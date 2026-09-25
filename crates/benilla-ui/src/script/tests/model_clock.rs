@@ -197,7 +197,7 @@ fn the_cooldown_machine_runs_on_the_two_handlers() {
     s.tick(1.0);
     s.run(&format!(
         r#"
-        -- Cooldown.lua, 1.12.1 (the stock file, transcribed for the test — decision 1602).
+        -- Cooldown.lua, 1.12.1 (the stock file, transcribed for the test).
         function CooldownFrame_SetTimer(this, start, duration, enable)
             if ( start > 0 and duration > 0 and enable > 0) then
                 this.start = start;

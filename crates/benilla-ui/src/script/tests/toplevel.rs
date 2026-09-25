@@ -176,7 +176,7 @@ fn the_trigger_is_the_effective_visibility_transition_not_the_show_call() {
         level(&mut s, "Dialog"),
         1,
         "a Show that moves no effective visibility raises nothing — the 1 is not a raise, it is \
-         SetParent's own level := Holder(0)+1 (decision 1323's re-level law)"
+         SetParent's own level := Holder(0)+1 (its re-level law)"
     );
     assert_eq!(level(&mut s, "Board"), 5, "and compacts nothing");
 

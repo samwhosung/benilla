@@ -674,10 +674,10 @@ mod tests {
             r#"
             -- 5.0 varargs: the implicit `arg` table, the form all of 1.12 FrameXML uses.
             local function count(...) local n = 0 for i = 1, arg.n do n = n + arg[i] end return n end
-            -- the iterator-less generic-for (1215)
+            -- the iterator-less generic-for
             local sum = 0
             for k, v in { 3, 4 } do sum = sum + v end
-            -- a table constructor with 5.0's compat semicolon (1315)
+            -- a table constructor with 5.0's compat semicolon
             local t = { a = 1; b = 2; }
             -- nesting long strings (LUA_COMPAT_LSTR = 2)
             local s2 = [[outer [[inner]] outer]]
@@ -748,7 +748,7 @@ mod tests {
             )
             .unwrap(),
             "0,1,2,3,4,-2,",
-            "the keyring (-2) is LAST — this is the director's Bagnon grid"
+            "the keyring (-2) is LAST — the order Bagnon's grid shows"
         );
         // The order the fields are written in does not change it.
         assert_eq!(

@@ -474,12 +474,12 @@ mod tests {
         let flat = ahead_share(7.0, Quat::IDENTITY);
         eprintln!(
             "snow arrivals ahead of the player: standing {standing:.3}, \
-             running tilted {tilted:.3}, running flat (the B233 shape) {flat:.3}"
+             running tilted {tilted:.3}, running flat (untilted slab) {flat:.3}"
         );
         assert!(
             flat < 0.10,
-            "the untilted slab is supposed to reproduce B233 (nearly nothing arrives ahead of a \
-             runner); got {flat:.3} — if this rose, the symptom's cause moved"
+            "the untilted slab is supposed to reproduce the symptom (nearly nothing arrives \
+             ahead of a runner); got {flat:.3} — if this rose, the symptom's cause moved"
         );
         assert!(
             tilted > 0.25,

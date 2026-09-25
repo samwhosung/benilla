@@ -238,7 +238,7 @@ pub(super) fn build_nodes(
     Some((map_id, ui, resolved))
 }
 
-/// The message an `SMSG_ACTIVATETAXIREPLY` code shows: the reference's handler (`FUN_005ed1e0`)
+/// The message an `SMSG_ACTIVATETAXIREPLY` code shows: the reference's handler (`0x5ed1e0`)
 /// closes the map on 0, shows `[0x85fedc + 4*code]` through `DisplayError` (`0x496720`) for
 /// 1-12, and does nothing from 13 up. The message row picks the surface, the yellow info line for
 /// seven of the twelve, and the sound: `ERR_TAXINOTENOUGHMONEY` speaks line `0x36`.

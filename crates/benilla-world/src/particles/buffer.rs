@@ -260,7 +260,7 @@ impl EffectQuads {
             self.cleared_this_frame,
             "effect-stream write before `begin_effect_frame`: this draw is about to be erased. \
              The producing system needs `.after(crate::particles::buffer::begin_effect_frame)` \
-             (see `EffectQuads::cleared_this_frame` — this is B161's failure mode)."
+             (see `EffectQuads::cleared_this_frame`)."
         );
         let end = self.verts.len() as u32;
         if end > start {

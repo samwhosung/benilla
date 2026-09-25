@@ -213,7 +213,7 @@ mod tests {
             .resource::<RigPalettes>()
             .row_placement(slot, 1)
             .expect("written");
-        assert_eq!(origin, AT, "still measured from the HOST's frame (1609)");
+        assert_eq!(origin, AT, "still measured from the HOST's frame");
         assert!(
             row1.distance(row0) > 0.3,
             "row 1 must carry the prop's own pose, not a copy of row 0 ({row0:?} vs {row1:?})"

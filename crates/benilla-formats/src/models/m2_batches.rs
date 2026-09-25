@@ -873,7 +873,7 @@ mod tests {
         );
         assert!(
             subs.iter().all(|s| !s.welded_billboard),
-            "…so no batch of it asks a lane to skin anything (decision 0841)"
+            "…so no batch of it asks a lane to skin anything"
         );
         let bytes = chain.read_file(path).expect("read the m2");
         assert!(

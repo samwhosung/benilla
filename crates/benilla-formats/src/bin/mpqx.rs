@@ -31,7 +31,7 @@ fn main() {
         }
         // `Chain::read` names a delete-marked path in its error message.
         Err(e) if e.to_string().contains("deleted from patch chain") => {
-            eprintln!("{e} — the client does not load this path (see decision 0246)");
+            eprintln!("{e} — the client does not load this path");
             std::process::exit(2);
         }
         Err(e) => {

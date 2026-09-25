@@ -328,7 +328,7 @@ mod tests {
     /// Open-world lava is MCLQ magma: the pin, `.go xyz -7845.99 -1065.50 123.60 0` in Burning
     /// Steppes (tile 33_46), stands on it.
     #[test]
-    fn b21_burning_steppes_lava_builds_a_magma_surface_at_the_reported_pin() {
+    fn burning_steppes_lava_builds_a_magma_surface_at_the_reported_pin() {
         let data = crate::wow_data_or_skip!();
         let mut chain = crate::open_chain(&data).expect("open chain");
         let meshes = tile_liquids(&mut chain, "Azeroth", 33, 46);

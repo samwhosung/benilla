@@ -917,8 +917,8 @@ fn real_prospecting_effect_is_absent_from_5875() {
                 crate::SPELL_EFFECT_PROSPECTING,
                 "spell {} carries SPELL_EFFECT_PROSPECTING in effect slot {i} — `0x495d60`'s \
                  third leg is reachable now, so cast-fail reasons 0x84 PROSPECT_NEED_MORE and \
-                 0x90 MIN_SKILL can raise and `ui_action::cast_fail` owes them argument arms \
-                 (decision 2292)",
+                 0x90 MIN_SKILL can raise and `ui_action::cast_fail` owes them \
+                 argument arms",
                 u32_at(r, 0).unwrap_or(0)
             );
         }

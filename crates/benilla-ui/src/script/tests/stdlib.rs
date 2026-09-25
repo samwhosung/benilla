@@ -57,7 +57,7 @@ fn stdlib_aliases_and_helpers() {
         tremove(t, 1)
         assert(t[1] == 20)
 
-        -- and the six 2.0 names that are NOT here (decision 2146)
+        -- and the six 2.0 names that are NOT here
         assert(wipe == nil and tostringall == nil)
         assert(strsplit == nil and strjoin == nil and strconcat == nil and strtrim == nil)
     "#,
@@ -256,7 +256,7 @@ fn the_rest_of_the_bare_globals() {
         -- string family
         assert(strbyte("A") == 65 and strchar(65) == "A")
 
-        -- and the Era-only names 1187 added are GONE (decision 1189): the 5.0 client has no
+        -- and the Era-only names are NOT here either: the 5.0 client has no
         -- string.match/gmatch, and claiming otherwise misleads an addon that feature-detects.
         assert(strmatch == nil and gmatch == nil and strrev == nil)
         assert(strlenutf8 == nil and strcmputf8i == nil)
@@ -290,10 +290,10 @@ fn the_lua_5_0_dialect_vanilla_addons_are_written_in_runs_here() {
         local n, first, second = varargs("a", "b")
         assert(n == 2 and first == "a" and second == "b")
 
-        -- The edge that used to be here is gone (decision 2101). `arg` was synthesized only for
-        -- a vararg function that did NOT also mention `...` in its body, so mixing the two
-        -- spellings in one function left `arg` nil. `...` as a value is no longer in the grammar
-        -- at all, so nothing can clear the flag and EVERY vararg function has its `arg`.
+        -- 5.1's parser synthesizes `arg` only for a vararg function that does NOT also mention
+        -- `...` in its body, so mixing the two spellings in one function would leave `arg` nil.
+        -- `...` as a value is not in this grammar at all, so nothing can clear the flag and
+        -- EVERY vararg function has its `arg`.
         local function fixed_and_varargs(a, ...) return a, arg.n, arg[1] end
         local a, n, first = fixed_and_varargs("a", "b", "c")
         assert(a == "a" and n == 2 and first == "b")
@@ -303,7 +303,7 @@ fn the_lua_5_0_dialect_vanilla_addons_are_written_in_runs_here() {
         assert(string.gfind ~= nil)          -- 5.1 renamed this to string.gmatch
         assert(math.mod(7, 3) == 1)
         -- ...and the 5.1 OPERATORS 5.0 lacks are not in the grammar: `%`, `#`, and `...` as a
-        -- value all fail to compile, exactly as they do on the 1.12 client (2101).
+        -- value all fail to compile, exactly as they do on the 1.12 client.
         assert(loadstring("return 7 % 3") == nil)
         assert(loadstring("return #({1})") == nil)
         assert(loadstring("return function(...) return ... end") == nil)

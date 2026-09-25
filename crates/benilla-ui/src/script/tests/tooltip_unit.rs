@@ -167,7 +167,7 @@ fn a_pending_name_titles_unknownobject_and_the_answer_replaces_it() {
     s.run(
         r#"
         UNKNOWNOBJECT = "Unknown"
-        assert(UnitName("player") == nil, "the binding's own fast path still pushes nil (2002)")
+        assert(UnitName("player") == nil, "the binding's own fast path still pushes nil")
         assert(TT:SetUnit("player") == 1)
         assert(TTTextLeft1:GetText() == UNKNOWNOBJECT,
                "the builder has no player fast path, got " .. tostring(TTTextLeft1:GetText()))

@@ -65,5 +65,5 @@ fn every_shape_c_colour_position_takes_nil_as_zero_and_never_raises() {
 
     // `FontString:SetTextColor 0x79d9c0`.
     s.run("FS:SetTextColor(nil, nil, nil)")
-        .expect("the sibling 1973 already fixed");
+        .expect("FontString:SetTextColor is shape C on r/g/b");
 }

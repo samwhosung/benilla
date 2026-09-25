@@ -188,7 +188,7 @@ fn report_check(exit: AppExit) -> AppExit {
     }
     println!(
         "WORLDVIEW_CHECK {} fault(s) — a game concept is wired into the engine, or an engine \
-         fact is parked on the game side. Decision 1160.",
+         fact is parked on the game side.",
         faults.len()
     );
     // A run with no install (`WOW_DATA=`) faults for a different reason, so it says which.
@@ -196,7 +196,7 @@ fn report_check(exit: AppExit) -> AppExit {
         println!(
             "WORLDVIEW_CHECK ran with NO INSTALL: a fault here is a system taking a resource that \
              only exists when there is client data as a hard `Res`/`ResMut`. Take it as `Option` \
-             and return, or insert it ahead of the no-data bail. Decision 1451."
+             and return, or insert it ahead of the no-data bail."
         );
     }
     AppExit::error()

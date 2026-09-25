@@ -243,7 +243,7 @@ fn touches_map_matches_the_paths_map_set() {
     }
     assert!(
         any_cross_map,
-        "no golden path crosses continents — the 0455 spare predicate has nothing to spare"
+        "no golden path crosses continents — the worldport spare predicate has nothing to spare"
     );
 }
 

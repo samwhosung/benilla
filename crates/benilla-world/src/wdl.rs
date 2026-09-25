@@ -257,6 +257,6 @@ fn the_far_band_is_a_fog_hull_not_a_fogged_surface() {
     assert!(
         !src.contains("w.fog_params.x") && !src.contains("w.fog_params.y"),
         "wdl.wgsl: the hull reads the SCENE fog distances again — the 33 yd overlap goes partly \
-         white at low view distances (the band decision 1521 closed)"
+         white at low view distances"
     );
 }

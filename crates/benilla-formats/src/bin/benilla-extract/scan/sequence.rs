@@ -244,7 +244,7 @@ pub fn goanimscan(chain: &mut Chain) -> Result<()> {
         "  arming a LOOPING band on a transition (motion) substate: {looping_motion} \
          ({looping_motion_sensitive} of them state-SENSITIVE, i.e. the transition is a clip the \
          rest pose isn't)  — the completion advance is the only thing that ends these; read \
-         as \"should this clip repeat?\" they swing for ever (decision 1151)"
+         as \"should this clip repeat?\" they swing for ever"
     );
     println!(
         "  authoring a non-empty replay range on a reachable substate: {multi_replay}  — R > 1 \
@@ -644,8 +644,8 @@ pub fn soundeventscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     eprintln!(
         "{scanned} models with sequences scanned; {carriers} carry a $DSL/$DSO/$SND marker, \
          {hostless} of them on the Static tier (no anim-root entity exists to hang an emitter \
-         on today); {rest_gated} carry the marker on a REST-posed sequence — the class benilla's rig gate \
-         (decision 0130) never arms, so the marker is unreachable through an AnimationPlayer."
+         on today); {rest_gated} carry the marker on a REST-posed sequence — the class \
+         benilla's rig gate never arms, so the marker is unreachable through an AnimationPlayer."
     );
     Ok(())
 }

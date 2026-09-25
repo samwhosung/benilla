@@ -375,7 +375,7 @@ fn a_hovered_plate_emits_no_glow_quad() {
         .collect();
     assert!(
         !paths.iter().any(|p| p.contains("Nameplate-Glow")),
-        "the hovered plate's glow must not be painted (0184); quads were {paths:?}"
+        "the hovered plate's glow must not be painted; quads were {paths:?}"
     );
     assert!(
         paths.iter().any(|p| p.contains("Nameplate-Border")),

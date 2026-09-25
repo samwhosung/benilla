@@ -916,7 +916,7 @@ mod addon_persistence_tests {
         assert_eq!(
             bound.1,
             vec!["CTRL-X".to_string()],
-            "the stored chord came back — this is the assertion 1192 §4 could not make"
+            "the stored chord came back, though the seed ran before the addon registered"
         );
     }
 

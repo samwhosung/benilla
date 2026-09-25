@@ -129,6 +129,6 @@ mod tests {
         .join()
         .unwrap();
         assert_eq!(parent, Some(QosClass::UserInteractive as u32));
-        assert_eq!(child, Some(0x15), "QoS inherited — 1109's premise changed");
+        assert_eq!(child, Some(0x15), "QoS inherited — PromotingSource is moot");
     }
 }

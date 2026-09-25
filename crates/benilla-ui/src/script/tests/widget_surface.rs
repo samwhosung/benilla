@@ -332,9 +332,9 @@ fn our_widget_methods_stay_inside_the_1_12_surface() {
     assert!(
         beyond.is_empty(),
         "benilla answers these on a class the 1.12 client does not register them on:\n{}\n\n\
-         1.12 is the target (decision 1188). Either remove it, give it its 1.12 spelling, or add \
-         the row to ALLOWED_BEYOND WITH the reason it has to stay — an unexplained superset is \
-         what 1189 had to roll back, and an addon that feature-detects one takes a path we cannot \
+         1.12 is the target. Either remove it, give it its 1.12 spelling, or add \
+         the row to ALLOWED_BEYOND WITH the reason it has to stay — an addon that \
+         feature-detects an unexplained superset takes a path we cannot \
          honour.",
         as_rows(&beyond)
     );

@@ -122,7 +122,7 @@ pub fn darkpropscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         "{roots_scanned} root(s), {modds_total} MODD(s): {zero_colour} carry colour #000000; \
          of those, interior-ONLY = {} — {black} BLACK (no MOLR light in range), {dim} dim \
          (a fixture light reaches them). RESCUED by exterior-wins: {rescued} (an interior group \
-         names them first, an exterior group also names them — sky-lit, decision 0969).",
+         names them first, an exterior group also names them — sky-lit).",
         black + dim,
     );
     if !by_model.is_empty() {

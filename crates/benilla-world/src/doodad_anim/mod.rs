@@ -332,7 +332,7 @@ fn gate_doodad_anim(
     // One log line per session, the first frame any host exists.
     if !*logged && !hosts.is_empty() {
         *logged = true;
-        info!("doodad anim: first host armed (decision 0130 phase 1)");
+        info!("doodad anim: first host armed");
     }
     let now = time.elapsed_secs();
     let world_cam = cam.single().ok();

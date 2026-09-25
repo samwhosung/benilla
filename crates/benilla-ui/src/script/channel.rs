@@ -552,7 +552,7 @@ mod command_tests {
 
     /// The row, custom-channel and nil legs, and that 0 is truthy.
     #[test]
-    fn join_channel_by_name_answers_the_three_legs_of_1908() {
+    fn join_channel_by_name_answers_the_row_custom_and_nil_legs() {
         let mut s = UiScript::new().unwrap();
         s.set_zone_channel_catalog(catalog());
         s.run(

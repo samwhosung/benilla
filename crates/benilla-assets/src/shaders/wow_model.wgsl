@@ -196,7 +196,7 @@ fn mcnk_cell_anchor(P: vec3<f32>) -> vec3<f32> {
 }
 
 #ifdef WOW_MERGED_FADE
-// The doodad fade curve (`FUN_00683f80`, in sync with `model_fade::doodad_fade_alpha`): alpha =
+// The doodad fade curve (`0x683f80`, in sync with `model_fade::doodad_fade_alpha`): alpha =
 // 1 − (d − start)/range, d = horizontal distance − radius, over a size-bucketed band.
 fn merged_fade_alpha(radius: f32, horiz_dist: f32) -> f32 {
     if (radius > 7.0) {
@@ -574,7 +574,7 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
     // `wow_normalize`: an authored zero normal reaches here on the unskinned lane.
     let n_m2 = wow_normalize(pbr_input.world_normal);
     // Bevy negates `world_normal` on back faces of double-sided materials (foliage, every WMO
-    // face); the reference never enables GL_LIGHT_MODEL_TWO_SIDE (`FUN_0059ce30`), so undo it.
+    // face); the reference never enables GL_LIGHT_MODEL_TWO_SIDE (`0x59ce30`), so undo it.
     let n_lit = select(-n_m2, n_m2, is_front);
     let ndotl = max(dot(n_lit, L), 0.0);
     let lit_nl = clamp(wow_light.light_ambient.rgb + wow_light.light_diffuse.rgb * ndotl, vec3<f32>(0.0), vec3<f32>(1.0));

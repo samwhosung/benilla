@@ -593,7 +593,7 @@ mod msaa_tests {
         };
         assert_eq!(apple.clamp(4), 4, "a count it offers is untouched");
         assert_eq!(apple.clamp(3), 2, "down to the nearest offered, never up");
-        assert_eq!(apple.clamp(8), 4, "the 2026-08-26 render-thread kill");
+        assert_eq!(apple.clamp(8), 4, "unoffered 8x panics the render thread");
         assert_eq!(apple.clamp(16), 4);
         assert_eq!(apple.clamp(1), 1);
 

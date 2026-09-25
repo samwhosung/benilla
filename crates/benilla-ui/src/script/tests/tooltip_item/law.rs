@@ -51,7 +51,7 @@ fn item_line_law_and_red_requirements() {
             "[ONPROC] Ravager",
             "\"A wicked axe of the Scarlet Crusade.\"",
         ],
-        "the verified line order (0276)"
+        "the reference's line order"
     );
     assert_eq!(lines[0].1, [0.0, 0.439, 0.867, 1.0], "rare-blue name");
     let class_line = &lines[10];

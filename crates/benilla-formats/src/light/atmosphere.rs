@@ -14,7 +14,7 @@ pub(super) const IB_CLOUD_SUN: u32 = 10;
 pub(super) const IB_CLOUD_SLOPE: u32 = 11;
 pub(super) const IB_CLOUD_GBASE: u32 = 12;
 /// The water-surface tint rows, ocean 14/15 and river/lake 16/17 (shallow, deep): the reference's
-/// swatch builder `FUN_0068a830` lerps them raw (`gWorldLight+0xe0..+0xec`), not the sky gradient.
+/// swatch builder `0x68a830` lerps them raw (`gWorldLight+0xe0..+0xec`), not the sky gradient.
 pub(super) const IB_OCEAN_SHALLOW: u32 = 14;
 pub(super) const IB_OCEAN_DEEP: u32 = 15;
 pub(super) const IB_RIVER_SHALLOW: u32 = 16;
@@ -31,7 +31,7 @@ pub(super) const FB_CLOUD_DENSITY: u32 = 3;
 pub(super) const LP_GLOW: usize = 4;
 
 /// `LightParams.dbc` field of the highlightSky flag, record byte `+0x04`: an int 0/1 the sky-dome
-/// fold `FUN_006d0f50` reads to gate the dawn/dusk azimuthal warp. Stored as 0.0/1.0.
+/// fold `0x6d0f50` reads to gate the dawn/dusk azimuthal warp. Stored as 0.0/1.0.
 pub(super) const LP_HIGHLIGHT: usize = 1;
 
 /// `LightParams.dbc` field of lightSkyboxID, record byte `+0x08`: the `LightSkybox.dbc` model that
@@ -41,7 +41,7 @@ pub(super) const LP_HIGHLIGHT: usize = 1;
 pub(super) const LP_SKYBOX: usize = 2;
 
 /// `LightParams.dbc` fields 5 to 8, after the glow: the water-blend alphas, the depth-alpha
-/// endpoints of the swatch (`swatch.a = lerp(shallow, deep, V)`, read by `FUN_006b6b60`).
+/// endpoints of the swatch (`swatch.a = lerp(shallow, deep, V)`, read by `0x6b6b60`).
 pub(super) const LP_WATER_SHALLOW_ALPHA: usize = 5;
 pub(super) const LP_WATER_DEEP_ALPHA: usize = 6;
 pub(super) const LP_OCEAN_SHALLOW_ALPHA: usize = 7;
@@ -72,7 +72,7 @@ pub struct Atmosphere {
     pub ambient: [f32; 3],
     /// The five sky-dome gradient stops, zenith to horizon (`SkyColor0..4`); all five are used.
     pub sky: [[f32; 3]; 5],
-    /// River/lake tint `[shallow, deep]`, IntBand rows 16/17 raw, lerped by depth (`FUN_0068a830`).
+    /// River/lake tint `[shallow, deep]`, IntBand rows 16/17 raw, lerped by depth (`0x68a830`).
     pub water_river: [[f32; 3]; 2],
     /// Ocean tint `[shallow, deep]`, IntBand rows 14/15 raw, from the same builder.
     pub water_ocean: [[f32; 3]; 2],
@@ -83,7 +83,7 @@ pub struct Atmosphere {
     /// The FFXGlow composite weight, `LightParams.glow`, raw 0..1: the composite is
     /// `scene + glow·bloom²`, and the reference quantises glow to `floor(glow·255)/255`.
     pub glow: f32,
-    /// `LightParams.highlightSky` as 0.0/1.0, scaling the dawn/dusk dome warp (`FUN_006d0f50`).
+    /// `LightParams.highlightSky` as 0.0/1.0, scaling the dawn/dusk dome warp (`0x6d0f50`).
     pub highlight_sky: f32,
     /// Cloud density `C`, FloatBand sub 3: the coverage threshold is `T = trunc((1 − C)·255)`.
     pub cloud_density: f32,

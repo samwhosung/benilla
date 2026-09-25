@@ -862,7 +862,7 @@ mod tests {
                     assert!(
                         lo >= 120,
                         "level {} ({}x{}) {class} texels reach luma {lo} — a Mod2x streak sampling \
-                         this level darkens the scene (B358)",
+                         this level darkens the scene",
                         s.level,
                         s.width,
                         s.height

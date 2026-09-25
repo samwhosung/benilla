@@ -30,7 +30,7 @@ fn stand_box_z_is_the_bubble_anchor_height_and_not_the_attachment() {
         assert!(
             (b.stand_box_z - attach_z).abs() > 0.02,
             "{path}: stand_box_z {:.4} must not be the posed-attachment height {attach_z} — those \
-             are the two mechanisms 1406 separated",
+             are two separate mechanisms",
             b.stand_box_z
         );
         assert!(

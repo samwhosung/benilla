@@ -209,8 +209,8 @@ pub fn skyboxscan(chain: &mut Chain) -> Result<()> {
              both halves matter — but this census establishes only 'flag implies MOSB'."
         );
         println!(
-            "   It does NOT say WHICH group the renderer tests, and reading it as if it did is the \
-             mistake decision 0767 made (superseded by 0773). The actual law: 0x40000 is tested \
+            "   It does NOT say WHICH group the renderer tests, and reading it as if it did is a \
+             mistake. The actual law: 0x40000 is tested \
              inside the portal flood (0x6b42e0 in 0x6b41c0) on the group being VISITED, never on the \
              group the camera stands in — so the predicate is 'any FLOOD-REACHED group carries the \
              bit, and the root names a MOSB'. Stratholme's King's Square is the counter-example that \

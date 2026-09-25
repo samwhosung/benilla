@@ -1804,7 +1804,7 @@ fn the_player_record_outlives_every_snapshot() {
     assert_eq!(
         s.eval::<String>(r#"return UnitRace("player")"#).unwrap(),
         "Night Elf",
-        "the same holds for the other three fields of the record (2263)"
+        "the same holds for the other three fields of the record"
     );
     assert_eq!(
         s.eval::<String>(r#"local _, t = UnitClass("player"); return t"#)

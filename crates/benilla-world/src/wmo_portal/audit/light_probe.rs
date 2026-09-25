@@ -475,7 +475,7 @@ fn world_point_light_probe() {
         let lane = match light {
             None => "exterior-on-terrain (sun + MCSH intensity)".to_string(),
             Some(c) if c.outdoor => format!(
-                "exterior-on-wmo g{:02} depth {:.1} (forced lit 2.5 — the skip-shadow bit, 0480)",
+                "exterior-on-wmo g{:02} depth {:.1} (forced lit 2.5 — the skip-shadow bit)",
                 c.group, c.depth
             ),
             Some(c) => match footprint_sample(model, probe_local) {

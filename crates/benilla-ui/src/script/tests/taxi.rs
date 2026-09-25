@@ -47,7 +47,7 @@ fn taxi_snapshot_surfaces_and_intents_drain() {
         assert(GetNumRoutes(1) == 0 and GetNumRoutes(2) == 1)
         assert(math.abs(TaxiGetSrcX(2, 1) - 0.5) < 1e-6)
         assert(math.abs(TaxiGetDestY(2, 1) - 0.8) < 1e-6)
-        assert(UnitOnTaxi("player") == nil)          -- 1/nil, never a boolean (2043)
+        assert(UnitOnTaxi("player") == nil)          -- 1/nil, never a boolean
 
         TakeTaxiNode(2)
         CloseTaxiMap()

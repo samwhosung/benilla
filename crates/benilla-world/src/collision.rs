@@ -512,7 +512,7 @@ mod liquid_trace_mask {
         assert!(
             control > 5.0,
             "the positive control must reproduce the regression — half a millimetre of settle \
-             should swing 2170's camera by yards, got {control}"
+             should swing the uncorrected camera by yards, got {control}"
         );
         // The corridor, across a swimmer's whole pitch range.
         for pitch_deg in [-25.0f32, -10.0, -2.0, -0.5, 0.0, 0.5, 2.0, 10.0, 25.0] {
@@ -576,8 +576,8 @@ mod liquid_trace_mask {
         );
         assert!(
             on.is_some_and(|d| d > 2.95),
-            "and it stops ON the plane, not a probe radius short of it — the water leg is a ray \
-             (decision 2185), which is what makes the corridor's 2/9 yd of clearance a clearance"
+            "and it stops ON the plane, not a probe radius short of it — the water leg is a ray, \
+             which is what makes the corridor's 2/9 yd of clearance a clearance"
         );
         assert_eq!(
             descend_camera(&mut app, false),

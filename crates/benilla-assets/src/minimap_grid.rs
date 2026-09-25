@@ -1,7 +1,7 @@
 //! The WMO interior minimap tile grid: how one group's footprint splits into the
 //! `<wmo>_<group>_<X>_<Y>.blp` tiles the client streams inside a building (tile producer
 //! `0x6a5270`). Each tile is a power-of-two texel square clamped to 32..256 px at 0.5 yd a texel,
-//! and both roundings go up: the round-to-int (`FUN_0073fdf5`) runs round-toward-+∞, so the edge
+//! and both roundings go up: the round-to-int (`0x73fdf5`) runs round-toward-+∞, so the edge
 //! is `2^ceil(log2(extent·2))` px and the count `ceil(extent / 128)`.
 
 /// World yards per minimap texel (`0xca7ebc`).

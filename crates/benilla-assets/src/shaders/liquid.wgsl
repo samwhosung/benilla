@@ -94,7 +94,7 @@ fn anim_time() -> f32 {
     return w.anim.w * globals.time;
 }
 
-// The 24 fps flip, 30 frames over 1.25 s (`FUN_0068aac0`), floored to a whole frame.
+// The 24 fps flip, 30 frames over 1.25 s (`0x68aac0`), floored to a whole frame.
 fn frame_layer() -> i32 {
     return i32(floor(anim_time() * 24.0) % max(w.anim.y, 1.0));
 }
@@ -153,7 +153,7 @@ fn vertex(in: Vertex) -> LiquidVsOut {
 
 // ── The ADT depth swatch ─────────────────────────────────────────────────────────────────────
 //
-// `FUN_0068a830` fills an 8×64 texture, each row the same across its 8 columns, with an exact
+// `0x68a830` fills an 8×64 texture, each row the same across its 8 columns, with an exact
 // byte-space integer accumulator, `row(i) = c0 + floor(i * (c1 - c0) / 64)` for i = 0..63, so
 // row 63 stops short of the deep endpoint. On the ocean (selector 0) the last row's HSV value is
 // scaled by 0.9 (`0x68aa13`, `[0x8102ec]`), which `floor(0.9 * byte)` reproduces within 1/255,
@@ -210,8 +210,8 @@ fn fragment(in: LiquidVsOut) -> @location(0) vec4<f32> {
     }
 
     // V, from the authored depth byte CPU-side: clamp(byte/42) on river/lake (LUT `0xc81768`,
-    // `FUN_0068d790`, saturating near 5 yd), clamp(byte/255) on ocean (LUT `0xc7fcd8`,
-    // `FUN_0068d690`), both built in `FUN_0068c4c0`. One V indexes colour and alpha alike.
+    // `0x68d790`, saturating near 5 yd), clamp(byte/255) on ocean (LUT `0xc7fcd8`,
+    // `0x68d690`), both built in `0x68c4c0`. One V indexes colour and alpha alike.
     let depth = clamp(in.depth, 0.0, 1.0);
     var shallow = wow_light.water_river[0];
     var deep = wow_light.water_river[1];

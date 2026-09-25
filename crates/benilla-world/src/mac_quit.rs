@@ -58,7 +58,7 @@ fn route_quit_through_window_close(_main_thread: bevy::ecs::system::NonSendMarke
     if rerouted == 0 {
         warn!(
             "mac_quit: no Quit item bound to terminate: — Cmd+Q may bypass the shutdown tail \
-             and lose this session's settings (1528)"
+             and lose this session's settings"
         );
     } else {
         info!("mac_quit: Cmd+Q routed through the window close ({rerouted} item(s))");

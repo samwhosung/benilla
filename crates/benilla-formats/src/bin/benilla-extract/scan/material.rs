@@ -1418,7 +1418,7 @@ pub fn fxuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     );
     println!(
         "  {anim_models} model(s) / {anim_batches} batch(es) carry a keyed TEXTURE TRANSFORM — \
-         the channel the spell-effect lane has run since 2282 and the entity lane since 2295"
+         the channel the spell-effect lane and the entity lane both run"
     );
     println!("    {:<10} {:>8} {:>9}", "", "identity", "first-key");
     for c in FxClass::ALL {
@@ -1438,8 +1438,8 @@ pub fn fxuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     );
     println!(
         "  the two columns are the two frozen states a non-running lane can be in: `identity` \
-         is a material built with `play_uv = false` (the AUTHORED UVs — what the spell-effect \
-         lane drew before 2282 and the entity lane before 2295), `first-key` what the same \
+         is a material built with `play_uv = false` (the AUTHORED UVs, drawn \
+         untransformed), `first-key` what the same \
          batch becomes on a lane that seeds `uv_anim.sample(0.0)` and never ticks it. \
          {seed_disagrees} batch(es) are classified differently by the two — read the per-batch \
          lines for which."
@@ -1679,7 +1679,7 @@ impl EntityReach {
             parts.push(format!("bone pile {}", self.bones.join(",")));
         }
         if self.also_fx {
-            parts.push("ALSO a spell-visual model (2282's lane runs its transform)".to_string());
+            parts.push("ALSO a spell-visual model (whose lane runs its transform)".to_string());
         }
         parts.join("  ·  ")
     }
@@ -1897,11 +1897,11 @@ impl UvClock {
         match self {
             Self::Gseq => {
                 "every live loop rides a GLOBAL SEQUENCE — a free-running clock, so one shared \
-                 material uniform is faithful (0136 choice 1)"
+                 material uniform is faithful"
             }
             Self::Band => {
                 "every live loop rides its SEQUENCE BAND — the instance's own play head, which a \
-                 shared uniform cannot serve (2282's per-instance lane)"
+                 shared uniform cannot serve (a per-instance lane can)"
             }
             Self::Mixed => "the batch's channels disagree: some global-sequence, some band",
             Self::Hold => {
@@ -2315,7 +2315,7 @@ pub fn entityuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     );
     println!(
         "  {anim_models} model(s) / {anim_batches} batch(es) carry a keyed TEXTURE TRANSFORM — the \
-         channel `entity_variants` seeds and registers since 2295 ({no_uvs} more are keyed but \
+         channel `entity_variants` seeds and registers ({no_uvs} more are keyed but \
          carry no UVs to transform)"
     );
     println!(

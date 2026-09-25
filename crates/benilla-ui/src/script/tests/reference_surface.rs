@@ -83,9 +83,9 @@ fn our_globals_stay_inside_the_1_12_surface() {
         unlisted.is_empty(),
         "benilla exposes {} global(s) the 1.12.1 client does not, and they are not listed as \
          exceptions:\n    {}\n\n\
-         1.12 is the target (decision 1188). Either give it its 1.12 spelling, or add it to \
-         `allowed_beyond_1_12` in this file WITH the reason it has to stay — an unexplained \
-         superset is what 1189 had to roll back.",
+         1.12 is the target. Either give it its 1.12 spelling, or add it to \
+         `allowed_beyond_1_12` in this file WITH the reason it has to stay — an addon that \
+         feature-detects an unexplained superset takes a path we cannot honour.",
         unlisted.len(),
         unlisted.join(" ")
     );

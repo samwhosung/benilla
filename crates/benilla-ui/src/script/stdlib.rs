@@ -125,12 +125,12 @@ const WOW_STDLIB: &str = r#"
 -- ── the bare string family ─────────────────────────────────────────────────────────────────────
 -- Every name here is present in the REAL 1.12 client's global table — the in-world `_G` captured
 -- from the running reference client (19,572 entries), which is the
--- authority this file now answers to (decision 1189).
+-- authority this file answers to.
 --
--- 1187 also installed `strmatch`, `strrev`, `gmatch`, `strlenutf8` and `strcmputf8i` from
--- Blizzard's *Era* enumeration, to get a Classic Era addon further. **None of them exist in
+-- `strmatch`, `strrev`, `gmatch`, `strlenutf8` and `strcmputf8i` come from Blizzard's *Era*
+-- enumeration, which a Classic Era addon may reach for. **None of them exist in
 -- 1.12** — `string.match`/`gmatch` are Lua 5.1 additions the 5.0 client never had — and Era is
--- not our target. They are gone; adding a global the client does not have is how an addon that
+-- not our target. They stay out; adding a global the client does not have is how an addon that
 -- feature-detects gets sent down a path we cannot honour.
 strlen  = string.len
 strsub  = string.sub
@@ -143,7 +143,7 @@ strchar = string.char
 gsub    = string.gsub
 tinsert = table.insert
 tremove = table.remove
--- `getn`, `sort`, `foreach` and `foreachi` are bound by `lua50` (decision 1194), which owns the
+-- `getn`, `sort`, `foreach` and `foreachi` are bound by `lua50`, which owns the
 -- 5.0 shapes of `table.getn`/`setn` and must not be shadowed by a second implementation here.
 
 -- ── the bare math aliases (the same 1.12 global family; the reference FrameXML uses them
@@ -155,7 +155,7 @@ abs   = math.abs
 max   = math.max
 min   = math.min
 sqrt  = math.sqrt
-mod   = math.mod        -- 5.0's name for fmod; `math.fmod` is removed by `lua50` (decision 1194)
+mod   = math.mod        -- 5.0's name for fmod; `math.fmod` is removed by `lua50`
 random = math.random
 -- `randomseed` is an ENGINE global in 1.12 exactly like `random` beside it (the captured `_G` types
 -- both `function engine`), and it is the half that was missing: `IgniteStatus` calls it at file
@@ -174,7 +174,7 @@ function cos(d) return math.cos(math.rad(d)) end
 rad = math.rad
 deg = math.deg
 -- The rest of the bare math family, each verified present in the real 1.12 client's global
--- table (decision 1189's captured `_G`; 1187 had reached for Blizzard's Era enumeration).
+-- table (the captured `_G`).
 -- `tan` and the inverses follow sin/cos into DEGREES — same family, same convention; that is
 -- consistent-with the verified sin/cos finding rather than separately byte-verified, and it is
 -- the convention every addon rotation helper assumes (`atan2` returning degrees is why
@@ -196,7 +196,7 @@ ldexp = math.ldexp
 -- `debuginfo`, `debugload`, `debugprint`, `debugdump`, `debugbreak` and `debugtimestamp` are
 -- **byte-identical `xor eax,eax; ret` stubs** — three bytes, no `call`, no memory write. They
 -- cannot print, log, write or set a global, and they return ZERO Lua values. So these are not
--- no-ops we invented under a real name (the "absent capability" class 1203 named); they are the
+-- no-ops we invented under a real name (an "absent capability"); they are the
 -- reference's own no-ops, transcribed.
 --
 -- That is what lets `BasicControls.xml` stop guarding its `debuginfo()` call and transcribe
@@ -220,7 +220,7 @@ do
     function debugprofilestop() return (GetTime() - profileStart) * 1000 end
 end
 
--- ── the error handler (decision 1195) ──────────────────────────────────────────────────────────
+-- ── the error handler ──────────────────────────────────────────────────────────────────────────
 -- `seterrorhandler(f)` / `geterrorhandler()` are ENGINE globals in 1.12 (the captured `_G` says
 -- so), and `_ERRORMESSAGE` — the default handler they start out holding — is FrameXML's. That
 -- split is why the pair lives here and the default is a plain function rather than a Rust binding:
@@ -249,7 +249,7 @@ function GetLocale() return "enUS" end
 __benilla_now = 0.0
 function GetTime() return __benilla_now end
 
--- ── The zone-text family (decisions 0203 phase 1 + 0287).
+-- ── The zone-text family.
 -- The app pushes the host globals on an area change (the same shape as
 -- GetTime) and fires MINIMAP_ZONE_CHANGED / the ZONE_CHANGED family; these getters just read the
 -- cached slots, like the real bindings (0x48a0a0/c0/e0/100 read BSS caches). GetZoneText = the
@@ -273,7 +273,7 @@ function GetZonePVPInfo()
     if t == "" then t = nil end
     if f == "" then f = nil end
     -- isArena is 1/nil, never a Lua boolean: the reference's third slot is `(nil) | (number)`
-    -- like every other 1.12 predicate (decision 2118).
+    -- like every other 1.12 predicate.
     return t, f, __benilla_pvp_arena and 1 or nil
 end
 
@@ -291,7 +291,7 @@ function GetGameTime() return __benilla_game_hour, __benilla_game_minute end
 -- `reference/1.12-globals.tsv`, from the stock chain, and from every registrar table), and the
 -- reason they were kept — that the vanilla addon ecosystem assumes them — did not survive being
 -- checked: the corpus callers are multi-client addons whose vanilla paths raise on a real 1.12
--- client too, or that define the name themselves under their own namespace (decision 2146).
+-- client too, or that define the name themselves under their own namespace.
 -- An addon reaching for one of these is reaching for a later client's API, and it should find
 -- what it would find there: nothing.
 
@@ -300,9 +300,9 @@ do
     -- `_find`/`_sub` are captured for the same reason `_format` is: this wrapper runs on every
     -- `format` call in the UI and must not follow an addon's later replacement of `string.*`.
     -- They are CALLS and not method syntax because 1.12 installs no string metatable, so
-    -- `fmt:find(...)` — which this used to be written as — raises there (decision 2101's
-    -- left-open item, closed in `lua50::install`). No chunk of ours may use what the reference's
-    -- VM cannot resolve; the parser enforces that for the grammar, and this is its runtime twin.
+    -- `fmt:find(...)` raises there, and here too (`lua50::install` removes the metatable). No
+    -- chunk of ours may use what the reference's VM cannot resolve; the parser enforces that
+    -- for the grammar, and this is its runtime twin.
     local _format, _find, _sub, _len = string.format, string.find, string.sub, string.len
     local CONV = "diouxXeEfgGqscp"  -- Lua 5.1 conversion letters
 

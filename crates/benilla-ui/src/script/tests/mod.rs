@@ -160,13 +160,13 @@ fn a_chosen_error_handler_hears_engine_caught_errors_and_the_default_does_not_du
     s.set_screen_size(1024.0, 768.0);
     s.run(
         "local f = CreateFrame('Frame') \
-         f:RegisterEvent('B271_PROBE') \
+         f:RegisterEvent('ERROR_PROBE') \
          f:SetScript('OnEvent', function() error('boom from a handler') end)",
     )
     .unwrap();
 
     // With the stdlib default handler, recognised by identity, the dispatch adds nothing.
-    s.fire_event("B271_PROBE", vec![]);
+    s.fire_event("ERROR_PROBE", vec![]);
     s.dispatch_script_errors_to_handler();
     let errors = s.take_errors();
     assert_eq!(
@@ -178,7 +178,7 @@ fn a_chosen_error_handler_hears_engine_caught_errors_and_the_default_does_not_du
     // A chosen handler gets the message, and the host channel still records it.
     s.run("caught = {} seterrorhandler(function(msg) table.insert(caught, msg) end)")
         .unwrap();
-    s.fire_event("B271_PROBE", vec![]);
+    s.fire_event("ERROR_PROBE", vec![]);
     s.dispatch_script_errors_to_handler();
     assert!(
         s.eval::<String>("return caught[1]")
@@ -243,11 +243,11 @@ fn an_error_handler_that_errors_does_not_recurse() {
     s.run(
         "seterrorhandler(function() error('the handler is broken too') end) \
          local f = CreateFrame('Frame') \
-         f:RegisterEvent('B271_PROBE') \
+         f:RegisterEvent('ERROR_PROBE') \
          f:SetScript('OnEvent', function() error('original fault') end)",
     )
     .unwrap();
-    s.fire_event("B271_PROBE", vec![]);
+    s.fire_event("ERROR_PROBE", vec![]);
     s.dispatch_script_errors_to_handler();
     let errors = s.take_errors();
     assert!(

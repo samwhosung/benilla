@@ -22,8 +22,8 @@ fn type_name(ty: i32) -> &'static str {
         char_proc_type::TINT => "TINT (body RGB)",
         char_proc_type::ALPHA => "ALPHA (body translucency)",
         char_proc_type::ANIM_RATE => "ANIM_RATE (body anim playback rate — 0 freezes the pose)",
-        char_proc_type::CHAIN_CHANNEL => "CHAIN (beam; the channel-stage key — 0955)",
-        char_proc_type::CHAIN_CAST => "CHAIN (beam; the cast-stage key — 0955)",
+        char_proc_type::CHAIN_CHANNEL => "CHAIN (beam; the channel-stage key)",
+        char_proc_type::CHAIN_CAST => "CHAIN (beam; the cast-stage key)",
         char_proc_type::WEAPON_TRAIL => "TRAIL (weapon swing ribbon, $WTB→$WTT)",
         _ => "(unmodelled)",
     }

@@ -178,7 +178,7 @@ mod tests {
             .count();
         assert_eq!(
             live, 0,
-            "an annoyed line resolved — 1815's dormancy is over"
+            "an annoyed line resolved — the column is no longer dormant"
         );
         // The control: the ordinary column is mostly live, so the sweep above tests the data.
         let normal_live = cat

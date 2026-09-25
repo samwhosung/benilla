@@ -164,7 +164,7 @@ fn tracking_hover_renders_gold_name_over_white_description() {
         matches!(&q.content, QuadContent::Text { text: Some(t), color: Some(c), .. }
             if t == "Finding Minerals." && (c[1] - 1.0).abs() < 1e-6 && (c[2] - 1.0).abs() < 1e-6)
     });
-    assert!(gold_name, "the tracking name line is GOLD (director A/B)");
+    assert!(gold_name, "the tracking name line is GOLD");
     assert!(white_desc, "the description is the aura-variant white");
     assert!(s.take_errors().is_empty());
 }

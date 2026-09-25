@@ -478,7 +478,7 @@ mod tests {
         // Without the walls nothing stops the body within the 5 yd it walks.
         assert!(
             run_east(false, walking).is_none(),
-            "B129 itself — the terrain here does not stop a body, which is why the flag has to"
+            "the pin itself — the terrain here does not stop a body, which is why the flag has to"
         );
         // With them, the capsule's leading surface stops at the chunk boundary.
         let d = run_east(true, walking).expect("the impassable chunk's fence stops the body");

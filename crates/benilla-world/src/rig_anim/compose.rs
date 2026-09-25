@@ -529,7 +529,7 @@ mod tests {
         assert!(
             abs_j > 3e-4,
             "the absolute route spends a world-scale ULP per frame — got {abs_j:.3e} yd. If this \
-             ever fails, decision 0974's premise has stopped holding here (or the rig above has \
+             ever fails, the rig-relative rebase has lost its reason here (or the rig above has \
              drifted into missing the large world axis again) — re-derive before deleting."
         );
         assert!(

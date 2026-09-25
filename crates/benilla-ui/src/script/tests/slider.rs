@@ -246,7 +246,7 @@ fn a_slider_does_not_answer_the_buttons_enable_trio() {
         end
         -- The Button's own predicate is the NUMBER 1 / the NUMBER 0, never a Lua boolean — its
         -- false leg is 0 rather than nil, settled per body at `0x7800b0`'s `setne`+`fild`
-        -- (decision 2118's `binding_abi::flag` doc).
+        -- (`binding_abi::flag`'s doc).
         assert(b:IsEnabled() == 1, "1, not true")
         b:Disable()
         assert(b:IsEnabled() == 0, "0, not false and not nil")

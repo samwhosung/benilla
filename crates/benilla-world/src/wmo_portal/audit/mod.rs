@@ -616,8 +616,8 @@ fn wmo_outside_audit() {
 
     assert_eq!(
         shell_culled, 0,
-        "{shell_culled} open-air cameras culled the building's exterior shell — the director's \
-         \"wrongly not visible from the outside\""
+        "{shell_culled} open-air cameras culled the building's exterior shell, so it is \
+         wrongly not visible from the outside"
     );
     assert!(
         inside_violations.is_empty(),

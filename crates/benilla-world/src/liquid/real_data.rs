@@ -222,10 +222,10 @@ fn uldaman_is_not_submerged_in_a_mushroom_caves_pool() {
         .filter_map(|w| w.surface_z_at(feet[0], feet[1]))
         .filter(|z| *z > feet[2])
         .min_by(f32::total_cmp)
-        .expect("the mushroom cave's pool is what B85 reported");
+        .expect("the mushroom cave's pool is over this XY");
     assert!(
         (reported - 399.64).abs() < 0.05,
-        "the surface B85 reported (got {reported})"
+        "the mushroom cave pool's surface (got {reported})"
     );
     assert!(reported - feet[2] > 185.0, "…and 186 yd overhead");
 
@@ -324,7 +324,7 @@ fn the_rogues_quarter_is_not_under_tirisfals_lake() {
     assert!(
         (unscoped.surface_z - 32.93).abs() < 0.05
             && (unscoped.surface_z - feet[2] - 95.19).abs() < 0.05,
-        "the surface B60 reported (got {})",
+        "Tirisfal's lake surface, 95 yd up (got {})",
         unscoped.surface_z
     );
     // Inside Undercity, none of its 38 liquid groups covers this XY.

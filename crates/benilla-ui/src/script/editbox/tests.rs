@@ -496,7 +496,7 @@ fn alt_arrow_key_mode_is_the_flag_and_the_engine_core_no_longer_swallows_moves()
 
     assert!(
         s.eval::<bool>("return E.SetIgnoreArrows == nil").unwrap(),
-        "5875 has no SetIgnoreArrows — publishing it was decision 1189's error"
+        "5875 has no SetIgnoreArrows — an EditBox must not publish it"
     );
 
     assert_eq!(

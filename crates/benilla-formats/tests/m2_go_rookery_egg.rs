@@ -37,7 +37,7 @@ fn the_rookery_egg_keys_its_hatch_in_despawn_not_in_the_state_family() {
     let hatch = seq(DESPAWN);
     assert!(
         (2.0..3.5).contains(&hatch.duration),
-        "157 Despawn is a multi-second play (got {}s) — the whole of what B140 reported missing",
+        "157 Despawn is a multi-second play (got {}s) — the egg's whole hatch",
         hatch.duration
     );
     assert!(

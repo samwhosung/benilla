@@ -1309,7 +1309,7 @@ mod tests {
         assert_ne!(
             tag,
             crate::mesh_tag::probe_bits(slot),
-            "the payload must not force a mid-ramp part opaque (the pre-0755 write)"
+            "the payload must not force a mid-ramp part opaque (a bare `probe_bits` write)"
         );
         let material = world
             .get::<MeshMaterial3d<WowModelMaterial>>(part)

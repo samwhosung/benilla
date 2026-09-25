@@ -577,7 +577,7 @@ mod tests {
         );
         assert!(
             !set.contains(&2),
-            "goblin male does NOT show geoset 2 — the white topknot of B11"
+            "goblin male does NOT show geoset 2 — the white topknot"
         );
         // Race 9 ships only sex-0 rows, so the goblin female keeps the region base, the same scalp.
         let f = cg.visible_geosets(9, 1, 0, 0, &EquipGeosets::default());

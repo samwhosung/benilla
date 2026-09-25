@@ -89,7 +89,7 @@ fn scroll_child_top_tracks_vertical_scroll_unclamped_then_restores_on_clear() {
         child:SetWidth(300); child:SetHeight(600)
         local marker = child:CreateTexture(nil, "ARTWORK")
         marker:SetTexture("marker:child")
-        marker:SetAllPoints()  -- templateless Lua regions carry no implicit anchor (decision 1310)
+        marker:SetAllPoints()  -- templateless Lua regions carry no implicit anchor
 
         frame:SetScrollChild(child)
     "#,
@@ -481,7 +481,7 @@ fn hit_test_denies_a_button_clipped_out_and_admits_it_once_scrolled_into_view() 
         local frame = CreateFrame("ScrollFrame", "SF")
         frame:SetPoint("TOPLEFT", 0, -100)  -- top 500
         frame:SetWidth(300); frame:SetHeight(200)  -- bottom 300
-        frame:EnableMouse(false)            -- isolate the button's own clip-gated hit (§5's subject)
+        frame:EnableMouse(false)            -- isolate the button's own clip-gated hit
 
         local child = CreateFrame("Frame", "Child")
         child:SetWidth(300); child:SetHeight(600)

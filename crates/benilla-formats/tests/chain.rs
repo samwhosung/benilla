@@ -801,7 +801,7 @@ fn reads_authentic_atmosphere_from_light_dbc() {
     };
     assert!(
         (a.fog_end - 500.0).abs() < 1.0,
-        "clear fog_end should be 500 yd (raw 18000/36, decision 0324), got {}",
+        "clear fog_end should be 500 yd (raw 18000/36), got {}",
         a.fog_end
     );
     assert!(
@@ -849,7 +849,7 @@ fn reads_elwynn_storm_fog_endpoints() {
     let s = cat.sample(0, [-8949.95, -132.49, 83.5], 1440, true);
     assert!(
         (s.fog_end - 277.8).abs() < 1.0,
-        "storm fog_end should be ~278 yd (raw 10000/36, decision 0324), got {}",
+        "storm fog_end should be ~278 yd (raw 10000/36), got {}",
         s.fog_end
     );
     assert!(

@@ -542,7 +542,7 @@ fn an_addon_error_while_entering_world_reports_on_screen_and_the_sibling_loads()
     let dir = tmp.join("benilla-config/AddOns/AaBroken");
     std::fs::create_dir_all(&dir).expect("broken addon dir");
     std::fs::write(dir.join("AaBroken.toc"), "## Interface: 11200\nboom.lua\n").expect("toc");
-    std::fs::write(dir.join("boom.lua"), "error('B271: file-scope boom')\n").expect("lua");
+    std::fs::write(dir.join("boom.lua"), "error('file-scope boom')\n").expect("lua");
     let mut world = booted_world();
 
     log_in_as(&mut world, "Onehunter", 1);
@@ -569,7 +569,7 @@ fn an_addon_error_while_entering_world_reports_on_screen_and_the_sibling_loads()
         .expect("eval")
         .unwrap_or_default();
     assert!(
-        shown.contains("B271: file-scope boom"),
+        shown.contains("file-scope boom"),
         "the dialog names the actual error, got: {shown:?}"
     );
     drop(script);

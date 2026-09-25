@@ -1274,7 +1274,7 @@ mod tests {
         assert!(scene_frozen(Some((false, false)), false, false));
         assert!(
             !scene_frozen(Some((false, true)), false, false),
-            "…and a throttled camera is awake (1559)"
+            "…and a throttled camera is awake"
         );
         // A world-lane emitter has no booth camera; the owner still reaches it.
         assert!(!scene_frozen(None, false, false));
@@ -1340,7 +1340,7 @@ mod tests {
             follow_fraction(&plain, 30.0),
             0.0,
             "no 0x4000: no per-frame term at any speed — ride-vs-trail is the storage space, not \
-             a correction (1585)"
+             a correction"
         );
         let riding = benilla_formats::ParticleEmitterDef {
             flags: 0x0011, // the carried torch, Club_1H_Torch_A_01.m2

@@ -71,6 +71,6 @@ fn the_lava_bubble_keys_its_whole_uv_flipbook_in_variation_one() {
 
     assert!(
         subs.iter().all(|s| s.uv_anim.is_none()),
-        "the slot-0 bake yields nothing on any batch — the frozen sprite B98 reported"
+        "the slot-0 bake yields nothing on any batch — read alone, the sprite freezes"
     );
 }

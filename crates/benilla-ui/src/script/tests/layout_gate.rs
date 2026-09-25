@@ -476,7 +476,7 @@ fn a_retargeted_anchor_follows_its_new_target() {
     assert!(
         (after_move - 310.0).abs() < 0.01,
         "moving the NEW target must move the plate (310), not leave it at {after_move} — the \
-         retarget's edge patch dropped the new edge and the node is under-dirtied (decision 1625)"
+         retarget's edge patch dropped the new edge and the node is under-dirtied"
     );
 
     s.run(r#"a:SetPoint("TOPLEFT", nil, "TOPLEFT", 0, -50)"#)

@@ -16,7 +16,7 @@ fn end_to_end_two_frame_tree_extracts_in_zkey_order() {
         parent:SetPoint("TOPLEFT", 0, 0)          -- anchored to the screen root
         parent:SetWidth(400); parent:SetHeight(300)
         -- SetAllPoints on each region: a templateless Lua region gets NO implicit anchor
-        -- (decision 1310 — rect-less, never drawn), so real addon code anchors it, and so do we.
+        -- (it is rect-less, never drawn), so real addon code anchors it, and so do we.
         local pbg = parent:CreateTexture(nil, "BACKGROUND")
         pbg:SetTexture("Interface\\Parent.blp")
         pbg:SetAllPoints()

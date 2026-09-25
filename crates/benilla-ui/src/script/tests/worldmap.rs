@@ -349,7 +349,7 @@ fn worldmap_current_zone_and_player_feed() {
         .unwrap();
     assert!(
         (px - 0.1).abs() < 1e-6 && (py - 0.2).abs() < 1e-6,
-        "a party slot reads its own projection (B320)"
+        "a party slot reads its own projection"
     );
     for token in ["party2", "party5", "party0", "raid1", "nonsense"] {
         assert_eq!(

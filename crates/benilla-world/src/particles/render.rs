@@ -863,8 +863,8 @@ mod tests {
         assert!(
             worst_route_over_bias > 0.5,
             "cam-relative route divergence stayed far inside the bias \
-             (worst {worst_route_over_bias:.2}× across the sweep) — 0781's premise would be \
-             unfounded"
+             (worst {worst_route_over_bias:.2}× across the sweep) — a decal would not need its \
+             receiver's matrix"
         );
     }
 
@@ -924,19 +924,19 @@ mod tests {
             }
         }
         eprintln!(
-            "bake residual worst: {worst_over_old:.3}x the 0781-era 4096 margin, \
-             {worst_over_retired_ring:.3}x the 8192 the ring rode until 1817, \
+            "bake residual worst: {worst_over_old:.3}x the old 4096 margin, \
+             {worst_over_retired_ring:.3}x the retired 8192 ring bias, \
              {worst_over_new:.3}x Rung::DECAL_RASTER"
         );
         assert!(
             worst_over_old > 0.5,
-            "the 3-ulp residual stayed far inside the 0781-era 4096 margin \
+            "the 3-ulp residual stayed far inside the old 4096 margin \
              (worst {worst_over_old:.2}×) — the resize's premise would be unfounded"
         );
         assert!(
             worst_over_retired_ring > 1.0,
             "the 3-ulp residual fits inside the retired +8192 (worst {worst_over_retired_ring:.2}×) \
-             — then the ring and reticle were NOT under-biased and 1817's raise wants re-arguing"
+             — then the ring and reticle were NOT under-biased and their raise wants re-arguing"
         );
         assert!(
             worst_over_new < 0.5,

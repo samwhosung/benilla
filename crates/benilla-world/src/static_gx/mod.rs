@@ -647,7 +647,7 @@ impl Plugin for StaticGxPlugin {
         if !enabled() {
             return;
         }
-        info!("static-gx: ARMED (default since 1434; WOW_STATIC_GX=0 opts out) — the retained static-world pass (1429–1434)");
+        info!("static-gx: ARMED (default; WOW_STATIC_GX=0 opts out) — retained static-world pass");
         app.init_resource::<StaticGx>().add_systems(
             PostUpdate,
             // Bake, scene walk, publish; after `CheckVisibility`, which is load-bearing. A spawned

@@ -572,7 +572,7 @@ mod tests {
         assert!(
             e.contains::<crate::exterior_cull::ExteriorScene>(),
             "an open-world liquid surface is exterior scene — untagged, the window cull never \
-             queries it and the lake draws through a sealed ceiling (the director's report)"
+             queries it and the lake draws through a sealed ceiling"
         );
         assert!(
             e.contains::<LiquidSurface>(),

@@ -1256,11 +1256,11 @@ mod tests {
         assert!(
             !pvs.visible[3],
             "a portal-disconnected shell 30 yd off the doorway's axis is culled: no window shows \
-             it, and drawing it is exactly the over-draw 1826 removed"
+             it, and drawing it would be pure over-draw"
         );
         assert!(
             pvs.visible[4],
-            "1853: an admitted shell is FLOODED FROM, not merely marked — g4 is an interior behind \
+            "an admitted shell is FLOODED FROM, not merely marked — g4 is an interior behind \
              g2 with no edge to the seed's half of the graph, so the walk through g2's own back \
              door is its only route into the PVS (`0x6b3d39 call 0x6b41c0`). A marking Pass 2 \
              leaves it culled, which from a Darnassus shop is most of the city"

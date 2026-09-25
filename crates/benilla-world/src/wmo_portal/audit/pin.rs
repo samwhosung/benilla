@@ -557,7 +557,7 @@ fn shadowfang_courtyard_leaves_the_far_room_on_the_scene_fog() {
     );
     assert!(
         !pvs.interior_fog[61],
-        "B335: the room two exterior-lit courtyards away must inherit the SCENE fog, not this \
+        "the room two exterior-lit courtyards away must inherit the SCENE fog, not this \
          building's MFOG teal"
     );
     assert!(
@@ -667,7 +667,7 @@ fn shadowfang_sees_true_interiors_that_are_off_the_fog_chain() {
     );
     assert!(
         !pvs.interior_fog[13],
-        "…and its room is off the chain, so the fog it takes is the SCENE's (1792 §5's fix)"
+        "…and its room is off the chain, so the fog it takes is the SCENE's"
     );
     assert_eq!(
         attach_room(61),
@@ -679,11 +679,11 @@ fn shadowfang_sees_true_interiors_that_are_off_the_fog_chain() {
         off_chain,
         vec![1, 2, 13, 68],
         "four true-interior rooms are in frame across the courtyards and none is on the chain: \
-         this is the population a unit's fog gate has to answer for. It was three until 1853 — \
-         g68 sits behind an exterior group no portal joins to the seed's half of the graph, so it \
-         arrives only once Pass 2 WALKS ON from the window that admits that group instead of \
-         merely marking it. The gate's verdict on all four is identical; what changed is how many \
-         rooms the cull lets the director see at once"
+         this is the population a unit's fog gate has to answer for. The fourth, g68, sits \
+         behind an exterior group no portal joins to the seed's half of the graph, so it \
+         arrives only because Pass 2 WALKS ON from the window that admits that group instead of \
+         merely marking it. The gate's verdict on all four is identical; the walk decides only \
+         how many rooms the cull lets the player see at once"
     );
 }
 

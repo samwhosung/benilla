@@ -817,7 +817,7 @@ mod tests {
         assert_eq!(
             (verdict.liquid, verdict.liquid_hidden),
             (1, 1),
-            "and the cull must have REACHED it — (0, 0) here is the pre-1652 defect, which \
+            "and the cull must have REACHED it — (0, 0) here is a cull that skipped it, which \
              leaves the surface `Inherited` and looks identical on screen to being admitted"
         );
     }

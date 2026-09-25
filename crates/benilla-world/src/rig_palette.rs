@@ -1220,12 +1220,12 @@ mod tests {
         assert_eq!(
             crate::mat_anim_table::region_offset() - rig_origin_region_offset(),
             rig_origin_region_bytes(),
-            "the mat-anim table follows the origin table (decision 1381)"
+            "the mat-anim table follows the origin table"
         );
         assert_eq!(
             crate::straddle::region_offset() - crate::mat_anim_table::region_offset(),
             crate::mat_anim_table::region_bytes(),
-            "the straddle clip table follows the mat-anim table (decision 2188)"
+            "the straddle clip table follows the mat-anim table"
         );
         assert_eq!(
             palette_region_offset() - crate::straddle::region_offset(),

@@ -959,7 +959,7 @@ mod tests {
         // The tauren bear value seen live: h = 2.083 × 1.35.
         assert!(
             (h(2289, 1.35) - 2.083 * 1.35).abs() < 5e-3,
-            "tauren bear form-derived h should reproduce 0695's observed 2.812"
+            "tauren bear form-derived h should reproduce the 2.812 seen live"
         );
     }
 
