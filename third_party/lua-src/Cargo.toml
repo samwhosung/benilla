@@ -1,23 +1,19 @@
 # A fork of the `lua-src` crate (MIT, github.com/mlua-rs/lua-src-rs), pinned to the version mlua
-# 0.11 asks for, carrying ONE deliberate change to the Lua 5.1.5 sources it compiles.
+# 0.11 asks for, carrying one deliberate change to the Lua 5.1.5 sources it compiles.
 #
-# WHY THIS EXISTS — decision 1215. The 1.12 addon corpus is written for Lua 5.0 and uses the
-# iterator-less generic-for (`for k, v in someTable do`) in 183 of 218 addons. Lua 5.1 deleted the
-# opcode that made it work, so on stock 5.1 it raises `attempt to call a table value` — the first
-# error for 60 of 218 addons at session start, three quarters of everything that breaks in a running
-# session. It is not reachable from inside Lua: not a library function, not a global, an OPCODE.
+# Why it exists: the 1.12 addon corpus is written for Lua 5.0 and uses the iterator-less
+# generic-for (`for k, v in someTable do`) in 183 of 218 addons. Lua 5.1 deleted the opcode that
+# made it work, so on stock 5.1 it raises `attempt to call a table value`, the first error for 60 of
+# 218 addons. No Lua-side shim can restore an opcode. The fork stays on 5.1.5 and restores that one
+# opcode's 5.0 behaviour, which Lua shipped as "for compatibility only", so every other 5.1 fix and
+# mlua's whole surface stay intact.
 #
-# WHAT IS AND IS NOT CHANGED: `BENILLA.md` lists every hunk against upstream's `lua-5.1.5/` tree
+# What changes: `BENILLA.md` lists every hunk against upstream's `lua-5.1.5/` tree
 # (eight, in three files) and the one command that verifies the sources against the registry copy.
 #
-# When the payload does land we are still NOT adopting Lua 5.0: we stay on 5.1.5 and restore the
-# behaviour of one opcode Lua itself shipped and labelled "for compatibility only", so every other
-# 5.1 fix and mlua's whole surface stay intact.
-#
-# The crate's own `src/lib.rs` is upstream's, with Lua 5.2/5.3/5.4/5.5 stripped from the `Version`
-# enum and the trees deleted. That is deliberate rather than tidiness: benilla builds 5.1 and only
-# 5.1, and a fork that still *offers* the other four would answer a request for them with a missing
-# directory at build time instead of a compile error here.
+# The crate's own `src/lib.rs` is upstream's, with Lua 5.2 to 5.5 stripped from the `Version` enum
+# and their trees deleted, so asking for another version is a compile error here rather than a
+# missing directory at build time.
 [package]
 name = "lua-src"
 version = "550.0.0"

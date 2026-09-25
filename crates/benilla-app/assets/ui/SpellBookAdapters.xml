@@ -1,6 +1,6 @@
 <Ui>
     <!--
-        BENILLA_ALLOW_OWN_UI=1. Deviation: over the unedited stock SpellBookFrame.xml, the pet
+        Deviation: over the unedited stock SpellBookFrame.xml, the pet
         page's autocast widgets take the pet bar button's proportions.
         The `$parentAutoCast` shine (UI-AutoCastButton.mdx) is squared on the button, 37x37 at
         CENTER (0,0) and scale 1.48, so its rim runs on the viewport edge at the pet button's

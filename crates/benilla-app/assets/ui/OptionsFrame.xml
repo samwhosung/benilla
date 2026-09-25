@@ -3166,7 +3166,7 @@
          GameMenuFrame.xml wraps ToggleGameMenu, IsOptionFrameOpen and UpdateMicroButtons, which
          name only the stock three. Chat-tab hover (FloatingChatFrame.lua l.842/860) reads the
          hidden UIOptionsFrame, so it works while this window, which does not cover the chat, is
-         open. BENILLA_ALLOW_OWN_UI=1 -->
+         open. -->
     <Script><![CDATA[
         -- This window's UIPanelWindows row, the reference's OptionsFrame values (UIParent.lua:16):
         -- the centre slot, openable while dead. UIParent.xml, which makes the table, loads first.
