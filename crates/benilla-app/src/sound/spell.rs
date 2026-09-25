@@ -1,4 +1,4 @@
-//! Spell-visual kit sounds (decision 0107): route [`SpellKitSound`] — the kit's own
+//! Spell-visual kit sounds: route [`SpellKitSound`] — the kit's own
 //! `SoundEntries.dbc` id (`SpellVisualKit` field 13), resolved by the cast-edge router
 //! (`crate::creature_anim::spell_visual`) — to audio at the casting unit, mirroring the client's
 //! looping-test split (`0x458830`): a plain kit rings as a fire-and-forget positioned one-shot
@@ -46,7 +46,7 @@ fn route_spell_kit_sounds(
     let listener = listener.pos;
     // Same-drain dedup: the client rings a kit's sound once per PlaySpellVisualKit call, and a
     // state kit is legitimately played twice in one packet burst (the impact hand-off's flash +
-    // the aura watcher's ADD edge — both real reference callers, 0852). One frame, one ring;
+    // the aura watcher's ADD edge — both real reference callers). One frame, one ring;
     // plays in different frames (a missile impact preceding the aura by a beat) both ring, as
     // the reference's two calls would.
     let mut played_now: Vec<(Entity, u32)> = Vec::new();
@@ -121,7 +121,7 @@ fn route_spell_kit_sounds(
                 }
             }
             SpellKitSound::StopKit { entity, kit_sound } => {
-                // Kit-scoped (an aura-drop reap, 0852): stop exactly this kit's channels; the
+                // Kit-scoped (an aura-drop reap): stop exactly this kit's channels; the
                 // ledger entry goes only if it is this kit, so an unrelated hold loop survives.
                 if hold_loops.get(&entity) == Some(&kit_sound) {
                     hold_loops.remove(&entity);

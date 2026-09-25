@@ -1,9 +1,9 @@
 //! **When** a remote unit's relayed move replays — the reference's per-unit replay chain, byte-traced
-//! (decision 0615; supersedes the invented estimator of 0601).
+//! (supersedes the invented estimator of 0601).
 //!
 //! A remote's inbound `MSG_MOVE_*` is not applied at arrival: it is given a client **fire-time** and
 //! waits in the unit's queue until the clock reaches it, the dead-reckon covering the mover's own
-//! timeline in between (decision 0601). The law that picks that
+//! timeline in between. The law that picks that
 //! fire-time lives in `0x618c30` + its window helper `0x618b50`, and it is **per unit** — five cells
 //! on the unit's own CMovement, no manager cursor:
 //!
@@ -44,7 +44,7 @@ pub(crate) struct RelayMove {
     pub(crate) fall_time: u32,
     pub(crate) jump: Option<JumpInfo>,
     pub(crate) transport: Option<TransportPose>,
-    /// **What this packet's opcode means on top of the pose** (decision 2064) — the receiver's
+    /// **What this packet's opcode means on top of the pose** — the receiver's
     /// switch, and the only thing about a relay that is not in its `MovementInfo`.
     pub(crate) verb: RelayVerb,
 }
@@ -56,7 +56,7 @@ impl RelayMove {
     /// queued node's tag `0x26`, which `0x619030` (facing) and `0x619090` (position) both skip.
     ///
     /// **That tag is the TELEPORT's, and this client believed for two years it was the
-    /// heartbeat's** (decision 2064, correcting 0601/0603). A teleport is the one move smoothing
+    /// heartbeat's** (correcting 0601/0603). A teleport is the one move smoothing
     /// cannot help — its position is a discontinuity, so blending toward it walks the mover, swept
     /// capsule and all, across the gap the teleport exists to skip. A heartbeat has no such
     /// problem and the reference blends it like anything else.
@@ -172,7 +172,7 @@ impl RelayChain {
         fire_ms
     }
 
-    /// **The sender skipped time** (`MSG_MOVE_TIME_SKIPPED`, decision 1935): advance this chain's
+    /// **The sender skipped time** (`MSG_MOVE_TIME_SKIPPED`): advance this chain's
     /// copy of the mover's wire clock by `lag_ms`, without scheduling anything. The reference does
     /// exactly this and nothing else — `0x603b40` resolves the unit and `0x61ab90` runs
     /// `[CMovement+0xac] += lag`, which is this field.

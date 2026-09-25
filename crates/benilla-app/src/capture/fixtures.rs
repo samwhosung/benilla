@@ -17,7 +17,7 @@ const WOLF_FACTION: u32 = 32;
 /// onto the water *beyond* it.
 pub(super) const NAME_WATER_POS: [f32; 3] = [-9512.97, -331.29, 61.4];
 
-/// The lighting matrix's chest (decision 0744): `GameObjectDisplayInfo` 259,
+/// The lighting matrix's chest: `GameObjectDisplayInfo` 259,
 /// `World\SkillActivated\Containers\TreasureChest01.mdx`. GameObject guids carry the `0xF110` high
 /// word, and the descriptor is left at its defaults — an unstated `GAMEOBJECT_STATE` holds the
 /// closed rest pose, which is the frame we want.
@@ -254,7 +254,7 @@ pub(super) fn seed_ui_fixture(
                  for his harsh taxes throughout the land.$B$BMake your choice!"
                     .into(),
             );
-            // Quest rows ride above the options (decision 0088) — an available quest (its own
+            // Quest rows ride above the options — an available quest (its own
             // AvailableQuestIcon dot) so the capture covers the quest-row icon/text seating, not
             // just the option rows.
             gossip.quests = vec![(783, 0, 5, "Eagan Peltskinner".into())];
@@ -502,7 +502,7 @@ pub(super) fn seed_ui_fixture(
                 }),
             );
             // The item objective's target + the reward rows (log icons resolve through the item
-            // template's display_info_id, not a wire display id — 0109).
+            // template's display_info_id, not a wire display id).
             let mut with_icon = template("Chipped Boar Tusk", 0);
             with_icon.display_info_id = DISP_STONE;
             items.insert_template(93_001, Some(with_icon));
@@ -895,7 +895,7 @@ pub(super) fn seed_ui_fixture(
                 (722, 24 | 60 << 16),
                 (724, 45),
                 (725, 55 | 60 << 16),
-                // Stat buffs (INT on the wire — decision 1397): +10 stamina, −5 spirit; +10 fire
+                // Stat buffs (INT on the wire): +10 stamina, −5 spirit; +10 fire
                 // resistance. The −5 is the two's-complement word an x86-hosted server sends; an
                 // arm64 host saturates that same debuff to a flat 0, so the RED leg of the sheet is
                 // exercisable here and not on this deploy.
@@ -1046,7 +1046,7 @@ pub(super) fn seed_ui_fixture(
             let Some(script) = script else {
                 return;
             };
-            // The Audio page (0957): register the real CVar set first — the hermetic capture has
+            // The Audio page: register the real CVar set first — the hermetic capture has
             // no CvarPlugin file load to race, and the rows must read real values, not the
             // nil-tolerant zeros — then open and select through the live paths.
             script.register_cvars(crate::cvars::registered_pairs());
@@ -1060,7 +1060,7 @@ pub(super) fn seed_ui_fixture(
             let Some(script) = script else {
                 return;
             };
-            // The Graphics page (0959), same posture as the Audio fixture: real CVar set, live
+            // The Graphics page, same posture as the Audio fixture: real CVar set, live
             // open-and-select paths.
             script.register_cvars(crate::cvars::registered_pairs());
             if let Err(e) =
@@ -1105,7 +1105,7 @@ pub(super) fn seed_ui_fixture(
             let Some(script) = script else {
                 return;
             };
-            // The dropdown list open (0992, re-seated onto Camera Following Style by 1649), same
+            // The dropdown list open (re-seated onto Camera Following Style by 1649), same
             // posture as the page fixtures: real CVar set, the live open-select-toggle path. The
             // list's width lands inside the click that opens it — the stock kit's
             // `UIDropDownMenu_Refresh` sizes every button from `normalText:GetWidth() + 60`
@@ -1142,10 +1142,10 @@ pub(super) fn seed_ui_fixture(
             let Some(script) = script else {
                 return;
             };
-            // Mid-search (0984), same posture as the page fixtures: real CVar set, then the
+            // Mid-search, same posture as the page fixtures: real CVar set, then the
             // live open path and a typed query — "volume" reflows the four volume sliders
             // under the Audio head (Master matched by the token too, so no pull-in here; the
-            // pull-in has its unit test). Focused (0989): captures pin the caret visible, so
+            // pull-in has its unit test). Focused: captures pin the caret visible, so
             // this baseline also pins the caret hugging the text's end — the drawn-space
             // advance law's visual regression guard.
             script.register_cvars(crate::cvars::registered_pairs());
@@ -1157,7 +1157,7 @@ pub(super) fn seed_ui_fixture(
             }
         }
         UiFixture::SpellBook => {
-            // The director's own report reproduced (decision 0228): a HUMAN WARRIOR (race 1,
+            // The director's own report reproduced: a HUMAN WARRIOR (race 1,
             // class 1) who learned Fireball + Mind Flay via a GM command during testing. The book
             // resolves through the REAL chain (live 1.12 spell ids; names/icons/ranks from the
             // local Spell.dbc, tab lines from SkillLineAbility.dbc, the General collapse from
@@ -1176,7 +1176,7 @@ pub(super) fn seed_ui_fixture(
                 crate::net::SelfPlayer,
                 crate::net::Guid(PLAYER_GUID),
             ));
-            // The equipped main-hand weapon — the auto-attack borrows its icon (decision 0230).
+            // The equipped main-hand weapon — the auto-attack borrows its icon.
             crate::items::spawn_item(
                 &mut commands,
                 &mut index,
@@ -1192,7 +1192,7 @@ pub(super) fn seed_ui_fixture(
             };
             actions.spells.extend([
                 // The auto-attack — its icon must be the equipped sword, NOT spell 6603's `Temp`
-                // placeholder face (decision 0230). Lands in General (no skill line).
+                // placeholder face. Lands in General (no skill line).
                 6603, // Attack
                 // Warrior class abilities → their own class-line tabs (flag clear for a warrior):
                 // Charge/Heroic Strike/Rend on Arms, Battle Shout on Fury.
@@ -1208,7 +1208,7 @@ pub(super) fn seed_ui_fixture(
                 133, // Fireball (Fire)
                 589, // Shadow Word: Pain (Shadow)
                 // Add-gate check: a language + an armor proficiency a live warrior carries, both
-                // DO_NOT_DISPLAY — must NOT appear at all (decision 0227).
+                // DO_NOT_DISPLAY — must NOT appear at all.
                 668,  // Language: Common
                 9078, // Cloth proficiency
             ]);
@@ -1259,7 +1259,7 @@ pub(super) fn seed_ui_fixture(
             }
         }
         UiFixture::Social => {
-            // Nothing to seed: the stray capsule (B264) rode the pane's *declaration*, not its
+            // Nothing to seed: the stray capsule rode the pane's *declaration*, not its
             // contents — an empty friends list opens the same frames a full one does.
             let Some(script) = script.as_mut() else {
                 return;
@@ -1431,7 +1431,7 @@ pub(super) fn seed_ui_fixture(
             // draws one — the ShouldShowName exclusivity) even though enemy plates boot ON.
             vplates.enemies = false;
         }
-        // The lighting matrix (decision 0744). One spawn, through the same component set a streamed
+        // The lighting matrix. One spawn, through the same component set a streamed
         // entity gets, at a position whose light lane was read out of the data (see the matrix note
         // in `scenarios`). Deliberately ANONYMOUS: no name is registered and plates are forced off,
         // so no glyph rides over the body — the diff of these cells must be about light and nothing
@@ -1494,7 +1494,7 @@ const COOLDOWN_NOW_S: f64 = 100_000.0;
 /// seconds of VM clock move a phase by `~5e-4` of a step, so the shot is reproducible.
 const COOLDOWN_SPAN_S: f64 = 10_000.0;
 
-/// **The cooldown sweep as a filmstrip** (B379): sixteen backpack slots, each parked at its own
+/// **The cooldown sweep as a filmstrip**: sixteen backpack slots, each parked at its own
 /// fraction of one very long cooldown, so the window shows sixteen points of the 1000 ms sweep at
 /// once — the instrument for "what does the indicator actually draw", which no test can reach
 /// (the engine tests prove the scrub, not the picture).

@@ -1,6 +1,6 @@
 //! `WOW_PICK` — the headless **"what is at this pixel, all the way back"** probe.
 //!
-//! The flicker instruments (decisions 0653/0656) localise a defect: `benilla-visual hotspot` hands
+//! The flicker instruments localise a defect: `benilla-visual hotspot` hands
 //! back a pixel box and says *this* is what would not hold still. Naming what is actually there was
 //! then a manual step — read the ADT placements, guess which model the report meant, hope. The
 //! interactive inspector ([`benilla_world::interact`]) answers it with a cursor, which an unattended probe
@@ -128,7 +128,7 @@ type HitIdentity = (
 /// colour, printed per cast so a value that MOVES inside one material is visible at all.
 ///
 /// This exists because comparing material **handles** across frames — the check that "eliminated" a
-/// distance-fade material swap for B38 (0665) — is blind to exactly this: the handle is stable while
+/// distance-fade material swap for B38 — is blind to exactly this: the handle is stable while
 /// the contents move, and three of these are re-sampled per frame *by design* (`sun_scale.zw`'s UV
 /// animation, the tint lane's per-instance clone, the fade twin's alpha). `tint.w` is the WMO
 /// interior batch-class lane (0 exterior / 1 interior-unlit / 2 the MOCV lerp) — a term that
@@ -195,7 +195,7 @@ fn fire_pick(
     // target. So the probe would answer "what is at this pixel" for a character's skin and silently
     // skip its helm, its pauldrons, its weapon and every camera-facing card hanging off them —
     // exactly the geometry a "this bit of my gear looks wrong" report is about (found chasing the
-    // Field Marshal pauldron, decision 0836). `ModelPart` rides every drawn batch in the client, so
+    // Field Marshal pauldron). `ModelPart` rides every drawn batch in the client, so
     // the probe keys on it too and stays a pure instrument: nothing outside this file reads it.
     objects: Query<Entity, Pickable>,
     names: HitNames,
@@ -224,7 +224,7 @@ fn fire_pick(
         };
         // `all_hits` is the whole reason this exists: the nearest hit alone cannot name the rival
         // surface behind it, which is exactly what we came for. The cast reads each part's
-        // RESIDENT geometry (decision 0857) — the render meshes are `RENDER_WORLD`-only since
+        // RESIDENT geometry — the render meshes are `RENDER_WORLD`-only since
         // 0834, so a `MeshRayCast` here reports nothing for any static model.
         let hits = pick.cast(ray, &pickable, true);
         // The camera's GLOBAL transform, bit-exact, on the line that carries the cast index — so
@@ -248,7 +248,7 @@ fn fire_pick(
             eye,
         );
         // Distance ALONG THE RAY is not the gap that decides a depth fight, and reading it as if it
-        // were is how B38 got called "not a depth fight" (0662). At a grazing angle the ray travels
+        // were is how B38 got called "not a depth fight". At a grazing angle the ray travels
         // nearly parallel to both surfaces, so a yard of ray can separate two planes that are a hair
         // apart — and near a line where two planes INTERSECT the perpendicular gap goes to zero
         // while the along-ray gap stays large. So report the perpendicular distance from this hit's
@@ -309,7 +309,7 @@ fn fire_pick(
             // `detail` is the inspector's second line — the kind-specific facts the model path can't
             // carry (a WMO prop's lighting lane, an emitter count). Printed here because this probe
             // IS the inspector without a cursor, and a prop that draws wrong usually differs from a
-            // right one only in that line (decision 0969: the black Booty Bay arch).
+            // right one only in that line (the black Booty Bay arch).
             let (kind, id, label) = obj.map_or_else(
                 || ("<worn>".to_string(), String::new(), String::new()),
                 |o| {

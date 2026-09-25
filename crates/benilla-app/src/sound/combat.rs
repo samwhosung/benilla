@@ -1,8 +1,8 @@
-//! Combat audio (decisions 0075 + 0525): the melee swing's sounds — the whoosh and exertion on
+//! Combat audio: the melee swing's sounds — the whoosh and exertion on
 //! their own event tags, the CONTACT family on the victim dispatch ([`SwingImpact`]).
 //!
 //! The trigger chain: `SMSG_ATTACKERSTATEUPDATE` → [`SwingMessage`] (net bridge; also drives the
-//! swing *animation*, decision 0073) → the attack sequence's M2 events fire mid-swing through
+//! swing *animation*) → the attack sequence's M2 events fire mid-swing through
 //! [`AnimSoundEvent`]. Two tags route directly from that stream:
 //!
 //! - **`$CSS`** — the swing whoosh, in **both** of its forms. Nothing contacted (miss/dodge/
@@ -32,11 +32,11 @@
 //!
 //! The **contact family** consumes [`SwingImpact`] — the victim dispatch `0x624530` + the
 //! `0x6247d0` weapon-sound block, fired at the swing clip's **`$AH0–3`/`$CAH`** crossing, or at
-//! receive for an unresolved attacker (decision 0529; previously keyed on `$HIT`, a CEffect-only
+//! receive for an unresolved attacker (previously keyed on `$HIT`, a CEffect-only
 //! tag many creature attack clips never author — ogre.m2 authors it in 1 of its ~14 attack
 //! variations, so ogre hits were near-silent):
 //!
-//! It is **two blocks in the client's order**, not one pick (decision 0899):
+//! It is **two blocks in the client's order**, not one pick:
 //!
 //! 1. `0x6247d0`'s own weapon-sound block, at the attacker — a **natural-weapon** swing
 //!    (`$AHn` fired the dispatch) plays the attacker's `CreatureSoundData.CustomAttack[n]`
@@ -51,12 +51,12 @@
 //!
 //! Plus the victim's injury vocal (`Injury`/`InjuryCritical`/`InjuryCrushing`) on a damaging,
 //! undefended hit — the ordinary one **rolled** at the victim's own class-2 threshold, 60 for a
-//! creature and 30 for a player, while a crit and a crushing blow always sound (decision 2073).
+//! creature and 30 for a player, while a crit and a crushing blow always sound.
 //!
 //! A `text_only` flush (supersede/attack-stop) drops its sounds — only the floating number
 //! flushes (decision 0149's flush law, inherited from the shared dispatch).
 //!
-//! ## The connecting swing — the other half of `$CSS` (decision 1567)
+//! ## The connecting swing — the other half of `$CSS`
 //!
 //! `$CSS` is **two** sounds, not one, and `0x624ca0` picks between them off the victimState
 //! alone: `{0 unaffected, 2 dodge, 6 evade}` take the by-handedness miss whoosh, and **every
@@ -122,7 +122,7 @@
 //! also plays under a clang is unpinned);
 //! the natural-weapon column is gated on
 //! contact like the weapon impact (whether the digit block also plays on a whiff is unpinned).
-//! `$CPP`/`$CST` are pinned NON-audio (decision 0279): `$CPP` is the victim defense-anim
+//! `$CPP`/`$CST` are pinned NON-audio: `$CPP` is the victim defense-anim
 //! dispatch, `$CST` re-pings the attached combat-kit list — neither belongs to this module.
 
 use bevy::ecs::entity::EntityHashMap;
@@ -239,14 +239,14 @@ fn load_weapon_impacts(mut commands: Commands, assets: Option<Res<WorldAssets>>)
 
 /// The latest swing outcome per attacker — written on the packet, read as the `$CSS` event
 /// fires over the following frames, overwritten by the next swing. (The contact family does not
-/// read it: [`SwingImpact`] carries its own consumed record, decision 0529. Neither does the
+/// read it: [`SwingImpact`] carries its own consumed record. Neither does the
 /// exertion vocal any more — it fires from the packet itself, so it never needs the record to
 /// survive into a later frame.)
 #[derive(Default)]
 struct LastSwing(EntityHashMap<SwingMessage>);
 
 /// The attacker's swinging weapon: `(subclass, metal)`, unarmed when the hand is empty. The
-/// metal-vs-wood half is the item's own **`Material`** off the wire (decision 0882) — not a
+/// metal-vs-wood half is the item's own **`Material`** off the wire — not a
 /// subclass guess, which the real 5875 data contradicts outright: maces (subclass 4) ship in both
 /// materials, so a Cudgel is wood where a Mace is metal.
 ///
@@ -356,7 +356,7 @@ fn swing_weight(
 }
 
 /// The whiff/no-weapon-contact family: nothing for the weapon to strike. Immune and deflect
-/// route to positioned stubs in the client (`0x457f20`/`0x458610`, decision 0279) whose kit ids
+/// route to positioned stubs in the client (`0x457f20`/`0x458610`) whose kit ids
 /// are unpinned — grouped here (whoosh, no impact) as the INTERIM stand-in.
 fn no_contact(swing: &SwingMessage) -> bool {
     swing.hit_info & HITINFO_MISS != 0
@@ -514,7 +514,7 @@ fn combat_sounds(
     // victim reads flesh — the reference's own answers for an unknown material, so the fallback
     // is its behaviour rather than a guess of ours.
     let mats = materials.as_deref().map(|m| &m.0);
-    // Every combat play carries its **voice bus** (decision 1555): the melee-contact family all
+    // Every combat play carries its **voice bus**: the melee-contact family all
     // contends for bus 10's four voices, the vocals for their own one or two, and the miss whoosh
     // for nothing at all. A kit refused at the cap is not an error — it is the gate doing its job,
     // and `play_kit_ext` reports it as an ordinary silent success.
@@ -846,7 +846,7 @@ fn combat_sounds(
                     || !swing.victim.is_some_and(|v| object_sound_playing(&out, v))
             });
             if let Some((victim_tr, _, net, victim_is_you, _)) = vocal_victim {
-                // The class chance roll (decision 2073), inside the victim's own `[vt+0x88]` and
+                // The class chance roll, inside the victim's own `[vt+0x88]` and
                 // therefore keyed on the VICTIM's type: class 2 is 60 for a creature and 30 for a
                 // player, while classes 3 and 9 carry 100 and always sound. So an ordinary wound
                 // grunt thins out under sustained melee and the big hits punch through it.
@@ -860,7 +860,7 @@ fn combat_sounds(
                         continue;
                     }
                 }
-                // **A zero column plays NOTHING** (decision 2075). benilla used to walk down the
+                // **A zero column plays NOTHING**. benilla used to walk down the
                 // family here — crushing → critical → ordinary — on the reasoning that "crushing
                 // rows are often 0 in data"; they are, and the reference is simply silent for
                 // them. `0x623490` tests the selected id exactly once (`0x6234e6 test ebx,ebx ;

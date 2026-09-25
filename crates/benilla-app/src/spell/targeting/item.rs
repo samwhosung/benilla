@@ -1,5 +1,5 @@
 //! The **item** seam — `0x495d60`, the whole local law for an item target, plus the two confirm
-//! popups that hang off it (decisions 0923 / 0928).
+//! popups that hang off it.
 //!
 //! Reached from two byte-identical rungs: the bag click (`PickupContainerItem 0x4f9b30` @ `4f9c54`)
 //! and the paper-doll click (`0x4c7300` @ `4c76df`) — *if IsTargeting and `TargetingWantsItem
@@ -77,12 +77,12 @@ pub(crate) enum ItemBind {
 /// time. The reference walks the spell's three effects; for each `ENCHANT_ITEM` (53) /
 /// `ENCHANT_ITEM_TEMPORARY` (54) one it runs, **in this order**:
 ///
-/// 1. **The equipped-item gate** (decision 0923). `EquippedItemSubClassMask [+0xec] != 0` ⇒ the
+/// 1. **The equipped-item gate**. `EquippedItemSubClassMask [+0xec] != 0` ⇒ the
 ///    item's class must equal `EquippedItemClass [+0xe8]` **and** `(1 << subclass)` must be in the
 ///    mask (`495e10`–`495e28`); `EquippedItemInventoryTypeMask [+0xf0] != 0` ⇒ `(1 <<
 ///    InventoryType)` must be in it (`495e4d`–`495e70`). Either miss is
 ///    [`ItemBind::Refuse`] — the client's own "Invalid target" red line, no packet, cursor kept.
-/// 2. **The bind confirm** (`495e93`–`495ec6`, decision 0928): the enchant this effect would apply
+/// 2. **The bind confirm** (`495e93`–`495ec6`): the enchant this effect would apply
 ///    must name a real `SpellItemEnchantment` row whose `Flags & 1` is set, the item must not be
 ///    [`ClickedItem::already_bound`], the confirmed flag must be clear, and the item's
 ///    InventoryType must be nonzero (`495ebc` — an *equippable* item; a lockbox or a reagent is
@@ -150,12 +150,12 @@ pub(crate) fn item_bind_verdict(
 /// an enchant off the Craft window, `CMSG_USE_ITEM` for a poison bottle's own ON_USE.
 ///
 /// It also drains the **two confirm popups' answers**, because the reference routes both back
-/// through this same gate rather than to a second machine (decision 0928):
+/// through this same gate rather than to a second machine:
 /// `BindEnchant 0x48d2e0` re-invokes `0x495d60` with its third parameter 1, and
 /// `ReplaceEnchant 0x48d300` skips the gate and calls `0x6e5b40` directly. So a Yes is just
 /// another item ask over the parked guid, and there is one code path for all three entries.
 ///
-/// The post-send tail is the ground commit's (decision 0792): arm the pending cast + the GCD, and
+/// The post-send tail is the ground commit's: arm the pending cast + the GCD, and
 /// clear the word. A click on an EMPTY slot binds nothing and keeps the mode — the ref's
 /// `0x495d60` returns at its own null-item guard (`495da1`) — and so does a refusal or either
 /// confirm, all three of which return before `BindTarget`.
@@ -414,7 +414,7 @@ mod tests {
 
     /// `0x495d60`'s two confirm branches and, more importantly, the ORDER they sit in — the equip
     /// gate first (`495e10`), then the bind confirm (`495e93`), then the replace confirm
-    /// (`495ecc`), each returning before `BindTarget`. Decision 0928.
+    /// (`495ecc`), each returning before `BindTarget`.
     ///
     /// The chain this pins is the one that is easy to get subtly wrong: the bind confirm consults
     /// the confirmed flag and the replace confirm does **not**, so answering the bind popup Yes

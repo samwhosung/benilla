@@ -8,8 +8,7 @@
 //! `$CSD 6923` = the SoundEntries kit literally named `HumanMaleEmoteLaugh`; Cry 77 → 6921,
 //! Chicken 78 → 6919, Applaud 80 → 4× `ClapSounds` 6576 — probe-verified on the real 5875 M2 +
 //! SoundEntries; the client's `$CSD` handler `0x623c10` → `0x459230` plays the event payload as
-//! a literal SoundEntries id, byte-confirming the routing) — and the **gathering/work pair**
-//! (decision 0562):
+//! a literal SoundEntries id, byte-confirming the routing) — and the **gathering/work pair**:
 //!
 //! - **`$TRD`** (`0x62faa0`): the in-flight spell's `SpellVisual` **field-14 strike sound**,
 //!   positioned — **the mining pick clang** (visual 93 → 1143 "Mining Impact") and the crafting
@@ -152,7 +151,7 @@ pub(super) fn route_anim_events(
             // every cycle. Whether anything is audible, from where, and how many at once are the
             // pool pump's questions, not this scanner's: see [`super::emitter_pool`].
             b"$DSL" if ev.data != 0 => {
-                // **The emitter's point is the marker's, not the model's** (decision 1904). Both
+                // **The emitter's point is the marker's, not the model's**. Both
                 // handlers take the kernel's `eventWorldPos` as an argument and pass it straight
                 // into the pool: the placed-M2 lane `0x6951e0` is `fn(fourcc, data, &worldPos, …)`
                 // with `[ebp+0x10]` the `C3Vector*` it hands to `0x461d80`/`0x462000`, and the

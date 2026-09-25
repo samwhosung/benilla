@@ -79,7 +79,7 @@ fn bake_test(
     let Some(model) = m2s.get(&handle) else {
         return false;
     };
-    // The portraits' studio light and the body pane's own (decision 0638) — the harness bakes each
+    // The portraits' studio light and the body pane's own — the harness bakes each
     // slot against the light that slot really uses, so the eyeball shows what ships.
     let (Some(studio), Some(pane)) = (
         booth_light.studio.buffer.clone(),
@@ -99,7 +99,7 @@ fn bake_test(
                 p.replace('\\', "/").to_ascii_lowercase()
             ))
         });
-    // The test model's render forms, built NOW (decision 0834) — a dev harness bake, one model.
+    // The test model's render forms, built NOW — a dev harness bake, one model.
     forms.ensure_now_rigged(&handle, &model.submeshes, mesh_assets);
     let built = forms.slices(&handle);
     let (stat_forms, skin_forms) = (built.stat, built.skin.unwrap_or(&[]));
@@ -192,7 +192,7 @@ fn bake_test(
     }
     // Also drive the paper-doll booth from the same model, so `WOW_PORTRAIT_TEST` eyeballs the
     // full-body framing (feet/crown crop) server-less. Same all-submesh caveat as the portraits
-    // (no geoset filter — a character bakes stacked hair, 0118); the live pane mirrors the filtered
+    // (no geoset filter — a character bakes stacked hair); the live pane mirrors the filtered
     // player. Spun to the default yaw so the still reads three-quarter like the pane's default.
     if let Some(booth) = booths.0.get(PAPERDOLL_SLOT) {
         commands.entity(booth.root).despawn_related::<Children>();

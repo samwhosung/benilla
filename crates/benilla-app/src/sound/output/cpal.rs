@@ -1,5 +1,5 @@
 //! The non-macOS half of [`super`] — the same surface as `coreaudio.rs`, over cpal
-//! (decision 1920: Linux and Windows had been silent since the 09-02 sync, bug B356).
+//! (Linux and Windows had been silent since the 09-02 sync, bug B356).
 //!
 //! [`super`] owns everything that decides *how* the mix reaches the speaker: the mix-ahead
 //! ring, the render thread, the meters, the rebuild-on-device-change loop. That is platform
@@ -210,7 +210,7 @@ impl Stream {
         // expensive in exactly one direction. `BufferUnderrun` is a routine ALSA xrun — the
         // device starved below us — and `BackendSpecific` is a grab-bag; treating either as a
         // dead device means a full teardown and rebuild of the stream on every glitch, which is
-        // the loudest possible response to the quietest problem (decision 1939). **Measured, not
+        // the loudest possible response to the quietest problem. **Measured, not
         // reasoned:** with both mapped to `device_died`, one second of the Linux live test
         // carried a `Lost` and a re-`Opened`; with this split, three runs carry neither. kira
         // draws the same line (`stream_manager.rs`: `DeviceNotAvailable | StreamInvalidated`

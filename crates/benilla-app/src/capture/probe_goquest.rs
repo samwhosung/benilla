@@ -1,6 +1,6 @@
 //! The GameObject-questgiver live probe (`WOW_PROBE_GOQUEST=1`) — the instrument for *"wanted
 //! posters and quest objects are never status-queried"*, and for the answer that question turned
-//! out to have (decision 1872).
+//! out to have.
 //!
 //! A quest-giving **GameObject** — a wanted poster, a half-eaten body, a suspicious barrel — is a
 //! questgiver on the wire exactly as a creature is, and the reference client asks about it: the

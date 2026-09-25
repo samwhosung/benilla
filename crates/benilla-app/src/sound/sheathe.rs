@@ -11,7 +11,7 @@
 //! `SheatheSoundLookups` (`(class, subclass, material)` → stow/draw kit pair — metal/wood
 //! weapons, shields); an empty slot is silent.
 //!
-//! The pick's only real input is the item's **`Material`** (decision 0882): the 5875 table is one
+//! The pick's only real input is the item's **`Material`**: the 5875 table is one
 //! row per weapon subclass per material, and every row of a material carries the same kit pair —
 //! metal 698/700, wood 697/699 — so the subclass is inert and the material decides everything. It
 //! rides the wire both ways (`SMSG_ITEM_QUERY_SINGLE_RESPONSE` for players, the

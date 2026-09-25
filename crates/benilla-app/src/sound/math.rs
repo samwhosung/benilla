@@ -79,7 +79,7 @@ pub(crate) fn near_field_atten(d_sq: f32, maxdist: f32) -> f32 {
 // "transition crossfade"; it is the SFX-bus auto-duck (the SoundVolume category dips to 50 %
 // while SFX one-shots play, restoring over 3 s), unrelated to music transitions, which benilla
 // does not model.
-// The real music transition is a 4.0 s backend fade-stop (see `sound::zone`). Decision 0100.
+// The real music transition is a 4.0 s backend fade-stop (see `sound::zone`).
 
 /// The global 3D rolloff factor — `FSOUND_3D_SetRolloffFactor(4.0)` at device init
 /// (`0x7a47b1`, prefill `0x7a495a` = 4.0f; `SoundRolloffFactor` CVar default "4" round-trips it).
@@ -89,7 +89,7 @@ pub(crate) const ROLLOFF_FACTOR: f32 = 4.0;
 /// FMOD 3.x's logarithmic/inverse model with the global rolloff factor:
 /// full volume inside `min_dist`, `min_dist / (min_dist + factor·(d − min_dist))` beyond
 /// (WoW handed FMOD `Sample_SetMinMaxDistance(min_dist, 100000.0)` — `0x458ed0` — and
-/// [`ROLLOFF_FACTOR`] at init). We disabled the backend's attenuation (decision 0070: gain is
+/// [`ROLLOFF_FACTOR`] at init). We disabled the backend's attenuation (gain is
 /// ours), so this model moves to our side of the seam; the audible total is
 /// `rolloff · near_field_atten`.
 pub(crate) fn fmod_rolloff(d_sq: f32, min_dist: f32) -> f32 {

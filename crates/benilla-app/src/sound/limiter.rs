@@ -1,5 +1,5 @@
 //! The **output limiter** — the mix's last stage, and the one that stops a busy soundscape from
-//! tearing (decision 1551).
+//! tearing.
 //!
 //! ## What it replaces
 //!

@@ -16,7 +16,7 @@ mod seam_tests;
 
 /// The drain: take this frame's events off the channel and run each through the handler table
 /// ([`super::handlers`]) **in wire order**, one after another, each handler a one-shot system
-/// over this exclusive world with its commands applied before the next (decisions 2305, 2306,
+/// over this exclusive world with its commands applied before the next (
 /// 2327). One frame, packet order, before anything else in
 /// [`benilla_world::schedule::WorldStage::Net`] runs: the property 0006 built and 2265 said
 /// every split must keep.
@@ -47,7 +47,7 @@ pub(super) fn tag_self_player(
         if guid.0 == me {
             // Identity only. The controller-fed [`crate::creature_anim::MovementState`] used to
             // ride along here, but it belongs to whichever body we are *steering*, which is not
-            // always this one — `player::embody` owns it now (decision 1281).
+            // always this one — `player::embody` owns it now.
             commands.entity(entity).insert(SelfPlayer);
         }
     }

@@ -131,7 +131,7 @@ pub(crate) struct Cooldowns {
     /// Bumped on every mutation — the UI feed's `ACTIONBAR_UPDATE_COOLDOWN` edge.
     pub(crate) generation: u64,
     /// Bumped when [`Self::prune`] actually removes records — the **natural-expiry** edge, kept
-    /// apart from [`Self::generation`] on purpose (decision 1439): a pruned record flips a
+    /// apart from [`Self::generation`] on purpose: a pruned record flips a
     /// pushed `ui_triple` to `None`, so a feed gated on this store must reopen at that instant —
     /// but the action feed's `ACTIONBAR_UPDATE_COOLDOWN` must NOT fire there, because the
     /// reference sweeps elapsed records on events and never announces a natural expiry.
@@ -143,7 +143,7 @@ impl Cooldowns {
         self.generation = self.generation.wrapping_add(1);
     }
 
-    /// The single counter a gated feed watches (decision 1439): moves exactly when a snapshot
+    /// The single counter a gated feed watches: moves exactly when a snapshot
     /// built over this store could differ — on any mutation, or on a natural expiry the prune
     /// noticed. (Both terms only ever increment, so the sum moves whenever either does.)
     pub(crate) fn feed_epoch(&self) -> u64 {
@@ -153,7 +153,7 @@ impl Cooldowns {
     /// True while an elapsed record still awaits its prune — the one window where a snapshot
     /// built over this store changes with NO counter having moved yet: the feeds run before
     /// `feed_action_state`'s per-frame prune, so on the exact frame a timer crosses zero the
-    /// pushed triple flips to `None` a frame ahead of [`Self::feed_epoch`] (decision 1439).
+    /// pushed triple flips to `None` a frame ahead of [`Self::feed_epoch`].
     /// The predicate is prune's own removal test; cold and parked it costs an empty iteration.
     pub(crate) fn sweep_pending(&self, now: Instant) -> bool {
         self.records.iter().any(|r| {
@@ -173,7 +173,7 @@ impl Cooldowns {
     /// (`StartCooldown`, which passes `gcd=0,0`) are separate nodes. The find-and-replace this
     /// used to do made the GO insert of any cooldown-carrying spell (Frost Nova) overwrite its
     /// own running GCD node — the whole bar's pie flashed and died ~100 ms after the press,
-    /// while cooldown-less spells (Arcane Explosion) kept theirs (decision 0947).
+    /// while cooldown-less spells (Arcane Explosion) kept theirs.
     fn add(
         &mut self,
         spell_id: u32,
@@ -231,7 +231,7 @@ impl Cooldowns {
     /// No GCD here — that's [`Self::start_gcd`]'s separate insert.
     ///
     /// `ranged_attack_time_ms` is the ranged-shot pad (the category scaler `0x6e2b60`'s
-    /// `add [categoryRecoveryTime], [player+0x110]+0x1e8`, decision 0378): the caster's live
+    /// `add [categoryRecoveryTime], [player+0x110]+0x1e8`): the caster's live
     /// `UNIT_FIELD_RANGEDATTACKTIME`
     /// when [`SpellDisplay::ranged_speed_cooldown`], else 0. It folds into the CATEGORY timer —
     /// the Throw/wand-Shoot sweep with all-zero DBC recovery — and rides the insert even for
@@ -401,7 +401,7 @@ impl Cooldowns {
         }
     }
 
-    /// **The list belongs to the world session, not to the process** (decision 2116) — the
+    /// **The list belongs to the world session, not to the process** — the
     /// session-end clear every other net-backed store already had
     /// ([`crate::net::session::disconnected`]).
     ///
@@ -523,7 +523,7 @@ impl Cooldowns {
         );
     }
 
-    /// One `SMSG_PET_SPELLS` cooldown entry (decision 0982) — [`Self::seed_initial`]'s pet twin,
+    /// One `SMSG_PET_SPELLS` cooldown entry — [`Self::seed_initial`]'s pet twin,
     /// separate because the pet block's ids are `u32` where the player's login list packs them
     /// into `u16`, and because its category duration carries a marker bit the player's does not.
     ///
@@ -592,7 +592,7 @@ impl Cooldowns {
 
     /// The cast validator's FIRST rung (`0x6094f0` @ `0x609565` → `0x6e2ea0` → the getter): a
     /// press is refused "not ready" iff [`Self::info`] reads ANY remaining — the spell's own
-    /// pair, a category match, or the GCD leg, one query (decision 0948, which closed 0379's
+    /// pair, a category match, or the GCD leg, one query (which closed 0379's
     /// INTERIM). The GCD refusal predicate is therefore the GETTER's:
     /// `pressed.startRecoveryCategory == node.startRecoveryCategory && node.time != 0` — the
     /// pressed spell's own `startRecoveryTime` is never consulted (a `{cat≠0, time=0}` press —
@@ -742,7 +742,7 @@ mod tests {
         assert!(!cds.has_on_hold_record(133, 0, fireball().category));
     }
 
-    /// The director's Frost Nova report (decision 0947): a cooldown-carrying spell's GO
+    /// The director's Frost Nova report: a cooldown-carrying spell's GO
     /// self-insert (`StartCooldown` passes `gcd=0,0`) lands on its OWN node and must never eat
     /// the cast-send GCD node — the bar's pie flashed and died ~100 ms after every Frost Nova
     /// press while cooldown-less spells (Arcane Explosion) kept theirs, because `add` used to
@@ -856,8 +856,8 @@ mod tests {
         assert_eq!((ch.remaining_ms, ch.duration_ms), (10_000, 15_000));
     }
 
-    /// **The session end empties the list, so the next login's wire is the whole truth**
-    /// (decision 2116). `seed_initial` appends by design (the reference's `AddCooldown` never
+    /// **The session end empties the list, so the next login's wire is the whole truth**.
+    /// `seed_initial` appends by design (the reference's `AddCooldown` never
     /// matches by id), so without the clear the previous session's record stays and — being
     /// stamped with the FULL remainder it had at the earlier login — outlives and outbids the
     /// fresh one. Measured live before the fix: a second world entry read `d=600` where the wire
@@ -1172,7 +1172,7 @@ mod tests {
         assert_eq!(cds.info(133, 0, Some(&fireball()), t0).remaining_ms, 0);
     }
 
-    /// The ranged-shot pad (decision 0378, `0x6e2b60`): a Throw-shaped
+    /// The ranged-shot pad (`0x6e2b60`): a Throw-shaped
     /// spell (category 76, all-zero DBC recovery) sweeps the weapon's attack time via its
     /// CATEGORY timer, and refuses a recast within it.
     #[test]

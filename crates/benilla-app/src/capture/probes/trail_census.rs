@@ -94,7 +94,7 @@ fn fire_trail_census(
     time: ProbeClock,
     // `ViewVisibility` is OPTIONAL and a trail never has one: a trail entity is spawned with a
     // `Transform` and nothing else, deliberately (`ribbons.rs`'s `fade` note — an emitter entity
-    // carrying a `Visibility` would enlist in a second writer's query, decision 0025). Asking for
+    // carrying a `Visibility` would enlist in a second writer's query). Asking for
     // it as a required component matched ZERO trails in every scene, on the ground and on a lift
     // alike, and printed `trails=0` as if the client had spawned none.
     trails: Query<(Entity, &RibbonTrail, Option<&ViewVisibility>)>,

@@ -32,20 +32,20 @@ mod particle_census;
 pub(crate) use particle_census::ParticleCensusPlugin;
 
 /// The under-floor census — per-unit "where the server put it vs where we drew it", the instrument
-/// that turns a screenshot of an NPC below a floor into a number (B197, decision 1384).
+/// that turns a screenshot of an NPC below a floor into a number.
 mod ground_census;
 pub(crate) use ground_census::GroundCensusPlugin;
 
 /// The transport census — per type-11/15 GameObject, the arm stage, the visibility pair and the
 /// render-descendant count: the reader that separates a lift the server never sent from one that
-/// never armed and so never lifted its spawn-hide (B168).
+/// never armed and so never lifted its spawn-hide.
 mod lift_census;
 pub(crate) use lift_census::LiftCensusPlugin;
 mod trail_census;
 pub(crate) use trail_census::TrailCensusPlugin;
 
 /// The unit-visual census — per-entity "what visual did this display actually get", which is what
-/// separates a debug cube (a gap of ours) from a model that legitimately draws nothing (B13,
+/// separates a debug cube (a gap of ours) from a model that legitimately draws nothing (
 /// decision 1403).
 mod visual_census;
 pub(crate) use visual_census::UnitVisualsPlugin;
@@ -58,13 +58,13 @@ pub(crate) use jitter::JitterMeterPlugin;
 
 /// The dress census — per-player "what did the wire ask for, what did we resolve, what is actually
 /// hanging off the skeleton": the three things a screenshot of a geared character conflates, and
-/// the reader that turns "my show-helm preference is ignored" into a counted contradiction (B123,
+/// the reader that turns "my show-helm preference is ignored" into a counted contradiction (
 /// decision 1472).
 mod dress_census;
 pub(crate) use dress_census::DressCensusPlugin;
 
 /// The reveal audit — per-frame, from a snap: every term that decides whether the world about
-/// to be shown is actually drawable (decision 1498).
+/// to be shown is actually drawable.
 mod reveal;
 pub(crate) use reveal::RevealAuditPlugin;
 
@@ -74,7 +74,7 @@ mod world_census;
 pub(crate) use world_census::{EntityCensusPlugin, NodeProbePlugin};
 
 /// The schedule census — per schedule, every system with its executor-relevant flags, both
-/// worlds: the structural inventory under the 1435 orchestration rows (decision 1437).
+/// worlds: the structural inventory under the 1435 orchestration rows.
 mod sched_census;
 pub(crate) use sched_census::SchedCensusPlugin;
 
@@ -84,7 +84,7 @@ pub(crate) use sched_census::SchedCensusPlugin;
 mod stall;
 pub(crate) use stall::StallPlugin;
 
-/// The clock **every probe schedule reads** — real time, never the virtual clock (decision 0789).
+/// The clock **every probe schedule reads** — real time, never the virtual clock.
 ///
 /// A probe knob is a wall-clock instruction: "send this at 20 s", "sample 300 frames from 25 s",
 /// "resize at 12 s", "exit at 480 s". `Time<Virtual>` cannot honour one — it clamps every frame delta
@@ -106,7 +106,7 @@ pub(crate) type ProbeClock<'w> = Res<'w, Time<bevy::time::Real>>;
 
 #[cfg(test)]
 mod tests {
-    /// **The invariant, checked instead of remembered** (decision 0789).
+    /// **The invariant, checked instead of remembered**.
     ///
     /// Naming the right clock [`ProbeClock`] makes it easy to reach for; it does not make the wrong
     /// one unavailable, and `Res<Time>` is the shorter, prelude-blessed, obvious spelling. That

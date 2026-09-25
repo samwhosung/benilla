@@ -16,9 +16,9 @@
 //!   **equipped main hand** (`6e5361`–`6e5391`): the client picks the weapon itself and binds it
 //!   as an ITEM target, so a shaman's Rockbiter / Flametongue / Frostbrand / Windfury Weapon —
 //!   22 rows, four names, the whole 5875 family — casts straight onto the weapon with no cursor
-//!   and no click (decision 1552). With the hand **empty** there is still no cursor: TryCast
+//!   and no click. With the hand **empty** there is still no cursor: TryCast
 //!   tests the same bit again on ArmCast's FALSE return (`6e504b`), clears the word and says
-//!   *"Your weapon hand is empty"* (decision 1554).
+//!   *"Your weapon hand is empty"*.
 //! - a candidate that satisfies nothing falls back to the **active player** — gated on the
 //!   `autoSelfCast` CVar (name `0x870dc0`, gate `[0xceac34]+0x28` at `0x6e53d7`; registered with
 //!   engine default `"0"`). The classic "buffing with an enemy targeted casts on yourself".
@@ -31,14 +31,14 @@
 //! ([`CastWireTarget::Targeting`]), not a verdict about it, because the reference's three "wants"
 //! predicates are three independent mask tests on the one word `0xcecac0` and **more than one can
 //! be true at once**: `TargetingWantsLocation 0x6e6320` (`& 0x60`) → the terrain click (decision
-//! 0792); `TargetingWantsItem 0x6e6330` (`& 0x4010`) → the bag / paper-doll click (0923/0928);
+//! 0792); `TargetingWantsItem 0x6e6330` (`& 0x4010`) → the bag / paper-doll click;
 //! `TargetingWantsGameObject 0x6e62d0` (`ch & 0x48`, i.e. `& 0x4800`) → the world click on a
-//! GameObject (decision 0939). A LOCKED spell — Opening, Pick Lock, Mining, Herb Gathering —
+//! GameObject. A LOCKED spell — Opening, Pick Lock, Mining, Herb Gathering —
 //! satisfies the last **two**, and the click decides which leg it was, exactly as `BindTarget
 //! 0x6e5b40` decides: by the clicked object's typemask (`6e5f17` item bit 1, `6e5f52` GameObject
 //! bit 5), each arm then re-testing the word. The terrain seam likewise serves **both** location
 //! bits — `TargetingWantsLocation`'s mask is `0x60`, and `BindLocation 0x6e60f0` has an arm for
-//! each (decision 2218, closing B388: Martin Fury's spell 265 is a pure `0x20` word, and reading
+//! each (closing B388: Martin Fury's spell 265 is a pure `0x20` word, and reading
 //! that seam as dest-only refused the only three shipped items that carry one). Still deferred,
 //! refused-not-guessed: STRING bit 13, and the *unit* hand-cursor mode (the residual-unit-word
 //! machine behind the autoSelfCast stand-in above).
@@ -78,26 +78,25 @@ pub(crate) const ERR_INVALID_TARGET: u8 = 0x0A;
 /// `SPELL_FAILED_MAINHAND_EMPTY` — "Your weapon hand is empty". The reference's own refusal for
 /// an imbue pressed with nothing in the main hand, raised at `6e5050` off TryCast's bit-9 test
 /// (`6e504b`). Unlike the two stand-ins above this is a *real* reference refusal site, which is
-/// why it travels as [`CastWireTarget::RefusedAtArm`]. Decision 1554.
+/// why it travels as [`CastWireTarget::RefusedAtArm`].
 pub(crate) const ERR_MAINHAND_EMPTY: u8 = 0x2d;
 
 /// The dest-location bit — the ground-cast wire mask (`BindLocation 0x6e60f0`'s bit-6 arm).
 const TF_DEST_LOCATION: u16 = 0x0040;
 /// The source-location bit — `BindLocation 0x6e60f0`'s **other** arm (`6e6105`–`6e6126`), tested
 /// one instruction before the dest one and writing `SPELLCAST+0x30` instead of `+0x3c`. Together
-/// the two are `TargetingWantsLocation 0x6e6320`'s `0x60`: the terrain click serves both
-/// (decision 2218).
+/// the two are `TargetingWantsLocation 0x6e6320`'s `0x60`: the terrain click serves both.
 const TF_SOURCE_LOCATION: u16 = 0x0020;
 /// `TargetingWantsLocation 0x6e6320`'s whole mask (`6e6328: testb $0x60, %cl`) — the one
 /// predicate the terrain seam asks the standing word.
 const LOCATION_BITS: u16 = TF_SOURCE_LOCATION | TF_DEST_LOCATION;
-/// The item bit — the *other* half of the targeting cursor (decision 0923). Its predicate twin is
+/// The item bit — the *other* half of the targeting cursor. Its predicate twin is
 /// `TargetingWantsItem 0x6e6330` (`flag_word & 0x4010`), which the bag and paper-doll click seams
 /// consult before binding the clicked item ([`super::targeting`]).
 const TF_ITEM: u16 = 0x0010;
 /// `TARGET_FLAG_LOCKED` — the **shared** bit: it is in `TargetingWantsItem`'s `0x4010` *and* in
 /// `TargetingWantsGameObject`'s `0x4800`, which is precisely how one armed lock spell serves both
-/// legs (decisions 0928 / 0939). Mining, Herb Gathering, Opening, Pick Lock, Disarm Trap: one
+/// legs. Mining, Herb Gathering, Opening, Pick Lock, Disarm Trap: one
 /// spell, two clicks that can end it — a lockbox in your bag, or a lockable GameObject in the
 /// world. Neither leg is a new wire shape; `BindTarget 0x6e5b40` picks its arm by the clicked
 /// object's typemask and then **hardcodes** the outgoing bit — item arm `6e5f1e: testl $0x4010,
@@ -109,7 +108,7 @@ const TF_ITEM: u16 = 0x0010;
 const TF_LOCKED: u16 = 0x4000;
 /// `TARGET_FLAG_GAMEOBJECT` — the other bit of `TargetingWantsGameObject 0x6e62d0`'s `0x4800`, and
 /// the one implicit arm 23 ORs in ([`cast_target_mask`]). A word carrying it arms the world click's
-/// GameObject leg (decision 0939).
+/// GameObject leg.
 const TF_GAMEOBJECT: u16 = 0x0800;
 /// The bits `BindTarget 0x6e5b40`'s **item** arm admits and then clears — `6e5f1e`'s
 /// `testl $0x4010` and `6e5f36`'s `and $0xbfef` (bits 4 and 14). The same `0x4010` that
@@ -147,7 +146,7 @@ pub(crate) enum CastWireTarget {
     /// returns FALSE (`6e5045`–`6e507b`). That tail sits *below* the requirement validator
     /// `0x6094f0`, in the same place as the targeting-cursor arm it is the sibling of — so this
     /// one is parked and fired at the cursor-entry point, not at the resolver's return
-    /// ([`super::send_spell_cast`]). Decision 1554.
+    /// ([`super::send_spell_cast`]).
     RefusedAtArm(u8),
 }
 
@@ -241,7 +240,7 @@ pub(crate) struct CastTargeting<'w, 's> {
     self_transform: Query<'w, 's, &'static Transform, With<SelfPlayer>>,
     transforms: Query<'w, 's, &'static Transform>,
     /// `Option`: the body exists only in world, and `HandleCastResult` is a one-shot handler
-    /// that must fetch its parameters on any built client (decision 2330 — the reply casts the
+    /// that must fetch its parameters on any built client (the reply casts the
     /// `modalNextSpell` chain through the ladder). No body, no movement: the moving gate passes
     /// and the server stays the net, as for every other untestable input.
     player: Option<Res<'w, crate::player::Player>>,
@@ -297,7 +296,7 @@ const EQUIPMENT_SLOT_MAINHAND: u8 = 15;
 #[derive(bevy::prelude::Resource)]
 pub(crate) struct AutoSelfCast(pub(crate) bool);
 
-/// `autoSelfCast`'s change callback (decision 2303): a flag.
+/// `autoSelfCast`'s change callback: a flag.
 pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut auto: ResMut<AutoSelfCast>) {
     if ev.is("autoSelfCast") {
         auto.0 = ev.flag();
@@ -323,7 +322,7 @@ pub(crate) fn cast_target_mask(def: &SpellDisplay) -> u16 {
         6 | 53 => word |= TF_UNIT_ENEMY,
         // 16 (ground-target) sets the cursor-mode flag (the ref's `bl`), not a word bit — the
         // location bits 0x60 usually arrive via `Targets` itself; both resolve to
-        // `GroundTargeting` in [`resolve_cast_target`] (decision 0792).
+        // `GroundTargeting` in [`resolve_cast_target`].
         21 | 45 => word |= TF_UNIT_ASSIST,
         23 => word |= 0x0800,
         25 | 63 => word |= TF_UNIT,
@@ -423,7 +422,7 @@ pub(crate) fn resolve_cast_target(
         // them agreeing if one ever doesn't.
         return CastWireTarget::Targeting(word | TF_DEST_LOCATION);
     }
-    // ArmCast's FIRST candidate leg (`6e5361`–`6e5391`, decision 1552) — the one that makes a
+    // ArmCast's FIRST candidate leg (`6e5361`–`6e5391`) — the one that makes a
     // weapon imbue cast-and-done. A player caster pressing a spell with `Attributes & 0x200`
     // takes its candidate from the equipped **main hand** (`[player+0x1d3c][15]`) rather than
     // from the explicit guid or the selection, and hands it straight to `BindTarget 0x6e5b40`.
@@ -443,7 +442,7 @@ pub(crate) fn resolve_cast_target(
             Some(item) if word & ITEM_ARM_BITS != 0 && word & !ITEM_ARM_BITS == 0 => {
                 return CastWireTarget::Item(item)
             }
-            // **Nothing in the main hand — and this is NOT a cursor** (decision 1554, correcting
+            // **Nothing in the main hand — and this is NOT a cursor** (correcting
             // 1552). The guid reads 0, `0x468460` resolves no object, `BindTarget` bails writing
             // nothing, and ArmCast returns FALSE. TryCast's tail then tests the SAME attribute
             // bit a second time (`6e504b: test ch,0x2`), **clears the flag_word outright**
@@ -460,7 +459,7 @@ pub(crate) fn resolve_cast_target(
     }
     // Bits outside the unit family (item/gameobject/location/string) have no candidate here.
     // A location word — Blizzard's bare `Targets = 0x40`, Martin Fury's bare `0x20` — is the
-    // targeting cursor's location half (decisions 0792, 2218): in the ref it falls out of the
+    // targeting cursor's location half: in the ref it falls out of the
     // failed bind walk into cursor mode (`6e50c8`), and deferring before the unit walk is
     // byte-equivalent **only while no unit bit stands beside it**, which is why the location arm
     // below carries that condition where the item/GO one is a bare mask test. One shipped row
@@ -632,7 +631,7 @@ mod tests {
         );
     }
 
-    /// The ground family resolves to `GroundTargeting` by BOTH routes (decision 0792): the
+    /// The ground family resolves to `GroundTargeting` by BOTH routes: the
     /// arm-16 fast-defer (Flamestrike: `Targets 0x40`, implicit 16 — and even with a selection,
     /// the ref defers before any candidate bind) and the bare DEST word falling out of the bind
     /// walk (Blizzard: `Targets 0x40`, implicit 28 = default arm). The word==0 immediate commit
@@ -667,7 +666,7 @@ mod tests {
         );
     }
 
-    /// **The SOURCE word raises the cursor, exactly as the DEST word does** (decision 2218,
+    /// **The SOURCE word raises the cursor, exactly as the DEST word does** (
     /// closing B388). `TargetingWantsLocation 0x6e6320` is `word & 0x60` — one predicate over both
     /// bits — and `BindLocation 0x6e60f0` has an arm for each, so a bare `0x20` is a terrain click
     /// waiting to happen, not a refusal. Martin Fury's spell 265 (`Targets 0x20`, implicit 15 =
@@ -721,7 +720,7 @@ mod tests {
     /// ones. That distinction is the whole of the LOCKED family: 100 of its 103 rows carry implicit
     /// arm 23, whose overlay ORs the GAMEOBJECT bit into the word (`0x4800`), and one carries arm
     /// 25 (`0x4002`). An equality test refused all of them, which is what a live key-on-lockbox
-    /// probe caught (0928).
+    /// probe caught.
     ///
     /// And the **word travels**: the resolver hands the cursor the whole thing rather than a
     /// verdict, so a `0x4800` word can answer the bag click *and* the world click. Deciding here
@@ -761,7 +760,7 @@ mod tests {
         assert_eq!(opening & (TF_GAMEOBJECT | TF_LOCKED), opening);
     }
 
-    /// The weapon-imbue leg (decision 1552, ledger B308): `Attributes & 0x200` makes the cast
+    /// The weapon-imbue leg (ledger B308): `Attributes & 0x200` makes the cast
     /// bind the equipped main hand and send on the press — no cursor, no click on the bag.
     ///
     /// Rockbiter Weapon 8017's real shape: `Targets 0x10`, `Attributes 0x50200`, implicit arm 0.

@@ -1,4 +1,4 @@
-//! `$WOW_MIX_TAP=<path.wav>` — record the final mix to disk (decision 1112).
+//! `$WOW_MIX_TAP=<path.wav>` — record the final mix to disk.
 //!
 //! The crackle hunts (1026, 1109) kept hitting the same wall: every scheduling meter reads
 //! healthy while the director's ear still catches a crackle — because the meters watch the
@@ -11,7 +11,7 @@
 //!
 //! Two properties matter:
 //! - **What is actually heard.** The tap is the main track's *last* effect, downstream of the
-//!   meter and the limiter (decision 1551), so the capture is the audible result — the waveform
+//!   meter and the limiter, so the capture is the audible result — the waveform
 //!   to scan when a report survives everything upstream. The mix's raw, pre-limiter level is the
 //!   [`super::meter`]'s job and lands in the health report as a number; the tap no longer has to
 //!   double as the clipping detector it once was.
@@ -64,7 +64,7 @@ pub(super) fn install(
 /// sound like"; it cannot answer "…at the moment the director pressed the key", because the game
 /// clock and the device clock are different clocks that drift. Reading this counter from a game
 /// system converts a game-thread event into a sample offset in the file, so a mark, a kit start
-/// and a missed deadline all land on the waveform they belong to (decision 1556).
+/// and a missed deadline all land on the waveform they belong to.
 ///
 /// Returns `None` if the file cannot be created — a probe that cannot record says so and the run
 /// continues, rather than taking the client down over an instrument.

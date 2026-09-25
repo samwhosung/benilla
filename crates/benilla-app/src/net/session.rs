@@ -192,7 +192,7 @@ fn on_disconnected(In(ev): In<SessionEvent>, mut e: Edges, mut b: Bridge) {
 }
 
 /// The three server-authored mover edges the controller both *applies* and *answers*: a
-/// teleport snap, a knockback launch (decision 1702) and possession's control half (B211),
+/// teleport snap, a knockback launch and possession's control half,
 /// forwarded whole and unjudged — only the controller can act on them.
 fn on_mover_edge(In(ev): In<SessionEvent>, mut e: Edges, b: Bridge) {
     match ev {
@@ -236,7 +236,7 @@ fn on_worldport(
     } = ev
     {
         // Every streamed roster member's object is about to be purged — the same deactivation
-        // the reference runs one object at a time (decision 1640).
+        // the reference runs one object at a time.
         crate::ui_party::net::roster_deactivated(&mut group, &b.index, &b.stores, &b.net);
         worldport(
             map_id,
@@ -343,12 +343,12 @@ fn on_pong(In(ev): In<SessionEvent>) {
     }
 }
 
-/// The pre-logon handshake reached a new stage (decision 0539) — the login screen's dialog reads it.
+/// The pre-logon handshake reached a new stage — the login screen's dialog reads it.
 fn login_stage(stage: benilla_protocol::LoginStage, out: &mut MessageWriter<LoginStageMessage>) {
     out.write(LoginStageMessage { stage });
 }
 
-/// A login attempt failed before the roster (decision 0539): the IO thread is back at its pre-logon
+/// A login attempt failed before the roster: the IO thread is back at its pre-logon
 /// park, and [`crate::login`]'s policy decides what happens next.
 fn login_failed(
     refusal: Option<benilla_protocol::LoginRefusal>,
@@ -407,7 +407,7 @@ fn character_login_failed(result: u8, out: &mut MessageWriter<CharacterLoginFail
 ///
 /// **The ack no longer goes out from here, and that is the load-bearing part.** While a cinematic
 /// runs unacked, vmangos re-anchors object visibility to the flying camera
-/// (`Player::UpdateCinematic`) and everything around the body despawns until relog (decision 0196)
+/// (`Player::UpdateCinematic`) and everything around the body despawns until relog
 /// — so the ack must still happen, at the *end* of playback rather than instantly. The cinematic
 /// plugin sends it on a natural end, on an ESC skip, and immediately for a trigger it cannot
 /// resolve to a shot, so no path drops it.
@@ -440,8 +440,8 @@ fn connected(
     // **The reference's world-session wipe, first** (`0x555740`'s `0x5557ad` arm): the player-name
     // and pet-name stores are cleared at every world entry, because a guid names one character and
     // a pet number one spawn, and nothing on the wire says either has been handed to somebody else
-    // since we last looked (decision 2223 — a wiped server's new character wearing a deleted one's
-    // name, B386). Creature templates are keyed by an entry that means the same thing forever and
+    // since we last looked (a wiped server's new character wearing a deleted one's
+    // name). Creature templates are keyed by an entry that means the same thing forever and
     // survive this, exactly as they survive the process.
     names.clear_world_session();
     // Our own name came with the login — seed the cache so "player" never queries.
@@ -464,7 +464,7 @@ fn logged_out(
 ) {
     // A deliberate logout ends this *character's* session, not just the socket: unlike
     // the disconnect teardown below (which keeps the self avatar as the local puppet for
-    // a seamless same-char reconnect, decision 0065), the avatar goes too — the next
+    // a seamless same-char reconnect), the avatar goes too — the next
     // login may be a different character. Clearing `SelfGuid` first makes the follow-up
     // Disconnected teardown total.
     info!("net: logged out — back to character select");
@@ -491,10 +491,10 @@ fn disconnected(
     pending_transfer: &mut PendingTransfer,
     disconnects: &mut MessageWriter<DisconnectedMessage>,
 ) {
-    // The reconnect-policy feed first (decision 0539): [`crate::login`] reads it as "the IO thread
+    // The reconnect-policy feed first: [`crate::login`] reads it as "the IO thread
     // is back at its pre-logon park".
     // Is the session over, or is this the pause inside one? Settled once, here, and carried on the
-    // message to every other reader (decision 1262).
+    // message to every other reader.
     let msg = DisconnectedMessage::new(reason.clone(), end);
     let over = msg.session_over;
     disconnects.write(msg);
@@ -505,14 +505,14 @@ fn disconnected(
     // The RTT ring is NOT cleared here. It belongs to the connection, and the read thread wipes
     // it as it re-enters its cycle loop (`net::io`) — same instant, one thread, no race with a
     // reconnect that has already begun measuring.
-    // Teardown (decision 0065): despawn every streamed entity except the self avatar —
+    // Teardown: despawn every streamed entity except the self avatar —
     // it stays the local puppet (controller + camera keep working); the reconnect's
     // re-create refreshes it in place. Immediate despawn, not `DespawnFade`: a
     // connection loss is not a world event, and index-less fading entities would race
     // the reconnect's re-creates. Entities already mid-fade left the index earlier and
     // finish fading on their own.
     //
-    // **Unless the session is over** (decision 1262), and then the avatar goes too, exactly as
+    // **Unless the session is over**, and then the avatar goes too, exactly as
     // [`logged_out`] takes it: 0065 spares it *for the reconnect*, and with no reconnect coming
     // that spared body is a puppet with no server behind it. Keeping it was the free camera —
     // `SelfGuid` set, no entity, an entry that never finished — so the fact that decides whether
@@ -533,7 +533,7 @@ fn disconnected(
     names.clear_pending();
     items.clear_session();
     // The cooldown list is session-scoped — the next login may be a different character — and
-    // had been missing from this sweep since it was built (decision 2116). `SMSG_INITIAL_SPELLS` carries every cooldown
+    // had been missing from this sweep since it was built. `SMSG_INITIAL_SPELLS` carries every cooldown
     // still running at every world entry and `seed_initial` APPENDS, so a list that outlives the
     // socket answers the old session's records: a second login on the same character reads its
     // own stale copy over the wire's fresh remainder, and a login on a different character
@@ -562,7 +562,7 @@ fn teleport(
     }
 }
 
-/// **A knockback the server aimed at our mover** (`SMSG_MOVE_KNOCK_BACK`, decision 1702) — a
+/// **A knockback the server aimed at our mover** (`SMSG_MOVE_KNOCK_BACK`) — a
 /// ballistic launch the controlling client flies itself, not a spline and not a teleport. Forwarded
 /// to the controller, which owns the take-off, the arc, and the ack the launch owes.
 ///
@@ -587,7 +587,7 @@ fn knock_back(
 }
 
 /// The far-teleport preamble (`SMSG_TRANSFER_PENDING`): latch it for the coming worldport —
-/// its transport block decides whether NEW_WORLD's coordinates are boat-local (decision 0455).
+/// its transport block decides whether NEW_WORLD's coordinates are boat-local.
 fn transfer_pending(map_id: u32, transport_entry: Option<u32>, pending: &mut PendingTransfer) {
     match transport_entry {
         Some(entry) => info!("net: transfer pending → map {map_id} riding transport {entry}"),
@@ -608,7 +608,7 @@ fn transfer_aborted(reason: u8, pending: &mut PendingTransfer) {
 /// A cross-map transfer (`SMSG_NEW_WORLD` / `SMSG_LOGIN_VERIFY_WORLD`): the new map streams a
 /// fresh object set — drop everything we were tracking, then hand the app the destination.
 ///
-/// One exception to the purge (decision 0455): an armed transport whose timetable touches the
+/// One exception to the purge: an armed transport whose timetable touches the
 /// destination map is **spared**, entity and index entry both. Transports are client-simulated
 /// global objects on one continuous two-continent clock — a spared boat sails straight through
 /// the seam (the `CurrentMap` flip itself flips which legs render), keeping the ride attachment
@@ -672,7 +672,7 @@ fn time_speed(
 
 /// The server **wall** clock (`SMSG_QUERY_TIME_RESPONSE`, answering the world-enter
 /// `CMSG_QUERY_TIME`) — the epoch the absolute descriptor stamps are dated in, and so the origin of
-/// every countdown drawn from one (today: the timed-quest timer, decision 1150). Nothing to do with
+/// every countdown drawn from one (today: the timed-quest timer). Nothing to do with
 /// [`time_speed`] above, which is the in-game day/night clock.
 ///
 /// Logged once per session at info, with the skew against our own clock: that number is exactly
@@ -726,7 +726,7 @@ fn reputation_delta(
         }
     }
     // A standing change is a questgiver-status input (`SatisfyQuestReputation`, and the reaction
-    // gate): the reference sweeps from this handler too (0654).
+    // gate): the reference sweeps from this handler too.
     quest.bump_reask();
 }
 

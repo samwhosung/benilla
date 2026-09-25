@@ -6,7 +6,7 @@
 //! `player::controller`, gated on `mouselook` (a held right button or MOVEANDSTEER) *and* a moving
 //! OS cursor inside the viewport. An unfocused probe window has neither. So the whole observed-swim
 //! lane — the wire's pitch tail, the dead-reckon's pitched travel basis, and the body-pitch render
-//! law (`0x60a110`, decision 0464) — was **unreachable from any script**: a benilla client could be
+//! law (`0x60a110`) — was **unreachable from any script**: a benilla client could be
 //! made to swim, but only ever level. The tilt shipped in July 2026 with no test, no trace field
 //! and no way to drive it, which is why "do other swimmers tilt?" had no answer short of the
 //! director's eye, and why a two-client probe of it could not be written at all.
@@ -32,7 +32,7 @@ use benilla_world::schedule::WorldStage;
 use super::ProbeClock;
 
 /// One scripted aim: the target pitch (radians, +up), when it takes effect, and an optional sweep
-/// rate (rad/s) applied from that moment — **wall-clock seconds** ([`ProbeClock`], decision 0789),
+/// rate (rad/s) applied from that moment — **wall-clock seconds** ([`ProbeClock`]),
 /// for [`super::probe_look`]'s reason: a dive scripted to reach 30° by second 25 has to reach it at
 /// second 25 whatever the frame rate did, and the wire tail it feeds is paced on the real clock.
 struct Aim {
@@ -113,7 +113,7 @@ pub(crate) fn drive_probe_pitch(
 /// `WOW_PROBE_PITCH`'s registration — the same shape (and the same ordering rationale) as
 /// [`super::probe_look`]'s: inert with no resource and no systems when the script parses to
 /// nothing, and ordered before [`crate::player::PlayerControlSet`] so the controller knows nothing
-/// about it (decision 1174).
+/// about it.
 pub(crate) struct ProbePitchPlugin;
 
 impl Plugin for ProbePitchPlugin {

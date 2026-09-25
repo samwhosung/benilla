@@ -1,5 +1,5 @@
-//! `WOW_PROBE_MODEL_CAMERA=1` — the live probe for the `<Model>` widget's **perspective leg**
-//! (decision 2027): a plain `CreateFrame("Model")` pointed at a camera-bearing file, framed by the
+//! `WOW_PROBE_MODEL_CAMERA=1` — the live probe for the `<Model>` widget's **perspective leg**:
+//! a plain `CreateFrame("Model")` pointed at a camera-bearing file, framed by the
 //! file's own camera through a camera of its own into its cell of the tile atlas.
 //!
 //! ## What it asks, and why it is a probe rather than a test

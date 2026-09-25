@@ -7,7 +7,7 @@
 //! "timing and feel are measured, never eyeballed"). So this probe teleports to the plaque, samples
 //! the UI pass's own per-phase meter ([`crate::ui_script::UiFrameCost`]) with the reader CLOSED,
 //! opens it on the real route, samples again, and prints the two side by side — including how many
-//! of each window's frames the extract gate (decision 0740) *skipped*, which is what decides
+//! of each window's frames the extract gate *skipped*, which is what decides
 //! whether a paint-pass cost is paid once or every frame.
 //!
 //! The object: `GameObject` 3011 (`gameobject_template` entry 2857, `GAMEOBJECT_TYPE_TEXT` = 9)
@@ -38,7 +38,7 @@ use crate::ui_script::{UiCostWanted, UiFrameCost};
 /// The reporter's own standing position beside the plaque (their debug panel, in the report's
 /// screenshot).
 const PLAQUE_AT: [f32; 3] = [-8760.2, 402.3, 103.9];
-/// `GAMEOBJECT_TYPE_TEXT` — the strategy type a book/plaque carries (decision 1105).
+/// `GAMEOBJECT_TYPE_TEXT` — the strategy type a book/plaque carries.
 const GO_TYPE_TEXT: i32 = 9;
 /// Scan radius around the landing spot, in yards — generous, so a slightly-off `.go` still finds it.
 const SCAN_RANGE: f32 = 20.0;
@@ -67,7 +67,7 @@ struct Sample {
     /// Everything the pass costs, whether or not the gate skipped: tick + resolve + measure +
     /// extract + convert + diff.
     total: u128,
-    /// Did the extract gate skip the conversion this frame (decision 0740)?
+    /// Did the extract gate skip the conversion this frame?
     skipped: bool,
 }
 

@@ -13,8 +13,8 @@
 //! `.send money <name> "subject" "text" <copper>` are both `SEC_ADMINISTRATOR` (6)
 //! (`AccountTypes`, `shared/Common.h` l.138-145: `SEC_MODERATOR=1`, `SEC_GAMEMASTER=3`,
 //! `SEC_ADMINISTRATOR=6`). **Probe accounts are gmlevel 6**, so all three land. They did *not*
-//! until 2026-07-26 — 0645 recorded the raise but never applied it, and the accounts sat at 3
-//! (0651). While they did, steps (c)/(d) below degraded to SKIP against a permission floor that
+//! until 2026-07-26 — 0645 recorded the raise but never applied it, and the accounts sat at 3.
+//! While they did, steps (c)/(d) below degraded to SKIP against a permission floor that
 //! was real, and that SKIP hid a defect in the probe itself: it re-found the money/item row by
 //! predicate each tick, so a *successful* take — which zeroes the money and clears the attachment
 //! — made the row stop matching and read as "no row ever appeared". Both steps now remember the
@@ -58,9 +58,9 @@ use crate::ui_mail::MailOpen;
 /// The Goldshire mailbox (vmangos `gameobject` guid 2978, entry 142075, map 0) — live-DB verified
 /// position.
 const MAILBOX_AT: [f32; 3] = [-9455.99, 45.82, 56.44];
-/// `GAMEOBJECT_TYPE_MAILBOX` (decision 0544/0548) — the GO strategy type this probe scans for.
+/// `GAMEOBJECT_TYPE_MAILBOX` — the GO strategy type this probe scans for.
 const GO_TYPE_MAILBOX: i32 = 19;
-/// The mailbox's server-side interaction check is 5 yd (`CheckMailBox`, decision 0544); scan
+/// The mailbox's server-side interaction check is 5 yd (`CheckMailBox`); scan
 /// generously wide so a slightly-off `.go` landing still finds it.
 const MAILBOX_SCAN_RANGE: f32 = 10.0;
 /// The probe's GM-mailed item: Linen Cloth ×5 (the task's fixture entry).
@@ -69,7 +69,7 @@ const ITEM_COUNT: u32 = 5;
 /// The probe's GM-mailed money, in copper (~1234c, the task's fixture amount).
 const MONEY_COPPER: u32 = 1234;
 
-/// `checked` mask bit READ (`0x1`, vmangos `Mail.h`, decision 0544) — redeclared locally (the
+/// `checked` mask bit READ (`0x1`, vmangos `Mail.h`) — redeclared locally (the
 /// `ui_mail` copy is private to that module) purely for this trace's printed flags.
 const CHECKED_READ: u32 = 0x1;
 /// `checked` mask bit COPIED (`0x4`) — the wire's `textCreated`: step (b2) asserts the
@@ -159,7 +159,7 @@ enum Phase {
         /// `TakeInboxMoney` zeroes `money` (or drops the row), so a predicate re-search returns
         /// `None` on exactly the ticks that prove success. That bug reported every successful take
         /// as "no money row appeared" and hid behind the old gmlevel-3 floor, where the row really
-        /// never arrived (0651).
+        /// never arrived.
         taken: Option<u32>,
     },
     /// `TakeInboxItem` on the item row (step d). Same remembered-id reason as [`Self::TakeMoney`].
@@ -537,7 +537,7 @@ fn mail_probe(
         Phase::TakeMoney { since, taken } => {
             // The id is REMEMBERED across ticks, never re-found: a successful take is exactly what
             // makes the row stop matching `money > 0`, so re-searching would read success as
-            // absence (0651). Matched as a pair rather than with guards — guarded `Some(_) if …`
+            // absence. Matched as a pair rather than with guards — guarded `Some(_) if …`
             // arms can't be proven exhaustive by rustc, forcing a dead catch-all.
             let next = Phase::TakeItem {
                 since: now,

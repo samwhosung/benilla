@@ -3,7 +3,7 @@
 //! The last unread link in B38. There, two surfaces of the Far Watch Post tower trade places: the
 //! awning is nearer, writes depth, compares `GreaterEqual`, is not discarded, is not culled, keeps
 //! the same mesh/material/texture every frame, and is submitted into `AlphaMask3d` at a stable draw
-//! position on every single frame (decisions 0662, 0665, 0667) — and on some frames the plank behind
+//! position on every single frame — and on some frames the plank behind
 //! it wins the pixel anyway. Every one of those facts was established on the **CPU** side. None of
 //! them says what value the GPU wrote into the depth buffer, which is the one thing that decides the
 //! pixel and the one thing we could not read.
@@ -50,7 +50,7 @@
 //! at all, and there is no single "the" depth at a pixel to report if it could — there are four. The
 //! probe refuses rather than reporting one of them, because a number that looks like the measurement
 //! you wanted, taken slightly wrong, is how this bug has already produced four confident wrong
-//! answers (0667).
+//! answers.
 
 use bevy::core_pipeline::core_3d::graph::{Core3d, Node3d};
 use bevy::ecs::query::QueryItem;
@@ -653,7 +653,7 @@ fn ndc_of(x: u32, y: u32, width: u32, height: u32) -> Vec2 {
 /// It has to be the whole point, not just the depth: a depth value alone linearises to the distance
 /// to the camera *plane*, while a ray cast measures along the *ray*, and off-axis those differ by
 /// `1/cos θ` — 15% at the edge of a 45° frame, six yards at this bug's range. Comparing the two
-/// without converting is the same axis mix-up that mis-measured B38's surface gap twice (0665), and
+/// without converting is the same axis mix-up that mis-measured B38's surface gap twice, and
 /// it is 100× the gap the readback exists to resolve. So unproject the actual pixel and hand back the
 /// point; the caller reports both lengths.
 ///

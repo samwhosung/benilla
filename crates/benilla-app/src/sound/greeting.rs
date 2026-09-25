@@ -114,11 +114,11 @@ enum WindowVocal {
 }
 
 /// The active interaction NPC: the union of every shipped window session that shares the left panel
-/// slot (they are mutually exclusive after the OnHide→CloseX reconcile — decision 0095). System 2
+/// slot (they are mutually exclusive after the OnHide→CloseX reconcile). System 2
 /// diffs THIS across frames, so **every** NPC-bound window must be in it — a window left out makes a
 /// swap *to* it look like a close-to-nothing and spuriously plays the prior window's goodbye. That
-/// omission is exactly what mis-played a goodbye on gossip→trainer until the trainer joined the union
-/// (decision 0237); a new window (bank, mail, …) must be added here too.
+/// omission is exactly what mis-played a goodbye on gossip→trainer until the trainer joined the union;
+/// a new window (bank, mail, …) must be added here too.
 fn active_interaction_npc(
     merchant: &MerchantOpen,
     gossip: &GossipState,

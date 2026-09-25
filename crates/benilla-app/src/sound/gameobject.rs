@@ -88,7 +88,7 @@ fn go_event_slot(ident: &[u8; 4]) -> Option<usize> {
 ///
 /// The load-bearing tenants: the fishing bobber's bite — Custom0's `$GC0` at t≈3.87 s → display
 /// 668 `Sound6` = kit 3355 "Fishing Hooked", fired **once per 0xB3** (the completion retire
-/// re-arms Stand before a second pass, decision 1100), beside the server's explicit
+/// re-arms Stand before a second pass), beside the server's explicit
 /// `SMSG_PLAY_OBJECT_SOUND(3355)` ~200 ms earlier — and every lit prop in the world, whose
 /// `CampFireSmallLoop`/`TorchLoop`/`ElvenFountainSmallA` take the pool lane and hum until the
 /// object's state changes under them.
@@ -147,7 +147,7 @@ pub(super) fn go_display_sounds(
         if kit == 0 {
             continue;
         }
-        // **Where the key fired, not where the object stands** (decision 1904): `0x5f3e20`'s
+        // **Where the key fired, not where the object stands**: `0x5f3e20`'s
         // `[ebp+0x10]` is the kernel's `eventWorldPos` and both lanes below take it verbatim —
         // `0x458870(id, pos, -1, 1.0f)` for the one-shot, `0x461d80(id, pos, 0)` for the pool. It
         // is the difference between a portal's hum coming from the portal and from the model's

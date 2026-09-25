@@ -57,7 +57,7 @@ struct ProbeChat {
 /// the director would type", so a client-side slash command (`/duel`, `/reaction`) is parsed by
 /// the same drain that serves the real chat box, while plain text and `.gm`/`.go` server commands
 /// still leave as Say exactly as before. Sending them as Say instead — the original shape — meant
-/// every client-side command silently went out as public chat and did nothing (decision 0637).
+/// every client-side command silently went out as public chat and did nothing.
 fn fire_probe_chat(
     mut probe: ResMut<ProbeChat>,
     time: ProbeClock,
@@ -105,7 +105,7 @@ fn fire_probe_chat(
 /// The optional hold is what makes *sustained* locomotion reachable headlessly: a 0.25 s W tap
 /// travels ~1.2 yd, far too little to cross a liquid surface's own slope, so a swim defect that
 /// only appears while moving over water could not be reproduced without asking the director to
-/// drive (decision 0644 — the gap `WOW_PROBE_LOOK` closed for mouse-turns, on the key side).
+/// drive (the gap `WOW_PROBE_LOOK` closed for mouse-turns, on the key side).
 ///
 /// Runs in `PreUpdate`
 /// after winit's input processing ([`bevy::input::InputSystems`]) so the synthetic
@@ -213,7 +213,7 @@ fn probe_key_by_name(name: &str) -> Option<KeyCode> {
         // membership had to be found by the director, twice. `WOW_CHAR` is a deliberate one-shot
         // (`run_mode`), so synthesizing the keypress is the only way back into the world in-process.
         "Enter" => KeyCode::Enter,
-        // Print screen (decision 1487). The whole player path — key → SCREENSHOT binding →
+        // Print screen. The whole player path — key → SCREENSHOT binding →
         // `TakeScreenshot()` → `Screenshot()` → the writer → SCREENSHOT_SUCCEEDED — is reachable
         // no other way: a Lua chunk can call the verb but skips the binding, and B261's contract
         // ("the message is not in the file") is a property of the KEY press, since the whole
@@ -247,7 +247,7 @@ struct ProbeKeyTap {
 
 /// Press each due tap (in-world gated, like the chat probe) and release it after its hold window.
 ///
-/// Both input currencies, deliberately (0997): `ButtonInput` for every held-state reader (and
+/// Both input currencies, deliberately: `ButtonInput` for every held-state reader (and
 /// the binding dispatch's stuck-latch sweep, which treats "latched but not pressed" as a missed
 /// release), plus the raw [`KeyboardInput`] message the binding dispatch's press/release edges
 /// actually consume — a state-only synthetic press was invisible to the chord latcher, which
@@ -326,7 +326,7 @@ fn fire_probe_key(
 ///
 /// **World entry, and deliberately not "VM rebuild"**, which is the wider edge and the wrong one:
 /// `ReloadUI()` rebuilds the VM without leaving the world, and `WOW_PROBE_LUA="ReloadUI()"` is a
-/// probe we actually run (decision 2028). Re-arming on the VM would make that chunk reload the
+/// probe we actually run. Re-arming on the VM would make that chunk reload the
 /// interface forever. [`ProbeLog`](install_probe_log) *does* follow the VM, because it is a
 /// channel rather than an action.
 pub(crate) struct ProbeLuaPlugin;
@@ -398,7 +398,7 @@ fn probe_lua_due(probe: &ProbeLua, now: f32) -> bool {
 /// Install `ProbeLog(text)` — the chunk's data channel OUT of the VM, as greppable `probe-log:`
 /// lines; before it existed a probe could only report through screenshots or by erroring.
 ///
-/// **Into whichever VM is live, and re-installed whenever that changes** (decision 2116). A
+/// **Into whichever VM is live, and re-installed whenever that changes**. A
 /// global installed once is gone at the next logout/login *and* at the next `ReloadUI()`, both of
 /// which build a new Lua state (1290/1291) — so a chunk that logged happily on its first run died
 /// on a nil call afterwards, which is precisely the shape of failure that reads as "the probe did
@@ -486,7 +486,7 @@ fn fire_probe_lua(
 /// press, move and release ([`UiScript::mouse_button`]/`mouse_move`), and a drag test written
 /// there passes while the live client's drag is broken — because the harness supplies the whole
 /// world: no per-frame app feed between the press and the release, no real frames elapsing, no
-/// resolve pass, no `feed_party` re-push, no OS cursor. That gap cost a session (B310: the raid
+/// resolve pass, no `feed_party` re-push, no OS cursor. That gap cost a session (the raid
 /// grid's second drag). This closes it by driving the SAME gesture in a real client: the press,
 /// the threshold-crossing move, the path, and the release each land on their own frame, with
 /// every app system running in between exactly as it does for a hand on the mouse.
@@ -503,8 +503,8 @@ fn fire_probe_lua(
 /// `on` seconds, parks the pointer over nothing for `off`, and repeats. Compare-the-two-halves
 /// designs that put all the parked frames at the start and all the swept frames after read the
 /// run's own drift as the effect: three legs of the same gesture, same binary, gave within-run
-/// `cpu_ms` deltas of +2.03, +1.02 and −0.61 ms while their per-phase µs columns agreed to 3%
-/// (decision 1634). Alternating pools both regimes across the same minutes, so drift cancels
+/// `cpu_ms` deltas of +2.03, +1.02 and −0.61 ms while their per-phase µs columns agreed to 3%.
+/// Alternating pools both regimes across the same minutes, so drift cancels
 /// instead of landing on one side.
 ///
 /// **`WOW_PROBE_HOVER_STEP` is the dial that decides what is being measured, and the default is

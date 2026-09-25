@@ -5,11 +5,11 @@
 //! - **[`Spline`]** — a server-authored path, sampled at constant speed by
 //!   [`spline::sample_splines`]. Creatures ride these. Two sources, one component: a fresh
 //!   `SMSG_MONSTER_MOVE` ([`spline::monster_move_spline`]), and the walk a unit was **already** on when
-//!   it streamed into view, joined mid-path from its create block ([`spline::create_spline`], 0708).
+//!   it streamed into view, joined mid-path from its create block ([`spline::create_spline`]).
 //! - **[`RemoteMotion`]** — another player's flag-driven locomotion, integrated by
 //!   [`remote::extrapolate_remote_units`]: the client's own dead-reckoning in miniature (extrapolate
 //!   from the last reported state, snap to the truth on the next packet). A jump is a **ballistic
-//!   event** — the launch played out locally under gravity — not flag-driven walking (decision 0053).
+//!   event** — the launch played out locally under gravity — not flag-driven walking.
 //!
 //! The parent [`super`] module owns the wire→ECS bridge that seeds + corrects these from the packet
 //! stream; this module owns the integration, split by concern: [`spline`] (the path walk + its
@@ -72,7 +72,7 @@ pub(super) fn wire_yaw(orientation: f32) -> Quat {
 /// column; 1 411 of them on a visible display) are exactly what a yaw-only placement gets wrong —
 /// and it misreads as a *position* bug, because an M2's geometry sits off its own origin: a signpost
 /// pointer's plank is 3.3 yd above the origin and 0.3–2.1 yd out, so dropping a 70° tilt swings that
-/// plank 4.3 yd from a spawn point that never moved (decision 1459, bug B89).
+/// plank 4.3 yd from a spawn point that never moved (bug B89).
 ///
 /// Falls back to the facing when the wire carried no quaternion at all, and when what it carried has
 /// no length to normalize — a create block folds absent fields to zero, and an all-zero quat would

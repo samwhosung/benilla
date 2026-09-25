@@ -1,4 +1,4 @@
-//! The probe **rig** (`WOW_RIG="<spec>"`, decision 0651) — one command that puts this checkout's probe
+//! The probe **rig** (`WOW_RIG="<spec>"`) — one command that puts this checkout's probe
 //! account into a chosen **body** and hands the session a world that is ready to test.
 //!
 //! ## Why it exists
@@ -125,7 +125,7 @@ impl Plugin for ProbeRigPlugin {
             return; // inert without a parseable spec (parse() has already said why)
         };
         info!("rig: {}", spec.describe());
-        // Publish the claim on the character pick as an always-present run fact (decision 1174).
+        // Publish the claim on the character pick as an always-present run fact.
         // The roster reads it to know the pick is already spoken for; before 1174 it called
         // `rig_char_name_from_env` directly, which is gameplay naming the harness.
         if let Some(name) = rig_char_name(&spec) {

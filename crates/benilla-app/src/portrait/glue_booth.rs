@@ -1,4 +1,4 @@
-//! The GLUE booth (decisions 0423 + 0465) — one booth slot serving both pre-world screens,
+//! The GLUE booth — one booth slot serving both pre-world screens,
 //! tuple-driven with **no wire entity**: the per-race `UI_<Race>` background scene with a character
 //! standing in it — the character being *built* (char create, naked + underwear) or the selected
 //! roster character (char select, geared from its enum record) — live, rotatable, fullscreen.
@@ -44,7 +44,7 @@ pub(crate) const GLUE_SLOT: &str = "glue";
 const GLUE_SIZE: u32 = 1024;
 
 /// The character appearance the CREATE screen shows — race/sex/**class** + the five appearance
-/// dials (decisions 0423 + 0527): the create body dressed in the (race, class, sex) level-1 starting
+/// dials: the create body dressed in the (race, class, sex) level-1 starting
 /// outfit (CharStartOutfit), the ref's create preview. Class is load-bearing here — a different
 /// class wears different starting gear, and the ref re-applies equipment on class change
 /// (`SelectClass 0x470f50` → `cc_apply_sections 0x470800`).
@@ -61,7 +61,7 @@ pub(crate) struct CreateLook {
 }
 
 /// The character the SELECT screen shows — the roster entry's full appearance + its visible
-/// equipment display pairs, verbatim off `SMSG_CHAR_ENUM` (decision 0465).
+/// equipment display pairs, verbatim off `SMSG_CHAR_ENUM`.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct SelectLook {
     pub(crate) race: u8,
@@ -80,7 +80,7 @@ pub(crate) struct SelectLook {
     /// swapping rows re-bakes the pet with the body.
     ///
     /// All three words matter. The display names the model; the **level and family are its size**
-    /// (`CreatureFamily`'s ramp — decision 1538), so a freshly tamed wolf stands visibly smaller
+    /// (`CreatureFamily`'s ramp), so a freshly tamed wolf stands visibly smaller
     /// than a level-60 one.
     pub(crate) pet_display_id: u32,
     pub(crate) pet_level: u32,
@@ -146,7 +146,7 @@ impl GlueLook {
     }
 }
 
-/// Which glue background scene shows (decision 0539 §5): the login screen's main-menu gate, or a
+/// Which glue background scene shows: the login screen's main-menu gate, or a
 /// race's `UI_<Race>` stage. An enum, not a fake race value — the login scene isn't a race, and
 /// the fog law forks on the kind (MainMenu is always fogged with its authored XML fog; Race keeps
 /// the 0429 create/select split).
@@ -158,7 +158,7 @@ pub(crate) enum GlueScene {
     Race(u8),
 }
 
-/// The glue screens' live input to the booth (decisions 0423 + 0465 + 0539): which scene shows
+/// The glue screens' live input to the booth: which scene shows
 /// (`None` = no scene, booth torn down — each screen drives it: login the main menu, create the
 /// picked race, select the SELECTED character's race, Orc before a list arrives), the character
 /// standing in it (`None` = empty stage — the login screen and an empty account), and the bake
@@ -197,7 +197,7 @@ pub(crate) struct CreateScene {
     /// The authored camera 0, captured at spawn (drives the booth camera while the scene shows).
     cam: Option<benilla_assets::PortraitCamera>,
     /// How far the scene's art paints around that camera — the shipped scene's measured extent
-    /// ([`benilla_formats::shipped_glue_art_extent`], decision 1619) — the ceiling on the framing
+    /// ([`benilla_formats::shipped_glue_art_extent`]) — the ceiling on the framing
     /// law's opening UPWARD on a narrow window ([`glue_scene_framing`]). `None` with no scene.
     /// The wide leg stopped reading it under 2187: one frame for every scene, so its width is
     /// [`super::framing::GLUE_BOX_ASPECT`]'s, not this stage's. It is still what says the frame
@@ -207,7 +207,7 @@ pub(crate) struct CreateScene {
     /// [`super::framing::GLUE_BOX_ASPECT`]: the booth camera renders into a centred viewport of
     /// this aspect, black either side ([`pillarbox_glue_scene`]). `None`: the whole window.
     ///
-    /// A property of the **window**, not of the scene (decision 2187) — set from the window while
+    /// A property of the **window**, not of the scene — set from the window while
     /// any glue screen is up, cleared only when the booth is torn down. It is what the chrome's
     /// canvas insets by (2091), and 1619's per-scene box is why that canvas used to jump as the
     /// roster selection moved between races.
@@ -534,7 +534,7 @@ pub(crate) struct PreviewRider {
 /// - An **equipped item's** camera-facing batch — a wand's gem, a glowing rune on a weapon. 270 of
 ///   the 2681 `Item\` models author one. An item model gets no rig here, so its offset carries the
 ///   attach point *and* the batch's own model-local pivot.
-/// - An **item glow's** camera-facing batch (decision 0805) — `Spells\Enchantments\Sparkle_A.m2` is
+/// - An **item glow's** camera-facing batch — `Spells\Enchantments\Sparkle_A.m2` is
 ///   exactly one such quad and nothing else, and `ItemVisuals` 28 (10 item displays) hangs it. Same
 ///   rig-less seat, plus the glow slot's offset on the weapon model.
 #[derive(Clone)]
@@ -559,9 +559,9 @@ pub(crate) struct PreviewBillboard {
 /// Two sources produce these, and the booth treats them identically:
 ///
 /// - **An equipped item's own emitters** — the R14 PVP pauldron's `SPARKLE` twinkle, the held
-///   torch's flame (decision 0813; the select screen showed
+///   torch's flame (the select screen showed
 ///   nothing at all until it was carried here). Seat = the body's attach point for that slot.
-/// - **An item glow** (decision 0805) — the `Spells\Enchantments\*.mdx` effect a held weapon's
+/// - **An item glow** — the `Spells\Enchantments\*.mdx` effect a held weapon's
 ///   `ItemVisuals` id hangs on the weapon's own attachment point; all but three of the 35 shipped
 ///   glow models are pure emitters. Seat = the body attach point **plus** the slot's offset on the
 ///   weapon model.
@@ -604,7 +604,7 @@ pub(crate) struct GhostKit {
     pub(crate) alpha: f32,
 }
 
-/// The entities-side builder's output (decisions 0423 + 0465): the geoset-filtered, composited
+/// The entities-side builder's output: the geoset-filtered, composited
 /// parts for the current look (+ its equipment riders for a Select look), plus the body displayId
 /// (for the booth's framing/rig) and a revision that bumps on every real change — a new successful
 /// bake, or a clear to `look: None`. The booth re-bakes only when `revision` changes; a bare yaw
@@ -615,8 +615,8 @@ pub(crate) struct GluePreviewBake {
     pub(crate) display_id: u32,
     pub(crate) parts: Vec<PreviewPart>,
     pub(crate) riders: Vec<PreviewRider>,
-    /// Every emitter-bearing model the look wears — the equipped items' own effects (decision 0813)
-    /// and the held items' glows (decision 0805). See [`PreviewEffects`].
+    /// Every emitter-bearing model the look wears — the equipped items' own effects
+    /// and the held items' glows. See [`PreviewEffects`].
     pub(crate) effects: Vec<PreviewEffects>,
     /// The look's camera-facing batches (the eye-glow, a wand's gem, a glow model's quad) — seated at
     /// their seat under a body joint and faced to the booth camera, not drawn as plain meshes. See
@@ -658,7 +658,7 @@ pub(crate) struct GluePetBake {
     pub(crate) emitters: Vec<benilla_assets::ModelEmitter>,
     /// The uniform render scale — the **`CreatureFamily` level ramp**, `minScale` → `maxScale`
     /// across `minScaleLevel` → `maxScaleLevel`
-    /// ([`benilla_formats::CreatureFamily::scale_at`], decision 1538).
+    /// ([`benilla_formats::CreatureFamily::scale_at`]).
     ///
     /// Not the `CreatureModelData.modelScale × CreatureDisplayInfo.scale` product this field
     /// briefly held: the reference computes that product one instruction before the ramp and then
@@ -698,7 +698,7 @@ pub(super) fn spawn_glue_booth(
             // FfxGlow's combine carries the scene alpha through for exactly this.
             clear_color: ClearColorConfig::Custom(Color::NONE),
             // The OUTPUT clear — what the upscaling blit paints on the target OUTSIDE the
-            // camera's viewport, when the framing law boxes the scene (decision 1619,
+            // camera's viewport, when the framing law boxes the scene (
             // [`pillarbox_glue_scene`]). Bevy's default here is the global `ClearColor`, which
             // the world's lighting sets to the day's fog colour every frame — so without this
             // the bars came out Elwynn-sky blue. Black: a frame, not a page showing through.
@@ -710,8 +710,8 @@ pub(super) fn spawn_glue_booth(
             ..default()
         },
         bevy::camera::RenderTarget::Image(image.clone().into()),
-        // **The glue screens run the reference's own glue pass pair**, not a bake's nothing
-        // (decision 1731): this camera draws the fullscreen `UI_<Race>` diorama the reference
+        // **The glue screens run the reference's own glue pass pair**, not a bake's nothing:
+        // this camera draws the fullscreen `UI_<Race>` diorama the reference
         // brackets its glue FFX around (`0x46fad3`/`0x46fae0`), and the GlueXML frames composite
         // over the result afterwards — which is why a ghost selection washes the scene steel-blue
         // while the character list, the buttons and the logo stay clean.
@@ -850,8 +850,8 @@ pub(super) fn sync_glue_scene(
     window: Query<&Window, With<PrimaryWindow>>,
     device: Res<bevy::render::renderer::RenderDevice>,
     queue: Res<bevy::render::renderer::RenderQueue>,
-    // The scene's particle-emitter spawn wiring (decision 0539 §5) + the skin-palette table and
-    // its mirror registry (decision 0720) + the model-forms cache and mesh store (decision 0834)
+    // The scene's particle-emitter spawn wiring + the skin-palette table and
+    // its mirror registry + the model-forms cache and mesh store
     // — one tuple param (the 16-SystemParam ceiling).
     particle_assets: (
         ResMut<benilla_world::rig_palette::RigPalettes>,
@@ -860,7 +860,7 @@ pub(super) fn sync_glue_scene(
         ResMut<Assets<Mesh>>,
         ResMut<benilla_world::instance_tint::InstanceTintMirrors>,
         // …and the scene's **material-animation lane**: the UV and tint registries and the shared
-        // delta table its samples land in (decisions 1381/2295). Here rather than beside, for the
+        // delta table its samples land in. Here rather than beside, for the
         // same ceiling — the param list is already full.
         ResMut<benilla_world::doodad_anim::UvAnimMaterials>,
         ResMut<benilla_world::doodad_anim::TintAnimMaterials>,
@@ -913,7 +913,7 @@ pub(super) fn sync_glue_scene(
     // render, so the bake wants window-native resolution (the fallback character-only render
     // shares it; its projection is aspect-aware).
     //
-    // …and so does the **frame** (decision 2187). One box for every scene means the box is a
+    // …and so does the **frame**. One box for every scene means the box is a
     // property of the window alone, so it is set here — from the window, before a token is even
     // resolved — and not down in the camera block with the scene's own fov. Two consequences, and
     // both are the point: the chrome's canvas ([`crate::glue::GlueCanvas`]) cannot move when the
@@ -933,7 +933,7 @@ pub(super) fn sync_glue_scene(
     }
 
     let token = scene_token(which);
-    // The fog law forks on the scene kind (decision 0539 §5): the main menu is ALWAYS fogged with
+    // The fog law forks on the scene kind: the main menu is ALWAYS fogged with
     // its authored XML fog; for a race stage it is per-SCREEN — create keeps `CharModelFogInfo`,
     // select renders the same scene unfogged (`0x472110` overwrites the background's fog
     // callback). The screen is told by the look's flavor (every create
@@ -1066,7 +1066,7 @@ pub(super) fn sync_glue_scene(
             .light
             .get_or_insert_with(|| blob.create(&device, "wow_create_scene_light"))
             .clone();
-        // The scene's rigs skin from THIS buffer's palette region (decision 0720): register it
+        // The scene's rigs skin from THIS buffer's palette region: register it
         // as a mirror (re-registration replaces — a rebuilt scene's old buffer drops).
         mirrors.0.insert("glue_scene", light.clone());
         // …and the per-instance TINT region beside the palette rows (decision 0812's channel):
@@ -1074,7 +1074,7 @@ pub(super) fn sync_glue_scene(
         // is the one off-world buffer that carries it — see
         // [`benilla_world::instance_tint::InstanceTintMirrors`] for why the portrait booths do not.
         tint_mirrors.0.insert("glue_scene", light.clone());
-        // …and the **mat-anim delta table** beside them (decisions 1381/2023): the scene's
+        // …and the **mat-anim delta table** beside them: the scene's
         // materials sample `matanim[slot]` out of THIS buffer, so registering a batch's loop is
         // only half the act — without the mirror the rows are written every frame into a region
         // only the world's materials ever read, and the scene samples its zero-initialised
@@ -1098,7 +1098,7 @@ pub(super) fn sync_glue_scene(
             dc[1],
             dc[2],
         );
-        // The scene model's render forms, built NOW (decision 0834): one backdrop model, behind
+        // The scene model's render forms, built NOW: one backdrop model, behind
         // the glue screen — the booth-lane exception to the paced rule.
         let scene_handle = scene
             .handle
@@ -1113,9 +1113,9 @@ pub(super) fn sync_glue_scene(
             .enumerate()
             .map(|(pi, s)| {
                 // The create scene is lit by its OWN authored M2 rig against its own buffer —
-                // never the world's sun (decisions 0429/0435) — and its clouds and water scroll.
+                // never the world's sun — and its clouds and water scroll.
                 //
-                // The authored batch order (index + 1) rides with it (decision 1449): a scene's
+                // The authored batch order (index + 1) rides with it: a scene's
                 // batches all hang off the scene root, so they share one transparent sort distance
                 // and only this bias tells them apart — without it `UI_Human`'s ground-shadow decal
                 // and its street tied, and the tie re-broke every frame.
@@ -1170,7 +1170,7 @@ pub(super) fn sync_glue_scene(
                         .map(|(h, _)| h.clone())
                         .unwrap_or_default(),
                     material,
-                    // The scene's authored per-batch material alpha (decision 0807). UI_Tauren
+                    // The scene's authored per-batch material alpha. UI_Tauren
                     // alone: a 0.55 `LENSALPHA` corner vignette, a 0.99 `GROUNDSHADOW` decal, 0.15
                     // `CLOUDS`, a 0.73 gradient. Drawn at 1.0 the vignette blacked out the frame
                     // corners — B121.
@@ -1203,7 +1203,7 @@ pub(super) fn sync_glue_scene(
             &[],               // …nor a character's eye-glow
             BoothInstance::default(),
         );
-        // The scene's authored particle emitters (decision 0539 §5) — the braziers/embers every
+        // The scene's authored particle emitters — the braziers/embers every
         // UI_* scene carries (MainMenu 28, Orc 11, NightElf 12…). Lit/fogged by the SCENE's own
         // light buffer: the ModelFFX fog covers the whole model, emitters included, carried by
         // `EffectLightOverride` into the shared lane's per-draw bind group. The seating, the
@@ -1226,7 +1226,7 @@ pub(super) fn sync_glue_scene(
         scene.spawned = true;
         scene.cam = model.camera0;
         // The scene's art extent — the shipped table's transcription of what the tool measured
-        // off this very model (decision 1619). Said out loud as the aspects the law acts on.
+        // off this very model. Said out loud as the aspects the law acts on.
         scene.art = benilla_formats::shipped_glue_art_extent(token);
         if let (Some(art), Some(cam)) = (scene.art, model.camera0.as_ref()) {
             let t0 = benilla_formats::authored_half_height(cam.fov);
@@ -1299,7 +1299,7 @@ pub(super) fn sync_glue_scene(
         let up = Quat::from_axis_angle(fwd, cam.roll) * Vec3::Y;
         // The record fov is the client's *diagonal* convention. The scene is a FULL-SCREEN pane, so
         // the reference feeds that conversion the display's own aspect and spends height on width —
-        // a 1.55× zoom at 21:9 that crops head and feet (B242). [`glue_scene_framing`] pins the
+        // a 1.55× zoom at 21:9 that crops head and feet. [`glue_scene_framing`] pins the
         // authored 4:3 view box instead; its doc carries the law. Far kept generous: fog is not
         // rendered yet, so the authored far (27.8 on Orc) would slice unfogged geometry.
         let vert_fov = glue_scene_framing(cam.fov, aspect, scene.art);
@@ -1316,7 +1316,7 @@ pub(super) fn sync_glue_scene(
     }
 }
 
-/// Apply the framing law's **pillarbox** to the glue booth camera (decision 1619): while
+/// Apply the framing law's **pillarbox** to the glue booth camera: while
 /// [`CreateScene::viewport_aspect`] is set, the camera renders into a centred viewport of that
 /// aspect on the window-sized target, and the target either side is the camera's black *output*
 /// clear (see [`spawn_glue_booth`]) — a frame. Inside the box nothing changes: the scene's own
@@ -1331,7 +1331,7 @@ pub(super) fn pillarbox_glue_scene(
         return;
     };
     let full_h = w.physical_height().max(1);
-    // The SAME arithmetic the chrome's canvas insets by ([`glue_box_physical`], decision 2091) —
+    // The SAME arithmetic the chrome's canvas insets by ([`glue_box_physical`]) —
     // one function, so the frame the camera renders and the frame the chrome lays out in cannot
     // round apart.
     let viewport =
@@ -1368,7 +1368,7 @@ fn resize_target(images: &mut Assets<Image>, target: &Handle<Image>, w: u32, h: 
     // whole by `prepare_assets<GpuImage>` next frame. This target is the glue scene's FULLSCREEN
     // render target: at 3200×1800 it is 22 MB, and taking the borrow once per frame just to
     // compare two u32s re-uploaded all 22 MB every frame on a screen where nothing moves
-    // (~1.3 GB/s; measured with `WOW_ASSET_CHURN=1`, decision 0772). This was the ONE asset write
+    // (~1.3 GB/s; measured with `WOW_ASSET_CHURN=1`). This was the ONE asset write
     // site in the tree not already behind that gate.
     benilla_assets::write_gated(
         images,
@@ -1389,7 +1389,7 @@ fn resize_target(images: &mut Assets<Image>, target: &Handle<Image>, w: u32, h: 
 /// screen's live yaw (drag / rotate — cheap, no re-bake). Mirrors [`super::sync_paperdoll`]: the
 /// parts + riders come pre-assembled from the entities builder, so here we only re-light them —
 /// onto the **scene's authored rig** while a scene is up (the ref's glue character is scene-lit;
-/// the select screen's hardcoded weather-sun is not yet settled, decision 0465 §5),
+/// the select screen's hardcoded weather-sun is not yet settled),
 /// the studio buffer otherwise — pose a fresh Stand-**looping** instance with the riders on its
 /// joints, and frame it full-body.
 pub(super) fn sync_glue_booth(
@@ -1404,7 +1404,7 @@ pub(super) fn sync_glue_booth(
     anim_data: Option<Res<crate::creature_anim::AnimData>>,
     mut cams: Query<(&BoothCam, &mut Transform, &mut Projection)>,
     mut palettes: ResMut<benilla_world::rig_palette::RigPalettes>,
-    // The per-instance modulate colour (decision 0812): a ghost selection paints the whole bake
+    // The per-instance modulate colour: a ghost selection paints the whole bake
     // through it, keyed on the rig slot this bake allocates — the reference's `cc+0x184..0x18c`.
     mut tints: ResMut<benilla_world::instance_tint::InstanceTints>,
     mut last: Local<Option<(u64, f32, u64)>>,
@@ -1526,7 +1526,7 @@ pub(super) fn sync_glue_booth(
                 static_mesh: p.static_mesh.clone(),
                 material: relight(&p.material, &mut scene, &mut booth_light, &mut materials),
                 twins: relight_twins(&p.twins, &mut scene, &mut booth_light, &mut materials),
-                // `None`, and a KNOWN GAP (decision 0807): a mirrored `PreviewPart` doesn't carry
+                // `None`, and a KNOWN GAP: a mirrored `PreviewPart` doesn't carry
                 // the batch's alpha loops, so a character batch with an authored dimming constant
                 // previews at 1.0 here. Closing it means threading `alpha_anim` through the
                 // appearance-assembly layer — deliberately not folded into the B121 fix.
@@ -1534,7 +1534,7 @@ pub(super) fn sync_glue_booth(
                 mat_anim: false,
             });
         }
-        // The equipment riders (a Select look — helm/shoulders/sheathed weapons, decision 0465):
+        // The equipment riders (a Select look — helm/shoulders/sheathed weapons):
         // scene-lit like the body, seated on the throwaway skeleton's joints by the booth spawn.
         let booth_riders: Vec<BoothRider> = bake
             .riders
@@ -1607,10 +1607,10 @@ pub(super) fn sync_glue_booth(
                 None => benilla_world::instance_tint::IDENTITY,
             },
         );
-        // The worn items' effects: an equipped item model's OWN emitters (decision 0813 — the R14
+        // The worn items' effects: an equipped item model's OWN emitters (the R14
         // pauldron's sparkle, the torch's flame) and the held weapons' `ItemVisuals`
-        // glows (decision 0805). One host per effect model at its seat, emitters owned by it — the
-        // scene-brazier recipe (0539 §5), so they draw against THIS camera and fog on the scene's own
+        // glows. One host per effect model at its seat, emitters owned by it — the
+        // scene-brazier recipe, so they draw against THIS camera and fog on the scene's own
         // light. Children of the booth root through their joint, so the next re-bake's
         // `despawn_related` reaps them. The reference reaches both through the very same attach
         // primitive it uses in the world (`0x472c91` → `0x47a0c0` → `0x4798c0`), and the enum carries
@@ -1811,7 +1811,7 @@ pub(super) fn sync_glue_pet(
         &booth_billboards,
         BoothInstance::default(),
     );
-    // The pet's OWN emitters — the imp's flames (decision 1539). Authored on the pet's own bones,
+    // The pet's OWN emitters — the imp's flames. Authored on the pet's own bones,
     // so this is the model's-own recipe, NOT the worn-item one (`spawn_booth_effects`, which seats
     // a *separate* model's emitters on a body bone through a host): the flame at the hand rides the
     // hand through the Stand loop.
@@ -2071,7 +2071,7 @@ mod tests {
     /// A same-size `resize_target` must not touch the image at all. `Assets::get_mut` queues
     /// `AssetEvent::Modified` whether or not the caller writes, and this target is the glue
     /// scene's fullscreen render target — one needless borrow per frame re-uploaded 22 MB per
-    /// frame at 3200×1800 while the login screen sat still (decision 0772).
+    /// frame at 3200×1800 while the login screen sat still.
     #[test]
     fn a_same_size_resize_does_not_mark_the_target_modified() {
         use bevy::asset::AssetEvent;

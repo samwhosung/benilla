@@ -1,4 +1,4 @@
-//! The **output meter** — what the mix's level actually *is*, in numbers (decision 1551).
+//! The **output meter** — what the mix's level actually *is*, in numbers.
 //!
 //! The three crackle hunts before this one (1026, 1109, 1112/1114) each ended by adding the meter
 //! that would have named the mechanism: the callback-deadline load, the stream-decoder liveness,
@@ -21,7 +21,7 @@
 //! - **`reduction`** — the deepest gain the limiter had to pull to make it fit ([`super::limiter`]
 //!   writes it here), so the log line reads as one story: asked for this, allowed that.
 //! - **`nonfinite`** — samples that were NaN or infinite. This is the meter's own blind spot,
-//!   closed deliberately (decision 1556): `f32::max` *discards* a NaN operand and `NaN > 1.0` is
+//!   closed deliberately: `f32::max` *discards* a NaN operand and `NaN > 1.0` is
 //!   `false`, so a mix carrying NaN reads as flawless on `peak` and `over` alike — and sails
 //!   through the limiter's `peak > CEILING` test untouched, straight into the driver. A single
 //!   non-finite sample is broadband noise at whatever the hardware makes of the bit pattern,

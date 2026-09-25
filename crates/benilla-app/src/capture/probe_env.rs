@@ -1,9 +1,9 @@
 //! The probe fleet's **environment registry** — every `WOW_PROBE*` variable the app reads, in one
-//! table the code is checked against in both directions (decision 2265 §A5).
+//! table the code is checked against in both directions.
 //!
 //! The set used to live in three places that could not see each other: the read sites (one per
 //! variable, spread over the fleet), a hand-kept arming list in `dev.rs` for the un-occludable
-//! window ([`super::ProbeFocusPlugin`], decision 0906), and nothing at all that said what the
+//! window ([`super::ProbeFocusPlugin`]), and nothing at all that said what the
 //! fleet accepts. The arming list is the one that bit: 0906's rule is that *every* scripted
 //! probe defends itself against the macOS occlusion throttle, and the list had drifted to ten of
 //! the twenty-five variables that schedule on the wall clock — a mail or auction probe launched
@@ -30,13 +30,13 @@ pub(crate) struct ProbeVar {
     /// marks, integrates a rate per frame, or steps a phase machine on `Time<Real>` — so the run
     /// is only right while frames keep arriving at full rate.
     ///
-    /// Why it matters (decision 0906): macOS drops a fully covered window to ~1 fps drawables,
+    /// Why it matters: macOS drops a fully covered window to ~1 fps drawables,
     /// and on such a window a wall-clock probe does not measure slowly, it **runs the wrong
     /// script** — one leg fired `W@16` and `Space@19` in the same frame and jumped from a
     /// standstill; another integrated its camera at 125 yd/s for 500 and never crossed the
-    /// radius it was testing (0794). Every `true` row therefore arms
+    /// radius it was testing. Every `true` row therefore arms
     /// [`super::ProbeFocusPlugin`] from `dev.rs`, which keeps the probe window un-occludable
-    /// (and, for a run that draws no pixels, parks it small in a corner — decision 1148).
+    /// (and, for a run that draws no pixels, parks it small in a corner).
     ///
     /// A `false` row is a flag or a modifier: a `_AT`/`_STEP`/`_KEEP` rides its parent's
     /// arming, a pricing lever changes *what* a run draws rather than *when*, and a state
@@ -162,7 +162,7 @@ pub(crate) const PROBE_VARS: &[ProbeVar] = &[
         purpose: "\"<chunk>\" — a Lua chunk evaluated after each drag whose string result is logged as the report",
         wall_clock: false,
     },
-    // ── The scripted controller inputs (decisions 0621/0653) ────────────────────────────────
+    // ── The scripted controller inputs ────────────────────────────────
     ProbeVar {
         name: "WOW_PROBE_LOOK",
         purpose: "\"<deg_per_sec>@<start_s>:<duration_s>[;…]\" — the scripted mouse-turn: turn the avatar's aim at a rate for a while",
@@ -384,7 +384,7 @@ mod tests {
     /// tests are the one place the literals are *supposed* to appear without being read.
     const SELF: &str = "capture/probe_env.rs";
 
-    /// **The table cannot drift from the code, in either direction** (decision 2265 §A5).
+    /// **The table cannot drift from the code, in either direction**.
     ///
     /// Every `"WOW_PROBE…"` string literal in the crate must be a row here — a variable the
     /// fleet reads that the registry does not know is exactly the hand-maintained gap this

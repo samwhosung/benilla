@@ -10,11 +10,11 @@
 //! ## The "photo booth"
 //!
 //! Each portrait slot (`"player"`/`"target"`) gets its own render layer + camera rendering into a
-//! [`PortraitImages`] entry. A third slot — `"paperdoll"` (decision 0208 §5) — reuses the exact same
+//! [`PortraitImages`] entry. A third slot — `"paperdoll"` — reuses the exact same
 //! bake pipeline for the character window's **full-body** model pane: it mirrors the *player's*
 //! dressed look like the `"player"` slot, but frames it through the model's own `<PlayerModel>`
 //! camera ([`framing::body_frame`] — raw `cameras[1]`, not the authored bust camera the round
-//! portraits use; decision 1089), bakes at 512², and spins the
+//! portraits use), bakes at 512², and spins the
 //! model to a live yaw ([`PaperDollBooth`], the ref's `Model:SetRotation`). The UI samples it
 //! *square*, not through the circular mask.
 //!
@@ -106,7 +106,7 @@ pub(crate) mod test_bake;
 /// frames, `"pet"` (decision 0990's frame), and `"npc"` — the NPC an interaction window (gossip /
 /// quest / merchant / trainer / taxi) is bound to ([`crate::ui_session::InteractNpc`]), so those
 /// windows show the creature's face instead of the `?` placeholder.
-/// `"targettarget"` (decision 1576) is the ninth and the odd one: it is the only slot whose unit
+/// `"targettarget"` is the ninth and the odd one: it is the only slot whose unit
 /// resolution is gated on the UI actually drawing it — see [`sync_portraits`]'s arm for why.
 const SLOTS: [&str; 9] = [
     "player",
@@ -119,17 +119,17 @@ const SLOTS: [&str; 9] = [
     "party3",
     "party4",
 ];
-/// The character-window **paper-doll** slot (decision 0208 §5): a full-body bake of the dressed
+/// The character-window **paper-doll** slot: a full-body bake of the dressed
 /// player, sampled *square* (not circular) by the character frame's model pane. Its own booth —
 /// separate resolution ([`PAPERDOLL_SIZE`]), body framing ([`framing::body_frame`]), and a live yaw
 /// ([`PaperDollBooth`]) — so the two portrait slots stay pixel-identical.
 const PAPERDOLL_SLOT: &str = "paperdoll";
-/// The **inspect** window's model pane (decision 0631 §4) — the same full-body bake as
+/// The **inspect** window's model pane — the same full-body bake as
 /// [`PAPERDOLL_SLOT`], pointed at *another* player. It is the composition of what the existing
 /// slots already do separately: body framing like the paper doll, an arbitrary unit like
 /// `"target"`. Both run through [`sync_body_booth`]; only the unit and the yaw differ.
 const INSPECT_SLOT: &str = "inspect";
-/// The **pet paper doll**'s model pane (decision 1057) — the character window's tab 2. Composed
+/// The **pet paper doll**'s model pane — the character window's tab 2. Composed
 /// exactly like [`INSPECT_SLOT`] (body framing + an arbitrary unit + a live yaw), pointed at the
 /// pet instead of at another player; it too runs through [`sync_body_booth`]. It gets its own booth
 /// rather than sharing the `"pet"` portrait slot because that one is a 256² *bust* for the pet unit
@@ -213,9 +213,9 @@ const STABLE_LAYER: usize = PETDOLL_LAYER + 1;
 /// on the same number. Two booths sharing a layer is not a cosmetic clash — `particles::sim`
 /// resolves an emitter's booth camera by *finding the first camera whose layers intersect*, so the
 /// glue scene's 28 emitters addressed the INSPECT camera, which is off at the glue screens, and the
-/// login screen's braziers simulated forever without ever being drawn (decision 0775).
+/// login screen's braziers simulated forever without ever being drawn.
 pub(super) const GLUE_LAYER: usize = STABLE_LAYER + 1;
-/// The **dressing room**'s render layer (decision 1060) — the next one past the glue booth's, by
+/// The **dressing room**'s render layer — the next one past the glue booth's, by
 /// the same ladder rule.
 pub(super) const DRESSUP_LAYER: usize = GLUE_LAYER + 1;
 /// The pipe_warm **twin booth**'s render layer — the next one past the dressing room's (same ladder
@@ -229,16 +229,16 @@ pub(crate) const WARM_BOOTH_LAYER: usize = DRESSUP_LAYER + 1;
 /// booth's custom `WowPortraitProjection`. Like [`WARM_BOOTH_LAYER`] this camera exists only while
 /// the warm pass runs, and nothing but menagerie rigs ever rides its layer.
 pub(crate) const WARM_ORTHO_LAYER: usize = WARM_BOOTH_LAYER + 1;
-/// The **minimap interior composite**'s render layer (decision 1466) — the next one past the warm
+/// The **minimap interior composite**'s render layer — the next one past the warm
 /// booth's. Not a portrait booth, but it is an offscreen camera with its own layer, and 0775's rule
 /// is that EVERY such layer is computed in this one ladder: the two booths that each worked out
 /// "the next layer past the paper doll's" in their own file landed on the same number, and the
 /// clash was silent in both rendering and the emitter→camera match.
 pub(crate) const MINIMAP_COMPOSITE_LAYER: usize = WARM_ORTHO_LAYER + 1;
-/// The UI model tiles' layer (`crate::ui_models`, decision 2008): every `<Model>` widget's M2
+/// The UI model tiles' layer (`crate::ui_models`): every `<Model>` widget's M2
 /// renders into one atlas through one camera on this layer.
 pub(crate) const UI_MODELS_LAYER: usize = MINIMAP_COMPOSITE_LAYER + 1;
-/// The base of the **perspective model panes'** layer block (decision 2027). A `<Model>` framed
+/// The base of the **perspective model panes'** layer block. A `<Model>` framed
 /// by its file's own camera cannot share the tile atlas's one orthographic camera — it needs a
 /// camera of its own, rendering into its own cell of the same atlas through a viewport — and one
 /// camera per pane means one layer per pane, or every perspective camera would draw every other
@@ -307,7 +307,7 @@ pub(crate) struct PortraitPart {
 ///
 /// It also rides a **mirror-only carrier** — a marker child that draws nothing — where the world
 /// geometry it names is not a unit descendant we can stamp: an item glow's own render batches, which
-/// the shared effect lane spawns under its own rig ([`crate::entities::item_glow`], decision 0822).
+/// the shared effect lane spawns under its own rig ([`crate::entities::item_glow`]).
 /// A booth bakes those at the bind pose, like any other rider.
 #[derive(Component)]
 pub(crate) struct PortraitRider {
@@ -332,14 +332,14 @@ pub(crate) struct PortraitRider {
 /// its own parts ([`PreviewBillboard`]). Carries the centred quad, its material, where it sits, and
 /// the billboard flag.
 ///
-/// Three sources plant one, exactly as on the glue path (decision 0822):
+/// Three sources plant one, exactly as on the glue path:
 ///
 /// - The character's own **eye-glow** (undead/night-elf, geoset 302 / geoset 0 — a fullbright quad
 ///   on the eye bone), planted by [`crate::entities::attach`].
 /// - An **equipped item's** camera-facing batch — a wand's gem, the held torch's `GLOWWHITE32` halo
 ///   (270 of the 2681 `Item\` models author one), planted by
 ///   [`crate::entities::equipment`]'s attach.
-/// - An **item glow's** batch (decision 0805) — `Spells\Enchantments\Sparkle_A.m2` is one additive
+/// - An **item glow's** batch — `Spells\Enchantments\Sparkle_A.m2` is one additive
 ///   quad and nothing else — planted by [`crate::entities::item_glow`].
 #[derive(Component)]
 pub(crate) struct PortraitBillboard {
@@ -363,7 +363,7 @@ pub(crate) enum PortraitSeat {
     /// A batch of the **rigged host model** itself (the eye-glow). Its bone's joint frame already
     /// bakes the bone pivot (the 0130 rig identity), so it needs no offset — and it belongs to that
     /// model's body, so a mount's own glow card prunes with the mount's meshes (a portrait shows the
-    /// rider alone, never the horse — decision 0441).
+    /// rider alone, never the horse).
     Body,
     /// A batch of a **rig-less rider** — an equipped item's, an item glow's — at its seat in the
     /// bone's joint frame (Bevy axes): the attach point **plus the batch's own model-local pivot**,
@@ -385,8 +385,8 @@ impl PortraitSeat {
 
 /// Stamped on an **effect-bearing model** riding a unit — the equipped item whose own emitters are
 /// its whole look (the R14 PVP pauldron's `SPARKLE` twinkle, the held torch's flame — decision
-/// 0813) and the `ItemVisuals` glow a held weapon hangs on its own attachment points
-/// (decision 0805). The world emitters are *free* entities the owner contract walks
+/// 0813) and the `ItemVisuals` glow a held weapon hangs on its own attachment points.
+/// The world emitters are *free* entities the owner contract walks
 /// ([`benilla_world::particles::spawn_emitter`]), never unit descendants, so — like [`PortraitBillboard`] —
 /// this marker is how a booth learns they exist at all: the mirror carries the emitter records plus
 /// the composed seat, and the booth spawns its own copies against its own camera
@@ -437,7 +437,7 @@ pub(crate) enum PortraitSource {
     File(String),
 }
 
-/// **The GUID-keyed bake cache** — `0xc0ce7c` (decision 1640; report B334).
+/// **The GUID-keyed bake cache** — `0xc0ce7c` (report B334).
 ///
 /// `SetPortraitTexture` on a player GUID whose object the client does not hold does **not** go
 /// straight to the 2D stand-in: it probes this cache by guid and, on a hit with a live handle,
@@ -499,7 +499,7 @@ impl PortraitBakes {
 #[derive(Resource, Default)]
 pub(crate) struct PortraitImages(pub(crate) HashMap<String, PortraitSource>);
 
-/// The paper-doll model pane's live input (decision 0208 §5): the bake **yaw** in radians — the
+/// The paper-doll model pane's live input: the bake **yaw** in radians — the
 /// ref's `Model:SetRotation` convention (rotate-left *decrements*; the pane's default is `0.61`, a
 /// three-quarter view). The character window's feed writes `yaw` each frame (from the rotate
 /// buttons / drag); the [`PAPERDOLL_SLOT`] booth spins the model root to match and re-bakes only
@@ -516,7 +516,7 @@ impl Default for PaperDollBooth {
     }
 }
 
-/// The inspect window's model pane input (decision 0631 §4) — the [`PaperDollBooth`] twin, plus
+/// The inspect window's model pane input — the [`PaperDollBooth`] twin, plus
 /// the one thing the paper doll never needs: **which unit**. `unit` is the entity
 /// [`crate::ui_inspect`] resolved the inspected token to this frame, `None` when nothing is being
 /// inspected (or the target isn't streamed), which empties the booth.
@@ -535,7 +535,7 @@ impl Default for InspectBooth {
     }
 }
 
-/// The pet paper doll's model pane input (decision 1057) — the [`InspectBooth`] shape exactly:
+/// The pet paper doll's model pane input — the [`InspectBooth`] shape exactly:
 /// a yaw the pane's rotate buttons write, and the unit [`crate::ui_pet_doll`] resolved the pet
 /// token to this frame (`None` with no pet out, or while its object hasn't streamed — which empties
 /// the booth, the same "no pet" the rest of the page shows).
@@ -664,7 +664,7 @@ struct Booth {
     target: Handle<Image>,
     baked: Option<LookKey>,
     /// **Whose face is standing in this booth** — the guid the current [`Self::baked`] belongs to,
-    /// for the handover into [`PortraitBakes`] when the booth loses them (decision 1640). Set by
+    /// for the handover into [`PortraitBakes`] when the booth loses them. Set by
     /// the party slots alone; `None` on every other booth, which never hands over.
     baked_guid: Option<u64>,
     /// **Body panes only** — what [`sync_body_booth`] last snapshotted, in place of `baked`.
@@ -676,16 +676,16 @@ struct Booth {
     shown: bool,
     /// How many times that edge has fired. Lives in [`SnapKey::show`].
     show_rev: u32,
-    /// Demand-render window (decision 0540): frames [`gate_booth_cameras`] still keeps this
+    /// Demand-render window: frames [`gate_booth_cameras`] still keeps this
     /// booth's camera active. Armed to [`BOOTH_SETTLE_FRAMES`] by every content edge (bake,
     /// empty, framing/yaw write); 0 with `pending` drained = the camera sleeps and the target
     /// keeps the last render — a still costs nothing per frame.
     wake: u32,
     /// The bake standing in this booth is a **live widget**, not a still: its Stand loops and its
     /// item emitters run ([`booth::spawn_booth_effects`]), so it must re-render every frame — but
-    /// only while something is drawing it, which [`BoothPanes`] answers (decision 1069). The
-    /// generalization of the glue booth's own always-on rule (`live_scene` below, decision 0540);
-    /// only the body panes set it (decision 0822 §4 — the round portraits are a one-shot bake).
+    /// only while something is drawing it, which [`BoothPanes`] answers. The
+    /// generalization of the glue booth's own always-on rule (`live_scene` below);
+    /// only the body panes set it (the round portraits are a one-shot bake).
     live: bool,
     /// Textures the last bake referenced that were not yet resident: the camera stays awake
     /// until each lands (an `mpq://` image arriving after the bake would otherwise be frozen
@@ -711,7 +711,7 @@ struct Booth {
     /// pipeline, the body the opaque one, the eye-glow card the additive one, and which of the
     /// three had landed by the fourth frame is a race. It is invisible on macOS, where the same
     /// compile `block_on`s the render thread instead: the whole class exists on the reporters'
-    /// machines and on no screen we can look at. Decision 1621.
+    /// machines and on no screen we can look at.
     ///
     /// Set by [`wake_booth`]; [`gate_booth_cameras`] holds the camera awake while the cache is
     /// draining and then spends one final rendered frame, exactly as it does for `pending`.
@@ -722,13 +722,13 @@ struct Booth {
     /// would pin a 256² camera rendering behind it.
     pipes_since: Option<f64>,
     /// The **destination pane's** aspect this booth's camera is currently framed for
-    /// ([`framing::WowPortraitProjection::aspect`], decision 1069) — 1.0 until the UI has drawn the
+    /// ([`framing::WowPortraitProjection::aspect`]) — 1.0 until the UI has drawn the
     /// pane once, then sticky: a hidden window must not re-frame the bake back to square.
     aspect: f32,
     /// A rig stands in this booth ([`booth::BoothRig::rigged`] at the last bake) — the park
     /// gate's "is there anything to park". Cleared with the emptied booth.
     rigged: bool,
-    /// The rotate arrows' turn animation ([`Turn`], decision 1559) — body panes only.
+    /// The rotate arrows' turn animation ([`Turn`]) — body panes only.
     turn: Turn,
     /// The booth scene is parked: its camera is asleep, so [`gate_booth_cameras`] put
     /// [`benilla_world::rig_anim::AnimParked`] on the root — the 0712 evaluator, the pose
@@ -742,7 +742,7 @@ struct Booth {
 }
 
 /// A body pane's **turn animation** state — the half of the reference's `SetRotation` that is not
-/// the facing write (decision 1559, director report B313).
+/// the facing write (director report B313).
 ///
 /// `PlayerModel:SetRotation(angle)` (`0x505bb0`) does two
 /// things: it picks a turn-in-place shuffle by direction, queues it and arms a 100 ms expiry, and
@@ -796,7 +796,7 @@ impl Turn {
 }
 
 /// The **cross-fade out of the pose an arm replaced** — the reference's per-bone SECONDARY blend
-/// slot, seeded by every arm the turn makes (decision 1565, director report B321).
+/// slot, seeded by every arm the turn makes (director report B321).
 ///
 /// `0x7121a0`'s sixth argument is `1` at both of the turn's call sites (`0x505c23` the rotation,
 /// `0x505c98` the 100 ms expiry). A non-zero there is
@@ -805,7 +805,7 @@ impl Turn {
 /// `[blk+0x100]`, the rate `[blk+0x104] = 1/blendTime` and the amplitude `[blk+0x108] = 1.0f`. The
 /// kernel at `0x714880` decays λ = smoothstep across it and blends `out = primary + (secondary −
 /// primary)·λ` ([`crate::creature_anim::select::blend_lambda`], the same curve the world lane's
-/// key-bone slot already runs — decision 0878).
+/// key-bone slot already runs).
 ///
 /// **One slot, not a list**, exactly as the client keeps one: an arm inside a running window
 /// overwrites `[blk+0xc4]`, and the pose it was fading out is dropped there and then.
@@ -827,9 +827,9 @@ struct Fade {
 const BOOTH_SETTLE_FRAMES: u32 = 4;
 
 /// This rig stands on a booth stage, not in the world: its `AnimParked` marker is owned by
-/// [`gate_booth_cameras`] alone, and the world-view parker (`creature_anim::lod`) filters it out
-/// (decision 1447). One marker, one writer — the same split the doodad draw gate holds for
-/// placed doodads (decision 1365). The hazard is structural: a booth stage sits outside every
+/// [`gate_booth_cameras`] alone, and the world-view parker (`creature_anim::lod`) filters it out.
+/// One marker, one writer — the same split the doodad draw gate holds for
+/// placed doodads. The hazard is structural: a booth stage sits outside every
 /// world frustum by construction, so an unfiltered view parker freezes every pane moments after
 /// its bake — while this gate, tracking only its own park edges, cannot heal the foreign marker.
 /// [`booth::BoothRig::finish`] inserts it beside the `RigPose`; [`booth::clear_booth_rig`]
@@ -862,7 +862,7 @@ fn booth_log() -> bool {
 /// show: the gate says a camera *drew*, never *what it drew*. B106's first-login shot is a
 /// portrait wearing no armour beside a fully-equipped character, so the question is exactly "how
 /// many parts/riders did the bake see, and did it ever re-bake when the rest arrived".
-/// `verb`: `bake` committed · `wait` abandoned (a source material was not resident, 0744) ·
+/// `verb`: `bake` committed · `wait` abandoned (a source material was not resident) ·
 /// `stand-in` the 2D fallback while no parts are attached · `empty` the booth was cleared.
 fn log_bake(
     token: &str,
@@ -1028,21 +1028,21 @@ struct Booths(HashMap<String, Booth>);
 
 /// Where each booth's bake is actually being **sampled on screen this frame**: slot token → the
 /// destination region's aspect (width ÷ height). Published by the UI extract for every portrait
-/// binding it emits — the *square* `BenillaSetBoothTexture` pane (decision 0208 §5) and, since
+/// binding it emits — the *square* `BenillaSetBoothTexture` pane and, since
 /// 1576, the round `SetPortraitTexture` unit portraits beside it. The two consumers below are
 /// body-booth-only and unreachable for a round slot (`sync_body_booth` is never called with one,
 /// and `live_pane` needs a `live` booth, which only a body pane ever is), so the round rows are
 /// inert here and exist for a third reader: [`sync_portraits`]'s `"targettarget"` gate, which asks
 /// this resource whether the frame it feeds is on screen at all.
 ///
-/// Two things need it, and neither can be a constant (decision 1069):
+/// Two things need it, and neither can be a constant:
 ///
 /// - **Shape.** A booth renders into a square target that the UI stretches to fill the pane's rect
 ///   (`extract`'s `UvRect::FULL`), so the projection has to run at the *pane's* aspect for the
 ///   stretch to cancel. Rendering at 1.0 into the dressing room's 316×351 pane made every
 ///   character 11% too tall (director report, 2026-08-06).
 /// - **Liveness.** A body pane's bake *animates* ([`BoothMotion::Loop`] — the reference's
-///   `<PlayerModel>` widgets render live, decision 0822 §4), so its camera renders every frame it
+///   `<PlayerModel>` widgets render live), so its camera renders every frame it
 ///   is on screen — and, now that this resource can say so, **none** when it is not. That last
 ///   half is also a strict win for the pre-1069 emitter case, which used to render forever behind
 ///   a closed window.
@@ -1062,14 +1062,14 @@ pub(crate) struct BoothPanes(pub(crate) HashMap<String, f32>);
 pub(crate) struct BoothBridge<'w> {
     pub(crate) images: Res<'w, PortraitImages>,
     pub(crate) panes: ResMut<'w, BoothPanes>,
-    /// The file panes' half of the same seam (decision 2008): the `ModelPane` arm publishes a
+    /// The file panes' half of the same seam: the `ModelPane` arm publishes a
     /// tile request per pane and samples the tile's atlas cell back.
     pub(crate) tiles: ResMut<'w, crate::ui_models::UiModelTiles>,
 }
 
 /// The group-facing inputs [`sync_portraits`] needs, in one param: who is in the party
 /// ([`crate::ui_party::GroupState`]), the guid→entity index that says which of them are actually
-/// STREAMED, the skin-palette table (decision 0720), the pet bar (0990), and the name cache — the
+/// STREAMED, the skin-palette table, the pet bar, and the name cache — the
 /// only place a member we hold no object for has a race and sex at all (report B315). The index
 /// serves the party slots and the pet alike.
 ///
@@ -1086,7 +1086,7 @@ pub(crate) struct PartyBooths<'w, 's> {
     names: Res<'w, crate::names::NameCache>,
     /// What the UI drew last frame ([`BoothPanes`]) — read by the `"targettarget"` slot alone.
     panes: Res<'w, BoothPanes>,
-    /// The guid-keyed bake cache + what the handover needs to run (decision 1640): a fresh render
+    /// The guid-keyed bake cache + what the handover needs to run: a fresh render
     /// target for the booth that just gave its own away, and that booth camera's
     /// [`RenderTarget`] to re-point at it.
     ///
@@ -1145,7 +1145,7 @@ fn feed_gx_aspect(
     }
 }
 
-/// The body panes' render rate (decision 1444): while a `<PlayerModel>`-family pane (paper
+/// The body panes' render rate: while a `<PlayerModel>`-family pane (paper
 /// doll, dressing room, inspect, pet) is on screen, its booth camera renders every OTHER frame
 /// instead of every frame. The pane's per-frame bill is the **second render pass itself** —
 /// 1441's trace put ~0.9 ms/frame in graph re-run + drawable pressure, and 1443 measured the
@@ -1156,7 +1156,7 @@ fn feed_gx_aspect(
 /// `boothHalfRate` is **benilla's own CVar** (the reference has no second view to rate-limit —
 /// its doll draws in the main pass, 1069's known rent). **Default ON (half-rate) — restored by
 /// 1607.** 1444 shipped it on; 1559 turned it off on the director's look-call (a full-rate doll
-/// reads as smoother); the 08-25 weak-GPU perf reports (B329) then measured what that costs — a
+/// reads as smoother); the 08-25 weak-GPU perf reports then measured what that costs — a
 /// body-pane booth's off-screen pass every frame, ~1.6 ms at 1600×900 and **7.6 ms at 4K**
 /// (an A/B leg), paid on exactly the weak GPUs that reported. The director retested
 /// the 30 fps doll and it reads fine, so the cheaper default is back. Full-rate is one
@@ -1232,7 +1232,7 @@ impl Plugin for PortraitPlugin {
             // The variant-cache reaper: booth twins die with their world source material.
             .add_systems(Update, (light::reap_dead_variants, feed_gx_aspect))
             // The `"npc"` token's entity is resolved by `ui_session`'s own plugin (it is shared with
-            // the interaction face-me, decision 1467) — the booths read whatever it last published.
+            // the interaction face-me) — the booths read whatever it last published.
             // Here the test bake owns the booths when its env is set (the live syncs yield to it),
             // and the paper-doll sync runs last (it shares the camera/booth/image resources, so the
             // chain keeps the access ordered).
@@ -1277,14 +1277,14 @@ impl Plugin for PortraitPlugin {
             // Re-face each booth's eye-glow cards to its own camera (reads last-propagate joint
             // globals; unordered w.r.t. the syncs — a fresh card just faces forward one frame).
             .add_systems(Update, booth::face_booth_billboards)
-            // The booth twin of the world visibility authority's render-alpha write (decision 0807):
+            // The booth twin of the world visibility authority's render-alpha write:
             // push each booth part's sampled `MatAnim` onto its tag. Ordered after the shared
             // sampler, the only producer of `MatAnim::current`, so it moves THIS frame's value.
             .add_systems(
                 Update,
                 booth::push_booth_mat_alpha.after(benilla_world::doodad_anim::sample_mat_anim),
             )
-            // The phase-3 preview instrument (`WOW_CREATE_TEST`, decision 0423): inert without the env.
+            // The phase-3 preview instrument (`WOW_CREATE_TEST`): inert without the env.
             .add_systems(Update, glue_booth::drive_create_test)
             // `WOW_BOOTH_DUMP=<token>:<path>:<secs>` — photograph a booth's render target to disk
             // (the headless eye on "what is the paperdoll actually showing right now"; the
@@ -1320,7 +1320,7 @@ pub(crate) fn new_target_image_sized(width: u32, height: u32) -> Image {
         // 0254/0541) — a booth target that pre-encodes lands a second encode in that chain. So the
         // target holds the booth's own un-encoded values and the UI shader encodes them.
         //
-        // FLOAT, not `Rgba8Unorm`, is B126 (decision 0804). Quantizing *un-encoded* values to 8 bits
+        // FLOAT, not `Rgba8Unorm`, is B126. Quantizing *un-encoded* values to 8 bits
         // is a precision collapse exactly where the eye is most sensitive: the only display levels
         // reachable below display byte 100 are `srgb(k/255)` = 0, 13, 22, 28, 34, 38, … — ~25 steps
         // where the 8-bit gamma backbuffer this feeds has 100. That is the banding that reads as
@@ -1341,7 +1341,7 @@ pub(crate) fn new_target_image_sized(width: u32, height: u32) -> Image {
 /// whys sit on the portrait-slot spawn below) at `Msaa::Off`. Defined ONCE and spawned by every
 /// booth camera — the portrait slots, the two body panes, the glue booth, and pipe_warm's twin
 /// booth — because the warm pass compiles the samples=1 twin of every model pipeline against
-/// exactly this shape behind the loading cover (decisions 0938/0958): a booth camera whose shape
+/// exactly this shape behind the loading cover: a booth camera whose shape
 /// drifts from the warm booth's is a live pipeline stall on its first bake.
 pub(crate) fn booth_view_shape() -> impl Bundle {
     (
@@ -1358,7 +1358,7 @@ pub(crate) fn booth_view_shape() -> impl Bundle {
     )
 }
 
-/// The pipe_warm **twin booth** (decision 0958). The real booths spawn with a
+/// The pipe_warm **twin booth**. The real booths spawn with a
 /// `PerspectiveProjection` placeholder and render the menagerie's twins under bevy_pbr's
 /// PERSPECTIVE view key — but nearly every real bake installs
 /// `Projection::custom(WowPortraitProjection)` ([`frame`]'s authored path; [`body_frame`]
@@ -1425,7 +1425,7 @@ fn setup_booths(
     booth_light.studio.buffer = Some(light_buffer("wow_portrait_light", studio_light()));
     // The body panes' own light — the reference `<PlayerModel>` widget's (see the fn's doc).
     booth_light.pane.buffer = Some(light_buffer("wow_model_pane_light", model_pane_light()));
-    // Booth rigs skin from the palette regions of THESE buffers (decision 0720): register both
+    // Booth rigs skin from the palette regions of THESE buffers: register both
     // as mirrors so the palette upload keeps their regions live.
     for (key, buf) in [
         ("portrait", &booth_light.studio.buffer),
@@ -1460,7 +1460,7 @@ fn setup_booths(
             },
             // The render target is its own component in Bevy 0.18 (Camera `#[require]`s it).
             RenderTarget::Image(image.clone().into()),
-            // The gamma lane (0161): booth materials emit gamma bytes like the world's, so the
+            // The gamma lane: booth materials emit gamma bytes like the world's, so the
             // booth needs the same final node — the FFXGlow combine owns the frame's ONE decode.
             // This also keeps the bake at exact world parity (same glow, same transform chain);
             // without it the portrait reads one encode too bright.
@@ -1499,8 +1499,8 @@ fn setup_booths(
         );
     }
 
-    // The four **body** booths — the character window's paper doll (decision 0208 §5), the
-    // inspect window's pane (decision 0631 §4), the pet paper doll's (decision 1057) and the
+    // The four **body** booths — the character window's paper doll, the
+    // inspect window's pane, the pet paper doll's and the
     // stable window's (`SetPetStablePaperdoll 0x4cb870`). Same off-screen pipeline as the
     // portrait slots (transparent target, HDR + the FFXGlow node, negative order so the bake is
     // ready before the world/UI cameras), but their own 512² targets, their own layers, and a
@@ -1542,7 +1542,7 @@ fn setup_booths(
             RenderTarget::Image(image.clone().into()),
             // Decode, but NO glow: these two stand in for 1.12 `<PlayerModel>` widgets, which the
             // reference paints in the UI strata — after the WorldFrame's own FFX apply — so they
-            // never carry the scene glow (decision 0638; [`benilla_world::ffx_glow::FfxGlow::UI_PANE`]).
+            // never carry the scene glow ([`benilla_world::ffx_glow::FfxGlow::UI_PANE`]).
             benilla_world::ffx_glow::FfxGlow::UI_PANE,
             // Placeholder — `sync_body_booth` overwrites transform + projection from the unit's
             // bounds on the first bake. A plain perspective is harmless while the model is loading.
@@ -1580,9 +1580,9 @@ fn setup_booths(
         );
     }
 
-    // The glue booth (decisions 0423 + 0465): its own slot/layer/target, framed per-bake.
+    // The glue booth: its own slot/layer/target, framed per-bake.
     glue_booth::spawn_glue_booth(&mut commands, &mut images, &mut portraits, &mut booths);
-    // The dressing room (decision 1060): a third body pane, tuple-driven like the glue booth but
+    // The dressing room: a third body pane, tuple-driven like the glue booth but
     // lit and framed like the paper doll.
     dressup::spawn_dressup_booth(&mut commands, &mut images, &mut portraits, &mut booths);
 }
@@ -1825,7 +1825,7 @@ impl DressedLook<'_, '_> {
     /// Walk `unit`'s descendants once, collecting its part + rider children. All empty while the
     /// unit's model is still loading / cube-fallback (no attach path has spawned the parts yet).
     ///
-    /// A mounted unit's MOUNT child (decision 0441) is a second creature under the unit — a
+    /// A mounted unit's MOUNT child is a second creature under the unit — a
     /// portrait/paper-doll shows the character alone, never the horse (the ref's `Model:SetUnit`
     /// binds the player model, not the mount). Its **parts** (the mount's body meshes) are
     /// skipped by pruning on the [`mount::MountBody`] marker; **riders** stay collected from the
@@ -1932,12 +1932,12 @@ fn sync_portraits(
         // art for exactly those tokens; a token that names nobody at all leaves it `None` and the
         // booth empties as before (report B315).
         let mut unseen: Option<String> = None;
-        // The guid this slot names, when the slot is one that retains a bake (decision 1640).
+        // The guid this slot names, when the slot is one that retains a bake.
         let mut occupant: Option<u64> = None;
         let unit: Option<Entity> = match token {
             "player" => self_q.single().ok(),
             "target" => selection.target,
-            // The target's own target (decision 1576) — one hop off `UNIT_FIELD_TARGET`, the same
+            // The target's own target — one hop off `UNIT_FIELD_TARGET`, the same
             // read the `"targettarget"` unit snapshot makes.
             //
             // **Gated on the UI actually drawing this slot**, which no other slot here is, and
@@ -1987,7 +1987,7 @@ fn sync_portraits(
                     .and_then(|n| n.parse::<usize>().ok())
                     .and_then(|n| party.roster.party_slots().nth(n - 1));
                 // Whose face this slot is showing — the key the bake handover files it under,
-                // and the key the absent-unit arm probes the cache with (decision 1640).
+                // and the key the absent-unit arm probes the cache with.
                 occupant = member.map(|m| m.guid);
                 let entity = member.and_then(|m| party.index.0.get(&m.guid)).copied();
                 if entity.is_none() {
@@ -2006,7 +2006,7 @@ fn sync_portraits(
             continue;
         };
         let Some(unit) = unit else {
-            // ── The bake handover (decision 1640, report B334) ─────────────────────────────
+            // ── The bake handover (report B334) ─────────────────────────────
             //
             // The booth is about to be emptied, and its target is a *still of the face that was
             // standing in it* — so before the clear renders over it, that image becomes this
@@ -2042,7 +2042,7 @@ fn sync_portraits(
             if booth.baked.is_some() {
                 commands.entity(booth.root).despawn_related::<Children>();
                 booth.baked = None;
-                // Render the emptied stage (decision 0540): the target must hold the cleared
+                // Render the emptied stage: the target must hold the cleared
                 // backdrop, not the departed unit's face, before the camera sleeps.
                 booth.wake = BOOTH_SETTLE_FRAMES;
                 booth.pending.clear();
@@ -2085,7 +2085,7 @@ fn sync_portraits(
             continue;
         }
         let key = LookKey::build(&parts, &riders, &billboards, &effects);
-        // **A changed occupant is a re-bake even at an identical look** (decision 1640). The key
+        // **A changed occupant is a re-bake even at an identical look**. The key
         // is built from mesh/material handles, so two party members in the same race, sex and
         // gear share it — and without this term the booth would keep standing A's bake while
         // `baked_guid` was quietly re-filed to B, so the handover would put that face in the
@@ -2121,7 +2121,7 @@ fn sync_portraits(
                     skinned: p.skinned_mesh.clone(),
                     static_mesh: p.static_mesh.clone(),
                     material: booth_light.studio.variant(&p.material, &mut wow_mats),
-                    // `None` — the same known gap as the glue preview's (decision 0807): a
+                    // `None` — the same known gap as the glue preview's: a
                     // mirrored `PortraitPart` doesn't carry the batch's alpha loops.
                     alpha_anim: None,
                     twins: BoothTwins::default(),
@@ -2193,7 +2193,7 @@ fn sync_portraits(
             booth.rigged = booth_rig.rigged();
             booth_rig.finish(&mut commands);
             booth.parked = false;
-            // **No emitters here, and that is the reference's own answer** (decision 0822): the
+            // **No emitters here, and that is the reference's own answer**: the
             // round portrait is a ONE-SHOT bake — a fresh M2 scene + instance, one `0x707680` draw,
             // the texture cached by GUID/displayId and returned with *no re-render* on a hit, nothing
             // persisting between bakes (`0x524f60`). A particle
@@ -2238,7 +2238,7 @@ fn sync_portraits(
 /// **What re-bakes.** A [`SnapKey`] change respawns the posed instance and re-aims the (yaw-
 /// independent) camera; a bare yaw change only re-rotates the root — neither happens on an unchanged
 /// frame. The bake stands ready whether or not the window is open, but the 512² *pass* only runs
-/// while the pane is being drawn ([`BoothPanes`], decision 1069).
+/// while the pane is being drawn ([`BoothPanes`]).
 ///
 /// The key is **not** the mirrored geometry. A `<PlayerModel>` duplicates the unit's model once and
 /// renders a copy the world can no longer reach, and it re-takes that copy on four things — the
@@ -2287,7 +2287,7 @@ fn sync_paperdoll(
     );
 }
 
-/// The inspect window's model pane (decision 0631 §4) — the paper doll's exact twin, pointed at
+/// The inspect window's model pane — the paper doll's exact twin, pointed at
 /// whichever unit [`crate::ui_inspect`] resolved this frame instead of at the self player.
 fn sync_inspect_booth(
     mut commands: Commands,
@@ -2330,7 +2330,7 @@ fn sync_inspect_booth(
     );
 }
 
-/// The pet paper doll's model pane (decision 1057) — the inspect pane's exact twin, pointed at the
+/// The pet paper doll's model pane — the inspect pane's exact twin, pointed at the
 /// pet [`crate::ui_pet_doll`] resolved this frame.
 fn sync_petdoll_booth(
     mut commands: Commands,
@@ -2533,7 +2533,7 @@ fn sync_body_booth(
     let Some(booth) = booths.0.get_mut(slot) else {
         return;
     };
-    // Latch the pane's aspect while it is on screen (decision 1069). Sticky: a closed window
+    // Latch the pane's aspect while it is on screen. Sticky: a closed window
     // publishes nothing, and re-framing the standing bake back to square on the way out would be a
     // visible pop on the way back in.
     let aspect = panes.0.get(slot).copied().unwrap_or(booth.aspect);
@@ -2569,7 +2569,7 @@ fn sync_body_booth(
             commands.entity(booth.root).despawn_related::<Children>();
             booth.snap = None;
             *last_pose = None;
-            // Render the emptied stage before sleeping (decision 0540) — and the emptied stage has
+            // Render the emptied stage before sleeping — and the emptied stage has
             // no emitters left, so the pane stops being live.
             booth.wake = BOOTH_SETTLE_FRAMES;
             booth.live = false;
@@ -2636,7 +2636,7 @@ fn sync_body_booth(
                 skinned: p.skinned_mesh.clone(),
                 static_mesh: p.static_mesh.clone(),
                 material: booth_light.pane.variant(&p.material, wow_mats),
-                // `None` — the same known gap as the glue preview's (decision 0807).
+                // `None` — the same known gap as the glue preview's.
                 alpha_anim: None,
                 twins: BoothTwins::default(),
                 mat_anim: false,
@@ -2666,8 +2666,8 @@ fn sync_body_booth(
                 twins: BoothTwins::default(),
             })
             .collect();
-        // The worn items' effects (decision 0822) — an equipped item's own emitters (0813) and a
-        // held weapon's `ItemVisuals` glow (0805). Collected BEFORE the teardown for the
+        // The worn items' effects — an equipped item's own emitters and a
+        // held weapon's `ItemVisuals` glow. Collected BEFORE the teardown for the
         // same reason as everything else here; spawned after the model, which is what hands us the
         // joints they seat on.
         let booth_effects: Vec<BoothEffects> = effects
@@ -2700,7 +2700,7 @@ fn sync_body_booth(
             anim_data.map(|a| &a.0),
             // The pane ANIMATES: Stand loops and the global-sequence bones run, which is what the
             // reference's `<PlayerModel>` widget does (decision 0822 §4 read it as live-rendering
-            // and left the pose as a look call; the director made that call — decision 1069).
+            // and left the pose as a look call; the director made that call).
             BoothMotion::Loop,
             // The grip is the reference's own probe of the duplicate's hand attachment nodes
             // ([`hand_grip`]) — NOT a constant. The `[false, false]` this replaced rested on
@@ -2776,7 +2776,7 @@ fn sync_body_booth(
                 .with_scale(Vec3::splat(model_scale)),
         );
         *last_pose = Some((yaw, model_scale));
-        // A spin is a content edge too (decision 0540): render the new pose, then sleep.
+        // A spin is a content edge too: render the new pose, then sleep.
         booth.wake = booth.wake.max(BOOTH_SETTLE_FRAMES);
     }
 }
@@ -2817,20 +2817,20 @@ fn pipe_settle(compiling: bool, wake_drained: bool, held_for: f64) -> PipeSettle
     }
 }
 
-/// The demand-render gate (decision 0540): each booth camera is active only while its booth has
+/// The demand-render gate: each booth camera is active only while its booth has
 /// something new to show — [`Booth::wake`] frames after a content edge, or a bake texture still
 /// in flight ([`Booth::pending`]) — except the booths whose content is **live**, which render
 /// continuously: the glue booth, whose whole scene is animated (looping sequences, global-sequence
 /// bones, particle emitters) while a glue screen shows, and a **body pane**, whose bake is a live
-/// `<PlayerModel>` widget ([`Booth::live`], decisions 0822 §4 + 1069). A sleeping camera
+/// `<PlayerModel>` widget ([`Booth::live`]). A sleeping camera
 /// skips its whole pass (clear + model + FFXGlow chain); its target keeps the last render — exactly
 /// right for a still (the 0105 bake, frozen at Stand).
 ///
-/// A live pane renders **only while it is on screen** ([`BoothPanes`], decision 1069): a character
+/// A live pane renders **only while it is on screen** ([`BoothPanes`]): a character
 /// window nobody opened costs nothing, which is the follow-up [`sync_paperdoll`] named and 0822's
 /// unconditional `live` never had.
 /// With `WOW_PORTRAIT_TEST` set the gate stands down (the eyeball harness wants live cameras).
-/// The pipeline warm pass is demand too (decision 0938): its menagerie duplicates rigs onto a
+/// The pipeline warm pass is demand too: its menagerie duplicates rigs onto a
 /// booth layer so the booths' `Msaa::Off` pipeline twins compile behind the entry cover — which
 /// only works if the booth cameras render during the warm window.
 fn gate_booth_cameras(
@@ -2856,7 +2856,7 @@ fn gate_booth_cameras(
     // `WOW_BOOTH_LOG` only: the marker's REAL state beside this gate's `booth.parked`
     // bookkeeping. The two can desync exactly one way — a foreign writer — and that desync is
     // invisible in every capture (a woken rig snaps to the absolute clock), so it must be
-    // loggable (decision 1447: the world parker froze every pane and no dump could show it).
+    // loggable (the world parker froze every pane and no dump could show it).
     markers: Query<(), With<benilla_world::rig_anim::AnimParked>>,
     mut env_cache: Local<Option<bool>>,
 ) {
@@ -2942,7 +2942,7 @@ fn gate_booth_cameras(
             || booth.wake > 0
             || !booth.pending.is_empty()
             || settling;
-        // Half-rate (decision 1444, [`PaneRate`]): when the live pane is the ONLY thing keeping
+        // Half-rate ([`PaneRate`]): when the live pane is the ONLY thing keeping
         // this camera rendering — no wake window settling a fresh bake, no pending texture hold,
         // no fullscreen glue scene — skip every other frame. `active` stays the LOGICAL state:
         // the park bookkeeping below keys off it (the pose keeps evaluating; only the render
@@ -2998,7 +2998,7 @@ fn gate_booth_cameras(
         }
         // Park/unpark the standing scene with its camera (director report 2026-08-19: the doll
         // bake animated at full cost from the LOGIN bake to quit, window opened or not). The
-        // park is one `AnimParked` marker on the root (decision 1443): the 0712 evaluator, the
+        // park is one `AnimParked` marker on the root: the 0712 evaluator, the
         // pose composes, the palette writes and the global-sequence writes all check it — the
         // pose HOLDS, the buffer is state. Booth-lane emitters freeze on the camera bit itself
         // (`particles::sim`). This system runs before the PostUpdate animation lane, so an
@@ -3090,7 +3090,7 @@ mod tests {
     use super::*;
     use crate::entities::ItemModelKind;
 
-    /// **The cache keeps faces, not slots** (decision 1640, report B334): a re-bake of somebody
+    /// **The cache keeps faces, not slots** (report B334): a re-bake of somebody
     /// already in it replaces their entry rather than queueing a second one, and only genuinely
     /// new members can push the oldest out. Get this wrong — count a replace as an insert — and a
     /// party member whose gear changes a few times evicts the other three.
@@ -3230,10 +3230,10 @@ mod tests {
     struct Unit(Entity);
 
     /// **A mounted unit's booth keeps the rider's gear and drops the horse's.** The mount prune is
-    /// what makes a portrait show the character alone (decision 0441) — but while mounted the
+    /// what makes a portrait show the character alone — but while mounted the
     /// character's own attach joints re-root INSIDE the mount subtree, so pruning everything under it
     /// would take the rider's equipment with the horse. Riders were already exempt; an equipped item's
-    /// camera-facing batch and its effects have to be too (decision 0822), and the discriminator is
+    /// camera-facing batch and its effects have to be too, and the discriminator is
     /// [`PortraitSeat`] — whose model the batch belongs to — not where in the tree it happens to sit.
     #[test]
     fn a_mounts_own_glow_card_prunes_but_the_riders_gear_does_not() {
@@ -3386,7 +3386,7 @@ mod tests {
         );
     }
 
-    /// The melee twin: a stow does not delete the weapon, it re-parents it (0826) — same handles,
+    /// The melee twin: a stow does not delete the weapon, it re-parents it — same handles,
     /// a hand point for a hip point. Both ends are in the sheath lane, so neither is in the key.
     #[test]
     fn stowing_a_sword_does_not_re_snapshot_the_pane() {

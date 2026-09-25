@@ -2,13 +2,13 @@
 //! chain — `surface under the unit → TerrainType → × the unit's footstep class →
 //! FootstepTerrainLookup → SoundEntries`.
 //!
-//! **The surface is [`benilla_world::surface`]'s to answer, not this module's** (decision 1161). It is the
+//! **The surface is [`benilla_world::surface`]'s to answer, not this module's**. It is the
 //! client's two-leg down-ray: a building that owns the column supplies its own floor's material,
 //! and only outdoors does the ADT ground-effect layer decide. Reading the ADT unconditionally is
 //! what put a snow crunch under the Kharanos inn's floorboards. `None` there is the reference's
 //! `−1` and means silent — never "ask the other leg".
 //!
-//! **Trigger: `$FSD` and nothing else** (decision 1080). A footfall is two disjoint channels in
+//! **Trigger: `$FSD` and nothing else**. A footfall is two disjoint channels in
 //! the client's event dispatcher `0x5ffbd0` — `$FSD → 0x623390` is the *sound*, the per-foot side
 //! tags (`$FL/$FR/$RL/$RR/$SL/$SR/$BL/$BR/$WL/$WR`) `→ 0x5fbf70` are the *visual* footfall (the
 //! decal + spray, [`crate::footprints`]) and play nothing. Reading both as steps rang **every gait
@@ -54,9 +54,9 @@
 //! Wading (feet below a water surface, down to the unit's own swim boundary `0.75·h`) picks the
 //! lookup's **splash** slot instead of dry (falling back to dry when the class has no splash kit);
 //! deeper the unit swims and footfalls go silent. The flat 2.0-yd stand-in that boundary used to be
-//! is retired now 0464's `collisionHeight` plumb has landed (decision 0645) — a murloc's footfalls
+//! is retired now 0464's `collisionHeight` plumb has landed — a murloc's footfalls
 //! now go quiet in water that only reaches a human's knees. Still open: this reads a *depth* even
-//! for the local player rather than its real mode flag — the named follow-up in decision 0530.
+//! for the local player rather than its real mode flag — the named follow-up in.
 
 use bevy::prelude::*;
 
@@ -205,7 +205,7 @@ fn footstep_sounds(
         };
         // Wading picks the splash slot; swimming (deeper than the wade ceiling) is silent.
         let wow = bevy_to_wow(transform.translation());
-        // The unit's own room claim (0696) — before it, every unit walking under an ADT lake
+        // The unit's own room claim — before it, every unit walking under an ADT lake
         // picked the splash slot on dry indoor stone.
         let who = benilla_world::world_point::Subject::Unit(ev.entity);
         let depth = world

@@ -1,7 +1,7 @@
 //! What the player *sees* while a cast waits for its click — the two classifier pre-empts and the
 //! numbers they compute: the ground point's range verdict (`CheckGroundPointInRange 0x6e6810`,
 //! inside `0x4820f0`), the hovered object's validity
-//! (`0x6e6460`, inside `0x4828d0` — decision 0949), and the reticle's radius
+//! (`0x6e6460`, inside `0x4828d0`), and the reticle's radius
 //! (`GetCurrentCastRadius 0x6e6350`).
 //!
 //! One module rather than a branch inside each seam, because in the reference this is one
@@ -72,14 +72,14 @@ pub(crate) fn ground_cast_radius(spells: Option<&Spells>, spell_id: u32, level: 
 /// While targeting, the world cursor is the classifier's pre-empt (`0x4820f0`). Runs right
 /// after [`crate::target`]'s classifier in the target chain and overwrites its verdict.
 ///
-/// **That pre-emption is the WORLD's, and only the world's** (decisions 1055, 1061). This computes
+/// **That pre-emption is the WORLD's, and only the world's**. This computes
 /// the world's verdict every frame — [`crate::target::reticle`] reads `WorldCursor.unable` as the
 /// AoE ring's colour, so it must stay live even while the mouse is parked on a bag. What the
 /// reference gates is the *display*: its hover handler `0x481790` runs only while the WorldFrame is
 /// the frame manager's mouse-focus frame, so over a UI frame the cursor simply keeps its last
 /// value. That gate lives in [`crate::cursor`], over the one sticky mode.
 ///
-/// **The verdict is per-seam, and the default is grey** (decision 0949). The reference reaches a
+/// **The verdict is per-seam, and the default is grey**. The reference reaches a
 /// cursor through the pick, and while targeting the pick flags come from the word alone
 /// (`0x481050`'s targeting arm), so the *word* chooses which of three handlers runs — and the
 /// third one is the reason this function is not just a range check:
@@ -107,11 +107,11 @@ pub(crate) fn ground_cast_radius(spells: Option<&Spells>, spell_id: u32, level: 
 /// `0x6e6460`'s other legs are unreachable from our targeting mode and deliberately not
 /// transcribed: the **unit** leg (`6e6519`) — a unit-target spell never enters targeting mode at
 /// all, it resolves to `CastWireTarget::Unit` — the world-CGItem leg (`6e66de`), and the corpse
-/// leg (`6e6719`). Named in decision 0949.
+/// leg (`6e6719`). Named in.
 ///
 /// The cursor is still a **whole-word** surface in one respect — every seam shows the `Cast`
 /// *kind*, only `unable` differs — which is why it reads [`SpellTargeting::spell`]. The reticle is
-/// per-seam and reads [`SpellTargeting::spell_for`] (decision 0943).
+/// per-seam and reads [`SpellTargeting::spell_for`].
 pub(crate) fn drive_targeting_cursor(
     targeting: Res<SpellTargeting>,
     occlusion: Res<PickOcclusion>,
@@ -318,7 +318,7 @@ mod tests {
         assert_eq!(ground_cast_radius(None, 10, 60), 0.0);
     }
 
-    /// **The dispatch table** (decision 0949) — the reference's three pick states, and the fact
+    /// **The dispatch table** — the reference's three pick states, and the fact
     /// that only two of them are handlers. Before this, every seam took plain `Cast`, so an armed
     /// poison or lockpick showed a lit cast cursor over open ground it could do nothing with.
     ///
@@ -391,7 +391,7 @@ mod tests {
         assert!(!verdict(0x4800, Some(Vec3::ZERO), Some(3.0)));
 
         // A lock word that ALSO carries DEST (`0x4840`) still has its terrain handler when no
-        // GameObject is the nearest pick — the seams are questions, not a partition (0939).
+        // GameObject is the nearest pick — the seams are questions, not a partition.
         assert!(verdict(0x4840, Some(Vec3::ZERO), None));
     }
 }

@@ -6,7 +6,7 @@
 //! never inherits the world's time of day. Which light it swaps to is a *fidelity* question with two
 //! different answers ([`BoothLight`]): the round unit-frame portraits keep our neutral
 //! [`studio_light`], while the body panes — transcriptions of 1.12 `<PlayerModel>` widgets —
-//! carry the reference widget's own light, [`model_pane_light`] (decision 0638).
+//! carry the reference widget's own light, [`model_pane_light`].
 
 use benilla_world::lighting::LightBlob;
 use std::collections::HashMap;
@@ -38,7 +38,7 @@ impl BoothRig {
     /// the source material is not resident this returns the world material itself, which is bound
     /// to the WORLD light buffer — and per this module's own header that is what "would render a
     /// night portrait pitch black". Latching one into a booth is never right: the bake is stored
-    /// in a `MeshMaterial3d` and the booth then sleeps (0540), so a single unlucky frame freezes a
+    /// in a `MeshMaterial3d` and the booth then sleeps, so a single unlucky frame freezes a
     /// world-lit — or unlit — pane until something else forces a re-bake.
     pub(super) fn variant(
         &mut self,
@@ -120,13 +120,13 @@ pub(crate) enum VariantLane {
     /// which render a model exactly as the world would but under a frozen light.
     World,
     /// The scene's authored M2 light rig ([`benilla_world::model_render::ShadeSel::Rig`] — the
-    /// probe-slot SH eval + the buffer's point table, decisions 0429/0435) **with fog forced
+    /// probe-slot SH eval + the buffer's point table) **with fog forced
     /// OFF**: the glue CHARACTER model takes no fog in the reference (its fill callback
     /// `0x470ce0` stages none, its collector's fog stays zeroed), and so does a `<Model>` pane
     /// that never armed any.
     RigUnfogged,
     /// The rig lane with the batch's **authored** fog policy kept — a `<Model>` pane whose Lua
-    /// armed fog (decision 2027). The per-material UNFOGGED bit (`0x02`) then does its own work,
+    /// armed fog. The per-material UNFOGGED bit (`0x02`) then does its own work,
     /// which is the reference's own per-batch fork: a fogged pane still draws its UNFOGGED
     /// materials unfogged (`0x70bb24`). The glue background scene takes this lane too.
     RigFogged,
@@ -176,7 +176,7 @@ pub(crate) fn material_variant(
 
 /// The **model pane's** light rows — the reference's own, for the `<PlayerModel>` panes (the
 /// character window's paper doll, the inspect window's twin). Byte-VERIFIED from the 1.12 client
-/// this session (decision 0638), because nothing in FrameXML sets it and the widget default decides:
+/// this session, because nothing in FrameXML sets it and the widget default decides:
 ///
 /// - `"PlayerModel"` registers factory `0x495bd0` (widget-type table, `0x49597a`), which allocates
 ///   `CharacterModelBase` (`0x3f8` B, the source-path string at `0x84351c`) and runs the ctor
@@ -256,7 +256,7 @@ mod tests {
     use super::*;
 
     /// The reference `<PlayerModel>` light, pinned at the values the 1.12 `CharacterModelBase`
-    /// constructor writes (decision 0638) — and, more importantly, pinned at the *consequence*:
+    /// constructor writes — and, more importantly, pinned at the *consequence*:
     /// its light is square across the body rig's view axis, so what the pane shows the viewer is
     /// ambient-lit only. A swapped axis here is the bug 0638 replaced (a frontal studio key, ~2×
     /// the reference on every surface the director can see); a flipped sign is 0638's own reading

@@ -130,7 +130,7 @@ fn load_death_thuds(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
 fn death_thud_sounds(
     mut events: MessageReader<AnimSoundEvent>,
     // GlobalTransform for the same reason every other anim-event consumer takes one: the tag can
-    // arrive on a parented child whose local Transform is not a world position (0441).
+    // arrive on a parented child whose local Transform is not a world position.
     units: Query<(&NetEntity, &GlobalTransform)>,
     thuds: Option<Res<DeathThuds>>,
     // The terrain leg's own catalog — `world.terrain_type` resolves the ground-effect hop through
@@ -166,7 +166,7 @@ fn death_thud_sounds(
             continue;
         };
         // The liquid over the body (gate 1's input). `water_surface_at` is the unit's own room
-        // claim (0696), so a corpse on an indoor floor under an ADT lake is not "in water".
+        // claim, so a corpse on an indoor floor under an ADT lake is not "in water".
         let who = benilla_world::world_point::Subject::Unit(ev.entity);
         let wow = bevy_to_wow(transform.translation());
         let depth = world

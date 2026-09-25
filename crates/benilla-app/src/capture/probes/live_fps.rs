@@ -6,7 +6,7 @@
 //! not four instruments.
 //!
 //! **What is counted lives in [`benilla_world::world_census`]; what is printed lives here.** The census
-//! is the engine's own published account of the frame it drew (decision 1164) — this probe adds
+//! is the engine's own published account of the frame it drew — this probe adds
 //! the timing window around it and owns the line shapes, which are a greppable contract of ours
 //! and no business of the renderer's.
 
@@ -151,7 +151,7 @@ struct LiveFps {
 /// what the cull did — is the engine's, and arrives with the rest of the census. Without it a
 /// `drawn=` reading taken indoors cannot be read at all: a big number means either "we claimed a
 /// room and the cull let everything through" or "we never claimed a room, so nothing was gated" —
-/// opposite bugs with identical numbers, and the difference cost a measurement (0780).
+/// opposite bugs with identical numbers, and the difference cost a measurement.
 /// The display stamp's monitor roster + the `WOW_GPU_MS=1` meter + its sample sink, bundled
 /// (the 16-SystemParam ceiling, the house's SpawnTables shape).
 type ScreenParams<'w, 's> = (
@@ -213,12 +213,12 @@ fn drive_live_fps(
     // gate, emitters, resident assets, the churn window. One param, one instant.
     mut census: WorldCensus,
     streamed: Query<(), With<crate::net::NetEntity>>,
-    // The animation-LOD gate's effect, machine-readable per probe (decision 0448): how many
+    // The animation-LOD gate's effect, machine-readable per probe: how many
     // streamed rigs sat parked at sample end.
     parked: Query<(), With<benilla_world::rig_anim::AnimParked>>,
     entities: Query<()>,
     pin: SamplePin,
-    // The owned skin-palette occupancy (decision 0720) — `rigs=live/peak bones=live/peak` on the
+    // The owned skin-palette occupancy — `rigs=live/peak bones=live/peak` on the
     // probe line proves the palette lane is actually populated (an all-zero table renders
     // origin-collapsed rigs, which no other probe number would catch).
     palettes: Option<Res<benilla_world::rig_palette::RigPalettes>>,
@@ -294,7 +294,7 @@ fn drive_live_fps(
                 // A synthetic held key: `ButtonInput` persists a press until its release, and the
                 // winit feed only releases keys it saw go down, so this holds across frames. The
                 // raw KeyboardInput message rides along for the binding dispatch's press edge
-                // (0997 — MOVEFORWARD latches off the event, holds off the state).
+                // (MOVEFORWARD latches off the event, holds off the state).
                 keys.press(KeyCode::KeyW);
                 key_events.write(bevy::input::keyboard::KeyboardInput {
                     key_code: KeyCode::KeyW,
@@ -378,7 +378,7 @@ fn drive_live_fps(
                 .single()
                 .map(|w| (w.physical_width(), w.physical_height()))
                 .unwrap_or((0, 0));
-            // The present mode actually measured under — an uncap that silently rails (0362) is
+            // The present mode actually measured under — an uncap that silently rails is
             // only diagnosable if the line says what was asked for.
             let present = windows
                 .single()

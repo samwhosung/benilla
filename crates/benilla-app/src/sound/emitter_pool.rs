@@ -1,7 +1,7 @@
 //! The **ambient emitter pool** — the reference's registration table at `0xb06dd8` and its
 //! per-frame pump `0x461990`.
 //!
-//! **Two tenants share it, because the reference's one pool has two registrars** (decision 1867).
+//! **Two tenants share it, because the reference's one pool has two registrars**.
 //! A *placed doodad* registers through its `$DSL` marker (`0x6951e0`, handle in
 //! `[CMapDoodadDef+0x168]`); a *GameObject* registers through **both** its own `$DSL` arm
 //! (`0x5f3fe5`) and the display-slot sound player `0x5f4010`'s **loop lane** — the branch
@@ -116,7 +116,7 @@ impl Entry {
     /// `0x461b40` steps 1–3: is there a channel coming to this entry at all? (Occupied, its kit
     /// resolvable, and at least one emitter registered.) Entitlement, not audibility — it decides
     /// whether the cap walk *services* the entry, never whether it *counts*; the composite return
-    /// of steps 4–6 decides that (see [`cap_step`], decision 2065).
+    /// of steps 4–6 decides that (see [`cap_step`]).
     fn entitled(&self) -> bool {
         self.id != 0 && !self.failed && !self.records.is_empty()
     }
@@ -332,7 +332,7 @@ enum CapStep {
 }
 
 /// One step of the cap walk. **`sounding_so_far` counts entries that came back LIVE AND IN RANGE,
-/// not entitled ones** — the correction of 2026-09-07 (decision 2065).
+/// not entitled ones** — the correction of 2026-09-07.
 ///
 /// Index is claim order, so this is first-come — emphatically **not** nearest. That is the cap's
 /// one surprising property: standing where five distinct doodad ambiences are *audible*, exactly

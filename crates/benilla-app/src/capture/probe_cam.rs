@@ -1,5 +1,5 @@
 //! `WOW_PROBE_CAM` — the scripted **camera park**: hold the third-person rig at an absolute yaw,
-//! pitch and zoom so an unattended probe can *look at* a named thing (decision 0653).
+//! pitch and zoom so an unattended probe can *look at* a named thing.
 //!
 //! [`super::probe_look`] turns the avatar's **aim**; that is the right lever for the facing stream,
 //! and the wrong one for framing a subject — it never touches `FlyCam::pitch`, which world entry
@@ -19,7 +19,7 @@
 //! (`"140,16,22@20:8"` — park, then sweep 8°/s). It exists because a parked camera is blind to a
 //! whole class of defect: the director's read of the Far Watch Post tower is that it "mostly only
 //! flickers while moving the cam, not while still" — z-fighting's signature, and precisely the
-//! condition decision 0653's still burst cannot see (decision 0656). Pair it with `benilla-visual
+//! condition decision 0653's still burst cannot see. Pair it with `benilla-visual
 //! flicker`'s **toggle map**, the reading that survives a moving view.
 //!
 //! It writes the rig fields directly for the same reason `probe_look` writes `face_yaw` directly —
@@ -91,7 +91,7 @@ pub(crate) fn from_env() -> Option<ProbeCam> {
 /// Hold the camera at the latest armed pose. Runs in `WorldStage::Input` **before** `control`, so
 /// the frame that sees the pose is the frame that renders it.
 ///
-/// On the **wall clock** ([`ProbeClock`], decision 0789), like every other probe schedule: `@25`
+/// On the **wall clock** ([`ProbeClock`]), like every other probe schedule: `@25`
 /// means twenty-five real seconds in, and a pan of `8°/s` means eight degrees per real second. It
 /// read `Res<Time>` from 0653 until decision 1174 — clamped to `max_delta` (250 ms) and frozen
 /// outright by the capture harness, so a hitching or occluded run silently under-ran every knob.

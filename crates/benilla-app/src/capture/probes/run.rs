@@ -8,17 +8,17 @@ use bevy::prelude::*;
 use super::ProbeClock;
 
 /// Keep a probe run's window **un-occludable, and out of the director's way** — the one defence
-/// against macOS's ~1 fps throttle for a fully covered window (decisions 0713/0777, docs/METHOD.md's
+/// against macOS's ~1 fps throttle for a fully covered window (docs/METHOD.md's
 /// `caffeinate` note), at the smallest footprint that still buys it.
 ///
 /// The on-top half used to live inside the FPS probe alone, which reads as "a frame-rate concern".
 /// It is not: **every** scripted probe schedule is wall-clock ([`ProbeClock`]), so a throttled run
 /// doesn't just measure slowly, it *executes the wrong script* — one session's mounted-jump run
 /// fired `W@16` and `Space@19` in the SAME frame at ~1 fps, i.e. it jumped from a standstill
-/// instead of mid-run, and the leg had to be re-read to notice (decision 0906). Any probe env arms
+/// instead of mid-run, and the leg had to be re-read to notice. Any probe env arms
 /// it, so a key/chat/Lua probe defends itself exactly like the FPS one.
 ///
-/// **The parking half is the other side of that bill** (decision 1148). Asserting `AlwaysOnTop`
+/// **The parking half is the other side of that bill**. Asserting `AlwaysOnTop`
 /// every frame silently defeats [`benilla_world::bgwin`]'s whole design — it overrides the
 /// `AlwaysOnBottom` birth cage *and* the `Normal` handed back at release — so an instrumented run
 /// sits on top for its entire life however politely it was launched. At the full-size default that

@@ -8,7 +8,7 @@
 //! booths share a layer, the wrong camera can win — and if that camera is inactive, the emitter
 //! simulates forever and never draws. Nothing about that is visible in a frame time, a trace, or
 //! the emitter's own state: the particles are all *correct*, just addressed to a view nobody is
-//! rendering. The census makes it a line of output (decision 0775).
+//! rendering. The census makes it a line of output.
 //!
 //! Prints every 2 s: frames, live vertex count, how many DISTINCT vertex-buffer states were seen
 //! (the liveness check — a frozen sim repeats one state), and the per-camera draw histogram with

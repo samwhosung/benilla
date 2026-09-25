@@ -4,7 +4,7 @@
 //!
 //! ## Why this exists
 //!
-//! The output limiter (decision 1551) was built, measured, and proven offline — five sample-aligned
+//! The output limiter was built, measured, and proven offline — five sample-aligned
 //! copies of a 0 dBFS buff go from `5.00x` full scale and 28 524 clipped samples to `0.99x` and
 //! none. It shipped on by default. The director then played a real session and reported **no
 //! audible change**: the mix still "gets really dirty, like a speaker breaking".
@@ -84,8 +84,7 @@ const MARK_KEY: KeyCode = KeyCode::F9;
 ///
 /// `1`/`true`/`yes`/`on` means "the default place"; anything else is taken as an explicit path, so
 /// a run can be pointed at a scratch dir. The default resolves through [`crate::local_state`] like
-/// every other thing we persist — a probe is local state, and the install stays read-only
-/// (decision 1486).
+/// every other thing we persist — a probe is local state, and the install stays read-only.
 ///
 /// Called *before* the mixer is built, because the taps are main-track effects and a kira main
 /// track is build-time-only.
@@ -238,7 +237,7 @@ impl Probe {
     }
 
     /// Note one kit actually starting — called from the kit player's play path, so the timeline
-    /// says *what* made the noise, not just that the level moved (decision 1556). Cheap enough to
+    /// says *what* made the noise, not just that the level moved. Cheap enough to
     /// sit on the play path unconditionally: a channel send behind an `Option` check.
     pub(super) fn note_play(&self, kit: u32, name: &str, category: &str, spatial: &str) {
         self.event(

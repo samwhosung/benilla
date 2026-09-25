@@ -6,7 +6,7 @@
 //! landing prints a SUCCESS/FAILURE verdict with the two machine checks of the 0484 gate:
 //! arrival distance to the destination node's DBC position, and measured flight duration vs the
 //! DBC prediction `Σ path-segment length ÷ 32 yd/s` (`PLAYER_FLIGHT_SPEED`) — timing measured,
-//! never eyeballed (decision 0404). An outer `timeout`d run + grep is the whole harness.
+//! never eyeballed. An outer `timeout`d run + grep is the whole harness.
 //! Non-combat. Pair with the checkout's probe identity (`.probe-identity`, or WOW_USER/WOW_PASS/WOW_CHAR — the `probe` skill). Uses `.taxicheat on` so
 //! the fresh probe character can fly to an unvisited node (and so the SHOWTAXINODES mask
 //! exercises the full-network branch); the 110-copper fare is DB-seeded (see the Wait phase —
@@ -97,7 +97,7 @@ enum Phase {
         /// Mount(91), mount child base Fly(135) (`0x5fd19c` + the 0441 mount pin).
         gait_ok: bool,
         /// The largest |flying pitch| (radians) seen on the SELF transform mid-flight — the
-        /// `sample_splines` tangent-climb attitude (decisions 0501/0516). The route climbs
+        /// `sample_splines` tangent-climb attitude. The route climbs
         /// Westfall's hills, so a working tilt shows ≳0.1 rad; ~0 means it never rendered.
         max_pitch: f32,
         /// The largest |flying BANK| (radians) mid-flight — the 0516 look-ahead lean. The route
@@ -179,7 +179,7 @@ fn taxi_probe(
             // AND online=0;` if a NOT_ENOUGH_MONEY reply ever shows up. The seed used to be the
             // *only* option: `.modify money` is SEC_BASIC_ADMIN(4) and the probe accounts were
             // gmlevel 3 (two runs bounced on NOT_ENOUGH_MONEY before that was traced). Since they
-            // were actually raised to 6 (0651) this probe could grant its own fare in-band the way
+            // were actually raised to 6 this probe could grant its own fare in-band the way
             // `probe_bank` now does — left alone because the offline seed works and is one fewer
             // command inside the flight window.
             let _ = net
@@ -315,7 +315,7 @@ fn taxi_probe(
                     .and_then(|mc| drivers.get(mc.0).ok())
                     .map(|d| d.playing().0);
                 let pair_ok = rider == Some(Some(91)) && mount == Some(Some(135));
-                // The flying attitude (decisions 0501/0516): `sample_splines` composes
+                // The flying attitude: `sample_splines` composes
                 // `Ry(f)·Rx(pitch)·Rz(bank)`, so the YXZ euler reads back (yaw, pitch, bank).
                 let (_, pitch, bank) = self_tf.rotation.to_euler(EulerRot::YXZ);
                 let max_pitch = max_pitch.max(pitch.abs());
@@ -365,7 +365,7 @@ fn taxi_probe(
                 predicted.is_some_and(|p| (flew_for - f64::from(p)).abs() < f64::from(p) * 0.15);
             // The route climbs Westfall's hills AND turns repeatedly: a working flying attitude
             // shows well over 0.05 rad (~3°) on each axis somewhere along it; ~0 means that
-            // axis never rendered (decisions 0501/0516).
+            // axis never rendered.
             let pitch_ok = max_pitch > 0.05;
             let bank_ok = max_bank > 0.05;
             let verdict = if dist_ok && time_ok && gait_ok && pitch_ok && bank_ok {

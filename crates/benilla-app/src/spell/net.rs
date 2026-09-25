@@ -168,7 +168,7 @@ pub(crate) struct Reply<'w, 's> {
 
 /// `HandleCastResult 0x6e7330` — the one handler that *casts*. A reply whose spell names a
 /// `modalNextSpell` (column 38) chains it through the ladder in the same call, the reference's
-/// `0x6e74aa call 0x6e5a90` → `TryCast` (decision 2330): so this handler takes [`CastLadder`]
+/// `0x6e74aa call 0x6e5a90` → `TryCast`: so this handler takes [`CastLadder`]
 /// and [`CastTargeting`] where the others take [`Lifecycle`] — the five spell-state fields the
 /// two would share are the ladder's — and reaches the rest through [`Reply`]. Before 2330 the
 /// chain was an outbox a `ui_action` drain emptied after the input pass; now the chained cast
@@ -440,7 +440,7 @@ fn on_spell_modifier(In(ev): In<SessionEvent>, mut l: Lifecycle) {
     }
 }
 
-/// Which unit's cooldown store a wire cooldown packet addresses (decision 0982).
+/// Which unit's cooldown store a wire cooldown packet addresses.
 ///
 /// All four of them (`SMSG_SPELL_COOLDOWN`, `_COOLDOWN_EVENT`, `_CLEAR_COOLDOWN`,
 /// `_COOLDOWN_CHEAT`) carry a caster guid, and until the pet bar existed all four answered it the
@@ -498,13 +498,13 @@ fn action_buttons(buttons: Vec<ActionButton>, actions: &mut PlayerActions) {
 }
 
 /// A spell added to the book after login (`SMSG_LEARNED_SPELL` — a trainer purchase, a quest reward,
-/// a level-up rank gain; decision 0237). The spellbook feed diffs `spells` each frame, so the insert
+/// a level-up rank gain). The spellbook feed diffs `spells` each frame, so the insert
 /// is all it needs to surface (the add-gate that decides which known spells are *book* entries is
-/// the feed's, decision 0227). No action-bar change — learning a spell does not bar it.
+/// the feed's). No action-bar change — learning a spell does not bar it.
 ///
 /// It also **announces the learn in chat**, which is the reference's own tail on this packet and
 /// not a nicety: `0x5e61c0` -> `AddSpell(id, slot, 1, 1)` -> the registrar `0x4b25b0` with its
-/// announce flag set (decision 2243, [`announce_learn`]).
+/// announce flag set ([`announce_learn`]).
 fn learned_spell(
     spell_id: u32,
     actions: &mut PlayerActions,
@@ -521,14 +521,14 @@ fn learned_spell(
 }
 
 /// **The learn announcement** — the `ERR_LEARN_*` chat line the registrar `0x4b25b0` prints at
-/// `0x4b2909` for a spell learned *mid-session* (decision 2243).
+/// `0x4b2909` for a spell learned *mid-session*.
 ///
 /// Which of the three lines, and whether the argText carries the rank, is
 /// [`benilla_formats::SpellDisplay::learn_announcement`]'s — it is a `Spell.dbc` `Attributes` read
 /// and its byte trail lives with the record. What is this side's is the mapping to catalog keys:
 /// ids `0x37`/`0x38`/`0x39` are `MsgKind::Chat` rows carrying chat type `10`, so
 /// [`crate::ui_action::UiErrorKeys`] puts all three on the chat window's system channel without
-/// this call site naming a surface (decision 1770).
+/// this call site naming a surface.
 ///
 /// A missing catalog (`Spells` absent, a DBC that failed to load) says nothing at all, like every
 /// other display path here — and so does an unknown id, which is the reference's own bounds/null
@@ -550,7 +550,7 @@ fn announce_learn(spell_id: u32, spells: Option<&Spells>, errors: &mut UiErrorKe
     errors.0.push(UiError::s(key, arg));
 }
 
-/// A spell taken back out of the book (`SMSG_REMOVED_SPELL`, decision 1584) — the inverse of
+/// A spell taken back out of the book (`SMSG_REMOVED_SPELL`) — the inverse of
 /// [`learned_spell`] above, and the packet a **talent wipe** arrives as: vmangos's `ResetTalents`
 /// walks every talent of the class and calls `RemoveSpell` on every rank, each of which tails into
 /// `Player::SendSpellRemoved`. Until this arm existed all of them were dropped, so the respec's
@@ -558,7 +558,7 @@ fn announce_learn(spell_id: u32, spells: Option<&Spells>, errors: &mut UiErrorKe
 /// had, because [`crate::ui_talent`] derives rank from exactly this set.
 ///
 /// It **announces the unlearn in chat** — *"You have unlearned %s."* — under
-/// [`benilla_formats::SpellDisplay::announces_unlearn`]'s four gates (decision 2246). 2243 claimed
+/// [`benilla_formats::SpellDisplay::announces_unlearn`]'s four gates. 2243 claimed
 /// the opposite here, on a byte citation, and was wrong: it bounded `RemoveSpell 0x5e9fe0` at the
 /// `ret 0x8` at `0x5ea28f` and so never read the block at `0x5ea292`, which is a live branch
 /// target past that `ret`. `0x5ea2ab push 0x14a` is that block, and `SMSG_REMOVED_SPELL`'s arm
@@ -583,7 +583,7 @@ fn removed_spell(
 }
 
 /// **The unlearn announcement** — `ERR_SPELL_UNLEARNED_S` (`0x5ea2ab`), the counterpart to
-/// [`announce_learn`] and deliberately not a mirror of it (decision 2246).
+/// [`announce_learn`] and deliberately not a mirror of it.
 ///
 /// The argText is the **bare** name: `0x5ea2a3` pushes `SpellRec+0x1e0` and there is no rank
 /// composer on this path at all, so a respec'd talent rank reads "You have unlearned Improved
@@ -604,7 +604,7 @@ fn announce_unlearn(spell_id: u32, spells: Option<&Spells>, errors: &mut UiError
 /// A rank-up (`SMSG_SUPERCEDED_SPELL`): the new rank replaces the old **in the book** (decision
 /// 0237). The server sends no fresh `SMSG_ACTION_BUTTONS` for this (VERIFIED vmangos
 /// `Player::learnSpell` — the `supercededOld` path touches only the spell store), so the bar has to
-/// follow too; it does, from the book, in `ui_action::ranks` (decision 0883). Re-pointing buttons
+/// follow too; it does, from the book, in `ui_action::ranks`. Re-pointing buttons
 /// *here* as well would be a second, weaker copy of that law — weaker because this packet doesn't
 /// arrive at all when the rank was gained while the character was loading (vmangos suppresses it
 /// with `IsInWorld()`), which is exactly the case that shipped a dead rank-1 button.
@@ -622,7 +622,7 @@ fn superceded_spell(
     actions.dirty = true;
     // A rank-up announces exactly like a first learn, and only once: the supersede pair `0x4b2f50`
     // calls the unlearn `0x4b2c50` and then the registrar `0x4b25b0` with `mov edx,0x1`
-    // (`0x4b2f61`), and the unlearn half holds no `DisplayError` call at all (decision 2243).
+    // (`0x4b2f61`), and the unlearn half holds no `DisplayError` call at all.
     announce_learn(new_spell_id, spells, errors);
     // The rank-up reaches the registrar with the same flag set (`0x4b2f61 mov edx,0x1`), so it
     // flashes the tab too — for the NEW rank, whose tab is the one it lands in (2252).
@@ -730,7 +730,7 @@ fn cast_result(
         if fails_our_cast {
             cast_bar.0.push(CastBarEdge::Failed);
         }
-        // Our own cast died (`SMSG_SPELL_FAILURE` is never sent — decision 0099): end the self
+        // Our own cast died (`SMSG_SPELL_FAILURE` is never sent): end the self
         // avatar's cast state + precast hold, spell-id-keyed like every reap.
         if let Some(e) = self_e {
             if fails_our_cast {
@@ -745,7 +745,7 @@ fn cast_result(
         }
     }
     // **The `modalNextSpell` chain — how a hunter starts shooting** (`HandleCastResult 0x6e7330`
-    // @ `0x6e7408`–`0x6e74aa`; decision 1597).
+    // @ `0x6e7408`–`0x6e74aa`).
     //
     // The reply to our in-flight cast finishes that cast's slot and then reads **column 38** of
     // the spell it names. Non-zero, and not already the running repeat ⇒ the client casts it,
@@ -770,7 +770,7 @@ fn cast_result(
     //
     // The chained spell is this function's **return**: `on_cast_result` hands it to the ladder
     // in the same call (`0x6e74aa call 0x6e5a90`), so the chained cast takes every rung a press
-    // takes and arms the in-flight slot before the next packet is handled (decision 2330).
+    // takes and arms the in-flight slot before the next packet is handled.
     if in_flight {
         pending.clear_if(spell_id);
         if let Some(next) = spells
@@ -840,7 +840,7 @@ fn spell_start(
     // the wire feed" item 1): a ranged-slot spell never opens a bar, whatever cast time the
     // server sent. Concretely: vmangos pads every non-auto-repeat ranged spell's cast by a flat
     // +500 ms (`SpellEntry::GetCastTime`), so Throw arrives as a real 500 ms cast — the ref
-    // shows no bar for it, and now neither do we (decision 0376). An unknown spell (no catalog,
+    // shows no bar for it, and now neither do we. An unknown spell (no catalog,
     // no row) keeps the bar: only a *known ranged* row suppresses.
     let ranged_slot = spells
         .and_then(|s| s.catalog.get(spell_id))
@@ -856,7 +856,7 @@ fn spell_start(
             }
         );
     }
-    // Our own timed cast opens the cast bar (an instant shows no bar — decision 0137).
+    // Our own timed cast opens the cast bar (an instant shows no bar).
     if self_guid.0 == Some(caster) && cast_time_ms > 0 {
         if !ranged_slot {
             cast_bar.0.push(CastBarEdge::Start {
@@ -876,7 +876,7 @@ fn spell_start(
                 until: Some(Instant::now() + Duration::from_millis(u64::from(cast_time_ms))),
             });
         }
-        // The anim layer's precast edge (decision 0107) — instants included: their
+        // The anim layer's precast edge — instants included: their
         // GO follows at once and reaps the (subliminal) hold, like the client's
         // stage-4 persist/reap pair.
         cast_events.write(CastEvent {
@@ -920,10 +920,10 @@ fn spell_go(
     queued_melee: &mut QueuedMeleeSpell,
     text: &mut MessageWriter<crate::combat_text::CombatTextSpawn>,
     // The three floating-text CVars, read inside the word emitter `0x607140` itself — so they
-    // gate the miss words below exactly as they gate a damage number (decision 2229).
+    // gate the miss words below exactly as they gate a damage number.
     text_gates: crate::combat_text::DamageTextGates,
     go_lid: &mut MessageWriter<crate::go_anim::GoLidOpen>,
-    // The client-local loot-target latch — armed here for a chest (decision 1477, `0x6e831b`).
+    // The client-local loot-target latch — armed here for a chest (`0x6e831b`).
     loot_latch: &mut crate::ui_loot::LootLatch,
     // The cooldown store + what its start laws read (grouped: one arm-body concern). The last
     // member is the PET's store — the reference inserts into two banks from this one handler
@@ -971,8 +971,8 @@ fn spell_go(
         );
     }
     // A cast that names a GameObject (an open-lock cast on a chest / locked door) hands off to the GO
-    // animation driver, which gates on the open-lock effect and opens the lid on the cast going off
-    // (decision 2271). Independent of the caster being streamed to us — an observed open still animates.
+    // animation driver, which gates on the open-lock effect and opens the lid on the cast going off.
+    // Independent of the caster being streamed to us — an observed open still animates.
     if let Some(go_guid) = go_target {
         go_lid.write(crate::go_anim::GoLidOpen { go_guid, spell_id });
     }
@@ -1083,7 +1083,7 @@ fn spell_go(
         // normal source — this insert is how a Charge sweep appears on vmangos, which sends no
         // cooldown packet for a plain cast. A pre-launch failure never reaches here, so nothing
         // needs reverting.
-        // The ranged-shot pad (the category scaler `0x6e2b60`, decision 0378): a ranged-slot cast
+        // The ranged-shot pad (the category scaler `0x6e2b60`): a ranged-slot cast
         // folds our live
         // `UNIT_FIELD_RANGEDATTACKTIME` (haste-scaled, server-written) into the category
         // recovery — the Throw/wand-Shoot button sweep, no server packet involved.
@@ -1130,7 +1130,7 @@ fn spell_go(
             }
         }
     }
-    // **The PET leg of the same insert** (decision 1031) — a second, independent `if` in the very
+    // **The PET leg of the same insert** — a second, independent `if` in the very
     // same handler, not an else of the one above.
     if let Some(d) = display.filter(|_| pet_go_cooldown(caster, self_guid, index, stores)) {
         // No ranged pad here: `0x6e2b60` is called on the self leg only (`0x6e845d`), and there is
@@ -1265,7 +1265,7 @@ fn spell_failed_other(
     seq: u64,
 ) {
     debug!("net: spell failed (other) {spell_id} by {caster:#x}");
-    // Our own in-flight cast was interrupted — the bar turns red "Interrupted" (decision 0137),
+    // Our own in-flight cast was interrupted — the bar turns red "Interrupted",
     // but only for the cast the bar is actually showing (keyed to `Casting`, like the reap): a
     // proc's own interrupt must not red-fade a different running bar. The guard opens the same way.
     if self_guid.0 == Some(caster) {
@@ -1301,7 +1301,7 @@ fn spell_failed_other(
 /// `delay_ms` (vmangos `Spell::Delayed`; a normal hit never interrupts a cast, it pushes it back).
 /// The cast bar slides its window out by the same (`SPELLCAST_DELAYED`, the reference Lua's
 /// `startTime`/`maxValue` shift — the spark jumps back and the bar keeps running), so a hit no
-/// longer lets the bar finish early while the real cast runs on (decision 0256). Self-only on the
+/// longer lets the bar finish early while the real cast runs on. Self-only on the
 /// wire, but the caster guid is on the packet — gate on it like every other own-cast edge.
 fn spell_delayed(
     caster: u64,
@@ -1328,7 +1328,7 @@ fn spell_delayed(
 /// always wire-paced (decision 0099 phase 5: every shot is its own `SPELL_GO`), and nothing
 /// stows (sheath-policy's "nothing sheathes on combat-end").
 ///
-/// **INTERIM (decision 0400 §2):** the cancel also disarms the standing
+/// **INTERIM:** the cancel also disarms the standing
 /// Load/Hold idle ([`crate::creature_anim::AutoRepeatArmed`] off) — the director's report: on
 /// the reference the shooting visibly STOPS when the server cancels (target too close), while
 /// our sticky arm kept the nock idle looping forever. Whether the real handler clears the
@@ -1357,7 +1357,7 @@ fn cancel_auto_repeat(
     crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, commands, net);
 }
 
-/// **Does this `SMSG_SPELL_GO` arm the PET's cooldown bank?** (decision 1031; `0x6e857a`-`0x6e85ad`.)
+/// **Does this `SMSG_SPELL_GO` arm the PET's cooldown bank?** (`0x6e857a`-`0x6e85ad`.)
 ///
 /// The reference's GO handler makes two independent cooldown inserts, into two banks
 /// (`0x6e2ea0`'s `bankHead = 0xcecaec + 24*bank`): the self leg above writes bank 0 at
@@ -1467,7 +1467,7 @@ fn cooldown_cheat(caster: u64, cooldowns: &mut Cooldowns) {
 }
 
 /// `MSG_CHANNEL_START` — self-only on the wire (no guid), so it goes straight to the cast bar; the
-/// channel *animation* state rides the unit-field pair instead (decision 0137).
+/// channel *animation* state rides the unit-field pair instead.
 fn channel_start(
     spell_id: u32,
     duration_ms: u32,
@@ -1487,7 +1487,7 @@ fn channel_update(remaining_ms: u32, channel: &mut ActiveChannel, feed: &mut Cas
     feed.0.push(CastBarEdge::ChannelUpdate { remaining_ms });
 }
 
-/// `SMSG_UPDATE_AURA_DURATION` — one of our own auras' remaining time (decisions 0255/0257), keyed
+/// `SMSG_UPDATE_AURA_DURATION` — one of our own auras' remaining time, keyed
 /// by raw slot and stamped with the receive time. The `ui_aura` feed joins it to the aura in that
 /// slot by arrival order; it arrives *before* the descriptor delta that names the slot.
 fn aura_duration(slot: u8, remaining_ms: u32, durations: &mut AuraDurations, now_secs: f64) {
@@ -1512,7 +1512,7 @@ fn set_spell_modifier(
 }
 
 /// The caster's chain-target hop array, filled from a wire target list — the reference's
-/// `0x605780` (decision 0955): it **clears before it fills** and **skips any entry equal to the
+/// `0x605780`: it **clears before it fills** and **skips any entry equal to the
 /// unit's own guid** (`0x6057bf`/`0x6057c9`). Targets not streamed to us drop out here: an endpoint
 /// we cannot place has nothing to draw to, which is what the reference's own hidden-hop path
 /// amounts to.
@@ -1536,7 +1536,7 @@ fn fill_chain_hops(
         .try_insert(crate::entities::ChainHops(hops));
 }
 
-/// `SMSG_SPELL_UPDATE_CHAIN_TARGETS` → the hop list a **beam** visual runs through (0955).
+/// `SMSG_SPELL_UPDATE_CHAIN_TARGETS` → the hop list a **beam** visual runs through.
 ///
 /// The reference parks it on the caster (the growable array at `unit+0xd44`: capacity `+0xd44`,
 /// count `+0xd48`, data `+0xd4c`, alloc quantum `+0xd50`), and the next chain `CharProc` consumes
@@ -1766,7 +1766,7 @@ mod tests {
     }
 
     /// A rank-up moves the **book** and marks the store dirty; the bar is not touched here — the
-    /// one rank law lives in `ui_action::ranks`, which the dirty flag then runs (decision 0883).
+    /// one rank law lives in `ui_action::ranks`, which the dirty flag then runs.
     #[test]
     fn superceded_spell_swaps_the_book_and_leaves_the_bar_to_the_rank_pass() {
         let mut actions = PlayerActions::default();
@@ -2058,7 +2058,7 @@ mod tests {
         ));
     }
 
-    /// **The GO's inline miss word: gold, gated, and only for an INSTANT spell** (decision 2229).
+    /// **The GO's inline miss word: gold, gated, and only for an INSTANT spell**.
     ///
     /// Phase 2 shipped this emit unconditional and hardcoded white. The binary closes both halves:
     /// - `0x6e7d4e fld [SpellRec+0x94]; fcomp 0.0; test ah,0x44; jp 0x6e7e71` — a spell with a
@@ -2230,7 +2230,7 @@ mod tests {
         );
     }
 
-    /// **The GO handler's PET leg** (decision 1031): a spell going off on a unit WE own arms the
+    /// **The GO handler's PET leg**: a spell going off on a unit WE own arms the
     /// pet's own cooldown bank, and nothing else does — vmangos sends no cooldown packet for a
     /// pet's cast, so without this the pet bar's sweep never runs in play.
     ///
@@ -2401,7 +2401,7 @@ mod tests {
         assert!(!p2 && !pet2, "a stranger's pet arms nothing");
     }
 
-    /// **Both** producers of the caster's chain-hop array (decision 0955): `SMSG_SPELL_GO`'s own
+    /// **Both** producers of the caster's chain-hop array: `SMSG_SPELL_GO`'s own
     /// hit list — the leg that makes a non-channelled chain spell draw at all — and the 816 packet.
     /// Each drops the caster's own guid and each clears before it fills; unstreamed targets fall
     /// out as they resolve. Without this the beam lane is inert no matter how right its geometry is.
@@ -2657,7 +2657,7 @@ mod tests {
         );
     }
 
-    /// `SMSG_REMOVED_SPELL` shrinks the book and dirties the feeds (decision 1584) — the packet a
+    /// `SMSG_REMOVED_SPELL` shrinks the book and dirties the feeds — the packet a
     /// talent wipe arrives as, one per rank of every talent. The dirty flag is a real EDGE, not a
     /// blanket set: a wipe sends removals for ranks the character never learned too (vmangos walks
     /// the whole class tree), and a repaint per no-op would be a repaint per talent in the game.
@@ -2676,7 +2676,7 @@ mod tests {
         assert!(!actions.dirty, "a spell we never knew is not a repaint");
     }
 
-    /// The unlearn line and its four silent gates (decision 2246) — the behaviour decision 2243
+    /// The unlearn line and its four silent gates — the behaviour decision 2243
     /// asserted, with a byte citation, did not exist. The argText is the BARE name: there is no
     /// rank composer on this path, so a respec'd rank says "Improved Fireball", never
     /// "Improved Fireball (Rank 3)".
@@ -2775,7 +2775,7 @@ mod tests {
         );
         assert!(errors.0.is_empty(), "…but the unlearn block does");
     }
-    /// **The GO-deferred auto-attack start** (`HandleSpellGo` @ `0x6e83c0`, decision 1593) — the
+    /// **The GO-deferred auto-attack start** (`HandleSpellGo` @ `0x6e83c0`) — the
     /// half of the auto-attack-on-cast law benilla shipped without, because ten hand-picked warrior
     /// rows were read as a census of `AttributesEx2 & 0x100000`. The real file carries the bit on
     /// 36, so the class that never started an auto-attack here is every stealth opener and

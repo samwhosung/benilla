@@ -12,7 +12,7 @@
 //!   vmangos answers `CMSG_OPEN_ITEM` with `SendLoot(item guid, LOOT_CORPSE)`, so
 //!   `SMSG_LOOT_RESPONSE` comes back **type 1** on the item's own guid, and 1477's admission gate
 //!   *refuses* a type-1 answer against a cold latch — bounces a `CMSG_LOOT_RELEASE` and opens
-//!   nothing. Grey clam, no window, forever. Decision 1531.
+//!   nothing. Grey clam, no window, forever.
 //!
 //! **The window is a number here, not a picture.** The probe drives the click through the live UI
 //! VM's own `UseContainerItem(0, slot)` — the same binding the bag button calls, so the whole

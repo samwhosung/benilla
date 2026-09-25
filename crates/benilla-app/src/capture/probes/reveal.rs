@@ -48,7 +48,7 @@ struct RevealAudit {
     /// Frames printed since the current arm; `None` = not armed.
     n: Option<u32>,
     /// [`ProbeClock`] seconds at the arming snap — the `t=` column. The wall clock, like every
-    /// other probe schedule (decision 0789): a reveal window is measured in real milliseconds,
+    /// other probe schedule: a reveal window is measured in real milliseconds,
     /// and the virtual clock clamps exactly the hitching frames this instrument exists to see.
     since: f32,
 }

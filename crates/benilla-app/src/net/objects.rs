@@ -2,7 +2,7 @@
 //! the drain's dispatch match, which went with it): the streamed world's creates, deltas, moves
 //! and destroys, the movers' speeds and granted modes, the GameObject templates and anims, and
 //! the item store's three kinds. Each packet is one handler over [`Scene`]; a handler's commands
-//! are applied before the next packet's handler runs (decision 2306), which is why the three
+//! are applied before the next packet's handler runs, which is why the three
 //! intra-drain staging maps the match kept (0061's `pending`, 1478's `SpeedStage`, 1780's
 //! `StagedModes`) are gone: a create inserts its store and speeds at spawn, and the next packet
 //! reads the live component. Registered from [`super::NetPlugin`].
@@ -160,8 +160,8 @@ fn on_object_create(In(ev): In<SessionEvent>, mut sc: Scene) {
 /// The item store's kinds: a descriptor-only create, the template's display head
 /// (`SMSG_ITEM_QUERY_SINGLE_RESPONSE`, answering our `CMSG_ITEM_QUERY_SINGLE` — the ask-once
 /// cache, decisions 0068/0072; a server miss records `None` so the entry is never re-asked), the
-/// item-lifetime countdown's only feed (decision 1933) and the temporary-enchant countdown's
-/// (decision 0920) — both written into the item's own [`crate::items::Countdowns`] (decision
+/// item-lifetime countdown's only feed and the temporary-enchant countdown's
+/// — both written into the item's own [`crate::items::Countdowns`] (decision
 /// 2340), which every tooltip surface reads back.
 fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
     match ev {
@@ -247,7 +247,7 @@ fn on_object_move(In(ev): In<SessionEvent>, mut sc: Scene) {
     }
 }
 
-/// **An observed mover skipped time** (decision 1935). No pose moved — only that unit's clock
+/// **An observed mover skipped time**. No pose moved — only that unit's clock
 /// ran on — so this touches its relay chain and nothing else, which is the whole of what the
 /// reference's handler does (`0x603b40` → `0x61ab90`: `[CMovement+0xac] += lag`). A guid we do
 /// not hold is dropped, faithfully: the reference resolves under `TYPEMASK_UNIT` and returns on
@@ -265,7 +265,7 @@ fn on_move_time_skipped(In(ev): In<SessionEvent>, mut sc: Scene) {
     }
 }
 
-/// The scheduled-replay law (decisions 0601/0615): `unit_move` runs the mover's own replay chain
+/// The scheduled-replay law: `unit_move` runs the mover's own replay chain
 /// over this packet's wire stamp to get its client fire-time, then applies it now if due, else
 /// queues it on the unit for `drain_pending_moves`.
 fn on_unit_move(In(ev): In<SessionEvent>, mut sc: Scene) {
@@ -325,7 +325,7 @@ fn on_object_values(In(ev): In<SessionEvent>, mut sc: Scene) {
 }
 
 /// The party hook runs FIRST and on the same edge the reference takes it: the deactivate
-/// virtual reads the descriptor that is about to go (decision 1640).
+/// virtual reads the descriptor that is about to go.
 fn on_object_destroyed(In(ev): In<SessionEvent>, mut sc: Scene) {
     if let SessionEvent::ObjectDestroyed(guid) = ev {
         crate::death::net::forget_corpse(guid, &mut sc.death_net);
@@ -415,7 +415,7 @@ fn on_gameobject_anim(In(ev): In<SessionEvent>, mut sc: Scene) {
     }
 }
 
-/// The observer movement-mode family (decision 1780) — the same modes, on a body somebody else
+/// The observer movement-mode family — the same modes, on a body somebody else
 /// is driving. No ack, so the handler ends the packet.
 fn on_spline_move_mode(In(ev): In<SessionEvent>, mut sc: Scene) {
     if let SessionEvent::SplineMoveMode { guid, mode, apply } = ev {
@@ -457,7 +457,7 @@ fn on_speed(In(ev): In<SessionEvent>, mut sc: Scene) {
 
 /// An object entered range / was created (`SMSG_UPDATE_OBJECT` create block): spawn or refresh the
 /// entity, warm the ask-once caches, and seed its descriptor store. A handler's commands are
-/// applied before the next packet's handler runs (decision 2306), so the store and the speeds
+/// applied before the next packet's handler runs, so the store and the speeds
 /// are components at spawn and the next packet reads them live.
 fn object_create(
     guid: u64,
@@ -486,7 +486,7 @@ fn object_create(
         display_id,
         scale,
     };
-    // A transport's cycle anchor (decision 0438): the create block's `UPDATE_FLAG_TRANSPORT`
+    // A transport's cycle anchor: the create block's `UPDATE_FLAG_TRANSPORT`
     // u32 + the local instant it landed. Re-creates re-anchor (the server re-sends the create at
     // map transitions and mid-course update frames precisely so clients can correct drift). The
     // transport tick owns it from here (`crate::transport`). Both ticking GO types (the only two
@@ -522,7 +522,7 @@ fn object_create(
         });
     // Where this object is *pointed*. A mover carries one yaw; a GameObject is placed by its
     // `GAMEOBJECT_ROTATION` quaternion, which is the reference's own placement input and is a
-    // strictly wider answer than the facing (decision 1459, `motion::gameobject_rotation`).
+    // strictly wider answer than the facing (`motion::gameobject_rotation`).
     //
     // **A mover's create pose is not a bare yaw.** The reference's create-block apply seeds both
     // halves of the body-pitch law from this very block — the flags word through `0x618c30`'s
@@ -555,7 +555,7 @@ fn object_create(
             local_orientation: t.orientation,
         });
     // Warm the name cache the moment a unit streams in. **This is the reference's own timing,
-    // not a convenience** (decision 2073): `0x60afb0` ResolveDisplayInfo registers the unit in
+    // not a convenience**: `0x60afb0` ResolveDisplayInfo registers the unit in
     // the creature-query cache at `0x60b157`, on the create path (`0x5fb880` ← the `UPDATETYPE`
     // driver's per-type table) and behind `0x60b134 cmp [OBJECT_FIELD_TYPE], 0x9` — so every
     // creature it streams is asked for, whether or not anything ever shows its name. And for a
@@ -576,14 +576,14 @@ fn object_create(
             let _ = names.resolve_creature(entry, guid, net_commands);
         }
     }
-    // Warm the lock cache the moment a GameObject streams in (decision 0239), so a
+    // Warm the lock cache the moment a GameObject streams in, so a
     // right-click resolves use-vs-cast instantly — the same ask-once, ask-at-sight
     // discipline as the name cache. The lockId isn't in the create packet; only the query
     // carries it.
     if matches!(kind, EntityKind::GameObject) {
         go_templates.request(guid, net_commands);
         // Where and how big, the moment it streams in — the readout that answers "is this prop in
-        // the wrong place, or the wrong size, or just drawn wrong" without a guess (decision 0637:
+        // the wrong place, or the wrong size, or just drawn wrong" without a guess (
         // the duel flag read as huge and mislocated, and nothing in the client could say which).
         // `RUST_LOG=benilla_app::net::objects=debug`.
         debug!(
@@ -595,7 +595,7 @@ fn object_create(
             position[2],
         );
     }
-    // The walk this unit is ALREADY on (decision 0708): its create block's live spline, joined at the
+    // The walk this unit is ALREADY on: its create block's live spline, joined at the
     // server's own progress along it. Traced before it is interpreted, so the `WOW_CREATE_SPLINE=off`
     // leg of the A/B still records what the wire offered.
     trace_create_spline(guid, spline.as_ref());
@@ -604,14 +604,14 @@ fn object_create(
         // Re-create of a tracked guid: refresh identity + pose. A create is a fresh server snapshot, so
         // any in-flight extrapolation is stale too — clear it.
         commands.entity(e).insert(net).remove::<RemoteMotion>();
-        // Speeds land straight on the entity (decision 2327 — the drain's staging maps are gone):
+        // Speeds land straight on the entity (the drain's staging maps are gone):
         // a fresh create inserts them as a component at spawn, a re-create replaces them whole
         // (below). A `SMSG_FORCE_*_SPEED_CHANGE` riding the same tick as this create still lands
         // on top of it, because each handler's commands are applied before the next packet's
-        // runs — 1478's law unchanged (B213, `apply::seam_tests`).
+        // runs — 1478's law unchanged (`apply::seam_tests`).
         if let Some(s) = speeds {
-            // A create is the server's newest snapshot of the mover: it replaces the set whole
-            // (decision 1478), and lands before the next packet's handler reads it.
+            // A create is the server's newest snapshot of the mover: it replaces the set whole,
+            // and lands before the next packet's handler reads it.
             commands.entity(e).insert(UnitSpeeds(s));
         }
         if let Some(anchor) = transport_anchor {
@@ -647,7 +647,7 @@ fn object_create(
     } else {
         // A transport spawns hidden: its create pose is the *stationary* spawn point (or worse,
         // the origin), not where the boat is in its cycle — the transport tick unhides it at the
-        // first sampled pose (decision 0438).
+        // first sampled pose.
         let visibility = if transport_anchor.is_some() {
             Visibility::Hidden
         } else {
@@ -678,15 +678,14 @@ fn object_create(
         if let Some(s) = walk {
             entity.insert(s);
         }
-        // The seed itself is never merged, which is the reference's create-time notify-suppress
-        // (decision 2297).
+        // The seed itself is never merged, which is the reference's create-time notify-suppress.
         entity.insert(ObjectStore(fields));
         index.0.insert(guid, entity.id());
     }
 }
 
 /// An item or container entered our view (`SMSG_UPDATE_OBJECT` descriptor-only create): an
-/// object like any other (decision 2334) — an entity in the index carrying its store, with no
+/// object like any other — an entity in the index carrying its store, with no
 /// pose and no model. A re-create of a live guid overlays the snapshot through the values path,
 /// which notifies the field watchers like any delta (the scene create's own rule).
 fn item_create(
@@ -705,7 +704,7 @@ fn item_create(
     } else {
         let e = crate::items::spawn_item(commands, index, guid, fields, container);
         // The item arrived: replay the enchant times queued for it while it was not held
-        // (`0x5ebde0`, decision 2340), each through the setter as of now.
+        // (`0x5ebde0`), each through the setter as of now.
         let queued = items.take_enchant_times(guid);
         if !queued.is_empty() {
             let mut countdowns = crate::items::Countdowns::default();
@@ -732,15 +731,15 @@ fn object_move(
     if let Some(&e) = index.0.get(&guid) {
         commands.entity(e).remove::<Spline>();
         // A movement block carries a yaw and nothing else — the only GameObjects that get one are
-        // transports, whose pose the transport tick owns from the next frame (decision 0438).
+        // transports, whose pose the transport tick owns from the next frame.
         write_pose(commands, transforms, e, position, wire_yaw(orientation));
     }
 }
 
 /// A relayed player movement packet (`MSG_MOVE_*`): the mover's authoritative pose + live move
-/// flags. The reference SCHEDULES a remote's apply (`0x618c30`, decision 0601): the mover's own
+/// flags. The reference SCHEDULES a remote's apply (`0x618c30`): the mover's own
 /// replay chain gives the packet a client fire-time
-/// (decision 0615, [`crate::net::motion::RelayMove`] → `RelayChain::schedule`); an already-due move
+/// ([`crate::net::motion::RelayMove`] → `RelayChain::schedule`); an already-due move
 /// applies now, a future one queues on the unit and fires in `drain_pending_moves` — the dead-reckon
 /// covering the mover's own timeline in between, which is what kills the arrival-jitter snap.
 /// `WOW_REMOTE_SNAP=1` restores raw apply-at-arrival for an A/B.
@@ -760,7 +759,7 @@ fn unit_move(
     // Addressed to US: the server writing our own pose, never an echo of ours (every one is
     // `SetAsServerSide`, `ctime = 0`). The reference APPLIES it — there is no mover-guid gate
     // anywhere on its inbound move path, and the local player resolves through the same object
-    // lookup as anyone else (`0x603bb0`; decision 0725). What is ours is only
+    // lookup as anyone else (`0x603bb0`). What is ours is only
     // *where it goes*: our avatar's motion source is the controller, not [`RemoteMotion`], so the
     // pose crosses to `player::wire_in` instead of down this lane.
     if self_guid.0 == Some(guid) {
@@ -786,7 +785,7 @@ fn unit_move(
     let Some(&e) = index.0.get(&guid) else {
         // No entity for this guid — the packet changes nothing. Traced rather than dropped in
         // silence: a mover that keeps running while these pile up is a streaming bug, not a replay
-        // one, and the two look identical from the outside (decision 0619).
+        // one, and the two look identical from the outside.
         trace_relay(
             guid,
             &mv,
@@ -822,7 +821,7 @@ fn unit_move(
                 apply_move(e, &mv, &mut rm, now_ms, commands, landings);
             } else {
                 // Fire-times are monotone per unit by construction (a chained fire never lands
-                // before its predecessor — decision 0615), so the queue stays ordered.
+                // before its predecessor), so the queue stays ordered.
                 rm.pending.push_back(PendingMove { fire_ms, mv });
             }
         } else {
@@ -860,7 +859,7 @@ fn unit_move(
 }
 
 /// A descriptor delta (`SMSG_UPDATE_OBJECT` values block): merge into the object's store in place
-/// — a unit's, a GameObject's, an item's (decision 2334), one path. An unknown guid — a `Values`
+/// — a unit's, a GameObject's, an item's, one path. An unknown guid — a `Values`
 /// with no create seen — is dropped, as before.
 fn object_values(
     guid: u64,
@@ -878,7 +877,7 @@ fn object_values(
 /// The object ceased to exist (`SMSG_DESTROY_OBJECT` — corpse decay ahead of respawn, a despawn).
 fn object_destroyed(guid: u64, commands: &mut Commands, index: &mut GuidIndex) {
     // **The object goes away by the same fade its stream-out takes** — `DespawnFade`, not a raw
-    // despawn (decision 2198). The reference's object-manager destroy hands the object's *model*
+    // despawn. The reference's object-manager destroy hands the object's *model*
     // to the `SWModelFadeout` scheduler on the way out: the base OnDeactivate `0x6145e0` (vtable
     // slot 1, which `0x464920` invokes on **both** DESTROY and OUT_OF_RANGE) unbinds the scene
     // handle and calls `0x672df0`, which keeps the detached model drawing and ramps its alpha to
@@ -902,11 +901,11 @@ fn object_destroyed(guid: u64, commands: &mut Commands, index: &mut GuidIndex) {
     // pending-destroy bit and returns, and the real free waits for the last pin to drop
     // (`0x468410`). The one pin benilla takes is the despawn animation
     // announced a moment earlier by `SMSG_GAMEOBJECT_DESPAWN_ANIM`, which is the whole of how an
-    // object gets to play its own despawn after the server says it is gone (decision 1404); the
+    // object gets to play its own despawn after the server says it is gone; the
     // fade then follows the animation, where the deferred destroy — and so the teardown — runs
     // ([`crate::go_anim::release_despawn_pin`]). A pinned object is still an object until then.
     if let Some(e) = index.0.remove(&guid) {
-        // An item has no model to hand the fadeout, so it goes now (decision 2334) — what the
+        // An item has no model to hand the fadeout, so it goes now — what the
         // scheduler does with a modelless entity anyway, one frame later — and its countdown
         // cells go with it (2340).
         if guid::is_item(guid) {
@@ -936,7 +935,7 @@ fn objects_removed(guids: Vec<u64>, commands: &mut Commands, index: &mut GuidInd
     // reference, distant mobs fade out, never blink out (0067's open question, settled by their
     // eyes). The mechanism behind it is the same one [`object_destroyed`] above now takes — the
     // OUT_OF_RANGE block and DESTROY reach `0x464920` alike, and its OnDeactivate hands the model
-    // to the `SWModelFadeout` scheduler either way ([`DespawnFade`], decision 2198). That the two
+    // to the `SWModelFadeout` scheduler either way ([`DespawnFade`]). That the two
     // routes agree is not a convenience here; it is the reference's own shape — and so is the
     // object ending at the stream-out rather than when the fade does ([`tear_down`]): a unit that
     // walks out of range, vanishes or stealths stops being targetable, TAB-able and hoverable now.
@@ -975,7 +974,7 @@ pub(crate) fn tear_down(mut ent: EntityWorldMut) {
 /// settle the unit's transport membership, apply the dictated facing snap, then attach or clear
 /// the travel spline.
 ///
-/// **`transport` changes the frame of everything else in the packet** (decision 1936). When it is
+/// **`transport` changes the frame of everything else in the packet**. When it is
 /// `Some`, `start`, every `path` point and an `Angle` facing are offsets in that transport's frame,
 /// the unit becomes (or stays) a [`TransportRider`] on it, and the spline is sampled into the
 /// rider's local pose for `transport::compose_riders` to carry out to the world. When it is `None`
@@ -999,7 +998,7 @@ fn monster_move(
     riders: &mut Query<&mut crate::transport::TransportRider>,
 ) {
     if let Some(&e) = index.0.get(&guid) {
-        // The DESYNC readout (decision 0708): how far this packet is about to teleport the unit — the
+        // The DESYNC readout: how far this packet is about to teleport the unit — the
         // gap between where we have been drawing it and where the server says the path begins. A
         // correctly-followed creature reads ~0; a frozen one reads the whole walk it slept through.
         trace_move_snap(
@@ -1117,7 +1116,7 @@ fn monster_move(
             crate::creature_anim::NockLatch,
             crate::creature_anim::RangedHold,
         )>();
-        // **A rooted unit cannot be splined** (decision 1780). `0x6187a0` — the *server
+        // **A rooted unit cannot be splined**. `0x6187a0` — the *server
         // position/spline apply*, and the sole path from this packet's parse chain into
         // `CMovement`'s spline installer `0x7c6a50` — opens with `0x6187c2 test ah,0x10` and
         // returns on ROOT: a rooted unit cannot translate, cannot jump, cannot be splined.
@@ -1157,7 +1156,7 @@ fn monster_move(
                 commands.entity(e).insert(spline).remove::<SplineStopped>();
             }
             // Stop/clear: freeze where the last sample left it (≈ the endpoint) — and keep the id,
-            // which the server is waiting to hear back for a player-driven unit (decision 1281).
+            // which the server is waiting to hear back for a player-driven unit.
             None => {
                 commands
                     .entity(e)
@@ -1169,7 +1168,7 @@ fn monster_move(
 }
 
 /// This unit's granted modes as of now — the live component, else none. A grant lands before
-/// the next packet's handler reads it (decision 2306). The reference's word lives as long as the
+/// the next packet's handler reads it. The reference's word lives as long as the
 /// `CGUnit`, so "no component" and "all bits clear" are the same answer and both are
 /// [`UnitMoveModes::default`].
 fn modes_of(guid: u64, index: &GuidIndex, modes: &Query<&mut UnitMoveModes>) -> UnitMoveModes {
@@ -1180,8 +1179,8 @@ fn modes_of(guid: u64, index: &GuidIndex, modes: &Query<&mut UnitMoveModes>) -> 
         .unwrap_or_default()
 }
 
-/// **A movement mode granted on a unit we do not control** — the `SMSG_SPLINE_MOVE_*` family
-/// (decision 1780). No ack, and `guid` is whatever unit the server named: normally a creature, which
+/// **A movement mode granted on a unit we do not control** — the `SMSG_SPLINE_MOVE_*` family.
+/// No ack, and `guid` is whatever unit the server named: normally a creature, which
 /// is exactly the body the ack'd `SMSG_FORCE_*` family structurally cannot address.
 ///
 /// An unresolvable guid is **dropped**, faithfully: the reference's handler `0x603c80` resolves with
@@ -1234,7 +1233,7 @@ fn spline_move_mode(
     }
 }
 
-/// The ask-once GameObject template (`SMSG_GAMEOBJECT_QUERY_RESPONSE`, decision 0239): cache it and
+/// The ask-once GameObject template (`SMSG_GAMEOBJECT_QUERY_RESPONSE`): cache it and
 /// resolve the lockId from the type-specific `data[]` slot — the interact routing reads it to choose
 /// use-vs-cast; the hover tooltip reads the name (decision 0276's GO law).
 fn gameobject_info(
@@ -1253,7 +1252,7 @@ fn gameobject_info(
 /// store — should not happen (a create inserts the store at spawn, and lands before the next
 /// packet's handler), but seeds defensively rather than drop the delta.
 ///
-/// Every merge reports its field edges ([`FieldChanged`], decision 2297): a create and a values
+/// Every merge reports its field edges ([`FieldChanged`]): a create and a values
 /// delta for the same guid are two wire blocks, and the reference notifies on the second.
 fn merge_fields(
     commands: &mut Commands,
@@ -1279,12 +1278,12 @@ fn merge_fields(
 /// write — an untracked guid, or a mover whose create carried no movement block — and the change
 /// is reported unapplied rather than silently dropped.
 ///
-/// The two speed sources used to disagree about *when* they land (decision 1478, B213): a
+/// The two speed sources used to disagree about *when* they land: a
 /// create's whole set was inserted through `Commands`, deferred to the drain's sync point, while
 /// a `SMSG_FORCE_*_SPEED_CHANGE` edited the live component at once — so the later packet lost
 /// either way when vmangos put the two back to back (`HandleMoveWorldportAckOpcode`'s self create
 /// and the mount strip three statements later). Under a handler per packet the create's insert
-/// lands before the change's handler runs (decision 2306), so both write the component and the
+/// lands before the change's handler runs, so both write the component and the
 /// wire's order is the order.
 fn set_speed(
     guid: u64,
@@ -1347,8 +1346,8 @@ fn force_speed_change(
 }
 
 /// An observed unit's speed changed (the SPLINE_SET / MOVE_SET families — another player
-/// mounting up, a hastened creature): stage it onto that unit's speed set, nothing to ack
-/// (decision 0441). The MOVE_SET flavour's pose already arrived as its own UnitMove.
+/// mounting up, a hastened creature): stage it onto that unit's speed set, nothing to ack.
+/// The MOVE_SET flavour's pose already arrived as its own UnitMove.
 fn speed_changed(
     guid: u64,
     kind: SpeedKind,
@@ -1367,7 +1366,7 @@ fn speed_changed(
 mod tests {
     use super::*;
 
-    /// **An item's countdowns are its own cells** (decision 2340), end to end through the real
+    /// **An item's countdowns are its own cells**, end to end through the real
     /// registration on the built client: `0x1EB` for an item not yet held waits on the active
     /// player and is replayed into the item's cells when its create lands, `0x1EA` for one not
     /// held is dropped for good, a refused slot writes nothing, and the destroy takes the cells
@@ -1466,7 +1465,7 @@ mod tests {
         assert!(world.get_entity(e).is_err(), "the cells died with the item");
     }
 
-    /// The observer movement-mode family's own harness (decision 1780): one indexed unit, and a
+    /// The observer movement-mode family's own harness: one indexed unit, and a
     /// `World` small enough that the only thing that can move it is the code under test.
     mod spline_modes {
         use super::*;

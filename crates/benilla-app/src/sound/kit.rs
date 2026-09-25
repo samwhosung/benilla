@@ -1,4 +1,4 @@
-//! The **kit player** — WoW's owned sound selection over the mixer seam (decision 0070).
+//! The **kit player** — WoW's owned sound selection over the mixer seam.
 //!
 //! A play request names a `SoundEntries` kit (by id or name, mirroring the client's
 //! `PlaySoundById`/`PlaySoundByName` surface `0x458850`/`0x458030`); this module does what the
@@ -8,7 +8,7 @@
 //! distance-cull, recompute `category · v · rolloff · near_field` and feed the channel volume —
 //! the `0x7a4ad0`/`0x7a5000`/`0x7a5dc0` loop).
 //!
-//! Pinned 2026-07-03 (decision 0079): variation gates are separate DBC bits (0x400 pitch / 0x800
+//! Pinned 2026-07-03: variation gates are separate DBC bits (0x400 pitch / 0x800
 //! volume — raw-copied flag word, `0x45c080`), the draw is the mulhi scale [`math::variation_draw`]
 //! (`0x455c70`), and **no Type→category table exists** — the client's volume category is set by
 //! which play driver was invoked (`0x45ce60`/`0x45cf00`), so [`play_kit`] takes
@@ -235,7 +235,7 @@ pub(super) const EXERTION_CHANCE_CREATURE: u32 = 70;
 pub(super) const EXERTION_CHANCE_PLAYER: u32 = 35;
 
 /// The class-2 (**ordinary injury**) chance thresholds — the victim's wound grunt, and the third
-/// and last rolled class (decision 2073). `0x8626d4[2] = 60` (creature) and `0x86424c[2] = 30`
+/// and last rolled class. `0x8626d4[2] = 60` (creature) and `0x86424c[2] = 30`
 /// (player): **P = 61/101 ≈ 60.4 %** and **31/101 ≈ 30.7 %**.
 ///
 /// The twin is picked by the **victim's** own type, since the roll runs inside the victim's
@@ -377,7 +377,7 @@ fn same_kit_cap_blocks(dedupe_exempt: bool, live_same_kit: usize) -> bool {
 /// device ceiling, and nothing else. A probe capture measured benilla at **42 simultaneous
 /// voices**, over 12 for 23 % of the run, which is what made the summed mix ask for +13.4 dBFS
 /// and the limiter (1551) pull the whole mix down by up to 13.5 dB a quarter of the time. The
-/// clipping became pumping; the director heard no improvement, correctly. Decision 1557.
+/// clipping became pumping; the director heard no improvement, correctly.
 ///
 /// The count covers **everything the device is mixing** — music and ambience included, because
 /// the reference's bus 0 (cap `INT_MAX`) is where zone music, ambience and the liquid loops all
@@ -689,7 +689,7 @@ pub(super) fn play_kit_ext(
         return Ok(false);
     }
 
-    // **The coherent-copy cap** (decision 1560) — the fallback for the rows the reference leaves
+    // **The coherent-copy cap** — the fallback for the rows the reference leaves
     // ungated above.
     //
     // A probe capture of the director's own reported case measured the loudest moment of a
@@ -797,7 +797,7 @@ pub(super) fn play_kit_ext(
         None => "2d",
     };
     debug!("sound: play kit {id} ({name}) {cat} {spatial}");
-    // …and onto the probe's timeline when one is recording (decision 1556), so a capture answers
+    // …and onto the probe's timeline when one is recording, so a capture answers
     // "what was playing when the mix went past full scale" instead of only "it did".
     if let Some(probe) = out.probe.as_ref() {
         probe.note_play(id, name, cat, spatial);
@@ -918,7 +918,7 @@ pub(super) fn kit_name(kits: &SoundKits, id: u32) -> Option<&str> {
 }
 
 /// Whether kit `id` is a LOOPING kit (`SoundEntries` flag 0x200) — the client's `0x458830` test
-/// that splits tracked-loop playback from fire-and-forget one-shots (decision 0107).
+/// that splits tracked-loop playback from fire-and-forget one-shots.
 pub(super) fn kit_looping(kits: &SoundKits, id: u32) -> bool {
     kits.catalog
         .get(id)
@@ -1195,7 +1195,7 @@ pub(super) fn pump_channels(
             * near_field(d_sq, ch.cutoff);
         if amp != ch.amp {
             ch.amp = amp;
-            // Glides, not snaps (decision 1026): this is the per-frame gain feed, and a step here
+            // Glides, not snaps: this is the per-frame gain feed, and a step here
             // is a click. It is also the one that scales — every live channel steps together when
             // a frame hitches, which is what a "crack fest" under OBS actually was.
             ch.handle
@@ -1218,7 +1218,7 @@ pub(super) fn apply_kit_debug(
 ) {
     // Read before borrowing mutably: a `&mut` through `ResMut` marks `DebugState` changed, and
     // this ran every frame — so every still-frame gate that reads `debug.is_changed()`
-    // (decision 1979) saw a changed debug state on every frame of every run.
+    // saw a changed debug state on every frame of every run.
     if !debug.sound.play_kit {
         return;
     }
@@ -1250,7 +1250,7 @@ pub(super) fn apply_kit_debug(
         Err(_) => KitRef::Name(&query),
     };
     let listener = listener.pos;
-    // `copies` fires the kit N times in ONE frame — the overlap probe (decision 1551). Five copies
+    // `copies` fires the kit N times in ONE frame — the overlap probe. Five copies
     // of kit 3116 is mass Fortitude on a full party: same kit, same instant, sample-aligned. The
     // per-kit gates still apply, so a kit carrying the 0x20 no-duplicate bit collapses to one
     // however many copies are asked for — which is the honest answer for that kit.
@@ -1436,7 +1436,7 @@ mod tests {
         assert_eq!(admitted(100), 101, "a critical swing always grunts");
     }
 
-    /// The injury pair's shape (decision 2073), and the reason the victim's grunt thins out:
+    /// The injury pair's shape, and the reason the victim's grunt thins out:
     /// **class 2 is rolled, classes 3 and 9 are not.** `0x8626d4[2] = 60` for a creature victim
     /// and `0x86424c[2] = 30` for a player one — so a creature vocalises about three hits in
     /// five, a player fewer than one in three, while every crit and every crushing blow sounds.
@@ -1469,7 +1469,7 @@ mod tests {
         assert!(admitted(INJURY_CHANCE_PLAYER) < admitted(EXERTION_CHANCE_PLAYER));
     }
 
-    /// **The two per-unit handles are disjoint** (decision 1399): the one-shot bark occupies
+    /// **The two per-unit handles are disjoint**: the one-shot bark occupies
     /// `[unit+0xb20]`, the greeting line `[unit+0xb1c]`, and neither may answer the other's
     /// question. This is the regression guard for the way the voice slot was added — tagging the
     /// bark's channel with its unit made it visible to the greeting latch, which would have let a

@@ -1,4 +1,4 @@
-//! The network↔ECS bridge: a typed-event channel into real ECS entities (decision 0006).
+//! The network↔ECS bridge: a typed-event channel into real ECS entities.
 //!
 //! A background **read** thread owns the blocking [`WorldSession`] (logon → world handshake → enter
 //! world) and streams the world as a flat list of [`SessionEvent`]s over a channel; a sibling
@@ -57,7 +57,7 @@ pub(crate) use motion::{
 };
 // `GroundClamped`'s only consumer outside `net::motion::spline` is the ground-census probe, and a
 // probe is an instrument — a build with the instruments compiled out contains nothing that names
-// this re-export, and warned about it every time (decision 1451). The `allow` is "unused in *that*
+// this re-export, and warned about it every time. The `allow` is "unused in *that*
 // build", not dead code; a `cfg` here is not the alternative, because seam knowledge has exactly
 // three addresses and this file is not one of them (1179, and its test says so out loud).
 #[allow(unused_imports)]
@@ -73,7 +73,7 @@ pub(crate) struct NetPlugin {
 
 /// Marker for "this process has **no** IO thread" — inserted only when [`NetPlugin::connect`] is
 /// false. Read by `crate::preflight`'s startup notice, which says so out loud, so a run that cannot
-/// exercise the wire path is never mistaken for one that did (decision 0728).
+/// exercise the wire path is never mistaken for one that did.
 ///
 /// A resource of its own rather than a bool on [`NetStatus`], because it answers a different
 /// question: `connected` is *runtime* state that a refused or dropped connection also clears, while
@@ -83,7 +83,7 @@ pub(crate) struct NetOffline;
 
 impl Plugin for NetPlugin {
     fn build(&self, app: &mut App) {
-        // The one release-on-enter for the ask-once caches this plugin owns (decision 2288;
+        // The one release-on-enter for the ask-once caches this plugin owns (
         // the story of the latch that emptied the mail send tab's stationery for a session is
         // on `query_cache::register`).
         crate::query_cache::register::<crate::names::NameCache>(app);
@@ -100,7 +100,7 @@ impl Plugin for NetPlugin {
             Update,
             publish_world_time.in_set(benilla_world::schedule::WorldStage::Net),
         );
-        // The bridge's own handlers (decision 2325): the world feed it forwards, the name cache it
+        // The bridge's own handlers: the world feed it forwards, the name cache it
         // initialises.
         world::register(app);
         session::register(app);
@@ -164,17 +164,17 @@ impl Plugin for NetPlugin {
                     // carries it for creatures) — before the clamp, so a swimmer is exempt same-frame.
                     mark_swimming_creatures,
                     // After `sample_splines` writes the raw spline Z: re-ground walking units onto our
-                    // terrain (the client discards a ground spline's Z — decision 0059); a swimming
+                    // terrain (the client discards a ground spline's Z); a swimming
                     // creature keeps its wire Z (its path runs through the water volume).
                     ground_clamp_creatures,
-                    // Fire due scheduled relays (decision 0601) before the extrapolator advances
+                    // Fire due scheduled relays before the extrapolator advances
                     // the freshly-applied state and reconcile-lerps toward the next queued head.
                     drain_pending_moves,
                     extrapolate_remote_units,
                     // The client-local facing turn runs here — after the movers (spline / remote)
                     // have set their poses, so a turn reads the goal's fresh position this frame.
                     // A stationary unit squares up on its target, and the NPC whose interaction
-                    // window is open turns to face us (decision 1467).
+                    // window is open turns to face us.
                     drive_display_facing,
                 )
                     .chain()
@@ -184,7 +184,7 @@ impl Plugin for NetPlugin {
                 // declares both edges itself. It used to sit ahead of the whole chain, which
                 // read the window state one frame late; harmless for an ~8-frame facing ease,
                 // and exactly the frame the `"npc"` unit token was stale on when a window's
-                // own `MERCHANT_SHOW` handler read it (decision 2022).
+                // own `MERCHANT_SHOW` handler read it.
             )
             // Not part of the movement chain above: one send on the world-enter message.
             .add_systems(Update, send_query_time.in_set(WorldStage::Net))
@@ -229,7 +229,7 @@ pub(crate) struct NetEntity {
     /// A *live* SCALE_X change (a values delta on an existing unit) updates this and eases the
     /// render scale over 2 s with a cosine smoothstep — the reference's own transition
     /// (byte-verified, `0x614bbf`; the code once misread as a selection fade-in) — through
-    /// `entities::live_display` (decision 0695), which likewise applies a live
+    /// `entities::live_display`, which likewise applies a live
     /// `UNIT_FIELD_DISPLAYID` change (druid forms, GM morphs — the old F04 deferral).
     pub(crate) scale: f32,
 }
@@ -262,7 +262,7 @@ pub(crate) struct UnitSpeeds(pub(crate) MoveSpeeds);
 /// so the clamp is only visible under a server that force-sets a back speed above its forward one.
 ///
 /// **There is no zero-`walk` fallback here, and that is a settled question rather than an
-/// oversight** (decision 1759). The ctor does zero all six speed fields (`0x7c48e8`–`0x7c4906`),
+/// oversight**. The ctor does zero all six speed fields (`0x7c48e8`–`0x7c4906`),
 /// and 1752 guarded against a mover reaching this with `walk == 0` by falling back to the run arm.
 /// The local player's create does **not** skip the speed-block apply, so the zero is not live
 /// after a world port: the guard `0x5ff070` has two callers, and the post-create `0x5fad50` passes
@@ -292,7 +292,7 @@ pub(crate) fn current_speed(s: &MoveSpeeds, flags: u32) -> f32 {
 }
 
 /// A streamed object's descriptor field set (`UpdateFields`) — the ECS's mirror of the object's
-/// server-side values array (decision 0061). Seeded from the create mask and [`ObjectFields::merge`]d
+/// server-side values array. Seeded from the create mask and [`ObjectFields::merge`]d
 /// with each `Values` delta, so it accumulates the object's full descriptor state over its life.
 /// Consumers read named accessors on the inner [`ObjectFields`]: `unit_health`/`unit_max_health` for the
 /// Death selector + the inspector, `unit_race`/`unit_gender` + the `player_*` customization for the
@@ -301,8 +301,8 @@ pub(crate) fn current_speed(s: &MoveSpeeds, flags: u32) -> f32 {
 #[derive(Component, Clone, Default)]
 pub(crate) struct ObjectStore(pub(crate) ObjectFields);
 
-/// **One descriptor dword moved on a streamed object** — the reference's `CMirrorHandler` edge
-/// (decision 2297). The real client keeps a shadow copy of every object's field array, and the
+/// **One descriptor dword moved on a streamed object** — the reference's `CMirrorHandler` edge.
+/// The real client keeps a shadow copy of every object's field array, and the
 /// values-apply notifier (`0x465330`) memcmps live against shadow over each registered span and
 /// calls the watcher with the OLD value (`0x465570` hands the mirror pointer as `param3`); a
 /// first CREATE passes a notify-suppress flag and fires nothing, an in-place re-create of a live
@@ -350,7 +350,7 @@ impl FieldChanged {
 /// The field edges one feed saw this run, keyed the way the unit feeds ask — "did THIS guid's
 /// field move" per token — so a per-token event rides the reference's own trigger (its notifier
 /// fans a moved field out to every token naming the unit, `0x515e50`) instead of a snapshot diff
-/// guarded by `prev.is_some()` (decision 2297). Collected once per run, off the reader.
+/// guarded by `prev.is_some()`. Collected once per run, off the reader.
 #[derive(Default)]
 pub(crate) struct FieldEdges(HashSet<(u64, u16)>);
 
@@ -438,7 +438,7 @@ pub(crate) struct SelfPlayer;
 /// without moving who you *are*.
 ///
 /// **Attached is not the same as allowed to move**, and the second is [`ActiveMover`]'s job, not
-/// this marker's (decision 1281). A feared player is still attached to their own body — the
+/// this marker's. A feared player is still attached to their own body — the
 /// reference keeps the anchor on it and keeps following it, merely smoothed — while the server, not
 /// their input, says where it goes.
 ///
@@ -480,15 +480,15 @@ pub(crate) struct NetEvents(Receiver<SessionEvent>);
 pub(crate) struct NetCommands(pub(crate) Sender<ClientCommand>);
 
 /// The character-management channel: the app's answer to each [`CharListMessage`] while the IO
-/// thread is parked at select. [`CharRequest::Enter`] picks a character to `CMSG_PLAYER_LOGIN` as
-/// (decision 0193); [`CharRequest::Create`]/[`CharRequest::Delete`] are serviced *in place* by the
+/// thread is parked at select. [`CharRequest::Enter`] picks a character to `CMSG_PLAYER_LOGIN` as;
+/// [`CharRequest::Create`]/[`CharRequest::Delete`] are serviced *in place* by the
 /// parked loop, which stays parked (re-enum, re-emit the roster, emit a [`SessionEvent::CharActionResult`])
-/// until an `Enter` moves the session into the world (decision 0423). Sent by [`crate::char_select`]'s
+/// until an `Enter` moves the session into the world. Sent by [`crate::char_select`]'s
 /// pick policy and the char-create screen; the parked IO read thread blocks on the other end.
 #[derive(Resource)]
 pub(crate) struct CharPick(pub(crate) Sender<CharRequest>);
 
-/// One request to the parked IO thread over the [`CharPick`] channel (decision 0423). `Delete`'s
+/// One request to the parked IO thread over the [`CharPick`] channel. `Delete`'s
 /// wire + service path is live (proven by `WOW_PROBE_CHARCREATE`); its UI affordance is a later
 /// slice (decision 0423's deferrals).
 pub(crate) enum CharRequest {
@@ -498,7 +498,7 @@ pub(crate) enum CharRequest {
     Create(benilla_protocol::CharCreateReq),
     /// Delete a character by guid (`CMSG_CHAR_DELETE`), then stay parked at select.
     Delete(u64),
-    /// Select's Back (decision 0539): drop the parked session and return the IO thread to the
+    /// Select's Back: drop the parked session and return the IO thread to the
     /// pre-logon park — the app is heading to the login screen.
     Abandon,
 }
@@ -536,13 +536,13 @@ pub(crate) enum RealmRequest {
     Abandon,
 }
 
-/// The credentials channel (decision 0539): the app's answer to the IO thread's **pre-logon park**.
+/// The credentials channel: the app's answer to the IO thread's **pre-logon park**.
 /// Sent by [`crate::login`]'s policy (the screen's submit, the env fast path, the reconnect
 /// resubmit); the parked read thread blocks on the other end.
 #[derive(Resource)]
 pub(crate) struct LoginSubmit(pub(crate) Sender<io::LoginRequest>);
 
-/// The login abandon generation (decision 0539): Cancel bumps it; each [`io::LoginRequest`] carries
+/// The login abandon generation: Cancel bumps it; each [`io::LoginRequest`] carries
 /// the value read at submit, and the IO thread discards an attempt whose value has been passed.
 #[derive(Resource)]
 pub(crate) struct LoginAbandon(pub(crate) std::sync::Arc<std::sync::atomic::AtomicU64>);
@@ -596,7 +596,7 @@ impl Objects<'_, '_> {
 #[derive(Resource, Default)]
 pub(crate) struct SelfGuid(pub(crate) Option<u64>);
 
-/// Connection status for the rest of the app (decision 0065): `connected` flips on
+/// Connection status for the rest of the app: `connected` flips on
 /// `Connected`/`Disconnected`; `last_reason` keeps the most recent failure so it can be surfaced
 /// (debug panel, future UI). The streamed-world teardown itself happens in [`apply_net_updates`].
 #[derive(Resource, Default)]
@@ -613,7 +613,7 @@ pub(crate) struct NetStatus {
 #[derive(Resource)]
 pub(crate) struct PingShared(pub(crate) std::sync::Arc<std::sync::Mutex<io::PingClock>>);
 
-/// The dropped-packet tally — the wire-coverage instrument (decision 0022). Every server packet the
+/// The dropped-packet tally — the wire-coverage instrument. Every server packet the
 /// codec dropped on the floor lands here, keyed by opcode: `unknown` counts opcodes with **no parse
 /// arm at all** (`ServerPacket::Other`), `unparseable` counts packets whose parser errored (skipped
 /// to keep the stream aligned). Fed by [`apply_net_updates`] from `SessionEvent::PacketDropped`;
@@ -662,7 +662,7 @@ pub(crate) fn publish_world_time(
 /// `Player::AddQuest`) and no packet ever restates it as a duration. So a countdown is
 /// `deadline − now_unix()`, and the local machine's own wall clock is deliberately never consulted:
 /// a player whose clock is a minute off would see every countdown a minute wrong, silently and only
-/// on their screen (decision 1150).
+/// on their screen.
 #[derive(Resource, Default)]
 pub(crate) struct ServerWallClock(pub(crate) Option<WallClockSample>);
 
@@ -704,17 +704,17 @@ impl ServerWallClock {
 
 /// How long a wall-clock sample stands before the client asks again — the reference's own hour
 /// (the resync site `0x4de836` is gated on `now > [0xbb749c]`, armed `= now + 0xe10` at
-/// `0x4def11`; decision 1154).
+/// `0x4def11`).
 const RESYNC_AFTER: Duration = Duration::from_secs(3600);
 
-/// Ask for the server's wall clock (decision 1150) — on entering the world (login, worldport and
+/// Ask for the server's wall clock — on entering the world (login, worldport and
 /// instance transfer alike, the same cascade the mail arc's `QueryNextMailTime` hangs off), and
 /// hourly thereafter.
 ///
 /// The hourly leg is the reference's, and it is not about our own drift: a monotonic base does not
 /// wander against a wall clock at any rate a countdown could show. What it tracks is the **server**
 /// being re-clocked under us — the one direction no local reasoning can see — for the price of four
-/// bytes an hour (decision 1154). It also self-heals a session that entered the world before the
+/// bytes an hour. It also self-heals a session that entered the world before the
 /// socket could answer.
 fn send_query_time(
     mut entered: MessageReader<EnteredWorldMessage>,
@@ -777,7 +777,7 @@ pub(crate) struct GameTime {
     base_minute: u32,
     /// Monotonic day serial at `received` (`year·372 + month·31 + day` of the packed server date —
     /// the packed convention's fixed 31-day months). Only differences matter: it feeds the
-    /// celestial moon-phase precession (`(dayCounter + todPhase) mod 1.7`, decision 0485).
+    /// celestial moon-phase precession (`(dayCounter + todPhase) mod 1.7`).
     base_day: u32,
     /// Game-minutes elapsed per real second.
     timescale: f32,
@@ -814,7 +814,7 @@ impl GameTime {
     /// Continuous **days + day-fraction** since the day-serial epoch, advanced by `timescale` —
     /// UNWRAPPED (it crosses midnight by growing past the next integer), in `f64` (the serial
     /// reaches ~12k and the consumer needs sub-minute resolution on top). Feeds the celestial
-    /// moon-phase `(dayCounter + todPhase) mod 1.7` (`0x6d41b9`; decision 0485).
+    /// moon-phase `(dayCounter + todPhase) mod 1.7` (`0x6d41b9`).
     pub(crate) fn day_continuous(&self) -> f64 {
         let elapsed = self.received.elapsed().as_secs_f64() * self.timescale as f64;
         self.base_day as f64 + (self.base_minute as f64 + elapsed) / 1440.0
@@ -880,7 +880,7 @@ impl MoveKind {
     }
 }
 
-/// The wire `ChatMsg` type byte an addon broadcast rides (decision 1235) — the client's own
+/// The wire `ChatMsg` type byte an addon broadcast rides — the client's own
 /// four-lane whitelist at `0x49fa3f`-`0x49fa4e`.
 ///
 /// A **total** map from a closed enum, and a named function rather than an inline `match` in
@@ -928,7 +928,7 @@ pub(crate) enum ChatKind {
 /// packet ended the cast (a pushback that should extend vs an interrupt that cancels) and whether a
 /// movement packet preceded it — vmangos interrupts a cast on any movement report whose position
 /// differs from the server's stored one (`Player::SetPosition`'s exact-float `positionChanged`). A
-/// reusable instrument, off by default (decision 0022 — own the instruments).
+/// reusable instrument, off by default (own the instruments).
 pub(crate) static CAST_TRACE: std::sync::LazyLock<bool> =
     std::sync::LazyLock::new(|| std::env::var("WOW_CAST_TRACE").is_ok());
 
@@ -983,7 +983,7 @@ pub(crate) enum ClientCommand {
         transport: Option<TransportPose>,
     },
     /// Report that our mover's simulation advanced through `lag_ms` without integrating
-    /// (`CMSG_MOVE_TIME_SKIPPED`) — decision 1935. `guid` is the mover's own, the reference's
+    /// (`CMSG_MOVE_TIME_SKIPPED`). `guid` is the mover's own, the reference's
     /// `0x600be0` gate being that it equals the active-mover globals. The server folds the number
     /// into its copy of that mover's movement clock (`stime`/`ctime`), and — while it thinks we
     /// have just boarded a transport — answers by re-sending the transport's create update.
@@ -1034,7 +1034,7 @@ pub(crate) enum ClientCommand {
         target: Option<String>,
         text: String,
     },
-    /// **An addon broadcast** (`SendAddonMessage`, decision 1235) — a `CMSG_MESSAGECHAT` carrying
+    /// **An addon broadcast** (`SendAddonMessage`) — a `CMSG_MESSAGECHAT` carrying
     /// `LANG_ADDON` in the language field instead of the speaker's tongue, which is the entire
     /// difference between addon data and speech (1.12.1 has no addon opcode).
     ///
@@ -1085,7 +1085,7 @@ pub(crate) enum ClientCommand {
     ///
     /// `target` is the cast-targets block, bound by the one cast ladder exactly as a
     /// [`Self::CastSpell`]'s is — the real client's `SendCast 0x6e54f0` writes one block for both
-    /// opcodes. `Object` is the key-in-a-lock arm (decision 0769); `Unit` a bandage/soulstone;
+    /// opcodes. `Object` is the key-in-a-lock arm; `Unit` a bandage/soulstone;
     /// `SelfImplicit` every ordinary consumable.
     UseItem {
         bag_index: u8,
@@ -1106,7 +1106,7 @@ pub(crate) enum ClientCommand {
     /// (`CMSG_WRAP_ITEM`, the same bag addressing) — the completion of the local wrap cursor a
     /// `ITEM_FLAG_WRAPPER` item's right-click armed. The **paper leads**, as the wire does.
     ///
-    /// The client applies no eligibility filter of its own (decision 1934): an equipped item, a
+    /// The client applies no eligibility filter of its own: an equipped item, a
     /// bag, a soulbound or stackable or unique item, or an already-wrapped one all send and are
     /// refused server-side with one of the six `ERR_CANT_WRAP_*` reasons, arriving here as an
     /// `InventoryFailure` on the UI error line. Success is silent — field updates on the target
@@ -1128,7 +1128,7 @@ pub(crate) enum ClientCommand {
     /// dropped item is ammo-class (INVTYPE_AMMO), mirroring the real client's own auto-equip fork
     /// (`0x5e1480`). Addressed by item `entry`, not a bag slot: the stack
     /// stays in the bag and `PLAYER_AMMO_ID` starts referencing it. A wrong/absent ranged weapon
-    /// refuses via `InventoryFailure`. Decision 0526.
+    /// refuses via `InventoryFailure`.
     SetAmmo {
         entry: u32,
     },
@@ -1173,7 +1173,7 @@ pub(crate) enum ClientCommand {
         dst_slot: u8,
         count: u8,
     },
-    /// Destroy a bag item (`CMSG_DESTROYITEM`, decision 0216 §3): `count` 0 = the whole stack.
+    /// Destroy a bag item (`CMSG_DESTROYITEM`): `count` 0 = the whole stack.
     /// Sent by the delete-confirm popup's accept (`DeleteCursorItem`), mapped from the engine's
     /// queued `(bag, slot, count)` destroy through the same wire-position map as every other
     /// container drain.
@@ -1210,7 +1210,7 @@ pub(crate) enum ClientCommand {
         spell_id: u32,
         src: [f32; 3],
     },
-    /// Cancel one of our own auras (`CMSG_CANCEL_AURA`, decision 0257): the right-click-a-buff wire,
+    /// Cancel one of our own auras (`CMSG_CANCEL_AURA`): the right-click-a-buff wire,
     /// carrying the **spell id** (the server cancels by spell, not slot). No answer packet — the
     /// removal comes back as a `UNIT_FIELD_AURA` delta. Sent by the aura feed's cancel drain.
     CancelAura {
@@ -1241,7 +1241,7 @@ pub(crate) enum ClientCommand {
     SetActionBarToggles {
         toggles: u8,
     },
-    /// Press one pet bar slot (`CMSG_PET_ACTION`, decisions 0982/0988). `packed` is the slot's OWN
+    /// Press one pet bar slot (`CMSG_PET_ACTION`). `packed` is the slot's OWN
     /// word as the server last sent it — command, reaction and spell all ride this one command,
     /// because the server dispatches on the type byte inside the word. `target_guid` is the
     /// player's current selection, which is what the client always sends (`0x4bd212`).
@@ -1254,7 +1254,7 @@ pub(crate) enum ClientCommand {
         packed: u32,
         target_guid: u64,
     },
-    /// Write pet bar slots (`CMSG_PET_SET_ACTION`, decision 0988) — `(0-based position, the whole
+    /// Write pet bar slots (`CMSG_PET_SET_ACTION`) — `(0-based position, the whole
     /// new word)` pairs, one or two.
     ///
     /// **This is how the autocast toggle travels**, with one entry: the client flips bit 30 in the
@@ -1270,7 +1270,7 @@ pub(crate) enum ClientCommand {
     PetStopAttack {
         pet_guid: u64,
     },
-    /// Cancel one of the **pet's** auras (`CMSG_PET_CANCEL_AURA`, decision 1007) — the pet bar's
+    /// Cancel one of the **pet's** auras (`CMSG_PET_CANCEL_AURA`) — the pet bar's
     /// press-again-to-cancel, and the pet-shaped twin of [`Self::CancelAura`].
     ///
     /// It is a separate opcode rather than `CancelAura` with a guid because the server needs to
@@ -1294,7 +1294,7 @@ pub(crate) enum ClientCommand {
         spell_id: u32,
         enabled: bool,
     },
-    /// Give the pet up permanently (`CMSG_PET_ABANDON`, decision 1066) — the right-click menu's
+    /// Give the pet up permanently (`CMSG_PET_ABANDON`) — the right-click menu's
     /// **Abandon**, and only that row.
     ///
     /// **Its Dismiss is not this**, however alike they read: `PetDismiss 0x4be4d0` opens no packet
@@ -1305,7 +1305,7 @@ pub(crate) enum ClientCommand {
     PetAbandon {
         pet_guid: u64,
     },
-    /// Rename the pet (`CMSG_PET_RENAME`, decision 1066) — the `PETRENAMECONFIRM` popup's accept.
+    /// Rename the pet (`CMSG_PET_RENAME`) — the `PETRENAMECONFIRM` popup's accept.
     ///
     /// The server may refuse the name outright, so nothing is applied locally; success arrives as a
     /// bumped `UNIT_FIELD_PET_NAME_TIMESTAMP` on the pet, which is what re-asks the name cache.
@@ -1341,7 +1341,7 @@ pub(crate) enum ClientCommand {
         spell_id: u32,
     },
     /// Volunteer our sheath state (`CMSG_SETSHEATHED`: 0 stowed · 1 melee · 2 ranged). The real
-    /// client auto-sends `1` when initiating melee with weapons stowed (decision 0073, verified
+    /// client auto-sends `1` when initiating melee with weapons stowed (verified
     /// `0x5ecb70` → `0x611cf0`); it lands in our `UNIT_FIELD_BYTES_2`, which drives everyone's
     /// weapon placement — including our own, via the descriptor echo.
     SetSheathed {
@@ -1365,8 +1365,8 @@ pub(crate) enum ClientCommand {
         guid: u64,
     },
     /// Choose a gossip menu option (`CMSG_GOSSIP_SELECT_OPTION`): `option` is the chosen line's
-    /// echoed `index`. v1 never sends a password — coded options are greyed and never selected
-    /// (decision 0081), so the writer always omits the trailing code. The server answers a fresh
+    /// echoed `index`. v1 never sends a password — coded options are greyed and never selected,
+    /// so the writer always omits the trailing code. The server answers a fresh
     /// menu (`SMSG_GOSSIP_MESSAGE`) or closes it (`SMSG_GOSSIP_COMPLETE`).
     GossipSelectOption {
         guid: u64,
@@ -1394,7 +1394,7 @@ pub(crate) enum ClientCommand {
         entry: u32,
         count: u8,
     },
-    /// Buy into a **named** container slot (`CMSG_BUY_ITEM_IN_SLOT`, decision 1797) — what a
+    /// Buy into a **named** container slot (`CMSG_BUY_ITEM_IN_SLOT`) — what a
     /// vendor row dragged off the merchant window and dropped into a bag or an equipment slot
     /// sends, as against [`ClientCommand::BuyItem`]'s auto-place from a plain row click.
     /// `bag_guid` is the container object's guid, or the player's own for the backpack and the
@@ -1430,12 +1430,12 @@ pub(crate) enum ClientCommand {
         vendor: u64,
         item_guid: u64,
     },
-    /// Accept an innkeeper's bind offer (`CMSG_BINDER_ACTIVATE`, decision 1331): the
+    /// Accept an innkeeper's bind offer (`CMSG_BINDER_ACTIVATE`): the
     /// `CONFIRM_BINDER` dialog's Accept, carrying the guid `SMSG_BINDER_CONFIRM` asked with. This
     /// is the ONLY packet in the flow that binds anything — selecting the gossip line just raises
     /// the question. Answered by `SMSG_BINDPOINTUPDATE` + `SMSG_PLAYERBOUND` once the innkeeper's
     /// Bind cast lands; declining sends nothing.
-    /// File a GM trouble ticket (`CMSG_GMTICKET_CREATE`, decision 1673): the Help window's Submit.
+    /// File a GM trouble ticket (`CMSG_GMTICKET_CREATE`): the Help window's Submit.
     /// `category` is a `GMTicketCategory.dbc` id (1..10); `map`/`pos` are where the player stands,
     /// which is what a GM's `.ticket go` uses. Answered by `SMSG_GMTICKET_CREATE` — **or by
     /// nothing**, on vmangos's several silent refusals (queue off, under `GMTickets.MinLevel`,
@@ -1465,14 +1465,14 @@ pub(crate) enum ClientCommand {
     BinderActivate {
         binder: u64,
     },
-    /// Accept a summon (`CMSG_SUMMON_RESPONSE`, decision 1747): the `CONFIRM_SUMMON` dialog's
+    /// Accept a summon (`CMSG_SUMMON_RESPONSE`): the `CONFIRM_SUMMON` dialog's
     /// Accept, carrying the guid the question arrived with. The **only** packet in the summon
     /// flow — there is no decline opcode, so a refused summon expires on the server's own timer
     /// and this client says nothing.
     SummonResponse {
         summoner: u64,
     },
-    /// Unlearn every talent (`MSG_TALENT_WIPE_CONFIRM` outbound, decision 1580): the
+    /// Unlearn every talent (`MSG_TALENT_WIPE_CONFIRM` outbound): the
     /// `CONFIRM_TALENT_WIPE` dialog's Accept, carrying the guid the trainer's question asked with.
     /// This is the ONLY packet in the flow that resets anything — selecting the gossip line just
     /// raises the question. Answered by the un-learn of every rank spell plus the refreshed
@@ -1480,7 +1480,7 @@ pub(crate) enum ClientCommand {
     TalentWipeConfirm {
         trainer: u64,
     },
-    // ── The dialog engine's verbs (decision 1963) ──
+    // ── The dialog engine's verbs ──
     /// `ForceLogout()` — `CMSG_PLAYER_LOGOUT` (`0x4A`, empty), the forced flavour of the logout
     /// dispatcher; sent only with a live world session.
     ForceLogout,
@@ -1501,22 +1501,22 @@ pub(crate) enum ClientCommand {
         map_id: u32,
         accept: bool,
     },
-    /// `RequestBattlefieldScoreData()` — `MSG_PVP_LOG_DATA`, empty (decision 1972).
+    /// `RequestBattlefieldScoreData()` — `MSG_PVP_LOG_DATA`, empty.
     RequestBattlefieldScoreData,
-    /// `LeaveBattlefield()` — `CMSG_LEAVE_BATTLEFIELD`: the active slot's map (decision 1972).
+    /// `LeaveBattlefield()` — `CMSG_LEAVE_BATTLEFIELD`: the active slot's map.
     LeaveBattlefield {
         map_id: u32,
     },
     /// A right-click on a `GAMEOBJECT_TYPE_MEETINGSTONE` that passed the type's four client-side
-    /// refusals — `CMSG 0x292`, `u64 goGuid` (decision 2283).
+    /// refusals — `CMSG 0x292`, `u64 goGuid`.
     MeetingStoneJoin {
         go_guid: u64,
     },
     /// `CancelMeetingStoneRequest()` — `CMSG 0x293`, empty.
     MeetingStoneLeave,
-    /// The enter-world meeting-stone status query — `CMSG 0x296`, empty (decision 1974).
+    /// The enter-world meeting-stone status query — `CMSG 0x296`, empty.
     MeetingStoneStatusQuery,
-    // ── The tutorial system (decision 1976) ──
+    // ── The tutorial system ──
     /// `FlagTutorial` / an auto-acknowledge site — `CMSG_TUTORIAL_FLAG`, the 0-based id.
     TutorialFlag {
         id: u32,
@@ -1525,7 +1525,7 @@ pub(crate) enum ClientCommand {
     TutorialClear,
     /// `ResetTutorials()` — `CMSG_TUTORIAL_RESET`, empty.
     TutorialReset,
-    // ── The battleground list window (decision 1974) ──
+    // ── The battleground list window ──
     /// `ShowBattlefieldList(index)` — `CMSG_BATTLEFIELD_LIST`: the queued slot's map.
     BattlefieldList {
         map_id: u32,
@@ -1540,7 +1540,7 @@ pub(crate) enum ClientCommand {
     /// `RequestBattlefieldPositions()` — `MSG_BATTLEGROUND_PLAYER_POSITIONS` outbound (empty;
     /// decision 1980), throttled app-side to the reference's 5000 ms.
     RequestBattlefieldPositions,
-    // ── The tabard designer (decision 1977) ──
+    // ── The tabard designer ──
     /// The NPC-click ladder's TABARDDESIGNER arm — `MSG_TABARDVENDOR_ACTIVATE` out.
     TabardVendorActivate {
         npc: u64,
@@ -1566,21 +1566,21 @@ pub(crate) enum ClientCommand {
     PetUnlearn {
         trainer: u64,
     },
-    /// Open the bank (`CMSG_BANKER_ACTIVATE`, decision 0604): the direct opener a right-click on
+    /// Open the bank (`CMSG_BANKER_ACTIVATE`): the direct opener a right-click on
     /// a pure banker (bit 8 the lowest service bit) uses — a gossip-flagged banker routes through
     /// the gossip menu instead, whose bank option makes the server volunteer the same answer.
     /// Answered by `SMSG_SHOW_BANK` (a `ShowBank` event → the bank window opens off local state).
     BankerActivate {
         guid: u64,
     },
-    /// Buy the next bank-bag slot (`CMSG_BUY_BANK_SLOT`, decision 0604): the purchase popup's
+    /// Buy the next bank-bag slot (`CMSG_BUY_BANK_SLOT`): the purchase popup's
     /// accept. **No packet on success** — the descriptor's `PLAYER_BYTES_2` bank-bag count + the
     /// falling coinage are the confirmation; refusal answers `SMSG_BUY_BANK_SLOT_RESULT` (a
     /// `BuyBankSlotResult` event → the red error line).
     BuyBankSlot {
         guid: u64,
     },
-    /// Deposit: auto-place a bag/doll item into the bank (`CMSG_AUTOBANK_ITEM`, decision 0604) —
+    /// Deposit: auto-place a bag/doll item into the bank (`CMSG_AUTOBANK_ITEM`) —
     /// the right-click auto-move while the bank window is open. Wire `(bag, slot)`; refusal
     /// answers `SMSG_INVENTORY_CHANGE_FAILURE` (the red line), success moves the item via
     /// `UPDATE_OBJECT` field deltas.
@@ -1588,21 +1588,21 @@ pub(crate) enum ClientCommand {
         bag: u8,
         slot: u8,
     },
-    /// Withdraw: auto-place a bank item into the bags (`CMSG_AUTOSTORE_BANK_ITEM`, decision 0604)
+    /// Withdraw: auto-place a bank item into the bags (`CMSG_AUTOSTORE_BANK_ITEM`)
     /// — the right-click auto-move on a bank slot. Same wire shape and answers as
     /// [`Self::AutoBankItem`] (vmangos routes by whether the source is a bank position).
     AutoStoreBankItem {
         bag: u8,
         slot: u8,
     },
-    /// Ask (or re-ask) a trainer's service list (`CMSG_TRAINER_LIST`, decision 0237): one trainer
+    /// Ask (or re-ask) a trainer's service list (`CMSG_TRAINER_LIST`): one trainer
     /// guid. The window first opens off the gossip trainer option's `SMSG_TRAINER_LIST`; this is the
     /// *refresh* verb, re-requested after a purchase to repaint the bought row green→gray (the server
     /// does not auto-resend on a buy). Answered by `SMSG_TRAINER_LIST` (a `TrainerList` event).
     TrainerList {
         trainer: u64,
     },
-    /// Buy (learn) a trainer service (`CMSG_TRAINER_BUY_SPELL`, decision 0237): the trainer guid + the
+    /// Buy (learn) a trainer service (`CMSG_TRAINER_BUY_SPELL`): the trainer guid + the
     /// service's `spell_id`. Sent by the Train button ([`crate::ui_trainer`]'s buy drain). Success
     /// answers `SMSG_TRAINER_BUY_SUCCEEDED` and delivers the spell via `SMSG_LEARNED_SPELL`; refusal
     /// answers `SMSG_TRAINER_BUY_FAILED` (a `TrainerBuyFailed` event → the window's error line).
@@ -1610,35 +1610,35 @@ pub(crate) enum ClientCommand {
         trainer: u64,
         spell_id: u32,
     },
-    /// Ask (or re-ask) a stable master's pet list (`MSG_LIST_STABLED_PETS`, decision 1676): one
+    /// Ask (or re-ask) a stable master's pet list (`MSG_LIST_STABLED_PETS`): one
     /// NPC guid. The window first opens off the gossip stable option's own inbound send of the
     /// same opcode; this is the *refresh* verb, re-requested after every successful mutation
     /// because none of them is answered with a fresh list.
     ListStabledPets {
         npc: u64,
     },
-    /// Put the current pet away (`CMSG_STABLE_PET`, decision 1676). **No destination slot** — the
+    /// Put the current pet away (`CMSG_STABLE_PET`). **No destination slot** — the
     /// server takes the first free bought one, so there is none to carry.
     StablePet {
         npc: u64,
     },
-    /// Summon a stabled pet (`CMSG_UNSTABLE_PET`, decision 1676): the NPC guid + the pet's own
+    /// Summon a stabled pet (`CMSG_UNSTABLE_PET`): the NPC guid + the pet's own
     /// number. Valid only with no current pet; with one out the verb is [`Self::StableSwapPet`].
     UnstablePet {
         npc: u64,
         pet_number: u32,
     },
-    /// Trade the current pet for a stabled one in one step (`CMSG_STABLE_SWAP_PET`, decision 1676).
+    /// Trade the current pet for a stabled one in one step (`CMSG_STABLE_SWAP_PET`).
     StableSwapPet {
         npc: u64,
         pet_number: u32,
     },
-    /// Buy the next stable slot (`CMSG_BUY_STABLE_SLOT`, decision 1676). The *which* is implicit,
+    /// Buy the next stable slot (`CMSG_BUY_STABLE_SLOT`). The *which* is implicit,
     /// as with the bank's bag slots; a refusal answers `SMSG_STABLE_RESULT`'s `ERR_MONEY`.
     BuyStableSlot {
         npc: u64,
     },
-    /// Spend talent points (`CMSG_LEARN_TALENT`, decision 0304): a `Talent.dbc` row id + the
+    /// Spend talent points (`CMSG_LEARN_TALENT`): a `Talent.dbc` row id + the
     /// requested rank (0-based, learn-up-to — the click sends the current rank count). Sent by
     /// the talent window's click-to-learn. No dedicated reply: success arrives as the rank
     /// spell's learn effects + the refreshed `PLAYER_CHARACTER_POINTS1`.
@@ -1673,7 +1673,7 @@ pub(crate) enum ClientCommand {
     SetWatchedFaction {
         rep_list_id: i32,
     },
-    /// Use a world GameObject (`CMSG_GAMEOBJ_USE`, decision 0236): a full guid naming the
+    /// Use a world GameObject (`CMSG_GAMEOBJ_USE`): a full guid naming the
     /// chest/door/quest-object/lever under the cursor. Sent by the right-click route
     /// ([`crate::target`]) when the nearest hovered CGObject is a usable GameObject. The server fans
     /// it out by GO type — a chest answers with `SMSG_LOOT_RESPONSE` (the loot window), a questgiver
@@ -1689,14 +1689,14 @@ pub(crate) enum ClientCommand {
     AreaTrigger {
         trigger_id: u32,
     },
-    /// Ask a GameObject's template (`CMSG_GAMEOBJECT_QUERY`, decision 0239): `entry` + the asking
+    /// Ask a GameObject's template (`CMSG_GAMEOBJECT_QUERY`): `entry` + the asking
     /// `guid`. Sent ask-once when a GameObject streams in ([`crate::go_templates`]); the answer's
     /// `lockId` decides whether a right-click uses it or casts an OPEN_LOCK spell.
     GameObjectQuery {
         entry: u32,
         guid: u64,
     },
-    /// Ask for one page of a book (`CMSG_PAGE_TEXT_QUERY`, decision 1105): the `PageText` id + the
+    /// Ask for one page of a book (`CMSG_PAGE_TEXT_QUERY`): the `PageText` id + the
     /// asking object's `guid` (an item's or a TEXT GameObject's — the server discards it). Sent
     /// ask-once by [`crate::ui_item_text::PageTexts`] when a reader opens on a page it hasn't got;
     /// vmangos answers with the whole forward chain, one `SMSG_PAGE_TEXT_QUERY_RESPONSE` per page.
@@ -1704,7 +1704,7 @@ pub(crate) enum ClientCommand {
         page_id: u32,
         guid: u64,
     },
-    /// Cast an OPEN_LOCK spell at a **GameObject** (`CMSG_CAST_SPELL`, decision 0239): the right-click
+    /// Cast an OPEN_LOCK spell at a **GameObject** (`CMSG_CAST_SPELL`): the right-click
     /// on a locked chest / mining vein / herb node. The server runs `EffectOpenLock` → a chest opens
     /// its loot (`SMSG_LOOT_RESPONSE`); the profession/skill gate is the server's.
     CastSpellGameObject {
@@ -1717,7 +1717,7 @@ pub(crate) enum ClientCommand {
         spell_id: u32,
         item_guid: u64,
     },
-    /// Open a corpse/creature's loot (`CMSG_LOOT`, decision 0084): a full guid naming the lootable
+    /// Open a corpse/creature's loot (`CMSG_LOOT`): a full guid naming the lootable
     /// unit. Sent by the right-click loot route ([`crate::target`]) on the loot classification
     /// (a dead unit carrying `UNIT_DYNFLAG_LOOTABLE`). Answered by `SMSG_LOOT_RESPONSE` (a
     /// `LootResponse` event on success, `LootError` on refusal). Not usable on a GameObject guid —
@@ -1736,13 +1736,13 @@ pub(crate) enum ClientCommand {
     /// synthesized coin row queues. Answered by `SMSG_LOOT_CLEAR_MONEY` (+ the coinage rising via
     /// `UPDATE_OBJECT`; solo looting gets no `SMSG_LOOT_MONEY_NOTIFY` on this server).
     LootMoney,
-    /// Close the loot window (`CMSG_LOOT_RELEASE`, decision 0084): the server ignores `guid` and
+    /// Close the loot window (`CMSG_LOOT_RELEASE`): the server ignores `guid` and
     /// releases whatever loot it has stored for us. Sent on `CloseLoot` (the window's `OnHide`).
     /// Answered by `SMSG_LOOT_RELEASE_RESPONSE` (a `LootReleaseResponse` event).
     LootRelease {
         guid: u64,
     },
-    /// Cast a group-loot vote (`CMSG_LOOT_ROLL`, decision 0591): the Need/Greed/Pass click on a
+    /// Cast a group-loot vote (`CMSG_LOOT_ROLL`): the Need/Greed/Pass click on a
     /// `GroupLootFrame`. The roll is addressed by the `(looted_target, item_slot)` pair the server
     /// opened it with — the client-internal `rollID` the Lua side uses never reaches the wire.
     /// Answered by an `SMSG_LOOT_ROLL` echo of our vote, then the roll's resolution.
@@ -1751,7 +1751,7 @@ pub(crate) enum ClientCommand {
         item_slot: u32,
         roll_type: u8,
     },
-    /// Hand a loot row to a group member (`CMSG_LOOT_MASTER_GIVE`, decision 1675): the master
+    /// Hand a loot row to a group member (`CMSG_LOOT_MASTER_GIVE`): the master
     /// looter's dropdown pick. `guid` is the open loot source, `slot` the row's **wire** slot, and
     /// `target` the recipient's guid. Success arrives as an ordinary `SMSG_LOOT_REMOVED` (the item
     /// traffic goes to the recipient, not to us); a refusal as a `MASTER_*` loot error.
@@ -1760,7 +1760,7 @@ pub(crate) enum ClientCommand {
         slot: u8,
         target: u64,
     },
-    /// Look at an available quest (`CMSG_QUESTGIVER_QUERY_QUEST`, decision 0088): a greeting/gossip
+    /// Look at an available quest (`CMSG_QUESTGIVER_QUERY_QUEST`): a greeting/gossip
     /// quest row click. Answered by `SMSG_QUESTGIVER_QUEST_DETAILS` (a `QuestDetail` event → the
     /// accept panel).
     QuestgiverQuery {
@@ -1809,7 +1809,7 @@ pub(crate) enum ClientCommand {
         npc: u64,
     },
     /// Greet a questgiver (`CMSG_QUESTGIVER_HELLO`) — the quest session's END on a non-gossip
-    /// NPC, which is what re-opens its quest list after a decline (decision 1738). The gossip
+    /// NPC, which is what re-opens its quest list after a decline. The gossip
     /// twin of this send is [`Self::GossipHello`].
     QuestgiverHello {
         npc: u64,
@@ -1820,7 +1820,7 @@ pub(crate) enum ClientCommand {
     QuestlogRemove {
         slot: u8,
     },
-    // ── The party quest-share (decision 1733; bodies in benilla-protocol `messages/quest/share.rs`). ──
+    // ── The party quest-share (bodies in benilla-protocol `messages/quest/share.rs`). ──
     /// Share the selected quest with the party (`CMSG_PUSHQUESTTOPARTY`) — the quest log's *Share
     /// Quest* button. The server walks the group itself; the answers come back as one
     /// `MSG_QUEST_PUSH_RESULT` per member (usually two: the opener, then the outcome).
@@ -1840,7 +1840,7 @@ pub(crate) enum ClientCommand {
         sharer: u64,
         msg: benilla_protocol::messages::QuestShareMsg,
     },
-    // ── The mail arc (decision 0544; writer bodies in benilla-protocol `world/writer/mail.rs`). ──
+    // ── The mail arc (writer bodies in benilla-protocol `world/writer/mail.rs`). ──
     /// Ask the mailbox's inbox page (`CMSG_GET_MAIL_LIST`) — the window's open verb and its
     /// refresh. Answered by `SMSG_MAIL_LIST_RESULT` (a `MailList` event).
     GetMailList {
@@ -1901,7 +1901,7 @@ pub(crate) enum ClientCommand {
     /// login to seed `HasNewMail()`/the minimap letter icon (decision 0544 P3, sent by
     /// `crate::ui_mail`'s world-enter one-shot).
     QueryNextMailTime,
-    // ── The auction house arc (decision 1511; writer bodies in benilla-protocol
+    // ── The auction house arc (writer bodies in benilla-protocol
     //    `world/writer/auction.rs`). Every verb carries the auctioneer guid — the server
     //    re-checks the 5 yd interact distance on each one, so there is no session token, and
     //    several refusals (a zero bid/duration, an unaffordable bid, a cancel whose cut can't be
@@ -1970,24 +1970,24 @@ pub(crate) enum ClientCommand {
     /// Ask for the server's wall clock (`CMSG_QUERY_TIME`, empty body) — sent on every world
     /// entry, answered by `SMSG_QUERY_TIME_RESPONSE` into [`ServerWallClock`]. That clock is the
     /// only way to read the absolute deadlines the server writes into descriptor fields, which is
-    /// how the timed-quest countdown gets its number (decision 1150).
+    /// how the timed-quest countdown gets its number.
     QueryTime,
-    /// Ask to inspect a player (`CMSG_INSPECT`, `u64 target`) — the UnitPopup INSPECT row
-    /// (decision 0631). Fire-and-forget: the reply echoes the guid and nothing else, and the window
+    /// Ask to inspect a player (`CMSG_INSPECT`, `u64 target`) — the UnitPopup INSPECT row.
+    /// Fire-and-forget: the reply echoes the guid and nothing else, and the window
     /// paints from the already-streamed PUBLIC `PLAYER_VISIBLE_ITEM_*` fields. Sent anyway because
     /// server-side it also sets our selection (`MiscHandler.cpp:945`), as the real client's does.
     Inspect {
         target: u64,
     },
     /// Ask for a player's honor stats (`MSG_INSPECT_HONOR_STATS`, `u64 target`) — the inspect
-    /// window's Honor tab (decision 1512). Unlike [`Self::Inspect`] this one is a **real** round
+    /// window's Honor tab. Unlike [`Self::Inspect`] this one is a **real** round
     /// trip: the reply rides the same opcode and is the only source of another player's honor
     /// numbers, since every field of the honor block is PRIVATE. A refusal is silence — the server
     /// applies the same three gates as `CMSG_INSPECT` and simply does not answer.
     InspectHonorStats {
         target: u64,
     },
-    // ── The player-trade arc (decision 0592; writer bodies in benilla-protocol
+    // ── The player-trade arc (writer bodies in benilla-protocol
     //    `world/writer/trade.rs`). ─────────────────────────────────────────────────────────────
     /// Offer to trade with a player (`CMSG_INITIATE_TRADE`, `u64 target`) — the UnitPopup TRADE row.
     /// The server answers the initiator on any refusal (`SMSG_TRADE_STATUS`) and, on success, sends
@@ -1997,7 +1997,7 @@ pub(crate) enum ClientCommand {
     },
     /// **Accept** an incoming trade request (`CMSG_BEGIN_TRADE`, empty) — makes the server emit
     /// `OPEN_WINDOW` to both sides. Sent by [`crate::ui_trade::answer_trade_request`], never by the
-    /// net drain: *whether* to accept is a policy with five inputs and (decision 1764) the player's
+    /// net drain: *whether* to accept is a policy with five inputs and the player's
     /// own answer, so the arm that decodes `BEGIN_TRADE` only records the request.
     BeginTrade,
     /// Decline an incoming trade request as **ignored** (`CMSG_IGNORE_TRADE`, `0x119`, empty) —
@@ -2123,7 +2123,7 @@ pub(crate) enum ClientCommand {
     /// [`crate::cinematic`] when playback ends or the player ESCs out of it, and immediately for a
     /// trigger it cannot resolve to a shot. Without the ack, vmangos anchors object visibility to
     /// the flying cinematic camera (a first login's race intro) and every NPC around the body
-    /// despawns until relog (decision 0196).
+    /// despawns until relog.
     CompleteCinematic,
     /// Announce the shot now being armed (`CMSG_NEXT_CINEMATIC_CAMERA`) — see
     /// [`benilla_protocol::WorldWriter::next_cinematic_camera`]. Sent for **every** shot, the
@@ -2132,7 +2132,7 @@ pub(crate) enum ClientCommand {
     /// [`crate::cinematic`]'s module doc.
     NextCinematicCamera,
     /// **Acknowledge a granted mover mode** — root, water-walk, feather-fall or hover (decisions
-    /// 0308, 0866): the echoed `counter` + our live pose, on the opcode
+    /// 0308): the echoed `counter` + our live pose, on the opcode
     /// [`MoveMode::ack_opcode`] picks. Sent by the controller the frame the
     /// [`MoveModeMessage`] lands; un-acked, the server never applies the change and observers never
     /// see it.
@@ -2149,7 +2149,7 @@ pub(crate) enum ClientCommand {
         pos: [f32; 3],
         orientation: f32,
     },
-    /// **Acknowledge the knockback we just flew** (`CMSG_MOVE_KNOCK_BACK_ACK`, decision 1702): the
+    /// **Acknowledge the knockback we just flew** (`CMSG_MOVE_KNOCK_BACK_ACK`): the
     /// echoed `counter`, our live pose/flags, and `launch` — the server's own quad, echoed back as
     /// the `MovementInfo` jump tail.
     ///
@@ -2171,7 +2171,7 @@ pub(crate) enum ClientCommand {
     /// (and its timeout's server-forced twin is server-side; decision 0308 slice 1).
     RepopRequest,
     /// Ask where our corpse is (`MSG_CORPSE_QUERY`, empty request) — on becoming a ghost and on
-    /// login-while-dead; answered into [`crate::death::DeathNet`] (decision 0308 §5).
+    /// login-while-dead; answered into [`crate::death::DeathNet`].
     CorpseQuery,
     /// Reclaim our corpse (`CMSG_RECLAIM_CORPSE` — RECOVER_CORPSE's Accept). Server-gated to
     /// ghost + delay elapsed + 39 yd; success returns as ordinary descriptor deltas.
@@ -2179,7 +2179,7 @@ pub(crate) enum ClientCommand {
         corpse: u64,
     },
     /// Self-resurrect (`CMSG_SELF_RES`, empty body — the DEATH popup's soulstone/Reincarnation
-    /// button, decision 1746). The server casts whatever `PLAYER_SELF_RES_SPELL` holds; success
+    /// button). The server casts whatever `PLAYER_SELF_RES_SPELL` holds; success
     /// returns as ordinary descriptor deltas, no answer packet.
     SelfRes,
     /// Take the spirit healer's resurrection (`CMSG_SPIRIT_HEALER_ACTIVATE` — the XP_LOSS
@@ -2192,7 +2192,7 @@ pub(crate) enum ClientCommand {
         caster: u64,
         accept: bool,
     },
-    // ── The group/party family (decision 0434; writer bodies in benilla-protocol
+    // ── The group/party family (writer bodies in benilla-protocol
     //    `world/writer/group.rs`) ──────────────────────────────────────────────────────────────
     /// Invite a player by name (`CMSG_GROUP_INVITE` — `/invite`, the unit menus, the invite ack
     /// comes back as `SMSG_PARTY_COMMAND_RESULT`).
@@ -2219,7 +2219,7 @@ pub(crate) enum ClientCommand {
     /// Ask the server for one party/raid member's whole stat block
     /// (`CMSG_REQUEST_PARTY_MEMBER_STATS`; answered by `SMSG_PARTY_MEMBER_STATS_FULL`).
     ///
-    /// **Sent from exactly two edges, both the reference's** (decision 1640, `0x4e8646` and
+    /// **Sent from exactly two edges, both the reference's** (`0x4e8646` and
     /// `0x4e83f1`): the moment a member's object leaves the object manager
     /// (`ui_party::net::member_deactivated`), and the GROUP_LIST seat of a member new to the roster
     /// whose object we do not hold (`seat_new_records`). There is no timer and no Lua binding — a
@@ -2235,13 +2235,13 @@ pub(crate) enum ClientCommand {
         threshold: u32,
     },
     /// Mark a unit with a raid-target icon (`MSG_RAID_TARGET_UPDATE` outbound — the popup's
-    /// submenu, decision 0434 §5): wire `icon` 0..7, `guid` 0 clears that icon's slot. Leader/
+    /// submenu): wire `icon` 0..7, `guid` 0 clears that icon's slot. Leader/
     /// assistant only server-side; echoes back as the delta form.
     SetRaidTarget {
         icon: u8,
         guid: u64,
     },
-    /// `MSG_MINIMAP_PING` (a minimap click, decision 1596): raw world `(x, y)`. The server relays
+    /// `MSG_MINIMAP_PING` (a minimap click): raw world `(x, y)`. The server relays
     /// them verbatim to the rest of the group and does nothing at all when we are solo — which is
     /// why the marker is drawn locally at click time rather than awaited off the wire.
     MinimapPing {
@@ -2275,10 +2275,10 @@ pub(crate) enum ClientCommand {
     /// Ask for our saved raid lockouts (`CMSG_REQUEST_RAID_INFO`) — the Raid Info panel.
     RequestRaidInfo,
     /// Reset every dungeon we own (`CMSG_RESET_INSTANCES`, empty body) — the SELF menu's "Reset
-    /// all instances" (decision 1748). Answered per instance: an `SMSG_INSTANCE_RESET` for each
+    /// all instances". Answered per instance: an `SMSG_INSTANCE_RESET` for each
     /// map that reset, an `SMSG_INSTANCE_RESET_FAILED` for each that would not.
     ResetInstances,
-    // ── The duel family (decision 0633; writer bodies in benilla-protocol
+    // ── The duel family (writer bodies in benilla-protocol
     //    `world/writer/duel.rs`). Challenging is a `CastSpell` of the duel spell, not a verb here.
     /// Accept a duel challenge (`CMSG_DUEL_ACCEPTED`) — the popup's Accept, and the challenger's
     /// own auto-accept the instant its request echoes back.
@@ -2290,7 +2290,7 @@ pub(crate) enum ClientCommand {
     DuelCancelled {
         arbiter: u64,
     },
-    // ── The social family (decision 0668; writer bodies in benilla-protocol
+    // ── The social family (writer bodies in benilla-protocol
     //    `world/writer/social.rs`). Note the wire's own asymmetry: add by NAME, remove by GUID.
     /// Refresh the friend list (`CMSG_FRIEND_LIST`) — the FrameXML's `ShowFriends()`. The list
     /// also arrives unasked at login, so this is never the only path.
@@ -2329,11 +2329,11 @@ pub(crate) enum ClientCommand {
     Who {
         request: Box<WhoRequest>,
     },
-    /// Ask to flip our own PvP flag (`CMSG_TOGGLE_PVP`, empty body — decision 0646): `/pvp` and
+    /// Ask to flip our own PvP flag (`CMSG_TOGGLE_PVP`, empty body): `/pvp` and
     /// the unit popup's PvP row, both through the VM's intent queue. Nothing local changes; the
     /// answer is the descriptor's PvP bit (and flagging *off* waits out the server's 300 s timer).
     TogglePvp,
-    /// Ask to flip our own show-helm preference (`CMSG_TOGGLE_HELM`, empty body — decision 1472):
+    /// Ask to flip our own show-helm preference (`CMSG_TOGGLE_HELM`, empty body):
     /// the Options window's *Show Helm* row, through the VM's intent queue. Nothing local changes;
     /// the answer is `PLAYER_FLAGS`' `HIDE_HELM` bit, which is what dresses the body — ours and
     /// every other player's, since the field is public.
@@ -2350,7 +2350,7 @@ pub(crate) enum ClientCommand {
     //    lands, never optimistically at the send; a refusal arrives separately as
     //    `SMSG_GUILD_COMMAND_RESULT`.
     //
-    //    Every one of these is sent by `crate::ui_guild` (decision 1257) except `GuildCreate`,
+    //    Every one of these is sent by `crate::ui_guild` except `GuildCreate`,
     //    which keeps its `#[allow(dead_code)]`: *founding* a guild is the charter/petition flow,
     //    deliberately out of the membership slice, and vmangos registers the opcode `STATUS_NEVER`
     //    so nothing would answer it anyway.
@@ -2515,14 +2515,14 @@ pub(crate) enum ClientCommand {
     },
     /// Fly a single hop (`CMSG_ACTIVATETAXI`): the flight-master guid, the source node, the
     /// destination node. Answered by `SMSG_ACTIVATETAXIREPLY`; success continues into the mount +
-    /// `SMSG_MONSTER_MOVE` flight (the existing self-spline rails, decision 0260). Sent by the
+    /// `SMSG_MONSTER_MOVE` flight (the existing self-spline rails). Sent by the
     /// taxi-map window's `TakeTaxiNode` drain on a one-hop route pick (`crate::ui_taxi`, phase 2).
     ActivateTaxi {
         guid: u64,
         source_node: u32,
         dest_node: u32,
     },
-    /// Fly a multi-hop chain in one send (`CMSG_ACTIVATETAXIEXPRESS`, decision 0496 §TU-3): sent
+    /// Fly a multi-hop chain in one send (`CMSG_ACTIVATETAXIEXPRESS`): sent
     /// when no direct `TaxiPath` edge exists current→target — the byte-verified discriminator,
     /// not hop count. The flight-master guid, the route's combined fare, and the full node chain
     /// in order. Answered by `SMSG_ACTIVATETAXIREPLY`, same as [`Self::ActivateTaxi`]. Sent by the
@@ -2547,14 +2547,14 @@ pub(crate) struct RealmListMessage {
 /// parked at character select waiting for the app's pick. Consumed by [`crate::char_select`]'s
 /// policy — auto-answer (pending pick / `WOW_CHAR`) or show the roster and wait for the director.
 /// `realm` is the auth realm-list entry this session connected to (name + type for the screen's
-/// realm banner, decision 0465).
+/// realm banner).
 #[derive(Message)]
 pub(crate) struct CharListMessage {
     pub(crate) characters: Vec<benilla_protocol::Character>,
     pub(crate) realm: Option<benilla_protocol::RealmInfo>,
 }
 
-/// The result of an in-place char create/delete the parked IO thread serviced (decision 0423),
+/// The result of an in-place char create/delete the parked IO thread serviced,
 /// bridged from the Net drain. A refreshed [`CharListMessage`] precedes a successful one. Consumed by
 /// the char-create screen (`crate::char_create`) to show the outcome; `code` is the raw
 /// `WorldResult` byte the screen maps to its 1.12 status text.
@@ -2581,14 +2581,14 @@ pub(crate) struct CharacterLoginFailedMessage {
 pub(crate) struct EnteredWorldMessage {
     /// The account's accumulated **rested billing minutes**, from the `SMSG_AUTH_RESPONSE` that
     /// admitted the session — pushed into the script here because this is the only moment it ever
-    /// arrives (decision 1820).
+    /// arrives.
     pub(crate) billing_time_rested: u32,
     /// The tutorial bank, if `SMSG_TUTORIAL_FLAGS` landed during the login handshake (1976);
     /// otherwise it arrives in the world stream.
     pub(crate) tutorial_flags: Option<Vec<u8>>,
 }
 
-/// **`SMSG_ADDON_INFO`'s verdict for the live session** (decision 2175) — the addons the server
+/// **`SMSG_ADDON_INFO`'s verdict for the live session** — the addons the server
 /// hid from the Lua index space, or `None` when it never answered our addon block.
 ///
 /// A resource rather than a field on [`EnteredWorldMessage`], because of *when* it is needed: the
@@ -2600,7 +2600,7 @@ pub(crate) struct EnteredWorldMessage {
 pub(crate) struct AddonInfoReply(pub(crate) Option<Vec<String>>);
 
 /// The server asked us to play a cinematic (`SMSG_TRIGGER_CINEMATIC`) — a `CinematicSequences.dbc`
-/// id. Read by [`crate::cinematic`], which owns the playback *and* the ack (decision 0196: the ack
+/// id. Read by [`crate::cinematic`], which owns the playback *and* the ack (the ack
 /// is not optional, only late).
 #[derive(Message)]
 pub(crate) struct CinematicTriggeredMessage {
@@ -2609,10 +2609,10 @@ pub(crate) struct CinematicTriggeredMessage {
 
 /// One `CHAT_MSG_SYSTEM` line — the server's own answer to a GM dot-command ("You set god mode to
 /// on for …", "There is no such command", "Player not found!"). It has always been *logged*
-/// (`net: server says — …`, decision 0651); this makes it *readable*, which is what lets a sender
+/// (`net: server says — …`); this makes it *readable*, which is what lets a sender
 /// know whether its command landed. That matters most for server state the descriptor does not
 /// carry: vmangos's god mode is a runtime-only `Unit::m_invincibilityHpThreshold` with no field and
-/// no flag on the wire, so this line is the only ground truth there is (decision 0677).
+/// no flag on the wire, so this line is the only ground truth there is.
 #[derive(Message, Clone)]
 pub(crate) struct ServerSaidMessage {
     pub(crate) text: String,
@@ -2625,13 +2625,13 @@ pub(crate) struct ServerSaidMessage {
 pub(crate) struct LoggedOutMessage;
 
 /// A login attempt progressed (the IO thread's `LoginStage`, bridged from the Net drain): the
-/// login screen's connecting dialog quotes the matching `LOGIN_STATE_*` string (decision 0539).
+/// login screen's connecting dialog quotes the matching `LOGIN_STATE_*` string.
 #[derive(Message, Clone, Copy)]
 pub(crate) struct LoginStageMessage {
     pub(crate) stage: benilla_protocol::LoginStage,
 }
 
-/// We are **queued** for a full realm (decision 1681) — one per `AUTH_WAIT_QUEUE` packet, while
+/// We are **queued** for a full realm — one per `AUTH_WAIT_QUEUE` packet, while
 /// the world handshake is still parked. Not a failure: the attempt is live and the queue ends
 /// either with a roster or with a real failure.
 #[derive(Message, Clone)]
@@ -2646,13 +2646,13 @@ pub(crate) struct LoginQueuedMessage {
 #[derive(Message, Clone)]
 pub(crate) struct DisconnectedMessage {
     pub(crate) reason: String,
-    /// How it ended — the fact the whole post-session behaviour turns on (decision 1262).
+    /// How it ended — the fact the whole post-session behaviour turns on.
     pub(crate) end: benilla_protocol::SessionEnd,
     /// **Is this the reference's `DISCONNECTED_FROM_SERVER`** — the session over, the client back
     /// at the account screen behind a "Disconnected from server" dialog, and nothing retried?
     ///
-    /// Decided **once**, by [`Self::new`], at the one edge where the event enters the app
-    /// (decision 1262). Four readers act on it — the world teardown, the screen flip, the black
+    /// Decided **once**, by [`Self::new`], at the one edge where the event enters the app.
+    /// Four readers act on it — the world teardown, the screen flip, the black
     /// cover, the credential policy — and they may not disagree: a teardown that keeps the avatar
     /// for a reconnect that never comes is exactly the avatar-less free camera the report
     /// described. Carrying the verdict rather than re-deriving it four times is what makes that
@@ -2687,7 +2687,7 @@ impl DisconnectedMessage {
     }
 }
 
-/// A login attempt failed before the roster (decision 0539): `code` is the server's auth result
+/// A login attempt failed before the roster: `code` is the server's auth result
 /// byte on a refusal (mapped to its `AUTH_*` glue string), `None` on a transport failure. The IO
 /// thread is back at its pre-logon park; [`crate::login`]'s policy decides what happens next.
 /// `terminal` marks a codeless failure that retrying cannot fix (the server is unusable by this
@@ -2747,7 +2747,7 @@ pub(crate) struct SelfMoveMessage {
     /// crossed yet and [`crate::transport::tick_transports`] is holding the transform frozen at the
     /// far continent's pose. Re-deriving there yields a local offset the size of the gap between
     /// two continents, which the next honest boat pose then multiplies into a fling off the deck.
-    /// The authoritative answer was on the wire the whole time (decision 2026).
+    /// The authoritative answer was on the wire the whole time.
     pub(crate) transport: Option<benilla_protocol::TransportPose>,
 }
 
@@ -2779,7 +2779,7 @@ pub(crate) struct SpeedChangeMessage {
 }
 
 /// **The server granted or revoked a mover mode** on our own mover — root, water-walk, feather-fall
-/// or hover (the ack'd movement-mode family; decision 0866). Sibling of [`SpeedChangeMessage`] in
+/// or hover (the ack'd movement-mode family). Sibling of [`SpeedChangeMessage`] in
 /// every respect: written by [`apply_net_updates`] for our guid only, read by the player controller,
 /// which is the one place that owns both the mode state and the honest pose the ack must carry.
 ///
@@ -2796,7 +2796,7 @@ pub(crate) struct MoveModeMessage {
     pub(crate) apply: bool,
 }
 
-/// **The server aimed a knockback at our mover** (`SMSG_MOVE_KNOCK_BACK`, decision 1702). Written by
+/// **The server aimed a knockback at our mover** (`SMSG_MOVE_KNOCK_BACK`). Written by
 /// [`apply_net_updates`] for our own guid only, read by the player controller — the one place that
 /// owns both the mover the launch acts on and the honest post-launch pose the ack must carry.
 #[derive(Message, Clone, Copy)]
@@ -2815,7 +2815,7 @@ pub(crate) struct KnockBackMessage {
 pub(crate) struct WorldportMessage {
     pub(crate) map_id: u32,
     /// **Boat-local** when `transport_entry` is set (vmangos `SendNewWorld` sends the rider's
-    /// `GetTransportPos()` — decision 0455); world otherwise.
+    /// `GetTransportPos()`); world otherwise.
     pub(crate) position: [f32; 3],
     pub(crate) orientation: f32,
     pub(crate) needs_ack: bool,
@@ -2826,7 +2826,7 @@ pub(crate) struct WorldportMessage {
     pub(crate) transport_entry: Option<u32>,
 }
 
-/// The `SMSG_TRANSFER_PENDING` latch (decision 0455): a far teleport was announced; the value
+/// The `SMSG_TRANSFER_PENDING` latch: a far teleport was announced; the value
 /// tells the coming worldport whether we ride a transport through it (and which). Set by the
 /// apply layer's TransferPending arm, consumed by its worldport arm, cleared on abort and on
 /// disconnect.
@@ -2874,7 +2874,7 @@ pub(crate) enum EmoteKind {
     Anim(u32),
 }
 
-/// A creature flared at someone (`SMSG_AI_REACTION`, bridged from the Net drain; decision 0280):
+/// A creature flared at someone (`SMSG_AI_REACTION`, bridged from the Net drain):
 /// `hostile` = reaction 2 HOSTILE (sent on every creature melee-attack start) vs reaction 0, the
 /// stealth pre-aggro ALERT. Pure audio in the client (`0x6056e0` — no animation, nameplate, or
 /// UI); consumer: `sound::creature`.
@@ -2884,7 +2884,7 @@ pub(crate) struct AiReactionMessage {
     pub(crate) hostile: bool,
 }
 
-/// The pet spoke (`SMSG_PET_ACTION_SOUND`, bridged from the Net drain; decision 2039): `talk` is
+/// The pet spoke (`SMSG_PET_ACTION_SOUND`, bridged from the Net drain): `talk` is
 /// the wire's own selector (`PET_TALK_ORDER` / `PET_TALK_ATTACK`), not a `SoundEntries` id — the
 /// kit comes off the pet's own `CreatureSoundData` row. Pure audio in the client (`0x6040c0`
 /// resolves the guid and calls the bark dispatcher, nothing else); consumer: `sound::creature`.
@@ -2894,7 +2894,7 @@ pub(crate) struct PetTalkMessage {
     pub(crate) talk: u32,
 }
 
-/// A dismissed pet's parting sound (`SMSG_PET_DISMISS_SOUND`, decision 2039): a
+/// A dismissed pet's parting sound (`SMSG_PET_DISMISS_SOUND`): a
 /// `CreatureModelData` id and the point, already in Bevy space. **No entity** — the packet names
 /// no guid and the pet is gone by the time it arrives, which is the whole reason it carries a
 /// position at all. Consumer: `sound::creature`.
@@ -2908,7 +2908,7 @@ pub(crate) struct PetDismissSoundMessage {
 mod tests {
     use super::*;
 
-    /// The field-edge contract at the one write that emits it (decision 2297), through the same
+    /// The field-edge contract at the one write that emits it, through the same
     /// body the drain's merge calls: a first create seeds silently (the reference's create-time
     /// notify-suppress), a values delta reports each moved dword with its old value and the
     /// store's class, a value re-sent unchanged reports nothing, and an in-place re-create of a
@@ -3047,7 +3047,7 @@ mod tests {
     /// **The cascade's ORDER is the whole feature, and one rung of it is counter-intuitive.**
     /// `0x7c4c90` takes the walk arm at `0x7c4d11` *before* the run arm's backward min at
     /// `0x7c4d1d`, so a walking backpedal is walk speed — not run-back. Our remote extrapolator
-    /// tested the backpedal first and got 4.5 here for five hundred commits (decision 1752); this
+    /// tested the backpedal first and got 4.5 here for five hundred commits; this
     /// is the assertion that pins the fix, in the one place both callers now go through.
     #[test]
     fn the_walk_arm_outranks_the_backward_min() {
@@ -3141,7 +3141,7 @@ mod tests {
         );
     }
 
-    /// **The addon lane's four wire bytes** (decision 1235) — the client's own whitelist at
+    /// **The addon lane's four wire bytes** — the client's own whitelist at
     /// `0x49fa3f`-`0x49fa4e`, and the last link in the chain between an addon's Lua call and the
     /// bytes `benilla-protocol`'s `addon_message_bodies_golden` pins. Wrong here and the payload
     /// goes down a lane nobody listens on, which is silent at both ends.

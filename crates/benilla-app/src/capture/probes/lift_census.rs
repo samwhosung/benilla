@@ -6,7 +6,7 @@
 //!
 //! - the server never streamed it (**no entity** — nothing on the wire, our count is 0);
 //! - it streamed but never **armed** (`state=seed`/`bare`): a transport spawns
-//!   [`Visibility::Hidden`] and is unhidden by its first ticked pose (decision 0438), so an arm
+//!   [`Visibility::Hidden`] and is unhidden by its first ticked pose, so an arm
 //!   that never completes leaves a car that is present, solid, and permanently invisible —
 //!   B168's "an invisible wall in its place";
 //! - it armed and ticks, but the model never built (`meshes=0`) — an asset gap;

@@ -1,8 +1,8 @@
 //! **The targeting cursor** — the client's one "this cast is waiting for a click" machine, and the
-//! three seams that can end it: the **terrain** click (decision 0792, closing B132:
-//! "ground-targeted AOE all Invalid target"), the **bag / paper-doll** click (decision 0923:
+//! three seams that can end it: the **terrain** click (closing B132:
+//! "ground-targeted AOE all Invalid target"), the **bag / paper-doll** click (
 //! poisons, stones, oils, scopes, enchants; 0928: its lockbox word and the two confirm popups), and
-//! the **world GameObject** click (decision 0939: Opening / Pick Lock / Mining / Herb Gathering
+//! the **world GameObject** click (Opening / Pick Lock / Mining / Herb Gathering
 //! armed from the book or a bar, then clicked at a chest, door or node).
 //!
 //! The reference's targeting mode IS a nonzero flag_word (`IsTargeting 0x6e48a0`), and that word —
@@ -14,7 +14,7 @@
 //! it, each transcribing a piece of the reference (the two pickup seams from 0923's own read):
 //!
 //! - [`cursor`] — while targeting, the world classifier is pre-empted (the ref's dispatcher step 2
-//!   runs before any object resolve), and the verdict is **per-seam** (decision 0949): the pick
+//!   runs before any object resolve), and the verdict is **per-seam**: the pick
 //!   flags come from the word, so the word chooses the handler — terrain → `0x4820f0`'s
 //!   `CheckGroundPointInRange 0x6e6810`, a GameObject → `0x4828d0`'s `0x6e6460` (the word's
 //!   `& 0x4800`, the spell-vs-lock predicate `0x5f8260`, then the range test), and **no handler
@@ -28,7 +28,7 @@
 //!   (`0x4c7300` @ `4c76df`) each carry the same three-instruction rung — IsTargeting,
 //!   `TargetingWantsItem 0x6e6330`, then `0x495d60(itemGuid)` and return — and `0x495d60` is
 //!   [`item_bind_verdict`] plus the bind. Two of its four exits are the **confirm popups**
-//!   (`BIND_ENCHANT` / `REPLACE_ENCHANT`, decision 0928), which park the clicked guid
+//!   (`BIND_ENCHANT` / `REPLACE_ENCHANT`), which park the clicked guid
 //!   ([`EnchantConfirmItem`], the ref's `0xb4e3c0`) and return with the word still standing; their
 //!   Yes re-enters that same drain.
 //!
@@ -57,8 +57,8 @@
 //! ([`crate::target::click::select_on_click`]'s gate transcribes the unreachable select).
 //! Right-click cancels on the DOWN edge ([`cancel_targeting_on_right_press`]); movement never
 //! cancels (`0x515090`'s explicit IsTargeting-skip). The ground reticle draws in [`crate::target`]'s
-//! `reticle` module (decision 0797) off [`ground_cast_radius`] + the cursor's range verdict — for
-//! the **terrain seam alone**, through [`SpellTargeting::spell_for`] (decision 0943): it is a
+//! `reticle` module off [`ground_cast_radius`] + the cursor's range verdict — for
+//! the **terrain seam alone**, through [`SpellTargeting::spell_for`]: it is a
 //! per-seam surface, and reading the seam-agnostic [`SpellTargeting::spell`] there is what put a
 //! green AoE circle under every armed lockpick and enchant.
 
@@ -83,7 +83,7 @@ use benilla_world::interact::WorldRightPress;
 ///   (`PickupContainerItem 0x4f9b30` @ `4f9c5d`) and the **paper-doll** click's
 ///   (`0x4c7300` @ `4c76e8`) — the identical three-instruction rung in both.
 /// - `TargetingWantsGameObject 0x6e62d0` (`6e62d8: testb $0x48, %ch`, i.e. `word & 0x4800`) → the
-///   **world** click on a GameObject (decision 0939).
+///   **world** click on a GameObject.
 ///
 /// **This is a question asked of a word, not a partition of words.** `0x4010` and `0x4800` overlap
 /// on `TARGET_FLAG_LOCKED`, so every lock spell answers *yes* to both the item and the GameObject
@@ -135,7 +135,7 @@ struct Targeting {
     /// What the click will commit. The ref keeps the whole pending-cast block across the cursor —
     /// the cast **item's** guid at `0xceac48` included — so `0x6e54f0`'s discriminator still picks
     /// `CMSG_USE_ITEM` when the click lands: a thrown grenade for the terrain seam (decision
-    /// 0914), a poison bottle for the item seam (0923), a key for the GameObject seam (0939).
+    /// 0914), a poison bottle for the item seam, a key for the GameObject seam.
     commit: super::cast_send::CastCommit,
     /// The standing flag_word `0xcecac0` itself — not a verdict about it. Every seam asks it its
     /// own question; more than one can answer yes.
@@ -168,7 +168,7 @@ impl SpellTargeting {
     /// [`Self::pending_for`]; `spell()` is `GetTargetingSpellId 0x6e48e0` and answers for the word
     /// as a whole (the bar's checked state, the re-press toggle, the
     /// `CURRENT_SPELL_CAST_CHANGED` edge). Reading `spell()` where a seam was meant is what put an
-    /// AoE reticle under a lockpick (decision 0943).
+    /// AoE reticle under a lockpick.
     pub(crate) fn spell_for(&self, wants: TargetingWants) -> Option<u32> {
         self.0
             .as_ref()
@@ -197,7 +197,7 @@ impl SpellTargeting {
     /// terrain click binds this point to. Bit 5 (SOURCE) is tested **before** bit 6 (DEST) and
     /// the arms are exclusive (`0x6e60f0` commits only once the word is 0 — a word
     /// carrying both takes two clicks and sends on the second; no 5875 spell carries both, so
-    /// only the precedence is transcribed here, not the two-click walk). Decision 2218.
+    /// only the precedence is transcribed here, not the two-click walk).
     fn location_bind(&self, point: [f32; 3]) -> Option<super::cast_send::TargetedBind> {
         let word = self.0.as_ref()?.word;
         if word & 0x0020 != 0 {
@@ -227,7 +227,7 @@ impl SpellTargeting {
 /// press over a UI frame never reaches the WorldFrame — [`WorldRightPress`]'s world gate
 /// transcribes the certain half of the one open question (whether a UI-frame right-click also
 /// cancels is unsettled). The `0x51`-effect placement-rotate skip (`[0xceca90]`) is
-/// unmodelled along with the flag itself (named residual, 0792).
+/// unmodelled along with the flag itself (named residual).
 pub(crate) fn cancel_targeting_on_right_press(
     mut presses: MessageReader<WorldRightPress>,
     payload_held: Res<crate::ui_script::CursorPayloadHeld>,
@@ -252,7 +252,7 @@ pub(crate) fn cancel_targeting_on_right_press(
 /// bag / doll pickup reroute reads the item half (`TargetingWantsItem`'s mirror), and the word's
 /// **edges** fire `CURRENT_SPELL_CAST_CHANGED`.
 ///
-/// That last one is the confirm popups' whole teardown (decision 0928): `UIParent.lua` hides both
+/// That last one is the confirm popups' whole teardown: `UIParent.lua` hides both
 /// on it, and without it a popup outlives the cast it is asking about — its Yes would then bind a
 /// *stale* item guid into whatever cast armed next. The reference fires the event from exactly
 /// these edges: `CURRENT_SPELL_CAST_CHANGED` (261) has ONE emitter binary-wide, the two-line
@@ -304,7 +304,7 @@ pub(crate) fn drain_stop_targeting(
 mod tests {
     use super::*;
 
-    /// A seam only answers a word its own mask test accepts (decisions 0923 / 0939). Without this,
+    /// A seam only answers a word its own mask test accepts. Without this,
     /// a terrain click while a poison is armed would ship a DEST block for an item spell.
     #[test]
     fn each_click_seam_only_sees_a_word_it_can_bind() {
@@ -345,7 +345,7 @@ mod tests {
         assert!(!t.active());
     }
 
-    /// **The overlap is the point** (decision 0939). A lock spell's word — `LOCKED`, plus arm 23's
+    /// **The overlap is the point**. A lock spell's word — `LOCKED`, plus arm 23's
     /// `GAMEOBJECT` overlay — is in `TargetingWantsItem`'s `0x4010` *and* in
     /// `TargetingWantsGameObject`'s `0x4800`, so one armed cursor genuinely answers two seams and
     /// whichever click lands first is the one that binds. An enum of halves could not say this, and

@@ -1,7 +1,7 @@
 //! **Every packet's handler sees what the packets before it did** — the property 2306 measured
 //! across the migration's seam (a run boundary was a command flush mid-frame) and the one the
 //! whole dispatch rests on now that every packet is its own handler with its commands applied
-//! before the next (decision 2327). The first test drives the real drain on the built client
+//! before the next. The first test drives the real drain on the built client
 //! over one frame two ways and compares; the rest are 1478's speed-staging laws, which used to
 //! be unit tests over a staging map and are now the same laws over consecutive packets.
 

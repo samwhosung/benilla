@@ -1,5 +1,5 @@
 //! The CoreAudio half of [`super`] — the thinnest correct layer between the mixer and the
-//! device (decision 1857).
+//! device.
 //!
 //! What lives here and nowhere else: finding the default output device and reading what it
 //! runs at; opening a HAL output unit pinned to that device with our stream format and our

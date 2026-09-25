@@ -90,7 +90,7 @@
 //!
 //! `WOW_GM=off` is not optional here: GM mode re-templates the body's faction to 35, and a
 //! battleground is the one place where every reaction, every objective and the server's own team
-//! assignment reads off it (0649, 0679).
+//! assignment reads off it.
 //!
 //! Non-combat — the probe never attacks and never stands anywhere contested; with one player in
 //! the instance there is nobody to fight. Pair with the checkout's probe identity (`.probe-identity`, or WOW_USER/WOW_PASS/WOW_CHAR — the `probe` skill).
@@ -591,7 +591,7 @@ fn bg_probe(
             // 1.8 yd, sent `CMSG_GAMEOBJ_USE`, and reported `ws2339=1` with no banner aura and no
             // `CHAT_MSG_BG_SYSTEM_ALLIANCE` — indistinguishable, from the probe's own lines, from a
             // client that cannot pick up flags. `probe_shield` drops GM mode when `WOW_GM=off` is
-            // set (0679), so this WAITS for the flag to clear rather than refusing outright: the
+            // set, so this WAITS for the flag to clear rather than refusing outright: the
             // shield arms and drops GM a few hundred ms into the world, after this arm first runs.
             if store.0.player_flags() & PLAYER_FLAGS_GM != 0 {
                 let since = *probe.waiting_since.get_or_insert(now);
@@ -934,7 +934,7 @@ fn bg_probe(
 
             if samples >= census_samples() {
                 // **The graveyard leg.** `.die` is the one thing that clears the probe's god
-                // shield by design (0677), so a probe CAN die on purpose; a battleground death is
+                // shield by design, so a probe CAN die on purpose; a battleground death is
                 // also the only place the area-spirit-healer arc (2291) is reachable at all, and
                 // a mechanism that has never been watched fire is not a mechanism anyone should
                 // claim. Non-combat: nothing kills us, we ask to be dead.
@@ -1265,7 +1265,7 @@ fn census(
                 if let Some(e) = benilla_protocol::guid::entry(guid.0) {
                     // The NAME, not just the entry: "179918" is a number to look up in a database
                     // and `Doodad_PortcullisActive01` is the battleground's gate. The cache is the
-                    // ask-once `GAMEOBJECT_QUERY` store (0239) the client already fills for every
+                    // ask-once `GAMEOBJECT_QUERY` store the client already fills for every
                     // GO that streams in, so this costs nothing and answers for free.
                     go_entries.push((e, go_templates.get(guid.0).map(|t| t.name.clone())));
                 }

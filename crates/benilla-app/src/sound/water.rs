@@ -38,11 +38,11 @@ const SPLASH_KIT: u32 = 1096;
 const SPLASH_DEPTH_FRAC: f32 = 0.4;
 
 /// What [`water_splashes`] reads per unit: identity, pose and its own collision height. Whose
-/// liquid may answer for it (decision 0696) is the world's own bookkeeping now — the unit is named
+/// liquid may answer for it is the world's own bookkeeping now — the unit is named
 /// by entity and `WorldPoint` looks its room up.
 type SplashQuery = (Entity, &'static Transform, Option<&'static CollisionHeight>);
 
-/// Only units whose depth can have changed since last frame (decision 1436): depth is a pure
+/// Only units whose depth can have changed since last frame: depth is a pure
 /// function of pose + collision height (the room claim follows the pose, liquid surfaces are
 /// static), so an unmoved unit cannot cross the line — and the per-unit `water_surface_at`
 /// lookup for EVERY unit priced 0.19 ms/f parked in the 1435 band map. A unit's first frame is
@@ -66,7 +66,7 @@ fn water_splashes(
     let listener = listener.pos;
     for (entity, transform, collision) in &units {
         let wow = bevy_to_wow(transform.translation);
-        // The unit's own collision height (0645). `None` only on a unit's very first frame, before
+        // The unit's own collision height. `None` only on a unit's very first frame, before
         // the stamp runs — the ctor default covers it, as it does in the reference.
         let h = collision.copied().unwrap_or_default().0;
         // Every unit carries a room claim since 0696 — before that the query passed "no claim",
@@ -80,7 +80,7 @@ fn water_splashes(
         // UNIT: the play is source-tagged and a crossing while the unit's previous splash still
         // sounds is dropped — a spam-jump's up-then-down double crossing fires once, like the
         // ref (director-reported, 2026-07-18: "entry and immediate exit" doubled vs the ref's
-        // one; decision 0518). INTERIM reading: the client routes the splash through the unit's own sound
+        // one). INTERIM reading: the client routes the splash through the unit's own sound
         // emitter (`[CGUnit+0xb18]`, the module's standing unpinned selector) — a busy emitter
         // as the natural suppressor is our model of it; slow wade-in/wade-out (both splash,
         // director-verified 2026-07-03) is preserved, the first splash long finished.

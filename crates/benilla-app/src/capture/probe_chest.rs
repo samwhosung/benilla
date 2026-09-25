@@ -21,7 +21,7 @@
 //! 3. **AFTER** — `CloseLoot()` through the live VM: back to `0`.
 //!
 //! Nothing here re-decides what packet a chest takes. The probe resolves the object through
-//! [`crate::target::click::resolve_go_action`] — the same lock chain the mouse runs (0239/0752) —
+//! [`crate::target::click::resolve_go_action`] — the same lock chain the mouse runs —
 //! and sends whichever arm it names, so a chest whose `Lock.dbc` row changes shape still gets the
 //! packet the real click would send. (Every world chest carries a lock: `Lock.dbc` 43 is one
 //! `LockType 13 "Open Kneeling"` slot, 57 is `5 "Open"` + `6 "Treasure (DND)"`, all `Skill 0`, so
@@ -286,7 +286,7 @@ fn chest_probe(
                 probe.phase = Phase::Done;
                 return;
             };
-            // The click's own route (0239/0752): ask the shared lock chain what the right-click
+            // The click's own route: ask the shared lock chain what the right-click
             // would send, then send exactly that.
             let go = objects
                 .iter()

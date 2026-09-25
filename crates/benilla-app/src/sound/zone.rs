@@ -16,7 +16,7 @@
 //! `DAT_00836400 = -1` at `0x45ffdb`), so the session's FIRST track is immediate too. `0x4601f0`'s
 //! `== 0 → now + 6000 ms` branch is reachable only from the natural-end reap `0x4600b6` and only
 //! ever *replaces* the −1, so it cannot fire on an entry — the 6 s wait benilla used to serve there
-//! was that branch misapplied (decision 1553). The incoming track starts at **full** volume,
+//! was that branch misapplied. The incoming track starts at **full** volume,
 //! **no fade-in** — faithful (`0x460240` → `0x7a5dc0`; neither fade-in primitive, `0x7a57b0` or
 //! `0x7a5730`, is ever called on a music slot, and the director confirmed by ear there is none).
 //! The reference's *perceived* slightly-soft onset is the delegated audio engine priming the
@@ -73,7 +73,7 @@ use super::{AudioListener, SoundConfig, SoundOutput};
 pub(crate) struct AreaSounds(pub(crate) AreaSoundCatalog);
 
 /// The race → exploration-jingle catalog (`ChrRaces.dbc` column 3) — the discovery sound
-/// `net::apply`'s `SMSG_EXPLORATION_EXPERIENCE` arm plays (decision 0829). Absent when the
+/// `net::apply`'s `SMSG_EXPLORATION_EXPERIENCE` arm plays. Absent when the
 /// client data didn't load.
 #[derive(Resource)]
 pub(crate) struct ExplorationSounds(pub(crate) benilla_formats::ExplorationSoundCatalog);
@@ -180,7 +180,7 @@ pub(super) struct ZoneAudio {
     zone_music: u32,
     /// The playing music stream (a zone track, an intro, or a server-pushed event track).
     music: Option<StreamingSoundHandle<kira::sound::FromFileError>>,
-    /// Starvation watch over the music slot (decision 1109) — a streamed track whose decode
+    /// Starvation watch over the music slot — a streamed track whose decode
     /// thread is outrun zero-fills the mix, which no other meter sees.
     music_watch: mixer::StreamWatch,
     /// The SoundEntries kit on the music slot (0 = never started one) — the "what is playing" a
@@ -200,7 +200,7 @@ pub(super) struct ZoneAudio {
     /// puts `loop_region` past EOF and the stream dies mid-file), so the loop is a restart at the
     /// natural end — the same shape [`super::glue`] gives the theme.
     lua_music_path: Option<String>,
-    /// Starvation watch over that slot (decision 1109), like the zone track's — it is a streamed
+    /// Starvation watch over that slot, like the zone track's — it is a streamed
     /// track of exactly the same class, and an addon's music is the one nothing else reports on.
     lua_music_watch: mixer::StreamWatch,
     /// When the next zone track starts (Time::elapsed_secs_f64; None = a track is playing or
@@ -219,7 +219,7 @@ pub(super) struct ZoneAudio {
     intro_last: std::collections::HashMap<u32, f64>,
     /// The last area id acted on (change detection).
     area: Option<u32>,
-    /// The last WMO interior acted on (change detection — the override layer, decision 0076).
+    /// The last WMO interior acted on (change detection — the override layer).
     interior: Option<super::interior::InteriorAudio>,
     /// Last submersion state — a flip makes the ambience swap INSTANT (the underwater no-fade
     /// branch, `0x458650` → `0x460af0`), vs the 5.0 s crossfade every other swap gets.
@@ -371,7 +371,7 @@ fn zone_audio(
     }
 
     // ---- react to an area or interior change (the WMO row overrides the terrain chain where
-    // its FKs are nonzero — sound::interior, decision 0076) ----
+    // its FKs are nonzero — sound::interior) ----
     let inside = interior.0;
     let area = world.area();
     if area != zone.area || inside != zone.interior {
@@ -521,7 +521,7 @@ fn zone_audio(
     }
 
     // ---- per-frame volumes (sliders are live) ----
-    // Both feeds `glide` rather than snap (decision 1026): these are the two loudest, longest-lived
+    // Both feeds `glide` rather than snap: these are the two loudest, longest-lived
     // channels in the mix, so a stepped gain on either is the most audible click there is.
     // Music holds full kit × category volume every frame — its only transition fade is the
     // outgoing 4.0 s fade-stop (on the backend), and the incoming starts at full (faithful).
@@ -727,7 +727,7 @@ fn start_music_stream(
 ///
 /// `StopMusic 0x458770` is four instructions, three of which are `0x460450(NULL)` — the very
 /// function `PlayMusic 0x458720` calls. So *stopping is playing a NULL name*, and this is that
-/// function (B391; `0x460450` has two callers image-wide and no address-takes, so nothing else
+/// function (`0x460450` has two callers image-wide and no address-takes, so nothing else
 /// in the client can start or stop this slot). The order below is its order:
 ///
 /// 1. **[`take_lua_music_slot`]** — the shared head, which is also the whole of the NULL arm.
@@ -998,7 +998,7 @@ fn lua_music(
 
     // The Music slider is live on this stream, as it is on every other music stream in the client
     // (`0x7a6660(ecx=2)`, the MusicVolume re-apply walker) — and `glide`, not a snap, for the same
-    // reason the zone track's feed glides (decision 1026).
+    // reason the zone track's feed glides.
     if let Some(h) = zone.lua_music.as_mut() {
         h.set_volume(
             mixer::amp_to_db(config.category_amp(SoundCategory::Music) * LUA_MUSIC_VOLUME),
@@ -1150,7 +1150,7 @@ fn stop_world_soundscape(zone: &mut ZoneAudio, reason: &str) {
 }
 
 /// Registration hook for [`super::SoundPlugin`].
-/// Report this module's live stream voices into the global budget (decision 1557).
+/// Report this module's live stream voices into the global budget.
 ///
 /// Rewritten from the live handles every frame rather than incremented and decremented, so a
 /// fade that gets interrupted — or a slot replaced mid-crossfade — cannot leave the budget
@@ -1289,7 +1289,7 @@ mod tests {
         assert!((CINEMATIC_MUSIC_RESUME_SECS - 3.0).abs() < f64::EPSILON);
     }
 
-    /// **`StopMusic()` is `PlayMusic(NULL)`, and this is the whole of it** (B391). `0x458770` is
+    /// **`StopMusic()` is `PlayMusic(NULL)`, and this is the whole of it**. `0x458770` is
     /// four instructions, three of which are `0x460450(NULL)`, and that shared head does exactly
     /// three things before the branch: fade this slot over 4.0 s (`0x460480`), clear it
     /// (`0x460485`), and write the zone pump's next start (`0x46049b`).

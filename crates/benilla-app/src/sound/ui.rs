@@ -1,6 +1,6 @@
-//! UI sounds — the app side of the Lua `PlaySound` seam (decision 0070 §4, the one deliberate
-//! UI-crate overlap cut when the sound crate was split), plus the **per-item item-gesture sounds**
-//! (decision 0091): the bag-drag pickup/put-down, and the loot-window pickup.
+//! UI sounds — the app side of the Lua `PlaySound` seam (the one deliberate
+//! UI-crate overlap cut when the sound crate was split), plus the **per-item item-gesture sounds**:
+//! the bag-drag pickup/put-down, and the loot-window pickup.
 //!
 //! Three triggers, all 2D SFX plays, all after the UI input pass so a click's sound plays the
 //! same frame its handler acted:
@@ -17,7 +17,7 @@
 //!   generic `INTERFACESOUND_CURSORGRABOBJECT`/`DROPOBJECT` pair (kits 902/903) instead — 0091's
 //!   crux: the two are mutually exclusive per transition, never both. A bag swap plays ONE sound
 //!   (the held item's put-down): the place branch never calls `SetCursorItem` — the Item→Item hop
-//!   0216 §2 shipped is byte-refuted (decision 0218; `0x5e0c40`), so that
+//!   0216 §2 shipped is byte-refuted (`0x5e0c40`), so that
 //!   transition no longer occurs. The Some→Some loss-then-gain pair below stays live for the
 //!   ACTION hop (the bar is client-authoritative and its displaced action DOES land on the
 //!   cursor, verified at `PlaceAction 0x4e62e0`) when the action-bar slice arrives.
@@ -124,7 +124,7 @@ fn load_item_sounds(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
 
 /// `INTERFACESOUND_CURSORGRABOBJECT`/`DROPOBJECT` — the generic non-item cursor-payload gesture
 /// pair (sound-kit ids, not `SOUNDKIT.xml` names; `0x495190`, 0091's crux). Plays for a
-/// Spell/Action payload transition (decision 0216) — an Item transition always plays its own
+/// Spell/Action payload transition — an Item transition always plays its own
 /// per-item kit instead, never this pair.
 const INTERFACESOUND_CURSORGRABOBJECT: u32 = 902;
 /// `LOOTWINDOWCOINSOUND` — SoundEntries kit 895, the coin clink the money pickup names (1962).
@@ -139,7 +139,7 @@ enum CursorGesture {
     Loss,
 }
 
-/// Play the cursor-payload gesture sound on every transition (decision 0216): an Item arm plays
+/// Play the cursor-payload gesture sound on every transition: an Item arm plays
 /// its per-item pickup/put-down kit (exactly the real client's call sites — an item landing on
 /// the cursor is `SetCursorItem` → `SndInterfacePlayItemSound(ecx=0)`, clearing (placed, swapped,
 /// cancelled onto its own slot, or ESC's `ClearCursor`) is `ClearCursor` → `(ecx=1)`); a Spell/
@@ -147,7 +147,7 @@ enum CursorGesture {
 /// pair instead. A same-`item_id` Item→Item transition (not currently producible) is a
 /// bookkeeping-only change and plays nothing; any other Some→Some transition plays the outgoing
 /// payload's loss sound THEN the incoming payload's gain sound — the `ClearCursor`+`SetCursorItem`
-/// pair. Item→Item never occurs anymore (the swap clears — 0218); the pair path stays for the
+/// pair. Item→Item never occurs anymore (the swap clears); the pair path stays for the
 /// byte-verified ACTION hop when the action-bar slice lands (module doc above). Every
 /// missing link (template in flight, unknown display, group 0, kit 0, absent catalog) is the
 /// client's own silent return, never an error. The previous payload is tracked here (a `Local`),
@@ -223,7 +223,7 @@ fn play_item_gesture_sounds(
         | CursorPayload::Macro(_)
         | CursorPayload::PetAction(_)
         // Mode 10 joins them: the stabled-pet grab `0x495010` calls the same generic path and
-        // names no per-item kit (decision 1677).
+        // names no per-item kit.
         | CursorPayload::StablePet(_)
         // Mode 2 (1962, 1965): the money pickup AND drop both play `LOOTWINDOWCOINSOUND` — the
         // same kit 895 the purse plays on a change (`sound/money.rs`) — and never the generic drop

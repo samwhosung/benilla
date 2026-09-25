@@ -26,7 +26,7 @@ use super::{AudioListener, SoundConfig, SoundOutput};
 const DISMOUNT_KIT: &str = "SpiritWolf (DONOTRENAME)";
 
 /// Play the fixed dismount kit on a live mounted→unmounted transition of any streamed unit —
-/// the `UNIT_FIELD_MOUNTDISPLAYID` edge with a zero NEW value (decision 2297: the field-edge
+/// the `UNIT_FIELD_MOUNTDISPLAYID` edge with a zero NEW value (the field-edge
 /// stream is create-suppressed, so streaming in unmounted is not a dismount by construction).
 fn dismount_sounds(
     mut edges: MessageReader<FieldChanged>,

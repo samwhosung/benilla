@@ -7,7 +7,7 @@
 //!   fallback for a camera-less model is a heuristic head closeup, anchored by the bind-pose bone
 //!   walk [`head_anchor`] (which the posed booth also uses to seat riders on real joints).
 //! - [`body_frame`] — a `<PlayerModel>` body PANE: raw `cameras[1]`, verbatim, else the client's own
-//!   synthesized *fixed* rig (`0x505890`, decision 1089). No fit, no
+//!   synthesized *fixed* rig (`0x505890`). No fit, no
 //!   normalization, no bone anchor anywhere on this path.
 
 use bevy::camera::{CameraProjection, PerspectiveProjection, Projection, SubCameraView};
@@ -19,8 +19,7 @@ use bevy::prelude::*;
 /// camera brings its own FOV (see [`frame`]).
 pub(super) const PORTRAIT_FOV: f32 = 0.5;
 
-/// The aspect the client's portrait bake feeds `0x5c3cc0` — **exactly `1.0`, on every screen**
-/// (decision 1543).
+/// The aspect the client's portrait bake feeds `0x5c3cc0` — **exactly `1.0`, on every screen**.
 ///
 /// `0x524f60` builds it as `(G44·64/W)/(G48·64/H)` = `(G44/G48)·(H/W)`, and `G44`/`G48`
 /// (`[0x832a44]`/`[0x832a48]`) are the *live* normalized screen-aspect direction cosines
@@ -64,7 +63,7 @@ pub(super) use benilla_formats::{ArtExtent, GLUE_AUTHORED_ASPECT};
 /// live mode). Feeding that straight into [`diag_to_vert`] makes the *diagonal* angle the invariant,
 /// so every pixel of extra width is paid for out of height: `0.600·fov` at 4:3, `0.492·fov` at 16:9,
 /// `0.386·fov` at 21:9. On a 3440×1440 panel that is a **1.55× zoom** over the authored framing, and
-/// the character's head and feet leave the frame (B242, decision 1587). The reference does the same
+/// the character's head and feet leave the frame. The reference does the same
 /// thing on the same monitor — it is a convention from before 21:9 panels existed, not a mechanism
 /// worth reproducing.
 ///
@@ -78,7 +77,7 @@ pub(super) use benilla_formats::{ArtExtent, GLUE_AUTHORED_ASPECT};
 /// narrow window opens upward rather than cropping the diorama's sides. Continuous at `4/3`, where
 /// both legs give `0.6·fov`.
 ///
-/// **…as far as the art goes** (decision 1619, B330). Every diorama is finite — a sky card of some
+/// **…as far as the art goes**. Every diorama is finite — a sky card of some
 /// authored width, a ground that stops — and 1587's hor+ had no ceiling: `UI_MainMenu` runs out
 /// of backdrop before 16:9 and the frame past its slanted edges was the clear colour. **Not one of
 /// the seven scenes is drawn wider than about 3:2** ([`benilla_formats::SHIPPED_GLUE_SCENES`],
@@ -90,7 +89,7 @@ pub(super) use benilla_formats::{ArtExtent, GLUE_AUTHORED_ASPECT};
 /// not a reason to zoom past the composition.
 ///
 /// **…and never tighter than the reference at 16:9.** Holding the width zooms faster than the
-/// reference's diagonal law, so left alone it re-crops the character at 21:9 (B242, the report
+/// reference's diagonal law, so left alone it re-crops the character at 21:9 (the report
 /// 1587 closed). The zoom has a floor ([`glue_zoom_floor`]): the reference's own 16:9 opening —
 /// the tightest framing every race has been played at, on the most common panel, for fifteen
 /// years, an empirical bound on "the character still fits", not a mechanism. (A floor of "what
@@ -98,10 +97,10 @@ pub(super) use benilla_formats::{ArtExtent, GLUE_AUTHORED_ASPECT};
 /// boots at 16:9 — 8% past the reference is past what fits.) Past the aspect where the floor's
 /// opening cannot fill the ceiling's width, the scene is **pillarboxed** — rendered at that
 /// aspect, centred, black either side — which is what the modern client does past 16:9 and the
-/// only honest answer once the art is narrower than the window: not void (B330), not a crop
-/// (B242), a frame.
+/// only honest answer once the art is narrower than the window: not void, not a crop,
+/// a frame.
 ///
-/// **The ceiling is [`GLUE_BOX_ASPECT`]'s, not the scene's own** (decision 2187). 1619 read the
+/// **The ceiling is [`GLUE_BOX_ASPECT`]'s, not the scene's own**. 1619 read the
 /// ceiling off each scene's measured art, so each of the seven boxed at its *own* aspect — 1.65:1
 /// in the night elf grove, 1.93:1 at the gate — and the box is what the chrome's canvas insets by
 /// (2091). Clicking a night elf on the character screen therefore moved the whole screen: at 16:9
@@ -150,7 +149,7 @@ pub(super) fn glue_scene_framing(fov: f32, window_aspect: f32, art: Option<ArtEx
 /// the window is wider than [`GLUE_BOX_ASPECT`] (pillarbox — render into a centred box of that
 /// aspect, black either side), `None` when the scene fills the window.
 ///
-/// A property of the **window alone** — no scene, no fov, no art (decision 2187). That is the whole
+/// A property of the **window alone** — no scene, no fov, no art. That is the whole
 /// point: the booth camera's viewport and the chrome's canvas ([`crate::glue::GlueCanvas`]) both
 /// come from here, so neither moves when the selected character's race changes the stage behind
 /// them, and neither flickers in the frames a stage swap is in flight.
@@ -159,7 +158,7 @@ pub(crate) fn glue_box_aspect(window_aspect: f32) -> Option<f32> {
 }
 
 /// **The glue frame: `1.672:1`** — the aspect every glue scene is pillarboxed to once the window
-/// is wider than it (decision 2187).
+/// is wider than it.
 ///
 /// Derived, not chosen: it is `max` over the seven shipped scenes of `h0/floor` — each scene's
 /// authored 4:3 **width** (`h0`) divided by the vertical half-extent the [`glue_zoom_floor`] holds
@@ -205,7 +204,7 @@ pub(crate) fn glue_box_physical(
 }
 
 /// The pillarbox's two **bars** in *logical* px — how far the glue chrome's canvas is inset from
-/// the left and right of the window (decision 2091). `(0.0, 0.0)` when the scene fills the window,
+/// the left and right of the window. `(0.0, 0.0)` when the scene fills the window,
 /// which is every window at or below the aspect its scene's art can fill.
 ///
 /// **Two numbers, not one halved.** A box whose leftover width is odd is one pixel off centre —
@@ -249,7 +248,7 @@ pub(crate) fn glue_canvas_bars(
 ///   nothing to cancel.
 /// - **Model pane:** the pane's own width÷height — the client renders straight into the pane rect
 ///   (`318×224 → 0.576·fov`), and our booth's square target is stretched onto that rect by the UI,
-///   so the one number does both jobs there too (decision 1069).
+///   so the one number does both jobs there too.
 ///
 /// Carried as a custom [`CameraProjection`] rather than a `PerspectiveProjection` because the
 /// camera system re-derives `aspect_ratio` from the (square) render target on every projection
@@ -269,7 +268,7 @@ pub(crate) struct WowPortraitProjection {
     /// *square* target that the UI stretches to fill whatever rect the sampling region resolves to
     /// (`extract`'s `UvRect::FULL`), so on-screen proportions are only true when the projection
     /// runs at the destination's aspect. Rendering at 1.0 into a 316×351 pane is what made every
-    /// dressing-room character 11% too tall (director report, 2026-08-06 — decision 1069). That the
+    /// dressing-room character 11% too tall (director report, 2026-08-06). That the
     /// client's own aspect and our destination's agree on both paths is not luck: the round
     /// portrait's region is square *because* the client baked it square.
     pub(super) aspect: f32,
@@ -333,7 +332,7 @@ pub(crate) struct PortraitAnchors {
     /// fields below take over.
     pub(crate) camera: Option<benilla_assets::PortraitCamera>,
     /// The model's **authored pane camera** — raw camera-table index 1, the rig a `<PlayerModel>`
-    /// body pane renders through ([`benilla_assets::M2Model::pane_camera`], decision 1089). `None`
+    /// body pane renders through ([`benilla_assets::M2Model::pane_camera`]). `None`
     /// for a model with fewer than two cameras → [`body_frame`]'s fixed fallback.
     pub(crate) pane_camera: Option<benilla_assets::PortraitCamera>,
     /// The MD20 header bbox **centre** (Bevy model-local) — the look-at target of the client's fixed
@@ -499,7 +498,7 @@ const PANE_FIXED_NEAR: f32 = 1.0 / 36.0;
 const PANE_FIXED_FAR: f32 = 5000.0;
 
 /// The **body pane** booth camera rig — a 1.12 `<PlayerModel>` widget's own camera, verbatim
-/// (decision 1089; `0x505890`).
+/// (`0x505890`).
 ///
 /// **There is no fit.** The widget renders through a frozen snapshot of the model's *authored*
 /// camera at **raw table index 1** — the `type == 1` "characterinfo" camera — and when the model has
@@ -643,7 +642,7 @@ mod tests {
         }
     }
 
-    /// **The authored pane camera is taken verbatim** (decision 1089): eye, look-at and all three
+    /// **The authored pane camera is taken verbatim**: eye, look-at and all three
     /// projection scalars are the record's, at every pane aspect. Nothing is fitted, nothing is
     /// derived from the model's size.
     #[test]
@@ -958,7 +957,7 @@ mod tests {
         }
     }
 
-    /// **[`GLUE_BOX_ASPECT`] is derived, and the two facts it rests on hold** (decision 2187):
+    /// **[`GLUE_BOX_ASPECT`] is derived, and the two facts it rests on hold**:
     /// it is the narrowest box that costs no shipped scene its authored 4:3 composition, and at
     /// that width no scene's art runs out inside the frame — except the night elves', whose sky
     /// card ends a hair inside their own authored box and always did (1619's table doc).
@@ -1141,8 +1140,8 @@ mod tests {
         );
     }
 
-    /// **The portrait bake's projection, pinned against the real client's own GL stream**
-    /// (decision 1543). Two apitrace captures of 1.12.1 — `WoW-wade-northshire-20260708.trace` at
+    /// **The portrait bake's projection, pinned against the real client's own GL stream**.
+    /// Two apitrace captures of 1.12.1 — `WoW-wade-northshire-20260708.trace` at
     /// 1152×648 (calls 1073945–1075996) and `WoW.trace` at 1280×800 (calls 5592698–5594820) — both
     /// upload the SAME bake matrix for HumanMale's `cameraLookup[0]` (`fov = π/4`, `far = 27.78`):
     ///

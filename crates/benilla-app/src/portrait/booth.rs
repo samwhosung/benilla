@@ -6,7 +6,7 @@
 //! Since decision 1443 the bake rides the **collapsed rig lane** (0724/1365): the skeleton is a
 //! [`RigPose`](benilla_world::rig_anim::RigPose) buffer on the booth root — no joint entities,
 //! no per-bone `AnimatedBy` seats in bevy's `animate_targets` sweep (the booth doll was the last
-//! consumer of that lane; ~0.35 ms/frame of the open char window, decision 1441). Consumers
+//! consumer of that lane; ~0.35 ms/frame of the open char window). Consumers
 //! (riders, cards, effect hosts) seat on demand-spawned anchors ([`BoothRig::anchor`]), and the
 //! park is one [`AnimParked`](benilla_world::rig_anim::AnimParked) marker on the root.
 
@@ -54,7 +54,7 @@ pub(super) struct BoothPart {
 
 /// Put the draw gate's marker on a booth child when — and only when — its material went onto the
 /// UV / tint lane ([`BoothPart::mat_anim`]). `tick_anim_materials` writes a registered row only for
-/// a material some marked, visible part draws (decision 1375), so a registered booth batch that
+/// a material some marked, visible part draws, so a registered booth batch that
 /// nobody marks stays frozen at its seed with a live table row behind it.
 fn mark_mat_anim(child: &mut bevy::ecs::system::EntityCommands<'_>, p: &BoothPart) {
     if p.mat_anim {
@@ -78,7 +78,7 @@ pub(crate) struct BoothTwins {
 /// and it is why a booth's riders and cards take it as surely as its body batches do — an item on a
 /// ghost is as translucent and as blue as the arm holding it.
 ///
-/// A booth composes at **bake time**, so this is where benilla's one-alpha law (decision 1164 — the
+/// A booth composes at **bake time**, so this is where benilla's one-alpha law (the
 /// game declares the translucency, the engine owns the write, the composition and the material
 /// swap) is discharged for a booth: the three things the engine owes a translucent instance (the
 /// tag's alpha field, the blend-twin swap, and the [`FadeMaterials`] record the depth prime arms
@@ -106,7 +106,7 @@ impl BoothInstance {
     /// The material this instance draws `steady` with, given the batch's twins — the blend twin
     /// while feathering, the steady material otherwise (and the steady one anyway for a batch that
     /// has no twin: a Mod/Mod2x batch reads no alpha, so no swap can feather it — it rides the
-    /// shader's identity lerp on the tag alpha instead, decision 0865/1489).
+    /// shader's identity lerp on the tag alpha instead).
     fn material(
         self,
         steady: &Handle<WowModelMaterial>,
@@ -201,7 +201,7 @@ impl BoothBillboard {
     /// the other consumers of that matrix to ride. It draws nothing; only its transform matters.
     ///
     /// The booth twin of [`benilla_world::billboard::BillboardCard::frame_following`], and the same
-    /// reasoning (decision 0813 §3, itself 0153's rule): same basis function, same law, one system
+    /// reasoning (itself 0153's rule): same basis function, same law, one system
     /// — not a second mechanism. Today's caller is the glue booth's equipment riders
     /// ([`super::glue_booth`]): an item model spawns no rig, so nothing else would apply the
     /// replacement to a particle emitter hanging under its billboard bone, and the reference folds
@@ -217,13 +217,13 @@ impl BoothBillboard {
 
 /// One **effect-bearing model** headed into a booth bake, as its particle emitters plus the composed
 /// seat: the body bone it rides and its offset in that bone's frame. The booth spawns one host there
-/// and owns the emitters off it (the scene-brazier recipe, decision 0539 §5); any geometry the same
+/// and owns the emitters off it (the scene-brazier recipe); any geometry the same
 /// model carries rides the ordinary [`BoothRider`] / [`BoothBillboardSpec`] lists at the same seat.
 ///
 /// The two lanes that feed it are the two lanes that mirror a dressed look — a live unit's
 /// [`crate::portrait::PortraitEffects`] markers, and the glue bake's [`super::PreviewEffects`] —
-/// and both mean the same two things: an equipped item's own emitters (decision 0813)
-/// and the `ItemVisuals` glow a held weapon hangs on its own attachment points (decision 0805).
+/// and both mean the same two things: an equipped item's own emitters
+/// and the `ItemVisuals` glow a held weapon hangs on its own attachment points.
 pub(super) struct BoothEffects {
     pub(super) bone: u16,
     pub(super) offset: Vec3,
@@ -267,7 +267,7 @@ impl BoothRig {
     }
 
     /// Commit the pose buffer onto the booth root — after every consumer is seated. `StageRig`
-    /// rides with it (decision 1447): the pair exists together or not at all, so the world-view
+    /// rides with it: the pair exists together or not at all, so the world-view
     /// parker can never see a booth `RigPose` without the marker that exempts it.
     pub(super) fn finish(self, commands: &mut Commands) {
         if let Some(rig) = self.rig {
@@ -305,8 +305,8 @@ pub(super) fn clear_booth_rig(commands: &mut Commands, root: Entity) {
 /// **Which booths call this is a fidelity split, not a cost one.** The body panes
 /// (`<PlayerModel>` widgets — the character window's paper doll, the inspect twin) are *live* in the
 /// reference: the widget renders through the per-frame `CSimpleModel` path whose light its ctor
-/// stages every frame (`0x76d680`, decision 0638) — the same widget family as the animating glue
-/// preview (decision 0423). The round unit-frame portraits are not: `SetPortraitTexture` bakes a
+/// stages every frame (`0x76d680`) — the same widget family as the animating glue
+/// preview. The round unit-frame portraits are not: `SetPortraitTexture` bakes a
 /// fresh instance in ONE draw and caches the texture by GUID/displayId, returning it with no
 /// re-render (`0x524f60`). A one-frame draw of a freshly-born particle pool
 /// yields nothing, so emitters have no place in a portrait — and a booth that owns emitters must
@@ -333,12 +333,12 @@ pub(super) fn spawn_booth_effects(
         // frame as `child+0x19c = parent+0x19c × child+0x180` (`0x714260`), and the emitter lane
         // then copies that into `emitter+0x1a8` (`0x718960` @`0x719073`) to fold into every
         // particle's alpha. Our particle sim already walks that chain
-        // ([`benilla_world::model_fade::ModelAlphas`], decisions 0827/0833) — it had simply never
+        // ([`benilla_world::model_fade::ModelAlphas`]) — it had simply never
         // been given a link to walk from a booth, because until a bake could be translucent every
         // booth rider really was opaque. A ghosted select body is the case that made it false.
         //
         // `ModelFade`, not `ModelAlpha`: the game declares the translucency and the engine owns the
-        // composition (decision 1164). A booth bake has no ramps to fold, so the walk reads the
+        // composition. A booth bake has no ramps to fold, so the walk reads the
         // declared value straight — see [`benilla_world::model_fade::ModelAlphas`].
         let mut host = commands.spawn((
             Transform::from_translation(fx.offset),
@@ -351,7 +351,7 @@ pub(super) fn spawn_booth_effects(
         }
         let host = host.id();
         for em in &fx.emitters {
-            // A **billboard** bone in the emitter's chain (decision 0813): its palette rows are
+            // A **billboard** bone in the emitter's chain: its palette rows are
             // replaced with the rendering camera's basis about the bone's own pivot, and children
             // multiply onto that, so the origin is `pivot + camBasis·(position − pivot)`. A booth is
             // its own camera, so the frame carrying the replacement is the booth twin of the world
@@ -384,7 +384,7 @@ pub(super) fn spawn_booth_effects(
                     anchor: Some(host), // the cloud anchors at the MODEL; bones compose births only
                     // A booth rider's host is torn down with the bake it belongs to.
                     on_owner_loss: benilla_world::particles::OwnerLoss::Free,
-                    // The MODEL this cloud multiplies by (0827): its own host, whose composed
+                    // The MODEL this cloud multiplies by: its own host, whose composed
                     // alpha is the bake's instance alpha. `ModelAlphas` reads 1.0 through an
                     // entity carrying no `ModelAlpha`, so an opaque bake costs exactly what it did.
                     alpha: Some(host),
@@ -477,7 +477,7 @@ pub(super) fn spawn_booth_own_emitters(
                 light_node: None,
                 // The bake root is torn down and rebuilt as a whole.
                 on_owner_loss: benilla_world::particles::OwnerLoss::Free,
-                // A booth bake has no appear/despawn ramp and no self-avatar feather (0827).
+                // A booth bake has no appear/despawn ramp and no self-avatar feather.
                 alpha: None,
             },
             // A booth loops its one authored clip forever — the doodad law.
@@ -500,7 +500,7 @@ pub(super) fn spawn_booth_own_emitters(
 
 /// How the booth bake's `AnimationPlayer` runs. Portraits are a **still** ([`Self::Frozen`] — Stand
 /// paused at t = 0, the ref bake); the char-create preview is a **live scene** ([`Self::Loop`] —
-/// Stand looping), the one case where the ref screen itself animates (decision 0423).
+/// Stand looping), the one case where the ref screen itself animates.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum BoothMotion {
     Frozen,
@@ -512,11 +512,11 @@ pub(super) enum BoothMotion {
 /// pose.
 ///
 /// With a rig (skeleton + inverse bindposes; every M2 display), the booth builds a collapsed
-/// [`RigPose`](benilla_world::rig_anim::RigPose) buffer (decision 1443 — no joint entities),
+/// [`RigPose`](benilla_world::rig_anim::RigPose) buffer (no joint entities),
 /// draws each part's **skinned** twin against its palette slot, seats riders on their bone's
 /// anchor, and arms the model's own Stand (anim id 0 through its baked resolution — the ref's
 /// loader-idle seed): `motion` decides whether that Stand is **frozen at t = 0** (a portrait
-/// still) or **looping** (the live glue scenes/preview — decisions 0423 + 0539). (The ref's own
+/// still) or **looping** (the live glue scenes/preview). (The ref's own
 /// sampling clock is the one unsettled, inferred point — t≈0 vs live phase; a frozen t=0 is
 /// inside its envelope either way.) Without a rig (boneless / WMO-display / rig not built), the
 /// static bind-pose bake: parts at identity, riders dropped (no bones to seat them on).
@@ -595,13 +595,13 @@ pub(super) fn spawn_booth_model(
             slot: 0,
         };
     };
-    // The collapsed pose buffer (decision 1443, replaying 0724/1365 for the last entity-joint
+    // The collapsed pose buffer (replaying 0724/1365 for the last entity-joint
     // rig lane): bind-pose composed, evaluated in place by the 0712 evaluator off the player
     // below. `without_camera_billboards` because a booth is not the world camera — see its doc;
     // the booth's cards counter-rotate to their own camera instead.
     let mut pose =
         benilla_world::rig_anim::RigPose::new(root, skeleton).without_camera_billboards();
-    // The owned palette rig (decision 0720): the booth's skinned parts tag this slot; the world
+    // The owned palette rig: the booth's skinned parts tag this slot; the world
     // pass writes its rows from the composed pose, and the booth's studio light buffer mirrors
     // the palette region (`rig_palette::RigPaletteMirrors`), so the booth camera sees the pose.
     let rig_slot = benilla_world::rig_palette::RigSkin::allocate_bones(
@@ -617,7 +617,7 @@ pub(super) fn spawn_booth_model(
         palettes.mark_mirrored(slot);
         slot
     });
-    // The model's global-sequence bone channels, by motion (decision 0539 §5):
+    // The model's global-sequence bone channels, by motion:
     // - **Loop** (the glue scenes + the create/select character): LIVE, on the world's own
     //   clock-driven sampler — the login gate's fires flicker, the Tauren windmill turns, the
     //   character blinks.
@@ -695,7 +695,7 @@ pub(super) fn spawn_booth_model(
         }
         // The persistent twin record: while this instance draws translucent, `benilla_world::zfill`
         // keeps a colour-masked, z-writing child on it, so overlapping limbs stay ONE blended
-        // layer instead of compounding 0.5 over 0.5 (the reference's `M2UseZFill`, decision 0831).
+        // layer instead of compounding 0.5 over 0.5 (the reference's `M2UseZFill`).
         if let Some(fm) = instance.fade_materials(&p.material, &p.twins) {
             child.insert(fm);
         }
@@ -711,7 +711,7 @@ pub(super) fn spawn_booth_model(
             // is culled while the posed geometry is dead centre of frame. `Creature\CarrionBird`
             // is the case: bind-pose z tops out at 1.19, its Stand box runs 0.54..6.23, and the
             // authored camera sits at z = 3.03 looking at z = 2.97 — nothing drew, and the
-            // portrait baked the empty booth (decision 1577, report B92). `Creature\Worm` the
+            // portrait baked the empty booth (report B92). `Creature\Worm` the
             // same. There is no cull to lose: a booth holds one model that its camera was
             // authored to frame.
             child.insert(bevy::camera::visibility::NoFrustumCulling);
@@ -779,13 +779,13 @@ pub(super) fn spawn_booth_model(
     // so the pose lands with the first animation pass — no play-after-spawn ordering dance.
     // `ModelAnimations` goes up beside it: the 0712 evaluator reads the player THROUGH the baked
     // pose source (`(&AnimationPlayer, &ModelAnimations, &mut RigPose)`) — no `AnimatedBy`
-    // targets exist to route bevy's own sweep here, which is the point (decision 1443).
+    // targets exist to route bevy's own sweep here, which is the point.
     if let Some(anims) = anims {
         let stand = catalog.map_or(0, |c| anims.resolve(0, c).id);
         if let Some(clip) = anims.find(stand) {
             let mut player = AnimationPlayer::default();
             // A portrait is a still (Stand paused at t = 0); the char-create preview is a live scene
-            // (Stand looping) — the one case the ref screen itself animates (decision 0423).
+            // (Stand looping) — the one case the ref screen itself animates.
             match motion {
                 BoothMotion::Frozen => {
                     player.play(clip.node).pause();
@@ -910,7 +910,7 @@ fn arm_turn(
         return false;
     };
     let (node, looping, blend) = (clip.node, clip.looping, clip.blend_time.max(0.0));
-    // **The half-blend refusal** (decision 1570, `0x7125c9`/`0x7125d4`). A blend already running
+    // **The half-blend refusal** (`0x7125c9`/`0x7125d4`). A blend already running
     // with λ > 0.5 — more than half its window still to run — is NOT re-seeded: the client keeps
     // the old secondary on its old window, and the clip that was primary is simply dropped. Read
     // as a rule: *a pose that never got past half weight is not worth fading out.* Equality takes
@@ -985,7 +985,7 @@ fn arm_turn(
 ///
 /// The reference's rotate arrows do not spin the model on the spot: `Model:SetRotation` queues a
 /// turn-in-place shuffle by direction *and then* writes the facing. Ours wrote only the facing
-/// (0638's bake yaw), so the doll pivoted like a turntable (B313).
+/// (0638's bake yaw), so the doll pivoted like a turntable.
 ///
 /// Both halves of that turn are **blended** arms ([`arm_turn`]), which is the second half of the
 /// same law and the fix for B321: the reference's 100 ms expiry does not drop the shuffle, it
@@ -993,7 +993,7 @@ fn arm_turn(
 /// out. Ours cut, and a cut out of a mid-stride pose is the "snap back to the stop pose" the
 /// director saw. Nothing here stops a clock early: the client's `rep movsd` copies the outgoing
 /// track's clock, not a pose, so the shuffle goes on stepping underneath the whole fade — a
-/// half-second, on HumanMale, which is a further whole loop of it (decision 1566).
+/// half-second, on HumanMale, which is a further whole loop of it.
 ///
 /// Body panes only ([`Booth::live`]), which is the same set the reference's turn machinery sits
 /// on. The doll cannot clack while it steps: footstep keys are fired by
@@ -1299,7 +1299,7 @@ mod tests {
         );
     }
 
-    /// **The booth twin of the equipped-item emitter's billboard frame** (decision 0813, carried to
+    /// **The booth twin of the equipped-item emitter's billboard frame** (carried to
     /// the select screen). Same real numbers as
     /// `billboard::tests::an_item_emitters_billboard_frame_puts_it_behind_the_pivot`
     /// (`LShoulder_Mail_PVPAlliance_C_01`: billboard bone 1 pivot `(-0.012, 0.162, -0.060)`, sparkle
@@ -1553,7 +1553,7 @@ mod tests {
         );
     }
 
-    /// **The rotate arrows arm the shuffle the model turns toward** (1559, B313), and the pair is
+    /// **The rotate arrows arm the shuffle the model turns toward** (1559), and the pair is
     /// the one read off the `fcomp` at `0x505bce` — *not* the inverted pair this port was first
     /// built on. Current facing **<** the new angle ⇒ `0xc` ShuffleRight; **>** ⇒ `0xb`
     /// ShuffleLeft; equal (and NaN, which the compare's unordered flags send the same way) ⇒ `0`
@@ -1601,7 +1601,7 @@ mod tests {
         );
     }
 
-    // ── The turn's cross-fades (decision 1565, B321) ────────────────────────────────────────────
+    // ── The turn's cross-fades ────────────────────────────────────────────
 
     /// The three ids a turn ever arms, with HumanMale's **real** authored numbers
     /// (`benilla-extract m2seq Character\\Human\\Male\\HumanMale.m2`): the shuffles blend in over
@@ -1741,7 +1741,7 @@ mod tests {
         );
     }
 
-    /// **The half-blend refusal, both legs** (decision 1570). One secondary slot, as the client
+    /// **The half-blend refusal, both legs**. One secondary slot, as the client
     /// keeps one — but an arm only *takes* it when the running blend is at or past halfway. Inside
     /// the first half, `0x7125d4` refuses: the older pose keeps fading on its own untouched window,
     /// and the clip that was primary is dropped outright rather than fading out of a weight it
@@ -1905,7 +1905,7 @@ mod instance_tests {
 
     /// A ghosted bake takes the blend twin and carries the record — with the **zfill** twin in it,
     /// which is the whole reason a 0.5 body does not compound `0.5` over `0.5` where an arm crosses
-    /// the torso (the reference's `M2UseZFill`, decision 0831).
+    /// the torso (the reference's `M2UseZFill`).
     #[test]
     fn a_ghosted_bake_takes_the_blend_twin_and_carries_the_zfill() {
         let (steady, blend, zfill) = handles();
@@ -1946,7 +1946,7 @@ mod instance_tests {
     /// A batch that cannot feather keeps its steady material even while the instance is
     /// translucent, and arms no prime — the reference's own twin gate, and the Mod/Mod2x rule
     /// (their blend equation reads no alpha, so no material swap can feather them; the shader's
-    /// identity lerp on the tag alpha does it instead — decisions 0865/1489).
+    /// identity lerp on the tag alpha does it instead).
     #[test]
     fn a_twinless_batch_stays_steady_even_while_the_instance_feathers() {
         let (steady, _, _) = handles();

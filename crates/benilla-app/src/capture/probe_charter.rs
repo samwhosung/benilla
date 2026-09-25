@@ -42,7 +42,7 @@
 //! | 1          | 8             | 11 (tabard designer)           | *"I want to create a guild crest."* |
 //!
 //! Icon byte **7** is `"petition"` in [`crate::ui_gossip`]'s `GOSSIP_ICON_TYPES` — the client's own
-//! `0x84b7ac` table, byte-verified in decision 1335. The probe finds the row **by that icon byte
+//! `0x84b7ac` table, byte-verified in. The probe finds the row **by that icon byte
 //! and selects by the row's wire index, never by list position**: that is the lesson
 //! [`super::probe_binder`]'s header records, and it is why this probe survives a menu that grows a
 //! row. The label guard is a lowercase substring for the same file's other lesson — vmangos
@@ -160,7 +160,7 @@ const REQUIRED_SIGNATURES: i64 = 9;
 const FRESH_SIGNATURES: i64 = 0;
 /// Copper handed to the probe body up front so the buy can never fail for funds. `.modify money`
 /// is `SEC_BASIC_ADMIN` (4) in vmangos's `Chat.cpp` command table and every `probeN` account is
-/// gmlevel **6** (docs/METHOD.md, decision 0651), so it lands; with no selection it targets the sender
+/// gmlevel **6** (docs/METHOD.md), so it lands; with no selection it targets the sender
 /// (`ChatHandler::GetSelectedPlayer`, `Chat.cpp:2601-2612`), which is why it is sent before the
 /// probe touches an NPC.
 const FUND_COPPER: u32 = 100_000;
@@ -1100,7 +1100,7 @@ fn charter_probe(
             }
             let title = vm_petition_str(&script, 2);
             // The bag tooltip has to reach the SAME name, not merely be non-empty. It is fed by a
-            // different path — the container snapshot, whose rebuild is gated (decision 1439) —
+            // different path — the container snapshot, whose rebuild is gated —
             // so the two can disagree, and requiring convergence is what proves the rename's
             // record patch reaches the gate rather than only the window. Held inside the step's
             // own timeout: a tooltip that never catches up FAILs here rather than being reported
@@ -1281,7 +1281,7 @@ fn hop(probe: &mut CharterProbe, net: &NetCommands, now: f64) {
 /// `probe.phase` on every path.
 ///
 /// **Step 3's FAIL is the icon-table regression, one row over from B249.** Byte 7 is `"petition"`
-/// in the client's own `0x84b7ac` table (decision 1335); a `"gossip"` here means the row draws the
+/// in the client's own `0x84b7ac` table; a `"gossip"` here means the row draws the
 /// chat bubble, which is what the pre-1331 hand-written map did to the innkeeper's byte 5.
 ///
 /// **Step 4's send is by WIRE INDEX**, read off the packet, never derived from where the row sits

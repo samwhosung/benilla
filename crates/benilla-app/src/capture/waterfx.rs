@@ -1,4 +1,4 @@
-//! The `waterfx` capture viewer — the foam **instrument** (decision 0022: see it before tuning
+//! The `waterfx` capture viewer — the foam **instrument** (see it before tuning
 //! it). A server-less synthetic rig: one dummy wading unit over a synthetic water footprint
 //! (a real 4.1667-yd wet-cell lattice, so patch building and bank clipping run for real) with a
 //! flat backdrop for contrast, driven through the NORMAL emitter path — nothing here bypasses the
@@ -14,7 +14,7 @@
 //! height there, which `benilla-formats --example water_here` prints). The synthetic lattice and
 //! backdrop stand down and the rig wades in the streamed ADT/WMO liquid at that pin — which is the
 //! only way to see the two things a synthetic square of water cannot show: how a patch **clips at a
-//! real bank**, and how it **sorts against the neighbouring water chunks** (B348 — one square of
+//! real bank**, and how it **sorts against the neighbouring water chunks** (one square of
 //! water has no neighbour to be painted over by). `WOW_MAP` picks the map.
 
 use bevy::prelude::*;

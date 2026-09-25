@@ -1,8 +1,8 @@
-//! The partner live probe (`WOW_PROBE=partner`) — the party arc's instrument (decision 0434):
+//! The partner live probe (`WOW_PROBE=partner`) — the party arc's instrument:
 //! a second client that says YES. Once in-world it auto-accepts every group invite, so the
 //! director can exercise the whole party surface — invite, roster lines, member frames,
 //! leader/loot management, pings — solo, with the probe account as the other member. It also
-//! accepts **duel** challenges (decision 0637), which is what makes the duel arc's two-client
+//! accepts **duel** challenges, which is what makes the duel arc's two-client
 //! questions answerable at all: whether the opponent turns hostile, whether the arbiter flag
 //! plants. Non-combat (the unattended-combat ban, `docs/METHOD.md` "The local vmangos server", stands
 //! untouched: this probe answers a challenge but never swings, and a duel nobody strikes in

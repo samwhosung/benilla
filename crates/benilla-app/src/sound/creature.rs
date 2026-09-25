@@ -3,11 +3,11 @@
 //! `$WNG`/`$WGG` wing flap/glide).
 //!
 //! The swing-driven vocals (exertion/injury) and the `$AH0..3` custom-attack columns live in
-//! [`super::combat`] (decisions 0075 + 0525 — the custom attacks are the swing dispatch's
+//! [`super::combat`] (the custom attacks are the swing dispatch's
 //! natural-weapon impact, not free-standing anim vocals); the
-//! aggro/alert flares land here ([`ai_reaction_vocals`], decision 0280), and so does the ambient
+//! aggro/alert flares land here ([`ai_reaction_vocals`]), and so does the ambient
 //! body loop ([`creature_body_loops`] — the `loop_sound` column, `0x623800`'s alive-gate). Still
-//! untriggered — data in the catalog, triggers INFERRED (0280): stun/jump_start/jump_end
+//! untriggered — data in the catalog, triggers INFERRED: stun/jump_start/jump_end
 //! (offsets verified, live triggers likely M2 tags — unpinned).
 
 use bevy::ecs::entity::EntityHashMap;
@@ -84,7 +84,7 @@ const fn bark_kit(voice: &benilla_formats::CreatureVoice, state: u8) -> u32 {
 }
 
 /// **The creature bark dispatcher, whole** — `0x623a40(ecx = unit, state)`, the one function
-/// every one-shot creature vocal below goes through (decision 2039). Four states are live here:
+/// every one-shot creature vocal below goes through. Four states are live here:
 /// `0` the HOSTILE aggro flare, `1` the pet's ORDER bark, `2` the pet's ATTACK bark, `4` the
 /// death cry. (State `3` exists in the table and plays nothing — it still stops and latches.)
 ///
@@ -149,11 +149,11 @@ fn play_bark(
     }
 }
 
-/// Play the death vocal on a **live** death — the reference's two triggers, each a field edge
-/// (decision 2297): the `UNIT_FIELD_HEALTH` watcher's alive→dead arm (`0x6046f0` at `0x6047a3`,
+/// Play the death vocal on a **live** death — the reference's two triggers, each a field edge:
+/// the `UNIT_FIELD_HEALTH` watcher's alive→dead arm (`0x6046f0` at `0x6047a3`,
 /// `OLD > 0 && NEW ≤ 0` — the real death handler `0x605860`) and the `UNIT_DYNAMIC_FLAGS`
 /// watcher's `UNIT_DYNFLAG_DEAD` SET edge (`0x600543`), which fires the very same `0x623a40(4)`
-/// — so a feign drops the body with its death cry, exactly like a kill (decision 1022). A unit
+/// — so a feign drops the body with its death cry, exactly like a kill. A unit
 /// that streams in already dead cries nothing: the edge stream is create-suppressed, the same
 /// distinction the animation driver makes for the settled-corpse pose.
 fn death_vocals(
@@ -199,11 +199,11 @@ fn death_vocals(
     }
 }
 
-/// The aggro/alert flare vocals (`SMSG_AI_REACTION` → the net bridge; decision 0280): HOSTILE →
+/// The aggro/alert flare vocals (`SMSG_AI_REACTION` → the net bridge): HOSTILE →
 /// the aggro bark (CreatureSoundData col 10), ALERT → the alert bark (col 13) — pure audio, like
 /// the client (`0x6056e0` plays no animation/UI on either leg).
 ///
-/// **HOSTILE rides the unit's one-shot voice channel, and that is not a nicety** (decision 1399):
+/// **HOSTILE rides the unit's one-shot voice channel, and that is not a nicety**:
 /// the bark goes out through `0x623a40(0)`,
 /// which stores its channel in `[unit+0xb20]` with category 0 latched in `[unit+0xb24]` —
 /// **the lowest category in the table, so it never interrupts a playing bark and a repeat is
@@ -217,7 +217,7 @@ fn death_vocals(
 /// heard as a phasing, stuttering, constantly-growling bear. The reference receives the same
 /// packets and collapses them at this slot.
 ///
-/// **ALERT is a different route, and is faithfully unconditional** — pinned since, decision 1401.
+/// **ALERT is a different route, and is faithfully unconditional** — pinned since.
 /// It reaches `vtable+0x88(8,0)` → `0x623490` → col 13, and it *is* rolled, but the class-8
 /// threshold is **100** and the compare is inclusive, so `P = 1`. Its one
 /// real gate is a mute while a **server-pushed** object sound is live on the unit — the
@@ -318,7 +318,7 @@ fn ai_reaction_vocals(
     }
 }
 
-/// The pet's voice (`SMSG_PET_ACTION_SOUND` → the net bridge; decision 2039): the two talk
+/// The pet's voice (`SMSG_PET_ACTION_SOUND` → the net bridge): the two talk
 /// selectors, straight onto [`play_bark`] at states 1 and 2.
 ///
 /// The reference's handler `0x6040c0` is four instructions of its own once the guid is resolved:
@@ -385,7 +385,7 @@ fn pet_talk_vocals(
     }
 }
 
-/// A dismissed pet's parting sound (`SMSG_PET_DISMISS_SOUND` → the net bridge; decision 2039) —
+/// A dismissed pet's parting sound (`SMSG_PET_DISMISS_SOUND` → the net bridge) —
 /// `CreatureSoundData` column 29, at a bare world point.
 ///
 /// **Not a bark, and that is the whole shape of it.** `0x604140` never touches `0x623a40`: it
@@ -493,7 +493,7 @@ fn creature_body_loops(
         // `0x623800`'s own gate verbatim (`0x623817` health, `0x62381e` the flag): RAW health ≤ 0
         // — absent = 0, deliberately not `unit_is_dead`'s max-health guard, which would leave a
         // unit whose snapshot has not landed humming — or `UNIT_DYNFLAG_DEAD` set, the feign-death
-        // bit the reference re-evaluates this very gate on (`0x60053c`, decision 1022).
+        // bit the reference re-evaluates this very gate on (`0x60053c`).
         let alive = store.0.unit_health().unwrap_or(0) > 0 && !store.0.unit_reads_dead();
         let desired = if alive { kit } else { 0 };
         // Stop a superseded loop first: death, or a mount transition that changed the row.
@@ -541,7 +541,7 @@ fn creature_body_loops(
 /// entity shape of the client's mounted redirect (`0x60c480`: `+0xb44 ?: +0xb40` — 0441
 /// fold-back).
 ///
-/// **The three tag families gate differently, and the difference is byte-exact** (decision 1401):
+/// **The three tag families gate differently, and the difference is byte-exact**:
 ///
 /// - **`$FD1..$FD4` → fidget 1..4, ungated.** `0x6232c0` → `0x623440` → `0x6230a0` reads
 ///   `row[+0x38 + 4*(n-1)]` literally and touches no gate at all. A zero slot bails silently, with
@@ -638,7 +638,7 @@ fn creature_anim_vocals(
 
 /// Registration hook for [`super::SoundPlugin`].
 /// The **fall-landing wound vocal** — the client-side hard-landing predictor's sound leg
-/// (`0x602d00 → call [vtable+0x88] class 2` at `0x602d84`; decision 0412): a landing past the HARD
+/// (`0x602d00 → call [vtable+0x88] class 2` at `0x602d84`): a landing past the HARD
 /// threshold plays the unit's ordinary CreatureSoundData **wound vocal, normal row** (class 2 →
 /// column `+0xc` = `injury[0]` — the same row a landed melee hit voices; the crit/crushing rows
 /// are unused here). NOT wire-driven: the server's `SMSG_ENVIRONMENTALDAMAGELOG` set plays no
@@ -755,7 +755,7 @@ mod tests {
         sounded
     }
 
-    /// **The bug and the fix, on the measured data** (decision 1399). Ungated — what benilla
+    /// **The bug and the fix, on the measured data**. Ungated — what benilla
     /// did — every arrival sounds: 63 overlapping 3.166 s roars. Through the voice slot the same
     /// burst is five barks, no two of them overlapping.
     #[test]
@@ -793,8 +793,8 @@ mod tests {
         assert!(!occupies_voice_slot(barking.0, barking.1, b));
     }
 
-    /// **The priority rule, at every boundary the reference's two jumps and one `jle` draw**
-    /// (decision 2039). The equal case is the one that matters most: it is what collapses a burst
+    /// **The priority rule, at every boundary the reference's two jumps and one `jle` draw**.
+    /// The equal case is the one that matters most: it is what collapses a burst
     /// of identical barks to one, and it is why the aggro flood of 1399 stays collapsed now that
     /// the slot carries a state instead of a bare bool.
     #[test]

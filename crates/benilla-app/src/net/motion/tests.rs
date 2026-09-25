@@ -257,7 +257,7 @@ fn remote_motion_backpedal_uses_run_back_speed() {
     assert_eq!(speed, 4.5);
 }
 
-/// **A walking remote is a walking remote in every direction** (decision 1752). This block used to
+/// **A walking remote is a walking remote in every direction**. This block used to
 /// test the backpedal ahead of the walk bit, so an observed player who toggled walk and pressed S
 /// extrapolated at run-back speed (4.5) — fast enough to clear the `> 2× walkSpeed` boundary and
 /// play the *run* clip while its owner walked. The bytes take the walk arm (`0x7c4d11` →
@@ -401,7 +401,7 @@ fn remote_motion_jump_is_a_parabola_not_flag_walking() {
         "horizontal coasts at the frozen 7 yd/s: {pos:?}"
     );
     assert!(pos[1].abs() < 1e-3, "no lateral drift: {pos:?}");
-    // **The analytic height, `v₀·t − ½g·t²`** (decision 1740). This asserted `v₀·t` until the
+    // **The analytic height, `v₀·t − ½g·t²`**. This asserted `v₀·t` until the
     // airborne-integrator round — explicit Euler, moving the whole step at the START-of-step speed
     // with no gravity in the displacement at all, which over this 0.5 s step is 3.98 yd against a
     // true 1.57. The local mover had the mirror-image error in the other direction. Both now run
@@ -512,7 +512,7 @@ fn monster_move_carries_every_waypoint() {
     );
 }
 
-/// **`MSG_MOVE_TIME_SKIPPED` advances the chain's wire clock and nothing else** (decision 1935).
+/// **`MSG_MOVE_TIME_SKIPPED` advances the chain's wire clock and nothing else**.
 /// The whole of the reference's handler is `[CMovement+0xac] += lag` (`0x603b40` → `0x61ab90`),
 /// and `+0xac` is this chain's `last_wire_ms`. The property that matters is downstream: after the
 /// skip, the mover's next packet — whose stamp is `lag` further on than it would otherwise have
@@ -624,7 +624,7 @@ fn monster_move_without_a_travelable_path_clears_the_spline() {
 /// Flags that make the chain treat a mover as mid-motion (`0x20ff`'s FORWARD bit is enough).
 const MOVING: u32 = move_flags::FORWARD;
 
-/// **The headline property** (decision 0615, the reference's `0x618c30`): while a mover is moving,
+/// **The headline property** (the reference's `0x618c30`): while a mover is moving,
 /// replay is paced by the *sender's* stamps — `fire = prev fire + wire step` — so however the packets
 /// clumped in flight, they replay at the spacing the stamps carry. Here four 500 ms-apart stamps
 /// arrive at 0 / 520 / 1450 / 1460 ms (one late, then a two-packet burst) and still fire 500 ms apart.
@@ -805,7 +805,7 @@ fn relay_chain_stays_monotone_and_bounded_under_scripted_jitter() {
     }
 }
 
-/// The pre-fire reconcile lerp (decision 0601; the reference's `0x619090`/`0x6191c0`): an armed
+/// The pre-fire reconcile lerp (the reference's `0x619090`/`0x6191c0`): an armed
 /// correction converges linearly in time and lands exactly on the event position at fire-time; a
 /// sub-tolerance prediction disagrees with nothing and the pose is untouched; Z joins the arm
 /// test only while swimming.
@@ -911,9 +911,9 @@ fn replay_frames(script: &[(u32, f64, u32)]) -> (Vec<u32>, u32) {
 
 #[test]
 fn a_due_arrival_never_jumps_the_queue() {
-    // **The runaway-mover regression** (decision 0618). A mover's packets are applied in the order
+    // **The runaway-mover regression**. A mover's packets are applied in the order
     // they arrived, always — even when the newest one is already due on arrival while older ones sit
-    // in the queue. Fire-times are monotone (0615), so a due arrival means everything queued is due
+    // in the queue. Fire-times are monotone, so a due arrival means everything queued is due
     // too: applying the arrival *directly* writes the newest state, and the drain then replays the
     // older queued packets over it in the same frame. Last write wins, last write is stale.
     //
@@ -940,7 +940,7 @@ fn a_due_arrival_never_jumps_the_queue() {
     );
 }
 
-// ── GameObject placement: the `GAMEOBJECT_ROTATION` quaternion (decision 1459) ────────────────
+// ── GameObject placement: the `GAMEOBJECT_ROTATION` quaternion ────────────────
 
 /// The seven `nightelfsignpostpointer02` arms of the Ravenwind post (Feralas, The Forgotten Coast)
 /// as vmangos' `gameobject` table spawns them: `(entry, position, orientation, rotation0..3)`.
@@ -1089,7 +1089,7 @@ fn a_gameobject_without_a_usable_quaternion_falls_back_to_its_facing() {
     }
 }
 
-/// **A flag-still remote is not integrated at all** (decision 1545) — the reference's own gate,
+/// **A flag-still remote is not integrated at all** — the reference's own gate,
 /// `0x20ff` ([`move_flags::INTEGRATED`]): `CMovement::Update`'s substep loop (`0x616e20`) and the
 /// manager's per-mover tick (`0x6166f5`) both bail on a mover with no move/jump/fall bit, and
 /// such a unit is not even in the mover list. So its pose is the last
@@ -1115,7 +1115,7 @@ fn a_flag_still_remote_is_left_where_the_wire_put_it() {
     ));
     app.init_asset::<Mesh>()
         .init_resource::<benilla_world::collision::ColliderEpoch>();
-    // The liquid/room facade the dead-reckon asks for a water-walker's surface (decision 1780),
+    // The liquid/room facade the dead-reckon asks for a water-walker's surface,
     // seeded empty — no mover here has the mode, and an empty world answers "no liquid".
     benilla_world::world_point::init_world_point_resources(app.world_mut());
     app.finish();
@@ -1194,7 +1194,7 @@ fn a_flag_still_remote_is_left_where_the_wire_put_it() {
     );
 }
 
-// ── The observer leg of the movement-mode family (decision 2061) ──────────────────────────────
+// ── The observer leg of the movement-mode family ──────────────────────────────
 
 /// Build the `RelayMove` the six observer opcodes decode to — an ordinary relay carrying whatever
 /// flags word the server wrote (apply/unapply rides that word for five of the six) plus the
@@ -1233,7 +1233,7 @@ fn apply_observed(before: RemoteMotion, mv: &super::relay::RelayMove) -> RemoteM
         .expect("the one-shot apply runs")
 }
 
-/// **A watched player's root actually stops them** (decision 2061) — the reported "he keeps sliding
+/// **A watched player's root actually stops them** — the reported "he keeps sliding
 /// after the root lands".
 ///
 /// The mechanism is not ours: the rooted player's OWN client wipes its direction bits when it
@@ -1270,7 +1270,7 @@ fn an_observed_root_lands_the_wiped_word_and_stops_the_dead_reckon() {
     );
 }
 
-/// **Levitate reaches an observer** (decision 2061, with 1706's three-at-once): `SPELL_AURA_HOVER`,
+/// **Levitate reaches an observer** (with 1706's three-at-once): `SPELL_AURA_HOVER`,
 /// `_FEATHER_FALL` and `_WATER_WALK` are granted together, each broadcast on its own observer
 /// opcode, and each carries the *whole* `m_movementInfo` flags word — so the last one to arrive
 /// holds all three bits. The extrapolator's ground resolve reads exactly this word (unioned with
@@ -1291,7 +1291,7 @@ fn an_observed_levitate_lands_all_three_granted_bits() {
 }
 
 /// **The teleport is the ONE relay the pre-fire reconcile skips — and the heartbeat is not**
-/// (decision 2064, correcting 0601/0603).
+/// (correcting 0601/0603).
 ///
 /// The queued node's tag `0x26`, which `0x619030` (facing) and `0x619090` (position) both bail on,
 /// is the teleport's: `push 0x26` occurs at exactly two addresses in the movement region
@@ -1328,7 +1328,7 @@ fn the_teleport_is_the_only_relay_the_reconcile_skips() {
     );
 }
 
-/// **The root opcode outranks the flags word it arrived with** (decision 2064). After the masked
+/// **The root opcode outranks the flags word it arrived with**. After the masked
 /// merge the client runs `SetRoot 0x7c7340` — `or 0x1000`, then the one-shot motion wipe
 /// `& 0xffe07f00` — unconditionally, so a `MSG_MOVE_ROOT` roots the mover even if the word it
 /// carried still had direction bits in it. vmangos always sends an already-wiped word, which is

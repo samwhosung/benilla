@@ -34,8 +34,8 @@ const REQUIRE_REWARN_SECS: f32 = 5.0;
 /// i.e. *adjacent* frames). One shot still writes the bare path, so every existing invocation is
 /// unchanged.
 ///
-/// The burst exists because **a flicker is a temporal artefact and a single frame cannot show one**
-/// (decision 0653). "This object's textures flicker" was un-diagnosable with the instruments we had:
+/// The burst exists because **a flicker is a temporal artefact and a single frame cannot show one**.
+/// "This object's textures flicker" was un-diagnosable with the instruments we had:
 /// the reporter's stills prove nothing, and grading a live run by eye is exactly the loop rule 7
 /// forbids. Adjacent frames from a *parked* camera ([`crate::player`]'s `WOW_PROBE_CAM`) turn it
 /// into arithmetic: `benilla-visual flicker <dir>` collapses the burst to the envelope of what
@@ -46,7 +46,7 @@ const REQUIRE_REWARN_SECS: f32 = 5.0;
 /// viewport and range — the same contract as the death gate below, because a frame that cannot
 /// contain the reported subject is not a measurement of it either. Ten banshee runs were once read
 /// as "can't reproduce" with the banshee never in frame, and a voidwalker crop-negative was a model
-/// that had wandered out of a fixed window (decision 0705). While the subject is missing the gate
+/// that had wandered out of a fixed window. While the subject is missing the gate
 /// WARNs with what *is* nearby — names and distances — so a mis-aimed run re-aims itself instead of
 /// ending as a silent blank; a run that exits with 0 shots written names its reason in the log.
 /// The unit's feet anchor decides "in frame", and in frame does not mean unoccluded — the gate
@@ -165,7 +165,7 @@ fn fire_live_shot(
     }
     // The SUBJECT gate — same contract as the death gate above: a frame that cannot contain the
     // reported subject is not a measurement of it, and a "clean" burst of such frames is the
-    // costliest false negative a live run produces (decision 0705). Every shot of a burst
+    // costliest false negative a live run produces. Every shot of a burst
     // re-passes the gate, so a subject that wanders off mid-burst pauses the burst instead of
     // padding it with blanks.
     if let Some(want) = shot.require.as_deref() {

@@ -1,10 +1,10 @@
-//! sound — WoW's owned audio selection/scheduling over a delegated mixer (decision 0070).
+//! sound — WoW's owned audio selection/scheduling over a delegated mixer.
 //!
-//! Three separable pieces (0070): the **mixer seam** ([`mixer`] — kira behind an FMOD-shaped
+//! Three separable pieces: the **mixer seam** ([`mixer`] — kira behind an FMOD-shaped
 //! surface), the **kit player** (WoW's owned selection math off `SoundEntries.dbc` — next slice
 //! commit), and the **trigger surface** (zone music/ambience, UI, world emitters — phased in).
 //! This module owns the Bevy plumbing: the output resource, the per-frame listener sync from the
-//! world camera, and the always-on player config (decision 0026: config is gameplay state, the
+//! world camera, and the always-on player config (config is gameplay state, the
 //! debug panel only edits it).
 
 use bevy::prelude::*;
@@ -39,7 +39,7 @@ mod money;
 mod mount;
 mod net;
 // Crate-visible for one reader: the dev-only stall watchdog asks `output::device_open` before
-// it suspends the process (decision 1857). Dev may see anything; nothing here knows dev exists.
+// it suspends the process. Dev may see anything; nothing here knows dev exists.
 pub(crate) mod output;
 mod probe;
 mod reverb;
@@ -65,7 +65,7 @@ pub(crate) use mixer::Mixer;
 pub(crate) use ui::{AutoEquipSound, LootPickupSound};
 pub(crate) use zone::ExplorationSounds;
 
-/// Player-facing audio config — always-on, player-faithful defaults (decision 0026: no
+/// Player-facing audio config — always-on, player-faithful defaults (no
 /// gameplay→dev coupling; the debug panel edits this, it doesn't own it).
 ///
 /// Defaults are the client's CVar registration defaults (`0x456fe0`, `0x460a60`):
@@ -79,11 +79,11 @@ pub(crate) struct SoundConfig {
     /// benilla zeroes every category through [`Self::category_amp`] instead — channels keep
     /// running silently (the `muted` posture), same audible truth.
     pub enabled: bool,
-    /// Quick mute — toggled by the dev chord + `M` (its plane is per-OS: decisions 0585, 0867).
+    /// Quick mute — toggled by the dev chord + `M` (its plane is per-OS: decisions 0585).
     /// Zeroes the **main track only**: selection and channel life go on untouched, so unmute is
     /// instant (unlike `enabled`, which stops sounds from being picked at all).
     ///
-    /// Starts **`false`** — a run you launch has sound, like the real client (decision 1026). It
+    /// Starts **`false`** — a run you launch has sound, like the real client. It
     /// used to boot muted so that automated runs stayed quiet, but that made the human's every
     /// session start with a chord press to hear anything. The quiet belongs on the automated side
     /// instead: `$WOW_NOSOUND` (agents) and `$WOW_CAPTURE` (the visual harness) open no device at
@@ -107,13 +107,13 @@ pub(crate) struct SoundConfig {
     pub ambience_enabled: bool,
     /// **Error speech** — 1.12's `EnableErrorSpeech` CVar (`CVar::Register` at `0x457877`,
     /// registrar default `"1"`, the stock Sound panel's fourth checkbox). Gates the race/sex
-    /// refusal lines your own character says ([`vocal`], decision 1815) and nothing else: it is
+    /// refusal lines your own character says ([`vocal`]) and nothing else: it is
     /// read inside `0x458250` alongside `MasterSoundEffects`, *before* any escalation state moves,
     /// so turning it off is silence rather than a muted play.
     pub error_speech: bool,
     /// **Sound while the window is in the background** — the era engine's
-    /// `Sound_EnableSoundWhenGameIsInBG`, over a setting 1.12 hardcodes and never made settable
-    /// (decision 1847). `false` = the reference's own behaviour: alt-tab away and the client goes
+    /// `Sound_EnableSoundWhenGameIsInBG`, over a setting 1.12 hardcodes and never made settable.
+    /// `false` = the reference's own behaviour: alt-tab away and the client goes
     /// quiet; come back and it returns.
     ///
     /// The reference's mechanism: **`WM_ACTIVATE`
@@ -150,7 +150,7 @@ pub(crate) struct SoundConfig {
     /// seven checkboxes (indices 1, 2, 4–8) and four sliders, none of them this, and none of the
     /// reference's 214 `CVar::Register` (`0x63db90`) sites names it (`Register` is the only
     /// creation path, so `Config.wtf` can hold no such key either). So the
-    /// row is the `autoLootDefault` posture: benilla's persistence is the CVar store (0954), and a
+    /// row is the `autoLootDefault` posture: benilla's persistence is the CVar store, and a
     /// setting with no 1.12 CVar takes the later-era engine's spelling rather than an invented one.
     pub background_sound: bool,
     /// Zone reverb — 1.12's `SoundReverb` CVar (`0x4573be` registration, callback `0x4574d0`,
@@ -160,7 +160,7 @@ pub(crate) struct SoundConfig {
     /// [`reverb::zone_reverb`].
     ///
     /// **Registrar default is `"1"`; ours is `false`** — the one place benilla's CVar defaults
-    /// leave the binary's (decisions 1153, 1155). The reference *emits* both calls on a stock
+    /// leave the binary's. The reference *emits* both calls on a stock
     /// boot — VERIFIED, and its three writers of `[0x835a4c]` all write 1 — but they are FMOD 3's
     /// EAX API, and its own header says `ONLY SUPPORTED ON WIN32 W/ FSOUND_HW3D FLAG`. The
     /// reference client's `Logs/Sound.log` on this machine reports
@@ -214,7 +214,7 @@ pub(crate) struct SoundConfig {
     /// `EnableMusic 0` is still silenced by [`Self::category_amp`] whatever this says. The latch
     /// would guard against nothing, so it is left out rather than transcribed for its own sake.
     pub music_suppressed: bool,
-    /// The **output limiter** — benilla's own `SoundOutputLimiter` CVar (decision 1551), default
+    /// The **output limiter** — benilla's own `SoundOutputLimiter` CVar, default
     /// **on**. Not a 1.12 CVar: the reference has no such DSP and does not need one, because it
     /// hands its whole audible mix to FMOD 3 and carries its headroom elsewhere (the SFX-bus
     /// auto-duck, `0x457960`). benilla sums into f32 and kira answers an
@@ -327,7 +327,7 @@ fn feed_world_hold(
     }
 }
 
-/// The **focus gate** (decision 1847): shut the output while the window is in the background,
+/// The **focus gate**: shut the output while the window is in the background,
 /// unless [`SoundConfig::background_sound`] says otherwise.
 ///
 /// Reads the window's own focus rather than a live bit on [`SoundConfig`] — unlike `world_hold`
@@ -391,7 +391,7 @@ pub(crate) struct SoundOutput {
     pub(crate) mixer: Option<Mixer>,
     /// Live kit channels, owned and pumped by [`kit::pump_channels`].
     pub(crate) channels: Vec<kit::ActiveChannel>,
-    /// The measuring-mode recorder, when `$WOW_SOUND_PROBE` armed one (decision 1556). It rides
+    /// The measuring-mode recorder, when `$WOW_SOUND_PROBE` armed one. It rides
     /// here rather than in a resource of its own so the kit player — which already holds `out` —
     /// can stamp every play on the capture's timeline with no new plumbing.
     pub(crate) probe: Option<probe::Probe>,
@@ -411,10 +411,10 @@ pub(crate) struct SoundOutput {
     /// the truth). Rewritten each frame by [`cinematic::drive_narration`], like its neighbours.
     pub(crate) cinematic_streams: usize,
     /// One-shots that lost their slot to a louder newcomer, and plays refused because nothing
-    /// live was quieter than them (decision 1557). Reported by the probe.
+    /// live was quieter than them. Reported by the probe.
     pub(crate) voices_stolen: u64,
     pub(crate) voices_denied: u64,
-    /// Same-kit copies dropped by [`kit::SAME_KIT_MAX`] (decision 1560).
+    /// Same-kit copies dropped by [`kit::SAME_KIT_MAX`].
     pub(crate) copies_dropped: u64,
 }
 
@@ -524,7 +524,7 @@ fn world_audio_live(
 
 pub(crate) struct SoundPlugin;
 
-/// The sound rows' change callback (decision 2303): the volumes clamp to `[0, 1]`, the enables
+/// The sound rows' change callback: the volumes clamp to `[0, 1]`, the enables
 /// are the client's int-parse + `!= 0` — `SoundReverb`'s own parse is literally that
 /// (`0x4574d0`: `setne al`). Writes only the arm it matched, so a `SoundConfig` change is a
 /// sound setting moving and nothing else.
@@ -554,7 +554,7 @@ impl Plugin for SoundPlugin {
         net::register(app);
         app.add_observer(on_cvar);
         // Who gets sound: a run a human launched, and only that. The default posture is audible
-        // (decision 1026 — `SoundConfig::muted` starts false), so the silence has to be opt-in by
+        // (`SoundConfig::muted` starts false), so the silence has to be opt-in by
         // the *automated* callers, both of which are unattended by construction:
         //   $WOW_NOSOUND — an agent opening the client to check something (the dispatch recipe in
         //                  `docs/METHOD.md` sets it; nobody is listening, and a background window that
@@ -712,7 +712,7 @@ fn update_audio_listener(
 }
 
 /// The dev chord + `M` — flip [`SoundConfig::muted`]. Lives on the dev-chord plane
-/// ([`benilla_world::modkeys::dev_chord`], decision 0585) so it can never collide with a game binding
+/// ([`benilla_world::modkeys::dev_chord`]) so it can never collide with a game binding
 /// and stays reachable with the chat bar open.
 fn toggle_mute(keys: Res<ButtonInput<KeyCode>>, mut config: ResMut<SoundConfig>) {
     if crate::run_mode::dev_chord(&keys, KeyCode::KeyM) {
@@ -748,7 +748,7 @@ fn apply_master_volume(
 /// director was doing when they heard it.
 const MIX_HEALTH_REPORT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Drain the backend's mix-health queues and report deadline misses (decision 1026).
+/// Drain the backend's mix-health queues and report deadline misses.
 ///
 /// This is the instrument the crackle investigation had to be run without: kira measures every
 /// callback's `elapsed / allotted` and we were throwing it away, so an underrun — the one failure
@@ -760,9 +760,9 @@ const MIX_HEALTH_REPORT: std::time::Duration = std::time::Duration::from_secs(5)
 /// crackle is *not* an underrun and the next suspect is upstream (a stepped parameter, a starved
 /// stream decoder) — which is exactly the disambiguation we could not make before. The starved
 /// stream decoder has its own meter now — [`mixer::StreamWatch`], fed by the music-stream
-/// holders (decision 1109; it registers on *neither* counter here) — and when every meter is
+/// holders (it registers on *neither* counter here) — and when every meter is
 /// quiet while the ear still hears something, `$WOW_MIX_TAP` records the waveform itself
-/// (decision 1112: a crackle can live purely in the mix's *content*).
+/// (a crackle can live purely in the mix's *content*).
 fn poll_mix_health(
     mut out: NonSendMut<SoundOutput>,
     time: Res<Time>,
@@ -773,8 +773,7 @@ fn poll_mix_health(
 ) {
     // While a probing run records, it owns the meters: [`meter::MixLevel::take`] is
     // reset-on-read, so two consumers would each see a fraction of the truth and both would
-    // under-report. The probe says everything this says, twenty times a second and to a file
-    // (decision 1556).
+    // under-report. The probe says everything this says, twenty times a second and to a file.
     if out.probe.is_some() {
         return;
     }
@@ -811,12 +810,12 @@ fn poll_mix_health(
     report_level(level, voices, rate);
 }
 
-/// The level half of the report (decision 1551) — the amplitude story none of the timing meters
+/// The level half of the report — the amplitude story none of the timing meters
 /// can tell. A mix that asks for more than full scale is not a maybe either: the sum did not fit,
 /// and without the limiter kira's `clamp` would have squared it off. The line names what the game
 /// asked for, how long it was over, what the limiter had to pull, and how many voices were live —
 /// which together say *why* (thirty voices at once is a different bug from one voice at 4×).
-/// The output-side story of one report window (decision 1857): every layer between the mix
+/// The output-side story of one report window: every layer between the mix
 /// and the speaker, each with its own number, so a crackle names its layer here.
 fn report_output(w: mixer::OutputWindow, peak_load: f32) {
     if w.cycles == 0 {

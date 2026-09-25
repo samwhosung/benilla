@@ -4,8 +4,8 @@
 //! not hold still, `WOW_PICK` says what geometry stands at them and whether it is visible. B38
 //! exhausted that layer. There, the awning is nearer than the plank behind it, writes depth, compares
 //! `GreaterEqual`, is not discarded and is not culled, and keeps the same mesh, material and texture
-//! on every single frame — and on half the frames the plank behind it wins the pixel anyway
-//! (decisions 0662, 0665). Under those facts that is impossible, so one of them stops being true
+//! on every single frame — and on half the frames the plank behind it wins the pixel anyway.
+//! Under those facts that is impossible, so one of them stops being true
 //! somewhere *after* the scene and before the draw, and nothing we had could see into that gap.
 //!
 //! So: `WOW_PHASE=<uniqueId>` watches every model batch of one placed object and reports, per frame,
@@ -42,7 +42,7 @@ impl Plugin for PhaseProbePlugin {
     fn build(&self, app: &mut App) {
         let raw = std::env::var("WOW_PHASE").ok();
         // `WOW_PHASE=particles` — the same question asked of every live PARTICLE emitter's quad
-        // mesh instead of one placement's batches (B16: a pool that is emitted, meshed, visible
+        // mesh instead of one placement's batches (a pool that is emitted, meshed, visible
         // and textured, whose pixels never change — "was its mesh ever SUBMITTED to a phase?" is
         // exactly the gap between the sim-side depth dump and the framebuffer).
         // `WOW_PHASE=particles[:<bone>,…]` — the bone list is the ARMING key, not a filter: the

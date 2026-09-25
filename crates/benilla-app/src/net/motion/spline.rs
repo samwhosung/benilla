@@ -1,6 +1,5 @@
 //! The server-authored path walk ([`Spline`], `SMSG_MONSTER_MOVE`) and the terrain re-ground that
-//! goes with it ([`ground_clamp_creatures`]) — the creature half of [`super`]'s motion model
-//! (decisions 0052/0059/0097).
+//! goes with it ([`ground_clamp_creatures`]) — the creature half of [`super`]'s motion model.
 
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -27,7 +26,7 @@ pub(crate) struct Spline {
     /// server validates the ack against the newest spline id. Irrelevant for a creature's walk.
     pub(crate) id: u32,
     /// A **ground walk** (the spline's `FLYING` bit was clear): the real client discards the path's Z
-    /// and re-derives it from the terrain under the unit (byte-verified — decision 0059), so
+    /// and re-derives it from the terrain under the unit (byte-verified), so
     /// [`ground_clamp_creatures`] snaps this unit onto benilla's terrain. `false` for a flying path,
     /// which keeps the spline's own Z.
     pub(crate) grounded: bool,
@@ -35,8 +34,7 @@ pub(crate) struct Spline {
     /// case is the one that does something: the real client's `SMSG_MONSTER_MOVE` commit
     /// `0x7c6a50` feeds this bit to `CMovement::SetRunMode 0x7c71c0` (`0x7c6ac2 and edi,0x100`;
     /// `0x7c6acb call`), whose argument is *run*, so **a spline without RUNMODE sets
-    /// `MOVEFLAG_WALK_MODE` on the unit it moves.** Every incoming spline re-authors the bit
-    /// (decision 1758).
+    /// `MOVEFLAG_WALK_MODE` on the unit it moves.** Every incoming spline re-authors the bit.
     ///
     /// Only the body **we drive** reads it ([`crate::player::server_ride`]) — a creature's own
     /// gait is derived from [`Spline::speed`], the path's arc length over its duration, so its
@@ -51,7 +49,7 @@ pub(crate) struct Spline {
     /// transport's live matrix, exactly as it already does for a rider whose pose came off a
     /// `MSG_MOVE_*` relay. It is also exempt from [`ground_clamp_creatures`]: the re-ground is a
     /// world-space terrain probe, there is no terrain under a deck, and the wire Z is already the
-    /// deck-local height (decision 1936).
+    /// deck-local height.
     pub(crate) deck: Option<u64>,
 }
 
@@ -262,7 +260,7 @@ pub(in crate::net) fn monster_move_spline(
         // A deck path's Z is the deck-local height and nothing re-derives it, so `grounded` — the
         // terrain-clamp opt-in — is meaningless there; `deck` is what the clamp actually skips on.
         // The flag still rides along because the SAMPLER reads it too: `grounded` selects the
-        // linear follow, `!grounded` the Catmull-Rom flight family (decision 1936).
+        // linear follow, `!grounded` the Catmull-Rom flight family.
         grounded: !flying,
         run_mode,
         deck,
@@ -270,7 +268,7 @@ pub(in crate::net) fn monster_move_spline(
 }
 
 /// Build the [`Spline`] a unit is **already riding** at the moment it streams into view — its create
-/// block's `MOVEFLAG_SPLINE_ENABLED` tail (decision 0708). Same path, same sampler as
+/// block's `MOVEFLAG_SPLINE_ENABLED` tail. Same path, same sampler as
 /// [`monster_move_spline`]; the one difference is *where the ride starts*: the server tells us how much
 /// of the path it has already covered ([`CreateSpline::time_passed_ms`]), so the spline's clock is
 /// **back-dated** by that much and [`Spline::sample`] picks the walk up exactly where the server has it,
@@ -308,7 +306,7 @@ pub(in crate::net) fn create_spline(spline: CreateSpline) -> Option<Spline> {
 }
 
 /// One `csp` line per create block that carried a live spline — the **supply** half of the
-/// spawn-freeze instrument (decision 0708), written to the shared `WOW_MOVE_TRACE` sink so it
+/// spawn-freeze instrument, written to the shared `WOW_MOVE_TRACE` sink so it
 /// interleaves with everything else on one clock. Logged from the wire, *before* the ride is
 /// interpreted, so the `WOW_CREATE_SPLINE=off` leg records the same lines as the fixed one and the two
 /// are directly diffable.
@@ -355,8 +353,8 @@ pub(in crate::net) fn trace_create_spline(guid: u64, spline: Option<&CreateSplin
 /// flushed), which is not a snap at all.
 ///
 /// Split into `xy` and `z` on purpose: only the **horizontal** part is a desync. A grounded creature's
-/// Z is deliberately ours, not the server's — [`ground_clamp_creatures`] re-derives it from our terrain
-/// (decision 0059), so on a slope a correctly-followed creature still reads a Z difference of a yard or
+/// Z is deliberately ours, not the server's — [`ground_clamp_creatures`] re-derives it from our terrain,
+/// so on a slope a correctly-followed creature still reads a Z difference of a yard or
 /// two against the wire. Read `xy`; `z` is the terrain disagreement, and reading the 3-D total instead
 /// would bury a clean follow in hill noise.
 pub(in crate::net) fn trace_move_snap(
@@ -413,7 +411,7 @@ pub(in crate::net) fn sample_splines(
         // and `transport::compose_riders` — which runs after this stage — carries it out to the
         // world. `Option` because only a `SMSG_MONSTER_MOVE_TRANSPORT` rider has one; a deck
         // spline whose component is missing falls back to the world write below rather than
-        // freezing (decision 1936).
+        // freezing.
         Option<&mut crate::transport::TransportRider>,
     )>,
     mut trace_next: Local<f32>,
@@ -463,7 +461,7 @@ pub(in crate::net) fn sample_splines(
             // creature moving along its path renders its root pitched to the segment's travel
             // pitch, nose-up positive about the body's local X; ground walkers render level. A
             // FLYING spline (the taxi) takes the full attitude — the tangent's climb plus the
-            // look-ahead BANK ([`Spline::flight_attitude`], decision 0516) — on the unit
+            // look-ahead BANK ([`Spline::flight_attitude`]) — on the unit
             // transform, so mount and rider tilt and lean as one composite, any model (0501's
             // placement law). Roll composes innermost: about the body's travel axis.
             let (pitch, bank) = if !spline.grounded {
@@ -506,7 +504,7 @@ pub(in crate::net) fn sample_splines(
 const SPL_TRACE_SECS: f32 = 1.0;
 
 /// One `spl` line per live [`Spline`] per [`SPL_TRACE_SECS`] — the **ride** half of the movement
-/// instrument, beside `csp`'s supply and `mmv`'s realized snaps (decision 0708). Those two log at
+/// instrument, beside `csp`'s supply and `mmv`'s realized snaps. Those two log at
 /// the wire; this one logs what the client is actually *drawing*, which is the only thing that
 /// answers "the server says it is flying and it looks frozen to me".
 ///
@@ -537,7 +535,7 @@ fn trace_ride(guid: u64, spline: &Spline, pos: [f32; 3], was: [f32; 3], now: Ins
 }
 
 /// **Whose Z and swim state does benilla derive?** — the one subject test
-/// [`mark_swimming_creatures`] and [`ground_clamp_creatures`] share (decision 1921, bug B357).
+/// [`mark_swimming_creatures`] and [`ground_clamp_creatures`] share (bug B357).
 ///
 /// Both used to ask `kind == Unit`, and **kind is the wrong question**. The reference has no such
 /// test: `SMSG_MONSTER_MOVE`'s apply `0x6187a0` splices *whatever unit the packet named* into the
@@ -552,7 +550,7 @@ fn trace_ride(guid: u64, spline: &Spline, pos: [f32; 3], was: [f32; 3], now: Ins
 /// So a **Player the server moves along a ground spline has its Z re-derived from the terrain
 /// exactly like a creature's**. cmangos's Playerbots drives its bots that way — they are Player
 /// objects moved by `SMSG_MONSTER_MOVE` — and with the kind test in place they kept the wire Z
-/// verbatim and strode a body-height over the slopes (B357). Nobody saw it on vmangos because a
+/// verbatim and strode a body-height over the slopes. Nobody saw it on vmangos because a
 /// *real* remote player's movement arrives relayed, carrying that player's own client-grounded Z.
 ///
 /// The set, and why each member is in it:
@@ -607,7 +605,7 @@ pub(crate) fn ground_derived(
 /// (`[0x7ff9c8]`) behind the probe, so a floor a hair above the feet supports the body; anything
 /// further above is simply not there. **Not** a lift: this clamp once started 2.5 yd above the seat
 /// (0059's "clear the little hill"), which is a probe the reference never casts — from up there the
-/// lid of a cage a unit stands *inside* reads as its floor (B372, decision 2018). The hill is the
+/// lid of a cage a unit stands *inside* reads as its floor. The hill is the
 /// walker's business now (the swept step below), and an idle unit is grounded exactly as far as the
 /// reference's settle would ground it: downward, from where it stands.
 const IDLE_UP_BAND: f32 = 1.0 / 36.0;
@@ -619,10 +617,10 @@ const IDLE_UP_BAND: f32 = 1.0 / 36.0;
 const GROUND_CLAMP_DOWN: f32 = 4.0;
 
 /// **The Y a grounded mover ends its frame at** — the reference's `0x634040` walk-resolve outcome
-/// plus the two granted modes that move it (decision 1780), as a pure function so the two callers
+/// plus the two granted modes that move it, as a pure function so the two callers
 /// cannot drift apart: [`ground_clamp_creatures`] for every streamed mover, and
-/// [`crate::player::server_ride`] for the body we are attached to while a server spline drives it
-/// (decision 1927). Before that second caller existed, the ride simply kept the wire Z — the same
+/// [`crate::player::server_ride`] for the body we are attached to while a server spline drives it.
+/// Before that second caller existed, the ride simply kept the wire Z — the same
 /// premise B357 corrected for bots, one layer up, and the same defect: a straight chord over a
 /// hollow, measured at +0.47 yd on a 16-yd Elwynn charge.
 ///
@@ -656,11 +654,11 @@ pub(crate) fn grounded_y(
 /// Ground every **grounded creature** on benilla's own world — the path-walkers (a ground spline)
 /// **and the idle ones standing at their raw spawn Z** (the "NPCs floating a bit"). The real client
 /// doesn't trust the wire Z for a walking unit: the grounded fork zeroes the spline Z-delta and the
-/// WALK resolver reads Z off the world trace (byte-verified, decision 0059); an idle unit reads
+/// WALK resolver reads Z off the world trace (byte-verified); an idle unit reads
 /// grounded against the reference too (the exact idle path isn't byte-pinned yet — 0059's open
 /// follow-up, reopened in decision 2018).
 ///
-/// **The probe geometry is the reference's, and it starts at the body** (decision 2018). A walker
+/// **The probe geometry is the reference's, and it starts at the body**. A walker
 /// continuing its path runs the shared swept step ([`crate::player::mover::grounded_step`]) from
 /// where it stood last frame with Δz = 0 — the ride up a walkable rise, the atomic step-up with a
 /// creature's own rise budget, the election snap down — and takes only the Y; the spline keeps the
@@ -670,11 +668,11 @@ pub(crate) fn grounded_y(
 /// ([`benilla_world::collision::WorldCollision::body_filter`]) — and takes the hit. Nothing here
 /// ever probes from *above* the body: that was 0059's `seat + 2.5` origin, and from up there a
 /// unit the server stood inside a GameObject's collision box found the box's lid as its floor
-/// (Galen Goodward on his cage, B372).
+/// (Galen Goodward on his cage).
 ///
 /// Scope is [`ground_derived`]: every `Unit`, plus a **`Player` the server moves** — a Playerbot,
 /// or anyone under a Charge/knockback/fear — because a body the server splines has no other Z
-/// authority here and the reference re-derives it the same way for either kind (B357, decision
+/// authority here and the reference re-derives it the same way for either kind (decision
 /// 1921). A **flying** spline keeps its own Z, and so does a **swimming** mover
 /// ([`CreatureSwimming`]): its wire Z *is* its swim depth — vmangos paths a water creature in 3D
 /// through the volume with a plain non-FLYING spline (verified
@@ -698,13 +696,12 @@ pub(crate) fn grounded_y(
 #[allow(clippy::type_complexity)] // one Bevy system's full input set
 pub(in crate::net) fn ground_clamp_creatures(
     world: benilla_world::collision::WorldCollision,
-    // The liquid query — a water-walking creature's floor is the surface, not the lakebed
-    // (decision 1780).
+    // The liquid query — a water-walking creature's floor is the surface, not the lakebed.
     points: benilla_world::world_point::WorldPoint,
     epoch: Res<benilla_world::collision::ColliderEpoch>,
     // The body a walker's step sweeps — the one player capsule every body shares, as the remote
-    // dead-reckon does (decision 0626). The reference sweeps each unit's own `CreatureModelData`
-    // radius/height (`[CMovement+0xb0]`/`+0xb4`, decision 1125); per-creature extents are the
+    // dead-reckon does. The reference sweeps each unit's own `CreatureModelData`
+    // radius/height (`[CMovement+0xb0]`/`+0xb4`); per-creature extents are the
     // refinement, not this record's.
     capsule: Res<crate::player::PlayerCapsule>,
     mut commands: Commands,
@@ -715,7 +712,7 @@ pub(in crate::net) fn ground_clamp_creatures(
         &mut Transform,
         Option<&mut GroundClamped>,
         Has<CreatureSwimming>,
-        // The server-granted movement modes (decision 1780). Two of them move this answer: HOVER
+        // The server-granted movement modes. Two of them move this answer: HOVER
         // rests the body a yard clear of the floor it found, and WATERWALKING makes the liquid
         // surface one of the floors it can find.
         Option<&crate::net::UnitMoveModes>,
@@ -730,7 +727,7 @@ pub(in crate::net) fn ground_clamp_creatures(
     let t0 = cost.then(std::time::Instant::now);
     let (mut visited, mut skipped, mut held, mut cast, mut swept, mut hit_n, mut moved) =
         (0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32);
-    // **The walker arm's two ground numbers** (decision 2174).
+    // **The walker arm's two ground numbers**.
     //
     // - `noflr` — walker frames whose swept step found no walkable floor at all. Expected nonzero
     //   while the world streams (our colliders arrive after the units do) and it is *harmless*:
@@ -779,7 +776,7 @@ pub(in crate::net) fn ground_clamp_creatures(
         // The granted-mode word is a *fourth input to the ray's answer*, so it joins the cache
         // gate below: a creature that is handed HOVER while standing perfectly still has not moved
         // and the world has not changed, and without this its cached ground answer would outlive
-        // the grant (decision 1780).
+        // the grant.
         let granted = modes.copied().unwrap_or_default();
         // **Re-seat on any write that wasn't ours.** The Y standing here differs from the one this
         // unit's last clamp left behind exactly when somebody who owns this unit's position moved
@@ -791,16 +788,16 @@ pub(in crate::net) fn ground_clamp_creatures(
             Some(c) if c.y_written == t.translation.y => c.seat_y,
             _ => t.translation.y,
         };
-        // The cast gate (decision 1357): a unit whose seat and XZ are bit-identical to the cast
+        // The cast gate: a unit whose seat and XZ are bit-identical to the cast
         // that produced its cached hit, in a world whose collider set has not changed since, cannot
         // get a different answer — those three ARE the ray's inputs. A moving floor (a lift, a
         // transport deck) reaches its rider through the wire's own position writes, which move the
         // seat and re-arm the cast; a building whose floor collider attaches a few frames after the
-        // unit was created moves the epoch and re-arms it (decision 1384 — before the epoch was in
+        // unit was created moves the epoch and re-arms it (before the epoch was in
         // the gate, that unit's wrong answer was cached for the session). A MISS never caches, so a
         // unit standing on a tile whose collider hasn't streamed in keeps asking until it lands.
         //
-        // **And the answer must still be STANDING, not merely unchanged** (decision 1921). The
+        // **And the answer must still be STANDING, not merely unchanged**. The
         // seat compare `c.seat_y == seat_y` cannot see the one case where those two come apart:
         // somebody rewrites this unit's Y to a pose whose *seat* equals the cached one, which is
         // exactly what a re-sent identical wire pose is (a periodic `SMSG_UPDATE_OBJECT`, a stop
@@ -834,8 +831,8 @@ pub(in crate::net) fn ground_clamp_creatures(
         //
         // The reference's second, rate-limited hover pass (`0x636fa1`, climbing back toward the
         // clearance at 7 yd/s) is deliberately NOT reproduced: this clamp is a pure function of
-        // (server pose, colliders) by construction, which is what makes its cache gate sound
-        // (decision 1384), and a per-frame ramp is state. A creature's seat is the server's, so the
+        // (server pose, colliders) by construction, which is what makes its cache gate sound,
+        // and a per-frame ramp is state. A creature's seat is the server's, so the
         // static answer is the one it converges to anyway.
         let water = granted
             .water_walking()
@@ -848,7 +845,7 @@ pub(in crate::net) fn ground_clamp_creatures(
             })
             .flatten();
         let hover = granted.hovering();
-        // ── Two answers, one probe law (decision 2018). ──
+        // ── Two answers, one probe law. ──
         // The reference has exactly one vertical probe geometry and it starts AT THE BODY: the WALK
         // resolver's settle sweeps DOWN from the current position (`0x636dcd`–`0x636e45`, `d·1.849
         // + 1/36`), and the only way up is the multipass step-up, which runs after a blocking hit
@@ -903,7 +900,7 @@ pub(in crate::net) fn ground_clamp_creatures(
                     steep: false,
                 },
             );
-            // **A walker whose sweep found no floor holds the server's pose** (decision 2174) —
+            // **A walker whose sweep found no floor holds the server's pose** —
             // the same law the idle branch below obeys, and the one [`grounded_y`] states in as
             // many words: a probe miss is either a genuinely airborne pose or ground that has not
             // streamed in, and an unclamped body belongs exactly where the server said. Taking
@@ -954,7 +951,7 @@ pub(in crate::net) fn ground_clamp_creatures(
         } else {
             let origin = Vec3::new(t.translation.x, seat_y + IDLE_UP_BAND, t.translation.z);
             let reach = IDLE_UP_BAND + GROUND_CLAMP_DOWN;
-            // The one-sided down-ray (decision 0970): a creature grounds like the player grounds
+            // The one-sided down-ray: a creature grounds like the player grounds
             // — a face whose winding points away is no floor, or an idle NPC would stand mid-air
             // on the very shell face the player mover now falls through.
             let hit = world.ray_body(origin, Dir3::NEG_Y, reach);
@@ -1065,7 +1062,7 @@ fn clamp_cost_enabled() -> bool {
 /// The A/B switch behind decision 1384: `WOW_CLAMP_SEAT=off` restores the pre-1384 clamp, which
 /// measured from its own previous answer and cached a hit without dating it against the collider
 /// set. That is the leg where a unit created inside a building before the building's floor collider
-/// attached stays under the floor for the session (B197) — kept as the lever that reproduces the bug
+/// attached stays under the floor for the session — kept as the lever that reproduces the bug
 /// on the fixed binary, so the fix's evidence never depends on two different builds.
 fn clamp_seat_disabled() -> bool {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -1099,7 +1096,7 @@ type SwimMarkQuery = (
     Has<SwimEvaluated>,
     // [`ground_derived`]'s four other inputs — this mark and the clamp walk the same population,
     // and must, or a server-splined body in water would be dragged to the lakebed by a clamp its
-    // own swim state was never derived to exempt it from (B357).
+    // own swim state was never derived to exempt it from.
     Has<Spline>,
     Has<GroundClamped>,
     Has<crate::net::Embodied>,
@@ -1107,7 +1104,7 @@ type SwimMarkQuery = (
 );
 
 /// This unit has been through [`mark_swimming_creatures`] with its room claim settled — the
-/// change-gate's stamp (decision 1445). A stationary unit's swim state cannot change while the
+/// change-gate's stamp. A stationary unit's swim state cannot change while the
 /// world stands still (1.12 water is static; the boundary depends only on the unit's own
 /// position and height), so a stamped unit re-evaluates only on `Changed<Transform>` — which
 /// every spline tick, teleport and clamp correction raises. The world NOT standing still is the
@@ -1128,7 +1125,7 @@ const CREATURE_SWIM_EXIT_BAND: f32 = 1.0 / 36.0;
 /// only from player packets, and a water creature's create block + splines carry no swim marker at
 /// all (verified `vmangos-src`, 2026-07-17). Neither does a **spline-driven player** — a Playerbot
 /// sends no `MSG_MOVE_*` of its own and `SMSG_MONSTER_MOVE` carries no flag word, so the same
-/// nothing arrives for it, and it is derived here for the same reason (B357, decision 1921). The
+/// nothing arrives for it, and it is derived here for the same reason. The
 /// gate below admits it: bit 3 PLAYER_CONTROLLED is set on every player object, so
 /// [`crate::player::may_swim`] is true. The real client runs its own depth decision `0x6030c0` on **remote
 /// units and creatures too**, not only on the body it steers.
@@ -1145,7 +1142,7 @@ const CREATURE_SWIM_EXIT_BAND: f32 = 1.0 / 36.0;
 /// population: the walk covers a unit only while its CMovement is linked and `+0x40 & 0x8000000`
 /// is clear.
 ///
-/// **What was missing is the gate** (B311, decisions 1568 + 1572). `0x6030c0` reads the unit's
+/// **What was missing is the gate**. `0x6030c0` reads the unit's
 /// `UNIT_FIELD_FLAGS` on **both** legs of its decision ([`crate::player::may_swim`] —
 /// PLAYER_CONTROLLED, PET_IN_COMBAT, USE_SWIM_ANIMATION): a set bit permits entry, and on the exit
 /// leg a set bit *prevents* the stop, so a unit with none of them **walks the lakebed at any
@@ -1183,7 +1180,7 @@ const CREATURE_SWIM_EXIT_BAND: f32 = 1.0 / 36.0;
 #[derive(Component)]
 pub(crate) struct CreatureSwimming;
 
-/// The last ground clamp this unit took (decisions 1357 + 1384) — [`ground_clamp_creatures`]' seat
+/// The last ground clamp this unit took — [`ground_clamp_creatures`]' seat
 /// and its cast gate. Every field compares by bit: the gate's question is "are the ray's inputs
 /// identical to the cast that produced this", never "close enough".
 #[derive(Component, Clone, Copy)]
@@ -1204,13 +1201,13 @@ pub(crate) struct GroundClamped {
     /// The collider-set stamp the answer was computed against — a cached answer outlives neither
     /// the unit's own pose nor the world it described.
     epoch: u64,
-    /// The granted-mode word the answer was computed under (decision 1780). HOVER and WATERWALKING
+    /// The granted-mode word the answer was computed under. HOVER and WATERWALKING
     /// both change what the same ray, from the same seat, in the same world, resolves to — so they
     /// are as much an input to the cached answer as the other three.
     modes: crate::net::UnitMoveModes,
     /// **The path this answer continues** — a walker's `(spline id, start)` — or `None` for an idle
     /// answer. A walker's frame is the reference's: Δz = 0 from where it stood last frame, then the
-    /// swept resolve (decision 2018). That continuity is exactly as long as one server path: the
+    /// swept resolve. That continuity is exactly as long as one server path: the
     /// reference re-bases its mover on every inbound movement packet (`0x7c6420`, `base :=
     /// packet pos`), so a new spline starts again from the server's own Z, and the late-floor
     /// ratchet 1384 removed cannot outlive a path here either.
@@ -1285,7 +1282,7 @@ pub(in crate::net) fn mark_swimming_creatures(
         if !ground_derived(net.kind, splined, clamped, embodied, relayed) {
             continue; // GameObjects don't swim; a relayed player carries the real flag on the wire
         }
-        // The unit's OWN room decides whose liquid answers (0696). Before it, both sources
+        // The unit's OWN room decides whose liquid answers. Before it, both sources
         // answered: Undercity's NPCs read Tirisfal's ADT water 95 yd over their heads and swam on
         // dry stone in rooms the player walked.
         //
@@ -1377,10 +1374,10 @@ mod under_floor {
         ));
         app.init_asset::<Mesh>().init_resource::<ColliderEpoch>();
         // The liquid/room facade the clamp and the dead-reckon both ask for a water-walker's
-        // surface (decision 1780). Seeded empty: this harness is about geometry, and an empty
+        // surface. Seeded empty: this harness is about geometry, and an empty
         // world answers "no liquid here", which is the case every test below is written for.
         benilla_world::world_point::init_world_point_resources(app.world_mut());
-        // The body a walker's swept step sweeps (decision 2018) — idle units never touch it.
+        // The body a walker's swept step sweeps — idle units never touch it.
         app.insert_resource(crate::player::PlayerCapsule(Collider::capsule(
             crate::player::CAPSULE_RADIUS,
             crate::player::CAPSULE_HEIGHT - 2.0 * crate::player::CAPSULE_RADIUS,
@@ -1450,7 +1447,7 @@ mod under_floor {
     }
 
     /// **A hovering creature rests exactly a yard over the floor it found** — and, faithfully,
-    /// **does not descend at all when that floor is under a yard away** (decision 1780). The
+    /// **does not descend at all when that floor is under a yard away**. The
     /// reference finalises `z = z_before_snap − max(L − 1.0, 0)` (`0x636e81`-`0x636ea9`), so the
     /// grant is not "+1 yd" but "stop a yard short of the snap, and never move *up*".
     ///
@@ -1493,7 +1490,7 @@ mod under_floor {
         );
     }
 
-    /// **A re-sent identical pose must not be held at the wire Z** (decision 1921). The cache gate
+    /// **A re-sent identical pose must not be held at the wire Z**. The cache gate
     /// asks whether the ray's inputs changed; until this test it did not also ask whether its own
     /// answer was still *standing*, so a unit whose Y was rewritten to a pose with the **same seat**
     /// — which is exactly what a periodic `SMSG_UPDATE_OBJECT` or a stop packet restating a
@@ -1528,7 +1525,7 @@ mod under_floor {
     /// wins over a lakebed below it, and loses to ground above it. The reference gets this for
     /// free — `MOVEFLAG_WATERWALKING` ORs the liquid layers into the walk trace's class mask
     /// (`0x63162e`), so one trace returns whichever is nearer the feet. Ours queries liquid
-    /// separately, so the max() is that election written out (decision 1780).
+    /// separately, so the max() is that election written out.
     ///
     /// With no liquid in this harness the mode must be inert — which is the assertion that would
     /// catch a `max` against a garbage surface (a `f32::MIN` sentinel, an unwrapped `None`).
@@ -1642,7 +1639,7 @@ mod tests {
         );
     }
 
-    /// The flying attitude on a straight climb (decision 0516 — `0x7c5490`'s flying branch): the
+    /// The flying attitude on a straight climb (`0x7c5490`'s flying branch): the
     /// pitch is the TANGENT's own climb (45° here), and a straight path never banks — the
     /// look-ahead direction coincides with the tangent, so θ = 2·acos(1) = 0.
     #[test]
@@ -1657,7 +1654,7 @@ mod tests {
         assert_eq!(bank, 0.0, "no bank on a straight path");
     }
 
-    /// The bank's sign law (0516): the θ between the XY tangent and the 1 s look-ahead direction,
+    /// The bank's sign law: the θ between the XY tangent and the 1 s look-ahead direction,
     /// ×2 — a LEFT turn (WoW CCW, `cross > 0`) leans left (+), the mirrored right turn leans
     /// right (−), and a gentle divergence stays inside the ±π/2 snap threshold.
     #[test]
@@ -1678,8 +1675,8 @@ mod tests {
         );
     }
 
-    /// A create-block spline is joined **where the server already is**, not restarted from the top
-    /// (decision 0708): a 20-yd path 12 s long, 9 s of it already ridden, samples three quarters
+    /// A create-block spline is joined **where the server already is**, not restarted from the top:
+    /// a 20-yd path 12 s long, 9 s of it already ridden, samples three quarters
     /// along — 15 yd in. Restarting it (the naive read of the same packet) would sample at 0 and put
     /// the creature back at the start.
     #[test]
@@ -1722,7 +1719,7 @@ mod tests {
         assert!(create_spline(spline(0, 5_000, vec![[1.0, 2.0, 3.0]])).is_none());
     }
 
-    /// The SNAP past ±π/2 (0516 — `0x7c5573..`: a snap to ±π, not a soft clamp): approaching a
+    /// The SNAP past ±π/2 (`0x7c5573..`: a snap to ±π, not a soft clamp): approaching a
     /// hairpin, the look-ahead lands on the return leg, the divergence doubles past π/2, and the
     /// bank pins to a full ±π roll — the reference's momentary switchback barrel-roll.
     #[test]
@@ -1893,7 +1890,7 @@ mod server_moved_players {
     const RIM_B: [f32; 3] = [0.0, -9.0, RIM_Z];
 
     /// A ground strip: the `(bevy x, bevy y)` profile extruded ±5 along Bevy Z, wound so its faces
-    /// point up — the one-sided down-ray (decision 0970) stands only on those.
+    /// point up — the one-sided down-ray stands only on those.
     fn ground_strip(app: &mut App, profile: &[(f32, f32)]) -> Entity {
         let mut verts = Vec::new();
         let mut tris = Vec::new();
@@ -1929,7 +1926,7 @@ mod server_moved_players {
         ));
         app.init_asset::<Mesh>().init_resource::<ColliderEpoch>();
         benilla_world::world_point::init_world_point_resources(app.world_mut());
-        // The body a walker's swept step sweeps (decision 2018) — idle units never touch it.
+        // The body a walker's swept step sweeps — idle units never touch it.
         app.insert_resource(crate::player::PlayerCapsule(Collider::capsule(
             crate::player::CAPSULE_RADIUS,
             crate::player::CAPSULE_HEIGHT - 2.0 * crate::player::CAPSULE_RADIUS,
@@ -2203,7 +2200,7 @@ mod server_moved_players {
         // A creature is ours walking or idle — decision 0059's law, untouched.
         assert!(unit(true, true, false, false));
         assert!(unit(false, false, false, false));
-        // …until we are steering it. A possessed creature is the controller's (decision 1927).
+        // …until we are steering it. A possessed creature is the controller's.
         assert!(!unit(true, true, true, false));
         assert!(!unit(false, false, true, false));
 
@@ -2228,7 +2225,7 @@ mod server_moved_players {
     }
 }
 
-/// **B372, and the probe law behind it** (decision 2018): a unit the server stands INSIDE a
+/// **B372, and the probe law behind it**: a unit the server stands INSIDE a
 /// GameObject's collision box — Galen Goodward in his cage, to the yard — and what a probe that
 /// starts at the body finds there, idle and walking; then the walker's two other duties, in the
 /// same harness: riding a hill it would otherwise chord under, and re-basing on a new path.

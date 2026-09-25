@@ -44,7 +44,7 @@ use super::TargetingWants;
 pub(crate) fn commit_ground_cast_on_click(
     mut clicks: MessageReader<WorldClick>,
     // The point the PRESS ray hit, not this frame's — the reference's `+0x360`, written by the one
-    // down-edge pick and read unchanged at the release (decision 1122).
+    // down-edge pick and read unchanged at the release.
     press: Res<crate::target::PressPick>,
     mut ladder: crate::spell::CastLadder,
 ) {
@@ -71,7 +71,7 @@ pub(crate) fn commit_ground_cast_on_click(
     let at = bevy_to_wow(point);
     // `BindLocation 0x6e60f0` has an arm per location bit and tests SOURCE first — the one click
     // binds `SPELLCAST+0x30` (wire `0x0020`) for a `Targets & 0x20` spell and `+0x3c` (wire
-    // `0x0040`) for a `& 0x40` one (decision 2218). `None` cannot happen behind
+    // `0x0040`) for a `& 0x40` one. `None` cannot happen behind
     // `pending_for(Location)`, whose mask is the same `0x60`; it stays a `let else` rather than an
     // unwrap so a future seam edit fails closed.
     let Some(bound) = ladder.ground.location_bind(at) else {
@@ -87,7 +87,7 @@ pub(crate) fn commit_ground_cast_on_click(
     ladder.commit_targeted(spell_id, commit, bound);
 }
 
-/// The world click's **GameObject** commit — the object leg (decision 0939). While targeting, a
+/// The world click's **GameObject** commit — the object leg. While targeting, a
 /// left-click that resolves to an object goes `0x492ce0` → `SELECT 0x4925d0` → `SetSelection
 /// 0x493540`, and `0x493540`'s *first* act is the targeting intercept: `4935ca call 0x6e48a0;
 /// je 0x4935ec` — targeting ⇒ `4935d5 call 0x6e5b40` `BindTarget(this = the clicked object)` and
@@ -120,7 +120,7 @@ pub(crate) fn commit_ground_cast_on_click(
 pub(crate) fn commit_object_cast_on_click(
     mut clicks: MessageReader<WorldClick>,
     // The press's pick, as in the terrain leg — the object a gesture binds is the one it started
-    // on, whatever the mouse did after (decision 1122).
+    // on, whatever the mouse did after.
     press: Res<crate::target::PressPick>,
     mut ladder: crate::spell::CastLadder,
 ) {
@@ -149,7 +149,7 @@ pub(crate) fn commit_object_cast_on_click(
     debug!("ui_action: cast {spell_id} committed at gameobject {guid:#x}");
     // The shared commit tail — `CMSG_CAST_SPELL` mask `0x800` + the packed guid for a known
     // opener, `CMSG_USE_ITEM` with the same block for a key's own ON_USE (the pending-cast block
-    // survives the cursor, decision 0914) — then the pending arm, the GCD, and the word cleared.
+    // survives the cursor) — then the pending arm, the GCD, and the word cleared.
     ladder.commit_targeted(spell_id, commit, TargetedBind::Object(guid));
 }
 
@@ -186,7 +186,7 @@ mod tests {
         world.init_resource::<super::super::SpellTargeting>();
         world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
         world.init_resource::<Messages<WorldClick>>();
-        // The commit legs read the PRESS latch now (decision 1122), not the live hover.
+        // The commit legs read the PRESS latch now, not the live hover.
         world.init_resource::<crate::target::PressPick>();
         // REGISTERED, not `run_system_once`: this seam's reader hygiene is a property of state
         // that survives between frames, and a fresh system per call would start every read at
@@ -212,11 +212,11 @@ mod tests {
         world.run_system(id).expect("the object commit runs");
     }
 
-    /// **`BindLocation 0x6e60f0`'s two arms, from one terrain click** (decision 2218). The same
+    /// **`BindLocation 0x6e60f0`'s two arms, from one terrain click**. The same
     /// click, the same point, the same commit tail — the standing word alone decides whether the
     /// point is bound to the SOURCE slot (`Targets 0x20`: Martin Fury's spell 265) or the DEST one
     /// (`Targets 0x40`: Blizzard). Before this, every ground commit wrote DEST, and a `0x20` word
-    /// never reached the cursor at all — it drew "Invalid target" (B388).
+    /// never reached the cursor at all — it drew "Invalid target".
     #[test]
     fn the_terrain_click_binds_source_or_dest_by_the_standing_word() {
         const BLIZZARD: u32 = 10;

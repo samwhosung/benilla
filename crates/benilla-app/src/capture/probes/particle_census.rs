@@ -13,7 +13,7 @@ use super::ProbeClock;
 /// one `UI_MainMenu` frame). Works at any state — the glue screens included, unlike the
 /// in-world-gated FPS probe.
 ///
-/// It also measures **draw distance** (decision 0678): each emitter's planar depth along
+/// It also measures **draw distance**: each emitter's planar depth along
 /// camera-forward — the coordinate the far-clip wall uses — and the draw-set gate's verdict, with
 /// `drawn_beyond_wall` on the summary line. That is the numeric form of "effects render at
 /// unlimited distance" (bug B39): emitters still ticking and drawing past the wall that has already
@@ -81,7 +81,7 @@ fn fire_particle_census(
     probe.fired = true;
     let mut total = 0usize;
     let mut n = 0usize;
-    // The B39 columns (decision 0678). Per emitter: its planar depth along camera-forward (the
+    // The B39 columns. Per emitter: its planar depth along camera-forward (the
     // coordinate the far-clip wall is measured in) and the draw-set gate's live verdict.
     //
     // **`drawn_beyond_wall` is the number that names the bug.** It counts emitters the gate is
@@ -141,7 +141,7 @@ fn fire_particle_census(
                     // `has_fade`, not `gated`: this column prints whether the emitter carries an
                     // `EmitterFade`, and calling it `gated` made it read as the draw-set verdict —
                     // which is `drawn` (its inverse), right beside it. A tile-emitter reading was
-                    // taken backwards off the old label before it was renamed (decision 2046).
+                    // taken backwards off the old label before it was renamed.
                     " depth={d:.1} drawn={drawn} lane={lane} has_fade={} at=({:.0},{:.0},{:.0})",
                     fade.is_some(),
                     c.x,
@@ -183,7 +183,7 @@ fn fire_particle_census(
             d.params.sample(None, 0.0, 0.0).lifespan,
             d.texture.as_deref().unwrap_or("-"),
             e.live(),
-            // The frame's composed MODEL alpha (decision 0827/0833) — the number that answers
+            // The frame's composed MODEL alpha — the number that answers
             // "this cloud is drawing, why can't I see it / why is it full strength?". An effect on
             // a unit that has not appeared yet reads ~0; one with no model above it reads 1.
             e.render_alpha(),

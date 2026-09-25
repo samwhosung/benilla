@@ -1,7 +1,6 @@
 //! Facing: the wire's `MonsterMoveFacing` resolution ([`resolve_facing`]) and the unit
 //! **display-facing smoother** ([`drive_display_facing`]) — the client's `0x600cd0` goal chain and
-//! its `+0xc98` box filter — with the [`FacingStep`] latch the anim layer's turn-shuffle reads
-//! (decision 0123).
+//! its `+0xc98` box filter — with the [`FacingStep`] latch the anim layer's turn-shuffle reads.
 //!
 //! **A unit has two facings and only one of them is the wire's**.
 //! The raw movement facing `CMovement+0x1c` is what the server put there; the *rendered character
@@ -9,7 +8,7 @@
 //! client-side, every frame, toward a goal it picks from an ordered chain. Two of that chain's goals
 //! are local decisions the server never sends: a stationary unit squares up on its
 //! `UNIT_FIELD_TARGET`, and **an NPC turns to face you for as long as its interaction window is
-//! open** (bug B110, decision 1467).
+//! open** (bug B110).
 //!
 //! benilla collapses the two facings into the unit's `Transform.rotation`, which is therefore the
 //! *display* facing; [`DisplayFacing::wire`] keeps the raw one alongside it, because the goal chain
@@ -33,7 +32,7 @@ use super::{yaw_of, RemoteMotion, Spline};
 /// at all* test, not a "close enough" one. Shared with the remote facing interp
 /// ([`super::remote`]) — the same latch drives a standing remote's mouse-turn shuffle.
 ///
-/// **This replaces `FACING_SETTLED = 0.05` (~3°), which was wrong twice over** (decision 1655).
+/// **This replaces `FACING_SETTLED = 0.05` (~3°), which was wrong twice over**.
 /// 0123 recorded `0x80c5c4`/`0x80c5c8` as "the client's small/large-delta thresholds" and left an
 /// "eyeballable stand-in" in their place; re-read at the bytes they are ±1e-5, a symmetric pair
 /// about zero, and the two bits they gate are *left/right*, not small/large. Sixty times too wide,
@@ -83,7 +82,7 @@ pub(crate) struct DisplayFacing {
 /// decision 0123) — so a squaring-up creature foot-shuffles instead of
 /// pivoting frozen, and each shuffle's return to Stand re-rolls the idle variation.
 ///
-/// **The applied step, not the remaining gap** (decision 1655): the client's latch reads
+/// **The applied step, not the remaining gap**: the client's latch reads
 /// `0x607ed0`'s accumulator — the increment it writes to `+0xc94` at `608239` — against
 /// [`TURN_LATCH_BAND`]. The two differ at the tail of a per-frame-halving ease, which is exactly
 /// where a shuffle is still meant to be playing. Removed the frame the body stops moving.
@@ -329,7 +328,7 @@ pub(crate) fn drive_display_facing(
         if tf.rotation != rot {
             tf.rotation = rot;
         }
-        // The turn-shuffle latch (decision 0123, corrected by 1650): the client tests the yaw
+        // The turn-shuffle latch (corrected by 1650): the client tests the yaw
         // this pump APPLIED (`0x607ed0`'s `param_2`, the increment written to `+0xc94`) against
         // the symmetric ±[`TURN_LATCH_BAND`] sign band — not the gap still to cover, and not a
         // "close enough" threshold. Folded because a pump may cross the wrap.
@@ -394,7 +393,7 @@ mod tests {
     }
 
     /// The steady behaviour is a per-frame HALVING — not a per-second rate — and π converges into
-    /// the dead-band in ~8-9 pumps. This is the shape benilla had wrong before decision 1467.
+    /// the dead-band in ~8-9 pumps. This is the shape benilla had wrong before.
     #[test]
     fn the_error_halves_per_pump_and_pi_settles_in_nine() {
         let mut hist = [0.0; 4];
@@ -541,7 +540,7 @@ mod tests {
         );
     }
 
-    /// The turn-shuffle latch's own law (decision 1655): [`FacingStep`] carries **the yaw this
+    /// The turn-shuffle latch's own law: [`FacingStep`] carries **the yaw this
     /// pump applied** — the client's `0x607ed0` accumulator, the increment it writes to `+0xc94` —
     /// tested against the symmetric ±[`TURN_LATCH_BAND`] sign band (`[0x80c5c8]`/`[0x80c5c4]`).
     ///

@@ -47,7 +47,7 @@
 //!   (*"Make this inn **my** home."*). Step 4's guard is therefore a lowercase `"home"` substring,
 //!   not an equality — the exact wording is the server's to choose.
 //! - **A probe login sees five rows here, not the three in the bug's screenshot.** GM mode is the
-//!   probe default (decision 0679; the preflight banner says so every run), and vmangos does not
+//!   probe default (the preflight banner says so every run), and vmangos does not
 //!   condition-filter a GM's menu — it appends `"(GM mode is ON)"` to the two holiday rows and
 //!   sends them anyway. So the bind row sits at list position 2 with wire index 1 on a probe, and
 //!   would sit at position 1 on a player. That is exactly why step 3 finds the row by its **wire
@@ -224,7 +224,7 @@ fn last_event(script: &UiScript) -> String {
 
 /// The `CHAT_MSG_SYSTEM` lines seen since the hook went in, newest last — step 6's second
 /// observation. `SMSG_PLAYERBOUND` prints `ERR_DEATHBIND_SUCCESS_S` here (`0x5e3d3f` →
-/// `DisplayError(0x138)`, chat type 238 = CHAT_MSG_SYSTEM; decision 1335).
+/// `DisplayError(0x138)`, chat type 238 = CHAT_MSG_SYSTEM).
 fn system_lines(script: &UiScript) -> Vec<String> {
     script
         .eval::<Vec<String>>("return ProbeBinderSystemLines or {}")
@@ -482,7 +482,7 @@ fn binder_probe(
         Phase::Line { since } => {
             // The feedback half of B249: "accepting appears to change nothing" was partly that
             // nothing ever SAID it had. SMSG_PLAYERBOUND prints ERR_DEATHBIND_SUCCESS_S
-            // ("%s is now your home.") as CHAT_MSG_SYSTEM — VERIFIED at `0x5e3d3f`, decision 1335.
+            // ("%s is now your home.") as CHAT_MSG_SYSTEM — VERIFIED at `0x5e3d3f`.
             let want = bound_line(&probe.bound_name);
             let lines = system_lines(&script);
             if lines.iter().any(|l| l == &want) {

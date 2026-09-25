@@ -5,7 +5,7 @@
 //! `PROBE_BANK: <step> PASS/FAIL/SKIP <detail>` line per step plus a final
 //! `PROBE_BANK: DONE pass=<n> fail=<m>` summary. Modeled closely on [`super::probe_mail`] (same
 //! phase-machine shape, trace style, self-terminating exit) — but unlike mail, the bank steps ride
-//! [`ClientCommand`]/the descriptor directly (decision 0604: the vault is already streamed, the
+//! [`ClientCommand`]/the descriptor directly (the vault is already streamed, the
 //! window is first-party, no Lua click surface to drive); the live Lua VM is only touched for the
 //! bonus refusal step's `UI_ERROR_MESSAGE` observation, the mail probe's own idiom.
 //!
@@ -57,7 +57,7 @@ use crate::ui_bank::{BankOpen, BankPrices};
 const BANKER_AT: [f32; 3] = [-4895.64, -1004.66, 504.024];
 /// Her creature template entry — the streamed-unit identity check.
 const BANKER_ENTRY: u32 = 5099;
-/// `UNIT_NPC_FLAG_BANKER` (bit 8) — the fallback identity check (either suffices; decision 0604).
+/// `UNIT_NPC_FLAG_BANKER` (bit 8) — the fallback identity check (either suffices).
 const NPC_FLAG_BANKER: u32 = 0x100;
 /// The server's `CheckBanker`/`GetNPCIfCanInteractWith` range is a few yards; scan generously wide
 /// so a slightly-off `.go` landing still finds her (the mail probe's `MAILBOX_SCAN_RANGE` idiom).
@@ -68,13 +68,13 @@ const ITEM_ENTRY: u32 = 2589;
 /// The first player-array bank slot (`PLAYER_FIELD_BANK_SLOT_1`'s wire index — `SLOT_PACK_FIRST`
 /// (23) + the backpack's 16 slots, decision 0604's addressing note: bank slots are wire 39-62).
 const SLOT_BANK_FIRST: u8 = SLOT_PACK_FIRST + 16;
-/// The client-side purchase ladder (`BankBagSlotPrices.dbc`, decision 0604) — the fallback used
+/// The client-side purchase ladder (`BankBagSlotPrices.dbc`) — the fallback used
 /// only if [`BankPrices`] failed to load; index = slots already purchased (0-based).
 const PRICE_LADDER: [u32; 6] = [1_000, 10_000, 100_000, 250_000, 500_000, 1_000_000];
 /// Slack added on top of the exact shortfall when the buy-slot step funds itself — the purse can
 /// move under it (a repair, a vendor sale) between the read and the purchase.
 const FUND_MARGIN_COPPER: u32 = 10_000;
-/// The purchasable-slot ceiling (decision 0604: `GetNumBankSlots()` reports full at 6).
+/// The purchasable-slot ceiling (`GetNumBankSlots()` reports full at 6).
 const MAX_BANK_BAGS: u8 = 6;
 /// How far past the banker's service range the refusal step teleports (yd, WoW space) — well
 /// past the handful of yards `GetNPCIfCanInteractWith` checks.
@@ -442,7 +442,7 @@ fn bank_probe(
                     // Fund the rung and come back next tick. `.modify money <n>` ADDS `n` copper
                     // (vmangos `HandleModifyMoneyCommand`: the arg is `addmoney`, not a set) and
                     // needs SEC_BASIC_ADMIN(4) — which probe accounts have had since they were
-                    // actually raised to 6 (0651). This step used to SKIP here, because the
+                    // actually raised to 6. This step used to SKIP here, because the
                     // accounts were gmlevel 3 and the grant would have been refused; the whole
                     // buy-slot leg was therefore unverified whenever the purse ran dry.
                     let grant = cost - money + FUND_MARGIN_COPPER;

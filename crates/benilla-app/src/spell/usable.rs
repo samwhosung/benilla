@@ -58,7 +58,7 @@ pub(crate) struct UsableCtx<'a> {
 }
 
 /// How many equipment indices the search covers — `0..=22` (`0x5f0c50`'s `cmp ebx,0x17; jl`): the
-/// 19 worn slots plus the four equipped bags. We walked 19 before decision 1903.
+/// 19 worn slots plus the four equipped bags. We walked 19 before.
 const EQUIPMENT_SLOTS: u8 = 23;
 
 /// `AttributesEx3`'s two hand restrictions, which is where the reference's **slot mask** comes
@@ -131,7 +131,7 @@ pub(crate) fn equipped_item_fits_cached(
 }
 
 /// **Which equipped-item reason the cast refuses with** — TryCast rung 7's own selection
-/// (`0x6e40e0` @ `6e416e`–`6e4180`, decision 1925). It is keyed on `AttributesEx3` **alone**: not
+/// (`0x6e40e0` @ `6e416e`–`6e4180`). It is keyed on `AttributesEx3` **alone**: not
 /// on `EquippedItemClass`, and not on which hand's search failed.
 ///
 /// ```text
@@ -187,10 +187,10 @@ pub(crate) fn equipped_item_fits(
         return true;
     }
     let class = d.equipped_item_class as u32;
-    // The **slot mask** first (decision 1903): `AttributesEx3` narrows the search to one hand for
+    // The **slot mask** first: `AttributesEx3` narrows the search to one hand for
     // an ability that names one, and to everything otherwise.
     let mut mask = hand_mask(d);
-    // …then the disarm ladder strips the hidden hand's bit out of it (decision 1863, its citation
+    // …then the disarm ladder strips the hidden hand's bit out of it (its citation
     // corrected by 1903: the reference does this at `0x5f0c69`/`0x5f0c91` with `visFlag = 1`
     // probes and a mask edit, NOT by `GetWeapon` returning NULL — same ladder, same outcome, one
     // hand only). A disarmed warrior's Heroic Strike greys out and its tooltip requirement line
@@ -230,8 +230,8 @@ pub(crate) struct WornItem {
 
 /// The search body, over a per-slot resolver the caller supplies — because two callers need it
 /// with different borrows: the greying leg and the tooltip hold `&mut Items` and may ASK the
-/// server on a miss, while the cast ladder's rung 7 runs inside a `&Items` borrow and must not
-/// (decision 1925). `None` from the resolver is the shared benefit-of-the-doubt: an item whose
+/// server on a miss, while the cast ladder's rung 7 runs inside a `&Items` borrow and must not.
+/// `None` from the resolver is the shared benefit-of-the-doubt: an item whose
 /// template has not landed counts as a match, never a refusal on missing data.
 fn equipped_slots_match(
     store: &ObjectStore,
@@ -252,7 +252,7 @@ fn equipped_slots_match(
             // The reference's two rejects, applied before the class match: a DEPRECATED item and
             // a genuinely BROKEN one (`MaxDurability > 0 && Durability == 0`) cannot satisfy a
             // requirement. Note this is the one place durability DOES gate something — it drives
-            // no animation or model path anywhere (decision 1863).
+            // no animation or model path anywhere.
             if it.flags & ITEM_FLAG_DEPRECATED != 0 {
                 return false;
             }
@@ -374,7 +374,7 @@ pub(crate) fn spell_usable(
     if !equipped_item_fits(d, ctx.store, objects, items, commands) {
         return (false, false);
     }
-    // Leg 5 (`0x6e3e7a`–`0x6e3eb2`): the combo-point gate (0879). A
+    // Leg 5 (`0x6e3e7a`–`0x6e3eb2`): the combo-point gate. A
     // `test [SpellRec+0x1c], 0x500000` selects finishing moves — ONE any-of test with one jcc, so
     // `AttributesEx` b20 and b22 never fork — and then `mov al,[ecx+0x1029]; test al,al` fails the
     // leg when the caster's combo-point byte is 0. That is `PLAYER_FIELD_BYTES` byte 1 off the
@@ -385,13 +385,13 @@ pub(crate) fn spell_usable(
     // CASTER-only, now proven rather than assumed: the current-target GUID globals `0xb4e2d8/dc`
     // appear nowhere before leg 10 in the whole of `0x6e3d60`. So a point banked on mob A with mob
     // B selected really does leave this button lit, and the server really does refuse it with
-    // `SPELL_FAILED_BAD_TARGETS` — the client's own divergence, not ours (0869, 0879). Overpower
+    // `SPELL_FAILED_BAD_TARGETS` — the client's own divergence, not ours. Overpower
     // is this leg's whole reason to exist: it has no aura state, so every other leg passes and the
     // button stayed lit forever without it.
     //
     // NO class gate here, and that asymmetry is the whole point: the Lua `GetComboPoints 0x51a190`
     // reads this same byte behind `cmp al,4 / cmp al,0xb`, so a warrior's Overpower point greys
-    // the button through this leg while lighting no combo dot (decision 0875). Anything the
+    // the button through this leg while lighting no combo dot. Anything the
     // *client* gates on reads the wire, never `GetComboPoints`.
     if d.needs_combo_points() && ctx.store.0.player_combo_points().unwrap_or(0) == 0 {
         return (false, false);
@@ -469,7 +469,7 @@ pub(crate) fn spell_usable(
 /// health included for negative types) — and then the talent cost cut, `SPELLMOD_COST` (op 14),
 /// which `0x6e31b0` applies inside itself at `6e32e3` through the integer applier `0x6e6af0`
 /// (`crate::spell::mods`). One law, every consumer: the usable walk's leg 12, the press-path
-/// power gate (0948), and the tooltip's cost cell (1074) — mirroring the byte fn's own caller
+/// power gate, and the tooltip's cost cell (1074) — mirroring the byte fn's own caller
 /// set (`0x609657`/`0x60968d`/`0x4e5201`/`0x6e3fdb`/`0x52e8ad`/`0x507de3`). The reference's
 /// per-school unit mods are still not modeled — what remains of 0948's standing gap.
 ///
@@ -503,7 +503,7 @@ pub(crate) fn power_cost(d: &SpellDisplay, store: &ObjectStore, mods: &SpellModi
 
 /// Whether the caster can afford `d`'s power cost — the shared availability-vs-cost compare
 /// behind BOTH the usable walk's leg 12 (`0x6e3fba`) and the press-path power gate
-/// (`0x6094f0` @ `0x60962c`, decision 0948): raw `UNIT_FIELD_POWER[type]` — ANY negative
+/// (`0x6094f0` @ `0x60962c`): raw `UNIT_FIELD_POWER[type]` — ANY negative
 /// PowerType reads `UNIT_FIELD_HEALTH` instead (the ref's `jl` at `0x609631`; Bloodrage's −2) —
 /// signed-compared against [`power_cost`]'s number.
 pub(crate) fn can_afford(d: &SpellDisplay, store: &ObjectStore, mods: &SpellModifiers) -> bool {
@@ -533,7 +533,7 @@ mod tests {
         ObjectStore(ObjectFields::from_pairs(&base))
     }
 
-    /// **The disarm ladder reaches the action bar** (decision 1863). The reference's own
+    /// **The disarm ladder reaches the action bar**. The reference's own
     /// equipped-item test `0x5ea5d0` walks its three `GetWeapon` slots with `visFlag = 0`, so the
     /// hand `UNIT_FLAG_DISARMED` hides stops satisfying a weapon requirement — a disarmed
     /// warrior's Heroic Strike greys out and its tooltip requirement line turns red. Because the
@@ -588,7 +588,7 @@ mod tests {
         assert!(!fits(true, &[(INV_OFFHAND, 0x2b)]));
     }
 
-    /// **The slot mask and its two rejects** (decision 1903) — the rest of `0x5f0c50`, which the
+    /// **The slot mask and its two rejects** — the rest of `0x5f0c50`, which the
     /// mislabelled census row had hidden behind a three-slot `GetWeapon` loop that does not exist.
     /// The search is equipment indices `0..=22`, narrowed by `AttributesEx3` to one hand when the
     /// ability names one, and a worn item that is DEPRECATED or genuinely BROKEN cannot satisfy it.

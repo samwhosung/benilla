@@ -1,5 +1,5 @@
 //! Remote-player dead-reckoning ([`RemoteMotion`], relayed `MSG_MOVE_*`) — the player half of
-//! [`super`]'s motion model (decision 0053): flag-driven ground locomotion between the ~2 Hz
+//! [`super`]'s motion model: flag-driven ground locomotion between the ~2 Hz
 //! heartbeats, and the jump as a locally-played ballistic event.
 
 use benilla_assets::coords::{bevy_to_wow, wow_to_bevy};
@@ -21,7 +21,7 @@ use super::{yaw_of, Spline};
 /// entity `Transform` is derived from it each frame); a packet overwrites it (a correction/snap). Not
 /// added to our own avatar (the controller drives that) nor to creatures (they ride a server [`Spline`]).
 ///
-/// **A jump is a ballistic event, not flag-driven walking** (decision 0053): while `JUMPING`
+/// **A jump is a ballistic event, not flag-driven walking**: while `JUMPING`
 /// ([`move_flags::FALLING`]) is set, the horizontal velocity is *frozen* at the launch
 /// ([`Self::jump_xy_vel`]) and the height follows a parabola under gravity ([`Self::vertical_velocity`])
 /// — the launch played out locally — rather than the ground locomotion the direction flags imply. Each
@@ -55,7 +55,7 @@ pub(crate) struct RemoteMotion {
     /// across the arc, cleared on landing. `None` on the ground (or if the mover was already airborne
     /// when it entered view — no takeoff seen, so no fall-height reference). Feeds the remote
     /// **landing predictor**: on the `FALLING → grounded` edge, `fall_start_z − landing_z` is the fall
-    /// height that gates the grunt + dust puff (decision 0415; the launch-height apex proxy the
+    /// height that gates the grunt + dust puff (the launch-height apex proxy the
     /// self-player path uses, applied identically to observed movers).
     pub(crate) fall_start_z: Option<f32>,
     /// Not-yet-due relayed moves, fire-time ascending — the reference's per-unit move-event queue
@@ -65,7 +65,7 @@ pub(crate) struct RemoteMotion {
     /// own timeline, so the residual at apply time is structurally small.
     pub(crate) pending: std::collections::VecDeque<PendingMove>,
     /// This mover's replay chain — the per-unit timing cells that pick each packet's fire-time
-    /// (decision 0615; [`super::relay`]). Per unit, exactly as the reference holds them on the
+    /// ([`super::relay`]). Per unit, exactly as the reference holds them on the
     /// unit's own CMovement.
     pub(crate) relay: RelayChain,
     /// Real-time ms when a packet last applied to this mover (`0.0` until the first one), and the
@@ -78,7 +78,7 @@ pub(crate) struct RemoteMotion {
 /// What [`crate::net::apply`]'s `unit_move` did with an inbound relayed move — the `out=` field of
 /// the `rly` trace. Every arrival gets a line, **including the ones we discard**: "the packet never
 /// showed up" and "the packet showed up and lost" are different bugs with the same symptom, and the
-/// trace has to tell them apart (decision 0619).
+/// trace has to tell them apart.
 #[derive(Clone, Copy)]
 pub(in crate::net) enum RelayOutcome {
     /// Applied at arrival — it was due and the unit's queue was empty.
@@ -89,7 +89,7 @@ pub(in crate::net) enum RelayOutcome {
     Seed,
     /// **Ours** — a server-authored pose for our own mover (`.go forward`, `.cheat fly`, an
     /// anticheat snap-back). Handed to the controller as a [`crate::net::SelfMoveMessage`] rather
-    /// than applied down this lane; the reference has no mover-guid gate at all (decision 0725).
+    /// than applied down this lane; the reference has no mover-guid gate at all.
     SelfMover,
     /// **No entity for this guid.** The mover isn't in our object index — so this packet, Stop or
     /// not, changes nothing. A stale mover that keeps running while these accumulate is a streaming
@@ -129,7 +129,7 @@ pub(in crate::net) fn trace_relay(
     let lead = chain.lead_ms(now_ms);
     // One tag per verb, `tp` and `rt` included: a mover that appears in the wrong place, or keeps
     // sliding through a root, is the report where "did that packet arrive?" is the whole question,
-    // and the trace has to answer it without a second run (decisions 2061/2064).
+    // and the trace has to answer it without a second run.
     let kind = match mv.verb {
         benilla_protocol::RelayVerb::Heartbeat => "hb",
         benilla_protocol::RelayVerb::Teleport => "tp",
@@ -150,7 +150,7 @@ pub(in crate::net) fn trace_relay(
 
 /// How long a mover may dead-reckon with **nothing queued** before the runaway watch starts
 /// reporting it (ms). A moving unit is normally fed every frame while it turns and at worst every
-/// 500 ms by the heartbeat (decision 0617), so two seconds of silence with a direction flag still
+/// 500 ms by the heartbeat, so two seconds of silence with a direction flag still
 /// live means we are inventing motion the server never described.
 const RUNAWAY_SILENCE_MS: f64 = 2000.0;
 
@@ -170,7 +170,7 @@ fn trace_runaway(guid_hint: Entity, rm: &RemoteMotion, now_ms: f64, silent_s: u3
     ];
     // The inbound census rides every line, because it is the discriminator: a starving mover with
     // packets still landing means the **server** stopped relaying that unit; a starving mover with
-    // the whole census frozen means the **socket** died with nobody noticing (decision 0621).
+    // the whole census frozen means the **socket** died with nobody noticing.
     let (pkts, age) = crate::net::io::inbound_census();
     let age = age.map_or_else(|| "never".to_string(), |ms| format!("{ms}ms"));
     benilla_assets::trace::line(
@@ -196,7 +196,7 @@ const REMOTE_TRACE_MS: f64 = 500.0;
 /// The pair is the whole point. A reported pitch with a zero tilt is the gate refusing (idle or
 /// strafe-only swim, or not swimming at all); a zero on *both* is a mover whose client never sent
 /// a pitch. Before this, neither number appeared anywhere — the observed-swimmer tilt landed in
-/// July 2026 (decision 0464) with no trace and no test, so "do other swimmers tilt?" was a
+/// July 2026 with no trace and no test, so "do other swimmers tilt?" was a
 /// question only the director's eye could answer.
 fn rendered_pitch(rm: &RemoteMotion) -> f32 {
     let (_, x, _) = crate::creature_anim::swim_body_rotation(0.0, rm.flags, rm.pitch)
@@ -263,7 +263,7 @@ pub(in crate::net) fn arrival_snap() -> bool {
     *SNAP.get_or_init(|| std::env::var_os("WOW_REMOTE_SNAP").is_some())
 }
 
-/// `WOW_REMOTE_FLAT=1` — the other A/B escape (decision 0626): dead-reckon a remote mover **without
+/// `WOW_REMOTE_FLAT=1` — the other A/B escape: dead-reckon a remote mover **without
 /// the world**, the pre-0626 behaviour — height frozen at the last packet's Z, the step unswept.
 /// Restores both defects on demand (a watched player sinking into rising ground and floating over
 /// falling ground; a mover marching into the wall its own client is stopped at), which is what makes
@@ -280,7 +280,7 @@ fn flat_extrapolation() -> bool {
 /// inside a building whose floor collider has not attached yet is walked down through the floor at
 /// `STEP_SNAP_SLACK` (1/36 yd) a frame — 1.67 yd/s at 60 fps — and left on the terrain under
 /// it for the session. Kept as the lever that reproduces B197's player site on the *fixed* binary,
-/// the twin of [`flat_extrapolation`] (0626) and `WOW_CLAMP_SEAT=off` (1384), and for the same
+/// the twin of [`flat_extrapolation`] and `WOW_CLAMP_SEAT=off` (1384), and for the same
 /// reason: the fix's evidence never has to depend on two different builds.
 fn idle_gate_disabled() -> bool {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -352,7 +352,7 @@ pub(super) fn facing_lerp(orientation: f32, target: f32, dt: f32, remaining_s: f
 /// Apply one relayed move to a unit — the pose snap + integrator re-seed the reference performs
 /// at arrival (`0x7c6420`) or at scheduled fire (`0x617e90` → `0x7c69a0`): position/facing/flags
 /// committed outright onto the ONE simulated pose, ballistic re-seeded from the jump tail, the
-/// landing predictor stepped, and the rider tail (decision 0438) re-anchored. Shared by the
+/// landing predictor stepped, and the rider tail re-anchored. Shared by the
 /// arrival path ([`crate::net::apply`]'s `unit_move`) and the queue drain ([`drain_pending_moves`]).
 pub(in crate::net) fn apply_move(
     e: Entity,
@@ -383,7 +383,7 @@ pub(in crate::net) fn apply_move(
     let (vertical_velocity, jump_xy_vel) =
         jump_seed(ev.jump, ev.fall_time, ev.flags & move_flags::SAFE_FALL != 0);
     let now_falling = ev.flags & FALLING != 0;
-    // The remote landing predictor (decision 0415): on the FALLING → grounded edge the fall
+    // The remote landing predictor: on the FALLING → grounded edge the fall
     // height gates the grunt + dust puff, exactly as the self controller does for us.
     let was_falling = rm.flags & FALLING != 0;
     let (new_start, descent) =
@@ -394,7 +394,7 @@ pub(in crate::net) fn apply_move(
     }
     rm.wow_pos = ev.position;
     rm.orientation = ev.orientation;
-    // **A merge, not an assignment** (decision 2064): the reference folds a relayed word through
+    // **A merge, not an assignment**: the reference folds a relayed word through
     // `0x75a07dff` at `0x618de7`, keeping the client-owned bits outside it — `ON_TRANSPORT` above
     // all, which is why a relayed pose relocates a rider without deboarding them. Today every bit
     // benilla holds on a watched mover comes from the wire and lands inside the mask, so this
@@ -426,7 +426,7 @@ pub(in crate::net) fn apply_move(
 /// dequeue + dispatch once due). Runs before [`extrapolate_remote_units`], which then advances
 /// the freshly-applied state and runs the pre-fire reconcile lerp against the next queued head.
 ///
-/// **REAL time, deliberately** (decision 0615): this is a replay clock paced against the server's
+/// **REAL time, deliberately**: this is a replay clock paced against the server's
 /// stamps, and the reference's is the OS wall clock (`0x42c010`, a QPC-derived ms counter). Bevy's
 /// virtual clock clamps every frame delta to `max_delta` (250 ms), so under macOS occlusion
 /// throttling (~1 fps for a backgrounded client — i.e. exactly the side-by-side A/B against the
@@ -457,11 +457,11 @@ pub(in crate::net) fn drain_pending_moves(
 ///
 /// **The step is then resolved against the world** ([`crate::player::mover::grounded_step`], decision
 /// 0626) — the same swept capsule, colliders and step-vs-fall election our own avatar walks on,
-/// because the reference drives every mover through one controller (decision 0059). Height therefore
+/// because the reference drives every mover through one controller. Height therefore
 /// comes from the ground under the mover **every frame**, and the dead-reckon cannot walk a watched
 /// player into geometry.
 ///
-/// **…for a mover the reference integrates at all** (decision 1545). One controller, every mover —
+/// **…for a mover the reference integrates at all**. One controller, every mover —
 /// but a mover with none of [`move_flags::INTEGRATED`] (`0x20ff`) set does not reach that controller
 /// in the first place: `CMovement::Update`'s substep loop and the manager's per-mover tick both bail
 /// on the same mask, and a flag-less unit is not even in the mover list. So a *standing* watched
@@ -496,9 +496,9 @@ pub(in crate::net) fn extrapolate_remote_units(
     time: Res<Time<Real>>,
     mut commands: Commands,
     // Avian's kinematic move-and-slide + the player-body capsule — the *same* pair the local
-    // controller sweeps (decision 0626): one controller, every mover.
+    // controller sweeps: one controller, every mover.
     world: benilla_world::collision::WorldCollision,
-    // The liquid query, for a water-walking mover's surface (decision 1780). Liquid is asked on our
+    // The liquid query, for a water-walking mover's surface. Liquid is asked on our
     // side rather than swept, so — exactly as the local controller does — the plane has to be handed
     // to the step ([`crate::player::mover::Support::water`]).
     points: benilla_world::world_point::WorldPoint,
@@ -524,8 +524,8 @@ pub(in crate::net) fn extrapolate_remote_units(
             // report — so two movers in one capture could not be told apart at all. `spl` has
             // carried its guid since it was written; this was the odd one out.
             Option<&crate::net::Guid>,
-            // The server-granted modes this unit was handed by the `SMSG_SPLINE_MOVE_*` family
-            // (decision 1780). Normally empty on a relayed **player** — vmangos only broadcasts
+            // The server-granted modes this unit was handed by the `SMSG_SPLINE_MOVE_*` family.
+            // Normally empty on a relayed **player** — vmangos only broadcasts
             // that family for a unit it is driving itself — which is exactly why it is OR'd with
             // the pose's own flags below rather than replacing them: for a player the modes ride
             // the pose (they are inside the server-authored merge mask), for a creature they ride
@@ -560,7 +560,7 @@ pub(in crate::net) fn extrapolate_remote_units(
         // resolve, before the reconcile lerp, so it is the *collision's* doing and not the
         // correction's. Stays 0 for a mover the resolve skips (swimming, on a boat).
         let mut held = 0.0f32;
-        // **The step meets the ground** (decision 0626). What [`RemoteMotion::advance`] produced is
+        // **The step meets the ground**. What [`RemoteMotion::advance`] produced is
         // our *invention* — the mover's own client has not told us anything since the last packet —
         // and an invention that ignores the world is what a watched player sinking into a hillside
         // and popping back out actually is. Run it through the local controller's own grounded
@@ -568,9 +568,9 @@ pub(in crate::net) fn extrapolate_remote_units(
         // against ours too, instead of marching into it) and the step-vs-fall election (so height
         // comes from the surface every frame, instead of standing frozen at the last packet's Z
         // until the next one snaps it). The reference makes no distinction here — one controller
-        // integrates and commits every mover (decision 0059).
+        // integrates and commits every mover.
         //
-        // **An airborne arc resolves too — but only against walls** (decision 0627). A jump owns its
+        // **An airborne arc resolves too — but only against walls**. A jump owns its
         // Z (the ballistic arc is the whole point), so it gets no election snap and no step-up; what
         // it does get is the same swept capsule, because a watched player who jumps into a building
         // has to be stopped by it. Unswept, our invented arc carried them *inside* the wall for the
@@ -584,7 +584,7 @@ pub(in crate::net) fn extrapolate_remote_units(
         // fight it).
         let airborne = rm.flags & move_flags::FALLING != 0;
         let afloat = rm.flags & move_flags::SWIMMING != 0;
-        // …and **a flag-still mover is not integrated at all** (decision 1545) — the reference's
+        // …and **a flag-still mover is not integrated at all** — the reference's
         // own gate, [`move_flags::INTEGRATED`] = `0x20ff`: `CMovement::Update`'s substep loop
         // (`0x616e20`) and the manager's per-mover tick (`0x6166f5`) both bail on it: such a unit
         // is not even in the mover list. Its pose is the last packet's, verbatim.
@@ -607,7 +607,7 @@ pub(in crate::net) fn extrapolate_remote_units(
         // gate skips it strictly earlier and for a stated reason — taking the last un-dated
         // collision cache (1384's part 3, never fixed on this lane) with it.
         //
-        // **This mover's whole `MOVEMENTFLAGS` word, as the reference holds it** (decision 1780):
+        // **This mover's whole `MOVEMENTFLAGS` word, as the reference holds it**:
         // the pose's own flags plus whatever the `SMSG_SPLINE_MOVE_*` family granted. Read by the
         // ground step's `Support` below — not by the integration gate on the next line, which is
         // the reference's own `0x20ff` over the *pose's* direction bits and none of the modes.
@@ -627,7 +627,7 @@ pub(in crate::net) fn extrapolate_remote_units(
             let resolved_center = if airborne {
                 crate::player::mover::airborne_step(&world, &capsule.0, from, vel, time.delta())
             } else {
-                // **The observed mover's own granted modes, honoured** (decision 1780 — 0866 built
+                // **The observed mover's own granted modes, honoured** (0866 built
                 // the family for our own mover and left this site reading `Support::default()`,
                 // which drew a hovering watched player a yard low and sagged a water-walker
                 // through the surface between packets). `modes` is the union of the pose's flags
@@ -678,7 +678,7 @@ pub(in crate::net) fn extrapolate_remote_units(
                         steep: false,
                     },
                 );
-                // **The no-floor drop is declined here too** (decision 2174, closing 1545's own
+                // **The no-floor drop is declined here too** (closing 1545's own
                 // residual). 1545 named this exact defect — *"`grounded_step`'s no-hit branch
                 // spends that whole reach descending — right for the local mover, whose next frame
                 // elects a real fall, and open-loop for a remote, which has no fall election at
@@ -694,7 +694,7 @@ pub(in crate::net) fn extrapolate_remote_units(
             held = (pos[0] - resolved[0]).hypot(pos[1] - resolved[1]);
             pos = resolved;
         }
-        // The pre-fire reconcile toward the queued head (decisions 0601/0602/0603):
+        // The pre-fire reconcile toward the queued head:
         // - **Facing** interpolates toward a NON-heartbeat event's facing (the reference's
         //   `0x618f80` ω armed by `0x619030`, integrated by `0x7c4f30` — its only smoothed
         //   facing path; a mouse-turning mover streams facing in SET_FACING packets, so without
@@ -729,7 +729,7 @@ pub(in crate::net) fn extrapolate_remote_units(
         // shuffle already.) Dropped the frame the body stops moving.
         //
         // **The yaw this frame APPLIED, against the ±1e-5 sign band** — the client's own latch
-        // input and its own band (`0x607ed0` `60843b`–`608473`; decision 1655), not the gap still
+        // input and its own band (`0x607ed0` `60843b`–`608473`), not the gap still
         // to cover measured against an eyeballed ~3°. `facing_lerp` above is what moved it; with
         // nothing queued it does not move at all, so the `pending` test the old form needed is
         // carried by the quantity itself.
@@ -824,11 +824,11 @@ pub(in crate::net) fn extrapolate_remote_units(
 /// `+7.958` *up* via the opcode, discarding the wire value). So the take-off **up**-speed is `-zspeed`,
 /// and the current up-speed is `-zspeed - g·t`. Mirrors vmangos `Unit.cpp` `ExtrapolateMovement`
 /// (`z = start.z + jumpInitialSpeed·t - ½g·t²`, `jumpInitialSpeed = -zspeed`) under the same `gravity`
-/// (decision 0053; sign corrected by the sniff — decision 0054).
+/// (sign corrected by the sniff).
 ///
 /// `feather` picks the clamp the recovered speed lands on — the reference's `0x7c5d20` chooses
 /// `[0x87d898]` = 7.0 over `[0x87d894]` = 60.148 on `MOVEFLAG_SAFE_FALL`, and it is the *mover's*
-/// bit, so a watched Slow Fall recovers to 7 yd/s exactly as ours does (decisions 0866, 1780).
+/// bit, so a watched Slow Fall recovers to 7 yd/s exactly as ours does.
 pub(crate) fn jump_seed(jump: Option<JumpInfo>, fall_time: u32, feather: bool) -> (f32, [f32; 2]) {
     let terminal = if feather {
         crate::player::FEATHER_TERMINAL_VELOCITY
@@ -848,7 +848,7 @@ pub(crate) fn jump_seed(jump: Option<JumpInfo>, fall_time: u32, feather: bool) -
     }
 }
 
-/// The remote landing predictor's per-packet arc step (decision 0415) — pure so it's unit-tested.
+/// The remote landing predictor's per-packet arc step — pure so it's unit-tested.
 /// Given the mover's prior/new `FALLING` state, the takeoff Z tracked so far, and this packet's Z,
 /// return `(new fall_start_z, landing descent)`. `descent` is `Some(fall height)` **only** on the
 /// `FALLING → grounded` edge with a known takeoff — the value that gates the grunt + dust puff. WoW
@@ -872,8 +872,8 @@ pub(in crate::net) fn fall_arc_step(
 impl RemoteMotion {
     /// Does a freshly-scheduled move apply **at arrival**, or go on the unit's queue?
     ///
-    /// Due (`fire ≤ now`) **and the queue empty** (decision 0618). Fire-times are monotone per unit
-    /// (0615), so a due arrival means every queued packet is due too — and [`drain_pending_moves`]
+    /// Due (`fire ≤ now`) **and the queue empty**. Fire-times are monotone per unit,
+    /// so a due arrival means every queued packet is due too — and [`drain_pending_moves`]
     /// runs *after* us in the same frame ([`crate::net`] chains apply → drain). Applying the arrival
     /// directly therefore writes the newest state and then lets the drain replay the older queued
     /// packets over the top of it. Last write wins, and the last write is stale: a Stop that races the
@@ -900,7 +900,7 @@ impl RemoteMotion {
     /// speed)` given the unit's `speeds` and `dt`. On the **ground**, integrates the velocity the current
     /// `flags` imply in the facing frame (forward/back/strafe summed, normalized, at the run / run-back /
     /// walk / swim speed the flags pick) and rotates the facing while a `TURN_*` flag is set. **Airborne**
-    /// (`JUMPING`/`FALLING`), it's a ballistic event instead (decision 0053): the frozen launch horizontal
+    /// (`JUMPING`/`FALLING`), it's a ballistic event instead: the frozen launch horizontal
     /// ([`Self::jump_xy_vel`]) plus a parabola under gravity ([`Self::vertical_velocity`]) — the launch
     /// played out locally, not flag-driven walking. Pure, so the signs + speed choice + arc are
     /// unit-tested (mirrors [`Spline::sample`]); the system writes the result back + to the transform.
@@ -919,7 +919,7 @@ impl RemoteMotion {
             // had the mirror-image bug in the other direction. The mean velocity is the exact
             // displacement rate under constant acceleration, so neither drifts now.
             //
-            // **Feather fall is the mover's own bit** (decision 1780): `MOVEFLAG_SAFE_FALL` is
+            // **Feather fall is the mover's own bit**: `MOVEFLAG_SAFE_FALL` is
             // inside the reference's server-authored merge mask, so a watched player under Slow
             // Fall or Levitate arrives carrying it in every relayed pose — this word IS the word
             // `0x7c5d23` tests, and picking the clamp off it is the whole of the mechanism.
@@ -985,8 +985,8 @@ impl RemoteMotion {
         // apart about a cascade whose whole content is its ORDER. Everything it reads is the
         // sender's own word, relayed verbatim: the direction bits, the swim bit and the walk bit.
         //
-        // **The walk arm outranks the backward min, and this block used to have it backwards**
-        // (decision 1752): it tested the backpedal first, so a walking backpedaller extrapolated
+        // **The walk arm outranks the backward min, and this block used to have it backwards**:
+        // it tested the backpedal first, so a walking backpedaller extrapolated
         // at `min(runBack, run)` = 4.5 yd/s. The bytes take the walk arm at `0x7c4d11` *before*
         // the run arm's `0x7c4d1d`, so the answer is `min(walk, run)` = 2.5 — a walking backpedal
         // is exactly as slow as a walk, and the observed body now plays Walk instead of Run.
@@ -1007,7 +1007,7 @@ impl RemoteMotion {
     }
 }
 
-/// **B197's fourth site — the *player* one** (decision 1545), in a world small enough to assert on:
+/// **B197's fourth site — the *player* one**, in a world small enough to assert on:
 /// a watched mover standing inside a building whose floor collider has not attached yet.
 ///
 /// The same three facts as `spline::under_floor`, which is that record's creature twin: the terrain
@@ -1094,7 +1094,7 @@ mod under_floor {
         ));
         app.init_asset::<Mesh>().init_resource::<ColliderEpoch>();
         // The liquid/room facade the clamp and the dead-reckon both ask for a water-walker's
-        // surface (decision 1780). Seeded empty: this harness is about geometry, and an empty
+        // surface. Seeded empty: this harness is about geometry, and an empty
         // world answers "no liquid here", which is the case every test below is written for.
         benilla_world::world_point::init_world_point_resources(app.world_mut());
         app.insert_resource(PlayerCapsule(Collider::capsule(

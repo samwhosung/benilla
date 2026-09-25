@@ -1,8 +1,8 @@
-//! Deterministic capture mode — the machine half of the Phase-5 visual A/B harness (decision 0008).
+//! Deterministic capture mode — the machine half of the Phase-5 visual A/B harness.
 //!
 //! With `$WOW_CAPTURE=<scenario>` set, the app boots server-less (net disabled in `main`), pins the
 //! game-clock and the camera to a named viewpoint, waits for the rendered image to stop changing,
-//! writes one PNG of the primary window to `$WOW_CAPTURE_OUT`, and exits. The render rework (decision 0008) is the
+//! writes one PNG of the primary window to `$WOW_CAPTURE_OUT`, and exits. The render rework is the
 //! single riskiest change in the architecture — it can regress the whole look at once — so it goes
 //! behind this harness: baselines are captured on the *current* pipeline, then every rework step is
 //! diffed against them by the `benilla-visual` tool, catching regressions by machine before the
@@ -23,7 +23,7 @@
 //!    previous one was caught missing something. Streaming, pipeline warm-up, late placements, late
 //!    M2 loads and the loading-screen fade are all *visible in the frame* — or they do not affect the
 //!    shot, in which case they were never the harness's business.
-//! 2. **The game clock is frozen** ([`CAPTURE_FRAME_DT`], [`hold_clock`], decision 0723), because the
+//! 2. **The game clock is frozen** ([`CAPTURE_FRAME_DT`], [`hold_clock`]), because the
 //!    sims integrate in *seconds* while the harness counts *frames*. Held while the scene is being
 //!    built, then released for exactly [`age_frames`] fixed steps, so the shot's sim age is the same
 //!    duration on any machine.
@@ -243,7 +243,7 @@ fn glue_screen() -> Option<GlueScreen> {
 /// default 5), `WOW_FX_FLY` (yd/s along the model's facing — a missile only trails in motion;
 /// default 0), `WOW_FX_YAW` (model facing, degrees, default 0), `WOW_FX_TURN` (deg/s the fixture
 /// keeps turning after spawn — a host that changes heading mid-effect, which is how you see that
-/// a world-mode cloud does NOT swing with it (decisions 1585/1591; the "heading-since-birth fan"
+/// a world-mode cloud does NOT swing with it (the "heading-since-birth fan"
 /// this knob was built for turned out not to exist); default 0), `WOW_FX_GROUND` (=1 seats the
 /// fixture ON the terrain via a down-ray — required to see a ground-anchored effect's projected
 /// surface decals, `crate::ground_fx`; default 0 = the mid-air point), `WOW_FX_HOLD` (=1 keeps
@@ -333,14 +333,14 @@ const VISTA_EYE_HEIGHT: f32 = 2.0;
 /// `scripts/visual.sh` reads so the driver never drifts from the code. Invoked by `main` for
 /// `WOW_CAPTURE=list`. On-demand fixtures (the UI look-pass windows, sun/moon/sky, house-compass)
 /// are deliberately absent: the blessed sweep is the director-chosen spot×time set only, so a
-/// `visual.sh baseline` opens six windows on their screen and not thirty (decision 0632).
+/// `visual.sh baseline` opens six windows on their screen and not thirty.
 pub(crate) fn print_scenario_names() {
     for s in SCENARIOS {
         println!("{}", s.name);
     }
 }
 
-/// Consecutive byte-identical framebuffer readbacks that mean "the scene is built" (decision 0815).
+/// Consecutive byte-identical framebuffer readbacks that mean "the scene is built".
 ///
 /// This is the harness's ONE residency test, and it is a measurement rather than a proxy: whatever is
 /// still arriving — a tile, a placement, an M2 that just finished loading, a pipeline wgpu has not
@@ -384,7 +384,7 @@ const BUILD_CAP_FRAMES: u32 = 1800;
 ///
 /// The starvation itself is macOS's, not ours — the compositor stops recycling presented drawables
 /// for a window it is not compositing, and nothing in-process can hand them back. We bound our own
-/// instrument; we do not fight the window server. Decision 1637.
+/// instrument; we do not fight the window server.
 const DEADLINE_SECS: u64 = 300;
 
 /// The effective wall-clock ceiling — `$WOW_CAPTURE_DEADLINE=<secs>`, `0` to disable. A healthy
@@ -446,7 +446,7 @@ const PROBE_WARMUP_FRAMES: u32 = 60;
 struct StabilityShot;
 
 /// The image-stability tracker: the previous framebuffer, and how many consecutive readbacks have
-/// matched it byte for byte (decision 0815). Bytes, not a hash — the buffer is tens of MB at most,
+/// matched it byte for byte. Bytes, not a hash — the buffer is tens of MB at most,
 /// a `memcmp` is free next to the readback itself, and an exact compare needs no collision argument.
 #[derive(Resource, Default)]
 struct FrameWatch {
@@ -597,7 +597,7 @@ impl Plugin for CapturePlugin {
                 .before(benilla_world::water_fx::WaterFoamSet)
                 .in_set(benilla_world::schedule::WorldStage::Present),
         );
-        // The `fxview` fixture's driver, same principle and the same shape (decision 1174): it
+        // The `fxview` fixture's driver, same principle and the same shape: it
         // creates the subject's display-cache entry, so it runs before the frame's build, inside
         // the entity-visuals set and after the net stage — exactly the slot it held while it was
         // an element of `EntitiesPlugin`'s chain, now stated rather than positional.
@@ -614,8 +614,8 @@ impl Plugin for CapturePlugin {
         let glue = GLUE_SCENARIOS.iter().find(|g| g.name == name).copied();
         if let Some(g) = glue {
             // The preview pick goes through the existing `WOW_CHARCREATE_PICK` instrument rather
-            // than a second path into `CreateSelection` — same reason the map is seeded by env
-            // (decision 0743): one route into a fact, whoever is asking.
+            // than a second path into `CreateSelection` — same reason the map is seeded by env:
+            // one route into a fact, whoever is asking.
             // …and an explicit pick in the environment outranks the scenario's default — the
             // per-race lever, so one scenario photographs every `UI_*` stage.
             if let Some((race, sex, class)) = g.pick {
@@ -829,7 +829,7 @@ impl Plugin for CapturePlugin {
                     ui: Some(UiFixture::NameWater),
                 }
             // By name, EITHER table: the blessed six or an on-demand fixture. Only the sweep is
-            // narrowed — every old viewpoint is still capturable by name (decision 0632).
+            // narrowed — every old viewpoint is still capturable by name.
             } else if let Some(&s) = SCENARIOS
                 .iter()
                 .chain(scenarios::ON_DEMAND.iter())
@@ -857,7 +857,7 @@ impl Plugin for CapturePlugin {
         // The arbitrary-viewpoint instruments (`vista`, `waterfx`, `fxview`) carry `map: None`
         // instead: their map IS the knob, so writing it back would be a round trip through a second
         // parser — and a second parser is how `WOW_MAP=Kalimdor` came to photograph Azeroth in
-        // silence. `world_map` is the one reader (decision 0743). A glue screen has no map.
+        // silence. `world_map` is the one reader. A glue screen has no map.
         if let Some(m) = scenario.as_ref().and_then(|s| s.map) {
             std::env::set_var("WOW_MAP", m.to_string());
         }
@@ -1127,7 +1127,7 @@ fn drive_capture(
                 Phase::FxAging
             } else {
                 // Clock released here: the sims now run exactly `age_frames()` fixed steps, so the
-                // shot's sim age is the same on any machine (decision 0723) — and a probe takes the
+                // shot's sim age is the same on any machine — and a probe takes the
                 // same road, so the scene it measures is that same fixed age instead of "however
                 // old 1800 real frames left it" (`CaptureCtx::frozen_clock`).
                 info!(
@@ -1165,7 +1165,7 @@ fn drive_capture(
             // world entity count moved — and 0723 measured that it **never fired**, because the
             // count-quiescence gate it shared a threshold with had already passed. What replaced it
             // is upstream and stronger: the image itself stopped changing before the clock was
-            // released, so a straggler that would have mattered was already waited out (0815).
+            // released, so a straggler that would have mattered was already waited out.
             if n + 1 < age_frames() {
                 Phase::Aging(n + 1)
             } else if ctx.probe_frames > 0 {
@@ -1272,7 +1272,7 @@ fn drive_capture(
                     _ => String::new(),
                 };
                 // The present mode the window actually measured under — an uncap that silently
-                // rails (0362) is only diagnosable if the line says what was asked for.
+                // rails is only diagnosable if the line says what was asked for.
                 let present = windows
                     .single()
                     .map(|w| format!(" present={:?}", w.present_mode))
@@ -1317,7 +1317,7 @@ fn drive_capture(
                 // capture that wrote nothing reported success and the sweep carried on around the
                 // hole (2026-07-28: one `water-night` run left no PNG, and `selfcheck` passed on
                 // the remaining eight). A missing file is a FAILED capture and says so, so
-                // `scripts/visual.sh`'s `set -e` stops the sweep at it (decision 0743).
+                // `scripts/visual.sh`'s `set -e` stops the sweep at it.
                 if Path::new(&ctx.out).is_file() {
                     info!("capture: saved {}, exiting", ctx.out);
                     exit.write(AppExit::Success);

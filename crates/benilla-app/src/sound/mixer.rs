@@ -1,4 +1,4 @@
-//! The audio-backend seam: kira 0.12 behind a narrow, FMOD-shaped surface (decision 0070).
+//! The audio-backend seam: kira 0.12 behind a narrow, FMOD-shaped surface.
 //!
 //! The real client delegates the entire audible mix to FMOD 3.x — spatialization/pan, min/max
 //! distance rolloff, doppler, reverb, decode, streaming — and owns only the parameters it feeds
@@ -58,7 +58,7 @@ pub(crate) fn snap() -> Tween {
     }
 }
 
-/// The per-frame **volume** feed's reconstruction ramp (decision 1026).
+/// The per-frame **volume** feed's reconstruction ramp.
 ///
 /// kira applies a track's volume as **one constant gain per internal chunk** — it updates the
 /// parameter once per `internal_buffer_size` (128 frames ≈ 2.9 ms) block and multiplies the whole
@@ -138,8 +138,8 @@ pub(crate) struct Mixer {
     reverb_send: SendTrackHandle,
     /// The Freeverb parameters on the send — retuned per zone preset.
     reverb: ReverbHandle,
-    /// The main track's level story — what the mix asked for, and what the limiter allowed
-    /// (decision 1551). Written on the audio thread, drained by [`Mixer::take_level`].
+    /// The main track's level story — what the mix asked for, and what the limiter allowed.
+    /// Written on the audio thread, drained by [`Mixer::take_level`].
     level: Arc<MixLevel>,
     /// The `SoundOutputLimiter` CVar cell the limiter reads each block.
     limiter_on: Arc<AtomicBool>,
@@ -245,7 +245,7 @@ impl Mixer {
     /// client's silenced-GENERIC default, `0x45a830`). The switch is **instant** — the
     /// client applies the new properties with no ramp (`0x45a720`).
     ///
-    /// The EAX→Freeverb projection is this backend's own lossy mapping (decision 0078):
+    /// The EAX→Freeverb projection is this backend's own lossy mapping:
     /// - `feedback = 10^(−0.108 / DecayTime)`, from Freeverb's RT60 relation at its ~36 ms mean
     ///   comb delay (`t60 ≈ 3·d̄ / −log10(f)`), clamped to 0.98 so a 20 s hangar can't run away;
     /// - `damping` blends "highs die faster than lows" (`1 − DecayHFRatio/2`, weight 0.7) with
@@ -297,7 +297,7 @@ impl Mixer {
         self.master.set_volume(amp_to_db(amp), glide());
     }
 
-    /// Open or shut the **output gate** — the focus mute (decision 1847), the seam mirror of the
+    /// Open or shut the **output gate** — the focus mute, the seam mirror of the
     /// reference's `FSOUND_SetMute(FSOUND_ALL, …)` on its window-activation event.
     ///
     /// A *gate*, not a level: unity or silence, nothing between. That is what makes it safe at
@@ -319,13 +319,13 @@ impl Mixer {
         );
     }
 
-    /// Arm or bypass the output limiter — the `SoundOutputLimiter` CVar (decision 1551). The
+    /// Arm or bypass the output limiter — the `SoundOutputLimiter` CVar. The
     /// limiter's delay line runs either way, so this is a fade, never a step in the output.
     pub(super) fn set_limiter(&mut self, on: bool) {
         self.limiter_on.store(on, Ordering::Relaxed);
     }
 
-    /// Read and reset the mix's level for this report window (decision 1551).
+    /// Read and reset the mix's level for this report window.
     pub(super) fn take_level(&mut self) -> LevelReading {
         self.level.take()
     }
@@ -343,12 +343,12 @@ impl Mixer {
     }
 
     /// Play a decoded sound on a fresh spatial track at a world position. Backend attenuation is
-    /// **disabled** — gain over distance is WoW's own math (decision 0070; the kit player's pump
+    /// **disabled** — gain over distance is WoW's own math (the kit player's pump
     /// computes `rolloff · near_field` and drives the channel volume). The backend contributes
     /// pan only. The returned track handle must live as long as the sound (drop unloads it).
     ///
     /// `reverb_send` is the kit's `SoundEntries.EAXDef` reduced to "does this sound take the wet
-    /// send at all" (decision 1155). 3D-open is **necessary but not sufficient** in the reference:
+    /// send at all". 3D-open is **necessary but not sufficient** in the reference:
     /// `0x458f1c` hands `EAXDef` to the slot lookup `0x45cdc0`, and because
     /// `SoundSamplePreferences.dbc` holds only ids 1 and 2 — **there is no id 0** — an `EAXDef 0`
     /// kit resolves a NULL slot and `FSOUND_Reverb_SetChannelProperties` (`0x7a5bf0`) skips before
@@ -382,7 +382,7 @@ impl Mixer {
                 z: pos.z,
             },
             builder
-                // Outlive the handle by exactly as long as the sound needs (decision 1026).
+                // Outlive the handle by exactly as long as the sound needs.
                 // kira defaults this to `false` (`track/sub/spatial_builder.rs`), which makes
                 // `should_be_removed()` fire the instant the handle drops — so a channel that
                 // is stopped-with-a-fade and then dropped in the same breath (every reaper
@@ -422,7 +422,7 @@ impl Mixer {
     }
 }
 
-/// How many **3D voices** can be alive at once — the spatial sub-track arena (decision 1551).
+/// How many **3D voices** can be alive at once — the spatial sub-track arena.
 ///
 /// Every positional one-shot gets its own spatial sub-track ([`Mixer::play_3d`]), so this is the
 /// hard ceiling on simultaneous 3D sound, and past it `add_spatial_sub_track` returns
@@ -439,15 +439,15 @@ impl Mixer {
 /// The cost is preallocation, not per-frame work: an idle slot is a few hundred bytes and no DSP.
 const SPATIAL_VOICE_CAPACITY: usize = 512;
 
-/// Build the **main track's effect chain**, in signal order (decision 1551):
+/// Build the **main track's effect chain**, in signal order:
 ///
 /// 1. **meter** — measures the summed mix as the game asked for it, over-scale and all. Upstream
 ///    of the limiter on purpose: the number worth reporting is what the mix *wanted*, because
 ///    that is the one that says whether the game is asking for something impossible.
 /// 2. **limiter** — the brickwall that makes it fit, so kira's own hard clamp never fires.
-/// 3. **mix tap** — records what is actually heard (decision 1112, `$WOW_MIX_TAP`; a no-op
+/// 3. **mix tap** — records what is actually heard (`$WOW_MIX_TAP`; a no-op
 ///    builder unless the env var names a capture path).
-/// 4. **output gate** — the focus mute (decision 1847), and the *only* stage downstream of every
+/// 4. **output gate** — the focus mute, and the *only* stage downstream of every
 ///    tap. It is last on purpose: a mute that sits above the taps falsifies every recording made
 ///    while the window is in the background, which is precisely when an unattended instrumented
 ///    run records. Here it silences the speakers and nothing else — `pre.wav`, `post.wav`, the
@@ -471,7 +471,7 @@ fn main_track(
     // is actually going to the device, so it engages exactly when the output would have clipped.
     let master = main.add_effect(VolumeControlBuilder::new(Decibels::IDENTITY));
     meter::install(&mut main, level);
-    // A probing run brackets the limiter with two taps (decision 1556). One tap can only ever
+    // A probing run brackets the limiter with two taps. One tap can only ever
     // say what was heard; two say whether the limiter is the thing that changed it — which is
     // precisely the question a "your fix changed nothing" report asks, and one the post-limiter
     // tap alone provably cannot answer.
@@ -508,7 +508,7 @@ struct MainChain {
     audio_pos: Option<Arc<AtomicU64>>,
 }
 
-/// `SoundBufferSize` (decision 1857): the reference's latched mix-ahead dial, read once here
+/// `SoundBufferSize`: the reference's latched mix-ahead dial, read once here
 /// the way the reference reads it once at sound-system init — before the `App` exists, so
 /// straight from the stored config (`boot_cvar`), the registered default when unset. Clamped
 /// to what a ring can sensibly hold; a value outside it is a typo, not a request.
@@ -533,7 +533,7 @@ fn io_buffer_frames() -> u32 {
         .unwrap_or(output::DEVICE_BUFFER_FRAMES)
 }
 
-/// The mix-health counters — what a crackle actually *is*, in numbers (decision 1026; the
+/// The mix-health counters — what a crackle actually *is*, in numbers (the
 /// meters behind them moved into the owned backend in 1857).
 ///
 /// Before this, a crackle was invisible to us: the only report was the director's ear, and we
@@ -655,14 +655,13 @@ pub(crate) fn loop_from_bytes(bytes: Vec<u8>) -> Result<StaticSoundData> {
 }
 
 /// Wrap compressed audio bytes for decode-streaming (music/ambience). The bytes go in behind
-/// [`PromotingSource`] — the decode-thread QoS fix (decision 1109) — never a bare cursor.
+/// [`PromotingSource`] — the decode-thread QoS fix — never a bare cursor.
 pub(crate) fn stream_from_bytes(bytes: Vec<u8>) -> Result<StreamingSoundData<FromFileError>> {
     StreamingSoundData::from_media_source(PromotingSource(std::io::Cursor::new(bytes)))
         .context("opening stream")
 }
 
-/// Compressed-audio source whose reads promote the calling thread — the stream-decode QoS fix
-/// (decision 1109).
+/// Compressed-audio source whose reads promote the calling thread — the stream-decode QoS fix.
 ///
 /// kira decodes each streaming sound on a thread of its own (`decode_scheduler.rs`, a bare
 /// `std::thread::spawn`) feeding a 16 384-frame ring buffer (~0.37 s at 44.1 kHz); when that
@@ -733,7 +732,7 @@ const STREAM_STARVED_MIN_SECS: f64 = 0.1;
 /// The accounting window [`StreamWatch`] compares over.
 const STREAM_WATCH_WINDOW_SECS: f64 = 1.0;
 /// How long a stream may sit audible with its position still pinned where it was constructed
-/// before the watch says it never played at all (decision 2253).
+/// before the watch says it never played at all.
 ///
 /// Well past any spin-up this machine produces — the login theme's is the worst of them, because
 /// the output device opens in the same frame — and short enough that a cue which never arrives is
@@ -750,7 +749,7 @@ const STREAM_START_MAX_SECS: f64 = 3.0;
 /// and WARNs when more than [`STREAM_STARVED_MIN_SECS`] went missing. Playback rate is always
 /// 1.0 here (WoW pitches no music), so the two clocks agree to drift well under the threshold.
 ///
-/// **Every stream opens with a frozen position, and that is not a dropout** (decision 2253).
+/// **Every stream opens with a frozen position, and that is not a dropout**.
 /// kira's `Shared::new` publishes `state = Playing` and `position = 0.0` when `play()` returns, so
 /// the handle reads audible before the renderer has ever seen the sound; and
 /// `StreamingSound::process` opens with `if self.frame_consumer.slots() < 2 { out.fill(ZERO);
@@ -1067,7 +1066,7 @@ mod tests {
         );
     }
 
-    /// The **offline mix harness** (decision 1551): render N simultaneous copies of one real kit
+    /// The **offline mix harness**: render N simultaneous copies of one real kit
     /// through the *same* main-track chain the client builds, over kira's mock backend, and
     /// report `(what the mix asked for, what came out)`.
     ///
@@ -1142,7 +1141,7 @@ mod tests {
         wav
     }
 
-    /// The **focus gate silences the output and nothing upstream** (decision 1847).
+    /// The **focus gate silences the output and nothing upstream**.
     ///
     /// This is the claim the whole design rests on, and the one that is expensive to be wrong
     /// about: an instrumented run's window is unfocused by construction, so a mute placed above
@@ -1302,7 +1301,7 @@ mod tests {
         assert_eq!(heard.over, 0, "nothing should have passed full scale");
     }
 
-    /// The probe's two taps must **bracket** the limiter (decision 1556) — and this is the test
+    /// The probe's two taps must **bracket** the limiter — and this is the test
     /// that the capture handed to the director can actually tell the mechanisms apart.
     ///
     /// The whole reason for a second tap is that `post.wav` alone cannot distinguish "the mix
@@ -1394,7 +1393,7 @@ mod tests {
         );
     }
 
-    /// The **voice ceiling is real, and it is ours** (decision 1551): a spatial-track arena
+    /// The **voice ceiling is real, and it is ours**: a spatial-track arena
     /// refuses past its capacity, and kira's unnamed default would have refused at 128 — a number
     /// a pack pull reaches, and one nobody here chose. Pins both halves so a kira upgrade that
     /// moves either cannot move benilla's voice ceiling silently.
@@ -1458,7 +1457,7 @@ mod tests {
         assert_eq!(fill(SPATIAL_VOICE_CAPACITY), SPATIAL_VOICE_CAPACITY);
     }
 
-    /// **The reported defect, reproduced and fixed, in numbers** (decision 1551).
+    /// **The reported defect, reproduced and fixed, in numbers**.
     ///
     /// `HolyProtection.wav` is the Fortitude buff — the director's own example ("a priest buffing
     /// a group with mass fort"). It is mastered to 1.000 peak and its kit (`SoundEntries` 3116)
@@ -1513,7 +1512,7 @@ mod tests {
         t0 + std::time::Duration::from_secs_f64(secs)
     }
 
-    /// The starvation accounting (decisions 1109, 2253): a stream that advances in lockstep with
+    /// The starvation accounting: a stream that advances in lockstep with
     /// wall time stays quiet; one whose position freezes mid-window (kira's zero-fill) reports the
     /// missing time; a slot swap's backward jump is a new stream, not a freeze; and going
     /// non-audible drops the baseline so a later stream starts clean.
@@ -1659,7 +1658,7 @@ mod tests {
         );
     }
 
-    /// **A stream's spin-up is not a dropout** (decision 2253), driven here on the timeline of
+    /// **A stream's spin-up is not a dropout**, driven here on the timeline of
     /// the 2026-09-15 login that reported the glue theme's own first 235 ms as injected silence.
     ///
     /// kira publishes `Playing` with `position = 0.0` the moment `play()` returns, and
@@ -1723,7 +1722,7 @@ mod tests {
     }
 
     /// Excluding the spin-up must not mean excluding a spin-up that never ends: a stream that
-    /// goes audible and never plays a sample is still named, once (decision 2253).
+    /// goes audible and never plays a sample is still named, once.
     #[test]
     fn stream_watch_names_a_stream_that_never_starts() {
         let dt = 1.0 / 60.0;

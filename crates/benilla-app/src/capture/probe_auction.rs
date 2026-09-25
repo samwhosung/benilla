@@ -34,7 +34,7 @@
 //!   100)` (`AuctionHouseMgr::GetAuctionDeposit`), with `Auction.Deposit.Min = 0` and
 //!   `Rate.Auction.Deposit = 1` in this deploy's `mangosd.conf`. At **120 minutes the unit count
 //!   is 1**, which is exactly where the client's own arithmetic (`CalculateAuctionDeposit`, whose
-//!   intermediate truncation disagrees with the server on longer listings — decision 1511 §7) and
+//!   intermediate truncation disagrees with the server on longer listings) and
 //!   the server's agree to the copper. That is why step (5) lists for 120 minutes: it makes "money
 //!   fell by exactly the quoted deposit" a real assertion instead of a flaky one.
 //! - **A cancel with no bidder is free** and returns the item **by mail**, not to the bag
@@ -172,7 +172,7 @@ struct AuctionProbe {
     ///
     /// Step (6d) asserts the arc raised **no** red line, and it used to read the whole tally: on a
     /// `probeN` account that is never zero, because the preflight's `GM mode is ON` and
-    /// `GOD mode is ON` banners (0679) are red lines too, and they land before the greeting. The
+    /// `GOD mode is ON` banners are red lines too, and they land before the greeting. The
     /// assertion was therefore FAILING on every clean run, which is worse than not making it.
     red_baseline: i64,
     passes: u32,
@@ -364,7 +364,7 @@ fn started_chat_check(script: &UiScript, probe: &mut AuctionProbe) {
 ///
 /// The pane is the *front* tab by the time this runs, and that is load-bearing rather than
 /// incidental: the row is painted by `AuctionFrameAuctions_Update`, which cannot complete before
-/// the tab's `OnShow` has given it a `page` (decision 2308). This check read the player's purse
+/// the tab's `OnShow` has given it a `page`. This check read the player's purse
 /// out of the row's money frame for as long as the probe asked for the owned list without opening
 /// the tab — the frame was still on its `MoneyTypeInfo["PLAYER"]` default because nothing had ever
 /// repainted it.
@@ -1180,7 +1180,7 @@ fn auction_probe(
             }
             // Re-ask on a cadence: the server drops a second in-flight list request silently.
             //
-            // **The FIRST ask is the tab click, not the raw binding** (decision 2308). Every
+            // **The FIRST ask is the tab click, not the raw binding**. Every
             // caller of `GetOwnerAuctionItems` in the stock files lives inside the Auctions pane —
             // its `OnShow` and its two page turners — and the `OnShow` is also the one place that
             // assigns `AuctionFrameAuctions.page`. Calling the binding cold puts the window in a

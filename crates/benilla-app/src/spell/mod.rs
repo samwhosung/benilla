@@ -31,7 +31,7 @@ pub(crate) mod validator;
 
 // The one cast path, and the only way in: every caster surface takes [`CastLadder`] as a single
 // SystemParam and commits through [`CastCommit`] — `send_spell_cast` itself is private to
-// `cast_send`, so a second send path cannot be written by accident (decision 0914).
+// `cast_send`, so a second send path cannot be written by accident.
 pub(crate) use cast_send::{CastCommit, CastLadder, TargetedBind};
 pub(crate) use cast_target::AutoSelfCast;
 pub(crate) use cooldowns::Cooldowns;
@@ -41,9 +41,9 @@ pub(crate) use inflight::{
 };
 pub(crate) use mods::{SpellModifiers, OP_COST};
 // The target chain registers the cursor pre-empt + the click commits, and the spellbook/stance/
-// craft drains thread the mode through the one cast-send path (decision 0792). `TargetingWants`
+// craft drains thread the mode through the one cast-send path. `TargetingWants`
 // travels with it because the chain also holds a *seam-specific* consumer — the ground reticle,
-// which draws for the location word alone (decision 0943).
+// which draws for the location word alone.
 pub(crate) use targeting::{ground_cast_radius, SpellTargeting, TargetingWants};
 
 /// The local self-cancel's slot in the frame: anything that reads the in-flight state after a
@@ -76,7 +76,7 @@ impl Plugin for SpellPlugin {
                     mods::track_class_family
                         .after(WorldStage::Net)
                         .before(UnitFeed),
-                    // The targeting mode's ESC-chain halves (decision 0792): the state push
+                    // The targeting mode's ESC-chain halves: the state push
                     // rides the feeds (before the input pass runs `ToggleGameMenu`), the
                     // trigger drain follows it — same frame, so an ESC's cancel lands before
                     // the next frame's cursor drive reads the mode. The cursor pre-empt, the
@@ -84,7 +84,7 @@ impl Plugin for SpellPlugin {
                     // (ordering against the classifier and the select click is theirs to own).
                     targeting::feed_targeting_to_vm.in_set(UnitFeed),
                     targeting::drain_stop_targeting.after(UiInput),
-                    // The item half's commit (decision 0923) — the bag / paper-doll click seam's
+                    // The item half's commit — the bag / paper-doll click seam's
                     // `0x495d60`. A UI drain like the others: after the input pass, so a click
                     // this frame binds this frame. It is deliberately NOT in the target chain —
                     // the clicks it consumes never reach the world.

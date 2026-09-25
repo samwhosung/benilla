@@ -360,7 +360,7 @@ const CHANNEL_INTERRUPT_MOVING: u32 = 0x8; // SpellRec+0x5c ChannelInterruptFlag
 /// The controller's report that a cancel-worthy local move edge happened this frame — a
 /// *directional* start (forward/back/strafe: our wire-axis mirror of the verified `0x10f0`
 /// mask's flags) or a jump takeoff. The mask's fifth member, the autorun toggle, is dormant
-/// until benilla grows an autorun (0445). Written by `player::control` at the same spot the
+/// until benilla grows an autorun. Written by `player::control` at the same spot the
 /// wire-axis transitions are computed, consumed (and cleared) by [`local_self_cancel`] next
 /// frame — one engine frame (~16 ms) from key to bar-kill, vs the server round trip (~150 ms+:
 /// the 0.5-yd delta has to accumulate before vmangos even notices).
@@ -385,10 +385,10 @@ pub(crate) struct LocalMoveStart(pub(crate) bool);
 ///   `SpellStopCasting → AbortCast` has no `InterruptFlags` test — the gate belongs to the
 ///   movement path alone).
 /// - **the channel half — MOVEMENT-ONLY** — ship `CMSG_CANCEL_CHANNELLING` and NOTHING else:
-///   the verified asymmetry (0445). Esc never reaches a channel — `0x6e6e80`'s whole callee
+///   the verified asymmetry. Esc never reaches a channel — `0x6e6e80`'s whole callee
 ///   closure never calls the channel canceler `0x6e9b70`, and its inflight gate (`0xceca88`)
 ///   is already 0 mid-channel (the launch `CAST_RESULT(OKAY)` clears it at `0x6e7408`): the
-///   vanilla "/stopcasting can't stop a channel" quirk, kept faithfully (0454). The ref's
+///   vanilla "/stopcasting can't stop a channel" quirk, kept faithfully. The ref's
 ///   `0x6e9b70` fires no FrameScript event and clears no
 ///   local state — the channel bar closes on the server's `SMSG_CHANNEL_UPDATE(0)`
 ///   (`0x6e75f0`), which also clears [`ActiveChannel`] through the normal wire path (its slack
@@ -396,7 +396,7 @@ pub(crate) struct LocalMoveStart(pub(crate) bool);
 ///
 /// Why `Interrupted` when the client's own event is VERIFIED as the silent `0x152` STOP (every
 /// self-cancel caller passes `cl=0`)? Because the REF'S NET OBSERVABLE is the red bar — the
-/// director's falsifier, decision 0449, now pinned end to end (0454): vmangos `Spell::cancel`
+/// director's falsifier, decision 0449, now pinned end to end: vmangos `Spell::cancel`
 /// answers the cancel with `SMSG_SPELL_FAILED_OTHER` and then a failing `SMSG_CAST_RESULT`
 /// reason 0x23 (`SPELL_FAILED_INTERRUPTED`, counted against the 1.12.1 build guards), the
 /// client routes a failing result through `HandleCastFailed 0x6e1a00`, and reasons
@@ -726,7 +726,7 @@ mod tests {
         /// wire cancel out, guard open, the STOP + INTERRUPTED bar-edge pair (the ref's own
         /// two-step: its silent 0x152 STOP arms the flash, the server echo's repaint holds the
         /// red "Interrupted"; our keyed reap suppresses the real echo, so the local pair
-        /// replays the sequence at RTT→0 — decisions 0449/0454), `Casting` reaped — instead of
+        /// replays the sequence at RTT→0), `Casting` reaped — instead of
         /// waiting ~150 ms+ for the server's 0.5-yd position-delta interrupt.
         #[test]
         fn a_move_edge_mid_cast_cancels_locally() {
@@ -884,7 +884,7 @@ mod tests {
         }
 
         /// Esc CANNOT stop a channel — `0x6e6e80` never reaches the channel
-        /// canceler `0x6e9b70`, and its inflight gate is already 0 mid-channel (0454): the
+        /// canceler `0x6e9b70`, and its inflight gate is already 0 mid-channel: the
         /// mirror answers `SpellStopCasting()` nil (the
         /// ladder falls through to the next rung) and the drain ships nothing.
         #[test]
@@ -1129,7 +1129,7 @@ mod tests {
             assert_eq!(app.world().resource::<QueuedMeleeSpell>().current(), None);
         }
 
-        /// The channel half is the SEND and nothing else — the verified asymmetry (0445): the
+        /// The channel half is the SEND and nothing else — the verified asymmetry: the
         /// ref's `0x6e9b70` ships CMSG_CANCEL_CHANNELLING but fires no FrameScript event and
         /// clears no state; the channel bar and the mirror both close on the server's
         /// `SMSG_CHANNEL_UPDATE(0)` through the normal wire path.

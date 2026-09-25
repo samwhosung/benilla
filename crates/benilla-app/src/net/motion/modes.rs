@@ -1,5 +1,5 @@
 //! The movement modes the server grants a unit we do **not** control — the `SMSG_SPLINE_MOVE_*`
-//! family's state (decision 1780).
+//! family's state.
 
 use benilla_protocol::SplineMode;
 use bevy::prelude::*;

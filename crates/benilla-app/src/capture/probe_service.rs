@@ -95,12 +95,12 @@ const WINDOW_TIMEOUT_SECS: f64 = 20.0;
 /// reading that a window's first frame is invisible) — and "one frame" and "never" are the same
 /// reading if you sample once, which is exactly what the first run of this assert did: it failed
 /// the quest and trainer legs, whose windows open on the packet, and passed the gossip legs only
-/// because the gossip frame holds shut for several frames waiting on its greeting query (B292).
+/// because the gossip frame holds shut for several frames waiting on its greeting query.
 /// The poll stays for the other reason a single sample lies — a starved observer during a terrain
 /// load — and prints how long the latch actually took.
 const GATE_TIMEOUT_SECS: f64 = 3.0;
 
-/// **The vendor fork's leg** (decision 1914) — Brother Danil, `creature_template.entry = 152`,
+/// **The vendor fork's leg** — Brother Danil, `creature_template.entry = 152`,
 /// `npc_flags = 4` (VENDOR and nothing else, so the ladder cannot reach him by any other arm),
 /// spawned in Northshire at his own `creature.position_*` (live-DB verified this session).
 const VENDOR_ENTRY: u32 = 152;
@@ -238,15 +238,15 @@ enum Phase {
         since: f64,
         guid: u64,
     },
-    /// The window is open; waiting for the re-click gate's `"npc"` token to name its NPC
-    /// (decision 1905). Its own phase because the latch is allowed to lag the window by a frame —
+    /// The window is open; waiting for the re-click gate's `"npc"` token to name its NPC.
+    /// Its own phase because the latch is allowed to lag the window by a frame —
     /// see [`GATE_TIMEOUT_SECS`].
     Gate {
         i: usize,
         since: f64,
         guid: u64,
     },
-    /// The vendor fork's own chain (decision 1914) — `.go` to the pure vendor.
+    /// The vendor fork's own chain — `.go` to the pure vendor.
     VendorHop {
         sent_at: f64,
     },
@@ -345,11 +345,11 @@ fn service_probe(
     mut gossip: ResMut<GossipState>,
     mut giver: ResMut<QuestGiver>,
     mut trainer: ResMut<TrainerOpen>,
-    // `[0xb4e2d0]`'s mirror — what the re-click gate reads (decision 1905). The probe asserts it
+    // `[0xb4e2d0]`'s mirror — what the re-click gate reads. The probe asserts it
     // live because the gate's risk is never the `==`, it is whether this really is armed by a
     // window and only by a window.
     interact: Res<InteractNpc>,
-    // The vendor fork's leg (decision 1914): the window the empty-cursor leg must open, the VM the
+    // The vendor fork's leg: the window the empty-cursor leg must open, the VM the
     // held-cursor leg picks an item up in, and the two the app needs to turn a (bag, slot) into
     // the guid the wire addresses.
     mut merchant: ResMut<MerchantOpen>,
@@ -487,7 +487,7 @@ fn service_probe(
             giver.clear();
             trainer.clear();
 
-            // **The first click must always get through** (decision 1905). Nothing is open here —
+            // **The first click must always get through**. Nothing is open here —
             // this leg has just cleared, and the reference arms `[0xb4e2d0]` from window openers
             // only — so the re-click gate must read disarmed at the moment of the send. If it ever
             // reads armed here, the gate would be eating first clicks and this probe would still
@@ -505,7 +505,7 @@ fn service_probe(
             }
 
             // `None` = an empty cursor: no leg here holds an item, and the vendor arm's fork is
-            // the merchant probe's business, not this one's (decision 1914).
+            // the merchant probe's business, not this one's.
             let sent = match service_action(arm, guid, false, None) {
                 ServiceAction::Send(cmd) => {
                     let named = format!("{cmd:?}");
@@ -633,7 +633,7 @@ fn service_probe(
                 next(&mut probe, &net, i, now);
             }
         }
-        // ── The vendor fork (decision 1914) ──────────────────────────────────────────────────
+        // ── The vendor fork ──────────────────────────────────────────────────
         Phase::VendorHop { sent_at } => {
             if now - sent_at < SETTLE_SECS {
                 return;

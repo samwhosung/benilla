@@ -79,7 +79,7 @@ const PREVENTION_PACIFY: u32 = 2;
 /// Its byte-shape is a trap for a binary scan: SILENCED's read is `f6 c4 20 test ah,0x20`, a
 /// sub-register byte-lane form with no dword immediate, invisible to an immediate scan.
 ///
-/// **The exemption scan is built** (decision 1946, closing 1925's deferral): each arm first asks
+/// **The exemption scan is built** (closing 1925's deferral): each arm first asks
 /// whether any of the caster's own auras grants immunity to what is blocking it — a scan of
 /// `UNIT_FIELD_AURA[0..47]`'s raw spell ids for an aura of the arm's own type, then
 /// [`benilla_formats::grants_immunity`] on each match. A hit **lifts** the refusal; a rejection
@@ -110,7 +110,7 @@ pub(crate) fn cast_cc_refusal(
     // two messages. `exempt` returning `exempt: true` means one of the caster's own auras grants
     // immunity to whatever is blocking — the arm is SKIPPED and the cast proceeds. Otherwise the
     // refusal is `0x8d` "Can't do that while %s" when the scan named a mechanic, and the arm's own
-    // reason when it did not (decision 1946).
+    // reason when it did not.
     let mut arm = |aura_types: &[u32], own_reason: u8| -> Option<(u8, Option<u32>)> {
         let scan = exempt(aura_types);
         if scan.exempt {
@@ -118,7 +118,7 @@ pub(crate) fn cast_cc_refusal(
         }
         Some(if scan.mechanic != 0 {
             // The mechanic rides along as the message's `%s` — the one client-LOCAL refusal that
-            // carries an argument word (decision 1948).
+            // carries an argument word.
             (REASON_PREVENTED_BY_MECHANIC, Some(scan.mechanic))
         } else {
             (own_reason, None)
@@ -163,7 +163,7 @@ pub(crate) fn cast_cc_refusal(
 /// and which one appears is decided by whether the exemption scan named a mechanic.
 const REASON_PREVENTED_BY_MECHANIC: u8 = 0x8d;
 
-/// The **pre-send** mounted refusal (decision 0481) — the requirement validator `0x6094f0`'s
+/// The **pre-send** mounted refusal — the requirement validator `0x6094f0`'s
 /// mounted block (`0x609c6c`): a live
 /// `UNIT_FIELD_MOUNTDISPLAYID` refuses the cast with reason `0x39` ("You are mounted") unless
 /// the spell carries Attributes bit 24 (`0x01000000`, castable-while-mounted — the exemption
@@ -201,7 +201,7 @@ pub(super) const ERR_ONLY_ABOVEWATER: u8 = 0x50;
 /// `SPELL_FAILED_ONLY_UNDERWATER` — "Can only use while swimming".
 pub(super) const ERR_ONLY_UNDERWATER: u8 = 0x58;
 
-/// The **pre-send** water refusal (decisions 1056 + 1063) — the requirement validator
+/// The **pre-send** water refusal — the requirement validator
 /// `0x6094f0`'s environment block `0x609d33–0x609de2`. It sits after the mounted/posture/day/night
 /// legs and before the moving gate (`0x609de3`), which is where the ladder runs it — so a druid
 /// standing on land is refused **before** the form gate `0x612480` ever evaluates.
@@ -255,7 +255,7 @@ pub(super) fn cast_water_refusal(move_flags_word: u32, spell: Option<&SpellDispl
 /// `ChannelInterruptFlags` (+0x5c), byte-verified at `0x609e0e`/`0x609e1c`.
 const AURA_INTERRUPT_MOVING_TURNING: u32 = 0x18;
 
-/// The **pre-send** moving refusal (decision 0862) — the requirement validator `0x6094f0`'s
+/// The **pre-send** moving refusal — the requirement validator `0x6094f0`'s
 /// moving block (`0x609de3–0x609e48`; the sole client-local emitter of reason `0x2e` "Can't do
 /// that while moving"): a press while the
 /// caster's live CMovement flags carry any of {forward, backward, strafe L/R, JUMPING} refuses
@@ -418,7 +418,7 @@ mod tests {
             Some(ERR_ONLY_ABOVEWATER)
         );
         assert_eq!(cast_water_refusal(0, Some(&food)), None);
-        // ARM B (decision 1063): a CHANNELED spell's requirement bits live in its channel
+        // ARM B: a CHANNELED spell's requirement bits live in its channel
         // column. Fishing ranks 2–4's shape — AuraInterruptFlags zero, ChannelInterruptFlags
         // 0x3cac (which carries 0x80), AttributesEx 0x21004004 (IS_CHANNELED).
         let fishing_r2 = SpellDisplay {
@@ -487,7 +487,7 @@ mod tests {
         assert!(forbids_water(430), "Drink");
         assert!(forbids_water(818), "Basic Campfire");
 
-        // ARM B's reason to exist, on the real rows (decision 1063). Fishing rank 1 carries the
+        // ARM B's reason to exist, on the real rows. Fishing rank 1 carries the
         // bit in the AURA column; its own upgrades carry NOTHING there and reach the gate only
         // through the CHANNEL column. Arm A alone would refuse rank 1 mid-swim and let 2–4 fish.
         let swim = crate::creature_anim::move_flags::SWIMMING;
@@ -620,7 +620,7 @@ mod cc_refusal_tests {
         cast_cc_refusal(flags, Some(100), false, Some(d), &mut no_auras()).map(|(r, _)| r)
     }
 
-    /// **The arms are not symmetric** (decision 1904, widened by 1925): stun, fear, charm and
+    /// **The arms are not symmetric** (widened by 1925): stun, fear, charm and
     /// confuse refuse EVERY spell; silence and pacify only the rows whose `PreventionType` names
     /// them. Reading `UNIT_FLAG_SILENCED` as "no casting at all" — which our own preflight banner
     /// used to say — is the mistake this pins.
@@ -712,7 +712,7 @@ mod cc_refusal_tests {
         assert_eq!(cc(SILENCED | FLEEING | CONFUSED, &spell(0)), Some(0x1e));
     }
 
-    /// **What the exemption does to an arm** (decision 1946) — the three outcomes, at the arm.
+    /// **What the exemption does to an arm** — the three outcomes, at the arm.
     #[test]
     fn the_exemption_skips_an_arm_or_renames_its_refusal() {
         let cast = spell(1);
@@ -775,7 +775,7 @@ mod cc_refusal_tests {
         );
     }
 
-    /// **The mechanic rides out with the refusal** (decision 1948) — the half that turns
+    /// **The mechanic rides out with the refusal** — the half that turns
     /// "Can't do that while %s" into a sentence. It is the ONE client-local refusal that carries
     /// an argument word, and it is `None` for every arm that fell to its own reason.
     #[test]

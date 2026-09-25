@@ -1,6 +1,6 @@
 //! The character-create live probe (`WOW_PROBE_CHARCREATE="<name>[,race,class,gender[,skin,face,\
 //! hair,haircolor,facial]]"`) — the agent-side instrument that machine-verifies the char-create/delete
-//! wire against the live server (decision 0423, phase 1), inert without the env. It also keeps the
+//! wire against the live server (phase 1), inert without the env. It also keeps the
 //! `CharRequest::Create`/`Delete` verbs exercised until their UI lands (the create screen is phase 4,
 //! delete's UI is deferred).
 //!

@@ -1,4 +1,4 @@
-//! The inbound **handler table** (decision 2305) — the reference's own shape for the wire's
+//! The inbound **handler table** — the reference's own shape for the wire's
 //! arrival side, and the cut 2265 §A1 asked for between the net bridge and the game windows.
 //!
 //! The real client keeps an opcode → handler table inside `NetClient` (`+0x74`, 828 slots; 387

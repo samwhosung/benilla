@@ -10,7 +10,7 @@ pub(super) struct Scenario {
     /// `Map.dbc` id the eye/look coords belong to. Raw WoW coords repeat on every continent — the
     /// Felwood spot's tile (`33_24`) exists in Azeroth too, empty — so a scenario that could not
     /// name its map silently photographed the wrong world. The harness seeds
-    /// [`benilla_world::world_map::CurrentMap`] from this before streaming starts (decision 0743).
+    /// [`benilla_world::world_map::CurrentMap`] from this before streaming starts.
     /// Which `Map.dbc` map this scenario photographs. `None` = **the `$WOW_MAP` knob decides** —
     /// the arbitrary-viewpoint instruments (`vista`, `waterfx`, `fxview`) go anywhere, so they have
     /// no map of their own and must not write one back over the knob. A named golden scenario
@@ -57,19 +57,19 @@ pub(super) enum UiFixture {
     /// gossip-vs-greeting confusion turned on, and previously uncaptured (bullet/title seating had
     /// no regression baseline).
     QuestGreeting,
-    /// The quest-log book window (decision 0109) fed the REAL way: a synthetic self-player entity
+    /// The quest-log book window fed the REAL way: a synthetic self-player entity
     /// whose descriptor carries occupied `PLAYER_QUEST_LOG` slots, so the capture exercises the
     /// whole live chain (descriptor → `feed_quest_log` → template cache → seam → Lua → render) —
     /// nothing pushed to the VM by hand.
     QuestLog,
     Loot,
     Bag,
-    /// **The cooldown sweep, at sixteen phases in one still** (B379).
+    /// **The cooldown sweep, at sixteen phases in one still**.
     ///
     /// The backpack filled slot for slot, each slot's `GetContainerItemCooldown` triple parked at
     /// its own fraction of one very long cooldown — so the sixteen `…Cooldown` model panes
     /// (`CooldownFrameTemplate`, the reference's own `UI-Cooldown-Indicator.m2` through the tile
-    /// lane, decision 2019) each hold a different point of the 1000 ms sweep and the window reads
+    /// lane) each hold a different point of the 1000 ms sweep and the window reads
     /// left-to-right, top-to-bottom as a filmstrip of it. Game slot 1 renders TOP-LEFT
     /// (`ContainerFrame_GenerateFrame` numbers backwards — see `seed_bag_window`), so ascending
     /// slot is reading order.
@@ -81,7 +81,7 @@ pub(super) enum UiFixture {
     /// slot a very long cooldown, which makes the settle window's few seconds worth
     /// `~5e-4` of one phase step.
     Cooldown,
-    /// **The cooldown filmstrip with the pet bar's autocast SHINE up beside it** (B379).
+    /// **The cooldown filmstrip with the pet bar's autocast SHINE up beside it**.
     ///
     /// `UI-AutoCastButton.m2` is four additive spline emitters and no render batch at all — 300
     /// live golden particles (`GlowStar.blp`, born `(0.98, 0.87, 0.19)`) circling the button. It
@@ -103,7 +103,7 @@ pub(super) enum UiFixture {
     /// render): slot icons, the attribute/resistance panes with buff coloring, melee + ranged
     /// blocks, the ammo count, the level line.
     Character,
-    /// **The loading screen, held up, with the tip of the day on it** (decision 2083).
+    /// **The loading screen, held up, with the tip of the day on it**.
     ///
     /// Not a window: it raises the world-entry loading screen — per-map backdrop, progress bar,
     /// and the `TipEdge::Pick` that chooses a `GameTips.dbc` row — and pins it so the harness has
@@ -130,19 +130,19 @@ pub(super) enum UiFixture {
     /// the scaled map block, the exploration fog (revealed overlays over the parchment base),
     /// and the enlarged player arrow.
     WorldMap,
-    /// The spellbook (decision 0216 §8) opened over a seeded known-spell set that resolves
+    /// The spellbook opened over a seeded known-spell set that resolves
     /// through the REAL chain (`PlayerActions.spells` → `Spell.dbc` × `SkillLineAbility.dbc` →
     /// the book feed → Lua → render): the panel plates, the 12-slot page with name/rank text,
     /// passive graying, the skill-line tab strip, and the page footer.
     SpellBook,
-    /// The macro window (decision 0983) over a seeded macro set, second slot selected — the look
+    /// The macro window over a seeded macro set, second slot selected — the look
     /// instrument the window shipped WITHOUT, which is why "CREATE_MACROS" across its title bar
-    /// reached the director's screen instead of a capture (0991). Pins the two-tab row inside the
+    /// reached the director's screen instead of a capture. Pins the two-tab row inside the
     /// 384-wide plate, the 18-slot grid, the selected-macro detail pane, the body box, and the
     /// bottom button row. Macros are made through the live `CreateMacro` path, so the fixture
     /// exercises the real engine table → `UPDATE_MACROS` → window chain.
     Macro,
-    /// The macro window's NAME/ICON POPUP open over the same set (0991) — the other half of the
+    /// The macro window's NAME/ICON POPUP open over the same set — the other half of the
     /// window, and the denser one: the 5×4 icon grid off the real `SpellIcon.dbc` catalog, its
     /// faux scroll bar, the name box, and the Okay/Cancel row.
     MacroPopup,
@@ -157,35 +157,35 @@ pub(super) enum UiFixture {
     /// which decision 0254 recorded as the gap that left its own lane uncovered. `$WOW_TABHOVER`
     /// swings it through the four alternate dock states (see `fixtures.rs`).
     ChatTabHover,
-    /// The social pane (`FriendsFrame`), opened through the live toggle — the instrument for B264
-    /// (decision 1298). Its `FriendsDropDown` host is declared with no anchors, exactly as
+    /// The social pane (`FriendsFrame`), opened through the live toggle — the instrument for B264.
+    /// Its `FriendsDropDown` host is declared with no anchors, exactly as
     /// the reference's own `FriendsDropDown` is; while an unpositioned owner stood in a zero rect
     /// for its regions, the dropdown template's texture chain drew a stray capsule at the screen
     /// origin every time the pane opened. Needs no server state to show it.
     Social,
-    /// The era-styled Options window (decisions 0950/0951), opened through the live panel path —
+    /// The era-styled Options window, opened through the live panel path —
     /// the look-pass instrument for the whole options arc: chrome nine-slice seams, tab plates,
     /// search-box seat, category list art, the window scale. Static (no server state touched),
     /// so its pixels move only when the window or the atlas seam does.
     Options,
-    /// The Options window ON THE AUDIO PAGE (decision 0957) — the setting-row look instrument:
+    /// The Options window ON THE AUDIO PAGE — the setting-row look instrument:
     /// checkbox art at its era seats, the 1.12 slider groove + thumb on the bare full-width bar
     /// (steppers cut 0989), child-row indent/small-font, the percent readouts, Defaults armed.
     /// Rows read the CVar registration defaults (hermetic capture = no config file), so the
     /// pixels move only with the window, the atlas seam, or a registered default.
     OptionsAudio,
-    /// The Options window ON THE GRAPHICS PAGE (decision 0959; farclip row retired 0961 and back
+    /// The Options window ON THE GRAPHICS PAGE (farclip row retired 0961 and back
     /// 1513; Environment Detail joined 0992, a slider since 1649) — uiScale at its 0.64..1.0 panel
     /// range with the percent readout, and three slider grooves under it. Rows
     /// read the CVar registration defaults (hermetic capture = no config file), so the pixels
     /// move only with the window, the atlas seam, or a registered default.
     OptionsGraphics,
-    /// The Options window ON THE CHAT PAGE (decision 1589 — B246's "no chat section in options").
+    /// The Options window ON THE CHAT PAGE (B246's "no chat section in options").
     /// The page 1.12 calls `CHAT_LABEL`: four checkbox rows over three stores at once (a saved
     /// variable, three CVars), which is what makes it worth a baseline of its own — the row art is
     /// the Audio page's, but the page is the first to mix stores in one column.
     OptionsChat,
-    /// The **colour picker with its wheel** (decision 1592): the hue disc and the brightness strip,
+    /// The **colour picker with its wheel**: the hue disc and the brightness strip,
     /// both generated art with no BLP behind them, plus the two markers riding on them. Seeded at a
     /// known colour so the markers sit somewhere checkable rather than at the default white's
     /// centre. The one fixture whose subject is pixels this client computes.
@@ -193,16 +193,16 @@ pub(super) enum UiFixture {
     /// The Controls page with the Camera Following Style MENU OPEN — the dropdown-list look
     /// instrument: the shared DropDownList1 at the window's effective scale (the kit's uiScale
     /// correction), three entries with the stored one checked, the kit's dialog backdrop. It was
-    /// Environment Detail's list (0992) until 1649 put that row back on the reference's slider;
+    /// Environment Detail's list until 1649 put that row back on the reference's slider;
     /// the instrument follows the shape, not the row, so it moved to a row that still has a list.
     OptionsDropdownList,
-    /// The Options window MID-SEARCH (decision 0984) — the results-view look instrument: the
+    /// The Options window MID-SEARCH — the results-view look instrument: the
     /// "volume" query reflows the four live volume sliders under the clickable Audio head
     /// (GameFontNormalLarge), title "Search Results", Defaults hidden, the clear-X shown in
     /// the box. Hermetic like the other options fixtures; pixels move only with the window
     /// or a registered default.
     OptionsSearch,
-    /// The KEY BINDINGS window (decision 0997) — the era-shaped standalone KeyBindingFrame on
+    /// The KEY BINDINGS window — the era-shaped standalone KeyBindingFrame on
     /// its Movement page: the category sidebar (gold-locked Movement Keys), Command/Key 1/
     /// Key 2 columns over the honest tree's rows with the byte-real 1.12 defaults ("Move and
     /// Steer — Middle Mouse" leading, straight off the real GlobalStrings the capture VM loads
@@ -218,7 +218,7 @@ pub(super) enum UiFixture {
     /// sweep covered this — decision 0519 wrote the law and shipped it with the sort bias
     /// pointing the wrong way, invisible to every gate. The name must read at full strength.
     NameWater,
-    /// One cell of the **lighting matrix** (decision 0744): a creature or a GameObject spawned
+    /// One cell of the **lighting matrix**: a creature or a GameObject spawned
     /// through the live path at `at`, so each lane an object's light can take is photographed from
     /// two sides. See [`SubjectKind`] and the matrix note above [`SUBJECT_SUN`].
     Subject {
@@ -253,7 +253,7 @@ pub(super) const GROUND_LOOK: [f32; 3] = [-8949.95, -132.49, 84.0];
 pub(super) const SKY_EYE: [f32; 3] = [-8980.0, -160.0, 112.0];
 pub(super) const SKY_LOOK: [f32; 3] = [-8740.0, 80.0, 168.0]; // up + out: horizon in the lower third, dome above
 
-// Farmhouse viewpoints (decision 0071): compass looks from the human-start login spot. Kept
+// Farmhouse viewpoints: compass looks from the human-start login spot. Kept
 // permanently — the pale-film regression was invisible for hours because every baseline framed the
 // Abbey, one of the few buildings immune to it. Baselines must cover ordinary buildings too.
 pub(super) const HOUSE_EYE: [f32; 3] = [-9439.1, 71.2, 68.0];
@@ -268,7 +268,7 @@ pub(super) const MAP_DEEPRUN_TRAM: u32 = 369;
 /// A separate table rather than a variant of [`Scenario`], because the two share nothing but a
 /// name and an output path: every field of a `Scenario` says where a camera stands in a streamed
 /// world. What they do share is the shutter, and that is the part worth sharing — it waits for the
-/// *image* to stop changing (decision 0815), which is as true of a glue screen as of a landscape.
+/// *image* to stop changing, which is as true of a glue screen as of a landscape.
 ///
 /// Not in [`SCENARIOS`]: the golden sweep is the director's blessed set (0632's law, 0817's cut,
 /// 1183's eviction) and growing it is their call, not the harness's. Capturable by name like any
@@ -290,12 +290,12 @@ pub(super) struct GlueScenario {
 /// needs a server, or a seeded one) and is not here.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum GlueScreen {
-    /// The character-creation screen (decision 0423). Photographs, in one frame: the authored-rig
+    /// The character-creation screen. Photographs, in one frame: the authored-rig
     /// lighting of the `UI_*` backdrop scene and its per-race fog (the lane 1171 left uncovered),
-    /// the preview body in its starting outfit (0527), and the GlueXML panel around them.
+    /// the preview body in its starting outfit, and the GlueXML panel around them.
     CharCreate,
-    /// The login screen (decision 0539) — `UI_MainMenu` behind the account form. Nearly static,
-    /// which is why it was not here until its framing was the subject (B330, decision 1619): the
+    /// The login screen — `UI_MainMenu` behind the account form. Nearly static,
+    /// which is why it was not here until its framing was the subject: the
     /// gate's backdrop is the narrowest art of the seven scenes, so it is the one whose edges a
     /// wide window reaches first. `WOW_WIN=2560x1440` is the reporter's shape.
     Login,
@@ -321,7 +321,7 @@ pub(super) const GLUE_SCENARIOS: &[GlueScenario] = &[
 /// numbers below are verbatim from their `benilla-config/shots.txt` ([`/shot`] — it was
 /// `~/.benilla/shots.txt` when they were taken; decision 1181 moved it).
 ///
-/// **The Stormwind canal was the third spot and is deleted, not evicted** (decision 1183, at the
+/// **The Stormwind canal was the third spot and is deleted, not evicted** (at the
 /// director's instruction — the one place the "nothing is deleted" rule below does not apply). It
 /// stopped holding the bar of 0 by one pixel per cell, and the cause is a renderer defect that is
 /// still open: two WMO surfaces intersect there, one MSAA sample sits in an exact depth tie, and
@@ -329,13 +329,13 @@ pub(super) const GLUE_SCENARIOS: &[GlueScenario] = &[
 /// draw order follows spawn order (1182 measured it, 16/16). **Deleting the shot is not a fix**; it
 /// removes the only cell that was reporting the bug. 1182 holds the repro recipe.
 ///
-/// **Held small on purpose (decision 0817).** 0632 cut a thirty-shot set down to six for exactly
+/// **Held small on purpose.** 0632 cut a thirty-shot set down to six for exactly
 /// this reason and stated the law — *a few spots chosen with the director, times a couple of day
 /// times* — and then the set grew back to **twenty-one** one well-argued addition at a time: an
 /// interior, a second continent, a shadow-line fence, four creature cells, four chest cells, two
 /// indoor creature cells. Every one had a real case. The aggregate was 42 windows popping open on the
 /// director's screen per `selfcheck`, several of them not reproducible, and a standing invitation to
-/// spend sessions chasing harness ghosts — which is what happened (0810, 0815). The director's call:
+/// spend sessions chasing harness ghosts — which is what happened. The director's call:
 /// *"get rid of that shit, making more problems than it's helping… just keep the simple stuff we had
 /// before, 3 frames 2 times of day."*
 ///
@@ -392,7 +392,7 @@ pub(super) const OVERLOOK_LOOK: [f32; 3] = [-8912.9, -125.4, 87.7];
 pub(super) const WATER_EYE: [f32; 3] = [-9527.0, -310.6, 70.8];
 pub(super) const WATER_LOOK: [f32; 3] = [-9499.4, -351.3, 61.4];
 
-/// Director shot 4 (decision 0743) — INSIDE the Lion's Pride Inn at Goldshire, standing in the
+/// Director shot 4 — INSIDE the Lion's Pride Inn at Goldshire, standing in the
 /// common room: the hearth (the MOCV-alpha self-illum bake), a daylight window, the lit chandelier,
 /// the stair run, floor boards and ceiling beams, and a room full of props. The sweep's only
 /// interior, and the only shot that exercises portal culling, the INT bake, the MOLT point pools
@@ -407,12 +407,12 @@ pub(super) const WATER_LOOK: [f32; 3] = [-9499.4, -351.3, 61.4];
 pub(super) const INN_EYE: [f32; 3] = [-9471.4, 39.4, 59.9];
 pub(super) const INN_LOOK: [f32; 3] = [-9458.8, -7.5, 48.2];
 
-/// Director shot 6 (decision 0749) — an Elwynn rail fence lying ACROSS the sun's shadow boundary,
+/// Director shot 6 — an Elwynn rail fence lying ACROSS the sun's shadow boundary,
 /// at 10:24: the right-hand span is in full sun, the left-hand span in shade, and the same edge
 /// runs on across the road behind it. One frame holding **both** states of the MCSH sun term, on
 /// terrain and on a doodad at once, with the ramp visible as the hard line between them.
 ///
-/// The lighting matrix (0746) samples the lit and shadowed lanes as SEPARATE cells at separate
+/// The lighting matrix samples the lit and shadowed lanes as SEPARATE cells at separate
 /// positions, so a regression that scaled both equally could pass both. Here the two states share
 /// one frame, one model and one texture, so only their DIFFERENCE can carry the shot — the control
 /// is inside the picture. It also lights the third lane neither matrix subject touches: a
@@ -424,7 +424,7 @@ pub(super) const INN_LOOK: [f32; 3] = [-9458.8, -7.5, 48.2];
 pub(super) const FENCE_EYE: [f32; 3] = [-9511.9, -4.0, 61.9];
 pub(super) const FENCE_LOOK: [f32; 3] = [-9552.0, 18.6, 42.4];
 
-/// Director shot 5 (decision 0743) — a Felwood hollow on **Kalimdor** (`MAP_KALIMDOR`): the
+/// Director shot 5 — a Felwood hollow on **Kalimdor** (`MAP_KALIMDOR`): the
 /// corrupted forest floor's root mat, a stand of emissive `felwoodmushroom` doodads, a pool of
 /// green sludge (a liquid type no other golden shot contains), the vast trunks behind, and the
 /// zone's sick-green fog and light palette.
@@ -437,7 +437,7 @@ pub(super) const FELWOOD_EYE: [f32; 3] = [4060.9, -944.3, 256.8];
 pub(super) const FELWOOD_LOOK: [f32; 3] = [4014.0, -954.4, 242.9];
 
 // ---------------------------------------------------------------------------------------------
-// The LIGHTING MATRIX (decision 0744) — one subject, three lanes, two sides.
+// The LIGHTING MATRIX — one subject, three lanes, two sides.
 //
 // The golden spots are landscape: they photograph terrain, buildings and water, and (captures being
 // server-less) contain no creature or GameObject at all. So the *object* light path — the one every
@@ -683,7 +683,7 @@ pub(super) const ON_DEMAND: &[Scenario] = &[
     // the diff is the whole body shifting brightness in perfect registration — LIGHT, not pose. The
     // GameObject's interior light lane does not converge by the shutter, while the CREATURE at the
     // same spot is bit-identical. That is the ledger's "mis-lit objects inside city WMOs" class, and
-    // it is open (decision 0746). Capture them by name to work on it; they rejoin the sweep the day
+    // it is open. Capture them by name to work on it; they rejoin the sweep the day
     // they are deterministic.
     Scenario {
         name: "chest-indoor-front",
@@ -796,7 +796,7 @@ pub(super) const ON_DEMAND: &[Scenario] = &[
         ui: None,
     },
     // Straight INTO the visible sun with the view lerp at max (f = 1) — the lens-flare regression
-    // fixture (decision 0500). At 17:30 the sun sits at elev ≈30°, azimuth 45°, clear of the
+    // fixture. At 17:30 the sun sits at elev ≈30°, azimuth 45°, clear of the
     // Northshire ridge (the sky-dusk scene's 19:30 sun hides BEHIND the mountains, which is how
     // the halo-edge artifact escaped every baseline): the full 20-unit sunGlare star-ray quad must
     // fade off smoothly with no hard edge (the old far-placed quad depth-fought the sky dome and
@@ -810,7 +810,7 @@ pub(super) const ON_DEMAND: &[Scenario] = &[
         ui: None,
     },
     // The rising MOON low over the same bearing (az 45°, elev ≈15° at 22:44). Originally the flare
-    // occlusion-gate fixture (decision 0502); since the byte-pinned moon dnCurve landed (0508) the
+    // occlusion-gate fixture; since the byte-pinned moon dnCurve landed the
     // halo is dark here BY LAW — the curve is flat zero until 22:45 — so this now regression-checks
     // two things: the disc rises edge-first behind the ridge (per-pixel terrain occlusion), and NO
     // glare ring exists anywhere this early (a halo at 22:44 = the dn gate broke). The live halo's
@@ -826,7 +826,7 @@ pub(super) const ON_DEMAND: &[Scenario] = &[
     },
     // The moon's halo at its byte-law PEAK — midnight, moon overhead (az 45°, elev 55°), dnCurve
     // 1.0, dense stars (star curve 1.0): the warm disc + the gamma-added soft glare ring at full
-    // envelope over the star field. The regression baseline for the halo's correct look (0508) —
+    // envelope over the star field. The regression baseline for the halo's correct look —
     // the moonrise fixture above proves its absence early, this one its presence at depth of night.
     Scenario {
         name: "northshire-moon-halo",
@@ -919,7 +919,7 @@ pub(super) const ON_DEMAND: &[Scenario] = &[
     // The GameTooltip forced open over a seeded bag slot (a green-quality item). Run with
     // `WOW_CAPTURE=ui-tooltip`.
     // The cooldown sweep as a filmstrip: sixteen bag slots, sixteen phases, one deterministic
-    // still (B379). Run with `WOW_CAPTURE=ui-cooldown`.
+    // still. Run with `WOW_CAPTURE=ui-cooldown`.
     Scenario {
         name: "ui-cooldown",
         map: Some(MAP_AZEROTH),
@@ -977,7 +977,7 @@ pub(super) const ON_DEMAND: &[Scenario] = &[
         minute: 720,
         ui: Some(UiFixture::Bare),
     },
-    // The combo-point dots at the target frame's top-right (decisions 0869/0875). `demo_unit_feed`
+    // The combo-point dots at the target frame's top-right. `demo_unit_feed`
     // seeds a ROGUE with four points banked on the selected wolf for this scenario only — the demo
     // player is a warrior everywhere else, and a warrior authentically lights no dot. Run with
     // `WOW_CAPTURE=ui-combopoints`.
@@ -1088,7 +1088,7 @@ pub(super) const ON_DEMAND: &[Scenario] = &[
         minute: 720,
         ui: Some(UiFixture::ChatTabHover),
     },
-    // The social pane, for the stray-dropdown regression (B264, decision 1298). Run with
+    // The social pane, for the stray-dropdown regression. Run with
     // `WOW_CAPTURE=ui-social`.
     Scenario {
         name: "ui-social",
@@ -1119,7 +1119,7 @@ pub(super) const ON_DEMAND: &[Scenario] = &[
         minute: 720,
         ui: Some(UiFixture::Options),
     },
-    // The same window on the AUDIO page (0957). Run with
+    // The same window on the AUDIO page. Run with
     // `WOW_CAPTURE=ui-options-audio`.
     Scenario {
         name: "ui-options-audio",
@@ -1129,7 +1129,7 @@ pub(super) const ON_DEMAND: &[Scenario] = &[
         minute: 720,
         ui: Some(UiFixture::OptionsAudio),
     },
-    // The same window on the GRAPHICS page (0959). Run with
+    // The same window on the GRAPHICS page. Run with
     // `WOW_CAPTURE=ui-options-graphics`.
     Scenario {
         name: "ui-options-graphics",
@@ -1159,7 +1159,7 @@ pub(super) const ON_DEMAND: &[Scenario] = &[
         minute: 720,
         ui: Some(UiFixture::ColorPicker),
     },
-    // The Controls page with the Camera Following Style dropdown OPEN (0992, re-seated 1649). Run
+    // The Controls page with the Camera Following Style dropdown OPEN (re-seated 1649). Run
     // with `WOW_CAPTURE=ui-options-dropdown`.
     Scenario {
         name: "ui-options-dropdown",
@@ -1179,7 +1179,7 @@ pub(super) const ON_DEMAND: &[Scenario] = &[
         minute: 720,
         ui: Some(UiFixture::KeyBindings),
     },
-    // The same window MID-SEARCH (0984): the "volume" results view. Run with
+    // The same window MID-SEARCH: the "volume" results view. Run with
     // `WOW_CAPTURE=ui-options-search`.
     Scenario {
         name: "ui-options-search",
@@ -1250,7 +1250,7 @@ pub(super) const SCAR_LOOK: [f32; 3] = [-11792.7, -2647.1, 66.6];
 /// untouched and stay pristine; `WOW_CAPTURE_UI=1` still works and still means what it meant, for
 /// the case it was actually for — opting the UI into a WORLD scenario's shot.
 /// Find a scenario by name across **both** tables — the blessed sweep [`SCENARIOS`] and
-/// [`ON_DEMAND`], exactly as the harness's own `WOW_CAPTURE=` resolution does (decision 0632: only
+/// [`ON_DEMAND`], exactly as the harness's own `WOW_CAPTURE=` resolution does (only
 /// the sweep is narrowed, every viewpoint stays capturable by name). Every `ui-*` fixture lives in
 /// `ON_DEMAND`, so a lookup that searched only `SCENARIOS` would answer "not a UI scenario" for
 /// precisely the scenarios this predicate exists to serve — which is what the test below caught

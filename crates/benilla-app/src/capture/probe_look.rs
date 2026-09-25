@@ -1,5 +1,5 @@
 //! `WOW_PROBE_LOOK` — the scripted **mouse-turn**, the one player action the probe harness could not
-//! synthesize (decision 0621).
+//! synthesize.
 //!
 //! `WOW_PROBE_KEY` presses keys, which is enough for the transition opcodes; but since decision 0617
 //! the busiest thing on our wire by far is the facing stream a *mouse* turn produces (~one packet per
@@ -23,9 +23,9 @@ use benilla_world::schedule::WorldStage;
 use super::ProbeClock;
 
 /// One scripted turn: `rate` (rad/s), when it starts, and how long it runs — **wall-clock seconds**
-/// ([`ProbeClock`], decision 0789). Both halves want real time here, for one reason: `90°/s for 6 s`
+/// ([`ProbeClock`]). Both halves want real time here, for one reason: `90°/s for 6 s`
 /// has to produce 540° of facing stream whatever the frame rate did, and the stream it feeds is
-/// itself paced on the real clock (0615). On the virtual clock the schedule would drift *and* every
+/// itself paced on the real clock. On the virtual clock the schedule would drift *and* every
 /// hitch would silently under-rotate the turn, since its delta is clamped to 250 ms.
 struct Turn {
     rate: f32,
@@ -97,7 +97,7 @@ pub(crate) fn drive_probe_look(
 /// (no resource, no systems) if the script parses to nothing — the same shape every other probe in
 /// the fleet has. It orders itself **before** [`crate::player::control`], which is what makes the
 /// frame that sees the new `face_yaw` the frame that streams it; the controller knows nothing
-/// about it (decision 1174).
+/// about it.
 pub(crate) struct ProbeLookPlugin;
 
 impl Plugin for ProbeLookPlugin {

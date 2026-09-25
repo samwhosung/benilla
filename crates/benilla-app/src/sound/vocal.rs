@@ -1,11 +1,11 @@
 //! **Vocal UI error speech** — the lines your own character says out loud when the client refuses
-//! something: *"I can't do that yet."*, *"Not enough mana."*, *"Out of range."* (decision 1815).
+//! something: *"I can't do that yet."*, *"Not enough mana."*, *"Out of range."*.
 //!
 //! One engine function owns this in the reference — `SndInterfacePlayVocalUISound` `0x458250`,
 //! whose **sole caller** is the message dispatcher `CGGameUI::DisplayError 0x496720` — and one
 //! builder fills the table it reads, `0x4580f0`, called once from the local player's world-entry
 //! (`0x5dea50`: race from the descriptor's own byte, sex from `0x5ed5b0`). Both are transcribed
-//! here; the byte-level decode of each, and the shipped-data facts behind it, are in decision 1815.
+//! here; the byte-level decode of each, and the shipped-data facts behind it, are in.
 //!
 //! ## The table (`0x4580f0` → `[0xb06240]`)
 //!

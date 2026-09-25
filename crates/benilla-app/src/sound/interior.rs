@@ -1,4 +1,4 @@
-//! WMO interior audio identity (decision 0076): the `WMOAreaTable` row for the group the camera
+//! WMO interior audio identity: the `WMOAreaTable` row for the group the camera
 //! eye is inside, published as an override layer for the zone schedulers.
 //!
 //! The chain: `wmo_portal::CurrentWmoInterior` (the faithful down-ray already run for the portal

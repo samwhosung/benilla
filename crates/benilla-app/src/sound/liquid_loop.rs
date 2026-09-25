@@ -1,5 +1,5 @@
 //! The **above-water liquid ambient loops** — the continuous ocean / river / lava / slime beds
-//! the client plays near liquid (decision 0506). The Booty Bay ocean wash is this system. A
+//! the client plays near liquid. The Booty Bay ocean wash is this system. A
 //! distinct layer from the submerged UnderWaterLoop swap ([`super::zone`], `0x460af0`): these are
 //! **3D-positioned loops LAYERED over the zone-ambience bed**, not a replacement of it.
 //!
@@ -17,7 +17,7 @@
 //!   [`ActiveChannel`] gain lane; **hard stop on submerge** (`0x458650→0x462e10→0x462b10`) and
 //!   **instant full-volume restart on resurface**.
 //!
-//! Named approximations (0506): the nearest point is the surface footprint's AABB clamp (the
+//! Named approximations: the nearest point is the surface footprint's AABB clamp (the
 //! ref walks actual cells — ours can lead the fade-in by a couple of yards on L-shaped
 //! shores); the tick is a frame; `MapWaterSounds`/`EnableAmbience` CVars map onto the ambience
 //! slider (no separate toggles).

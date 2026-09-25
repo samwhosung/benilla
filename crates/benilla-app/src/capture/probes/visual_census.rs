@@ -8,7 +8,7 @@
 //!   debug signal that says so (it renders black rather than its authored red only because an
 //!   unlit `StandardMaterial` catches no light in our scene);
 //! - the entity's display named a model which **draws nothing** — how an invisible trigger
-//!   creature hides in the real client, and nothing should be drawn at all (decision 1403).
+//!   creature hides in the real client, and nothing should be drawn at all.
 //!
 //! One line per streamed entity says which, without an eye:
 //!
@@ -33,7 +33,7 @@
 //!   at all. `pick=0` means the unit cannot be hovered or clicked *at all* and only its name plate
 //!   can select it — which is the second half of what the Naxxramas weapon mobs reported and what
 //!   neither `meshes` nor `held` could say: `held=[main]` proves the axe is *attached*, never that
-//!   it is *clickable* (decision 1658).
+//!   it is *clickable*.
 //! - **`pending`** marks an entity whose visual has not been built yet (a model still streaming) —
 //!   never to be confused with one that built nothing, which is the distinction the census exists
 //!   to keep.
@@ -109,10 +109,10 @@ type VisualQuery = (
     // The attach slots standing under this unit — the visual truth for everything that rides a
     // BONE rather than the entity, which `Children` above cannot see.
     Option<&'static HeldAttached>,
-    // …and its mount, the third chained-model root the pick offers (decision 0441).
+    // …and its mount, the third chained-model root the pick offers.
     Option<&'static crate::entities::mount::MountChild>,
     // The descriptor, read for exactly one thing here: which half of the corpse fork a
-    // `TYPEID_CORPSE` row is on (decision 1706). A corpse has no name-cache entry, so without this
+    // `TYPEID_CORPSE` row is on. A corpse has no name-cache entry, so without this
     // every corpse row reads `Corpse … ?` and cannot say whether `meshes=0` means "the bone-pile
     // model is missing" or "the dressed body is missing" — opposite findings.
     Option<&'static crate::net::ObjectStore>,

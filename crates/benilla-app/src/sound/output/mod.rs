@@ -1,4 +1,4 @@
-//! The output stream — benilla's own kira backend (decision 1857, extended to every platform
+//! The output stream — benilla's own kira backend (extended to every platform
 //! by 1920).
 //!
 //! kira renders the mix; this module owns everything between that render and the speaker:
@@ -8,7 +8,7 @@
 //! it, and hands the callback one buffer per cycle: `coreaudio.rs` on macOS, `cpal.rs`
 //! elsewhere. Nothing above that seam knows which one it is, which is the point: 1857 wrote the
 //! non-macOS half as a stub that opened nothing, and Linux and Windows shipped silent for a
-//! release (B356).
+//! release.
 //!
 //! ## The shape: mix ahead, copy on the deadline
 //!
@@ -114,7 +114,7 @@ pub(super) const DEVICE_BUFFER_FRAMES: u32 = 512;
 pub(super) const MIX_AHEAD_MS: u32 = 100;
 
 /// Whether an output stream is open right now — read by instruments that would stop the
-/// process's threads (decision 1857: `/usr/bin/sample` suspends the task, realtime IO thread
+/// process's threads (`/usr/bin/sample` suspends the task, realtime IO thread
 /// included, and every HAL cycle it holds is a crackle; the stall watchdog stands down while
 /// this is set). Set by the backend around the stream's life, never by anything else.
 static DEVICE_OPEN: AtomicBool = AtomicBool::new(false);
@@ -708,7 +708,7 @@ fn render_loop(
     // Held for the thread's life and dropped with it: on Windows that hands the MMCSS
     // registration back, everywhere else it is inert.
     //
-    // `WOW_AUDIO_NO_RT=1` — the A/B lever (decision 1947): a raid with sound on reads a
+    // `WOW_AUDIO_NO_RT=1` — the A/B lever: a raid with sound on reads a
     // `cpu_p99` several ms over its mean while the annotation names no churn, and a realtime
     // render thread preempting the compute pools on four performance cores is the standing
     // suspect. Off, the thread takes the user-interactive QoS fallback below.

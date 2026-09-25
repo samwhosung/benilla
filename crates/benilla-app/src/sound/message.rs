@@ -1,8 +1,8 @@
 //! **The message catalog's sound half** — the branch of `CGGameUI::DisplayError 0x496720` that
-//! nobody had wired (decision 1815).
+//! nobody had wired.
 //!
 //! Every displayed client message is a row of the registry at `0xb4b498`
-//! ([`benilla_ui::messages`], decision 1770), and the dispatcher reads two of that row's fields
+//! ([`benilla_ui::messages`]), and the dispatcher reads two of that row's fields
 //! before it ever reaches the text: `+0x08`, a **sound cue name**, and `+0x0c`, a **type tag**.
 //! The test is one comparison (`0x49673d cmp [row+0xc],0x44 / je 0x496784`) and it picks between
 //! two entirely different sounds:
@@ -65,7 +65,7 @@ impl MessageSounds {
     ///
     /// **On 5875's data that difference has no case**: of the 86 rows that sound at all (56 voice
     /// lines + 30 cues), every single one resolves a non-empty string in the shipped
-    /// `GlobalStrings.lua` — measured, not assumed (decision 1815). The rows with no text are the
+    /// `GlobalStrings.lua` — measured, not assumed. The rows with no text are the
     /// silent ones, `ERR_CANT_BE_DISENCHANTED` among them, so nothing is lost by hanging the sound
     /// off the display. It is written down because the *ordering* is the surprising part, and a
     /// future locale or a patched table could give it a tenant.

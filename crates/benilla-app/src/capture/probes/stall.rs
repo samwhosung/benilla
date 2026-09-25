@@ -2,7 +2,7 @@
 //! instrument that makes "I tabbed away and came back to X" reproducible.
 //!
 //! A probe window cannot be tabbed away from: every scripted live probe asserts `AlwaysOnTop`
-//! ([`super::ProbeFocusPlugin`], decision 0906) precisely so the OS cannot throttle it. So the one
+//! ([`super::ProbeFocusPlugin`]) precisely so the OS cannot throttle it. So the one
 //! class of bug that only appears *because* the window went to the background — the client running
 //! for seconds at ~1 fps and then resuming — had no reproduction at all. This is that reproduction:
 //! it blocks the main loop for `<ms>` on each of `<frames>` consecutive frames, every `<every_s>`
@@ -17,7 +17,7 @@
 //!   window therefore still targets **60 Hz**; losing focus on its own costs nothing.
 //! - *macOS* — a window that is fully **covered** is throttled at the drawable: every
 //!   `CAMetalLayer.nextDrawable` blocks about a second, so the run continues at ~1 fps for as long
-//!   as it is covered (decisions 0713/0777; the director's correction in 0906 — "any covering
+//!   as it is covered (the director's correction in 0906 — "any covering
 //!   window, not just the lock screen"; 1355 measured the signature as a `p99 ≈ 1020 ms`
 //!   metronome). A ten-second glance at a terminal is therefore ~10 consecutive one-second frames,
 //!   which is why `<frames>` exists: a *single* long frame is a hitch, and a hitch is not what
@@ -25,7 +25,7 @@
 //!
 //! So the knob that reproduces a ten-second tab-away is `WOW_STALL="1000,20,60,10"`.
 //!
-//! **Not to be confused with `WOW_STALL_INJECT`** (`crate::perf::stall`, decisions 0713/1637),
+//! **Not to be confused with `WOW_STALL_INJECT`** (`crate::perf::stall`),
 //! whose name is one suffix away. That one fires **a single** sleep at a single instant, and it
 //! exists to prove the stuck-main-thread *watchdog* fires — it is a test affordance for an
 //! instrument, not a reproduction of a gameplay state. This one repeats, blocks `<frames>` in a

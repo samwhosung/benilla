@@ -1,6 +1,6 @@
 //! The background networking threads — the socket half of the net bridge.
 //!
-//! [`spawn_net`] starts a read thread with **two park points** (decisions 0193 + 0539): it first
+//! [`spawn_net`] starts a read thread with **two park points**: it first
 //! parks **pre-logon** on the credentials channel — the login screen's pause — then, once a
 //! [`LoginRequest`] (credentials *and* the realmlist to dial) walks logon → realm → world
 //! handshake (emitting [`SessionEvent::LoginStage`]s,
@@ -20,7 +20,7 @@
 //! ([`SessionEvent::LoggedOut`]) does the same with [`SessionEnd::LoggedOut`], and so does a
 //! **refused character login** ([`SessionEvent::CharacterLoginFailed`]) — the pick is announced
 //! optimistically, so a refusal is an entry taken back rather than a failure to enter. What happens next is
-//! the app's, and the two answers differ (decision 1262): the logout relists, while a loss ends the
+//! the app's, and the two answers differ: the logout relists, while a loss ends the
 //! session at the account screen unless nobody is there to type. A single long-lived sibling write thread drains
 //! [`ClientCommand`](super::ClientCommand)s down to the server; each successful connection hands it
 //! the fresh [`WorldWriter`] over a swap channel, so "exactly one writer" is structural, not
@@ -45,7 +45,7 @@ use super::{CharRequest, ChatKind, ClientCommand, RealmRequest};
 
 /// **The inbound census** — every packet the read thread pulls off the world socket, whatever its
 /// opcode, and the wall-clock of the most recent one (unix ms). Two numbers, one job: telling a
-/// *silent server* apart from a *dead socket* (decision 0621).
+/// *silent server* apart from a *dead socket*.
 ///
 /// When a remote mover freezes into a dead-reckoned runaway, the client cannot otherwise say which
 /// of those it is looking at — and they are opposite bugs. If these keep climbing while the mover
@@ -79,7 +79,7 @@ pub(crate) fn inbound_census() -> (u64, Option<u64>) {
     )
 }
 
-/// One submitted login attempt (decision 0539): the credentials, plus the abandon generation at
+/// One submitted login attempt: the credentials, plus the abandon generation at
 /// submit time — the thread discards the attempt at its next stage boundary if the shared counter
 /// has moved (a Cancel bumps it). A counter, not a flag: a flag cleared by the *next* submit would
 /// un-cancel the attempt still in flight.
@@ -87,7 +87,7 @@ pub(crate) fn inbound_census() -> (u64, Option<u64>) {
 pub(crate) struct LoginRequest {
     pub(crate) user: String,
     pub(crate) pass: String,
-    /// The realmlist to dial, `host[:port]` (decision 1667). **Per-attempt, exactly like the
+    /// The realmlist to dial, `host[:port]`. **Per-attempt, exactly like the
     /// credentials beside it** — the login screen can now repoint the client between attempts, and
     /// an address travelling with its attempt means an edit made mid-dial cannot silently retarget
     /// the connection already in flight. It is also the only shape under which the abandon
@@ -274,7 +274,7 @@ enum Cycle {
     /// select-screen Back ([`CharRequest::Abandon`]).
     Repark,
     /// A clean in-game logout: emit the teardown `Disconnected` (decision 0065's path), then park.
-    /// The app's pending credentials re-establish the roster silently (decision 0539 §3).
+    /// The app's pending credentials re-establish the roster silently.
     LoggedOut,
     /// The server refused the character we picked (`SMSG_CHARACTER_LOGIN_FAILED`) — we are not in
     /// the world, and the optimistic entry this thread already announced has to be taken back.
@@ -318,13 +318,13 @@ pub(super) fn spawn_net(cfg: NetConfig, connect: bool) -> NetHandles {
         let (writer_tx, writer_rx) = crossbeam_channel::unbounded::<WorldWriter>();
         let clock = Arc::clone(&ping_clock);
         // The read thread's own handle: `SMSG_PONG` is measured where it lands, not where it is
-        // drained (B346 — see [`PingClock`]).
+        // drained (see [`PingClock`]).
         let read_clock = Arc::clone(&ping_clock);
         let abandon = Arc::clone(&login_abandon);
         thread::Builder::new()
             .name("wow-net-write".into())
             .spawn(move || {
-                // Latency-sensitive: movement packets queue here (thread QoS, decision 0609).
+                // Latency-sensitive: movement packets queue here (thread QoS).
                 benilla_world::thread_qos::promote_current_thread(
                     benilla_world::thread_qos::QosClass::UserInitiated,
                 );
@@ -387,8 +387,8 @@ pub(super) fn spawn_net(cfg: NetConfig, connect: bool) -> NetHandles {
                         }
                         Err(e) => {
                             // A live-stream failure — including a displacement kick, which reaches
-                            // us as a bare EOF and nothing else (decision 1262). No sleep: what
-                            // happens next is the app's policy, not this thread's (0539 §3).
+                            // us as a bare EOF and nothing else. No sleep: what
+                            // happens next is the app's policy, not this thread's.
                             bevy::log::error!("net: {e:#}");
                             if events_tx
                                 .send(SessionEvent::Disconnected {
@@ -418,7 +418,7 @@ pub(super) fn spawn_net(cfg: NetConfig, connect: bool) -> NetHandles {
     }
 }
 
-/// One connection cycle: **park pre-logon** for credentials (decision 0539) → logon → **park at
+/// One connection cycle: **park pre-logon** for credentials → logon → **park at
 /// the realm list** until the app names a realm → world handshake → the character roster → **park
 /// at character select** until the app picks → enter the
 /// world, hand the writer to the write thread, then stream decoded [`SessionEvent`]s until the
@@ -443,7 +443,7 @@ fn run(
         realm_rx,
         pick_rx,
     } = parks;
-    // ── The pre-logon park (decision 0539): block for credentials. ──────────────────────────────
+    // ── The pre-logon park: block for credentials. ──────────────────────────────
     bevy::log::info!("net: parked at the login screen — waiting for credentials");
     let req = match login_rx.recv() {
         Ok(req) => req,
@@ -706,11 +706,11 @@ fn run(
 
         // Park at character select until the app answers (its pick policy: auto-relogin on reconnect,
         // the WOW_CHAR fast path, or the director's click). Create/delete requests are serviced *in
-        // place* (decision 0423): send, read the one result byte, on success re-enum + re-emit the
+        // place*: send, read the one result byte, on success re-enum + re-emit the
         // roster, emit the result, and loop back to the park — the thread stays a policy-free blocking
         // sequencer. The channel only closes on app exit. If the server kicked the parked socket
         // meanwhile, the login below fails → the caller cycles → a fresh roster → the app auto-resends
-        // its pick — self-healing, no keep-alive needed (decision 0193).
+        // its pick — self-healing, no keep-alive needed.
         bevy::log::info!("net: parked at character select");
         let guid = loop {
             // **Two channels, one park.** The realm list is a dialog, not a screen (`RealmList.xml`
@@ -761,7 +761,7 @@ fn run(
                 recv(pick_rx) -> pick => match pick {
                     Err(_) => Parked::Exit,
                     Ok(CharRequest::Enter(guid)) => Parked::Play(guid),
-                    // Select's Back (decision 0539): drop the parked session, return to the login park.
+                    // Select's Back: drop the parked session, return to the login park.
                     Ok(CharRequest::Abandon) => Parked::Repark,
                     Ok(CharRequest::Create(create)) => {
                         Parked::Acted(CharAction::Create, session.create_character(&create)?)
@@ -818,7 +818,7 @@ fn run(
         let billing_time_rested = session.billing_time_rested();
         let tutorial_flags = session.take_tutorial_flags();
         // `SMSG_ADDON_INFO`'s verdict, paired back against the block we sent — the reply carries no
-        // names (decision 2175). No reply at all means no hidden addons *and* no Lua index space;
+        // names. No reply at all means no hidden addons *and* no Lua index space;
         // the distinction is the script's to draw, so both arrive as the same empty list here and
         // the "did it answer" bit rides separately.
         let statuses = session.take_addon_info();
@@ -870,7 +870,7 @@ fn run(
                     tail,
                 } => {
                     skip_run = 0;
-                    // **The decode-length instrument** (decision 2265 §B1). A body is
+                    // **The decode-length instrument**. A body is
                     // length-framed, so a decoder shorter than the server's layout succeeds
                     // silently and the field it never read is invisible from outside. This is
                     // the one line that shows it — once per opcode, at info, and NEVER a skip:
@@ -883,7 +883,7 @@ fn run(
                             benilla_protocol::messages::opcode_name(opcode).unwrap_or("?"),
                         );
                     }
-                    // The full inbound opcode stream (tag `in`, decision 0624) — the last place a
+                    // The full inbound opcode stream (tag `in`) — the last place a
                     // packet could hide. `skip` covers what failed to parse and `rly` covers what
                     // reached the mover replay; between them sits the packet that parsed into *no*
                     // event, which no instrument could see. With this line every packet off the wire
@@ -900,7 +900,7 @@ fn run(
                         );
                     }
                     for ev in events {
-                        // **The pong bypass** (B346), the reference's own shape: `OnData 0x537b10`
+                        // **The pong bypass**, the reference's own shape: `OnData 0x537b10`
                         // peeks the opcode and hands `SMSG_PONG` straight to `HandlePong 0x537d60`
                         // inline, instead of copying it onto the queue the game thread drains. So do
                         // we — the round trip is measured here, against the clock the write thread
@@ -932,7 +932,7 @@ fn run(
                 }
                 Poll::Skipped { opcode, reason } => {
                     skip_run += 1;
-                    // **Every** skip, uncapped, into the trace (tag `skip`, decision 0623). A packet that
+                    // **Every** skip, uncapped, into the trace (tag `skip`). A packet that
                     // arrives and fails to parse is indistinguishable, from outside, from one that never
                     // arrived: the inbound census counts it either way, and no `rly` line is emitted
                     // either way. That ambiguity is what made a starving remote mover unattributable —
@@ -1101,7 +1101,7 @@ fn writer_loop(
                 let Some(w) = writer.as_mut() else {
                     // No live writer: the session is gone and this command evaporates. Traced
                     // unconditionally — this is the state in which a client keeps *deciding* to send
-                    // movement (`snd` lines) that no one will ever receive (decision 0621).
+                    // movement (`snd` lines) that no one will ever receive.
                     // **Both lines name the command.** They used to write a fixed string, so a
                     // login that dropped five commands before the writer existed said only that
                     // five of something went missing — and since `writer` is set exactly once and
@@ -1211,7 +1211,7 @@ fn writer_loop(
                             w.send_channel(target.as_deref().unwrap_or_default(), &text)
                         }
                     },
-                    // The addon lane (decision 1235). The distribution arrived as an enum and the
+                    // The addon lane. The distribution arrived as an enum and the
                     // map is TOTAL — no "unknown, guess SAY" arm exists, which is what the enum
                     // seam is for — so the whole arm is one call.
                     ClientCommand::AddonMessage { distribution, text } => {
@@ -1341,7 +1341,7 @@ fn writer_loop(
                     ClientCommand::TextEmote { text_id, target } => w.text_emote(text_id, target),
                     ClientCommand::GossipHello { guid } => w.gossip_hello(guid),
                     ClientCommand::GossipSelectOption { guid, option } => {
-                        // v1 sends no code — coded options are greyed, never selected (decision 0081).
+                        // v1 sends no code — coded options are greyed, never selected.
                         w.gossip_select_option(guid, option, None)
                     }
                     ClientCommand::NpcTextQuery { text_id, guid } => w.npc_text_query(text_id, guid),
@@ -1520,7 +1520,7 @@ fn writer_loop(
                     } => w.send_mail(
                         mailbox, &receiver, &subject, &body,
                         // The stationery the player selected (1970) and package 0 — vmangos
-                        // discards both and stores MAIL_STATIONERY_DEFAULT (41, decision 0544),
+                        // discards both and stores MAIL_STATIONERY_DEFAULT (41),
                         // but the wire carries what the client chose, as the reference's does.
                         stationery, 0, item_guid, money, cod,
                     ),
@@ -1598,12 +1598,12 @@ fn writer_loop(
                         auction_id,
                     } => w.auction_remove_item(auctioneer, auction_id),
                     ClientCommand::QueryTime => w.query_time(),
-                    // The inspect request (decision 0631) — no reply is awaited; see the writer.
+                    // The inspect request — no reply is awaited; see the writer.
                     ClientCommand::Inspect { target } => w.inspect(target),
-                    // The inspect-honor query (decision 1512) — this one IS answered; the reply
+                    // The inspect-honor query — this one IS answered; the reply
                     // rides the same opcode back.
                     ClientCommand::InspectHonorStats { target } => w.inspect_honor_stats(target),
-                    // The player-trade arc (decision 0592) — the CMSG verbs onto the P0 writers.
+                    // The player-trade arc — the CMSG verbs onto the P0 writers.
                     ClientCommand::InitiateTrade { target } => w.initiate_trade(target),
                     ClientCommand::BeginTrade => w.begin_trade(),
                     ClientCommand::BusyTrade => w.busy_trade(),
@@ -1723,7 +1723,7 @@ fn writer_loop(
                         w.guild_set_officer_note(&name, &note)
                     }
                     ClientCommand::GuildInfoText { text } => w.guild_info_text(&text),
-                    // The petition family (decision 1672) — founding a guild.
+                    // The petition family — founding a guild.
                     ClientCommand::PetitionShowList { npc } => w.petition_show_list(npc),
                     ClientCommand::PetitionBuy { npc, name } => w.petition_buy(npc, &name),
                     ClientCommand::PetitionShowSignatures { item } => {
@@ -1750,7 +1750,7 @@ fn writer_loop(
                         nodes,
                     } => w.activate_taxi_express(guid, total_cost, &nodes),
                 };
-                // **What actually reached the socket** (tag `wire`, decision 0621). The controller's
+                // **What actually reached the socket** (tag `wire`). The controller's
                 // `snd` line is written before the command is even queued, so it records a decision,
                 // not a transmission — a client whose session died goes on producing `snd` lines into
                 // a dead channel forever, which is exactly the ambiguity that cost us a hunt. Only

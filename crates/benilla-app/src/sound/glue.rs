@@ -6,7 +6,7 @@
 //!   [`super::ui`]'s `PlaySound` seam, but from the glue screens (which have no Lua VM).
 //! - **Music**: the glue title theme (`GlueParent.lua`'s `CurrentGlueMusic`,
 //!   `Sound\Music\GlueScreenMusic\wow_main_theme.mp3`), streamed from the login screen on
-//!   (decision 0539) and kept across the glue screens (the ref keeps it through select ⇄ create).
+//! and kept across the glue screens (the ref keeps it through select ⇄ create).
 //!   **The click into the world does not end it** (1550/1553, `0x46c258`): it plays unbroken
 //!   through the whole map load, and the stop is armed by the *load draining* — a 3.0 s fade, still
 //!   behind the loading screen. Re-entering the glue after a logout starts it again.
@@ -41,7 +41,7 @@ const GLUE_MUSIC_FADE_OUT_MS: u64 = 3000;
 pub(crate) struct GlueSound(pub(crate) &'static str);
 
 /// The held glue-music stream (non-`Sync` handle — non-Send state, like [`super::zone`]'s), plus
-/// its starvation watch (decision 1109). The handle is held through the stop-fade, not dropped at
+/// its starvation watch. The handle is held through the stop-fade, not dropped at
 /// it: the fade rides out under the world-entry load burst, which is exactly the crackle-prone
 /// window, and [`watch_glue_music`] can only see a stream it still holds. Since 1550 the theme
 /// itself rides that whole burst too — all the more reason for the watch to be able to see it.
@@ -136,7 +136,7 @@ fn start_glue_music(
     }
 }
 
-/// **The world's load drained — arm the theme's fade** (decision 1553, correcting 1550's trigger).
+/// **The world's load drained — arm the theme's fade** (correcting 1550's trigger).
 ///
 /// This is the reference's own trigger, and it is not a music event at all: `CGlueMgr::Update`
 /// state 8 runs a *second* pass every frame after the entry (`[0xb41d94] == 1`), spinning on the
@@ -150,7 +150,7 @@ fn start_glue_music(
 /// wanted tile spawned, placements up, colliders quiet ([`crate::loading_screen`]) — so the fade is
 /// armed on `world_hold`'s **falling edge**. The edge is tracked every frame but only acted on
 /// **in the world**, which is what excludes the logout blackout: that cover drops on the frame the
-/// state leaves `InWorld` (0738), and firing there would fade the theme the glue had just restarted.
+/// state leaves `InWorld`, and firing there would fade the theme the glue had just restarted.
 ///
 /// The handle is deliberately kept through the fade — the [`GlueMusic`] docs say why — and reaped
 /// by [`watch_glue_music`] once the fade lands on `Stopped`.
@@ -172,7 +172,7 @@ fn hand_off_glue_music(
     }
 }
 
-/// Per-frame stream health + handle reaping: the starvation watch (decision 1109) over the held
+/// Per-frame stream health + handle reaping: the starvation watch over the held
 /// theme, and the drop once it reaches `Stopped` — after the handoff fade lands, or at the theme's
 /// natural end. On the glue screens that end re-arms [`start_glue_music`], which brings the theme
 /// back from the top — the login screen no longer falls silent for good after one play-through.
@@ -218,7 +218,7 @@ fn watch_glue_music(
     music.watch.feed(h, f64::from(time.delta_secs()));
 }
 
-/// Report the glue theme's voice into the global budget (decision 1557) — it rides `InWorld`
+/// Report the glue theme's voice into the global budget — it rides `InWorld`
 /// since 1550, so it occupies a channel there like anything else.
 fn report_stream_voices(music: NonSend<GlueMusic>, mut out: NonSendMut<super::SoundOutput>) {
     out.glue_streams = usize::from(
@@ -237,7 +237,7 @@ pub(super) fn plugin(app: &mut App) {
             (
                 play_glue_sounds,
                 // The theme starts at the login screen (the ref's `AccountLogin_OnShow` sets the
-                // same `wow_main_theme` — decision 0539) and keeps across the glue screens.
+                // same `wow_main_theme`) and keeps across the glue screens.
                 start_glue_music
                     .run_if(in_state(ClientState::Login).or(in_state(ClientState::CharSelect))),
                 // No run condition on either: the theme rides `InWorld` now (1550), so its handoff

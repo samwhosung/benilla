@@ -67,7 +67,7 @@ impl EmoteSounds {
 
     /// The `$ESD` anim event's kit for a unit in this looping state emote: the row's
     /// `EventSoundID`, gated on `EmoteSpecProc == 2` — the client's `row[+0x10] == 2` test in the
-    /// `$ESD` handler `0x6239f0` before it reads `row[+0x18]` (decision 0562). A one-shot emote id
+    /// `$ESD` handler `0x6239f0` before it reads `row[+0x18]`. A one-shot emote id
     /// parked in the state field stays silent, exactly like the reference.
     pub(crate) fn state_event_sound(&self, emote_id: u32) -> Option<u32> {
         (self.0.spec_proc(emote_id) == Some(2))
