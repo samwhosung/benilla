@@ -1,88 +1,19 @@
-//! The innkeeper-bind live probe (`WOW_PROBE_BINDER=1`) — decision 1331's end-to-end instrument and
-//! the evidence that closes **B249** ("setting your Hearthstone shows a wrong icon and doesn't
-//! take"): log in, GM-hop to the exact innkeeper in the bug's screenshot, open her gossip menu on
-//! the real wire, assert the bind row's icon reads **binder** (half 1), select it, assert the
-//! server's `SMSG_BINDER_CONFIRM` arrived and reached the Lua dialog (half 2's question), answer it
-//! through the reference's own `ConfirmBinder()`, and assert the hearthstone actually moved (half
-//! 2's answer). One `PROBE_BINDER: <step> PASS/FAIL/SKIP <detail>` line per step, then a final
-//! `PROBE_BINDER: DONE pass=<n> fail=<m>`. Modeled closely on [`super::probe_bank`] — same phase
-//! machine, same trace style, same self-terminating exit ([`super::probes::ProbeExitPlugin`]'s
-//! pattern), same live-VM observation idiom (a small Lua hook appending to a probe table, read back
-//! with `script.eval`).
+//! The innkeeper-bind live probe (`WOW_PROBE_BINDER=1`): hops to Innkeeper Keldamyr (entry 6736,
+//! Dolanaar, map 1), opens her gossip on the real wire, checks the bind row's icon maps to
+//! `binder`, selects it, checks `SMSG_BINDER_CONFIRM` reaches `CONFIRM_BINDER`, answers with
+//! `ConfirmBinder()`, and checks the hearthstone moved and the bind announced itself. One
+//! `PROBE_BINDER: <step> PASS/FAIL/SKIP <detail>` line per step, then `PROBE_BINDER: DONE
+//! pass=<n> fail=<m>`, and it exits. An environmental problem SKIPs; a wrong value FAILs.
+//! Non-combat; the switches are `docs/CONTRIBUTING.md`, "Running it unattended".
 //!
-//! Unit tests cannot close B249. Half 1's old mapping was self-consistent (it just described a
-//! *later* client's icon art), and half 2's packet was never parsed at all — both defects are only
-//! visible against a real server sending real bytes, which is what this probe puts in front of
-//! them.
-//!
-//! ## The innkeeper (live-DB verified against the local vmangos, `mangos` DB)
-//!
-//! Innkeeper Keldamyr — `creature_template.entry = 6736`, spawn `creature.guid = 46343`, **map 1**
-//! (Teldrassil, Dolanaar), position `(9802.21, 982.608, 1313.98)`,
-//! `creature_template.npc_flags = 135` = `0x87` = GOSSIP|QUESTGIVER|VENDOR|**INNKEEPER**,
-//! `gossip_menu_id = 1293`. She is the NPC in the bug's screenshot, which is why the probe hops to
-//! her rather than to whichever innkeeper is nearest.
-//!
-//! **`UNIT_NPC_FLAG_INNKEEPER` is `0x80` (128) on 1.12** — vmangos `Objects/UnitDefines.h:610`,
-//! read this session. `GossipDef.h:45`'s comment beside `GOSSIP_OPTION_INNKEEPER` says `(65536)`,
-//! which is a *later* client's value for the same flag: exactly the stale-comment trap decision
-//! 1331 is about (half 1 was a hand-written icon map that trusted that same header's enum *names*).
-//! [`NPC_FLAG_INNKEEPER`] below is the verified `0x80`, and it is only the scan's fallback — the
-//! primary identity check is the template entry.
-//!
-//! ## The bind row (live-DB verified this session)
-//!
-//! `gossip_menu_option` for menu 1293 carries five rows; the innkeeper's is
-//! `option_icon = 5`, `option_id = 8` (`GOSSIP_OPTION_INNKEEPER`), `npc_option_npcflag = 128`,
-//! text *"Make this inn my home."* — and **every one of the 21 `option_id = 8` rows in the whole
-//! world DB uses `option_icon = 5`** (`SELECT option_icon, COUNT(*) … WHERE option_id = 8 GROUP BY
-//! option_icon` → a single row, `5 | 21`). So icon 5 is *the* innkeeper icon, and 5 was precisely
-//! the byte the pre-1331 map had no entry for: it fell through to the chat bubble. Step 3 FAILs
-//! loudly on `"gossip"` for that reason — that string is the B249 regression itself.
-//!
-//! Two things a live reading shows that the DB row does not, both verified on the first run:
-//!
-//! - **The label on the wire is not `option_text`.** vmangos prefers the row's
-//!   `option_broadcast_text` (2822 -> *"Make this inn your home."*) over the `option_text` column
-//!   (*"Make this inn **my** home."*). Step 4's guard is therefore a lowercase `"home"` substring,
-//!   not an equality — the exact wording is the server's to choose.
-//! - **A probe login sees five rows here, not the three in the bug's screenshot.** GM mode is the
-//!   probe default (the preflight banner says so every run), and vmangos does not
-//!   condition-filter a GM's menu — it appends `"(GM mode is ON)"` to the two holiday rows and
-//!   sends them anyway. So the bind row sits at list position 2 with wire index 1 on a probe, and
-//!   would sit at position 1 on a player. That is exactly why step 3 finds the row by its **wire
-//!   icon byte** and step 4 selects by its **wire index**, and why neither ever counts positions.
-//!
-//! ## What each step can and cannot conclude
-//!
-//! Step 5 is the load-bearing one. Before 1331 `SMSG_BINDER_CONFIRM` (0x2eb) had no const, no parse
-//! arm and no dialog: it fell through `parse.rs`'s tail into `ServerPacket::Other` and the click
-//! produced a closing gossip window and nothing else. A PASS there means the packet is parsed, the
-//! session state took it, and the `CONFIRM_BINDER` event reached the live VM carrying a real area
-//! name.
-//!
-//! Step 6 answers it the way a player does — `ConfirmBinder()` run in the live VM, so the whole
-//! dialog→engine→drain→wire chain (`CMSG_BINDER_ACTIVATE`, 0x1b5) is exercised rather than a
-//! synthesized packet. **A rebind to the place you are already bound is invisible unless you make
-//! it visible**: vmangos's `EffectBind` (`SpellEffects.cpp`) writes the homebind and sends
-//! `SMSG_BINDPOINTUPDATE` *unconditionally*, but our [`HomeBind`] would simply be re-set to the
-//! value it already held. So the probe clears `HomeBind` to `None` immediately before answering
-//! and waits for it to become `Some` again — that transition is the fresh packet, and it is the
-//! only reading that survives a probe character who already hearths in Dolanaar from an earlier
-//! run.
-//!
-//! ## The run recipe
-//!
-//! ```text
-//! WOW_DATA=WoW/Data WOW_USER=probe1 WOW_PASS=pprobe1 WOW_CHAR=Probeone \
-//!     WOW_PROBE_BINDER=1 cargo run -q -p benilla
-//! ```
-//! (the checkout's probe identity — `.probe-identity`, or WOW_USER/WOW_PASS/WOW_CHAR; the `probe`
-//! skill). Non-combat, and GM mode is left exactly as found. An
-//! outer `timeout` + grep on `PROBE_BINDER:` is the whole harness; the probe self-exits once DONE.
-//!
-//! Every step SKIPs with a note rather than FAILing for an environmental problem (the NPC never
-//! streamed, a GM command refused, no UI VM in this build). A genuine wrong value is a FAIL.
+//! - `UNIT_NPC_FLAG_INNKEEPER` is `0x80` (vmangos `UnitDefines.h:664`); the `(65536)` beside
+//!   `GOSSIP_OPTION_INNKEEPER` in `GossipDef.h:45` is a later client's value.
+//! - Every `GOSSIP_OPTION_INNKEEPER` row in the world DB sends icon 5.
+//! - The wire label is the row's broadcast text ("Make this inn your home."), not `option_text`.
+//! - vmangos does not condition-filter a GM's menu, so a probe in GM mode sees extra rows: the
+//!   row is found by its wire icon and selected by its wire index, never by position.
+//! - `EffectBind` sends `SMSG_BINDPOINTUPDATE` even for a rebind to the same place
+//!   (`SpellEffects.cpp:5806`), so the probe clears `HomeBind` first and waits for it to return.
 
 use bevy::prelude::*;
 
@@ -98,45 +29,36 @@ use crate::ui_binder::BinderState;
 use crate::ui_gossip::GossipState;
 use crate::ui_session::NpcSession;
 
-/// Innkeeper Keldamyr's spawn (vmangos `creature` guid 46343, entry 6736) — the `.go xyz` target.
+/// Innkeeper Keldamyr's spawn (vmangos `creature` guid 46343), the `.go xyz` target.
 const INNKEEPER_AT: [f32; 3] = [9802.21, 982.608, 1313.98];
-/// Her map — Teldrassil. `.go xyz` takes the map id as its fourth argument.
+/// Her map, Kalimdor; `.go xyz` takes the map id as its fourth argument.
 const INNKEEPER_MAP: u32 = 1;
-/// Her creature template entry — the streamed-unit identity check (module doc).
+/// Her creature template entry, the primary identity check.
 const INNKEEPER_ENTRY: u32 = 6736;
-/// `UNIT_NPC_FLAG_INNKEEPER` — `0x80` on 1.12, NOT the `65536` `GossipDef.h`'s comment names
-/// (module doc). The scan's fallback when the entry read is unavailable.
+/// `UNIT_NPC_FLAG_INNKEEPER` on 1.12, the scan's fallback identity check.
 const NPC_FLAG_INNKEEPER: u32 = 0x80;
-/// The wire `GOSSIP_ICON` byte every `GOSSIP_OPTION_INNKEEPER` row in the world DB sends
-/// (21/21, verified this session) — decision 1331's table indexes it to `"binder"`.
+/// The wire `GOSSIP_ICON` byte every `GOSSIP_OPTION_INNKEEPER` row sends.
 const ICON_INNKEEPER: u8 = 5;
 /// The type string [`crate::ui_gossip`]'s table must produce for [`ICON_INNKEEPER`].
 const ICON_TYPE_BINDER: &str = "binder";
-/// What the pre-1331 map produced instead — the chat bubble. Seeing it back is B249, not a flake.
+/// The chat bubble, what an unmapped icon byte falls back to.
 const ICON_TYPE_REGRESSION: &str = "gossip";
-/// The substring the bind row's label must carry before the probe is willing to select it — a
-/// guard against binding whatever else the menu happens to offer if the DB row ever moves.
+/// A substring the bind row's label must carry before the probe selects it.
 const BIND_LABEL_HINT: &str = "home";
-/// Scan radius around the `.go` landing, generously wide so a slightly-off hop still finds her
-/// (the bank/mail probes' idiom).
+/// Scan radius around the `.go` landing, wide enough for a slightly-off hop.
 const SCAN_RANGE: f32 = 12.0;
 
 const SETTLE_SECS: f64 = 3.0;
-/// The waits are deliberately generous, and the reason is measured rather than guessed: the `.go`
-/// lands on a **different map**, so the whole leg after the hop runs inside Teldrassil's terrain
-/// load — the first live run logged five consecutive `frame hitch: ~1050 ms` lines and a 5.0 s
-/// loading screen across steps 4→5, i.e. the probe got roughly one frame per second to poll in.
-/// The packets were prompt; the *observer* was starved. A timeout tight enough to trip on that
-/// would report a FAIL about the wire, which is the one thing an instrument must never do.
+/// Generous: the hop lands on another map, and its terrain load leaves the probe about one frame
+/// a second to poll in, though the packets arrive promptly.
 const SCAN_TIMEOUT_SECS: f64 = 20.0;
 const MENU_TIMEOUT_SECS: f64 = 20.0;
 const CONFIRM_TIMEOUT_SECS: f64 = 20.0;
 const BIND_TIMEOUT_SECS: f64 = 20.0;
 const LINE_TIMEOUT_SECS: f64 = 20.0;
 
-/// `ERR_DEATHBIND_SUCCESS_S` (GlobalStrings.lua:1543, verbatim) — what step 7 expects to read back
-/// off CHAT_MSG_SYSTEM, composed here rather than imported so the probe asserts against the
-/// reference's own string and not against whatever `ui_binder` happens to hold.
+/// `ERR_DEATHBIND_SUCCESS_S` (`GlobalStrings.lua:1544`), written out so step 7 asserts against
+/// the reference string, not `ui_binder`'s.
 fn bound_line(area_name: &str) -> String {
     "%s is now your home.".replace("%s", area_name)
 }
@@ -150,27 +72,22 @@ impl Plugin for ProbeBinderPlugin {
     }
 }
 
-/// The probe's phase machine plus the identities discovered along the way (the bank probe's shape:
-/// a `Copy` phase snapshotted out of the resource each tick, so an arm can mutate `probe` freely).
+/// The probe's phase machine plus the identities found along the way.
 #[derive(Resource, Default)]
 struct BinderProbe {
     phase: Phase,
     /// The innkeeper's guid, once streamed in.
     innkeeper: Option<u64>,
-    /// The bind row's **wire** `index` — the value the packet carried and the value
-    /// `CMSG_GOSSIP_SELECT_OPTION` must echo back. vmangos numbers them `data << uint32(iI)` over
-    /// the rows it actually sends (`GossipDef.cpp:188`), so it is the row's **0-based** position in
-    /// *this* menu — neither the DB's `gossip_menu_option.id` nor the Lua menu's 1-based position,
-    /// and the probe assumes no relation between them for the same reason the real drain doesn't.
+    /// The bind row's wire index, echoed by `CMSG_GOSSIP_SELECT_OPTION`: its 0-based position
+    /// among the rows sent (`GossipDef.cpp:188`), neither the DB id nor the Lua position.
     bind_index: Option<u32>,
-    /// The area id [`HomeBind`] held before step 6 cleared it — reported in the verdict so a
-    /// rebind-to-the-same-place reads as the deliberate no-visible-change case it is.
+    /// The area id [`HomeBind`] held before step 6 cleared it, reported in the verdict.
     baseline_area: Option<u32>,
-    /// The area name the bind resolved to — step 7 composes its expected line from it.
+    /// The area name the bind resolved to; step 7 composes its expected line from it.
     bound_name: String,
     passes: u32,
     fails: u32,
-    /// Latched once [`Phase::Done`] has fired its exit (never re-fire on a later frame).
+    /// Latched once [`Phase::Done`] has fired its exit.
     exited: bool,
 }
 
@@ -182,7 +99,7 @@ enum Phase {
     Settling {
         sent_at: f64,
     },
-    /// `GossipHello` sent; waiting for the parsed menu AND its push into the VM (step 2).
+    /// `GossipHello` sent; waiting for the parsed menu and its push into the VM (step 2).
     Menu {
         sent_at: f64,
     },
@@ -198,23 +115,21 @@ enum Phase {
         since: f64,
         sent: bool,
     },
-    /// Step 7 — the bind landed; waiting for `SMSG_PLAYERBOUND`'s
-    /// `ERR_DEATHBIND_SUCCESS_S` line to reach the VM as CHAT_MSG_SYSTEM.
+    /// Step 7: waiting for `SMSG_PLAYERBOUND`'s `ERR_DEATHBIND_SUCCESS_S` as `CHAT_MSG_SYSTEM`.
     Line {
         since: f64,
     },
     Done,
 }
 
-/// Read the Lua-side `ProbeBinderEvents` log length (the `CONFIRM_BINDER` hook) — `0` on any eval
-/// hiccup, treated as "nothing observed yet", never a panic (the bank probe's idiom).
+/// The Lua-side `ProbeBinderEvents` log length (the `CONFIRM_BINDER` hook); 0 on an eval error.
 fn events_len(script: &UiScript) -> i64 {
     script
         .eval::<i64>("return table.getn(ProbeBinderEvents or {})")
         .unwrap_or(0)
 }
 
-/// The newest `ProbeBinderEvents` entry — `CONFIRM_BINDER`'s `arg1`, the area name that fills the
+/// The newest `ProbeBinderEvents` entry: `CONFIRM_BINDER`'s `arg1`, the area name that fills the
 /// dialog's `"Do you want to make %s your new home?"`.
 fn last_event(script: &UiScript) -> String {
     script
@@ -222,27 +137,24 @@ fn last_event(script: &UiScript) -> String {
         .unwrap_or_default()
 }
 
-/// The `CHAT_MSG_SYSTEM` lines seen since the hook went in, newest last — step 6's second
-/// observation. `SMSG_PLAYERBOUND` prints `ERR_DEATHBIND_SUCCESS_S` here (`0x5e3d3f` →
-/// `DisplayError(0x138)`, chat type 238 = CHAT_MSG_SYSTEM).
+/// The `CHAT_MSG_SYSTEM` lines seen since the hook went in, newest last. `SMSG_PLAYERBOUND`
+/// prints `ERR_DEATHBIND_SUCCESS_S` there (`0x5e3d3f` → `DisplayError(0x138)`, chat type 238).
 fn system_lines(script: &UiScript) -> Vec<String> {
     script
         .eval::<Vec<String>>("return ProbeBinderSystemLines or {}")
         .unwrap_or_default()
 }
 
-/// How many values the live `GetGossipOptions()` returns — flat `(label, type)` pairs, so twice the
-/// row count. The probe waits on this rather than assuming the feed already ran this frame.
+/// How many values the live `GetGossipOptions()` returns: flat `(label, type)` pairs, twice the
+/// row count.
 fn vm_gossip_values(script: &UiScript) -> i64 {
     script
         .eval::<i64>("local t = { GetGossipOptions() } return table.getn(t)")
         .unwrap_or(0)
 }
 
-/// The icon **type string** the app mapped for the 1-based menu row `pos` — read exactly where the
-/// FrameXML reads it, out of the pushed [`benilla_ui::script::GossipMenu`] snapshot through the
-/// Era `GetGossipOptions()` vararg. (`ui_gossip::gossip_icon_type` is private to its module; the
-/// snapshot is the same value the real menu draws from, which is the stronger assert anyway.)
+/// The icon type string `GetGossipOptions()` returns for the 1-based menu row `pos`, read where
+/// `GossipFrame.lua` reads it.
 fn vm_icon_type(script: &UiScript, pos: usize) -> String {
     script
         .eval::<String>(&format!(
@@ -252,15 +164,15 @@ fn vm_icon_type(script: &UiScript, pos: usize) -> String {
         .unwrap_or_default()
 }
 
-/// The texture path `BENILLA_GOSSIP_ICONS.binder` resolves to in the live VM — `""` if the table or
-/// the key is missing, which would mean the row draws the fallback bubble whatever the app mapped.
+/// `BENILLA_GOSSIP_ICONS.binder` in the live VM, `""` when absent. The stock
+/// `GossipFrame.lua:123` builds the icon path from the type string and defines no such table.
 fn vm_binder_texture(script: &UiScript) -> String {
     script
         .eval::<String>("return (BENILLA_GOSSIP_ICONS and BENILLA_GOSSIP_ICONS.binder) or \"\"")
         .unwrap_or_default()
 }
 
-/// The live VM's `GetBindLocation()` — the hearthstone's own answer for where you are bound.
+/// The live VM's `GetBindLocation()`, the hearthstone's own answer.
 fn vm_bind_location(script: &UiScript) -> String {
     script
         .eval::<String>("return GetBindLocation()")
@@ -285,15 +197,14 @@ fn binder_probe(
         return; // not in-world yet
     }
     let Some(script) = script else {
-        return; // no UI VM this build (headless net-only) — nothing this probe can drive
+        return; // no UI VM in this build, so nothing to drive
     };
     let now = time.elapsed_secs_f64();
     let phase = probe.phase;
 
     match phase {
         Phase::Wait => {
-            // The CONFIRM_BINDER hook (step 5's observation channel — the bank probe's exact
-            // pattern), installed up front so it is live long before the question can arrive.
+            // The `CONFIRM_BINDER` and `CHAT_MSG_SYSTEM` hook, live before the question can arrive.
             if let Err(e) = script.run(
                 r#"
                 if not ProbeBinderHooked then
@@ -429,9 +340,8 @@ fn binder_probe(
         }
         Phase::Accept { since, sent } => {
             if !sent {
-                // Clear the bind BEFORE answering: a rebind to the area we already hearth in
-                // re-sends SMSG_BINDPOINTUPDATE with an identical payload, so only the
-                // None → Some transition proves a fresh packet landed (module doc).
+                // Clear the bind before answering: a rebind to the same area re-sends an
+                // identical `SMSG_BINDPOINTUPDATE`, so only None → Some proves a fresh packet.
                 probe.baseline_area = home.0;
                 home.0 = None;
                 if let Err(e) = script.run("ConfirmBinder()") {
@@ -480,9 +390,7 @@ fn binder_probe(
             }
         }
         Phase::Line { since } => {
-            // The feedback half of B249: "accepting appears to change nothing" was partly that
-            // nothing ever SAID it had. SMSG_PLAYERBOUND prints ERR_DEATHBIND_SUCCESS_S
-            // ("%s is now your home.") as CHAT_MSG_SYSTEM — VERIFIED at `0x5e3d3f`.
+            // `SMSG_PLAYERBOUND` prints `ERR_DEATHBIND_SUCCESS_S` as a system line (`0x5e3d3f`).
             let want = bound_line(&probe.bound_name);
             let lines = system_lines(&script);
             if lines.iter().any(|l| l == &want) {
@@ -507,9 +415,8 @@ fn binder_probe(
                 "PROBE_BINDER: DONE pass={} fail={}",
                 probe.passes, probe.fails
             );
-            // The probe self-exit pattern (`ProbeExitPlugin::fire_probe_exit`): a polite AppExit
-            // plus a hard backstop thread, so a net/winit teardown hang can't leave a zombie
-            // client holding the probe account.
+            // `ProbeExitPlugin::fire_probe_exit`'s pattern: `AppExit` plus a hard backstop, so a
+            // teardown hang cannot leave a client holding the probe account.
             exit.write(AppExit::Success);
             std::thread::spawn(|| {
                 std::thread::sleep(std::time::Duration::from_secs(5));
@@ -520,10 +427,7 @@ fn binder_probe(
     }
 }
 
-/// Steps 3 and 4 — B249's first half, then the click.
-///
-/// Split out of the phase match because it is one straight line of asserts with several exits, and
-/// inlining it buried the phase machine's shape. Sets `probe.phase` on every path.
+/// Steps 3 and 4: the bind row's icon, then the click. Sets `probe.phase` on every path.
 fn assert_icon_and_select(
     probe: &mut BinderProbe,
     gossip: &GossipState,
@@ -532,8 +436,7 @@ fn assert_icon_and_select(
     innkeeper: u64,
     now: f64,
 ) {
-    // Step 3 — the icon. The row is found by the WIRE byte, because that byte is the fact under
-    // test: every GOSSIP_OPTION_INNKEEPER row in the world DB sends 5 (module doc).
+    // Step 3, the icon: the row is found by its wire byte, the fact under test.
     let Some((pos, opt)) = gossip
         .options
         .iter()
@@ -592,8 +495,7 @@ fn assert_icon_and_select(
     );
     probe.passes += 1;
 
-    // Step 4 — the click. Guarded on the label, and sent with the row's WIRE index — read off the
-    // packet, never derived from where the row sits in the list (the drain's own rule).
+    // Step 4, the click: guarded on the label, sent with the row's wire index from the packet.
     if !opt.message.to_lowercase().contains(BIND_LABEL_HINT) {
         warn!(
             "PROBE_BINDER: SKIP (4 select) — the icon=={ICON_INNKEEPER} row reads {:?}, which does \

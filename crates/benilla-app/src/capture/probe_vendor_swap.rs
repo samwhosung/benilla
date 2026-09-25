@@ -1,42 +1,23 @@
-//! The **vendor-swap** live probe (`WOW_PROBE_VENDOR_SWAP=1`) — decision 2022's end-to-end
-//! instrument: does a second vendor, opened while the first vendor's window is still up, swap the
-//! WHOLE window — the stock `MerchantFrame_UpdateMerchantInfo`'s `UnitName("NPC")` title and its
-//! `SetPortraitTexture(MerchantFramePortrait, "NPC")` face — on the very dispatch that raises
-//! `MERCHANT_SHOW`; and does closing the window clear the `"npc"` token?
-//!
-//! The director's report (2026-09-05): the Goldshire inn's vendor window titled "Innkeeper
-//! Farley" over Brog Hamfist's stock, with an empty portrait ring; then "clicking between vendors
-//! while the window is open doesn't swap name and some other things maybe too". Both faces of
-//! one seam — the decision has the mechanism. This probe stands in that inn, between its two
-//! pure vendors (**Brog Hamfist** 151 and **Barkeep Dobbins** 465, 5.45 yd apart — live-DB
-//! verified), so both are inside the service reach at once and the second open lands on top of
-//! the first window exactly as the click does.
+//! The vendor-swap live probe (`WOW_PROBE_VENDOR_SWAP=1`): does a second vendor, opened over the
+//! first's window, swap the whole window (stock `MerchantFrame.lua:67-68`, the `UnitName("NPC")`
+//! title and the `"NPC"` portrait) on the dispatch that raises `MERCHANT_SHOW`, and does closing
+//! the window clear the `"npc"` token? It stands in the Goldshire inn between Brog Hamfist (151)
+//! and Barkeep Dobbins (465), 5.45 yd apart, both within service reach.
 //!
 //! Legs, one `PROBE_VENDOR_SWAP: <leg> PASS/FAIL/SKIP` line each:
-//! 1. **open** — `CMSG_LIST_INVENTORY` to Brog; at the `MERCHANT_SHOW` dispatch, `UnitName("npc")`
-//!    and the title both read Brog's name.
-//! 2. **portrait** — the round region is being sampled under the canonical `"npc"` key
-//!    (`portrait::BoothPanes`) and the booth publishes a live bake for it (`PortraitImages`).
-//! 3. **swap** — with Brog's window still open, `CMSG_LIST_INVENTORY` to Dobbins; at that
-//!    `MERCHANT_SHOW`, both readings are Dobbins' name.
-//! 4. **title** — a second later, the title the window is actually left showing is his too.
-//! 5. **clear** — `HideUIPanel(MerchantFrame)` (the stock OnHide → `CloseMerchant`), and once the
-//!    session is gone `UnitExists("npc")` is nil.
+//! 1. open: `CMSG_LIST_INVENTORY` to Brog; at `MERCHANT_SHOW`, `UnitName("npc")` and the title
+//!    both read his name.
+//! 2. portrait: the round region is sampled under the `"npc"` key (`portrait::BoothPanes`) and the
+//!    booth publishes a live bake for it (`PortraitImages`).
+//! 3. swap: with Brog's window open, `CMSG_LIST_INVENTORY` to Dobbins; at that `MERCHANT_SHOW`,
+//!    both read Dobbins' name.
+//! 4. title: a second later the window still shows his name.
+//! 5. clear: `HideUIPanel(MerchantFrame)` (stock OnHide calls `CloseMerchant`); once the session
+//!    is gone `UnitExists("npc")` is nil.
 //!
-//! The event readings are taken **inside the event** by a Lua hook frame registered after the
-//! stock window's, so a later `MERCHANT_UPDATE` repaint cannot mask what the open frame saw —
-//! which is how the bug hid: a vendor whose items were already cached got no repaint, and one
-//! whose items were still streaming got one a moment later that quietly corrected the title.
-//!
-//! Non-combat, nothing bought, nothing sold; the window is closed the way its own close button
-//! closes it (no packet).
-//!
-//! ## The run recipe
-//! ```text
-//! WOW_USER=probe1 WOW_PASS=pprobe1 WOW_CHAR=Probeone WOW_UNATTENDED=1 WOW_NOSOUND=1 \
-//!     WOW_PROBE_VENDOR_SWAP=1 cargo run -q -p benilla
-//! ```
-//! (the checkout's probe identity (`.probe-identity`, or WOW_USER/WOW_PASS/WOW_CHAR — the `probe` skill)).
+//! The event readings are taken inside the event by a hook frame registered after the stock one,
+//! so a later `MERCHANT_UPDATE` repaint cannot mask what the open left. Non-combat, nothing bought
+//! or sold. The switches are `docs/CONTRIBUTING.md`, "Running it unattended".
 
 use bevy::prelude::*;
 
@@ -50,32 +31,26 @@ use crate::player::Player;
 use crate::portrait::{BoothPanes, PortraitImages, PortraitSource};
 use crate::ui_merchant::MerchantOpen;
 
-/// Brog Hamfist `<General Supplies>` — `creature_template.entry = 151`, `npc_flags = 4`.
+/// Brog Hamfist `<General Supplies>`: `creature_template.entry = 151`, `npc_flags = 4`.
 const BROG_ENTRY: u32 = 151;
-/// Barkeep Dobbins — `entry = 465`, `npc_flags = 4`.
+/// Barkeep Dobbins: `entry = 465`, `npc_flags = 4`.
 const DOBBINS_ENTRY: u32 = 465;
-/// Midway between the two spawns (`creature.position_*`: Brog −9465.29, 9.63; Dobbins −9459.98,
-/// 8.41; both z 57.15), so each is ~2.8 yd away — inside the 5.5556 yd service reach.
+/// Midway between the two spawns (Brog -9465.29, 9.63; Dobbins -9459.98, 8.41; both z 57.15),
+/// ~2.8 yd from each, inside the 5.5556 yd service reach.
 const STAND_AT: [f32; 3] = [-9462.6, 9.0, 57.15];
 const MAP: u32 = 0;
 
-/// Let the hop land and the inn stream before the first scan.
 const SETTLE_SECS: f64 = 3.0;
-/// How long to wait for both vendors (and their names) before calling the hop environmental.
+/// How long to wait for both vendors and their names before a SKIP.
 const SCAN_TIMEOUT_SECS: f64 = 20.0;
-/// How long a leg waits for its window / its event after the opcode goes out.
 const WINDOW_TIMEOUT_SECS: f64 = 15.0;
-/// How long the round portrait may take to be sampled and baked once the window is open.
 const PORTRAIT_TIMEOUT_SECS: f64 = 10.0;
-/// How long after the swap to read the title the window is actually left showing.
+/// How long after the swap to read the title the window is left showing.
 const SETTLED_SECS: f64 = 1.0;
-/// The service reach the click cannot act past (`crate::target::SERVICE_RANGE_SQ`).
 const SCAN_RANGE_SQ: f32 = crate::target::SERVICE_RANGE_SQ;
 
-/// The hook frame: one line per merchant event, read INSIDE the dispatch. Registered after the
-/// stock `MerchantFrame` (the probe installs it in-world, long after the FrameXML load), so the
-/// stock `OnEvent` has already repainted by the time this runs and `MerchantNameText` shows what
-/// the open frame left there.
+/// The hook frame: one line per merchant event, read inside the dispatch. Registered after the
+/// stock `MerchantFrame`, so `MerchantNameText` shows what the stock `OnEvent` left there.
 const HOOK: &str = r#"
     if not ProbeVendorSwapHooked then
         ProbeVendorSwapHooked = true
@@ -217,8 +192,7 @@ fn vendor_swap_probe(
                     .map(|(guid, ..)| guid.0)
             };
             let (brog, dobbins) = (find(BROG_ENTRY), find(DOBBINS_ENTRY));
-            // Both names must be cached before the legs read them back out of the VM — the
-            // ask-once resolve is what the unit feed itself would send on the open frame.
+            // Both names must be cached before the legs read them back out of the VM.
             let named = |g: Option<u64>| g.is_some_and(|g| names.resolve(g, &net).is_some());
             let (brog_named, dobbins_named) = (named(brog), named(dobbins));
             if brog_named && dobbins_named {
@@ -379,11 +353,9 @@ fn vendor_swap_probe(
                     probe.phase = Phase::Done;
                 }
                 None => {}
-                // One more poll after the clear: the unit feed pushes the token's absence on the
-                // frame after the session clears.
+                // The unit feed drops the token the frame after the session clears.
                 Some(at) if now - at >= 0.25 => {
-                    // `and 1 or 0`: the binding answers a Lua boolean where the reference
-                    // answers `1`/nil (its own noted question), and a `false ~= nil` is true.
+                    // `and 1 or 0` turns `UnitExists`'s `1` or nil into a number.
                     let exists: i64 = script
                         .eval(r#"return UnitExists("npc") and 1 or 0"#)
                         .unwrap_or(1);
@@ -411,9 +383,7 @@ fn vendor_swap_probe(
                 "PROBE_VENDOR_SWAP: DONE pass={} fail={} skip={}",
                 probe.passes, probe.fails, probe.skips
             );
-            // The probe self-exit pattern (`ProbeExitPlugin::fire_probe_exit`): a polite AppExit
-            // plus a hard backstop thread, so a net/winit teardown hang can't leave a zombie
-            // client holding the probe account.
+            // `AppExit` plus a hard backstop, so a teardown hang cannot keep the account held.
             exit.write(AppExit::Success);
             std::thread::spawn(|| {
                 std::thread::sleep(std::time::Duration::from_secs(5));

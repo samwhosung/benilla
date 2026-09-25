@@ -1,38 +1,13 @@
-//! The **dress census** (`WOW_DRESS_CENSUS=<secs>[,<every>]`) — one line per streamed player near
-//! the body saying what the wire asked for, what we resolved, and what is actually hanging off the
-//! skeleton right now.
+//! `WOW_DRESS_CENSUS=<secs>[,<every>]`: one line per streamed player near the body giving what the
+//! wire asked for, what we resolved and what hangs off the skeleton.
 //!
-//! It exists because those are three different things and a screenshot conflates all three. A
-//! helm or cloak the player chose to hide, drawn anyway, is exactly a gap between the
-//! first and the third: the descriptor carried `PLAYER_FLAGS_HIDE_HELM`, the resolver ignored it,
-//! and a helm model hung off the head. Nothing in a picture separates that from "this character
-//! simply has a helm equipped", which is why the report needed a reader rather than an eye.
+//! - `flags`/`hide`: `PLAYER_FLAGS` and its `HIDE_HELM 0x400`/`HIDE_CLOAK 0x800` bits, a public
+//!   field, so every player in range is readable.
+//! - `helm`/`cloak`: the resolved `ItemDisplayInfo` ids ([`Equipment`]); `0` is not dressed.
+//! - `spawned`: the attach slots standing under the unit ([`HeldAttached::spawned_slots`]).
+//! - `contradictions`: bodies whose flags hide a piece that is dressed anyway, tagged `!!`.
 //!
-//! ```text
-//! DRESS_CENSUS t=20.0 players=2 hiding-helm=1 hiding-cloak=1 contradictions=0 radius=120 body=(-8949.95,-132.49,83.57)
-//! DRESS 0xF150000000000038 d=   0.0 flags=0x00020c02 hide=helm+cloak helm=0      cloak=0      settled=1 spawned=[main,shL,shR] Probethree
-//! DRESS 0xF150000000000079 d=  12.4 flags=0x00020002 hide=-          helm=32154  cloak=41205  settled=1 spawned=[main,off,helm,shL,shR] Naz
-//! ```
-//!
-//! - **`flags` / `hide`** are the wire's own: `PLAYER_FLAGS` and its `HIDE_HELM 0x400` /
-//!   `HIDE_CLOAK 0x800` bits, which are PUBLIC — so every player in range is readable here, not
-//!   only our own body, and "does a remote player's preference reach us" is a line rather than an
-//!   argument.
-//! - **`helm` / `cloak`** are the resolved `ItemDisplayInfo` ids ([`Equipment`]) — `0` means the
-//!   body is dressed without that piece, whether because nothing is equipped there or because the
-//!   preference suppressed it.
-//! - **`spawned`** is the attach-slot list actually standing under the unit
-//!   ([`HeldAttached::spawned_slots`]) — the visual truth, read off the ECS rather than inferred.
-//! - **`contradictions`** is the headline number and the whole point: a body whose flags say hide
-//!   while a `helm` display or a spawned `helm` slot says otherwise is tagged `!!` and counted.
-//!   B123 reproduces as `contradictions=1`; the fix reads `contradictions=0` with `hide=` still
-//!   set, which is the distinction "the helm is gone" alone cannot make (it is also what a naked
-//!   head looks like when the *preference* never arrived).
-//!
-//! ```text
-//! WOW_USER=probeN WOW_PASS=pprobeN WOW_CHAR=<geared body> WOW_NOSOUND=1 \
-//!   WOW_DRESS_CENSUS="20,10" WOW_PROBE_EXIT_AT=45 cargo run -q -p benilla
-//! ```
+//! How to run it: `docs/CONTRIBUTING.md`, "Running it unattended".
 
 use benilla_assets::coords::bevy_to_wow;
 use benilla_protocol::EntityKind;
@@ -43,8 +18,7 @@ use crate::entities::{Equipment, HeldAttached, ATTACH_SLOT_NAMES};
 use crate::names::NameCache;
 use crate::net::{Guid, NetEntity, ObjectStore, SelfPlayer};
 
-/// How far from the body the census looks, in yards — the unit-visual census's radius, for the
-/// same reason: comfortably past what the server streams, so an empty census means an empty scene.
+/// Census radius in yards, past what the server streams; `WOW_DRESS_CENSUS_RADIUS` overrides.
 const DEFAULT_RADIUS: f32 = 120.0;
 
 pub(crate) struct DressCensusPlugin;
@@ -62,15 +36,14 @@ impl Plugin for DressCensusPlugin {
     }
 }
 
-/// [`DressCensusPlugin`] state: when the next census fires, and how often after that (`0` = once).
+/// [`DressCensusPlugin`] state; `every` of 0 fires once.
 #[derive(Resource)]
 struct DressCensus {
     next: f32,
     every: f32,
 }
 
-/// What the census reads per entity: identity, kind, pose, the resolved worn set, and the attach
-/// roots actually standing.
+/// What the census reads per entity.
 type DressQuery = (
     Entity,
     &'static Guid,
@@ -87,14 +60,10 @@ fn fire_dress_census(
     time: ProbeClock,
     names: Res<NameCache>,
     body: Query<(Entity, &Transform), With<SelfPlayer>>,
-    // The self body's parts, one line each (`DRESS_PART`) — the draw-population inventory.
+    // The self body's parts, one `DRESS_PART` line each.
     body_parts: crate::entities::BodyPartsDesc,
     entities: Query<DressQuery>,
-    // The body's draw population (`parts=`/`mats=`): every mesh part hanging under the unit —
-    // body batches, each attach model's batches, cards — and how many DISTINCT materials
-    // they bind. The gap between the two is the ceiling on merging a body's batches by
-    // material (1929's first proposal): what a merge could collapse, read off a dressed body
-    // instead of guessed from a model's batch table.
+    // `parts=`/`mats=`: mesh parts under the unit and the distinct materials they bind.
     children: Query<&Children>,
     parts: Query<&MeshMaterial3d<benilla_assets::materials::WowModelMaterial>>,
 ) {
@@ -116,7 +85,7 @@ fn fire_dress_census(
         .and_then(|v| v.parse::<f32>().ok())
         .unwrap_or(DEFAULT_RADIUS);
 
-    // `(is_contradiction, sort key, line)`. A contradiction sorts to the top: it is the finding.
+    // `(is_contradiction, sort key, line)`; contradictions sort first.
     let mut rows: Vec<(bool, i64, String)> = Vec::new();
     let (mut hiding_helm, mut hiding_cloak, mut bad) = (0u32, 0u32, 0u32);
     for (unit, guid, net, t, store, equipment, attached) in &entities {
@@ -137,9 +106,7 @@ fn fire_dress_census(
             .enumerate()
             .filter_map(|(i, e)| e.map(|_| ATTACH_SLOT_NAMES[i]))
             .collect();
-        // The contradiction: the wire asked for a piece to be hidden and it is dressed anyway —
-        // either resolved onto the body or standing as an attach model. This is B123's symptom,
-        // stated as a predicate instead of a screenshot.
+        // The wire hides a piece that is resolved onto the body or standing as an attach model.
         let helm_shown = eq.helm != 0 || spawned.contains(&"helm");
         let contradiction = (hide_helm && helm_shown) || (hide_cloak && eq.cloak != 0);
         bad += u32::from(contradiction);

@@ -1,28 +1,12 @@
-//! The world-book live probe (`WOW_PROBE_BOOK=1`) — B240's instrument: what does having the item-
-//! text reader open actually cost per frame, on the real object the report names?
+//! The world-book live probe (`WOW_PROBE_BOOK=1`): the per-frame cost of the item-text reader
+//! open on a real plaque. It hops to the plaque, samples the UI pass's meter
+//! ([`crate::ui_script::UiFrameCost`]) with the reader closed, opens it, samples again, checks the
+//! page's render, and logs both windows under `PROBE_BOOK:`, with how many frames the extract
+//! gate skipped.
 //!
-//! The symptom: a ~50% fps drop (62 → 36 fps, 16.0 → 28.0 ms) while the *Alliance Military Ranks*
-//! plaque's HTML page is up in the reader, recovering the moment it closes. That is a **frame-cost
-//! A/B**, and eyeballing an fps counter is exactly the way not to settle one (docs/METHOD.md's
-//! "timing and feel are measured, never eyeballed"). So this probe teleports to the plaque, samples
-//! the UI pass's own per-phase meter ([`crate::ui_script::UiFrameCost`]) with the reader CLOSED,
-//! opens it on the real route, samples again, and prints the two side by side — including how many
-//! of each window's frames the extract gate *skipped*, which is what decides
-//! whether a paint-pass cost is paid once or every frame.
-//!
-//! The object: `GameObject` 3011 (`gameobject_template` entry 2857, `GAMEOBJECT_TYPE_TEXT` = 9)
-//! in Stormwind's Old Town, whose `data[0]` is `page_text` 2676 — a 647-byte HTML body. The
-//! `.go xyz` below is the reported standing position, off the debug panel: `-8760.2 402.3 103.9`.
-//!
-//! ## The run recipe
-//!
-//! ```text
-//! WOW_NOSOUND=1 WOW_USER=probe0 WOW_PASS=pprobe0 WOW_CHAR=Probezero \
-//!     WOW_PROBE_BOOK=1 cargo run -q -p benilla --release
-//! ```
-//! (the checkout's probe identity — `.probe-identity`, or WOW_USER/WOW_PASS/WOW_CHAR; the `probe`
-//! skill). An outer `timeout` + a grep on `PROBE_BOOK:` is the whole harness;
-//! the probe self-exits ([`super::probes::ProbeExitPlugin`]'s pattern) once DONE.
+//! The object is Stormwind Old Town's Alliance Military Ranks plaque (`gameobject_template` 2857,
+//! `GAMEOBJECT_TYPE_TEXT`), whose `data[0]` is `page_text` 2676, a 647-byte HTML body. The
+//! switches are `docs/CONTRIBUTING.md`, "Running it unattended".
 
 use bevy::prelude::*;
 
@@ -35,16 +19,14 @@ use crate::player::Player;
 use crate::ui_item_text::ItemTextOpen;
 use crate::ui_script::{UiCostWanted, UiFrameCost};
 
-/// The reporter's own standing position beside the plaque (their debug panel, in the report's
-/// screenshot).
+/// A standing position beside the plaque.
 const PLAQUE_AT: [f32; 3] = [-8760.2, 402.3, 103.9];
-/// `GAMEOBJECT_TYPE_TEXT` — the strategy type a book/plaque carries.
+/// `GAMEOBJECT_TYPE_TEXT`, a book or plaque.
 const GO_TYPE_TEXT: i32 = 9;
-/// Scan radius around the landing spot, in yards — generous, so a slightly-off `.go` still finds it.
+/// Scan radius around the landing spot, in yards.
 const SCAN_RANGE: f32 = 20.0;
 
-/// Frames sampled per window. Long enough that a one-off hitch cannot carry the mean, short enough
-/// that the whole run is a few seconds.
+/// Frames sampled per window, enough that one hitch cannot carry the mean.
 const SAMPLE_FRAMES: usize = 240;
 const SETTLE_SECS: f64 = 4.0;
 const SCAN_TIMEOUT_SECS: f64 = 20.0;
@@ -62,24 +44,21 @@ impl Plugin for ProbeBookPlugin {
 /// One frame's reading off the UI meter.
 #[derive(Clone, Copy)]
 struct Sample {
-    /// The paint pass — the phase the glyph rasterization and the ellipsis seam live in.
+    /// The paint pass: glyph rasterization and the ellipsis seam.
     convert: u128,
-    /// Everything the pass costs, whether or not the gate skipped: tick + resolve + measure +
-    /// extract + convert + diff.
+    /// The whole UI pass, skipped or not.
     total: u128,
-    /// Did the extract gate skip the conversion this frame?
+    /// Whether the extract gate skipped the conversion this frame.
     skipped: bool,
 }
 
 #[derive(Resource, Default)]
 struct BookProbe {
     phase: Phase,
-    /// The plaque's guid, once the scan finds it.
     plaque: Option<u64>,
     closed: Vec<Sample>,
     open: Vec<Sample>,
-    /// Characters the whole UI draws once the reader is up — the `n` the seam's cost scales in,
-    /// and the proof the page's blocks were built at all.
+    /// Characters the whole UI draws once the reader is up.
     page_chars: i64,
     fails: u32,
     exited: bool,
@@ -93,24 +72,19 @@ enum Phase {
     Settling {
         sent_at: f64,
     },
-    /// Sampling with the reader CLOSED — the control window.
+    /// Sampling with the reader closed, the control window.
     Closed,
-    /// Reader opened on the real route; waiting for `ITEM_TEXT_READY` to paint a body.
+    /// Reader opened; waiting for `ITEM_TEXT_READY` to paint a body.
     WaitReady {
         since: f64,
     },
-    /// Sampling with the reader OPEN — the reported condition.
+    /// Sampling with the reader open.
     Open,
     Done,
 }
 
-/// The reader's painted state: `(shown, characters the page actually draws)`.
-///
-/// The body is read off the RENDER LIST, not out of the VM. `ItemTextPageText` is a `SimpleHTML`
-/// since decisions 1337/1338 and 5875's SimpleHTML has no `GetText` (its Lua table is 19 entries
-/// and none of them is a text getter) — so the honest question is what the reader draws, which is
-/// also the stronger one: a parsed page is many blocks, a plain one is a single raw block, and a
-/// page that failed to build is zero.
+/// The reader's painted state: `(shown, characters drawn)`, read off the render list because the
+/// 1.12 `SimpleHTML` has no `GetText`.
 fn reader_state(script: &UiScript) -> (bool, i64) {
     use benilla_ui::script::QuadContent;
     let shown = script
@@ -128,9 +102,8 @@ fn reader_state(script: &UiScript) -> (bool, i64) {
     (shown, chars)
 }
 
-/// Every string the UI currently draws — the render list is the honest place to ask what the page
-/// looks like, and the only place since `ItemTextPageText` became a `SimpleHTML` (5875's has no
-/// `GetText` in its method table `0x87ba80`).
+/// Every string the UI draws; the only way to read the page, as `SimpleHTML` has no `GetText`
+/// (method table `0x87ba80`).
 fn drawn_strings(script: &UiScript) -> Vec<String> {
     use benilla_ui::script::QuadContent;
     script
@@ -144,9 +117,8 @@ fn drawn_strings(script: &UiScript) -> Vec<String> {
         .collect()
 }
 
-/// **B240's render half, checked where it was reported.** The page body is HTML; if the parse ever
-/// falls back, the reader draws the markup itself — the reported symptom. So: no drawn
-/// string may contain a tag, and the page's own lines must each be there as their own block.
+/// Checks the page's render: no drawn string holds a tag (a failed parse draws the markup), each
+/// of the page's lines is its own block, none is ellipsized, and the page fits its window.
 fn report_render(script: &UiScript) -> u32 {
     let drawn = drawn_strings(script);
     let mut fails = 0;
@@ -163,7 +135,7 @@ fn report_render(script: &UiScript) -> u32 {
             markup.iter().take(2).collect::<Vec<_>>()
         );
     }
-    // The blocks the plaque's own body must produce, each its own centred line.
+    // Lines of the plaque's body, each its own centred block.
     let want = [
         "ALLIANCE MILITARY RANKS",
         "OFFICERS",
@@ -181,18 +153,15 @@ fn report_render(script: &UiScript) -> u32 {
         fails += 1;
         error!("PROBE_BOOK: (render) FAIL — blocks missing from the page: {missing:?}");
     }
-    // The other half of the reported look: a truncated block means the body is height-pinned
-    // again and decision 1332's ellipsis seam has it back.
+    // A truncated block means the body is height-pinned and the ellipsis seam cuts it.
     if let Some(cut) = drawn.iter().find(|t| t.ends_with("...")) {
         fails += 1;
         error!("PROBE_BOOK: (render) FAIL — a drawn block is ellipsized: {cut:?}");
     } else {
         info!("PROBE_BOOK: (render) PASS — no block is cut off with \"...\"");
     }
-    // **Does the page FIT?** The director's own comparison against 1.12.1 (08-15) was that ours
-    // ran off the bottom where the reference's ends inside the window. The scroll range answers it
-    // exactly and without an eye: it is the content's overhang past the viewport, so this page —
-    // which the reference shows whole — must come out at zero.
+    // The reference shows this page whole, so its scroll range (the overhang past the viewport)
+    // must be zero.
     let range = script
         .eval::<f64>("return ItemTextScrollFrame:GetVerticalScrollRange()")
         .unwrap_or(-1.0);
@@ -250,7 +219,7 @@ fn book_probe(
         return; // not in-world yet
     }
     let Some(script) = script else {
-        return; // no UI VM this build — nothing this probe can drive
+        return; // no UI VM in this build
     };
     let now = time.elapsed_secs_f64();
     let sample = Sample {
@@ -262,8 +231,7 @@ fn book_probe(
 
     match phase {
         Phase::Wait => {
-            // Arm the pass's phase split for this run (decision 1174's direction: the consumer
-            // asks, the pass never learns the instrument's name).
+            // Arm the pass's per-phase split for this run.
             wanted.0 = true;
             let [x, y, z] = PLAQUE_AT;
             info!("PROBE_BOOK: heading to the Old Town plaque ({x} {y} {z}) — GameObject type 9, page_text 2676");
@@ -341,9 +309,7 @@ fn book_probe(
                 open_mean - closed_mean,
                 probe.fails
             );
-            // The probe self-exit pattern (`ProbeExitPlugin::fire_probe_exit`): a polite AppExit
-            // plus a hard backstop thread, so a net/winit teardown hang can't leave a zombie
-            // client holding the probe account.
+            // `AppExit` plus a hard backstop, so a teardown hang cannot keep the account held.
             exit.write(AppExit::Success);
             std::thread::spawn(|| {
                 std::thread::sleep(std::time::Duration::from_secs(5));

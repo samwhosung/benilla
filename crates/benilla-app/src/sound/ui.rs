@@ -1,32 +1,14 @@
-//! UI sounds — the app side of the Lua `PlaySound` seam (the one deliberate
-//! UI-crate overlap cut when the sound crate was split), plus the **per-item item-gesture sounds**:
-//! the bag-drag pickup/put-down, and the loot-window pickup.
+//! UI sounds: the app side of the Lua `PlaySound` seam, and the per-item gesture sounds. All play
+//! 2D on SFX after the UI input pass, so a click sounds the frame its handler acts.
 //!
-//! Three triggers, all 2D SFX plays, all after the UI input pass so a click's sound plays the
-//! same frame its handler acted:
-//! - The engine-free binding queues plain [`SoundRequest`]s ([`benilla_ui::script`]'s
-//!   outbound-intent seam); [`drain_ui_sounds`] drains them each frame into the kit player (UI
-//!   sounds have no world position — the client's `PlaySoundById`/`ByName` path).
-//! - The cursor **payload** transition IS the pickup/put-down gesture (the real client plays these
-//!   from `SetCursorItem 0x494c4a`/`ClearCursor 0x49520a`, engine-side — never FrameXML):
-//!   [`play_item_gesture_sounds`] watches [`UiScript::cursor_payload`] (decision 0216's typed
-//!   `CursorPayload`, any arm) each frame. An **Item** arm resolves its kit through the
-//!   chain `ItemGroupSounds[ItemDisplayInfo[displayId].group_sounds].kit[gesture]`
-//!   ([`play_item_gesture`]; `0x457ff0`). A
-//!   **Spell**/**Action** arm (no producer yet — the spellbook/action-bar slices) plays the
-//!   generic `INTERFACESOUND_CURSORGRABOBJECT`/`DROPOBJECT` pair (kits 902/903) instead — 0091's
-//!   crux: the two are mutually exclusive per transition, never both. A bag swap plays ONE sound
-//!   (the held item's put-down): the place branch never calls `SetCursorItem` — the Item→Item hop
-//!   0216 §2 shipped is byte-refuted (`0x5e0c40`), so that
-//!   transition no longer occurs. The Some→Some loss-then-gain pair below stays live for the
-//!   ACTION hop (the bar is client-authoritative and its displaced action DOES land on the
-//!   cursor, verified at `PlaceAction 0x4e62e0`) when the action-bar slice arrives.
-//! - Taking a loot-window row plays that item's **pickup** kit (gesture 0) — the same per-item
-//!   resolution, fired at the loot-slot click before the CMSG send (the real client's loot-list
-//!   pickup site, `0x4c2790`). [`crate::ui_loot`] emits
-//!   a [`LootPickupSound`] with the row's display id; [`play_loot_pickup_sounds`] plays it. (The
-//!   loot *money* coin and the buy/sell coin are the coinage-change watcher instead — [`super::money`]
-//!   — because acquiring an item on loot is the only one of the four that plays a per-item sound.)
+//! - [`drain_ui_sounds`] plays the [`SoundRequest`]s the script queues, as the client's
+//!   `PlaySoundById`/`ByName` path.
+//! - A cursor payload change is the pickup or put-down gesture, played engine-side by the
+//!   reference from `SetCursorItem` (`0x494c4a`) and `ClearCursor` (`0x49520a`). An item resolves
+//!   `ItemGroupSounds[ItemDisplayInfo[displayId].group_sounds].kit[gesture]` (`0x457ff0`); other
+//!   payloads play the generic grab/drop pair; never both. A bag swap plays one sound, the held
+//!   item's put-down: the place branch never calls `SetCursorItem` (`0x5e0c40`).
+//! - Taking a loot row plays that item's pickup kit at the click, before the send (`0x4c2790`).
 
 use bevy::prelude::*;
 
@@ -41,9 +23,8 @@ use benilla_assets::{AssetSet, LockRecover, WorldAssets};
 use super::kit::{self, KitRef, SoundKits};
 use super::{SoundConfig, SoundOutput};
 
-/// Drain the VM's queued `PlaySound` intents into the kit player. The queue is drained even when
-/// the catalog/assets are absent (headless, missing client data) so it can never grow unbounded —
-/// those plays are dropped with a debug line, the same graceful-absence posture as every consumer.
+/// Drain the VM's queued `PlaySound` intents into the kit player; drained even with no catalog,
+/// so the queue cannot grow unbounded.
 fn drain_ui_sounds(
     script: Option<NonSendMut<UiScript>>,
     kits: Option<ResMut<SoundKits>>,
@@ -70,7 +51,7 @@ fn drain_ui_sounds(
             SoundRequest::KitId(id) => KitRef::Id(*id),
             SoundRequest::KitName(name) => KitRef::Name(name),
             SoundRequest::File(path) => {
-                // `PlaySoundFile`: by path, no kit — no gates, no variation (module docs).
+                // `PlaySoundFile`: by path, with no kit gates or variation.
                 if let Err(e) = kit::play_file(
                     &mut kits,
                     &assets,
@@ -84,8 +65,7 @@ fn drain_ui_sounds(
                 continue;
             }
         };
-        // 2D: no position, so the listener is irrelevant (no gate, no rolloff). Interface
-        // sounds ride the SFX slider (the client's SoundVolume bucket).
+        // 2D, on the SFX slider (the client's SoundVolume bucket).
         if let Err(e) = kit::play_kit(
             &mut kits,
             &assets,
@@ -101,12 +81,10 @@ fn drain_ui_sounds(
     }
 }
 
-/// The `ItemGroupSounds.dbc` catalog — the pickup/put-down/use kit per item sound group. Optional
-/// resource (absent ⇒ item drags are silent), the usual graceful-absence posture.
+/// The `ItemGroupSounds.dbc` catalog: the pickup, put-down and use kits per item sound group.
 #[derive(Resource)]
 struct ItemSounds(ItemGroupSoundsCatalog);
 
-/// Startup: load `ItemGroupSounds.dbc` off the chain (the same shape as `load_sound_kits`).
 fn load_item_sounds(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
     let Some(assets) = assets else { return };
     let loaded = {
@@ -122,36 +100,26 @@ fn load_item_sounds(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
     }
 }
 
-/// `INTERFACESOUND_CURSORGRABOBJECT`/`DROPOBJECT` — the generic non-item cursor-payload gesture
-/// pair (sound-kit ids, not `SOUNDKIT.xml` names; `0x495190`, 0091's crux). Plays for a
-/// Spell/Action payload transition — an Item transition always plays its own
-/// per-item kit instead, never this pair.
+/// `INTERFACESOUND_CURSORGRABOBJECT`/`DROPOBJECT`: the generic cursor gesture pair for a non-item
+/// payload, by kit id (`0x495190`).
 const INTERFACESOUND_CURSORGRABOBJECT: u32 = 902;
-/// `LOOTWINDOWCOINSOUND` — SoundEntries kit 895, the coin clink the money pickup names (1962).
+/// `LOOTWINDOWCOINSOUND`: kit 895, the coin a money pickup plays.
 const LOOTWINDOWCOINSOUND: u32 = 895;
 const INTERFACESOUND_CURSORDROPOBJECT: u32 = 903;
 
-/// Which half of a gesture pair a transition plays: the payload landing on the cursor (`Gain`,
-/// the client's `SetCursorItem`/kit-index 0) or leaving it (`Loss`, `ClearCursor`/kit-index 1).
+/// Which half of a gesture pair plays: `Gain` (`SetCursorItem`, kit index 0) or `Loss`
+/// (`ClearCursor`, kit index 1).
 #[derive(Clone, Copy)]
 enum CursorGesture {
     Gain,
     Loss,
 }
 
-/// Play the cursor-payload gesture sound on every transition: an Item arm plays
-/// its per-item pickup/put-down kit (exactly the real client's call sites — an item landing on
-/// the cursor is `SetCursorItem` → `SndInterfacePlayItemSound(ecx=0)`, clearing (placed, swapped,
-/// cancelled onto its own slot, or ESC's `ClearCursor`) is `ClearCursor` → `(ecx=1)`); a Spell/
-/// Action arm plays the generic [`INTERFACESOUND_CURSORGRABOBJECT`]/[`INTERFACESOUND_CURSORDROPOBJECT`]
-/// pair instead. A same-`item_id` Item→Item transition (not currently producible) is a
-/// bookkeeping-only change and plays nothing; any other Some→Some transition plays the outgoing
-/// payload's loss sound THEN the incoming payload's gain sound — the `ClearCursor`+`SetCursorItem`
-/// pair. Item→Item never occurs anymore (the swap clears); the pair path stays for the
-/// byte-verified ACTION hop when the action-bar slice lands (module doc above). Every
-/// missing link (template in flight, unknown display, group 0, kit 0, absent catalog) is the
-/// client's own silent return, never an error. The previous payload is tracked here (a `Local`),
-/// not in the VM — the engine-free model owns the state, the app owns the sound.
+/// Play the cursor-payload gesture sound on every transition: an item lands through
+/// `SetCursorItem` → `SndInterfacePlayItemSound(ecx=0)` and leaves through `ClearCursor` →
+/// `(ecx=1)`. Another Some → Some change plays the outgoing loss then the incoming gain, as a
+/// displaced action lands on the cursor (`PlaceAction`, `0x4e62e0`); the same item is no change.
+/// A missing link (template, display, group 0, kit 0) is silent, as in the client.
 fn play_item_gesture_sounds(
     script: Option<NonSend<UiScript>>,
     mut prev: Local<crate::ui_script::VmMemo<Option<CursorPayload>>>,
@@ -170,17 +138,15 @@ fn play_item_gesture_sounds(
     if *prev == now {
         return;
     }
-    // Track the transition even when the catalogs are absent, so a late-loading catalog doesn't
-    // replay a stale gesture.
+    // Tracked even without catalogs, so a late-loading catalog never replays a stale gesture.
     let old = std::mem::replace(&mut *prev, now.clone());
     let (Some(mut kits), Some(assets)) = (kits, assets) else {
         return;
     };
 
     let mut play = |payload: &CursorPayload, gesture: CursorGesture| match payload {
-        // Mode 5 shares the ITEM arm, not the generic one: the vendor grab `0x4950f0` is handed
-        // the row's `ItemDisplayInfo` id precisely so the cursor gets that item's own pickup and
-        // putdown sounds, the same pair a bag item gets.
+        // Mode 5 takes the item arm: the vendor grab `0x4950f0` is handed the row's
+        // `ItemDisplayInfo` id, so it plays the item's own pickup and put-down.
         CursorPayload::Item(_) | CursorPayload::Merchant(_) => {
             let item_id = match payload {
                 CursorPayload::Item(i) => i.item_id,
@@ -190,9 +156,8 @@ fn play_item_gesture_sounds(
             let (Some(displays), Some(sounds)) = (&displays, &sounds) else {
                 return;
             };
-            // By gesture time the template is cached (the bag drew the icon from it) — this is a
-            // lookup, not an ask; a genuinely in-flight template resolves silent, like the
-            // client's null-record return.
+            // The template is cached by now (the bag drew the icon); one still in flight is
+            // silent, like the client's null-record return.
             let Some(display_id) = items
                 .template(item_id, 0, &net)
                 .map(|t| t.display_info_id)
@@ -214,19 +179,15 @@ fn play_item_gesture_sounds(
                 &config,
             );
         }
-        // Everything that is not a live item shares the generic grab/drop kit — the reference's
-        // own `0x494f60`/`0x494f80` grab path for a macro (mode 8) reaches the same
-        // `INTERFACESOUND_CURSOR*` pair the spell and bar-action modes do, and the pet-action
-        // builder `0x494e20` names `INTERFACESOUND_CURSORGRABOBJECT` outright.
+        // The generic pair: the macro grab (mode 8, `0x494f60`/`0x494f80`) reaches the same
+        // pair as spells and actions, and the pet-action builder `0x494e20` names it outright.
         CursorPayload::Spell(_)
         | CursorPayload::Action(_)
         | CursorPayload::Macro(_)
         | CursorPayload::PetAction(_)
-        // Mode 10 joins them: the stabled-pet grab `0x495010` calls the same generic path and
-        // names no per-item kit.
+        // Mode 10: the stabled-pet grab `0x495010` calls the same generic path.
         | CursorPayload::StablePet(_)
-        // Mode 2 (1962, 1965): the money pickup AND drop both play `LOOTWINDOWCOINSOUND` — the
-        // same kit 895 the purse plays on a change (`sound/money.rs`) — and never the generic drop
+        // Mode 2: money pickup and drop both play `LOOTWINDOWCOINSOUND`, never the generic drop
         // kit (`0x494cfe`/`0x49523a`).
         | CursorPayload::Money(_) => {
             let kit_id = match (&payload, gesture) {
@@ -261,10 +222,8 @@ fn play_item_gesture_sounds(
     }
 }
 
-/// The per-item gesture play, shared by the cursor-drag and loot-pickup triggers: resolve the kit
-/// through the byte-verified chain `ItemGroupSounds[ItemDisplayInfo[displayId].group_sounds]
-/// .kit[gesture]` and play it 2D on the SFX bucket. Every missing link (unknown display, group 0,
-/// kit 0) is the client's own silent return, never an error.
+/// Resolve an item's gesture kit through `ItemDisplayInfo` and `ItemGroupSounds` and play it 2D;
+/// a missing link is silent, as in the client.
 fn play_item_gesture(
     display_id: u32,
     gesture: ItemGesture,
@@ -296,19 +255,15 @@ fn play_item_gesture(
     }
 }
 
-/// Request to play an item's **loot pickup** sound — written by [`crate::ui_loot::drain_loot`] when
-/// the player takes a loot-window row (carrying that row's display id). The real client plays the
-/// per-item `ItemGroupSounds` **pickup** kit (gesture 0) client-side at the loot-slot click, before
-/// the CMSG send (`0x4c2790`): looting an item plays its
-/// pickup sound, while the `SMSG_ITEM_PUSH` acquire itself is silent — so buying, which also pushes
-/// an item, plays no pickup sound (only the coin, via [`super::money`]).
+/// A looted row's pickup sound, written by [`crate::ui_loot::drain_loot`]. The client plays it at
+/// the loot-slot click (`0x4c2790`); `SMSG_ITEM_PUSH` itself is silent, so a purchase makes no
+/// pickup sound.
 #[derive(Message, Clone, Copy)]
 pub(crate) struct LootPickupSound {
     pub(crate) display_id: u32,
 }
 
-/// Play the per-item pickup kit for each looted row ([`LootPickupSound`]). Graceful absence: if any
-/// catalog is missing the queue is drained and dropped, the same posture as every consumer.
+/// Play the per-item pickup kit for each looted row; with a catalog missing the queue is dropped.
 fn play_loot_pickup_sounds(
     mut reqs: MessageReader<LootPickupSound>,
     displays: Option<Res<ItemDisplays>>,
@@ -341,22 +296,17 @@ fn play_loot_pickup_sounds(
     }
 }
 
-/// Request to play the **auto-equip** gesture pair for an item — written by [`crate::ui_items`]
-/// when a right-click auto-equips a bag item (the `CMSG_AUTOEQUIP_ITEM` fork of `UseContainerItem`).
-/// The real client implements the right-click shortcut as a *synthetic* `SetCursorItem` →
-/// `ClearCursor` (`Script::UseContainerItem 0x4fa0e0` → the pickup play at `0x494c4a` then the
-/// place play at
-/// `0x49520a`), so it plays the item's `ItemGroupSounds` **pickup** kit[0] THEN its **place**
-/// kit[1] — the same two sounds a drag-equip makes. A drag *already* plays them via the
-/// cursor-payload transitions ([`play_item_gesture_sounds`]); the right-click path never touches
-/// the cursor in benilla, so this pair is emitted explicitly to match.
+/// The auto-equip gesture pair, written by [`crate::ui_items`] when a right-click auto-equips a
+/// bag item. The client's `UseContainerItem` (`0x4fa0e0`) runs a synthetic `SetCursorItem` then
+/// `ClearCursor` (`0x494c4a`, `0x49520a`), so pickup then put-down play; benilla's right-click
+/// never touches the cursor, so the pair is emitted here.
 #[derive(Message, Clone, Copy)]
 pub(crate) struct AutoEquipSound {
     pub(crate) display_id: u32,
 }
 
-/// Play the pickup-then-place pair for each [`AutoEquipSound`]. Graceful absence: if any catalog is
-/// missing the queue is drained and dropped, the same posture as every consumer.
+/// Play the pickup-then-place pair for each [`AutoEquipSound`]; with a catalog missing the queue
+/// is dropped.
 fn play_auto_equip_sounds(
     mut reqs: MessageReader<AutoEquipSound>,
     displays: Option<Res<ItemDisplays>>,
@@ -376,8 +326,6 @@ fn play_auto_equip_sounds(
         return;
     };
     for req in reqs.read() {
-        // Pickup (grab onto cursor) THEN place (drop into the slot) — the order the real client's
-        // synthetic SetCursorItem→ClearCursor runs them.
         for gesture in [ItemGesture::Pickup, ItemGesture::PutDown] {
             play_item_gesture(
                 req.display_id,

@@ -1,33 +1,16 @@
-//! GameObject **display-slot** sounds — `GameObjectDisplayInfo.Sound[0..9]`, the ten kit columns a
-//! door/chest/goober plays as its animation runs.
+//! GameObject display-slot sounds: the ten `GameObjectDisplayInfo.Sound[0..9]` kits a door,
+//! chest or goober plays as its animation runs.
 //!
-//! **One function in the reference reads those columns, and one thing reaches it.** `0x5f4010` is
-//! the binary's only reader of `Sound[slot]` (whole-image census of the store `0xc0dce4` and its
-//! index `0xc0dcec`: six references, four gameplay readers, three of them the ModelName column),
-//! and its only caller is the GameObject M2 **animation-event** dispatcher `0x5f3e20` — registered
-//! per object at create (`0x5f7d1f` → vtable `+0x30`) on the **family-A** types only, which is
-//! exactly benilla's [`crate::go_anim::GoAnim`] population. `$GO0..5` address slots 0..5
-//! (Stand/Open/Loop/Close/Destroy/Opened), `$GC0..3` the four Custom slots 6..9. So a display slot
-//! is audible only when the object's own model authors the matching event keyframe *and* the clip
-//! carrying it is playing: **there is no state-transition sound path** (benilla decisions
-//! 1090/1867).
+//! The reference's only reader of the columns, `0x5f4010`, is called only from the GameObject M2
+//! animation-event dispatcher `0x5f3e20` (registered at create, `0x5f7d1f`, on the types
+//! [`crate::go_anim::GoAnim`] animates). So a slot sounds only when the model authors the event
+//! keyframe and its clip plays; there is no state-transition sound path.
 //!
-//! **The kit's `SoundEntries` flag `0x200` picks the lane** — `0x5f4051 call 0x458830`, whose only
-//! other consumer image-wide is a spell-visual path (`0x60edf0`). Clear ⇒ a positioned
-//! **one-shot** (`0x458870`). Set ⇒ the **ambient emitter
-//! pool** (`0x461d80`), the same 32-entry table placed doodads' `$DSL` registers into, with the
-//! handle cached in `[handler+0x18]` — one per object, shared with that object's own `$DSL` arm.
-//! The loop is dropped again by `0x5f40c0`, called from the state-machine dispatch `0x5f3cb0`
-//! ([`crate::go_anim::GoStateDispatch`]) and by the object's teardown; nothing else stops it, and
-//! there is no `$DSE` arm on this dispatcher at all.
-//!
-//! **What the corpus actually contains** (`benilla-extract goslotscan`, the instrument this module
-//! is checked against): 213 display rows carry a kit; per slot, *filled → reached by an authored
-//! tag* is Stand 24→18, Open 99→80, Loop 28→14, Close 42→38, Destroy 26→14, **Opened 0→0**,
-//! Custom0 77→56, Custom1 10→3, Custom2 5→1, Custom3 1→0. Thirty-seven live pairs name a looping
-//! kit — every campfire, brazier, torch, fountain, hologram and Stratholme portal — which is the
-//! whole reason the loop lane is not optional. Slot 5 Opened is empty data in 1.12.1: no display
-//! row fills it, so it costs nothing and can never be heard.
+//! The kit's `SoundEntries` flag `0x200` (`0x5f4051 call 0x458830`) picks the lane: clear is a
+//! positioned one-shot (`0x458870`), set registers into the 32-entry ambient emitter pool
+//! (`0x461d80`), one handle per object shared with its `$DSL`. Only `0x5f40c0`, from the state
+//! dispatch `0x5f3cb0` and teardown, drops that loop; this dispatcher has no `$DSE` arm.
+//! Slot 5 (Opened) is empty in every 1.12.1 display row.
 
 use bevy::prelude::*;
 
@@ -43,7 +26,7 @@ use super::emitter_pool::AmbientEmitterPool;
 use super::kit::{kit_looping, play_kit, KitRef, SoundCategory, SoundKits};
 use super::{AudioListener, SoundConfig, SoundOutput};
 
-/// The display→sound-slots table (only displays with any non-zero slot; ~a third of the 1638).
+/// The display → sound-slots table, holding only displays with a non-zero slot.
 #[derive(Resource)]
 pub(super) struct GoSounds(GameObjectSounds);
 
@@ -62,11 +45,8 @@ fn load_go_sounds(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
     }
 }
 
-/// The GO display-slot an M2 animation-event tag addresses — the reference's GO event dispatcher
-/// `0x5f3e20` (the 1086 fold-back): `$GO0..5`
-/// → `Sound[0..5]`, `$GC0..3` → the Custom slots `Sound[6..9]`. Every other tag is not this
-/// channel's (`$SND`/`$DSO`/`$DSL` carry a literal kit id and ride the generic
-/// [`crate::sound::anim_events`] arms; `$SHK` is camera shake, no audio).
+/// The display slot an M2 event tag addresses in `0x5f3e20`: `$GO0..5` → `Sound[0..5]`,
+/// `$GC0..3` → the Custom slots `Sound[6..9]`.
 fn go_event_slot(ident: &[u8; 4]) -> Option<usize> {
     match ident {
         [b'$', b'G', b'O', d @ b'0'..=b'5'] => Some((d - b'0') as usize),
@@ -76,27 +56,15 @@ fn go_event_slot(ident: &[u8; 4]) -> Option<usize> {
 }
 
 /// Play the display-slot kits a GameObject's animation events name, and drop its ambient loop when
-/// the state machine dispatches — the two halves of `0x5f4010`'s lifecycle, in one system so the
-/// release can never land *after* the register that a state change is about to produce.
+/// the state machine dispatches.
 ///
-/// That ordering is structural, not scheduled: the release rides
-/// [`crate::go_anim::GoStateDispatch`], written the frame the machine arms a new clip, while the
-/// new clip's own `$GOn` cannot fire before the frame *after* its arm ([`crate::creature_anim`]'s
-/// scan rule — an arm frame fires nothing). Releases are drained first here, so whichever order
-/// the scheduler picks for this system against [`crate::go_anim`], a release always precedes the
-/// register it precedes in the reference.
-///
-/// The load-bearing tenants: the fishing bobber's bite — Custom0's `$GC0` at t≈3.87 s → display
-/// 668 `Sound6` = kit 3355 "Fishing Hooked", fired **once per 0xB3** (the completion retire
-/// re-arms Stand before a second pass), beside the server's explicit
-/// `SMSG_PLAY_OBJECT_SOUND(3355)` ~200 ms earlier — and every lit prop in the world, whose
-/// `CampFireSmallLoop`/`TorchLoop`/`ElvenFountainSmallA` take the pool lane and hum until the
-/// object's state changes under them.
+/// Releases drain first so one always precedes the register it precedes in the reference: a
+/// dispatch lands the frame a new clip is armed, and that clip's `$GOn` cannot fire before the
+/// next frame (an arm frame fires nothing).
 pub(super) fn go_display_sounds(
     mut dispatched: MessageReader<GoStateDispatch>,
     mut events: MessageReader<crate::creature_anim::AnimSoundEvent>,
-    // `GlobalTransform`: a GameObject is a root entity today, but the event's position is the
-    // model's placement in the reference either way, and reading the world pose cannot be wrong.
+    // The world pose: the event position is the model's placement in the reference.
     gos: Query<(&NetEntity, &GlobalTransform)>,
     go_sounds: Option<Res<GoSounds>>,
     kits: Option<ResMut<SoundKits>>,
@@ -105,15 +73,12 @@ pub(super) fn go_display_sounds(
     config: Res<SoundConfig>,
     listener: Res<AudioListener>,
     mut pool: ResMut<AmbientEmitterPool>,
-    // Kit ids already complained about. A `$GOn` on a looping rest clip re-fires every band pass
-    // — the centaur teleporter's Closed band is 0.334 s — so an unresolvable id would warn three
-    // times a second for the object's whole life. The same flood [`super::anim_events`] learned
-    // to avoid at 420 lines in one run past Darnassus.
+    // Kit ids already warned about: a `$GOn` on a looping rest clip re-fires every band pass
+    // (0.334 s on the centaur teleporter), so an unresolvable id would warn several times a second.
     mut complained: Local<std::collections::HashSet<u32>>,
 ) {
-    // `0x5f3cb0`'s first act is `0x5f3cc8 call 0x5f40c0` — release the object's display-sound loop
-    // — and it runs before the machine picks the new substate's animation. Draining it here even
-    // when nothing else is resolvable keeps the two halves from drifting apart.
+    // `0x5f3cb0` first releases the loop (`0x5f3cc8 call 0x5f40c0`), before it picks the new
+    // substate's animation; drained even when nothing else resolves.
     for d in dispatched.read() {
         super::emitter_pool::release(&mut pool, d.0);
     }
@@ -128,8 +93,7 @@ pub(super) fn go_display_sounds(
         let Some(slot) = go_event_slot(&ev.ident) else {
             continue;
         };
-        // A creature clip authoring a `$GO*`/`$GC*` tag doesn't resolve here: the query wants a
-        // GameObject's display row, and only GO entities carry one in the display-slot table.
+        // Only a GameObject has a display row in this table; a creature's `$GO*` tag is ignored.
         let Ok((net, transform)) = gos.get(ev.entity) else {
             continue;
         };
@@ -141,23 +105,16 @@ pub(super) fn go_display_sounds(
             .and_then(|d| go_sounds.0.slots(d))
             .map(|s| s[slot])
             .unwrap_or(0);
-        // `0x458830` fails a null id and `0x5f4010` returns — an unfilled column is silence, not a
-        // fallback. 97 shipped models author a `$GO0` against a zero Stand column (the bobber
-        // among them); that is the reference being quiet, not a miss.
+        // An unfilled column is silence: `0x458830` fails a null id and `0x5f4010` returns.
         if kit == 0 {
             continue;
         }
-        // **Where the key fired, not where the object stands**: `0x5f3e20`'s
-        // `[ebp+0x10]` is the kernel's `eventWorldPos` and both lanes below take it verbatim —
-        // `0x458870(id, pos, -1, 1.0f)` for the one-shot, `0x461d80(id, pos, 0)` for the pool. It
-        // is the difference between a portal's hum coming from the portal and from the model's
-        // pivot: 82 of the 135 shipped `$GC0` records sit off their origin, out to 63.4 yd on
-        // `orc_waterwheel.m2`, and 83 of 177 `$GO0`s do.
+        // Where the key fired, not the object's origin: both lanes take `0x5f3e20`'s event world
+        // position (`[ebp+0x10]`) verbatim, `0x458870(id, pos, -1, 1.0f)` and
+        // `0x461d80(id, pos, 0)`. Many shipped events sit off their origin, up to 63.4 yd.
         let pos = ev.pos.unwrap_or_else(|| transform.translation());
-        // The lane select. A looping kit is NOT a looping channel here: it is a *registration* in
-        // the shared emitter pool, which is what makes one hum follow you down a row of braziers
-        // instead of thirty channels stacking — and what makes a re-crossing of the marker (the
-        // per-pass event re-fire of an armed looping clip) a no-op instead of a restart.
+        // A looping kit registers in the shared emitter pool, not a channel of its own, so a row
+        // of braziers is one hum and a re-fired marker is a no-op, not a restart.
         if kit_looping(&kits, kit) {
             super::emitter_pool::register(&mut pool, ev.entity, kit, pos, listener);
             continue;
@@ -193,9 +150,7 @@ pub(super) fn plugin(app: &mut App) {
 mod tests {
     use super::go_event_slot;
 
-    /// The dispatcher's slot table (`0x5f3e20`): `$GO0..5` are the
-    /// first six display slots, `$GC0..3` the four Custom slots 6..9 — the bobber's splash is
-    /// `$GC0` → slot 6. Out-of-range digits and other families are not this channel.
+    /// The dispatcher's slot table (`0x5f3e20`).
     #[test]
     fn event_tags_map_to_display_slots() {
         assert_eq!(go_event_slot(b"$GO0"), Some(0));

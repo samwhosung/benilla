@@ -1,35 +1,16 @@
-//! The **output meter** — what the mix's level actually *is*, in numbers.
+//! The output meter: the summed mix's level, measured on the main track ahead of the limiter.
 //!
-//! The three crackle hunts before this one (1026, 1109, 1112/1114) each ended by adding the meter
-//! that would have named the mechanism: the callback-deadline load, the stream-decoder liveness,
-//! the HAL's own IO cycle, the recorded waveform. Every one of them watches *timing*. None of
-//! them watches **amplitude** — and amplitude is the one thing that goes wrong when a lot of
-//! sounds happen at once, which is exactly the condition the director reports ("a lot of mobs
-//! attacking same time... it gets really dirty, like a speaker breaking").
+//! A clipped mix meets every timing deadline, and kira answers it with a hard
+//! `clamp(-1.0, 1.0)`, which is broadband distortion; so this records what the game asked for:
 //!
-//! It cannot be read off any existing counter, because a clipped mix is *healthy* by all of them:
-//! the callback met its deadline, no decoder starved, the OS delivered every cycle on time. The
-//! mix was computed perfectly — it was just louder than full scale, and kira's renderer answers
-//! that with a hard `clamp(-1.0, 1.0)` (`backend/renderer.rs`), which is a squared-off waveform,
-//! i.e. broadband distortion. So this meter sits on the main track **ahead of the limiter** and
-//! records what the game *asked* for:
+//! - `peak`: the largest `|sample|`; above 1.0 the mix did not fit full scale.
+//! - `over`: how many samples were past full scale.
+//! - `reduction`: the deepest gain [`super::limiter`] pulled.
+//! - `nonfinite`: NaN or infinite samples, which `peak` and `over` cannot see (`f32::max` drops a
+//!   NaN and `NaN > 1.0` is false) and which pass the limiter untouched.
 //!
-//! - **`peak`** — the largest `|sample|` the summed mix reached. `> 1.0` means the request did not
-//!   fit; `4.7` means the game asked for 4.7× full scale and (before 1551) got a clipped 1.0.
-//! - **`over`** — how many samples were past full scale. One is a tick; a hundred thousand is the
-//!   report the director filed.
-//! - **`reduction`** — the deepest gain the limiter had to pull to make it fit ([`super::limiter`]
-//!   writes it here), so the log line reads as one story: asked for this, allowed that.
-//! - **`nonfinite`** — samples that were NaN or infinite. This is the meter's own blind spot,
-//!   closed deliberately: `f32::max` *discards* a NaN operand and `NaN > 1.0` is
-//!   `false`, so a mix carrying NaN reads as flawless on `peak` and `over` alike — and sails
-//!   through the limiter's `peak > CEILING` test untouched, straight into the driver. A single
-//!   non-finite sample is broadband noise at whatever the hardware makes of the bit pattern,
-//!   which is *also* "a speaker breaking", and no counter we had could see it. It must be tested
-//!   for explicitly or not at all.
-//!
-//! The audio-thread half is three atomics and a compare per sample. The main-thread half drains
-//! them once per report window in `sound::poll_mix_health`.
+//! The audio thread pays three atomics per block; `sound::poll_mix_health` drains them per report
+//! window.
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -38,11 +19,9 @@ use kira::effect::{Effect, EffectBuilder};
 use kira::info::Info;
 use kira::Frame;
 
-/// The mix's level, shared audio-thread → main-thread.
-///
-/// Peaks are stored as the **bit pattern** of a non-negative `f32`, which orders identically to
-/// the float itself — so `fetch_max`/`fetch_min` on the bits are exactly max/min on the values,
-/// with no lock and no CAS loop on the render path.
+/// The mix's level, shared from the audio thread to the main thread. Peaks are stored as the bit
+/// pattern of a non-negative `f32`, which orders like the float, so `fetch_max`/`fetch_min` on
+/// the bits need no lock.
 #[derive(Debug)]
 pub(super) struct MixLevel {
     /// Peak `|sample|` of the summed mix since the last [`Self::take`].
@@ -51,8 +30,7 @@ pub(super) struct MixLevel {
     over: AtomicU64,
     /// The limiter's deepest gain since the last [`Self::take`] (1.0 = it never engaged).
     reduction_bits: AtomicU32,
-    /// Non-finite (NaN/inf) samples since the last [`Self::take`]. Never nonzero in a healthy
-    /// mix; any nonzero reading is a defect upstream, not a loud passage.
+    /// Non-finite samples since the last [`Self::take`]; any is a defect upstream.
     nonfinite: AtomicU64,
 }
 
@@ -70,19 +48,14 @@ impl Default for MixLevel {
 /// One window's reading, as [`MixLevel::take`] hands it to the reporter.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct LevelReading {
-    /// Peak `|sample|` the summed mix reached. `> 1.0` = the mix did not fit in full scale.
     pub(super) peak: f32,
-    /// Samples past full scale in the window.
     pub(super) over: u64,
-    /// The limiter's deepest gain in the window (1.0 = never engaged).
     pub(super) reduction: f32,
-    /// Non-finite samples in the window. Anything but zero is a bug upstream of the mix.
     pub(super) nonfinite: u64,
 }
 
 impl MixLevel {
-    /// Fold one processed block's tally in (audio thread) — accumulated in locals first, so the
-    /// render path pays atomics per *block*, not per sample.
+    /// Fold one processed block's tally in, on the audio thread.
     #[inline]
     fn block(&self, peak: f32, over: u64, nonfinite: u64) {
         self.peak_bits.fetch_max(peak.to_bits(), Ordering::Relaxed);
@@ -94,14 +67,14 @@ impl MixLevel {
         }
     }
 
-    /// Fold the limiter's applied gain in (audio thread — [`super::limiter`]).
+    /// Fold the limiter's applied gain in, on the audio thread.
     #[inline]
     pub(super) fn gain(&self, gain: f32) {
         self.reduction_bits
             .fetch_min(gain.to_bits(), Ordering::Relaxed);
     }
 
-    /// Read and reset — one window's story (main thread).
+    /// Read and reset one window, on the main thread.
     pub(super) fn take(&self) -> LevelReading {
         LevelReading {
             peak: f32::from_bits(self.peak_bits.swap(0, Ordering::Relaxed)),
@@ -115,9 +88,7 @@ impl MixLevel {
     }
 }
 
-/// Install the meter on `builder` and return the cell it feeds. Always on: it is three atomics on
-/// the render path, and the alternative is what the last four crackle hunts each had to start
-/// from — the director's ear and no number.
+/// Install the meter on `builder`, feeding `level`. Always on.
 pub(super) fn install(builder: &mut kira::track::MainTrackBuilder, level: &Arc<MixLevel>) {
     builder.add_effect(MeterBuilder {
         level: Arc::clone(level),
@@ -135,7 +106,7 @@ impl EffectBuilder for MeterBuilder {
     }
 }
 
-/// The audio-thread half: measure, never modify.
+/// The audio-thread half: it measures and never modifies.
 struct Meter {
     level: Arc<MixLevel>,
 }
@@ -147,8 +118,7 @@ impl Effect for Meter {
         let mut nonfinite = 0u64;
         for f in input.iter() {
             for mag in [f.left.abs(), f.right.abs()] {
-                // `is_finite` first: a NaN would otherwise vanish into `max` and compare `false`
-                // against the over-scale test, i.e. register as a perfectly healthy sample.
+                // `is_finite` first: a NaN vanishes into `max` and fails the over-scale test.
                 if mag.is_finite() {
                     peak = peak.max(mag);
                     over += u64::from(mag > 1.0);
@@ -165,8 +135,7 @@ impl Effect for Meter {
 mod tests {
     use super::*;
 
-    /// The float-bits ordering trick the lock-free peak/min rests on: for non-negative floats,
-    /// `to_bits` is monotonic, so atomic max/min on the bits are max/min on the values.
+    /// For non-negative floats `to_bits` is monotonic, which the lock-free peak and min rest on.
     #[test]
     fn float_bits_order_like_the_floats_for_non_negatives() {
         let mut vals = [0.0f32, 1e-30, 0.5, 0.999, 1.0, 1.0001, 4.7, 1e30];
@@ -181,8 +150,7 @@ mod tests {
         assert_eq!(level.take().peak, 1e30);
     }
 
-    /// A window's reading is the window's, not all time: `take` resets peak and count, and
-    /// restores the "limiter never engaged" identity for the reduction.
+    /// `take` resets the peak and count, and the reduction to 1.0.
     #[test]
     fn take_resets_the_window() {
         let level = MixLevel::default();
@@ -200,15 +168,10 @@ mod tests {
         assert_eq!(r.reduction, 1.0);
     }
 
-    /// The blind spot this meter exists to not have. A NaN sample is invisible to both amplitude
-    /// tests — `f32::max` returns the *other* operand and `NaN > 1.0` is `false` — so a mix full
-    /// of NaN would otherwise report peak 0.0, zero over-scale, and perfect health while the
-    /// driver plays noise. Only an explicit finiteness test sees it.
+    /// A NaN sample is invisible to both amplitude tests; only the finiteness test counts it.
     #[test]
     fn non_finite_samples_are_counted_not_silently_swallowed() {
-        // The trap, stated as an executable fact rather than a comment. `black_box` keeps these
-        // runtime comparisons — a literal NaN comparison is (rightly) a lint, and the point here
-        // is exactly that this is what the audio thread would have been doing.
+        // `black_box` keeps these runtime comparisons; a literal NaN comparison is a lint.
         let nan = std::hint::black_box(f32::NAN);
         assert_eq!(0.0f32.max(nan), 0.0, "`max` discards a NaN operand");
         assert!(

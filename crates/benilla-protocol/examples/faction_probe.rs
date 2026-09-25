@@ -1,7 +1,7 @@
 //! Diagnostic probe: prints each streamed unit's `UNIT_FIELD_FACTIONTEMPLATE`, with level and
 //! display id, to check the descriptor decode against `creature_template.faction`.
 //!
-//! Run: `cargo run -p benilla-protocol --example faction_probe -- probeN pprobeN [host]`. The
+//! Run: `cargo run -p benilla-protocol --example faction_probe -- probeN <password> [host]`. The
 //! account has no default, because a login kicks whoever is on the account.
 
 use std::time::{Duration, Instant};
@@ -13,10 +13,10 @@ fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let user = args
         .next()
-        .context("usage: faction_probe -- <probeN> <pprobeN> [host] (a probe account)")?;
+        .context("usage: faction_probe -- <probeN> <password> [host] (a probe account)")?;
     let pass = args
         .next()
-        .context("usage: faction_probe -- <probeN> <pprobeN> [host] (a probe account)")?;
+        .context("usage: faction_probe -- <probeN> <password> [host] (a probe account)")?;
     let host = args.next().unwrap_or_else(|| "localhost".into());
 
     let logon = benilla_protocol::logon(&host, &user, &pass)?;

@@ -67,7 +67,8 @@ pub(super) struct ShardEmitter {
     path: String,
     /// `DYNAMICOBJECT_RADIUS`: the wire radius is the spread (`0x6ebad0`).
     radius: f32,
-    /// Shards per second: `CharParamOne` times the graphics-quality factor, here its 1.0 maximum.
+    /// Shards per second: `CharParamOne` times the `spellEffectLevel` factor, 1.0 at its
+    /// default "2".
     rate: f32,
     /// Fractional emissions carried between frames.
     accum: f32,

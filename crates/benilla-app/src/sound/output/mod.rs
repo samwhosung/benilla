@@ -1,70 +1,34 @@
-//! The output stream — benilla's own kira backend (extended to every platform
-//! by 1920).
+//! The output stream: benilla's own kira backend, the same code on every platform. It owns
+//! everything between kira's render and the speaker: the device, the IO callback, the render
+//! thread and the meters. The one platform seam is `device` (`coreaudio.rs` on macOS, `cpal.rs`
+//! elsewhere), which finds the default output, opens a stream and hands the callback one buffer
+//! per cycle.
 //!
-//! kira renders the mix; this module owns everything between that render and the speaker:
-//! the device, the IO callback, the thread the mix runs on, and every meter that says whether
-//! the sound reached the hardware on time. **All of it is the same code everywhere.** Exactly
-//! one seam is platform-specific — `device`, which finds the default output, opens a stream on
-//! it, and hands the callback one buffer per cycle: `coreaudio.rs` on macOS, `cpal.rs`
-//! elsewhere. Nothing above that seam knows which one it is, which is the point: 1857 wrote the
-//! non-macOS half as a stub that opened nothing, and Linux and Windows shipped silent for a
-//! release.
+//! ## Mix ahead, copy on the deadline
 //!
-//! ## The shape: mix ahead, copy on the deadline
+//! The IO callback runs on the host's realtime thread with a hard per-cycle budget, and anything
+//! that parks it (a page-in, a stall) skips a cycle, which is a crackle. So it only copies: a
+//! render thread runs kira's [`Renderer`] ahead into a lock-free ring,
+//! [`OutputSettings::mix_ahead_ms`] deep, the reference's `SoundBufferSize`. That thread is
+//! scheduled as the platform documents for an audio worker (`device::set_realtime`: a
+//! time-constraint policy in the device's IO workgroup on macOS, `SCHED_FIFO` on unix, MMCSS on
+//! Windows); any of those can be refused, and the ring's depth turns a refusal into a
+//! degradation rather than a crackle.
 //!
-//! The HAL calls our IOProc on its realtime IO thread once per device cycle, with a hard
-//! budget: the buffer must be filled before the DMA reaches it. The 2026-09-02 overload the OS
-//! itself annotated (`HALS_OverloadMessage: … HAL client proc exceeding io cycle budget` /
-//! `safety violation`) was that budget blown while the mix's own compute was ~1% of it — the
-//! callback did not *run* long, it *waited* long, on a machine with its swap 94% full and a
-//! load average of 26. A page-in, a stall, anything that parks the thread for tens of
-//! milliseconds inside the callback is a skipped cycle, and a skipped cycle is a crackle. The
-//! mechanism was measured on CoreAudio; every host below has the same shape, and the answer
-//! below is the same one.
+//! ## The meters, reported by [`OutputBackend::service`]
 //!
-//! So the IOProc no longer renders. A render thread of ours runs kira's [`Renderer`] ahead of
-//! the device into a lock-free ring, and the IOProc copies from the ring — a few hundred
-//! floats, hot in cache, nothing else. A stall now has the ring's depth to hide in instead of
-//! one cycle's budget: [`OutputSettings::mix_ahead_ms`] of it, the reference's own
-//! `SoundBufferSize` (FMOD 3's mix-ahead buffer, registered at 50 or 100 ms by host). The
-//! render thread is scheduled the way the platform documents for an audio worker
-//! (`device::set_realtime`): on macOS a time-constraint policy joined to the device's IO
-//! workgroup, on unix `SCHED_FIFO`, on Windows MMCSS — so under CPU contention it is served
-//! like the audio system's own thread. Every one of those can be refused, and the ring's depth
-//! is what makes a refusal a degradation rather than a crackle.
+//! - lead: at callback entry, the time the buffer is due at the DAC minus now; negative is late.
+//! - io: the callback's wall time; anything past microseconds is the thread parked inside it.
+//! - gap: spacing of successive cycle timestamps; a doubled gap is a skipped cycle.
+//! - underruns: cycles the ring could not fill, the one audible failure left.
+//! - render: the render thread's wall time per chunk.
+//! - overloads: `kAudioDeviceProcessorOverload`, macOS only; zero elsewhere.
 //!
-//! ## What the meters can now say
-//!
-//! Every number that names a crackle's layer is read here and reported by
-//! [`OutputBackend::service`] on the main thread:
-//!
-//! - **lead** — at IOProc entry, the host time the buffer is due at the DAC minus now: the
-//!   HAL's own deadline for this cycle. A late wake shrinks it; negative means already late.
-//! - **io** — the IOProc's wall time entry→exit. The copy costs microseconds; anything larger
-//!   is the thread being parked inside the callback (the mechanism above).
-//! - **gap** — spacing of successive cycle timestamps; a doubled gap is a cycle the HAL skipped.
-//! - **underruns** — cycles the ring could not fill: the render thread fell the whole ring
-//!   behind. The audible failure this design leaves, counted rather than guessed.
-//! - **render** — the render thread's per-chunk wall time, kira's `cpu_usage` equivalent.
-//! - **overloads** — `kAudioDeviceProcessorOverload`, stamped with the host time it fired.
-//!   macOS only: no other host has an analogue, and off macOS this reads zero. Every other
-//!   meter, `underruns` included, means the same thing everywhere.
-//!
-//! ## What the device layer does that the old stack could not
-//!
-//! Default-output changes, device loss and rate changes each raise a notice; `service`
-//! rebuilds the stream on the new default. kira's own cpal backend could do none of that on
-//! macOS (its device poll is compiled out there, and cpal 0.17 wired a no-op error callback
-//! for the default device) — unplug the headphones and the old stream paused forever. That is
-//! why `coreaudio.rs` exists and why cpal is out of the graph on macOS; off macOS the notices
-//! come from a device poll and cpal's error callback, which those hosts do deliver, and the
-//! rebuild loop above is the same one.
-//!
-//! The callback and the render loop are allocation-free by construction and *checked*: in
-//! debug builds `assert_no_alloc` aborts the process on an allocation inside either.
+//! Default-output changes, device loss and rate changes raise a notice, and `service` rebuilds
+//! the stream on the new default. The callback and the render loop are allocation-free, checked
+//! in debug builds by `assert_no_alloc`.
 
-// The device layer, one file per platform behind one name. Everything in this module is the
-// same code everywhere; `device` is the only seam (decision 1857 for CoreAudio, 1920 for cpal).
+// The device layer, one file per platform behind one name.
 #[cfg(target_os = "macos")]
 #[path = "coreaudio.rs"]
 mod device;
@@ -83,52 +47,40 @@ use rtrb::{Consumer, Producer, RingBuffer};
 
 use device::{Cycle, Device, Joined, Listeners, Notices, Stream, Workgroup};
 
-/// Frames the render thread produces per pass — its scheduling period. 256 at 48 kHz is
-/// 5.3 ms: two of kira's 128-frame parameter blocks, small enough to keep the ring topped up
-/// finely, large enough that the thread is not the busiest thing on the machine.
+/// Frames per render pass: 5.3 ms at 48 kHz, two of kira's 128-frame parameter blocks.
 const RENDER_CHUNK_FRAMES: usize = 256;
 
 /// How long an unopenable device waits before the next attempt.
 const REOPEN_EVERY: Duration = Duration::from_secs(1);
 
 /// How long the main thread waits for the IO closure to hand the ring consumer back after a
-/// stream is dropped. The unit stop is synchronous; this is a defence, not an expectation.
+/// stream drops; the stop is synchronous, so this is a defence.
 const HANDBACK_WAIT: Duration = Duration::from_millis(250);
 
-/// The device IO buffer we ask for. The IOProc is a copy now, so this bounds no compute; it
-/// sets how often the HAL wakes us and how much of the mix-ahead each wake drains. 512 is
-/// what shipping engines run on macOS (FMOD's and Godot's block, the device's own default
-/// here) and the opposite of the 2048 the old design reached for: this machine's overload
-/// telemetry (`io_page_faults_duration: 0`, `IOWorkLoop: skipping cycle due to overload`)
-/// says the IO thread was scheduled late, not run long — and a realtime thread that sleeps
-/// 43 ms between 0.4 ms of work is exactly the shape Apple Silicon parks on an efficiency
-/// core (developer forums 726096: workgroup threads land on E-cores from 512 frames up).
-/// A thread woken 94×/s stays warm and stays placed; the mix-ahead absorbs what it can't.
+/// The device IO buffer we ask for; it sets how often the host wakes us, not any compute. 512 is
+/// FMOD's and Godot's block on macOS, where a realtime workgroup thread at larger buffers can be
+/// parked on an efficiency core between wakes.
 pub(super) const DEVICE_BUFFER_FRAMES: u32 = 512;
 
-/// How far ahead of the device the mix runs. The reference registers `SoundBufferSize` — FMOD 3's
-/// mix-ahead, the same quantity — at `"50"` or `"100"` by host (`0x457520`, strings at
-/// `0x835e10`/`0x835e0c`, byte-read 2026-09-02); the larger of its two is ours, because the
-/// stall we measured a crackle from was a whole IO cycle long and the point of the depth is to
-/// hide the next one.
+/// How far ahead of the device the mix runs. The reference registers `SoundBufferSize`, FMOD 3's
+/// mix-ahead, at `"50"` or `"100"` by host (`0x457520`, strings at `0x835e10`/`0x835e0c`); this is
+/// the larger on every host, since the depth exists to hide a stall a whole IO cycle long.
 pub(super) const MIX_AHEAD_MS: u32 = 100;
 
-/// Whether an output stream is open right now — read by instruments that would stop the
-/// process's threads (`/usr/bin/sample` suspends the task, realtime IO thread
-/// included, and every HAL cycle it holds is a crackle; the stall watchdog stands down while
-/// this is set). Set by the backend around the stream's life, never by anything else.
+/// Whether an output stream is open, set only by the backend around the stream's life. The stall
+/// watchdog stands down while it is set: `/usr/bin/sample` suspends the IO thread too, and every
+/// cycle it holds is a crackle.
 static DEVICE_OPEN: AtomicBool = AtomicBool::new(false);
 
 /// True while an output stream is open on a device.
-// The one reader is the stall watchdog (`perf::stall`), which is macOS-only — it exists because
-// `/usr/bin/sample` suspends the whole task. Off macOS nothing asks, and that is not drift.
+// The one reader, the stall watchdog (`perf::stall`), is macOS-only.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn device_open() -> bool {
     DEVICE_OPEN.load(Ordering::Acquire)
 }
 
-/// The device's current default rate, read without opening anything — for the pieces of the
-/// mix that are sized before the backend exists (the tap's WAV header, the limiter's delay).
+/// The default device's rate, read without opening it, for what is sized before the backend
+/// exists (the tap's WAV header, the limiter's delay).
 pub(super) fn probe_sample_rate() -> Option<u32> {
     device::default_output().ok().map(|d| d.sample_rate)
 }
@@ -136,12 +88,9 @@ pub(super) fn probe_sample_rate() -> Option<u32> {
 /// The dials the mixer opens the device with.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct OutputSettings {
-    /// The device IO buffer, frames (clamped to the device's range). The IOProc is a copy,
-    /// so this no longer bounds any compute — it sets how often the HAL wakes us and how much
-    /// of the mix-ahead is consumed per wake.
+    /// The device IO buffer in frames, clamped to the device's range.
     pub device_buffer_frames: u32,
-    /// How far ahead of the device the mix runs, milliseconds — the reference's
-    /// `SoundBufferSize`. The stall the output can absorb without an audible gap.
+    /// The mix-ahead in ms, the reference's `SoundBufferSize`: the stall the output absorbs.
     pub mix_ahead_ms: u32,
 }
 
@@ -220,7 +169,7 @@ pub(super) enum Event {
     },
     Lost(&'static str),
     OpenFailed(String),
-    /// The stream is gone for good (the ring's consumer never came back — a bug, not a device).
+    /// The stream is gone for good: the ring's consumer never came back, a bug, not a device.
     Dead(String),
 }
 
@@ -266,8 +215,8 @@ struct Shared {
     notices: Arc<Notices>,
 }
 
-/// Hands `T` back through a one-slot ring when dropped — how the ring consumer inside the
-/// IO closure returns to the main thread when a stream is torn down.
+/// Hands `T` back through a one-slot ring when dropped: how the ring consumer in the IO closure
+/// returns to the main thread when a stream is torn down.
 struct Returning<T> {
     inner: Option<T>,
     back: Producer<T>,
@@ -404,8 +353,8 @@ impl OutputBackend {
         self.stream_errors
     }
 
-    /// Main-thread service: react to device notices (rebuild the stream on the new default),
-    /// retry an unopened device, and drain the window's meters. Cheap when nothing happened.
+    /// Main-thread service: rebuild the stream on a device notice, retry an unopened device, and
+    /// drain the window's meters.
     pub(super) fn service(&mut self) -> (Window, Vec<Event>) {
         let mut events = std::mem::take(&mut self.pending);
         let notices = &self.shared.notices;
@@ -449,8 +398,8 @@ impl OutputBackend {
         (self.take_window(), events)
     }
 
-    /// Open a stream on `device` with the ring consumer held in `Stage::Idle`. Returns the
-    /// event to log; leaves the stage `Idle` (with the retry clock reset) on failure.
+    /// Open a stream on `device` with the ring consumer held in `Stage::Idle`; on failure the
+    /// stage stays `Idle` with the retry clock reset.
     fn open(&mut self, device: Device) -> Option<Event> {
         let Stage::Idle { consumer, .. } = std::mem::replace(&mut self.stage, Stage::Dead) else {
             self.stage = Stage::Dead;
@@ -469,8 +418,7 @@ impl OutputBackend {
         let (mut returning, handback) = Returning::new(consumer);
         let shared = Arc::clone(&self.shared);
         let mut last_output_ns = 0u64;
-        // The closure owns the ring consumer (inside `returning`, which hands it back when the
-        // closure is dropped with the stream) and a clone of the shared meters.
+        // `returning` hands the ring consumer back when the closure drops with the stream.
         let on_cycle = move |cycle: Cycle<'_>| {
             io_cycle(cycle, returning.get_mut(), &shared, &mut last_output_ns);
         };
@@ -550,9 +498,8 @@ impl OutputBackend {
     }
 
     fn take_window(&mut self) -> Window {
-        // The running cycle size, not the one we asked for: a host may grant another (the HAL's
-        // silent clamp), and WASAPI's shared mode varies it per wake. The report's `nominal` is
-        // only worth printing if it is what just happened.
+        // The running cycle size, not the one asked for: a host may clamp it, and WASAPI's
+        // shared mode varies it per wake.
         if let Stage::Running { stream, .. } = &self.stage {
             self.buffer_frames = stream.buffer_frames();
         }
@@ -624,8 +571,7 @@ fn frames_to_ns(frames: usize, sample_rate: u32) -> u64 {
     (frames as u64 * 1_000_000_000) / u64::from(sample_rate.max(1))
 }
 
-/// Run `f` with allocation forbidden (debug builds abort on a violation; release runs it
-/// bare). The tripwire that keeps the realtime paths honest across every future change.
+/// Run `f` with allocation forbidden: debug builds abort on a violation, release runs it bare.
 #[inline]
 fn no_alloc<R>(f: impl FnOnce() -> R) -> R {
     #[cfg(debug_assertions)]
@@ -638,8 +584,8 @@ fn no_alloc<R>(f: impl FnOnce() -> R) -> R {
     }
 }
 
-/// The IOProc: copy one device buffer out of the ring, stamp the meters. Realtime thread —
-/// no allocation, no lock, no log.
+/// The IO callback: copy one device buffer out of the ring and stamp the meters. Realtime
+/// thread: no allocation, no lock, no log.
 fn io_cycle(
     cycle: Cycle<'_>,
     consumer: &mut Consumer<f32>,
@@ -691,12 +637,10 @@ fn io_cycle(
     });
 }
 
-/// The render thread: keep the ring full of kira's output, one chunk at a time, woken by the
-/// IOProc after every cycle (and by a timeout, so a missed wake cannot starve it).
-// The two explicit `drop`s below are load-bearing on macOS, where `Joined` leaves the device's
-// audio workgroup in its `Drop`: the old membership goes before the new one is taken, never both
-// at once. Off macOS `Joined` cannot even be constructed, so clippy sees a drop of a type with no
-// `Drop` — a platform difference, not a redundant call.
+/// The render thread: keep the ring full, one chunk at a time, woken by the IO callback after
+/// every cycle and by a timeout so a missed wake cannot starve it.
+// The explicit `drop`s matter on macOS, where `Joined`'s `Drop` leaves the workgroup: the old
+// membership goes before the new one is taken. Off macOS `Joined` has no `Drop`.
 #[allow(clippy::drop_non_drop)]
 fn render_loop(
     mut renderer: Renderer,
@@ -705,13 +649,9 @@ fn render_loop(
     group: Option<Workgroup>,
     period_ns: u64,
 ) {
-    // Held for the thread's life and dropped with it: on Windows that hands the MMCSS
-    // registration back, everywhere else it is inert.
-    //
-    // `WOW_AUDIO_NO_RT=1` — the A/B lever: a raid with sound on reads a
-    // `cpu_p99` several ms over its mean while the annotation names no churn, and a realtime
-    // render thread preempting the compute pools on four performance cores is the standing
-    // suspect. Off, the thread takes the user-interactive QoS fallback below.
+    // Held for the thread's life: on Windows its drop hands the MMCSS registration back.
+    // `WOW_AUDIO_NO_RT=1` skips realtime for the user-interactive QoS fallback, an A/B lever for
+    // the render thread preempting the compute pools.
     let no_rt = std::env::var_os("WOW_AUDIO_NO_RT").is_some();
     let realtime = if no_rt {
         Err(anyhow::anyhow!("WOW_AUDIO_NO_RT=1"))
@@ -754,7 +694,7 @@ fn render_loop(
         }
         let rate = control.pending_rate.swap(0, Ordering::AcqRel);
         if rate != 0 {
-            // Off the no-alloc path on purpose: effects may resize their state here.
+            // Off the no-alloc path: effects may resize their state here.
             renderer.on_change_sample_rate(rate);
         }
         if control.regroup.swap(false, Ordering::AcqRel) {
@@ -793,26 +733,15 @@ fn render_loop(
 mod tests {
     use super::*;
 
-    /// **The instrument B356 was missing.** Opt-in (`WOW_AUDIO_LIVE=1`), because it opens the
-    /// machine's real output device — not something eight parallel worktrees should each do on
-    /// every `cargo test`. What it answers is the one question the gates cannot: *on this
-    /// platform, does the device layer open a stream, does the IO callback run, and does the
-    /// render thread keep the ring ahead of it?* Every layer of decision 1857 is in the loop
-    /// and nothing above it is, so a failure names the platform file and nothing else.
-    ///
-    /// It is the whole verification story off macOS, where the gates never compile this code at
-    /// all: a cross-platform compile type-checks Linux and Windows, and this runs the result.
+    /// Opt-in (`WOW_AUDIO_LIVE=1`) since it opens the real output device: does the device layer
+    /// open a stream, does the callback run, and does the render thread keep ahead? Off macOS it
+    /// is the only run of this code.
     ///
     ///     WOW_AUDIO_LIVE=1 cargo test -p benilla-app --lib sound::output:: -- --nocapture
     ///
-    /// **A device with no clock fails the underrun assertion by construction, and that is the
-    /// assertion working.** Run against ALSA's `null` PCM (the obvious way to fake a device in a
-    /// container) the first run of this test read 1,192,964 cycles in one second against a
-    /// nominal 86: `null` accepts every write instantly, so the callback free-runs and no render
-    /// thread on earth stays ahead of it. A sink that paces — PulseAudio's `module-null-sink`,
-    /// `pcm.!default { type pulse }` — reads 0 underruns with the ring at its full 106 ms. If
-    /// this fails with a cycle count wildly above `1 s / cycle_ms`, look at the device before
-    /// the code.
+    /// A device with no clock fails the underrun check by construction: ALSA's `null` PCM
+    /// accepts every write at once, so the callback free-runs far above `1 s / cycle_ms` cycles.
+    /// A pacing sink (PulseAudio's `module-null-sink`) reads 0 underruns.
     #[test]
     fn live_output_opens_and_runs() {
         if std::env::var("WOW_AUDIO_LIVE").is_err() {
@@ -823,8 +752,7 @@ mod tests {
             OutputBackend,
         >::default())
         .expect("the output backend opened a device");
-        // One second of real device cycles. The stream opens inside `start`, so the first
-        // `service` already carries the `Opened` event.
+        // The stream opens inside `start`, so the first `service` carries the `Opened` event.
         std::thread::sleep(Duration::from_secs(1));
         let (window, events) = manager.backend_mut().service();
         for event in &events {

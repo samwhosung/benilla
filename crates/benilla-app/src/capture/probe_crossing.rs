@@ -1,11 +1,8 @@
-//! The sea-crossing live probe (`WOW_PROBE=crossing`) — decision 0455's instrument, inert
-//! without the env: once in-world, wait for a cross-continent transport docked on our map,
-//! GM-drop onto its deck (`.go xyz`; probe accounts are gmlevel 6), then just stand there and
-//! report the seam: aboard → map flip (TRANSFER_PENDING / NEW_WORLD riding branch, logged by
-//! the net layer) → still riding → arrived docked on the far continent. Every phase edge prints
-//! a `PROBE crossing:` line, so an outer `timeout`d run + grep is the whole harness. Non-combat.
-//! Pair with the checkout's own probe identity (`.probe-identity`, or WOW_USER/WOW_PASS/WOW_CHAR
-//! — the `probe` skill; a shared account gets kicked by parallel sessions mid-ride).
+//! The sea-crossing live probe (`WOW_PROBE=crossing`): once in-world, waits for a cross-continent
+//! transport docked on our map, drops onto its deck with `.go xyz`, and logs a `PROBE crossing:`
+//! line at each edge: aboard, map flip (the riding `NEW_WORLD` branch), still riding, docked on the
+//! far continent. Non-combat. It needs the checkout's own probe account, since a shared one is
+//! kicked mid-ride; the switches are `docs/CONTRIBUTING.md`, "Running it unattended".
 
 use bevy::prelude::*;
 
@@ -24,15 +21,12 @@ impl Plugin for ProbeCrossingPlugin {
     }
 }
 
-/// The probe's phase machine. `Wait` → (deck drop sent) `Boarding` → (ride attached) `Aboard` →
-/// (CurrentMap flipped, still riding) `Crossed` → (docked on the new map, still riding) done.
-/// A failed boarding (window closed under the settle, landed in the drink) retries the next
-/// docked window; a lost ride after the flip is a loud FAILURE line.
+/// `Wait`, `Boarding` (drop sent), `Aboard` (ride attached), `Crossed` (map flipped, still
+/// riding), `Done`. A missed boarding retries at the next dock; a ride lost after the flip FAILs.
 #[derive(Resource, Default)]
 struct CrossingProbe {
     phase: Phase,
-    /// The one-shot [`BOOTSTRAP_DOCK`] send — so a body that still cannot see a ferry after the
-    /// hop (wrong continent, a `.go` the server refused) doesn't re-teleport every frame.
+    /// Latches the one dock hop, so a body that still sees no ferry does not hop every frame.
     bootstrapped: bool,
 }
 
@@ -55,41 +49,18 @@ enum Phase {
     Done,
 }
 
-/// Yards above the boat's sampled origin the GM drop aims: high enough to clear the deck
-/// wherever the model origin sits, low enough that the post-teleport settle hold (6 s) + the free
-/// fall land well inside the dock window.
-///
-/// **10 was not high enough, and the failure was silent.** A taxi path's node `z` is the
-/// *waterline* for the sea ferries — every node of path 241 carries `z = 0` — while their decks
-/// stand ~16 yd above it, so the drop materialised inside the hull and the probe reported
-/// "boarding missed the window" forever without ever printing a `transport: board`. The zeppelins
-/// hid it: their nodes sit at deck height (71.08), where 10 yd clears fine. Anything on the boat
-/// counts as boarding — `owning_transport` walks up to the `Transport` root — so overshooting a
-/// cabin roof is harmless and undershooting is not.
+/// Yards above the boat's sampled origin the drop aims. A sea ferry's path nodes sit at the
+/// waterline (path 241 is all `z = 0`) with the deck ~16 yd above, while zeppelin nodes sit at deck
+/// height; landing anywhere on the boat counts, so overshooting is harmless.
 const DROP_HEIGHT: f32 = 25.0;
-/// Seconds after the deck drop before conceding the boarding failed (settle 6 s + fall + attach,
-/// with slack) and re-arming for the next docked window.
+/// Seconds after the drop before the boarding counts as missed (6 s settle, fall, attach, slack).
 const BOARD_DEADLINE: f64 = 15.0;
-/// Solid ground on the Booty Bay pier, beside the Ratchet ferry's berth (WoW coords) — where the
-/// probe sends itself when no cross-continent transport is in range at all.
-///
-/// The probe used to *assume* it was standing at a dock: its `Wait` arm only reacts to a transport
-/// the server has already put in visibility range, so a probe body parked anywhere else waited
-/// forever, printing nothing. That made the instrument unrunnable from a cold login, which is the
-/// only way an unattended session ever starts it.
+/// The Booty Bay pier beside the Ratchet ferry's berth (WoW coords), where the probe goes when no
+/// cross-continent transport is in range.
 const BOOTSTRAP_DOCK: [f32; 4] = [-14297.2, 531.0, 8.8, 0.0];
-/// `WOW_PROBE_DOCK=x,y,z[,map]` — go to *this* dock, before waiting for anything. `map` defaults
-/// to 0 and **must be sent**: `.go xyz` without one teleports within the map you are *currently*
-/// on, so a probe that has already crossed to Kalimdor and is then aimed at a Booty Bay dock lands
-/// at Azeroth's coordinates on Kalimdor — off that map's tile grid, where nothing streams and the
-/// loading cover can never clear. This probe did exactly that and hung, which is the bug it was
-/// written to chase, arrived at from the other end.
-///
-/// Without it the probe rides whichever cross-continent ferry the login happens to be standing
-/// next to, which is not a choice at all: the 1.12 fleet's seams are not interchangeable (one
-/// path crosses mid-cycle, another crosses at the cycle wrap), so "it worked" on the ferry that
-/// answered says nothing about the one a report names. Overriding the destination is how a
-/// specific seam gets measured.
+/// `WOW_PROBE_DOCK=x,y,z[,map]`: go to this dock first, to measure a named ferry's seam (one
+/// path crosses mid-cycle, another at the cycle wrap). `map` defaults to 0 and is always sent:
+/// `.go xyz` without one stays on the current map (vmangos `TeleportCommands.cpp:871`).
 fn dock_override() -> Option<[f32; 4]> {
     let raw = std::env::var("WOW_PROBE_DOCK").ok()?;
     let mut it = raw.split(',').map(|p| p.trim().parse::<f32>());
@@ -102,16 +73,12 @@ fn dock_override() -> Option<[f32; 4]> {
         }
     }
 }
-/// How near [`dock_override`]'s named dock the body must stand before the probe will board
-/// anything — wide enough to cover a pier and the ferry moored along it, tight enough that the
-/// login spot on another continent can never satisfy it.
+/// How near [`dock_override`]'s dock the body must stand before boarding anything.
 const DOCK_ARRIVED_YD: f32 = 200.0;
-/// How near the body a docked ferry must be before the probe will drop onto it — see the scan.
-/// Generous enough for a long pier, far short of the next dock on the same continent.
+/// How near a docked ferry must be to drop onto it: a long pier, short of the next dock.
 const BOARDABLE_YD: f32 = 400.0;
-/// Seconds the probe watches for a cross-continent transport before sending itself to
-/// [`BOOTSTRAP_DOCK`] — long enough for a login's object stream to deliver one if we are already
-/// somewhere it sails from.
+/// Seconds to wait for the login's object stream to show a ferry before going to
+/// [`BOOTSTRAP_DOCK`].
 const BOOTSTRAP_AFTER: f64 = 20.0;
 
 fn crossing_probe(
@@ -132,24 +99,13 @@ fn crossing_probe(
     let now = time.elapsed_secs_f64();
     match probe.phase {
         Phase::Wait => {
-            // Nothing that crosses the sea is in range at all — we are not at a ferry dock. Send
-            // the body to one (once; `bootstrapped` latches) rather than waiting out the run.
+            // With no sea-crossing transport in range, go to a dock once.
             let forced = dock_override();
             let adrift = !transports
                 .iter()
                 .any(|(_, t, _)| t.touches_map(0) && t.touches_map(1));
-            // An explicit `WOW_PROBE_DOCK` goes FIRST and waits for nothing: the whole point of
-            // naming a dock is to ride *that* ferry, and the login spot very often has a different
-            // one already in range — which the scan below would board within the grace period,
-            // silently measuring the wrong seam. (It did exactly that: a run aimed at Booty Bay
-            // rode the Undercity zeppelin instead.) Only the "no ferry anywhere" fallback waits,
-            // because that one is guessing and should let the object stream finish first.
-            // **Having SENT the hop is not having ARRIVED.** `.go` is a server round trip; the
-            // scan below runs again on the very next frame, when the body is still standing where
-            // it logged in and the old surroundings' ferry is still in range — so it boards that
-            // one and measures the wrong seam, which is precisely the failure the override exists
-            // to prevent. (Aimed at Booty Bay, it rode the Menethil–Theramore ferry.) So while a
-            // dock is named, nothing is boarded until the body is actually standing at it.
+            // A named dock hops at once, and nothing is boarded until the body stands there: the
+            // `.go` is a round trip, and the login spot's own ferry is still in range meanwhile.
             if let Some(dock) = forced {
                 let here = benilla_assets::coords::bevy_to_wow(player.pos);
                 let (dx, dy) = (here[0] - dock[0], here[1] - dock[1]);
@@ -173,7 +129,7 @@ fn crossing_probe(
                         "no cross-continent transport in range"
                     }
                 );
-                // The map id is not optional — see [`dock_override`].
+                // Always send the map id: `.go xyz` without one stays on the current map.
                 let _ = net.0.send(ClientCommand::Chat {
                     kind: crate::net::ChatKind::Say,
                     target: None,
@@ -184,9 +140,8 @@ fn crossing_probe(
             if adrift {
                 return;
             }
-            // A cross-continent transport (the 1.12 fleet crosses EK↔Kalimdor, maps 0↔1),
-            // currently docked on OUR map: drop onto its deck. `sample.pos` is WoW coords —
-            // exactly what `.go xyz` takes.
+            // A transport touching maps 0 and 1, docked on our map: drop onto its deck.
+            // `sample.pos` is in WoW coords, as `.go xyz` takes.
             for (guid, transport, anchor) in &transports {
                 if !(transport.touches_map(0) && transport.touches_map(1)) {
                     continue;
@@ -195,12 +150,8 @@ fn crossing_probe(
                 if sample.map != map || sample.moving {
                     continue;
                 }
-                // **And it has to be a ferry we are actually standing next to.** A cross-continent
-                // `.go` leaves the departed surroundings' objects in the entity list until the
-                // server gets round to removing them, so the scan can otherwise pick a boat
-                // thousands of yards away and `.go` onto its deck — undoing the hop that just
-                // placed us, and measuring whichever seam that boat happens to cross. Aimed at
-                // Booty Bay, this probe boarded the Tirisfal zeppelin twice that way.
+                // Only a nearby ferry: after a cross-continent `.go` the departed surroundings'
+                // objects stay in the entity list until the server removes them.
                 let here = benilla_assets::coords::bevy_to_wow(player.pos);
                 let (dx, dy) = (here[0] - sample.pos[0], here[1] - sample.pos[1]);
                 if (dx * dx + dy * dy).sqrt() > BOARDABLE_YD {

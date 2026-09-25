@@ -1,12 +1,8 @@
-//! Spell-visual kit sounds: route [`SpellKitSound`] — the kit's own
-//! `SoundEntries.dbc` id (`SpellVisualKit` field 13), resolved by the cast-edge router
-//! (`crate::creature_anim::spell_visual`) — to audio at the casting unit, mirroring the client's
-//! looping-test split (`0x458830`): a plain kit rings as a fire-and-forget positioned one-shot
-//! (`0x458870`); a **LOOPING** kit (Fireball's precast buildup 702, Arcane Missiles' channel hum
-//! 3136) becomes a channel **tracked to the caster** (`0x61fec0`) and is reaped by
-//! [`SpellKitSound::StopHold`] when the hold ends (the client kills the effect's sound at
-//! `0x614150`) — without the reap, a `/castvis 133` buildup loops forever past its own release.
-//! Unit despawn is covered by the greeting module's source-channel reaper.
+//! Spell-visual kit sounds: [`SpellKitSound`] (the kit's `SoundEntries.dbc` id, `SpellVisualKit`
+//! field 13) played at the casting unit, split as the reference's looping test (`0x458830`)
+//! splits it. A plain kit is a positioned one-shot (`0x458870`); a looping kit (Fireball's
+//! buildup 702, Arcane Missiles' hum 3136) is a channel tracked to the caster (`0x61fec0`),
+//! reaped by [`SpellKitSound::StopHold`] as the reference kills the effect's sound at `0x614150`.
 
 use bevy::ecs::entity::EntityHashMap;
 use bevy::prelude::*;
@@ -29,13 +25,12 @@ fn route_spell_kit_sounds(
     mut out: NonSendMut<SoundOutput>,
     config: Res<SoundConfig>,
     listener: Res<AudioListener>,
-    // Each unit's live tracked hold-loop kit, so StopHold reaps exactly that kit's channels and
-    // never a sibling tagged channel (the caster's greeting line keeps talking).
+    // Each unit's live hold-loop kit, so StopHold reaps only that kit's channels.
     mut hold_loops: Local<EntityHashMap<u32>>,
     mut despawned: RemovedComponents<NetEntity>,
 ) {
     for entity in despawned.read() {
-        hold_loops.remove(&entity); // the channel itself dies via the greeting despawn reaper
+        hold_loops.remove(&entity); // the channel dies with the source-channel despawn reaper
     }
     if events.is_empty() {
         return;
@@ -44,11 +39,8 @@ fn route_spell_kit_sounds(
         return;
     };
     let listener = listener.pos;
-    // Same-drain dedup: the client rings a kit's sound once per PlaySpellVisualKit call, and a
-    // state kit is legitimately played twice in one packet burst (the impact hand-off's flash +
-    // the aura watcher's ADD edge — both real reference callers). One frame, one ring;
-    // plays in different frames (a missile impact preceding the aura by a beat) both ring, as
-    // the reference's two calls would.
+    // One ring per unit and kit per frame: the impact flash and the aura watcher's add edge can
+    // both play a state kit in one packet burst. Plays in different frames both ring.
     let mut played_now: Vec<(Entity, u32)> = Vec::new();
     for ev in events.read() {
         match *ev {
@@ -59,8 +51,7 @@ fn route_spell_kit_sounds(
                 played_now.push((entity, kit_sound));
                 let pos = transforms.get(entity).map(|t| t.translation).ok();
                 let looping = kit_looping(&kits, kit_sound);
-                // The kit player is otherwise invisible in logs — this line is what a headless
-                // probe greps to prove a spell's sound actually fired (0451 mount-up probe).
+                // The line a headless probe greps to prove a spell's sound fired.
                 debug!("spell kit sound {kit_sound} on {entity:?} (looping {looping})");
                 let played = if looping {
                     play_kit_ext(
@@ -98,9 +89,8 @@ fn route_spell_kit_sounds(
                 }
             }
             SpellKitSound::PlayAt { pos, kit_sound } => {
-                // The kit-sound leg's `extra`-override arm: a bare positional one-shot, no owner
-                // to track a loop on and no dedup ledger — its one caller is a missile's ground
-                // arrival, and two projectiles never land on the same point in the same frame.
+                // A bare positional one-shot with no owner or dedup: its one caller is a
+                // missile's ground arrival.
                 debug!("spell kit sound {kit_sound} at {pos:?}");
                 if let Err(e) = play_kit(
                     &mut kits,
@@ -121,8 +111,7 @@ fn route_spell_kit_sounds(
                 }
             }
             SpellKitSound::StopKit { entity, kit_sound } => {
-                // Kit-scoped (an aura-drop reap): stop exactly this kit's channels; the
-                // ledger entry goes only if it is this kit, so an unrelated hold loop survives.
+                // An aura-drop reap: stop this kit's channels; an unrelated hold loop survives.
                 if hold_loops.get(&entity) == Some(&kit_sound) {
                     hold_loops.remove(&entity);
                 }

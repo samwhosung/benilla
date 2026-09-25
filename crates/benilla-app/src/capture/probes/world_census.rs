@@ -1,16 +1,11 @@
-//! The two exclusive-`World` reflection dumps — the pair of one-shots that answer "what is
-//! resident right now, and what is it made of" by walking the live `World` itself: the bevy_ui
-//! node inventory ([`NodeProbePlugin`]) and the archetype census ([`EntityCensusPlugin`]).
-//! They share the shape (fire once at `t`, take `&mut World`, print with the ubiquitous
-//! plumbing components filtered out) as well as the question.
+//! Two one-shot dumps of the live `World`: the bevy_ui node inventory ([`NodeProbePlugin`]) and
+//! the archetype census ([`EntityCensusPlugin`]), each printed without the plumbing components.
 
 use bevy::prelude::*;
 
-/// The bevy_ui node census (`WOW_NODE_PROBE=<secs>`): once, `t` seconds in, print one line per
-/// live `ComputedNode` entity — resolved rect (logical px, y-down), visibility, and the entity's
-/// full component list — the "who owns this rectangle" instrument for UI drawn OUTSIDE the
-/// FrameXML quad pass (the glue widgets, loading screen, overlays), which `WOW_UI_PROBE`'s quad
-/// dump can't see. Born hunting a phantom gold-bordered box over the mail window's send tab.
+/// `WOW_NODE_PROBE=<secs>`: once, one line per `ComputedNode` entity with its rect (logical px,
+/// y-down), visibility and components: the UI outside the FrameXML quad pass, which
+/// `WOW_UI_PROBE` cannot see.
 pub(crate) struct NodeProbePlugin;
 
 impl Plugin for NodeProbePlugin {
@@ -24,7 +19,7 @@ impl Plugin for NodeProbePlugin {
     }
 }
 
-/// [`NodeProbePlugin`] state: the fire time and the once-latch.
+/// [`NodeProbePlugin`] state.
 #[derive(Resource)]
 struct NodeProbe {
     at: f32,
@@ -45,10 +40,7 @@ fn fire_node_probe(world: &mut World) {
         .iter(world)
         .next()
         .map_or(1.0, bevy::window::Window::scale_factor);
-    // **`UiGlobalTransform`, not `GlobalTransform`.** Bevy moved UI onto its own 2-D transform;
-    // a UI entity no longer carries `GlobalTransform` at all, so the old query matched *nothing*
-    // and this probe answered "0 nodes" — a plausible-looking reading rather than a failure —
-    // for every run since that upgrade (found 2026-08-29, reaching for it to check a caret).
+    // `UiGlobalTransform`: a bevy UI entity carries no `GlobalTransform`.
     let mut q = world.query::<(
         Entity,
         &bevy::ui::ComputedNode,
@@ -59,7 +51,7 @@ fn fire_node_probe(world: &mut World) {
         .iter(world)
         .map(|(e, node, gt, vis)| (e, node.size(), gt.translation, vis.is_none_or(|v| v.get())))
         .collect();
-    // A zero here is now itself the anomaly — the screen has no UI, or the query has rotted again.
+    // Zero nodes is an anomaly: a bare screen or a query that no longer matches.
     if rows.is_empty() {
         warn!("node probe: NO ui nodes matched — the screen is bare, or this probe has rotted");
     }
@@ -70,7 +62,7 @@ fn fire_node_probe(world: &mut World) {
             |it| {
                 it.map(|c| c.name().shortname().to_string())
                     .filter(|n| {
-                        // Drop the ubiquitous plumbing components — the signal is the rest.
+                        // Drop the plumbing components.
                         !matches!(
                             n.as_str(),
                             "Transform"
@@ -98,12 +90,8 @@ fn fire_node_probe(world: &mut World) {
     }
 }
 
-/// The entity census (`WOW_ENTITY_CENSUS=<secs>`, REAL seconds): once, `t` seconds in, print one
-/// line per live archetype — entity count plus its signal components, largest first — and a machine-readable
-/// summary. The "what IS the entity count made of" instrument: the standing HUD reads tens of
-/// thousands of entities, and every per-frame cost that scales with *residency* (0362's
-/// change-tick sweeps, transform propagation, render extraction) is only attributable once
-/// residency itself has names. Born with the cost-ledger campaign.
+/// `WOW_ENTITY_CENSUS=<secs>` (real seconds): once, one line per archetype, largest first, with
+/// its entity count and signal components, then a summary.
 pub(crate) struct EntityCensusPlugin;
 
 impl Plugin for EntityCensusPlugin {
@@ -117,7 +105,7 @@ impl Plugin for EntityCensusPlugin {
     }
 }
 
-/// [`EntityCensusPlugin`] state: the fire time and the once-latch.
+/// [`EntityCensusPlugin`] state.
 #[derive(Resource)]
 struct EntityCensus {
     at: f32,
@@ -127,15 +115,12 @@ struct EntityCensus {
 /// Archetype lines the census prints; everything smaller folds into the summary's `other_n`.
 const ENTITY_CENSUS_ROWS: usize = 60;
 
-/// Signal components shown per archetype line — enough to name what the entities are without
-/// drowning the line in a 30-component render archetype.
+/// Signal components shown per archetype line.
 const ENTITY_CENSUS_COMPS: usize = 14;
 
 fn fire_entity_census(world: &mut World) {
     {
-        // REAL seconds, not virtual: the census is timed to compose with `WOW_LIVE_FPS_AT`
-        // (also real), and virtual time lags real by the load stalls — a virtual-timed one-shot
-        // scheduled "just before sampling" fires after the probe has already exited.
+        // Real seconds, to compose with `WOW_LIVE_FPS_AT`; virtual time lags by the load stalls.
         let time = world.resource::<Time<bevy::time::Real>>().elapsed_secs();
         let probe = world.resource::<EntityCensus>();
         if probe.fired || time < probe.at {
@@ -144,12 +129,7 @@ fn fire_entity_census(world: &mut World) {
     }
     world.resource_mut::<EntityCensus>().fired = true;
 
-    // The anchor split (0732 slice A's premise check). `RigAnchor` leaves are the single largest
-    // archetype in the scene — 53 % of all entities — and slice A's claim is that most of them ride
-    // nothing. "Rides nothing" is directly observable: an anchor whose entity has no `Children` is
-    // hosting no attachment, no emitter, no ribbon, no card. Counted here rather than inferred from
-    // the model's bone sources, because the model says what COULD attach and the world says what
-    // DID.
+    // `RigAnchor`s with no `Children` host nothing: no attachment, emitter, ribbon or card.
     {
         let mut q = world.query_filtered::<Option<&bevy::prelude::Children>, bevy::prelude::With<benilla_world::rig_anim::RigAnchor>>();
         let (mut total, mut childless) = (0u32, 0u32);
@@ -178,14 +158,12 @@ fn fire_entity_census(world: &mut World) {
                 .filter_map(|id| components.get_info(*id))
                 .map(|c| c.name().shortname().to_string())
                 .collect();
-            // Whether this archetype sits in the render-visibility population: bevy's
-            // `check_visibility` sweeps every `ViewVisibility` row once PER ACTIVE CAMERA,
-            // so `vis=y` rows are the ones a second camera (booth) re-bills the frame for.
+            // `vis=y`: bevy's `check_visibility` sweeps these rows once per active camera.
             let in_vis_population = full.iter().any(|n| n == "ViewVisibility");
             let signal: Vec<String> = full
                 .iter()
                 .filter(|n| {
-                    // Drop the ubiquitous plumbing components — the signal is the rest.
+                    // Drop the plumbing components.
                     !matches!(
                         n.as_str(),
                         "Transform"
@@ -199,9 +177,7 @@ fn fire_entity_census(world: &mut World) {
                 })
                 .cloned()
                 .collect();
-            // A bare transform node has no signal left after the filter — and two such
-            // archetypes differing only in plumbing (Children vs not) would print as identical
-            // rows. For those, the plumbing IS the signal: print the full list.
+            // With one signal component or none, the plumbing tells archetypes apart: print it all.
             let names = if signal.len() <= 1 { full } else { signal };
             let shown = names.len().min(ENTITY_CENSUS_COMPS);
             let more = names.len() - shown;

@@ -160,7 +160,7 @@ impl ProbeShield {
 }
 
 /// Whether `user` is a probe account — `probe` followed by digits, the identity every unattended
-/// run logs in with (the `probe` skill). Nothing else is ours to
+/// run logs in with (`docs/CONTRIBUTING.md`, "Running it unattended"). Nothing else is ours to
 /// modify: a player's account is theirs, and a plain test account is not a probe.
 fn is_probe_account(user: &str) -> bool {
     // Byte-wise (a &str slice at 5 would panic mid-char on non-ASCII input; bytes can't).

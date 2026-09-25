@@ -1,33 +1,19 @@
-//! The schedule census (`WOW_SCHED_CENSUS=1`): the structural inventory behind the 1435 band
-//! map's orchestration rows — per schedule, every system with its executor-relevant flags
-//! (non-`Send`, exclusive, has-deferred), for BOTH worlds. Born with decision 1437: the parked
-//! frame pays ~5.4 ms/f of pure scheduling (schedule selves + executor + empty command applies
-//! across ~600 executed systems), and neither consolidation nor executor choices can be argued
-//! about until the population has names and counts.
-//!
-//! Why runtime one-shots instead of a pre-run `Schedule::initialize` walk: bevy removes a
-//! schedule from the `Schedules` resource WHILE it runs (`World::schedule_scope`), so no single
-//! vantage sees everything — and pre-run initialization is the wrong tool twice over
-//! (`Extract` params panic without the runtime-only `MainWorld`, and `Local<impl FromWorld>`
-//! state may read resources Startup hasn't inserted yet). Two vantages per world cover each
-//! other: `Update` and `PostUpdate` in the main world, `ExtractSchedule` and `Render` in the
-//! render app. Only the `Main`/`RenderStartup` runners stay invisible (each is the fixed
-//! one-system runner bevy ships).
+//! `WOW_SCHED_CENSUS=1`: per schedule in both worlds, every system with its executor flags
+//! (non-`Send`, exclusive, has-deferred). Bevy removes a running schedule from `Schedules`
+//! (`World::schedule_scope`), so two vantages per world cover each other: `Update`/`PostUpdate`
+//! in main, `ExtractSchedule`/`Render` in the render app. Only the `Main`/`RenderStartup` runners
+//! stay unseen.
 
 use bevy::prelude::*;
 use bevy::render::{ExtractSchedule, Render, RenderApp};
 
-/// Frames to wait before dumping — deep enough that every schedule has run at least once (the
-/// census reads the live graph, not what a first frame happens to have reached).
+/// The frame to dump at: late enough that every schedule has run once.
 const CENSUS_FRAME: u32 = 10;
 
-/// Frames to wait before the census run exits — the render app runs a frame behind the main
-/// world (pipelined), so give its vantages room past [`CENSUS_FRAME`] before the app closes.
+/// The frame the run exits at; the pipelined render app runs a frame behind [`CENSUS_FRAME`].
 const EXIT_FRAME: u32 = 40;
 
-/// The census instrument. Purely structural — it does not need the world, a server, or a
-/// character: the schedule graph is fixed once the plugins have built, so a login-screen run
-/// answers for every state.
+/// The census; the graph is fixed once plugins build, so a login-screen run answers for all states.
 pub(crate) struct SchedCensusPlugin;
 
 impl Plugin for SchedCensusPlugin {
@@ -36,8 +22,7 @@ impl Plugin for SchedCensusPlugin {
             .add_systems(Update, census_vantage("main", "Update"))
             .add_systems(PostUpdate, census_vantage("main", "PostUpdate"))
             .add_systems(Last, census_exit);
-        // The render app still lives in the main `App` here (pipelining detaches it at cleanup,
-        // after every plugin has built). Its two vantages mirror the main world's pair.
+        // The render app is still a sub-app here; pipelining detaches it at cleanup.
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app
                 .init_resource::<DumpedSchedules>()
@@ -47,13 +32,11 @@ impl Plugin for SchedCensusPlugin {
     }
 }
 
-/// Which schedules this world's earlier vantage already printed — the later vantage adds only
-/// what the earlier one could not see (itself, chiefly).
+/// Schedules this world has printed; the later vantage adds only what the earlier could not see.
 #[derive(Resource, Default)]
 struct DumpedSchedules(std::collections::HashSet<String>);
 
-/// One vantage: an exclusive one-shot that, at [`CENSUS_FRAME`], prints every schedule visible
-/// in `Schedules` that no earlier vantage in this world has printed.
+/// One vantage: at [`CENSUS_FRAME`], prints every visible schedule this world has not printed.
 fn census_vantage(
     world_tag: &'static str,
     vantage: &'static str,
@@ -80,9 +63,8 @@ fn census_vantage(
     }
 }
 
-/// Print one schedule: the tally line, then one line per system. `systems()` errors only on an
-/// uninitialized graph — impossible by [`CENSUS_FRAME`] for a schedule that runs, and a
-/// registered-but-never-run schedule is exactly worth flagging as such.
+/// Prints one schedule's tally, then one line per system. By [`CENSUS_FRAME`] only a schedule that
+/// never ran is uninitialized, and it is flagged.
 fn dump_schedule(
     world_tag: &str,
     vantage: &str,
@@ -129,7 +111,7 @@ fn dump_schedule(
     }
 }
 
-/// Close the run once both worlds have had time to print — the census is its own whole run.
+/// Exits once both worlds have printed.
 fn census_exit(mut frame: Local<u32>, mut exit: MessageWriter<AppExit>) {
     *frame += 1;
     if *frame == EXIT_FRAME {

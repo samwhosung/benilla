@@ -1,58 +1,38 @@
-//! **Vocal UI error speech** — the lines your own character says out loud when the client refuses
-//! something: *"I can't do that yet."*, *"Not enough mana."*, *"Out of range."*.
-//!
-//! One engine function owns this in the reference — `SndInterfacePlayVocalUISound` `0x458250`,
-//! whose **sole caller** is the message dispatcher `CGGameUI::DisplayError 0x496720` — and one
-//! builder fills the table it reads, `0x4580f0`, called once from the local player's world-entry
-//! (`0x5dea50`: race from the descriptor's own byte, sex from `0x5ed5b0`). Both are transcribed
-//! here; the byte-level decode of each, and the shipped-data facts behind it, are in.
+//! Vocal UI error speech: the lines your character says when the client refuses something ("Not
+//! enough mana."). The reference's `SndInterfacePlayVocalUISound` `0x458250`, whose sole caller
+//! is `CGGameUI::DisplayError` `0x496720`, reads a table that `0x4580f0` builds once at the local
+//! player's world entry (`0x5dea50`: race from the descriptor, sex from `0x5ed5b0`).
 //!
 //! ## The table (`0x4580f0` → `[0xb06240]`)
 //!
-//! `2 × 0x44` twelve-byte slots indexed `sex * 0x44 + line`, filled for the player's **race** from
-//! `VocalUISounds.dbc` ([`benilla_formats::VocalUiSound`]). Each slot carries the ordinary kit, the
-//! annoyed kit, and the annoyed kit's variation count — the reference reads that count at build
-//! time through `0x45cda0(kit) + 0x94`, which is the runtime kit record's populated-`File[i]`
-//! counter, i.e. [`benilla_formats::SoundKit::files`]`.len()`.
+//! `2 × 0x44` slots indexed `sex * 0x44 + line`, filled for the player's race from
+//! `VocalUISounds.dbc` ([`benilla_formats::VocalUiSound`]): the ordinary kit, the annoyed kit and
+//! the annoyed kit's variation count (`0x45cda0(kit) + 0x94`, the kit's
+//! [`benilla_formats::SoundKit::files`]`.len()`). Both kits resolve at build time here; the
+//! reference resolves the ordinary one at play time and treats a miss as not played (`0x45cda0`),
+//! so the 281 empty ids of 1 066 stay silent without a warning per refusal.
 //!
-//! **benilla resolves BOTH kits at build time; the reference resolves only the annoyed one there.**
-//! Same answer, and deliberately so: the reference's play core looks the ordinary id up at play
-//! time and treats an unresolvable one as "did not play" (`0x45cda0`'s `cmp ecx,count; jae → NULL`),
-//! whereas [`kit::play_kit_ext`] reports an unknown kit as an **error** — which for a table where
-//! 281 of 1 066 ids are `0`/`-1` would be a warning per refusal rather than the silence the
-//! reference produces. Resolving once, up front, keeps the observable identical and the log clean.
+//! ## The cycle (`0x458250`, [`VocalSpeech::speak`])
 //!
-//! ## The cycle (`0x458250`)
+//! 1. A different line than last time resets the escalation (`0x4582ad`).
+//! 2. If armed, play the annoyed kit at explicit variation `n` (`0, 1, 2, …`; the ordinary line
+//!    uses `-1`, the weighted pool), then advance; if the kit is exhausted or the play refused,
+//!    disarm.
+//! 3. Then attempt the ordinary line anyway: `0x458316` falls through into `0x458324`. The bus-1
+//!    cap of 1 ([`kit::Bus::ERROR_SPEECH`]) refuses it while the annoyed line sounds, which is why
+//!    [`kit::play_kit_ext`] returns whether it played.
+//! 4. An ordinary line that played counts; four in a row of one line arm the escalation
+//!    (`0x458359 cmp eax,4`).
 //!
-//! Transcribed in [`VocalSpeech::speak`], and it is stranger than "play the line":
-//!
-//! 1. A **different** line than last time resets the escalation state (`0x4582ad`).
-//! 2. If escalation is armed, play the **annoyed** kit at variation `n` — an *explicit* index that
-//!    walks `0, 1, 2, …` (the ordinary line uses `-1`, the weighted-random pool). Advance `n`; if
-//!    the kit is exhausted or the play was refused, disarm and reset.
-//! 3. **Then attempt the ordinary line anyway** — there is no early return at `0x458316`, the
-//!    annoyed arm falls straight through into `0x458324`. What stops you hearing both is the
-//!    **bus-1 cap of 1** ([`kit::Bus::ERROR_SPEECH`]): the annoyed line is already holding the
-//!    single slot, so the second attempt is refused at the gate and reports back that it did not
-//!    play. That refusal is why [`kit::play_kit_ext`] returns a bool at all.
-//! 4. On an ordinary line that *did* play, count it; at **four** consecutive plays of the same
-//!    line, arm the escalation and reset the counter (`0x458359 cmp eax,4`).
-//!
-//! **On 5875's data the escalation is inaudible, and that is a fact about the data, not a gap.**
-//! Every one of `VocalUISounds.dbc`'s 1 066 annoyed ids is absent from `SoundEntries.dbc`, so the
-//! variation count is always 0, step 2 always disarms on its first attempt, and step 3 always
-//! plays the ordinary line — pinned by `benilla_formats`'
-//! `the_annoyed_column_resolves_to_nothing_in_this_build`. The cycle is transcribed anyway
-//! because it *is* the mechanism, on the same footing as the dormant `0x800` volume-variation gate
-//! in [`super::kit`].
+//! In this build the escalation is inaudible: none of the 1 066 annoyed ids is in
+//! `SoundEntries.dbc`, so step 2 always disarms and step 3 always plays (`benilla_formats`'
+//! `the_annoyed_column_resolves_to_nothing_in_this_build`).
 //!
 //! ## Gates
 //!
-//! `MasterSoundEffects` **and** `EnableErrorSpeech`, both read before anything else happens
-//! (`0x458264`/`0x45827f`) — so a player with error speech off does not silently advance the
-//! escalation counter either. The second is a real 1.12 CVar (`CVar::Register` at `0x457877`,
-//! default `"1"`) wired to the stock Sound panel's fourth checkbox; [`super::SoundConfig`] carries
-//! it and `crate::cvars` registers it.
+//! `MasterSoundEffects` and `EnableErrorSpeech`, both read before any state changes
+//! (`0x458264`/`0x45827f`). `EnableErrorSpeech` is a 1.12 CVar (`0x457877`, default `"1"`), the
+//! stock Sound panel's fourth checkbox, carried by [`super::SoundConfig`].
 
 use bevy::prelude::*;
 
@@ -65,24 +45,20 @@ use benilla_world::schedule::WorldStage;
 use super::kit::{self, Bus, KitRef, PlayExtras, SoundCategory, SoundKits};
 use super::{SoundConfig, SoundOutput};
 
-/// The message catalog's "**no** error speech" `type_tag` — and, not by coincidence, the table's
-/// width: the reference tests `cmp [row+0xc],0x44` for equality to take the named-cue branch
-/// (`0x49673d`) and `cmp edi,0x44; jge` as a bound on the line id (`0x45829c`), and the shipped
-/// `VocalUISounds.dbc` stops one short at 67. So "the sentinel" and "one past the last line" are
-/// the same number, and this constant is both.
+/// The message catalog's no-speech `type_tag`, and one past the last line: the reference tests
+/// `[row+0xc] == 0x44` for the named-cue branch (`0x49673d`) and bounds the line by `0x44`
+/// (`0x45829c`).
 pub(crate) const NO_SPEECH_TAG: u8 = VOCAL_UI_LINES as u8;
 
-/// How many consecutive plays of one line arm the annoyed escalation — `0x458359 cmp eax,4`.
+/// Consecutive plays of one line that arm the escalation (`0x458359 cmp eax,4`).
 const ESCALATE_AFTER: u32 = 4;
 
-/// One `sex × line` slot of the reference's `[0xb06240]` table, with both kits already resolved
-/// (module doc). A slot with no ordinary kit is silent for that race/sex/line — 281 of the file's
-/// 1 066 ids are `0` or `-1`, and that is what the data says rather than something to fill in.
+/// One `sex × line` slot of `[0xb06240]`, both kits resolved; one with no ordinary kit is silent.
 #[derive(Clone, Copy, Default)]
 struct Slot {
     normal: Option<u32>,
     annoyed: Option<u32>,
-    /// The annoyed kit's variation count, the bound step 2 walks to (`0x4582f0`).
+    /// The bound step 2 walks to (`0x4582f0`).
     annoyed_variations: u32,
 }
 
@@ -90,12 +66,11 @@ struct Slot {
 #[derive(Resource)]
 pub(crate) struct VocalUiSounds(pub(crate) VocalUiSoundCatalog);
 
-/// The built table plus the reference's three escalation globals — `[0x835a40]`
-/// `s_lastPlayedVocalUISound`, `[0xb05ee4]` (armed) and `[0xb05f78]` (the variation counter).
-/// Kept together because `0x4580f0` resets all three when it rebuilds, and so does this.
+/// The table and the escalation globals, `[0x835a40]` `s_lastPlayedVocalUISound`, `[0xb05ee4]`
+/// armed and `[0xb05f78]` the counter, together because `0x4580f0` resets all three.
 #[derive(Resource)]
 pub(crate) struct VocalSpeech {
-    /// The race the table was built for — `None` until the local player's descriptor names one.
+    /// The race the table was built for.
     race: Option<u32>,
     /// `2 * VOCAL_UI_LINES` slots, `sex * VOCAL_UI_LINES + line`.
     table: Vec<Slot>,
@@ -109,8 +84,7 @@ impl Default for VocalSpeech {
         Self {
             race: None,
             table: vec![Slot::default(); 2 * VOCAL_UI_LINES],
-            // The builder's own reset value: `0x458109 mov [0x835a40],0x44` — the sentinel, so the
-            // first line spoken after a rebuild is always "different from last time".
+            // The sentinel (`0x458109`): the first line after a rebuild is always a new line.
             last_line: NO_SPEECH_TAG,
             armed: false,
             variation: 0,
@@ -119,13 +93,8 @@ impl Default for VocalSpeech {
 }
 
 impl VocalSpeech {
-    /// `0x4580f0` — fill the table for one race and reset the escalation state.
-    ///
-    /// Walked **backwards** over the file, which is the reference's own direction (`0x458140`
-    /// counts down): on a duplicate `(race, line)` the lowest-indexed row is the one left
-    /// standing. 5875's file has no duplicate pair, so this is a rule with no live case — kept
-    /// because it costs a `.rev()` and losing it would be a silent divergence if a patch ever
-    /// added one.
+    /// `0x4580f0`: fills the table for one race and resets the escalation. It walks the file
+    /// backwards, as `0x458140` does, so on a duplicate `(race, line)` the lowest row wins.
     fn build(&mut self, race: u32, catalog: &VocalUiSoundCatalog, kits: &SoundKitCatalog) {
         self.table.clear();
         self.table.resize(2 * VOCAL_UI_LINES, Slot::default());
@@ -156,26 +125,25 @@ impl VocalSpeech {
         );
     }
 
-    /// Which race the table currently holds — the rebuild trigger, and what the tests read.
+    /// The race the table holds: the rebuild trigger.
     fn built_for(&self) -> Option<u32> {
         self.race
     }
 
-    /// `0x458250(sex, line)` — the whole cycle (module doc). `play` is the kit player, returning
-    /// whether a channel actually opened; the bus-1 cap living inside it is what makes step 3
-    /// silent while step 2 is sounding.
+    /// `0x458250(sex, line)`, the cycle. `play` returns whether a channel opened; its bus-1 cap
+    /// silences step 3 while step 2 sounds.
     fn speak(&mut self, sex: u32, line: u8, play: &mut dyn FnMut(u32, Option<usize>) -> bool) {
-        // `0x458254`/`0x45825b`: anything but male/female leaves without touching a thing.
+        // `0x458254`/`0x45825b`: anything but male or female leaves at once.
         if sex > 1 {
             return;
         }
-        // `0x45829c cmp edi,0x44; jge` — a signed bound on the line, checked before the state is
-        // touched, so a catalog row carrying the sentinel cannot disturb an escalation in flight.
+        // `0x45829c`: the line bound, before any state changes, so the sentinel cannot disturb an
+        // escalation.
         if usize::from(line) >= VOCAL_UI_LINES {
             return;
         }
-        // `0x4582ad`: a different line resets the escalation. Note the reference stamps
-        // `s_lastPlayedVocalUISound` *unconditionally* below, whether or not anything sounds.
+        // `0x4582ad`: a different line resets the escalation; the last line is stamped whether
+        // or not anything sounds.
         if line != self.last_line {
             self.armed = false;
             self.variation = 0;
@@ -197,8 +165,8 @@ impl VocalSpeech {
             }
         }
 
-        // No early return above this line — `0x458316`'s `jmp` lands on the store, not on the
-        // exit, so the ordinary attempt always happens (module doc step 3).
+        // No early return above: `0x458316` jumps to the store, so the ordinary attempt always
+        // happens.
         if slot.normal.is_some_and(|kit| play(kit, None)) {
             self.variation += 1;
             if self.variation >= ESCALATE_AFTER {
@@ -224,10 +192,8 @@ fn load_vocal_ui_sounds(mut commands: Commands, assets: Option<Res<WorldAssets>>
     }
 }
 
-/// Rebuild the table when the local player's race changes — the reference's world-entry call
-/// (`0x5dea72`), reached here as a state watch rather than an event because benilla's descriptor
-/// arrives incrementally and a character swap is just another race change. Cheap: it does nothing
-/// at all until the race actually moves.
+/// Rebuilds the table when the local player's race changes, the reference's world-entry call
+/// (`0x5dea72`) as a state watch, since the descriptor arrives incrementally.
 fn build_vocal_table(
     mut speech: ResMut<VocalSpeech>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
@@ -239,7 +205,7 @@ fn build_vocal_table(
     };
     let race = self_q.iter().next().and_then(|s| s.0.unit_race());
     let Some(race) = race.map(u32::from) else {
-        return; // no descriptor yet — keep whatever table we have, like the reference does
+        return; // no descriptor yet: keep the table
     };
     if speech.built_for() == Some(race) {
         return;
@@ -247,9 +213,7 @@ fn build_vocal_table(
     speech.build(race, &catalog.0, kits.catalog());
 }
 
-/// Say one error-speech line in the local player's own voice — the app-side entry point
-/// [`super::message`] calls, and the only caller there should ever be (the reference has exactly
-/// one too).
+/// Says one error-speech line in the local player's voice; [`super::message`] is the one caller.
 pub(super) fn speak_line(
     line: u8,
     speech: &mut VocalSpeech,
@@ -260,8 +224,7 @@ pub(super) fn speak_line(
     config: &SoundConfig,
     listener: Vec3,
 ) {
-    // `0x458264`/`0x45827f`: BOTH CVars, ahead of every state write. A player with error speech
-    // off is not merely muted — the escalation counter does not advance for them either.
+    // `0x458264`/`0x45827f`: both CVars, ahead of every state write, so the counter stays put.
     if !config.enabled || !config.error_speech {
         return;
     }
@@ -273,8 +236,7 @@ pub(super) fn speak_line(
             config,
             listener,
             KitRef::Id(kit),
-            // 2D: `0x45ce60` opens through `0x7a5450`, the two-dimensional wrapper. It is your
-            // own voice — no position, no rolloff.
+            // 2D: `0x45ce60` opens through the two-dimensional wrapper `0x7a5450`.
             None,
             SoundCategory::Sfx,
             PlayExtras {
@@ -304,9 +266,7 @@ pub(super) fn plugin(app: &mut App) {
 mod tests {
     use super::*;
 
-    /// A recorder standing in for the kit player, with the **bus-1 cap of 1** modelled the way it
-    /// actually bites: at most one play per `speak` call is admitted, because the reference's cap
-    /// counts a channel that is still sounding and error speech has the bus to itself.
+    /// A stand-in kit player with the bus-1 cap of 1: at most one play per `speak` call.
     #[derive(Default)]
     struct Rec {
         plays: Vec<(u32, Option<usize>)>,
@@ -316,7 +276,7 @@ mod tests {
     impl Rec {
         fn play(&mut self, kit: u32, variant: Option<usize>) -> bool {
             if self.this_call > 0 {
-                return false; // bus 1, cap 1 — the slot is taken
+                return false; // bus 1, cap 1: the slot is taken
             }
             self.this_call += 1;
             self.plays.push((kit, variant));
@@ -345,10 +305,8 @@ mod tests {
         rec.plays[start..].to_vec()
     }
 
-    /// **The 5875 case**: no annoyed audio, so the ordinary line plays every single time and the
-    /// escalation is invisible — the behaviour a player actually gets today. The counter still
-    /// turns over underneath (it arms on the 4th and disarms on the 5th), which is exactly why
-    /// this has to be asserted rather than assumed.
+    /// This build's data: no annoyed audio, so the ordinary line plays every time, though the
+    /// counter still arms on the 4th and disarms on the 5th.
     #[test]
     fn with_no_annoyed_audio_the_ordinary_line_plays_every_time() {
         let mut s = speech_with(Some(1875), None, 0);
@@ -362,10 +320,8 @@ mod tests {
         }
     }
 
-    /// The escalation itself, with audio present: four ordinary plays, then the annoyed variations
-    /// **in file order** (an explicit index, not the random pool), then back to ordinary. The
-    /// ordinary attempt still happens on every annoyed call — the cap is what silences it, and the
-    /// recorder proves only one sound per call comes out.
+    /// With annoyed audio: four ordinary plays, the annoyed variations in file order, then
+    /// ordinary again; one sound per call.
     #[test]
     fn four_of_the_same_line_escalates_then_walks_the_annoyed_variations() {
         let mut s = speech_with(Some(10), Some(20), 2);
@@ -373,21 +329,19 @@ mod tests {
         for i in 0..4 {
             assert_eq!(say(&mut s, &mut rec, 0, 5), vec![(10, None)], "call {i}");
         }
-        // Armed: the annoyed kit, variation 0 then 1 — and nothing else, though the ordinary line
-        // was attempted both times.
+        // Armed: the annoyed kit, variation 0 then 1, the ordinary attempt capped out.
         assert_eq!(say(&mut s, &mut rec, 0, 5), vec![(20, Some(0))]);
         assert_eq!(say(&mut s, &mut rec, 0, 5), vec![(20, Some(1))]);
-        // Exhausted (2 variations): disarm, and the ordinary line is heard again on that very call.
+        // Exhausted: disarm, and the ordinary line plays on that same call.
         assert_eq!(say(&mut s, &mut rec, 0, 5), vec![(10, None)]);
         for _ in 0..3 {
             assert_eq!(say(&mut s, &mut rec, 0, 5), vec![(10, None)]);
         }
-        // …and the cycle comes round again.
+        // The cycle comes round again.
         assert_eq!(say(&mut s, &mut rec, 0, 5), vec![(20, Some(0))]);
     }
 
-    /// A different line resets the escalation — three of one line then a fourth of another does
-    /// not make anybody annoyed (`0x4582ad`).
+    /// A different line resets the escalation (`0x4582ad`).
     #[test]
     fn a_different_line_resets_the_escalation() {
         let mut s = speech_with(Some(10), Some(20), 2);
@@ -396,17 +350,15 @@ mod tests {
             say(&mut s, &mut rec, 0, 5);
         }
         assert_eq!(say(&mut s, &mut rec, 0, 6), vec![(10, None)]);
-        // Back to line 5: the count restarts from zero, so it takes a fresh FOUR — the three
-        // before the interruption bought nothing.
+        // Back to line 5: the count restarts, so it takes a fresh four.
         for i in 0..4 {
             assert_eq!(say(&mut s, &mut rec, 0, 5), vec![(10, None)], "call {i}");
         }
         assert_eq!(say(&mut s, &mut rec, 0, 5), vec![(20, Some(0))]);
     }
 
-    /// A silent slot plays nothing and **does not count** — the reference advances its counter
-    /// only on a play that returned a channel (`0x458344 je`), so a line your race has no audio
-    /// for can never arm the escalation.
+    /// A silent slot plays nothing and does not count: the counter advances only on a play that
+    /// opened a channel (`0x458344 je`).
     #[test]
     fn a_voiceless_line_neither_sounds_nor_counts() {
         let mut s = speech_with(None, Some(20), 2);
@@ -417,8 +369,7 @@ mod tests {
         assert!(!s.armed);
     }
 
-    /// The two front-door refusals, neither of which may disturb state: a sex past female
-    /// (`0x45825b`) and a line at or past the sentinel (`0x45829c`).
+    /// A sex past female (`0x45825b`) and a line at the sentinel (`0x45829c`) leave state alone.
     #[test]
     fn the_bounds_refuse_without_touching_the_escalation() {
         let mut s = speech_with(Some(10), Some(20), 2);
@@ -439,8 +390,7 @@ mod tests {
         assert_eq!(say(&mut s, &mut rec, 0, 5), vec![(20, Some(0))]);
     }
 
-    /// Male and female read **different slots** of one table — the `sex * 0x44` stride, which is
-    /// the whole reason the table is 2 × 0x44 rather than 0x44.
+    /// Male and female read different slots, the `sex * 0x44` stride.
     #[test]
     fn the_sexes_index_different_slots() {
         let mut s = VocalSpeech {
@@ -454,9 +404,8 @@ mod tests {
         assert_eq!(say(&mut s, &mut rec, 1, 0), vec![(1999, None)]);
     }
 
-    /// The table build, on the real shipped DBCs: Human male line 0 is `HumanMale_InventoryFull`,
-    /// the annoyed column comes back empty (1815's dormancy), and a rebuild for another race
-    /// replaces the whole table rather than merging into it. Skips without client data.
+    /// The shipped DBCs: Human male line 0 is `HumanMale_InventoryFull`, no annoyed kit resolves,
+    /// and a rebuild for another race replaces the table.
     #[test]
     fn the_real_table_builds_per_race_and_replaces_on_change() {
         let data = benilla_formats::wow_data_or_skip!();

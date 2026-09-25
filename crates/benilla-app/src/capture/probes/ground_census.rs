@@ -1,43 +1,14 @@
-//! The **under-floor census** (`WOW_GROUND_CENSUS=<secs>[,<every>]`) — the instrument that closes
-//! B197's symptom: *"±half the NPCs in one building sit below the floor"*.
+//! `WOW_GROUND_CENSUS=<secs>[,<every>]`: per ground-clamped body ([`ground_derived`], including a
+//! player the server moves on a spline), whether it sits below the pose the server sent.
 //!
-//! Every reported site of that bug was a picture. A picture cannot say whether a unit is below the
-//! floor **because the server put it there** (then it is the server's ledger) or because *we* pulled
-//! it down off the pose the server sent (then it is ours), and it cannot say whether the floor the
-//! unit belongs on is even collidable from where it stands. Both questions are one line of numbers
-//! per unit:
+//! - `seat`: the server's Z ([`GroundClamped::seat_y`]), before the ground clamp.
+//! - `drop`: `seat − z`, how far the clamp pulled the unit down; `sunk` counts those past
+//!   [`SUNK_YD`].
+//! - `above`: the lowest walkable surface strictly above the feet.
+//! - `terrain`: the MCNK height under it, what the clamp finds before a building's collider loads.
 //!
-//! ```text
-//! UGD 0x…  unit "Stormwind Guard"  z=5.02  seat=9.14  drop=+4.12  terrain=5.02  above=9.07 (+4.05)  spline=0 swim=0
-//! ```
-//!
-//! - **`seat`** is the server's own Z for this unit — the pose the create block / a move packet /
-//!   its spline last wrote ([`GroundClamped::seat_y`]), before the ground clamp had its say.
-//! - **`drop`** is `seat − z`: how far the clamp pulled the unit *below* the server's pose. This is
-//!   the number that names the bug; on a healthy scene it is within a yard either way (the clamp's
-//!   whole job is a small correction), and `sunk` counts the ones past [`SUNK_YD`].
-//! - **`above`** is the lowest walkable surface strictly above the unit's feet, found by walking a
-//!   one-sided down-ray through the stack. A unit with a floor right there and a big `drop` is
-//!   standing under a floor it could be standing on — the exact shape of the report.
-//! - **`terrain`** is the MCNK height under it, which is what the clamp finds when a building's own
-//!   collider has not attached yet.
-//!
-//! Pair it with the checkout's probe identity (the `probe` skill) and a `.go` to the reported spot:
-//!
-//! ```text
-//! WOW_USER=probeN WOW_PASS=pprobeN WOW_CHAR=Probe<n> WOW_NOSOUND=1 \
-//!   WOW_PROBE_CHAT=".go xyz 6558.80 457.23 9.07 1" \
-//!   WOW_GROUND_CENSUS="30,15" WOW_PROBE_EXIT_AT=75 cargo run -q -p benilla
-//! ```
-//!
-//! The repeat form is the load-race half: a census at 30 s and again at 45 s says whether a sunk
-//! unit *stays* sunk once the world has finished arriving, which is what separates a transient from
-//! the ratchet decision 1384 removed.
-//!
-//! It lists exactly the bodies the clamp is responsible for ([`ground_derived`]) — since B357 that
-//! includes a **player the server moves along a spline**, which the `player` tag names. That is the
-//! whole readout for a Playerbots server: a bot mid-path reads `player spline=1` with a small
-//! `drop`, and the bug it closes read the wire Z with no row here at all.
+//! The repeat form tells a transient sink during loading from one that stays. How to run it:
+//! `docs/CONTRIBUTING.md`, "Running it unattended".
 
 use benilla_assets::coords::bevy_to_wow;
 use benilla_protocol::EntityKind;
@@ -51,18 +22,13 @@ use crate::net::{
     SelfPlayer, Spline,
 };
 
-/// A drop past this (yd) counts as **sunk** — the headline count. The clamp's honest corrections are
-/// the small float off a slightly-high wire Z and the little hill a straight spline cuts through;
-/// half a yard is well clear of both and well under a storey.
+/// A drop past this (yd) counts as sunk: clear of the clamp's small corrections, under a storey.
 const SUNK_YD: f32 = 0.5;
 
-/// How far above a unit's feet the stack walk starts looking for the floor it should be on. A
-/// storey and a bit: high enough to clear any building floor a unit could be sunk beneath, low
-/// enough that it doesn't report the roof of an unrelated structure.
+/// Where the stack walk starts above the feet (yd): past one storey, below most roofs.
 const CEILING_YD: f32 = 12.0;
 
-/// Feet-clearance for "strictly above" in the stack walk — below this the surface *is* the one the
-/// unit is standing on, not one above it.
+/// A surface within this of the feet (yd) is the one the unit stands on.
 const ABOVE_EPS: f32 = 0.05;
 
 pub(crate) struct GroundCensusPlugin;
@@ -88,8 +54,7 @@ impl Plugin for GroundCensusPlugin {
     }
 }
 
-/// [`GroundCensusPlugin`] state: when the next census fires, how often after that (`0` = once), and
-/// how far from the body to look.
+/// [`GroundCensusPlugin`] state; `every` of 0 fires once, `radius` from `WOW_GROUND_CENSUS_RADIUS`.
 #[derive(Resource)]
 struct GroundCensus {
     next: f32,
@@ -97,8 +62,7 @@ struct GroundCensus {
     radius: f32,
 }
 
-/// What the census reads per unit: identity, kind, pose, the clamp's memo (the seat), whether a
-/// path is driving it, and whether it is swimming (which exempts it from the clamp).
+/// What the census reads per unit; a swimmer is exempt from the clamp.
 type CensusQuery = (
     &'static Guid,
     &'static NetEntity,
@@ -106,21 +70,17 @@ type CensusQuery = (
     Option<&'static GroundClamped>,
     Option<&'static Spline>,
     Has<CreatureSwimming>,
-    // The subject test's other two inputs, so the listing is exactly the clamp's own population
-    // rather than a second, hand-kept guess at it.
+    // The rest of `ground_derived`'s inputs, so the listing is the clamp's own population.
     Has<Embodied>,
     Has<RemoteMotion>,
 );
 
-/// One census line per [`ground_derived`] body within [`GroundCensus::radius`] of ours, worst drop
-/// first, under a summary line naming the count that matters.
+/// One line per [`ground_derived`] body within [`GroundCensus::radius`], worst drop first, under
+/// a summary line.
 fn fire_ground_census(
     mut probe: ResMut<GroundCensus>,
     time: ProbeClock,
-    // The name each row belongs to. "Which NPC is sunk" is a name question — a guid sends the
-    // reader back to the server's own tables to answer it — and the cache is already warm: it is
-    // asked at first *sight* for every unit that streams in. A `None` is a name still in flight,
-    // never a missing one.
+    // Warm from first sight of every unit; a `None` is a name still in flight.
     names: Res<NameCache>,
     net_commands: Res<NetCommands>,
     world: benilla_world::collision::WorldCollision,
@@ -172,16 +132,13 @@ fn fire_ground_census(
                 "UGD {:#018x} {} {name:?} display={} pos=({:.2},{:.2},{:.2}) z={z:.2} seat={seat:.2} \
                  drop={drop:+.2} terrain={} above={} spline={} swim={}",
                 guid.0,
-                // Which kind this row is: since B357 the listing is not all creatures, and a
-                // player row is the one a Playerbots report is about.
+                // The listing includes spline-driven players.
                 if net.kind == EntityKind::Player {
                     "player"
                 } else {
                     "unit"
                 },
-                // The display id, so a row hands straight to `WOW_CLAMP_TRACE=<display>` — the
-                // per-frame `clmp` readout is filtered by display and nothing else, and a census
-                // row that names only a guid cannot be followed up with it.
+                // The key `WOW_CLAMP_TRACE=<display>` filters its per-frame readout by.
                 net.display_id.unwrap_or(0),
                 wow[0],
                 wow[1],
@@ -194,9 +151,7 @@ fn fire_ground_census(
         ));
     }
     rows.sort_by(|a, b| b.0.total_cmp(&a.0));
-    // A swimmer is EXEMPT from the clamp by design (its wire Z is its swim depth), so its seat is
-    // simply the last Z the clamp saw before it entered the water — a stale memo, not a drop. It
-    // stays in the listing and out of the count.
+    // A swimmer's wire Z is its swim depth and its seat is stale: listed, not counted.
     let sunk = rows
         .iter()
         .filter(|(d, swim, _)| *d > SUNK_YD && !swim)
@@ -220,11 +175,8 @@ fn fire_ground_census(
     }
 }
 
-/// The lowest walkable surface **strictly above** `feet` — the floor a sunk unit should be standing
-/// on. Walks the one-sided down-ray stack from [`CEILING_YD`] overhead: each hit above the feet
-/// becomes the new candidate and the next cast starts just under it, so a unit beneath three
-/// storeys reports the one immediately over its head rather than the roof. `None` when nothing is
-/// overhead — the healthy outdoor case.
+/// The lowest walkable surface strictly above `feet`: casts down from [`CEILING_YD`] overhead,
+/// restarting just under each hit, so the nearest floor overhead wins over the roof.
 fn lowest_surface_above(
     world: &benilla_world::collision::WorldCollision,
     feet: Vec3,
@@ -237,10 +189,8 @@ fn lowest_surface_above(
             break;
         }
         let origin = Vec3::new(feet.x, from, feet.z);
-        // A miss ENDS the walk with what it already has — it never discards it. `?` here read as
-        // "no floor above this unit" for three of B197's four sunk NPCs, whose second cast (from
-        // just under the floor it had already found, down to feet sitting on the terrain) missed
-        // that terrain by a float hair. The instrument's own first finding was its own bug.
+        // A miss ends the walk keeping what it found: a cast can miss the feet's own surface by
+        // a float hair.
         let Some(hit) = world.ray_body(origin, Dir3::NEG_Y, reach) else {
             break;
         };

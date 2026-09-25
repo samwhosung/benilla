@@ -1,6 +1,5 @@
-//! Unit tests for the pure motion kernels — the spline sampler, the dead-reckoning integrator,
-//! the jump ballistics, and the facing turn (each child module's math, exercised together here
-//! like [`super`]'s original single-file block).
+//! Tests for the motion kernels: the spline sampler, dead-reckoning, jump ballistics, the relay
+//! chain, facing and gameobject placement.
 
 use std::time::{Duration, Instant};
 
@@ -31,22 +30,17 @@ fn speeds() -> MoveSpeeds {
 
 #[test]
 fn remote_fall_arc_reports_height_only_on_the_landing_edge() {
-    // Takeoff (grounded → FALLING): snapshot this Z, report nothing yet.
     assert_eq!(fall_arc_step(false, true, None, 100.0), (Some(100.0), None));
-    // Still airborne (FALLING → FALLING): hold the takeoff Z, still nothing.
     assert_eq!(
         fall_arc_step(true, true, Some(100.0), 80.0),
         (Some(100.0), None)
     );
-    // Landing (FALLING → grounded) with a known takeoff: report the fall height (WoW Z up, so
-    // takeoff − landing), and clear the reference.
     assert_eq!(
         fall_arc_step(true, false, Some(100.0), 70.0),
         (None, Some(30.0))
     );
-    // Landing after entering view mid-fall (no takeoff seen): no height reference → no prediction.
+    // Entered view mid-fall: no takeoff, no prediction.
     assert_eq!(fall_arc_step(true, false, None, 70.0), (None, None));
-    // Grounded → grounded: nothing tracked, nothing reported.
     assert_eq!(fall_arc_step(false, false, None, 70.0), (None, None));
 }
 
@@ -67,16 +61,8 @@ fn motion(flags: u32, orientation: f32) -> RemoteMotion {
     }
 }
 
-/// **The observed swimmer's body actually tilts** — the swim body-pitch render law (`0x60a110`,
-/// decision 0464 §1), which shipped in July 2026 with no test of its own and no trace field, so the
-/// only instrument that could contradict it was the director's eye.
-///
-/// The law is [`crate::creature_anim::swim_body_rotation`] and it is now *one* function: this
-/// asserts the observed lane end to end — a relayed `MSG_MOVE_*` carrying `SWIMMING | FORWARD`
-/// and a nose-up pitch lands on [`RemoteMotion::pitch`], and the rotation the extrapolator writes
-/// decomposes back to exactly that pitch about the body's local X, with the yaw untouched and no
-/// roll. Then the three gates that must render LEVEL, because a zero tilt is only correct when
-/// one of them is the reason.
+/// The swim body-pitch render law (`0x60a110`) on a relayed swimmer, and the three cases that
+/// render level.
 #[test]
 fn a_relayed_swimmer_renders_pitched_and_the_gates_render_level() {
     use bevy::ecs::system::RunSystemOnce;
@@ -84,13 +70,12 @@ fn a_relayed_swimmer_renders_pitched_and_the_gates_render_level() {
 
     use crate::creature_anim::swim_body_rotation;
 
-    // What the rotation the pose owners write decomposes back to: (yaw, pitch, roll).
+    // (yaw, pitch, roll).
     let decompose = |flags: u32, pitch: f32, yaw: f32| {
         swim_body_rotation(yaw, flags, pitch).to_euler(EulerRot::YXZ)
     };
 
-    // The relay lands the wire pitch on the component (`apply_move`), and the extrapolator
-    // renders it: a swimmer nose-down 0.6 rad on a 1.2 rad heading.
+    // A swimmer nose-down 0.6 rad on a 1.2 rad heading.
     let mut rm = motion(0, 0.0);
     let mv = super::relay::RelayMove {
         wire_ms: 0,
@@ -103,8 +88,7 @@ fn a_relayed_swimmer_renders_pitched_and_the_gates_render_level() {
         transport: None,
         verb: benilla_protocol::RelayVerb::Pose,
     };
-    // Through the real arrival path, not a hand-set field: `apply_move` is what the relay and
-    // the queue drain both go through, so this is the seam that would drop the pitch.
+    // Through `apply_move`, the seam the relay and the queue drain share.
     let mut world = bevy::prelude::World::new();
     world.init_resource::<bevy::ecs::message::Messages<crate::creature_anim::HardLanding>>();
     let e = world.spawn_empty().id();
@@ -134,13 +118,9 @@ fn a_relayed_swimmer_renders_pitched_and_the_gates_render_level() {
     );
     assert!(roll.abs() < 1e-5, "a swimmer never banks: {roll}");
 
-    // Nose-UP is the opposite sign through the same axis — the two must not collapse.
     let (_, up, _) = decompose(rm.flags, 0.6, 0.0);
     assert!((up - 0.6).abs() < 1e-5, "nose-up 0.6 rad renders: {up}");
 
-    // The three LEVEL gates. Each is a *correct* zero, which is exactly why the trace reports
-    // the reported pitch beside the rendered one — otherwise they are indistinguishable from a
-    // swimmer whose pitch never arrived.
     for (name, flags) in [
         ("an idle floater", move_flags::SWIMMING),
         (
@@ -158,13 +138,12 @@ fn a_relayed_swimmer_renders_pitched_and_the_gates_render_level() {
 
 #[test]
 fn swim_dead_reckon_folds_the_pitch_into_the_travel() {
-    // A swimmer's wire pitch folds into the travel direction the way the client's swim velocity
-    // basis does (`0x7c5880`): vertical sin(pitch)·swim speed, horizontal scaled by cos(pitch).
+    // `0x7c5880`: vertical sin(pitch) * swim speed, horizontal scaled by cos(pitch).
     let pitch = 0.5_f32;
     let mut rm = motion(move_flags::SWIMMING | move_flags::FORWARD, 0.0);
     rm.pitch = pitch;
     let (pos, _, vertical, speed) = rm.advance(speeds(), 1.0);
-    // Facing 0 = WoW +X; swim speed 4.0 for 1 s.
+    // Facing +X, swim speed 4.0 for 1 s.
     assert!(
         (pos[0] - 4.0 * pitch.cos()).abs() < 1e-4,
         "horizontal shrinks by cos(pitch): {}",
@@ -181,7 +160,6 @@ fn swim_dead_reckon_folds_the_pitch_into_the_travel() {
     );
     assert!((speed - 4.0).abs() < 1e-5, "anim rate reads the 3D speed");
 
-    // Level swim (pitch 0) stays flat; an idle floater (no direction bits) doesn't drift.
     let level = motion(move_flags::SWIMMING | move_flags::FORWARD, 0.0);
     let (pos, ..) = level.advance(speeds(), 1.0);
     assert_eq!(pos[2], 0.0);
@@ -194,29 +172,26 @@ fn swim_dead_reckon_folds_the_pitch_into_the_travel() {
 #[test]
 fn resolve_facing_angle_spot_and_target() {
     let none = |_g: u64| None;
-    // Angle is verbatim.
     assert_eq!(
         resolve_facing(MonsterMoveFacing::Angle(1.25), [0.0; 3], none),
         Some(1.25)
     );
-    // Spot due WoW +X (north) from the unit → orientation 0.
+    // WoW +X is north: orientation 0.
     assert_eq!(
         resolve_facing(MonsterMoveFacing::Spot([5.0, 0.0, 0.0]), [0.0; 3], none),
         Some(0.0)
     );
-    // Spot due WoW +Y (west) → orientation +π/2.
+    // WoW +Y is west: orientation +pi/2.
     assert_eq!(
         resolve_facing(MonsterMoveFacing::Spot([0.0, 5.0, 0.0]), [0.0; 3], none),
         Some(std::f32::consts::FRAC_PI_2)
     );
-    // Target resolves through the lookup; the bearing uses the unit's own position as origin.
     assert_eq!(
         resolve_facing(MonsterMoveFacing::Target(0x42), [1.0, 1.0, 0.0], |g| {
             (g == 0x42).then_some([1.0, 6.0, 0.0])
         }),
         Some(std::f32::consts::FRAC_PI_2)
     );
-    // None, an unknown target, and a coincident point all yield no facing (never a spin-to-0).
     assert_eq!(
         resolve_facing(MonsterMoveFacing::None, [0.0; 3], none),
         None
@@ -238,7 +213,6 @@ fn resolve_facing_angle_spot_and_target() {
 
 #[test]
 fn remote_motion_runs_forward_along_facing() {
-    // Facing WoW +X (orientation 0), moving forward for 1s at run 7 → +7 in X, no Y, no turn.
     let (pos, o, _vz, speed) = motion(move_flags::FORWARD, 0.0).advance(speeds(), 1.0);
     assert!((pos[0] - 7.0).abs() < 1e-3, "forward advances +X: {pos:?}");
     assert!(pos[1].abs() < 1e-3, "no lateral drift: {pos:?}");
@@ -248,7 +222,6 @@ fn remote_motion_runs_forward_along_facing() {
 
 #[test]
 fn remote_motion_backpedal_uses_run_back_speed() {
-    // Facing +X, BACKWARD with no forward override → moves −X at the slower run-back speed.
     let (pos, _o, _vz, speed) = motion(move_flags::BACKWARD, 0.0).advance(speeds(), 1.0);
     assert!(
         (pos[0] + 4.5).abs() < 1e-3,
@@ -257,12 +230,8 @@ fn remote_motion_backpedal_uses_run_back_speed() {
     assert_eq!(speed, 4.5);
 }
 
-/// **A walking remote is a walking remote in every direction**. This block used to
-/// test the backpedal ahead of the walk bit, so an observed player who toggled walk and pressed S
-/// extrapolated at run-back speed (4.5) — fast enough to clear the `> 2× walkSpeed` boundary and
-/// play the *run* clip while its owner walked. The bytes take the walk arm (`0x7c4d11` →
-/// `0x7c4d4d`) before the run arm's backward min (`0x7c4d1d`), so both directions are
-/// `min(walk, run)` = 2.5.
+/// The walk arm (`0x7c4d11` to `0x7c4d4d`) comes before the run arm's backward min (`0x7c4d1d`),
+/// so a walk is `min(walk, run)` in both directions.
 #[test]
 fn a_walking_remote_backpedals_at_walk_speed_not_run_back() {
     let s = speeds();
@@ -281,10 +250,10 @@ fn a_walking_remote_backpedals_at_walk_speed_not_run_back() {
         "…and a WALKING backpedal is still 2.5, not run_back's 4.5: {pos:?}"
     );
     assert_eq!(speed, 2.5);
-    // The control: without the walk bit the same press is the run-back min, unchanged.
+    // Without the walk bit, the run-back min.
     let (_pos, _o, _vz, speed) = motion(move_flags::BACKWARD, 0.0).advance(s, 1.0);
     assert_eq!(speed, 4.5);
-    // …and swimming still pre-empts the walk bit entirely — there is no swim-walk.
+    // Swimming pre-empts the walk bit.
     let (_pos, _o, _vz, speed) = motion(
         move_flags::FORWARD | move_flags::SWIMMING | move_flags::WALK_MODE,
         0.0,
@@ -295,9 +264,7 @@ fn a_walking_remote_backpedals_at_walk_speed_not_run_back() {
 
 #[test]
 fn remote_motion_swim_backpedal_takes_min_of_the_swim_pair() {
-    // The byte law (`0x7c4c90`'s backward arms): backward speed is
-    // `min(back, forward)` for both pairs — the plain back speed whenever it's the slower
-    // (always, at vanilla values), clamped if a server force-sets it above the forward speed.
+    // `0x7c4c90`'s backward arms: `min(back, forward)` for both pairs.
     let mut s = speeds();
     s.swim_back = 2.5;
     let (pos, _o, _vz, speed) =
@@ -307,7 +274,7 @@ fn remote_motion_swim_backpedal_takes_min_of_the_swim_pair() {
         "swim backpedal advances −X by swim_back: {pos:?}"
     );
     assert_eq!(speed, 2.5);
-    s.swim_back = 9.0; // above forward swim (4.0) — the min clamps to swim
+    s.swim_back = 9.0; // above forward swim (4.0)
     let (_pos, _o, _vz, speed) =
         motion(move_flags::SWIMMING | move_flags::BACKWARD, 0.0).advance(s, 1.0);
     assert_eq!(
@@ -318,7 +285,7 @@ fn remote_motion_swim_backpedal_takes_min_of_the_swim_pair() {
 
 #[test]
 fn remote_motion_strafe_left_moves_90deg_left() {
-    // Facing +X (north), strafe-left is +90° → +Y (west in WoW), at run speed.
+    // Facing +X (north), strafe-left is +Y (west), at run speed.
     let (pos, o, _vz, _s) = motion(move_flags::STRAFE_LEFT, 0.0).advance(speeds(), 1.0);
     assert!(
         (pos[1] - 7.0).abs() < 1e-3,
@@ -330,7 +297,6 @@ fn remote_motion_strafe_left_moves_90deg_left() {
 
 #[test]
 fn remote_motion_turn_in_place_rotates_facing_only() {
-    // TURN_LEFT with no translation: facing rotates by +turn_rate·dt; no position change, speed 0.
     let (pos, o, _vz, speed) = motion(move_flags::TURN_LEFT, 0.0).advance(speeds(), 0.5);
     assert!(
         (o - std::f32::consts::FRAC_PI_2).abs() < 1e-3,
@@ -354,8 +320,7 @@ fn remote_motion_stationary_when_no_move_flags() {
 
 #[test]
 fn jump_seed_derives_velocity_and_clamps() {
-    // The wire zspeed is DOWN-positive (a rising jump is negative — VERIFIED, the real client sends
-    // -7.955547): the take-off UP-speed is `-zspeed`. Horizontal = (cos,sin)·xyspeed (world XY).
+    // The wire zspeed is down-positive: the 1.12 client sends -7.955547 for a rising jump.
     let j = JumpInfo {
         zspeed: -7.955_547,
         cos_angle: 1.0,
@@ -371,27 +336,23 @@ fn jump_seed_derives_velocity_and_clamps() {
         (xy[0] - 7.0).abs() < 1e-3 && xy[1].abs() < 1e-3,
         "horizontal +X: {xy:?}"
     );
-    // Mid-fall (1s in): up-speed = -zspeed − g·t (now negative, descending).
+    // 1 s in: -zspeed - g * t.
     let (vz1, _) = jump_seed(Some(j), 1000, false);
     assert!(
         (vz1 - (7.955_547 - GRAVITY)).abs() < 1e-3,
         "vertical decays by gravity: {vz1}"
     );
-    // A long fall is clamped to terminal velocity.
     let (vzt, _) = jump_seed(Some(j), 10_000, false);
     assert!(
         (vzt + TERMINAL_VELOCITY).abs() < 1e-3,
         "clamped to −terminal: {vzt}"
     );
-    // A non-jumping packet → grounded: no vertical, no horizontal freeze.
     assert_eq!(jump_seed(None, 0, false), (0.0, [0.0, 0.0]));
 }
 
 #[test]
 fn remote_motion_jump_is_a_parabola_not_flag_walking() {
-    // Airborne (JUMPING) with a frozen +X launch of 7 yd/s and +Z 7.955547 yd/s. Even though the
-    // FORWARD flag is set, the horizontal is the *frozen* launch (not run speed), and the height
-    // follows the arc under gravity — the launch played out locally, not flag-driven walking.
+    // FORWARD is set, but the horizontal is the frozen 7 yd/s launch, not run speed.
     let mut rm = motion(move_flags::FALLING | move_flags::FORWARD, 0.0);
     rm.vertical_velocity = 7.955_547;
     rm.jump_xy_vel = [7.0, 0.0];
@@ -401,12 +362,7 @@ fn remote_motion_jump_is_a_parabola_not_flag_walking() {
         "horizontal coasts at the frozen 7 yd/s: {pos:?}"
     );
     assert!(pos[1].abs() < 1e-3, "no lateral drift: {pos:?}");
-    // **The analytic height, `v₀·t − ½g·t²`**. This asserted `v₀·t` until the
-    // airborne-integrator round — explicit Euler, moving the whole step at the START-of-step speed
-    // with no gravity in the displacement at all, which over this 0.5 s step is 3.98 yd against a
-    // true 1.57. The local mover had the mirror-image error in the other direction. Both now run
-    // the one exact step ([`crate::player::mover::fall_step`]), so this is the closed form and it
-    // holds at any `dt`.
+    // The closed form `v0 * t - g * t^2 / 2`, exact at any `dt`.
     let analytic = 7.955_547 * 0.5 - 0.5 * GRAVITY * 0.5 * 0.5;
     assert!(
         (pos[2] - analytic).abs() < 1e-3,
@@ -425,7 +381,7 @@ fn remote_motion_jump_is_a_parabola_not_flag_walking() {
 
 #[test]
 fn spline_interpolates_constant_speed_and_faces_travel() {
-    // Two legs: 10 yd east (+X), then 10 yd north-ish (+Y), over 4s total (constant speed → 2s/leg).
+    // Two 10 yd legs over 4 s: 2 s each at constant speed.
     let start = Instant::now();
     let s = Spline {
         deck: None,
@@ -465,8 +421,7 @@ fn spline_interpolates_constant_speed_and_faces_travel() {
 
 #[test]
 fn spline_travel_pitch_is_the_segment_climb_angle() {
-    // A 45° climbing leg (10 yd east, 10 yd up) reports pitch asin(dz/len) = π/4 (+up) — the
-    // observed-mover pitch rule `asin(dir.z)` the swimming-creature body pitch renders.
+    // A 45 degree climb reports pitch `asin(dir.z)` = pi/4, up positive.
     let start = Instant::now();
     let s = Spline {
         deck: None,
@@ -487,8 +442,6 @@ fn spline_travel_pitch_is_the_segment_climb_angle() {
 
 #[test]
 fn monster_move_carries_every_waypoint() {
-    // The whole decoded polyline rides into the spline — a curved patrol keeps its corners, not a
-    // straight start→endpoint collapse. `sample` (tested above) then walks all of them constant-speed.
     let path = vec![
         [0.0, 0.0, 0.0],
         [10.0, 0.0, 0.0],
@@ -512,26 +465,21 @@ fn monster_move_carries_every_waypoint() {
     );
 }
 
-/// **`MSG_MOVE_TIME_SKIPPED` advances the chain's wire clock and nothing else**.
-/// The whole of the reference's handler is `[CMovement+0xac] += lag` (`0x603b40` → `0x61ab90`),
-/// and `+0xac` is this chain's `last_wire_ms`. The property that matters is downstream: after the
-/// skip, the mover's next packet — whose stamp is `lag` further on than it would otherwise have
-/// been — must schedule as though nothing unusual happened. Drop the skip and that same packet
-/// buys `lag` ms of extra `wire_delta` and fires that much late.
+/// `MSG_MOVE_TIME_SKIPPED` is `[CMovement+0xac] += lag` (`0x603b40` to `0x61ab90`): the next
+/// packet schedules as if nothing were skipped.
 #[test]
 fn a_reported_skip_keeps_the_relay_chain_level_with_the_sender() {
     let step = |chain: &mut RelayChain, wire_ms: u32, now_ms: f64| {
         chain.schedule(wire_ms, now_ms, 0, true)
     };
-    // Two chains fed identically, except that one is told about the sender's 300 ms skip.
+    // Two chains, one told about the sender's 300 ms skip.
     let (mut told, mut untold) = (RelayChain::default(), RelayChain::default());
     step(&mut told, 10_000, 0.0);
     step(&mut untold, 10_000, 0.0);
 
     told.skip_time(300);
 
-    // The sender's next packet: 100 ms of real play later, but its stamp has ALSO carried the
-    // 300 ms it skipped — so the wire step is 400 while only 100 ms of our clock passed.
+    // 100 ms later on our clock, but the stamp carries the skip too: a wire step of 400.
     let a = step(&mut told, 10_400, 100.0);
     let b = step(&mut untold, 10_400, 100.0);
     assert!(
@@ -546,8 +494,6 @@ fn a_reported_skip_keeps_the_relay_chain_level_with_the_sender() {
     );
 }
 
-/// A skip for a mover whose chain has never seen a packet is inert: there is no reference stamp
-/// to advance, and the first real packet seeds both cells off itself.
 #[test]
 fn a_skip_before_the_first_packet_changes_nothing() {
     let mut seeded = RelayChain::default();
@@ -562,7 +508,6 @@ fn a_skip_before_the_first_packet_changes_nothing() {
 
 #[test]
 fn monster_move_flying_spline_is_not_grounded() {
-    // A FLYING path keeps the server's Z — the ground-clamp must leave it alone.
     let s = monster_move_spline(
         vec![[0.0, 0.0, 0.0], [10.0, 0.0, 50.0]],
         0,
@@ -621,13 +566,10 @@ fn monster_move_without_a_travelable_path_clears_the_spline() {
     );
 }
 
-/// Flags that make the chain treat a mover as mid-motion (`0x20ff`'s FORWARD bit is enough).
+/// Any `0x20ff` bit makes the chain treat a mover as mid-motion.
 const MOVING: u32 = move_flags::FORWARD;
 
-/// **The headline property** (the reference's `0x618c30`): while a mover is moving,
-/// replay is paced by the *sender's* stamps — `fire = prev fire + wire step` — so however the packets
-/// clumped in flight, they replay at the spacing the stamps carry. Here four 500 ms-apart stamps
-/// arrive at 0 / 520 / 1450 / 1460 ms (one late, then a two-packet burst) and still fire 500 ms apart.
+/// `0x618c30`: stamps 500 ms apart arriving late and in a burst still fire 500 ms apart.
 #[test]
 fn relay_chain_replays_on_the_senders_cadence() {
     let mut chain = RelayChain::default();
@@ -643,9 +585,8 @@ fn relay_chain_replays_on_the_senders_cadence() {
     );
 }
 
-/// The chain's two seeds and its guards: the first packet anchors both cells and fires at arrival; a
-/// stale/duplicate stamp contributes no step (`@0x618cb8`'s `jle`); and the server's `u32` ms clock
-/// wrapping mid-session is just another forward step.
+/// The first packet fires at arrival, a stale stamp adds no step (`@0x618cb8`), and the `u32`
+/// clock's wrap is a forward step.
 #[test]
 fn relay_chain_seeds_holds_stale_stamps_and_survives_the_clock_wrap() {
     let mut chain = RelayChain::default();
@@ -654,8 +595,7 @@ fn relay_chain_seeds_holds_stale_stamps_and_survives_the_clock_wrap() {
         4_000.0,
         "first packet: fire at arrival, whatever the server's clock reads"
     );
-    // A re-sent / out-of-order stamp: no forward step, so the chain doesn't advance past the
-    // previous fire (and the reference stamp is left alone — the next real step measures from it).
+    // Re-sent and out-of-order stamps; the next step measures from the last that counted.
     assert_eq!(chain.schedule(7_000, 4_100.0, MOVING, true), 4_000.0);
     assert_eq!(chain.schedule(6_900, 4_200.0, MOVING, true), 4_000.0);
     assert_eq!(
@@ -663,7 +603,7 @@ fn relay_chain_seeds_holds_stale_stamps_and_survives_the_clock_wrap() {
         4_300.0,
         "the next forward stamp steps 300 ms from the last one that counted"
     );
-    // The wrap: 150 is 251 ms after u32::MAX − 100 on a wrapping ms clock.
+    // 150 is 251 ms after u32::MAX - 100.
     let mut chain = RelayChain::default();
     chain.schedule(u32::MAX - 100, 0.0, MOVING, true);
     assert_eq!(
@@ -673,36 +613,20 @@ fn relay_chain_seeds_holds_stale_stamps_and_survives_the_clock_wrap() {
     );
 }
 
-/// **What the chain would do with a server-authored SELF move** — the measurement decision 0725's
-/// inline apply rests on, rather than an assertion about it. The reference has one move machine and
-/// routes a self-addressed `MSG_MOVE_*` (a GM `.go forward`, a `.cheat fly` toggle, an anticheat
-/// snap-back) through this same chain, so the honest question is what fire-time it hands one.
-///
-/// Two arms, and the second is the one that matters. **Fresh chain → arrival**: the local mover's
-/// chain is fed by these packets and nothing else, and in ordinary play none arrive at all, so the
-/// first one is a seed and fires immediately. **Seeded chain → the sender's cadence, held**: once
-/// there are stamps to pace against, a packet that arrives *earlier* than the previous fire plus
-/// the wire step is deliberately delayed to preserve the spacing the stamps carry. That is the
-/// chain's headline property working exactly as designed — and it is the property benilla's self
-/// arm skips, because reproducing the "cadence" between one GM command and the next buys nothing
-/// while delaying a correction to our own pose.
-///
-/// The stamps are vmangos's own: `SetAsServerSide` writes a fresh `WorldTimer::getMSTime()` into
-/// `stime`, so the wire steps track the real time between the commands.
+/// What the reference's chain does with a server-authored self move, which benilla applies at
+/// once: the first fires at arrival, a later early one is held to the cadence. The stamps are
+/// server time (vmangos `MovementInfo.h:208`).
 #[test]
 fn the_chain_paces_a_server_authored_self_move_and_would_hold_an_early_one() {
     let mut chain = RelayChain::default();
-    // Standing still, nothing queued — the state a GM command finds us in.
     assert_eq!(
         chain.schedule(1_000, 0.0, 0, true),
         0.0,
         "the first server-authored move seeds the chain and fires at arrival"
     );
-    // 30 s later, arriving 140 ms behind the chain's pacing: the pacing law says fire at arrival
-    // (a late packet is already overdue), and the lateness enters the window.
+    // 30 s later, 140 ms late: fires at arrival.
     assert_eq!(chain.schedule(31_000, 30_140.0, 0, true), 30_140.0);
-    // 30 s later again, arriving 90 ms *ahead* of the pacing. The chain holds it back to keep the
-    // sender's spacing — so the reference would apply this one 90 ms after it landed.
+    // 30 s later again, 90 ms early: held 90 ms.
     assert_eq!(
         chain.schedule(61_000, 60_050.0, 0, true),
         60_140.0,
@@ -710,38 +634,31 @@ fn the_chain_paces_a_server_authored_self_move_and_would_hold_an_early_one() {
     );
 }
 
-/// The de-jitter buffer is re-sized **only** on a standing mover with an empty queue (`@0x618ce4` /
-/// `@0x618cf3`), and it is sized by the window's worst lateness (`0x618b50`) — then held, not
-/// re-charged: the ring stores lateness *relative to the base*, so a spike already absorbed doesn't
-/// buy a second helping of buffer on the next idle packet.
+/// Only a standing mover with an empty queue re-bases (`@0x618ce4`, `@0x618cf3`), by the window's
+/// worst lateness (`0x618b50`), and an absorbed spike is not charged again.
 #[test]
 fn relay_chain_rebases_the_buffer_only_when_idle_and_unqueued() {
-    // A 200 ms-late packet enters the window while the mover is moving: no re-base, no buffer.
+    // A packet 200 ms late while moving.
     let mut chain = RelayChain::default();
     chain.schedule(0, 0.0, MOVING, true);
     assert_eq!(chain.schedule(500, 700.0, MOVING, true), 500.0);
-    // Still moving when the next one lands: the chain stays glued to the sender's cadence.
     let mut moving = chain.clone();
     assert_eq!(
         moving.schedule(1000, 1000.0, MOVING, true),
         1000.0,
         "mid-motion: the 200 ms spike buys no buffer"
     );
-    // The same packet on a mover that has come to a stop with nothing queued: NOW the chain
-    // re-bases, and the buffer it takes is exactly the window's worst lateness.
     let mut idle = chain.clone();
     assert_eq!(
         idle.schedule(1000, 1000.0, 0, true),
         1200.0,
         "idle + empty: re-based by the window max (200 ms late)"
     );
-    // ...and the next idle packet holds that buffer rather than charging the spike again.
     assert_eq!(
         idle.schedule(1500, 1500.0, 0, true),
         1700.0,
         "the absorbed spike is not re-charged: still 200 ms of lead"
     );
-    // A queued event blocks the re-base even when the mover is idle.
     let mut queued = chain.clone();
     assert_eq!(
         queued.schedule(1000, 1000.0, 0, false),
@@ -750,28 +667,24 @@ fn relay_chain_rebases_the_buffer_only_when_idle_and_unqueued() {
     );
 }
 
-/// The reference's skew clamp (`@0x618d0d`/`@0x618d49`): a fire never lands more than 1000 ms after
-/// its packet's arrival, nor more than 500 ms before it.
+/// The skew clamp (`@0x618d0d`, `@0x618d49`): a fire lands within 500 ms before and 1000 ms after
+/// arrival.
 #[test]
 fn relay_chain_holds_the_offset_inside_the_reference_clamp() {
-    // A 2 s wire step delivered 100 ms after the last fire would schedule 1.9 s out — capped.
+    // A 2 s wire step 100 ms after the last fire would be 1.9 s out.
     let mut chain = RelayChain::default();
     chain.schedule(0, 0.0, MOVING, true);
     assert_eq!(chain.schedule(2000, 100.0, MOVING, true), 1100.0);
-    // A stalled sender (no forward step) whose packet lands 4 s after the last fire would schedule
-    // 4 s in the past — floored at arrival − 500 ms, which is due-on-arrival either way.
+    // A stalled sender 4 s after the last fire would be 4 s in the past.
     let mut chain = RelayChain::default();
     chain.schedule(0, 1000.0, MOVING, true);
     assert_eq!(chain.schedule(0, 5000.0, MOVING, true), 4500.0);
 }
 
-/// Under a scripted jitter pattern — a steady stream, a stalled tail, a catch-up burst, an idle
-/// resync, then motion again — the chain stays well-formed: fire-times never go backwards (which is
-/// what lets the queue be a plain FIFO with no re-sort), and the lead over arrival stays inside the
-/// reference's clamp.
+/// Fire-times never go backwards, which lets the queue be a plain FIFO.
 #[test]
 fn relay_chain_stays_monotone_and_bounded_under_scripted_jitter() {
-    // (wire stamp, arrival, moving?) — 500 ms stamps throughout; the arrivals are the abuse.
+    // (wire stamp, arrival, moving): 500 ms stamps, jittered arrivals.
     let script: [(u32, f64, bool); 14] = [
         (500, 100.0, true),    // first packet
         (1000, 600.0, true),   // steady
@@ -805,21 +718,18 @@ fn relay_chain_stays_monotone_and_bounded_under_scripted_jitter() {
     }
 }
 
-/// The pre-fire reconcile lerp (the reference's `0x619090`/`0x6191c0`): an armed
-/// correction converges linearly in time and lands exactly on the event position at fire-time; a
-/// sub-tolerance prediction disagrees with nothing and the pose is untouched; Z joins the arm
-/// test only while swimming.
+/// The pre-fire reconcile (`0x619090`, `0x6191c0`): Z joins the arm test only while swimming.
 #[test]
 fn reconcile_lerp_lands_on_the_event_at_its_fire_time() {
     let target = [10.0, 0.0, 0.0];
-    // Five 100 ms frames toward a fire 500 ms out: linear-in-time convergence, exact landing.
+    // Five 100 ms frames toward a fire 500 ms out.
     let mut pos = [0.0, 0.0, 0.0];
     for i in 1..=5 {
         let remaining_after = 0.5 - 0.1 * i as f32;
         pos = reconcile_lerp(pos, pos, target, false, 0.1, remaining_after);
     }
     assert!((pos[0] - 10.0).abs() < 1e-4, "landed on the event: {pos:?}");
-    // Prediction already agrees (within the 0.0278-yd tolerance): no correction at all.
+    // Within the 0.0278 yd tolerance.
     let held = reconcile_lerp(
         [5.0, 5.0, 0.0],
         [10.0, 0.01, 0.0],
@@ -829,7 +739,6 @@ fn reconcile_lerp_lands_on_the_event_at_its_fire_time() {
         0.4,
     );
     assert_eq!(held, [5.0, 5.0, 0.0], "sub-tolerance miss arms nothing");
-    // A Z-only miss arms only while swimming (the reference's 2D-vs-3D flag split).
     let dry = reconcile_lerp(
         [0.0; 3],
         [10.0, 0.0, 1.0],
@@ -843,42 +752,35 @@ fn reconcile_lerp_lands_on_the_event_at_its_fire_time() {
     assert_ne!(wet, [0.0; 3], "swimming: Z arms the correction");
 }
 
-/// The pre-fire facing interp (the reference's `0x618f80` ω + `0x7c4f30` integrate — the only
-/// smoothed facing path a remote has): linear-in-time rotation landing exactly on the event's
-/// facing at fire-time, always the short way around the ±π fold, with a dead-zone for a
-/// negligible turn.
+/// The pre-fire facing interp (`0x618f80`, `0x7c4f30`) takes the short way round.
 #[test]
 fn facing_lerp_turns_the_short_way_and_lands_at_fire_time() {
     use std::f32::consts::TAU;
-    // Five 100 ms frames toward a fire 500 ms out: lands exactly on the event facing.
+    // Five 100 ms frames toward a fire 500 ms out.
     let mut o = 0.0f32;
     for i in 1..=5 {
         let remaining_after = 0.5 - 0.1 * i as f32;
         o = facing_lerp(o, 1.5, 0.1, remaining_after);
     }
     assert!((o - 1.5).abs() < 1e-4, "landed on the event facing: {o}");
-    // The ±π fold: from 0.1 toward 6.2 (≈ −0.083 the short way) the first frame must rotate
-    // NEGATIVE (through 0), never the ~6.1-rad long way.
+    // From 0.1 toward 6.2, about -0.083 the short way, through 0.
     let stepped = facing_lerp(0.1, 6.2, 0.1, 0.4);
     assert!(
         stepped < 0.1 && stepped > 6.2 - TAU,
         "short way around: {stepped}"
     );
-    // A sub-dead-zone delta isn't worth turning for.
     let held = facing_lerp(1.0, 1.0 + 1.0e-8, 0.1, 0.4);
     assert_eq!(held, 1.0, "dead-zone: negligible turn skipped");
 }
 
-/// The frame loop as [`crate::net`] chains it: `apply_net_updates` routes each arriving packet
-/// (applied at arrival, or queued), then `drain_pending_moves` empties everything due — apply
-/// **before** drain, both on the same frame clock. Returns the order packets were actually applied
-/// in, tagged by their `fall_time`, plus the flags left on the unit at the end.
+/// The frame loop as [`crate::net`] chains it, arrival before drain on one clock; returns the
+/// applied order by `fall_time` and the final flags.
 fn replay_frames(script: &[(u32, f64, u32)]) -> (Vec<u32>, u32) {
     use super::relay::{PendingMove, RelayMove};
     let mut rm = motion(MOVING, 0.0);
     let mut applied = Vec::new();
     let apply = |rm: &mut RemoteMotion, mv: &RelayMove, applied: &mut Vec<u32>| {
-        rm.flags = mv.flags; // the one bit of `apply_move` this ordering question turns on
+        rm.flags = mv.flags; // the one part of `apply_move` the ordering needs
         applied.push(mv.fall_time);
     };
     for (id, &(wire_ms, arrival_ms, flags)) in script.iter().enumerate() {
@@ -889,7 +791,7 @@ fn replay_frames(script: &[(u32, f64, u32)]) -> (Vec<u32>, u32) {
             orientation: 0.0,
             flags,
             pitch: 0.0,
-            fall_time: id as u32, // the packet's identity, carried through the queue
+            fall_time: id as u32, // the packet's identity
             jump: None,
             transport: None,
             verb: benilla_protocol::RelayVerb::Pose,
@@ -911,21 +813,14 @@ fn replay_frames(script: &[(u32, f64, u32)]) -> (Vec<u32>, u32) {
 
 #[test]
 fn a_due_arrival_never_jumps_the_queue() {
-    // **The runaway-mover regression**. A mover's packets are applied in the order
-    // they arrived, always — even when the newest one is already due on arrival while older ones sit
-    // in the queue. Fire-times are monotone, so a due arrival means everything queued is due
-    // too: applying the arrival *directly* writes the newest state, and the drain then replays the
-    // older queued packets over it in the same frame. Last write wins, last write is stale.
-    //
-    // The script: a 60 Hz burst that builds a one-deep queue, then a delivery stall (packet 4 lands
-    // 64 ms late) so its fire-time — chained at 48 + 16 = 64 ms — is already past by arrival at 96.
-    // Packet 4 is the STOP; packet 3, still queued in front of it, is FORWARD.
+    // A 60 Hz burst builds a one-deep queue, then the Stop lands at 96 ms with its fire-time (64)
+    // already past while the FORWARD packet 3 is still queued.
     let script: [(u32, f64, u32); 5] = [
-        (1000, 0.0, MOVING),  // 0 — seeds the chain, fires at arrival
-        (1016, 0.0, MOVING),  // 1 — same frame; fire 16, queued
-        (1032, 16.0, MOVING), // 2 — fire 32, queued; the drain releases 1
-        (1048, 32.0, MOVING), // 3 — fire 48, queued; the drain releases 2
-        (1064, 96.0, 0),      // 4 — the STOP. Fire 64, already due; 3 is still queued
+        (1000, 0.0, MOVING),  // 0: seeds, fires at arrival
+        (1016, 0.0, MOVING),  // 1: fire 16, queued
+        (1032, 16.0, MOVING), // 2: fire 32, queued; the drain releases 1
+        (1048, 32.0, MOVING), // 3: fire 48, queued; the drain releases 2
+        (1064, 96.0, 0),      // 4: the Stop, fire 64, due; 3 still queued
     ];
     let (order, flags) = replay_frames(&script);
     assert_eq!(
@@ -942,10 +837,9 @@ fn a_due_arrival_never_jumps_the_queue() {
 
 // ── GameObject placement: the `GAMEOBJECT_ROTATION` quaternion ────────────────
 
-/// The seven `nightelfsignpostpointer02` arms of the Ravenwind post (Feralas, The Forgotten Coast)
-/// as vmangos' `gameobject` table spawns them: `(entry, position, orientation, rotation0..3)`.
-/// Six carry the pure-yaw encoding; entry 152580 — the one bug B89 was reported on — authors a
-/// 70° tilt in `rotation0/1`.
+/// The seven `nightelfsignpostpointer02` arms of the Ravenwind post (Feralas) from vmangos'
+/// `gameobject` table, `(entry, position, orientation, rotation0..3)`; six are pure yaw, and
+/// 152580 authors a 70 degree tilt in `rotation0/1`.
 const RAVENWIND_POST: [(u32, [f32; 3], f32, [f32; 4]); 7] = [
     (
         152574,
@@ -991,17 +885,14 @@ const RAVENWIND_POST: [(u32, [f32; 3], f32, [f32; 4]); 7] = [
     ),
 ];
 
-/// The middle of the pointer plank in the model's OWN space (WoW axes, Z up) — the mid-point of
-/// `nightelfsignpostpointer02.m2`'s collision hull, `benilla-extract m2coll`: x ±0.197,
-/// y 0.338‥2.075, z 3.062‥3.624. It is that offset from the origin — 3.3 yd up, ~1.2 yd out — that
-/// turns a dropped rotation into a *displaced* plank.
+/// The plank's mid-point in model space (WoW axes), the centre of the model's collision hull
+/// (`benilla-extract m2coll`: x +-0.197, y 0.338 to 2.075, z 3.062 to 3.624).
 const PLANK_MID_MODEL: [f32; 3] = [0.0, 1.206, 3.343];
 
-/// Where the post itself stands (the six untilted arms all spawn on its axis).
+/// The post's axis, where the six untilted arms spawn.
 const POST_AXIS: [f32; 2] = [-4446.4, 2055.25];
 
-/// Put a model-space point (WoW axes) through a spawn transform and read the answer back in WoW
-/// world coordinates — the mesh is baked into Bevy space, so the point converts on the way in.
+/// The plank's mid-point through a spawn transform, in WoW world coordinates.
 fn plank_in_world(position: [f32; 3], rotation: Quat) -> [f32; 3] {
     let t = super::pose_transform(position, rotation);
     benilla_assets::coords::bevy_to_wow(
@@ -1009,10 +900,8 @@ fn plank_in_world(position: [f32; 3], rotation: Quat) -> [f32; 3] {
     )
 }
 
-/// The pure-yaw quaternion vmangos writes for a spawn with no authored tilt IS `rot_z(facing)`, so
-/// placing by the quaternion must leave those spawns exactly where the facing put them. This is the
-/// whole safety argument for the switch: 54 747 of the 56 632 live spawn rows are this case, and if
-/// the two paths disagreed by even a hair, every prop in the world would shift.
+/// A pure-yaw quaternion is `rot_z(facing)` and places exactly like the facing; 54 747 of the
+/// 56 632 spawn rows are this case.
 #[test]
 fn a_pure_yaw_gameobject_quaternion_places_exactly_like_the_facing() {
     for orientation in [0.0_f32, 0.401426, -0.767946, -1.20428, 1.97222, 3.0, -2.7] {
@@ -1024,7 +913,7 @@ fn a_pure_yaw_gameobject_quaternion_places_exactly_like_the_facing() {
             "orientation {orientation}: quat {by_quat:?} vs yaw {by_yaw:?}"
         );
     }
-    // …and at the reported site, on the six real spawn rows that carry no tilt.
+    // The six untilted spawn rows at the Ravenwind post.
     for (entry, position, orientation, quat) in RAVENWIND_POST.iter().take(6) {
         let by_quat = plank_in_world(
             *position,
@@ -1039,10 +928,8 @@ fn a_pure_yaw_gameobject_quaternion_places_exactly_like_the_facing() {
     }
 }
 
-/// Entry 152580 — bug B89. Its authored 70° tilt is the difference between a plank ON the post and
-/// a plank 4.3 yd away in mid-air, and the spawn point itself is 3 yd off the post (the tilt is what
-/// carries the plank back onto it), so the facing-only placement cannot even land in the right
-/// neighbourhood.
+/// Entry 152580 spawns 3 yd off the post; its 70 degree tilt carries the plank back onto it, and
+/// facing-only placement leaves it 4.3 yd away in mid-air.
 #[test]
 fn the_tilted_ravenwind_pointer_lands_on_its_post() {
     let (_, position, orientation, quat) = RAVENWIND_POST[6];
@@ -1052,18 +939,16 @@ fn the_tilted_ravenwind_pointer_lands_on_its_post() {
     );
     let by_yaw = plank_in_world(position, super::wire_yaw(orientation));
 
-    // The golden: hand-derived from the spawn row and the model's own hull, WoW world coordinates.
+    // Hand-derived from the spawn row and the model's hull.
     for (got, want) in by_quat.iter().zip([-4444.139_f32, 2055.174, 46.512]) {
         assert!((got - want).abs() < 0.01, "{by_quat:?} vs the golden");
     }
-    // What it means: the plank hangs off the post's axis at arm's length…
     let radius = |p: [f32; 3]| (p[0] - POST_AXIS[0]).hypot(p[1] - POST_AXIS[1]);
     assert!(
         radius(by_quat) < 2.5,
         "on the post: r = {}",
         radius(by_quat)
     );
-    // …where the facing-only placement flings it clear of the post entirely, which is the report.
     assert!(radius(by_yaw) > 4.0, "off the post: r = {}", radius(by_yaw));
     let apart = (0..3)
         .map(|i| (by_quat[i] - by_yaw[i]).powi(2))
@@ -1075,9 +960,7 @@ fn the_tilted_ravenwind_pointer_lands_on_its_post() {
     );
 }
 
-/// No usable quaternion ⇒ the facing, not a `NaN`. A create block folds absent fields to zero, so
-/// "the wire sent nothing" can reach here as an all-zero quat — which has no length to normalize and
-/// would blank the object rather than mis-place it.
+/// A create block folds absent fields to zero, so an all-zero quaternion means none was sent.
 #[test]
 fn a_gameobject_without_a_usable_quaternion_falls_back_to_its_facing() {
     for quat in [None, Some([0.0; 4])] {
@@ -1089,13 +972,8 @@ fn a_gameobject_without_a_usable_quaternion_falls_back_to_its_facing() {
     }
 }
 
-/// **A flag-still remote is not integrated at all** — the reference's own gate,
-/// `0x20ff` ([`move_flags::INTEGRATED`]): `CMovement::Update`'s substep loop (`0x616e20`) and the
-/// manager's per-mover tick (`0x6166f5`) both bail on a mover with no move/jump/fall bit, and
-/// such a unit is not even in the mover list. So its pose is the last
-/// packet's, verbatim — and the per-frame depenetration + down-cast the settled memo used to claw
-/// back (1490 item 2 / 1473 §3) does not run at all, for a stated reason rather than a proof that
-/// its answer was identical.
+/// A mover with no `0x20ff` bit is not integrated (`0x616e20`, `0x6166f5`): its pose is the
+/// last packet's.
 #[test]
 fn a_flag_still_remote_is_left_where_the_wire_put_it() {
     use avian3d::prelude::{Collider, RigidBody};
@@ -1103,8 +981,7 @@ fn a_flag_still_remote_is_left_where_the_wire_put_it() {
     use bevy::transform::TransformPlugin;
 
     let mut app = App::new();
-    // `WorldCollision` takes the mover's trace exclusions (the ghost/DOOR set, 1767); the
-    // real one is initialised by the world plugins, which a headless harness does not run.
+    // `WorldCollision` needs the trace exclusions the world plugins would initialise.
     app.init_resource::<benilla_world::collision::MoverTraceExclusions>();
     app.add_plugins((
         MinimalPlugins,
@@ -1115,8 +992,7 @@ fn a_flag_still_remote_is_left_where_the_wire_put_it() {
     ));
     app.init_asset::<Mesh>()
         .init_resource::<benilla_world::collision::ColliderEpoch>();
-    // The liquid/room facade the dead-reckon asks for a water-walker's surface,
-    // seeded empty — no mover here has the mode, and an empty world answers "no liquid".
+    // An empty liquid world: no water anywhere.
     benilla_world::world_point::init_world_point_resources(app.world_mut());
     app.finish();
     app.cleanup();
@@ -1125,7 +1001,7 @@ fn a_flag_still_remote_is_left_where_the_wire_put_it() {
         crate::player::CAPSULE_HEIGHT - 2.0 * crate::player::CAPSULE_RADIUS,
     )));
     app.add_systems(Update, super::remote::extrapolate_remote_units);
-    // A 10×10 up-wound floor at bevy y = 0 (wow z = 0).
+    // A 10x10 up-wound floor at z = 0.
     let verts = vec![
         Vec3::new(-5.0, 0.0, -5.0),
         Vec3::new(5.0, 0.0, -5.0),
@@ -1142,20 +1018,18 @@ fn a_flag_still_remote_is_left_where_the_wire_put_it() {
         .spawn((
             Transform::default(),
             motion(0, 0.0),
-            // Real speeds, so the FORWARD leg below actually translates.
+            // Real speeds, so the FORWARD leg below translates.
             crate::net::UnitSpeeds(speeds()),
         ))
         .id();
-    // The one that used to sink: standing where no collider exists at all — a mover inside a
-    // building whose floor has not attached (B197's player site), or over a tile still streaming.
+    // Standing where no collider exists: an unattached building floor, or a tile still streaming.
     let mut over_nothing = motion(0, 0.0);
     over_nothing.wow_pos = [50.0, 50.0, 10.0];
     let stranded = app
         .world_mut()
         .spawn((Transform::default(), over_nothing))
         .id();
-    // Seed the idle mover a hair above the floor, the way a wire Z arrives: its own client's
-    // resting clearance against the same geometry. The reference leaves that hair alone.
+    // A hair above the floor, as a wire Z arrives: the sender's resting clearance.
     let seated = [0.0, 0.0, 0.01];
     app.world_mut()
         .entity_mut(idle)
@@ -1171,16 +1045,13 @@ fn a_flag_still_remote_is_left_where_the_wire_put_it() {
         rm.wow_pos, seated,
         "flag-still ⇒ not integrated: the wire's Z stands, hair and all"
     );
-    // Before 1545 this one was descending STEP_SNAP_SLACK (1/36 yd) EVERY FRAME with nothing to
-    // end it — the whole defect, in one assertion.
     let rm = app.world().entity(stranded).get::<RemoteMotion>().unwrap();
     assert_eq!(
         rm.wow_pos,
         [50.0, 50.0, 10.0],
         "no ground under a standing mover is OUR world being incomplete, not a drop to take"
     );
-    // A direction flag puts it back in the mover list, and 0626's resolve runs: the floor is 0.01
-    // below, well inside the standing reach, so the resolve settles it onto the surface.
+    // A direction flag brings the resolve back; the floor 0.01 below is inside its reach.
     app.world_mut()
         .entity_mut(idle)
         .get_mut::<RemoteMotion>()
@@ -1196,9 +1067,8 @@ fn a_flag_still_remote_is_left_where_the_wire_put_it() {
 
 // ── The observer leg of the movement-mode family ──────────────────────────────
 
-/// Build the `RelayMove` the six observer opcodes decode to — an ordinary relay carrying whatever
-/// flags word the server wrote (apply/unapply rides that word for five of the six) plus the
-/// opcode's verb, which matters for root and teleport alone.
+/// The `RelayMove` the six observer opcodes decode to: the server's flags word, which carries
+/// apply and unapply for five of them, plus the verb.
 fn observed(flags: u32, position: [f32; 3], verb: RelayVerb) -> super::relay::RelayMove {
     super::relay::RelayMove {
         wire_ms: 1000,
@@ -1213,8 +1083,7 @@ fn observed(flags: u32, position: [f32; 3], verb: RelayVerb) -> super::relay::Re
     }
 }
 
-/// Run one relayed move through the real arrival path (`apply_move` — the seam the relay and the
-/// queue drain both go through), starting from `before`.
+/// Runs one relayed move through `apply_move` from `before`.
 fn apply_observed(before: RemoteMotion, mv: &super::relay::RelayMove) -> RemoteMotion {
     use bevy::ecs::system::RunSystemOnce;
     let mv = mv.clone();
@@ -1233,16 +1102,8 @@ fn apply_observed(before: RemoteMotion, mv: &super::relay::RelayMove) -> RemoteM
         .expect("the one-shot apply runs")
 }
 
-/// **A watched player's root actually stops them** — the reported "he keeps sliding
-/// after the root lands".
-///
-/// The mechanism is not ours: the rooted player's OWN client wipes its direction bits when it
-/// applies `SetRoot 0x7c7340` (`& 0xffe07f00`), acks with that wiped word, and vmangos stores the
-/// ack verbatim (`HandleMoverRelocation`: `pMover->m_movementInfo = movementInfo`, forcing
-/// `MOVEFLAG_ROOT` back on) before broadcasting it to observers as `MSG_MOVE_ROOT`. So the correct
-/// receiver is the plain one — fold the whole word — and the ONLY thing that was wrong was that we
-/// never parsed the packet. This pins the consequence: after it, nothing the integration gate tests
-/// survives, which is what stops the dead-reckon.
+/// The rooted client wipes its direction bits (`0x7c7340`, `& 0xffe07f00`) and acks the wiped
+/// word, which vmangos stores (`MovementHandler.cpp:1067`) and relays as `MSG_MOVE_ROOT`.
 #[test]
 fn an_observed_root_lands_the_wiped_word_and_stops_the_dead_reckon() {
     let walking = motion(move_flags::FORWARD, 0.0);
@@ -1252,7 +1113,7 @@ fn an_observed_root_lands_the_wiped_word_and_stops_the_dead_reckon() {
         "precondition: this mover is being stepped"
     );
 
-    // What vmangos actually broadcasts: ROOT set, the direction bits gone.
+    // What vmangos broadcasts: ROOT set, the direction bits gone.
     let rooted = apply_observed(
         walking,
         &observed(move_flags::ROOT, [0.0; 3], RelayVerb::Root(true)),
@@ -1270,12 +1131,8 @@ fn an_observed_root_lands_the_wiped_word_and_stops_the_dead_reckon() {
     );
 }
 
-/// **Levitate reaches an observer** (with 1706's three-at-once): `SPELL_AURA_HOVER`,
-/// `_FEATHER_FALL` and `_WATER_WALK` are granted together, each broadcast on its own observer
-/// opcode, and each carries the *whole* `m_movementInfo` flags word — so the last one to arrive
-/// holds all three bits. The extrapolator's ground resolve reads exactly this word (unioned with
-/// the `SMSG_SPLINE_MOVE_*` component) for its hover offset and water plane, so landing the word IS
-/// landing the effect.
+/// Levitate grants hover, feather fall and water walk together, each on its own observer opcode
+/// carrying the whole flags word, so the last to arrive holds all three bits.
 #[test]
 fn an_observed_levitate_lands_all_three_granted_bits() {
     let trio = move_flags::HOVER | move_flags::SAFE_FALL | move_flags::WATER_WALKING;
@@ -1285,24 +1142,14 @@ fn an_observed_levitate_lands_all_three_granted_bits() {
         "hover + feather fall + water walk, from one broadcast word"
     );
 
-    // …and the un-levitate is the same word with the bits gone — no opcode says "unapply".
+    // The unapply is the same word without the bits.
     let landed = apply_observed(floating, &observed(0, [0.0; 3], RelayVerb::Pose));
     assert_eq!(landed.flags, 0, "the revoke is the absence of the bits");
 }
 
-/// **The teleport is the ONE relay the pre-fire reconcile skips — and the heartbeat is not**
-/// (correcting 0601/0603).
-///
-/// The queued node's tag `0x26`, which `0x619030` (facing) and `0x619090` (position) both bail on,
-/// is the teleport's: `push 0x26` occurs at exactly two addresses in the movement region
-/// (`0x6186bd`, `0x618736`), both inside functions reached only from the teleport arms — and
-/// `0x602fb0`, one of the two callers, sends `push 0xc7` (`MSG_MOVE_TELEPORT_ACK`) on its other
-/// branch. This client had it attributed to the heartbeat since 0601 and blended the wrong one.
-///
-/// Both halves are asserted, because getting either backwards is a distinct visible bug: blending
-/// toward a blink drags the mover — swept capsule and all — across the 20 yards it exists to skip,
-/// and *not* blending a heartbeat leaves a watched player's straight run snapping at 2 Hz, which is
-/// the whole reason the blends exist. And a teleport is excluded from the *blend*, never the apply.
+/// Tag `0x26`, skipped by `0x619030` and `0x619090`, is the teleport's: `push 0x26` occurs only at
+/// `0x6186bd` and `0x618736`, reached only from the teleport arms (`0x602fb0` sends
+/// `MSG_MOVE_TELEPORT_ACK` on its other branch).
 #[test]
 fn the_teleport_is_the_only_relay_the_reconcile_skips() {
     let dest = [20.0, 5.0, 3.0];
@@ -1328,15 +1175,12 @@ fn the_teleport_is_the_only_relay_the_reconcile_skips() {
     );
 }
 
-/// **The root opcode outranks the flags word it arrived with**. After the masked
-/// merge the client runs `SetRoot 0x7c7340` — `or 0x1000`, then the one-shot motion wipe
-/// `& 0xffe07f00` — unconditionally, so a `MSG_MOVE_ROOT` roots the mover even if the word it
-/// carried still had direction bits in it. vmangos always sends an already-wiped word, which is
-/// exactly why this is worth pinning: nothing in a live run would catch it going wrong.
+/// After the merge the client runs `SetRoot` (`0x7c7340`) unconditionally, so the opcode roots
+/// the mover even when the word disagrees; vmangos always sends a wiped word, so no live run
+/// would catch this.
 #[test]
 fn the_root_opcode_wins_over_a_word_that_disagrees_with_it() {
-    // A deliberately contradictory packet: the opcode says root, the word says "running forward,
-    // not rooted". The reference roots them anyway.
+    // The opcode says root, the word says running forward.
     let liar = observed(move_flags::FORWARD, [0.0; 3], RelayVerb::Root(true));
     let rooted = apply_observed(motion(move_flags::FORWARD, 0.0), &liar);
     assert_ne!(rooted.flags & move_flags::ROOT, 0, "the opcode set the bit");
@@ -1346,8 +1190,7 @@ fn the_root_opcode_wins_over_a_word_that_disagrees_with_it() {
         "and the one-shot wipe took the direction bits with it — this is what stops the slide"
     );
 
-    // The unroot clears the bit and invents no movement: `ClearRoot 0x7c7370` is `and ~0x1000`,
-    // not the wipe run backwards.
+    // `ClearRoot` (`0x7c7370`) is `and ~0x1000`.
     let freed = apply_observed(rooted, &observed(0, [0.0; 3], RelayVerb::Root(false)));
     assert_eq!(freed.flags, 0, "cleared, and still not moving");
 }

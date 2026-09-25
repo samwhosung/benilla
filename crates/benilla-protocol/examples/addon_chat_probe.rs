@@ -4,9 +4,9 @@
 //! (`ChatHandler.cpp:488`) and skips `SanitizeChatMessage` for addon chat
 //! (`ChatHandler.cpp:49`), so the prefix TAB survives.
 //!
-//! Run: `cargo run -p benilla-protocol --example addon_chat_probe -- probeN pprobeN [probeM
-//! pprobeM] [host]`. One account runs the CHANNEL case; a second adds the PARTY case, and must be
-//! an account nobody else is logged in on, since a login kicks the current holder.
+//! Run: `cargo run -p benilla-protocol --example addon_chat_probe -- probeN <password> [probeM
+//! <password>] [host]`. One account runs the CHANNEL case; a second adds the PARTY case, and must
+//! be an account nobody else is logged in on, since a login kicks the current holder.
 //!
 //! Needs `AddonChannel = 1` (off drops every addon send) and
 //! `AllowTwoSide.Interaction.Channel = 0` (on, `Channel::Say` rewrites the language to
@@ -216,7 +216,7 @@ fn judge(lane: &str, expect_type: u8, addon_text: &str, control_text: &str, seen
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let usage = "usage: addon_chat_probe -- <probeN> <pprobeN> [<probeM> <pprobeM>] [host]";
+    let usage = "usage: addon_chat_probe -- <probeN> <password> [<probeM> <password>] [host]";
     let (user_a, pass_a) = match args.as_slice() {
         [a, b, ..] => (a.clone(), b.clone()),
         _ => bail!("{usage}"),

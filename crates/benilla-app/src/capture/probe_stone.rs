@@ -1,56 +1,28 @@
-//! The meeting-stone live probe (`WOW_PROBE_STONE=1`) — decision 2283's instrument: **can a
-//! player actually get into the LFG queue, and does everything downstream of that light up?**
+//! The meeting-stone live probe (`WOW_PROBE_STONE=1`): joins a real meeting stone's LFG queue and
+//! reads the answer out of the live VM. A stone is joined with `CMSG 0x292`; vmangos ignores a
+//! `CMSG_GAMEOBJ_USE` on type 23 (`GameObject.cpp:1836`).
 //!
-//! Until 2283 a right-click on a meeting stone sent `CMSG_GAMEOBJ_USE`, which vmangos' own
-//! `GameObject::Use` answers with an explicit `return` for type 23. So the whole receiving half —
-//! the two globals, the five-way status table, `MEETINGSTONE_CHANGED`, the stock
-//! `MiniMapMeetingStoneFrame` — had been built and tested against synthetic packets and had never
-//! once run off a real one. This probe is what closes that: it drives the click's own route and
-//! then reads the answer out of the **live VM**, not out of our own state.
-//!
-//! **Why a probe and not a capture:** none of this is a picture. Every reading here is a number or
-//! a Lua truth value — the queued area id, `IsInMeetingStoneQueue()`, whether the stock minimap
-//! button is shown — so the verdict needs no eye in the loop (`docs/METHOD.md` step 4).
-//!
-//! **Where it enters the chain, exactly.** It writes the very
-//! [`MeetingStoneUse`] the click ladder writes, so everything **downstream** of that seam runs
-//! for real — the validator, `CMSG 0x292`, the server, `SMSG 0x295`, the feed, the two globals,
-//! the stock frame. It does **not** cover the mouse hit-test or the shared gates *above* the seam
-//! (highlightable, mounted, range); those are the click test's
+//! It writes the [`MeetingStoneUse`] the click ladder writes, so everything downstream runs for
+//! real (the validator, `CMSG 0x292`, `SMSG 0x295`, the feed, the two globals, the stock frame).
+//! The hit-test and the gates above that seam are the click test's
 //! (`target::click::tests::a_right_click_on_a_meeting_stone_joins_it_and_sends_no_gameobj_use`).
-//! Neither alone closes the chain; together they do.
 //!
-//! ## The five legs, in order
+//! The five legs, in order:
 //!
-//! 1. **CONTROL** — parked at the stone, nothing clicked: `IsInMeetingStoneQueue()` must be `nil`
-//!    and the stock icon hidden. A probe that only ever sees the queued state cannot tell a fix
-//!    from a stuck flag.
-//! 2. **REFUSED** — the body demoted **below** the stone's `data[0]`, then clicked: the client's
-//!    own level refusal must fire, and **nothing** may reach the wire. This is the one of the four
-//!    refusals the server does not duplicate — `HandleMeetingStoneJoinOpcode` never looks at the
-//!    stone's level band — so if our copy is wrong, the server queues a level-1 character for
-//!    Deadmines and nobody notices.
-//! 3. **JOINED** — the body levelled **into** the band, then clicked: `SMSG 0x295` must arrive with
-//!    this stone's own `data[2]`, `IsInMeetingStoneQueue()` must answer the number `1`,
-//!    `GetMeetingStoneStatusText()` a real string, and `MiniMapMeetingStoneFrame` must be shown.
-//! 4. **DARKENED** — with that queue held, the stone's own `highlightable` slot must now refuse it
-//!    ([`crate::target::cursor_mode::meeting_stone_queued`] over the live area): the stone you are
-//!    queued at stops being clickable, which is the whole of `0x5f6990`.
-//! 5. **LEFT** — `CancelMeetingStoneRequest()` through the live VM: back to `nil`, icon hidden.
+//! 1. Control: parked, nothing clicked: `IsInMeetingStoneQueue()` is `nil`, the icon hidden.
+//! 2. Refused: demoted below the stone's `data[0]`, then clicked: the client's level refusal fires
+//!    and nothing reaches the wire. The server never checks the level band
+//!    (`LFGHandler.cpp:31`), so this refusal is the client's alone.
+//! 3. Joined: levelled into the band, then clicked: `SMSG 0x295` carries the stone's `data[2]`,
+//!    `IsInMeetingStoneQueue()` is `1`, `GetMeetingStoneStatusText()` a string, and
+//!    `MiniMapMeetingStoneFrame` shown.
+//! 4. Darkened: the stone queued at is no longer highlightable
+//!    ([`crate::target::cursor_mode::meeting_stone_queued`], `0x5f6990`).
+//! 5. Left: `CancelMeetingStoneRequest()` through the VM: back to `nil`, icon hidden.
 //!
-//! ## The run recipe
-//!
-//! ```text
-//! WOW_NOSOUND=1 WOW_UNATTENDED=1 WOW_USER=probe3 WOW_PASS=pprobe3 WOW_CHAR=Probethree \
-//!     WOW_PROBE_STONE=1 cargo run -q -p benilla
-//! ```
-//! (the checkout's probe identity — `.probe-identity`, or WOW_USER/WOW_PASS/WOW_CHAR; the `probe`
-//! skill). `WOW_PROBE_STONE=<x>,<y>,<z>[,<map>]` aims it elsewhere.
-//!
-//! **It leaves the probe body at the stone's minimum level**, deliberately and without putting it
-//! back: the level is the probe's own instrument (leg 2 needs one side of the band and leg 3 the
-//! other), and a probe character's level is scratch. Grep `PROBE_STONE:` for the verdict; the
-//! probe self-exits when it lands.
+//! `WOW_PROBE_STONE=<x>,<y>,<z>[,<map>]` aims it elsewhere. It leaves the body at the stone's
+//! minimum level. Grep `PROBE_STONE:` for the verdict; the switches are `docs/CONTRIBUTING.md`,
+//! "Running it unattended".
 
 use bevy::prelude::*;
 
@@ -64,24 +36,20 @@ use crate::player::Player;
 use crate::target::cursor_mode::meeting_stone_queued;
 use crate::ui_dialog_verbs::{MeetingStone, MeetingStoneUse};
 
-/// The probe's default object: the **Stockade** meeting stone in Stormwind (`gameobject.guid`
-/// 26635, template 179595 — `data[0..2] = 24, 32, 717`). Chosen because it is a plain unpooled
-/// spawn in a capital, its level band is narrow enough that a level-1 body is comfortably outside
-/// it, and area 717 resolves to a real `AreaTable` row, so the status text comes out a sentence
-/// ("Looking for more for The Stockade") rather than the `UNKNOWN` fallback — which makes the
-/// JOINED leg's `text=yes` mean the whole rebuild ran, not just that a string exists.
+/// The default object: the Stockade meeting stone in Stormwind (`gameobject.guid` 26635,
+/// template 179595, `data[0..2] = 24, 32, 717`), an unpooled spawn whose area 717 is a real
+/// `AreaTable` row, so the status text is a sentence rather than the `UNKNOWN` fallback.
 const STONE_AT: [f32; 4] = [-8810.5, 798.0, 98.2, 0.0];
 /// `GAMEOBJECT_TYPE_MEETINGSTONE`.
 const GO_TYPE_MEETINGSTONE: i32 = 23;
-/// The level leg 2 demotes to — below every shipped stone's `data[0]`.
+/// The level leg 2 demotes to, below every shipped stone's `data[0]`.
 const LEVEL_BELOW: u32 = 1;
 
 const SCAN_RANGE: f32 = 30.0;
 const SETTLE_SECS: f64 = 6.0;
 const SCAN_TIMEOUT_SECS: f64 = 30.0;
 const LEVEL_TIMEOUT_SECS: f64 = 20.0;
-/// How long a refusal is given to *not* happen. The join round trip below is the same server, so
-/// anything that was going to arrive has arrived.
+/// How long the refused click is watched for a reply that must not come.
 const REFUSAL_WINDOW_SECS: f64 = 6.0;
 const QUEUE_TIMEOUT_SECS: f64 = 20.0;
 
@@ -108,7 +76,7 @@ struct StoneProbe {
     tmpl: Option<MeetingStoneTemplate>,
     fails: u32,
     exited: bool,
-    /// What each leg actually read, for the DONE line.
+    /// What each leg read, for the DONE line.
     joined_area: u32,
     status_text: Option<String>,
     icon_shown: bool,
@@ -127,9 +95,8 @@ enum Phase {
         since: f64,
     },
     Control,
-    /// `.character level` issued; waiting for the store to report it. `join` says which leg the
-    /// click that follows belongs to — **not** the level value, because a stone whose `data[0]`
-    /// is 1 would make the two indistinguishable and loop the probe forever.
+    /// `.character level` issued; waiting for the store to report it. `join` names the next
+    /// click's leg, since a stone whose `data[0]` is 1 makes the two levels equal.
     WaitLevel {
         want: u32,
         since: f64,
@@ -151,8 +118,7 @@ enum Phase {
     Done,
 }
 
-/// Where the probe is aimed: `WOW_PROBE_STONE=<x>,<y>,<z>[,<map>]`, else [`STONE_AT`]. Anything
-/// unparseable falls back to the default rather than failing the run — the common value is `1`.
+/// `WOW_PROBE_STONE=<x>,<y>,<z>[,<map>]`, else [`STONE_AT`] (the common value is `1`).
 fn target() -> [f32; 4] {
     let Ok(raw) = std::env::var("WOW_PROBE_STONE") else {
         return STONE_AT;
@@ -168,8 +134,7 @@ fn target() -> [f32; 4] {
     }
 }
 
-/// One leg's verdict line. `got == want` is the whole test; the line says both either way, so a
-/// failure reads as a measurement rather than as an assertion name.
+/// One leg's verdict line, saying both `want` and `got`.
 fn check(label: &str, want: &str, got: &str) -> u32 {
     if want == got {
         info!("PROBE_STONE: {label:<9} PASS — {got}");
@@ -180,8 +145,7 @@ fn check(label: &str, want: &str, got: &str) -> u32 {
     }
 }
 
-/// The three live VM readings every leg is written in, asked of the **stock files**: the two
-/// bindings `Minimap.xml` calls, and whether its button is actually up.
+/// The live VM readings: the two bindings stock `Minimap.xml` calls, and whether its button is up.
 fn vm_state(script: &UiScript) -> (bool, Option<String>, bool) {
     let queued = script
         .eval::<bool>("return IsInMeetingStoneQueue() and true or false")
@@ -215,7 +179,7 @@ fn stone_probe(
         return; // not in-world yet
     };
     let Some(script) = script else {
-        return; // no UI VM this build — nothing this probe can read
+        return; // no UI VM in this build
     };
     let now = time.elapsed_secs_f64();
     let level = store.0.unit_level().unwrap_or(0);
@@ -331,8 +295,7 @@ fn stone_probe(
                     if queued { "" } else { "un" }
                 ),
             );
-            // `.character level 0` is not a level; a template that ships `data[0] = 0` means
-            // "no floor", which for this leg is simply level 1.
+            // `data[0] = 0` means no floor, which for this leg is level 1.
             let want = probe.tmpl.map_or(1, |t| t.min_level.max(1));
             info!("PROBE_STONE: levelling to {want} for the join leg");
             let _ = net.0.send(ClientCommand::Chat {
@@ -375,8 +338,7 @@ fn stone_probe(
                     if text.is_some() { "yes" } else { "no" }
                 ),
             );
-            // Leg 4 — `0x5f6990` over the LIVE queue: this stone is now the one we are queued at,
-            // so its highlightable slot must refuse it.
+            // Leg 4: `0x5f6990` over the live queue refuses the stone we are queued at.
             probe.darkened = meeting_stone_queued(Some(area), queue.area);
             probe.fails += check("DARKENED", "true", &probe.darkened.to_string());
             info!("PROBE_STONE: leaving through the live VM's own CancelMeetingStoneRequest()");

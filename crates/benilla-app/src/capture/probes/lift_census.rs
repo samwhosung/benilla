@@ -1,46 +1,16 @@
-//! The **transport census** (`WOW_LIFT_CENSUS=<secs>[,<every>]`) — the instrument that turns
-//! *"the Thunder Bluff elevators aren't there"* into a line of numbers.
+//! `WOW_LIFT_CENSUS=<secs>[,<every>]`: per type-11 elevator and type-15 boat, whether it
+//! streamed, armed, built a model and where it is in its cycle. A transport spawns
+//! [`Visibility::Hidden`] and its first ticked pose unhides it, so one that never arms is present,
+//! solid and invisible.
 //!
-//! An absent lift is a screenshot, and a screenshot cannot separate the four ways a type-11
-//! elevator (or a type-15 boat) can fail to appear — each of which calls for a different fix:
+//! - `state`: `lift`/`taxi` (armed), `seed` (a type-11 waiting for its keyframe catalog), `bare`
+//!   (anchored, no drive), `parked` (no anchor).
+//! - `vis`/`inh`: the root's [`Visibility`] and the propagated [`InheritedVisibility`]; `hidden=`
+//!   counts transports the tick never showed or judged off the live [`CurrentMap`] (`map=`).
+//! - `meshes`: render descendants of the whole subtree.
 //!
-//! - the server never streamed it (**no entity** — nothing on the wire, our count is 0);
-//! - it streamed but never **armed** (`state=seed`/`bare`): a transport spawns
-//!   [`Visibility::Hidden`] and is unhidden by its first ticked pose, so an arm
-//!   that never completes leaves a car that is present, solid, and permanently invisible —
-//!   B168's "an invisible wall in its place";
-//! - it armed and ticks, but the model never built (`meshes=0`) — an asset gap;
-//! - it armed, ticks and draws, and the car is simply somewhere else in its cycle
-//!   (`cycle=`/`pos=` say where, against the authored keyframes).
-//!
-//! ```text
-//! LIFT 0xF11000000000504B entry=4170   disp=360   type=11 state=lift  period=30033 cycle=17421
-//!      moving=0 vis=Inherited inh=1 meshes=4 attached=1 pos=(-1286.24,189.72,130.08) d=9.4
-//! ```
-//!
-//! - **`state`** is the arm verdict read off the components themselves: `lift`/`taxi` (armed),
-//!   `seed` (a type-11 waiting for its keyframe catalog), `bare` (an anchored transport with no
-//!   drive — the boat arm waiting on a template, or a type-11 whose create carried no entry),
-//!   `parked` (no anchor: a pathless type-11 the arm deliberately released, or a type the wire
-//!   never flagged).
-//! - **`vis`/`inh`** are the root's own [`Visibility`] and the propagated
-//!   [`InheritedVisibility`]. `vis=Hidden` on a transport is the finding: either the tick never ran
-//!   for it, or it ran and judged the car off-map. The headline `hidden=` count is that number, and
-//!   `map=` beside it is the live [`CurrentMap`] the tick judged against — the pair that named
-//!   decision 1654 (`hidden=11 … map=1`, every lift on Kalimdor, all of them armed and ticking).
-//! - **`meshes`** counts render descendants (the whole subtree, not just direct children — a GO
-//!   model hangs its submeshes under an anim host).
-//!
-//! Pair it with the checkout's probe identity (the `probe` skill) and a `.go` to the reported spot:
-//!
-//! ```text
-//! WOW_USER=probeN WOW_PASS=pprobeN WOW_CHAR=Probe<n> WOW_NOSOUND=1 \
-//!   WOW_PROBE_CHAT=".go xyz -1286.2 189.7 132.0 1" \
-//!   WOW_LIFT_CENSUS="30,15" WOW_PROBE_EXIT_AT=75 cargo run -q -p benilla
-//! ```
-//!
-//! The repeat form is the load-race half: a census at 30 s and again at 45 s says whether a
-//! `state=seed` is a transient (the catalog had not opened yet) or the verdict.
+//! The repeat form tells a transient `state=seed` from a stuck one. How to run it:
+//! `docs/CONTRIBUTING.md`, "Running it unattended".
 
 use benilla_assets::coords::bevy_to_wow;
 use benilla_protocol::EntityKind;
@@ -53,8 +23,7 @@ use crate::net::{Guid, NetEntity, ObjectStore, SelfPlayer};
 use crate::transport::{ElevatorSeed, Transport, TransportAnchor};
 use benilla_world::world_map::CurrentMap;
 
-/// How deep the render-descendant walk goes. A GO's submeshes sit at most a couple of levels
-/// under the net root (root → anim host → submesh); eight is slack, not a limit anything reaches.
+/// Depth of the render-descendant walk; a GO's submeshes sit two levels down (root, anim host).
 const WALK_DEPTH: u32 = 8;
 
 pub(crate) struct LiftCensusPlugin;
@@ -72,15 +41,14 @@ impl Plugin for LiftCensusPlugin {
     }
 }
 
-/// [`LiftCensusPlugin`] state: when the next census fires, and how often after that (`0` = once).
+/// [`LiftCensusPlugin`] state; `every` of 0 fires once.
 #[derive(Resource)]
 struct LiftCensus {
     next: f32,
     every: f32,
 }
 
-/// What the census reads per entity: identity, kind/display, pose, the three transport
-/// components (each one a distinct arm stage), the visibility pair, and the visual gate.
+/// What the census reads per entity; each transport component is a distinct arm stage.
 type CensusQuery = (
     &'static Guid,
     &'static NetEntity,
@@ -95,11 +63,8 @@ type CensusQuery = (
     Has<VisualAttached>,
 );
 
-/// One line per streamed transport GameObject — hidden ones first, then by distance — under a
-/// summary line naming the counts that matter. No radius: vmangos sends a map's **whole** transport
-/// set at world entry and keeps it resident (`Map::SendInitTransports`, `Map.cpp:1719`; every
-/// type-11 joins `m_transports` at `Map::Add`) — decision 0678 measured the same thing from a
-/// ship's lanterns at 4853 yd. So the population is a handful and all of it is in reach.
+/// One line per streamed transport, hidden first, then by distance. No radius: vmangos sends a
+/// map's whole transport set at world entry (`Map::SendInitTransports`, `Map.cpp:1718`).
 fn fire_lift_census(
     mut probe: ResMut<LiftCensus>,
     time: ProbeClock,
@@ -125,9 +90,8 @@ fn fire_lift_census(
     for (guid, net, t, store, transport, anchor, seed, vis, inherited, kids, attached) in &entities
     {
         let go_type = store.0.gameobject_type_id();
-        // Every ticking GO type (the pair the reference's per-frame tick `0x630970` fires) plus
-        // anything already wearing a transport component — so a type field we misread still shows
-        // up rather than vanishing from the instrument that exists to find it.
+        // The GO types the reference's per-frame tick `0x630970` fires, plus anything carrying a
+        // transport component, so a misread type field still lists.
         if !(net.kind == EntityKind::GameObject && matches!(go_type, 11 | 15)
             || transport.is_some()
             || anchor.is_some()
@@ -199,13 +163,12 @@ fn fire_lift_census(
     }
 }
 
-/// A borrowed child slice, or an empty one — the `Option<&Children>` unwrap the walk starts from.
+/// The children to start the walk from, or none.
 fn entity_children(kids: Option<&Children>) -> Vec<Entity> {
     kids.map(|c| c.iter().collect()).unwrap_or_default()
 }
 
-/// Count the render descendants of a subtree — the whole subtree, because a GameObject's
-/// submeshes hang under an anim host rather than directly off the net root.
+/// Counts render descendants of the whole subtree; a GO's submeshes hang under an anim host.
 fn render_descendants(
     roots: Vec<Entity>,
     children: &Query<&Children>,

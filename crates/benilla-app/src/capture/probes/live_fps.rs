@@ -1,14 +1,6 @@
-//! The live frame-time sample ([`LiveFpsPlugin`]) and everything printed from the same sample
-//! window: the `FPS_PROBE` line itself, the visible-submesh census
-//! (`VIS_CENSUS`/`VIS_ESCAPED`/`VIS_DUMP`), the asset-churn ratchet (`MAT_CHURN`) and the
-//! residency meter (`ASSET_DUMP`). One file because one system, `drive_live_fps`, prints all four
-//! from the same frame at the same instant — they are one measurement with four line families,
-//! not four instruments.
-//!
-//! **What is counted lives in [`benilla_world::world_census`]; what is printed lives here.** The census
-//! is the engine's own published account of the frame it drew — this probe adds
-//! the timing window around it and owns the line shapes, which are a greppable contract of ours
-//! and no business of the renderer's.
+//! The live frame-time sample ([`LiveFpsPlugin`]) and the lines printed from the same window:
+//! `FPS_PROBE`, `VIS_CENSUS`/`VIS_ESCAPED`/`VIS_DUMP`, `MAT_CHURN` and `ASSET_DUMP`. The counting
+//! is [`benilla_world::world_census`]'s; the timing window and the line shapes are here.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -16,22 +8,13 @@ use bevy::prelude::*;
 use crate::capture::PROBE_WARMUP_FRAMES;
 use benilla_world::world_census::WorldCensus;
 
-/// The LIVE FPS probe (`WOW_LIVE_FPS=<frames>`, delay via `WOW_LIVE_FPS_AT` seconds, default 25;
-/// `WOW_LIVE_FPS_MOVE=1` holds W through warmup + sampling, so the probe measures RUNNING through
-/// the scene — streaming, spawns, re-classification — not a parked camera; the 0366 hunt's
-/// "running around SW" gap):
-/// the [`crate::capture::CapturePlugin`] probe's numbers on a NORMAL connected run — streamed units, net
-/// apply, quest markers, everything the server-less harness deliberately excludes. Built for the
-/// 0362 residual: the serverless stormwind probe pinned 60 while the director's live session read
-/// 20, so the gap IS the live world — this instrument measures it. Waits for in-world + the delay
-/// (park the character first with [`super::ProbeChatPlugin`]), uncaps vsync, warms
-/// [`PROBE_WARMUP_FRAMES`], samples, prints the same machine-greppable `FPS_PROBE` line
-/// (scenario=`live`), and exits.
+/// `WOW_LIVE_FPS=<frames>` (default 300): the [`crate::capture::CapturePlugin`] probe's numbers on
+/// a connected run. Waits for the world and `WOW_LIVE_FPS_AT` seconds (default 25), uncaps vsync,
+/// warms [`PROBE_WARMUP_FRAMES`], samples, prints `FPS_PROBE scenario=live` and exits.
+/// `WOW_LIVE_FPS_MOVE=1` holds W throughout, measuring a run through the scene.
 pub(crate) struct LiveFpsPlugin;
 
-/// How long past `WOW_LIVE_FPS_AT` the probe waits for a world before declaring the run dead.
-/// Entry normally lands well inside `at` itself; 60 s of grace covers a cold-cache load without
-/// ever letting a stranded run ride out a harness timeout (see the `Waiting` arm).
+/// Seconds past `WOW_LIVE_FPS_AT` without a world before the run exits as dead; covers a cold load.
 const BOOT_DEADLINE_SECS: f32 = 60.0;
 
 impl Plugin for LiveFpsPlugin {
@@ -67,8 +50,7 @@ impl Plugin for LiveFpsPlugin {
         })
         .add_systems(Update, drive_live_fps);
         WorldCensus::churn_counters(app);
-        // The engine counts its own materials; the UI pass is ours, so we fold it into the same
-        // tally rather than keeping a second one that could disagree about the window.
+        // The UI pass's material joins the engine's churn tally.
         WorldCensus::count_churn::<crate::ui_pass::UiQuadMaterial>(app, "uiquad");
     }
 }
@@ -81,7 +63,6 @@ enum LiveFpsPhase {
     Done,
 }
 
-/// [`LiveFpsPlugin`] state.
 /// The still-frame input counters (`benilla_world::dev_state::STILL_INPUTS_CHANGED`), now.
 fn still_inputs_now() -> [u32; 7] {
     let c = &benilla_world::dev_state::STILL_INPUTS_CHANGED;
@@ -92,84 +73,56 @@ fn still_inputs_now() -> [u32; 7] {
 struct LiveFps {
     frames: usize,
     at: f32,
-    /// Hold W while measuring (`WOW_LIVE_FPS_MOVE=1`) — the moving-workload probe.
+    /// Hold W while measuring (`WOW_LIVE_FPS_MOVE=1`).
     run: bool,
     phase: LiveFpsPhase,
     samples: Vec<f32>,
-    /// Process CPU per frame, ms, index-parallel with `samples` — the TAIL half of `cpu_ms`:
-    /// a mean under budget hides the one frame in twenty that is over it, and whether that
-    /// frame was CPU work or a wait is the first question about a stutter.
+    /// Process CPU per frame, ms, index-parallel with `samples`: says whether a slow frame was
+    /// work or a wait.
     cpu_samples: Vec<f32>,
     cpu_prev: Option<f64>,
-    /// Per frame, beside `cpu_samples`: entities added net of removed, mesh assets added,
-    /// model materials added — the three spike signatures a crowd produces (a spell kit
-    /// spawning, a body dressing, a first-seen material realizing). Printed for the worst
-    /// frames only.
+    /// Per frame: net entities added, meshes added, model materials added, sound kit decodes.
+    /// Printed for the worst frames only.
     churn_samples: Vec<(i32, u32, u32, u32)>,
     entities_prev: usize,
     decodes_prev: u32,
-    /// Live particles and the GPU meter's freshest reading per frame — the two "same work,
-    /// more of it" signatures the churn triple cannot carry.
+    /// Live particles and the GPU meter's freshest reading per frame.
     load_samples: Vec<(u32, f32)>,
-    /// The PACED clock's delta per frame (`Time<Virtual>`, `frame_pace`): under vsync with
-    /// pipelined rendering the raw delta is mis-split into long/short pairs that sum to exact
-    /// refresh multiples, so `samples`' tail counts presentation jitter as frames. The pacer
-    /// snaps a cadenced delta to whole refreshes; a paced delta of two periods is a frame the
-    /// display actually skipped.
+    /// The paced delta per frame (`Time<Virtual>`, `frame_pace`). Under vsync with pipelined
+    /// rendering the raw delta splits into long/short pairs; a paced delta of two refresh periods
+    /// is a frame the display skipped.
     paced_samples: Vec<f32>,
-    /// Per-thread CPU at the window's first frame (`perf::thread_cpu_table`), keyed by pthread
-    /// identity — subtracted at the window's end for `thr=[name:ms/frame,…]`.
+    /// Per-thread CPU at the window's first frame (`perf::thread_cpu_table`), keyed by pthread,
+    /// the baseline for `thr=[name:ms/frame,…]`.
     threads_at_start: Option<Vec<(usize, String, f64, f64)>>,
     /// The page-fault counters at the window's first frame (`perf::process_faults`).
     faults_at_start: Option<(u64, u64)>,
-    /// `dev_state::STILL_INPUTS_CHANGED` at the window's first frame — `noisy=` is the delta.
+    /// `dev_state::STILL_INPUTS_CHANGED` at the window's first frame; `noisy=` is the delta.
     still_at_start: [u32; 7],
-    /// Process CPU seconds at the first sampled frame ([`crate::perf::process_cpu_secs`]) — the
-    /// baseline for the window's `cpu_ms`/`cpu_pct`.
+    /// Process CPU seconds at the first sampled frame ([`crate::perf::process_cpu_secs`]), the
+    /// baseline for `cpu_ms`/`cpu_pct`.
     cpu_at_start: Option<f64>,
-    /// Machine-wide CPU ticks at the first sampled frame ([`crate::perf::system_cpu_ticks`]) — the
-    /// baseline for `sys_busy_pct`, which says whether anyone ELSE was competing for the cores
-    /// while this leg ran. `cpu_ms` alone cannot: see that function's header for the 25.93-vs-18.8
-    /// leg that motivated it (1157).
+    /// Machine-wide CPU ticks at the first sampled frame ([`crate::perf::system_cpu_ticks`]), the
+    /// baseline for `sys_busy_pct`: whether other processes competed for the cores.
     sys_at_start: Option<(u64, u64)>,
-    /// The window's occlusion state, maintained from `WindowOccluded` transitions. macOS
-    /// throttles a FULLY covered window to ~1 fps (any covering window, not just the lock
-    /// screen — the director's correction to 0729/0730's lock-screen reading): a probe launched
-    /// detached spawns unfocused and can land completely behind other windows, and its leg then
-    /// measures the throttle, not the client.
+    /// Occlusion, from `WindowOccluded`: macOS throttles a fully covered window to ~1 fps.
     occluded_now: bool,
-    /// Sampled frames taken while occluded — `occluded_frames=` on the probe line, so a
-    /// throttled leg names itself instead of being inferred from a ~1 s hitch signature.
+    /// Sampled frames taken while occluded (`occluded_frames=`).
     occluded_frames: usize,
 }
 
-/// **Where** the sample was taken — the 0705 prove-the-run law: a probe number is evidence only
-/// once the body is known to be at the pin, and `WOW_PROBE_CHAT`'s `.go` can silently fail (a bad
-/// map id, a refused command) leaving the run measuring the login spot.
-///
-/// The *scene-state* half of the pin — which room the camera claims, how many exterior windows,
-/// what the cull did — is the engine's, and arrives with the rest of the census. Without it a
-/// `drawn=` reading taken indoors cannot be read at all: a big number means either "we claimed a
-/// room and the cull let everything through" or "we never claimed a room, so nothing was gated" —
-/// opposite bugs with identical numbers, and the difference cost a measurement.
-/// The display stamp's monitor roster + the `WOW_GPU_MS=1` meter + its sample sink, bundled
-/// (the 16-SystemParam ceiling, the house's SpawnTables shape).
+/// The rest of [`drive_live_fps`]'s params, bundled under the 16-SystemParam ceiling.
 type ScreenParams<'w, 's> = (
     Query<'w, 's, &'static bevy::window::Monitor>,
     Option<Res<'w, crate::perf::GpuMsShared>>,
     Local<'s, Vec<f32>>,
     Option<Res<'w, crate::perf::WgpuCensusShared>>,
-    // Every camera, for `views=`: the number of ACTIVE views the render app walked this frame —
-    // each is its own pass set (a portrait booth awake, a body pane open), and a lane that
-    // scales with views (cluster assignment, the view bind groups, every per-pass tracker) is
-    // not a scene cost until this number is known.
+    // Every camera, for `views=`: active views, each its own pass set.
     Query<'w, 's, &'static Camera>,
     // The UI's live texture-identity runs (`ui_batches=`): one `Mesh2d` draw each in the 2D pass.
     Query<'w, 's, (), With<crate::ui_pass::UiQuadBatch>>,
-    // Every view-visible `Mesh3d` by lane (`vis_terrain/model/liquid/other=`): the 3D passes'
-    // draw population. `drawn=` counts model submeshes only; the terrain is one entity per
-    // ADT chunk and a city horizon is over a thousand of them — a per-draw cost is not
-    // attributable until this split is known.
+    // Every view-visible `Mesh3d` by lane (`vis_terrain/model/liquid/other=`); `drawn=` counts
+    // model submeshes only, and terrain is one entity per ADT chunk.
     Query<
         'w,
         's,
@@ -186,8 +139,8 @@ type ScreenParams<'w, 's> = (
     MessageReader<'w, 's, AssetEvent<benilla_assets::materials::WowModelMaterial>>,
     Res<'w, Time<bevy::time::Virtual>>,
     ResMut<'w, crate::perf::MainThreadSplit>,
-    // The additive blend-state check (`perf::blend_check`): draws whose bound blend state
-    // contradicted their material this frame — `blend_mismatch=` on the line.
+    // `blend_mismatch=` (`perf::blend_check`): draws whose bound blend state contradicts their
+    // material.
     Option<Res<'w, crate::perf::BlendMismatchShared>>,
 );
 
@@ -195,40 +148,31 @@ type ScreenParams<'w, 's> = (
 struct SamplePin<'w, 's> {
     map: Option<Res<'w, benilla_world::world_map::CurrentMap>>,
     body: Option<Res<'w, crate::player::Player>>,
-    /// The eye the leg was measured through — pose-stamped like `sys_busy_pct` time-stamps load,
-    /// and for the same reason: two legs are only comparable if this matches. 1475's bring-up
-    /// lost an hour to a probe whose camera sat first-person pitched 26° down — a per-character
-    /// saved camera file, invisible in every count — and the census read as a regression hunt.
+    /// The camera the leg was measured through: two legs compare only when it matches.
     cam: Query<'w, 's, &'static GlobalTransform, With<benilla_world::view::WorldCamera>>,
 }
 
-/// Wait for in-world + the delay, uncap, warm, sample, print, exit — the live twin of the
-/// harness probe's `Phase::ProbeWarmup`/`Probing` arms.
+/// Waits for the world and the delay, uncaps, warms, samples, prints and exits: the live form of
+/// the harness probe's `Phase::ProbeWarmup`/`Probing` arms.
 fn drive_live_fps(
     mut probe: ResMut<LiveFps>,
     time: Res<Time<bevy::time::Real>>,
     self_player: Query<(), With<crate::net::SelfPlayer>>,
     mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
-    // What the engine drew this frame and what it is holding — submeshes, the exterior-scene
-    // gate, emitters, resident assets, the churn window. One param, one instant.
+    // What the engine drew this frame and what it holds.
     mut census: WorldCensus,
     streamed: Query<(), With<crate::net::NetEntity>>,
-    // The animation-LOD gate's effect, machine-readable per probe: how many
-    // streamed rigs sat parked at sample end.
+    // Rigs the animation-LOD gate parked, at sample end.
     parked: Query<(), With<benilla_world::rig_anim::AnimParked>>,
     entities: Query<()>,
     pin: SamplePin,
-    // The owned skin-palette occupancy — `rigs=live/peak bones=live/peak` on the
-    // probe line proves the palette lane is actually populated (an all-zero table renders
-    // origin-collapsed rigs, which no other probe number would catch).
+    // Skin-palette occupancy (`rigs=live/peak`); an empty table renders origin-collapsed rigs.
     palettes: Option<Res<benilla_world::rig_palette::RigPalettes>>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut key_events: MessageWriter<bevy::input::keyboard::KeyboardInput>,
     mut exit: MessageWriter<AppExit>,
     mut occlusions: MessageReader<bevy::window::WindowOccluded>,
-    // Bundled (the 16-SystemParam ceiling): the monitor roster for the display stamp, and the
-    // `WOW_GPU_MS=1` meter — the render app's whole-frame GPU clock, sampled per probe frame so
-    // the leg line carries gpu percentiles beside the cpu ones (absent when the meter is off).
+    // Includes the `WOW_GPU_MS=1` meter, the render app's whole-frame GPU clock.
     mut screen: ScreenParams,
 ) {
     let (monitors, gpu, gpu_samples, wgpu_census, cameras, ui_batches, vis_meshes) = (
@@ -247,8 +191,7 @@ fn drive_live_fps(
         .11
         .as_ref()
         .map_or(0, |m| m.0.load(std::sync::atomic::Ordering::Relaxed));
-    // Read every frame (a reader that only reads inside the window would report the whole
-    // backlog on its first sampled frame).
+    // Read every frame, or the first sampled frame would report the whole backlog.
     let mesh_added = mesh_events
         .read()
         .filter(|e| matches!(e, AssetEvent::Added { .. }))
@@ -257,22 +200,16 @@ fn drive_live_fps(
         .read()
         .filter(|e| matches!(e, AssetEvent::Added { .. }))
         .count() as u32;
-    // Drain every frame so the state is current whichever phase we're in — the window can be
-    // occluded before sampling ever starts (a detached launch spawns behind whatever is open).
+    // Drained every frame: the window can be occluded before sampling starts.
     for o in occlusions.read() {
         probe.occluded_now = o.occluded;
     }
     match probe.phase {
         LiveFpsPhase::Done => {}
         LiveFpsPhase::Waiting => {
-            // (The un-occludable window that keeps the SETTLE phase from streaming the world at
-            // ~1 fps is [`ProbeFocusPlugin`]'s now — every probe needs it, not just this one.)
             if time.elapsed_secs() < probe.at || self_player.is_empty() {
-                // The boot deadline: entering the world takes seconds, and `at` already grants a
-                // settle window on top — a run still worldless this far past it is stranded on a
-                // glue screen (dead server, refused login the marker arms didn't catch) and every
-                // second more is the 1371 sitting's dead wall-clock again. `FATAL` is the marker
-                // a leg runner keys on.
+                // Still worldless past the deadline: stranded on a glue screen. A leg runner
+                // keys on `FATAL`.
                 if time.elapsed_secs() > probe.at + BOOT_DEADLINE_SECS {
                     error!(
                         "live-fps: FATAL — still not in world {:.0}s past the probe delay; a measurement run with no world is dead. exiting",
@@ -291,10 +228,8 @@ fn drive_live_fps(
                 if probe.run { ", holding W" } else { "" }
             );
             if probe.run {
-                // A synthetic held key: `ButtonInput` persists a press until its release, and the
-                // winit feed only releases keys it saw go down, so this holds across frames. The
-                // raw KeyboardInput message rides along for the binding dispatch's press edge
-                // (MOVEFORWARD latches off the event, holds off the state).
+                // Held until released: winit only releases keys it saw go down. The raw message
+                // gives the binding dispatch its press edge (MOVEFORWARD latches off the event).
                 keys.press(KeyCode::KeyW);
                 key_events.write(bevy::input::keyboard::KeyboardInput {
                     key_code: KeyCode::KeyW,
@@ -324,8 +259,7 @@ fn drive_live_fps(
                 probe.still_at_start = still_inputs_now();
                 main_split.restart();
                 probe.sys_at_start = crate::perf::system_cpu_ticks();
-                // The churn census restarts with the window — warmup noise (streaming, shader
-                // warms) would otherwise read as steady-state ratchets.
+                // Restart churn with the window so warmup does not read as a ratchet.
                 census.restart_churn();
                 probe.occluded_frames = 0;
             }
@@ -378,19 +312,13 @@ fn drive_live_fps(
                 .single()
                 .map(|w| (w.physical_width(), w.physical_height()))
                 .unwrap_or((0, 0));
-            // The present mode actually measured under — an uncap that silently rails is
-            // only diagnosable if the line says what was asked for.
+            // The present mode measured under.
             let present = windows
                 .single()
                 .map(|w| format!(" present={:?}", w.present_mode))
                 .unwrap_or_default();
-            // Which display the window sits on, and that display's refresh rate — the regime a
-            // railed leg is railed AT. Two legs of one sitting have read 126.5 vs exactly 60.0 fps
-            // under the same uncapped present mode (1388 round 3, 1395's pin), and nothing on the
-            // line said why: this machine drives a 60 Hz external beside a 120 Hz built-in, and
-            // present=AutoNoVsync resolves to Metal displaySync=false either way — the rail, when
-            // one appears, is the WindowServer's, keyed to the display. Stamp it so a regime split
-            // reads off the line instead of costing a discarded round.
+            // The display under the window's centre and its refresh rate: on macOS an uncapped
+            // leg can still rail at the WindowServer's per-display rate.
             let display = {
                 let center = windows.single().ok().and_then(|w| match w.position {
                     bevy::window::WindowPosition::At(p) => {
@@ -423,15 +351,14 @@ fn drive_live_fps(
                     None => " display=unpositioned".to_string(),
                 }
             };
-            // The GPU meter's percentiles over the same window (WOW_GPU_MS=1; empty otherwise).
+            // GPU percentiles over the same window (`WOW_GPU_MS=1`; empty otherwise).
             let gpu_line = if gpu_samples.is_empty() {
                 String::new()
             } else {
                 let mut g = std::mem::take(&mut **gpu_samples);
                 g.sort_by(f32::total_cmp);
                 let gat = |q: f32| g[(((g.len() - 1) as f32) * q).round() as usize];
-                // …and the wgpu resource census beside it (`perf::gpu::WgpuCensus`): the
-                // residency term of the pass-encode CPU, sampled at the window's end.
+                // The wgpu resource census (`perf::gpu::WgpuCensus`) at the window's end.
                 let census = wgpu_census
                     .as_ref()
                     .map(|c| {
@@ -461,16 +388,13 @@ fn drive_live_fps(
                     g[g.len() - 1]
                 )
             };
-            // CPU cost per frame across every thread — the load-robust half of the measurement
-            // (`perf::process_cpu_secs`), and directly comparable with a reporter's CPU %.
+            // Process CPU per frame across every thread (`perf::process_cpu_secs`).
             let v_len = v.len();
             let cpu = match (probe.cpu_at_start, crate::perf::process_cpu_secs()) {
                 (Some(t0), Some(t1)) => {
                     let per_frame_ms = (t1 - t0) * 1000.0 / v.len() as f64;
-                    // The tail: CPU percentiles over the same frames, how many frames ran over
-                    // the 60 Hz budget, and the worst six as `index:frame_ms/cpu_ms` — a frame
-                    // whose cpu is near its length was WORK; one far under it was a WAIT (GPU,
-                    // present, a lock).
+                    // CPU percentiles, frames over the 60 Hz budget, and the worst six as
+                    // `index:frame_ms/cpu_ms`: cpu near frame length was work, far under a wait.
                     let mut c: Vec<f32> = probe.cpu_samples.clone();
                     c.sort_by(f32::total_cmp);
                     let cat = |q: f32| c[(((c.len() - 1) as f32) * q).round() as usize];
@@ -500,8 +424,7 @@ fn drive_live_fps(
                         })
                         .collect::<Vec<_>>()
                         .join(",");
-                    // Per thread, ms per frame over the window — the split that says which
-                    // thread a tax landed on; threads sharing a name (a pool) are summed.
+                    // Per thread, ms per frame; threads sharing a name (a pool) are summed.
                     let threads = match (&probe.threads_at_start, crate::perf::thread_cpu_table()) {
                         (Some(t0), Some(t1)) => {
                             let start: std::collections::HashMap<usize, (f64, f64)> =
@@ -538,9 +461,8 @@ fn drive_live_fps(
                                 .zip(probe.still_at_start)
                                 .map(|(n, s)| n.wrapping_sub(s))
                                 .collect();
-                            // Page faults per frame beside the split: `sys` time with no
-                            // syscall under it is the kernel zero-filling pages the allocator
-                            // gave back and asked for again.
+                            // Page faults per frame: `sys` time without syscalls is the kernel
+                            // zero-filling pages.
                             let faults =
                                 match (probe.faults_at_start, crate::perf::process_faults()) {
                                     (Some((mi0, ma0)), Some((mi1, ma1))) => format!(
@@ -571,11 +493,8 @@ fn drive_live_fps(
                 }
                 _ => String::new(),
             };
-            // How busy the WHOLE machine was across the same window — every core, every process.
-            // `cpu_ms` is load-ROBUST, not load-immune (1157: the same pin leg read 25.93 with two
-            // other slots compiling and 18.80-20.12 quiet), so a leg that does not say this cannot
-            // be compared with one taken at a different time. A stamp, never a gate: legs at
-            // similar `sys_busy_pct` are comparable, legs far apart are not.
+            // Machine-wide busy share over the window: `cpu_ms` rises under outside load, so legs
+            // compare only at similar `sys_busy_pct`. A stamp, not a gate.
             let sys = match (probe.sys_at_start, crate::perf::system_cpu_ticks()) {
                 (Some((b0, t0)), Some((b1, t1))) if t1 > t0 => {
                     format!(
@@ -585,9 +504,8 @@ fn drive_live_fps(
                 }
                 _ => String::new(),
             };
-            // The pin the number belongs to, in the `.go xyz` order, so a probe line can be
-            // matched against the report's coordinates without a second instrument — followed by
-            // the exterior-scene gate's state, which is what makes `drawn=` legible indoors.
+            // Where the sample was taken, in `.go xyz` order: a failed `.go` leaves the body at
+            // login. Then the exterior-scene gate's state, which `drawn=` indoors needs.
             let at_pin = match (pin.map.as_ref(), pin.body.as_ref().filter(|b| b.active)) {
                 (Some(m), Some(b)) => {
                     let [x, y, z] = benilla_assets::coords::bevy_to_wow(b.pos);
@@ -610,16 +528,13 @@ fn drive_live_fps(
                 (Some(room), Some(w)) => format!(" room={room} windows={w}"),
                 _ => String::new(),
             };
-            // Beside `room=`, because the two answer the same question from opposite ends:
-            // `room=none` says the camera claims no interior, `sky=` says whether some building's
-            // PVS is painting its own backdrop over the world anyway.
+            // Whether a building's PVS paints its own backdrop, the counterpart of `room=`.
             let sky = seen
                 .sky
                 .as_deref()
                 .map(|s| format!(" sky={s}"))
                 .unwrap_or_default();
-            // The effect stream's other half. `emitters=`/`particles=` above count quad clouds
-            // only, so a screen full of ribbon trails reads as an empty scene without this.
+            // `emitters=`/`particles=` count quad clouds only; ribbons are counted here.
             let ribbons = seen
                 .ribbons
                 .map(|(n, d)| format!(" ribbons={n} ribbons_drawn={d}"))
@@ -680,8 +595,7 @@ fn drive_live_fps(
                 ui_batches.iter().count(),
                 vis = {
                     let mut n = [0usize; 4];
-                    // Of the model parts, how many draw in the transparent pass (M2 `Blend`
-                    // batches) — the sorted phase whose draws never batch across materials.
+                    // Model parts in the transparent pass (M2 `Blend`), which never batch.
                     let mut blended = 0usize;
                     for (vv, terrain, model, liquid) in vis_meshes.iter() {
                         if !vv.get() {
@@ -730,8 +644,7 @@ fn drive_live_fps(
                 probe.occluded_frames,
             );
             print_vis_census(&seen);
-            // The window's Modified-event totals per asset type — a type at ~1×/frame here is a
-            // per-frame re-upload ratchet; absent means quiet.
+            // Modified-event totals per asset type; ~1×/frame is a per-frame re-upload.
             if !seen.churn.is_empty() {
                 let churn = seen
                     .churn
@@ -760,20 +673,9 @@ fn drive_live_fps(
     }
 }
 
-/// **What is on the screen, and who is accountable for it** — the `VIS_CENSUS` line beside
-/// `FPS_PROBE`, plus a per-model breakdown under `WOW_VIS_DUMP=1`.
-///
-/// `drawn=` alone cannot answer "why can I still see that from in here?". It is one number over
-/// every model submesh, and the interesting split is not visible-vs-not: it is which *subsystem* the
-/// visible thing belongs to and whether anything is gating it at all. A tree that draws through a
-/// wall is a completely different defect depending on whether it is tagged as exterior scene
-/// (tagged but admitted — the cull or the bound is wrong) or is not (nothing is gating it — the
-/// wrong lane spawned it). Naming which took a screenshot, an asset dig and a wrong guess; this
-/// line answers it in one run.
-///
-/// `WOW_VIS_DUMP=1` then names the models: one `VIS_DUMP` line per distinct visible label, ungated
-/// first, most-drawn first — which is the "so WHICH trees are they?" question. The counting is
-/// [`benilla_world::world_census`]'s; the line shapes below are ours.
+/// `VIS_CENSUS`: visible submeshes per kind and whether the exterior-scene gate covers them, so a
+/// model drawing through a wall reads as tagged-but-admitted or ungated. `WOW_VIS_DUMP=1` adds one
+/// `VIS_DUMP` line per visible label, ungated first.
 fn print_vis_census(seen: &benilla_world::world_census::CensusReport) {
     let line = seen
         .kinds
@@ -798,8 +700,7 @@ fn print_vis_census(seen: &benilla_world::world_census::CensusReport) {
         "VIS_CENSUS visible-submeshes {line} | resident {resident} | why {why} | tagged={} hidden={} exempt={} no_aabb={}",
         seen.tagged, seen.hidden, seen.exempt, seen.no_aabb
     );
-    // The escapees always print: a tagged, bounded object the cull left un-hidden is a defect by
-    // construction, and burying it behind a flag is how it stays unnoticed.
+    // Always printed: a tagged, bounded object the cull left visible is a defect.
     for (label, card, n) in &seen.escaped {
         let c = if *card { " BILLBOARD-CARD" } else { "" };
         println!("VIS_ESCAPED {n}{c} {label}");

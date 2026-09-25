@@ -1,37 +1,17 @@
-//! The battleground-queue live probe (`WOW_PROBE_BGQUEUE=1`) — the instrument that makes
-//! "**log in while queued for a battleground**" a shape anyone can reproduce, inert without the
-//! env.
+//! The battleground-queue live probe (`WOW_PROBE_BGQUEUE=1`): the fixture for a login while
+//! queued. It levels the body past the bracket floor, hops to the Stormwind Warsong Gulch
+//! battlemaster, greets him (`CMSG_BATTLEMASTER_HELLO`, `SMSG_BATTLEFIELD_LIST`), joins through
+//! the listed guid (`CMSG_BATTLEMASTER_JOIN`) and logs `PROBE bgqueue:` with the slot it got.
 //!
-//! Decision 2232 audited the 29 drains that could still lose a login burst and argued this one
-//! safe on paper: `SMSG_BATTLEFIELD_STATUS` is published as `UPDATE_BATTLEFIELD_STATUS` off a
-//! `mem::take` latch that no `VmMemo` re-arms, so a message consumed in 2214's one-frame window
-//! is gone — but [`crate::ui_battlefield::reset_on_world_enter`] re-sends
-//! `CMSG_BATTLEFIELD_STATUS` on entry and the server answers slot by slot, so the queue heals
-//! itself. That record named the argument **unexercised**, and the reason it stayed unexercised
-//! is that the setup is three server-side gates deep, not that nobody thought to look.
+//! The body stays queued: vmangos only marks a logged-out entry offline
+//! (`BattleGroundMgr.cpp:1768`) and sends its status again at login
+//! (`BattleGroundMgr.cpp:1728`), so the next plain login is the measurement. Dequeue it with
+//! `WOW_PROBE_LUA='AcceptBattlefieldPort(1,0)'` on a plain login.
 //!
-//! So: level past the bracket floor, GM-hop to the Stormwind Warsong Gulch battlemaster, greet
-//! him on the real wire (`CMSG_BATTLEMASTER_HELLO` → `SMSG_BATTLEFIELD_LIST`), queue through the
-//! guid that list carried (`CMSG_BATTLEMASTER_JOIN`), and report the slot the server put us in.
-//! The probe then **leaves the body queued** — vmangos keeps the queue entry across a logout
-//! (`BattleGroundQueue::PlayerLoggedOut` only marks it offline) and re-sends the status from
-//! `Player::LoadFromDB`, i.e. inside the login burst. The NEXT plain login is the measurement;
-//! this run is its fixture.
+//! The bodyless `CMSG_BATTLEFIELD_JOIN` cannot queue: vmangos passes an empty battlemaster guid
+//! (`BattleGroundHandler.cpp:78`), which the NPC interaction check never resolves.
 //!
-//! **Why the guid and not `CMSG_BATTLEFIELD_JOIN`.** vmangos routes the bodyless join through
-//! `RequestBgJoinQueue(ObjectGuid{}, …)`, whose `GetNPCIfCanInteractWith(battlemaster,
-//! UNIT_NPC_FLAG_BATTLEMASTER)` cannot resolve an empty guid — it logs an anticheat line and
-//! returns, silently. Only the battlemaster leg queues anyone, which is why this probe has to
-//! stand next to one.
-//!
-//! **The undo is one line**, and it belongs here rather than in whatever record cites the probe:
-//! the body stays queued until something dequeues it, so leave it clean with
-//! `WOW_PROBE_LUA='AcceptBattlefieldPort(1,0)'` on a plain login — `GetBattlefieldStatus(1)` then
-//! answers `none`. A body left queued is not harmful, only surprising: every later login on that
-//! account carries an extra `SMSG_BATTLEFIELD_STATUS` in its burst.
-//!
-//! Non-combat. Pair with the checkout's probe identity (`.probe-identity`, or WOW_USER/WOW_PASS/WOW_CHAR — the `probe` skill), and `WOW_NOSOUND=1` when
-//! it runs unattended. One `timeout`'d run plus a grep for `PROBE bgqueue:` is the whole harness.
+//! Non-combat; the switches are `docs/CONTRIBUTING.md`, "Running it unattended".
 
 use bevy::prelude::*;
 
@@ -42,22 +22,15 @@ use crate::target::cursor_mode::npc_flags;
 use crate::ui_battlefield::Battlefield;
 use crate::ui_dialog_verbs::BattlefieldQueue;
 
-/// Elfarran's spawn (vmangos `creature` guid 54614, entry 14981, map 0) — Stormwind's Warsong
-/// Gulch battlemaster, `battlemaster_entry` row `14981 → bg_template 2`. The `.go xyz` target;
-/// the battlemaster himself is then found in the streamed world by his npc flag, never by a guid.
+/// Elfarran's spawn (vmangos `creature` guid 54614, entry 14981, map 0), Stormwind's Warsong
+/// Gulch battlemaster; he is then found in the streamed world by his npc flag.
 const BATTLEMASTER_AT: [f32; 3] = [-8454.62, 318.85, 120.97];
-/// Warsong Gulch's Map.dbc row — what `GetBattleGroundTypeIdByMapId` turns back into template 2.
+/// Warsong Gulch's Map.dbc row, which `GetBattleGroundTypeIdByMapId` maps to template 2.
 const WSG_MAP: u32 = 489;
-/// The level the probe body is raised to before queueing.
-///
-/// `battleground_template` carries one row per content patch, and the server picks the highest at
-/// or below its own: WSG opens at **10** on patch 6, **20** on patch 5 and **21** on patch 3. 25
-/// clears all three, so the probe never has to know which patch the local server is running —
-/// a wrong guess there fails as a bare `LANG_YOUR_BG_LEVEL_REQ_ERROR` notification with no queue,
-/// which reads exactly like a broken client.
+/// The level the body is raised to: `battleground_template` opens WSG at 10, 20 or 21 by content
+/// patch, and 25 clears all three.
 const QUEUE_LEVEL: u32 = 25;
-/// `UNIT_NPC_FLAG_BATTLEMASTER`'s service range is the ordinary NPC one; 15 yd is the hop's
-/// settle radius, not a gate — the server applies its own interaction check.
+/// The hop's search radius, not a gate: the server applies its own interaction range.
 const NEAR_YD: f32 = 15.0;
 
 pub(crate) struct ProbeBgQueuePlugin;
@@ -74,8 +47,7 @@ struct BgQueueProbe {
     phase: Phase,
 }
 
-/// `Wait` → (levelled + GM hop sent) `Hopped` → (battlemaster found, hello sent) `Greeted` →
-/// (the list landed, join sent) `Joined` → verdict → `Done`.
+/// `Wait`, `Hopped` (levelled, hop sent), `Greeted` (hello sent), `Joined` (join sent), `Done`.
 #[derive(Default, PartialEq)]
 enum Phase {
     #[default]
@@ -93,7 +65,6 @@ enum Phase {
     Done,
 }
 
-// One Bevy system's full input set (the guard-poi probe's shape).
 fn bg_queue_probe(
     time: ProbeClock,
     mut probe: ResMut<BgQueueProbe>,
@@ -110,18 +81,14 @@ fn bg_queue_probe(
     let now = time.elapsed_secs_f64();
     match probe.phase {
         Phase::Wait => {
-            // **Revive first, unconditionally.** `CanInteractWithNPC` refuses a dead player
-            // outright (`!IsAlive() && !VISIBLE_TO_GHOSTS`), and the refusal surfaces as an
-            // anticheat line about an "invalid creature" — which reads like a wrong guid, not
-            // like a corpse. A probe body parks where the last run left it, and this one is
-            // easy to leave drowned; `.revive` on a living character is a no-op.
+            // Revive first: `CanInteractWithNPC` refuses a dead player (vmangos `Player.cpp:2529`)
+            // with a log line that reads like a wrong guid; `.revive` on the living is a no-op.
             let _ = net.0.send(ClientCommand::Chat {
                 kind: crate::net::ChatKind::Say,
                 target: None,
                 text: ".revive".to_string(),
             });
-            // The level next: a body under the bracket floor is refused at the HELLO, before the
-            // list is ever built, so there would be nothing to queue through.
+            // A body under the bracket floor is refused at the hello, with no list to join from.
             let level = store.0.unit_level().unwrap_or(0);
             if level < QUEUE_LEVEL {
                 info!("PROBE bgqueue: level {level} — raising to {QUEUE_LEVEL} for the bracket");
@@ -142,7 +109,7 @@ fn bg_queue_probe(
         }
         Phase::Hopped { sent_at } => {
             if now - sent_at < 3.0 {
-                return; // post-teleport settle: let the battlemaster stream in
+                return; // let the battlemaster stream in
             }
             let here = player.pos;
             let master = units.iter().find(|(_, net_e, store, tf)| {
@@ -166,8 +133,7 @@ fn bg_queue_probe(
             }
         }
         Phase::Greeted { master, sent_at } => {
-            // Waiting for the LIST, not for a clock: the guid it carries is the one the join has
-            // to quote, and its arrival is the proof the level gate was cleared.
+            // Wait for the list: the join quotes its guid, and it proves the level gate cleared.
             if battlefield.battlemaster() == Some(master) {
                 info!("PROBE bgqueue: list landed — queueing for map {WSG_MAP}");
                 let _ = net.0.send(ClientCommand::BattlemasterJoin {

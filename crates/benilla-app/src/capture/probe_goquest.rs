@@ -1,71 +1,33 @@
-//! The GameObject-questgiver live probe (`WOW_PROBE_GOQUEST=1`) — the instrument for *"wanted
-//! posters and quest objects are never status-queried"*, and for the answer that question turned
-//! out to have.
+//! The GameObject-questgiver live probe (`WOW_PROBE_GOQUEST=1`). The reference asks about a
+//! quest-giving GameObject as it does a creature: the sweep sends `CMSG_QUESTGIVER_STATUS_QUERY`
+//! for any GameObject with `GAMEOBJECT_FLAGS` bit 2 whose reaction toward us is `> 1`. It then
+//! refuses the answer: its handler `0x5dc9f0` resolves the guid with typemask 8, a GameObject's
+//! `0x21` misses bit 3, and the packet dies at `0x5dca2f`. Real 1.12 captures carry no GameObject
+//! status at all, but vmangos answers one (`TYPEMASK_CREATURE_OR_GAMEOBJECT`,
+//! `QuestHandler.cpp:40`), so without the refusal a wanted poster would wear a `!`. The probe tells
+//! "asked and refused" from "never asked" through [`QuestGiver::refused_for`], keyed by guid since
+//! one drain answers several quest objects.
 //!
-//! A quest-giving **GameObject** — a wanted poster, a half-eaten body, a suspicious barrel — is a
-//! questgiver on the wire exactly as a creature is, and the reference client asks about it: the
-//! sweep callback tests typemask bit 5 and sends `CMSG_QUESTGIVER_STATUS_QUERY` for any GameObject
-//! carrying `GAMEOBJECT_FLAGS` bit 2 whose reaction toward us is `> 1`. benilla asked about no
-//! GameObject at all, which is a real wire gap.
+//! Four readings:
 //!
-//! But **the answer is refused, and nothing is ever drawn**: the reference's handler `0x5dc9f0`
-//! resolves the GUID with typemask 8, a GameObject's `0x21` misses bit 3, and the packet dies at
-//! `0x5dca2f`. And the real 1.12 service never sent one anyway — zero GameObject GUIDs across the
-//! 1292 in the genuine sniff corpus. **vmangos does send one** (`TYPEMASK_CREATURE_OR_GAMEOBJECT`,
-//! `QuestHandler.cpp:41`), so on our server the refusal is load-bearing rather than theoretical:
-//! without it a wanted poster would wear a gold `!` the reference client leaves bare.
+//! 1. LOW: at level [`LOW_LEVEL`], below the quest's `MinLevel`, the server answers 1
+//!    (`UNAVAILABLE`) and we refuse it.
+//! 2. HIGH: past `MinLevel` the answer changes to 5 (`AVAILABLE`), so it is a live query.
+//! 3. NO STATUS: `QuestGiver::status()` for the poster stays `None` every frame; the marker layer
+//!    and the minimap dot both draw from it.
+//! 4. UNIT CONTROL: a creature questgiver in the same scene still gets and keeps its status.
 //!
-//! That makes this probe's job the three-way distinction a unit test cannot make at the real
-//! object: **the query went out**, **the answer came back**, and **we refused it** — where "never
-//! asked" and "asked and correctly refused" both read as an empty status map. The refusal readout
-//! ([`QuestGiver::refused_for`]) is what separates them, and an arriving status can only exist if
-//! our query did. It is keyed by guid on purpose: Goldshire has several quest objects in view and
-//! the server answers all of them in one drain, so a single last-writer slot reads as whichever
-//! object archetype order happened to put last (it read as a regression exactly once, on a run
-//! where nothing about the behaviour had changed).
+//! `WOW_PROBE_GOQUEST=<x>,<y>,<z>[,<map>]` aims it elsewhere; the default is the Goldshire wanted
+//! poster (`gameobject` 26843, template 68, type 2, flags 4, quest 176 with `MinLevel` 5 and
+//! `QuestLevel` 11), a single unpooled spawn, with questgiver creatures nearby for the control.
+//! Each window sets the level and bumps the re-ask epoch to force a sweep, the only way a
+//! GameObject guid reaches the wire; the starting level is restored on exit. It logs
+//! `PROBE_GOQUEST:` lines and exits; the switches are `docs/CONTRIBUTING.md`, "Running it
+//! unattended".
 //!
-//! Four readings, in order, and the last two are the controls that make it a regression test:
-//!
-//! 1. **LOW** — at level [`LOW_LEVEL`], below the quest's own `MinLevel`: the server must answer
-//!    `1` (`UNAVAILABLE`, the grey `!` a *creature* would wear) and we must refuse it.
-//! 2. **HIGH** — after a ding past `MinLevel`: the answer must change to `5` (`AVAILABLE`). A probe
-//!    that only ever saw one value could not tell a live query from a single stale packet.
-//! 3. **NO STATUS** — `QuestGiver::status()` for the poster stays `None` throughout, sampled every
-//!    frame rather than at the windows. The marker layer and the minimap dot both draw from exactly
-//!    that map, so an empty entry *is* "no `!`, no dot".
-//! 4. **THE UNIT CONTROL** — a creature questgiver in the same scene still gets and keeps its own
-//!    status. This is the half that must not change, and it is what would catch a refusal written
-//!    one bit too wide.
-//!
-//! ## The run recipe
-//!
-//! ```text
-//! WOW_NOSOUND=1 WOW_USER=probe4 WOW_PASS=pprobe4 WOW_CHAR=Probefour \
-//!     WOW_PROBE_GOQUEST=1 cargo run -q -p benilla
-//! ```
-//! (the checkout's probe identity — `.probe-identity`, or WOW_USER/WOW_PASS/WOW_CHAR; the `probe`
-//! skill). `WOW_PROBE_GOQUEST=<x>,<y>,<z>[,<map>]` aims it elsewhere; the
-//! default is the **Goldshire wanted poster** — `gameobject.guid` 26843, template 68
-//! `Wanted Poster`, `type` 2 `GAMEOBJECT_TYPE_QUESTGIVER`, `flags` 4 `INTERACT_COND`, offering
-//! quest 176 `Wanted: "Hogger"` (`MinLevel` 5, `QuestLevel` 11). It is a single **unpooled** spawn
-//! with a 900 s respawn, so it is there every run — unlike the chest probe's first target, which
-//! was a spawn-pool member and read "missing" most of the time (decision 1471's trap). Goldshire
-//! also supplies the unit control (Marshal Dughan and the innkeeper are both questgiver-flagged),
-//! which is why both halves can be read at one spot.
-//!
-//! Each window forces its own sweep, because that is the *only* way a GameObject GUID reaches the
-//! wire: it sets the level (the reference's own `UNIT_FIELD_LEVEL` watch, and what makes the answer
-//! change) and then bumps the packet epoch, so the window sweeps even if the character already
-//! happened to be standing at the level the window wants. The starting level is restored on exit.
-//!
-//! **One trap the scan line will show you:** every probe character is permanently in GM mode
-//! (`characters.extra_flags` bit `0x1`), and vmangos ORs `target->IsGameMaster()` into a
-//! GameObject's `IsActivateToQuest` (`Object.cpp`) — so `GAMEOBJECT_DYN_FLAGS` reads `0x1` on
-//! every quest object regardless of whether the character could actually take the quest. The
-//! *dialog status* is computed without any GM term, so the windows below are unaffected; but do
-//! not read the dyn-flag as "this quest is available to me", and do not gate a query on it.
-//!
-//! Grep `PROBE_GOQUEST:` for the verdict; the probe self-exits when it lands.
+//! vmangos ORs `IsGameMaster()` into a GameObject's `IsActivateToQuest` (`Object.cpp:652`), so in
+//! GM mode `GAMEOBJECT_DYN_FLAGS` reads `0x1` on every quest object; the dialog status has no GM
+//! term, so the readings are unaffected.
 
 use bevy::prelude::*;
 
@@ -79,15 +41,15 @@ use crate::ui_quest::QuestGiver;
 /// The probe's default object: the `Wanted Poster` outside the Goldshire inn (`gameobject` 26843,
 /// template 68, quest 176). `[x, y, z, map]`.
 const POSTER_AT: [f32; 4] = [-9668.23, 683.39, 36.33, 0.0];
-/// `GAMEOBJECT_TYPE_QUESTGIVER` — the strategy type a wanted poster carries.
+/// `GAMEOBJECT_TYPE_QUESTGIVER`, the type a wanted poster carries.
 const GO_TYPE_QUESTGIVER: i32 = 2;
-/// `GAMEOBJECT_FLAGS` bit 2 — the reference's whole GameObject query gate (`0x5eb0f2 shr eax,0x2`).
+/// `GAMEOBJECT_FLAGS` bit 2, the reference's GameObject query gate (`0x5eb0f2`).
 const GO_FLAG_INTERACT_COND: u32 = 0x4;
-/// `UNIT_NPC_FLAGS` questgiver bit — how the unit control names itself.
+/// `UNIT_NPC_FLAGS` questgiver bit, how the unit control is found.
 const NPC_FLAG_QUESTGIVER: u32 = 0x2;
-/// The two levels the two windows are read at, chosen against quest 176's own `MinLevel` 5 and
-/// `QuestLevel` 11: below it the server answers `UNAVAILABLE`, above it `AVAILABLE` (and not
-/// `CHAT`, which would need `level > QuestLevel + Quests.LowLevelHideDiff`).
+/// The two windows' levels, against quest 176's `MinLevel` 5 and `QuestLevel` 11: below it the
+/// server answers `UNAVAILABLE`, above it `AVAILABLE` (not `CHAT`, which needs
+/// `level > QuestLevel + Quests.LowLevelHideDiff`).
 const LOW_LEVEL: u32 = 2;
 const HIGH_LEVEL: u32 = 8;
 /// `DialogStatus` ids the verdict is written in (the keys of the status map `0x80c454`).
@@ -96,8 +58,7 @@ const STATUS_AVAILABLE: u32 = 5;
 
 const SETTLE_SECS: f64 = 5.0;
 const SCAN_TIMEOUT_SECS: f64 = 25.0;
-/// How long a window waits for the refused answer. The query goes out on the sweep the window
-/// itself forces; nothing arriving in this long means it was never sent.
+/// How long a window waits for the refused answer; nothing arriving means it was never sent.
 const STATUS_TIMEOUT_SECS: f64 = 15.0;
 /// How long a `.levelup` is given to come back down the wire as a `UNIT_FIELD_LEVEL` change.
 const LEVEL_TIMEOUT_SECS: f64 = 15.0;
@@ -118,9 +79,9 @@ struct GoQuestProbe {
     phase: Phase,
     /// The poster's guid, once the scan finds it.
     poster: Option<u64>,
-    /// The unit control's guid — a questgiver-flagged creature in the same scene.
+    /// The unit control's guid, a questgiver-flagged creature in the same scene.
     control: Option<u64>,
-    /// The level the character was at when the probe started — restored before it exits.
+    /// The level the character was at when the probe started, restored before it exits.
     start_level: Option<u32>,
     /// The refused status read in each window.
     low: Option<u32>,
@@ -158,8 +119,8 @@ enum Phase {
     Done,
 }
 
-/// Where the probe is aimed: `WOW_PROBE_GOQUEST=<x>,<y>,<z>[,<map>]`, else [`POSTER_AT`]. Anything
-/// unparseable falls back to the default rather than failing the run — the common value is `1`.
+/// Where the probe is aimed: `WOW_PROBE_GOQUEST=<x>,<y>,<z>[,<map>]`, else [`POSTER_AT`] (also
+/// for `1`).
 fn target() -> [f32; 4] {
     let Ok(raw) = std::env::var("WOW_PROBE_GOQUEST") else {
         return POSTER_AT;
@@ -175,8 +136,8 @@ fn target() -> [f32; 4] {
     }
 }
 
-/// `.levelup <delta>` on the probe's own character. Nothing is ever selected by this probe, so the
-/// command's creature branch (`GetSelectedCreature`) can't fire.
+/// `.levelup <delta>` on the probe's own character; nothing is selected, so the command's
+/// creature branch (`GetSelectedCreature`) cannot fire.
 fn level_to(net: &NetCommands, from: u32, to: u32) {
     let delta = i64::from(to) - i64::from(from);
     if delta == 0 {
@@ -228,8 +189,7 @@ fn goquest_probe(
         return; // our own descriptor hasn't landed
     };
     let now = time.elapsed_secs_f64();
-    // Sampled every frame, not just at the windows: a status that flashed on for one frame and was
-    // pruned would still have been a rendered `!`, and the claim is that none is ever stored.
+    // Sampled every frame: a status stored for one frame is still a rendered `!`.
     if probe.poster.is_some_and(|p| quest.status(p).is_some()) {
         probe.poster_ever_stored = true;
     }
@@ -318,10 +278,8 @@ fn goquest_probe(
         }
         Phase::Level { to, since } => {
             if level == to {
-                // Force the sweep this window depends on. A GameObject GUID reaches the wire ONLY
-                // from a sweep (`0x5eb159`, `0x5eb456`), and the level change above is one — but it
-                // is a no-op when the character already stood at this level, so the epoch bump
-                // makes the window's sweep unconditional.
+                // A GameObject guid reaches the wire only from a sweep (`0x5eb159`, `0x5eb456`);
+                // the epoch bump forces one even if the level did not change.
                 quest.bump_reask();
                 info!("PROBE_GOQUEST: at level {to}, swept — reading the window");
                 probe.phase = Phase::Read {
@@ -337,8 +295,7 @@ fn goquest_probe(
         Phase::Read { level: at, since } => {
             let count = quest.refused_count();
             let mine = probe.poster.and_then(|p| quest.refused_for(p));
-            // The HIGH window must see a *different* answer than LOW, or one stale refusal would
-            // satisfy both.
+            // HIGH must see a different answer than LOW, or one stale refusal would satisfy both.
             let settled = if at == LOW_LEVEL {
                 mine
             } else {
@@ -420,9 +377,8 @@ fn goquest_probe(
                 probe.high,
                 quest.refused_count(),
             );
-            // The probe self-exit pattern (`ProbeExitPlugin::fire_probe_exit`): a polite AppExit
-            // plus a hard backstop thread, so a net/winit teardown hang can't leave a zombie
-            // client holding the probe account.
+            // `ProbeExitPlugin::fire_probe_exit`'s pattern: `AppExit` plus a hard backstop, so a
+            // teardown hang cannot leave a client holding the probe account.
             exit.write(AppExit::Success);
             std::thread::spawn(|| {
                 std::thread::sleep(std::time::Duration::from_secs(5));

@@ -1,24 +1,8 @@
-//! The inbound **handler table** — the reference's own shape for the wire's
-//! arrival side, and the cut 2265 §A1 asked for between the net bridge and the game windows.
-//!
-//! The real client keeps an opcode → handler table inside `NetClient` (`+0x74`, 828 slots; 387
-//! registrations by 37 subsystem clusters) and its dispatcher `0x537aa0` knows
-//! none of them: it looks the opcode up and calls what it finds, **in packet order**, discarding an
-//! unregistered opcode in silence. Here the table is [`NetHandlers`]: a [`SessionEventKind`] →
-//! handlers map that every subsystem fills for itself through [`NetHandlerApp::net_handler`], and
-//! the drain ([`super::apply_net_updates`]) is exclusive over the world so the handlers — ordinary
-//! systems taking `In<SessionEvent>`, registered as one-shots — run one after another in the
-//! order the packets arrived, each seeing what the one before it did.
-//!
-//! **Why not one typed `Message<T>` per family with a reader system each** (2265's sketch): a
-//! reader per family runs *after* the whole drain, so two families' packets interleaved in one
-//! frame are handled family by family, not in packet order — a chat line and a combat-log line
-//! that arrived in one drain would swap. The table keeps the one property 2265 said must survive
-//! any split: one frame, packet order, before anything else runs.
-//!
-//! **The table is the whole dispatch** (since 2327). Every kind has at least one handler, read
-//! off the built client by `every_session_event_kind_has_one_owner`; the drain's own match, the
-//! runs it took across the seam and the broadcast list (2305, 2306, 2326) are gone.
+//! The inbound handler table, the reference's shape: `NetClient` holds an opcode → handler table
+//! (`+0x74`, 828 slots) and its dispatcher `0x537aa0` calls each packet's handler in packet order,
+//! dropping an unregistered opcode in silence. Here each subsystem registers one-shot systems per
+//! [`SessionEventKind`] through [`NetHandlerApp::net_handler`], and the exclusive drain runs them
+//! in packet order, each seeing what the one before it did.
 
 use std::collections::HashMap;
 
@@ -26,18 +10,17 @@ use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::ecs::system::SystemId;
 use bevy::prelude::*;
 
-/// One registered handler: the one-shot system and the name it registers under (for the census).
+/// One registered handler: the one-shot system and its name for the census.
 type Handler = (SystemId<In<SessionEvent>>, &'static str);
 
-/// The table. Filled at plugin build by every subsystem that answers a packet; read by the drain.
+/// The table, filled at plugin build and read by the drain.
 #[derive(Resource, Default)]
 pub(crate) struct NetHandlers {
     by_kind: HashMap<SessionEventKind, Vec<Handler>>,
 }
 
 impl NetHandlers {
-    /// Every kind with a handler, with the handlers' names in registration order — the owner
-    /// test's view of the table.
+    /// Every kind with a handler, and the handlers' names in registration order.
     #[cfg(test)]
     pub(crate) fn census(&self) -> std::collections::BTreeMap<SessionEventKind, Vec<&'static str>> {
         self.by_kind
@@ -46,10 +29,8 @@ impl NetHandlers {
             .collect()
     }
 
-    /// Run **every** registered handler once with `ev` — whatever kind it registered for — and
-    /// name the ones that could not run. A handler matches on its own kind and ignores the rest,
-    /// so what this exercises is the part a wrong-kind event still reaches: the system's
-    /// parameters being fetched from this world.
+    /// Runs every handler once with `ev`, whatever its kind, and names those that could not run:
+    /// a wrong-kind event still fetches the system's parameters.
     #[cfg(test)]
     pub(crate) fn probe(&self, world: &mut World, ev: &SessionEvent) -> Vec<String> {
         let mut failed = Vec::new();
@@ -68,8 +49,7 @@ impl NetHandlers {
         self.by_kind.entry(kind).or_default().push(handler);
     }
 
-    /// Run every handler registered for the event's kind, in registration order, each with the
-    /// event (cloned for all but the last).
+    /// Runs the event's handlers in registration order.
     fn run(&self, world: &mut World, ev: SessionEvent) {
         let Some(list) = self.by_kind.get(&SessionEventKind::from(&ev)) else {
             return;
@@ -86,15 +66,13 @@ impl NetHandlers {
 
 fn call(world: &mut World, id: SystemId<In<SessionEvent>>, name: &str, ev: SessionEvent) {
     if let Err(e) = world.run_system_with(id, ev) {
-        // A registered handler that cannot run is a bug in the registering plugin (a missing
-        // resource, most likely), never the wire's fault — loud, so the smoke gate sees it.
+        // A plugin bug (most likely a missing resource), logged loud so the smoke gate sees it.
         error!("net: handler `{name}` did not run: {e}");
     }
 }
 
-/// Registering a packet handler from a plugin: `app.net_handler(SessionEventKind::X, on_x)`,
-/// where `on_x` is an ordinary system taking `In<SessionEvent>` and whatever it needs. Several
-/// handlers may answer one kind; they run in registration order.
+/// `app.net_handler(SessionEventKind::X, on_x)` registers a system taking `In<SessionEvent>`;
+/// several handlers on one kind run in registration order.
 pub(crate) trait NetHandlerApp {
     fn net_handler<M>(
         &mut self,
@@ -118,8 +96,7 @@ impl NetHandlerApp for App {
     }
 }
 
-/// One drain's dispatch, **in wire order**: every event runs its handlers in place, each
-/// handler's commands applied before the next event's.
+/// One drain's dispatch in wire order, each handler's commands applied before the next event.
 pub(crate) fn dispatch(world: &mut World, events: Vec<SessionEvent>) {
     let handlers = world.remove_resource::<NetHandlers>().unwrap_or_default();
     for ev in events {
@@ -132,7 +109,7 @@ pub(crate) fn dispatch(world: &mut World, events: Vec<SessionEvent>) {
 mod tests {
     use super::*;
 
-    /// What ran, in order — a handler's name and the event it saw.
+    /// What ran, in order.
     #[derive(Resource, Default)]
     struct Log(Vec<String>);
 
@@ -204,9 +181,7 @@ mod tests {
         );
     }
 
-    /// **Every kind has a handler**, read off the built client. A kind with none is a packet the
-    /// client decodes and then drops on the floor — the reference discards an unregistered
-    /// opcode in silence; this says so at test time.
+    /// A kind with no handler is a decoded packet dropped in silence, as the reference does.
     #[test]
     fn every_session_event_kind_has_one_owner() {
         let mut app = crate::game_plugins::schedule_tests::headless_client();
@@ -224,11 +199,8 @@ mod tests {
         assert!(unowned.is_empty(), "{}", unowned.join("\n"));
     }
 
-    /// **Every registered handler can run on the built client.** The dispatch match's parameters
-    /// were fetched every frame from the first, so a resource nobody inserted failed at boot; a
-    /// handler's are fetched when its packet arrives, which for a rare packet is never in a
-    /// smoke run. This fetches them all, once, on the headless client — every plugin built and
-    /// finished — by running each handler with an event of a kind it ignores.
+    /// A handler's parameters are fetched only when its packet arrives, which for a rare packet is
+    /// never in a smoke run; this fetches them all once, with an event each handler ignores.
     #[test]
     fn every_registered_handler_can_run_on_the_built_client() {
         let mut app = crate::game_plugins::schedule_tests::headless_client();
@@ -245,11 +217,8 @@ mod tests {
         assert!(failed.is_empty(), "{}", failed.join("\n"));
     }
 
-    /// **A handler matches the kind it registered for.** `net_handler(K::X, on_y)` routes X to
-    /// `on_y`, and `on_y` opens with `if let SessionEvent::X` — two spellings of one kind, which
-    /// nothing else ties together: a handler registered under the wrong kind compiles, runs, and
-    /// silently ignores its packet. Read off the source: every registration's handler names its
-    /// kind in its body. A session-end listener takes `In(_)` and is exempt.
+    /// A handler registered under the wrong kind compiles and silently ignores its packet, so each
+    /// handler must name `SessionEvent::<Kind>` in its body; a session-end listener is exempt.
     #[test]
     fn every_handler_names_the_kind_it_registered_for() {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -305,9 +274,7 @@ mod tests {
                     })
                     .map(|(_, l)| l)
                     .collect();
-                // The whole variant name, not a prefix of one: `SessionEvent::Chat` is the head
-                // of `ChatPlayerNotFound` too, so a bare `contains` let a handler registered for
-                // `Chat` pass by matching a cousin (six kinds are prefixes of others).
+                // The whole variant name: `Chat` is also a prefix of `ChatPlayerNotFound`.
                 let names_kind = {
                     let body = body.join("\n");
                     let needle = format!("SessionEvent::{kind}");

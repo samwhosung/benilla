@@ -1,9 +1,6 @@
-//! **Every packet's handler sees what the packets before it did** — the property 2306 measured
-//! across the migration's seam (a run boundary was a command flush mid-frame) and the one the
-//! whole dispatch rests on now that every packet is its own handler with its commands applied
-//! before the next. The first test drives the real drain on the built client
-//! over one frame two ways and compares; the rest are 1478's speed-staging laws, which used to
-//! be unit tests over a staging map and are now the same laws over consecutive packets.
+//! Every packet's handler sees what the packets before it did: the first test drives the real
+//! drain over one frame two ways and compares, the rest pin the speed-change ordering laws over
+//! consecutive packets.
 
 use benilla_protocol::field::{FIELD_UNIT_HEALTH, FIELD_UNIT_LEVEL, FIELD_UNIT_MAXHEALTH};
 use benilla_protocol::messages::{ObjectType, SpeedKind, SplineMode};
@@ -68,7 +65,7 @@ fn updates() -> Vec<SessionEvent> {
     ]
 }
 
-/// A packet of another subsystem's — any would do; the mailbox's needs no open window.
+/// A packet of another subsystem's; the mailbox's needs no open window.
 fn claimed() -> SessionEvent {
     SessionEvent::NextMailTime { seconds: -86400.0 }
 }
@@ -186,13 +183,9 @@ fn speeds_after(events: Vec<SessionEvent>) -> Option<MoveSpeeds> {
     world.get::<UnitSpeeds>(e).map(|s| s.0)
 }
 
-/// **B213, pinned at the drain.** vmangos's `HandleMoveWorldportAckOpcode` sends the self create
-/// block (`Map::Add` → `SendInitSelf`, still carrying the mount's 11.2 yd/s) and then, three
-/// statements later, strips the mount because the destination map forbids one — so
-/// `SMSG_FORCE_RUN_SPEED_CHANGE` 7.0 rides the same tick. In wire order the change wins; before
-/// 1478 the create's *deferred* `UnitSpeeds` insert landed last and `.tele` into BWL left the
-/// avatar running at mount speed on foot. Under a handler per packet the create's insert has
-/// landed before the change's handler runs, and the change edits the live component.
+/// A worldport sends the self create block still at mount speed (`MovementHandler.cpp:115`), then
+/// dismounts where the map forbids a mount (`MovementHandler.cpp:183`) in the same tick; in wire
+/// order the force change wins.
 #[test]
 fn a_force_change_beats_a_create_from_the_same_frame() {
     let mounted = MoveSpeeds {
@@ -215,8 +208,7 @@ fn a_force_change_beats_a_create_from_the_same_frame() {
     );
 }
 
-/// The reverse order is just as much the wire's order: a create block is the server's newest
-/// snapshot of the mover, so one arriving *after* a change replaces it whole.
+/// A create block is the server's newest snapshot of the mover, so one after a change replaces it.
 #[test]
 fn a_create_after_a_change_replaces_it() {
     let on_foot = MoveSpeeds {
@@ -258,8 +250,7 @@ fn a_change_on_a_live_mover_keeps_its_other_slots() {
     assert_eq!(s.turn_rate, on_foot.turn_rate);
 }
 
-/// A change with nowhere to land — a mover whose create carried no movement block — invents no
-/// speed set: nothing is inserted for a set that never existed.
+/// A change on a mover whose create carried no movement block inserts nothing.
 #[test]
 fn a_change_with_no_speed_set_invents_none() {
     assert!(speeds_after(vec![create_with_speeds(None), force_run(7.0)]).is_none());

@@ -1,9 +1,5 @@
-//! The bridge's own world feed (in the net handler table since 2325, moved out of the drain's
-//! world arm file) — what the server pushes about the *world* rather than about an entity or a
-//! window, forwarded by the bridge because what receives it is not an app subsystem: the weather
-//! change goes to the world crate's weather as a [`WeatherMessage`], and the world-state table the
-//! UI's `$<n>w` tokens read is a cache the bridge initialises ([`WorldStates`]). Registered from
-//! [`super::NetPlugin`].
+//! The bridge's world feed: weather goes to the world crate as a [`WeatherMessage`], world states
+//! to the [`WorldStates`] table the UI's `$<n>w` tokens read.
 
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use benilla_world::weather::WeatherMessage;
@@ -12,7 +8,7 @@ use bevy::prelude::*;
 use super::NetHandlerApp;
 use crate::world_state::WorldStates;
 
-/// Register the two handlers — called from [`super::NetPlugin`].
+/// Registers the two handlers.
 pub(super) fn register(app: &mut App) {
     use SessionEventKind as K;
     app.net_handler(K::Weather, on_weather)
@@ -41,7 +37,7 @@ fn on_world_states(In(ev): In<SessionEvent>, mut states: ResMut<WorldStates>) {
     }
 }
 
-/// `SMSG_WEATHER` — the zone's weather change (`instant` on zone entry, a ramp otherwise).
+/// `SMSG_WEATHER`: the zone's weather change, `instant` on zone entry, a ramp otherwise.
 fn weather(
     weather_type: u32,
     grade: f32,
@@ -57,13 +53,9 @@ fn weather(
     });
 }
 
-/// `SMSG_INIT_WORLD_STATES` / `SMSG_UPDATE_WORLD_STATE` — both wires funnel into the one setter,
-/// as the reference's own handler does.
-///
-/// An **init clears the table first** and records its `(map, zone)` as the world-state UI's display
-/// filter — the reference's `0x4c5650`, which runs before the pair loop (rationale on
-/// [`crate::world_state`]). The order below
-/// is that handler's: clear + scope, then the packet's pairs.
+/// `SMSG_INIT_WORLD_STATES` and `SMSG_UPDATE_WORLD_STATE` share one setter, as in the reference.
+/// An init first clears the table and records `(map, zone)` as the UI's display filter, then
+/// writes its pairs (reference: `0x4c5650`).
 fn world_states(
     scope: Option<(u32, u32)>,
     states: Vec<(u32, u32)>,

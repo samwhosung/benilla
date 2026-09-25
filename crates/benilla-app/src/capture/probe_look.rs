@@ -1,19 +1,10 @@
-//! `WOW_PROBE_LOOK` — the scripted **mouse-turn**, the one player action the probe harness could not
-//! synthesize.
+//! `WOW_PROBE_LOOK`: the scripted mouse-turn, which drives the per-frame facing stream a key press
+//! cannot.
 //!
-//! `WOW_PROBE_KEY` presses keys, which is enough for the transition opcodes; but since decision 0617
-//! the busiest thing on our wire by far is the facing stream a *mouse* turn produces (~one packet per
-//! frame). A defect that only shows up under that density — and the runaway hunt looks like exactly
-//! that — could not be reproduced headlessly at all: an agent had to ask the director to drive, every
-//! iteration. That is the tooling gap this closes.
-//!
-//! Format: `WOW_PROBE_LOOK="<deg_per_sec>@<start_s>:<duration_s>[;…]"`, e.g. `"90@20:6"` — turn the
-//! avatar's aim 90°/s for six seconds starting twenty seconds in. Negative rates turn the other way.
-//! It writes [`Player::face_yaw`] directly rather than faking `AccumulatedMouseMotion` + a held right
-//! button: the camera's look session gates on the OS cursor being inside the viewport
-//! (`cursor_in_viewport`), which is unreliable for an unfocused probe window, and the camera plumbing
-//! is not what is under test. From `face_yaw` onward this is the identical path a real mouse-turn
-//! takes — the same value `stream_self_movement` diffs to decide on a `MSG_MOVE_SET_FACING`.
+//! Format: `WOW_PROBE_LOOK="<deg_per_sec>@<start_s>:<duration_s>[;...]"`, e.g. `"90@20:6"` turns
+//! the aim 90 degrees/s for 6 s from 20 s in; a negative rate turns the other way. It writes
+//! [`Player::face_yaw`] directly, since the look session gates on the OS cursor being inside the
+//! viewport; from there it is the path a mouse-turn takes to `MSG_MOVE_SET_FACING`.
 
 use bevy::prelude::*;
 
@@ -22,11 +13,8 @@ use benilla_world::schedule::WorldStage;
 
 use super::ProbeClock;
 
-/// One scripted turn: `rate` (rad/s), when it starts, and how long it runs — **wall-clock seconds**
-/// ([`ProbeClock`]). Both halves want real time here, for one reason: `90°/s for 6 s`
-/// has to produce 540° of facing stream whatever the frame rate did, and the stream it feeds is
-/// itself paced on the real clock. On the virtual clock the schedule would drift *and* every
-/// hitch would silently under-rotate the turn, since its delta is clamped to 250 ms.
+/// One scripted turn: `rate` (rad/s) over a window in wall-clock seconds ([`ProbeClock`]); the
+/// virtual clock clamps its delta to 250 ms, which would under-rotate across a hitch.
 struct Turn {
     rate: f32,
     at: f32,
@@ -38,8 +26,7 @@ pub(crate) struct ProbeLook {
     turns: Vec<Turn>,
 }
 
-/// Parse the env script. Absent or unparseable entries yield no turns (with a warning), so the probe
-/// is inert unless asked for.
+/// Parses `WOW_PROBE_LOOK`; unparseable entries are skipped with a warning.
 pub(crate) fn from_env() -> Option<ProbeLook> {
     let spec = std::env::var("WOW_PROBE_LOOK").ok()?;
     let turns: Vec<Turn> = spec
@@ -69,8 +56,8 @@ pub(crate) fn from_env() -> Option<ProbeLook> {
     (!turns.is_empty()).then_some(ProbeLook { turns })
 }
 
-/// Rotate the aim for every turn whose window covers this frame. Runs in `WorldStage::Input`
-/// **before** the controller, so the frame that sees the new `face_yaw` is the frame that streams it.
+/// Rotates the aim for every turn whose window covers this frame, before the controller, so the
+/// same frame streams it.
 pub(crate) fn drive_probe_look(
     probe: Res<ProbeLook>,
     time: ProbeClock,
@@ -93,11 +80,8 @@ pub(crate) fn drive_probe_look(
     }
 }
 
-/// `WOW_PROBE_LOOK`'s registration. Added by the probe fleet when the variable is set, and inert
-/// (no resource, no systems) if the script parses to nothing — the same shape every other probe in
-/// the fleet has. It orders itself **before** [`crate::player::control`], which is what makes the
-/// frame that sees the new `face_yaw` the frame that streams it; the controller knows nothing
-/// about it.
+/// Registers `WOW_PROBE_LOOK` before [`crate::player::control`]; inert if the script parses to
+/// nothing.
 pub(crate) struct ProbeLookPlugin;
 
 impl Plugin for ProbeLookPlugin {

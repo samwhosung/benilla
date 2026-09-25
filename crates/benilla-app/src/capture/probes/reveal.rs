@@ -1,38 +1,11 @@
-//! The **reveal audit** (`WOW_REVEAL=<frames>`) — one line per frame from a snap, naming every
-//! term that decides whether the world the player is about to be shown is actually there.
+//! `WOW_REVEAL=<frames>`: one `REVEAL` line per frame after a snap (a same-map teleport or a
+//! worldport), naming every term that decides whether the destination is drawn. Residency columns
+//! (`res`, `focus`, `scene`, `place`, `coll`, `merge`, `gx`) are the terms behind
+//! [`WorldLoadProgress::presentable`], which the cover waits on; draw columns (`drawn`, `hid`,
+//! `sel`, `room`, `win`, `pvslag`) are what the frame put on screen.
 //!
-//! "Teleported and the city wasn't drawn for a frame or more" is a *temporal* claim about the
-//! frames either side of a reveal, and neither a screenshot nor the loading screen's own 3-second
-//! wait line can hold one: the screenshot is one frame with no state attached, and the wait line
-//! only speaks for loads slow enough to be stuck. This prints the whole window — the cover, the
-//! residency terms behind [`WorldLoadProgress::presentable`], the settle hold, and the retained
-//! pass's collected-vs-published region counts — so "which term let the reveal through" is read
-//! off a column instead of guessed.
-//!
-//! ```text
-//! WOW_USER=probe1 WOW_PASS=pprobe1 WOW_CHAR=Probeone \
-//!   WOW_PROBE_CHAT=".go xyz -9250.45 160.86 67.90 0;.tele stormwind" \
-//!   WOW_PROBE_CHAT_AT=20 WOW_PROBE_CHAT_EVERY=25 WOW_REVEAL=120 \
-//!   WOW_PROBE_EXIT_AT=70 cargo run -q -p benilla | grep REVEAL
-//! ```
-//!
-//! The arming edge is the snap itself (a same-map teleport or a worldport), so the window covers
-//! the frames a cover would have to be up for — and, when none is, the frames the player is
-//! looking at the destination through nothing at all.
-//!
-//! **It runs in `Last`, and that is load-bearing.** Half of what decides whether a frame has a
-//! world in it is settled in `PostUpdate` — bevy's visibility check, the exterior-scene gate, the
-//! retained pass's own scene walk — and a line printed in `Update` reports those columns from the
-//! *previous* frame. Against a one-or-two-frame artefact an off-by-one instrument is worse than
-//! none: it attributes the hole to the frame beside it. In `Last` every column below is this
-//! frame's, residency and draw alike.
-//!
-//! The columns split into two halves on purpose. **Residency** (`res`, `focus`, `scene`, `place`,
-//! `coll`, `merge`, `gx`) is *what the world has* — the terms behind
-//! [`WorldLoadProgress::presentable`], the ones the cover is raised and cleared on. **Draw**
-//! (`drawn`, `hid`, `sel`, `room`, `win`, `pvseye`) is *what the frame put on screen*. A reveal
-//! defect where every residency term reads ready and the draw half has collapsed is not a
-//! streaming bug at all — it is the visibility authority answering about somewhere else.
+//! Runs in `Last`: visibility, the exterior-scene gate and the retained pass settle in
+//! `PostUpdate`, so an `Update` line would report them a frame late.
 
 use bevy::prelude::*;
 
@@ -47,9 +20,7 @@ struct RevealAudit {
     frames: u32,
     /// Frames printed since the current arm; `None` = not armed.
     n: Option<u32>,
-    /// [`ProbeClock`] seconds at the arming snap — the `t=` column. The wall clock, like every
-    /// other probe schedule: a reveal window is measured in real milliseconds,
-    /// and the virtual clock clamps exactly the hitching frames this instrument exists to see.
+    /// [`ProbeClock`] seconds at the arming snap, the base of the `t=` column.
     since: f32,
 }
 
@@ -66,8 +37,7 @@ impl Plugin for RevealAuditPlugin {
             n: None,
             since: 0.0,
         })
-        // In `Last`: after the streamer published residency, after the screen decided what to do
-        // with it, and after `PostUpdate` settled what actually draws (see the module docs).
+        // `Last`: after residency, the loading screen and `PostUpdate`'s visibility.
         .add_systems(Last, drive_reveal_audit);
     }
 }
@@ -105,8 +75,7 @@ fn drive_reveal_audit(
         .as_deref()
         .map_or((0, 0, 0), benilla_world::static_gx::StaticGx::draw_census);
     let seen = census.take();
-    // How far the visibility authority's pose is from the eye this frame is actually drawn from
-    // — ~0 in steady play, the whole jump on a snap frame it has not caught up with.
+    // Distance from the visibility authority's eye to the drawn camera: ~0 in steady play.
     let pvs_lag = match (seen.pvs_eye, cam.iter().next()) {
         (Some(eye), Some(now_eye)) => eye.distance(now_eye.translation()),
         _ => f32::NAN,

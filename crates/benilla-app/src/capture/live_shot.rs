@@ -1,8 +1,5 @@
-//! The LIVE probe shot — one screenshot (or an adjacent-frame burst) of a NORMAL connected run,
-//! with the two validity gates that make its output *evidence*: the death gate (a dead/ghost
-//! avatar renders the whole world through the death filter) and the subject gate
-//! (`WOW_SHOT_REQUIRE` — a frame that cannot contain the reported subject is not a measurement of
-//! it). Split from `probes` when the gates outgrew it; the sibling probe one-shots stay there.
+//! The live probe shot: a screenshot or adjacent-frame burst of a connected run, gated on a live
+//! avatar (a ghost renders through the death filter) and on the subject being in frame.
 
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
@@ -14,43 +11,22 @@ use crate::names::NameCache;
 use crate::net::{Guid, NetCommands, NetEntity, ObjectStore, SelfPlayer};
 use benilla_world::view::WorldCamera;
 
-/// How far the subject gate's WARN looks when listing what *is* nearby — wide enough to catch the
-/// "right room, wrong wing" mis-aim even when `WOW_SHOT_REQUIRE_DIST` is tight.
+/// How far the subject gate's warning looks when listing what is nearby.
 const REQUIRE_NEARBY_RANGE: f32 = 100.0;
 
-/// Seconds between subject-gate WARNs while waiting. Frequent enough to be read live, rare enough
-/// that a log grep isn't wading through it.
+/// Seconds between subject-gate warnings while waiting.
 const REQUIRE_REWARN_SECS: f32 = 5.0;
 
-/// The LIVE probe shot (`WOW_LIVE_SHOT=<png>`, delay via `WOW_LIVE_SHOT_AT` seconds, default 12):
-/// one screenshot of the primary window on a NORMAL connected run — the "what does the live scene
-/// actually look like" instrument (server GameObjects, event spawns, NPCs — everything the
-/// server-less harness deliberately excludes). The app keeps running after the save; pair with
-/// `WOW_USER`/`WOW_CHAR` and an outer `timeout` for unattended probes. Unlike
-/// [`super::CapturePlugin`], nothing is pinned — the shot shows the scene as a player would see it.
+/// The live probe shot (`WOW_LIVE_SHOT=<png>`, after `WOW_LIVE_SHOT_AT` seconds, default 12): the
+/// primary window of a connected run, nothing pinned; the app keeps running after the save.
 ///
-/// **`WOW_LIVE_SHOT_COUNT=<n>` makes it a burst** — `n` shots written as `<stem>-000.png`,
-/// `<stem>-001.png`, … , spaced by `WOW_LIVE_SHOT_EVERY` seconds (**default 0 = one per frame**,
-/// i.e. *adjacent* frames). One shot still writes the bare path, so every existing invocation is
-/// unchanged.
+/// `WOW_LIVE_SHOT_COUNT=<n>` makes a burst of `<stem>-000.png`, ... spaced `WOW_LIVE_SHOT_EVERY`
+/// seconds (default 0, adjacent frames), so a flicker from a parked camera (`WOW_PROBE_CAM`) can
+/// be measured with `benilla-visual flicker <dir>`.
 ///
-/// The burst exists because **a flicker is a temporal artefact and a single frame cannot show one**.
-/// "This object's textures flicker" was un-diagnosable with the instruments we had:
-/// the reporter's stills prove nothing, and grading a live run by eye is exactly the loop rule 7
-/// forbids. Adjacent frames from a *parked* camera ([`crate::player`]'s `WOW_PROBE_CAM`) turn it
-/// into arithmetic: `benilla-visual flicker <dir>` collapses the burst to the envelope of what
-/// would not hold still, and the lit pixels are the defect.
-///
-/// **`WOW_SHOT_REQUIRE=<name>` is the SUBJECT gate** (substring, case-insensitive; range via
-/// `WOW_SHOT_REQUIRE_DIST`, default 60): no shot fires until a unit with that name is inside the
-/// viewport and range — the same contract as the death gate below, because a frame that cannot
-/// contain the reported subject is not a measurement of it either. Ten banshee runs were once read
-/// as "can't reproduce" with the banshee never in frame, and a voidwalker crop-negative was a model
-/// that had wandered out of a fixed window. While the subject is missing the gate
-/// WARNs with what *is* nearby — names and distances — so a mis-aimed run re-aims itself instead of
-/// ending as a silent blank; a run that exits with 0 shots written names its reason in the log.
-/// The unit's feet anchor decides "in frame", and in frame does not mean unoccluded — the gate
-/// closes the aim trap, not line-of-sight.
+/// `WOW_SHOT_REQUIRE=<name>` (case-insensitive substring; range `WOW_SHOT_REQUIRE_DIST`, default
+/// 60) holds every shot until a unit so named has its feet in the viewport and in range, and warns
+/// with what is nearby while it waits. In frame does not mean unoccluded.
 pub(crate) struct LiveShotPlugin;
 
 impl Plugin for LiveShotPlugin {
@@ -89,9 +65,7 @@ impl Plugin for LiveShotPlugin {
     }
 }
 
-/// [`LiveShotPlugin`] state: the output path, how many shots the burst wants, their spacing
-/// (`0` = one per frame), how many have gone out, and when the next one may — seeded to
-/// `WOW_LIVE_SHOT_AT`, so the first-fire delay and the burst spacing are the same clock.
+/// [`LiveShotPlugin`] state; `next_at` starts at `WOW_LIVE_SHOT_AT`, then steps by `every`.
 #[derive(Resource)]
 struct LiveShot {
     out: String,
@@ -104,8 +78,7 @@ struct LiveShot {
     require_dist: f32,
 }
 
-/// `stem-007.png` for shot 7 of a burst — the bare path when the burst is one shot, so the
-/// single-shot filename (which existing probes and docs name literally) never moves.
+/// `stem-007.png` for shot 7 of a burst; the bare path for a single shot.
 fn burst_path(out: &str, index: u32, count: u32) -> String {
     if count <= 1 {
         return out.to_string();
@@ -116,16 +89,8 @@ fn burst_path(out: &str, index: u32, count: u32) -> String {
     }
 }
 
-/// Fire the live screenshot(s) once the startup delay has elapsed — one per frame by default, so a
-/// burst samples *adjacent* frames and a per-frame instability has nowhere to hide.
-///
-/// **Refuses to fire while the avatar is dead or a ghost.** `preflight` already reports it, but a
-/// single WARN in a four-hundred-line log is not a gate: a ghost renders the whole world through the
-/// death filter, so every image in the burst is a desaturated wash and *every* measurement correlated
-/// against it — pixel series, hotspot runs, depth readback, the phase census — silently describes the
-/// filter instead of the scene. That cost a whole B38 session: eight bursts and three retracted
-/// mechanisms measured on a corpse, because the images still looked like a plausible frame. A loud
-/// no-op is worth far more than a burst that has to be recognised as garbage after the fact.
+/// Fires the live shots once the delay has elapsed. Refuses while the avatar is dead or a ghost:
+/// the world then renders through the death filter, and every frame would measure the filter.
 #[allow(clippy::type_complexity)] // one Bevy system's full input set
 fn fire_live_shot(
     mut shot: ResMut<LiveShot>,
@@ -163,11 +128,8 @@ fn fire_live_shot(
             return;
         }
     }
-    // The SUBJECT gate — same contract as the death gate above: a frame that cannot contain the
-    // reported subject is not a measurement of it, and a "clean" burst of such frames is the
-    // costliest false negative a live run produces. Every shot of a burst
-    // re-passes the gate, so a subject that wanders off mid-burst pauses the burst instead of
-    // padding it with blanks.
+    // The subject gate: every shot of a burst re-passes it, so a subject that wanders off pauses
+    // the burst.
     if let Some(want) = shot.require.as_deref() {
         let Ok((cam, cam_pose)) = camera.single() else {
             return;
@@ -175,13 +137,11 @@ fn fire_live_shot(
         let cam_tf = GlobalTransform::from(*cam_pose);
         let viewport = cam.logical_viewport_size().unwrap_or(Vec2::ZERO);
         let want_lc = want.to_lowercase();
-        // One pass: find the nearest in-frame match, and keep the neighbourhood for the WARN —
-        // `resolve` sends the name query on a miss, so just scanning fills the cache within frames.
+        // `resolve` sends the name query on a miss, so scanning fills the cache within frames.
         let mut found: Option<(String, f32, Vec2)> = None;
         let mut nearby: Vec<(f32, String)> = Vec::new();
         for (guid, tf) in &subjects {
-            // Only name-bearing families: a GameObject can never resolve (its name rides its own
-            // unmodeled query), so it would sit in the listing as noise and never match the gate.
+            // Only name-bearing families: a GameObject's name rides its own query, not this cache.
             if !guid::is_player(guid.0)
                 && !guid::is_creature_or_pet(guid.0)
                 && guid::pet_number(guid.0).is_none()

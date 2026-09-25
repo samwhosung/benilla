@@ -1,7 +1,5 @@
-//! The `fxview` fixture's **driver** — the half of the effect-viewer instrument that stands the
-//! subject up in the world (the request, its knobs and the camera are [`super`]'s). It lives here
-//! because a fixture's driver belongs with its fixture: `entities::spell_fx` is gameplay, and
-//! gameplay never depends on the capture harness.
+//! The `fxview` fixture's driver: stands the effect-viewer's subject up in the world; the
+//! request, its knobs and the camera are [`super`]'s.
 
 use bevy::prelude::*;
 
@@ -15,20 +13,15 @@ use crate::entities::spell_fx::{
     attach_effect_visuals, EffectHost, FxMaterials, FxTintAnims, SpellFx, FALLBACK_SPAN,
 };
 
-/// The `fxview` unit lane's synthetic guid (`WOW_FX_DISPLAY`) — a high-word `0xF130` creature guid
-/// like the wire's, in a serverless capture where nothing else claims one.
+/// The unit lane's synthetic guid (`WOW_FX_DISPLAY`): a wire-shaped `0xF130` creature guid.
 const FXVIEW_UNIT_GUID: u64 = (0xF130u64 << 48) | 0xFC0FEE;
 
-/// The `fxview` GameObject lane's synthetic guid (`WOW_FX_GO`) — the wire's `0xF110` high word,
-/// which is what `crate::net` reads a GO's identity out of.
+/// The GameObject lane's synthetic guid (`WOW_FX_GO`): the `0xF110` high word `crate::net` reads
+/// a GO's identity from.
 const FXVIEW_GO_GUID: u64 = (0xF110u64 << 48) | 0xFC0FEE;
 
-/// Drive the `fxview` capture fixture (see [`super::FxViewRequest`]) — the effect-
-/// viewer instrument: once the capture driver arms it (scene settled), spawn a root at the
-/// fixture point, create the model's [`SpellFx`] cache entry, attach the full visual set
-/// through the same [`attach_effect_visuals`] body the game uses, and (for missiles) fly the
-/// root along its facing so trails extend. Inert outside fxview captures (the request resource
-/// only exists then).
+/// Drives the `fxview` fixture once armed: spawns a root, attaches the model through the game's
+/// own [`attach_effect_visuals`], and flies a missile along its facing so trails extend.
 pub(crate) fn drive_fx_view(
     req: Option<Res<FxViewRequest>>,
     state: Option<ResMut<FxViewState>>,
@@ -58,11 +51,8 @@ pub(crate) fn drive_fx_view(
     };
     let root = *state.root.get_or_insert_with(|| {
         let mut pos = benilla_assets::coords::wow_to_bevy(req.at.unwrap_or(FXVIEW_POS));
-        // `WOW_FX_DISPLAY`: the UNIT lane. Spawn the live component set a streamed creature gets
-        // (`net::apply`'s, the same one the `vplates` fixture's wolf uses) and let the ordinary
-        // unit pipeline build the model — so what this shoots is a creature, not a model, and
-        // every unit-only term (tag alpha, the fade gate, anim LOD, the emitters' sequence host)
-        // is in the picture. Always seated on the terrain: a creature stands on the ground.
+        // `WOW_FX_DISPLAY`, the unit lane: the component set `net::apply` gives a streamed
+        // creature, so the unit pipeline builds it with every unit-only term; seated on terrain.
         if let Some(display) = req.display {
             if let Some(hit) = spatial.cast_ray(
                 pos,
@@ -87,7 +77,7 @@ pub(crate) fn drive_fx_view(
                             (22, 100), // UNIT_FIELD_HEALTH
                             (28, 100), // UNIT_FIELD_MAXHEALTH
                             (34, 60),  // UNIT_FIELD_LEVEL
-                            (35, 35),  // UNIT_FIELD_FACTIONTEMPLATE — friendly, so no combat pose
+                            (35, 35),  // UNIT_FIELD_FACTIONTEMPLATE: friendly, no combat pose
                         ],
                     )),
                     Transform::from_translation(pos)
@@ -96,12 +86,9 @@ pub(crate) fn drive_fx_view(
                 ))
                 .id();
         }
-        // `WOW_FX_GO`: the GAMEOBJECT lane. A placed trap/door/chest reaches the screen through
-        // `crate::go_anim`'s state machine (`0x5f3cb0`), never through the effect pool, so this is
-        // the only lane that reproduces one. The descriptor carries the three fields the machine
-        // reads — display, TYPE_ID (the `go_animates` gate) and STATE (the substate) — and
-        // nothing else, so an unset knob renders exactly what an omitted wire field renders.
-        // Always seated on the terrain: a GO stands on the ground.
+        // `WOW_FX_GO`, the GameObject lane: a placed GO animates through `crate::go_anim`'s state
+        // machine (`0x5f3cb0`), not the effect pool. The descriptor carries only display, TYPE_ID
+        // and STATE, the fields the machine reads; seated on terrain.
         if let Some(display) = req.go {
             if let Some(hit) = spatial.cast_ray(
                 pos,
@@ -133,9 +120,7 @@ pub(crate) fn drive_fx_view(
                 ))
                 .id();
         }
-        // `WOW_FX_GROUND=1`: seat the fixture ON the terrain — a ground-anchored effect's flat
-        // quads render as projected surface decals and need ground inside their vertical slab.
-        // The scene settled before arming, so the streamed tile's collider is there to hit.
+        // `WOW_FX_GROUND=1`: a ground-anchored effect's quads decal onto terrain inside their slab.
         if req.ground {
             if let Some(hit) = spatial.cast_ray(
                 pos,
@@ -156,8 +141,7 @@ pub(crate) fn drive_fx_view(
             ))
             .id()
     });
-    // A missile only trails in motion: fly the root along its model-forward (local −Z).
-    // WOW_FX_TURN keeps the fixture rotating — the attached-model heading-since-birth fan.
+    // A missile only trails in motion: fly along model-forward (local -Z); `WOW_FX_TURN` spins it.
     if req.fly > 0.0 || req.turn != 0.0 {
         if let Ok(mut t) = transforms.get_mut(root) {
             let fwd = t.rotation * -Vec3::Z;
@@ -168,11 +152,8 @@ pub(crate) fn drive_fx_view(
             }
         }
     }
-    // The one-pass reap (the game's completion callback, `fx_attach`): a discrete kit
-    // instance dies at exactly one pass of sequence 0 and its emitters DRAIN — the fixture
-    // mirrors it so a capture past the span shows the truth. `WOW_FX_HOLD=1` previews a
-    // persistent hold instead (reaped by its spell edge in game, so no clock here).
-    // The one-pass reap is an effect-instance rule; a unit — or a placed GameObject — stands there.
+    // The game's one-pass reap (`fx_attach`): a one-shot kit instance dies after one pass of
+    // sequence 0. Not for `WOW_FX_HOLD=1` (reaped by its spell in game) or a unit or GO.
     if !req.hold && !state.expired && req.display.is_none() && req.go.is_none() {
         if let Some(at) = state.attached_at {
             let span = fx
@@ -187,9 +168,7 @@ pub(crate) fn drive_fx_view(
         }
     }
     if state.attached_at.is_none() {
-        // The unit and GameObject lanes have no attach step — the entity pipeline builds the model
-        // on its own. Their "age" is therefore seconds since the entity appeared, which is what the
-        // animation phase is measured in.
+        // The unit and GO lanes have no attach step: their age counts from the entity's spawn.
         if req.display.is_some() || req.go.is_some() {
             state.attached_at = Some(time.elapsed_secs());
             return;
@@ -204,14 +183,11 @@ pub(crate) fn drive_fx_view(
             root,
             &fx.models[&req.model_path],
             time.elapsed_secs(),
-            true, // the fixture plants at a world point — ground quads decal onto the terrain
-            // The fixture previews kit effects, which are attached models — but it hangs on
-            // nothing (there is no host model in a preview), so its pool keeps the drain.
+            true, // planted at a world point: ground quads decal onto the terrain
+            // No host model in a preview, so the pool keeps the drain.
             EffectHost { parent: None },
-            // `WOW_FX_HOLD=1` previews a PERSISTENT instance, so it must show the persistent
-            // lifecycle — birth then `Hold` — or the instrument would report a freeze the game
-            // does not have. Without it the fixture previews a one-shot, which runs its birth once
-            // and is reaped by the fixture's own span clock below.
+            // `WOW_FX_HOLD=1` shows the persistent lifecycle (birth then `Hold`); otherwise a
+            // one-shot, reaped by the span clock above.
             Some(if req.hold {
                 FxStage::State
             } else {
@@ -225,7 +201,7 @@ pub(crate) fn drive_fx_view(
             },
             &ibps,
             &mut palettes,
-            None, // the fixture previews a kit effect on its model's own `Stand`
+            None, // a kit effect on its model's own `Stand`
         ) {
             state.attached_at = Some(time.elapsed_secs());
         }

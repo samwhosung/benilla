@@ -1,13 +1,9 @@
-//! Projectile **flight sound** (`SpellVisual` field 10): the loop a missile carries while it
-//! travels — the thrown weapon's `WeaponLoop`, the fireball's `FireMissileLoop`. The client keeps
-//! a per-missile loop handle (`CMissile+0x44`) started at launch and killed at
-//! arrival; ours is a channel **tracked to the missile entity** (the tracked-loop follow in
-//! [`super::kit::pump_channels`] rides it along the flight) begun on [`MissileSound::Start`] and
-//! reaped on [`MissileSound::Stop`], which `crate::entities::missile` writes at launch/arrival.
-//!
-//! `force_loop`: the missile loop is looping by construction in the client (the loop handle), not
-//! by the `SoundEntries` 0x200 flag — so we loop unconditionally, the same authority split the
-//! creature body-loop uses ([`super::kit::play_kit_ext`]).
+//! Projectile flight sound: the `SpellVisual` field 10 loop a missile carries in flight. The
+//! reference's first flight step (`0x61e2a0`) starts it (`0x61e79e call 0x4589a0`, handle at
+//! `CMissile+0x44`), each later step moves it (`0x61e77c call 0x7a5b10`), and arrival kills it.
+//! Here it is a channel tagged to the missile entity from [`MissileSound::Start`] to
+//! [`MissileSound::Stop`]. Force-looped: the loop handle makes it loop, not the kit's `0x200`
+//! flag.
 
 use bevy::prelude::*;
 
@@ -50,8 +46,7 @@ fn route_missile_sounds(
                     Some(pos),
                     SoundCategory::Sfx,
                     PlayExtras {
-                        // tag the loop to the missile — the pump follows it in flight, and the
-                        // loop is looping by construction rather than by the kit's own flag
+                        // the pump follows the tagged loop in flight
                         source: Some(entity),
                         force_loop: true,
                         ..default()
@@ -60,7 +55,7 @@ fn route_missile_sounds(
                     warn!("missile flight sound {kit_sound}: {e:#}");
                 }
             }
-            // The missile carries only this one channel — stop everything tagged to it.
+            // The missile carries only this one channel.
             MissileSound::Stop { entity } => {
                 stop_source(&mut out, entity);
             }

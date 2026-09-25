@@ -5,7 +5,7 @@
 //! `SPELL_FAILED_NOT_READY` (60), or a second `SMSG_SPELL_GO`, marks the server's cooldown end
 //! relative to the first GO.
 //!
-//! Run: `cargo run -p benilla-protocol --example cooldown_probe -- probeN pprobeN [host]` on a
+//! Run: `cargo run -p benilla-protocol --example cooldown_probe -- probeN <password> [host]` on a
 //! probe account with a warrior (a login kicks whoever is on the account); `.learn` needs
 //! gmlevel 5 (`SEC_DEVELOPER`).
 
@@ -37,10 +37,10 @@ fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let user = args
         .next()
-        .context("usage: cooldown_probe -- <probeN> <pprobeN> [host] (a probe account)")?;
+        .context("usage: cooldown_probe -- <probeN> <password> [host] (a probe account)")?;
     let pass = args
         .next()
-        .context("usage: cooldown_probe -- <probeN> <pprobeN> [host] (a probe account)")?;
+        .context("usage: cooldown_probe -- <probeN> <password> [host] (a probe account)")?;
     let host = args.next().unwrap_or_else(|| "localhost".into());
 
     let logon = benilla_protocol::logon(&host, &user, &pass)?;

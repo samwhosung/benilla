@@ -1,56 +1,18 @@
-//! `WOW_DEPTH` — **what depth actually won this pixel, and how far away is it?**
+//! `WOW_DEPTH`: reads back the depth that won a pixel in the opaque pass, and how far away it is.
 //!
-//! The last unread link in B38. There, two surfaces of the Far Watch Post tower trade places: the
-//! awning is nearer, writes depth, compares `GreaterEqual`, is not discarded, is not culled, keeps
-//! the same mesh/material/texture every frame, and is submitted into `AlphaMask3d` at a stable draw
-//! position on every single frame — and on some frames the plank behind
-//! it wins the pixel anyway. Every one of those facts was established on the **CPU** side. None of
-//! them says what value the GPU wrote into the depth buffer, which is the one thing that decides the
-//! pixel and the one thing we could not read.
+//! `WOW_DEPTH="<x>,<y>[;<x>,<y>…]"` logs, per frame, the raw reverse-Z value at each screenshot
+//! pixel and the surface's distance both along the pixel's ray (comparable with `WOW_PICK`'s hit
+//! distances) and to the camera plane. `WOW_DEPTH_AT=<secs>` (default 20) and
+//! `WOW_DEPTH_COUNT=<n>` (default 1) shape the sampling like the screenshot burst and the ray pick.
+//! Pixels are used as given: the depth texture is allocated in physical pixels.
 //!
-//! So: `WOW_DEPTH="<x>,<y>[;<x>,<y>…]"` copies the view's depth texture back after the main pass and
-//! logs, per frame, the raw reverse-Z value at each pixel and **where that puts the surface** — both
-//! as a distance along the pixel's ray and as the perpendicular distance to the camera plane, because
-//! those are different numbers and only the first is comparable with a ray cast.
-//! `WOW_DEPTH_AT=<secs>` (default 20) / `WOW_DEPTH_COUNT=<n>` (default 1) shape the sampling like the
-//! screenshot burst and the ray pick, so the three line up frame for frame.
+//! `WOW_DEPTH_QUADS=<bone>[,<bone>…]` (empty value = every quad emitter) samples a grid inside
+//! each live particle quad's projected corners instead, and logs the fraction that survives the
+//! depth test and how deep the occluder sits in front, in yards. Frames with no live quad are
+//! skipped and not counted.
 //!
-//! **Run it together with `WOW_PICK` at the same pixels.** This probe answers *what depth won*; the
-//! ray pick answers *what is standing there* — every hit along the ray with its distance. Reading the
-//! won distance against the hit distances is what turns a number into "**whose** depth won": if a
-//! frame's depth matches hit 1's distance rather than hit 0's, the nearer surface never wrote depth
-//! there, and no argument about draw order or culling survives that. Splitting the two keeps each
-//! probe single-purpose, and because the geometry is static the pick's distances hold across the
-//! whole burst.
-//!
-//! Coordinates are **screenshot pixels** — the same space `benilla-visual` reports boxes in and
-//! `WOW_PICK` takes — and here they are used directly, because the depth texture is allocated in
-//! physical pixels. (`WOW_PICK` has to divide by the window scale factor; its ray cast works in
-//! logical units. Same input space, different reason.)
-//!
-//! ## `WOW_DEPTH_QUADS` — the same reading, taken at a particle quad's OWN pixels
-//!
-//! A hand-written pixel list is the wrong instrument for a *moving* subject. B16's eye glow is two
-//! additive quads a few dozen pixels across, riding an animated bone: name a pixel and by the frame
-//! the readback lands the quad is somewhere else, and a grid coarse enough to catch it samples the
-//! head, the ground and the neighbouring unit instead (that mis-measurement is retracted).
-//!
-//! `WOW_DEPTH_QUADS=<bone>[,<bone>…]` (empty value = every quad emitter) reads the emitter's **live
-//! vertex buffer** — the four corners `expand_quads` actually wrote, the ones the GPU is about to
-//! rasterize — projects them with the frame's own matrices, and samples the depth buffer on a
-//! bilinear grid *inside that quad*. What comes back is the number the offline model predicts and
-//! the reference measures: the **surviving area fraction** of the quad under `GreaterEqual`, plus
-//! how deep the winning surface sits in front of it, in yards. No camera hunting, no pixel guessing,
-//! and no way to accidentally measure a different surface.
-//!
-//! Frames with no live quad are skipped entirely (no copy, no frame counted), so the burst lands on
-//! the frames where the subject exists rather than on a wall clock.
-//!
-//! **MSAA must be off** (`WOW_MSAA=off`). A multisampled depth texture cannot be copied to a buffer
-//! at all, and there is no single "the" depth at a pixel to report if it could — there are four. The
-//! probe refuses rather than reporting one of them, because a number that looks like the measurement
-//! you wanted, taken slightly wrong, is how this bug has already produced four confident wrong
-//! answers.
+//! MSAA must be off (`WOW_MSAA=off`): a multisampled depth texture cannot be copied and has no
+//! single depth per pixel, so the probe refuses.
 
 use bevy::core_pipeline::core_3d::graph::{Core3d, Node3d};
 use bevy::ecs::query::QueryItem;
@@ -88,9 +50,7 @@ impl Plugin for DepthProbePlugin {
             );
             return;
         }
-        // Quad mode arms at once: the subject is a particle pool that does not exist until its
-        // model spawns, and the frame gate below (report only frames that HAVE quads) is a
-        // sharper window than any wall clock the caller could guess.
+        // Quad mode arms at once: frames without a live quad are skipped anyway.
         let at = std::env::var("WOW_DEPTH_AT")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -128,26 +88,15 @@ impl Plugin for DepthProbePlugin {
                 Render,
                 (
                     prepare_staging.in_set(RenderSystems::PrepareResources),
-                    // The node encodes the copy inside the graph; by the time the graph has run and
-                    // submitted, the staging buffer holds it and can be mapped.
+                    // The node encodes the copy in the graph; after submit, staging maps.
                     read_depth.after(RenderSystems::Render),
                 ),
             )
             .add_render_graph_node::<ViewNodeRunner<DepthReadbackNode>>(Core3d, DepthReadbackLabel)
-            // Between the opaque pass (which draws `Opaque3d` *and* `AlphaMask3d`) and the
-            // transmissive/transparent ones. That is the depth as it stood when the opaque fight was
-            // decided, which is the question — see [`DepthReadbackNode`] for what reading it later
-            // gets you instead. The retained static pass draws BEFORE the opaque pass (2016), so
-            // its walls are in this read too; while it ran after, the graph left the two
-            // unordered and a probe could read a wall-less depth on some frames.
-            //
-            // `WOW_DEPTH_AFTER=1` moves the copy to AFTER the transparent pass — deliberately
-            // measuring the thing the placement note warns about: the depth the transparent pass
-            // itself wrote. B38 first observed that phantom ("5–8 yd at pixels where the ray cast
-            // finds the tower at 32–43 yd … from something that tracks the camera") and never named
-            // it; B16's eye quads lose a depth compare that the opaque-pass buffer says they win,
-            // so the same writer is now the suspect. Before-vs-after at the same pixels names its
-            // depth, and its depth names it.
+            // After the opaque pass (`Opaque3d` and `AlphaMask3d`), before the transmissive one.
+            // The retained static pass draws before the opaque pass, so its walls are in the read.
+            // `WOW_DEPTH_AFTER=1` copies after the transparent pass instead, to read the depth the
+            // transparent pass itself wrote.
             .add_render_graph_edges(
                 Core3d,
                 if std::env::var_os("WOW_DEPTH_AFTER").is_some() {
@@ -167,8 +116,7 @@ impl Plugin for DepthProbePlugin {
     }
 }
 
-/// The pixels to read and the sampling window. Extracted to the render world as a plain clone (a
-/// handful of coordinates once per sampled frame).
+/// The pixels to read and the sampling window.
 #[derive(Resource, Clone)]
 struct DepthWatch {
     pixels: Vec<(u32, u32)>,
@@ -192,24 +140,19 @@ struct QuadWatch(Option<Vec<u16>>);
 #[derive(Clone, Copy)]
 struct QuadProbe {
     bone: u16,
-    /// Index within the emitter's mesh — quads are written oldest-first, so 0 is the smallest,
-    /// dimmest particle and the last is the one born this frame (the big, bright one that decides
-    /// whether the glow reads at all).
+    /// Index within the emitter's quads, written oldest-first: the last was born this frame.
     index: u32,
     /// The four corners in physical pixels, in `expand_quads`' own vertex order.
     corners: [Vec2; 4],
-    /// The NDC depth the corners carry. Read from the projected corners, not assumed constant —
-    /// the *spread* is reported, because a billboard that is not a constant-depth plane is a
-    /// different bug wearing the same symptom (`0x7b2a50`'s plain billboard gives all four
-    /// corners one depth).
+    /// The corners' mid NDC depth; `dspread` is their spread, which the reference's plain
+    /// billboard (`0x7b2a50`) keeps at zero.
     dquad: f32,
     dspread: f32,
-    /// The quad centre's distance to the camera plane, yards — the unit the burial is reported in.
+    /// The quad centre's distance to the camera plane, yards.
     viewz: f32,
 }
 
-/// This frame's live quads, in `$WOW_DEPTH_QUADS` scope. Empty on every frame in every run that
-/// did not ask for the mode.
+/// This frame's live quads, in `$WOW_DEPTH_QUADS` scope.
 #[derive(Resource, Clone, Default)]
 struct QuadProbes(Vec<QuadProbe>);
 
@@ -220,14 +163,9 @@ impl ExtractResource for QuadProbes {
     }
 }
 
-/// Project every in-scope emitter's live quads into pixels, once a frame.
-///
-/// Deliberately reads the **shared effect stream** (0732 P1), not the simulation: these are the
-/// vertices the draw will consume, so a quad that was mis-built (collapsed, mis-billboarded,
-/// left at last frame's anchor) is measured as itself rather than as what the sim intended. Runs
-/// after `BillboardPlace`, the set that fills the stream, so the read is this frame's. An
-/// emitter's CHILD-pool quads ride its draw records too (same `main_entity`), attributed to the
-/// parent's bone — the old per-mesh read never saw them at all.
+/// Project every in-scope emitter's live quads into pixels, once a frame, from the shared effect
+/// stream `BillboardPlace` fills, so each quad is measured as drawn. Child-pool quads share the
+/// emitter's draw records and count under its bone.
 fn collect_quads(
     watch: Res<QuadWatch>,
     mut probes: ResMut<QuadProbes>,
@@ -245,8 +183,7 @@ fn collect_quads(
     let Some(vp) = camera.physical_viewport_size() else {
         return;
     };
-    // The frame's own matrices, the same pair `depthdump` projects with — so a quad's `dquad` here
-    // and its `dquad` there are the same number, and the two logs can be read against each other.
+    // The frame's own matrices, the same pair `depthdump` projects with.
     let clip_from_world = projection.get_clip_from_view() * cam_tf.to_matrix().inverse();
     for (entity, emitter) in &emitters {
         if !bones.is_empty() && !bones.contains(&emitter.bone()) {
@@ -298,8 +235,7 @@ fn collect_quads(
     }
 }
 
-/// `"60,61"` → the bone scope; an empty or absent value means every quad emitter. `None` when the
-/// variable is unset at all, which is what turns the whole mode off.
+/// `"60,61"` → the bone scope; an empty value means every quad emitter, an unset one `None`.
 fn parse_bones(spec: Option<&str>) -> Option<Vec<u16>> {
     Some(
         spec?
@@ -309,9 +245,7 @@ fn parse_bones(spec: Option<&str>) -> Option<Vec<u16>> {
     )
 }
 
-/// Marks the one view whose depth to read. The depth texture is cached per *render target*, so the
-/// world camera and the UI camera on the same window share it — but picking a view by viewport size
-/// would be picking by coincidence, and this bug is made of numbers taken slightly wrong.
+/// Marks the one view whose depth to read; the UI camera shares the world camera's depth texture.
 #[derive(Component, Clone, Copy, ExtractComponent)]
 struct DepthProbeView;
 
@@ -323,10 +257,8 @@ struct DepthStaging {
     height: u32,
 }
 
-/// Wait for the sampling window, then mark the world camera: opt its depth texture into `COPY_SRC`
-/// (the default is `RENDER_ATTACHMENT` alone, which cannot be copied), and refuse the whole probe if
-/// MSAA is on. Checking the live `Msaa` component rather than `$WOW_MSAA` means the refusal tracks
-/// what the renderer is actually doing, not what the environment asked for.
+/// Once the sampling window opens, opt the world camera's depth texture into `COPY_SRC` and mark
+/// it; the live `Msaa` component being anything but off disables the probe.
 fn arm(
     mut watch: ResMut<DepthWatch>,
     time: ProbeClock,
@@ -373,8 +305,7 @@ fn prepare_staging(
     }
     let Ok(depth) = view.single() else { return };
     let size = depth.texture.size();
-    // `Depth32Float` is 4 bytes a texel, and a buffer copy's row stride must be 256-aligned — so the
-    // stride is the aligned *byte* count, which is not the aligned pixel count times four.
+    // `Depth32Float` is 4 bytes a texel; a buffer copy's row stride is 256-byte aligned.
     let bytes_per_row = RenderDevice::align_copy_bytes_per_row(size.width as usize * 4) as u32;
     if staging.is_some_and(|s| s.bytes_per_row == bytes_per_row && s.height == size.height) {
         return;
@@ -394,17 +325,8 @@ fn prepare_staging(
 #[derive(RenderLabel, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct DepthReadbackLabel;
 
-/// Copies the depth texture aside **right after the opaque pass** — the moment the question is about.
-///
-/// Placement is the whole correctness of this probe, and getting it wrong is quiet. Read at the end of
-/// the main pass instead and the numbers come back 5–8 yd at pixels where the ray cast finds the tower
-/// at 32–43 yd, with a distance even at pixels that have **no** geometry along the ray: by then the
-/// *transparent* pass has written depth of its own, from something that tracks the camera. Those were
-/// stable, plausible, reproducible numbers about the wrong thing — which is worse than no probe,
-/// because it looks like a measurement.
-///
-/// `MainOpaquePass` draws `Opaque3d` and then `AlphaMask3d`, which is exactly the pair the B38 fight is
-/// between, so this is the depth that decided it.
+/// Copies the depth texture right after the opaque pass. Read at the end of the main pass instead,
+/// it also holds depth the transparent pass wrote, from something that tracks the camera.
 #[derive(Default)]
 struct DepthReadbackNode;
 
@@ -424,12 +346,11 @@ impl ViewNode for DepthReadbackNode {
         ) else {
             return Ok(());
         };
-        // `read_depth` counts the frames; the copy is cheap but not free, so stop with it.
+        // `read_depth` counts the frames; stop copying once the burst is done.
         if !watch.armed || world.resource::<DepthFramesRead>().0 >= watch.count {
             return Ok(());
         }
-        // Quad mode with nothing live this frame: no copy, and `read_depth` will not count it —
-        // the burst spends its frames on the ones that have the subject in them.
+        // Quad mode with nothing live this frame: no copy, and `read_depth` does not count it.
         if watch.pixels.is_empty()
             && world
                 .get_resource::<QuadProbes>()
@@ -438,14 +359,13 @@ impl ViewNode for DepthReadbackNode {
             return Ok(());
         }
         let size = depth.texture.size();
-        // `COPY_SRC` only lands on the texture allocated *after* `arm` patched the camera, so the
-        // first armed frame still has the old one. Skip it rather than trip wgpu validation.
+        // `COPY_SRC` lands only on the texture allocated after `arm`, so the first armed frame
+        // still has the old one.
         if !depth.texture.usage().contains(TextureUsages::COPY_SRC) {
             return Ok(());
         }
         // Depth-stencil formats reject partial copies (wgpu-core `validate_texture_copy_range`), so
-        // the whole texture goes across even though we want a handful of pixels. At one debug frame
-        // each, the simple thing and the correct thing are the same.
+        // the whole texture goes across.
         render_context.command_encoder().copy_texture_to_buffer(
             TexelCopyTextureInfo {
                 texture: &depth.texture,
@@ -471,7 +391,7 @@ impl ViewNode for DepthReadbackNode {
     }
 }
 
-/// How many frames [`read_depth`] has reported — read by the graph node, which cannot hold a `Local`.
+/// How many frames [`read_depth`] has reported; a resource because the graph node reads it.
 #[derive(Resource, Default)]
 struct DepthFramesRead(u32);
 
@@ -491,8 +411,7 @@ fn read_depth(
     if !watch.armed || read.0 >= watch.count {
         return;
     }
-    // Mirrors the node's quad-mode skip: no copy was encoded, so there is nothing to read and this
-    // frame does not spend one of the burst's slots.
+    // Mirrors the node's quad-mode skip: nothing was copied, and the frame is not counted.
     let quads = quads.map(|q| q.0.clone()).unwrap_or_default();
     if watch.pixels.is_empty() && quads.is_empty() {
         return;
@@ -507,17 +426,14 @@ fn read_depth(
     let size = depth.texture.size();
     let slice = staging.buffer.slice(..);
     slice.map_async(MapMode::Read, |_| {});
-    // Block. A probe run is not gameplay, and a frame's numbers are worth nothing if they arrive
-    // attached to a later frame's index.
+    // Block, so a frame's numbers never arrive under a later frame's index.
     if let Err(e) = device.poll(bevy::render::render_resource::PollType::wait_indefinitely()) {
         error!("depth: poll failed: {e}");
         return;
     }
     let frame = read.0;
     read.0 += 1;
-    // The projection the frame was actually drawn with, once per burst. Stated rather than assumed:
-    // the reported distances are only as good as this matrix, and an instrument whose calibration is
-    // invisible is one whose numbers cannot be audited later.
+    // The projection the frame was drawn with, once per burst: the distances derive from it.
     if frame == 0 {
         info!(
             "depth: {}x{} view, clip_from_view P₂₂ {} P₃₂ {} P₀₀ {} P₁₁ {}",
@@ -543,10 +459,8 @@ fn read_depth(
             let at = (y * staging.bytes_per_row + x * 4) as usize;
             let d = f32::from_le_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]]);
             match view_point(&view_from_clip, ndc_of(x, y, size.width, size.height), d) {
-                // Both distances, because they are not the same number and the difference is 15% at
-                // the edge of the frame: `along` is measured along the ray (what `WOW_PICK` reports,
-                // so this is the one to compare), `z` is the perpendicular distance to the camera
-                // plane (what the depth buffer natively encodes).
+                // Along the ray (what `WOW_PICK` reports) and to the camera plane (what depth
+                // encodes); they differ by 15% at the frame edge.
                 Some(p) => info!(
                     "depth#{frame} ({x}, {y}): {d:.9}  =  {:.4} yd along the ray  ({:.4} yd view z)",
                     p.length(),
@@ -563,17 +477,12 @@ fn read_depth(
     staging.buffer.unmap();
 }
 
-/// Samples in each direction across a quad's own area — 16×16 = 256 tests, fine enough that the
-/// fraction is stable to well under a percent against the offline model's 48×48 and 64×64 grids,
-/// cheap enough to run on every quad of a pool.
+/// Samples per side across a quad's own area: 16x16, stable to under a percent.
 const QUAD_GRID: usize = 16;
 
-/// Run one quad's depth contest and log it.
-///
-/// Reverse-Z, `GreaterEqual` (the particle material takes Bevy's default compare): the fragment
-/// survives iff `dquad >= dbuffer`. Sampling walks the quad's own `(u, v)` by bilinear interpolation
-/// of its four projected corners, so every sample is inside the quad by construction — including a
-/// spun quad, whose screen AABB is up to 41 % larger than the quad itself.
+/// Run one quad's depth contest and log it. Reverse-Z with Bevy's default `GreaterEqual`: a
+/// fragment survives iff `dquad >= dbuffer`. Samples interpolate the four projected corners, so
+/// each lies inside the quad even when it is spun.
 fn report_quad(
     frame: u32,
     q: &QuadProbe,
@@ -583,8 +492,7 @@ fn report_quad(
     height: u32,
 ) {
     let (mut passed, mut total) = (0usize, 0usize);
-    // Reverse-Z: the LARGEST buffer value is the NEAREST surface, so `dmax` is the closest thing
-    // standing in the quad's way and `dmin` the furthest.
+    // Reverse-Z: `dmax` is the nearest occluder, `dmin` the furthest.
     let (mut dmin, mut dmax) = (f32::MAX, f32::MIN);
     let mut cleared = 0usize;
     for iy in 0..QUAD_GRID {
@@ -619,8 +527,7 @@ fn report_quad(
         );
         return;
     }
-    // `dquad` and the buffer values live on the same reverse-Z curve, so the ratio converts either
-    // to yards without re-deriving the projection: view z scales as 1/d.
+    // On the reverse-Z curve view z scales as 1/d, so the ratio to `dquad` converts to yards.
     let yd = |d: f32| q.viewz * q.dquad / d;
     let (near, far) = (yd(dmax), yd(dmin));
     info!(
@@ -648,17 +555,8 @@ fn ndc_of(x: u32, y: u32, width: u32, height: u32) -> Vec2 {
     )
 }
 
-/// Unproject a pixel's depth back to where it is in **view space**, in yards.
-///
-/// It has to be the whole point, not just the depth: a depth value alone linearises to the distance
-/// to the camera *plane*, while a ray cast measures along the *ray*, and off-axis those differ by
-/// `1/cos θ` — 15% at the edge of a 45° frame, six yards at this bug's range. Comparing the two
-/// without converting is the same axis mix-up that mis-measured B38's surface gap twice, and
-/// it is 100× the gap the readback exists to resolve. So unproject the actual pixel and hand back the
-/// point; the caller reports both lengths.
-///
-/// Going through the inverse of the live matrix, rather than a reverse-Z formula, means the reading
-/// cannot silently disagree with the projection the frame was drawn with.
+/// Unproject a pixel's depth through the live matrix to its view-space point, in yards. The whole
+/// point is needed: off axis, the ray length exceeds the plane distance by `1/cos θ`.
 fn view_point(view_from_clip: &Mat4, ndc: Vec2, d: f32) -> Option<Vec3> {
     let p = *view_from_clip * Vec4::new(ndc.x, ndc.y, d, 1.0);
     // Behind the camera or at infinity (a reverse-Z clear reads 0 ⇒ w 0) means nothing drew here.
@@ -667,8 +565,7 @@ fn view_point(view_from_clip: &Mat4, ndc: Vec2, d: f32) -> Option<Vec3> {
         .filter(|v| v.is_finite() && v.z < 0.0)
 }
 
-/// `"x,y;x,y"` → pixels. Malformed pairs are dropped with a warning rather than failing the run:
-/// a typo in one coordinate of a list of eight should not cost a capture.
+/// `"x,y;x,y"` → pixels; a malformed pair is dropped with a warning.
 fn parse_pixels(spec: &str) -> Vec<(u32, u32)> {
     spec.split(';')
         .filter(|s| !s.trim().is_empty())
@@ -729,7 +626,6 @@ mod tests {
 
     #[test]
     fn off_axis_the_ray_is_longer_than_the_perpendicular_distance() {
-        // The bug this test exists for: reporting view-space z as if it were the ray-cast distance.
         // Straight ahead the two agree; at the frame edge they must not.
         let inv = proj().inverse();
         let d = depth_of(46.0);
@@ -759,9 +655,8 @@ mod tests {
 
     #[test]
     fn the_awning_and_the_plank_are_thousands_of_ulps_apart() {
-        // The whole instrument rests on this: at the B38 pin the two surfaces are 1.4 cm apart
-        // perpendicular, and a readback can only name the winner if that gap survives `f32`.
-        // If this ever fails, the probe cannot answer the question it exists for.
+        // Two measured surfaces 1.4 cm apart perpendicular: the readback names the winner only if
+        // that gap survives `f32`.
         let (awning, plank) = (46.0253f32, 46.0897f32);
         let (da, dp) = (depth_of(awning), depth_of(plank));
         let ulps = ((da.to_bits() as i64) - (dp.to_bits() as i64)).abs();

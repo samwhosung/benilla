@@ -3,7 +3,7 @@
 //! writer must carry the language too. The server drops a say in a language the character does
 //! not know, answering only `SMSG_NOTIFICATION`.
 //!
-//! Run: `cargo run -p benilla-protocol --example horde_chat_probe -- probeN pprobeN [host]`.
+//! Run: `cargo run -p benilla-protocol --example horde_chat_probe -- probeN <password> [host]`.
 //! Creates the orc `Orc<N-spelled>` on the account on first run.
 
 use anyhow::{bail, Context, Result};
@@ -24,12 +24,13 @@ fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let user = args
         .next()
-        .context("usage: horde_chat_probe -- <probeN> <pprobeN> [host] (a probe account)")?;
+        .context("usage: horde_chat_probe -- <probeN> <password> [host] (a probe account)")?;
     let pass = args
         .next()
-        .context("usage: horde_chat_probe -- <probeN> <pprobeN> [host] (a probe account)")?;
+        .context("usage: horde_chat_probe -- <probeN> <password> [host] (a probe account)")?;
     let host = args.next().unwrap_or_else(|| "localhost".into());
-    let orc = orc_name(&user).context("account must be a probeN (the `probe` skill)")?;
+    let orc = orc_name(&user)
+        .context("account must be a probeN (docs/CONTRIBUTING.md, \"Running it unattended\")")?;
 
     let logon = benilla_protocol::logon(&host, &user, &pass)?;
     let addr = logon

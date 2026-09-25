@@ -1,17 +1,9 @@
-//! The CoreAudio half of [`super`] — the thinnest correct layer between the mixer and the
-//! device.
-//!
-//! What lives here and nowhere else: finding the default output device and reading what it
-//! runs at; opening a HAL output unit pinned to that device with our stream format and our
-//! per-client IO buffer; the four property listeners the backend reacts to; the realtime
-//! scheduling of the render thread (time-constraint policy + the device's audio workgroup,
-//! Apple's documented pair for an audio worker thread); and the host clock the meters read.
-//!
-//! Everything is plain C API through the objc2 CoreAudio bindings and `coreaudio-rs`'s
-//! `AudioUnit` — the two crates cpal itself stood on, now used directly, because the cpal layer
-//! between them and us was where three of the defects 1857 lists lived (a no-op error callback
-//! on the default device, a `DefaultOutput` unit pinned to a fixed device, and the IO-cycle
-//! timestamp thrown away before it reached anyone).
+//! The CoreAudio half of [`super`]: the default output device and its format, a HAL output unit
+//! pinned to it with our per-client IO buffer, the property listeners, the render thread's
+//! realtime scheduling (time-constraint policy plus the device's audio workgroup, Apple's
+//! documented pair) and the host clock. Plain C API through the objc2 CoreAudio bindings and
+//! `coreaudio-rs`'s `AudioUnit`, not cpal, whose macOS layer drops device-loss errors, pins
+//! `DefaultOutput` to a fixed device and discards the IO-cycle timestamp.
 
 use std::ffi::c_void;
 use std::ptr::NonNull;
@@ -35,22 +27,19 @@ use objc2_core_audio::{
 };
 use objc2_core_audio_types::AudioValueRange;
 
-/// The channel count we render. kira mixes stereo; the HAL output unit maps our two channels
-/// onto whatever the device has.
+/// kira mixes stereo; the HAL output unit maps the two channels onto the device's.
 pub(super) const CHANNELS: u32 = 2;
 
-/// `kAudioOutputUnitProperty_CurrentDevice` — pins a HAL output unit to one device.
+/// `kAudioOutputUnitProperty_CurrentDevice`: pins a HAL output unit to one device.
 const OUTPUT_UNIT_CURRENT_DEVICE: u32 = 2000;
-/// `kAudioUnitProperty_MaximumFramesPerSlice` — the most frames one render call may ask for.
-/// An output unit defaults to 1156; a device buffer larger than that must raise it or the
-/// unit refuses the slice (`kAudioUnitErr_TooManyFramesToProcess`).
+/// `kAudioUnitProperty_MaximumFramesPerSlice`: 1156 by default on an output unit; a larger device
+/// buffer must raise it or the unit refuses the slice (`kAudioUnitErr_TooManyFramesToProcess`).
 const UNIT_MAXIMUM_FRAMES_PER_SLICE: u32 = 14;
 
 // ---------------------------------------------------------------------------------------------
 // Host clock
 
-// The two mach clock calls, declared here: libc deprecates its copies in favour of a crate we
-// have no other use for, and two signatures are not worth a dependency.
+// Declared here: libc deprecates its copies in favour of a crate we have no other use for.
 #[repr(C)]
 struct MachTimebaseInfo {
     numer: u32,
@@ -62,8 +51,8 @@ extern "C" {
     fn mach_timebase_info(info: *mut MachTimebaseInfo) -> i32;
 }
 
-/// Nanoseconds on the host clock (`mach_absolute_time`, the clock CoreAudio stamps its IO
-/// cycles with). Wall-monotonic, cheap (a commpage read), safe on the audio thread.
+/// Nanoseconds on the host clock (`mach_absolute_time`, which stamps CoreAudio's IO cycles);
+/// monotonic, cheap and safe on the audio thread.
 pub(super) fn now_ns() -> u64 {
     // SAFETY: no arguments, no side effects.
     host_ticks_to_ns(unsafe { mach_absolute_time() })
@@ -81,8 +70,7 @@ fn ns_to_host_ticks(ns: u64) -> u64 {
     (u128::from(ns) * u128::from(denom) / u128::from(numer)) as u64
 }
 
-/// The mach timebase, read once. The ratio is a hardware constant; re-fetching it per
-/// callback (as cpal did) is gratuitous work on the realtime path.
+/// The mach timebase, a hardware constant, read once.
 fn timebase() -> (u32, u32) {
     static TIMEBASE: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
     *TIMEBASE.get_or_init(|| {
@@ -105,13 +93,13 @@ fn timebase() -> (u32, u32) {
 pub(super) struct Device {
     pub id: AudioObjectID,
     pub name: String,
-    /// The device's nominal rate — what we render at (the unit does no rate conversion).
+    /// The device's nominal rate, which we render at: the unit does no rate conversion.
     pub sample_rate: u32,
-    /// The device's accepted IO buffer range, frames.
+    /// The accepted IO buffer range, frames.
     pub buffer_range: (u32, u32),
-    /// The device's own output latency, frames (`kAudioDevicePropertyLatency`), for the report.
+    /// The device's output latency, frames (`kAudioDevicePropertyLatency`), for the report.
     pub latency_frames: u32,
-    /// The safety offset, frames — the HAL's margin before the DMA that an IOProc must clear.
+    /// The safety offset, frames: the HAL's margin before the DMA that an IOProc must clear.
     pub safety_frames: u32,
 }
 
@@ -189,8 +177,8 @@ fn fourcc(selector: u32) -> String {
         .collect()
 }
 
-/// The system's current default output device, fully described. `Err` when there is none
-/// (headless CI, everything unplugged) — the caller runs silent.
+/// The system's default output device; with none (headless CI, all unplugged) the caller runs
+/// silent.
 pub(super) fn default_output() -> Result<Device> {
     let id: AudioObjectID = get(
         kAudioObjectSystemObject as AudioObjectID,
@@ -250,18 +238,17 @@ fn describe(id: AudioObjectID) -> Result<Device> {
 // ---------------------------------------------------------------------------------------------
 // Stream
 
-/// What the IOProc sees each cycle: the interleaved stereo buffer to fill and the host time
-/// at which its first frame reaches the DAC (the HAL's own deadline for this cycle).
+/// What the IOProc sees each cycle: the interleaved stereo buffer to fill and the host time its
+/// first frame reaches the DAC, the cycle's deadline.
 pub(super) struct Cycle<'a> {
     pub buffer: &'a mut [f32],
     pub frames: usize,
-    /// `AudioTimeStamp::mHostTime`, in nanoseconds on the [`now_ns`] clock. Zero if the HAL
-    /// did not stamp a host time (never seen on a real device; defended anyway).
+    /// `AudioTimeStamp::mHostTime` in ns on the [`now_ns`] clock; zero if the HAL stamped none.
     pub output_time_ns: u64,
 }
 
-/// An open, running output stream on one device. Dropping it stops the unit and frees the
-/// callback synchronously — nothing runs on the IO thread after the drop returns.
+/// A running output stream. Dropping it stops the unit and frees the callback synchronously:
+/// nothing runs on the IO thread after the drop returns.
 pub(super) struct Stream {
     unit: AudioUnit,
     /// The IO buffer the HAL actually granted, frames.
@@ -269,20 +256,16 @@ pub(super) struct Stream {
 }
 
 impl Stream {
-    /// The cycle size the device is actually running, frames — read back after the open,
-    /// because the HAL may quietly hand back a different size than asked (Chromium documents
-    /// the silent clamp).
+    /// The cycle size the device runs, frames, read back after the open: the HAL may silently
+    /// grant a different size than asked.
     pub(super) fn buffer_frames(&self) -> u32 {
         self.buffer_frames
     }
 
     /// Open `device` at its nominal rate with a per-client IO buffer of `buffer_frames` (clamped
-    /// to the device's range) and start it. `on_cycle` runs on the HAL's realtime IO thread —
-    /// it must never block, allocate, or log.
-    ///
-    /// `_notices` is what a stream raises on its own where the platform has no listener API
-    /// (`cpal.rs` wires it to cpal's error callback); here every notice comes from
-    /// [`Listeners`], so the stream needs none of it.
+    /// to the device's range) and start it. `on_cycle` runs on the HAL's realtime IO thread and
+    /// must never block, allocate or log. Every notice here comes from [`Listeners`], so
+    /// `_notices` goes unused.
     pub(super) fn open<F>(
         device: &Device,
         buffer_frames: u32,
@@ -293,9 +276,7 @@ impl Stream {
         F: FnMut(Cycle<'_>) + Send + 'static,
     {
         let buffer_frames = buffer_frames.clamp(device.buffer_range.0, device.buffer_range.1);
-        // The IO buffer is a per-client property on the modern HAL — our request sizes OUR IO
-        // cycle and nobody else's (verified 2026-09-02: a second process read 512 while this
-        // client ran at 2048). Set on the device object before the unit starts.
+        // A per-client property on the HAL: it sizes our IO cycle only. Set before the unit starts.
         set(
             device.id,
             kAudioDevicePropertyBufferFrameSize,
@@ -367,8 +348,7 @@ impl Stream {
 
 impl Drop for Stream {
     fn drop(&mut self) {
-        // Explicit, so the order is ours: stop the IO thread first, then the unit's own Drop
-        // uninitialises and frees the callback (and with it whatever the closure owned).
+        // Stop the IO thread first; the unit's own Drop then frees the callback and its captures.
         let _ = self.unit.stop();
     }
 }
@@ -376,18 +356,17 @@ impl Drop for Stream {
 // ---------------------------------------------------------------------------------------------
 // Listeners
 
-/// The flags CoreAudio's notification thread raises; the backend polls them on the main
-/// thread. Atomics only — a listener runs on CoreAudio's own thread and may not touch us.
+/// Flags CoreAudio's notification thread raises and the main thread polls; atomics only.
 #[derive(Default)]
 pub(super) struct Notices {
-    /// The system default output device changed (headphones plugged, AirPods connected…).
+    /// The system default output device changed (headphones plugged in, say).
     pub default_changed: AtomicBool,
     /// The device we are on says it is no longer alive (unplugged).
     pub device_died: AtomicBool,
     /// The device's nominal sample rate changed under us (Audio MIDI Setup).
     pub rate_changed: AtomicBool,
-    /// `kAudioDeviceProcessorOverload` count — the HAL saying our IO cycle ran past its
-    /// deadline. The one crackle signature that is definitionally audible.
+    /// `kAudioDeviceProcessorOverload` count: our IO cycle ran past its deadline, an audible
+    /// crackle.
     pub overloads: AtomicU64,
     /// Host time (ns) of the most recent overload, so the report can place it.
     pub last_overload_ns: AtomicU64,
@@ -425,8 +404,7 @@ unsafe extern "C-unwind" fn on_notice(
     0
 }
 
-/// The listeners armed on one device (plus the one system-wide default-device listener),
-/// removed on drop. Rebuilding the stream on a new device drops and re-arms.
+/// The listeners armed on one device, plus the system-wide default-device one; removed on drop.
 pub(super) struct Listeners {
     notices: Arc<Notices>,
     armed: Vec<(AudioObjectID, AudioObjectPropertyAddress)>,
@@ -494,8 +472,8 @@ impl Drop for Listeners {
     fn drop(&mut self) {
         let client = Arc::as_ptr(&self.notices) as *mut c_void;
         for (object, address) in self.armed.drain(..) {
-            // SAFETY: mirrors the registration above. A dead device may refuse; that is fine —
-            // its listeners die with it.
+            // SAFETY: mirrors the registration above; a dead device may refuse, and its
+            // listeners die with it.
             let _ = unsafe {
                 AudioObjectRemovePropertyListener(
                     object,
@@ -514,8 +492,8 @@ impl Drop for Listeners {
 /// `os_workgroup_t` is an ObjC object pointer; we never look inside it.
 type OsWorkgroup = *mut c_void;
 
-/// `os_workgroup_join_token_s`: a signature plus 36 opaque bytes on 64-bit. Sized generously —
-/// the OS writes into it, we only carry it back to `leave`.
+/// `os_workgroup_join_token_s`: a signature plus 36 opaque bytes on 64-bit, sized generously; we
+/// only carry it back to `leave`.
 #[repr(C)]
 struct JoinToken {
     sig: u32,
@@ -528,8 +506,8 @@ extern "C" {
     fn os_release(object: *mut c_void);
 }
 
-/// The device's IO-thread audio workgroup — the scheduler's notion of "the threads working
-/// toward this device's deadline" (WWDC20 *Meet Audio Workgroups*). Retained; released on drop.
+/// The device's IO-thread audio workgroup, the threads working toward its deadline; retained,
+/// released on drop.
 pub(super) struct Workgroup(OsWorkgroup);
 
 // SAFETY: an os_workgroup is a thread-safe OS object; we only pass its pointer to `join` /
@@ -555,7 +533,7 @@ impl Drop for Workgroup {
     }
 }
 
-/// The render thread's membership in a workgroup — leaves on drop, on the same thread.
+/// The render thread's membership in a workgroup; leaves on drop, on the same thread.
 pub(super) struct Joined {
     group: Workgroup,
     token: Box<JoinToken>,
@@ -586,19 +564,16 @@ impl Drop for Joined {
     }
 }
 
-/// The render thread's realtime standing. A time-constraint policy lasts as long as the thread
-/// does and needs no unwinding, so this carries nothing; it exists because the Windows half of
-/// the same surface (`cpal.rs`) has an MMCSS registration to hand back.
+/// The render thread's realtime standing; empty here, since the policy needs no unwinding
+/// (the Windows side has an MMCSS registration to hand back).
 pub(super) struct Realtime;
 
-/// Give the calling thread a time-constraint (realtime) policy: it produces `period_ns` worth
-/// of audio per wake and must be done well inside that. The scheduler then treats it like the
-/// HAL's own IO thread — above every QoS band, on a performance core.
+/// Give the calling thread a time-constraint policy for `period_ns` of audio per wake, so the
+/// scheduler treats it like the HAL's IO thread: above every QoS band, on a performance core.
 pub(super) fn set_realtime(period_ns: u64) -> Result<Realtime> {
     let period = ns_to_host_ticks(period_ns) as u32;
-    // A render chunk costs a fraction of a millisecond; the constraint is the deadline from
-    // period start by which that computation must be done. Half the period leaves the other
-    // half to the IO thread's own copy and to any neighbour in the workgroup.
+    // The constraint is the deadline from period start; half the period leaves the rest to the
+    // IO thread's copy and the workgroup's neighbours.
     let policy = libc::thread_time_constraint_policy {
         period,
         computation: (period / 10).max(1),

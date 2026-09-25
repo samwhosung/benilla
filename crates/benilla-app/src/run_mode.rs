@@ -106,7 +106,8 @@ pub(crate) fn env_login() -> bool {
 /// `WOW_CAPTURE` and `WOW_RIG` are folded in because they *cannot* be a person: a capture authors
 /// the camera and a rig drives the body, so a run that sets either has already said what it is and
 /// cannot forget to. Everything else declares — `scripts/smoke.sh`, `cine.sh`, `summon-live.sh`
-/// and the ad-hoc probe recipe in the `probe` skill all pass `WOW_UNATTENDED=1`.
+/// and an ad-hoc probe run (`docs/CONTRIBUTING.md`, "Running it unattended") all pass
+/// `WOW_UNATTENDED=1`.
 ///
 /// Read by whatever may act *instead of* a person: the lost-session verdict (decision 1262 — the
 /// session-loss readers never call this directly, [`crate::net::DisconnectedMessage::new`] asks

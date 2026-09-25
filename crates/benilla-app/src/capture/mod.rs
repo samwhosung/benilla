@@ -1,71 +1,34 @@
-//! Deterministic capture mode — the machine half of the Phase-5 visual A/B harness.
+//! Deterministic capture mode: with `$WOW_CAPTURE=<scenario>` the app boots server-less, pins the
+//! game clock and the camera to a named viewpoint, waits for the rendered image to stop changing,
+//! writes one PNG of the primary window to `$WOW_CAPTURE_OUT` and exits. `scripts/visual.sh`
+//! drives it and `benilla-visual` diffs the shots against baselines.
 //!
-//! With `$WOW_CAPTURE=<scenario>` set, the app boots server-less (net disabled in `main`), pins the
-//! game-clock and the camera to a named viewpoint, waits for the rendered image to stop changing,
-//! writes one PNG of the primary window to `$WOW_CAPTURE_OUT`, and exits. The render rework is the
-//! single riskiest change in the architecture — it can regress the whole look at once — so it goes
-//! behind this harness: baselines are captured on the *current* pipeline, then every rework step is
-//! diffed against them by the `benilla-visual` tool, catching regressions by machine before the
-//! director's eye. Driven by `scripts/visual.sh`.
+//! Captures are rendered game art: they live under the gitignored `target/visual/`.
 //!
-//! Captures contain Blizzard-derived imagery (rendered terrain/models), so they live under the
-//! gitignored `target/visual/` and are never committed.
+//! Two mechanisms make a capture reproducible:
+//! 1. The shutter waits for the image itself to stop changing ([`STABLE_FRAMES`], [`FrameWatch`]),
+//!    compared byte for byte off the framebuffer, so streaming, pipeline warm-up and late loads
+//!    are all waited out.
+//! 2. The game clock is frozen ([`CAPTURE_FRAME_DT`], [`hold_clock`]) while the scene builds, then
+//!    released for exactly [`age_frames`] fixed steps, so the shot's sim age is the same on any
+//!    machine.
 //!
-//! ## What makes a capture reproducible — two mechanisms, and that is all
-//! "Deterministic" is the whole claim: a golden diff is evidence only if two runs of one unchanged
-//! build agree. Pinning the camera, the game clock and the clutter seed is not enough.
-//!
-//! 1. **The shutter waits for the IMAGE to stop changing** ([`STABLE_FRAMES`], [`FrameWatch`],
-//!    decision 0815). The scene is built when the rendered frame stops moving — measured, by reading
-//!    the framebuffer back and comparing bytes. This replaced four *proxies* for the same question
-//!    (tile residency, `scene_ready`, outstanding placements, and a world-entity-count quiescence
-//!    counter), each of which was partial by construction and each of which had been added after the
-//!    previous one was caught missing something. Streaming, pipeline warm-up, late placements, late
-//!    M2 loads and the loading-screen fade are all *visible in the frame* — or they do not affect the
-//!    shot, in which case they were never the harness's business.
-//! 2. **The game clock is frozen** ([`CAPTURE_FRAME_DT`], [`hold_clock`]), because the
-//!    sims integrate in *seconds* while the harness counts *frames*. Held while the scene is being
-//!    built, then released for exactly [`age_frames`] fixed steps, so the shot's sim age is the same
-//!    duration on any machine.
-//!
-//! **Neither one fixes the known residual flake, and no gate here can.** `scripts/visual.sh
-//! selfcheck` still finds a small number of scenarios that land in one of exactly two states. The
-//! cause is not timing: it is that our draw order among *coplanar, equal-depth* batches follows spawn
-//! order, and spawn order varies because asset loads complete on a thread pool (0723's Open section,
-//! reached again by 0810 and 0815). Both states are perfectly stable — so waiting longer, waiting for
-//! quiescence, or waiting for pixel stability cannot help. It is a renderer defect that the harness
-//! correctly *reports*; do not try to gate it away here. Read 0815 before touching this file's phases.
-//!
-//! **`creature-indoor-front` is one of them** (named 2026-09-01, while A/B-ing 1787's fog gate): two
-//! runs of ONE unchanged build land in the two states at MAE 4.518, the whole difference confined to
-//! the subject's own brightness with the room around it pixel-identical, and the settle counts differ
-//! (235 vs 211 frames). If a change you are A/B-ing shows exactly 4.518 here, re-run the baseline
-//! before believing it — the number is the flake's, not yours.
+//! Neither fixes the residual flake: a few scenarios land in one of two stable states, because
+//! draw order among coplanar equal-depth batches follows spawn order, which follows thread-pool
+//! load completion. It is a renderer defect the harness reports; waiting longer cannot gate it
+//! away. `creature-indoor-front` is one: two runs of one build differ at MAE 4.518, confined to
+//! the subject's brightness, so a 4.518 there is the flake, not the change under test.
 //!
 //! ## Running one capture by hand
-//! **Run through Cargo — never the built binary directly:**
+//! Run through Cargo, never a bare `target/debug/benilla`, which may be stale:
 //! ```text
 //! WOW_CAPTURE=ui-unitframes \
 //!     WOW_CAPTURE_OUT=/tmp/shot.png cargo run -q -p benilla
 //! ```
-//! (`WOW_DATA` is only needed for a non-standard install — the client finds one in the project
-//! folder or beside the binary on its own, `benilla_formats::wow_data`, decision 1175.)
-//!
-//! `cargo run` rebuilds first; a bare `target/debug/benilla` can silently be **stale code** — the
-//! classic way a capture "disproves" a fix that was never in the binary. Staleness is now the
-//! *only* trap here, and this note is worth keeping for why. Before 0993, `assets/` resolved
-//! through Cargo's runtime `CARGO_MANIFEST_DIR`, so a bare run loaded **no** WGSL at all and every
-//! custom-shader layer — the entire player UI, sky, liquid, models — rendered blank; it was read
-//! as a UI bug for hours once. 0993 patched that by baking an absolute source-tree path in at
-//! compile time, which fixed the capture and left a binary that worked only on the machine that
-//! built it. 1175 deleted the path instead: every shader is compiled into the binary and addressed
-//! `embedded://<crate>/shaders/…`, so there is no asset root left to resolve wrongly.
-//! A **`ui-*` scenario opts the player UI in on its own** — it declares a `ui:` fixture, which is
-//! this table saying the window is the subject ([`scenarios::ui_opted_in`], and read its doc
-//! for why that is a correctness fix and not a convenience). `WOW_CAPTURE_UI=1` remains, for what
-//! it was always actually for: painting the UI over a **world** scenario's shot. World baselines
-//! stay UI-free by default either way. `WOW_CAPTURE=list`
-//! prints the scenario names. `scripts/visual.sh` wraps all of this.
+//! `WOW_DATA` is needed only for an install the client does not find on its own
+//! (`benilla_formats::wow_data`). A `ui-*` scenario opts the player UI in by declaring a `ui:`
+//! fixture ([`scenarios::ui_opted_in`]); `WOW_CAPTURE_UI=1` paints the UI over a world scenario,
+//! whose baselines are UI-free by default. `WOW_CAPTURE=list` prints the scenario names.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -82,9 +45,6 @@ use benilla_world::schedule::WorldStage;
 use benilla_world::terrain_stream::WorldLoadProgress;
 use benilla_world::view::WorldCamera;
 
-// The UI fixture seeding (the synthetic window states), the scenario table, and the live-run
-// probe instruments (`probes`) each live in their own file — the server-less harness (settle,
-// screenshot, perf probe) is this one's concern.
 mod depth_probe;
 mod fixtures;
 mod live_shot;
@@ -159,10 +119,8 @@ use scenarios::GlueScreen;
 use scenarios::{Scenario, SubjectKind, UiFixture, GLUE_SCENARIOS, GROUND_EYE, SCENARIOS};
 
 pub(crate) mod fxview;
-// The three scripted probe drivers, which lived in `player/` until decision 1174: they turn the
-// avatar's aim, aim its swim pitch, and park the camera rig, and all three order themselves BEFORE
-// `player::control`. An instrument may name the gameplay system it runs against; gameplay may not
-// name the instrument.
+// The scripted aim, swim-pitch and camera-rig drivers order themselves before `player::control`:
+// an instrument may name the gameplay system it drives, gameplay never names the instrument.
 mod probe_cam;
 mod probe_look;
 mod probe_pitch;
@@ -172,15 +130,11 @@ pub(crate) use probe_cam::ProbeCamPlugin;
 pub(crate) use probe_look::ProbeLookPlugin;
 pub(crate) use probe_pitch::ProbePitchPlugin;
 
-/// Which screen a capture starts the client on — the dev arm of [`crate::run_mode::start_state`],
-/// which is what `main` actually calls. A glue capture boots onto the screen it photographs; any
-/// other capture boots straight in-world (no net, no picker); with no capture at all this is the
-/// ordinary login screen.
+/// The screen a capture starts on, the dev arm of [`crate::run_mode::start_state`]: a glue capture
+/// boots onto its screen, any other capture straight in-world, no capture the login screen.
 ///
-/// The **third** independent reader of `$WOW_CAPTURE`, and deliberately so: `run_mode` asks it for
-/// the app and `dev_state::deterministic_run` asks it for the engine, because after 1160's split
-/// each layer must be able to ask with nothing above it. One environment variable, three readers,
-/// no shared symbol across either boundary. Keep them in step.
+/// One of three readers of `$WOW_CAPTURE`, with `run_mode` and `dev_state::deterministic_run`,
+/// one per layer and sharing no symbol: keep them in step.
 pub(crate) fn start_state() -> crate::char_select::ClientState {
     match glue_screen() {
         Some(GlueScreen::CharCreate) => crate::char_select::ClientState::CharCreate,
@@ -190,9 +144,8 @@ pub(crate) fn start_state() -> crate::char_select::ClientState {
     }
 }
 
-/// Is `$WOW_CAPTURE` naming a **glue** screen? Consulted before the plugins build, because
-/// the answer decides which screen the client starts on — a glue capture is the one kind of
-/// capture that must NOT boot straight into the world.
+/// The glue screen `$WOW_CAPTURE` names, if any; read before the plugins build, since it decides
+/// the start screen.
 fn glue_screen() -> Option<GlueScreen> {
     let name = std::env::var("WOW_CAPTURE").ok()?;
     GLUE_SCENARIOS
@@ -201,81 +154,41 @@ fn glue_screen() -> Option<GlueScreen> {
         .map(|g| g.screen)
 }
 
-/// The `fxview` fixture request — the **effect-viewer instrument**: spawn one effect/missile
-/// model (full rig + emitters + ribbons + cards, the same `attach_effect_visuals` body the game
-/// uses), let it run `age` seconds, and shoot it from a chosen angle. The agent's own eye on
-/// spell visuals: every "this effect looks wrong from angle X" report becomes a reproducible
-/// headless capture instead of a director round-trip. Not a golden scenario (deliberately
-/// excluded from `print_scenario_names` — output depends on the model/age/angle knobs):
+/// The `fxview` effect viewer: spawn one effect or missile model through the game's own
+/// `attach_effect_visuals`, let it run `WOW_FX_AGE` seconds and shoot it from a chosen angle. Not a
+/// golden scenario: its output depends on the knobs.
 ///
 /// ```text
-/// WOW_DATA=<Data> WOW_CAPTURE=fxview WOW_FX_MODEL='Spells\DemonArmor_Impact_Head.mdx' \
+/// WOW_CAPTURE=fxview WOW_FX_MODEL='Spells\DemonArmor_Impact_Head.mdx' \
 ///   WOW_FX_AGE=1.2 WOW_FX_AZ=60 WOW_FX_EL=15 WOW_CAPTURE_OUT=/tmp/fx.png cargo run -q -p benilla
 /// ```
 ///
-/// **`WOW_FX_DISPLAY=<CreatureDisplayInfo id>` swaps the subject onto the UNIT path** — the same
-/// component set a streamed creature gets, seated on the terrain, with everything that hangs off
-/// being a unit (tag alpha, the distance-fade gate, anim LOD, the emitter's sequence host). Model
-/// lane vs unit lane at one knob is what turns "does this creature look wrong?" into a headless
-/// A/B instead of a director round-trip:
+/// Three lanes: the effect pool (`WOW_FX_MODEL`), a unit (`WOW_FX_DISPLAY`, the component set a
+/// streamed creature gets) and a GameObject (`WOW_FX_GO`, whose sequence `crate::go_anim`'s state
+/// machine picks, `0x5f3cb0`). A missing `GAMEOBJECT_STATE` reads as 0, ACTIVE, which on a model
+/// with no `Opened` sequence resolves elsewhere.
 ///
-/// ```text
-/// WOW_DATA=<Data> WOW_CAPTURE=fxview WOW_FX_DISPLAY=1132 WOW_FX_AGE=6 WOW_FX_EL=20 \
-///   WOW_FX_DIST=12 WOW_CAPTURE_OUT=/tmp/vw.png cargo run -q -p benilla
-/// ```
-///
-/// **`WOW_FX_GO=<GameObjectDisplayInfo id>` swaps the subject onto the GAMEOBJECT path** — the
-/// third lane, and the one a placed trap/door/chest actually takes: the wire component set a
-/// streamed GO gets, so `crate::go_anim`'s state machine (`0x5f3cb0`) — not the effect pool —
-/// chooses the sequence. `WOW_FX_GO_STATE` (`GAMEOBJECT_STATE`, default 1 READY) and
-/// `WOW_FX_GO_TYPE` (`GAMEOBJECT_TYPE_ID`, default 6 TRAP) select the substate;
-/// `benilla-extract goanimscan` *predicts* what that resolves to, and this *shows* it. The lane
-/// matters because an absent `GAMEOBJECT_STATE` reads as the wire default `0` = ACTIVE, which on a
-/// model with no `Opened` sequence lands somewhere else entirely:
-///
-/// ```text
-/// WOW_DATA=<Data> WOW_CAPTURE=fxview WOW_FX_GO=3073 WOW_FX_GO_STATE=1 WOW_FX_AGE=4 \
-///   WOW_FX_DIST=3 WOW_CAPTURE_OUT=/tmp/go.png cargo run -q -p benilla
-/// ```
-///
-/// Knobs: `WOW_FX_MODEL` (required, internal path), `WOW_FX_AGE` (seconds after attach, default
-/// 1.0), `WOW_FX_AZ`/`WOW_FX_EL` (camera orbit degrees, default 0/10), `WOW_FX_DIST` (yards,
-/// default 5), `WOW_FX_FLY` (yd/s along the model's facing — a missile only trails in motion;
-/// default 0), `WOW_FX_YAW` (model facing, degrees, default 0), `WOW_FX_TURN` (deg/s the fixture
-/// keeps turning after spawn — a host that changes heading mid-effect, which is how you see that
-/// a world-mode cloud does NOT swing with it (the "heading-since-birth fan"
-/// this knob was built for turned out not to exist); default 0), `WOW_FX_GROUND` (=1 seats the
-/// fixture ON the terrain via a down-ray — required to see a ground-anchored effect's projected
-/// surface decals, `crate::ground_fx`; default 0 = the mid-air point), `WOW_FX_HOLD` (=1 keeps
-/// the fixture alive past one sequence pass — previewing a persistent HOLD kit's steady state;
-/// default 0 = the game's discrete-instance reap at one pass, then the pool drains),
-/// `WOW_FX_AT` (`x,y,z` — plant the fixture at a real world point instead of the Northshire
-/// hillside, with `WOW_MAP` picking the map and `WOW_FX_MINUTE` the clock; the ground-decal lanes
-/// need real terrain under the subject),
-/// `WOW_FX_UP` (yards to raise the fixture above its resolved seat — for models authored below
-/// their anchor, whose opening frames the terrain otherwise swallows; default 0).
+/// Knobs, defaults in parentheses: `WOW_FX_AGE` s after attach (1.0), `WOW_FX_AZ`/`WOW_FX_EL`
+/// orbit degrees (0/10), `WOW_FX_DIST` yd (5), `WOW_FX_FLY` yd/s along the facing (0),
+/// `WOW_FX_YAW` degrees (0), `WOW_FX_TURN` deg/s after spawn (0), `WOW_FX_GROUND=1` seats it on
+/// the terrain for ground decals, `WOW_FX_HOLD=1` keeps it past one sequence pass,
+/// `WOW_FX_MINUTE` the clock (720).
 #[derive(Resource)]
 pub(crate) struct FxViewRequest {
     pub(crate) model_path: String,
-    /// `WOW_FX_DISPLAY=<CreatureDisplayInfo id>` — spawn the subject as a real **unit** (the live
-    /// `NetEntity` component set, the same path a streamed creature takes) instead of attaching it
-    /// as an effect. The two lanes differ in everything that hangs off being a unit — material tag
-    /// alpha, the distance-fade gate, anim LOD, the emitter's sequence host — so switching this one
-    /// knob is the A/B that says whether a defect belongs to the model or to the unit path.
-    /// `WOW_FX_MODEL` is then optional (the display id names the model).
+    /// `WOW_FX_DISPLAY`: spawn the subject as a unit with this `CreatureDisplayInfo` id, the A/B
+    /// that says whether a defect is the model's or the unit path's; `WOW_FX_MODEL` is optional.
     pub(crate) display: Option<u32>,
-    /// `WOW_FX_GO=<GameObjectDisplayInfo id>` — spawn the subject as a real **GameObject**, so
-    /// [`crate::go_anim`]'s state machine picks the sequence instead of the effect pool's
-    /// "play clip 0". A placed trap renders through this lane and nothing else, so it is the only
-    /// honest A/B for "does the trap look right".
+    /// `WOW_FX_GO`: spawn the subject as a GameObject with this `GameObjectDisplayInfo` id, the
+    /// lane a placed trap renders through.
     pub(crate) go: Option<u32>,
-    /// `WOW_FX_GO_STATE` — the `GAMEOBJECT_STATE` the fixture's descriptor carries (default 1 =
-    /// READY, what vmangos spawns a trap in). Set it to 0 to see what an omitted field renders as.
+    /// `WOW_FX_GO_STATE`: the descriptor's `GAMEOBJECT_STATE`, default 1 READY, the state vmangos
+    /// creates a spell-cast trap in (`SpellEffects.cpp:5655`); 0 shows what an omitted field reads.
     pub(crate) go_state: u32,
-    /// `WOW_FX_GO_TYPE` — the `GAMEOBJECT_TYPE_ID` (default 6 = TRAP). Decides whether
-    /// [`crate::go_anim::go_animates`] puts the instance on the machine at all.
+    /// `WOW_FX_GO_TYPE`: the `GAMEOBJECT_TYPE_ID`, default 6 TRAP; decides whether
+    /// [`crate::go_anim::go_animates`] runs the state machine at all.
     pub(crate) go_type: u32,
-    /// `WOW_FX_SCALE` — the unit lane's `NetEntity::scale` (the wire scale a creature carries).
+    /// `WOW_FX_SCALE`: the unit lane's wire scale.
     pub(crate) scale: f32,
     pub(crate) age: f32,
     pub(crate) az_deg: f32,
@@ -283,78 +196,50 @@ pub(crate) struct FxViewRequest {
     pub(crate) dist: f32,
     pub(crate) fly: f32,
     pub(crate) yaw_deg: f32,
-    /// See `WOW_FX_TURN` above (deg/s).
     pub(crate) turn: f32,
-    /// See `WOW_FX_GROUND` above.
     pub(crate) ground: bool,
-    /// See `WOW_FX_HOLD` above.
     pub(crate) hold: bool,
-    /// `WOW_FX_AT=x,y,z` — plant the fixture at this raw WoW point instead of [`FXVIEW_POS`]
-    /// (with `WOW_MAP` picking the map, like `vista` and `waterfx`). The ground-decal lanes —
-    /// blob shadow, footprints, the selection ring — only exist *on* terrain, and which terrain
-    /// decides whether they exist at all (footprints gate on the surface's `TerrainType.Flags & 1`,
-    /// i.e. snow and sand) and how hard the coplanar tie is (a steep slope seen at a grazing
-    /// angle is the whole difficulty). A fixture nailed to one Northshire hillside can photograph
-    /// none of that.
+    /// `WOW_FX_AT=x,y,z`: a raw WoW point in place of [`FXVIEW_POS`], `WOW_MAP` the map. Ground
+    /// decals depend on the surface: footprints need `TerrainType.Flags & 1` (snow, sand).
     pub(crate) at: Option<[f32; 3]>,
-    /// `WOW_FX_UP` — raise the fixture this many yards above its resolved seat (default 0).
-    /// The escape hatch for models authored BELOW their anchor (Arcane Intellect's star cluster
-    /// starts 1.6 yd under its attach point): at the default seat the terrain swallows the
-    /// opening of the animation, and no camera angle can look through the ground.
+    /// `WOW_FX_UP`: yards above the resolved seat, for a model authored below its anchor (Arcane
+    /// Intellect's star cluster starts 1.6 yd under it) whose opening the terrain would swallow.
     pub(crate) up: f32,
 }
 
-/// The fixture's live state, written by `fxview::drive_fx_view` and the phase
-/// driver below.
+/// The fixture's live state, written by `fxview::drive_fx_view` and `drive_capture`.
 #[derive(Resource, Default)]
 pub(crate) struct FxViewState {
-    /// Set by the capture driver once the scene has settled — the fixture spawns only then, so
-    /// a one-shot effect's age at the shot is the REQUESTED age, not age + settle time.
+    /// Set once the scene has settled; the fixture spawns only then, so its age is the one asked.
     pub(crate) armed: bool,
     pub(crate) root: Option<Entity>,
-    /// `time.elapsed_secs()` at the frame the visuals attached — the age clock's zero.
+    /// `time.elapsed_secs()` when the visuals attached: the age clock's zero.
     pub(crate) attached_at: Option<f32>,
-    /// The fixture ran its one sequence pass and the root was reaped (the game's discrete-kit
-    /// completion callback, mirrored so captures past the span tell the truth: emitters drain,
-    /// they don't pour). `WOW_FX_HOLD=1` disables the reap.
+    /// The root was reaped after one sequence pass, as the game reaps a discrete kit;
+    /// `WOW_FX_HOLD=1` disables the reap.
     pub(crate) expired: bool,
 }
 
-/// Where the fxview effect spawns: mid-air over the Northshire slope (raw WoW coords), inside
-/// the ground scenario's streamed tiles, high enough that terrain never intersects the model.
+/// Where the fxview effect spawns: mid-air over the Northshire slope, inside the ground
+/// scenario's streamed tiles.
 pub(crate) const FXVIEW_POS: [f32; 3] = [-8960.0, -145.0, 90.0];
 
-/// How far the `vista` fixture seats its eye above the position it is given (yd) — a standing human's
-/// camera pivot, so pasting a `.go xyz` straight off the debug panel frames what the director saw
-/// rather than a worm's-eye view from inside the ground.
+/// How far the `vista` fixture seats its eye above the given position (yd): a standing human's
+/// camera pivot, so a `.go xyz` off the debug panel frames what a player there saw.
 const VISTA_EYE_HEIGHT: f32 = 2.0;
 
-/// Print the BASELINE scenario names, one per line — the single source of truth
-/// `scripts/visual.sh` reads so the driver never drifts from the code. Invoked by `main` for
-/// `WOW_CAPTURE=list`. On-demand fixtures (the UI look-pass windows, sun/moon/sky, house-compass)
-/// are deliberately absent: the blessed sweep is the director-chosen spot×time set only, so a
-/// `visual.sh baseline` opens six windows on their screen and not thirty.
+/// Print the baseline scenario names, one per line, for `WOW_CAPTURE=list`; `scripts/visual.sh`
+/// reads its sweep from this. On-demand fixtures are not listed.
 pub(crate) fn print_scenario_names() {
     for s in SCENARIOS {
         println!("{}", s.name);
     }
 }
 
-/// Consecutive byte-identical framebuffer readbacks that mean "the scene is built".
-///
-/// This is the harness's ONE residency test, and it is a measurement rather than a proxy: whatever is
-/// still arriving — a tile, a placement, an M2 that just finished loading, a pipeline wgpu has not
-/// specialised yet (until it is warm Bevy draws only the clear colour, which is why a blind settle
-/// could photograph a uniform fog-blue frame) — either changes the image, and resets this counter, or
-/// does not affect the shot at all.
-///
-/// 30 frames (~0.5 s of held-clock frames) is the same confidence window the entity-count counter it
-/// replaced used. Raise it with `$WOW_CAPTURE_STABLE` for a scene with a very slow tail; this is the
-/// knob that used to be `WOW_CAPTURE_SETTLE`, and unlike that one it buys *evidence* rather than a
-/// guess at a duration.
+/// Consecutive byte-identical framebuffer readbacks that mean the scene is built: anything still
+/// arriving changes the image or does not affect the shot. `$WOW_CAPTURE_STABLE` overrides it.
 const STABLE_FRAMES: u32 = 30;
 
-/// The effective stability window — see [`STABLE_FRAMES`].
 fn stable_frames() -> u32 {
     std::env::var("WOW_CAPTURE_STABLE")
         .ok()
@@ -362,34 +247,16 @@ fn stable_frames() -> u32 {
         .unwrap_or(STABLE_FRAMES)
 }
 
-/// Hard cap on held frames spent waiting for [`STABLE_FRAMES`], so a scene whose image never settles
-/// (a UI fixture with a live animation) shoots anyway rather than hanging — forfeiting the guarantee,
-/// loudly. Deliberately generous: reaching it means the shot is not reproducible.
+/// Cap on held frames waiting for [`STABLE_FRAMES`], so a scene that never settles (a live UI
+/// animation) shoots anyway, with a warning that the shot is not reproducible.
 const BUILD_CAP_FRAMES: u32 = 1800;
 
-/// Wall-clock ceiling on a whole capture run, deadline exceeded → `AppExit::error()`.
-///
-/// **Every other bound in this harness counts FRAMES, and that is only a bound while frames keep
-/// arriving.** On 2026-08-26 macOS stopped granting drawables to our window — `-[CAMetalLayer
-/// nextDrawable]` parked on its own ~1 s internal timeout, over and over, verified in the stall
-/// sampler's own captures (758 of ~1000 samples in `semaphore_timedwait_trap` beneath
-/// `CAMetalLayerPrivateNextDrawableLocked`, with `frame hitch: 1005..1019 ms` repeating in the log).
-/// At that rate [`BUILD_CAP_FRAMES`] is not 30 seconds of patience, it is **thirty minutes**, and
-/// every agent-driven capture that session read as a dead terminal with no error and no clue.
-///
-/// So the ceiling that matters is the one measured in the units the failure is measured in. It is
-/// not a retry, a fallback or a heuristic: a capture either produces its image or fails, and this is
-/// the line that makes the second one *happen* instead of hanging. The message it prints carries the
-/// observed frame rate, because "47 frames in 300 s" is the diagnosis and a bare timeout is not.
-///
-/// The starvation itself is macOS's, not ours — the compositor stops recycling presented drawables
-/// for a window it is not compositing, and nothing in-process can hand them back. We bound our own
-/// instrument; we do not fight the window server.
+/// Wall-clock ceiling on a capture run, past which it exits with an error. The other bounds count
+/// frames, and macOS can stop granting drawables to a window it is not compositing (about 1 s per
+/// `-[CAMetalLayer nextDrawable]`), which stretches the frame caps to half an hour.
 const DEADLINE_SECS: u64 = 300;
 
-/// The effective wall-clock ceiling — `$WOW_CAPTURE_DEADLINE=<secs>`, `0` to disable. A healthy
-/// capture is seconds (`ui-bag` 7 s, a settled world scenario ~10 s), so 300 s is ~30× headroom and
-/// cannot fire on a run that is merely slow.
+/// The effective ceiling: `$WOW_CAPTURE_DEADLINE=<secs>`, `0` to disable.
 fn capture_deadline() -> Option<Duration> {
     let secs = std::env::var("WOW_CAPTURE_DEADLINE")
         .ok()
@@ -398,17 +265,11 @@ fn capture_deadline() -> Option<Duration> {
     (secs > 0).then(|| Duration::from_secs(secs))
 }
 
-/// Steps of [`CAPTURE_FRAME_DT`] the sims run, clock released, once the scene is built and
-/// quiescent — the shot's *sim age*. 150 = 2.5 s: past the 2 s spawn appear-fade
-/// (`model_fade::APPEAR_FADE_SECS`) and long past a flame pool's particle lifetime, so the scene is
-/// at steady state and not mid-transient.
-///
-/// Because it is counted in frozen frames it is a **duration**, identically on any machine — which
-/// is the whole point. `$WOW_CAPTURE_AGE` overrides it for a scene that needs longer to fill (snow:
-/// flakes sink at 2-6.5 yd/s from ~22 yd up, so the column wants ~11 s ≈ 660).
+/// Steps of [`CAPTURE_FRAME_DT`] the sims run once the scene is built: the shot's sim age. 150 is
+/// 2.5 s, past the 2 s spawn fade (`model_fade::APPEAR_FADE_SECS`) and a flame pool's particle
+/// lifetime. `$WOW_CAPTURE_AGE` overrides it for a scene that fills slowly (snow wants ~660).
 const AGE_FRAMES: u32 = 150;
 
-/// The effective aging window — see [`AGE_FRAMES`].
 fn age_frames() -> u32 {
     std::env::var("WOW_CAPTURE_AGE")
         .ok()
@@ -416,23 +277,12 @@ fn age_frames() -> u32 {
         .unwrap_or(AGE_FRAMES)
 }
 
-/// The frozen capture clock's frame step: every capture frame advances the game clock by exactly
-/// this, whatever the frame really cost. Anything integrated in *seconds* — particle pools, ribbon
-/// trails, animation, weather, fades — therefore reaches the shutter in the same state every run.
-///
-/// Without it the harness is only **frame**-pinned: the build window counts frames while the sims
-/// advance on `time.delta_secs()`, i.e. real wall-clock, so two runs spend different real time per
-/// frame (streaming, pipeline warm-up, whatever else the machine is doing) and photograph the flames
-/// in different places. Measured on this tree before the change — the golden six captured twice from
-/// one **unchanged** build: MAE up to 0.009 with max pixel deltas of 180, the same band a real render
-/// change lands in. That noise floor is why decision 0721 could not read its own flame pixels, and
-/// why 0719 read signal out of some that were partly run-to-run churn.
-///
-/// 1/60 s, so every settle window keeps the duration its comment claims (150 frames ≈ 2.5 s) instead
-/// of buying however much sim time the machine happened to grant.
+/// The frozen clock's step, 1/60 s per capture frame, so everything integrated in seconds reaches
+/// the shutter in the same state every run. On a live clock two runs of one build differ by up to
+/// MAE 0.009, as much as a real render change.
 const CAPTURE_FRAME_DT: Duration = Duration::from_nanos(16_666_667);
 
-/// Hard cap on how long to wait for the screenshot save to land, so a capture never hangs the harness.
+/// Cap on frames waiting for the screenshot save, so a capture never hangs.
 const SAVE_TIMEOUT_FRAMES: u32 = 120;
 /// A couple of grace frames after the save completes before exiting, so the file is flushed.
 const EXIT_GRACE_FRAMES: u32 = 3;
@@ -440,22 +290,17 @@ const EXIT_GRACE_FRAMES: u32 = 3;
 /// Frames the perf probe discards after uncapping vsync (present-mode switch + pipeline settle).
 const PROBE_WARMUP_FRAMES: u32 = 60;
 
-/// Marks a framebuffer readback taken to test scene stability, so the real shot's `Capturing` wait
-/// (see [`Phase::Saving`]) cannot mistake one for the screenshot it is waiting on.
+/// Marks a stability readback, so [`Phase::Saving`]'s wait cannot mistake it for the shot.
 #[derive(Component)]
 struct StabilityShot;
 
-/// The image-stability tracker: the previous framebuffer, and how many consecutive readbacks have
-/// matched it byte for byte. Bytes, not a hash — the buffer is tens of MB at most,
-/// a `memcmp` is free next to the readback itself, and an exact compare needs no collision argument.
+/// The image-stability tracker. Compares whole bytes, not a hash: a `memcmp` is free next to the
+/// readback and needs no collision argument.
 #[derive(Resource, Default)]
 struct FrameWatch {
-    /// The last framebuffer read back, or `None` before the first one lands.
     prev: Option<Vec<u8>>,
-    /// Consecutive readbacks identical to their predecessor. Reset to 0 by any change.
     stable: u32,
-    /// A readback is outstanding. Only ever one at a time, so `stable` counts *distinct* frames
-    /// rather than however many requests the GPU happened to retire together.
+    /// A readback is outstanding; only one at a time, so `stable` counts distinct frames.
     in_flight: bool,
 }
 
@@ -463,7 +308,7 @@ struct FrameWatch {
 fn watch_frame(shot: On<ScreenshotCaptured>, mut watch: ResMut<FrameWatch>) {
     watch.in_flight = false;
     let Some(bytes) = shot.image.data.as_ref() else {
-        return; // no readback payload (a zero-sized or unavailable target) — treat as no evidence
+        return; // no payload (a zero-sized target): no evidence
     };
     watch.stable = if watch.prev.as_deref() == Some(bytes.as_slice()) {
         watch.stable + 1
@@ -476,21 +321,17 @@ fn watch_frame(shot: On<ScreenshotCaptured>, mut watch: ResMut<FrameWatch>) {
 /// Capture lifecycle. Advances one step per frame in [`drive_capture`].
 #[derive(Clone, Copy)]
 enum Phase {
-    /// Clock held; waiting for the rendered image to stop changing ([`STABLE_FRAMES`]). This one
-    /// phase replaced `Streaming` + `Settling` and the four world-state proxies they waited on — see
-    /// this module's header.
+    /// Clock held; waiting for the image to stop changing ([`STABLE_FRAMES`]).
     Building(u32),
-    /// Scene built, clock released: running exactly [`age_frames`] steps of
-    /// [`CAPTURE_FRAME_DT`] so every second-driven thing is at a known, machine-independent age.
+    /// Clock released: running exactly [`age_frames`] steps of [`CAPTURE_FRAME_DT`].
     Aging(u32),
-    /// fxview only: scene settled, fixture armed; waiting for the effect to attach and run its
-    /// requested age before the shot.
+    /// Fixture viewers only: fixture armed, waiting for it to attach and reach its age.
     FxAging,
-    /// Perf-probe mode (`$WOW_FPS_PROBE`): vsync off, discarding warm-up frames.
+    /// Perf probe (`$WOW_FPS_PROBE`): vsync off, discarding warm-up frames.
     ProbeWarmup(u32),
-    /// Perf-probe mode: sampling frame times until the target count, then print + exit.
+    /// Perf probe: sampling frame times, then print and exit.
     Probing(u32),
-    /// Screenshot requested; waiting for the async save (`Capturing` marker) to appear and clear.
+    /// Screenshot requested; waiting for the async save's `Capturing` marker to appear and clear.
     Saving { frames: u32, seen: bool },
     /// Save done; a few grace frames, then `AppExit`.
     Done(u32),
@@ -498,83 +339,51 @@ enum Phase {
 
 #[derive(Resource)]
 struct CaptureCtx {
-    /// The in-world viewpoint — `None` for a glue-screen capture, which has no world, no camera
-    /// and no map. Every reader of it sits on a world path; the shutter itself needs neither.
+    /// The in-world viewpoint; `None` for a glue-screen capture, which has no world.
     scenario: Option<Scenario>,
-    /// The scenario's name, whichever table it came from — for the output path and the probe line.
+    /// The scenario's name, for the output path and the probe line.
     name: &'static str,
     out: String,
     phase: Phase,
-    /// UI fixture already seeded (once, at residency) — see [`seed_ui_fixture`].
+    /// The UI fixture is seeded ([`seed_ui_fixture`]).
     ui_seeded: bool,
-    /// `$WOW_FPS_PROBE` — sample this many frames (vsync off) instead of screenshotting, then print
-    /// frame-time stats + scene counts and exit. The repeatable perf instrument: same scenario, same
-    /// settle, numbers instead of pixels. 0 = normal capture.
+    /// `$WOW_FPS_PROBE`: sample this many frames, vsync off, and print frame-time stats and scene
+    /// counts instead of screenshotting; 0 is a normal capture.
     probe_frames: u32,
-    /// The frozen clock is still in force ([`CAPTURE_FRAME_DT`]). True for the whole of every run
-    /// that ends in a screenshot; a perf probe **starts** frozen and drops this the moment the scene
-    /// is built and aged, because its entire measurement *is* the real frame cost.
-    ///
-    /// It used to be `probe_frames == 0`, decided once at build — i.e. a probe ran its whole
-    /// `Building` phase on a live clock. That silently broke when 0815 replaced the settle proxies
-    /// with the image-stability gate: on a live clock the sky drifts and the flames burn, so the
-    /// image *cannot* stop changing and `watch.stable` never leaves 0. Every probe since has spent
-    /// the full [`BUILD_CAP_FRAMES`] — 1800 frames, ~30 s, and 1800 full-resolution readbacks of a
-    /// stability test that could not pass — and then printed a warning about a shot it never takes.
-    /// Worse for a *perf* instrument: the scene it measured was however old 1800 real frames made
-    /// it, which is a different age on every machine. Frozen build → deterministic [`age_frames`] →
-    /// release is the same three steps a capture takes, and it is what makes the probe repeatable.
-    /// Decision 1637.
+    /// The frozen clock ([`CAPTURE_FRAME_DT`]) is in force. A screenshot run keeps it to the end; a
+    /// perf probe builds and ages frozen like a capture, so it measures a scene of the same age on
+    /// any machine, then drops it because its measurement is the real frame cost.
     frozen_clock: bool,
-    /// `$WOW_RESIZE=WxH` already applied (once, at first settle) — see the `Building` arm.
+    /// `$WOW_RESIZE` is applied (once, at first settle).
     resized: bool,
-    /// Probe samples (frame ms).
     probe_samples: Vec<f32>,
-    /// Process CPU seconds at the first sampled frame — the window baseline for the probe line's
-    /// `cpu_ms`/`cpu_pct` (the load-robust metric, decision 0711; the scenario probe lacked it).
+    /// Process CPU seconds at the first sample, the baseline for the probe line's `cpu_ms`.
     probe_cpu_start: Option<f64>,
-    /// Wall-clock start of the run, and how long it may take — see [`capture_deadline`]. A real
-    /// [`Instant`], never `Time<Real>`: under the frozen clock `Time<Real>` is itself manual
-    /// ([`CAPTURE_FRAME_DT`] per frame), so a harness that timed itself by it would measure the
-    /// very frame count it is trying not to trust.
+    /// Wall-clock start of the run ([`capture_deadline`]). A real [`Instant`]: under the frozen
+    /// clock `Time<Real>` is itself manual and would only count frames.
     started: Instant,
     deadline: Option<Duration>,
-    /// Frames [`drive_capture`] has run, all phases — the denominator of the rate the deadline
-    /// message reports.
+    /// Frames [`drive_capture`] has run, the denominator of the deadline message's rate.
     frames: u32,
     /// The deadline already fired; `AppExit` is written and no phase advances again.
     bailed: bool,
 }
 
-/// `$WOW_RESIZE=WxH` — resize the window to this (logical px) once the image first settles,
-/// then settle again before shooting. The mid-session resolution-change instrument (see the
-/// `Building` arm). `None` when unset or malformed.
+/// `$WOW_RESIZE=WxH`: resize the window (logical px) once the image first settles, then settle
+/// again before shooting.
 fn resize_request() -> Option<(u32, u32)> {
     let v = std::env::var("WOW_RESIZE").ok()?;
     let (w, h) = v.split_once('x')?;
     Some((w.parse().ok()?, h.parse().ok()?))
 }
 
-/// The present mode a perf probe uncaps to (also the live probe's — see `probes/live_fps.rs`).
+/// The present mode a perf probe uncaps to, shared with the live probe.
 ///
-/// `AutoNoVsync`, measured, not assumed: explicit `Immediate` on macOS/Metal is a trap — A/B'd
-/// 2026-07-27 (overlook-noon, release, twice each), it *rails* near 16.6 ms AND takes 1.0–1.5 s
-/// stalls (the `-[CAMetalLayer nextDrawable]` timeout — drawable starvation), while `AutoNoVsync`
-/// genuinely uncaps when macOS grants it (p50 12.7 ms on the same scene). 0362's "AutoNoVsync
-/// doesn't uncap" was the *power state* withholding the grant, not the mode — no present mode
-/// escapes that; `cpu_ms` on the probe line is the rail-proof metric. `WOW_PROBE_UNCAP=immediate`
-/// re-runs the losing arm when macOS/wgpu move.
-///
-/// `WOW_PROBE_UNCAP=vsync` does not uncap at all: the leg keeps the player's present mode and
-/// rails at the display's rate on purpose. It was built because the WindowServer's grant is not
-/// ours to schedule — one sitting on the M2 Air read 123.5, 60.0, 60.0 and 87.5 fps across four
-/// otherwise identical uncapped legs — and 1442's "railed-60.0 pairs only" rule discards every
-/// pair the grant split. **Measured the same day, it is not a neutral instrument:** two
-/// interleaved rounds at the Goldshire pin, no crowd, read `cpu_ms` 11.80 / 11.55 uncapped
-/// (both railed 60.0 by the WindowServer anyway) against 14.65 / 12.43 under this arm — the
-/// vsync wait costs the process CPU, and unevenly. So the default stays uncapped and a pair is
-/// still accepted only when both legs happened to rail; this arm is for a sitting whose legs
-/// refuse to rail at all, with the tax read against a same-arm baseline.
+/// `AutoNoVsync` by default: on macOS/Metal explicit `Immediate` rails near 16.6 ms and takes
+/// 1.0-1.5 s drawable stalls, while `AutoNoVsync` uncaps when the window server grants it; when
+/// it does not, `cpu_ms` on the probe line is the metric. `WOW_PROBE_UNCAP=immediate` selects
+/// `Immediate`. `WOW_PROBE_UNCAP=vsync` keeps vsync for a sitting whose legs never rail; the vsync
+/// wait costs process CPU unevenly, so read it only against a same-mode baseline.
 pub(crate) fn probe_uncap_mode() -> bevy::window::PresentMode {
     match std::env::var("WOW_PROBE_UNCAP").as_deref() {
         Ok("immediate") => bevy::window::PresentMode::Immediate,
@@ -587,9 +396,7 @@ pub(crate) struct CapturePlugin;
 
 impl Plugin for CapturePlugin {
     fn build(&self, app: &mut App) {
-        // The `waterfx` fixture drives its synthetic wading dummy before the foam emitter reads
-        // the motion — registered here, against the engine's ordering handle, because the
-        // instrument is the one that knows it is an instrument.
+        // The `waterfx` dummy moves before the foam emitter reads its motion.
         app.add_systems(
             Update,
             (waterfx::spawn, waterfx::drive)
@@ -597,10 +404,8 @@ impl Plugin for CapturePlugin {
                 .before(benilla_world::water_fx::WaterFoamSet)
                 .in_set(benilla_world::schedule::WorldStage::Present),
         );
-        // The `fxview` fixture's driver, same principle and the same shape: it
-        // creates the subject's display-cache entry, so it runs before the frame's build, inside
-        // the entity-visuals set and after the net stage — exactly the slot it held while it was
-        // an element of `EntitiesPlugin`'s chain, now stated rather than positional.
+        // The `fxview` driver creates the subject's display-cache entry, so it runs before the
+        // frame's display build, after the net stage.
         app.add_systems(
             Update,
             fxview::drive_fx_view
@@ -609,24 +414,19 @@ impl Plugin for CapturePlugin {
                 .after(benilla_world::schedule::WorldStage::Net),
         );
         let name = std::env::var("WOW_CAPTURE").unwrap_or_default();
-        // A **glue** capture short-circuits everything below: no map to seed, no viewpoint to
-        // pin, no fixture to open. Only the shutter is shared, and the shutter wants no world.
+        // A glue capture has no map, viewpoint or fixture; only the shutter is shared.
         let glue = GLUE_SCENARIOS.iter().find(|g| g.name == name).copied();
         if let Some(g) = glue {
-            // The preview pick goes through the existing `WOW_CHARCREATE_PICK` instrument rather
-            // than a second path into `CreateSelection` — same reason the map is seeded by env:
-            // one route into a fact, whoever is asking.
-            // …and an explicit pick in the environment outranks the scenario's default — the
-            // per-race lever, so one scenario photographs every `UI_*` stage.
+            // The preview pick rides `WOW_CHARCREATE_PICK`, and a pick already in the environment
+            // wins, so one scenario photographs every race's stage.
             if let Some((race, sex, class)) = g.pick {
                 if std::env::var_os("WOW_CHARCREATE_PICK").is_none() {
                     std::env::set_var("WOW_CHARCREATE_PICK", format!("{race},{sex},{class}"));
                 }
             }
         }
-        // The fxview instrument: a synthetic scenario (ground scene, noon) + the fixture
-        // request from env. Not in SCENARIOS — `scripts/visual.sh`'s golden sweep must never
-        // run it (its output depends on the model/age/angle knobs, not just the name).
+        // `fxview`, `waterfx`, `vista` and `name-close` are built from knobs, not the tables, and
+        // are never in the golden sweep.
         let scenario: Option<Scenario> = if glue.is_some() {
             None
         } else {
@@ -643,7 +443,7 @@ impl Plugin for CapturePlugin {
                     .and_then(|v| v.trim().parse().ok());
                 let model_path = match (std::env::var("WOW_FX_MODEL"), display.or(go)) {
                     (Ok(p), _) => p,
-                    (Err(_), Some(_)) => String::new(), // the id lanes name their model by display id
+                    (Err(_), Some(_)) => String::new(), // the id lanes name their own model
                     (Err(_), None) => {
                         eprintln!(
                             "WOW_CAPTURE=fxview needs WOW_FX_MODEL=<internal .mdx/.m2 path>, \
@@ -676,11 +476,6 @@ impl Plugin for CapturePlugin {
                     ground: knob("WOW_FX_GROUND", 0.0) > 0.5,
                     hold: knob("WOW_FX_HOLD", 0.0) > 0.5,
                     up: knob("WOW_FX_UP", 0.0),
-                    // `WOW_FX_AT=x,y,z` plants the fixture anywhere in the real world, with
-                    // `WOW_MAP` picking the map — the same pair `vista` and `waterfx` take. The
-                    // default hillside can photograph an effect but not a ground decal: which
-                    // surface is under the subject decides whether footprints exist at all, and
-                    // how steeply it falls away decides how hard the coplanar tie is.
                     at,
                 })
                 .init_resource::<FxViewState>();
@@ -693,12 +488,10 @@ impl Plugin for CapturePlugin {
                     ui: None,
                 }
             } else if name == "waterfx" {
-                // The water-foam viewer (see `capture::waterfx`): a wading unit over a synthetic
-                // wet lattice — or, with WOW_WFX_AT=x,y,z, in the real streamed liquid at that pin
-                // — framed by a fixed orbit around the rig centre. Knobs: WOW_WFX_MODE
-                // (ring|wake|turn), WOW_WFX_SPEED (yd/s), WOW_WFX_HEAD (deg), WOW_WFX_AGE (s),
-                // WOW_WFX_DEPTH (yd),
-                // camera WOW_WFX_AZ/EL/DIST. Not a golden scenario.
+                // The water-foam viewer: a wading unit over a synthetic lattice, or in real
+                // liquid with `WOW_WFX_AT`, on a fixed orbit. Knobs: `WOW_WFX_MODE`
+                // (ring|wake|turn), `_SPEED` yd/s, `_HEAD` deg, `_AGE` s, `_DEPTH` yd, and the
+                // camera's `_AZ`/`_EL`/`_DIST`.
                 let knob = |k: &str, d: f32| {
                     std::env::var(k)
                         .ok()
@@ -710,11 +503,8 @@ impl Plugin for CapturePlugin {
                     Ok("turn") => waterfx::WfxMode::Turn,
                     _ => waterfx::WfxMode::Ring,
                 };
-                // Rig centre in raw WoW coords. Default: over the Northshire ground scene, the
-                // synthetic surface a few yards above the terrain so the backdrop plane reads
-                // clean. `WOW_WFX_AT=x,y,z` moves it anywhere and switches the rig to the REAL
-                // streamed liquid there (`z` = that water's surface height) — a synthetic square
-                // of water has no bank to clip against and no neighbour to be sorted against.
+                // Rig centre, raw WoW coords: a synthetic surface over the Northshire ground by
+                // default; `WOW_WFX_AT` puts it in the real liquid there, `z` its surface.
                 let at = std::env::var("WOW_WFX_AT").ok().and_then(|v| {
                     let c: Vec<f32> = v.split(',').filter_map(|p| p.trim().parse().ok()).collect();
                     (c.len() == 3).then(|| [c[0], c[1], c[2]])
@@ -741,8 +531,7 @@ impl Plugin for CapturePlugin {
                 .init_resource::<FxViewState>();
                 Scenario {
                     name: "waterfx",
-                    // The synthetic lattice sits over the Northshire slope; a live rig
-                    // (`WOW_WFX_AT`) goes wherever its pin is, so its map is a knob like `vista`'s.
+                    // `WOW_MAP` picks the map for a live rig.
                     map: None,
                     eye,
                     look: center,
@@ -750,21 +539,15 @@ impl Plugin for CapturePlugin {
                     ui: None,
                 }
             } else if name == "vista" {
-                // The **arbitrary-viewpoint** instrument: stand anywhere on the map, face any heading,
-                // at any clock — the world half of what `fxview` is for effects. A director report that
-                // arrives as "look at this horizon, here" (position, facing and time are all on the debug
-                // panel, and `copy .go xyz` puts the position on the clipboard) becomes a reproducible
-                // headless capture instead of a round-trip. Pair it with `WOW_FARCLIP` to match their
-                // slider — horizon and fog artifacts live and die by the far-clip wall. Not a golden
-                // scenario (its output depends on the knobs, not the name).
+                // The arbitrary-viewpoint instrument: any position, heading and clock, e.g.
                 //
                 //   WOW_CAPTURE=vista WOW_VISTA_AT=-5841.9,-3802.4,-59.7 WOW_VISTA_FACE=24 \
-                //     WOW_VISTA_MIN=1052 WOW_FARCLIP=320 WOW_CAPTURE_OUT=/tmp/v.png cargo run -q -p benilla
+                //     WOW_VISTA_MIN=1052 WOW_FARCLIP=320 cargo run -q -p benilla
                 //
-                // Knobs: `WOW_VISTA_AT` (required, raw WoW `x,y,z` — the PLAYER position; the eye seats
-                // `VISTA_EYE_HEIGHT` above it), `WOW_VISTA_FACE` (heading in degrees — the panel's
-                // "facing" in its `(24°)` form; 0 = +X, counter-clockwise), `WOW_VISTA_PITCH` (degrees,
-                // + = up, default 0 = level), `WOW_VISTA_MIN` (game minute of day, default 720 = noon).
+                // `WOW_VISTA_AT` is the player's feet (the eye sits `VISTA_EYE_HEIGHT` above),
+                // `WOW_VISTA_FACE` the debug panel's facing in degrees (0 = +X, counter-clockwise),
+                // `WOW_VISTA_PITCH` degrees up (0), `WOW_VISTA_MIN` the game minute (720).
+                // `WOW_FARCLIP` matches a player's far-clip slider.
                 let knob = |k: &str, d: f32| {
                     std::env::var(k)
                         .ok()
@@ -785,8 +568,7 @@ impl Plugin for CapturePlugin {
                 let d = 500.0_f32;
                 Scenario {
                     name: "vista",
-                    // The arbitrary-viewpoint instrument goes anywhere, so its map is a knob: a
-                    // horizon report from Kalimdor is `WOW_MAP=1` (a `Map.dbc` id).
+                    // `WOW_MAP` picks the map (a `Map.dbc` id).
                     map: None,
                     eye,
                     look: [
@@ -798,9 +580,7 @@ impl Plugin for CapturePlugin {
                     ui: None,
                 }
             } else if name == "name-close" {
-                // The magnified overhead-name instrument (see `scenarios::NAME_CLOSE_AT`): the
-                // `name-water` wolf, orbited by knob and looked straight at, so the ONE variable
-                // is how many device pixels a glyph texel is drawn into. Not a golden scenario.
+                // The magnified overhead-name instrument ([`scenarios::NAME_CLOSE_AT`]).
                 let knob = |k: &str, d: f32| {
                     std::env::var(k)
                         .ok()
@@ -808,8 +588,7 @@ impl Plugin for CapturePlugin {
                         .unwrap_or(d)
                 };
                 let at = scenarios::NAME_CLOSE_AT;
-                // The name hangs `h` above the unit's FEET (the posed PlayerName attachment plus
-                // the block's own line of rise) — that point is what the camera orbits and aims at.
+                // The camera orbits and aims at the name, `WOW_NAME_H` above the unit's feet.
                 let name_at = [at[0], at[1], at[2] + knob("WOW_NAME_H", 1.4)];
                 let (dist, az, el) = (
                     knob("WOW_NAME_DIST", 4.0),
@@ -828,8 +607,6 @@ impl Plugin for CapturePlugin {
                     minute: 720,
                     ui: Some(UiFixture::NameWater),
                 }
-            // By name, EITHER table: the blessed six or an on-demand fixture. Only the sweep is
-            // narrowed — every old viewpoint is still capturable by name.
             } else if let Some(&s) = SCENARIOS
                 .iter()
                 .chain(scenarios::ON_DEMAND.iter())
@@ -849,15 +626,8 @@ impl Plugin for CapturePlugin {
                 std::process::exit(2);
             })
         };
-        // Seed the continent the scenario names, BEFORE `world_map::load_world_map` reads it at
-        // `Startup` — that is the single place `CurrentMap` is set for a server-less run, and the
-        // terrain/WDL streamers and per-map lighting all key off it. Raw WoW coords repeat on every
-        // continent, so a scenario that could not say which map it meant would stream the wrong
-        // world's tiles and photograph a void (Felwood's tile `33_24` exists in Azeroth, empty).
-        // The arbitrary-viewpoint instruments (`vista`, `waterfx`, `fxview`) carry `map: None`
-        // instead: their map IS the knob, so writing it back would be a round trip through a second
-        // parser — and a second parser is how `WOW_MAP=Kalimdor` came to photograph Azeroth in
-        // silence. `world_map` is the one reader. A glue screen has no map.
+        // Seed the map before `world_map::load_world_map` reads `WOW_MAP` at `Startup`, the one
+        // place `CurrentMap` is set server-less; a `map: None` instrument leaves the knob alone.
         if let Some(m) = scenario.as_ref().and_then(|s| s.map) {
             std::env::set_var("WOW_MAP", m.to_string());
         }
@@ -877,12 +647,8 @@ impl Plugin for CapturePlugin {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);
-        // The frozen capture clock ([`CAPTURE_FRAME_DT`]) — now for every run, probe included, and
-        // released at a phase boundary rather than never installed (see `CaptureCtx::frozen_clock`).
-        // A probe still measures a live clock: `drive_capture` restores
-        // `TimeUpdateStrategy::Automatic` on the way into `ProbeWarmup`, before a single frame is
-        // sampled, because `time.delta_secs()` under a manual strategy would report a flawless
-        // constant 16.67 ms for any scene, however slow.
+        // The frozen clock for every run; a probe switches back to `Automatic` before its first
+        // sample, or it would measure a constant 16.67 ms ([`CaptureCtx::frozen_clock`]).
         app.insert_resource(TimeUpdateStrategy::ManualDuration(CAPTURE_FRAME_DT))
             .add_systems(Startup, hold_clock);
         app.insert_resource(CaptureMode)
@@ -904,19 +670,15 @@ impl Plugin for CapturePlugin {
                 bailed: false,
             })
             .add_systems(Update, pin_scene.in_set(WorldStage::Present))
-            // Before the UnitFeed pass: the seed stands in for wire data that in live play
-            // filled the app caches on EARLIER frames, so the same frame's feeds (item-template
-            // / player-req pushes, then the merchant paint) must all see it. Unordered, the
-            // one-shot MERCHANT_SHOW paint races feed_item_stats and the usable reds are
-            // flaky in the capture.
+            // Before `UnitFeed`: the seed stands in for wire data live play delivers on earlier
+            // frames, so the same frame's feeds and the one-shot `MERCHANT_SHOW` paint must see it.
             .add_systems(Update, seed_ui_fixture.before(crate::ui_unit::UnitFeed))
             .add_systems(Last, drive_capture);
     }
 }
 
-/// Each frame, force the deterministic capture conditions: pinned time-of-day, no perf HUD, and the
-/// fixed camera pose. Runs in `WorldStage::Present` (after `control` is gated off and after terrain
-/// streaming reads the camera), so the harness is the sole, stable author of the view.
+/// Each frame, force the capture conditions: pinned time of day, no perf HUD, the fixed camera.
+/// Runs in `WorldStage::Present`, after terrain streaming reads the camera.
 fn pin_scene(
     ctx: Res<CaptureCtx>,
     mut debug: ResMut<DebugState>,
@@ -927,21 +689,16 @@ fn pin_scene(
     roots: Query<&Transform, Without<WorldCamera>>,
     mut cam: Query<&mut Transform, With<WorldCamera>>,
 ) {
-    perf.visible = false; // hidden by default since 2099, but a session may have chorded it up —
-                          // a capture is pristine and UI-free whatever the run did
-                          // A glue screen has no world to light, no clock to pin and no camera to place. The shutter
-                          // above needs none of that — it is watching the framebuffer.
+    perf.visible = false;
+    // A glue screen has no world, clock or camera to pin.
     let Some(scenario) = ctx.scenario else {
         return;
     };
     debug.lighting.follow_server_time = false;
     debug.lighting.manual_minute = scenario.minute;
 
-    // `WOW_MM_PROBE=x,y,z` (raw WoW coords) drops the player at that point and marks them active, so
-    // the interior minimap (which keys off `player.active` + `player.pos`) renders in a headless
-    // capture — the harness otherwise leaves the player inactive at spawn, so interiors never show.
-    // The camera looks straight down from above so the WMO streams in around it. Interior-minimap
-    // debugging instrument (decision 0203 arc), not a golden scenario.
+    // `WOW_MM_PROBE=x,y,z` (raw WoW coords) places an active player there, so the interior
+    // minimap renders server-less, with the camera above so the WMO streams in around it.
     let probe = std::env::var("WOW_MM_PROBE").ok().and_then(|s| {
         let v: Vec<f32> = s.split(',').filter_map(|x| x.trim().parse().ok()).collect();
         (v.len() == 3).then(|| [v[0], v[1], v[2]])
@@ -950,7 +707,7 @@ fn pin_scene(
         player.pos = wow_to_bevy(p);
         player.active = true;
         player.detached = false;
-        // Above and off to the side (not straight down — that degenerates `looking_at` with Y up).
+        // Off to the side: straight down degenerates `looking_at` with Y up.
         let eye = wow_to_bevy([p[0] - 25.0, p[1] - 25.0, p[2] + 40.0]);
         for mut t in &mut cam {
             *t = Transform::from_translation(eye).looking_at(wow_to_bevy(p), Vec3::Y);
@@ -959,9 +716,8 @@ fn pin_scene(
     }
 
     let (eye, look) = match (&fx_req, &fx_state) {
-        // fxview: orbit the fixture's LIVE root (a flying missile moves; the camera tracks it)
-        // at the requested azimuth/elevation/distance, aimed one yard up — the effect models
-        // author their bodies ~0.5–1.5 units above their root.
+        // fxview: orbit the fixture's live root (a missile moves), aimed one yard up, where the
+        // effect models author their bodies.
         (Some(req), Some(state)) => {
             let root_pos = state
                 .root
@@ -982,22 +738,15 @@ fn pin_scene(
 
 /// Hold the game clock at zero until the image stops changing; [`drive_capture`] releases it.
 ///
-/// The fixed frame step alone is not enough, because it only makes each frame the same *size* — a
-/// torch flame still ages from the frame its tile happened to spawn on, and tiles spawn under a
-/// wall-clock budget (`terrain_stream`'s `SPAWN_BUDGET`) against asset I/O that finishes on a
-/// different frame every run. Held through the whole build, every emitter in the scene is zero-age
-/// when the clock is released, so at the shutter each has run exactly [`age_frames`] steps no matter
-/// when it appeared. Frame-driven work (streaming itself, the spawn budget, the screenshot save) is
-/// on the real clock and runs on regardless — which is what lets the scene finish arriving while the
-/// sims stand still.
+/// Tiles spawn under a wall-clock budget, so without the hold an emitter would age from whichever
+/// frame its tile arrived on; held, every emitter has run exactly [`age_frames`] steps at the
+/// shutter. Streaming and the save are frame-driven and run on regardless.
 fn hold_clock(mut clock: ResMut<Time<Virtual>>) {
     clock.pause();
 }
 
-/// The three scene-population queries the `FPS_PROBE` line prints — bundled because they are one
-/// concern (how much world is resident, and how much of it survived the cull) and because
-/// `drive_capture` sits against Bevy's 16-parameter ceiling, which the CVar host's old knob
-/// bundle hit first (retired by 2303).
+/// The scene-population queries the `FPS_PROBE` line prints, bundled because `drive_capture` sits
+/// at Bevy's 16-parameter ceiling.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct ProbeCensus<'w, 's> {
     particles: Query<'w, 's, &'static benilla_world::particles::ParticleEmitter>,
@@ -1005,39 +754,33 @@ pub(crate) struct ProbeCensus<'w, 's> {
     entities: Query<'w, 's, ()>,
 }
 
-/// Drive the capture lifecycle: wait for streaming, settle, screenshot, exit.
+/// Drive the capture lifecycle: settle, age, screenshot or probe, exit.
 fn drive_capture(
     mut ctx: ResMut<CaptureCtx>,
     mut watch: ResMut<FrameWatch>,
-    // Disjoint from the stability readbacks by the marker: without it, one of those in flight would
-    // satisfy this wait and the harness could call the real shot done before it was written.
+    // Excludes stability readbacks, or one in flight could satisfy the real shot's wait.
     capturing: Query<(), (With<Capturing>, Without<StabilityShot>)>,
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
-    // `ResMut` for one reason: re-anchoring the clock at the probe's release — see `Phase::Aging`.
+    // `ResMut` to re-anchor the clock at the probe's release (`Phase::Aging`).
     mut time: ResMut<Time<bevy::time::Real>>,
     mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     census: ProbeCensus,
     fx_req: Option<Res<FxViewRequest>>,
     wfx_req: Option<Res<waterfx::WaterFxView>>,
     mut fx_state: Option<ResMut<FxViewState>>,
-    // **The harness's one deliberate virtual clock** — the allowlisted exception in
-    // `probes::probe_schedules_read_the_wall_clock`. The fixture age below is an age *on the clock
-    // the effect animates on* — the same clock this system freezes at save time, one field down —
-    // not a schedule. Everything schedule-shaped in the harness reads [`probes::ProbeClock`]
-    // instead; decision 0789 says why, and what learning it cost.
+    // The harness's one virtual-clock read, allowlisted in
+    // `probes::probe_schedules_read_the_wall_clock`: the fixture's age is measured on the clock the
+    // effect animates on. Everything schedule-shaped reads [`probes::ProbeClock`].
     game_time: Res<Time>,
     mut clock: ResMut<Time<Virtual>>,
-    // Switched to `Automatic` at the probe's release point — see `Phase::Aging`.
+    // Switched to `Automatic` at the probe's release (`Phase::Aging`).
     mut time_strategy: ResMut<TimeUpdateStrategy>,
-    // `Option`: the glue-screen capture path builds no composite lane, so there is no backdrop to
-    // ask how big the world was — and those scenarios have no world to price anyway.
+    // `None` on a glue-screen capture, which builds no composite lane.
     backdrop: Option<Res<crate::world_backdrop::WorldBackdrop>>,
 ) {
-    // The wall-clock ceiling, checked before anything else and in every phase — `Building` is
-    // where the drawable starvation was caught, but `FxAging` waits on a fixture that may never
-    // attach and `Saving` on a readback that may never land, and one deadline covers all three
-    // where three per-phase frame caps would not ([`capture_deadline`]).
+    // The wall-clock ceiling covers every phase: a fixture may never attach, a readback may never
+    // land ([`capture_deadline`]).
     if ctx.bailed {
         return;
     }
@@ -1060,16 +803,13 @@ fn drive_capture(
             return;
         }
     }
-    // Both fixture viewers (fxview / waterfx) share the build→arm→age→shoot flow; only the
-    // requested age differs.
     let fixture_age = fx_req
         .as_ref()
         .map(|r| r.age)
         .or(wfx_req.as_ref().map(|r| r.age));
     ctx.phase = match ctx.phase {
         Phase::Building(n) => {
-            // One readback at a time, requested only here — so a leftover can never be mistaken for
-            // the real shot (the `StabilityShot` marker keeps `Saving`'s wait disjoint too).
+            // One readback at a time, requested only here, marked so `Saving` cannot mistake it.
             if !watch.in_flight {
                 watch.in_flight = true;
                 commands
@@ -1085,10 +825,8 @@ fn drive_capture(
                     watch.stable,
                 );
             }
-            // The emptiness tripwire (1373): stability proves the image stopped changing, not
-            // that it contains anything — a lane that renders nothing is perfectly stable, and
-            // the 1371 black era sailed through this gate without a word. The bytes are already
-            // in hand; color channels only, since alpha is opaque even on a black frame.
+            // Stability does not prove content: a lane that renders nothing is stable too. Color
+            // channels only, since alpha is opaque even on a black frame.
             if watch.stable >= stable_frames() || capped {
                 if let Some(px) = watch.prev.as_deref() {
                     if px
@@ -1107,12 +845,8 @@ fn drive_capture(
             if watch.stable < stable_frames() && !capped {
                 Phase::Building(n + 1)
             } else if let Some((rw, rh)) = resize_request().filter(|_| !ctx.resized) {
-                // `$WOW_RESIZE=WxH` (logical px): a mid-session resolution change, applied only
-                // once the image has SETTLED at the boot size — the whole UI has been built and
-                // its text measured under the boot scale before the window changes, which is
-                // exactly the fullscreen-toggle flow a fresh boot at the target size can't
-                // exercise (stale text-metric caches were invisible to every same-size capture).
-                // The stability watch restarts and the shot photographs the post-resize frame.
+                // `$WOW_RESIZE`: resize after the UI was built and measured at the boot size, the
+                // fullscreen-toggle flow a fresh boot at the target size cannot exercise.
                 ctx.resized = true;
                 if let Ok(mut w) = windows.single_mut() {
                     w.resolution.set(rw as f32, rh as f32);
@@ -1122,14 +856,11 @@ fn drive_capture(
                 Phase::Building(0)
             } else if fixture_age.is_some() {
                 if let Some(state) = fx_state.as_deref_mut() {
-                    state.armed = true; // scene ready — the fixture spawns now, age clock clean
+                    state.armed = true; // the fixture spawns now, its age clock clean
                 }
                 Phase::FxAging
             } else {
-                // Clock released here: the sims now run exactly `age_frames()` fixed steps, so the
-                // shot's sim age is the same on any machine — and a probe takes the
-                // same road, so the scene it measures is that same fixed age instead of "however
-                // old 1800 real frames left it" (`CaptureCtx::frozen_clock`).
+                // Clock released: the sims run exactly `age_frames()` steps, probe or capture.
                 info!(
                     "capture: image settled after {} frames, aging {}",
                     n + 1,
@@ -1139,8 +870,6 @@ fn drive_capture(
             }
         }
         Phase::FxAging => {
-            // The fixture was armed when settling completed; shoot once it has attached and run
-            // its requested age on the game clock.
             let aged = match (fixture_age, &fx_state) {
                 (Some(age), Some(state)) => state
                     .attached_at
@@ -1161,39 +890,21 @@ fn drive_capture(
             }
         }
         Phase::Aging(n) => {
-            // No churn-restart here. The old one re-held the clock and restarted this window if the
-            // world entity count moved — and 0723 measured that it **never fired**, because the
-            // count-quiescence gate it shared a threshold with had already passed. What replaced it
-            // is upstream and stronger: the image itself stopped changing before the clock was
-            // released, so a straggler that would have mattered was already waited out.
+            // No restart on late arrivals: the image already stopped changing before release.
             if n + 1 < age_frames() {
                 Phase::Aging(n + 1)
             } else if ctx.probe_frames > 0 {
-                // Scene built and aged to a known duration; hand the clock back to real time
-                // BEFORE a single frame is sampled, or `Phase::Probing` would read the manual
-                // [`CAPTURE_FRAME_DT`] as its measurement and report a flawless 16.67 ms.
+                // Hand the clock back to real time before the first sample, or `Probing` would
+                // read the manual [`CAPTURE_FRAME_DT`] and report a flawless 16.67 ms.
                 ctx.frozen_clock = false;
                 *time_strategy = TimeUpdateStrategy::Automatic;
-                // Re-anchor `Time<Real>` to NOW, or the first automatic frame is billed for the
-                // entire frozen phase. `update_with_duration` sets `last_update = last_update +
-                // dt` — a fictional instant that falls behind reality by exactly the wall-clock
-                // time spent frozen (~8 s here). The next `Automatic` tick does
-                // `Instant::now() - that`, which lands as one multi-second delta: `perf::stats`
-                // reported it as a phantom `frame hitch: 1060 ms`, and `update_virtual_time`
-                // clamped it to `max_delta` and stepped every sim a quarter-second at once — a
-                // spawn burst whose cost then landed in the samples (measured: p95 46-52 ms
-                // against 18 ms before).
-                //
-                // Called from `Last`, so the huge delta it writes is overwritten by the next
-                // frame's `time_system` before anything reads it, and it never reaches
-                // `Time<Virtual>` at all — `update_virtual_time` only runs inside `time_system`.
-                // What survives is the anchor: `last_update = now`, so frame one of the
-                // measurement is an ordinary frame.
+                // Re-anchor `Time<Real>` to now: the manual strategy left `last_update` behind by
+                // the frozen phase's wall time (~8 s), which the first automatic tick would bill
+                // as one hitch and a quarter-second sim step. Called from `Last`, so the delta it
+                // writes is overwritten by the next `time_system` before anything reads it.
                 time.update_with_instant(Instant::now());
-                // Uncap presentation so we measure true frame cost, not the vsync ceiling.
-                // `$WOW_PROBE_VSYNC=1` keeps vsync ON instead — the probe then measures the PRESENT
-                // ceiling itself (what fps the display sync actually grants this window), the
-                // instrument for "what is the vsync cap right now".
+                // Uncap presentation to measure frame cost; `$WOW_PROBE_VSYNC=1` keeps vsync and
+                // measures the present ceiling itself.
                 let keep_vsync = std::env::var("WOW_PROBE_VSYNC").as_deref() == Ok("1");
                 if !keep_vsync {
                     if let Ok(mut w) = windows.single_mut() {
@@ -1228,8 +939,7 @@ fn drive_capture(
         Phase::Probing(n) => {
             let ms = time.delta_secs() * 1000.0;
             ctx.probe_samples.push(ms);
-            // `==`, not `>=`: `AppExit` takes a frame or two to drain, and the re-entered finish
-            // branch used to print a second (301-frame) line in the gap.
+            // `==`, not `>=`: `AppExit` takes a frame or two to drain, and `>=` would print twice.
             if n + 1 == ctx.probe_frames {
                 let mut v = ctx.probe_samples.clone();
                 v.sort_by(f32::total_cmp);
@@ -1245,22 +955,18 @@ fn drive_capture(
                     .single()
                     .map(|w| (w.physical_width(), w.physical_height()))
                     .unwrap_or((0, 0));
-                // The pixels the GPU was actually asked for. `px` is the WINDOW, and since 1639
-                // the world need not match it: a probe line that reported only the window would
-                // silently price a 4x supersample as if it were a native frame.
+                // The world's render size, which need not match the window `px`: a supersample
+                // would otherwise be priced as a native frame.
                 let world_px = backdrop.map_or(String::new(), |b| {
                     let s = b.render_size();
                     format!(" world_px={}x{}", s.x, s.y)
                 });
-                // Scene population: model submeshes (the per-frame visibility walk's N), how many
-                // survived the cull to render, and the whole-world entity count — the scale terms
-                // behind every O(N) per-frame cost (the Stormwind fps hunt's instrument).
+                // Submeshes, how many survived the cull, and the entity count.
                 let (submeshes, drawn) = census.parts.iter().fold((0usize, 0usize), |(n, d), v| {
                     (n + 1, d + usize::from(v.get()))
                 });
                 let entity_count = census.entities.iter().len();
-                // CPU cost per frame across every thread — the load-robust half of the measurement
-                // (`perf::process_cpu_secs`), same fields as the live probe's line.
+                // CPU per frame across every thread, the load-robust metric.
                 let cpu = match (ctx.probe_cpu_start, crate::perf::process_cpu_secs()) {
                     (Some(t0), Some(t1)) => {
                         let per_frame_ms = (t1 - t0) * 1000.0 / v.len() as f64;
@@ -1271,14 +977,12 @@ fn drive_capture(
                     }
                     _ => String::new(),
                 };
-                // The present mode the window actually measured under — an uncap that silently
-                // rails is only diagnosable if the line says what was asked for.
+                // The present mode measured under, so a silently railed uncap is diagnosable.
                 let present = windows
                     .single()
                     .map(|w| format!(" present={:?}", w.present_mode))
                     .unwrap_or_default();
-                // Machine-greppable one-liner + a human block. stdout, not the log, so a script can
-                // capture it without log-filter noise.
+                // One greppable line on stdout, clear of log filtering.
                 println!(
                     "FPS_PROBE scenario={} frames={} mean_ms={mean:.2} p50_ms={:.2} p95_ms={:.2} p99_ms={:.2} max_ms={:.2} fps={:.1} emitters={emitters} active={active} particles={live} submeshes={submeshes} drawn={drawn} entities={entity_count} px={}x{}{world_px}{cpu}{present}",
                     ctx.name,
@@ -1298,8 +1002,6 @@ fn drive_capture(
         Phase::Saving { frames, seen } => {
             let busy = !capturing.is_empty();
             let seen = seen || busy;
-            // The save spans a few frames; `Capturing` marks it in-flight. Done once it has appeared
-            // and cleared — or on timeout, so a missed marker can't hang the harness.
             if (seen && !busy) || frames + 1 >= SAVE_TIMEOUT_FRAMES {
                 Phase::Done(0)
             } else {
@@ -1311,13 +1013,8 @@ fn drive_capture(
         }
         Phase::Done(n) => {
             if n + 1 >= EXIT_GRACE_FRAMES {
-                // Exit on what is ON DISK, not on having reached this phase. The save is async and
-                // the `Saving` phase gives up after `SAVE_TIMEOUT_FRAMES` so a missed `Capturing`
-                // marker can't hang the harness — but "gave up" used to exit Success anyway, so a
-                // capture that wrote nothing reported success and the sweep carried on around the
-                // hole (2026-07-28: one `water-night` run left no PNG, and `selfcheck` passed on
-                // the remaining eight). A missing file is a FAILED capture and says so, so
-                // `scripts/visual.sh`'s `set -e` stops the sweep at it.
+                // Exit on what is on disk: a save that timed out without a file is a failed
+                // capture, so `scripts/visual.sh`'s `set -e` stops the sweep at it.
                 if Path::new(&ctx.out).is_file() {
                     info!("capture: saved {}, exiting", ctx.out);
                     exit.write(AppExit::Success);
@@ -1334,20 +1031,13 @@ fn drive_capture(
             }
         }
     };
-    // Release (or re-hold) the frozen clock with the phase: held while the scene is still being
-    // built (see [`hold_clock`]), running from the moment it is quiescent. Re-held if a late tile
-    // drops the scene back out of residency, so the restarted settle is the same settle.
+    // The clock runs only once the image has stopped changing ([`hold_clock`]): held while
+    // building and while saving, running while aging.
     if ctx.frozen_clock {
-        // The invariant, in one line: **the clock runs only once the image has stopped changing.**
-        // Held while the scene is still being built, so no effect can ever age from the frame its
-        // model happened to arrive on.
         let held = match ctx.phase {
             Phase::Building(_) => true,
-            // Shutter open — hold the sims still. The screenshot is *requested* on one frame but
-            // the render world may serve it a frame or two later (pipelined rendering), and with
-            // the clock still running that is a one-step difference in every particle pool: the
-            // static scene is identical and the flames are not. Frozen here, it no longer matters
-            // which frame is grabbed.
+            // Pipelined rendering may serve the screenshot a frame or two after the request; a
+            // running clock would move every particle pool by a step in that gap.
             Phase::Saving { .. } | Phase::Done(_) => true,
             _ => false,
         };

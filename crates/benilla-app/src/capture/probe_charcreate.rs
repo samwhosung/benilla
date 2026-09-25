@@ -1,16 +1,9 @@
-//! The character-create live probe (`WOW_PROBE_CHARCREATE="<name>[,race,class,gender[,skin,face,\
-//! hair,haircolor,facial]]"`) — the agent-side instrument that machine-verifies the char-create/delete
-//! wire against the live server (phase 1), inert without the env. It also keeps the
-//! `CharRequest::Create`/`Delete` verbs exercised until their UI lands (the create screen is phase 4,
-//! delete's UI is deferred).
-//!
-//! While parked at character select it sends [`CharRequest::Create`] with the parsed request, logs
-//! the `SMSG_CHAR_CREATE` result byte, and — unless `WOW_PROBE_CHARCREATE_KEEP=1` — deletes the
-//! character it just made ([`CharRequest::Delete`]) so the account isn't littered, logging that
-//! result too. Run it **without** `WOW_CHAR` (which would auto-enter the world and leave select),
-//! against the checkout's own probe account (`.probe-identity`, or `WOW_USER`/`WOW_PASS` — the
-//! `probe` skill); creating/deleting characters is a
-//! non-combat operation, safe to run headlessly.
+//! The character-create live probe (`WOW_PROBE_CHARCREATE="<name>[,race,class,gender[,skin,\
+//! face,hair,haircolor,facial]]"`), inert without the env. At character select it sends
+//! [`CharRequest::Create`], logs the `SMSG_CHAR_CREATE` result byte, then deletes the new
+//! character and logs that result too, unless `WOW_PROBE_CHARCREATE_KEEP=1`. Run it without
+//! `WOW_CHAR`, which would enter the world; the switches are `docs/CONTRIBUTING.md`, "Running it
+//! unattended".
 
 use benilla_protocol::{messages, CharAction, CharCreateReq};
 use bevy::prelude::*;
@@ -75,18 +68,18 @@ struct CharCreateProbe {
     req: CharCreateReq,
     keep: bool,
     state: ProbeState,
-    /// The freshest roster seen (tracked so a successful create can find its guid to clean up).
+    /// The freshest roster, where a successful create finds its guid to clean up.
     roster: Vec<benilla_protocol::Character>,
 }
 
-/// Drive the probe's create → (delete) → done sequence off the roster + result messages.
+/// Drive create, then delete, off the roster and result messages.
 fn drive_charcreate_probe(
     mut probe: ResMut<CharCreateProbe>,
     pick: Res<CharPick>,
     mut lists: MessageReader<CharListMessage>,
     mut results: MessageReader<CharActionResultMessage>,
 ) {
-    // Always track the freshest roster (the fresh list precedes each successful action's result).
+    // The fresh roster arrives before each successful action's result.
     let got_roster = lists.read().fold(false, |_, m| {
         probe.roster = m.characters.clone();
         true
@@ -167,8 +160,7 @@ fn drive_charcreate_probe(
     }
 }
 
-/// A minimal name for the result byte (the create screen has the full 1.12 GlueStrings table; the
-/// probe only needs the anchors it verifies against).
+/// A name for the result bytes the probe checks; the create screen has the full table.
 fn result_label(action: CharAction, code: u8) -> &'static str {
     match (action, code) {
         (CharAction::Create, messages::CHAR_CREATE_SUCCESS) => "CHAR_CREATE_SUCCESS",

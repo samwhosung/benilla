@@ -1,16 +1,12 @@
-//! The taxi-flight live probe (`WOW_PROBE=taxi`) — decision 0484's end-to-end instrument, inert
-//! without the env: once in-world, GM-hop to the Stormwind flight master (Dungar Longdrink),
-//! open the taxi menu on the real wire (`CMSG_TAXIQUERYAVAILABLENODES` → `SMSG_SHOWTAXINODES`),
-//! activate the short verified hop Stormwind → Sentinel Hill (nodes 2 → 4, TaxiPath 6), and ride
-//! the server's flying spline to arrival. Every phase edge prints a `PROBE taxi:` line and the
-//! landing prints a SUCCESS/FAILURE verdict with the two machine checks of the 0484 gate:
-//! arrival distance to the destination node's DBC position, and measured flight duration vs the
-//! DBC prediction `Σ path-segment length ÷ 32 yd/s` (`PLAYER_FLIGHT_SPEED`) — timing measured,
-//! never eyeballed. An outer `timeout`d run + grep is the whole harness.
-//! Non-combat. Pair with the checkout's probe identity (`.probe-identity`, or WOW_USER/WOW_PASS/WOW_CHAR — the `probe` skill). Uses `.taxicheat on` so
-//! the fresh probe character can fly to an unvisited node (and so the SHOWTAXINODES mask
-//! exercises the full-network branch); the 110-copper fare is DB-seeded (see the Wait phase —
-//! `.modify money` outranks the probe account).
+//! The taxi-flight live probe (`WOW_PROBE=taxi`): hops to Stormwind's flight master, opens the
+//! menu (`CMSG_TAXIQUERYAVAILABLENODES`, `SMSG_SHOWTAXINODES`), flies Stormwind to Sentinel Hill
+//! and logs a `PROBE taxi:` line at each edge. The landing verdict checks the distance to the
+//! destination node's DBC position, the flight time against the path length over 32 yd/s, the
+//! in-flight anims and the flying pitch and bank; then it holds `W` and logs when movement starts.
+//!
+//! Non-combat. `.taxicheat on` lets a fresh character fly to an unvisited node; the ~110-copper
+//! fare comes from the character's own purse. The switches are `docs/CONTRIBUTING.md`, "Running
+//! it unattended".
 
 use benilla_assets::coords::bevy_to_wow;
 use benilla_formats::{load_taxi_nodes, load_taxi_path_nodes};
@@ -22,19 +18,16 @@ use crate::player::Player;
 use crate::ui_taxi::TaxiState;
 use benilla_assets::{LockRecover, WorldAssets};
 
-/// The flight under test: Stormwind (node 2) → Sentinel Hill (node 4), TaxiPath id 6 — the pair
-/// byte-verified against the real 5875 tables by the phase-1 catalog tests.
+/// The flight under test: Stormwind (node 2) to Sentinel Hill (node 4), TaxiPath 6.
 const SRC_NODE: u32 = 2;
 const DEST_NODE: u32 = 4;
 const TAXI_PATH: u32 = 6;
-/// Dungar Longdrink's spawn (vmangos `creature` guid 79658, entry 352, map 0) — the `.go xyz`
-/// target; the flight master is then scanned from the streamed world by its npc flag, never by a
-/// hardcoded guid.
+/// Dungar Longdrink's spawn (vmangos `creature` guid 79658, entry 352, map 0); the flight master
+/// is then found in the streamed world by his npc flag.
 const FLIGHTMASTER_AT: [f32; 3] = [-8835.8, 490.1, 109.7];
-/// `UNIT_NPC_FLAG_FLIGHTMASTER` (bit 3) — the same bit the cursor classifier keys on.
+/// `UNIT_NPC_FLAG_FLIGHTMASTER` (bit 3).
 const NPC_FLAG_FLIGHTMASTER: u32 = 0x8;
-/// vmangos `PLAYER_FLIGHT_SPEED` (yd/s, hardcoded server-side) — the duration prediction's
-/// divisor.
+/// vmangos `PLAYER_FLIGHT_SPEED` in yd/s (`WaypointMovementGenerator.cpp:390`).
 const FLIGHT_SPEED: f32 = 32.0;
 
 pub(crate) struct ProbeTaxiPlugin;
@@ -49,8 +42,7 @@ impl Plugin for ProbeTaxiPlugin {
             .add_systems(Update, taxi_probe)
             .add_systems(
                 PreUpdate,
-                // After the loading cover's input swallow as well as winit's input pass — see
-                // `probes::act::ProbeKeyPlugin` for why a synthetic press orders past it.
+                // After winit's input pass and the loading cover's input swallow.
                 hold_w_post_land
                     .after(bevy::input::InputSystems)
                     .after(crate::loading_screen::CoverInput),
@@ -58,17 +50,15 @@ impl Plugin for ProbeTaxiPlugin {
     }
 }
 
-/// The DBC-derived expectations, loaded once off the patch chain: the destination node's world
-/// position (the arrival assert) and the path's total length (the duration prediction).
+/// From the DBCs: the destination node's position and the path's total length.
 #[derive(Default)]
 struct Expectations {
     dest_pos: Option<[f32; 3]>,
     path_len: Option<f32>,
 }
 
-/// The probe's phase machine. `Wait` → (GM hop sent) `Hopped` → (flight master streamed in,
-/// query sent) `Queried` → (map opened, activate sent) `Activated` → (self-spline riding)
-/// `Flying` → (ride ended) verdict → `Done`.
+/// `Wait`, `Hopped` (hop sent), `Queried` (query sent), `Activated` (activate sent), `Flying`
+/// (riding the spline), `PostLand`, `Done`.
 #[derive(Resource, Default)]
 struct TaxiProbe {
     expect: Expectations,
@@ -93,21 +83,15 @@ enum Phase {
     Flying {
         started_at: f64,
         last_report: f64,
-        /// Latched true the first in-flight frame the anim pair reads right — rider base
-        /// Mount(91), mount child base Fly(135) (`0x5fd19c` + the 0441 mount pin).
+        /// Latched once the rider plays Mount (91) and the mount child Fly (135) (`0x5fd19c`).
         gait_ok: bool,
-        /// The largest |flying pitch| (radians) seen on the SELF transform mid-flight — the
-        /// `sample_splines` tangent-climb attitude. The route climbs
-        /// Westfall's hills, so a working tilt shows ≳0.1 rad; ~0 means it never rendered.
+        /// The largest flying pitch magnitude (radians) on the self transform.
         max_pitch: f32,
-        /// The largest |flying BANK| (radians) mid-flight — the 0516 look-ahead lean. The route
-        /// turns repeatedly, so a working bank shows ≳0.05 rad; ~0 means no lean rendered.
+        /// The largest flying bank magnitude (radians), the look-ahead lean.
         max_bank: f32,
     },
-    /// Post-landing diagnosis (the director's "we float a char height and can't move for ~5 s"):
-    /// W is held synthetically ([`hold_w_post_land`]) from the moment the verdict prints; each
-    /// second this logs the pose — height over the ground (a conform-style down-ray), distance
-    /// from the landing point, ride/mount state — and stamps when movement actually began.
+    /// After landing, with `W` held ([`hold_w_post_land`]): logs height over ground, distance
+    /// moved and ride state each second, and when movement began.
     PostLand {
         landed_at: f64,
         landed_pos: Vec3,
@@ -143,7 +127,6 @@ fn load_expectations(mut probe: ResMut<TaxiProbe>, world_assets: Option<Res<Worl
     }
 }
 
-// One Bevy system's full input set (the crossing-probe shape) + its self query tuple.
 #[allow(clippy::type_complexity)]
 fn taxi_probe(
     time: ProbeClock,
@@ -174,14 +157,8 @@ fn taxi_probe(
         Phase::Wait => {
             let [x, y, z] = FLIGHTMASTER_AT;
             info!("PROBE taxi: hopping to the Stormwind flight master at ({x}, {y}, {z})");
-            // The fare is seeded offline in `characters.money` (100000 copper; a flight spends
-            // ~110) — re-seed via `UPDATE characters SET money=100000 WHERE name LIKE 'Probe%'
-            // AND online=0;` if a NOT_ENOUGH_MONEY reply ever shows up. The seed used to be the
-            // *only* option: `.modify money` is SEC_BASIC_ADMIN(4) and the probe accounts were
-            // gmlevel 3 (two runs bounced on NOT_ENOUGH_MONEY before that was traced). Since they
-            // were actually raised to 6 this probe could grant its own fare in-band the way
-            // `probe_bank` now does — left alone because the offline seed works and is one fewer
-            // command inside the flight window.
+            // The fare comes from the character's purse; a NOT_ENOUGH_MONEY reply means it is
+            // empty (`.modify money` refills it).
             let _ = net
                 .0
                 .send(ClientCommand::SetSelection { guid: self_guid.0 });
@@ -198,8 +175,7 @@ fn taxi_probe(
             probe.phase = Phase::Hopped { sent_at: now };
         }
         Phase::Hopped { sent_at } => {
-            // Post-teleport settle, then scan the streamed world for a flight-master-flagged
-            // unit in interaction range — the guid comes from the wire, never hardcoded.
+            // Settle, then find a flight-master-flagged unit in range.
             if now - sent_at < 3.0 {
                 return;
             }
@@ -251,8 +227,8 @@ fn taxi_probe(
                 });
                 probe.phase = Phase::Activated { sent_at: now };
             } else if now - sent_at > 2.0 && !retried {
-                // First contact LEARNS, never opens (vmangos SendLearnNewTaxiNode) — the second
-                // query opens the menu.
+                // A first visit learns the node and opens nothing (vmangos
+                // `TaxiHandler.cpp:75`); the second query opens the menu.
                 info!("PROBE taxi: no menu yet (first-visit learn?) — querying again");
                 let _ = net
                     .0
@@ -307,16 +283,14 @@ fn taxi_probe(
         } => {
             let wow = bevy_to_wow(player.pos);
             if player.server_riding() {
-                // The anim pair the flight must show (`0x5fd19c` + the 0441 mount pin):
-                // rider base Mount(91), mount child base Fly(135). Latched — the first frames
-                // legitimately lag (mount attach, first selection).
+                // Rider Mount (91), mount child Fly (135) (`0x5fd19c`); latched, as the first
+                // frames lag the mount attach.
                 let rider = drivers.get(self_entity).ok().map(|d| d.playing().0);
                 let mount = mount_child
                     .and_then(|mc| drivers.get(mc.0).ok())
                     .map(|d| d.playing().0);
                 let pair_ok = rider == Some(Some(91)) && mount == Some(Some(135));
-                // The flying attitude: `sample_splines` composes
-                // `Ry(f)·Rx(pitch)·Rz(bank)`, so the YXZ euler reads back (yaw, pitch, bank).
+                // `sample_splines` composes `Ry(f) * Rx(pitch) * Rz(bank)`, so YXZ reads it back.
                 let (_, pitch, bank) = self_tf.rotation.to_euler(EulerRot::YXZ);
                 let max_pitch = max_pitch.max(pitch.abs());
                 let max_bank = max_bank.max(bank.abs());
@@ -350,8 +324,8 @@ fn taxi_probe(
                 }
                 return;
             }
-            // The ride ended (server_ride snapped to the endpoint and sent CMSG_MOVE_SPLINE_DONE
-            // — its own log line). Verdict time.
+            // The ride ended: `server_ride` snapped to the endpoint and sent
+            // `CMSG_MOVE_SPLINE_DONE`.
             let flew_for = now - started_at;
             let dist = probe.expect.dest_pos.map(|p| {
                 let (dx, dy, dz) = (wow[0] - p[0], wow[1] - p[1], wow[2] - p[2]);
@@ -359,13 +333,10 @@ fn taxi_probe(
             });
             let predicted = probe.expect.path_len.map(|l| l / FLIGHT_SPEED);
             let dist_ok = dist.is_some_and(|d| d < 20.0);
-            // The server's duration also stretches with the mount-up delays and our
-            // spline-arrival timing; a ±15% band catches a wrong curve/speed without flaking.
+            // A 15% band: the server's duration also holds the mount-up delays.
             let time_ok =
                 predicted.is_some_and(|p| (flew_for - f64::from(p)).abs() < f64::from(p) * 0.15);
-            // The route climbs Westfall's hills AND turns repeatedly: a working flying attitude
-            // shows well over 0.05 rad (~3°) on each axis somewhere along it; ~0 means that
-            // axis never rendered.
+            // The route climbs and turns, so each axis passes 0.05 rad somewhere along it.
             let pitch_ok = max_pitch > 0.05;
             let bank_ok = max_bank > 0.05;
             let verdict = if dist_ok && time_ok && gait_ok && pitch_ok && bank_ok {
@@ -415,7 +386,7 @@ fn taxi_probe(
             if since - last_log >= 1.0 {
                 last_log = since;
                 let wow = bevy_to_wow(player.pos);
-                // Conform-style ground probe: from 2 yd above the feet, 50 yd down.
+                // Ground probe: from 2 yd above the feet, 50 yd down.
                 let origin = player.pos + Vec3::Y * 2.0;
                 let ground = spatial
                     .cast_ray_predicate(
@@ -460,9 +431,8 @@ fn taxi_probe(
     }
 }
 
-/// Hold W from the landing verdict on (PreUpdate, after winit's input processing so the synthetic
-/// press is visible to the controller the same frame — the [`super::probes::ProbeKeyPlugin`]
-/// pattern): the post-land phase measures when the avatar actually starts moving.
+/// Holds `W` from the landing verdict on, in `PreUpdate` after winit's input pass so the
+/// controller sees it the same frame.
 fn hold_w_post_land(probe: Res<TaxiProbe>, mut keys: ResMut<ButtonInput<KeyCode>>) {
     if matches!(probe.phase, Phase::PostLand { .. }) {
         keys.press(KeyCode::KeyW);

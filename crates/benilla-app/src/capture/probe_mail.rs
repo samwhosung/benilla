@@ -1,48 +1,16 @@
-//! The mail-arc live probe (`WOW_PROBE_MAIL=1`) — decision 0544/0548's end-to-end instrument:
-//! GM-mail the probe's OWN character, walk to the Goldshire mailbox, open it on the real wire,
-//! and drive the inbox/take/send/delete surface through the live Lua VM exactly as a click would,
-//! printing a `PROBE_MAIL:` trace line with a PASS/FAIL/SKIP verdict per step and a final
-//! `PROBE_MAIL: DONE pass=<n> fail=<m>` summary. Modeled closely on [`super::probe_taxi`] (same
-//! phase-machine shape, same trace style, same self-terminating exit).
+//! The mail live probe (`WOW_PROBE_MAIL=1`): GM-mails the probe's own character a letter, money
+//! and an item, walks to the Goldshire mailbox, opens it on the real wire and drives the inbox
+//! through the live Lua VM as clicks would: read, copy and read the letter, take the money and the
+//! item, two refused sends, delete. One `PROBE_MAIL:` line per step with PASS/FAIL/SKIP, then
+//! `PROBE_MAIL: DONE pass=<n> fail=<m>`, and it exits. `WOW_CHAR` doubles as the send target. The
+//! switches are `docs/CONTRIBUTING.md`, "Running it unattended".
 //!
-//! ## The GM `.send` syntax (verified against the vmangos source, `Chat/Chat.cpp` +
-//! `Commands/MiscCommands.cpp`)
-//!
-//! `sendCommandTable[]` (Chat.cpp ~l.931): `.send mail <name> "subject" "text"` is
-//! `SEC_MODERATOR` (1); `.send items <name> "subject" "text" item[:count]…` and
-//! `.send money <name> "subject" "text" <copper>` are both `SEC_ADMINISTRATOR` (6)
-//! (`AccountTypes`, `shared/Common.h` l.138-145: `SEC_MODERATOR=1`, `SEC_GAMEMASTER=3`,
-//! `SEC_ADMINISTRATOR=6`). **Probe accounts are gmlevel 6**, so all three land. They did *not*
-//! until 2026-07-26 — 0645 recorded the raise but never applied it, and the accounts sat at 3.
-//! While they did, steps (c)/(d) below degraded to SKIP against a permission floor that
-//! was real, and that SKIP hid a defect in the probe itself: it re-found the money/item row by
-//! predicate each tick, so a *successful* take — which zeroes the money and clears the attachment
-//! — made the row stop matching and read as "no row ever appeared". Both steps now remember the
-//! id they took from, and a missing row is a FAIL, because at gmlevel 6 there is no longer an
-//! innocent reason for one. All three GM
-//! sends build their `MailDraft` and call `MailDraft::SendMailTo` DIRECTLY
-//! (`HandleSendMailCommand`/`HandleSendItemsCommand`/`HandleSendMoneyCommand`, `MiscCommands.cpp`
-//! ~l.1012-1145) — never through `WorldSession::HandleSendMail` (`MailHandler.cpp`), whose
-//! `MAIL_ERR_CANNOT_SEND_TO_SELF` gate (l.204) lives only in the CMSG-driven path. So a GM
-//! `.send mail <self>` bypasses the self-check entirely and lands in the sender's own mailbox —
-//! confirmed by reading `MailDraft::SendMailTo` (`Mail/Mail.cpp` l.300+) end to end: no self
-//! comparison anywhere in it. The GM path's `deliver_delay` also defaults to `0`
-//! (`Mail.h` l.254; the command handlers pass none) — unlike the player CMSG path's
-//! `MailDeliveryDelay` (decision 0544's 1 h note), so a successful GM send (permission allowing)
-//! is in the inbox on the very next `CMSG_GET_MAIL_LIST`, no extra wait needed. Sender identity:
-//! `MailSender(MAIL_NORMAL, <the GM's own char guid counter>, MAIL_STATIONERY_GM)` — a real player
-//! sender guid, GM stationery (61, `ui_mail.rs`'s `STATIONERY_GM`).
-//!
-//! ## The run recipe
-//!
-//! ```text
-//! WOW_DATA=<vanilla Data dir> WOW_USER=probe2 WOW_PASS=pprobe2 WOW_CHAR=Probetwo \
-//!     WOW_PROBE_MAIL=1 cargo run -q -p benilla
-//! ```
-//! (the checkout's probe identity — `.probe-identity`, or WOW_USER/WOW_PASS/WOW_CHAR; the `probe`
-//! skill). `WOW_CHAR` doubles as the probe's own mail-send target — read
-//! once at world-enter, never hardcoded. An outer `timeout` + grep on `PROBE_MAIL:` is the whole
-//! harness; the probe self-exits (the [`super::probes::ProbeExitPlugin`] pattern) once DONE.
+//! `.send mail <name> "subject" "text"` needs `SEC_MODERATOR`; `.send items … item[:count]` and
+//! `.send money … <copper>` need `SEC_ADMINISTRATOR` (vmangos `Chat.cpp:935-938`). Each builds a
+//! `MailDraft` and calls `SendMailTo` directly (`MiscCommands.cpp:1012-1166`), never through
+//! `HandleSendMail`, whose `MAIL_ERR_CANNOT_SEND_TO_SELF` check (`MailHandler.cpp:204`) is on the
+//! CMSG path only. So a GM send to oneself lands, with no delivery delay (`Mail.h:254`), from a
+//! `MAIL_NORMAL` sender carrying the GM's own guid, on GM stationery (61).
 
 use bevy::prelude::*;
 
@@ -55,33 +23,29 @@ use crate::net::{ChatKind, ClientCommand, Guid, NetCommands, NetEntity, ObjectSt
 use crate::player::Player;
 use crate::ui_mail::MailOpen;
 
-/// The Goldshire mailbox (vmangos `gameobject` guid 2978, entry 142075, map 0) — live-DB verified
-/// position.
+/// The Goldshire mailbox (vmangos `gameobject` guid 2978, entry 142075, map 0).
 const MAILBOX_AT: [f32; 3] = [-9455.99, 45.82, 56.44];
-/// `GAMEOBJECT_TYPE_MAILBOX` — the GO strategy type this probe scans for.
+/// `GAMEOBJECT_TYPE_MAILBOX`, the type this probe scans for.
 const GO_TYPE_MAILBOX: i32 = 19;
-/// The mailbox's server-side interaction check is 5 yd (`CheckMailBox`); scan
-/// generously wide so a slightly-off `.go` landing still finds it.
+/// Wider than the server's 5 yd `CheckMailBox`, so a slightly-off `.go` landing still finds it.
 const MAILBOX_SCAN_RANGE: f32 = 10.0;
-/// The probe's GM-mailed item: Linen Cloth ×5 (the task's fixture entry).
+/// The GM-mailed item: Linen Cloth x5.
 const ITEM_ENTRY: u32 = 2589;
 const ITEM_COUNT: u32 = 5;
-/// The probe's GM-mailed money, in copper (~1234c, the task's fixture amount).
+/// The GM-mailed money, in copper.
 const MONEY_COPPER: u32 = 1234;
 
-/// `checked` mask bit READ (`0x1`, vmangos `Mail.h`) — redeclared locally (the
-/// `ui_mail` copy is private to that module) purely for this trace's printed flags.
+/// `checked` bit READ (`0x1`, vmangos `Mail.h`), for the trace's printed flags.
 const CHECKED_READ: u32 = 0x1;
-/// `checked` mask bit COPIED (`0x4`) — the wire's `textCreated`: step (b2) asserts the
-/// `CMSG_MAIL_CREATE_TEXT_ITEM` round-trip stamps it.
+/// `checked` bit COPIED (`0x4`), the wire's `textCreated`: step (b2) asserts the
+/// `CMSG_MAIL_CREATE_TEXT_ITEM` round trip sets it.
 const CHECKED_COPIED: u32 = 0x4;
 
 const SETTLE_SECS: f64 = 3.0;
 const SCAN_TIMEOUT_SECS: f64 = 15.0;
 const LIST_TIMEOUT_SECS: f64 = 15.0;
 const BODY_TIMEOUT_SECS: f64 = 10.0;
-/// How long a GM-sent row is given to show up before the dependent step FAILs — generous, but
-/// bounded (never hangs).
+/// How long a GM-sent row is given to show up before the dependent step FAILs.
 const ROW_GRACE_SECS: f64 = 5.0;
 const ACTION_TIMEOUT_SECS: f64 = 8.0;
 
@@ -94,29 +58,24 @@ impl Plugin for ProbeMailPlugin {
     }
 }
 
-/// The probe's phase machine + the identities it discovers along the way (kept resource-level,
-/// not per-variant, since several later phases re-resolve the same row by its stable
-/// `message_id` — list order can shift after a take/delete re-sync).
+/// The probe's phase machine plus the identities it finds; rows are kept by `message_id`, since
+/// list order shifts after a take or delete.
 #[derive(Resource, Default)]
 struct MailProbe {
     phase: Phase,
-    /// `WOW_CHAR` — the probe's own name, its GM-mail target and its self-send target. Read once
-    /// at [`Phase::Wait`] (the "read it from the same place login does" instruction — `net/io.rs`
-    /// reads the identical env var).
+    /// `WOW_CHAR`: the probe's own name, its GM-mail and self-send target, read once at
+    /// [`Phase::Wait`].
     char_name: String,
-    /// The plain letter's `message_id`, once found (stable across resyncs; row order isn't).
+    /// The plain letter's `message_id`, once found.
     letter_id: Option<u32>,
     passes: u32,
     fails: u32,
-    /// Latched once [`Phase::Done`] has fired its exit (never re-fire on a later frame).
+    /// Latched once [`Phase::Done`] has fired its exit.
     exited: bool,
 }
 
-/// Every field is `Copy` (f64/bool/i64) — the phase is snapshotted out of the resource each tick
-/// ([`mail_probe`]'s `let phase = probe.phase;`) so the match arms are free to mutate `probe`
-/// (counters, `letter_id`, `char_name`) without fighting the borrow checker over `probe.phase`
-/// itself; an arm that wants to "keep waiting" simply never writes `probe.phase`, leaving the
-/// pre-match value in place.
+/// Copied out of the resource each tick so the arms can mutate `probe`; an arm that keeps
+/// waiting leaves `probe.phase` alone.
 #[derive(Default, Clone, Copy, PartialEq)]
 enum Phase {
     #[default]
@@ -125,27 +84,25 @@ enum Phase {
     Settling {
         sent_at: f64,
     },
-    /// Mailbox clicked ([`MailOpen::click`], decision 0544/0548 — no packet); waiting for the
-    /// first `SMSG_MAIL_LIST_RESULT` (step a).
+    /// Mailbox clicked ([`MailOpen::click`], a local open with no packet); waiting for the first
+    /// `SMSG_MAIL_LIST_RESULT` (step a).
     WaitList {
         clicked_at: f64,
     },
-    /// The list landed — `GetInboxText` the plain letter (mark-read + ask-once body, step b).
+    /// The list landed: `GetInboxText` the plain letter (mark-read and ask-once body, step b).
     OpenLetter,
     /// Waiting for the letter's `CMSG_ITEM_TEXT_QUERY` reply to land in the body cache.
     WaitBody {
         since: f64,
     },
-    /// `TakeInboxTextItem` on the opened letter — the letter button's permanent-copy verb
+    /// `TakeInboxTextItem` on the opened letter, the permanent-copy verb
     /// (`CMSG_MAIL_CREATE_TEXT_ITEM`, step b2): PASS when the re-synced row carries COPIED.
     CopyLetter {
         since: f64,
         sent: bool,
     },
-    /// Read the permanent copy (step b3): find the Plain Letter (8383) in the bags via the
-    /// container Lua, right-click it through the real `UseContainerItem` route, PASS when the
-    /// reader window paints the GM letter's body — then destroy the copy (else bags accumulate
-    /// one per run).
+    /// Read the permanent copy (step b3): find the Plain Letter (item 8383) in the bags, click it
+    /// through `UseContainerItem`, PASS when the reader shows the body, then destroy the copy.
     ReadLetter {
         since: f64,
         /// The letter's `(lua bag, 1-based slot)` once found and clicked.
@@ -154,26 +111,22 @@ enum Phase {
     /// `TakeInboxMoney` on the money row (step c).
     TakeMoney {
         since: f64,
-        /// The message id we sent the take for, once sent. It is remembered rather than re-found
-        /// each tick because **taking is what makes the row stop matching**: a successful
-        /// `TakeInboxMoney` zeroes `money` (or drops the row), so a predicate re-search returns
-        /// `None` on exactly the ticks that prove success. That bug reported every successful take
-        /// as "no money row appeared" and hid behind the old gmlevel-3 floor, where the row really
-        /// never arrived.
+        /// The message id the take was sent for, kept because a successful take zeroes `money`
+        /// or drops the row, so re-searching would read success as absence.
         taken: Option<u32>,
     },
-    /// `TakeInboxItem` on the item row (step d). Same remembered-id reason as [`Self::TakeMoney`].
+    /// `TakeInboxItem` on the item row (step d); the taken id is kept as in [`Self::TakeMoney`].
     TakeItem {
         since: f64,
         taken: Option<u32>,
     },
-    /// `SendMail` to the probe's own name — expects `CANNOT_SEND_TO_SELF` (step e).
+    /// `SendMail` to the probe's own name, expecting `CANNOT_SEND_TO_SELF` (step e).
     SendSelf {
         since: f64,
         sent: bool,
         baseline: i64,
     },
-    /// `SendMail` to a name that doesn't exist — expects `RECIPIENT_NOT_FOUND` (step f).
+    /// `SendMail` to a name that does not exist, expecting `RECIPIENT_NOT_FOUND` (step f).
     SendBad {
         since: f64,
         sent: bool,
@@ -187,14 +140,12 @@ enum Phase {
     Done,
 }
 
-/// Find the first row matching `pred`, by stable `message_id` (never a position — resyncs shift
-/// rows around).
+/// The first row matching `pred`, by its stable `message_id`.
 fn find_by(mail: &MailOpen, pred: impl Fn(&MailListEntry) -> bool) -> Option<u32> {
     mail.mails.iter().find(|e| pred(e)).map(|e| e.message_id)
 }
 
-/// The 1-based display index a `message_id` currently sits at, or `None` if it's gone (taken/
-/// deleted/expired-and-purged).
+/// The 1-based display index a `message_id` currently sits at, `None` once it is gone.
 fn index_of(mail: &MailOpen, mail_id: u32) -> Option<u32> {
     mail.mails
         .iter()
@@ -206,8 +157,7 @@ fn entry_of(mail: &MailOpen, mail_id: u32) -> Option<&MailListEntry> {
     mail.mails.iter().find(|e| e.message_id == mail_id)
 }
 
-/// Read the Lua-side `ProbeMailEvents` log length (the `UI_ERROR_MESSAGE` hook) — `0` on any eval
-/// hiccup (treated as "nothing observed yet", never a panic).
+/// The Lua-side `ProbeMailEvents` log length (the `UI_ERROR_MESSAGE` hook); 0 on an eval error.
 fn events_len(script: &UiScript) -> i64 {
     script
         .eval::<i64>("return table.getn(ProbeMailEvents or {})")
@@ -236,11 +186,10 @@ fn mail_probe(
         return; // not in-world yet
     }
     let Some(script) = script else {
-        return; // no UI VM this build (headless net-only) — nothing this probe can drive
+        return; // no UI VM in this build, so nothing to drive
     };
     let now = time.elapsed_secs_f64();
-    // A cheap `Copy` snapshot (see [`Phase`]'s doc) — frees every arm below to mutate `probe`
-    // freely and to leave `probe.phase` untouched when it just wants to keep waiting.
+    // A `Copy` snapshot, so the arms can mutate `probe` (see `Phase`).
     let phase = probe.phase;
 
     match phase {
@@ -252,10 +201,8 @@ fn mail_probe(
                 probe.phase = Phase::Done;
                 return;
             }
-            // The UI_ERROR_MESSAGE hook (steps e/f's observation channel) — a hidden frame that
-            // logs `arg1` into a Lua table this probe polls, the same "reach out of the VM"
-            // pattern as `ProbeLuaPlugin`'s `ProbeLog`, but as a readable log instead of a
-            // one-shot info! line (we need to distinguish two different error texts in order).
+            // The `UI_ERROR_MESSAGE` hook for steps e and f: a hidden frame logs `arg1` into a Lua
+            // table the probe polls, so the two error texts are told apart in order.
             if let Err(e) = script.run(
                 r#"
                 if not ProbeMailHooked then
@@ -273,8 +220,7 @@ fn mail_probe(
             }
             let name = &probe.char_name;
             info!("PROBE_MAIL: GM-mailing {name} (plain letter, money, item) then heading to the Goldshire mailbox");
-            // Three GM sends (verified syntax above) + the teleport, one chat burst (the
-            // `ProbeChatPlugin`/`probe_taxi` idiom: GM dot-commands ride as plain Say lines).
+            // The three GM sends and the teleport, as plain Say lines.
             let [x, y, z] = MAILBOX_AT;
             for text in [
                 format!(".send mail {name} \"probe letter\" \"hello\""),
@@ -356,10 +302,10 @@ fn mail_probe(
             };
             probe.letter_id = Some(letter_id);
             let Some(idx) = index_of(&mail, letter_id) else {
-                return; // shouldn't happen the same frame we just found it — re-poll
+                return; // found this frame, so not expected; re-poll
             };
-            // CheckInbox() called twice, idempotently (`0x4aeab0`'s 60s client-side throttle,
-            // decision 0548 §2/0544) — proves a rapid re-call is a no-op, not a packet storm.
+            // `CheckInbox()` twice: `0x4aeab0` throttles it to once per 60 s, so the re-call is a
+            // no-op.
             if let Err(e) = script.run(&format!("CheckInbox() CheckInbox() GetInboxText({idx})")) {
                 error!("PROBE_MAIL: FAIL (b) — GetInboxText({idx}) errored: {e}");
                 probe.fails += 1;
@@ -468,8 +414,8 @@ fn mail_probe(
         Phase::ReadLetter { since, slot } => {
             match slot {
                 None => {
-                    // Find the Plain Letter (8383) in the bags via the container Lua the bag UI
-                    // itself uses; encoded bag*100+slot (-1 = not there yet).
+                    // Find the Plain Letter (item 8383) via the bag UI's own container Lua;
+                    // encoded bag*100+slot (-1 = not there yet).
                     let found = script
                         .eval::<i64>(
                             "for bag=0,4 do local n=GetContainerNumSlots(bag) or 0 \
@@ -535,10 +481,8 @@ fn mail_probe(
             }
         }
         Phase::TakeMoney { since, taken } => {
-            // The id is REMEMBERED across ticks, never re-found: a successful take is exactly what
-            // makes the row stop matching `money > 0`, so re-searching would read success as
-            // absence. Matched as a pair rather than with guards — guarded `Some(_) if …`
-            // arms can't be proven exhaustive by rustc, forcing a dead catch-all.
+            // The id is kept across ticks: a successful take makes the row stop matching
+            // `money > 0`. Matched as a pair, since guarded arms would need a dead catch-all.
             let next = Phase::TakeItem {
                 since: now,
                 taken: None,
@@ -778,9 +722,8 @@ fn mail_probe(
                 "PROBE_MAIL: DONE pass={} fail={}",
                 probe.passes, probe.fails
             );
-            // The probe self-exit pattern (`ProbeExitPlugin::fire_probe_exit`): a polite AppExit
-            // plus a hard backstop thread, so a net/winit teardown hang can't leave a zombie
-            // client holding the probe account.
+            // `ProbeExitPlugin::fire_probe_exit`'s pattern: `AppExit` plus a hard backstop, so a
+            // teardown hang cannot leave a client holding the probe account.
             exit.write(AppExit::Success);
             std::thread::spawn(|| {
                 std::thread::sleep(std::time::Duration::from_secs(5));

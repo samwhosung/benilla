@@ -1,13 +1,12 @@
-//! The sound layer's packet handlers (in the net handler table since 2325, moved out of the
-//! drain's world arm file) — the three ambient audio triggers, each a [`ServerSoundMessage`] the
-//! zone mixer ([`super::zone`]) plays.
+//! The sound layer's packet handlers: the three server audio triggers, each a
+//! [`ServerSoundMessage`] the zone mixer ([`super::zone`]) plays.
 
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
 
 use crate::net::{GuidIndex, NetHandlerApp, ServerSoundKind, ServerSoundMessage};
 
-/// Register the handlers — called from [`super::SoundPlugin`].
+/// Register the handlers, from [`super::SoundPlugin`].
 pub(super) fn register(app: &mut App) {
     use SessionEventKind as K;
     app.net_handler(K::PlaySound, on_play)
@@ -30,7 +29,7 @@ fn on_play(
     }
 }
 
-/// `SMSG_PLAY_SOUND` — a 2D (non-positional) one-shot.
+/// `SMSG_PLAY_SOUND`: a 2D one-shot.
 fn play_sound(sound_id: u32, out: &mut MessageWriter<ServerSoundMessage>) {
     out.write(ServerSoundMessage {
         kind: ServerSoundKind::Sound2d,
@@ -39,7 +38,7 @@ fn play_sound(sound_id: u32, out: &mut MessageWriter<ServerSoundMessage>) {
     });
 }
 
-/// `SMSG_PLAY_MUSIC` — the zone/event music track.
+/// `SMSG_PLAY_MUSIC`: the zone or event music track.
 fn play_music(music_id: u32, out: &mut MessageWriter<ServerSoundMessage>) {
     out.write(ServerSoundMessage {
         kind: ServerSoundKind::Music,
@@ -48,8 +47,8 @@ fn play_music(music_id: u32, out: &mut MessageWriter<ServerSoundMessage>) {
     });
 }
 
-/// `SMSG_PLAY_OBJECT_SOUND` — a one-shot anchored to a streamed object (silent while its guid
-/// isn't streamed in: the mixer has nowhere to place it).
+/// `SMSG_PLAY_OBJECT_SOUND`: a one-shot at a streamed object, silent while its guid is not
+/// streamed in.
 fn play_object_sound(
     sound_id: u32,
     guid: u64,

@@ -1,20 +1,12 @@
-//! The cast-cancel live probe (`WOW_PROBE=castcancel`) — the end-to-end instrument for the cast
-//! bar's LOCAL self-cancel (decision 0256 open item 2), inert without the env: once in-world, use
-//! the Hearthstone (a 10 s cast that never arms the send guard, so it exercises the
-//! started-`Casting` half of the cancel's inflight union), then 2 s into the bar inject a real
-//! `W` press into `ButtonInput<KeyCode>` — the ACTUAL controller path, so the probe drives the
-//! same move-start edge a player's key does (controller → `LocalMoveStart` →
-//! `spell::local_self_cancel` → `CMSG_CANCEL_CAST`).
+//! The cast-cancel live probe (`WOW_PROBE=castcancel`): once in-world it uses the Hearthstone (a
+//! 10 s cast), then 2 s into the bar presses `W` through `ButtonInput<KeyCode>`, the controller
+//! path a player's key takes to `spell::local_self_cancel` and `CMSG_CANCEL_CAST`.
 //!
-//! The verdict is read off the run log with `WOW_CAST_TRACE=1`: the `LOCAL self-cancel` line
-//! must land beside the `SEND move StartForward` line — frames, not a server round trip, after
-//! it — and the server's echo (`RECV CAST_RESULT failure`) must follow without repainting
-//! anything (the reap already emptied the `Casting` key it tests). The probe also logs every
-//! cast-bar phase transition ([`bar_timeline`]) so the red bar's hold/burst/fade durations are
-//! measured off the timestamps, not eyeballed. Non-combat, safe unattended
-//! (docs/METHOD.md's rule bans unattended *combat* probes); a hearth that completes because the
-//! cancel FAILED just ports the probe character home — visible in the log as the missing cancel line. Pair with
-//! the checkout's probe identity (`.probe-identity`, or WOW_USER/WOW_PASS/WOW_CHAR — the `probe` skill) + `WOW_CAST_TRACE=1 WOW_PROBE_EXIT_AT=<s>`.
+//! With `WOW_CAST_TRACE=1` the `LOCAL self-cancel` line must land frames after the `SEND move
+//! StartForward` line, and the server's `RECV CAST_RESULT failure` must follow without repainting.
+//! Every bar phase change is logged ([`bar_timeline`]) so the hold, burst and fade are measured
+//! from timestamps. Non-combat: a failed cancel only hearths the character home. The switches are
+//! `docs/CONTRIBUTING.md`, "Running it unattended".
 
 use bevy::prelude::*;
 
@@ -30,7 +22,7 @@ impl Plugin for ProbeCastCancelPlugin {
     }
 }
 
-/// The bar's phase, read out of the live VM (the transcription's own state fields).
+/// The bar's phase, read from the stock `CastingBarFrame`'s state fields.
 const BAR_PHASE_CHUNK: &str = "return (function()\n\
     local f = CastingBarFrame\n\
     if not f then return \"noui\" end\n\
@@ -44,10 +36,9 @@ const BAR_PHASE_CHUNK: &str = "return (function()\n\
     return \"shown|\" .. txt\n\
  end)()";
 
-/// Log every cast-bar phase transition with a timestamp — the measured timeline of the
-/// transcription's hold/burst/fade (decision 0454's pin: `holdTime` 1 s wall-clock, then
-/// ~5 flash + ~20 fade ticks normalized to `CASTING_BAR_REF_TICK` 30 Hz ≈ 0.83 s). The deltas
-/// between the logged `hold` → `burst` → `fade` → `hidden` lines ARE the verdict; no eyeballing.
+/// Logs each cast-bar phase change with a timestamp. Stock `CastingBarFrame.lua` holds
+/// `CASTING_BAR_HOLD_TIME` (1 s), then steps the flash by 0.2 and the fade by 0.05 once per
+/// `OnUpdate` (`CastingBarFrame.lua:132-147`), so burst and fade last 5 and 20 frames.
 fn bar_timeline(
     time: ProbeClock,
     script: Option<NonSend<benilla_ui::script::UiScript>>,
@@ -60,9 +51,7 @@ fn bar_timeline(
     let Some(script) = script else {
         return;
     };
-    // Session-keyed (1290) even though this is harness code: the phase string is read *out of* the
-    // VM, so a stale one would swallow the first transition of the next login — the exact event
-    // this probe exists to timestamp.
+    // Session-keyed: a phase string left from the last login would swallow the first transition.
     let last = last.get(&script);
     let Ok(state) = script.eval::<String>(BAR_PHASE_CHUNK) else {
         return;
@@ -85,9 +74,8 @@ struct ProbeCastCancel {
     used_at: Option<f32>,
 }
 
-/// Scan the backpack for the Hearthstone by item link (a restock can't silently move the
-/// probe's target) and use it. `false` = not resolved yet — a fresh character's first login
-/// still has the item-query round trip in flight, so the caller retries per frame.
+/// Finds the Hearthstone in the backpack by item link and uses it; `false` while the item query
+/// is still in flight, so the caller retries each frame.
 const USE_HEARTH_CHUNK: &str = "return (function()\n\
     for s = 1, GetContainerNumSlots(0) do\n\
       local link = GetContainerItemLink(0, s)\n\
@@ -99,10 +87,8 @@ const USE_HEARTH_CHUNK: &str = "return (function()\n\
     return false\n\
  end)()";
 
-/// The timeline: from **3.0 s** after world-enter, scan-until-resolved for the Hearthstone and
-/// use it (deadline 10 s — the link needs the server's item-query echo on a cold cache); **2.0 s
-/// into the 10 s cast** press `W`; **+0.3 s** release it. Every phase logs, so a stalled run
-/// shows where it stopped.
+/// From 3 s after world entry, use the Hearthstone (deadline 10 s), press `W` 2 s into the cast
+/// and release it 0.3 s later; every phase logs.
 fn cast_cancel_probe(
     time: ProbeClock,
     mut probe: ResMut<ProbeCastCancel>,
@@ -132,7 +118,7 @@ fn cast_cancel_probe(
                     probe.phase = 99;
                     error!("castcancel probe: no Hearthstone link resolved by t+10 s");
                 }
-                Ok(false) => {} // still resolving — retry next frame
+                Ok(false) => {} // still resolving, retry next frame
                 Err(e) => {
                     probe.phase = 99;
                     error!("castcancel probe: {e}");

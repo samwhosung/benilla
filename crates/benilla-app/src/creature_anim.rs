@@ -25,9 +25,8 @@ use select::{Mode, Special};
 mod twist;
 pub(crate) use twist::{wrap_pi, BodyTwist};
 
-/// Parks an off-frustum rig's pose while its clocks and events run, as the reference does not
-/// tick one (`0x683dd0`). Where they differ: parked rigs here still draw, and every parked unit
-/// stays audible, where the reference keeps only `MORE_AUDIBLE` creatures audible off-screen.
+/// Parks an off-frustum rig's pose while its clocks run, as the reference does not tick one
+/// (`0x683dd0`); a parked unit's events fire only for a `MORE_AUDIBLE` template.
 mod lod;
 
 /// Wielded `(item class, subclass)` per hand as worn (`GetWeapon(slot, 1)`, `0x605e30`, what the

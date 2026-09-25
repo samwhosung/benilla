@@ -1,13 +1,10 @@
-//! The melee live probe (`WOW_PROBE=melee`) — an agent-side instrument, inert without the env:
-//! once in-world, periodically fire the attack-nearest core ([`AttackNearestRequest`] — the
-//! action-bar attack's own no-selection path), so the probe character fights whatever is closest
-//! while the `benilla_assets::trace` sink (`WOW_MOVE_TRACE=<path>`) records the swing→impact→spawn combat-text
-//! timeline for pair-birth analysis. Pair with the checkout's probe identity (the `probe` skill) + an outer
-//! `timeout`.
+//! The melee live probe (`WOW_PROBE=melee`), inert without the env: once in-world it fires the
+//! attack-nearest core ([`AttackNearestRequest`]) every few seconds, so the character fights
+//! whatever is closest while `WOW_MOVE_TRACE=<path>` records the swing, impact and combat-text
+//! timeline.
 //!
-//! **Do NOT run this unattended** (director's rule, 2026-07-14, `docs/METHOD.md` "The local vmangos
-//! server"): the probe fights back-to-back with no health awareness and the character DIES (Tri
-//! did). Combat runs are director-assisted — ask, or hand an eyeball script.
+//! Never run it unattended (`docs/METHOD.md`, "The local server"): it fights with no health
+//! awareness and the character dies.
 
 use bevy::prelude::*;
 
@@ -23,9 +20,8 @@ impl Plugin for ProbeMeleePlugin {
     }
 }
 
-/// Every few seconds: with a live selection, (re)send the attack swing at it (idempotent while
-/// already auto-attacking; covers the auto-acquired-attacker case the acquire core skips); with
-/// none, run the acquire core. Re-acquires the next victim after a kill clears the selection.
+/// Every 3 s: swing at the selection (idempotent while auto-attacking, and it covers an attacker
+/// the acquire core skips), or with none, run the acquire core.
 fn melee_probe(
     time: ProbeClock,
     mut last: Local<f64>,

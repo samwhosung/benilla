@@ -1,27 +1,9 @@
-//! The **dressing room** booth — the ref's `DressUpFrame`/`DressUpModel`: the
-//! player's own character wearing an item they do *not* own, spun by the window's rotate buttons.
-//!
-//! ## Why this booth cannot be the paper doll's
-//!
-//! The paper doll and the inspect pane mirror a *live entity's* spawned children
-//! ([`super::sync_body_booth`]) — which is exactly right for "show me what is standing in the
-//! world", and exactly wrong here: nobody in the world is wearing the previewed item. So the
-//! dressing room takes the **tuple-driven** path the glue screens already use — the shared
-//! assembly in [`crate::entities::attach`] builds the parts from a spec
-//! (body displayId + appearance dials + a 19-slot equipment array), and this module bakes them.
-//!
-//! The spec's equipment is the player's own visible items with the tried-on ones substituted in
-//! ([`crate::ui_dressup`] composes it). One consequence worth naming: the preview dresses by the
-//! **select-screen** law (weapons drawn in the hands, `0x47a0c0`), not by the
-//! world's sheath state — the reference's `DressUpModel` is a `<PlayerModel>` subclass showing the
-//! character posed for inspection, and that is the pose the shared assembly produces.
-//!
-//! ## The light is the reference's own
-//!
-//! `DressUpModel` (`0x495c00`) subclasses the very `CharacterModelBase` ctor (`0x505680`) the
-//! character window's `<PlayerModel>` uses — same single directional light, same ambient.
-//! So this bake lights through [`BoothLight::pane`], the same rig as the paper
-//! doll, with no glow ([`benilla_world::ffx_glow::FfxGlow::UI_PANE`]) for the same reason.
+//! The dressing-room booth, the reference's `DressUpFrame`/`DressUpModel`: the player's own
+//! character wearing items they do not own. Nobody in the world wears the preview, so it is built
+//! from a spec by the shared assembly ([`crate::entities::attach`]), not mirrored from a live
+//! entity, and it dresses by the select-screen law (weapons in hand, `0x47a0c0`). `DressUpModel`
+//! (`0x495c00`) shares the `CharacterModelBase` ctor (`0x505680`) with the character window's
+//! `<PlayerModel>`, so it lights through [`BoothLight::pane`] with no glow, as the paper doll does.
 
 use benilla_protocol::CharEnumItem;
 use bevy::camera::visibility::RenderLayers;
@@ -39,18 +21,14 @@ use super::{
     PreviewEffects, PreviewPart, PreviewRider, BOOTH_SETTLE_FRAMES, DRESSUP_LAYER, PAPERDOLL_SIZE,
 };
 
-/// The dressing-room booth slot token (its key in [`PortraitImages`] / [`Booths`]).
+/// The dressing-room booth's key in [`PortraitImages`] and [`Booths`].
 pub(crate) const DRESSUP_SLOT: &str = "dressup";
 
-/// The character the dressing room shows: the player's own body + appearance, wearing the
-/// equipment array [`crate::ui_dressup`] composed (their visible items, with each tried-on item
-/// substituted into its slot).
-///
-/// Its `PartialEq` is the re-assembly trigger — a try-on, a reset, or the player equipping
-/// something while the window is open all show up as a different look.
+/// The player's own body and appearance wearing [`crate::ui_dressup`]'s equipment array (their
+/// visible items with the tried-on ones substituted); a change in it re-assembles the booth.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct DressUpLook {
-    /// The player's own body display id (the ref's `SetUnit("player")`).
+    /// The player's own body display id (the reference's `SetUnit("player")`).
     pub(crate) display_id: u32,
     pub(crate) race: u8,
     pub(crate) sex: u8,
@@ -59,18 +37,15 @@ pub(crate) struct DressUpLook {
     pub(crate) hair_style: u8,
     pub(crate) hair_color: u8,
     pub(crate) facial_hair: u8,
-    /// Worn **ItemDisplayInfo** ids by equipment slot, the `SMSG_CHAR_ENUM` shape the shared
-    /// assembly reads (helm 0 · shoulder 2 · … · main hand 15 · off hand 16 · ranged 17 · tabard 18).
+    /// `ItemDisplayInfo` ids by equipment slot, in the `SMSG_CHAR_ENUM` shape (helm 0, main hand
+    /// 15, off hand 16, ranged 17, tabard 18).
     pub(crate) equipment: [CharEnumItem; 19],
-    /// The player's own guild tabard — so a tried-on Guild Tabard previews *their*
-    /// crest, not the blank default. Part of the look's `PartialEq`, so an identity that lands
-    /// while the window is open re-assembles the booth exactly as a try-on does.
+    /// The player's own guild crest, so a tried-on Guild Tabard shows it, not the blank default.
     pub(crate) emblem: Option<benilla_formats::GuildEmblem>,
 }
 
-/// The dressing room's live input: who is standing in it (`None` = the window is closed / has
-/// nothing to show, which empties the booth) and the pane's bake **yaw** in radians — the ref's
-/// `Model:SetRotation`, written by the window's rotate buttons exactly as the paper doll's is.
+/// The dressing room's input: the look (`None` empties the booth) and the yaw in radians, the
+/// reference's `Model:SetRotation` driven by the rotate buttons.
 #[derive(Resource)]
 pub(crate) struct DressUpPreview {
     pub(crate) look: Option<DressUpLook>,
@@ -81,15 +56,14 @@ impl Default for DressUpPreview {
     fn default() -> Self {
         Self {
             look: None,
-            // The ref's `Model_OnLoad` default facing (`UIParent.lua:1422`), same as the paper doll's.
+            // `Model_OnLoad`'s default facing (`UIParent.lua:1422`).
             yaw: 0.61,
         }
     }
 }
 
-/// The assembled dressing-room look — the entities-side builder's output, the [`super::GluePreviewBake`]
-/// twin. `revision` bumps on every real change (a fresh assembly, or a clear to `look: None`); the
-/// booth re-bakes only when it moves, and a bare yaw change never touches it.
+/// The assembled dressing-room parts. `revision` bumps on a fresh assembly or a clear; the booth
+/// re-bakes only when it moves, never on a bare yaw change.
 #[derive(Resource, Default)]
 pub(crate) struct DressUpBake {
     pub(crate) look: Option<DressUpLook>,
@@ -102,9 +76,8 @@ pub(crate) struct DressUpBake {
     pub(crate) revision: u64,
 }
 
-/// Stand the dressing-room booth up beside the two body panes (called from [`super::setup_booths`]).
-/// Same off-screen pipeline as those — [`PAPERDOLL_SIZE`]² target, decode but no glow (decision
-/// 0638) — on its own layer, framed per-bake, and **transparent** (see the clear below).
+/// Stand the dressing-room booth up: a [`PAPERDOLL_SIZE`]² target with no glow on its own layer,
+/// framed per bake, and transparent.
 pub(super) fn spawn_dressup_booth(
     commands: &mut Commands,
     images: &mut Assets<Image>,
@@ -124,25 +97,15 @@ pub(super) fn spawn_dressup_booth(
         super::booth_view_shape(),
         Camera {
             order: -100 + DRESSUP_LAYER as isize,
-            // **Transparent**, unlike the paper doll's opaque near-black slab. The
-            // reference's `<DressUpModel>` is a widget that draws only its model: the dark room
-            // behind the character is the window's own `DressUpBackground-<Race>` art, and an
-            // opaque bake hid it completely — the pane's rect covers all but a 32 px strip of it.
-            //
-            // 1070 lowered this quad to BACKGROUND, which is what un-covered the Reset/Close
-            // buttons; it cannot un-cover the race art, because that art is on the WINDOW (level 0)
-            // and the level term outranks the layer. Only compositing can. The glue booth
-            // has done exactly this since 0818 — FfxGlow's combine carries the scene alpha through.
-            //
-            // The other three panes keep their opaque near-black: nothing is behind them to reveal,
-            // and their look is the director's approved one.
+            // Transparent: `<DressUpModel>` draws only its model, and the room behind it is the
+            // window's `DressUpBackground-<Race>` art at a lower frame level, which only
+            // compositing can show through.
             clear_color: ClearColorConfig::Custom(Color::NONE),
             ..default()
         },
         bevy::camera::RenderTarget::Image(image.clone().into()),
         benilla_world::ffx_glow::FfxGlow::UI_PANE,
-        // Placeholder — `sync_dressup_booth` overwrites transform + projection from the body's
-        // bounds on the first bake, exactly as the paper doll's does.
+        // Placeholder: `sync_dressup_booth` frames it from the body's bounds on the first bake.
         Projection::from(PerspectiveProjection {
             fov: super::PORTRAIT_FOV,
             near: 0.02,
@@ -177,13 +140,8 @@ pub(super) fn spawn_dressup_booth(
     );
 }
 
-/// Bake the assembled dressing-room look, and spin it to the pane's yaw.
-///
-/// The [`super::sync_body_booth`] law over tuple-driven parts: re-light onto the pane rig, pose a
-/// fresh instance, seat the riders and effects, frame it full-body, arm the wake window. What
-/// differs from the paper doll is only where the parts come from (a bake resource, not a live
-/// unit's children) and the hand grip — the assembly holds the weapons, so the hands close on them
-/// (`CloseHand 0x479660`).
+/// Bake the assembled look as [`super::sync_body_booth`] does, and spin it to the pane's yaw. The
+/// assembly holds the weapons, so the hands close on them (`CloseHand` `0x479660`).
 pub(super) fn sync_dressup_booth(
     mut commands: Commands,
     preview: Res<DressUpPreview>,
@@ -198,9 +156,7 @@ pub(super) fn sync_dressup_booth(
     mut palettes: ResMut<benilla_world::rig_palette::RigPalettes>,
     mut env_cache: Local<Option<bool>>,
     mut last: Local<Option<(u64, f32)>>,
-    // Whether a bake is currently STANDING on the stage — the empty arm's "is there anything to
-    // tear down?" gate. `Booth::baked` can't answer it here: that field keys the mirrored booths'
-    // look, and this one is revision-keyed.
+    // Whether a bake stands on the stage; `Booth::baked` keys the mirrored booths, not this one.
     mut staged: Local<bool>,
 ) {
     if super::test_mode(&mut env_cache) {
@@ -209,8 +165,7 @@ pub(super) fn sync_dressup_booth(
     let Some(booth) = booths.0.get_mut(DRESSUP_SLOT) else {
         return;
     };
-    // The destination pane's aspect, latched while it is on screen — the dressing
-    // room's is 316×351, so baking square made every character 11% too tall.
+    // The pane's aspect, latched while on screen: the dressing room's is 316×351, not square.
     let aspect = panes.0.get(DRESSUP_SLOT).copied().unwrap_or(booth.aspect);
     let (last_rev, last_yaw) = last.unwrap_or((u64::MAX, f32::NAN));
     let rebake = last_rev != bake.revision || booth.aspect != aspect;
@@ -220,11 +175,8 @@ pub(super) fn sync_dressup_booth(
     booth.aspect = aspect;
 
     if rebake {
-        // Nothing to show (the window is closed, or the assembly cleared) → empty the stage and
-        // let the camera sleep once it has rendered the emptied frame. Only when
-        // something WAS standing here: at startup this arm runs with an empty stage already, and
-        // arming the wake there paid four full booth passes to re-render nothing (caught in the
-        // 1060 probe's own `[booth] t=0.00 dressup active=true wake=4` line).
+        // Nothing to show: empty the stage, and wake only if something stood there, so an
+        // already-empty stage at startup costs no booth passes.
         if bake.parts.is_empty() {
             if *staged {
                 commands.entity(booth.root).despawn_related::<Children>();
@@ -232,8 +184,7 @@ pub(super) fn sync_dressup_booth(
                 booth.wake = BOOTH_SETTLE_FRAMES;
                 booth.live = false;
                 booth.pending.clear();
-                // The despawn reaped meshes and anchors; the rig state on the ROOT needs its
-                // own strip ([`super::clear_booth_rig`]).
+                // The despawn reaped meshes and anchors; the rig state on the root needs its own.
                 super::clear_booth_rig(&mut commands, booth.root);
                 booth.rigged = false;
                 booth.parked = false;
@@ -242,8 +193,8 @@ pub(super) fn sync_dressup_booth(
             *last = Some((bake.revision, preview.yaw));
             return;
         }
-        // The rig + framing come from the display cache — the same readiness the assembly gated
-        // on, so both are ready together. If somehow not, leave `last` alone and retry next frame.
+        // Rig and framing come from the display cache the assembly gated on; if not ready,
+        // leave `last` alone and retry next frame.
         let Some(creatures) = creatures.as_deref() else {
             return;
         };
@@ -263,7 +214,7 @@ pub(super) fn sync_dressup_booth(
                 skinned: p.skinned_mesh.clone(),
                 static_mesh: p.static_mesh.clone(),
                 material: relight(&p.material),
-                // `None` — the same known gap as the glue preview's.
+                // Not built, as in the glue preview.
                 alpha_anim: None,
                 twins: BoothTwins::default(),
                 mat_anim: false,
@@ -292,7 +243,7 @@ pub(super) fn sync_dressup_booth(
                 twins: BoothTwins::default(),
             })
             .collect();
-        // Never latch a world-lane material into a pane (the [`super::light`] law): retry instead.
+        // Never latch a world-lane material into a pane ([`super::light`]): retry instead.
         if booth_light.pane.take_unready() {
             booth.wake = booth.wake.max(BOOTH_SETTLE_FRAMES);
             return;
@@ -309,8 +260,7 @@ pub(super) fn sync_dressup_booth(
                 .as_ref()
                 .map(|ibp| (rig.skeleton, ibp, rig.animations)),
             anim_data.as_deref().map(|a| &a.0),
-            // Stand LOOPING, like the paper doll beside it — the reference's `<DressUpModel>` is a
-            // live-rendering widget and the director called the pose.
+            // Stand looping, like the paper doll: `<DressUpModel>` renders live.
             BoothMotion::Loop,
             bake.grip,
             &booth_billboards,
@@ -332,20 +282,17 @@ pub(super) fn sync_dressup_booth(
                 .collect::<Vec<_>>(),
             BoothInstance::default(),
         );
-        // The bake animates, so its camera can't sleep — `gate_booth_cameras` runs it every frame
-        // the window is drawing this pane, and none once it closes.
-        // The turn's node bookkeeping named the player this bake just replaced ([`Turn::rebaked`]).
+        // The bake animates, so `gate_booth_cameras` runs its camera every frame the pane draws.
         booth.turn.rebaked();
         booth.live = true;
-        // A fresh bake is animated by construction; the park state is the new rig's.
+        // A fresh bake is animated; the park state is the new rig's.
         booth.rigged = booth_rig.rigged();
         booth_rig.finish(&mut commands);
         booth.parked = false;
         *staged = true;
         aim(&mut cams, DRESSUP_SLOT, &body_frame(&anchors, aspect));
-        // `WOW_BOOTH_LOG=1` — one line per committed bake, the same instrument the mirrored booths
-        // carry (`super::log_bake`, whose signature is the mirrored part types'). It is what
-        // separates "the pane is black because nothing baked" from "…because the camera is wrong".
+        // `WOW_BOOTH_LOG=1`: one line per committed bake, as `super::log_bake` for the mirrored
+        // booths.
         if super::booth_log() {
             eprintln!(
                 "[booth] dressup bake parts={} riders={} billboards={} fx={} rev={} aspect={aspect:.3}",
@@ -366,14 +313,9 @@ pub(super) fn sync_dressup_booth(
                 .chain(booth_billboards.iter().map(|b| &b.material)),
         );
     }
-    // The yaw (the ref's `Model:SetRotation`) — applied on a fresh bake and on every spin, never on
-    // an idle frame. A spin is a content edge too.
-    //
-    // And the other half of `SetRotation`: the turn-in-place shuffle
-    // ([`super::booth::drive_booth_turn`], 1559). The dressing room wires the same held-arrow
-    // `OnUpdate` the character window does (the stock `Model_OnUpdate`, 1969), so it steps its feet
-    // the same way. Keyed on the yaw alone — this block also runs for a re-bake, which is a
-    // `RefreshUnit` in the reference and does not turn the model.
+    // The yaw, `Model:SetRotation`, applied on a fresh bake and on every spin. A spin also steps
+    // the feet ([`super::booth::drive_booth_turn`]), as the stock `Model_OnUpdate` held-arrow
+    // turn does; keyed on the yaw alone, since a re-bake is a `RefreshUnit` and does not turn.
     if booth.turn.faced != Some(preview.yaw) {
         if let Some(prev) = booth.turn.faced {
             booth.turn.spun = Some(super::booth::turn_shuffle(prev, preview.yaw));

@@ -1,26 +1,14 @@
-//! Zone reverb (the last 0070 slice-4 piece): the area's EAX preset on the
-//! mixer's reverb send.
+//! Zone reverb: the area's EAX preset on the mixer's reverb send.
 //!
-//! The data chain: [`CurrentArea`] → `AreaTable` cols 5/6 (`SoundProviderPref` /
-//! `...Underwater`, parent-inherited — the client's caller `0x67e7f0` walks the same fallback)
-//! → `SoundProviderPreferences.dbc` (the EAX listener properties, consumed RAW — no clamps on
-//! this path, `0x45a790`) → [`Mixer::set_reverb`]'s Freeverb projection, applied **instantly**
-//! on change (`0x45a720`). Submerged, the underwater
-//! column wins — pref 11 on 568 areas; dry land uses the dry column (8 dungeon floors in 1.12).
+//! [`CurrentArea`] → `AreaTable` cols 5/6 (dry and underwater provider, parent-inherited as the
+//! reference's caller `0x67e7f0` walks it) → `SoundProviderPreferences.dbc`, whose EAX listener
+//! properties are used raw (`0x45a790`) → `Mixer::set_reverb`, applied instantly on change
+//! (`0x45a720`). Submerged, the underwater column wins.
 //!
-//! Which sounds the wet signal reaches is **not** this module's business and is not "every 3D
-//! sound": 3D-open (channel flag bit 27, `0x7a5bf0`) is necessary but not sufficient — the kit's
-//! `SoundEntries.EAXDef` decides, and `0` means a NULL `SoundSamplePreferences` slot and a
-//! permanently dry channel (the gate lives at [`Mixer::play_3d`]). 2D/UI/music/
-//! ambience are structurally dry on top of that. `WMOAreaTable` carries the big interior payload
-//! (~4 000 group rows, CAVE/AUDITORIUM/ARENA — 3 687 of them CAVE, which is what the Thunderbrew
-//! Distillery's interior groups say).
-//!
-//! **The whole chain is gated on the `SoundReverb` CVar, and benilla defaults it OFF** —
-//! [`SoundConfig::reverb`] carries the why and the confidence: the
-//! reference emits the calls but its EAX API has had no hardware to render on since Vista.
-//! Everything below stays built and correct — this module resolves the same preset the binary
-//! would — but nothing reaches the mixer until the CVar says so.
+//! Only 3D-open channels (flag bit 27, `0x7a5bf0`) whose kit has a nonzero
+//! `SoundEntries.EAXDef` reach the send (the gate is `Mixer::play_3d`); 2D, UI, music and
+//! ambience stay dry. The chain is gated on the `SoundReverb` CVar, off by default
+//! ([`SoundConfig::reverb`] says why).
 
 use bevy::prelude::*;
 
@@ -32,11 +20,10 @@ use benilla_world::schedule::WorldStage;
 use super::zone::AreaSounds;
 use super::{SoundConfig, SoundOutput};
 
-/// The reverb-preset catalog. Absent when the client data didn't load.
+/// The reverb-preset catalog.
 #[derive(Resource)]
 pub(crate) struct SoundProviders(pub(crate) SoundProviderCatalog);
 
-/// Startup: load the preset catalog.
 fn load_providers(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
     let Some(assets) = assets else { return };
     let loaded = {
@@ -52,14 +39,13 @@ fn load_providers(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
     }
 }
 
-/// Track the applied preset so the send is only retuned on change (0 = none; `None` = unknown —
-/// the next [`zone_reverb`] run re-applies whatever it resolves, even the same preset).
+/// The applied preset, so the send is retuned only on change: 0 is none, `None` re-applies
+/// whatever resolves next.
 #[derive(Resource, Default)]
 struct AppliedPreset(Option<u32>);
 
-/// React to area/interior/underwater changes: resolve the preset id and hand the row to the
-/// mixer. The WMO interior's preset overrides the terrain area's (this is where
-/// ~4 000 CAVE/AUDITORIUM rows live); zero falls through to the area chain.
+/// Resolve the preset for the area, interior and submersion, and hand the row to the mixer. A
+/// nonzero WMO interior preset overrides the terrain area's.
 fn zone_reverb(
     mut applied: ResMut<AppliedPreset>,
     mut out: NonSendMut<SoundOutput>,
@@ -73,11 +59,8 @@ fn zone_reverb(
         return;
     };
     let column = usize::from(world.submersion().is_water());
-    // `SoundReverb` off ⇒ no preset reaches the backend at all — the client's `0x45a75b` gate,
-    // which returns before the marshal rather than applying a silent one. Off is our default and
-    // the reference's audible truth: its EAX path needs hardware no machine has
-    // had since DirectSound lost hardware mixing in Vista. Flipping the CVar re-applies here,
-    // like the client's callback (`0x4574d0`).
+    // With `SoundReverb` off no preset reaches the backend (the `0x45a75b` gate returns before
+    // the marshal). Flipping the CVar re-applies here, like the callback `0x4574d0`.
     let pref = if config.enabled && config.reverb {
         interior
             .0
@@ -112,8 +95,7 @@ fn zone_reverb(
     applied.0 = Some(pref);
 }
 
-/// `OnExit(InWorld)`: the world's room dies with the world — dry the send and forget the latch
-/// (`None` ⇒ the next login re-applies from its own area, even if it resolves the same preset).
+/// `OnExit(InWorld)`: dry the send and forget the latch, so the next login re-applies.
 fn leave_world(mut applied: ResMut<AppliedPreset>, mut out: NonSendMut<SoundOutput>) {
     if applied.0.take().is_some_and(|p| p != 0) {
         info!("reverb: off (left world)");

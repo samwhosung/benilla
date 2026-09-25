@@ -1,108 +1,40 @@
-//! The GM trouble-ticket live probe (`WOW_PROBE_GMTICKET=1`) — decision 1673's end-to-end
-//! instrument: log in, and drive the whole five-opcode ticket wire through the **live Lua VM's own
-//! bindings** (`GetGMStatus`, `DeleteGMTicket`, `GetGMTicket`, `NewGMTicket`, `UpdateGMTicket`),
-//! observing every answer where the Help window observes it — as an `UPDATE_TICKET` /
-//! `UPDATE_GM_STATUS` event fired at a real frame. One
-//! `PROBE_GMTICKET: <step> PASS/FAIL/SKIP <detail>` line per step, then a final
-//! `PROBE_GMTICKET: DONE pass=<n> fail=<m>`. Modeled on [`super::probe_binder`] and
-//! [`super::probe_bank`] — same phase machine, same trace style, same self-terminating exit
-//! ([`super::probes::ProbeExitPlugin`]'s pattern), same live-VM observation idiom (a small Lua hook
-//! appending to a probe table, read back with `script.eval`).
+//! The GM ticket live probe (`WOW_PROBE_GMTICKET=1`): drives the five ticket opcodes through the
+//! live Lua VM's bindings (`GetGMStatus`, `DeleteGMTicket`, `GetGMTicket`, `NewGMTicket`,
+//! `UpdateGMTicket`) and observes each answer as the Help window does, as an `UPDATE_TICKET` or
+//! `UPDATE_GM_STATUS` event. Logs one `PROBE_GMTICKET: <step> PASS/FAIL/SKIP <detail>` line per
+//! step, then `PROBE_GMTICKET: DONE pass=<n> fail=<m>`, and exits. Non-combat and sends no GM
+//! command; the switches are `docs/CONTRIBUTING.md`, "Running it unattended".
 //!
-//! ## Why unit tests cannot close this feature
+//! vmangos answers several refusals with silence (`GMTicketHandler.cpp:88-113`): no packet for a
+//! create when the queue is off, the player is under `GMTickets.MinLevel` or the category is
+//! `>= GMTICKET_MAX` (11), nor for a delete with no ticket (`:73-86`).
 //!
-//! 1673 ships 23 unit tests, byte-exact wire goldens and a DBC oracle, and **not one of them can
-//! tell whether vmangos accepts the packet**. The server answers several refusals with *silence*:
-//! `HandleGMTicketCreateOpcode` returns with no packet at all when the queue is off, when the
-//! player is under `GMTickets.MinLevel`, or when the category is `>= GMTICKET_MAX` (11), and
-//! `HandleGMTicketDeleteTicketOpcode` likewise when there is no ticket (vmangos
-//! `Handlers/GMTicketHandler.cpp`, read this session). A create the server drops on the floor is
-//! byte-identical, from the client's side, to one that worked. Only a live round trip settles it.
+//! The steps:
+//! 1. queue: `GetGMStatus()` must fire `UPDATE_GM_STATUS` with 1 (`GMTickets.Enable` defaults on,
+//!    `World.cpp:684`); a 0 is the queue switched off, and the rest SKIPs.
+//! 2. clean: `DeleteGMTicket()` then `GetGMTicket()`, expecting `arg1 == 0`; the get's answer is
+//!    waited on, since a delete with no ticket gets none.
+//! 3. create: `NewGMTicket(4, <unique text>)` then `GetGMTicket()`, expecting category 4 and the
+//!    text exactly, which proves the create body's layout.
+//! 4. db: always SKIP. The client never reads map and position back, so the probe prints the row
+//!    it expects (`db-expect`, with a `drift=` bound) and the row is checked by hand.
+//! 5. edit: `UpdateGMTicket(4, <second text>)` then `GetGMTicket()`, expecting the new text
+//!    exactly, which proves the category byte on `CMSG_GMTICKET_UPDATETEXT` (cmangos-classic reads
+//!    a bare cstring there).
+//! 6. abandon: `DeleteGMTicket()` then `GetGMTicket()`, expecting `arg1 == 0` again.
 //!
-//! ## What each step can and cannot conclude
+//! Lua's calls reach the wire in call order, so each step only waits on the server's round trip.
+//! Answers are not correlated to asks: a GM command, vmangos's post-delete `SendTicket(nullptr)`
+//! and the engine's own re-ask on create-ok and update-ok (reference `0x5e4479`) all fire
+//! `UPDATE_TICKET` unasked, so each step takes any matching answer after its baseline, and matches
+//! a unique text in steps 3 and 5.
 //!
-//! 1. **queue** — `GetGMStatus()`, then `UPDATE_GM_STATUS` carrying **1**. `GMTickets.Enable`
-//!    defaults to `true` (`World.cpp:684`), so 1 is the expected answer; no event at all means the
-//!    opcode round trip is dead and is a FAIL. A `0` is not a client defect — it is the queue
-//!    genuinely switched off, and every later step would then be answered with silence, so the
-//!    probe SKIPs the rest rather than manufacturing failures out of a server setting.
-//! 2. **clean** — `DeleteGMTicket()`, then `GetGMTicket()`, expecting `arg1 == 0`. Clears a
-//!    leftover ticket from an earlier run *and* proves the "no ticket" answer decodes
-//!    (`GMTICKET_STATUS_DEFAULT`, a 4-byte body). **The trap:** delete-with-no-ticket is answered
-//!    with nothing at all, so this waits on the `GetGMTicket` answer that follows, never on a
-//!    delete response.
-//! 3. **create** — `NewGMTicket(4, <unique text>)` (4 = Item, `GMTicketCategory.dbc` id 4 =
-//!    vmangos `GMTICKET_ITEM`), then `GetGMTicket()`, expecting `arg1 == 4` and `arg2` **equal** to
-//!    the text sent. The load-bearing step: it proves the `u8` category, the map/position block,
-//!    the text and the trailing `"Reserved for future use"` cstring are laid out the way vmangos
-//!    reads them. A category widened to `u32` would shift the map id and the position three bytes
-//!    down; the server would file the ticket at a garbage spot or reject the packet outright.
-//! 4. **db** — the row itself. **A two-part check, and the probe only does the first half**: the
-//!    client never reads map/position back, so the echo in step 3 cannot prove they landed. The
-//!    probe *prints* what it sent (`PROBE_GMTICKET: db-expect …`) and the operator runs the SQL
-//!    after the run and compares. This step therefore always reports SKIP — it is not a pass the
-//!    probe is entitled to claim. The line carries a `drift=` figure: how far the body could have
-//!    moved between the position sample and the frame the packet was stamped (see [`REST_EPS`]).
-//!    `drift=0.000` means the position in the line is exact.
-//! 5. **edit** — `UpdateGMTicket(4, <second unique text>)`, then `GetGMTicket()`, expecting `arg2`
-//!    **equal** to the new text. This is the step that proves the **category byte** on
-//!    `CMSG_GMTICKET_UPDATETEXT` — the emulator fork 1673 records, where cmangos-classic reads a
-//!    bare cstring and would swallow our category byte as the first character of the text. The
-//!    comparison is equality, never `contains`, because a stray leading control byte is exactly
-//!    the failure this step exists to catch.
-//! 6. **abandon** — `DeleteGMTicket()`, then `GetGMTicket()`, expecting `arg1 == 0` again.
+//! vmangos's abandon is `CloseTicket`, which sets `closed_by` and keeps the row
+//! (`GMTicketMgr.cpp:401-410`); an edit replaces `message` and the type but keeps the create's map
+//! and position (`GMTicketHandler.cpp:59-60`).
 //!
-//! ## Two facts about waiting that this probe is built around
-//!
-//! **The wait is for the SERVER, never for the drain.** Lua's calls reach the wire in call order:
-//! [`crate::ui_gm_ticket`]'s `drain_gm_ticket` walks ONE ordered intent queue
-//! (`take_gm_ticket_intents`), so `DeleteGMTicket(); GetGMTicket()` in a single chunk arrives
-//! delete-then-get. It did not always — the drain used to walk a counter per verb and put every
-//! ask ahead of every write and delete, which inverted exactly that pair and made the get answer
-//! with the *pre*-delete state. This probe is what surfaced that (driving the bindings directly is
-//! what a third-party addon does and what no shipped-window test exercises); decision 1673's "One
-//! ordered queue, not a counter per verb" records the fix. What still has to be waited for is the
-//! **round trip**: each step separates its write from the read-back by [`WRITE_GAP_SECS`] and then
-//! waits up to [`ANSWER_TIMEOUT_SECS`] for an answer that matches. The gap is no longer a
-//! correctness crutch; it keeps one exchange per trace line, which is what makes a failing step
-//! readable.
-//!
-//! **Answers are not correlated to asks, so nothing here waits for "the next event".** Three
-//! sources put an `UPDATE_TICKET` on the stream that this probe never explicitly asked for: a GM's
-//! `.ticket viewid`/`escalate`/`complete`; vmangos's own delete handler (`SendTicket(this,
-//! nullptr)`, right after the delete response); and the **engine's own re-ask**, which fires on
-//! every create-ok (2) and update-ok (4) response (`GmTicketState::note_write_landed`, the
-//! reference's `0x5e4479`). So after step 3's `NewGMTicket` an answer arrives *before* the probe's
-//! own `GetGMTicket()` — expected, not an anomaly. Each step latches the observed event count as a
-//! baseline and then waits for **any** answer after it that matches the expectation, failing only
-//! at the timeout and printing every answer it did see. Matching on a *unique* text for the two
-//! load-bearing steps is what keeps that from being a weaker assertion than "the next one".
-//!
-//! ## What the DB row looks like afterwards
-//!
-//! vmangos's abandon is `CloseTicket`, which sets `closed_by` and `SaveToDB()`s — it does **not**
-//! delete the row (`GMTicketMgr.cpp:401-410`) — so step 6 leaves the row in place for the operator
-//! to read. `HandleGMTicketUpdateTextOpcode` calls `SetTicketType(packet.type)` as well as
-//! `SetMessage`, so after step 5 the row's `message` is the **edited** text while `map`/
-//! `position_*` still carry the create's values (the row is REPLACEd in place). Both `db-expect`
-//! lines say which is which.
-//!
-//! ## The run recipe
-//!
-//! ```text
-//! WOW_NOSOUND=1 WOW_USER=probe3 WOW_PASS=pprobe3 WOW_CHAR=Probethree \
-//!     WOW_PROBE_GMTICKET=1 cargo run -q -p benilla
-//! ```
-//! (the checkout's probe identity — `.probe-identity`, or WOW_USER/WOW_PASS/WOW_CHAR; the `probe`
-//! skill). Non-combat; the probe never drives the body and sends no
-//! GM command, so GM mode and position are left exactly as found — but note that the body is not
-//! necessarily *still* when a run starts (see [`REST_EPS`]). An outer `timeout` + grep on
-//! `PROBE_GMTICKET:` is the whole harness; the probe self-exits once DONE. Nothing here is a
-//! timing measurement, so an occluded window costs wall clock and no correctness.
-//!
-//! Every step SKIPs with a note rather than FAILing for an environmental problem (no UI VM in this
-//! build, the queue switched off server-side, a binding that would not run). A genuine wrong value
-//! is a FAIL.
+//! An environmental problem (no UI VM, the queue off, a binding that will not run) SKIPs; only a
+//! wrong value FAILs.
 
 use bevy::prelude::*;
 
@@ -113,58 +45,41 @@ use super::probes::ProbeClock;
 use crate::net::SelfPlayer;
 use crate::player::Player;
 
-/// `GMTicketCategory.dbc` id 4 = "Item" (decision 1673's table), which is vmangos's
-/// `GMTICKET_ITEM = 4` (`SharedDefines.h:1779`) — the same number on both sides, which is the
-/// point: the id is the wire value, not a list index.
+/// `GMTicketCategory.dbc` id 4, "Item", which is vmangos's `GMTICKET_ITEM`
+/// (`SharedDefines.h:1779`): the id is the wire value, not a list index.
 const CATEGORY_ITEM: u32 = 4;
 
-/// `SMSG_GMTICKETSYSTEMSTATUS`'s "the queue is taking tickets" (`GMTICKET_QUEUE_STATUS_ENABLED`).
-///
-/// The field is **signed** (`GmTicketState::queue_status`, byte-verified: the reference loads it
-/// with `fild dword`), so `-1` — the window's "queue down, and say so" arm — is a value this probe
-/// can legitimately read back. vmangos only ever sends 0 or 1.
+/// `SMSG_GMTICKETSYSTEMSTATUS`'s `GMTICKET_QUEUE_STATUS_ENABLED`. The field is signed (the
+/// reference fires it at `0x5e4689` through `%d`, a `fild dword` at `0x704fa6`), so the window's
+/// -1 arm is readable; vmangos sends 0 or 1.
 const QUEUE_ENABLED: f64 = 1.0;
 
-/// The `UPDATE_TICKET` `arg1` that means "you have no ticket" — the window's whole else-branch
-/// hangs on `arg1 and arg1 ~= 0`.
+/// The `UPDATE_TICKET` `arg1` for no ticket; the Help window tests `arg1 and arg1 ~= 0`.
 const NO_TICKET: f64 = 0.0;
 
-/// Settle before the first ask: lets the body land, the world stream, and any login-time
-/// `GetGMTicket()` the shipped Help window fires drain and answer before a baseline is latched.
+/// Settle before the first ask, so the Help window's login-time `GetGMTicket()` is answered before
+/// a baseline is latched.
 const SETTLE_SECS: f64 = 3.0;
 
-/// The gap between a write/delete and the `GetGMTicket()` that reads it back.
-///
-/// Not a correctness requirement — the drain preserves Lua's call order (module doc) — but a
-/// readability one: it keeps one exchange per trace line, so a step that fails names the exchange
-/// that failed rather than a batch of them.
+/// The gap between a write and its `GetGMTicket()` read-back; the drain keeps call order, so it
+/// only keeps one exchange per trace line.
 const WRITE_GAP_SECS: f64 = 1.0;
 
-/// How long a step waits for a matching answer before calling it. Generous on purpose: a starved
-/// (occluded) window polls at ~1 fps and a timeout tight enough to trip on that would report a
-/// FAIL about the wire, which is the one thing an instrument must never do.
+/// How long a step waits for a matching answer; generous, as an occluded window polls at ~1 fps.
 const ANSWER_TIMEOUT_SECS: f64 = 20.0;
 
-/// **The body must be at rest before the ticket is filed.** A ticket records *where you are*, and
-/// the first live run of this probe filed one while the body was still falling: it entered the
-/// world at z ≈ 94, the preflight banner read 82, and it was through 60 a second later — 21 yd of
-/// travel across the create. The row happened to match anyway (the drain sampled the same frame),
-/// but "happened to" is not a property an instrument may rest step 4 on, so the create now waits
-/// for the body to stop moving. Movement under [`REST_EPS`] yd for [`REST_HOLD_SECS`] counts as
-/// stopped.
+/// A ticket records the body's position, so the create waits for it to rest: under this many yd
+/// of movement for [`REST_HOLD_SECS`].
 const REST_EPS: f32 = 0.02;
 const REST_HOLD_SECS: f64 = 0.5;
-/// The cap on that wait. Timing out is not a failure — the probe files anyway and says the
-/// position may be off, because a body that genuinely cannot come to rest (a lift, a swim, a
-/// treadmill of terrain streaming) still has a working ticket wire to test.
+/// The cap on that wait; past it the probe files anyway and flags the position as approximate.
 const REST_TIMEOUT_SECS: f64 = 20.0;
 
-/// How far the body may have travelled between the position sample and the frame the drain stamps
-/// the packet, before the db-expect line stops being trustworthy (yd, WoW space).
+/// How far (yd) the body may move between the position sample and the frame the drain stamps the
+/// packet before the db-expect position is flagged.
 const STAMP_DRIFT_EPS: f32 = 0.05;
 
-/// The operator's half of step 4: the row to read back off the server's `characters` database,
-/// printed verbatim so it can be pasted into whatever reaches that database.
+/// Step 4's query against the server's `characters` database, printed for a manual check.
 const DB_QUERY: &str = "SELECT ticket_id, name, ticket_type, map, position_x, position_y, \
                         position_z, closed_by, message FROM gm_tickets ORDER BY ticket_id DESC \
                         LIMIT 1;";
@@ -178,26 +93,24 @@ impl Plugin for ProbeGmTicketPlugin {
     }
 }
 
-/// The probe's phase machine plus what it discovered along the way (the bank/binder probes' shape:
-/// a `Copy` phase snapshotted out of the resource each tick, so an arm can mutate `probe` freely).
+/// The probe's phase machine and what it discovered along the way.
 #[derive(Resource, Default)]
 struct GmTicketProbe {
     phase: Phase,
-    /// The text step 3 filed — unique per run, so no stale answer can satisfy step 3 by accident.
+    /// The text step 3 filed, unique per run so no stale answer satisfies it.
     create_text: String,
     /// The text step 5 edited it to.
     edit_text: String,
-    /// Map and WoW-space position sampled at the moment `NewGMTicket` was called — what the drain
-    /// stamps into `CMSG_GMTICKET_CREATE` in that frame or the next, and what the DB row must
-    /// carry.
+    /// Map and WoW-space position sampled at the `NewGMTicket` call, which the drain stamps into
+    /// `CMSG_GMTICKET_CREATE` that frame or the next.
     create_map: u32,
     create_pos: [f32; 3],
-    /// How far the body had travelled by the frame after the create call — the honest bound on
-    /// how wrong the db-expect position could be (`None` until that frame has been seen).
+    /// How far the body had moved by the frame after the create call: the db-expect position's
+    /// error bound.
     stamp_drift: Option<f32>,
     passes: u32,
     fails: u32,
-    /// Latched once [`Phase::Done`] has fired its exit (never re-fire on a later frame).
+    /// Latched once [`Phase::Done`] has fired its exit.
     exited: bool,
 }
 
@@ -205,7 +118,7 @@ struct GmTicketProbe {
 enum Phase {
     #[default]
     Wait,
-    /// Hook installed; settling before the first ask (module doc).
+    /// Hook installed; settling before the first ask.
     Settling {
         since: f64,
     },
@@ -223,8 +136,8 @@ enum Phase {
         since: f64,
         baseline: usize,
     },
-    /// Waiting for the body to stop moving before the ticket is filed ([`REST_EPS`]) — `last` is
-    /// the previous sample and `still_since` when it was last seen to move.
+    /// Waiting for the body to rest; `last` is the previous sample, `still_since` when it last
+    /// moved.
     Rest {
         since: f64,
         last: [f32; 3],
@@ -243,7 +156,7 @@ enum Phase {
     EditGap {
         since: f64,
     },
-    /// `GetGMTicket()` called; waiting for the *new* text (step 5b).
+    /// `GetGMTicket()` called; waiting for the new text (step 5b).
     EditGet {
         since: f64,
         baseline: usize,
@@ -260,10 +173,8 @@ enum Phase {
     Done,
 }
 
-/// The `UPDATE_TICKET` answers the live VM has seen, newest last, as `(arg1, arg2)` — the category
-/// (0 for "no ticket") and the description. `arg2` is recorded as `""` whenever `arg1` is 0, since
-/// the no-ticket fire carries a single argument and reading a second one would be reading whatever
-/// the global happened to hold.
+/// The `UPDATE_TICKET` answers seen, newest last, as `(category, text)`. The text is `""` when the
+/// category is 0: that fire carries one argument, and `arg2` would be stale.
 fn ticket_answers(script: &UiScript) -> Vec<(f64, String)> {
     let cats = script
         .eval::<Vec<f64>>("return ProbeGmTicketCat or {}")
@@ -281,10 +192,7 @@ fn status_answers(script: &UiScript) -> Vec<f64> {
         .unwrap_or_default()
 }
 
-/// The first answer after `baseline` that satisfies `want` — the module doc's match-or-timeout
-/// rule. Answers are not correlated to asks, so "the next event" is not a safe read; "any answer
-/// after the baseline that matches" is, and the timeout is what turns a never-matching stream into
-/// a FAIL that prints everything it saw.
+/// The first answer after `baseline` that satisfies `want`; answers are not correlated to asks.
 fn matching<T>(answers: &[T], baseline: usize, want: impl Fn(&T) -> bool) -> Option<usize> {
     answers
         .iter()
@@ -294,9 +202,7 @@ fn matching<T>(answers: &[T], baseline: usize, want: impl Fn(&T) -> bool) -> Opt
         .map(|(i, _)| i)
 }
 
-/// A unique-per-run ticket text, so no stale or unsolicited answer can satisfy steps 3/5 by
-/// accident. Seconds resolution is plenty — two runs cannot start in the same second and reach the
-/// same step, and the suffix distinguishes the two texts within a run.
+/// A ticket text unique per run (to the second); the suffix tells a run's two texts apart.
 fn unique_text(suffix: &str) -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -318,15 +224,14 @@ fn gm_ticket_probe(
         return; // not in-world yet
     }
     let Some(script) = script else {
-        return; // no UI VM this build (headless net-only) — nothing this probe can drive
+        return; // no UI VM in a headless build
     };
     let now = time.elapsed_secs_f64();
     let phase = probe.phase;
 
     match phase {
         Phase::Wait => {
-            // The observation channel, installed before anything is asked so it is live for every
-            // answer including the unsolicited ones (the binder probe's exact pattern).
+            // The hook goes in before any ask, so it sees the unsolicited answers too.
             if let Err(e) = script.run(
                 r#"
                 if not ProbeGmTicketHooked then
@@ -353,9 +258,7 @@ fn gm_ticket_probe(
                 end
                 "#,
             ) {
-                // Without the hook nothing can be observed, and every step would then FAIL for a
-                // reason that has nothing to do with the wire. That is the one failure mode an
-                // instrument must never produce, so it stops here instead.
+                // Without the hook nothing is observable, so stop rather than FAIL every step.
                 warn!(
                     "PROBE_GMTICKET: SKIP (0 hook) — the UPDATE_TICKET/UPDATE_GM_STATUS hook would \
                      not install in the live VM: {e}. Nothing can be observed, so no step below \
@@ -382,7 +285,7 @@ fn gm_ticket_probe(
             };
         }
 
-        // Step 1 — the queue status. No event at all means the round trip is dead.
+        // Step 1, the queue status: no event at all means the round trip is dead.
         Phase::Queue { since, baseline } => {
             let seen = status_answers(&script);
             let Some(i) = matching(&seen, baseline, |_| true) else {
@@ -424,8 +327,8 @@ fn gm_ticket_probe(
             probe.phase = Phase::CleanGap { since: now };
         }
 
-        // Step 2 — the clean slate. The delete is deliberately NOT waited on: with no ticket
-        // vmangos answers it with nothing at all.
+        // Step 2, the clean slate. The delete is not waited on: with no ticket vmangos sends
+        // nothing.
         Phase::CleanGap { since } => {
             if now - since < WRITE_GAP_SECS {
                 return;
@@ -465,8 +368,7 @@ fn gm_ticket_probe(
             }
         }
 
-        // The rest gate: a ticket records where you are, so file it from a body that has stopped
-        // moving (module doc — the first live run filed one mid-fall).
+        // The rest gate: a ticket records the position, so file it from a body at rest.
         Phase::Rest {
             since,
             last,
@@ -507,13 +409,10 @@ fn gm_ticket_probe(
             probe.phase = Phase::CreateGap { since: now };
         }
 
-        // Step 3 — the load-bearing one: the create body's layout, proven by the echo.
+        // Step 3: the create body's layout, proven by the echo.
         Phase::CreateGap { since } => {
-            // The first tick after the create call is the last frame in which the drain can still
-            // stamp the packet, so this is the whole window in which the body could move between
-            // the sample and the wire. Measuring it here — rather than a second later, at the
-            // db-expect print — is the difference between an honest bound and crying wolf at a
-            // body that simply kept falling after the packet had already gone.
+            // The first tick after the create call is the last frame the drain can stamp the
+            // packet in, so the drift is measured here and not at the later db-expect print.
             if probe.stamp_drift.is_none() {
                 let drift = distance(bevy_to_wow(player.pos), probe.create_pos);
                 probe.stamp_drift = Some(drift);
@@ -592,7 +491,7 @@ fn gm_ticket_probe(
             }
         }
 
-        // Step 5 — the edit, and with it the category byte on CMSG_GMTICKET_UPDATETEXT.
+        // Step 5: the edit, and with it the category byte on CMSG_GMTICKET_UPDATETEXT.
         Phase::EditGap { since } => {
             if now - since < WRITE_GAP_SECS {
                 return;
@@ -609,8 +508,7 @@ fn gm_ticket_probe(
         Phase::EditGet { since, baseline } => {
             let seen = ticket_answers(&script);
             let want = probe.edit_text.clone();
-            // Equality, never `contains`: a leading control byte in the stored text is precisely
-            // the cmangos-style failure this step exists to catch (decision 1673's divergence).
+            // Equality, never `contains`: a stray leading byte is the failure this step catches.
             if let Some(i) = matching(&seen, baseline, |(_, t)| *t == want) {
                 let (cat, text) = &seen[i];
                 info!(
@@ -643,8 +541,7 @@ fn gm_ticket_probe(
             }
         }
 
-        // Step 6 — abandon. vmangos keeps the row (CloseTicket → closed_by + SaveToDB), so the
-        // operator's SQL still finds it afterwards.
+        // Step 6, abandon. vmangos's `CloseTicket` keeps the row, so step 4's query still finds it.
         Phase::AbandonGap { since } => {
             if now - since < WRITE_GAP_SECS {
                 return;
@@ -690,9 +587,7 @@ fn gm_ticket_probe(
                 "PROBE_GMTICKET: DONE pass={} fail={}",
                 probe.passes, probe.fails
             );
-            // The probe self-exit pattern (`ProbeExitPlugin::fire_probe_exit`): a polite AppExit
-            // plus a hard backstop thread, so a net/winit teardown hang can't leave a zombie
-            // client holding the probe account.
+            // AppExit plus a hard-exit backstop, so a teardown hang cannot keep the account held.
             exit.write(AppExit::Success);
             std::thread::spawn(|| {
                 std::thread::sleep(std::time::Duration::from_secs(5));
@@ -703,10 +598,8 @@ fn gm_ticket_probe(
     }
 }
 
-/// Run one binding in the live VM, or SKIP the whole probe with the reason.
-///
-/// A binding that will not run is environmental (no VM, a broken chunk) — never a wire verdict —
-/// so it must not print a FAIL. Returns `false` once the probe has been parked in [`Phase::Done`].
+/// Runs one binding in the live VM, or SKIPs the whole probe and returns `false`: a binding that
+/// will not run is environmental, never a wire verdict.
 fn run_or_skip(probe: &mut GmTicketProbe, script: &UiScript, step: &str, chunk: &str) -> bool {
     match script.run(chunk) {
         Ok(()) => {
@@ -724,13 +617,8 @@ fn run_or_skip(probe: &mut GmTicketProbe, script: &UiScript, step: &str, chunk: 
     }
 }
 
-/// Print step 4's half of the check: exactly what the DB row must carry.
-///
-/// The position is the one sampled at the `NewGMTicket` call — what the drain stamps into the
-/// packet, in that frame or the next. How much the body could have moved inside that window is
-/// measured once, at the frame after the call, and reported here as `drift=`; a value at or under
-/// [`STAMP_DRIFT_EPS`] means the line is exact. The map id and `ticket_type` are exact regardless.
-/// **Nothing here is a PASS** — the row is the operator's to read.
+/// Prints what step 4's DB row must carry. `drift=` bounds the position's error; at or under
+/// [`STAMP_DRIFT_EPS`] it is exact, and the map id and `ticket_type` are always exact.
 fn report_db_expectation(probe: &GmTicketProbe, when: &str, message: &str) {
     let [x, y, z] = probe.create_pos;
     info!(
@@ -750,9 +638,8 @@ fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
 mod tests {
     use super::*;
 
-    /// The match-or-timeout rule: a step accepts **any** answer after its baseline that matches,
-    /// because unsolicited answers (a GM's `.ticket viewid`, vmangos's own post-delete push) share
-    /// the stream with the solicited ones. It must never accept one from *before* the baseline.
+    /// Unsolicited answers share the stream, so any match after the baseline counts, never one
+    /// before it.
     #[test]
     fn a_step_matches_after_its_baseline_and_never_before_it() {
         let answers = vec![
@@ -764,14 +651,12 @@ mod tests {
         assert_eq!(matching(&answers, 0, |(_, t)| t == "mine"), Some(1));
         // Baseline past the first match: the later identical answer is the one taken.
         assert_eq!(matching(&answers, 2, |(_, t)| t == "mine"), Some(3));
-        // Nothing after the baseline matches — the caller's timeout is what turns this into a
-        // FAIL, and it must not be papered over by an earlier answer.
+        // Nothing after the baseline matches, and an earlier answer must not count.
         assert_eq!(matching(&answers, 4, |(_, t)| t == "mine"), None);
         assert_eq!(matching(&answers, 2, |(c, _)| *c == NO_TICKET), Some(2));
     }
 
-    /// The two texts within a run are distinct — step 5's assertion is "the text CHANGED to this",
-    /// and it would be vacuous if the edit reused the create's string.
+    /// Step 5 asserts the text changed, which needs the edit's text to differ from the create's.
     #[test]
     fn the_create_and_edit_texts_are_distinct() {
         assert_ne!(unique_text(""), unique_text(" edited"));

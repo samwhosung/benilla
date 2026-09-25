@@ -1,54 +1,17 @@
-//! The **unit-visual census** (`WOW_UNIT_VISUALS=<secs>[,<every>]`) — the instrument that closes
-//! B13's symptom: *"the invisible trigger NPC displays as a black block"*.
+//! `WOW_UNIT_VISUALS=<secs>[,<every>]`: per streamed entity, which visual its display got. A debug
+//! cube means no model we could load; an invisible trigger creature has a model that draws nothing
+//! in the reference, and should draw nothing here.
 //!
-//! Every site of that bug arrived as a screenshot of a black slab, and a screenshot cannot say
-//! which of the two things a slab is. Both look identical and they call for opposite fixes:
+//! - `cube`: the [`FallbackCube`] marker; `cubes=` on the summary counts them.
+//! - `meshes`: direct render children, the body's own batches; `cube=0 meshes=0` is a trigger.
+//! - `held`: attach slots on the skeleton ([`HeldAttached::spawned_slots`]), which `meshes`
+//!   misses since an attached model is a grandchild.
+//! - `pick`: parts the mouseover ray-tests across [`crate::target::hover::pick_model_roots`], or
+//!   fallback-box children; `pick=0` is selectable only by nameplate.
+//! - `PENDING`: a visual not built yet, as opposed to one that built nothing.
 //!
-//! - the entity's display named **no model we could load** — a gap of ours, and the cube is the
-//!   debug signal that says so (it renders black rather than its authored red only because an
-//!   unlit `StandardMaterial` catches no light in our scene);
-//! - the entity's display named a model which **draws nothing** — how an invisible trigger
-//!   creature hides in the real client, and nothing should be drawn at all.
-//!
-//! One line per streamed entity says which, without an eye:
-//!
-//! ```text
-//! UVIS 0xF130003A7200013B Unit  display=13069 d=6.4  cube=1 meshes=0 pick=1 held=[] Zandalarian Event Generator
-//! ```
-//!
-//! - **`cube`** is the [`FallbackCube`] marker — literally the arm that spawned it, not a guess
-//!   from the picture. The headline `cubes=` count is the number that names the bug.
-//! - **`meshes`** counts the entity's spawned render children — the BODY's own batches. `cube=0
-//!   meshes=0` is the *correct* reading for a trigger creature: attached, and drawing nothing.
-//! - **`held`** is the attach-slot list actually hanging off its skeleton
-//!   ([`HeldAttached::spawned_slots`], the dress census's own reader). It is here because
-//!   `meshes` counts *direct* children and an attached model is a grandchild, so a unit whose
-//!   whole visible self is a held weapon — the Naxxramas `Unholy Axe`, an `InvisibleStalker` body
-//!   with an axe in its hand — reads `meshes=0` whether the axe is there or not. That blind spot
-//!   is what let decision 1656's defect sit under a green census; `held=[main]` is the line that
-//!   says the weapon arrived.
-//! - **`pick`** counts the parts the **mouseover** would actually ray-test — every skinned part
-//!   across the unit's chained model roots ([`crate::target::hover::pick_model_roots`]: the body,
-//!   everything it wears, its mount), plus its fallback-box children where it has no skinned parts
-//!   at all. `pick=0` means the unit cannot be hovered or clicked *at all* and only its name plate
-//!   can select it — which is the second half of what the Naxxramas weapon mobs reported and what
-//!   neither `meshes` nor `held` could say: `held=[main]` proves the axe is *attached*, never that
-//!   it is *clickable*.
-//! - **`pending`** marks an entity whose visual has not been built yet (a model still streaming) —
-//!   never to be confused with one that built nothing, which is the distinction the census exists
-//!   to keep.
-//!
-//! Pair it with the checkout's probe identity (the `probe` skill) and a `.go` to the reported spot:
-//!
-//! ```text
-//! WOW_USER=probeN WOW_PASS=pprobeN WOW_CHAR=Probe<n> WOW_NOSOUND=1 \
-//!   WOW_PROBE_CHAT=".go xyz -11847.0 1280.9 3.2 0" \
-//!   WOW_UNIT_VISUALS="45,15" WOW_PROBE_EXIT_AT=90 cargo run -q -p benilla
-//! ```
-//!
-//! The repeat form is the load-race half: a census at 45 s and again at 60 s says whether a `cube`
-//! is a *verdict* or just an entity whose model had not landed yet — the same transient-vs-ratchet
-//! separation `WOW_GROUND_CENSUS` makes for the under-floor report.
+//! The repeat form tells a transient cube from a stuck one. How to run it: `docs/CONTRIBUTING.md`,
+//! "Running it unattended".
 
 use benilla_assets::coords::bevy_to_wow;
 use benilla_protocol::EntityKind;
@@ -60,9 +23,7 @@ use crate::names::NameCache;
 use crate::net::{Guid, NetEntity, SelfPlayer};
 use crate::target::hover::pick_model_roots;
 
-/// How far from the body the census looks, in yards. Comfortably past the server's own creature
-/// visibility radius for a spot the operator has just `.go`ne to, so "nothing found" means the
-/// scene is empty rather than the window being tight.
+/// Census radius in yards, past the server's visibility radius; `WOW_UNIT_VISUALS_RADIUS` sets it.
 const DEFAULT_RADIUS: f32 = 120.0;
 
 pub(crate) struct UnitVisualsPlugin;
@@ -88,8 +49,7 @@ impl Plugin for UnitVisualsPlugin {
     }
 }
 
-/// [`UnitVisualsPlugin`] state: when the next census fires, how often after that (`0` = once), and
-/// how far from the body to look.
+/// [`UnitVisualsPlugin`] state; `every` of 0 fires once.
 #[derive(Resource)]
 struct UnitVisuals {
     next: f32,
@@ -97,8 +57,7 @@ struct UnitVisuals {
     radius: f32,
 }
 
-/// What the census reads per entity: identity, kind + display, pose, and whether its visual has
-/// been built yet.
+/// What the census reads per entity.
 type VisualQuery = (
     Entity,
     &'static Guid,
@@ -106,20 +65,15 @@ type VisualQuery = (
     &'static Transform,
     Option<&'static Children>,
     Has<VisualAttached>,
-    // The attach slots standing under this unit — the visual truth for everything that rides a
-    // BONE rather than the entity, which `Children` above cannot see.
+    // The attach slots on this unit's bones, which `Children` does not reach.
     Option<&'static HeldAttached>,
-    // …and its mount, the third chained-model root the pick offers.
+    // Its mount, the third chained-model root the pick offers.
     Option<&'static crate::entities::mount::MountChild>,
-    // The descriptor, read for exactly one thing here: which half of the corpse fork a
-    // `TYPEID_CORPSE` row is on. A corpse has no name-cache entry, so without this
-    // every corpse row reads `Corpse … ?` and cannot say whether `meshes=0` means "the bone-pile
-    // model is missing" or "the dressed body is missing" — opposite findings.
+    // For a `TYPEID_CORPSE`, which has no name: bone pile or dressed body.
     Option<&'static crate::net::ObjectStore>,
 );
 
-/// One line per streamed entity within [`UnitVisuals::radius`] of the body — cubes first, then
-/// everything else — under a summary line naming the count that matters.
+/// One line per streamed entity within [`UnitVisuals::radius`], cubes first, under a summary line.
 fn fire_unit_visuals(
     mut probe: ResMut<UnitVisuals>,
     time: ProbeClock,
@@ -128,8 +82,8 @@ fn fire_unit_visuals(
     entities: Query<VisualQuery>,
     cubes: Query<(), With<FallbackCube>>,
     meshes: Query<(), With<Mesh3d>>,
-    // The pick's own populations, read exactly as `update_hover` reads them: the skinned parts of
-    // each chained model root (pass 1/2) and, for a unit with none, its fallback-box children.
+    // The pick's populations as `update_hover` reads them: skinned parts per chained model root,
+    // else fallback-box children.
     child_sets: Query<&Children>,
     rig_parts: Query<(), With<benilla_world::rig_palette::RigPart>>,
     box_parts: Query<(), With<benilla_world::interact::CreaturePickPart>>,
@@ -149,8 +103,7 @@ fn fire_unit_visuals(
     };
     let radius2 = probe.radius * probe.radius;
 
-    // `(is_cube, sort key, line)`. Cubes sort to the top: they are the finding, and a busy city
-    // census is long.
+    // `(is_cube, sort key, line)`; cubes sort first.
     let mut rows: Vec<(bool, i64, String)> = Vec::new();
     let (mut cube_n, mut blank_n, mut pending_n) = (0u32, 0u32, 0u32);
     let mut cube_displays: Vec<u32> = Vec::new();
@@ -166,7 +119,7 @@ fn fire_unit_visuals(
             cube |= cubes.contains(kid);
             mesh_n += u32::from(meshes.contains(kid));
         }
-        // A cube IS a mesh child; count it as the cube it is so `meshes` reads as real geometry.
+        // The cube is a mesh child; exclude it so `meshes` counts real geometry.
         mesh_n = mesh_n.saturating_sub(u32::from(cube));
         let display = net.display_id.unwrap_or(0);
         if !attached {
@@ -179,10 +132,8 @@ fn fire_unit_visuals(
         } else if mesh_n == 0 {
             blank_n += 1;
         }
-        // What the mouseover would test. The enumeration is the picker's own
-        // ([`pick_model_roots`]) so the census can never report a set the pick doesn't use; the
-        // fallback-box leg mirrors `update_hover`'s AABB path, which owns exactly the units the
-        // skinned path does not.
+        // What the mouseover tests, via the picker's own [`pick_model_roots`]; the fallback-box
+        // leg mirrors `update_hover`'s AABB path for units with no skinned parts.
         let worn = held.map_or(&[][..], |h| h.spawned_slots().as_slice());
         let mut pick_n: u32 = pick_model_roots(entity, worn, mount.map(|m| m.0))
             .filter_map(|root| child_sets.get(root).ok())
@@ -218,7 +169,7 @@ fn fire_unit_visuals(
                 u8::from(cube),
                 held.join(","),
                 if attached { "attached" } else { "PENDING" },
-                // The name, or — for a corpse, which never has one — which fork it took.
+                // The name, or for a corpse which fork it took.
                 match (net.kind, store) {
                     (EntityKind::Corpse, Some(s)) if s.0.corpse_is_bones() => "<bones>",
                     (EntityKind::Corpse, Some(_)) => "<corpse body>",

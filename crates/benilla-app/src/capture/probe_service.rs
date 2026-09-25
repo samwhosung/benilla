@@ -1,17 +1,9 @@
-//! The **NPC-service ladder** live probe (`WOW_PROBE_SERVICE=1`) — decision 1861's end-to-end
-//! instrument, and the answer to "does right-clicking a trainer or a quest giver really open their
-//! window instead of a gossip menu?".
-//!
-//! 1861 replaced a cursor-kind dispatch with the reference's own first-match-wins walk over
-//! `UNIT_NPC_FLAGS` ([`crate::target::click::service_arm`]; `0x5f0130`). **Bit 0 (GOSSIP) is
-//! tested first**, so the flag — not the profession — decides: a trainer or questgiver that also
-//! carries GOSSIP still opens a gossip menu, and only a flagless one opens its own window. That
-//! precedence is the whole question, and it is invisible to a unit test: the bits come off the
-//! wire, and what appears on screen is the *server's* answer to the opcode the ladder picked.
-//!
-//! So the probe walks four real Northshire/Stormwind NPCs, one per interesting flag shape, and for
-//! each one reports the wire's `UNIT_NPC_FLAGS`, the arm the shipped ladder takes, the opcode it
-//! sends, and which window actually opened:
+//! The NPC-service live probe (`WOW_PROBE_SERVICE=1`): does right-clicking a trainer or a quest
+//! giver open their window rather than a gossip menu? The click walks `UNIT_NPC_FLAGS` first
+//! match wins ([`crate::target::click::service_arm`]; `0x5f0130`), bit 0 (GOSSIP) first, so a
+//! trainer or questgiver that also carries GOSSIP opens a gossip menu. The probe hops to four real
+//! NPCs, calls the shipped `service_arm`/`service_action` on the wire's flags and
+//! [`QuestGiver::status`], and reports the arm, the opcode and the window that opened:
 //!
 //! | NPC | `npc_flags` | arm | window |
 //! |---|---|---|---|
@@ -20,37 +12,16 @@
 //! | *any pure questgiver with an offer* | `0x02`, GOSSIP clear | Questgiver | quest frame |
 //! | Alma Jainrose (812) | `0x10` TRAINER only | Trainer | trainer frame |
 //!
-//! The flag column is live-DB verified against the local vmangos (`mangos`,
-//! `SELECT entry, name, npc_flags FROM creature_template`), and reported again from the wire on
-//! every run — a template edit shows up as a note beside the reading rather than as a mystery FAIL.
+//! The pure-questgiver row is found by predicate: the bit-1 arm is gated on the quest status
+//! (`[unit+0xcb8] ∉ {0,1}`), which depends on what the character has turned in, so the leg takes
+//! the first streamed unit with QUESTGIVER, no GOSSIP and an offer, and SKIPs if there is none.
+//! Each leg also checks that the re-click gate arms with the window. A last leg forks the pure
+//! vendor: an empty cursor opens the list, a held item sells.
 //!
-//! **The ladder is called, never re-implemented.** The probe reads the same two inputs the click
-//! reads (`ObjectStore::unit_npc_flags` and [`QuestGiver::status`]) and calls the shipped
-//! `service_arm`/`service_action`; only the mouse hit-test and the cursor's range gray sit outside
-//! it. A private copy of the bit table is exactly how a probe goes quietly stale (the B249 icon
-//! map), so there isn't one.
-//!
-//! **The pure-questgiver row is found by predicate, not by entry.** Whether Deputy Willem has
-//! anything for *this* probe character depends on what it has already turned in, and the bit-1 arm
-//! is gated on that status (`[unit+0xcb8] ∉ {0,1}`). So that leg hops into Northshire and takes the
-//! first streamed unit that is QUESTGIVER, not GOSSIP, and actually has an offer — reporting which
-//! one it picked. If the character has cleared the whole valley it SKIPs and says so.
-//!
-//! One `PROBE_SERVICE: <leg> PASS/FAIL/SKIP <detail>` line per leg, then a final
-//! `PROBE_SERVICE: DONE pass=<n> fail=<m> skip=<k>`. A wrong arm or a wrong window is a FAIL; an
-//! environmental problem (the `.go` refused, the NPC never streamed, no offer left in the valley)
-//! is a SKIP with the reason.
-//!
-//! ## The run recipe
-//!
-//! ```text
-//! WOW_DATA=WoW/Data WOW_USER=probe4 WOW_PASS=pprobe4 WOW_CHAR=Probefour \
-//!     WOW_UNATTENDED=1 WOW_PROBE_SERVICE=1 cargo run -q -p benilla
-//! ```
-//! (the checkout's probe identity (`.probe-identity`, or WOW_USER/WOW_PASS/WOW_CHAR — the `probe` skill)). Non-combat, GM mode
-//! left as found, nothing bought and nothing turned in: every leg opens a window and closes it
-//! client-side, which is what the reference's own close does (`ui_gossip`: there is no
-//! `CMSG_GOSSIP_CLOSE` in 1.12).
+//! One `PROBE_SERVICE: <leg> PASS/FAIL/SKIP <detail>` line per leg, then `PROBE_SERVICE: DONE
+//! pass=<n> fail=<m> skip=<k>`. A wrong arm or window FAILs; an environmental problem SKIPs.
+//! Non-combat; each window is closed client-side, as the reference's own close is (1.12 has no
+//! `CMSG_GOSSIP_CLOSE`). The switches are `docs/CONTRIBUTING.md`, "Running it unattended".
 
 use bevy::prelude::*;
 
@@ -69,56 +40,38 @@ use crate::ui_quest::QuestGiver;
 use crate::ui_session::InteractNpc;
 use crate::ui_trainer::TrainerOpen;
 
-/// How wide to look around a `.go` landing for the leg's NPC — **and no wider than the reference's
-/// own service reach**, because the click cannot act past it either: beyond
-/// [`crate::target::SERVICE_RANGE_SQ`] (5.5556 yd, `0xc4c28c`/`0xb4b32c`) the cursor goes gray, the
-/// click sends nothing, and vmangos's `GetNPCIfCanInteractWith` refuses the opcode silently.
-///
-/// This constant is the reason the questgiver leg first read as a client defect: its hop point was
-/// an invented Northshire "hub" ~29 yd from Deputy Willem, so the probe called a ladder the click
-/// would never have reached, the server dropped the packet on its own distance check, and the
-/// timeout printed a FAIL about the client (docs/METHOD.md §6 — prove the run before reading the
-/// result). Every hop point is now an NPC's own spawn, and the scan re-checks the reach.
+/// How wide to look around a `.go` landing: the reference's service reach,
+/// [`crate::target::SERVICE_RANGE_SQ`] (5.5556 yd, `0xc4c28c`/`0xb4b32c`). Past it the cursor goes
+/// gray, the click sends nothing, and vmangos's `GetNPCIfCanInteractWith` refuses silently.
 const SCAN_RANGE_SQ: f32 = crate::target::SERVICE_RANGE_SQ;
 /// Let the hop land and the tile stream before the first scan.
 const SETTLE_SECS: f64 = 3.0;
 /// How long a leg waits for its NPC to stream in before calling the hop environmental.
 const SCAN_TIMEOUT_SECS: f64 = 20.0;
-/// How long a leg waits for its window after the opcode goes out. Generous for the same reason the
-/// binder probe's is: the observer is starved during a terrain load, never the wire.
+/// How long a leg waits for its window after the opcode goes out; a terrain load starves the
+/// observer, not the wire.
 const WINDOW_TIMEOUT_SECS: f64 = 20.0;
-/// How long the re-click gate's latch may lag the window it belongs to.
-///
-/// It no longer lags by construction: `feed_interact_npc` is seated after the net apply since
-/// decision 2022, so the token arms on the very frame the window opens. It USED to be allowed to
-/// lag a frame (`ui_session` was "deliberately unordered" against the apply, on decision 1741's
-/// reading that a window's first frame is invisible) — and "one frame" and "never" are the same
-/// reading if you sample once, which is exactly what the first run of this assert did: it failed
-/// the quest and trainer legs, whose windows open on the packet, and passed the gossip legs only
-/// because the gossip frame holds shut for several frames waiting on its greeting query.
-/// The poll stays for the other reason a single sample lies — a starved observer during a terrain
-/// load — and prints how long the latch actually took.
+/// How long the re-click gate's latch may lag its window. `feed_interact_npc` runs after the net
+/// apply, so the token arms on the window's own frame; the poll covers a starved observer and
+/// reports the lag.
 const GATE_TIMEOUT_SECS: f64 = 3.0;
 
-/// **The vendor fork's leg** — Brother Danil, `creature_template.entry = 152`,
-/// `npc_flags = 4` (VENDOR and nothing else, so the ladder cannot reach him by any other arm),
-/// spawned in Northshire at his own `creature.position_*` (live-DB verified this session).
+/// The vendor fork's NPC: Brother Danil (entry 152), `npc_flags` 4, vendor only, so no other arm
+/// reaches him; at his own Northshire spawn.
 const VENDOR_ENTRY: u32 = 152;
 const VENDOR_AT: [f32; 3] = [-8901.59, -112.716, 82.0314];
 const VENDOR_MAP: u32 = 0;
-/// Tough Jerky — a 1-copper vendor trash item, `.additem`'d so the sell leg has something of its
-/// own to sell and never touches whatever the probe character was already carrying.
+/// Tough Jerky, a 1-copper item `.additem`ed so the sell leg sells only its own copy.
 const SELL_ITEM_ENTRY: u32 = 117;
 /// How long to wait for `.additem` to land in a bag, and for the sold item to leave it.
 const BAG_TIMEOUT_SECS: f64 = 20.0;
 
 /// Which NPC a leg is looking for.
 enum Ident {
-    /// A specific `creature_template.entry` — the identity check that cannot be confused by a
-    /// neighbour who happens to share a flag.
+    /// A specific `creature_template.entry`, which a neighbour sharing a flag cannot match.
     Entry(u32),
-    /// The bit-1 arm's own shape: QUESTGIVER set, GOSSIP clear, and an offer live for THIS
-    /// character (`SMSG_QUESTGIVER_STATUS` ∉ {0,1}) — see the module doc.
+    /// The bit-1 arm's shape: QUESTGIVER set, GOSSIP clear, and an offer live for this character
+    /// (`SMSG_QUESTGIVER_STATUS` ∉ {0,1}).
     PureQuestgiverWithOffer,
 }
 
@@ -136,20 +89,17 @@ struct Leg {
     name: &'static str,
     ident: Ident,
     map: u32,
-    /// The spawn points to try, in order — each an NPC's own `creature.position_*`, so the landing
-    /// is inside the service reach. A leg with several is one whose subject depends on what this
-    /// character has already turned in (the questgiver leg); it moves to the next candidate when
-    /// the one it hopped to has nothing to offer.
+    /// The spawn points to try, in order, each an NPC's own position so the landing is inside the
+    /// service reach; the next is tried when one has nothing to offer.
     at: &'static [[f32; 3]],
-    /// `creature_template.npc_flags` as the world DB held it when this probe was written — printed
-    /// beside the wire's value so a template edit reads as a note rather than a mystery.
+    /// `creature_template.npc_flags` in the world DB, printed beside the wire's value.
     db_flags: u32,
     want_arm: ServiceArm,
     want_window: Window,
 }
 
-/// The four flag shapes worth a live reading (module doc's table). Northshire first — three of the
-/// four legs share one hop's worth of terrain — then the Stormwind first-aid trainer.
+/// The four flag shapes worth a live reading (the module doc's table): Northshire, then the
+/// Stormwind first-aid trainer.
 const LEGS: &[Leg] = &[
     Leg {
         name: "Marshal McBride — GOSSIP|QUESTGIVER",
@@ -173,8 +123,8 @@ const LEGS: &[Leg] = &[
         name: "a pure questgiver with an offer — QUESTGIVER, no GOSSIP",
         ident: Ident::PureQuestgiverWithOffer,
         map: 0,
-        // Deputy Willem (823), Eagan Peltskinner (196), Falkhaan Isenstrider (6774) — the three
-        // pure questgivers of Northshire, each at its own spawn (live-DB verified this session).
+        // Northshire's three pure questgivers at their own spawns: Deputy Willem, Eagan
+        // Peltskinner and Falkhaan Isenstrider (entries 823, 196, 6774).
         at: &[
             [-8933.54, -136.523, 83.4466],
             [-8869.22, -163.237, 80.9719],
@@ -210,14 +160,10 @@ struct ServiceProbe {
     passes: u32,
     fails: u32,
     skips: u32,
-    /// How many frames the current scan actually got to poll in. A starved observer and a missing
-    /// NPC look identical in a SKIP line otherwise — and on a loaded machine the first is far more
-    /// likely: at load 61 this probe logged `frame hitch: ~1010 ms` on repeat (the ~1 fps regime
-    /// decisions 0713/0777/1355 name) and its 20-second scan window bought about twenty samples.
-    /// A leg runner answers the same problem with a load guard (1157); a probe that does one thing and
-    /// exits is better served by reporting what it actually got.
+    /// How many frames the current scan got to poll in, so a SKIP tells a starved observer from a
+    /// missing NPC.
     polls: u32,
-    /// Latched once [`Phase::Done`] has fired its exit (never re-fire on a later frame).
+    /// Latched once [`Phase::Done`] has fired its exit.
     exited: bool,
 }
 
@@ -238,19 +184,18 @@ enum Phase {
         since: f64,
         guid: u64,
     },
-    /// The window is open; waiting for the re-click gate's `"npc"` token to name its NPC.
-    /// Its own phase because the latch is allowed to lag the window by a frame —
-    /// see [`GATE_TIMEOUT_SECS`].
+    /// The window is open; waiting for the re-click gate's `"npc"` token to name its NPC (see
+    /// [`GATE_TIMEOUT_SECS`]).
     Gate {
         i: usize,
         since: f64,
         guid: u64,
     },
-    /// The vendor fork's own chain — `.go` to the pure vendor.
+    /// The vendor fork's own chain: `.go` to the pure vendor.
     VendorHop {
         sent_at: f64,
     },
-    /// The EMPTY-cursor leg: `CMSG_LIST_INVENTORY` sent, waiting for the merchant window.
+    /// The empty-cursor leg: `CMSG_LIST_INVENTORY` sent, waiting for the merchant window.
     VendorOpen {
         since: f64,
         guid: u64,
@@ -260,7 +205,7 @@ enum Phase {
         since: f64,
         guid: u64,
     },
-    /// The HELD-cursor leg: `CMSG_SELL_ITEM` sent, waiting for the slot to empty.
+    /// The held-cursor leg: `CMSG_SELL_ITEM` sent, waiting for the slot to empty.
     VendorSell {
         since: f64,
         bag: i64,
@@ -269,9 +214,7 @@ enum Phase {
     Done,
 }
 
-/// The bag slot holding [`SELL_ITEM_ENTRY`], as `"bag,slot"`, or `""` — asked of the live VM
-/// through the same bindings a player's bag UI uses, so the probe never needs its own view of the
-/// container fields.
+/// The bag slot holding [`SELL_ITEM_ENTRY`], asked of the live VM through the bag UI's bindings.
 fn find_item_slot(script: &UiScript) -> Option<(i64, u32)> {
     let found = script
         .eval::<String>(&format!(
@@ -288,8 +231,7 @@ fn find_item_slot(script: &UiScript) -> Option<(i64, u32)> {
     Some((b.parse().ok()?, s.parse().ok()?))
 }
 
-/// A flag word as the log wants it — the hex plus the bit names, so a reader never has to decode
-/// `0x13` by hand.
+/// A flag word as hex plus bit names.
 fn flag_names(flags: u32) -> String {
     const NAMES: [(u32, &str); 14] = [
         (f::GOSSIP, "GOSSIP"),
@@ -318,15 +260,15 @@ fn flag_names(flags: u32) -> String {
     }
 }
 
-/// Which window is open on `guid`, if any — the observation every leg is judged on.
+/// Which window is open on `guid`, if any.
 fn open_window(
     guid: u64,
     gossip: &GossipState,
     giver: &QuestGiver,
     trainer: &TrainerOpen,
 ) -> Option<Window> {
-    // The gossip frame does not open on the packet: it holds closed until the greeting's
-    // `CMSG_NPC_TEXT_QUERY` answers (B292's hold, `ui_gossip`), so the greeting is part of "open".
+    // The gossip frame stays closed until the greeting's `CMSG_NPC_TEXT_QUERY` answers
+    // (`ui_gossip`), so the greeting is part of open.
     if gossip.npc == Some(guid) && gossip.greeting.is_some() {
         return Some(Window::Gossip);
     }
@@ -345,13 +287,10 @@ fn service_probe(
     mut gossip: ResMut<GossipState>,
     mut giver: ResMut<QuestGiver>,
     mut trainer: ResMut<TrainerOpen>,
-    // `[0xb4e2d0]`'s mirror — what the re-click gate reads. The probe asserts it
-    // live because the gate's risk is never the `==`, it is whether this really is armed by a
-    // window and only by a window.
+    // `[0xb4e2d0]`'s mirror, what the re-click gate reads: armed by a window and only by one.
     interact: Res<InteractNpc>,
-    // The vendor fork's leg: the window the empty-cursor leg must open, the VM the
-    // held-cursor leg picks an item up in, and the two the app needs to turn a (bag, slot) into
-    // the guid the wire addresses.
+    // The vendor fork: the merchant window, the VM the held-cursor leg picks up in, and what
+    // turns a (bag, slot) into the item guid.
     mut merchant: ResMut<MerchantOpen>,
     script: Option<NonSendMut<UiScript>>,
     objects: crate::net::Objects,
@@ -380,7 +319,7 @@ fn service_probe(
             let me = player.pos;
             let found = units.iter().find(|(guid, net_e, store, tf)| {
                 // The click's own gate: `dist² > SERVICE_RANGE_SQ` is the cursor's `unable`, and
-                // the arm never runs. Acting outside it would measure nothing.
+                // the arm never runs.
                 if net_e.kind != EntityKind::Unit
                     || tf.translation.distance_squared(me) > SCAN_RANGE_SQ
                 {
@@ -421,8 +360,7 @@ fn service_probe(
                         SCAN_RANGE_SQ.sqrt(),
                         leg.at.len(),
                         match fps < 5.0 {
-                            // The reading is about the OBSERVER, not the world: below a handful of
-                            // frames a second this leg never really looked (0713/0777/1355).
+                            // Below a handful of frames a second the leg never really looked.
                             true =>
                                 " — THE OBSERVER WAS STARVED, so this SKIP says nothing about \
                                      the NPC. Re-run on an idle machine (`uptime`; a leg runner's guard \
@@ -487,11 +425,8 @@ fn service_probe(
             giver.clear();
             trainer.clear();
 
-            // **The first click must always get through**. Nothing is open here —
-            // this leg has just cleared, and the reference arms `[0xb4e2d0]` from window openers
-            // only — so the re-click gate must read disarmed at the moment of the send. If it ever
-            // reads armed here, the gate would be eating first clicks and this probe would still
-            // pass every other leg, which is why the assert is at the send and not after it.
+            // The first click must get through: nothing is open, and the reference arms
+            // `[0xb4e2d0]` only from window openers, so the gate must read disarmed at the send.
             if interact.1.is_some() {
                 error!(
                     "PROBE_SERVICE: FAIL ({}) — the npc token is armed on {:#x} BEFORE the send; \
@@ -504,8 +439,7 @@ fn service_probe(
                 return;
             }
 
-            // `None` = an empty cursor: no leg here holds an item, and the vendor arm's fork is
-            // the merchant probe's business, not this one's.
+            // `None` = an empty cursor; the vendor fork's held-cursor leg runs after the ladder.
             let sent = match service_action(arm, guid, false, None) {
                 ServiceAction::Send(cmd) => {
                     let named = format!("{cmd:?}");
@@ -587,9 +521,8 @@ fn service_probe(
                     next(&mut probe, &net, i, now);
                 }
                 None if now - since > WINDOW_TIMEOUT_SECS => {
-                    // Distinguish the one near-miss that is a real defect from a dead wire: the
-                    // gossip session latched but its greeting never resolved, so the frame stayed
-                    // shut (`GossipState::resolve_greeting`'s "Missing gossip text!" path).
+                    // A gossip session latched with an unresolved greeting keeps the frame shut
+                    // (`GossipState::resolve_greeting`'s "Missing gossip text!" path).
                     let held = gossip.npc == Some(guid) && gossip.greeting.is_none();
                     error!(
                         "PROBE_SERVICE: FAIL ({}) — no {:?} window on {guid:#x} within \
@@ -662,8 +595,8 @@ fn service_probe(
             trainer.clear();
             merchant.clear();
 
-            // The EMPTY-cursor leg. The arm is asserted, not assumed: a vendor who had grown a
-            // GOSSIP bit would take the gossip arm and this leg would be measuring nothing.
+            // The empty-cursor leg. The arm is asserted: a vendor with a GOSSIP bit takes the
+            // gossip arm.
             let arm = service_arm(flags, None);
             if arm != Some(ServiceArm::Vendor) {
                 warn!(
@@ -738,7 +671,7 @@ fn service_probe(
                 }
                 return;
             };
-            // Pick it up exactly as a player does — through the binding, not by writing the model.
+            // Pick it up as a player does, through the binding, not by writing the model.
             if let Err(e) = script.run(&format!("PickupContainerItem({bag}, {slot})")) {
                 error!("PROBE_SERVICE: SKIP (vendor fork, held cursor) — PickupContainerItem: {e}");
                 probe.skips += 1;
@@ -809,8 +742,7 @@ fn service_probe(
                 probe.phase = Phase::Done;
                 return;
             };
-            // The server's own verdict: the sold stack leaves the bag. Nothing client-side can
-            // fake this — it is the inventory update answering the packet.
+            // The server's verdict: the sold stack leaves the bag.
             let gone = script
                 .eval::<bool>(&format!(
                     "return GetContainerItemLink({bag}, {slot}) == nil"
@@ -843,9 +775,8 @@ fn service_probe(
                 "PROBE_SERVICE: DONE pass={} fail={} skip={}",
                 probe.passes, probe.fails, probe.skips
             );
-            // The probe self-exit pattern (`ProbeExitPlugin::fire_probe_exit`): a polite AppExit
-            // plus a hard backstop thread, so a net/winit teardown hang can't leave a zombie
-            // client holding the probe account.
+            // `ProbeExitPlugin::fire_probe_exit`'s pattern: `AppExit` plus a hard backstop, so a
+            // teardown hang cannot leave a client holding the probe account.
             exit.write(AppExit::Success);
             std::thread::spawn(|| {
                 std::thread::sleep(std::time::Duration::from_secs(5));
@@ -856,8 +787,7 @@ fn service_probe(
     }
 }
 
-/// The open quest panel's shape, for the PASS line — `Greeting` (the multi-quest list) vs
-/// `Detail` (the single quest's own frame) is exactly the distinction a reader wants here.
+/// The open quest panel's shape, for the PASS line.
 fn discr(view: &crate::ui_quest::QuestView) -> &'static str {
     use crate::ui_quest::QuestView as V;
     match view {

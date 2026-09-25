@@ -1,21 +1,13 @@
-//! The money coin sound — `LOOTWINDOWCOINSOUND` on every change to the self-player's coinage.
+//! The coin sound: the 1.12 client has no money kit; a `CMirrorHandler` callback on
+//! `PLAYER_FIELD_COINAGE` (`0x5ddf30`), the same watcher that fires `PLAYER_MONEY`, plays
+//! `LOOTWINDOWCOINSOUND` (kit 895) on every change, so buying, selling, looting money and any
+//! other purse change all sound. Played 2D on the SFX bucket.
 //!
-//! The real 1.12 client has **no dedicated money kit**: every coinage change plays
-//! `LOOTWINDOWCOINSOUND` (SoundEntries kit 895) from a `CMirrorHandler` callback registered on
-//! `PLAYER_FIELD_COINAGE` (`0x5ddf30`) — the
-//! same watcher that also fires the `PLAYER_MONEY` UI event. So one rule reproduces the coin for
-//! **buy** (spend), **sell** (gain), and **loot money** — all three move `PLAYER_FIELD_COINAGE` on
-//! the wire — plus any other purse change (quest reward, mail, trade), exactly as the client does.
-//! (Looting an *item* is the only acquire that plays a per-item sound instead; that lives in
-//! [`super::ui`].)
-//!
-//! benilla plays it 2D on the SFX bucket when the mirrored coinage moves. The **first** observation
-//! after login/reconnect is a seed, not a change — it never plays for the initial populate (whether
-//! the reference's watcher fires on the first coinage set at login is inferred, unconfirmed in the
-//! binary; suppressing it is the correct-feeling choice and avoids a coin on every zone-in). The
-//! real client double-plays loot money (an optimistic play at the click plus this watcher); benilla
-//! keeps the single watcher-driven play — one clean coin on the confirmed change, imperceptibly
-//! latent on localhost.
+//! The first value after login or reconnect seeds without playing; whether the reference's watcher
+//! fires on the login set is untraced. Deviation: the reference also plays an optimistic coin at
+//! the loot-money click, so looted money sounds twice; benilla plays the watcher's coin alone,
+//! because one coin on the confirmed change reads cleanly and the round trip the early coin hides
+//! is imperceptible on a local server.
 
 use bevy::prelude::*;
 
@@ -25,15 +17,11 @@ use benilla_assets::WorldAssets;
 use super::kit::{self, KitRef, SoundKits};
 use super::{SoundConfig, SoundOutput};
 
-/// The SoundEntries name the client plays on any coinage change (kit 895; `0x5ddf30`). Played by
-/// name through the same registry as every interface sound.
+/// The SoundEntries name the client plays on any coinage change (kit 895, `0x5ddf30`).
 const COIN_SOUND: &str = "LOOTWINDOWCOINSOUND";
 
-/// Play the coin whenever the self-player's `PLAYER_FIELD_COINAGE` changes. The previous value is a
-/// `Local` seeded on first sight (no play for the initial populate) and reset to `None` whenever no
-/// self-player exists (pre-login / disconnect), so a reconnect re-seeds rather than replaying a
-/// stale delta. Fires on both directions (a buy is a decrease, a sell/loot an increase) — the
-/// client's watcher plays unconditionally on change.
+/// Play the coin whenever the self-player's coinage changes, in either direction. The previous
+/// value resets with no self-player, so a reconnect re-seeds instead of replaying a stale delta.
 fn play_coin_on_coinage_change(
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     mut prev: Local<Option<u32>>,
@@ -49,8 +37,7 @@ fn play_coin_on_coinage_change(
     let Some(money) = store.0.player_money() else {
         return;
     };
-    // Advance the memory unconditionally (even without a catalog to play through) so a late-loading
-    // catalog never replays this delta; only an actual change past the seeded value plays.
+    // Advanced even without a catalog, so a late-loading catalog never replays this delta.
     let old = prev.replace(money);
     if !matches!(old, Some(p) if p != money) {
         return; // first sight or unchanged

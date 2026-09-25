@@ -1,73 +1,40 @@
-//! The probe fleet's **environment registry** — every `WOW_PROBE*` variable the app reads, in one
-//! table the code is checked against in both directions.
-//!
-//! The set used to live in three places that could not see each other: the read sites (one per
-//! variable, spread over the fleet), a hand-kept arming list in `dev.rs` for the un-occludable
-//! window ([`super::ProbeFocusPlugin`]), and nothing at all that said what the
-//! fleet accepts. The arming list is the one that bit: 0906's rule is that *every* scripted
-//! probe defends itself against the macOS occlusion throttle, and the list had drifted to ten of
-//! the twenty-five variables that schedule on the wall clock — a mail or auction probe launched
-//! exactly as the method prescribes ran covered, at ~1 fps, measuring garbage.
-//!
-//! So the list is now a **column** here ([`ProbeVar::wall_clock`]), the arming reads the column,
-//! and two structural tests below keep the table honest: every `"WOW_PROBE…"` string literal in
-//! the crate is a row, every row is a literal somewhere other than this file, and every value
-//! `WOW_PROBE` itself dispatches on is in [`PROBE_NAMES`]. `WOW_PROBE=list` prints it.
-//!
-//! What this is **not**: a dispatcher. The variables keep their own read sites and their own
-//! shapes — several carry free-form values (Lua chunks, chat lines with spaces and `=`, `A>B`
-//! drag specs) and several combine in one run — so folding them into one variable would need an
-//! escaping mini-language and would change the launch line every session uses. The defect was
-//! the drift, and a registry is the whole cure for drift.
+//! The probe environment registry: every `WOW_PROBE*` variable the app reads, with whether it
+//! schedules on the wall clock ([`ProbeVar::wall_clock`], which arms [`super::ProbeFocusPlugin`]).
+//! The tests keep it in step with the code both ways; `WOW_PROBE=list` prints it. The variables
+//! keep their own read sites: this is a registry, not a dispatcher.
 
 /// One probe-fleet environment variable.
 pub(crate) struct ProbeVar {
     /// The variable, exactly as the read site spells it.
     pub name: &'static str,
-    /// One line: the value shape and what setting it does, from the comment at the read site.
+    /// One line: the value shape and what setting it does.
     pub purpose: &'static str,
-    /// Whether the variable **schedules on elapsed real time** — its script fires at `<secs>`
-    /// marks, integrates a rate per frame, or steps a phase machine on `Time<Real>` — so the run
-    /// is only right while frames keep arriving at full rate.
-    ///
-    /// Why it matters: macOS drops a fully covered window to ~1 fps drawables,
-    /// and on such a window a wall-clock probe does not measure slowly, it **runs the wrong
-    /// script** — one leg fired `W@16` and `Space@19` in the same frame and jumped from a
-    /// standstill; another integrated its camera at 125 yd/s for 500 and never crossed the
-    /// radius it was testing. Every `true` row therefore arms
-    /// [`super::ProbeFocusPlugin`] from `dev.rs`, which keeps the probe window un-occludable
-    /// (and, for a run that draws no pixels, parks it small in a corner).
-    ///
-    /// A `false` row is a flag or a modifier: a `_AT`/`_STEP`/`_KEEP` rides its parent's
-    /// arming, a pricing lever changes *what* a run draws rather than *when*, and a state
-    /// machine that advances on wire replies (the char-create probe) has no clock to be robbed of.
+    /// Whether the variable schedules on elapsed real time, so it is only right at full frame
+    /// rate: macOS drops a covered window to ~1 fps, and such a run fires its script out of
+    /// order. A `true` row arms [`super::ProbeFocusPlugin`] from `dev.rs`, keeping the window
+    /// un-occludable; a modifier rides its parent's arming.
     pub wall_clock: bool,
 }
 
-/// Every `WOW_PROBE*` variable the app reads. Grouped by the probe that owns each; the order is
-/// the order `WOW_PROBE=list` prints.
+/// Every `WOW_PROBE*` variable the app reads, grouped by owner, in `WOW_PROBE=list` order.
 pub(crate) const PROBE_VARS: &[ProbeVar] = &[
     // ── The variable itself, and the run shell every scripted probe rides ────────────────────
     ProbeVar {
         name: "WOW_PROBE",
         purpose: "<name> — a value-dispatched live probe (see the names below); `list` prints this table",
-        // Five of the six values step a phase machine on `time.elapsed_secs` (melee's 3 s swing
-        // cadence, crossing/taxi/guardpoi's phases, castcancel's press-at-t); `partner` answers
-        // invites the frame they land, but rides the same variable.
+        // Every value but `list` and `partner` steps a phase machine on the wall clock.
         wall_clock: true,
     },
     ProbeVar {
         name: "WOW_PROBE_EXIT_AT",
         purpose: "<secs> — exit the app after N wall seconds; bounds any scripted live probe's lifetime",
-        // Fires on `ProbeClock` at `<secs>`, and it is the one probe variable a trace-only run
-        // sets on its own (`WOW_MOVE_TRACE`/`WOW_STREAM_TRACE` legs, docs/METHOD.md) — 0794's
-        // throttled camera leg was exactly such a run.
+        // Fires on `ProbeClock`; a trace-only run sets it alone.
         wall_clock: true,
     },
     ProbeVar {
         name: "WOW_PROBE_PARK",
         purpose: "corner|edge|off — where the un-occludable probe window sits, and whether it is pinned on top",
-        // A dial ON the occlusion defence itself, not a schedule.
+        // A dial on the occlusion defence itself, not a schedule.
         wall_clock: false,
     },
     ProbeVar {
@@ -118,7 +85,7 @@ pub(crate) const PROBE_VARS: &[ProbeVar] = &[
     ProbeVar {
         name: "WOW_PROBE_HOVER",
         purpose: "\"<frame>[;<frame>…]\" — sweep the real pointer across the named frames' centres, pressing nothing",
-        // Starts at `_AT`, one move per `_STEP` seconds, alternating on `_DUTY` — all wall seconds.
+        // Starts at `_AT`, one move per `_STEP` seconds, alternating on `_DUTY`, in wall seconds.
         wall_clock: true,
     },
     ProbeVar {
@@ -166,15 +133,13 @@ pub(crate) const PROBE_VARS: &[ProbeVar] = &[
     ProbeVar {
         name: "WOW_PROBE_LOOK",
         purpose: "\"<deg_per_sec>@<start_s>:<duration_s>[;…]\" — the scripted mouse-turn: turn the avatar's aim at a rate for a while",
-        // `90°/s for 6 s` has to produce 540° whatever the frame rate did; integrates rate × dt
-        // between `at` and `until` on `ProbeClock`.
+        // Integrates rate times dt between `at` and `until` on `ProbeClock`.
         wall_clock: true,
     },
     ProbeVar {
         name: "WOW_PROBE_PITCH",
         purpose: "\"<deg>@<start_s>[:<deg_per_sec>][;…]\" — the scripted dive: aim a swimming avatar's nose up or down (+up)",
-        // A dive scripted to reach 30° by second 25 has to reach it at second 25, and it is the
-        // one script that can be a run's only actuator (a drifting swimmer needs no keys).
+        // Each dive target is due at its wall-clock second.
         wall_clock: true,
     },
     ProbeVar {
@@ -194,7 +159,7 @@ pub(crate) const PROBE_VARS: &[ProbeVar] = &[
         purpose: "1 — keep vsync ON in the FPS probe: it then measures the present ceiling the display grants this window",
         wall_clock: false,
     },
-    // ── The pricing levers and traces: change what a run draws or logs, never when ───────────
+    // ── The pricing levers and traces: what a run draws or logs, never when ─────────────────
     ProbeVar {
         name: "WOW_PROBE_UI_ONE_TEX",
         purpose: "1 — pricing lever: split UI runs on state flags alone, ignoring texture identity (the draw-count ceiling an atlas would reach)",
@@ -211,8 +176,7 @@ pub(crate) const PROBE_VARS: &[ProbeVar] = &[
         wall_clock: false,
     },
     // ── The `=1` live probes: each parks the body somewhere real and steps a phase machine ───
-    // Every one below reads `time.elapsed_secs_f64()` into a `since`/`now` phase machine —
-    // waits, settles and timeouts in wall seconds — so each arms the occlusion defence.
+    // Their waits, settles and timeouts are wall seconds, so each arms the occlusion defence.
     ProbeVar {
         name: "WOW_PROBE_BG_SAMPLES",
         purpose: "n — how many 12 s census samples WOW_PROBE_BG takes inside the battleground (default 12; ~30 reaches vmangos's 5-minute premature finish, i.e. the end of a match)",
@@ -308,8 +272,7 @@ pub(crate) const PROBE_VARS: &[ProbeVar] = &[
     ProbeVar {
         name: "WOW_PROBE_CHARCREATE",
         purpose: "\"<name>[,race,class,gender[,skin,face,hair,haircolor,facial]]\" — create (and delete) a character at select over the wire",
-        // A roster/result state machine: `AwaitingRoster` → create → result byte → delete →
-        // result byte, each step on the reply that arrives. No clock read anywhere in it.
+        // Each step advances on a wire reply; no clock is read.
         wall_clock: false,
     },
     ProbeVar {
@@ -319,9 +282,8 @@ pub(crate) const PROBE_VARS: &[ProbeVar] = &[
     },
 ];
 
-/// The named values of `WOW_PROBE` itself, `(value, purpose)` — the one place they are listed.
-/// `dev.rs` dispatches on the literals (one plugin per value) and `lib.rs` answers `list`
-/// before any window opens; the test below keeps both in step with this table.
+/// The named values of `WOW_PROBE`, `(value, purpose)`; `dev.rs` dispatches on them and `lib.rs`
+/// answers `list`.
 pub(crate) const PROBE_NAMES: &[(&str, &str)] = &[
     ("list", "print this table and exit, before any window opens"),
     (
@@ -350,12 +312,12 @@ pub(crate) const PROBE_NAMES: &[(&str, &str)] = &[
     ),
 ];
 
-/// The variables whose presence arms the un-occludable probe window — the `wall_clock` column.
+/// The variables whose presence arms the un-occludable probe window.
 pub(crate) fn wall_clock_vars() -> impl Iterator<Item = &'static str> {
     PROBE_VARS.iter().filter(|v| v.wall_clock).map(|v| v.name)
 }
 
-/// `WOW_PROBE=list` — print the registry, one variable per line, then the named values.
+/// `WOW_PROBE=list`: prints the registry, one variable per line, then the named values.
 pub(crate) fn print() {
     println!("The probe fleet's environment (capture::probe_env, decision 2265 §A5).");
     println!(
@@ -380,17 +342,11 @@ pub(crate) fn print() {
 mod tests {
     use super::*;
 
-    /// This file's own path under `src/` — excluded from both scans, since its table and its
-    /// tests are the one place the literals are *supposed* to appear without being read.
+    /// This file's path under `src/`, excluded from both scans.
     const SELF: &str = "capture/probe_env.rs";
 
-    /// **The table cannot drift from the code, in either direction**.
-    ///
-    /// Every `"WOW_PROBE…"` string literal in the crate must be a row here — a variable the
-    /// fleet reads that the registry does not know is exactly the hand-maintained gap this
-    /// module replaced — and every row must be a literal somewhere other than this file, or the
-    /// registry is describing a variable nothing reads. String literals only: doc comments
-    /// write the backticked form and are skipped by line.
+    /// Every `"WOW_PROBE..."` string literal in the crate is a row, and every row is a literal
+    /// outside this file; comment lines are skipped.
     #[test]
     fn every_probe_variable_is_registered_and_every_registered_variable_is_read() {
         let registered: Vec<&str> = PROBE_VARS.iter().map(|v| v.name).collect();
@@ -440,10 +396,8 @@ mod tests {
         );
     }
 
-    /// **`WOW_PROBE`'s named values are listed once.** Every `Ok("<name>")` the code compares
-    /// `WOW_PROBE`'s value against (the `dev.rs` plugin dispatch, the `lib.rs` `list` exit) must
-    /// be a `PROBE_NAMES` row, and every row must be dispatched on — so `WOW_PROBE=list` prints
-    /// the values that exist, not the ones someone remembered.
+    /// Every `Ok("<name>")` compared against `WOW_PROBE` is a `PROBE_NAMES` row, and every row
+    /// is dispatched on.
     #[test]
     fn every_dispatched_probe_name_is_listed_and_every_listed_name_is_dispatched() {
         let listed: Vec<&str> = PROBE_NAMES.iter().map(|(n, _)| *n).collect();
@@ -514,8 +468,7 @@ mod tests {
         out
     }
 
-    /// The source with every comment line (`//`, `///`, `//!`) dropped — the scans below want
-    /// code, and a doc comment quoting a variable is not a read of it.
+    /// The source with every comment line dropped: a comment quoting a variable is not a read.
     fn code_lines(text: &str) -> String {
         text.lines()
             .filter(|l| !l.trim_start().starts_with("//"))
@@ -523,8 +476,7 @@ mod tests {
             .join("\n")
     }
 
-    /// Every `"WOW_PROBE[A-Z0-9_]*"` string literal in the code — the whole literal, quote to
-    /// quote, so a variable named inside a longer message is not a match.
+    /// Every whole `"WOW_PROBE[A-Z0-9_]*"` string literal in the code, quote to quote.
     fn probe_literals(text: &str) -> Vec<String> {
         let code = code_lines(text);
         let mut out = Vec::new();
@@ -551,8 +503,7 @@ mod tests {
         let mut rest = code.as_str();
         while let Some(i) = rest.find(needle) {
             let after = &rest[i + needle.len()..];
-            // The comparison sits right after the read: `.as_deref() == Ok("…")`. Bound the
-            // look-ahead so a bare `is_ok()` gate is not paired with some later `Ok("…")`.
+            // Bounded look-ahead, so a bare `is_ok()` gate is not paired with a later `Ok("...")`.
             let window = &after[..after.len().min(48)];
             if let Some(j) = window.find("Ok(\"") {
                 let value = &after[j + 4..];

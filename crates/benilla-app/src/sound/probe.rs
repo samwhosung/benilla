@@ -1,63 +1,26 @@
-//! **Measuring mode** — `$WOW_SOUND_PROBE`: record a session so a sound report becomes evidence.
-//! `scripts/soundprobe.sh` starts the client in it (the `play` profile, with the banner that says
-//! when to press the mark key); `scripts/soundprobe.py` reads the capture back.
+//! Sound measuring mode, `$WOW_SOUND_PROBE`: records a session so a sound report can be read
+//! from numbers. `scripts/soundprobe.sh` starts the client in it; `scripts/soundprobe.py` reads
+//! the capture back.
 //!
-//! ## Why this exists
-//!
-//! The output limiter was built, measured, and proven offline — five sample-aligned
-//! copies of a 0 dBFS buff go from `5.00x` full scale and 28 524 clipped samples to `0.99x` and
-//! none. It shipped on by default. The director then played a real session and reported **no
-//! audible change**: the mix still "gets really dirty, like a speaker breaking".
-//!
-//! That gap is the whole reason for this module. Per the contract, what the director hears
-//! outranks any mechanism we found: a verified fix that does not change what they hear means the
-//! mechanism we verified is not the mechanism they are hearing. Being right about *a* cause is not
-//! being right about *the* cause, and the honest next move is not another fix — it is an
-//! instrument that can tell the candidates apart in a **real run**, on their machine, on the
-//! encounter they are describing.
-//!
-//! The candidates are genuinely different failures that sound alike through a speaker:
+//! Faults that sound alike through a speaker, and their signatures:
 //!
 //! | mechanism | signature in a probe capture |
 //! |---|---|
-//! | over-scale sum (1551's claim) | `pre.wav` past ±1.0, `post.wav` clean, `gain` well under 1 |
-//! | **limiter not actually engaging** | `pre.wav` past ±1.0 **and** `post.wav` past ±1.0 |
-//! | buffer underrun / missed deadline | both WAVs clean at the mark; `load >= 1.0`, `overruns` climbing |
+//! | over-scale sum | `pre.wav` past ±1.0, `post.wav` clean, `gain` well under 1 |
+//! | limiter not engaging | `pre.wav` and `post.wav` both past ±1.0 |
+//! | underrun / missed deadline | both WAVs clean at the mark; `load >= 1.0`, `overruns` rising |
 //! | starved stream decoder | both WAVs clean; a hard step to zero in `post.wav` at the mark |
-//! | **non-finite samples** | `nan > 0` — invisible to every other counter (see [`super::meter`]) |
+//! | non-finite samples | `nan > 0`, invisible to every other counter ([`super::meter`]) |
 //! | voice-steal / refusal clicks | `refused` climbing, a discontinuity at the mark |
-//! | the limiter's *own* pumping | `post.wav` clean but `gain` diving repeatedly — a fix that is itself the complaint |
+//! | the limiter's own pumping | `post.wav` clean but `gain` diving repeatedly |
 //!
-//! Note the last row. An instrument that can only confirm its author's fix is not an instrument;
-//! this one is built so that "1551 made it worse" is a reading it can produce.
+//! A run writes three files to `benilla-config/sound-probe/`, off the game thread: `pre.wav` (the
+//! mix ahead of the limiter), `post.wav` (after it) and `timeline.jsonl` (a row every [`TICK`] with
+//! level, health and voice counts, plus an event per kit start, marker and refusal).
 //!
-//! ## What a run produces
-//!
-//! Three files in `benilla-config/sound-probe/`, all written off the game thread:
-//!
-//! - **`pre.wav`** — the summed mix *as the game asked for it*, tapped ahead of the limiter.
-//! - **`post.wav`** — what was actually heard, tapped after it.
-//! - **`timeline.jsonl`** — the game-side story on a shared clock: a row every
-//!   [`TICK`] with level/health/voice counts, plus an event per kit start, per marker keypress,
-//!   and per refusal.
-//!
-//! Two taps rather than one is the point: with only the post-limiter tap the 1551 hunt could not
-//! have distinguished "the mix never clipped" from "the limiter failed", which is exactly the
-//! question the director's report raises.
-//!
-//! ## The shared clock
-//!
-//! A capture is only useful if a game-thread event can be placed on the waveform. The game clock
-//! and the device clock are different clocks and they drift, so every row carries `a` — the frame
-//! index published by the pre-tap ([`super::mix_tap::install_at`]), i.e. the exact sample offset
-//! in `pre.wav`. A marker is then a *sample position*, not an approximate timestamp.
-//!
-//! ## The marker
-//!
-//! **F9** stamps the timeline the instant the director hears something. This is the piece that
-//! makes a ten-minute session tractable: instead of scanning the whole capture for anomalies and
-//! guessing which one they meant, the analysis starts at the marks and reads outward. The key is
-//! bound *only* while probing, so it cannot collide with a game binding by construction.
+//! Every row carries `a`, the pre-tap's frame index ([`super::mix_tap::install_at`]), so an event
+//! is a sample position in `pre.wav`, free of drift between the game and device clocks. F9 stamps a
+//! marker; it is bound only while probing.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -67,27 +30,18 @@ use bevy::prelude::*;
 
 use super::SoundOutput;
 
-/// How often a tick row is written. 50 ms is fine enough to see a burst rise and fall inside one
-/// spell cast, and coarse enough that a ten-minute session is ~12 000 rows rather than a file
-/// nobody opens.
+/// The tick-row interval: fine enough to see a burst within one cast, ~12 000 rows in ten minutes.
 const TICK: std::time::Duration = std::time::Duration::from_millis(50);
 
-/// How often the run prints a spoken summary to the console, so the director gets live feedback
-/// during the session and not only a file afterwards. Matches the normal health cadence.
+/// The console summary interval, the normal health cadence.
 const SPEAK: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// The marker key. Bound only while probing (see the module docs), so it needs no dev chord and
-/// cannot collide with a game binding.
+/// The marker key, bound only while probing.
 const MARK_KEY: KeyCode = KeyCode::F9;
 
-/// Resolve the probe's output directory from `$WOW_SOUND_PROBE`, creating it.
-///
-/// `1`/`true`/`yes`/`on` means "the default place"; anything else is taken as an explicit path, so
-/// a run can be pointed at a scratch dir. The default resolves through [`crate::local_state`] like
-/// every other thing we persist — a probe is local state, and the install stays read-only.
-///
-/// Called *before* the mixer is built, because the taps are main-track effects and a kira main
-/// track is build-time-only.
+/// The probe's output directory from `$WOW_SOUND_PROBE`, created: `1`/`true`/`yes`/`on` is the
+/// [`crate::local_state`] default, anything else a path. Called before the mixer is built, since
+/// the taps are main-track effects and a kira main track is fixed at build.
 pub(super) fn output_dir() -> Option<PathBuf> {
     let raw = std::env::var_os("WOW_SOUND_PROBE")?;
     let raw = raw.to_string_lossy().into_owned();
@@ -118,24 +72,20 @@ pub(super) fn output_dir() -> Option<PathBuf> {
     Some(dir)
 }
 
-/// The game-thread half of a probing run. Lives in [`SoundOutput`] so every sound system that
-/// already holds `out` can stamp an event without new plumbing.
+/// The game-thread half of a probing run, in [`SoundOutput`] so any sound system can stamp events.
 pub(crate) struct Probe {
     dir: PathBuf,
     rate: u32,
-    /// Lines to the writer thread. crossbeam because the sender must be `Sync` to sit in a
-    /// resource, and because a disk write on the game thread would stall the frame — and a
-    /// stalled frame is *itself* one of the mechanisms under investigation. The instrument must
-    /// not manufacture the artifact it is measuring.
+    /// Lines to the writer thread: a disk write on the game thread would stall the frame, one of
+    /// the faults being measured. crossbeam, because the sender must be `Sync`.
     tx: crossbeam_channel::Sender<String>,
-    /// The pre-tap's frame clock — the shared time axis (see the module docs).
+    /// The pre-tap's frame clock, the shared time axis.
     audio_pos: Option<Arc<AtomicU64>>,
     started: std::time::Instant,
     marks: u32,
     since_tick: std::time::Duration,
     since_speak: std::time::Duration,
-    /// Maxima since the last spoken summary, so the console line covers its whole window even
-    /// though the meters are drained twenty times a second.
+    /// Maxima since the last console summary; the meters drain every tick.
     window: Window,
     /// Cumulative counters at the last tick, to report deltas.
     last_overruns: u64,
@@ -146,7 +96,7 @@ pub(crate) struct Probe {
     last_copies: u64,
 }
 
-/// The accumulators behind one spoken summary.
+/// The accumulators behind one console summary.
 #[derive(Default, Clone, Copy)]
 struct Window {
     peak: f32,
@@ -162,8 +112,7 @@ struct Window {
 }
 
 impl Probe {
-    /// Begin recording. `audio_pos` is the pre-tap's frame clock; `None` (no pre-tap) still
-    /// produces a usable timeline, just one keyed on the game clock alone.
+    /// Begins recording. With no pre-tap (`audio_pos` `None`) the timeline has the game clock only.
     pub(super) fn start(dir: PathBuf, rate: u32, audio_pos: Option<Arc<AtomicU64>>) -> Self {
         let (tx, rx) = crossbeam_channel::unbounded::<String>();
         let path = dir.join("timeline.jsonl");
@@ -215,7 +164,7 @@ impl Probe {
         probe
     }
 
-    /// Frames the pre-tap has written — the sample offset every row is keyed on.
+    /// Frames the pre-tap has written: the sample offset every row is keyed on.
     fn audio_frame(&self) -> u64 {
         self.audio_pos
             .as_ref()
@@ -227,7 +176,7 @@ impl Probe {
         let _ = self.tx.send(line);
     }
 
-    /// Stamp an event with `extra` already formatted as JSON object members (leading comma).
+    /// Stamps an event; `extra` is JSON object members with a leading comma.
     fn event(&self, ev: &str, extra: &str) {
         self.send(format!(
             r#"{{"t":{:.3},"a":{},"ev":"{ev}"{extra}}}"#,
@@ -236,9 +185,8 @@ impl Probe {
         ));
     }
 
-    /// Note one kit actually starting — called from the kit player's play path, so the timeline
-    /// says *what* made the noise, not just that the level moved. Cheap enough to
-    /// sit on the play path unconditionally: a channel send behind an `Option` check.
+    /// Notes a kit starting, from the kit player's play path, so the timeline says what made the
+    /// noise.
     pub(super) fn note_play(&self, kit: u32, name: &str, category: &str, spatial: &str) {
         self.event(
             "play",
@@ -262,9 +210,7 @@ fn esc(s: &str) -> String {
         .collect()
 }
 
-/// Drain lines to disk, flushing each batch so a hard kill loses at most one batch — the same
-/// crash-safety rule the mix tap follows, for the same reason: the interesting moment is often
-/// the last thing before the session ends.
+/// Drains lines to disk, flushing each batch so a hard kill loses at most one.
 fn writer(file: std::fs::File, rx: crossbeam_channel::Receiver<String>) {
     use std::io::Write;
     let mut file = std::io::BufWriter::new(file);
@@ -278,19 +224,17 @@ fn writer(file: std::fs::File, rx: crossbeam_channel::Receiver<String>) {
     let _ = file.flush();
 }
 
-/// The probe's own health pump: one tick row per [`TICK`], one spoken summary per [`SPEAK`].
-///
-/// While this runs it **owns the meters** — [`super::poll_mix_health`] stands down, because
-/// [`super::meter::MixLevel::take`] is reset-on-read and two consumers would each see a fraction
-/// of the truth. Everything that report says, this says, twenty times a second and to a file.
+/// The probe's health pump: a row per [`TICK`], a console summary per [`SPEAK`]. It owns the
+/// meters while it runs: [`super::meter::MixLevel::take`] resets on read, so
+/// [`super::poll_mix_health`] stands down.
 pub(super) fn tick(
     mut out: NonSendMut<SoundOutput>,
     time: Res<Time>,
     mut exit: MessageReader<bevy::app::AppExit>,
 ) {
     let exiting = exit.read().next().is_some();
-    // Read before the split borrow: the ceiling bounds *everything the device mixes*, streams
-    // included, so that — not the kit-channel count — is the number worth recording.
+    // Before the split borrow. The voice ceiling bounds everything the device mixes, streams
+    // included, so that count is recorded, not the kit channels.
     let voices = out.live_voices();
     let (stolen, denied) = (out.voices_stolen, out.voices_denied);
     let copies = out.copies_dropped;
@@ -330,7 +274,7 @@ pub(super) fn tick(
         ),
     );
 
-    // Fold into the spoken window.
+    // Fold into the console window.
     let w = &mut probe.window;
     w.peak = w.peak.max(level.peak);
     w.over += level.over;
@@ -375,8 +319,7 @@ pub(super) fn tick(
     }
 }
 
-/// One window's spoken line — the live half, so the director can see whether the numbers moved at
-/// the moment they heard it without waiting for the analysis.
+/// One window's console line, live during the session.
 fn speak(w: Window, rate: u32) {
     let ms = |samples: u64| samples as f64 / 2.0 / f64::from(rate) * 1000.0;
     if w.nonfinite > 0 {
@@ -421,7 +364,7 @@ fn speak(w: Window, rate: u32) {
     }
 }
 
-/// The marker key (see the module docs). Bound only while probing.
+/// Stamps a marker on F9.
 pub(super) fn marker(mut out: NonSendMut<SoundOutput>, keys: Res<ButtonInput<KeyCode>>) {
     if !keys.just_pressed(MARK_KEY) {
         return;
@@ -439,8 +382,7 @@ pub(super) fn marker(mut out: NonSendMut<SoundOutput>, keys: Res<ButtonInput<Key
     );
 }
 
-/// Install the probe's systems. Registered unconditionally; every system early-returns in one
-/// `Option` check when `$WOW_SOUND_PROBE` is unset, which is the normal case.
+/// Registered always; every system returns at once when `$WOW_SOUND_PROBE` is unset.
 pub(super) fn plugin(app: &mut App) {
     app.add_systems(Update, (tick, marker));
 }
@@ -449,8 +391,7 @@ pub(super) fn plugin(app: &mut App) {
 mod tests {
     use super::*;
 
-    /// A kit name is the one free-form string a row carries; a quote or a backslash in it must not
-    /// produce a line the analyser cannot parse.
+    /// A quote or backslash in a kit name must not break the row's JSON.
     #[test]
     fn kit_names_stay_valid_json() {
         assert_eq!(esc("HolyProtection"), "HolyProtection");
@@ -459,8 +400,7 @@ mod tests {
         assert_eq!(esc("tab\there"), "tab here");
     }
 
-    /// `$WOW_SOUND_PROBE` reads as a flag *or* a path, and the off-forms really are off — a probe
-    /// that silently records every session would be a footgun on the director's machine.
+    /// `$WOW_SOUND_PROBE` reads as a flag or a path, and the off forms are off.
     #[test]
     fn the_env_var_reads_as_flag_or_path() {
         for off in ["0", "false", "off", ""] {

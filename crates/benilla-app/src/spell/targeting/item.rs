@@ -1,10 +1,7 @@
-//! The **item** seam — `0x495d60`, the whole local law for an item target, plus the two confirm
-//! popups that hang off it.
-//!
-//! Reached from two byte-identical rungs: the bag click (`PickupContainerItem 0x4f9b30` @ `4f9c54`)
-//! and the paper-doll click (`0x4c7300` @ `4c76df`) — *if IsTargeting and `TargetingWantsItem
-//! 0x6e6330`, then `0x495d60(itemGuidLo, itemGuidHi)` and return; nothing is picked up*. The VM
-//! half of that reroute lives in `benilla_ui`'s cursor seam; this module is `0x495d60` itself.
+//! The item seam, `0x495d60`, and its two confirm popups. The bag click (`PickupContainerItem
+//! 0x4f9b30`) and the paper-doll click (`0x4c7300`) both call it when `IsTargeting` and
+//! `TargetingWantsItem 0x6e6330` hold, and pick nothing up; the VM half of that reroute is in
+//! `benilla_ui`'s cursor seam.
 
 use bevy::prelude::*;
 
@@ -12,96 +9,67 @@ use crate::net::SelfPlayer;
 
 use super::TargetingWants;
 
-/// The item guid a confirm popup is standing over — the reference's `0xb4e3c0`/`0xb4e3c4` pair,
-/// written by BOTH confirm exits of `0x495d60` (`49608f`/`4960bb`) and read back by whichever Lua
-/// answer arrives: `BindEnchant 0x48d2e0` re-invokes the gate with it, `ReplaceEnchant 0x48d300`
-/// re-resolves it and calls the binder outright.
-///
-/// It is a *separate* global from the targeting word in the reference, and it stays separate here,
-/// because it holds no cancel logic of its own: the reference never clears it, and never needs to,
-/// since `BindTarget 0x6e5b40` re-checks `test $0x4010, [0xcecac0]` before it binds anything
-/// (`6e5f1e`). Ours is inert the same way — every reader goes through
-/// [`SpellTargeting::pending_for`], so once the word is gone a stale guid can do nothing.
+/// The item guid a confirm popup stands over (`0xb4e3c0`), written by both confirm exits of
+/// `0x495d60`. The reference never clears it, since `BindTarget 0x6e5b40` re-tests the word
+/// before binding; here every reader goes through [`SpellTargeting::pending_for`], so a stale guid
+/// is inert.
 #[derive(Resource, Default)]
 pub(crate) struct EnchantConfirmItem(Option<u64>);
 
-/// What the clicked item is, as `0x495d60` reads it off the live object — everything past the
-/// template's three type fields comes from the item OBJECT's descriptor, which for our own bags is
-/// fully streamed.
+/// The clicked item as `0x495d60` reads it: template type fields, the rest off the item object.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct ClickedItem {
-    /// `0x5d9f30` / `0x5d9f90` / `0x5d9ff0` — the item template's Class, SubClass and
-    /// InventoryType (each resolved through the item cache `0x55ba30`).
+    /// Template Class, SubClass and InventoryType (`0x5d9f30`, `0x5d9f90`, `0x5d9ff0`, through the
+    /// item cache `0x55ba30`).
     pub(crate) class: u32,
     pub(crate) subclass: u32,
     pub(crate) inventory_type: u32,
-    /// `0x5da2c0` — "has this item already been through the bind question?": `ITEM_FIELD_FLAGS &
-    /// 1` (already soulbound), **or** any of its seven live `ITEM_FIELD_ENCHANTMENT` slots naming
-    /// a row with [`benilla_formats::EnchantCatalog::binds_the_item`] (`5da300`–`5da320`).
+    /// `0x5da2c0`: `ITEM_FIELD_FLAGS & 1` (soulbound), or any of the seven enchantment slots names
+    /// a row that [`benilla_formats::EnchantCatalog::binds_the_item`].
     pub(crate) already_bound: bool,
-    /// `ITEM_FIELD_ENCHANTMENT[slot]` for PERM (0) and TEMP (1), as the replace check reads them
-    /// (`495eec: movl 0x40(%ecx,%eax,4)` with `eax = 3*slot`). `None` for an empty slot, a
-    /// negative id (the ref's `jl`), or an id that names no `SpellItemEnchantment` row.
+    /// `ITEM_FIELD_ENCHANTMENT` PERM (0) and TEMP (1); `None` for empty, a negative id, or an id
+    /// with no `SpellItemEnchantment` row.
     pub(crate) existing_enchant: [Option<u32>; 2],
 }
 
-/// The enchant an ENCHANT_ITEM effect would apply — `SpellItemEnchantment[EffectMiscValue[i]]`,
-/// resolved once at `495e93` and read by BOTH confirms.
+/// The enchant the cast would apply, `SpellItemEnchantment[EffectMiscValue]`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct NewEnchant {
     pub(crate) id: u32,
-    /// [`benilla_formats::EnchantCatalog::binds_the_item`] — `Flags & 1`.
+    /// `Flags & 1`.
     pub(crate) binds: bool,
 }
 
-/// What `0x495d60` decides for one clicked item. Four exits, and the three non-`Bind` ones all
-/// return **before** `BindTarget`, so the targeting word survives every one of them — that is what
-/// keeps the cursor up through a mis-click *and* through both confirm popups.
+/// `0x495d60`'s verdict. Every exit but `Bind` returns before `BindTarget`, so the word and the
+/// cursor survive a refusal and both popups.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ItemBind {
-    /// `496056: call 0x6e5b40` — bind the item and send.
+    /// `BindTarget 0x6e5b40`: bind the item and send.
     Bind,
-    /// `496068` — `0x6e1a00(spell, 0x0a)`, no packet.
+    /// `0x6e1a00(spell, 0x0a)`, no packet.
     Refuse(u8),
-    /// `496087` — park the guid at `0xb4e3c0/0xb4e3c4` and fire event **402 `BIND_ENCHANT`**
-    /// (`4960a3`, no args): *"Enchanting this item will bind it to you."* Its Yes is
-    /// `BindEnchant 0x48d2e0`, which re-invokes this very gate with the confirmed flag set.
+    /// Park the guid and fire `BIND_ENCHANT` (event 402, no args); its Yes, `BindEnchant
+    /// 0x48d2e0`, re-runs the gate confirmed.
     ConfirmBind,
-    /// `4960b3` — park the guid and fire event **403 `REPLACE_ENCHANT`** (`4960e4`, format
-    /// `"%s%s"` = the OLD then the NEW enchant name): *"Do you want to replace "%s" with "%s"?"*.
-    /// Its Yes is `ReplaceEnchant 0x48d300`, which skips the gate entirely and calls the binder.
+    /// Park the guid and fire `REPLACE_ENCHANT` (event 403, old name then new); its Yes,
+    /// `ReplaceEnchant 0x48d300`, skips the gate and binds.
     ConfirmReplace { existing: u32, new: u32 },
 }
 
-/// `0x495d60` — the whole local law for an item target, run at BIND time (the click), not at hover
-/// time. The reference walks the spell's three effects; for each `ENCHANT_ITEM` (53) /
-/// `ENCHANT_ITEM_TEMPORARY` (54) one it runs, **in this order**:
+/// `0x495d60`, run at the click, for an `ENCHANT_ITEM` (53) or `ENCHANT_ITEM_TEMPORARY` (54)
+/// effect, in this order:
 ///
-/// 1. **The equipped-item gate**. `EquippedItemSubClassMask [+0xec] != 0` ⇒ the
-///    item's class must equal `EquippedItemClass [+0xe8]` **and** `(1 << subclass)` must be in the
-///    mask (`495e10`–`495e28`); `EquippedItemInventoryTypeMask [+0xf0] != 0` ⇒ `(1 <<
-///    InventoryType)` must be in it (`495e4d`–`495e70`). Either miss is
-///    [`ItemBind::Refuse`] — the client's own "Invalid target" red line, no packet, cursor kept.
-/// 2. **The bind confirm** (`495e93`–`495ec6`): the enchant this effect would apply
-///    must name a real `SpellItemEnchantment` row whose `Flags & 1` is set, the item must not be
-///    [`ClickedItem::already_bound`], the confirmed flag must be clear, and the item's
-///    InventoryType must be nonzero (`495ebc` — an *equippable* item; a lockbox or a reagent is
-///    never asked). All four ⇒ [`ItemBind::ConfirmBind`].
-/// 3. **The replace confirm** (`495ecc`–`495f1c`): the slot is PERM for effect 53 and TEMP for 54
-///    (`495ed3: cmpl $0x35 / setne` — the ONE place the two effect types diverge), and if that slot
-///    already holds an enchant that names a row, **and** the new enchant names one too, ⇒
-///    [`ItemBind::ConfirmReplace`]. Note this leg does NOT consult the confirmed flag: answering
-///    the bind popup Yes re-enters here and can raise the replace popup next, which is exactly the
-///    reference's two-popup chain.
+/// 1. The equip gate: with a nonzero `EquippedItemSubClassMask` the class must match and the
+///    subclass bit be set; with a nonzero `EquippedItemInventoryTypeMask` the InventoryType bit
+///    must be set. A miss is [`ItemBind::Refuse`], "Invalid target", no packet.
+/// 2. The bind confirm: the new enchant's row binds, the item is not
+///    [`ClickedItem::already_bound`], the confirmed flag is clear and the InventoryType is nonzero.
+/// 3. The replace confirm: the slot is PERM for 53 and TEMP for 54, and both it and the new
+///    enchant name a row. It ignores the confirmed flag, so the bind popup's Yes can raise it next.
 ///
-/// Otherwise [`ItemBind::Bind`]. A spell with no enchant effect (the bare-`Targets 0x10` rows that
-/// are Disenchant and kin, and every `0x4000` lockbox opener) has no leg to fail at all — the
-/// reference walks its loop and falls straight through to `496056: call 0x6e5b40`, and so do we.
-///
-/// One narrowing, measured rather than assumed: the reference tests **all three** effect slots,
-/// [`benilla_formats::SpellDisplay`] carries only slot 0, and across the whole 363-row item-target
-/// family not one row hides its enchant effect in slot 1 or 2 — pinned by the formats-side family
-/// test, which fails if that ever stops being true.
+/// A spell with no enchant effect (Disenchant, the `0x4000` lockbox openers) binds outright.
+/// The reference walks all three effect slots; [`benilla_formats::SpellDisplay`] carries only
+/// slot 0, and a formats test fails if any item-target row puts its enchant in slot 1 or 2.
 pub(crate) fn item_bind_verdict(
     def: &benilla_formats::SpellDisplay,
     item: &ClickedItem,
@@ -140,25 +108,11 @@ pub(crate) fn item_bind_verdict(
     ItemBind::Bind
 }
 
-/// The item half's commit — the bag and paper-doll click seams (`PickupContainerItem 0x4f9b30`
-/// @ `4f9c54`–`4f9c6d` and its byte-identical doll twin `0x4c7300` @ `4c76df`–`4c76fb`: *if
-/// IsTargeting and TargetingWantsItem, then `0x495d60(itemGuidLo, itemGuidHi)` and return —
-/// nothing is picked up*). The VM half of that reroute lives in `benilla_ui`'s cursor seam; this
-/// drain is `0x495d60` itself: resolve the clicked slot's live item, run [`item_bind_verdict`],
-/// and on a pass do what `496056` does — hand the item to the ONE binder, which fills the word's
-/// item bit and lets `SendCast 0x6e54f0` commit. Same block, two opcodes: `CMSG_CAST_SPELL` for
-/// an enchant off the Craft window, `CMSG_USE_ITEM` for a poison bottle's own ON_USE.
-///
-/// It also drains the **two confirm popups' answers**, because the reference routes both back
-/// through this same gate rather than to a second machine:
-/// `BindEnchant 0x48d2e0` re-invokes `0x495d60` with its third parameter 1, and
-/// `ReplaceEnchant 0x48d300` skips the gate and calls `0x6e5b40` directly. So a Yes is just
-/// another item ask over the parked guid, and there is one code path for all three entries.
-///
-/// The post-send tail is the ground commit's: arm the pending cast + the GCD, and
-/// clear the word. A click on an EMPTY slot binds nothing and keeps the mode — the ref's
-/// `0x495d60` returns at its own null-item guard (`495da1`) — and so does a refusal or either
-/// confirm, all three of which return before `BindTarget`.
+/// The bag and paper-doll click commit: resolve the clicked slot's item, run
+/// [`item_bind_verdict`] and on a pass bind it for `SendCast 0x6e54f0` (`CMSG_CAST_SPELL` for an
+/// enchant, `CMSG_USE_ITEM` for a poison bottle). It also takes both popups' answers: `BindEnchant
+/// 0x48d2e0` re-runs `0x495d60` confirmed, `ReplaceEnchant 0x48d300` calls `0x6e5b40` directly. An
+/// empty slot (`0x495d60`'s null-item guard), a refusal or a confirm keeps the mode.
 pub(crate) fn commit_item_cast_on_pick(
     script: Option<NonSendMut<benilla_ui::script::UiScript>>,
     self_q: Query<&crate::net::ObjectStore, With<SelfPlayer>>,
@@ -169,9 +123,8 @@ pub(crate) fn commit_item_cast_on_pick(
     let Some(mut script) = script else {
         return;
     };
-    // The three entries into the ONE gate, in the order the reference reaches them: a fresh click
-    // (unconfirmed), then the bind popup's Yes over the parked guid (confirmed). The replace
-    // popup's Yes bypasses the gate entirely, so it collects separately.
+    // Fresh clicks, then the bind popup's Yes, go through the gate; the replace popup's Yes does
+    // not.
     let mut asks: Vec<(u64, bool)> = Vec::new();
     let mut bind_outright: Vec<u64> = Vec::new();
     for (bag, slot) in script.take_item_picks() {
@@ -197,11 +150,9 @@ pub(crate) fn commit_item_cast_on_pick(
 
     for (item_guid, confirmed) in asks {
         let Some((spell_id, commit)) = ladder.ground.pending_for(TargetingWants::Item) else {
-            continue; // a click raced a cancel — the word is gone, so there is nothing to bind
+            continue; // a click raced a cancel
         };
-        // The gate needs the clicked item's template; an unresolved one (never seen in practice —
-        // the bag needed it for the icon) binds ungated and lets the server judge, the same
-        // permissive shape the rest of the click law uses.
+        // An unresolved template binds ungated and the server judges.
         let entry = ladder
             .objects
             .object(item_guid)
@@ -232,15 +183,12 @@ pub(crate) fn commit_item_cast_on_pick(
             class,
             subclass,
             inventory_type,
-            // `0x5da2c0`: already soulbound, or already carrying an enchant that binds. The
-            // item tooltip's Soulbound override reads the SAME predicate — see
-            // [`crate::items::already_bound`].
+            // `0x5da2c0`, the same predicate as the tooltip's Soulbound line.
             already_bound: fields.is_some_and(|f| crate::items::already_bound(f, cat)),
             existing_enchant: [0u8, 1]
                 .map(|slot| fields.and_then(|f| crate::items::live_enchant(f, slot, cat))),
         };
-        // `495e93` — the enchant this cast would apply, resolved once and read by both confirms.
-        // `EffectMiscValue` is signed and the ref tests `jl` before its range compare.
+        // `EffectMiscValue` is signed; the reference rejects a negative one before the row lookup.
         let new = u32::try_from(def.effect_misc_value[0])
             .ok()
             .filter(|&id| cat.is_some_and(|c| c.0.has_row(id)))
@@ -262,8 +210,7 @@ pub(crate) fn commit_item_cast_on_pick(
                 script.fire_event("BIND_ENCHANT", vec![]);
             }
             ItemBind::ConfirmReplace { existing, new } => {
-                // `4960d0`/`4960d4` read both names off the rows with no suppression gate — the
-                // OLD one first, then the NEW, matching `"Do you want to replace %s with %s?"`.
+                // Old name first, then new: "Do you want to replace %s with %s?".
                 let name = |id: u32| {
                     cat.and_then(|c| c.0.name(id))
                         .unwrap_or_default()
@@ -290,8 +237,7 @@ pub(crate) fn commit_item_cast_on_pick(
         }
     }
 
-    // `ReplaceEnchant 0x48d300` — re-resolve the parked guid and call `0x6e5b40` outright. No gate
-    // re-run at all: the popup's Yes IS the answer to every question the gate would ask again.
+    // `ReplaceEnchant 0x48d300`: bind the parked guid with no gate re-run.
     for item_guid in bind_outright {
         let Some((spell_id, commit)) = ladder.ground.pending_for(TargetingWants::Item) else {
             continue;
@@ -371,7 +317,7 @@ mod tests {
             equipped_item_inventory_type_mask: 0,
             ..Default::default()
         };
-        // 8679's real mask carries dagger (15), so a rogue's own weapon passes the subclass leg.
+        // Its real mask carries dagger (15), so a rogue's own weapon passes the subclass leg.
         assert_eq!(
             item_target_refusal(&poison, CLASS_WEAPON, SUB_DAGGER, 13),
             None
@@ -387,9 +333,7 @@ mod tests {
             "a shield is armor — the class leg alone stops it"
         );
 
-        // Disenchant (13262): an item-targeted spell with NO enchant effect. The reference walks
-        // its loop, finds no 53/54 arm, and falls straight through to the bind — anything goes,
-        // and the server judges.
+        // Disenchant (13262) has no enchant effect: anything binds and the server judges.
         let disenchant = SpellDisplay {
             effects: [99, 0, 0],
             equipped_item_class: -1,
@@ -404,22 +348,15 @@ mod tests {
             None
         );
 
-        // A subclass past the mask's 32 bits can never be in it — shifted, that would be UB-ish
-        // nonsense, so the gate refuses instead of wrapping.
+        // A subclass past the mask's 32 bits is refused, not wrapped.
         assert_eq!(
             item_target_refusal(&poison, CLASS_WEAPON, 40, 13),
             Some(crate::spell::cast_target::ERR_INVALID_TARGET)
         );
     }
 
-    /// `0x495d60`'s two confirm branches and, more importantly, the ORDER they sit in — the equip
-    /// gate first (`495e10`), then the bind confirm (`495e93`), then the replace confirm
-    /// (`495ecc`), each returning before `BindTarget`.
-    ///
-    /// The chain this pins is the one that is easy to get subtly wrong: the bind confirm consults
-    /// the confirmed flag and the replace confirm does **not**, so answering the bind popup Yes
-    /// re-enters the gate and can raise the replace popup next. Getting that backwards would
-    /// either swallow the second question or loop on the first.
+    /// The equip gate, then the bind confirm, then the replace confirm; the bind popup's Yes can
+    /// raise the replace popup because only the bind confirm reads the confirmed flag.
     #[test]
     fn the_two_confirms_chain_in_the_references_order() {
         use benilla_formats::SpellDisplay;
@@ -427,7 +364,7 @@ mod tests {
         const TEMP: u32 = benilla_formats::SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY;
         const INVTYPE_WEAPON: u32 = 13;
 
-        // A permanent weapon enchant whose row binds the item (the ZG/imbue family's `Flags & 1`).
+        // A permanent weapon enchant whose row binds the item (`Flags & 1`).
         let perm = SpellDisplay {
             effects: [ENCHANT, 0, 0],
             effect_misc_value: [1900, 0, 0],
@@ -446,7 +383,7 @@ mod tests {
             ..Default::default()
         };
 
-        // 1 · The bind confirm, and each of its four legs turned off in turn (`495ea3`-`495ec6`).
+        // 1. The bind confirm, and each of its four legs turned off in turn.
         assert_eq!(
             item_bind_verdict(&perm, &bare, binder, false),
             ItemBind::ConfirmBind
@@ -488,8 +425,7 @@ mod tests {
             "a non-equippable item — a lockbox, a reagent — is never asked (495ec6)"
         );
 
-        // 2 · Yes on the bind popup re-enters with the flag set (`BindEnchant 0x48d2e0`), and the
-        // gate falls through to the REPLACE question for the same click.
+        // 2. The bind popup's Yes re-enters confirmed and reaches the replace question.
         let enchanted = ClickedItem {
             existing_enchant: [Some(2564), None],
             ..bare
@@ -508,8 +444,7 @@ mod tests {
             "and its Yes lands on the replace question — the ref's two-popup chain"
         );
 
-        // 3 · The slot fork (`495ed3: cmpl $0x35 / setne`) — the ONE place effect 53 and 54
-        // diverge. A permanent enchant asks about PERM; a poison asks about TEMP.
+        // 3. The slot fork, the one place effects 53 and 54 differ: PERM for 53, TEMP for 54.
         let temp_spell = SpellDisplay {
             effects: [TEMP, 0, 0],
             effect_misc_value: [1900, 0, 0],
@@ -538,7 +473,7 @@ mod tests {
             "and the mirror: a permanent enchant ignores the temp slot"
         );
 
-        // 4 · The equip gate still runs FIRST — a refusal beats both confirms (495e10 < 495e93).
+        // 4. The equip gate runs first: a refusal beats both confirms.
         let bracer_only = SpellDisplay {
             effects: [ENCHANT, 0, 0],
             effect_misc_value: [1900, 0, 0],

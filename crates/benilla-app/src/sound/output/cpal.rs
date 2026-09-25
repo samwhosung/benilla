@@ -1,35 +1,15 @@
-//! The non-macOS half of [`super`] — the same surface as `coreaudio.rs`, over cpal
-//! (Linux and Windows had been silent since the 09-02 sync, bug B356).
+//! The non-macOS half of [`super`]: the same surface as `coreaudio.rs` ([`Device`], [`Stream`],
+//! [`Cycle`], [`Notices`], [`Listeners`], [`set_realtime`], [`now_ns`]) over cpal, which speaks
+//! ALSA, PipeWire, WASAPI and the rest. Where cpal differs from CoreAudio:
 //!
-//! [`super`] owns everything that decides *how* the mix reaches the speaker: the mix-ahead
-//! ring, the render thread, the meters, the rebuild-on-device-change loop. That is platform
-//! code nowhere. What is platform code is only the last hop — find the default output device,
-//! open a stream on it, and hand our IO callback one buffer per cycle — and off macOS that hop
-//! is ALSA or PipeWire on Linux, WASAPI on Windows, and something else again on the BSDs. cpal
-//! is the layer that already speaks all of them, so this file is cpal wearing the shape
-//! `coreaudio.rs` wears: [`Device`], [`Stream`], [`Cycle`], [`Notices`], [`Listeners`],
-//! [`set_realtime`], [`now_ns`].
+//! - Cycle timestamps: cpal gives `callback` and `playback` instants, so
+//!   [`Cycle::output_time_ns`] is `now + (playback - callback)` on our own clock.
+//! - Device notices: cpal has no notification API, so [`Listeners`] polls the default device's
+//!   identity and rate, backed by cpal's stream error callback. Nothing is an analogue of
+//!   `kAudioDeviceProcessorOverload`, so the overload meter reads zero.
+//! - Realtime: no workgroups; [`set_realtime`] is `SCHED_FIFO` on unix and MMCSS on Windows.
 //!
-//! ## The three places cpal does not hand us what CoreAudio does
-//!
-//! - **Cycle timestamps.** CoreAudio stamps every IO cycle with the host time its first frame
-//!   reaches the DAC; the *lead* meter is that minus now. cpal gives the same quantity split in
-//!   two (`OutputStreamTimestamp`'s `callback` and `playback`), so the lead is their difference
-//!   and [`Cycle::output_time_ns`] is `now + (playback − callback)` — the same number the meter
-//!   is about, reconstructed on our own clock.
-//! - **Device notices.** CoreAudio raises a property listener when the default output changes,
-//!   when a device dies, when its rate changes. cpal has no notification API at all, so
-//!   [`Listeners`] is a half-second poll of the default device's identity and rate (the same
-//!   mechanism kira's own cpal backend uses off macOS) plus cpal's stream error callback, which
-//!   *is* delivered on these hosts — unlike on macOS, where cpal 0.17 wires a no-op for the
-//!   default device. `kAudioDeviceProcessorOverload` has no analogue: the overload meter reads
-//!   zero here, and the audible failure is counted where it always was, as a ring underrun.
-//! - **Realtime scheduling.** No workgroups; [`Workgroup`] is inert. [`set_realtime`] is
-//!   `SCHED_FIFO` on unix and MMCSS "Pro Audio" on Windows — see its own docs for what each
-//!   costs when the OS refuses.
-//!
-//! Everything else — including the fact that an unsupported target simply reports no device and
-//! the client runs silent — falls out of cpal, whose Null host is what it compiles to there.
+//! An unsupported target compiles to cpal's Null host, reports no device and runs silent.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -39,25 +19,18 @@ use anyhow::{bail, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample};
 
-/// The channel count we render. kira mixes stereo; [`spread`] puts it over whatever the device
-/// actually takes.
+/// kira mixes stereo; [`spread`] puts it over whatever the device takes.
 pub(super) const CHANNELS: u32 = 2;
 
-/// How often [`Listeners`] re-reads the default output device. Half a second is kira's own
-/// cadence for this poll off macOS, and it is the granularity at which "I plugged headphones
-/// in" should become audible.
+/// How often [`Listeners`] re-reads the default output device, kira's own cadence off macOS.
 const WATCH_EVERY: Duration = Duration::from_millis(500);
 
-/// The most frames one [`Cycle`] carries. A host that hands us a bigger buffer than this gets
-/// it served in several cycles rather than an allocation on the audio thread ([`Stream::open`]
-/// sizes the scratch once, at open). Generous on purpose: 8192 frames is 170 ms at 48 kHz, well
-/// past any buffer a host has been seen to ask for, and 64 KB of scratch is nothing.
+/// The most frames one [`Cycle`] carries (170 ms at 48 kHz); a bigger host buffer is served in
+/// several cycles rather than allocating on the audio thread.
 const MAX_CYCLE_FRAMES: usize = 8192;
 
-/// Nanoseconds on a monotonic clock. Not the device's clock — cpal's `StreamInstant` is
-/// host-defined and not comparable across hosts, so the meters ride [`Instant`] and the one
-/// device-timeline quantity we need (the lead) is reconstructed from a *difference* of stream
-/// instants, which is well-defined everywhere.
+/// Nanoseconds on a monotonic clock. cpal's `StreamInstant` is host-defined, so the meters ride
+/// [`Instant`] and the lead comes from a difference of stream instants.
 pub(super) fn now_ns() -> u64 {
     static EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     EPOCH.get_or_init(Instant::now).elapsed().as_nanos() as u64
@@ -70,21 +43,18 @@ pub(super) fn now_ns() -> u64 {
 #[derive(Clone)]
 pub(super) struct Device {
     pub name: String,
-    /// The rate the device's default config runs at — what we render at (nothing below us
-    /// resamples).
+    /// The default config's rate, which we render at: nothing below us resamples.
     pub sample_rate: u32,
     /// The buffer sizes the host says it accepts, frames.
     pub buffer_range: (u32, u32),
-    /// cpal exposes no device latency or safety offset; the report prints 0 rather than a guess.
+    /// cpal exposes no device latency or safety offset; the report prints 0.
     pub latency_frames: u32,
     pub safety_frames: u32,
-    /// The cpal handle and the config we will open with. Private: [`super`] only ever reads the
-    /// descriptive fields above.
+    /// The cpal handle and the config we open with.
     device: cpal::Device,
     config: cpal::SupportedStreamConfig,
-    /// The host's stable id for this device, when it has one. This — not [`Self::name`] — is
-    /// what [`Listeners`] compares: a display name is neither unique nor fixed (two identical
-    /// headsets, a renamed endpoint), and cpal 0.17 deprecates `name()` for exactly that.
+    /// The host's stable id, when it has one: what [`Listeners`] compares, since a display name
+    /// is neither unique nor fixed.
     id: Option<cpal::DeviceId>,
 }
 
@@ -100,12 +70,10 @@ impl std::fmt::Debug for Device {
     }
 }
 
-/// The host's current default output device, fully described. `Err` when there is none (a
-/// headless machine, no sound server running, an unsupported target) — the caller runs silent.
+/// The host's default output device; with none (headless, no sound server, an unsupported
+/// target) the caller runs silent.
 pub(super) fn default_output() -> Result<Device> {
-    // Prime the monotonic epoch here, on the main thread: the first reader is otherwise the
-    // audio callback, and a clock that starts on the realtime path is one more thing to reason
-    // about for no gain.
+    // Prime the clock's epoch on the main thread, not first in the audio callback.
     now_ns();
     let host = cpal::default_host();
     let device = host
@@ -119,9 +87,7 @@ fn describe(device: cpal::Device) -> Result<Device> {
         .description()
         .map(|d| d.name().to_string())
         .unwrap_or_else(|_| "unnamed output device".to_string());
-    // The default config is the one config the host guarantees it can open, and cpal's own
-    // heuristic already prefers f32 and stereo within it. Negotiating our own would only add a
-    // way to be refused.
+    // The default config is the one the host guarantees it can open; cpal prefers f32 stereo.
     let config = device
         .default_output_config()
         .with_context(|| format!("default output config for {name}"))?;
@@ -134,8 +100,7 @@ fn describe(device: cpal::Device) -> Result<Device> {
     }
     let buffer_range = match *config.buffer_size() {
         cpal::SupportedBufferSize::Range { min, max } => (min.max(1), max.max(1)),
-        // "Unknown" means the host will not take a size from us at all; `Stream::open` reads
-        // that back off the config and asks for the host's default instead.
+        // The host takes no size from us; `Stream::open` asks for its default instead.
         cpal::SupportedBufferSize::Unknown => (1, u32::MAX),
     };
     Ok(Device {
@@ -153,41 +118,33 @@ fn describe(device: cpal::Device) -> Result<Device> {
 // ---------------------------------------------------------------------------------------------
 // Stream
 
-/// What the IO callback sees each cycle: the interleaved **stereo** buffer to fill and the time
-/// at which its first frame reaches the DAC.
+/// What the IO callback sees each cycle: the interleaved stereo buffer to fill and the time its
+/// first frame reaches the DAC.
 pub(super) struct Cycle<'a> {
     pub buffer: &'a mut [f32],
     pub frames: usize,
-    /// When this cycle's first frame is due, in nanoseconds on the [`now_ns`] clock —
-    /// reconstructed as `now + (playback − callback)` from cpal's pair of stream instants.
-    /// Zero if the host gave no usable timestamp.
+    /// When the first frame is due, ns on the [`now_ns`] clock; zero with no usable timestamp.
     pub output_time_ns: u64,
 }
 
-/// An open, running output stream on one device. Dropping it stops the stream and drops the
-/// callback (and with it whatever the closure owned) — cpal joins its own audio thread first.
+/// A running output stream. Dropping it stops the stream and drops the callback; cpal joins its
+/// audio thread first.
 pub(super) struct Stream {
     _stream: cpal::Stream,
     observed_frames: Arc<AtomicU32>,
 }
 
 impl Stream {
-    /// The cycle size the device is actually running, frames.
-    ///
-    /// cpal cannot tell us what the host granted, and on WASAPI's shared mode it varies from
-    /// wake to wake, so the honest number is the one the last callback carried rather than the
-    /// one we asked for. Seeded with the request so the first report is never zero.
+    /// The cycle size the last callback carried, frames, seeded with the request: cpal cannot
+    /// say what the host granted, and WASAPI's shared mode varies it per wake.
     pub(super) fn buffer_frames(&self) -> u32 {
         self.observed_frames.load(Ordering::Relaxed)
     }
 
     /// Open `device` at its default config with a buffer of `buffer_frames` (clamped to what the
-    /// host says it accepts) and start it. `on_cycle` runs on cpal's audio thread — it must
-    /// never block, allocate, or log.
-    ///
-    /// `notices` is wired to cpal's stream error callback: on these hosts it is delivered (the
-    /// no-op 1857 found was macOS-and-default-device only), and it is the promptest signal that
-    /// the device is gone. The poll in [`Listeners`] is the backstop.
+    /// host accepts) and start it. `on_cycle` runs on cpal's audio thread and must never block,
+    /// allocate or log. `notices` gets cpal's stream error callback, the promptest sign of a lost
+    /// device; the [`Listeners`] poll is the backstop.
     pub(super) fn open<F>(
         device: &Device,
         buffer_frames: u32,
@@ -206,24 +163,16 @@ impl Stream {
         let observed_frames = Arc::new(AtomicU32::new(buffer_frames));
 
         let errors = Arc::clone(notices);
-        // Only two of cpal's four `StreamError`s are fatal to a stream, and getting that wrong is
-        // expensive in exactly one direction. `BufferUnderrun` is a routine ALSA xrun — the
-        // device starved below us — and `BackendSpecific` is a grab-bag; treating either as a
-        // dead device means a full teardown and rebuild of the stream on every glitch, which is
-        // the loudest possible response to the quietest problem. **Measured, not
-        // reasoned:** with both mapped to `device_died`, one second of the Linux live test
-        // carried a `Lost` and a re-`Opened`; with this split, three runs carry neither. kira
-        // draws the same line (`stream_manager.rs`: `DeviceNotAvailable | StreamInvalidated`
-        // restart, the other two are dropped).
+        // Only `DeviceNotAvailable` and `StreamInvalidated` are fatal, as kira draws it; an ALSA
+        // xrun (`BufferUnderrun`) or `BackendSpecific` must not tear the stream down.
         let reported = std::sync::atomic::AtomicBool::new(false);
         let on_error = move |e: cpal::StreamError| {
             match e {
                 cpal::StreamError::DeviceNotAvailable | cpal::StreamError::StreamInvalidated => {
                     errors.device_died.store(true, Ordering::Release);
                 }
-                // Not fatal, so the stream stays. Said once per stream and no more: this runs on
-                // the audio thread, and an xrun storm must not become a logging storm. The
-                // audible cost of a starved device is already counted upstairs as an underrun.
+                // Logged once per stream: this is the audio thread, and a starved device is
+                // already counted as an underrun.
                 _ => {
                     if !reported.swap(true, Ordering::Relaxed) {
                         bevy::log::warn!("audio: output stream reported {e} (stream kept)");
@@ -241,9 +190,7 @@ impl Stream {
             observed: Arc::clone(&observed_frames),
             scratch: vec![0.0; MAX_CYCLE_FRAMES * CHANNELS as usize],
         };
-        // The format list cpal's own `beep` example carries — every output format it can hand a
-        // typed callback for. The default config names one of them, so in practice this picks
-        // f32 on WASAPI and whatever ALSA's heuristic settled on.
+        // Every output format cpal can hand a typed callback for.
         let stream = match device.config.sample_format() {
             cpal::SampleFormat::F32 => build::<f32, _>(device, &config, ctx, on_error),
             cpal::SampleFormat::F64 => build::<f64, _>(device, &config, ctx, on_error),
@@ -266,15 +213,13 @@ impl Stream {
     }
 }
 
-/// Everything the audio callback owns, so [`Stream::open`] can build it once and hand it to
-/// whichever sample-format instantiation the device turns out to want.
+/// Everything the audio callback owns, built once for whichever sample format the device wants.
 struct Callback<F> {
     on_cycle: F,
     channels: usize,
     sample_rate: u32,
     observed: Arc<AtomicU32>,
-    /// Preallocated interleaved stereo — the buffer [`Cycle`] hands out. Sized at open; a host
-    /// buffer longer than this is served in several cycles rather than by allocating here.
+    /// Preallocated interleaved stereo, the buffer [`Cycle`] hands out.
     scratch: Vec<f32>,
 }
 
@@ -300,8 +245,8 @@ where
 }
 
 impl<F: FnMut(Cycle<'_>) + Send + 'static> Callback<F> {
-    /// One cpal callback: render our stereo mix into the scratch and spread it over the
-    /// device's channels. Realtime thread — no allocation, no lock, no log.
+    /// One cpal callback: render the stereo mix into the scratch and spread it over the
+    /// device's channels. Realtime thread: no allocation, no lock, no log.
     fn run<T>(&mut self, data: &mut [T], info: &cpal::OutputCallbackInfo)
     where
         T: SizedSample + FromSample<f32>,
@@ -311,9 +256,7 @@ impl<F: FnMut(Cycle<'_>) + Send + 'static> Callback<F> {
             return;
         }
         self.observed.store(frames as u32, Ordering::Relaxed);
-        // The device timeline, on our clock: how far ahead of this callback the audio it fills
-        // is due. `duration_since` is `None` only if a host reports playback before callback,
-        // which would make the lead meaningless — report no timestamp rather than a wrong one.
+        // `None` only if a host reports playback before callback: no timestamp beats a wrong one.
         let ts = info.timestamp();
         let due = match ts.playback.duration_since(&ts.callback) {
             Some(ahead) => now_ns() + ahead.as_nanos() as u64,
@@ -340,14 +283,9 @@ impl<F: FnMut(Cycle<'_>) + Send + 'static> Callback<F> {
     }
 }
 
-/// Write an interleaved stereo block over a device buffer of `channels` channels.
-///
-/// Stereo is the mix's own shape, and every host here takes the device's channel count
-/// literally — there is no HAL output unit above us doing the map, the way `coreaudio.rs` has.
-/// So: mono averages the pair, stereo copies, and anything wider puts L and R on the first two
-/// channels and silences the rest. That last case is deliberately *not* an upmix — the
-/// reference is a stereo client, and inventing a centre or a surround feed would be our
-/// invention, not its.
+/// Write an interleaved stereo block over `channels` device channels: mono averages the pair,
+/// stereo copies, and wider puts L and R first and silences the rest, no upmix, since the
+/// reference is a stereo client.
 fn spread<T: SizedSample + FromSample<f32>>(stereo: &[f32], out: &mut [T], channels: usize) {
     match channels {
         1 => {
@@ -380,10 +318,8 @@ fn spread<T: SizedSample + FromSample<f32>>(stereo: &[f32], out: &mut [T], chann
 // ---------------------------------------------------------------------------------------------
 // Listeners
 
-/// The flags the device watch raises; the backend polls them on the main thread. Same shape as
-/// `coreaudio.rs`'s, so [`super`] reacts identically — with one field that stays zero here
-/// ([`Notices::overloads`]: no host below has an analogue of `kAudioDeviceProcessorOverload`,
-/// so the audible failure is counted as a ring underrun and nowhere else).
+/// The flags the device watch raises and the main thread polls, shaped as `coreaudio.rs`'s;
+/// [`Notices::overloads`] stays zero here.
 #[derive(Default)]
 pub(super) struct Notices {
     pub default_changed: AtomicBool,
@@ -394,11 +330,8 @@ pub(super) struct Notices {
 }
 
 /// The device watch: a thread that re-reads the host's default output every [`WATCH_EVERY`] and
-/// raises a notice when it is no longer the device we are on. cpal has no notification API —
-/// this poll is the mechanism kira's own cpal backend uses off macOS, and it is why it was
-/// compiled out *on* macOS (kira #38: enumerating devices mid-stream crackles there). One-shot:
-/// it stops at the first notice, because the backend's answer to one is to rebuild the stream,
-/// which arms a fresh watch on the device it landed on.
+/// raises a notice when it changes. One-shot: the backend answers a notice by rebuilding the
+/// stream, which arms a fresh watch.
 pub(super) struct Listeners {
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
@@ -422,10 +355,8 @@ impl Listeners {
                         notices.device_died.store(true, Ordering::Release);
                         return;
                     };
-                    // Identity by the host's own id where there is one, by display name where
-                    // there is not. A device we could not read at all is a transient, not a
-                    // change — `None` here says nothing and looks again next tick, rather than
-                    // forcing a rebuild onto the device we are already on.
+                    // By the host's id where there is one, else by name; an unreadable device
+                    // is a transient (`None`), not a change.
                     let changed = match (&was_id, now.id()) {
                         (Some(was), Ok(is_now)) => Some(*was != is_now),
                         _ => now.description().ok().map(|d| d.name() != was_name),
@@ -445,8 +376,7 @@ impl Listeners {
             })
             .ok();
         if thread.is_none() {
-            // A watch we could not spawn is a degraded instrument, not a dead stream: the mix
-            // plays, it just will not follow a device change until the next open.
+            // The mix still plays; it just will not follow a device change until the next open.
             bevy::log::warn!("audio: no device watch — device changes will not be followed");
         }
         Self { stop, thread }
@@ -466,8 +396,7 @@ impl Drop for Listeners {
 // ---------------------------------------------------------------------------------------------
 // Realtime scheduling for the render thread
 
-/// No audio workgroups off macOS — no scheduler here has a notion of "the threads working
-/// toward this device's deadline". [`set_realtime`] is the whole story.
+/// No audio workgroups off macOS; [`set_realtime`] is the whole story.
 pub(super) struct Workgroup;
 
 impl Workgroup {
@@ -490,28 +419,19 @@ pub(super) struct Realtime {
     _task: mmcss::Task,
 }
 
-/// Give the calling thread the strongest scheduling standing the OS will grant an audio worker.
-/// It may be refused, and [`super`]'s caller then falls back — the mix-ahead ring is what makes
-/// that a degradation rather than a crackle.
+/// Give the calling thread the strongest standing the OS grants an audio worker; it may be
+/// refused, and the caller falls back.
 ///
-/// - **unix** (Linux, the BSDs): `SCHED_FIFO`. Refused with `EPERM` unless the process has
-///   `RLIMIT_RTPRIO` headroom — which a desktop session gets from its audio group or from
-///   PipeWire's own limits file, and a bare login shell does not. Priority 10 is deliberately
-///   modest: it is inside the ceiling rtkit hands its own clients (20), so we sit below the
-///   sound server's threads rather than above them. There is no busy-wait to starve a core
-///   with — the loop parks between chunks.
-/// - **Windows**: MMCSS, task "Pro Audio" at `AVRT_PRIORITY_CRITICAL` — the documented way for
-///   a thread that is not the audio engine's own to be scheduled like one, and what every
-///   Windows audio stack (WASAPI's own samples, cpal, `audio_thread_priority`) asks for.
+/// - unix: `SCHED_FIFO` priority 10, below rtkit's client ceiling (20) so the sound server's
+///   threads stay above us; `EPERM` without `RLIMIT_RTPRIO` headroom.
+/// - Windows: MMCSS task "Pro Audio" at `AVRT_PRIORITY_CRITICAL`.
 ///
-/// `period_ns` is the render chunk's duration; only a time-constraint scheduler (macOS) takes
-/// one, so it is unused here.
+/// `period_ns` is only for macOS's time-constraint policy.
 pub(super) fn set_realtime(_period_ns: u64) -> Result<Realtime> {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        // SAFETY: a POSIX call against the calling thread with a zeroed, correctly typed
-        // parameter block — `sched_param` carries reserved fields on some targets, so it is
-        // zeroed rather than listed.
+        // SAFETY: a POSIX call on the calling thread with a zeroed `sched_param`, zeroed since
+        // it carries reserved fields on some targets.
         let rc = unsafe {
             let mut param: libc::sched_param = std::mem::zeroed();
             param.sched_priority = 10;
@@ -535,9 +455,7 @@ pub(super) fn set_realtime(_period_ns: u64) -> Result<Realtime> {
     }
 }
 
-/// MMCSS, declared here rather than pulled through a binding crate — three calls and a constant
-/// are not worth a dependency, and it is the posture `coreaudio.rs` already takes with mach and
-/// `os_workgroup`.
+/// MMCSS, declared here rather than through a binding crate.
 #[cfg(windows)]
 mod mmcss {
     use anyhow::{bail, Result};
@@ -555,12 +473,11 @@ mod mmcss {
         fn AvRevertMmThreadCharacteristics(handle: *mut core::ffi::c_void) -> i32;
     }
 
-    /// The calling thread's membership in an MMCSS task, reverted on drop — on the same thread,
-    /// which is where the render loop drops it.
+    /// The calling thread's membership in an MMCSS task, reverted on drop on the same thread.
     pub(super) struct Task(*mut core::ffi::c_void);
 
-    // SAFETY: the handle is only ever touched by the thread that created it. The impl exists so
-    // the enclosing `Realtime` has the same auto-traits on every target, not to move it.
+    // SAFETY: only the creating thread touches the handle; the impl gives `Realtime` the same
+    // auto-traits on every target.
     unsafe impl Send for Task {}
 
     impl Task {
@@ -574,7 +491,7 @@ mod mmcss {
             }
             // SAFETY: `handle` is the live registration just returned.
             if unsafe { AvSetMmThreadPriority(handle, PRIORITY_CRITICAL) } == 0 {
-                // The task membership alone is most of the benefit; keep it, and say so.
+                // The task membership alone is most of the benefit; keep it.
                 bevy::log::warn!("audio: MMCSS took the task but refused AVRT_PRIORITY_CRITICAL");
             }
             Ok(Self(handle))

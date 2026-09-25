@@ -1,17 +1,10 @@
-//! The guard-directions live probe (`WOW_PROBE=guardpoi`) — the end-to-end instrument for
-//! [`crate::poi_marker`], inert without the env: once in-world, GM-hop to a Stormwind City Guard,
-//! open his gossip on the real wire (`CMSG_GOSSIP_HELLO` → `SMSG_GOSSIP_MESSAGE`), click the
-//! directions option, and report what `SMSG_GOSSIP_POI` actually put on the map.
+//! The guard-directions live probe (`WOW_PROBE=guardpoi`) for [`crate::poi_marker`]: hops to a
+//! Stormwind City Guard, opens his gossip (`CMSG_GOSSIP_HELLO`, `SMSG_GOSSIP_MESSAGE`), clicks the
+//! "Weapons Trainer" option and checks the `SMSG_GOSSIP_POI` marker field by field against
+//! `points_of_interest` row 808, then logs which minimap draw it gets from here.
 //!
-//! The verdict is machine-checked against the server's own row, so a wrong parse cannot pass: the
-//! guard's "Weapons Trainer" option carries `action_poi_id = 808`, whose `points_of_interest` row
-//! is `("Woo Ping", -8796.2, 613.098, icon 6, flags 99)`. The probe asserts the name, the position,
-//! the icon and the flags, then classifies the marker exactly as the minimap's landmark pass would
-//! — distance, view radius, and which of the two draws it takes — so the run says *what would be
-//! on screen*, not merely that a packet arrived.
-//!
-//! Non-combat. Pair with the checkout's probe identity (`.probe-identity`, or WOW_USER/WOW_PASS/WOW_CHAR — the `probe` skill), and `WOW_NOSOUND=1` when
-//! it runs unattended. One `timeout`'d run plus a grep for `PROBE guardpoi:` is the whole harness.
+//! Non-combat; grep `PROBE guardpoi:`. The switches are `docs/CONTRIBUTING.md`, "Running it
+//! unattended".
 
 use bevy::prelude::*;
 
@@ -21,21 +14,19 @@ use crate::player::Player;
 use crate::poi_marker::PoiMarker;
 use crate::ui_gossip::GossipState;
 
-/// A Stormwind City Guard's spawn (vmangos `creature` guid 79664, entry 68, map 0) — the `.go xyz`
-/// target. The guard himself is then found in the streamed world by his gossip flag, never by a
-/// hardcoded guid.
+/// A Stormwind City Guard's spawn (vmangos `creature` guid 79664, entry 68, map 0); the guard is
+/// then found in the streamed world by his gossip flag.
 const GUARD_AT: [f32; 3] = [-8854.14, 541.299, 105.984];
-/// `UNIT_NPC_FLAG_GOSSIP` (bit 0) — every direction-giving guard carries it.
+/// `UNIT_NPC_FLAG_GOSSIP` (bit 0).
 const NPC_FLAG_GOSSIP: u32 = 0x1;
-/// The option we click, by its label. Menu 435 lists it 9th ("Weapons Trainer", `action_poi_id`
-/// 808); matching on the text rather than the index keeps the probe honest if the row order moves.
+/// The option clicked, matched by label: gossip menu 435's "Weapons Trainer", `action_poi_id` 808.
 const OPTION_LABEL: &str = "Weapons Trainer";
-/// What `points_of_interest` row 808 says the answer must be.
+/// `points_of_interest` row 808.
 const EXPECT_NAME: &str = "Woo Ping";
 const EXPECT_POS: [f32; 2] = [-8796.2, 613.098];
 const EXPECT_ICON: u32 = 6; // ICON_POI_REDFLAG
-const EXPECT_FLAGS: u32 = 99; // candidate | draw-the-in-range-icon
-/// The in/out-of-range split the minimap's landmark pass applies (`0x811730`, VERIFIED).
+const EXPECT_FLAGS: u32 = 99; // bits 0 (a candidate) and 1 (draw the in-range icon)
+/// The in/out-of-range split of the minimap's landmark pass (`0x811730`).
 const BLIP_EDGE_RATIO: f32 = 0.8;
 
 pub(crate) struct ProbeGuardPoiPlugin;
@@ -52,8 +43,7 @@ struct GuardPoiProbe {
     phase: Phase,
 }
 
-/// `Wait` → (GM hop sent) `Hopped` → (guard found, hello sent) `Greeted` → (option clicked)
-/// `Asked` → verdict → `Done`.
+/// `Wait`, `Hopped` (hop sent), `Greeted` (hello sent), `Asked` (option clicked), `Done`.
 #[derive(Default, PartialEq)]
 enum Phase {
     #[default]
@@ -71,7 +61,6 @@ enum Phase {
     Done,
 }
 
-// One Bevy system's full input set (the taxi-probe shape).
 fn guard_poi_probe(
     time: ProbeClock,
     mut probe: ResMut<GuardPoiProbe>,
@@ -99,7 +88,7 @@ fn guard_poi_probe(
         }
         Phase::Hopped { sent_at } => {
             if now - sent_at < 3.0 {
-                return; // post-teleport settle: let the guard stream in
+                return; // let the guard stream in
             }
             let me = player.pos;
             let guard = units.iter().find(|(_, net_e, store, tf)| {
@@ -161,7 +150,7 @@ fn guard_poi_probe(
                 }
                 return;
             };
-            // Every field against the server's own row — a mis-ordered parse cannot survive this.
+            // Every field against the server's row, so a mis-ordered parse fails.
             let mut wrong: Vec<String> = Vec::new();
             if poi.name != EXPECT_NAME {
                 wrong.push(format!("name {:?} != {EXPECT_NAME:?}", poi.name));
@@ -181,8 +170,7 @@ fn guard_poi_probe(
                 wrong.push(format!("flags {} != {EXPECT_FLAGS}", poi.flags));
             }
 
-            // What the minimap's landmark pass would do with it, from here (the default zoom's
-            // 133.3-yd view radius — the probe never opens the zoom dial, so this IS the live one).
+            // The minimap's landmark pass from here, at the default zoom's 133.3-yd view radius.
             let w = benilla_assets::coords::bevy_to_wow(player.pos);
             let d = ((poi.pos[0] - w[0]).powi(2) + (poi.pos[1] - w[1]).powi(2)).sqrt();
             let radius = 133.3;

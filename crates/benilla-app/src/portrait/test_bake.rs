@@ -1,8 +1,6 @@
-//! The `WOW_PORTRAIT_TEST` debug bake — the booth pipeline's server-less eyeball harness
-//! (`WOW_PORTRAIT_TEST=<Model\\Path.mdx>` + optional `WOW_PORTRAIT_TEST_SKIN=<blp>`): bake that
-//! model into every slot (portraits + the paper doll's body framing) and own the booths (the live
-//! syncs and the 0540 demand gate both stand down). Split from `mod.rs` — the harness concern,
-//! not the live bake path.
+//! The `WOW_PORTRAIT_TEST=<Model\\Path.mdx>` debug bake (optional
+//! `WOW_PORTRAIT_TEST_SKIN=<blp>`): bakes that model into every booth slot with no server and owns
+//! the booths, so the live syncs and the demand gate stand down.
 
 use benilla_assets::M2Model;
 use bevy::prelude::*;
@@ -12,8 +10,7 @@ use super::framing::{body_frame, frame, head_anchor, PortraitAnchors};
 use super::{aim, test_mode, BoothCam, BoothLight, Booths, PaperDollBooth, PAPERDOLL_SLOT, SLOTS};
 use benilla_assets::m2_url;
 
-/// The debug bake driver: when `WOW_PORTRAIT_TEST` is set, bake the named model into every slot once
-/// it loads, and own the booths (the live sync yields). See [`bake_test`].
+/// When `WOW_PORTRAIT_TEST` is set, bake the named model into every slot once it loads.
 pub(super) fn sync_test_portraits(
     mut commands: Commands,
     booths: Res<Booths>,
@@ -53,10 +50,8 @@ pub(super) fn sync_test_portraits(
     }
 }
 
-/// The debug bake: load the env model once, then spawn its submeshes (real WowModelMaterial, untextured
-/// → the muted fallback) into every slot and frame each camera. A pipeline eyeball only — no skins, no
-/// cache. Returns `true` once the model has loaded + a light buffer exists and it's baked (the caller
-/// then stops re-baking).
+/// Load the env model once, spawn its submeshes into every slot and frame each camera; `true` once
+/// baked. All submeshes, no geoset filter and no cache: an untextured part gets the muted fallback.
 fn bake_test(
     commands: &mut Commands,
     palettes: &mut benilla_world::rig_palette::RigPalettes,
@@ -75,21 +70,19 @@ fn bake_test(
     let handle = test_handle
         .get_or_insert_with(|| asset_server.load(m2_url(path)))
         .clone();
-    // Bake only once the asset lands and the studio-light buffer exists (the material needs it).
+    // Bake only once the asset lands and the light buffers exist.
     let Some(model) = m2s.get(&handle) else {
         return false;
     };
-    // The portraits' studio light and the body pane's own — the harness bakes each
-    // slot against the light that slot really uses, so the eyeball shows what ships.
+    // Each slot bakes against the light it really uses: the portraits' studio, the pane's own.
     let (Some(studio), Some(pane)) = (
         booth_light.studio.buffer.clone(),
         booth_light.pane.buffer.clone(),
     ) else {
         return false;
     };
-    // Optional real skin for the test bake (WOW_PORTRAIT_TEST_SKIN=<blp path>) — an untextured model
-    // reads dark brown by design (the muted fallback is a gamma-dark albedo), so brightness parity
-    // with the world is only judgeable textured.
+    // An untextured model reads dark brown (the muted fallback), so brightness is only judgeable
+    // with a real skin.
     let skin: Option<Handle<Image>> = std::env::var("WOW_PORTRAIT_TEST_SKIN")
         .ok()
         .filter(|s| !s.is_empty())
@@ -99,7 +92,7 @@ fn bake_test(
                 p.replace('\\', "/").to_ascii_lowercase()
             ))
         });
-    // The test model's render forms, built NOW — a dev harness bake, one model.
+    // Built now: a harness bake of one model.
     forms.ensure_now_rigged(&handle, &model.submeshes, mesh_assets);
     let built = forms.slices(&handle);
     let (stat_forms, skin_forms) = (built.stat, built.skin.unwrap_or(&[]));
@@ -116,8 +109,8 @@ fn bake_test(
                         .get(pi)
                         .map(|(h, _)| h.clone())
                         .unwrap_or_default(),
-                    // The booth look: the slot's own light buffer, sky lane (never ground-shaded),
-                    // frozen at t = 0 — so no UV scroll and the tint seeded at its first key.
+                    // The slot's light buffer, sky lane, frozen at t = 0: no UV scroll, the tint
+                    // at its first key.
                     material: mats.off_world(
                         s,
                         s.texture.clone().or_else(|| skin.clone()),
@@ -125,8 +118,7 @@ fn bake_test(
                         light,
                         false,
                     ),
-                    // The harness parses submeshes straight off the model, so the authored alpha is
-                    // right here — an eyeball bake should show the batch dimming the artist wrote.
+                    // Straight off the model, so the authored alpha animation is at hand.
                     alpha_anim: s.alpha_anim.clone(),
                     twins: BoothTwins::default(),
                     mat_anim: false,
@@ -184,16 +176,13 @@ fn bake_test(
             catalog,
             BoothMotion::Frozen,
             [false, false], // the WOW_PORTRAIT_TEST bake dresses no weapons
-            &[],            // …nor an eye-glow
+            &[],            // nor an eye-glow
             BoothInstance::default(),
         )
         .finish(commands);
         aim(cams, token, &rig);
     }
-    // Also drive the paper-doll booth from the same model, so `WOW_PORTRAIT_TEST` eyeballs the
-    // full-body framing (feet/crown crop) server-less. Same all-submesh caveat as the portraits
-    // (no geoset filter — a character bakes stacked hair); the live pane mirrors the filtered
-    // player. Spun to the default yaw so the still reads three-quarter like the pane's default.
+    // The paper-doll booth too, to check the full-body framing, spun to the pane's default yaw.
     if let Some(booth) = booths.0.get(PAPERDOLL_SLOT) {
         commands.entity(booth.root).despawn_related::<Children>();
         spawn_booth_model(
@@ -201,7 +190,7 @@ fn bake_test(
             palettes,
             booth.root,
             booth.layer.clone(),
-            &pane_parts, // the pane's own light, not the portraits' studio (decision 0638)
+            &pane_parts, // the pane's own light, not the portraits' studio
             &[],
             Some((
                 &model.skeleton,
@@ -210,12 +199,12 @@ fn bake_test(
             )),
             catalog,
             BoothMotion::Frozen,
-            [false, false], // the paper-doll still sheaths its weapons — no in-hand grip
-            &[],            // eye-glow in the paper doll is the same follow-up (see above)
+            [false, false], // the harness bake holds no weapons, so no in-hand grip
+            &[],            // no eye-glow
             BoothInstance::default(),
         )
         .finish(commands);
-        // The eyeball harness has no live UI publishing a pane, so it bakes square.
+        // No live UI publishes a pane aspect here, so it bakes square.
         aim(cams, PAPERDOLL_SLOT, &body_frame(&anchors, 1.0));
         commands
             .entity(booth.root)
@@ -226,33 +215,21 @@ fn bake_test(
     true
 }
 
-/// `WOW_BOOTH_DUMP=<token>:<path>:<secs>`: once `secs` of app time have elapsed, screenshot the
-/// named booth's render target (e.g. `paperdoll`) to `path`. A probe run can then look at the
-/// pane a live session would see under the character window — without a UI click path (the
-/// first-login black-pane hunt). One shot per run; inert without the env.
+/// `WOW_BOOTH_DUMP=<token>:<path>:<secs>`: after `secs` of app time, save the named booth's render
+/// target (e.g. `paperdoll`) to `path` as a PNG, once; inert without the env.
 ///
-/// **It must WAKE the booth before it shoots, and that is the whole subtlety.** Bevy's
-/// `Screenshot::image` does not read the target texture's existing contents: it substitutes a
-/// fresh `screenshot-capture-rendertarget` as that target's output attachment and hands back
-/// whatever is *rendered into it during the capture frame* (`bevy_render`'s
-/// `prepare_screenshots`). Under the 0540 demand gate a settled booth's camera is inactive and
-/// its target simply "keeps the last render" — so shooting it while it sleeps renders nothing
-/// into the substituted attachment and the PNG comes back a uniform `RGBA(0,0,0,0)`, which is
-/// exactly the `Image::new_fill` pattern in `new_target_image` and exactly what this
-/// instrument produced for its entire first life (every leg of the B106 hunt, control included,
-/// byte-identical). So: arm `Booth::wake` first, hold it armed, and take the shot a few frames
-/// later while the camera is still rendering. A dump that ever comes back uniformly transparent
-/// again means the wake is not reaching the gate — treat it as a broken instrument, not a black
-/// pane.
+/// It must wake the booth first: `Screenshot::image` returns only what renders during the capture
+/// frame (`bevy_render`'s `prepare_screenshots`), and a settled booth's camera is inactive, so a
+/// sleeping shot comes back uniform `RGBA(0,0,0,0)`. A uniformly transparent dump means the wake
+/// is not reaching the gate, not a black pane.
 pub(super) fn dump_booth_target(
     mut commands: Commands,
     mut booths: ResMut<Booths>,
     time: Res<Time<bevy::time::Real>>,
     mut phase: Local<u32>,
 ) {
-    /// Frames to hold the booth awake before taking the shot: the gate reads `wake` and flips
-    /// `Camera::is_active` in the same frame, so one would do — a small margin covers the
-    /// command-applied camera flip and the render-app extract behind it.
+    /// Frames awake before the shot: one would do, the margin covers the deferred camera flip and
+    /// the render-app extract.
     const WAKE_LEAD: u32 = 3;
     const DONE: u32 = u32::MAX;
 
@@ -276,7 +253,7 @@ pub(super) fn dump_booth_target(
         *phase = DONE;
         return;
     };
-    // Hold the gate open across the lead AND the capture frame itself.
+    // Hold the gate open across the lead and the capture frame.
     booth.wake = booth.wake.max(super::BOOTH_SETTLE_FRAMES);
     if *phase < WAKE_LEAD {
         if *phase == 0 {
@@ -306,18 +283,9 @@ pub(super) fn dump_booth_target(
         });
 }
 
-/// Turn a booth render-target readback into something the PNG encoder can write — and, more to the
-/// point, into what the **screen** shows.
-///
-/// The targets are `Rgba16Float` holding **un-encoded** values (`super::new_target_image`): the
-/// display encode is the UI arc's, applied when the glue/paper-doll tree samples the target
-/// (`crate::ui_gamma`), and a readback bypasses that lane entirely. So it happens here. Without it
-/// the PNG is ~2.2× dark — which is precisely what this instrument produced for its whole first life
-/// (it relabeled the un-encoded 8-bit bytes as sRGB and saved them verbatim), and a dump that reads
-/// darker than the screen is a debugging instrument that lies about the thing it exists to show.
-///
-/// `None` on an unexpected format, so a future target-format change is a loud warning rather than a
-/// garbled PNG.
+/// Encode a booth readback as the screen shows it. The targets are `Rgba16Float` holding
+/// un-encoded values (the display encode happens where the UI samples them, `crate::ui_gamma`), so
+/// a readback needs the sRGB curve here or the PNG is about 2.2× dark. `None` on any other format.
 pub(crate) fn encode_target_readback(shot: &Image) -> Option<Image> {
     use bevy::asset::RenderAssetUsages;
     use bevy::render::render_resource::{TextureDimension, TextureFormat};
@@ -330,8 +298,8 @@ pub(crate) fn encode_target_readback(shot: &Image) -> Option<Image> {
     for texel in src.as_chunks::<8>().0 {
         for (c, half_pair) in texel.as_chunks::<2>().0.iter().enumerate() {
             let v = half::f16::from_le_bytes([half_pair[0], half_pair[1]]).to_f32();
-            // The sRGB transfer function for colour (channel 3 is plain coverage, never encoded) —
-            // the same curve the swapchain's `…Srgb` write applies to the live frame.
+            // The sRGB transfer function, as the swapchain's `Srgb` write applies; channel 3 is
+            // coverage, never encoded.
             let encoded = match c {
                 3 => v,
                 _ if v <= 0.003_130_8 => v * 12.92,
@@ -369,8 +337,7 @@ mod tests {
         )
     }
 
-    /// The dump encodes colour and passes alpha through — the screen's transfer function, applied
-    /// where the readback bypassed the UI lane that would have applied it.
+    /// The dump encodes colour with the screen's transfer function and passes alpha through.
     #[test]
     fn the_booth_dump_encodes_colour_and_leaves_alpha_alone() {
         let texel = |v: f32| half::f16::from_f32(v).to_le_bytes().to_vec();
@@ -384,11 +351,9 @@ mod tests {
         let out = encode_target_readback(&readback(TextureFormat::Rgba16Float, data))
             .expect("float readback encodes");
         let bytes = out.data.as_ref().expect("encoded bytes");
-        // 0.5 linear is display 188 — NOT 128. That gap is the whole reason this exists: for its
-        // first life the instrument wrote the 128.
+        // 0.5 linear is display 188, not 128.
         assert_eq!(bytes[0], 188);
-        // The old 8-bit linear target's second code lands on 13 — the bottom of the ladder B126
-        // measured, and the reason a float target has ~4× the levels down here.
+        // An 8-bit linear target's second code lands on 13: a float target has more levels here.
         assert_eq!(bytes[1], 13);
         assert_eq!(bytes[2], 0);
         // Alpha is coverage, never encoded.

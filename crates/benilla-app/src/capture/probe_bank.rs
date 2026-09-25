@@ -1,45 +1,14 @@
-//! The bank-arc live probe (`WOW_PROBE_BANK=1`) — decision 0604's end-to-end instrument: log in,
-//! GM-hop to a PURE banker, drive the whole six-opcode bank wire
-//! (`CMSG_BANKER_ACTIVATE`→`SMSG_SHOW_BANK`, deposit/withdraw via `CMSG_AUTOBANK_ITEM`/
-//! `CMSG_AUTOSTORE_BANK_ITEM`, `CMSG_BUY_BANK_SLOT` and its refusal), and print a
-//! `PROBE_BANK: <step> PASS/FAIL/SKIP <detail>` line per step plus a final
-//! `PROBE_BANK: DONE pass=<n> fail=<m>` summary. Modeled closely on [`super::probe_mail`] (same
-//! phase-machine shape, trace style, self-terminating exit) — but unlike mail, the bank steps ride
-//! [`ClientCommand`]/the descriptor directly (the vault is already streamed, the
-//! window is first-party, no Lua click surface to drive); the live Lua VM is only touched for the
-//! bonus refusal step's `UI_ERROR_MESSAGE` observation, the mail probe's own idiom.
+//! The bank live probe (`WOW_PROBE_BANK=1`): hops to a pure banker, drives the six bank opcodes
+//! (activate, deposit, withdraw, buy a slot and its out-of-range refusal) and logs one
+//! `PROBE_BANK: <step> PASS/FAIL/SKIP <detail>` line per step, then `PROBE_BANK: DONE pass=<n>
+//! fail=<m>`, and exits. Non-combat; the switches are `docs/CONTRIBUTING.md`, "Running it
+//! unattended".
 //!
-//! ## The banker (live-DB verified against the local vmangos, `characters`/
-//! `mangos` DBs)
+//! The banker is Soleil Stonemantle (entry 5099, Ironforge), whose `npc_flags` is 256, banker
+//! only, so `CMSG_BANKER_ACTIVATE` opens the bank with no gossip in between.
 //!
-//! Soleil Stonemantle, creature entry 5099, spawn guid 12629, map 0 (Ironforge, The Vault), pos
-//! `(-4895.64, -1004.66, 504.024)`. Her `creature_template.npc_flags` is **256** exactly — bit 8
-//! only (`UNIT_NPC_FLAG_BANKER`), no gossip bits — so she is a *pure* banker: the direct
-//! `CMSG_BANKER_ACTIVATE` route applies with no gossip pre-empt (decision 0604's interact-routing
-//! note).
-//!
-//! ## The funding note — `.modify money` is NOT within a probe account's reach (verified, corrects
-//! the task brief)
-//!
-//! vmangos `Chat.cpp`'s `modifyCommandTable` pins `.modify money` at `SEC_BASIC_ADMIN` (4,
-//! `Common.h` `AccountTypes`) — one level ABOVE `SEC_GAMEMASTER` (3), the level every probe account
-//! is provisioned at (docs/METHOD.md). So `.modify money` is refused server-side for a probe login,
-//! exactly the same floor [`super::probe_taxi`]'s module doc already found for the taxi fare. This
-//! probe never sends it: step (e) reads the character's live `money` field instead (DB-verified
-//! this session: `Probeone` carries 100000 copper, `bank_bag_slots` 0 — comfortably funds the
-//! first purchase-ladder rung, 1000 copper) and SKIPs the purchase gracefully if the live balance
-//! ever falls short of the next rung's price, rather than sending a command known to be refused.
-//!
-//! ## The run recipe
-//!
-//! ```text
-//! WOW_DATA=WoW/Data WOW_USER=probe1 WOW_PASS=pprobe1 WOW_CHAR=Probeone \
-//!     WOW_PROBE_BANK=1 cargo run -q -p benilla
-//! ```
-//! (the checkout's probe identity — `.probe-identity`, or WOW_USER/WOW_PASS/WOW_CHAR; the `probe`
-//! skill).
-//! Non-combat; GM mode is left exactly as found. An outer `timeout` + grep on `PROBE_BANK:` is the
-//! whole harness; the probe self-exits ([`super::probes::ProbeExitPlugin`]'s pattern) once DONE.
+//! The slot purchase funds itself with `.modify money <n>`, which adds `n` copper and needs
+//! `SEC_BASIC_ADMIN` (vmangos `Chat.cpp:586`).
 
 use bevy::prelude::*;
 
@@ -52,32 +21,27 @@ use crate::net::{ChatKind, ClientCommand, Guid, NetCommands, NetEntity, ObjectSt
 use crate::player::Player;
 use crate::ui_bank::{BankOpen, BankPrices};
 
-/// Soleil Stonemantle's spawn (vmangos `creature` guid 12629, entry 5099, map 0) — live-DB
-/// verified this session (module doc).
+/// Soleil Stonemantle's spawn (vmangos `creature` guid 12629, map 0).
 const BANKER_AT: [f32; 3] = [-4895.64, -1004.66, 504.024];
-/// Her creature template entry — the streamed-unit identity check.
+/// Her creature template entry, one of the two identity checks.
 const BANKER_ENTRY: u32 = 5099;
-/// `UNIT_NPC_FLAG_BANKER` (bit 8) — the fallback identity check (either suffices).
+/// `UNIT_NPC_FLAG_BANKER` (bit 8), the other identity check.
 const NPC_FLAG_BANKER: u32 = 0x100;
-/// The server's `CheckBanker`/`GetNPCIfCanInteractWith` range is a few yards; scan generously wide
-/// so a slightly-off `.go` landing still finds her (the mail probe's `MAILBOX_SCAN_RANGE` idiom).
+/// Wider than the server's interact range, so a slightly-off `.go` landing still finds her.
 const SCAN_RANGE: f32 = 12.0;
-/// The probe's deposit/withdraw fixture: Linen Cloth (cheap, stackable, no durability/equip
-/// complications).
+/// The deposit/withdraw fixture: Linen Cloth.
 const ITEM_ENTRY: u32 = 2589;
-/// The first player-array bank slot (`PLAYER_FIELD_BANK_SLOT_1`'s wire index — `SLOT_PACK_FIRST`
-/// (23) + the backpack's 16 slots, decision 0604's addressing note: bank slots are wire 39-62).
+/// The first bank slot's wire index: `SLOT_PACK_FIRST` (23) plus the backpack's 16; bank slots
+/// are 39-62.
 const SLOT_BANK_FIRST: u8 = SLOT_PACK_FIRST + 16;
-/// The client-side purchase ladder (`BankBagSlotPrices.dbc`) — the fallback used
-/// only if [`BankPrices`] failed to load; index = slots already purchased (0-based).
+/// `BankBagSlotPrices.dbc`'s ladder, indexed by slots already bought; used only if
+/// [`BankPrices`] failed to load.
 const PRICE_LADDER: [u32; 6] = [1_000, 10_000, 100_000, 250_000, 500_000, 1_000_000];
-/// Slack added on top of the exact shortfall when the buy-slot step funds itself — the purse can
-/// move under it (a repair, a vendor sale) between the read and the purchase.
+/// Slack over the exact shortfall when the buy-slot step funds itself.
 const FUND_MARGIN_COPPER: u32 = 10_000;
 /// The purchasable-slot ceiling (`GetNumBankSlots()` reports full at 6).
 const MAX_BANK_BAGS: u8 = 6;
-/// How far past the banker's service range the refusal step teleports (yd, WoW space) — well
-/// past the handful of yards `GetNPCIfCanInteractWith` checks.
+/// How far (yd, WoW x) the refusal step hops, well past `GetNPCIfCanInteractWith`'s range.
 const REFUSAL_OFFSET_X: f32 = 150.0;
 
 const SETTLE_SECS: f64 = 3.0;
@@ -85,8 +49,7 @@ const SCAN_TIMEOUT_SECS: f64 = 15.0;
 const ACTIVATE_TIMEOUT_SECS: f64 = 10.0;
 const ITEM_TIMEOUT_SECS: f64 = 10.0;
 const ACTION_TIMEOUT_SECS: f64 = 8.0;
-/// The bonus refusal step's event wait — generous but bounded; a miss SKIPs, never FAILs (task
-/// brief: "if flaky, SKIP with a note rather than FAIL").
+/// The refusal step's event wait; a miss SKIPs, never FAILs.
 const REFUSAL_GRACE_SECS: f64 = 6.0;
 
 pub(crate) struct ProbeBankPlugin;
@@ -98,33 +61,26 @@ impl Plugin for ProbeBankPlugin {
     }
 }
 
-/// The probe's phase machine + the identities discovered along the way (the mail probe's shape:
-/// `Copy` phase, resource-level bulk state so an arm can freely mutate `probe` without fighting
-/// the borrow checker over `probe.phase`).
+/// The probe's phase machine and the identities it discovers.
 #[derive(Resource, Default)]
 struct BankProbe {
     phase: Phase,
-    /// The banker's guid, once streamed in.
     banker: Option<u64>,
-    /// The item round-tripped through deposit/withdraw (same guid both ways — an item's object
-    /// identity survives a bag/slot move server-side).
+    /// The item round-tripped through deposit/withdraw; its guid survives the move.
     item_guid: Option<u64>,
     /// The bank slot index (0-based) the fixture item landed in after deposit.
     bank_idx: Option<u8>,
-    /// Step (e)'s baseline purchased-slot count `B`, latched once so the verdict can compare
-    /// against it after the buy.
+    /// The buy-slot step's baseline purchased count, latched before the buy.
     baseline_purchased: u8,
     baseline_money: u32,
     /// The next rung's price, resolved once (DBC if loaded, else [`PRICE_LADDER`]).
     next_cost: u32,
     passes: u32,
     fails: u32,
-    /// Latched once [`Phase::Done`] has fired its exit (never re-fire on a later frame).
     exited: bool,
 }
 
-/// Every field is `Copy` — the phase is snapshotted out of the resource each tick (the mail
-/// probe's `let phase = probe.phase;` idiom), freeing the match arms to mutate `probe` freely.
+/// `Copy`, so each tick snapshots it and the match arms can mutate `probe`.
 #[derive(Default, Clone, Copy, PartialEq)]
 enum Phase {
     #[default]
@@ -137,8 +93,7 @@ enum Phase {
     Activating {
         sent_at: f64,
     },
-    /// Ensuring a backpack item exists to deposit — `.additem` if the bags are empty (step 3
-    /// prep).
+    /// Ensuring a backpack item to deposit, `.additem` if the bags are empty (step 3).
     EnsureItem {
         since: f64,
         sent: bool,
@@ -151,18 +106,15 @@ enum Phase {
     Withdraw {
         since: f64,
     },
-    /// `BuyBankSlot` sent (funds permitting); waiting for the purchased-count descriptor delta
-    /// (step 5).
+    /// `BuyBankSlot` sent; waiting for the purchased-count descriptor delta (step 5).
     BuySlot {
         since: f64,
         sent: bool,
-        /// Whether this step has already granted itself the fare with `.modify money`. One shot:
-        /// if the purse is still short after a grant, that is a real defect, not a permission wall.
+        /// Whether the one `.modify money` grant has gone out; still short after it is a FAIL.
         funded: bool,
     },
-    /// Step 6 (bonus): teleport out of range, then `BuyBankSlot` the now-stale guid, expecting
-    /// `SMSG_BUY_BANK_SLOT_RESULT` NOTBANKER. `teleported`/`bought` gate the two sends in order;
-    /// `since` resets at each send so the following wait is measured from it, not from entry.
+    /// Step 6: hop out of range, then `BuyBankSlot` the stale guid, expecting
+    /// `SMSG_BUY_BANK_SLOT_RESULT` NOTBANKER; `since` resets at each send.
     Refusal {
         since: f64,
         teleported: bool,
@@ -172,22 +124,21 @@ enum Phase {
     Done,
 }
 
-/// Read the Lua-side `ProbeBankEvents` log length (the `UI_ERROR_MESSAGE` hook, the mail probe's
-/// idiom) — `0` on any eval hiccup (treated as "nothing observed yet", never a panic).
+/// The length of the Lua `ProbeBankEvents` log (the `UI_ERROR_MESSAGE` hook); `0` on an eval
+/// error.
 fn events_len(script: &UiScript) -> i64 {
     script
         .eval::<i64>("return table.getn(ProbeBankEvents or {})")
         .unwrap_or(0)
 }
 
-/// Read the newest `ProbeBankEvents` entry (the just-fired `UI_ERROR_MESSAGE` text).
+/// The newest `ProbeBankEvents` entry.
 fn last_event(script: &UiScript) -> String {
     script
         .eval::<String>("return ProbeBankEvents[table.getn(ProbeBankEvents)] or \"\"")
         .unwrap_or_default()
 }
 
-/// The first backpack slot holding a nonzero item guid, if any.
 fn find_pack_item(store: &ObjectStore) -> Option<(u8, u64)> {
     (0..16u8).find_map(|i| {
         store
@@ -198,7 +149,6 @@ fn find_pack_item(store: &ObjectStore) -> Option<(u8, u64)> {
     })
 }
 
-/// The bank slot index currently holding `guid`, if any.
 fn find_bank_slot(store: &ObjectStore, guid: u64) -> Option<u8> {
     (0..24u8).find(|&i| store.0.player_bank_slot(i) == Some(guid))
 }
@@ -220,7 +170,7 @@ fn bank_probe(
         return; // not in-world yet
     }
     let Some(script) = script else {
-        return; // no UI VM this build (headless net-only) — nothing this probe can drive
+        return; // no UI VM in a headless build
     };
     let now = time.elapsed_secs_f64();
     let phase = probe.phase;
@@ -230,8 +180,7 @@ fn bank_probe(
 
     match phase {
         Phase::Wait => {
-            // The UI_ERROR_MESSAGE hook (step 6's observation channel — the mail probe's exact
-            // pattern), installed up front so it's live well before the refusal step needs it.
+            // Step 6's `UI_ERROR_MESSAGE` hook, installed up front.
             if let Err(e) = script.run(
                 r#"
                 if not ProbeBankHooked then
@@ -439,12 +388,8 @@ fn bank_probe(
                      rung costs {cost}c"
                 );
                 if money < cost && !funded {
-                    // Fund the rung and come back next tick. `.modify money <n>` ADDS `n` copper
-                    // (vmangos `HandleModifyMoneyCommand`: the arg is `addmoney`, not a set) and
-                    // needs SEC_BASIC_ADMIN(4) — which probe accounts have had since they were
-                    // actually raised to 6. This step used to SKIP here, because the
-                    // accounts were gmlevel 3 and the grant would have been refused; the whole
-                    // buy-slot leg was therefore unverified whenever the purse ran dry.
+                    // Fund the rung and come back next tick; `.modify money <n>` adds `n`
+                    // copper (vmangos `CharacterCommands.cpp:4477`).
                     let grant = cost - money + FUND_MARGIN_COPPER;
                     info!("PROBE_BANK: (5 buy_slot) purse {money}c < {cost}c — granting {grant}c with `.modify money`");
                     let _ = net.0.send(ClientCommand::Chat {
@@ -547,8 +492,7 @@ fn bank_probe(
                 return;
             }
             if !bought {
-                // A settle window before firing the stale-guid buy — mirrors step 1's
-                // SETTLE_SECS, long enough for the `.go` + the range-guard close to land.
+                // Let the `.go` and the bank window's range close land first.
                 if now - since < SETTLE_SECS {
                     return;
                 }
@@ -595,9 +539,7 @@ fn bank_probe(
                 "PROBE_BANK: DONE pass={} fail={}",
                 probe.passes, probe.fails
             );
-            // The probe self-exit pattern (`ProbeExitPlugin::fire_probe_exit`): a polite AppExit
-            // plus a hard backstop thread, so a net/winit teardown hang can't leave a zombie
-            // client holding the probe account.
+            // `AppExit` plus a hard backstop, so a teardown hang cannot keep the account held.
             exit.write(AppExit::Success);
             std::thread::spawn(|| {
                 std::thread::sleep(std::time::Duration::from_secs(5));

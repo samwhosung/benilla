@@ -1,36 +1,15 @@
-//! The probe **run's own shell** — everything about the process and its window rather than
-//! about what is being measured: the un-occludable, parked window ([`ProbeFocusPlugin`]), the
-//! bounded lifetime ([`ProbeExitPlugin`]), and the mid-run resize ([`ProbeResizePlugin`]).
-//! Every scripted probe rides these, whatever instrument it is running.
+//! The probe run's shell: the un-occludable, parked window ([`ProbeFocusPlugin`]), the bounded
+//! lifetime ([`ProbeExitPlugin`]) and the mid-run resize ([`ProbeResizePlugin`]).
 
 use bevy::prelude::*;
 
 use super::ProbeClock;
 
-/// Keep a probe run's window **un-occludable, and out of the director's way** — the one defence
-/// against macOS's ~1 fps throttle for a fully covered window (docs/METHOD.md's
-/// `caffeinate` note), at the smallest footprint that still buys it.
-///
-/// The on-top half used to live inside the FPS probe alone, which reads as "a frame-rate concern".
-/// It is not: **every** scripted probe schedule is wall-clock ([`ProbeClock`]), so a throttled run
-/// doesn't just measure slowly, it *executes the wrong script* — one session's mounted-jump run
-/// fired `W@16` and `Space@19` in the SAME frame at ~1 fps, i.e. it jumped from a standstill
-/// instead of mid-run, and the leg had to be re-read to notice. Any probe env arms
-/// it, so a key/chat/Lua probe defends itself exactly like the FPS one.
-///
-/// **The parking half is the other side of that bill**. Asserting `AlwaysOnTop`
-/// every frame silently defeats [`benilla_world::bgwin`]'s whole design — it overrides the
-/// `AlwaysOnBottom` birth cage *and* the `Normal` handed back at release — so an instrumented run
-/// sits on top for its entire life however politely it was launched. At the full-size default that
-/// is a screen-filling window over whatever the director is doing, and a session that fires six
-/// probes fires six of them (which is how it got reported). The answer is not to drop the
-/// assertion — the throttle is real — but to shrink what is being asserted:
-/// [`benilla_world::bgwin::no_pixel_run`] sizes such a run at 640×360 and this parks it in the top-right
-/// corner. A run that photographs pixels is excluded from both and keeps the full window.
-///
-/// Write-gated on both counts: re-marking `Window` every frame would re-apply its whole state
-/// through winit, and the park is one-shot, latched once a monitor is actually readable (the
-/// monitor entities do not exist on frame 1).
+/// Keeps a probe window un-occludable: macOS throttles a fully covered window to ~1 fps, which
+/// on the wall clock ([`ProbeClock`]) collapses scheduled steps into one frame. A no-pixel run
+/// ([`benilla_world::bgwin::no_pixel_run`], 640×360) is also parked once, per [`Park`]; a run that
+/// photographs pixels keeps the full window. Pinning overrides [`benilla_world::bgwin`]'s levels.
+/// Writes only on change: marking `Window` changed re-applies its whole state through winit.
 pub(crate) struct ProbeFocusPlugin;
 
 impl Plugin for ProbeFocusPlugin {
@@ -39,34 +18,25 @@ impl Plugin for ProbeFocusPlugin {
     }
 }
 
-/// Where a no-pixel probe window goes, and whether it is pinned on top — `WOW_PROBE_PARK`.
-///
-/// This is a **dial, not a preference**, and it exists because the thing it trades against is
-/// recorded as unproven. `AlwaysOnTop` costs the director screen for every probe a session fires;
-/// what it buys is immunity from the macOS occlusion throttle, whose evidence is decision 0713's
-/// *"one suspect survives, unproven"* (stall magnitudes of 1026–1053 ms sitting on
-/// `CAMetalLayer.nextDrawable`'s 1 s timeout) promoted to fact by 0777 and built on by 0906. The
-/// probe line already stamps `occluded_frames=`, so each setting is measurable against the others
-/// on the same pin — which is the only way to retire the on-top assertion honestly.
+/// `WOW_PROBE_PARK`: where a no-pixel probe window goes and whether it is pinned on top; compare
+/// settings by the probe line's `occluded_frames=`.
 #[derive(Clone, Copy, PartialEq)]
 enum Park {
-    /// Top-right corner, `AlwaysOnTop`. Today's behaviour.
+    /// Top-right corner, `AlwaysOnTop`; the default.
     Corner,
-    /// Mostly past the right edge — a [`PARK_EDGE_SLIVER`]-wide strip left on screen, at the
-    /// NORMAL level. macOS marks a window `NSWindowOcclusionStateVisible` if *any* part of it is
-    /// visible, so a sliver should be enough to dodge the throttle at ~1% of the screen cost.
+    /// A [`PARK_EDGE_SLIVER`]-wide strip on screen at the normal level: macOS counts a window
+    /// visible if any part of it is.
     Edge,
-    /// Wholly past the right edge, NORMAL level. The best case if AppKit allows it — AppKit
-    /// constrains ordinary titled windows back onto a screen (`constrainFrameRect:toScreen:`), so
-    /// this may simply not stick; that is the assumption the dial exists to test.
+    /// Wholly past the right edge, normal level; AppKit may constrain it back
+    /// (`constrainFrameRect:toScreen:`).
     Off,
 }
 
 /// How much of an [`Park::Edge`] window stays on screen (logical px).
 const PARK_EDGE_SLIVER: f32 = 32.0;
 
-/// Gap (logical px) a [`Park::Corner`] window keeps from the screen's top and right edges — clear
-/// of the menu bar, which a window at `y = 0` would sit under.
+/// Gap (logical px) a [`Park::Corner`] window keeps from the top and right edges, clear of the
+/// menu bar.
 const PROBE_WINDOW_MARGIN: f32 = 36.0;
 
 fn park_mode() -> Park {
@@ -87,9 +57,7 @@ fn keep_probe_window_on_top(
     };
     let no_pixel = benilla_world::bgwin::no_pixel_run();
     let mode = park_mode();
-    // Only `Corner` needs the pin: the other two get out of the way by *position*, which is the
-    // point of measuring them — an edge/offscreen window that never reports `occluded_frames` has
-    // retired the assertion on evidence instead of preference.
+    // A pixel run is always pinned; a no-pixel run only in `Corner`, the others dodge by position.
     let want_top = !no_pixel || mode == Park::Corner;
     let level = if want_top {
         bevy::window::WindowLevel::AlwaysOnTop
@@ -102,10 +70,9 @@ fn keep_probe_window_on_top(
     if *parked || !no_pixel {
         return;
     }
-    // `WindowPosition::At` is in PHYSICAL pixels while the window's own resolution is logical, so
-    // the width has to be scaled before it is subtracted.
+    // `WindowPosition::At` is physical pixels, the resolution logical: scale the width.
     let Some(m) = monitors.iter().next() else {
-        return; // no monitor entity yet — try again next frame
+        return; // no monitor entity yet (frame 1)
     };
     let scale = m.scale_factor as f32;
     let width = (w.resolution.width() * scale) as i32;
@@ -130,9 +97,7 @@ fn keep_probe_window_on_top(
     );
 }
 
-/// The probe self-termination as its own plugin, registered whenever `WOW_PROBE_EXIT_AT` is set
-/// — it used to ride inside [`super::ProbeLuaPlugin`], so a chat/key-only probe's exit knob silently
-/// did nothing (the 0441 flourish probe hung past its window on exactly that).
+/// The probe self-termination, registered whenever `WOW_PROBE_EXIT_AT` is set.
 pub(crate) struct ProbeExitPlugin;
 
 impl Plugin for ProbeExitPlugin {
@@ -147,10 +112,7 @@ impl Plugin for ProbeExitPlugin {
     }
 }
 
-/// The probe run's clean self-termination (`WOW_PROBE_EXIT_AT=<secs>`, off when unset): exit the
-/// app after N wall seconds, so a scripted live probe (`WOW_PROBE_LUA`/`WOW_PROBE_CHAT`) is one
-/// foreground command with a bounded lifetime — no external kill, no orphaned window (0437's
-/// probe rounds prompted it; generic to every future live probe).
+/// `WOW_PROBE_EXIT_AT=<secs>`: exits the app after that many wall seconds; off when unset.
 #[derive(Resource)]
 struct ProbeExit {
     at: Option<f32>,
@@ -167,10 +129,8 @@ fn fire_probe_exit(
         info!("probe-exit: {at}s elapsed — exiting");
         probe.fired = true;
         exit.write(AppExit::Success);
-        // The hard backstop rides its own OS thread: the polite AppExit stops the Update
-        // schedule, so an in-schedule backstop can never fire — exactly the hang it existed
-        // for (a winit/net-thread teardown hang leaves a zombie client holding the account;
-        // the 0451 probe reproduced it). A probe run has nothing to lose.
+        // The hard backstop runs on its own thread, since `AppExit` stops `Update`: a teardown
+        // hang would otherwise leave a client holding the account.
         std::thread::spawn(|| {
             std::thread::sleep(std::time::Duration::from_secs(5));
             warn!("probe-exit: still alive 5s after AppExit — hard exit");
@@ -179,10 +139,8 @@ fn fire_probe_exit(
     }
 }
 
-/// The window-resize probe (`WOW_PROBE_RESIZE="<secs>:<W>x<H>"`, logical units): resize the
-/// primary window mid-run — the headless stand-in for a mac fullscreen toggle or a window drag,
-/// so resize-reactive layout (the glue screens' rescale rebuild) is verifiable in one scripted
-/// run: open, resize at `t`, shoot after (`WOW_LOGIN_SHOT_OUT` fires at 8 s).
+/// `WOW_PROBE_RESIZE="<secs>:<W>x<H>"`: resizes the primary window to that logical size mid-run,
+/// standing in for a fullscreen toggle or a window drag.
 pub(crate) struct ProbeResizePlugin;
 
 impl Plugin for ProbeResizePlugin {
@@ -206,7 +164,7 @@ impl Plugin for ProbeResizePlugin {
     }
 }
 
-/// [`ProbeResizePlugin`] state: the fire time, the target logical size, and the once-latch.
+/// [`ProbeResizePlugin`] state; `size` is logical.
 #[derive(Resource)]
 struct ProbeResize {
     at: f32,

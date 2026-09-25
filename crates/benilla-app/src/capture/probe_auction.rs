@@ -1,66 +1,23 @@
-//! The auction-arc live probe (`WOW_PROBE_AUCTION=1`) — decision 1511's end-to-end instrument:
-//! GM-hop to a real Stormwind auctioneer, greet it on the wire, and drive browse / throttle /
-//! sell / owner-list / cancel through the **live Lua VM** exactly as a click would, printing a
-//! `PROBE_AUCTION:` trace line with a PASS/FAIL/SKIP verdict per step and a final
-//! `PROBE_AUCTION: DONE pass=<n> fail=<m>` summary. Modeled closely on [`super::probe_mail`]
-//! (same phase-machine shape, same trace style, same self-terminating exit).
+//! The auction live probe (`WOW_PROBE_AUCTION=1`): hops to a Stormwind auctioneer, greets it on
+//! the wire and drives browse, throttle, sell, owner list and cancel through the live Lua VM as a
+//! click would, logging one `PROBE_AUCTION:` PASS/FAIL/SKIP line per step, then
+//! `PROBE_AUCTION: DONE pass=<n> fail=<m>`, and exits. Non-combat; the switches are
+//! `docs/CONTRIBUTING.md`, "Running it unattended".
 //!
-//! ## The one assertion no unit test can make
+//! The window opens on the server's `MSG_AUCTION_HELLO` reply, not on the click, and the reply's
+//! house id (checked in `1..=7`) keys the deposit rate the sell pane quotes.
 //!
-//! Step (2). **The window is opened by the server, not by the click** ([`crate::ui_auction`]):
-//! `MSG_AUCTION_HELLO` goes out and nothing happens; the *reply* — the same opcode coming back
-//! with the auctioneer guid and an `AuctionHouse.dbc` house id — opens the session and fires
-//! `AUCTION_HOUSE_SHOW`. Every other piece of this arc is downstream of that reply arriving, so it
-//! is the step this probe exists for. The house id is checked to be in `1..=7` because it keys the
-//! deposit rate the sell pane quotes, and a zero would silently quote a free listing.
+//! Server behaviour the phases follow (vmangos `AuctionHouseHandler.cpp`):
+//! - One list request at a time: a second while one is in flight is dropped silently (`:710`).
+//! - `etime` is minutes, one of 1, 4 or 12 times the 2 h `MIN_AUCTION_TIME` (`:287-291`).
+//! - The deposit is `SellPrice × count × (etime / MIN_AUCTION_TIME) × depositPercent / 100`
+//!   (`AuctionHouseMgr.cpp:98`); at 120 minutes the client's `CalculateAuctionDeposit` agrees
+//!   with it to the copper.
+//! - A cancel with no bidder is free and returns the item by mail.
+//! - A GM account is refused with `RESTRICTED_ACCOUNT` unless `GM.AllowTrades` is on (`:249`).
 //!
-//! ## The auctioneer (live-DB verified against the local vmangos, `mangos`)
-//!
-//! Auctioneer Fitch, creature entry 8719, spawn guid 12696, map 0 (Stormwind, Trade District),
-//! pos `(-8821.53, 659.886, 97.4645)`. Her `creature_template.npc_flags` is **4096** exactly —
-//! bit 12 only (`UNIT_NPC_FLAG_AUCTIONEER`), no gossip bit — so the right-click route sends
-//! `AuctionHello` directly with no gossip pre-empt (`target::click::interact_command`'s own note
-//! on the service ladder), which is precisely the command this probe sends.
-//!
-//! ## What the server does that shapes the phases (VERIFIED, vmangos `AuctionHouseHandler.cpp`)
-//!
-//! - **One AH list request at a time.** `HandleAuctionListItems`/`ListOwnerItems`/`ListBidderItems`
-//!   all open with `if (ReceivedAHListRequest()) return;` — a second query while one is in flight
-//!   is dropped *silently*. Every list phase here therefore waits for its answer before asking
-//!   again, and the owner phase re-asks on a timer rather than spamming.
-//! - **`etime` is minutes on the wire**, converted server-side (`etime * MINUTE`) and switched
-//!   against 1/4/12 × `MIN_AUCTION_TIME` (2 h). 120 is the shortest legal listing.
-//! - **The deposit** is `uint32(SellPrice × count × (etime / MIN_AUCTION_TIME) × depositPercent /
-//!   100)` (`AuctionHouseMgr::GetAuctionDeposit`), with `Auction.Deposit.Min = 0` and
-//!   `Rate.Auction.Deposit = 1` in this deploy's `mangosd.conf`. At **120 minutes the unit count
-//!   is 1**, which is exactly where the client's own arithmetic (`CalculateAuctionDeposit`, whose
-//!   intermediate truncation disagrees with the server on longer listings) and
-//!   the server's agree to the copper. That is why step (5) lists for 120 minutes: it makes "money
-//!   fell by exactly the quoted deposit" a real assertion instead of a flaky one.
-//! - **A cancel with no bidder is free** and returns the item **by mail**, not to the bag
-//!   (`HandleAuctionRemoveItem`) — so a clean run leaves the auction house as it found it and one
-//!   letter in the probe's own mailbox. Vanilla's behaviour, not litter we could avoid.
-//! - `GM.AllowTrades = 1` in this deploy, so the gmlevel-6 probe accounts are not refused with
-//!   `AUCTION_ERR_RESTRICTED_ACCOUNT` (the guard at the top of `HandleAuctionSellItem`).
-//!
-//! ## The row-identity rule this probe obeys
-//!
-//! [`super::probe_mail`]'s header records the defect worth not repeating: a probe that re-finds
-//! its row **by predicate** each tick reads its own success as absence, because a successful
-//! action is exactly what stops the row matching. So the auction created in step (5) is
-//! remembered by the **auction id the server's own `STARTED` result carried**, once, and every
-//! later step tracks that id — never "the row whose item is Linen Cloth".
-//!
-//! ## The run recipe
-//!
-//! ```text
-//! WOW_PROBE_AUCTION=1 WOW_NOSOUND=1 WOW_USER=probe5 WOW_PASS=pprobe5 WOW_CHAR=Probefive \
-//!     cargo run -p benilla
-//! ```
-//! (the checkout's probe identity — `.probe-identity`, or WOW_USER/WOW_PASS/WOW_CHAR; the `probe`
-//! skill).
-//! Non-combat. An outer grep on `PROBE_AUCTION:` is the whole harness; the probe self-exits (the
-//! [`super::probes::ProbeExitPlugin`] pattern) once DONE.
+//! The auction is tracked by the id the server's `STARTED` result carried, never re-found by a
+//! predicate over the rows, since a successful action is what stops a row matching.
 
 use bevy::prelude::*;
 
@@ -73,37 +30,25 @@ use crate::net::{ChatKind, ClientCommand, Guid, NetCommands, NetEntity, ObjectSt
 use crate::player::Player;
 use crate::ui_auction::AuctionOpen;
 
-/// Auctioneer Fitch's spawn (vmangos `creature` guid 12696, entry 8719, map 0) — the `.go xyz`
-/// target; the auctioneer itself is then scanned out of the streamed world by its npc flag, never
-/// by a hardcoded guid (the taxi/bank probes' idiom).
+/// Auctioneer Fitch's spawn (vmangos `creature` guid 12696, map 0), the `.go xyz` target; the
+/// unit itself is found by its npc flag.
 const AUCTIONEER_AT: [f32; 3] = [-8821.53, 659.886, 97.4645];
-/// Her creature template entry — reported, not required (the flag below is the identity test).
+/// Her creature template entry, reported only; her `npc_flags` is 4096, auctioneer only, so the
+/// right-click route sends `AuctionHello` with no gossip in between.
 const AUCTIONEER_ENTRY: u32 = 8719;
-/// `UNIT_NPC_FLAG_AUCTIONEER` (bit 12) — the same bit the cursor classifier and the click router
-/// key on (`target::cursor_mode::npc_flags::AUCTIONEER`).
+/// `UNIT_NPC_FLAG_AUCTIONEER` (bit 12).
 const NPC_FLAG_AUCTIONEER: u32 = 0x1000;
-/// How wide the streamed world is searched for an auctioneer. Generous, so a slightly-off `.go`
-/// landing still finds one — but the NEAREST match is the one greeted, never the first the ECS
-/// happens to yield.
-///
-/// **That distinction cost this probe its first run.** Stormwind's Trade District holds several
-/// auctioneers a few yards apart; a plain `find` picked one 7.0 yd away and the greeting came back
-/// as *nothing at all*, because the server's `CanInteractWithNPC` ends in
-/// `IsWithinDistInMap(this, INTERACTION_DISTANCE)` and refuses silently — the exact failure mode
-/// step (2) exists to detect, arrived at by our own aim rather than by a defect.
+/// Wider than the interact range, so a slightly-off `.go` landing still finds one; the nearest is
+/// greeted, as several auctioneers stand a few yards apart.
 const SCAN_RANGE: f32 = 12.0;
-/// vmangos `INTERACTION_DISTANCE` (`ObjectDefines.h:24`) — 5.0 yd between centres, plus each
-/// side's bounding radius. Anything past it is refused with no packet, so the probe would rather
-/// say so than send a greeting it knows will be ignored.
+/// vmangos `INTERACTION_DISTANCE` (`ObjectDefines.h:24`); past it a greeting gets no reply.
 const INTERACT_MAX_YD: f32 = 5.0;
 
-/// The fixture listed in step (5): Linen Cloth — cheap, stackable, no durability/bind/equip
-/// complications, and a `sell_price` of 13 c (live-DB verified), so a stack of five has a
-/// nonzero deposit. A ZERO deposit would make the money assertion vacuous.
+/// The step (5) fixture: Linen Cloth, whose 13 c sell price gives a stack of five a nonzero
+/// deposit.
 const ITEM_ENTRY: u32 = 2589;
 const ITEM_COUNT: u32 = 5;
-/// The listing length. 120 minutes is the one duration where the client's deposit arithmetic and
-/// the server's agree exactly (module doc).
+/// 120 minutes, where the client's deposit quote and the server's charge agree exactly.
 const DURATION_MINUTES: u32 = auction_duration::SHORT_MINUTES;
 
 const SETTLE_SECS: f64 = 3.0;
@@ -112,22 +57,17 @@ const HELLO_TIMEOUT_SECS: f64 = 10.0;
 const LIST_TIMEOUT_SECS: f64 = 15.0;
 const ACTION_TIMEOUT_SECS: f64 = 10.0;
 const ITEM_TIMEOUT_SECS: f64 = 10.0;
-/// How long the refusal is watched before it is believed — the throttle drops the query with no
-/// event at all, so the only honest reading is "nothing went out, and nothing came back, for this
-/// long" (`AuctionWireLog`'s own reason for existing).
+/// How long nothing must go out or come back before the throttle's silent refusal is believed.
 const REFUSAL_WATCH_SECS: f64 = 2.0;
-/// The client throttle is 5 s; give the recovery a generous but bounded window.
+/// The client throttle is 5 s.
 const RECOVER_TIMEOUT_SECS: f64 = 12.0;
-/// The owner list is re-asked on this cadence (the server drops a second in-flight list request
-/// silently, so a re-ask has to be spaced, not spammed).
+/// The owner list re-ask cadence, spaced because the server drops an in-flight second request.
 const OWNER_REASK_SECS: f64 = 3.0;
 const OWNER_TIMEOUT_SECS: f64 = 20.0;
-/// How long a UI EVENT is given to trail the state change it answers. Nothing orders this probe
-/// against `feed_auction`, which is what fires them, so an event can legitimately land a frame
-/// after the wire state it reports — but not ninety of them.
+/// How long a UI event may trail its wire state: `feed_auction` fires it, unordered with this
+/// probe.
 const EVENT_GRACE_SECS: f64 = 1.5;
-/// How long the sell slot is given to empty itself after the listing is away, before (5c) calls
-/// it. Generous: it is a one-line clear, not a round trip.
+/// How long the sell slot has to empty after the listing is away.
 const SELL_SLOT_GRACE_SECS: f64 = 3.0;
 
 pub(crate) struct ProbeAuctionPlugin;
@@ -139,61 +79,45 @@ impl Plugin for ProbeAuctionPlugin {
     }
 }
 
-/// The probe's phase machine + the identities it discovers along the way (kept resource-level, not
-/// per-variant, since several later phases re-resolve the same auction by its stable id — the
-/// module doc's row-identity rule).
+/// The probe's phase machine and the identities it discovers along the way.
 #[derive(Resource, Default)]
 struct AuctionProbe {
     phase: Phase,
     /// The auctioneer's guid, once streamed in.
     auctioneer: Option<u64>,
-    /// **The** handle: the auction id the server's own `STARTED` result carried. Everything after
-    /// step (5) tracks this, never a predicate over the rows.
+    /// The auction id the server's `STARTED` result carried; every later step tracks it.
     auction_id: Option<u32>,
-    /// The vendor value of the stack in the sell slot — what both deposits are computed from.
+    /// The sell-slot stack's vendor value, which both deposits are computed from.
     stack_value: i64,
-    /// `CalculateAuctionDeposit(120)` — the client's own quote, which step (5) then holds the
-    /// server's charge against.
+    /// The client's `CalculateAuctionDeposit` quote, held against the server's charge.
     deposit: i64,
     min_bid: i64,
     buyout: i64,
-    /// The purse immediately before `StartAuction` went in.
+    /// The purse just before `StartAuction`.
     baseline_money: u32,
-    /// `AUCTION_OWNED_LIST_UPDATE`'s count immediately before `StartAuction` went in.
-    ///
-    /// Taken THERE and not when step (6) starts, so that an owner re-query queued by the STARTED
-    /// result cannot fire the event before the baseline is read — a baseline taken after it would
-    /// wait for a second event that a repeated identical page will never produce. (Since 2308 that
-    /// re-query only happens for a list we already hold, and step 6 is what first asks for this
-    /// one, so the ordering is belt and braces rather than load-bearing.)
+    /// `AUCTION_OWNED_LIST_UPDATE`'s count just before `StartAuction`, so an owner re-query the
+    /// `STARTED` result queues cannot fire the event before the baseline is read.
     owned_event_baseline: i64,
-    /// How many red `UI_ERROR_MESSAGE` lines the run had already raised when the auction window
-    /// opened — the login environment's own, not the arc's.
-    ///
-    /// Step (6d) asserts the arc raised **no** red line, and it used to read the whole tally: on a
-    /// `probeN` account that is never zero, because the preflight's `GM mode is ON` and
-    /// `GOD mode is ON` banners are red lines too, and they land before the greeting. The
-    /// assertion was therefore FAILING on every clean run, which is worse than not making it.
+    /// Red `UI_ERROR_MESSAGE` lines raised before the window opened: on a probe account the GM
+    /// and GOD mode banners, not the arc's.
     red_baseline: i64,
     passes: u32,
     fails: u32,
-    /// Latched once [`Phase::Done`] has fired its exit (never re-fire on a later frame).
+    /// Latched once [`Phase::Done`] has fired its exit.
     exited: bool,
 }
 
-/// Every field is `Copy` — the phase is snapshotted out of the resource each tick
-/// ([`auction_probe`]'s `let phase = probe.phase;`), which frees the match arms to mutate `probe`
-/// without fighting the borrow checker over `probe.phase`; an arm that wants to "keep waiting"
-/// simply never writes it.
+/// `Copy`, so each tick snapshots it and the arms can mutate `probe`; an arm that keeps waiting
+/// never writes it.
 #[derive(Default, Clone, Copy, PartialEq)]
 enum Phase {
     #[default]
     Wait,
-    /// `.go` + `.additem` issued; settling before the world streams the auctioneer in (step 1).
+    /// `.go` sent; settling while the world streams the auctioneer in (step 1).
     Settling {
         sent_at: f64,
     },
-    /// `AuctionHello` sent; waiting for the **reply** to open the session (step 2).
+    /// `AuctionHello` sent; waiting for the reply to open the session (step 2).
     Greet {
         sent_at: f64,
         show_baseline: i64,
@@ -210,15 +134,15 @@ enum Phase {
         since: f64,
         event_baseline: i64,
     },
-    /// The second query, which the client throttle must refuse outright (step 4a).
+    /// A second query, which the client throttle must refuse (step 4a).
     Refuse {
         since: f64,
         sent: bool,
         sent_baseline: u32,
         results_baseline: u32,
     },
-    /// Waiting for `CanSendAuctionQuery()` to come back, then proving it with a real third query
-    /// that actually goes out (step 4b).
+    /// Waiting for `CanSendAuctionQuery()` to return true, then a third query that must go out
+    /// (step 4b).
     Recover {
         since: f64,
         sent: bool,
@@ -229,8 +153,7 @@ enum Phase {
         since: f64,
         sent: bool,
     },
-    /// Picked up and dropped in the sell slot; waiting for the slot to read back a priced item
-    /// (step 5 prep).
+    /// Dropped in the sell slot; waiting for it to read back a priced item (step 5 prep).
     Attach {
         since: f64,
     },
@@ -238,9 +161,7 @@ enum Phase {
     Sell {
         since: f64,
     },
-    /// The money assertion (which trails the verdict by however long the descriptor takes) and
-    /// the sell-slot one. Each is LATCHED, because they land at different moments and neither may
-    /// re-print while the other is still waiting.
+    /// The money and sell-slot assertions, each latched since they land at different moments.
     SellMoney {
         since: f64,
         money_done: bool,
@@ -268,8 +189,7 @@ enum Phase {
     Done,
 }
 
-/// One Lua-side event counter (`ProbeAuctionEvents`), or `0` on any eval hiccup — treated as
-/// "nothing observed yet", never a panic.
+/// One Lua-side event counter (`ProbeAuctionEvents`), or 0 on an eval error.
 fn event_count(script: &UiScript, event: &str) -> i64 {
     script
         .eval::<i64>(&format!(
@@ -278,24 +198,13 @@ fn event_count(script: &UiScript, event: &str) -> i64 {
         .unwrap_or(0)
 }
 
-/// The newest `UI_ERROR_MESSAGE` text the hook logged (the arc's failure channel — a refused
-/// auction command surfaces here and nowhere else).
+/// The newest `UI_ERROR_MESSAGE` text the hook logged, where a refused auction command surfaces.
 fn last_error(script: &UiScript) -> String {
     script
         .eval::<String>("return ProbeAuctionErrors[table.getn(ProbeAuctionErrors)] or \"\"")
         .unwrap_or_default()
 }
 
-/// (6d) Where the STARTED verdict was SAID — the live half of the director's 2026-08-22 report that
-/// an auction outcome arrived as a red centre-screen line.
-///
-/// Two halves, and the second is the one that would have caught the bug: the "Auction created." line
-/// has to be in the **chat** log (catalog row `0x178`, kind 0 → `CHAT_MSG_SYSTEM`), and a clean run
-/// has to have raised **no red line at all**. Asserting only the first would still pass if we
-/// printed it in both places.
-///
-/// Compared against `getglobal("ERR_AUCTION_STARTED")` rather than against English: the string is
-/// the player's own, and this file must not carry a copy of it.
 /// Red `UI_ERROR_MESSAGE` lines raised so far, as the hook's own array counts them.
 fn red_count(script: &UiScript) -> i64 {
     script
@@ -303,6 +212,9 @@ fn red_count(script: &UiScript) -> i64 {
         .unwrap_or(-1)
 }
 
+/// (6d) The `STARTED` verdict prints as a chat line (catalog row `0x178`, kind 0,
+/// `CHAT_MSG_SYSTEM`) and never as a red line; matched against the player's own
+/// `ERR_AUCTION_STARTED`.
 fn started_chat_check(script: &UiScript, probe: &mut AuctionProbe) {
     let said = script
         .eval::<i64>(
@@ -331,8 +243,7 @@ fn started_chat_check(script: &UiScript, probe: &mut AuctionProbe) {
             probe.fails += 1;
         }
         (said, reds) => {
-            // The reds are listed from the baseline on, for the same reason `reds` counts from
-            // there: the login environment's own banners are not this arc's output.
+            // Listed from the baseline on: the login banners are not this arc's output.
             let lines = script
                 .eval::<String>(&format!(
                     "local t = {{}} \
@@ -351,23 +262,10 @@ fn started_chat_check(script: &UiScript, probe: &mut AuctionProbe) {
     }
 }
 
-/// (6c) The owner row's money frame, read out of the live VM — the live half of the director's
-/// 2026-08-22 report that the price columns were dropping their zeros.
-///
-/// The law under test is `MoneyTypeInfo["AUCTION"]`'s `showSmallerCoins`: it collapses only the
-/// **leading** zero denominations, so a 1-silver minimum bid reads `1s 0c` and not a lone silver
-/// coin. Derived from `probe.min_bid` rather than hardcoded, because the listing price is computed
-/// from the item's own vendor value and a fixed expectation would be a lie the day the item changes.
-///
-/// `IsShown`, not `IsVisible`: the coin buttons' own shown-ness is the subject, not whatever the
-/// window is doing around them.
-///
-/// The pane is the *front* tab by the time this runs, and that is load-bearing rather than
-/// incidental: the row is painted by `AuctionFrameAuctions_Update`, which cannot complete before
-/// the tab's `OnShow` has given it a `page`. This check read the player's purse
-/// out of the row's money frame for as long as the probe asked for the owned list without opening
-/// the tab — the frame was still on its `MoneyTypeInfo["PLAYER"]` default because nothing had ever
-/// repainted it.
+/// (6c) The owner row's money frame: `MoneyTypeInfo["AUCTION"]`'s `showSmallerCoins` hides only
+/// leading zero denominations, so a 1-silver bid reads `1s 0c` (`MoneyFrame.lua:223-253`). The
+/// Auctions tab must be in front: its `OnShow` sets the `page` that `AuctionFrameAuctions_Update`
+/// paints the row with.
 fn owner_money_check(script: &UiScript, probe: &mut AuctionProbe) {
     let (gold, silver, copper) = (
         probe.min_bid / 10_000,
@@ -415,10 +313,8 @@ fn owner_money_check(script: &UiScript, probe: &mut AuctionProbe) {
     }
 }
 
-/// The 1-based **display** index our auction currently sits at in the owner list, or `None` if it
-/// is not on the page. Read off the app-side page rather than by predicate: `CancelAuction(index)`
-/// is mapped back through the same sorted view the feed pushed, and with no header ever clicked
-/// that view is the wire order (`ui_auction::sort`: an empty stack leaves the order alone).
+/// The 1-based display index of our auction in the owner list. `CancelAuction(index)` maps back
+/// through the same sorted view, which is wire order while no header is clicked.
 fn owner_index_of(auction: &AuctionOpen, auction_id: u32) -> Option<u32> {
     auction.lists[OWNER]
         .entries
@@ -427,7 +323,7 @@ fn owner_index_of(auction: &AuctionOpen, auction_id: u32) -> Option<u32> {
         .map(|i| i as u32 + 1)
 }
 
-/// Step (5)'s entry — the next phase every step-4 exit, pass or fail, funnels into.
+/// Step (5)'s entry, where every step-4 exit lands.
 fn ensure_item(now: f64) -> Phase {
     Phase::EnsureItem {
         since: now,
@@ -435,8 +331,7 @@ fn ensure_item(now: f64) -> Phase {
     }
 }
 
-/// Step (7)'s entry. Reached from step (6) either way: a listing we created is cancelled even
-/// when the assertion about it failed, because leaving it is the one thing this probe must not do.
+/// Step (7)'s entry, reached from step (6) pass or fail so a created listing is never left.
 fn cancel_at(now: f64) -> Phase {
     Phase::Cancel {
         since: now,
@@ -487,18 +382,15 @@ fn auction_probe(
         return; // not in-world yet
     };
     let Some(script) = script else {
-        return; // no UI VM this build (headless net-only) — nothing this probe can drive
+        return; // no UI VM in a headless build
     };
     let now = time.elapsed_secs_f64();
-    // A cheap `Copy` snapshot (see [`Phase`]'s doc).
     let phase = probe.phase;
 
     match phase {
         Phase::Wait => {
-            // The observation channel: one hidden frame counting every event this arc fires, plus
-            // a log of the `UI_ERROR_MESSAGE` texts (the mail probe's `ProbeMailEvents` idiom,
-            // widened to a per-event tally because this arc fires six different events and the
-            // question is always "did THIS one fire").
+            // One hidden frame counting each event this arc fires, logging the red and system
+            // chat texts.
             if let Err(e) = script.run(
                 r#"
                 if not ProbeAuctionHooked then
@@ -533,11 +425,8 @@ fn auction_probe(
             }
             let [x, y, z] = AUCTIONEER_AT;
             info!("PROBE_AUCTION: hopping to Auctioneer Fitch (entry {AUCTIONEER_ENTRY}) at ({x}, {y}, {z})");
-            // The teleport (the `ProbeChatPlugin`/`probe_taxi` idiom: GM dot-commands ride as
-            // plain Say lines). The sell fixture is NOT stocked here: step (5) looks in the bags
-            // first and only `.additem`s when there is nothing to reuse, because a cancelled
-            // auction returns its stack by MAIL and an unconditional grant would mint five more
-            // linen into the world on every run.
+            // GM commands ride as Say lines. The fixture is not granted here: step (5) reuses a
+            // stack from the bags first, since each cancel returns its stack by mail.
             let _ = net.0.send(ClientCommand::Chat {
                 kind: ChatKind::Say,
                 target: None,
@@ -550,7 +439,7 @@ fn auction_probe(
                 return;
             }
             let me = player.pos;
-            // The NEAREST auctioneer, not the first one the ECS yields — see [`SCAN_RANGE`].
+            // The nearest auctioneer, not the first the ECS yields.
             let nearest = units
                 .iter()
                 .filter(|(_, net_e, store, tf)| {
@@ -575,9 +464,7 @@ fn auction_probe(
                 );
                 probe.passes += 1;
                 probe.auctioneer = Some(guid);
-                // The exact command a right-click on a pure auctioneer builds
-                // (`target::click::interact_command`, CursorKind::Buy + bit 12). It opens
-                // NOTHING on its own — the reply does.
+                // What a right-click on a pure auctioneer sends; the reply opens the window.
                 let _ = net.0.send(ClientCommand::AuctionHello { auctioneer: guid });
                 info!("PROBE_AUCTION: (2 greet) MSG_AUCTION_HELLO sent — the window opens on the REPLY, not on this");
                 probe.phase = Phase::Greet {
@@ -625,8 +512,7 @@ fn auction_probe(
                         auction.auctioneer.unwrap_or(0)
                     );
                     probe.passes += 1;
-                    // Everything red before this instant is the login environment (the GM/GOD
-                    // banners); the arc's own tally starts here.
+                    // The arc's red-line tally starts here.
                     probe.red_baseline = red_count(&script);
                 } else {
                     error!(
@@ -666,9 +552,8 @@ fn auction_probe(
             event_baseline,
         } => {
             if !sent {
-                // The Browse pane's own call, with every filter at its default: empty name, empty
-                // level boxes (the pane hands strings), no class/subclass/invtype, page 0, not
-                // usable-only, quality ALL (-1).
+                // The Browse pane's call with every filter at its default: empty name and level
+                // strings, no class/subclass/invtype, page 0, not usable-only, quality all (-1).
                 if let Err(e) =
                     script.run(r#"QueryAuctionItems("", "", "", nil, nil, nil, 0, nil, -1)"#)
                 {
@@ -866,8 +751,7 @@ fn auction_probe(
             }
         }
         Phase::EnsureItem { since, sent } => {
-            // The bag scan the bag UI itself would do — encoded bag*100+slot, -1 = not there
-            // (the mail probe's own `GetContainerItemLink` idiom).
+            // A bag scan by item link, returning bag*100+slot or -1.
             let found = script
                 .eval::<i64>(&format!(
                     "for bag=0,4 do local n=GetContainerNumSlots(bag) or 0 \
@@ -878,8 +762,7 @@ fn auction_probe(
                 .unwrap_or(-1);
             if found >= 0 {
                 let (bag, lslot) = (found / 100, found % 100);
-                // Pick it up and drop it in the sell slot — the two calls the sell button's own
-                // OnClick chain makes (`AuctionsItemButton_OnClick` → ClickAuctionSellItemButton).
+                // The two calls the sell button's `AuctionsItemButton_OnClick` chain makes.
                 if let Err(e) = script.run(&format!(
                     "PickupContainerItem({bag}, {lslot}) ClickAuctionSellItemButton()"
                 )) {
@@ -914,9 +797,8 @@ fn auction_probe(
             }
         }
         Phase::Attach { since } => {
-            // Six values ALWAYS; the first is nil for an empty slot. `price` is the stack's
-            // vendor value, which is what both deposits are computed from — so wait for it to be
-            // nonzero rather than quoting a deposit off an item template still in flight.
+            // Six values, the first nil for an empty slot. Waits for a nonzero `price` (the
+            // stack's vendor value) so the deposit is not quoted off a template still in flight.
             let (name, count, price) = script
                 .eval::<(String, i64, i64)>(
                     "local n, _, c, _, _, p = GetAuctionSellItemInfo() return n or \"\", c or 0, p or 0",
@@ -928,8 +810,8 @@ fn auction_probe(
                         "return CalculateAuctionDeposit({DURATION_MINUTES})"
                     ))
                     .unwrap_or(-1);
-                // The sell pane's own suggested opening price (`AuctionSellItemButton_OnEvent`):
-                // half again the stack's vendor value, floored at one silver.
+                // The sell pane's suggested opening price: `max(100, floor(price * 1.5))`
+                // (`AuctionSellItemButton_OnEvent`).
                 let min_bid = (price * 3 / 2).max(100);
                 let buyout = min_bid * 2;
                 let money = store.0.player_money().unwrap_or(0);
@@ -1056,8 +938,7 @@ fn auction_probe(
                     money_done = true;
                 }
             }
-            // The slot itself: with the item gone from the bag, the pane must not still be
-            // showing it.
+            // With the item gone from the bag, the pane must not still show it.
             if !slot_done {
                 let occupied = script
                     .eval::<bool>("return GetAuctionSellItemInfo() ~= nil")
@@ -1110,12 +991,8 @@ fn auction_probe(
                          return n or \"\", b or -1, o or -1, c or -1"
                     ))
                     .unwrap_or_default();
-                // The WIRE side lands a frame before the feed pushes the snapshot, so reading Lua
-                // the moment the entry appears gets the twelve-value null tail — zeros and an
-                // empty name — for a row that genuinely exists. Wait for the VM to agree rather
-                // than printing that as if it were the row's content: a PASS whose own message
-                // shows empty data is the "probe that lies" this file's header warns about, and it
-                // is the reason the Lua read is part of the assertion below and not decoration.
+                // The wire entry lands a frame before the feed pushes the snapshot, so Lua reads
+                // an empty row until the VM agrees; wait for it.
                 let lua_ready = min_bid == probe.min_bid && buyout == probe.buyout;
                 if !lua_ready {
                     if now - since > OWNER_TIMEOUT_SECS {
@@ -1131,9 +1008,8 @@ fn auction_probe(
                     }
                     return;
                 }
-                // The item's NAME is allowed to still be empty — it fills in from the ask-once
-                // template cache and the window shows a placeholder until it does. The numbers
-                // come straight off the wire and must agree on both sides.
+                // The name may still be empty until the template cache fills it; the numbers
+                // come off the wire and must agree.
                 let right = entry.item_entry == ITEM_ENTRY
                     && i64::from(entry.start_bid) == probe.min_bid
                     && i64::from(entry.buyout) == probe.buyout;
@@ -1178,22 +1054,12 @@ fn auction_probe(
                 probe.phase = cancel_at(now);
                 return;
             }
-            // Re-ask on a cadence: the server drops a second in-flight list request silently.
-            //
-            // **The FIRST ask is the tab click, not the raw binding**. Every
-            // caller of `GetOwnerAuctionItems` in the stock files lives inside the Auctions pane —
-            // its `OnShow` and its two page turners — and the `OnShow` is also the one place that
-            // assigns `AuctionFrameAuctions.page`. Calling the binding cold puts the window in a
-            // state no click can reach, and the reply's `AUCTION_OWNED_LIST_UPDATE` then repaints
-            // a tab whose `page` is still nil: this probe raised
-            // `Blizzard_AuctionUI.lua:837: attempt to perform arithmetic on field 'page'` twice a
-            // run doing exactly that, at WARN, where nothing was looking. Clicking the tab is both
-            // the faithful drive ("exactly as a click would", this file's header) and what makes
-            // step (6c) a real assertion instead of a permanently red one.
+            // Re-ask on a cadence. The first ask is the tab click: every stock caller of
+            // `GetOwnerAuctionItems` is in the Auctions pane, and its `OnShow` sets the
+            // `AuctionFrameAuctions.page` the repaint needs (`Blizzard_AuctionUI.lua:813-837`).
             if last_ask == 0.0 || now - last_ask > OWNER_REASK_SECS {
                 let ask = if last_ask == 0.0 {
-                    // The tab's own OnShow issues the query, once per window session
-                    // (`AuctionFrame.gotAuctions`), and sets the page the repaint needs.
+                    // The tab's OnShow queries once per window session (`gotAuctions`).
                     "AuctionFrameTab_OnClick(3)"
                 } else {
                     "GetOwnerAuctionItems()"
@@ -1301,7 +1167,7 @@ fn auction_probe(
                     _ => return,
                 }
             }
-            // ...and it has to actually leave the page the window is showing.
+            // The row must also leave the page the window shows.
             if owner_index_of(&auction, auction_id).is_none() {
                 info!("PROBE_AUCTION: PASS (7b cancel-list) — auction {auction_id} is gone from the \"owner\" list");
                 probe.passes += 1;
@@ -1317,8 +1183,7 @@ fn auction_probe(
                 probe.phase = Phase::Done;
                 return;
             }
-            // The re-ask cadence, plus the write-back that keeps `removed` from re-printing its
-            // verdict every tick.
+            // Re-ask on the cadence; writing `removed` back keeps its verdict from re-printing.
             let ask = last_ask == 0.0 || now - last_ask > OWNER_REASK_SECS;
             if ask {
                 crate::ui_script::run_or_warn(&script, "GetOwnerAuctionItems()");
@@ -1339,9 +1204,7 @@ fn auction_probe(
                 "PROBE_AUCTION: DONE pass={} fail={}",
                 probe.passes, probe.fails
             );
-            // The probe self-exit pattern (`ProbeExitPlugin::fire_probe_exit`): a polite AppExit
-            // plus a hard backstop thread, so a net/winit teardown hang can't leave a zombie
-            // client holding the probe account.
+            // AppExit plus a hard-exit backstop, so a teardown hang cannot keep the account held.
             exit.write(AppExit::Success);
             std::thread::spawn(|| {
                 std::thread::sleep(std::time::Duration::from_secs(5));

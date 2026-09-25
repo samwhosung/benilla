@@ -1,15 +1,10 @@
-//! Glue-screen audio (decision 0423's polish pass) — the two sounds of the pre-world screens:
+//! Glue-screen audio: the clicks and the title theme.
 //!
-//! - **Clicks**: the char select/create screens emit [`GlueSound`] messages naming the SoundEntries
-//!   kits the 1.12 GlueXML plays verbatim (`gsCharacterCreationClass`, `gsCharacterSelectionEnterWorld`,
-//!   …); [`play_glue_sounds`] drains them into the kit player as 2D SFX — the same shape as
-//!   [`super::ui`]'s `PlaySound` seam, but from the glue screens (which have no Lua VM).
-//! - **Music**: the glue title theme (`GlueParent.lua`'s `CurrentGlueMusic`,
-//!   `Sound\Music\GlueScreenMusic\wow_main_theme.mp3`), streamed from the login screen on
-//! and kept across the glue screens (the ref keeps it through select ⇄ create).
-//!   **The click into the world does not end it** (1550/1553, `0x46c258`): it plays unbroken
-//!   through the whole map load, and the stop is armed by the *load draining* — a 3.0 s fade, still
-//!   behind the loading screen. Re-entering the glue after a logout starts it again.
+//! - Clicks: the char select and create screens emit [`GlueSound`] with the SoundEntries kit names
+//!   the 1.12 GlueXML plays, drained into the kit player as 2D SFX.
+//! - Music: `GlueParent.lua`'s `CurrentGlueMusic`, streamed from the login screen and kept across
+//!   the glue screens. Entering the world does not end it (`0x46c258`): it plays through the map
+//!   load and fades over 3.0 s once the load drains, still behind the loading screen.
 
 use bevy::prelude::*;
 
@@ -19,38 +14,27 @@ use benilla_assets::{LockRecover, WorldAssets};
 use super::kit::{self, KitRef, SoundCategory, SoundKits};
 use super::{mixer, SoundConfig, SoundOutput};
 
-/// The glue music file — a frozen fact of the 1.12 GlueXML (`GlueParent.lua`, `CurrentGlueMusic`).
 const GLUE_MUSIC: &str = "Sound\\Music\\GlueScreenMusic\\wow_main_theme.mp3";
 
-/// The theme's own volume, under the Music slider: **0.8** — `0x45aeb0` starts the glue stream at
-/// `0x3f4ccccd` on both its arms, where the city-intro playlist and the in-world Lua `PlayMusic`
-/// use 1.0f. It is a plain scalar on the MusicVolume
-/// category (the stream's flag word is 2, bit `0x2` = `[0x87cef8]`), exactly like a zone track's
-/// kit volume, so it multiplies rather than replaces the slider.
+/// The theme's own volume, multiplied into the Music slider: `0x45aeb0` starts the glue stream at
+/// 0.8 (`0x3f4ccccd`) on the MusicVolume category (flag word 2, bit `0x2` = `[0x87cef8]`).
 const GLUE_MUSIC_VOLUME: f32 = 0.8;
 
-/// The stop-fade armed when the world's load drains: **3.0 s**, `[0x803248]` in `.rdata`
-/// (`0x40400000`) — the constant `0x45aeb0`'s NULL arm hands `0x45b050`, and the fade is **linear
-/// in amplitude**, not in dB (`0x7a5a50` ramps FMOD's 0–255 level). Not 1.0 s: that is
-/// `StopGlueMusic`'s literal, and `StopGlueMusic` is a `"movie"`-screen call the world entry never
-/// makes.
+/// The stop-fade armed when the world's load drains: 3.0 s (`[0x803248]`, handed to `0x45b050` by
+/// `0x45aeb0`'s NULL arm), linear in amplitude (`0x7a5a50`). `StopGlueMusic`'s 1.0 s is a
+/// movie-screen call the world entry never makes.
 const GLUE_MUSIC_FADE_OUT_MS: u64 = 3000;
 
-/// A glue-screen `PlaySound` — the SoundEntries kit name the 1.12 GlueXML plays for this click.
+/// A glue-screen `PlaySound`: the SoundEntries kit name the 1.12 GlueXML plays for this click.
 #[derive(Message)]
 pub(crate) struct GlueSound(pub(crate) &'static str);
 
-/// The held glue-music stream (non-`Sync` handle — non-Send state, like [`super::zone`]'s), plus
-/// its starvation watch. The handle is held through the stop-fade, not dropped at
-/// it: the fade rides out under the world-entry load burst, which is exactly the crackle-prone
-/// window, and [`watch_glue_music`] can only see a stream it still holds. Since 1550 the theme
-/// itself rides that whole burst too — all the more reason for the watch to be able to see it.
+/// The held glue-music stream and its starvation watch. The handle is kept through the stop-fade
+/// so the watch still sees the stream during the world-entry load burst.
 struct GlueMusic {
     handle: Option<mixer::StreamingSoundHandle<kira::sound::FromFileError>>,
     watch: mixer::StreamWatch,
-    /// The stop-fade is armed and running. The per-frame slider feed stands off while it is set,
-    /// so a live `MusicVolume` change cannot stomp the ramp back up to full mid-fade — the hazard
-    /// [`super::zone`]'s ambience crossfade documents from the other side.
+    /// The stop-fade is running; the per-frame slider feed stands off so it cannot undo the ramp.
     fading: bool,
 }
 
@@ -64,7 +48,7 @@ impl Default for GlueMusic {
     }
 }
 
-/// Drain glue clicks into the kit player (2D SFX, by name — the client's name-registry path).
+/// Drain glue clicks into the kit player as 2D SFX, by kit name.
 fn play_glue_sounds(
     mut msgs: MessageReader<GlueSound>,
     kits: Option<ResMut<SoundKits>>,
@@ -92,9 +76,8 @@ fn play_glue_sounds(
     }
 }
 
-/// While on the select screen, start the title theme if it isn't up. Runs per-frame (cheap early
-/// return once playing) rather than on the state edge: the app *boots* into CharSelect, and the
-/// initial `OnEnter` fires before the mixer/chain exist — an edge-triggered start misses it.
+/// On the glue screens, start the title theme if it is not up. Per-frame, not on the state edge:
+/// the app boots into the glue before the mixer and chain exist, so the first `OnEnter` is early.
 fn start_glue_music(
     mut music: NonSendMut<GlueMusic>,
     mut out: NonSendMut<SoundOutput>,
@@ -102,14 +85,11 @@ fn start_glue_music(
     config: Res<SoundConfig>,
 ) {
     if music.handle.is_some() && !music.fading {
-        return; // still playing (select ⇄ create hops re-enter CharSelect)
+        return; // still playing (select ⇄ create re-enters CharSelect)
     }
-    // A theme caught mid-fade is NOT "still playing": returning to the glue inside the 3 s ramp
-    // must bring it back at once. The reference gets there by bookkeeping — the enter-world stop
-    // clears the cached track name (`0x45afec`), so `SetGlueScreen`'s next `PlayGlueMusic` misses
-    // the same-name early-out, stops the outgoing stream and opens a fresh one. Same outcome here:
-    // the old handle is dropped below with its ramp already armed, so it finishes fading on the
-    // backend while the new stream starts at full.
+    // A theme mid-fade restarts at once: the enter-world stop clears the cached track name
+    // (`0x45afec`), so the next `PlayGlueMusic` opens a fresh stream. The old handle drops below
+    // with its ramp armed and finishes fading on the backend.
     let (Some(assets), Some(mixer_ref)) = (assets, out.mixer.as_mut()) else {
         return;
     };
@@ -136,24 +116,13 @@ fn start_glue_music(
     }
 }
 
-/// **The world's load drained — arm the theme's fade** (correcting 1550's trigger).
+/// Arm the theme's 3.0 s fade when the world's load drains.
 ///
-/// This is the reference's own trigger, and it is not a music event at all: `CGlueMgr::Update`
-/// state 8 runs a *second* pass every frame after the entry (`[0xb41d94] == 1`), spinning on the
-/// AsyncFileLoader (`0x443e20`) while any read is outstanding; the frame the queue drains it calls
-/// `0x45aeb0(NULL)` → `0x45b050(3.0f)` and then sends `CMSG_PLAYER_LOGIN`. So the theme sounds
-/// through the click and the whole map load, and dies on a 3.0 s fade armed *behind* the loading
-/// screen — never on the click (1550's own `stop_glue_music`), and never on the first world track
-/// (1550's replacement, which was the right *feel* found from a misread of the branch).
-///
-/// benilla's analogue of "the async queue drained" is the cover's own clear condition — every
-/// wanted tile spawned, placements up, colliders quiet ([`crate::loading_screen`]) — so the fade is
-/// armed on `world_hold`'s **falling edge**. The edge is tracked every frame but only acted on
-/// **in the world**, which is what excludes the logout blackout: that cover drops on the frame the
-/// state leaves `InWorld`, and firing there would fade the theme the glue had just restarted.
-///
-/// The handle is deliberately kept through the fade — the [`GlueMusic`] docs say why — and reaped
-/// by [`watch_glue_music`] once the fade lands on `Stopped`.
+/// The reference's trigger: `CGlueMgr::Update` state 8 spins each frame after entry
+/// (`[0xb41d94] == 1`) while the AsyncFileLoader (`0x443e20`) has reads outstanding; the frame it
+/// drains it calls `0x45aeb0(NULL)` → `0x45b050(3.0f)`, then sends `CMSG_PLAYER_LOGIN`. benilla's
+/// analogue is `world_hold`'s falling edge ([`crate::loading_screen`]), acted on only in the world
+/// so the logout blackout's drop does not fade the theme the glue just restarted.
 fn hand_off_glue_music(
     config: Res<SoundConfig>,
     state: Res<State<ClientState>>,
@@ -172,27 +141,19 @@ fn hand_off_glue_music(
     }
 }
 
-/// Per-frame stream health + handle reaping: the starvation watch over the held
-/// theme, and the drop once it reaches `Stopped` — after the handoff fade lands, or at the theme's
-/// natural end. On the glue screens that end re-arms [`start_glue_music`], which brings the theme
-/// back from the top — the login screen no longer falls silent for good after one play-through.
-/// **In the world it does not**, and that asymmetry is the point of [`start_glue_music`]'s run
-/// condition: a theme that outlives a music-less zone must run out, not loop under it (1550).
+/// The starvation watch over the held theme, and the handle's drop once it reaches `Stopped`.
+/// On the glue screens [`start_glue_music`] then restarts it; in the world it runs out and stays
+/// out.
 fn watch_glue_music(
     mut music: NonSendMut<GlueMusic>,
-    // **`Real`, not the generic clock** — the watch compares elapsed time against the audio
-    // stream's own position, so it must be fed WALL time. `Res<Time>` is the paced virtual clock:
-    // `frame_pace` median-snaps it and caps it at `max_delta`, so during a loading burst it
-    // neither matches wall nor errs in a predictable direction, and the "ms of injected silence"
-    // it produced was not a measurement of anything.
+    // Wall time: the watch compares against the stream's own position, and the paced virtual
+    // clock is snapped and capped by `frame_pace`.
     time: Res<Time<bevy::time::Real>>,
     config: Res<SoundConfig>,
 ) {
     let music = &mut *music;
-    // The Music slider is live on this stream, as it is on the world's (the
-    // `MusicVolume` handler's re-apply walker `0x7a6660(ecx=2)` matches the glue wrapper, so moving
-    // the slider rescales the playing theme in place — mid-loading-screen included). Stand off
-    // while the stop-fade runs; see [`GlueMusic::fading`].
+    // The Music slider rescales the playing theme in place (the `MusicVolume` re-apply walker
+    // `0x7a6660(ecx=2)` matches the glue stream), except while the stop-fade runs.
     if !music.fading {
         if let Some(h) = music.handle.as_mut() {
             h.set_volume(
@@ -205,10 +166,7 @@ fn watch_glue_music(
         return;
     };
     if h.state() == kira::sound::PlaybackState::Stopped {
-        // The theme's end, said out loud — the counterpart to the `glue music: <path>` start line.
-        // With the theme now outliving world entry (1550), "did it actually stop, or is it playing
-        // under the world?" is a real question about a stream nothing else reports on, and it must
-        // be answerable from an ordinary log rather than from a mix capture.
+        // Logged: the theme outlives world entry, and nothing else reports when it stops.
         info!("glue music: stream ended");
         music.handle = None;
         music.fading = false;
@@ -218,8 +176,7 @@ fn watch_glue_music(
     music.watch.feed(h, f64::from(time.delta_secs()));
 }
 
-/// Report the glue theme's voice into the global budget — it rides `InWorld`
-/// since 1550, so it occupies a channel there like anything else.
+/// Report the glue theme's voice into the global budget; it plays into `InWorld` too.
 fn report_stream_voices(music: NonSend<GlueMusic>, mut out: NonSendMut<super::SoundOutput>) {
     out.glue_streams = usize::from(
         music
@@ -236,13 +193,12 @@ pub(super) fn plugin(app: &mut App) {
             Update,
             (
                 play_glue_sounds,
-                // The theme starts at the login screen (the ref's `AccountLogin_OnShow` sets the
-                // same `wow_main_theme`) and keeps across the glue screens.
+                // The theme starts at the login screen (`AccountLogin_OnShow` sets the same
+                // `wow_main_theme`) and keeps across the glue screens.
                 start_glue_music
                     .run_if(in_state(ClientState::Login).or(in_state(ClientState::CharSelect))),
-                // No run condition on either: the theme rides `InWorld` now (1550), so its handoff
-                // and the watch both have to keep running there — and the entry load burst is
-                // exactly the window the watch exists for (1109).
+                // No run condition: the theme plays into `InWorld`, and the entry load burst is
+                // the window the watch exists for.
                 hand_off_glue_music,
                 watch_glue_music
                     .after(start_glue_music)

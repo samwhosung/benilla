@@ -1,44 +1,21 @@
-//! `WOW_PROBE_MODEL_CAMERA=1` — the live probe for the `<Model>` widget's **perspective leg**:
-//! a plain `CreateFrame("Model")` pointed at a camera-bearing file, framed by the
-//! file's own camera through a camera of its own into its cell of the tile atlas.
+//! `WOW_PROBE_MODEL_CAMERA=1`: the live probe for the `<Model>` widget's perspective leg. It builds
+//! a plain `CreateFrame("Model")` on a camera-bearing file and reads the camera and root the
+//! renderer actually built, which the unit tests in `crate::ui_models` cannot reach.
 //!
-//! ## What it asks, and why it is a probe rather than a test
+//! Each leg projects three model-space points through that camera and root and compares the NDC
+//! with the baseline's:
 //!
-//! The unit tests in `crate::ui_models` pin the leg's arithmetic — the client's diagonal-FOV matrix
-//! (`0x5c3cc0`) against its worked numbers, and the three cancellations. What they cannot reach is
-//! the half that only exists at run time: does the engine resolve the camera at all, does the
-//! renderer find the record, does a camera get spawned, aimed, and pointed at a real cell of a
-//! real atlas. So this probe drives the **whole live pipeline** from Lua and reads the result off
-//! the entities the renderer actually built.
+//! - `scale`: `SetModelScale(3)` moves nothing, as the authored eye rides the model's root.
+//! - `position`: `SetPosition(0.4, -0.3, 0.9)` moves nothing, for the same reason.
+//! - `facing`: `SetFacing(1.0)` moves nothing: the up vector `0x7ac640` builds is model-space `+Z`
+//!   at `roll = 0`, the facing's own axis. Only `<PlayerModel>`'s frozen camera (`0x7acf10`)
+//!   shows a facing.
+//! - `ortho`, the control: `SetCamera(9)` is past the file's camera count, so the widget installs
+//!   the NULL camera and falls to the orthographic leg, and the perspective camera goes inactive.
 //!
-//! The measurement is numeric, not visual (docs/METHOD.md's rule: a capture can confirm an existence
-//! fact, it cannot measure one). Each leg projects three model-space probe points through the
-//! camera and the root the renderer placed this frame, and compares the resulting NDC against the
-//! baseline's:
-//!
-//! - `scale` — `SetModelScale(3)` must not move a pixel. The authored eye is carried through the
-//!   model's root transform, so the camera scales with the model.
-//! - `position` — `SetPosition(0.4, −0.3, 0.9)` must not move a pixel, for the same reason.
-//! - `facing` — `SetFacing(1.0)` must not move a pixel **either**: the up vector `0x7ac640` builds
-//!   is model-space `+Z` at `roll = 0`, which is the axis the facing turns about, so eye, target,
-//!   geometry and up all turn together. The rule that only `SetFacing` shows is scoped to
-//!   `<PlayerModel>`'s frozen camera (`0x7acf10`).
-//! - `ortho` — the control that must NOT hold: `SetCamera(9)` is past the file's camera count, so
-//!   the widget installs the NULL camera and falls to the orthographic leg, where a facing is a
-//!   plain roll in the screen plane. A probe whose "identical" legs all passed because nothing was
-//!   drawing would fail here.
-//!
-//! Three screenshots ride along — the baseline, the scaled/offset one and the turned one — as the
-//! existence evidence and for the director's own eye. They are the whole window, so they are not
-//! compared: the world behind the pane moves.
-//!
-//! ## The run recipe
-//! ```text
-//! WOW_USER=probe5 WOW_PASS=pprobe5 WOW_CHAR=Probefive WOW_UNATTENDED=1 WOW_NOSOUND=1 \
-//!     WOW_PROBE_MODEL_CAMERA=1 cargo run -q -p benilla
-//! ```
-//! (the checkout's probe identity (`.probe-identity`, or WOW_USER/WOW_PASS/WOW_CHAR — the `probe` skill)). `WOW_TILE_TRACE=1`
-//! alongside it prints the leg, the record, the eye and the matrix per pane per frame.
+//! Three whole-window screenshots go to the local-state folder as existence evidence; they are not
+//! compared. `WOW_TILE_TRACE=1` prints the leg, record, eye and matrix per pane per frame. The
+//! switches are `docs/CONTRIBUTING.md`, "Running it unattended".
 
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
@@ -50,24 +27,20 @@ use super::probes::ProbeClock;
 use crate::net::SelfPlayer;
 use crate::ui_models::{TilePerspectiveCamera, TileRoot, UiModelTiles};
 
-/// The file the probe frames. `Creature\Wolf\Wolf.m2` carries **two** cameras
-/// (`benilla-extract m2cam`: index 0 type 0 at eye `(1.6927, 0.7238, 0.8837)` fov `0.95002`,
-/// index 1 type 1 at eye `(5.5556, 0, 1.8056)` fov `0.67620`), so it exercises the raw-index
-/// selection AND has an index past the count for the orthographic control.
+/// The file framed. `Creature\Wolf\Wolf.m2` carries two cameras (`benilla-extract m2cam`: index
+/// 0 type 0, eye `(1.6927, 0.7238, 0.8837)`, fov `0.95002`; index 1 type 1, eye
+/// `(5.5556, 0, 1.8056)`, fov `0.67620`), so index 9 is past the count.
 const FILE: &str = r"Creature\\Wolf\\Wolf.mdx";
-/// The pane's size in FrameXML units — the pet pane's own `318×224`, whose aspect is a worked
-/// example of the projection `0x5c3cc0` (`θ = 0.287938 · fov`).
+/// The pane's size in FrameXML units: the pet pane's `318x224`, a worked example of the
+/// projection `0x5c3cc0` (`theta = 0.287938 * fov`).
 const PANE_W: f32 = 318.0;
 const PANE_H: f32 = 224.0;
-/// Frames to let a change settle before the numbers are read: the extract republishes the request
-/// on the next conversion and the renderer aims the camera the frame after that.
+/// Frames to let a change settle: the extract republishes it, then the renderer aims the camera.
 const SETTLE_FRAMES: u32 = 8;
-/// NDC agreement the cancellation legs must hold to. Generous against f32 round-off through two
-/// 4×4 composes; a leg that failed to cancel misses by tens of percent, not by a thousandth.
+/// NDC agreement the cancelling legs must hold; a failed cancel misses by tens of percent.
 const NDC_EPS: f32 = 1.0e-3;
 
-/// The Lua that builds the pane. Anonymous is the corpus shape (pfUI's autocast shine), but the
-/// probe needs a handle on it, so it is global.
+/// The Lua that builds the pane, named so the legs can reach it.
 const BUILD: &str = r#"
 ProbeModelCam = CreateFrame("Model", "ProbeModelCam", UIParent)
 ProbeModelCam:SetWidth(318)
@@ -88,7 +61,7 @@ impl Plugin for ProbeModelCameraPlugin {
     }
 }
 
-/// One leg's reading: the NDC of the three probe points, and the label to report it under.
+/// One leg's reading: the NDC of the three probe points.
 #[derive(Clone, Copy, Default)]
 struct Reading([Vec2; 3]);
 
@@ -110,7 +83,7 @@ enum Phase {
     Await {
         since: f64,
     },
-    /// A change is in flight; read it in `at`.
+    /// A change is in flight; read after [`SETTLE_FRAMES`].
     Settle {
         frames: u32,
         leg: Leg,
@@ -128,7 +101,7 @@ enum Leg {
 }
 
 impl Leg {
-    /// The Lua that puts the pane INTO this leg — run when the leg is entered, before its reading.
+    /// The Lua that puts the pane into this leg, run before its reading.
     fn setup(self) -> &'static str {
         match self {
             Leg::Baseline => "",
@@ -137,9 +110,7 @@ impl Leg {
                 "ProbeModelCam:SetModelScale(1) ProbeModelCam:SetPosition(0.4, -0.3, 0.9)"
             }
             Leg::Facing => "ProbeModelCam:SetPosition(0, 0, 0) ProbeModelCam:SetFacing(1.0)",
-            // The control: index 9 is past Wolf's two cameras, so the widget installs the NULL
-            // camera and the pane drops to the orthographic leg. Its perspective camera goes
-            // inactive, which is what the reading detects.
+            // Past Wolf's two cameras: the NULL camera, the orthographic leg.
             Leg::Ortho => "ProbeModelCam:SetCamera(9)",
         }
     }
@@ -155,8 +126,7 @@ impl Leg {
     }
 }
 
-/// The three model-space points the legs are compared on — a wolf-sized spread, in Bevy space
-/// (the frame the tile root and the camera both work in).
+/// The three model-space points the legs compare, a wolf-sized spread in Bevy space.
 fn probe_points() -> [Vec3; 3] {
     [
         benilla_assets::coords::wow_to_bevy([0.0, 0.0, 0.8]),
@@ -165,9 +135,8 @@ fn probe_points() -> [Vec3; 3] {
     ]
 }
 
-/// Project the three points through whatever the renderer built this frame — the ACTIVE
-/// perspective camera and the tile root under its layer. `None` when no perspective camera is
-/// aimed (which is the orthographic leg, and the control's expected answer).
+/// Projects the points through the active perspective camera and the tile root on its layer;
+/// `None` with no perspective camera aimed, the orthographic leg.
 fn read_leg(
     cams: &Query<
         (&Camera, &GlobalTransform, &Projection, &RenderLayers),
@@ -176,9 +145,7 @@ fn read_leg(
     roots: &Query<(&GlobalTransform, &RenderLayers), With<TileRoot>>,
 ) -> Option<Reading> {
     let (_, cam_tf, proj, layers) = cams.iter().find(|(c, _, _, _)| c.is_active)?;
-    // The pane's root is the one on the camera's OWN layer — a perspective camera sees exactly one
-    // tile by construction, and the interface has other tiles up (the minimap ping, the map arrow)
-    // whose roots would otherwise be picked at random.
+    // The root on the camera's own layer: other tiles (the minimap ping, the map arrow) are up.
     let (root, _) = roots.iter().find(|(_, l)| *l == layers)?;
     let clip = proj.get_clip_from_view() * cam_tf.to_matrix().inverse() * root.to_matrix();
     let mut out = [Vec2::ZERO; 3];
@@ -190,8 +157,7 @@ fn read_leg(
 }
 
 fn shoot(commands: &mut Commands, name: &str) {
-    // Every file we write goes through `local_state` — never into the WoW install, never a
-    // platform config dir (docs/METHOD.md's one-folder rule).
+    // Written under `local_state`, never into the install.
     let Some(path) = crate::local_state::home().map(|d| d.join(format!("{name}.png"))) else {
         warn!("PROBE_MODEL_CAMERA: no local-state folder — skipping the {name} shot");
         return;
@@ -243,8 +209,7 @@ fn model_camera_probe(
                     leg: Leg::Baseline,
                 };
             } else if now - since > 30.0 {
-                // The asset never landed, or the pane never reached the paint list. An
-                // environmental miss, not a wrong answer.
+                // The asset never landed or the pane never painted: a SKIP, not a wrong answer.
                 error!(
                     "PROBE_MODEL_CAMERA: SKIP — no tile after 30 s (cells={}, camera aimed={})",
                     tiles.cells.len(),
@@ -342,9 +307,7 @@ fn model_camera_probe(
                 probe.passes, probe.fails, probe.skips
             );
             exit.write(AppExit::Success);
-            // The polite `AppExit` plus a hard backstop, the harness's standard pair
-            // (`ProbeExitPlugin::fire_probe_exit`): a net or winit teardown hang must not leave a
-            // zombie client holding the probe account.
+            // A hard backstop, so a teardown hang cannot keep the account held.
             std::thread::spawn(|| {
                 std::thread::sleep(std::time::Duration::from_secs(5));
                 warn!("PROBE_MODEL_CAMERA: still alive 5s after AppExit — hard exit");

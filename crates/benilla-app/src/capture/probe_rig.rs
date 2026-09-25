@@ -1,18 +1,6 @@
-//! The probe **rig** (`WOW_RIG="<spec>"`) — one command that puts this checkout's probe
-//! account into a chosen **body** and hands the session a world that is ready to test.
-//!
-//! ## Why it exists
-//!
-//! Every probe account owns one level-1 character, and every session that needs anything else has
-//! been hand-assembling it out of GM commands. Mined from 507 MB of this project's own session
-//! transcripts, the standing tax is: `.go xyz` 750×, `.additem` 434×, `.modify` 345×, `.gm off`
-//! 257×, `.revive` **121×**, `.learn <one spell id>` a few dozen times — while
-//! `.character premade` (96 ready-made BiS/twink **gear** templates plus 53 **talent** ones sitting
-//! in this deploy's world DB, every class at 19/29/39/49/60) has been used **zero** times, because
-//! nobody knew it was there. That is the shape of the problem: the primitives exist and are undiscoverable, so
-//! each session re-derives a worse version of them.
-//!
-//! The rig is the one verb that hides all of it: name a body, get a body.
+//! The probe rig (`WOW_RIG="<spec>"`): puts this checkout's probe account into a chosen body
+//! through GM commands and hands over a world ready to test. Non-combat: it creates, configures,
+//! places and stops.
 //!
 //! ```text
 //! WOW_RIG="tauren druid 60 gear:heal-preraid-bis spec:heal-preraid-bis at:ThunderBluff"
@@ -21,58 +9,26 @@
 //! WOW_RIG="nightelf druid"                   # just a body of that shape, level 1
 //! ```
 //!
-//! ## What it does
+//! Race and class name a character, since vmangos has no class-change command: the name is
+//! `<Race3><Class3><word>[f]`, the word this checkout's (`run_mode::rig_suffix`), so a later run
+//! reuses the same body. Without race and class the rig configures whatever `WOW_CHAR` logs in as.
+//! When a create fails with `CHAR_CREATE_SERVER_LIMIT`, the rig deletes this checkout's rig-named
+//! character cheapest to rebuild and retries once; no other character is ever deleted.
 //!
-//! **Race + class name a character, so the rig owns the pick.** vmangos has no class-change command
-//! (`.character race` exists; there is no `.character class`), so a different class *is* a different
-//! character — which makes creating one the honest primitive rather than a fallback. The name is
-//! derived, never invented: `<Race3><Class3><word>[f]`, the word being this checkout's
-//! (`run_mode::rig_suffix`), e.g. a Tauren Druid for `Probeone` → `Taudruone`. Deterministic means
-//! the *next* session reuses the same body instead of littering a second one, and the pattern is
-//! what makes eviction safe (below). Omit race+class and the rig configures whatever `WOW_CHAR`
-//! already logs in as.
+//! The GM commands behind it, with the level each needs (vmangos `Chat.cpp`):
+//! - a dead body: `.revive` (SEC_GAMEMASTER 3), always.
+//! - `<level>`: `.character level N` (SEC_DEVELOPER 5), then `.learn all_myclass` (5), which
+//!   teaches all class spells and talents.
+//! - `gear:<t>`: `.character premade gear <t>` (SEC_BASIC_ADMIN 4), which levels up and equips.
+//! - `spec:<t>`: `.character premade spec <t>` (4), which resets talents and learns the tree.
+//! - `at:<name>`: `.tele <name>` (SEC_TICKETMASTER 2), a `game_tele` row.
+//! - `at:m,x,y,z[,o]`: `.go xyz x y z m`, or `.go xyzo` to pin the facing (2).
+//! - `gm:on|off`: `.gm on|off` (SEC_TICKETMASTER 2).
 //!
-//! **The roster is a cache with an eviction policy.** `CharactersPerRealm` is 10, and there are 40
-//! valid race/class pairs, so a busy account fills. The rig does not hardcode the limit: it tries
-//! the create, and only on `CHAR_CREATE_SERVER_LIMIT` evicts **the rig-named character of this checkout
-//! that is cheapest to rebuild** — lowest level first, ties broken by oldest — then retries once.
-//! Nothing outside the rig's own naming pattern is ever deleted, so `Probe<N>` and anything a human
-//! made are untouchable.
-//!
-//! **Then it applies state, in an order that matters:** revive before anything (a ghost's commands
-//! half-apply), level before gear (`ApplyPremadeGearTemplateToPlayer` only levels *up*, never
-//! down), spells after level, teleport last (so a fixup lands where you asked, not where you were).
-//! It always revives a dead or ghost body, whether or not you asked — that is the 121× command, and
-//! there is no session that wants to keep testing on a corpse.
-//!
-//! ## The GM verbs behind it (all verified against the vmangos source, github.com/vmangos/core)
-//!
-//! | rig token | command | needs | note |
-//! |---|---|---|---|
-//! | (always, if dead) | `.revive` | SEC_GAMEMASTER 3 | |
-//! | `<level>` | `.character level N` | SEC_DEVELOPER 5 | no name arg ⇒ self |
-//! | (with a level) | `.learn all_myclass` | SEC_DEVELOPER 5 | = all class spells **+** all talents |
-//! | `gear:<t>` | `.character premade gear <t>` | SEC_BASIC_ADMIN 4 | name or entry; levels up + equips |
-//! | `spec:<t>` | `.character premade spec <t>` | SEC_BASIC_ADMIN 4 | resets talents, learns the tree |
-//! | `at:<name>` | `.tele <name>` | SEC_TICKETMASTER 2 | 997 named rows in `game_tele` |
-//! | `at:m,x,y,z[,o]` | `.go xyz x y z m` (`.go xyzo` with `o`) | SEC_TICKETMASTER 2 | pin the facing when a motion probe walks |
-//! | `gm:on\|off` | `.gm on\|off` | SEC_GAMEMASTER 3 | see 0649 on why `off` matters |
-//!
-//! Probe accounts are gmlevel **6**, so every one of these lands. Pass `gear:?` (or `spec:?`) to
-//! make the server *list* the templates its class has instead of applying one — the discovery path,
-//! since the catalog lives in the world DB and not in any client data.
-//!
-//! **Two things about `gear:` that have each cost a session.** First, the templates are not all full
-//! sets: of the 96 in this deploy, `pvp-r14-hunter-fx` holds 5 items and the priest/warrior
-//! `heal-r14`/`tank-r14` hold 8, against a 16.8 mean — so a sparse body can be exactly what the
-//! template says, and only a body under `GEAR_FLOOR` is evidence of a refusal. Second, applying gear
-//! **strips before it dresses** (`ApplyPremadeGearTemplateToPlayer` unequips all 19 slots, then
-//! `StoreNewItemInBestSlots` per item), so re-dressing a body leaves the old copy in its bags and
-//! mails the overflow once they fill. Repeated rigs on one character accumulate; a fresh rig-named
-//! character (give `WOW_RIG` a race+class) starts with empty bags and is the cheaper path.
-//!
-//! Non-combat throughout: the rig creates, configures, places and stops. It never fights, so the
-//! unattended-combat ban (docs/METHOD.md) is untouched.
+//! `gear:?` or `spec:?` makes the server list its templates for the class, as the catalog lives in
+//! the world DB. Applying gear unequips all 19 slots before it equips
+//! (`ObjectMgr.cpp:12079-12117`), so re-dressing a body leaves the old set in its bags or mailed;
+//! a fresh rig-named character starts with empty bags.
 
 use benilla_protocol::{messages, CharAction, CharCreateReq};
 use bevy::prelude::*;
@@ -84,31 +40,24 @@ use crate::net::{
     ObjectStore, SelfPlayer,
 };
 
-/// Grace after world entry before the first GM line — the descriptor and the UI VM both have to be
-/// up, and a command sent into a half-built session is silently dropped.
+/// Grace after world entry before the first GM line, while the descriptor and the UI VM come up;
+/// a command sent into a half-built session is dropped.
 const SETTLE_SECS: f32 = 3.0;
 
-/// Spacing between GM lines. Each one is a server-side mutation whose result the next may depend on
-/// (level → gear → spec), and two flips inside one net drain merge to a no-op (0441's lesson).
+/// Spacing between GM lines: each may depend on the last (level, gear, spec), and two flips inside
+/// one net drain merge to a no-op.
 const STEP_SECS: f32 = 0.8;
 
-/// Grace after the last GM line before reading the result back — the level-up, the equip sweep and
-/// the teleport all land as descriptor deltas a frame or two later.
+/// Grace after the last GM line before reading the result back, as its effects land as descriptor
+/// deltas a frame or two later.
 const VERIFY_SECS: f32 = 2.0;
 
-/// The fewest items any real gear template in this deploy's world DB actually holds, so a body that
-/// wears fewer than this after a `gear:` **cannot** be the template landing — something refused.
-///
-/// Derived, not invented: `SELECT COUNT(*) … player_premade_item GROUP BY entry` over the 96 rows of
-/// `player_premade_item_template` runs 5…23 (mean 16.8). Only three templates are partial —
-/// `pvp-r14-hunter-fx` (5), and the priest/warrior `heal-r14`/`tank-r14` (8 each) — so a **low but
-/// legitimate** count is a real outcome and this floor deliberately sits under it: the warning fires
-/// only for a body that is essentially naked. (Entry 910 has one item row and no template row at
-/// all — an orphan; asking for it by entry errors server-side.)
+/// The fewest items any gear template in the local world DB holds (`pvp-r14-hunter-fx`, 5), so a
+/// body wearing fewer after a `gear:` was refused.
 const GEAR_FLOOR: usize = 5;
 
-/// Did a `gear:` ask come back with a body that cannot be wearing the template? `gear:?` is the
-/// discovery path — it lists and dresses nothing, so it never counts as a refusal.
+/// Whether a `gear:` ask came back with a body that cannot be wearing the template; `gear:?` only
+/// lists, so it never counts.
 fn gear_was_refused(gear: Option<&str>, equipped: usize) -> bool {
     gear.is_some_and(|g| g != "?") && equipped < GEAR_FLOOR
 }
@@ -125,9 +74,7 @@ impl Plugin for ProbeRigPlugin {
             return; // inert without a parseable spec (parse() has already said why)
         };
         info!("rig: {}", spec.describe());
-        // Publish the claim on the character pick as an always-present run fact.
-        // The roster reads it to know the pick is already spoken for; before 1174 it called
-        // `rig_char_name_from_env` directly, which is gameplay naming the harness.
+        // Publish the claim on the character pick, so the roster knows the pick is spoken for.
         if let Some(name) = rig_char_name(&spec) {
             app.insert_resource(crate::run_mode::RigCharacter(name));
         }
@@ -144,10 +91,10 @@ impl Plugin for ProbeRigPlugin {
     }
 }
 
-/// The parsed `WOW_RIG` spec. Every field is optional — the rig only touches what was asked for.
+/// The parsed `WOW_RIG` spec; the rig touches only what was asked for.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct RigSpec {
-    /// `(race id, class id, gender)` — present together or not at all; they name the character.
+    /// `(race id, class id, gender)`, which name the character.
     body: Option<(u8, u8, u8)>,
     level: Option<u8>,
     gear: Option<String>,
@@ -155,23 +102,20 @@ struct RigSpec {
     /// `.tele <name>`, or `.go xyz` when the token parsed as `map,x,y,z`.
     at: Option<String>,
     gm: Option<bool>,
-    /// Whether to `.learn all_myclass`. Defaults to "yes if a level was asked for" — a level-60
-    /// body with a level-1 spellbook is not a level-60 body.
+    /// Whether to `.learn all_myclass`; defaults to yes when a level was asked for.
     learn: Option<bool>,
 }
 
 impl RigSpec {
-    /// Parse the whitespace-separated, order-free, case-insensitive token soup. Returns `None` (with
-    /// a `warn!` naming the offending token) rather than silently rigging the wrong thing.
+    /// Parses the whitespace-separated, order-free, case-insensitive tokens; a bad token warns and
+    /// rigs nothing.
     fn parse(spec: &str) -> Option<Self> {
         let mut out = Self::default();
         let (mut race, mut class, mut gender) = (None, None, None);
         for tok in spec.split_whitespace() {
             let lower = tok.to_ascii_lowercase();
             if let Some((key, _)) = lower.split_once(':') {
-                // The KEY is matched case-insensitively, but the VALUE is taken from the original
-                // token: a premade-template name and a `game_tele` name are both looked up verbatim
-                // server-side, so lowercasing them would break the lookup.
+                // The value keeps its case: template and `game_tele` names are looked up verbatim.
                 let val = tok.split_once(':').map_or("", |(_, v)| v).to_string();
                 match key {
                     "gear" => out.gear = Some(val),
@@ -215,14 +159,12 @@ impl RigSpec {
         Some(out)
     }
 
-    /// Whether the class's spellbook should be filled in (`learn:` if given, else "a level implies
-    /// the spells that come with it").
+    /// Whether to fill the class's spellbook: as asked, else when a level above 1 was asked for.
     fn wants_spells(&self) -> bool {
         self.learn.unwrap_or(self.level.is_some_and(|l| l > 1))
     }
 
-    /// The one-line echo of what was asked for — printed at startup so a mis-parse is obvious
-    /// before the socket even opens.
+    /// The one-line echo of the spec, printed at startup.
     fn describe(&self) -> String {
         let body = self
             .body
@@ -275,9 +217,8 @@ enum RigPhase {
     Settling(f32),
     /// Sending the batch, one line per [`STEP_SECS`].
     Commanding,
-    /// The batch is out; re-read the descriptor at this `Time::elapsed_secs` and report what
-    /// actually landed. A command the server refused is otherwise invisible — the send always
-    /// "succeeds", and the preflight banner describes the body we *arrived* in, not the rigged one.
+    /// The batch is out; at this `Time::elapsed_secs` the descriptor is re-read to report what
+    /// landed, since a refused GM command gets no error.
     Verifying(f32),
     Done,
 }
@@ -286,9 +227,9 @@ enum RigPhase {
 struct Rig {
     spec: RigSpec,
     phase: RigPhase,
-    /// The freshest roster (each successful create/delete is preceded by a new enum).
+    /// The freshest roster.
     roster: Vec<benilla_protocol::Character>,
-    /// A server-limit eviction has already been spent — one is a full roster, two is a bug.
+    /// A server-limit eviction has been spent; only one is allowed.
     evicted: bool,
     steps: Vec<String>,
     sent: usize,
@@ -315,11 +256,10 @@ fn drive_rig(
     match rig.phase {
         RigPhase::AwaitRoster => {
             if rig.roster.is_empty() && rig.spec.body.is_none() {
-                return; // no roster yet, and nothing to create — wait for the enum
+                return; // no roster yet, and nothing to create
             }
             let Some(want) = rig_char_name(&rig.spec) else {
-                // No body asked for: let char_select's own WOW_CHAR/default pick stand, and just
-                // configure whatever walks into the world.
+                // No body asked for: char_select's own pick stands.
                 rig.phase = RigPhase::Entering;
                 return;
             };
@@ -444,8 +384,7 @@ fn drive_rig(
                 maxhp = store.0.unit_max_health().unwrap_or(0),
                 faction = store.0.unit_faction_template().unwrap_or(0),
             );
-            // The one failure that reads as success: the batch went out, the server refused every
-            // line, and the body is exactly as found. Level is the cheapest tell.
+            // A batch the server refused leaves the body as found; the level is the cheapest tell.
             if let Some(want) = rig.spec.level {
                 let got = store.0.unit_level().unwrap_or(0);
                 if got < u32::from(want) {
@@ -457,13 +396,8 @@ fn drive_rig(
                     );
                 }
             }
-            // The other failure that reads as success: `.character premade gear` went out, the body
-            // came back wearing almost nothing, and every later reading is of the wrong body. The
-            // server unequips all 19 slots *before* it equips (`ApplyPremadeGearTemplateToPlayer` →
-            // `AutoUnequipItemFromSlot` → `StoreNewItemInBestSlots`, vmangos `ObjectMgr.cpp`), so a
-            // near-naked body means the equip half was refused while the strip half already ran —
-            // the set is in the bags, or mailed if they were full. A session that misses this line
-            // measures a probe in its underwear.
+            // The server unequips all 19 slots before it equips (`ObjectMgr.cpp:12079-12117`), so
+            // a near-naked body means the equip half was refused after the strip ran.
             if gear_was_refused(rig.spec.gear.as_deref(), equipped) {
                 warn!(
                     "rig: asked for gear but the body wears only {equipped} item(s) — the leanest \
@@ -479,9 +413,8 @@ fn drive_rig(
     }
 }
 
-/// The GM batch, in the one order that works: revive first (a ghost half-applies everything else),
-/// level before gear (a premade template only levels *up*), spells after the level they belong to,
-/// and the teleport last so a fixup lands where you asked rather than where you started.
+/// The GM batch in the order that works: revive first (a ghost half-applies the rest), level
+/// before gear (a template only levels up), spells after the level, the teleport last.
 fn build_steps(spec: &RigSpec, dead: bool) -> Vec<String> {
     let mut steps = Vec::new();
     if dead {
@@ -498,8 +431,7 @@ fn build_steps(spec: &RigSpec, dead: bool) -> Vec<String> {
     }
     for (token, verb) in [(&spec.gear, "gear"), (&spec.spec, "spec")] {
         if let Some(t) = token {
-            // `?` asks the server to LIST this class's templates instead of applying one — the
-            // catalog lives in the world DB, so the server is the only thing that can enumerate it.
+            // `?` asks the server to list this class's templates instead of applying one.
             let arg = if t == "?" { "" } else { t.as_str() };
             steps.push(format!(".character premade {verb} {arg}").trim_end().into());
         }
@@ -514,12 +446,9 @@ fn build_steps(spec: &RigSpec, dead: bool) -> Vec<String> {
     steps
 }
 
-/// `map,x,y,z[,o]` → `.go xyz x y z map`, or `.go xyzo x y z o map` when a facing is given
-/// (VERIFIED vmangos `Chat.cpp:408`: `xyzo`, SEC_TICKETMASTER like `xyz`). Anything else is a
-/// `game_tele` name. The facing is load-bearing exactly when a motion probe walks from the
-/// pin: `W` follows the BODY's facing, and each probe character keeps whatever facing it last
-/// had — an unpinned facing sent probe0 and probe4 down different routes from the same point,
-/// which invalidated a cross-checkout A/B before 1462's sitting caught it.
+/// `map,x,y,z[,o]` for `.go xyz x y z map`, or `.go xyzo x y z o map` with a facing (vmangos
+/// `Chat.cpp:408`); anything else is a `game_tele` name. A motion probe pins the facing, since
+/// `W` follows the body's facing and a character keeps whatever facing it last had.
 fn parse_point(at: &str) -> Option<(i32, f32, f32, f32, Option<f32>)> {
     let mut parts = at.split(',').map(str::trim);
     let map = parts.next()?.parse().ok()?;
@@ -544,27 +473,16 @@ fn rig_char_name(spec: &RigSpec) -> Option<String> {
         class_code(class)?,
         if gender == 1 { "f" } else { "" }
     );
-    // vmangos caps player names at 12 (`MAX_PLAYER_NAME`); the longest this can build is
-    // `Nel` + `Wlk` + `three` + `f` = 12. Normalized like the server does: leading capital, rest
-    // lower.
+    // vmangos caps player names at 12 (`ObjectMgr.h:398`); the longest built here is
+    // `Nel` + `Wlk` + `three` + `f`. Normalized as the server does: leading capital, rest lower.
     let mut chars = name.chars();
     Some(chars.next()?.to_ascii_uppercase().to_string() + &chars.as_str().to_ascii_lowercase())
 }
 
-/// The rig-named character of this checkout that costs least to lose: **lowest level first**, ties
-/// broken by oldest (the enum is ordered by `create_time` — vmangos `HandleCharEnumOpcode` — so an
-/// earlier index *is* older). Level is the proxy for invested setup: a level-1 body is 15 seconds to
-/// rebuild, a geared 60 is a minute and a talent tree. Evicting by age alone would throw away the
-/// most valuable body on the account first, which the live fill test made obvious.
-///
-/// Anything that is not a rig name for `word` — the probe body itself, a hand-made character,
-/// another checkout's leftovers — is invisible here, and that is what makes automatic deletion safe.
-///
-/// `word` is a **parameter, not a `rig_suffix()` call inside**: reading the ambient word here made
-/// the eviction test pass only in the checkout it was written in (whose rig names end `…one`) and
-/// fail in every other — and in a checkout with no declaration, where `rig_suffix()` is `None` and
-/// nothing matches at all. A unit test's answer must not depend on which directory the build
-/// happened in.
+/// This checkout's rig-named character cheapest to rebuild: lowest level first, ties to the oldest
+/// (the enum is ordered by `create_time`, vmangos `CharacterHandler.cpp:180`). Anything not a rig
+/// name for `word` is never chosen. `word` is a parameter so a test does not depend on the
+/// checkout it runs in.
 fn evictable(
     roster: &[benilla_protocol::Character],
     want: Option<&str>,
@@ -592,8 +510,6 @@ fn is_rig_name(name: &str, word: &str) -> bool {
     has_codes && (rest == word || rest == format!("{word}f"))
 }
 
-/// Race id → the 3-letter name code. `Nel`/`Und` rather than the DBC's own prefixes: unambiguous,
-/// and readable in a roster line.
 const RACE_CODES: [(u8, &str); 8] = [
     (1, "hum"),
     (2, "orc"),
@@ -605,7 +521,7 @@ const RACE_CODES: [(u8, &str); 8] = [
     (8, "tro"),
 ];
 
-/// Class id → the 3-letter name code (`wlk` for warlock — `war` is already the warrior's).
+/// Class id to its 3-letter name code (`wlk` for warlock, as `war` is the warrior's).
 const CLASS_CODES: [(u8, &str); 9] = [
     (1, "war"),
     (2, "pal"),
@@ -626,8 +542,7 @@ fn class_code(id: u8) -> Option<&'static str> {
     CLASS_CODES.iter().find(|(i, _)| *i == id).map(|(_, c)| *c)
 }
 
-/// Spec word → `ChrRaces.dbc` id. Both the one-word and the two-word spellings, because a spec is
-/// typed by hand and `nightelf`/`night-elf` are the same intent.
+/// Spec word to `ChrRaces.dbc` id, with the common spellings.
 fn race_id(word: &str) -> Option<u8> {
     Some(match word {
         "human" => 1,
@@ -642,7 +557,7 @@ fn race_id(word: &str) -> Option<u8> {
     })
 }
 
-/// Spec word → `ChrClasses.dbc` id (6 and 10 are unused in 1.12).
+/// Spec word to `ChrClasses.dbc` id (6 and 10 are unused in 1.12).
 fn class_id(word: &str) -> Option<u8> {
     Some(match word {
         "warrior" => 1,
@@ -664,8 +579,7 @@ mod tests {
 
     #[test]
     fn a_naked_body_after_a_gear_ask_is_a_refusal_but_a_lean_template_is_not() {
-        // The three partial templates this deploy really ships (5 and 8 items) must stay quiet —
-        // the floor exists to catch a stripped body, not to second-guess the world DB.
+        // The partial templates (5 and 8 items) must stay quiet.
         assert!(!gear_was_refused(Some("pvp-r14-hunter-fx"), 5));
         assert!(!gear_was_refused(Some("tank-r14"), 8));
         assert!(
@@ -689,8 +603,7 @@ mod tests {
 
     #[test]
     fn template_names_keep_their_case() {
-        // The token soup is matched case-insensitively, but a premade template name and a
-        // `game_tele` name are looked up VERBATIM server-side — lowercasing them would break both.
+        // Template and `game_tele` names are looked up verbatim server-side.
         let s = RigSpec::parse("at:ThunderBluff gear:DPS-PreRaid-BiS").unwrap();
         assert_eq!(s.at.as_deref(), Some("ThunderBluff"));
         assert_eq!(s.gear.as_deref(), Some("DPS-PreRaid-BiS"));
@@ -698,12 +611,11 @@ mod tests {
 
     #[test]
     fn a_half_named_body_is_refused_rather_than_guessed() {
-        // A race with no class (or the reverse) cannot name a character, and guessing the other
-        // half would silently rig the wrong body.
+        // A race with no class, or the reverse, cannot name a character.
         assert!(RigSpec::parse("tauren 60").is_none());
         assert!(RigSpec::parse("druid").is_none());
         assert!(RigSpec::parse("tauren druid").is_some());
-        // No body at all is legal — that rigs whatever already logs in.
+        // No body at all rigs whatever already logs in.
         assert_eq!(RigSpec::parse("60 gear:x").unwrap().body, None);
         // A typo is refused, never ignored.
         assert!(RigSpec::parse("taruen druid").is_none());
@@ -784,9 +696,7 @@ mod tests {
         };
         assert_eq!(name("tauren druid", "one"), "taudruone");
         assert_eq!(name("nightelf warlock female", "three"), "nelwlkthreef");
-        // The longest name this scheme can mint is exactly vmangos's MAX_PLAYER_NAME of 12 — a
-        // 13th character would be refused by the server as an invalid name, and the rig would
-        // recreate it every run.
+        // The longest name this scheme can mint is exactly vmangos's `MAX_PLAYER_NAME`.
         const MAX_PLAYER_NAME: usize = 12;
         let longest = RACE_CODES
             .iter()
@@ -836,17 +746,15 @@ mod tests {
 
     #[test]
     fn eviction_spends_the_body_that_is_cheapest_to_rebuild() {
-        // The word is passed in, never read from the ambient checkout — these names are one
-        // checkout's, and taking the word from `rig_suffix()` made this test pass there and fail
-        // in every other checkout (and in one with no declaration, where it is `None`).
+        // The word is passed in, never read from the checkout the test runs in.
         let slot = "one";
-        // Roster order IS create order (vmangos enumerates by `create_time`).
+        // Roster order is create order (vmangos enumerates by `create_time`).
         let roster = [
-            row("Probeone", 60, 1),  // the identity — never evictable
-            row("Watcher", 60, 2),   // hand-made — never evictable
+            row("Probeone", 60, 1),  // the identity, never evictable
+            row("Watcher", 60, 2),   // hand-made, never evictable
             row("Taudruone", 60, 3), // oldest rig body, but a geared 60
             row("Orcwarone", 1, 4),  // a level-1 filler: the cheapest to lose
-            row("Undmagone", 1, 5),  // same level, but younger — the tie goes to the older
+            row("Undmagone", 1, 5),  // same level, but younger: the tie goes to the older
             row("Nelwlkonef", 40, 6),
         ];
         assert_eq!(
@@ -858,10 +766,9 @@ mod tests {
             evictable(&roster, Some("Orcwarone"), slot),
             Some((5, "Undmagone".into())),
         );
-        // Nothing rig-named on this slot ⇒ nothing to evict; the caller errors rather than guessing.
+        // Nothing rig-named on this slot, nothing to evict; the caller errors rather than guessing.
         assert_eq!(evictable(&roster[..2], None, slot), None);
-        // And another checkout's leftovers are invisible: the same roster, read with another word,
-        // evicts nothing. This is the assertion that would have caught the ambient read.
+        // Another checkout's rig characters are invisible.
         assert_eq!(evictable(&roster, None, "three"), None);
     }
 
