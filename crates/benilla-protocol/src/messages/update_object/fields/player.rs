@@ -325,6 +325,11 @@ impl ObjectFields {
     pub fn player_is_ghost(&self) -> bool {
         self.player_flags() & 0x10 != 0
     }
+    /// Dead or a ghost, the reference's `0x605f30`: health 0, or for a player the ghost flag. Not
+    /// feign death, which is `unit_reads_dead`; a creature has no `PLAYER_FLAGS`, so reads clear.
+    pub fn is_dead_or_ghost(&self) -> bool {
+        self.unit_is_dead() || self.player_is_ghost()
+    }
     /// `PLAYER_FLAGS_HIDE_HELM` (`0x400`, `Player.h:325`), set by `CMSG_TOGGLE_HELM`; public.
     pub fn player_hides_helm(&self) -> bool {
         self.player_flags() & 0x400 != 0

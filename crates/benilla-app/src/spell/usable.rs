@@ -8,8 +8,8 @@
 //! current target), the bit-25 cooldown fold (11) and power (12).
 //!
 //! Not built, each answering usable: leg 2's caster aura-immunity helpers (`0x6e9f20/40/60`), leg
-//! 4's `AttributesEx3` sub-conditions, and the ghost state beyond plain death. CanAssist in leg 10b
-//! is a reaction-rank test (friendly or better), not the reference's `0x6066f0`.
+//! 4's `AttributesEx3` sub-conditions. CanAssist in leg 10b is a reaction-rank test (friendly or
+//! better), not the reference's `0x6066f0`.
 
 use benilla_protocol::messages::ItemUseSpell;
 
@@ -276,8 +276,9 @@ pub(crate) fn spell_usable(
     if d.effects[0] == SPELL_EFFECT_TRADE_SKILL {
         return (true, false);
     }
-    // Leg 1: dead casters need the castable-while-dead attribute.
-    if ctx.store.0.unit_health() == Some(0) && d.attributes & ATTR_CASTABLE_WHILE_DEAD == 0 {
+    // Leg 1 (`0x6e3dad`): a dead or ghost caster (`0x605f30`) needs the castable-while-dead
+    // attribute (`0x6e3db6`).
+    if ctx.store.0.is_dead_or_ghost() && d.attributes & ATTR_CASTABLE_WHILE_DEAD == 0 {
         return (false, false);
     }
     // Leg 3 (`0x6e4000`): every reagent count carried, every totem tool present.
@@ -416,8 +417,8 @@ mod tests {
     use super::*;
     use benilla_protocol::ObjectFields;
 
-    // Field indices, private in the protocol crate: health 22, power1 23, flags 46, aurastate
-    // 125, bytes_1 138.
+    // Field indices, private in the protocol crate: health 22, power1 23, max health 28, flags
+    // 46, aurastate 125, bytes_1 138, player flags 190.
     fn player(pairs: &[(u16, u32)]) -> ObjectStore {
         // `UNIT_FLAG_PVP_ATTACKABLE` (bit 3), which every player carries: `CanAttack 0x606980`
         // picks its arm on that bit for both parties.
@@ -691,14 +692,17 @@ mod tests {
         let d = SpellDisplay::default();
         assert_eq!(walk(&d, &alive), (true, false));
 
-        // Leg 1: dead; the attribute waives it.
-        let dead = player(&[(22, 0)]);
+        // Leg 1: dead, or a ghost at health 1 (field 190 bit `0x10`); the attribute waives it.
+        let dead = player(&[(22, 0), (28, 100)]);
         assert_eq!(walk(&d, &dead), (false, false));
+        let ghost = player(&[(22, 1), (28, 100), (190, 0x10)]);
+        assert_eq!(walk(&d, &ghost), (false, false));
         let while_dead = SpellDisplay {
             attributes: ATTR_CASTABLE_WHILE_DEAD,
             ..Default::default()
         };
         assert_eq!(walk(&while_dead, &dead), (true, false));
+        assert_eq!(walk(&while_dead, &ghost), (true, false));
 
         // Leg 3: a missing reagent.
         let reagent = SpellDisplay {

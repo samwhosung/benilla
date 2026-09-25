@@ -330,9 +330,7 @@ const ATTACK_FLAG_REFUSALS: [(u32, &str); 4] = [
 
 /// Phase A of the attack-start validator `0x612df0`, the actor's own eligibility: the first
 /// failing gate raises its `ERR_ATTACK_*` line and returns `true`, and no packet is sent. The
-/// actor is the player for Attack (`0x6131aa`) and the pet for the pet bar (`0x4bd40d`). The
-/// reference's dead test `0x605f30` also refuses a player with `PLAYER_FLAGS_GHOST`
-/// (`[[obj+0xe68]+8]` bit 4); this tests health only.
+/// actor is the player for Attack (`0x6131aa`) and the pet for the pet bar (`0x4bd40d`).
 pub(crate) fn attack_actor_refusal(
     actor: Option<&ObjectStore>,
     self_guid: Option<u64>,
@@ -356,7 +354,8 @@ pub(crate) fn attack_actor_blocked(
 ) -> Option<&'static str> {
     // An unresolved actor skips the chain, as in the reference (`0x4bd403`).
     let fields = &actor?.0;
-    let key = if fields.unit_health().is_some_and(|h| h == 0) {
+    // `0x605f30` (`0x612e10`): dead, or a player's ghost flag, since a ghost has health 1.
+    let key = if fields.is_dead_or_ghost() {
         "ERR_ATTACK_DEAD"
     } else if fields
         .unit_charmed_by()
@@ -656,13 +655,15 @@ mod attack_actor_tests {
     use benilla_protocol::ObjectFields;
 
     const HEALTH: u16 = 22;
+    const MAXHEALTH: u16 = 28;
     const FLAGS: u16 = 46;
     const CHARMEDBY: u16 = 10;
     const MOUNT: u16 = 133;
+    const PLAYER_FLAGS: u16 = 190;
 
     fn actor(pairs: &[(u16, u32)]) -> ObjectStore {
         // A live, unowned, unmounted, unimpaired unit unless a case says otherwise.
-        let mut all = vec![(HEALTH, 100)];
+        let mut all = vec![(HEALTH, 100), (MAXHEALTH, 100)];
         all.extend_from_slice(pairs);
         ObjectStore(ObjectFields::from_pairs(&all))
     }
@@ -688,6 +689,11 @@ mod attack_actor_tests {
         );
         assert_eq!(
             refusal(Some(&actor(&[(HEALTH, 0)])), Some(7)),
+            Some("ERR_ATTACK_DEAD")
+        );
+        // A released ghost has health 1; `0x605f30`'s ghost-flag leg refuses it.
+        assert_eq!(
+            refusal(Some(&actor(&[(HEALTH, 1), (PLAYER_FLAGS, 0x10)])), Some(7)),
             Some("ERR_ATTACK_DEAD")
         );
         assert_eq!(

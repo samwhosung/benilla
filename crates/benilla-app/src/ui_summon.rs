@@ -175,8 +175,8 @@ pub(crate) mod net {
         app.net_handler(SessionEventKind::SummonRequest, on_request);
     }
 
-    /// `0x605f30` over the self object is both accessors: not `unit_is_dead` alone (a ghost's
-    /// health is 1), nor `unit_reads_dead` (`0x605f90`). An unstreamed self latches (`0x5e6189`).
+    /// `0x605f30` over the self object, not `unit_reads_dead` (`0x605f90`). An unstreamed self
+    /// latches (`0x5e6189`).
     fn on_request(
         In(ev): In<SessionEvent>,
         mut summon: ResMut<SummonState>,
@@ -195,7 +195,7 @@ pub(crate) mod net {
                 .0
                 .and_then(|g| index.0.get(&g))
                 .and_then(|e| stores.get(*e).ok())
-                .is_some_and(|s| s.0.unit_is_dead() || s.0.player_is_ghost());
+                .is_some_and(|s| s.0.is_dead_or_ghost());
             request(
                 summoner,
                 zone,
@@ -305,35 +305,6 @@ mod tests {
         );
         assert_eq!(summon.zone, 1519);
         assert!(!summon.ask, "and no second dialog is owed");
-    }
-
-    /// A ghost's health is 1, so `unit_is_dead()` is false; only `0x605f30`'s ghost-bit leg
-    /// refuses it.
-    #[test]
-    fn a_ghost_is_refused_even_though_a_ghost_is_not_dead() {
-        // A released player on the wire: health 1 of 100, the `PLAYER_FLAGS` ghost bit.
-        const HEALTH: u16 = 22;
-        const MAXHEALTH: u16 = 28;
-        const PLAYER_FLAGS: u16 = 190;
-        let ghost = benilla_protocol::ObjectFields::from_pairs(&[
-            (HEALTH, 1),
-            (MAXHEALTH, 100),
-            (PLAYER_FLAGS, 0x10),
-        ]);
-
-        assert!(
-            !ghost.unit_is_dead(),
-            "a ghost has health — which is why the first leg alone lets one through"
-        );
-        assert!(ghost.player_is_ghost());
-        assert!(
-            ghost.unit_is_dead() || ghost.player_is_ghost(),
-            "the arm's predicate is the OR of both legs, and it must refuse a ghost"
-        );
-
-        // The corpse case, for the other leg: dead, not yet released, no ghost bit.
-        let corpse = benilla_protocol::ObjectFields::from_pairs(&[(HEALTH, 0), (MAXHEALTH, 100)]);
-        assert!(corpse.unit_is_dead() && !corpse.player_is_ghost());
     }
 
     /// No parent-zone hop and no GlobalString tail, unlike [`crate::ui_binder`]'s chain.

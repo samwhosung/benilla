@@ -400,12 +400,11 @@ fn answer_trade_request(
         return;
     }
 
-    // Legs 4-7, a silent busy: a dead or ghost initiator (`0x605f30`, raw health 0 or the ghost
-    // flag; `unit_reads_dead`, like `UnitIsDead` `0x517ac0`, would refuse a feigning hunter), a
-    // cinematic (`[0xb4e310]`), lost player control (`[0xb4b3e4]`, which `0x4958e0` writes, not an
-    // in-world flag) or an open auction house (`[0xb725f8]`, its auctioneer, not a pending trade).
-    let dead_or_ghost = initiator_store
-        .is_some_and(|s| s.0.unit_health().is_some_and(|hp| hp == 0) || s.0.player_is_ghost());
+    // Legs 4-7, a silent busy: a dead or ghost initiator (`0x605f30`; `unit_reads_dead`, like
+    // `UnitIsDead` `0x517ac0`, would refuse a feigning hunter), a cinematic (`[0xb4e310]`), lost
+    // player control (`[0xb4b3e4]`, which `0x4958e0` writes, not an in-world flag) or an open
+    // auction house (`[0xb725f8]`, its auctioneer, not a pending trade).
+    let dead_or_ghost = initiator_store.is_some_and(|s| s.0.is_dead_or_ghost());
     if dead_or_ghost
         || cinematic.is_playing()
         || player.control_lost
@@ -1303,13 +1302,18 @@ mod tests {
 
     #[test]
     fn a_dead_or_ghost_initiator_is_refused() {
-        // The `UNIT_FIELD_HEALTH` and `PLAYER_FLAGS` field ids, and `PLAYER_FLAGS_GHOST`.
+        // The `UNIT_FIELD_HEALTH`, `UNIT_FIELD_MAXHEALTH` and `PLAYER_FLAGS` field ids, and
+        // `PLAYER_FLAGS_GHOST`.
         const HEALTH: u16 = 22;
+        const MAXHEALTH: u16 = 28;
         const PLAYER_FLAGS: u16 = 190;
         const GHOST: u32 = 0x10;
         for (label, fields) in [
-            ("dead", vec![(HEALTH, 0u32)]),
-            ("ghost", vec![(HEALTH, 1u32), (PLAYER_FLAGS, GHOST)]),
+            ("dead", vec![(HEALTH, 0u32), (MAXHEALTH, 100)]),
+            (
+                "ghost",
+                vec![(HEALTH, 1u32), (MAXHEALTH, 100), (PLAYER_FLAGS, GHOST)],
+            ),
         ] {
             let (mut app, rx) = request_app(false, false, true);
             let entity = app.world().resource::<GuidIndex>().0[&0x7];

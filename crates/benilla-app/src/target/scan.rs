@@ -789,7 +789,7 @@ pub(super) fn remember_last_enemy(
         return;
     };
     // Conjuncts 2 and 3: not dead or a ghost (a ghost's wire health is 1), and not mounted.
-    if me.0.unit_is_dead() || me.0.player_is_ghost() || me.0.unit_mount_display_id() != 0 {
+    if me.0.is_dead_or_ghost() || me.0.unit_mount_display_id() != 0 {
         return;
     }
     let store = stores.get(entity).ok();
