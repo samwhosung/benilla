@@ -364,7 +364,7 @@
 - `WOW_PARTICLE_DEPTHDUMP_BONES` — benilla-world/src/particles/depthdump.rs
 - `WOW_PARTICLE_FLAT` — benilla-world/src/particles/render.rs
 - `WOW_PARTICLE_NODEPTH` — benilla-world/src/particles/render.rs
-- `WOW_PASS` — benilla-app/src/login/mod.rs, benilla-app/src/net.rs, benilla-app/src/run_mode.rs
+- `WOW_PASS` — benilla-app/src/login/mod.rs, benilla-app/src/net.rs, benilla-app/src/run_mode.rs, benilla-protocol/examples/login_refusal_probe.rs, benilla-protocol/examples/park_probe.rs
 - `WOW_PERF_HUD` — benilla-app/src/perf/hud.rs
 - `WOW_PHASE` — benilla-app/src/capture/phase_probe.rs, benilla-app/src/dev.rs, benilla-world/src/bgwin.rs
 - `WOW_PHASE_AT` — benilla-app/src/capture/phase_probe.rs
@@ -493,7 +493,7 @@
 - `WOW_UNIT_VISUALS` — benilla-app/src/capture/probes/visual_census.rs, benilla-app/src/dev.rs
 - `WOW_UNIT_VISUALS_RADIUS` — benilla-app/src/capture/probes/visual_census.rs
 - `WOW_UPLOAD_BUDGET` — benilla-world/src/world_plugins.rs
-- `WOW_USER` — benilla-app/src/login/mod.rs, benilla-app/src/net.rs, benilla-app/src/run_mode.rs
+- `WOW_USER` — benilla-app/src/login/mod.rs, benilla-app/src/net.rs, benilla-app/src/run_mode.rs, benilla-protocol/examples/login_refusal_probe.rs, benilla-protocol/examples/park_probe.rs
 - `WOW_VIS_DUMP` — benilla-app/src/capture/probes/live_fps.rs
 - `WOW_VIS_TRACE` — benilla-world/src/model_render/visibility.rs
 - `WOW_VISTA_AT` — benilla-app/src/capture/mod.rs
