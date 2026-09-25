@@ -5,7 +5,7 @@
 //! and that a valid pick then works on the same socket.
 //!
 //! A creature guid trips the stateless `!packet.guid.IsPlayer()` guard. Needs the local vmangos
-//! and account `two`/`ptwo`.
+//! and an account in `WOW_USER`/`WOW_PASS`.
 
 use std::time::Duration;
 
@@ -25,7 +25,9 @@ fn connect(user: &str, pass: &str) -> anyhow::Result<WorldSession> {
 }
 
 fn main() -> anyhow::Result<()> {
-    let (user, pass) = ("two", "ptwo");
+    let user = std::env::var("WOW_USER").map_err(|_| anyhow::anyhow!("set WOW_USER"))?;
+    let pass = std::env::var("WOW_PASS").map_err(|_| anyhow::anyhow!("set WOW_PASS"))?;
+    let (user, pass) = (user.as_str(), pass.as_str());
     let mut s = connect(user, pass)?;
     let chars = s.char_enum()?;
     println!(

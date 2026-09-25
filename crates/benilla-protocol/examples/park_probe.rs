@@ -2,7 +2,7 @@
 //! `SMSG_LOGOUT_COMPLETE` and a reconnect re-serves the roster; a socket parked at character
 //! select for 130 s still logs in, since vmangos does not kick a quiet authenticated socket.
 //!
-//! Needs the local vmangos and account `two`/`ptwo`.
+//! Needs the local vmangos and an account in `WOW_USER`/`WOW_PASS`.
 
 use std::time::Duration;
 
@@ -19,7 +19,9 @@ fn connect(user: &str, pass: &str) -> anyhow::Result<WorldSession> {
 }
 
 fn main() -> anyhow::Result<()> {
-    let (user, pass) = ("two", "ptwo");
+    let user = std::env::var("WOW_USER").map_err(|_| anyhow::anyhow!("set WOW_USER"))?;
+    let pass = std::env::var("WOW_PASS").map_err(|_| anyhow::anyhow!("set WOW_PASS"))?;
+    let (user, pass) = (user.as_str(), pass.as_str());
 
     // ── 1 · logout round-trip ──
     let mut s = connect(user, pass)?;
