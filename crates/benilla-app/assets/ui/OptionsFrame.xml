@@ -1808,8 +1808,9 @@
                                         </Frame>
                                     </Frames>
                                 </Frame>
-                                <!-- No useUiScale checkbox, which 1.12 has: benilla has no
-                                     useUiScale, so the UI scale always applies. -->
+                                <!-- No useUiScale checkbox, which 1.12 has: benilla registers
+                                     useUiScale but never reads it, so the UI scale always
+                                     applies. -->
                                 <Frame name="$parentGraphics" hidden="true">
                                     <Anchors>
                                         <Anchor point="TOPLEFT"/>
