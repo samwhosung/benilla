@@ -114,9 +114,9 @@ fn build_submesh_mesh(sub: &RenderSubmesh, usages: RenderAssetUsages) -> Mesh {
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, sub.vertex_colors.clone());
     }
     if sub.normals.len() == sub.positions.len() {
-        // A card authored facing away from the viewer is lit on the face it presents, so flip its
-        // normals, never its winding: the reference culls the single-sided ones from every angle,
-        // and re-winding would show them.
+        // Deviation: a card authored facing away from the viewer is lit on the face it presents,
+        // because the reference shades it inverted and camera-dependent. Flip its normals, never
+        // its winding, which would show the single-sided ones the reference culls at every angle.
         let flip = sub.billboard_card_faces_away();
         let normals: Vec<[f32; 3]> = sub
             .normals

@@ -316,9 +316,9 @@ impl Loader<'_> {
                 TopLevel::Include(path) => self.do_include(path),
                 // Deviation: a `<Script file=>` value with a separator joins the including
                 // document's directory, like a bare name. The reference uses it verbatim
-                // (`0x6ee070`-`0x6ee079`) against the process CWD (`0x647e60`, `0x646ebc`; the
-                // basename retry at `0x647ed3` is off), where it never opens, so joining breaks
-                // nothing that loads on 1.12.
+                // (`0x6ee070`-`0x6ee079`) against the install directory, the root `0x646ea0`
+                // scans from Storm's base path `0xc52418` (the basename retry at `0x647ed3` is
+                // off), where a stock install has no such file, so joining breaks nothing.
                 TopLevel::Script(ScriptRef::File(path)) => {
                     let joined = join_ref(self.base(), path);
                     match (self.files)(&joined) {

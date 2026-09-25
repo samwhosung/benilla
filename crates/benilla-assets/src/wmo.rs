@@ -88,8 +88,8 @@ pub struct WmoModel {
     /// Per-MODD first referencing group, whose MOLR set the interior lane folds; the
     /// interior/exterior class reads [`Self::doodad_groups`].
     pub doodad_owner: Vec<Option<u16>>,
-    /// Per-MODD every group whose MODR names it: the portal-cull key, as the reference draws
-    /// doodads per visible group (`0x695aa0`, MODR at `+0xe8`, count `+0x144`, walk `0x698720`).
+    /// Per-MODD every group whose MODR names it: the portal-cull key, as the reference admits a
+    /// group's props each frame its portal walk visits it (`0x685d70` → `0x6838f0`).
     pub doodad_groups: Vec<Arc<[u16]>>,
     /// Per-group footprint faces (render faces, MOCV, MOPY flags); `None` for exterior groups and
     /// groups without MOCV. A GameObject M2 down-rays them for its MOCV lighting (`0x69e4c0`).
@@ -276,7 +276,8 @@ pub fn floor168(c: [u8; 3]) -> [f32; 3] {
 }
 
 /// MODD index to its first referencing group, whose MOLR set the interior lane uses. The reference
-/// creates a doodad on the first visible-group walk that names it, and never one no group names.
+/// creates a group's props once, when the group enters the streaming window (`0x698720` →
+/// `0x695aa0`, MODR at `+0xe8`, count `+0x144`), and never one no group names.
 fn modr_owners(doodad_count: usize, group_doodad_refs: &[Vec<u16>]) -> Vec<Option<u16>> {
     let mut owner: Vec<Option<u16>> = vec![None; doodad_count];
     for (gi, refs) in group_doodad_refs.iter().enumerate() {
@@ -289,8 +290,8 @@ fn modr_owners(doodad_count: usize, group_doodad_refs: &[Vec<u16>]) -> Vec<Optio
     owner
 }
 
-/// MODD index to every group whose MODR names it: the reference draws per visible group
-/// (`0x695aa0` from the walk at `0x698720`), so a prop shows while any of them is visible.
+/// MODD index to every group whose MODR names it: the reference admits a group's props in each
+/// frame its portal walk visits it (`0x685d70` → `0x6838f0`), so a prop shows while any is visible.
 fn modr_refs(doodad_count: usize, group_doodad_refs: &[Vec<u16>]) -> Vec<Arc<[u16]>> {
     let mut refs: Vec<Vec<u16>> = vec![Vec::new(); doodad_count];
     for (gi, group) in group_doodad_refs.iter().enumerate() {

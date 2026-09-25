@@ -13,8 +13,8 @@
 // `ocean_h` frame, near-black RGB and the ripple in alpha, which its authored mips fade with
 // distance, so the sampler's mips and anisotropy matter; primary is the lit default white vertex
 // (`glColorMaterial`); secondary is the sun sheen.
-// Deviation: the reference's ADT water alpha is the `0xc7fbc0` LUT curve `1.6·(i/63)^8`; this keeps
-// the linear swatch alpha, because switching changes the look of every ADT water surface.
+// The ADT water alpha is the swatch's own: the `0xc7fbc0` LUT texture binds only behind
+// `[0xc800ec]` (`0x685244`-`0x685257`), which never holds one (its one store, `0x68c7f8`, is 0).
 // Deviation: this is the `specular`/`pixelShaders` = 1 leg the reference install runs; both CVars
 // (`0x6886a0`/`0x688712`) default to 0, where water has no program, no specular, a plain ADD
 // combine and no blend. An active ARB program bypasses the texture environment.
