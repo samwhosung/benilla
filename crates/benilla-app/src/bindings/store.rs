@@ -23,7 +23,7 @@ pub(crate) fn to_diff(snapshot: &[(String, Vec<String>)]) -> String {
         .iter()
         .map(|s| (s.name, [s.d1, s.d2].into_iter().flatten().collect()))
         .collect();
-    let mut out = String::from("# benilla key bindings (decision 0997) — diff vs defaults\n");
+    let mut out = String::from("# benilla key bindings — diff vs defaults\n");
     for (name, keys) in snapshot {
         let is_default = defaults
             .get(name.as_str())

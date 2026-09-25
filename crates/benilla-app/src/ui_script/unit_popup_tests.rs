@@ -56,11 +56,11 @@ fn bake_strings(s: &UiScript) {
         PARTY_INVITE = "Invite"
         TRADE = "Trade"
         DUEL = "Duel"
-        -- The inspect row's label (decision 0631). Verified against the real
-        -- `Interface\FrameXML\GlobalStrings.lua:2327` off the 1.12.1 patch chain — which is what the
-        -- app itself runs at boot (`load_global_strings`); this stub only stands in for it here.
+        -- The inspect row's label: the value at `Interface\FrameXML\GlobalStrings.lua:2327` off
+        -- the 1.12.1 patch chain, which is what the app itself runs at boot
+        -- (`load_global_strings`); this stub only stands in for it here.
         INSPECT = "Inspect"
-        -- The follow row's label (decision 0893), likewise the real
+        -- The follow row's label, likewise the real
         -- `GlobalStrings.lua:1981` value off the 1.12.1 patch chain.
         FOLLOW = "Follow"
         CANCEL = "Cancel"
@@ -68,13 +68,13 @@ fn bake_strings(s: &UiScript) {
         -- The newbie tooltip the stock unit frame raises on a HOVER, which every test in this file
         -- takes on its way to a right-click. `UnitFrame_OnEnter` (ref `UnitFrame.lua:58-65`) runs
         -- the detailed-tip branch whenever `SHOW_NEWBIE_TIPS == "1"` — 1.12's own default
-        -- (`UIOptionsFrame.lua:100`, a file benilla does not build; our `assets/ui/OptionsFrame.xml`
-        -- is the definer, and this harness loads no options file, so the branch is not reached
+        -- (`UIOptionsFrame.lua:100`, which the app loads off the patch chain; this harness loads
+        -- no options file, so `SHOW_NEWBIE_TIPS` is nil and the branch is not reached
         -- here). For a player-controlled target that is not us that branch calls
         -- `GameTooltip_AddNewbieTip(PLAYER_OPTIONS_LABEL, 1, 1, 1, NEWBIE_TOOLTIP_PLAYEROPTIONS)`.
         -- Both are nil in a bare harness, and `GameTooltip:SetText(nil)` raises. Verbatim from the
         -- real `Interface\FrameXML\GlobalStrings.lua` off the 1.12.1 chain (l.3081 and l.2755).
-        -- Our deleted `UnitFrames.xml` never reached this arm; the stock file does.
+        -- The stock unit frame reaches this arm, so both strings must exist.
         PLAYER_OPTIONS_LABEL = "Player Options"
         NEWBIE_TOOLTIP_PLAYEROPTIONS = "Right-click to bring up special commands for interacting with another player. You can inspect their equipment, issue a party invite, initiate a trade, or challenge a player to a duel. A group leader can promote or remove that player from the group."
     "#,
@@ -299,8 +299,8 @@ fn solo_target_trade_click_queues_an_initiate() {
         s.eval::<String>("return DropDownList1Button5:GetText()")
             .unwrap(),
         "Trade",
-        "Trade is the fifth row (title + Whisper + Inspect + Invite + Trade) — Inspect joined \
-         ahead of it in decision 0631"
+        "Trade is the fifth row (title + Whisper + Inspect + Invite + Trade) — Inspect sits \
+         ahead of it"
     );
 
     let (tx, ty) = s

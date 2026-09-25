@@ -193,7 +193,7 @@ fn chest_probe(
         Phase::Wait => {
             let [x, y, z, map] = target();
             info!(
-                "PROBE_CHEST: heading to the chest ({x} {y} {z} map {map}) — B84's object, \
+                "PROBE_CHEST: heading to the chest ({x} {y} {z} map {map}) — the kneel target, \
                  GameObject type {GO_TYPE_CHEST}"
             );
             let _ = net.0.send(ClientCommand::Chat {

@@ -55,7 +55,7 @@ fn the_capture_is_asked_for_silently_and_only_the_answer_speaks() {
     );
     assert!(
         !shown(&s),
-        "NOTHING is on screen at the moment of capture — this is B261's whole contract"
+        "NOTHING is on screen at the moment of capture — this is the whole contract"
     );
 
     // The engine's answer, one or more frames later.

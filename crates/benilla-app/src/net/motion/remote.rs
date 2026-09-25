@@ -789,7 +789,7 @@ mod under_floor {
             WIRE_Y,
             "the terrain 2.10 yd down is outside any walking frame's election reach, so there is \
              no floor of ours to find and the wire's height stands — instead of a per-frame \
-             descent that nothing here would ever end (2174)"
+             descent that nothing here would ever end"
         );
     }
 
@@ -817,7 +817,7 @@ mod under_floor {
         assert!(
             z < WIRE_Y,
             "the floor is inside a moving frame's reach, so the election still settles the body \
-             onto it — 2174 declines the no-FLOOR drop, never the resolve (z={z:.3})"
+             onto it — only the no-FLOOR drop is declined, never the resolve (z={z:.3})"
         );
         assert!(
             z > WIRE_Y - 0.5,
@@ -836,12 +836,12 @@ mod under_floor {
         frames(&mut app, 240);
         // `-- --nocapture` prints the depth.
         println!(
-            "pre-1545 leg, 240 frames: z={:.4} (wire {WIRE_Y})",
+            "idle gate off, 240 frames: z={:.4} (wire {WIRE_Y})",
             z_of(&app, e)
         );
         assert!(
             z_of(&app, e) < TERRAIN_Y + 0.1,
-            "the pre-1545 leg walks a standing mover down onto the terrain under the building"
+            "with the idle gate off, a standing mover sinks onto the terrain under the building"
         );
     }
 }

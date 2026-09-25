@@ -66,7 +66,7 @@ const UIPARENT_STAND_INS: &str = r#"
     LocalizeFrames = LocalizeFrames or function() end
     updateContainerFrameAnchors = updateContainerFrameAnchors or function() end
     -- 1.12 keeps UpdateNameplates in UIOptionsFrame.lua, which a kit reaches only at manifest
-    -- l.21; our own OptionsFrame.xml re-declares it below that (decision 2132). Both are plain
+    -- l.21; our own OptionsFrame.xml re-declares it below that. Both are plain
     -- `function X()` writes, so a full kit ends on ours and a short one keeps this no-op.
     UpdateNameplates = UpdateNameplates or function() end
     CloseAllBags = CloseAllBags or function() end
@@ -120,7 +120,7 @@ const UIPARENT_STAND_INS: &str = r#"
     -- The four options/menu windows `IsOptionFrameOpen` (l.997) and `ToggleGameMenu` (l.1467)
     -- index unguarded. `IsOptionFrameOpen` is on the path of every window close, so a kit that
     -- loads no options window raised on the first bag click. In the shipped manifest all four
-    -- names are real, and since 2177 all three options windows are the REFERENCE's own files,
+    -- names are real, and all three options windows are the REFERENCE's own files,
     -- loaded hidden — including `OptionsFrame`, the video window, which used to be our own
     -- window's name. Ours is `BenillaOptionsFrame` now and is not in this list: it is not a name
     -- the reference indexes, and the wrappers in `GameMenuFrame.xml` are what tell these two

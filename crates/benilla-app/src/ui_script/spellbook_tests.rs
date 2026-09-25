@@ -489,7 +489,7 @@ fn the_pet_tab_switches_books_and_renders_the_pets_spells() {
     .collect();
     assert!(
         (br[0] - 71.53).abs() < 0.01 && (br[1] - 71.53).abs() < 0.01,
-        "brackets are {}x{}, 1393 draws them at 71.53 so the art reaches this button's corners",
+        "brackets are {}x{}, benilla draws them at 71.53 so the art reaches this button's corners",
         br[0],
         br[1]
     );
@@ -509,11 +509,11 @@ fn the_pet_tab_switches_books_and_renders_the_pets_spells() {
         .collect();
     assert!(
         (geom[0] - 37.0).abs() < 0.01 && (geom[1] - 37.0).abs() < 0.01,
-        "shine pane is {geom:?}, expected 37x37 (1393 squares it on the button)"
+        "shine pane is {geom:?}, expected 37x37 (benilla squares it on the button)"
     );
     assert!(
         (geom[2] - 1.48).abs() < 0.001,
-        "shine pane's model scale is {}, expected 1393's 1.48 (the pet button's rim ratio)",
+        "shine pane's model scale is {}, expected 1.48 (the pet button's rim ratio)",
         geom[2]
     );
     let dx = s
@@ -524,7 +524,7 @@ fn the_pet_tab_switches_books_and_renders_the_pets_spells() {
         .unwrap();
     assert!(
         dx.abs() < 0.01 && dy.abs() < 0.01,
-        "shine pane sits at ({dx}, {dy}) inside the button; 1393 squares it on the button so it \
+        "shine pane sits at ({dx}, {dy}) inside the button; benilla squares it on the button so it \
          is concentric with the brackets — the ref's +1,+1 is what read as a top/right bias"
     );
 
@@ -556,7 +556,7 @@ fn the_pet_tab_switches_books_and_renders_the_pets_spells() {
     assert_eq!(
         s.eval::<i64>("return SpellBook_GetSpellID(1)").unwrap(),
         1,
-        "DO NOT FIX: the ref's pet arm has no page term (decision 1032)"
+        "DO NOT FIX: the ref's pet arm has no page term"
     );
     // …and Next writes `SPELLBOOK_PAGENUMBERS[selectedSkillLine]` on both books
     // (`SpellBookFrame.lua:423`), so the pet page stays put.
@@ -712,7 +712,7 @@ fn the_macro_editor_takes_a_shift_click_and_only_a_shift_click() {
     assert_eq!(
         body(&s),
         "",
-        "B248: an UNSHIFTED click must never reach the macro editor (ref l.271 tests shift first)"
+        "an UNSHIFTED click must never reach the macro editor (ref l.271 tests shift first)"
     );
     assert!(s.cursor_payload().is_none());
 

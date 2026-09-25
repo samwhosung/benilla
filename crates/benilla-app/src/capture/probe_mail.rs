@@ -247,7 +247,10 @@ fn mail_probe(
                     && tf.translation.distance(me) < MAILBOX_SCAN_RANGE
             });
             if let Some((guid, ..)) = mailbox {
-                info!("PROBE_MAIL: mailbox {:#x} in range — clicking (local open, no packet, decision 0544/0548)", guid.0);
+                info!(
+                    "PROBE_MAIL: mailbox {:#x} in range — clicking (local open, no packet)",
+                    guid.0
+                );
                 mail.click(guid.0);
                 probe.phase = Phase::WaitList { clicked_at: now };
             } else if now - sent_at > SCAN_TIMEOUT_SECS {

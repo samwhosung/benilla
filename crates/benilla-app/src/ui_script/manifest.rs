@@ -290,7 +290,7 @@ mod tests {
         for name in super::super::content::shipped_files() {
             assert!(
                 !reference_ui::is_chain_entry(name),
-                "assets/ui is flat by construction, but ships {name} — a manifest entry with a                  separator is read as a file to source off the player's install"
+                "assets/ui is flat, but ships {name}: a separator makes it a file off the install"
             );
         }
     }

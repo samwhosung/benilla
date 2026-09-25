@@ -398,7 +398,7 @@ fn nothing_repaints_a_frame_that_opened_before_its_snapshot() {
         s.eval::<Option<String>>("return GroupLootFrame1Name:GetText()")
             .unwrap(),
         None,
-        "nothing to paint yet — this is the state B371 reported"
+        "nothing to paint yet — this is the reported state"
     );
 
     s.set_loot_rolls(rolls());

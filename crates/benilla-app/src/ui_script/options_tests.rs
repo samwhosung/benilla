@@ -2159,7 +2159,7 @@ fn a_hovered_row_raises_its_1_12_description_on_the_era_seat() {
     assert_eq!(
         s.eval::<i64>("return GameTooltip:NumLines()").unwrap(),
         1,
-        "the description ALONE — the era's white name line is cut (1054)"
+        "the description ALONE — the era's white name line is cut"
     );
     // The era seat, `DefaultTooltipMixin`'s `ANCHOR_RIGHT` at x -10: BOTTOMLEFT on the label
     // region's TOPRIGHT, 10 back.
@@ -2589,7 +2589,7 @@ fn defaults_resets_the_combat_page_to_the_shipped_assignments() {
     assert_eq!(
         s.eval::<String>("return SHOW_COMBAT_TEXT").unwrap(),
         "0",
-        "the master walks back too — the reference's own value since 1804"
+        "the master walks back too — the reference's own value"
     );
     assert_eq!(
         s.eval::<String>("return COMBAT_TEXT_SHOW_AURAS").unwrap(),
@@ -3280,7 +3280,7 @@ fn the_defaults_button_is_armed_by_rows_not_by_a_category() {
             .unwrap();
         assert!(
             has_rows || key == "Keybindings",
-            "{key} opens onto nothing — every category leads somewhere since 1139"
+            "{key} opens onto nothing — every category leads somewhere"
         );
         s.run(&format!("BenillaOptionsFrameCategoryListRow{key}:Click()"))
             .unwrap();

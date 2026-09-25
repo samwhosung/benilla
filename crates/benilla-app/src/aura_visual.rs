@@ -394,7 +394,7 @@ fn trace_edge(what: &str, entity: Entity, spell_id: u32, n: &AuraNodes) {
     benilla_assets::trace::line(
         "aur",
         &format!(
-            "{what} e={entity} spell={spell_id} alpha={alphas:?}{tint}{rate}              base {:.2} cur {:.2} target {:.2}",
+            "{what} e={entity} spell={spell_id} alpha={alphas:?}{tint}{rate} -> base {:.2} cur {:.2} target {:.2}",
             n.base,
             n.current,
             n.target()

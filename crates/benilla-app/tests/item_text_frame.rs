@@ -414,7 +414,7 @@ fn a_quest_givers_gossip_displaces_the_open_reader() {
     assert!(s.take_errors().is_empty());
     assert!(
         !s.eval::<bool>("return ItemTextFrame:IsShown()").unwrap(),
-        "gossip replaced the note — the B288 stack (both drawn at 0,-104) cannot form"
+        "gossip replaced the note — the two-window stack (both drawn at 0,-104) cannot form"
     );
     assert!(s
         .eval::<bool>("return GossipFrame:IsShown() and GetLeftFrame():GetName() == 'GossipFrame'")

@@ -314,7 +314,7 @@ fn bagnon_draws_a_slot_for_every_bag_slot() {
     assert_eq!(
         bagnon_slot_quads(&mut s),
         28,
-        "every live slot must actually be DRAWN (16 backpack + 12 keyring) — the director saw a \
+        "every live slot must actually be DRAWN (16 backpack + 12 keyring) — broken, it drew a \
          title and a gold line and nothing else, while every column of the addon survey called \
          this addon fine"
     );
@@ -424,7 +424,7 @@ fn the_item_button_helpers_paint_a_slots_icon_and_count() {
     assert_eq!(
         &tint[..3],
         &[0.5, 0.5, 0.5],
-        "a locked item greys out (ref: `elseif not r or not shaderSupported`)"
+        "a locked item keeps the caller's 0.5 grey (ref: with a shader, r, g, b stay as passed)"
     );
 
     // A count of 1 hides the label again (`ItemButtonTemplate.lua:12`).
@@ -906,7 +906,7 @@ fn a_stack_count_wears_the_font_object_its_font_attr_names() {
     );
     assert_eq!(
         shadow, None,
-        "and NO drop shadow: NumberFontNormal has no <Shadow> in 1.12 either (Fonts.xml:226). \
+        "and NO drop shadow: NumberFontNormal has no <Shadow> in 1.12 either (Fonts.xml:150). \
          The readability is the outline; adding a shadow here would be a divergence"
     );
 }
@@ -1308,6 +1308,6 @@ fn the_backpack_button_lit_state_with_bagnon_holding_the_bags() {
         !s.eval::<bool>("return MainMenuBarBackpackButton:GetChecked() and true or false")
             .unwrap(),
         "open by click ⇒ unlit: the stock BackpackButton_OnClick tail's native scan is the last \
-         word, as on the reference (Bug 7's divergence retired with the stock bag bar, 1783)"
+         word, as on the reference, since the bag bar is the stock file"
     );
 }

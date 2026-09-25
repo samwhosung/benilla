@@ -152,7 +152,7 @@ mod tests {
             offenders.is_empty(),
             "these memos outlive the VM they are about — wrap them in \
              `crate::ui_script::VmMemo<…>` and read them through `.get(&script)`, or add them to \
-             `EXEMPT` with the reason they are not memory about the VM (decision 1290):\n  {}",
+             `EXEMPT` with the reason they are not memory about the VM:\n  {}",
             offenders.join("\n  ")
         );
     }

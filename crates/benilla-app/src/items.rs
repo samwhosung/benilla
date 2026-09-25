@@ -1026,7 +1026,7 @@ mod tests {
         );
         assert!(
             !already_bound(&item(0x0, 99), cat),
-            "an id that names no row binds nothing (the ref's `testl` after the table load)"
+            "an id that names no row binds nothing (the reference's `testl` after the table load)"
         );
         assert!(
             !already_bound(&item(0x0, 11), None),

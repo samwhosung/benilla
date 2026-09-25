@@ -1742,7 +1742,7 @@ mod tests {
             s.eval::<String>("return table.concat(ORDER, ' ')").unwrap(),
             "ITEM_LOCK_CHANGED:nil,nil BAG_UPDATE:0,nil",
             "the shot signal fires — with NO arguments, as all five of the reference's fire sites \
-             do (decision 2140) — and precedes BAG_UPDATE. The slot it names travels in the fact \
+             do — and precedes BAG_UPDATE. The slot it names travels in the fact \
              that it fired at all, which is enough: every consumer repaints from its own `this`, \
              and Quiver's shot timer only needs to know that A shot happened"
         );

@@ -805,7 +805,7 @@ mod tests {
         assert_eq!(
             state(&app),
             (Some(36), true),
-            "the flip records the dungeon AND our own eyes (1754's term 1)"
+            "the flip records the dungeon AND our own eyes"
         );
 
         // Writer 2, on a fresh state: a raid id is dropped, a party dungeon lands without the

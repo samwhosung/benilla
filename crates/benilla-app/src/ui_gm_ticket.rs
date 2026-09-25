@@ -349,7 +349,7 @@ pub(crate) mod net {
             }
             2 => debug!("gm ticket: a GM closed the ticket"),
             3 => {
-                debug!("gm ticket: a GM survey was offered — the survey window is deferred (1673)")
+                debug!("gm ticket: a GM survey was offered — the survey window is deferred")
             }
             other => debug!("gm ticket: unknown status update {other}"),
         }

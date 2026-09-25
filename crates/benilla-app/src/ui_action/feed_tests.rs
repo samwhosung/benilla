@@ -95,7 +95,7 @@ fn a_landed_item_template_redisplays_the_action_slot() {
         fed_texture(&mut app).as_deref(),
         Some(MISSING_ITEM_ICON),
         "the first resolve of a cold entry IS the ask, so it can only show the reference's own \
-         placeholder — and never nil, since ref FrameXML HIDES the icon on a nil texture (0666)"
+         placeholder — and never nil, since ref FrameXML HIDES the icon on a nil texture"
     );
     assert!(
         rx.try_iter()

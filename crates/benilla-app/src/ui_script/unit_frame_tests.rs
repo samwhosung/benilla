@@ -298,7 +298,7 @@ fn unit_combat_drives_the_player_hit_indicator() {
     assert_eq!(
         extracted_text_height(&mut s, "64"),
         Some(45.0),
-        "×1.5 crit height, UNCAPPED past 32 (decision 0582's regime split)"
+        "×1.5 crit height, UNCAPPED past 32"
     );
 
     s.fire_event("UNIT_COMBAT", ev("player", "WOUND", "ABSORB", 0, 0));
@@ -1256,12 +1256,12 @@ fn a_feigning_target_paints_empty_bars_and_the_dead_text() {
         s.eval::<String>("return TargetDeadText:GetText()").unwrap(),
         "Dead",
         "the WORD is the GlobalString `DEAD` (l.898), never the key: a literal \"DEAD\" here \
-         is the caps bug the director caught on Onyxia"
+         is the caps bug seen on Onyxia"
     );
     assert_eq!(
         s.eval::<i64>(r#"return UnitIsDead("target")"#).unwrap(),
         1,
-        "UnitIsDead 0x517ac0's dynflag leg reaches the API too — as the number 1 (2043)"
+        "UnitIsDead 0x517ac0's dynflag leg reaches the API too — as the number 1"
     );
 
     s.set_unit("target", hunter(1200, 300, false));

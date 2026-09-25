@@ -329,8 +329,8 @@ fn binder_probe(
                 error!(
                     "PROBE_BINDER: FAIL (5 confirm) — no answered question within \
                      {CONFIRM_TIMEOUT_SECS}s of the select: BinderState pending={:?} (wanted \
-                     {innkeeper:#x}), CONFIRM_BINDER fired={fired}, arg1={area:?}. Before decision \
-                     1331 the packet had no parse arm at all and fell through to \
+                     {innkeeper:#x}), CONFIRM_BINDER fired={fired}, arg1={area:?}. A packet with \
+                     no parse arm at all falls through to \
                      ServerPacket::Other — that is what this reading looks like.",
                     binder.npc()
                 );
@@ -458,8 +458,8 @@ fn assert_icon_and_select(
     if ty == ICON_TYPE_REGRESSION {
         error!(
             "PROBE_BINDER: FAIL (3 icon) — the innkeeper's row {:?} (wire icon={ICON_INNKEEPER}) \
-             maps to {ICON_TYPE_REGRESSION:?}, the chat bubble. THIS IS THE B249 REGRESSION: \
-             decision 1331's table must index byte 5 to {ICON_TYPE_BINDER:?}.",
+             maps to {ICON_TYPE_REGRESSION:?}, the chat bubble. THIS IS THE ICON REGRESSION: \
+             `ui_gossip`'s icon table must index byte 5 to {ICON_TYPE_BINDER:?}.",
             opt.message
         );
         probe.fails += 1;

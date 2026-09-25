@@ -442,7 +442,7 @@ pub(super) fn drain_chat_input(
                 );
                 lines.push(format!(
                     "reaction: plate is_player {is_player} (OBJECT_FIELD_TYPE says {:?}; the two \
-                     must agree — the predicates read the field, 1674) · faction-group mask self {} \
+                     must agree — the predicates read the field) · faction-group mask self {} \
                      target {} · can_cooperate {} · can_attack(player→unit) {}",
                     target_store.and_then(|s| s.0.object_type()),
                     mask(own_store),

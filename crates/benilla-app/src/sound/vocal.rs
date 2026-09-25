@@ -429,7 +429,7 @@ mod tests {
         );
         assert!(
             s.table.iter().all(|slot| slot.annoyed.is_none()),
-            "an annoyed kit resolved — 1815's dormancy is over"
+            "an annoyed kit resolved — this build's escalation is no longer silent"
         );
 
         // A race change is a full rebuild: Tauren line 0, not Human's, and no Human residue.

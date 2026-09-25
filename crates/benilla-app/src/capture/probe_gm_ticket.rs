@@ -533,7 +533,7 @@ fn gm_ticket_probe(
                      {ANSWER_TIMEOUT_SECS}s. Wanted arg2 == {want:?}; answers seen after the \
                      baseline: {:?}. leading-byte-swallowed={stray} — if that is true, the server \
                      read our category byte as the first character of the text, which is the \
-                     cmangos-classic behaviour decision 1673 records.",
+                     cmangos-classic behaviour.",
                     &seen[baseline.min(seen.len())..]
                 );
                 probe.fails += 1;

@@ -569,7 +569,7 @@ fn every_query_binding_answers_the_reference_s_return_kinds() {
             if let Some((_, known, _)) = KINDS_NOT_YET_ASSERTED.iter().find(|(n, ..)| n == name) {
                 assert_eq!(
                     *known, observed,
-                    "{name} is on the not-yet-asserted list at stale kinds — it now answers                      ({observed})"
+                    "{name}'s not-yet-asserted row is stale: it now answers ({observed})"
                 );
                 continue;
             }
@@ -680,7 +680,7 @@ fn every_widget_method_answers_the_reference_s_return_kinds() {
             {
                 assert_eq!(
                     *known, observed,
-                    "{name} is on the widget not-yet-asserted list at stale kinds — it now                      answers ({observed})"
+                    "{name}'s widget not-yet-asserted row is stale: it now answers ({observed})"
                 );
                 continue;
             }

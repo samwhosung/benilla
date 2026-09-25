@@ -354,7 +354,7 @@ mod tests {
         }
         assert_eq!(
             fired_parked, 0,
-            "an unflagged parked rig's event keyframes are not scanned (1482)"
+            "an unflagged parked rig's event keyframes are not scanned"
         );
         assert!(fired_twin > 0, "the live twin keeps firing — the control");
         assert_eq!(

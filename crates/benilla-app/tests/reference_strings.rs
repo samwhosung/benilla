@@ -252,7 +252,7 @@ fn no_user_facing_sentence_is_written_in_rust_when_the_reference_ships_one() {
         "\nA user-facing sentence is written in Rust where the reference ships the string.\n\
          Resolve it by key instead — `keyed_line`/`keyed_line_s` where a `UiScript` is in hand, \
          `UiError::key` into a queue at the net bridge, `GlueStrings::text` on the glue screens.\n\
-         (decision 2035){}",
+         Over the ratchet:{}",
         over.join("")
     );
 }

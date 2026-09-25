@@ -760,8 +760,8 @@ mod tests {
         assert!(rx.try_recv().is_err(), "no duplicate on the wire");
         assert!(
             world.resource::<CastErrors>().0.is_empty(),
-            "the same spell's re-press is the ref's SILENT bail (6e4d43), not \"Another action is \
-             in progress\""
+            "the same spell's re-press is the reference's SILENT bail (6e4d43), not \"Another \
+             action is in progress\""
         );
 
         // A different cast mid-opener is the loud refusal (6e4d97).
@@ -1057,7 +1057,7 @@ mod tests {
         assert!(rx.try_recv().is_err(), "no duplicate on the wire");
         assert!(
             world.resource::<CastErrors>().0.is_empty(),
-            "the same spell's re-press is the ref's SILENT bail (6e4d43), not a red line"
+            "the same spell's re-press is the reference's SILENT bail (6e4d43), not a red line"
         );
 
         send(&mut world, MOUNT, HEARTH_COMMIT);
@@ -1250,7 +1250,7 @@ mod tests {
         assert_eq!(
             world.resource::<CastErrors>().0,
             vec![CastFail::local(MOUNT, 0x61)],
-            "mid-cast outranks the cooldown rung (the ref's IsCasting precedes the validator)"
+            "mid-cast outranks the cooldown rung (the reference's IsCasting precedes the validator)"
         );
     }
 

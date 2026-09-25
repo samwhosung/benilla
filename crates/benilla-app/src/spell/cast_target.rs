@@ -518,7 +518,7 @@ mod tests {
                 &rel_none()
             ),
             CastWireTarget::SelfImplicit,
-            "word==0 commits before the arm-16 defer — the ref's order"
+            "word==0 commits before the arm-16 defer — the reference's order"
         );
     }
 

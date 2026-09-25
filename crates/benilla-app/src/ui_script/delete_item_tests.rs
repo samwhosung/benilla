@@ -178,7 +178,7 @@ fn delete_item_confirm_no_clears_without_destroying() {
     s.tick(0.01); // ITEM_LOCK_CHANGED fires from the pending queue at the next tick
     assert!(
         s.eval::<i64>("return repaints").unwrap() >= 1,
-        "the clear's ITEM_LOCK_CHANGED repaints the bag (the stuck-darkened slot, 0218)"
+        "the clear's ITEM_LOCK_CHANGED repaints the bag (no stuck-darkened slot)"
     );
     assert!(
         !s.eval::<bool>("local _, _, locked = GetContainerItemInfo(0, 1) return locked")
@@ -187,7 +187,7 @@ fn delete_item_confirm_no_clears_without_destroying() {
     );
     assert!(
         !desaturated(&mut s, &slot1),
-        "…and the repaint un-darkened it — the 0218 stuck-dark slot"
+        "…and the repaint un-darkened it — no stuck-dark slot"
     );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }

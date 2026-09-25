@@ -744,7 +744,7 @@ mod tests {
         step_off(0.1, &mut player);
         assert!(
             rx.try_recv().is_err(),
-            "the arc's first frame puts NOTHING on the wire — this packet is B79's un-seat"
+            "the arc's first frame puts NOTHING on the wire — a packet here un-seats the player"
         );
         assert_eq!(
             player.move_flags,

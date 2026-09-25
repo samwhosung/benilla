@@ -177,7 +177,7 @@ pub(super) const UIPARENT_STAND_INS: &str = r#"
     LocalizeFrames = LocalizeFrames or function() end
     updateContainerFrameAnchors = updateContainerFrameAnchors or function() end
     -- 1.12 keeps UpdateNameplates in UIOptionsFrame.lua, which a kit reaches only at manifest
-    -- l.21; our own OptionsFrame.xml re-declares it below that (decision 2132). Both are plain
+    -- l.21; our own OptionsFrame.xml re-declares it below that. Both are plain
     -- `function X()` writes, so a full kit ends on ours and a short one keeps this no-op.
     UpdateNameplates = UpdateNameplates or function() end
     CloseAllBags = CloseAllBags or function() end
@@ -224,9 +224,9 @@ pub(super) const UIPARENT_STAND_INS: &str = r#"
             -- …and every row's ANCHOR TARGET (`anchorTo`, l.1668), which is a different set: the
             -- keys are the frames being MOVED, the targets are what they move relative to, and
             -- several targets (`ActionButton1`, `MainMenuBarArtFrame`) are declared in files a
-            -- one-window kit never loads. An unresolvable name is a RAISE now (decision 2176), so
-            -- a target the kit is missing aborts `UIParent_ManageFramePositions` mid-pass where it
-            -- used to anchor to the parent and carry on.
+            -- one-window kit never loads. An unresolvable name is a RAISE, so a target the kit is
+            -- missing aborts `UIParent_ManageFramePositions` mid-pass rather than anchoring to
+            -- the parent and carrying on.
             if row.anchorTo then table.insert(named, row.anchorTo) end
         end
         benilla_seat(named)
@@ -238,7 +238,7 @@ pub(super) const UIPARENT_STAND_INS: &str = r#"
     -- The four options/menu windows `IsOptionFrameOpen` (l.997) and `ToggleGameMenu` (l.1467)
     -- index unguarded. `IsOptionFrameOpen` is on the path of every window close, so a kit that
     -- loads no options window raised on the first bag click. In the shipped manifest all four
-    -- names are real, and since 2177 all three options windows are the REFERENCE's own files,
+    -- names are real, and all three options windows are the REFERENCE's own files,
     -- loaded hidden — including `OptionsFrame`, the video window, which used to be our own
     -- window's name. Ours is `BenillaOptionsFrame` now and is not in this list: it is not a name
     -- the reference indexes, and the wrappers in `GameMenuFrame.xml` are what tell these two
@@ -289,7 +289,7 @@ pub(super) const MULTI_ACTION_BAR_STAND_INS: &str = r#"
     -- `UIOptionsFrameCheckButtons["SHOW_MULTIBAR1_TEXT"].setFunc`, which needs the row to exist.
     -- Empty rows on purpose — the real ones carry `index = 33..36, 40`, and a stand-in that
     -- restated those numbers would be a transcription of the reference's table in a test helper,
-    -- which is the thing 2115 deleted from `OptionsFrame.xml`. Any kit that reads an index has the
+    -- which `OptionsFrame.xml` does not carry either. Any kit that reads an index has the
     -- real window loaded and therefore the real table.
     for _, key in ipairs({ "SHOW_MULTIBAR1_TEXT", "SHOW_MULTIBAR2_TEXT", "SHOW_MULTIBAR3_TEXT",
                            "SHOW_MULTIBAR4_TEXT", "ALWAYS_SHOW_MULTIBARS_TEXT" }) do
@@ -659,7 +659,7 @@ fn world_point(s: &mut UiScript) -> (f32, f32) {
         )
         .expect(
             "the fixture must load Interface\\FrameXML\\WorldFrame.xml (load_world_frame): a \
-             world drop is a click on THAT frame, not on nothing (decision 2089)",
+             world drop is a click on THAT frame, not on nothing",
         );
     assert_eq!(r.len(), 4, "WorldFrame: unresolved rect {r:?}");
     let (steps, mut blockers) = (7, Vec::new());

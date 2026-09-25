@@ -242,7 +242,7 @@ pub fn run(build: BuildId) -> AppExit {
             s.set_executor_kind(bevy::ecs::schedule::ExecutorKind::SingleThreaded);
         });
         println!(
-            "executor: PostUpdate -> single-threaded (1437 default; WOW_MT_POSTUPDATE=1 for MT)"
+            "executor: PostUpdate -> single-threaded (the default; WOW_MT_POSTUPDATE=1 for MT)"
         );
     }
     // The build banner ships in every build: which build produced a log is the first thing a report
@@ -395,7 +395,7 @@ pub fn run(build: BuildId) -> AppExit {
                 s.set_executor_kind(bevy::ecs::schedule::ExecutorKind::SingleThreaded);
             });
             println!(
-                "executor: ExtractSchedule -> single-threaded (1437 default; WOW_MT_EXTRACT=1 for MT)"
+                "executor: ExtractSchedule -> single-threaded (the default; WOW_MT_EXTRACT=1 for MT)"
             );
         } else {
             // A missing sub-app would silently flip nothing.

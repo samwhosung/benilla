@@ -421,7 +421,7 @@ fn the_action_bar_abbreviation_is_the_refs_own_getbindingtext() {
         s.eval::<String>(r#"return GetBindingText("SHIFT-2", "KEY_", 1)"#)
             .unwrap(),
         "s-2",
-        "the director's SHIF… truncation reads s-2 now"
+        "SHIFT-2 reads s-2, not a SHIF… truncation"
     );
     assert_eq!(
         s.eval::<String>(r#"return GetBindingText("ALT-Z", "KEY_", 1)"#)
@@ -649,7 +649,7 @@ fn the_pet_lane_is_registered_under_the_action_bar_header() {
         s.eval::<Option<u32>>(r#"return SetBinding("MOUSEWHEELUP", "BONUSACTIONBUTTON1")"#)
             .unwrap(),
         Some(1),
-        "a press+release command takes the wheel — the refusal was ours, B265"
+        "a press+release command takes the wheel — the reference does not refuse it"
     );
 
     // Search matches display names (the era's `AddSearchTags`), so the query is the row's label.

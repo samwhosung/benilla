@@ -327,7 +327,7 @@ fn on_packet_dropped(In(ev): In<SessionEvent>, mut b: Bridge) {
 /// latency reading is a frame late, so it warns.
 fn on_pong(In(ev): In<SessionEvent>) {
     if let SessionEvent::Pong { sequence } = ev {
-        warn!("net: pong seq={sequence} reached the drain — the read thread's RTT bypass is gone (B346)");
+        warn!("net: pong seq={sequence} reached the drain — the read thread's RTT bypass is gone");
     }
 }
 

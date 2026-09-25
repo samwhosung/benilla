@@ -26,7 +26,7 @@ fn shipped_action_bar_drives_end_to_end() {
         + super::test_ui::load_ui(&s, "Interface\\FrameXML\\BonusActionBarFrame.xml");
     assert_eq!(
         frames, 80,
-        "what the three stock files declare (1938): MainMenuBar.xml's 8 — the bar, the XP StatusBar, \
+        "what the three stock files declare: MainMenuBar.xml's 8 — the bar, the XP StatusBar, \
          the overlay frame, the max-level rail, the art frame, the performance bar and its button, \
          the exhaustion tick; ActionBarFrame.xml's 14 — 12 ActionButtons and the 2 page arrows; \
          BonusActionBarFrame.xml's 24 — the bonus frame with its 12 buttons and the shapeshift frame \
@@ -304,7 +304,7 @@ fn state_feedback_drives_cooldown_checked_and_usable_through_the_xml() {
     assert_eq!(
         (c[0], c[1], c[2]),
         (0.4, 0.4, 0.4),
-        "the ref's unusable grey — the icon the director sees on food in combat"
+        "the ref's unusable grey — the icon a player sees on food in combat"
     );
 
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
@@ -907,7 +907,7 @@ fn count_fontstring_follows_is_consumable_action_not_the_bag_count() {
     assert_eq!(
         count_of(&s, 3),
         "",
-        "B201: a NON-consumable ITEM (a mount) shows no stack number, whatever the count says"
+        "a NON-consumable ITEM (a mount) shows no stack number, whatever the count says"
     );
     assert!(
         s.extract()
@@ -1048,7 +1048,7 @@ fn shipped_bag_frame_drives_end_to_end() {
          Model on each of the four slots that inherit PaperDollItemSlotButtonTemplate (+4). The \
          deleted BagFrame.xml built 12: it mirrored the six buttons and their push cards but had \
          no cooldown on a bag-bar slot at all, which is the reference's own and is what the swap \
-         to Interface\\FrameXML\\MainMenuBarBagButtons.xml brought with it (1751 window 3)"
+         to Interface\\FrameXML\\MainMenuBarBagButtons.xml brought with it"
     );
 
     // The app's feed: a backpack with Tough Jerky ×5 in slot 1.
@@ -1523,7 +1523,7 @@ fn the_main_bar_pages_and_a_bonus_page_still_outranks_it() {
              end return true"
         )
         .unwrap(),
-        "all six pages are viewable at rest — every extra bar ships off (1500)"
+        "all six pages are viewable at rest — every extra bar ships off"
     );
     // The page numeral: `ActionBarUpButton` writes it at load and on `ACTIONBAR_PAGE_CHANGED`
     // (ActionBarFrame.xml:175, 180).
@@ -1609,7 +1609,7 @@ fn the_main_bar_pages_and_a_bonus_page_still_outranks_it() {
         s.eval::<i64>("return ActionButton_GetPagedID(BonusActionButton1)")
             .unwrap(),
         25,
-        "and off page 1 even the bonus button follows the page: the conjunct 1897 found missing"
+        "and off page 1 even the bonus button follows the page"
     );
     s.set_bonus_bar_offset(0);
     assert_eq!(
@@ -1701,7 +1701,7 @@ fn bonus_bar_slides_up_with_sound_and_down_without() {
         vec![(73, false)],
         "the BONUS branch of stock ActionButtonUp passes a literal 0 for onSelf (ActionButton.lua:38) \
          — in a stance, ALT-1 drives the bonus page without self-cast; the reference's own rule, \
-         which 1745's expectation of (73, true) had smoothed over"
+         not the (73, true) a self-cast would give"
     );
     s.run("BonusActionBarFrame:Hide() ActionButtonDown(1) ActionButtonUp(1, 1)")
         .unwrap();

@@ -363,7 +363,7 @@ mod tests {
             .collect();
 
         println!(
-            "\n=== 1751 migration readiness — {} stock windows ===",
+            "\n=== migration readiness — {} stock windows ===",
             stock.len()
         );
         println!(
@@ -654,7 +654,7 @@ mod tests {
             out
         };
 
-        println!("\n=== 1751 gap report — what each unmigrated window would cost ===");
+        println!("\n=== gap report — what each unmigrated window would cost ===");
         #[allow(clippy::type_complexity)] // (blockers, file, engine, fx, method, load errors)
         let mut rows: Vec<(
             usize,
@@ -1112,7 +1112,7 @@ mod tests {
                 "KeyRingButtonIDToInvSlotID",
                 "an engine binding (`1.12-globals.tsv`). `ContainerFrame.lua:617` hovers a KEYRING \
                  slot with it, so the raise needs the keyring open and a key hovered. Ours drives \
-                 keyring tooltips through `ContainerFrameAdapters.xml`'s wrapper (0765), which is \
+                 keyring tooltips through `ContainerFrameAdapters.xml`'s wrapper, which is \
                  why nothing has hit it — the wrapper answers first for our own rows.",
             ),
             (
@@ -1122,7 +1122,7 @@ mod tests {
                  method/net-send) of the pre-1.12 skill-point purchase UI. the detail bar's LearnSkillButton calls it, and \
                  that button shows only while `UnitCharacterPoints`'s second value or a row's \
                  step/rank cost is non-zero — which no 1.12 server sends. Unreachable until the \
-                 skill-point wire exists; not built (1956).",
+                 skill-point wire exists; not built.",
             ),
             (
                 "SkillFrame.xml",
@@ -1131,7 +1131,7 @@ mod tests {
                  method/net-send) of the pre-1.12 skill-point purchase UI. the detail bar's RightArrow calls it, and \
                  that button shows only while `UnitCharacterPoints`'s second value or a row's \
                  step/rank cost is non-zero — which no 1.12 server sends. Unreachable until the \
-                 skill-point wire exists; not built (1956).",
+                 skill-point wire exists; not built.",
             ),
             (
                 "SkillFrame.xml",
@@ -1140,7 +1140,7 @@ mod tests {
                  method/net-send) of the pre-1.12 skill-point purchase UI. the detail bar's LeftArrow calls it, and \
                  that button shows only while `UnitCharacterPoints`'s second value or a row's \
                  step/rank cost is non-zero — which no 1.12 server sends. Unreachable until the \
-                 skill-point wire exists; not built (1956).",
+                 skill-point wire exists; not built.",
             ),
             (
                 "DurabilityFrame.xml",
@@ -1155,8 +1155,8 @@ mod tests {
                 "one of the GM survey's four engine verbs, none built: the survey window opens on \
                  GMSURVEY_DISPLAY, which the stock HelpFrame.lua registers and nothing fires — the \
                  trigger is ticket status 3 on SMSG_GMTICKET_GETTICKET, which vmangos never sends \
-                 (1889; the producer gate carries the event). Gated since the addon became a reached \
-                 LoadOnDemand row (1967).",
+                 (the producer gate carries the event). Gated as the addon is a reached \
+                 LoadOnDemand row.",
             ),
             (
                 "Blizzard_GMSurveyUI.xml",
@@ -1164,8 +1164,8 @@ mod tests {
                 "one of the GM survey's four engine verbs, none built: the survey window opens on \
                  GMSURVEY_DISPLAY, which the stock HelpFrame.lua registers and nothing fires — the \
                  trigger is ticket status 3 on SMSG_GMTICKET_GETTICKET, which vmangos never sends \
-                 (1889; the producer gate carries the event). Gated since the addon became a reached \
-                 LoadOnDemand row (1967).",
+                 (the producer gate carries the event). Gated as the addon is a reached \
+                 LoadOnDemand row.",
             ),
             (
                 "Blizzard_GMSurveyUI.xml",
@@ -1173,8 +1173,8 @@ mod tests {
                 "one of the GM survey's four engine verbs, none built: the survey window opens on \
                  GMSURVEY_DISPLAY, which the stock HelpFrame.lua registers and nothing fires — the \
                  trigger is ticket status 3 on SMSG_GMTICKET_GETTICKET, which vmangos never sends \
-                 (1889; the producer gate carries the event). Gated since the addon became a reached \
-                 LoadOnDemand row (1967).",
+                 (the producer gate carries the event). Gated as the addon is a reached \
+                 LoadOnDemand row.",
             ),
             (
                 "Blizzard_GMSurveyUI.xml",
@@ -1182,14 +1182,14 @@ mod tests {
                 "one of the GM survey's four engine verbs, none built: the survey window opens on \
                  GMSURVEY_DISPLAY, which the stock HelpFrame.lua registers and nothing fires — the \
                  trigger is ticket status 3 on SMSG_GMTICKET_GETTICKET, which vmangos never sends \
-                 (1889; the producer gate carries the event). Gated since the addon became a reached \
-                 LoadOnDemand row (1967).",
+                 (the producer gate carries the event). Gated as the addon is a reached \
+                 LoadOnDemand row.",
             ),
             (
                 "StaticPopup.xml",
                 "ReplaceTradeEnchant",
                 "a registered 1.12 binding (`0x48d330`) whose body is not yet known; it is built \
-                 once it is (1960). Reached by TRADE_REPLACE_ENCHANT's Accept, an event this engine does not fire yet.",
+                 once it is. Reached by TRADE_REPLACE_ENCHANT's Accept, an event this engine does not fire yet.",
             ),
         ];
 
@@ -1832,8 +1832,8 @@ mod tests {
                  UNPRODUCEABLE rather than unbuilt: the 5875 client registers the event and \
                  signals it from NOWHERE (a whole-image census: no signal site passes its id, \
                  `0x11d`), so StaticPopupDialogs[\"TRADE\"] is \
-                 dead code THERE too. benilla wired the dialog up once and took it back out — \
-                 decision 1764. Producing this would be a divergence, not a fix",
+                 dead code THERE too, and benilla leaves it unproduced: \
+                 producing this would be a divergence, not a fix",
             ),
             (
                 "TRADE_REPLACE_ENCHANT",
@@ -1844,7 +1844,7 @@ mod tests {
                 "CLOSE_WORLD_MAP",
                 "WorldMapFrame.lua — the engine-side close the reference fires when the map is \
                  shut from outside its own frame; benilla closes the map through the frame's own \
-                 hide path only (1980)",
+                 hide path only",
             ),
             ("DISPLAY_SIZE_CHANGED", "the four paperdoll files"),
             (
@@ -1860,11 +1860,11 @@ mod tests {
             ("PLAYER_DAMAGE_DONE_MODS", "PaperDollFrame.lua"),
             (
                 "SHOW_COMPARE_TOOLTIP",
-                "PaperDollFrame.lua — the second `TRADE_REQUEST` (decision 1764): event 377 is \
+                "PaperDollFrame.lua — the second `TRADE_REQUEST`: event 377 is \
                  registered in 5875 and signalled from NOWHERE (zero fire sites in the whole \
                  image), so this listener is dead code THERE \
-                 too. benilla fired it from 0283 until 2202, then drove the plates itself on a \
-                 shift-held hover until 2210; both were supersets. Nothing in this engine seats a \
+                 too. benilla once fired it, and later drove the plates itself on a \
+                 shift-held hover; both were supersets. Nothing in this engine seats a \
                  shopping plate now — the reference's own callers do (`MerchantFrame.xml:63-80`, \
                  the auction rows), which is the whole of the compare in 1.12.1. Producing this \
                  event would be a divergence, not a fix",
@@ -1875,7 +1875,7 @@ mod tests {
                 "UNIT_QUEST_LOG_CHANGED",
                 "QuestLogFrame.lua — a party member's quest-log fields changing (the reference \
                  fires it off the unit's PLAYER_QUEST_LOG_* descriptor updates); benilla's unit \
-                 feed does not derive it yet (1944)",
+                 feed does not derive it yet",
             ),
             (
                 "UNIT_MODEL_CHANGED",
@@ -1885,7 +1885,7 @@ mod tests {
             (
                 "ZONE_UNDER_ATTACK",
                 "ChatFrame.lua — the reference's `SMSG_ZONE_UNDER_ATTACK` line (\"%s is under \
-                 attack!\"); the wire handler is not built (1948)",
+                 attack!\"); the wire handler is not built",
             ),
         ];
 
@@ -2033,7 +2033,7 @@ mod tests {
         assert!(
             surprises.is_empty(),
             "a chain file listens for an event NOTHING fires, and it is not one of the known gaps \
-             — this is 1819 arriving: a window migration brought a listener with no producer:\n  {}",
+             — a window migration brought a listener with no producer:\n  {}",
             surprises.join("\n  ")
         );
 

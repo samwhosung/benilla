@@ -1020,7 +1020,7 @@ mod tests {
         app.update();
         assert!(
             state(&app).pressed(cmd::MOVE_FORWARD),
-            "holding W and opening the chat box keeps you running (2196)"
+            "holding W and opening the chat box keeps you running"
         );
         assert_eq!(
             lua_count(&app, "PROBE_UP"),
@@ -1231,7 +1231,7 @@ mod tests {
         app.update();
         assert!(
             state(&app).pressed(cmd::MOVE_FORWARD),
-            "the first repeat after re-activation re-latches (2204)"
+            "the first repeat after re-activation re-latches"
         );
     }
 
@@ -1282,7 +1282,7 @@ mod tests {
         app.update();
         assert!(
             state(&app).pressed(cmd::MOVE_FORWARD),
-            "SHIFT-W falls back to W — the whole point of 1142"
+            "an unbound SHIFT-W falls back to W, the modifier dropped"
         );
         // It unlatches on the base key with the modifier still down (the reference replays the
         // press-time chord at key-up, `0x483bd0`; latching the resolved command is equivalent).
@@ -1302,7 +1302,7 @@ mod tests {
         app.update();
         assert!(
             state(&app).fired(cmd::TOGGLE_UI),
-            "ALT-Z is TOGGLEUI (0870)"
+            "ALT-Z is TOGGLEUI: the exact chord probes first"
         );
         assert!(!state(&app).fired(cmd::TOGGLE_SHEATH));
         // CTRL-ALT-Z fires nothing: the single strip drops the leftmost modifier (`ALT-CTRL-Z`
@@ -1454,7 +1454,7 @@ mod tests {
         app.update();
         assert!(
             state(&app).pressed(cmd::MOVE_FORWARD),
-            "the frame ate the toggle key; you are still running (2196)"
+            "the frame ate the toggle key; you are still running"
         );
 
         // The eaten key loses its binding...
@@ -1613,7 +1613,7 @@ mod tests {
         assert!(open(&app, 0), "B opens the backpack");
         assert!(
             !open(&app, 2),
-            "B does NOT open the equipped bag — this is the bug 1494 fixes"
+            "B does NOT open the equipped bag — TOGGLEBACKPACK opens the backpack alone"
         );
 
         // B again: bag 0 is open, so this is the close arm.

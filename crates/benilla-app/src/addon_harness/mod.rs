@@ -694,12 +694,12 @@ fn drive_ui_probe(script: &mut UiScript) -> Vec<String> {
         -- HOVER. Nothing above puts a tooltip on screen, and a whole class of addon only runs
         -- there: hooks on GameTooltip's OnShow/OnHide, the FrameXML globals an addon replaces
         -- (GameTooltip_SetDefaultAnchor), and the ones that SCRAPE the line regions
-        -- (`GameTooltipTextLeft1:GetText()`). Decision 1220 fixed a raise squarely in that class
-        -- and this column could not see it, which is the reason this block exists.
+        -- (`GameTooltipTextLeft1:GetText()`). A raise squarely in that class is invisible to the
+        -- calls above, which is the reason this block exists.
         --
         -- Each call is guarded on the global being a FUNCTION, not merely non-nil: an unguarded
         -- call to a missing FrameXML global would land in every addon's probe column as that
-        -- addon's fault, which is exactly the mis-attribution 1209 was written about.
+        -- addon's fault, which is exactly the mis-attribution the probe must never make.
         if GameTooltip and UIParent then
             if type(GameTooltip_SetDefaultAnchor) == "function" then
                 try(function() GameTooltip_SetDefaultAnchor(GameTooltip, UIParent) end)
@@ -3120,8 +3120,8 @@ mod dependency_tests {
             wants.absent_foreign_files,
             vec!["Interface/AddOns/NotInstalled/templates.xml".to_string()],
             "`..` is collapsed the way the client collapses it, and the RESOLVED path is what is \
-             reported — the collapse is the interesting half. The path is INSTALL-relative since \
-             2155, which is the space the reference's file layer is actually handed: this exact \
+             reported — the collapse is the interesting half. The path is INSTALL-relative, \
+             which is the space the reference's file layer is actually handed: this exact \
              shape is Auctioneer's, and its real neighbour resolves off the chain now."
         );
         assert!(
@@ -3718,7 +3718,7 @@ mod dependency_tests {
         assert_eq!(
             called_on("ScrollingMessageFrame"),
             vec!["ScrollingMessageFrame:SetInsertMode (on MessageFrame)".to_string()],
-            "the row 1228 could not print: the sibling that DOES answer it is named, because \
+            "a missing verb's row names the sibling that DOES answer it, because \
              `wire the kind` and `write the verb` are different jobs"
         );
         assert!(

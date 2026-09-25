@@ -1630,7 +1630,7 @@ mod tests {
         assert_eq!(
             team(&[(BYTES_0, human_warrior), (FACTIONTEMPLATE, GM_TEMPLATE)]),
             1,
-            "a GM keeps his race's side (report B378)"
+            "a GM keeps his race's side"
         );
         assert_eq!(
             team(&[(BYTES_0, scourge_mage), (FACTIONTEMPLATE, GM_TEMPLATE)]),
@@ -2046,7 +2046,7 @@ mod tests {
         };
         assert!(
             flag_events(step(&mut app, 0)).is_empty(),
-            "the login descriptor is a create: structurally silent (1098 §4)"
+            "the login descriptor is a create: structurally silent"
         );
 
         // `PLAYER_FLAGS_HIDE_HELM` `0x400` moves and the resting bit does not.

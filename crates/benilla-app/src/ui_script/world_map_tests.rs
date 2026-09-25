@@ -172,7 +172,7 @@ fn hovering_a_poi_names_it_and_adds_a_status_line_only_when_there_is_one() {
             .unwrap(),
         None,
         "no description → a blank line that reads back NIL: `FontString:GetText 0x79d690` \
-         substitutes nil for an empty string (decision 2110), and Cartographer 2.02's world-map \
+         substitutes nil for an empty string, and Cartographer 2.02's world-map \
          hover reads exactly this as \"this POI has no status line\""
     );
 

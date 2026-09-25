@@ -673,7 +673,7 @@ pub(crate) mod schedule_tests {
              undeclared order against something it shares state with — declare the order \
              (`.after`, a set, a `chain`), or raise the ceiling here with the reason. \
              `WOW_AMBIGUITY_DUMP=1` on this test lists the pairs; a resource that commutes by \
-             construction belongs in `Classes` instead (decisions 2279, 2287)."
+             construction belongs in `Classes` instead."
         );
         assert!(
             n + slack >= ceiling,
@@ -855,7 +855,7 @@ pub(crate) mod schedule_tests {
     /// An instrument, not a gate: prints `Update`'s serial depth as-is and with the VM, then
     /// the audio layer too, made `Send`-owned. Asserts nothing; run it by hand.
     #[test]
-    #[ignore = "instrument: run by hand (2265 §A3's executor census) — cargo test -p benilla-app --lib concurrency_census -- --ignored --nocapture"]
+    #[ignore = "instrument: run by hand (the executor census) — cargo test -p benilla-app --lib concurrency_census -- --ignored --nocapture"]
     fn concurrency_census() {
         let mut app = headless_client();
         let c = census(&mut app, Update, SyncPoints::Built);
@@ -943,7 +943,7 @@ pub(crate) mod schedule_tests {
         let c = census(&mut app, Update, SyncPoints::Built);
         if !type_names_available(&c) {
             eprintln!(
-                "skipped: this build carries no type names (bevy/debug rides with dev, 1451)"
+                "skipped: this build carries no type names (bevy/debug rides with the dev feature)"
             );
             return;
         }
@@ -1042,7 +1042,7 @@ pub(crate) mod schedule_tests {
         assert!(
             offenders.is_empty(),
             "these systems hold the VM in `Update` without declaring their side of the tick \
-             (decision 2304):\n  {}",
+             (`UiFeed` before it, or `.after(UiInput)`):\n  {}",
             offenders.join("\n  ")
         );
         assert!(stale.is_empty(), "stale rows:\n  {}", stale.join("\n  "));
@@ -1085,7 +1085,7 @@ pub(crate) mod schedule_tests {
         ("tutorial.rs", "drain_tutorials", Because::FilledByVm,
          "`sends` exist only after Lua acknowledged, cleared or reset a flag, and go to the wire"),
         ("ui_action/drain.rs", "drain_go_openers", Because::FilledByVm,
-         "filled only by a world right-click on a GameObject; the drain sends casts to the wire (2232's own bucket)"),
+         "filled only by a world right-click on a GameObject; the drain sends casts to the wire"),
         ("ui_auction/mod.rs", "drain_auction", Because::FilledByVm,
          "VM verbs; the refresh flags act only under an open window and become wire re-asks"),
         ("ui_bank/mod.rs", "feed_bank", Because::PlayerRoundTrip,
@@ -1125,7 +1125,7 @@ pub(crate) mod schedule_tests {
         ("ui_loot_roll.rs", "drain_loot_rolls", Because::FilledByVm,
          "only a Need/Greed/Pass click queues a confirm or vote, held in the VM"),
         ("ui_loot_roll.rs", "feed_loot_rolls", Because::PlayerRoundTrip,
-         "a roll exists only after a group member loots under group loot (2232's bucket); leftovers are cleared at socket teardown (another player's act: coincidence-only residual)"),
+         "a roll exists only after a group member loots under group loot; leftovers are cleared at socket teardown (another player's act: coincidence-only residual)"),
         ("ui_macro/mod.rs", "load_macros", Because::MemoLatched,
          "`MacroFiles.identity` is a `VmMemo`, so a new session re-reads the files and re-fires UPDATE_MACROS; also `InWorldGated`"),
         ("ui_macro/mod.rs", "save_dirty_macros", Because::FilledByVm,
@@ -1139,13 +1139,13 @@ pub(crate) mod schedule_tests {
         ("ui_quest_share.rs", "feed_quest_share", Because::PlayerRoundTrip,
          "a verdict answers our own push and a confirm follows a party member's escort accept, both held until the name resolves (the confirm is another player's act: coincidence-only residual)"),
         ("ui_script/extract/mod.rs", "paint_script", Because::Deliberate,
-         "per-frame paint and cost state, not a queue (2232)"),
+         "per-frame paint and cost state, not a queue"),
         ("ui_social/feed.rs", "feed_social", Because::MemoLatched,
          "the login-burst lists are re-announced to a new VM by `fed.seeded` (`VmMemo<FedSocial>`); the show flag is Lua's; a status line waits on the name resolve"),
         ("ui_stable/mod.rs", "feed_stable", Because::PlayerRoundTrip,
          "both packets follow a stable master's gossip and a click in its window"),
         ("ui_summon.rs", "feed_summon", Because::PlayerRoundTrip,
-         "only another player's Ritual of Summoning latches the ask (2232's duel shape; coincidence-only residual)"),
+         "only another player's Ritual of Summoning latches the ask (the duel's shape; coincidence-only residual)"),
         ("ui_tabard.rs", "drain_tabard", Because::FilledByVm,
          "the intents are Lua's; the event answers a Save intent"),
         ("ui_tabard.rs", "feed_tabard", Because::PlayerRoundTrip,
@@ -1153,7 +1153,7 @@ pub(crate) mod schedule_tests {
         ("ui_talent_wipe.rs", "feed_talent_wipe", Because::PlayerRoundTrip,
          "`MSG_TALENT_WIPE_CONFIRM` answers the trainer's gossip option"),
         ("ui_taxi/mod.rs", "feed_taxi", Because::PlayerRoundTrip,
-         "both packets follow talking to a flight master (2232's own example)"),
+         "both packets follow talking to a flight master"),
         ("ui_tradeskill.rs", "drain_trade_skill", Because::FilledByVm,
          "every consumed queue is Lua's; the cast-event continuation is inert until a Lua `DoTradeSkill` latched a count"),
         ("ui_trainer/mod.rs", "feed_trainer", Because::PlayerRoundTrip,
@@ -1201,7 +1201,7 @@ pub(crate) mod schedule_tests {
         let update = census(&mut app, Update, SyncPoints::Built);
         if !type_names_available(&update) {
             eprintln!(
-                "skipped: this build carries no type names (bevy/debug rides with dev, 1451)"
+                "skipped: this build carries no type names (bevy/debug rides with the dev feature)"
             );
             return;
         }
@@ -1286,10 +1286,10 @@ pub(crate) mod schedule_tests {
         assert!(
             offenders.is_empty(),
             "these systems hold the VM and consume a one-shot with nothing gating them on the \
-             interface being up — in 2214's one-frame window they publish to a VM with no frames \
-             and the edge is lost (2220, 2232). Gate them (`.run_if(ingame_ui_up)`, on the system \
+             interface being up — in the one frame before it is, they publish to a VM with no \
+             frames and the edge is lost. Gate them (`.run_if(ingame_ui_up)`, on the system \
              or its set), or add them to `EXEMPT` with the reason they cannot be filled before \
-             the interface exists (decision 2279):\n  {}",
+             the interface exists:\n  {}",
             offenders.join("\n  ")
         );
         assert!(

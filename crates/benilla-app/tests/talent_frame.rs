@@ -289,7 +289,7 @@ fn an_unavailable_talent_reaches_the_renderer_desaturated() {
     let (grey, tint) = icon(&quads, "Ability_BackStab");
     assert!(
         grey,
-        "an unavailable talent's icon must carry the greyscale flag — the whole of B162"
+        "an unavailable talent's icon must carry the greyscale flag — the flag is what greys it"
     );
     // The stock 0.65 tint still reaches the quad: the desaturate shader
     // (`Shaders\Pixel\Desaturate.bls`) discards its RGB, but its alpha is read on both paths.

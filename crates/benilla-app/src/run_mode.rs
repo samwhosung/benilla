@@ -73,8 +73,8 @@ pub(crate) fn fatal_when_driverless(why: &str) -> bool {
     if env_login() {
         warn!(
             "login: {why} — leaving the dialog up, because nothing declared this run driverless. \
-             Set WOW_UNATTENDED=1 if nobody is here and it should exit non-zero instead \
-             (decision 1769)."
+             Set WOW_UNATTENDED=1 if nobody is here and it should exit \
+             non-zero instead."
         );
     }
     false
@@ -289,9 +289,9 @@ mod tests {
             "a dev-chord affordance outside the dev roots must go through `run_mode::dev_chord`, \
              which is `false` in a player build — the engine's `modkeys::dev_chord` is always \
              compiled, so calling it directly ships a live dev key to a player and the build gate \
-             cannot see it (decision 1176). And a `#[cfg(feature = \"dev\")]` outside `run_mode`, \
+             cannot see it. And a `#[cfg(feature = \"dev\")]` outside `run_mode`, \
              `dev.rs` and `lib.rs` means a gameplay module has learned the seam exists — ask \
-             `run_mode::dev_affordances()` instead (decision 1179). Offenders:\n  {}",
+             `run_mode::dev_affordances()` instead. Offenders:\n  {}",
             offenders.join("\n  "),
         );
     }

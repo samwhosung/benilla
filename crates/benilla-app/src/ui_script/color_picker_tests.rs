@@ -392,8 +392,8 @@ fn a_dropdown_row_with_has_color_swatch_opens_the_picker_and_cancel_restores() {
         -- The anchor needs a POSITION. `ToggleDropDownMenu` anchors the list to this frame and then
         -- guards on `listFrame:GetCenter()`, hiding the list again and returning when it is nil
         -- (ref UIDropDownMenu.lua:624-631) — so an unplaced dropdown opens no menu in the real
-        -- client either. Our deleted transcription carried no such guard and showed it regardless,
-        -- which is the only reason this fixture ever worked unanchored.
+        -- client either. The guard is why this fixture places the dropdown: unanchored, the stock
+        -- file hides the list again at once and the test would see no menu at all.
         dd:SetPoint("CENTER", 0, 0)
         UIDropDownMenu_Initialize(dd, function()
             local info = {}

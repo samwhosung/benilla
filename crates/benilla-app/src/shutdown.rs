@@ -98,7 +98,7 @@ mod tests {
         assert!(
             app.world().resource::<Saw>().0 == 0,
             "…and the Update system did not see it. This is the bug: every file the session \
-             would have written on the way out is simply never written (1528)"
+             would have written on the way out is simply never written"
         );
     }
 
@@ -153,7 +153,7 @@ mod tests {
             app.world().resource::<Saw>().0,
             1,
             "the tail runs on the edge; a second run would re-fire \
-             PLAYER_LEAVING_WORLD/PLAYER_LOGOUT into every addon (1537)"
+             PLAYER_LEAVING_WORLD/PLAYER_LOGOUT into every addon"
         );
     }
 

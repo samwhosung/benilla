@@ -784,7 +784,7 @@ fn tab_round_trip_with_a_selected_skill_by_point() {
     click(&mut s, character_tab);
     assert!(
         shown(&mut s, "PaperDollFrame"),
-        "the Character tab switches back (the 2026-07-17 report)"
+        "the Character tab switches back"
     );
     assert!(!shown(&mut s, "SkillFrame"), "Skills page yields");
 

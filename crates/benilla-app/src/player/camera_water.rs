@@ -146,7 +146,7 @@ mod tests {
         );
         assert!(
             over > 0.0,
-            "and above it at all — this is the whole difference between 2170 and a working camera"
+            "and above it at all — a pivot at or under the plane is what breaks the camera"
         );
     }
 

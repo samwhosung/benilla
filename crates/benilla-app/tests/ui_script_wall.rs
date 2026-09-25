@@ -80,7 +80,7 @@ fn the_vm_is_named_by_no_more_files_than_the_ceiling_says() {
     assert!(
         n <= CEILING,
         "{n} gameplay files outside ui_script/ and the feeds name UiScript; the ceiling is \
-         {CEILING}.\nA new file learned that the FrameXML VM exists. Decision 1177's line is that \
+         {CEILING}.\nA new file learned that the FrameXML VM exists. The line is that \
          only the feed layer may know: feed a model value instead, or — if this file genuinely is \
          feed code — it belongs under a `ui_*` module, and a probe under `capture/`. Raise CEILING \
          here only with the reason, the way world_api_wall.rs requires.\nWOW_UISCRIPT_DUMP=1 lists \

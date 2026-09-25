@@ -572,7 +572,7 @@ fn charter_probe(
                     format!(
                         "the registrar opened on {npc:#x} but GetGuildCharterCost() reads {cost}, \
                          not {CHARTER_COST_COPPER} (vmangos GUILD_CHARTER_COST, \
-                         PetitionsHandler.cpp:39) — the showlist row's charterCost is not what \
+                         PetitionsHandler.cpp:38) — the showlist row's charterCost is not what \
                          the getter reads, or the visible-row `&1` rule picked the wrong row"
                     ),
                 );
@@ -585,8 +585,8 @@ fn charter_probe(
                         "no registrar window within {REGISTRAR_TIMEOUT_SECS}s of the select: \
                          GuildRegistrarState npc={:?} (wanted {npc:#x}), \
                          GuildRegistrarFrame:IsVisible()={visible}, GetGuildCharterCost()={cost}. \
-                         Before decision 1672 SMSG_PETITION_SHOWLIST had no parse arm at all and \
-                         fell through to ServerPacket::Other — that is what this reading looks \
+                         An SMSG_PETITION_SHOWLIST with no parse arm at all \
+                         falls through to ServerPacket::Other — that is what this reading looks \
                          like. Lines seen: {:?}",
                         registrar.npc(),
                         probe_lines(&script)
@@ -803,8 +803,8 @@ fn charter_probe(
                          click: PetitionFrame:IsVisible()={visible}, petitionType={kind:?}, \
                          isOriginator={originator}, GetNumPetitionNames()={names}. Either the \
                          item-use fork never reached ItemUseRoute::ShowPetition (a charter that \
-                         falls through to `Nothing` sends nothing at all — the pre-1672 \
-                         behaviour) or the answer never became a window. Lines seen: {:?}",
+                         falls through to `Nothing` sends nothing at all — a silent \
+                         failure) or the answer never became a window. Lines seen: {:?}",
                         probe_lines(&script)
                     ),
                 );
@@ -1086,8 +1086,8 @@ fn assert_icon_and_select(
             "icon",
             format!(
                 "the charter row {:?} (wire icon={ICON_PETITION}) maps to \
-                 {ICON_TYPE_REGRESSION:?}, the chat bubble. That is B249's regression one row \
-                 over: decision 1335's table must index byte 7 to {ICON_TYPE_PETITION:?}",
+                 {ICON_TYPE_REGRESSION:?}, the chat bubble: the binder's icon regression \
+                 one row over: `ui_gossip`'s table must index byte 7 to {ICON_TYPE_PETITION:?}",
                 opt.message
             ),
         );

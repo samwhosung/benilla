@@ -240,6 +240,6 @@ fn the_list_rows_carry_the_queue_status() {
             .unwrap(),
         None,
         "an un-queued row's status line is blank, and a blank FontString reads back NIL \
-         (`FontString:GetText 0x79d690` substitutes — decision 2110)"
+         (`FontString:GetText 0x79d690` substitutes nil)"
     );
 }

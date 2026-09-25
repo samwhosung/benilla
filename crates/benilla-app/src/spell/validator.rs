@@ -424,7 +424,7 @@ mod tests {
         assert_eq!(
             cast_water_refusal(0, Some(aquatic)),
             Some(ERR_ONLY_UNDERWATER),
-            "on land, Aquatic Form refuses — the B176 report"
+            "on land, Aquatic Form refuses: it is underwater-only"
         );
         assert_eq!(
             cast_water_refusal(crate::creature_anim::move_flags::SWIMMING, Some(aquatic)),

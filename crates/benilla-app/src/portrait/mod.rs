@@ -2457,7 +2457,7 @@ mod tests {
         let bow: Vec<&PortraitRider> = bow.iter().collect();
         assert!(
             LookKey::build(&body, &[], &[], &[]) != LookKey::build(&body, &bow, &[], &[]),
-            "the pre-1616 key moved on the draw — which is the bug"
+            "the mirrored-geometry key moved on the draw — which is the bug"
         );
     }
 

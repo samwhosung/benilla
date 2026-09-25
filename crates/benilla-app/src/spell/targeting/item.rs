@@ -441,7 +441,7 @@ mod tests {
                 existing: 2564,
                 new: 1900
             },
-            "and its Yes lands on the replace question — the ref's two-popup chain"
+            "and its Yes lands on the replace question — the reference's two-popup chain"
         );
 
         // 3. The slot fork, the one place effects 53 and 54 differ: PERM for 53, TEMP for 54.

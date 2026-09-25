@@ -151,7 +151,7 @@ mod tests {
         assert!(p.contains(0, 1), "the source end");
         assert!(
             p.contains(0, 5),
-            "the destination end (0218: the send locks both)"
+            "the destination end (the send locks both)"
         );
         assert!(!p.contains(1, 1), "a different bag's slot is untouched");
     }

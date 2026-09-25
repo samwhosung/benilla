@@ -143,7 +143,7 @@ mod tests {
                 // Empty, which the drain's `is_empty()` skip drops as `0x4945b4`'s guard does.
                 assert!(
                     text.is_empty(),
-                    "reason 59's {key} resolved to {text:?} — B198's duplicate line is back"
+                    "reason 59's {key} resolved to {text:?} — the duplicate line is back"
                 );
                 continue;
             }

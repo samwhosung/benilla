@@ -775,7 +775,7 @@ mod tests {
         assert_eq!(
             markup_spans("|cff0055FFDeadly Boss Mod API|r", base, true),
             vec![("Deadly Boss Mod API".to_string(), blue)],
-            "B273: the tooltip's title wraps, and wrapping does not exempt it from the decode"
+            "the tooltip's title wraps, and wrapping does not exempt it from the decode"
         );
         assert_eq!(
             markup_spans("A |cff00ff00B|r C", base, false),

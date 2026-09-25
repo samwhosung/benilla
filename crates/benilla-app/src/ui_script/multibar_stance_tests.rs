@@ -70,7 +70,7 @@ fn shipped_multibars_drive_end_to_end() {
     let frames = super::test_ui::load_ui(&s, "Interface\\FrameXML\\MultiActionBars.xml");
     assert_eq!(
         frames, 100,
-        "what stock MultiActionBars.xml declares (1938): the four bar frames and their 48 buttons, \
+        "what stock MultiActionBars.xml declares: the four bar frames and their 48 buttons, \
          each with a $parentCooldown — the same 100 ours built for the same seats"
     );
 
@@ -1611,7 +1611,7 @@ fn a_forms_state_change_leaves_the_shelf_down_over_the_raised_bar() {
     for region in shelf {
         assert!(
             !shown(&s, region),
-            "{region}: the director's plate — the shelf re-shown over the raised bar"
+            "{region}: the shelf re-shown over the raised bar"
         );
     }
     assert_eq!(ring(&s), 50.0);

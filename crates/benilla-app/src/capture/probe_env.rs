@@ -95,7 +95,7 @@ pub(crate) const PROBE_VARS: &[ProbeVar] = &[
     },
     ProbeVar {
         name: "WOW_PROBE_HOVER_STEP",
-        purpose: "<secs> — seconds per pointer move (default 0.25; ~0.016 sweeps at frame rate, the director's gesture)",
+        purpose: "<secs> — seconds per pointer move (default 0.25; ~0.016 sweeps at frame rate, like a real hand)",
         wall_clock: false,
     },
     ProbeVar {
@@ -239,7 +239,7 @@ pub(crate) const PROBE_VARS: &[ProbeVar] = &[
     },
     ProbeVar {
         name: "WOW_PROBE_BOOK",
-        purpose: "1 — teleport to the Old Town plaque and measure what the item-text reader costs per frame, closed vs open (B240)",
+        purpose: "1 — teleport to the Old Town plaque and measure what the item-text reader costs per frame, closed vs open",
         wall_clock: true,
     },
     ProbeVar {
@@ -292,15 +292,15 @@ pub(crate) const PROBE_NAMES: &[(&str, &str)] = &[
     ),
     (
         "partner",
-        "the second client that says yes: auto-accept every group invite and duel challenge (0434/0637)",
+        "the second client that says yes: auto-accept every group invite and duel challenge",
     ),
     (
         "crossing",
-        "board a cross-continent boat and report the map seam surviving (0455)",
+        "board a cross-continent boat and report the map seam surviving",
     ),
     (
         "taxi",
-        "open the flight-master menu on the wire and ride Stormwind → Sentinel Hill to a verdict (0484)",
+        "open the flight-master menu on the wire and ride Stormwind → Sentinel Hill to a verdict",
     ),
     (
         "guardpoi",
@@ -319,11 +319,11 @@ pub(crate) fn wall_clock_vars() -> impl Iterator<Item = &'static str> {
 
 /// `WOW_PROBE=list`: prints the registry, one variable per line, then the named values.
 pub(crate) fn print() {
-    println!("The probe fleet's environment (capture::probe_env, decision 2265 §A5).");
+    println!("The probe fleet's environment (capture::probe_env).");
     println!(
         "wall-clock: the variable schedules on elapsed real time and arms the un-occludable probe"
     );
-    println!("window (ProbeFocusPlugin, decision 0906) — covered, such a run drops to ~1 fps and");
+    println!("window (ProbeFocusPlugin) — covered, such a run drops to ~1 fps and");
     println!("executes the wrong script.");
     println!();
     println!("{:<26} {:<10} PURPOSE", "VARIABLE", "WALL-CLOCK");

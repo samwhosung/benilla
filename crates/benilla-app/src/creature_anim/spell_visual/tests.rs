@@ -436,7 +436,7 @@ fn ranged_spells_merge_the_weapon_visual_into_their_empty_slots() {
     assert_eq!(
         (multi.precast, multi.cast),
         (171, 172),
-        "the empty body-kit slots fill from the weapon — the missing draw/release (B153)"
+        "the empty body-kit slots fill from the weapon — else the draw/release is missing"
     );
     assert_eq!(
         (multi.impact, multi.missile_model, multi.missile_attach),

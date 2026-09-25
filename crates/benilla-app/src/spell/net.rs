@@ -2640,7 +2640,7 @@ mod tests {
         );
         assert!(
             swings(&fire(10, SERPENT_STING, false)).is_empty(),
-            "Serpent Sting carries Ex2 bit 17, not bit 20 — it starts nothing (B280 / 0994 §4)"
+            "Serpent Sting carries Ex2 bit 17, not bit 20 — it starts nothing"
         );
         assert!(
             swings(&fire(10, BACKSTAB, true)).is_empty(),

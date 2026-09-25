@@ -367,7 +367,7 @@ fn range_cell_on_real_data() {
 
 /// The required-item, chance-to-X and reagents lines on the real data.
 #[test]
-fn the_pinned_c6_lines_on_real_data() {
+fn the_required_item_chance_and_reagent_lines_on_real_data() {
     let data = benilla_formats::wow_data_or_skip!();
     let mut chain = benilla_formats::open_chain(&data).expect("open chain");
     let spells = Spells {

@@ -1465,7 +1465,7 @@ mod tests {
         assert_eq!(
             material_events(&app),
             (0, 0),
-            "no material was built or rebuilt for a colour — the count 2236 gates on"
+            "no material was built or rebuilt for a colour — a colour is a tag, not a material"
         );
         assert_eq!(
             app.world().resource::<Assets<UiQuadMaterial>>().len(),

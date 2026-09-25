@@ -99,7 +99,7 @@ fn surface_report(deep: bool, dump_path: Option<String>) {
         }
     }
 
-    println!("\n  SURFACE DIFF — our _G vs the captured 1.12 _G (decision 1189)");
+    println!("\n  SURFACE DIFF — our _G vs the captured 1.12 _G");
     println!("  FrameXML digest : {}", addon_harness::framexml_digest());
     println!("  reference names : {}", reference.len());
     println!("  ours            : {}", ours.len());
@@ -131,7 +131,7 @@ fn surface_report(deep: bool, dump_path: Option<String>) {
         extra_by_kind.entry(kind).or_default().push(name);
     }
     println!(
-        "\n  PUBLISHED BY US, ABSENT FROM 1.12 ({}) — a superset is not free (1189):",
+        "\n  PUBLISHED BY US, ABSENT FROM 1.12 ({}) — a superset is not free:",
         extra.len()
     );
     for (kind, names) in &extra_by_kind {
@@ -160,7 +160,7 @@ fn surface_report(deep: bool, dump_path: Option<String>) {
         println!(
             "    ^ read these: an unprefixed verb 1.12 lacks is what `if SomeName then` finds.\n      \
              Most are our own UI's helpers (KeyBindings_*, Options*), which are only\n      \
-             a naming question — but a POST-1.12 API name here is 1189's hazard exactly, because an\n      \
+             a naming question — but a POST-1.12 API name here is the hazard, because an\n      \
              addon that feature-tests it takes a branch written for a client we are not."
         );
     }
@@ -411,7 +411,7 @@ fn main() {
     let strict = reports.iter().filter(|r| r.errors.is_empty()).count();
     println!(
         "      (…{} of those name a file their own package does not contain, which the reference \
-         logs and carries on from; the pre-2155 column counted those as failures: {strict}/{})",
+         logs and carries on from; the strict column counts those as failures: {strict}/{})",
         loaded - strict,
         reports.len()
     );
@@ -704,11 +704,11 @@ fn main() {
         // library replicated into many addons inflates a row.
         println!("\n  most-wanted missing METHODS — addons that NAME each as obj:Name(), and");
         println!("  no widget answers. NOT a blocker list and NOT a build queue:");
-        println!("    · a big number is usually ONE library file replicated (1207/1210), and");
+        println!("    · a big number is usually ONE library file replicated, and");
         println!(
             "    · a third-party library's own method on its own object is not ours to write."
         );
-        println!("  Open the call site before ranking it (decision 1240).");
+        println!("  Open the call site before ranking it.");
         ranked(methods, 16);
     }
 
@@ -896,8 +896,8 @@ fn main() {
                     println!("\n  DIFF vs {path}: REFUSED — the baseline is at a different tree");
                     println!("    baseline digest {was}   this run {now}");
                     println!(
-                        "    A delta across two digests is not attributable to your change \
-                         (decision 1209).\n    Re-take the baseline on this tree: \
+                        "    A delta across two digests is not attributable \
+                         to your change.\n    Re-take the baseline on this tree: \
                          --status <file>, then re-run --diff."
                     );
                     return;

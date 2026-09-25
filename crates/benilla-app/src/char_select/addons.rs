@@ -1600,8 +1600,8 @@ mod tests {
             p.verdict(5).token().as_deref(),
             Some("INTERFACE_VERSION"),
             "a manifest with NO `## Interface` parses as 0 and IS out of date — the record ctor \
-             leaves [rec+0x1c]=0 and the gate compares it like any other value (decision 1292, \
-             byte-verified; supersedes 1191 §6's silent-is-current reading)"
+             leaves [rec+0x1c]=0 and the gate compares it like any other value (byte-verified: \
+             a missing line is never read as current)"
         );
 
         // Force-load erases the refusal (reason 7 written, then reset to 0), so a ticked box

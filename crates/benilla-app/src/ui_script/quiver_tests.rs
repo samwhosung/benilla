@@ -174,7 +174,7 @@ fn quiver_publishes_its_global_functions_for_a_hunter() {
         s.eval::<String>("return type(Quiver.CastPetAction)")
             .unwrap(),
         "function",
-        "B267: the addon's own field is nil because its VARIABLES_LOADED handler died \
+        "the addon's own field is nil because its VARIABLES_LOADED handler died \
          before publishing it — errors so far: {:#?}",
         s.errors()
     );

@@ -486,7 +486,7 @@ mod tests {
         assert_eq!(
             (player.vel_y, player.horiz_vel),
             (0.0, Vec3::ZERO),
-            "the controller resumes from the endpoint at rest (decision 0260) — \
+            "the controller resumes from the endpoint at rest — \
              stale pre-ride momentum must not leak into the resume"
         );
         match rx.try_recv() {

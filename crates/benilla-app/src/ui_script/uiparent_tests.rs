@@ -227,7 +227,7 @@ fn the_font_path_globals_are_the_references_own_four() {
     ] {
         assert!(
             s.eval::<bool>(&format!("return {name} ~= nil")).unwrap(),
-            "{name} — ref Fonts.xml assigns it; a dropped line from a transcribed block is how              LIGHTYELLOW_FONT_COLOR_CODE went missing"
+            "{name} — ref Fonts.xml assigns it, and a dropped line leaves it nil"
         );
     }
     // The value addons splice into strings (`Fonts.xml:13`).

@@ -784,8 +784,8 @@ mod tests {
         assert!(locked.contains(&CreateAction::Gender(1)), "female");
         assert!(
             locked.contains(&CreateAction::ClassSlot(6)),
-            "mage is slot 6 of [1,2,3,4,5,7,8,9,11] — and it is the mage icon the director saw \
-             unmarked"
+            "mage is slot 6 of [1,2,3,4,5,7,8,9,11] — the mage icon itself must carry the lock, \
+             not sit unmarked"
         );
 
         // Moving the selection moves the lock, never lights a second icon.

@@ -193,14 +193,14 @@ mod tests {
         data[9] = 3;
         t.insert(100, 2, "Wanted Poster".into(), &data);
         t.insert(101, 9, "Book".into(), &data);
-        t.insert(102, 10, "Chest".into(), &data);
+        t.insert(102, 10, "Goober".into(), &data);
         t.insert(103, 15, "Boat".into(), &data);
         assert_eq!(t.templates.get(100).unwrap().quest_material, Some(2));
         assert_eq!(t.templates.get(101).unwrap().quest_material, Some(2));
         assert_eq!(
             t.templates.get(102).unwrap().quest_material,
             Some(3),
-            "a chest reads data[9]"
+            "a GOOBER (type 10) reads data[9]"
         );
         assert_eq!(t.templates.get(103).unwrap().quest_material, None);
     }

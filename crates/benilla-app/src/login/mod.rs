@@ -1333,7 +1333,7 @@ mod tests {
         let _rig = crate::local_state::test_env::EnvGuard::unset("WOW_RIG");
         assert!(
             crate::run_mode::env_login() && !crate::run_mode::unattended(),
-            "the fixture must be the env the director plays in: credentials, nobody declared away",
+            "the fixture must be a player's env: credentials, nobody declared away",
         );
         assert!(
             !refusal_exits(false),

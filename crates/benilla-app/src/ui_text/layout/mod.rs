@@ -361,7 +361,7 @@ mod seat_tests {
     }
 
     #[test]
-    fn the_seat_is_the_law_plus_the_directors_nudge() {
+    fn the_seat_is_the_law_plus_a_one_pixel_nudge() {
         assert_eq!(snap_block_top(10.5), snap_block_top_law(10.5) + 1.0);
         assert_eq!(snap_block_top(0.0), 1.0);
     }

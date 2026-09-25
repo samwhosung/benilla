@@ -1146,6 +1146,6 @@ return n";
         count(&mut s),
         5,
         "the already-known row must LEAVE THE SCREEN, not just the engine's count — this is the \
-         director's report: the checkbox moved and the list underneath did not"
+         reported bug: the checkbox moved and the list underneath did not"
     );
 }

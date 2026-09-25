@@ -999,7 +999,7 @@ mod tests {
         };
         assert!(
             !tower_shows(&states, &explored_epl),
-            "no world states received — no tower icon (this IS report B190)"
+            "no world states received — no tower icon (this IS the reported bug)"
         );
         states.write(&[(2372, 1)]);
         assert!(tower_shows(&states, &explored_epl), "Alliance holds it");

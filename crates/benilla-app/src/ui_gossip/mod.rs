@@ -325,7 +325,7 @@ fn drain_gossip(
                     option: opt.index,
                 });
             }
-            Some(_) => debug!("ui_gossip: ignoring coded option {pos} (v1 greys it)"),
+            Some(_) => debug!("ui_gossip: ignoring coded option {pos} (coded options are greyed)"),
             None => debug!("ui_gossip: SelectGossipOption({pos}) out of range — ignored"),
         }
     }

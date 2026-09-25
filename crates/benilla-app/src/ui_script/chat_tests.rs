@@ -1144,7 +1144,7 @@ fn a_quick_exit_and_reentry_keeps_the_plates_hover_fade() {
     assert!(
         bare.eval::<bool>("return ChatFrame1Tab:IsVisible() and ChatFrame1.oldAlpha == nil and ChatFrame1.hover == 1")
             .unwrap(),
-        "the trapped state the director described: tab up, oldAlpha nil, hover stuck"
+        "the trapped state: tab up, oldAlpha nil, hover stuck"
     );
 
     // The shipped interface, with the guard the manifest load installs.

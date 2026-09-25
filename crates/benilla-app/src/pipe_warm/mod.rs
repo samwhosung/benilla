@@ -485,7 +485,7 @@ fn census_view_classes(
         warn!(
             "pipeline warm: camera {} draws through {} — a view key the menagerie never rendered \
              a rig through, so its whole model-pipeline space compiles LIVE on first sight. Give \
-             it a warm arm (decisions 0958/2262/2264). Warm keys this session: {}.",
+             it a warm arm. Warm keys this session: {}.",
             name.map_or("<unnamed>", Name::as_str),
             class.describe(),
             warm.warmed_views
@@ -719,7 +719,7 @@ mod census_tests {
 
     /// A warm set with no orthographic arm: the world camera's Perspective and the two
     /// `Msaa::Off` booth classes.
-    fn warm_set_before_2262() -> Vec<ViewClass> {
+    fn warm_set_without_an_orthographic_arm() -> Vec<ViewClass> {
         vec![
             view_class(Some(&perspective()), Some(&Msaa::Off), true),
             view_class(Some(&perspective()), Some(&Msaa::Sample4), true),
@@ -731,12 +731,12 @@ mod census_tests {
     /// would miss it.
     #[test]
     fn the_census_fires_for_an_unwarmed_orthographic_camera() {
-        let warm = warm_set_before_2262();
+        let warm = warm_set_without_an_orthographic_arm();
         let tile_cam = view_class(Some(&orthographic()), Some(&Msaa::Off), true);
         assert!(
             !warm.contains(&tile_cam),
             "the ui_models tile camera's view key must read as unwarmed against a warm set that \
-             has no orthographic arm — this is the report 2262 was written to produce"
+             has no orthographic arm — the census must report it"
         );
         assert_eq!(
             tile_cam.samples, 1,
@@ -746,7 +746,7 @@ mod census_tests {
 
     #[test]
     fn the_census_is_silent_for_every_warmed_class() {
-        let warm = warm_set_before_2262();
+        let warm = warm_set_without_an_orthographic_arm();
         for class in &warm {
             assert!(warm.contains(class));
         }
@@ -754,7 +754,7 @@ mod census_tests {
         assert!(
             warm.contains(&booth_after_first_bake),
             "a booth's runtime-installed custom projection is the NONSTANDARD class, warmed by \
-             the twin booth (0958)"
+             the twin booth"
         );
     }
 
@@ -764,6 +764,6 @@ mod census_tests {
         let with = view_class(Some(&perspective()), Some(&Msaa::Off), true);
         let without = view_class(Some(&perspective()), Some(&Msaa::Off), false);
         assert_ne!(with, without);
-        assert!(!warm_set_before_2262().contains(&without));
+        assert!(!warm_set_without_an_orthographic_arm().contains(&without));
     }
 }

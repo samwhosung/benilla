@@ -1143,7 +1143,7 @@ mod tests {
                 .map(|e| e.key)
                 .collect::<Vec<_>>(),
             vec!["ERR_INITIATE_TRADE_S"],
-            "0x7 is named in the cache but is not a streamed object: the status line is dropped,              the initiate line is not"
+            "0x7 is cached, not a streamed object: the status line drops, the initiate line stays"
         );
 
         // Stream the player, ask again: now it prints.

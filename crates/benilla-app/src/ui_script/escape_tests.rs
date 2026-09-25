@@ -355,7 +355,7 @@ fn escape_ladder_cast_then_windows_then_target_one_eater_per_press() {
     );
     assert!(
         !s.take_target_clear(),
-        "the same press must NOT also drop the target (the raw-key double-fire 0449 retires)"
+        "the same press must NOT also drop the target (no raw-key double-fire)"
     );
 
     // Press 2, the cast over: `CloseAllWindows` eats it.

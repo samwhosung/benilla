@@ -326,7 +326,7 @@ fn xp_loss_cancel_then_reconfirm_reshows_with_the_alert_dress() {
     s.fire_event("CONFIRM_XP_LOSS", vec![]);
     assert!(
         s.eval::<bool>("return StaticPopup1:IsVisible()").unwrap(),
-        "a fresh confirm re-shows after a Cancel (B80's deadlock)"
+        "a fresh confirm re-shows after a Cancel (no deadlock)"
     );
     s.run("StaticPopup_Hide(\"XP_LOSS\")").unwrap();
     s.run(concat!(

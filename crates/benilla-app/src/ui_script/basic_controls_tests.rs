@@ -76,7 +76,7 @@ fn error_message_is_the_installed_handler_and_the_host_channel_stays_sighted() {
     assert!(
         s.eval::<bool>("return geterrorhandler() == _ERRORMESSAGE")
             .unwrap(),
-        "the reference's own default handler is installed (1305)"
+        "the reference's own default handler is installed"
     );
     // An addon's pcall wrapper reports through `geterrorhandler()`, which pops the dialog.
     s.run(r#"geterrorhandler()("reported")"#).unwrap();

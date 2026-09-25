@@ -443,7 +443,7 @@ fn an_addon_registering_our_own_chat_frame_does_not_double_print() {
     assert_eq!(
         lines_in_window(&s),
         2,
-        "one more line, not two — ChatFrame1's own OnEvent does not render CHAT_MSG_*"
+        "one more line, not two — registering an event again never fires it twice"
     );
     assert_eq!(s.eval::<i64>("return SpyN").unwrap(), 2);
     assert!(s.errors().is_empty(), "handler errors: {:?}", s.errors());
@@ -934,7 +934,7 @@ fn a_leave_notice_keeps_its_number_because_the_record_dies_after_the_line() {
     assert_eq!(
         channels.names(),
         [Some("World".to_string()), None],
-        "and only THEN is the record gone — as a HOLE at slot 2, not a shortened list (1286)"
+        "and only THEN is the record gone — as a HOLE at slot 2, not a shortened list"
     );
 }
 
@@ -1985,7 +1985,7 @@ fn the_combat_log_window_has_the_docks_rect() {
     assert_eq!(
         s.eval::<i64>("return ChatFrame2:GetNumPoints()").unwrap(),
         3,
-        "FCF_DockUpdate's three points — a 2 means the dock never seeded this window"
+        "FCF_DockUpdate's three points — any other count means the dock never seeded this window"
     );
     assert_eq!(
         s.eval::<i64>("return table.getn(DOCKED_CHAT_FRAMES)")

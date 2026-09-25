@@ -195,7 +195,7 @@ fn the_background_row_opens_the_picker_and_its_opacity_slider_drives_the_window(
     assert!(
         s.eval::<bool>("return OpacitySliderFrame:IsVisible()")
             .unwrap(),
-        "and the picker wears its opacity slider — B246's 'background slider'"
+        "and the picker wears its opacity slider — the chat window's 'background slider'"
     );
     assert_eq!(
         s.eval::<f64>("return OpacitySliderFrame:GetValue()")

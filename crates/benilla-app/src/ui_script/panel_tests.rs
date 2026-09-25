@@ -45,7 +45,7 @@ fn shipped_gossip_frame_drives_end_to_end() {
     assert_eq!(
         load_xml(&s, "Interface\\FrameXML\\GossipFrame.xml"),
         43,
-        "the stock file's own shape (1751) — ours materialized 41"
+        "the stock file's own shape — ours materialized 41"
     );
 
     s.resolve();
@@ -961,7 +961,7 @@ fn an_addons_own_frame_registered_in_uipanelwindows_takes_the_left_slot() {
 /// The registry rows as `UIParent.lua:14-50` writes them. An unregistered frame opens with a bare
 /// `Show` and takes no slot (`:658-661`), so a missing row lets the next panel seat over it.
 #[test]
-fn the_1507_registry_rows_match_the_reference_bytes() {
+fn the_panel_registry_rows_match_the_reference_bytes() {
     let _data = benilla_formats::wow_data_or_skip!();
     let s = UiScript::new().unwrap();
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");

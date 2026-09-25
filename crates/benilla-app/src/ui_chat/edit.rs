@@ -159,7 +159,7 @@ impl ChannelState {
             Some(mask) => *mask |= bit,
             // No join precedes the cache loader, so this is a broken ordering.
             None if bit != 0 => warn!(
-                "chat: {name:?} confirmed joined before the chat cache seated the zone mask — bit                  {bit:#x} dropped"
+                "chat: {name:?} joined before the zone mask was seated — bit {bit:#x} dropped"
             ),
             None => {}
         }

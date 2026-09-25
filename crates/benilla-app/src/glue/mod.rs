@@ -451,7 +451,7 @@ mod tests {
         assert_eq!(
             colour(&app),
             Color::WHITE,
-            "hover whitens it (the ref's HighlightFont)"
+            "hover whitens it (the reference's HighlightFont)"
         );
 
         app.world_mut().get_mut::<GlueDisabled>(button).unwrap().0 = true;
@@ -461,7 +461,7 @@ mod tests {
             Color::WHITE,
             "a disabled button does not highlight"
         );
-        assert_ne!(colour(&app), GOLD, "it grays (the ref's GlueFontDisable)");
+        assert_ne!(colour(&app), GOLD, "it grays (the stock GlueFontDisable)");
     }
 
     #[test]

@@ -513,7 +513,7 @@ fn debug_panel_ui(
                                 egui::Slider::new(&mut sound_cfg.ambience, 0.0..=1.0)
                                     .text("ambience"),
                             );
-                            ui.checkbox(&mut sound_cfg.limiter, "output limiter (1551)");
+                            ui.checkbox(&mut sound_cfg.limiter, "output limiter");
                             ui.separator();
                             ui.label("kit probe: a SoundEntries id or name");
                             ui.text_edit_singleline(&mut s.kit_query);

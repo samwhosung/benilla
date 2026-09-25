@@ -55,7 +55,7 @@ const VERDICTS: &[(&str, Verdict)] = &[
     (
         "CursorLeft",
         Open(
-            "the cover READS it rather than taking it (decision 2090): a `None` in the window's \
+            "the cover READS it rather than taking it: a `None` in the window's \
              position field is either winit's departure or the cover's own blank, and the hand-back \
              must not confuse them — restoring the stash over a pointer the player took out of the \
              window would warp it back in. Draining it would blind the gate to its own signal.",

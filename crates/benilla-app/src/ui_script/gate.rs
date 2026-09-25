@@ -59,7 +59,7 @@ pub(crate) fn trace(feed: &'static str, inputs: &[(&str, bool)]) {
 pub(crate) fn audit_push(gate_closed: bool, feed: &str, what: &str) {
     assert!(
         !gate_closed,
-        "feed gate audit (1439): {feed} pushed {what} on a CLOSED gate — \
+        "feed gate audit: {feed} pushed {what} on a CLOSED gate — \
          an input is missing from its gate"
     );
 }

@@ -2342,7 +2342,7 @@ mod tests {
         assert_eq!(
             current_speed(&unfilled, f::FORWARD | f::WALK_MODE),
             0.0,
-            "no fallback: `min(walk, run)` with walk 0 is 0 (decision 1759)"
+            "no fallback: `min(walk, run)` with walk 0 is 0"
         );
         assert_eq!(
             current_speed(&unfilled, f::FORWARD),

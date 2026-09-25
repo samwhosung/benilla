@@ -577,9 +577,9 @@ mod tests {
                     (&feed[0], &feed[1]),
                     (CastBarEdge::Stop, CastBarEdge::Interrupted)
                 ),
-                "the bar edges are the ref's own two-step at RTT→0 — STOP (arms the flash \
-                 overlay) then the red INTERRUPTED (the echo's repaint: hold, burst, fade); \
-                 the keyed reap silences the real echo (0449/0454)"
+                "the bar edges are the reference's own two-step at RTT→0 — STOP (arms the \
+                 flash overlay) then the red INTERRUPTED (the echo's repaint: hold, burst, fade); \
+                 the keyed reap silences the real echo"
             );
             let self_e = app.world().resource::<GuidIndex>().0[&10];
             assert!(
@@ -742,7 +742,7 @@ mod tests {
                     rx.try_recv(),
                     Ok(crate::net::ClientCommand::CancelAutoRepeat)
                 ),
-                "the auto-repeat cancel ships first — the ref's priority branch"
+                "the auto-repeat cancel ships first — the reference's priority branch"
             );
             assert!(rx.try_recv().is_err(), "the cast survives the first press");
             assert!(app.world().resource::<AutoRepeatActive>().0.is_none());
@@ -823,8 +823,8 @@ mod tests {
                     app.world().resource::<CastBarFeed>().0[..],
                     [CastBarEdge::Stop]
                 ),
-                "the ref's `0x152` STOP and nothing else: no red INTERRUPTED for a spell that \
-                 never opened a bar"
+                "the reference's `0x152` STOP and nothing else: no red INTERRUPTED for a \
+                 spell that never opened a bar"
             );
         }
 

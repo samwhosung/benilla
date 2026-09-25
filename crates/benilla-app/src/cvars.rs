@@ -153,7 +153,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
         crate::realmlist::CVAR_REALMLIST,
         crate::realmlist::DEFAULT_REALMLIST,
         "us.logon.worldofwarcraft.com:3724",
-        "1667: that host has not resolved since 2019, so shipping it makes every first launch a \
+        "that host has not resolved since 2019, so shipping it makes every first launch a \
          DNS failure; benilla dials the machine it is running on",
     ),
     // `autoClearAFK` (`0x5e24d4`, "1" `0x82e748`, handle `[0xc4d68c]` set at `0x5e24ef`, read at
@@ -183,9 +183,9 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "SoundReverb",
         "0",
         "1",
-        "1153: the reference's reverb is EAX-over-hardware and that hardware has not existed \
-         since Vista, so \"1\" would ship audio the real client has never actually produced \
-         (B236)",
+        "the reference's reverb is EAX-over-hardware, and that hardware has not existed since \
+         Vista, so \"1\" would ship audio the real client has never actually produced on any \
+         machine a player runs today",
     ),
     // FMOD 3's mix-ahead buffer in ms (`0x4571ca`, flags 2: read once at sound init); here it sizes
     // the render thread's ring ahead of the IO callback (`sound::output`). `0x457520` registers
@@ -199,8 +199,8 @@ pub(crate) const REGISTERED: &[Registered] = &[
     ours(
         "SoundOutputLimiter",
         "1",
-        "1551: benilla's own — the reference's FMOD 3 mix needs no such DSP; we sum into f32 \
-         behind a hard clamp, and every WoW SFX is mastered to full scale",
+        "benilla's own — the reference sums at full scale and clips; every WoW SFX is mastered \
+         to full scale, so overlapping kits need a limiter to keep from distorting",
     ),
     overridden(
         "uiScale",
@@ -238,7 +238,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "autoSelfCast",
         "1",
         "0",
-        "1745: with it off, an unbindable friendly cast falls into the reference's \
+        "with it off, an unbindable friendly cast falls into the reference's \
          targeting-cursor machine, which is unmodeled — leaving no path at all. Flip when that \
          machine lands",
     ),
@@ -312,7 +312,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
     ours(
         "autoLootDefault",
         "0",
-        "0961: 1.12 has no auto-loot CVar at all — vanilla offers only the shift gesture, so OFF \
+        "1.12 has no auto-loot CVar at all — vanilla offers only the shift gesture, so OFF \
          IS the reference's own behaviour; the spelling is era's",
     ),
     // The overhead-name gates, registered at `0x6c7470` into mask `0xce8720`: `UnitNamePlayer`
@@ -346,7 +346,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "frillDensity",
         "32",
         "16",
-        "1649/1804: the reference's registered 16 is stop 0 and its post-`hwDetect` 24 is on no \
+        "the reference's registered 16 is stop 0 and its post-`hwDetect` 24 is on no \
          stop at all, so every stop diverges; Medium (32) is the nearest one no sparser than a \
          fresh install, and erring sparse is the worse failure for ground cover",
     ),
@@ -504,7 +504,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "gxApi",
         "",
         "direct3d",
-        "2151: descriptive, not a selector — benilla renders through wgpu, which has no D3D9 \
+        "descriptive, not a selector — benilla renders through wgpu, which has no D3D9 \
          backend and no chooser; the value is the live adapter's own and is never persisted",
     )
     .latched(),
@@ -524,7 +524,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "gxResolution",
         "1600x900",
         "640x480",
-        "1627: narrowed to the WINDOWED size only — fullscreen is the monitor's own and we expose \
+        "narrowed to the WINDOWED size only — fullscreen is the monitor's own and we expose \
          no mode list, and 640x480 is not a window anyone would ship a client at",
     )
     .latched(),
@@ -533,7 +533,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
     ours(
         "boothHalfRate",
         "1",
-        "1444/1607: benilla's own — the reference draws its doll inside the main pass and has no \
+        "benilla's own — the reference draws its doll inside the main pass and has no \
          second view to rate-limit",
     ),
     // `gxMultisample` (`0x63a950`, flags 3). The reference formats its default from field 21 of the
@@ -548,7 +548,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "gxColorBits",
         "32",
         "16",
-        "1643: these describe, they do not steer — the pair is our swapchain's own, and every \
+        "these describe, they do not steer — the pair is our swapchain's own, and every \
          format `MsaaFormats` publishes carries it",
     )
     .latched(),
@@ -556,7 +556,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "gxDepthBits",
         "32",
         "16",
-        "1643: as `gxColorBits` — the depth half of the same descriptive pair",
+        "as `gxColorBits` — the depth half of the same descriptive pair",
     )
     .latched(),
     // `trilinear` and `anisotropic`, over `benilla_assets::TexFilterSetting` (`tex_filter.rs`
@@ -572,7 +572,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "trilinear",
         "1",
         "0",
-        "1645: `hwDetect` sets it from `VideoHardware.dbc` field 9 before the first frame, and \
+        "`hwDetect` sets it from `VideoHardware.dbc` field 9 before the first frame, and \
          that field is 1 on both fallback rows an unlisted modern GPU can reach — measured on the \
          reference's own `Logs/gx.log` (`videoID: 170`)",
     ),
@@ -587,7 +587,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "weatherDensity",
         "3",
         "2",
-        "2181: every precipitation rate in `benilla-world`'s own precipitation module was \
+        "every precipitation rate in `benilla-world`'s own precipitation module was \
          derived and graded against the reference install's own apitrace captures, and that \
          install runs \
          `SET weatherDensity \"3\"` (K = 1.0) — so 3 is the value a benilla-vs-reference \
@@ -608,7 +608,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
     ours(
         "renderScale",
         "1",
-        "1639: benilla's own — the reference has no off-screen buffer to hang a resolution dial \
+        "benilla's own — the reference has no off-screen buffer to hang a resolution dial \
          on; its nearest equivalent, `gxResolution`, drops the interface with the world",
     ),
     // benilla's own: `/console fpsJournal 1` appends a per-second row of position, frame cost and
@@ -617,7 +617,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
     ours(
         "fpsJournal",
         "0",
-        "2008: benilla's own — 1.12 has no player-side perf log; its nearest thing is the \
+        "benilla's own — 1.12 has no player-side perf log; its nearest thing is the \
          Ctrl+R framerate label, a number with no file behind it",
     ),
     // `lastCharacterIndex` (`0x402d93`, "0" `0x82e570`, category 4, handle `[0x882674]`), help
@@ -1385,7 +1385,7 @@ pub(crate) fn fold_dying_vm_cvars(world: &mut World) {
 
 /// The file's header comment.
 const HEADER: &str = "\
-# benilla local config (decision 0954) — CVar values that moved off their defaults.
+# benilla local config — CVar values that moved off their defaults.
 # Managed by the client; hand edits are read on next launch and preserved on save.
 ";
 
@@ -1559,12 +1559,12 @@ mod tests {
         );
         assert!(
             !sound.background_sound,
-            "the reference goes quiet in the background and offers no way out (decision 1847)"
+            "the reference goes quiet in the background and offers no way out"
         );
         assert_eq!(d["SoundReverb"] != 0.0, sound.reverb);
         assert_eq!(d["SoundOutputLimiter"] != 0.0, sound.limiter);
-        assert!(sound.limiter, "the output limiter ships on (decision 1551)");
-        assert!(!sound.reverb, "zone reverb ships off (decision 1153)");
+        assert!(sound.limiter, "the output limiter ships on");
+        assert!(!sound.reverb, "zone reverb ships off");
         assert_eq!(d["uiScale"], DEFAULT_UI_SCALE);
         // `ViewDistance::default()` reads `$WOW_FARCLIP`, so this is the env-less literal.
         assert_eq!(d["farclip"], 350.0);
@@ -2610,13 +2610,13 @@ mod tests {
         const LUA_ONLY: &[(&str, &str)] = &[
             (
                 "statusBarText",
-                "TextStatusBar.lua reads it on CVAR_UPDATE (1140)",
+                "TextStatusBar.lua reads it on each CVAR_UPDATE",
             ),
             (
                 "UberTooltips",
-                "GameTooltip's binding-line gate, stock and pfUI (1316)",
+                "GameTooltip's binding-line gate, stock and pfUI",
             ),
-            ("gxApi", "pfUI's system tooltip names the backend (2151)"),
+            ("gxApi", "pfUI's system tooltip names the backend"),
             (
                 "useUiScale",
                 "UIOptionsFrame.lua and OptionsFrame.lua branch on it to gate the uiScale slider",

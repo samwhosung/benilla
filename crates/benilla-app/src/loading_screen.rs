@@ -730,7 +730,7 @@ mod tests {
         assert_eq!(
             screen.tip_edge,
             Some(TipEdge::Pick),
-            "and the tip 2077 just picked survives it — a raise is the only thing that could \
+            "and the tip just picked survives it — a raise is the only thing that could \
              have cleared it, and no raise happened"
         );
         assert!(

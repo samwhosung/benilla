@@ -549,12 +549,12 @@ mod session_end_tests {
         assert!(
             p.modes == Default::default(),
             "the granted modes belonged to the mover that just ended — a root that survives \
-             `/logout` is B306: the character re-enters the world and WASD is dead"
+             `/logout` means the character re-enters the world and WASD is dead"
         );
         assert!(
             *p == Player::default(),
             "and nothing else survives either: the session boundary returns the resource to the \
-             state `player::setup` inserts at boot (1542)"
+             state `player::setup` inserts at boot"
         );
     }
 

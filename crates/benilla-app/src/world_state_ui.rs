@@ -324,8 +324,8 @@ mod tests {
 
         assert!(
             build(&catalog, &states, false).is_empty(),
-            "no zone-defense channel — the world-PvP rows are all Type 1 (this IS report B190's \
-             second half, and its least obvious gate)"
+            "no zone-defense channel — the world-PvP rows are all Type 1 (the Type gate, the \
+             least obvious of the gates here)"
         );
 
         let rows = build(&catalog, &states, true);

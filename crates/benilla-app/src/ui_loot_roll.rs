@@ -624,7 +624,7 @@ mod tests {
     #[test]
     fn line_table_covers_every_shape() {
         let other = Some("Bob");
-        let me = Some("Sam");
+        let me = Some("Aldric");
         // (packet, name, is_self, expected)
         let cases: &[(LootRoll, Option<&str>, bool, &str)] = &[
             // The three votes (`Group.cpp:970-990`), which have _SELF forms.
@@ -698,7 +698,7 @@ mod tests {
         for roll_type in [roll_vote::NEED, roll_vote::GREED] {
             let got = format_line(
                 &RollLine::Announce(announce(1, 57, roll_type)),
-                Some("Sam"),
+                Some("Aldric"),
                 true, // is_self
                 LINK,
                 true,

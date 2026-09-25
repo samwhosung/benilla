@@ -837,7 +837,7 @@ fn drive_capture(
                     {
                         error!(
                             "capture: settled image is EMPTY — every color channel is zero; the \
-                             scene rendered nothing (1373)"
+                             scene rendered nothing"
                         );
                     }
                 }

@@ -245,7 +245,7 @@ fn hovering_the_meter_shows_the_live_latency() {
     assert_eq!(
         newbie_line_color(&mut s),
         Some([1.0, 0.82, 0.0, 1.0]),
-        "NORMAL_FONT_COLOR (Fonts.xml l.37)"
+        "NORMAL_FONT_COLOR (Fonts.xml l.15)"
     );
 
     // Still hovering: the next beat rewrites the plate (`MainMenuBar.xml:388`).

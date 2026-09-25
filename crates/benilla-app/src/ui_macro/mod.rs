@@ -85,7 +85,7 @@ fn load_icon_catalog(
             info!("ui_macro: {} macro icons in the chooser", icons.len());
             script.set_macro_icons(icons);
         }
-        Err(e) => error!("ui_macro: SpellIcon.dbc failed — the icon chooser is empty: {e:#}"),
+        Err(e) => error!("ui_macro: no Interface\\Icons\\ listing — the chooser is empty: {e:#}"),
     }
 }
 

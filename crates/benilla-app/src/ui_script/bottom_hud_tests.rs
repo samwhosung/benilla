@@ -89,9 +89,9 @@ fn no_shipped_file_declares_its_own_copy_of_a_managed_offset() {
     }
     assert!(
         offences.is_empty(),
-        "a managed offset is owned by UIParent.xml's manage pass and may only be READ elsewhere \
+        "a managed offset is owned by UIParent.lua's manage pass and may only be READ elsewhere \
          (fall back inline at the point of use — `local y = CONTAINER_OFFSET_Y or 70` — never by \
-         assigning a copy, which goes stale the moment a bar is raised; decision 1499):\n{}",
+         assigning a copy, which goes stale the moment a bar is raised):\n{}",
         offences.join("\n")
     );
 }
@@ -137,7 +137,7 @@ const BOTTOM_EXEMPT: &[(&str, &str)] = &[
         "ItemRefTooltip",
         "the reference's own answer, matched exactly (ItemRef.xml l.4): frameStrata HIGH + \
          toplevel + movable at BOTTOM +80. A linked-item window lands ABOVE the HIGH bars rather \
-         than clearing them (decision 1318), and the player drags it where they want",
+         than clearing them, and the player drags it where they want",
     ),
     (
         "ChatFrame3",
@@ -153,8 +153,8 @@ const BOTTOM_EXEMPT: &[(&str, &str)] = &[
         "the world map's full-screen cover (WorldMapFrame.xml) — TOPLEFT+BOTTOMRIGHT is how it \
          fills the screen, not a seat in the contested band, and clearance is the opposite of \
          what it wants: a blackout lifted over the action bars would leave a strip of world \
-         showing under the map. It joins this population at all only because decision 1757 took \
-         its parent=UIParent away, which is what lets it survive the UIParent:Hide() that \
+         showing under the map. It joins this population at all only because it has no \
+         parent=UIParent, which is what lets it survive the UIParent:Hide() that \
          showing the map performs",
     ),
 ];
@@ -194,8 +194,8 @@ fn every_bottom_anchored_top_level_frame_is_accounted_for() {
         unaccounted.is_empty(),
         "these top-level frames anchor to the screen's bottom edge but nothing decides their \
          clearance over the action bars. Give each one a row in \
-         UIPARENT_MANAGED_FRAME_POSITIONS (the stock UIParent.lua's table, since 1988), or add \
-         it to BOTTOM_EXEMPT here with the reason it needs no row (decision 1499):\n{}",
+         UIPARENT_MANAGED_FRAME_POSITIONS (the stock UIParent.lua's table), or add \
+         it to BOTTOM_EXEMPT here with the reason it needs no row:\n{}",
         unaccounted.join("\n")
     );
 }
@@ -328,7 +328,7 @@ fn no_bottom_band_frame_overlaps_a_raised_bar() {
                     !overlaps(bar_rect, v),
                     "with {raised:?} raised, {victim} {v:?} overlaps {bar} {bar_rect:?} — \
                      something in the bottom band is not clearing the bars. Its seat must come \
-                     from UIParent_ManageFramePositions, read fresh (decision 1499)."
+                     from UIParent_ManageFramePositions, read fresh."
                 );
             }
         }

@@ -267,7 +267,7 @@ fn drive_shield(
                     "probe-shield: GM mode is off — turning it back ON, so a parked body is not \
                      permanently mobbed. Readings taken now are faction-35 readings and are wrong \
                      for anything about hostility, colour, threat, aggro, damage or timers \
-                     (0649/0657) — set WOW_GM=off for those, which is safe: the shield holds."
+                     — set WOW_GM=off for those, which is safe: the shield holds."
                 );
                 shield.steps.push(".gm on".into());
             }

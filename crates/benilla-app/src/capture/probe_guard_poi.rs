@@ -179,7 +179,7 @@ fn guard_poi_probe(
                     format!("POIIcons cell {} at its true spot", poi.icon)
                 }
                 true => "nothing (in range, no Flags&2)".to_string(),
-                false => "the gold guide arrow on the rim, pointing at it (1519)".to_string(),
+                false => "the gold guide arrow on the rim, pointing at it".to_string(),
             };
             info!(
                 "PROBE guardpoi: marker \"{}\" at ({:.1}, {:.1}) icon {} flags {} — {d:.1} yd away \

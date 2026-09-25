@@ -795,8 +795,8 @@ mod tests {
         assert!(
             missing.is_empty(),
             "custom pipeline lanes with no pipe_warm contributor: {missing:?} — a lane the \
-             menagerie can't see compiles its pipelines live on first draw (decisions \
-             0837/0938/0958)"
+             menagerie can't see compiles its pipelines live on first draw, a render-thread \
+             stall"
         );
     }
 
@@ -896,7 +896,7 @@ mod tests {
             missing.is_empty(),
             "material lanes with no pipe_warm contributor: {missing:?} — every registered \
              lane's pipelines compile behind the loading cover, or its first sight is a live \
-             render-thread stall (decisions 0837/0937/0938/0958)"
+             render-thread stall"
         );
     }
 }

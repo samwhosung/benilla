@@ -618,14 +618,14 @@ mod tests {
         }
 
         // One shared height would put a gnome's rest line above her head.
-        let pre_0645 = rest_cap(crate::player::DEFAULT_COLLISION_HEIGHT);
+        let shared_rest = rest_cap(crate::player::DEFAULT_COLLISION_HEIGHT);
         assert!(
-            pre_0645 > GNOME_FEMALE,
-            "the old constant rest line ({pre_0645}) must sit above a {GNOME_FEMALE}-yd gnome — \
+            shared_rest > GNOME_FEMALE,
+            "the old constant rest line ({shared_rest}) must sit above a {GNOME_FEMALE}-yd gnome — \
              that was the bug, and if this ever fails the test below is no longer testing it"
         );
         assert!(
-            pre_0645 - GNOME_FEMALE > 0.3,
+            shared_rest - GNOME_FEMALE > 0.3,
             "…by a third of a yard of water over her head, not a rounding error"
         );
     }

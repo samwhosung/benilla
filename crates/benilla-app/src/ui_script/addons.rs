@@ -2126,7 +2126,7 @@ mod tests {
         assert_eq!(
             script.eval::<bool>("return IsAddOnLoaded('Base') == 1").ok(),
             Some(true),
-            "a startup-loaded addon must read as loaded, or every LoadOnDemand dependent of it              answers DEP_NOT_DEMAND_LOADED"
+            "a startup-loaded addon reads as loaded, else a dependent answers DEP_NOT_DEMAND_LOADED"
         );
         assert_eq!(
             script.eval::<bool>("return OptsRan == nil").ok(),

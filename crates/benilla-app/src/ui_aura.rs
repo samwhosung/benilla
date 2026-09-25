@@ -922,7 +922,7 @@ mod tests {
         assert_eq!(
             denied.iter().map(|a| a.spell_id).collect::<Vec<_>>(),
             [22766],
-            "a hostile creature shows its debuffs and NOT its buffs — the B216 divergence"
+            "a hostile creature shows its debuffs and NOT its buffs — `UnitBuff`'s unit gate"
         );
         assert!(denied.iter().all(|a| !a.helpful));
 

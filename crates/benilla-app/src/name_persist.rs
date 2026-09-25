@@ -238,7 +238,7 @@ mod tests {
         );
         assert!(
             names.generation() > before,
-            "a landed record moves the counter the gated feeds watch (1439)"
+            "a landed record moves the counter the gated feeds watch"
         );
 
         let _ = std::fs::remove_dir_all(&tmp);

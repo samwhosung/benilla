@@ -91,7 +91,7 @@ fn shipped_loot_frame_drives_end_to_end() {
     assert_eq!(
         load_xml(&s, "Interface\\FrameXML\\LootFrame.xml"),
         34,
-        "the STOCK file's own shape (1751): the window, its portrait overlay and Next/Prev art, \
+        "the STOCK file's own shape: the window, its portrait overlay and Next/Prev art, \
          four LootButton rows each carrying ItemButtonTemplate's sub-frames, the two pagers, the \
          close button, and GroupLootDropDown with the dropdown template's own children. Our \
          transcription materialized 10 — a count is a fingerprint of a file, not a property of a \

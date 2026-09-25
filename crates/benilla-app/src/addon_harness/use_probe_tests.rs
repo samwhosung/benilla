@@ -202,7 +202,7 @@ fn the_use_column_can_fail() {
 /// so it is `untouched`. Bagnon's item slots must be reachable (`driven >= 1` on a `BagnonItem*`
 /// frame); whether they raise is not asserted here.
 #[test]
-fn the_directors_two_verified_addons_are_reachable_and_omnicc_is_not_broken() {
+fn bagnon_is_reachable_and_omnicc_is_not_broken() {
     benilla_formats::wow_data_or_skip!();
     // A skip the gate can refuse (`benilla_formats::install`).
     let corpus = benilla_formats::addon_corpus_or_skip!();
@@ -222,7 +222,7 @@ fn the_directors_two_verified_addons_are_reachable_and_omnicc_is_not_broken() {
     assert_ne!(
         omni.used.verdict(),
         Used::Raised,
-        "!OmniCC is on the director's screen and works; a column that calls it broken is broken \
+        "!OmniCC draws in the live client and works; a column that calls it broken is broken \
          itself: {:?}",
         omni.used.errors
     );
@@ -230,7 +230,7 @@ fn the_directors_two_verified_addons_are_reachable_and_omnicc_is_not_broken() {
     let bagnon = row("Bagnon");
     assert!(
         bagnon.used.driven >= 1,
-        "Bagnon draws bag slots the director can put a cursor on; the probe must be able to reach \
+        "Bagnon draws bag slots a player can put a cursor on; the probe must be able to reach \
          at least one (drew={:?} touchable={})",
         bagnon.render.frames,
         bagnon.used.touchable
@@ -241,7 +241,7 @@ fn the_directors_two_verified_addons_are_reachable_and_omnicc_is_not_broken() {
             .frames
             .iter()
             .any(|f| f.starts_with("BagnonItem")),
-        "…and the thing it touched must be a SLOT — the exact widget the director hovered: {:?}",
+        "…and the thing it touched must be a SLOT — the exact widget a player hovers: {:?}",
         bagnon.used.frames
     );
 }

@@ -155,7 +155,7 @@ mod tests {
             offenders.is_empty(),
             "the probe harness must schedule on the wall clock (`ProbeClock`), not the virtual \
              clock — it is clamped to max_delta (250 ms), so any hitching leg silently drifts every \
-             `<secs>` knob out from under the operator (decision 0789). Offenders:\n  {}",
+             `<secs>` knob out from under the operator. Offenders:\n  {}",
             offenders.join("\n  "),
         );
         assert!(

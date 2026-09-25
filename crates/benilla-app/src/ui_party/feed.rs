@@ -1384,7 +1384,7 @@ mod tests {
         };
         let s = member_unit_state(&m, Some(&ghost), None, &GroupState::default(), None, None);
         assert!(s.ghost);
-        assert!(!s.dead, "a released ghost is not `dead` — the 0308 §1 trio");
+        assert!(!s.dead, "a released ghost is not `dead` — only a ghost");
 
         // The overlay ORs: a roster byte carrying the bit still wins over a record without it.
         let stale = GroupMemberEntry {
@@ -1607,10 +1607,10 @@ mod tests {
         }
 
         let mut names = NameCache::default();
-        names.insert_player(0x5E1F, "Sam".into(), None);
+        names.insert_player(0x5E1F, "Kel".into(), None);
         assert_eq!(
             raid_name_of(&group, me, &names, 0x5E1F).as_deref(),
-            Some("Sam")
+            Some("Kel")
         );
         assert_eq!(
             raid_name_of(&group, me, &names, 0xA11CE).as_deref(),
@@ -1622,7 +1622,7 @@ mod tests {
             raid_guid_for_name(&group, me, &names, "alice"),
             Some(0xA11CE)
         );
-        assert_eq!(raid_guid_for_name(&group, me, &names, "SAM"), Some(0x5E1F));
+        assert_eq!(raid_guid_for_name(&group, me, &names, "KEL"), Some(0x5E1F));
         assert_eq!(raid_guid_for_name(&group, me, &names, "Nobody"), None);
 
         // Outside a raid all are empty, so a raid verb in a party sends nothing.
@@ -1636,7 +1636,7 @@ mod tests {
         let mut group = GroupState::default();
         let me = Some(0x5E1Fu64);
         let mut names = NameCache::default();
-        names.insert_player(0x5E1F, "Sam".into(), None);
+        names.insert_player(0x5E1F, "Kel".into(), None);
         synthetic_raid(&mut group, &mut names, me);
         assert!(group.test, "the synthetic raid arms the sandbox");
         assert_eq!(group.group_type, GROUPTYPE_RAID);

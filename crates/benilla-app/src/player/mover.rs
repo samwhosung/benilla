@@ -1005,7 +1005,7 @@ mod tests {
         // The blocking edge is low on the bevel, inside the cone, so this rides rather than pops.
         assert!(
             frames[0].0 < 0.3,
-            "a 0.91 yd gain in one frame is the teleport 1126 exists to avoid: {frames:?}"
+            "a 0.91 yd gain in one frame is the teleport the ride avoids: {frames:?}"
         );
     }
 
@@ -1832,7 +1832,7 @@ mod tests {
             wire,
             (true, JUMP_SPEED),
             "`force = 0` skips that test and takes off on the land seed `0xc0fe93d8` (the launch \
-             speed, not the post-gravity `vel_y` — 1740)"
+             speed, not the post-gravity `vel_y`)"
         );
     }
 
@@ -2094,7 +2094,7 @@ mod tests {
         assert_eq!(
             vel_y, PUSH.y,
             "the vertical is the server's take-off speed, not JUMP_SPEED ({JUMP_SPEED}) — read off \
-             `launch_vz`, because `vel_y` has already taken this frame's gravity step (1740)"
+             `launch_vz`, because `vel_y` has already taken this frame's gravity step"
         );
         assert_eq!(
             horiz,

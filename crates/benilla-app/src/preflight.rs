@@ -143,8 +143,8 @@ fn camera_2d_msaa_agrees(
              counts` the frame it goes active. Bevy keys the Core2d DEPTH texture on the target \
              alone (core_2d::prepare_core_2d_depth_textures) but the COLOUR target on the sample \
              count too, so they share one depth attachment and cannot share a colour one. Usually \
-             the cause is a camera that never named an Msaa: silence is Sample4, not off \
-             (decisions 1628, 1659).",
+             the cause is a camera that never named an Msaa: silence is Sample4, not off, so \
+             name one on every camera.",
             other_label.as_deref().unwrap_or("an unnamed Camera2d"),
             other_samples,
             label.as_deref().unwrap_or("an unnamed Camera2d"),
@@ -302,7 +302,7 @@ fn findings(
         ShieldReport::Disabled => out.push(
             "THE PROBE SHIELD IS OFF (WOW_GOD=off) — this character CAN die, so an unattended run \
              can leave a corpse for the next session. Deliberate for a death-arc test; unset \
-             WOW_GOD for anything else (decision 0677)."
+             WOW_GOD for anything else."
                 .into(),
         ),
         ShieldReport::Unconfirmed => out.push(
@@ -321,17 +321,17 @@ fn findings(
              Any hostility, reaction-colour, nameplate, threat, aggro, damage or drowning reading \
              taken now is wrong. It ALSO suspends the INDOOR DISMOUNT: \
              `CheckAreaExploreAndOutdoor` drops outdoor-only auras only `if (… && \
-             !IsGameMaster())`, so a GM rides into a building and stays mounted (decision 0934). {}",
+             !IsGameMaster())`, so a GM rides into a building and stays mounted. {}",
             match shield {
                 // The default on a probe body, so this warning shows on most runs.
                 ShieldReport::Arming | ShieldReport::Armed =>
                     "This is the default. Re-run with WOW_GM=off for those readings — safe, \
-                     because the probe shield (decision 0677) keeps the body alive without it.",
+                     because the probe shield keeps the body alive without it.",
                 // `WOW_GM` does not reach a non-probe body, and vmangos persists GM mode in
                 // `characters.extra_flags` bit 0, restored at login by `GM.LoginState = 2`.
                 ShieldReport::NotOurs =>
                     "WOW_GM does not reach this body — the shield only ever commands probe accounts \
-                     (0677) — so the way out is typing `.gm off` yourself. It persists across \
+                     — so the way out is typing `.gm off` yourself. It persists across \
                      logins (vmangos GM.LoginState = 2), which is why it is on now.",
                 _ =>
                     "Re-run with WOW_GM=off for those readings. Note the probe shield is NOT up on \

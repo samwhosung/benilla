@@ -64,7 +64,7 @@ fn the_self_menu_row_gates_on_the_binding_and_confirms_before_sending() {
     s.run(
         r#"
         -- The stock raid pane concatenates this into each of its eight group headers inside
-        -- their own OnLoad, so it has to exist before the addon loads (1874).
+        -- their own OnLoad, so it has to exist before the addon loads.
         GROUP = "Group"
         RESET_INSTANCES = "Reset all instances"
         CONFIRM_RESET_INSTANCES = "Do you really want to reset all of your instances?"

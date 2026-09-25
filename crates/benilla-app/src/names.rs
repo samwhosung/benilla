@@ -818,8 +818,8 @@ mod tests {
     fn invalidating_a_player_makes_the_next_resolve_ask_again() {
         let (cmds, rx) = commands();
         let mut cache = NameCache::default();
-        cache.insert_player(0x11, "Sam".into(), Some((1, 2, 0)));
-        assert_eq!(cache.resolve(0x11, &cmds), Some("Sam"));
+        cache.insert_player(0x11, "Aldric".into(), Some((1, 2, 0)));
+        assert_eq!(cache.resolve(0x11, &cmds), Some("Aldric"));
         assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)), "no ask");
 
         let before = cache.generation();

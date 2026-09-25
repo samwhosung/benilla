@@ -141,7 +141,7 @@ fn the_render_column_can_fail() {
 /// `!OmniCC` paints through an anonymous frame parented to an existing cooldown, an overlay;
 /// Bagnon builds its own window of item-slot buttons.
 #[test]
-fn the_directors_two_verified_addons_come_out_on_opposite_sides() {
+fn omnicc_and_bagnon_come_out_on_opposite_sides() {
     benilla_formats::wow_data_or_skip!();
     // A skip the gate can refuse (`benilla_formats::install`).
     let corpus = benilla_formats::addon_corpus_or_skip!();
@@ -162,7 +162,7 @@ fn the_directors_two_verified_addons_come_out_on_opposite_sides() {
     assert_eq!(
         row("!OmniCC").render.drew(),
         Drew::Overlay,
-        "!OmniCC's countdown text is on the director's screen; it paints via an ANONYMOUS frame \
+        "!OmniCC's countdown text draws in the live client; it paints via an ANONYMOUS frame \
          parented to a cooldown of ours, which is precisely what a name-based check cannot see"
     );
 
@@ -177,7 +177,7 @@ fn the_directors_two_verified_addons_come_out_on_opposite_sides() {
             .frames
             .iter()
             .any(|f| f.starts_with("BagnonItem")),
-        "…and the slots are what it draws — the exact thing the director could not see: {:?}",
+        "…and the slots are what it draws — the item slots a player sees: {:?}",
         row("Bagnon").render.frames
     );
 }

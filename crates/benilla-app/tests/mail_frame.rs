@@ -607,7 +607,7 @@ fn an_auction_invoice_renders_as_a_receipt() {
     assert_eq!(
         text(&s, "OpenMailBodyText"),
         "nil",
-        "an invoice has no letter body at all — `GetInboxText` nils it (1527), so the receipt has \
+        "an invoice has no letter body at all — `GetInboxText` nils it, so the receipt has \
          nothing to sit on top of"
     );
     assert!(s.take_errors().is_empty());
@@ -635,7 +635,7 @@ fn an_auction_invoice_renders_as_a_receipt() {
         text(&s, "OpenMailInvoiceBuyMode"),
         "nil",
         "the buy-mode line is blank on a bid win, and a blank FontString reads back nil — \
-         `FontString:GetText 0x79d690` substitutes (decision 2110); this helper `tostring`s it"
+         `FontString:GetText 0x79d690` substitutes; this helper `tostring`s it"
     );
     assert_eq!(money(&s, "OpenMailTransactionAmountMoneyFrame"), "9000");
     for gone in [

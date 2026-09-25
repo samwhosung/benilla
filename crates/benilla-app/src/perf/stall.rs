@@ -154,7 +154,7 @@ fn watchdog(dir: Option<std::path::PathBuf>) {
                     eprintln!(
                         "stall-sample: main thread stale {age} ms — NOT sampled: an audio \
                          device is open, and `sample` suspending the process is itself a \
-                         crackle (1857). `WOW_STALL_SAMPLE=force` to sample anyway."
+                         crackle. `WOW_STALL_SAMPLE=force` to sample anyway."
                     );
                     declined = true;
                 }

@@ -157,7 +157,7 @@ fn a_tooltip_content_change_costs_exactly_one_layout_solve() {
         s.layout_derivations() - derives_before,
         0,
         "a settled tooltip whose CONTENT changes must not re-derive the layout graph — the line \
-         pool is already built, so nothing structural is happening (decision 1388)"
+         pool is already built, so nothing structural is happening"
     );
     // The answers landed in that one solve, or the plate would lag its text by a frame.
     assert_eq!(
@@ -199,7 +199,7 @@ fn the_settled_shipped_ui_costs_no_gate_walk_on_a_quiet_frame() {
         0,
         "20 idle frames of the shipped UI cost {} whole-roster gate walks — something in \
          assets/ui/ is writing a layout input every frame with nothing happening. Name it with \
-         WOW_LAYOUT_TOUCH_TRACE=<secs>:<n> on a live run (decision 1385).",
+         WOW_LAYOUT_TOUCH_TRACE=<secs>:<n> on a live run.",
         s.layout_gate_walks() - before
     );
 }
@@ -247,7 +247,7 @@ fn a_region_moving_every_frame_costs_one_gate_walk_on_the_shipped_ui() {
         assert!(
             frames < 50 && regions < 200,
             "step {step}: moving ONE region solved {frames} frames and swept {regions} regions — \
-             the scope is tracking the graph, not the change (decision 1350)"
+             the scope is tracking the graph, not the change"
         );
     }
     let walks = s.layout_gate_walks() - walks_before;
@@ -255,9 +255,9 @@ fn a_region_moving_every_frame_costs_one_gate_walk_on_the_shipped_ui() {
     assert_eq!(
         walks, 10,
         "10 frames of one moving region must cost 10 whole-roster gate walks — one each. 30 \
-         means the fingerprint is hashing the 0294 seeds again, so every solve outgrows the value \
-         it stores and neither it nor the settling walk behind it can close tier 1 (decision \
-         1385). At the shipped roster each extra walk is ~1 ms of CPU on every frame of every cast."
+         means the fingerprint is hashing the dirty seeds again, so every solve outgrows the \
+         value it stores and neither it nor the settling walk behind it can close tier 1. At the \
+         shipped roster each extra walk is ~1 ms of CPU on every frame of every cast."
     );
     assert_eq!(
         solves, 10,
@@ -323,7 +323,7 @@ fn a_region_moving_every_frame_costs_no_graph_derivation_on_the_shipped_ui() {
          re-filtered for liveness, all 10,438 anchored regions re-hashed and their edges rebuilt: \
          ~1.48 ms of CPU at the Stormwind pin, on every frame anything moves. A write site is \
          falling back to the conservative `Model::touch_layout` where it could name its node \
-         (decision 1388)."
+         instead."
     );
 }
 
@@ -458,7 +458,7 @@ fn a_tooltip_line_flipping_wrapped_to_plain_costs_no_graph_derivation() {
         "10 hovers between a wrapped line and a plain one derived the layout graph {derives} \
          times. The wrap-pin write in `tooltip::append_line` moves ONE region's explicit size and \
          must name it (`touch_layout_region`); the conservative `touch_layout` re-derives the \
-         whole roster on every hover (decision 1388)."
+         whole roster on every hover."
     );
 }
 
@@ -517,7 +517,7 @@ fn a_hover_sweep_across_owners_costs_no_graph_derivation() {
         "24 hovers across 12 owners derived the layout graph {derives} times — one per slot \
          crossed. `SetOwner` re-points ONE node's anchor and must patch that node's edges \
          (`Model::touch_layout_retarget_frame`); the conservative touch re-derives the whole \
-         roster on every slot the cursor passes over (decisions 1388, 1625)."
+         roster on every slot the cursor passes over."
     );
 }
 
@@ -575,10 +575,10 @@ fn an_action_bar_hover_sweep_costs_no_graph_derivation() {
     let derives = s.layout_derivations() - derives_before;
     assert_eq!(
         derives, 0,
-        "24 action-bar hovers derived the layout graph {derives} times. The `ClearAllPoints()` on \
-         `GameTooltip_SetDefaultAnchor`'s next line is a retarget to the EMPTY target set and must \
-         name its node like any other (decision 1630, extending 1625; 2176 moved the emptying \
-         itself off `SetOwner`'s ANCHOR_NONE arm, which the reference leaves alone)."
+        "24 action-bar hovers derived the layout graph {derives} times. `SetOwner`'s ANCHOR_NONE \
+         arm clears the anchors (`0x52fec2 call 0x767ed0`), and so does the `ClearAllPoints()` \
+         on `GameTooltip_SetDefaultAnchor`'s next line: each is a retarget to the EMPTY target \
+         set and must name its node like any other."
     );
 }
 
@@ -644,6 +644,6 @@ fn a_bag_addon_hover_sweep_costs_no_graph_derivation() {
         derives, 0,
         "24 bag-slot hovers derived the layout graph {derives} times — one per slot crossed. \
          `ClearAllPoints` drops a node's whole anchor-target set, which is a retarget onto the \
-         EMPTY set and names its node like any other (decision 2114, completing 1625/1630)."
+         EMPTY set and names its node like any other."
     );
 }

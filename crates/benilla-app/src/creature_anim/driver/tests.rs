@@ -351,7 +351,7 @@ fn relaxed_base_arms_roll_variations_and_the_shuffle_drives_them() {
     assert_eq!(
         gait(&app),
         Some(11),
-        "the settle does not release the shuffle (1655)"
+        "the settle does not release the shuffle"
     );
 
     for _ in 0..6 {
@@ -1055,7 +1055,7 @@ fn the_swim_relatch_holds_the_kick_but_a_ground_cut_freezes_it() {
     assert_eq!(
         drv(&app),
         super::super::select::Mode::Entering(super::super::select::Special::Jump),
-        "the re-latch holds the kick (0517) — the swim gait waits for its end"
+        "the re-latch holds the kick — the swim gait waits for its end"
     );
     let player = app.world().entity(unit).get::<AnimationPlayer>().unwrap();
     let kick = player
@@ -1085,7 +1085,7 @@ fn the_swim_relatch_holds_the_kick_but_a_ground_cut_freezes_it() {
     assert_eq!(
         kick.speed(),
         0.0,
-        "the ground cut is FROZEN mid-pose (0503)"
+        "the ground cut is FROZEN mid-pose: its speed is 0"
     );
 }
 
@@ -2566,7 +2566,7 @@ fn the_mount_transition_takes_bone_0_back_from_a_full_body_one_shot() {
     assert_eq!(
         playing(&app),
         Some(MOUNT),
-        "B203: the mount arm displaces the cast clip — it does not wait for it to finish"
+        "the mount arm displaces the cast clip — it does not wait for it to finish"
     );
 
     app.update();
@@ -3050,12 +3050,12 @@ fn every_shot_of_a_volley_re_arms_the_fire_clip_through_the_emote_lane() {
         assert_eq!(
             mode(&app),
             FIRING,
-            "…and the base never recomputed out of it"
+            "…and the driver has not seen the completion yet: the base is still the swing"
         );
         assert_eq!(
             gait(&app),
             None,
-            "…so the pull was not replayed between shots"
+            "…so no gait is picked yet; the recompute and the re-pull come a frame later"
         );
     }
 
@@ -3945,7 +3945,7 @@ mod base_anim_lock {
                 .get::<AnimDriver>()
                 .unwrap()
                 .started_anim,
-            "the bracket walked with its play declined — nothing started, so nothing downstream              may read a play out of the mode change (the flinch's eviction, 2076's trail edge)"
+            "the bracket's play was declined: nothing started for the flinch or the trail to read"
         );
         advance(&mut app, 16);
         assert_eq!(

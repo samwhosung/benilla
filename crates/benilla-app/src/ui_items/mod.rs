@@ -1626,7 +1626,7 @@ mod count_of_tests {
         assert_eq!(
             count_of(&store, &objs.get(), AMMO, InventoryScope::CARRIED),
             0,
-            "benilla's pre-1158 count reached neither band — the named narrowing"
+            "the carried scope reaches neither worn gear nor the keyring — the named narrowing"
         );
     }
 

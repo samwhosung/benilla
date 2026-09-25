@@ -71,7 +71,7 @@ fn bankframe_opened_shows_and_sets_the_title() {
     );
     assert!(
         !bag_open(&s, 0),
-        "the reference's bank leaves your bags alone (0561 is the vendor's, not the bank's)"
+        "the reference's bank leaves your bags alone (opening them is the vendor's, not the bank's)"
     );
     assert!(
         s.eval::<bool>("return GetLeftFrame() == BankFrame")
@@ -117,7 +117,7 @@ fn bankframe_closed_queues_close_closes_open_popouts_and_plays_the_close_kit() {
     );
     assert!(
         s.take_bank_close(),
-        "OnHide queued CloseBankFrame() — the client-side close intent (no wire opcode, decision 0604)"
+        "OnHide queued CloseBankFrame() — the client-side close intent (no wire opcode)"
     );
     assert!(
         s.eval::<bool>("return GetLeftFrame() == nil").unwrap(),

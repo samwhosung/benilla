@@ -148,8 +148,8 @@ const GAP: &[(&str, &str, &str)] = &[
         "CRAFT_UPDATE",
         "the reference commits through the 21-byte thunk 0x4f6be0 (the trainer's 0x4d8c90 shape); \
          a no-op here because the craft list is flat — the header law was never ported from \
-         TradeSkill (0446, 0530's follow-up) — so there is nothing to repaint. Whether any 1.12 \
-         craft list carries more than one group is not established: 0446 covers Enchanting, \
+         TradeSkill — so there is nothing to repaint. Whether any 1.12 \
+         craft list carries more than one group is not established: Enchanting's does not, \
          Beast Training is unchecked",
     ),
     (
@@ -168,7 +168,7 @@ const GAP: &[(&str, &str, &str)] = &[
         "SelectGossipOption",
         "GOSSIP_ENTER_CODE",
         "a coded option raises the code-entry popup in the reference (the worker 0x4e2320); here \
-         coded options are greyed and unselectable (0081 v1, `reference_ui`'s UNPRODUCED row), and \
+         coded options are greyed and unselectable (`reference_ui`'s UNPRODUCED row), and \
          vmangos's `gossip_menu_option` carries zero coded rows, so no NPC on this server reaches it",
     ),
 ];
@@ -302,7 +302,7 @@ fn every_event_the_reference_fires_from_a_verb_is_fired_by_the_verb_s_module() {
         surprises.is_empty(),
         "the reference fires these events from inside the verb, and the module that registers \
          the verb here fires nothing — the stock Lua that calls the verb for its side effect \
-         repaints nothing (2244's class). Fire it from the verb, or declare the pair: ELSEWHERE \
+         repaints nothing. Fire it from the verb, or declare the pair: ELSEWHERE \
          when a feed fires it on THIS verb's change and you read that at the feed, GAP with the \
          reason otherwise:\n  {}",
         surprises.join("\n  ")

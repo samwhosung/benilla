@@ -145,7 +145,7 @@ fn combat_text_crit_pops_and_parks() {
     let h = extracted_text_height(&mut s, "-64").expect("crit still drawn");
     assert!(
         h > 30.0 && h <= 60.0,
-        "crit pop animates the height UNCAPPED past 32 (decision 0582), got {h}"
+        "crit pop animates the height UNCAPPED past 32, got {h}"
     );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }

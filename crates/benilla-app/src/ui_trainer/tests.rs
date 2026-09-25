@@ -247,7 +247,7 @@ fn trainer_icon_on_real_data_reaches_for_the_crafted_item() {
     assert_eq!(
         recipe_icon.as_deref(),
         Some("Interface\\Icons\\Spell_Shadow_SealOfKings"),
-        "the blue crown the director saw IS the recipe spell's own icon"
+        "the blue crown on the row IS the recipe spell's own icon"
     );
 
     // A tradeskill trainer: gate 3 fires for item 2847 and the icon waits on its template.

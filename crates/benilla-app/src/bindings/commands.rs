@@ -1734,47 +1734,47 @@ pub(crate) static ABSENT: &[Absent] = &[
     absent!(
         "TOGGLESTATS",
         ["ToggleStats"],
-        "a dev-plane instrument (1043)"
+        "a dev-plane instrument on a dev chord"
     ),
     absent!(
         "TOGGLETRIS",
         ["ToggleTris"],
-        "a dev-plane instrument (1043)"
+        "a dev-plane instrument on a dev chord"
     ),
     absent!(
         "TOGGLEPORTALS",
         ["TogglePortals"],
-        "a dev-plane instrument (1043)"
+        "a dev-plane instrument on a dev chord"
     ),
     absent!(
         "TOGGLECOLLISION",
         ["ToggleCollision"],
-        "a dev-plane instrument (1043)"
+        "a dev-plane instrument on a dev chord"
     ),
     absent!(
         "TOGGLECOLLISIONDISPLAY",
         ["ToggleCollisionDisplay"],
-        "a dev-plane instrument (1043)"
+        "a dev-plane instrument on a dev chord"
     ),
     absent!(
         "TOGGLEPLAYERBOUNDS",
         ["TogglePlayerBounds"],
-        "a dev-plane instrument (1043)"
+        "a dev-plane instrument on a dev chord"
     ),
     absent!(
         "TOGGLEPERFORMANCEDISPLAY",
         ["TogglePerformanceDisplay"],
-        "a dev-plane instrument (1043)"
+        "a dev-plane instrument on a dev chord"
     ),
     absent!(
         "TOGGLEPERFORMANCEVALUES",
         ["TogglePerformanceValues"],
-        "a dev-plane instrument (1043)"
+        "a dev-plane instrument on a dev chord"
     ),
     absent!(
         "RESETPERFORMANCEVALUES",
         ["ResetPerformanceValues"],
-        "a dev-plane instrument (1043)"
+        "a dev-plane instrument on a dev chord"
     ),
     // ── The mouse's own three (hidden) ──────────────────────────────────────────────────
     // The reference's mouse-look bindings (BUTTON2, BUTTON1, CTRL-BUTTON1), hidden from the
@@ -1909,7 +1909,7 @@ mod tests {
                 s.run_on_up(),
                 reference_run_on_up,
                 "{}: runOnUp disagrees with the install's Bindings.xml — that flag decides \
-                 whether a press of this command delivers a release half (1295)",
+                 whether a press of this command delivers a release half",
                 s.name
             );
             let ours: Vec<&str> = [s.d1, s.d2].into_iter().flatten().collect();
@@ -2045,7 +2045,7 @@ mod tests {
         for shipped in ["ToggleCharacter", "ChangeActionBarPage", "ShowUIPanel"] {
             assert!(
                 defined.contains(shipped),
-                "the assets/ui scan missed `{shipped}`"
+                "the scan missed `{shipped}`, a host registration or a stock chain global"
             );
         }
         // Stock ContainerFrame.lua's, sourced off the chain by `benilla.toc`.

@@ -477,8 +477,8 @@ fn watch_guards_no_op_without_erroring() {
     assert_eq!(
         s.eval::<i64>("return GetQuestLogSelection()").unwrap(),
         1,
-        "a shift-click never selects — stock QuestLogTitleButton_OnClick's shift branch returns \
-         before the plain-click arm's QuestLog_SetSelection (QuestLogFrame.lua:472-500)"
+        "a guarded shift-click never selects — each guard's `return` in the stock shift branch \
+         comes before the plain-click arm's QuestLog_SetSelection (QuestLogFrame.lua:472-500)"
     );
 
     // Fill the five watches with quests 2-6: the objectives guard is the click handler's

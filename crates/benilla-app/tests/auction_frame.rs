@@ -368,7 +368,7 @@ fn the_show_cascade_notifies_the_bids_pane_once_and_keeps_its_page() {
     assert_eq!(
         order(&s),
         "window,pane",
-        "OURS, and a known deviation (2317): the reference's cascade is post-order, \"pane,window\""
+        "OURS, and a known deviation: the reference's cascade is post-order, \"pane,window\""
     );
     assert_eq!(
         page(&s),

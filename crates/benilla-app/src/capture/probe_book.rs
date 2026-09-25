@@ -269,7 +269,7 @@ fn book_probe(
             probe.closed.push(sample);
             if probe.closed.len() >= SAMPLE_FRAMES {
                 let guid = probe.plaque.unwrap_or_default();
-                info!("PROBE_BOOK: opening the reader on {guid:#x} (the right-click's own route — `ItemTextOpen::open_pages`, decision 1105)");
+                info!("PROBE_BOOK: opening the reader on {guid:#x} (the right-click's own route — `ItemTextOpen::open_pages`)");
                 reader.open_pages(guid);
                 probe.phase = Phase::WaitReady { since: now };
             }
