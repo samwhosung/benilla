@@ -144,6 +144,9 @@ pub(crate) struct PressPick {
     /// The context cursor as of the press, which the right-click ladder forks on; the reference's
     /// new-target validation (`0x5ecb70`) also reads the press's pick, not a live one.
     pub(crate) cursor: cursor_mode::WorldCursor,
+    /// The unit dispatcher's attack fork as of the press, which the sword alone cannot carry: the
+    /// sword also needs the player's own legs, and a refused player still takes the attack arm.
+    pub(crate) attack_fork: cursor_mode::AttackFork,
 }
 
 impl PressPick {
@@ -162,6 +165,7 @@ pub(crate) fn latch_press_pick(
     object: Res<HoveredObject>,
     occlusion: Res<PickOcclusion>,
     cursor: Res<cursor_mode::WorldCursor>,
+    attack_fork: Res<cursor_mode::AttackFork>,
     mut press: ResMut<PressPick>,
 ) {
     // Either button's down edge arms a pick (`0x514810`, clickModes 1 and 2); a chord does not
@@ -176,6 +180,7 @@ pub(crate) fn latch_press_pick(
         object: *object,
         occlusion: *occlusion,
         cursor: *cursor,
+        attack_fork: *attack_fork,
     };
 }
 
@@ -250,6 +255,7 @@ impl Plugin for TargetPlugin {
             .init_resource::<PickOcclusion>()
             .init_resource::<PressPick>()
             .init_resource::<WorldCursor>()
+            .init_resource::<cursor_mode::AttackFork>()
             .init_resource::<CombatFlash>()
             .init_resource::<scan::TabHistory>()
             .init_resource::<scan::LastEnemy>()
@@ -393,6 +399,7 @@ mod tests {
         world.init_resource::<HoveredObject>();
         world.init_resource::<PickOcclusion>();
         world.init_resource::<cursor_mode::WorldCursor>();
+        world.init_resource::<cursor_mode::AttackFork>();
         world.init_resource::<PressPick>();
         world.init_resource::<ButtonInput<MouseButton>>();
         let id = world.register_system(latch_press_pick);
@@ -430,6 +437,7 @@ mod tests {
         world.init_resource::<HoveredObject>();
         world.init_resource::<PickOcclusion>();
         world.init_resource::<cursor_mode::WorldCursor>();
+        world.init_resource::<cursor_mode::AttackFork>();
         world.init_resource::<PressPick>();
         world.init_resource::<ButtonInput<MouseButton>>();
         let id = world.register_system(latch_press_pick);

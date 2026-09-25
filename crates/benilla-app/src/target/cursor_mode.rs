@@ -122,6 +122,23 @@ pub(crate) mod npc_flags {
 }
 
 pub(super) const UNIT_FLAG_SKINNABLE: u32 = 0x0400_0000;
+const UNIT_FLAG_PACIFIED: u32 = 0x0002_0000;
+
+/// The hovered unit is one the unit dispatcher `0x60bea0` forks to its attack arm for (`0x60c192`):
+/// alive or feigning, refused by `CanInteract` and passed by `CanAttack`. The sword also needs the
+/// player's own legs ([`player_attack_legs`]), which the arm tests again inside.
+#[derive(Resource, Default, Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct AttackFork(pub(crate) bool);
+
+/// The player's legs of the classifier's attack leg (`0x482648`–`0x4826a2`), in its order: not
+/// dead or a ghost (`0x48264a`), not mounted (`0x482661`), not pacified (`0x48268f`) and in
+/// control (`[0xb4b3e4]`, `0x48269b`). Any failure clears to Point (`0x4826cb`).
+pub(crate) fn player_attack_legs(own: &ObjectStore, control_lost: bool) -> bool {
+    !own.0.is_dead_or_ghost()
+        && own.0.unit_mount_display_id() == 0
+        && own.0.unit_flags() & UNIT_FLAG_PACIFIED == 0
+        && !control_lost
+}
 
 /// NPC-service range, squared: gray beyond 5.5556 yd (`0xb4b32c` = `[0x804328]²`, checked
 /// boundary-inclusive at `0x482320`). The NPC windows' walk-away close uses the same constant.
@@ -504,7 +521,9 @@ pub(super) fn classify_cursor(
     hovered_object: Res<HoveredObject>,
     factions: Option<Res<Factions>>,
     reputations: Res<Reputations>,
-    mut cursor: ResMut<WorldCursor>,
+    (mut cursor, mut fork): (ResMut<WorldCursor>, ResMut<AttackFork>),
+    // `control_lost` is the attack leg's `[0xb4b3e4]` clear.
+    player: Res<crate::player::Player>,
     units: Query<(
         &Transform,
         Option<&ObjectStore>,
@@ -581,6 +600,7 @@ pub(super) fn classify_cursor(
     };
     // The reference picks once over all objects; benilla picks units and GameObjects apart and
     // classifies whichever is nearer under the cursor.
+    let attack_fork = std::cell::Cell::new(false);
     let resolve_unit = || {
         let (unit_tf, store, _) = units.get(hovered.target?).ok()?;
         let store = store?;
@@ -620,17 +640,19 @@ pub(super) fn classify_cursor(
             return service_cursor(store.0.unit_npc_flags(), status)
                 .map(|kind| (kind, dist_sq > SERVICE_RANGE_SQ));
         }
-        // `CanAttack 0x606980` (`0x48269a`), the predicate TAB, the combat flash and
-        // `UnitCanAttack` share.
-        if super::can_attack(
+        // `CanAttack 0x606980` (`0x482680`), the predicate TAB, the combat flash and
+        // `UnitCanAttack` share; not attackable clears the cursor (`0x4826cb`): Point.
+        if !super::can_attack(
             Some(store),
             factions.as_deref(),
             &reputations,
             Some(self_store),
         ) {
-            return Some((CursorKind::Attack, dist_sq > ATTACK_RANGE_SQ));
+            return None;
         }
-        None // the reference's cursor clear (`0x4826cb`): Point
+        attack_fork.set(true);
+        player_attack_legs(self_store, player.control_lost)
+            .then_some((CursorKind::Attack, dist_sq > ATTACK_RANGE_SQ))
     };
     // The corpse classifier `0x482740`.
     let resolve_corpse = || {
@@ -659,6 +681,10 @@ pub(super) fn classify_cursor(
     let want = WorldCursor { kind, unable };
     if *cursor != want {
         *cursor = want;
+    }
+    let want_fork = AttackFork(attack_fork.get());
+    if *fork != want_fork {
+        *fork = want_fork;
     }
 }
 
@@ -1223,6 +1249,30 @@ mod tests {
             Some((CursorKind::Speak, false)),
             "…while a bit that IS consulted still reaches its cursor"
         );
+    }
+
+    /// The sword's player legs (`0x48264a`–`0x4826a2`): a corpse, a ghost at health 1, a rider, a
+    /// pacified player and one without control each see the pointer.
+    #[test]
+    fn the_sword_needs_a_live_unmounted_unpacified_player_in_control() {
+        // Health 22, max health 28, unit flags 46, mount display 133, player flags 190.
+        let own = |pairs: &[(u16, u32)]| {
+            let mut all = vec![(22, 100), (28, 100)];
+            all.extend_from_slice(pairs);
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&all))
+        };
+        assert!(player_attack_legs(&own(&[]), false));
+        assert!(!player_attack_legs(&own(&[(22, 0)]), false), "dead");
+        assert!(
+            !player_attack_legs(&own(&[(22, 1), (190, 0x10)]), false),
+            "a ghost"
+        );
+        assert!(!player_attack_legs(&own(&[(133, 1147)]), false), "mounted");
+        assert!(
+            !player_attack_legs(&own(&[(46, UNIT_FLAG_PACIFIED)]), false),
+            "pacified"
+        );
+        assert!(!player_attack_legs(&own(&[]), true), "no control");
     }
 
     /// `UNIT_NPC_FLAGS` REPAIR, the service bit the ladder never tests.

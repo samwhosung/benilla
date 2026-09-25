@@ -409,7 +409,9 @@ pub(super) fn act_on_right_click(
     let (Some(entity), Some(guid)) = (hovered.target, hovered.guid) else {
         return;
     };
-    let attack = cursor.kind == cursor_mode::CursorKind::Attack;
+    // The dispatcher's attack arm (`0x60c18c`), not the sword: a dead, ghost or mounted player
+    // still takes it and is refused inside (`0x60c1a1`, `0x60c1bc`), never reaching a service.
+    let attack = press.attack_fork.0;
     let target = stores.get(entity).ok().map(|(s, _)| s);
     // ── The dead-target fork of the unit dispatcher `0x60bea0` ──
     // Loot routes by classification (dead and `UNIT_DYNFLAG_LOOTABLE`), not the cursor kind, whose
@@ -446,7 +448,8 @@ pub(super) fn act_on_right_click(
         );
     }
     let me = self_player.single().ok();
-    // A mid-combat click on a vendor or corpse switches and stops, never swings (`0x5ecb70`).
+    // A mid-combat click on a vendor or corpse switches and stops, never swings (`0x5ecb70`); the
+    // sword, not the fork, as the re-swing also needs the player's own legs.
     let outcome = scan::commit(
         &mut selection,
         &mut seam,
@@ -455,7 +458,7 @@ pub(super) fn act_on_right_click(
         target,
         me.is_some_and(|(_, _, e)| e),
         me.map(|(_, g, _)| g.0),
-        attack,
+        press.attack(),
     );
     match unit_branch(attack, dead_fork, leg) {
         UnitBranch::Attack => {
@@ -1791,6 +1794,78 @@ mod tests {
             "the release must act on the unit whose plate the press was over"
         );
     }
+
+    /// The dispatcher's attack arm (`0x60c18c`) is taken on the fork, not the sword: a ghost over
+    /// a hostile NPC sees the pointer, and its right-click is refused silently inside the arm
+    /// (`0x60c1a1`), with no swing and no service packet; a live player on the same fork swings.
+    #[test]
+    fn a_ghost_takes_the_attack_arm_and_is_refused_silently() {
+        const F_PLAYER_FLAGS: u16 = 190;
+        const F_NPC_FLAGS: u16 = 147;
+        for (label, own, swings) in [
+            (
+                "ghost",
+                &[(F_HEALTH, 1), (F_MAXHEALTH, 100), (F_PLAYER_FLAGS, 0x10)][..],
+                false,
+            ),
+            ("live", &[(F_HEALTH, 100), (F_MAXHEALTH, 100)][..], true),
+        ] {
+            let (tx, rx) = crossbeam_channel::unbounded::<ClientCommand>();
+            let (mut world, _boar) = right_click_world();
+            world.insert_resource(NetCommands(tx));
+            let me = world
+                .query_filtered::<Entity, With<SelfPlayer>>()
+                .single(&world)
+                .unwrap();
+            world.entity_mut(me).insert(store(own));
+            // A hostile gossip NPC: its service bit must never be read on the attack arm.
+            let npc = world
+                .spawn((
+                    Guid(BOAR + 1),
+                    store(&[(F_HEALTH, 100), (F_MAXHEALTH, 100), (F_NPC_FLAGS, 0x1)]),
+                ))
+                .id();
+            *world.resource_mut::<PressPick>() = PressPick {
+                hovered: Hovered {
+                    target: Some(npc),
+                    guid: Some(BOAR + 1),
+                    distance: 3.0,
+                    ..Hovered::default()
+                },
+                attack_fork: cursor_mode::AttackFork(true),
+                ..PressPick::default()
+            };
+            world
+                .resource_mut::<Messages<WorldRightClick>>()
+                .write(WorldRightClick);
+            world.run_system_once(act_on_right_click).unwrap();
+            let sent: Vec<_> = rx.try_iter().collect();
+            assert!(
+                matches!(sent.first(), Some(ClientCommand::SetSelection { guid }) if *guid == BOAR + 1),
+                "{label}: the select stands: {sent:?}"
+            );
+            assert!(
+                !sent
+                    .iter()
+                    .any(|c| matches!(c, ClientCommand::GossipHello { .. })),
+                "{label}: the attack arm never reaches the service leg: {sent:?}"
+            );
+            assert_eq!(
+                sent.iter()
+                    .any(|c| matches!(c, ClientCommand::AttackSwing { .. })),
+                swings,
+                "{label}: {sent:?}"
+            );
+            assert!(
+                world
+                    .resource::<crate::ui_action::UiErrorKeys>()
+                    .0
+                    .is_empty(),
+                "{label}: the arm says nothing"
+            );
+        }
+    }
+
     /// A meeting stone's own use slot (`0x5f69d0`) replaces the shared sender: the click hands it
     /// to the join validator and puts no `0xB1` on the wire, which vmangos' type-23 `Use` ignores.
     #[test]
