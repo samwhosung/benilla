@@ -153,36 +153,18 @@ fn quest<'a>(
     }
 }
 
-/// The turn-in's coin string (`0x5dc511`-`0x5dc5fd`): each nonzero denomination as `"%d %s"`
-/// with its `GOLD`, `SILVER` or `COPPER` global, gold first, as `"%s%s%s%s%s"`. A `", "` follows
-/// gold when silver or copper is paid and precedes copper when gold or silver is, so gold and
-/// copper with no silver read "1 Gold, , 5 Copper", as in the reference.
+/// The turn-in's coin string (`0x5dc511`-`0x5dc5fd`): each paid denomination as `"%d %s"` with
+/// its `GOLD`, `SILVER` or `COPPER` global, gold first. The reference's separator test yields
+/// `", , "` with a zero middle coin; this joins only the paid ones, with `", "`.
 fn coin_text(copper: u32, get: &dyn Fn(&str) -> String) -> String {
     // `0x6c6260`'s split by 10000, 100 and 1.
     let (g, s, c) = (copper / 10000, copper / 100 % 100, copper % 100);
-    let part = |n: u32, key: &str| {
-        if n == 0 {
-            String::new()
-        } else {
-            format!("{n} {}", get(key))
-        }
-    };
-    let after_gold = if g != 0 && (s != 0 || c != 0) {
-        ", "
-    } else {
-        ""
-    };
-    let before_copper = if (g != 0 || s != 0) && c != 0 {
-        ", "
-    } else {
-        ""
-    };
-    format!(
-        "{}{after_gold}{}{before_copper}{}",
-        part(g, "GOLD"),
-        part(s, "SILVER"),
-        part(c, "COPPER")
-    )
+    [(g, "GOLD"), (s, "SILVER"), (c, "COPPER")]
+        .into_iter()
+        .filter(|&(n, _)| n != 0)
+        .map(|(n, key)| format!("{n} {}", get(key)))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
@@ -365,13 +347,13 @@ mod tests {
     }
 
     #[test]
-    fn the_coin_string_joins_the_paid_denominations_as_the_reference_does() {
+    fn the_coin_string_joins_only_the_paid_denominations() {
         assert_eq!(coin_text(5, &words), "5 Copper");
         assert_eq!(coin_text(250, &words), "2 Silver, 50 Copper");
         assert_eq!(coin_text(10_200, &words), "1 Gold, 2 Silver");
         assert_eq!(coin_text(12_345, &words), "1 Gold, 23 Silver, 45 Copper");
         assert_eq!(coin_text(30_000, &words), "3 Gold");
-        // Both separators test their neighbours, not the middle term.
-        assert_eq!(coin_text(10_005, &words), "1 Gold, , 5 Copper");
+        // A zero middle coin leaves no empty place between its neighbours.
+        assert_eq!(coin_text(10_005, &words), "1 Gold, 5 Copper");
     }
 }
