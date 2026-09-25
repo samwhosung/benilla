@@ -680,7 +680,7 @@ fn every_texture_frame_outranks_its_status_bars() {
         let Some(base) = texture_frame.strip_suffix("TextureFrame") else {
             continue;
         };
-        for suffix in ["HealthBar", "ManaBar", "ManaBar"] {
+        for suffix in ["HealthBar", "ManaBar"] {
             let bar = format!("{base}{suffix}");
             let Some(&(bar_strata, bar_level)) = level_of.get(&bar) else {
                 continue;
@@ -699,9 +699,9 @@ fn every_texture_frame_outranks_its_status_bars() {
     }
     // The reference names two TextureFrames, `TargetFrameTextureFrame` and
     // `TargetofTargetTextureFrame` (TargetFrame.xml); the player, pet and party frames nest their
-    // art in anonymous frames instead. Two families × the three suffixes (ManaBar twice) = 6.
+    // art in anonymous frames instead: two families with two bars each.
     assert!(
-        checked >= 6,
+        checked >= 4,
         "only {checked} texture-frame/bar pairs checked — the name sweep found nothing"
     );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());

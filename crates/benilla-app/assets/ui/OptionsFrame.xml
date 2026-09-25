@@ -901,8 +901,8 @@
                 return
             end
             if key == "Controls" then
-                -- l.715-719: Auto-Follow Speed is dead while the style is Never, "0" in the
-                -- engine's values and "3" as the reference's dropdown writes it.
+                -- l.715-719: Auto-Follow Speed is dead while the style is Never: "0", or a stray
+                -- "3", which the validator also accepts and which reads as Never.
                 local style = GetCVar("cameraSmoothStyle")
                 OptionsRow_SetEnabled(BenillaOptionsFrameContainerBodyControlsRowAutoFollowSpeed,
                     style ~= "0" and style ~= "3")
@@ -1703,9 +1703,8 @@
                                             </OnLoad></Scripts>
                                         </Frame>
                                         <!-- 1.12's UIOptionsFrameCameraDropDown, with its
-                                             tooltips. Deviation: values are the engine's 0/1/2;
-                                             1.12 writes 3 for Never, which its terrain-tilt
-                                             consumer reads past its table's end. -->
+                                             tooltips and values: Smart 1, Always 2, Never 0
+                                             (UIOptionsFrame.lua:525, 536, 547). -->
                                         <Frame name="$parentRowCameraFollowStyle" inherits="OptionsDropdownRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" relativeTo="$parentRowMouseSpeed" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>

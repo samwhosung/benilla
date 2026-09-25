@@ -30,18 +30,6 @@ fn state() -> HonorState {
     }
 }
 
-/// The strings the inspect page's titles read, verbatim from 1.12's `GlobalStrings.lua` (`:2795`,
-/// `:3075`, `:3150-3161`, `:3297`).
-const RANK_GLOBALS: &str = r#"
-    NONE = "None"
-    RANK = "Rank"
-    PLAYER_LEVEL = "Level %d %s %s"
-    PVP_RANK_12_1 = "Knight-Captain"
-    PVP_RANK_12_0 = "Legionnaire"
-    PVP_RANK_14_1 = "Lieutenant Commander"
-    PVP_RANK_14_0 = "Champion"
-"#;
-
 /// The character window, whose fifth tab this page is; [`super::test_ui::CHARACTER_UI`] carries
 /// `HonorFrame.xml`, as `PaperDollFrame.lua:103` writes into it on every show.
 fn load_page(s: &UiScript) {
@@ -350,7 +338,6 @@ fn inspect_reply() -> InspectHonorData {
 fn shown_inspect_honor_page() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    s.run(RANK_GLOBALS).unwrap();
     for file in [
         "Interface\\FrameXML\\Fonts.xml",
         // `TEXT`, the stock level line's formatter.

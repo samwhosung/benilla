@@ -3701,10 +3701,10 @@ fn the_max_camera_distance_slider_stores_a_factor_and_reads_out_yards() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// 1.12's dropdown writes 1/2/3 for `cameraSmoothStyle`, but the engine's tables are 0 Never,
-/// 1 Smart, 2 Always: the validator (`0x50c060`) accepts 3 while the terrain-tilt consumer
-/// (`0x50dbc0`) reads past its table. The entries carry the engine's values in the reference's
-/// order, a stray 3 still reads Never, and the plate follows the selection.
+/// 1.12's dropdown writes Smart 1, Always 2 and Never 0 for `cameraSmoothStyle`
+/// (`UIOptionsFrame.lua:525,536,547`); the validator (`0x50c060`) also accepts 3, which the
+/// terrain-tilt consumer (`0x50dbc0`) reads past its table. The entries carry those values in the
+/// reference's order, a stray 3 reads Never, and the plate follows the selection.
 #[test]
 fn the_camera_following_style_dropdown_carries_the_engine_enum_and_plate() {
     benilla_formats::wow_data_or_skip!();

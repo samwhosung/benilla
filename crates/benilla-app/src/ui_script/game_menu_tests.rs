@@ -757,8 +757,6 @@ fn the_menu_rides_the_shared_era_window_scale() {
     s.run("ShowUIPanel(GameMenuFrame)").unwrap();
     s.resolve();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
-    let ran = s.eval::<f64>("return BENILLA_MENU_ONSHOW or -99").unwrap();
-    println!("handler ran probe: {ran}");
     let k = s.eval::<f64>("return GameMenuFrame:GetScale()").unwrap();
     let want = s.eval::<f64>("return ERA_WINDOW_SCALE").unwrap();
     assert!((k - want).abs() < 1e-6, "menu scale {k} != knob {want}");

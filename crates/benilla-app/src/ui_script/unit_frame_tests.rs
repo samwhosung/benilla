@@ -1867,16 +1867,6 @@ fn the_unit_frames_publish_every_name_the_reference_declares() {
             missing.push(name);
         }
     }
-    // The raid "Group N" tab (`PlayerFrame_UpdateGroupIndicator`, `PlayerFrame.lua:214-232`),
-    // exempt from the check, though stock `PlayerFrame.xml:359-416` declares all five.
-    let unbuilt = [
-        "PlayerFrameGroupIndicator",
-        "PlayerFrameGroupIndicatorLeft",
-        "PlayerFrameGroupIndicatorMiddle",
-        "PlayerFrameGroupIndicatorRight",
-        "PlayerFrameGroupIndicatorText",
-    ];
-    missing.retain(|m| !unbuilt.contains(m));
     assert!(
         missing.is_empty(),
         "the reference declares these and we do not publish them — an addon reading any of them \

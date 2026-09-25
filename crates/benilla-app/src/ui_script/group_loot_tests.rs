@@ -332,7 +332,7 @@ fn cancel_loot_roll_hides_only_that_frame() {
 
 /// A roll with its item template in flight opens without error, with no name and no icon.
 #[test]
-fn in_flight_roll_does_not_error_and_falls_back() {
+fn in_flight_roll_opens_without_a_name_or_icon() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = setup();
     load_group_loot(&s);
