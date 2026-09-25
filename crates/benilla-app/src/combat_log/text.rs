@@ -450,11 +450,13 @@ pub(super) fn spell_energize_log(
     }
 }
 
-/// Miss code (vmangos `SpellMissInfo`, 1 to 11) to the centre text's `SPELL_*` outcome word. The
-/// reference's miss-word emitter `0x62bab0` has no `SPELL_ABSORBED`; code 10's word is untraced.
+/// Miss code (vmangos `SpellMissInfo`) to the centre text's `SPELL_*` outcome word, the jump table
+/// `0x62be10` indexed by code - 2 (`0x62bb50`). Code 10 (absorb) has no word of its own: its slot
+/// and every code past the table take the default `SPELL_MISSED` (`0x62bdc3`). Code 0 fires
+/// nothing (`0x62babb`).
 fn miss_center_type(code: u8) -> Option<&'static str> {
     Some(match code {
-        1 => "SPELL_MISSED",
+        0 => return None,
         2 => "SPELL_RESISTED",
         3 => "SPELL_DODGED",
         4 => "SPELL_PARRIED",
@@ -462,9 +464,8 @@ fn miss_center_type(code: u8) -> Option<&'static str> {
         6 => "SPELL_EVADED",
         7 | 8 => "SPELL_IMMUNE",
         9 => "SPELL_DEFLECTED",
-        10 => "SPELL_ABSORBED",
         11 => "SPELL_REFLECTED",
-        _ => return None,
+        _ => "SPELL_MISSED",
     })
 }
 
@@ -666,6 +667,33 @@ mod tests {
             melee_center_text(0x80, 1, 300, 0, 0, 0),
             words("DAMAGE_CRIT", Some(300), None)
         );
+    }
+
+    /// The spell-miss word per code, as the jump table `0x62be10`: absorb (10) and every code past
+    /// the table are `SPELL_MISSED`, and 0 is nothing.
+    #[test]
+    fn spell_miss_codes_follow_the_reference_table() {
+        let got: Vec<_> = (0..=13).map(miss_center_type).collect();
+        assert_eq!(
+            got,
+            vec![
+                None,
+                Some("SPELL_MISSED"),
+                Some("SPELL_RESISTED"),
+                Some("SPELL_DODGED"),
+                Some("SPELL_PARRIED"),
+                Some("SPELL_BLOCKED"),
+                Some("SPELL_EVADED"),
+                Some("SPELL_IMMUNE"),
+                Some("SPELL_IMMUNE"),
+                Some("SPELL_DEFLECTED"),
+                Some("SPELL_MISSED"),
+                Some("SPELL_REFLECTED"),
+                Some("SPELL_MISSED"),
+                Some("SPELL_MISSED"),
+            ]
+        );
+        assert_eq!(miss_center_type(255), Some("SPELL_MISSED"));
     }
 
     /// `SMSG_SPELLLOGMISS`'s word is spell gold: `0x5e7f66` pushes the resolved spell record, not
