@@ -186,6 +186,11 @@ pub(super) fn drain_action_uses(
         };
         match actions.buttons.get(&slot) {
             Some(b) if b.kind == ACTION_KIND_SPELL && b.action == SPELL_ATTACK => {
+                // `UseAction` casts Attack through TryCast, so its dead rung comes first: "You are
+                // dead", where the binding, which skips TryCast, reads "Can't attack while dead."
+                if ladder.dead_refusal(SPELL_ATTACK, targeting.self_store.iter().next()) {
+                    continue;
+                }
                 // The attack validator's actor gates (`0x612df0`) precede both the swing and the
                 // nearest-enemy scan (`0x6130b5`), so both arms gate here.
                 if attack_actor_refusal(

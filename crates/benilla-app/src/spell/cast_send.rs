@@ -2,12 +2,12 @@
 //! the reference's `TryCast 0x6e4b60` and its commit `SendCast 0x6e54f0` rung for rung.
 //!
 //! The rungs: the auto-repeat toggle-off (the reference's action-button handler, ahead of TryCast;
-//! its order against the profession intercept is unobservable), the profession intercept, the
-//! targeting abort, in-flight, reagents and totems, the equipped item, target binding and range,
-//! then the validator `0x6094f0` (not-ready and GCD, power, crowd control, mounted, water, moving,
-//! form), the deferred cast-arm refusal and the targeting cursor. The commit tail follows: ranged
-//! stance, auto-repeat arm, the send, the auto-attack start, the GCD. A refusal is local and
-//! pre-commit: no packet, no GCD, no pending arm, only the red line.
+//! its order against the profession intercept is unobservable), the profession intercept, dead or a
+//! ghost, the targeting abort, in-flight, reagents and totems, the equipped item, target binding
+//! and range, then the validator `0x6094f0` (not-ready and GCD, power, crowd control, mounted,
+//! water, moving, form), the deferred cast-arm refusal and the targeting cursor. The commit tail
+//! follows: ranged stance, auto-repeat arm, the send, the auto-attack start, the GCD. A refusal is
+//! local and pre-commit: no packet, no GCD, no pending arm, only the red line.
 //!
 //! An item use takes the same ladder: `CGItem::Use 0x5d8d00` calls `0x6e5a90`, whose body is
 //! `call 0x6e4b60` with the item as TryCast's third argument (read at `6e4d76` and `6e4f33`). Three
@@ -163,6 +163,17 @@ impl CastLadder<'_, '_> {
         self.ground.clear();
     }
 
+    /// TryCast's dead rung alone, for the Attack button, whose short-circuit (`0x6e4c7a`) leaves
+    /// the ladder right after it.
+    pub(crate) fn dead_refusal(
+        &mut self,
+        spell_id: u32,
+        self_store: Option<&crate::net::ObjectStore>,
+    ) -> bool {
+        let def = self.spells.as_ref().and_then(|s| s.catalog.get(spell_id));
+        caster_dead_refusal(spell_id, def, self_store, &mut self.cast_errors)
+    }
+
     /// Run the ladder for `spell_id` and commit as `commit` says.
     pub(crate) fn send(
         &mut self,
@@ -216,6 +227,25 @@ impl CastLadder<'_, '_> {
     }
 }
 
+/// TryCast's dead rung (`0x6e4c49`), after the profession intercept and ahead of the Attack
+/// short-circuit (`0x6e4c7a`): a dead or ghost caster (`0x605f30`) is refused with 0x13, "You are
+/// dead", unless the spell is castable while dead (`Attributes & 0x800000`, `0x6e4c55`).
+fn caster_dead_refusal(
+    spell_id: u32,
+    def: Option<&benilla_formats::SpellDisplay>,
+    self_store: Option<&crate::net::ObjectStore>,
+    cast_errors: &mut CastErrors,
+) -> bool {
+    if !self_store.is_some_and(|s| s.0.is_dead_or_ghost())
+        || def.is_some_and(|d| d.attributes & benilla_formats::ATTR_CASTABLE_WHILE_DEAD != 0)
+    {
+        return false;
+    }
+    debug!("ui_action: cast {spell_id} refused locally — dead or a ghost (0x13)");
+    cast_errors.push_local(spell_id, 0x13);
+    true
+}
+
 /// Run the ladder for one cast and commit it. The commit tail (`0x6e54f0`): a ranged spell arms the
 /// ranged stance (`0x6e5930`, `SetSheatheState(2,1,1)`; the echoed START re-requests it), an
 /// auto-repeat spell sets the sticky armed state (`0x6e593b`, `|= 0x200`, the Load/Hold idle's
@@ -261,6 +291,9 @@ fn send_spell_cast(
         debug!("ui_action: cast {spell_id} re-pressed — auto-repeat toggles off");
         let self_e = self_player.single().ok().map(|(e, _)| e);
         crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, ecs, commands);
+        return;
+    }
+    if caster_dead_refusal(spell_id, def, ctx.rel.self_store, cast_errors) {
         return;
     }
     // TryCast's IsTargeting leg (`6e4d62`): a new press while the cursor is up clears the word,
@@ -736,6 +769,112 @@ mod tests {
                 ladder.send_at_object(spell_id, &ctx(), go_guid);
             })
             .expect("the ladder runs as a one-shot system");
+    }
+
+    /// TryCast's dead rung (`0x6e4c49`): a corpse and a ghost (health 1, the `PLAYER_FLAGS` bit)
+    /// are refused with 0x13 and no packet, after the profession intercept; `Attributes &
+    /// 0x800000` waives it, and the Attack button's own entry takes the same rung.
+    #[test]
+    fn a_dead_or_ghost_caster_is_refused_as_dead_unless_the_spell_waives_it() {
+        use crate::net::ObjectStore;
+        use benilla_formats::SpellDisplay;
+        use benilla_protocol::ObjectFields;
+        const PLAIN: u32 = 100;
+        const WHILE_DEAD: u32 = 200;
+        const PROFESSION: u32 = 300;
+        const ATTACK: u32 = crate::ui_action::SPELL_ATTACK;
+
+        let (mut world, rx) = world();
+        let mut spells = crate::ui_action::Spells::empty_for_tests();
+        spells.catalog = benilla_formats::SpellCatalog::from_displays(
+            [
+                (PLAIN, SpellDisplay::default()),
+                (
+                    WHILE_DEAD,
+                    SpellDisplay {
+                        attributes: benilla_formats::ATTR_CASTABLE_WHILE_DEAD,
+                        ..Default::default()
+                    },
+                ),
+                (
+                    PROFESSION,
+                    SpellDisplay {
+                        effects: [benilla_formats::SPELL_EFFECT_TRADE_SKILL, 0, 0],
+                        ..Default::default()
+                    },
+                ),
+                // Attack's `Attributes` are `0x10`, no waiver.
+                (
+                    ATTACK,
+                    SpellDisplay {
+                        attributes: 0x10,
+                        ..Default::default()
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        world.insert_resource(spells);
+        // Fields 22 health, 28 max health, 190 `PLAYER_FLAGS`. Leaked: the closure must be 'static.
+        let leak = |pairs: &[(u16, u32)]| -> &'static ObjectStore {
+            Box::leak(Box::new(ObjectStore(ObjectFields::from_pairs(pairs))))
+        };
+        let corpse = leak(&[(22, 0), (28, 100)]);
+        let ghost = leak(&[(22, 1), (28, 100), (190, 0x10)]);
+        let press = |world: &mut World, spell_id: u32, store: &'static ObjectStore| {
+            world
+                .run_system_once(move |mut ladder: CastLadder| {
+                    let base = ctx();
+                    let with_store = cast_target::CastContext {
+                        rel: cast_target::TargetRelations {
+                            self_store: Some(store),
+                            ..base.rel
+                        },
+                        ..base
+                    };
+                    ladder.send(spell_id, &with_store, CastCommit::Spell);
+                })
+                .expect("one-shot");
+        };
+
+        for (label, store) in [("corpse", corpse), ("ghost", ghost)] {
+            press(&mut world, PLAIN, store);
+            assert!(
+                rx.try_recv().is_err(),
+                "{label}: a refused press never sends"
+            );
+            assert_eq!(
+                std::mem::take(&mut world.resource_mut::<CastErrors>().0),
+                vec![CastFail::local(PLAIN, 0x13)],
+                "{label}: \"You are dead\""
+            );
+            let refused = world
+                .run_system_once(move |mut ladder: CastLadder| {
+                    ladder.dead_refusal(ATTACK, Some(store))
+                })
+                .expect("one-shot");
+            assert!(refused, "{label}: the Attack button stops at the same rung");
+            assert_eq!(
+                std::mem::take(&mut world.resource_mut::<CastErrors>().0),
+                vec![CastFail::local(ATTACK, 0x13)]
+            );
+        }
+
+        // The profession intercept (`6e4bce`) comes first: the book opens, no error.
+        press(&mut world, PROFESSION, ghost);
+        assert_eq!(
+            world.resource::<crate::ui_tradeskill::TradeSkillOpens>().0,
+            vec![PROFESSION]
+        );
+        assert!(world.resource::<CastErrors>().0.is_empty());
+
+        press(&mut world, WHILE_DEAD, ghost);
+        assert!(
+            matches!(rx.try_recv(), Ok(ClientCommand::CastSpell { spell_id, .. }) if spell_id == WHILE_DEAD),
+            "the castable-while-dead attribute waives the rung"
+        );
+        assert!(world.resource::<CastErrors>().0.is_empty());
     }
 
     /// A mashed chest opener goes out once as the GameObject block; the re-click is `6e4d43`'s
