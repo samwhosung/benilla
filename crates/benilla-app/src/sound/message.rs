@@ -54,6 +54,12 @@ impl MessageSounds {
     pub(crate) fn queued(&self) -> &[&'static MessageRecord] {
         &self.records
     }
+
+    /// The named cues queued, for the producer's tests.
+    #[cfg(test)]
+    pub(crate) fn queued_cues(&self) -> &[&'static str] {
+        &self.cues
+    }
 }
 
 /// Drain [`MessageSounds`]: a cue by name, or speech by line.

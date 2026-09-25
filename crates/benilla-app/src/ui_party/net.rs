@@ -13,8 +13,12 @@ use benilla_protocol::{SessionEvent, SessionEventKind};
 use super::GroupState;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, GuidIndex, NetCommands, NetHandlerApp, ObjectStore, SelfGuid};
+use crate::sound::MessageSounds;
 use crate::ui_action::{UiError, UiErrorKeys};
 use crate::ui_quest::QuestGiver;
+
+/// The join chime, played by name (`0x840404` through `0x458030`).
+const INVITE_ACCEPT_SOUND: &str = "igPlayerInviteAccept";
 
 /// One handler per group kind, plus the session-end listener.
 pub(super) fn register(app: &mut App) {
@@ -99,7 +103,9 @@ fn on_list(
     In(ev): In<SessionEvent>,
     mut group: ResMut<GroupState>,
     mut errors: ResMut<UiErrorKeys>,
+    mut sounds: ResMut<MessageSounds>,
     mut quest: ResMut<QuestGiver>,
+    self_guid: Res<SelfGuid>,
     names: Res<NameCache>,
     index: Res<GuidIndex>,
     commands: Res<NetCommands>,
@@ -115,12 +121,14 @@ fn on_list(
         list(
             &mut group,
             &mut errors,
+            &mut sounds,
             &mut quest,
             group_type,
             own_flags,
             members,
             leader,
             loot,
+            &self_guid,
             &names,
             &index,
             &commands,
@@ -233,12 +241,14 @@ fn leader_changed(
 fn list(
     group: &mut GroupState,
     errors: &mut UiErrorKeys,
+    sounds: &mut MessageSounds,
     quest: &mut QuestGiver,
     group_type: u8,
     own_flags: u8,
     members: Vec<GroupMemberEntry>,
     leader: u64,
     loot: Option<GroupLootInfo>,
+    self_guid: &SelfGuid,
     names: &NameCache,
     index: &GuidIndex,
     net_commands: &NetCommands,
@@ -252,8 +262,11 @@ fn list(
         .iter()
         .map(|m| (m.guid, m.status & member_status::ONLINE != 0))
         .collect();
-    let lines = group.apply_list(group_type, own_flags, members, leader, loot);
-    push_group_lines(errors, lines);
+    let shown = group.apply_list(group_type, own_flags, members, leader, loot, self_guid.0);
+    push_group_lines(errors, shown.lines);
+    if shown.invite_accept {
+        sounds.push_cue(INVITE_ACCEPT_SOUND);
+    }
     seat_new_records(group, &seats, index, net_commands);
     quest.bump_reask();
 }
@@ -375,12 +388,14 @@ mod tests {
         list(
             &mut group,
             &mut errors,
+            &mut MessageSounds::default(),
             &mut quest,
             0,
             0,
             vec![member(leader, "Aldwyn"), member(far, "Brisca")],
             leader,
             None,
+            &SelfGuid::default(),
             &names,
             &GuidIndex::default(),
             &net,
@@ -404,12 +419,14 @@ mod tests {
         list(
             &mut group,
             &mut errors,
+            &mut MessageSounds::default(),
             &mut quest,
             0,
             0,
             vec![member(leader, "Aldwyn"), member(far, "Brisca")],
             leader,
             None,
+            &SelfGuid::default(),
             &names,
             &GuidIndex::default(),
             &net,
@@ -420,6 +437,52 @@ mod tests {
             "a re-sent roster re-asks nothing"
         );
         assert_eq!(names.player_traits(leader), Some((1, 4, 1)));
+    }
+
+    #[test]
+    fn a_join_queues_the_invite_accept_chime_and_a_resync_does_not() {
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let net = NetCommands(tx);
+        let (mut group, mut errors, mut sounds, mut quest) = (
+            GroupState::default(),
+            UiErrorKeys::default(),
+            MessageSounds::default(),
+            QuestGiver::default(),
+        );
+        let names = NameCache::default();
+        let mut send = |sounds: &mut MessageSounds, members: Vec<GroupMemberEntry>| {
+            list(
+                &mut group,
+                &mut errors,
+                sounds,
+                &mut quest,
+                0,
+                0,
+                members,
+                7,
+                None,
+                &SelfGuid(Some(9)),
+                &names,
+                &GuidIndex::default(),
+                &net,
+            );
+        };
+
+        send(&mut sounds, vec![member(7, "Aldwyn")]);
+        assert_eq!(
+            sounds.queued_cues(),
+            ["igPlayerInviteAccept"],
+            "our first party"
+        );
+        send(&mut sounds, vec![member(7, "Aldwyn")]);
+        assert_eq!(sounds.queued_cues().len(), 1, "a resync is silent");
+        send(&mut sounds, vec![member(7, "Aldwyn"), member(8, "Brisca")]);
+        assert_eq!(sounds.queued_cues().len(), 2, "a member joining our party");
+        assert_eq!(
+            benilla_ui::messages::by_key("ERR_JOINED_GROUP_S").and_then(|r| r.sound),
+            None,
+            "the join line's own row carries no sound, so the chime is the only one"
+        );
     }
 
     // ── The out-of-range record ──────────────────────────────────────────────
@@ -444,7 +507,7 @@ mod tests {
 
     fn grouped(members: &[GroupMemberEntry]) -> GroupState {
         let mut group = GroupState::default();
-        group.apply_list(0, 0, members.to_vec(), members[0].guid, None);
+        group.apply_list(0, 0, members.to_vec(), members[0].guid, None, None);
         group
     }
 
@@ -528,12 +591,14 @@ mod tests {
             list(
                 group,
                 &mut errors,
+                &mut MessageSounds::default(),
                 &mut quest,
                 0,
                 0,
                 members,
                 near,
                 None,
+                &SelfGuid::default(),
                 &names,
                 &index,
                 &net,

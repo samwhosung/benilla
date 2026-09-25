@@ -1,6 +1,7 @@
 //! Group session state: the `SMSG_GROUP_LIST` mirror and the party system lines. vmangos sends no
 //! text for party events, so, as the reference does through `DisplayError` (`0x496720`), each
-//! opcode composes its own line and the `SMSG_GROUP_LIST` roster diff composes joins and leaves.
+//! opcode composes its own line and `SMSG_GROUP_LIST` composes joins and leaves from what the list
+//! finds held: the party slots (`0x5e6a40`) and the raid roster (`0x4ba5f0`, `0x4ba550`).
 
 use std::collections::HashMap;
 
@@ -24,13 +25,16 @@ pub(crate) struct UiPartyPlugin;
 impl Plugin for UiPartyPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
-        app.init_resource::<GroupState>().add_systems(
-            Update,
-            (
-                feed::feed_party.in_set(UiFeed),
-                feed::drain_party.after(UiInput),
-            ),
-        );
+        // A UI-only harness has no sound stack; the list handler queues the join chime.
+        app.init_resource::<GroupState>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .add_systems(
+                Update,
+                (
+                    feed::feed_party.in_set(UiFeed),
+                    feed::drain_party.after(UiInput),
+                ),
+            );
     }
 }
 
@@ -45,6 +49,10 @@ pub struct GroupState {
     pub own_flags: u8,
     /// The other members in wire order; the list never contains the recipient.
     pub members: Vec<GroupMemberEntry>,
+    /// The leave ack, `SMSG_GROUP_UNINVITE` and `SMSG_GROUP_DESTROYED` empty the reference's party
+    /// slots and leader (`0x4e84a0`, `0x4e8250(0)`) and keep its raid roster; the next list then
+    /// finds no slot held.
+    pub slots_emptied: bool,
     pub leader: u64,
     /// The loot tail, present whenever the list has members.
     pub loot: Option<GroupLootInfo>,
@@ -71,10 +79,18 @@ pub struct GroupState {
     pub ready_check_answers: Vec<(u64, bool)>,
 }
 
+/// What one `SMSG_GROUP_LIST` shows: its lines, and whether it plays `igPlayerInviteAccept`
+/// (`0x5e6c83`-`0x5e6c8f`), the join's only sound, since `ERR_JOINED_GROUP_S`'s row has none.
+#[derive(Debug, Default, PartialEq)]
+pub struct ListOutcome {
+    pub lines: Vec<UiError>,
+    pub invite_accept: bool,
+}
+
 impl GroupState {
-    /// Apply one `SMSG_GROUP_LIST` and return its roster diff's lines. As in the reference
-    /// (`0x5e6c19`, `0x5e6d37`) the diff starts from an empty cache and runs both ways, the
-    /// all-zero list included; kick, leave (`0x5e690b`) and disband lines come from their opcodes.
+    /// Apply one `SMSG_GROUP_LIST` and return what it shows, in the reference's order: the party
+    /// slots' joins, the new-group line, the party slots' leaves, then the raid roster's lines.
+    /// Kick, leave (`0x5e690b`) and disband lines come from their opcodes.
     pub fn apply_list(
         &mut self,
         group_type: u8,
@@ -82,37 +98,82 @@ impl GroupState {
         members: Vec<GroupMemberEntry>,
         leader: u64,
         loot: Option<GroupLootInfo>,
-    ) -> Vec<UiError> {
-        let mut lines = Vec::new();
+        self_guid: Option<u64>,
+    ) -> ListOutcome {
+        let mut out = ListOutcome::default();
+        let raid = group_type == GROUPTYPE_RAID;
+        // The two stores as this list finds them: the party slots unless an opcode emptied them,
+        // and the raid roster, which only a list that is not a raid drops.
+        let held_slots: Vec<(u64, String)> = if self.slots_emptied {
+            Vec::new()
+        } else {
+            self.party_slots()
+                .map(|m| (m.guid, m.name.clone()))
+                .collect()
+        };
+        let raid_held = self.group_type == GROUPTYPE_RAID;
+        // "Held a group" (`0x5e6aa9`): an occupied slot (`0x5e6afb`) or a raid roster (`0x5e6b29`).
+        let held = !held_slots.is_empty() || raid_held;
+
+        let own = own_flags & 0x7f;
+        let seated: Vec<&GroupMemberEntry> = members
+            .iter()
+            .filter(|m| m.flags & 0x7f == own)
+            .take(4)
+            .collect();
+        for m in &seated {
+            if !held {
+                // Seated into no group: no line, but the chime (`0x5e6dc6`).
+                out.invite_accept = true;
+            } else if !raid && !held_slots.iter().any(|(guid, _)| *guid == m.guid) {
+                // New to a party we held (`0x5e6c19`, `0x5e6c24`).
+                out.lines.push(UiError::s("ERR_JOINED_GROUP_S", &m.name));
+                out.invite_accept = true;
+            }
+        }
+        // A new group we lead: one line, for the last member listed (`0x5e6c94`-`0x5e6cc1`).
+        if !held && self_guid.is_some_and(|me| me == leader) {
+            if let Some(last) = members.last().filter(|m| !m.name.is_empty()) {
+                out.lines.push(UiError::s("ERR_JOINED_GROUP_S", &last.name));
+            }
+        }
+        // A party list's leaves: the held slots it no longer seats (`0x5e6cd7`-`0x5e6e09`).
+        if !raid {
+            for (guid, name) in &held_slots {
+                if !seated.iter().any(|m| m.guid == *guid) {
+                    out.lines.push(UiError::s("ERR_LEFT_GROUP_S", name));
+                }
+            }
+        }
+        if raid {
+            // `0x4ba5f0`: arrivals only onto a held roster (`0x4ba725`), departures, and the
+            // joined line when none was held (`0x4ba83a`).
+            if raid_held {
+                for m in &members {
+                    if !self.members.iter().any(|old| old.guid == m.guid) {
+                        out.lines
+                            .push(UiError::s("ERR_RAID_MEMBER_ADDED_S", &m.name));
+                    }
+                }
+                for old in &self.members {
+                    if !members.iter().any(|m| m.guid == old.guid) {
+                        out.lines
+                            .push(UiError::s("ERR_RAID_MEMBER_REMOVED_S", &old.name));
+                    }
+                }
+            } else {
+                out.lines.push(UiError::key("ERR_RAID_YOU_JOINED"));
+            }
+        } else if raid_held {
+            // `0x4ba550`: a list that is not a raid drops the held roster (`0x4ba55f`).
+            out.lines.push(UiError::key("ERR_RAID_YOU_LEFT"));
+        }
+
         // The all-zero list means "not in a group" (vmangos `Server/Packets/Group.h:257`); only
         // `leader == 0` tells it apart, since a solo leader's list is empty but names a leader.
-        let leaving = leader == 0;
-        // Raid wording when either side of the transition is a raid. The reference's raid lines
-        // come from its raid roster rebuild `0x4ba5f0` and raid-leave leg `0x4ba550`, whose
-        // triggers this diff does not follow.
-        let (added, removed) = if group_type == 1 || (leaving && self.group_type == 1) {
-            ("ERR_RAID_MEMBER_ADDED_S", "ERR_RAID_MEMBER_REMOVED_S")
-        } else {
-            ("ERR_JOINED_GROUP_S", "ERR_LEFT_GROUP_S")
-        };
-        for m in &members {
-            if !self.members.iter().any(|old| old.guid == m.guid) {
-                lines.push(UiError::s(added, &m.name));
-            }
-        }
-        for old in &self.members {
-            if !members.iter().any(|m| m.guid == old.guid) {
-                lines.push(UiError::s(removed, &old.name));
-            }
-        }
-        if leaving {
+        if leader == 0 {
             self.leave_group();
-            return lines;
-        }
-        // Entering a raid prints `ERR_RAID_YOU_JOINED`, as the reference does when its raid
-        // roster was empty (`0x4ba83a`).
-        if group_type == 1 && self.group_type != 1 {
-            lines.push(UiError::key("ERR_RAID_YOU_JOINED"));
+            return out;
         }
         // Raid to party clears the raid-target board, as the reference's `0x4ba550` does on the
         // raid-flag-clear leg; a disband clears it in `leave_group`.
@@ -127,11 +188,12 @@ impl GroupState {
         self.group_type = group_type;
         self.own_flags = own_flags;
         self.members = members;
+        self.slots_emptied = false;
         self.leader = leader;
         self.loot = loot;
         // A real list ends the sandbox; `synthetic_roster` re-raises the flag after its own call.
         self.test = false;
-        lines
+        out
     }
 
     /// The `party1..party4` slots: our own subgroup in packet order, at most four (`0x5e6baa`
@@ -155,19 +217,24 @@ impl GroupState {
         vec![UiError::s("ERR_DECLINE_GROUP_S", name)]
     }
 
-    /// `SMSG_GROUP_UNINVITE`: we were kicked; prints unconditionally (`0x5e6850`).
+    /// `SMSG_GROUP_UNINVITE`: we were kicked; empties the slots and prints unconditionally
+    /// (`0x5e6850`).
     pub fn apply_uninvited(&mut self) -> Vec<UiError> {
+        self.slots_emptied = true;
         vec![UiError::key("ERR_UNINVITE_YOU")]
     }
 
-    /// `SMSG_GROUP_DESTROYED`: prints only while grouped (`0x5e6880` tests `0x4e86d0() != 0`).
-    /// vmangos's two-member collapse sends none (`Group/Group.cpp:533`).
+    /// `SMSG_GROUP_DESTROYED`: prints only while grouped (`0x5e6880` tests `0x4e86d0() != 0`), then
+    /// empties the slots (`0x5e6893`). vmangos's two-member collapse sends none
+    /// (`Group/Group.cpp:533`).
     pub fn apply_destroyed(&mut self) -> Vec<UiError> {
-        if self.in_group {
+        let lines = if self.in_group {
             vec![UiError::key("ERR_GROUP_DISBANDED")]
         } else {
             Vec::new()
-        }
+        };
+        self.slots_emptied = true;
+        lines
     }
 
     /// `SMSG_GROUP_SET_LEADER`; vmangos sends the full list right after (`Group::ChangeLeader`).
@@ -182,9 +249,10 @@ impl GroupState {
     /// `SMSG_PARTY_COMMAND_RESULT` through the reference's jump table (`0x5e6a14`): one message
     /// per result, its catalog row giving text, surface and sound (result 7 is the red error line,
     /// the rest chat). Silent, as in the reference: results past 8, `OK` for an operation other
-    /// than invite or leave, and an invite ack with no name (`0x5e6923`).
+    /// than invite or leave, and an invite ack with no name (`0x5e6923`). The leave ack also
+    /// empties the slots (`0x5e68f6`).
     pub fn apply_command_result(
-        &self,
+        &mut self,
         operation: u32,
         member: &str,
         result: u32,
@@ -194,7 +262,10 @@ impl GroupState {
             party_result::OK => match operation {
                 // The reference's guard: an invite ack with no name prints nothing.
                 party_operation::INVITE if !member.is_empty() => Some(named("ERR_INVITE_PLAYER_S")),
-                party_operation::LEAVE => Some(UiError::key("ERR_LEFT_GROUP_YOU")),
+                party_operation::LEAVE => {
+                    self.slots_emptied = true;
+                    Some(UiError::key("ERR_LEFT_GROUP_YOU"))
+                }
                 _ => None,
             },
             party_result::BAD_PLAYER_NAME => Some(named("ERR_BAD_PLAYER_NAME_S")),
@@ -292,6 +363,7 @@ impl GroupState {
             group_type,
             own_flags,
             members,
+            slots_emptied,
             leader,
             loot,
             stats,
@@ -311,6 +383,7 @@ impl GroupState {
         *group_type = 0;
         *own_flags = 0;
         members.clear();
+        *slots_emptied = false;
         *leader = 0;
         *loot = None;
         stats.clear();
@@ -418,7 +491,7 @@ mod tests {
         assert_eq!((g.ready_check, g.ready_check_requests), (1, 1));
         assert_eq!(g.saved_instances_answers, 2);
 
-        g.apply_list(0, 0, vec![], 0, None);
+        g.apply_list(0, 0, vec![], 0, None, None);
 
         assert!(!g.in_group);
         assert!(g.members.is_empty());
@@ -474,102 +547,222 @@ mod tests {
         assert_eq!(g.ready_check_answers, vec![(0xB0B, false)]);
     }
 
+    /// Our own guid, for the lists that ask whether we lead.
+    const ME: u64 = 0x5E1F;
+
+    fn sub(name: &str, guid: u64, subgroup: u8) -> GroupMemberEntry {
+        GroupMemberEntry {
+            flags: subgroup,
+            ..member(name, guid)
+        }
+    }
+
+    fn lines(lines: Vec<UiError>, invite_accept: bool) -> ListOutcome {
+        ListOutcome {
+            lines,
+            invite_accept,
+        }
+    }
+
     #[test]
-    fn join_lines_come_from_roster_diffs() {
+    fn joining_a_party_names_nobody_already_in_it() {
         let mut g = GroupState::default();
-        // Our first list prints Alice's join: the reference's cache starts empty (`0x5e6c19`).
+        let party = vec![member("Alice", 1), member("Bob", 2)];
         assert_eq!(
-            g.apply_list(0, 0, vec![member("Alice", 1)], 1, None),
-            vec![UiError::s("ERR_JOINED_GROUP_S", "Alice")]
+            g.apply_list(0, 0, party.clone(), 1, None, Some(ME)),
+            lines(vec![], true),
+            "seated into no group: the chime alone"
         );
         assert!(g.in_group);
+
+        let grown = [party.clone(), vec![member("Carol", 3)]].concat();
         assert_eq!(
-            g.apply_list(0, 0, vec![member("Alice", 1), member("Carol", 3)], 1, None),
-            vec![UiError::s("ERR_JOINED_GROUP_S", "Carol")]
+            g.apply_list(0, 0, grown.clone(), 1, None, Some(ME)),
+            lines(vec![UiError::s("ERR_JOINED_GROUP_S", "Carol")], true),
+            "a member new to a party we held"
         );
         assert_eq!(
-            g.apply_list(0, 0, vec![member("Alice", 1)], 1, None),
-            vec![UiError::s("ERR_LEFT_GROUP_S", "Carol")]
+            g.apply_list(0, 0, party.clone(), 1, None, Some(ME)),
+            lines(vec![UiError::s("ERR_LEFT_GROUP_S", "Carol")], false)
         );
-        // An unchanged resync (loot/status churn re-sends the list) prints nothing.
-        assert!(g
-            .apply_list(0, 0, vec![member("Alice", 1)], 1, None)
-            .is_empty());
+        // An unchanged resync (loot/status churn re-sends the list) shows nothing.
+        assert_eq!(
+            g.apply_list(0, 0, party, 1, None, Some(ME)),
+            ListOutcome::default()
+        );
     }
 
     #[test]
-    fn leave_kick_disband_lines_stack_per_opcode() {
-        // Voluntary: the leave ack prints; the empty list adds the leave lines.
+    fn a_group_we_form_names_the_member_the_list_names_last() {
         let mut g = GroupState::default();
-        g.apply_list(0, 0, vec![member("Alice", 1)], 1, None);
+        // A solo leader's list names nobody, and holds no group.
+        assert_eq!(
+            g.apply_list(0, 0, vec![], ME, None, Some(ME)),
+            ListOutcome::default()
+        );
+        assert_eq!(
+            g.apply_list(0, 0, vec![member("Alice", 1)], ME, None, Some(ME)),
+            lines(vec![UiError::s("ERR_JOINED_GROUP_S", "Alice")], true)
+        );
+
+        let mut g = GroupState::default();
+        assert_eq!(
+            g.apply_list(
+                0,
+                0,
+                vec![member("Alice", 1), member("Bob", 2)],
+                ME,
+                None,
+                Some(ME)
+            ),
+            lines(vec![UiError::s("ERR_JOINED_GROUP_S", "Bob")], true),
+            "one line, for the last member"
+        );
+        // Not ours: nobody is named.
+        let mut g = GroupState::default();
+        assert_eq!(
+            g.apply_list(0, 0, vec![member("Alice", 1)], 1, None, Some(ME)),
+            lines(vec![], true)
+        );
+    }
+
+    #[test]
+    fn an_opcode_that_ends_the_group_leaves_the_empty_list_nobody_to_name() {
+        type Ending = fn(&mut GroupState) -> Vec<UiError>;
+        let endings: [(Ending, &str); 3] = [
+            (
+                |g| {
+                    g.apply_command_result(party_operation::LEAVE, "Us", party_result::OK)
+                        .into_iter()
+                        .collect()
+                },
+                "ERR_LEFT_GROUP_YOU",
+            ),
+            (|g| g.apply_uninvited(), "ERR_UNINVITE_YOU"),
+            (|g| g.apply_destroyed(), "ERR_GROUP_DISBANDED"),
+        ];
+        for (end, key) in endings {
+            let mut g = GroupState::default();
+            g.apply_list(
+                0,
+                0,
+                vec![member("Alice", 1), member("Bob", 2)],
+                1,
+                None,
+                None,
+            );
+            assert_eq!(end(&mut g), vec![UiError::key(key)]);
+            assert_eq!(
+                g.apply_list(0, 0, Vec::new(), 0, None, None),
+                ListOutcome::default(),
+                "{key} emptied the slots"
+            );
+            assert!(!g.in_group);
+        }
+
+        // Ungrouped, the disband is silent (the `0x4e86d0` gate).
+        assert!(GroupState::default().apply_destroyed().is_empty());
+
+        // vmangos's two-member collapse sends nothing first: the survivor sees the leaver go.
+        let mut g = GroupState::default();
+        g.apply_list(0, 0, vec![member("Alice", 1)], 1, None, None);
+        assert_eq!(
+            g.apply_list(0, 0, Vec::new(), 0, None, None),
+            lines(vec![UiError::s("ERR_LEFT_GROUP_S", "Alice")], false)
+        );
+    }
+
+    #[test]
+    fn joining_a_raid_prints_the_joined_line_alone() {
+        let raid = vec![sub("Alice", 1, 0), sub("Bob", 2, 1), sub("Carol", 3, 1)];
+        let mut g = GroupState::default();
+        assert_eq!(
+            g.apply_list(1, 0, raid.clone(), 1, None, Some(ME)),
+            lines(vec![UiError::key("ERR_RAID_YOU_JOINED")], true),
+            "Alice shares our subgroup, so the chime plays"
+        );
+        let mut g = GroupState::default();
+        assert_eq!(
+            g.apply_list(1, 2, raid, 1, None, Some(ME)),
+            lines(vec![UiError::key("ERR_RAID_YOU_JOINED")], false),
+            "nobody in our subgroup, no chime"
+        );
+    }
+
+    #[test]
+    fn a_raid_list_names_arrivals_and_departures_in_raid_words_alone() {
+        let mut g = GroupState::default();
+        g.apply_list(
+            1,
+            0,
+            vec![sub("Alice", 1, 0), sub("Bob", 2, 1)],
+            1,
+            None,
+            None,
+        );
+        // Dave lands in our subgroup: the raid line, no party line and no chime.
+        assert_eq!(
+            g.apply_list(
+                1,
+                0,
+                vec![sub("Alice", 1, 0), sub("Bob", 2, 1), sub("Dave", 4, 0)],
+                1,
+                None,
+                None
+            ),
+            lines(vec![UiError::s("ERR_RAID_MEMBER_ADDED_S", "Dave")], false)
+        );
+        assert_eq!(
+            g.apply_list(
+                1,
+                0,
+                vec![sub("Alice", 1, 0), sub("Dave", 4, 0)],
+                1,
+                None,
+                None
+            ),
+            lines(vec![UiError::s("ERR_RAID_MEMBER_REMOVED_S", "Bob")], false)
+        );
+    }
+
+    #[test]
+    fn leaving_a_raid_prints_the_left_line_alone() {
+        let raid = vec![sub("Alice", 1, 0), sub("Bob", 2, 1), sub("Carol", 3, 0)];
+        let mut g = GroupState::default();
+        g.apply_list(1, 0, raid.clone(), 1, None, None);
         assert_eq!(
             g.apply_command_result(party_operation::LEAVE, "Us", party_result::OK),
             Some(UiError::key("ERR_LEFT_GROUP_YOU"))
         );
         assert_eq!(
-            g.apply_list(0, 0, Vec::new(), 0, None),
-            vec![UiError::s("ERR_LEFT_GROUP_S", "Alice")]
-        );
-        assert!(!g.in_group);
-
-        // Kicked: `SMSG_GROUP_UNINVITE` prints unconditionally.
-        let mut g = GroupState::default();
-        g.apply_list(0, 0, vec![member("Alice", 1)], 1, None);
-        assert_eq!(g.apply_uninvited(), vec![UiError::key("ERR_UNINVITE_YOU")]);
-        assert_eq!(
-            g.apply_list(0, 0, Vec::new(), 0, None),
-            vec![UiError::s("ERR_LEFT_GROUP_S", "Alice")]
+            g.apply_list(0, 0, Vec::new(), 0, None, None).lines,
+            vec![UiError::key("ERR_RAID_YOU_LEFT")]
         );
 
-        // Destroyed while grouped: it prints, and the empty list still runs its diff.
+        // Removed with no opcode first: our subgroup's slots go in party words, then the raid.
         let mut g = GroupState::default();
-        g.apply_list(0, 0, vec![member("Alice", 1)], 1, None);
+        g.apply_list(1, 0, raid, 1, None, None);
         assert_eq!(
-            g.apply_destroyed(),
-            vec![UiError::key("ERR_GROUP_DISBANDED")]
-        );
-        assert_eq!(
-            g.apply_list(0, 0, Vec::new(), 0, None),
-            vec![UiError::s("ERR_LEFT_GROUP_S", "Alice")]
-        );
-        // Ungrouped, it is silent (the `0x4e86d0` gate).
-        assert!(g.apply_destroyed().is_empty());
-
-        // vmangos's two-member collapse sends no `SMSG_GROUP_DESTROYED`: just the leave line.
-        let mut g = GroupState::default();
-        g.apply_list(0, 0, vec![member("Alice", 1)], 1, None);
-        assert_eq!(
-            g.apply_list(0, 0, Vec::new(), 0, None),
-            vec![UiError::s("ERR_LEFT_GROUP_S", "Alice")]
+            g.apply_list(0, 0, Vec::new(), 0, None, None).lines,
+            vec![
+                UiError::s("ERR_LEFT_GROUP_S", "Alice"),
+                UiError::s("ERR_LEFT_GROUP_S", "Carol"),
+                UiError::key("ERR_RAID_YOU_LEFT"),
+            ]
         );
     }
 
     #[test]
-    fn raid_wording_and_conversion() {
+    fn a_party_becoming_a_raid_and_back_prints_only_the_raid_edges() {
         let mut g = GroupState::default();
-        g.apply_list(0, 0, vec![member("Alice", 1)], 1, None);
-        // Party to raid: same roster, the type flips.
+        g.apply_list(0, 0, vec![member("Alice", 1)], 1, None, None);
         assert_eq!(
-            g.apply_list(1, 0, vec![member("Alice", 1)], 1, None),
-            vec![UiError::key("ERR_RAID_YOU_JOINED")]
+            g.apply_list(1, 0, vec![member("Alice", 1)], 1, None, None),
+            lines(vec![UiError::key("ERR_RAID_YOU_JOINED")], false)
         );
         assert_eq!(
-            g.apply_list(1, 0, vec![member("Alice", 1), member("Dave", 4)], 1, None),
-            vec![UiError::s("ERR_RAID_MEMBER_ADDED_S", "Dave")]
-        );
-        let mut lines = g.apply_list(1, 0, vec![member("Alice", 1)], 1, None);
-        assert_eq!(
-            lines.pop(),
-            Some(UiError::s("ERR_RAID_MEMBER_REMOVED_S", "Dave"))
-        );
-        // Leaving the raid: the empty list's diff keeps the departed raid's wording.
-        assert_eq!(
-            g.apply_command_result(party_operation::LEAVE, "Us", party_result::OK),
-            Some(UiError::key("ERR_LEFT_GROUP_YOU"))
-        );
-        assert_eq!(
-            g.apply_list(0, 0, Vec::new(), 0, None),
-            vec![UiError::s("ERR_RAID_MEMBER_REMOVED_S", "Alice")]
+            g.apply_list(0, 0, vec![member("Alice", 1)], 1, None, None),
+            lines(vec![UiError::key("ERR_RAID_YOU_LEFT")], false)
         );
     }
 
@@ -580,7 +773,7 @@ mod tests {
         m2.flags = 0x01; // subgroup 1
         let mut m3 = member("Carol", 3);
         m3.flags = 0x80; // subgroup 0, assistant: the filter ignores 0x80
-        g.apply_list(1, 0x00, vec![member("Alice", 1), m2, m3], 1, None);
+        g.apply_list(1, 0x00, vec![member("Alice", 1), m2, m3], 1, None, None);
         let slots: Vec<&str> = g.party_slots().map(|m| m.name.as_str()).collect();
         assert_eq!(slots, vec!["Alice", "Carol"]);
     }
@@ -631,7 +824,7 @@ mod tests {
     #[test]
     fn stats_merge_and_retention() {
         let mut g = GroupState::default();
-        g.apply_list(0, 0, vec![member("Alice", 1)], 1, None);
+        g.apply_list(0, 0, vec![member("Alice", 1)], 1, None, None);
         g.apply_stats(
             1,
             false,
@@ -665,7 +858,7 @@ mod tests {
         assert_eq!(s.cur_hp, Some(70));
         assert_eq!(s.max_hp, None, "FULL replaces the snapshot outright");
 
-        g.apply_list(0, 0, Vec::new(), 0, None);
+        g.apply_list(0, 0, Vec::new(), 0, None, None);
         assert!(g.stats.is_empty());
     }
 
@@ -686,7 +879,7 @@ mod tests {
     #[test]
     fn a_raid_to_party_conversion_clears_the_raid_target_board() {
         let mut g = GroupState::default();
-        g.apply_list(1, 0, vec![member("Ally", 0x22)], 0x22, None);
+        g.apply_list(1, 0, vec![member("Ally", 0x22)], 0x22, None, None);
         g.apply_raid_target(7, 0x22);
         assert_eq!(g.raid_targets[7], 0x22, "marked while a raid");
 
@@ -696,13 +889,14 @@ mod tests {
             vec![member("Ally", 0x22), member("Bee", 0x33)],
             0x22,
             None,
+            None,
         );
         assert_eq!(
             g.raid_targets[7], 0x22,
             "a roster change inside a raid keeps the marks"
         );
 
-        g.apply_list(0, 0, vec![member("Ally", 0x22)], 0x22, None);
+        g.apply_list(0, 0, vec![member("Ally", 0x22)], 0x22, None, None);
         assert_eq!(
             g.raid_targets, [0; 8],
             "the raid flag clearing empties the board"
@@ -722,7 +916,7 @@ mod tests {
             (party_result::WRONG_FACTION, 0xff, false),
             (party_result::IGNORING_YOU, 0x13d, true),
         ];
-        let g = GroupState::default();
+        let mut g = GroupState::default();
         for &(result, id, takes_name) in TABLE {
             let msg = g
                 .apply_command_result(party_operation::INVITE, "Zed", result)
@@ -744,7 +938,7 @@ mod tests {
         }
 
         // The two `OK` arms, where the operation decides.
-        let ok = |op| g.apply_command_result(op, "Zed", party_result::OK);
+        let mut ok = |op| g.apply_command_result(op, "Zed", party_result::OK);
         assert_eq!(
             benilla_ui::messages::by_key(ok(party_operation::INVITE).unwrap().key)
                 .unwrap()
@@ -762,8 +956,8 @@ mod tests {
     #[test]
     fn the_wrong_faction_refusal_is_the_red_line_and_the_rest_are_chat() {
         use benilla_ui::messages::MsgKind;
-        let g = GroupState::default();
-        let kind = |r| {
+        let mut g = GroupState::default();
+        let mut kind = |r| {
             benilla_ui::messages::kind_of(
                 g.apply_command_result(party_operation::INVITE, "Zed", r)
                     .unwrap()
@@ -787,7 +981,7 @@ mod tests {
     /// Three inputs show nothing: the reference's default arm (`0x5e6a06`) returns with no call.
     #[test]
     fn the_silent_inputs_show_nothing() {
-        let g = GroupState::default();
+        let mut g = GroupState::default();
         // 1: every result past the table (`dec eax; cmp eax,7; ja`, unsigned).
         for r in [9u32, 10, 42, u32::MAX] {
             assert!(
@@ -822,7 +1016,7 @@ mod tests {
         let s = benilla_ui::script::UiScript::new().expect("VM");
         s.run(&String::from_utf8_lossy(&src)).expect("runs clean");
 
-        let g = GroupState::default();
+        let mut g = GroupState::default();
         for r in [
             party_result::BAD_PLAYER_NAME,
             party_result::TARGET_NOT_IN_GROUP,
@@ -860,10 +1054,20 @@ mod tests {
         let mut g = GroupState::default();
         let mut lines = Vec::new();
         // Driven through every producer, so a new line cannot skip the checks below.
-        lines.extend(g.apply_list(0, 0, vec![member("Alice", 1), member("Bob", 2)], 1, None));
-        lines.extend(g.apply_list(0, 0, vec![member("Alice", 1)], 1, None));
-        lines.extend(g.apply_list(1, 0, vec![member("Alice", 1), member("Dave", 4)], 1, None));
-        lines.extend(g.apply_list(1, 0, vec![member("Alice", 1)], 1, None));
+        let mut list =
+            |g: &mut GroupState, group_type: u8, members: &[(&str, u64)], leader: u64| {
+                let members = members.iter().map(|(n, guid)| member(n, *guid)).collect();
+                lines.extend(
+                    g.apply_list(group_type, 0, members, leader, None, None)
+                        .lines,
+                );
+            };
+        list(&mut g, 0, &[("Alice", 1)], 1);
+        list(&mut g, 0, &[("Alice", 1), ("Bob", 2)], 1);
+        list(&mut g, 0, &[("Alice", 1)], 1);
+        list(&mut g, 1, &[("Alice", 1)], 1);
+        list(&mut g, 1, &[("Alice", 1), ("Dave", 4)], 1);
+        list(&mut g, 1, &[("Alice", 1)], 1);
         lines.extend(g.apply_invited("Bob"));
         lines.extend(g.apply_declined("Carol"));
         lines.extend(g.apply_leader_changed("Alice", Some("Us")));
@@ -872,6 +1076,7 @@ mod tests {
         lines.extend(g.apply_destroyed());
         g.leader = 1;
         lines.extend(g.apply_ready_check_request(false));
+        lines.extend(g.apply_list(0, 0, Vec::new(), 0, None, None).lines);
 
         let mut keys: Vec<&str> = lines.iter().map(|m| m.key).collect();
         keys.sort_unstable();
@@ -890,9 +1095,10 @@ mod tests {
                 "ERR_RAID_MEMBER_ADDED_S",
                 "ERR_RAID_MEMBER_REMOVED_S",
                 "ERR_RAID_YOU_JOINED",
+                "ERR_RAID_YOU_LEFT",
                 "ERR_UNINVITE_YOU",
             ],
-            "all twelve keys this window can raise are exercised below"
+            "all thirteen keys this window can raise are exercised below"
         );
 
         for msg in &lines {
