@@ -1415,16 +1415,30 @@ pub(super) fn drain_addon_chat_sends(
                 out.body
             }
             crate::net::ChatKind::Dnd => {
-                // DND has no mirror (`0x49f3f0`): the live descriptor bit. The reference's DND
-                // also clears a standing AFK first (`0x49f3d6`); this arm does not.
+                // `/dnd` is type `0x15`, so the reference clears a standing AFK before it marks DND
+                // (`0x49f3d6` skips only type `0x14`). This arm matches before `_`, so the clear has
+                // to happen here or a typed `/afk` then `/dnd` never sends the empty AFK packet.
+                if let Some(line) =
+                    super::away::auto_clear_line(*mirror, auto_clear_afk(&cvars), &strings)
+                {
+                    super::away::push_system(&mut chat_log, line);
+                    mirror.0 = 0;
+                    let _ = commands.0.send(ClientCommand::Chat {
+                        kind: crate::net::ChatKind::Afk,
+                        target: None,
+                        text: String::new(),
+                    });
+                }
+                // DND has no mirror (`0x49f3f0`): the live descriptor bit.
                 let out = super::away::dnd_line(&send.text, is_dnd(&self_q), &strings);
                 if let Some(line) = out.line {
                     super::away::push_system(&mut chat_log, line);
                 }
                 out.body
             }
-            // Clear a standing AFK first (`0x49f3d6` skips only type `0x14`), then send the
-            // line's own packet.
+            // Any other type: clear a standing AFK first (`0x49f3d6` skips only type `0x14`), then
+            // send the line's own packet. `/dnd` is type `0x15` and is handled above, where the
+            // same clear runs before the DND line.
             _ => {
                 if let Some(line) =
                     super::away::auto_clear_line(*mirror, auto_clear_afk(&cvars), &strings)
