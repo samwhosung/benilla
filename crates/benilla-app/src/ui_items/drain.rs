@@ -205,6 +205,43 @@ pub(super) fn drain_inventory_uses(
     }
 }
 
+/// Sends paper-doll repair-mode clicks as `CMSG_REPAIR_ITEM`; the cursor route supplies the
+/// equipped item's guid, as the 1.12 client does rather than an inventory position.
+pub(super) fn drain_inventory_repairs(
+    script: Option<NonSendMut<UiScript>>,
+    self_q: Query<&ObjectStore, With<SelfPlayer>>,
+    merchant: Res<crate::ui_merchant::MerchantOpen>,
+    objects: Objects,
+    commands: Res<NetCommands>,
+) {
+    let Some(mut script) = script else {
+        return;
+    };
+    let Some(vendor) = merchant.vendor else {
+        return;
+    };
+    for id in script.take_inventory_repairs() {
+        if !(1..=19).contains(&id) {
+            debug!("ui_items: repair equipped lua slot {id} out of range — ignored");
+            continue;
+        }
+        let slot = (id - 1) as u8;
+        match self_q
+            .iter()
+            .next()
+            .and_then(|store| slot_guid(&store.0, EQUIPMENT_BAG, slot, &objects))
+        {
+            Some(item_guid) => {
+                debug!("ui_items: repair equipped lua slot {id} (item {item_guid:#x})");
+                let _ = commands
+                    .0
+                    .send(ClientCommand::RepairItem { vendor, item_guid });
+            }
+            None => debug!("ui_items: repair equipped empty lua slot {id} — ignored"),
+        }
+    }
+}
+
 pub(super) fn drain_container_uses(
     script: Option<NonSendMut<UiScript>>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,

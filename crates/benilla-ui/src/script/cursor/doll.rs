@@ -5,7 +5,7 @@ use mlua::Lua;
 
 use crate::script::binding_abi::flag;
 use crate::script::container::ContainerMove;
-use crate::script::Model;
+use crate::script::{Model, SoundRequest};
 
 use super::{queue_cursor_update, queue_lock_changed, CursorItem, CursorPayload, EQUIPMENT_BAG};
 
@@ -23,6 +23,21 @@ pub(super) fn pickup_inventory_item(model: &mut Model, id: u32) -> bool {
     // worn weapon can be poisoned. A held payload wins: `0x4c73af` tests it first.
     if model.item_pick_armed && model.cursor.is_none() {
         model.item_picks.push((EQUIPMENT_BAG, id));
+        return false;
+    }
+    // `PickupInventoryItem` shares the repair-mode leg with bag clicks: with no item held, a
+    // worn-slot click queues `CMSG_REPAIR_ITEM` instead of lifting the item.
+    if model.repair_mode && model.cursor.is_none() && (1..=19).contains(&id) {
+        model.inventory_repairs.push(id);
+        if model
+            .inv_slot("player", id as usize)
+            .is_some_and(|s| s.item_id != 0)
+        {
+            // The paper-doll repair click plays locally, before its `CMSG_REPAIR_ITEM` drain.
+            model
+                .sound_queue
+                .push(SoundRequest::KitNameRestart("ITEM_REPAIR".into()));
+        }
         return false;
     }
     match model.cursor.take() {
@@ -142,10 +157,15 @@ pub(super) fn auto_equip_cursor_item(model: &mut Model) -> bool {
     }
 }
 
-/// `UseInventoryItem(id)`, the doll slot's right-click (`PaperDollFrame.lua:658-659`): the app
-/// sends `CMSG_USE_ITEM` with bag 255 and the 0-based slot, and drops an empty slot unsent.
+/// `UseInventoryItem(id)`, the doll slot's right-click (`PaperDollFrame.lua:658-659`): repair
+/// mode uses the same cursor-first slot click as left-click. Otherwise the app sends
+/// `CMSG_USE_ITEM` with bag 255 and the 0-based slot, dropping an empty slot unsent.
 pub(super) fn use_inventory_item(model: &mut Model, id: u32) {
-    model.inventory_uses.push(id);
+    if model.repair_mode {
+        pickup_inventory_item(model, id);
+    } else {
+        model.inventory_uses.push(id);
+    }
 }
 
 /// `IsInventoryItemLocked(id)`: true while `id` is the held item's source or the app reports a
@@ -214,7 +234,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 #[cfg(test)]
 mod tests {
     use crate::script::cursor::{CursorAction, CursorPayload, CursorSpell, EQUIPMENT_BAG};
-    use crate::script::{ContainerMove, ContainerSlot, ContainerState, InvSlotView, UiScript};
+    use crate::script::{
+        ContainerMove, ContainerSlot, ContainerState, InvSlotView, SoundRequest, UiScript,
+    };
 
     /// Head (1), a ring in finger slot 11 that also fits 12, and Tabard (19).
     fn doll_slots() -> crate::script::InventorySlots {
@@ -574,6 +596,33 @@ mod tests {
         s.run("UseInventoryItem(19)").unwrap();
         assert_eq!(s.take_inventory_uses(), vec![1, 19]);
         assert!(s.take_inventory_uses().is_empty(), "drained");
+    }
+
+    #[test]
+    fn repair_mode_queues_an_equipped_slot_without_picking_it_up() {
+        let mut s = UiScript::new().unwrap();
+        s.set_inventory_slots(doll_slots());
+        s.set_merchant(Some(crate::script::MerchantState {
+            can_repair: true,
+            ..Default::default()
+        }));
+        s.run("ShowRepairCursor()").unwrap();
+
+        assert!(!s.eval::<bool>("return PickupInventoryItem(1)").unwrap());
+        assert!(!s.eval::<bool>("return PickupInventoryItem(1)").unwrap());
+        s.run("UseInventoryItem(1)").unwrap();
+        assert!(s.cursor_item().is_none());
+        assert_eq!(s.take_inventory_repairs(), vec![1, 1, 1]);
+        assert!(s.take_inventory_uses().is_empty(), "no item-use intent");
+        assert_eq!(
+            s.take_sounds(),
+            vec![
+                SoundRequest::KitNameRestart("ITEM_REPAIR".into()),
+                SoundRequest::KitNameRestart("ITEM_REPAIR".into()),
+                SoundRequest::KitNameRestart("ITEM_REPAIR".into()),
+            ]
+        );
+        assert!(s.take_inventory_repairs().is_empty(), "drained");
     }
 
     #[test]

@@ -338,6 +338,11 @@ impl super::UiScript {
     pub fn take_inventory_uses(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.model_mut().inventory_uses)
     }
+
+    /// Drain equipped slots clicked in repair mode, for `CMSG_REPAIR_ITEM`.
+    pub fn take_inventory_repairs(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.model_mut().inventory_repairs)
+    }
 }
 
 fn with_unit_stats<T>(

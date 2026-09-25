@@ -197,6 +197,20 @@ fn with_button<T>(
 /// region in that layer goes dark, not only the HighlightTexture. `Enable()` here turns it back
 /// on; the reference restores it only on a hovered button, by re-running its `<OnEnter>`
 /// (`0x779183`), and never while `LockHighlight` holds (`[frame+0xf8]`).
+pub(super) fn set_enabled_frame(frame: &mut crate::widget::Frame, on: bool) -> bool {
+    let KindState::Button(bs) = &mut frame.kind_state else {
+        return false;
+    };
+    bs.set_enabled(on);
+    let bit = 1u8 << DrawLayer::Highlight.index();
+    if on {
+        frame.disabled_layers &= !bit;
+    } else {
+        frame.disabled_layers |= bit;
+    }
+    true
+}
+
 fn set_enabled(lua: &Lua, this: &Table, on: bool) -> mlua::Result<()> {
     let h = frame_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -204,15 +218,8 @@ fn set_enabled(lua: &Lua, this: &Table, on: bool) -> mlua::Result<()> {
         .arena
         .frame_mut(h)
         .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
-    match &mut frame.kind_state {
-        KindState::Button(bs) => bs.set_enabled(on),
-        _ => return Err(mlua::Error::runtime("not a Button")),
-    };
-    let bit = 1u8 << DrawLayer::Highlight.index();
-    if on {
-        frame.disabled_layers &= !bit;
-    } else {
-        frame.disabled_layers |= bit;
+    if !set_enabled_frame(frame, on) {
+        return Err(mlua::Error::runtime("not a Button"));
     }
     Ok(())
 }

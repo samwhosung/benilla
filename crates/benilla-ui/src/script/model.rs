@@ -830,6 +830,8 @@ pub(crate) struct Model {
     pub(crate) inventory_alerts: [u8; 12],
     /// `UseInventoryItem` slot ids, sent as `CMSG_USE_ITEM` on the equipped item.
     pub(crate) inventory_uses: Vec<u32>,
+    /// Equipped slot ids clicked while the merchant repair cursor is armed.
+    pub(crate) inventory_repairs: Vec<u32>,
     /// Main- and off-hand temporary enchants in `GetWeaponEnchantInfo`'s order, pushed each frame.
     pub(crate) weapon_enchants: [Option<weapon_enchant::WeaponEnchant>; 2],
 
@@ -1381,6 +1383,7 @@ impl Model {
             bank_bag_slots: Default::default(),
             inventory_alerts: [0; 12],
             inventory_uses: Vec::new(),
+            inventory_repairs: Vec::new(),
             weapon_enchants: [None; 2],
             inspect: None,
             inspect_notifies: Vec::new(),

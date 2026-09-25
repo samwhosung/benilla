@@ -658,6 +658,19 @@ pub(super) fn stop_source_kit(out: &mut SoundOutput, source: Entity, kit_id: u32
     });
 }
 
+/// Replace a click-triggered UI kit's current play so its next click is never swallowed by
+/// `NO_DUPLICATES`. Other kit plays retain the normal duplicate gate.
+pub(super) fn stop_kit(out: &mut SoundOutput, kit_id: u32) {
+    out.channels.retain_mut(|c| {
+        if c.kit == kit_id {
+            c.handle.stop(mixer::declick());
+            false
+        } else {
+            true
+        }
+    });
+}
+
 /// Force-stop every channel tagged with `source` on despawn, the unit teardown stop (`0x5fbb6c`).
 /// Returns how many it stopped, so the doodad reaper in [`super::anim_events`] can tell a reaped
 /// loop from a silent source.

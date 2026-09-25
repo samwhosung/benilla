@@ -196,6 +196,10 @@ mod tests {
         assert_eq!(ui.id, 823);
         assert_eq!(ui.sound_type, 2, "type 2 = UI");
 
+        let repair = cat.by_name("ITEM_REPAIR").expect("repair UI kit by name");
+        assert_eq!(repair.id, 7994);
+        assert_eq!(repair.flags & sound_kit_flags::NO_DUPLICATES, 0x20);
+
         // The joined path of a UI kit resolves to real bytes on the chain.
         let (path, _) = &ui.files[0];
         let bytes = chain.read(path).expect("kit file readable off the chain");

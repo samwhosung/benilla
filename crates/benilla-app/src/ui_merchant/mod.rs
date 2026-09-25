@@ -451,6 +451,7 @@ fn feed_merchant(
     if fresh == *last && !name_changed && !switched {
         return;
     }
+    let repair_cost_changed = matches!((&*last, &fresh), (Some(old), Some(new)) if old.repair_all_cost != new.repair_all_cost);
     script.set_merchant(fresh.clone());
     let name_arg = || vec![ScriptValue::Str(vendor_name.clone().unwrap_or_default())];
     if switched {
@@ -467,6 +468,9 @@ fn feed_merchant(
             (Some(_), None) => script.fire_event("MERCHANT_CLOSED", vec![]),
             (None, None) => {}
         }
+    }
+    if repair_cost_changed {
+        script.refresh_merchant_repair_all();
     }
     *last = fresh;
     *last_name = vendor_name;

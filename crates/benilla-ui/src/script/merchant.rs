@@ -12,6 +12,7 @@ use mlua::{Lua, MultiValue, Value};
 use super::container::UiCursorMode;
 use super::cursor::CursorPayload;
 use super::Model;
+use crate::widget::RegionKind;
 
 /// One vendor row, resolved by the app; its 1-based index is its place in [`MerchantState::items`].
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -81,9 +82,47 @@ pub struct MerchantState {
 }
 
 impl super::UiScript {
-    /// Push (or clear, with `None`) the open vendor.
+    /// Push (or clear, with `None`) the open vendor. Closing a merchant also hides its repair
+    /// cursor; the reference's `MerchantFrame_OnHide` leaves no repair mode armed.
     pub fn set_merchant(&mut self, state: Option<MerchantState>) {
+        let closing = state.is_none();
         self.model_mut().merchant = state;
+        if closing {
+            self.model_mut().repair_mode = false;
+        }
+    }
+
+    /// Reapply `MerchantFrame_OnShow`'s repair-all button state after durability changes while
+    /// the merchant remains open. Stock 1.12 `MERCHANT_UPDATE` repaints rows but not this icon.
+    pub fn refresh_merchant_repair_all(&mut self) {
+        let mut model = self.model_mut();
+        let can_repair = model
+            .merchant
+            .as_ref()
+            .is_some_and(|m| m.repair_all_cost > 0);
+        let Some(button) = model.arena.lookup("MerchantRepairAllButton") else {
+            return;
+        };
+        let Some(icon) = model
+            .region_names
+            .get("MerchantRepairAllIcon")
+            .and_then(|id| model.id_to_region.get(id))
+            .copied()
+        else {
+            return;
+        };
+        if !matches!(
+            model.arena.region(icon).map(|r| r.kind),
+            Some(RegionKind::Texture)
+        ) {
+            return;
+        }
+        let Some(frame) = model.arena.frame_mut(button) else {
+            return;
+        };
+        if super::button::set_enabled_frame(frame, can_repair) {
+            model.region_data.entry(icon).or_default().desaturated = !can_repair;
+        }
     }
 
     /// Drain the `(row, quantity)` buys `BuyMerchantItem` queued, the row 1-based.
@@ -461,6 +500,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.repair_all = true;
+            // The UI verb plays its repair feedback at the click, before the packet is drained.
+            model
+                .sound_queue
+                .push(super::SoundRequest::KitNameRestart("ITEM_REPAIR".into()));
             Ok(())
         })?,
     )?;
@@ -468,9 +511,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "ShowRepairCursor",
         lua.create_function(|lua, ()| {
-            lua.app_data_mut::<Model>()
-                .expect("model app_data")
-                .repair_mode = true;
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            // `0x4fbcc0`: a targeting spell or a vendor without repair service leaves the
+            // cursor untouched. `ClearCursor(1,1)` returns any held item before mode 0x11 arms.
+            if model.spell_targeting || !model.merchant.as_ref().is_some_and(|m| m.can_repair) {
+                return Ok(());
+            }
+            crate::script::cursor::clear_cursor(&mut model);
+            model.repair_mode = true;
+            model.ui_cursor = None;
+            model.ui_cursor_dirty = true;
             Ok(())
         })?,
     )?;
@@ -542,7 +592,7 @@ fn arm_vendor_cursor(lua: &Lua, price_of: impl FnOnce(&MerchantState) -> Option<
 #[cfg(test)]
 mod tests {
     use super::{ItemStatsHead, MerchantItem, MerchantState};
-    use crate::script::UiScript;
+    use crate::script::{ContainerSlot, ContainerState, SoundRequest, UiScript};
 
     fn stock() -> MerchantState {
         MerchantState {
@@ -806,13 +856,107 @@ mod tests {
         s.run("RepairAllItems()").unwrap();
         assert!(s.take_repair_all());
         assert!(!s.take_repair_all(), "drained");
+        assert_eq!(
+            s.take_sounds(),
+            vec![SoundRequest::KitNameRestart("ITEM_REPAIR".into())]
+        );
 
         assert!(s.eval::<bool>("return InRepairMode() == nil").unwrap());
         s.run("ShowRepairCursor()").unwrap();
         assert!(s.repair_mode());
         assert!(s.eval::<bool>("return InRepairMode() == 1").unwrap());
+        assert_eq!(s.ui_cursor(), None, "repair clears a stale hover override");
         s.run("HideRepairCursor()").unwrap();
         assert!(!s.repair_mode());
+
+        s.run("ShowRepairCursor()").unwrap();
+        s.set_merchant(None);
+        assert!(
+            !s.repair_mode(),
+            "closing the merchant hides the repair cursor"
+        );
+    }
+
+    #[test]
+    fn show_repair_cursor_checks_targeting_and_vendor_then_returns_held_item() {
+        let mut s = UiScript::new().unwrap();
+        let mut bag = ContainerState {
+            num_slots: 1,
+            ..Default::default()
+        };
+        bag.slots.insert(
+            1,
+            ContainerSlot {
+                item_id: 117,
+                count: 1,
+                ..Default::default()
+            },
+        );
+        s.set_container(0, Some(bag));
+        s.run("PickupContainerItem(0, 1)").unwrap();
+        assert!(s.cursor_item().is_some());
+
+        s.run("ShowRepairCursor()").unwrap();
+        assert!(!s.repair_mode(), "no vendor cannot arm repair");
+        assert!(s.cursor_item().is_some(), "early return keeps held item");
+
+        s.set_merchant(Some(stock()));
+        s.run("ShowRepairCursor()").unwrap();
+        assert!(!s.repair_mode(), "non-repair vendor cannot arm repair");
+        assert!(s.cursor_item().is_some());
+
+        let mut vendor = stock();
+        vendor.can_repair = true;
+        s.set_merchant(Some(vendor));
+        s.set_spell_targeting(true);
+        s.run("ShowRepairCursor()").unwrap();
+        assert!(!s.repair_mode(), "targeting spell wins over repair");
+        assert!(s.cursor_item().is_some());
+
+        s.set_spell_targeting(false);
+        s.run("ShowRepairCursor()").unwrap();
+        assert!(s.repair_mode());
+        assert!(
+            s.cursor_item().is_none(),
+            "ClearCursor returned the held item"
+        );
+        assert!(s
+            .eval::<bool>("local _, _, locked = GetContainerItemInfo(0, 1) return not locked")
+            .unwrap());
+        assert!(s.take_container_moves().is_empty());
+    }
+
+    #[test]
+    fn repair_all_button_refreshes_when_cost_changes() {
+        let mut s = UiScript::new().unwrap();
+        s.run(
+            r#"MerchantRepairAllButton = CreateFrame("Button", "MerchantRepairAllButton")
+               MerchantRepairAllIcon = MerchantRepairAllButton:CreateTexture("MerchantRepairAllIcon", "ARTWORK")"#,
+        )
+        .unwrap();
+        let icon_is_gray = |s: &UiScript| {
+            let model = s.lua().app_data_ref::<crate::script::Model>().unwrap();
+            let id = model.region_names["MerchantRepairAllIcon"];
+            let icon = *model.id_to_region.get(&id).unwrap();
+            model.region_data.get(&icon).is_some_and(|r| r.desaturated)
+        };
+        let mut state = stock();
+        state.can_repair = true;
+        state.repair_all_cost = 100;
+        s.set_merchant(Some(state.clone()));
+        s.refresh_merchant_repair_all();
+        assert!(s
+            .eval::<bool>("return MerchantRepairAllButton:IsEnabled() ~= 0")
+            .unwrap());
+        assert!(!icon_is_gray(&s));
+
+        state.repair_all_cost = 0;
+        s.set_merchant(Some(state));
+        s.refresh_merchant_repair_all();
+        assert!(s
+            .eval::<bool>("return MerchantRepairAllButton:IsEnabled() == 0")
+            .unwrap());
+        assert!(icon_is_gray(&s));
     }
 
     #[test]
