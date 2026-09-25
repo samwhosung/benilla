@@ -5,7 +5,7 @@ use std::io;
 
 use crate::wire::{read_u32_le, read_u64_le};
 
-/// `SMSG_BUY_BANK_SLOT_RESULT`'s reason (`BANK_SLOT_*`, vmangos `Player.h:91-94`).
+/// `SMSG_BUY_BANK_SLOT_RESULT`'s reason (`ERR_BANKSLOT_*`, vmangos `Player.h:91-94`).
 pub mod bank_slot_result {
     pub const FAILED_TOO_MANY: u32 = 0;
     pub const INSUFFICIENT_FUNDS: u32 = 1;

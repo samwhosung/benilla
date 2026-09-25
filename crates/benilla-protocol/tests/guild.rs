@@ -383,7 +383,7 @@ fn guild_roster_with_no_members_is_just_the_head() {
 }
 
 /// A viewer without `GR_RIGHT_VIEWOFFNOTE` gets `""` for every officer note (vmangos
-/// `Guild/Guild.cpp:821`, `:844`): the cstring's NUL is still on the wire.
+/// `Guild/Guild.cpp:819`, `:846`): the cstring's NUL is still on the wire.
 #[test]
 fn guild_roster_reads_the_empty_officer_notes_of_an_unprivileged_viewer() {
     let mut body = roster_head(2, "motd", "info", &[guild_rank_right::ALL, 0x0000_0003]);

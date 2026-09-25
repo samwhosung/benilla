@@ -41,28 +41,29 @@ pub(super) fn read_initial_spells(r: &mut impl Read) -> io::Result<(Vec<u16>, Ve
     Ok((spells, cooldowns))
 }
 
-/// Read `SMSG_LEARNED_SPELL` (vmangos `Spell.cpp:175-179`): `u16 spellId`, then an action-bar slot
-/// the client does not use. The one message that adds to the book after login.
+/// Read `SMSG_LEARNED_SPELL` (vmangos `Server/Packets/Spell.cpp:175-179`): `u16 spellId`, then
+/// an action-bar slot the client does not use. The one message that adds to the book after login.
 pub(super) fn read_learned_spell(r: &mut impl Read) -> io::Result<u16> {
     let spell_id = read_u16_le(r)?;
     let _action_bar_slot = read_u16_le(r)?;
     Ok(spell_id)
 }
 
-/// Read `SMSG_REMOVED_SPELL` (vmangos `Spell.cpp:181`): a bare `u16 spellId`, no action-bar slot.
+/// Read `SMSG_REMOVED_SPELL` (vmangos `Server/Packets/Spell.cpp:181`): a bare `u16 spellId`, no
+/// action-bar slot.
 pub(super) fn read_removed_spell(r: &mut impl Read) -> io::Result<u16> {
     read_u16_le(r)
 }
 
-/// Read `SMSG_SUPERCEDED_SPELL` (vmangos `Spell.cpp:169-173`): `(oldSpellId, newSpellId)`; a
-/// rank-up replaces the old spell in both the book and the action bar.
+/// Read `SMSG_SUPERCEDED_SPELL` (vmangos `Server/Packets/Spell.cpp:169-173`): `(oldSpellId,
+/// newSpellId)`; a rank-up replaces the old spell in both the book and the action bar.
 pub(super) fn read_superceded_spell(r: &mut impl Read) -> io::Result<(u16, u16)> {
     Ok((read_u16_le(r)?, read_u16_le(r)?))
 }
 
-/// Read `SMSG_SPELL_COOLDOWN` (vmangos `Spell.cpp:142-151`, client `0x6e9460`): a `u64` caster,
-/// then `(spell, ms)` pairs to the end, with no flags byte in 1.12. `ms == 0` means the spell's own
-/// `Spell.dbc` recovery times. Sent for school lockouts and pet cooldowns.
+/// Read `SMSG_SPELL_COOLDOWN` (vmangos `Server/Packets/Spell.cpp:142-150`, client `0x6e9460`): a
+/// `u64` caster, then `(spell, ms)` pairs to the end, with no flags byte in 1.12. `ms == 0` means
+/// the spell's own `Spell.dbc` recovery times. Sent for school lockouts and pet cooldowns.
 pub(super) fn read_spell_cooldown(r: &mut &[u8]) -> io::Result<(u64, Vec<(u32, u32)>)> {
     let caster = read_u64_le(r)?;
     let mut cooldowns = Vec::new();
@@ -74,15 +75,18 @@ pub(super) fn read_spell_cooldown(r: &mut &[u8]) -> io::Result<(u64, Vec<(u32, u
     Ok((caster, cooldowns))
 }
 
-/// Read `SMSG_ITEM_COOLDOWN` (vmangos `Item.cpp:229-233`): `(item_guid, spell_id)`. The client
-/// (`0x6e95d0`) gives the item a hardcoded 30 s cooldown; no duration is on the wire.
+/// Read `SMSG_ITEM_COOLDOWN` (vmangos `Server/Packets/Item.cpp:229-233`): `(item_guid, spell_id)`,
+/// sent when an item with an on-use spell is equipped (`Player::ApplyEquipCooldown`,
+/// `Player.cpp:19358-19384`). The client (`0x6e95d0`) gives the item a hardcoded 30 s cooldown; no
+/// duration is on the wire.
 pub(super) fn read_item_cooldown(r: &mut impl Read) -> io::Result<(u64, u32)> {
     Ok((read_u64_le(r)?, read_u32_le(r)?))
 }
 
-/// Read `SMSG_COOLDOWN_EVENT` or `SMSG_CLEAR_COOLDOWN` (vmangos `Spell.cpp:152-167`, client
-/// `0x6e9670`): the `u32` spell id first, then the `u64` caster. EVENT starts the timers of an
-/// on-hold (`SPELL_ATTR_COOLDOWN_ON_EVENT`) cooldown; CLEAR removes the cooldown.
+/// Read `SMSG_COOLDOWN_EVENT` or `SMSG_CLEAR_COOLDOWN` (vmangos
+/// `Server/Packets/Spell.cpp:152-167`, client `0x6e9670`): the `u32` spell id first, then the
+/// `u64` caster. EVENT starts the timers of an on-hold (`SPELL_ATTR_COOLDOWN_ON_EVENT`) cooldown;
+/// CLEAR removes the cooldown.
 pub(super) fn read_cooldown_event(r: &mut impl Read) -> io::Result<(u32, u64)> {
     Ok((read_u32_le(r)?, read_u64_le(r)?))
 }

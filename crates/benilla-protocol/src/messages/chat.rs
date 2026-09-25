@@ -33,8 +33,9 @@ pub const CHAT_MSG_RAID_LEADER: u8 = 0x57;
 pub const CHAT_MSG_RAID_WARNING: u8 = 0x58;
 pub const CHAT_MSG_RAID_BOSS_WHISPER: u8 = 0x59;
 pub const CHAT_MSG_RAID_BOSS_EMOTE: u8 = 0x5A;
-/// The server's "your message was filtered" notice, which the chat frame formats as
-/// `CHAT_FILTERED`; the client's spam and profanity filters exempt it (`0x49aacc`).
+/// The server's "your message was filtered" notice: its text is the addressee's name, which the
+/// chat frame formats into `CHAT_FILTERED`; the client's spam and profanity filters exempt it
+/// (`0x49aacc`).
 pub const CHAT_MSG_FILTERED: u8 = 0x5B;
 pub const CHAT_MSG_BATTLEGROUND: u8 = 0x5C;
 pub const CHAT_MSG_BATTLEGROUND_LEADER: u8 = 0x5D;

@@ -11,7 +11,7 @@ use crate::wire::{
 };
 
 /// The raid-assistant bit of a member's flags byte; bits 0-2 are the subgroup
-/// (`Group.cpp:158,166`).
+/// (`Group/Group.cpp:1382,1394`).
 pub const GROUP_MEMBER_ASSISTANT: u8 = 0x80;
 
 /// vmangos `GroupMemberStatus` (`Group/Group.h:102-111`); bit `0x20` is never set.
@@ -51,7 +51,7 @@ pub mod party_result {
 pub struct GroupMemberEntry {
     pub name: String,
     pub guid: u64,
-    /// [`member_status`] bits (`GetGroupMemberStatus`, `Group.cpp:45-63`).
+    /// [`member_status`] bits (`GetGroupMemberStatus`, `Group/Group.cpp:45-63`).
     pub status: u8,
     /// Subgroup in bits 0-2, plus [`GROUP_MEMBER_ASSISTANT`].
     pub flags: u8,

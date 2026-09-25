@@ -130,7 +130,7 @@ pub struct PetSpells {
     pub state: u32,
     /// The ten bar slots, in bar order.
     pub bar: [PetActionEntry; PET_ACTION_SLOTS],
-    /// The pet spellbook, packed like the bar; only a permanent pet has one (`Player.cpp:17549`).
+    /// The pet spellbook, packed like the bar; only a permanent pet has one (`Player.cpp:17547`).
     pub spells: Vec<PetActionEntry>,
     pub cooldowns: Vec<PetSpellCooldown>,
 }
@@ -231,7 +231,7 @@ pub struct PetMode {
     pub state: u32,
 }
 
-/// Read `SMSG_PET_MODE`: `u64 petGuid, u32 state` (`0x4bdb10`; vmangos `Packets/Pet.cpp:101-108`).
+/// Read `SMSG_PET_MODE`: `u64 petGuid, u32 state` (`0x4bdb10`; vmangos `Packets/Pet.cpp:104-111`).
 pub(super) fn read_pet_mode(r: &mut impl Read) -> io::Result<PetMode> {
     Ok(PetMode {
         pet_guid: read_u64_le(r)?,
@@ -239,7 +239,7 @@ pub(super) fn read_pet_mode(r: &mut impl Read) -> io::Result<PetMode> {
     })
 }
 
-/// Read `SMSG_PET_ACTION_FEEDBACK` (vmangos `Packets/Pet.cpp:87-90`): one reason byte.
+/// Read `SMSG_PET_ACTION_FEEDBACK` (vmangos `Packets/Pet.cpp:90-93`): one reason byte.
 pub(super) fn read_pet_action_feedback(r: &mut impl Read) -> io::Result<u8> {
     read_u8(r)
 }

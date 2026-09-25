@@ -1031,7 +1031,7 @@ fn combat_log_wire_golden() {
     }
 }
 
-/// Raw caster guid, u32 spellId, u32 count, raw guids (vmangos `Spell.cpp:4970-4997`); in the
+/// Raw caster guid, u32 spellId, u32 count, raw guids (vmangos `Spell.cpp:4974-4997`); in the
 /// reference (`0x6e9820`) the only writer of the beams' chain-target array (`unit+0xd44`).
 #[test]
 fn spell_chain_targets_wire() {

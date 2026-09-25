@@ -13,7 +13,7 @@ use crate::wire::{
 /// The guild charter's item entry, vmangos `GUILD_CHARTER` (`PetitionsHandler.cpp:37`).
 pub const CHARTER_ITEM_ENTRY: u32 = 5863;
 
-/// The charter's display id, vmangos `CHARTER_DISPLAY_ID` (`PetitionsHandler.cpp:38`).
+/// The charter's display id, vmangos `CHARTER_DISPLAY_ID` (`PetitionsHandler.cpp:39`).
 pub const CHARTER_DISPLAY_ID: u32 = 16161;
 
 /// The template-flag bit of a signable petition (vmangos `ItemPrototype.h:77`); the reference
@@ -29,7 +29,7 @@ pub const MAX_PETITION_SIGNATURES: usize = 9;
 pub const CHARTER_NAME_MAX_LENGTH: usize = 24;
 
 /// The result code shared by `SMSG_PETITION_SIGN_RESULTS` and `SMSG_TURN_IN_PETITION_RESULTS`
-/// (vmangos `PetitionSigns`, `Guild.h:147-154`); each packet uses its own subset.
+/// (vmangos `PetitionSigns`, `Guild/Guild.h:147-154`); each packet uses its own subset.
 pub mod petition_result {
     /// Signed, or turned in; both packets.
     pub const OK: u32 = 0;
@@ -52,13 +52,13 @@ pub mod petition_result {
 /// (`Petition.h:176`: "only 1 element is supported in the client").
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PetitionShowListEntry {
-    /// Row index, 1-based (`PetitionsHandler.cpp:501`).
+    /// Row index, 1-based (`PetitionsHandler.cpp:496`).
     pub index: u32,
     /// The item entry sold, [`CHARTER_ITEM_ENTRY`] in practice.
     pub charter_entry: u32,
     /// Its display id, [`CHARTER_DISPLAY_ID`] in practice.
     pub charter_display_id: u32,
-    /// Price in copper, an `int32` on the wire (vmangos charges 1000, `PetitionsHandler.cpp:39`).
+    /// Price in copper, an `int32` on the wire (vmangos charges 1000, `PetitionsHandler.cpp:38`).
     pub charter_cost: i32,
     /// vmangos sends 1; its header says a row "must be `&1` to show it in the UI"
     /// (`Petition.h:169`).
@@ -79,7 +79,7 @@ pub struct PetitionShowList {
 pub(super) fn read_petition_show_list(r: &mut impl Read) -> io::Result<PetitionShowList> {
     let npc = read_u64_le(r)?;
     let count = read_u8(r)?;
-    // vmangos sends exactly one charter (`PetitionsHandler.cpp:503`); 8 is generous.
+    // vmangos sends exactly one charter (`PetitionsHandler.cpp:504`); 8 is generous.
     let mut entries = Vec::with_capacity(capacity_hint(count, 8));
     for _ in 0..count {
         entries.push(PetitionShowListEntry {
@@ -170,9 +170,9 @@ pub struct PetitionQueryResponse {
     pub owner: u64,
     /// The proposed guild's name, carried by no other packet.
     pub name: String,
-    /// Free text on the charter; empty on vmangos (`PetitionsHandler.cpp:178`).
+    /// Free text on the charter; empty, as vmangos never sets it (`PetitionsHandler.cpp:177-183`).
     pub body_text: String,
-    /// vmangos sends 1 (`PetitionsHandler.cpp:179`); meaning unknown.
+    /// vmangos sends 1 (`PetitionsHandler.cpp:181`); meaning unknown.
     pub flags: u32,
     /// Signatures required, which the reference's Request-Signature button tests; vmangos sends 9
     /// even when its `MinPetitionSigns` is lower (`PetitionsHandler.cpp:182`).
@@ -189,7 +189,7 @@ pub struct PetitionQueryResponse {
     pub allowed_classes: u32,
     /// Race mask restriction, 0 on vmangos.
     pub allowed_races: u32,
-    /// Gender restriction: a `u16`, the packet's one odd width (`Packets/Petition.cpp:94`).
+    /// Gender restriction: a `u16`, the packet's one odd width (`Packets/Petition.cpp:95`).
     pub allowed_gender: u16,
     /// Minimum level, 0 on vmangos.
     pub allowed_min_level: u32,

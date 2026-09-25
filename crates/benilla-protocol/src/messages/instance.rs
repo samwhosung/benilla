@@ -68,7 +68,7 @@ pub enum InstanceResetFailure {
 
 impl InstanceResetFailure {
     /// Deviation: a reason of 3 or more is silent, where the reference prints an uninitialized
-    /// stack buffer; 3 is the server's `INSTANCERESET_FAIL_SILENTLY`.
+    /// stack buffer, because 3 is the server's `INSTANCERESET_FAIL_SILENTLY`.
     pub fn from_wire(reason: u32) -> Option<Self> {
         match reason {
             0 => Some(Self::General),

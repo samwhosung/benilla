@@ -189,7 +189,7 @@ fn trainer_buy_result_wire() {
 #[test]
 fn learned_and_superceded_spell_wire() {
     // SMSG_LEARNED_SPELL: u16 spellId + u16 actionBarSlot, the slot unused by the client and
-    // dropped (vmangos `Spell.cpp:175-179`).
+    // dropped (vmangos `Packets/Spell.cpp:175-179`).
     match messages::parse_server(messages::opcode::SMSG_LEARNED_SPELL, &hx("cb19aaaa")).unwrap() {
         ServerPacket::LearnedSpell { spell_id } => assert_eq!(spell_id, 6603),
         other => panic!("learned spell, got {}", other.name()),
@@ -201,7 +201,7 @@ fn learned_and_superceded_spell_wire() {
         other => panic!("spell learned event, got {other:?}"),
     }
 
-    // SMSG_SUPERCEDED_SPELL: u16 oldSpellId + u16 newSpellId (vmangos `Spell.cpp:169-173`).
+    // SMSG_SUPERCEDED_SPELL: u16 oldSpellId + u16 newSpellId (vmangos `Packets/Spell.cpp:169-173`).
     match messages::parse_server(messages::opcode::SMSG_SUPERCEDED_SPELL, &hx("cb19cc19")).unwrap()
     {
         ServerPacket::SupercededSpell {

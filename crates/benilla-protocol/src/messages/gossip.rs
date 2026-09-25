@@ -24,7 +24,7 @@ pub struct QuestOption {
 }
 
 /// `CMSG_GOSSIP_HELLO` body: the NPC's full guid (`Npc.cpp:3`); it works on any interactable
-/// creature, gossip flag or not (`Player.cpp:347`).
+/// creature, gossip flag or not (`NPCHandler.cpp:347`).
 pub fn gossip_hello(npc_guid: u64) -> Vec<u8> {
     npc_guid.to_le_bytes().to_vec()
 }
@@ -108,8 +108,8 @@ pub const NPC_TEXT_BLOCKS: usize = 8;
 /// Read `SMSG_NPC_TEXT_UPDATE` (vmangos `GossipDef.cpp:298-369`), all eight blocks undecided; the
 /// greeting is picked when the frame opens, by [`select_greeting`].
 ///
-/// Deviation: the 1.12 client garbles a block in a non-zero language (`0x49b560`); we drop the
-/// language because no 1.12 record sets one.
+/// The language is parsed and dropped: the 1.12 client garbles a block in a non-zero language
+/// (`0x49b560`), which is not built, and no 1.12 record is known to set one.
 pub(super) fn read_npc_text_update(r: &mut &[u8]) -> io::Result<(u32, Vec<NpcTextBlock>)> {
     let text_id = read_u32_le(r)?;
     let mut blocks = Vec::with_capacity(NPC_TEXT_BLOCKS);

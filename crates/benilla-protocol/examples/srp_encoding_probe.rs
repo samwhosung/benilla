@@ -9,8 +9,8 @@
 //! ```
 //!
 //! `--stress N` runs N ordinary fixed-width handshakes and reports the failure rate, waiting out
-//! realmd's lockout: 60 s after `WrongPass.MaxAttempts` (default 10) failures, during which it
-//! answers `0x08 WOW_FAIL_DB_BUSY`.
+//! realmd's lockout: `WrongPass.MaxAttempts` (default 10) failures within 60 s lock the IP out
+//! for 60 s, answered with `0x08 WOW_FAIL_DB_BUSY`.
 
 use std::net::TcpStream;
 use std::time::Duration;

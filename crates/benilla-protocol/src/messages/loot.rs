@@ -35,7 +35,7 @@ pub mod slot_type {
 
 /// `LootType` (vmangos `LootMgr.h:49-61`). Only these four reach the wire: `SendLoot` remaps
 /// skinning and insignia to `PICKPOCKETING`, fishing holes and fails to `FISHING`
-/// (`Player.cpp:8117-8131`); `CMSG_LOOT` always gets `CORPSE` (`LootHandler.cpp:340-354`).
+/// (`Player.cpp:8120-8136`); `CMSG_LOOT` always gets `CORPSE` (`LootHandler.cpp:380`).
 pub mod loot_type {
     pub const CORPSE: u8 = 1;
     pub const PICKPOCKETING: u8 = 2;

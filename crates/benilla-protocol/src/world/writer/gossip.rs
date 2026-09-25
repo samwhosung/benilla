@@ -1,5 +1,6 @@
 //! The gossip sends. `CMSG_GOSSIP_HELLO` opens every NPC service window: vmangos accepts it for any
-//! interactable creature (`CanInteractWithNPC` with `UNIT_NPC_FLAG_NONE`, `Player.cpp:347`).
+//! interactable creature (`GetNPCIfCanInteractWith` with `UNIT_NPC_FLAG_NONE`,
+//! `NPCHandler.cpp:347`).
 
 use anyhow::Result;
 

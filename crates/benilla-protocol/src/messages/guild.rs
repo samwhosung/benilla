@@ -3,8 +3,9 @@
 //!
 //! Deviation: string reads are unbounded. The reference `0x4191b0` caps each field, counting the
 //! NUL (roster name `0x30`, notes `0x80`, MOTD `0x200`, info `0x7d0`, guild name `0x60`, rank name
-//! `0x40`), and on overflow empties it and no-ops every later read in the packet; every cap is far
-//! above the server's own length limits, so a legitimate packet reads the same.
+//! `0x40`), and on overflow empties it and no-ops every later read in the packet. Unbounded reads
+//! cannot poison a packet, and every cap is far above the server's own length limits, so a
+//! legitimate packet reads the same.
 
 use std::io::{self, Read};
 
@@ -550,7 +551,8 @@ pub fn guild_set_public_note(name: &str, note: &str) -> Vec<u8> {
     two_cstring_body(name, note)
 }
 
-/// Body of `CMSG_GUILD_SET_OFFICER_NOTE` (`Server/Packets/Guild.cpp:67-71`): name, then note.
+/// Body of `CMSG_GUILD_SET_OFFICER_NOTE` (`Server/Packets/Guild.cpp:67-71`): name, then note;
+/// the server requires [`guild_rank_right::EDIT_OFFICER_NOTE`].
 pub fn guild_set_officer_note(name: &str, note: &str) -> Vec<u8> {
     two_cstring_body(name, note)
 }

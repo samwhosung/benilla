@@ -116,7 +116,7 @@ pub fn questgiver_status_query(npc: u64) -> Vec<u8> {
 }
 
 /// Body of `CMSG_QUESTGIVER_HELLO` (`Quest.cpp:16-19`): the NPC guid. The server answers it like
-/// `CMSG_GOSSIP_HELLO`, through `SendPreparedGossip` (`QuestHandler.cpp:103`).
+/// `CMSG_GOSSIP_HELLO`, through `SendPreparedGossip` (`QuestHandler.cpp:104`).
 pub fn questgiver_hello(npc: u64) -> Vec<u8> {
     npc.to_le_bytes().to_vec()
 }

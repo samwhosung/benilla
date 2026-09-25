@@ -297,7 +297,7 @@ pub const LANGUAGE_ORCISH: u32 = 0x1;
 /// `LANG_ADDON` (vmangos `SharedDefines.h:270`): marks a chat line as addon data, not speech;
 /// 1.12 has no addon opcode, and the client routes such a line to `CHAT_MSG_ADDON`. The server
 /// skips language, flood and sanitize checks for it, never rewrites it, and allows it only on the
-/// group, guild and channel lanes (`ChatHandler.cpp:49,84,176-218`). The 1.12 `SendAddonMessage`
+/// group, guild and channel lanes (`ChatHandler.cpp:49,84,172-219`). The 1.12 `SendAddonMessage`
 /// (`0x49f920`) sends only PARTY, RAID, GUILD and BATTLEGROUND, and the receive side names any
 /// other lane "UNKNOWN" (`0x49aff4`).
 pub const LANGUAGE_ADDON: u32 = 0xFFFF_FFFF;

@@ -99,7 +99,8 @@ impl ObjectFields {
         self.unit_pet_number() != 0
     }
     /// `UNIT_FIELD_PETNUMBER`: `GetUnitName` (`0x609210`) keys the pet-name cache on it when
-    /// nonzero; a `HIGHGUID_PET` guid's number is not a substitute, no name query answers it.
+    /// nonzero. A `HIGHGUID_PET` guid's number is no substitute: a companion's is never filed in
+    /// its charm info, so no pet-name query answers it.
     pub fn unit_pet_number(&self) -> u32 {
         self.get_u32(FIELD_UNIT_PETNUMBER).unwrap_or(0)
     }

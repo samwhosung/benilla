@@ -309,7 +309,7 @@ fn death_arc_family_parses_and_decodes() {
         }
     }
 
-    // The movement-flag bits (vmangos `Objects/MovementInfo.h:25-62`).
+    // The movement-flag bits (vmangos `Objects/MovementInfo.h:28-62`).
     assert_eq!(MoveMode::Root.flag(), 0x0000_1000);
     assert_eq!(MoveMode::WaterWalk.flag(), 0x1000_0000);
     assert_eq!(MoveMode::FeatherFall.flag(), 0x2000_0000);

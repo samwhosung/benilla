@@ -310,7 +310,8 @@ fn messagechat_sendable_types_golden() {
 
 /// `SendAddonMessage` (reference `0x49f920`) sends `CMSG_MESSAGECHAT` on one of four lanes: `u32`
 /// type, `u32` language `LANG_ADDON`, then one cstring of prefix, TAB and message (`0x49f9b3`);
-/// there is no prefix or target field. The receiver splits on the first TAB (`0x49a8d0`).
+/// there is no prefix or target field. The receiver splits on the first TAB (`0x49a8d0`); vmangos
+/// relays the TAB intact, as it skips `SanitizeChatMessage` for addon chat (`ChatHandler.cpp:49`).
 #[test]
 fn addon_message_bodies_golden() {
     assert_eq!(

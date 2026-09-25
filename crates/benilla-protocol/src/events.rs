@@ -229,7 +229,8 @@ pub enum SessionEvent {
     /// cinematic camera (`Player::UpdateCinematic`), despawning the world around the body.
     CinematicTriggered { cinematic_id: u32 },
     /// `MSG_MOVE_TIME_SKIPPED`: not a pose. The mover's relay stamp advances by `lag_ms`, as the
-    /// reference's `[CMovement+0xac] += lag` (`0x603b40`), or its next packet is scheduled late.
+    /// reference's `[CMovement+0xac] += lag` (`0x603b40` → `0x601560` → `0x61ab90`), or its next
+    /// packet is scheduled late.
     MoveTimeSkipped { guid: u64, lag_ms: u32 },
     /// A server path: `path` is the travel-order polyline from `start`, walked at constant speed
     /// over `duration_ms`; a stop, a zero duration or fewer than two points leaves it empty.

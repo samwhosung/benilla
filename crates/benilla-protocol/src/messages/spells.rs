@@ -268,8 +268,8 @@ pub(super) fn read_update_aura_duration(r: &mut impl Read) -> io::Result<(u8, u3
     Ok((slot, remaining_ms))
 }
 
-/// Read `SMSG_PLAY_SPELL_VISUAL` (vmangos `Spell.cpp:54-58`): raw `u64` unit, `u32` kit id. The
-/// client (`0x6e98d0`) checks the kit against `SpellVisualKit.dbc` and plays it at stage 0.
+/// Read `SMSG_PLAY_SPELL_VISUAL` (vmangos `Packets/Spell.cpp:54-58`): raw `u64` unit, `u32` kit
+/// id. The client (`0x6e98d0`) checks the kit against `SpellVisualKit.dbc` and plays it at stage 0.
 pub(super) fn read_play_spell_visual(r: &mut impl Read) -> io::Result<(u64, u32)> {
     let unit = read_u64_le(r)?;
     let kit_id = read_u32_le(r)?;

@@ -409,7 +409,8 @@ pub enum ServerPacket {
         flags: u8,
         members: Vec<(u64, u8)>,
     },
-    /// `SMSG_CHAT_PLAYER_NOT_FOUND`: the whisper target is not online (`Chat.cpp:26-29`).
+    /// `SMSG_CHAT_PLAYER_NOT_FOUND`: the whisper target is not online
+    /// (`Server/Packets/Chat.cpp:26-29`).
     ChatPlayerNotFound {
         name: String,
     },
@@ -420,7 +421,7 @@ pub enum ServerPacket {
         text: String,
     },
     /// `SMSG_AREA_TRIGGER_MESSAGE`: why a trigger refused us, as `u32 length` then a cstring
-    /// (`WorldSession.cpp:882-898`).
+    /// (`WorldSession.cpp:883-898`).
     AreaTriggerMessage {
         text: String,
     },
@@ -751,7 +752,7 @@ pub enum ServerPacket {
         vendor: u64,
         items: Vec<VendorItem>,
     },
-    /// `SMSG_BUY_ITEM`: the vendor's stock after a purchase (`Item.cpp:190-196`).
+    /// `SMSG_BUY_ITEM`: the vendor's stock after a purchase (`Server/Packets/Item.cpp:190-196`).
     BuyItem {
         vendor: u64,
         slot: u32,

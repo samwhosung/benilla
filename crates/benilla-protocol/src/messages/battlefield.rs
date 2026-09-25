@@ -95,7 +95,8 @@ pub struct PvpLogData {
     pub rows: Vec<PvpLogRow>,
 }
 
-/// Deviation: every row is kept; the reference has 80 row blocks and does not clamp the count.
+/// Deviation: every row is kept, because the reference takes the count unclamped into its 80
+/// row blocks and a larger one overruns them.
 pub(super) fn read_pvp_log_data(r: &mut impl Read) -> io::Result<PvpLogData> {
     let ended = read_u8(r)? != 0;
     let winner = if ended { Some(read_u8(r)?) } else { None };

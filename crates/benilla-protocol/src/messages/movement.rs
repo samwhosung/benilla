@@ -100,7 +100,7 @@ impl SpeedKind {
 }
 
 /// A mode the server grants the controlling client, one `MOVEMENTFLAGS` bit each (vmangos
-/// `MovementInfo.h:25-62`, reference setters `0x7c7280`-`0x7c7370`). Root stops translation and
+/// `MovementInfo.h:28-62`, reference setters `0x7c7280`-`0x7c7370`). Root stops translation and
 /// falling but not turning (`0x618054`); water walk makes liquid walkable (aura 104); feather fall
 /// caps the fall at 7 yd/s instead of 60.148 (aura 105, `0x7c5d20`); hover lifts ground contact by
 /// 1.0 yd (aura 106, `0x6367b0`). Levitate (spell 1706) grants the last three at once.

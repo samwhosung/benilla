@@ -230,7 +230,8 @@ fn parse_server_body(
             // bytes left, `u32 billingTimeRemaining, u8 billingPlanFlags, u32 billingTimeRested`;
             // then, for WAIT_QUEUE, `u32 position`. The 5 guarding a 9-byte group is the client's
             // and mis-parses a 6..=9 byte body; matched on purpose. Deviation: a body too short
-            // for the position gives `None`, because the client redisplays a stale position.
+            // for the position gives `None` where the client redisplays a stale global, because
+            // showing a stale queue position as current is a client bug.
             let result = read_u8(&mut r)?;
             let queued = result == super::AUTH_WAIT_QUEUE;
             let mut billing_time_rested = None;

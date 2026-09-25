@@ -165,7 +165,8 @@ const INTEGRITY_HASH_5875_MACOS: [u8; 20] = [
 ];
 
 /// The integrity digest `H` for `crc_salt`, known only for [`MANGOS_VERSION_CHALLENGE`].
-/// Deviation: a stored constant, not a hash of the install, which may lack the five binaries.
+/// Deviation: a stored per-OS constant, not the reference's HMAC over its own executables
+/// (`0x5b1170`), because every mangos-family realmd issues this one salt.
 fn integrity_hash(crc_salt: &[u8; 16]) -> Option<[u8; 20]> {
     if *crc_salt != MANGOS_VERSION_CHALLENGE {
         return None;

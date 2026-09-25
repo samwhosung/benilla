@@ -5,7 +5,7 @@ use std::io;
 use crate::wire::{read_cstring, read_f32_le, read_i32_le, read_u32_le, read_u64_le, read_u8};
 
 /// `MSG_CORPSE_QUERY`'s answer (`QueryHandler.cpp:258-304`), a lone `u8(0)` when not found; the
-/// request is the same opcode, empty. The server also sends an unprompted not-found when the
+/// request is the same opcode, empty. The server also sends an unprompted not-found when a looted
 /// corpse turns to bones (`Map.cpp:3624-3629`), which means "drop the marker".
 #[derive(Debug, Clone, PartialEq)]
 pub struct CorpseLocation {
@@ -48,7 +48,7 @@ pub(super) fn read_corpse_reclaim_delay(r: &mut &[u8]) -> io::Result<u32> {
 
 /// `SMSG_RESURRECT_REQUEST`, a resurrection offer (`Spell.cpp:5024-5044`). `sickness` warns the
 /// accept brings resurrection sickness, `has_timer` keeps the reclaim-delay gate, and the stock
-/// popup picks its variant by the two.
+/// popup picks its variant by the two. `name` is empty for a player caster, named by guid instead.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResurrectRequestBody {
     pub caster: u64,

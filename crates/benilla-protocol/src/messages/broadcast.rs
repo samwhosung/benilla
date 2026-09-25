@@ -17,7 +17,8 @@ pub(super) fn read_server_message(r: &mut &[u8]) -> io::Result<(u32, String)> {
 
 /// `SMSG_ZONE_UNDER_ATTACK` (`Server/Packets/Misc.cpp:451-454`, handler `0x49dcc0`): the attacked
 /// area's `AreaTable.dbc` id, whose own name fills the text. vmangos sends it map-wide to the
-/// enemy team when a player kills a guard or PvP-enabling creature, once per area per 10 s.
+/// enemy team when a player kills a guard or PvP-enabling creature, once per area per 10 s
+/// (`Creature.cpp:2889`).
 pub(super) fn read_zone_under_attack(r: &mut &[u8]) -> io::Result<u32> {
     read_u32_le(r)
 }
@@ -25,7 +26,7 @@ pub(super) fn read_zone_under_attack(r: &mut &[u8]) -> io::Result<u32> {
 /// `SMSG_DEFENSE_MESSAGE` (`Maps/Map.cpp:1868-1884`, handler `0x49de30`): `u32` zone id, `u32`
 /// length counting the NUL, then the text. The reference skips exactly `length` bytes
 /// (`0x419ac0`) and drops the line when that overruns the packet, so an overrun errors here.
-/// Deviation: text without a NUL stops at `length`, where the reference reads out of bounds.
+/// Deviation: text without a NUL stops at `length`, because the reference reads on out of bounds.
 pub(super) fn read_defense_message(r: &mut &[u8]) -> io::Result<(u32, String)> {
     let zone_id = read_u32_le(r)?;
     let length = read_u32_le(r)? as usize;

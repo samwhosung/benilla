@@ -60,9 +60,11 @@ pub const CMSG_SET_WATCHED_FACTION: u16 = 0x0318; // 792
 pub const SMSG_AUTH_CHALLENGE: u16 = 0x01EC;
 pub const SMSG_AUTH_RESPONSE: u16 = 0x01EE;
 /// The Warden anticheat challenge; vmangos kicks a client that leaves it unanswered for 30 s
-/// (`Warden::Update`). Deviation: no Warden ([`crate::WardenRequired`]), so the connect refuses.
+/// (`Warden::Update`). Deviation: benilla has no Warden, so the connect refuses such a server
+/// ([`crate::WardenRequired`]) because a session there would only be kicked.
 pub const SMSG_WARDEN_DATA: u16 = 0x02E6;
-/// One record per `## Secure:` addon in `CMSG_AUTH_SESSION`, in order, with no count or names.
+/// The answer to `CMSG_AUTH_SESSION`'s addon block: one record per `## Secure:` addon, in order,
+/// with no count or names.
 pub const SMSG_ADDON_INFO: u16 = 0x02EF;
 pub const SMSG_COMPRESSED_UPDATE_OBJECT: u16 = 0x01F6;
 /// A zlib envelope of whole movement packets. Routine: vmangos switches a session to it after 300
@@ -222,7 +224,8 @@ pub const SMSG_CLEAR_COOLDOWN: u16 = 0x01DE; // 478
 pub const SMSG_COOLDOWN_CHEAT: u16 = 0x01E1; // 481
 
 /// A timed item's remaining life in seconds; the display reads this, not `ITEM_FIELD_DURATION`
-/// (`Item.cpp:1094`). It shares the reference handler (`0x5e4f69`) with the enchant update below.
+/// (`Item.cpp:1094`). Its reference handler is the enchant update's, forking on the opcode
+/// (`0x5e4f69`).
 pub const SMSG_ITEM_TIME_UPDATE: u16 = 0x01EA; // 490
 
 /// The only source of a temporary enchant's remaining time: the reference tooltip reads a
@@ -607,8 +610,8 @@ pub const CMSG_GMTICKET_SYSTEMSTATUS: u16 = 0x021A; // 538
 pub const SMSG_GMTICKET_SYSTEMSTATUS: u16 = 0x021B; // 539
 
 /// A ticket-state push: `u32` 1 updated, 2 closed, 3 survey offered; vmangos never sends it. The
-/// reference re-asks for the ticket on 1 (`0x5e7932`). Deviation: 3 opens no survey window,
-/// since vmangos can never offer one.
+/// reference re-asks for the ticket on 1 (`0x5e7932`); 2 and 3 are recorded, not acted on, and
+/// the survey window 3 offers is not built.
 pub const SMSG_GM_TICKET_STATUS_UPDATE: u16 = 0x0328; // 808
 
 // The bank: `CMSG_BANKER_ACTIVATE` opens a pure banker; `SMSG_SHOW_BANK` also arrives unasked
@@ -891,9 +894,10 @@ pub const CMSG_GROUP_SWAP_SUB_GROUP: u16 = 0x0280; // 640
 pub const CMSG_GROUP_RAID_CONVERT: u16 = 0x028E; // 654
 pub const CMSG_GROUP_ASSISTANT_LEADER: u16 = 0x028F; // 655
 pub const SMSG_PARTY_MEMBER_STATS_FULL: u16 = 0x02F2; // 754
-/// Both ways; the server's side is mode-prefixed (`Group.cpp:77-82` read, `:132-147` write).
+/// Both ways; the server's side is mode-prefixed (`Packets/Group.cpp:77-82` read, `:132-147`
+/// write).
 pub const MSG_RAID_TARGET_UPDATE: u16 = 0x0321; // 801
-/// Both ways: an empty body starts a check, a non-empty one answers (`Group.cpp:84-96`).
+/// Both ways: an empty body starts a check, a non-empty one answers (`Packets/Group.cpp:84-96`).
 pub const MSG_RAID_READY_CHECK: u16 = 0x0322; // 802
 /// Ask for our raid lockouts: empty body, sent by `RequestRaidInfo()` on every RaidFrame show.
 pub const CMSG_REQUEST_RAID_INFO: u16 = 0x02CD; // 717
@@ -975,7 +979,8 @@ pub const SMSG_UPDATE_WORLD_STATE: u16 = 0x02C3; // 707
 // ── Instance and raid lockouts ──
 
 /// "You are now saved to this instance": a `u32` flag, 0 from vmangos (`0x4e7e60`; 1 adds a debug
-/// prefix). Deviation: 2 or more prints nothing; the reference prints an uninitialized buffer.
+/// prefix). Deviation: 2 or more prints nothing, because the reference prints an uninitialized
+/// buffer.
 pub const SMSG_INSTANCE_SAVE_CREATED: u16 = 0x02CB; // 715
 /// A raid-lockout warning: `u32 type`, `u32 mapId`, `u32 secondsUntilReset` (`0x49e1c0`).
 pub const SMSG_RAID_INSTANCE_MESSAGE: u16 = 0x02FA; // 762

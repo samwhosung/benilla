@@ -132,9 +132,10 @@ impl WorldWriter {
         )
     }
 
-    /// Send an addon message (`SendAddonMessage`). Its language, [`messages::LANGUAGE_ADDON`], is
-    /// the only mark of addon data (`0x49f920`); vmangos gates it on `AddonChannel` and skips the
-    /// language gate, flood control and sanitizing.
+    /// Send an addon message (`SendAddonMessage`): `text` is the caller's composed `prefix` TAB
+    /// `message`, on the party, raid, guild or battleground lane. Its language,
+    /// [`messages::LANGUAGE_ADDON`], is the only mark of addon data (`0x49f920`); vmangos gates it
+    /// on `AddonChannel` and skips the language gate, flood control and sanitizing.
     pub fn send_addon_message(&mut self, chat_type: u32, text: &str) -> Result<()> {
         self.send(
             opcode::CMSG_MESSAGECHAT,

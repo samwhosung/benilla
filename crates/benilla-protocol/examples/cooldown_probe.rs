@@ -1,13 +1,13 @@
 //! Diagnostic probe: the server's cooldown window for Charge (spell 100: `recoveryTime 0`,
 //! category 44, `categoryRecoveryTime 15000`) against the client's 15 s sweep. It charges a
 //! Northshire Kobold Vermin (entry 6), then recasts every 200 ms. vmangos checks the cooldown
-//! first in `CheckCast` (`Spell.cpp:5369`), so the first result other than
+//! near the top of `CheckCast` (`Spell.cpp:5369`), so the first result other than
 //! `SPELL_FAILED_NOT_READY` (60), or a second `SMSG_SPELL_GO`, marks the server's cooldown end
 //! relative to the first GO.
 //!
 //! Run: `cargo run -p benilla-protocol --example cooldown_probe -- probeN <password> [host]` on a
 //! probe account with a warrior (a login kicks whoever is on the account); `.learn` needs
-//! gmlevel 5 (`SEC_DEVELOPER`).
+//! gmlevel 5 (`SEC_DEVELOPER`). It is a combat probe, so it never runs unattended.
 
 use std::time::{Duration, Instant};
 
