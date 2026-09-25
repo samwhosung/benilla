@@ -1353,11 +1353,13 @@ pub(super) fn drain_addon_chat_sends(
     cvars: Res<crate::cvars::Cvars>,
     // Our descriptor, for the DND arm's live `PLAYER_FLAGS & 0x4`.
     self_q: Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
+    // The joined slots a `CHANNEL` target's number names.
+    channels: Res<super::edit::ChannelState>,
 ) {
     let Some(mut script) = script else {
         return;
     };
-    for send in script.take_chat_sends() {
+    for mut send in script.take_chat_sends() {
         let Some(kind) = super::edit::SendType::from_token(&send.chat_type) else {
             warn!(
                 "chat: SendChatMessage with unknown type {:?}",
@@ -1369,6 +1371,19 @@ pub(super) fn drain_addon_chat_sends(
             ));
             continue;
         };
+        // A channel target is a slot number, sent as that slot's name; with no such slot the call
+        // ends here (`0x49f4ea`), ahead of the AFK clear and the tutorial acknowledge.
+        if kind == super::edit::SendType::Channel {
+            let name = send.target.as_deref().and_then(|t| channels.send_target(t));
+            if name.is_none() {
+                debug!(
+                    "chat: SendChatMessage names no joined channel {:?}; not sent",
+                    send.target
+                );
+                continue;
+            }
+            send.target = name;
+        }
         // `SendChatMessage`'s tutorial acknowledge (`0x49f5fc`) covers the twelve social types,
         // not say, yell or emote.
         if !matches!(

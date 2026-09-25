@@ -1,6 +1,6 @@
 //! `SendChatMessage(text [, chatType [, language [, target]]])` (`0x49f1e0`): the engine verb an
 //! addon speaks through, with no FrameXML between it and the wire. `chatType` defaults to
-//! `"SAY"`; the fourth argument is the whisper target or the channel name or number.
+//! `"SAY"`; the fourth argument is the whisper target or the channel's number.
 //!
 //! It queues a [`ChatSend`] rather than going through the edit box, whose drain runs the slash
 //! grammar: an addon's `SendChatMessage("/dance")` says the characters. The reference splits the
@@ -34,7 +34,8 @@ pub struct ChatSend {
     /// The chat type token (`"SAY"`, `"WHISPER"`, `"CHANNEL"`, …), uppercased, since the
     /// reference's compare ignores case.
     pub chat_type: String,
-    /// The whisper target or the channel name or number, as text; the app resolves either.
+    /// The fourth argument as `lua_tostring` gives it (`0x49f306`): the whisper target, or the
+    /// channel number the app resolves to a joined channel's name.
     pub target: Option<String>,
 }
 
@@ -108,13 +109,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let chat_type = chat_type
                     .unwrap_or_else(|| "SAY".into())
                     .to_ascii_uppercase();
-                // A channel arrives as a name or a number; both become text.
-                let target = match target {
-                    Value::String(s) => Some(s.to_string_lossy()),
-                    Value::Integer(n) => Some(n.to_string()),
-                    Value::Number(n) => Some(format!("{n:.0}")),
-                    _ => None,
-                };
+                // `lua_isstring` then `lua_tostring` (`0x49f2f6`, `0x49f306`): a number is its
+                // text, so `2.7` reaches the channel's `SStrToInt` as "2.7", which reads 2.
+                let target = super::binding_abi::optional_string(lua, &target);
                 lua.app_data_mut::<Model>()
                     .expect("model app_data")
                     .chat_sends
@@ -166,7 +163,7 @@ mod tests {
     }
 
     #[test]
-    fn the_target_argument_takes_a_name_or_a_channel_number() {
+    fn the_target_argument_is_its_lua_tostring_text() {
         let mut s = UiScript::new().unwrap();
         s.run(r#"SendChatMessage("hi", "WHISPER", nil, "Bob")"#)
             .unwrap();
@@ -174,10 +171,20 @@ mod tests {
             .unwrap();
         s.run(r#"SendChatMessage("lf1m", "CHANNEL", nil, "General")"#)
             .unwrap();
+        s.run(r#"SendChatMessage("lf1m", "CHANNEL", nil, 2.7)"#)
+            .unwrap();
+        s.run(r#"SendChatMessage("lf1m", "CHANNEL", nil, {})"#)
+            .unwrap();
         let sent = s.take_chat_sends();
         assert_eq!(sent[0].target.as_deref(), Some("Bob"));
         assert_eq!(sent[1].target.as_deref(), Some("1"));
         assert_eq!(sent[2].target.as_deref(), Some("General"));
+        assert_eq!(
+            sent[3].target.as_deref(),
+            Some("2.7"),
+            "not rounded: the app's `SStrToInt` reads 2"
+        );
+        assert_eq!(sent[4].target, None, "a table is no string");
         assert_eq!(sent[1].chat_type, "CHANNEL");
     }
 

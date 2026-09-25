@@ -142,6 +142,26 @@ impl ChannelSlot {
     }
 }
 
+/// Storm's `SStrToInt` (`0x64ac60`): an optional `-`, then decimal digits up to the first other
+/// byte, with no whitespace skip, no `+` and no overflow check (`10·n + d` wraps); no digit is 0.
+fn sstr_to_int(s: &str) -> i32 {
+    let (neg, digits) = match s.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, s),
+    };
+    let n = digits
+        .bytes()
+        .take_while(u8::is_ascii_digit)
+        .fold(0i32, |n, d| {
+            n.wrapping_mul(10).wrapping_add(i32::from(d - b'0'))
+        });
+    if neg {
+        n.wrapping_neg()
+    } else {
+        n
+    }
+}
+
 /// `id`'s `ZONECHANNELS` bit, `1 << (ChannelID - 1)`; nothing outside `1..=32` has one.
 pub(crate) fn zone_bit(id: u32) -> u32 {
     if id == 0 || id > 32 {
@@ -200,26 +220,31 @@ impl ChannelState {
     /// (`0x49be50`), and a hole, an out-of-range number or a suspended slot make the whole call a
     /// no-op (`None`). Anything else is already the wire name.
     pub(crate) fn leave_target(&self, arg: &str) -> Option<String> {
-        let digits: String = arg
-            .strip_prefix('-')
-            .unwrap_or(arg)
-            .chars()
-            .take_while(|c| c.is_ascii_digit())
-            .collect();
-        if digits.is_empty() || digits.chars().all(|c| c == '0') {
-            return Some(arg.to_string());
+        match sstr_to_int(arg) {
+            0 => Some(arg.to_string()),
+            n => self.confirmed_slot_name(n).map(str::to_string),
         }
-        if arg.starts_with('-') {
-            return None; // a negative never names a slot
-        }
-        digits
-            .parse::<usize>()
+    }
+
+    /// `SendChatMessage`'s channel target (`0x49f4d9`-`0x49f4ea`): `SStrToInt` straight into
+    /// `0x49be50`, with no name leg, so only a number naming a confirmed slot sends, and the
+    /// packet carries that slot's name. Anything else, a name included, sends nothing.
+    pub(crate) fn send_target(&self, arg: &str) -> Option<String> {
+        self.confirmed_slot_name(sstr_to_int(arg))
+            .map(str::to_string)
+    }
+
+    /// The by-number getter `0x49be50`: slot `n`'s name when it is in range, not a hole, and in
+    /// state 0 (here [`SlotState::Joined`]); below 1, past the end, a hole or another state is
+    /// `None`.
+    fn confirmed_slot_name(&self, n: i32) -> Option<&str> {
+        usize::try_from(n)
             .ok()
-            .filter(|n| *n > 0)
-            .and_then(|n| self.joined.get(n - 1))
+            .and_then(|n| n.checked_sub(1))
+            .and_then(|i| self.joined.get(i))
             .and_then(|slot| slot.as_ref())
             .filter(|slot| slot.state == SlotState::Joined)
-            .map(|slot| slot.name.clone())
+            .map(|slot| slot.name.as_str())
     }
 
     /// Rename a slot in place at send time, the reference's `0x49bc50` from the walk (`0x49a3dc`):

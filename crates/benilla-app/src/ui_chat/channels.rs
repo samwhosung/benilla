@@ -1010,6 +1010,13 @@ mod tests {
             "a composed name passes through"
         );
         assert_eq!(c.leave_target("mychan").as_deref(), Some("mychan"));
+        assert_eq!(c.leave_target("+1").as_deref(), Some("+1"), "no `+`");
+        assert_eq!(c.leave_target(" 1").as_deref(), Some(" 1"), "no space skip");
+        assert_eq!(
+            c.leave_target("4294967297").as_deref(),
+            Some("General - Elwynn Forest"),
+            "`SStrToInt` wraps: 2^32 + 1 reads 1"
+        );
 
         // The mask clear needs a slot carrying the wire name (`0x49f0f4`).
         c.note_zone_channel_left("General - Nowhere");

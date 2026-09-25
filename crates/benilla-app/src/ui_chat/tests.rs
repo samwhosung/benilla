@@ -2391,3 +2391,77 @@ fn the_chat_cache_restore_is_finished_before_player_login() {
     drop(world);
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// `SendChatMessage`'s `CHANNEL` target through the real drain: `SStrToInt` into `0x49be50`
+/// (`0x49f4d9`-`0x49f4ea`), so the packet carries the numbered slot's name, and a number naming
+/// no confirmed slot, or a name, sends nothing at all.
+#[test]
+fn a_channel_send_carries_the_numbered_slots_name() {
+    use super::edit::{ChannelSlot, ChannelState, SlotState};
+    use crate::net::{ChatKind, ClientCommand, NetCommands};
+    use bevy::ecs::system::RunSystemOnce;
+
+    let mut world = bevy::prelude::World::new();
+    world.insert_non_send_resource(benilla_ui::script::UiScript::new().expect("VM"));
+    let (tx, rx) = crossbeam_channel::unbounded();
+    world.insert_resource(NetCommands(tx));
+    world.init_resource::<super::feed::ChatLog>();
+    world.init_resource::<super::away::AfkMirror>();
+    world.init_resource::<crate::cvars::Cvars>();
+    world.insert_resource(ChannelState {
+        joined: vec![
+            Some(ChannelSlot::joined("General - Elwynn Forest")),
+            Some(ChannelSlot::joined("Trade - City")),
+            None,
+            Some(ChannelSlot {
+                name: "LocalDefense - Elwynn Forest".into(),
+                state: SlotState::Suspended,
+            }),
+        ],
+        ..Default::default()
+    });
+    world
+        .non_send_resource::<benilla_ui::script::UiScript>()
+        .run(
+            r#"
+            SendChatMessage("lf1m", "CHANNEL", nil, 2)
+            SendChatMessage("hello", "CHANNEL", nil, "1")
+            SendChatMessage("float", "CHANNEL", nil, 2.7)
+            SendChatMessage("hole", "CHANNEL", nil, 3)
+            SendChatMessage("suspended", "CHANNEL", nil, 4)
+            SendChatMessage("past the end", "CHANNEL", nil, 9)
+            SendChatMessage("by name", "CHANNEL", nil, "General - Elwynn Forest")
+            SendChatMessage("zero", "CHANNEL", nil, "0")
+            SendChatMessage("none", "CHANNEL")
+            SendChatMessage("tell", "WHISPER", nil, "2")
+            "#,
+        )
+        .expect("lua");
+    world
+        .run_system_once(super::input::drain_addon_chat_sends)
+        .expect("drain");
+
+    let sent: Vec<(ChatKind, Option<String>, String)> = rx
+        .try_iter()
+        .map(|c| match c {
+            ClientCommand::Chat { kind, target, text } => (kind, target, text),
+            other => panic!("unexpected command {other:?}"),
+        })
+        .collect();
+    let chan = |target: &str, text: &str| {
+        (
+            ChatKind::Channel,
+            Some(target.to_string()),
+            text.to_string(),
+        )
+    };
+    assert_eq!(
+        sent,
+        vec![
+            chan("Trade - City", "lf1m"),
+            chan("General - Elwynn Forest", "hello"),
+            chan("Trade - City", "float"),
+            (ChatKind::Whisper, Some("2".into()), "tell".into()),
+        ]
+    );
+}

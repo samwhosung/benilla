@@ -158,6 +158,9 @@ impl Plugin for UiChatPlugin {
                 )
                     .chain()
                     .after(UiInput)
+                    // Before the zone-channel walk renumbers or renames a slot, so a `/N` resolves
+                    // against the roster the script's `GetChannelName` read this frame.
+                    .before(channels::end_session_channels_on_disconnect)
                     .in_set(crate::char_select::InWorldGated),
             )
             // The zone-channel auto-join, which vmangos leaves to the client. The disconnect clear
