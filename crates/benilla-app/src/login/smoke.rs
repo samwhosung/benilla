@@ -98,10 +98,10 @@ mod tests {
     #[test]
     fn the_smoke_spec_splits_three_ways() {
         assert_eq!(
-            smoke_spec("probe1:pprobe1:Probeone"),
-            ("probe1", "pprobe1", Some("Probeone"))
+            smoke_spec("probe1:secret:Probeone"),
+            ("probe1", "secret", Some("Probeone"))
         );
-        assert_eq!(smoke_spec("probe1:pprobe1"), ("probe1", "pprobe1", None));
+        assert_eq!(smoke_spec("probe1:secret"), ("probe1", "secret", None));
         // A trailing colon names no body; a password may not itself contain one (the client caps
         // both fields at 16 letters and vmangos accounts have none).
         assert_eq!(smoke_spec("one:pass:"), ("one", "pass", None));

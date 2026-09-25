@@ -13,7 +13,7 @@
 //!   --reload-templates  make the server re-read the premade tables before dressing
 //!   --host <h>        default `localhost`
 //!
-//! … -- one pone One --wipe --level 60 --tier phase6-bis --home --spread a
+//! … -- <account> <password> <Character> --wipe --level 60 --tier phase6-bis --home --spread a
 //! ```
 //!
 //! Without `--wipe` it skips classes the account already has. Creating needs no GM level;

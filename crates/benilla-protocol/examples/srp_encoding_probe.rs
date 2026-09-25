@@ -5,7 +5,7 @@
 //! whenever a value has one; cmangos does the same (`Sha1Hash::UpdateBigNumbers`).
 //!
 //! ```text
-//! cargo run --release -p benilla-protocol --example srp_encoding_probe -- --user one --pass pone
+//! cargo run --release -p benilla-protocol --example srp_encoding_probe -- --user U --pass P
 //! ```
 //!
 //! `--stress N` runs N ordinary fixed-width handshakes and reports the failure rate, waiting out
@@ -342,8 +342,8 @@ fn matrix(host: &str, user: &str, pass: &str, enc: Enc, title: &str) {
 
 fn main() -> Result<()> {
     let mut host = "localhost".to_string();
-    let mut user = "one".to_string();
-    let mut pass = "pone".to_string();
+    let mut user = String::new();
+    let mut pass = String::new();
     let mut stress = 0u32;
     let mut logons = 0u32;
     let mut args = std::env::args().skip(1);
@@ -356,6 +356,9 @@ fn main() -> Result<()> {
             "--logon" => logons = args.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             other => return Err(anyhow!("unknown argument {other}")),
         }
+    }
+    if user.is_empty() || pass.is_empty() {
+        return Err(anyhow!("--user and --pass are required"));
     }
 
     // `--logon N` runs the shipped `logon` N times; every handshake must succeed, or its

@@ -1,7 +1,7 @@
 //! `benilla-world`: logs in to realmd, enters the world server as a character, and tallies the
 //! updates it pushes; the `--<probe>` flags live-verify one wire each.
 //!
-//! Example: `cargo run -p benilla-protocol --bin benilla-world -- one pone localhost`
+//! Example: `cargo run -p benilla-protocol --bin benilla-world -- <account> <password> localhost`
 //!
 //! An account with no character gets a Human Warrior (`--create <name>`). The world address
 //! defaults to the realm list's (`--world` overrides).

@@ -8,8 +8,8 @@
 //! lighting model (`Light.dbc` sampled against the server clock) with a sky dome, sun/moon discs, and
 //! distance fog; a faithful `EffectGlow` bloom on top.
 //!
-//! In parallel a background thread ([`net`]) logs in (`$WOW_USER`/`$WOW_PASS`/`$WOW_HOST`, default
-//! `one`/`pone`/`localhost`), enters the world, and streams object updates. NPCs and GameObjects
+//! In parallel a background thread ([`net`]) logs in (`$WOW_USER`/`$WOW_PASS`/`$WOW_HOST`, host
+//! default `localhost`), enters the world, and streams object updates. NPCs and GameObjects
 //! render as their real models (resolved from the display id via the creature/GameObject catalogs); other
 //! players stay cyan cubes, and our own avatar is blue until we take third-person control of it.
 //! **The world is loaded when a character enters it, and released when they leave** — the glue

@@ -96,7 +96,7 @@ pub(crate) fn env_login() -> bool {
 ///
 /// **This is the fact [`env_login`] was mistaken for, twice.** Env credentials mean "log in without
 /// typing"; they say nothing about the room — and the director plays with
-/// `WOW_USER=one WOW_PASS=pone cargo play`, which is the example line in `.cargo/config.toml`. So
+/// `WOW_USER=… WOW_PASS=… cargo play`, the example line in `.cargo/config.toml`. So
 /// every session they played read as "a harness": a typed password's refusal killed the process
 /// (fixed on 2026-08-28 by asking `announced` — direct evidence — instead of the environment) and,
 /// the half that fix left standing, a kick sent the client racing to take the account back instead
@@ -451,11 +451,11 @@ mod tests {
             let _c = EnvGuard::unset("WOW_CHAR");
             assert!(!env_login() && !unattended());
         }
-        // `WOW_USER=one WOW_PASS=pone cargo play` — `.cargo/config.toml`'s own example, and the
+        // `WOW_USER=… WOW_PASS=… cargo play`, `.cargo/config.toml`'s example, and the
         // director's launch line since 2026-08-29. Log them in without typing, yes. Decide things
         // on their behalf, no.
-        let _u = EnvGuard::set("WOW_USER", "one");
-        let _p = EnvGuard::set("WOW_PASS", "pone");
+        let _u = EnvGuard::set("WOW_USER", "player");
+        let _p = EnvGuard::set("WOW_PASS", "secret");
         assert!(env_login(), "the fast path still submits for them");
         assert!(
             !unattended(),
@@ -471,19 +471,19 @@ mod tests {
 
     #[test]
     fn the_fast_path_is_the_declared_account_or_refused() {
-        let id = parse_identity("WOW_USER=probe4\nWOW_PASS=pprobe4\nWOW_CHAR=Probefour\n").unwrap();
+        let id = parse_identity("WOW_USER=probe4\nWOW_PASS=secret\nWOW_CHAR=Probefour\n").unwrap();
         // Our own account: the whole point of the declaration.
         assert!(guard_for(Some(&id), "probe4").is_ok());
         assert!(guard_for(Some(&id), "PROBE4").is_ok()); // vmangos accounts are case-insensitive
 
         // Anyone else's account — a player's, another checkout's probe — kicks a live session.
-        let player = guard_for(Some(&id), "one").unwrap_err();
+        let player = guard_for(Some(&id), "player").unwrap_err();
         assert!(player.contains("probe4") && player.contains("kicks"));
         // The override hint belongs to the caller that can act on it, not to the reason.
         assert!(!player.contains("WOW_ALLOW_ACCOUNT"));
         assert!(guard_for(Some(&id), "probe7").is_err());
         // No declaration, no standing.
-        assert!(guard_for(None, "one").is_ok());
+        assert!(guard_for(None, "player").is_ok());
     }
 
     #[test]

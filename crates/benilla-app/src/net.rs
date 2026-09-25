@@ -2978,7 +2978,7 @@ mod tests {
     ///
     /// 1262 was built and verified in August and then quietly stopped working, with none of its
     /// code touched: the verdict asked the *environment* whether anybody was here, and on
-    /// 2026-08-29 the director's launch line became `WOW_USER=one WOW_PASS=pone cargo play` — the
+    /// 2026-08-29 the director's launch line became `WOW_USER=… WOW_PASS=… cargo play` — the
     /// example line in our own `.cargo/config.toml`. From that moment every session they played
     /// was "a probe", so a kick meant reconnect, and the account ping-ponged exactly as B252
     /// reported. Nothing about the fix was wrong; the fact under it was. 1769 made the claim a
@@ -2997,8 +2997,8 @@ mod tests {
 
         // The director's launch line, verbatim. Credentials in the environment, nobody declared
         // absent — this is a person playing, and a lost session is over.
-        let _user = EnvGuard::set("WOW_USER", "one");
-        let _pass = EnvGuard::set("WOW_PASS", "pone");
+        let _user = EnvGuard::set("WOW_USER", "player");
+        let _pass = EnvGuard::set("WOW_PASS", "secret");
         let _char = EnvGuard::set("WOW_CHAR", "One");
         let _decl = EnvGuard::unset("WOW_UNATTENDED");
         let _cap = EnvGuard::unset("WOW_CAPTURE");

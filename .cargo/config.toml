@@ -1,5 +1,5 @@
 # `cargo play` — the run loop. Same optimization as `--release`, plus incremental compilation (see
 # `[profile.play]` in the workspace Cargo.toml for why it is a separate profile and not a flip of
-# `release`). Env vars still prefix it: `WOW_USER=one WOW_PASS=pone cargo play`.
+# `release`). Env vars still prefix it: `WOW_USER=<account> WOW_PASS=<password> cargo play`.
 [alias]
 play = "run --profile play -p benilla"

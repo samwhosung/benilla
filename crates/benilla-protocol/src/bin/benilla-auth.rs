@@ -1,6 +1,6 @@
 //! `benilla-auth`: SRP6 logon against a vanilla realmd, printing the realm list.
 //!
-//! Example: `cargo run --bin benilla-auth -- one pone localhost`
+//! Example: `cargo run --bin benilla-auth -- <account> <password> localhost`
 
 use anyhow::Result;
 use clap::Parser;

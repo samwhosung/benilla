@@ -5,7 +5,7 @@
 //!
 //! This module owns the **credential policy** — the 0193 §3 mirror for the IO thread's pre-logon
 //! park: the env fast path (`WOW_USER` and `WOW_PASS` both set auto-submits
-//! with the old `one`/`pone` defaults, so every probe/smoke invocation keeps working), the
+//! with the old default account, so every probe/smoke invocation keeps working), the
 //! pending-credentials resubmit (paced at the flat 3 s, app-side — the IO thread never sleeps),
 //! and the director's typed submit. A *refused* code (bad password) clears the intent and shows
 //! the authored `AUTH_*` dialog — never an auto-retry against a refusal.
@@ -1230,7 +1230,8 @@ mod tests {
     #[test]
     fn a_lost_session_clears_the_credentials_and_shows_the_dialog() {
         let (mut app, _requests) = policy_app();
-        app.world_mut().resource_mut::<LoginIntent>().creds = Some(("one".into(), "pone".into()));
+        app.world_mut().resource_mut::<LoginIntent>().creds =
+            Some(("player".into(), "secret".into()));
         app.world_mut().write_message(DisconnectedMessage {
             reason: "disconnected: world stream closed: failed to fill whole buffer".into(),
             end: benilla_protocol::SessionEnd::Lost,
@@ -1258,7 +1259,8 @@ mod tests {
     #[test]
     fn a_logout_teardown_still_relists_at_once() {
         let (mut app, _requests) = policy_app();
-        app.world_mut().resource_mut::<LoginIntent>().creds = Some(("one".into(), "pone".into()));
+        app.world_mut().resource_mut::<LoginIntent>().creds =
+            Some(("player".into(), "secret".into()));
         app.world_mut().write_message(DisconnectedMessage {
             reason: "logged out".into(),
             end: benilla_protocol::SessionEnd::LoggedOut,
@@ -1331,7 +1333,7 @@ mod tests {
     fn an_unattended_run_still_reconnects_on_its_own() {
         let (mut app, _requests) = policy_app();
         app.world_mut().resource_mut::<LoginIntent>().creds =
-            Some(("probe1".into(), "pprobe1".into()));
+            Some(("probe1".into(), "secret".into()));
         app.world_mut().write_message(DisconnectedMessage {
             reason: "disconnected: connection reset".into(),
             end: benilla_protocol::SessionEnd::Lost,
@@ -1363,13 +1365,13 @@ mod tests {
         // Credentials pending with the retry due: the policy's silent submit tick.
         {
             let mut intent = app.world_mut().resource_mut::<LoginIntent>();
-            intent.creds = Some(("one".into(), "pone".into()));
+            intent.creds = Some(("player".into(), "secret".into()));
             intent.retry_at = Some(0.0);
         }
         app.update();
 
         let sent = requests.try_recv().expect("the policy submitted");
-        assert_eq!(sent.user, "one");
+        assert_eq!(sent.user, "player");
         assert_eq!(
             sent.host, "logon.example.org:3725",
             "the attempt dials what the realmlist says, not a value latched at spawn",
@@ -1444,7 +1446,8 @@ mod tests {
 
         // The status dialog's Cancel: the attempt is abandoned and the credentials forgotten, so
         // nothing resubmits behind the player's back.
-        app.world_mut().resource_mut::<LoginIntent>().creds = Some(("one".into(), "pone".into()));
+        app.world_mut().resource_mut::<LoginIntent>().creds =
+            Some(("player".into(), "secret".into()));
         app.world_mut().resource_mut::<LoginIntent>().in_flight = true;
         app.world_mut()
             .resource_mut::<GlueDialog>()
@@ -1581,8 +1584,8 @@ mod tests {
 
         // 1 · The director's actual launch line, verbatim from `.cargo/config.toml`'s example.
         //     Nothing here says anybody is absent, so nothing may end the run — typed or not.
-        let _user = crate::local_state::test_env::EnvGuard::set("WOW_USER", "one");
-        let _pass = crate::local_state::test_env::EnvGuard::set("WOW_PASS", "pone");
+        let _user = crate::local_state::test_env::EnvGuard::set("WOW_USER", "player");
+        let _pass = crate::local_state::test_env::EnvGuard::set("WOW_PASS", "secret");
         let _char = crate::local_state::test_env::EnvGuard::set("WOW_CHAR", "One");
         let _decl = crate::local_state::test_env::EnvGuard::unset("WOW_UNATTENDED");
         let _cap = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
@@ -1659,13 +1662,13 @@ mod tests {
     fn the_login_press_asks_for_the_account_before_the_password() {
         let mut form = LoginForm::default();
         assert_eq!(login_press(&form), LoginPress::NeedAccount);
-        form.account.set_text("one");
+        form.account.set_text("player");
         assert_eq!(login_press(&form), LoginPress::NeedPassword);
-        form.password.set_text("pone");
+        form.password.set_text("secret");
         assert_eq!(login_press(&form), LoginPress::Submit);
         // And a password-only form still asks for the account, not the password.
         let mut only_pass = LoginForm::default();
-        only_pass.password.set_text("pone");
+        only_pass.password.set_text("secret");
         assert_eq!(login_press(&only_pass), LoginPress::NeedAccount);
     }
 
