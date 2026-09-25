@@ -1,12 +1,8 @@
-// The glue screens' Bevy UI node shader on the UI gamma composite lane, vendored from
-// `bevy_ui_render` 0.18.1 `src/ui.wgsl`: upstream verbatim except `linear_to_srgb`, the fragment's
-// colour computation, and the dropped `#define_import_path` line (two modules claiming
-// `bevy_ui::ui_node` would collide). Re-diff against upstream on every Bevy upgrade: a structural
-// change fails pipeline validation, a fragment-side one drifts silently.
-//
-// The reference draws the glue screens into an 8-bit backbuffer, so every UI multiply and blend is
-// arithmetic on gamma bytes. This fragment outputs raw gamma into the `Rgba8UnormSrgb` target, so
-// the `(SrcAlpha, OneMinusSrcAlpha)` blend runs on gamma values; `ui_gamma.wgsl` decodes once.
+// The glue screens' Bevy UI node shader, vendored from `bevy_ui_render` 0.18.1 `src/ui.wgsl`,
+// verbatim except `linear_to_srgb`, the fragment's colour and the dropped `#define_import_path`
+// (two `bevy_ui::ui_node` modules would collide). Re-diff on every Bevy upgrade: a fragment-side
+// change drifts silently. The fragment outputs raw gamma, as the reference blends on 8-bit bytes;
+// `ui_gamma.wgsl` decodes once.
 
 #import bevy_render::view::View
 
@@ -24,8 +20,8 @@ fn enabled(flags: u32, mask: u32) -> bool {
     return (flags & mask) != 0u;
 }
 
-// Linear → sRGB on the IEC 61966-2-1 curve the hardware's sRGB store uses, so it inverts the
-// sampler's decode bit-for-bit in f32; keep identical to `ui_quad.wgsl`'s.
+// Linear to sRGB (IEC 61966-2-1), the exact inverse of the sampler's decode; keep identical to
+// `ui_quad.wgsl`'s.
 fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
     let higher = 1.055 * pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055;
     let lower = c * 12.92;
@@ -231,9 +227,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let texture_color = textureSample(sprite_texture, sprite_sampler, in.uv);
 
     // ── changed from upstream ──
-    // Upstream multiplies in linear. Each factor is encoded back to its authored sRGB byte and the
-    // multiply runs there, as the reference's FFP does; encoding the product instead diverges in
-    // the darks (sRGB's linear toe). Alpha is coverage and multiplies unchanged.
+    // Upstream multiplies in linear; here each factor goes back to its byte and the multiply runs
+    // there, as the reference's fixed-function pipeline does.
     let textured = enabled(in.flags, TEXTURED);
     let tint = linear_to_srgb(in.color.rgb);
     let texel = linear_to_srgb(texture_color.rgb);

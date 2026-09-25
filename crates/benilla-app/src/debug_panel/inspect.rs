@@ -1,6 +1,5 @@
-//! The **inspector surface** — the dev-chord `I` overlay: an "armed" pill plus a compact identity
-//! card that follows the cursor over whatever [`MouseoverTarget`] picked. Split from the module
-//! face for size only; the toggle, the card, and its readout lines live here unchanged.
+//! The inspector, the dev-chord `I` overlay: an "armed" pill and an identity card that follows
+//! the cursor over whatever [`MouseoverTarget`] picked.
 
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
@@ -15,34 +14,27 @@ use benilla_world::model_render::ModelKind;
 use benilla_world::modkeys::DEV_CHORD;
 use benilla_world::view::WorldCamera;
 
-/// The **dev chord + `I`** (for *inspect*) arms/disarms the inspector — off the bare-letter plane the
-/// game's own bindings own, on whichever plane this OS leaves free. Unmistakable as a
-/// chord, so unlike the old bare `i` it needs no chat-bar/EditBox gate.
+/// The dev chord + `I` arms and disarms the inspector; a chord needs no EditBox gate.
 pub(super) fn toggle_inspect(keys: Res<ButtonInput<KeyCode>>, mut inspect: ResMut<InspectMode>) {
     if benilla_world::modkeys::dev_chord(&keys, KeyCode::KeyI) {
         inspect.enabled = !inspect.enabled;
     }
 }
 
-/// How long the inspector card shows its "copied to clipboard" confirmation after a left-click.
-/// Shared with the journal's row-copy flash ([`super::journal`]).
+/// How long a "copied to clipboard" confirmation shows, on the card and the journal's rows.
 pub(super) const COPY_FLASH_SECS: f32 = 1.2;
 
-/// A per-kind accent so the card's header is glanceable (which *sort* of thing am I over?) before you
-/// even read the label.
+/// A per-kind accent for the card's header.
 fn kind_color(kind: ModelKind) -> egui::Color32 {
     match kind {
-        ModelKind::Doodad => egui::Color32::from_rgb(140, 220, 140), // green — props/trees
-        ModelKind::Wmo => egui::Color32::from_rgb(150, 185, 240),    // blue — buildings
-        ModelKind::Creature => egui::Color32::from_rgb(240, 205, 130), // gold — NPCs
-        ModelKind::GameObject => egui::Color32::from_rgb(220, 165, 220), // violet — GameObjects
+        ModelKind::Doodad => egui::Color32::from_rgb(140, 220, 140), // green: props, trees
+        ModelKind::Wmo => egui::Color32::from_rgb(150, 185, 240),    // blue: buildings
+        ModelKind::Creature => egui::Color32::from_rgb(240, 205, 130), // gold: NPCs
+        ModelKind::GameObject => egui::Color32::from_rgb(220, 165, 220), // violet: GameObjects
     }
 }
 
-/// The granted movement modes as the card names them — `None` when the unit has
-/// none, which is nearly all of them, so the common line is unchanged. Named rather than derived
-/// from the raw word on the card: `0x40001000` says nothing to the eye, and the whole reason this
-/// is on the card is that the modes explain a body that looks wrong and is not.
+/// The granted movement modes by name, `None` for a unit with none (nearly all of them).
 fn granted_modes(modes: Option<&crate::net::UnitMoveModes>) -> Option<String> {
     use crate::creature_anim::move_flags as f;
     let w = modes?.0;
@@ -61,54 +53,35 @@ fn granted_modes(modes: Option<&crate::net::UnitMoveModes>) -> Option<String> {
     (!named.is_empty()).then(|| format!("granted {}", named.join("+")))
 }
 
-/// The inspector's GameObject collision readout: does a hull exist, is it disabled
-/// right now, and what stored state does the passability gate see. Named so the bundled `stores`
-/// param stays readable.
+/// A GameObject's collision readout: hull present, hull disabled, and the stored state the
+/// passability gate sees.
 type GoCollisionReadout = (
     Has<avian3d::prelude::Collider>,
     Has<avian3d::prelude::ColliderDisabled>,
     Option<&'static crate::go_anim::GoAnim>,
 );
 
-/// The inspector's **motion** readout: the server-dictated path a creature is riding
-/// ([`crate::net::Spline`]) and the dead-reckoned state of a remote mover
-/// ([`crate::net::RemoteMotion`]) — the two producers of "this thing is moving" that the animation
-/// selector itself unifies. On the card because the identity lines alone cannot answer the one
-/// question a "that creature looks wrong" report always turns on: *is it actually moving, and how
-/// fast?* The AQ drakes are the case that earned it — a Brood of Nozdormu 190 yd overhead beating
-/// its wings at a flat 1× while its path crawls at walk pace reads as frozen, and nothing on the
-/// card said the path was the slow half.
-///
-/// …and, since 1780, the third producer: the modes the server **granted** this unit
-/// ([`crate::net::UnitMoveModes`]). They belong on the same line because they answer the same
-/// report from the other side — a body a yard off the floor, standing on water, or refusing every
-/// path the server sends it looks broken and is not, and the mode word is the only place that
-/// difference is written down. A unit with none reads nothing extra, which is nearly all of them.
+/// A unit's motion readout: its server path ([`crate::net::Spline`]), its dead-reckoned remote
+/// motion ([`crate::net::RemoteMotion`]) and the modes the server granted it
+/// ([`crate::net::UnitMoveModes`]), which explain a hovering, water-walking or rooted body.
 type MotionReadout = (
     Option<&'static crate::net::Spline>,
     Option<&'static crate::net::RemoteMotion>,
     Option<&'static crate::net::UnitMoveModes>,
-    // The clamp's memo, for the card's `ground` line — the only place a "this mob is under the
-    // world" sighting becomes a measurement instead of a picture.
+    // The ground clamp's memo, for the card's `ground` line.
     Option<&'static crate::net::GroundClamped>,
-    // Where the unit is standing *now*, which the `ground` line reads the terrain against.
+    // Where the unit stands now, which the `ground` line reads the terrain against.
     &'static Transform,
 );
 
-/// The inspector's entity LIGHT readout: the lane this object's parts render
-/// under, and which attach found the room — "two identical GameObjects a few yards apart, one lit
-/// like the room and one like the street" is the report that made this a card line rather than a
-/// rebuild with `WOW_INTERIOR_LOG`.
+/// An object's light readout: the lane its parts render under, and which attach found the room.
 type EntityLightReadout = (
     &'static benilla_world::interior::InteriorAnchor,
     Has<benilla_world::interior::ContainmentAttach>,
 );
 
-/// One pickable part as the card's `parts alive` and glow-card lines read it: the object, its
-/// draw verdict, its transform, whether it is a billboard card, the material + mesh tag the glow
-/// line names, and the visibility class the STACKED count reads. A tuple alias like
-/// [`EntityLightReadout`] above, for the same reason: as an inline `Query<>` the field trips
-/// clippy's `type_complexity` at the workspace gate.
+/// One pickable part as the card's `parts alive` and glow-card lines read it; an alias because an
+/// inline `Query<>` trips clippy's `type_complexity`.
 type PartReadout = (
     &'static benilla_world::interact::WorldObject,
     &'static bevy::camera::visibility::ViewVisibility,
@@ -119,58 +92,42 @@ type PartReadout = (
     Option<&'static bevy::camera::visibility::VisibilityClass>,
 );
 
-/// Everything the identity card reads off the **net entity** under the cursor, as one named
-/// [`SystemParam`] — the descriptor store and the coarse kind the line gates go by, the GameObject
-/// collision readout, the light readout, and the two remaining inputs of the
-/// **interact gate** ([`crate::target::cursor_mode::go_highlightable`]): the faction catalog and our
-/// own store. A bundle because `inspect_ui` sits at Bevy's 16-param ceiling; a named struct rather
-/// than the tuple it grew out of, so each member says what it is at the point of use.
+/// Everything the identity card reads off the net entity under the cursor, bundled because
+/// `inspect_ui` sits at Bevy's 16-param ceiling.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct InspectStores<'w, 's> {
     stores: Query<'w, 's, &'static ObjectStore>,
     kinds: Query<'w, 's, &'static crate::net::NetEntity>,
-    /// Every pickable part with its draw verdict, for the card's `parts alive` line: a prop
-    /// spawned twice reads twice its model's batch count here, and nowhere else.
+    /// Every pickable part with its draw verdict; a prop spawned twice reads twice its batches.
     objects: Query<'w, 's, PartReadout>,
-    /// The realized materials + images, for the card line: which material a glow card is bound
-    /// to, whether that material still says ADDITIVE, and whether its texture is resident.
+    /// For a glow card: its bound material, whether that is still additive, and whether its
+    /// texture is resident.
     model_mats: Res<'w, Assets<benilla_assets::materials::WowModelMaterial>>,
     images: Res<'w, Assets<bevy::image::Image>>,
     collision: Query<'w, 's, GoCollisionReadout>,
     lit: Query<'w, 's, EntityLightReadout>,
     motion: Query<'w, 's, MotionReadout>,
-    /// The MCNK heightfield under the hovered unit — the `ground` line's third number, and the one
-    /// that separates "the server put it there" from "we sank it".
+    /// The MCNK height under the hovered unit, the `ground` line's `terrain`.
     points: benilla_world::world_point::WorldPoint<'w, 's>,
     factions: Option<Res<'w, crate::target::ring::Factions>>,
     self_store: Query<'w, 's, &'static ObjectStore, With<crate::net::SelfPlayer>>,
-    /// The live standings — the other half of the reaction resolve (`ring_reaction` takes the
-    /// reputation branch first, and a rank that came off a standing rather than a faction-template
-    /// comparison is the single most confusing thing about a unit's colour).
+    /// The live standings: `ring_reaction` takes the reputation branch before the template one.
     reputations: Res<'w, crate::net::Reputations>,
-    /// This frame's plate verdict ([`crate::vplates::VPlates`]) — the *rendered* answer, not a
-    /// re-derivation, so the card can never disagree with what is on screen.
+    /// This frame's rendered plate verdict, not a re-derivation, so the card matches the screen.
     plates: Res<'w, crate::vplates::VPlates>,
-    /// Which of the two master bits are on, so a `plate ✗` can say whether the unit lost its plate
-    /// on the category gate or on something else.
+    /// The two master bits, so a `plate ✗` can say whether the category gate refused it.
     plate_mode: Res<'w, crate::vplates::VPlateMode>,
-    /// The ask-once GO template cache — the readable head a TEXT object's line reports,
-    /// and the highlight column + name the tooltip ladder reports (2246).
+    /// The GO template cache: a TEXT object's page and the tooltip ladder's highlight column
+    /// and name.
     go_templates: Res<'w, crate::go_templates::GameObjectTemplates>,
-    /// `[0xb72038]` — the meeting-stone queue, the other half of MEETINGSTONE(23)'s own
-    /// highlightable term, so the card's `interact` verdict reads the same
-    /// predicate the cursor and the click do.
+    /// The meeting-stone queue (`[0xb72038]`), part of MEETINGSTONE(23)'s highlightable term, so
+    /// the card's `interact` verdict reads the same predicate as the cursor.
     stone: Option<Res<'w, crate::ui_dialog_verbs::MeetingStone>>,
-    /// **The published GameObject mouseover** — the one the tooltip actually reads
-    /// ([`crate::target::HoveredObject`]). The card's own pick is a dev pick and does not go
-    /// through the publish, so without this the card can show an object the game is not hovering
-    /// at all and give no sign of the difference (2246).
+    /// The published GameObject mouseover the tooltip reads; the card's own dev pick bypasses the
+    /// publish, so this shows when the two differ.
     hovered_go: Res<'w, crate::target::HoveredObject>,
-    /// The GameObject **animation** readout — what the state machine's arm
-    /// (`0x5f3930`) is playing right now, for the card's `anim` line. Its own query rather than a
-    /// `collision` member because it needs the model components: they sit on the same entity as
-    /// [`crate::go_anim::GoAnim`], but a GO whose model authors no skeleton renders as a static
-    /// mesh and has none of them.
+    /// What the GameObject state machine's arm (`0x5f3930`) is playing, for the `anim` line. Its
+    /// own query: a GO whose model has no skeleton is a static mesh without these components.
     go_anims: Query<
         'w,
         's,
@@ -180,29 +137,19 @@ pub(super) struct InspectStores<'w, 's> {
             &'static benilla_assets::ModelAnimations,
         ),
     >,
-    /// The **picked submesh's own `MeshTag`** — the per-instance shading payload, decoded by its
-    /// owning module ([`benilla_world::mesh_tag::describe`]).
-    ///
-    /// The `light` line above names which *law* an object is on; this names what its parts are
-    /// actually carrying under that law, and the two together are what settle a "why is this body
-    /// lit wrong?" report. The payload's meaning switches on material state, which a tag alone
-    /// cannot know, so the decode prints BOTH readings of bits 6..=18 side by side — a shade byte
-    /// of 255 (the MCSH-shadowed half-intensity) sits inside a probe slot of 2047, and a writer
-    /// using the wrong law for its material is invisible in either reading alone and obvious in
-    /// the pair. Read off the picked entity itself, not the parent: `WorldObject` and `MeshTag`
-    /// both ride the submesh.
+    /// The picked submesh's own `MeshTag`, its per-instance shading payload. Its meaning depends
+    /// on material state, so [`benilla_world::mesh_tag::describe`] prints both readings of bits
+    /// 6..=18. Read off the submesh itself, not the parent.
     tags: Query<'w, 's, &'static bevy::mesh::MeshTag>,
 }
 
-/// The inspector overlay, drawn only while armed: a weak top-centre "armed" pill (so it's obvious the
-/// mode is on and how to leave it) and, whenever the cursor is over an identified object, a compact
-/// identity card pinned to the cursor. No chrome, no panel — its own lightweight surface.
+/// The inspector overlay while armed: a top-centre "armed" pill and, over an identified object,
+/// an identity card pinned to the cursor.
 pub(super) fn inspect_ui(
     mut contexts: EguiContexts,
     inspect: Res<InspectMode>,
     mouseover: Res<MouseoverTarget>,
-    // The pickable mesh is a child of the net entity; its descriptor store (`ObjectStore`) lives on the
-    // parent, so the readout hops child → parent.
+    // The pickable mesh is a child of the net entity, whose `ObjectStore` is on the parent.
     parents: Query<&ChildOf>,
     stores: InspectStores,
     guids: Query<&crate::net::Guid>,
@@ -212,11 +159,8 @@ pub(super) fn inspect_ui(
     spells: Option<Res<crate::ui_action::Spells>>,
     names: Res<crate::names::NameCache>,
     net_commands: Res<crate::net::NetCommands>,
-    // Bundled into one param (Bevy's system-function arity ceiling): the copy-click button, and
-    // the flag it must yield to — a left press this frame the UI already consumed as a
-    // cursor-payload world drop must not ALSO land as an inspector copy-click, the same
-    // yield every other world left-press consumer gives it (see `PointerOverUi` above for the
-    // hover-time twin).
+    // Bundled for the arity ceiling: the copy-click button and the flag it yields to, a left
+    // press the UI already consumed as a cursor-payload drop.
     click_input: (
         Res<ButtonInput<MouseButton>>,
         Res<crate::ui_script::PlayerUiClickConsumed>,
@@ -230,7 +174,7 @@ pub(super) fn inspect_ui(
     }
     let ctx = contexts.ctx_mut()?;
 
-    // Armed indicator — small + dim, so it states "inspect is on" without competing with the world.
+    // The armed indicator, small and dim.
     egui::Area::new(egui::Id::new("inspect_armed"))
         .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 8.0))
         .show(ctx, |ui| {
@@ -240,15 +184,14 @@ pub(super) fn inspect_ui(
                 .fill(OVERLAY_FILL)
                 .show(ui, |ui| {
                     overlay_text(ui);
-                    // Spelled out, not ⌃⌘ — egui's default font stack has no glyph for U+2303 and
-                    // would draw tofu.
+                    // Spelled out: egui's default fonts have no glyph for U+2303.
                     ui.label(
                         egui::RichText::new(format!("inspect · {DEV_CHORD}+I to exit")).small(),
                     );
                 });
         });
 
-    // The identity card: only when hovering a picked object, pinned just off the cursor tip.
+    // The identity card, only over a picked object, pinned just off the cursor tip.
     let Some(obj) = mouseover.object.as_ref() else {
         return Ok(());
     };
@@ -256,8 +199,7 @@ pub(super) fn inspect_ui(
         return Ok(());
     };
 
-    // A unit's decoded server vitals from its descriptor store (`ObjectStore`), if the picked mesh's
-    // parent has them — proof the descriptor pipeline (UpdateFields → ObjectValues → ECS) reached it.
+    // The picked mesh's parent, the net entity carrying the descriptor store.
     let net_entity = mouseover
         .entity
         .and_then(|e| parents.get(e).ok())
@@ -268,14 +210,13 @@ pub(super) fn inspect_ui(
     let go_templates = &*stores.go_templates;
     let queued_area = stores.stone.as_deref().map_or(0, |s| s.area);
     let hovered_go = &*stores.hovered_go;
-    // The picked submesh's shading payload — off the hit entity itself (see the field's doc).
+    // The picked submesh's shading payload, off the hit entity itself.
     let tag_line = mouseover
         .entity
         .and_then(|e| stores.tags.get(e).ok())
         .map(|t| format!("tag {}", benilla_world::mesh_tag::describe(t.0)));
-    // The duplicate readout: every live part naming this same object, and how many of them
-    // drew this frame. A doodad has one part per render batch; a doubled placement shows twice
-    // that here — the census the FPS probe prints as `orphan_parts=`, at the cursor.
+    // Every live part naming this object and how many drew; a doodad has one per render batch,
+    // so a doubled placement shows twice that.
     let parts_line = {
         let (mut alive, mut drawn, mut stacked) = (0usize, 0usize, 0usize);
         let mut cards: Vec<String> = Vec::new();
@@ -283,15 +224,12 @@ pub(super) fn inspect_ui(
             if w.kind == obj.kind && w.id == obj.id {
                 alive += 1;
                 drawn += usize::from(vv.get());
-                // A part whose `VisibilityClass` lists its mesh class more than once is queued
-                // that many times — drawn stacked on itself (`model_render::park`'s dedup).
+                // A `VisibilityClass` listing its mesh class twice is queued, and drawn, twice.
                 stacked += usize::from(class.is_some_and(|c| c.len() > 1));
                 if card {
-                    // One glow card, as the draw sees it: its live world scale (the placement
-                    // scale times the bone's pulse), its tag alpha, and the bound material's
-                    // marker word — ADDITIVE is `clutter_fade.z` bit 2, the bit `specialize`
-                    // keys the (ONE, ONE) blend on and the shader keys the alpha fold on; a card
-                    // whose material lost it draws its texture unweighted, a hard bright disc.
+                    // A glow card as drawn: world scale (placement times the bone's pulse), tag
+                    // alpha, and the material word. Additive is `clutter_fade.z` bit 2, which keys
+                    // the (ONE, ONE) blend and the shader's alpha fold.
                     let scale = gt.compute_transform().scale.x;
                     let alpha = tag.map_or(-1.0, |t| benilla_world::mesh_tag::alpha_of(t.0));
                     let m = mat.and_then(|m| stores.model_mats.get(&m.0));
@@ -350,27 +288,20 @@ pub(super) fn inspect_ui(
         &stores.go_anims,
     );
     let store = net_entity.and_then(|p| stores.get(p).ok());
-    // The unit's server name through the query cache — asks on first hover, fills on a later frame
-    // (the same ask-once path the unit frames use).
+    // The unit's name through the ask-once cache; it fills on a later frame.
     let name_line = net_entity
         .and_then(|p| guids.get(p).ok())
         .and_then(|g| names.resolve_unit(g.0, store, &net_commands))
         .map(str::to_string);
-    // Line gates go by the entity's KIND, not field presence: a create-seeded store answers every
-    // field (absent = 0, the descriptor truth), so "is the health field there" stopped meaning
-    // "is this a unit".
+    // Gate by kind, not field presence: a create-seeded store answers every field (absent is 0).
     let kind = net_entity.and_then(|p| kinds.get(p).ok()).map(|n| n.kind);
     let is_unit = matches!(
         kind,
         Some(benilla_protocol::EntityKind::Unit | benilla_protocol::EntityKind::Player)
     );
     let is_player = kind == Some(benilla_protocol::EntityKind::Player);
-    // The GameObject collision + state readout — the line that closes the loop on
-    // "this door is drawn open but I can't walk through it". It answers, for the object under the
-    // cursor, the three facts the passability gate turns on: the client's stored `GAMEOBJECT_STATE`
-    // (`go_anim::go_state`, i.e. what we believe open/closed is), whether a collision hull exists at
-    // all, and whether it is currently disabled. A door reading `state 0 open · SOLID` is the bug
-    // live on screen; `state 0 open · passable` says the gate ran and something else is blocking.
+    // A GameObject's stored `GAMEOBJECT_STATE` and its hull, the passability gate's inputs: a door
+    // reading `state 0 open · SOLID` is the gate failing.
     let go_line = store
         .filter(|_| kind == Some(benilla_protocol::EntityKind::GameObject))
         .map(|s| {
@@ -406,14 +337,9 @@ pub(super) fn inspect_ui(
             } else {
                 format!(" [{}]", named.join("|"))
             };
-            // The **interact gate**, stated rather than inferred (`0x5f2f80`): the
-            // strategy vtable's `+0x14` **highlightable** slot is the single predicate behind the
-            // cursor, the +64 brighten, the right-click USE and the pick priority — so a GO reading
-            // `interact ✗` is saying all four are off *by design*, and one reading `interact ✓` while
-            // showing no gear says the fault is downstream in the cursor naming. That distinction is
-            // exactly what the type-8 anvil report cost a hand-derivation to make: an anvil hovers
-            // (this card is up) and must still read `interact ✗`, because SPELL_FOCUS is one of the
-            // types whose `+0x14` is a constant `xor al,al`.
+            // The interact gate (`0x5f2f80`): the strategy vtable's `+0x14` highlightable slot is
+            // the one predicate behind the cursor, the +64 brighten, right-click USE and pick
+            // priority. SPELL_FOCUS's slot is a constant `xor al,al`, so an anvil reads `✗`.
             let reaction =
                 crate::target::cursor_mode::go_reaction(factions, s.0.gameobject_faction(), self_store);
             let go_guid = net_entity.and_then(|p| guids.get(p).ok()).map(|g| g.0);
@@ -431,24 +357,13 @@ pub(super) fn inspect_ui(
             } else {
                 "interact ✗"
             };
-            // **The TOOLTIP's own ladder**, which `interact` above is not and is
-            // routinely mistaken for. "No tooltip on this" has three possible stages and the card
-            // could name none of them, so every report of it cost a session of code reading:
-            //
-            //  · `hover ✗` — the **mouseover-eligibility** slot `+0x54`
-            //    ([`crate::target::cursor_mode::mouseover_eligible`]) said no, so the reference
-            //    publishes the NULL mouseover and there is no tooltip *by design*. For a
-            //    GENERIC(5) signpost this is the template's `data[1]` highlight column, which is
-            //    why the `tmpl` field sits beside it.
-            //  · `hover ✓` but `shown ✗` — eligible, and the publish still did not take it: the
-            //    pick lost to the occlusion verdict, to a nearer unit, or to the pointer being
-            //    over UI. The fault is in the pick, not the gate.
-            //  · `shown ✓` and still no plate on screen — the fault is downstream in
-            //    [`crate::ui_tooltip`], and `tmpl` says whether the name it needs has arrived.
-            //
-            // `tmpl —` is the one that looks like a bug and is not: the template query is
-            // ask-once and answers a frame or two later, and until it does the tooltip has no
-            // name to draw.
+            // The tooltip's own ladder, distinct from `interact`:
+            //  · `hover ✗`: the mouseover-eligibility slot `+0x54` said no, so the reference
+            //    publishes a NULL mouseover; for a GENERIC(5) signpost it is the template's
+            //    `data[1]` highlight column.
+            //  · `hover ✓`, `shown ✗`: the publish lost to occlusion, a nearer unit or UI.
+            //  · `shown ✓` and no tooltip: the fault is in [`crate::ui_tooltip`].
+            // `tmpl —` is the ask-once template query not answered yet.
             let tmpl = go_guid.and_then(|g| go_templates.get(g));
             let hover_gate = crate::target::cursor_mode::mouseover_eligible(
                 s.0.gameobject_type_id(),
@@ -469,11 +384,8 @@ pub(super) fn inspect_ui(
                     Some(t) => format!("{:?}", t.name),
                 }
             );
-            // TEXT (type 9) only: the **readable head**. A book that opens no
-            // window is either "no page in the template" or a fault downstream, and only this
-            // line tells the two apart — the symptom is identical from the chair, and the first
-            // one is the reference behaving correctly. `page —` = the template says none;
-            // `page ?` = its ask-once query hasn't answered yet.
+            // TEXT (type 9) only, the template's page: `page —` means none, so no window opens;
+            // `page ?` means the query has not answered yet.
             let page_text = if s.0.gameobject_type_id() == crate::target::cursor_mode::GO_TYPE_TEXT
             {
                 let go_guid = net_entity.and_then(|p| guids.get(p).ok()).map(|g| g.0);
@@ -488,17 +400,12 @@ pub(super) fn inspect_ui(
             } else {
                 String::new()
             };
-            // The **placement tilt** — shown only when there is one. A GameObject
-            // is placed by its `GAMEOBJECT_ROTATION` quaternion, and 96.7% of live spawns encode a
-            // plain yaw in it; the rest carry a tilt that swings the model's off-origin geometry
-            // yards from the spawn point. So `tilt 70°` on a prop that looks misplaced says "this
-            // one's pose is quaternion-only" — the question B89 cost a DB round-trip to answer —
-            // and its absence says the placement is a bare facing and the fault is elsewhere.
+            // The tilt of the `GAMEOBJECT_ROTATION` quaternion, shown only when there is one: most
+            // spawns are a plain yaw, and a tilt swings off-origin geometry yards from the spawn.
             let tilt = s
                 .0
                 .gameobject_rotation()
-                // The angle the quaternion leans the model's own up-axis off world up:
-                // `acos(m22)`, i.e. `2·asin(|x, y|)` — zero for every pure-yaw spawn.
+                // The model's up-axis off world up, `acos(m22)`, i.e. `2·asin(|x, y|)`.
                 .map(|q| (2.0 * q[0].hypot(q[1]).min(1.0).asin()).to_degrees())
                 .filter(|deg| *deg >= 0.5)
                 .map(|deg| format!(" · tilt {deg:.0}°"))
@@ -516,8 +423,7 @@ pub(super) fn inspect_ui(
             s.0.unit_level().unwrap_or(0)
         )
     });
-    // Raw bytes (not name-mapped): creature race/class don't share the player-race enum, so a label
-    // would mislead. The character model will name-map these for players specifically.
+    // Raw bytes: creature race and class do not share the player-race enum.
     let appearance_line = store.filter(|_| is_unit).map(|s| {
         format!(
             "race {} · class {} · sex {}",
@@ -526,14 +432,8 @@ pub(super) fn inspect_ui(
             s.0.unit_gender().unwrap_or(0)
         )
     });
-    // **Why this unit does or does not carry a V-plate** — the whole input set of
-    // `vplates::drive_vplates`'s gate on one line, plus the verdict it actually reached this frame
-    // (read out of [`crate::vplates::VPlates`], never re-derived, so the card cannot disagree with
-    // the screen). "These plates shouldn't be here" is otherwise a question no amount of looking
-    // can answer: the plate is drawn from a REACTION rank whose provenance (a reputation standing
-    // vs a faction-template comparison) is invisible, over unit flags nothing displays, and the
-    // two master bits are off-screen state. Reading `reaction 3 neutral(rep)` off a green-looking
-    // city NPC is the entire diagnosis.
+    // Why this unit does or does not carry a plate: every input of `vplates::drive_vplates`'s
+    // gate and the verdict read from [`crate::vplates::VPlates`].
     let plate_line = store.filter(|_| is_unit).map(|s| {
         let rank = crate::target::ring::ring_reaction(factions, reputations, Some(s), self_store);
         let word = match rank {
@@ -546,10 +446,8 @@ pub(super) fn inspect_ui(
             6 => "revered",
             _ => "exalted",
         };
-        // Which branch produced it: a faction WITH a reputation slot colours by our standing
-        // (`0x605fc0` → `0x4d63a0`, before any template comparison), everything else by the
-        // template comparator. The two disagree constantly — a battleground emissary is `friendly`
-        // by template and `neutral` by standing — and only this tag says which one you are seeing.
+        // A faction with a reputation slot reacts by our standing (`0x605fc0` -> `0x4d63a0`),
+        // before any template comparison; everything else by the template comparator.
         let branch = s
             .0
             .unit_faction_template()
@@ -570,8 +468,7 @@ pub(super) fn inspect_ui(
         let verdict = match net_entity {
             Some(p) if plates.contains(&p) => "plate ✓".to_string(),
             _ => {
-                // The category the gate would have put it in, and whether that bit is on — the
-                // first thing to check when a plate is missing (or present) unexpectedly.
+                // The category the gate would have put it in, and whether that bit is on.
                 let (category, bit) = if rank >= 4 {
                     ("friendly", plate_mode.friends)
                 } else {
@@ -590,8 +487,7 @@ pub(super) fn inspect_ui(
             s.0.unit_flags(),
         )
     });
-    // Player-only customization: the compositor's input, shown raw so we can
-    // confirm the PLAYER_BYTES decode against an in-game character.
+    // Player customization, the compositor's input, raw from `PLAYER_BYTES`.
     let customization_line = store.filter(|_| is_player).map(|s| {
         format!(
             "skin {} · face {} · hair {}/{} · facial {}",
@@ -603,21 +499,15 @@ pub(super) fn inspect_ui(
         )
     });
 
-    // A unit mid-cast (`SMSG_SPELL_START` .. GO — the `Casting` wire seam): which spell, by id and
-    // display name. The director's "what is it casting?" answered on hover; the finished cast's
-    // trail lives in the journal.
+    // A unit mid-cast, between `SMSG_SPELL_START` and GO: the spell's id and name.
     let casting_line = net_entity.and_then(|p| castings.get(p).ok()).map(|c| {
         match spells.as_ref().and_then(|s| s.catalog.get(c.spell_id)) {
             Some(d) => format!("casting {} \"{}\"", c.spell_id, d.name),
             None => format!("casting {}", c.spell_id),
         }
     });
-    // **Is it moving, and how fast** ([`MotionReadout`]) — the input the `anim` line below is a
-    // consequence of. A creature riding a server path reports the path's constant speed (its whole
-    // length over its whole duration, the same number the gait selector reads) and how far through
-    // it is, so a unit that looks static is either `still` (no path at all — the server has not
-    // launched one, or the last one expired) or a path so slow it cannot be seen. A remote mover
-    // reports its dead-reckoning speed instead. Units and players only: a GameObject has no mover.
+    // Motion: a server path's constant speed (length over duration, as the gait selector reads
+    // it) and progress, or a remote mover's dead-reckoning speed; `still` means no path at all.
     let motion_line = net_entity
         .filter(|_| is_unit)
         .and_then(|p| motion.get(p).ok())
@@ -640,25 +530,10 @@ pub(super) fn inspect_ui(
                 None => moving,
             }
         });
-    // **Where its feet came from** ([`crate::net::GroundClamped`]) — the ground clamp's own memo,
-    // shown because "that mob is standing inside the hill" is a claim about three numbers and no
-    // screenshot carries them:
-    //
-    //   `ground z 12.34 · seat 12.42 (drop +0.08) · terrain 12.34 · walk hit`
-    //
-    // - **`z`** is where we are drawing it; **`seat`** is the pose the server last wrote, before
-    //   the clamp had its say, and **`drop`** = `seat − z` is the clamp's own correction. A big
-    //   positive drop is *ours*; a `z` far under `terrain` with `drop ≈ 0` is the server's.
-    // - **`terrain`** is the MCNK height under it — so "is it under the world?" reads off the card
-    //   rather than off a guess about what the hill looks like from here.
-    // - **the arm and the probe verdict**: `walk` is the swept step continuing a server path,
-    //   `idle` the settle from the seat, and they answer a MISS differently — an idle miss leaves
-    //   the unit at its seat, a walk miss descends. `MISS` is upper-case because on the `walk` arm
-    //   it is the interesting state, not a neutral one.
-    //
-    // The same three numbers `WOW_GROUND_CENSUS` prints per unit, on the unit the director is
-    // actually pointing at: the census answers "is anything sunk in this scene", this answers "why
-    // is *that* one".
+    // The ground clamp's memo ([`crate::net::GroundClamped`]): `z` is drawn, `seat` the server's
+    // last pose, `drop` = `seat - z` the clamp's correction, `terrain` the MCNK height. `walk` is
+    // the swept step on a server path and `idle` the settle from the seat; an idle miss stays at
+    // the seat, a walk miss descends.
     let ground_line = net_entity
         .filter(|_| is_unit)
         .and_then(|p| motion.get(p).ok())
@@ -676,21 +551,18 @@ pub(super) fn inspect_ui(
                 if c.hit { "hit" } else { "MISS" },
             )
         });
-    // An `AnimationData` id as the card names it — shared by the creature and GameObject anim
-    // lines below, which read the same id space.
+    // An `AnimationData` id by name, for both anim lines.
     let fmt = |id: u16| match anim_data.as_ref().and_then(|a| a.0.name(id)) {
         Some(name) => format!("{name}({id})"),
         None => format!("{id}"),
     };
-    // The animation slots this frame (requested `AnimationData` ids — the selector's choice,
-    // before missing-clip substitution): the full-body base + any masked upper-body overlay.
+    // The requested `AnimationData` ids, before missing-clip substitution: the full-body base and
+    // any masked upper-body overlay.
     let anim_line = net_entity.and_then(|p| drivers.get(p).ok()).map(|d| {
         let (base, overlay) = d.playing();
         let base = base.map(&fmt).unwrap_or_else(|| "—".into());
-        // The base slot's live playback rate — `speed / (moveSpeed · modelScale)`
-        // on a locomotion clip, a flat 1× on everything else. Shown so a "its walk is too fast"
-        // report is a hover away from a number instead of a hand-worked divisor; suppressed at
-        // exactly 1× so the ordinary case doesn't carry noise.
+        // The base slot's playback rate, `speed / (moveSpeed · modelScale)` on a locomotion clip;
+        // hidden at 1x.
         let rate = d.rate();
         let rate = if (rate - 1.0).abs() > 1e-3 {
             format!(" · rate {rate:.2}×")
@@ -702,12 +574,9 @@ pub(super) fn inspect_ui(
             None => format!("anim {base}{rate}"),
         }
     });
-    // The same line for a **GameObject**, which is driven by `GoAnim` rather than
-    // `AnimDriver` and so never reached the branch above: the sequence the state machine's arm
-    // (`0x5f3930`) is playing, whether it is a transient one (a transition motion / a Custom block
-    // — something the completion advance `0x5f4120` must end) or the state's held rest pose, and
-    // the repeat it is running under. A `transition · loops` reading is the "stuck open/closing"
-    // bug, stated.
+    // A GameObject's line, from `GoAnim`: the sequence the state machine's arm (`0x5f3930`) plays,
+    // a transient one the completion advance `0x5f4120` must end or the held rest pose, and its
+    // repeat. `transition · loops` is a door stuck mid-motion.
     let anim_line = anim_line.or_else(|| {
         let (id, transient, repeat) = net_entity
             .and_then(|p| go_anims.get(p).ok())
@@ -720,8 +589,7 @@ pub(super) fn inspect_ui(
         };
         Some(format!("anim {} · {kind}{repeat}", fmt(id)))
     });
-    // The light lane + the attach that found it. Absent until the classifier has
-    // resolved the anchor once — a freshly streamed object shows no line rather than a wrong one.
+    // The light lane and the attach that found it; absent until the anchor resolves once.
     let light_line = net_entity
         .and_then(|p| lit.get(p).ok())
         .map(|(anchor, containment)| {
@@ -736,7 +604,7 @@ pub(super) fn inspect_ui(
             )
         });
 
-    // The lines shown in the card — also exactly what a left-click copies to the clipboard.
+    // The card's lines, which a left-click copies.
     let mut lines = vec![format!("{:?}", obj.kind), obj.label.clone()];
     if let Some(name) = &name_line {
         lines.push(format!("\"{name}\""));
@@ -783,8 +651,7 @@ pub(super) fn inspect_ui(
     lines.push(parts_line.clone());
     lines.push(format!("{:.1} yd away", mouseover.distance));
 
-    // The inspector owns left-click while armed (player::control suppresses left-orbit during inspect),
-    // so a press over the hovered object copies the whole card to the clipboard.
+    // The inspector owns left-click while armed; `player::control` suppresses left-orbit.
     if buttons.just_pressed(MouseButton::Left) && !click_consumed.0 {
         ctx.copy_text(lines.join("\n"));
         *copied_at = Some(time.elapsed_secs());
@@ -838,7 +705,6 @@ pub(super) fn inspect_ui(
                         egui::RichText::new(format!("{:.1} yd away", mouseover.distance))
                             .color(OVERLAY_TEXT_DIM),
                     );
-                    // Copy affordance, swapped for a brief confirmation after a left-click.
                     if just_copied {
                         ui.label(
                             egui::RichText::new("copied to clipboard")
@@ -857,14 +723,8 @@ pub(super) fn inspect_ui(
     Ok(())
 }
 
-/// The nearest identified thing under the cursor this frame, or `None`. `point`/`distance` are the
-/// world-space hit.
-///
-/// The identity is the resource's own (`object`), not something the consumer looks up off `entity`:
-/// most of the static world draws from a consolidated lane and has **no entity** to look anything
-/// up on. `entity` is `Some` only when one owns the geometry — which is exactly
-/// when the extra per-entity readouts (a unit's descriptor store, a GameObject's collision) mean
-/// anything.
+/// The nearest identified thing under the cursor this frame. `entity` is `Some` only when one
+/// owns the geometry: most of the static world draws from a consolidated lane with none.
 #[derive(Resource, Default)]
 pub struct MouseoverTarget {
     pub object: Option<WorldObject>,
@@ -873,9 +733,8 @@ pub struct MouseoverTarget {
     pub distance: f32,
 }
 
-/// Ray-cast from the cursor into the world and record the nearest [`WorldObject`] hit. Restricted to
-/// entities carrying `WorldObject` (so terrain, particle billboards, and other un-identified meshes are
-/// transparent to the pick), and skipped entirely unless inspection is active.
+/// Ray-cast from the cursor to the nearest [`WorldObject`], only while inspect is armed; terrain
+/// and other unidentified meshes are transparent to it.
 pub(super) fn update_mouseover(
     inspect: Res<InspectMode>,
     pointer_over_ui: Res<PointerOverUi>,
@@ -883,8 +742,7 @@ pub(super) fn update_mouseover(
     window: Query<&Window, With<PrimaryWindow>>,
     camera: Query<(&Camera, &GlobalTransform), With<WorldCamera>>,
     objects: Query<(Entity, &WorldObject)>,
-    // Everything drawn, entity-owned or not — see [`WorldPick`]: most of the static world draws
-    // from a consolidating lane and would be invisible to a bare `PickParts` cast (1534).
+    // Everything drawn, entity-owned or not.
     pick: WorldPick,
 ) {
     if !inspect.enabled {
@@ -895,9 +753,7 @@ pub(super) fn update_mouseover(
     }
     target.object = None;
     target.entity = None;
-    // The pointer is over the dev UI (e.g. the now-overlaid debug panel), not the world — don't pick
-    // behind it. This replaces the old "is the cursor in the inset world viewport?" test, which no
-    // longer means anything now the panel overlays a full-screen view.
+    // No pick behind UI.
     if pointer_over_ui.0 {
         return;
     }
@@ -908,7 +764,7 @@ pub(super) fn update_mouseover(
         return;
     };
     let Some(cursor) = window.cursor_position() else {
-        return; // cursor left the window, or we're in mouselook (hidden)
+        return; // outside the window, or hidden in mouselook
     };
     let identified: HashSet<Entity> = objects.iter().map(|(e, _)| e).collect();
     if let Some(hit) = pick.at_cursor(cursor, camera, cam_tf, &identified) {

@@ -1,15 +1,6 @@
-//! The cast journal — *what was that spell?*
-//!
-//! The inspector card answers the spatial question (what is this thing under my cursor?); a spell
-//! is **temporal** — its visual is often gone before anyone could point at it. So the journal
-//! records every cast edge as it flows past and the I-toggled inspect overlay shows the recent
-//! rows, each a click-to-copy identity block (spell id + name, caster, visual id, missile speed)
-//! ready to paste into a bug report or a session chat.
-//!
-//! Recording is **always on** (the whole point is that the question comes *after* the event —
-//! see the spell, then arm inspect and it's already there); only the drawing gates on
-//! [`InspectMode`]. The buffer is deliberately tiny ([`KEPT`]): this answers "that spell just
-//! now", not history.
+//! The cast journal: every recent cast edge, shown in the inspect overlay as click-to-copy rows.
+//! Recording is always on so a spell seen before inspect was armed is already there; only the
+//! drawing gates on [`InspectMode`].
 
 use std::collections::VecDeque;
 
@@ -28,31 +19,30 @@ const KEPT: usize = 24;
 /// Rows drawn in the overlay, newest first.
 const SHOWN: usize = 10;
 
-/// Where a recorded cast currently stands (the wire edges of decision 0099 phase 1).
+/// Where a recorded cast stands on its wire edges.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CastState {
-    /// `SMSG_SPELL_START` seen, no GO yet — in flight (or the row went stale on a missed edge).
+    /// `SMSG_SPELL_START` seen, no GO yet (or the row went stale on a missed edge).
     Casting,
-    /// `SMSG_SPELL_GO` — the cast went off.
+    /// `SMSG_SPELL_GO`: the cast went off.
     Went,
-    /// The cast died without a release (`SMSG_SPELL_FAILED_OTHER` / our failed `CAST_RESULT`).
+    /// The cast died without a release (`SMSG_SPELL_FAILED_OTHER` or our failed `CAST_RESULT`).
     Failed,
 }
 
-/// One observed cast, resolved at record time against the `Spell.dbc` display catalog (name /
-/// visual / speed); the caster's *name* stays a guid here and resolves at draw time through the
-/// ask-once [`crate::names::NameCache`] (so a name that fills late still shows).
+/// One observed cast, its `Spell.dbc` display resolved at record time; the caster stays a guid
+/// and resolves at draw time, so a name that fills late still shows.
 struct CastRecord {
     caster: u64,
     spell_id: u32,
     name: Option<String>,
     visual: u32,
     speed: f32,
-    /// `Time::elapsed_secs_f64` of the latest edge (a GO refreshes it — age reads "went off").
+    /// `Time::elapsed_secs_f64` of the latest edge; a GO refreshes it.
     at: f64,
     state: CastState,
-    /// Missile arrivals credited back to this row (`CastEventKind::Impact` carries the *target*,
-    /// so impacts match by spell id against the newest launched row).
+    /// Missile arrivals, matched by spell id to the newest launched row: an impact carries the
+    /// target, not the caster.
     impacts: u32,
 }
 
@@ -63,8 +53,7 @@ pub(super) struct CastJournal {
 }
 
 impl CastJournal {
-    /// The newest record matching `caster` + `spell_id` in the `Casting` state — the row a
-    /// GO/fail edge upgrades (an instant's START and GO arrive the same frame and share one row).
+    /// The newest `Casting` row for `caster` and `spell_id`, the one a GO or fail edge upgrades.
     fn open_cast(&mut self, caster: u64, spell_id: u32) -> Option<&mut CastRecord> {
         self.records
             .iter_mut()
@@ -80,9 +69,7 @@ impl CastJournal {
     }
 }
 
-/// Record every cast edge into the journal (always on — the drawing, not the recording, gates on
-/// inspect mode). Reads the same [`CastEvent`] stream the visual router consumes; the spell's
-/// display row resolves here, once, so the draw pass is pure formatting.
+/// Record every cast edge into the journal, resolving the spell's display row once.
 pub(super) fn record_casts(
     mut casts: MessageReader<CastEvent>,
     mut journal: ResMut<CastJournal>,
@@ -94,7 +81,7 @@ pub(super) fn record_casts(
     for ev in casts.read() {
         match ev.kind {
             CastEventKind::Start | CastEventKind::Go | CastEventKind::Fail => {
-                // The caster's guid off its net entity; a despawned-same-frame caster just drops.
+                // A caster despawned the same frame drops.
                 let Ok(&Guid(caster)) = guids.get(ev.entity) else {
                     continue;
                 };
@@ -103,8 +90,8 @@ pub(super) fn record_casts(
                     CastEventKind::Go => CastState::Went,
                     _ => CastState::Failed,
                 };
-                // A GO/fail closes its own START row; without one (a triggered proc's bare GO,
-                // or a failed instant) it gets a fresh row — every edge stays visible.
+                // A GO or fail closes its START row; without one (a proc's bare GO, a failed
+                // instant) it gets a fresh row.
                 if state != CastState::Casting {
                     if let Some(open) = journal.open_cast(caster, ev.spell_id) {
                         open.state = state;
@@ -124,9 +111,8 @@ pub(super) fn record_casts(
                     impacts: 0,
                 });
             }
-            // The arrival edges: credit the newest launched row for this spell (the caster isn't
-            // on the unit hand-off's message — decision 0099 phase 4). A ground arrival is an
-            // arrival too — a pure dest cast's only one, and the journal's proof it landed.
+            // Arrivals credit the newest launched row for the spell; a ground arrival counts, as
+            // a pure dest cast has no other.
             CastEventKind::Impact { .. } | CastEventKind::GroundImpact { .. } => {
                 if let Some(row) = journal
                     .records
@@ -153,9 +139,8 @@ fn age(now: f64, at: f64) -> String {
     }
 }
 
-/// The journal overlay: while inspect is armed, the recent casts as a top-left column, newest
-/// first — click a row to copy its one-line identity block. Shares the inspector card's style
-/// (decision 0025's one overlay look).
+/// The journal overlay: while inspect is armed, recent casts top-left, newest first; a click
+/// copies a row.
 pub(super) fn journal_ui(
     mut contexts: EguiContexts,
     inspect: Res<InspectMode>,
@@ -164,8 +149,7 @@ pub(super) fn journal_ui(
     names: Res<crate::names::NameCache>,
     net_commands: Res<NetCommands>,
     time: Res<Time>,
-    // The copied row's edge stamp (`CastRecord::at` is unique per row) + when the copy happened,
-    // for the per-row confirmation flash.
+    // The copied row's `at` (unique per row) and when it was copied, for the confirmation flash.
     mut copied: Local<Option<(f64, f32)>>,
 ) -> Result {
     if !inspect.enabled || journal.records.is_empty() {
@@ -189,7 +173,6 @@ pub(super) fn journal_ui(
                             .color(OVERLAY_TEXT_DIM),
                     );
                     for (i, r) in journal.records.iter().rev().take(SHOWN).enumerate() {
-                        // The caster: "you", the ask-once name cache, or the raw guid.
                         let caster = if self_guid.0 == Some(r.caster) {
                             "you".to_string()
                         } else {
@@ -274,7 +257,6 @@ pub(super) fn journal_ui(
                             ));
                             *copied = Some((r.at, time.elapsed_secs()));
                         }
-                        // The same confirmation the card gives, per row.
                         if copied.is_some_and(|(at, t)| {
                             at == r.at && time.elapsed_secs() - t < super::inspect::COPY_FLASH_SECS
                         }) {

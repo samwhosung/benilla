@@ -1,26 +1,19 @@
-//! Raid-target marker **overhead billboards** — the name render's marker leg `0x6c709a`: for
-//! each unit holding a mark on the 8-slot board (
-//! `GroupState::raid_targets`) and NOT carrying a live V-nameplate (the `[CGUnit+0xe60]==0`
-//! mutual exclusion — the plate shows its own raid-icon child instead, `vplates`), the client
-//! draws a separate world billboard: the anchor unit-quad LUT `(−.5,1,0),(.5,1,0),(.5,0,0),
-//! (−.5,0,0)` (bottom-anchored, h-centered), the 4-column `UI-RaidTargetingIcons` atlas cell
-//! (`col = idx&3`, `row = idx>>2`, cell 0.25), index list `{0,1,3,3,1,2}`.
+//! Raid-target marker overhead billboards, the name render's marker leg (`0x6c709a`): each unit
+//! holding a mark on the 8-slot board (`GroupState::raid_targets`) and without a live V-nameplate
+//! (`[CGUnit+0xe60] == 0`; the plate shows its own raid icon) gets a world billboard, the unit
+//! quad LUT `(-.5,1,0),(.5,1,0),(.5,0,0),(-.5,0,0)` over the 4-column `UI-RaidTargetingIcons`
+//! atlas (`col = idx&3`, `row = idx>>2`, cell 0.25), indices `{0,1,3,3,1,2}`.
 //!
-//! Seat (`0x6c70d8`): if the unit's overhead NAME shows this frame, the marker's bottom sits
-//! **one line-pitch above the top of the name block** — world Z = `anchor + (lineCount + 1)·scale`;
-//! with no name it sits at the bare anchor. Camera-facing, world-scaled by the shared name
-//! height-scale law ([`crate::nameplates::height_scale`]) — same world-pass unlit/Blend state
-//! as the names (walls occlude; the skipped depth-write is the shared named divergence).
+//! Seat (`0x6c70d8`): with the unit's name shown, the bottom sits at
+//! `anchor + (lineCount + 1) * scale`, one line pitch above the name block; else at the anchor.
+//! `scale` is the names' height law ([`crate::nameplates::height_scale`]).
 //!
-//! Size (`0x6c7200`): the marker is a
-//! **fixed unit (1×1) world billboard** — `scale` feeds only the seat (the z-raise), NEVER the
-//! quad geometry. The ref builds the quad by a verbatim vertex copy of the unit LUT (no `fmul`
-//! on position) and billboards it through a world-matrix-cancellation chain (`0x7bca80…`) that
-//! re-normalizes the basis to unit length, so the on-screen size is a world/view-transform
-//! quantity independent of the name `scale`. (The earlier "one pitch square = `scale`·1" was
-//! REFUTED — that under-sized the marker ~5× for a small unit.) Drawn here at [`MARK_WORLD_SIZE`],
-//! a fixed world unit, camera-facing; the absolute pixel projection is the render boundary (a
-//! director look-call). The ref's third gate (`0x605f30()==0`) is unresolved and not reproduced.
+//! Size (`0x6c7200`): a fixed one-unit world quad; `scale` never enters its geometry, and the
+//! billboard chain (`0x7bca80`) renormalizes the basis to unit length.
+//!
+//! Drawn in the names' world pass, unlit and blended. Deviation: no depth write, as for the names,
+//! because blended sorting looks the same.
+//! The reference's third gate (`0x605f30() == 0`) is untraced and not applied.
 
 use bevy::prelude::*;
 
@@ -31,25 +24,20 @@ use crate::ui_party::GroupState;
 use crate::vplates::VPlates;
 use benilla_world::view::WorldCamera;
 
-/// The mark atlas (4×2 icons in a 4-column grid, cell 0.25) — the same art the popup's submenu
-/// rows and the plate child slice.
+/// The mark atlas: 4x2 icons in a 4-column grid, cell 0.25.
 const MARK_TEXTURE: &str = "mpq://interface/targetingframe/ui-raidtargetingicons.blp";
 
-/// The marker's world size (`0x6c7200`): a **fixed** world unit,
-/// independent of the name `scale`. The ref's quad is the bare unit LUT billboarded by a
-/// world-matrix-cancellation chain that leaves a unit-length basis; the pixel projection is the
-/// render boundary (a director look-call — adjust here if it reads too big/small).
+/// The marker's world size (`0x6c7200`): one unit, independent of the name `scale`.
 const MARK_WORLD_SIZE: f32 = 1.0;
 
-/// One live marker: the billboard entity, the unit it rides, and its wire icon slot.
+/// One live marker: the billboard entity and the unit it rides.
 #[derive(Clone, Copy)]
 struct LiveMark {
     marker: Entity,
     unit: Entity,
 }
 
-/// The marker caches: the shared material, one tiny quad mesh per icon (lazy), and the live
-/// marker per board slot (wire icon 0..7).
+/// The shared material, one lazy quad mesh per icon, and the live marker per board slot.
 #[derive(Resource, Default)]
 pub(crate) struct RaidMarks {
     material: Option<Handle<StandardMaterial>>,
@@ -57,12 +45,11 @@ pub(crate) struct RaidMarks {
     live: [Option<LiveMark>; 8],
 }
 
-/// Marker component on a mark billboard entity (root-level, following its unit).
+/// A root-level mark billboard, following its unit.
 #[derive(Component)]
 struct RaidMarkBillboard;
 
-/// The marker quad (`0x6c709a`) for one wire icon: the LUT positions (local X ∈ [−.5, .5],
-/// Y ∈ [0, 1], bottom anchored), the atlas cell UVs, the ref's own index list.
+/// The marker quad (`0x6c709a`) for one wire icon: the LUT, the atlas cell, the index list.
 fn mark_mesh(icon: u32) -> Mesh {
     use bevy::asset::RenderAssetUsages;
     use bevy::mesh::{Indices, PrimitiveTopology};
@@ -95,9 +82,8 @@ fn mark_mesh(icon: u32) -> Mesh {
     mesh
 }
 
-/// The marker's world transform for `unit` this frame — the seat (`0x6c70d8`) over the shared
-/// anchor/scale law. Generic over the joint-globals filter like [`overhead_anchor`] (the placer
-/// passes a disjoint query).
+/// The marker's transform for `unit` this frame, seated per `0x6c70d8`. Generic over the
+/// joint-globals filter, like [`overhead_anchor`].
 fn mark_place<F: bevy::ecs::query::QueryFilter>(
     unit: Entity,
     tf: &Transform,
@@ -110,9 +96,7 @@ fn mark_place<F: bevy::ecs::query::QueryFilter>(
     mounts: &Query<(), With<crate::entities::mount::MountChild>>,
 ) -> Transform {
     let anchor = overhead_anchor(unit, tf, attach, poses, fallback, globals, mounts);
-    // `scale` (the name's world height-law) drives ONLY the seat — the marker sits one
-    // line-pitch above the top of the name block. The quad SIZE is a fixed world unit
-    // (`0x6c7200`: `scale` never enters the marker geometry), not `scale`-scaled.
+    // `scale` drives only the seat, never the quad size (`0x6c7200`).
     let scale = height_scale(anchor.y - tf.translation.y);
     let lift = match plates.line_count(unit) {
         Some(lines) => (lines as f32 + 1.0) * scale,
@@ -125,11 +109,9 @@ fn mark_place<F: bevy::ecs::query::QueryFilter>(
     }
 }
 
-/// Drive the markers: walk the 8-slot board, resolve each marked guid to its streamed entity
-/// (an out-of-range mark simply doesn't draw — the client can't render a unit it can't see),
-/// gate on the plate exclusion, and (re)build the billboard entities. Runs after the name
-/// driver (the seat reads this frame's line counts) — spawn-frame seat here, the per-frame
-/// re-seat is [`place_raid_marks`].
+/// Walks the 8-slot board, resolves each marked guid to its streamed entity (an unstreamed unit
+/// draws nothing), applies the plate exclusion and (re)builds the billboards. Runs after the name
+/// driver, whose line counts seat it; [`place_raid_marks`] re-seats every frame.
 #[allow(clippy::type_complexity)] // one Bevy system's full input set
 fn drive_raid_marks(
     mut commands: Commands,
@@ -161,8 +143,7 @@ fn drive_raid_marks(
             materials.add(StandardMaterial {
                 base_color: Color::WHITE,
                 base_color_texture: Some(asset_server.load::<Image>(MARK_TEXTURE)),
-                // The names' world-pass state: unlit, depth-TESTED (walls occlude), Blend
-                // (the shared skipped-depth-write divergence).
+                // The names' world-pass state: unlit, depth-tested, blended, no depth write.
                 unlit: true,
                 alpha_mode: AlphaMode::Blend,
                 cull_mode: None,
@@ -176,7 +157,7 @@ fn drive_raid_marks(
         let unit = (guid != 0)
             .then(|| index.0.get(&guid).copied())
             .flatten()
-            // The plate exclusion + a despawning unit both unmark the overlay.
+            // The plate exclusion and a despawning unit both drop the marker.
             .filter(|e| !vplates.0.contains(e) && units.contains(*e));
         let stale = match (marks.live[slot], unit) {
             (Some(live), Some(unit)) if live.unit == unit => continue, // placed per frame below
@@ -219,8 +200,8 @@ fn drive_raid_marks(
     }
 }
 
-/// Seat every live marker from THIS frame's propagated pose (the nameplates placer's twin —
-/// same PostUpdate window, so a moving unit's mark never trails its name).
+/// Seats every live marker from this frame's propagated pose, in the nameplate placer's window,
+/// so a moving unit's mark never trails its name.
 #[allow(clippy::type_complexity)]
 fn place_raid_marks(
     marks: Res<RaidMarks>,
@@ -244,7 +225,7 @@ fn place_raid_marks(
         let (Ok(tf), Ok((mut mtf, mut mglobal))) =
             (units.get(live.unit), mark_tfs.get_mut(live.marker))
         else {
-            continue; // spawned this frame and not yet flushed, or unit despawning — next frame
+            continue; // spawned this frame and not flushed, or the unit is despawning
         };
         let place = mark_place(
             live.unit,
@@ -262,9 +243,7 @@ fn place_raid_marks(
     }
 }
 
-/// Registers the marker driver (Update, after the name driver whose line counts seat it and the
-/// V-plate drive whose exclusion gates it) and the per-frame placer (PostUpdate, the nameplates
-/// placer's window).
+/// Registers the marker driver, after the name driver and the V-plate drive, and the placer.
 pub(crate) struct RaidMarksPlugin;
 
 impl Plugin for RaidMarksPlugin {
@@ -289,9 +268,7 @@ impl Plugin for RaidMarksPlugin {
 mod tests {
     use super::*;
 
-    /// The marker quad (`0x6c709a`) against the reference's laws: the LUT positions
-    /// (bottom-anchored, h-centered, one unit square) and the 4-column atlas cells (`col = idx&3`,
-    /// `row = idx>>2`, cell 0.25) — skull (Lua 8 = wire 7) lands on the second row's last cell.
+    /// Skull is Lua index 8, wire icon 7.
     #[test]
     fn mark_mesh_matches_the_lut_and_atlas_laws() {
         let mesh = mark_mesh(0);

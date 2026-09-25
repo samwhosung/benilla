@@ -1,8 +1,4 @@
-//! **The probe's can-it-fail proof**, plus the one property that makes its answers worth
-//! anything: the VM it reads is the corpus's, not the selection's.
-//!
-//! A debugger that quietly answers a different question from the report it exists to explain is
-//! worse than no debugger, because every conclusion drawn from it looks sourced.
+//! Tests for the read-back probe: it reads after the session start, in the corpus's VM.
 
 use std::path::{Path, PathBuf};
 
@@ -46,14 +42,8 @@ impl Drop for Fixtures {
     }
 }
 
-/// **The probe reads AFTER the session start, and a raise is a value, not a stop.**
-///
-/// Three claims in one addon. A global written at file scope is readable (the load ran); a global
-/// written only from a `PLAYER_LOGIN` handler is readable too (**the session start ran** — this is
-/// the claim that separates this from a bare load, and the moment the session column's own errors
-/// come from); and an eval that raises comes back tagged `ERROR:` **without stopping the eval after
-/// it**, because a debugging session that dies on its own first typo is a debugging session spent
-/// re-running the command.
+/// A file-scope global and a `PLAYER_LOGIN` global are both readable, and a raise comes back as
+/// `ERROR:` without stopping the next eval.
 #[test]
 fn the_probe_reads_the_vm_after_the_session_start() {
     let fx = Fixtures::new("after");
@@ -98,13 +88,7 @@ fn the_probe_reads_the_vm_after_the_session_start() {
     );
 }
 
-/// **The environment is the whole folder's, never the probed addon's.**
-///
-/// `GetAddOnInfo` is how AceAddon and AceLibrary — the two most replicated files in the corpus —
-/// find their dependencies, so a probe built against a registry of one would send half the
-/// ecosystem down its "nothing is installed" path and answer a different question from the survey
-/// row it was opened to explain. The sibling here is never surveyed and never loaded; it must
-/// still be *installed*.
+/// The registry is the whole folder's: a sibling that is never loaded is still installed.
 #[test]
 fn the_probe_sees_the_whole_folder_installed() {
     let fx = Fixtures::new("registry");
@@ -131,16 +115,14 @@ fn the_probe_sees_the_whole_folder_installed() {
         out.answers[1].1, "= 2",
         "the registry is the folder's, not the selection's"
     );
-    // ...and installed is not loaded: one addon per VM is the survey's own isolation rule, and a
-    // probe that silently ran the neighbours would attribute their globals to the addon in hand.
+    // Installed is not loaded: one addon per VM, as in the survey.
     assert_eq!(
         out.answers[2].1, "= nil",
         "an installed sibling must NOT have been run"
     );
 }
 
-/// A folder with no manifest is `None`, not an empty outcome — the same refusal the survey makes
-/// by filtering, said out loud so the caller can tell "no such addon" from "that addon is silent".
+/// A folder with no manifest is `None`, not an empty outcome.
 #[test]
 fn a_folder_without_a_manifest_is_refused() {
     let fx = Fixtures::new("nomanifest");

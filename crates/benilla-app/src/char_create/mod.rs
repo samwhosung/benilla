@@ -1,21 +1,6 @@
-//! The character-creation screen — the v1 glue overlay (phase 4).
-//!
-//! A disposable Bevy-UI screen (the same register as [`crate::char_select`], not GlueXML — the
-//! faithful glue arc is 0193's) arranged like the reference client's `CharacterCreate.xml` and
-//! driving the live preview booth ([`crate::portrait`]'s `"create"` slot): the left tower holds the
-//! faction-bannered race grid, the gender pair, the per-race class grid (only the CharBaseInfo-valid
-//! classes, like the ref), the five appearance dials (ranges data-derived per (race, sex) —
-//! [`crate::entities::CharCreate`]; labels per-race via the ChrRaces customization tokens), and
-//! Randomize; the right stack quotes the GlueStrings faction/race/class paragraphs; the model floats
-//! center over the page (transparent booth); name + Accept/Back sit along the bottom. The real art,
-//! captions, and click sounds come from the player's own client data ([`art`]'s `GlueArt`,
-//! [`crate::glue_strings::GlueStrings`], [`crate::sound::GlueSound`]) — never embedded. Every
-//! `SMSG_CHAR_CREATE` result maps to its 1.12 GlueStrings text in the status line; a success
-//! re-enums (phase 1) and returns to select with the new row armed.
-//!
-//! The module is split by concern: [`art`] (client-data art + the frozen tables), [`parts`] (the
-//! component vocabulary), [`widgets`] (the glue button shapes), [`screen`] (the authored layout),
-//! [`refresh`] (the systems driving it), and this file (state, input, wire).
+//! The character-creation screen: a Bevy-UI overlay laid out like the 1.12 `CharacterCreate.xml`,
+//! driving the `"create"` preview booth, with art, captions and sounds read from the player's
+//! install. This file holds the selection state, input and the wire.
 
 mod panels;
 mod parts;
@@ -38,24 +23,19 @@ use crate::net::{CharActionResultMessage, CharPick, CharRequest};
 use crate::portrait::{CreateLook, GlueLook, GluePreview};
 use crate::sound::GlueSound;
 
-/// Alliance / Horde race columns, top to bottom — the order the reference screen shows
-/// (director's screenshot, 2026-07-19). `CharacterCreate.lua`'s `CharacterCreateEnumerateRaces`
-/// fills `CharacterCreateRaceButton1..8` in the order the engine's `GetAvailableRaces()` returns,
-/// and `CharacterCreate.xml` chains buttons 1–4 down column A from (33,−68) with button 5 anchored
-/// right of button 1 (+46) and 6–8 chained below it — so the flat engine order fills Alliance then
-/// Horde, ascending race id within each. (`RACE_ICON_TCOORDS` is a name→UV lookup; its literal table
-/// order never reaches layout — reading it as the button order is what got this wrong before.)
+/// Alliance and Horde race columns, top to bottom: `CharacterCreateEnumerateRaces` fills buttons
+/// 1..8 in `GetAvailableRaces()` order and `CharacterCreate.xml` chains 1-4 down the first column,
+/// 5-8 down the second, so Alliance then Horde, ascending race id. `RACE_ICON_TCOORDS`'s table
+/// order is a name-to-UV lookup and never the layout order.
 ///
-/// `pub(crate)` on the Alliance half because it is also the race→side split
-/// `ui_unit::race_faction_group` answers `UnitFactionGroup("player")` with during world entry —
-/// one home for the mapping, pinned by [`tests::race_columns_match_the_reference_screen`], rather
-/// than a second copy that can disagree with this one.
+/// The Alliance half is also the race-to-side split `ui_unit::race_faction_group` answers
+/// `UnitFactionGroup("player")` with.
 pub(crate) const ALLIANCE: [u8; 4] = [1, 3, 4, 7]; // Human, Dwarf, Night Elf, Gnome
 const HORDE: [u8; 4] = [2, 5, 6, 8]; // Orc, Scourge, Tauren, Troll
-/// The ref's initial model facing (`SetCharacterCreateFacing(-15)`), reset on every race switch.
+/// The reference's initial facing (`SetCharacterCreateFacing(-15)`), reset on every race switch.
 const INITIAL_FACING: f32 = -15.0 * std::f32::consts::PI / 180.0;
 
-/// The character-creation subsystem: the screen + its selection state.
+/// The character-creation screen and its selection state.
 pub(crate) struct CharCreatePlugin;
 
 impl Plugin for CharCreatePlugin {
@@ -89,10 +69,8 @@ impl Plugin for CharCreatePlugin {
     }
 }
 
-/// The end-to-end create instrument (`WOW_CHARCREATE_NAME=<name>`): a few seconds
-/// after the create screen is up, fill the name and fire Create — so the whole screen → wire →
-/// server → result → back-to-select path is verifiable headlessly (pair with `WOW_CHARCREATE_SHOT=1`
-/// to reach the screen). Inert without the env; fires once.
+/// `WOW_CHARCREATE_NAME=<name>`: a few seconds after the screen is up, fill the name and fire
+/// Create once, exercising the whole create path unattended (pair with `WOW_CHARCREATE_SHOT=1`).
 fn debug_auto_create(
     mut sel: ResMut<CreateSelection>,
     pick: Res<CharPick>,
@@ -110,7 +88,7 @@ fn debug_auto_create(
     let now = time.elapsed_secs();
     let start = *armed_at.get_or_insert(now);
     if now - start < 6.0 {
-        return; // let the model settle + the socket park
+        return; // let the model settle and the socket park
     }
     sel.name.set_text(&name);
     sel.creating = true;
@@ -119,8 +97,7 @@ fn debug_auto_create(
     info!("char create: auto-create fired for {:?}", sel.name.text);
 }
 
-/// The screen-shot instrument (`WOW_CHARCREATE_SHOT=1`): jump to the create screen a
-/// few seconds after boot so a live shot / eyeball reaches it without a click. Inert without the env.
+/// `WOW_CHARCREATE_SHOT=1`: jump to the create screen a few seconds after boot, without a click.
 fn debug_enter(
     state: Res<State<ClientState>>,
     mut next: ResMut<NextState<ClientState>>,
@@ -137,12 +114,8 @@ fn debug_enter(
     }
 }
 
-/// The shot instrument's race/sex/class pick (`WOW_CHARCREATE_PICK="race,sex[,class]"`): applied
-/// once as soon as the create screen is up (after its enter reset), so a probe shot can capture any
-/// race's scene — the ref comparisons are per-race. The optional third field picks the class, which
-/// selects the starting outfit the preview wears — so an A/B of the same race at two
-/// classes machine-checks the dressing path. An out-of-range class for the race is ignored (the
-/// race's first class stands). Inert without the env.
+/// `WOW_CHARCREATE_PICK="race,sex[,class]"`: applied once the screen is up, after its enter reset;
+/// a class the race may not be is ignored.
 fn debug_pick(
     state: Res<State<ClientState>>,
     catalog: Option<Res<CharCreate>>,
@@ -163,8 +136,6 @@ fn debug_pick(
     let mut it = spec.split(',').map(|s| s.trim().parse::<u8>().ok());
     sel.race = it.next().flatten().unwrap_or(1).max(1);
     sel.sex = it.next().flatten().unwrap_or(0).min(1);
-    // `clamp` seats the race's first class; the optional third field overrides it, honored only if
-    // the race may actually be that class.
     sel.clamp(catalog.as_deref());
     if let Some(class) = it.next().flatten() {
         if race_classes(catalog.as_deref(), sel.race).contains(&class) {
@@ -176,10 +147,8 @@ fn debug_pick(
             );
         }
     }
-    // The appearance dials (`WOW_CHARCREATE_DIALS="skin,face,hairStyle,hairColor,facialHair"`):
-    // each field optional, a missing/blank one leaves that dial at 0. Every value is clamped into
-    // the (race, sex)'s real range, so a probe can name a specific look — e.g. the bald + bearded
-    // combination that leaves an orc/gnome male's facial hair without a hair texture.
+    // `WOW_CHARCREATE_DIALS="skin,face,hairStyle,hairColor,facialHair"`: each field optional
+    // (missing leaves 0), each clamped into the (race, sex)'s range.
     if let Ok(spec) = std::env::var("WOW_CHARCREATE_DIALS") {
         let counts = dial_counts(catalog.as_deref(), sel.race, sel.sex);
         for (i, field) in spec.split(',').take(5).enumerate() {
@@ -205,10 +174,8 @@ fn debug_pick(
     *done = true;
 }
 
-/// The shot writer (`WOW_CHARCREATE_SHOT_OUT=<path>`): once the create screen has been up a few
-/// seconds (art + model settled), write one PNG of the window via Bevy's own framebuffer readback —
-/// so an agent run can machine-check the screen's geometry without macOS screen-recording
-/// permission. Pairs with `WOW_CHARCREATE_SHOT=1`; inert without the env.
+/// `WOW_CHARCREATE_SHOT_OUT=<path>`: once the screen has settled, write one PNG of the window
+/// through Bevy's framebuffer readback. Pairs with `WOW_CHARCREATE_SHOT=1`.
 fn debug_shot(
     mut commands: Commands,
     time: Res<Time>,
@@ -236,27 +203,22 @@ fn debug_shot(
 
 // ── The selection state ──────────────────────────────────────────────────────────────────────────
 
-/// What the create screen currently has selected. The five dials are `[skin, face, hairStyle,
-/// hairColor, facialHair]` indices; the ranges come from [`CharCreate`], and are re-clamped whenever
-/// race/gender changes (so a dial never points past the new race's range). `class` reaches the booth
-/// too — it picks the starting outfit the preview wears.
+/// What the create screen has selected. The dials are `[skin, face, hairStyle, hairColor,
+/// facialHair]` indices into [`CharCreate`]'s ranges, re-clamped on every race or gender change;
+/// `class` picks the starting outfit the preview wears.
 #[derive(Resource, Default)]
 pub(crate) struct CreateSelection {
     race: u8,
     sex: u8,
     class: u8,
     dials: [u8; 5],
-    /// The typed name — a real [`EditBoxState`], so it has the caret, selection,
-    /// Ctrl+A and clipboard the chat box has. Letters-only and the 12-cap are enforced by the
-    /// shared feed, on pasted text as well as typed.
+    /// The typed name; the shared feed enforces letters only and the 12-character cap, pasted too.
     name: EditBoxState,
-    /// A create is in flight (waiting on `SMSG_CHAR_CREATE`) — the Create button is disarmed and the
-    /// status shows progress.
+    /// Waiting on `SMSG_CHAR_CREATE`: Create is disarmed.
     creating: bool,
 }
 
-/// The five dial counts for a (race, sex), or `[1; 5]` when the catalog is missing (so the UI still
-/// renders, degenerate).
+/// The five dial counts for a (race, sex), or `[1; 5]` without the catalog.
 fn dial_counts(catalog: Option<&CharCreate>, race: u8, sex: u8) -> [u8; 5] {
     catalog
         .and_then(|c| c.0.ranges(race, sex))
@@ -265,7 +227,7 @@ fn dial_counts(catalog: Option<&CharCreate>, race: u8, sex: u8) -> [u8; 5] {
 }
 
 impl CreateSelection {
-    /// Reset to a valid default for the catalog (Human, male, its first class, dials 0).
+    /// Reset to Human, male, its first class, dials 0.
     fn reset(&mut self, catalog: Option<&CharCreate>) {
         self.race = 1;
         self.sex = 0;
@@ -277,7 +239,7 @@ impl CreateSelection {
         self.creating = false;
     }
 
-    /// Re-clamp class + dials into the current (race, sex)'s valid ranges — after a race/gender change.
+    /// Re-clamp class and dials into the current (race, sex)'s valid ranges.
     fn clamp(&mut self, catalog: Option<&CharCreate>) {
         if let Some(c) = catalog {
             if !c.0.allows(self.race, self.class) {
@@ -294,8 +256,7 @@ impl CreateSelection {
         }
     }
 
-    /// The look to show in the booth: race/gender/class + appearance. Class dresses the preview in
-    /// the (race, class, sex) starting outfit, so a class change re-bakes the model.
+    /// The booth's look; the class dresses the (race, class, sex) starting outfit.
     fn look(&self) -> CreateLook {
         CreateLook {
             race: self.race,
@@ -309,7 +270,6 @@ impl CreateSelection {
         }
     }
 
-    /// The wire request for the current selection.
     fn request(&self) -> CharCreateReq {
         CharCreateReq {
             name: self.name.text.clone(),
@@ -325,36 +285,35 @@ impl CreateSelection {
     }
 }
 
-/// One clickable control on the screen — a single component so one query dispatches every button.
+/// One clickable control on the screen.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 enum CreateAction {
     Race(u8),
     Gender(u8),
-    /// A class-grid slot (index into the selected race's valid-class list — the ref enumerates only
-    /// the classes the race may be, so the slot→class mapping shifts per race).
+    /// An index into the race's valid classes: the reference lists only those, so the slot's class
+    /// shifts per race.
     ClassSlot(u8),
-    /// A dial spinner arrow: dial index 0..5, direction ±1.
+    /// Dial index 0..5, direction ±1.
     Dial(u8, i8),
     Randomize,
     Create,
     Back,
-    /// Hold-to-rotate (the ref's rotate buttons, ±2°/frame).
+    /// Hold to rotate, like the reference's rotate buttons.
     RotateLeft,
     RotateRight,
-    /// The model pane (drag to rotate — no click action, but it carries the tag for the drag test).
+    /// The model pane: drag to rotate, no click action.
     Model,
 }
 
-/// The classes the selected race may be, ascending class id (the CharBaseInfo file order — the
-/// ref's `GetClassesForRace` enumeration).
+/// The classes the race may be, ascending class id: CharBaseInfo order, as `GetClassesForRace`
+/// enumerates them.
 fn race_classes(catalog: Option<&CharCreate>, race: u8) -> Vec<u8> {
     catalog
         .map(|c| c.0.classes_for_race(race))
         .unwrap_or_else(|| vec![1, 2, 3, 4, 5, 7, 8, 9, 11])
 }
 
-/// A class id's GlueStrings fileString (`CLASS_<FILE>`, `CLASS_ICON_TCOORDS` key) — a frozen enum
-/// of the build.
+/// A class id's file string, the `CLASS_ICON_TCOORDS` key.
 fn class_file(class: u8) -> &'static str {
     match class {
         1 => "WARRIOR",
@@ -372,13 +331,8 @@ fn class_file(class: u8) -> &'static str {
 
 // ── Input ────────────────────────────────────────────────────────────────────────────────────────
 
-/// The name box's caret blink clock (the ref's `blinkSpeed`, f32 default 0.5 s — `0x77a790`,
-/// period `E+0x370` / accumulator `E+0x374`), reset on every keystroke
-/// so the caret is solid while you type.
-///
-/// Its own resource rather than a [`CreateSelection`] field on purpose: ticking it there would trip
-/// that resource's change detection every frame and defeat `refresh_dynamic`'s `is_changed` gate,
-/// re-running the whole dial/panel/icon refresh 60× a second.
+/// Clicks, name typing, Enter and Escape. The name caret blinks at the reference's `blinkSpeed`,
+/// 0.5 s (`0x77a790`).
 fn create_input(
     buttons: Query<(Entity, &CreateAction)>,
     clicks: Res<crate::glue::GlueClicks>,
@@ -386,7 +340,7 @@ fn create_input(
     keys: Res<ButtonInput<KeyCode>>,
     catalog: Option<Res<CharCreate>>,
     mut sel: ResMut<CreateSelection>,
-    // The host pasteboard + the window handle its Wayland backend needs.
+    // The host pasteboard and the window handle its Wayland backend needs.
     mut clipboard: NonSendMut<HostClipboard>,
     raw_handle: Query<&bevy::window::RawHandleWrapper, With<bevy::window::PrimaryWindow>>,
     time: Res<Time>,
@@ -404,17 +358,15 @@ fn create_input(
     let mut changed_look = false;
     let mut do_create = false;
 
-    // Every control on this screen is a Button, and a Button fires on the RELEASE, over the
-    // button that took the press (1533, `crate::glue::glue_clicks`). The name box needs no
-    // press-to-focus: the screen has one field and it is always focused while up.
+    // A Button fires on the release over the button that took the press (`glue::glue_clicks`).
     for (entity, action) in &buttons {
         if !clicks.hit(entity) {
             continue;
         }
         match *action {
             CreateAction::Race(r) => {
-                // The ref plays the click always, switches only on a real change — and a switch
-                // resets the class to the race's first and the facing to −15°.
+                // The reference always clicks; a real switch resets the class to the race's first
+                // and the facing to -15°.
                 sounds.write(GlueSound("gsCharacterCreationClass"));
                 if sel.race != r {
                     sel.race = r;
@@ -433,9 +385,7 @@ fn create_input(
                 }
             }
             CreateAction::ClassSlot(slot) => {
-                // The ref plays the click always, and re-dresses the model only on a real change:
-                // `SelectClass` (`0x470f50`) → `cc_apply_sections` re-applies equipment, because the
-                // class picks the starting outfit the preview wears.
+                // The reference always clicks and re-dresses only on a real change (`0x470f50`).
                 if let Some(&class) = race_classes(cat, sel.race).get(slot as usize) {
                     sounds.write(GlueSound("gsCharacterCreationClass"));
                     if sel.class != class {
@@ -463,7 +413,6 @@ fn create_input(
         }
     }
 
-    // Name typing + Enter/Esc.
     for ev in keyboard.read() {
         if ev.state != ButtonState::Pressed {
             continue;
@@ -506,8 +455,7 @@ fn cycle_dial(sel: &mut CreateSelection, catalog: Option<&CharCreate>, dial: usi
     sel.dials[dial] = (cur + dir as i32).rem_euclid(count) as u8;
 }
 
-/// Set every dial to a random valid index (a tiny xorshift, seeded off a per-run counter — the
-/// screen has no need for a real RNG dependency; captures never hit Randomize).
+/// Set every dial to a random valid index, from a small xorshift.
 fn randomize(sel: &mut CreateSelection, catalog: Option<&CharCreate>, rng: &mut u64) {
     let counts = dial_counts(catalog, sel.race, sel.sex);
     for (d, &n) in sel.dials.iter_mut().zip(&counts) {
@@ -519,10 +467,7 @@ fn randomize(sel: &mut CreateSelection, catalog: Option<&CharCreate>, rng: &mut 
     }
 }
 
-/// Paint the name box from its [`EditBoxState`] — the display segments, the selection highlight and
-/// the caret at the cursor — through the shared [`crate::glue::widgets::paint_glue_field`], so it
-/// draws exactly like the login boxes. Only the five name-box row items carry a
-/// `GlueFieldPart`, so requiring it is enough to pick them out of every other `DynText`.
+/// Paint the name box through the shared `paint_glue_field`, so it draws like the login boxes.
 fn refresh_name_box(
     sel: Res<CreateSelection>,
     mut parts: Query<(
@@ -531,19 +476,12 @@ fn refresh_name_box(
         &mut Visibility,
     )>,
 ) {
-    // One field, no focus model: it is focused whenever the screen is up.
     crate::glue::widgets::paint_glue_field(&sel.name, true, parts.iter_mut());
 }
 
-/// Rotate the preview: drag on the model pane (the ref's full-frame mouse rotation: `facing +=
-/// Δcursor·CHARACTER_ROTATION_CONSTANT` — dragging right *increases* the facing, same sign as the
-/// right rotate button), or hold a rotate button (the ref's ±2°-per-frame
-/// `RotateLeft/Right_OnUpdate`; left decrements the facing).
-///
-/// The drag constant is the select screen's, because in the reference it is literally the same
-/// number: `CHARACTER_ROTATION_CONSTANT = 0.6` is declared once in `CharacterSelect.lua` and read
-/// by both screens' `OnUpdate`. This screen carried a bare `0.01` rad/px (0.573°/px) instead — a
-/// 4.5 % drift from the screen next door, against a comment that already claimed 0.6 (1533).
+/// Rotate the preview by dragging the model pane (dragging right increases the facing) or holding
+/// a rotate button (left decrements it). The drag uses the select screen's constant: the reference
+/// declares `CHARACTER_ROTATION_CONSTANT = 0.6` once in `CharacterSelect.lua` for both screens.
 fn rotate_model(
     panes: Query<(&Interaction, &CreateAction)>,
     motion: Res<AccumulatedMouseMotion>,
@@ -591,10 +529,8 @@ fn create_result(
             char_result_text(&strings, msg.code)
         );
         if msg.code == benilla_protocol::messages::CHAR_CREATE_SUCCESS {
-            // The fresh roster already arrived (`net::io` re-enumerates and emits it BEFORE the
-            // result), so `note_created` selects the new row against the list already in hand —
-            // arming a flag for "the next roster update" waited for a message that never comes
-            // again, and the select screen came back on the old row.
+            // `net::io` re-enumerates and emits the fresh roster before the result, so the new
+            // row is selected against the list already in hand; no later roster update comes.
             roster.note_created(sel.name.text.clone());
             next.set(ClientState::CharSelect);
         } else if let Ok(mut text) = status.single_mut() {
@@ -603,26 +539,10 @@ fn create_result(
     }
 }
 
-/// A `SMSG_CHAR_CREATE` result byte → its **GlueStrings key**, resolved off the player's own
-/// `GlueStrings.lua` with a built-in caption as the fallback — `login::world_refusal_text`'s shape,
-/// and the reference's own (a key first, a literal only when the chain lacks it).
-///
-/// The codes are vmangos's `ResponseCodes`, anchored at `CHAR_CREATE_SUCCESS = 0x2E`; every key
-/// below was derived by matching our old text against the shipped file rather than by name, then
-/// corrected where the *semantics* disagreed with the match. Three things that hiding behind
-/// literals had concealed:
-///
-/// - **`0x36` was missing a sentence.** Our copy of `CHAR_CREATE_SERVER_QUEUE` stopped at
-///   "…temporarily disabled." where the shipped string continues "Please try again during off peak
-///   hours." A re-typed string is a string nobody diffed.
-/// - **`0x50` was invented.** "You cannot use consecutive spaces in a name" has no 1.12
-///   counterpart — there is no `CHAR_NAME_CONSECUTIVE_SPACES` in this chain — so it takes the
-///   default arm, `CHAR_CREATE_INVALID_NAME`, exactly as any code the table does not name does.
-///   Composing a better sentence for a code the client has no string for is what 2035 was about.
-/// - **`0x4B` named the wrong key.** It resolved `CHAR_CREATE_NAME_IN_USE` because that key's text
-///   *equals* `CHAR_NAME_RESERVED`'s in enUS — "That name is unavailable" — but the code is the
-///   reserved-name one. Identical text, different key: a locale that words them apart would have
-///   shown the wrong sentence, and no amount of text comparison could ever have found it.
+/// A `SMSG_CHAR_CREATE` result code (vmangos `ResponseCodes`, `CHAR_CREATE_SUCCESS = 0x2E`) to its
+/// GlueStrings key, read off the player's chain, with a built-in caption only when the key is
+/// missing. `0x50` has no 1.12 string and takes the default arm; `0x4B` is `CHAR_NAME_RESERVED`,
+/// whose enUS text equals `CHAR_CREATE_NAME_IN_USE`'s.
 fn char_result_text<'a>(strings: &'a GlueStrings, code: u8) -> &'a str {
     let (key, fallback): (&str, &'a str) = match code {
         0x2E => ("CHAR_CREATE_SUCCESS", "Character created"),
@@ -694,28 +614,22 @@ fn char_result_text<'a>(strings: &'a GlueStrings, code: u8) -> &'a str {
 
 #[cfg(test)]
 mod tests {
-    /// **Every char-create result resolves to the sentence 1.12 actually ships**, read off the
-    /// player's own chain — `GlueStrings.lua` with `GlueLocalization.lua`'s `Localize()` patch over
-    /// it, assembled by the loader's own helper so this cannot assert a sentence the running client
-    /// would not show (2052). The regression for three bugs that literals had hidden (decision
-    /// 2045). Skips without client data.
+    /// The chain is assembled by the loader's own helper, `GlueLocalization.lua`'s `Localize()`
+    /// over `GlueStrings.lua`, so this asserts what the running client shows.
     #[test]
     fn every_char_create_result_resolves_in_the_real_glue_strings() {
         let data = benilla_formats::wow_data_or_skip!();
         let mut chain = benilla_formats::open_chain(&data).expect("open chain");
         let strings = crate::glue_strings::table_from_chain(&mut chain);
 
-        // `0x36` used to stop at "…temporarily disabled."; the shipped string carries a second
-        // sentence, and a re-typed string is one nobody diffed.
+        // The shipped `0x36` string has a second sentence.
         assert_eq!(
             char_result_text(&strings, 0x36),
             "This server is currently queued and new character creation is temporarily disabled. \
              Please try again during off peak hours."
         );
 
-        // `0x50` is INVENTED text: 1.12 has no `CHAR_NAME_CONSECUTIVE_SPACES`, so the code takes
-        // the default arm like any other the table does not name. If a chain ever *does* carry
-        // such a key this assert is what will say so.
+        // 1.12 has no `CHAR_NAME_CONSECUTIVE_SPACES`, so `0x50` takes the default arm.
         assert_eq!(
             char_result_text(&strings, 0x50),
             char_result_text(&strings, 0xFE),
@@ -723,8 +637,6 @@ mod tests {
         );
         assert_eq!(char_result_text(&strings, 0xFE), "Invalid character name");
 
-        // Every named code must resolve to a REAL key — the fallback caption never showing is the
-        // whole point, since a fallback that matches hides a missing key forever.
         for code in [
             0x2Eu8, 0x2F, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x45, 0x46, 0x47, 0x48,
             0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F,
@@ -734,20 +646,13 @@ mod tests {
         }
     }
 
-    /// **`0x4B` is the reserved-name code, and text alone can never prove it.**
-    ///
-    /// It used to resolve `CHAR_CREATE_NAME_IN_USE`, whose enUS value is *identical* to
-    /// `CHAR_NAME_RESERVED`'s — "That name is unavailable" — so no comparison of the displayed
-    /// string could distinguish right from wrong. This asserts the key by *name* against the
-    /// shipped file, which is the only thing that can. A locale that words the two apart is
-    /// exactly the case this protects.
+    /// The two keys share their enUS text, so the key is asserted by name through a sentinel.
     #[test]
     fn the_reserved_name_code_names_the_reserved_key_not_the_in_use_one() {
         let data = benilla_formats::wow_data_or_skip!();
         let mut chain = benilla_formats::open_chain(&data).expect("open chain");
         let map = crate::glue_strings::table_from_chain(&mut chain).into_map();
 
-        // Both keys exist and agree in enUS — which is why the mix-up was invisible.
         let reserved = map.get("CHAR_NAME_RESERVED").expect("CHAR_NAME_RESERVED");
         let in_use = map
             .get("CHAR_CREATE_NAME_IN_USE")
@@ -757,39 +662,26 @@ mod tests {
             "if these ever differ, the mix-up becomes visible"
         );
 
-        // Prove we read the RESERVED one: a table with only that key altered must move 0x4B.
         let mut probe = map.clone();
         probe.insert("CHAR_NAME_RESERVED".into(), "RESERVED-SENTINEL".into());
         let strings = GlueStrings::from_map(probe);
         assert_eq!(char_result_text(&strings, 0x4B), "RESERVED-SENTINEL");
-        // …and 0x31, the genuine in-use code, must NOT have moved.
         assert_eq!(char_result_text(&strings, 0x31), in_use.as_str());
     }
 
     use super::*;
 
-    /// The race grid's column order, pinned against the reference screen (director's screenshot,
-    /// 2026-07-19): Alliance reads Human · Dwarf · Night Elf · Gnome, Horde reads Orc · Scourge ·
-    /// Tauren · Troll. This is a *regression* test with history: the columns were previously ordered
-    /// off `RACE_ICON_TCOORDS`'s table order, which is a name→UV lookup that never reaches layout —
-    /// the real order is whatever `GetAvailableRaces()` enumerates into buttons 1–8, which the XML
-    /// chains 1–4 down column A and 5–8 down column B.
     #[test]
     fn race_columns_match_the_reference_screen() {
         assert_eq!(ALLIANCE, [1, 3, 4, 7], "Human, Dwarf, Night Elf, Gnome");
         assert_eq!(HORDE, [2, 5, 6, 8], "Orc, Scourge, Tauren, Troll");
-        // Together the columns are exactly the eight playable races, no repeats.
         let mut all: Vec<u8> = ALLIANCE.iter().chain(&HORDE).copied().collect();
         all.sort_unstable();
         assert_eq!(all, (1..=8).collect::<Vec<u8>>());
-        // Each column ascends by race id — the engine's per-faction enumeration order.
         assert!(ALLIANCE.windows(2).all(|w| w[0] < w[1]));
         assert!(HORDE.windows(2).all(|w| w[0] < w[1]));
     }
 
-    /// The booth look carries the class, so a class click re-dresses the model.
-    /// Guards the regression this test was written for: `CreateSelection.class` was set by the
-    /// class buttons but never reached `GluePreview`, so the starting outfit never changed.
     #[test]
     fn look_carries_the_class() {
         let mut sel = CreateSelection {
@@ -799,7 +691,7 @@ mod tests {
             ..default()
         };
         let warrior = sel.look();
-        sel.class = 8; // mage — a different starting outfit (robe, not the recruit set)
+        sel.class = 8; // mage, a different starting outfit
         let mage = sel.look();
         assert_eq!(warrior.class, 1);
         assert_eq!(mage.class, 8);
@@ -809,22 +701,10 @@ mod tests {
         );
     }
 
-    /// **The chosen race / gender / class icon is LOCK-HIGHLIGHTED** — the reference's own verb:
-    /// `SetCharacterRace`, `SetCharacterClass` and `SetCharacterGender` each call
-    /// `button:LockHighlight()` on the one that is chosen and `UnlockHighlight()` on the rest
-    /// (`CharacterCreate.lua` l.171/254/326). In 1.12 that lock *is* the whole selected visual:
-    /// `CharacterCreateIconButtonTemplate` has its `<CheckedTexture>` commented out, leaving the
-    /// ADD `ButtonHilight-Square` and the HIGHLIGHT-layer `$parentHighlightText` — both of which
-    /// the lock is what lights.
-    ///
-    /// **The regression this exists for** (director, 2026-09-17: *"it doesn't show that mage is
-    /// selected"*): 2072 moved the sheen to one owner and gave this screen's visuals query a
-    /// `&mut LockHighlight` term — but [`crate::glue::widgets::icon_button`], the only spawn site
-    /// for all eighteen of these icons, inserted no such component. A `&mut T` term is a filter,
-    /// so the query matched **nothing**: no selected sheen and no icon name on race, gender or
-    /// class, for ten days. Every existing sheen test hand-spawned the flag, so the consumer was
-    /// covered and the producer was not — hence this one builds the icons with the real
-    /// `icon_button` and runs the real system.
+    /// `SetCharacterRace`, `SetCharacterClass` and `SetCharacterGender` `LockHighlight()` the
+    /// chosen button (`CharacterCreate.lua`); with the template's `<CheckedTexture>` commented out,
+    /// that lock is the whole selected visual. Built with the real `icon_button`, which must insert
+    /// the `LockHighlight` the refresh query needs.
     #[test]
     fn the_chosen_icons_are_lock_highlighted() {
         use crate::glue::art::GlueArt;
@@ -877,8 +757,7 @@ mod tests {
 
         let mut app = App::new();
         app.init_resource::<GlueArt>()
-            // Human, female, MAGE — the director's own case. With no catalog loaded
-            // `race_classes` is the full list, so mage (8) is slot 6.
+            // Human, female, mage: without a catalog `race_classes` is the full list, so slot 6.
             .insert_resource(CreateSelection {
                 race: 1,
                 sex: 1,
@@ -909,7 +788,7 @@ mod tests {
              unmarked"
         );
 
-        // …and the selection moving takes the lock with it, rather than lighting a second icon.
+        // Moving the selection moves the lock, never lights a second icon.
         app.world_mut().resource_mut::<CreateSelection>().class = 1; // warrior, slot 0
         app.update();
         let locked: Vec<CreateAction> = app

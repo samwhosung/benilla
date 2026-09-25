@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// A shipped proc: kit 324's — `#f82929`, alpha 100, 600 ms.
+/// A shipped proc, kit 324: `#f82929`, alpha 100, 600 ms.
 fn kit_324() -> TrailProc {
     TrailProc {
         packed: 0x64f8_2929,
@@ -16,8 +16,8 @@ fn armed(trail: TrailProc) -> WeaponTrail {
     t
 }
 
-/// `0x6c6560`'s arithmetic, worked: with the shipped `CharParamThree = 100` and a 16.7 ms frame,
-/// `fadeStep = 5`, so `nSegments = 20` — twenty appended frames ≈ 0.33 s of trail history.
+/// `0x6c6560` with the shipped `CharParamThree = 100` and a 16.7 ms frame: `fadeStep = 5`, so
+/// `nSegments = 20`, about 0.33 s of trail history.
 #[test]
 fn shipped_frame_gives_five_and_twenty() {
     for dt in [16, 17] {
@@ -26,8 +26,8 @@ fn shipped_frame_gives_five_and_twenty() {
     assert_eq!(100 / fade_step(16, 100), 20);
 }
 
-/// The floor is `cmp al,1` — a **low-byte** test, so a result of exactly 256 takes the floor
-/// rather than its own value, and a long hitch does not end the trail.
+/// The floor is `cmp al,1`, a low-byte test, so exactly 256 takes the floor and a long hitch does
+/// not end the trail.
 #[test]
 fn fade_step_floor_is_the_low_byte() {
     assert_eq!(fade_step(0, 100), 1, "a zero delta floors");
@@ -52,8 +52,8 @@ fn ring_read_and_write_diverge_past_127() {
     for i in 0..127u32 {
         assert_eq!(s.read(i), Vec3::splat(i as f32), "counter {i} is exact");
     }
-    // Counter 127 writes slot 127; counter 128 writes slot 0, and the reader's `128 % 127 = 1`
-    // picks up slot 1 — the sample written by counter 129, one AHEAD of the one it wants.
+    // Counter 128 writes slot 0, but the reader's `128 % 127 = 1` picks slot 1, the sample
+    // counter 129 writes, one ahead.
     for i in 127..135u32 {
         s.push(Vec3::splat(i as f32));
     }
@@ -77,7 +77,7 @@ fn push_bounds_the_ring_at_capacity() {
 }
 
 /// Re-arming a live swing resets its ring in place (`0x6c675f`) rather than stacking a second
-/// trail — the same creation-time law the effect nodes take (2057).
+/// trail.
 #[test]
 fn rearm_resets_rather_than_stacks() {
     let mut t = armed(kit_324());
@@ -113,33 +113,28 @@ fn kit_324_at_sixty_hz() {
         assert!(frame < 10_000, "the trail must terminate");
     };
     assert_eq!(appended, 35, "appends for the 600 ms duration at 60 Hz");
-    // The nominal is 20 pairs (alpha 100 / fadeStep 5), but `fadeStep` is a TRUNCATED product,
-    // so as the alpha decays the integer quotient drifts *above* it — alpha 68 at a 16 ms frame
-    // truncates to step 3 and asks for 22. The ring's 64 pairs is the real ceiling.
+    // Nominal 20 pairs, but `fadeStep` truncates, so as the alpha decays the quotient rises:
+    // alpha 68 at 16 ms gives step 3 and 22 pairs. The ring's 64 pairs is the ceiling.
     assert_eq!(
         longest, 22,
         "the retained history peaks just over the nominal 20 pairs"
     );
-    // Holding `fadeStep` constant puts the visible life at ≈ duration/2 + (alpha/fadeStep)·dt ≈
-    // duration. It is not constant — it is `trunc(dt·alpha/300)`, so it shrinks
-    // with the alpha it is decaying, and the truncation shaves it further (alpha 54 asks for 2.88
-    // and gets 2). The decay is therefore sub-exponential and a 600 ms kit is on screen for
-    // **twice** its duration.
+    // `fadeStep = trunc(dt·alpha/300)` shrinks with the alpha it decays (alpha 54 gives 2, not
+    // 2.88), so the decay is sub-exponential and a 600 ms kit is on screen for about twice that.
     assert_eq!(
         end, 1_250,
         "a 600 ms kit is visible for 1.25 s, not the constant-step ~0.6 s"
     );
 }
 
-/// The alpha ramp's DIRECTION — the one thing a re-implementation is most likely to invert.
-/// The oldest retained pair is the opaque end; the pair at the weapon is the transparent one,
-/// and once the ring holds its full `2·segments` the ramp reaches exactly 0 there.
+/// The oldest retained pair is the opaque end, the pair at the weapon the transparent one; once the
+/// ring holds its full `2·segments` the ramp reaches exactly 0 there.
 #[test]
 fn the_far_end_of_the_arc_is_the_opaque_end() {
     let mut t = armed(kit_324());
     let swing = t.swing.as_mut().expect("live");
     let mut strip = Vec::new();
-    // Twenty appended frames is where the ring first holds the full `alpha/fadeStep` segments.
+    // Twenty appended frames first fill the `alpha/fadeStep` segments.
     for frame in 1..=20u32 {
         let blade = Vec3::new(frame as f32, 0.0, 0.0);
         match swing.step(frame * 1000 / 60, blade, blade + Vec3::Y) {
@@ -153,8 +148,7 @@ fn the_far_end_of_the_arc_is_the_opaque_end() {
         alphas.windows(2).all(|w| w[0] > w[1]),
         "alpha must fall from the oldest sample to the weapon: {alphas:?}"
     );
-    // One `fadeStep` per pair, subtracted before the pair is stored — so the ramp is arithmetic
-    // and its last term is exactly zero.
+    // One `fadeStep` per pair, subtracted before the pair is stored, so the last term is zero.
     let drop = alphas[0] - alphas[1];
     assert!(
         alphas.windows(2).all(|w| (w[0] - w[1] - drop).abs() < 1e-6),
@@ -171,8 +165,7 @@ fn the_far_end_of_the_arc_is_the_opaque_end() {
     );
 }
 
-/// Before the ring fills, the oldest pair carries `alpha − fadeStep` outright — 95/255 at the
-/// shipped alpha of 100.
+/// Before the ring fills, the oldest pair carries `alpha − fadeStep`: 95/255 at alpha 100.
 #[test]
 fn the_oldest_pair_carries_alpha_minus_one_step() {
     let mut t = armed(kit_324());
@@ -206,8 +199,8 @@ fn alpha_holds_until_the_half_duration_mark() {
     assert!(swing.alpha < 100, "and decaying past the mark");
 }
 
-/// Whirlwind's 10 000 ms spin is the one shipped kit that outruns the ring, so it is the one the
-/// reader/writer modulus mismatch is visible on.
+/// Whirlwind's 10 000 ms spin is the one shipped kit that outruns the ring and shows the
+/// reader/writer modulus mismatch.
 #[test]
 fn only_whirlwind_outruns_the_ring() {
     let whirlwind = TrailProc {
@@ -283,8 +276,8 @@ fn play_anim(app: &mut App, unit: Entity) {
         .set_started_anim(true);
 }
 
-/// The proc ARMS; it does not draw. Nothing happens until the unit plays an animation — which is
-/// what makes Charge (kit 44, anim id −1) start its trail on the charge itself.
+/// The proc arms, it does not draw: the trail starts with the unit's next animation, which is how
+/// Charge (kit 44, anim id −1) starts its trail on the charge.
 #[test]
 fn an_arm_alone_fires_nothing() {
     let (mut app, unit, hands) = latch_app();
@@ -305,8 +298,7 @@ fn an_arm_alone_fires_nothing() {
     );
 }
 
-/// `0x5fe4b1 mov [ebx+0xd20],edi` — the duration is cleared the moment it is read, so one arm is
-/// one trail. A second animation must not restart it.
+/// `0x5fe4b1 mov [ebx+0xd20],edi` clears the duration as it is read, so one arm is one trail.
 #[test]
 fn the_latch_is_consumed_exactly_once() {
     let (mut app, unit, hands) = latch_app();
@@ -327,8 +319,7 @@ fn the_latch_is_consumed_exactly_once() {
     assert!(!trailing(&app, hands[0]), "the arm was one-shot");
 }
 
-/// One pair of fields on the unit means one pending arm: a second proc before the first fires
-/// OVERWRITES it rather than queueing behind it.
+/// One pair of fields on the unit is one pending arm: a second proc overwrites it, not queues.
 #[test]
 fn a_second_arm_replaces_the_pending_one() {
     let (mut app, unit, hands) = latch_app();
@@ -352,8 +343,8 @@ fn a_second_arm_replaces_the_pending_one() {
     assert_eq!(swing.duration_ms, 10_000, "the LAST arm wins");
 }
 
-/// A hand holding nothing — or a weapon whose model authors neither marker — has no object to
-/// arm, and the other hand is unaffected (`0x60e550`'s `test ecx,ecx ; je` per slot).
+/// A hand with nothing, or a weapon model with neither marker, has nothing to arm and leaves the
+/// other hand alone (`0x60e550`'s `test ecx,ecx ; je` per slot).
 #[test]
 fn an_empty_hand_is_skipped() {
     let (mut app, unit, hands) = latch_app();
@@ -367,8 +358,7 @@ fn an_empty_hand_is_skipped() {
     assert!(trailing(&app, hands[0]), "the armed hand still fires");
 }
 
-/// The pending arm dies with the unit — the reference drops it in the CGUnit teardown
-/// (`0x5fbcdc`), eight instructions after destroying both trail objects.
+/// The pending arm dies with the unit, in the CGUnit teardown (`0x5fbcdc`).
 #[test]
 fn the_latch_is_swept_when_the_unit_goes() {
     let (mut app, unit, _) = latch_app();
@@ -391,8 +381,7 @@ fn the_latch_is_swept_when_the_unit_goes() {
 
 use benilla_world::particles::buffer::{begin_effect_frame, EffectQuads};
 
-/// End to end through the render half: an armed swing on a moving blade commits vertices, they
-/// carry the kit's colour and the ramp, and the draw stops when the trail does.
+/// An armed swing on a moving blade commits vertices in the kit's colour and ramp.
 #[test]
 fn an_armed_trail_commits_a_strip_to_the_effect_stream() {
     let mut app = App::new();
@@ -416,9 +405,8 @@ fn an_armed_trail_commits_a_strip_to_the_effect_stream() {
             benilla_world::model_fade::ParentModel(wearer),
         ))
         .id();
-    // Frame 1 seeds one pair; a strip needs two, so the first commit is empty by construction.
+    // Frame 1 seeds one pair; a strip needs two.
     app.update();
-    // Sweep the blade so the samples are distinct, and let the ring fill.
     for f in 1..=8u32 {
         app.world_mut()
             .get_mut::<Transform>(hand)
@@ -443,14 +431,11 @@ fn an_armed_trail_commits_a_strip_to_the_effect_stream() {
     let verts = &quads.verts[draw.range.start as usize..draw.range.end as usize];
     assert!(verts.len() >= 8, "at least two quads: {}", verts.len());
     assert_eq!(verts.len() % 4, 0, "whole quads");
-    // Kit 324's #f82929, and an alpha ramp that actually varies across the strip.
     for v in verts {
         assert!((v.color[0] - 248.0 / 255.0).abs() < 1e-6, "{:?}", v.color);
         assert!((v.color[1] - 41.0 / 255.0).abs() < 1e-6, "{:?}", v.color);
     }
-    // Eight appended frames is short of the 20 the ring will hold, so the ramp has not yet
-    // reached 0 at the blade — but it must already fall, by one `fadeStep` per quad, from the
-    // opaque far end (alpha − fadeStep = 95/255) toward it.
+    // Eight frames do not fill the ring, so the ramp falls from 95/255 but has not reached 0.
     let alphas: Vec<f32> = verts.iter().map(|v| v.color[3]).collect();
     let (lo, hi) = (
         alphas.iter().cloned().fold(f32::MAX, f32::min),
@@ -458,7 +443,7 @@ fn an_armed_trail_commits_a_strip_to_the_effect_stream() {
     );
     assert!((hi - 95.0 / 255.0).abs() < 1e-6, "the opaque end: {hi}");
     assert!(hi - lo > 0.1, "a real ramp, not one flat alpha: {alphas:?}");
-    // Each quad is `[b0, b1, t1, t0]` — the two ends of one segment, so its corners pair up.
+    // Each quad is `[b0, b1, t1, t0]`, the two ends of one segment.
     for q in verts.as_chunks::<4>().0 {
         assert_eq!(
             q[0].color[3], q[3].color[3],
@@ -467,14 +452,13 @@ fn an_armed_trail_commits_a_strip_to_the_effect_stream() {
         assert_eq!(q[1].color[3], q[2].color[3], "and so does the newer");
         assert!(q[0].color[3] > q[1].color[3], "falling toward the weapon");
     }
-    // The blade swept along +X, so the strip must span more than a single blade's worth of it.
     let xs: Vec<f32> = verts.iter().map(|v| v.pos[0]).collect();
     let span =
         xs.iter().cloned().fold(f32::MIN, f32::max) - xs.iter().cloned().fold(f32::MAX, f32::min);
     assert!(span > 0.5, "the ribbon follows the blade's arc: {span}");
 }
 
-/// A hidden prop draws no trail — our own vis chain, the same gate [`crate::bowstring`] takes.
+/// A hidden prop draws no trail, the same visibility gate [`crate::bowstring`] takes.
 #[test]
 fn a_hidden_weapon_draws_nothing() {
     let mut app = App::new();
@@ -503,13 +487,9 @@ fn a_hidden_weapon_draws_nothing() {
     assert!(app.world().resource::<EffectQuads>().draws.is_empty());
 }
 
-/// **The trail takes its WEARER's light, not the scene's**.
-///
-/// The draw runs inside the weapon model's own per-frame callback, during the wearer's model draw,
-/// so the enabled lights it inherits are the ones the M2 collector committed for that unit —
-/// four-way byte-derived through `0x70d982 → 0x70ca50 → 0x70baf0` plus the held-weapon `[+0x3b8]`
-/// alias. Outdoors that is the day/night ambient, which is the fallback. Indoors it is the light
-/// node's own committed word, and taking the sky's instead tinted every indoor trail cool.
+/// The trail takes its wearer's light, not the scene's: it draws inside the wearer's model draw,
+/// so it inherits the lights committed for that unit (`0x70d982 → 0x70ca50 → 0x70baf0`, held
+/// weapon `[+0x3b8]`). Indoors that is the node's ambient, outdoors the day/night one.
 #[test]
 fn an_indoor_wearers_committed_ambient_wins_over_the_scenes() {
     fn strip_rgb(app: &App) -> [f32; 3] {
@@ -565,8 +545,8 @@ fn an_indoor_wearers_committed_ambient_wins_over_the_scenes() {
         }
         lit[i] = strip_rgb(&app);
     }
-    // Kit 324's #f82929 through each ambient. The two are close in magnitude and opposite in hue,
-    // so a channel RATIO is the assertion that would actually catch the wrong one being used.
+    // The two ambients are close in magnitude and opposite in hue, so a channel ratio tells them
+    // apart.
     let [out_r, out_g, _] = lit[0];
     let [in_r, in_g, _] = lit[1];
     assert!(

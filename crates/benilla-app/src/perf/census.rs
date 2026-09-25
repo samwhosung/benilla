@@ -1,28 +1,11 @@
-//! Env-gated one-shot and per-second counters: the premise-checkers a sizing question needs before
-//! anyone designs a fix for it.
+//! Env-gated one-shot and per-second counters that check a performance premise before a fix.
 
 use bevy::prelude::*;
 
-/// `WOW_CPU_CENSUS=<at>:<secs>` — the per-thread CPU census (macOS): where does the pill's
-/// cpu-ms actually go, thread by thread, summing **exactly** to the process total?
-///
-/// Two snapshots bracket a window: at each, `getrusage(RUSAGE_SELF)` (the pill's own clock,
-/// [`super::clock::process_cpu_secs`]) and then every live thread's cumulative CPU via
-/// `proc_pidinfo(PROC_PIDLISTTHREADS / PROC_PIDTHREADINFO)`. The report prints each thread's
-/// delta over the window in ms/frame, then the **residual** = process delta − Σ live-thread
-/// deltas, which is exactly the CPU of threads that exited inside the window (plus the
-/// inter-read skew of the sweep itself). Nothing is modeled: every row is a measured delta and
-/// the rows plus the residual reproduce the process total by construction.
-///
-/// Facts this rests on, pinned empirically on this machine (2026-08-20, threadcpu.c probe)
-/// before this was written:
-/// - `pth_user_time`/`pth_system_time` are **nanoseconds** (a 200 ms calibrated burn read
-///   196.6 ms; the mach-timebase interpretation read 31.8× over) — *not* mach ticks, unlike
-///   `rusage_info`'s `ri_user_time`.
-/// - live-thread sums + exited-thread time = `getrusage` total to 0.05 ms over a ~1 s burn
-///   (a thread that burned 250 ms and exited was absent from the list and present in the
-///   residual at exactly 250.0 ms).
-/// - `PROC_PIDLISTTHREADS = 6` (verified in the SDK's `sys/proc_info.h`; libc lacks the const).
+/// `WOW_CPU_CENSUS=<at>:<secs>`: the pill's cpu-ms over a window, thread by thread (macOS). Two
+/// snapshots of the process clock and every live thread's CPU bracket the window; the residual,
+/// process delta minus the live-thread deltas, is the CPU of threads that exited in the window.
+/// `pth_user_time`/`pth_system_time` are nanoseconds, not mach ticks.
 #[cfg(target_os = "macos")]
 pub(super) mod cpu_census {
     use std::collections::HashMap;
@@ -32,13 +15,11 @@ pub(super) mod cpu_census {
 
     use crate::perf::clock::process_cpu_secs;
 
-    /// `sys/proc_info.h`; not in the libc crate (its sibling `PROC_PIDTHREADINFO = 5` is).
+    /// `sys/proc_info.h`; not in the libc crate.
     const PROC_PIDLISTTHREADS: libc::c_int = 6;
 
-    /// One cumulative reading per live thread: `tid → (name, user_ns, system_ns)`. User and
-    /// system are kept apart on purpose: real work is user time, while a thread whose CPU is
-    /// mostly *system* time is burning it in the kernel — park/wake churn, semaphores, mach
-    /// calls — which points at the scheduler/driver seam rather than at any system's body.
+    /// One cumulative reading per live thread: `tid → (name, user_ns, system_ns)`; mostly-system
+    /// time points at kernel churn (park/wake, semaphores) rather than a system's body.
     fn thread_snapshot() -> HashMap<u64, (String, u64, u64)> {
         let pid = std::process::id() as libc::c_int;
         let mut tids = [0u64; 512];
@@ -93,8 +74,7 @@ pub(super) mod cpu_census {
         threads: HashMap<u64, (String, u64, u64)>,
     }
 
-    /// Armed from the env at plugin build (on the main thread — which is how `main_tid` is
-    /// known without pinning the census system itself).
+    /// Armed from the env at plugin build, on the main thread, which is how `main_tid` is known.
     #[derive(Resource)]
     pub(in crate::perf) struct CpuCensus {
         at: f32,
@@ -102,9 +82,8 @@ pub(super) mod cpu_census {
         main_tid: u64,
         frames: u64,
         start: Option<Snap>,
-        /// Every thread seen by the once-a-second sweeps inside the window, with its **latest**
-        /// cumulative reading — so a thread that dies mid-window can still be *named* in the
-        /// residual report (its last reading is a lower bound on what it contributed).
+        /// Every thread the once-a-second sweeps saw in the window, with its latest reading, so
+        /// a thread that dies mid-window can be named in the residual.
         seen: HashMap<u64, (String, u64, u64)>,
         next_sweep: f32,
         done: bool,
@@ -116,7 +95,7 @@ pub(super) mod cpu_census {
             let v = std::env::var("WOW_CPU_CENSUS").ok()?;
             let (at, window) = v.split_once(':')?;
             let mut main_tid = 0u64;
-            // SAFETY: null pthread = the calling thread; writes one u64.
+            // SAFETY: a null pthread means the calling thread; writes one u64.
             unsafe { libc::pthread_threadid_np(0, &mut main_tid) };
             Some(Self {
                 at: at.parse().ok()?,
@@ -165,8 +144,7 @@ pub(super) mod cpu_census {
         let process_ms = (end_process - start.process_secs) * 1000.0;
         let per_frame = |ms: f64| ms / frames as f64;
 
-        // Per-thread deltas over the window. A thread born inside the window has no start
-        // reading — its full cumulative time is its delta (it was zero at birth).
+        // A thread born inside the window has no start reading; its whole time is its delta.
         let mut rows: Vec<(f64, f64, String)> = Vec::new(); // (user_ms, sys_ms, label)
         let mut live_sum_ms = 0.0f64;
         for (tid, (name, end_u, end_s)) in &end_threads {
@@ -200,7 +178,7 @@ pub(super) mod cpu_census {
         for (u, s, label) in &rows {
             let ms = u + s;
             if per_frame(ms) < 0.0005 {
-                continue; // folded into the "under" line below — still in the printed sum
+                continue; // folded into the "under" line below, still in the printed sum
             }
             eprintln!(
                 "[cpu-census] {:>9.4}  {:>8.4}  {:>8.4}  {:>5.1}%  {label}",
@@ -231,10 +209,8 @@ pub(super) mod cpu_census {
             per_frame(residual_ms),
             residual_ms / process_ms * 100.0
         );
-        // Name the churn: threads the per-second sweeps saw that are gone by the end snapshot.
-        // Their last cumulative reading minus their start reading (0 if born in-window) is a
-        // LOWER bound on what they contributed to the residual — they kept burning after the
-        // sweep that last saw them.
+        // Threads the sweeps saw that are gone by the end: their last reading is a lower bound
+        // on their share of the residual.
         let mut churned: HashMap<String, (usize, f64)> = HashMap::new();
         for (tid, (name, last_u, last_s)) in &census.seen {
             if end_threads.contains_key(tid) {
@@ -261,9 +237,7 @@ pub(super) mod cpu_census {
     }
 }
 
-/// `WOW_MESH_EVENTS=1`: per-second Mesh asset-event counts (see the plugin registration). The
-/// `sample` list names a few mutated asset ids so the writer can be found by grepping who holds
-/// that handle.
+/// `WOW_MESH_EVENTS=1`: per-second Mesh asset-event counts, with a few Modified ids.
 pub(super) fn count_mesh_events(
     mut events: MessageReader<bevy::asset::AssetEvent<Mesh>>,
     time: Res<Time>,
@@ -295,11 +269,9 @@ pub(super) fn count_mesh_events(
     }
 }
 
-/// `WOW_PART_CHURN=1`: per-second M2-part churn. `rm_frames` is the count of frames with ≥1
-/// `MeshMaterial3d<WowModelMaterial>` removal — exactly the predicate that promotes
-/// `classify_water_side` to its full walk (0930's twin-GC mark), so a regime reading ~60 here
-/// full-walks every frame. `mat_mod` counts `WowModelMaterial` asset Modified events — the
-/// global asset-changed tick that wakes every `AssetChanged` scan.
+/// `WOW_PART_CHURN=1`: per-second M2-part churn. `rm_frames` counts frames with a
+/// `MeshMaterial3d<WowModelMaterial>` removal, the predicate that sends `classify_water_side` to
+/// its full walk; `mat_mod` counts the material Modified events that wake `AssetChanged` scans.
 pub(super) fn count_part_churn(
     added: Query<(), Added<MeshMaterial3d<benilla_assets::materials::WowModelMaterial>>>,
     mut removed: RemovedComponents<MeshMaterial3d<benilla_assets::materials::WowModelMaterial>>,
@@ -329,10 +301,8 @@ pub(super) fn count_part_churn(
     }
 }
 
-/// `WOW_MESH_HOLDERS=1`: once a second, the set of mesh asset ids Modified in the last second
-/// and the component signature of every entity holding one — [`count_mesh_events`] counts and
-/// samples the ids, this names the writer by its holder's archetype (an id alone says nothing).
-/// Exclusive, like [`arch_census`], for the same reason: the signature needs the live archetype.
+/// `WOW_MESH_HOLDERS=1`: once a second, the archetype of each entity holding a mesh Modified in
+/// that second. Exclusive, since the signature needs the live archetype.
 pub(super) fn mesh_holders(
     world: &mut World,
     mut cursor: Local<Option<bevy::ecs::message::MessageCursor<bevy::asset::AssetEvent<Mesh>>>>,
@@ -390,13 +360,12 @@ pub(super) fn mesh_holders(
     ids.clear();
 }
 
-/// When the one-shot archetype census fires (seconds of `Time` elapsed; `f32::MAX` = spent).
+/// When the one-shot archetype census fires, in seconds of `Time`; `f32::MAX` once spent.
 #[derive(Resource)]
 pub(super) struct ArchCensusAt(pub(super) f32);
 
-/// The census itself (`WOW_ARCH_CENSUS`): exclusive, so it sees every archetype of the live
-/// world in one stop. Component paths are trimmed to their last two segments — the census reads
-/// as lanes, not as imports.
+/// `WOW_ARCH_CENSUS`: the entity total, then the 60 largest archetypes' entity counts and
+/// component sets.
 pub(super) fn arch_census(world: &mut World) {
     let due = world.resource::<ArchCensusAt>().0;
     if world.resource::<bevy::time::Time>().elapsed_secs() < due {
@@ -436,7 +405,7 @@ pub(super) fn arch_census(world: &mut World) {
 }
 
 /// `WOW_CAM_CHANGED=1`: per-second count of frames whose world-camera `Transform` /
-/// `GlobalTransform` registered as changed (see the plugin registration).
+/// `GlobalTransform` registered as changed.
 pub(super) fn count_camera_changes(
     t_changed: Query<(), (With<benilla_world::view::WorldCamera>, Changed<Transform>)>,
     g_changed: Query<
@@ -460,18 +429,7 @@ pub(super) fn count_camera_changes(
     }
 }
 
-/// `WOW_ROW_BLOAT=<n>` — the consolidation question's premise counter (the drastic-options
-/// census, 2026-08-17): once the world holds a real static model row, spawn `n` inert CLONES of
-/// it — same mesh handle, same material handle, same component shape — parked 10,000 yd
-/// underground so the frustum culls every one. The per-frame walks that scale with TOTAL rows
-/// (the visibility reset/sweep pair, the `AssetChanged` tick scans, `PreviousGlobalTransform`,
-/// `mark_dirty_trees`) pay for these rows exactly as for real ones, while the O(visible) half
-/// (specialize/queue/encode) never sees them — so an interleaved leg A/B (bloat off vs on) reads
-/// **d(cpu_ms)/d(rows)** directly. That derivative × the rows a mega-merge would delete is the
-/// honest ceiling of the consolidation option, measured before anyone builds it.
-/// (Measured the same night it was built: +30k rows = +1.33 cpu_ms at LBRS, ~44 ns/row/frame.)
-///
-/// `BloatSource` is one live static row's clonable component set, named for the lint.
+/// One live static row's clonable component set.
 type BloatSource<'w, 's> = Query<
     'w,
     's,
@@ -485,12 +443,15 @@ type BloatSource<'w, 's> = Query<
     Without<benilla_world::rig_palette::RigPart>,
 >;
 
+/// `WOW_ROW_BLOAT=<n>`: once a static model row exists, spawn `n` inert clones of it parked
+/// 10,000 yd underground, so the walks that scale with total rows pay for them and the
+/// per-visible work never sees them; a leg A/B reads d(cpu_ms)/d(rows).
 pub(super) fn row_bloat(mut commands: Commands, mut done: Local<bool>, source: BloatSource) {
     if *done {
         return;
     }
     let Some((mesh, mat, part, tag, aabb)) = source.iter().next() else {
-        return; // no static row streamed yet — try again next frame
+        return; // no static row streamed yet
     };
     let n: usize = std::env::var("WOW_ROW_BLOAT")
         .ok()
@@ -513,19 +474,10 @@ pub(super) fn row_bloat(mut commands: Commands, mut done: Local<bool>, source: B
     *done = true;
 }
 
-/// `WOW_MESH_TOUCH=<secs>` — from `secs` onward, mark ONE scratch [`Mesh`] asset modified every
-/// frame, and nothing else.
-///
-/// **The tax meter for [`bevy::asset::AssetChanged`].** Bevy 0.18's `AssetChanged<Mesh3d>` fast
-/// path is all-or-nothing: one `Assets<Mesh>` modification — of *any* mesh, including a `Mesh2d`
-/// UI batch no 3D row will ever reference — arms `mark_3d_meshes_as_changed_if_their_assets_changed`
-/// plus one `check_entities_needing_specialization::<M>` walk per registered material type, each
-/// over every `Mesh3d` row in the scene. 1361's per-slot skip gate and 1463's pan gate both exist
-/// to keep that disarmed, and both are gates on the *UI's* writes; this measures the price of a
-/// single arming with the UI's own work subtracted out, which no gate-side experiment can.
-///
-/// One run, two regimes, so the reading is a WITHIN-run paired delta: run-to-run cpu variance on
-/// this machine is ±1 ms (1157), which is the size of the thing being measured.
+/// `WOW_MESH_TOUCH=<secs>`: from `secs` on, mark one scratch [`Mesh`] modified every frame and
+/// nothing else, pricing one arming of [`bevy::asset::AssetChanged`] as a within-run delta. Any
+/// `Assets<Mesh>` modification, even a 2D UI mesh, arms a walk of every `Mesh3d` row per
+/// registered material type.
 pub(super) fn mesh_touch(
     mut meshes: ResMut<Assets<Mesh>>,
     time: Res<bevy::time::Time<bevy::time::Real>>,
@@ -541,8 +493,7 @@ pub(super) fn mesh_touch(
             bevy::asset::RenderAssetUsages::default(),
         ))
     });
-    // `get_mut` is the whole point: it writes `AssetEvent::Modified` for this id, which bumps the
-    // global changed tick every `AssetChanged` filter reads. The mesh itself stays empty.
+    // `get_mut` writes `AssetEvent::Modified`, bumping the tick every `AssetChanged` filter reads.
     let _ = meshes.get_mut(&*handle);
 }
 
@@ -550,23 +501,10 @@ pub(super) fn mesh_touch(
 #[derive(Resource)]
 pub(super) struct MeshTouchAt(pub f32);
 
-/// `WOW_RES_CENSUS=<at>:<secs>` — the resource change census: over a window opening at `at`
-/// seconds and `secs` long, on how many of its frames each resource read as CHANGED, printed
-/// once at the window's end, noisiest first.
-///
-/// The premise-checker behind every still-frame gate, generalised from 1982's five hand-picked
-/// `noisy=` counters to every registered resource. Bevy marks a resource changed on every `&mut`
-/// borrow, not on every write: one system that takes `ResMut<T>` — or `as_deref_mut()`s an
-/// `Option<ResMut<T>>` — each frame to *test* something makes `T.is_changed()` true on every
-/// frame of every run, and silently disarms every gate that asks it. 1982 found `DebugState`
-/// that way (299 of 300 frames); 1697's item 1 (`Creatures`, every frame, the equipment gate)
-/// sat unfound for a fortnight after being named because nothing walked the rest. On a parked
-/// leg the honest list is short — the clocks, the input state, the probe's own bookkeeping —
-/// and anything else near 100 % is a writer to find with `grep -rn 'ResMut<Name>'`.
-///
-/// Exclusive (`&mut World`) in `Last`; dev-only and env-gated, so it costs nothing unarmed and
-/// a few microseconds a frame armed. `NonSend` resources (the UI script VM) are not walked: the
-/// world exposes no iterator over that storage.
+/// `WOW_RES_CENSUS=<at>:<secs>`: on how many of the window's frames each resource read as
+/// changed, noisiest first. Bevy marks a resource changed on every `&mut` borrow, not every
+/// write, so one per-frame `ResMut<T>` disarms every gate on `T.is_changed()`. `NonSend`
+/// resources are not walked: the world has no iterator over them.
 pub(super) mod res_census {
     use std::collections::HashMap;
 
@@ -579,8 +517,7 @@ pub(super) mod res_census {
     pub(in crate::perf) struct ResCensus {
         at: f32,
         window: f32,
-        /// The world tick this census last counted at — `is_changed(last_run, this_run)`'s
-        /// "when the system last ran", so a touch counts once per frame, never twice.
+        /// The tick this census last counted at, so a touch counts once per frame.
         last_run: Option<Tick>,
         frames: u32,
         counts: HashMap<ComponentId, u32>,
@@ -653,9 +590,8 @@ pub(super) mod res_census {
         rows.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
         let frames = census.frames.max(1);
         let hot = |n: u32| n * 10 >= frames * 9;
-        // bevy's own asset stores are `ResMut` in its per-frame asset systems by design (that is
-        // why `AssetChanged` exists) — every `Assets<T>` reads hot on every run, so they are one
-        // count here and never a row, or they would bury the app's own writers.
+        // Bevy's own asset stores read hot every frame by design, so they are one count, not
+        // rows.
         let bevy_store =
             |name: &str| name.starts_with("Assets<") || name.starts_with("AssetChanges<");
         let every_frame = rows.iter().filter(|(n, _)| hot(*n)).count();
@@ -667,8 +603,7 @@ pub(super) mod res_census {
             "RES_CENSUS frames={frames} resources={total} touched={} at_90pct_or_more={every_frame} (of which bevy asset stores: {bevy_hot})\n",
             rows.len()
         );
-        // Every row at half the window or more: the whole list is the point (the first run
-        // printed 48 of 302 and stopped in the B's).
+        // Every row at half the window or more, unabridged.
         for (n, name) in rows
             .iter()
             .filter(|(n, name)| *n * 2 >= frames && !bevy_store(name))

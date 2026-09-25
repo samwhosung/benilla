@@ -1,14 +1,6 @@
-//! Drives the reference's own `Blizzard_TradeSkillUI` addon through the engine — the crafting-book
-//! twin of `talent_frame.rs`, and the first test that executes the transcribed tradeskill Lua at
-//! all (the polish pass's own discovery: no suite loaded this file, so a runtime bug in the
-//! Show/Update/dropdown code would only ever surface in a live session).
-//!
-//! The harness loads the same file chain the app does (`ui_script/mod.rs`'s list, cut to the
-//! tradeskill window's dependency prefix), pushes a synthetic two-group Blacksmithing book,
-//! opens the window with the app's own `TRADE_SKILL_SHOW`, and exercises the polish-pass
-//! surface end-to-end: the CollapseAll tab (text, fold-all round trip through the engine's
-//! touched-flag → `TRADE_SKILL_UPDATE` contract), and both filter dropdowns (capsule default
-//! text, a REAL menu-row click driving the exclusive filter, the "All" row restoring it).
+//! Drives the stock `Blizzard_TradeSkillUI` and `Blizzard_CraftUI` addons off the player's chain
+//! with a synthetic book and the app's own show events: the CollapseAll tab, the filter menus,
+//! the reagent slots and the list rows' selection and hover.
 
 use benilla_ui::script::{
     CraftRecipe, CraftState, CraftTooltip, TradeSkillDifficulty, TradeSkillReagent,
@@ -17,9 +9,7 @@ use benilla_ui::script::{
 
 mod common;
 
-/// The tradeskill window's load prefix — the app's own order (`ui_script/mod.rs`), members only.
-/// CraftFrame.xml rides along (it loads right after TradeSkillFrame.xml in the app and shares
-/// its guarded-global utilities) so a load error in EITHER window fails here.
+/// The load prefix of both windows, in the app's order.
 const FILES: &[&str] = &[
     "Interface\\FrameXML\\Fonts.xml",
     r"Interface\FrameXML\MoneyFrame.lua",
@@ -30,21 +20,17 @@ const FILES: &[&str] = &[
     "Interface\\FrameXML\\GlobalStrings.lua",
     "Interface\\FrameXML\\BasicControls.xml",
     "Interface\\FrameXML\\LocaleProperties.lua",
-    "Interface\\FrameXML\\StaticPopup.xml", // the dialog engine (1960)
+    "Interface\\FrameXML\\StaticPopup.xml", // the dialog engine
     "Interface\\FrameXML\\GameTooltip.xml",
     "Interface\\FrameXML\\UIDropDownMenu.xml",
     "ScrollTemplates.xml",
-    // The stock windows open from UIParent's own TRADE_SKILL_SHOW / CRAFT_SHOW arms (its
-    // `*_LoadUI` then `*_Show`), not from a registration of their own — so UIParent.xml is a
-    // dependency of the event path this suite drives (1973). With no addon registry here the
-    // load reports ADDON_LOAD_FAILED through `message`, which is a shown frame, not an error.
-    // The reference's own addons (1973), off the chain — both inherit the trainer window's
-    // list/detail kit, which the manifest seats above them. An integration test has no addon
-    // registry, so the files load as chain files, the way the manifest's own entries do.
+    // Both windows open from UIParent's TRADE_SKILL_SHOW / CRAFT_SHOW arms (`*_LoadUI`, then
+    // `*_Show`). With no addon registry the addons load as chain files, and `*_LoadUI` reports
+    // ADDON_LOAD_FAILED through `message`, a shown frame, not an error.
+    // Both addons inherit the trainer window's list and detail templates.
     r"Interface\FrameXML\ClassTrainerFrameTemplates.xml",
-    // The reagent slots inherit `QuestItemTemplate` (147x41) through the addons' own row templates,
-    // and the selection paints them with `SetItemButtonTexture`/`SetItemButtonCount`, which are
-    // ItemButtonTemplate.lua's — both chain files the manifest seats above the addons.
+    // The reagent slots inherit `QuestItemTemplate` and are painted with `SetItemButtonTexture`
+    // and `SetItemButtonCount` (`ItemButtonTemplate.lua`).
     r"Interface\FrameXML\ItemButtonTemplate.xml",
     r"Interface\FrameXML\QuestFrameTemplates.xml",
     r"Interface\AddOns\Blizzard_TradeSkillUI\Blizzard_TradeSkillUI.xml",
@@ -52,9 +38,8 @@ const FILES: &[&str] = &[
 ];
 
 fn load_ui(script: &UiScript) {
-    // `common::load_ui`, not a local read: a manifest entry carrying a path separator is the
-    // REFERENCE's own file and has to come off the player's chain, which `std::fs::read` under
-    // `assets/ui` cannot do. This kit gained such an entry when the dropdown migrated (1751).
+    // `common::load_ui`: an entry with a path separator is a stock file read off the player's
+    // chain, not from `assets/ui`.
     for file in FILES {
         common::load_ui(script, file);
     }
@@ -78,7 +63,7 @@ fn recipe(
         cooldown_secs: None,
         product_item: spell_id + 10_000,
         product_inv_type,
-        product_item_level: 0, // neutral — this file's order pins fall through to the name
+        product_item_level: 0, // neutral: ordering falls through to the name
         reagents: vec![TradeSkillReagent {
             item: 2840,
             name: Some("Copper Bar".into()),
@@ -90,8 +75,8 @@ fn recipe(
     }
 }
 
-/// A two-group Blacksmithing book: Mail (a chest + a legs product) and Trade Goods (a non-equip
-/// stone → the 0x800000 catch-all slot) — the director's own reference-screenshot shape.
+/// A two-group Blacksmithing book: Mail (a chest and a legs product) and Trade Goods (a stone,
+/// which lands in the 0x800000 not-equippable slot).
 fn state() -> TradeSkillState {
     TradeSkillState {
         line: 164,
@@ -107,8 +92,7 @@ fn state() -> TradeSkillState {
     }
 }
 
-/// The app-side contract the window's event-driven repaints ride on: after any engine-side list
-/// mutator, drain the touched flag and fire `TRADE_SKILL_UPDATE` (drain_trade_skill's own shape).
+/// What the app does after a list mutator: drain the touched flag and fire `TRADE_SKILL_UPDATE`.
 fn pump(script: &mut UiScript) {
     if script.take_trade_skill_touched() {
         script.fire_event("TRADE_SKILL_UPDATE", vec![]);
@@ -130,15 +114,14 @@ fn collapse_all_tab_and_filter_dropdowns_work_end_to_end() {
     // 2 headers + 3 recipes.
     assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 5);
 
-    // The CollapseAll tab carries its GlobalString text (a cross-chunk local would render nil).
+    // The CollapseAll tab carries its GlobalString text.
     assert_eq!(
         s.eval::<String>("return TradeSkillCollapseAllButton:GetText()")
             .unwrap(),
         "All"
     );
 
-    // Fold everything through the tab: the click never calls Update() itself — the engine's
-    // touched flag + TRADE_SKILL_UPDATE (pump) is the whole repaint path, the ref's own contract.
+    // The click never calls Update() itself: the repaint rides TRADE_SKILL_UPDATE (`pump`).
     s.run("TradeSkillCollapseAllButton:Click()").unwrap();
     pump(&mut s);
     assert_eq!(
@@ -150,7 +133,7 @@ fn collapse_all_tab_and_filter_dropdowns_work_end_to_end() {
     pump(&mut s);
     assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 5);
 
-    // The dropdown capsules default to the "All …" texts (the OnShow/Initialize dance).
+    // The dropdowns default to the "All …" texts.
     assert_eq!(
         s.eval::<String>("return TradeSkillSubClassDropDownText:GetText()")
             .unwrap(),
@@ -161,7 +144,7 @@ fn collapse_all_tab_and_filter_dropdowns_work_end_to_end() {
             .unwrap(),
         "All Slots"
     );
-    // The InvSlot vocabulary: Chest(5) → bit 4, Legs(7) → bit 6, stone(0) → the catch-all.
+    // Chest (5) is bit 4, Legs (7) bit 6, the stone (0) the not-equippable slot.
     assert_eq!(
         s.eval::<(String, String, String)>("return GetTradeSkillInvSlots()")
             .unwrap(),
@@ -172,7 +155,7 @@ fn collapse_all_tab_and_filter_dropdowns_work_end_to_end() {
         )
     );
 
-    // A REAL menu-row click: open the SubClass menu, click "Trade Goods" (row 3: All + 2 groups).
+    // A menu-row click: "Trade Goods" is row 3 (All, then the two groups).
     s.run("ToggleDropDownMenu(1, nil, TradeSkillSubClassDropDown)")
         .unwrap();
     s.run("DropDownList1Button3:Click()").unwrap();
@@ -187,7 +170,7 @@ fn collapse_all_tab_and_filter_dropdowns_work_end_to_end() {
             .unwrap(),
         "Trade Goods"
     );
-    // The capsule follows the picked row on the next initialize (OnShow re-runs it).
+    // The dropdown text follows the picked row on the next initialize (OnShow re-runs it).
     s.run("TradeSkillSubClassDropDown:Hide() TradeSkillSubClassDropDown:Show()")
         .unwrap();
     assert_eq!(
@@ -204,9 +187,8 @@ fn collapse_all_tab_and_filter_dropdowns_work_end_to_end() {
     assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 5);
 }
 
-/// The Craft window's own CollapseAll tab is faithful-but-inert (a 1.12 craft list is a single
-/// skill-line group, so the header scan always finds zero and hides the tab — the file's own
-/// deviation note); this pins the load + the text attribute + the hidden-in-practice state.
+/// A 1.12 craft list has no headers, so `Blizzard_CraftUI.lua:269-282` always hides the Craft
+/// window's CollapseAll tab.
 #[test]
 fn craft_collapse_tab_loads_with_text_and_stays_hidden_for_a_flat_list() {
     benilla_formats::wow_data_or_skip!();
@@ -230,27 +212,18 @@ fn craft_collapse_tab_loads_with_text_and_stays_hidden_for_a_flat_list() {
     );
 }
 
-/// **The reagent slot IS `QuestItemTemplate`** — B250's pin, in both windows.
-///
-/// The ref's `TradeSkillItemTemplate` (Blizzard_TradeSkillUI.xml l.11-35) and `CraftItemTemplate`
-/// (Blizzard_CraftUI.xml l.29-53) each inherit `QuestItemTemplate` and override **only scripts**, so
-/// the slot's whole visual is that template's: 147×41, a 39×39 icon, the `UI-QuestItemNameFrame`
-/// plate on the icon's right edge, the name centred ON the plate, and the count on the icon's own
-/// BOTTOMRIGHT.
-///
-/// Every assertion here is one the shape that shipped before B250 would fail — a 140×32 slot with a
-/// 28×28 icon, no plate at all, the name top-anchored right of the icon and the count *below* the
-/// name. It is written that way on purpose (decision 1107's "so the sibling law would fail it"): the
-/// numbers alone would let a future session drift the slot back toward a hand-rolled shape with no
-/// test going red.
+/// `TradeSkillItemTemplate` (`Blizzard_TradeSkillUI.xml:11-35`) and `CraftItemTemplate`
+/// (`Blizzard_CraftUI.xml:29-53`) inherit `QuestItemTemplate` and override only scripts: a 147×41
+/// slot, a 39×39 icon, the name plate on the icon's right edge with the name centred on it, and
+/// the count on the icon's bottom-right corner.
 #[test]
 fn reagent_slots_carry_the_questitemtemplate_shape_in_both_windows() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     load_ui(&s);
 
-    // Both windows open (a slot's anchors resolve against a laid-out parent), and the slots this
-    // test measures are shown — the ref's own SetSelection shows one per reagent.
+    // Both windows open so the anchors resolve against a laid-out parent; the slots are shown as
+    // SetSelection shows one per reagent.
     s.set_trade_skill(Some(state()));
     s.fire_event("TRADE_SKILL_SHOW", vec![]);
     s.fire_event("CRAFT_SHOW", vec![]);
@@ -266,7 +239,7 @@ fn reagent_slots_carry_the_questitemtemplate_shape_in_both_windows() {
                 .unwrap_or_else(|e| panic!("{expr}: {e}"))
         };
 
-        // The row box: 147×41, the ref's QuestItemTemplate <Size>.
+        // QuestItemTemplate's <Size>.
         assert_eq!(
             (
                 num(&format!("{w}1:GetWidth()")),
@@ -276,21 +249,20 @@ fn reagent_slots_carry_the_questitemtemplate_shape_in_both_windows() {
             "{w}1 row box"
         );
 
-        // The 2-column grid: column 2 opens exactly one row-width right (Reagent2 anchors
-        // LEFT→Reagent1's RIGHT with a zero offset, so the pitch IS the row width) …
+        // Reagent2 anchors LEFT to Reagent1's RIGHT at zero offset, so the pitch is the row width,
         assert_eq!(
             num(&format!("{w}2:GetLeft()")) - num(&format!("{w}1:GetLeft()")),
             147.0,
             "{w} column pitch"
         );
-        // … and row 2 drops one row height plus the ref's own 2px gutter.
+        // and row 2 drops one row height plus a 2px gutter.
         assert_eq!(
             num(&format!("{w}3:GetTop()")) - num(&format!("{w}1:GetTop()")),
             -43.0,
             "{w} row step"
         );
 
-        // The icon (`$parentIconTexture`, the reference's own region name): 39×39 flush in the row's TOPLEFT corner.
+        // `$parentIconTexture`: 39×39, flush in the row's TOPLEFT corner.
         assert_eq!(
             (
                 num(&format!("{w}1IconTexture:GetWidth()")),
@@ -310,8 +282,7 @@ fn reagent_slots_carry_the_questitemtemplate_shape_in_both_windows() {
             "{w}1 icon flush top"
         );
 
-        // The name plate — the piece that was missing entirely. Its 128×64 texture starts 10px
-        // inside the icon's right edge and is centred on the icon's own middle.
+        // The 128×64 name plate starts 10px inside the icon's right edge, centred on the icon.
         assert_eq!(
             s.eval::<String>(&format!("return {w}1NameFrame:GetTexture()"))
                 .unwrap(),
@@ -332,8 +303,7 @@ fn reagent_slots_carry_the_questitemtemplate_shape_in_both_windows() {
             "{w}1 plate rides the icon's right edge"
         );
 
-        // The name sits ON the plate (+15 from its left), vertically centred — not above-right of
-        // the icon, where the pre-B250 shape put it.
+        // The name sits on the plate, 15 from its left, vertically centred.
         assert_eq!(
             num(&format!("{w}1Name:GetLeft()")) - num(&format!("{w}1NameFrame:GetLeft()")),
             15.0,
@@ -350,7 +320,7 @@ fn reagent_slots_carry_the_questitemtemplate_shape_in_both_windows() {
             "{w}1 name is centred on the plate ({nc} vs {pc})"
         );
 
-        // The count rides the ICON's bottom-right corner (-4, +1) — not a line below the name.
+        // The count sits on the icon's bottom-right corner (-4, +1).
         assert_eq!(
             num(&format!("{w}1Count:GetRight()")) - num(&format!("{w}1IconTexture:GetRight()")),
             -4.0,
@@ -368,25 +338,10 @@ fn reagent_slots_carry_the_questitemtemplate_shape_in_both_windows() {
     }
 }
 
-/// **A row click paints the selection glow, and a row hover paints nothing** — the two things the
-/// director saw wrong in a live window, pinned in both directions.
-///
-/// Neither was subtle. Both survived because this suite drove the window's tabs, dropdowns and
-/// reagent slots without ever clicking or hovering a LIST ROW:
-///
-///   * `TradeSkillFrame_Update` addressed `TradeSkillHighlight` — the *texture* — for
-///     the Hide/SetPoint/Show that the reference does on `TradeSkillHighlightFrame`, the *frame*
-///     (Blizzard_TradeSkillUI.lua l.99/142-143; only l.200's `SetVertexColor` is the texture's).
-///     The frame is declared `hidden="true"`, so it never once became visible and no selection ever
-///     highlighted. `CraftFrame.xml`/`TrainerFrame.xml` both split the two correctly already.
-///   * The row template carried a `GameTooltip:SetTradeSkillItem` OnEnter that the reference has no
-///     trace of: `TradeSkillSkillButtonTemplate` overrides `OnClick` alone, and its base
-///     `ClassTrainerSkillButtonTemplate` (`Interface\FrameXML\ClassTrainerFrameTemplates.xml`) only
-///     recolours `$parentSubText` on hover. The real window's list is bare on hover.
-///
-/// The hover half asserts through the row's own script table rather than a synthetic mouse-over, so
-/// it fails on the *existence* of a hover handler — re-adding one "harmlessly" goes red here even if
-/// the tooltip it opens happens to be empty in a headless VM.
+/// The selection glow is `TradeSkillHighlightFrame`, a `hidden="true"` frame the update moves
+/// and shows (`Blizzard_TradeSkillUI.lua:99`, `:142-143`); only the vertex colour goes on the
+/// `TradeSkillHighlight` texture (`:200`). A list row has no tooltip: its template overrides
+/// `OnClick` alone, and `ClassTrainerSkillButtonTemplate` only recolours `$parentSubText` on hover.
 #[test]
 fn a_row_click_shows_the_selection_glow_and_a_row_hover_shows_nothing() {
     benilla_formats::wow_data_or_skip!();
@@ -395,7 +350,7 @@ fn a_row_click_shows_the_selection_glow_and_a_row_hover_shows_nothing() {
     s.set_trade_skill(Some(state()));
     s.fire_event("TRADE_SKILL_SHOW", vec![]);
 
-    // Row 1 is the "Mail" header, row 2 the first recipe (the two-group book `state()` builds).
+    // Row 1 is the "Mail" header, row 2 the first recipe.
     assert_eq!(
         s.eval::<String>("local _, t = GetTradeSkillInfo(2) return t")
             .unwrap(),
@@ -403,8 +358,7 @@ fn a_row_click_shows_the_selection_glow_and_a_row_hover_shows_nothing() {
         "row 2 is a recipe, not a header (state()'s own difficulty)"
     );
 
-    // Opening already selects `GetFirstTradeSkill()` (the OnEvent path), so the glow is up before
-    // any click — exactly what the director's screenshot should have shown and didn't.
+    // Opening selects `GetFirstTradeSkill()` (OnEvent), so the glow is up before any click.
     let glow_on_row = |s: &UiScript, n: i64| {
         let (glow, row) = (
             s.eval::<f64>("return TradeSkillHighlightFrame:GetTop()")
@@ -421,7 +375,7 @@ fn a_row_click_shows_the_selection_glow_and_a_row_hover_shows_nothing() {
     );
     assert!(glow_on_row(&s, 2), "and it is parked on the first recipe");
 
-    // A click on the OTHER Mail recipe moves it, rather than leaving it at the window's TOPLEFT.
+    // A click on the other Mail recipe moves it.
     s.run("TradeSkillSkill3:Click()").unwrap();
     pump(&mut s);
     assert_eq!(
@@ -437,7 +391,7 @@ fn a_row_click_shows_the_selection_glow_and_a_row_hover_shows_nothing() {
         "the glow followed the click to row 3"
     );
 
-    // Fold every group away and no recipe row is visible to carry it.
+    // With every group folded no recipe row is visible to carry it.
     s.run("TradeSkillCollapseAllButton:Click()").unwrap();
     pump(&mut s);
     assert!(
@@ -446,15 +400,13 @@ fn a_row_click_shows_the_selection_glow_and_a_row_hover_shows_nothing() {
         "no recipe row on screen → no glow (headers never take the selection)"
     );
 
-    // The hover half. Positive control first, so a `GetScript` that answered nil for everything
-    // could not quietly pass the real assertions below: the reagent slot DOES tooltip on hover.
+    // Control: a reagent slot has an OnEnter, so `GetScript` reports real handlers.
     assert!(
         s.eval::<bool>("return TradeSkillReagent1:GetScript(\"OnEnter\") ~= nil")
             .unwrap(),
         "control: a reagent slot has an OnEnter, so GetScript reports real handlers"
     );
-    // The list row's hover is the trainer template's own — it recolours `$parentSubText` and
-    // nothing else (ClassTrainerFrameTemplates.xml): driven with `this` set, it opens no tooltip.
+    // The list row's hover is the trainer template's, which opens no tooltip.
     s.run("GameTooltip:Hide() this = TradeSkillSkill2 TradeSkillSkill2:GetScript(\"OnEnter\")()")
         .unwrap();
     assert!(
@@ -465,24 +417,11 @@ fn a_row_click_shows_the_selection_glow_and_a_row_hover_shows_nothing() {
         .unwrap();
 }
 
-/// **The recipe list lights its rows white — under the cursor, and on the selected one.** The
-/// director put the real client's Blacksmithing window next to ours: there, the hovered row and the
-/// selected row are both white, while every other recipe wears its difficulty colour. Ours wore the
-/// difficulty colour everywhere, hover and selection included.
-///
-/// One mechanism does both, and it is the row BUTTON's, not a script's.
-/// `ClassTrainerSkillButtonTemplate` — the base under this window's rows, Craft's and the class
-/// trainer's — declares `<HighlightFont inherits="GameFontHighlight">` (white) beside its
-/// `<NormalFont>`, and `TradeSkillFrame_Update` paints each row with
-/// `skillButton:SetTextColor(difficulty)` and then calls `LockHighlight()` on the selected one
-/// (Blizzard_TradeSkillUI.lua l.113/144). A `SetTextColor` writes the NORMAL font instance only, so
-/// it cannot reach a highlighted label — which is exactly why the reference's rows still turn white.
-///
-/// Ours could not, for two reasons that had to be fixed together: the row's label
-/// was a child `$parentName` FontString rather than the button's own `<ButtonText>`, so no per-state
-/// font could reach it; and the engine's highlighted label fell back to the normal state's colour,
-/// so even a ButtonText would have stayed orange. This test is the end-to-end pin — it reads the
-/// colour off the extracted text quad, not off any Lua state, so it fails if either half regresses.
+/// The hovered and the selected recipe rows are white, the rest their difficulty colour:
+/// `ClassTrainerSkillButtonTemplate` declares a white `<HighlightFont>`, and
+/// `TradeSkillFrame_Update` sets the difficulty with `SetTextColor`, which writes the normal font
+/// only, then `LockHighlight`s the selection (`Blizzard_TradeSkillUI.lua:113`, `:144`). The colour
+/// is read off the extracted text quad.
 #[test]
 fn a_hovered_or_selected_recipe_row_paints_its_label_white() {
     benilla_formats::wow_data_or_skip!();
@@ -492,8 +431,7 @@ fn a_hovered_or_selected_recipe_row_paints_its_label_white() {
     s.set_trade_skill(Some(state()));
     s.fire_event("TRADE_SKILL_SHOW", vec![]);
 
-    // Row 1 is the "Mail" header; rows 2 and 3 are its two Medium recipes, and opening the window
-    // auto-selects the first of them.
+    // Row 1 is the "Mail" header; rows 2 and 3 are its Medium recipes, and opening selects row 2.
     assert_eq!(
         s.eval::<i64>("return GetTradeSkillSelectionIndex()")
             .unwrap(),
@@ -501,8 +439,7 @@ fn a_hovered_or_selected_recipe_row_paints_its_label_white() {
         "the show-time auto-selection landed on the first recipe"
     );
 
-    // The label really is the button's own ButtonText now — a child FontString would leave
-    // GetFontString() nil and take every per-state font with it.
+    // The label is the button's ButtonText, the only region per-state fonts reach.
     assert!(
         s.eval::<bool>("return TradeSkillSkill2:GetFontString() ~= nil")
             .unwrap(),
@@ -589,12 +526,8 @@ fn a_hovered_or_selected_recipe_row_paints_its_label_white() {
     );
 }
 
-/// **The craft list lights the same way, off the same base template.** `CraftButtonTemplate` and
-/// `TradeSkillSkillButtonTemplate` both inherit `ClassTrainerSkillButtonTemplate`, so its
-/// `<HighlightFont inherits="GameFontHighlight">` is one mechanism serving both windows — and
-/// `Craft_Update` locks its selected row exactly as the tradeskill one does (Blizzard_CraftUI.lua
-/// l.234). Ours had the same `$parentName`-FontString workaround in both files, so fixing only the
-/// window the director was looking at would have left the enchanting book wrong beside it.
+/// The craft list lights the same way: `CraftButtonTemplate` inherits the same base template, and
+/// the update locks the selected row (`Blizzard_CraftUI.lua:234`).
 #[test]
 fn a_hovered_or_selected_craft_row_paints_its_label_white() {
     benilla_formats::wow_data_or_skip!();

@@ -1,26 +1,7 @@
-//! **The one text-input law, host half.** Every text field in the client — the FrameXML EditBoxes
-//! (chat, `/who`, the StaticPopup) and the three glue-screen fields (login account/password, the
-//! character name, the delete confirmation) — resolves its keystrokes here.
-//!
-//! There are three parts, and the split is deliberate:
-//!
-//! - [`keymap`] — *which chord means what*, per OS. The one place Ctrl+V vs Cmd+V is decided.
-//! - [`clipboard`] — *the OS pasteboard*, one held handle per process, per-platform backend.
-//! - [`feed_key`] (here) — the glue between them and the **engine's** byte-verified box law
-//!   ([`EditBoxState`]). It owns no editing semantics of its own.
-//!
-//! ## Why this module exists
-//!
-//! The editing law was reachable only through the Lua UI runtime, so the glue screens — which have
-//! no Lua VM — each hand-rolled a three-case imitation: append a printable char, Backspace, Tab.
-//! No caret movement, no selection, no Ctrl+A, and no clipboard at all. Worse, they matched on
-//! winit's `logical_key`, which is `Character("v")` for Ctrl+V, so **pasting into the login box
-//! typed a literal `v` into the password**. Four fields, four different laws, three of them wrong.
-//!
-//! Now the law is [`EditBoxState`]'s (pure, no Lua) and the *routing* is this
-//! module's, so a field gets the whole thing by owning an `EditBoxState` and calling [`feed_key`].
-//! The FrameXML path keeps its own dispatcher because it must also fire Lua handlers and route
-//! focus through the widget arena, but it reads the same [`keymap`] and the same [`clipboard`].
+//! The host half of text input: [`keymap`] maps chords per OS, [`clipboard`] holds the OS
+//! pasteboard, and [`feed_key`] routes a key into the engine's [`EditBoxState`], which owns the
+//! editing itself. The glue-screen fields call [`feed_key`]; the FrameXML EditBoxes have their own
+//! dispatcher, which fires Lua handlers, over the same keymap and clipboard.
 
 use std::ffi::c_void;
 
@@ -36,16 +17,13 @@ pub(crate) mod keymap;
 pub(crate) use clipboard::{wayland_display, HostClipboard};
 pub(crate) use keymap::{chord, Chord, Mods};
 
-/// Adds the process-wide OS pasteboard. Nothing else here is a system: [`feed_key`] is a plain
-/// function each screen calls from its own input pass, because every screen already owns its focus
-/// model (the login form's two-field enum, the dialog's single box) and inverting that into a
-/// component-driven focus would be churn for no gain.
+/// Adds the process-wide OS pasteboard; [`feed_key`] is called from each screen's own input pass.
 pub(crate) struct TextInputPlugin;
 
 impl Plugin for TextInputPlugin {
     fn build(&self, app: &mut App) {
-        // Held for the whole run: on X11 dropping the handle *is* clearing the clipboard.
-        // `NonSend` — no backend is `Sync`, NSPasteboard is main-thread-only.
+        // Held for the whole run: on X11 dropping the handle clears the clipboard. `NonSend`: no
+        // backend is `Sync`, and NSPasteboard is main-thread-only.
         app.init_non_send_resource::<HostClipboard>();
     }
 }
@@ -60,10 +38,7 @@ pub(crate) fn mods_now(keys: &ButtonInput<KeyCode>) -> Mods {
     }
 }
 
-/// Which characters a field accepts. The box law's own `numeric` flag covers digits-only; this
-/// covers the one other rule the client has — a character name is letters (the create screen's
-/// `is_ascii_alphabetic` guard). It is applied to **pasted** text as well as typed, which the old
-/// hand-rolled screens could not do at all, having no paste.
+/// Which characters a field accepts, typed or pasted; the box's own `numeric` flag covers digits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CharFilter {
     /// Everything printable (the login boxes).
@@ -92,20 +67,14 @@ impl CharFilter {
 /// What [`feed_key`] did with a key press.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FieldKey {
-    /// The field handled it — an edit, a caret move, or a clipboard operation. The screen must not
-    /// also act on this key.
+    /// The field handled it; the screen must not also act on this key.
     Consumed,
-    /// Not a text-editing key. The screen decides (ENTER submits, ESCAPE cancels, TAB cycles
-    /// focus) — those are the screen's semantics, not the field's, exactly as the FrameXML box
-    /// hands ENTER/ESCAPE/TAB to its own scripts.
+    /// Not a text-editing key; the screen decides, as the FrameXML box hands ENTER, ESCAPE and TAB
+    /// to its scripts.
     Passthrough,
 }
 
-/// Feed one key press to `field`. The whole shared law in one call: the per-OS chord table decides
-/// what the chord means, [`EditBoxState`] executes it, and the clipboard trio resolves against the
-/// held host pasteboard.
-///
-/// `wl_display` comes from [`wayland_display`] — `None` off Wayland.
+/// Feed one key press to `field`. `wl_display` comes from [`wayland_display`], `None` off Wayland.
 pub(crate) fn feed_key(
     field: &mut EditBoxState,
     ev: &KeyboardInput,
@@ -117,8 +86,7 @@ pub(crate) fn feed_key(
     if ev.state != ButtonState::Pressed {
         return FieldKey::Passthrough;
     }
-    // The three box-event keys are the screen's, always — even though a chord table entry could
-    // claim them. This mirrors the FrameXML split (`script::editbox::key_input`).
+    // The box-event keys are always the screen's, as in `script::editbox::key_input`.
     if matches!(
         ev.key_code,
         KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape | KeyCode::Tab
@@ -142,19 +110,17 @@ pub(crate) fn feed_key(
             }
             Chord::Paste => {
                 if let Some(text) = clipboard.read(wl_display) {
-                    // Filter before the box sees it, so a name box can't be pasted full of digits.
                     field.paste(&filter.keep(&text));
                 }
             }
         }
         return FieldKey::Consumed;
     }
-    // Plain character input. A command-modified char never types (Cmd/Ctrl+L must not insert "l"),
-    // but Ctrl+Alt passes: that is AltGr, the plane European layouts type real characters with —
-    // the same guard the FrameXML feed uses, and the reason the chord table excludes AltGr too.
+    // A command-modified char never types, but Ctrl+Alt (AltGr) does; the FrameXML feed and the
+    // chord table use the same guard.
     if !(mods.sup || (mods.ctrl && !mods.alt)) {
         if let Some(text) = &ev.text {
-            // C0 control characters are consumed-but-inert, as in the box's own `char_input`.
+            // C0 control characters are dropped, as in the box's own `char_input`.
             let printable = filter.keep(text);
             if !printable.is_empty() {
                 field.insert(&printable);
@@ -165,9 +131,7 @@ pub(crate) fn feed_key(
     FieldKey::Passthrough
 }
 
-/// A fresh single-line field with `max_letters` (0 = unlimited) and optional password masking —
-/// the glue screens' constructor, so they never hand-assemble an [`EditBoxState`] and quietly miss
-/// a flag.
+/// A fresh single-line field with `max_letters` (0 = unlimited) and optional password masking.
 pub(crate) fn field(max_letters: usize, password: bool) -> EditBoxState {
     EditBoxState {
         max_letters,
@@ -176,9 +140,8 @@ pub(crate) fn field(max_letters: usize, password: bool) -> EditBoxState {
     }
 }
 
-/// Advance the caret blink and report whether it is currently drawn — the box's own blink law
-/// (`E+0x370`/`E+0x374`, ctor default 0.5 s), so a glue caret and a chat caret blink identically.
-/// An unfocused field always reports "hidden" without accumulating.
+/// Advance the caret blink and report whether it is drawn: the box's own blink (`E+0x370`,
+/// `E+0x374`, default 0.5 s). An unfocused field is hidden and does not accumulate.
 pub(crate) fn tick_caret(field: &mut EditBoxState, focused: bool, dt: f32) -> bool {
     if !focused {
         return false;
@@ -197,9 +160,6 @@ pub(crate) fn tick_caret(field: &mut EditBoxState, focused: bool, dt: f32) -> bo
 mod tests {
     use super::*;
 
-    /// The name box takes letters only — and the filter runs on **pasted** text too, which is the
-    /// case the old hand-rolled screens could not express at all (they had no paste). Regression
-    /// for.
     #[test]
     fn letters_filter_applies_to_pasted_text() {
         assert_eq!(CharFilter::Letters.keep("Bob123"), "Bob");
@@ -207,16 +167,12 @@ mod tests {
         assert_eq!(CharFilter::Letters.keep("123"), "");
     }
 
-    /// `Any` keeps everything printable but still drops control characters — a pasted newline must
-    /// never reach a single-line box as a literal.
     #[test]
     fn any_filter_keeps_printables_and_drops_controls() {
         assert_eq!(CharFilter::Any.keep("pass word!"), "pass word!");
         assert_eq!(CharFilter::Any.keep("one\ntwo\r"), "onetwo");
     }
 
-    /// A letters-only paste still honours the box's own cap, because the filter feeds
-    /// `EditBoxState::paste`, which enforces `max_letters` like any other insert.
     #[test]
     fn a_filtered_paste_still_obeys_max_letters() {
         let mut f = field(4, false);
@@ -224,8 +180,7 @@ mod tests {
         assert_eq!(f.text, "abcd");
     }
 
-    /// A password field masks its display but never its buffer — the login password box relies on
-    /// this, and on `selected_text` yielding the mask rather than the secret.
+    /// Copying from a password field yields the mask, not the secret.
     #[test]
     fn a_password_field_masks_display_and_copies() {
         let mut f = field(0, true);

@@ -1,25 +1,17 @@
-//! Drives the stock `Interface\FrameXML\TradeFrame.xml` through the engine (decision 0592 P1) — the
-//! trade twin of `mail_frame.rs`: it loads the same file chain the app does (cut to the trade
-//! window's dependency prefix), pushes a synthetic two-sided offer, opens the window with the app's
-//! own `TRADE_SHOW` event, and asserts the transcribed Lua actually paints — the named regions
-//! exist, both columns populate from a fed `TradeState`, the money coin trios render, and the
-//! accept glow tracks the `TRADE_ACCEPT_UPDATE(my, his)` args. This is the machine gate for the XML
-//! (a Lua error / missing global / wrong region name fails here); the director's eye judges only the *look*.
+//! Drives the stock `TradeFrame.xml` through the engine: pushes a synthetic two-sided offer, opens
+//! the window with `TRADE_SHOW`, and asserts the Lua paints both columns, the money and the accept
+//! glows that follow `TRADE_ACCEPT_UPDATE(my, his)`.
 
 mod common;
 
 use benilla_ui::script::{ScriptValue, TradeSideState, TradeSlotItem, TradeState, UiScript};
 
-/// The trade window's load prefix — the app's own order (`ui_script/mod.rs`), members only.
-/// MerchantFrame.xml rides along because TradeFrame.xml reuses its global `BenillaMoney_*` coin
-/// helpers (the two gold displays), so a load error in either fails here.
+/// The trade window's load prefix, in `assets/ui/benilla.toc` order.
 const FILES: &[&str] = &[
     "Interface\\FrameXML\\Fonts.xml",
     r"Interface\FrameXML\MoneyFrame.lua",
     r"Interface\FrameXML\MoneyFrame.xml",
-    // The money entry comes off the chain since 1882 — `MoneyInputFrameTemplate` and the
-    // `MoneyInputFrame_*` verbs the window's OnLoad calls. Seated straight after MoneyFrame.xml,
-    // which is benilla.toc's own order.
+    // `MoneyInputFrameTemplate` and the `MoneyInputFrame_*` functions the window calls.
     r"Interface\FrameXML\MoneyInputFrame.lua",
     r"Interface\FrameXML\MoneyInputFrame.xml",
     r"Interface\FrameXML\UIParent.xml",
@@ -28,9 +20,9 @@ const FILES: &[&str] = &[
     "Interface\\FrameXML\\GlobalStrings.lua",
     "Interface\\FrameXML\\BasicControls.xml",
     "Interface\\FrameXML\\LocaleProperties.lua",
-    "Interface\\FrameXML\\StaticPopup.xml", // the dialog engine (1960)
+    "Interface\\FrameXML\\StaticPopup.xml", // the dialog engine
     "Interface\\FrameXML\\GameTooltip.xml",
-    // The stock slot updates go through ItemButtonTemplate.lua's SetItemButton* helpers (1966).
+    // The slot updates go through `ItemButtonTemplate.lua`'s `SetItemButton*` helpers.
     r"Interface\FrameXML\ItemButtonTemplate.xml",
     "Interface\\FrameXML\\TradeFrame.xml",
 ];
@@ -53,7 +45,7 @@ fn item(item_id: u32, name: &str, count: u32, quality: u32) -> TradeSlotItem {
     }
 }
 
-/// A two-sided offer: we offer Linen Cloth ×5 + 1g23s45c; the partner offers Silk Cloth + 5s.
+/// We offer Linen Cloth ×5 and 1g 23s 45c; the partner offers Silk Cloth and 5s.
 fn state() -> TradeState {
     let mut player = TradeSideState {
         gold: 12_345,
@@ -86,7 +78,7 @@ fn trade_frame_loads_and_key_regions_exist() {
         "TradeRecipientItem7",
         "TradeFrameTradeButton",
         "TradeFrameCancelButton",
-        "TradePlayerInputMoneyFrameGold", // our gold is now the editable input (P2)
+        "TradePlayerInputMoneyFrameGold", // our gold is the editable input
         "TradeRecipientMoneyFrameCopperButton",
         "TradeHighlightPlayer",
         "TradeHighlightRecipientEnchant",
@@ -107,8 +99,8 @@ fn trade_show_opens_and_both_columns_populate() {
     let mut s = UiScript::new().unwrap();
     load_ui(&s);
     s.set_trade(Some(state()));
-    // The stock header reads `UnitName("NPC")` — the partner rides the shared "npc" booth the
-    // app's session feed points at them (1966).
+    // The stock header reads `UnitName("NPC")` (`TradeFrame.lua:43`); the app points the "npc"
+    // unit at the partner.
     s.set_unit(
         "npc",
         Some(benilla_ui::script::UnitState {
@@ -123,11 +115,8 @@ fn trade_show_opens_and_both_columns_populate() {
         s.eval::<bool>("return TradeFrame:IsShown()").unwrap(),
         "the window opens on TRADE_SHOW"
     );
-    // ...and it is SLOTTED into the left panel, not merely Show()n unpositioned. Without the
-    // UIPanelWindows["TradeFrame"] row, ShowUIPanel takes its unregistered branch — a bare
-    // frame:Show() with no SetLeftFrame placement — which still flips IsShown() but leaves the
-    // window off its panel slot, so it never lands on screen (the live "OPEN_WINDOW arrived on both
-    // clients, yet no window" bug). This is the assertion that catches that missing registration.
+    // Slotted into the left panel by its `UIPanelWindows` row (`UIParent.lua:27`); unregistered,
+    // `ShowUIPanel` only calls `Show()` and the window never lands on screen.
     assert_eq!(
         s.eval::<String>("return GetLeftFrame() and GetLeftFrame():GetName() or ''")
             .unwrap(),
@@ -135,7 +124,6 @@ fn trade_show_opens_and_both_columns_populate() {
         "TRADE_SHOW slots the window into the left panel"
     );
 
-    // Our slot 1 and the partner's slot 1 painted their names + icons from the fed state.
     assert_eq!(
         s.eval::<String>("return TradePlayerItem1Name:GetText()")
             .unwrap(),
@@ -151,7 +139,7 @@ fn trade_show_opens_and_both_columns_populate() {
             .unwrap(),
         "a filled slot shows its icon"
     );
-    // An empty slot clears its name (the stock's `SetText(nil)`) + hides its icon.
+    // An empty slot clears its name (`SetText(nil)`) and hides its icon.
     assert!(s
         .eval::<Option<String>>("return TradePlayerItem2Name:GetText()")
         .unwrap()
@@ -161,17 +149,14 @@ fn trade_show_opens_and_both_columns_populate() {
         .eval::<bool>("return TradePlayerItem2ItemButtonIconTexture:IsShown()")
         .unwrap());
 
-    // The partner's name paints from GetTradePartnerName().
+    // The partner's name paints from `UnitName("NPC")`, set up above.
     assert_eq!(
         s.eval::<String>("return TradeFrameRecipientNameText:GetText()")
             .unwrap(),
         "Thrall"
     );
 
-    // The partner's read-only money rendered exactly one coin for 5s: TARGET_TRADE is a COLLAPSING
-    // type (MoneyTypeInfo.collapse), so gold and copper hide and silver alone stands — the
-    // reference's own rule, and the one this fixture was written to show. Our own gold is the
-    // editable input, exercised in `player_money_input_reflects_then_offers`.
+    // `TARGET_TRADE` collapses (`MoneyFrame.lua:69`), so 5s shows the silver coin alone.
     assert!(s
         .eval::<bool>(
             "return TradeRecipientMoneyFrameSilverButton:IsShown() \
@@ -189,15 +174,14 @@ fn enchant_slot_shows_the_not_traded_note() {
     let mut s = UiScript::new().unwrap();
     load_ui(&s);
     let mut st = state();
-    // Park an item in our enchant slot (index 6 = slot 7).
+    // Our enchant slot: index 6, slot 7.
     st.player.slots[6] = Some(item(6217, "Copper Rod", 1, 1));
     s.set_trade(Some(st));
     s.fire_event("TRADE_SHOW", vec![]);
-    // Slot 7 with an item but no enchant shows the coloured "will not be traded" note.
     assert_eq!(
         s.eval::<String>("return TradePlayerItem7Name:GetText()")
             .unwrap(),
-        // The stock wording, TRADEFRAME_NOT_MODIFIED_TEXT (ours had read "Will Not Be Traded").
+        // `TRADEFRAME_NOT_MODIFIED_TEXT` (`TradeFrame.lua:64`).
         "|cffffffffItem not yet modified|r"
     );
     assert!(s.take_errors().is_empty());
@@ -210,12 +194,12 @@ fn accept_update_drives_the_column_glows() {
     load_ui(&s);
     s.set_trade(Some(state()));
     s.fire_event("TRADE_SHOW", vec![]);
-    // Highlights start hidden (TradeFrame_Update hides all four).
+    // `TradeFrame_Update` hides all four highlights.
     assert!(!s
         .eval::<bool>("return TradeHighlightRecipient:IsShown()")
         .unwrap());
 
-    // The partner accepts: their column + enchant glow show, ours stay hidden.
+    // The partner accepts: their column and enchant glow show, ours stay hidden.
     s.fire_event(
         "TRADE_ACCEPT_UPDATE",
         vec![ScriptValue::Int(0), ScriptValue::Int(1)],
@@ -230,7 +214,7 @@ fn accept_update_drives_the_column_glows() {
         .eval::<bool>("return TradeHighlightPlayer:IsShown()")
         .unwrap());
 
-    // We accept: our glow shows and the Trade button disables (the reference's own-accept lock).
+    // We accept: our glow shows and the Trade button disables.
     s.fire_event(
         "TRADE_ACCEPT_UPDATE",
         vec![ScriptValue::Int(1), ScriptValue::Int(0)],
@@ -253,13 +237,13 @@ fn closing_the_window_queues_the_cancel() {
     s.fire_event("TRADE_SHOW", vec![]);
     let _ = s.take_trade_close();
 
-    // The X button hides the window → OnHide → CloseTrade queues the local close/cancel verb.
+    // The X hides the window, and its OnHide's `CloseTrade` queues the close.
     s.run("TradeFrameCloseButton:Click()").unwrap();
     assert!(!s.eval::<bool>("return TradeFrame:IsShown()").unwrap());
     assert!(s.take_trade_close(), "closing queued the CloseTrade intent");
     assert!(s.take_errors().is_empty());
 
-    // TRADE_CLOSED from the server-driven path also hides it.
+    // A server-driven `TRADE_CLOSED` also hides it.
     s.fire_event("TRADE_SHOW", vec![]);
     assert!(s.eval::<bool>("return TradeFrame:IsShown()").unwrap());
     s.fire_event("TRADE_CLOSED", vec![]);
@@ -280,14 +264,15 @@ fn trade_button_click_queues_accept() {
     assert!(s.take_errors().is_empty());
 }
 
-/// The editable player money input (decision 0592 P2): the server's PLAYER_TRADE_MONEY echo reflects
-/// the accepted gold into the three boxes without re-offering (the diff-guarded SetCopper), and a
-/// keystroke offers the running copper total through SetTradeMoney → the app's SET_TRADE_GOLD.
+/// `PLAYER_TRADE_MONEY` fills the three boxes from `GetPlayerTradeMoney()` without re-offering,
+/// and a keystroke offers the copper total through `SetTradeMoney`. vmangos never echoes our own
+/// gold (it sends it to the partner only, `TradeData.cpp:118`); the app sets it client-side and
+/// fires the event.
 #[test]
 fn player_money_input_reflects_then_offers() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
-    s.set_money(1_000_000); // SetTradeMoney is purse-gated (1965)
+    s.set_money(1_000_000); // SetTradeMoney is purse-gated
     load_ui(&s);
     s.set_trade(Some(state())); // state().player.gold == 12345 (1g 23s 45c)
     s.fire_event("TRADE_SHOW", vec![]);
@@ -303,8 +288,7 @@ fn player_money_input_reflects_then_offers() {
         );
     }
 
-    // Reflection: PLAYER_TRADE_MONEY fills the boxes from GetPlayerTradeMoney(), guarded so the
-    // programmatic fill does NOT re-offer (no spurious SET_TRADE_GOLD).
+    // The programmatic fill must not re-offer.
     let _ = s.take_trade_money();
     s.fire_event("PLAYER_TRADE_MONEY", vec![]);
     assert_eq!(
@@ -323,12 +307,11 @@ fn player_money_input_reflects_then_offers() {
         "the guarded reflect does not re-offer"
     );
 
-    // A genuine keystroke offers the running total (bypass the affordability clamp — a bare harness
-    // has no purse).
+    // Lift the affordability clamp (`TradeFrame.lua:164`) for a typed offer.
     s.run("GetMoney = function() return 100000000 end").unwrap();
     s.run("TradePlayerInputMoneyFrameGold:SetText('2')")
         .unwrap();
-    s.tick(0.0); // the deferred OnTextChanged drains here (decision 1831)
+    s.tick(0.0); // the deferred OnTextChanged drains here
     assert_eq!(
         s.take_trade_money(),
         Some(2 * 10000 + 23 * 100 + 45),
@@ -337,20 +320,17 @@ fn player_money_input_reflects_then_offers() {
     assert!(s.take_errors().is_empty());
 }
 
-/// The trade slot buttons route through the shared drop handler (decision 0592 P2): clicking OUR
-/// filled slot clears it (ClickTradeButton → CLEAR_TRADE_ITEM), while the partner's column is inert
-/// (ClickTargetTradeButton). Exercises the real button OnClick → BenillaTradeSlot_OnClick →
-/// player/recipient name-dispatch, without needing a cursor payload (the empty-cursor clear path).
+/// With an empty cursor, clicking our filled slot clears it (`ClickTradeButton`), while the
+/// partner's column calls `ClickTargetTradeButton`, which queues nothing (`TradeFrame.xml:101`).
 #[test]
 fn slot_click_routes_player_to_clear_and_recipient_to_inert() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     load_ui(&s);
-    s.set_trade(Some(state())); // player slot 1 + recipient slot 1 are both filled
+    s.set_trade(Some(state())); // both slot 1s are filled
     s.fire_event("TRADE_SHOW", vec![]);
     let _ = s.take_trade_clear_items();
 
-    // Our filled slot 1 clicked with an empty cursor → a clear routed through ClickTradeButton.
     s.run("TradePlayerItem1ItemButton:Click()").unwrap();
     assert_eq!(
         s.take_trade_clear_items(),
@@ -358,8 +338,6 @@ fn slot_click_routes_player_to_clear_and_recipient_to_inert() {
         "clicking our filled slot clears it (ClickTradeButton)"
     );
 
-    // The partner's filled slot is read-only — the click hits ClickTargetTradeButton, which queues
-    // nothing on either channel.
     s.run("TradeRecipientItem1ItemButton:Click()").unwrap();
     assert!(
         s.take_trade_clear_items().is_empty() && s.take_trade_set_items().is_empty(),

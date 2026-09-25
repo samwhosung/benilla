@@ -1,22 +1,8 @@
-//! **The 2D opaque pass, skipped when it has nothing to draw**.
-//!
-//! bevy's `MainOpaquePass2dNode` opens a command encoder and a render pass whether or not its two
-//! phases hold an item, and on every camera of ours they never do: each player-UI quad is in the
-//! transparent phase (`AlphaMode2d::Blend`), Bevy UI paints through its own node,
-//! egui through its own. 2197 parked the pass as "price it on an immediate-mode GPU"; 2205 priced
-//! its GPU at zero; the crowd profile of 2225 priced its CPU at ~0.2 ms a frame, parked, traced —
-//! an encoder and a pass that wgpu sizes and clears its usage trackers for, empty or not (the
-//! residency term `perf::gpu`'s census names).
-//!
-//! The pass exists in bevy for the clear, and the clear does not need it: whichever pass touches
-//! the view target first clears it (`ColorAttachment`'s first-call semantics, the same rule
-//! `static_gx` and the FFX combine already lean on), and bevy's transparent 2D node opens its pass
-//! unconditionally for exactly that reason. So an empty opaque pass has nothing to do that the
-//! pass after it does not.
-//!
-//! This is bevy's node with one early return, registered under bevy's own label:
-//! `RenderGraph::add_node` is a map insert, so the later registration replaces the node and the
-//! graph's edges — keyed by label — carry over untouched.
+//! Bevy's 2D opaque pass, skipped when both its phases are empty, which on our cameras they always
+//! are (UI quads are transparent, Bevy UI and egui draw in their own nodes). The first pass to
+//! touch the view target clears it, so the transparent pass after it takes the clear.
+//! Registered under Bevy's own label: `add_node` is a map insert, so it replaces the node and the
+//! edges keyed by label carry over.
 
 use bevy::core_pipeline::core_2d::graph::{Core2d, Node2d};
 use bevy::core_pipeline::core_2d::{AlphaMask2d, Opaque2d};
@@ -64,9 +50,8 @@ impl ViewNode for SkipEmptyOpaque2dNode {
         ) else {
             return Ok(());
         };
-        // The one line bevy's node does not have. Nothing to draw means nothing to encode: the
-        // transparent pass that follows opens its own pass unconditionally and takes the target's
-        // first-call clear.
+        // The one line Bevy's node lacks: the transparent pass that follows opens unconditionally
+        // and takes the target's first-call clear.
         if opaque_phase.is_empty() && alpha_mask_phase.is_empty() {
             return Ok(());
         }
@@ -110,9 +95,8 @@ impl ViewNode for SkipEmptyOpaque2dNode {
     }
 }
 
-/// Replaces bevy's 2D opaque node under its own label. Added by [`crate::ui_pass::PlayerUiPlugin`],
-/// which owns every camera that runs the `Core2d` graph, after `DefaultPlugins` has registered the
-/// node it replaces.
+/// Replaces Bevy's 2D opaque node; must be added after `DefaultPlugins` registers the original
+/// (by [`crate::ui_pass::PlayerUiPlugin`]).
 pub(crate) struct SkipEmptyOpaque2dPlugin;
 
 impl Plugin for SkipEmptyOpaque2dPlugin {

@@ -1,23 +1,11 @@
-//! The realm list's **layout** — the reference `GlueXML/RealmList.xml` arrangement rebuilt in Bevy
-//! UI, scaled to the window the way every glue screen is (the 1024×768 virtual screen times
-//! `height / 768`).
+//! The realm list's layout: `GlueXML/RealmList.xml` in Bevy UI, on the 1024×768 glue scale.
 //!
-//! A full-screen black-at-0.75 dim (the reference's own BACKGROUND layer, which also stops a click
-//! reaching the screen behind), then the 640×512 `HelpFrame` plate centred at the authored `+24`
-//! offset — the same plate the AddOns list uses, because `RealmList.xml` and `AddonList.xml` are
-//! the same panel. On it: the `UI-DialogBox-Header` title plate reading `SERVER_SELECTION`, the
-//! four sort-column headers, eighteen 512×16 realm rows at the authored 20 px pitch, the
-//! `UI-QuestLogTitleHighlight` selection band, the close X, and Okay / Cancel along the bottom.
+//! A full-screen dim, then the 640×512 `HelpFrame` plate (the AddOns list's) with the title plate,
+//! four sort headers, eighteen rows, the selection band, the close X, and Okay and Cancel. Rows are
+//! spawned empty and [`refresh_rows`] writes them every frame from [`super::Realms`].
 //!
-//! **Each row is four columns, and three of them are computed** — the type suffix, the character
-//! count, and the load word — see [`super::load`]. The row is spawned once with empty strings and
-//! [`refresh_rows`] writes it every frame from [`super::Realms`], which is what lets the list
-//! answer a five-second refresh without rebuilding the tree.
-//!
-//! **The category tab strip is not drawn.** The reference hides it whenever the list has a single
-//! category (`RealmList_UpdateTabs`), which is every server benilla connects to; with more than
-//! one we show every realm rather than stranding some behind a tab whose *name* we cannot yet
-//! source — see [`super`]'s note.
+//! The category tab strip is not built: `RealmList_UpdateTabs` hides it for a single category, and
+//! with several, only the first category's realms show.
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -33,30 +21,27 @@ use super::{Realms, SortKey};
 
 use crate::char_select::wow_font;
 
-/// Over the glue screen it stands on (1100), over that screen's own dialogs (1200), and over the
-/// AddOns panel's tooltip (1220) — the reference's `frameStrata="DIALOG"` with `toplevel="true"`.
+/// `frameStrata="DIALOG"` with `toplevel`: above the glue screen, its dialogs and the AddOns
+/// tooltip (z 1100, 1200, 1220).
 const REALM_Z: i32 = 1250;
 
-/// The panel plate, straight off `RealmList.xml`.
+/// The panel plate, from `RealmList.xml`.
 const BG_W: f32 = 640.0;
 const BG_H: f32 = 512.0;
 /// `RealmListBackground`'s authored CENTER offset.
 const BG_CENTER_OFF_X: f32 = 24.0;
 
-/// `MAX_REALMS_DISPLAYED` (`RealmList.lua` l.2).
+/// `MAX_REALMS_DISPLAYED` (`RealmList.lua:2`).
 pub(super) const MAX_ROWS: usize = 18;
-/// The authored row pitch: a 16-tall button plus the 4 px anchor offset to the next.
-///
-/// Note this is NOT `REALM_BUTTON_HEIGHT` (`RealmList.lua` l.1 = 16), which the reference uses for
-/// the scrollbar's step while its buttons sit 20 apart. We scroll by whole rows, so only the pitch
-/// is load-bearing here.
+/// The row pitch: a 16-tall button plus the 4 px anchor offset; not `REALM_BUTTON_HEIGHT` (16),
+/// which is only the scrollbar's step.
 const ROW_PITCH: f32 = 20.0;
 /// `RealmListRealmButton1` at TOPLEFT (22, −56).
 const ROW0_LEFT: f32 = 22.0;
 const ROW0_TOP: f32 = 56.0;
 const ROW_W: f32 = 512.0;
 const ROW_H: f32 = 16.0;
-/// `RealmListHighlight` — wider than the row it sits behind.
+/// `RealmListHighlight`, wider than the row it sits behind.
 const HILIGHT_W: f32 = 557.0;
 
 /// The four sort columns: `(key, string key, left, width)`. The lefts chain off
@@ -71,8 +56,7 @@ const SORT_COLUMNS: [(SortKey, &str, f32, f32); 4] = [
 const SORT_H: f32 = 19.0;
 const SORT_CAP_L: f32 = 5.0;
 const SORT_CAP_R: f32 = 4.0;
-/// The sort header row's top edge: anchored BOTTOMLEFT to the plate's TOPLEFT at −50, so the
-/// 19-tall button's *bottom* is at 50.
+/// The sort header's top: its BOTTOMLEFT is anchored at −50 off the plate's TOPLEFT.
 const SORT_TOP: f32 = 50.0 - SORT_H;
 
 /// A row's four column boxes, chained off the `RealmListRealmButtonTemplate` anchors:
@@ -83,9 +67,8 @@ const COL_TYPE: (f32, f32) = (235.0, 50.0);
 const COL_PLAYERS: (f32, f32) = (336.0, 32.0);
 const COL_LOAD: (f32, f32) = (418.0, 115.0);
 
-/// Root of the realm-list screen (despawned whole on exit). `with_art`/`s` drive the same rebuild
-/// rule every glue screen uses: an artless early spawn upgrades when the client art lands, and a
-/// window resize rebuilds at the new glue scale.
+/// Root of the realm list; `with_art` and `s` trigger a rebuild when the art lands or the scale
+/// changes.
 #[derive(Component)]
 pub(super) struct RealmListUi {
     with_art: bool,
@@ -95,26 +78,22 @@ pub(super) struct RealmListUi {
 /// One clickable control on the screen.
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RealmAction {
-    /// A realm row (0-based *screen* row, resolved against the scroll offset at click time).
+    /// A realm row: the 0-based screen row, resolved against the scroll offset at click time.
     Row(usize),
     Ok,
-    /// The Cancel button, and ESCAPE — `RealmList_OnCancel`.
+    /// The Cancel button and Escape, `RealmList_OnCancel`.
     Cancel,
-    /// The close X, which is **not** the Cancel button. `RealmListCloseButton`'s whole OnClick is
-    /// `RealmList:Hide()`, and `GlueCloseButton` (`GlueTemplates.xml` l.4) declares no sound — so
-    /// the X is silent where Cancel plays `gsLoginChangeRealmCancel`. Same outcome for the player,
-    /// one fewer click in the room.
+    /// The close X: `RealmList:Hide()`, silent (`GlueCloseButton`, `GlueTemplates.xml:4`,
+    /// declares no sound) where Cancel plays `gsLoginChangeRealmCancel`.
     Close,
     Sort(SortKey),
 }
 
-/// Which screen row an entity belongs to — on the row button and on each of its four texts.
+/// The screen row of a row button and of each of its four texts.
 #[derive(Component, Clone, Copy)]
 pub(super) struct RowOf(pub(super) usize);
 
-/// Which of a row's four columns a text entity is. One component with four values rather than four
-/// marker types: the refresh then reads every column in **one** query and one loop, instead of four
-/// that differ only in which marker they filter on and which disjointness they have to declare.
+/// Which of a row's four columns a text entity is.
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Column {
     Name,
@@ -129,13 +108,7 @@ pub(super) struct RowHighlight;
 #[derive(Component)]
 pub(super) struct OkButton;
 
-/// Raise, rebuild and tear down the dialog — `RealmList:Show()` / `:Hide()`, plus the rebuild rule
-/// every glue tree here follows (an artless early spawn upgrades when the client art lands, and a
-/// window resize rebuilds at the new glue scale).
-///
-/// **Not a state transition.** The frame is shown over whatever glue screen is current and hidden
-/// again; nothing about that screen changes, which is the whole of `RealmList`'s lifecycle in the
-/// reference (see [`super`]).
+/// Spawn, rebuild and despawn the dialog as `shown` says, over whatever glue screen is current.
 pub(super) fn drive_screen(
     mut commands: Commands,
     realms: Res<Realms>,
@@ -208,11 +181,9 @@ fn spawn_screen(
         .spawn((
             RealmListUi { with_art, s },
             GlobalZIndex(REALM_Z),
-            // `enableMouse="true"` on a `setAllPoints` frame: the dialog eats every click that
-            // misses its own controls, so the screen underneath cannot be operated through it.
-            // (A `Button` with no `FocusPolicy` blocks, which is what we want here.)
+            // `enableMouse="true"` on a full-screen frame: clicks never reach the screen below.
             Button,
-            // The reference's own full-screen BACKGROUND layer: black at 0.75.
+            // The reference's full-screen BACKGROUND layer.
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.75)),
             Node {
                 width: Val::Percent(100.0),
@@ -238,8 +209,8 @@ fn spawn_screen(
                 for row in 0..MAX_ROWS {
                     spawn_row(b, &font, row, s);
                 }
-                // Okay / Cancel — `GlueDialogButtonTemplate` at 125×35, Cancel at BOTTOMRIGHT
-                // (−46, +13) and Okay hung off its left edge with an 8 px overlap.
+                // `GlueDialogButtonTemplate` 125×35: Cancel at BOTTOMRIGHT (−46, +13), Okay off
+                // its left edge with an 8 px overlap.
                 let cancel_left = BG_W - 46.0 - 125.0;
                 let btn_top = BG_H - 13.0 - 35.0;
                 for (action, key, left) in [
@@ -268,7 +239,7 @@ fn spawn_screen(
         });
 }
 
-/// The six-piece `HelpFrame` plate — 640×512 in two rows of three.
+/// The six-piece `HelpFrame` plate, two rows of three.
 fn spawn_plate(b: &mut ChildSpawnerCommands, art: &GlueArt, s: f32) {
     match &art.help_frame {
         Some(hf) => {
@@ -330,7 +301,7 @@ fn spawn_header(
     );
 }
 
-/// `GlueCloseButton` at TOPRIGHT (−42, −3) — see [`RealmAction::Close`] for why it is not Cancel.
+/// `GlueCloseButton` at TOPRIGHT (−42, −3).
 fn spawn_close(b: &mut ChildSpawnerCommands, art: &GlueArt, font: &Handle<Font>, s: f32) {
     let mut x = b.spawn((
         RealmAction::Close,
@@ -382,10 +353,8 @@ fn spawn_close(b: &mut ChildSpawnerCommands, art: &GlueArt, font: &Handle<Font>,
     }
 }
 
-/// The four clickable column headers (`RealmSortButtonTemplate`): a three-slice
-/// `WhoFrame-ColumnTabs` plate, the label 8 in from the left with the `UI-SortArrow` beside it, and
-/// the `UI-Character-Tab-Highlight` sheen the shared [`crate::glue::glue_hilights`] pass lights on
-/// hover.
+/// The four column headers (`RealmSortButtonTemplate`): a three-slice `WhoFrame-ColumnTabs`
+/// plate, the label with `UI-SortArrow`, and the `UI-Character-Tab-Highlight` hover sheen.
 fn spawn_sort_headers(
     b: &mut ChildSpawnerCommands,
     art: &GlueArt,
@@ -403,7 +372,6 @@ fn spawn_sort_headers(
             abs(s, left, SORT_TOP, w, SORT_H),
         ))
         .with_children(|h| {
-            // The plate: 5-wide left cap, 4-wide right cap, the middle stretched between them.
             if let Some((tex, size)) = &art.column_tabs {
                 for (tc, l, cw) in [
                     (COLUMN_TAB_TC[0], 0.0, SORT_CAP_L),
@@ -420,7 +388,7 @@ fn spawn_sort_headers(
                     ));
                 }
             }
-            // The sheen, LEFT..RIGHT+4 and 24 tall — vertically centred on a 19-tall button.
+            // The sheen, LEFT..RIGHT+4 and 24 tall, centred on the button.
             if let Some(hi) = &art.tab_highlight {
                 h.spawn((
                     Hilight,
@@ -474,8 +442,7 @@ fn spawn_sort_headers(
     }
 }
 
-/// `RealmListHighlight` — one 557×16 band, moved to the selected row and vertex-coloured to match
-/// it (`RealmListHighlightTexture:SetVertexColor`).
+/// `RealmListHighlight`: one band, moved to the selected row and vertex-coloured to match it.
 fn spawn_highlight(b: &mut ChildSpawnerCommands, art: &GlueArt, s: f32) {
     let mut band = b.spawn((
         RowHighlight,
@@ -536,10 +503,8 @@ fn spawn_row(b: &mut ChildSpawnerCommands, font: &Handle<Font>, row: usize, s: f
     });
 }
 
-/// Write every visible row from the realm list — the reference's `RealmListUpdate`.
-///
-/// Runs every frame rather than on change, because the list is re-requested every five seconds and
-/// a realm's load band moves when *any other* realm's population does.
+/// `RealmListUpdate`: write every visible row, each frame, since any realm's population moves
+/// every band.
 #[allow(clippy::type_complexity)]
 pub(super) fn refresh_rows(
     realms: Res<Realms>,
@@ -564,11 +529,9 @@ pub(super) fn refresh_rows(
         Some(g) => g.text(key, key).to_string(),
         None => key.to_string(),
     };
-    // The screen row → realm index map for this frame, honouring the scroll offset.
     let at = |row: usize| visible.get(realms.offset + row).copied();
 
-    // The row under the cursor, if any — `RealmListRealmButtonTemplate`'s `HighlightFont`, which
-    // is the only hover state a row has (the template carries no HighlightTexture).
+    // A row's only hover state is the template's `HighlightFont`; it has no HighlightTexture.
     let mut hovered = None;
     for (RowOf(row), interaction, mut vis) in &mut rows {
         *vis = match at(*row) {
@@ -580,7 +543,6 @@ pub(super) fn refresh_rows(
         }
     }
 
-    // Where the selection band goes, decided while walking the name column.
     let mut band_row = None;
     for (RowOf(row), column, mut t, mut color) in &mut cols {
         let Some(realm) = at(*row).map(|i| &realms.realms[i]) else {
@@ -588,9 +550,7 @@ pub(super) fn refresh_rows(
         };
         let down = super::is_down(realm);
         let invalid = super::is_invalid(realm);
-        // `LockHighlight()` on the chosen row, `button:Disable()` on an offline one: the selected
-        // row wears its highlight font just as a hovered row does, and a disabled row wears
-        // neither.
+        // `LockHighlight()` on the chosen row, `Disable()` on an offline one.
         let is_selected = selected.as_deref() == Some(realm.name.as_str()) && !down;
         let lit = !down && (is_selected || hovered == Some(*row));
         let (new, c) = match column {
@@ -601,8 +561,7 @@ pub(super) fn refresh_rows(
                 let (normal, highlight) = load::name_colors(down, invalid, realm.characters);
                 (realm.name.clone(), if lit { highlight } else { normal })
             }
-            // `RealmListUpdate` recolours the selected row's type and load columns to
-            // HIGHLIGHT_FONT_COLOR — the two computed words go white under the band.
+            // `RealmListUpdate` turns the selected row's type and load `HIGHLIGHT_FONT_COLOR`.
             Column::Type => {
                 let (key, c) = load::type_column(realm.realm_type);
                 (text(key), if is_selected { load::HIGHLIGHT } else { c })

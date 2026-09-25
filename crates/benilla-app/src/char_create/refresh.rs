@@ -1,7 +1,5 @@
-//! The create screen's live refresh (decision 0423's polish passes) — everything that follows the
-//! selection or the pointer after [`super::screen`] spawns the tree: icon rects, per-race dial
-//! labels, the GlueStrings info paragraphs, faction tints, the ref's hover/selected visuals
-//! (`LockHighlight`, `HighlightFont`, up/down art states), and the info panels' wheel scroll.
+//! The create screen's live refresh: everything that follows the selection or the pointer once
+//! [`super::screen`] has spawned the tree.
 
 use bevy::input::mouse::{AccumulatedMouseMotion, MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
@@ -21,8 +19,8 @@ use crate::glue::art::{
 };
 use crate::glue::widgets::{FallbackFace, GlueDisabled, Hilight, HoverLabel, LockHighlight};
 
-/// Refill everything that follows the selection — icon rects, dial labels, info texts, faction
-/// tints, class-slot mapping — on selection change or a fresh spawn.
+/// Refill icon rects, dial labels, info texts, faction tints and class slots on a selection
+/// change or a fresh spawn.
 #[allow(clippy::type_complexity)]
 pub(super) fn refresh_dynamic(
     sel: Res<CreateSelection>,
@@ -96,7 +94,7 @@ pub(super) fn refresh_dynamic(
         if let Some((image, rect)) = tc {
             node.image = image;
             node.rect = Some(rect);
-            node.color = Color::WHITE; // spawned transparent until real art lands
+            node.color = Color::WHITE; // spawned transparent until the art lands
         }
     }
 
@@ -117,8 +115,7 @@ pub(super) fn refresh_dynamic(
                     .text(&format!("FACIAL_HAIR_{facial_tok}"), "Facial Hair")
                     .to_string(),
             },
-            // The name box is five flex items (segments + carets), painted from its
-            // `EditBoxState` by `refresh_name_box` — never a single string here.
+            // Painted by `refresh_name_box`.
             DynText::Name => continue,
             DynText::InfoTitle(InfoKind::Faction) => strings
                 .text(
@@ -128,11 +125,8 @@ pub(super) fn refresh_dynamic(
                 .to_string(),
             DynText::InfoTitle(InfoKind::Race) => race_name(sel.race).to_string(),
             DynText::InfoTitle(InfoKind::Class) => class_name(sel.class).to_string(),
-            // The info bodies keep the shipped strings VERBATIM: every `FACTION_INFO_*`/
-            // `RACE_INFO_*`/`CLASS_*` opens with eight literal spaces — that indent IS the ref's
-            // first-line clearance past the header icon (the FontString is full-width at x=0;
-            // GlueStrings.lua authors the inset into the text). Trimming it ran line 1 under the
-            // icon (director's report, 2026-07-20).
+            // Never trimmed: each `FACTION_INFO_*`, `RACE_INFO_*` and `CLASS_*` string opens with
+            // eight spaces, which is the reference's first-line clearance past the header icon.
             DynText::InfoBody(InfoKind::Faction) => strings
                 .text(
                     if alliance {
@@ -147,8 +141,7 @@ pub(super) fn refresh_dynamic(
                 strings.text(&format!("RACE_INFO_{file}"), "").to_string()
             }
             DynText::InfoAbilities => {
-                // The ref's `CharacterCreateEnumerateRaces` join: every `ABILITY_INFO_<FILE><n>`
-                // line, newline-separated, into the gold ability text.
+                // `CharacterCreateEnumerateRaces` joins every `ABILITY_INFO_<FILE><n>` by newline.
                 let mut lines = Vec::new();
                 let mut n = 1;
                 while let Some(a) = strings.get(&format!("ABILITY_INFO_{file}{n}")) {
@@ -170,8 +163,7 @@ pub(super) fn refresh_dynamic(
         }
     }
 
-    // The faction tints: the page lean, and the panels' backdrop-bg color (the ref's
-    // `SetBackdropColor` — the border stays untinted, its color table entry commented out).
+    // The reference's `SetBackdropColor` tints only the bg; the border's entry is commented out.
     for (tint, bg, node) in &mut tints {
         let fill = if alliance { ALLIANCE_FILL } else { HORDE_FILL };
         match tint {
@@ -186,7 +178,7 @@ pub(super) fn refresh_dynamic(
             }
             DynTint::BoxFill => {
                 if let Some(mut node) = node {
-                    node.color = fill; // the texture's own alpha rides along
+                    node.color = fill; // the texture keeps its own alpha
                 } else if let Some(mut bg) = bg {
                     bg.0 = fill.with_alpha(FALLBACK_ALPHA);
                 }
@@ -194,8 +186,7 @@ pub(super) fn refresh_dynamic(
         }
     }
 
-    // The facial dial hides when the race's token is NONE (the ref rule; no 5875 row is, but the
-    // mechanism is the authored one).
+    // The facial dial hides when the race's token is `NONE`, as in the reference (no 1.12 row is).
     for (row, mut node) in &mut dial_rows {
         if row.0 == 4 {
             node.display = if facial_tok == "NONE" {
@@ -206,8 +197,7 @@ pub(super) fn refresh_dynamic(
         }
     }
 
-    // Unused class slots collapse (the ref enumerates the valid classes into the first buttons and
-    // hides the rest — same compaction).
+    // The reference fills the valid classes into the first buttons and hides the rest.
     for (action, mut node) in &mut slots {
         if let CreateAction::ClassSlot(i) = action {
             node.display = if (*i as usize) < classes.len() {
@@ -219,24 +209,15 @@ pub(super) fn refresh_dynamic(
     }
 }
 
-/// Per-frame interaction visuals the CREATE screen owns: which icon is *chosen* (the ref's
-/// `LockHighlight`, which [`crate::glue::glue_hilights`] then renders), hover labels, the no-art
-/// fallback shade, and the Create button's disabled latch while a create is in flight. The
-/// screen-agnostic passes — up/down art swaps, the glue buttons' art + caption color, outline
-/// mirroring — are [`crate::glue`]'s, registered beside this in the plugin chain.
-///
-/// **The chosen-icon write is its own query, deliberately.** It used to be a sixth term on the
-/// hover query below, which meant a button without a [`LockHighlight`] dropped out of the hover
-/// visuals too — and since no spawn site on this screen had one, that query matched *nothing*:
-/// no selected sheen and no icon name anywhere on the create screen. Two jobs, two queries, so a
-/// missing component can only ever cost its own job.
+/// The create screen's own per-frame visuals: the chosen icon's `LockHighlight`, hover labels,
+/// the no-art fallback shade and Create's disabled latch; the shared passes are [`crate::glue`]'s.
+/// The lock write keeps its own query, so a button without a `LockHighlight` still gets hover.
 #[allow(clippy::type_complexity)]
 pub(super) fn refresh_hover(
     sel: Res<CreateSelection>,
     catalog: Option<Res<CharCreate>>,
     art: Res<GlueArt>,
-    // The glue-panel buttons (Accept/Back/Randomize) are the shared visuals pass's whole —
-    // art states, caption, fallback shade, hover highlight — hence `Without<GlueBtn>` here.
+    // Accept, Back and Randomize are wholly the shared visuals pass's.
     mut buttons: Query<
         (
             &CreateAction,
@@ -260,9 +241,8 @@ pub(super) fn refresh_hover(
         _ => false,
     };
 
-    // `SetCharacterRace`/`SetCharacterClass`/`SetCharacterGender`: `LockHighlight()` on the one
-    // that is chosen, `UnlockHighlight()` on the rest. Nothing about visibility — the sheen is
-    // `crate::glue::glue_hilights`' alone.
+    // `SetCharacterRace`/`Class`/`Gender`: `LockHighlight()` the chosen one, unlock the rest;
+    // `glue_hilights` draws the sheen.
     for (action, mut locked) in &mut locks {
         let is_sel = selected(action);
         if locked.0 != is_sel {
@@ -274,14 +254,13 @@ pub(super) fn refresh_hover(
         let is_sel = selected(action);
         let hovered = *interaction != Interaction::None;
         let lit = is_sel || hovered;
-        // No-art fallback only: buttons spawned with a plain face get a hover shade. (Every node
-        // *has* a `BackgroundColor` — only a `FallbackFace`'s belongs to us.)
+        // Every node has a `BackgroundColor`; only a `FallbackFace`'s is ours to shade.
         if fallback {
             bg.0 = if lit { BTN_HOVER } else { BTN_BG };
         }
         for child in children {
             if let Ok(mut vis) = labels.get_mut(*child) {
-                // Without icon art the label IS the button face — always visible.
+                // Without icon art the label is the button face.
                 let show = lit || art.races.is_none();
                 *vis = if show {
                     Visibility::Inherited
@@ -292,7 +271,6 @@ pub(super) fn refresh_hover(
         }
     }
 
-    // The Create button disarms while a create is in flight (the shared visuals pass renders it).
     for (action, mut disabled) in &mut disables {
         if matches!(action, CreateAction::Create) {
             let want = sel.creating;
@@ -303,7 +281,7 @@ pub(super) fn refresh_hover(
     }
 }
 
-/// Wheel-scroll a hovered info panel (the ref's GlueScrollFrame `OnMouseWheel`).
+/// Wheel-scroll a hovered info panel, the reference's GlueScrollFrame `OnMouseWheel`.
 pub(super) fn scroll_info(
     mut wheel: MessageReader<MouseWheel>,
     mut boxes: Query<(&Interaction, &ComputedNode, &mut ScrollPosition), With<InfoScroll>>,
@@ -326,8 +304,8 @@ fn max_scroll(node: &ComputedNode) -> f32 {
     ((node.content_size.y - node.size.y) * node.inverse_scale_factor).max(0.0)
 }
 
-/// The scrollbar's inputs (`GlueScrollBarTemplate`): an arrow click steps half a track (the ref's
-/// `SetValue(GetValue() ± GetHeight()/2)`), the knob drags.
+/// The scrollbar's inputs (`GlueScrollBarTemplate`): an arrow click steps half a track,
+/// `SetValue(GetValue() ± GetHeight()/2)`, and the knob drags.
 pub(super) fn scroll_drive(
     motion: Res<AccumulatedMouseMotion>,
     arrows: Query<(Entity, &ScrollArrow)>,
@@ -335,8 +313,7 @@ pub(super) fn scroll_drive(
     thumbs: Query<(&ScrollThumb, &Interaction)>,
     mut scrolls: Query<(&ComputedNode, &mut ScrollPosition), With<InfoScroll>>,
 ) {
-    // The arrow steps on the RELEASE — it is a `<Button>` with an `<OnClick>`, not a slider (1533).
-    // The knob below is the slider half, and a drag is a held press by definition.
+    // The arrow is a `<Button>` with an `<OnClick>`, so it steps on the release; the knob drags.
     for (entity, arrow) in &arrows {
         if !clicks.hit(entity) {
             continue;
@@ -359,10 +336,8 @@ pub(super) fn scroll_drive(
     }
 }
 
-/// The scrollbar's look: the knob rides the scroll fraction, the arrows swap up/down/disabled art
-/// (disabled at their end stop, the additive highlight on hover), and every [`ScrollHides`] piece
-/// vanishes while the panel has nothing to scroll (the ref's `scrollBarHideable` + the Top/Bottom
-/// track art's range-changed hide).
+/// The scrollbar's look: the knob follows the scroll fraction, the arrows swap up, down and
+/// disabled art, and every [`ScrollHides`] piece hides while there is nothing to scroll.
 #[allow(clippy::type_complexity)]
 pub(super) fn scroll_visuals(
     art: Res<GlueArt>,
@@ -399,8 +374,7 @@ pub(super) fn scroll_visuals(
         if img.image != *face {
             img.image = face.clone();
         }
-        // A scroll arrow at the end of its travel is genuinely disabled — said once, in the
-        // component the shared sheen pass already reads, rather than re-derived beside it.
+        // The shared sheen pass reads this.
         if off.0 != disabled {
             off.0 = disabled;
         }

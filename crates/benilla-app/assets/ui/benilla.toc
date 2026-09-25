@@ -1,35 +1,30 @@
-# The built-in interface, parsed like any addon's `.toc`. Entries load in order: a bare filename
-# is ours, from `assets/ui`; a path is the reference's own file, off the player's patch chain.
-# The list loads on entering the world, then third-party addons. Deviation: entry 0, Fonts.xml,
-# loads alone at Startup, because the glue screens share its glyph atlas.
-# A frame built at load resolves `inherits=`, `parent=` and a named `relativeTo=` against names
-# declared above; a missing one only warns (the template is skipped, the parent falls back to the
-# enclosing frame).
-# On a collision a later Lua global or template replaces the earlier one, but a named frame
-# publishes its global only while the name is free.
-# A stock `.xml` that does not `<Script file=>` its own `.lua` needs both rows, `.lua` first
-# (`every_chain_xml_brings_its_own_lua`).
-# Blizzard's LoadOnDemand addons have no row, as in the reference: `ui_script::addons` loads each
-# off the chain on first use, after every template here is registered.
+# The built-in interface, in load order: a bare filename is ours, from `assets/ui`; a path is
+# the reference's own file, off the player's patch chain. Entry 0, Fonts.xml, loads alone into
+# every boot VM, from Startup on; the rest loads on entering the world, then third-party addons.
+# The font objects thus exist before the login screen; the reference loads Fonts.xml with the
+# rest of FrameXML.
+# `inherits=`, `parent=` and a named `relativeTo=` resolve only against names declared above; a
+# missing one only warns (the template is skipped, the parent falls back to the enclosing frame).
+# A later Lua global or template replaces an earlier one; a named frame publishes its global
+# only while the name is free.
+# A stock `.xml` that does not `<Script file=>` its own `.lua` needs both rows, `.lua` first.
+# LoadOnDemand addons have no row, as in the reference; they load off the chain on first use.
 
 ## Interface: 11200
 ## Title: benilla
 
 Interface\FrameXML\Fonts.xml
 
-# Second, not first as in the reference, because entry 0 must be Fonts.xml. The VM already ran it
-# at Startup; this pass makes the manifest complete, and stock files read the strings at load.
+# Second, not first as in the reference, because entry 0 must be Fonts.xml.
 Interface\FrameXML\GlobalStrings.lua
 # `Localize()` runs at load and overwrites GlobalStrings keys, so this follows them.
 Interface\FrameXML\Localization.xml
-# `GetText` and its gender and plural helpers: a Lua global, not an engine binding (the client's
-# `FrameScript_GetText` at `0x703bf0` calls it). UIParent.xml sources this file again.
+# `GetText` is a Lua global, not an engine binding: the client's `0x703bf0` calls it.
 Interface\FrameXML\LocaleProperties.lua
 Interface\FrameXML\BasicControls.xml
 # Before UIParent.xml, whose `LowHealthFrame` has `parent="WorldFrame"`.
 Interface\FrameXML\WorldFrame.xml
 # Above every file that names `parent="UIParent"` or adds a `UIPanelWindows` row at load.
-# `ui_script::manifest` reruns `UIParent_ManageFramePositions` once the whole list has loaded.
 Interface\FrameXML\UIParent.xml
 Interface\FrameXML\ItemButtonTemplate.xml
 # Before GameTooltip.xml and StaticPopup.xml, whose money rows inherit `SmallMoneyFrameTemplate`.
@@ -40,8 +35,7 @@ Interface\FrameXML\MoneyInputFrame.xml
 Interface\FrameXML\GameTooltip.xml
 Interface\FrameXML\UIDropDownMenu.xml
 Interface\FrameXML\UIMenu.xml
-# Before the unit frames: their dropdowns' OnLoad runs `UIDropDownMenu_Initialize`, whose
-# initializer calls `UnitPopup_ShowMenu` at once.
+# Before the unit frames, whose dropdowns' OnLoad reaches `UnitPopup_ShowMenu`.
 Interface\FrameXML\UnitPopup.xml
 Interface\FrameXML\ItemRef.xml
 # The `TextStatusBar` template and verbs, which the unit bars and `MainMenuExpBar` inherit.
@@ -49,8 +43,7 @@ Interface\FrameXML\TextStatusBar.lua
 Interface\FrameXML\TextStatusBar.xml
 # Before PartyFrame.xml, whose rows reach `RefreshBuffs` from their OnLoad.
 Interface\FrameXML\BuffFrame.xml
-# Two function-only kits: the unit windows below call `UnitFrame_Initialize` from their OnLoad,
-# and the player and pet frames `CombatFeedback_Initialize`.
+# Function-only kits the unit windows below call from their OnLoad.
 Interface\FrameXML\UnitFrame.xml
 Interface\FrameXML\CombatFeedback.xml
 Interface\FrameXML\PlayerFrame.xml
@@ -59,43 +52,38 @@ Interface\FrameXML\TargetFrame.xml
 Interface\FrameXML\PetFrame.xml
 # Anchors `relativeTo="TargetFrame"`.
 Interface\FrameXML\ComboFrame.xml
-# Ours: benilla's scroll kits, for our options window and script log.
+# Ours: the scroll parts of our options window and script log.
 ScrollTemplates.xml
 
 Interface\FrameXML\UIPanelTemplates.lua
 
 Interface\FrameXML\UIPanelTemplates.xml
-# The reference's three options windows, loaded hidden so addons find their frames by name;
-# nothing of ours may show them. Deviation: the player opens benilla's own options window,
-# `OptionsFrame.xml` below. The video window's templates (OptionsFrameTemplates.xml) inherit
-# UIPanelTemplates.xml's, and its dropdowns run `UIDropDownMenu_Initialize` at load. It holds the
-# global `OptionsFrame`, so ours is `BenillaOptionsFrame`.
+# The reference's three options windows, loaded hidden so addons find their frames by name.
+# Deviation: the player opens our own options window, `OptionsFrame.xml` below, because 1.12's
+# settings screens are much worse to use; the stock one holds `OptionsFrame`.
 Interface\FrameXML\OptionsFrame.xml
 Interface\FrameXML\SoundOptionsFrame.xml
-# Inherits `OptionsCheckButtonTemplate`; brings CharacterFrameTemplates.xml and declares
-# `UIOptionsFrameCheckButtons`, which MultiActionBars.lua writes at load.
+# Inherits `OptionsCheckButtonTemplate`, and declares `UIOptionsFrameCheckButtons`, which
+# MultiActionBars.lua writes at load.
 Interface\FrameXML\UIOptionsFrame.xml
 # StaticPopup.lua starts `StaticPopupDialogs` empty: a file that adds a dialog at load follows it.
 Interface\FrameXML\StaticPopup.xml
 Interface\FrameXML\CoinPickupFrame.xml
 
-# Ours: the options window's Keybindings page. Before OptionsFrame.xml, whose Keybindings page
-# inherits these templates and calls this script at OnLoad.
+# Ours: the Keybindings page's templates and script, which OptionsFrame.xml uses at load.
 KeyBindingsPage.xml
 
-# Ours: `BenillaOptionsFrame`, the options window the game menu opens. Its rows read
-# `OptionsFrameSliders` and the option globals the stock windows above set at load.
+# Ours: `BenillaOptionsFrame`; its rows read the option globals the stock windows above set.
 OptionsFrame.xml
 
-# Declares `MainMenuBar`, `MainMenuBarArtFrame` and `MainMenuExpBar`, which later files use as a
-# parent or read at load.
+# `MainMenuBar`, `MainMenuBarArtFrame` and `MainMenuExpBar`, which later files read at load.
 Interface\FrameXML\MainMenuBar.xml
 
 Interface\FrameXML\Cooldown.xml
 # `ActionButtonTemplate`, which ActionBarFrame.xml's `ActionBarButtonTemplate` inherits.
 Interface\FrameXML\ActionButtonTemplate.xml
 Interface\FrameXML\ActionBarFrame.xml
-# The four optional bars (action slots 25-72), built on `ActionBarButtonTemplate`.
+# The four optional bars, action slots 25-72.
 Interface\FrameXML\MultiActionBars.xml
 Interface\FrameXML\PetActionBarFrame.xml
 # `UpdateMicroButtons` reads CharacterFrame, SpellBookFrame, QuestLogFrame, GameMenuFrame, the
@@ -119,17 +107,15 @@ Interface\FrameXML\UIErrorsFrame.xml
 # Anchors `relativeTo="UIErrorsFrame"`.
 Interface\FrameXML\RaidWarning.xml
 Interface\FrameXML\ContainerFrame.xml
-# `CharacterFrame` is the parent of every tab page below. PaperDollFrame.xml declares the stat
-# templates PetPaperDollFrame.xml inherits and `PaperDollItemSlotButtonTemplate`, which the bag
-# bar inherits. `CharacterFrame_OnLoad` reads `PlayerFrameHealthBar`, `PlayerFrameManaBar` and
-# `MainMenuExpBar` and calls `PanelTemplates_SetNumTabs`, all declared above.
+# `CharacterFrame` parents every tab page below, and its OnLoad reads `PlayerFrameHealthBar`,
+# `PlayerFrameManaBar` and `MainMenuExpBar`; PaperDollFrame.xml declares templates the pet page
+# and the bag bar inherit.
 Interface\FrameXML\CharacterFrame.xml
 Interface\FrameXML\PaperDollFrame.xml
 Interface\FrameXML\PetPaperDollFrame.xml
 Interface\FrameXML\MainMenuBarBagButtons.xml
 Interface\FrameXML\StackSplitFrame.xml
-# Ours. Deviation: the keyring is an ordinary container (id -2), so its tooltip uses `SetBagItem`;
-# this wraps `ContainerFrameItemButton_OnEnter`, capturing the stock body at load.
+# Ours: wraps the stock bag verbs; the keyring is a container (id -2).
 ContainerFrameAdapters.xml
 Interface\FrameXML\ReputationFrame.xml
 Interface\FrameXML\SkillFrame.xml
@@ -137,8 +123,7 @@ Interface\FrameXML\SkillFrame.xml
 Interface\FrameXML\HonorFrame.xml
 Interface\FrameXML\DressUpFrame.xml
 Interface\FrameXML\SpellBookFrame.xml
-# Ours. Deviation: the spellbook's autocast brackets (71.53, reference 60) and shine (37x37 at
-# scale 1.48) take the pet action button's proportions. Resizes `SpellButton1..12` at load.
+# Ours: the pet page's autocast widgets in the pet action button's proportions.
 SpellBookAdapters.xml
 # RaidFrame.xml names `parent="FriendsFrame"` and MailFrame.xml inherits `FriendsFrameTabTemplate`.
 Interface\FrameXML\FriendsFrame.xml
@@ -163,25 +148,20 @@ Interface\FrameXML\QuestTimerFrame.xml
 Interface\FrameXML\ChatFrame.xml
 Interface\FrameXML\FloatingChatFrame.xml
 
-# `ShapeshiftBar_OnLoad` can show the bar, whose OnShow runs `UIParent_ManageFramePositions`. The
-# pass reads the reputation watch bar, the quest timer and watch frames, the chat frames and more
-# unguarded, so this follows all of them (enforced by
-# `every_load_time_runner_of_the_managed_pass_follows_what_it_reads`).
+# `ShapeshiftBar_OnLoad` can reach `UIParent_ManageFramePositions`, which reads the frames above
+# unguarded.
 Interface\FrameXML\BonusActionBarFrame.xml
 # `WorldStateAlwaysUpFrame`'s OnLoad runs the same pass, which also reads
 # `ShapeshiftBarLeft/Middle/Right`, so this follows BonusActionBarFrame.xml.
 Interface\FrameXML\WorldStateFrame.xml
-# `ClassTrainerListScrollFrameTemplate`, which the on-demand macro, trainer, trade skill and craft
-# addons inherit.
+# `ClassTrainerListScrollFrameTemplate`, which on-demand addons inherit.
 Interface\FrameXML\ClassTrainerFrameTemplates.xml
-# Ours: the `/errors` script error log, which 1.12 lacks, and benilla's slash commands, added to
-# `SlashCmdList` at load.
+# Ours: the `/errors` script error log and our slash commands.
 ScriptLogFrame.xml
 Interface\FrameXML\HelpFrame.xml
 Interface\FrameXML\CinematicFrame.xml
 Interface\FrameXML\TabardFrame.xml
 Interface\FrameXML\TutorialFrame.xml
-# Ours: the ESC game menu. Deviation: its ladder is the 1.15 Era client's. Last: it wraps
-# `ToggleGameMenu`, `IsOptionFrameOpen` and `UpdateMicroButtons`, captured at load, to count
-# `BenillaOptionsFrame`.
+# Ours: the ESC game menu. Last: it wraps `ToggleGameMenu`, `IsOptionFrameOpen` and
+# `UpdateMicroButtons` to count `BenillaOptionsFrame`.
 GameMenuFrame.xml

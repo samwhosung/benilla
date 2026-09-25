@@ -1,8 +1,7 @@
-//! The select screen's input — clicks (single selects, double enters — the ref's
-//! `CharacterSelectButton_OnClick`/`OnDoubleClick`), the bottom buttons, the keyboard (Enter =
-//! enter world, Escape = exit, arrows cycle with wrap), and the model rotation (drag anywhere at
-//! the pinned `CHARACTER_ROTATION_CONSTANT` 0.6°/px; hold the rotate pair at ±2°/frame). Sounds
-//! are the ref's exact set — a bare selection click is silent.
+//! The select screen's input: row clicks (single selects, double enters, as the reference's
+//! `CharacterSelectButton_OnClick`/`OnDoubleClick`), the bottom buttons, the keyboard, and model
+//! rotation (drag at `CHARACTER_ROTATION_CONSTANT` 0.6°/px, or hold a rotate button at ±2°/frame).
+//! A bare selection click is silent, as in the reference.
 
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
@@ -17,13 +16,11 @@ use super::{class_name, send_pick, ClientState, Roster};
 
 use crate::glue::{drag_yaw, ROTATE_RATE};
 
-/// The double-click window (the ref rides the OS notion; this is the conventional interval).
+/// The double-click window: the conventional interval, where the reference takes the OS's.
 const DOUBLE_CLICK_SECS: f32 = 0.4;
 
-/// Button presses + the keyboard: selection, enter world, delete (opens the dialog), create,
-/// back/escape (return to the login screen — decision 0539, retiring 0465 §6's exit-the-client
-/// collapse), arrow-key cycling. Inert while the delete dialog is up (it owns the keyboard and
-/// sits over the buttons).
+/// Button presses and the keyboard: Enter enters the world, Escape and Back return to the login
+/// screen, the arrows cycle the selection with wrap.
 #[allow(clippy::type_complexity)]
 pub(super) fn select_input(
     buttons: Query<(Entity, &SelectAction)>,
@@ -42,44 +39,36 @@ pub(super) fn select_input(
     time: Res<Time>,
     mut last_click: Local<Option<(usize, f32)>>,
 ) {
-    // A modal owns the input while it is up — the delete confirm, the AddOns list, the realm
-    // list (which stands over this screen rather than replacing it), or the shared glue dialog
-    // (a refused character login is said in that one, and its Okay must not double as this
-    // screen's Enter World / Escape).
+    // A modal owns the input while it is up: the delete confirm, the AddOns list, the realm list
+    // over this screen, or the glue dialog (whose Okay must not double as Enter World or Escape).
     if dialog.open || panel.open || realms.shown || glue_dialog.is_open() {
         return;
     }
     let now = time.elapsed_secs();
     let mut enter_world = false;
     let mut back_to_login = false;
-    // Buttons fire on the RELEASE, over the button that took the press — the reference's stock
-    // `<Button>` click mask is `LeftButtonUp` alone (1533, `crate::glue::glue_clicks`).
+    // Buttons fire on release over the pressed button: the stock `<Button>` click mask is
+    // `LeftButtonUp` alone (`crate::glue::glue_clicks`).
     for (entity, action) in &buttons {
         if !clicks.hit(entity) {
             continue;
         }
         match *action {
             SelectAction::Row(i) if i < roster.chars.len() => {
-                // Single click selects (silently, like the ref); a second click on the same row
-                // within the window is the double-click → enter world.
                 let double =
                     last_click.is_some_and(|(row, at)| row == i && now - at < DOUBLE_CLICK_SECS);
                 *last_click = Some((i, now));
-                // Selecting is gated on the row actually CHANGING — the ref's own
-                // `CharacterSelectButton_OnClick` is that gate and nothing else, so the row you
-                // are already on is not re-selected and keeps the facing you dragged into it
-                // (`Roster::click_row`).
+                // `CharacterSelectButton_OnClick` selects only when the row changes, so the
+                // current row keeps the facing dragged into it.
                 roster.click_row(i);
-                // `OnDoubleClick` runs the same gated select and then enters the world
-                // unconditionally — it does not re-test what was selected before.
+                // `OnDoubleClick` runs the same select, then enters the world unconditionally.
                 if double {
                     enter_world = true;
                 }
             }
             SelectAction::EnterWorld => enter_world = true,
             SelectAction::Delete => {
-                // The ref plays the click and opens the typed-confirm dialog for the selection
-                // (a no-selection click just plays the sound — the ref's `selectedIndex > 0` gate).
+                // With no selection the click only plays the sound (`selectedIndex > 0` gate).
                 sounds.write(GlueSound("gsCharacterSelectionDelCharacter"));
                 if let Some(c) = roster.selected_char() {
                     dialog.open_for(c.guid, c.name.clone(), c.level, class_name(c.class));
@@ -90,13 +79,12 @@ pub(super) fn select_input(
                 next.set(ClientState::CharCreate);
             }
             SelectAction::Addons => {
-                // The reference plays `gsCharacterSelectionOpen`-family click here; ours reuses
-                // the create-screen open sound rather than inventing a name the client lacks.
+                // The stock `OnClick` plays no sound (`CharacterSelect.xml:231-233`); this plays
+                // the create-screen one.
                 sounds.write(GlueSound("gsCharacterSelectionCreateNew"));
-                // The whole roster rides along so the panel's "Configure Addons For:" dropdown
-                // can fan out over every character. The realm resolves exactly
-                // as `ui_macro::identity`'s does — same fallback, so the enable files the panel
-                // writes stay keyed the way the world-entry walk reads them (1191 §7).
+                // The whole roster feeds the "Configure Addons For:" dropdown. The realm must
+                // resolve as `ui_macro::identity` does, or the enable files are keyed apart from
+                // what world entry reads.
                 let realm = roster
                     .realm
                     .as_ref()
@@ -106,11 +94,9 @@ pub(super) fn select_input(
                 panel.open_for(realm, chars);
             }
             SelectAction::Back => back_to_login = true,
-            // The reference's `CHANGE_REALM`: raise the realm list **over** this screen. Nothing
-            // is torn down and nothing is disconnected — the character park serves the list in
-            // place and only leaves when a realm is picked, so Cancel puts the player back here
-            // with the session they never left. The pending pick still has to go, or the fresh
-            // roster on the OTHER realm would be auto-answered with a guid from this one.
+            // `CHANGE_REALM`: the realm list rises over this screen with the session kept, so
+            // Cancel returns here. The pending pick is cleared, or the other realm's roster would
+            // be answered with a guid from this one.
             SelectAction::ChangeRealm => {
                 sounds.write(GlueSound("gsLoginChangeRealmOK"));
                 roster.pending_pick = None;
@@ -120,7 +106,6 @@ pub(super) fn select_input(
         }
     }
 
-    // Keyboard: Enter = enter world; Escape = back to login; Up/Left + Down/Right cycle with wrap.
     if keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::NumpadEnter) {
         enter_world = true;
     }
@@ -128,9 +113,7 @@ pub(super) fn select_input(
         back_to_login = true;
     }
     if back_to_login {
-        // The ref's Back leaves select for the login screen: drop the parked
-        // session (the IO thread re-parks pre-logon) and forget both intents — a deliberate Back
-        // must not auto-relogin.
+        // Back drops the parked session and both intents, so it does not auto-relogin.
         sounds.write(GlueSound("gsCharacterSelectionExit"));
         roster.pending_pick = None;
         intent.clear();
@@ -162,9 +145,8 @@ pub(super) fn select_input(
     }
 }
 
-/// Rotate the selected character: drag anywhere on the scene pane (the ref's full-frame mouse
-/// rotation at the pinned 0.6°/px — dragging right increases the facing), or hold a rotate button
-/// (±2°/frame; left decrements).
+/// Rotate the selected character: drag on the scene (0.6°/px, right increases the facing) or
+/// hold a rotate button (±2°/frame, left decrements).
 pub(super) fn rotate_model(
     panes: Query<(&Interaction, &SelectAction)>,
     motion: Res<AccumulatedMouseMotion>,

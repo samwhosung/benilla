@@ -1,17 +1,5 @@
-//! The select screen's **layout** — the reference `CharacterSelect.xml` arrangement rebuilt in
-//! Bevy UI, full-bleed and scaled to the window: the glue engine renders a
-//! 1024×768 virtual screen scaled to the display, so every authored offset/size below is the
-//! ref's number times `height / 768`.
-//!
-//! Bottom layer: the glue booth's fullscreen render (the `UI_<Race>` scene + the geared selected
-//! character), drag-anywhere to rotate. Over it: the WoW logo (TOPLEFT), the selected character's
-//! name (`GlueFontNormalHuge` at BOTTOM (0,100)), Enter World (200×60 at BOTTOM (0,30)) with the
-//! rotate pair tucked under it, Back (BOTTOMRIGHT (−30,25)) and Delete Character to its left, and
-//! the right-column character frame: 260×642 at TOPRIGHT (−5,−15), `Glue-Tooltip` backdrop tinted
-//! `DEFAULT_TOOLTIP_COLOR` at 0.85 alpha, holding the realm banner, the Change Realm
-//! button (back to [`crate::realm_select`]'s list), ten 256×70 row buttons from TOPLEFT
-//! (24,−65) at the authored 57 px pitch (13 px overlap, hit-inset 15), and Create New Character at
-//! the frame's BOTTOM (0,15). The delete dialog is [`super::dialog`]'s.
+//! The select screen's layout, `CharacterSelect.xml` rebuilt in Bevy UI. The glue screen is a
+//! 1024×768 virtual screen, so every authored offset and size is scaled by `height / 768`.
 
 use bevy::prelude::*;
 use bevy::ui_render::ui_material::MaterialNode;
@@ -28,30 +16,28 @@ use benilla_assets::WorldAssets;
 
 use super::wow_font;
 
-/// One clickable control on the screen — a single component so one query dispatches every button.
+/// One clickable control on the screen.
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SelectAction {
-    /// The fullscreen scene pane (drag to rotate — no click action).
+    /// The fullscreen scene pane, dragged to rotate.
     Scene,
-    /// A character-list row (0-based roster index; single click selects, double click enters).
+    /// A character-list row by 0-based roster index.
     Row(usize),
     EnterWorld,
-    /// Back to the login screen (the ref's flow — decision 0539 retired 0465 §6's
-    /// exit-the-client collapse).
+    /// Back to the login screen.
     Back,
     Delete,
     CreateChar,
-    /// Back to the realm list — drops the parked session, keeps the logon.
+    /// Raise the realm list over this screen, keeping the session.
     ChangeRealm,
-    /// Open the AddOns list — the reference's `CharacterSelectAddonsButton`.
+    /// Open the AddOns list (`CharacterSelectAddonsButton`).
     Addons,
     RotateLeft,
     RotateRight,
 }
 
-/// Root of the select screen (despawned whole on exit). `with_art` records whether the tree was
-/// built with the client art present — an artless early spawn upgrades once the art lands; `s`
-/// records the glue scale it was built at, so a window resize (mac fullscreen) rebuilds it too.
+/// Root of the select screen. `with_art` and the glue scale `s` it was built at let an artless
+/// spawn or a resize rebuild it.
 #[derive(Component)]
 pub(super) struct CharSelectUi {
     pub(super) with_art: bool,
@@ -72,32 +58,26 @@ pub(super) enum RowText {
 }
 
 const SCREEN_Z: i32 = 1100;
-/// `DEFAULT_TOOLTIP_COLOR` (AccountLogin.lua): border rgb + bg rgb; the frame applies bg at 0.85.
+/// `DEFAULT_TOOLTIP_COLOR` (`AccountLogin.lua`): border and background rgb, background at 0.85.
 const FRAME_BORDER: Color = Color::srgb(0.8, 0.8, 0.8);
 const FRAME_FILL: Color = Color::srgb(0.09, 0.09, 0.09);
 const FRAME_FILL_ALPHA: f32 = 0.85;
-/// The list's row geometry (`CharSelectCharacterButtonTemplate` + the button anchors): 256×70
-/// buttons whose next TOP anchors 13 above the previous BOTTOM — net pitch 57; the hit rect drops
-/// the bottom 15 (the visible/clickable row is 55 tall).
+/// Row geometry (`CharSelectCharacterButtonTemplate`): 256×70 buttons, each TOP 13 above the
+/// previous BOTTOM (pitch 57), the hit rect dropping the bottom 15 (55 tall).
 pub(super) const MAX_ROWS: usize = 10;
 const ROW_W: f32 = 256.0;
 const ROW_HIT_H: f32 = 55.0;
 const ROW_PITCH: f32 = 57.0;
 
-/// Entry is a cheap state reset only — the tree spawns via [`materialize_screen`], because the
-/// INITIAL state's `OnEnter` fires during app startup, before the MPQ chain / booth slots exist
-/// (a one-shot spawn here came up artless with no scene pane — the boot-order trap the create
-/// screen never sees, entered seconds later).
+/// Entry only resets state: the initial state's `OnEnter` fires at startup, before the MPQ chain
+/// and booth slots exist, so the tree spawns in [`materialize_screen`].
 pub(super) fn enter_select(mut preview: ResMut<GluePreview>) {
-    // The model faces the camera on entry (the C-side facing global's zero default; the create
-    // screen's −15° is its own reset). The booth feed (`refresh::feed_glue_preview`) establishes
-    // the scene + look from the roster each frame.
+    // The model faces the camera on entry: the reference's facing global defaults to zero.
     preview.yaw = 0.0;
 }
 
-/// Spawn the screen tree once its prerequisites exist — and upgrade an artless early spawn the
-/// moment the client art lands (despawn + respawn; the tree is cheap and static). With no client
-/// data at all the artless tree still spawns after a short grace (the graceful-absence posture).
+/// Spawn the screen tree once the art is loaded, respawn it when art lands after an artless spawn
+/// or the glue scale changes; with no client data it spawns artless after a second.
 pub(super) fn materialize_screen(
     mut commands: Commands,
     existing: Query<(Entity, &CharSelectUi)>,
@@ -118,8 +98,6 @@ pub(super) fn materialize_screen(
     let s = crate::glue::screen_scale(window.single().ok());
     match existing.single() {
         Ok((root, ui)) => {
-            // Rebuild when the art lands after an early artless spawn, or when a window resize
-            // (mac fullscreen, a drag) has changed the glue scale the tree was baked at.
             if (!ui.with_art && with_art) || ui.s != s {
                 commands.entity(root).despawn();
                 spawn_screen(
@@ -180,13 +158,8 @@ fn spawn_screen(
             BackgroundColor(BACKDROP),
         ))
         .with_children(|ui| {
-            // The 3D scene, full-bleed and first (everything else draws over it) — the ref's
-            // screen IS the fullscreen ModelFFX: the selected race's scene with the geared
-            // character standing in it. The whole pane drags to rotate (the ref's full-frame mouse
-            // rotation); the page tint behind it is the no-art fallback. It keeps the WINDOW while
-            // the chrome below does not: a pillarbox's bars are the booth camera's own output
-            // clear inside this window-sized target (1619 §3), so the pane that samples it covers
-            // the window and brings the bars with it.
+            // The fullscreen ModelFFX scene, first so everything draws over it. It covers the
+            // window, not the canvas: a pillarbox's bars are the booth camera's own clear.
             let mut pane = ui.spawn((
                 SelectAction::Scene,
                 Button,
@@ -205,18 +178,15 @@ fn spawn_screen(
         })
         .id();
 
-    // ...and every piece of chrome hangs off the CANVAS — the boxed scene's own rect (decision
-    // 2091). Anchored to the window instead, the logo and the whole right-hand character frame
-    // (with Delete Character and Back) stood out in the bars at 21:9.
+    // The chrome hangs off the canvas, the boxed scene's rect, so none of it sits in the bars.
     let mut canvas = commands.spawn((crate::glue::glue_canvas(), ChildOf(root)));
     canvas.with_children(|ui| {
-        // The WoW logo (`CharacterSelectLogo`, 256×128 at TOPLEFT (3,−7)).
+        // `CharacterSelectLogo`, 256×128 at TOPLEFT (3,-7).
         if let Some(logo) = &art.logo {
             ui.spawn((ImageNode::new(logo.clone()), abs(s, 3.0, 7.0, 256.0, 128.0)));
         }
 
-        // The selected character's name (`CharSelectCharacterName`, GlueFontNormalHuge 22 gold,
-        // BOTTOM (0,100)).
+        // `CharSelectCharacterName`, GlueFontNormalHuge gold at BOTTOM (0,100).
         ui.spawn((Node {
             position_type: PositionType::Absolute,
             bottom: px(100.0),
@@ -241,7 +211,7 @@ fn spawn_screen(
                 );
             });
 
-        // Enter World (`CharSelectEnterWorldButton`, GlueButtonTemplate 200×60 at BOTTOM (0,30)).
+        // `CharSelectEnterWorldButton`, GlueButtonTemplate 200×60 at BOTTOM (0,30).
         ui.spawn((Node {
             position_type: PositionType::Absolute,
             bottom: px(30.0),
@@ -265,11 +235,7 @@ fn spawn_screen(
 
         rotate_cluster(ui, art, &font, s);
 
-        // **AddOns** — the reference's `CharacterSelectAddonsButton`, which 1191
-        // §5 recorded as never built because there was no list behind it. There is now. Bottom
-        // LEFT, out of the way of the Enter World / Back cluster; the reference sits it in the
-        // same lower band. Shown only when something is installed, exactly as the reference's
-        // `UpdateAddonButton` hides it on `GetNumAddOns() == 0`.
+        // `CharacterSelectAddonsButton`, hidden on `GetNumAddOns() == 0` (`UpdateAddonButton`).
         if super::addons::AddonsPanel::any_installed() {
             ui.spawn((Node {
                 position_type: PositionType::Absolute,
@@ -293,7 +259,7 @@ fn spawn_screen(
                 });
         }
 
-        // Back (100×35 at BOTTOMRIGHT (−30,25)) and Delete Character (165×35 at its LEFT).
+        // Back (100×35 at BOTTOMRIGHT (-30,25)) and Delete Character (165×35 at its LEFT).
         ui.spawn((Node {
             position_type: PositionType::Absolute,
             right: px(30.0),
@@ -330,9 +296,7 @@ fn spawn_screen(
     });
 }
 
-/// The right-column character frame (`CharacterSelectCharacterFrame`, 260×642 at TOPRIGHT
-/// (−5,−15)): the `Glue-Tooltip` backdrop, the realm banner + disabled Change Realm, the ten row
-/// buttons, and Create New Character at the bottom.
+/// The right-column `CharacterSelectCharacterFrame`, 260×642 at TOPRIGHT (-5,-15).
 fn character_frame(
     ui: &mut ChildSpawnerCommands,
     art: &GlueArt,
@@ -350,8 +314,8 @@ fn character_frame(
         ..default()
     },))
         .with_children(|frame| {
-            // The backdrop: bg inset (10,5,4,9) tiled at 16, the 16-edge border over it — both
-            // tinted with DEFAULT_TOOLTIP_COLOR (border rgb / bg rgb at 0.85), the ref's OnLoad.
+            // Background inset (10,5,4,9) tiled at 16 under the 16-edge border, both tinted with
+            // `DEFAULT_TOOLTIP_COLOR` in the reference's OnLoad.
             if let (Some(bg), Some(border)) = (&art.tooltip_bg, &art.name_border) {
                 frame.spawn((
                     tiled_bg_node(
@@ -376,7 +340,7 @@ fn character_frame(
                     overlay(),
                 ));
             }
-            // The realm banner (`CharSelectRealmName`, GlueFontDisableLarge 18 at TOP (0,−10)).
+            // `CharSelectRealmName`, GlueFontDisableLarge at TOP (0,-10).
             outlined_text(
                 frame,
                 Node {
@@ -397,9 +361,6 @@ fn character_frame(
                 font,
                 s,
             );
-            // Change Realm (below the banner) — live. It was drawn permanently disabled for as
-            // long as there was no realm list behind it to go back to; there is now, and it
-            // costs a world dial rather than a re-login (`crate::realm_select`).
             frame
                 .spawn((Node {
                     position_type: PositionType::Absolute,
@@ -421,13 +382,12 @@ fn character_frame(
                         s,
                     );
                 });
-            // The ten row buttons (256×70 from TOPLEFT (24,−65), net pitch 57 — the 13 px overlap
-            // is the hit-rect's dropped bottom 15; our nodes ARE the hit shape, 55 tall).
+            // From TOPLEFT (24,-65); the nodes are the 55-tall hit shape.
             for row in 0..MAX_ROWS {
                 row_button(frame, art, font, row, s);
             }
-            // Create New Character (width ≈ text+50 ×45 at the frame BOTTOM (0,15) — the ref's
-            // shipped client always shows it here; the per-free-row anchor is commented out).
+            // Create New Character at the frame's BOTTOM (0,15); the reference's per-free-row
+            // anchor is commented out.
             frame
                 .spawn((Node {
                     position_type: PositionType::Absolute,
@@ -452,10 +412,8 @@ fn character_frame(
         });
 }
 
-/// One character-list row (`CharSelectCharacterButtonTemplate`): Name (GlueFontNormal 15 gold at
-/// TOPLEFT (0,−5)), Info (GlueFontHighlightSmall 12 white below), Location (GlueFontDisableSmall
-/// 12 gray below), and the ADD-mode `Glue-CharacterSelect-Highlight` card (256×74 at (−20,+8)) —
-/// lit on hover and LOCKED on the selected row.
+/// One `CharSelectCharacterButtonTemplate` row: Name, Info and Location lines and the ADD-mode
+/// `Glue-CharacterSelect-Highlight` card (256×74 at (-20,+8)), lit on hover, locked when selected.
 fn row_button(
     frame: &mut ChildSpawnerCommands,
     art: &GlueArt,
@@ -468,8 +426,8 @@ fn row_button(
         .spawn((
             SelectAction::Row(row),
             Button,
-            LockHighlight::default(), // `LockHighlight` on the selected row (refresh.rs)
-            Visibility::Hidden,       // shown by the refresh while the roster has this row
+            LockHighlight::default(),
+            Visibility::Hidden,
             Node {
                 position_type: PositionType::Absolute,
                 left: px(24.0),
@@ -548,10 +506,8 @@ fn row_button(
         });
 }
 
-/// The rotate pair (`CharacterSelectRotateLeft/Right`, 50² each): the left button's TOP anchors to
-/// Enter World's BOTTOM at (−15,+19) — the pair sits flush with the screen's bottom edge, tucked
-/// under the button — the right overlapping −19; `UI-RotationRight-Big` art with the left mirrored,
-/// `UI-Common-MouseHilight` ADD on hover.
+/// The rotate pair (`CharacterSelectRotateLeft/Right`, 50² each): the left's TOP anchors to Enter
+/// World's BOTTOM at (-15,+19), the right overlaps it by 19; the left mirrors the right's art.
 fn rotate_cluster(ui: &mut ChildSpawnerCommands, art: &GlueArt, font: &Handle<Font>, s: f32) {
     let px = |v: f32| Val::Px(v * s);
     ui.spawn((Node {
@@ -625,26 +581,10 @@ fn rotate_cluster(ui: &mut ChildSpawnerCommands, art: &GlueArt, font: &Handle<Fo
         });
 }
 
-/// **A world loading cover outranks the glue screen.**
-///
-/// The glue screens sit at [`SCREEN_Z`] = 1100 and the loading screen at 1000, so the glue draws
-/// *over* the cover. That is right for the logout direction — the world→glue swap must show the
-/// glue — and wrong for the entry one: the cover is raised in `WorldStage::Present` while we are
-/// still `CharSelect`, so the raise frame renders the character screen on top of it and the FIRST
-/// frame that can show the cover is the **state-flip** frame, which is also the frame the whole
-/// world arrives on. Measured this round: click → cover on the glass was ~100 ms, of which the
-/// flip frame alone was 60 — the character screen held, frozen, for every millisecond of it. That
-/// is the director's *"the char freezes briefly before the loading screen appears"*; 1345 fixed
-/// the same shape for the FrameXML burst and left this half standing, because nothing had ever
-/// asked which frame the cover first *drew* on.
-///
-/// Hiding the root moves the cover onto the raise frame's own render, a whole frame earlier and —
-/// far more importantly — **off** the flip frame's critical path: the cover is already drawn and
-/// presenting while that frame churns. Registered after `WorldStage::Present` so it reads *this*
-/// frame's raise; visibility propagates in `PostUpdate` and renders the same frame, exactly like
-/// the loading screen's own show/hide. Read from [`LoadingScreen::covering`] and not from
-/// [`crate::loading_screen::EntryCover`]: this is the one consumer that must react while still
-/// `CharSelect`, which is precisely the frame `EntryCover` cannot count.
+/// Hide the screen under a world loading cover. The glue at z 1100 draws over the loading screen
+/// at z 1000, and on world entry the cover rises while still `CharSelect`; hiding the root shows it
+/// on that frame, not the state-flip frame the world loads on. Runs after `WorldStage::Present` and
+/// reads `LoadingScreen::covering`, since `EntryCover` does not count this frame.
 pub(super) fn hide_under_world_cover(
     loading: Res<crate::loading_screen::LoadingScreen>,
     mut roots: Query<&mut Visibility, With<CharSelectUi>>,
@@ -671,15 +611,10 @@ pub(super) fn exit_select(
     for e in &roots {
         commands.entity(e).despawn();
     }
-    // Clear the booth + scene (entering the world or the create screen; the latter re-establishes
-    // its own the same frame) and drop any open dialog state.
     preview.look = None;
     preview.scene = None;
     dialog.close();
-    // The shared glue dialog is this screen's too while it is up (a refused character login), and
-    // it must not follow us into the world or onto the create screen — the login screen's own
-    // `exit_login` closes it on the same edge for the same reason. The tree goes with it **here**
-    // rather than being left to the driver: the driver runs on the glue screens only, so on the
-    // edges out of the glue layer there would be nobody left to despawn the root.
+    // The glue dialog must not follow into the world or the create screen. Its tree is despawned
+    // here, since its driver runs on the glue screens only.
     glue_dialog.dismiss(&mut commands);
 }

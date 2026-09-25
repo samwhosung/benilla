@@ -1,17 +1,9 @@
 <Ui>
     <!--
-        The game menu, the frame ESC opens. Its chrome is the reference GameMenuFrame.xml's: DIALOG
-        strata, the UI-DialogBox backdrop (insets 11/12/12/11, 32px tile and edge), the 256x64
-        header at TOP +12 with the title 14px down it, the reference's click sounds, and the stock
-        `GameMenuButtonTemplate`, which the era's MainMenuFrameButtonTemplate matches in art,
-        size and label fonts.
-        Deviation: the ladder is the 1.15 era client's ESC menu (GameMenuFrame.lua l.62-162),
-        because its settings screens replace 1.12's, which are much worse to use. It keeps the
-        era's layout numbers, padding 32 top and 28 elsewhere (MainMenuFrameTemplates.xml
-        l.18-33) and a 20-unit gap between groups (MainMenuFrameTemplates.lua l.61-71), and drops
-        the era's AddOns rung, because the character-select AddOns screen is the only addon UI;
-        Key Bindings is in the options window, as in the era.
-        Names are the reference's, unprefixed: addons address `GameMenuFrame` by name.
+        The game menu ESC opens, in the chrome of the reference's GameMenuFrame.xml.
+        Deviation: the rungs are the 1.15 era client's ESC menu, because its settings screens
+        replace 1.12's, which are much worse to use; the era's AddOns rung is dropped, since the
+        character-select AddOns screen is the only addon UI. Addons address `GameMenuFrame` by name.
     -->
     <Script><![CDATA[
         -- Label strings as `X = X or "..."`, so a stock GlobalStrings value wins where one exists.
@@ -24,18 +16,15 @@
         RETURN_TO_GAME = RETURN_TO_GAME or "Return to Game"
         CANCEL = CANCEL or "Cancel"
 
-        -- Labels and disables a rung with nothing behind it yet (Edit Mode, Support), greyed on the
-        -- template's -Disabled art the way the era menu greys a dead entry.
+        -- A rung with nothing behind it yet (Edit Mode, Support), disabled.
         function GameMenuButton_Pending(button, text)
             button:SetText(text)
             button:Disable()
         end
 
         -- ══ Our options window in the stock "is an options window open?" checks ══
-        -- The three stock functions name the reference's options windows, which here are hidden
-        -- stock frames, so each is wrapped to add `BenillaOptionsFrame` and still runs the stock
-        -- body. Wrapped here because this file loads last: `UpdateMicroButtons`
-        -- (MainMenuBarMicroButtons.xml) loads after our options window.
+        -- Each wraps the stock body to add `BenillaOptionsFrame`; here because this file loads
+        -- last, after MainMenuBarMicroButtons.xml.
         local Ref_IsOptionFrameOpen = IsOptionFrameOpen
         local Ref_ToggleGameMenu = ToggleGameMenu
         local Ref_UpdateMicroButtons = UpdateMicroButtons
@@ -45,8 +34,7 @@
             return BenillaOptionsFrame and BenillaOptionsFrame:IsVisible()
         end
 
-        -- `UIParent.lua:996`, read by `CloseAllWindows_WithExceptions`: a yes keeps the ESC sweep
-        -- off the centre panel, which our window is, so ESC closes it through its own rung.
+        -- `UIParent.lua:996`: a yes keeps the ESC sweep off the centre panel, which our window is.
         function IsOptionFrameOpen()
             if BenillaOptions_IsOpen() then
                 return 1
@@ -54,13 +42,11 @@
             return Ref_IsOptionFrameOpen()
         end
 
-        -- `UIParent.lua:1465-1497`, the ESC ladder: static popup first, then an open options
-        -- window, then the rest of the stock ladder. The stock body re-runs the popup rung, a pure
-        -- scan when nothing is shown (`StaticPopup.lua:1879-1893`). Our Close button's click is
-        -- the discard-and-hide the reference reaches through `OptionsFrameCancel:Click()`.
+        -- `UIParent.lua:1465-1497`: static popup, then an open options window, then the stock
+        -- ladder. Our Close click is the discard-and-hide of the reference's `OptionsFrameCancel`.
         function ToggleGameMenu(clicked)
             if clicked then
-                -- As the reference's `clicked` arm: close an options window, then still toggle.
+                -- As the reference's `clicked` arm: close an options window, then toggle.
                 if BenillaOptions_IsOpen() then
                     BenillaOptionsFrameCloseButton:Click()
                 end
@@ -76,9 +62,8 @@
             return Ref_ToggleGameMenu(clicked)
         end
 
-        -- `MainMenuBarMicroButtons.lua:47-58`: a post-hook that only ever pushes the Main Menu
-        -- button, never releases it, so the stock decision over its six frames stands and ours adds
-        -- the seventh. Guarded for a test kit that loads this file without the micro bar.
+        -- `MainMenuBarMicroButtons.lua:47-58`: only ever pushes the button, so the stock decision
+        -- stands and ours adds our window.
         function UpdateMicroButtons()
             if Ref_UpdateMicroButtons then
                 Ref_UpdateMicroButtons()
@@ -90,18 +75,15 @@
 
     ]]></Script>
 
-    <!-- The era's header font, GameFontNormalMed1 (FRIZQT 13, gold): an era name 1.12's Fonts.xml
-         lacks, declared beside its one consumer. -->
+    <!-- The era's header font, which 1.12's Fonts.xml lacks. -->
     <Font name="GameFontNormalMed1" inherits="GameFontNormal" virtual="true">
         <FontHeight><AbsValue val="13"/></FontHeight>
     </Font>
 
 
-    <!-- The reference frame's attributes (GameMenuFrame.xml l.3) except `movable`, which is inert
-         there: the reference defines no drag scripts. -->
+    <!-- GameMenuFrame.xml:4's attributes but `movable`, inert there: it has no drag scripts. -->
     <Frame name="GameMenuFrame" parent="UIParent" frameStrata="DIALOG" toplevel="true" enableMouse="true" hidden="true">
-        <!-- The era layout: 28+144+28 wide; 32 top and 28 bottom padding around seven 21-unit
-             rungs and three 20-unit section gaps. -->
+        <!-- The era layout: 28+144+28 wide, 32 top, 28 bottom, 7 rungs of 21, 3 gaps of 20. -->
         <Size><AbsDimension x="200" y="267"/></Size>
         <Anchors><Anchor point="CENTER"/></Anchors>
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
@@ -115,8 +97,7 @@
                     <Size><AbsDimension x="256" y="64"/></Size>
                     <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="12"/></Offset></Anchor></Anchors>
                 </Texture>
-                <!-- The era's 13px header font (MainMenuFrameMixin:OnLoad) on the 1.12 seat, which
-                     is within half a unit of the era's. -->
+                <!-- The era's 13px font on the 1.12 seat, within half a unit of the era's. -->
                 <FontString name="GameMenuFrameTitle" inherits="GameFontNormalMed1" text="MAIN_MENU">
                     <Anchors>
                         <Anchor point="TOP" relativeTo="GameMenuFrameHeader"><Offset><AbsDimension x="0" y="-14"/></Offset></Anchor>
@@ -126,9 +107,7 @@
         </Layers>
         <Frames>
 
-            <!-- The era's Options entry (GameMenuFrame.lua l.88), opening our options window. A
-                 literal label: 1.12 has no GAMEMENU_OPTIONS, and its OPTIONS_MENU is a different
-                 string, "Options Menu". -->
+            <!-- Literal: 1.12 has no GAMEMENU_OPTIONS; its OPTIONS_MENU is "Options Menu". -->
             <Button name="GameMenuButtonOptions" inherits="GameMenuButtonTemplate" text="Options">
                 <Anchors>
                     <Anchor point="TOPLEFT"><Offset><AbsDimension x="28" y="-32"/></Offset></Anchor>
@@ -158,7 +137,7 @@
                 <Anchors>
                     <Anchor point="TOPLEFT" relativeTo="GameMenuButtonSupport" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="0"/></Offset></Anchor>
                 </Anchors>
-                <!-- The reference's body (GameMenuFrame.xml l.118-122). -->
+                <!-- GameMenuFrame.xml:118-122. -->
                 <Scripts>
                     <OnClick>
                         PlaySound("igMainMenuOption")
@@ -168,8 +147,7 @@
                 </Scripts>
             </Button>
 
-            <!-- The reference's OnShow disables Logout and Exit Game while a CAMP or QUIT countdown
-                 is up, so a running countdown cannot be re-armed. -->
+            <!-- As the reference: disabled while a CAMP or QUIT countdown is up. -->
             <Button name="GameMenuButtonLogout" inherits="GameMenuButtonTemplate" text="LOGOUT">
                 <Anchors>
                     <Anchor point="TOPLEFT" relativeTo="GameMenuButtonMacros" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-20"/></Offset></Anchor>
@@ -220,14 +198,11 @@
                 </Scripts>
             </Button>
         </Frames>
-        <!-- The reference's OnShow/OnHide: the Main Menu micro button pushes in and the bag
-             buttons grey out while the menu is up. Guarded for a test that loads this file
-             without the action bar. -->
+        <!-- The reference's OnShow/OnHide, guarded for a test that loads no action bar. -->
         <Scripts>
             <OnShow>
-                -- Deviation: ERA_WINDOW_SCALE (OptionsFrame.xml, loaded earlier) stands in for the
-                -- UIParent scale the era draws this menu and its options window at.
-                -- A second OnShow on this frame would replace this one: the last SetScript wins.
+                -- ERA_WINDOW_SCALE (OptionsFrame.xml) stands in for the era's UIParent scale. A
+                -- second OnShow on this frame would replace this one.
                 this:SetScale(ERA_WINDOW_SCALE or 1)
                 if UpdateMicroButtons then UpdateMicroButtons() end
                 if Disable_BagButtons then Disable_BagButtons() end

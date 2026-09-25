@@ -1,49 +1,17 @@
-//! The **character-select AddOns screen** — the one addon surface (the
-//! in-game panel was retired at the director's call, 2026-08-14; `ReloadUI` itself stays).
+//! The character-select AddOns screen, the reference's `GlueXML\AddonList.xml/.lua` layout drawn
+//! natively: per row a tri-state checkbox (`GetAddOnEnableState`), the title gold when loadable,
+//! red when enabled and broken except `DEP_DISABLED` (grey), and the `ADDON_<reason>` status. A
+//! row has no highlight and no click; only its checkbox toggles. Okay is `SaveAddOns` (the next
+//! login applies it), Cancel, Escape and the X are `ResetAddOns`.
 //!
-//! The reference is `Interface\GlueXML\AddonList.xml/.lua`, read off the player's own patch chain
-//! (`patch.MPQ` — 1293 located it after 1197 believed it missing), and **this screen now draws the
-//! authored layout**: the six `HelpFrame-*` plate pieces that are the whole framed panel, the
-//! `UI-DialogBox-Header` title plate, the `GlueCloseButton`, the `GlueDropDownMenuTemplate`
-//! control, the 19×(16+4) entry column, the `GlueScrollFrameTemplate` bar with the
-//! `UI-Character-ScrollBar` track, and the four-button bottom row in the reference's own order
-//! (Disable All · Enable All ··· Okay · Cancel). Geometry constants below are the authored
-//! numbers, resolved top-down into the 640×512 plate. Behaviour is **re-expressed natively** —
-//! written under 1234's rule, which 1602 has since retired; the native form stays as a design
-//! choice, not a law.
+//! Deviation: no Script Memory dial, because there is no Lua heap cap here; no URL or update
+//! buttons, because launching a browser is an outward action (`## URL` shows in the tooltip); no
+//! security icon, because no installed addon carries `## Secure` honestly and it would always
+//! read insecure.
 //!
-//! ## What the reference does, and what we do
-//!
-//! `AddonList_Update` per row: a **tri-state** checkbox (`GetAddOnEnableState` → 0/1/2, the grey
-//! check drawn with `UI-CheckBox-Check-Disabled`), the title (`## Title` else the folder name)
-//! coloured **gold when loadable, red when enabled-and-broken — except `DEP_DISABLED`, which reads
-//! grey** (AddonList.lua's own exception), and the status token (`getglobal("ADDON_"..reason)`) in
-//! `GlueFontNormalSmall` 30 units right of the title box. Titles render their `|cAARRGGBB` markup
-//! as colour, exactly as every FontString does — as does every other string on this screen,
-//! the tooltip included ([`crate::glue::widgets::markup_spans`]). Hovering a row raises
-//! `AddonTooltip` (title + notes + `ADDON_DEPENDENCIES`) anchored to the row's left; hovering a
-//! MIXED checkbox raises `ENABLED_FOR_SOME`. **A row has no hover highlight and no row-click** —
-//! only the checkbox toggles (the entry template carries no `HighlightTexture` and no `OnClick`);
-//! reproducing that is also what killed the hover-respawn flashing the director reported: the
-//! spawned tree no longer changes under the cursor at all.
-//!
-//! Carried from 1197/1293: the character dropdown ("All" + the realm roster, staging
-//! per-character), the `checkAddonVersion`-inverted force-load checkbox, Okay = `SaveAddOns`
-//! (write the per-character enable files; the next login IS the apply point), Cancel/ESC/the X =
-//! `ResetAddOns` (discard). **Not built**, per 1197's standing rejections (Script Memory
-//! reaffirmed by the director, 2026-08-14): the Script Memory dial, the URL/update launch buttons
-//! (`## URL` shows in the tooltip instead — information, not a trigger), the security icon.
-//!
-//! ## Why it reads the folder rather than the VM
-//!
-//! At character select no addon has been *loaded* — `load_third_party` is a world-entry step
-//! (1191 §2) — so `GetNumAddOns()` would answer 0. The screen asks
-//! [`crate::ui_script::addons::installed_rows`] instead, and resolves the enable bits through
-//! [`crate::ui_script::addons::EnableStore`] exactly as the world-entry walk does: the same
-//! discovery, the same manifest parser, the same store. Two views of one folder, never two
-//! folders. Both reads happen **once at open** ([`AddonsPanel::open_for`]) — the folder walk used
-//! to run once per roster character, which decision 2311 retired along with the per-character
-//! `installed()` it was there to feed.
+//! No addon is loaded at the glue, so `GetNumAddOns()` would answer 0: the screen reads the folder
+//! once at open through [`crate::ui_script::addons::installed_rows`] and
+//! [`crate::ui_script::addons::EnableStore`], as world entry does.
 
 use bevy::prelude::*;
 use bevy::ui_render::ui_material::MaterialNode;
@@ -63,18 +31,18 @@ use crate::ui_script::addons::{self, InstalledAddOn};
 
 use super::wow_font;
 
-// ── The authored geometry (AddonList.xml, patch chain) — y resolved top-down in the plate ────────
+// ── The authored geometry (`AddonList.xml`), y resolved top-down in the plate ──────────────────
 
-/// `AddonListBackground` — the 640×512 `HelpFrame-*` plate, anchored CENTER +(24, 0).
+/// `AddonListBackground`, the 640×512 `HelpFrame-*` plate, anchored CENTER +(24, 0).
 const BG_W: f32 = 640.0;
 const BG_H: f32 = 512.0;
 const BG_CENTER_OFF_X: f32 = 24.0;
-/// `MAX_ADDONS_DISPLAYED` (AddonList.lua l.2).
+/// `MAX_ADDONS_DISPLAYED` (`AddonList.lua:2`).
 const MAX_ROWS: usize = 19;
-/// `ADDON_BUTTON_HEIGHT` (l.1); each entry anchors TOP to the previous BOTTOM at (0, −4).
+/// `ADDON_BUTTON_HEIGHT` (`AddonList.lua:1`); each entry's TOP sits 4 below the previous BOTTOM.
 const ROW_H: f32 = 16.0;
 const ROW_PITCH: f32 = ROW_H + 4.0;
-/// Entry 1 sits at TOPLEFT (37, −80); entries are 520 wide.
+/// Entry 1 sits at TOPLEFT (37, -80); entries are 520 wide.
 const ROW_LEFT: f32 = 37.0;
 const ROW_TOP: f32 = 80.0;
 const ROW_W: f32 = 520.0;
@@ -82,8 +50,8 @@ const ROW_W: f32 = 520.0;
 const TITLE_LEFT: f32 = 42.0;
 const TITLE_W: f32 = 220.0;
 const STATUS_LEFT: f32 = TITLE_LEFT + TITLE_W + 30.0;
-/// `AddonCharacterDropDown` at TOPLEFT (0, −38); its `CharacterCreate-LabelFrame` art is three
-/// 64-tall slices (25 | 115 | 25) whose top rides 17 ABOVE the 32-tall frame.
+/// `AddonCharacterDropDown` at TOPLEFT (0, -38); its `CharacterCreate-LabelFrame` art is three
+/// 64-tall slices (25 | 115 | 25) whose top rides 17 above the 32-tall frame.
 const DROP_TOP: f32 = 38.0;
 const DROP_ART_TOP: f32 = DROP_TOP - 17.0;
 const DROP_ART_H: f32 = 64.0;
@@ -95,36 +63,33 @@ const DROP_TC: [[f32; 4]; 3] = [
     [0.1953125, 0.8046875, 0.0, 1.0],
     [0.8046875, 1.0, 0.0, 1.0],
 ];
-/// The open list: TOPLEFT to the dropdown frame's BOTTOMLEFT +(8, 22 up) → (8, 48) in the plate.
+/// The open list: TOPLEFT to the dropdown's BOTTOMLEFT +(8, 22 up), (8, 48) in the plate.
 const DROP_LIST_LEFT: f32 = 8.0;
 const DROP_LIST_TOP: f32 = DROP_TOP + 32.0 - 22.0;
-/// `AddonListForceLoad`: a 32² checkbox whose TOP-center sits at (+50, −42); label at LEFT +36.
+/// `AddonListForceLoad`: a 32² checkbox whose TOP-center sits at (+50, -42); label at LEFT +36.
 const FORCE_LEFT: f32 = BG_W / 2.0 + 50.0 - 16.0;
 const FORCE_TOP: f32 = 42.0;
-/// `AddonListScrollFrame`: TOPLEFT (49, −73), 510×390; its slider column and track hang right.
+/// `AddonListScrollFrame`: TOPLEFT (49, -73), 510×390; its slider column and track hang right.
 const SCROLL_TOP: f32 = 73.0;
 const SCROLL_H: f32 = 390.0;
 const SCROLL_RIGHT: f32 = 49.0 + 510.0;
-/// The slider column between the two 16² arrows — the `<Slider>` the reference's
-/// `GlueScrollBarTemplate` authors, and the surface a drag measures itself against ([`ScrollBand`]).
+/// The slider column between the two 16² arrows, `GlueScrollBarTemplate`'s `<Slider>`.
 const BAR_TOP: f32 = SCROLL_TOP + 16.0;
 const BAR_H: f32 = SCROLL_H - 32.0;
-/// The knob's extent along the track (`UI-ScrollBar-Knob`, 16²).
+/// `UI-ScrollBar-Knob`, 16².
 const KNOB: f32 = 16.0;
 /// The bottom row: 35 tall, 13 off the plate bottom.
 const BTN_TOP: f32 = BG_H - 13.0 - 35.0;
 
-/// A red that reads as "this is enabled and will not load" — `SetTextColor(1.0, 0.1, 0.1)`,
-/// AddonList.lua's own value.
+/// Enabled but will not load: `SetTextColor(1.0, 0.1, 0.1)` (`AddonList.lua:63`).
 const BROKEN: Color = Color::srgb(1.0, 0.1, 0.1);
-/// The `AddonTooltip` backdrop tint — its `OnLoad`'s `SetBackdropColor(0.09, 0.09, 0.19)`.
+/// The `AddonTooltip` backdrop tint, its `OnLoad`'s `SetBackdropColor(0.09, 0.09, 0.19)`.
 const TIP_FILL: Color = Color::srgb(0.09, 0.09, 0.19);
 /// The tooltip's authored width.
 const TIP_W: f32 = 220.0;
 
-/// One checkbox's face — the reference's `GetAddOnEnableState` values by their meaning
-/// (0 / 2 / 1 = [`Self::Off`] / [`Self::On`] / [`Self::Mixed`]). `Mixed` exists only in the
-/// All view: enabled for SOME of the characters, not all of them.
+/// One checkbox's face, `GetAddOnEnableState`'s 0 / 2 / 1; `Mixed` (enabled for some characters)
+/// exists only in the All view.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum BoxState {
     Off,
@@ -132,72 +97,46 @@ enum BoxState {
     Mixed,
 }
 
-/// What the cursor is over, for the two tooltips: the row strip raises the `AddonTooltip` body,
-/// the checkbox raises `ENABLED_FOR_SOME` (only when its state is MIXED) — the reference splits
-/// them the same way (the entry's `OnEnter` vs the CheckButton's).
+/// What the cursor is over: a row raises `AddonTooltip`, a mixed checkbox `ENABLED_FOR_SOME`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Hover {
     Row(usize),
     Check(usize),
 }
 
-/// The screen's state. Opened by the select screen's AddOns button, driven by
-/// [`drive_addons_panel`], cleared on leaving character select.
-///
-/// `staged` is the whole point of Okay/Cancel: edits go here — one column per roster character —
-/// and only Okay writes the files. The reference does the same with `SaveAddOns`/`ResetAddOns`
-/// over the client's in-memory per-character records.
+/// The screen's state; edits stage per character and only Okay writes the files.
 #[derive(Resource)]
 pub(super) struct AddonsPanel {
     pub(super) open: bool,
-    /// The installed list as read at open — never re-read while up, so a row's index is stable.
-    /// Shared **metadata**: its own `enabled` bit is the first column's read and nothing repaints
-    /// from it; the live enable state is `staged`'s.
+    /// The installed list read at open, so a row's index is stable; the enable state is `staged`'s.
     list: Vec<InstalledAddOn>,
-    /// The realm the roster belongs to — half of every enable file's key (0997's `(realm, name)`).
+    /// The roster's realm, half of every enable file's `(realm, name)` key.
     realm: String,
-    /// The roster's character names at open, the dropdown's entries after "All". Empty on a fresh
-    /// account; `staged` then holds one anonymous column so the checkboxes still work (below).
+    /// The roster's character names, the dropdown's entries after "All".
     chars: Vec<String>,
-    /// The edited enable state: `staged[c][i]` is character `c`'s bit for `list[i]`. When `chars`
-    /// is empty this is ONE anonymous column (the folder with nobody's file — everything enabled);
-    /// it has no file behind it, so Okay writes nothing, exactly what the pre-1293 single-identity
-    /// screen did with no character.
+    /// `staged[c][i]` is character `c`'s bit for `list[i]`; with no characters, one anonymous
+    /// column that Okay does not write.
     staged: Vec<Vec<bool>>,
-    /// What the files said at open, column for column — Okay writes only the columns that moved
-    /// off this ([`Self::save_staged`]).
+    /// What the files said at open; Okay writes only the columns that moved off it.
     baseline: Vec<Vec<bool>>,
-    /// The dropdown's selection: `None` = "All", `Some(c)` = `chars[c]`. Which character's enable
-    /// state the list edits — and whose staged bits feed the gate.
+    /// The dropdown's selection: `None` is "All", `Some(c)` is `chars[c]`.
     view: Option<usize>,
-    /// The dropdown's option list is up (drawn over the list area).
     dropdown_open: bool,
-    /// The live `checkAddonVersion` mirror ("1"/absent = check ON = the force-load box UNTICKED),
-    /// refreshed from the boot VM every frame by [`drive_addons_panel`] — the same live-per-query
-    /// read the gate's verbs make (1292 §2.2), which is why toggling the box repaints the statuses
-    /// with nothing rescanned.
+    /// The live `checkAddonVersion`, true meaning the force-load box is unticked; read off the
+    /// boot VM every frame.
     version_check: bool,
     /// First visible row (`AddonList.offset`).
     offset: usize,
-    /// The scroll bar's in-flight drag: the grab [`slider_grab`] returned at the press, as a
-    /// fraction of the band's own height ([`ScrollBand`]).
-    ///
-    /// Held here rather than read back off `Interaction::Pressed` because the panel **respawns
-    /// its whole tree** on any repaint — and a drag repaints it every row it crosses. A fresh
-    /// entity's `Interaction` starts at `None`, so a capture inferred from the widget would drop
-    /// the moment the drag moved the list. The button's own held state (`ButtonInput`) is the
-    /// only thing that survives a respawn, so that is what the drag rides on.
+    /// The scroll drag's grab, as a fraction of the band's height. Held here, not read off
+    /// `Interaction::Pressed`: a drag respawns the tree, and a fresh entity's `Interaction` is
+    /// `None`.
     drag: Option<f32>,
-    /// The spawned tooltip, keyed by what it describes — **the only thing hover drives, and
-    /// never a repaint trigger**. The old model set `dirty` on every hover change and respawned
-    /// the whole tree, which reset the fresh entities' `Interaction` to `None`, which flipped
-    /// the hover back, which respawned again — the "border flashing" the director reported.
+    /// The spawned tooltip, keyed by what it describes. Hover never sets `dirty`: a respawn resets
+    /// `Interaction`, which would flip the hover and respawn again.
     tip: Option<(Hover, Entity)>,
     root: Option<Entity>,
     spawned_s: f32,
-    /// Set while the spawned tree no longer matches the state — one flag rather than a diff,
-    /// because a 19-row list is cheaper to respawn than to reconcile. Hover is deliberately NOT
-    /// part of this (above).
+    /// The spawned tree no longer matches the state and is respawned whole.
     dirty: bool,
 }
 
@@ -212,9 +151,8 @@ impl Default for AddonsPanel {
             baseline: Vec::new(),
             view: None,
             dropdown_open: false,
-            // The registrar default: "1" = check ON (1292, byte-verified). Hand-written Default
-            // for this one field — a derived `false` would paint every out-of-date row loadable
-            // for the frame before the drive system's first CVar read corrects it.
+            // The registered default, "1"; a `false` would paint out-of-date rows loadable for a
+            // frame.
             version_check: true,
             offset: 0,
             drag: None,
@@ -227,22 +165,13 @@ impl Default for AddonsPanel {
 }
 
 impl AddonsPanel {
-    /// Open for this realm's roster: the folder read **once** into one metadata list, and one
-    /// staged column per character off the enable store. The reference's `AddonList_OnShow` also
-    /// re-reads (`AddonList_Update`), so a folder that changed under us is picked up.
-    ///
-    /// **The store is loaded for the whole roster, not per character**. A column
-    /// is not "that character's file, everything else enabled": an addon the character has no row
-    /// for takes what the realm's *other* characters agree on, and only falls to the manifest's
-    /// `## DefaultState` when they disagree or nobody has said anything. Reading it the other way
-    /// is what made a newly created character re-enable every addon in the All view — its
-    /// all-enabled column turned every disabled row Mixed, and Mixed reads as on.
+    /// Open for this realm's roster: read the folder, and one staged column per character, as
+    /// `AddonList_OnShow` re-reads. The store loads for the whole roster: an addon a character has
+    /// no row for takes what the other characters agree on, else the manifest's `## DefaultState`.
     pub(super) fn open_for(&mut self, realm: String, chars: Vec<String>) {
         self.list = addons::installed_rows();
         self.staged.clear();
         let store = addons::EnableStore::load(&realm, &chars);
-        // A fresh account stages one anonymous column: no character means no file to key, and
-        // Okay has none to write ([`Self::save_staged`] walks `chars`).
         let columns: Vec<Option<&str>> = if chars.is_empty() {
             vec![None]
         } else {
@@ -259,7 +188,7 @@ impl AddonsPanel {
         self.baseline = self.staged.clone();
         self.realm = realm;
         self.chars = chars;
-        // "All" is the reference's own default selection (AddonList.lua's dropdown initializer).
+        // "All" is the reference's default selection.
         self.view = None;
         self.dropdown_open = false;
         self.offset = 0;
@@ -280,10 +209,7 @@ impl AddonsPanel {
         self.dirty = true;
     }
 
-    /// Okay — the reference's `SaveAddOns`: write the per-character enable files, and only for
-    /// the characters whose staged column actually moved off what their file said at open (the
-    /// write is [`addons::write_enable_state`]'s merge, so an untouched character's file is not
-    /// even opened). The anonymous no-roster column has no file and writes nothing.
+    /// Okay, `SaveAddOns`: write the enable file of each character whose column changed.
     fn save_staged(&self) {
         for (c, name) in self.chars.iter().enumerate() {
             if self.staged.get(c) == self.baseline.get(c) {
@@ -300,23 +226,13 @@ impl AddonsPanel {
         }
     }
 
-    /// Are there any installed addons at all? The reference hides its button when not
-    /// (`UpdateAddonButton`), and so do we — a button that opens an empty list is worse than none.
-    ///
-    /// **Answered once per process, not per call.** The screen asks this while it is spawning its
-    /// tree, and the tree respawns on every glue-scale change — which during a window drag-resize
-    /// is *every frame*. Reading the folder there means a `read_dir` plus a `.toc` parse per addon
-    /// per frame for as long as the director holds the mouse down. Installing or removing an addon
-    /// mid-session is not a thing that happens, so the cache never needs invalidating; the panel
-    /// itself re-reads the folder on every open ([`Self::open_for`]), which is where freshness
-    /// actually matters.
+    /// Whether any addon is installed (`UpdateAddonButton` hides the button otherwise). Cached for
+    /// the process: the screen respawns every frame of a drag-resize.
     pub(super) fn any_installed() -> bool {
         static ANY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         *ANY.get_or_init(|| !addons::installed_rows().is_empty())
     }
 
-    /// The rows currently visible, as `(index, addon)` — enable state is the view's to answer
-    /// ([`Self::box_state`]), not the metadata's.
     fn visible(&self) -> impl Iterator<Item = (usize, &InstalledAddOn)> {
         self.list
             .iter()
@@ -325,14 +241,11 @@ impl AddonsPanel {
             .take(MAX_ROWS)
     }
 
-    /// The highest first-row index that still fills the list.
     fn max_offset(&self) -> usize {
         self.list.len().saturating_sub(MAX_ROWS)
     }
 
-    /// Where the knob sits, as a fraction of its travel — the value→pixel direction. Shared by the
-    /// spawn (which draws the knob there) and the drag (which needs to know where it grabbed), so
-    /// the two can never disagree about what the bar is showing.
+    /// Where the knob sits, as a fraction of its travel; shared by the spawn and the drag.
     fn thumb_fraction(&self) -> f32 {
         match self.max_offset() {
             0 => 0.0,
@@ -340,12 +253,8 @@ impl AddonsPanel {
         }
     }
 
-    /// The pixel→value direction: seat the first visible row at `fraction` of the way down.
-    ///
-    /// Rounded to a whole row because this list scrolls by ROWS, not pixels — the reference's
-    /// AddonList is a faux scroll frame over 19 fixed slots, so the knob rides in row-sized
-    /// detents. `dirty` only when the row actually changes: a drag inside one detent must not
-    /// respawn the tree 60 times a second.
+    /// Seat the first visible row at `fraction` of the way down, rounded to a row: the reference's
+    /// list is a faux scroll frame over 19 fixed slots.
     fn scroll_to(&mut self, fraction: f32) {
         let next = (fraction * self.max_offset() as f32).round() as usize;
         if next != self.offset {
@@ -354,9 +263,8 @@ impl AddonsPanel {
         }
     }
 
-    /// One row's checkbox state for the current view. A single character's view is plain
-    /// two-state over their column; the All view is the reference's tri-state — its
-    /// `GetAddOnEnableState(nil, i)`: enabled for all / for some (the greyed check) / for none.
+    /// One row's checkbox for the current view; the All view is `GetAddOnEnableState(nil, i)`'s
+    /// tri-state.
     fn box_state(&self, i: usize) -> BoxState {
         match self.view {
             Some(c) => {
@@ -387,21 +295,13 @@ impl AddonsPanel {
         }
     }
 
-    /// Is this addon enabled *for the current view* — the bit the gate is fed? A single character
-    /// reads their own column. The All view answers **"any staged character has it on"**, which
-    /// 1293 stated as the natural reading of an untraced mechanism and which the bytes have
-    /// since confirmed: `AddonList_Update` computes `enabled = (checkboxState > 0)` off
-    /// `GetAddOnEnableState(nil, i)`, whose `1` (enabled for some) therefore counts as on
-    /// (`0x51e470`). What 1293 got wrong was not this fold but what each column holds — see
-    /// [`Self::open_for`] and.
+    /// The enable bit the gate is fed: in the All view, on for any character, since
+    /// `AddonList_Update` takes `enabled = (checkboxState > 0)` (`AddonList.lua:48`, `0x51e470`).
     fn effective_enabled(&self, i: usize) -> bool {
         self.box_state(i) != BoxState::Off
     }
 
-    /// The current view lowered into the gate's adapter rows (1292): the folder's one registry
-    /// with THIS view's staged enable bits. `loaded` is `false` for every row — nothing has
-    /// loaded at the glue (`load_third_party` is a world-entry step, 1191 §2), so the loaded
-    /// short-circuit can never fire here.
+    /// The current view as the gate's rows; nothing is loaded at the glue.
     fn gate_rows(&self) -> Vec<GateRow<'_>> {
         self.list
             .iter()
@@ -417,20 +317,14 @@ impl AddonsPanel {
             .collect()
     }
 
-    /// **Why a row will not load** — the one arbiter's answer (1292), which the status column
-    /// splices and the title colour keys on. `demand_only=false`: this is the glue surface
-    /// (`dl=0`) — `NOT_DEMAND_LOADED` is unreachable here. `version_check` is the live CVar
-    /// mirror, re-read per query like the reference (1292 §2.2).
+    /// Why a row will not load. The glue surface passes `demand_only=false`, so
+    /// `NOT_DEMAND_LOADED` is unreachable; the version check is re-read per query.
     fn verdict(&self, i: usize) -> Verdict {
         can_load(&self.gate_rows(), i, false, self.version_check)
     }
 
-    /// AddonList.lua's title colour, verbatim in structure: gold when loadable; red when the
-    /// player has it ON and it still will not load — **unless the reason is `DEP_DISABLED`**,
-    /// which reads grey like a disabled row (the Lua's own `reason ~= "DEP_DISABLED"` guard: the
-    /// player already made that choice one row up, and red would blame the dependent); grey
-    /// otherwise. Any `|c` markup in the title overrides this base per-span, exactly as the
-    /// reference FontString renders it ([`crate::glue::widgets::markup_spans`]).
+    /// The title colour (`AddonList.lua:60-66`): gold when loadable, red when enabled and still
+    /// not loading unless the reason is `DEP_DISABLED`, grey otherwise. `|c` markup overrides it.
     fn title_colour(&self, i: usize) -> Color {
         let verdict = self.verdict(i);
         if verdict.loadable() {
@@ -442,10 +336,8 @@ impl AddonsPanel {
         }
     }
 
-    /// A checkbox click for the current view. In a single character's view it is a plain toggle
-    /// of their bit. In the All view it is the reference's CheckButton over the tri-state: a
-    /// grey (mixed) box **counts as checked**, so clicking On *or* Mixed unchecks — disable for
-    /// every character — and only a fully-unchecked box enables for all.
+    /// A checkbox click. In the All view a mixed box counts as checked, so clicking On or Mixed
+    /// disables for every character and only an unchecked box enables for all.
     fn click_row(&mut self, i: usize) {
         match self.view {
             Some(c) => {
@@ -466,8 +358,7 @@ impl AddonsPanel {
         }
     }
 
-    /// Enable All / Disable All sweep the CURRENT VIEW: the view the player is editing is the
-    /// view the sweep edits — "All" sweeps every column, a single character's view only theirs.
+    /// Enable All and Disable All sweep the current view's columns.
     fn set_all(&mut self, on: bool) {
         match self.view {
             Some(c) => {
@@ -484,7 +375,6 @@ impl AddonsPanel {
         self.dirty = true;
     }
 
-    /// The dropdown's current value — "All" or the viewed character's name.
     fn view_name<'a>(&'a self, strings: &'a GlueStrings) -> &'a str {
         match self.view {
             None => strings.text("ALL", "All"),
@@ -493,11 +383,8 @@ impl AddonsPanel {
     }
 }
 
-/// The status column's text: the reference's `getglobal("ADDON_"..reason)` splice, run against
-/// the parsed GlueStrings table — the glue side loads no VM to splice in (1197 §3), but the
-/// string TABLE is loaded, so the lookup is the same one. The fallbacks are the shipped values
-/// of the same tokens, pinned by `the_status_labels_are_the_reference_globalstrings_values`
-/// (verified against the extracted 1.12 chain, GlueStrings.lua l.44-56).
+/// The status text, `getglobal("ADDON_"..reason)` over the parsed GlueStrings; the fallbacks are
+/// the shipped values (`GlueStrings.lua:44-56`).
 fn status_label<'a>(strings: &'a GlueStrings, token: &'a str) -> &'a str {
     let fallback = match token {
         "DISABLED" => "Disabled",
@@ -505,19 +392,14 @@ fn status_label<'a>(strings: &'a GlueStrings, token: &'a str) -> &'a str {
         "DEP_MISSING" => "Dependency missing",
         "DEP_DISABLED" => "Dependency disabled",
         "DEP_INTERFACE_VERSION" => "Dependency out of date",
-        // `BANNED`/`CORRUPT`/`INSECURE` gate on server signature state we do not model, and
-        // `NOT_DEMAND_LOADED` is the in-game surface's (`demand_only=false` here) — none is
-        // producible at the glue (addon_gate's module doc); the raw token is the honest fallback.
+        // `BANNED`, `CORRUPT`, `INSECURE` and `NOT_DEMAND_LOADED` are not produced at the glue.
         other => other,
     };
     strings.get(&format!("ADDON_{token}")).unwrap_or(fallback)
 }
 
-/// Flip the *Load out of date AddOns* box: the `checkAddonVersion` CVar **inverted** (1292 §2,
-/// byte-verified — ticked = `"0"`). A host write into the registry (2303), which is what
-/// persists it and what the VM's mirror learns — nothing else to do: the statuses repaint from
-/// [`drive_addons_panel`]'s per-frame mirror, no rescan, because the gate re-reads the flag per
-/// query (1292 §2.2).
+/// Flip the "Load out of date AddOns" box, the `checkAddonVersion` CVar inverted (ticked is
+/// `"0"`); the statuses repaint from [`drive_addons_panel`]'s per-frame read.
 fn toggle_force_load(cvars: &mut crate::cvars::Cvars) {
     let checking = cvars.addon_version_check();
     cvars.set("checkAddonVersion", if checking { "0" } else { "1" });
@@ -526,50 +408,38 @@ fn toggle_force_load(cvars: &mut crate::cvars::Cvars) {
 /// The panel's clickable parts.
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
 pub(super) enum AddonsAction {
-    /// A row's CHECKBOX — the only thing on a row that clicks, as in the reference (the entry
-    /// template has no `OnClick`; `AddonList_Enable` hangs off the CheckButton alone).
+    /// A row's checkbox, the only thing on a row that clicks (`AddonList_Enable`).
     Row(usize),
-    /// The row strip itself: hover raises the `AddonTooltip`; a press does nothing.
+    /// The row strip: hover raises the `AddonTooltip`; a press does nothing.
     RowHover(usize),
     EnableAll,
     DisableAll,
     Okay,
-    /// Cancel, the ESC key, and the `GlueCloseButton` X — all `AddonList_OnCancel`.
+    /// Cancel, Escape and the `GlueCloseButton` X, all `AddonList_OnCancel`.
     Cancel,
     ScrollUp,
     ScrollDown,
-    /// The slider column — **one surface covering knob and track alike**, because the law has no
-    /// thumb hit-test to gate capture on: a press anywhere on the bar captures, and where it
-    /// *grabs* is [`slider_grab`]'s to say, from geometry rather than from picking.
+    /// The slider column, one surface for knob and track: a press anywhere captures, and
+    /// [`slider_grab`] says where it grabs.
     ScrollBar,
-    /// The dropdown control — opens/closes the option list. Also carried by the open list's
-    /// full-screen backdrop, so a click that misses every option closes it (click-away).
+    /// The dropdown control; also the open list's full-screen backdrop, so a missed click closes
+    /// it.
     DropdownToggle,
-    /// One dropdown option: `None` = "All", `Some(c)` = that roster character.
+    /// One dropdown option: `None` is "All", `Some(c)` a roster character.
     DropdownPick(Option<usize>),
-    /// The *Load out of date AddOns* checkbox ([`toggle_force_load`]).
+    /// The "Load out of date AddOns" checkbox.
     ForceLoad,
 }
 
-/// The panel root (despawned whole on close).
 #[derive(Component)]
 struct AddonsUi;
 
-/// The scroll bar's travel band — the node spanning [`BAR_TOP`]`..`[`BAR_TOP`]`+`[`BAR_H`], with
-/// the knob riding inside it as a child.
-///
-/// The drag reads its `ComputedNode`/`UiGlobalTransform` rather than re-deriving where the bar
-/// landed on screen: this panel is centered by a flex parent at a window-dependent scale, so any
-/// hand-rolled screen-rect math here would be a second copy of the layout, wrong the first time
-/// the window resizes. Normalizing the cursor into this node's own box is scale-free by
-/// construction.
+/// The scroll bar's travel band, the knob its child. The drag normalizes the cursor into this
+/// node's own box, so it is free of the window scale and centering.
 #[derive(Component)]
 pub(super) struct ScrollBand;
 
-/// Spawn/despawn the panel, run its flows, and repaint when anything it shows has changed.
-///
-/// Ordered before the select screen's own click handling so a click that lands on the panel is
-/// never also read as a click on the screen behind it.
+/// Spawn or despawn the panel, run its flows, and repaint when anything it shows changed.
 pub(super) fn drive_addons_panel(
     mut commands: Commands,
     mut panel: ResMut<AddonsPanel>,
@@ -602,10 +472,8 @@ pub(super) fn drive_addons_panel(
     let mut close_and_discard = false;
     let mut bar_pressed = false;
     for (entity, action, interaction) in &hovers {
-        // **The scroll bar warps on the PRESS**, and only it: the reference's `CSimpleSlider`
-        // OnMouseDown (`0x789ca0`, 45 bytes, zero branches) warps the value from any press inside
-        // the hit rect — there is no thumb hit-test in the class. Every *button*
-        // in this panel fires on the RELEASE, over the button that took the press (1533).
+        // The scroll bar acts on the press: `CSimpleSlider`'s OnMouseDown (`0x789ca0`) warps from
+        // any press in its hit rect, with no thumb hit-test. Every button fires on release.
         let click = if *action == AddonsAction::ScrollBar {
             interaction.is_changed() && *interaction == Interaction::Pressed
         } else {
@@ -625,8 +493,7 @@ pub(super) fn drive_addons_panel(
             AddonsAction::ScrollDown => scroll(&mut panel, 1),
             AddonsAction::ScrollBar => bar_pressed = true,
             AddonsAction::DropdownToggle => {
-                // The reference's dropdown button click (`ToggleDropDownMenu` +
-                // `PlaySound("igMainMenuOptionCheckBoxOn")`).
+                // `ToggleDropDownMenu` and `PlaySound("igMainMenuOptionCheckBoxOn")`.
                 sounds.write(GlueSound("igMainMenuOptionCheckBoxOn"));
                 panel.dropdown_open = !panel.dropdown_open;
                 panel.dirty = true;
@@ -638,13 +505,11 @@ pub(super) fn drive_addons_panel(
                 panel.dirty = true;
             }
             AddonsAction::ForceLoad => {
-                // No VM (a bare test world / a capture): nothing to write to and nothing the
-                // walk would read differently — the box is inert, honestly.
                 toggle_force_load(&mut cvars);
             }
         }
     }
-    // `AddonList_OnKeyDown`: ESCAPE cancels, ENTER accepts.
+    // `AddonList_OnKeyDown`: Escape cancels, Enter accepts.
     if keys.just_pressed(KeyCode::Escape) {
         close_and_discard = true;
     }
@@ -658,24 +523,17 @@ pub(super) fn drive_addons_panel(
     }
 
     // ── the scroll bar's drag ──────────────────────────────────────────────────────────
-    // Benilla's one slider law, reached from the glue lane: the press grabs ([`slider_grab`] —
-    // on the knob it keeps the grabbed point, off it the knob's centre warps under the cursor),
-    // and press and every move after it share the one absolute cursor→value map
-    // ([`slider_fraction`]). Absolute, so it cannot drift off the cursor over a long drag; and
-    // the capture rides the held BUTTON, not the widget, so it survives the repaint that every
-    // crossed row triggers and keeps tracking with the cursor off the bar entirely.
+    // The press grabs ([`slider_grab`]), then every move maps the cursor absolutely
+    // ([`slider_fraction`]). The capture rides the held button, so it survives each respawn.
     let cursor = window
         .single()
         .ok()
         .and_then(|w| w.physical_cursor_position());
     if !mouse.pressed(MouseButton::Left) || cursor.is_none() {
-        // Release, or the cursor left the window — the widget lane abandons a capture on the
-        // same two conditions.
         panel.drag = None;
     }
     if let (Some(cursor), Ok((node, xf))) = (cursor, band.single()) {
-        // Everything below is a fraction of the band's own height, which makes it free of the
-        // window scale, the panel's centering, and the retina factor all at once.
+        // Fractions of the band's height, free of scale, centering and the retina factor.
         if let Some(local) = node.normalize_point(*xf, cursor) {
             let cursor_n = local.y + 0.5;
             let thumb_n = KNOB / BAR_H;
@@ -684,7 +542,7 @@ pub(super) fn drive_addons_panel(
                 panel.drag = Some(slider_grab(cursor_n, lead_n, thumb_n));
             }
             if let Some(grab) = panel.drag {
-                // `None` = a knob with nowhere to go; the bar is not spawned in that case.
+                // `None` is a knob with nowhere to go; the bar is not spawned then.
                 if let Some(f) = slider_fraction(cursor_n, grab, 1.0, thumb_n) {
                     panel.scroll_to(f);
                 }
@@ -692,10 +550,8 @@ pub(super) fn drive_addons_panel(
         }
     }
 
-    // The live `checkAddonVersion` mirror (1293): read per frame like the gate's own per-query
-    // read (1292 §2.2), so the ForceLoad click above — or any other writer — repaints the
-    // statuses this same frame with nothing rescanned. Absent VM or table = the registrar
-    // default: check ON.
+    // `checkAddonVersion` read per frame, as the gate reads it per query; absent, the registered
+    // default "1".
     let version_check = script
         .as_deref()
         .and_then(|s| s.cvar("checkAddonVersion"))
@@ -706,7 +562,7 @@ pub(super) fn drive_addons_panel(
     }
 
     if close_and_save {
-        // `AddonList_OnOk` / `AddonList_OnCancel` play the realm dialog's pair.
+        // `AddonList_OnOk` and `AddonList_OnCancel` play the realm dialog's pair.
         sounds.write(GlueSound("gsLoginChangeRealmOK"));
         panel.save_staged();
         panel.close();
@@ -740,13 +596,11 @@ pub(super) fn drive_addons_panel(
         ));
         panel.spawned_s = s;
         panel.dirty = false;
-        // Fresh entities — hover, tooltips and highlights reconcile against them next frame.
+        // Hover and tooltips reconcile against the fresh entities next frame.
         return;
     }
 
     // ── hover: the tooltip, with the tree left alone ──────────────────────────────────────────
-    // (The sheens are `crate::glue::glue_hilights`' — this panel used to drive its own, which is
-    // one of the four copies that let the realm list ship with none.)
 
     let hover = hovers.iter().find_map(|(_, a, i)| {
         if !matches!(*i, Interaction::Hovered | Interaction::Pressed) {
@@ -758,8 +612,7 @@ pub(super) fn drive_addons_panel(
             _ => None,
         }
     });
-    // What the tooltip should say for this hover — `None` collapses "nothing hovered" and "a
-    // checkbox that is not mixed" (the reference's CheckButton only carries a tooltip then).
+    // A checkbox carries a tooltip only when mixed.
     let want = match hover {
         Some(h @ Hover::Row(_)) => Some(h),
         Some(h @ Hover::Check(i)) if panel.box_state(i) == BoxState::Mixed => Some(h),
@@ -773,8 +626,7 @@ pub(super) fn drive_addons_panel(
             let row = match h {
                 Hover::Row(i) | Hover::Check(i) => i,
             };
-            // Anchor to the row strip — the reference's own
-            // `AddonTooltip:SetPoint("TOPRIGHT", this, "TOPLEFT", -14, 0)`.
+            // `AddonTooltip:SetPoint("TOPRIGHT", this, "TOPLEFT", -14, 0)` on the row strip.
             let strip = hovers
                 .iter()
                 .find_map(|(e, a, _)| (*a == AddonsAction::RowHover(row)).then_some(e));
@@ -792,7 +644,7 @@ pub(super) fn drive_addons_panel(
     }
 }
 
-/// Move the first visible row by `delta`, clamped — the reference's `AddonList.offset`.
+/// Move the first visible row (`AddonList.offset`) by `delta`, clamped.
 fn scroll(panel: &mut AddonsPanel, delta: i32) {
     let max = panel.max_offset();
     let next = (panel.offset as i32 + delta).clamp(0, max as i32) as usize;
@@ -802,12 +654,9 @@ fn scroll(panel: &mut AddonsPanel, delta: i32) {
     }
 }
 
-/// One checkbox as the reference `CheckButton` draws it: the `UI-CheckBox-Up` box always (the
-/// pressed swap is [`ArtSwap`]'s), the check OVERLAID — gold (`-Check`) when on, grey
-/// (`-Check-Disabled`) when mixed (`TriStateCheckbox_SetState`'s state-1 texture) — and the ADD
-/// highlight lit on hover ([`HoverLit`]). The old face swapped the box art for the check art,
-/// which is why the director's screenshot showed floating checks with no boxes. Plain-fill
-/// fallback without art.
+/// One checkbox as the `CheckButton` draws it: the `UI-CheckBox-Up` box always, the check overlaid
+/// (`-Check` when on, `-Check-Disabled` when mixed, `TriStateCheckbox_SetState`'s state 1), and the
+/// ADD highlight on hover.
 fn checkbox_button<A: Component>(
     parent: &mut ChildSpawnerCommands,
     art: &GlueArt,
@@ -859,8 +708,7 @@ fn checkbox_button<A: Component>(
         None => {
             b.insert(BackgroundColor(match state {
                 BoxState::On => GOLD,
-                // Ours: halfway between the art-less GOLD and DIM, so a mixed box still reads
-                // as its own state.
+                // Art-less only: halfway between GOLD and DIM.
                 BoxState::Mixed => Color::srgb(0.75, 0.64, 0.25),
                 BoxState::Off => DIM,
             }));
@@ -891,9 +739,8 @@ fn spawn_panel(
         .spawn((
             AddonsUi,
             GlobalZIndex(1200), // over the select screen's 1100, like the delete dialog
-            // The reference's own full-screen BACKGROUND layer: black at 0.75 over the glue
-            // scene, which is also what keeps a stray click off the screen behind (picking
-            // follows z-order).
+            // The reference's full-screen BACKGROUND layer, black at 0.75; it also keeps a stray
+            // click off the screen behind.
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.75)),
             Node {
                 width: Val::Percent(100.0),
@@ -907,13 +754,11 @@ fn spawn_panel(
             let mut boxed = overlay_ui.spawn(Node {
                 width: px(BG_W),
                 height: px(BG_H),
-                // The plate's authored CENTER offset (+24, 0).
                 left: px(BG_CENTER_OFF_X),
                 ..default()
             });
             boxed.with_children(|b| {
-                // ── the HelpFrame plate: six pieces tiling 640×512, frame + top band + dark
-                // inset + bottom band all baked into the art ─────────────────────────────────
+                // ── the HelpFrame plate: six pieces tiling 640×512 ─────────────────────────
                 match &art.help_frame {
                     Some(hf) => {
                         for (img, l, t, w, h) in [
@@ -926,9 +771,8 @@ fn spawn_panel(
                         ] {
                             b.spawn((ImageNode::new(img.clone()), abs(l, t, w, h)));
                         }
-                        // The ARTWORK divider strip under the top band: the same three top
-                        // pieces' authored sub-band (TexCoords y 0.12109375–0.234375), 29 tall
-                        // at y 50.
+                        // The ARTWORK divider under the top band: the top pieces' TexCoords
+                        // y 0.12109375-0.234375, 29 tall at y 50.
                         const BAND_TC: [f32; 4] = [0.0, 1.0, 0.121_093_75, 0.234_375];
                         for (i, (img, l, w)) in [
                             (&hf.tl, 0.0, 256.0),
@@ -956,8 +800,8 @@ fn spawn_panel(
                     }
                 }
 
-                // ── the header plate + title (`UI-DialogBox-Header` 256×64 at TOP (−12, +12),
-                // `ADDON_LIST` GlueFontNormalSmall 14 under its top) ─────────────────────────
+                // ── the header plate (`UI-DialogBox-Header` 256×64 at TOP (-12, +12)) and
+                // `ADDON_LIST` ───────────────────────────────────────────────────────────────
                 if let Some((header, _)) = &art.dialog_header {
                     b.spawn((
                         ImageNode::new(header.clone()),
@@ -986,7 +830,7 @@ fn spawn_panel(
                     s,
                 );
 
-                // ── the close X (`GlueCloseButton` at TOPRIGHT (−42, −3)) — Cancel ──────────
+                // ── the close X (`GlueCloseButton` at TOPRIGHT (-42, -3)), Cancel ──────────
                 {
                     let mut x = b.spawn((
                         AddonsAction::Cancel,
@@ -1035,8 +879,7 @@ fn spawn_panel(
                     }
                 }
 
-                // ── "Configure Addons For:" + the dropdown (`AddonCharacterDropDown`,
-                // `GlueDropDownMenuTemplate`) ────────────────────────────────────────────────
+                // ── "Configure Addons For:" and `AddonCharacterDropDown` ─────────────────────
                 outlined_text(
                     b,
                     Node {
@@ -1063,8 +906,6 @@ fn spawn_panel(
                         abs(0.0, DROP_ART_TOP, DROP_W, DROP_ART_H),
                     ));
                     drop.with_children(|d| {
-                        // The three `CharacterCreate-LabelFrame` slices (25 | 115 | 25 of the
-                        // 128-wide art) — the same sheet the create screen's dial rows use.
                         if let Some((sheet, size)) = &art.label_frame {
                             let mut left = 0.0;
                             for (w, tc) in DROP_SLICE_W.iter().zip(DROP_TC) {
@@ -1084,8 +925,7 @@ fn spawn_panel(
                                 abs(10.0, 20.0, DROP_W - 20.0, 24.0),
                             ));
                         }
-                        // The selected value (white, `GlueFontHighlightSmall`) right-aligned
-                        // beside the arrow — the template's own text seat.
+                        // The selected value, `GlueFontHighlightSmall`, right-aligned by the arrow.
                         outlined_text(
                             d,
                             Node {
@@ -1109,7 +949,7 @@ fn spawn_panel(
                             &font,
                             s,
                         );
-                        // The 24² arrow (`UI-ChatIcon-ScrollDown-*` + `UI-Common-MouseHilight`).
+                        // The 24² arrow (`UI-ChatIcon-ScrollDown-*`, `UI-Common-MouseHilight`).
                         let mut arrow = d.spawn((
                             AddonsAction::DropdownToggle,
                             Button,
@@ -1157,10 +997,8 @@ fn spawn_panel(
                     });
                 }
 
-                // ── "Load out of date AddOns" (`AddonListForceLoad`: a 32² checkbox at TOP
-                // (+50, −42), label at LEFT +36) — the `checkAddonVersion` CVar INVERTED
-                // (ticked = "0"; 1292 §2.1: force-load actively ERASES the refusal, so ticking
-                // repaints every INTERFACE_VERSION row as plain loadable) ────────────────────
+                // ── "Load out of date AddOns" (`AddonListForceLoad`): ticking erases the
+                // `INTERFACE_VERSION` refusal, so those rows repaint loadable ────────────────
                 checkbox_button(
                     b,
                     art,
@@ -1198,23 +1036,17 @@ fn spawn_panel(
                 for (slot, (index, addon)) in panel.visible().enumerate() {
                     let top = ROW_TOP + slot as f32 * ROW_PITCH;
                     let state = panel.box_state(index);
-                    // The one arbiter (1292): status and colour both come from the gate over
-                    // the CURRENT VIEW's staged states.
                     let status = panel.verdict(index).token();
                     let colour = panel.title_colour(index);
 
-                    // The row strip: tooltip hover only — no click, no highlight (the
-                    // reference entry has neither; see the module doc on the flashing).
+                    // The row strip: tooltip hover only, no click and no highlight.
                     b.spawn((
                         AddonsAction::RowHover(index),
                         Button,
                         abs(ROW_LEFT, top, ROW_W, ROW_H),
                     ))
                     .with_children(|r| {
-                        // Title — `GlueFontNormal`, 220 wide, colour markup rendered
-                        // ([`crate::glue::widgets::markup_spans`], run by every `GlueText`);
-                        // clipped at the authored box so a long title
-                        // cannot run into the status column.
+                        // Title, clipped at its 220-wide box so it cannot run into the status.
                         outlined_text(
                             r,
                             Node {
@@ -1237,8 +1069,7 @@ fn spawn_panel(
                             &font,
                             s,
                         );
-                        // Status — `GlueFontNormalSmall` (gold), 30 right of the title box:
-                        // the reference's `getglobal("ADDON_"..reason)` splice.
+                        // Status, `GlueFontNormalSmall` gold, 30 right of the title box.
                         if let Some(token) = status.as_deref() {
                             outlined_text(
                                 r,
@@ -1262,8 +1093,8 @@ fn spawn_panel(
                             );
                         }
                     });
-                    // The checkbox: a 32² CheckButton at the entry's LEFT +5, spawned after
-                    // the strip so it wins the pick where they overlap.
+                    // A 32² CheckButton at the entry's LEFT +5, spawned after the strip so it
+                    // wins the pick where they overlap.
                     checkbox_button(
                         b,
                         art,
@@ -1273,14 +1104,11 @@ fn spawn_panel(
                     );
                 }
 
-                // ── the scrollbar, shown only when the list overflows (the reference's
-                // `GlueScrollFrame_Update` hides it on the same condition): the
-                // `UI-Character-ScrollBar` decorative track + the `GlueScrollBarTemplate`
-                // column (16² arrows, the knob riding the offset fraction) ──────────────────
+                // ── the scrollbar, only when the list overflows (`GlueScrollFrame_Update`) ───
                 if panel.max_offset() > 0 {
                     if let Some((track, size)) = &art.char_scrollbar {
                         for (l, t, w, h, tc) in [
-                            // Top 31×256 at scrollframe TOPRIGHT (−2, +5).
+                            // Top 31×256 at scrollframe TOPRIGHT (-2, +5).
                             (
                                 SCROLL_RIGHT - 2.0,
                                 SCROLL_TOP - 5.0,
@@ -1288,7 +1116,7 @@ fn spawn_panel(
                                 256.0,
                                 [0.0, 0.484_375, 0.0, 1.0],
                             ),
-                            // Middle, spanning to the bottom piece (TexCoords y .75–1).
+                            // Middle, spanning to the bottom piece (TexCoords y .75-1).
                             (
                                 SCROLL_RIGHT - 2.0,
                                 SCROLL_TOP - 5.0 + 256.0,
@@ -1296,7 +1124,7 @@ fn spawn_panel(
                                 (SCROLL_TOP + SCROLL_H + 2.0 - 106.0) - (SCROLL_TOP - 5.0 + 256.0),
                                 [0.0, 0.484_375, 0.75, 1.0],
                             ),
-                            // Bottom 31×106 at scrollframe BOTTOMRIGHT (−2, −2).
+                            // Bottom 31×106 at scrollframe BOTTOMRIGHT (-2, -2).
                             (
                                 SCROLL_RIGHT - 2.0,
                                 SCROLL_TOP + SCROLL_H + 2.0 - 106.0,
@@ -1315,7 +1143,7 @@ fn spawn_panel(
                             ));
                         }
                     }
-                    // The slider column: TOPLEFT at scrollframe TOPRIGHT +(6, −16).
+                    // The slider column: TOPLEFT at scrollframe TOPRIGHT +(6, -16).
                     let bar_left = SCROLL_RIGHT + 6.0;
                     let bar_top = BAR_TOP;
                     let bar_h = BAR_H;
@@ -1343,10 +1171,7 @@ fn spawn_panel(
                                 ));
                             });
                         }
-                        // The band IS the slider: pressable end to end, with the knob a
-                        // decorative child riding at the value fraction. Splitting them into two
-                        // pickable surfaces would put a thumb hit-test back into the capture
-                        // decision, which the class does not have (`slider_grab`).
+                        // The band is the slider, pressable end to end; the knob is decoration.
                         b.spawn((
                             AddonsAction::ScrollBar,
                             ScrollBand,
@@ -1355,10 +1180,8 @@ fn spawn_panel(
                         ))
                         .with_children(|band| {
                             band.spawn((
-                                // The knob must NOT capture the press it sits under: a UI node
-                                // with no `FocusPolicy` defaults to `Block`, and a blocking knob
-                                // would swallow every press aimed at it — the one gesture this
-                                // whole path exists to serve — leaving only the bare track
+                                // The knob must not block the press: a node's default
+                                // `FocusPolicy` is `Block`, which would leave only the track
                                 // draggable.
                                 bevy::ui::FocusPolicy::Pass,
                                 ImageNode {
@@ -1411,9 +1234,8 @@ fn spawn_panel(
                     }
                 }
 
-                // ── the bottom row, the reference's own order and geometry: Disable All ·
-                // Enable All (`AddonListButtonTemplate` 160×35 from BOTTOMLEFT +16) ··· Okay ·
-                // Cancel (`GlueDialogButtonTemplate` 125×35 from BOTTOMRIGHT −46) ───────────
+                // ── the bottom row: Disable All, Enable All (`AddonListButtonTemplate` 160×35
+                // from BOTTOMLEFT +16), Okay, Cancel (125×35 from BOTTOMRIGHT -46) ──────────
                 for (action, token, fallback, left, w, kind) in [
                     (
                         AddonsAction::DisableAll,
@@ -1463,10 +1285,8 @@ fn spawn_panel(
                     });
                 }
 
-                // ── the dropdown's open list (`UIDropDownListTemplate`: the DialogBox
-                // backdrop, 16-tall rows, the gold check on the current selection, the
-                // `UI-QuestTitleHighlight` hover), plus a full-screen click-away backdrop
-                // underneath it in z ────────────────────────────────────────────────────────
+                // ── the dropdown's open list (`UIDropDownListTemplate`) over a full-screen
+                // click-away backdrop ────────────────────────────────────────────────────────
                 if panel.dropdown_open {
                     b.spawn((
                         AddonsAction::DropdownToggle,
@@ -1521,8 +1341,7 @@ fn spawn_panel(
                                 Color::WHITE,
                             );
                         }
-                        // "All" first, then the roster in its own order — the reference's
-                        // `AddonListCharacterDropDown_Initialize` shape.
+                        // "All", then the roster (`AddonListCharacterDropDown_Initialize`).
                         for view in std::iter::once(None).chain((0..panel.chars.len()).map(Some)) {
                             let name = match view {
                                 None => strings.text("ALL", "All"),
@@ -1590,11 +1409,9 @@ fn spawn_panel(
         .id()
 }
 
-/// The hover tooltip — the reference's `AddonTooltip` (a 220-wide `UI-Tooltip-Border` box, fill
-/// `(0.09, 0.09, 0.19)`, title + notes + `ADDON_DEPENDENCIES` in that order) anchored TOPRIGHT to
-/// the row's TOPLEFT at (−14, 0), spawned as the row strip's child so the anchor is structural.
-/// `## URL` rides as an extra line (1197: information, not a launch button). A MIXED checkbox
-/// hover shows `ENABLED_FOR_SOME` alone — the reference's GlueTooltip split, on the same box.
+/// `AddonTooltip`: title, notes and `ADDON_DEPENDENCIES` in a 220-wide box, a child of the row
+/// strip. Deviation: `## URL` adds a line in place of the reference's launch button, because
+/// launching a browser is an outward action. A mixed checkbox shows `ENABLED_FOR_SOME` alone.
 fn spawn_tooltip(
     parent: &mut ChildSpawnerCommands,
     art: &GlueArt,
@@ -1607,7 +1424,7 @@ fn spawn_tooltip(
 ) -> Entity {
     let px = |v: f32| Val::Px(v * s);
     let font = wow_font(assets);
-    // (text, size, colour) per line; empties dropped below.
+    // (text, size, colour) per line; empties are dropped.
     let mut lines: Vec<(String, f32, Color)> = Vec::new();
     match hover {
         Hover::Row(_) => {
@@ -1714,9 +1531,7 @@ mod tests {
         }
     }
 
-    /// A panel over `chars` staged columns (each starting at the list's own `enabled` bits),
-    /// viewing All — the open-time default. Tests that want a single character's view set
-    /// `p.view = Some(c)` themselves.
+    /// A panel over `chars` staged columns, each starting at the manifest defaults, viewing All.
     fn panel_for(chars: usize, list: Vec<InstalledAddOn>) -> AddonsPanel {
         let staged: Vec<Vec<bool>> = (0..chars.max(1))
             .map(|_| list.iter().map(|a| a.default_state).collect())
@@ -1732,25 +1547,15 @@ mod tests {
         }
     }
 
-    /// The single-character convenience: one column, All view — over one column the All view IS
-    /// that column (any-on and all-on coincide), so `p.staged[0][i]` drives everything.
+    /// One column, whose All view is that column, so `p.staged[0][i]` drives everything.
     fn panel(list: Vec<InstalledAddOn>) -> AddonsPanel {
         panel_for(1, list)
     }
 
-    /// **Every label this panel can show is the value its reference token carries**.
-    ///
-    /// The splice is the reference's own (`getglobal("ADDON_"..reason)`), run against the parsed
-    /// GlueStrings table; what this pins is the FALLBACKS — the strings shown with no client
-    /// data — quoted from the extracted 1.12 chain (GlueStrings.lua l.44-56). An empty table
-    /// exercises exactly that path.
-    ///
-    /// This test exists because a comment here once named a token `INCOMPATIBLE`, **which does
-    /// not exist** — the real one is `ADDON_INTERFACE_VERSION`. A wrong token name is invisible
-    /// until somebody splices it.
+    /// Every fallback label is its token's shipped value (`GlueStrings.lua:44-56`).
     #[test]
     fn the_status_labels_are_the_reference_globalstrings_values() {
-        let strings = GlueStrings::default(); // no chain in a test — the pinned fallbacks answer
+        let strings = GlueStrings::default(); // no chain, so the fallbacks answer
         for (token, want) in [
             ("DISABLED", "Disabled"),
             ("DEP_DISABLED", "Dependency disabled"),
@@ -1766,13 +1571,8 @@ mod tests {
         }
     }
 
-    /// The status column's rule — THE GATE's verdict (1292): `AddOn_CanLoad`'s byte-verified
-    /// check order, consulted over the current view's staged states.
-    ///
-    /// The ordering is the part worth pinning: a row the player turned OFF reads `DISABLED` and
-    /// nothing else, even when its dependency is also missing — the gate's check 3 precedes the
-    /// dependency loop, and the alternative tells a player to go fix a dependency for an addon
-    /// they deliberately switched off.
+    /// The status is the gate's verdict in `AddOn_CanLoad`'s check order: a row turned off reads
+    /// `DISABLED` even with a missing dependency, since that check precedes the dependency loop.
     #[test]
     fn the_status_column_reports_the_gates_reason_in_the_references_precedence() {
         let mut p = panel(vec![
@@ -1804,29 +1604,22 @@ mod tests {
              byte-verified; supersedes 1191 §6's silent-is-current reading)"
         );
 
-        // Force-load ERASES the refusal (1292 §2.1: reason 7 written, then reset to 0) — with
-        // the box ticked an out-of-date row is byte-indistinguishable from a current one, so the
-        // screen shows nothing there, faithfully.
+        // Force-load erases the refusal (reason 7 written, then reset to 0), so a ticked box
+        // leaves an out-of-date row indistinguishable from a current one.
         p.version_check = false;
         assert_eq!(p.verdict(4).token(), None);
         assert_eq!(p.verdict(5).token(), None);
         p.version_check = true;
 
-        // Turning the library off makes its dependent unloadable, and the dependent says so.
         p.staged[0][1] = false;
         assert_eq!(p.verdict(1).token().as_deref(), Some("DISABLED"));
         assert_eq!(p.verdict(2).token().as_deref(), Some("DEP_DISABLED"));
 
-        // ...and a row the player turned off reports only that, even with a broken dependency.
         p.staged[0][3] = false;
         assert_eq!(p.verdict(3).token().as_deref(), Some("DISABLED"));
     }
 
-    /// AddonList.lua's title colour, including its one exception: an enabled row that will not
-    /// load reads RED — **unless the reason is `DEP_DISABLED`**, where the Lua's own
-    /// `reason ~= "DEP_DISABLED"` guard sends it to grey (the player already made that choice
-    /// on the dependency's row; the first build here painted it red and the director's shot
-    /// showed the mismatch).
+    /// An enabled row that will not load is red, except for `DEP_DISABLED`, which is grey.
     #[test]
     fn the_title_colour_follows_addonlist_luas_rule_with_the_dep_disabled_exception() {
         let mut p = panel(vec![
@@ -1846,14 +1639,14 @@ mod tests {
         );
     }
 
-    /// The All view's gate input is OUR reading (1293): "enabled = any staged character has it on".
+    /// The All view feeds the gate "on for any character" (`checkboxState > 0`).
     #[test]
     fn the_all_view_feeds_the_gate_any_character_on() {
         let mut p = panel_for(
             2,
             vec![addon("Lib", &[], 11200), addon("Needs", &["Lib"], 11200)],
         );
-        p.staged[0][0] = false; // Char0 turned Lib off; Char1 has not
+        p.staged[0][0] = false; // Char0 turned Lib off, Char1 has not
 
         assert_eq!(
             p.verdict(0).token(),
@@ -1870,8 +1663,6 @@ mod tests {
         assert_eq!(p.verdict(0).token(), None, "Char1's view is untouched");
     }
 
-    /// The All view's box is the reference's tri-state (`GetAddOnEnableState`: 0/1/2), computed
-    /// across every staged column; a single character's view is plain two-state over theirs.
     #[test]
     fn the_all_view_box_is_a_tri_state_over_every_character() {
         let mut p = panel_for(3, vec![addon("A", &[], 11200)]);
@@ -1888,22 +1679,19 @@ mod tests {
         p.staged[2][0] = false;
         assert_eq!(p.box_state(0), BoxState::Off, "disabled for all");
 
-        // A single character's view never shows Mixed — it is their own bit, both ways.
         p.view = Some(1);
         assert_eq!(p.box_state(0), BoxState::Off);
         p.staged[1][0] = true;
         assert_eq!(p.box_state(0), BoxState::On);
     }
 
-    /// An All-view click is the reference's CheckButton over the tri-state: a grey (mixed) box
-    /// COUNTS AS CHECKED, so clicking it — or a fully-checked one — unchecks (disable for every
-    /// character), and only a fully-unchecked box enables for all.
+    /// In the All view a mixed box counts as checked, so a click disables for every character.
     #[test]
     fn an_all_view_click_follows_the_references_checkbutton() {
         let mut p = panel_for(3, vec![addon("A", &[], 11200)]);
         p.staged[1][0] = false; // mixed
 
-        p.click_row(0); // mixed = checked → click unchecks
+        p.click_row(0);
         assert!(
             p.staged.iter().all(|col| !col[0]),
             "mixed → disabled for ALL characters"
@@ -1918,14 +1706,12 @@ mod tests {
         p.click_row(0);
         assert!(p.staged.iter().all(|col| !col[0]), "checked → back off");
 
-        // In a single character's view the same click is a plain toggle of THEIR bit.
         p.view = Some(2);
         p.click_row(0);
         assert!(p.staged[2][0] && !p.staged[0][0] && !p.staged[1][0]);
     }
 
-    /// Okay/Cancel is a **staged** edit: nothing the panel does touches an enable file until
-    /// Okay. `Cancel` is the reference's `ResetAddOns`, and `close` is what implements it.
+    /// No enable file is touched until Okay; Cancel (`ResetAddOns`) is `close`.
     #[test]
     fn edits_are_staged_and_cancel_discards_them() {
         let mut p = panel(vec![addon("A", &[], 11200), addon("B", &[], 11200)]);
@@ -1943,10 +1729,7 @@ mod tests {
         );
     }
 
-    /// **Okay fans out per character** (1293 — the reference's `SaveAddOns` over the dropdown's
-    /// roster): every character whose staged column moved off its open-time baseline gets their
-    /// own merge-write, and an untouched character's file is not even created. Hermetic under
-    /// `BENILLA_HOME` like the walk's own folder tests (`ui_script/addons.rs`).
+    /// Okay writes each changed character's file and creates none for an untouched one.
     #[test]
     fn okay_writes_every_changed_characters_file_and_only_those() {
         let _l = crate::local_state::test_env::ENV_LOCK
@@ -1975,13 +1758,11 @@ mod tests {
         assert_eq!(p.staged.len(), 3, "one staged column per roster character");
         assert_eq!(p.staged, p.baseline);
 
-        // Distinct edits: Alice loses Alpha, Bob loses Beta, Carol touches nothing.
         p.staged[0][0] = false;
         p.staged[1][1] = false;
         p.save_staged();
 
-        // Read back through the same store the world-entry walk resolves against — the two views
-        // of one folder that 1197 §3 demands can never disagree.
+        // Read back through the store world entry resolves against.
         let roster = ["Alice".to_string(), "Bob".to_string(), "Carol".to_string()];
         let store = addons::EnableStore::load("TestRealm", &roster);
         let rows = addons::installed_rows();
@@ -2001,27 +1782,15 @@ mod tests {
             !addons::enable_state_path(Some(&carol)).unwrap().exists(),
             "an unchanged column writes no file — only the diffs against the open-time baseline"
         );
-        // And Carol, who has no file at all, is NOT "everything enabled": she takes what the
-        // others agree on, which here is nothing — Alpha and Beta are each on for one and off
-        // for the other — so both fall to their manifests' `## DefaultState` (2311).
+        // Carol, with no file, takes what the others agree on; they split on both, so each falls
+        // to its manifest's `## DefaultState`.
         assert_eq!(read("Carol"), vec![true, true]);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// **Creating a character does not re-enable everything** — the director's report,
-    /// 2026-09-17: *"after creating a new char all addons are enabled again, even after disabling
-    /// all of them just before"*.
-    ///
-    /// The walk is theirs, verbatim: Disable All in the All view, Okay, create a character, open
-    /// the list again. What used to happen is the whole bug in one line — the new character had
-    /// no `AddOns.txt`, benilla read an absent row as **enabled**, and that all-true column turned
-    /// every row in the All view from Off to Mixed, which paints a check and reads as on
-    /// (`effective_enabled`). One click there would then have written the all-enabled state back
-    /// onto every other character's file: a one-way ratchet.
-    ///
-    /// The reference does not do this: its enable query `0x51e470` counts only nodes with an
-    /// **explicit** entry, so a character with no file contributes no opinion and inherits the
-    /// aggregate — here, the unanimous `disabled` the player just saved.
+    /// Disable All, Okay, then create a character: the list reopens all disabled. The reference's
+    /// enable query `0x51e470` counts only explicit entries, so a character with no file inherits
+    /// the aggregate.
     #[test]
     fn a_new_character_inherits_the_disable_it_did_not_ask_for() {
         let _l = crate::local_state::test_env::ENV_LOCK
@@ -2040,7 +1809,6 @@ mod tests {
         let _h =
             crate::local_state::test_env::EnvGuard::set("BENILLA_HOME", home.to_str().unwrap());
 
-        // The roster before the create, and the player's Disable All + Okay over it.
         let mut p = AddonsPanel::default();
         p.open_for(
             "TestRealm".into(),
@@ -2050,8 +1818,7 @@ mod tests {
         p.save_staged();
         p.close();
 
-        // …then a character is created, so the roster the panel opens over has one more name and
-        // that name has no enable file at all.
+        // A created character, with no enable file.
         p.open_for(
             "TestRealm".into(),
             vec!["Onemage".into(), "Onerogue".into(), "Freshling".into()],
@@ -2074,9 +1841,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// The other side of the same law: a new character does **not** inherit a disable the roster
-    /// never agreed on. One character off, one on, and the newcomer takes the manifest's
-    /// `## DefaultState` — so this is not "new characters copy whoever is strictest".
+    /// A new character does not inherit a disable the roster split on: it takes the manifest's
+    /// `## DefaultState`.
     #[test]
     fn a_new_character_inherits_nothing_when_the_roster_disagrees() {
         let _l = crate::local_state::test_env::ENV_LOCK
@@ -2128,10 +1894,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// The force-load box IS the `checkAddonVersion` CVar inverted, and a toggle is a host
-    /// write into the registry (2303) — that is the whole persistence story (the write dirties
-    /// the config and reaches the VM's mirror through the outbox); the panel itself only
-    /// repaints from its per-frame mirror, rescanning nothing (1292 §2.2).
+    /// The force-load box is the `checkAddonVersion` CVar inverted, written into the registry.
     #[test]
     fn the_force_load_box_flips_the_cvar_in_the_registry() {
         let mut cvars = crate::cvars::Cvars::default();
@@ -2161,17 +1924,8 @@ mod tests {
         );
     }
 
-    /// **B274** — the knob is draggable, and the drag is the client's own law.
-    ///
-    /// This models the press/move arithmetic the drive system runs, in the same band-normalized
-    /// units: `cursor_n` is the cursor as a fraction of the bar's height, `thumb_n` the knob's
-    /// share of it. Only the cursor read and the `ComputedNode` lookup are left out — everything
-    /// that decides where the list lands is here.
-    ///
-    /// What it pins is the property the reporter is missing (a grab moves the list at all) plus
-    /// the two that make it feel right: **offset-preserving** on the knob (grab its bottom edge,
-    /// and the list does not jump before you have moved), and **absolute, not accumulated**, so a
-    /// long drag cannot walk away from the cursor.
+    /// The drive system's press and move arithmetic in band-normalized units: a knob grab keeps
+    /// its offset, and the drag is absolute, so it cannot walk away from the cursor.
     #[test]
     fn the_scroll_knob_drags_the_list_under_the_cursor() {
         let thumb_n = KNOB / BAR_H;
@@ -2184,35 +1938,32 @@ mod tests {
         let max = p.max_offset();
         assert_eq!(max, MAX_ROWS + 1);
 
-        // Press the knob at its BOTTOM edge, at rest (knob at the top of the track).
+        // Press the resting knob at its bottom edge.
         let grab = slider_grab(thumb_n, 0.0, thumb_n);
         assert_eq!(grab, thumb_n, "grabbing the knob's bottom keeps that point");
         let f = slider_fraction(thumb_n, grab, 1.0, thumb_n).expect("the bar has travel");
         p.scroll_to(f);
         assert_eq!(p.offset, 0, "the press alone must not jump the list");
 
-        // Drag to the middle of the track; the grabbed point stays under the cursor, so the
-        // knob's LEADING edge lands half a knob above it.
+        // Mid-track: the grabbed point stays under the cursor, the leading edge half a knob up.
         let f = slider_fraction(0.5 + thumb_n * 0.5, grab, 1.0, thumb_n).unwrap();
         p.scroll_to(f);
         assert_eq!(p.offset, max / 2, "mid-track = mid-list");
 
-        // Past the bottom end: pinned, never past it (the clamp `SetValue` does in the client).
+        // Past the bottom end: pinned, the clamp `SetValue` does.
         let f = slider_fraction(4.0, grab, 1.0, thumb_n).unwrap();
         p.scroll_to(f);
         assert_eq!(p.offset, max);
         assert_eq!(p.visible().count(), MAX_ROWS, "the last page is still full");
 
-        // Absolute, not accumulated: returning the cursor to where it pressed returns the list
-        // to where it started, however far it wandered in between.
+        // Absolute: returning the cursor to the press point returns the list to its start.
         let f = slider_fraction(thumb_n, grab, 1.0, thumb_n).unwrap();
         p.scroll_to(f);
         assert_eq!(p.offset, 0);
     }
 
-    /// A press on the TRACK — off the knob — warps the knob's centre under the cursor and drags
-    /// on from there, one gesture. 1.12 does this (`0x789ca0`, and the director's own requirement
-    /// in 0989); the glue bar runs the same law as every in-game one.
+    /// A press on the bare track warps the knob's centre under the cursor and drags on from there
+    /// (`0x789ca0`).
     #[test]
     fn a_press_on_the_bare_track_warps_the_knob_under_the_cursor() {
         let thumb_n = KNOB / BAR_H;
@@ -2236,10 +1987,8 @@ mod tests {
         assert!(p.dirty, "and the move repaints");
     }
 
-    /// The two directions are inverses at every stop: draw the knob where the offset says
-    /// ([`AddonsPanel::thumb_fraction`]), read the offset back out of that position
-    /// ([`AddonsPanel::scroll_to`]), and land on the same row. A bar that fails this creeps a row
-    /// per grab.
+    /// [`AddonsPanel::thumb_fraction`] and [`AddonsPanel::scroll_to`] are inverses at every stop,
+    /// or a bar creeps a row per grab.
     #[test]
     fn the_knob_position_and_the_row_it_means_are_inverses() {
         let mut p = panel(

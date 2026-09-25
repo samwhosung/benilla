@@ -1,24 +1,16 @@
 <Ui>
     <!--
-        The key bindings page: the options window's Keybindings category, over the engine's
-        binding table and the 1.12 binding API. This file holds the templates and the script; the
-        rows are children of the Keybindings body in OptionsFrame.xml, which loads after it. Only
-        commands the engine dispatches are registered, so only they and their categories appear.
-        Deviation: the page is the era Settings panel's Keybindings page (Keybindings.lua,
-        KeybindingsOverrides.lua), because 1.12's settings screens are much worse to use. It is
-        one list of collapsible category sections, the Character Specific Keybindings checkbox as
-        its first row, and search results that open this page.
-        Capture and set follow 1.12's Blizzard_BindingUI where the two differ: a capsule click
-        arms, the next key or mouse 3/4/5 press binds at once, left and right clicks only select,
-        the wheel binds like any key, and ESC while armed binds Escape (1.12's OnKeyDown has no
-        ESCAPE filter; Unbind Key clears).
+        The options window's Keybindings page: templates and script; its rows live in
+        OptionsFrame.xml, which loads after. Only commands the engine dispatches appear.
+        Deviation: the layout is the era Settings panel's Keybindings page (collapsible category
+        sections), because 1.12's settings screens are much worse to use. Capture follows 1.12's
+        Blizzard_BindingUI: the next key or mouse 3/4/5 press binds, left and right clicks only
+        select, and ESC while armed binds Escape (its OnKeyDown has no ESCAPE filter).
         Deviation: every bind, unbind and reset saves at once, as the era panel commits, where
         1.12 had Okay and Cancel; only Reset To Default and leaving the character set confirm.
     -->
 
-    <!-- A key capsule, 1.12's KeyBindingFrameBindingButtonTemplate: UIPanelButtonTemplate2 art at
-         180x22 with the small font trio, registered for all five buttons so a middle, 4 or 5
-         press reaches the capture. Selected is its LockHighlight, the ADD highlight held on. -->
+    <!-- 1.12's KeyBindingFrameBindingButtonTemplate; all five buttons reach the capture. -->
     <Button name="KeyBindingButtonTemplate" virtual="true">
         <Size><AbsDimension x="180" y="22"/></Size>
         <ButtonText name="$parentText"/>
@@ -34,10 +26,8 @@
         </Scripts>
     </Button>
 
-    <!-- A list row, painted as a binding (name, two capsules) or as a section header: one toggle
-         in 1.12's QuestLogTitleButton dress, the 16x16 plus/minus square and gold label, since
-         the era's expand arrows are not in 1.12. Both are 25 tall, the era's one row height
-         (SettingsKeybindingSectionInitializer:GetExtent). -->
+    <!-- A binding row or a section header in 1.12's QuestLogTitleButton dress, since the era's
+         expand arrows are not in 1.12; 25 tall, the era's row height. -->
     <Frame name="KeyBindingRowTemplate" virtual="true">
         <Size><AbsDimension x="560" y="25"/></Size>
         <Layers>
@@ -91,10 +81,8 @@
             return fallback
         end
 
-        -- ── Key display ── 1.12's GetBindingText in full form, as the reference shows it here and
-        -- in tooltips (the action bar's abbreviated form is the stock GetBindingText): modifier
-        -- prefixes stay uppercase tokens, the base key reads its KEY_* global, else itself.
-        -- "CTRL--" is CTRL plus the minus key.
+        -- ── Key display ── 1.12's GetBindingText in full form: modifier prefixes stay tokens, the
+        -- base key reads its KEY_* global. "CTRL--" is CTRL plus the minus key.
         function KeyBindings_KeyText(key)
             if not key then
                 return NORMAL_FONT_COLOR_CODE .. KeyBindings_String("NOT_BOUND", "Not Bound") .. FONT_COLOR_CODE_CLOSE
@@ -119,9 +107,7 @@
             return prefix .. KeyBindings_String("KEY_" .. rest, rest)
         end
 
-        -- ── Page state ── `sections` is the era section model, `selected`/`keyID` the 1.12
-        -- selection, and `searchPainted` maps OptionsFrame.xml's live search rows (row name to
-        -- binding index).
+        -- ── Page state ── `searchPainted` maps OptionsFrame.xml's search rows to binding indices.
         KeyBindingsPage = { sections = {}, items = {} }
 
         KEYBINDINGS_ROW_BASE = "BenillaOptionsFrameContainerBodyKeybindingsRow"
@@ -129,9 +115,8 @@
         KEYBINDINGS_ROW_HEIGHT = 25
         KEYBINDINGS_SEARCH_ROWS = 8
 
-        -- ── Section model ── the era's CreateKeybindingInitializers: one section per category
-        -- token in first-appearance order, which is 1.12's Bindings.xml order. Sections start
-        -- collapsed (the era's Classic overrides pass no `expanded`); a rebuild keeps each state.
+        -- ── Section model ── one section per category in Bindings.xml order, collapsed at first
+        -- as in the era; a rebuild keeps each state.
         function KeyBindings_BuildSections()
             local page = KeyBindingsPage
             local was = {}
@@ -153,8 +138,7 @@
             KeyBindings_Flatten()
         end
 
-        -- The visible list the faux scroll runs over (the era's EvaluateVisibility): each header,
-        -- then its rows when expanded.
+        -- The visible list the faux scroll runs over.
         function KeyBindings_Flatten()
             local page = KeyBindingsPage
             page.items = {}
@@ -168,7 +152,7 @@
             end
         end
 
-        -- A header click (the era's OnExpandedChanged), voiced with the checkbox sound.
+        -- A header click, voiced with the checkbox sound.
         function KeyBindings_ToggleSection(n)
             local sec = KeyBindingsPage.sections[n]
             if not sec then return end
@@ -178,7 +162,7 @@
             KeyBindingsPage_Update()
         end
 
-        -- Expands or collapses a section silently; the capture fixture opens sections with it.
+        -- Silent, for the capture fixture.
         function KeyBindings_ExpandSection(n, on)
             local sec = KeyBindingsPage.sections[n]
             if not sec then return end
@@ -186,8 +170,7 @@
             KeyBindings_Flatten()
         end
 
-        -- ── Painters ── one row in one mode, shared by the list and the search rows, whose
-        -- capsules capture in place as the era's live results do.
+        -- ── Painters ── shared by the list and the search rows, which capture in place.
         function KeyBindings_PaintBindRow(name, index)
             local command, _, key1, key2 = GetBinding(index)
             local b1 = getglobal(name .. "Key1Button")
@@ -234,7 +217,7 @@
             getglobal(name .. "Key2Button"):Hide()
         end
 
-        -- ── The list repaint (1.12 KeyBindingFrame_Update over the era section list). ──
+        -- ── The list repaint (1.12 KeyBindingFrame_Update) ──
         function KeyBindingsPage_Update()
             local page = KeyBindingsPage
             local scroll = getglobal("BenillaOptionsFrameContainerBodyKeybindingsScrollFrame")
@@ -255,14 +238,12 @@
             end
             FauxScrollFrame_Update(scroll, table.getn(page.items),
                 KEYBINDINGS_DISPLAYED, KEYBINDINGS_ROW_HEIGHT)
-            -- The trough is ours and the stock kit never shows one, so it follows the bar
-            -- `FauxScrollFrame_Update` has just shown or hidden.
+            -- Our trough follows the bar `FauxScrollFrame_Update` has just shown or hidden.
             BenillaScrollTrough_Follow(scroll:GetName())
             KeyBindings_UpdateUnbindKey()
         end
 
-        -- The page entry (BenillaOptionsFrame_SelectCategory): rebuilds the sections, since a
-        -- rebind or a set switch may have changed the table, then repaints from the top.
+        -- The page entry: a rebind or a set switch may have changed the table.
         function KeyBindingsPage_Refresh()
             KeyBindings_BuildSections()
             local box = getglobal("BenillaOptionsFrameContainerBodyKeybindingsCharacterRowCheck")
@@ -279,9 +260,7 @@
             getglobal("BenillaOptionsFrameContainerBodyKeybindingsOutput"):SetText(text)
         end
 
-        -- ── Selection ── selecting a capsule arms the host's capture (BenillaBindCapture), which
-        -- swallows raw input and hands the canonical chord to KeyBindings_OnHostKey; deselecting
-        -- disarms.
+        -- ── Selection ── arms the host's capture, which hands its chord to KeyBindings_OnHostKey.
         function KeyBindings_SetSelected(command, keyID)
             KeyBindingsPage.selected = command
             KeyBindingsPage.keyID = keyID
@@ -297,8 +276,7 @@
             end
         end
 
-        -- Repaints whichever view shows binding rows, the list or every search row, since a bind
-        -- from one search row can unbind a victim shown on another.
+        -- Every search row: a bind from one can unbind a victim shown on another.
         function KeyBindings_RepaintVisible()
             if KeyBindingsPage.searchPainted then
                 for name, index in pairs(KeyBindingsPage.searchPainted) do
@@ -311,9 +289,7 @@
         end
 
         function KeyBindingButton_OnClick(button)
-            -- As 1.12: while armed, only a left or right click reselects or deselects. A middle,
-            -- 4 or 5 press is a bind that the armed capture takes after this click, so it must
-            -- leave the selection alone.
+            -- As 1.12: while armed, a middle, 4 or 5 press is a bind the capture takes after this.
             local page = KeyBindingsPage
             if page.selected then
                 if button ~= "LeftButton" and button ~= "RightButton" then
@@ -337,14 +313,11 @@
             KeyBindings_RepaintVisible()
         end
 
-        -- The live commit: saves the set a bind, unbind or reset has just changed.
         function KeyBindings_Commit()
             SaveBindings(GetCurrentBindingSet())
         end
 
-        -- The host's capture callback, `chord` canonical (ALT-CTRL-SHIFT-TOKEN): 1.12's OnKeyDown
-        -- armed branch, then the live commit. A stolen chord names its victim in red only when it
-        -- was the victim's last key; the command's keys rebind in slot order.
+        -- `chord` is ALT-CTRL-SHIFT-TOKEN; 1.12's OnKeyDown armed branch, then the live commit.
         function KeyBindings_OnHostKey(chord)
             local page = KeyBindingsPage
             if not page.selected then
@@ -379,9 +352,7 @@
             KeyBindings_RepaintVisible()
         end
 
-        -- 1.12's KeyBindingFrame_SetBinding: a refused bind restores the slot's old key. SetBinding
-        -- refuses only a string that is not a key, so this fires for a chord the capture could not
-        -- name, never for the wheel; the message stays 1.12's wheel text.
+        -- 1.12's KeyBindingFrame_SetBinding, message and all; SetBinding refuses only a non-key.
         function KeyBindings_SetOrRestore(key, command, oldKey)
             if not SetBinding(key, command) then
                 if oldKey then SetBinding(oldKey, command) end
@@ -391,8 +362,7 @@
             end
         end
 
-        -- The Unbind Key button (OptionsFrame.xml): 1.12's body, which empties the selected slot
-        -- and slides the other into slot order, then the live commit.
+        -- 1.12's Unbind Key body, then the live commit.
         function KeyBindings_Unbind()
             local page = KeyBindingsPage
             local key1, key2 = GetBindingKey(page.selected)
@@ -409,12 +379,9 @@
             KeyBindings_RepaintVisible()
         end
 
-        -- ── Character-specific set ── 1.12's binding sets under the era's checkbox. Checking
-        -- saves set 2 at once, a copy of the current binds (LoadBindings(2) falls back to the
-        -- account set), and that saved set is what the checkbox reads. Unchecking deletes it, so
-        -- it confirms (the era confirms only on uncheck) and the box stays checked meanwhile.
-        -- The accept loads set 1 before saving it; saving first would write the character binds
-        -- into the account set.
+        -- ── Character-specific set ── checking saves set 2 at once (LoadBindings(2) falls back
+        -- to the account set); unchecking confirms first, as the era does. The accept loads set 1
+        -- before saving it, or the character binds would be written into the account set.
         function KeyBindings_CharacterToggle(box)
             PlaySound("igMainMenuOptionCheckBoxOn")
             if box:GetChecked() then
@@ -442,8 +409,7 @@
                 KeyBindingsPage_Refresh()
             end,
         }
-        -- Reset To Default, the page's Defaults button: it confirms, as the era's does, with our
-        -- own string since 1.12 has none, and resets the current set with a live commit.
+        -- Reset To Default confirms, as the era's does; our string, since 1.12 has none.
         StaticPopupDialogs["CONFIRM_RESET_KEYBINDINGS"] = {
             text = "Are you sure you want to reset all keybindings to their defaults?",
             button1 = KeyBindings_String("OKAY", "Okay"),
@@ -458,11 +424,8 @@
             end,
         }
 
-        -- ── Search ── a binding's tag is its display name uppercased (the era's
-        -- AddSearchTags(GetBindingName(action))); matches list under the Keybindings group head,
-        -- which opens this page (the era's `redirectCategory`, Blizzard_SettingsPanel.lua l.578).
-        -- OptionsFrame.xml paints them as live rows. Deviation: a static pool of
-        -- KEYBINDINGS_SEARCH_ROWS rows, where the era's results scroll.
+        -- ── Search ── a binding's tag is its display name uppercased, as the era's.
+        -- A static pool of KEYBINDINGS_SEARCH_ROWS rows, where the era's results scroll.
         function KeyBindings_SearchMatches(words)
             local out = {}
             for i = 1, GetNumBindings() do

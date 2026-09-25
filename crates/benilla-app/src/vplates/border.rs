@@ -1,28 +1,20 @@
-//! Sharpening the V-plate frame border.
+//! The V-plate frame border, resampled sharp.
 //!
-//! The frame art `Interface\Tooltips\Nameplate-Border` is a **128 × 32** BLP. The plate frame is
-//! `0.1 × 0.025` gx; past the 1024×768 knee (and always on a retina framebuffer) it is drawn
-//! *larger* than 128 × 32, so the UI pass's bilinear sampler **magnifies** the bitmap — the 1 px
-//! gold bevel smears across several soft pixels (the director's "blurry border").
-//!
-//! The director's call (2026-07-07): keep the **exact same art**, just make it sharper — not a
-//! redraw. So we resample the BLP's own pixels to the plate's physical size with **sharp bilinear**:
-//! flat within each source texel, a ~1-output-pixel anti-aliased ramp at texel boundaries. Same
-//! colours, same proportions, same socket — but crisp edges instead of a full-texel gradient. The
-//! result is uploaded as the border texture and drawn 1:1 (see [`super::drive_vplates`], which
-//! regenerates it only when the plate's physical size changes).
+//! Deviation: the reference magnifies the 128 × 32 `Interface\Tooltips\Nameplate-Border` art with
+//! `GL_LINEAR` (`0x770200`, filter `[0x878cf0]` = 1), smearing its 1 px bevel once the plate is
+//! larger than native; we resample the same pixels to the plate's physical size with sharp
+//! bilinear and draw it 1:1, because the chosen look is the same art with a crisp bevel.
+//! [`super::drive_vplates`] regenerates it when the physical size changes.
 
-/// Resample `src` (an `sw × sh` sRGB RGBA8 image) to `dw × dh` with sharp bilinear. Interpolates in
-/// **premultiplied** sRGB so alpha edges don't dark-fringe. On magnification the per-axis boundary
-/// ramp is compressed to ~1 output pixel (crisp); on minification it falls back to plain bilinear
-/// (`sharpen = max(scale, 1)`), so a plate smaller than native still resolves cleanly.
+/// Resample `src` (an `sw × sh` sRGB RGBA8 image) to `dw × dh` with sharp bilinear, premultiplied
+/// so alpha edges do not fringe dark. Magnifying squeezes each texel boundary to about one output
+/// pixel; minifying is plain bilinear.
 pub(crate) fn resample_sharp(src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32) -> Vec<u8> {
     let fetch = |x: i32, y: i32| -> [f32; 4] {
         let x = x.clamp(0, sw as i32 - 1) as u32;
         let y = y.clamp(0, sh as i32 - 1) as u32;
         let i = ((y * sw + x) * 4) as usize;
         let a = src[i + 3] as f32 / 255.0;
-        // Premultiplied: colour weighted by coverage, so blended edges stay clean.
         [
             src[i] as f32 / 255.0 * a,
             src[i + 1] as f32 / 255.0 * a,
@@ -35,12 +27,11 @@ pub(crate) fn resample_sharp(src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32) -> 
     let mut out = vec![0u8; (dw * dh * 4) as usize];
     for dy in 0..dh {
         for dx in 0..dw {
-            // Source coordinate at this output texel's centre (−0.5 = texel-centre convention).
+            // Source coordinate at this output texel's centre.
             let su = (dx as f32 + 0.5) * sw as f32 / dw as f32 - 0.5;
             let sv = (dy as f32 + 0.5) * sh as f32 / dh as f32 - 0.5;
             let (x0, y0) = (su.floor(), sv.floor());
-            // Sharpen the fractional part: steepen the ramp so the texel boundary spans ~1 output
-            // pixel instead of the whole magnified texel (1.0 = plain bilinear).
+            // Steepen the ramp so a texel boundary spans about one output pixel.
             let ru = (((su - x0) - 0.5) * sharpen_x + 0.5).clamp(0.0, 1.0);
             let rv = (((sv - y0) - 0.5) * sharpen_y + 0.5).clamp(0.0, 1.0);
             let (x0, y0) = (x0 as i32, y0 as i32);
@@ -74,12 +65,9 @@ pub(crate) fn resample_sharp(src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32) -> 
 mod tests {
     use super::*;
 
-    /// A 2×2 source (one opaque red texel, the rest transparent) upscaled 4× stays the same size and
-    /// colour, and the sharp ramp keeps the opaque quadrant's core fully opaque red — no bilinear
-    /// wash across the whole image.
+    /// A 2×2 source with one opaque red texel, upscaled 4×, keeps a solid red core.
     #[test]
     fn resample_sharp_keeps_the_texel_crisp() {
-        // src texel (0,0) opaque red; the other three transparent.
         let mut src = vec![0u8; 2 * 2 * 4];
         src[0] = 255; // r
         src[3] = 255; // a
@@ -90,14 +78,11 @@ mod tests {
             let i = ((y * dw + x) * 4) as usize;
             [out[i], out[i + 1], out[i + 2], out[i + 3]]
         };
-        // The top-left corner sits well inside the opaque red texel — solid red, full alpha.
         assert_eq!(px(0, 0), [255, 0, 0, 255], "crisp opaque red core");
-        // The far corner is inside the transparent texels — clear.
         assert_eq!(px(7, 7)[3], 0, "transparent quadrant stays clear");
     }
 
-    /// Round-trip identity: resampling to the same size returns the source unchanged (the ramp is a
-    /// no-op at scale 1). Opaque pixels, so premultiply is exact.
+    /// Opaque pixels, so premultiplication round-trips exactly.
     #[test]
     fn resample_sharp_identity_at_same_size() {
         let mut src = vec![0u8; 3 * 3 * 4];

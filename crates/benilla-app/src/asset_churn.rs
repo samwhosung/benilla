@@ -1,20 +1,7 @@
-//! `WOW_ASSET_CHURN=1` — what the app rewrites in `Assets<T>` every frame, and how big it is.
-//!
-//! The question this answers: Bevy's `prepare_assets<GpuImage>` re-uploads any image that was
-//! **modified** since last frame, and `extract_render_asset` re-extracts it. Both showed up as a
-//! flat multi-millisecond per-frame cost on the login screen — a static background image — where
-//! nothing should be modified at all. A trace can name the *system* that pays; only the asset
-//! events name the *asset* that made it pay.
-//!
-//! Prints one line per second: for each watched asset type, the per-frame Added/Modified counts,
-//! and for images the megabytes those modifications ask the render world to re-upload, plus the
-//! top offenders by how many frames they were touched in.
-//!
-//! The megabytes come from the image's `texture_descriptor`, not from `data.len()`. A
-//! `RenderAssetUsages::RENDER_WORLD` image has its bytes MOVED into the render world on extract, so
-//! main-side `data` is `None` from then on — measuring it read 0 for the sprite sheets, the effect
-//! textures and all three terrain arrays, i.e. for most of the texture set. The meter was blind to
-//! precisely the assets it exists to catch.
+//! `WOW_ASSET_CHURN=1`: once a second, logs per asset type the Added/Modified events per frame,
+//! the image megabytes those modifications re-upload, and the images touched in the most frames.
+//! Sizes come from the `texture_descriptor`: a `RENDER_WORLD` image's main-side `data` is `None`
+//! after extract.
 
 use std::collections::HashMap;
 
@@ -25,8 +12,7 @@ use bevy::time::Real;
 
 pub(crate) struct AssetChurnPlugin;
 
-/// Off unless `WOW_ASSET_CHURN=1`, read once (the plugin is skipped entirely, so an ordinary run
-/// carries no systems at all — not even a disabled one).
+/// Off unless `WOW_ASSET_CHURN=1`, read once; when off the plugin adds no systems.
 pub(crate) fn enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("WOW_ASSET_CHURN").as_deref() == Ok("1"))
@@ -47,12 +33,9 @@ struct Churn {
     frames: u32,
     /// asset type -> (added, modified) event totals this window.
     counts: HashMap<&'static str, (u64, u64)>,
-    /// Image id -> how many DISTINCT frames it was modified in, the last frame index that counted
-    /// (so several Modified events in one frame count once), and its byte size when last seen.
-    /// Counting events instead printed "touched in 77/9 frames" — a ratio above 1.0 is the
-    /// instrument telling you it is measuring something other than what its label says.
+    /// Per image: distinct frames modified, not events, so the ratio never exceeds 1.
     images: HashMap<AssetId<Image>, ImageChurn>,
-    /// Bytes of image data modification asks the render world to re-upload, this window.
+    /// Image bytes modification asks the render world to re-upload, this window.
     image_bytes: u64,
     last_report: f32,
 }
@@ -62,9 +45,9 @@ struct Churn {
 struct ImageChurn {
     /// Distinct frames this image was modified in.
     frames: u64,
-    /// The last frame index already counted, so N events in one frame count once.
+    /// The last frame counted, so several events in one frame count once.
     last_frame: Option<u32>,
-    /// Its data size when last seen (what a modification asks to be re-uploaded).
+    /// Its GPU size when last seen.
     bytes: usize,
 }
 

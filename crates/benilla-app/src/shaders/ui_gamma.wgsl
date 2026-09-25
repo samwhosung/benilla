@@ -1,8 +1,6 @@
-// The UI lane's one gamma decode, with the client's display-gamma ramp applied first: the value
-// sampled here is the byte the reference's RAMDAC would read. `ui_quad.wgsl` composites gamma bytes
-// into an `Rgba8UnormSrgb` target, so the sampler returns the value written and `srgb_to_linear`
-// re-encodes it to the exact byte in the swapchain (output mode `Skip`, no blit follows). RGB is
-// premultiplied by coverage; alpha is coverage, carries no gamma, and passes through.
+// The UI lane's one gamma decode, after the display-gamma ramp: the sampled value is the byte the
+// reference's RAMDAC would read, and `srgb_to_linear` re-encodes it to the exact swapchain byte.
+// Alpha is coverage and passes through.
 
 #import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
 
@@ -22,9 +20,8 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
 fn fs_decode(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let ui = textureSample(screen_texture, screen_sampler, in.uv);
     var rgb = ui.rgb;
-    // The reference's hardware ramp `pow(i / 255, gamma)` (`0x591680`), with `rgb` as `i / 255`.
-    // The uniform branch keeps the default an exact identity: `pow(x, 1.0)` compiles to
-    // `exp2(log2(x))` and `log2(0)` is undefined, which the floor also guards for other gammas.
+    // The reference's hardware ramp `pow(i / 255, gamma)` (`0x591680`). The branch keeps gamma 1
+    // an exact identity and the floor guards `log2(0)` inside `pow`.
     if (ramp.x != 1.0) {
         rgb = pow(max(rgb, vec3<f32>(1e-6)), vec3<f32>(ramp.x));
     }

@@ -1,24 +1,7 @@
-//! The item layer — decision 0068's T2 (containers) groundwork.
+//! The item layer: item objects in the guid index and the item template cache.
 //!
-//! The wire splits item knowledge in two:
-//!
-//! - **Objects** — the item/container *instances* the server streamed at us (`ItemCreate`: our own
-//!   inventory at login, loot, trades; they are private, so only ours ever arrive). **An item is
-//!   an object**: it is an entity in the one guid index with the same
-//!   [`ObjectStore`] every unit has — `Guid` + `ObjectStore` + [`ItemObject`] — created, merged
-//!   and destroyed by the object layer's handlers like any other kind, its field edges on the
-//!   same watch (`FieldChanged`, kind `Item`/`Container`), gone with the session's sweep. Which
-//!   *slot* holds a guid lives one level up, in the player descriptor's `INV_SLOT`/`PACK_SLOT`
-//!   arrays and a bag's `CONTAINER_FIELD_SLOT` array; [`crate::net::Objects`] resolves those guids
-//!   to the item's fields. Its countdowns (temporary enchants, its own lifetime) are its own
-//!   [`Countdowns`] component — the reference's per-object deadline cells.
-//!
-//! - **Templates** — the static item *definitions* (`SMSG_ITEM_QUERY_SINGLE_RESPONSE`: name,
-//!   quality, class, display id), keyed by entry and shared by every copy. The exact twin of
-//!   [`crate::names::NameCache`], with the same **ask-once** discipline: [`Items::template`]
-//!   returns the answer when known, otherwise sends the query (deduped while in flight) and
-//!   reports "not yet". Negative answers are cached — a bad entry never becomes a query loop.
-//!   Templates survive disconnect: item definitions are stable across sessions.
+//! An item is `Guid` + [`ObjectStore`] + [`ItemObject`] in the guid index; item fields are private,
+//! so only our own arrive. Templates are keyed by entry, asked once, and survive disconnect.
 
 use std::time::{Duration, Instant};
 
@@ -31,20 +14,17 @@ use bevy::ecs::system::SystemParam;
 use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, ObjectStore, Objects};
 use crate::query_cache::QueryCache;
 
-/// **An item or container entity's kind** — the reference's `TYPEMASK_ITEM` / `TYPEMASK_CONTAINER`
-/// on the one object index. An item is `Guid` + [`ObjectStore`] + this; it has no
-/// `NetEntity` and no `Transform` because it has no model and no pose. Every system that iterates
-/// stores as *units* filters this out (`Without<ItemObject>`): an item block's dwords overlap the
-/// unit block's indices, so an unfiltered unit read of an item's store answers with item fields.
+/// An item or container entity's kind (`TYPEMASK_ITEM` / `TYPEMASK_CONTAINER`), with no model or
+/// pose. Unit readers filter it out (`Without<ItemObject>`): an item block's dwords overlap the
+/// unit block's indices.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ItemObject {
-    /// `TYPEMASK_CONTAINER` — the create said so; a bag's slot array lives past the item block.
+    /// `TYPEMASK_CONTAINER`: a bag's slot array lives past the item block.
     pub(crate) container: bool,
 }
 
-/// Spawn an item object into the index — the item half of the object layer's create, and what a
-/// fixture seeds with. The seed is never merged (the create-time notify-suppress, 2297); a
-/// re-create of a live guid takes the values path in the handler, not this.
+/// Spawn an item object into the index. The seed is never merged, so the create raises no field
+/// notify; a re-create of a live guid takes the handler's values path instead.
 pub(crate) fn spawn_item(
     commands: &mut Commands,
     index: &mut GuidIndex,
@@ -64,31 +44,22 @@ pub(crate) fn spawn_item(
     e
 }
 
-/// The item's enchantment slots — `ITEM_FIELD_ENCHANTMENT`'s 21 dwords, three per slot, and the
-/// reference's seven enchant deadline cells `[obj + 0x324 + slot*4]` (`0x5d9d00`), which end where
-/// the next member begins at `+0x340`.
+/// `ITEM_FIELD_ENCHANTMENT`'s 21 dwords, three per slot; the reference's seven deadline cells at
+/// `obj + 0x324 + slot*4` (`0x5d9d00`) end where the next member begins, at `+0x340`.
 pub(crate) const ENCHANT_SLOTS: usize = 7;
 
-/// **An item's countdowns** — the reference's per-object deadline cells on `CGItem_C` (decision
-/// 2340): its own lifetime at `+0x320` (fed only by `SMSG_ITEM_TIME_UPDATE`) and
-/// one temporary-enchant deadline per enchant slot at `+0x324` (fed only by
-/// `SMSG_ITEM_ENCHANT_TIME_UPDATE`, decision 0920; the item's `ITEM_FIELD_ENCHANTMENT` duration
-/// field is never read for it). Every item object carries one from its spawn, so the cells die
-/// with the object as the reference's do, and a write through `Mut` is the landing the inventory
-/// feeds' [`ItemChanges`] sees.
-///
-/// Absolute deadlines, recomputed on read and never ticked — `0x5d9c60` / `0x5d9d00` subtract
-/// `now` from the cell on every call.
+/// An item's countdowns, the reference's deadline cells on `CGItem_C`: its lifetime at `+0x320`
+/// (fed only by `SMSG_ITEM_TIME_UPDATE`) and one temporary-enchant deadline per slot at `+0x324`
+/// (fed only by `SMSG_ITEM_ENCHANT_TIME_UPDATE`; the enchantment field's duration is never read).
+/// Absolute deadlines, recomputed on every read and never ticked (`0x5d9c60`, `0x5d9d00`).
 #[derive(Component, Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Countdowns {
     lifetime: Option<Instant>,
     enchants: [Option<Instant>; ENCHANT_SLOTS],
 }
 
-/// The two setters' shared store rule (`0x5d9c00`, `0x5d9cc0`): a **signed** `<= 0` clears the
-/// cell — `jle` on the wire value, so `0` and anything with the top bit set both store absence
-/// rather than a 68-year deadline — and anything else parks `now + seconds`, the wire's seconds
-/// times the one `imul 0x3e8`.
+/// The setters' store rule (`0x5d9c00`, `0x5d9cc0`): a signed `<= 0` (`jle`) clears the cell, so a
+/// top-bit value is absence, not a 68-year deadline; anything else parks `now + seconds`.
 fn deadline(seconds: u32) -> Option<Instant> {
     ((seconds as i32) > 0).then(|| Instant::now() + Duration::from_secs(u64::from(seconds)))
 }
@@ -98,8 +69,7 @@ fn left(cell: Option<Instant>) -> Option<Duration> {
     cell.map(|at| at.saturating_duration_since(Instant::now()))
 }
 
-/// The tooltip's read: an elapsed cell is no timer at all (the `!= 0` gate prints the plain
-/// line).
+/// The tooltip's read: an elapsed cell is no timer (its `!= 0` gate prints the plain line).
 fn remaining_ms(cell: Option<Instant>) -> Option<u64> {
     left(cell)
         .filter(|l| !l.is_zero())
@@ -107,9 +77,8 @@ fn remaining_ms(cell: Option<Instant>) -> Option<u64> {
 }
 
 impl Countdowns {
-    /// `SMSG_ITEM_ENCHANT_TIME_UPDATE`'s setter `0x5d9cc0`. The reference indexes the cell array
-    /// with the wire's slot unchecked — a slot past the seventh overruns into the next member;
-    /// this refuses it instead (`false`), as the spell-modifier tables refuse theirs.
+    /// `SMSG_ITEM_ENCHANT_TIME_UPDATE`'s setter `0x5d9cc0`. A slot past the seventh is refused
+    /// (`false`), where the reference indexes unchecked and overruns into the next member.
     pub(crate) fn set_enchant(&mut self, slot: u32, seconds: u32) -> bool {
         let Some(cell) = self.enchants.get_mut(slot as usize) else {
             return false;
@@ -127,55 +96,36 @@ impl Countdowns {
         self.enchants.get(slot as usize).copied().flatten()
     }
 
-    /// Milliseconds left on the temporary enchant in `slot`, or `None` when that slot carries no
-    /// timer — including an expired one (`0x5d9d00` returns 0 past the deadline, and the tooltip's
-    /// `!= 0` gate then prints the plain name).
+    /// Milliseconds left on the temporary enchant in `slot`; `None` also once expired.
     pub(crate) fn enchant_remaining_ms(&self, slot: u32) -> Option<u64> {
         remaining_ms(self.enchant(slot))
     }
 
-    /// [`Self::enchant_remaining_ms`] at **display granularity**: floored to the whole second.
-    ///
-    /// The snapshot feeds read this one. The tooltip's bucket ladder is ceil at day/hour/min and
-    /// truncate at seconds, so every value inside one second renders the same line — but a raw
-    /// per-ms read makes the *snapshot* differ every frame, which held the 1439 gates open and
-    /// fired `UNIT_INVENTORY_CHANGED` at frame rate for as long as a poison ticked (director
-    /// report, 2026-08-19: the char window's cost, and its refusal to settle after closing).
-    /// Floored, the snapshot moves once a second — exactly as often as its rendering can.
-    /// The live per-ms reader stays for `GetWeaponEnchantInfo` ([`Self::enchant_deadline_ms`]),
-    /// whose per-frame push is the reference's own recompute-per-call (`0x5d9d00`).
+    /// [`Self::enchant_remaining_ms`] floored to the second, for the snapshot feeds: a per-ms read
+    /// would fire `UNIT_INVENTORY_CHANGED` every frame while a timer runs.
     pub(crate) fn enchant_remaining_display_ms(&self, slot: u32) -> Option<u64> {
         self.enchant_remaining_ms(slot).map(|ms| ms - ms % 1000)
     }
 
-    /// The same deadline read **without** the tooltip's expired-is-absent collapse: `Some(0)` for a
-    /// timer that has run out, `None` only when the slot never had one.
-    ///
-    /// `GetWeaponEnchantInfo` needs the two apart where the tooltip does not. Its expiration return
-    /// is `max(0, deadline − now)` from the client-local deadline array (`0x5d9d00`, subtract on
-    /// read), so an enchant whose timer has elapsed answers the NUMBER 0, and
-    /// `BuffFrame_Enchant_OnUpdate` then draws "0 s" and pulses the icon. Collapsing that to nil
-    /// would silently hide a expiring enchant's last state.
+    /// The deadline read without the expired-is-absent collapse: `Some(0)` once run out, `None`
+    /// only when never set. `GetWeaponEnchantInfo` returns `max(0, deadline - now)` (`0x5d9d00`),
+    /// so an elapsed enchant answers 0 and `BuffFrame_Enchant_OnUpdate` draws "0 s".
     pub(crate) fn enchant_deadline_ms(&self, slot: u32) -> Option<u64> {
         left(self.enchant(slot)).map(|l| l.as_millis() as u64)
     }
 
-    /// Milliseconds left on the item's own lifetime, or `None` when it carries no timer —
-    /// including an elapsed one.
+    /// Milliseconds left on the item's own lifetime; `None` also once elapsed.
     pub(crate) fn lifetime_remaining_ms(&self) -> Option<u64> {
         remaining_ms(self.lifetime)
     }
 
-    /// [`Self::lifetime_remaining_ms`] at **display granularity** — floored to the whole second,
-    /// for the same reason [`Self::enchant_remaining_display_ms`] is.
+    /// [`Self::lifetime_remaining_ms`] floored to the whole second, as the enchant read is.
     pub(crate) fn lifetime_remaining_display_ms(&self) -> Option<u64> {
         self.lifetime_remaining_ms().map(|ms| ms - ms % 1000)
     }
 
-    /// This item's share of [`ItemChanges::countdown_steps`]: each live cell contributes
-    /// `floor(seconds left) + 1`, an unset or elapsed one 0 — so the final `Some(0) → None`
-    /// collapse (the tooltip reverting to the plain enchant name, the lifetime line vanishing) is
-    /// its own step, one frame after the deadline elapses.
+    /// This item's share of [`ItemChanges::countdown_steps`]: `floor(seconds left) + 1` per live
+    /// cell, 0 when unset or elapsed, so the final `Some(0)` to `None` collapse is its own step.
     fn steps(&self, now: Instant) -> u64 {
         std::iter::once(self.lifetime)
             .chain(self.enchants)
@@ -198,11 +148,7 @@ type ItemMoved = (
     Or<(Changed<ObjectStore>, Changed<Countdowns>)>,
 );
 
-/// **Did any item object move this frame** — the gate input the inventory feeds watch in place of
-/// the item map's old epoch: a create, a values delta, a countdown landing or a
-/// destroy on any item entity. `Changed` covers the first three (a spawn is a change, and so is a
-/// write to either component), the removal reader the fourth — a bag's slot going empty is the
-/// player's own field, but the *item* vanishing is only this.
+/// Whether any item object was created, written or destroyed this frame; the inventory feeds' gate.
 #[derive(SystemParam)]
 pub(crate) struct ItemChanges<'w, 's> {
     changed: Query<'w, 's, (), ItemMoved>,
@@ -217,21 +163,15 @@ impl ItemChanges<'_, '_> {
         !self.changed.is_empty() || removed
     }
 
-    /// The value a gated feed watches instead of holding its gate open per-frame while a
-    /// countdown runs: it moves exactly when some **displayable** countdown can — the two
-    /// second-floored reads a bag/equipment snapshot renders. The sum of every item's
-    /// [`Countdowns`] steps; between landings (which [`Self::moved`] reports) each term only
-    /// falls, so a displayable change can never be masked by another. No live cell — the
-    /// overwhelmingly common case — sums to 0.
+    /// The sum of every item's [`Countdowns`] steps: it moves exactly when a second-floored read
+    /// can, and each term only falls between landings, so no change masks another.
     pub(crate) fn countdown_steps(&self) -> u64 {
         let now = Instant::now();
         self.countdowns.iter().map(|c| c.steps(now)).sum()
     }
 }
 
-/// **The player's inventory, as one read** — what a bag, paper-doll or spellbook feed resolves
-/// its slots from: the self descriptor's slot arrays and their change tick, the
-/// object lookup those guids resolve through, and the item entities' own change watch.
+/// The player's inventory as one read: the self descriptor, the object lookup and the item watch.
 #[derive(SystemParam)]
 pub(crate) struct Inventory<'w, 's> {
     pub(crate) self_store: Query<'w, 's, &'static ObjectStore, With<crate::net::SelfPlayer>>,
@@ -241,9 +181,7 @@ pub(crate) struct Inventory<'w, 's> {
     pub(crate) changes: ItemChanges<'w, 's>,
 }
 
-/// The slice of an item template that equipment rendering + combat animation consume (decisions
-/// 0072/0073): the ItemDisplayInfo key, the two placement inputs, and the weapon class pair the
-/// swing/ready selectors key on. A Copy **view** of the cached [`ItemInfo`] ([`Items::held`]).
+/// The Copy slice of an [`ItemInfo`] that equipment rendering and combat animation read.
 #[derive(Clone, Copy)]
 pub(crate) struct HeldTemplate {
     pub(crate) display_info_id: u32,
@@ -251,103 +189,61 @@ pub(crate) struct HeldTemplate {
     pub(crate) sheath: u32,
     pub(crate) class: u32,
     pub(crate) subclass: u32,
-    /// `Material` — the item's `Material.dbc` id (1 metal · 2 wood · 5 chain · 6 plate · 7 cloth ·
-    /// 8 leather · 0 undefined). On the wire in `SMSG_ITEM_QUERY_SINGLE_RESPONSE`, and the **only**
-    /// input to the draw/stow sound pick: `SheatheSoundLookups` carries one row per weapon subclass
-    /// per material, and every row of a material agrees — the subclass is inert.
+    /// `Material.dbc` id (1 metal, 2 wood, 5 chain, 6 plate, 7 cloth, 8 leather, 0 undefined), the
+    /// only input to the draw/stow sound: every `SheatheSoundLookups` row of a material agrees.
     pub(crate) material: u32,
 }
 
-/// `SpellItemEnchantment.dbc`'s two consumer columns, loaded once and read by both lanes that
-/// need them: the **visual** by the weapon-glow chain (
-/// [`crate::entities::item_glow`]) and the **name** by the item tooltip's enchant line (decision
-/// 0915, [`crate::ui_items`]). It lives here rather than inside either consumer because it is
-/// item *data*, and because a second loader over one DBC is how a schema quietly drifts.
-///
-/// Optional, like every DBC-backed resource: absent, weapons draw unadorned and no tooltip prints
-/// an enchant line — each lane's own pre-existing behaviour.
+/// `SpellItemEnchantment.dbc`, for the weapon glow ([`crate::entities::item_glow`]) and the
+/// tooltip enchant line ([`crate::ui_items`]). Optional: absent, neither draws.
 #[derive(Resource)]
 pub(crate) struct Enchants(pub(crate) benilla_formats::EnchantCatalog);
 
-/// One enchant SLOT's contribution, as the app resolved it — `(slot index, id, charges,
-/// remaining ms)`. The id is **signed**, because its sign is load-bearing downstream: it picks the
-/// line's colour and nothing else (`0x52c9f9` — `abs(id)` names the DBC row either way).
+/// One enchant slot: `(slot index, id, charges, remaining ms)`. The id is signed: the sign picks
+/// the line's colour only, and `abs(id)` names the DBC row (`0x52c9f9`).
 pub(crate) type EnchantSlot = (u8, i32, u32, Option<u64>);
 
-/// The tooltip lines an item instance's enchant slots contribute — the one place the app turns
-/// enchant *ids* into text. Every tooltip surface feeds through here, so a
-/// bag hover, a paper-doll hover and an inspect hover can never disagree.
-///
-/// The per-slot gate is the reference's (`0x52c9f9`–`0x52ca23`): `id != 0`, then `abs(id)` must
-/// name a real `SpellItemEnchantment` row — **the sign never changes which row**, only the colour
-/// the engine paints. An id that names no row contributes nothing rather than a placeholder.
-///
-/// `slots` is the caller's source, and it differs by surface for a reason the wire fixes: our own
-/// items stream as OBJECTS, so all 7 `ITEM_FIELD_ENCHANTMENT` slots (plus charges, plus the
-/// `SMSG_ITEM_ENCHANT_TIME_UPDATE` timer) are readable; anybody else's are visible only through
-/// the slots their descriptor broadcasts, which in 1.12 vmangos fills for PERM and TEMP only.
+/// The tooltip lines an item's enchant slots contribute; every tooltip surface feeds through here.
+/// The reference's per-slot gate (`0x52c9f9` to `0x52ca23`): `id != 0` and `abs(id)` names a
+/// `SpellItemEnchantment` row, else nothing. Our own items carry all seven slots; another
+/// player's descriptor carries only the permanent and temporary ones (vmangos).
 pub(crate) fn enchant_lines(
     slots: impl IntoIterator<Item = EnchantSlot>,
     enchants: Option<&Enchants>,
 ) -> Vec<benilla_ui::script::EnchantView> {
     let lines = enchant_lines_quiet(slots, enchants);
-    // One breadcrumb per session the first time any surface resolves an enchant — the
-    // machine-readable "this lane is live" signal for a feature whose whole symptom is ABSENCE
-    // (`entities::item_glow`'s idiom, and the reason this one exists: the enchant ids reaching the
-    // tooltip travel a DIFFERENT wire field from the ones the weapon glow reads, so a silent miss
-    // here would look exactly like an unenchanted item).
+    // Logged once per session: a missing enchant looks exactly like an unenchanted item.
     if !lines.is_empty() {
         static FIRST: std::sync::Once = std::sync::Once::new();
-        // The whole view, not just the name: the countdown and the charges each ride a different
-        // wire lane from the id, so "which of the three arrived" is exactly what this must answer.
+        // The whole view: the id, charges and countdown each ride a different wire lane.
         FIRST.call_once(|| info!("item enchant: {lines:?} (the first resolved this session)"));
     }
     lines
 }
 
-/// `0x5da2c0` — **"has this item already been through the bind question?"**: the instance's
-/// `ITEM_FIELD_FLAGS & 1` (already soulbound), **or** any of its seven live
-/// `ITEM_FIELD_ENCHANTMENT` slots naming a `SpellItemEnchantment` row that binds the item
-/// ([`benilla_formats::EnchantCatalog::binds_the_item`], the ref's `5da300`–`5da320` walk).
-///
-/// One predicate, two consumers — the enchant cursor's bind question
-/// ([`crate::ui_action`]'s `ClickedItem::already_bound`, the `0x495d60` gate) and the item
-/// tooltip's **Soulbound** override. They must agree: an item the cursor considers
-/// already bound is exactly an item whose tooltip says *Soulbound*.
-///
-/// Read off the RAW descriptor, never off the rendered [`enchant_lines`] list. That list is a
-/// *display* view: it drops rows the catalog cannot name, and it drops every
-/// `Flags & 0x2` row outright (the line the reference refuses to print). The two
-/// flag sets **overlap**, so this is not a hypothetical: **Firestone 1-4 and Orb of Fire carry
-/// both bits** — they bind the item AND print no line — so an imbued weapon would read back as
-/// "not bound" from the lines while the reference calls it bound.
+/// `0x5da2c0`: already bound when `ITEM_FIELD_FLAGS & 1` is set or a live enchant slot names a
+/// binding `SpellItemEnchantment` row (`0x5da300` to `0x5da320`). The enchant cursor's bind
+/// question (gate `0x495d60`) and the tooltip's Soulbound line both read it. It reads the raw
+/// descriptor, not [`enchant_lines`]: Firestone and Orb of Fire both bind and print no line.
 pub(crate) fn already_bound(fields: &ObjectFields, cat: Option<&Enchants>) -> bool {
     fields.item_flags().is_some_and(|f| f & 0x1 != 0)
         || (0..7).any(|slot| live_enchant(fields, slot, cat).is_some_and(|id| binds(id, cat)))
 }
 
-/// One `ITEM_FIELD_ENCHANTMENT` slot as the bind checks read it (`495eec:
-/// movl 0x40(%ecx,%eax,4)` with `eax = 3*slot`): the raw id must be **positive** (the ref's `jl`
-/// skip at `495ef4`/`5da306`) and must name a real `SpellItemEnchantment` row (its
-/// `testl %eax,%eax` after the table load). Anything else is "no enchant here".
-///
-/// NB this is the *bind-question* reading, not the *line* reading — the line law names its row
-/// off `abs(id)` and keeps the sign only for the colour ([`enchant_lines`], `0x52c9f9`).
+/// One enchant slot as the bind checks read it (`0x495eec`): the raw id must be positive (`jl` at
+/// `0x495ef4`, `0x5da306`) and name a row, where the tooltip line uses `abs(id)`.
 pub(crate) fn live_enchant(fields: &ObjectFields, slot: u8, cat: Option<&Enchants>) -> Option<u32> {
     let id = u32::try_from(fields.item_enchant(slot)?).ok()?;
     cat.is_some_and(|c| c.0.has_row(id)).then_some(id)
 }
 
-/// `SpellItemEnchantment.Flags & 1` — this enchant soulbinds the item it lands on.
+/// `SpellItemEnchantment.Flags & 1`: this enchant soulbinds the item it lands on.
 pub(crate) fn binds(id: u32, cat: Option<&Enchants>) -> bool {
     cat.is_some_and(|c| c.0.binds_the_item(id))
 }
 
-/// [`enchant_lines`] without the breadcrumb — the same gate and the same naming, for the one
-/// caller that is not a live item: the startup resolve of the whole `ItemRandomProperties` table
-/// ([`random_property_views`]). Routing that through the loud one would fire "the first enchant
-/// resolved this session" at load, every session, which is exactly the signal the breadcrumb
-/// exists to distinguish from silence.
+/// [`enchant_lines`] without the log line, for the load-time resolve of the whole
+/// `ItemRandomProperties` table ([`random_property_views`]).
 fn enchant_lines_quiet(
     slots: impl IntoIterator<Item = EnchantSlot>,
     enchants: Option<&Enchants>,
@@ -358,13 +254,9 @@ fn enchant_lines_quiet(
     let lines: Vec<benilla_ui::script::EnchantView> = slots
         .into_iter()
         .filter(|&(_, id, _, _)| id != 0)
-        // `SpellItemEnchantment.Flags & 0x2` — the row prints NO line at all. Both of the
-        // reference's enchant-line printers open with it and return before they ever read the
-        // name (`6290e4` / `62923e`, each `testb $0x2, 0x5c(...)` → `jne <retl>`). Twelve shipped
-        // rows, one family: the totem-granted weapon imbues, Firestone, Orb of Fire — buffs whose
-        // source already shows elsewhere on screen, so the weapon does not repeat them. Found and
-        // closed while transcribing the *other* bit of that column; 0915 read the
-        // name column alone and printed all twelve.
+        // `SpellItemEnchantment.Flags & 0x2`: no line; both reference printers return before
+        // reading the name (`0x6290e4`, `0x62923e`). Twelve rows: the totem weapon imbues,
+        // Firestone, Orb of Fire.
         .filter(|&(_, id, _, _)| !enchants.0.tooltip_hides_name(id.unsigned_abs()))
         .filter_map(|(slot, id, charges, remaining_ms)| {
             let name = enchants.0.name(id.unsigned_abs())?.to_string();
@@ -380,26 +272,14 @@ fn enchant_lines_quiet(
     lines
 }
 
-/// `ItemRandomProperties.dbc` — the **random-suffix roll**: the "of the Monkey" a drop rolled, and
-/// the enchants that roll grants. One table, two consumers, exactly as in the
-/// reference: the display NAME ([`item_display_name`], its `0x5d8b00`) and the tooltip's enchant
-/// slots 2..6 ([`random_property_lines`], its `0x52b7e0` suffix-row copy).
-///
-/// Optional like every DBC-backed resource: absent, names stay unsuffixed and a rolled item shows
-/// no suffix lines — the behaviour benilla had before this arc.
+/// `ItemRandomProperties.dbc`, the random-suffix roll: a name suffix and tooltip enchant slots
+/// 2..6 (`0x52b7e0`). Optional: absent, names stay unsuffixed.
 #[derive(Resource)]
 pub(crate) struct RandomProperties(pub(crate) benilla_formats::RandomPropertyCatalog);
 
-/// The item's display NAME — the reference's one name formatter `0x5d8b00(entry, randomPropertyId)`,
-/// whose whole law is its two exits: `ITEM_SUFFIX_TEMPLATE` (`"%s %s"`) joined with the roll's
-/// suffix, or the plain template name when the id is 0, negative, past the table, or names a row
-/// with no suffix string.
-///
-/// **Every** display of an item's name goes through here, because in the reference every one of
-/// them goes through that function: the tooltip plate, the `|Hitem:…|h[Name]|h` link (the link is
-/// built FROM this string), the loot row, the chat "You receive loot" line, the auction and mail
-/// rows. A surface that composed the name itself would print "Chipped Claw" where the client prints
-/// "Chipped Claw of the Bear" — which is exactly the drift decision 0888 recorded and this closes.
+/// The item's display name, the reference's one formatter `0x5d8b00(entry, randomPropertyId)`:
+/// `ITEM_SUFFIX_TEMPLATE` (`"%s %s"`) with the roll's suffix, or the plain name when the id names
+/// no suffixed row. Every surface that shows an item name goes through here.
 pub(crate) fn item_display_name(
     base: &str,
     random_property_id: i32,
@@ -411,17 +291,8 @@ pub(crate) fn item_display_name(
     }
 }
 
-/// The tooltip lines a random-property **roll** contributes, for a source that has no item object
-/// to read `ITEM_FIELD_ENCHANTMENT` from — a loot slot, a chat link, an auction or mail row.
-///
-/// This is the reference's mechanism (`0x52b7bf`–`0x52b7fb`), one for one: the tooltip resolves
-/// its `+0x424` randomPropertyId against `ItemRandomProperties.dbc` and copies the row's five
-/// enchant ids into session slots **2..6**, which the enchant family then prints exactly like an
-/// object's own slots (white, since only slots 0/1 ever colour). So the same [`enchant_lines`] gate
-/// runs over them — one law for both id sources, which is the point of routing them through it.
-///
-/// An item OBJECT needs none of this: the server writes the rolled ids into its own enchant slots,
-/// and the object path already reads them.
+/// The tooltip lines of a roll, for a source with no item object: the reference (`0x52b7bf` to
+/// `0x52b7fb`) copies the row's five enchant ids into slots 2..6 and prints them as its own.
 pub(crate) fn random_property_lines(
     row: &benilla_formats::RandomProperty,
     enchants: Option<&Enchants>,
@@ -437,14 +308,8 @@ pub(crate) fn random_property_lines(
     enchant_lines_quiet(slots, enchants)
 }
 
-/// The whole roll table, resolved for the engine — every `ItemRandomProperties` row as the
-/// suffix plus its named enchant lines, ready to push once ([`benilla_ui::script::UiScript::
-/// set_random_properties`]).
-///
-/// Pushed whole rather than asked for per id, because it is a static table the app already holds
-/// and its consumers are click-driven: a chat-link tooltip has no hover re-enter loop, so a late
-/// answer would leave the first click showing an item with no lines. The reference reads its own
-/// loaded DBC store the same way, at draw time, from the id the source supplied.
+/// Every `ItemRandomProperties` row as its suffix and named enchant lines, pushed to the engine
+/// whole: a chat-link tooltip has no hover re-enter, so a per-id ask would miss the first click.
 pub(crate) fn random_property_views(
     props: &RandomProperties,
     enchants: Option<&Enchants>,
@@ -464,11 +329,7 @@ pub(crate) fn random_property_views(
         .collect()
 }
 
-/// The two catalogs a random-suffix **roll** resolves through, as one value: the roll's own table
-/// and the enchant names its five ids land on. They are never useful apart — a roll is a name plus
-/// a set of enchant ids, and both halves come from a DBC the app owns — and every surface that
-/// shows a rolled item needs the pair, so it travels as a pair rather than as two `Option` params
-/// threaded through every loot/link/auction/mail feed.
+/// The two catalogs a random-suffix roll resolves through: the roll table and the enchant names.
 #[derive(Clone, Copy)]
 pub(crate) struct RollCatalogs<'a> {
     pub(crate) props: Option<&'a RandomProperties>,
@@ -476,22 +337,19 @@ pub(crate) struct RollCatalogs<'a> {
 }
 
 impl RollCatalogs<'_> {
-    /// No DBC catalogs — what the unit tests run with (no install), and what a shipping session
-    /// falls back to when the tables are missing: the plain name, and no suffix lines.
+    /// No DBC catalogs: the plain name and no suffix lines.
     #[cfg(test)]
     pub(crate) const NONE: RollCatalogs<'static> = RollCatalogs {
         props: None,
         enchants: None,
     };
 
-    /// [`item_display_name`] — the item's name with this roll's suffix joined on.
+    /// [`item_display_name`] with this roll's suffix.
     pub(crate) fn name(&self, base: &str, random_property_id: u32) -> String {
         item_display_name(base, random_property_id as i32, self.props)
     }
 
-    /// [`random_property_lines`] for one id — the roll's enchant slots 2..6, resolved and named.
-    /// The live surfaces do NOT call this (the engine resolves the lines itself, off the pushed
-    /// table); it is the app-side check that the id → row → slot mapping is what the law says.
+    /// [`random_property_lines`] for one id; the live surfaces read the engine's pushed table.
     #[cfg(test)]
     pub(crate) fn lines(&self, random_property_id: u32) -> Vec<benilla_ui::script::EnchantView> {
         match self.props.and_then(|p| p.0.get(random_property_id as i32)) {
@@ -501,39 +359,29 @@ impl RollCatalogs<'_> {
     }
 }
 
-/// The item stores: instances by guid, templates by entry (+ the in-flight ask-once set).
-/// Filled by the net bridge; read by the container APIs (`GetContainerItemInfo` and kin).
+/// Item templates by entry, asked once, and the enchant times queued for items not yet held.
 #[derive(Resource, Default)]
 pub(crate) struct Items {
-    /// The template cache — ask-once through [`QueryCache`]; a `None` answer is
-    /// the server's "unknown entry" (the top-bit miss branch), cached so it is never re-asked.
+    /// A `None` answer is the server's unknown entry, cached so it is never re-asked.
     templates: QueryCache<u32, ItemInfo>,
-    /// Entries whose template landed since the last [`Self::take_fresh`] drain — the push half of
-    /// the tooltip store (every landed template goes to the UI unprompted, so the first hover of
-    /// an item whose name is already on screen never misses).
+    /// Landed since the last [`Self::take_fresh`]; pushed to the UI unprompted.
     fresh: Vec<u32>,
-    /// **`PlayerPendingItemExpiration`** — the temporary-enchant updates that named an item not
-    /// yet held, kept for the item's arrival. The reference's `0x1EB` arm, on an
-    /// item-lookup miss, links a `{item guid, slot, seconds}` record onto the active player's list
-    /// (`0x5ebd40`, the list at `CGPlayer_C + 0x1cc8`); `0x5ebde0` walks it when an item of ours is
-    /// set up (`0x5d8440`), applies each match through the setter — `seconds` counted from then,
-    /// not from the packet — and unlinks it. Records for an item that never arrives live as long
-    /// as the player object: here, the session. The item-lifetime arm `0x1EA` has no such list.
+    /// The reference's `PlayerPendingItemExpiration` list (`0x5ebd40`, at `CGPlayer_C + 0x1cc8`):
+    /// `(guid, slot, seconds)` enchant updates for an item not yet held. `0x5ebde0` applies them
+    /// when the item is set up (`0x5d8440`), counting seconds from then; they live as long as the
+    /// player, here the session. `SMSG_ITEM_TIME_UPDATE` has no such list.
     pending_enchant_times: Vec<(u64, u32, u32)>,
 }
 
 impl Items {
-    /// `SMSG_ITEM_ENCHANT_TIME_UPDATE` named an item we do not hold: keep it for the item's
-    /// arrival ([`Self::pending_enchant_times`]'s `0x5ebd40`). The caller has checked the active
-    /// player resolves — the reference queues onto a player object, and drops the update when
-    /// none resolves.
+    /// Queue an `SMSG_ITEM_ENCHANT_TIME_UPDATE` for an item not held. The caller has checked the
+    /// active player resolves: the reference drops the update when none does.
     pub(crate) fn queue_enchant_time(&mut self, guid: u64, slot: u32, seconds: u32) {
         debug!("enchant timer: item {guid:#x} not held — queued for its arrival");
         self.pending_enchant_times.push((guid, slot, seconds));
     }
 
-    /// The item `guid` arrived: its queued enchant updates, in arrival order, unlinked — what
-    /// `0x5ebde0` replays through the setter.
+    /// The item `guid` arrived: its queued enchant updates in arrival order, unlinked (`0x5ebde0`).
     pub(crate) fn take_enchant_times(&mut self, guid: u64) -> Vec<(u32, u32)> {
         let mut taken = Vec::new();
         self.pending_enchant_times.retain(|&(g, slot, seconds)| {
@@ -546,10 +394,8 @@ impl Items {
         taken
     }
 
-    /// The template for `entry`, if known. On a miss, asks the server (once per entry per
-    /// connection; `guid` rides along when the ask is about a concrete item, `0` for
-    /// template-only) and returns `None` — call again after the answer lands. A cached negative
-    /// (server doesn't know the entry) is also `None`, without a re-ask.
+    /// The template for `entry` if known; a miss asks once per entry per connection (`guid` rides
+    /// along, `0` for template-only). A cached negative is also `None`, without a re-ask.
     pub(crate) fn template(
         &self,
         entry: u32,
@@ -562,18 +408,13 @@ impl Items {
         })
     }
 
-    /// Whether the server has ANSWERED the `entry` query with "unknown item" — the cached
-    /// negative, distinct from a still-pending ask (both read `None` from [`Self::template`]).
-    /// The cast-fail redisplay queue keys on it: pending → keep waiting for the
-    /// answer (the ref's `DBCACHECALLBACK` redisplay), negative → give up and show the ref's
-    /// `"UNKNOWN"` fallback instead of waiting forever.
+    /// Whether the server answered `entry` as unknown, not still pending; the cast-fail redisplay
+    /// then shows the reference's `"UNKNOWN"` instead of waiting.
     pub(crate) fn template_answered_unknown(&self, entry: u32) -> bool {
         self.templates.answered_unknown(entry)
     }
 
-    /// The held/worn display head for `entry` — the [`HeldTemplate`] view of [`Self::template`]
-    /// (same ask-once discipline, template-only ask). Equipment rendering + the swing selector
-    /// consume this Copy slice instead of borrowing the full info.
+    /// The [`HeldTemplate`] view of [`Self::template`], asked template-only.
     pub(crate) fn held(&self, entry: u32, commands: &NetCommands) -> Option<HeldTemplate> {
         self.template(entry, 0, commands).map(|i| HeldTemplate {
             display_info_id: i.display_info_id,
@@ -585,10 +426,7 @@ impl Items {
         })
     }
 
-    /// [`Self::template`]'s **read-only** twin: the record for `entry` only if it is already
-    /// cached, and never an ask. For callers holding `&Items` — the cast ladder's equipped-item
-    /// rung runs inside a `&Items` borrow, and by the time a button is pressed the greying feed
-    /// that shares its search has had the template for many frames.
+    /// [`Self::template`] without the ask: the cached record only.
     pub(crate) fn template_cached(&self, entry: u32) -> Option<&ItemInfo> {
         self.templates.get(entry)
     }
@@ -598,26 +436,18 @@ impl Items {
         if info.is_some() {
             self.fresh.push(entry);
         }
-        // A NEGATIVE answer moves the generation too: it flips the entry from "still asking" to
-        // "answered unknown", which is a real display transition for anything that waits on the
-        // ask (the cast-fail redisplay's `"UNKNOWN"` literal, [`Self::template_answered_unknown`]).
+        // A negative answer moves the generation too: "still asking" to "answered unknown" is a
+        // display transition for the cast-fail redisplay.
         self.templates.insert(entry, info);
     }
 
-    /// The landed-template broadcast counter — the cache's own generation, bumped by every
-    /// landed answer, positive or negative. The **broadcast** twin of [`Self::fresh`]: `fresh`
-    /// is a DRAIN (exactly one consumer can take it — the tooltip feed does), so a second
-    /// consumer that caches a template-derived view needs its own signal; it keeps the epoch it
-    /// last resolved at and re-resolves when it advances — the modern stand-in for the ref's
-    /// `DBCACHECALLBACK` redisplay (`0x6e29b0`), which is how the real client repaints a view
-    /// drawn while the item cache was still answering.
+    /// Bumped by every landed answer, for consumers besides the drain; the stand-in for the
+    /// reference's `DBCACHECALLBACK` redisplay (`0x6e29b0`).
     pub(crate) fn template_epoch(&self) -> u64 {
         self.templates.generation()
     }
 
-    /// Drain the entries whose template landed since the last drain (see the `fresh` field).
-    /// Every entry with a CACHED template — the re-push sweep's domain (a `$z`-style
-    /// player-state input changing means every already-pushed view may be stale).
+    /// Every entry with a cached template.
     pub(crate) fn cached_template_ids(&self) -> Vec<u32> {
         self.templates
             .iter()
@@ -625,31 +455,19 @@ impl Items {
             .collect()
     }
 
+    /// Drain the entries whose template landed since the last drain.
     pub(crate) fn take_fresh(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.fresh)
     }
 
-    /// Disconnect: drop the instances (the server re-streams inventory at login) and the in-flight
-    /// asks (a query dropped by a dead writer must be re-askable); keep the templates (static).
-    /// Release the ask-once latch without dropping what the cache LEARNED — the world-enter
-    /// counterpart to [`Self::clear_session`]'s disconnect teardown.
-    ///
-    /// `template` marks an entry pending *before* the send, and a send made while the io thread
-    /// holds no writer evaporates. Nothing told the cache, so the entry stayed pending for the
-    /// life of the process and was never re-asked. That is not hypothetical: `feed_mail` carries
-    /// no run condition, so on 2026-09-06 it asked all five `Stationery.dbc` templates at the
-    /// login screen, every one was dropped "not connected", and the send tab's stationery list
-    /// was empty for the whole session — which the stock `SendMailFrame_Reset` turns into every
-    /// send silently unsent. The ask site is fixed; this makes the CLASS harmless, because the
-    /// cost of a wrong latch (a feature dead all session, in silence) is nothing like the cost of
-    /// a redundant re-ask.
+    /// World enter: release the ask-once latch and keep what the cache learned. An ask is marked
+    /// pending before the send, and a send made while no writer is held is dropped silently.
     pub(crate) fn clear_pending(&mut self) {
         self.templates.clear_pending();
     }
 
-    /// The objects themselves — and their countdowns — are the index's, swept with every other
-    /// entity; the pending enchant times die with the player they were
-    /// queued on.
+    /// Disconnect: drop the in-flight asks and the queued enchant times, keep the templates. The
+    /// item objects and their countdowns go with the index's sweep.
     pub(crate) fn clear_session(&mut self) {
         self.pending_enchant_times.clear();
         self.templates.clear_pending();
@@ -662,21 +480,12 @@ impl crate::query_cache::AskOnce for Items {
     }
 }
 
-/// The ask-once trio every UI resolver needs to be tested: the template cache, the command
-/// channel, and — crucially — the channel's live **receiver**, without which every `ItemQuery`
-/// send fails and the "asked the server" half of the law goes unobservable. `items` starts empty,
-/// so a fresh `TestDeps` reads as "template in flight"; seed one with [`Items::insert_template`]
-/// to test the landed arm.
-///
-/// Shared because the three icon laws (`ui_trainer::service_icon`, `ui_tradeskill::recipe_icon`,
-/// `ui_craft::craft_icon`) all terminate in this same cache — the fixture is the one thing they
-/// legitimately have in common, unlike the laws themselves.
+/// The ask-once test fixture; it holds the live receiver, without which every send fails.
 #[cfg(test)]
 pub(crate) struct TestDeps {
     pub(crate) items: Items,
     pub(crate) commands: NetCommands,
-    /// The object index the item objects live in — seed it with
-    /// [`Self::spawn_item`], read it through [`Self::with_objects`].
+    /// The object index: seed with [`Self::spawn_item`], read through [`Self::with_objects`].
     pub(crate) world: World,
     rx: crossbeam_channel::Receiver<ClientCommand>,
 }
@@ -695,13 +504,12 @@ impl TestDeps {
         }
     }
 
-    /// An item object in the index — what the wire's `ItemCreate` spawns.
+    /// An item object in the index, as the wire's `ItemCreate` spawns it.
     pub(crate) fn spawn_item(&mut self, guid: u64, fields: ObjectFields) -> Entity {
         test_spawn_item(&mut self.world, guid, fields, false)
     }
 
-    /// Run `f` with the lookup the helpers under test take, beside the template cache and the
-    /// command channel — the three borrows split so a test can hold all of them at once.
+    /// Run `f` with the object lookup, the template cache and the command channel borrowed apart.
     pub(crate) fn with_objects<R>(
         &mut self,
         f: impl FnOnce(&Objects, &Items, &NetCommands) -> R,
@@ -712,8 +520,7 @@ impl TestDeps {
         f(&objects, items, commands)
     }
 
-    /// The entries the resolver asked the server for — an ask-once gate firing is observable here
-    /// even when the icon it feeds is still `None`.
+    /// The entries asked of the server, observable while the icon they feed is still `None`.
     pub(crate) fn queried_entries(&self) -> Vec<u32> {
         self.rx
             .try_iter()
@@ -725,8 +532,7 @@ impl TestDeps {
     }
 }
 
-/// Spawn an item object straight into a test world's index — [`spawn_item`] without the command
-/// queue, for a test that holds the `World`.
+/// [`spawn_item`] straight into a test world, without the command queue.
 #[cfg(test)]
 pub(crate) fn test_spawn_item(
     world: &mut World,
@@ -741,12 +547,11 @@ pub(crate) fn test_spawn_item(
     e
 }
 
-/// Equipment slots 15/16 — `EQUIPMENT_SLOT_MAINHAND` / `_OFFHAND` (vmangos `EquipmentSlots`).
+/// `EQUIPMENT_SLOT_MAINHAND` / `_OFFHAND` (vmangos `EquipmentSlots`).
 pub(crate) const EQUIPMENT_SLOT_MAINHAND: u8 = 15;
 pub(crate) const EQUIPMENT_SLOT_OFFHAND: u8 = 16;
 
-/// One equipment slot's item class, through the guid → entry → template walk. `None` for an empty
-/// slot or a template still in flight.
+/// One equipment slot's item class; `None` while empty or its template is in flight.
 fn equipped_class(
     store: &ObjectStore,
     objects: &Objects,
@@ -759,16 +564,10 @@ fn equipped_class(
     Some(items.template(entry, guid, commands)?.class as u8)
 }
 
-/// **Which equipment slot this character's disarm hides** — the ladder
-/// ([`crate::creature_anim::disarmed_hand`]) asked of the raw inventory rather than of the
-/// resolved hands, which is the form the two *item*-side consumers need: the action bar's
-/// equipped-item requirement (`0x5f0c50`, which strips the bit out of its slot mask) and the
-/// item-use refusal (`CGItem::Use`'s rung 15, which compares it against the clicked item's own
-/// worn position). `None` while the flag is down or neither hand holds a weapon.
-///
-/// It lives here, next to the cache it reads, so the ladder is stated once and asked twice rather
-/// than re-derived per consumer — the failure decision 0664 names, and the reason the quest fork
-/// was once missing from all three of its call sites.
+/// The equipment slot this character's disarm hides ([`crate::creature_anim::disarmed_hand`] over
+/// the raw inventory), for the action bar's equipped-item requirement (`0x5f0c50`) and the
+/// item-use refusal (`CGItem::Use` rung 15). `None` while the flag is down or neither hand holds
+/// a weapon.
 pub(crate) fn disarmed_equipment_slot(
     store: &ObjectStore,
     objects: &Objects,
@@ -783,7 +582,7 @@ pub(crate) fn disarmed_equipment_slot(
     crate::creature_anim::disarmed_hand(main, off).map(|hand| EQUIPMENT_SLOT_MAINHAND + hand as u8)
 }
 
-/// [`disarmed_equipment_slot`]'s read-only twin — same ladder, no ask.
+/// [`disarmed_equipment_slot`] without the ask.
 pub(crate) fn disarmed_equipment_slot_cached(
     store: &ObjectStore,
     objects: &Objects,
@@ -804,8 +603,8 @@ pub(crate) fn disarmed_equipment_slot_cached(
     .map(|hand| EQUIPMENT_SLOT_MAINHAND + hand as u8)
 }
 
-/// A minimal, VALID item template named `name` — the shared test seam for every module that
-/// needs a landed template (the sentinels that matter are `allowable_*` = −1 and `stackable` = 1).
+/// A minimal valid item template named `name`; the sentinels that matter are `allowable_*` = -1
+/// and `stackable` = 1.
 #[cfg(test)]
 pub(crate) fn test_template(name: &str) -> ItemInfo {
     ItemInfo {
@@ -904,10 +703,6 @@ mod tests {
         );
     }
 
-    /// The gated feeds' template-side counter (1439): a template landing moves it, and a lazy
-    /// `template()` miss — the per-frame read that poisons `is_changed` — moves nothing. The
-    /// instance side is the item entities' own change ticks since 2334
-    /// ([`an_item_is_an_object_in_the_index_and_its_changes_are_watched`]).
     #[test]
     fn the_template_epoch_counts_landings_and_asks_count_nothing() {
         let (cmds, _rx) = commands();
@@ -924,10 +719,7 @@ mod tests {
         assert_ne!(items.template_epoch(), t0, "a landing is");
     }
 
-    /// The display step/quantize pair on one item's cells: a parked deadline
-    /// contributes `floor(secs)+1` (bounded here, not exact — the test can't pin the sub-second
-    /// phase), the display read is floored to the whole second, and clearing the cell takes its
-    /// term away (the `Some(0) → None` collapse is the term's own last step).
+    /// The step count is bounded, not exact: the test cannot pin the sub-second phase.
     #[test]
     fn countdown_steps_move_by_displayable_seconds() {
         let now = Instant::now();
@@ -944,7 +736,6 @@ mod tests {
         assert_eq!(shown % 1000, 0, "the display read is second-floored");
         assert!(shown <= 90_000);
 
-        // The lifetime cell joins the same step sum.
         c.set_lifetime(1800);
         let shown = c.lifetime_remaining_display_ms().expect("parked");
         assert_eq!(shown % 1000, 0);
@@ -962,16 +753,6 @@ mod tests {
         assert_eq!(c.lifetime_remaining_ms(), None);
     }
 
-    /// The two setters' store rules, each the reference's (`0x5d9c00` / `0x5d9cc0`):
-    ///
-    /// - **A non-POSITIVE value clears, in both cells.** The test is SIGNED (`jle`), so `0` and
-    ///   a wire value with the top bit set both store absence instead of a 68-year deadline.
-    ///   Before decision 2340 only the lifetime path knew this; the enchant path parked the far
-    ///   future.
-    /// - **A slot past the seventh is refused**, where the reference would index past the cell
-    ///   array into the next member.
-    /// - The deadline read answers `Some(_)` for a live cell and `None` for a slot that never had
-    ///   one, where the tooltip read collapses both an unset and an elapsed cell to `None`.
     #[test]
     fn the_setters_clear_on_signed_non_positive_and_refuse_a_slot_past_the_array() {
         let mut c = Countdowns::default();
@@ -1003,8 +784,6 @@ mod tests {
         assert!(c.enchant_deadline_ms(6).is_some_and(|ms| ms <= 30_000));
     }
 
-    /// The push half of the tooltip store: a landed template is marked fresh exactly once (the
-    /// drain empties), and a cached negative never is (there's nothing to push).
     #[test]
     fn landed_templates_drain_as_fresh_once() {
         let mut items = Items::default();
@@ -1014,11 +793,8 @@ mod tests {
         assert!(items.take_fresh().is_empty(), "a drain empties the queue");
     }
 
-    /// The right-click-to-open predicates — and the fact that the **line and the click are not the
-    /// same test**. The tooltip's `shows_open_line` carries the lock sub-gate (a
-    /// `LockID` template earns the line only once the INSTANCE says UNLOCKED); the click's
-    /// `opens_loot` is the BARE template bit, so a still-locked junkbox sends anyway and the
-    /// server supplies the refusal. Getting that backwards eats the click in silence.
+    /// The tooltip's open line waits for an unlocked instance; the click is the bare template bit,
+    /// so a locked junkbox still sends and the server refuses.
     #[test]
     fn open_line_carries_the_lock_gate_the_open_send_does_not() {
         let plain = |flags: u32, lock_id: u32| {
@@ -1028,22 +804,20 @@ mod tests {
             t
         };
 
-        // The clam: LOOTABLE, no lock — line and send agree, instance flags irrelevant.
+        // The clam: lootable, no lock; line and send agree.
         assert!(plain(ITEM_FLAG_LOOTABLE, 0).shows_open_line(0));
         assert!(plain(ITEM_FLAG_LOOTABLE, 0).opens_loot());
         // An ordinary item does neither, however its instance is flagged.
         assert!(!plain(0, 0).shows_open_line(ITEM_DYNFLAG_UNLOCKED | ITEM_DYNFLAG_WRAPPED));
         assert!(!plain(0, 0).opens_loot());
-        // A junkbox: LOOTABLE but locked. **The two predicates part company here** — no line
-        // until the instance says UNLOCKED, but the click goes out either way.
+        // A junkbox, lootable but locked: no line until unlocked, but the click goes out.
         assert!(!plain(ITEM_FLAG_LOOTABLE, 7).shows_open_line(0));
         assert!(plain(ITEM_FLAG_LOOTABLE, 7).shows_open_line(ITEM_DYNFLAG_UNLOCKED));
         assert!(
             plain(ITEM_FLAG_LOOTABLE, 7).opens_loot(),
             "the send ignores LockID entirely — the server owns the refusal"
         );
-        // Gift wrap: the WRAPPER template unwraps only while the instance is still WRAPPED, and
-        // that arm is its own dispatcher position, not a nested case of the loot arm.
+        // Gift wrap unwraps only while the instance is still wrapped, its own dispatcher arm.
         assert!(!plain(ITEM_FLAG_WRAPPER, 0).unwraps_gift(0));
         assert!(plain(ITEM_FLAG_WRAPPER, 0).unwraps_gift(ITEM_DYNFLAG_WRAPPED));
         assert!(
@@ -1072,9 +846,6 @@ mod tests {
         );
     }
 
-    /// **An item is an object**: spawned into the one index with its store,
-    /// resolved through [`Objects`] like a unit, and its create, its delta, a countdown landing
-    /// and its despawn each move [`ItemChanges`] exactly once — the gate the inventory feeds watch.
     #[test]
     fn an_item_is_an_object_in_the_index_and_its_changes_are_watched() {
         use bevy::ecs::system::RunSystemOnce;
@@ -1123,8 +894,7 @@ mod tests {
             .merge(ObjectFields::from_pairs(&[(14, 4)]));
         assert_eq!(world.run_system(read).unwrap(), (Some(117), Some(4), true));
         assert!(!world.run_system(read).unwrap().2);
-        // A countdown landing is the item's own change too, and its cell joins
-        // the step sum the feeds watch between landings.
+        // A countdown landing is the item's own change, and its cell joins the step sum.
         world
             .get_mut::<Countdowns>(e)
             .expect("every item carries its cells")
@@ -1144,9 +914,6 @@ mod tests {
         assert!(!world.run_system(read).unwrap().2);
     }
 
-    /// **`PlayerPendingItemExpiration`**: an enchant time for an item not yet held
-    /// waits for it, is handed over in arrival order once, and a disconnect drops what never
-    /// arrived — while the templates the session learned survive it.
     #[test]
     fn a_queued_enchant_time_waits_for_its_item_and_the_session_keeps_templates() {
         let mut items = Items::default();
@@ -1163,15 +930,14 @@ mod tests {
             "unlinked once replayed"
         );
 
-        // A disconnect drops the records for items that never arrived and the in-flight asks,
-        // and keeps the templates.
+        // A disconnect drops unarrived records and in-flight asks, and keeps the templates.
         let (cmds, rx) = commands();
         items.insert_template(117, Some(info("Tough Jerky")));
         assert!(items.template(118, 0, &cmds).is_none()); // leaves 118 in flight
         items.clear_session();
         assert!(items.take_enchant_times(0x43).is_empty());
         assert!(items.template(117, 0, &cmds).is_some(), "templates survive");
-        // 118's ask was dropped with the writer — it must re-ask now.
+        // 118's ask was dropped with the writer, so it re-asks now.
         let _ = rx.try_recv();
         assert!(items.template(118, 0, &cmds).is_none());
         assert!(matches!(
@@ -1180,10 +946,7 @@ mod tests {
         ));
     }
 
-    /// The id → row join: slot order is preserved, a `0` slot and an id with
-    /// no `SpellItemEnchantment` name are both silently absent (never a placeholder line), and with
-    /// no catalog at all nothing renders. Plus the reference's sign rule — **`abs(id)` names the
-    /// row, the sign only travels** (`0x52c9f9`), which is why a negative id resolves at all.
+    /// `abs(id)` names the row and the sign only travels (`0x52c9f9`).
     #[test]
     fn enchant_lines_join_named_ids_in_slot_order() {
         let cat = Enchants(benilla_formats::EnchantCatalog::from_rows(
@@ -1206,7 +969,7 @@ mod tests {
             )),
             vec!["Agility +15".to_string(), "Crusader".to_string()]
         );
-        // A NEGATIVE id resolves off `abs(id)` — the same row — and only carries its sign onward.
+        // A negative id resolves off `abs(id)` and carries its sign onward.
         let neg = enchant_lines([(0, -2564, 0, None)], Some(&cat));
         assert_eq!(neg.len(), 1);
         assert_eq!(neg[0].name, "Agility +15");
@@ -1214,9 +977,9 @@ mod tests {
         // Charges and a countdown ride the slot through untouched (the engine formats them).
         let temp = enchant_lines([(1, 1900, 5, Some(90_000))], Some(&cat));
         assert_eq!((temp[0].charges, temp[0].remaining_ms), (5, Some(90_000)));
-        // An id the table doesn't name contributes nothing at all.
+        // An id the table does not name contributes nothing.
         assert!(enchant_lines([(0, 999_999, 0, None)], Some(&cat)).is_empty());
-        // No DBC → no lines, the pre-0915 tooltip.
+        // No DBC, no lines.
         assert!(enchant_lines([(0, 2564, 0, None)], None).is_empty());
     }
 
@@ -1235,12 +998,8 @@ mod tests {
         ObjectFields::from_pairs(&[(21, flags), (22, slot0)])
     }
 
-    /// **`0x5da2c0` — the bind question's predicate**, and the reason it reads the raw descriptor.
-    ///
-    /// Two halves, `||`: the instance's soulbound bit, or any live enchant slot naming a row with
-    /// `Flags & 1`. The last case is the one that decides the shape: the Firestone family carries
-    /// BOTH the binding bit and the tooltip-suppression bit, so the same item is bound *and*
-    /// prints no enchant line — a predicate read off [`enchant_lines`] would call it unbound.
+    /// `0x5da2c0`: the Firestone shape binds and prints no line, so a predicate read off
+    /// [`enchant_lines`] would call it unbound.
     #[test]
     fn the_bind_predicate_reads_the_descriptor_not_the_rendered_lines() {
         let cat = catalog();
@@ -1273,7 +1032,7 @@ mod tests {
             !already_bound(&item(0x0, 11), None),
             "no catalog loaded — the enchant half cannot answer, and does not guess"
         );
-        // The one that pins the design: bound, and invisible to the line law.
+        // The case that pins the design: bound, and no line.
         assert!(
             already_bound(&item(0x0, 12), cat),
             "the Firestone shape — binds AND hides its line"

@@ -1,21 +1,10 @@
-//! `hover_log.rs` — the **hover-cost recorder** (`WOW_HOVER_LOG`).
+//! The hover-cost recorder (`WOW_HOVER_LOG`): every frame to a CSV, tagged with what the tooltip
+//! showed, and a report at exit ranking cost by tooltip state.
 //!
-//! The director reports dropped frames while hovering bag items and spells. Reproducing that needs
-//! a live session and a *hand* on the mouse, which the headless capture harness cannot supply and
-//! reading `[ui-cost]` lines off a terminal cannot survive: the interesting frames are a handful of
-//! spikes inside thousands of quiet ones. So this records **every frame** to a file, tagged with
-//! what the tooltip was showing at the time, and prints a report at exit that ranks the cost
-//! *against the tooltip state* — hovering vs not, and which hover.
-//!
-//! Run: `WOW_HOVER_LOG=1 cargo run --release -p benilla` (writes `target/hover-log.csv`; a path
-//! value writes there instead). Hover whatever feels bad, for as long as you like, then quit — the
-//! report prints to the terminal and the raw rows stay in the file.
-//!
-//! Columns are one frame each: the wall frame time and the process-CPU delta (the meter vsync
-//! cannot rail — `perf.rs`), the UI pass's own phase split (tick/resolve/measure/extract/diff,
-//! μs — the same marks `WOW_UI_COST=1` prints), and the tooltip context (shown, line count, owner
-//! frame, first line). A spike with flat UI phases is NOT a UI-pass cost, and that negative is the
-//! most valuable thing this can say.
+//! `WOW_HOVER_LOG=1` writes `benilla-config/Diagnostics/hover-log.csv`; any other value is a path.
+//! Columns per frame: wall time, process-CPU delta, the UI pass's phase split in microseconds
+//! (the `WOW_UI_COST=1` marks), the mesh rebuild's split, and the tooltip (owner, line count,
+//! first line). A spike with flat UI phases is not a UI-pass cost.
 
 use std::io::Write;
 
@@ -24,15 +13,10 @@ use bevy::time::Real;
 
 use benilla_ui::script::UiScript;
 
-/// The per-frame phase split this recorder writes to the CSV. Produced and owned by the UI pass
-/// itself — an instrument reads the fact, it does not define it.
 use crate::ui_script::{UiCostWanted, UiFrameCost};
 
-/// Where to write, from `$WOW_HOVER_LOG`: unset ⇒ off, `1` ⇒
-/// `benilla-config/Diagnostics/hover-log.csv` (the one folder, 0954/1486 — never the cwd-relative
-/// `target/…` this once named, which is the install folder when the binary is launched from
-/// inside it), anything else ⇒ that path. A hermetic run has no folder: `1` is then off, and
-/// says so, the sound probe's rule.
+/// Where to write, from `$WOW_HOVER_LOG`: unset or `0` is off, `1` is
+/// `benilla-config/Diagnostics/hover-log.csv` (off in a hermetic run), anything else a path.
 fn log_path() -> Option<String> {
     match std::env::var("WOW_HOVER_LOG") {
         Err(_) => None,
@@ -51,23 +35,21 @@ fn log_path() -> Option<String> {
     }
 }
 
-/// Is the recorder on? Read once — the phase marks in the UI pass (`extract::tick_script`/`paint_script`) consult this every frame.
+/// Whether the recorder is on, read once; the UI pass's phase marks consult it every frame.
 pub fn enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| log_path().is_some())
 }
 
-/// One recorded frame, kept in memory for the exit report (the file gets it either way).
+/// One recorded frame, kept for the exit report.
 #[derive(Clone)]
 struct Row {
     frame_ms: f32,
     cpu_ms: f32,
     cost: UiFrameCost,
-    /// The RENDER-side half of the same frame (`ui_pass::UiMeshCost`). Added after the 1625 fix
-    /// left the symptom standing: the UI-script phases read flat on a hovered frame while the mesh
-    /// rebuild below them was doing whole-interface work, and this recorder could not see it.
+    /// The same frame's mesh rebuild cost.
     mesh: crate::ui_pass::UiMeshCost,
-    /// The tooltip context: `None` = no tooltip up. `(owner frame, line count, first line)`.
+    /// `(owner frame, line count, first line)`, or `None` with no tooltip up.
     tip: Option<(String, i64, String)>,
 }
 
@@ -87,8 +69,7 @@ impl Plugin for HoverLogPlugin {
             return;
         }
         let path = log_path().expect("enabled() checked");
-        // Ask the UI pass for its phase split. `init_resource` first so this holds whichever
-        // plugin builds first — `UiScriptPlugin`'s own init is then a no-op.
+        // `init_resource` first so this holds whichever plugin builds first.
         app.init_resource::<UiCostWanted>();
         app.world_mut().resource_mut::<UiCostWanted>().0 = true;
         if let Some(dir) = std::path::Path::new(&path).parent() {
@@ -118,8 +99,7 @@ impl Plugin for HoverLogPlugin {
     }
 }
 
-/// The tooltip context, asked of the VM itself so it reads the same names the director sees. One
-/// tiny chunk per frame, only while recording.
+/// The tooltip context, asked of the Lua VM, once per frame while recording.
 fn tooltip_context(script: &UiScript) -> Option<(String, i64, String)> {
     let chunk = r#"
         if not GameTooltip or not GameTooltip:IsShown() then return "" end
@@ -234,34 +214,24 @@ fn summarize(label: &str, rows: &[&Row]) -> String {
     let ui_us = |f: fn(&UiFrameCost) -> u128| {
         rows.iter().map(|r| f(&r.cost) as f64).sum::<f64>() / f64::from(n)
     };
-    // The churn number: mean FontStrings re-shaped per frame. A settled UI sits at 0.00; anything
-    // above it in a steady hover population is a string whose measure key moves every frame.
+    // Mean FontStrings re-shaped per frame; a settled UI sits at 0.
     let measured = rows.iter().map(|r| r.cost.measured as f64).sum::<f64>() / f64::from(n);
-    // What the frame actually DID, as opposed to what it cost: how often the layout fixpoint ran
-    // (a solve walks the whole anchor graph, not the tooltip's corner of it) and how often the
-    // extract gate skipped the conversion+rasterize loop outright.
+    // How often the layout fixpoint ran, and how often the extract gate skipped conversion.
     #[allow(clippy::cast_precision_loss)]
     let solves = rows.iter().map(|r| r.cost.solves as f64).sum::<f64>() / f64::from(n);
-    // The term `solves` hides: a solve that had to DERIVE the layout graph first
-    // costs an order of magnitude more than one that used the ledger, and both count as one solve.
-    // The law is zero — anything else is a write site that gave up naming its node, which
-    // `WOW_LAYOUT_DERIVE_TRACE=<secs>:<n>` will backtrace on a live run.
+    // Solves that had to derive the layout graph first; should be zero, and
+    // `WOW_LAYOUT_DERIVE_TRACE=<secs>:<n>` backtraces one on a live run.
     let derives = rows.iter().map(|r| r.cost.derives as f64).sum::<f64>() / f64::from(n);
-    // The RENDER half of the same frame. `rebuilt%` is the one to read first: a population that
-    // rebuilds the mesh on every frame is paying whole-interface work per frame, whatever the
-    // script-pass phases say.
+    // The mesh half: a population that rebuilds every frame pays whole-interface work.
     let mesh_us = |f: fn(&crate::ui_pass::UiMeshCost) -> u128| {
         rows.iter().map(|r| f(&r.mesh) as f64).sum::<f64>() / f64::from(n)
     };
     let rebuilt = 100.0 * rows.iter().filter(|r| r.mesh.rebuilt).count() as f32 / n;
     let mesh_runs = rows.iter().map(|r| r.mesh.runs as f64).sum::<f64>() / f64::from(n);
-    // The number that reaches Bevy: a rewritten batch re-extracts, and `rewrites` tracking `runs`
-    // means the skip gate is being defeated for every batch at once.
+    // A rewritten batch re-extracts; `rewrites` tracking `runs` means the skip gate never holds.
     let mesh_rw = rows.iter().map(|r| r.mesh.rewrites as f64).sum::<f64>() / f64::from(n);
     let skips = 100.0 * rows.iter().filter(|r| r.cost.skipped).count() as f32 / n;
-    // Counted against the DROPPED threshold, not the raw budget: synced wall time rails at the
-    // display's present grant and jitters around it, so counting frames over 16.7 ms mostly counts
-    // jitter (`perf.rs`'s `DROPPED_FACTOR` — a missed interval is what a player feels).
+    // Over 1.5 budgets, not the raw budget: vsynced wall time jitters around the interval.
     let dropped = rows
         .iter()
         .filter(|r| r.frame_ms > crate::perf::FRAME_BUDGET_MS * 1.5)
@@ -299,10 +269,7 @@ fn summarize(label: &str, rows: &[&Row]) -> String {
     )
 }
 
-/// At quit: the ranked read. Splits the run by tooltip state — that split IS the question, and a
-/// per-owner breakdown says whether one hover channel (bag slot vs spell button) is the expensive
-/// one. The worst frames print with their tooltip context so a spike is attributable to what was
-/// under the cursor at the time.
+/// At quit: the report, split by tooltip state and owner, with the worst frames' tooltips.
 fn report_on_exit(mut exits: MessageReader<AppExit>, mut rec: ResMut<Recorder>) {
     if exits.read().next().is_none() {
         return;
@@ -316,10 +283,8 @@ fn report_on_exit(mut exits: MessageReader<AppExit>, mut rec: ResMut<Recorder>) 
     println!("{}", report(&rows, &rec.path));
 }
 
-/// Re-read a recorded CSV and print the report — `WOW_HOVER_LOG_REPORT=<path>`, handled before the
-/// app starts (see `main`). The analysis moves faster than the sessions that feed it: a question
-/// this report cannot yet answer is one column away, and re-deriving it from rows already on disk
-/// costs nobody a second play session.
+/// Re-reads a recorded CSV and prints the report (`WOW_HOVER_LOG_REPORT=<path>`, before the app
+/// starts).
 pub fn report_recorded_file(path: &str) {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
@@ -341,8 +306,7 @@ pub fn report_recorded_file(path: &str) {
     println!("{}", report(&rows, path));
 }
 
-/// One CSV line back into a [`Row`]. Splits on commas OUTSIDE quotes (the text columns carry
-/// commas and doubled quotes — `cell`'s escaping, read back).
+/// One CSV line back into a [`Row`], splitting on commas outside quotes.
 fn parse_row(line: &str) -> Option<Row> {
     let mut fields: Vec<String> = Vec::new();
     let mut cur = String::new();
@@ -363,8 +327,7 @@ fn parse_row(line: &str) -> Option<Row> {
     if fields.len() < 17 {
         return None;
     }
-    // The render-side columns are APPENDED (a pre-1625 recording has none) — absent reads as zero,
-    // the same posture `spliced` took when it was added.
+    // Later columns are appended at the end, and an older recording without them reads zero.
     let n = |i: usize| fields.get(i).and_then(|f| f.parse().ok()).unwrap_or(0);
     let mesh = crate::ui_pass::UiMeshCost {
         rebuilt: n(18) > 0,
@@ -398,11 +361,7 @@ fn parse_row(line: &str) -> Option<Row> {
             solves: num(9)? as u64,
             derives: num(10)? as u64,
             skipped: num(11)? != 0.0,
-            // Appended column (absent in pre-splice recordings — those read back as 0).
             spliced: fields.get(17).and_then(|f| f.parse().ok()).unwrap_or(0),
-            // Appended after the mesh block for the same reason `spliced` was appended after
-            // the tip block: a new column goes on the END so every recording made before it
-            // still reads.
             dropped: fields.get(25).and_then(|f| f.parse().ok()).unwrap_or(0),
         },
         mesh,
@@ -427,7 +386,7 @@ fn report(rows: &[Row], path: &str) -> String {
     out.push('\n');
     out.push_str(&summarize("tooltip up", &hover));
     out.push('\n');
-    // Per hover target, busiest first — one line per owner frame the tooltip was anchored to.
+    // Per owner frame, busiest first.
     let mut by_owner: std::collections::BTreeMap<String, Vec<&Row>> = Default::default();
     for r in &hover {
         if let Some((owner, _, _)) = &r.tip {
@@ -440,11 +399,7 @@ fn report(rows: &[Row], path: &str) -> String {
         out.push_str(&summarize(&format!("  ↳ {owner}"), rs));
         out.push('\n');
     }
-    // The split that separates a STEADY tax from a per-CHANGE one: frames that ran the layout
-    // fixpoint against frames that did not. A hover whose quiet frames are as expensive as its
-    // solving ones has a per-frame problem; one where the cost lives entirely in the solving
-    // frames is paying per content CHANGE — and moving the mouse across a bag grid changes content
-    // constantly, which is the same felt hitch by a different mechanism and a different fix.
+    // Frames that solved layout against those that did not: a steady tax or a per-change one.
     let solved: Vec<&Row> = hover
         .iter()
         .copied()
@@ -460,11 +415,8 @@ fn report(rows: &[Row], path: &str) -> String {
     out.push_str(&summarize("tooltip up · frames that did NOT", &quiet));
     out.push('\n');
 
-    // The churn roll-up: which strings the font engine was asked to re-shape, and on how many
-    // frames. A string appearing on hundreds of frames is a measure key that never settles — the
-    // per-frame re-shape and the forced second resolve both hang off it, and it is the fix's
-    // target. Counted per frame it appears on, not per request, so one loud string reads as one
-    // row.
+    // Re-shaped strings by frames seen; one on hundreds of frames has a measure key that never
+    // settles.
     let mut churn: std::collections::HashMap<String, (usize, usize)> = Default::default();
     for r in rows {
         for t in &r.cost.measured_texts {
@@ -482,9 +434,7 @@ fn report(rows: &[Row], path: &str) -> String {
         }
     }
 
-    // The worst frames, with what was under the cursor.
-    // Ranked by CPU, not wall: under vsync every wall reading rails at the present interval and
-    // says nothing (`perf.rs`) — CPU is the cost meter the rail cannot fool.
+    // The worst frames by CPU, since vsynced wall time rails at the present interval.
     let mut worst = rows.to_vec();
     worst.sort_by(|a, b| b.cpu_ms.total_cmp(&a.cpu_ms));
     out.push_str(

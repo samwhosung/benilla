@@ -1,10 +1,6 @@
-//! **The main thread's CPU, inside the app's frame** — `First` to `Last`, per frame, so the
-//! probe can subtract it from the thread's whole-frame CPU (`thr=[main:…]`) and name what is
-//! left: the event loop, AppKit's redraw path, the pipelined-render handshake. The vsync tax
-//! is +1.2 ms of main-thread user time per frame that no system grew and
-//! no sampler placed; whether it is spent inside the schedules or around them is this split.
-//!
-//! Two pinned systems, one `clock_gettime` each — nothing a frame can feel.
+//! The main thread's CPU inside the app's frame (`First` to `Last`), so the probe can subtract it
+//! from the thread's whole-frame CPU (`thr=[main:…]`) and attribute the rest to the event loop,
+//! the windowing system's redraw path and the pipelined-render handshake.
 
 use bevy::prelude::*;
 

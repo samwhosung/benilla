@@ -1,64 +1,32 @@
-//! **What kind of run is this, and whose** — the always-present layer, on the player's side of the
-//! `dev` seam (built in 1174).
+//! What kind of run this is and whose: the always-present layer on the player's side of the `dev`
+//! seam. Every answer defaults to the player's (nobody drives the camera, the client starts at the
+//! login screen, no rig owns the pick); a dev build's instruments only move answers off those
+//! defaults. Gameplay reads this module, never `capture`, `debug_panel` or `perf`.
 //!
-//! Everything here answers a question about *the run itself*, and every answer has a
-//! **player-faithful default**: nobody is driving the camera, the client starts at the login
-//! screen, no rig owns the character pick, this checkout belongs to nobody in particular. A dev
-//! build's instruments then move those answers off their defaults — which is the one direction the
-//! seam allows. Gameplay reads this module; gameplay never reads `capture`, `debug_panel` or
-//! `perf`.
-//!
-//! It exists because the alternative kept losing. 0026 asked for "a player-safe home or default"
-//! for exactly this class of fact in June 2026 and named two of them; by August there were 24
-//! references from non-dev code into the instruments (1173), because the facts had no home and the
-//! nearest thing that already knew the answer was the instrument itself.
-//!
-//! The engine drew the same line for itself one layer down: [`benilla_world::dev_state`]'s
-//! `deterministic_run` reads `$WOW_CAPTURE` on its own account, because "run deterministically" is
-//! a property of the world and the world must be able to ask it with no harness above it at all.
-//! **One environment variable, several readers, no shared symbol** — that is the pattern, and
-//! [`scenario_active`] below is its app-side twin. Keep the two in step.
+//! [`benilla_world::dev_state`]'s `deterministic_run` reads `$WOW_CAPTURE` on its own, as
+//! [`scenario_active`] does here; the two must stay in step.
 
 use bevy::prelude::*;
 
-/// **Something other than the player is authoring the camera and the avatar this run.**
-///
-/// Inserted by the capture harness, which is the only thing that ever drives them; a player build
-/// compiles no inserter, so the resource simply never exists and every `run_if` below reads as
-/// "the player is in charge" for free. The *type* lives here rather than in `capture` for one
-/// reason: `player::control`, `player::server_ride`, the self-model fade and the UI pass all name
-/// it in a run condition, and a run condition that names a dev type is a dependency on dev.
+/// Something other than the player authors the camera and the avatar this run. Only the capture
+/// harness inserts it; the type lives here because non-dev run conditions name it.
 #[derive(Resource)]
 pub(crate) struct CaptureMode;
 
-/// The rig's derived character name, when `$WOW_RIG` names a body.
-///
-/// Inserted by `capture::ProbeRigPlugin` at build time; absent otherwise — which is the player
-/// answer, and the answer in any run the rig is not driving. The character-select roster reads it
-/// to know that the pick is already spoken for, so it must not also honour `$WOW_CHAR`: the rig may
-/// have to *create* its body first, and the `WOW_CHAR` fast path is a one-shot that structurally
-/// cannot wait for that. Before 1174 the roster asked the harness directly.
+/// The rig's derived character name when `$WOW_RIG` names a body, inserted by
+/// `capture::ProbeRigPlugin`. While present the roster ignores `$WOW_CHAR`: the rig may have to
+/// create its body first, and the `WOW_CHAR` one-shot cannot wait for that.
 #[derive(Resource)]
 pub(crate) struct RigCharacter(pub(crate) String);
 
-/// **Is a capture running?** (`$WOW_CAPTURE` set.)
-///
-/// Read before any plugin builds — it decides whether the net thread starts, what size the window
-/// opens at, and whether clutter/anim-LOD randomness is pinned. All of those are properties of the
-/// run, not of the harness, and all of them must have an answer in a build with no harness in it.
-/// See the module doc for why this reads the variable rather than asking `capture`.
+/// Is a capture running (`$WOW_CAPTURE` set)? Read before any plugin builds: it decides whether
+/// the net thread starts, the window size, and whether clutter and anim-LOD randomness is pinned.
 pub(crate) fn scenario_active() -> bool {
     std::env::var("WOW_CAPTURE").is_ok()
 }
 
-/// **Is the player UI opted into this capture?** — the harness's [`crate::capture::ui_opted_in`],
-/// forwarded from here for the same reason [`scenario_active`] lives here: three consumers outside
-/// the harness need the answer (the UI load, the synthetic unit feed, the window size), and **all
-/// of them must still compile in a build with no harness in it**. `mod capture` is
-/// `#[cfg(feature = "dev")]`; this module is not.
-///
-/// `false` in a player build is the correct answer and not a stub: that binary has no scenario
-/// table and no `$WOW_CAPTURE` handling, so there is no capture for the UI to be opted into.
+/// Is the player UI opted into this capture? Forwards [`crate::capture::ui_opted_in`] for readers
+/// outside the harness; `false` in a player build, which has no capture to opt into.
 #[cfg(feature = "dev")]
 pub(crate) fn capture_ui_opted_in() -> bool {
     crate::capture::ui_opted_in()
@@ -69,68 +37,34 @@ pub(crate) fn capture_ui_opted_in() -> bool {
     false
 }
 
-/// **Do the credentials come from the environment?** (`$WOW_USER` and `$WOW_PASS`, both — the
-/// login screen's env fast path.)
-///
-/// The player answer is `false`, and it is the default: with neither set the client opens at the
-/// login screen and waits for somebody to type. Setting both says *"log in without waiting for me
-/// to type"* — and **that is the only thing it says.** It is not a claim about who is in the room;
-/// [`unattended`] is the fact for that, and keeping the two apart is. There is no
-/// default account: one credential without the other is a typed login, and `$WOW_CHAR` alone is
-/// the roster's fast path after one (`char_select`), not a login.
+/// Do the credentials come from the environment (`$WOW_USER` and `$WOW_PASS`, both)? That means
+/// "log in without typing" and nothing about who is present; [`unattended`] answers that. One
+/// credential alone is a typed login, and `$WOW_CHAR` alone is only the roster's fast path.
 pub(crate) fn env_login() -> bool {
     ["WOW_USER", "WOW_PASS"]
         .iter()
         .all(|k| std::env::var_os(k).is_some())
 }
 
-/// **Is there nobody here?** (`$WOW_UNATTENDED`, or the two runs that are automated by
-/// construction: `$WOW_CAPTURE` and `$WOW_RIG`.)
+/// Is nobody at the keyboard? `false` unless the run declares itself with `$WOW_UNATTENDED`, or is
+/// a capture (`$WOW_CAPTURE`) or a rig (`$WOW_RIG`), which cannot be a person. Env login
+/// credentials alone never make a run unattended: a player may launch with them. The doubt goes
+/// one way because a wrong "attended" costs a probe a timeout, while a wrong "unattended" makes a
+/// player's client fight another for their account. A scripted run declares itself, as
+/// `docs/CONTRIBUTING.md`, "Running it unattended" says.
 ///
-/// The player answer is `false` and it is the **default**, like every other answer in this module:
-/// a client with nobody at the keyboard is the exception, and an exception declares itself. The
-/// direction is the whole point — guessing "attended" when a probe is running costs that probe a
-/// timeout, loudly; guessing "unattended" when a person is playing ships them a client that fights
-/// another client for their account, silently. Those two are not worth the same, so the doubt goes
-/// one way.
-///
-/// **This is the fact [`env_login`] was mistaken for, twice.** Env credentials mean "log in without
-/// typing"; they say nothing about the room — and the director plays with
-/// `WOW_USER=… WOW_PASS=… cargo play`, the example line in `.cargo/config.toml`. So
-/// every session they played read as "a harness": a typed password's refusal killed the process
-/// (fixed on 2026-08-28 by asking `announced` — direct evidence — instead of the environment) and,
-/// the half that fix left standing, a kick sent the client racing to take the account back instead
-/// of to the login screen. That is decision 1262's reported bug, reappearing three weeks later
-/// with not one line of its code changed, because the fact underneath it was never true. 1769.
-///
-/// `WOW_CAPTURE` and `WOW_RIG` are folded in because they *cannot* be a person: a capture authors
-/// the camera and a rig drives the body, so a run that sets either has already said what it is and
-/// cannot forget to. Everything else declares — `scripts/smoke.sh`, `cine.sh`, `summon-live.sh`
-/// and an ad-hoc probe run (`docs/CONTRIBUTING.md`, "Running it unattended") all pass
-/// `WOW_UNATTENDED=1`.
-///
-/// Read by whatever may act *instead of* a person: the lost-session verdict (the
-/// session-loss readers never call this directly, [`crate::net::DisconnectedMessage::new`] asks
-/// once at the wire edge and every reader acts on the verdict it carries) and the two `FATAL`
-/// exits that keep a driverless run from burning its wall-clock on a dialog.
+/// Read by what acts instead of a person: [`crate::net::DisconnectedMessage::new`] (the
+/// lost-session verdict, taken once at the wire edge) and the `FATAL` exits.
 pub(crate) fn unattended() -> bool {
     ["WOW_UNATTENDED", "WOW_CAPTURE", "WOW_RIG"]
         .iter()
         .any(|k| std::env::var_os(k).is_some())
 }
 
-/// **This run cannot get past the screen it is on — may the client end it instead of a person?**
-/// (decision 1371's `FATAL` marker, resting on 1769's fact.)
-///
-/// `true` only for a run that has declared itself [`unattended`]: it exits non-zero on the one
-/// greppable marker a leg runner keys on, rather than parking a driverless run on a dialog for
-/// its whole wall-clock. Otherwise the dialog stays up for whoever is there.
-///
-/// The `false` arm still speaks, when the credentials came from the environment: a probe that
-/// quietly parks for 300 s instead of failing in 5 is precisely what 1769's default trades away,
-/// so the log names the declaration that buys the old behaviour back. Both arms live here because
-/// three call sites — two in [`crate::login`], one in [`crate::char_select`] — must not drift
-/// apart on either the verdict or the marker a leg runner greps for.
+/// A run stuck on a dialog: `true` (exit) only when the run is [`unattended`], logging the `FATAL`
+/// marker a leg runner greps for; otherwise the dialog stays up, with a hint when the credentials
+/// came from the environment. The call sites in [`crate::login`] and [`crate::char_select`] share
+/// it so the verdict and the marker cannot drift apart.
 pub(crate) fn fatal_when_driverless(why: &str) -> bool {
     if unattended() {
         error!("login: FATAL — {why}; exiting");
@@ -146,14 +80,9 @@ pub(crate) fn fatal_when_driverless(why: &str) -> bool {
     false
 }
 
-/// **Which screen the client starts on.** A player starts at the login screen, always; a capture
-/// boots straight into the world (no net, no picker), and a *glue* capture boots onto the very
-/// screen it photographs.
-///
-/// The one place this module forwards into the dev half, and deliberately the only one: the answer
-/// is needed *before the plugins build* (it is `CharSelectPlugin`'s `start`), so it cannot be a
-/// resource an instrument inserts the way [`CaptureMode`] and [`RigCharacter`] are. The forward is
-/// one call, in one direction, and the player arm names nothing at all.
+/// The screen the client starts on: a player at the login screen, a capture straight in the world,
+/// a glue capture on the screen it photographs. Needed before the plugins build, so it forwards
+/// into the dev half rather than reading a resource.
 pub(crate) fn start_state() -> crate::char_select::ClientState {
     #[cfg(feature = "dev")]
     {
@@ -165,44 +94,23 @@ pub(crate) fn start_state() -> crate::char_select::ClientState {
     }
 }
 
-/// **Does this build offer developer affordances at all?** `false` in a player build.
-///
-/// The generalisation of 1176's one-door rule, and the thing that record should have written.
-/// A dev affordance does not have to live in a dev module: the world map's
-/// Alt-click jump is in `ui_world_map`, the `/castvis` family is in `ui_chat`, the dev key plane's
-/// cost is in `bindings`. None of them names a dev root, so none of them fails to compile, and all
-/// of them shipped to players in 1174 exactly as free-fly did.
-///
-/// So the question a gameplay module asks is not "is the debug panel compiled in" — it is **"may I
-/// offer this at all"**, and there is one place to ask it. Held by
-/// [`tests::the_dev_plane_has_exactly_one_door`].
+/// Does this build offer developer affordances at all? `false` in a player build. A dev affordance
+/// may sit in a gameplay module (the world map's Alt-click jump, `/castvis`), so it asks here.
+/// Held by [`tests::the_dev_plane_has_exactly_one_door`].
 pub(crate) fn dev_affordances() -> bool {
     cfg!(feature = "dev")
 }
 
-/// **Did a dev-chord affordance just fire?** `Ctrl`+`Shift`+*key*, and `false` in a player build.
-///
-/// The one door onto the dev plane, and the reason it exists: the plane is
-/// [`benilla_world::modkeys::dev_chord`], which lives in the **engine** (1160 moved it there —
-/// "nothing about which two modifiers are the dev plane is a debug-panel opinion"), and the engine
-/// is always compiled. So a gameplay module asking for a dev chord creates **no symbol into a dev
-/// module**, compiles clean with `--no-default-features`, and ships a live dev affordance to a
-/// player. That is exactly what happened: 1174 landed a green player build in which `Ctrl+Shift+F`
-/// still flew the camera through the world, `+G` still teleported the avatar, and `+M` still muted
-/// the game.
-///
-/// Routing every non-dev reader through here makes the whole plane dark at once rather than five
-/// keys at a time, and makes the next dev chord dark for free. The build gate cannot see this class
-/// — nothing fails to compile — so it is held by [`tests::the_dev_plane_has_exactly_one_door`]
-/// instead, in the suite the gates already run.
+/// Did a dev chord (`Ctrl`+`Shift`+key) fire? `false` in a player build. The engine's
+/// [`benilla_world::modkeys::dev_chord`] is always compiled, so a gameplay module calling it
+/// directly would ship a live dev key to players with no build failure; every non-dev reader comes
+/// through here instead. Held by [`tests::the_dev_plane_has_exactly_one_door`].
 pub(crate) fn dev_chord(keys: &ButtonInput<KeyCode>, key: KeyCode) -> bool {
     dev_affordances() && benilla_world::modkeys::dev_chord(keys, key)
 }
 
-/// The free-fly hint the take-control line carries, or empty when there is no chord to advertise.
-/// A player build must not offer a key that does nothing. Spelled from
-/// [`benilla_world::modkeys::DEV_CHORD`] like every other surface that names the plane, so it
-/// cannot drift from what the chord actually listens for.
+/// The take-control line's free-fly hint, spelled from [`benilla_world::modkeys::DEV_CHORD`];
+/// empty in a player build, which must not offer a key that does nothing.
 pub(crate) fn free_fly_hint() -> String {
     #[cfg(feature = "dev")]
     {
@@ -217,24 +125,11 @@ pub(crate) fn free_fly_hint() -> String {
     }
 }
 
-/// **This crate's source directory on a dev build, `None` in a player build** — the seam's second
-/// door, and the one [`dev_affordances`] cannot be.
-///
-/// `dev_affordances()` answers "may I offer this", at runtime. Part of the seam is not about
-/// offering anything: it is about a **string being absent from the binary**.
-/// `env!("CARGO_MANIFEST_DIR")` names the build machine's home directory, and a runtime `if` does
-/// not remove it — the literal is still compiled in, still in `strings`, still shipped. 1174's
-/// pool-slot guard made exactly that mistake one level down ("inert in a player build" read as
-/// "absent from a player build"), and decision 1175 is entirely about a binary that stops
-/// depending on the machine that built it. So this `cfg` has to be real, and it lives here, once,
-/// behind a value instead of scattered across the modules that need it.
-///
-/// Two callers, both resolving content or state and neither of them an affordance:
-/// [`crate::ui_script`]'s dev probe into `assets/ui` (so editing FrameXML costs no recompile) and
-/// [`crate::local_state`]'s project-folder home. Both get `None` in a player build and fall through
-/// to the compiled-in copy and to `<exe dir>` respectively, with no path literal in the binary.
-///
-/// Held by [`tests::the_dev_plane_has_exactly_one_door`] like the rest of the seam.
+/// This crate's source directory on a dev build, `None` in a player build. The `cfg` must be real,
+/// not a runtime check: `env!("CARGO_MANIFEST_DIR")` names the build machine, and the literal must
+/// be absent from a player binary. Read by [`crate::ui_script`] (live `assets/ui`) and
+/// [`crate::local_state`] (the project-folder home); held by
+/// [`tests::the_dev_plane_has_exactly_one_door`].
 pub(crate) fn dev_source_dir() -> Option<&'static std::path::Path> {
     #[cfg(feature = "dev")]
     {
@@ -246,38 +141,24 @@ pub(crate) fn dev_source_dir() -> Option<&'static std::path::Path> {
     }
 }
 
-/// The pre-connect **account guard**, consulted by the login policy's env fast path
-/// ([`crate::login`]). Returns `Err(explanation)` when this checkout declares the account its
-/// scripted runs log in as ([`declared_identity`]) and the fast path is about to authenticate as
-/// anything else: a login KICKS whoever holds the account — a player mid-session, or another
-/// checkout's probe, whose kicked client (the 0065 teardown) despawns every net entity, so that
-/// run's next sample reads a unit-less world and prints garbage.
-///
-/// The declaration is a file, never the build directory: a path is nobody's identity. Without
-/// one (a plain clone, a player build) the guard is inert — it has no business having an opinion
-/// about a login it cannot attribute. That is why this lives here and not in `preflight`
-/// (decision 0649's home for it, until 1174 made `preflight` dev-only): gameplay's login policy
-/// calls it, and gameplay may not call an instrument.
-///
-/// `WOW_ALLOW_ACCOUNT=1` is the escape hatch for the rare deliberate cross-account run; it turns the
-/// refusal into a warning rather than silence, because the kick still happens.
+/// The pre-connect account guard on the env fast path ([`crate::login`]): `Err(explanation)` when
+/// this checkout declares an account ([`declared_identity`]) and the login is for another, because
+/// a login kicks whoever holds the account. Inert without a declaration. `WOW_ALLOW_ACCOUNT=1`
+/// turns the refusal into a warning.
 pub(crate) fn account_guard(user: &str) -> Result<(), String> {
     guard_for(declared_identity().as_ref(), user)
 }
 
 /// What `.probe-identity` at the project root declares: the account a scripted run from this
-/// checkout logs in as (`WOW_USER=`, `WOW_PASS=`, `WOW_CHAR=`, one per line; never committed —
-/// `.gitignore` carries it). A machine that runs several checkouts against one server gives each
-/// its own account this way, and `scripts/probe-identity.sh` reads the same file.
+/// checkout logs in as (`WOW_USER=`, `WOW_PASS=`, `WOW_CHAR=`, one per line, gitignored). Also read
+/// by `scripts/probe-identity.sh`.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct DeclaredIdentity {
     pub(crate) user: String,
     pub(crate) character: String,
 }
 
-/// The declaration, read off the project folder — `dev` only, the install resolver's own
-/// project-folder rung: a player build has no source tree to name, and no
-/// declared identity to keep.
+/// The declaration, read off the project folder; a player build has none.
 #[cfg(feature = "dev")]
 pub(crate) fn declared_identity() -> Option<DeclaredIdentity> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -291,8 +172,8 @@ pub(crate) fn declared_identity() -> Option<DeclaredIdentity> {
     None
 }
 
-/// The file's three lines, as an identity — `None` unless the account and the character are
-/// both there (the password is the scripts' business, never this crate's).
+/// The file as an identity, `None` unless both the account and the character are there; the
+/// password is never read.
 #[cfg_attr(not(feature = "dev"), allow(dead_code))]
 fn parse_identity(text: &str) -> Option<DeclaredIdentity> {
     let field = |key: &str| {
@@ -307,7 +188,7 @@ fn parse_identity(text: &str) -> Option<DeclaredIdentity> {
     })
 }
 
-/// [`account_guard`]'s decision, with the declaration passed in so it is testable without a file.
+/// [`account_guard`]'s decision, with the declaration passed in.
 fn guard_for(declared: Option<&DeclaredIdentity>, user: &str) -> Result<(), String> {
     let Some(id) = declared else {
         return Ok(());
@@ -323,11 +204,9 @@ fn guard_for(declared: Option<&DeclaredIdentity>, user: &str) -> Result<(), Stri
     ))
 }
 
-/// The word a rig appends to the bodies it mints for this checkout (`<Race3><Class3><word>[f]`),
-/// so that several checkouts against one server never collide on a character name: the declared
-/// character, lowercased, without a leading `probe` — a probe fleet names its bodies
-/// `Probe<word>`, and the word is the identity. `None` without a declaration; the rig then
-/// configures the body it logged in as.
+/// The word a rig appends to this checkout's bodies (`<Race3><Class3><word>[f]`) so checkouts
+/// never collide on a name: the declared character, lowercased, without a leading `probe`. `None`
+/// without a declaration; the rig then configures the body it logged in as.
 pub(crate) fn rig_suffix() -> Option<String> {
     Some(suffix_of(&declared_identity()?.character))
 }
@@ -348,23 +227,12 @@ fn suffix_of(character: &str) -> String {
 mod tests {
     use super::*;
 
-    /// **The dev plane has exactly one door**.
-    ///
-    /// The player-build gate (`cargo build -p benilla --no-default-features`) catches a *symbol*
-    /// crossing into a dev module. It cannot catch this: `benilla_world::modkeys::dev_chord` is
-    /// engine, always compiled, so a gameplay module that asks it for `Ctrl+Shift+F` compiles
-    /// perfectly in a player build and ships free-fly to a player. 1174 landed exactly that, green.
-    ///
-    /// So the rule is checked instead of remembered, the way 0789 checks the probe clock: outside
-    /// the dev roots, `dev_chord` is [`super::dev_chord`]'s to call and nobody else's. A dev module
-    /// may call the engine's directly — it does not exist in a player build to be reached.
-    ///
-    /// This does NOT police [`benilla_world::modkeys::DEV_CHORD`], the display string: naming the
-    /// plane in a label is not offering a key.
+    /// Outside the dev roots, only [`super::dev_chord`] may call the engine's `dev_chord`, and no
+    /// file may name the `dev` feature: the player build gate cannot see either. The display
+    /// string [`benilla_world::modkeys::DEV_CHORD`] is exempt.
     #[test]
     fn the_dev_plane_has_exactly_one_door() {
-        // Everything that is compiled out by `--no-default-features`, plus this module, which is
-        // the door itself. Anything else asking the engine for a dev chord is the bug.
+        // Compiled out by `--no-default-features`, plus this module, the door itself.
         const DEV_ROOTS: &[&str] = &[
             "capture/",
             "debug_panel/",
@@ -377,14 +245,9 @@ mod tests {
             "lib.rs",
             "run_mode.rs",
         ];
-        // Assembled at runtime so the checker does not flag its own source — the same trick, and
-        // the same proof of teeth, as `capture::probes`' clock test.
+        // Assembled at runtime so the checker does not flag its own source.
         let needle = format!("modkeys::{}(", "dev_chord");
-        // The second clause: `#[cfg(feature = "dev")]` itself. Seam knowledge has exactly three
-        // addresses — this module (the always-present layer), `dev.rs` (the group), and `lib.rs`
-        // (the module declarations). A `cfg` attribute anywhere else means a gameplay module has
-        // learned the seam exists, which is the state 1174's whole diff cleared the tree out of,
-        // and which spreads one file at a time if nothing objects.
+        // `#[cfg(feature = "dev")]` belongs only in this module, `dev.rs` and `lib.rs`.
         let cfg_needle = format!("feature = {}dev{}", '"', '"');
 
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -433,8 +296,7 @@ mod tests {
         );
     }
 
-    /// **Two questions, two facts** — and the fixture is the line the director
-    /// actually types, so a future merge of the two answers fails here rather than in their game.
+    /// Env credentials log in without typing but do not make the run unattended.
     #[test]
     fn env_credentials_are_not_a_claim_about_who_is_in_the_room() {
         use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
@@ -452,9 +314,7 @@ mod tests {
             let _c = EnvGuard::unset("WOW_CHAR");
             assert!(!env_login() && !unattended());
         }
-        // `WOW_USER=… WOW_PASS=… cargo play`, `.cargo/config.toml`'s example, and the
-        // director's launch line since 2026-08-29. Log them in without typing, yes. Decide things
-        // on their behalf, no.
+        // `WOW_USER=… WOW_PASS=… cargo play`, `.cargo/config.toml`'s example: a player's launch.
         let _u = EnvGuard::set("WOW_USER", "player");
         let _p = EnvGuard::set("WOW_PASS", "secret");
         assert!(env_login(), "the fast path still submits for them");
@@ -473,17 +333,15 @@ mod tests {
     #[test]
     fn the_fast_path_is_the_declared_account_or_refused() {
         let id = parse_identity("WOW_USER=probe4\nWOW_PASS=secret\nWOW_CHAR=Probefour\n").unwrap();
-        // Our own account: the whole point of the declaration.
         assert!(guard_for(Some(&id), "probe4").is_ok());
         assert!(guard_for(Some(&id), "PROBE4").is_ok()); // vmangos accounts are case-insensitive
 
-        // Anyone else's account — a player's, another checkout's probe — kicks a live session.
+        // Anyone else's account kicks a live session.
         let player = guard_for(Some(&id), "player").unwrap_err();
         assert!(player.contains("probe4") && player.contains("kicks"));
         // The override hint belongs to the caller that can act on it, not to the reason.
         assert!(!player.contains("WOW_ALLOW_ACCOUNT"));
         assert!(guard_for(Some(&id), "probe7").is_err());
-        // No declaration, no standing.
         assert!(guard_for(None, "player").is_ok());
     }
 
@@ -503,11 +361,10 @@ mod tests {
 
     #[test]
     fn the_rig_word_is_the_declared_character_without_its_probe_prefix() {
-        // vmangos player names carry no digits, so a probe fleet spells its index: the word is
-        // what follows `Probe`, and the rig's `Taudru<word>` keeps one body per checkout.
+        // vmangos player names carry no digits, so a probe fleet spells its index.
         assert_eq!(suffix_of("Probefour"), "four");
         assert_eq!(suffix_of("Probezero"), "zero");
-        // Any other name is its own word, cut to what a 12-character name has room for.
+        // Any other name is its own word, cut to fit a 12-character name.
         assert_eq!(suffix_of("Tester"), "tester");
         assert_eq!(suffix_of("Longcharname"), "longch");
         assert_eq!(suffix_of("Probe"), "probe");

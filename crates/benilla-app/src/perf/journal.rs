@@ -1,41 +1,13 @@
-//! The FPS JOURNAL — `/console fpsJournal 1` in any build, or `WOW_FPS_JOURNAL=<csv path>` on a
-//! harness run: once a second, append one row of where the player is, what the frame cost on
-//! the wall, on the CPU and on the GPU, and **what is resident** (see [`JOURNAL_HEADER`] for the
-//! column order, written into every fresh file) — the "where does it dip" instrument for a
-//! director-driven run, and since decision 2008 the instrument a PLAYER on hardware we do not
-//! own can run for us. They play normally; the journal turns "it drops in the Dwarven District"
-//! into coordinates a headless probe can tele straight back to, and its GPU columns turn a Steam
-//! Deck's "GPU 94 % busy" into which pass is eating it. Negligible cost: one line of IO a second,
-//! samples reused from the frame meters.
+//! The FPS journal (`/console fpsJournal 1` in any build, or `WOW_FPS_JOURNAL=<csv path>`): once
+//! a second, one row of where the player is, what the frame cost on the wall, the CPU and the
+//! GPU, and what is resident ([`JOURNAL_HEADER`]). It ships in the player build so a player on any
+//! hardware can record a run; the file is `benilla-config/Diagnostics/fps-journal.csv`, opened
+//! with a `#` line naming the adapter, the backend and whether the device can time passes.
 //!
-//! **Player-facing, so it lives outside the `dev` seam** (2008, on 1495's precedent): the people
-//! whose frames we need to read run the player build, which compiles every other instrument out
-//! (1173). The CVar's knob is [`FpsJournalSetting`]; the file is
-//! `benilla-config/Diagnostics/fps-journal.csv` ([`crate::local_state::fps_journal_path`]), the
-//! thing a reporter attaches. `WOW_FPS_JOURNAL` names another path and turns the journal on for
-//! the run regardless of the CVar — the harness lever it always was. A fresh file opens with one
-//! `#` line naming the adapter, the backend and whether the device can time passes, so a journal
-//! from a machine we have never seen says what it was read on.
-//!
-//! **The GPU columns read bevy's render diagnostics** (`RenderDiagnosticsPlugin`, registered here
-//! so it is present in every build): one timestamp pair per render pass, resolved a few frames
-//! later into `render/<pass>/elapsed_gpu` measurements. Those exist where the device offers
-//! `TIMESTAMP_QUERY_INSIDE_PASSES` — Vulkan and DX12, so the Linux and Windows builds — and never
-//! on an Apple GPU, which samples counters only at stage boundaries (the `perf` module header);
-//! there the columns stay EMPTY rather than zero, so "no reading" cannot be mistaken for "free".
-//! Our own passes (`static_gx`, the `ffx_glow` chain, `ui_gamma_decode`) open spans of their own,
-//! because a city's biggest draw must not land in `gpu_other`. The buckets are [`gpu_bucket`]; a
-//! pass this file does not name is still counted, under `gpu_other`, and `gpu_ms` is the sum of
-//! every pass — the GPU's busy time inside passes, which is what "GPU-bound" reads against the
-//! wall `mean_ms` beside it.
-//!
-//! The residency columns make it the **leak curve** instrument too: `FPS_PROBE`'s residency
-//! meter samples once per run, which can only compare two runs at one point each — it cannot tell
-//! "grows with distance streamed" from "grows with time elapsed", and cannot show *where* on a
-//! route the cost arrives. A per-second row of `cpu_ms` beside `mats/images/uv/tint` plots the
-//! per-frame cost directly against residency along one continuous leg, on the same time axis as
-//! the position — so a same-map traverse (no `MapChange`, so no map-scoped eviction) shows its
-//! accumulation as a slope instead of a before/after pair.
+//! The GPU columns read bevy's per-pass render diagnostics, which exist only where the device
+//! has `TIMESTAMP_QUERY_INSIDE_PASSES` (Vulkan and DX12, never an Apple GPU); elsewhere the cells
+//! stay empty, not zero. `gpu_ms` is the sum of every pass, and an unnamed pass lands in
+//! `gpu_other`.
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -50,23 +22,19 @@ use super::clock::{main_thread_cpu_secs, process_cpu_secs};
 
 pub(crate) struct FpsJournalPlugin;
 
-/// The `fpsJournal` CVar's knob (2008): on, the journal appends to the player's
-/// `Diagnostics/fps-journal.csv` from the next second on; off, it stops mid-run and the file
-/// keeps what it has. `/console fpsJournal 1` is the whole recipe a reporter needs.
+/// The `fpsJournal` CVar: on, the journal appends from the next second; off, it stops and the
+/// file keeps what it has.
 #[derive(Resource, Default)]
 pub(crate) struct FpsJournalSetting(pub(crate) bool);
 
-/// The journal's column order, written as the first line of a fresh file (after the `#` adapter
-/// line). Appended-to files keep whatever header they were created with — the columns only ever
-/// grow at the end, so an older journal still parses against its own header.
+/// The column order, written once into a fresh file after the `#` adapter line. Columns only
+/// ever grow at the end, so an older journal still parses against its own header.
 const JOURNAL_HEADER: &str = "t,x,y,z,mean_ms,p95_ms,streamed,entities,cpu_ms,mats,meshes,images,\
                               m2,uv,tint,pmat,emat,skin,cmat,tex,cgeo,evicted,fx,fy,fz,main_ms,\
                               gpu_ms,gpu_opaque,gpu_static,gpu_transp,gpu_glow,gpu_post,gpu_ui,\
                               gpu_other\n";
 
-/// The FPS journal switch's change callback (2008, 2303): a flag, the client's int-parse +
-/// `!= 0`. The journal system reads the knob every frame, so the file opens on the next second
-/// and closes the second it is turned off.
+/// The `fpsJournal` change callback: a flag, int-parsed and `!= 0`.
 pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut journal: ResMut<FpsJournalSetting>) {
     if ev.is("fpsJournal") {
         journal.0 = ev.flag();
@@ -75,10 +43,8 @@ pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut journal: ResMut<Fps
 
 impl Plugin for FpsJournalPlugin {
     fn build(&self, app: &mut App) {
-        // bevy's per-pass render diagnostics — the source of the GPU columns, and (under the
-        // `tracy` feature) the hook Tracy's GPU zones ride. Present in every build: its per-frame
-        // cost is one query resolve and one buffer map on the render thread, and a player's
-        // journal is exactly the build that has to carry it (2008).
+        // Bevy's per-pass render diagnostics, the source of the GPU columns and of Tracy's GPU
+        // zones, registered in every build.
         app.add_plugins(RenderDiagnosticsPlugin)
             .init_resource::<FpsJournalSetting>()
             .add_observer(on_cvar)
@@ -102,18 +68,15 @@ impl Plugin for FpsJournalPlugin {
 struct FpsJournal {
     /// `WOW_FPS_JOURNAL`: a fixed path, on for the whole run whatever the CVar says.
     env_path: Option<PathBuf>,
-    /// Where rows go while the journal is on; `None` = off, or nowhere to write (a hermetic
-    /// run has no state folder, and the CVar has no other place to point).
+    /// Where rows go while the journal is on; `None` when off, or on a hermetic run with no
+    /// state folder.
     path: Option<PathBuf>,
     window: Vec<f32>,
     last_flush: f32,
-    /// Process CPU seconds at the previous flush — the row's `cpu_ms` is this second's CPU cost
-    /// per frame, the load-robust half of the measurement.
+    /// Process CPU seconds at the previous flush, for the row's per-frame `cpu_ms`.
     cpu_at_flush: Option<f64>,
-    /// Main-thread CPU seconds at the previous flush, for the row's `main_ms`. Exactly parallel to
-    /// `cpu_at_flush`, so the two columns are the same measurement at two scopes: `cpu_ms` is every
-    /// thread's work, `main_ms` the serialized part of it. A leg where they diverge is a leg whose
-    /// cost moved off (or onto) the critical path — which the all-threads column alone cannot say.
+    /// Main-thread CPU seconds at the previous flush, for the row's `main_ms`: `cpu_at_flush`'s
+    /// measurement narrowed to the serialized part.
     main_at_flush: Option<f64>,
     /// This second's GPU spans, folded per frame from the diagnostics store.
     gpu: GpuAccum,
@@ -122,29 +85,28 @@ struct FpsJournal {
 /// The GPU columns after `gpu_ms`, in header order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum GpuBucket {
-    /// bevy's `main_opaque_pass_3d` — terrain, the model lane's opaque parts, the sky shells.
+    /// Bevy's `main_opaque_pass_3d`: terrain, opaque model parts, the sky shells.
     Opaque = 0,
-    /// Our retained static pass (`static_gx`): the WMOs and the doodads, the city's own draw.
+    /// Our retained static pass (`static_gx`): the WMOs and the doodads.
     Static,
-    /// bevy's transparent (and transmissive) 3D passes — water, glow cards, particles.
+    /// Bevy's transparent and transmissive 3D passes: water, glow cards, particles.
     Transparent,
-    /// The `ffx_glow` chain: the quarter-res downsample, the two Gauss taps — and a bake's
-    /// combine. The world's combine is the first draw of the UI camera's main pass since 2234,
-    /// inside `main_transparent_pass_2d`'s own span (it has none of its own — 2258), so it lands
-    /// in [`Self::Ui`] with that pass.
+    /// The `ffx_glow` chain: the quarter-res downsample, the two Gauss taps and a bake's combine.
+    /// The world's combine draws inside `main_transparent_pass_2d`'s span, so it lands in
+    /// [`Self::Ui`].
     Glow,
     /// The full-screen tail on every camera: tonemapping, upscaling, the MSAA writeback.
     Post,
     /// The 2D camera's passes, bevy UI, and our `ui_gamma_decode`.
     Ui,
-    /// Every span this file does not name — counted, never dropped.
+    /// Every span this file does not name, counted, never dropped.
     Other,
 }
 
 const GPU_BUCKETS: usize = 7;
 
-/// Which column a diagnostics path lands in. `None` = not a top-level GPU span: a CPU span, a
-/// non-render diagnostic, or a span nested under another (its parent already carries it).
+/// Which column a diagnostics path lands in; `None` for anything but a top-level GPU span (a
+/// nested span's parent already carries it).
 fn gpu_bucket(path: &str) -> Option<GpuBucket> {
     let pass = path.strip_prefix("render/")?.strip_suffix("/elapsed_gpu")?;
     if pass.contains('/') {
@@ -163,21 +125,17 @@ fn gpu_bucket(path: &str) -> Option<GpuBucket> {
     })
 }
 
-/// One second's GPU spans: summed per bucket, divided at the flush by the number of frames
-/// whose readback landed — not by the wall window's frame count, because bevy's diagnostics
-/// mutex hands the store at most one frame per sync and drops the rest when readbacks bunch up,
-/// so the honest divisor is the frames actually read.
+/// One second's GPU spans, summed per bucket and divided by the frames whose readback landed:
+/// bevy hands the store at most one frame per sync and drops the rest when readbacks bunch up.
 #[derive(Default)]
 struct GpuAccum {
     sum: [f64; GPU_BUCKETS],
     frames: u32,
-    /// The newest measurement time consumed, so each fold reads only what arrived since. All
-    /// measurements of one sync share one `Instant`, which is what makes "a frame" countable.
+    /// The newest measurement time consumed; all measurements of one sync share one `Instant`,
+    /// which is what makes a frame countable.
     seen: Option<Instant>,
-    /// `WOW_GPU_PASSES=1` — the same sums per PASS, printed beside each row as a `GPU_PASSES`
-    /// line: the journal's buckets fold both 2D passes, the UI pass and the gamma decode into
-    /// one `gpu_ui`, and a pass-level question (an empty pass encoded every frame; one filter
-    /// pass of a chain) needs the raw split. Empty and unread unless armed.
+    /// `WOW_GPU_PASSES=1`: the same sums per pass, printed beside each row as a `GPU_PASSES`
+    /// line; empty unless armed.
     passes: std::collections::BTreeMap<String, f64>,
 }
 
@@ -220,9 +178,8 @@ impl GpuAccum {
         self.seen = newest;
     }
 
-    /// The row's GPU cells — `,gpu_ms,<one per bucket>` — and the reset. All empty when no
-    /// frame was read this second: the platform has no in-pass timestamps, and an empty cell
-    /// says so where a zero would lie.
+    /// The row's GPU cells, `,gpu_ms,<one per bucket>`, and the reset; all empty when no frame
+    /// was read this second.
     fn columns(&mut self) -> String {
         let mut s = String::new();
         if self.frames == 0 {
@@ -235,7 +192,7 @@ impl GpuAccum {
                 s.push_str(&format!(",{:.2}", bucket / n));
             }
             if passes_armed() {
-                // Costliest first, ms per read frame — the raw split the buckets fold.
+                // Costliest first, ms per read frame.
                 let mut rows: Vec<(&String, &f64)> = self.passes.iter().collect();
                 rows.sort_by(|a, b| b.1.total_cmp(a.1));
                 let line: Vec<String> = rows
@@ -252,9 +209,7 @@ impl GpuAccum {
     }
 }
 
-/// The `#` line a fresh file opens with: what the rows were read on, and whether the GPU
-/// columns can ever fill (the device's in-pass timestamp feature, the one bevy's pass spans
-/// need). Everything a reader needs to know before comparing two journals.
+/// The `#` line a fresh file opens with: the adapter, and whether the GPU columns can ever fill.
 fn preamble(adapter: Option<&RenderAdapterInfo>, device: Option<&RenderDevice>) -> String {
     let (gpu, backend, driver) = adapter.map_or_else(
         || ("?".to_string(), "?".to_string(), "?".to_string()),
@@ -263,7 +218,7 @@ fn preamble(adapter: Option<&RenderAdapterInfo>, device: Option<&RenderDevice>) 
             (
                 a.name.clone(),
                 format!("{:?}", a.backend),
-                // Metal reports no driver string at all; a `?` reads better than a blank.
+                // Metal reports no driver string.
                 if driver.is_empty() {
                     "?".to_string()
                 } else {
@@ -285,14 +240,9 @@ fn preamble(adapter: Option<&RenderAdapterInfo>, device: Option<&RenderDevice>) 
     format!("# benilla fps journal | gpu {gpu} | backend {backend} | driver {driver} | gpu_spans {spans}\n")
 }
 
-/// The journal's residency columns, grouped because `journal_fps` is near Bevy's system-param
-/// arity limit.
-///
-/// The `Assets<T>` counts are the totals — what the process holds. The [`ArtCensus`] half is the
-/// same population **broken down by the cache that holds it**, which is what turns
-/// "materials are growing" into a named holder in one row instead of a run-length probe. `evicted`
-/// is the running total dropped by distance: on a same-map traverse it was structurally zero before
-/// 0793, because nothing but a `MapChange` evicted anything.
+/// The journal's residency columns, grouped for Bevy's system-param arity limit. The
+/// `Assets<T>` counts are totals; the [`ArtCensus`] half breaks the same population down by the
+/// cache that holds it, and `evicted` is the running total dropped by distance.
 ///
 /// [`ArtCensus`]: benilla_world::art_scope::ArtCensus
 #[derive(bevy::ecs::system::SystemParam)]
@@ -304,16 +254,12 @@ struct JournalResidency<'w> {
     uv_reg: Res<'w, benilla_world::doodad_anim::UvAnimMaterials>,
     tint_reg: Res<'w, benilla_world::doodad_anim::TintAnimMaterials>,
     art: Res<'w, benilla_world::art_scope::ArtCensus>,
-    /// The **view focus** — where art is actually being asked for. Distinct from the row's `x,y,z`,
-    /// which is the avatar: through a detached free-fly the body stands still while the camera covers
-    /// kilometres, so on that leg the position columns describe nothing that is happening. The
-    /// director's first run was exactly that leg, and reading it needed this column.
+    /// The view focus, where art is asked for; it leaves the avatar's `x,y,z` in a detached
+    /// free-fly.
     scope: Res<'w, benilla_world::art_scope::ArtScopeState>,
 }
 
-/// The GPU side: the diagnostics store the render spans sync into, and the two facts the
-/// preamble names. All optional — a headless app without a renderer has none of them, and the
-/// journal then writes its CPU columns and leaves the GPU cells empty.
+/// The diagnostics store and the preamble's adapter and device; all absent without a renderer.
 #[derive(bevy::ecs::system::SystemParam)]
 struct JournalGpu<'w> {
     store: Option<Res<'w, DiagnosticsStore>>,
@@ -321,9 +267,7 @@ struct JournalGpu<'w> {
     device: Option<Res<'w, RenderDevice>>,
 }
 
-/// `NonSendMarker` pins this to the main thread, which the `main_ms` column requires:
-/// [`main_thread_cpu_secs`] reports *the calling thread*, so on a worker it would silently log
-/// whichever pool thread ran the flush.
+/// Pinned to the main thread: [`main_thread_cpu_secs`] reads the calling thread's clock.
 fn journal_fps(
     _pin_to_main_thread: bevy::ecs::system::NonSendMarker,
     mut journal: ResMut<FpsJournal>,
@@ -336,8 +280,8 @@ fn journal_fps(
     gpu: JournalGpu,
 ) {
     let now = time.elapsed_secs();
-    // The switch, read every frame: the env lever or the CVar. Turning on opens (or creates) the
-    // file and restarts every per-second baseline; turning off drops the half-second in hand.
+    // Read every frame: turning on opens the file and restarts every baseline; turning off
+    // drops the partial second.
     let wanted = journal.env_path.is_some() || setting.0;
     match (wanted, journal.path.is_some()) {
         (false, false) => return,
@@ -354,10 +298,9 @@ fn journal_fps(
                 .clone()
                 .or_else(crate::local_state::fps_journal_path)
             else {
-                return; // hermetic: no state folder, and nothing else to write into
+                return; // hermetic: no state folder
             };
-            // The header goes in exactly once, at creation: the rows are appended for the life
-            // of the run (and across runs, deliberately — a journal accumulates legs).
+            // The header goes in once, at creation; rows append across runs.
             if !path.exists() {
                 let head = format!(
                     "{}{JOURNAL_HEADER}",
@@ -401,8 +344,6 @@ fn journal_fps(
         .filter(|p| p.active)
         .map(|p| benilla_assets::coords::bevy_to_wow(p.pos))
         .unwrap_or([0.0; 3]);
-    // CPU per frame over this second — the number the reporter's "CPU %" compares against, and
-    // the one that does not move with whatever else is compiling on this machine.
     let cpu_now = process_cpu_secs();
     let cpu_ms = match (journal.cpu_at_flush, cpu_now) {
         (Some(t0), Some(t1)) => format!("{:.2}", (t1 - t0) * 1000.0 / v.len() as f64),
@@ -423,7 +364,7 @@ fn journal_fps(
         residency.uv_reg.0.len(),
         residency.tint_reg.0.len(),
     );
-    // The per-cache breakdown, in `ArtSlot::ALL` order — which IS the header's column order.
+    // `ArtSlot::ALL` order is the header's column order.
     for slot in benilla_world::art_scope::ArtSlot::ALL {
         line.push_str(&format!(",{}", residency.art.live(slot)));
     }
@@ -432,8 +373,7 @@ fn journal_fps(
         Some(f) => line.push_str(&format!(",{:.1},{:.1},{:.1}", f[0], f[1], f[2])),
         None => line.push_str(",,,"),
     }
-    // Appended at the end, per this file's own rule: the columns only ever grow there, so an
-    // existing journal keeps parsing against the header it was created with.
+    // New columns only ever append at the end of the row.
     let main_now = main_thread_cpu_secs();
     match (journal.main_at_flush, main_now) {
         (Some(t0), Some(t1)) => {
@@ -442,7 +382,6 @@ fn journal_fps(
         _ => line.push(','),
     }
     journal.main_at_flush = main_now;
-    // The GPU cells (2008), last of all.
     let gpu_cells = journal.gpu.columns();
     line.push_str(&gpu_cells);
     line.push('\n');
@@ -482,7 +421,6 @@ mod tests {
         assert_eq!(b("render/ui/elapsed_gpu"), Some(Ui));
         assert_eq!(b("render/ui_gamma_decode/elapsed_gpu"), Some(Ui));
         assert_eq!(b("render/main_transparent_pass_2d/elapsed_gpu"), Some(Ui));
-        // Unnamed passes are counted, not dropped.
         assert_eq!(
             b("render/early_mesh_preprocessing/elapsed_gpu"),
             Some(Other)

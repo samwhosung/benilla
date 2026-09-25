@@ -1,8 +1,6 @@
-// WoW `alphaMode="ADD"` for Bevy UI, the glue highlight overlays: `AddUiMaterial::specialize` sets
-// the additive blend state, and this stage samples the authored sub-rect (`rect` is uv min/max; the
-// sheets keep the button region in a corner or quarter). The texel goes back to gamma bytes, so the
-// `SrcAlpha, One` blend is the reference's byte add `dst + texel * a` (EGxBlend 3,
-// `glBlendFunc(GL_SRC_ALPHA, GL_ONE)`).
+// `alphaMode="ADD"` for the glue highlight overlays: samples the sub-rect `rect` (uv min/max) and
+// returns gamma bytes, so the `SrcAlpha, One` blend is the reference's byte add `dst + texel * a`
+// (EGxBlend 3, `glBlendFunc(GL_SRC_ALPHA, GL_ONE)`).
 #import bevy_ui::ui_vertex_output::UiVertexOutput
 
 @group(1) @binding(0) var texture: texture_2d<f32>;

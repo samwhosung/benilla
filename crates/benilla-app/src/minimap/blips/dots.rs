@@ -1,8 +1,5 @@
-//! The `ObjectIcons.blp` **dot layer** — the per-object cell lists of the classifier
-//! `0x4eaa90` (quest gold cell 3, tracking gold/red cells 0/1, party blue cell 4). Split from
-//! the blip layer's landmark/arrow half; the shared frame geometry ([`BlipCtx`]), hover slot,
-//! and size basis live in the parent module (the byte law and its provenance are in the
-//! parent's module doc).
+//! The `ObjectIcons.blp` dots of the classifier `0x4eaa90`: quest gold cell 3, tracking gold and
+//! red cells 0 and 1, party blue cell 4.
 
 use std::collections::HashMap;
 
@@ -20,56 +17,42 @@ use crate::ui_pass::{UiQuad, UiQuads, UvRect};
 
 use super::{party_member_pos, BlipCtx, MinimapBlipHover, TrackedCandidates, BLIP_BASIS_PX};
 
-/// The quest dot's quad: 8 × 8 px (`bc82a8 = base·0.00625` × 1280, ctor-frozen; the per-cell
-/// scale table `{1,1,1,1,1.3}` leaves quest cell 3 at 1.0 — only the party cell 4 is 1.3×).
+/// The quest dot's quad, 8 px (`0xbc82a8`, frozen by the ctor); the per-cell scale table
+/// `{1,1,1,1,1.3}` scales only the party cell 4.
 const QUEST_DOT_PX: f32 = 8.0;
 /// The party dot's quad: the same 8-px base at the cell table's 1.3× party scale.
 const PARTY_DOT_PX: f32 = 8.0 * 1.3;
-/// `ObjectIcons.blp` cell 4 — the blue party-member dot (col 0, row 1 of the 4×4 grid).
+/// `ObjectIcons.blp` cell 4, the blue party dot (col 0, row 1 of the 4×4 grid).
 const PARTY_DOT_CELL: [f32; 4] = [0.0, 0.25, 0.25, 0.5];
-/// `ObjectIcons.blp` cell 0 — the gold tracked-RESOURCE dot (col 0, row 0): a GameObject
-/// passing the resource-tracking predicate (Find Herbs/Minerals; `0x5ed2b0`).
+/// `ObjectIcons.blp` cell 0, the gold dot of a GameObject passing resource tracking (`0x5ed2b0`).
 const TRACKED_GO_CELL: [f32; 4] = [0.0, 0.25, 0.0, 0.25];
-/// `ObjectIcons.blp` cell 1 — the red tracked-UNIT dot (col 1, row 0): a unit passing the
-/// creature-tracking predicate (Track Beasts/Humanoids/…; `0x5ed210`).
+/// `ObjectIcons.blp` cell 1, the red dot of a unit passing creature tracking (`0x5ed210`).
 const TRACKED_UNIT_CELL: [f32; 4] = [0.25, 0.5, 0.0, 0.25];
-/// `UNIT_DYNAMIC_FLAGS` bit 0x2 — the per-viewer "always show on minimap" flag (vmangos
-/// `UNIT_DYNFLAG_TRACK_UNIT`; the server sets it on a Hunter's Mark victim for the caster).
-/// Byte-verified as `0x5ed210`'s first clause (`+0x224 & 0x2`, the 0564 fold-back).
+/// `UNIT_DYNAMIC_FLAGS` bit 0x2, set per viewer on a Hunter's Mark victim for its caster; one of
+/// `0x5ed210`'s two always-show clauses (`+0x224 & 0x2`).
 const UNIT_DYNFLAG_TRACK_UNIT: u32 = 0x2;
-/// Creature type 7 — Humanoid: the resolver's player/race fallback. Byte-verified via the
-/// shipped `ChrRaces.dbc` (col 9 = 7 for all nine playable races, read by `0x605570`; the 0564
-/// fold-back) — also the `<= 0` fallback of the shapeshift override.
+/// Creature type 7, Humanoid: a player's type (`ChrRaces.dbc` col 9 is 7 for all nine playable
+/// races, read by `0x605570`) and the `<= 0` fallback of the shapeshift override.
 const CREATURE_TYPE_HUMANOID: u32 = 7;
 
-/// `ObjectIcons.blp` cell for a DIALOG_STATUS — **status 7 only** (`cmp [obj+0xcb8],7` at
-/// `0x4eac31`, VERIFIED): the gold cell 3. Every other status draws no quest dot.
+/// Only DIALOG_STATUS 7 draws a quest dot, the gold cell 3 (`cmp [obj+0xcb8],7` at `0x4eac31`).
 fn quest_dot_cell(status: u32) -> Option<[f32; 4]> {
     (status == 7).then_some([0.75, 1.0, 0.0, 0.25])
 }
 
-/// The three preconditions `0x4eaa90` applies to a **UNIT or PLAYER** before either dot category
-/// is even chosen. They sit upstream of the `cmp [edi+0xcb8],7` at `0x4eac31`,
-/// whose only predecessor is the fall-through, so they gate the gold **quest** dot (cell 3) and the
-/// red **tracking** dot (cell 1) alike. They do **not** touch the GameObject leg (cell 0) or the
-/// party dots (cell 4), which are reached by other paths entirely.
-///
-/// A candidate with no descriptor yet fails, which is the same answer the reference's own read of
-/// an un-streamed unit would give (a zeroed health field is `<= 0`) — and it lasts one drain, since
-/// `net/apply` seeds the store at the tail of the drain that spawned the entity.
+/// The three gates `0x4eaa90` applies to a unit or player ahead of the status-7 compare at
+/// `0x4eac31`, so they bar the quest dot and the tracking dot alike, never a GameObject or party
+/// dot. A unit with no descriptor yet fails, as a zeroed health field does in the reference.
 fn unit_dot_eligible(store: Option<&ObjectStore>, me: Option<u64>) -> bool {
     let Some(f) = store.map(|s| &s.0) else {
         return false;
     };
-    // 1. `0x4eac19 mov ecx,[eax+0x40]; test ecx,ecx; 0x4eac1e 0f 8e jle` — a **signed** `<= 0` on
-    //    `UNIT_FIELD_HEALTH` (`0f 8e`, not `0f 86`). The dead get no dot of any kind.
+    // 1. A signed `<= 0` on `UNIT_FIELD_HEALTH` (`jle` at `0x4eac1e`): the dead get no dot.
     if f.unit_health().unwrap_or(0) as i32 <= 0 {
         return false;
     }
-    // 2. `UNIT_FIELD_CHARMEDBY` when non-zero, else `UNIT_FIELD_SUMMONEDBY`, both halves compared
-    //    against the active player's guid (`0x468550`) — and **equality is the reject**: your own
-    //    pet, minion or charmed victim is never a blip. (This is not the classifier's self-GUID
-    //    check; there are two other, separate ones.)
+    // 2. The owner, `UNIT_FIELD_CHARMEDBY` when non-zero else `UNIT_FIELD_SUMMONEDBY`, equal to
+    //    our guid (`0x468550`) rejects: our own pet, minion or charmed unit is never a blip.
     let owner = match f.unit_charmed_by() {
         Some(g) if g != 0 => g,
         _ => f.unit_summoned_by().unwrap_or(0),
@@ -77,18 +60,12 @@ fn unit_dot_eligible(store: Option<&ObjectStore>, me: Option<u64>) -> bool {
     if owner != 0 && Some(owner) == me {
         return false;
     }
-    // 3. `byte [eax+0x213] & 4` — `UNIT_FIELD_BYTES_1` byte 3 bit 2, the only `& 4` site on that
-    //    byte image-wide. The bit is verified; its *name* is vmangos's.
+    // 3. `byte [eax+0x213] & 4`, `UNIT_FIELD_BYTES_1` byte 3 bit 2 (vmangos's untrackable name).
     !f.unit_is_untrackable()
 }
 
-/// Draw a gold dot per quest-giver at status 7, at the unit's live position, hard-culled at
-/// the view radius in 3-D world distance (`range² < dx²+dy²+dz²` skips — no rim ride);
-/// records a hover hit with the guid. Called AFTER the player arrow: dots draw last, on top.
-///
-/// Walks the candidate set rather than the status map — the classifier's own shape (it is a
-/// per-object callback, not a per-status one), and the only way to reach each object's descriptor,
-/// which [`unit_dot_eligible`] needs.
+/// Draw a gold dot per quest giver at status 7, culled at the view radius in 3-D distance with
+/// no rim arrow. Runs after the player arrow, so the dots draw on top.
 pub(in crate::minimap) fn emit_quest_dots(
     ctx: &BlipCtx,
     statuses: &HashMap<u64, u32>,
@@ -103,7 +80,7 @@ pub(in crate::minimap) fn emit_quest_dots(
     for (guid, net, tf, store) in candidates.iter() {
         let npc = guid.0;
         if !matches!(net.kind, EntityKind::Unit | EntityKind::Player) {
-            continue; // the GameObject leg (`0x4eab43`) never reaches the `== 7` compare
+            continue; // the GameObject leg (`0x4eab43`) never reaches the status-7 compare
         }
         let Some(cell) = statuses.get(&npc).copied().and_then(quest_dot_cell) else {
             continue;
@@ -117,11 +94,8 @@ pub(in crate::minimap) fn emit_quest_dots(
         if d3 > ctx.radius_yd {
             continue;
         }
-        // The cross-interior GREY (`0xffb0b0b0`, byte-pinned render value): the classifier
-        // greys entries whose colorFlag is set — the "indoor/subzone distinction" via the
-        // containment query `0x670540`. Implemented as the indoor-containment MISMATCH (the
-        // same down-ray the entity light classifier uses); the exact compare is INTERIM
-        // pending its scoped pin.
+        // The grey `0xffb0b0b0` marks a dot across an interior boundary; the reference decides
+        // through `0x670540`, untraced, and this uses an indoor-containment mismatch.
         let grey = unit_indoors(tf.translation()) != player_indoors;
         let tint = if grey { 0xb0 as f32 / 255.0 } else { 1.0 };
         let rect = Rect::from_center_size(
@@ -144,11 +118,9 @@ pub(in crate::minimap) fn emit_quest_dots(
     }
 }
 
-/// The resource-tracking predicate (the classifier's `0x5ed2b0` leg): does this GameObject's
-/// lock match the active `PLAYER_TRACK_RESOURCES` mask? The GO's template lockId resolves
-/// through `Lock.dbc`; ANY skill-keyed slot whose `LockType.dbc` id `n` has mask bit
-/// `1 << (n − 1)` set matches (the server sets exactly that bit from the tracking aura's
-/// MiscValue — vmangos `HandleAuraTrackResources`). Lock-less GOs (lockId 0) never track.
+/// Resource tracking (`0x5ed2b0`): any skill-keyed `Lock.dbc` slot of the lock whose `LockType`
+/// `n` has bit `1 << (n − 1)` set in `PLAYER_TRACK_RESOURCES`, the bit the server sets from the
+/// aura's MiscValue (vmangos `HandleAuraTrackResources`).
 fn tracked_resource(mask: u32, lock_id: u32, locks: &LockCatalog) -> bool {
     if mask == 0 || lock_id == 0 {
         return false;
@@ -162,8 +134,7 @@ fn tracked_resource(mask: u32, lock_id: u32, locks: &LockCatalog) -> bool {
     })
 }
 
-/// Our own tracking state, read once off the SelfPlayer descriptor: the two masks + the
-/// track-stealthed bit (`PLAYER_FIELD_BYTES & 0x2`).
+/// Our tracking masks and the track-stealthed bit (`PLAYER_FIELD_BYTES & 0x2`).
 #[derive(Clone, Copy, Default)]
 pub(in crate::minimap) struct SelfTracking {
     pub(in crate::minimap) creatures: u32,
@@ -171,11 +142,9 @@ pub(in crate::minimap) struct SelfTracking {
     pub(in crate::minimap) stealthed: bool,
 }
 
-/// The creature-tracking predicate — `0x5ed210` (the 0564 fold-back): two always-show clauses
-/// first — `UNIT_DYNFLAG_TRACK_UNIT` (Hunter's Mark) and *our* track-stealthed bit against the
-/// target's CREEP vis-flag (the TRACK_STEALTHED(151) consumer) — then the unit's creature type
-/// against `PLAYER_TRACK_CREATURES` (bit `creatureType − 1`). No alive/dead or faction gate
-/// (byte-verified: neither predicate tests either).
+/// Creature tracking (`0x5ed210`): either always-show clause, `UNIT_DYNFLAG_TRACK_UNIT` or our
+/// track-stealthed bit (aura 151) with the unit's CREEP flag, else the creature type's bit
+/// `type − 1` in `PLAYER_TRACK_CREATURES`. The predicate itself tests no alive/dead or faction.
 fn tracked_creature(
     tracking: SelfTracking,
     creature_type: Option<u32>,
@@ -193,11 +162,8 @@ fn tracked_creature(
             .is_some_and(|t| (1..=32).contains(&t) && tracking.creatures & (1u32 << (t - 1)) != 0)
 }
 
-/// The client's creature-type resolver, transcribed — `0x605570` (3-way, the 0564
-/// fold-back): a nonzero shapeshift form reads `SpellShapeshiftForm.dbc`'s creatureType FIRST
-/// (`<= 0` → Humanoid — a cat-form druid is a Beast); else an NPC reads its cached creature
-/// template, a player its race → Humanoid (`ChrRaces.dbc` col 9 = 7 for all nine playable
-/// races, dumped from the shipped file).
+/// The creature-type resolver `0x605570`: a shapeshift form's `SpellShapeshiftForm.dbc` type
+/// first (`<= 0` reads Humanoid), else an NPC's cached template, else Humanoid for a player.
 fn creature_type_of(
     kind: EntityKind,
     shapeshift_form: u8,
@@ -223,12 +189,9 @@ fn creature_type_of(
     }
 }
 
-/// Draw the tracking dots: the gold cell-0 dot per tracked GameObject, then
-/// the red cell-1 dot per tracked unit — the classifier's fall-through for objects NOT at
-/// quest status 7 (those draw the quest dot instead; the `==7` branch is tested first,
-/// byte-verified `0x4eac31`). Same hard 3-D radius cull, cross-interior grey, and hover law
-/// as the quest dots; drawn just before them (the draw walks the cell lists in order, so
-/// cells 0/1 sit under a same-spot quest or party dot).
+/// Draw the tracking dots, gold cell 0 per GameObject then red cell 1 per unit not at quest
+/// status 7 (`0x4eac31` tests that first). Drawn before the quest and party dots, as the cell
+/// lists draw in order.
 pub(in crate::minimap) fn emit_tracking_dots(
     ctx: &BlipCtx,
     tracking: SelfTracking,
@@ -245,10 +208,7 @@ pub(in crate::minimap) fn emit_tracking_dots(
     quads: &mut UiQuads,
     hover: &mut MinimapBlipHover,
 ) {
-    // NB the unit pass runs even with an empty creature mask — the two always-show clauses
-    // need no tracking aura bit in it (Hunter's Mark marks the victim, not the caster;
-    // track-stealthed rides PLAYER_FIELD_BYTES, not the mask).
-    // A candidate's dot, shared by both passes: range-cull, grey, push, hover.
+    // The unit pass runs even with an empty creature mask: the always-show clauses need none.
     let mut dot = |guid: u64, tf: &GlobalTransform, cell: [f32; 4], name: DotName| {
         let w = bevy_to_wow(tf.translation());
         let d3 =
@@ -279,16 +239,8 @@ pub(in crate::minimap) fn emit_tracking_dots(
             }
         }
     };
-    // Cell 0 — tracked GameObjects (gold): template lockId through Lock.dbc.
-    //
-    // **No quest-status precedence on this leg**. This loop used to skip a
-    // GameObject whose status was 7, mirroring the unit loop below — but the classifier's
-    // `cmp dword ptr [edi+0xcb8],7` at `0x4eac31` is reachable **only** from the UNIT and PLAYER
-    // legs (machine-enumerated predecessors): the GameObject leg at `0x4eab43` falls straight
-    // into `0x5ed2b0`, GameObject *tracking*, and emits category 0. A GameObject never draws a
-    // quest dot in the reference, so nothing about a quest status may suppress its tracking dot —
-    // and a GameObject can no longer *hold* a status here anyway (`net/apply` drops it, as
-    // `0x5dc9f0` does).
+    // Cell 0, GameObjects. No quest-status check: the GameObject leg (`0x4eab43`) goes straight
+    // to `0x5ed2b0` and never reaches the status-7 compare.
     if tracking.resources != 0 {
         if let Some(locks) = locks {
             for (guid, net, tf, _) in candidates.iter() {
@@ -296,7 +248,7 @@ pub(in crate::minimap) fn emit_tracking_dots(
                     continue;
                 }
                 let Some(t) = templates.get(guid.0) else {
-                    continue; // template not answered yet — no lock to test
+                    continue; // template not answered yet
                 };
                 if tracked_resource(tracking.resources, t.lock_id, locks) {
                     dot(guid.0, tf, TRACKED_GO_CELL, DotName::Known(t.name.clone()));
@@ -304,13 +256,11 @@ pub(in crate::minimap) fn emit_tracking_dots(
             }
         }
     }
-    // Cell 1 — tracked units (red): the 3-way creature-type resolver + the always-show pair.
+    // Cell 1, units.
     for (guid, net, tf, store) in candidates.iter() {
         if !matches!(net.kind, EntityKind::Unit | EntityKind::Player) {
             continue;
         }
-        // The same three preconditions the quest dot passes — they are upstream of the branch
-        // that chooses between the two categories (`0x4eac31`), so neither category outruns them.
         if !unit_dot_eligible(store, self_guid) {
             continue;
         }
@@ -346,10 +296,8 @@ enum DotName {
     Known(String),
 }
 
-/// The party **dots** — the in-range half of the party blip placement `0x6dad10`: the blue
-/// `ObjectIcons` cell 4 at the member's true position, at the cell table's 1.3× scale (10.4 px on
-/// the frozen basis). Drawn last with the object dots (`0x4ed7b7`'s order: above the arrows and the
-/// player arrow).
+/// The party dots, the in-range half of the party placement `0x6dad10`: blue cell 4 at 1.3×,
+/// drawn last with the object dots, above every arrow (`0x4ed7b7`).
 pub(in crate::minimap) fn emit_party_dots(
     ctx: &BlipCtx,
     group: &crate::ui_party::GroupState,
@@ -364,7 +312,7 @@ pub(in crate::minimap) fn emit_party_dots(
         };
         let d = ((x - ctx.wx).powi(2) + (y - ctx.wy).powi(2)).sqrt();
         if d / ctx.radius_yd > super::BLIP_EDGE_RATIO {
-            continue; // out of range — the arrow pass drew it
+            continue; // out of range: the arrow pass drew it
         }
         quads.overlays.push(UiQuad {
             rect: Rect::from_center_size(
@@ -384,13 +332,7 @@ pub(in crate::minimap) fn emit_party_dots(
 mod tests {
     use super::*;
 
-    /// **The three preconditions upstream of BOTH dot categories**. They live in
-    /// `0x4eaa90` between the type gate and the `cmp [edi+0xcb8],7`, whose only predecessor is
-    /// the fall-through — so a unit that fails any of them draws neither the gold quest dot nor
-    /// the red tracking dot. benilla had none of them.
-    ///
-    /// The control is the first row: an ordinary live creature still passes, which is what would
-    /// catch a predicate written one bit too wide and blanked the minimap.
+    /// The first row is the control: an ordinary live creature still passes.
     #[test]
     fn the_dead_our_own_minions_and_the_untrackable_draw_no_dot_of_either_kind() {
         use crate::net::ObjectStore;
@@ -400,7 +342,7 @@ mod tests {
         const FIELD_SUMMONEDBY: u16 = 12; // UNIT_FIELD_SUMMONEDBY (2 dwords)
         const FIELD_CHARMEDBY: u16 = 10; // UNIT_FIELD_CHARMEDBY (2 dwords)
         const FIELD_BYTES_1: u16 = 138;
-        /// `UNIT_FIELD_BYTES_1` byte 3 bit 2 — the `& 4` the classifier tests.
+        /// `UNIT_FIELD_BYTES_1` byte 3 bit 2, the `& 4` the classifier tests.
         const UNTRACKABLE: u32 = 0x4 << 24;
         const ME: u64 = 0x0000_0000_0000_0007;
         const SOMEONE_ELSE: u64 = 0x0000_0000_0000_0042;
@@ -452,7 +394,7 @@ mod tests {
                 Some(&with(&[
                     (FIELD_CHARMEDBY, lo(ME)),
                     (FIELD_CHARMEDBY + 1, hi(ME)),
-                    // A non-zero CHARMEDBY wins outright — SUMMONEDBY is only the fallback.
+                    // A non-zero CHARMEDBY wins; SUMMONEDBY is only the fallback.
                     (FIELD_SUMMONEDBY, lo(SOMEONE_ELSE)),
                     (FIELD_SUMMONEDBY + 1, hi(SOMEONE_ELSE)),
                 ])),
@@ -466,8 +408,7 @@ mod tests {
         );
     }
 
-    /// Only status 7 dots (the gold cell 3). Status 6 — despite the vmangos "red dot"
-    /// comment — draws nothing on the 1.12 client (byte-verified `==7` at 0x4eac31).
+    /// Status 6 draws nothing on the 1.12 client despite vmangos's "red dot" comment (`0x4eac31`).
     #[test]
     fn quest_dot_is_status_seven_only_gold_cell_three() {
         assert_eq!(quest_dot_cell(7), Some([0.75, 1.0, 0.0, 0.25]));
@@ -476,15 +417,11 @@ mod tests {
         }
     }
 
-    /// The tracking predicates' mask-bit law: bit `1 << (n − 1)` where `n` is
-    /// the GO lock's skill-slot `LockType` id (resources) or the unit's creature type
-    /// (creatures) — the exact bit the server sets from the tracking aura's MiscValue — plus
-    /// the always-show dyn-flag clause that needs no mask at all.
+    /// Bit `1 << (n − 1)`, `n` the lock's skill-slot `LockType` or the creature type.
     #[test]
     fn tracking_predicates_follow_the_mask_bit_law() {
         use benilla_formats::{LockSlot, LOCK_KEY_ITEM, MAX_LOCK_SLOTS};
-        // A mining-vein-shaped lock (one SKILL slot, Mining LockType 3) and a key-ITEM lock
-        // whose index happens to collide numerically.
+        // A Mining (LockType 3) skill slot, and a key-item slot with the same index.
         let mut vein = [LockSlot::default(); MAX_LOCK_SLOTS];
         vein[0] = LockSlot {
             key_type: LOCK_KEY_SKILL,
@@ -538,9 +475,8 @@ mod tests {
             !tracked_creature(beasts, None, 0, false),
             "type not cached yet — no dot"
         );
-        // The always-show pair (`0x5ed210`): Hunter's Mark forces the dot with no
-        // tracking aura on us; track-stealthed lights only a CREEP-flagged unit — and only
-        // the conjunction of the two bits does.
+        // The always-show pair: Hunter's Mark needs no tracking aura; track-stealthed needs
+        // both our bit and the unit's CREEP flag.
         assert!(tracked_creature(
             SelfTracking::default(),
             None,
@@ -559,9 +495,6 @@ mod tests {
         );
     }
 
-    /// The creature-type resolver's 3-way (`0x605570`, the 0564 fold-back): shapeshift
-    /// override first (`<= 0` → Humanoid), then the cached template for NPCs, the Humanoid
-    /// fallback for players.
     #[test]
     fn creature_type_resolver_prefers_the_shapeshift_override() {
         use benilla_formats::ShapeshiftForm;
@@ -583,7 +516,7 @@ mod tests {
             ),
         ]
         .into();
-        // A cat-form PLAYER is a Beast; unshifted, a player is a Humanoid.
+        // A cat-form player is a Beast; unshifted, a Humanoid.
         assert_eq!(
             creature_type_of(EntityKind::Player, 1, None, &names, Some(&forms)),
             Some(1)
@@ -592,13 +525,11 @@ mod tests {
             creature_type_of(EntityKind::Player, 0, None, &names, Some(&forms)),
             Some(CREATURE_TYPE_HUMANOID)
         );
-        // A <=0 creatureType row resolves Humanoid, not the race/template path.
         assert_eq!(
             creature_type_of(EntityKind::Player, 16, None, &names, Some(&forms)),
             Some(CREATURE_TYPE_HUMANOID)
         );
-        // An unshifted NPC with no cached template yet resolves nothing (no dot until the
-        // ask-once query answers); a GameObject never resolves a creature type.
+        // An NPC with no cached template yet resolves nothing.
         assert_eq!(
             creature_type_of(EntityKind::Unit, 0, Some(69), &names, Some(&forms)),
             None
@@ -609,10 +540,8 @@ mod tests {
         );
     }
 
-    /// The whole client-side chain against the REAL 5875 data (skips without it): the
-    /// tracking spell's `EffectMiscValue` → the server's mask bit → the gathering node's
-    /// `Lock.dbc` skill slot. Find Minerals lights a Copper Vein, Find Herbs a Peacebloom —
-    /// and neither lights the other's node.
+    /// The tracking spell's `EffectMiscValue`, the server's mask bit and the node's `Lock.dbc`
+    /// skill slot, on the install's data.
     #[test]
     fn real_find_minerals_lights_a_copper_vein_not_an_herb() {
         let data = benilla_formats::wow_data_or_skip!();
@@ -622,8 +551,7 @@ mod tests {
         let forms =
             benilla_formats::load_shapeshift_forms(&mut chain).expect("SpellShapeshiftForm.dbc");
 
-        // The server's mask law, applied to the real spell row: bit `1 << (MiscValue − 1)` of
-        // the aura-`kind` effect (44 TRACK_CREATURES / 45 TRACK_RESOURCES).
+        // Bit `1 << (MiscValue − 1)` of the aura-`kind` effect (44 creatures, 45 resources).
         let mask_of = |spell_id: u32, kind: u32| -> u32 {
             let s = spells.get(spell_id).expect("spell row");
             (0..3)
@@ -637,19 +565,16 @@ mod tests {
                 .expect("tracking effect present")
         };
 
-        // Find Minerals 2580 ↔ Copper Vein (gameobject_template 1731, chest lockId 38 —
-        // vmangos world DB — whose Lock.dbc row is the Mining LockType 3 skill slot).
+        // Find Minerals 2580 and a Copper Vein (vmangos `gameobject_template` 1731, lockId 38).
         let minerals = mask_of(2580, 45);
         assert_eq!(minerals, 1 << 2, "Find Minerals' MiscValue is Mining (3)");
         assert!(tracked_resource(minerals, 38, &locks));
-        // Find Herbs 2383 ↔ Peacebloom/Silverleaf (lockId 29, Herbalism LockType 2).
+        // Find Herbs 2383 and Peacebloom or Silverleaf (lockId 29, Herbalism LockType 2).
         let herbs = mask_of(2383, 45);
         assert!(tracked_resource(herbs, 29, &locks));
         assert!(!tracked_resource(minerals, 29, &locks), "cross-profession");
         assert!(!tracked_resource(herbs, 38, &locks), "cross-profession");
-        // Track Beasts 1494: TRACK_CREATURES MiscValue 1 = Beast — a wolf dots red, a
-        // humanoid doesn't. And through the shapeshift override on the REAL
-        // SpellShapeshiftForm.dbc, a cat-form (1) druid IS a Beast to it.
+        // Track Beasts 1494 (MiscValue 1, Beast) lights a cat-form (1) druid.
         let beasts = SelfTracking {
             creatures: mask_of(1494, 44),
             ..Default::default()

@@ -1,13 +1,6 @@
-//! Drives the reference's own `Blizzard_TalentUI` addon through the engine — the first test that
-//! executes the transcribed talent Lua at all (before this, the window's machinery only ever
-//! ran inside a live client session; both of the director's day-one reports — no prereq branch
-//! lines, no tooltip on first hover — slipped through that gap).
-//!
-//! The harness loads the same file chain the app does (`ui_script/mod.rs`'s list, cut to the
-//! talent window's dependency prefix), pushes a synthetic two-talent page shaped like the
-//! warrior's Improved Rend → Deep Wounds column, opens the window, and asserts at three
-//! depths: the Lua-visible state (`TALENT_BRANCH_ARRAY`), the logical frame state (`IsShown`),
-//! and the extract the renderer actually draws (branch/arrow quads with their atlas coords).
+//! Drives the stock `Blizzard_TalentUI` addon through the engine with a synthetic two-talent page
+//! shaped like the warrior's Improved Rend and Deep Wounds column, asserting the Lua state
+//! (`TALENT_BRANCH_ARRAY`), the frame state (`IsShown`) and the quads the renderer draws.
 
 mod common;
 
@@ -16,41 +9,33 @@ use benilla_ui::script::{
     UiScript, UnitState,
 };
 
-/// The talent window's load prefix — the app's own order (`assets/ui/benilla.toc`), members only.
-/// `ItemButtonTemplate.xml` is the `SetItemButton*` family the talent buttons grey through (the
-/// reference's own verb; see TalentFrame.xml's header) — it sits at .toc line 32, above every
-/// other entry here bar `Fonts.xml`.
+/// The talent window's load prefix, in `assets/ui/benilla.toc` order.
 const FILES: &[&str] = &[
-    // `PLAYER_LEVEL` and the rest of the strings the stock file formats through.
+    // `PLAYER_LEVEL` and the other strings the stock file formats.
     "Interface\\FrameXML\\GlobalStrings.lua",
     "Interface\\FrameXML\\Fonts.xml",
     // `TEXT`.
     "Interface\\FrameXML\\BasicControls.xml",
+    // `SetItemButtonDesaturated`, which the talent buttons grey through.
     "Interface\\FrameXML\\ItemButtonTemplate.xml",
     r"Interface\FrameXML\MoneyFrame.lua",
     r"Interface\FrameXML\MoneyFrame.xml",
+    // `ToggleTalentFrame` (`UIParent.lua:205`).
     r"Interface\FrameXML\UIParent.xml",
-    // `ToggleTalentFrame` lives here now, not in the window's own file.
     "Interface\\FrameXML\\GameTooltip.xml",
-    // `UIPanelScrollFrameTemplate` — the stock scroll frame's whole substance: its `$parentScrollBar`
-    // Slider AND its `<OnMouseWheel>`. Nothing else in the tree declares it, and a missing template
-    // is a loader WARNING, not an error, so without this the window still built — just with no
-    // scrollbar and no wheel. `load_ui_strict` below is what makes that loud.
+    // `UIPanelScrollFrameTemplate`: the scroll bar and the `<OnMouseWheel>`. A missing template
+    // is only a loader warning, so the window would build without them.
     r"Interface\FrameXML\UIPanelTemplates.lua",
     r"Interface\FrameXML\UIPanelTemplates.xml",
     "Interface\\FrameXML\\LocaleProperties.lua",
-    "Interface\\FrameXML\\StaticPopup.xml", // the dialog engine (1960)
-    // `TalentTabTemplate` inherits `CharacterFrameTabButtonTemplate`, and `inherits=`
-    // resolves at LOAD (1993).
+    "Interface\\FrameXML\\StaticPopup.xml", // the dialog engine
+    // `TalentTabTemplate` inherits `CharacterFrameTabButtonTemplate`; `inherits=` resolves at load.
     r"Interface\FrameXML\CharacterFrameTemplates.xml",
     "ScrollTemplates.xml",
-    // Stock `TalentFrame_OnShow` opens with `SetButtonPulse(TalentMicroButton, 0, 1)` and then
-    // `UpdateMicroButtons()` — both live here, and a nil `TalentMicroButton` throws out of OnShow
-    // BEFORE `TalentFrame_Update()`, so the whole window comes up empty. Our
-    // retired file's OnShow called neither, which is why this was never a dependency before.
+    // `TalentFrame_OnShow` pulses `TalentMicroButton` and calls `UpdateMicroButtons()`
+    // (`Blizzard_TalentUI.lua:97-100`); a nil button throws before `TalentFrame_Update()`.
     r"Interface\FrameXML\MainMenuBarMicroButtons.xml",
-    // Five files behind one line: the `.xml` sources its own `.lua` and `<Include>`s the
-    // templates file that declares TalentButton/Branch/Arrow/TabTemplate.
+    // Sources its own `.lua` and `<Include>`s the templates file.
     "Interface\\AddOns\\Blizzard_TalentUI\\Blizzard_TalentUI.xml",
 ];
 
@@ -60,10 +45,8 @@ fn load_ui(script: &UiScript) {
     }
 }
 
-/// The Improved Rend → Deep Wounds shape: a rank-3 prereq two tiers straight up the same
-/// column, the empty cell between them carrying the vertical branch (the classic vanilla look).
-/// `points_spent` decides the line's color: ≥10 unlocks tier 3 (yellow, `1`); fewer leaves it
-/// locked (gray, `-1`) — the reference draws the branch EITHER way.
+/// A rank-3 prereq two tiers up the same column, the empty cell between carrying the branch.
+/// `points_spent` of 10 or more unlocks tier 3 (yellow, `1`); fewer draws it gray (`-1`).
 fn fixture(points_spent: u32) -> TalentUiState {
     let rend = TalentView {
         name: "Improved Rend".into(),
@@ -110,13 +93,8 @@ fn fixture(points_spent: u32) -> TalentUiState {
     }
 }
 
-/// [`fixture`] plus a talent on the LAST tier, so the tree is taller than the scroll frame.
-///
-/// The stock `TalentFrameScrollChildFrame` is 50px in XML and is never resized by Lua — the
-/// reference derives its extent from the buttons anchored into it via `UpdateScrollChildRect`
-/// (`Blizzard_TalentUI.lua:311`). So a two-talent tree genuinely does not scroll, and asking it to
-/// would be asserting our retired file's behaviour rather than the reference's: ours pinned the
-/// child to a fixed full-height rect, which made every tree scrollable regardless of content.
+/// [`fixture`] plus a last-tier talent, so the tree scrolls: the scroll child's extent comes from
+/// the buttons in it via `UpdateScrollChildRect` (`Blizzard_TalentUI.lua:311`).
 fn tall_fixture() -> TalentUiState {
     let mut state = fixture(10);
     let mut deep = state.talents[0][1].clone();
@@ -137,13 +115,8 @@ fn view(name: &str, desc: &str) -> SpellTooltipView {
     }
 }
 
-/// Hover a talent button the way a player does — the pointer, not a handler call.
-///
-/// The stock `Blizzard_TalentUITemplates.xml` writes the tooltip code INLINE in the button's
-/// `<OnEnter>` (`GameTooltip:SetOwner` + `GameTooltip:SetTalent`), so there is no named function to
-/// invoke the way our retired file's `BenillaTalentButton_OnEnter` could be. Moving
-/// the mouse is closer to the thing under test anyway: it drives the hit test as well as the
-/// handler.
+/// Hover a talent button with the pointer: the stock `<OnEnter>` is inline, with no named
+/// function to call.
 fn hover(script: &mut UiScript, frame: &str) {
     script.resolve();
     let (x, y): (f32, f32) = script
@@ -152,9 +125,7 @@ fn hover(script: &mut UiScript, frame: &str) {
     script.mouse_move(x, y);
 }
 
-/// A level-60 player. The reference's `ToggleTalentFrame` opens nothing below level 10 (decision
-/// 1833) — real behaviour, not a guard — so every opener here needs one. Our retired file had no
-/// such gate, which is why this fixture did not exist before.
+/// A level-60 player: `ToggleTalentFrame` opens nothing below level 10 (`UIParent.lua:206`).
 fn probe_player() -> UnitState {
     UnitState {
         exists: true,
@@ -170,9 +141,6 @@ fn open_window(points_spent: u32) -> UiScript {
     let mut script = UiScript::new().expect("engine");
     script.set_screen_size(1024.0, 768.0);
     load_ui(&script);
-    // The reference's `ToggleTalentFrame` opens nothing below level 10 — that is
-    // real behaviour, not a guard, so the window needs a player who has talents at all. Our
-    // retired file had no such gate, which is why this fixture was never needed before.
     script.set_unit("player", Some(probe_player()));
     script.set_talents(fixture(points_spent));
     script.run("ToggleTalentFrame()").expect("toggle");
@@ -183,8 +151,7 @@ fn open_window(points_spent: u32) -> UiScript {
 fn branch_lines_draw_for_a_same_column_prereq() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut script = open_window(10);
-    // Depth 1 — the Lua machinery: Update ran, the branch array carries the vertical chain
-    // (tier 1's down-edge, the empty tier-2 cell's up+down, the button's own top arrow).
+    // The Lua state: tier 1's down edge, the empty tier-2 cell's up and down, tier 3's top arrow.
     script
         .run(
             r#"
@@ -197,7 +164,7 @@ fn branch_lines_draw_for_a_same_column_prereq() {
             "#,
         )
         .expect("branch array");
-    // Depth 2 — the pooled textures took the work: at least one branch + one arrow shown.
+    // The pooled textures: at least one branch and one arrow shown.
     script
         .run(
             r#"
@@ -206,8 +173,7 @@ fn branch_lines_draw_for_a_same_column_prereq() {
             "#,
         )
         .expect("pool state");
-    // Depth 3 — the renderer sees them: branch/arrow quads in the extract, cropped into the
-    // atlas (a full-sheet [0,1] crop means SetTexCoord never landed).
+    // The extract: atlas-cropped quads (a full-sheet crop means SetTexCoord never landed).
     script.resolve();
     let quads = script.extract();
     let branch = quads
@@ -241,9 +207,7 @@ fn branch_lines_draw_for_a_same_column_prereq() {
 fn tooltip_is_complete_on_the_first_hover() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut script = open_window(10);
-    // The app's feed owes the store every talent spell view up front (the spellbook's own
-    // arrival-driven contract) — with the views in place, the FIRST OnEnter must render the
-    // full tooltip: name line, description, the green hint.
+    // With the talent spell views stored up front, the first OnEnter renders the full tooltip.
     script.set_spell_tooltip(201, view("Improved Rend", "Bleed harder."));
     script.set_spell_tooltip(301, view("Deep Wounds", "Bleed on crit."));
     hover(&mut script, "TalentFrameTalent2");
@@ -262,8 +226,7 @@ fn tooltip_is_complete_on_the_first_hover() {
 fn tooltip_miss_still_shows_the_rank_line() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut script = open_window(10);
-    // The store is EMPTY (no views pushed): the ask-once fallback must still show a box with
-    // the talent head — never a blank hover — and record the ask for the app's resolver.
+    // An empty store: the fallback still shows the talent head and records the ask.
     hover(&mut script, "TalentFrameTalent2");
     script
         .run(
@@ -284,9 +247,7 @@ fn tooltip_miss_still_shows_the_rank_line() {
 #[test]
 fn a_locked_tier_still_draws_the_branch_gray() {
     let _data = benilla_formats::wow_data_or_skip!();
-    // The director's own day-one state: 2 points spent, tier 3 locked — the reference draws
-    // the chain anyway, gray (the `-1` keys of the texcoord tables; a typo'd negative key
-    // would error the draw loop and hide every line while the grid stays perfect).
+    // 2 points spent, tier 3 locked: the chain still draws, gray (the texcoord tables' `-1` keys).
     let script = open_window(2);
     script
         .run(
@@ -301,21 +262,8 @@ fn a_locked_tier_still_draws_the_branch_gray() {
         .expect("gray branch");
 }
 
-/// **B162 — an unavailable talent goes GREYSCALE, not merely dim.**
-///
-/// The reporter's own A/B: 1.12.1 at 0 talent points draws every unlearned icon in black and
-/// white; benilla drew them in full colour. The Lua was never wrong — it asked for the grey-out
-/// and the ask reached the region — but the engine had no `Texture:SetDesaturated`, so
-/// `SetItemButtonDesaturated`'s no-shader arm was the only one available and "greyed" meant a
-/// `SetVertexColor(0.65)` brightness multiply. On colourful art that reads as a slightly dimmer
-/// colourful icon, which is exactly what was reported.
-///
-/// So the assertion is on the DESATURATION FLAG reaching the renderer, not on the tint: the tint
-/// was always there and was never the thing that was missing. The fixture is the reporter's state
-/// — points spent, none left — and Deep Wounds' tier is locked besides.
-///
-/// The control is the same extract's learned talent: full colour, no flag. A regression that
-/// greys the whole tree passes the first assertion and fails this one.
+/// An unavailable talent reaches the renderer desaturated (`Texture:SetDesaturated`, via
+/// `SetItemButtonDesaturated`), not merely tinted; the learned talent is the control.
 #[test]
 fn an_unavailable_talent_reaches_the_renderer_desaturated() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -337,24 +285,20 @@ fn an_unavailable_talent_reaches_the_renderer_desaturated() {
     };
     let quads = script.extract();
 
-    // Deep Wounds: tier 3 with 2 points spent — locked, and the player has 2 points to spend, so
-    // this is the tier gate alone, not the no-points force-desaturate.
+    // Deep Wounds: locked by the tier gate alone, since the player still has points to spend.
     let (grey, tint) = icon(&quads, "Ability_BackStab");
     assert!(
         grey,
         "an unavailable talent's icon must carry the greyscale flag — the whole of B162"
     );
-    // The reference's own `(1, 0.65, 0.65, 0.65)` still SETS that tint, and on shader-capable
-    // hardware it has no effect on colour — the desaturated fragment discards the vertex RGB
-    // entirely (`Shaders\Pixel\Desaturate.bls`; decision 1330 corrected 1327 here). It is
-    // pinned anyway because the value must keep reaching the quad: it is what the no-shader arm
-    // would have drawn with, and its ALPHA is read on both paths.
+    // The stock 0.65 tint still reaches the quad: the desaturate shader
+    // (`Shaders\Pixel\Desaturate.bls`) discards its RGB, but its alpha is read on both paths.
     assert!(
         (tint[0] - 0.65).abs() < 1e-3,
         "the ref's 0.65 still lands on the quad (inert on RGB, live on alpha), got {tint:?}"
     );
 
-    // The control: Improved Rend is learned to max, so it is available — full colour, no flag.
+    // The control: Improved Rend, learned to max.
     let (grey, tint) = icon(&quads, "Ability_Gouge");
     assert!(!grey, "a learned talent must NOT be greyed");
     assert!(
@@ -366,11 +310,8 @@ fn an_unavailable_talent_reaches_the_renderer_desaturated() {
 #[test]
 fn a_wheel_spin_over_the_grid_scrolls_the_tree() {
     let _data = benilla_formats::wow_data_or_skip!();
-    // The wheel's whole chain, driven from the pointer entry point the app feeds: hit-test on
-    // a talent button, bubble to the ScrollFrame's OnMouseWheel, step the Slider, whose
-    // OnValueChanged pans the frame. This is the chain the 2051f4f8 rename broke silently —
-    // the handler called a helper by a name that no longer existed, and only a real spin (not
-    // a load) executes it.
+    // The whole chain: hit test on a talent button, bubble to the ScrollFrame's OnMouseWheel,
+    // step the Slider, whose OnValueChanged pans the frame.
     let mut script = UiScript::new().expect("engine");
     script.set_screen_size(1024.0, 768.0);
     load_ui(&script);
@@ -382,7 +323,7 @@ fn a_wheel_spin_over_the_grid_scrolls_the_tree() {
     let (x, y): (f32, f32) = script
         .eval("return TalentFrameTalent1:GetCenter()")
         .expect("talent 1 center");
-    // One notch DOWN (WoW convention: -1) — the handler steps the bar one valueStep forward.
+    // One notch down is -1; the handler steps the bar one valueStep forward.
     script.mouse_wheel(x, y, -1.0);
     script
         .run(
@@ -395,7 +336,6 @@ fn a_wheel_spin_over_the_grid_scrolls_the_tree() {
             "#,
         )
         .expect("wheel down");
-    // And the notch back up re-seats the top.
     script.mouse_wheel(x, y, 1.0);
     script
         .run(

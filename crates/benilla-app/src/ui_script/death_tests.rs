@@ -177,7 +177,7 @@ fn resurrect_request_picks_variant_and_answers() {
         recovery_delay: 0.0,
         ..Default::default()
     });
-    s.fire_event("RESURRECT_REQUEST", vec![ScriptValue::Str("Pone".into())]);
+    s.fire_event("RESURRECT_REQUEST", vec![ScriptValue::Str("Healer".into())]);
     assert!(s.eval::<bool>("return StaticPopup1:IsVisible()").unwrap());
     assert_eq!(
         s.eval::<String>("return StaticPopup1.which").unwrap(),
@@ -187,7 +187,7 @@ fn resurrect_request_picks_variant_and_answers() {
     assert_eq!(
         s.eval::<String>("return StaticPopup1Text:GetText()")
             .unwrap(),
-        "Pone wants to resurrect you",
+        "Healer wants to resurrect you",
         "the offerer name formats into the no-sickness text"
     );
     assert!(s
@@ -213,7 +213,7 @@ fn resurrect_request_picks_variant_and_answers() {
             ..Default::default()
         }),
     );
-    s.fire_event("RESURRECT_REQUEST", vec![ScriptValue::Str("Pone".into())]);
+    s.fire_event("RESURRECT_REQUEST", vec![ScriptValue::Str("Healer".into())]);
     assert_eq!(
         s.eval::<String>("return StaticPopup1.which").unwrap(),
         "RESURRECT"

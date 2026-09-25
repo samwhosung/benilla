@@ -1,17 +1,6 @@
-//! The create screen's **layout** — the reference `CharacterCreate.xml` arrangement rebuilt in
-//! Bevy UI (decision 0423's polish passes), full-bleed and scaled to the window: the glue engine
-//! renders a 1024×768 virtual screen scaled to the display, so every authored offset/size below is
-//! the ref's number times `height / 768`. The widget shapes it places live in [`super::widgets`],
-//! the component vocabulary in [`super::parts`], the art in [`super::art`], and the systems that
-//! drive it all in [`super::refresh`].
-//!
-//! Left: the configuration tower — `UI-CharacterCreate-Background` under three stacked
-//! `OuterBorder` pieces, the faction banners behind the 2×4 race grid, the gender pair, the
-//! valid-classes-only grid, the five `LabelFrame` dial spinners, Randomize. Right: the three
-//! `TextPanel-Border` info panels (faction/race/class), bg-tinted per faction like the ref's
-//! `SetBackdropColor`, quoting the GlueStrings paragraphs. Center: the transparent-booth model,
-//! full-height, drag- or button-rotatable (the big `UI-RotationRight` pair, bottom-left). Bottom:
-//! NAME over the `Glue-Tooltip-Border` edit box; Accept over Back in the corner.
+//! The create screen's layout, the reference's `CharacterCreate.xml` in Bevy UI. The glue engine
+//! scales a 1024×768 virtual screen to the window, so every authored offset and size below is the
+//! reference's number times `height / 768`.
 
 use bevy::prelude::*;
 use bevy::ui_render::ui_material::MaterialNode;
@@ -68,10 +57,8 @@ pub(super) fn enter_create(
     );
 }
 
-/// Rebuild the tree when a window resize (mac fullscreen, a drag) has changed the glue scale it
-/// was baked at — the create screen has no per-frame materialize (it spawns on entry, after the
-/// boot-order traps the other screens dodge), so the rescale watch lives here. Selection and the
-/// typed name live in resources and repaint via [`super::refresh`], so the rebuild loses nothing.
+/// Rebuild the tree when a resize changes the glue scale; the selection and name live in
+/// resources, so the rebuild loses nothing.
 pub(super) fn rescale_screen(
     mut commands: Commands,
     existing: Query<(Entity, &CharCreateUi)>,
@@ -106,14 +93,12 @@ fn spawn_screen(
     window: &Query<&Window, With<PrimaryWindow>>,
 ) {
     let font = wow_font(assets);
-    // The edit box types in `GlueEditBoxFont` — ARIALN, not FRIZQT (GlueFonts.xml).
+    // The edit box types in `GlueEditBoxFont`, ARIALN, not FRIZQT (`GlueFonts.xml`).
     let edit_font: Handle<Font> = assets.load("mpq://Fonts/ARIALN.ttf");
     let model_image = match portraits.0.get(GLUE_SLOT) {
         Some(PortraitSource::Live(h)) => Some(h.clone()),
         _ => None,
     };
-    // The glue engine scales a 1024×768 virtual screen to the window; scale the authored sizes the
-    // same way so the ref proportions hold at any size.
     let s = crate::glue::screen_scale(window.single().ok());
     let px = |v: f32| Val::Px(v * s);
     let empty = GlueStrings::default();
@@ -132,12 +117,9 @@ fn spawn_screen(
             BackgroundColor(BACKDROP),
         ))
         .with_children(|ui| {
-            // The 3D scene, full-bleed and first (everything else draws over it) — the ref's
-            // screen IS a fullscreen ModelFFX: the per-race background with the character standing
-            // in it (the booth renders both into this window-sized target). The whole pane drags
-            // to rotate, the ref's full-frame mouse rotation; the page tint behind it is the
-            // no-art fallback. It keeps the WINDOW while the chrome below does not: a pillarbox's
-            // bars are the booth camera's own output clear inside this same target (1619 §3).
+            // The 3D scene first, full window: the reference's screen is a fullscreen ModelFFX,
+            // the race background with the character in it, and the whole frame drags to rotate.
+            // A pillarbox's bars are the booth camera's own clear inside this target.
             let mut pane = ui.spawn((
                 CreateAction::Model,
                 Button,
@@ -156,15 +138,13 @@ fn spawn_screen(
         })
         .id();
 
-    // ...and every piece of chrome hangs off the CANVAS — the boxed scene's own rect (decision
-    // 2091). The race/class towers are this screen's edge-anchored chrome: against the window they
-    // stand over the bars, and 1587's "no void at 21:9" held only because they did (1619 §2).
+    // The chrome hangs off the canvas, the boxed scene's rect, never the window.
     let mut canvas = commands.spawn((crate::glue::glue_canvas(), ChildOf(root)));
     canvas.with_children(|ui| {
         left_tower(ui, art, &font, s, strings);
 
-        // The WoW logo (`CharacterCreateWoWLogo`, 256×128 at (3,−7)) — after the tower, like the
-        // ref's frame order (child frames draw over the parent's border art).
+        // `CharacterCreateWoWLogo` (256×128 at (3,-7)), after the tower, as the reference's
+        // frame order draws it over the border art.
         if let Some(logo) = &art.logo {
             ui.spawn((ImageNode::new(logo.clone()), abs(s, 3.0, 7.0, 256.0, 128.0)));
         }
@@ -173,8 +153,7 @@ fn spawn_screen(
         name_cluster(ui, art, &font, &edit_font, s, strings);
         rotate_cluster(ui, art, &font, s);
 
-        // Accept over Back, bottom-right (`CharCreateOkayButton` 160×35 over `BackButton` 120×30
-        // at BOTTOMRIGHT (−50, 20)).
+        // `CharCreateOkayButton` 160×35 over `BackButton` 120×30 at BOTTOMRIGHT (-50,20).
         ui.spawn((Node {
             position_type: PositionType::Absolute,
             right: px(50.0),
@@ -211,8 +190,7 @@ fn spawn_screen(
     });
 }
 
-/// The configuration tower (`CharacterCreateConfigurationFrame`, 206×600 at TOPLEFT (28,−74)):
-/// frame art, banners, faction headers, the race/gender/class grids, the dial rows, Randomize —
+/// The configuration tower, `CharacterCreateConfigurationFrame` (206×600 at TOPLEFT (28,-74)),
 /// every child at its authored offset.
 fn left_tower(
     ui: &mut ChildSpawnerCommands,
@@ -231,9 +209,8 @@ fn left_tower(
         ..default()
     },))
         .with_children(|tower| {
-            // The frame: `UI-CharacterCreate-Background` stretched behind (TOPLEFT of border1 +6 →
-            // BOTTOMLEFT of border3 +6), three `OuterBorder` pieces stacked over it (224 wide,
-            // centered on the 206 frame → x −9; heights 236/240/210 with the authored texcoords).
+            // `UI-CharacterCreate-Background` behind three stacked `OuterBorder` pieces, 224 wide
+            // centered on the 206 frame (x -9).
             if let Some(bg) = &art.tower_bg {
                 tower.spawn((ImageNode::new(bg.clone()), abs(s, -3.0, 0.0, 218.0, 680.0)));
             }
@@ -253,16 +230,14 @@ fn left_tower(
                     ));
                 }
             }
-            // The banners (`CharacterCreateBanners`, 256×259 at TOP (−2,−60)) behind the race grid.
+            // `CharacterCreateBanners`, 256×259 at TOP (-2,-60), behind the race grid.
             if let Some(banners) = &art.banners {
                 tower.spawn((
                     ImageNode::new(banners.clone()),
                     abs(s, -27.0, 60.0, 256.0, 259.0),
                 ));
             }
-            // Alliance | Horde over the banner tops (bottom-anchored ±50 of the banner center).
-            // The XML's `text="ALLIANCE"` is a localization key — GlueStrings renders it
-            // mixed-case ("Alliance"), never the raw key.
+            // The XML's `text="ALLIANCE"` is a GlueStrings key, shown as "Alliance".
             for (key, fallback, center) in
                 [("ALLIANCE", "Alliance", 51.0), ("HORDE", "Horde", 151.0)]
             {
@@ -285,8 +260,7 @@ fn left_tower(
                 );
             }
 
-            // The race grid: two columns of 48² check-buttons (col A at (33,68), col B at (127,68),
-            // row pitch 48+5).
+            // Two columns of 48² buttons at (33,68) and (127,68), row pitch 48+5.
             for (faction, left) in [(ALLIANCE, 33.0), (HORDE, 127.0)] {
                 tower
                     .spawn((Node {
@@ -314,7 +288,7 @@ fn left_tower(
                     });
             }
 
-            // The gender pair (below race col A: race4's BOTTOMLEFT + (20,−28)).
+            // The gender pair at race button 4's BOTTOMLEFT + (20,-28).
             tower
                 .spawn((Node {
                     position_type: PositionType::Absolute,
@@ -348,9 +322,7 @@ fn left_tower(
                     }
                 });
 
-            // The class grid (3-wide under the banners: cols at x 27/79/131, rows touching) — 8
-            // slots refreshed to the selected race's valid classes; unused slots collapse (the
-            // ref's enumerate-then-hide compacts the same way).
+            // Three wide, columns at x 27/79/131; 8 slots, unused ones collapse.
             tower
                 .spawn((Node {
                     position_type: PositionType::Absolute,
@@ -378,8 +350,7 @@ fn left_tower(
                     }
                 });
 
-            // The five dial spinners (`CharacterCustomizationFrameTemplate`, 198×32 rows stacked
-            // from (4,480) — centered under the class grid).
+            // `CharacterCustomizationFrameTemplate`, 198×32 rows stacked from (4,480).
             tower
                 .spawn((Node {
                     position_type: PositionType::Absolute,
@@ -395,10 +366,9 @@ fn left_tower(
                     }
                 });
 
-            // RANDOMIZE (146×30, centered on the row column). The XML anchors it 25 below the
-            // dials, but `CharacterCreate_UpdateFacialHairCustomization` re-anchors it on every
-            // race set — `SetPoint("TOP", Frame5, "BOTTOM", 0, -5)` — so the shipped client always
-            // shows the 5px gap.
+            // The XML anchors it 25 below the dials, but
+            // `CharacterCreate_UpdateFacialHairCustomization` re-anchors it on every race set,
+            // `SetPoint("TOP", Frame5, "BOTTOM", 0, -5)`, so the 1.12 client shows a 5 px gap.
             tower
                 .spawn((Node {
                     position_type: PositionType::Absolute,
@@ -422,8 +392,8 @@ fn left_tower(
         });
 }
 
-/// One dial spinner row: the `CharacterCreate-LabelFrame` 3-slice (64-tall art overhanging the
-/// 32-tall row), the centered per-race label, and the 32² arrow pair on the right.
+/// One dial row: the `CharacterCreate-LabelFrame` 3-slice (64-tall art over the 32-tall row),
+/// the per-race label and the arrow pair.
 fn dial_row(
     dials: &mut ChildSpawnerCommands,
     art: &GlueArt,
@@ -442,8 +412,7 @@ fn dial_row(
             },
         ))
         .with_children(|row| {
-            // LabelFrame: Left 25 at (−5), Middle stretched, Right 25 ending at x 154 (RIGHT −44,
-            // clearing the arrows) — the 128×64 art's 25|78|25 horizontal slices.
+            // The 128×64 art's 25|78|25 slices: Left at x -5, Right ending at x 154 (RIGHT -44).
             if let Some((frame, size)) = &art.label_frame {
                 for (left, width, tc) in [
                     (-5.0, 25.0, [0.0, 0.1953125, 0.0, 1.0]),
@@ -460,7 +429,7 @@ fn dial_row(
                     ));
                 }
             }
-            // The per-race label, centered on the frame middle (`GlueFontHighlightSmall`).
+            // `GlueFontHighlightSmall`, centered on the frame middle.
             outlined_text(
                 row,
                 Node {
@@ -500,8 +469,7 @@ fn dial_row(
         });
 }
 
-/// NAME over the edit box (`CharacterCreateNameEdit`, 156×40 at BOTTOM (8,50), backdropped in
-/// `Glue-Tooltip-Border` — always Alliance-tinted, the ref's `OnLoad`), our status line beneath.
+/// NAME over `CharacterCreateNameEdit` (156×40 at BOTTOM (8,50)), with the status line beneath.
 fn name_cluster(
     ui: &mut ChildSpawnerCommands,
     art: &GlueArt,
@@ -536,8 +504,7 @@ fn name_cluster(
                 font,
                 s,
             );
-            // The shared glue edit-box chrome — Alliance-tinted, always (the
-            // ref's `OnLoad`); the create refresh writes the typed name into the marker.
+            // Always Alliance-tinted, as the reference's `OnLoad` sets it.
             crate::glue::widgets::glue_edit_box(
                 cluster,
                 art,
@@ -549,8 +516,7 @@ fn name_cluster(
                 (15.0, 0.0, 0.0, 0.0), // CharacterCreate.xml: TextInsets left 15 only
                 s,
             );
-            // Empty until a create fails — the ref surfaces errors in a dialog; this line is our
-            // minimal stand-in, never an idle hint.
+            // Empty until a create fails; the reference shows the error in a dialog, not built.
             outlined_text(
                 cluster,
                 Node::default(),
@@ -568,8 +534,8 @@ fn name_cluster(
         });
 }
 
-/// The rotate pair (`CharacterCreateRotateLeft/Right`: 50² at BOTTOMLEFT (237,0), overlapping
-/// −19) — `UI-RotationRight-Big` art, the left button mirrored, `UI-Common-MouseHilight` on hover.
+/// `CharacterCreateRotateLeft/Right`: 50² at BOTTOMLEFT (237,0), overlapping -19, the left one
+/// the mirrored `UI-RotationRight-Big`.
 fn rotate_cluster(ui: &mut ChildSpawnerCommands, art: &GlueArt, font: &Handle<Font>, s: f32) {
     let px = |v: f32| Val::Px(v * s);
     ui.spawn((Node {
@@ -647,8 +613,7 @@ pub(super) fn exit_create(
     for e in &roots {
         commands.entity(e).despawn();
     }
-    // Clear the booth + scene. Back to CharSelect re-establishes both the same frame
-    // (its `OnEnter` runs after this `OnExit`).
+    // CharSelect's `OnEnter` runs after this and re-establishes both the same frame.
     preview.look = None;
     preview.scene = None;
 }

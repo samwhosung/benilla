@@ -1,15 +1,11 @@
-//! **The combat log** — the reference's own handler cluster for the combat packets (in the net
-//! handler table since 2323, moved out of the drain's `combat_chat` and `combat_log` arm files).
-//! Every combat packet has two consumers, and the reference emits both from one handler: the
-//! **chat line** ([`chat`], the `0x629b60` display dispatcher's text) and the **floating
-//! number** with the portrait's `UNIT_COMBAT` flash ([`text`], `0x629d30` →
-//! `COMBAT_TEXT_UPDATE`; `0x625010` is the melee blood spurt, not this). They are gated by different CVars and classify by different laws, which is why the
-//! legs are two files; they answer one packet, which is why the handler is one — the line first,
-//! the number second, as the drain's match ran them.
+//! The combat log: the handlers for the combat packets. The reference answers each packet from one
+//! handler with two consumers, the chat line ([`chat`], the display dispatcher `0x629b60`) and the
+//! floating number with the portrait's `UNIT_COMBAT` flash ([`text`]; `0x629d30` fires
+//! `COMBAT_TEXT_UPDATE`); they run in that order. The two legs have different CVar gates and
+//! classification rules.
 //!
-//! Two packets have a third consumer: the completed swing and the environmental-damage log also
-//! drive the animation layer, whose handlers ([`crate::creature_anim::net`]) are registered after
-//! these, so a kind with two handlers runs the line, then the animation.
+//! The completed swing and the environmental-damage log also drive animation; those handlers
+//! ([`crate::creature_anim::net`]) register after these, so the line runs before the animation.
 
 use benilla_protocol::messages::SpellOutcomeLog;
 use benilla_protocol::{SessionEvent, SessionEventKind};
@@ -28,8 +24,7 @@ use crate::ui_unit::{CombatTextEvent, UnitCombatFeedback};
 pub(crate) mod chat;
 pub(crate) mod text;
 
-/// What the chat line classifies against — [`chat::ChatCtx`]'s inputs, built per packet by
-/// [`Ctx::ctx`]. Read-only, so a handler can hold it beside the mutable [`Sinks`].
+/// The chat line's read-only inputs, built into a [`chat::ChatCtx`] per packet.
 #[derive(SystemParam)]
 pub(crate) struct Ctx<'w> {
     self_guid: Res<'w, SelfGuid>,
@@ -59,11 +54,10 @@ impl Ctx<'_> {
     }
 }
 
-/// What the two legs read from the world and write to: the object stores and poses both legs
-/// resolve endpoints through, the chat log, the number's gates and its three sinks.
+/// What the two legs resolve endpoints through and write to.
 #[derive(SystemParam)]
 pub(crate) struct Sinks<'w, 's> {
-    /// `CombatDamage` + the two `Pet*` sub-gates.
+    /// `CombatDamage` and the two `Pet*` sub-gates.
     damage_text: Res<'w, DamageTextGates>,
     stores: Query<'w, 's, &'static mut ObjectStore>,
     poses: Query<'w, 's, &'static mut Transform>,
@@ -75,9 +69,8 @@ pub(crate) struct Sinks<'w, 's> {
     center: MessageWriter<'w, CombatTextEvent>,
 }
 
-/// The combat log's plugin — registration only; the two legs' state is the chat window's and the
-/// combat text's. Added ahead of [`crate::creature_anim::CreatureAnimPlugin`] so the two kinds
-/// both answer run the line before the animation.
+/// The combat log's handler registration. Added ahead of
+/// [`crate::creature_anim::CreatureAnimPlugin`], so a shared kind runs the line first.
 pub(crate) struct CombatLogPlugin;
 
 impl Plugin for CombatLogPlugin {
@@ -131,11 +124,8 @@ fn on_spell_damage_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
     }
 }
 
-/// **`CombatLogPeriodicSpells` gates the WHOLE packet body, and this handler is where that is
-/// expressible.** The reference's read site `0x626dee` is the first thing the handler `0x626dd0`
-/// does, and a zero jumps to the bare epilogue `0x6271b4`: no chat line, no floating tick number,
-/// no periodic miss word. Gating inside either leg would model it as two filters; it is one gate
-/// over both.
+/// `CombatLogPeriodicSpells` gates the whole packet: the handler `0x626dd0` reads it first
+/// (`0x626dee`) and a zero jumps to the epilogue `0x6271b4`, so no line, number or word.
 fn on_periodic_aura_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
     if let SessionEvent::PeriodicAuraLog(s) = ev {
         if !c.periodic.0 {
@@ -217,8 +207,7 @@ fn on_spell_log_miss(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
     }
 }
 
-// ── the combat log's completeness block (1703): every one of these is chat-only — they carry
-// no damage number, so unlike their neighbours above they have no floating-text leg to call ──
+// ── Chat-only packets: no damage number, so no floating-text leg ──
 
 fn on_party_kill_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
     if let SessionEvent::PartyKillLog(k) = ev {
@@ -313,12 +302,9 @@ fn on_level_up(In(ev): In<SessionEvent>, mut l: Sinks) {
     }
 }
 
-/// An honor award (the arc's other inbound message, the inspect reply, is
-/// `ui_honor`'s own handler): the combat-log line (name-resolved, so it queues) and the floating
-/// number, which are two different surfaces of one packet and are both the reference's. A
-/// DISHONORABLE kill arrives here too, carrying NEGATIVE honor — the floating text takes it
-/// signed, because the shipped `COMBAT_TEXT_HONOR_GAINED` handler prefixes a "+" only when the
-/// number is positive and therefore already expects the other case.
+/// An honor award: the combat-log line (name-resolved, so it queues) and the `HONOR_GAINED`
+/// number. A dishonorable kill carries negative honor, passed signed: the stock handler prefixes
+/// "+" only to a positive number (`Blizzard_CombatText.lua:234`).
 fn on_pvp_credit(In(ev): In<SessionEvent>, mut l: Sinks) {
     if let SessionEvent::PvpCredit(credit) = ev {
         l.log.push_pvp_credit(

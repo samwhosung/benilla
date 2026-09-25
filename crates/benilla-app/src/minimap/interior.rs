@@ -1,48 +1,33 @@
-//! The WMO-interior minimap's group selection — the portal flood-fill + the tile-name stem
-//! (split from the tile renderer; the mechanism and its byte provenance are unchanged).
+//! The WMO-interior minimap's group selection (the portal flood-fill) and tile-name stem.
 
 use bevy::math::{Affine3A, Vec3};
 
 use benilla_assets::coords::{bevy_to_wow, wow_to_bevy};
 use benilla_assets::WmoModel;
 
-/// MOGP group flags read by the interior flood-fill: `EXTERIOR` (an outdoor shell group — not part of
-/// the interior tile flood) and `UNREACHABLE`/no-render (`0x80`) which also suppresses tile emit. The
-/// client skips `& 0x8` at the flood level (`0x6a5020`) and `& 0x88` at the emit level
+/// MOGP flags: the flood skips `& 0x8` exterior groups (`0x6a5020`), the emit skips `& 0x88`
 /// (`0x6a5270`).
 const GROUP_EXTERIOR: u32 = 0x8;
 const GROUP_NO_EMIT: u32 = 0x88;
 
-/// The `md5translate.trs` key stem for a WMO's interior minimap tiles, from its `.wmo` asset path.
-/// The reference builds the tile name by stripping the `World\` prefix and the `.wmo` extension off
-/// the model filename (name builder `0x6da330`), e.g.
-/// `World\wmo\KhazModan\Cities\Ironforge\Ironforge.wmo` → `wmo\khazmodan\cities\ironforge\ironforge`.
-/// Backslash-separated + lowercased (the trs lookup is case-insensitive). `None` if not a
-/// `World\…\*.wmo`.
+/// The `md5translate.trs` key stem of a WMO's interior tiles: the model path without `World\` and
+/// `.wmo` (name builder `0x6da330`), backslashed and lowercased, the trs lookup being
+/// case-insensitive. `None` if not a `World\…\*.wmo`.
 pub(super) fn wmo_minimap_stem(wmo_path: &str) -> Option<String> {
     let p = wmo_path.replace('/', "\\").to_ascii_lowercase();
     let stem = p.split_once("world\\")?.1.strip_suffix(".wmo")?;
     Some(stem.to_string())
 }
 
-/// The interior minimap's group selection: a **portal flood-fill** from the player's current group,
-/// gated by a player-centred query box — the client mechanism (the flood `0x6a5020`). Returns, per
-/// absolute group index, whether that group's tiles should be drawn (reached through portals AND
-/// its bbox overlaps the view in XY). Replaces the naive draw-every-group-in-the-window, which
-/// painted unreachable/far floors over the current one.
+/// Which groups' tiles draw, per absolute group index: the reference's portal flood-fill from the
+/// player's group (`0x6a5020`) inside a player-centred query box.
 ///
-/// The query box (WoW **world** axes; the client builds it in the WMO model frame, but the overlap
-/// decisions are frame-agnostic so we test in world space — the group bboxes and portal polygons are
-/// transformed by the placement to match): XY = the view window grown to `±2·radius`; **Z is
-/// asymmetric, `[player.z − 1.5·radius, player.z + radius]`** — mostly *below* the eye, so from a floor
-/// you reach the storey just under it through a stairwell but not the whole tower. A group EMITS when
-/// its bbox overlaps the box in **XY only** (no per-group Z test — the client has none). The **same
-/// XY overlap gates the portal RECURSION** (a miss returns at `0x6a51f4`): a group that fails the
-/// XY test neither emits nor floods onward. For an XY-passing group, each portal is CROSSED when
-/// its polygon is not fully outside any of the box's **6 planes** (a 3-D outcode cull *including Z*
-/// — the only per-floor Z gate the client applies; stacked floors share an XY footprint, so an
-/// adjacent storey passes its own XY gate and is reached through the stairwell portal). `EXTERIOR`
-/// (`0x8`) groups are not interior-flooded; `0x88` groups emit no tiles.
+/// The box is XY `±2·radius` and Z `[z − 1.5·radius, z + radius]`, mostly below the player, so a
+/// stairwell reaches the storey below but not the whole tower. A group whose bbox misses the box in
+/// XY neither emits nor floods onward (`0x6a51f4`); there is no per-group Z test. A portal is
+/// crossed unless its polygon lies wholly outside one of the box's six planes, the only Z gate.
+/// The reference builds the box in model space; testing in world space with the bboxes and portals
+/// transformed gives the same answers.
 pub(super) fn interior_group_selection(
     model: &WmoModel,
     world_from_local: &Affine3A,
@@ -60,10 +45,10 @@ pub(super) fn interior_group_selection(
     let box_min = [pw[0] - 2.0 * c, pw[1] - 2.0 * c, pw[2] - 1.5 * c];
     let box_max = [pw[0] + 2.0 * c, pw[1] + 2.0 * c, pw[2] + c];
 
-    // A model-space point → world (WoW axes), the frame the query box lives in.
+    // A model point to world (WoW axes), the query box's frame.
     let to_world = |m: [f32; 3]| bevy_to_wow(world_from_local.transform_point3(wow_to_bevy(m)));
-    // A group's model bbox → its world AABB (8 transformed corners) — a conservative superset under a
-    // rotated placement, fine for the emit gate (an over-included far group is window-culled at draw).
+    // A group's model bbox as a world AABB: a superset under a rotated placement, and the draw's
+    // window cull trims the excess.
     let world_aabb = |bmin: [f32; 3], bmax: [f32; 3]| {
         let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
         for &x in &[bmin[0], bmax[0]] {
@@ -82,7 +67,7 @@ pub(super) fn interior_group_selection(
     let xy_overlap = |lo: [f32; 3], hi: [f32; 3]| {
         lo[0] <= box_max[0] && hi[0] >= box_min[0] && lo[1] <= box_max[1] && hi[1] >= box_min[1]
     };
-    // 6-plane outcode of a world point against the box (1 bit per face it is outside of).
+    // 6-plane outcode of a world point against the box, one bit per face it is outside.
     let outcode = |w: [f32; 3]| {
         let mut o = 0u8;
         for k in 0..3 {
@@ -105,21 +90,18 @@ pub(super) fn interior_group_selection(
         visited[g] = true;
         let gn = &model.group_nav[g];
         if gn.flags & GROUP_EXTERIOR != 0 {
-            continue; // an outdoor shell group — not part of the interior flood
+            continue; // an exterior group is not flooded
         }
         let (lo, hi) = world_aabb(gn.bbox_min, gn.bbox_max);
-        // XY-OVERLAP GATE (a miss returns at `0x6a51f4`): a group whose model-XY bbox misses the
-        // query window emits NOTHING and does NOT flood onward — the gate blocks emit AND recursion
-        // both. Stacked storeys share an XY footprint, so an adjacent floor still passes it (and is
-        // reached via the stairwell portal's 3-D cull below).
+        // The XY gate blocks emit and recursion both (`0x6a51f4`); a stacked storey shares the XY
+        // footprint and passes it.
         if !xy_overlap(lo, hi) {
             continue;
         }
         if gn.flags & GROUP_NO_EMIT == 0 {
             drawable[g] = true;
         }
-        // PORTAL RECURSION: cross a portal iff its polygon is not fully outside any box plane (3-D,
-        // Z included). This is the only place a floor above/below is gated out.
+        // Cross a portal unless its polygon is wholly outside one box plane, Z included.
         let start = gn.ref_start as usize;
         let end = (start + gn.ref_count as usize).min(model.portal_refs.len());
         for r in &model.portal_refs[start..end] {
@@ -138,7 +120,7 @@ pub(super) fn interior_group_selection(
             for v in poly {
                 and &= outcode(to_world(*v));
                 if and == 0 {
-                    break; // not fully outside any one plane ⇒ the portal reaches into the box
+                    break; // outside no single plane: the portal reaches into the box
                 }
             }
             if and == 0 {
@@ -151,15 +133,9 @@ pub(super) fn interior_group_selection(
 
 #[cfg(test)]
 mod tests {
-    /// The interior flood-fill's two gates, on a synthetic 4-group building (all sharing one XY
-    /// footprint except `far`, which sits 1000 yd away):
-    ///   `player(g0)` ──floor-hole portal──> `cellar(g1)`  both under the query box ⇒ both drawn
-    ///   `player(g0)` ──in-box portal─────-> `far(g2)`      reached, bbox misses XY ⇒ NOT drawn
-    ///   `far(g2)`    ──portal────────────-> `behind(g3)`   must NOT be reached: the XY gate that
-    ///                                                      rejected g2 also blocks flooding THROUGH it
-    /// The last leg is the reference's recursion gate (the XY gate blocks emit *and* recursion,
-    /// `0x6a51f4`). `behind`'s own bbox does overlap the box, so it would draw if recursion had
-    /// leaked through `far`.
+    /// A 4-group building: g0 (the player's) and g1 (a cellar) join by a floor hole and both draw;
+    /// g2 sits 1000 yd off in XY, reached but not drawn; g3 overlaps the box but is reachable only
+    /// through g2, by a portal inside the box, so only g2's XY gate keeps it out (`0x6a51f4`).
     #[test]
     fn interior_flood_fill_gates_on_xy_and_blocks_recursion_through_a_missed_group() {
         use super::interior_group_selection;
@@ -188,13 +164,7 @@ mod tests {
         let mut portal_vertices = Vec::new();
         portal_vertices.extend(poly(0.0, 0.0)); // portal 0: g0<->g1, a floor hole at the player
         portal_vertices.extend(poly(4.0, 1.0)); // portal 1: g0<->g2, well inside the query box
-                                                // portal 2: g2<->g3, deliberately placed INSIDE the query box, so the 3-D outcode cull would
-                                                // happily cross it. The ONLY thing that stops g3 being reached is g2 failing its own XY gate
-                                                // — which is exactly the behaviour under test (a
-                                                // box-outside portal would pass this test even with
-                                                // the pre-correction emit-only gate, and so would
-                                                // prove nothing).
-        portal_vertices.extend(poly(3.0, 1.0));
+        portal_vertices.extend(poly(3.0, 1.0)); // portal 2: g2<->g3, also inside the box
         let info = |start: u16| WmoPortalInfo {
             start_vertex: start,
             count: 4,
@@ -267,8 +237,8 @@ mod tests {
         );
     }
 
-    /// The box's Z extent is what keeps a distant storey out: put the connecting portal far below the
-    /// box floor and the 3-D outcode cull stops the flood before it.
+    /// The box's Z extent keeps a distant storey out: a portal far below the box floor is not
+    /// crossed.
     #[test]
     fn interior_flood_fill_rejects_a_portal_outside_the_query_box_z_extent() {
         use super::interior_group_selection;
@@ -350,8 +320,8 @@ mod tests {
     #[test]
     fn wmo_stem_strips_world_prefix_and_extension() {
         use super::wmo_minimap_stem;
-        // The interior tile key stem = the .wmo path minus `World\` and `.wmo`, lowercased. Appending
-        // `_001_00_00.blp` reproduces the trs key `WMO\KhazModan\Cities\Ironforge\ironforge_001_00_00.blp`.
+        // The stem plus `_001_00_00.blp` is the trs key
+        // `WMO\KhazModan\Cities\Ironforge\ironforge_001_00_00.blp`.
         assert_eq!(
             wmo_minimap_stem("World/wmo/KhazModan/Cities/Ironforge/Ironforge.wmo").as_deref(),
             Some("wmo\\khazmodan\\cities\\ironforge\\ironforge"),

@@ -1,8 +1,6 @@
-//! The glue screens' reusable widget builders — the art button shapes of `GlueButtons.xml` /
-//! `CharacterCreate.xml` that each screen's layout places at its authored offsets — plus the
-//! widget-vocabulary marker components they spawn. Builders are generic over the screen's action
-//! component (`CreateAction`, `SelectAction`, …); each degrades to a plain-fill + text face
-//! without client art.
+//! The glue screens' widget builders (the button shapes of `GlueButtons.xml` and
+//! `CharacterCreate.xml`) and their marker components. Builders are generic over the screen's
+//! action component; each falls back to a plain face with text without client art.
 
 use benilla_ui::markup::{tokens, TokenKind};
 use benilla_ui::widget::EditBoxState;
@@ -15,64 +13,45 @@ use super::backdrop::{backdrop_border, tiled_bg_node};
 
 // ── The shared widget vocabulary ─────────────────────────────────────────────────────────────────
 
-/// A button's highlight overlay: the reference's `HighlightTexture`, lit while the cursor is on
-/// the button — or held lit by [`LockHighlight`].
-///
-/// **Its visibility belongs to [`super::glue_hilights`] and to nothing else.** It used to be "the
-/// owning screen's to drive", which is how four screens ended up with four hand-rolled hover
-/// loops, two of them subtly different, and how the realm list ended up with none at all — no
-/// sheen on any of its buttons, because nobody remembered to write the fifth.
+/// A button's `HighlightTexture`, lit on hover or by [`LockHighlight`]. Its visibility belongs to
+/// [`super::glue_hilights`] alone.
 #[derive(Component)]
 pub(crate) struct Hilight;
-/// **`Button:LockHighlight()`** — hold this button's [`Hilight`] lit whether or not the cursor is
-/// on it, which is how every glue list marks its selected row.
-///
-/// The reference's own verb, and the reason the sheen can have one owner: "lit" is
-/// `hovered || locked`, and a screen that knows which row is chosen says exactly that much and
-/// nothing about visibility.
+/// `Button:LockHighlight()`: hold this button's [`Hilight`] lit, as every glue list marks its
+/// selected row.
 #[derive(Component, Default)]
 pub(crate) struct LockHighlight(pub(crate) bool);
-/// A button spawned with a plain-fill face because client art is missing — the only buttons whose
-/// `BackgroundColor` a hover pass may shade (every `Node` carries one since Bevy 0.15's required
-/// components, so presence alone can't distinguish the fallback).
+/// A button with a plain-fill face for missing art, the only kind whose `BackgroundColor` a hover
+/// pass may shade (every `Node` carries one).
 #[derive(Component)]
 pub(crate) struct FallbackFace;
-/// An icon button's name label (the ref's `HighlightText`: visible on hover/selected — always,
-/// without icon art).
+/// An icon button's name label, the `HighlightText` shown on hover or selection.
 #[derive(Component)]
 pub(crate) struct HoverLabel;
-/// A glue-panel button (swaps up/down/disabled art; its caption whitens on hover).
+/// A glue-panel button.
 #[derive(Component)]
 pub(crate) struct GlueBtn;
-/// A glue-panel button's enabled state (the ref's `Enable()`/`Disable()`): the screen toggles it,
-/// [`super::glue_button_visuals`] renders it (disabled art, gray caption, no hover).
+/// A glue-panel button's `Enable()`/`Disable()` state: the screen toggles it,
+/// [`super::glue_button_visuals`] renders it.
 #[derive(Component, Default)]
 pub(crate) struct GlueDisabled(pub(crate) bool);
-/// A glue button's own authored `TexCoords` crop, where a template overrides the shared
-/// `GlueButtons.xml` region (`AddonListButtonTemplate` crops `0.025–0.535`). Read by
-/// [`super::glue_button_visuals`] in place of [`BUTTON_TC`].
+/// A template's own `TexCoords` crop, used in place of [`BUTTON_TC`].
 #[derive(Component, Clone, Copy)]
 pub(crate) struct BtnTexCoords(pub(crate) [f32; 4]);
-/// A glue button's caption (gold at rest, white on hover — the ref's `HighlightFont`).
+/// A glue button's caption: gold at rest, white on hover (`HighlightFont`).
 #[derive(Component)]
 pub(crate) struct GlueCaption;
-/// A two-state button face (spinner arrows, rotate): pressed swaps `up` → `down`.
+/// A two-state button face (spinner arrows, rotate): pressed shows `down`.
 #[derive(Component)]
 pub(crate) struct ArtSwap {
     pub(crate) up: Handle<Image>,
     pub(crate) down: Handle<Image>,
 }
-/// One of an outlined text's black copies ([`outlined_text`]) — content mirrored from its real
-/// sibling by [`super::sync_outlines`]; `dir` is its unit offset direction, seated to exactly one
-/// DEVICE pixel by [`super::seat_outline_copies`].
+/// One of an outlined text's eight black copies; `dir` is its offset direction.
 ///
-/// The reference's `outline="NORMAL"` is not string geometry at all: the ring is **baked into the
-/// glyph atlas cell by one 8-neighbour dilation pass at rasterization** (`0x5ce440`/`0x5cea30`) —
-/// and the glyph rasterizes at final
-/// device-pixel size, so the ring is one device pixel hugging the glyph at every resolution
-/// (vanilla's famously thin outlines at high res). Offsetting copies by an authored *unit*
-/// instead put the ring 2–3 device px out at fullscreen scales, where it read as a separate
-/// doubled stroke (director's report, 2026-07-19).
+/// The reference's `outline="NORMAL"` is one 8-neighbour dilation baked into the glyph at its
+/// device-pixel size (`0x5ce440`, `0x5cea30`), so the ring is one device pixel at every resolution,
+/// never one UI unit.
 #[derive(Component)]
 pub(crate) struct OutlineCopy {
     pub(crate) dir: Vec2,
@@ -80,8 +59,7 @@ pub(crate) struct OutlineCopy {
 
 // ── Layout helpers ───────────────────────────────────────────────────────────────────────────────
 
-/// An absolutely-positioned node at the authored `(left, top, w, h)`, scaled by `s` — the shape of
-/// nearly every ref anchor once resolved to 1024×768 coordinates.
+/// An absolutely-positioned node at the authored `(left, top, w, h)`, scaled by `s`.
 pub(crate) fn abs(s: f32, left: f32, top: f32, w: f32, h: f32) -> Node {
     Node {
         position_type: PositionType::Absolute,
@@ -105,12 +83,8 @@ pub(crate) fn overlay() -> Node {
     }
 }
 
-/// A glue string's look, before the outline treatment: content, authored size, color, and whether
-/// it may wrap (the ref FontStrings never break a label; only the info paragraphs wrap).
-///
-/// `text` is **markup**, not a literal: its `|cAARRGGBB…|r` escapes decode to colour and `color`
-/// is the base they override ([`markup_spans`]). Every glue string goes through that decode
-/// because every `CSimpleFontString` in 5875 does.
+/// A glue string's look before the outline. `text` is markup, decoded as every
+/// `CSimpleFontString` decodes it, and `color` is the base its escapes override.
 pub(crate) struct GlueText<'a> {
     pub text: &'a str,
     pub size: f32,
@@ -118,15 +92,9 @@ pub(crate) struct GlueText<'a> {
     pub wrap: bool,
 }
 
-/// A glue text with the fonts' black outline (`outline="NORMAL"`, GlueFonts.xml — every glue font
-/// but the edit box carries it). Bevy text has no stroke, so the string draws nine times: eight
-/// black copies one DEVICE pixel out in the 8-neighbour directions (the ref's baked dilation ring
-/// — see [`OutlineCopy`]), then the real text — with the MasterFont (1,−1) drop shadow — painted
-/// last on top. `node` is the layout shape (position/margins/centering); an auto-sized inner box
-/// keeps the copies registered with the real string wherever `node` puts it. `wrapper_extra` rides
-/// the wrapper (visibility markers hide all nine at once); `text_extra` rides the real text (the
-/// markers the refresh writes — [`super::sync_outlines`] mirrors those writes into the copies).
-/// Returns the real text entity.
+/// A glue text with the glue fonts' `outline="NORMAL"` (GlueFonts.xml): eight black copies one
+/// device pixel out, then the real text with the MasterFont (1,−1) shadow on top.
+/// `wrapper_extra` rides the wrapper of all nine, `text_extra` the real text, which is returned.
 pub(crate) fn outlined_text<W: Bundle, T: Bundle>(
     parent: &mut ChildSpawnerCommands,
     node: Node,
@@ -150,18 +118,8 @@ pub(crate) fn outlined_text<W: Bundle, T: Bundle>(
     )
 }
 
-/// [`outlined_text`], **centred** — for a wrapped paragraph the reference centres.
-///
-/// A separate door rather than a field on [`GlueText`] because centring is the exception here, and
-/// naming it at the one call site that wants it is cheaper and clearer than a fifth field on
-/// thirty-three literals. The justification has to reach all nine strings (the eight outline copies
-/// share the layout), so it cannot be inserted onto the real text afterwards.
-///
-/// **Which way round is faithful is not obvious**, so: a `FontString` with no `justifyH` defaults
-/// to **CENTER**, and `GlueDialogText` (`GlueDialog.xml:56`) omits it — so the dialog is centred.
-/// Every *other* wrapped glue string in the shipped XML sets `justifyH="LEFT"` explicitly
-/// (`CharacterCreate.xml`'s race/class/faction bodies, `AddonList.xml`'s title/notes/deps), which
-/// is why [`outlined_text`] stays left and this is the exception rather than the default.
+/// [`outlined_text`], centred. A `FontString` with no `justifyH` is CENTER, and
+/// `GlueDialogText` omits it (`GlueDialog.xml:56`); every other wrapped glue string sets LEFT.
 pub(crate) fn outlined_text_centered<W: Bundle, T: Bundle>(
     parent: &mut ChildSpawnerCommands,
     node: Node,
@@ -185,29 +143,12 @@ pub(crate) fn outlined_text_centered<W: Bundle, T: Bundle>(
     )
 }
 
-/// Split a glue string into its coloured spans — WoW's `|cAARRGGBB…|r` inline markup, decoded by
-/// the reference's grammar ([`benilla_ui::markup`]) instead of drawn literally.
+/// Split a glue string into coloured spans by the `|c…|r` markup grammar ([`benilla_ui::markup`]).
+/// Every `CSimpleFontString` decodes it unconditionally (`0x5c2810`), so every glue string does.
 ///
-/// **This lives in the primitive on purpose.** It used to be one call site's private helper (the
-/// AddOns row title), which is exactly how the same `|cff0055FF…|r` came out coloured in a list
-/// row and literal in the tooltip an inch to its left: a FontString property implemented
-/// per-caller is a property no caller reliably has. In the real client the decode is
-/// `CSimpleFontString`'s own and takes no opt-in — `0x5c2810` parses `|c`/`|r`/`|H`/`|h`/`||`
-/// unconditionally for every one of them (the flags word that could disable them has no writer
-/// anywhere in the image). So every `GlueText` decodes, and there is no way to spawn one that
-/// doesn't.
-///
-/// `base` is the string's own colour; an escape overrides it until `|r`, and the escape's alpha
-/// byte is discarded exactly as the client discards it (`0x5c2ab2`). Link escapes hide their
-/// payload and keep their visible text — the glue has no clickable links, so a `|H…|h` reads as
-/// its text. `||` draws one `|`.
-///
-/// A line break (`\n`, `|n`) follows the string's own `wrap`: a real break where the ref lets the
-/// string wrap (a tooltip paragraph), a space where it authored one line (a row title, a button
-/// caption) — the flag is our stand-in for the multi-line bit the client tests, and collapsing
-/// beats a label growing a second row inside a 20-unit slot.
-///
-/// Never empty: an empty string yields one empty span, so [`outlined_spans`] always has a root.
+/// An escape overrides `base` until `|r`, its alpha discarded (`0x5c2ab2`); a link keeps only its
+/// text; `||` draws one `|`. A line break is real when `wrap` is set and a space otherwise, `wrap`
+/// standing in for the multi-line flag the reference tests. An empty string yields one empty span.
 pub(crate) fn markup_spans(text: &str, base: Color, wrap: bool) -> Vec<(String, Color)> {
     let mut spans: Vec<(String, Color)> = Vec::new();
     let mut cur = String::new();
@@ -249,13 +190,8 @@ pub(crate) fn markup_spans(text: &str, base: Color, wrap: bool) -> Vec<(String, 
     spans
 }
 
-/// [`outlined_text`]'s span-tree body — the decoded spans of [`markup_spans`] drawn as one string
-/// with the colour switching mid-run. The real text is Bevy's `Text` root + `TextSpan` children;
-/// the eight outline copies carry the flattened plain string, which is identical geometry because
-/// the copies only exist to be a black ring.
-///
-/// **Private**: [`outlined_text`] is the one door in, so no caller can hand-build spans and skip
-/// the markup decode (B273's shape — see [`markup_spans`]).
+/// [`outlined_text`]'s body: the real text as a `Text` root with `TextSpan` children, the outline
+/// copies as the flattened string. Private, so no caller skips the markup decode.
 fn outlined_spans<W: Bundle, T: Bundle>(
     parent: &mut ChildSpawnerCommands,
     node: Node,
@@ -268,9 +204,7 @@ fn outlined_spans<W: Bundle, T: Bundle>(
     font: &Handle<Font>,
     s: f32,
 ) -> Entity {
-    // Both fields set, so no `..default()` — `TextLayout` has exactly these two, and clippy's
-    // `needless_update` is right that spelling a rest-pattern here only hides the next field
-    // Bevy adds.
+    // Both fields set, so no `..default()` (clippy's `needless_update`).
     let layout = TextLayout {
         linebreak: if wrap {
             LineBreak::WordBoundary
@@ -289,17 +223,15 @@ fn outlined_spans<W: Bundle, T: Bundle>(
     parent
         .spawn((node, wrapper_extra))
         .with_children(|wrapper| {
-            // The −1px trim: our centered layout box sat the glyphs ~1px lower than the ref's
-            // baseline placement everywhere (director-measured); one optical correction here
-            // covers every glue string.
+            // The −1 px trim: a centred layout box sits the glyphs about 1 px below the
+            // reference's baseline placement.
             let trim = Node {
                 top: Val::Px(-s),
                 ..default()
             };
             wrapper.spawn(trim).with_children(|inner| {
-                // The 8-neighbour ring (see [`OutlineCopy`]) — seated to one device pixel by
-                // `seat_outline_copies`; the 0.5-logical spawn value is the retina guess for the
-                // one frame before that system runs.
+                // The 8-neighbour ring; `seat_outline_copies` sets it to one device pixel, and
+                // 0.5 logical covers the frame before it runs.
                 for dy in [-1.0, 0.0, 1.0] {
                     for dx in [-1.0, 0.0, 1.0] {
                         if dx == 0.0 && dy == 0.0 {
@@ -346,20 +278,12 @@ fn outlined_spans<W: Bundle, T: Bundle>(
     real
 }
 
-/// A 48² icon check-button (race/class/gender): the `IconShadow` behind, the icon face (dynamic —
-/// the owning screen assigns the sheet + rect — or fixed), a `ButtonHilight-Square` overlay lit on
-/// hover *and held while selected* (the ref's `LockHighlight`; the template's `CheckedTexture` is
-/// commented out in the shipped 1.12 GlueXML, so the locked square *is* the whole selected
-/// visual), and the name label along the bottom (the ref's `HighlightText`, `GlueFontNormalSmall`,
-/// anchored BOTTOM +1 — over the icon's bottom edge). `dyn_icon`/`label_dyn` are the screen's
-/// refresh markers, spawned onto the face / real label text.
+/// A 48² race/class/gender check-button: the `IconShadow`, the face, a `ButtonHilight-Square`
+/// lit on hover and locked while selected (the template's `CheckedTexture` is commented out), and
+/// the `HighlightText` name label at BOTTOM +1. `dyn_icon` and `label_dyn` are refresh markers.
 ///
-/// **It carries its own [`LockHighlight`]**, because the reference does: these are the
-/// `CheckButton`s that `SetCharacterRace`/`SetCharacterClass`/`SetCharacterGender` lock and
-/// unlock by hand (`CharacterCreate.lua` l.171/254/326). Leaving the flag to the screen is how
-/// the create screen lost every selected sheen *and* every icon name for ten days — 2072 added a
-/// `&mut LockHighlight` term to the screen's own visuals query and this spawn site had none, so
-/// the query matched nothing at all.
+/// It carries its own [`LockHighlight`]: `SetCharacterRace`/`Class`/`Gender` lock these by hand
+/// (`CharacterCreate.lua` l.171/254/326), and the screen's query needs the component present.
 pub(crate) fn icon_button<A: Component, I: Bundle, L: Bundle>(
     parent: &mut ChildSpawnerCommands,
     font: &Handle<Font>,
@@ -386,15 +310,15 @@ pub(crate) fn icon_button<A: Component, I: Bundle, L: Bundle>(
         b.insert((FallbackFace, BackgroundColor(BTN_BG))); // no art: the label is the button face
     }
     b.with_children(|b| {
-        // The shadow (64² centered, offset (2,−2)) — behind everything.
+        // The shadow: 64² centred, offset (2,−2), behind everything.
         if let Some(shadow) = &art.icon_shadow {
             b.spawn((
                 ImageNode::new(shadow.clone()),
                 abs(s, -6.0, -6.0, 64.0, 64.0),
             ));
         }
-        // The icon face: dynamic (transparent until the refresh assigns the sheet + rect — a
-        // default `ImageNode` is a white square) or fixed at spawn (gender halves).
+        // A dynamic face is transparent until the refresh assigns it, since a default
+        // `ImageNode` is a white square; the gender halves are fixed.
         let mut face = b.spawn((
             match &fixed {
                 Some((sheet, rect)) => ImageNode {
@@ -416,7 +340,6 @@ pub(crate) fn icon_button<A: Component, I: Bundle, L: Bundle>(
         if let Some(icon) = dyn_icon {
             face.insert(icon);
         }
-        // The ADD-mode overlays draw through the true-additive UI material (`add_material`).
         if let Some(hilight) = &art.hilight {
             b.spawn((
                 Hilight,
@@ -425,8 +348,7 @@ pub(crate) fn icon_button<A: Component, I: Bundle, L: Bundle>(
                 overlay(),
             ));
         }
-        // The name label: the wrapper carries the hover visibility (all five strings toggle
-        // together); the dynamic marker rides the real text for the refresh + outline sync.
+        // The wrapper carries the hover visibility, so all nine strings toggle together.
         let real = outlined_text(
             b,
             Node {
@@ -453,8 +375,7 @@ pub(crate) fn icon_button<A: Component, I: Bundle, L: Bundle>(
     });
 }
 
-/// A 32² spinner arrow at its authored x in the dial row — up/down art states + the additive
-/// hover highlight, or a plain `<`/`>` without art.
+/// A 32² spinner arrow at its authored x in the dial row, or a plain `<`/`>` without art.
 pub(crate) fn dial_arrow<A: Component>(
     row: &mut ChildSpawnerCommands,
     arrow: &Option<ArrowArt>,
@@ -510,25 +431,23 @@ pub(crate) fn dial_arrow<A: Component>(
     }
 }
 
-/// A glue button template (`GlueButtons.xml` / `GlueDialog.xml`): the caption font it authors, and
-/// its `<ButtonText>` CENTER-anchor **offset**. The offset is real and per-template — the big
-/// `GlueButtonTemplate` pulls its caption 3 units LEFT and 3 UP of dead centre — and drawing every
-/// caption dead centre instead sat them all low, and the big buttons' right.
+/// A glue button template (`GlueButtons.xml`, `GlueDialog.xml`): its caption font and its
+/// per-template `<ButtonText>` CENTER offset.
 #[derive(Clone, Copy)]
 pub(crate) enum GlueBtnKind {
-    /// `GlueButtonTemplate` (170×45) — GlueFontNormal, ButtonText CENTER (−3, 3).
+    /// `GlueButtonTemplate` (170×45): GlueFontNormal, ButtonText CENTER (−3, 3).
     Normal,
-    /// `GlueButtonSmallTemplate` (150×38) — GlueFontNormalSmall, ButtonText CENTER (0, 3).
+    /// `GlueButtonSmallTemplate` (150×38): GlueFontNormalSmall, ButtonText CENTER (0, 3).
     Small,
-    /// `GlueDialogButtonTemplate` (200×40) — GlueFontNormal, ButtonText CENTER (0, 2).
+    /// `GlueDialogButtonTemplate` (200×40): GlueFontNormal, ButtonText CENTER (0, 2).
     Dialog,
-    /// `AddonListButtonTemplate` (160×35) — GlueFontNormal, ButtonText CENTER (0, 2), and its own
-    /// narrower art crop (TexCoords 0.025–0.535 of the `Glue-Panel-Button` sheets).
+    /// `AddonListButtonTemplate` (160×35): GlueFontNormal, ButtonText CENTER (0, 2), and its own
+    /// art crop, TexCoords 0.025–0.535.
     List,
 }
 
 impl GlueBtnKind {
-    /// `(font size, caption offset)` — the offset in the reference's anchor space, y UP-positive.
+    /// `(font size, caption offset)`, the offset in the reference's anchor space, y up.
     fn caption(self) -> (f32, Vec2) {
         match self {
             Self::Normal => (15.0, Vec2::new(-3.0, 3.0)),
@@ -537,7 +456,6 @@ impl GlueBtnKind {
         }
     }
 
-    /// The template's art crop where it overrides the shared `GlueButtons.xml` region.
     fn tex_coords(self) -> Option<BtnTexCoords> {
         match self {
             Self::List => Some(BtnTexCoords([0.025, 0.535, 0.0, 0.75])),
@@ -546,51 +464,23 @@ impl GlueBtnKind {
     }
 }
 
-/// `GlueEditBoxFont`'s size (GlueFonts.xml: ARIALN 18) — the typed line and the caret beside it.
+/// `GlueEditBoxFont`'s size (GlueFonts.xml: ARIALN 18).
 pub(crate) const EDIT_FONT_SIZE: f32 = 18.0;
-/// The typed line's line-height multiple, pinned here rather than left to Bevy's default so the
-/// caret's height (below) is provably the same number the text lays out with.
+/// The typed line's line-height multiple; the caret's height must use the same number.
 const EDIT_LINE_HEIGHT: f32 = 1.2;
-/// The edit caret's colour: the reference's caret re-applies **`FONTINSTANCE.textColor`** whenever
-/// the font changes (`0x77e2a0`, mask bit 2) — the ctor's `0xFFFFFFFF` is only the pre-font default.
-/// So it is the box's text colour by law, not white by coincidence; both the line and the bar take
-/// it from here.
+/// The typed text and caret colour: the reference's caret takes `FONTINSTANCE.textColor` whenever
+/// the font changes (`0x77e2a0`, mask bit 2).
 const EDIT_TEXT_COLOR: Color = Color::WHITE;
-/// The edit caret is a drawn **bar**, not a character — a `CSimpleTexture` at `E+0x368`, allocated
-/// with a different allocator/tag/ctor than the `CSimpleFontString` beside it (`0x779c86` vs
-/// `0x779bee`; the cursor flush `0x77da80` fires `OnCursorChanged` with
-/// four float caret-*position* args). benilla used to append a `"|"` glyph (login) or a static `"_"`
-/// (create), which put a font's shape on a font's baseline and re-laid the text out every blink.
-///
-/// **Width is 4.0 UI units** — byte-verified, not the 1 px this shipped with first.
-/// `0x77ba2d–0x77ba67` stores `G1·4/(G3·1024)`, which the client's own internal→Lua converter maps
-/// to exactly 4.0 at every aspect and resolution. Same units as every other authored glue number,
-/// so it scales with `s` like the rest. Height is the FontString's line height; the bar is
-/// vertically centred on the line (the ref anchors caret-LEFT to the FontString's own rect, so
-/// TextInsets never enter the caret's own geometry — it inherits them by anchoring).
+/// The edit caret is a drawn bar, a `CSimpleTexture` at `E+0x368` (`0x779c86`), not a glyph. It is
+/// 4.0 UI units wide at every aspect (`0x77ba2d–0x77ba67`) and one line tall, centred on the line.
 const CARET_W: f32 = 4.0;
 
-/// The standard edit caret — the drawn [`CARET_W`]-unit bar, one line tall at the box's font size,
-/// in the box's text colour, spawned hidden (the owning screen blinks its `Visibility` on the ref's
-/// 0.5 s clock, reset solid on every keystroke). Seat it as the flex sibling right after the typed
-/// line so it lands at the cursor without anyone measuring text. The ONE caret; every edit box —
-/// [`glue_edit_box`]'s chrome and the delete dialog's ChatInputBorder box — spawns it here, so the
-/// mechanism can never fork back into per-screen `"|"`/`"_"` glyphs.
+/// The edit caret, spawned hidden for the owner to blink, as the flex sibling after the typed
+/// text so it lands at the cursor with no text measuring. Every glue edit box spawns it here.
 ///
-/// **The caret is an OVERLAY: it takes no width in the row.** The flex item is zero-wide — a bare
-/// *seam* the row's layout collapses to nothing — and the drawn bar is an absolutely-positioned
-/// child hanging off it, left edge on the seam, so the typed line is one continuous run whatever
-/// the cursor or the selection is doing. It used to be the bar itself, [`CARET_W`] units wide and
-/// in flow, which pushed the text apart at the cursor and — because a select-all moves the whole
-/// string from the `Before` slot to the `Selected` slot, across one caret seam — **shifted the
-/// text bodily to the right the moment a box was focused** (the director's report, 2026-08-29).
-///
-/// This is also what the client does, and the two facts are the same fact: the caret is a
-/// `CSimpleTexture` quad at `drawLayer 3`, anchored LEFT-to-LEFT on the FontString with
-/// `x = W(lineStart → cursor)` — the measured advance of the text before the cursor (`0x779c86`,
-/// `0x77da80`). A quad anchored *over* the line cannot
-/// displace it, and its left edge sits exactly on the seam flex puts us on. `drawLayer 3` is above
-/// the FontString's `2`, which is the [`ZIndex`] here.
+/// It takes no width: a zero-wide seam with the bar hung off it, so the text never moves. The
+/// reference's caret is a quad at `drawLayer 3` over the FontString's `2`, anchored at the advance
+/// of the text before the cursor (`0x779c86`, `0x77da80`).
 pub(crate) fn caret_bar<C: Bundle>(
     parent: &mut ChildSpawnerCommands,
     caret: C,
@@ -601,7 +491,7 @@ pub(crate) fn caret_bar<C: Bundle>(
         .spawn((
             caret,
             Visibility::Hidden,
-            // The seam: zero-wide, one line tall (the row centres it), and above its siblings.
+            // The seam: zero-wide, one line tall (the row centres it), above its siblings.
             ZIndex(1),
             Node {
                 width: Val::Px(0.0),
@@ -610,8 +500,7 @@ pub(crate) fn caret_bar<C: Bundle>(
             },
         ))
         .with_children(|c| {
-            // The drawn bar, out of flow so it costs the row nothing. `Visibility::Inherited` by
-            // default, so blinking the seam blinks the bar.
+            // Out of flow; inherits the seam's visibility, so blinking the seam blinks the bar.
             c.spawn((
                 Node {
                     position_type: PositionType::Absolute,
@@ -626,34 +515,23 @@ pub(crate) fn caret_bar<C: Bundle>(
         });
 }
 
-/// Which flex item of a glue edit box's text row an entity is.
-///
-/// The row is `[before][caret][selected][caret][after]` — five items, so the caret lands **at the
-/// cursor** and a selection shows its highlight with **no text measuring anywhere**: flex layout
-/// does the positioning, exactly as the single caret sibling used to. `Selected` carries the
-/// highlight background permanently; with nothing selected its text is empty, so it has zero width
-/// and paints nothing. Which of the two caret slots is visible follows the cursor, which the box
-/// law keeps at one end of the selection or the other.
-///
-/// **Both caret slots are zero-width seams** ([`caret_bar`]), present or not, so the three text
-/// slots concatenate to one unbroken line: which slot a run of text sits in never moves it.
+/// Which item of a glue edit box's row `[before][caret][selected][caret][after]` an entity is.
+/// Flex places the caret and selection with no text measuring; an empty `Selected` has zero
+/// width, and the caret slots are zero-width seams, so the text is one unbroken line.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum GlueFieldPart {
     /// `display[..sel_start]`
     Before,
-    /// The caret when it sits at the selection's start (and whenever nothing is selected).
+    /// The caret at the selection's start, and whenever nothing is selected.
     CaretAtStart,
-    /// `display[sel_start..sel_end]` — the highlighted run.
+    /// `display[sel_start..sel_end]`, the highlighted run.
     Selected,
-    /// The caret when it sits at the selection's end.
     CaretAtEnd,
     /// `display[sel_end..]`
     After,
 }
 
-/// Paint one glue edit box from its [`EditBoxState`] — the segments, the selection, and the caret.
-/// Shared so the login boxes, the create-name box and the delete dialog can never fork (decision
-/// 0704); everything it draws comes off the same state the shared law edits.
+/// Paint one glue edit box's segments, selection and caret from its [`EditBoxState`].
 pub(crate) fn paint_glue_field<'a>(
     field: &EditBoxState,
     focused: bool,
@@ -665,21 +543,15 @@ pub(crate) fn paint_glue_field<'a>(
         ),
     >,
 ) {
-    // **The highlight is deliberately NOT gated on `focused`** — `focused` drives the caret alone.
-    // That asymmetry looks like an oversight and is the reference's own: the caret's flush
-    // (`0x77da80`) explicitly hides when `E != [0xcf4dc8]`, while the selection flush (`0x77d950`)
-    // and its geometry worker (`0x77de70`) contain no read of the focus global anywhere, and the
-    // per-frame update calls the flush BEFORE its own focus test. The quads show iff
-    // `start < end` — focus never enters it. An unfocused box that still holds a
-    // selection paints it, and that is correct; the login screen simply never leaves one behind
-    // (`LoginForm::focus` collapses the box it leaves).
+    // `focused` gates the caret, not the highlight: the reference's caret flush hides when
+    // `E != [0xcf4dc8]` (`0x77da80`), but the selection flush (`0x77d950`, `0x77de70`) never reads
+    // focus, so an unfocused box paints the selection it holds.
     let display = field.display();
     let lo = field.sel_start.min(field.sel_end);
     let hi = field.sel_start.max(field.sel_end);
     let (d_lo, d_hi) = (field.text_to_display(lo), field.text_to_display(hi));
     let d_cursor = field.text_to_display(field.cursor);
-    // Only a focused box blinks; `caret_shown` is the box's own blink phase, ticked by
-    // `textinput::tick_caret`, so a glue caret and the chat caret share one clock.
+    // `caret_shown` is ticked by `textinput::tick_caret`, the chat caret's clock too.
     let caret_on = focused && field.caret_shown;
     for (part, text, mut vis) in parts {
         let (want_text, want_vis) = match part {
@@ -705,17 +577,9 @@ pub(crate) fn paint_glue_field<'a>(
     }
 }
 
-/// A glue edit box's CHROME — the shape every glue EditBox authors (`AccountLoginAccountEdit`/
-/// `PasswordEdit`, `CharacterCreateNameEdit`): the `UI-Tooltip-Background` fill tiled at 16 inside
-/// the (10,5,4,9) insets, the `Glue-Tooltip-Border` 16-edge over it (both caller-tinted — the
-/// login boxes take `DEFAULT_TOOLTIP_COLOR`, the create name box the Alliance row), and the text
-/// row at the ref's TextInsets (left 15, vertically centered) in `GlueEditBoxFont` (ARIALN 18,
-/// white).
-///
-/// `extras` rides the box node (the screen's click-to-focus action + `Button`); `marker` is cloned
-/// onto all five row items ([`GlueFieldPart`]) so the screen's refresh can query them as a set and
-/// hand them to [`paint_glue_field`]. Plain-fill fallback without art. Focus and typing are the
-/// owning screen's systems — this is chrome only, so the screens' boxes can never fork.
+/// A glue edit box's chrome, as every glue EditBox authors it: `UI-Tooltip-Background` tiled at
+/// 16 inside the (10,5,4,9) insets under the `Glue-Tooltip-Border` 16-edge, both tinted by the
+/// caller, and the text row at `text_insets`. `marker` goes on all five row items.
 pub(crate) fn glue_edit_box<E: Bundle, T: Bundle + Clone>(
     parent: &mut ChildSpawnerCommands,
     art: &GlueArt,
@@ -755,10 +619,8 @@ pub(crate) fn glue_edit_box<E: Bundle, T: Bundle + Clone>(
             ));
             backdrop_border(b, art.name_border.as_ref().unwrap(), NAME_EDGE, border);
         }
-        // The ref's `<TextInsets>` (left, right, top, bottom): the EditBox's FontString rect is
-        // the box inset by them, and the typed line is centred in THAT — not in the whole box. The
-        // login boxes inset the bottom by 5, which lifts the line, and the caret beside it, off the
-        // box's own centre; the create name box insets only the left, so it stays centred.
+        // `<TextInsets>` (left, right, top, bottom): the typed line is centred in the inset rect,
+        // not the whole box.
         let (ti_l, ti_r, ti_t, ti_b) = text_insets;
         b.spawn((Node {
             position_type: PositionType::Absolute,
@@ -789,8 +651,7 @@ pub(crate) fn glue_edit_box<E: Bundle, T: Bundle + Clone>(
                         },
                     ));
                     if part == GlueFieldPart::Selected {
-                        // The box law's own highlight tint (`SetHighlightColor`'s ctor default,
-                        // opaque medium grey) — the same colour the chat box selects with.
+                        // `SetHighlightColor`'s default, opaque medium grey, as the chat box.
                         e.insert(BackgroundColor(Color::srgb(
                             96.0 / 255.0,
                             96.0 / 255.0,
@@ -817,13 +678,8 @@ pub(crate) fn glue_edit_box<E: Bundle, T: Bundle + Clone>(
     });
 }
 
-/// A glue-panel button (Accept/Back/Enter World/…): the real `Glue-Panel-Button` art with its
-/// additive hover sheen and a caption that whitens on hover (the ref's `HighlightFont`);
-/// plain-fill fallback. Art states + caption color are driven by [`super::glue_button_visuals`].
-///
-/// Returns the button's entity, so a screen can reach back into what it just built — the login
-/// screen marks its realmlist button [`GlueDisabled`] when `$WOW_HOST` owns the session (1667).
-/// Ignoring the return is the norm; nothing is `#[must_use]`.
+/// A glue-panel button on `Glue-Panel-Button` art with its hover sheen, or a plain fill. Returns
+/// the button's entity.
 pub(crate) fn glue_button<A: Component>(
     parent: &mut ChildSpawnerCommands,
     art: &GlueArt,
@@ -877,15 +733,12 @@ pub(crate) fn glue_button<A: Component>(
         let (font_size, offset) = kind.caption();
         outlined_text(
             inner,
-            // The template's authored `<ButtonText>` offset off CENTER. The ref's anchor space is
-            // y-UP, so it negates into Bevy's `top`; on a flex item both shift it visually without
-            // disturbing the layout, which is exactly an anchor offset.
+            // The `<ButtonText>` offset off CENTER; the reference's y is up, so it negates into
+            // `top`.
             Node {
                 left: Val::Px(offset.x * s),
-                // +1 cancels `outlined_text`'s shared −1 trim for captions: that trim was fitted
-                // (director-measured) back when captions drew at dead centre, so once the authored
-                // `<ButtonText>` offset above is applied it corrects the same unit twice and the
-                // caption reads a notch high. Director's eye, 2026-07-19.
+                // +1 cancels `outlined_text`'s −1 trim for captions: the `<ButtonText>` offset
+                // already corrects that unit.
                 top: Val::Px((1.0 - offset.y) * s),
                 ..default()
             },
@@ -908,18 +761,6 @@ pub(crate) fn glue_button<A: Component>(
 mod tests {
     use super::*;
 
-    /// `|cAARRGGBB…|r` markup renders as colour, not as text — for **every** glue string, which
-    /// is the whole point of the decode living in the primitive.
-    ///
-    /// Two regressions are pinned here. The MapCoords one (a `## Title` of
-    /// `|cff00ff00MapCoords 0.32`, printed literally in the AddOns list), and B273: the same
-    /// screen's tooltip printed `|cff0055FFDeadly Boss Mod API|r` raw while the row an inch to
-    /// its left drew it blue, because only the row had opted into a decode. Nothing opts in now
-    /// — [`outlined_text`] is the one door and it always decodes — so the case worth testing is
-    /// the function, once, for both.
-    ///
-    /// The grammar is the byte-verified [`benilla_ui::markup`]; the escape's alpha byte is
-    /// discarded there, so only rgb reaches the span colour.
     #[test]
     fn colour_escapes_become_spans_not_text() {
         let base = GOLD;
@@ -963,8 +804,6 @@ mod tests {
         );
     }
 
-    /// A `|H…|h` link keeps its visible text and drops its payload — the glue has no clickable
-    /// links, so the alternative is an addon note printing `|Hitem:1234|h`.
     #[test]
     fn a_link_escape_keeps_its_text_and_hides_its_payload() {
         assert_eq!(
@@ -973,9 +812,6 @@ mod tests {
         );
     }
 
-    /// A line break follows the string's own `wrap`: a real break where the ref lets the string
-    /// wrap, a space where it authored one line. A 20-unit row title growing a second row is the
-    /// failure this avoids; a tooltip paragraph losing its author's break is the other.
     #[test]
     fn a_line_break_follows_the_strings_own_wrap_flag() {
         assert_eq!(

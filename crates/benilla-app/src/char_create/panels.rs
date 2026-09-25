@@ -1,9 +1,6 @@
-//! The create screen's right info stack (`CharacterCreateCharacterFaction/Race/Class`, 240 wide at
-//! TOPRIGHT (−20,−20), heights 160/260/210, 10 apart): each a `TextPanel-Border` backdrop whose bg
-//! tints with the faction, the header icon overhanging the corner, the scrollable title + body +
-//! gold ability lines — and the `GlueScrollFrameTemplate` scrollbar along the right edge (16² arrow
-//! buttons above/below a knob track, the CharacterCreate decorative track art behind it, everything
-//! hidden while the panel has nothing to scroll — the ref's `scrollBarHideable`).
+//! The create screen's right info stack, `CharacterCreateCharacterFaction/Race/Class`: each a
+//! faction-tinted `TextPanel-Border` backdrop with a header icon, scrollable text and a
+//! `GlueScrollFrameTemplate` scrollbar.
 
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
@@ -55,8 +52,7 @@ pub(super) fn right_stack(
                 }
                 panel.with_children(|panel| {
                     if framed {
-                        // The backdrop: tiled `UI-Tooltip-Background` inset (8,4,4,8) under the
-                        // untinted `TextPanel-Border` (the ref tints only the bg).
+                        // The reference tints only the bg, never the `TextPanel-Border`.
                         panel.spawn((
                             DynTint::BoxFill,
                             tiled_bg_node(
@@ -81,9 +77,8 @@ pub(super) fn right_stack(
                             Color::WHITE,
                         );
                     }
-                    // The header icon, overhanging the top-left corner (48² at (−3, −8)) — ABOVE
-                    // the scroll content: the ref's IconFrame `OnLoad` bumps its frame level +1,
-                    // so scrolled text slides UNDER the icon, never over it.
+                    // Above the scroll content: the reference's IconFrame `OnLoad` raises its
+                    // frame level by 1, so scrolled text slides under the icon.
                     panel.spawn((
                         DynIcon::Info(kind),
                         ImageNode {
@@ -93,7 +88,6 @@ pub(super) fn right_stack(
                         ZIndex(1),
                         abs(s, -3.0, -8.0, 48.0, 48.0),
                     ));
-                    // The scrollable content (the ref's GlueScrollFrame, 190 wide at (17,−10)).
                     let scroll = panel
                         .spawn((
                             InfoScroll,
@@ -146,8 +140,7 @@ pub(super) fn right_stack(
                                 font,
                                 s,
                             );
-                            // The racial abilities under the race paragraph, gold — the ref's
-                            // separate `CharacterCreateRaceAbilityText` (`GlueFontNormalSmall`).
+                            // The reference's separate gold `CharacterCreateRaceAbilityText`.
                             if kind == InfoKind::Race {
                                 outlined_text(
                                     inner,
@@ -177,10 +170,8 @@ pub(super) fn right_stack(
         });
 }
 
-/// One panel's scrollbar (`GlueScrollFrameTemplate` resolved to panel coordinates): the decorative
-/// track art behind, then the 16-wide slider column 6px right of the scroll frame — up button,
-/// knob track, down button. Every piece carries [`ScrollHides`] (the whole bar vanishes while the
-/// panel fits its text, like the ref's `scrollBarHideable` frames).
+/// One panel's scrollbar, `GlueScrollFrameTemplate` in panel coordinates; the whole bar hides
+/// while the panel fits its text, like the reference's `scrollBarHideable`.
 fn scrollbar(
     panel: &mut ChildSpawnerCommands,
     sc: &ScrollArt,
@@ -188,11 +179,11 @@ fn scrollbar(
     panel_h: f32,
     s: f32,
 ) {
-    // The frame is inset 10 top/bottom; the slider is inset 16 more for the buttons.
+    // The frame is inset 10 top and bottom; the slider 16 more for the buttons.
     let bar_h = panel_h - 20.0;
     let track_h = bar_h - 32.0;
-    // `UI-CharacterCreate-ScrollBar-Top` (32×128 at frame TOPRIGHT (−3,4)) and the ClassTrainer
-    // strip (30×123 at frame BOTTOMRIGHT (−3,−2), the authored sub-rect) — panel x 204.
+    // `UI-CharacterCreate-ScrollBar-Top` (32×128 at frame TOPRIGHT (-3,4)) and the ClassTrainer
+    // strip's authored sub-rect (30×123 at BOTTOMRIGHT (-3,-2)), both at panel x 204.
     if let Some((top, _)) = &sc.track_top {
         panel.spawn((
             ScrollHides { scroll },
@@ -228,8 +219,8 @@ fn scrollbar(
                         step: track_h * s / 2.0,
                     },
                     Button,
-                    // At the end of its travel this arrow is disabled — `scroll_visuals` writes it
-                    // and `crate::glue::glue_hilights` reads it, so the sheen dies with the arrow.
+                    // Disabled at the end of travel: `scroll_visuals` writes it and
+                    // `glue_hilights` reads it, so the sheen goes with the arrow.
                     crate::glue::widgets::GlueDisabled(false),
                     ImageNode {
                         image: art.up.clone(),

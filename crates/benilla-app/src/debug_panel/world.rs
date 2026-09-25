@@ -1,20 +1,6 @@
-//! The panel's **World** section — the `.gps` of the client: who you are, which map/zone you're
-//! in (and whether the zone system calls it indoors), the exact WoW-space position + facing, and
-//! the terrain stream's tile residency. Pure readout except two affordances:
-//!
-//! - **copy `.go xyz`** — a click puts the vmangos teleport line for the current spot on the
-//!   clipboard (`.go xyz x y z [mapid]`, verified against vmangos `HandleGoXYZCommand`), so "it
-//!   looks wrong *here*" becomes a pasteable coordinate for the headless probes
-//!   (`WOW_PROBE_CHAT`, live-shot runs) and the FPS-journal loop closes without hand-copying
-//!   numbers.
-//! - **land here** — the button half of [`crate::player::land`] (whose chord is the dev chord + `G`),
-//!   shown only while free-flying.
-//!
-//! **While free-flying, the spot is the CAMERA's** — the section gains a `camera` line and the
-//! copy button switches to it. The subject here is "where you are", and detached that is where you
-//! flew to; the frozen avatar is not it. Copying the body's coordinates was the old behaviour, and
-//! it was wrong at exactly the moment the button is worth pressing: you fly out to a spot
-//! precisely *because* you want its number.
+//! The panel's World section: who you are, map and zone, WoW-space position and facing, and tile
+//! residency, plus a copy of the vmangos `.go xyz` line and, while free-flying, a land-here
+//! button. While free-flying the spot is the camera's, not the frozen avatar's.
 
 use benilla_assets::coords::bevy_to_wow;
 use benilla_formats::world_to_tile;
@@ -25,10 +11,7 @@ use bevy_egui::egui;
 use super::OVERLAY_TEXT_DIM;
 use crate::player::land::LandHere;
 
-/// The World section's read side, bundled (the 16-param ceiling of `debug_panel_ui`): where the
-/// player is — map, zone leaf, indoor claim, tile residency — and who they are (guid + the
-/// ask-once name cache the unit frames use). Plus the free-fly pair: the camera's own transform
-/// (the detached spot) and the land-here ask the button writes.
+/// The World section's inputs, bundled to stay under `debug_panel_ui`'s 16-param ceiling.
 #[derive(SystemParam)]
 pub(super) struct WorldReadout<'w, 's> {
     player: Option<Res<'w, crate::player::Player>>,
@@ -37,8 +20,8 @@ pub(super) struct WorldReadout<'w, 's> {
     area: Res<'w, benilla_world::terrain_stream::CurrentArea>,
     areas: Option<Res<'w, crate::area::AreaTableRes>>,
     interior: Res<'w, benilla_world::wmo_portal::CurrentAreaInterior>,
-    /// The camera's own WMO room claim + the exterior-window worklist it produces — the two inputs
-    /// [`benilla_world::exterior_cull`] runs on. See the readout below for why they are worth a line.
+    /// The camera's WMO room claim and the exterior windows it produces, the two inputs of
+    /// [`benilla_world::exterior_cull`].
     room: Res<'w, benilla_world::wmo_portal::CameraInteriorClaim>,
     windows: Res<'w, benilla_world::wmo_portal::ExteriorWindows>,
     skybox: Res<'w, benilla_world::skybox::CameraSkybox>,
@@ -51,11 +34,8 @@ pub(super) struct WorldReadout<'w, 's> {
     land: MessageWriter<'w, LandHere>,
 }
 
-/// Render the section: readout lines top-down (who → map → zone → position → tiles), the copy
-/// affordance last.
+/// Render the section: who, map, zone, position and tiles, the buttons last.
 pub(super) fn world_section(ui: &mut egui::Ui, world: &mut WorldReadout) {
-    // Who: the character name through the ask-once cache (fills a frame later, like the unit
-    // frames), or a plain offline line.
     match world.self_guid.0 {
         Some(guid) => {
             let name = world
@@ -71,7 +51,7 @@ pub(super) fn world_section(ui: &mut egui::Ui, world: &mut WorldReadout) {
         }
     }
 
-    // Map: id + Map.dbc name (the directory is the asset path, the name is the human one).
+    // Map: id and `Map.dbc` name.
     let map_id = world.map.as_ref().map(|m| m.0);
     if let Some(id) = map_id {
         let name = world
@@ -82,9 +62,8 @@ pub(super) fn world_section(ui: &mut egui::Ui, world: &mut WorldReadout) {
         ui.label(format!("map {id} · {name}"));
     }
 
-    // Zone: the leaf area and its top zone (one line when they coincide), plus the zone-text
-    // indoor claim — the same authorities the splash/minimap text reads, so this readout and
-    // the player-facing text can never disagree.
+    // Zone: top zone and leaf area, and the indoor claim, from the same sources the zone text
+    // reads, so the two cannot disagree.
     if let Some(leaf) = world.area.0 {
         let (leaf_name, zone_name) = match world.areas.as_ref() {
             Some(a) => (a.0.name(leaf), a.0.top_zone(leaf).and_then(|z| a.0.name(z))),
@@ -98,13 +77,9 @@ pub(super) fn world_section(ui: &mut egui::Ui, world: &mut WorldReadout) {
         if world.interior.0.is_some() {
             line.push_str("  ·  indoors");
         }
-        // The WMO skybox engagement, right beside the interior claim it derives from: both come off
-        // the camera's down-ray seed, so when the backdrop flips between the building's painted sky
-        // and the Light.dbc gradient, this is the line that says which — and whether the claim moved
-        // under it. From the chair the two are only distinguishable by colour. The weight is the
-        // 4-second crossfade (== the interior-fog blend, one number): `w 0.00` beside a name means
-        // the flood published a skybox the crossfade hasn't engaged — faithful standing outside
-        // the gate, not a resolve bug.
+        // The WMO skybox or the Light.dbc gradient, from the same down-ray as the interior claim.
+        // The weight is the 4-second crossfade: `w 0.00` beside a name is a published skybox not
+        // yet engaged, which is correct standing outside the gate.
         match world.skybox.0.as_deref() {
             Some(path) => {
                 let leaf = path.rsplit('\\').next().unwrap_or(path);
@@ -119,20 +94,12 @@ pub(super) fn world_section(ui: &mut egui::Ui, world: &mut WorldReadout) {
         ui.label(egui::RichText::new(format!("leaf area {leaf}")).color(OVERLAY_TEXT_DIM));
     }
 
-    // The exterior-scene gate, in the two terms that decide it: which WMO ROOM the
-    // camera's own down-ray claims, and how many portal windows that room's flood left onto the
-    // outdoor world. Terrain draws iff a window admits it, so "why can I still see the ground from
-    // in here?" has exactly three answers and this line says which:
-    //   * `room —` — no claim at all. We are on the OUTSIDE leg and draw the whole exterior, which
-    //     is correct *if* the reference is too (a `0x8`-flagged group claims nothing — Stratholme's
-    //     entrance hall is EXTERIOR, and the reference draws the world there as well).
-    //   * `windows N` with N large, or a window covering most of the screen — we are indoors and the
-    //     doorway rects are too generous.
-    //   * `windows 0` — sealed, nothing exterior may draw; terrain visible anyway means something
-    //     is reaching the screen that is not tagged `ExteriorScene`. Every exterior bucket is
-    //     tagged now — WMO placements since 0784, open-world liquid since 1652 — so at `windows 0`
-    //     the honest reading of anything still drawn is a bug, not a known gap.
-    // Two numbers is the whole diagnosis, and neither was readable from the chair before.
+    // The exterior-scene gate: the WMO room the camera's down-ray claims and the portal windows
+    // its flood leaves onto the outdoors; terrain draws only through a window.
+    //   * `room —`: no claim, the whole exterior draws (a `0x8`-flagged group claims nothing, and
+    //     the reference draws the world there too).
+    //   * many windows, or one covering most of the screen: the doorway rects are too generous.
+    //   * `windows 0`: sealed; anything exterior still drawn is not tagged `ExteriorScene`, a bug.
     let room_line = match world.room.0 {
         Some(claim) => format!("room g{:02}", claim.room.group),
         None => "room —".to_string(),
@@ -155,8 +122,7 @@ pub(super) fn world_section(ui: &mut egui::Ui, world: &mut WorldReadout) {
     };
     ui.label(egui::RichText::new(format!("{room_line}  ·  {window_line}")).color(OVERLAY_TEXT_DIM));
 
-    // Position + facing, raw WoW coords (what the wire and every probe speak); the tile the
-    // feet are on and how much of the stream window is spawned.
+    // Position and facing in raw WoW coords; the tile underfoot and the stream's residency.
     let Some(player) = world.player.as_ref().filter(|p| p.active) else {
         return;
     };
@@ -176,9 +142,8 @@ pub(super) fn world_section(ui: &mut egui::Ui, world: &mut WorldReadout) {
             .color(OVERLAY_TEXT_DIM),
     );
 
-    // Free-flying: the camera is the spot (the lines above are the frozen body, kept — knowing
-    // where you left it is exactly what you fly back to). This line, and the copy/land pair below,
-    // all speak the camera's coordinates while detached.
+    // Free-flying: the lines above stay the frozen body; this line and the buttons below use
+    // the camera's coordinates.
     let detached_at = detached
         .then(|| {
             world
@@ -197,8 +162,7 @@ pub(super) fn world_section(ui: &mut egui::Ui, world: &mut WorldReadout) {
         );
     }
 
-    // The teleport line: `.go xyz x y z [mapid]` (vmangos argument order). Copied, not shown —
-    // the readout above already displays every number.
+    // `.go xyz x y z [mapid]`, vmangos's argument order (`TeleportCommands.cpp:854`).
     let [gx, gy, gz] = detached_at.unwrap_or([x, y, z]);
     let copy_label = if detached_at.is_some() {
         "copy .go xyz (camera)"
@@ -212,8 +176,8 @@ pub(super) fn world_section(ui: &mut egui::Ui, world: &mut WorldReadout) {
         };
         ui.ctx().copy_text(line);
     }
-    // Land here — the button half of the dev chord's `G`. Only while detached, because
-    // attached the camera sits behind the avatar and "land at the camera" means a step backwards.
+    // The button form of the dev chord's `G`, only while detached: attached, the camera sits
+    // behind the avatar.
     if detached_at.is_some() && ui.button("land here").clicked() {
         world.land.write(LandHere);
     }

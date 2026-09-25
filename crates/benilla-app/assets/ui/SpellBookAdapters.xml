@@ -1,13 +1,9 @@
 <Ui>
     <!--
-        Deviation: over the unedited stock SpellBookFrame.xml, the pet
-        page's autocast widgets take the pet bar button's proportions.
-        The `$parentAutoCast` shine (UI-AutoCastButton.mdx) is squared on the button, 37x37 at
-        CENTER (0,0) and scale 1.48, so its rim runs on the viewport edge at the pet button's
-        1.024x and shares the brackets' centre; the reference's is 36x36 at CENTER (1,1), 1.22.
-        The corner brackets are 71.53 rather than 60: the art fills 33/64 of
-        UI-AutoCastableOverlay.blp, and 71.53 = 37 x 58/30 puts them on the button's corners at
-        the pet button's 0.997x. Deleting this file restores the reference's look.
+        Deviation: the pet page's autocast widgets take the pet bar button's proportions, so the
+        shine and the corner brackets sit on the button's edge and share its centre. Stock
+        SpellBookFrame.xml has the shine 36x36 at CENTER (1,1), scale 1.22, the brackets 60; 71.53
+        is 37 x 58/30 (the art fills 33/64 of UI-AutoCastableOverlay.blp).
     -->
     <Script><![CDATA[
         for i = 1, 12 do

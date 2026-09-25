@@ -1,27 +1,18 @@
-//! The engine-drawn **fishing line**: rod tip → bobber while a unit channels Fishing.
+//! The engine-drawn fishing line, rod tip to bobber, while a unit channels Fishing.
 //!
-//! The reference draws this as a per-UNIT effect, not a GO one — one line object per unit
-//! (`[unit+0xb4c]`, ctor `0x61f490`), created when the unit's `UNIT_FIELD_CHANNEL_OBJECT`
-//! resolves to a live **FISHINGNODE** GameObject, `UNIT_CHANNEL_SPELL` ≠ 0, and the mainhand is a
-//! fishing pole whose model is loaded; torn down when any of that ceases (the server clears the
-//! channel fields at finish/interrupt). **No local-player gate** — every visible fisher shows a
-//! line. Benilla draws it immediate-mode per frame from exactly those conditions, so the
-//! reference's create/watcher/teardown lifecycle falls out as the condition holding or not.
+//! The reference keeps one line per unit (`[unit+0xb4c]`, ctor `0x61f490`) while its
+//! `UNIT_FIELD_CHANNEL_OBJECT` is a live FISHINGNODE GameObject, `UNIT_CHANNEL_SPELL` is nonzero
+//! and the mainhand is a loaded fishing pole, for every visible fisher, not only the player. Here
+//! it is drawn each frame those conditions hold.
 //!
-//! The geometry (`0x61f780`): **65 vertices**, straight
-//! lerp near → far, then a fixed half-sine sag — `z −= 0.5 × sin(π·t)`, 0.5 world-units at the
-//! midpoint, not length- or physics-scaled. Near = the pole M2's `$CCH` event marker (the bobber
-//! authors one too and the reference NEVER reads it — its far end is the bobber's position with
-//! `z += scale × bboxHeight × 0.5`). One flat color for the whole strip = the pole's
-//! light-collector accumulated ambient, alpha opaque, GL_LIGHTING forced off, drawn as a plain
-//! line strip in scene state.
+//! The geometry (`0x61f780`): 65 vertices lerped near to far with a fixed sag of
+//! `0.5 * sin(pi * t)` world units, not scaled by length. Near is the pole's `$CCH` marker (the
+//! bobber's own `$CCH` is never read); far is the bobber's position plus half its scaled bbox
+//! height. One flat color, the pole's light-collector ambient, opaque and unlit.
 //!
-//! Named deviations (same class as the bowstring's): the anchor rides the static
-//! prop frame (the pole's bone 1 is not posed — item props rest at bind pose here); the color
-//! samples the scene ambient ([`benilla_world::lighting::WowLighting`]) rather than a per-model light
-//! collector; gizmo lines are unfogged. The reference's sheath side-trigger (`0x60d2f0` calls
-//! `SetSheatheState(1)` when the watcher finds the pole on the back) and the FishingCast→
-//! FishingLoop anim handoff (`0x5fc3f0` case 0x85) are the channel-anim family's, not drawn here.
+//! Here the anchor rides the unposed prop frame, the color is the scene ambient rather than the
+//! pole's light collector, and the line is unfogged. The sheathe trigger (`0x60d2f0`) and the
+//! FishingCast to FishingLoop handoff (`0x5fc3f0` case 0x85) belong to the channel animations.
 
 use bevy::prelude::*;
 
@@ -30,24 +21,22 @@ use benilla_protocol::EntityKind;
 use crate::entities::OverheadFallback;
 use crate::net::{GuidIndex, NetEntity, ObjectStore};
 
-/// Marks a spawned **mainhand prop** whose model authors the `$CCH` line anchor — the fishing
-/// pole (exactly one weapon model in the 5875 chain authors it: the `scan_events` sweep, so
-/// presence is the reference's `{class 2, subclass 20}` ItemCache check data-equivalently).
-/// Inserted by the held-item attach; despawned with the prop, which is the clear.
+/// Marks a mainhand prop whose model authors `$CCH`, which only the fishing pole does, standing
+/// in for the reference's `{class 2, subclass 20}` item check. Despawned with the prop.
 #[derive(Component)]
 pub(crate) struct FishingPoleTip {
-    /// The unit holding the pole — its channel fields decide whether a line draws.
+    /// The unit holding the pole, whose channel fields decide whether a line draws.
     pub(crate) owner: Entity,
     /// `$CCH` in the prop's mesh frame (Bevy space).
     pub(crate) tip: Vec3,
 }
 
-/// 64 segments / 65 vertices — the reference's `t = i/64` (const `0x80a92c` = 0.015625).
+/// 64 segments, 65 vertices: `t = i/64` (const `0x80a92c` = 0.015625).
 const SEGMENTS: usize = 64;
-/// The fixed half-sine sag amplitude (const `0x80c9a8` = −0.5, applied to `sin(π·t)`).
+/// The half-sine sag amplitude (const `0x80c9a8` = -0.5, applied to `sin(pi * t)`).
 const SAG: f32 = 0.5;
 
-/// Draw every visible fisher's line (per frame, post-propagation so the prop frame is current).
+/// Draws every visible fisher's line from this frame's prop frame.
 fn draw_fishing_lines(
     poles: Query<(&FishingPoleTip, &GlobalTransform, &InheritedVisibility)>,
     owners: Query<&ObjectStore>,
@@ -65,8 +54,7 @@ fn draw_fishing_lines(
         if !vis.get() {
             continue;
         }
-        // The reference's create conditions, checked live: a channel spell, aimed at a streamed
-        // FISHINGNODE. (`0x612650`; the GO-type read is the strategy's own `descr+0x3c`.)
+        // The create conditions (`0x612650`): a channel spell aimed at a streamed FISHINGNODE.
         let Ok(store) = owners.get(pole.owner) else {
             continue;
         };
@@ -89,11 +77,9 @@ fn draw_fishing_lines(
             continue;
         }
         let near = prop.transform_point(pole.tip);
-        // Far = bobber base + half its scaled bbox height (`0x5f9f50`: `z += scale × [go+0xbc] ×
-        // 0.5`) — the float's waterline center, whatever the model's pivot does.
+        // Bobber base plus half its scaled bbox height (`0x5f9f50`).
         let far = go_tf.translation() + Vec3::Y * (net.scale * height.map_or(0.0, |h| h.0) * 0.5);
-        // The flat strip color: accumulated ambient clamped [0,1], opaque (the scene-ambient
-        // stand-in for the pole's collector — module doc).
+        // The scene ambient clamped to [0, 1], opaque.
         let color = lighting.as_deref().map_or(Color::srgb(0.5, 0.5, 0.5), |l| {
             Color::srgb(
                 l.ambient[0].clamp(0.0, 1.0),
@@ -111,8 +97,7 @@ fn draw_fishing_lines(
     }
 }
 
-/// Registers the line drawer beside the bowstring's — after propagation, so both weapon-prop
-/// spans read this frame's frames.
+/// Registers the line drawer after transform propagation.
 pub(crate) struct FishingLinePlugin;
 
 impl Plugin for FishingLinePlugin {
@@ -128,9 +113,8 @@ impl Plugin for FishingLinePlugin {
 mod tests {
     use super::*;
 
-    /// The polyline the reference builds (`0x61f780`): 65 vertices, straight lerp, and the fixed
-    /// half-sine sag — zero at both ends, exactly −0.5 in world Z (Bevy Y) at the midpoint,
-    /// independent of the span's length.
+    /// The reference's polyline (`0x61f780`): zero sag at both ends, -0.5 in world Z (Bevy Y) at
+    /// the midpoint.
     #[test]
     fn the_sag_is_a_fixed_half_sine() {
         let near = Vec3::new(0.0, 5.0, 0.0);
@@ -146,7 +130,7 @@ mod tests {
         assert!((pts[64] - far).length() < 1e-5);
         let mid = near.lerp(far, 0.5);
         assert!((pts[32].y - (mid.y - SAG)).abs() < 1e-4);
-        // The sag never scales with length: a 200-yard span dips the same 0.5.
+        // A 200 yd span dips the same 0.5.
         let long = near.lerp(Vec3::new(200.0, 5.0, 0.0), 0.5);
         let dip = SAG * (std::f32::consts::PI * 0.5).sin();
         assert!((dip - SAG).abs() < 1e-6);

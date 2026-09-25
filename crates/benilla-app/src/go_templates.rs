@@ -1,11 +1,6 @@
-//! The ask-once GameObject template cache — benilla's `GAMEOBJECT_QUERY` store.
-//!
-//! A GameObject's **lockId** (a type-specific slot of its template `data[]`) decides its right-click
-//! action: a locked object (chest / mining vein / herb node / locked door) casts an `OPEN_LOCK` spell
-//! at it, an unlocked one sends `CMSG_GAMEOBJ_USE`. The lockId isn't in the create packet, so it's
-//! fetched ask-once by entry when a GameObject streams in ([`GameObjectTemplates::request`], warmed
-//! from [`crate::net::apply`]'s `ObjectCreate`, the same discipline as the name cache), the answer
-//! resolved in [`GameObjectTemplates::insert`], and read by the interact routing ([`crate::target`]).
+//! The ask-once GameObject template cache, filled by `CMSG_GAMEOBJECT_QUERY` when an object
+//! streams in. The template's lockId decides a right-click: a locked object is opened by an
+//! `OPEN_LOCK` cast, an unlocked one by `CMSG_GAMEOBJ_USE`.
 
 use benilla_formats::{LockCatalog, LockTypeCatalog};
 use benilla_protocol::guid;
@@ -14,84 +9,51 @@ use bevy::prelude::*;
 use crate::net::{ClientCommand, NetCommands};
 use crate::query_cache::QueryCache;
 
-/// `Lock.dbc` as a resource — `lockId → requirement slots`, read by the interact
-/// routing to decide use-vs-cast and, for a lockable object, which `LockType` the opener spell must
-/// match. Loaded once at startup ([`crate::entities`]); absent when the client data is.
+/// `Lock.dbc`: decides use against cast, and which `LockType` the opener spell must match.
 #[derive(Resource)]
 pub(crate) struct Locks(pub(crate) LockCatalog);
 
-/// `LockType.dbc` as a resource — `LockType.Id → cursor stem`, read by the world
-/// cursor's GameObject branch ([`crate::target`]) to name a lockable object's cursor by data
-/// (`PickLock`/`GatherHerbs`/`Mine`), the client's own lock → LockType → CursorName chain. Loaded
-/// once at startup; absent when the client data is, in which case a lock-bearing GO shows the
-/// generic Interact gear like any other base type.
+/// `LockType.dbc`: names a lockable object's cursor (`PickLock`, `GatherHerbs`, `Mine`) through
+/// the client's lock, LockType, CursorName chain.
 #[derive(Resource)]
 pub(crate) struct LockTypes(pub(crate) LockTypeCatalog);
 
-/// A cached GameObject template — what the interact routing and the hover tooltip need. The
-/// `type_id` is consumed transiently to pick the lock's `data[]` slot (the entity already
-/// carries it).
+/// A cached GameObject template, as the interact routing and the hover tooltip need it.
 #[derive(Clone)]
 pub(crate) struct GoTemplate {
-    /// The `Lock.dbc` id from the type's data slot — `0` means no lock (opens by `CMSG_GAMEOBJ_USE`).
+    /// The `Lock.dbc` id; `0` is no lock.
     pub(crate) lock_id: u32,
-    /// The display name — the hover tooltip's gold first line (decision 0276's GO law).
+    /// The hover tooltip's first line.
     pub(crate) name: String,
-    /// The vanilla **highlight** column, for the two types whose mouseover-eligibility slot reads
-    /// it instead of running a predicate: GENERIC(5)'s `data[1]` (`0x5f4830`,
-    /// decision 0762 — nonzero on 1387 of the 1870 shipped type-5 templates, which is why a road
-    /// signpost hovers and the scenery beside it never does) and CAPTURE_POINT(29)'s `data[19]`
-    /// (`0x5f6d80` — byte-for-byte the same shape, a different slot). `false` for every other type,
-    /// which never consults it.
+    /// Mouseover eligibility for the two types that read a column: GENERIC(5) `data[1]`
+    /// (`0x5f4830`) and CAPTURE_POINT(29) `data[19]` (`0x5f6d80`).
     pub(crate) highlight_column: bool,
-    /// GENERIC(5) only: the template's **`data[0]`**, the sole input of that type's `[vtbl+0x5c]`
-    /// (`0x5f8630`) — the fork in the mouseover publisher that decides whether this object's
-    /// tooltip FOLLOWS THE CURSOR (`0x492a01` → `0x52ffe0(owner, 6, 0, 0)`, the SetOwner core at
-    /// anchor state 6) or takes the default corner seat like a creature's (`0x492a42`, which
-    /// writes no owner and fires `OnTooltipSetDefaultAnchor` instead).
-    ///
-    /// The slot is named by `0x621b00(type, semantic 0x13)`, a key that resolves for exactly one
-    /// of the 31 GO types — so no other type can take the cursor arm, and 0766's INTERIM "GENERIC
-    /// vs not" proxy is replaced by the real key. **Distinct from
-    /// [`Self::highlight_column`]**, which is `data[1]` via semantic `0x12` and gates *eligibility*
-    /// rather than *placement*: an object can be hoverable and still be corner-seated.
-    ///
-    /// `false` for every other type. (The *name* is inferred from vmangos's field order; the index
-    /// and the fork are byte-verified, and the data is cross-checked against the reference client's
-    /// own `gameobjectcache.wdb` — 1890 entries, zero disagreements with the server's.)
+    /// GENERIC(5) `data[0]` (`0x5f8630`, semantic `0x13`, which no other type has): the tooltip
+    /// follows the cursor (`0x492a01`, SetOwner `0x52ffe0` at anchor state 6) or takes the default
+    /// corner (`0x492a42`).
+    /// Placement, not eligibility: a hoverable object can still be corner-seated.
     pub(crate) floating_tooltip: bool,
-    /// MEETINGSTONE (type 23) only: the three template slots the stone's own strategy reads —
-    /// `data[0]`/`data[1]` = minLevel/maxLevel and `data[2]` = areaID.
-    /// `None` for every other type.
+    /// MEETINGSTONE (type 23) only.
     pub(crate) meeting_stone: Option<MeetingStoneTemplate>,
-    /// MO_TRANSPORT (type 15) path parameters — `Some` only for boats/zeppelins:
-    /// the template's `data0..2` = (taxiPathId, moveSpeed, accelRate), the inputs the transport
-    /// timetable is built from.
+    /// MO_TRANSPORT (type 15) only: the transport timetable's inputs.
     pub(crate) mo_transport: Option<MoTransport>,
-    /// TEXT (type 9) only: the book/plaque's page chain head + frame material.
-    /// `Some` with a nonzero `page_id` is what makes a right-click *read* it; a type-9 template
-    /// with no page (vanilla ships a handful) opens nothing at all, exactly like the reference.
+    /// TEXT (type 9) only; a right-click reads it only when `page_id` is nonzero.
     pub(crate) text_page: Option<TextPage>,
-    /// The `PageTextMaterial.dbc` id `GetQuestBackgroundMaterial` answers for a quest sourced from
-    /// this object — by `GAMEOBJECT_TYPE_ID`: QUESTGIVER (2) and GOOBER (9) read `data[2]`, CHEST
-    /// (10) reads `data[9]`, every other type answers none (`0x5f5950`).
+    /// The `PageTextMaterial.dbc` id `GetQuestBackgroundMaterial` answers for a quest from this
+    /// object (`0x5f5950`): QUESTGIVER (2) and TEXT (9) read `data[2]`, GOOBER (10) `data[9]`.
     pub(crate) quest_material: Option<u32>,
 }
 
-/// A MEETINGSTONE (type 23) template's three slots, all of them read by the stone's own strategy
-/// through the per-type attribute table `0x621b00`: keys `0x33`/`0x34`/`0x35` → indices 0/1/2
-/// (vmangos `GameObjectInfo::meetingstone` = `minLevel, maxLevel, areaID`).
-///
-/// The **areaID** is the input of the type's own `highlightable` slot `0x5f6990`
-/// ([`crate::target::cursor_mode::meeting_stone_queued`]); the **level pair** is the input of the
-/// use-slot validator's level refusal (`ERR_MEETING_STONE_INVALID_LEVEL`).
+/// A MEETINGSTONE template's slots, read through `0x621b00` keys `0x33` to `0x35` (vmangos
+/// `GameObjectInfo::meetingstone`). The area feeds the type's highlightable slot `0x5f6990`, the
+/// levels the use refusal `ERR_MEETING_STONE_INVALID_LEVEL`.
 #[derive(Clone, Copy)]
 pub(crate) struct MeetingStoneTemplate {
-    /// `data[0]` — the lowest level the stone accepts.
+    /// `data[0]`.
     pub(crate) min_level: u32,
-    /// `data[1]` — the highest level the stone accepts.
+    /// `data[1]`.
     pub(crate) max_level: u32,
-    /// `data[2]` — the `AreaTable` id the stone queues for.
+    /// `data[2]`, the `AreaTable` id the stone queues for.
     pub(crate) area: u32,
 }
 
@@ -103,19 +65,17 @@ pub(crate) struct MoTransport {
     pub(crate) accel_rate: f32,
 }
 
-/// A TEXT (type 9) template's readable head — `data[0]`/`data[2]` (vmangos `GameObjectInfo::text`
-/// = `pageID, language, pageMaterial, allowMounted`). The client reads both through
-/// the same per-type attribute→slot table (`0x621b00`, attribute `0x11` = pageMaterial), so the
-/// two layouts are the one layout.
+/// A TEXT template's readable head (vmangos `GameObjectInfo::text`; the client's `0x621b00` key
+/// `0x11` is the same material slot).
 #[derive(Clone, Copy)]
 pub(crate) struct TextPage {
-    /// `data[0]` — the first page's `PageText` id; `0` = nothing to read.
+    /// `data[0]`, the first `PageText` id; `0` is nothing to read.
     pub(crate) page_id: u32,
-    /// `data[2]` — the `PageTextMaterial.dbc` id the reader's frame paints with.
+    /// `data[2]`, a `PageTextMaterial.dbc` id.
     pub(crate) material: u32,
 }
 
-/// `entry → template`, ask-once per connection (mirrors [`crate::names::NameCache`]'s discipline).
+/// Entry to template, asked once per connection.
 #[derive(Resource, Default)]
 pub(crate) struct GameObjectTemplates {
     templates: QueryCache<u32, GoTemplate>,
@@ -128,9 +88,7 @@ impl crate::query_cache::AskOnce for GameObjectTemplates {
 }
 
 impl GameObjectTemplates {
-    /// Ask the server for a GameObject's template if not already known or in flight (once per entry).
-    /// `guid` names the asking object; the server answers by entry, so all spawns of a template share
-    /// the one query.
+    /// Asks for a template once per entry; every spawn of a template shares the one query.
     pub(crate) fn request(&self, guid: u64, commands: &NetCommands) {
         let Some(entry) = guid::entry(guid) else {
             return;
@@ -143,42 +101,31 @@ impl GameObjectTemplates {
         });
     }
 
-    /// Record a `SMSG_GAMEOBJECT_QUERY_RESPONSE`, resolving the lockId from the type-specific
-    /// `data[]` slot. A miss (server didn't know the entry) arrives zeroed → `lock_id = 0` (no lock).
+    /// Records a `SMSG_GAMEOBJECT_QUERY_RESPONSE`; a miss arrives zeroed, so no lock.
     pub(crate) fn insert(&mut self, entry: u32, type_id: u32, name: String, data: &[i32; 24]) {
         let lock_id = go_lock_slot(type_id)
             .and_then(|slot| data.get(slot))
             .map(|&v| v.max(0) as u32)
             .unwrap_or(0);
-        // The highlight column, at the slot its type reads it from: GENERIC(5)
-        // `data[1]`, CAPTURE_POINT(29) `data[19]`. Both slots are resolved by the same
-        // `0x621b00(type, semantic 0x12)` lookup in the reference; the two shipped answers are
-        // inlined here for the same reason [`go_lock_slot`] inlines the lock's.
+        // The reference resolves both slots by `0x621b00(type, semantic 0x12)`.
         let highlight_column = match type_id {
             5 => data[1] != 0,
             29 => data[19] != 0,
             _ => false,
         };
-        // GENERIC(5): data[0] = the tooltip-placement fork's input. Same shape as
-        // the highlight column above and deliberately beside it — they are adjacent slots that
-        // answer different questions, and reading them as one is the mistake 0766 made.
+        // Adjacent to the highlight column but a different question: placement.
         let floating_tooltip = type_id == 5 && data[0] != 0;
-        // MEETINGSTONE (23): data[0..2] = minLevel, maxLevel, areaID (vmangos
-        // `gameobject_template`) — the area feeds that type's own highlightable slot, the level
-        // pair the use-slot validator's level refusal.
         let meeting_stone = (type_id == 23).then(|| MeetingStoneTemplate {
             min_level: data[0].max(0) as u32,
             max_level: data[1].max(0) as u32,
             area: data[2].max(0) as u32,
         });
-        // MO_TRANSPORT (15): data0..2 = taxiPathId / moveSpeed / accelRate (vmangos
-        // `GameObjectInfo::moTransport`).
+        // vmangos `GameObjectInfo::moTransport`.
         let mo_transport = (type_id == 15).then(|| MoTransport {
             taxi_path_id: data[0].max(0) as u32,
             move_speed: data[1].max(0) as f32,
             accel_rate: data[2].max(0) as f32,
         });
-        // TEXT (9): data[0] = pageID, data[2] = pageMaterial.
         let text_page = (type_id == 9).then(|| TextPage {
             page_id: data[0].max(0) as u32,
             material: data[2].max(0) as u32,
@@ -203,23 +150,21 @@ impl GameObjectTemplates {
         );
     }
 
-    /// The cached template for a GameObject guid, or `None` if its query hasn't answered yet.
+    /// The cached template for a GameObject guid.
     pub(crate) fn get(&self, guid: u64) -> Option<&GoTemplate> {
         guid::entry(guid).and_then(|e| self.templates.get(e))
     }
 }
 
-/// Which `data[]` slot holds a GameObject type's lockId (mangos `GameObjectInfo::GetLockId`), or
-/// `None` for a type that never carries one. DOOR/BUTTON keep it at slot 1 (slot 0 is `startOpen`),
-/// FISHINGHOLE at slot 4, and the rest that have a lock at slot 0.
+/// The `data[]` slot of a type's lockId (vmangos `GameObjectInfo::GetLockId`).
 fn go_lock_slot(type_id: u32) -> Option<usize> {
     match type_id {
         // DOOR(0), BUTTON(1): data[0] = startOpen, data[1] = lockId.
         0 | 1 => Some(1),
-        // QUESTGIVER(2), CHEST(3), TRAP(6), GOOBER(10), AREADAMAGE(12), CAMERA(13), FLAGSTAND(24),
-        // FLAGDROP(26): data[0] = lockId. (Gathering nodes are CHEST(3).)
+        // QUESTGIVER(2), CHEST(3, also gathering nodes), TRAP(6), GOOBER(10), AREADAMAGE(12),
+        // CAMERA(13), FLAGSTAND(24), FLAGDROP(26).
         2 | 3 | 6 | 10 | 12 | 13 | 24 | 26 => Some(0),
-        // FISHINGHOLE(25): data[4] = lockId.
+        // FISHINGHOLE(25).
         25 => Some(4),
         _ => None,
     }
@@ -235,12 +180,11 @@ mod tests {
         assert_eq!(go_lock_slot(0), Some(1)); // DOOR (slot 0 is startOpen)
         assert_eq!(go_lock_slot(1), Some(1)); // BUTTON
         assert_eq!(go_lock_slot(25), Some(4)); // FISHINGHOLE
-        assert_eq!(go_lock_slot(5), None); // GENERIC — never a lock
-        assert_eq!(go_lock_slot(19), None); // MAILBOX — no lock (opens by USE)
+        assert_eq!(go_lock_slot(5), None); // GENERIC
+        assert_eq!(go_lock_slot(19), None); // MAILBOX opens by USE
     }
 
-    /// The quest-giver material arm — by type: QUESTGIVER (2) and GOOBER (9) read `data[2]`,
-    /// CHEST (10) reads `data[9]`, anything else none (`0x5f5950`).
+    /// `0x5f5950`: QUESTGIVER (2) and TEXT (9) read `data[2]`, GOOBER (10) `data[9]`.
     #[test]
     fn insert_captures_the_quest_material_by_type() {
         let mut t = GameObjectTemplates::default();
@@ -265,8 +209,7 @@ mod tests {
     fn insert_captures_mo_transport_tuple() {
         let mut t = GameObjectTemplates::default();
         let mut data = [0i32; 24];
-        // The Menethil–Theramore boat (entry 176231): taxiPathId 292, moveSpeed 30, accelRate 1
-        // (vmangos gameobject_template).
+        // The Menethil to Theramore boat's vmangos template row.
         data[0] = 292;
         data[1] = 30;
         data[2] = 1;
@@ -285,8 +228,6 @@ mod tests {
         assert!(t.templates.get(2).unwrap().mo_transport.is_none());
     }
 
-    /// TEXT (9) captures the readable head — `data[0]` page id, `data[2]` material (decision
-    /// 1105); no other type does.
     #[test]
     fn insert_captures_the_text_page_head() {
         let mut t = GameObjectTemplates::default();
@@ -303,7 +244,7 @@ mod tests {
             .expect("type 9 captures");
         assert_eq!(page.page_id, 1416);
         assert_eq!(page.material, 2);
-        // A goober with the same bytes does not — its data[0] is a lockId.
+        // A goober's data[0] is a lockId.
         t.insert(2037, 10, "Lever".into(), &data);
         assert!(t.templates.get(2037).unwrap().text_page.is_none());
     }
@@ -313,7 +254,7 @@ mod tests {
         let mut t = GameObjectTemplates::default();
         let mut data = [0i32; 24];
         data[0] = 38; // a Copper Vein's lockId lives in chest slot 0
-                      // guid 0xF110_0000_026C_3xxx — HIGHGUID_GAMEOBJECT with entry 1731 (0x6C3) in bits 24..47.
+                      // HIGHGUID_GAMEOBJECT with entry 1731 in bits 24..47.
         let guid = 0xF110_0000_0000_0000 | (1731u64 << 24) | 0x40;
         t.insert(
             guid::entry(guid).unwrap(),
@@ -324,18 +265,8 @@ mod tests {
         assert_eq!(t.get(guid).map(|g| g.lock_id), Some(38));
     }
 
-    /// **`data[0]` and `data[1]` are different questions, and a GENERIC object can answer them
-    /// differently** — the pin that replaces 0766's INTERIM proxy.
-    ///
-    /// `data[1]` (semantic `0x12`, `0x5f4830`) is mouseover ELIGIBILITY: is this hoverable at all.
-    /// `data[0]` (semantic `0x13`, `0x5f8630`) is PLACEMENT: does its plate follow the cursor or
-    /// take the corner seat. Reading one as the other is exactly the mistake 0766 named as a proxy.
-    ///
-    /// The two rows are real, taken from the reference client's own `gameobjectcache.wdb`
-    /// (build 5875): `Brill` (entry 1630) is hoverable *and* cursor-seated, while
-    /// `Doodad_WoodSignPointerNice10` (175656) — the same family of wooden pointer sign — is
-    /// hoverable and CORNER-seated. Same model family, opposite answers, which is why the type
-    /// alone could never have been the key.
+    /// Real rows from the 1.12 client's `gameobjectcache.wdb`: two pointer signs, both hoverable,
+    /// one cursor-seated and one corner-seated.
     #[test]
     fn a_generic_can_be_hoverable_and_still_corner_seated() {
         let mut t = GameObjectTemplates::default();
@@ -361,9 +292,7 @@ mod tests {
         );
     }
 
-    /// The fork's key exists for GENERIC(5) and for no other type: `0x621b00` answers semantic
-    /// `0x13` for exactly one of the 31 types, so `data[0]` is never read as a placement flag
-    /// anywhere else — a CHEST's `data[0]` is its lockId, and must not move its tooltip.
+    /// `0x621b00` answers semantic `0x13` for GENERIC(5) alone.
     #[test]
     fn no_other_type_reads_data0_as_the_placement_fork() {
         let mut t = GameObjectTemplates::default();

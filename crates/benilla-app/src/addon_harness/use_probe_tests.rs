@@ -1,54 +1,15 @@
-//! **The use column's can-it-fail proof, in both directions and per gesture.**
-//!
-//! This arc has shipped two instruments that could not fail — the UI probe swallowed every raise it
-//! was built to report, and the method oracle answered "nothing missing" when it could not run at
-//! all — so a new column arrives with its falsifier or it does not arrive.
-//!
-//! Two directions, and both are load-bearing:
-//!
-//! - **It must report.** Four fixtures, one per gesture, each drawing one button and raising from
-//!   exactly one handler: `OnEnter`, `OnClick` on the left, `OnClick` on the right (registered for
-//!   `RightButtonUp` only, so a left click cannot reach it), and `OnDragStart`. A column that
-//!   drove only clicks passes three of these and fails one, which is the point of splitting them.
-//! - **It must stay quiet.** A fixture that draws the *same* button with **no handlers at all**
-//!   must come out [`Used::Survived`] with `driven ≥ 1` and zero errors — the shape that proves the
-//!   errors above came from the addons and not from the probe.
-//!
-//! ...and one more, which is the distinction the whole column is built around: a fixture that
-//! **paints but takes no mouse** must come out [`Used::Untouched`] with `driven == 0`, never
-//! `Survived`. "Nothing raised" and "nothing was touched" are different answers, and an instrument
-//! that cannot tell them apart is the one that reported a spotless corpus for a month.
-//!
-//! Then the real oracle: the director's two verified addons. `!OmniCC` works and must not be
-//! reported broken; Bagnon's slots are the reason this file exists and must at minimum be
-//! **reachable** — whether they still raise is the parallel handler fix's to change, so the
-//! durable assertion is that the probe can get its hands on them at all.
-//!
-//! ## What the falsification run actually established (2026-08-11)
-//!
-//! Each was applied to `use_probe`, run, and reverted — a can-it-fail claim is worth what it was
-//! measured at, not what it was asserted at:
-//!
-//! | change to the probe | this file |
-//! |---|---|
-//! | right-click press/release removed | RED — `RaisesOnRightClick` reads `Survived`, `driven=1` |
-//! | drag presses and releases in place (no 4-px move) | RED — `RaisesOnDrag` |
-//! | every `mouse_move` removed | RED — `RaisesOnEnter` |
-//! | every left-button transition removed | RED — `RaisesOnLeftClick` |
-//! | `Untouched` folded into `Survived` | RED — `PaintsButTakesNoMouse` |
-//!
-//! And the two **negative** results, which are the useful ones: removing only the hover move
-//! leaves this file GREEN (the drag's own move crosses the same hover boundary), and removing only
-//! the explicit left click leaves it GREEN (the drag press/release *is* a left click on a frame
-//! that never registered for drag). So what these fixtures pin is the gesture, not the line —
-//! stated in `drive_one` too, where somebody would otherwise delete an "obviously redundant" call.
+//! Tests for the use column: one fixture per gesture that raises from exactly one handler, a
+//! silent button that must survive with `driven >= 1`, a painted mouse-disabled frame that must be
+//! `untouched`, and two real corpus addons that must be reachable. The fixtures pin each gesture,
+//! not each line: removing only the hover move or only the explicit left click stays green, since
+//! the drag also hovers and clicks.
 
 use std::path::{Path, PathBuf};
 
 use super::{survey, Used};
 
-/// One throwaway AddOns root, cleaned up on drop even if a test panics. (The twin of
-/// `render_tests::Fixtures`; kept local so the two files' fixtures cannot collide in `temp_dir`.)
+/// One throwaway AddOns root, cleaned up on drop even if a test panics; its own temp prefix keeps
+/// it apart from `render_tests`'.
 struct Fixtures(PathBuf);
 
 impl Fixtures {
@@ -88,11 +49,8 @@ impl Drop for Fixtures {
 }
 
 /// A 64×64 painted Button at the centre of the screen, plus whatever `extra` wires onto it.
-///
-/// Painted, because an unpainted frame never reaches the target list at all — the use column takes
-/// its aim from the render column's attribution, so every fixture here has to draw first. Centred,
-/// because the corners of the default UI are full of our own windows and a fixture underneath one
-/// of them would be dropped by the attribution rule for a reason the test is not about.
+/// Painted, since the use column aims at the render column's quads; centred, clear of the default
+/// UI's windows.
 fn painted_button(extra: &str) -> String {
     format!(
         r#"
@@ -108,12 +66,11 @@ fn painted_button(extra: &str) -> String {
     )
 }
 
-/// **The proof: every gesture is really driven, and silence is really silence.**
+/// Every gesture is driven, silence stays silent, and nothing touched is not a pass.
 #[test]
 fn the_use_column_can_fail() {
     let fx = Fixtures::new("cannotfail");
-    // One fixture per gesture. Each raises from exactly ONE handler, so a probe that skips that
-    // gesture reports this addon clean and the assertion below catches it by name.
+    // One fixture per gesture, each raising from exactly one handler.
     fx.addon(
         "RaisesOnEnter",
         &painted_button(r#"f:SetScript("OnEnter", function() error("USEFIXTURE_ENTER") end)"#),
@@ -122,10 +79,8 @@ fn the_use_column_can_fail() {
         "RaisesOnLeftClick",
         &painted_button(r#"f:SetScript("OnClick", function() error("USEFIXTURE_LEFTCLICK") end)"#),
     );
-    // Registered for the RIGHT button ONLY — the default set is `{"LeftButtonUp"}`, so this
-    // handler is unreachable by any amount of left-clicking. It is the fixture that separates
-    // "the probe clicks" from "the probe clicks with both buttons", which matters because
-    // right-click is how every container slot in the game is used.
+    // Registered for `RightButtonUp` only (the default is `{"LeftButtonUp"}`), so no left click
+    // reaches it.
     fx.addon(
         "RaisesOnRightClick",
         &painted_button(
@@ -135,8 +90,7 @@ fn the_use_column_can_fail() {
         "#,
         ),
     );
-    // `OnDragStart` fires only past the 4-px threshold, so this one also proves the probe's drag
-    // actually MOVES rather than pressing and releasing in place.
+    // `OnDragStart` fires only past the 4 px threshold, so the drag must actually move.
     fx.addon(
         "RaisesOnDrag",
         &painted_button(
@@ -146,12 +100,9 @@ fn the_use_column_can_fail() {
         "#,
         ),
     );
-    // THE OTHER DIRECTION. The same painted, mouse-taking button with nothing wired to it at all:
-    // driven, and silent. Without this row the four above prove only that the probe can produce
-    // errors, not that the errors came from the addons.
+    // The same button with no handlers: driven and silent, so the errors above are the addons'.
     fx.addon("SilentButTouchable", &painted_button(""));
-    // ...and the distinction the column exists for. It paints exactly as much as the others and
-    // takes no mouse, so nothing of the addon's answers a hit-test: `untouched`, never `ok`.
+    // Paints but takes no mouse: `untouched`, never `ok`.
     fx.addon(
         "PaintsButTakesNoMouse",
         r#"
@@ -174,8 +125,7 @@ fn the_use_column_can_fail() {
             .unwrap_or_else(|| panic!("{name} was not surveyed"))
     };
 
-    // Every fixture must have LOADED and DRAWN, or a `driven = 0` below would be measuring a load
-    // failure or a blank window rather than the thing under test.
+    // Each fixture must load and draw, or `driven = 0` would measure something else.
     for name in [
         "RaisesOnEnter",
         "RaisesOnLeftClick",
@@ -197,7 +147,7 @@ fn the_use_column_can_fail() {
         );
     }
 
-    // ── It reports, per gesture ────────────────────────────────────────────────────────────────
+    // ── It reports, per gesture ──
     for (name, marker) in [
         ("RaisesOnEnter", "USEFIXTURE_ENTER"),
         ("RaisesOnLeftClick", "USEFIXTURE_LEFTCLICK"),
@@ -220,7 +170,7 @@ fn the_use_column_can_fail() {
         );
     }
 
-    // ── ...and it stays quiet when there is nothing to report ──────────────────────────────────
+    // ── It stays quiet when nothing raises ──
     let quiet = row("SilentButTouchable");
     assert_eq!(
         quiet.used.verdict(),
@@ -234,7 +184,7 @@ fn the_use_column_can_fail() {
          whole column is about"
     );
 
-    // ── ...and it never calls "nothing was touched" a pass ─────────────────────────────────────
+    // ── Nothing touched is not a pass ──
     let untouched = row("PaintsButTakesNoMouse");
     assert_eq!(
         untouched.used.verdict(),
@@ -248,22 +198,13 @@ fn the_use_column_can_fail() {
     );
 }
 
-/// **The real oracle: the director's two verified addons.**
-///
-/// - `!OmniCC` **works** — its countdown numbers are on their screen. It must not be reported as
-///   broken. It is also the reference [`Used::Untouched`]: its whole visible output is a
-///   `FontString` on an anonymous, mouse-disabled `Frame`, so there is nothing on it to click and
-///   nothing wrong with it either. If this column ever calls it `raised`, the column is wrong.
-/// - **Bagnon** is why this file exists: sixteen bag slots drawn and dead to the touch. The
-///   assertion here is the durable half — the probe can **reach** them (`driven ≥ 1`, on a
-///   `BagnonItem*` frame). Whether they still raise is the parallel handler fix's to change, so
-///   asserting `Raised` would turn somebody else's fix into this file's failure; what must never
-///   regress is the probe's ability to get its hands on the slots at all, because a column that
-///   silently stops touching them is exactly how this instrument has been wrong four times.
+/// `!OmniCC` is never `raised`: its output is a `FontString` on an anonymous mouse-disabled frame,
+/// so it is `untouched`. Bagnon's item slots must be reachable (`driven >= 1` on a `BagnonItem*`
+/// frame); whether they raise is not asserted here.
 #[test]
 fn the_directors_two_verified_addons_are_reachable_and_omnicc_is_not_broken() {
     benilla_formats::wow_data_or_skip!();
-    // The one resolver, and a skip the gate can refuse (`benilla_formats::install`).
+    // A skip the gate can refuse (`benilla_formats::install`).
     let corpus = benilla_formats::addon_corpus_or_skip!();
     let fx = Fixtures::new("oracle");
     for name in ["!OmniCC", "Bagnon", "Bagnon_Core", "Bagnon_Forever"] {

@@ -1,31 +1,13 @@
-//! The WMO-interior minimap's **offscreen composite** — the client's own compositing pipeline.
+//! The WMO-interior minimap's offscreen composite, the reference's own pipeline: tiles drawn into
+//! a 256 × 256 target (`0x4eda42`/`0x4eda48`) under an ortho half-extent of 1.5 × the view radius
+//! (`0x4ec130`, the factor at `0x80308c`), cleared colour-only to opaque black (unpacked at
+//! `0x59b910`), blending off and alpha-tested at `GEQUAL 224/255`; the blit shows the middle
+//! two-thirds, netting 1.0 × radius on screen.
 //!
-//! Indoors the reference does not draw the group tiles onto the screen. It draws them into a fixed
-//! **256 × 256** render target created once at `0x4eda42`/`0x4eda48`, under an ortho half-extent of
-//! **1.5 × the view radius** (`0x4ec130`, the `× 1.5` at `0x80308c`), cleared **colour-only** to
-//! opaque black (the packed `0xAARRGGBB` unpacked at `0x59b910`), with **blending disabled** and an
-//! **alpha test** at `GEQUAL 224/255` — then blits the **middle two-thirds** of that target, which
-//! is what nets the `1.0 × radius` on screen.
-//!
-//! **Both halves of that are load-bearing, and they only work together.** The alpha test is what
-//! stops two group tiles that meet along a shared wall from leaving the clear colour between them
-//! (blended, each contributes a filtered partial edge and up to 25% of the black shows through —
-//! B141's "odd black lines", at *every* joint). But the target's resolution is what stops the
-//! **genuine** gaps in the bake from reading: `3 · radius / 256` model-yd per texel is 0.703 yd at
-//! the default indoor zoom against the tiles' authored 0.5 — a ~1.4× **minification before the
-//! test**, in which a one-texel bake gap is simply never sampled. Drawing the tiles alpha-tested
-//! straight to the screen, where we rasterise ~1.85× *finer* than the client ever did, turns those
-//! same gaps from a soft grey line into a hard black one — measured, and the reason this module
-//! exists rather than just the render state (1466's "why part 1 alone makes it worse").
-//!
-//! Mechanically: [`super::emit_minimap`]'s interior branch fills [`MinimapComposite`] with this
-//! frame's tiles in **target space** instead of pushing them at the screen; [`drive_composite`]
-//! materialises them as pooled quads on the composite camera's own render layer; and the interior
-//! branch draws ONE screen quad sampling the target, masked to the minimap circle as usual.
-//!
-//! The tiles ride a **shared unit-quad mesh and a per-texture material**, moving on their
-//! `Transform` alone (1463's law): the composite re-aims every frame the player walks, and
-//! rebuilding ~50 meshes a frame to express a pan is exactly the churn that pass avoids.
+//! The alpha test and the target's resolution only work together: the test keeps the clear from
+//! showing where two tiles meet at a shared wall, and the coarse target (0.703 yd per texel at the
+//! default indoor zoom, against the bake's 0.5) minifies before the test, so a one-texel gap in
+//! the bake is never sampled. Alpha-tested straight to the screen, those gaps read as black lines.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
@@ -36,66 +18,56 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, T
 use crate::portrait::MINIMAP_COMPOSITE_LAYER;
 use crate::ui_pass::UiQuadMaterial;
 
-/// The composite target's edge, in texels — the client's `mov edx,0x100` at `0x4eda42`. It is a
-/// **fidelity constant, not a quality knob**: raising it re-opens the hairlines this module exists
-/// to close, because the bake's own one-texel gaps stop being sub-texel (see the module docs).
+/// The target's edge in texels (`0x4eda42`). A fidelity constant, not a quality knob: a larger
+/// target samples the bake's one-texel gaps and draws them as hairlines.
 pub(super) const RT_SIZE: u32 = 256;
 
-/// The composite's ortho half-extent as a multiple of the on-screen view radius (`0x80308c`). The
-/// target holds 1.5 × what is shown; the blit takes the middle two-thirds back out.
+/// The target's ortho half-extent as a multiple of the on-screen view radius (`0x80308c`).
 pub(super) const RT_HALF_EXTENT_SCALE: f32 = 1.5;
 
-/// The fraction of the target's edge the blit shows — `1 / RT_HALF_EXTENT_SCALE`, i.e. the middle
-/// two-thirds, which is what nets `1.0 × radius` on screen.
+/// The fraction of the target's edge the blit shows, netting 1.0 × radius on screen.
 pub(super) const RT_BLIT_FRACTION: f32 = 1.0 / RT_HALF_EXTENT_SCALE;
 
-/// One tile to composite, already in **target space**: the camera's y-up units, origin at the
-/// target's centre (= the player), `RT_SIZE / 2` units to an edge.
+/// One tile in target space: y-up, origin at the target's centre (the player), `RT_SIZE / 2`
+/// units to an edge.
 pub(super) struct CompositeTile {
     pub(super) texture: Handle<Image>,
     /// Centre, in target units.
     pub(super) center: Vec2,
     /// Size, in target units.
     pub(super) size: Vec2,
-    /// The placement yaw, as a **clockwise-on-screen** angle (what the screen path uses); negated
-    /// on the way into the camera's y-up frame.
+    /// The placement yaw, clockwise on screen; negated into the camera's y-up frame.
     pub(super) rotation: f32,
-    /// Draw order within the composite — ascending draws later (on top), matching the group sort.
+    /// Ascending draws later (on top), matching the group sort.
     pub(super) order: usize,
 }
 
-/// This frame's interior composite: the tiles to draw and whether the composite is live at all.
-/// Written by [`super::emit_minimap`], consumed by [`drive_composite`].
+/// This frame's interior composite, filled by [`super::emit_minimap`] for [`drive_composite`].
 #[derive(Resource, Default)]
 pub(super) struct MinimapComposite {
-    /// `false` = outdoors (or no minimap widget): the camera is switched off and the pool retires.
+    /// `false` outdoors or with no minimap widget: the camera is off and the pool empties.
     pub(super) active: bool,
     pub(super) tiles: Vec<CompositeTile>,
 }
 
-/// The composite's durable pieces: the target image, its camera, the shared quad mesh, the
-/// per-texture material cache and the entity pool.
+/// The composite's durable pieces: target, camera, shared quad, material cache and entity pool.
 #[derive(Resource)]
 pub(super) struct CompositeRig {
-    /// The render target — sampled by the blit quad on the screen lane.
+    /// The render target, sampled by the blit quad.
     pub(super) image: Handle<Image>,
     camera: Entity,
     quad: Handle<Mesh>,
-    /// Materials keyed by tile texture. A WMO's tile set is small and stable while you are inside
-    /// it, so this fills once per building rather than per frame.
+    /// Materials by tile texture; a building's tile set is small, so this fills once per building.
     materials: bevy::platform::collections::HashMap<AssetId<Image>, Handle<UiQuadMaterial>>,
     pool: Vec<Entity>,
 }
 
 /// Build the target, its camera and the shared quad once, at startup.
 ///
-/// The target is **un-encoded** and float, exactly like the portrait booths':
-/// the UI arc composites in gamma bytes and does its one sRGB encode at the end, so a target that
-/// pre-encoded would land a second encode downstream — and quantising un-encoded values to 8 bits
-/// is B126's banding collapse, which a map of large flat colour fields would show as plainly as the
-/// glue screens did. The tile draw therefore writes the sampled texel **un-encoded** (the
-/// [`UiQuad::alpha_test`](crate::ui_pass::UiQuad::alpha_test) arm in `ui_quad.wgsl`), and the blit
-/// quad encodes it on the way to the screen like any other UI texture.
+/// The target is float and un-encoded, like the portrait booths': the UI pass does its one sRGB
+/// encode at the end, and un-encoded 8-bit values band. The tile draw writes the texel un-encoded
+/// (the [`UiQuad::alpha_test`](crate::ui_pass::UiQuad::alpha_test) arm in `ui_quad.wgsl`) and the
+/// blit quad encodes it like any other UI texture.
 pub(super) fn setup_composite(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
@@ -116,29 +88,24 @@ pub(super) fn setup_composite(
         TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::RENDER_ATTACHMENT;
     let image = images.add(image);
 
-    // A 1×1 quad centred on the origin: every tile is this mesh under its own Transform, so a
-    // panning composite never rewrites a vertex buffer (1463). Its layout is a pipeline key axis
-    // and pipe_warm warms the same mesh, so the builder has one author (2262).
+    // A 1×1 quad at the origin, every tile a Transform of it. `pipe_warm` warms this same mesh (its
+    // layout is a pipeline key axis), so both take it from one builder.
     let quad = meshes.add(crate::ui_pass::tile_quad_mesh());
 
     let camera = commands
         .spawn((
             Name::new("minimap composite camera"),
             Camera2d,
-            // **No MSAA** — the client's target is a plain RGBA8 surface with none, and here it is
-            // load-bearing rather than cosmetic: multisampling an alpha-TESTED edge hands back
-            // partial coverage, and partial coverage over an opaque black clear is precisely the
-            // grey seam this whole module exists to remove. The test's whole point is that a
-            // fragment is all or nothing.
+            // No MSAA, like the reference's plain RGBA8 target: multisampling an alpha-tested edge
+            // gives partial coverage over the black clear, the grey seam this target removes.
             bevy::render::view::Msaa::Off,
             RenderLayers::layer(MINIMAP_COMPOSITE_LAYER),
             RenderTarget::Image(image.clone().into()),
             Camera {
-                // The client's clear: colour only, opaque black (`0x4ec8ef`, mask 1). Everything
-                // the bake does not cover reads as this — including, faithfully, the exterior
-                // group's whole footprint, which has no authored tile at all.
+                // The reference's clear: colour only, opaque black (`0x4ec8ef`, mask 1). Anything
+                // the bake leaves uncovered reads black, the exterior group's footprint included.
                 clear_color: ClearColorConfig::Custom(Color::BLACK),
-                // Off until the player is indoors; `drive_composite` owns the switch.
+                // Off until indoors; `drive_composite` owns the switch.
                 is_active: false,
                 ..default()
             },
@@ -164,8 +131,8 @@ pub(super) fn setup_composite(
     });
 }
 
-/// Materialise [`MinimapComposite`] onto the composite camera: one pooled entity per tile, each the
-/// shared quad under a Transform, each wearing its texture's cached material.
+/// Draw [`MinimapComposite`] on the composite camera: one pooled entity per tile, the shared quad
+/// under a Transform with its texture's cached material.
 pub(super) fn drive_composite(
     mut composite: ResMut<MinimapComposite>,
     rig: Option<ResMut<CompositeRig>>,
@@ -188,8 +155,7 @@ pub(super) fn drive_composite(
         return;
     }
 
-    // Ascending order draws later. The composite camera's own ortho spans ±0.5·RT_SIZE in z by
-    // default, so keep the span well inside it however many tiles a zoom level asks for.
+    // Ascending order draws later; z stays within -50..50 whatever the tile count.
     let count = composite.tiles.len().max(1);
     for (i, tile) in composite.tiles.iter().enumerate() {
         let material = rig

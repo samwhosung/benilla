@@ -1,25 +1,14 @@
-//! `ChrClasses.dbc`, loaded once and read by everything that asks the client a question about a
-//! class.
-//!
-//! Three consumers today and they are unrelated to each other — [`crate::ui_pet_book`] wants field
-//! 4's pet name token, `UnitHasRelicSlot` wants field 16's relic flag, and
-//! `crate::spell::mods` wants field 15's class spell-family — which is exactly why the
-//! table does not live inside any of them. It used to live in the pet book, back when the pet
-//! token was the only column anyone read.
-//!
-//! The resource is **absent**, not empty, when the load fails. Every reader then falls to the
-//! reference's own degraded answer (`"PET"` for the token, no relic slot for any class, family 0
-//! — which the modifier gate's first conjunct refuses), so a missing table costs a warlock the
-//! word "Demon", a paladin their relic branches and everyone their talent modifiers rather than
-//! taking the client down.
+//! `ChrClasses.dbc`, loaded once for its unrelated readers: the pet book (field 4, pet name token),
+//! `UnitHasRelicSlot` (field 16) and `crate::spell::mods` (field 15, spell family). Absent when the
+//! load fails; each reader then takes the reference's degraded answer: `"PET"`, no relic slot,
+//! family 0.
 
 use bevy::prelude::*;
 
 use benilla_assets::{AssetSet, LockRecover, WorldAssets};
 use benilla_formats::ChrClasses;
 
-/// The parsed table — see [`benilla_formats::ChrClasses`] for what each column is and which bytes
-/// say so.
+/// The parsed table; [`benilla_formats::ChrClasses`] documents the columns.
 #[derive(Resource)]
 pub(crate) struct ChrClassTable(pub(crate) ChrClasses);
 

@@ -1,23 +1,15 @@
 <Ui>
     <!--
-        Benilla's scroll kits, sharing one `Slider` bar, its arrow helpers and an optional trough:
-        a faux-scroll kit that re-binds a fixed set of rows to a moving data offset, and a
-        real-scroll kit that pans and clips a `<ScrollFrame>` child whose height is known only after
-        layout. A real-scroll bar overrides the template's OnValueChanged on its instance, which
-        wins because the loader runs every `<Scripts>` block in order.
-        Faux model: the value is pixels, `[0, (numItems - numToDisplay) * itemHeight]` in steps of
-        `itemHeight`; the parent holds the 0-based top row in `frame.offset` and its repaint in
-        `frame.updateFunc`, set by the owner's OnLoad.
-        Deviation: the faux parent is a plain `<Frame>`, not the reference's ScrollFrame relay,
-        which adds nothing because the reference's `SetVerticalScroll` stores the bar's value as is.
-        `FauxScrollFrameTemplate` and the `FauxScrollFrame_*`, `ScrollFrame_*` and
-        `ScrollingEdit_*` API are the stock `UIPanelTemplates` on the player's chain, which loads
-        after this file, so its declarations win.
+        Benilla's scroll parts: a `Slider` bar with its arrow helpers, an optional trough, and a
+        real-scroll kit that pans a `<ScrollFrame>` child whose height is known only after layout.
+        Faux lists use the stock `FauxScrollFrameTemplate`; this file declares only `Benilla` names.
+        A real-scroll bar overrides the template's OnValueChanged on its instance, which wins
+        because the loader runs every `<Scripts>` block in order.
     -->
     <Script><![CDATA[
-        -- Steps the bar by its valueStep. Deviation: one row on a faux list, where the reference
-        -- bar's arrows step half its height. Soundless: the reference plays UChatScrollButton on
-        -- an arrow click, never on the wheel, so the arrows' OnClick plays it.
+        -- One valueStep per step, where the reference's arrows and wheel move half the bar
+        -- (UIPanelTemplates.xml:137/149, UIPanelTemplates.lua:150-157).
+        -- Soundless: the reference plays UChatScrollButton on an arrow click, never on the wheel.
         function BenillaScrollBar_Step(scrollBar, dir)
             local step = scrollBar:GetValueStep()
             if step <= 0 then step = 1 end
@@ -34,11 +26,10 @@
             if val >= maxV then down:Disable() else down:Enable() end
         end
 
-        -- The faux bar's OnValueChanged: the top row is the value rounded to the nearest row, so
-        -- thumb and rows agree, and `updateFunc` runs only when that row changes, which also ends
-        -- the loop when a repaint re-seats the thumb.
-        -- A ScrollFrame parent also gets the value through SetVerticalScroll, as the reference's
-        -- `UIPanelScrollBarTemplate` routes it (UIPanelTemplates.xml l.156-158).
+        -- The value is pixels in steps of a row; the parent holds the 0-based top row in
+        -- `frame.offset` and its repaint in `frame.updateFunc`, which runs only when that row
+        -- changes, so a repaint that re-seats the thumb ends the loop. A ScrollFrame parent also
+        -- gets SetVerticalScroll, as UIPanelTemplates.xml:156-158 routes it.
         function BenillaFauxScrollBar_OnValueChanged(scrollBar, value)
             local frame = scrollBar:GetParent()
             local step = scrollBar:GetValueStep()
@@ -52,10 +43,8 @@
             if frame.SetVerticalScroll then frame:SetVerticalScroll(value) end
         end
 
-        -- Seats a trough on its bar with the reference's ReputationFrame hang, 8 left, 21 above and
-        -- 20 below (ReputationFrame.xml l.573-599 against UIPanelTemplates.xml l.166-181), which
-        -- puts each art socket on its arrow button. Lazy, because the bar is declared after its
-        -- trough and does not exist at the trough's OnLoad.
+        -- ReputationFrame's hang, 8 left, 21 above, 20 below (ReputationFrame.xml:573-599 against
+        -- UIPanelTemplates.xml:166-181). Lazy: the bar does not exist at the trough's OnLoad.
         function BenillaScrollTrough_Seat(trough, scrollBar)
             if trough.seated then return end
             trough.seated = true
@@ -64,9 +53,7 @@
             trough:SetPoint("BOTTOMRIGHT", scrollBar, "BOTTOMRIGHT", 7, -20)
         end
 
-        -- Shows or hides a bar and its `<barname>Trough` together, seating the trough first; show
-        -- and hide a bar only through here. The trough is opt-in because 1.12 draws trough art per
-        -- window: `UIPanelScrollBarTemplate` carries only the arrows and the knob.
+        -- Show and hide a bar only through here, so its `<barname>Trough` follows.
         function BenillaScrollBar_SetShown(scrollBar, shown)
             local trough = getglobal(scrollBar:GetName() .. "Trough")
             if trough then BenillaScrollTrough_Seat(trough, scrollBar) end
@@ -79,9 +66,7 @@
             end
         end
 
-        -- The same for a stock `FauxScrollFrameTemplate` frame, whose bar is the reference's: seats
-        -- `<frame>ScrollBarTrough` and mirrors the frame's shown state. Call it after
-        -- `FauxScrollFrame_Update`, which shows or hides the frame.
+        -- For a stock `FauxScrollFrameTemplate` frame; call after `FauxScrollFrame_Update`.
         function BenillaScrollTrough_Follow(scrollFrameName)
             local sf = getglobal(scrollFrameName)
             if not sf then return end
@@ -93,30 +78,25 @@
             if sf:IsShown() then trough:Show() else trough:Hide() end
         end
 
-        -- One row per wheel notch (+1 up) on a faux list, called from the owner window's
-        -- OnMouseWheel since the spin bubbles up the parent chain. Benilla-named: the reference has
-        -- no faux wheel function (its `ScrollFrameTemplate_OnMouseWheel` moves half the bar).
+        -- One row per wheel notch (+1 up), from the owner window's OnMouseWheel; the reference's
+        -- `ScrollFrameTemplate_OnMouseWheel` moves half the bar.
         function BenillaFauxScrollFrame_OnMouseWheel(frame, delta)
             local scrollBar = getglobal(frame:GetName() .. "ScrollBar")
             BenillaScrollBar_Step(scrollBar, -delta)
         end
 
         -- ══════════════════════════ The real-scroll kit ══════════════════════════════════════════
-        -- Shaped on the reference `UIPanelScrollFrameTemplate` (UIPanelTemplates.xml l.166-211):
-        -- the bar is a `Slider` child, `$parentBar`, so `bar:GetParent()` is the frame it pans.
+        -- Shaped on UIPanelTemplates.xml:166-211: the bar is the `Slider` child `$parentBar`.
         BENILLA_SCROLL_STEP = 20   -- px per arrow click or wheel notch
         BENILLA_SCROLL_PAD = 20    -- px of room below the child's last element
 
-        -- Pans the frame the bar rides. The loop back through OnVerticalScroll and SyncBar ends in
-        -- one hop: SyncBar writes the value the bar already holds, which Slider:SetValue ignores.
+        -- The loop back through SyncBar ends in one hop: Slider:SetValue ignores an equal value.
         function BenillaScrollBar_OnValueChanged(bar, value)
             bar:GetParent():SetVerticalScroll(value)
             BenillaScrollBar_UpdateArrows(bar)
         end
 
-        -- Fits the bar to the frame's live range, [0, range] px, and hides it when the content fits
-        -- (reference: ScrollFrame_OnScrollRangeChanged). Owners call it from OnScrollRangeChanged
-        -- and OnVerticalScroll.
+        -- Hides the bar when the content fits (reference: ScrollFrame_OnScrollRangeChanged).
         function BenillaScroll_SyncBar(sf)
             local bar = getglobal(sf:GetName() .. "Bar")
             if not bar then return end
@@ -128,8 +108,7 @@
             BenillaScrollBar_SetShown(bar, range > 0)
         end
 
-        -- Pans by `delta` px, clamped here: SetVerticalScroll stores any value, as the reference's
-        -- does; the reference's ScrollFrameTemplate_OnMouseWheel clamps through its bar's range.
+        -- Clamped here: SetVerticalScroll stores any value, as the reference's does.
         function BenillaScroll_Step(sf, delta)
             local target = sf:GetVerticalScroll() + delta
             local range = sf:GetVerticalScrollRange()
@@ -144,7 +123,7 @@
             BenillaScroll_Step(sf, -delta * BENILLA_SCROLL_STEP)
         end
 
-        -- A widget's resolved bottom, or nil if hidden, a blank FontString, or not laid out yet.
+        -- Nil if hidden, a blank FontString, or not laid out yet.
         function BenillaScroll_WidgetBottom(w)
             if not w then return nil end
             if w.IsShown then
@@ -156,13 +135,11 @@
             return w:GetBottom()
         end
 
-        -- Sizes the scroll child to its lowest visible widget plus BENILLA_SCROLL_PAD and updates
-        -- the frame's range. Rects resolve after Lua runs, so owners re-run it from OnUpdate until
-        -- it returns false; it writes only on a real change, since SetHeight invalidates layout.
+        -- Rects resolve after Lua runs, so owners re-run this from OnUpdate; it writes only on a
+        -- real change, since SetHeight invalidates layout.
         function BenillaScroll_ResizeChild(scrollName, widgets)
             local sf = getglobal(scrollName)
-            -- The frame's own child, not a derived name: the reference pairs `<X>ScrollFrame` with
-            -- `<X>ScrollChildFrame`.
+            -- Not a derived name: the reference pairs `<X>ScrollFrame` with `<X>ScrollChildFrame`.
             local child = sf:GetScrollChild()
             if not child then return false end
             local top = child:GetTop()
@@ -182,11 +159,7 @@
         end
     ]]></Script>
 
-    <!--
-        The bar: a 16px `Slider` with step buttons above and below the track, on the stock 1.12
-        scrollbar art cropped to its centred 16px (the `0.25..0.75` TexCoords of the reference's
-        `UIPanelScrollBarButton`).
-    -->
+    <!-- The stock scrollbar art cropped to its centred 16px, as `UIPanelScrollBarButton` does. -->
     <Slider name="BenillaScrollBarTemplate" virtual="true">
         <Size><AbsDimension x="16" y="0"/></Size>
         <Frames>
@@ -219,24 +192,19 @@
     </Slider>
 
     <!--
-        A bar's trough, the recessed channel it rides in; the reference's scroll kit has none.
-        Declare it before its bar, so it draws beneath, named `<barname>Trough` and with no
-        anchors: BenillaScrollTrough_Seat seats it on the bar.
-        `UI-Character-ScrollBar` (64x256) holds two 31-wide channel pieces, the left column
-        (u 0 .. 31/64) capped at the top and the right (u 33/64 .. 1) at the bottom, each with a
-        16-tall socket for its arrow button: rows 4-19 at the top, rows 87-102 at the bottom.
-        Deviation: cut as a three-slice (both socket ends at natural height, the plain channel
-        stretched between) where the reference overlaps two quads, since two quads reach only 362
-        units and a page here is 563 tall.
-        The black fill is the reference's trough backing (ItemTextFrame's 0.8-alpha `Middle`). It
-        is in BACKGROUND and the art in BORDER because the client orders overlapping quads within
-        one layer by texture handle; the bar's buttons (ARTWORK) and knob (OVERLAY) draw above both.
+        A bar's trough, drawn per window in 1.12. Declare it before its bar, named
+        `<barname>Trough`, with no anchors. `UI-Character-ScrollBar` holds two 31-wide pieces,
+        the left capped at the top, the right at the bottom.
+        Deviation: a three-slice where the reference overlaps two quads, since two quads reach
+        only 362 units and a page here is 563 tall.
+        The fill is ItemTextFrame's 0.8-alpha black; fill and art are in separate layers because
+        the client orders overlapping quads within one layer by texture handle.
     -->
     <Frame name="BenillaScrollTroughTemplate" virtual="true" hidden="true">
         <Size><AbsDimension x="31"/></Size>
         <Layers>
             <Layer level="BACKGROUND">
-                <!-- The channel interior: x 6..24 of the 31-wide piece, inset 6 from each edge. -->
+                <!-- The channel interior, inset 6 from each edge of the 31-wide piece. -->
                 <Texture name="$parentFill">
                     <Anchors>
                         <Anchor point="TOPLEFT"><Offset><AbsDimension x="6" y="0"/></Offset></Anchor>
@@ -246,7 +214,7 @@
                 </Texture>
             </Layer>
             <Layer level="BORDER">
-                <!-- Cap + up-arrow socket + crossbar: left column, rows 0..22 (v 0 .. 23/256). -->
+                <!-- Left column, rows 0..22: the cap, the up-arrow socket and a crossbar. -->
                 <Texture name="$parentTop" file="Interface\PaperDollInfoFrame\UI-Character-ScrollBar">
                     <Size><AbsDimension y="23"/></Size>
                     <Anchors>
@@ -255,8 +223,7 @@
                     </Anchors>
                     <TexCoords left="0" right="0.484375" top="0" bottom="0.08984375"/>
                 </Texture>
-                <!-- Crossbar + down-arrow socket + cap: right column, rows 82..107
-                     (v 82/256 .. 108/256), ending on v 0.421875 as ReputationFrame's does. -->
+                <!-- Right column, ending on v 0.421875 as ReputationFrame's does. -->
                 <Texture name="$parentBottom" file="Interface\PaperDollInfoFrame\UI-Character-ScrollBar">
                     <Size><AbsDimension y="26"/></Size>
                     <Anchors>
@@ -265,8 +232,7 @@
                     </Anchors>
                     <TexCoords left="0.515625" right="1.0" top="0.3203125" bottom="0.421875"/>
                 </Texture>
-                <!-- The stretched run between them: left column rows 30..70, plain rails only.
-                     Declared last: an anchor to a later sibling falls back to the parent. -->
+                <!-- Declared last: an anchor to a later sibling falls back to the parent. -->
                 <Texture name="$parentMiddle" file="Interface\PaperDollInfoFrame\UI-Character-ScrollBar">
                     <Anchors>
                         <Anchor point="TOPLEFT" relativeTo="$parentTop" relativePoint="BOTTOMLEFT"/>

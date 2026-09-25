@@ -1,42 +1,17 @@
-//! Loading screen — the faithful full-screen world-load splash + progress bar shown on initial
-//! world entry and on cross-map teleport (the load latency async streaming can't hide). Built on the
-//! VERIFIED reference mechanism: per-map art via the
-//! `Map.dbc` → `LoadingScreens.dbc` → BLP FK chain (resolved by `benilla-formats`), under the engine's
-//! bar — which in 1.12 is exactly two layers, `Loading-BarBorder` + `Loading-BarFill`, at the
-//! screen-fraction rects byte-verified from `LoadingScreen.cpp` (NOT the 5-texture stack the asset
-//! names suggest; Background/Glow/Glass are never composited in vanilla).
+//! The loading screen: the full-screen splash and progress bar over world entry and cross-map
+//! teleports. The art resolves `Map.dbc` → `LoadingScreens.dbc` → BLP for every map kind; the bar
+//! is two layers, `Loading-BarBorder` and `Loading-BarFill` (Background, Glow and Glass are never
+//! drawn in 1.12).
 //!
-//! **Foundation, not a one-off.** The art lookup is the *same* mechanism for every map kind (open
-//! world / instance / battleground) — only the BLP row differs — so this hosts all of them for free.
-//! The two cases out of current scope (taxi/boat/zeppelin's moving flight-path icon; a richer
-//! progress model) slot in as an extra overlay layer / a different progress source without restructure.
+//! Event-raised and readiness-cleared, as in the reference: it rises at the character pick's
+//! `Connected` edge and at `SMSG_TRANSFER_PENDING` (the reference's two entries into `0x406640`'s
+//! tail) and clears on a per-frame readiness poll. The reference's one blocking stretch
+//! (`SMSG_NEW_WORLD`'s `0x401b00` defers `0x401bc0` onto the deadline heap, drained at `0x420d0c`)
+//! also suppresses input, which this client builds explicitly ([`input`]).
 //!
-//! **The lifecycle is event-raised, readiness-cleared** — and the reference's is
-//! too, which 0737 assumed it was not. This header claimed for months that the reference *blocks*
-//! on its world load and so covers "by construction"; decision 1990 says
-//! half of that is wrong. The reference runs ordinary frames with **one** blocking stretch inside
-//! them (`SMSG_NEW_WORLD`'s `0x401b00` defers `0x401bc0` onto the deadline heap, which drains at
-//! `0x420d0c` and runs to completion in that one iteration, `Sleep(1)` residency spins and all) —
-//! but the screen is raised *frames earlier*, at `TRANSFER_PENDING`, and dismissed *frames later*
-//! by a per-frame readiness poll. Which is this file's shape. What an async-streaming client has to
-//! build explicitly is not the lifecycle after all: it is the **input suppression** the blocking
-//! stretch does not provide either (see [`input`]). The screen
-//! rises at the **transition edges and only those** — the character pick's `Connected` edge (before
-//! the glue tears down) and `SMSG_TRANSFER_PENDING` (the portal walk-in), which are precisely the
-//! reference's two entries into `0x406640`'s tail — all observed *here*, from the
-//! messages/resources the net bridge already publishes. The destination **snap** is not one of
-//! them: `SMSG_NEW_WORLD` and `SMSG_LOGIN_VERIFY_WORLD` are two handlers there (`0x401b00` /
-//! `0x401de0`) and neither can reach the raise `0x406800` or the screen's map global `[0x82f00c]`,
-//! so a snap only ends the wait its raise armed and can never re-point a live screen
-//! ([`LoadingScreen::far_snap`]). And what a live screen *shows* is latched harder still: the
-//! resolved texture, not the map id ([`LoadingScreen::art_resolved`]). A residency backstop catches any
-//! path with no edge, **in world only** — it used to fire at boot too, and that is what warmed the
-//! world's pipelines behind the glue, which only worked while a world was being streamed
-//! there at all. Since 0777 none is, and the warm-up rides the entry cover instead. It clears when
-//! the destination is **scene-presentable** ([`WorldLoadProgress`],
-//! published by `terrain_stream` + the collider queue): every wanted tile spawned, the focus
-//! neighbourhood's placements up, colliders quiet, the snap no longer awaited. Never anything
-//! about the *body* — feet-on-ground is not a load condition (the flying-teleport hang).
+//! A destination snap only ends a raise's wait ([`LoadingScreen::snap_landed`]). The screen clears
+//! when the destination is scene-presentable ([`WorldLoadProgress`]), never on the body reaching
+//! the ground.
 
 use bevy::prelude::*;
 use std::collections::HashMap;
@@ -50,22 +25,14 @@ use benilla_world::schedule::WorldStage;
 use benilla_world::terrain_stream::WorldLoadProgress;
 use benilla_world::world_map::CurrentMap;
 
-/// **The cover takes the input plane** — the loading screen's input half, in its own file because
-/// it is a different mechanism (a source cut in `PreUpdate`) from the state machine below, and one
-/// file should not have to explain both.
+/// The cover's input half: while it is up the client takes no input (a source cut in `PreUpdate`).
 mod input;
 pub(crate) use input::CoverInput;
 
-// Bar layout — VERIFIED THREE ways (build 5875): the `WoW.exe` `LoadingScreen.cpp` bar descriptor
-// table (@0x7ffd34, `FUN_00407150`) gives entry = {cx, cy, halfW, halfH} with rect = [cx ± halfW·0.5]
-// × [cy ± halfH·0.5] and fill right edge = left + progress·halfW; Border {0.5,0.075,0.600,0.050}, Fill
-// {0.5,0.075,0.525,0.025}. An apitrace of the live reference (WoW.12/WoW.17) confirmed these rects, and
-// a reference screenshot measured the fill at left=0.245 (≈0.2375), ~9% from the BOTTOM. The bar sits
-// at the BOTTOM — `cy=0.075` is measured from the bottom (the engine's GL ortho origin); the trace's
-// "top" reading was the wined3d D3D→GL y-flip (a host representation, see memory
-// `apitrace-is-crossover-translated`), refuted by the screenshot + the binary. ONLY Border + Fill are
-// drawn in 1.12 (Background/Glow/Glass are never composited). Rects are viewport fractions; y is the
-// distance from the BOTTOM edge (Bevy UI `bottom:`).
+// The bar, from the `LoadingScreen.cpp` descriptor table at `0x7ffd34` (read by `0x407150`):
+// entry {cx, cy, halfW, halfH}, rect [cx ± halfW·0.5] × [cy ± halfH·0.5], fill right edge
+// left + progress·halfW; Border {0.5, 0.075, 0.600, 0.050}, Fill {0.5, 0.075, 0.525, 0.025}.
+// Viewport fractions, `cy` measured up from the bottom edge (Bevy UI `bottom:`).
 const BORDER_LEFT: f32 = 0.200; // 0.5 − 0.600·0.5
 const BORDER_WIDTH: f32 = 0.600;
 const BORDER_BOTTOM: f32 = 0.050; // 0.075 − 0.050·0.5
@@ -75,54 +42,28 @@ const FILL_BOTTOM: f32 = 0.0625; // 0.075 − 0.025·0.5
 const FILL_HEIGHT: f32 = 0.025;
 const FILL_MAX_WIDTH: f32 = 0.525; // halfW; fill width = progress · FILL_MAX_WIDTH
 
-/// The glue/loading screen is authored 4:3; on a wider window the reference fits it to height and
-/// letterboxes (black bars L/R). Measured from a reference screenshot (content ≈ 1878×1385 ≈ 4:3 in a
-/// 1999-wide window). The square BLP is stretched to this aspect (a mild widen).
+/// The glue and loading screens are authored 4:3; on a wider window the reference fits them to
+/// height and pillarboxes. The square BLP is stretched to this aspect.
 const BACKDROP_ASPECT: f32 = 4.0 / 3.0;
-/// Frames the world must read fully-resident before we clear the screen — debounces the post-teleport
-/// frame where `loaded` is drained (`total > 0`, `ready` momentarily 0) so we don't flicker off/on.
+/// Consecutive fully resident frames before the clear: debounces the post-teleport frame where
+/// `ready` reads 0 against a nonzero `total`.
 const CLEAR_AFTER_READY_FRAMES: u32 = 3;
-/// The wait instrument: once the screen has been up this long, say *which term*
-/// still blocks the clear, every [`WAIT_LOG_EVERY`] seconds — so a "loading screen stuck" report is
-/// a one-line diagnosis instead of a session. Ordinary loads finish under the threshold and log
-/// nothing extra.
+/// Once the screen has been up this long, log which term still blocks the clear, every
+/// [`WAIT_LOG_EVERY`] seconds.
 const WAIT_LOG_AFTER: f32 = 3.0;
 const WAIT_LOG_EVERY: f32 = 2.0;
-/// How far a same-map snap must move the body before its destination is treated as a **load** at
-/// all (yards). Under this, a teleport cannot outrun the streamer — the ground and buildings you
-/// land on are the ones you left — and the raise below would only be able to flash a cover over
-/// content that happened to be arriving anyway. Sized to clear every *combat* relocation with
-/// room to spare (charge/intercept 25 yd, blink 20 yd, the knockbacks under 30), because those
-/// end in a server teleport too and a black screen mid-fight is the one thing this must never
-/// do; the reported case — `.tele` across a city — is 458 yd.
+/// How far (yd) a same-map snap must move the body to count as a load. It clears every combat
+/// relocation (charge and intercept 25 yd, blink 20, knockbacks under 30), which also ends in a
+/// server teleport and must never black out the screen.
 const SNAP_LOAD_MIN_YD: f32 = 100.0;
 
-/// Consecutive covered+in-world frames before the cover counts as **on the glass**.
-///
-/// Renders are serial, so at 3 the two intermediate frames' renders have committed their
-/// presents. This was 0962's argument and its constant; it now lives beside the fact it defines
-/// rather than being restated in each consumer (it had already been copied twice, and the third
-/// consumer — the world camera — never got it at all).
+/// Consecutive covered, in-world frames before the cover is on the glass: renders are serial, so
+/// at 3 the two frames before have presented.
 const COVER_PRESENT_FRAMES: u32 = 3;
 
-/// **Is the entry cover ON THE GLASS?** — the one fact 0962's rule is written in terms of, held
-/// in one place because restating it is exactly how it gets forgotten.
-///
-/// The world-entry raise happens in `Update`; the state flips a frame later, so the FIRST
-/// covered+in-world frame is also the first frame whose render can draw the cover. Anything
-/// synchronous on that frame holds the *previous* present — the character-select screen, frozen
-/// — for its whole duration. That is the director's report, three times now (0962, 1345, and the
-/// world camera below), and each time it was one consumer nobody had counted:
-///
-/// - the **pipeline-warm menagerie** — its own `covered_frames`, now this;
-/// - the **world-entry FrameXML load** (1345) — its own `covered_frames`, now this;
-/// - the **world camera and the booth wake** — never deferred at all, and measured (this record's
-///   round) as **57 of the flip frame's 60 ms**: the first render of a 3 000-entity world with
-///   cold pipelines, plus fifteen booth cameras woken by the warm pass, all on the one frame that
-///   owes the glass a loading screen.
-///
-/// Counted in `First` so a `PreUpdate` reader (the entry load, an exclusive system) and an
-/// `Update` reader (the warm pass, the camera gate) see the same frame's answer.
+/// Whether the entry cover has reached the glass. The first covered frame is the first whose
+/// render can draw the cover, so synchronous work on it freezes character select on screen.
+/// Counted in `First` so `PreUpdate` and `Update` readers see the same frame's answer.
 #[derive(Resource, Default)]
 pub(crate) struct EntryCover {
     /// Consecutive covered+in-world frames; reset the moment either goes false.
@@ -130,26 +71,23 @@ pub(crate) struct EntryCover {
 }
 
 impl EntryCover {
-    /// Has the cover had enough frames to reach the glass? **True whenever no cover is up** —
-    /// there is then no glass to protect, and a consumer that waited would wait forever (the
-    /// capture that boots straight in-world is exactly this case).
+    /// Whether the cover has had enough frames to reach the glass; true when no cover is up, since
+    /// a consumer would otherwise wait forever (a capture that boots straight in world).
     pub(crate) fn presented(&self) -> bool {
         self.frames == 0 || self.frames >= COVER_PRESENT_FRAMES
     }
 
-    /// Is a cover up and still owed its first present? The inverse of the arm above that a
-    /// *renderer* wants: "do not draw anything but the cover this frame".
+    /// A cover is up and not yet presented: a renderer draws nothing but the cover this frame.
     pub(crate) fn owes_a_present(&self) -> bool {
         self.frames > 0 && self.frames < COVER_PRESENT_FRAMES
     }
 
-    /// **Is a world cover up right now?** — `LoadingScreen::covering()` ∧ in world, which is
-    /// the pair every cover consumer actually means, counted once here.
+    /// A cover is up and the client is in world.
     pub(crate) fn covering(&self) -> bool {
         self.frames > 0
     }
 
-    /// Covered frames so far — what the tests assert on.
+    /// Covered frames so far.
     #[cfg(test)]
     pub(crate) fn frames(&self) -> u32 {
         self.frames
@@ -157,8 +95,7 @@ impl EntryCover {
 }
 
 impl EntryCover {
-    /// One frame's worth of counting — the whole rule, so the test seam and the system cannot
-    /// drift apart.
+    /// One frame's count; the system and the tests both go through this.
     pub(crate) fn tick(&mut self, covered: bool) {
         self.frames = if covered {
             self.frames.saturating_add(1)
@@ -168,7 +105,7 @@ impl EntryCover {
     }
 }
 
-/// `First`: advance (or reset) the covered-frame count. One writer, read by every consumer.
+/// `First`: advance or reset the covered-frame count.
 fn count_entry_cover(
     screen: Res<LoadingScreen>,
     state: Res<State<crate::char_select::ClientState>>,
@@ -178,8 +115,7 @@ fn count_entry_cover(
     cover.tick(screen.covering() && in_world);
 }
 
-/// Bevy resource wrapper around the format-crate [`LoadingScreenCatalog`] (the `LoadingScreenID` → BLP
-/// path table). Paired with [`MapCatalogRes`] (the `mapId` → `LoadingScreenID` FK) to resolve art.
+/// The `LoadingScreenID` → BLP path table; [`MapCatalogRes`] maps a map to its `LoadingScreenID`.
 #[derive(Resource)]
 struct LoadingScreenCatalogRes(LoadingScreenCatalog);
 
@@ -196,86 +132,47 @@ pub(crate) enum TipEdge {
 #[derive(Resource, Default)]
 pub(crate) struct LoadingScreen {
     active: bool,
-    /// A raise from an entry edge (the pick's `Connected`, `SMSG_TRANSFER_PENDING`) holds until the
-    /// destination snap (worldport/teleport) actually lands — so the OLD location's readiness can
-    /// never clear a screen raised for the NEW one. This is what closes the world-entry flash: the
-    /// login-vista tiles are fully resident the moment the glue tears down, and without this hold
-    /// that residency would clear the screen seconds before `SMSG_LOGIN_VERIFY_WORLD` arrives.
+    /// A raise from an entry edge holds until the destination snap lands, so the old location's
+    /// residency cannot clear a screen raised for the new one (at world entry the login vista is
+    /// resident well before `SMSG_LOGIN_VERIFY_WORLD`).
     awaiting_snap: bool,
-    /// **The map to resolve this screen's art from** — the reference's `[0x82f00c]`, set by every
-    /// raise: the roster's `Character.map` at the pick edge, the transfer's map at
-    /// `SMSG_TRANSFER_PENDING`, the map we are on for a backstop raise. `None` is the reference's
-    /// `-1`: *this screen draws no backdrop* — the boot default, and what a failed resolve leaves
-    /// behind ([`Self::art_resolved`]).
-    ///
-    /// It is deliberately not `CurrentMap`, which moves under a live screen. Log out inside a
-    /// dungeon whose instance is gone by the time you come back and vmangos relocates you *during*
-    /// `Player::LoadFromDB` (`Player.cpp`, the `GetGoBackTrigger` arm) — no
-    /// `SMSG_TRANSFER_PENDING`, no `SMSG_NEW_WORLD`, just a `SMSG_LOGIN_VERIFY_WORLD` naming a
-    /// different map than the roster row the screen was raised from. Reading the art per frame
-    /// from `CurrentMap` made the dungeon backdrop switch to the continent one mid-load; nothing
-    /// on the wire can do that in the reference ([`Self::snap_landed`]).
-    ///
-    /// **This field is not the latch, though — [`Self::art_resolved`] is**. Five
-    /// writers touch `[0x82f00c]` image-wide, all inside the `LoadingScreen.cpp` TU: `0x4067e6`
-    /// and `0x4072d3` store a map id (the two transition entries), and `0x406d0e`/`0x4073d4`/
-    /// `0x407e59` store `-1`. A raise landing on a screen that is already up re-points it
-    /// *unconditionally* — and repaints nothing, because the texture is already resolved.
+    /// The map this screen's art resolves from, the reference's `[0x82f00c]`, set by every raise;
+    /// `None` is its `-1`, no backdrop. Not `CurrentMap`: vmangos can relocate a character inside
+    /// `Player::LoadFromDB` (`Player.cpp:15020`), under a live screen. Its writers: `0x4067e6` and
+    /// `0x4072d3` store a map id, `0x406d0e`, `0x4073d4` and `0x407e59` store `-1`.
     map: Option<u32>,
-    /// **Has this screen resolved its backdrop yet?** — the reference's `[0x882e04]`, the loaded
-    /// texture handle, and the thing the art is actually latched by. `0x406cf0`
-    /// reads the map id only to reject `-1`, then `0x406cfc`/`0x406d01`/`0x406d03` skip the
-    /// resolver `0x406e20` outright whenever the handle is non-null; the handle's three writers
-    /// image-wide are the resolver's two stores and `0x407ed7 = 0` inside the dismiss `0x407e80`.
-    ///
-    /// So the map id decides the picture on **exactly one frame per screen**, and nothing that
-    /// happens afterwards can change it. Cleared by [`Self::dismiss`], never by a raise.
+    /// The reference's `[0x882e04]` texture handle, which latches the art: `0x406cf0` reads the map
+    /// id only to reject `-1`, and `0x406cfc`/`0x406d01`/`0x406d03` skip the resolver `0x406e20`
+    /// while it is set. Cleared by [`Self::dismiss`], never by a raise.
     art_resolved: bool,
-    /// **Plain black cover, no art, no bar** — the logout transition. The logout
-    /// teardown despawns the avatar and the streamed world in the same frame's Net stage, but
-    /// `CharSelect` (and the glue screen with it) only applies at the NEXT frame's state
-    /// transition — without this the dead world renders uncovered for that frame, and it is
-    /// exactly the teardown-burst frame, so it lingers. The ref's world→glue swap shows black
-    /// there too. Dropped the moment the state leaves `InWorld` (the glue owns the screen from
-    /// then, at a higher z); any real raise replaces it with the full screen.
+    /// Plain black cover with no art or bar, for the world→glue cut; dropped once the state leaves
+    /// `InWorld`.
     blackout: bool,
-    /// Consecutive presentable frames while active (see [`CLEAR_AFTER_READY_FRAMES`]).
+    /// Consecutive presentable frames while active ([`CLEAR_AFTER_READY_FRAMES`]).
     ready_frames: u32,
-    /// Monotonic bar fill, 0..1 — only ever advances within a load (reset to 0 on each activation), so
-    /// the bar reads as one continuous stream even though the raw residency ratio dips as `desired`
-    /// shifts while the view moves. A real loading bar never goes backwards.
+    /// Bar fill, 0..1, monotonic within a load: the raw residency ratio dips as the view moves.
     displayed: f32,
-    /// Decoded backdrop art by BLP path, so repeated teleports to a continent don't re-decode.
+    /// Decoded backdrop art by BLP path.
     art_cache: HashMap<String, Handle<Image>>,
-    /// **Which tip the next raise should carry** — `Pick` on the glue→world entry, `Clear` on every
-    /// other raise, taken by [`crate::game_tip::drive_game_tip`] on the same frame. A field rather
-    /// than a message because it is a property OF the raise, and the raise is this struct's.
+    /// Which tip the next raise carries, taken by [`crate::game_tip::drive_game_tip`].
     pub(crate) tip_edge: Option<TipEdge>,
-    /// **Capture only** — the clear below is skipped while this is set. A loading screen is a
-    /// picture that is up for a second and then gone: nothing in the tree could photograph one,
-    /// which is how the tip of the day shipped dead and stayed dead through a live smoke run.
-    /// Written by [`Self::hold_for_capture`] and by nothing a player can reach.
+    /// Capture only: the clear is skipped while set ([`Self::hold_for_capture`]).
     held: bool,
 
-    /// `Time::elapsed_secs` at the last raise + at the last wait-instrument line (see
-    /// [`WAIT_LOG_AFTER`]).
+    /// `Time::elapsed_secs` at the last raise and at the last wait log line.
     active_since: f32,
     last_wait_log: f32,
-    /// The avatar's position as of LAST frame — so a snap's own displacement is knowable here
-    /// (the snap is applied in `Input`, a stage before this one). Read only by the snap raise
-    /// below, which uses it to tell a relocation from a spell's little hop.
+    /// The avatar's position last frame, to measure a snap (applied in `Input`, a stage earlier).
     last_pos: Option<Vec3>,
 }
 
 impl LoadingScreen {
-    /// Whether the opaque loading backdrop currently covers the frame — the world camera renders
-    /// under it (pipeline warm-up), never behind the glue screens.
+    /// Whether the opaque cover is up; the world camera renders under it, never behind the glue.
     pub(crate) fn covering(&self) -> bool {
         self.active
     }
 
-    /// An active cover, for tests that drive covered-frame accounting (the entry-load deferral)
-    /// and the cursor's covered arm.
+    /// An active cover, for tests.
     #[cfg(test)]
     pub(crate) fn test_covering() -> Self {
         Self {
@@ -284,19 +181,13 @@ impl LoadingScreen {
         }
     }
 
-    /// Take the raise's tip edge, if one is pending — read once, by
-    /// [`crate::game_tip::drive_game_tip`].
+    /// Take the pending raise's tip edge; read once, by [`crate::game_tip::drive_game_tip`].
     pub(crate) fn take_tip_edge(&mut self) -> Option<TipEdge> {
         self.tip_edge.take()
     }
 
-    /// **The capture instrument** (`WOW_CAPTURE=loading-tip`): raise the screen the way the
-    /// glue→world entry does — art, bar and a `Pick` edge for the tip — and then never let go, so
-    /// the harness's settle window has something to hold still on. The one screen in the client
-    /// whose whole existence is measured in the seconds before it disappears, made photographable.
-    /// `map` is the destination the art latches to, exactly as a real raise's is ([`Self::map`]):
-    /// the harness knows it from the scenario, and with `None` the shot would be a black box with a
-    /// tip on it rather than the real `Map.dbc` → `LoadingScreens.dbc` → BLP chain.
+    /// The capture instrument (`WOW_CAPTURE=loading-tip`): raise as the glue→world entry does,
+    /// with art, bar and a `Pick` tip, and never clear. `map` latches the art as a raise's does.
     pub(crate) fn hold_for_capture(&mut self, map: Option<u32>) {
         self.active = true;
         self.blackout = false;
@@ -306,13 +197,9 @@ impl LoadingScreen {
         self.tip_edge = Some(TipEdge::Pick);
     }
 
-    /// Raise the screen for a fresh load. `awaiting_snap` marks a raise whose destination snap is
-    /// still in flight; `map` is the destination this screen's art is LATCHED to for its whole life
-    /// ([`Self::map`]) — every caller states what it knows, and a caller with no announced
-    /// destination passes the map we are on rather than leaving the art to follow `CurrentMap`.
-    ///
-    /// **Only an edge that would reach the reference's own transition entries calls this.** The
-    /// destination *snap* is not one of them ([`Self::snap_landed`]).
+    /// Raise the screen for a fresh load, its art latched to `map` for its life (a caller with no
+    /// announced destination passes the current map). Only an edge that reaches the reference's
+    /// transition entries calls this, never a snap ([`Self::snap_landed`]).
     fn raise(&mut self, reason: &str, awaiting_snap: bool, map: Option<u32>, now: f32) {
         self.active = true;
         self.blackout = false;
@@ -325,22 +212,11 @@ impl LoadingScreen {
         info!("loading screen: up ({reason}, map {map:?})");
     }
 
-    /// **The destination snap landed** — `SMSG_NEW_WORLD` or `SMSG_LOGIN_VERIFY_WORLD`. It ends the
-    /// wait a raise armed, and it does **nothing else**: not the art, not the tip, not the bar.
-    ///
-    /// The two are one [`crate::net::WorldportMessage`] here and two handlers in the reference
-    /// (`0x401b00` and `0x401de0`), and *neither touches the screen*:
-    /// the raise `0x406800` has three call sites and all three are inside the `LoadingScreen.cpp`
-    /// TU, so nothing on the wire can re-raise or re-point a screen that is already up. Treating
-    /// the snap as a fresh load is what swapped the backdrop mid-load ([`Self::map`]), restarted
-    /// the bar, and — a round-trip into *every* world entry — wiped the tip of the day that
-    /// decision 2077 had just picked.
-    ///
-    /// `map` is the destination the snap names — `None` for a same-map teleport ack, which cannot
-    /// disagree with the screen by construction.
+    /// The destination snap (`SMSG_NEW_WORLD` or `SMSG_LOGIN_VERIFY_WORLD`) landed: it ends the
+    /// raise's wait and nothing else, not the art, the tip or the bar. The reference's handlers
+    /// (`0x401b00`, `0x401de0`) never touch the screen: the raise `0x406800` has three call sites,
+    /// all inside `LoadingScreen.cpp`. `map` is `None` for a same-map teleport ack.
     fn snap_landed(&mut self, map: Option<u32>) {
-        // Worth a line on its own: the destination the server actually seated us on is not the one
-        // this screen was raised for, i.e. we were relocated between the roster and the login.
         if let (Some(raised), Some(dest)) = (self.map, map) {
             if raised != dest {
                 info!("loading screen: snap landed on map {dest} — raised for map {raised}, art holds");
@@ -349,14 +225,9 @@ impl LoadingScreen {
         self.awaiting_snap = false;
     }
 
-    /// **The far snap's whole rule** — the one place it lives, so the test seam and the system
-    /// cannot drift apart (the [`EntryCover::tick`] pattern, two structs up).
-    ///
-    /// A screen that is already up **is this snap's screen** — the entry raise waiting for
-    /// `SMSG_LOGIN_VERIFY_WORLD`, the portal's waiting for `SMSG_NEW_WORLD` — so the snap ends its
-    /// wait and nothing more. Returns `true` only when no screen is up at all, which is the
-    /// caller's cue to raise one: our backstop for a server-initiated port that arrived with no
-    /// announcing edge (the reference needs no such backstop — its own world load blocks).
+    /// A far snap: a screen already up is this snap's own, so the snap only ends its wait. Returns
+    /// `true` when no screen is up and the caller should raise one, our backstop for a port with no
+    /// announcing edge (the reference's blocking world load needs none).
     #[must_use]
     fn far_snap(&mut self, map: u32) -> bool {
         if !self.active {
@@ -366,15 +237,13 @@ impl LoadingScreen {
         false
     }
 
-    /// **The dismiss** (the reference's `0x407e80`) — the one place the screen comes down, so the
-    /// things a screen owns for its lifetime come down with it exactly once. The tip is one of
-    /// those: `[0x882e10]`'s only writers image-wide are the `EnterWorld` setter `0x406630` and
-    /// `0x407f2b` inside this dismiss, so a *raise* never clears a tip — only this does.
+    /// The dismiss (the reference's `0x407e80`), the only place a tip clears: `[0x882e10]`'s
+    /// writers are the `EnterWorld` setter `0x406630` and `0x407f2b` here.
     fn dismiss(&mut self) {
         self.active = false;
         self.blackout = false;
         self.tip_edge = Some(TipEdge::Clear);
-        // `0x407ed7 mov ds:0x882e04,edi` — the next screen resolves its own art, and only here.
+        // `0x407ed7` clears `[0x882e04]`: the next screen resolves its own art.
         self.art_resolved = false;
     }
 }
@@ -388,8 +257,7 @@ struct LoadingBackdrop;
 struct LoadingBarFill;
 #[derive(Component)]
 struct LoadingBarBorder;
-/// The tip-of-the-day text block — its `Text` root; the coloured runs are its
-/// children, rebuilt when the shown tip changes.
+/// The tip-of-the-day `Text` root; its coloured runs are children, rebuilt when the tip changes.
 #[derive(Component)]
 pub(crate) struct LoadingTip;
 
@@ -399,34 +267,25 @@ impl Plugin for LoadingScreenPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LoadingScreen>()
             .init_resource::<EntryCover>()
-            // `First`, ahead of every consumer in `PreUpdate` and `Update` — see [`EntryCover`].
+            // In `First`, ahead of every consumer in `PreUpdate` and `Update`.
             .add_systems(First, count_entry_cover)
             .add_systems(Startup, setup_loading_screen.after(AssetSet::Open))
-            // In `WorldStage::Present` (after Input + Stream): we read residency for the SAME frame's
-            // player position — a teleport snaps in Input → the streamer recomputes focus in Stream →
-            // we cover it here. Visibility set now propagates in PostUpdate and renders this frame, so
-            // the swap never flashes.
+            // In `WorldStage::Present`, after Input and Stream: a teleport snaps in Input and the
+            // streamer refocuses in Stream, so the cover lands on the same frame, never a flash.
             .add_systems(Update, drive_loading_screen.in_set(WorldStage::Present));
-        // …and the other half of what a cover *is*: while it is up, the client takes no input
-        // (`input`). Wired here rather than as a plugin of its own so the cover and its input rule
-        // can never be registered apart.
+        // The cover's input rule, registered here so the two cannot be registered apart.
         input::build(app);
     }
 }
 
-/// Startup: load the LoadingScreens catalog + the bar texture stack off the shared chain, and spawn
-/// the (initially hidden, then activated on the first `drive` frame) UI tree.
+/// Startup: load the LoadingScreens catalog and the bar textures, and spawn the hidden UI tree.
 fn setup_loading_screen(
     mut commands: Commands,
     world_assets: Option<ResMut<WorldAssets>>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    // Root: fullscreen black — this IS the pillarbox letterbox, and it spawns UNCONDITIONALLY.
-    // Every `covering()` consumer (the world camera stays active to warm pipelines, the warm
-    // pass, the settle hold, and now the audio hold) behaves as if covered whenever
-    // `LoadingScreen::active` is true — so a missing catalog or bar texture must degrade to a
-    // plain black cover, never to "no cover node at all" while the whole client pretends one is
-    // up (the naked-world failure this used to be). Flex-centres the 4:3 content area.
+    // The black pillarbox root spawns unconditionally: `covering()` consumers act as covered while
+    // the screen is active, so missing art must still leave a black cover.
     let root = commands
         .spawn((
             LoadingRoot,
@@ -439,7 +298,7 @@ fn setup_loading_screen(
                 ..default()
             },
             BackgroundColor(Color::BLACK),
-            // Above the 3D scene; UI already paints after the main pass, this orders within UI.
+            // UI already paints after the 3D scene; this orders within UI.
             GlobalZIndex(1000),
             Visibility::Hidden,
         ))
@@ -461,22 +320,17 @@ fn setup_loading_screen(
         }
     }
 
-    // The two layers 1.12 actually draws (sRGB clamp sprites — UI art, not tiling world art).
+    // The two layers 1.12 draws, as sRGB clamp sprites.
     let mut tex = |path: &str| assets.sprite_texture(path, &mut images);
     let Some(border) = tex("Interface\\Glues\\LoadingBar\\Loading-BarBorder.blp") else {
         error!("loading bar textures missing — plain black cover, no art");
         return;
     };
     let fill = tex("Interface\\Glues\\LoadingBar\\Loading-BarFill.blp").unwrap_or_default();
-    // The spawned ImageNodes below own these handles (the root is never despawned, only hidden), so
-    // the textures stay resident without a separate holder resource.
 
     commands.entity(root).with_children(|root| {
-        // The whole loading screen renders in one 4:3 area fit to viewport height, centred, with
-        // the root's black showing as pillarbox bars L/R (the reference's behaviour — the glue/load
-        // screen is authored 4:3; on a wider window it letterboxes). Width = height·4/3 in vh.
-        // The backdrop + bar are children, so their verified fractions are relative to THIS area.
-        // Sibling paint order = spawn order: backdrop → fill → border (border on top).
+        // One 4:3 area fit to the viewport height and centred; the bar's fractions are relative
+        // to it. Paint order is spawn order: backdrop, tip, fill, border.
         root.spawn(Node {
             width: Val::Vh(100.0 * BACKDROP_ASPECT),
             height: Val::Vh(100.0),
@@ -484,8 +338,7 @@ fn setup_loading_screen(
             ..default()
         })
         .with_children(|area| {
-            // Backdrop art: the square BLP stretched to fill the 4:3 area (mild widen — what the
-            // reference does). Starts black (default-white texture tinted) until the art resolves.
+            // Tinted black until the art resolves.
             area.spawn((
                 LoadingBackdrop,
                 ImageNode {
@@ -500,16 +353,10 @@ fn setup_loading_screen(
                     ..default()
                 },
             ));
-            // The tip of the day, drawn between the background quad and the
-            // progress bar — the reference's own order (`0x406e12`/`0x406e18`). The block is
-            // positioned in PERCENT of this 4:3 area, which is exactly the space
-            // `crate::game_tip`'s constants are in; only the font size and the shadow need pixels,
-            // and those follow the window each frame. Empty and hidden until a glue->world raise
-            // fills it.
+            // The tip, between the backdrop and the bar as in the reference (`0x406e12`,
+            // `0x406e18`), placed in percent of this area, the space of `crate::game_tip`.
             area.spawn((LoadingTip, crate::game_tip::tip_bundle()));
-            // Fill — left-anchored; width = progress·FILL_MAX_WIDTH (set each frame). y from the
-            // BOTTOM (verified by screenshot + binary). The fill art is a horizontally-uniform
-            // gradient, so width-scaling reads as a left→right reveal.
+            // The fill art is a horizontally uniform gradient, so scaling its width is a reveal.
             area.spawn((
                 LoadingBarFill,
                 Node {
@@ -547,14 +394,12 @@ fn setup_loading_screen(
     });
 }
 
-/// Per-frame: observe the lifecycle edges, run the trigger/clear state machine, resolve backdrop
-/// art, and push the progress fraction into the bar.
+/// Per frame: observe the lifecycle edges, run the raise and clear rules, resolve the backdrop and
+/// set the bar.
 #[allow(clippy::type_complexity)]
 fn drive_loading_screen(
     mut screen: ResMut<LoadingScreen>,
-    // The streamer's two published facts, bundled into one param (Bevy's 16-element system-param
-    // ceiling, the same squeeze `player::control` and `feed_ui_input` already pay): what is
-    // resident, and whether that residency is even ABOUT the player's own ground this frame.
+    // Bundled to stay under Bevy's 16-parameter ceiling.
     stream: (
         Res<WorldLoadProgress>,
         Res<benilla_world::terrain_stream::ViewFocus>,
@@ -576,23 +421,12 @@ fn drive_loading_screen(
         ),
     >,
     player: Option<Res<crate::player::Player>>,
-    // **Real, not virtual** — this clock measures a LOAD, and `Time<Virtual>` clamps any frame
-    // longer than 250 ms (`transport.rs` names the same constant for the same reason). A loading
-    // screen is made of exactly those frames, so the default clock under-reports it: measured on
-    // one smoke re-entry, a cover that was up for 2.24 s wall reported 1.2 s. An instrument whose
-    // whole job is "how long was this up, and what was blocking it" cannot run on a clock that
-    // discards the stalls.
+    // Real time: `Time<Virtual>` clamps frames over 250 ms, and a load is made of those.
     time: Res<Time<Real>>,
-    // The 0837 warm pass: the cover holds until the menagerie's pipelines have compiled — the
-    // point of the cover is that NOTHING first-sight-compiles after it lifts.
+    // The cover holds until the warm pass has compiled its pipelines.
     warm: Res<crate::pipe_warm::WarmPass>,
-    // The deferred world-entry UI load (0962's frame accounting, applied to 1051's burst):
-    // armed at the entry edge, run behind this cover a few frames in. While it is still
-    // pending the reveal would show a world with no interface — the reference's reveal always
-    // has the UI up, because its UI load happens inside its blocking world load.
+    // The world-entry UI load runs behind this cover; the reference's reveal always has the UI up.
     entry_ui_pending: Option<Res<crate::ui_script::PendingEntryUiLoad>>,
-    // The lifecycle edges, all observed from what the net bridge already
-    // publishes — this module owns the whole state machine, nothing else is instrumented for it.
     edges: (
         Res<State<crate::char_select::ClientState>>,
         MessageReader<crate::net::EnteredWorldMessage>,
@@ -619,70 +453,46 @@ fn drive_loading_screen(
     let (progress, focus) = (&stream.0, &stream.1);
     let now = time.elapsed_secs();
     let map_id = current_map.as_ref().map(|m| m.0);
-    // The physics hold releases on the same residency signal that clears this screen (decision
-    // 0737 — never on ground contact), so waiting for it costs nothing and guarantees the safe
-    // order: the body's world is live before the reveal, never a reveal of a body about to drop.
+    // The physics hold releases on the same residency signal, so the body's world is live first.
     let player_settling = player.as_ref().is_some_and(|p| p.settling);
 
     // --- The edges. ---
-    // A real glue entry (not 0065's seamless in-world reconnect, which must stay seamless): the
-    // same frame `enter_on_connected` flips the state that tears the glue down, this raise puts
-    // the cover up — raise and teardown are atomic by construction. The destination snap
-    // (`SMSG_LOGIN_VERIFY_WORLD`) is still a server character-load away; `awaiting_snap` holds the
-    // screen across that gap. Art resolves at once from the roster's own `Character.map`.
+    // A glue entry (not the seamless in-world reconnect), raised on the frame the glue tears down
+    // and held across the server's character load; the art comes from the roster's map.
     if entered.read().next().is_some() && *state.get() != crate::char_select::ClientState::InWorld {
         let map = roster.as_ref().and_then(|r| r.pending_map());
         screen.raise("world entry", true, map, now);
-        // **The tip of the day rides THIS edge and no other**: the reference's
-        // setter `0x406630` has exactly one caller, inside `CGlueMgr::EnterWorld`, and neither
-        // `SMSG_TRANSFER_PENDING` arm reaches it — so a portal or worldport screen carries no tip.
-        // The pick itself is `crate::game_tip`'s, one system over; this list is at Bevy's
-        // sixteen-parameter ceiling and the tip needs three resources of its own.
+        // The tip rides this edge alone: the reference's setter `0x406630` has one caller, in
+        // `CGlueMgr::EnterWorld`, which neither `SMSG_TRANSFER_PENDING` arm reaches.
         screen.tip_edge = Some(TipEdge::Pick);
     }
-    // A portal walk-in (`SMSG_TRANSFER_PENDING`, no transport): the server is about to unload us
-    // and the `SMSG_NEW_WORLD` snap follows after its own load — cover now, like the reference.
-    // Transport crossings keep riding visibly until their worldport lands below.
+    // A portal (`SMSG_TRANSFER_PENDING`, no transport): cover now, before the server unloads us, as
+    // the reference does. A transport crossing rides visibly until its worldport lands.
     if let Some(t) = transfer.as_ref().filter(|t| t.is_changed()) {
         match &t.0 {
             Some(info) if info.transport_entry.is_none() => {
                 screen.raise("transfer pending", true, Some(info.map_id), now);
             }
-            // The latch cleared with no snap in flight = `SMSG_TRANSFER_ABORTED` (a worldport
-            // clears it too, but that path also lands below this frame): stop awaiting, and the
-            // still-resident old world clears the screen through the ordinary debounce.
+            // Cleared with no snap in flight is `SMSG_TRANSFER_ABORTED` (a worldport lands below
+            // this frame): stop waiting, and the resident old world clears the screen.
             None => screen.awaiting_snap = false,
             Some(_) => {}
         }
     }
-    // The snap ([`LoadingScreen::far_snap`]): it never re-raises a live screen, so the art that
-    // screen was raised with holds even when the server seats us on a different map than the one
-    // it announced. That is the reference exactly — `0x406800` is reachable from nothing outside
-    // the loading-screen TU, so no packet can re-point a screen that is up.
+    // A snap never re-raises a live screen ([`LoadingScreen::far_snap`]).
     for w in worldports.read() {
         if screen.far_snap(w.map_id) {
             screen.raise("worldport", false, Some(w.map_id), now);
         }
     }
-    // A same-map teleport just ends any awaited snap — whether it needs a screen at all is the
-    // backstop's call below (a summon across the room shouldn't flash one).
+    // A same-map teleport ends any awaited snap; whether it needs a screen is decided below.
     let teleported = teleports.read().next().is_some();
     if teleported {
         screen.snap_landed(None);
     }
-    // Logout: the same frame's Net stage despawned the avatar and tore the world
-    // down, but `CharSelect` only applies at the NEXT frame's state transition — cover the dead
-    // world with plain black until the glue owns the screen. No art, no bar: the ref's
-    // world→glue swap is a black cut, not a loading screen.
-    // A dead session is the same world→glue cut, and it needs this arm more than
-    // logout does: the entry race raises the cover on `EnteredWorldMessage` a few lines up and
-    // arms `awaiting_snap` for a snap the dead socket will never send, so without the disarm here
-    // the cover is what the player would have been left staring at.
+    // Logout, a lost session or a refused login: `CharSelect` applies next frame, so cover the torn
+    // down world with black (the reference's world→glue cut), and disarm a snap that will not come.
     let session_over = lost.read().any(|m| m.session_over);
-    // A **refused character login** is the same cut, and it needs the disarm as badly as a dead
-    // session does: the entry edge above raised the cover with `awaiting_snap` armed for a snap
-    // the server has just told us will never come, and nothing else in this function can end that
-    // wait. Left alone it is a loading screen with no world behind it and no way off.
     let refused = refusals.read().next().is_some();
     if logouts.read().next().is_some() || session_over || refused {
         screen.active = true;
@@ -705,53 +515,24 @@ fn drive_loading_screen(
         screen.dismiss();
     }
 
-    // --- Backstop trigger: the ground under the view focus isn't resident and nothing raised us
-    // (a far same-map `.tele`, or any path with no edge). Normal streaming keeps the focus tile
-    // resident, so this never fires while walking.
-    //
-    // **In world only**. It used to fire at boot as well, and that was load-bearing
-    // by accident: a raised screen keeps the world camera active, which is what compiled the
-    // world's pipelines behind the glue. But it only worked because the world was being streamed
-    // behind the glue in the first place — with no world to load there, the same trigger would put
-    // an invisible screen up forever against residency that never arrives. The warm-up is not lost,
-    // it MOVED: the world now loads under the cover this same function raises on world entry, which
-    // is where a warm-up belongs. ---
-    //
-    // **And only while the focus IS the body** ([`ViewFocus::follows_body`]). The trigger's whole
-    // premise is "residency says the ground under the player is missing and no edge announced it,
-    // so a load must be happening". While the eye is deliberately elsewhere — a cinematic fly-by,
-    // a free-fly — residency describes the *camera's* tile, and reading it as a fact about the
-    // player is reading someone else's ground (decision 1336's lesson, one consumer over).
-    // Measured: every cinematic raised this cover the instant it started (`.debug play cinematic
-    // 41` → "loading screen: up (focus not resident, map None)" in the same millisecond as the
-    // shot), covering the opening seconds of the fly-by the deferred-start latch exists to protect
-    // — and, once the body took the settle hold for the same detachment, covering ALL of it,
-    // because this cover's clear waits on that hold and that hold waits on the focus coming home.
+    // --- Backstop: the ground under the focus is not resident and nothing raised us. In world
+    // only, since behind the glue nothing loads; and only while the focus is the body, since in a
+    // cinematic or free-fly residency describes the camera's tile. ---
     if !screen.active
         && !progress.focus_resident
         && focus.follows_body()
         && *state.get() == crate::char_select::ClientState::InWorld
     {
-        // Same map by construction — the destination this covers is the ground under the body.
+        // Same map by construction: the ground under the body.
         screen.raise("focus not resident", false, map_id, now);
     }
 
-    // --- …and the same test at the SNAP, on everything the reveal actually needs. The backstop
-    // above watches one term — the focus TERRAIN tile — and a teleport inside the streamer's keep
-    // band (up to ~1600 yd, three tiles) lands on ground that is already resident, so it never
-    // fires. The destination's *buildings* are a different question: their placements may still be
-    // spawning, and since the retained pass (1429) a spawned building still has a bake between it
-    // and the screen. That is how `.tele` across a city put the player down in a Stormwind with no
-    // Stormwind in it, uncovered, for the frames it took to arrive.
-    //
-    // Only at a snap, and only against the same predicate that CLEARS the screen: a summon across
-    // a room whose world is already there raises nothing (no flash), and ordinary walking — which
-    // crosses tile lines with placements pending all day — is not a snap and cannot reach this. ---
+    // --- At a snap, the same test against the clear's own predicate: a teleport inside the keep
+    // band lands on resident terrain while the destination's buildings may still be arriving. ---
     let body = player.as_ref().map(|p| p.pos);
     let relocated = match (teleported, screen.last_pos, body) {
         (true, Some(was), Some(now_pos)) => was.distance(now_pos) >= SNAP_LOAD_MIN_YD,
-        // No previous position to compare (the entry frame): treat the snap as a relocation, the
-        // conservative arm — a covered load is recoverable, a naked one is what this closes.
+        // No previous position (the entry frame): treat it as a relocation.
         (true, _, _) => true,
         _ => false,
     };
@@ -764,9 +545,7 @@ fn drive_loading_screen(
         screen.raise("teleport, destination not presentable", false, map_id, now);
     }
 
-    // --- Clear: the destination snap has landed, the scene is presentable (tiles + focus
-    // placements + colliders — [`WorldLoadProgress::presentable`]), and the physics hold is done,
-    // sustained a few frames. ---
+    // --- Clear, sustained a few frames. ---
     if screen.active && !screen.held {
         if progress.is_ready()
             && progress.presentable()
@@ -787,7 +566,6 @@ fn drive_loading_screen(
             }
         } else {
             screen.ready_frames = 0;
-            // The wait instrument: a screen up past the threshold names the blocking term.
             if now - screen.active_since > WAIT_LOG_AFTER
                 && now - screen.last_wait_log >= WAIT_LOG_EVERY
             {
@@ -811,8 +589,7 @@ fn drive_loading_screen(
         }
     }
 
-    // --- Visibility. The root is the cover; the backdrop art + bar hide under blackout (0738's
-    // plain black cut — the root's black background IS the frame then). ---
+    // --- Visibility: under blackout only the root's black shows. ---
     if let Ok(mut vis) = root.single_mut() {
         *vis = if screen.active {
             Visibility::Visible
@@ -839,15 +616,10 @@ fn drive_loading_screen(
         return;
     }
 
-    // --- Backdrop art — `0x406cf0`'s gate in shape: the map id is read ONCE per
-    // screen, to resolve the texture; from then on the resolved texture is what draws, and only
-    // the dismiss clears it. A raise landing on a live screen re-points [`LoadingScreen::map`] and
-    // repaints nothing, which is why "the screen you were given is the screen you keep" survives
-    // even a transfer arriving mid-load. Resolution walks the FK chain and caches by path. ---
+    // --- Backdrop art, `0x406cf0`'s gate: the map id is read once per screen to resolve the
+    // texture, so a raise onto a live screen repaints nothing. ---
     if !screen.art_resolved {
-        // Until this screen's own art lands, the backdrop is the root's black — never the LAST
-        // screen's texture, which is what a stale tint would leave on the glass (the reference
-        // holds a null handle here and does not draw the quad at all).
+        // Black, never the last screen's texture (the reference holds a null handle, no quad).
         if let Ok((mut img, _)) = backdrop.single_mut() {
             if img.color != Color::BLACK {
                 img.color = Color::BLACK;
@@ -870,15 +642,11 @@ fn drive_loading_screen(
             match (handle, backdrop.single_mut()) {
                 (Some(handle), Ok((mut img, _))) => {
                     img.image = handle;
-                    img.color = Color::WHITE; // reveal the art (was tinted black)
+                    img.color = Color::WHITE; // untint to reveal the art
                     screen.art_resolved = true;
-                    // Once per screen, and the only place the picture is decided — so "which
-                    // backdrop did that load actually show" is a log line rather than a capture.
                     info!("loading screen: backdrop for map {map_id} resolved");
                 }
-                // The resolve failed — no `LoadingScreens` row, or the BLP is missing. This screen
-                // shows no backdrop for the rest of its life and does not retry: `0x406d0e` writes
-                // `-1` into the map id for exactly this, and `0x406cf0` early-returns on it after.
+                // No retry: `0x406d0e` writes `-1` into the map id and `0x406cf0` returns on it.
                 _ => {
                     warn!("loading screen: no backdrop for map {map_id} — plain black this load");
                     screen.map = None;
@@ -887,9 +655,7 @@ fn drive_loading_screen(
         }
     }
 
-    // --- Progress bar: monotonic fill, reveals left→right, width = progress·FILL_MAX_WIDTH.
-    // While the snap is still in flight the residency being published is the OLD location's
-    // (fully resident) — hold the bar at zero until the destination's own numbers exist. ---
+    // --- Progress bar: zero until the snap lands (residency is still the old place's). ---
     if !screen.awaiting_snap {
         screen.displayed = screen.displayed.max(progress.fraction());
     }
@@ -903,11 +669,6 @@ fn drive_loading_screen(
 mod tests {
     use super::*;
 
-    /// **The one fact three consumers now share** ([`EntryCover`]). Two of them each kept their
-    /// own copy of this count (0962's menagerie, 1345's FrameXML load) and the third — the world
-    /// camera, which renders the whole arriving world on the same frame — never had one at all,
-    /// which is the freeze this round measured. The arithmetic is trivial; that it has exactly one
-    /// home is the point.
     #[test]
     fn the_cover_counts_frames_to_the_glass_and_resets_the_moment_it_drops() {
         let mut cover = EntryCover::default();
@@ -935,22 +696,15 @@ mod tests {
         );
         assert!(!cover.owes_a_present());
 
-        // A reveal (or leaving the world) drops it back to the uncovered arm in one frame — the
-        // next raise must not inherit the last one's credit.
+        // A reveal drops the count to zero in one frame; the next raise earns its own.
         cover.tick(false);
         assert_eq!(cover.frames(), 0);
         assert!(cover.presented());
         cover.tick(true);
         assert!(!cover.presented(), "the next raise starts its own count");
     }
-    /// **The director's report, as an assertion.** Log out inside a dungeon, come back hours
-    /// later, and the instance is gone: vmangos relocates the character to the dungeon's go-back
-    /// trigger *inside* `Player::LoadFromDB`, before the world is entered — so no
-    /// `SMSG_TRANSFER_PENDING` and no `SMSG_NEW_WORLD` ever announce it, and the first the client
-    /// hears is `SMSG_LOGIN_VERIFY_WORLD` naming a map the roster row did not. The screen keeps
-    /// the art it was raised with, for its whole life. The reference could not do otherwise:
-    /// `[0x82f00c]` has no writer on either world-load handler's path (`0x401b00`/`0x401de0`), and
-    /// the raise `0x406800` is reachable from nothing outside the `LoadingScreen.cpp` TU.
+    /// vmangos can relocate a character out of an expired instance inside `Player::LoadFromDB`, so
+    /// `SMSG_LOGIN_VERIFY_WORLD` names another map than the roster did.
     #[test]
     fn a_relocating_snap_cannot_move_the_art_the_screen_was_raised_with() {
         let mut screen = LoadingScreen::default();
@@ -986,9 +740,8 @@ mod tests {
         assert!(screen.active, "the screen stays up across its own snap");
     }
 
-    /// The other half of the same rule: a cross-map port that arrived with **no** announcing edge
-    /// still gets a cover. This is ours, not the reference's — its own world load blocks, so it
-    /// needs no backstop.
+    /// A cross-map port with no announcing edge still gets a cover: our backstop, which the
+    /// reference's blocking world load does not need.
     #[test]
     fn a_snap_with_nothing_covering_it_asks_for_a_raise() {
         let mut screen = LoadingScreen::default();
@@ -999,10 +752,6 @@ mod tests {
         );
     }
 
-    /// **The tip comes down with the screen, never with a raise** — `[0x882e10]`'s only writers
-    /// image-wide are `EnterWorld`'s setter `0x406630` and `0x407f2b`, inside the dismiss
-    /// `0x407e80`. Ours used to clear it on every non-entry raise, which meant the login snap wiped
-    /// the tip a server round-trip into *every* world entry.
     #[test]
     fn only_the_dismiss_clears_the_tip() {
         let mut screen = LoadingScreen::default();
@@ -1021,11 +770,7 @@ mod tests {
         assert!(!screen.active);
     }
 
-    /// **What a live screen SHOWS is latched by the resolved texture, not by the map id**
-    /// (correcting 2081's reading). A raise onto a screen that is already up
-    /// re-points `[0x82f00c]` unconditionally — the reference's `0x406640`/`0x4072c0` have no
-    /// guard on that store — and repaints nothing, because `0x406cf0` skips the resolver whenever
-    /// `[0x882e04]` is non-null. Only the dismiss `0x407ed7` clears it.
+    /// The reference's raises (`0x406640`/`0x4072c0`) store the map id with no guard.
     #[test]
     fn a_raise_onto_a_live_screen_repoints_the_map_but_never_the_picture() {
         let mut screen = LoadingScreen::default();

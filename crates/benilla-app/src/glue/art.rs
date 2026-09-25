@@ -1,10 +1,6 @@
-//! The glue screens' client-data art — everything the reference
-//! `CharacterCreate.xml` / `CharacterSelect.xml` / `GlueButtons.xml` draw with, loaded off the
-//! player's own patch chain (never embedded): the icon sheets, the tower frame pieces, the rotate
-//! buttons, the select list's row highlight, and the `Backdrop` edge files split into their
-//! eight authored pieces. Plus the frozen texcoord tables from `CharacterCreate.lua` and the authored glue
-//! palette (`GlueFonts.xml` / the Lua color table). Every field is optional — with no client data
-//! the screens degrade to plain text buttons.
+//! The glue screens' art, loaded off the player's own patch chain, plus the texcoord tables of
+//! `CharacterCreate.lua` and the glue palette. Every piece is optional: with no client data the
+//! screens fall back to plain text buttons.
 
 use bevy::prelude::*;
 
@@ -19,21 +15,20 @@ use super::backdrop::BackdropEdges;
 pub(crate) const GOLD: Color = Color::srgb(1.0, 0.78, 0.0);
 /// `GlueFontDisable*`'s gray.
 pub(crate) const DIM: Color = Color::srgb(0.5, 0.5, 0.5);
-/// The info bodies' `GlueFontCharacterCreate` — pure white (inherits `GlueFontHighlightSmall`).
+/// The info bodies' `GlueFontCharacterCreate`: white, from `GlueFontHighlightSmall`.
 pub(crate) const INFO_TEXT: Color = Color::WHITE;
-/// The page tints — ours: the ref swaps a whole 3D scene per race; we lean the flat page instead
-/// (Alliance cool, Horde warm).
+/// The glue screens' root fill, ours (Alliance cool, Horde warm on the create screen), seen only
+/// where no 3D scene draws over it.
 pub(crate) const BACKDROP: Color = Color::srgb(0.05, 0.06, 0.08);
 pub(crate) const BACKDROP_ALLIANCE: Color = Color::srgb(0.05, 0.06, 0.10);
 pub(crate) const BACKDROP_HORDE: Color = Color::srgb(0.09, 0.05, 0.05);
-/// `FACTION_BACKDROP_COLOR_TABLE` (CharacterCreate.lua): border rgb + bg rgb per row. The info
-/// panels apply only the bg tint (the ref *comments out* the border tint); the name box applies
-/// both — always the Alliance row (`CharacterCreate_OnLoad`).
+/// `FACTION_BACKDROP_COLOR_TABLE` (CharacterCreate.lua): the info panels take only the fill (the
+/// border tint is commented out); the name box takes both, always the Alliance row.
 pub(crate) const ALLIANCE_BORDER: Color = Color::srgb(0.5, 0.5, 0.5);
 pub(crate) const ALLIANCE_FILL: Color = Color::srgb(0.09, 0.09, 0.19);
 pub(crate) const HORDE_FILL: Color = Color::srgb(0.19, 0.05, 0.05);
-/// Plain-fill fallbacks (no client art only): a faint button face, its hover, and a translucent
-/// box fill standing in for `UI-Tooltip-Background` (whose ~0.8 alpha is baked into the texture).
+/// Fallbacks with no client art; `FALLBACK_ALPHA` matches the ~0.8 alpha baked into
+/// `UI-Tooltip-Background`.
 pub(crate) const BTN_BG: Color = Color::srgba(1.0, 1.0, 1.0, 0.05);
 pub(crate) const BTN_HOVER: Color = Color::srgba(1.0, 1.0, 1.0, 0.14);
 pub(crate) const FALLBACK_ALPHA: f32 = 0.8;
@@ -45,16 +40,15 @@ pub(crate) const NAME_EDGE: f32 = 16.0;
 
 // ── The art set ──────────────────────────────────────────────────────────────────────────────────
 
-/// One spinner-arrow direction's states (`Glue-{Left,Right}Arrow-Button-{Up,Down,Highlight}` —
-/// the highlight pre-built as its additive overlay material).
+/// One spinner arrow's states, `Glue-{Left,Right}Arrow-Button-{Up,Down,Highlight}`.
 pub(crate) struct ArrowArt {
     pub(crate) up: Handle<Image>,
     pub(crate) down: Option<Handle<Image>>,
     pub(crate) hi: Option<Handle<AddUiMaterial>>,
 }
 
-/// One scrollbar arrow's states (`UI-ScrollBar-Scroll{Up,Down}Button-*`: 32² sheets whose center
-/// quarter is the 16² button — `GlueScrollBarButton`'s texcoords, [`SCROLL_BTN_TC`]).
+/// One scrollbar arrow's states (`UI-ScrollBar-Scroll{Up,Down}Button-*`), the 16² button in the
+/// center quarter of a 32² sheet ([`SCROLL_BTN_TC`]).
 pub(crate) struct ScrollBtnArt {
     pub(crate) up: Handle<Image>,
     pub(crate) down: Handle<Image>,
@@ -63,7 +57,7 @@ pub(crate) struct ScrollBtnArt {
     pub(crate) size: Vec2,
 }
 
-/// The login checkbox's states (`UI-CheckBox-*`, AccountLogin.xml's Save Account Name button).
+/// The login Save Account Name checkbox's states (`UI-CheckBox-*`, AccountLogin.xml).
 pub(crate) struct CheckboxArt {
     pub(crate) up: Handle<Image>,
     pub(crate) down: Handle<Image>,
@@ -76,8 +70,7 @@ pub(crate) struct ScrollArt {
     pub(crate) up_btn: ScrollBtnArt,
     pub(crate) down_btn: ScrollBtnArt,
     pub(crate) knob: (Handle<Image>, Vec2),
-    /// `UI-CharacterCreate-ScrollBar-Top` / `UI-ClassTrainer-ScrollBar` — the decorative track
-    /// behind the slider, shown only when the panel scrolls (the ref's range-changed hook).
+    /// The decorative track behind the slider, shown only when the panel scrolls.
     pub(crate) track_top: Option<(Handle<Image>, Vec2)>,
     pub(crate) track_bottom: Option<(Handle<Image>, Vec2)>,
 }
@@ -105,83 +98,66 @@ pub(crate) struct GlueArt {
     pub(crate) tower_border: Option<(Handle<Image>, Vec2)>,
     /// The 64² shadow behind every race/class/gender icon.
     pub(crate) icon_shadow: Option<Handle<Image>>,
-    /// The dial rows' `CharacterCreate-LabelFrame` (128×64: a 25|stretch|25 horizontal 3-slice).
+    /// The dial rows' `CharacterCreate-LabelFrame`: 128×64, a 25|stretch|25 horizontal 3-slice.
     pub(crate) label_frame: Option<(Handle<Image>, Vec2)>,
-    /// The big rotate buttons (`UI-RotationRight-Big-*`; the left button is this art mirrored).
+    /// `UI-RotationRight-Big-*`; the left rotate button is this art mirrored.
     pub(crate) rotate_up: Option<Handle<Image>>,
     pub(crate) rotate_down: Option<Handle<Image>>,
     /// The rotate buttons' hover ring (`UI-Common-MouseHilight`).
     pub(crate) mouse_hilight: Option<Handle<AddUiMaterial>>,
-    /// The `Backdrop` pieces: the two edge files split into their eight authored pieces
-    /// ([`split_backdrop_edges`]) + the tiled `UI-Tooltip-Background`.
+    /// The two edge files split into their eight pieces, and the tiled `UI-Tooltip-Background`.
     pub(crate) panel_border: Option<BackdropEdges>,
     pub(crate) name_border: Option<BackdropEdges>,
     pub(crate) tooltip_bg: Option<Handle<Image>>,
-    /// The info panels' scrollbar set (all-or-nothing: without the full set the panels stay
-    /// wheel-only, like before).
+    /// All or nothing: without the full set the info panels scroll by wheel only.
     pub(crate) scroll: Option<ScrollArt>,
-    /// The select list's row highlight (`Glue-CharacterSelect-Highlight`, ADD) — hover + the
-    /// locked selected row.
+    /// `Glue-CharacterSelect-Highlight` (ADD), on hover and on the locked selected row.
     pub(crate) select_highlight: Option<Handle<AddUiMaterial>>,
-    /// The delete/rename dialog box (`UI-DialogBox-Background` tile + `-Border` edge 32, split).
+    /// The delete/rename dialog: `UI-DialogBox-Border` (edge 32) over `-Background`.
     pub(crate) dialog_border: Option<BackdropEdges>,
     pub(crate) dialog_bg: Option<Handle<Image>>,
-    /// The dialog's `DialogAlertIcon` (64²).
     pub(crate) dialog_alert: Option<Handle<Image>>,
-    /// The delete dialog's edit-box art (`UI-ChatInputBorder-Left`/`-Right`, CharacterSelect.xml):
-    /// two 75×32 pieces overhanging the 130-wide box by 10 each side.
+    /// The delete dialog's edit box (CharacterSelect.xml): two 75×32 pieces overhanging the
+    /// 130-wide box by 10 each side.
     pub(crate) chat_input_left: Option<(Handle<Image>, Vec2)>,
     pub(crate) chat_input_right: Option<(Handle<Image>, Vec2)>,
-    /// The login screen's set: the Blizzard logo (`Glues-BlizzardLogo`, bottom
-    /// center) and the Save Account Name checkbox states.
+    /// The login screen's logo (bottom center) and checkbox.
     pub(crate) blizzard_logo: Option<Handle<Image>>,
     pub(crate) checkbox: Option<CheckboxArt>,
-    /// The AddOn List screen's set (the reference `GlueXML/AddonList.xml`, read off the patch
-    /// chain): the six `HelpFrame-*` plate pieces that ARE the whole framed panel (top band, dark
-    /// inset, bottom band baked in), the `UI-DialogBox-Header` title plate, the `GlueCloseButton`
-    /// states, the `GlueDropDownMenuTemplate` arrow (`UI-ChatIcon-ScrollDown-*`), the open list's
-    /// row highlight (`UI-QuestTitleHighlight`, ADD), the tri-state's grey check
-    /// (`UI-CheckBox-Check-Disabled`), the tooltip's own border (`UI-Tooltip-Border`, edge 16 —
-    /// the in-game edge file, not `Glue-Tooltip-Border`), and the decorative scrollbar track
-    /// (`UI-Character-ScrollBar`).
+    /// The AddOn List screen's set (`GlueXML/AddonList.xml`). The six `HelpFrame-*` pieces are the
+    /// whole framed panel; its tooltip uses the in-game `UI-Tooltip-Border`, not the glue one.
     pub(crate) help_frame: Option<HelpFrameArt>,
     pub(crate) dialog_header: Option<(Handle<Image>, Vec2)>,
     pub(crate) close_btn: Option<CloseBtnArt>,
     pub(crate) dropdown_arrow_up: Option<Handle<Image>>,
     pub(crate) dropdown_arrow_down: Option<Handle<Image>>,
     pub(crate) quest_hilight: Option<Handle<AddUiMaterial>>,
-    /// The same `UI-QuestLogTitleHighlight` art as a **plain texture**. The realm list tints its
-    /// selection band per row (`RealmListHighlightTexture:SetVertexColor` — green when you have
-    /// characters on that realm, red when it is invalid, gold otherwise), and a shared
-    /// `AddUiMaterial` handle cannot carry a per-row colour. **Stated divergence:** drawn
-    /// alpha-blended rather than the reference's `alphaMode="ADD"`, which is the price of the
-    /// tint until the ADD material grows a colour uniform.
+    /// The realm list's selection band, tinted per row by
+    /// `RealmListHighlightTexture:SetVertexColor`. Drawn alpha-blended where the reference uses
+    /// `alphaMode="ADD"`: `AddUiMaterial` has no tint yet.
     pub(crate) title_highlight: Option<Handle<Image>>,
     pub(crate) check_disabled: Option<Handle<Image>>,
     pub(crate) tooltip_border: Option<BackdropEdges>,
     pub(crate) char_scrollbar: Option<(Handle<Image>, Vec2)>,
 
-    /// The realm list's own additions to that set (`RealmList.xml`): the sort headers'
-    /// `RealmSortButtonTemplate` — a three-slice `WhoFrame-ColumnTabs` plate, the
-    /// `UI-Character-Tab-Highlight` sheen it lights on hover, and the `UI-SortArrow` that sits
-    /// beside each label.
+    /// The realm list's sort headers (`RealmSortButtonTemplate`, RealmList.xml).
     pub(crate) column_tabs: Option<(Handle<Image>, Vec2)>,
     pub(crate) tab_highlight: Option<Handle<AddUiMaterial>>,
     pub(crate) sort_arrow: Option<(Handle<Image>, Vec2)>,
 }
 
-/// `RealmSortButtonTemplate`'s three `WhoFrame-ColumnTabs` slices, `[left, right, top, bottom]`
-/// texcoords each — the left cap (5 wide), the stretched middle, and the right cap (4 wide).
+/// `RealmSortButtonTemplate`'s `WhoFrame-ColumnTabs` slices, `[left, right, top, bottom]` each:
+/// the left cap (5 wide), the stretched middle, the right cap (4 wide).
 pub(crate) const COLUMN_TAB_TC: [[f32; 4]; 3] = [
     [0.0, 0.078_125, 0.0, 0.593_75],
     [0.078_125, 0.906_25, 0.0, 0.593_75],
     [0.906_25, 0.968_75, 0.0, 0.593_75],
 ];
-/// `$parentArrow`'s texcoords into `UI-SortArrow` (the down-pointing half).
+/// `$parentArrow`'s texcoords into `UI-SortArrow`, the down-pointing half.
 pub(crate) const SORT_ARROW_TC: [f32; 4] = [0.0, 0.5625, 0.0, 1.0];
 
-/// The `Interface\HelpFrame\HelpFrame-*` plate: six pieces tiling a 640×512 framed panel
-/// (TopLeft/Top 256², TopRight 128×256 across the top row; BotLeft/Bottom/BotRight below).
+/// The `HelpFrame-*` plate: six pieces tiling a 640×512 panel (TopLeft/Top 256², TopRight
+/// 128×256 on top; BotLeft/Bottom/BotRight below).
 pub(crate) struct HelpFrameArt {
     pub(crate) tl: Handle<Image>,
     pub(crate) top: Handle<Image>,
@@ -201,7 +177,7 @@ pub(crate) struct CloseBtnArt {
 }
 
 impl GlueArt {
-    /// Load the art set once (idempotent; failures stay `None` — the graceful-absence posture).
+    /// Load the art set once; a piece that fails stays `None`.
     pub(crate) fn ensure_loaded(
         &mut self,
         assets: &mut WorldAssets,
@@ -247,8 +223,8 @@ impl GlueArt {
         self.gender = sized(assets, &format!("{CC}Gender"), images);
         self.factions = sized(assets, &format!("{CC}Factions"), images);
         self.banners = assets.sprite_texture(&format!("{CC}Banners"), images);
-        // (`CheckButtonHilight` stays unloaded — the template's `CheckedTexture` is commented out
-        // in the shipped 1.12 GlueXML; the selected visual is the *locked* highlight alone.)
+        // No `CheckButtonHilight`: the template's `CheckedTexture` is commented out in 1.12
+        // GlueXML, so the selected look is the locked highlight alone.
         self.hilight = add_overlay(
             assets,
             "Interface\\Buttons\\ButtonHilight-Square",
@@ -340,7 +316,7 @@ impl GlueArt {
                 ),
             })
         })();
-        // The select screen's set: the row highlight + the delete dialog's box.
+        // The select screen's set.
         self.select_highlight = add_overlay(
             assets,
             "Interface\\Glues\\CharacterSelect\\Glue-CharacterSelect-Highlight",
@@ -384,7 +360,7 @@ impl GlueArt {
                 ),
             })
         })();
-        // The AddOn List screen's set (reference `GlueXML/AddonList.xml` off the patch chain).
+        // The AddOn List screen's set.
         const HF: &str = "Interface\\HelpFrame\\HelpFrame-";
         self.help_frame = (|| {
             let tl = sized(assets, &format!("{HF}TopLeft"), images)?;
@@ -515,10 +491,8 @@ impl GlueArt {
 /// The whole-texture uv rect for [`add_overlay`].
 const FULL_TC: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
 
-/// Build one ADD-mode highlight as its [`AddUiMaterial`] — a TRUE additive overlay (every glue
-/// highlight is authored as a glow on opaque black and drawn `alphaMode="ADD"`; see the material's
-/// module docs for why an alpha-encode approximation was retired). `tc` is the authored
-/// `[left, right, top, bottom]` texcoord region (the sheets store the button in a sub-rect).
+/// One `alphaMode="ADD"` highlight (a glow authored on opaque black) as an [`AddUiMaterial`];
+/// `tc` is the `[left, right, top, bottom]` texcoord region.
 fn add_overlay(
     assets: &mut WorldAssets,
     path: &str,
@@ -533,9 +507,9 @@ fn add_overlay(
     }))
 }
 
-// ── The frozen icon-cell tables (CharacterCreate.lua's *_ICON_TCOORDS, verbatim) ─────────────────
+// ── The icon-cell tables (CharacterCreate.lua's *_ICON_TCOORDS, verbatim) ────────────────────────
 
-/// A race's cell in `UI-CharacterCreate-Races` (col, row; female = row + 2) — `RACE_ICON_TCOORDS`.
+/// A race's cell in `UI-CharacterCreate-Races` (col, row; female is row + 2), `RACE_ICON_TCOORDS`.
 fn race_cell(race: u8) -> Option<(f32, f32)> {
     Some(match race {
         1 => (0.0, 0.0), // Human
@@ -550,14 +524,13 @@ fn race_cell(race: u8) -> Option<(f32, f32)> {
     })
 }
 
-/// A race icon's texcoords for a (race, sex).
 pub(crate) fn race_tc(race: u8, sex: u8) -> Option<[f32; 4]> {
     let (c, r) = race_cell(race)?;
     let r = r + if sex == 1 { 2.0 } else { 0.0 };
     Some([c * 0.25, (c + 1.0) * 0.25, r * 0.25, (r + 1.0) * 0.25])
 }
 
-/// A class icon's texcoords in `UI-CharacterCreate-Classes` — `CLASS_ICON_TCOORDS`, verbatim.
+/// A class icon's texcoords in `UI-CharacterCreate-Classes`, `CLASS_ICON_TCOORDS` verbatim.
 pub(crate) fn class_tc(class: u8) -> Option<[f32; 4]> {
     Some(match class {
         1 => [0.0, 0.25, 0.0, 0.25],              // Warrior
@@ -573,14 +546,13 @@ pub(crate) fn class_tc(class: u8) -> Option<[f32; 4]> {
     })
 }
 
-/// The glue-button art regions (`GlueButtons.xml` TexCoords): Up/Down/Disabled share one region,
-/// the Highlight has its own.
+/// `GlueButtons.xml` texcoords: Up/Down/Disabled share one region, the Highlight has its own.
 pub(crate) const BUTTON_TC: [f32; 4] = [0.0, 0.578125, 0.0, 0.75];
 pub(crate) const BUTTON_HI_TC: [f32; 4] = [0.0, 0.625, 0.0, 0.6875];
-/// The scrollbar buttons/knob live in the center quarter of their sheets (`GlueScrollBarButton`).
+/// The scrollbar buttons and knob sit in the center quarter of their sheets.
 pub(crate) const SCROLL_BTN_TC: [f32; 4] = [0.25, 0.75, 0.25, 0.75];
 
-/// Texcoords → an `ImageNode` pixel rect on a texture of `size`.
+/// Texcoords to an `ImageNode` pixel rect on a texture of `size`.
 pub(crate) fn tc_rect(size: Vec2, tc: [f32; 4]) -> Rect {
     Rect::new(
         tc[0] * size.x,

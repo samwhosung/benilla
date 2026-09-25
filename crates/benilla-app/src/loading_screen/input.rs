@@ -1,100 +1,25 @@
-//! **The cover takes the input plane.** While the loading screen covers the frame, benilla accepts
-//! no mouse and no keyboard: no hover, no cursor classification, no click, no keybinding, no
-//! camera, no movement. One system, at the source, so *nothing under the cover has to know the
-//! cover exists*.
+//! While the loading screen covers the frame, no mouse or keyboard input reaches anything: one
+//! cut at the source, in `PreUpdate` after `InputSystems`, so no consumer needs to know the cover.
+//! The reference does the same: the raise (`0x406800`, `0x4068e0 call 0x4069e0`) registers the
+//! stub `0x406a50` (`xor eax,eax; ret`) at priority 8.0 on event categories 1, 8 (key down), 0xa
+//! (repeat), 0xb (button down) and 0xc (mouse move), above every `CSimpleTop` handler at 1.0; the
+//! dispatcher `0x4245b0` stops on a zero return (`0x4246ad`), and the dismiss `0x407e80`
+//! unregisters them.
+//! Category 0xc feeds `UpdateMouseFocus` (`0x7660d0`), so the cursor freezes.
 //!
-//! ## The reference does this too, and it does it at the source
+//! - Up edges are swallowed too, which matches by outcome: the reference's held key comes back
+//!   released on world enter (`0x4908c0 → 0x49093c → 0x5144c0`).
+//! - Deviation: the wheel is swallowed, where the reference still zooms the hidden camera, because
+//!   nothing should act through the screen.
+//! - Deviation: the world pick is cleared, where the reference's `0x481790` keeps picking at the
+//!   frozen point, because ours is quieter and looks the same: the reference's pointer cannot
+//!   move, so its pick changes nothing visible.
 //!
-//! This file was written on the assumption that the reference simply blocks inside its world load,
-//! so the question never arises there. The disassembly behind decision 1990 says otherwise, and
-//! the answer is better than the assumption: **the reference has an explicit input veto, registered
-//! by the screen's own raise.**
-//!
-//! `0x406800` (the raise) ends `0x4068e0 call 0x4069e0`, which registers the three-byte stub
-//! `0x406a50` — `xor eax,eax; ret` — on event-bus categories **1, 8 (key down), 0xa (auto-repeat),
-//! 0xb (button down) and 0xc (mouse move)** at priority **8.0f**; `0x407e80` (the dismiss)
-//! unregisters all five. The dispatcher `0x4245b0` stops its walk on a zero return (`0x4246ad`),
-//! and every `CSimpleTop` input handler sits at 1.0f — so those five categories never reach the
-//! interface at all while the screen is up. Category 0xc's registrant is `UpdateMouseFocus`
-//! (`0x7660d0`) itself, so the veto stops the pointer resolver outright: **the cursor freezes.**
-//! Key-up, button-up, the wheel, category 0x10 and `WM_ACTIVATE` are deliberately let through.
-//!
-//! So the shape below is the reference's shape — one veto at the source, not a condition on each
-//! consumer — arrived at independently and then confirmed. Two deliberate differences, named
-//! rather than drifted into:
-//!
-//! - **We swallow the wheel and the up edges too.** The up edges are equivalent by outcome: the
-//!   reference's held key comes back **released** anyway (`0x4908c0 → 0x49093c → 0x5144c0` zeroes
-//!   the movement mask on world-enter, and a still-held key cannot re-arm it — it reclassifies to
-//!   the vetoed auto-repeat category), which is exactly what the release edge below produces. The
-//!   wheel is a real deviation: in the reference a notch under the loading screen still zooms the
-//!   camera you cannot see. Swallowing it is the director's "nothing through the screen", and it
-//!   costs a zoom nobody asked for.
-//! - **We clear the world pick; the reference leaves it running at the frozen point.** `0x481790`
-//!   hangs off the layer walk rather than the bus, so it keeps picking — and in the two windows
-//!   where a world is populated (before `SMSG_NEW_WORLD`, and again once the new player object
-//!   exists) it *can* set a context cursor under the screen. It is invisible there only because the
-//!   pointer cannot move. Ours is strictly quieter and observably identical.
-//!
-//! ## Why this is a source cut and not a run condition
-//!
-//! The obvious way to build it is a run condition per input system. That is the way it regresses:
-//! the census behind this module counted **fifty-one** places raw input enters the app, more than
-//! half of them with no state gate of any kind — the whole `target::TargetUpdate` pick chain
-//! included, which is the one the director caught. Every one of them would have had to remember,
-//! and every future one would have to remember too. The director's report was exactly a thing
-//! nobody remembered: the world pick ran under the cover, found a unit, and the *hardware cursor
-//! changed to the sword* over art the player was only waiting on.
-//!
-//! So the cut is at the source, in `PreUpdate`, after `bevy::input::InputSystems` has built this
-//! frame's input and before anything reads it. A consumer written a year from now is covered
-//! without knowing this file exists — which is the only property that survives a multi-year
-//! codebase.
-//!
-//! ## The four things it takes, and what makes the pointer half work
-//!
-//! 1. **The button planes** — `ButtonInput<KeyCode>`/`<Key>`/`<MouseButton>`. See [`swallow`] for
-//!    the exact rule: a press that arrives under the cover never happened, and anything held from
-//!    *before* the cover is released once, with a real release edge, so a gesture already in
-//!    flight (a mouselook session, a held `MOVEFORWARD` binding, an armed UI drag) unwinds through
-//!    the path it already has for a released button instead of being stranded down forever.
-//! 2. **The raw message queues** — `KeyboardInput`, `MouseButtonInput`, `MouseMotion`,
-//!    `MouseWheel`, `CursorMoved` — drained, because a `MessageReader` reads the queue, not the
-//!    button state (`feed_ui_input`'s character/EditBox feed and the glue screens all read raw).
-//! 3. **The accumulators** — `AccumulatedMouseMotion`/`AccumulatedMouseScroll`, which
-//!    `InputSystems` builds from those same messages and which the camera and the wheel bindings
-//!    poll rather than read.
-//! 4. **The pointer position itself**, which is the half a message drain cannot reach: a hit-test
-//!    does not read an event, it reads `Window::cursor_position()`, a *field*. So the cover blanks
-//!    it and restores it on the way out ([`CoveredPointer`]).
-//!
-//! That fourth one is the load-bearing trick, and it is not a hack: **"the pointer is not in the
-//! window" is a state every pointer consumer in the client already implements correctly**, because
-//! it is the ordinary alt-tabbed-away case. `update_hover`/`update_hovered_object` clear
-//! [`crate::target::Hovered`] and return; `update_pick_occlusion` leaves the ray at infinity;
-//! `classify_cursor` then reads an empty pick and settles on Point; `feed_ui_input` takes its
-//! `pointer_left_window()` arm, which leaves the hovered frame (one `OnLeave`) and disarms any
-//! press/drag; bevy's own `ui_focus_system` clears every `Interaction`, so `glue_clicks` goes
-//! quiet with it. Not one of those had to be told about loading screens.
-//!
-//! ## What it deliberately does not take
-//!
-//! **Synthetic input.** The capture probes press into the same `ButtonInput` resources — but they
-//! do it in `Update`, after this system, and the pointer probes drive
-//! `ui_script::SyntheticPointer` rather than the window. An instrument driving the client is the
-//! operator, not the player. The two probe writers that *do* run in `PreUpdate` order themselves
-//! [`after`](CoverInput) this set so the relationship is written down rather than left ambiguous.
-//!
-//! **The cursor's own art.** Parking it at the plain arrow and dropping any item/spell overlay is
-//! the reference's `0x6e4940` (cursor index 1, set *before* the screen goes up), and it lives with
-//! the cursor in [`crate::cursor`] rather than here — it is an output, not a channel.
-//!
-//! **Nothing else.** There is no dev exemption: the debug panel, the perf pill, the inspector and
-//! their chords go quiet under the cover along with everything else. That is a real cost — a stuck
-//! load is exactly when you want the instruments — and it is deliberate, because the alternative
-//! is a keycode allowlist, and a keycode handed to the dev plane is also a keycode handed to the
-//! keybinding table. The diagnosis path for a stuck load is the wait instrument
-//! ([`super::WAIT_LOG_AFTER`]), which names the blocking term without anyone touching a key.
+//! Taken: the button planes ([`swallow`]), the raw message queues, the mouse accumulators, and the
+//! window's cursor position, blanked so every hit-test takes its pointer-outside-the-window path
+//! ([`CoveredPointer`]). Not taken: synthetic probe input, written in `Update` or ordered after
+//! [`CoverInput`]. The cursor art (`0x6e4940`, the plain arrow) lives in [`crate::cursor`]. There
+//! is no dev exemption; a stuck load is diagnosed by [`super::WAIT_LOG_AFTER`].
 
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input::mouse::{
@@ -106,80 +31,32 @@ use bevy::window::{CursorLeft, CursorMoved, PrimaryWindow};
 
 use super::LoadingScreen;
 
-/// The set [`swallow_input_under_the_cover`] runs in — `PreUpdate`, after
-/// `bevy::input::InputSystems` and before `bevy::ui::UiSystems::Focus`.
-///
-/// Exported so the handful of `PreUpdate` systems that legitimately write input — the capture
-/// probes — can order themselves after it instead of racing it.
+/// The set [`swallow_input_under_the_cover`] runs in, between `InputSystems` and
+/// `UiSystems::Focus`; the capture probes that write input in `PreUpdate` order after it.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct CoverInput;
 
-/// Where the OS pointer really is while the cover has the window's cursor position blanked.
+/// Where the OS pointer is while the cover has the window's cursor position blanked, re-read every
+/// covered frame and handed back when the cover drops, so hover works without a mouse move.
 ///
-/// Re-read every covered frame, not stashed once: `bevy_winit` keeps writing the window's position
-/// on every physical move regardless of whether anyone reads the `CursorMoved` message we drain,
-/// so this tracks the pointer through the whole load and hands it back on the way out. Without the
-/// hand-back the position would stay `None` until the player's next mouse move — hover would come
-/// back dead after a teleport, and the first click would land nowhere, which is the same defect in
-/// the other direction.
-///
-/// # `set_physical_cursor_position` MOVES THE MOUSE
-///
-/// The load-bearing fact, because the name does not say it and getting it wrong shipped a bug for
-/// months: **`Window::set_physical_cursor_position` is not "tell bevy where the pointer is", it is
-/// "put the pointer there".** It writes `Window.internal.physical_cursor_position`, and
-/// `bevy_winit::system::changed_windows` turns *any* change of that field to a `Some` into
-/// `winit_window.set_cursor_position(…)` — `CGWarpMouseCursorPosition` on macOS, a real hardware
-/// warp. There is no bookkeeping-only setter; this field is bevy's cursor-warp API, and winit is
-/// its only other writer.
-///
-/// So the hand-back cannot simply write what it stashed. It used to, and the pointer was yanked
-/// across the screen on every cover drop: measured on 2026-09-08 across a live `/logout`, the
-/// restore wrote `(811.9, 1242.6)` physical and the hardware cursor teleported from `(308, 588)`
-/// to `(406, 621)` points in the same millisecond. The stash goes stale over exactly the frames a
-/// cover is up for — a world teardown is one ~283 ms frame during which no events are pumped at
-/// all — so the pointer landed wherever it had been when the world went away, which after a click
-/// on the centred game menu's Logout is the middle of the window.
-///
-/// **The law, therefore: never write a position we do not know to be true right now.** Which is
-/// [`swallow_input_under_the_cover`]'s three-way hand-back:
-///
-/// - Winit already has a position (the field reads `Some`) → it is fresher than anything stashed,
-///   so leave it alone. This is the case a moving mouse always takes: the events queued during a
-///   hitch are delivered *before* the frame that drops the cover.
-/// - The pointer has left the window ([`left`](Self::left)), or the window does not have the
-///   keyboard → write nothing. We have no business moving a pointer that is over somebody else's
-///   window.
-/// - Otherwise nothing has moved since we stashed it, so the stash *is* where the pointer is and
-///   writing it back moves nothing.
+/// `Window::set_physical_cursor_position` with `Some` is a hardware warp (`changed_windows` calls
+/// winit's `set_cursor_position`), so the hand-back writes only a position still true: none when
+/// winit already has a fresher one, none when the pointer left or the window lacks focus, and
+/// otherwise the stash, where the pointer still is.
 #[derive(Resource, Default)]
 pub(crate) struct CoveredPointer {
     /// The last position seen while covered, in physical pixels.
     stashed: Option<DVec2>,
-    /// Is the window's cursor position currently ours (blanked) rather than winit's?
+    /// Whether the window's cursor position is currently our blank rather than winit's.
     blanked: bool,
-    /// Has winit said the pointer left the window since [`stashed`](Self::stashed) was taken?
-    ///
-    /// The one thing the window's own field cannot tell us: a `None` there is either winit's
-    /// `CursorLeft` or our blank, and the two must not be confused — restoring the stash over the
-    /// first would warp the pointer back *into* the window from wherever the player took it.
+    /// Whether winit reported `CursorLeft` since the stash; the window's `None` cannot tell that
+    /// from our blank, and restoring over it would warp the pointer back into the window.
     left: bool,
 }
 
-/// One frame's swallow of one button plane.
-///
-/// The whole rule, and it needs no memory of its own:
-///
-/// - **A press that arrives under the cover never happened** — `just_pressed` is exactly this
-///   frame's arrivals, and [`ButtonInput::reset`] takes each out of all three sets.
-/// - **Whatever is still held came from before the cover, and is released once, with an edge** —
-///   after the step above, `pressed` can only contain buttons held on an earlier frame, so
-///   [`ButtonInput::release_all`] moves precisely those into `just_released`. On every *later*
-///   covered frame `pressed` is already empty and this is a no-op, so the release edge is
-///   delivered exactly once per cover, with no flag to keep.
-///
-/// A real OS release arriving mid-cover is likewise silent: bevy's own release only records an
-/// edge for a button it still has pressed, and we took it out on the first covered frame.
+/// One frame's swallow of one button plane: a press arriving under the cover is erased, and a
+/// button held from before it is released once with a real edge, so a gesture in flight unwinds.
+/// Later covered frames find nothing pressed, so the edge comes once per cover.
 fn swallow<T>(input: &mut ButtonInput<T>)
 where
     T: Copy + Eq + std::hash::Hash + Send + Sync + 'static,
@@ -191,8 +68,7 @@ where
     input.release_all();
 }
 
-/// `swallow` for a plane whose button type is not `Copy` (`ButtonInput<Key>`'s logical keys carry
-/// a `SmolStr`).
+/// `swallow` for a non-`Copy` button type (`ButtonInput<Key>`).
 fn swallow_cloned<T>(input: &mut ButtonInput<T>)
 where
     T: Clone + Eq + std::hash::Hash + Send + Sync + 'static,
@@ -204,8 +80,8 @@ where
     input.release_all();
 }
 
-/// The raw input-message queues, as one [`bevy::ecs::system::SystemParam`] — bevy's 16-element
-/// system-param ceiling, the same squeeze `drive_loading_screen` next door already pays.
+/// The raw input-message queues, as one [`bevy::ecs::system::SystemParam`] to stay under Bevy's
+/// 16-parameter ceiling.
 #[derive(bevy::ecs::system::SystemParam)]
 struct RawInput<'w> {
     keyboard: ResMut<'w, Messages<KeyboardInput>>,
@@ -225,7 +101,7 @@ impl RawInput<'_> {
     }
 }
 
-/// The button planes + the accumulators, as one param (see [`RawInput`] on the ceiling).
+/// The button planes and the accumulators, as one param.
 #[derive(bevy::ecs::system::SystemParam)]
 struct Buttons<'w> {
     keys: ResMut<'w, ButtonInput<KeyCode>>,
@@ -245,14 +121,9 @@ impl Buttons<'_> {
     }
 }
 
-/// `PreUpdate`, in [`CoverInput`]: take the whole input plane for as long as the cover is up.
-///
-/// **The one-frame edge, stated so nobody has to rediscover it.** The cover is raised in `Update`
-/// (`drive_loading_screen`, in `WorldStage::Present`), and this runs in `PreUpdate`, so the raise
-/// frame itself still takes input — its `Input` stage ran before the raise did. That is the
-/// correct boundary rather than a miss: the raise frame's *render* is the first one that draws the
-/// cover, so input dies on exactly the frames whose previous present showed it, and the player
-/// never sees the cover on a frame that also acted on their mouse.
+/// `PreUpdate`, in [`CoverInput`]: take the whole input plane while the cover is up. The cover
+/// rises in `Update`, so its raise frame still takes input; that frame is also the first to draw
+/// it, so input stops exactly on the frames after the cover was shown.
 fn swallow_input_under_the_cover(
     screen: Res<LoadingScreen>,
     mut pointer: ResMut<CoveredPointer>,
@@ -261,12 +132,8 @@ fn swallow_input_under_the_cover(
     mut buttons: Buttons,
     mut raw: RawInput,
 ) {
-    // **Winit's last word on the pointer, read before anything below can overwrite it.** The
-    // window's position field already reflects the LAST cursor event of this frame (bevy_winit
-    // writes it as it dispatches, in order, before the update runs), so `Some` here is the live
-    // truth and outranks the stash. A `None` is ambiguous — winit's `CursorLeft` or our own blank —
-    // which is the whole reason [`CoveredPointer::left`] exists. Drained every frame, covered or
-    // not, so the reader never hands a covered frame a departure from two frames ago.
+    // Read before anything below writes it: bevy_winit has already applied this frame's cursor
+    // events, so `Some` is the live pointer. Departures drain every frame, so none goes stale.
     let departed = departures.read().count() > 0;
     let here = window
         .single()
@@ -279,10 +146,7 @@ fn swallow_input_under_the_cover(
     }
 
     if !screen.covering() {
-        // The way out: hand the window its pointer back, once, on the frame the cover drops — and
-        // only when that hand-back is TRUE, because the write is a hardware warp (see
-        // [`CoveredPointer`]). Winit's own fresher answer wins; a pointer that has left the window,
-        // or a window that does not have the keyboard, gets nothing.
+        // Hand the pointer back once, only when the stash is still true (see [`CoveredPointer`]).
         if pointer.blanked {
             pointer.blanked = false;
             let stashed = pointer.stashed.take();
@@ -299,33 +163,27 @@ fn swallow_input_under_the_cover(
     buttons.swallow_all();
     raw.drain();
 
-    // The pointer half. Re-stash before blanking so the position tracks the real cursor through
-    // the load (see [`CoveredPointer`]); `physical_cursor_position()` already answers `None` for a
-    // pointer outside the window, which is the same nothing we are about to write.
+    // Re-stash before blanking so the stash tracks the real cursor through the load.
     if let Ok(mut window) = window.single_mut() {
         if let Some(seen) = here {
             pointer.stashed = Some(seen.as_dvec2());
-            // Blanking is safe where restoring is not: `changed_windows` guards its warp on the
-            // *clamped* getter answering `Some`, so writing `None` re-caches without touching the
-            // hardware pointer. Only when there is something to blank — an unconditional write
-            // would deref-mut `Window` every covered frame, and a spurious `Changed<Window>` is a
-            // surface reconfigure (`video::apply_present_mode`'s note).
+            // Writing `None` does not warp. Only when there is something to blank: a spurious
+            // `Changed<Window>` reconfigures the surface.
             window.set_physical_cursor_position(None);
         }
         pointer.blanked = true;
     }
 }
 
-/// Wire the gate. Called by [`super::LoadingScreenPlugin`] — this is not a plugin of its own,
-/// because the cover and its input rule are one system and must never be registerable apart.
+/// Wire the gate; called by [`super::LoadingScreenPlugin`] so the cover and its input rule are
+/// never registered apart.
 pub(super) fn build(app: &mut App) {
     app.init_resource::<CoveredPointer>().add_systems(
         PreUpdate,
         swallow_input_under_the_cover
             .in_set(CoverInput)
-            // After the input is built, before anything reads it. `UiSystems::Focus` is bevy's own
-            // `PreUpdate` reader (it hit-tests the cursor into `Interaction`, which is what
-            // `glue::glue_clicks` rides), so it has to land on the other side of us.
+            // Before `UiSystems::Focus`, Bevy's own `PreUpdate` reader, which hit-tests the cursor
+            // into `Interaction`.
             .after(bevy::input::InputSystems)
             .before(bevy::ui::UiSystems::Focus),
     );
@@ -336,17 +194,13 @@ mod tests {
     use super::*;
     use bevy::input::ButtonState;
 
-    /// The [`swallow`] rule, both halves, in the order they matter: a press that arrives under the
-    /// cover is erased, and a button held from before it is released **once**, with a real edge.
     #[test]
     fn a_press_under_the_cover_never_happened_and_a_held_one_is_released_once() {
         let mut keys = ButtonInput::<KeyCode>::default();
 
-        // Held from before the cover: pressed on an earlier frame, so its `just_pressed` edge is
-        // gone by now (bevy clears the edge sets at the head of every frame).
+        // Held from before the cover: `clear` drops its `just_pressed` edge, as a new frame does.
         keys.press(KeyCode::KeyW);
         keys.clear();
-        // …and this frame, under the cover, the player also presses SPACE.
         keys.press(KeyCode::Space);
 
         swallow(&mut keys);
@@ -363,7 +217,6 @@ mod tests {
             "…with a real release edge, so a held MOVEFORWARD binding unwinds"
         );
 
-        // The next covered frame: bevy clears the edge sets, and there is nothing left to release.
         keys.clear();
         swallow(&mut keys);
         assert_eq!(
@@ -374,8 +227,6 @@ mod tests {
         assert_eq!(keys.get_pressed().count(), 0);
     }
 
-    /// A real OS release arriving mid-cover produces no second edge — bevy's own `release` only
-    /// records one for a button it still holds pressed, and the first covered frame took it out.
     #[test]
     fn an_os_release_under_the_cover_is_silent() {
         let mut keys = ButtonInput::<KeyCode>::default();
@@ -392,16 +243,13 @@ mod tests {
         );
     }
 
-    /// The gate against a real `App` and bevy's own `InputSystems`: with the cover up, a frame of
-    /// input reaches nobody — button planes, raw queues and the window's cursor position all read
-    /// empty — and the pointer comes back on the frame the cover drops, with no mouse move needed.
+    /// Against a real `App` and Bevy's `InputSystems`.
     #[test]
     fn a_covered_frame_hands_no_input_to_anyone_and_gives_the_pointer_back() {
         let mut app = App::new();
         app.add_plugins((
             bevy::input::InputPlugin,
-            // For `Messages<CursorMoved>` — a window message, not an input one — and for the
-            // window types themselves. `primary_window: None`: the test spawns its own.
+            // For `Messages<CursorMoved>` and the window types; the test spawns its own window.
             bevy::window::WindowPlugin {
                 primary_window: None,
                 exit_condition: bevy::window::ExitCondition::DontExit,
@@ -410,8 +258,6 @@ mod tests {
         ))
         .init_resource::<LoadingScreen>()
         .init_resource::<CoveredPointer>()
-        // `UiSystems::Focus` is bevy's, and pulling `UiPlugin` into a unit test to state an
-        // ordering the real wiring already states would test bevy, not us.
         .add_systems(
             PreUpdate,
             swallow_input_under_the_cover
@@ -444,13 +290,11 @@ mod tests {
                 .set_physical_cursor_position(at);
         };
 
-        // A pointer in the middle of the window, and a key held from before the cover.
         put_cursor(&mut app, Some(DVec2::new(400.0, 300.0)));
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::KeyW);
 
-        // --- Uncovered: an ordinary frame. Nothing is touched.
         app.update();
         assert!(seen(&app).is_some(), "no cover, no blanking");
         assert!(
@@ -460,7 +304,6 @@ mod tests {
             "no cover, no swallow"
         );
 
-        // --- The cover goes up, and the player presses SPACE under it.
         app.world_mut().resource_mut::<LoadingScreen>().active = true;
         app.world_mut().write_message(KeyboardInput {
             key_code: KeyCode::Space,
@@ -492,7 +335,6 @@ mod tests {
             "the raw queue is drained too, so a MessageReader sees nothing either"
         );
 
-        // --- The cover clears: the pointer comes straight back.
         app.world_mut().resource_mut::<LoadingScreen>().active = false;
         app.update();
         assert_eq!(
@@ -502,15 +344,10 @@ mod tests {
         );
     }
 
-    /// **The hand-back never invents a position**. Writing the window's cursor
-    /// position is a hardware warp, so the cover may only write one it knows is still true — which
-    /// is the difference between handing the pointer back and dragging it across the player's
-    /// screen. Three cases, one harness: winit's fresher answer wins; a departed pointer and an
-    /// unfocused window get nothing; a still pointer gets its stash.
+    /// Writing the cursor position is a hardware warp, so the hand-back writes only a true one.
     #[test]
     fn the_hand_back_never_writes_a_position_it_does_not_know_to_be_true() {
-        /// Cover, blank, then drop the cover under `arrange` — answering: what does the cover write
-        /// into the window on the way out?
+        /// Cover, blank, then drop the cover under `arrange`; returns what the cover wrote back.
         fn round_trip(arrange: impl FnOnce(&mut App, Entity)) -> Option<Vec2> {
             let mut app = App::new();
             app.add_plugins((
@@ -547,7 +384,6 @@ mod tests {
                     .set_physical_cursor_position(at);
             };
 
-            // A pointer in the window, then the cover: one covered frame stashes and blanks it.
             put(&mut app, Some(DVec2::new(400.0, 300.0)));
             app.world_mut().resource_mut::<LoadingScreen>().active = true;
             app.update();
@@ -578,10 +414,7 @@ mod tests {
              that is where the pointer already is"
         );
 
-        // Winit spoke first: bevy_winit writes the window's field as it dispatches the frame's
-        // events, so a `Some` on the drop frame is the live pointer. Overwriting it with the stash
-        // is exactly the warp — this is the case a moving mouse always takes, and the one that
-        // dragged the cursor to the middle of the window on every `/logout` before 2090.
+        // A `Some` on the drop frame is winit's live pointer, the case a moving mouse takes.
         assert_eq!(
             round_trip(|app, window| {
                 app.world_mut()

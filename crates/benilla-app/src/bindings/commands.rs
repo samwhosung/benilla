@@ -1,35 +1,16 @@
-//! The command registry — every binding command benilla actually implements, in
-//! 1.12 `Bindings.xml` order, with the 1.12 default chords (byte-real: the client's own
-//! `bindings-cache.wtf`, account ONE) and each command's dispatch class.
+//! The binding command registry: every command benilla implements, in 1.12 `Bindings.xml` order,
+//! with the stock default chords (`WTF\DefaultBindings.wtf`) and each command's dispatch class.
+//! A command appears only over a real engine action; the rest are in [`ABSENT`], and the two
+//! together are exactly the client's 228 live bindings. Labels and headers are the 1.12
+//! `BINDING_NAME_*`/`BINDING_HEADER_*` GlobalStrings.
 //!
-//! **Honest tree**: a command appears here only over a real engine action — the same law as the
-//! options rows. The 1.12 commands with no benilla mechanism yet are absent, not stubbed;
-//! the page shows only what's here, and only non-empty categories (era law). Labels/headers are
-//! the 1.12 GlobalStrings (`BINDING_NAME_*`/`BINDING_HEADER_*`), defined in the window's XML.
-//!
-//! **…and the absence is written down** ([`ABSENT`]). The honest tree's one hole
-//! was that nothing noticed when a mechanism ARRIVED: 0997 promised "each returns the day its
-//! mechanism lands, one registry row", and then the keyring, the pet book (1050), the
-//! reputation and honor pages, the six action-bar pages and the two vertical multibars (1500)
-//! all shipped their mechanism with no row — some for five hundred commits, none of them a
-//! mistake anyone could see. `SPECS` ∪ `ABSENT` is now exactly the client's 228 live bindings,
-//! and each absent row names the Lua globals whose arrival falsifies it.
-//!
-//! Three dispatch classes:
-//! - [`Kind::Held`] — press latches, base-key release unlatches (the reference's `runOnUp`
-//!   movement pairs); engine systems read the latch ([`super::BindingsState`]).
-//! - [`Kind::Edge`] / [`Kind::EdgeUpDown`] — fires Lua in the VM (the reference's binding body,
-//!   quoted 1:1 where our FrameXML port has the same functions).
-//! - [`Kind::Host`] — fires into [`super::BindingsState::fired`]; an engine system consumes it
-//!   (chat open, TAB targeting, nameplates, autorun, …).
-//!
-//! Recorded default divergences: `TOGGLEUI` ships `ALT-Z` (the cache's `CTRL-Z` is
-//! a player rebind all three accounts inherited, not the shipped default — the one row that does
-//! not trust the cache). That is now the ONLY one — the bag row's divergence (`OPENALLBAGS` wearing
-//! both `B` and `SHIFT-B`, because benilla had a single all-bags knob) is gone as of 1494: the
-//! reference's split ships whole, keys and bodies alike.
+//! Dispatch classes:
+//! - [`Kind::Held`]: press latches, base-key release unlatches (the `runOnUp` movement pairs);
+//!   engine systems read the latch ([`super::BindingsState`]).
+//! - [`Kind::Edge`] / [`Kind::EdgeUpDown`]: runs the reference's binding body as Lua.
+//! - [`Kind::Host`]: fires into [`super::BindingsState::fired`] for an engine system.
 
-/// A command's index into [`SPECS`] — the engine-side handle (`cmd::JUMP`).
+/// A command's index into [`SPECS`], the engine-side handle (`cmd::JUMP`).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct Cmd(pub u16);
 
@@ -46,19 +27,17 @@ pub(crate) enum Kind {
 
 pub(crate) struct Spec {
     pub name: &'static str,
-    /// The category header's global-string key (`BINDING_HEADER_MOVEMENT`) — the window's
-    /// sidebar groups by it, era-style.
+    /// The category header's global-string key (`BINDING_HEADER_MOVEMENT`).
     pub category: &'static str,
     pub kind: Kind,
-    /// The 1.12 default chords (canonical strings; `None` = shipped unbound).
+    /// The 1.12 default chords; `None` is shipped unbound.
     pub d1: Option<&'static str>,
     pub d2: Option<&'static str>,
 }
 
 impl Spec {
-    /// Press+release semantics — the reference's `<Binding runOnUp=…>`, whose ONE reader is
-    /// `RunCommand 0x4b7bf1`: it gates the release half and nothing else. (It used to gate a
-    /// mousewheel refusal at `SetBinding` time here; that refusal is not in the client — 1295.)
+    /// The reference's `<Binding runOnUp=…>`; its one reader (`0x4b7bf1`) gates the release half
+    /// and nothing else.
     pub(crate) fn run_on_up(&self) -> bool {
         matches!(self.kind, Kind::Held | Kind::EdgeUpDown(..))
     }
@@ -76,21 +55,11 @@ macro_rules! spec {
     };
 }
 
-/// Engine-side handles for the host-dispatched commands (indexes into [`SPECS`], asserted by
-/// test). Lua-bodied commands need no handle — nothing in Rust names them.
+/// Engine-side handles for the host-dispatched commands, as indexes into [`SPECS`].
 pub(crate) mod cmd {
     use super::{Cmd, TABLE};
 
-    /// Resolve a command NAME to its [`Cmd`] handle at compile time — a linear scan of [`TABLE`]
-    /// in a `const fn`, so a name that is not in the registry is a BUILD error, not a runtime
-    /// surprise.
-    ///
-    /// These handles used to be hand-written row numbers, and every row that landed ahead of one
-    /// silently re-pointed it at its neighbour: 1057's `TOGGLECHARACTER3` moved three of them
-    /// 86/87/88 → 87/88/89, 1136's `TOGGLEACTIONBARLOCK` moved the same three again, and 1494's
-    /// bag family would have moved them a third time (`TOGGLE_UI` landing on `MINIMAPZOOMOUT`). A
-    /// guard test named the drift but the numbers still had to be re-typed by hand each time; the
-    /// name is the thing we actually mean, so the name is what the table is asked for now.
+    /// Resolve a command name to its [`Cmd`] at compile time; an unknown name is a build error.
     const fn by_name(name: &str) -> Cmd {
         let mut i = 0;
         while i < TABLE.len() {
@@ -140,11 +109,8 @@ pub(crate) mod cmd {
     pub(crate) const CAMERA_ZOOM_OUT: Cmd = by_name("CAMERAZOOMOUT");
 }
 
-/// The registry, 1.12 `Bindings.xml` order. Sub-tables (action buttons, shapeshift, raid
-/// targets) are written out because each row carries its own Lua body string.
-///
-/// `TABLE` is the `const` view [`cmd::by_name`] scans at compile time (a `static` cannot be read
-/// during const evaluation); `SPECS` is the one everything else uses.
+/// The registry, in 1.12 `Bindings.xml` order. `TABLE` is the `const` view [`cmd::by_name`] scans,
+/// since a `static` cannot be read during const evaluation.
 pub(crate) static SPECS: &[Spec] = TABLE;
 
 const TABLE: &[Spec] = &[
@@ -229,9 +195,7 @@ const TABLE: &[Spec] = &[
         Some("R"),
         None
     ),
-    // The other reply: the last person YOU told, not the last who told you
-    // (`ChatEdit_GetLastToldTarget`, ChatFrame.lua l.1650). The memory was already being kept by
-    // the send path and read by nothing — 1745.
+    // The last person you told, not the last who told you (`ChatFrame.lua:1650`).
     spec!(
         "REPLY2",
         CHAT,
@@ -239,9 +203,7 @@ const TABLE: &[Spec] = &[
         Some("SHIFT-R"),
         None
     ),
-    // The combat-log four (Bindings.xml l.108-119): ChatFrame2's own paging and the reference's
-    // `ToggleCombatLog`, both FloatingChatFrame.lua's since the chat window became the
-    // reference's (1948). Chords from `bindings-cache.wtf`, account ONE.
+    // The combat-log four (`Bindings.xml:108-119`): ChatFrame2's paging and `ToggleCombatLog`.
     spec!(
         "COMBATLOGPAGEUP",
         CHAT,
@@ -271,8 +233,7 @@ const TABLE: &[Spec] = &[
         None
     ),
     // ── Action bar (BINDING_HEADER_ACTIONBAR) ───────────────────────────────────────────
-    // The ref's runOnUp pair (Bindings.xml:121: DOWN shows the pushed visual, UP fires) —
-    // exactly what the old hardcoded number-row table sent.
+    // The `runOnUp` pair (`Bindings.xml:121`): down shows the pushed visual, up fires.
     spec!(
         "ACTIONBUTTON1",
         ACTIONBAR,
@@ -357,13 +318,9 @@ const TABLE: &[Spec] = &[
         Some("="),
         None
     ),
-    // The stance/shapeshift row (ref ShapeshiftBar_ChangeForm(n)) — ours clicks the bar's own
-    // buttons, which carry the full form-switch law (stock BonusActionBarFrame.xml, 1938).
-    // ── The self-cast dozen (1.12 `Bindings.xml`:257-293) ───────────────────────────────
-    // The same two halves as ACTIONBUTTON, with `ActionButtonUp`'s second argument set: the
-    // reference's own `onSelf`, which stock `ActionButtonUp` forwards to `UseAction`'s third
-    // and the host used to drop (1745). `ALT-1`…`ALT-=` are byte-real from DefaultBindings.wtf,
-    // and they sit one modifier off the plain bar exactly as the reference lays them out.
+    // ── Self-cast (`Bindings.xml:205-288`) ─────────────────────────────────────────────
+    // ACTIONBUTTON's halves with `ActionButtonUp`'s `onSelf` argument set, which stock
+    // `ActionButtonUp` forwards to `UseAction`.
     spec!(
         "SELFACTIONBUTTON1",
         ACTIONBAR,
@@ -448,6 +405,8 @@ const TABLE: &[Spec] = &[
         Some("ALT-="),
         None
     ),
+    // The reference body is `ShapeshiftBar_ChangeForm(n)`; this clicks the visible stock
+    // button, whose OnClick calls it (`BonusActionBarFrame.xml:37`).
     spec!(
         "SHAPESHIFTBUTTON1",
         ACTIONBAR,
@@ -538,14 +497,9 @@ const TABLE: &[Spec] = &[
         Some("CTRL-F10"),
         None
     ),
-    // The PET bar's row — 1.12 calls it BONUSACTIONBUTTON and files it under this same ACTIONBAR
-    // header (Bindings.xml:321-390 carries no `header` attribute, so it inherits l.121's), which
-    // is why "Secondary Action Button 1-10" reads under Action Bar in the reference's own window.
-    // The ref's body is BonusActionButtonDown/Up(id), and those two are one-liners onto
-    // PetActionButtonDown/Up (BonusActionBarFrame.lua:106-112) — the PET bar's buttons, not the
-    // bonus bar's. benilla has no bonus bar at all, so the pet bar is the whole lane, exactly as
-    // the reference wires it. Defaults are byte-real and unanimous: CTRL-1..CTRL-0 in all three
-    // of the install's `bindings-cache.wtf` files (unlike TOGGLEUI's rebind).
+    // The pet bar, which 1.12 names BONUSACTIONBUTTON under the ACTIONBAR header
+    // (`Bindings.xml:321-390`); its `BonusActionButtonDown/Up` only call
+    // `PetActionButtonDown/Up` (`BonusActionBarFrame.lua:106-112`).
     spec!(
         "BONUSACTIONBUTTON1",
         ACTIONBAR,
@@ -616,12 +570,9 @@ const TABLE: &[Spec] = &[
         Some("CTRL-0"),
         None
     ),
-    // ── The action-bar PAGES (1.12 `Bindings.xml`:395-431) ──────────────────────────────
-    // The bar is six pages of twelve (action slots 1..72) and it has been since 1500 shipped the
-    // multibars; `ChangeActionBarPage` is the engine's (it fires ACTIONBAR_PAGE_CHANGED and nothing
-    // else — 1938) and the `ActionBar_Page{Up,Down}` wrap is stock ActionButton.lua's. `SHIFT-1..6`
-    // and the SHIFT-arrow / SHIFT-wheel steps are
-    // byte-real from `WTF\\DefaultBindings.wtf`.
+    // ── Action-bar pages (`Bindings.xml:391-432`) ──────────────────────────────────────
+    // Six pages of twelve (slots 1-72). `ChangeActionBarPage` is an engine verb that only fires
+    // `ACTIONBAR_PAGE_CHANGED`; the `ActionBar_Page{Up,Down}` wrap is stock ActionButton.lua's.
     spec!(
         "ACTIONPAGE1",
         ACTIONBAR,
@@ -696,13 +647,8 @@ const TABLE: &[Spec] = &[
         Some("SHIFT-DOWN"),
         Some("SHIFT-MOUSEWHEELDOWN")
     ),
-    // The action-bar lock, the ref's own binding body verbatim (Bindings.xml:433-
-    // 439) — it flips the `LOCK_ACTIONBAR` uvar OptionsFrame.xml declares (1938), the same global the
-    // Options window's Action Bars row writes. It sits here because the reference files it under
-    // this header (l.433 carries no `header=`, so it inherits l.121's ACTIONBAR), and it ships
-    // **unbound**: no `TOGGLEACTIONBARLOCK` line in any of the install's three
-    // `bindings-cache.wtf` files, which is also what the option's own tooltip implies ("can be
-    // bound to a function key in the keybindings interface").
+    // Flips the `LOCK_ACTIONBAR` uvar the Options window's Lock ActionBars row writes
+    // (`Bindings.xml:433-439`).
     spec!(
         "TOGGLEACTIONBARLOCK",
         ACTIONBAR,
@@ -712,9 +658,6 @@ const TABLE: &[Spec] = &[
         None,
         None
     ),
-    // The `autoSelfCast` CVar's own toggle, the reference's body verbatim — real since 1745
-    // wired that CVar to the cast arm's `AutoSelfCast` knob, which had been welded to a Resource
-    // default with nothing able to move it. Ships unbound, like the reference.
     spec!(
         "TOGGLEAUTOSELFCAST",
         ACTIONBAR,
@@ -740,9 +683,7 @@ const TABLE: &[Spec] = &[
         Some("SHIFT-TAB"),
         None
     ),
-    // The friendly cone — the same scan with the reaction test flipped (1745). `CTRL-TAB` /
-    // `CTRL-SHIFT-TAB`, byte-real; the reverse flag is the reference's own
-    // `TargetNearestFriend(1)`, and its `Bindings.xml` comment says so out loud.
+    // The friendly scan; `1` is the reverse flag (`Bindings.xml:458`).
     spec!(
         "TARGETNEARESTFRIEND",
         TARGETING,
@@ -757,8 +698,7 @@ const TABLE: &[Spec] = &[
         Some("CTRL-SHIFT-TAB"),
         None
     ),
-    // The self/party bodies are 1.12's own, 1:1 (Bindings.xml:460-509 — already-targeted
-    // falls through to the pet).
+    // An already-targeted unit falls through to its pet (`Bindings.xml:460-494`).
     spec!(
         "TARGETSELF",
         TARGETING,
@@ -878,21 +818,8 @@ const TABLE: &[Spec] = &[
         Some("C"),
         None
     ),
-    // The bag family, in the reference's own `Bindings.xml` order and with its own bodies and
-    // defaults (1494). 0997 collapsed all of this onto ONE command — `OPENALLBAGS` wearing both
-    // `B` and `SHIFT-B` over a `ToggleBackpack()` that opened every bag — because benilla had a
-    // single all-bags knob to hang keys off. The reference has three knobs and the director
-    // reported the difference: `B` opens the backpack ALONE, `SHIFT-B` opens the lot.
-    //
-    // Every default here is byte-real from the client's own `bindings-cache.wtf`, identical across
-    // all three independent accounts (ONE, TWO, WINUSER) — which is what rules out a player rebind
-    // (the `TOGGLEUI` trap).
-    //
-    // Each body is the bare GLOBAL, exactly the ref's own `Bindings.xml` — NOT a button's OnClick
-    // handler: a handler carries the button's checked bookkeeping, and routing a key through it
-    // drags that onto a path the reference keeps clean (with a bag addon holding `ToggleBackpack`,
-    // the key press is the path that lights the backpack button on the real client — the addon's
-    // OnShow write is the last word).
+    // The bag family: `B` opens the backpack alone, `SHIFT-B` every bag. Each body is the bare
+    // global, as in `Bindings.xml`, never a button's OnClick, which would add its checked state.
     spec!(
         "TOGGLEBACKPACK",
         INTERFACE,
@@ -900,8 +827,8 @@ const TABLE: &[Spec] = &[
         Some("B"),
         Some("F12")
     ),
-    // TOGGLEBAG**N** is bag **5-N**: the reference's numbering runs the bar right-to-left, so F8
-    // opens the slot FARTHEST from the backpack. Quoted from ref Bindings.xml l.564-575.
+    // TOGGLEBAGn is bag 5-n, so F8 opens the slot farthest from the backpack
+    // (`Bindings.xml:564-575`).
     spec!(
         "TOGGLEBAG1",
         INTERFACE,
@@ -937,9 +864,6 @@ const TABLE: &[Spec] = &[
         Some("SHIFT-B"),
         None
     ),
-    // The keyring's own toggle (1.12 `Bindings.xml`; ships UNBOUND, and the reference's page
-    // shows it as such). 0765 landed the keyring plate and its `HasKey` gate; the row it was
-    // owed has been missing since.
     spec!(
         "TOGGLEKEYRING",
         INTERFACE,
@@ -954,8 +878,7 @@ const TABLE: &[Spec] = &[
         Some("P"),
         None
     ),
-    // The PET book is the same window forked on `bookType` — 1050's law, and the reason this is
-    // a second command rather than a second key on the first.
+    // The pet book is the same window forked on `bookType`.
     spec!(
         "TOGGLEPETBOOK",
         INTERFACE,
@@ -970,9 +893,8 @@ const TABLE: &[Spec] = &[
         Some("N"),
         None
     ),
-    // TOGGLECHARACTER**N** is the reference's PAGE number, not our tab index: 0 = PaperDoll,
-    // 1 = Skill, 2 = Reputation, 3 = PetPaperDoll, 4 = Honor. The rows run 4, 3, 2, 1 in the
-    // file, and the file's order is this table's order.
+    // TOGGLECHARACTERn is the reference's page number, not a tab index: 0 PaperDoll, 1 Skill,
+    // 2 Reputation, 3 PetPaperDoll, 4 Honor; the file runs them 4, 3, 2, 1.
     spec!(
         "TOGGLECHARACTER4",
         INTERFACE,
@@ -980,9 +902,6 @@ const TABLE: &[Spec] = &[
         Some("H"),
         None
     ),
-    // `SHIFT-P` is byte-real from the client's own `bindings-cache.wtf`, and identical in two
-    // independent accounts (ONE and WINUSER) — which is what rules out a player rebind (the
-    // `TOGGLEUI` trap).
     spec!(
         "TOGGLECHARACTER3",
         INTERFACE,
@@ -1069,10 +988,8 @@ const TABLE: &[Spec] = &[
         None,
         None
     ),
-    // The battleground scoreboard and the battlefield minimap — the Interface block's last two
-    // (Bindings.xml l.630-635), both Lua-bodied: `ToggleWorldStateScoreFrame` is the stock
-    // WorldStateFrame.lua's since 1972 and `ToggleBattlefieldMinimap` UIParent.xml's (ref
-    // UIParent.lua l.216-221). Defaults byte-real from `WTF\DefaultBindings.wtf`.
+    // `ToggleWorldStateScoreFrame` is stock WorldStateFrame.lua's, `ToggleBattlefieldMinimap`
+    // stock `UIParent.lua:216` (`Bindings.xml:630-635`).
     spec!(
         "TOGGLEWORLDSTATESCORES",
         INTERFACE,
@@ -1102,8 +1019,8 @@ const TABLE: &[Spec] = &[
         Some("NUMPADMINUS"),
         None
     ),
-    // The sound toggles/steps flip the same CVars the ref's SoundOptionsFrame_* bodies do
-    // (1.12 SoundOptionsFrame.lua: master enable = MasterSoundEffects, step 0.1).
+    // The CVars stock SoundOptionsFrame.lua moves: `MasterSoundEffects` is the master enable,
+    // `MasterVolume` steps by 0.1.
     spec!(
         "TOGGLEMUSIC",
         MISC,
@@ -1140,25 +1057,9 @@ const TABLE: &[Spec] = &[
         Some("CTRL--"),
         None
     ),
-    // ALT-Z, not the cache's CTRL-Z — settled by 0870: all three of the install's accounts
-    // descend from one profile whose TOGGLEUI had been rebound; ALT-Z is the shipped default
-    // (the one command whose default does NOT trust the cache file).
+    // ALT-Z is the shipped default; a `bindings-cache.wtf` holding CTRL-Z is a player rebind.
     spec!("TOGGLEUI", MISC, Kind::Host, Some("ALT-Z"), None),
-    // Print screen. The body is the reference's own one-liner because our
-    // `TakeScreenshot` has the same contract its does (ScreenshotStatus.xml) — hide the last
-    // shot's confirmation, then ask the engine.
-    //
-    // `PRINTSCREEN` comes from the SHIPPED default, not a player's cache: `DefaultBindings.wtf`
-    // lives inside `patch.MPQ` and its line 128 is `bind PRINTSCREEN SCREENSHOT` (the install's
-    // account-ONE `bindings-cache.wtf` agrees). `Edge`, not `EdgeUpDown`, is also byte-real: the
-    // `<Binding>` carries no `runOnUp`, and the reference's dispatcher returns on key-up unless
-    // that flag is set (`0x4b7bea`).
-    //
-    // On a Mac keyboard the token arrives as F13, which is the reference's own Mac mapping rather
-    // than an accommodation (`KEY_PRINTSCREEN_MAC = "F13"`); `super::chord` does the translation.
-    // The stock WorldFrame.lua's framerate readout: `FramerateLabel`/`FramerateText`
-    // toggled by `ToggleFramerate()`, refreshed off `GetFramerate()` every quarter second by
-    // `WorldFrame_OnUpdate`. CTRL-R is the install's own DefaultBindings.wtf chord (1804).
+    // Stock WorldFrame.lua's framerate readout.
     spec!(
         "TOGGLEFPS",
         MISC,
@@ -1166,6 +1067,8 @@ const TABLE: &[Spec] = &[
         Some("CTRL-R"),
         None
     ),
+    // `Edge`: the `<Binding>` has no `runOnUp`, and the dispatcher returns on key-up without it
+    // (`0x4b7bea`).
     spec!(
         "SCREENSHOT",
         MISC,
@@ -1174,11 +1077,9 @@ const TABLE: &[Spec] = &[
         None
     ),
     // ── Camera (BINDING_HEADER_CAMERA) ──────────────────────────────────────────────────
-    // The five named camera views — `player::camera_view`, whose defaults are the
-    // reference's own `0x84f488` table. NEXTVIEW/PREVVIEW ship on END/HOME and **do not wrap**
-    // (`0x50faa0`/`0x50fac0` are hard stops); Set/Save/Reset ship unbound, and 1.12 files no
-    // SAVEVIEW1/RESETVIEW1 row even though its engine accepts view 1 — that is a `Bindings.xml`
-    // decision, so the table follows the file.
+    // The five camera views (defaults: the table at `0x84f488`). NEXTVIEW/PREVVIEW stop at the
+    // ends (`0x50faa0`/`0x50fac0`); 1.12 has no SAVEVIEW1/RESETVIEW1 row though the engine
+    // accepts view 1.
     spec!(
         "NEXTVIEW",
         CAMERA,
@@ -1228,12 +1129,9 @@ const TABLE: &[Spec] = &[
         None
     ),
     // ── MultiActionBar (BINDING_HEADER_MULTIACTIONBAR) ──────────────────────────────────
-    // The two bottom bars' buttons (stock MultiActionBars.xml renders exactly these; 1.12's right bars
-    // and their MULTIACTIONBAR3/4 commands stay out — honest tree). Ref bodies are the
-    // MultiActionButtonDown/Up runOnUp pair (Bindings.xml:799-966), defined in stock
-    // MultiActionBars.lua; shipped UNBOUND like the ref (no MULTIACTIONBAR* line in any of the
-    // install's bindings-cache.wtf files). 1.12 files bar 2 under a BLANK spacer-header;
-    // both bars sit under the one MULTIACTIONBAR header here (1008, recorded).
+    // The four multibars' `runOnUp` pairs (`Bindings.xml:799-1134`), stock MultiActionBars.lua's.
+    // Deviation: 1.12 files bars 2-4 under the spacer headers `BLANK`, `BLANK2` and `BLANK3`; they
+    // sit under MULTIACTIONBAR here because this page's sections are named.
     spec!(
         "MULTIACTIONBAR1BUTTON1",
         MULTIACTIONBAR,
@@ -1474,11 +1372,7 @@ const TABLE: &[Spec] = &[
         None,
         None
     ),
-    // ── The two VERTICAL bars (1.12 files them under its own `BLANK2`/`BLANK3` spacer
-    // headers; they join bar 2 under MULTIACTIONBAR here for the same reason 1008 folded that
-    // one — a spacer is a display device in the reference's flat list, and this page's sections
-    // are named). Both bars are real since 1500; `MultiBarRight` is bar 3, `MultiBarLeft` bar 4,
-    // and both ship UNBOUND exactly as the reference does.
+    // The vertical bars: `MultiBarRight` is bar 3, `MultiBarLeft` bar 4.
     spec!(
         "MULTIACTIONBAR3BUTTON1",
         MULTIACTIONBAR,
@@ -1720,8 +1614,7 @@ const TABLE: &[Spec] = &[
         None
     ),
     // ── Raid targeting (BINDING_HEADER_RAID_TARGET) ─────────────────────────────────────
-    // 1.12 bodies 1:1 (SetRaidTargetIcon toggles when the unit already wears the icon; 0
-    // clears — party.rs's registered semantics). All unbound by default, like the client.
+    // `SetRaidTargetIcon` toggles an icon the unit already wears off; 0 clears.
     spec!(
         "RAIDTARGET1",
         RAID_TARGET,
@@ -1787,34 +1680,15 @@ const TABLE: &[Spec] = &[
     ),
 ];
 
-/// One 1.12 binding command this client does **not** register — and the mechanism it waits on.
-///
-/// The honest tree says a command appears in [`SPECS`] only over a real engine action. That
-/// rule is right and it stays; what it never had was a way to notice when the action *arrived*.
-/// 0997's own residue promised "each returns the day its mechanism lands, one registry row" and
-/// then five mechanisms landed without their rows: the keyring, the pet book (1050), the
-/// reputation and honor pages (1057-era), the six action-bar pages and the two vertical multibars
-/// (1500). Nothing was wrong with any of those commits — nothing was *watching*.
-///
-/// So the absence is written down rather than merely true, and it is written down in a form that
-/// goes stale loudly: [`needs`] names the Lua globals the reference's own binding body calls that
-/// this client does not define, and
-/// `the_absent_commands_are_still_absent` fails the day the last one lands.
+/// One 1.12 binding command this client does not register, and the mechanism it waits on; a
+/// test fails once every global in [`needs`] is defined.
 ///
 /// [`needs`]: Absent::needs
 pub(crate) struct Absent {
     /// The 1.12 command name, exactly as `Bindings.xml` spells it.
     pub name: &'static str,
-    /// Lua globals the reference's body calls that this client does not define. **This is the
-    /// falsifier**: while at least one is missing the absence is real; when they are all defined
-    /// the mechanism has landed and the row belongs in [`SPECS`].
-    ///
-    /// Empty is allowed and means *there is no Lua-global signal* — the missing mechanism is
-    /// host-side behind a global that already exists (self-cast lives behind `UseAction`'s third
-    /// argument, which the Lua passes and the host drops). Those rows carry the whole weight in
-    /// [`why`], and they are the ones to be suspicious of.
-    ///
-    /// [`why`]: Absent::why
+    /// Lua globals the reference's body calls that this client does not define; never empty, and
+    /// once all are defined the row belongs in [`SPECS`].
     #[cfg_attr(
         not(test),
         expect(
@@ -1825,7 +1699,7 @@ pub(crate) struct Absent {
         )
     )]
     pub needs: &'static [&'static str],
-    /// What would have to exist here — one line, mechanism-first.
+    /// What would have to exist, in one line.
     pub why: &'static str,
 }
 
@@ -1839,9 +1713,8 @@ macro_rules! absent {
     };
 }
 
-/// The 1.12 commands benilla does not implement, in `Bindings.xml` order — the other half of the
-/// registry, and the half that used to be invisible. `SPECS` ∪ `ABSENT` is exactly the client's
-/// 228 live bindings, asserted by [`tests::every_1_12_command_is_registered_or_recorded_absent`].
+/// The 1.12 commands benilla does not implement, in `Bindings.xml` order; with `SPECS`, exactly
+/// the client's 228 live bindings.
 pub(crate) static ABSENT: &[Absent] = &[
     // ── Movement ────────────────────────────────────────────────────────────────────────
     absent!(
@@ -1855,14 +1728,9 @@ pub(crate) static ABSENT: &[Absent] = &[
         ["PitchDownStart", "PitchDownStop"],
         "no keyboard pitch — see PITCHUP"
     ),
-    // ── Action bar ──────────────────────────────────────────────────────────────────────
-    // ── Interface ───────────────────────────────────────────────────────────────────────
     // ── Misc ────────────────────────────────────────────────────────────────────────────
-    // The nine `hidden="true" debug="true"` rows. Every one of them names an instrument benilla
-    // really has (the tri counter, the collision display, the portal draw, the perf pill) — they
-    // are absent because those instruments answer to the dev plane's chords (0702/1043), not to a
-    // binding. Whether that is right is a real question and 1745 takes it; until then the rows
-    // stay recorded rather than quietly missing.
+    // The nine `hidden="true" debug="true"` rows: benilla's instruments for these answer to the
+    // dev plane's chords, not to a binding.
     absent!(
         "TOGGLESTATS",
         ["ToggleStats"],
@@ -1909,11 +1777,8 @@ pub(crate) static ABSENT: &[Absent] = &[
         "a dev-plane instrument (1043)"
     ),
     // ── The mouse's own three (hidden) ──────────────────────────────────────────────────
-    // These are the reference's mouse-look bindings — BUTTON2 turn-or-action, BUTTON1
-    // select-or-move, CTRL-BUTTON1 the sticky variant — and they are `hidden` because the window
-    // never lists them, not because they are debug. benilla's mouse-look is hardwired in
-    // `player/camera.rs` instead, which is exactly the shape 1043 spent a decision undoing for
-    // the keyboard.
+    // The reference's mouse-look bindings (BUTTON2, BUTTON1, CTRL-BUTTON1), hidden from the
+    // window; benilla's mouse-look is hardwired in `player/camera.rs`.
     absent!(
         "TURNORACTION",
         ["TurnOrActionStart", "TurnOrActionStop"],
@@ -1930,9 +1795,7 @@ pub(crate) static ABSENT: &[Absent] = &[
         "left-button select/move is hardwired, not routed through a binding"
     ),
     // ── iTunes remote (platform="mac") ──────────────────────────────────────────────────
-    // The one place 1.12's own binding file is OS-specific: five rows carrying `platform="mac"`,
-    // the whole use of that attribute in the client. They remote the *system* music player, not
-    // the game's, and benilla has nothing to remote.
+    // 1.12's only `platform="mac"` rows; they remote the system music player, not the game's.
     absent!(
         "ITUNES_PLAYPAUSE",
         ["MusicPlayer_PlayPause"],
@@ -1964,8 +1827,6 @@ pub(crate) static ABSENT: &[Absent] = &[
 mod tests {
     use super::*;
 
-    /// Every default chord in the table parses — a typo'd token would otherwise silently ship
-    /// an unpressable default.
     #[test]
     fn every_default_chord_parses() {
         for s in SPECS {
@@ -1979,11 +1840,7 @@ mod tests {
         }
     }
 
-    /// No two commands ship the SAME default chord. One key, one command is the binding table's
-    /// own law (the steal pass in [`super::store::resolve`] enforces it at load), so a duplicate
-    /// here would ship a table that eats itself: registration order would decide the winner and
-    /// the loser would come up silently unbound. Cheap tripwire for the one mistake a new block
-    /// of rows can make — 1052's CTRL-1..CTRL-0 went in with nothing to catch a collision.
+    /// One key, one command: a duplicate default would leave the loser of the steal pass unbound.
     #[test]
     fn no_two_commands_ship_the_same_default_chord() {
         let mut seen: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
@@ -1996,7 +1853,6 @@ mod tests {
         }
     }
 
-    /// Names are unique (the table is keyed by them everywhere: files, Lua, the window).
     #[test]
     fn names_are_unique() {
         let mut seen = std::collections::HashSet::new();
@@ -2005,17 +1861,8 @@ mod tests {
         }
     }
 
-    /// **The registry against the real client's own two files.** Two columns of this table are
-    /// pure transcription from the 1.12 install, and both are load-bearing in a way nothing else
-    /// here can see: `runOnUp` — which decides whether a wheel notch delivers a release half at
-    /// all (1295), and which B265 turned entirely on — and every command's default chords. A
-    /// hand-typed table drifts; this reads the source of truth instead of trusting the typing.
-    ///
-    /// `Interface\FrameXML\Bindings.xml` carries the flag, `WTF\DefaultBindings.wtf` the chords.
-    /// Both are install content, read at runtime, never committed; the test skips (passes)
-    /// without a client, the house pattern for a real-data test. Running Blizzard's own 234-row
-    /// file through our [`benilla_ui::bindings_xml`] is a second gate riding along — that is the
-    /// parser every addon's `Bindings.xml` lands in.
+    /// Every row's `runOnUp` against the install's `Bindings.xml`, and its default chords against
+    /// `WTF\DefaultBindings.wtf`.
     #[test]
     fn the_registry_matches_the_installs_own_bindings() {
         let data = benilla_formats::wow_data_or_skip!();
@@ -2033,8 +1880,7 @@ mod tests {
             .map(|b| (b.name.as_str(), b.run_on_up))
             .collect();
 
-        // `bind <CHORD> <COMMAND>`, in the file's own order — which is the order the command's
-        // Key 1 and Key 2 slots take.
+        // `bind <CHORD> <COMMAND>`; file order is the Key 1, Key 2 order.
         let wtf = String::from_utf8_lossy(
             &chain
                 .read_file("WTF\\DefaultBindings.wtf")
@@ -2076,20 +1922,8 @@ mod tests {
         }
     }
 
-    /// **The coverage gate**: every one of the client's 228 live bindings is
-    /// either in [`SPECS`] or in [`ABSENT`], and never both.
-    ///
-    /// This is the half [`the_registry_matches_the_installs_own_bindings`] could not see. That
-    /// test walks OUR rows and checks them against the install, so a command we never wrote down
-    /// is invisible to it — which is how the keyring, the pet book, the reputation and honor
-    /// pages, the six action-bar pages and the two vertical multibars all shipped their mechanism
-    /// and kept their key unbound, some of them for five hundred commits. Walking the INSTALL's
-    /// rows instead makes an unwritten command a build failure the day it becomes reachable.
-    ///
-    /// `hidden` rides along: 1.12 marks twelve bindings `hidden="true"` (the nine debug toggles
-    /// and the three mouse-look ones) and the window never lists them. This client registers none
-    /// of them, and this asserts that stays true — a hidden row in `SPECS` would be a row the
-    /// Keybindings page shows and the reference does not.
+    /// Every one of the client's 228 live bindings is in exactly one of [`SPECS`] and [`ABSENT`],
+    /// none of the twelve `hidden="true"` ones is in `SPECS`, and `SPECS` keeps the file's order.
     #[test]
     fn every_1_12_command_is_registered_or_recorded_absent() {
         let Some(reference) = install_bindings() else {
@@ -2130,8 +1964,7 @@ mod tests {
             );
         }
 
-        // The table's order IS the Keybindings page's row order, and the module claims it is the
-        // file's. It was not: TOGGLECHARACTER1/3 sat ahead of TOGGLESPELLBOOK until 1745.
+        // The table's order is the Keybindings page's row order.
         let order: Vec<&str> = reference.iter().map(|b| b.name.as_str()).collect();
         let mut at = 0usize;
         for s in SPECS {
@@ -2146,14 +1979,8 @@ mod tests {
         }
     }
 
-    /// **The staleness half.** Each [`ABSENT`] row names the Lua globals the reference's own body
-    /// calls that this client does not define; while at least one is still missing the absence is
-    /// real. When they are all defined the mechanism has landed and the row is owed to [`SPECS`] —
-    /// which is precisely the event nothing was watching for.
-    ///
-    /// "Defined" is read from source, not from a VM: a harness would have to load the whole of
-    /// FrameXML to answer, and the question here is "has anyone written it yet", which the sources
-    /// say directly. Same posture as `tests/world_api_wall.rs`.
+    /// An [`ABSENT`] row whose `needs` are all defined belongs in [`SPECS`]. "Defined" is read
+    /// from source, not from a VM.
     #[test]
     fn the_absent_commands_are_still_absent() {
         let defined = lua_globals_defined();
@@ -2179,10 +2006,8 @@ mod tests {
         }
     }
 
-    /// The absent table is well formed: unique names, and every row either carries a falsifier or
-    /// is one of the host-side ones the header calls out. The second half is not a formality — a
-    /// row with no `needs` can rot silently, so the count of them is pinned and moving it is a
-    /// deliberate act.
+    /// Unique names, a reason on every row, and no row without `needs`, which could go stale
+    /// unnoticed.
     #[test]
     fn the_absent_table_is_well_formed() {
         let mut seen = std::collections::HashSet::new();
@@ -2202,21 +2027,8 @@ mod tests {
         );
     }
 
-    /// **The scanner's own falsifier.** [`the_absent_commands_are_still_absent`] is only a gate
-    /// while `lua_globals_defined` really sees every kind of definition; a scanner that quietly
-    /// returned nothing would pass every row forever, which is the exact failure it exists to
-    /// end. So: one global of each kind that is certainly defined, and one that certainly is not.
-    ///
-    /// **There are THREE kinds since decision 1751, and this test found the third the hard way.**
-    /// `ToggleKeyRing` sat in the FrameXML row below and started failing the day the bag windows
-    /// migrated: it is defined in `ContainerFrame.lua`, which this client no longer ships — it
-    /// EXECUTES it off the player's own patch chain. The honest repair was not to swap the name
-    /// for one still in `assets/ui`; it was that the scan had gone blind to a whole store, and
-    /// blind to it in exactly the direction that matters (1751 §4 makes "ship the stock files off
-    /// the chain" the default for a NEW window, so the global that retires an ABSENT row —
-    /// `ToggleBattlefieldMinimap`, say — will appear in neither Rust nor `assets/ui`). So
-    /// `lua_globals_defined` reads the chain half of the manifest too, and `ToggleKeyRing` stays
-    /// here as the witness for it.
+    /// `lua_globals_defined` sees each store it reads and invents nothing; a blind scanner would
+    /// pass every [`ABSENT`] row.
     #[test]
     fn the_global_scanner_sees_both_kinds_of_definition() {
         benilla_formats::wow_data_or_skip!();
@@ -2227,17 +2039,16 @@ mod tests {
                 "the Rust scan missed the host registration `{host}`"
             );
         }
-        // Each is defined ONLY in `assets/ui` — the reference's own homes for them
-        // (CharacterFrame.lua, ActionBarFrame.lua, UIParent.lua) are not among the files
-        // `benilla.toc` sources, so the chain scan below cannot cover for a broken one.
+        // None of these is in `assets/ui`: `ChangeActionBarPage` is a host registration and the
+        // other two come from stock CharacterFrame.lua and UIParent.lua off the chain, so this
+        // loop does not isolate the `assets/ui` scan.
         for shipped in ["ToggleCharacter", "ChangeActionBarPage", "ShowUIPanel"] {
             assert!(
                 defined.contains(shipped),
                 "the assets/ui scan missed `{shipped}`"
             );
         }
-        // The chain half needs a client, like every other reader of install content — and the
-        // two rows above still run without one, so the test keeps its teeth either way.
+        // Stock ContainerFrame.lua's, sourced off the chain by `benilla.toc`.
         if benilla_formats::wow_data().is_some() {
             for sourced in ["ToggleKeyRing", "ToggleBag", "OpenAllBags"] {
                 assert!(
@@ -2253,13 +2064,8 @@ mod tests {
         );
     }
 
-    /// The parser's own header, read against the file it describes. `benilla_ui::bindings_xml`
-    /// quotes the shape of `Interface\FrameXML\Bindings.xml` — 228 live bindings, 94 `runOnUp`,
-    /// 13 `header`, 12 `hidden`, the commented-out `MOVEVIEW*` family that a text search counts and
-    /// a parser must not — and until 2331 the test that pinned those numbers lived beside the
-    /// parser, keyed on a `BENILLA_BINDINGS_XML` path nothing ever set, so it had never run. It
-    /// lives here because here is where the install is (`install_bindings`, off the player's own
-    /// chain); a wrong count is either a wrong file or a header that drifted from the client.
+    /// The install's `Bindings.xml` has the shape `benilla_ui::bindings_xml` documents; the
+    /// commented-out `MOVEVIEW*` family must not register.
     #[test]
     fn the_installs_bindings_xml_reads_as_the_parsers_header_says() {
         let Some(binds) = install_bindings() else {
@@ -2285,7 +2091,7 @@ mod tests {
         );
     }
 
-    /// The install's own `Bindings.xml`, parsed — `None` (and a skipped test) without a client.
+    /// The install's own `Bindings.xml`, parsed.
     fn install_bindings() -> Option<Vec<benilla_ui::bindings_xml::AddonBinding>> {
         let data = benilla_formats::wow_data_or_skip!(None);
         let mut chain = benilla_formats::open_chain(&data).expect("open the 1.12 patch chain");
@@ -2298,25 +2104,11 @@ mod tests {
         Some(benilla_ui::bindings_xml::parse(&xml).expect("Blizzard's own file parses"))
     }
 
-    /// Every Lua global this client defines, read out of its own sources — **all three stores**:
-    /// the host registrations (`g.set("Name", …)` anywhere in the workspace), our own FrameXML
-    /// port's function definitions (`function Name(` / `Name = function` inside the `<Script>`
-    /// blocks of `assets/ui`), and the reference's own FrameXML that decision 1751 executes off
-    /// the player's installed patch chain.
-    ///
-    /// The third store is not decoration. Until the bag windows migrated, "the FrameXML this
-    /// client runs" and "the files in `assets/ui`" were the same set; they are not any more, and
-    /// 1751 §4 makes the divergence grow — a NEW window ships as the stock files off the chain
-    /// plus the engine verbs they call, so the global that would retire an [`ABSENT`] row can land
-    /// without a line changing in either half this scan used to read. `benilla.toc` is the one
-    /// ordered list of both stores (a manifest entry carrying a path is the reference's file), so
-    /// it is what the chain half walks. No install ⇒ no chain half, the standard degradation.
-    ///
-    /// Deliberately syntactic and deliberately generous — a false "defined" fails the gate loudly
-    /// (it asks for a row that turns out not to work), while a false "missing" would let a landed
-    /// mechanism stay silent, which is the failure this whole gate exists to end. A reference
-    /// file's `local function name()` is therefore counted as well; that is the generous direction
-    /// on purpose.
+    /// Every Lua global this client defines, read from source: host registrations
+    /// (`g.set("Name", …)`), function definitions in `assets/ui`'s `<Script>` blocks, and the
+    /// stock files `benilla.toc` sources off the chain (none without an install). Deliberately
+    /// generous, `local function` included: a false "defined" fails loudly, a false "missing"
+    /// would hide a landed mechanism.
     fn lua_globals_defined() -> std::collections::HashSet<String> {
         fn walk(dir: &std::path::Path, ext: &str, out: &mut Vec<std::path::PathBuf>) {
             let Ok(entries) = std::fs::read_dir(dir) else {
@@ -2344,8 +2136,7 @@ mod tests {
             }
         }
 
-        /// One Lua-carrying text's own definitions — a `<Script>` block of ours or a reference
-        /// `.lua` off the chain, the same two shapes either way.
+        /// The `function Name(` and `Name = function` definitions in one Lua-carrying text.
         fn scan_lua(text: &str, names: &mut std::collections::HashSet<String>) {
             let mut rest = text;
             while let Some(i) = rest.find("function ") {
@@ -2370,10 +2161,8 @@ mod tests {
             }
         }
 
-        /// The `.lua` files an XML document pulls in through `<Script file="…"/>`. Only a script
-        /// reference ends in `.lua` — a `<Texture file=>` names art — so the extension is the
-        /// whole test, and the paths come back relative to the document's own directory, which is
-        /// how the loader resolves them (1186).
+        /// The `.lua` files an XML document pulls in through `<Script file="…"/>`, relative to the
+        /// document's directory, as the loader resolves them.
         fn script_files(text: &str) -> Vec<String> {
             let mut out = Vec::new();
             let mut rest = text;
@@ -2388,7 +2177,6 @@ mod tests {
             out
         }
 
-        // `crates/benilla-app/` → the workspace root.
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .and_then(|p| p.parent())
@@ -2403,8 +2191,7 @@ mod tests {
             let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            // `.set("Name"` — the host-registration idiom, over any amount of intervening
-            // whitespace (rustfmt breaks the long ones onto their own line).
+            // `.set("Name"`, across any whitespace, as rustfmt breaks long ones onto a new line.
             let mut rest = text.as_str();
             while let Some(i) = rest.find(".set(") {
                 rest = &rest[i + ".set(".len()..];
@@ -2427,8 +2214,6 @@ mod tests {
             scan_lua(&text, &mut names);
         }
 
-        // The chain half of the manifest — the reference's own files, read the way the client
-        // reads them.
         let Some(data) = benilla_formats::wow_data() else {
             return names;
         };
@@ -2441,9 +2226,8 @@ mod tests {
             .lines()
             .map(str::trim)
             .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            // The manifest's own rule for which store an entry names
-            // (`ui_script::reference_ui::is_chain_entry`): our tree is flat, so a separator is a
-            // path and a path is the reference's. The bare names were walked above.
+            // An entry with a path separator is a stock file
+            // (`ui_script::reference_ui::is_chain_entry`).
             .filter(|l| l.contains('\\') || l.contains('/'))
         {
             let Ok(bytes) = chain.read_file(entry) else {

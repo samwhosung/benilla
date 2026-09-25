@@ -1,7 +1,4 @@
-//! Helpers for the crate's **structural tests** — the ones that read this crate's own source
-//! and insist on a shape. A structural test exists where the
-//! failure is silent at runtime, so the check has to happen at the line; these are the readers
-//! they share.
+//! Source readers shared by the crate's structural tests, which check this crate's own code.
 
 /// Every `.rs` file under `root`, recursively.
 pub(crate) fn rust_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
@@ -28,7 +25,7 @@ pub(crate) fn src_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
 }
 
-/// A file's path under `src/`, with forward slashes — the key every `EXEMPT` table uses.
+/// A file's path under `src/`, with forward slashes: the key every `EXEMPT` table uses.
 pub(crate) fn rel_path(file: &std::path::Path) -> String {
     let src = src_dir();
     file.strip_prefix(&src)
@@ -37,18 +34,14 @@ pub(crate) fn rel_path(file: &std::path::Path) -> String {
         .replace('\\', "/")
 }
 
-/// One `fn` item as the scanners see it: its name, its parenthesised parameter list, and its
-/// body (the text between the outermost braces), each found by bracket matching so a scan
-/// sees a signature or a body rather than whatever text happens to follow.
+/// One `fn` item: name, parameter list and body, each found by bracket matching.
 pub(crate) struct FnItem<'a> {
     pub name: &'a str,
     pub params: &'a str,
     pub body: &'a str,
 }
 
-/// Every `fn` in `text`. A `fn` with no body (a trait method signature) comes back with an
-/// empty body; a generic parameter list before the `(` is tolerated in the shapes this
-/// codebase writes.
+/// Every `fn` in `text`; a bodiless signature comes back with an empty body.
 pub(crate) fn fn_items(text: &str) -> Vec<FnItem<'_>> {
     let bytes = text.as_bytes();
     let mut out = Vec::new();
@@ -66,8 +59,7 @@ pub(crate) fn fn_items(text: &str) -> Vec<FnItem<'_>> {
             continue;
         };
         let params = &text[open + 1..close];
-        // The body: the first `{` after the parameter list, unless a `;` (a bodiless
-        // signature) or another `fn` comes first.
+        // The body: the first `{` after the parameters, unless a `;` comes first.
         let tail = &text[close + 1..];
         let body = match (tail.find('{'), tail.find(';')) {
             (Some(b), Some(s)) if s < b => "",
@@ -85,7 +77,7 @@ pub(crate) fn fn_items(text: &str) -> Vec<FnItem<'_>> {
     out
 }
 
-/// The parenthesised parameter list of every `fn` in `text` — see [`fn_items`].
+/// The parameter list of every `fn` in `text`.
 pub(crate) fn fn_parameter_lists(text: &str) -> Vec<&str> {
     fn_items(text).into_iter().map(|f| f.params).collect()
 }

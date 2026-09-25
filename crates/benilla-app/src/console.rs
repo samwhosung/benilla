@@ -1,20 +1,13 @@
-//! The in-game **console command registry** — the reference's `ConsoleCommand`
-//! table, host side: `ConsoleCommandRegister 0x63f9e0` over a `TSExplicitList<CONSOLECOMMAND>`,
-//! with parse / register / lookup / execute (the registry runtime, `[0x63f880, 0x640c50)`). A
-//! subsystem registers its commands from its own plugin ([`ConsoleCommandApp::console_command`]),
-//! the way each of the reference's registers into the one table, and `/console <line>` reaches
-//! [`execute`] through the chat drain.
+//! The console command registry: the reference's `ConsoleCommand` table
+//! (`ConsoleCommandRegister` `0x63f9e0`, runtime `[0x63f880, 0x640c50)`). Subsystems register
+//! from their plugins; `/console <line>` reaches [`execute`] through the chat drain.
 //!
-//! **A CVar is a command too.** The reference's `CVar::Register` installs a per-CVar command
-//! under the CVar's own name (`0x63dde0`): a bare name prints `CVar "%s" is "%s"`, a name with a
-//! value sets it. So does this — over [`Cvars`] — after the registered commands, which is the
-//! reference's own lookup order. The four commands `ConsoleVar.cpp`'s `Initialize` registers
-//! (`set`, `cvar_reset`, `cvar_default`, `cvarlist`) are the built-ins [`ConsolePlugin`] adds,
-//! plus `help`, which the reference's registry runtime owns.
+//! Each CVar is also a command under its own name (`0x63dde0`): a bare name prints
+//! `CVar "%s" is "%s"`, a name with a value sets it, looked up after the registered commands.
+//! The built-ins are `ConsoleVar.cpp`'s four (`set`, `cvar_reset`, `cvar_default`, `cvarlist`)
+//! plus the registry's `help`.
 //!
-//! There is no console screen here — the drop-down that `` ` `` toggles in the reference — so a
-//! command's output is a system line in the chat frame. That is the seam `/console` already
-//! used; the registry is what the arm match behind it became.
+//! The reference's drop-down console screen is not built: output is a system line in chat.
 
 use std::collections::BTreeMap;
 
@@ -22,8 +15,7 @@ use bevy::prelude::*;
 
 use crate::cvars::{Cvars, SetOutcome};
 
-/// A command's body: the whole world, the argument tail after the command name (trimmed), and
-/// the lines to print in return.
+/// A command's body: the world and the trimmed argument tail in, the lines to print out.
 pub(crate) type ConsoleHandler = fn(&mut World, &str) -> Vec<String>;
 
 #[derive(Clone, Copy)]
@@ -34,14 +26,13 @@ struct ConsoleCommand {
     run: ConsoleHandler,
 }
 
-/// The registry — lowercased name → command, in name order.
+/// The registry: lowercased name to command, in name order.
 #[derive(Resource, Default)]
 pub(crate) struct ConsoleCommands {
     by_key: BTreeMap<String, ConsoleCommand>,
 }
 
-/// `app.console_command(name, help, handler)` — a subsystem registering its own command from
-/// its plugin, the reference's `ConsoleCommandRegister`.
+/// Registers a command from a plugin, the reference's `ConsoleCommandRegister`.
 pub(crate) trait ConsoleCommandApp {
     fn console_command(
         &mut self,
@@ -60,8 +51,7 @@ impl ConsoleCommandApp for App {
     ) -> &mut Self {
         let mut table = self.world_mut().get_resource_or_init::<ConsoleCommands>();
         let key = name.to_ascii_lowercase();
-        // Two registrations of one name is a wiring bug, never a runtime condition — and the
-        // reference's registry would silently shadow one with the other.
+        // Two registrations of one name is a wiring bug.
         assert!(
             !table.by_key.contains_key(&key),
             "console command {name:?} registered twice"
@@ -89,14 +79,11 @@ impl Plugin for ConsolePlugin {
     }
 }
 
-/// Run one console line — the reference's `ConsoleCommandExecute`: the first token is a command
-/// name (case-insensitive), the rest is its argument tail. A registered command runs; else a
-/// registered CVar answers as its per-CVar command does; else the line is reported as unknown.
-/// Returns the lines to print.
+/// Runs one console line, the reference's `ConsoleCommandExecute`: a registered command, else a
+/// CVar's own command, else unknown, matched case-insensitively. Returns the lines to print.
 ///
-/// A CVar write here is applied **at once** — its observers run before this returns — which is
-/// the reference's shape (the callback runs inside `CVar::Set`), and what makes a typed
-/// `/console farclip 500` visible on the next frame rather than the one after.
+/// A CVar write runs its observers before this returns, as the callback runs inside `CVar::Set`
+/// in the reference.
 pub(crate) fn execute(world: &mut World, line: &str) -> Vec<String> {
     let line = line.trim();
     let (name, args) = line
@@ -126,8 +113,8 @@ pub(crate) fn execute(world: &mut World, line: &str) -> Vec<String> {
     )]
 }
 
-/// `CVar "%s" is "%s"` — the per-CVar command's empty-argument arm (`0x63dde0`), with the
-/// staged value beside it when one is waiting for the latch boundary.
+/// `CVar "%s" is "%s"`, the per-CVar command with no argument (`0x63dde0`), plus any staged
+/// value.
 fn print_cvar(world: &World, name: &str) -> String {
     let cvars = world.resource::<Cvars>();
     let Some(row) = cvars.row(name) else {
@@ -142,7 +129,7 @@ fn print_cvar(world: &World, name: &str) -> String {
     }
 }
 
-/// A write through the registry, its observers run, and the outcome said back.
+/// A write through the registry with its observers run, and the outcome as a line.
 fn set_cvar(world: &mut World, name: &str, value: &str) -> Vec<String> {
     let (outcome, events) = {
         let mut cvars = world.resource_mut::<Cvars>();
@@ -164,10 +151,9 @@ fn set_cvar(world: &mut World, name: &str, value: &str) -> Vec<String> {
     }
 }
 
-/// `set <name> <value>` — the reference's `0x63d500`. **One stated divergence:** the reference
-/// registers an unknown name as a new category-5 record, invisible to Lua; ours refuses it,
-/// because a row nothing reads is exactly what the registry's honest-tree rule exists to keep
-/// out, and `config.toml` preserves an unknown key on its own.
+/// `set <name> <value>` (`0x63d500`). Deviation: the reference registers an unknown name as a new
+/// category-5 record; this refuses it, because nothing would read the row and `config.toml`
+/// keeps an unknown key anyway.
 fn set(world: &mut World, args: &str) -> Vec<String> {
     let (name, value) = args
         .split_once(char::is_whitespace)
@@ -178,8 +164,8 @@ fn set(world: &mut World, args: &str) -> Vec<String> {
     set_cvar(world, name, value)
 }
 
-/// `cvar_reset <name>` / `cvar_default <name>` — the reference's `0x63d590`/`0x63d640`. One
-/// body for both: our rows carry no separate reset value, so the reset target is the default.
+/// `cvar_reset` and `cvar_default` (`0x63d590`, `0x63d640`): one body, since a row has no reset
+/// value apart from its default.
 fn cvar_default(world: &mut World, args: &str) -> Vec<String> {
     let name = args.split_whitespace().next().unwrap_or("");
     if name.is_empty() {
@@ -195,9 +181,9 @@ fn cvar_default(world: &mut World, args: &str) -> Vec<String> {
     set_cvar(world, name, &default)
 }
 
-/// `cvarlist [match]` — the reference's `0x63d6f0`, in a format of our own: one line per row,
-/// the value, the default when the value moved, the staged value when one is waiting, and
-/// whether the session owns the row or an addon declared it.
+/// `cvarlist [match]` (`0x63d6f0`), one line per row: value, default when moved, staged value,
+/// and whether the session or an addon owns it. The reference's line format is untraced; this
+/// one is benilla's.
 fn cvarlist(world: &mut World, args: &str) -> Vec<String> {
     let wanted = args.split_whitespace().next().map(str::to_ascii_lowercase);
     let cvars = world.resource::<Cvars>();
@@ -233,7 +219,7 @@ fn cvarlist(world: &mut World, args: &str) -> Vec<String> {
     out
 }
 
-/// `help [command]` — the registry's own listing.
+/// `help [command]`: the registry's listing.
 fn help(world: &mut World, args: &str) -> Vec<String> {
     let table = world.resource::<ConsoleCommands>();
     let wanted = args.split_whitespace().next();
@@ -272,9 +258,6 @@ mod tests {
         execute(app.world_mut(), line)
     }
 
-    /// **The lookup order is the reference's**: a registered command first, then the CVar's own
-    /// per-name command (bare name prints, a value sets), then unknown — case-insensitively at
-    /// every step, like the engine's own table lookup.
     #[test]
     fn a_line_is_a_command_then_a_cvar_then_unknown() {
         let mut app = console_app();
@@ -351,7 +334,6 @@ mod tests {
         );
     }
 
-    /// `cvarlist` marks a moved value with its default, a session-owned row, and an addon's.
     #[test]
     fn cvarlist_says_where_each_row_stands() {
         let mut app = console_app();
@@ -379,7 +361,6 @@ mod tests {
         assert_eq!(some.len(), 2, "matched case-insensitively: {some:?}");
     }
 
-    /// `help` lists what is registered, and a subsystem's registration is one call.
     #[test]
     fn help_lists_the_registry_and_a_registration_is_one_call() {
         fn shout(_: &mut World, args: &str) -> Vec<String> {

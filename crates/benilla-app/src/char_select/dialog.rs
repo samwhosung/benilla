@@ -1,15 +1,6 @@
-//! The delete confirm dialog (`CharacterDeleteDialog`) — the ref's typed-confirm:
-//! the 512×256 `UI-DialogBox` centered over the screen, `CONFIRM_CHAR_DELETE` naming the selected
-//! character, the alert icon, an edit box where typing `DELETE_CONFIRM_STRING` ("DELETE") enables
-//! Okay, and Okay/Cancel (`GlueDialogButtonTemplate` 200×40). Esc cancels, Enter confirms when
-//! armed; Okay sends `CMSG_CHAR_DELETE` through the parked glue channel and plays
-//! `gsTitleOptionOK` (Cancel: `gsTitleOptionExit`). The target is snapshotted at open (guid +
-//! title), so a roster refresh mid-dialog can never retarget the delete.
-//!
-//! The edit box is `CharacterDeleteEditBox` verbatim (CharacterSelect.xml): 130×32, the two
-//! `UI-ChatInputBorder-Left/Right` 75×32 pieces overhanging it by 10 each side, typing in
-//! `GlueFontHighlight` (FRIZQT 15 white — outlined like every glue font), no TextInsets, and the
-//! standard drawn caret bar ([`caret_bar`]) blinking on the ref's 0.5 s clock, solid while typing.
+//! The delete confirm dialog (`CharacterDeleteDialog`): typing `DELETE_CONFIRM_STRING` ("DELETE")
+//! arms Okay, which sends `CMSG_CHAR_DELETE` (`gsTitleOptionOK`); Cancel or Escape close it
+//! (`gsTitleOptionExit`). The target is snapshotted at open, so a roster refresh cannot retarget.
 
 use benilla_ui::widget::EditBoxState;
 use bevy::input::keyboard::KeyboardInput;
@@ -29,25 +20,21 @@ use crate::sound::GlueSound;
 
 use super::wow_font;
 
-/// The dialog's state: opened by the Delete button (the target snapshotted), driven by
-/// [`drive_delete_dialog`], cleared on leave.
+/// The delete dialog's state.
 #[derive(Resource, Default)]
 pub(super) struct DeleteDialog {
     pub(super) open: bool,
-    /// The snapshotted delete target (guid) + its display line pieces (name, level, class name).
+    /// The snapshotted target: guid, name, level, class name.
     target: Option<(u64, String, u8, &'static str)>,
-    /// What's been typed into the confirm box — a real [`EditBoxState`], so it
-    /// has the caret, selection, Ctrl+A and clipboard every other field has. The ref's
-    /// `letters="32"` cap is the box's own `max_letters`. (`pub(super)` for the shot instrument.)
+    /// The confirm box's text; the reference's `letters="32"` cap is its `max_letters`.
     pub(super) typed: EditBoxState,
     /// The spawned dialog root, while up.
     root: Option<Entity>,
-    /// The glue scale the spawned tree was built at — a resize rebuilds it.
+    /// The glue scale the tree was built at; a resize rebuilds it.
     spawned_s: f32,
 }
 
 impl DeleteDialog {
-    /// Open for the character (snapshot — the roster may refresh underneath).
     pub(super) fn open_for(&mut self, guid: u64, name: String, level: u8, class: &'static str) {
         self.open = true;
         self.target = Some((guid, name, level, class));
@@ -60,7 +47,8 @@ impl DeleteDialog {
         self.typed.set_text("");
     }
 
-    /// The typed text matches `DELETE_CONFIRM_STRING` (case-insensitive, the ref's `strupper`).
+    /// The typed text matches `DELETE_CONFIRM_STRING`, case-insensitive (the reference's
+    /// `strupper`).
     fn armed(&self, confirm: &str) -> bool {
         self.typed.text.eq_ignore_ascii_case(confirm)
     }
@@ -76,18 +64,15 @@ pub(super) enum DialogAction {
 /// The typed-text line inside the edit box.
 #[derive(Component)]
 pub(super) struct TypedText;
-/// The edit box's caret bar (the shared [`caret_bar`]; [`drive_delete_dialog`] blinks it — the
-/// dialog's one field always holds the focus, like the create screen's name box).
+/// The edit box's caret bar; the dialog's one field always holds the focus.
 #[derive(Component)]
 pub(super) struct DeleteCaret;
 /// The dialog root (despawned on close).
 #[derive(Component)]
 struct DialogUi;
 
-/// Spawn/despawn the dialog with [`DeleteDialog::open`], feed its typing, and run its flows:
-/// Okay (enabled only while the typed text matches) sends the delete; Cancel/Esc close; Enter
-/// confirms when armed. Runs before the list refresh so a successful delete's roster update
-/// repaints the same frame it lands.
+/// Spawn or despawn the dialog, feed its typing and run Okay, Cancel, Enter and Escape. Runs
+/// before the list refresh, so a delete's roster update repaints the frame it lands.
 #[allow(clippy::type_complexity)]
 pub(super) fn drive_delete_dialog(
     mut commands: Commands,
@@ -102,16 +87,13 @@ pub(super) fn drive_delete_dialog(
     buttons: Query<(Entity, &DialogAction)>,
     clicks: Res<crate::glue::GlueClicks>,
     mut okay: Query<(&DialogAction, &mut GlueDisabled)>,
-    // The five row items of the confirm box (segments + carets), painted by the shared
-    // `paint_glue_field`; plus the host pasteboard and the window handle its Wayland backend needs.
     mut parts: Query<(
         &crate::glue::widgets::GlueFieldPart,
         Option<&mut Text>,
         &mut Visibility,
     )>,
     mut clipboard: NonSendMut<HostClipboard>,
-    // One query: the window drives the glue scale, and its raw handle carries the `wl_display` the
-    // Wayland clipboard backend is built from.
+    // The window drives the glue scale; its raw handle carries the Wayland clipboard's display.
     window: Query<
         (&Window, Option<&bevy::window::RawHandleWrapper>),
         With<bevy::window::PrimaryWindow>,
@@ -122,7 +104,6 @@ pub(super) fn drive_delete_dialog(
     let strings = strings.as_deref().unwrap_or(&empty);
     let confirm = strings.text("DELETE_CONFIRM_STRING", "DELETE");
 
-    // Closed: make sure nothing is spawned, drain stray keys, done.
     if !dialog.open {
         if let Some(root) = dialog.root.take() {
             commands.entity(root).despawn();
@@ -131,8 +112,7 @@ pub(super) fn drive_delete_dialog(
         return;
     }
 
-    // Spawn on the open edge — and respawn when a window resize has changed the glue scale the
-    // tree was baked at (the typed text lives in the resource, so it survives the rebuild).
+    // Respawn on a glue-scale change; the typed text lives in the resource and survives.
     let s = crate::glue::screen_scale(window.single().ok().map(|(w, _)| w));
     if dialog.root.is_some() && dialog.spawned_s != s {
         if let Some(root) = dialog.root.take() {
@@ -151,8 +131,7 @@ pub(super) fn drive_delete_dialog(
         dialog.spawned_s = s;
     }
 
-    // Typing: the shared law — editing, caret, selection and the clipboard trio.
-    // ENTER/ESCAPE come back unclaimed and are handled by the button/key block above.
+    // Enter and Escape pass through unclaimed to the key handling below.
     let mods = textinput::mods_now(&keys);
     let wl = textinput::wayland_display(window.iter().next().and_then(|(_, h)| h));
     for ev in keyboard.read() {
@@ -165,7 +144,6 @@ pub(super) fn drive_delete_dialog(
             textinput::CharFilter::Any,
         );
     }
-    // The dialog's box is always the focused one while it is up.
     textinput::tick_caret(&mut dialog.typed, true, time.delta_secs());
     paint_glue_field(&dialog.typed, true, parts.iter_mut());
 
@@ -176,10 +154,9 @@ pub(super) fn drive_delete_dialog(
         }
     }
 
-    // The flows.
     let mut do_delete = false;
     let mut do_cancel = false;
-    // Both buttons fire on the RELEASE (1533) — a confirm you can slide off and cancel.
+    // Both buttons fire on release, so a press can slide off.
     for (entity, action) in &buttons {
         if !clicks.hit(entity) {
             continue;
@@ -209,12 +186,9 @@ pub(super) fn drive_delete_dialog(
     }
 }
 
-/// Build the dialog tree (`CharacterDeleteDialog`'s shipped layout): the 512×256 DialogBox
-/// backdrop centered, the two-tone `CONFIRM_CHAR_DELETE` line (gold lead, white identity — the
-/// ref's inline `|cffffffff…|r` span, split across two stacked lines), the instructions, the
-/// alert icon, the ChatInputBorder edit box, Okay + Cancel. The vertical chain is the ref's
-/// anchor chain resolved: Text1 TOP (0,−16) → instructions 20 below → box 5 below (top 102 —
-/// which also centers it on the LEFT (12,+10) alert icon, the authored cross-check).
+/// Build `CharacterDeleteDialog`'s layout: the 512×256 DialogBox centered, the question, the
+/// instructions, the alert icon, the edit box, Okay and Cancel. The vertical positions resolve the
+/// reference's anchor chain: Text1 TOP (0,-16), instructions 20 below, the box 5 below (top 102).
 fn spawn_dialog(
     commands: &mut Commands,
     art: &GlueArt,
@@ -230,9 +204,7 @@ fn spawn_dialog(
         .as_ref()
         .map(|(_, n, l, c)| (n.clone(), *l, *c))
         .unwrap_or_default();
-    // `CONFIRM_CHAR_DELETE` = "Do you want to delete\n|cffffffff%s   Level %d   %s|r?" — the
-    // colour-span split: everything before the |c is the gold lead; the span (+ the trailing "?")
-    // is the white identity line.
+    // `CONFIRM_CHAR_DELETE`'s `|cffffffff` span splits it: gold lead above, white identity below.
     let raw = strings.text(
         "CONFIRM_CHAR_DELETE",
         "Do you want to delete\n|cffffffff%s   Level %d   %s|r?",
@@ -265,7 +237,7 @@ fn spawn_dialog(
                 ..default()
             });
             boxed.with_children(|b| {
-                // Backdrop: bg tiled at 32 inside (11,12,12,11), the 32-edge border over it.
+                // Background tiled at 32 inside insets (11,12,12,11), the 32-edge border over it.
                 if let (Some(bg), Some(border)) = (&art.dialog_bg, &art.dialog_border) {
                     b.spawn((
                         tiled_bg_node(bg.clone(), 32.0, s, Color::WHITE),
@@ -285,7 +257,7 @@ fn spawn_dialog(
                         overlay(),
                     ));
                 }
-                // The alert icon (64² at LEFT (12,10) — center 118 from the top at height 256).
+                // The 64² alert icon at LEFT (12,10): its center is 118 from the top.
                 if let Some(alert) = &art.dialog_alert {
                     b.spawn((
                         ImageNode::new(alert.clone()),
@@ -299,7 +271,7 @@ fn spawn_dialog(
                         },
                     ));
                 }
-                // The two-tone question (GlueFontNormalLarge 18): gold lead, white identity.
+                // GlueFontNormalLarge, 18.
                 for (top, text, color) in [
                     (16.0, lead.as_str(), GOLD),
                     (40.0, identity.as_str(), Color::WHITE),
@@ -325,7 +297,6 @@ fn spawn_dialog(
                         s,
                     );
                 }
-                // The instructions (`CONFIRM_CHAR_DELETE_INSTRUCTIONS`, small).
                 outlined_text(
                     b,
                     Node {
@@ -349,10 +320,8 @@ fn spawn_dialog(
                     &font,
                     s,
                 );
-                // The edit box (`CharacterDeleteEditBox`, 130×32 centered): the two
-                // `UI-ChatInputBorder-Left/Right` 75×32 pieces overhanging by 10 each side
-                // (their authored sub-rects), the typed line in `GlueFontHighlight` (FRIZQT 15
-                // white, outlined) at the box's left edge (no TextInsets), the caret bar after it.
+                // `CharacterDeleteEditBox`, 130×32: the `UI-ChatInputBorder-Left/Right` 75×32
+                // pieces overhang by 10 each side; the text has no TextInsets.
                 b.spawn((Node {
                     position_type: PositionType::Absolute,
                     top: px(102.0),
@@ -416,11 +385,8 @@ fn spawn_dialog(
                                 ..default()
                             },))
                                 .with_children(|f| {
-                                    // The same five-item row every other field uses
-                                    // (`GlueFieldPart`): segments either side of the selection,
-                                    // with a caret slot at each selection edge. Each segment is
-                                    // its own `outlined_text`, and the outline copies follow
-                                    // automatically (`glue::sync_outline_text`).
+                                    // The five-part field row: segments either side of the
+                                    // selection, a caret slot at each edge.
                                     let segment = |f: &mut ChildSpawnerCommands, part| {
                                         outlined_text(
                                             f,
@@ -450,8 +416,8 @@ fn spawn_dialog(
                                 });
                         });
                     });
-                // Okay (right edge at center −6) + Cancel (left edge at center +7), 200×40,
-                // bottom 16 — the GlueDialogButtonTemplate pair.
+                // The `GlueDialogButtonTemplate` pair, 200×40 at bottom 16: Okay's right edge at
+                // center -6, Cancel's left edge at center +7.
                 b.spawn((Node {
                     position_type: PositionType::Absolute,
                     bottom: px(16.0),

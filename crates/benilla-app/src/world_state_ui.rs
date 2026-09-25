@@ -1,43 +1,17 @@
-//! The always-up world-state readout (`WorldStateFrame`) — the app half behind
-//! stock `Interface\FrameXML\WorldStateFrame.xml` and benilla-ui's `script/worldstate.rs` bindings.
+//! The always-up world-state readout behind stock `WorldStateFrame.xml`: joins the rows
+//! `WorldStateUI.dbc` displays with the states the server sent ([`crate::world_state`]).
 //!
-//! This is report **B190**'s second half: the alliance↔horde progress UI. `WorldStateUI.dbc` says
-//! which world states are *displayed*, where, and with what label; [`crate::world_state`] holds
-//! what the server actually sent; this module joins them and pushes the result.
+//! The list builder (`0x4c56e0`) walks the whole DBC and admits a row when:
+//! 1. `MapID` is -1 or the scope's map;
+//! 2. `AreaID` is 0 or the scope's area;
+//! 3. `Type` is 0, or 1 while [`defense_channel_joined`]; 2 (battleground scoreboard columns)
+//!    never.
 //!
-//! Everything below is the reference's.
+//! The scope is the server's last `SMSG_INIT_WORLD_STATES`, not the player's position: the
+//! reference's two scope globals are written only by that init and by the logout reset.
 //!
-//! ## The list builder (`0x4c56e0`)
-//!
-//! Walks the whole DBC and admits a row on three gates, each failure skipping the row rather than
-//! aborting the walk:
-//!
-//! 1. **Map** — `MapID == -1` (a wildcard with *zero* shipped rows) or `MapID` equals the scope's
-//!    map;
-//! 2. **Area** — `AreaID == 0` (wildcard) or equal to the scope's area;
-//! 3. **Type** — `0` accepts unconditionally, `1` accepts only while [`defense_channel_joined`],
-//!    `2` (the battleground scoreboard columns) always rejects.
-//!
-//! **The scope is the server's last `SMSG_INIT_WORLD_STATES`, not the player's position**
-//! ([`crate::world_state::WorldStates::scope`]). That is not a simplification: the two globals it
-//! mirrors have exactly two writers each image-wide, the init clear and the logout reset, so a
-//! plain zone change moves nothing here. It matters — walk into Eastern Plaguelands and the readout
-//! appears when the *server* says so, which is also when the states it would read arrive.
-//!
-//! ## Why the towers need a chat channel
-//!
-//! The `Type == 1` gate is the surprising one, and it is the whole of what the world-PvP rows
-//! (Eastern Plaguelands' three, Silithus's two) hang on. The reference recomputes a flag by
-//! scanning the channels the player has **joined** and asking whether any of their
-//! `ChatChannels.dbc` rows carries **both** `ZONE_DEP` and `DEFENSE` — which in the shipped table
-//! is row 22 alone, the zone-scoped defense channel. Leave that channel and the tower readout
-//! disappears; the map icons, which are gated on the world states themselves, stay.
-//!
-//! ## The text (`0x508560`)
-//!
-//! Exactly one of the ten returned values is expanded, and by an expander that is **not** the
-//! NPC-text one — different function, different grammar, sharing only the table getter. See
-//! [`expand`].
+//! The world-PvP rows (Eastern Plaguelands, Silithus) are all `Type` 1, so leaving the zone
+//! defense channel hides them; the map icons, gated on the states themselves, stay.
 
 use bevy::ecs::system::NonSendMut;
 use bevy::prelude::*;
@@ -49,12 +23,10 @@ use benilla_assets::{AssetSet, LockRecover, WorldAssets};
 
 use crate::world_state::WorldStates;
 
-/// The shared `WorldStateUI.dbc` catalog. Absent if the DBC failed to read, which degrades to an
-/// empty readout rather than an error.
+/// The shared `WorldStateUI.dbc` catalog; absent, the readout is empty.
 #[derive(Resource)]
 pub(crate) struct WorldStateUiRes(pub(crate) WorldStateUiCatalog);
 
-/// Startup: load the table off the patch chain.
 fn load_world_state_ui(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
     let Some(assets) = assets else { return };
     let loaded = {
@@ -70,13 +42,8 @@ fn load_world_state_ui(mut commands: Commands, assets: Option<Res<WorldAssets>>)
     }
 }
 
-/// The `Type == 1` gate: has the player joined a **zone-dependent defense** channel?
-///
-/// The reference scans its joined-channel array and tests each channel's `ChatChannels.dbc`
-/// `Flags` for `0x2 | 0x10000` (`0x49bd9b`/`0x49bda2`) — both bits, not either. Exactly one shipped
-/// row qualifies: id 22, flags `0x010003`. Our joined list is names, so each resolves back to its
-/// row the same way the server resolves it (`row_for_name`); a custom channel resolves to nothing
-/// and cannot open the gate, which is right.
+/// The `Type == 1` gate: a joined channel whose `ChatChannels.dbc` flags carry both `ZONE_DEP` and
+/// `DEFENSE` (`0x49bd9b`, `0x49bda2`), which is row 22 alone. A custom channel resolves to no row.
 fn defense_channel_joined(channels: &crate::ui_chat::ChannelState) -> bool {
     const REQUIRED: u32 = chan::ZONE_DEP | chan::DEFENSE;
     channels
@@ -85,23 +52,12 @@ fn defense_channel_joined(channels: &crate::ui_chat::ChannelState) -> bool {
         .any(|row| row.flags & REQUIRED == REQUIRED)
 }
 
-/// Expand a `WorldStateUI` label — the reference's `0x508560`, and **not** the NPC-text expander
-/// ([`crate::npc_text`]). The two share only the world-state getter: every `call` in this one
-/// resolves to a CRT helper, the getter, or the string primitives, and the quest-text token
-/// handler `0x5070a0` is not among them.
-///
-/// The grammar is `%<digits>W|w` **and nothing else** — no `$` sigil, and no `e` (negated-key)
-/// form. A hit reads the table at the parsed id and prints the value through `"%d"`. Anything else
-/// after a `%` emits a literal `"%"`, sets an error flag the caller ignores, and **leaves the
-/// offending character unconsumed** so it falls through as ordinary text — the digits scanned ahead
-/// of it are consumed either way. No shipped row reaches that leg (all nine macro-bearing rows are
-/// well-formed), so it is reproduced rather than relied upon.
-///
-/// The reference writes into a 260-byte buffer with a 256-byte limit, so a label longer than that
-/// is truncated. Kept, because a UI string silently growing past what the reference would show is
-/// a difference the frame would render.
+/// Expands a `WorldStateUI` label (`0x508560`), a different expander from [`crate::npc_text`]'s,
+/// sharing only the world-state getter. The grammar is `%<digits>W|w` alone, printed `%d`; any
+/// other `%` emits a literal `%`, consumes its digits and leaves the next character as text.
+/// Output is truncated at the reference's 256-byte limit.
 fn expand(text: &str, states: &WorldStates) -> String {
-    /// The reference's `strncat` bound — `0x508560`'s caller passes `0x100`.
+    /// The `strncat` bound: `0x508560`'s caller passes `0x100`.
     const LIMIT: usize = 0x100 - 1;
 
     fn push(s: &str, out: &mut String) {
@@ -130,12 +86,11 @@ fn expand(text: &str, states: &WorldStates) -> String {
         }
         match bytes.get(j) {
             Some(b'w' | b'W') => {
-                // `atoi` over the run — an empty run is 0, which reads the table at key 0.
+                // `atoi`: an empty run is key 0.
                 let id: u32 = text[digits_at..j].parse().unwrap_or(0);
                 push(&states.get(id).to_string(), &mut out);
                 i = j + 1;
             }
-            // The error leg: a literal `%`, and the letter is left for the next pass.
             _ => {
                 push("%", &mut out);
                 i = j;
@@ -145,16 +100,14 @@ fn expand(text: &str, states: &WorldStates) -> String {
     out
 }
 
-/// Build the rows for one scope — the builder's gates, then `GetWorldStateUIInfo`'s resolution of
-/// each admitted row into the ten values it answers with.
+/// The admitted rows for the current scope, resolved as `GetWorldStateUIInfo` answers them.
 fn build(
     catalog: &WorldStateUiCatalog,
     states: &WorldStates,
     defense_channel: bool,
 ) -> Vec<WorldStateUiView> {
     let Some((map, area)) = states.scope() else {
-        // No init seen. The reference's rebuild trigger refuses to run before one arrives, and its
-        // filter globals read `-1`, which no row matches.
+        // Before an init the reference never rebuilds, and its scope globals read -1.
         return Vec::new();
     };
     catalog
@@ -164,7 +117,6 @@ fn build(
         .collect()
 }
 
-/// The three gates, in the builder's order (see the module doc).
 fn admits(row: &WorldStateUiRow, map: u32, area: u32, defense_channel: bool) -> bool {
     let map_ok = row.map_id == u32::MAX || row.map_id == map;
     let area_ok = row.area_id == 0 || row.area_id == area;
@@ -176,13 +128,11 @@ fn admits(row: &WorldStateUiRow, map: u32, area: u32, defense_channel: bool) -> 
     map_ok && area_ok && type_ok
 }
 
-/// `GetWorldStateUIInfo`'s ten values for one row (`0x4c5a70`). Only [`WorldStateUiRow::text`] is
-/// expanded; every other string is the DBC column verbatim, and the three extended ids answer
-/// their *resolved values*.
+/// `GetWorldStateUIInfo` for one row (`0x4c5a70`): only the text is expanded, and the extended
+/// ids answer their states' values.
 fn resolve(row: &WorldStateUiRow, states: &WorldStates) -> WorldStateUiView {
     WorldStateUiView {
-        // A row with no `StateVariable` answers the constant 1, not 0 — the miss leg is a literal
-        // `1.0` at `0x4c5ad8`, so "no state of its own" reads as on.
+        // No `StateVariable` answers 1 (`0x4c5ad8`).
         ui_state: match row.state_variable {
             0 => 1,
             id => states.get(id),
@@ -197,8 +147,8 @@ fn resolve(row: &WorldStateUiRow, states: &WorldStates) -> WorldStateUiView {
     }
 }
 
-/// Push the readout when any of its inputs moves. The setter diffs before firing
-/// `UPDATE_WORLD_STATES`, so a frame in which nothing changed costs one table walk and no event.
+/// Pushes the readout when a world-state packet arrives or the defense-channel flag flips, the
+/// reference's two rebuild triggers.
 fn feed_world_state_ui(
     script: Option<NonSendMut<UiScript>>,
     catalog: Option<Res<WorldStateUiRes>>,
@@ -207,9 +157,7 @@ fn feed_world_state_ui(
     mut defense_channel: Local<bool>,
     mut last: Local<crate::ui_script::VmMemo<Option<(u64, bool)>>>,
 ) {
-    // Recomputed only when the roster moves. The scan resolves each joined NAME back to its DBC
-    // row, which allocates per row — cheap once a login, wasteful sixty times a second. A system
-    // that has never run sees every resource as changed, so the first frame computes it.
+    // Only when the roster moves; a first run sees it changed.
     if channels.is_changed() {
         *defense_channel = defense_channel_joined(&channels);
     }
@@ -217,8 +165,6 @@ fn feed_world_state_ui(
     let (Some(mut script), Some(catalog)) = (script, catalog) else {
         return;
     };
-    // The reference's own two rebuild triggers: a world-state packet (which is also the only thing
-    // that moves the scope) and the defense-channel flag flipping.
     let key = (states.generation(), defense_channel);
     if *last.get(&script) == Some(key) {
         return;
@@ -232,7 +178,6 @@ pub(crate) struct WorldStateUiPlugin;
 impl Plugin for WorldStateUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_world_state_ui.after(AssetSet::Open))
-            // After the script tick, like every other feed: the queued event dispatches next tick.
             .add_systems(Update, feed_world_state_ui.after(crate::ui_script::UiInput));
     }
 }
@@ -257,8 +202,6 @@ mod tests {
         }
     }
 
-    /// The `%<digits>w` grammar: a hit prints the table value through `%d`, a miss prints `0`
-    /// (the getter's own miss leg), and case does not matter.
     #[test]
     fn the_macro_expands_world_state_values() {
         let mut states = WorldStates::default();
@@ -280,7 +223,6 @@ mod tests {
         assert_eq!(expand("", &states), "");
     }
 
-    /// A value with the top bit set prints negative — the `%d` width, same as `$<n>w`.
     #[test]
     fn a_top_bit_value_prints_negative() {
         let mut states = WorldStates::default();
@@ -288,9 +230,7 @@ mod tests {
         assert_eq!(expand("%2327w", &states), "-1");
     }
 
-    /// The error leg: a `%` not followed by an optional digit run and a `w` emits a literal `%`
-    /// and leaves the offending character to fall through as text. It is unreachable on shipped
-    /// data; it is here so the behaviour is decided rather than accidental.
+    /// Unreachable on shipped data.
     #[test]
     fn a_malformed_macro_emits_a_literal_percent() {
         let states = WorldStates::default();
@@ -304,7 +244,6 @@ mod tests {
         );
     }
 
-    /// The reference's 256-byte buffer bound.
     #[test]
     fn the_output_is_capped_at_the_reference_buffer() {
         let states = WorldStates::default();
@@ -312,8 +251,6 @@ mod tests {
         assert_eq!(expand(&long, &states).len(), 0xFF);
     }
 
-    /// The three builder gates. Map `-1` and area `0` are wildcards; `Type` 2 never enters this
-    /// list at all, and `Type` 1 waits for the defense channel.
     #[test]
     fn the_builder_gates_admit_the_right_rows() {
         // Eastern Plaguelands: map 0, area 139.
@@ -326,7 +263,6 @@ mod tests {
             "map -1 is a wildcard"
         );
 
-        // Type: 0 unconditional, 1 on the channel, 2 never.
         assert!(admits(&row(0, 139, 1), 0, 139, true));
         assert!(
             !admits(&row(0, 139, 1), 0, 139, false),
@@ -340,8 +276,6 @@ mod tests {
         }
     }
 
-    /// Before any `SMSG_INIT_WORLD_STATES` the readout is empty — the reference's filter globals
-    /// read `-1` and its rebuild trigger will not run at all.
     #[test]
     fn nothing_shows_before_the_first_init() {
         let catalog = WorldStateUiCatalog::from_rows(vec![(136, row(0, 139, 0))]);
@@ -349,8 +283,6 @@ mod tests {
         assert!(build(&catalog, &states, true).is_empty());
     }
 
-    /// A row with no `StateVariable` answers `uiState = 1`, not `0` — the miss leg is a literal
-    /// `1.0`, so "no state of its own" reads as on rather than off.
     #[test]
     fn a_row_without_a_state_variable_reads_one() {
         let states = WorldStates::default();
@@ -368,7 +300,6 @@ mod tests {
         assert_eq!(resolve(&with_state, &states).ui_state, 1);
     }
 
-    /// The extended-UI ids are answered as resolved *values*, not as the ids the DBC holds.
     #[test]
     fn the_extended_ui_ids_are_resolved_to_values() {
         let mut states = WorldStates::default();
@@ -379,10 +310,7 @@ mod tests {
         assert_eq!(resolve(&r, &states).extended_ui_state, [42, 7, 0]);
     }
 
-    /// The whole join, against the REAL table: in Eastern Plaguelands, with the zone-defense
-    /// channel joined and the server's tower counts in, the readout is the two labelled tower rows
-    /// plus the capture-point progress row — and without the channel it is empty. Skips without
-    /// client data.
+    /// Against the install's table: Eastern Plaguelands with and without the defense channel.
     #[test]
     fn the_real_table_builds_the_eastern_plaguelands_readout() {
         let data = benilla_formats::wow_data_or_skip!();
@@ -417,18 +345,17 @@ mod tests {
         assert_eq!(rows[2].extended_ui_state, [60, 40, 0]);
         assert_eq!(rows[2].ui_state, 1, "state 2426 reads 1");
 
-        // The server flips a tower: the same rows, new numbers, no rebuild needed.
+        // The server flips a tower.
         states.write(&[(2327, 2), (2328, 2)]);
         let rows = build(&catalog, &states, true);
         assert_eq!(rows[0].text, "Towers Controlled: 2");
         assert_eq!(rows[1].text, "Towers Controlled: 2");
 
-        // Elsewhere on the same continent, nothing — the area gate.
         let mut elsewhere = WorldStates::default();
         elsewhere.init_scope(0, 12); // Elwynn Forest
         assert!(build(&catalog, &elsewhere, true).is_empty());
 
-        // Warsong Gulch: Type 0, so no channel needed, and its rows carry the dynamic flag icons.
+        // Warsong Gulch: `Type` 0, with dynamic flag icons.
         let mut wsg = WorldStates::default();
         wsg.init_scope(489, 0);
         wsg.write(&[(1581, 2), (1582, 1), (1601, 3), (2339, 1)]);
@@ -444,12 +371,8 @@ mod tests {
         assert_eq!(rows[1].ui_state, 0, "state 2338 — the Alliance flag is not");
     }
 
-    /// The `Type == 1` gate is only worth building if the channel it waits on is one the client
-    /// actually joins — otherwise the whole Eastern Plaguelands readout ships dead. Against the
-    /// real `ChatChannels.dbc`: exactly one row carries both `ZONE_DEP` and `DEFENSE`, it is
-    /// `LocalDefense - %s`, and it is an auto-join row. `WorldDefense` is the control that could
-    /// have made this pass for the wrong reason — it carries `DEFENSE` without `ZONE_DEP`, and
-    /// must not open the gate. Skips without client data.
+    /// Against the install's `ChatChannels.dbc`: the one qualifying row is auto-joined, and
+    /// `WorldDefense` (`DEFENSE` without `ZONE_DEP`) is the control.
     #[test]
     fn the_gates_channel_is_one_the_client_joins_by_itself() {
         let data = benilla_formats::wow_data_or_skip!();
@@ -486,8 +409,7 @@ mod tests {
         );
     }
 
-    /// An init CLEARS the table (the C2 correction): a state received in the previous zone must
-    /// not still read through after the server re-scopes us.
+    /// An init clears the table.
     #[test]
     fn an_init_forgets_the_previous_zone() {
         let mut states = WorldStates::default();

@@ -1,22 +1,5 @@
-//! **The render column's can-it-fail proof.**
-//!
-//! A probe that cannot fail is not a probe, and this arc has shipped two that could not: the UI
-//! probe swallowed every raise it was built to report (`the_ui_probe_records_what_an_override_raises`
-//! is that scar), and the method oracle answered "nothing missing" when it could not run at all.
-//! So this file pins **both directions**, twice over.
-//!
-//! **Synthetically**, on three fixture addons written to be unambiguous — one that paints a
-//! texture, one that hangs a FontString off a frame it did not create, and one that creates a
-//! shown frame with nothing paintable on it. The third is the sharp one: a frame's own draw slot
-//! emits a quad and paints **nothing** (`ui_script::extract`'s converter drops it), so an
-//! implementation that counted quads instead of *painting* quads would score it as drawing and
-//! every `nothing` row in the corpus would be a lie.
-//!
-//! **And against reality**, on the two addons the director has verified with their own eyes:
-//! `!OmniCC`'s countdown numbers are on their screen, and Bagnon's bag slots were not. Two real
-//! addons with known, opposite, human-checked outcomes is a better oracle than any fixture — it is
-//! the check that would have caught this class months ago — so
-//! [`the_directors_two_verified_addons_come_out_on_opposite_sides`] is the one to read first.
+//! Tests for the render column, in both directions: synthetic fixtures that paint a window, an
+//! overlay or nothing, and two real corpus addons with known opposite outcomes.
 
 use std::path::{Path, PathBuf};
 
@@ -61,8 +44,8 @@ impl Drop for Fixtures {
     }
 }
 
-/// **The proof, in both directions.** An addon that paints must register; one that does not must
-/// not — and "creates a frame" is not "paints".
+/// An addon that paints registers, one that does not stays `nothing`, and creating a frame is not
+/// painting.
 #[test]
 fn the_render_column_can_fail() {
     benilla_formats::wow_data_or_skip!();
@@ -80,7 +63,7 @@ fn the_render_column_can_fail() {
         f:Show()
     "#,
     );
-    // Paints, but onto one of OUR frames — no window of its own anywhere.
+    // Paints, but only onto a pre-existing frame.
     fx.addon(
         "PaintsOnOurs",
         r#"
@@ -91,9 +74,7 @@ fn the_render_column_can_fail() {
         fs:Show()
     "#,
     );
-    // Draws NOTHING — but is far from inert: it creates a frame, shows it, and that frame emits a
-    // `QuadContent::Frame` entry. Nothing paints from it. This is the fixture that fails a naive
-    // implementation.
+    // Creates and shows a frame, whose own `QuadContent::Frame` slot paints nothing.
     fx.addon(
         "DrawsNothing",
         r#"
@@ -113,8 +94,7 @@ fn the_render_column_can_fail() {
             .unwrap_or_else(|| panic!("{name} was not surveyed"))
     };
 
-    // Every fixture must actually have RUN — otherwise "drew nothing" would be measuring a load
-    // failure, which is the confusion this column exists to end.
+    // Each fixture must load, or "drew nothing" would measure a load failure.
     for name in ["PaintsAWindow", "PaintsOnOurs", "DrawsNothing"] {
         assert!(
             drew(name).loaded,
@@ -158,26 +138,14 @@ fn the_render_column_can_fail() {
     );
 }
 
-/// **The oracle: two real addons, opposite director-verified outcomes.**
-///
-/// `!OmniCC` puts cooldown countdown numbers on the director's screen — it works, and it works by
-/// creating an **anonymous** frame parented to one of our cooldowns, so any check built on name
-/// prefixes or on "did it create a top-level window" scores it zero. Bagnon has to build its own
-/// item-slot buttons, and the director saw none of them.
-///
-/// The two are surveyed together in one throwaway root — copies are not made, the corpus folders
-/// are surveyed where they lie — and the column must place them on opposite sides:
-/// `!OmniCC` an [`Drew::Overlay`], Bagnon a window of its [`Drew::Own`].
-///
-/// If this test ever disagrees with the director's eyes, **the test is wrong**.
+/// `!OmniCC` paints through an anonymous frame parented to an existing cooldown, an overlay;
+/// Bagnon builds its own window of item-slot buttons.
 #[test]
 fn the_directors_two_verified_addons_come_out_on_opposite_sides() {
     benilla_formats::wow_data_or_skip!();
-    // The one resolver, and a skip the gate can refuse (`benilla_formats::install`).
+    // A skip the gate can refuse (`benilla_formats::install`).
     let corpus = benilla_formats::addon_corpus_or_skip!();
-    // A root holding just these four, SYMLINKED rather than copied. Surveying the whole corpus
-    // here would put a minute onto `cargo test --workspace` for four rows — the full sweep is the
-    // `addon_harness` example's job, not a unit test's.
+    // Symlinked into a small root: the full corpus sweep is the `addon_harness` example's job.
     let fx = Fixtures::new("oracle");
     for name in ["!OmniCC", "Bagnon", "Bagnon_Core", "Bagnon_Forever"] {
         std::os::unix::fs::symlink(corpus.join(name), fx.root().join(name)).unwrap();
@@ -190,8 +158,7 @@ fn the_directors_two_verified_addons_come_out_on_opposite_sides() {
             .unwrap_or_else(|| panic!("{name} is not in the corpus"))
     };
 
-    // The POSITIVE control. A render check that scores this one blank is broken, whatever else it
-    // gets right — the director sees its numbers.
+    // The positive control.
     assert_eq!(
         row("!OmniCC").render.drew(),
         Drew::Overlay,
@@ -199,8 +166,6 @@ fn the_directors_two_verified_addons_come_out_on_opposite_sides() {
          parented to a cooldown of ours, which is precisely what a name-based check cannot see"
     );
 
-    // The case that started this. Bagnon builds its own window; before the two fixes it built
-    // nothing at all and every other column called it fine.
     assert_eq!(
         row("Bagnon").render.drew(),
         Drew::Own,

@@ -1,19 +1,13 @@
 <!--
-    Our adapters over the stock `Interface\FrameXML\ContainerFrame.xml` and `.lua`, which run off
-    the player's patch chain: the bag windows are the stock `ContainerFrame1..12`. This file loads
-    after them, so its definitions win; a stock body that needs a benilla answer is wrapped here.
-    Deviation: benilla's keyring is a container (id -2) where the reference's is inventory slots,
-    so a keyring slot's tooltip comes from `GameTooltip:SetBagItem` like any bag's; the stock
-    keyring fork in `ContainerFrameItemButton_OnEnter` (ContainerFrame.lua l.615-620) reads the
-    inventory-slot space, which our keyring items are not in.
-    A full keyring prints the reference's empty error line: its `PutKeyInKeyRing` reads
-    `NO_EMPTY_KEYRING_SLOTS`, which 1.12 does not ship (it has `NO_EMPTY_KEYRING_SLOTS_ERROR`).
-    That is the reference's behaviour, kept.
+    Adapters over the stock ContainerFrame.xml and .lua; loaded after them, so these win.
+    Deviation: our keyring is a container (id -2), not inventory slots as in the reference, so its
+    tooltip comes from `SetBagItem`; the stock fork (ContainerFrame.lua:615-620) reads the slots.
+    A full keyring prints an empty error line as the reference does: `PutKeyInKeyRing` reads
+    `NO_EMPTY_KEYRING_SLOTS`, which 1.12 does not ship.
 -->
 <Ui xmlns="http://www.blizzard.com/wow/ui/">
     <Script><![CDATA[
-        -- The stock body, captured before the name is shadowed. It is nil when no client data was
-        -- sourced, and the call then says so rather than doing nothing.
+        -- The stock body, captured before it is shadowed; nil when no client data was sourced.
         local refItemButtonOnEnter = ContainerFrameItemButton_OnEnter
 
         function ContainerFrameItemButton_OnEnter(button)
@@ -22,8 +16,7 @@
             end
             if not button then return end
 
-            -- Our keyring is a container, so its slot takes the stock general path's calls for a
-            -- bag slot instead of the inventory-slot detour.
+            -- The stock bag-slot path, not its inventory-slot keyring detour.
             if button:GetParent():GetID() == KEYRING_CONTAINER then
                 if (button:GetRight() or 0) >= (GetScreenWidth() / 2) then
                     GameTooltip:SetOwner(button, "ANCHOR_LEFT")
@@ -44,29 +37,22 @@
         end
 
         -- ══ The three bag verbs benilla answers differently ═══════════════════════════════════
-        -- Deviation: `OpenBackpack` opens every equipped bag, not only the backpack, so the
-        -- vendor, bank, mail and trade windows that call it from OnShow bring up every bag to sell
-        -- or deposit from; `CloseBackpack` is its inverse, `CloseAllBags` the unconditional form.
-        -- The was-open memory is keyed by bag id because `ContainerFrame1..12` are recycled across
-        -- bags, and every open and close goes through the stock `OpenBag`/`CloseBag`/`IsBagOpen`,
-        -- so their guards and any addon that replaces them apply.
+        -- Deviation: `OpenBackpack` opens every equipped bag, not only the backpack, so the vendor,
+        -- bank, mail and trade windows that call it bring up every bag to sell or deposit from.
+        -- The was-open memory is keyed by bag id: `ContainerFrame1..12` are recycled across bags.
         BENILLA_BAG_WAS_OPEN = {}
 
-        -- The unconditional close, from the stock ShowUIPanel's centre branch: it ignores the
-        -- was-open memory and covers the bank bags, as the reference's CloseAllBags does
-        -- (l.702-707).
+        -- Ignores the was-open memory and covers the bank bags, as ContainerFrame.lua:702-707 does.
         function BenillaCloseAllBags()
             for bagId = 0, (NUM_CONTAINER_FRAMES or -1) do
                 CloseBag(bagId)
             end
         end
 
-        -- A bag already open is remembered and left alone, so CloseBackpack leaves open a window
-        -- the player opened; the reference's `backpackWasOpen`, one entry per bag.
+        -- The reference's `backpackWasOpen`, one entry per bag: CloseBackpack leaves those open.
         function BenillaOpenBackpack()
             for bagId = 0, (NUM_BAG_FRAMES or -1) do
-                -- OpenBag's own test, repeated so the memory agrees with it: the backpack always,
-                -- another bag only when its slot holds one.
+                -- OpenBag's own test, repeated so the memory agrees with it.
                 if bagId == 0 or GetContainerNumSlots(bagId) > 0 then
                     if IsBagOpen(bagId) then
                         BENILLA_BAG_WAS_OPEN[bagId] = 1
@@ -86,8 +72,7 @@
             end
         end
 
-        -- Published after the stock ContainerFrame.lua has loaded, so these are the definitions its
-        -- callers reach (the stock `ShowUIPanel`'s `CloseAllBags`, a vendor's `OpenBackpack`).
+        -- After the stock ContainerFrame.lua has loaded, so its callers reach these.
         OpenBackpack = BenillaOpenBackpack
         CloseBackpack = BenillaCloseBackpack
         CloseAllBags = BenillaCloseAllBags

@@ -1,29 +1,13 @@
-//! **The integration tests' interface loader — one copy, both stores**.
-//!
-//! The in-crate sibling of `ui_script::test_ui::load_ui`, which integration tests cannot reach:
-//! they link this crate as a library, so its `#[cfg(test)]` items are not compiled for them. Each
-//! `tests/*.rs` therefore grew its own reader off `assets/ui`, and every one of them broke the
-//! first time a file it names became the reference's own.
-//!
-//! The rule is the manifest's, verbatim: **a bare filename is a file we ship, a path is the
-//! reference's own off the player's installed chain.** Our shipped tree is flat, so a separator
-//! decides, and nothing here needs to know which windows have migrated.
-//!
-//! The provider half matters as much as the loop. A sourced document pulls its Lua through its own
-//! `<Script file="X.lua"/>`, which the loader resolves against the *including document's*
-//! directory — `Interface\FrameXML\X.lua`, a chain path. A disk-only provider leaves every one of
-//! those globals nil and the failures land nowhere near the cause.
-//!
-//! **A chain entry needs client data**, so a test that names one opens with
-//! `benilla_formats::wow_data_or_skip!()`, like every other archive-backed test.
+//! The integration tests' interface loader: integration tests cannot reach
+//! `ui_script::test_ui::load_ui`, which is `#[cfg(test)]`. A bare filename is a file we ship
+//! under `assets/ui`, a path is the reference's own off the installed chain, and `<Script file>`
+//! includes resolve through the same provider. A test that names a chain entry opens with
+//! `benilla_formats::wow_data_or_skip!()`.
 
 use benilla_ui::script::UiScript;
 
-/// Load one manifest entry into `script`, panicking on any loader error.
-///
-/// A `.lua` entry is run as a chunk rather than parsed as a document — `GlobalStrings.lua` and
-/// `LocaleProperties.lua` are entries of that shape in the real manifest too. Bytes, not text: a
-/// chunk goes to Lua as it sits in the archive and only an XML parse decodes (1193).
+/// Load one manifest entry into `script`, panicking on any loader error. A `.lua` entry runs as a
+/// chunk of raw bytes, as `GlobalStrings.lua` does in the real manifest; only XML is decoded.
 pub fn load_ui(script: &UiScript, entry: &str) {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui");
     let chain = |req: &str| -> Option<Vec<u8>> {
@@ -65,10 +49,7 @@ pub fn load_ui(script: &UiScript, entry: &str) {
     }
 }
 
-/// The stock micro-button row's unguarded reads, stood in for on the row's first call — one copy
-/// per store, like the loader itself. `ui_script::test_ui::MICRO_BUTTON_STAND_INS` is the
-/// original and carries the why.
-/// The stock `UIParent.xml`'s unguarded callees, stood in for at load — see
+/// The stock `UIParent.xml`'s unguarded callees, stood in for at load; the copy of
 /// `ui_script::test_ui::UIPARENT_STAND_INS`.
 const UIPARENT_STAND_INS: &str = r#"
     -- Callees of the stock UIParent.xml's <OnUpdate> and of UIParent_OnEvent's arms that live in
@@ -164,6 +145,8 @@ const UIPARENT_STAND_INS: &str = r#"
     end
 "#;
 
+/// The stock micro-button row's unguarded reads, stood in for on the row's first call; the copy of
+/// `ui_script::test_ui::MICRO_BUTTON_STAND_INS`.
 const MICRO_BUTTON_STAND_INS: &str = r#"
     local real = UpdateMicroButtons
     function UpdateMicroButtons()

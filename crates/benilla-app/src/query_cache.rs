@@ -1,24 +1,11 @@
-//! **`QueryCache<K, V>` — the one ask-once cache**.
+//! `QueryCache<K, V>`, the ask-once cache: the reference's `DBCache<T>` (vtable `0x80912c`). A
+//! miss sends the query once, a second lookup of a pending key does not re-send, the response
+//! lands the record, and eviction is explicit only.
 //!
-//! The reference has one `DBCache<T>` (vtable `0x80912c`): a consumer's miss
-//! sends the query and queues a callback; a second lookup of a pending key appends a callback
-//! instead of re-sending; the response handler writes the record and fires the callbacks;
-//! eviction is explicit only. benilla had that machine hand-copied across eight modules under
-//! three names for the in-flight set (`pending`, `querying`, `queried`), the miss and the
-//! landing bodies pasted ("the exact twin of `NameCache`"), and the release that keeps an ask
-//! sent before the writer thread exists from latching its key for the process lifetime written
-//! for two of the eight.
+//! The read that asks takes `&self` (the in-flight set is behind a lock), so read-only systems
+//! share the owning resource and its change detection means an answer landed.
 //!
-//! **The read that asks takes `&self`.** A miss marks itself in a lock-guarded set and sends
-//! its query; the answered map does not move. That is the reason for a type over the copies: a
-//! system that only *reads* a name or a template holds the owning resource shared, so two such
-//! systems no longer conflict over it — 2287's "pure cache" class measured 556 such undeclared
-//! orders — and Bevy's change detection on the owner means "an answer landed" again instead of
-//! "someone looked" (the two hand-rolled epochs in `items.rs` were written because it did not).
-//!
-//! A negative answer is cached as `None` (the server's high-bit miss), so a dead key is never
-//! re-asked; [`QueryCache::answered_unknown`] is for the consumer that waits (the cast-fail
-//! redisplay) to know when to stop.
+//! A negative answer (the server's high-bit miss) is cached as `None` and never re-asked.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
@@ -31,12 +18,10 @@ use crate::net::EnteredWorldMessage;
 
 pub(crate) struct QueryCache<K, V> {
     answered: HashMap<K, Option<V>>,
-    /// The keys in flight. Behind a lock so the read that asks is `&self`; uncontended by
-    /// construction (every holder runs on the main thread under the single-threaded executor,
-    /// and a miss is the rare path).
+    /// The keys in flight, locked so the read that asks is `&self`; uncontended on the main
+    /// thread.
     pending: Mutex<HashSet<K>>,
-    /// Bumped by every landing, positive or negative — the broadcast a consumer that caches a
-    /// view derived from an answer keys on (the reference's `DBCACHECALLBACK` redisplay).
+    /// Bumped by every landing or eviction, the reference's `DBCACHECALLBACK` redisplay.
     generation: u64,
 }
 
@@ -51,8 +36,8 @@ impl<K: Copy + Eq + Hash, V> Default for QueryCache<K, V> {
 }
 
 impl<K: Copy + Eq + Hash, V> QueryCache<K, V> {
-    /// The answer for `key` if the server has given one. `None` for a miss — which runs `ask`
-    /// once per key per connection — and for a cached negative alike.
+    /// The answer for `key`; a miss runs `ask` once per key per connection. `None` for a miss
+    /// and a cached negative alike.
     pub(crate) fn get_or_ask(&self, key: K, ask: impl FnOnce()) -> Option<&V> {
         match self.answered.get(&key) {
             Some(answer) => answer.as_ref(),
@@ -65,35 +50,33 @@ impl<K: Copy + Eq + Hash, V> QueryCache<K, V> {
         }
     }
 
-    /// The read-only twin: the answer if it is already here, and never an ask.
+    /// The answer if it is already here, never asking.
     pub(crate) fn get(&self, key: K) -> Option<&V> {
         self.answered.get(&key)?.as_ref()
     }
 
-    /// The answer for `key`, mutably — for a record the wire patches in place after it landed
-    /// (a guild's rank rename, a petition's new title). Never an ask.
+    /// The answer, mutably, for a record the wire patches in place; never asking.
     pub(crate) fn get_mut(&mut self, key: K) -> Option<&mut V> {
         self.answered.get_mut(&key)?.as_mut()
     }
 
-    /// Has the server answered `key` at all — with a record or with "unknown"?
+    /// Whether the server answered `key`, with a record or "unknown".
     pub(crate) fn answered(&self, key: K) -> bool {
         self.answered.contains_key(&key)
     }
 
-    /// Has the server answered `key` with "unknown"? Distinct from a still-pending ask, which
-    /// reads `None` from [`Self::get_or_ask`] too.
+    /// Whether the server answered "unknown", as opposed to a still-pending ask.
     pub(crate) fn answered_unknown(&self, key: K) -> bool {
         self.answered.get(&key).is_some_and(Option::is_none)
     }
 
     #[cfg(test)]
-    /// Is an ask for `key` in flight?
+    /// Whether an ask for `key` is in flight.
     pub(crate) fn is_pending(&self, key: K) -> bool {
         self.pending.lock_recover().contains(&key)
     }
 
-    /// Land an answer; `None` is the server's negative.
+    /// Lands an answer; `None` is the server's negative.
     pub(crate) fn insert(&mut self, key: K, answer: Option<V>) {
         self.pending
             .get_mut()
@@ -104,7 +87,7 @@ impl<K: Copy + Eq + Hash, V> QueryCache<K, V> {
     }
 
     /// The reference's explicit eviction (a high-bit key, `SMSG_INVALIDATE_PLAYER`): the next
-    /// read anywhere re-asks. Returns whether there was anything to evict.
+    /// read re-asks. Returns whether there was anything to evict.
     pub(crate) fn evict(&mut self, key: K) -> bool {
         self.pending
             .get_mut()
@@ -117,9 +100,8 @@ impl<K: Copy + Eq + Hash, V> QueryCache<K, V> {
         was
     }
 
-    /// Forget the in-flight asks — a disconnect may have dropped them on the writer floor, and
-    /// an ask sent before the writer existed never left at all. [`register`] runs this on every
-    /// world entry for every cache that registers.
+    /// Forgets the in-flight asks, which a disconnect or a send before the writer existed may
+    /// have dropped; [`register`] runs it on every world entry.
     pub(crate) fn clear_pending(&mut self) {
         self.pending
             .get_mut()
@@ -127,18 +109,17 @@ impl<K: Copy + Eq + Hash, V> QueryCache<K, V> {
             .clear();
     }
 
-    /// Drop everything, answers included (a session-scoped cache on disconnect).
+    /// Drops everything, answers included (a session-scoped cache on disconnect).
     pub(crate) fn clear(&mut self) {
         self.answered.clear();
         self.clear_pending();
     }
 
-    /// The landing counter — see the field.
     pub(crate) fn generation(&self) -> u64 {
         self.generation
     }
 
-    /// Every answered key with its answer (a persisted cache's save walks this).
+    /// Every answered key with its answer, for a persisted cache's save.
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&K, &Option<V>)> {
         self.answered.iter()
     }
@@ -158,12 +139,8 @@ pub(crate) trait AskOnce: Resource {
     fn clear_pending(&mut self);
 }
 
-/// **The one release-on-enter.** Every cache owner registers here at build; the system runs on
-/// the world-enter message and clears the in-flight sets, so a key asked before the io writer
-/// existed — or across a disconnect — is asked again. Before 2288 this was written for two of
-/// the eight owners (`net::release_ask_once_latches_on_enter`, after the mail send tab's
-/// stationery list went missing for a whole session in silence), and the other six were the
-/// same dead-feature class, still armed.
+/// Registers a cache owner to clear its in-flight asks on world entry, so a key asked before the
+/// writer existed, or across a disconnect, is asked again.
 pub(crate) fn register<T: AskOnce>(app: &mut App) {
     app.add_systems(
         Update,

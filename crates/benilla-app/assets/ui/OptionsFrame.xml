@@ -1,18 +1,13 @@
 <Ui>
     <!--
-        The Options window, opened from the game menu. Deviation: the 1.15 era client's single
-        settings window replaces the 1.12 four-panel family, which is much worse to use; the 1.12
-        frames still load, hidden, for addons.
-        Structure follows the era UI source (1.15.9), surfaces the 1.14 System window
-        (OptionsFrameTemplates.xml); every art byte is 1.12-native or a colour fill, so era atlas
-        names below cite geometry only. Cut from the era window: the corner close X, live tabs,
-        the Accessibility, Languages and Network pages, and the close-with-pending confirm and
-        revert timer, so hiding discards pending edits and Apply commits outright. A slider shows
-        the 1.12 range; an out-of-range config value displays clamped and is not written back.
+        The Options window the game menu opens. Deviation: the 1.15 era client's single settings
+        window replaces the 1.12 four-panel family, which is much worse to use; the 1.12 frames
+        still load, hidden, for addons. Every art byte is 1.12-native or a colour fill, so era
+        names below cite geometry only. Hiding discards pending edits and Apply commits outright.
+        A slider shows the 1.12 range; an out-of-range value displays clamped, not written back.
     -->
 
-    <!-- The era GameFontHighlightMedium/Huge (FRIZQT 14 and 20, white) under Options* names, so
-         Fonts.xml stays the 1.12 set; the shadow is MasterFont's (Fonts.xml l.62). -->
+    <!-- The era's 14 and 20 white fonts, outside Fonts.xml's 1.12 set; MasterFont's shadow. -->
     <Font name="OptionsFontHighlightMedium" font="Fonts\FRIZQT__.TTF" virtual="true">
         <Shadow>
             <Offset><AbsDimension x="1" y="-1"/></Offset>
@@ -31,17 +26,14 @@
     </Font>
 
     <Script><![CDATA[
-        -- The stock UIOptionsFrame.xml loads hidden before this file and owns the options uvars
-        -- (UIOptionsFrame_Init, UIOptionsFrame.lua l.93-185) and UIOptionsFrameCheckButtons;
-        -- each uvar row captures its default at OnLoad, after that file ran.
+        -- UIOptionsFrame.xml loads first and owns the uvars; each row captures its default at
+        -- OnLoad.
         -- Deviation: AUTO_QUEST_WATCH is the string "1". 1.12 assigns the number 1 (l.122) but
-        -- every consumer compares against "1" (QuestLogFrame.lua:64/68), and 1 ~= "1" in Lua 5.0.
-        -- The RegisterForSave repeats the stock one, which is idempotent.
+        -- every consumer compares against "1" (QuestLogFrame.lua:64/68); 1 ~= "1" in Lua 5.0.
         AUTO_QUEST_WATCH = "1"
         RegisterForSave("AUTO_QUEST_WATCH")
 
-        -- Every combat-text row's applyFunc, UIOptionsFrame_Save l.371-376: Blizzard_CombatText
-        -- is LoadOnDemand, so the master loads it, and the update runs only once it exists.
+        -- UIOptionsFrame.lua:370-376: Blizzard_CombatText is LoadOnDemand, so the master loads it.
         function CombatText_UpdateOrLoad()
             if ( SHOW_COMBAT_TEXT == "1" ) then
                 UIParentLoadAddOn("Blizzard_CombatText")
@@ -50,17 +42,15 @@
                 CombatText_UpdateDisplayedMessages()
             end
         end
-        -- The Remove Chat Hover Delay row's applyFunc (UIOptionsFrame.lua l.216).
+        -- The Remove Chat Hover Delay row's applyFunc (UIOptionsFrame.lua:216).
         function ChatFrame_ApplyMouseOverDelay()
             if SetChatMouseOverDelay then -- nil in a VM loaded without the chat files
                 SetChatMouseOverDelay(REMOVE_CHAT_DELAY)
             end
         end
 
-        -- Show Tutorials' setter (UIOptionsFrame.lua l.318-327). There is no tutorial CVar: the
-        -- store is the _Load/_Save/_SetDefaults special arms, and disabling marks the whole bank.
-        -- The `~=` guard is the reference's: TutorialsEnabled() is 1 or nil, and re-ticking an
-        -- on row must not ResetTutorials() and re-arm dismissed tutorials.
+        -- Show Tutorials' setter (UIOptionsFrame.lua:318-327); there is no tutorial CVar. The `~=`
+        -- guard is the reference's: re-ticking an on row must not re-arm dismissed tutorials.
         function BenillaOptionsFrame_SetTutorialsEnabled(value)
             if ( tonumber(value) ~= TutorialsEnabled() ) then
                 if ( value == "1" ) then
@@ -73,11 +63,9 @@
             end
         end
 
-        -- UpdateNameplates, over the stock UIOptionsFrame.lua l.768-780. Deviation: stock l.776
-        -- is dropped. Stock l.774-776 shows then hides the friendly plates; on 1.12 that clears
-        -- volatile bits (`[0xc4da34]`), but here the verbs write the CVar pair that is the store,
-        -- so it would erase the saved setting at every world entry. The body stays for addons
-        -- that set NAMEPLATES_ON and call this.
+        -- UIOptionsFrame.lua:768-780. Deviation: stock l.776 is dropped. On 1.12 its show-then-hide
+        -- clears volatile bits (`[0xc4da34]`); here the verbs write the CVar pair that is the
+        -- store, so it would erase the saved setting at every world entry.
         function UpdateNameplates()
             if ( NAMEPLATES_ON ) then
                 ShowNameplates()
@@ -92,18 +80,18 @@
         end
 
 
-        -- The category tree (the era Game tab) in list order; keys are the row name suffixes.
+        -- The category tree in list order; keys are the row name suffixes.
         OPTIONS_CATEGORY_KEYS = {
             "Controls", "Interface", "ActionBars", "Combat", "Chat", "Keybindings", "Nameplates",
             "Graphics", "Audio",
         }
 
-        -- The era-window scale: the era UIParent draws smaller than our 768-unit canvas on modern
-        -- screens, and every era-shaped window wears this (GameMenuFrame too). Set by eye.
+        -- The era UIParent draws smaller than our 768-unit canvas; a chosen value, not the
+        -- reference's.
         ERA_WINDOW_SCALE = 0.78
 
         function BenillaOptionsFrame_UpdateScale()
-            -- The era panel's checkFit = 1: UIPanelUpdateScaleForFit also shrinks it to fit.
+            -- The era panel's checkFit: it also shrinks to fit the screen.
             local k = ERA_WINDOW_SCALE
             local wFit = GetScreenWidth() / 940
             local hFit = GetScreenHeight() / 744
@@ -112,16 +100,12 @@
             BenillaOptionsFrame:SetScale(k)
         end
 
-        -- The era tab width (MinimalTab.lua l.7): label width + 40, measured in the tabs' OnShow
-        -- as 1.12's PanelTemplates_TabResize is, since it depends on the scale the window's
-        -- OnShow sets first. Deviation: the era measures the medium font it swaps away (about 6
-        -- wider); this measures the small font the label wears.
+        -- The era tab width, label + 40, measured after OnShow sets the scale.
         function OptionsTab_FitWidth(tab)
             tab:SetWidth(getglobal(tab:GetName() .. "Text"):GetStringWidth() + 40)
         end
 
-        -- A category row: the wash at the era atlas size (187x21), in the 1.14 hover steel-blue
-        -- (OptionsFrameTemplates.lua l.130-131). A new category is one XML row plus one key.
+        -- The wash at the era atlas size, in the 1.14 hover steel-blue.
         function OptionsCategoryRow_OnLoad(row, key, label)
             row.categoryKey = key
             row.pageTitle = label
@@ -132,10 +116,7 @@
             bg:SetVertexColor(0.196, 0.388, 0.8)
         end
 
-        -- Select a category: 1.14's OptionsList_SelectButton (OptionsFrameTemplates.lua
-        -- l.107-121), the selected wash gold and locked, the rest blue. Picking a category ends a
-        -- search (Blizzard_SettingsPanel.lua l.793); SetText("") re-enters here through the
-        -- restore, so the outer call returns early.
+        -- 1.14's OptionsList_SelectButton. SetText("") ends a search and re-enters here.
         function BenillaOptionsFrame_SelectCategory(key)
             BenillaOptionsFrame.selectedCategory = key
             if BenillaOptionsFrameSearchBox:GetText() ~= "" then
@@ -162,8 +143,7 @@
             end
             -- A category switch starts at the top, as the era ScrollBox does per category.
             BenillaOptionsFrameContainerScroll:SetVerticalScroll(0)
-            -- Keybindings: entering rebuilds the section tree; leaving disarms a pending capture,
-            -- which must never outlive the page.
+            -- Leaving Keybindings disarms a pending capture, which must never outlive the page.
             local kb = getglobal("BenillaOptionsFrameContainerBodyKeybindings")
             if key == "Keybindings" then
                 kb:Show()
@@ -184,12 +164,10 @@
             end
         end
 
-        -- ── Search: the era SettingsPanel search (Blizzard_SettingsPanel.lua l.566-692) ──
-        -- A row's tag is its label uppercased; a query matches by plain substring, scored by
-        -- matched length, grouped under clickable category heads in best-score order. Results
-        -- are the live row frames re-anchored, so values and writes work mid-search.
+        -- ── Search: the era SettingsPanel search ──
+        -- Tags are labels uppercased, matched by plain substring and scored by matched length.
+        -- Results are the live rows, so writes work mid-search.
 
-        -- The era word list (l.569-572): the whole query, then each comma- or space-separated word.
         function OptionsSearch_Words(text)
             local up = string.upper(text)
             local words = { up }
@@ -199,7 +177,7 @@
             return words
         end
 
-        -- The era score (MatchesSearchTags, Blizzard_Settings.lua l.65-77), with a plain find.
+        -- The era's MatchesSearchTags score, with a plain find.
         function OptionsSearch_Score(tag, words)
             for _, w in ipairs(words) do
                 local first, last = string.find(tag, w, 1, true)
@@ -208,7 +186,6 @@
             return nil
         end
 
-        -- The era gather (l.575-636): scores walked high to low give the groups' order.
         function OptionsSearch_FindMatches(text)
             local words = OptionsSearch_Words(text)
             local buckets, scores = {}, {}
@@ -227,7 +204,7 @@
                     end
                 end
             end
-            -- Keybinding matches join the buckets, as in the era; their rkey is the binding index.
+            -- Keybinding matches join the buckets; their rkey is the binding index.
             for _, m in ipairs(KeyBindings_SearchMatches(words)) do
                 if not buckets[m.score] then
                     buckets[m.score] = {}
@@ -250,9 +227,7 @@
         end
 
         -- ── The page scroll ──
-        -- The body is as tall as the larger of the page rect and the content. Only frames hung
-        -- off the body's top are measured, so the size converges: one anchored to its bottom
-        -- would move as it grows. IsVisible, since a hidden page's rows keep their shown flag.
+        -- Only frames hung off the body's top are measured, so the size converges.
         function OptionsScroll_ContentBottom()
             local bottom = nil
             local function take(name)
@@ -277,8 +252,7 @@
             return bottom
         end
 
-        -- Size the body from OnUpdate, off the previous frame's rects; writes are gated because
-        -- SetWidth and SetHeight invalidate layout.
+        -- From OnUpdate, off the previous frame's rects; SetWidth and SetHeight invalidate layout.
         function OptionsScroll_Fit()
             local sf = BenillaOptionsFrameContainerScroll
             local body = BenillaOptionsFrameContainerBody
@@ -297,8 +271,7 @@
             end
         end
 
-        -- The page layout (era SettingsList: verticalPad 10, padLeft 25, spacing 9): the head at
-        -- (10,-12), each next at (0,-9), as the rows' XML anchors state; `prev` nil is the head.
+        -- The era SettingsList layout: the head at (10,-12), each next at (0,-9), as in the XML.
         function OptionsSearch_Place(name, prev)
             local f = getglobal(name)
             f:ClearAllPoints()
@@ -311,7 +284,7 @@
             end
         end
 
-        -- Lay a page's rows back on their XML chain after a search; a test holds the two equal.
+        -- Back on the XML chain after a search; a test holds the two equal.
         function OptionsPage_Layout(key)
             local prev = nil
             for _, rkey in ipairs(OPTIONS_PAGE_ROWS[key]) do
@@ -322,8 +295,6 @@
             end
         end
 
-        -- The results view (era OnSearchTextChanged, l.659-691): page bodies shown, rows hidden,
-        -- then each group chained, head then matches, a child pulling its parent in (l.665-670).
         -- The title and no-match strings are ours: the era's are not in its UI source.
         function OptionsSearch_Display(text)
             BenillaOptionsFrameContainerScroll:SetVerticalScroll(0)
@@ -334,7 +305,6 @@
                 end
                 getglobal("BenillaOptionsFrameContainerBodySearchHead" .. k):Hide()
             end
-            -- The Keybindings body hides too; matched bindings paint onto the search pool.
             getglobal("BenillaOptionsFrameContainerBodyKeybindings"):Hide()
             getglobal("BenillaOptionsFrameContainerBodySearchHeadKeybindings"):Hide()
             for i = 1, KEYBINDINGS_SEARCH_ROWS do
@@ -359,7 +329,6 @@
                 getglobal(head):Show()
                 prev = head
                 if key == "Keybindings" then
-                    -- Matched bindings paint onto the pool, capped at its size.
                     KeyBindingsPage.searchPainted = {}
                     local shown = 0
                     for _, index in ipairs(groups[key]) do
@@ -397,7 +366,6 @@
             end
         end
 
-        -- Ending a search (the era's empty-text arm, l.655-658).
         function OptionsSearch_Restore()
             BenillaOptionsFrameContainerScroll:SetVerticalScroll(0)
             for k in pairs(OPTIONS_PAGE_ROWS) do
@@ -414,7 +382,6 @@
             BenillaOptionsFrame_SelectCategory(BenillaOptionsFrame.selectedCategory or "Controls")
         end
 
-        -- The era text gate (OnSearchTextChanged l.640-652).
         function OptionsSearch_OnTextChanged(text)
             if text == BenillaOptionsFrame.searchText then return end
             local had = BenillaOptionsFrame.searchText and BenillaOptionsFrame.searchText ~= ""
@@ -427,31 +394,28 @@
         end
 
         -- ── The setting pages: 1.12 rows in the era Settings grammar ──
-        -- Rows, CVars, labels and dependencies are the 1.12 panels'; geometry is the era
-        -- settings list (Blizzard_SettingControls, Blizzard_SettingsList): 26-tall rows on a 9
-        -- spacing, label LEFT+37 to CENTER-85, control at CENTER-80.
-        -- Descriptions 1.12 lacks take a BENILLA_ prefix, so OPTION_TOOLTIP_* stays 1.12's own.
+        -- Descriptions 1.12 lacks take a BENILLA_ prefix.
         BENILLA_TOOLTIP_RENDER_SCALE =
             "Draws the 3D world at a fraction of the window's resolution, or larger than it. "
             .. "The interface is unaffected at any setting.\n\n"
             .. "Below 100% trades sharpness for frame rate; above 100% is supersampling, which "
             .. "smooths edges at the cost of frame rate. Applies when you click Apply."
 
-        -- Enable Sound in Background: 1.12 has no checkbox; silenced sounds keep running.
+        -- 1.12 has no such checkbox.
         BENILLA_TOOLTIP_BACKGROUND_SOUND =
             "Keeps the game's sound playing while you are working in another window.\n\n"
             .. "With this off, switching away silences the game and switching back restores it. "
             .. "Sounds keep running while they are silenced, so a long one may have finished by "
             .. "the time you return."
 
-        -- Display Mode: 1.12's WINDOWED_MODE text describes a checkbox and exclusive-mode gamma.
+        -- 1.12's WINDOWED_MODE text describes a checkbox and exclusive-mode gamma.
         BENILLA_TOOLTIP_DISPLAY_MODE =
             "Windowed (Fullscreen) fills the screen with a borderless window; Windowed runs in "
             .. "an ordinary one.\n\n"
             .. "There is no exclusive fullscreen mode. WoW itself removed one in 8.0.1, and "
             .. "modern Classic offers these same two."
 
-        -- Brightness: 1.12's GAMMA text points at gray-bar art this page does not have.
+        -- 1.12's GAMMA text points at gray-bar art this page does not have.
         BENILLA_TOOLTIP_BRIGHTNESS =
             "Lightens or darkens the whole picture — nights, caves and interiors are what it is "
             .. "for.\n\n"
@@ -460,10 +424,7 @@
             .. "finished image instead, so it works in both display modes."
 
         OPTIONS_PAGE_ROWS = {
-            -- The era Controls order for Sticky Targeting, Auto Loot, Invert Mouse and Mouse
-            -- Sensitivity; the rest follow their 1.12 box's columns left to right, General
-            -- 45 -> 3 -> 16 and 14 -> 61, then Camera: the style dropdown -> 24 -> 26,
-            -- Slider2 -> 27 -> 15, Slider3 -> Slider4.
+            -- The era Controls order first; the rest follow their 1.12 box's columns.
             Controls = {
                 "RowStickyTarget", "RowAssistAttack", "RowClearAFK",
                 "RowBlockTrades", "RowAutoSelfCast",
@@ -482,14 +443,12 @@
                 "RowWeatherDensity",
                 "RowDisplayMode", "RowVerticalSync", "RowRenderScale",
             },
-            -- Player Guild Names is a child of Player Names, as in 1.12 (l.702-708).
+            -- Guild Names is a child of Player Names (UIOptionsFrame.lua:703-709).
             Nameplates = {
                 "RowEnemyPlates", "RowFriendlyPlates",
                 "RowPlayerNames", "RowGuildNames", "RowNpcNames", "RowOwnName",
             },
-            -- 1.12's Display box by column (12 -> 2, 31 -> 20, 42 -> 39 -> 66 -> 5), then Help
-            -- (28 -> 44 -> 29). The target-of-target pair, from Advanced Options' Raid and Party
-            -- box, sits under Status Text, the other unit-frame readout.
+            -- 1.12's Display box by column, then Help; target-of-target sits under Status Text.
             Interface = {
                 "RowEnhancedTooltips", "RowStatusText", "RowTargetOfTarget", "RowTargetOfTargetMode",
                 "RowShowCloak", "RowShowHelm",
@@ -497,42 +456,39 @@
                 "RowProfanityFilter",
                 "RowShowTutorials", "RowTipOfTheDay", "RowNewbieTips",
             },
-            -- 1.12's chat box in anchor order (UIOptionsFrame.xml l.751-840). Not shipped: 7
-            -- Simple Chat, which needs FCF_Set_SimpleChat's re-layout, and 8 Lock Chat Settings
-            -- and 51 Guild Recruitment Channel, whose verbs exist.
+            -- 1.12's chat box (UIOptionsFrame.xml:751-840). Not shipped: Simple Chat, which needs
+            -- FCF_Set_SimpleChat's re-layout, Lock Chat Settings and Guild Recruitment.
             Chat = {
                 "RowGuildMemberAlert", "RowRemoveChatDelay", "RowChatBubbles", "RowLootSpam",
                 "RowPartyChatBubbles", "RowSpamFilter",
             },
-            -- Deviation: the bar toggles and grid switch precede the lock, which 1.12's two-column
-            -- box leads with (CheckButton32), so what is on screen reads first.
+            -- Deviation: the bar toggles precede the lock, which 1.12's box leads with, so what is
+            -- on screen reads first.
             ActionBars = {
                 "RowMultiBar1", "RowMultiBar2", "RowMultiBar3", "RowMultiBar4",
                 "RowAlwaysShowMultibars", "RowLockActionBar",
             },
-            -- The combat-text box in its anchor-chain order, not its CheckButton index order.
+            -- The combat-text box in its anchor-chain order.
             Combat = {
                 "RowCombatText", "RowFloatMode", "RowLowHealthMana", "RowAuras", "RowAuraFade",
                 "RowCombatState", "RowDodgeParryMiss", "RowResistances", "RowReputation",
                 "RowReactives", "RowFriendlyNames", "RowComboPoints", "RowEnergyGains",
                 "RowHonorGained",
-                -- 19 -> 11 -> 9 close the chain under their own master (l.709-714).
+                -- Under their own master (UIOptionsFrame.lua:710-716).
                 "RowShowDamage", "RowPeriodicDamage", "RowPetDamage",
             },
         }
 
-        -- `tip` is a GlobalStrings key, resolved at hover as UIOptionsFrame.lua l.265 does.
+        -- `tip` is a GlobalStrings key, resolved at hover as UIOptionsFrame.lua:265 does.
         function OptionsRow_OnLoad(row, cvar, label, tip, child)
             row.cvar = cvar
             row.tip = tip
-            -- The era search tag: the display name (SettingControls.lua l.773), uppercased.
             row.searchTag = string.upper(label)
-            -- Kept for OptionsRow_SetEnabled, whose disabled font must keep the child size.
+            -- OptionsRow_SetEnabled's disabled font must keep the child size.
             row.child = child
             local l = getglobal(row:GetName() .. "Label")
             l:SetText(label)
             if child then
-                -- Era child rows (SettingControls.lua l.319-322): the label indents, in small font.
                 l:SetFontObject("GameFontNormalSmall")
                 l:ClearAllPoints()
                 l:SetPoint("LEFT", row:GetName(), "LEFT", 52, 0)
@@ -540,10 +496,9 @@
             end
         end
 
-        -- ── The row's store: a CVar, a saved global, or an API pair ──
-        -- 1.12's three stores (UIOptionsFrame.lua l.230-377): `cvar`, `uvar` or a
-        -- `func`/`setFunc` pair, all as strings, "1"/"0" for a toggle.
-        -- Whether the row has a store, in OptionsRow_Set's order; keep the two in step.
+        -- ── The row's store ──
+        -- 1.12's `cvar`, `uvar` or `func`/`setFunc` (UIOptionsFrame.lua:230-377), all strings. Keep
+        -- OptionsRow_HasStore in OptionsRow_Set's order.
         function OptionsRow_HasStore(row)
             return row.uvar or row.setFunc or row.cvar
         end
@@ -551,8 +506,8 @@
         function OptionsRow_Get(row)
             if row.uvar then return getglobal(row.uvar) end
             if row.getFunc then
-                -- A numeric API row, 1.12's video-panel `func` fork (OptionsFrame.lua l.110/135),
-                -- formatted like the slider's write so it compares equal as a string.
+                -- OptionsFrame.lua:110/135, formatted like the slider's write so strings compare
+                -- equal.
                 if row.numeric then
                     return (string.gsub(string.format("%.2f", row.getFunc()), "%.?0+$", ""))
                 end
@@ -561,22 +516,19 @@
             return GetCVar(row.cvar)
         end
 
-        -- The write. A uvar row runs its applyFunc, the reference's side effect from
-        -- UIOptionsFrame_Save, on the click. `cvarEvent` is SetCVar's third argument, returned as
-        -- CVAR_UPDATE's arg1 (1.12 passes its CheckButtons key).
+        -- A uvar row applies on the click; `cvarEvent` is CVAR_UPDATE's arg1.
         function OptionsRow_Set(row, value)
             if row.uvar then
                 setglobal(row.uvar, value)
-                -- `applyFunc` is a global's name, looked up when applied: most definers load
-                -- after this file. A name with no global behind it applies nothing.
+                -- Looked up when applied: most definers load after this file.
                 local apply = row.applyFunc
                 if type(apply) == "string" then apply = getglobal(apply) end
                 if apply then apply() end
                 return
             end
-            -- An API row passes the "1"/"0" string, as UIOptionsFrame_Save l.290-297 does.
+            -- The "1"/"0" string, as UIOptionsFrame.lua:291-297.
             if row.setFunc then
-                -- A numeric one passes a number, as OptionsFrame_Save does (l.206-226).
+                -- A number, as OptionsFrame.lua:206-226.
                 if row.numeric then
                     row.setFunc(tonumber(value))
                 else
@@ -588,10 +540,8 @@
             OptionsRow_WritePartner(row, value)
         end
 
-        -- The partner write, from UIOptionsFrame_Save's special arms: Pet Melee Damage also
-        -- writes PetSpellDamage (l.334-336); the camera speeds write their pitch twin at yaw/4
-        -- and yaw/2 (l.351-356). A scaled value is formatted like the slider's write, so a
-        -- partner at its default compares equal and stays out of the config file.
+        -- UIOptionsFrame_Save's partner writes: Pet Melee Damage also writes PetSpellDamage
+        -- (l.334-336); the camera speeds write their pitch twin at yaw/4 and yaw/2 (l.351-356).
         function OptionsRow_WritePartner(row, value)
             if not row.partner then return end
             local v = value
@@ -602,23 +552,21 @@
             SetCVar(row.partner.cvar, v)
         end
 
-        -- The registered default. A uvar's is the value its defining file assigned, captured at
-        -- the row's OnLoad: all UI XML loads before the saved-variables chunk runs over it.
+        -- A uvar's default is captured at OnLoad, before the saved-variables chunk runs.
         function OptionsRow_Default(row)
             if row.uvar then return row.udefault end
             if row.getFunc then return row.fdefault end
             return GetCVarDefault(row.cvar)
         end
 
-        -- A uvar row: OptionsRow_OnLoad's signature with the global's name in the cvar seat.
+        -- OptionsRow_OnLoad's signature with the global's name in the cvar seat.
         function OptionsGlobalRow_OnLoad(row, uvar, label, tip, child)
             OptionsRow_OnLoad(row, nil, label, tip, child)
             row.uvar = uvar
             row.udefault = getglobal(uvar)
         end
 
-        -- An API row, 1.12's `func`/`setFunc` shape. `default` is stated because nothing is
-        -- registered; the reference hand-writes it too (UIOptionsFrame_SetDefaults l.631-634).
+        -- Stated, as UIOptionsFrame_SetDefaults hand-writes it (l.631-634).
         function OptionsFuncRow_OnLoad(row, getFunc, setFunc, default, label, tip, child)
             OptionsRow_OnLoad(row, nil, label, tip, child)
             row.getFunc = getFunc
@@ -626,33 +574,29 @@
             row.fdefault = default
         end
 
-        -- A numeric API row; `default` is still a string, since rows compare strings.
+        -- `default` is still a string, since rows compare strings.
         function OptionsNumFuncRow_OnLoad(row, getFunc, setFunc, default, label, tip, child)
             OptionsFuncRow_OnLoad(row, getFunc, setFunc, default, label, tip, child)
             row.numeric = 1
         end
 
-        -- Saved uvars land after their file-scope consumers ran; the stock VARIABLES_LOADED arm
-        -- (UIOptionsFrame.lua l.193-227) re-applies them, so this window has no load ladder.
+        -- UIOptionsFrame.lua:193-227 re-applies saved uvars, so this window has no load ladder.
 
-        -- OptionsFrameSliders is the stock video window's table (OptionsFrame.lua l.24-34),
-        -- which addons write; a declaration here would replace it. This maps its slider index to
-        -- our Graphics row; 4, 5, 7 and 8 have none, and the holes are why the OnShow loop uses
-        -- Lua 5.0's `for i, name in` pairs form: ipairs would stop at 3.
+        -- OptionsFrameSliders is the stock table (OptionsFrame.lua:24-34), which addons write.
+        -- Holes at 4, 5, 7 and 8, so the OnShow loop uses the pairs form: ipairs would stop at 3.
         BENILLA_GRAPHICS_SLIDER_ROWS = {
             "RowUiScale", "RowFarclip", "RowWorldDetail",
             [6] = "RowBrightness", [9] = "RowWeatherDensity",
         }
 
-        -- A slider's range and readout where the template's is not it. The refreshing guard:
         -- SetMinMaxValues re-clamps and fires OnValueChanged, which must not write back.
         function OptionsSliderRow_Setup(row, min, max, step, fmt, stops)
             local slider = getglobal(row:GetName() .. "ControlSlider")
             row.fmt = fmt
             -- Kept for the "travel" readout, a share of the row's own range.
             row.minv, row.maxv = min, max
-            -- A named ladder reads out its stop (Low/Medium/High). Deviation: 1.12's slider
-            -- labels only its ends; a bare index would mean nothing to a player.
+            -- Deviation: a named ladder reads out its stop; 1.12's slider labels only its ends, and
+            -- a bare index would mean nothing to a player.
             row.stops = stops
             row.refreshing = 1
             slider:SetMinMaxValues(min, max)
@@ -660,8 +604,7 @@
             row.refreshing = nil
         end
 
-        -- ── The dropdown rows: the 1.12 UIDropDownMenu kit in the era row grammar ──
-        -- Entry values are the store's strings; AddButton checks the one equal to selectedValue.
+        -- ── The dropdown rows: the 1.12 UIDropDownMenu kit ──
         function OptionsDropdownRow_Setup(row, entries)
             row.entries = entries
             local dd = getglobal(row:GetName() .. "Dropdown")
@@ -685,7 +628,7 @@
             end
         end
 
-        -- An entry click (`this` is the list button); the kit closes the list and plays the click.
+        -- `this` is the list button; the kit closes the list and plays the click.
         function OptionsDropdownEntry_OnClick()
             local dd = UIDropDownMenu_GetCurrentDropDown()
             local row = dd:GetParent()
@@ -693,16 +636,14 @@
             OptionsDropdown_ShowValue(row)
         end
 
-        -- Paint the capsule from the store. selectedValue is set as a field: SetSelectedValue's
-        -- Refresh walks the shared DropDownList1 and could match another dropdown's buttons. An
-        -- off-grid value shows the nearest entry and is not written back.
+        -- A field, not SetSelectedValue, whose Refresh walks the shared DropDownList1. An off-grid
+        -- value shows the nearest entry.
         function OptionsDropdown_ShowValue(row)
             local dd = getglobal(row:GetName() .. "Dropdown")
             local v = OptionsRow_Get(row)
             local match
             for _, e in ipairs(row.entries) do
-                -- `alt`: a stored "3" (in range, no entry's value) shows as Never, where the
-                -- nearest-value fallback would show Always. `e.alt ~= nil` keeps nil matching none.
+                -- `alt`: a stored "3" shows as Never, where the nearest value would show Always.
                 if e.value == v or (e.alt ~= nil and e.alt == v) then match = e end
             end
             if not match and tonumber(v) then
@@ -718,8 +659,7 @@
             if match then
                 dd.selectedValue = match.value
                 UIDropDownMenu_SetText(match.text, dd)
-                -- An entry with its own `tip` retargets the row's description, as
-                -- UIOptionsFrameCameraDropDown_OnClick does with OPTION_TOOLTIP_CAMERA<id>.
+                -- As UIOptionsFrameCameraDropDown_OnClick retargets OPTION_TOOLTIP_CAMERA<id>.
                 if match.tip then row.tip = match.tip end
             else
                 dd.selectedValue = v
@@ -727,12 +667,11 @@
             end
         end
 
-        -- The readout (era MinimalSlider): rounded percent (FormatPercentage, Audio.lua l.406-411).
         function OptionsRow_FormatValue(row, value)
             if row.fmt == "raw" then
                 return string.format("%d", math.floor(value + 0.5))
             end
-            -- A named ladder reads its stop's name; the clamp guards a short stops table.
+            -- The clamp guards a short stops table.
             if row.stops then
                 local i = math.floor(value + 0.5) + 1
                 if i < 1 then i = 1 end
@@ -745,15 +684,14 @@
                 return string.format("%d%%",
                     math.floor((value - row.minv) / (row.maxv - row.minv) * 100 + 0.5))
             end
-            -- "yards": cameraDistanceMaxFactor shown as the distance it sets over the 15 yd base.
+            -- "yards": cameraDistanceMaxFactor over the 15 yd base.
             if row.fmt == "yards" then
                 return string.format("%d yd", math.floor(value * 15 + 0.5))
             end
             return string.format("%d%%", math.floor(value * 100 + 0.5))
         end
 
-        -- The era row-wide hover wash (HoverBackgroundTemplate) and the tooltip, from one seam;
-        -- crossing controls does not blink, as OnLeave fires before OnEnter within a move.
+        -- Crossing controls does not blink: OnLeave fires before OnEnter within a move.
         function OptionsRow_Hover(row, on)
             local hover = getglobal(row:GetName() .. "Hover")
             if on then
@@ -765,17 +703,15 @@
             end
         end
 
-        -- The description: 1.12's per-option string alone in the default gold
-        -- (OptionsFrameTemplates.xml l.52-64), seated the era way (ANCHOR_RIGHT, x -10).
-        -- Deviation: the era's white name line is cut, as it repeats the label.
+        -- 1.12's per-option string alone in gold (OptionsFrameTemplates.xml:52-64).
         function OptionsRow_ShowTooltip(row)
             local text = row.tip and getglobal(row.tip)
             if text then
                 GameTooltip:SetOwner(getglobal(row:GetName() .. "Tip"), "ANCHOR_RIGHT", -10, 0)
                 GameTooltip:SetText(text, nil, nil, nil, nil, 1)
             else
-                -- Deviation: 1.12 returns early here. A mute row hides the last plate, so a hover
-                -- entered without the old row's OnLeave cannot leave a neighbour's text standing.
+                -- Deviation: 1.12 returns early here; a mute row hides the last plate, so a
+                -- neighbour's text cannot stand when its OnLeave was missed.
                 GameTooltip:Hide()
             end
         end
@@ -784,7 +720,7 @@
             local row = box:GetParent()
             local checked = box:GetChecked()
             -- The 1.12 panels disagree: the interface panel plays CheckBoxOn when checked
-            -- (OptionsFrame.lua l.509), the sound panel CheckBoxOff; Audio rows carry soundQuirk.
+            -- (OptionsFrame.lua:509-515), the sound panel CheckBoxOff; Audio rows carry soundQuirk.
             local kitOn = checked
             if row.soundQuirk then kitOn = not kitOn end
             if kitOn then
@@ -807,8 +743,8 @@
             local control = slider:GetParent()
             local row = control:GetParent()
             if not row.refreshing then
-                -- Era obeyStepOnDrag (MinimalSlider.xml l.5-7): a move snaps to the grid from the
-                -- minimum (farclip's 1.12 grid is 177+n*60); a refresh sets the stored value raw.
+                -- Snaps to the grid from the minimum (farclip's is 177+n*60); a refresh sets it
+                -- raw.
                 local step = slider:GetValueStep()
                 if step and step > 0 then
                     local minv = slider:GetMinMaxValues()
@@ -822,12 +758,10 @@
             end
             getglobal(control:GetName() .. "Value"):SetText(OptionsRow_FormatValue(row, value))
             if OptionsRow_HasStore(row) and not row.refreshing then
-                -- Two decimals, trailing zeros stripped, so a value at its default compares
-                -- equal as a string and stays out of the config file.
+                -- Trailing zeros stripped, so a value at its default stays out of the config file.
                 local str = string.gsub(string.format("%.2f", value), "%.?0+$", "")
                 if row.deferred then
-                    -- Era CommitFlag.Apply: shown at once, stored on Apply. A pending equal to
-                    -- the committed value is dropped, as the era's IsModified does.
+                    -- Stored on Apply; a pending equal to the committed value is dropped.
                     if str == OptionsRow_Get(row) then
                         row.pending = nil
                     else
@@ -846,8 +780,7 @@
                 local row = getglobal(base .. rkey)
                 local box = getglobal(base .. rkey .. "Check")
                 if box then
-                    -- SetChecked takes the store's string as the 1.12 panel does: "0" unchecks.
-                    -- An inverted row checks on "0" (UIOptionsFrame.lua's GAMEFIELD_DESELECT arm).
+                    -- "0" unchecks; an inverted row checks on "0".
                     if row.invert then
                         local checked
                         if OptionsRow_Get(row) == "0" then checked = 1 end
@@ -863,8 +796,7 @@
                     -- A staged value shows first, as the era's GetValue returns it.
                     slider:SetValue(tonumber(row.pending or OptionsRow_Get(row) or "0") or 0)
                     row.refreshing = nil
-                    -- SetValue fires only on a change, so the readout is written here, from the
-                    -- slider's own (clamped) value.
+                    -- SetValue fires only on a change, so the readout is written here.
                     getglobal(base .. rkey .. "ControlValue"):SetText(
                         OptionsRow_FormatValue(row, slider:GetValue()))
                 end
@@ -873,16 +805,15 @@
             OptionsApply_Update()
         end
 
-        -- Per-page dependency rules, each the 1.12 panel's own.
+        -- Each page's dependency rules, the 1.12 panel's own.
         function OptionsPage_UpdateDependencies(key)
             if key == "Combat" then
-                -- The combat-text block: the master off greys the floating-text rows, and Combo
-                -- Points is greyed for anyone but a rogue or druid.
+                -- Combo Points is for rogues and druids only.
                 local on = SHOW_COMBAT_TEXT ~= "0"
                 local _, class = UnitClass("player")
                 class = class and string.upper(class)
                 local combo = class == "ROGUE" or class == "DRUID"
-                -- The damage-number trio is not under this master: that block names 53..69 only.
+                -- The damage-number trio is not under this master.
                 local damage = {
                     RowShowDamage = 1, RowPeriodicDamage = 1, RowPetDamage = 1,
                 }
@@ -894,34 +825,33 @@
                             getglobal("BenillaOptionsFrameContainerBodyCombat" .. rkey), live)
                     end
                 end
-                -- l.709-714: Show Target Damage off greys Periodic and Pet Damage.
+                -- UIOptionsFrame.lua:710-716: Show Target Damage off greys Periodic and Pet Damage.
                 local dmg = GetCVar("CombatDamage") ~= "0"
                 OptionsRow_SetEnabled(BenillaOptionsFrameContainerBodyCombatRowPeriodicDamage, dmg)
                 OptionsRow_SetEnabled(BenillaOptionsFrameContainerBodyCombatRowPetDamage, dmg)
                 return
             end
             if key == "Controls" then
-                -- l.715-719: Auto-Follow Speed is dead while the style is Never: "0", or a stray
-                -- "3", which the validator also accepts and which reads as Never.
+                -- UIOptionsFrame.lua:717-721: dead while the style is Never, "0" or a stray "3".
                 local style = GetCVar("cameraSmoothStyle")
                 OptionsRow_SetEnabled(BenillaOptionsFrameContainerBodyControlsRowAutoFollowSpeed,
                     style ~= "0" and style ~= "3")
                 return
             end
             if key == "Nameplates" then
-                -- l.702-708: Player Names off greys Player Guild Names.
+                -- UIOptionsFrame.lua:703-709: Player Names off greys Player Guild Names.
                 OptionsRow_SetEnabled(BenillaOptionsFrameContainerBodyNameplatesRowGuildNames,
                     GetCVar("UnitNamePlayer") ~= "0")
                 return
             end
             if key == "Interface" then
-                -- l.694-700: the target-of-target mode is dead while its switch is off.
+                -- UIOptionsFrame.lua:697-701: the mode is dead while its switch is off.
                 OptionsRow_SetEnabled(BenillaOptionsFrameContainerBodyInterfaceRowTargetOfTargetMode,
                     SHOW_TARGET_OF_TARGET ~= "0")
                 return
             end
             if key == "ActionBars" then
-                -- l.722-726: Right ActionBar 2 is dead while Right ActionBar is off.
+                -- UIOptionsFrame.lua:722-726: Right ActionBar 2 needs Right ActionBar.
                 OptionsRow_SetEnabled(BenillaOptionsFrameContainerBodyActionBarsRowMultiBar4,
                     SHOW_MULTI_ACTIONBAR_3)
                 return
@@ -942,14 +872,12 @@
             end
         end
 
-        -- Grey or wake one row. A dropdown greys as OptionsFrame_DisableDropDown does, button
-        -- disabled and text gray; 1.12 has no UIDropDownMenu_DisableDropDown.
+        -- As OptionsFrame_DisableDropDown; 1.12 has no UIDropDownMenu_DisableDropDown.
         function OptionsRow_SetEnabled(row, on)
             local name = row:GetName()
             local box = getglobal(name .. "Check")
             local dd = getglobal(name .. "Dropdown")
-            -- A slider greys as OptionsFrame_DisableSlider does (l.481-486), thumb hidden; it
-            -- also drops the mouse, since a press anywhere on this track seats the value.
+            -- As OptionsFrame_DisableSlider (l.481-486); a press on the track would seat the value.
             local sl = getglobal(name .. "ControlSlider")
             if box then
                 if on then box:Enable() else box:Disable() end
@@ -985,7 +913,7 @@
             end
         end
 
-        -- Defaults: the visible page back to its registered defaults, pending edits dropped.
+        -- Pending edits dropped.
         function OptionsPage_Defaults(key)
             local base = "BenillaOptionsFrameContainerBody" .. key
             for _, rkey in ipairs(OPTIONS_PAGE_ROWS[key]) do
@@ -996,10 +924,9 @@
             OptionsPage_Refresh(key)
         end
 
-        -- ── The Apply flow: era CommitFlag.Apply ──
-        -- Pending edits are panel-wide: they survive a category switch; hiding discards them.
+        -- ── The Apply flow ──
+        -- Pending edits survive a category switch; hiding discards them.
 
-        -- The era Apply gate (HasUnappliedSettings): shown only while an edit is pending.
         function OptionsApply_Update()
             local pending
             for key, rows in pairs(OPTIONS_PAGE_ROWS) do
@@ -1017,7 +944,6 @@
             end
         end
 
-        -- Commit every pending edit (era SettingsPanelMixin:CommitSettings).
         function OptionsPage_Apply()
             for key, rows in pairs(OPTIONS_PAGE_ROWS) do
                 local base = "BenillaOptionsFrameContainerBody" .. key
@@ -1032,7 +958,6 @@
             OptionsApply_Update()
         end
 
-        -- Hiding discards pending edits (the era's WipeModifiedTable on hide).
         function OptionsPage_DiscardPending()
             for key, rows in pairs(OPTIONS_PAGE_ROWS) do
                 local base = "BenillaOptionsFrameContainerBody" .. key
@@ -1044,8 +969,8 @@
         end
     ]]></Script>
 
-    <!-- The red panel button (era UIPanelButtonTemplate, 96x22), a copy of
-         GameMenuButtonTemplate (GameMenuFrame.xml l.145), which loads after this file. -->
+    <!-- A copy of the stock GameMenuButtonTemplate (UIPanelTemplates.xml:403) at the era's
+         96x22. -->
     <Button name="OptionsRedButtonTemplate" virtual="true">
         <Size><AbsDimension x="96" y="22"/></Size>
         <ButtonText name="$parentText"/>
@@ -1058,9 +983,7 @@
         <DisabledFont inherits="GameFontDisable"/>
     </Button>
 
-    <!-- A category row (era Blizzard_CategoryList.xml), 199 wide as the era ScrollBox stretches
-         it. The wash is 1.14's OptionsListButtonTemplate (OptionsFrameTemplates.xml l.216-229):
-         one UI-QuestLogTitleHighlight quad in ADD blend, blue on hover, gold when selected. -->
+    <!-- The wash is 1.14's OptionsListButtonTemplate: blue on hover, gold when selected. -->
     <Button name="OptionsCategoryRowTemplate" virtual="true">
         <Size><AbsDimension x="199" y="20"/></Size>
         <Layers>
@@ -1070,8 +993,7 @@
                 </Texture>
             </Layer>
         </Layers>
-        <!-- The era label box spans the row (CategoryList.xml l.72-77), so the default middle
-             justify centres the text vertically; justifyH LEFT keeps it from centring across. -->
+        <!-- The label box spans the row, so the text centres vertically but not across. -->
         <ButtonText name="$parentText" justifyH="LEFT">
             <Anchors>
                 <Anchor point="TOPLEFT"><Offset><AbsDimension x="36" y="1"/></Offset></Anchor>
@@ -1083,7 +1005,7 @@
         <DisabledFont inherits="GameFontDisable"/>
         <Scripts>
             <OnClick>BenillaOptionsFrame_SelectCategory(this.categoryKey)</OnClick>
-            <!-- The hover wash; the selected row keeps its locked gold. -->
+            <!-- The selected row keeps its locked gold. -->
             <OnEnter>
                 if BenillaOptionsFrame.selectedCategory ~= this.categoryKey then
                     getglobal(this:GetName() .. "Bg"):Show()
@@ -1097,8 +1019,7 @@
         </Scripts>
     </Button>
 
-    <!-- A category header (era SettingsCategoryListHeaderTemplate); the era's
-         Options_CategoryHeader_<n> wash has no 1.12 art and is dropped. -->
+    <!-- A category header; the era's wash has no 1.12 art. -->
     <Frame name="OptionsCategoryHeaderTemplate" virtual="true">
         <Size><AbsDimension x="199" y="30"/></Size>
         <Layers>
@@ -1110,9 +1031,7 @@
         </Layers>
     </Frame>
 
-    <!-- A search group head (era SettingsListSearchCategoryTemplate, Blizzard_SettingsList.xml
-         l.65-87); a click selects the category, ending the search. Deviation: the hover is the
-         rows' white 0.1 wash, not the era's gray ADD overlay. -->
+    <!-- A search group head; a click selects the category, ending the search. -->
     <Button name="OptionsSearchHeadTemplate" virtual="true" hidden="true">
         <Size><AbsDimension y="45"/></Size>
         <Layers>
@@ -1138,9 +1057,7 @@
         </Scripts>
     </Button>
 
-    <!-- A checkbox setting row (era SettingsCheckboxControlTemplate, SettingControls.lua
-         l.322-323, l.473) with the 1.12 UI-CheckBox set. No HighlightTexture: the era row-wide
-         wash (HoverBackgroundTemplate) is the hover. -->
+    <!-- A checkbox row with the 1.12 UI-CheckBox set; the row-wide wash is the hover. -->
     <Frame name="OptionsCheckboxRowTemplate" virtual="true" enableMouse="true">
         <Size><AbsDimension y="26"/></Size>
         <Layers>
@@ -1163,8 +1080,8 @@
             </Layer>
         </Layers>
         <Frames>
-            <!-- The tooltip seat, the era's label-half region (Blizzard_SettingControls.xml
-                 l.57-61); mouse-less so it never steals the row's hover. -->
+            <!-- The tooltip seat, the label half; mouse-less so it never steals the row's
+                 hover. -->
             <Frame name="$parentTip">
                 <Anchors>
                     <Anchor point="TOPLEFT"/>
@@ -1191,11 +1108,8 @@
         </Scripts>
     </Frame>
 
-    <!-- A slider setting row (era SettingsSliderControlTemplate, SettingControls.lua l.550-552):
-         the 1.12 OptionsSliderTemplate groove (OptionsFrameTemplates.xml l.74) and 32x32 thumb,
-         and the era readout 6 right (MinimalSlider.xml l.73-77). No era steppers, as in 1.12; a
-         press anywhere on the track seats the thumb. The +3 seats the art, not the control, so
-         the readout stays level with the label. -->
+    <!-- 1.12's OptionsSliderTemplate groove (OptionsFrameTemplates.xml:74); no steppers, as in
+         1.12. The +3 seats the art, so the readout stays level with the label. -->
     <Frame name="OptionsSliderRowTemplate" virtual="true" enableMouse="true">
         <Size><AbsDimension y="26"/></Size>
         <Layers>
@@ -1218,8 +1132,7 @@
             </Layer>
         </Layers>
         <Frames>
-            <!-- The tooltip seat. Deviation: the era hangs a slider's plate off the slider
-                 (SettingControls.lua l.556); one column keeps it still down a page. -->
+            <!-- The tooltip seat: one column keeps the plate still down a page. -->
             <Frame name="$parentTip">
                 <Anchors>
                     <Anchor point="TOPLEFT"/>
@@ -1273,9 +1186,7 @@
         </Scripts>
     </Frame>
 
-    <!-- A dropdown setting row (era SettingsDropdownControlTemplate): the 1.12
-         UIDropDownMenuTemplate capsule at CENTER-71, so its ink (after about 10 units of cap)
-         opens at the groove's column, 180 wide to match the track. -->
+    <!-- At CENTER-71, so the capsule's ink opens at the groove's column. -->
     <Frame name="OptionsDropdownRowTemplate" virtual="true" enableMouse="true">
         <Size><AbsDimension y="26"/></Size>
         <Layers>
@@ -1315,13 +1226,12 @@
         </Scripts>
     </Frame>
 
-    <!-- The window (era SettingsPanel: 920x724, CENTER), toplevel as 1.12's OptionsFrame.xml
-         l.3. Deviation: strata HIGH, the era SettingsPanel's, where 1.12's is DIALOG. -->
+    <!-- The era SettingsPanel's size and strata, HIGH, where 1.12's OptionsFrame is DIALOG;
+         toplevel as 1.12's OptionsFrame.xml:5. -->
     <Frame name="BenillaOptionsFrame" parent="UIParent" frameStrata="HIGH" toplevel="true" enableMouse="true" hidden="true">
         <Size><AbsDimension x="920" y="724"/></Size>
         <Anchors><Anchor point="CENTER"/></Anchors>
-        <!-- The 1.14 System window backdrop, BACKDROP_DIALOG_32_32 (Backdrop.lua l.17-25): the
-             UI-DialogBox-Background tile, uniform black at 0.6 alpha, inside the rope border. -->
+        <!-- The 1.14 System window backdrop, BACKDROP_DIALOG_32_32. -->
         <Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
             <TileSize><AbsValue val="32"/></TileSize>
             <EdgeSize><AbsValue val="32"/></EdgeSize>
@@ -1329,9 +1239,8 @@
         </Backdrop>
         <Layers>
             <Layer level="BACKGROUND">
-                <!-- A black 0.7 fill over the 0.6 tile (0.88 combined) so labels read over bright
-                     terrain. Inset 15, not the bg insets: regions draw over the border, whose ink
-                     ends by texel 14. -->
+                <!-- 0.88 combined with the tile, so labels read over bright terrain. Inset 15:
+                     regions draw over the border, whose ink ends by texel 14. -->
                 <Texture name="$parentGroundDim">
                     <Anchors>
                         <Anchor point="TOPLEFT"><Offset><AbsDimension x="15" y="-15"/></Offset></Anchor>
@@ -1341,15 +1250,13 @@
                 </Texture>
             </Layer>
             <Layer level="ARTWORK">
-                <!-- The title plate at the 1.14 seat (OptionsFrameTemplates.xml l.244-255). -->
                 <Texture name="$parentHeader" file="Interface\DialogFrame\UI-DialogBox-Header">
                     <Size><AbsDimension x="300" y="68"/></Size>
                     <Anchors><Anchor point="TOP"><Offset><AbsDimension x="0" y="12"/></Offset></Anchor></Anchors>
                 </Texture>
             </Layer>
             <Layer level="OVERLAY">
-                <!-- The title on the plate, as a 1.12 dialog carries it. Not GameFontNormalMed1:
-                     GameMenuFrame.xml declares that after this file. -->
+                <!-- Not GameFontNormalMed1: GameMenuFrame.xml declares that after this file. -->
                 <FontString name="$parentTitleText" inherits="GameFontNormal" text="Options">
                     <Anchors>
                         <Anchor point="TOP" relativeTo="$parentHeader"><Offset><AbsDimension x="0" y="-14"/></Offset></Anchor>
@@ -1358,10 +1265,8 @@
             </Layer>
         </Layers>
         <Frames>
-            <!-- The two boxes, 1.14's OptionsFrameListTemplate (OptionsFrameTemplates.xml
-                 l.113-116): outlines, fill alpha 0, border LIGHTGRAY_FONT_COLOR. Declared first
-                 so siblings draw above. Deviation: tops at -52, not 1.14's -40, to clear the
-                 search box. -->
+            <!-- 1.14's OptionsFrameListTemplate outlines, declared first so siblings draw above;
+                 tops at -52 to clear the search box. -->
             <Frame name="$parentCategoryBox">
                 <Anchors>
                     <Anchor point="TOPLEFT"><Offset><AbsDimension x="10" y="-52"/></Offset></Anchor>
@@ -1396,10 +1301,8 @@
                     </OnLoad>
                 </Scripts>
             </Frame>
-            <!-- The tabs, seated the 1.14 way on the category box (InterfaceOptionsFrame.xml
-                 l.152-158), with the era MinimalTab's width and text. Static: only Game has pages.
-                 Each plate is one UI-Character tab piece at the era heights, flipped vertically,
-                 since 1.12 ships only bottom-tab plates. -->
+            <!-- Static: only Game has pages. Each plate is a UI-Character tab piece flipped, since
+                 1.12 ships only bottom-tab plates. -->
             <Button name="$parentGameTab">
                 <Size><AbsDimension x="72" y="37"/></Size>
                 <Anchors>
@@ -1450,17 +1353,17 @@
                 <NormalFont inherits="GameFontNormalSmall"/>
                 <HighlightFont inherits="GameFontNormalSmall"/>
                 <DisabledFont inherits="GameFontNormalSmall"/>
-                <!-- No addon list behind it: disabled, but in the era's unselected gold. -->
+                <!-- No addon list behind it: disabled, in the era's unselected gold. -->
                 <Scripts>
                     <OnLoad>self:Disable()</OnLoad>
                     <OnShow>OptionsTab_FitWidth(self)</OnShow>
                 </Scripts>
             </Button>
 
-            <!-- ── The category list (era CategoryList; static, it fits) ── -->
+            <!-- ── The category list ── -->
             <Frame name="$parentCategoryList">
                 <Size><AbsDimension x="199"/></Size>
-                <!-- The top: the box top (-52) plus the era's 12-unit list-to-box pad. -->
+                <!-- The box top (-52) plus the era's 12-unit pad. -->
                 <Anchors>
                     <Anchor point="TOPLEFT"><Offset><AbsDimension x="18" y="-64"/></Offset></Anchor>
                     <Anchor point="BOTTOMLEFT"><Offset><AbsDimension x="18" y="46"/></Offset></Anchor>
@@ -1521,7 +1424,7 @@
                 </Frames>
             </Frame>
 
-            <!-- ── The page area (era SettingsList) ── -->
+            <!-- ── The page area ── -->
             <Frame name="$parentContainer">
                 <Anchors>
                     <Anchor point="TOPLEFT" relativeTo="$parentCategoryList" relativePoint="TOPRIGHT"><Offset><AbsDimension x="16" y="0"/></Offset></Anchor>
@@ -1529,8 +1432,7 @@
                 </Anchors>
                 <Layers>
                     <Layer level="ARTWORK">
-                        <!-- The era options_horizontaldivider at (TOP, -50), as the colour fill
-                             it is: a 630x1 white row at about 0.3 alpha (atlas fdid 1318750). -->
+                        <!-- The era divider as a fill: 630x1 white at about 0.3. -->
                         <Texture name="$parentDivider">
                             <Size><AbsDimension y="1"/></Size>
                             <Anchors>
@@ -1576,9 +1478,7 @@
                             </OnClick>
                         </Scripts>
                     </Button>
-                    <!-- The page area scrolls, as the era SettingsList's ScrollBox does
-                         (Blizzard_SettingsList.xml l.48-58); a bar shows only when content
-                         outgrows the rect. enableMouse catches the wheel over blank area. -->
+                    <!-- enableMouse catches the wheel over blank area. -->
                     <ScrollFrame name="$parentScroll" enableMouse="true">
                         <Anchors>
                             <Anchor point="TOPLEFT"><Offset><AbsDimension x="0" y="-50"/></Offset></Anchor>
@@ -1593,28 +1493,23 @@
                             <OnScrollRangeChanged>BenillaScroll_SyncBar(this)</OnScrollRangeChanged>
                         </Scripts>
                         <Frames>
-                            <!-- The bar's trough seats itself on the bar its name minus "Trough"
-                                 names (BenillaScrollTrough_Seat). Declared before the body and the
-                                 bar so it draws beneath both. -->
+                            <!-- Declared before the body and the bar so it draws beneath both. -->
                             <Frame name="$parentBarTrough" inherits="BenillaScrollTroughTemplate"/>
-                            <!-- The page body. Named in full so every page and row name derives
-                                 from it. Sized, not anchored: SetScrollChild pins its TOPLEFT and
-                                 OptionsScroll_Fit keeps the size. -->
+                            <!-- Sized, not anchored: SetScrollChild pins its TOPLEFT and
+                                 OptionsScroll_Fit sizes it. -->
                             <Frame name="BenillaOptionsFrameContainerBody">
                                 <Size><AbsDimension x="665" y="563"/></Size>
                             <Layers>
                                 <Layer level="OVERLAY">
-                                    <!-- The no-match line (era SETTINGS_SEARCH_NOTHING_FOUND, at
-                                         the section header's seat). -->
+                                    <!-- The no-match line, at the section header's seat. -->
                                     <FontString name="$parentNoResults" inherits="GameFontHighlightLarge" justifyH="LEFT" hidden="true" text="No results found.">
                                         <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="17" y="-28"/></Offset></Anchor></Anchors>
                                     </FontString>
                                 </Layer>
                             </Layers>
                             <Frames>
-                                <!-- The Controls page. Labels are 1.12's GlobalStrings, the
-                                     era's for Auto Loot. Sticky Targeting is inverted in both
-                                     clients (1.12 checks it on deselectOnClick "0"). -->
+                                <!-- Sticky Targeting is inverted, as 1.12 checks it on
+                                     deselectOnClick "0". -->
                                 <Frame name="$parentControls" hidden="true">
                                     <Anchors>
                                         <Anchor point="TOPLEFT"/>
@@ -1661,9 +1556,9 @@
                                             <Scripts><OnLoad>OptionsRow_OnLoad(self, "BlockTrades", "Block Trades",
                                                 "OPTION_TOOLTIP_BLOCK_TRADES")</OnLoad></Scripts>
                                         </Frame>
-                                        <!-- Deviation: ships "1" where 1.12 registers "0"
-                                             (`cvars::REGISTERED`): off, a friendly cast falls
-                                             into the targeting cursor, which is not modelled. -->
+                                        <!-- Deviation: ships "1" where 1.12 registers "0": off, a
+                                             friendly cast falls into the targeting cursor, which is
+                                             not modelled. -->
                                         <Frame name="$parentRowAutoSelfCast" inherits="OptionsCheckboxRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" relativeTo="$parentRowBlockTrades" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
@@ -1702,9 +1597,8 @@
                                                 OptionsSliderRow_Setup(self, 0.5, 1.5, 0.05)
                                             </OnLoad></Scripts>
                                         </Frame>
-                                        <!-- 1.12's UIOptionsFrameCameraDropDown, with its
-                                             tooltips and values: Smart 1, Always 2, Never 0
-                                             (UIOptionsFrame.lua:525, 536, 547). -->
+                                        <!-- Smart 1, Always 2, Never 0 (UIOptionsFrame.lua:525,
+                                             536, 547). -->
                                         <Frame name="$parentRowCameraFollowStyle" inherits="OptionsDropdownRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" relativeTo="$parentRowMouseSpeed" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
@@ -1720,7 +1614,6 @@
                                                 })
                                             </OnLoad></Scripts>
                                         </Frame>
-                                        <!-- The 1.12 camera toggles and speed sliders. -->
                                         <Frame name="$parentRowFollowTerrain" inherits="OptionsCheckboxRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" relativeTo="$parentRowCameraFollowStyle" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
@@ -1757,9 +1650,9 @@
                                                 OptionsSliderRow_Setup(self, 90, 270, 10, "raw")
                                             </OnLoad></Scripts>
                                         </Frame>
-                                        <!-- One CVar, two consumers that move together: the
-                                             `0xf0000` nibble in `0x50e570`'s trace mask, and
-                                             `0x50e629`'s pivot floor and cap test. -->
+                                        <!-- One CVar, two consumers: the `0xf0000` nibble in
+                                             `0x50e570`'s trace mask and `0x50e629`'s pivot floor
+                                             and cap test. -->
                                         <Frame name="$parentRowWaterCollision" inherits="OptionsCheckboxRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" relativeTo="$parentRowAutoFollowSpeed" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
@@ -1780,8 +1673,7 @@
                                                     "OPTION_TOOLTIP_SMART_PIVOT")
                                             </OnLoad></Scripts>
                                         </Frame>
-                                        <!-- UIOptionsFrameSliders row 3, with the partner write
-                                             of cameraPitchMoveSpeed at half (l.355-356). -->
+                                        <!-- Writes cameraPitchMoveSpeed at half (l.354-356). -->
                                         <Frame name="$parentRowMouseLookSpeed" inherits="OptionsSliderRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" relativeTo="$parentRowSmartPivot" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
@@ -1807,9 +1699,7 @@
                                         </Frame>
                                     </Frames>
                                 </Frame>
-                                <!-- The Audio page: the era order (volumes, then enables) over
-                                     the 1.12 rows; the three volumes are children of Master, in
-                                     SoundOptionsFrame.lua's order. -->
+                                <!-- The three volumes are children of Master. -->
                                 <Frame name="$parentAudio" hidden="true">
                                     <Anchors>
                                         <Anchor point="TOPLEFT"/>
@@ -1843,7 +1733,6 @@
                                             <Scripts><OnLoad>
                                                 OptionsRow_OnLoad(self, "SoundVolume", "Sound Volume",
                                                     "OPTION_TOOLTIP_SOUND_VOLUME", 1)
-                                                -- Era parentInitializer (SettingsPanel.lua l.665).
                                                 self.parentRow = "RowMaster"
                                             </OnLoad></Scripts>
                                         </Frame>
@@ -1891,7 +1780,7 @@
                                                 self.soundQuirk = 1
                                             </OnLoad></Scripts>
                                         </Frame>
-                                        <!-- 1.12's checkbox 4 (SoundOptionsFrame.lua l.2). -->
+                                        <!-- 1.12's checkbox 4 (SoundOptionsFrame.lua:3). -->
                                         <Frame name="$parentRowEnableErrorSpeech" inherits="OptionsCheckboxRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" relativeTo="$parentRowEnableAmbience" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
@@ -1903,9 +1792,8 @@
                                                 self.soundQuirk = 1
                                             </OnLoad></Scripts>
                                         </Frame>
-                                        <!-- Deviation: an era row; 1.12 always mutes when the
-                                             window loses focus, which off matches. soundQuirk is
-                                             the panel's, so it applies here too. -->
+                                        <!-- An era row, not in 1.12, which always mutes when
+                                             the window loses focus; off matches it. -->
                                         <Frame name="$parentRowBackgroundSound" inherits="OptionsCheckboxRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" relativeTo="$parentRowEnableErrorSpeech" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
@@ -1920,9 +1808,8 @@
                                         </Frame>
                                     </Frames>
                                 </Frame>
-                                <!-- The Graphics page: 1.12's OptionsFrameSliders rows that have
-                                     a knob, bounds read from the table. Deviation: no useUiScale
-                                     checkbox; the UI scale always applies. -->
+                                <!-- No useUiScale checkbox, which 1.12 has: benilla has no
+                                     useUiScale, so the UI scale always applies. -->
                                 <Frame name="$parentGraphics" hidden="true">
                                     <Anchors>
                                         <Anchor point="TOPLEFT"/>
@@ -1940,8 +1827,7 @@
                                                 OptionsSliderRow_Setup(self, OptionsFrameSliders[1].minValue,
                                                     OptionsFrameSliders[1].maxValue,
                                                     OptionsFrameSliders[1].valueStep)
-                                                -- Era CommitFlag.Apply (Graphics.lua l.684): a
-                                                -- live write would rescale the slider mid-drag.
+                                                -- A live write would rescale the slider mid-drag.
                                                 self.deferred = 1
                                             </OnLoad></Scripts>
                                         </Frame>
@@ -1973,16 +1859,16 @@
                                                     { "Low", "Medium", "High" })
                                             </OnLoad></Scripts>
                                         </Frame>
-                                        <!-- The reference's slider 6 (`func = "Gamma"`): an API
-                                             row over GetGamma/SetGamma, whose unit is 1 - gamma;
-                                             writing `gamma` directly would invert the control. -->
+                                        <!-- An API row over GetGamma/SetGamma, whose unit is
+                                             `1 - gamma`; writing `gamma` would invert the
+                                             control. -->
                                         <Frame name="$parentRowBrightness" inherits="OptionsSliderRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" relativeTo="$parentRowWorldDetail" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
                                                 <Anchor point="TOPRIGHT" relativeTo="$parentRowWorldDetail" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
                                             </Anchors>
                                             <Scripts><OnLoad>
-                                                -- OptionsFrame_SetDefaults' default (l.441-445);
+                                                -- OptionsFrame_SetDefaults' default (l.444-445);
                                                 -- `or 1` covers a VM with no CVars.
                                                 local gd = tonumber(GetCVarDefault("gamma")) or 1
                                                 OptionsNumFuncRow_OnLoad(self, GetGamma, SetGamma,
@@ -1993,9 +1879,8 @@
                                                     OptionsFrameSliders[6].valueStep, "travel")
                                             </OnLoad></Scripts>
                                         </Frame>
-                                        <!-- The reference's slider 9, on the CVar directly, as
-                                             1.12's lands: with no SetweatherDensity global,
-                                             OptionsFrame_Save falls through to SetCVar. -->
+                                        <!-- On the CVar, as 1.12's lands: there is no
+                                             SetweatherDensity global. -->
                                         <Frame name="$parentRowWeatherDensity" inherits="OptionsSliderRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" relativeTo="$parentRowBrightness" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
@@ -2004,9 +1889,8 @@
                                             <Scripts><OnLoad>
                                                 OptionsRow_OnLoad(self, "weatherDensity", "Weather Intensity",
                                                     "OPTION_TOOLTIP_WEATHER_DETAIL")
-                                                -- Our stop names for the reference's rates:
-                                                -- `0x67b870` maps 0 to 3 onto the spawn-rate gains
-                                                -- {0.1, 0.33, 0.66, 1.0} in `[0x8680ec]`.
+                                                -- Our names for `0x67b870`'s spawn-rate gains
+                                                -- `{0.1, 0.33, 0.66, 1.0}` (`[0x8680ec]`).
                                                 OptionsSliderRow_Setup(self, OptionsFrameSliders[9].minValue,
                                                     OptionsFrameSliders[9].maxValue,
                                                     OptionsFrameSliders[9].valueStep, nil,
@@ -2020,10 +1904,8 @@
                                             </Anchors>
                                             <Scripts><OnLoad>
                                                 -- Deviation: modern Classic's two-entry Display
-                                                -- Mode dropdown (Graphics.lua in
-                                                -- Blizzard_SettingsDefinitions_Shared), as there
-                                                -- is no exclusive fullscreen; gxWindow "0" is the
-                                                -- borderless window. Applies on the click.
+                                                -- Mode, as there is no exclusive fullscreen;
+                                                -- gxWindow "0" is the borderless window.
                                                 OptionsRow_OnLoad(self, "gxWindow", "Display Mode",
                                                     "BENILLA_TOOLTIP_DISPLAY_MODE")
                                                 OptionsDropdownRow_Setup(self, {
@@ -2038,9 +1920,8 @@
                                                 <Anchor point="TOPRIGHT" relativeTo="$parentRowDisplayMode" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
                                             </Anchors>
                                             <Scripts><OnLoad>
-                                                -- 1.12's Video Options checkbox 5. Not deferred
-                                                -- despite its gxRestart = 1: the present mode
-                                                -- changes live.
+                                                -- Not deferred despite gxRestart: vsync changes
+                                                -- live.
                                                 OptionsRow_OnLoad(self, "gxVSync", "Vertical Sync",
                                                     "OPTION_TOOLTIP_VERTICAL_SYNC")
                                             </OnLoad></Scripts>
@@ -2051,11 +1932,10 @@
                                                 <Anchor point="TOPRIGHT" relativeTo="$parentRowVerticalSync" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
                                             </Anchors>
                                             <Scripts><OnLoad>
-                                                -- Deviation: benilla's own row (the reference draws
-                                                -- to the backbuffer), and no Multisampling row,
-                                                -- which misses alpha-tested cutouts. Deferred: a
-                                                -- live write rebuilds the world render target on
-                                                -- every drag tick.
+                                                -- Deviation: our own row (the reference draws to
+                                                -- the backbuffer), and no Multisampling, which
+                                                -- misses alpha-tested cutouts. Deferred: a write
+                                                -- rebuilds the render target.
                                                 OptionsRow_OnLoad(self, "renderScale", "Render Scale",
                                                     "BENILLA_TOOLTIP_RENDER_SCALE")
                                                 OptionsSliderRow_Setup(self, 0.5, 2.0, 0.05)
@@ -2063,9 +1943,8 @@
                                             </OnLoad></Scripts>
                                         </Frame>
                                     </Frames>
-                                    <!-- Re-apply OptionsFrameSliders' bounds on show, as
-                                         OptionsFrame_Load does, so an addon's write (pfUI's
-                                         hdgraphic) reaches the slider. fmt and stops are ours. -->
+                                    <!-- Re-apply the bounds on show, as OptionsFrame_Load does, so
+                                         an addon's write lands. -->
                                     <Scripts>
                                         <OnShow>
                                             for i, name in BENILLA_GRAPHICS_SLIDER_ROWS do
@@ -2079,8 +1958,7 @@
                                         </OnShow>
                                     </Scripts>
                                 </Frame>
-                                <!-- The Combat page: 1.12's AdvancedOptionsCombatText box as uvar
-                                     rows, each applying CombatText_UpdateOrLoad on the click. -->
+                                <!-- 1.12's AdvancedOptionsCombatText box, as uvar rows. -->
                                 <Frame name="$parentCombat" hidden="true">
                                     <Anchors>
                                         <Anchor point="TOPLEFT"/>
@@ -2272,8 +2150,8 @@
                                             </OnLoad></Scripts>
                                         </Frame>
                                         <!-- CombatDamage masters what floats over a unit, apart
-                                             from SHOW_COMBAT_TEXT (l.709-714); at "0" neither
-                                             `0x607140` nor `0x6128b0` floats anything. -->
+                                             from SHOW_COMBAT_TEXT; at "0" neither `0x607140` nor
+                                             `0x6128b0` floats anything. -->
                                         <Frame name="$parentRowShowDamage" inherits="OptionsCheckboxRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" relativeTo="$parentRowHonorGained" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
@@ -2284,8 +2162,8 @@
                                                     "OPTION_TOOLTIP_SHOW_DAMAGE")
                                             </OnLoad></Scripts>
                                         </Frame>
-                                        <!-- Off drops the whole SMSG_PERIODICAURALOG body
-                                             (`0x626dee`): lines, tick numbers and misses. -->
+                                        <!-- Off drops the SMSG_PERIODICAURALOG body
+                                             (`0x626dee`). -->
                                         <Frame name="$parentRowPeriodicDamage" inherits="OptionsCheckboxRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" relativeTo="$parentRowShowDamage" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
@@ -2312,11 +2190,9 @@
                                         </Frame>
                                     </Frames>
                                 </Frame>
-                                <!-- The Action Bars page. Bar rows are API rows over the
-                                     character's PLAYER_FIELD_BYTES byte 2, re-sent on change;
-                                     Always Show ActionBars is a uvar, since SetActionBarToggles
-                                     drops a fifth argument (`cmp esi,4` at `0x4e770e`). The
-                                     closures resolve their callees at click time, not load. -->
+                                <!-- Bar rows are API rows over PLAYER_FIELD_BYTES byte 2, resolved
+                                     at click time. Always Show is a uvar: SetActionBarToggles drops
+                                     a fifth argument (`0x4e770e`). -->
                                 <Frame name="$parentActionBars" hidden="true">
                                     <Anchors>
                                         <Anchor point="TOPLEFT"/>
@@ -2383,8 +2259,7 @@
                                                     "0", "Show Right ActionBar", "OPTION_TOOLTIP_SHOW_MULTIBAR3")
                                             </OnLoad></Scripts>
                                         </Frame>
-                                        <!-- A child of bar 3: MultiBarLeft shows only beside
-                                             MultiBarRight (l.722-726). -->
+                                        <!-- Needs Right ActionBar (UIOptionsFrame.lua:722-726). -->
                                         <Frame name="$parentRowMultiBar4" inherits="OptionsCheckboxRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" relativeTo="$parentRowMultiBar3" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
@@ -2413,8 +2288,7 @@
                                             <Scripts><OnLoad>
                                                 OptionsGlobalRow_OnLoad(self, "ALWAYS_SHOW_MULTIBARS",
                                                     "Always Show ActionBars", "OPTION_TOOLTIP_ALWAYS_SHOW_MULTIBARS")
-                                                -- The click arm (UIOptionsFrame.xml:683); the load
-                                                -- arm is the stock VARIABLES_LOADED one.
+                                                -- UIOptionsFrame.xml:680-683's click arm.
                                                 self.applyFunc = "MultiActionBar_UpdateGridVisibility"
                                             </OnLoad></Scripts>
                                         </Frame>
@@ -2430,17 +2304,15 @@
                                         </Frame>
                                     </Frames>
                                 </Frame>
-                                <!-- The Interface page. 62 (HIDE_OUTDOOR_WORLD_STATE) is absent:
-                                     no zone-objective tracker. A row has an applyFunc only when
-                                     something derived from it is set once and kept. -->
+                                <!-- No HIDE_OUTDOOR_WORLD_STATE row: there is no zone-objective
+                                     tracker. -->
                                 <Frame name="$parentInterface" hidden="true">
                                     <Anchors>
                                         <Anchor point="TOPLEFT"/>
                                         <Anchor point="BOTTOMRIGHT"/>
                                     </Anchors>
                                     <Frames>
-                                        <!-- CheckButtons 12 and 2 head the Display box; the
-                                             cvarEvent wakes TextStatusBar.xml's CVAR_UPDATE. -->
+                                        <!-- cvarEvent wakes TextStatusBar's CVAR_UPDATE. -->
                                         <Frame name="$parentRowEnhancedTooltips" inherits="OptionsCheckboxRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT"><Offset><AbsDimension x="10" y="-12"/></Offset></Anchor>
@@ -2460,9 +2332,8 @@
                                                 self.cvarEvent = "STATUS_BAR_TEXT"
                                             </OnLoad></Scripts>
                                         </Frame>
-                                        <!-- Saved globals in 1.12, not CVars. The mode row is a
-                                             child, as 1.12's dropdown hangs off CheckButton50 and
-                                             greys with it (l.694-700). -->
+                                        <!-- Saved globals in 1.12; the mode greys with its switch
+                                             (UIOptionsFrame.lua:697-701). -->
                                         <Frame name="$parentRowTargetOfTarget" inherits="OptionsCheckboxRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" relativeTo="$parentRowStatusText" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
@@ -2474,8 +2345,8 @@
                                                 self.applyFunc = "TargetofTarget_Update"
                                             </OnLoad></Scripts>
                                         </Frame>
-                                        <!-- Deviation: the label is ours; 1.12 never sets this
-                                             dropdown's. Entries are its strings in its order. -->
+                                        <!-- The label is ours, since 1.12 never sets this
+                                             dropdown's; entries are its strings in its order. -->
                                         <Frame name="$parentRowTargetOfTargetMode" inherits="OptionsDropdownRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" relativeTo="$parentRowTargetOfTarget" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
@@ -2494,8 +2365,8 @@
                                                 self.applyFunc = "TargetofTarget_Update"
                                             </OnLoad></Scripts>
                                         </Frame>
-                                        <!-- Bits of the character's PLAYER_FLAGS: API rows, as
-                                             1.12's `func` pair (UIOptionsFrame.lua l.18-19). -->
+                                        <!-- PLAYER_FLAGS bits, API rows
+                                             (UIOptionsFrame.lua:18-19). -->
                                         <Frame name="$parentRowShowCloak" inherits="OptionsCheckboxRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" relativeTo="$parentRowTargetOfTargetMode" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
@@ -2548,8 +2419,7 @@
                                                     "Automatic Quest Tracking", "OPTION_TOOLTIP_AUTO_QUEST_WATCH")
                                             </OnLoad></Scripts>
                                         </Frame>
-                                        <!-- CheckButton5, closing the chain under 66. The CVar
-                                             gates in the shared masker (`0x4a1a66`). -->
+                                        <!-- The CVar gates in the shared masker (`0x4a1a66`). -->
                                         <Frame name="$parentRowProfanityFilter" inherits="OptionsCheckboxRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" relativeTo="$parentRowAutoQuestWatch" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
@@ -2558,23 +2428,22 @@
                                             <Scripts><OnLoad>OptionsRow_OnLoad(self, "profanityFilter", "Profanity Filter",
                                                 "OPTION_TOOLTIP_PROFANITY_FILTER")</OnLoad></Scripts>
                                         </Frame>
-                                        <!-- The Help box, 28 -> 44 -> 29. Reset Tutorials does
-                                             not ship: ticking this row resets them. -->
+                                        <!-- No Reset Tutorials button: ticking this row resets
+                                             them. -->
                                         <Frame name="$parentRowShowTutorials" inherits="OptionsCheckboxRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" relativeTo="$parentRowProfanityFilter" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
                                                 <Anchor point="TOPRIGHT" relativeTo="$parentRowProfanityFilter" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
                                             </Anchors>
-                                            <!-- An API row over the tutorial bank, default "1"
-                                                 (UIOptionsFrame_SetDefaults l.645). -->
+                                            <!-- Default "1" (UIOptionsFrame.lua:645-646). -->
                                             <Scripts><OnLoad>
                                                 OptionsFuncRow_OnLoad(self, TutorialsEnabled,
                                                     BenillaOptionsFrame_SetTutorialsEnabled, "1",
                                                     "Show Tutorials", "OPTION_TOOLTIP_SHOW_TUTORIALS")
                                             </OnLoad></Scripts>
                                         </Frame>
-                                        <!-- The label and its tooltip name the tips
-                                             differently; both are 1.12's strings. -->
+                                        <!-- Label and tooltip name the tips differently; both are
+                                             1.12's. -->
                                         <Frame name="$parentRowTipOfTheDay" inherits="OptionsCheckboxRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" relativeTo="$parentRowShowTutorials" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
@@ -2596,9 +2465,8 @@
                                         </Frame>
                                     </Frames>
                                 </Frame>
-                                <!-- The Chat page. The chat window's look stays on the chat tab's
-                                     menu, as in 1.12. Party Chat Bubbles is not a child: the
-                                     client gates party bubbles on their own CVar. -->
+                                <!-- Party Chat Bubbles is not a child: the client gates party
+                                     bubbles on their own CVar. -->
                                 <Frame name="$parentChat" hidden="true">
                                     <Anchors>
                                         <Anchor point="TOPLEFT"/>
@@ -2611,7 +2479,7 @@
                                                 <Anchor point="TOPRIGHT"><Offset><AbsDimension x="-20" y="-12"/></Offset></Anchor>
                                             </Anchors>
                                             <Scripts><OnLoad>
-                                                <!-- 1.12 registers it "0" (cvars.rs cites it). -->
+                                                <!-- 1.12 registers it "0". -->
                                                 OptionsRow_OnLoad(self, "guildMemberNotify",
                                                     "Guild Member Alert",
                                                     "OPTION_TOOLTIP_GUILDMEMBER_ALERT")
@@ -2663,9 +2531,9 @@
                                                     "Show Party Chat Bubbles", "OPTION_TOOLTIP_PARTY_CHAT_BUBBLES")
                                             </OnLoad></Scripts>
                                         </Frame>
-                                        <!-- Inverted, as 1.12 checks it on "0" (l.253) and flips
-                                             the write (l.337). The filter drops a line matching
-                                             SpamMessages.dbc, in every chat type but
+                                        <!-- Inverted, as 1.12 reads (UIOptionsFrame.lua:253-255)
+                                             and writes it (l.337). The filter drops a
+                                             SpamMessages.dbc match in every chat type but
                                              CHAT_MSG_FILTERED (`0x49aad2`). -->
                                         <Frame name="$parentRowSpamFilter" inherits="OptionsCheckboxRowTemplate">
                                             <Anchors>
@@ -2680,10 +2548,9 @@
                                         </Frame>
                                     </Frames>
                                 </Frame>
-                                <!-- The Nameplates page: the V-key plates (`[0xc4da34]` bits 0
-                                     and 3), then the 1.12 UnitName* checkboxes. Deviation: 1.12
-                                     has no plate rows, only the keybinding; these are era rows
-                                     named after BINDING_NAME_NAMEPLATES. -->
+                                <!-- The Nameplates page: the V-key plates (`[0xc4da34]` bits 0 and
+                                     3), then 1.12's UnitName* checkboxes. The plate rows are era
+                                     rows: 1.12 has only the keybinding. -->
                                 <Frame name="$parentNameplates" hidden="true">
                                     <Anchors>
                                         <Anchor point="TOPLEFT"/>
@@ -2714,8 +2581,7 @@
                                             <Scripts><OnLoad>OptionsRow_OnLoad(self, "UnitNamePlayer", "Player Names",
                                                 "OPTION_TOOLTIP_SHOW_PLAYER_NAMES")</OnLoad></Scripts>
                                         </Frame>
-                                        <!-- A child of Player Names, as CheckButton22 hangs off
-                                             21; it gates the guild line of the name stack. -->
+                                        <!-- A child of Player Names, as CheckButton22 of 21. -->
                                         <Frame name="$parentRowGuildNames" inherits="OptionsCheckboxRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" relativeTo="$parentRowPlayerNames" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
@@ -2745,9 +2611,8 @@
                                         </Frame>
                                     </Frames>
                                 </Frame>
-                                <!-- The Keybindings page (its logic is KeyBindingsPage.xml).
-                                     enableMouse: rows are plain Frames, so the page itself
-                                     catches the wheel. -->
+                                <!-- enableMouse: rows are plain Frames, so the page catches the
+                                     wheel. -->
                                 <Frame name="$parentKeybindings" hidden="true" enableMouse="true">
                                     <Anchors>
                                         <Anchor point="TOPLEFT"/>
@@ -2761,8 +2626,7 @@
                                         </Layer>
                                     </Layers>
                                     <Frames>
-                                        <!-- The box at CENTER-40, not CENTER-80: the 1.12
-                                             string is longer than the era's and clips there. -->
+                                        <!-- CENTER-40: the 1.12 string clips at CENTER-80. -->
                                         <Frame name="$parentCharacterRow" enableMouse="true">
                                             <Size><AbsDimension y="26"/></Size>
                                             <Anchors>
@@ -2919,12 +2783,11 @@
                                         <Anchor point="TOPRIGHT" relativeTo="$parentRow18" relativePoint="BOTTOMRIGHT"/>
                                     </Anchors>
                                 </Frame>
-                                        <!-- The bar's trough (1.12 authors it per window), named
-                                             off the bar for BenillaScrollBar_SetShown. Declared
-                                             before the faux frame so it draws beneath it. -->
+                                        <!-- Declared before the faux frame so it draws beneath
+                                             it. -->
                                         <Frame name="$parentScrollFrameScrollBarTrough" inherits="BenillaScrollTroughTemplate"/>
-                                        <!-- Ends at -32 so the kit's bar, hung 6 right, rides
-                                             the -26..-10 gutter (the TrainerFrame seating). -->
+                                        <!-- Ends at -32, so the kit's bar rides the -26..-10
+                                             gutter. -->
                                         <ScrollFrame name="$parentScrollFrame" inherits="FauxScrollFrameTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT"><Offset><AbsDimension x="10" y="-47"/></Offset></Anchor>
@@ -2932,13 +2795,11 @@
                                             </Anchors>
                                             <Scripts>
                                                 <OnLoad>ScrollFrame_OnLoad()</OnLoad>
-                                                <!-- The 1.12 kit updates `offset` only here.
-                                                     KEYBINDINGS_ROW_HEIGHT must stay a global:
-                                                     this chunk cannot see another file's local. -->
+                                                <!-- KEYBINDINGS_ROW_HEIGHT must stay a global: this
+                                                     chunk cannot see another file's local. -->
                                                 <OnVerticalScroll>FauxScrollFrame_OnVerticalScroll(KEYBINDINGS_ROW_HEIGHT, KeyBindingsPage_Update)</OnVerticalScroll>
-                                                <!-- Replaces the inherited wheel handler, which
-                                                     fires before the page's guard: while a capsule
-                                                     is armed the wheel binds, never scrolls. -->
+                                                <!-- Fires before the page's guard, so it is
+                                                     replaced: an armed capsule binds the wheel. -->
                                                 <OnMouseWheel>
                                                     if not KeyBindingsPage.selected then
                                                         ScrollFrameTemplate_OnMouseWheel(arg1)
@@ -2947,8 +2808,7 @@
                                             </Scripts>
                                         </ScrollFrame>
                                     </Frames>
-                                    <!-- Rows and the bar bubble the wheel here; an armed
-                                         capsule binds it instead. -->
+                                    <!-- Rows and the bar bubble the wheel here. -->
                                     <Scripts>
                                         <OnMouseWheel>
                                             if not KeyBindingsPage.selected then
@@ -2957,8 +2817,7 @@
                                         </OnMouseWheel>
                                     </Scripts>
                                 </Frame>
-                                <!-- The search heads, one per OPTIONS_PAGE_ROWS page; a new
-                                     page needs one here. -->
+                                <!-- One per OPTIONS_PAGE_ROWS page. -->
                                 <Button name="$parentSearchHeadControls" inherits="OptionsSearchHeadTemplate">
                                     <Scripts><OnLoad>
                                         self.categoryKey = "Controls"
@@ -3013,8 +2872,7 @@
                                         getglobal(self:GetName() .. "Label"):SetText("Keybindings")
                                     </OnLoad></Scripts>
                                 </Button>
-                                <!-- The keybinding search pool: one frame per
-                                     KEYBINDINGS_SEARCH_ROWS (8). -->
+                                <!-- KEYBINDINGS_SEARCH_ROWS (8) frames. -->
                                 <Frame name="$parentKeybindSearch1" inherits="KeyBindingRowTemplate" hidden="true"/>
                                 <Frame name="$parentKeybindSearch2" inherits="KeyBindingRowTemplate" hidden="true"/>
                                 <Frame name="$parentKeybindSearch3" inherits="KeyBindingRowTemplate" hidden="true"/>
@@ -3025,9 +2883,8 @@
                                 <Frame name="$parentKeybindSearch8" inherits="KeyBindingRowTemplate" hidden="true"/>
                             </Frames>
                             </Frame>
-                            <!-- The page scroll bar, inside the right edge in the rows' free
-                                 -26..-10 gutter. Inset 21/20 so the trough, which hangs 21 above
-                                 and 20 below the bar, lands flush on the page rect. -->
+                            <!-- Inset 21/20 so the trough, which hangs 21 above and 20 below the
+                                 bar, lands flush. -->
                             <Slider name="$parentBar" inherits="BenillaScrollBarTemplate" hidden="true">
                                 <Anchors>
                                     <Anchor point="TOPRIGHT"><Offset><AbsDimension x="-10" y="-21"/></Offset></Anchor>
@@ -3040,12 +2897,10 @@
                 </Frames>
             </Frame>
 
-            <!-- The search box: the era SearchBoxTemplate geometry in the 1.12 Common-Input-Border
-                 (InputBoxTemplate UVs). Deviation: no magnifier, which has no 1.12 art, so the
-                 text inset is 5, not 16. -->
+            <!-- The search box: the era geometry in the 1.12 Common-Input-Border; no magnifier,
+                 which has no 1.12 art, so the text inset is 5, not 16. -->
             <EditBox name="$parentSearchBox" autoFocus="false" letters="64">
                 <Size><AbsDimension x="350" y="22"/></Size>
-                <!-- The era seat (SettingsPanel.xml l.76-81). -->
                 <Anchors>
                     <Anchor point="BOTTOMRIGHT" relativeTo="$parentContainer" relativePoint="TOPRIGHT"><Offset><AbsDimension x="4" y="20"/></Offset></Anchor>
                 </Anchors>
@@ -3122,7 +2977,6 @@
             </EditBox>
 
             <!-- ── Close: no corner X; the red button and ESC close the window ── -->
-            <!-- The red Close (era SettingsPanel.CloseButton). -->
             <Button name="$parentCloseButton" inherits="OptionsRedButtonTemplate" text="Close">
                 <Anchors><Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-16" y="16"/></Offset></Anchor></Anchors>
                 <Scripts>
@@ -3132,7 +2986,7 @@
                     </OnClick>
                 </Scripts>
             </Button>
-            <!-- The era Apply (Blizzard_SettingsPanel.xml l.52-57), shown with a pending edit. -->
+            <!-- The era Apply, shown with a pending edit. -->
             <Button name="$parentApplyButton" inherits="OptionsRedButtonTemplate" text="Apply" hidden="true">
                 <Anchors><Anchor point="RIGHT" relativeTo="$parentCloseButton" relativePoint="LEFT"><Offset><AbsDimension x="-2" y="0"/></Offset></Anchor></Anchors>
                 <Scripts>
@@ -3148,8 +3002,8 @@
                 BenillaOptionsFrame_SelectCategory(this.selectedCategory or "Controls")
                 if UpdateMicroButtons then UpdateMicroButtons() end
             </OnShow>
-            <!-- Hiding ends a search (the era's ClearSearchBox), discards pending edits, and
-                 disarms a bind capture, which would otherwise swallow all input. -->
+            <!-- Hiding ends a search, discards pending edits, and disarms a bind capture, which
+                 would otherwise swallow all input. -->
             <OnHide>
                 BenillaOptionsFrameSearchBox:SetText("")
                 OptionsPage_DiscardPending()
@@ -3159,16 +3013,11 @@
             </OnHide>
         </Scripts>
     </Frame>
-    <!-- The reference's three options windows load hidden off the player's chain; nothing
-         aliases a stock name onto this window or shows a stock frame. This one is
-         BenillaOptionsFrame because the stock OptionsFrame.xml owns `OptionsFrame`.
-         GameMenuFrame.xml wraps ToggleGameMenu, IsOptionFrameOpen and UpdateMicroButtons, which
-         name only the stock three. Chat-tab hover (FloatingChatFrame.lua l.842/860) reads the
-         hidden UIOptionsFrame, so it works while this window, which does not cover the chat, is
-         open. -->
+    <!-- BenillaOptionsFrame, because the stock OptionsFrame.xml owns `OptionsFrame`. Chat-tab hover
+         (FloatingChatFrame.lua:842/860) reads the hidden UIOptionsFrame, so it works while this
+         window, which does not cover the chat, is open. -->
     <Script><![CDATA[
-        -- This window's UIPanelWindows row, the reference's OptionsFrame values (UIParent.lua:16):
-        -- the centre slot, openable while dead. UIParent.xml, which makes the table, loads first.
+        -- The reference's OptionsFrame row (UIParent.lua:16): the centre slot, openable while dead.
         UIPanelWindows["BenillaOptionsFrame"] = { area = "center", pushable = 0, whileDead = 1 }
     ]]></Script>
 </Ui>

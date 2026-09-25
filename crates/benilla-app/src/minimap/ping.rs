@@ -1,54 +1,27 @@
-//! The minimap **ping** (the feature 0471 paused and this brings back).
+//! The minimap ping, engine-owned and pinned to a world point.
 //!
-//! ## The pin
+//! The world `(x, y)` is the only stored position: the stock `Minimap_OnUpdate` re-seats the
+//! `MiniMapPing` frame every frame from `GetPingPosition()`, the normalized offset
+//! [`drive_minimap_ping`] republishes against the live view radius, so the marker follows the pan
+//! and the zoom with no second copy to fall out of step.
 //!
-//! A ping marks a **place in the world**, so a world point `(x, y)` is the only thing this module
-//! stores. Where it lands on screen is *derived* — by the stock `Minimap_OnUpdate`, which
-//! re-seats the `MiniMapPing` frame every frame from `GetPingPosition()`, the normalized offset
-//! [`drive_minimap_ping`] republishes from the pin against the live view radius. It therefore
-//! cannot drift from the map, cannot lag the pan by a frame, and cannot survive a zoom change at
-//! the old scale: there is no second copy of the position to fall out of step with.
+//! - In: the stock `Minimap_OnClick` calls `Minimap:PingLocation(dx, dy)` in UI units from the
+//!   centre; the renderer converts it with the geometry of the frame it draws: UI units × the seam
+//!   scale = window px, ÷ `px_per_yd` = yards.
+//! - Across: our ping sends `MSG_MINIMAP_PING` (raw world floats, relayed to the rest of the group
+//!   only, `GroupHandler.cpp:384-391`); a member's seats the same way. A ping seats locally at
+//!   click time, so a solo ping works.
+//! - Out: `MINIMAP_PING (unitToken, nx, ny)` fires with the relay `0x4ee330`'s offsets
+//!   `(−dy·k, dx·k)`, `k = 1/(2·radius)`; `Minimap:GetPingPosition()` reads them back.
 //!
-//! That is the whole difference from the first attempt, which stored the
-//! world point in the engine but drew the marker from **Lua** off a stale push; 1596 §2 has the
-//! autopsy.
+//! The reference keeps the world point in two statics nothing clears (`0xbc787c`/`0xbc7880`), and
+//! the stock `Minimap.lua` owns everything visible: it shows the `MiniMapPing` `<Model>`
+//! (`Interface\MiniMap\Ping\MinimapPing.mdx`, rendered by `crate::ui_models`), holds it 5 s and
+//! fades it 0.5 s (`MINIMAPPING_TIMER`, `MINIMAPPING_FADE_TIMER`). `WorldMapPing` is the same model
+//! on the world map.
 //!
-//! ## The three legs
-//!
-//! - **In** — a click reaches Lua's `Minimap_OnClick` (the stock one, hookable: the corpus's
-//!   `CleanMinimap` replaces that global outright), which calls `Minimap:PingLocation(dx, dy)`
-//!   with centre-relative offsets in **UI units**. [`seat_click`]'s caller drains it in the *same
-//!   frame it draws the map*, converting through that frame's own geometry: UI units × the 0582
-//!   seam scale = window px, ÷ `px_per_yd` = yards. (Skipping that seam multiply is what put the
-//!   first version's ping ~27 % too far from the player at 1080p.)
-//! - **Across** — our own ping sends `MSG_MINIMAP_PING` (raw world floats; the server relays them
-//!   verbatim to the rest of the group and nowhere else). A group member's arrives through the
-//!   session event and seats the same way. A ping is seated **locally at click time**, never
-//!   waited for off the wire: vanilla pings work solo.
-//! - **Out** — `MINIMAP_PING (unitToken, nx, ny)` fires for addons, with the same normalized
-//!   offsets the relay `0x4ee330` hands Lua (`(−dy·k, dx·k)`, `k = 1/(2·radius)`).
-//!   `Minimap:GetPingPosition()` reads the live value back.
-//!
-//! ## Lifetime and pixels — the stock `Minimap.lua`'s and its `<Model>`'s, not ours
-//!
-//! The reference splits the ping in two: the engine stores the world point in a pair of statics
-//! **nothing ever clears** (`0xbc787c`/`0xbc7880` — six instructions touch those cells
-//! and the only zeroing is a CRT initializer), and FrameXML owns everything visible — the
-//! `MiniMapPing` `<Model>` it shows on `MINIMAP_PING`, re-seats every frame from
-//! `GetPingPosition()`, holds 5 s (`MINIMAPPING_TIMER`), "fades" 0.5 s through a `SetAlpha(255·t)`
-//! that clamps to full until the last ~2 ms, and hides. Since 1751's swap that file runs here
-//! verbatim (1974), and since decision 2013 the `<Model>` it shows **renders its own file**
-//! (`Interface\MiniMap\Ping\MinimapPing.mdx`, through `crate::ui_models`): the spinner on its
-//! global-sequence clock, the static centre, the ring on the looping Stand — the model's own
-//! bones, weight tracks and additive quads, on the pane's private clock that runs only while the
-//! frame is shown. The sprite this module used to draw in their place (1596/1599's
-//! byte-measured re-expression of those quads) is gone with it, and so is the world-map ping gap
-//! 1980 named: `WorldMapPing` is the same file on the map sheet.
-//!
-//! What is *not* a lifetime: proximity. The first version applied the client's 10-yd
-//! `d² < 100` auto-clear to the party ping, and that clear belongs to the **`SMSG_GOSSIP_POI`
-//! marker** — a different feature in a different slot (`0x6d99aa`–`0x6d9a4c`). Walking to your
-//! own ping used to delete it mid-hold.
+//! Reaching a ping does not clear it: the reference's 10-yd `d² < 100` auto-clear belongs to the
+//! `SMSG_GOSSIP_POI` marker (`0x6d99aa`–`0x6d9a4c`).
 
 use bevy::prelude::*;
 
@@ -59,50 +32,37 @@ use super::blips::BlipCtx;
 use crate::net::{ClientCommand, Guid, NetCommands, SelfPlayer};
 use crate::player::Player;
 
-/// The stored ping — the reference's two statics. One, never cleared: the reference keeps no
-/// list, and no map tag either (a worldport mid-ping re-projects the old point against the new
-/// map's player position, which the stock Lua's disc test then hides — reproduced as is).
+/// The stored ping, the reference's two statics: one, never cleared, with no map tag (after a
+/// worldport the old point re-projects and the stock Lua's disc test hides it).
 struct LivePing {
-    /// **The pin**: the WoW `(x, y)` this ping marks. The only stored position; the screen seat is
-    /// re-derived from it every frame.
+    /// The WoW `(x, y)` this ping marks; the screen seat is re-derived from it every frame.
     world: (f32, f32),
-    /// The pinger's guid, `0` = ourselves — resolved to the `MINIMAP_PING` event's unit token, and
-    /// the test for "this is ours, put it on the wire".
+    /// The pinger's guid, `0` for ourselves: the event's unit token, and whether it is sent.
     sender: u64,
 }
 
-/// The engine-owned ping state. Seated by a click (drained in the renderer, with
-/// that frame's geometry) or by a group member's `MSG_MINIMAP_PING`; announced by
-/// [`drive_minimap_ping`]; drawn by the stock `MiniMapPing` frame for exactly as long as that
-/// frame shows itself.
+/// The engine-owned ping, seated by a click or a group member's `MSG_MINIMAP_PING`, announced by
+/// [`drive_minimap_ping`] and drawn by the stock `MiniMapPing` frame.
 #[derive(Resource, Default)]
 pub(crate) struct MinimapPing {
     live: Option<LivePing>,
-    /// A ping seated since the last [`drive_minimap_ping`] — it still owes the world an outbound
-    /// `MSG_MINIMAP_PING` (if it is ours) and a `MINIMAP_PING` event (either way).
+    /// Seated since the last [`drive_minimap_ping`]: owes a `MINIMAP_PING` event, and the wire send
+    /// if ours.
     fresh: bool,
 }
 
 impl MinimapPing {
-    /// Seat a ping at a world point. Re-pinging replaces: the reference tolerates the same, and a
-    /// group echo of our own click lands on the spot we already drew (`Minimap_SetPing` twice on
-    /// one spot just restarts the timer).
+    /// Seat a ping at a world point, replacing the live one, as the reference's re-ping does.
     pub(crate) fn seat(&mut self, world: (f32, f32), sender: u64) {
         self.live = Some(LivePing { world, sender });
         self.fresh = true;
     }
 }
 
-/// Convert a `Minimap:PingLocation(x, y)` click into the world point it names, drain-side.
-///
-/// `ui` is centre-relative in **UI units** (x right, y up — `GetCursorPosition()`'s space);
-/// `seam` is window px per UI unit ([`crate::ui_script::seam_scale`]), and `ctx` is the geometry
-/// of the map **as drawn this frame**. The mapping is [`BlipCtx::offset`]'s inverse: screen right
-/// = −WoW y (west), screen up = +WoW x (north).
-///
-/// `None` when the click is outside the disc — the reference's `Minimap_OnClick` makes the same
-/// test in Lua (`sqrt(x² + y²) < width/2`), stated here in yards because that is the space the
-/// answer lives in.
+/// A `Minimap:PingLocation(x, y)` click to the world point it names: `ui` is centre-relative UI
+/// units (x right, y up), `seam` window px per UI unit ([`crate::ui_script::seam_scale`]), `ctx`
+/// the map as drawn this frame. The inverse of [`BlipCtx::offset`]: screen right is −WoW y, screen
+/// up +WoW x. `None` outside the disc, the stock test (`Minimap.lua:135`) in yards.
 fn click_to_world(ctx: &BlipCtx, ui: (f32, f32), seam: f32) -> Option<(f32, f32)> {
     if ctx.px_per_yd <= 0.0 || seam <= 0.0 {
         return None;
@@ -115,25 +75,16 @@ fn click_to_world(ctx: &BlipCtx, ui: (f32, f32), seam: f32) -> Option<(f32, f32)
     Some((ctx.wx + up_yd, ctx.wy - right_yd))
 }
 
-/// Seat this frame's `Minimap:PingLocation` click — inside the renderer, against the geometry
-/// the player actually clicked on and the map actually drew at.
-///
-/// The seat happens here rather than in a system of its own precisely so there is no window in
-/// which a click is held against a *stale* view scale: the first version parked the click for a
-/// separate system that read the scale the renderer had left behind on the previous frame, and
-/// dropped the click outright whenever that leftover was still zero. (The *drain* is the caller's,
-/// one step earlier, so the click is spent even on a frame that draws no map — see there.)
+/// Seat this frame's `Minimap:PingLocation` click inside the renderer, against the geometry the
+/// map drew this frame, so a click is never converted at a stale scale.
 pub(super) fn seat_click(ctx: &BlipCtx, ping: &mut MinimapPing, click: Option<(f32, f32)>) {
     if let Some(world) = click.and_then(|c| click_to_world(ctx, c, ctx.seam)) {
         ping.seat(world, 0);
     }
 }
 
-/// Announce a fresh ping and republish the position — everything that is *not* geometry.
-///
-/// Runs before the script tick so the `MINIMAP_PING` event and the position behind
-/// `Minimap:GetPingPosition()` land in the same tick, and so an addon's handler sees a ping that
-/// is already seated (the renderer seated it at the end of the previous frame).
+/// Republish the ping's normalized position and announce a fresh ping. Runs before the script
+/// tick, so the `MINIMAP_PING` event and `Minimap:GetPingPosition()` land in the same tick.
 pub(super) fn drive_minimap_ping(
     script: Option<bevy::ecs::system::NonSendMut<UiScript>>,
     mut ping: ResMut<MinimapPing>,
@@ -149,11 +100,8 @@ pub(super) fn drive_minimap_ping(
         return;
     };
 
-    // The normalized offsets, recomputed from the pin every tick against the live view radius —
-    // the byte-verified relay's own `(−dy·k, dx·k)`, `k = 1/(2·radius)`. With the map hidden there
-    // is no live index to read (the extract publishes no slot), so the event's numbers fall back
-    // to the registered default zoom: an addon still hears the ping, at the scale the map would
-    // have if it were up.
+    // The relay's `(−dy·k, dx·k)`, `k = 1/(2·radius)`, recomputed every tick. With the map hidden
+    // there is no live zoom, so the registered default stands in.
     let wow = bevy_to_wow(player.pos);
     let radius = super::view_radius_yd(
         widget
@@ -176,18 +124,16 @@ pub(super) fn drive_minimap_ping(
     let Some(live) = ping.live.as_ref() else {
         return;
     };
-    // Ours goes on the wire — raw world floats — but only when there is a group to relay them to.
-    // The reference gates its send the same way (`PingLocation` `0x4eeca0` sends only when
-    // grouped, VERIFIED) while still pinging locally, which is why a solo ping works at all and
-    // why the marker is drawn at click time rather than awaited off the wire.
+    // Ours goes on the wire only when grouped, as the reference's `PingLocation` (`0x4eeca0`)
+    // sends; the local ping stands either way.
     if live.sender == 0 && group.in_group {
         let _ = commands.0.send(ClientCommand::MinimapPing {
             x: live.world.0,
             y: live.world.1,
         });
     }
-    // The event's unit token: ourselves, or the sender's party slot. A sender we cannot resolve
-    // (they left the group mid-flight) still pings — the reference's own Lua ignores arg1.
+    // The event's unit token: ourselves or the sender's party slot. An unresolved sender still
+    // pings; the stock handler ignores arg1.
     let self_guid = self_q.iter().next().map(|g| g.0);
     let token = if live.sender == 0 || Some(live.sender) == self_guid {
         "player".to_string()
@@ -207,8 +153,7 @@ pub(super) fn drive_minimap_ping(
     );
 }
 
-/// Register the ping's packet handler — called from [`super::MinimapPlugin`] (in the net handler
-/// table since 2313).
+/// Register the ping's packet handler.
 pub(super) fn register(app: &mut App) {
     use crate::net::NetHandlerApp;
     app.net_handler(
@@ -217,10 +162,7 @@ pub(super) fn register(app: &mut App) {
     );
 }
 
-/// A group member pinged. The wire carries raw world floats and the relay is
-/// stateless in the reference too — we seat them as the pin and the minimap derives the rest.
-/// The server only relays a ping between people who are grouped, and a ping from another map
-/// would be dropped by the renderer's own map test anyway.
+/// A group member's ping: raw world floats, seated as the pin.
 fn on_minimap_ping(In(ev): In<benilla_protocol::SessionEvent>, mut ping: ResMut<MinimapPing>) {
     if let benilla_protocol::SessionEvent::MinimapPing { guid, x, y } = ev {
         ping.seat((x, y), guid);
@@ -251,16 +193,13 @@ mod tests {
         }
     }
 
-    /// **The first version's ping landed in the wrong place**: the click
-    /// arrives in UI units and the map's `px_per_yd` is in *window* px, and it divided one by the
-    /// other. At the shipped default (0.9 uiScale on a 1080p window) the seam is ≈1.27, so every
-    /// ping seated ≈27 % further from the player than the player clicked — worse the further out
-    /// you clicked, which is exactly what "it pings somewhere else" looks like.
+    /// The click is in UI units and `px_per_yd` in window px: at 0.9 uiScale on a 1080p window the
+    /// seam is ≈1.27, and a conversion that skips it seats every ping ≈27 % too far out.
     #[test]
     fn a_click_converts_through_the_seam_scale() {
         let c = ctx();
         let seam = 1080.0 / 768.0 * 0.9; // the shipped default at 1080p
-                                         // 20 UI units right of centre → 20·seam window px → ÷ px_per_yd yards WEST (−y).
+                                         // 20 UI units right → 20·seam px → yards west (−y).
         let (x, y) = click_to_world(&c, (20.0, 0.0), seam).expect("inside the disc");
         let expect_yd = 20.0 * seam / c.px_per_yd;
         assert!((x - 0.0).abs() < 1e-3, "no northing from a due-east click");
@@ -269,7 +208,7 @@ mod tests {
             "screen right is WoW −y (west): {y} vs {}",
             -expect_yd
         );
-        // The bug: dropping the seam multiply shortens every click by the same factor.
+        // Without the seam multiply every click lands off by the same factor.
         let naive = 20.0 / c.px_per_yd;
         assert!(
             (expect_yd - naive).abs() > 5.0,
@@ -277,7 +216,7 @@ mod tests {
         );
     }
 
-    /// Screen up is WoW +x (north) — [`BlipCtx::offset`]'s inverse, so a ping seated from a click
+    /// Screen up is WoW +x (north), [`BlipCtx::offset`]'s inverse, so a ping seated from a click
     /// draws back under the cursor.
     #[test]
     fn a_click_round_trips_through_the_blip_mapping() {
@@ -303,8 +242,8 @@ mod tests {
         );
     }
 
-    /// **The pin.** The stored form is a world point, so walking moves the marker across the map
-    /// by exactly the player's displacement — no re-seating, no second copy to drift.
+    /// The stored form is a world point, so walking moves the marker by exactly the player's
+    /// displacement.
     #[test]
     fn the_marker_tracks_the_world_as_the_player_walks() {
         let mut c = ctx();
@@ -322,11 +261,9 @@ mod tests {
         );
     }
 
-    /// **No proximity clear**. The first version applied the client's 10-yd
-    /// `d² < 100` auto-clear to the party ping; that clear belongs to the `SMSG_GOSSIP_POI` marker
-    /// (`0x6d99aa`–`0x6d9a4c`), and `MSG_MINIMAP_PING` has no C-side storage to clear at all.
-    /// Standing on your own ping must not delete it — and a frame with no click seats nothing
-    /// over it.
+    /// No proximity clear: the 10-yd `d² < 100` auto-clear is the `SMSG_GOSSIP_POI` marker's
+    /// (`0x6d99aa`–`0x6d9a4c`), and the ping's statics are never cleared. A frame with no click
+    /// seats nothing over it.
     #[test]
     fn reaching_the_ping_does_not_clear_it() {
         let mut c = ctx();
@@ -354,9 +291,7 @@ mod tests {
         assert!(ping.fresh, "a seat owes the world its event");
     }
 
-    /// A degenerate frame (the widget has not drawn yet) drops the click rather than seating a
-    /// ping at a garbage point — and, unlike the first version, that is the *only* case in which
-    /// a click is dropped for want of a scale.
+    /// A click before the map has drawn (no scale) is dropped, not seated at a garbage point.
     #[test]
     fn a_click_before_the_map_has_drawn_is_dropped() {
         let mut c = ctx();

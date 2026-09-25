@@ -1,6 +1,6 @@
-// The glue screens' Bevy UI nine-patch and tiled shader on the UI gamma composite lane: every glue
-// `Backdrop` draws through it. Vendored from `bevy_ui_render` 0.18.1 `src/ui_texture_slice.wgsl`,
-// verbatim except `linear_to_srgb` and the final colour; re-diff on every Bevy upgrade.
+// The glue screens' Bevy UI nine-patch shader, which every glue `Backdrop` draws through. Vendored
+// from `bevy_ui_render` 0.18.1 `src/ui_texture_slice.wgsl`, verbatim except `linear_to_srgb` and
+// the final colour; re-diff on every Bevy upgrade.
 
 #import bevy_render::view::View;
 #import bevy_render::globals::Globals;
@@ -135,8 +135,8 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
     let atlas_uv = in.atlas_rect.xy + uv * (in.atlas_rect.zw - in.atlas_rect.xy);
 
     // ── Changed from upstream ──
-    // Upstream returns `in.color * textureSample(...)`. Both factors go back to gamma bytes before
-    // the multiply, the reference's gamma-space `SetBackdropColor` tint, so the blend is byte math.
+    // Upstream returns `in.color * textureSample(...)`; both factors go back to bytes first, as the
+    // reference's gamma-space `SetBackdropColor` tint.
     let texel = textureSample(sprite_texture, sprite_sampler, atlas_uv);
     return vec4<f32>(
         linear_to_srgb(in.color.rgb) * linear_to_srgb(texel.rgb),

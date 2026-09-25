@@ -1,10 +1,6 @@
-//! The realm list's input — the reference's `RealmSelectButton_OnClick`/`OnDoubleClick`,
-//! `RealmList_OnOk`/`OnCancel`, `RealmListTab_OnClick`, `SortRealms`, and `RealmList_OnKeyDown`.
-//!
-//! **Every exit hides the dialog and touches nothing else.** `RealmList_OnOk` is
-//! `PlaySound; RealmList:Hide(); ChangeRealm(...)` and `RealmList_OnCancel` is
-//! `PlaySound; RealmList:Hide(); RealmListDialogCancelled()` — neither names a screen, because the
-//! screen it is standing on is the one the player goes back to (see [`super`]).
+//! The realm list's input: the reference's row clicks, `RealmList_OnOk`/`OnCancel`, the column
+//! sort and `RealmList_OnKeyDown`. Every exit only hides the dialog; neither names a screen, so the
+//! player stays on the screen underneath.
 
 use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
@@ -16,7 +12,7 @@ use crate::sound::GlueSound;
 use super::screen::{RealmAction, MAX_ROWS};
 use super::{is_down, Realms};
 
-/// The double-click window — the same conventional interval the select screen uses.
+/// The double-click window, the interval the character select screen uses.
 const DOUBLE_CLICK_SECS: f32 = 0.4;
 
 /// Clicks: a row selects (a second one enters), the column headers sort, Okay enters, Cancel and
@@ -42,8 +38,7 @@ pub(super) fn clicks(
                 let Some(name) = realm_at(&realms, row) else {
                     continue;
                 };
-                // `RealmSelectButton_OnClick` also resets the refresh timer — a player working
-                // down the list should not have it re-sort under them every five seconds.
+                // `RealmSelectButton_OnClick` also resets the refresh timer.
                 realms.refresh_in = super::REFRESH_SECS;
                 let double = last_click
                     .as_ref()
@@ -57,8 +52,7 @@ pub(super) fn clicks(
             RealmAction::Ok => enter = true,
             RealmAction::Cancel => leave = Some(true),
             RealmAction::Close => leave = Some(false),
-            // `realm_set_primary_key` (0x46e9b0) — move-to-front, and the clicked column keeps
-            // the direction it already had unless it was already primary. See `Sort::click`.
+            // `0x46e9b0`: the clicked column moves to the front of the sort keys.
             RealmAction::Sort(key) => realms.sort.click(key),
         }
     }
@@ -109,9 +103,8 @@ pub(super) fn keys(
         scroll_into_view(&mut realms, to, n);
     }
 
-    // The wheel scrolls the window over the list, in the reference's own 16 px steps translated
-    // back to rows (`RealmListScrollFrame_OnVerticalScroll` divides the bar value by
-    // `REALM_BUTTON_HEIGHT`, so one notch is one row).
+    // One notch is one row: `RealmListScrollFrame_OnVerticalScroll` divides the bar value by
+    // `REALM_BUTTON_HEIGHT`.
     let notches = wheel_rows(&mut wheel_carry, wheel.read());
     if notches != 0 {
         let max = rows.len().saturating_sub(MAX_ROWS);
@@ -120,10 +113,8 @@ pub(super) fn keys(
     }
 }
 
-/// The rows this frame's wheel messages scroll the list by — positive is DOWN the list, one row
-/// per whole notch ([`WheelNotches`]). Each message is normalised to lines in its own unit first:
-/// a trackpad sends a gesture as a trickle of `Pixel` messages, and stepping a row per message
-/// ran the list to its end on a gentle swipe.
+/// Rows this frame's wheel messages scroll by, positive down, one per whole notch; each message is
+/// normalised to lines first, since a trackpad sends a trickle of `Pixel` messages.
 fn wheel_rows<'a>(
     carry: &mut WheelNotches,
     wheel: impl IntoIterator<Item = &'a MouseWheel>,
@@ -134,7 +125,7 @@ fn wheel_rows<'a>(
         .sum()
 }
 
-/// The realm on a given **screen** row, honouring the scroll offset.
+/// The realm on a given screen row, honouring the scroll offset.
 fn realm_at(realms: &Realms, row: usize) -> Option<String> {
     let rows = realms.rows();
     rows.get(realms.offset + row)
@@ -151,24 +142,14 @@ fn scroll_into_view(realms: &mut Realms, row: usize, total: usize) {
     }
 }
 
-/// `RealmList_OnCancel` — and `RealmListCloseButton`, which differs only in the sound
-/// (`with_sound`).
+/// `RealmList_OnCancel`, and the close X without the sound. `RealmListDialogCancelled`
+/// (`0x46ed20` -> `0x46b810`) does nothing off the login screen and there closes the realmd
+/// socket (`0x5b3320`) with no screen change; the character park ignores `Abandon` and the login
+/// park re-parks, dropping the socket.
 ///
-/// **The park's answer to `Abandon` is the whole difference between the two contexts**, and
-/// neither costs this function a branch — which is exactly the reference's own shape. Its
-/// `RealmListDialogCancelled` (`0x46ed20` → `0x46b810`, VERIFIED) opens by comparing the current
-/// glue screen's name against `"login"`: **not equal and it returns immediately**, so from
-/// character select the native does *nothing at all* — the realmd link, the world session and the
-/// operation record are untouched and `Hide()` is the entire effect. Equal, and it tail-jumps
-/// `CLoginMgr::Cancel` (`0x5b3320`), closing the realmd socket — **without any `SetGlueScreen`**,
-/// because the login screen was never left. Ours matches on both legs: the character park ignores
-/// `Abandon`, and the login-side park re-parks, which drops the `Logon` and its socket.
-///
-/// **One divergence, stated.** In the reference the X reaches only `CancelRealmListQuery`
-/// (`0x46ed10` → `0x46b7e0`: cancel the pending `COP_GET_REALMS` record, send nothing, close
-/// nothing), so from a login it leaves the realmd link up. Ours abandons on both, because our IO
-/// thread *parks* on the question rather than polling for it: a hidden dialog with the thread
-/// still blocked at the realm park is precisely the desync this whole redesign exists to remove.
+/// Deviation: the reference's X only cancels the pending realm query (`0x46ed10` -> `0x46b7e0`)
+/// and leaves the realmd link up; ours abandons, because the IO thread blocks at the realm park
+/// until answered.
 fn do_cancel(
     realms: &mut Realms,
     choice: &RealmChoice,
@@ -184,18 +165,11 @@ fn do_cancel(
 
 /// `RealmList_OnOk`: play the click, hide the frame, answer the park.
 ///
-/// **Deferred: the `REALM_IS_FULL` confirm.** The reference raises a Yes/No dialog first when the
-/// chosen realm's load band reads `Full` *and* you have no characters on it
-/// (`GlueDialogTypes["REALM_IS_FULL"]`). Ours enters directly, because the two-button `GlueDialog`
-/// that would ask lives inside the login screen (`crate::login::screen::spawn_dialog`) and lifting
-/// it into `crate::glue` is its own change — one this screen should not smuggle in. Shipping the
-/// check without the dialog would be worse than not having it: OK would silently do nothing.
-///
-/// The gap is narrow. `Full` is the `0x80` flag sentinel, which vmangos does not set, so the
-/// dialog is unreachable against the servers benilla connects to today.
+/// Not built: the reference's `REALM_IS_FULL` Yes/No confirm for a `Full` realm with no characters
+/// on it; ours enters directly. `Full` is the `0x80` flag, which vmangos never sets.
 fn try_enter(realms: &mut Realms, choice: &RealmChoice, sounds: &mut MessageWriter<GlueSound>) {
     let Some(realm) = realms.selected() else {
-        return; // nothing highlighted — the reference's Okay is disabled here
+        return; // the reference disables Okay with nothing highlighted
     };
     if is_down(realm) {
         return; // the reference disables OK for an offline realm
@@ -220,8 +194,7 @@ mod tests {
         }
     }
 
-    /// **A trackpad trickle scrolls the rows it adds up to, not a row per message** — ten
-    /// `Pixel` messages of a tenth of a line apiece are one notch, so at most one row.
+    /// Ten `Pixel` messages of a tenth of a line are one notch, so at most one row.
     #[test]
     fn a_trackpad_trickle_scrolls_only_the_rows_it_adds_up_to() {
         let mut carry = WheelNotches::default();
@@ -237,7 +210,7 @@ mod tests {
         );
     }
 
-    /// A mouse wheel's notch is one `Line` message and one row, as it always was.
+    /// A mouse wheel's notch is one `Line` message and one row.
     #[test]
     fn a_line_notch_scrolls_one_row() {
         let mut carry = WheelNotches::default();

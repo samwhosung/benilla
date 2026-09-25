@@ -1,45 +1,18 @@
-//! `CreateFrame`'s fourth argument against the **real** `assets/ui` templates — the corpus idiom,
-//! end to end.
-//!
-//! The unit tests for the runtime template path live in
-//! `benilla-ui/src/script/tests/create_frame_template.rs` and drive synthetic templates. This one
-//! exists because the thing an addon actually types is
-//!
-//! ```lua
-//! local tab = CreateFrame("Button", "MyTab", UIParent, "TabButtonTemplate")
-//! getglobal("MyTab".."Text"):SetText("Hi")
-//! ```
-//!
-//! against a template *we* wrote, loaded the way the client loads it — six hundred lines of real
-//! FrameXML above it, a font registry, an anchor graph — not a four-line fixture. Every assertion
-//! below is a global an addon would reach for.
+//! `CreateFrame`'s fourth argument against real FrameXML templates, loaded the way the client
+//! loads them: the addon idiom `CreateFrame("Button", "MyTab", UIParent, "TabButtonTemplate")`
+//! then `getglobal("MyTab".."Text")`.
 
 mod common;
 
 use benilla_ui::script::UiScript;
 
-/// The prefix of `benilla.toc`'s load order these templates need: the font registry, the panel kit,
-/// UIParent (the parent every addon passes), and the faux-scroll kit.
-///
-/// **Two of the templates under test are the REFERENCE's since 1860** — `FauxScrollFrameTemplate`
-/// and `TabButtonTemplate` were ours until the dead-copy sweep, and both now come off the player's
-/// chain from `Interface\FrameXML\UIPanelTemplates.xml`, seated below `UIParent.xml` exactly as
-/// the manifest seats it. So this list carries the chain pair and the loader below has to be able
-/// to READ a chain entry, which a disk-only provider under `assets/ui` cannot.
+/// The prefix of `benilla.toc`'s load order these templates need. `FauxScrollFrameTemplate` and
+/// `TabButtonTemplate` are the stock ones, from `UIPanelTemplates.xml` on the player's chain.
 const FILES: &[&str] = &[
     "Interface\\FrameXML\\Fonts.xml",
-    // A REGRESSION GUARD, not a dependency (1923). FadingFrame.xml's entire body is a single
-    // `<Script file="FadingFrame.lua"/>`, so it loads correctly ONLY if that relative reference
-    // resolves against the document's own directory. Load it through the path-less `loader::load`
-    // and the base is "", the ref stays bare, the provider misses, and the assert below fires —
-    // which is exactly what it did before this file passed the path.
-    //
-    // It is self-contained on BOTH axes, and both had to be checked: zero `inherits=`, AND its Lua
-    // has no file-scope statements at all — only function definitions. The first guard tried here
-    // was CombatFeedback.xml, which also has zero `inherits=` but whose Lua calls `TEXT()` at file
-    // scope (l.7); that global is BasicControls.xml's, so it needed a dependency after all.
-    // `UnitFrame.lua` fails the same way (`TEXT(MANA)`). Structural dependencies are not the only
-    // kind.
+    // A guard, not a dependency: its whole body is `<Script file="FadingFrame.lua"/>`, which loads
+    // only if resolved against the document's own directory. It has no `inherits=` and its Lua
+    // has no file-scope statements, so it needs nothing before it.
     "Interface\\FrameXML\\FadingFrame.xml",
     r"Interface\FrameXML\MoneyFrame.lua",
     r"Interface\FrameXML\MoneyFrame.xml",
@@ -49,7 +22,7 @@ const FILES: &[&str] = &[
     "Interface\\FrameXML\\GlobalStrings.lua",
     "Interface\\FrameXML\\BasicControls.xml", // `TEXT`, which StaticPopup.lua reads at file scope
     "Interface\\FrameXML\\LocaleProperties.lua",
-    "Interface\\FrameXML\\StaticPopup.xml", // the dialog engine (1960)
+    "Interface\\FrameXML\\StaticPopup.xml", // the dialog engine
     "ScrollTemplates.xml",
 ];
 
@@ -59,20 +32,15 @@ fn load_ui(script: &UiScript) {
     }
 }
 
-/// The line an addon writes, and the globals it reads on the next one.
-///
-/// `TabButtonTemplate` (`UIPanelTemplates.xml`) is a `<Button>` carrying a `<Size>`, six `<Layers>`
-/// slices, a `<ButtonText name="$parentText">`, a `<HighlightTexture
-/// name="$parentHighlightTexture">`, the three state fonts and an `<OnUpdate>` — i.e. every
-/// decoration pass at once. Instantiating it as `BenillaTemplateProbeTab` must publish
-/// `BenillaTemplateProbeTab*`, and must publish nothing named after the template.
+/// `TabButtonTemplate` (`UIPanelTemplates.xml:303`) exercises every decoration pass at once; an
+/// instance publishes its parts under its own name and nothing under the template's.
 #[test]
 fn a_real_template_reaches_an_addon_through_create_frame() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     load_ui(&s);
-    // Clear anything the UI load itself had to say; what follows is this call's alone.
+    // Clear what the UI load itself reported.
     let _ = s.take_warnings();
     let _ = s.take_errors();
 
@@ -81,11 +49,8 @@ fn a_real_template_reaches_an_addon_through_create_frame() {
     )
     .expect("the corpus idiom must not error");
 
-    // The template's authored `<Size>` is 115x32 in BOTH our retired copy and the reference's, but
-    // the reference's `<OnLoad>` calls `PanelTemplates_TabResize(0)` — it FITS the tab to its text
-    // on load, and a freshly created tab has none, so what survives is the two end caps. Ours left
-    // the fit to an OnUpdate settle (1004), which is why this used to read the pre-fit 115. The
-    // height is untouched by the fit and still the template's (1860).
+    // The authored `<Size>` is 115x32, but the `<OnLoad>` calls `PanelTemplates_TabResize(0)`
+    // (`UIPanelTemplates.xml:371`), fitting an empty tab to its end caps; the height is untouched.
     let (w, h) = s
         .eval::<(f32, f32)>("return ProbeTab:GetWidth(), ProbeTab:GetHeight()")
         .unwrap();
@@ -93,8 +58,7 @@ fn a_real_template_reaches_an_addon_through_create_frame() {
     let caps = s
         .eval::<f32>("return 2 * BenillaTemplateProbeTabLeft:GetWidth()")
         .unwrap();
-    // `caps` plus the empty label's one-unit floor (`FONTSTRING_MIN_SPAN`) — the point is that it
-    // collapsed to its end caps, nowhere near the authored 115.
+    // `caps` plus the empty label's one-unit floor (`FONTSTRING_MIN_SPAN`).
     assert!(
         w >= caps && w <= caps + 1.5,
         "an unlabelled tab fits down to its two end caps: {w} vs {caps}"
@@ -106,8 +70,7 @@ fn a_real_template_reaches_an_addon_through_create_frame() {
         "the parent argument, not the template's idea of one"
     );
 
-    // The globals an addon addresses the parts by — every one named against the INSTANCE. The
-    // reference's own kit does exactly this (`getglobal(tabName.."Text")` in PanelTemplates).
+    // The part globals, named for the instance, as `UIPanelTemplates.lua:42` reads them.
     for suffix in [
         "Text",             // <ButtonText name="$parentText">
         "HighlightTexture", // <HighlightTexture name="$parentHighlightTexture">
@@ -141,10 +104,7 @@ fn a_real_template_reaches_an_addon_through_create_frame() {
         "Hi"
     );
 
-    // The template's <Scripts> reached the frame. **`OnLoad`, not `OnUpdate`, since 1860** — the
-    // OnUpdate was our own text-fit settle (1004), and the reference's `TabButtonTemplate` declares
-    // exactly one handler: an `<OnLoad>` that calls `PanelTemplates_TabResize(0)` and sizes the
-    // highlight. That it ran is what the collapsed width above already proves.
+    // The stock template declares one handler, the `<OnLoad>`.
     assert!(
         s.eval::<bool>(r#"return ProbeTab:GetScript("OnLoad") ~= nil"#)
             .unwrap(),
@@ -159,21 +119,9 @@ fn a_real_template_reaches_an_addon_through_create_frame() {
     );
 }
 
-/// The template the corpus actually asks for, and the handler that proves the naming rule.
-///
-/// `FauxScrollFrameTemplate` is the most-instantiated template in the 218-addon vanilla corpus that
-/// benilla declares at all — 15 `CreateFrame` call sites across AckisRecipeList, FonzAppraiser,
-/// Leader, Optional and oRA2. Its `<OnLoad>` is `ScrollFrame_OnLoad`, whose very first line is
-///
-/// ```lua
-/// getglobal(this:GetName() .. "ScrollBarScrollDownButton"):Disable()
-/// ```
-///
-/// so the handler **dies on a nil index** unless the caller's own name won all the way down: the
-/// template's nested `<Slider name="$parentScrollBar">` had to become `<caller>ScrollBar`, and
-/// *that* slider's own inherited `$parentScrollDownButton` had to become
-/// `<caller>ScrollBarScrollDownButton`. Two levels of `$parent`, composed through a runtime
-/// template, checked by shipped code rather than by an assertion we wrote to match.
+/// `FauxScrollFrameTemplate`, the addon corpus's most-instantiated template, runs
+/// `ScrollFrame_OnLoad` (`UIPanelTemplates.lua:244`), which indexes
+/// `<name>ScrollBarScrollDownButton` first: two levels of `$parent` through a runtime template.
 #[test]
 fn the_corpus_favourite_template_composes_parent_two_levels_deep() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -184,18 +132,13 @@ fn the_corpus_favourite_template_composes_parent_two_levels_deep() {
     let _ = s.take_errors();
 
     s.run(
-        // **A `ScrollFrame`, not a `Frame`, since 1860.** `FauxScrollFrameTemplate` is now the
-        // reference's own and the reference declares it as a `<ScrollFrame>` carrying a
-        // `<ScrollChild>`; `framexml::merge` takes the OVERRIDING node's tag, so asking for a
-        // "Frame" keeps the frame a Frame and the ScrollFrame-only parts — the scroll child among
-        // them — cannot apply. Our retired copy was a plain `<Frame>`, which is why the corpus
-        // idiom used to read that way here.
+        // The stock template is a `<ScrollFrame>` with a `<ScrollChild>`, and `framexml::merge`
+        // takes the overriding node's tag, so a "Frame" would drop the scroll-only parts.
         r#"Scroller = CreateFrame("ScrollFrame", "BenillaTemplateProbeScroll", UIParent, "FauxScrollFrameTemplate")"#,
     )
     .expect("the corpus's most-used template must not error");
 
-    // `ScrollFrame_OnLoad` ran to completion — it set `this.offset`, its last statement, which it
-    // cannot reach if either getglobal above returned nil.
+    // `this.offset` is `ScrollFrame_OnLoad`'s last statement.
     assert_eq!(
         s.eval::<f32>("return Scroller.offset").unwrap(),
         0.0,

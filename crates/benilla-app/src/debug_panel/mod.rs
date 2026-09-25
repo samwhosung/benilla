@@ -1,31 +1,7 @@
-//! Standardized in-window debug panel (egui).
-//!
-//! The panel is a rounded, translucent **window floated off the top-right corner** (a gap from the
-//! edges, like the perf pill) — it overlays the 3D view, which renders full-screen underneath and is
-//! never letterboxed. Fixed width (no resize handle). [`DEV_CHORD`]+`D` shows/hides it (1043, 1048).
-//! Its look (translucent dark backing + crisp text) is shared with the perf pill and the inspector card
-//! via [`OVERLAY_FILL`] / [`overlay_text`], so the dev overlays read as one family.
-//!
-//! ## How it's wired (so future subsystems slot in cleanly)
-//! - [`DebugState`] is one resource grouped into per-subsystem sections ([`ModelDebug`],
-//!   [`LightingDebug`], …; new subsystems add sibling fields).
-//! - The panel UI ([`debug_panel_ui`]) reads/writes that resource via egui widgets.
-//! - Small **apply** systems turn the resource into world changes (e.g. [`apply_model_visibility`]).
-//!   Each only does work when its slice of the state actually changes (tracked with a `Local`
-//!   snapshot), so leaving the panel open costs nothing. (Lighting is now resolved in `lighting.rs`;
-//!   this section is time controls + a readout, not knobs.)
-//! - [`EguiPointerOver`] publishes "the mouse is talking to the egui overlays" each pass; both it
-//!   and the combined source of truth gameplay reads ([`crate::ui_script::PointerOverUi`]) are
-//!   *defined* by that combiner, and this module only writes them (dev
-//!   plugins must be droppable without breaking gameplay reads, so gameplay may not name a
-//!   dev-owned type).
-//!
-//! Adding a section for a new subsystem is therefore: a `FooDebug` field, a few widgets in the
-//! panel, and one `apply_foo` system — no plumbing changes. (Weather is the worked example.)
-//!
-//! Rendering uses bevy_egui's manual-context mode: auto-creation is disabled in [`DebugPanelPlugin`]
-//! and a dedicated full-window overlay camera composites egui over the finished frame (a transparent
-//! canvas, premultiplied over the swapchain). See bevy_egui's `side_panel` example.
+//! The in-window egui debug panel, floated top-right over the full-screen world and toggled by
+//! [`DEV_CHORD`]+`D`. It edits [`DebugState`]; apply systems elsewhere turn that into world
+//! changes. [`EguiPointerOver`] is owned by `ui_script` and only written here, so gameplay never
+//! names a dev-owned type. egui runs in manual-context mode on its own overlay camera.
 
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::CameraOutputMode;
@@ -42,58 +18,37 @@ use benilla_world::lighting::{ClockSource, GameClock, WowLighting};
 use benilla_world::model_render::{ModelKind, ModelPart};
 use benilla_world::modkeys::{dev_chord, DEV_CHORD};
 
-/// The egui half of the pointer arbitration: this panel *writes* it, `ui_script` owns it —
-/// so a build without these overlays still compiles gameplay's reads (the
-/// module-doc note above). `InspectMode`, the other half of 0026's named pair, lives there too
-/// and is imported by the two files that touch it (`inspect`, `journal`).
+/// The egui half of the pointer arbitration: written here, owned by `ui_script`.
 use crate::ui_script::EguiPointerOver;
 
 mod inspect;
 mod journal;
 
-/// The dev state this panel edits — resource-only, faithful defaults (the
-/// always-present config layer; this module is only its editor). The engine owns and inits it,
-/// and the per-frame model-visibility apply system that reads its toggles is `model_render`'s.
+/// The dev state this panel edits; the engine owns and inits it.
 use benilla_world::dev_state::DebugState;
 use benilla_world::model_render::{blend_index, kind_index};
 
-/// The World section — identity/map/zone/position readout + the copy-`.go xyz` affordance.
+/// The World section: identity, map, zone and position, and the `.go xyz` copy.
 mod world;
 use world::{world_section, WorldReadout};
 
-/// Shared look for the floating dev overlays — this panel, the perf pill, the inspector card — so they
-/// read as one family. The backing is a **near-solid dark** so the bright text keeps strong contrast
-/// *no matter the scene behind it*: a lightly-translucent box let bright terrain/sky bleed through and
-/// washed the text out, making legibility depend on the view. [`overlay_text`] sets the bright primary
-/// tone; [`OVERLAY_TEXT_DIM`] the readable secondary one. (Lower the alpha for a more see-through box —
-/// at the cost of view-independent contrast.)
+/// The dev overlays' shared backing, near-solid so the text contrast does not depend on the scene.
 pub(crate) const OVERLAY_FILL: egui::Color32 = egui::Color32::from_black_alpha(224);
-/// Primary overlay text — a crisp near-white that reads over the translucent fill (egui's dark default
-/// is only `gray(140)`). Set as the ui's `override_text_color`; explicit `.color(...)` calls still win.
+/// Primary overlay text, set as `override_text_color`; an explicit `.color(...)` still wins.
 pub(crate) const OVERLAY_TEXT: egui::Color32 = egui::Color32::from_gray(235);
-/// De-emphasised overlay text (ids, distances, hints): dimmer than [`OVERLAY_TEXT`] but still crisp on
-/// the translucent backing.
+/// De-emphasised overlay text: ids, distances, hints.
 pub(crate) const OVERLAY_TEXT_DIM: egui::Color32 = egui::Color32::from_gray(180);
 
-/// Apply the shared overlay text treatment for the **compact, fixed-size** surfaces (perf pill,
-/// inspector card): brighten to [`OVERLAY_TEXT`] and disable wrapping. No-wrap also kills the
-/// first-frame layout flash where a fresh auto-sized container hasn't cached its width yet and a label
-/// like "60 fps" briefly breaks across two lines. (The resizable debug panel brightens the same way but
-/// keeps wrapping, so its labels reflow instead of clipping when narrowed.)
+/// Overlay text for the compact fixed-size surfaces: [`OVERLAY_TEXT`], no wrapping, which also
+/// stops a fresh auto-sized container breaking a label across lines on its first frame.
 pub(crate) fn overlay_text(ui: &mut egui::Ui) {
     let style = ui.style_mut();
     style.visuals.override_text_color = Some(OVERLAY_TEXT);
     style.wrap_mode = Some(egui::TextWrapMode::Extend);
 }
 
-/// Strip the **Tab** key from egui's per-frame input so egui never treats it as focus navigation.
-///
-/// Tab is a bound game key — `TargetNearestEnemy`. Left to itself, egui reads Tab at
-/// `begin_pass` (`Focus::begin_pass`) and pulls keyboard focus into whatever focusable widget is on
-/// screen — the always-on perf pill — ringing it and then owning the keyboard. Our egui surfaces are
-/// mouse-driven dev overlays with no tab-to-next-field need, so we drop Tab before the pass sees it.
-/// Bevy's own `ButtonInput<KeyCode>` (what `target::scan` reads) is populated independently from the
-/// same winit events, so TAB targeting still fires — this only removes the phantom egui focus.
+/// Strip Tab from egui's input: it is bound to `TargetNearestEnemy`, and egui would take it as
+/// focus navigation and grab the keyboard. Bevy's `ButtonInput<KeyCode>` still sees it.
 fn strip_egui_tab_focus(mut inputs: Query<&mut EguiInput>) {
     for mut input in &mut inputs {
         input.events.retain(|e| {
@@ -114,10 +69,7 @@ fn track_pointer_over_ui(mut contexts: EguiContexts, mut over: ResMut<EguiPointe
     Ok(())
 }
 
-/// The panel's display order for [`ModelKind`], and the label it writes. Free functions rather
-/// than an inherent `impl`: the type is engine vocabulary now (`model_render`) and an inherent impl
-/// cannot follow it across the crate boundary decision 1160 is drawing — the *panel's* opinion
-/// about how to present it belongs to the panel either way.
+/// The panel's display order for [`ModelKind`].
 const MODEL_KINDS: [ModelKind; 4] = [
     ModelKind::Doodad,
     ModelKind::Wmo,
@@ -155,56 +107,44 @@ fn source_label(s: ClockSource) -> &'static str {
     }
 }
 
-/// Adds the egui plugin, the debug-state resource, the panel UI, and the apply systems.
 pub(crate) use inspect::MouseoverTarget;
 
+/// Adds the egui plugin, the panel UI, the inspector and the cast journal.
 pub struct DebugPanelPlugin;
 
 impl Plugin for DebugPanelPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(EguiPlugin::default());
-        // Manual context mode: we host egui on a dedicated overlay camera (below) so we can inset the
-        // *world* camera's viewport without clipping the panel. Disable right after adding the plugin
-        // (the resource exists by then) — before the auto-create system runs at startup.
+        // Manual context mode, egui hosted on its own overlay camera: disable auto-creation right
+        // after adding the plugin, before its startup system runs.
         {
             let mut egui = app.world_mut().resource_mut::<EguiGlobalSettings>();
             egui.auto_create_primary_context = false;
-            // Don't let egui drive the OS cursor icon. The player hides the OS cursor and draws its
-            // own `Point.blp` sprite, so egui's per-hover `CursorIcon::System` inserts are pointless
-            // churn (and a dev panel doesn't need resize/text cursors).
+            // The player hides the OS cursor and draws `Point.blp`, so egui must not drive it.
             egui.enable_cursor_icon_updates = false;
         }
 
-        // `DebugState` itself is `benilla_world::dev_state`'s and the engine inits it — this panel is only
-        // its editor, and eight other subsystems read it whether or not the panel
-        // is installed.
-        // The inspector surface and the cast journal — the two instruments that stood on
-        // `interact` and were registered by it until decision 1160's stage zero. The mouseover
-        // pick comes with them: it never ran except while the inspector was armed, so it was never
-        // the engine's picking, only this overlay's. (`InspectMode` and `EguiPointerOver`, which
-        // this panel writes, are inited by their owner `UiScriptPlugin` — 1174.)
+        // The inspector, its mouseover pick and the cast journal. `DebugState`, `InspectMode` and
+        // `EguiPointerOver` are inited by their owners.
         app.init_resource::<MouseoverTarget>()
             .init_resource::<journal::CastJournal>()
-            // After the UI keyboard feed because `update_mouseover` reads `PointerOverUi`, whose
-            // player-UI half `UiInput` writes — the pick must see this frame's hover, not last
-            // frame's. (`toggle_inspect` itself no longer needs the ordering: its dev chord can't be
-            // typed text, so it reads no keyboard-capture flag — decision 0585.)
+            // After `UiInput`: `update_mouseover` reads `PointerOverUi`, whose player-UI half it
+            // writes, and must see this frame's hover.
             .add_systems(
                 Update,
                 (inspect::toggle_inspect, inspect::update_mouseover)
                     .chain()
                     .after(crate::ui_script::UiInput),
             )
-            // Always recording (messages persist two frames — no ordering constraint needed).
+            // Always recording; messages persist two frames, so no ordering is needed.
             .add_systems(Update, journal::record_casts)
             .add_systems(
                 EguiPrimaryContextPass,
                 (inspect::inspect_ui, journal::journal_ui),
             )
             .add_systems(Startup, spawn_egui_camera)
-            // Keep Tab out of egui: it's a bound game key, never focus-navigation for our overlays.
-            // Runs after bevy_egui fills `EguiInput` and before egui's pass consumes it (the seam
-            // bevy_egui documents for input edits).
+            // Between bevy_egui filling `EguiInput` and the pass consuming it, the seam bevy_egui
+            // documents for input edits.
             .add_systems(
                 PreUpdate,
                 strip_egui_tab_focus
@@ -215,12 +155,10 @@ impl Plugin for DebugPanelPlugin {
                 EguiPrimaryContextPass,
                 (debug_panel_ui, track_pointer_over_ui),
             )
-            // No ordering against the UI keyboard feed: the toggle is a dev chord (1043), which no
-            // focused EditBox can consume and which needs no capture gate — the same reason `perf`'s
-            // and `sound`'s toggles never needed one.
+            // No ordering against `UiInput`: a dev chord cannot be typed text.
             .add_systems(Update, (toggle_panel, gate_egui_lane).chain())
-            // The gate's other half: a gated frame still owes bevy_egui a prepared (empty) pass —
-            // between the end-pass it skipped and the output consumer that doesn't (1452).
+            // A gated frame still owes bevy_egui a prepared empty output, between the end pass it
+            // skipped and the output consumer that still runs.
             .add_systems(
                 PostUpdate,
                 feed_gated_egui_output
@@ -230,29 +168,13 @@ impl Plugin for DebugPanelPlugin {
     }
 }
 
-/// The 1445 gate's missing half. Upstream, `run_manually` means "the app will run
-/// the egui pass itself this frame" — never "off": `process_output_system` still `take()`s an
-/// output from every context every frame and logs at ERROR when none was prepared (bevy_egui
-/// 0.39 and 0.41 alike, `output.rs`). With the lane gated that was one ERROR per frame — a red
-/// herring beside any real failure, and gate-fatal severity for a by-design idle state (ERROR
-/// means "the client is broken": 1450).
-///
-/// So a gated frame *runs the empty pass itself* — `Context::run` with default input and no UI,
-/// exactly what the error message prescribes for manual mode. Zero widgets means zero shapes:
-/// the consumer tessellates nothing, uploads nothing, and the sleeping camera draws nothing —
-/// the lane keeps costing what 1445 bought, and bevy_egui's output contract holds. A context
-/// that genuinely ran (gate open, or a true manual runner) has `Some` output by now and is left
-/// alone.
-///
-/// Not hand-built `FullOutput::default()`: `process_output_system` tessellates whatever it is
-/// given, and tessellating a context that never began a pass panics `No fonts loaded` (measured
-/// here — fonts only initialize inside a real begin-pass). `run` is the initialization path.
+/// Feed each gated context an empty output: `run_manually` is not "off", and bevy_egui's
+/// `process_output_system` logs an ERROR every frame a context has none. The first feed is a real
+/// `Context::run`, because tessellating a context that never began a pass panics `No fonts loaded`.
 fn feed_gated_egui_output(
     mut contexts: Query<(&mut EguiContext, &mut EguiFullOutput, &EguiContextSettings)>,
-    // The empty pass's output after its first run, with the one-time texture delta (the font
-    // atlas) already delivered: every later gated frame feeds this clone instead of running a
-    // real begin/end pass — memory GC, a fresh `FullOutput`, a tessellation of nothing —
-    // 1.4 % of a parked frame's main thread for a panel that is closed.
+    // The empty pass's output minus its one-time texture delta, fed on every later gated frame
+    // instead of running a real pass.
     mut cached: Local<Option<egui::FullOutput>>,
 ) {
     for (mut ctx, mut full_output, settings) in &mut contexts {
@@ -260,10 +182,8 @@ fn feed_gated_egui_output(
             full_output.0 = Some(match &*cached {
                 Some(out) => out.clone(),
                 None => {
-                    // `get_mut`, not `get`: the immutable getter sits behind bevy_egui's
-                    // `immutable_ctx` feature, off in our build. The first run is fed whole
-                    // (its texture delta carries the fonts); the cache keeps everything but
-                    // that delta, which must reach the GPU exactly once.
+                    // `get_mut`: `get` needs bevy_egui's `immutable_ctx` feature. The font
+                    // texture delta must reach the GPU exactly once, so the cache drops it.
                     let out = ctx.get_mut().run(egui::RawInput::default(), |_| {});
                     let mut keep = out.clone();
                     keep.textures_delta = Default::default();
@@ -276,54 +196,26 @@ fn feed_gated_egui_output(
     }
 }
 
-/// A full-window overlay camera that hosts the primary egui context and composites it over the 3D
-/// scene (higher order, alpha blend, no clear). Renders no world geometry (`RenderLayers::none`).
-/// Order 2 — above the player-UI quad pass (`ui_pass::PlayerUiPlugin`, order 1), which itself sits
-/// above the order-0 world camera. Per decision 0025's overlay arbitration ("dev overlays composite
-/// over" everything else) and 0068 §2: dev overlays always stay on top of the player UI.
+/// The full-window overlay camera hosting the primary egui context, order 2: above the player-UI
+/// pass (order 1) and the world camera (order 0), so dev overlays always sit on top.
 fn spawn_egui_camera(mut commands: Commands) {
     commands.spawn((
         PrimaryEguiContext, // `#[require(EguiContext)]` ⇒ this camera carries EguiContext
-        // Named so [`crate::preflight`]'s MSAA check can say WHICH cameras disagree — an
-        // entity id in that error is a lookup, a name is the answer.
+        // Named for [`crate::preflight`]'s MSAA check, which reports cameras by name.
         Name::new("egui dev-overlay camera"),
         Camera2d,
-        // **No MSAA — and saying so is what keeps the panel openable at all**.
-        // Silence here does not mean "none": `Camera` requires `Msaa`, whose `Default` is
-        // `Sample4`, so this camera used to carry four samples without ever naming them. That was
-        // invisible while the player-UI camera silently carried four too — and became a fatal
-        // `Attachments have differing sample counts` the moment 1628 gave that one `Msaa::Off`,
-        // because Bevy's two prepare passes disagree about whether MSAA is part of a texture's
-        // identity: `prepare_view_targets` keys the COLOUR target on `(target, usage, hdr, msaa)`,
-        // while `core_2d::prepare_core_2d_depth_textures` keys the DEPTH texture on the target
-        // ALONE (`core_3d`'s equivalent does include it — the asymmetry is 2D-only). Two
-        // `Camera2d`s on one window then share one depth texture at whichever sample count the
-        // first-iterated camera stamped on it, and the other one's pass is invalid.
-        //
-        // Off is also simply right here: egui feathers its own edges in the tessellator, so
-        // multisampling this overlay buys nothing and costs a full-window 4× colour texture and 4×
-        // the fill — the same arithmetic as 1628. [`crate::preflight`] now checks the agreement
-        // every run, so the next camera that stays silent is named in the log instead of in a wgpu
-        // validation error that names no camera at all.
+        // Set explicitly: `Camera` requires `Msaa`, default `Sample4`, and Bevy keys the 2D depth
+        // texture on the target alone, so this must match the player-UI camera's `Msaa::Off` or a
+        // pass fails validation. egui feathers its own edges anyway.
         bevy::render::view::Msaa::Off,
         RenderLayers::none(),
         Camera {
             order: 2,
-            // **An overlay composites only its own pixels** — the law the player-UI camera's
-            // clear already states. egui paints onto a transparent canvas, and the output blit
-            // lays that canvas over the finished frame in the swapchain. bevy_egui's own pass
-            // blends PREMULTIPLIED (`egui::Color32` is premultiplied, and its pipeline says so),
-            // so the canvas holds premultiplied colour with coverage in alpha, and the blit has
-            // to compose it as such — `SrcAlpha` would weight it by alpha twice.
-            //
-            // It used to load the shared main texture instead (`ClearColorConfig::None`), which
-            // happened to hold the player-UI camera's decoded frame: two cameras on one window
-            // share bevy's main textures, and that camera's decode flipped them. The blit then
-            // re-emitted the whole frame over itself. Since decision 2206 the player-UI camera
-            // writes the swapchain directly and leaves its main texture un-decoded, so an
-            // overlay that loaded it would present the UI ~2.2× bright whenever the panel was
-            // open. Clearing is what an overlay should have done all along; and, like the
-            // player-UI camera, it never touches the world image, so writeback is off.
+            // An overlay composites only its own pixels: egui paints a cleared transparent canvas
+            // in premultiplied colour, so the blit over the swapchain blends premultiplied
+            // (`SrcAlpha` would weight it twice). Loading the shared main texture instead would
+            // re-present the player-UI camera's un-decoded frame. It never touches the world
+            // image, so writeback is off.
             output_mode: CameraOutputMode::Write {
                 blend_state: Some(BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                 clear_color: ClearColorConfig::None,
@@ -335,17 +227,9 @@ fn spawn_egui_camera(mut commands: Commands) {
     ));
 }
 
-/// Demand-gate the whole egui lane: when no dev overlay is open — panel closed,
-/// inspect off (the perf HUD's pill is quads on the player-UI pass and never needs this lane;
-/// 1453/1454) — the primary context goes `run_manually` (which
-/// `bevy_egui`'s context-pass loop honors by skipping it outright: no begin/end pass, no
-/// tessellate, no `EguiPrimaryContextPass` run) and the overlay camera sleeps (no Core2d graph
-/// run, no composite, no render-side prep). A hidden dev surface then costs what a player build
-/// pays — nothing; before the gate the lane drew an EMPTY overlay for ~0.33 traced ms/frame
-/// (the 1445 trace). One-frame lag behind the toggles, invisible on a chord press.
-///
-/// `EguiPointerOver` clears on the way down: its writer ([`track_pointer_over_ui`]) lives inside
-/// the gated pass and would hold the last hover forever.
+/// Demand-gate the egui lane: with the panel closed and inspect off, the primary context goes
+/// `run_manually` (bevy_egui skips its pass) and the overlay camera sleeps, so a hidden dev surface
+/// costs nothing. `EguiPointerOver` clears on the way down: its writer runs inside the gated pass.
 fn gate_egui_lane(
     debug: Res<DebugState>,
     inspect: Res<crate::ui_script::InspectMode>,
@@ -367,20 +251,13 @@ fn gate_egui_lane(
 }
 
 fn toggle_panel(keys: Res<ButtonInput<KeyCode>>, mut debug: ResMut<DebugState>) {
-    // The dev chord + `D`. It was a *bare* backtick until 1043 — backtick reads as
-    // "not a game key", but it is one ([`crate::bindings::chord`] gives it the token `` ` ``, so the
-    // reference's binding UI can bind it like any other), which made a bare toggle here exactly the
-    // squat 0585 moved the perf HUD off `P` for. 1043 put it on the chord; `` ` `` is a bad key to
-    // hold a chord on, so it became a letter like the rest of the fleet. The chat-bar/EditBox gate
-    // the bare key needed is gone either way: a chord can't be mistaken for typed text.
+    // The dev chord + `D`: a bare key would squat on a bindable game key.
     if dev_chord(&keys, KeyCode::KeyD) {
         debug.open = !debug.open;
     }
 }
 
-/// Draw the panel as a translucent **overlay** on the right — the world renders full-screen
-/// underneath (no viewport inset). `ui_script::PointerOverUi` keeps the cursor's panel
-/// interactions from leaking into gameplay mouse-look.
+/// Draw the panel as an overlay on the right over the full-screen world.
 fn debug_panel_ui(
     mut contexts: EguiContexts,
     stamp: Res<benilla_world::build_id::BuildId>,
@@ -412,8 +289,7 @@ fn debug_panel_ui(
     }
 
     let ctx = contexts.ctx_mut()?;
-    // Full height: the window spans the view (an 8 px gap top and bottom), rather than auto-sizing to
-    // however much content the open sections happen to have.
+    // Full height, rather than auto-sized to the open sections.
     let panel_h = (ctx.content_rect().height() - 32.0).max(120.0);
     egui::Window::new("benilla_debug")
         .title_bar(false)
@@ -428,17 +304,14 @@ fn debug_panel_ui(
                 .inner_margin(egui::Margin::symmetric(10, 8)),
         )
         .show(ctx, |ui| {
-            // Brighten to match the overlays; keep egui's default wrapping so labels reflow, not clip.
+            // Brighten like the overlays but keep wrapping, so labels reflow rather than clip.
             ui.visuals_mut().override_text_color = Some(OVERLAY_TEXT);
-            ui.set_width(280.0); // fixed width — no resize handle
+            ui.set_width(280.0); // fixed width, no resize handle
             ui.set_height(panel_h); // fill the height; sections scroll within it
 
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
-                // Leave room under the scroll for the pinned footer below (hotkey map + build id).
-                // Three lines' worth: the footer keeps the panel's default wrapping, so a font
-                // whose metrics run wider than ours reflows the hotkey map instead of having its
-                // second line clipped away.
+                // Room for the pinned footer: three lines, as a wider font wraps the hotkey map.
                 .max_height(panel_h - 56.0)
                 .show(ui, |ui| {
                     // Disjoint borrows of the sections so each can drive its own widgets.
@@ -449,9 +322,6 @@ fn debug_panel_ui(
                         weather: w,
                         ..
                     } = &mut *debug;
-                    // WHERE AM I — the `.gps` of the panel: identity, map, zone, position, tile
-                    // residency, and the click-to-copy `.go xyz` teleport line that feeds the
-                    // headless probes (`WOW_PROBE_CHAT`) and the FPS-journal loop.
                     egui::CollapsingHeader::new("World")
                         .default_open(true)
                         .show(ui, |ui| world_section(ui, &mut world));
@@ -475,19 +345,12 @@ fn debug_panel_ui(
                                     format!("{}  ·  {}", kind_label(k), kind_counts[kind_index(k)]),
                                 );
                             }
-                            // The doodad-animation cost meter: how many placed
-                            // doodads carry an anim host, how many are ticking right now (the
-                            // draw gate pauses hidden ones), how many batches sample a
-                            // material-alpha loop (phase 2), and how many materials scroll their
-                            // UVs (phase 3 — waterfalls).
+                            // Doodad animation cost: anim hosts, ticking ones (hidden ones pause),
+                            // material-alpha samplers and UV-scrolling materials.
                             let ticking = anim_hosts.iter().filter(|h| h.active).count();
-                            // Of the material samplers, how many resolve to **0 right now** — the
-                            // batches the reference culls this frame (`A <= 0`,
-                            // `0x707b3a`–`0x707b5c`). Non-zero as soon as a voidwalker/banshee/
-                            // slime/infernal is in view: those models author geometry that only
-                            // appears on death, and this counter is what says we are hiding it
-                            // rather than drawing it. `dim` counts the partial factors — a batch
-                            // drawn, but not at full strength.
+                            // Samplers at 0 are batches the reference culls (`A <= 0`,
+                            // `0x707b3a`-`0x707b5c`), such as a voidwalker's death-only geometry;
+                            // `dim` counts batches drawn below full strength.
                             let (mut hidden, mut dim) = (0usize, 0usize);
                             for m in &mat_anims {
                                 if m.current <= 0.0 {
@@ -505,17 +368,12 @@ fn debug_panel_ui(
                             ));
 
                             ui.add_space(6.0);
-                            // WMO portal cull A/B: off ⇒ every building group always
-                            // draws (the cathedral reappears from the Trade District).
+                            // WMO portal cull A/B: off, every building group always draws.
                             ui.checkbox(&mut m.portal_cull, "WMO portal visibility cull");
-                            // The cull probe: a one-click full trace dump — stand where a
-                            // room vanishes, click, and the exact seed evidence + per-portal verdicts land
-                            // in a file.
+                            // Dumps the seed and per-portal verdicts to a file.
                             if ui.button("dump WMO cull trace").clicked() {
-                                // Under the one folder (0954/1486), beside the crash reports and
-                                // the stall samples. The world crate is handed the path because
-                                // it has no `local_state` of its own; a hermetic run has no
-                                // folder, and the click says so instead of writing into the cwd.
+                                // Into the diagnostics folder; the world crate has no
+                                // `local_state`, and a hermetic run has no folder at all.
                                 match crate::local_state::diagnostics_dir() {
                                     Some(dir) => {
                                         cull_probe.dump_to = Some(dir.join("wmo-cull-trace.txt"));
@@ -531,7 +389,7 @@ fn debug_panel_ui(
                     egui::CollapsingHeader::new("Lighting")
                         .default_open(false)
                         .show(ui, |ui| {
-                            // Time of day — drives the DBC-sampled colors + the sun's day-arc.
+                            // Time of day drives the Light.dbc colours and the sun's arc.
                             ui.strong(format!(
                                 "Time of day: {}  ({})",
                                 hhmm(clock.minute),
@@ -545,8 +403,7 @@ fn debug_panel_ui(
                                             .text("scrub time")
                                             .custom_formatter(|n, _| hhmm(n as u32)),
                                     );
-                                    // Exact per-minute entry: drag/scroll ±1 min, or click to type a raw
-                                    // minute (0..1439) or an `HH:MM` time — for landing on an exact moment.
+                                    // Exact entry: drag by one minute, or type a minute or `HH:MM`.
                                     ui.add(
                                         egui::DragValue::new(&mut l.manual_minute)
                                             .range(0..=1439)
@@ -568,19 +425,18 @@ fn debug_panel_ui(
 
                             ui.add_space(6.0);
                             ui.strong("Resolved (Light.dbc, this time)");
-                            // 0..255 bytes (eyedrop-friendly vs the reference client) + a swatch.
+                            // 0..255 bytes, for eyedropping against the reference, and a swatch.
                             let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as i32;
                             let swatch = |ui: &mut egui::Ui, name: &str, c: [f32; 3]| {
                                 let (r, g, b) = (byte(c[0]), byte(c[1]), byte(c[2]));
                                 let col = egui::Color32::from_rgb(r as u8, g as u8, b as u8);
-                                // The label text is tinted the resolved color (a swatch the font always
-                                // renders); the [r,g,b] are the exact 0..255 values for eyedrop A/Bs.
+                                // The label is tinted the resolved colour, as its own swatch.
                                 ui.colored_label(col, format!("{name}  [{r}, {g}, {b}]"));
                             };
                             swatch(ui, "ambient (row 1)", lighting.ambient);
                             swatch(ui, "diffuse (row 0)", lighting.diffuse);
                             swatch(ui, "specular (row 9)", lighting.spec);
-                            // The backdrop / fog colour (row 7) — what `ClearColor` shows behind the dome.
+                            // The fog colour (row 7) is also `ClearColor` behind the dome.
                             swatch(ui, "fog / backdrop (row 7)", lighting.fog_color);
                             let d = lighting.sun_dir;
                             ui.label(
@@ -598,7 +454,7 @@ fn debug_panel_ui(
                     egui::CollapsingHeader::new("Weather")
                         .default_open(false)
                         .show(ui, |ui| {
-                            // Live state readout (the two ramped channels).
+                            // The two ramped channels.
                             if let Some(ws) = weather_state.as_ref() {
                                 ui.strong(format!(
                                     "{:?}  ·  effect {:.2}  ·  sky {:.2}  ·  storm blend {:.2}",
@@ -608,10 +464,8 @@ fn debug_panel_ui(
                                     benilla_world::weather::storm_blend(ws.sky_density),
                                 ));
                             }
-                            // The `weatherDensity` setting (video-options Weather Intensity 0–3)
-                            // — the real game setting, not a tuning knob. Scales the rain/snow/
-                            // mist spawn gain via the `0x67b870` quality table; default 3 matches
-                            // the reference install's Config.wtf.
+                            // The `weatherDensity` CVar (Weather Intensity 0-3), scaling spawn
+                            // gain through the `0x67b870` quality table.
                             if let Some(ws) = weather_state.as_mut() {
                                 let mut wd = ws.weather_density;
                                 ui.horizontal(|ui| {
@@ -624,7 +478,7 @@ fn debug_panel_ui(
                                     ws.weather_density = wd;
                                 }
                             }
-                            // The override scrub — drives the same apply path as the wire.
+                            // The override drives the same apply path as the wire.
                             let before = (w.force, w.kind, w.grade.to_bits(), w.instant);
                             ui.checkbox(&mut w.force, "override server weather");
                             ui.add_enabled_ui(w.force, |ui| {
@@ -643,8 +497,6 @@ fn debug_panel_ui(
                             }
                         });
 
-                    // The object inspector is its own dev-chord `I` surface (see `interact.rs`), not a
-                    // section here — identifying a thing shouldn't need the whole panel open.
                     egui::CollapsingHeader::new("Sound")
                         .default_open(false)
                         .show(ui, |ui| {
@@ -674,15 +526,11 @@ fn debug_panel_ui(
                             }
                         });
 
-                    // The wire-coverage section: connection state + the dropped-packet tally
-                    // (every opcode the codec ignored or failed to parse, by count — a silent
-                    // gap in wire coverage made visible; decision 0022's instrument disposition).
+                    // Connection state and every opcode the codec ignored or failed to parse.
                     egui::CollapsingHeader::new("Net")
                         .default_open(false)
                         .show(ui, |ui| {
-                            // The LAST sample, not the ring average the meter shows: the panel
-                            // is the instrument, and "what did the most recent pong measure" is
-                            // the question a stuck or spiking meter needs answered.
+                            // The last sample, not the meter's ring average.
                             let last_rtt = ping.0.lock_recover().last_rtt_ms;
                             ui.label(if net_status.connected {
                                 match last_rtt {
@@ -722,11 +570,8 @@ fn debug_panel_ui(
                                 }
                             }
                         });
-                    // The step-up probe's last blocked-frame report (`crate::player::step_probe`).
-                    // On the panel *because a capture has to be steerable*: the director walks into
-                    // the kerb that will not climb and watches the `t=` stamp tick and the ladder
-                    // fill in, instead of finding out afterwards that the probe never fired at the
-                    // spot they meant (method §6 — prove the run before reading the result).
+                    // The step-up probe's last blocked-frame report, live, so a run can be seen
+                    // to fire at the intended spot.
                     egui::CollapsingHeader::new("Step-up")
                         .default_open(false)
                         .show(ui, |ui| {
@@ -756,11 +601,9 @@ fn debug_panel_ui(
                                     }
                                 });
                         });
-                    // Future sections add their own CollapsingHeader here.
                 });
 
-            // The pinned footer: the dev-surface hotkey map, so the other overlays are
-            // discoverable from the one surface people find first.
+            // The pinned footer: the dev-surface hotkey map.
             ui.separator();
             ui.label(
                 egui::RichText::new(format!(
@@ -769,9 +612,7 @@ fn debug_panel_ui(
                     .small()
                     .color(OVERLAY_TEXT_DIM),
             );
-            // …and which build this is (`benilla_world::build_id`). Bottom line of the surface a reader is
-            // already on when something looks wrong: a click copies the full sha, so "it looks like
-            // this here" can name the code it happened on.
+            // The build; a click copies the full sha.
             let build = ui.add(
                 egui::Label::new(
                     egui::RichText::new(format!("build {}", stamp.summary()))

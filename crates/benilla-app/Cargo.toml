@@ -9,40 +9,34 @@ description = "The Bevy app as a library: everything but the build-id stamp, whi
 workspace = true
 
 [features]
-# `dev` compiles in the instruments: the debug panel, perf HUD, inspector, capture harness and
-# probes. Nothing may depend on it; `scripts/gates.sh` builds `benilla` with no default features.
+# `dev` compiles in the instruments; the player build (`scripts/gates.sh`) has no defaults.
 default = ["dev"]
-# `benilla-assets`, `-formats` and `-world` come in without default features and their `dev` is
-# forwarded here: it is on by default in each, so unification would put it back in a player build.
+# The asset, format and world crates default `dev` on, so they come in without it, forwarded here.
 dev = ["benilla-assets/dev", "benilla-formats/dev", "benilla-world/dev", "dep:bevy_egui"]
 tracy = ["bevy/trace_tracy"]
-# `--features trace_chrome` writes every system's per-run span to `trace-<ts>.json` in the cwd.
+# Writes every system's per-run span to `trace-<ts>.json` in the cwd.
 trace_chrome = ["bevy/trace_chrome"]
 
 [dependencies]
 anyhow.workspace = true
-# The EditBox clipboard chords, read on the main thread as macOS NSPasteboard requires; Wayland
-# goes through `smithay-clipboard`. The 3.x bevy_egui uses, so the graph has one copy.
+# The EditBox clipboard, on the main thread as NSPasteboard requires; bevy_egui's 3.x.
 arboard = "3"
 benilla-ui = { path = "../benilla-ui" }
 bevy.workspace = true
 wgpu.workspace = true
 bevy_egui = { version = "0.39", optional = true }
 bytemuck = { version = "1", features = ["derive"] }
-# `f16` decode for the `WOW_BOOTH_DUMP` dump of the `Rgba16Float` booth render targets.
+# `f16` decode for the `WOW_BOOTH_DUMP` dump of the `Rgba16Float` booth targets.
 half = "2"
 # Compiles `assets/ui` into the binary, so the interface loads on a machine without the source.
 include_dir = "0.7"
-# The 1.12 chat filters (`text_filter`): the DBCs' 2289 profanity and 28 spam patterns, with one
-# `RegexSet` for the any-match pass over every chat line.
+# The 1.12 chat filters (`text_filter`), with one `RegexSet` for the any-match pass per line.
 regex = "1"
-# `getrusage` for the perf probes' process CPU time; `mach_absolute_time` and `thread_policy_set`
-# for the audio output's meter clock and its render thread's realtime policy.
+# `getrusage` for perf CPU time; the audio clock and render thread's realtime policy on macOS.
 libc = "0.2"
-# PNG encoding only: the macOS hardware cursor's NSImage data and screenshots.
+# PNG encoding only: the macOS cursor's NSImage data and screenshots.
 image = { version = "0.25", default-features = false, features = ["png"] }
-# Thread-to-ECS channels such as the net bridge's: crossbeam's `Receiver` is `Sync`, so either end
-# can be a Bevy resource without a mutex.
+# Thread-to-ECS channels: crossbeam's `Receiver` is `Sync`, so it is a resource without a mutex.
 crossbeam-channel = "0.5"
 benilla-assets = { path = "../benilla-assets", default-features = false }
 benilla-formats = { path = "../benilla-formats", default-features = false }
@@ -55,33 +49,29 @@ toml = "0.8"
 avian3d = "0.6"
 # Shapes and rasterizes `FontString` text standalone (`ui_text`), at bevy_text's own 0.16.
 cosmic-text = "0.16"
-# `cosmic-text`'s font database, whose types `ui_text` names; must stay the version it depends on.
+# `cosmic-text`'s font database, named by `ui_text`; must stay the version it depends on.
 fontdb = "0.23"
 # The mixer. Its `cpal` backend stays off on every target: `sound::output` is our own backend.
 kira = { version = "0.12", default-features = false, features = ["mp3", "wav", "pcm", "adpcm"] }
 # Aborts a debug build on an allocation in the audio IO callback or render pass; off in release.
 assert_no_alloc = "1.1"
-# For `MediaSource`: kira's decode thread reads through our source, which raises the thread's QoS
-# so the world-entry burst cannot starve it. Must stay kira's version, or the trait won't match.
+# `MediaSource`: our source raises kira's decode thread's QoS; must stay kira's version.
 symphonia = { version = "0.5", default-features = false }
 # The audio threads' lock-free SPSC rings (output, mix tap); kira's version, so the graph has one.
 rtrb = "0.3"
 mint = "0.5"
-# The gossip greeting's weighted draw, re-rolled per open as in the reference; `benilla-srp`'s 0.8.
+# The gossip greeting's weighted draw, re-rolled per open as in the reference.
 rand = "0.8"
 
-# Linux/BSD Wayland clipboard: smithay-clipboard drives the standard `wl_data_device` on our own
-# `wl_display`, read through raw-window-handle (bevy's 0.6). arboard's Wayland feature speaks
-# `wlr-data-control`, which GNOME does not implement.
+# Wayland clipboard over the standard `wl_data_device`; arboard's speaks `wlr-data-control`,
+# which GNOME does not implement.
 [target.'cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))'.dependencies]
 raw-window-handle = "0.6"
 smithay-clipboard = "0.7"
 
-# macOS: AppKit through objc2 drives a native NSCursor with the window's cursor rects disabled;
-# winit's cursor rects revert to the arrow under our continuous render loop (`cursor.rs`).
+# A native NSCursor: winit's cursor rects revert to the arrow under a continuous render loop.
 [target.'cfg(target_os = "macos")'.dependencies]
-# The audio device layer (`sound::output::coreaudio`): the HAL output unit through coreaudio-rs,
-# the AudioObject property API through objc2-core-audio, at the versions and features cpal uses.
+# The audio device layer (`sound::output::coreaudio`), at the versions and features cpal uses.
 coreaudio-rs = { version = "0.13", default-features = false, features = ["audio_unit", "core_audio"] }
 objc2-core-audio = { version = "0.3", default-features = false, features = ["std", "AudioHardware"] }
 objc2-core-audio-types = { version = "0.3", default-features = false, features = ["std", "CoreAudioBaseTypes"] }
@@ -89,7 +79,6 @@ objc2 = "0.5"
 objc2-app-kit = { version = "0.2", features = [
     "NSApplication",
     "NSResponder",
-    # NSApplicationActivationPolicy (bgwin's Accessory demotion) is declared in this header.
     "NSRunningApplication",
     "NSWindow",
     "NSView",
@@ -99,12 +88,11 @@ objc2-app-kit = { version = "0.2", features = [
 ] }
 objc2-foundation = { version = "0.2", features = ["NSArray", "NSData", "NSGeometry"] }
 
-# Off macOS the device layer's last hop runs over cpal (`sound::output::cpal`). macOS goes direct:
-# there cpal cannot report or rebuild on a lost default device and drops the IO-cycle timestamp.
-# An unsupported target gets cpal's Null host, which reports no device.
+# The audio device layer off macOS (`sound::output::cpal`); on macOS cpal cannot rebuild on a
+# lost default device and drops the IO-cycle timestamp.
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 cpal = "0.17"
 
-# Windows CPU clocks for `perf::clock`: `GetProcessTimes`, `GetThreadTimes`, `GetSystemTimes`.
+# Windows CPU clocks for `perf::clock`.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }

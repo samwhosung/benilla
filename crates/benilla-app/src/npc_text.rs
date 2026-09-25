@@ -1,74 +1,50 @@
-//! NPC-text macros — the client-side `$`-token expansion the 1.12 wire leaves undone in every
-//! server-authored text the player reads: gossip greetings, questgiver panel texts, and the quest
-//! log's description/objectives (the director's screenshot showed a literal `$N` in a quest
-//! description). One shared mechanism (the 0109 look fix promoted it out of `ui_gossip`); every feed
-//! seam that pushes NPC text into the VM runs it — as the reference does, routing all fourteen of
-//! its call sites through the one expander.
+//! The `$`-token expansion of server-authored NPC text (gossip, questgiver panels, the quest log),
+//! which the client does, not the server; every feed that pushes NPC text into the VM runs it, as
+//! the reference routes its fourteen call sites through one expander (`0x506f70`, token handler
+//! `0x5070a0`).
 //!
-//! The grammar is the reference's (`QuestTextParser.cpp`, driver `0x506f70` → token handler
-//! `0x5070a0`):
+//! - The accepted set is `B C E G N R T W` in either case; anything else re-emits the `$` and
+//!   leaves the letter as text.
+//! - A decimal prefix is consumed ahead of every token, but only `W` and `E` read it.
+//! - Case is the output switch: `$r` is `$R` through `_strlwr`, and likewise `$c` and `$t`.
 //!
-//! - the accepted set is **exactly** `B C E G N R T W`, in either case. Anything else re-emits the
-//!   `$` and lets the letter fall through as ordinary literal text;
-//! - an optional decimal prefix is scanned and consumed ahead of *every* token, but only `W`/`E`
-//!   read it;
-//! - **case is the output switch, not a separate token**: `$R` is the race string verbatim
-//!   (`"Night Elf"`), `$r` is that same string through `_strlwr` (`"night elf"`). Same for
-//!   `$C`/`$c` and `$T`/`$t`; `$N`/`$B`/`$G` are case-insensitive.
-//!
-//! The reference's *other* `$`-expander — spell descriptions, with its `$/N;` scale prefixes and
-//! `$<spellId>` cross-references — is a different function over a different source. Ours is
-//! [`benilla_formats::substitute`], kept separate here exactly as it is there.
+//! Spell descriptions use a separate expander in the reference, as here
+//! ([`benilla_formats::substitute`]).
 
 use bevy::prelude::*;
 
 use crate::names::NameCache;
 use crate::net::{Guid, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
 
-/// The unit a `$`-macro expands against. Every seam we have passes the **self player** (the
-/// reference resolves the subject from the GUID its call site hands over, and only its four chat
-/// sites pass the speaker instead), so the reference's non-player arm — where `$R`/`$C` emit the
-/// unit's *name* in place of a race/class — is not reachable from here.
+/// The unit a `$`-macro expands against: the self player, or the speaker at the reference's four
+/// chat sites.
 pub(crate) struct Subject {
     pub name: String,
-    /// `UNIT_FIELD_BYTES_0` byte 0 / byte 1 — indices into the `ChrRaces`/`ChrClasses` tables the
-    /// reference reads by locale column. Ours are [`crate::ui_unit`]'s hardcoded English rows, which
-    /// were checked character-for-character against the shipped DBCs.
+    /// `UNIT_FIELD_BYTES_0` bytes 0 and 1, into `ChrRaces` and `ChrClasses`, which the reference
+    /// reads at the client's locale column; we read [`crate::ui_unit`]'s rows, the enUS column's.
     pub race: u8,
     pub class: u8,
-    /// `UNIT_FIELD_BYTES_0` byte 2. The `$G`/`$T` branch test is `== 0` → the *first* arm, anything
-    /// else → the second — the reference compares against zero, so this is not "1 = female".
+    /// `UNIT_FIELD_BYTES_0` byte 2; `$G` takes the first arm on 0, the second on anything else.
     pub gender: u8,
 }
 
-/// Everything a `$`-token can read: the [`Subject`] the person-tokens expand against, and the
-/// world-state table `$<n>w`/`$<n>e` index. The reference reads the latter from a process global
-/// (`[0xb71ec8]`); we hold it as a resource, so the expander takes it explicitly — the same shape
-/// the sibling spell expander already uses (`benilla_formats::TokenContext`).
+/// Everything a `$`-token can read; `states` is the reference's global world-state table
+/// (`[0xb71ec8]`).
 pub(crate) struct MacroContext<'a> {
-    /// `None` is the reference's no-subject case — see [`substitute`].
+    /// `None` is the reference's no-subject case.
     pub subject: Option<&'a Subject>,
     pub states: &'a crate::world_state::WorldStates,
 }
 
-/// Substitute the macros in `text` against `ctx` (see the module doc for the grammar). A `None`
-/// subject is the reference's no-subject case: every token that needs one fails, which re-emits the
-/// `$` and leaves the rest of the text literal — so an un-landed player name shows `$N` for the
-/// moment rather than a hole, and the feeds re-substitute when it arrives.
+/// Expands the macros in `text`. With no subject every person-token re-emits its `$`, so a name
+/// not yet known shows `$N` until the feeds re-substitute.
 pub(crate) fn substitute(text: &str, ctx: &MacroContext) -> String {
     substitute_checked(text, ctx).0
 }
 
-/// [`substitute`], plus the reference driver's **return flag**: `true` when no token failed.
-///
-/// The reference's `0x506f70` returns exactly this — "no unrecognized token was hit" — and its
-/// callers branch on it. The panel seams ignore it (they show the `$`-preserving text either way,
-/// which is what [`substitute`] hands back); the **chat** seam must not, because the reference's
-/// chat path never displays a `$` — it drops or defers the line instead. See
-/// `ui_chat::feed`'s use.
-///
-/// Note what the flag does NOT mean: it says nothing about truncation, and a `false` can come
-/// either from an unresolvable subject or from a token outside the accepted set.
+/// [`substitute`] plus `0x506f70`'s return flag, `true` when no token failed (no subject, or a
+/// token outside the set). Panels ignore it; chat must not, since the reference's chat path drops
+/// or defers a line rather than show a `$`.
 pub(crate) fn substitute_checked(text: &str, ctx: &MacroContext) -> (String, bool) {
     let subject = ctx.subject;
     let mut clean = true;
@@ -81,30 +57,24 @@ pub(crate) fn substitute_checked(text: &str, ctx: &MacroContext) -> (String, boo
             i += 1;
             continue;
         }
-        // The decimal prefix is consumed ahead of the token letter whatever the token turns out to
-        // be — so `$5N` is just `$N`, and an unaccepted `$5X` loses the digits on its way out.
+        // An unaccepted `$5X` loses its digits too.
         let mut j = i + 1;
         while chars.get(j).is_some_and(char::is_ascii_digit) {
             j += 1;
         }
-        // `fail` is the reference's `false` return: the `$` comes back and the cursor stays on the
-        // letter, which the literal path then copies.
+        // On a fail the `$` comes back and the letter is copied as text.
         let mut fail = false;
         match chars.get(j).copied() {
-            // Exactly one `\n` (no CR) — the text renderer splits on it. Needs no subject.
+            // Exactly one `\n`, no CR.
             Some('B' | 'b') => {
                 out.push('\n');
                 i = j + 1;
             }
-            // `$<n>W` / `$<n>E` — the world-state table ([`crate::world_state`]), filled by
-            // SMSG_INIT_WORLD_STATES (`0x2C2`) and SMSG_UPDATE_WORLD_STATE (`0x2C3`); `$…E` reads
-            // that same table at the *negated* key, and both render `%d`. A miss prints `"0"` —
-            // which is every lookup until a zone actually sends states, and is what the reference
-            // prints then too.
+            // The world-state table (`SMSG_INIT_WORLD_STATES`, `SMSG_UPDATE_WORLD_STATE`); `E`
+            // reads the negated key; both render `%d`, and a miss prints "0".
             Some(tok @ ('W' | 'w' | 'E' | 'e')) => {
-                // `SStrToInt` over the prefix. No digits at all reads an uninitialized buffer in
-                // the reference (undefined); we take it as key 0, and an id too wide for the
-                // dword the wire carries goes the same way rather than wrapping to a live key.
+                // `SStrToInt` over the prefix. No digits reads an uninitialized buffer in the
+                // reference; we take key 0, as for an id too wide for a dword.
                 let n: u32 = chars[i + 1..j]
                     .iter()
                     .collect::<String>()
@@ -127,8 +97,7 @@ pub(crate) fn substitute_checked(text: &str, ctx: &MacroContext) -> (String, boo
             },
             Some(tok @ ('R' | 'r' | 'C' | 'c')) => match subject {
                 Some(s) => {
-                    // An id outside the table is where the reference dereferences near-NULL and
-                    // faults outright; we emit nothing.
+                    // An id outside the table faults the reference; we emit nothing.
                     let name = if matches!(tok, 'R' | 'r') {
                         crate::ui_unit::race_names(s.race).map_or("", |(display, _)| display)
                     } else {
@@ -143,10 +112,9 @@ pub(crate) fn substitute_checked(text: &str, ctx: &MacroContext) -> (String, boo
                 }
                 None => fail = true,
             },
-            // `$T`/`$t` is the PvP rank title, with this same gender branch as its fallback when the
-            // `PVP_RANK_<rank>_<team>` GlobalString misses — which it always does here, since we
-            // ship no rank titles. So the two tokens share one path, and `$t` lower-cases nothing:
-            // the reference never lower-cases the fallback text either.
+            // `$T` is the PvP rank title, falling back to this gender branch, never lower-cased,
+            // when the `PVP_RANK_<rank>_<team>` GlobalString misses. We ship no rank titles, so it
+            // always misses.
             Some('G' | 'g' | 'T' | 't') => match subject {
                 Some(s) => {
                     let mut k = j + 1;
@@ -158,10 +126,7 @@ pub(crate) fn substitute_checked(text: &str, ctx: &MacroContext) -> (String, boo
                             out.extend(if s.gender == 0 { first } else { second });
                             i = end;
                         }
-                        // A malformed branch swallows the marker and the spaces after it and emits
-                        // nothing at all — its argument survives as plain text, so `$G male female;`
-                        // renders `male female;`. (We used to pass the whole token through; the
-                        // bytes say the marker is consumed.)
+                        // Malformed: the marker and its spaces go, the argument stays as text.
                         None => i = k,
                     }
                 }
@@ -179,9 +144,7 @@ pub(crate) fn substitute_checked(text: &str, ctx: &MacroContext) -> (String, boo
     (out, clean)
 }
 
-/// Parse a `$G`/`$T` branch body `first:second;` starting at `start` (already past the marker and
-/// the spaces behind it), returning the two arms and the index just past the terminating `;`.
-/// `None` — malformed — when there is no `:` before the `;`, or no `;` at all.
+/// Parses a `first:second;` branch body: the two arms and the index past the `;`.
 fn parse_branch(chars: &[char], start: usize) -> Option<(&[char], &[char], usize)> {
     let colon = (start..chars.len()).find(|&j| chars[j] == ':' || chars[j] == ';')?;
     if chars[colon] != ':' {
@@ -195,18 +158,14 @@ fn parse_branch(chars: &[char], start: usize) -> Option<(&[char], &[char], usize
     ))
 }
 
-/// Drop the spaces the reference's branch copy drops: the leading run (after the marker and after
-/// the `:`) and the trailing one. Only `' '` — its skip loops test that byte, not whitespace.
+/// Trims leading and trailing `' '` only, as the reference's branch copy does.
 fn trim_spaces(arm: &[char]) -> &[char] {
     let start = arm.iter().position(|&c| c != ' ').unwrap_or(arm.len());
     let end = arm.iter().rposition(|&c| c != ' ').map_or(start, |p| p + 1);
     &arm[start..end]
 }
 
-/// The self player as a macro [`Subject`] — the name from the [`NameCache`] (a miss queries the
-/// server once, like the unit frames), race/class/gender from the descriptor. `None` until the
-/// player is streamed *and* its name has landed; the feeds diff on the substituted text, so it
-/// re-substitutes when that happens.
+/// The self player as a macro [`Subject`], once it is streamed and its name is known.
 pub(crate) fn player_identity(
     self_q: &Query<(&ObjectStore, &Guid), With<SelfPlayer>>,
     names: &NameCache,
@@ -221,14 +180,8 @@ pub(crate) fn player_identity(
     })
 }
 
-/// A macro [`Subject`] for an **arbitrary** guid — the chat feed's subject, where every other seam
-/// passes the local player.
-///
-/// This is the reference's own two-step (`0x506f70`): look the guid up in the
-/// object manager first and read the unit's descriptors, and only when it isn't streamed fall back
-/// to the **name-cache** record. `None` means the subject could not be resolved at all — the
-/// reference's no-subject case, which fails every person-token and re-emits a literal `$`; that is
-/// also what an untargeted line (guid 0) gets, deliberately.
+/// The chat feed's [`Subject`] for any guid: the object manager's descriptors, else the name
+/// cache (`0x506f70`). Guid 0 has no subject.
 pub(crate) fn subject_for_guid(
     guid: u64,
     index: &GuidIndex,
@@ -249,9 +202,8 @@ pub(crate) fn subject_for_guid(
             gender: store.0.unit_gender().unwrap_or(0),
         });
     }
-    // Not streamed: the name answer's own race/class/gender. A creature guid has no such record and
-    // lands on zeros — which is right, because the reference's non-player arm never reads a
-    // race/class for `$R`/`$C` either; it emits the unit's name instead (`0x50716b`/`0x5071f7`).
+    // A creature lands on zeros, so `$R` and `$C` emit nothing; the reference's non-player arm
+    // emits the unit's name (`0x50716b`, `0x5071f7`), which is not built.
     let (race, class, gender) = names.player_traits(guid).unwrap_or((0, 0, 0));
     Some(Subject {
         name,
@@ -266,7 +218,7 @@ mod tests {
     use super::{substitute, substitute_checked, MacroContext, Subject};
     use crate::world_state::WorldStates;
 
-    /// Thrall the night-elf priest — race 4 / class 5, so both table lookups are real rows.
+    /// Race 4, class 5: both real rows.
     fn subject(gender: u8) -> Subject {
         Subject {
             name: "Thrall".into(),
@@ -276,8 +228,6 @@ mod tests {
         }
     }
 
-    /// Expand against a subject and an empty world-state table — the shape of every test whose
-    /// concern is a person-token.
     fn expand(text: &str, subject: Option<&Subject>) -> String {
         substitute(
             text,
@@ -288,9 +238,6 @@ mod tests {
         )
     }
 
-    /// The driver's return flag ([`substitute_checked`]) — `true` only when no token failed. The
-    /// chat seam branches on it (drop / defer / show raw), so a wrong flag silently loses chat lines
-    /// rather than merely showing a stray `$`.
     #[test]
     fn the_return_flag_reports_whether_any_token_failed() {
         let s = subject(0);
@@ -300,7 +247,6 @@ mod tests {
             states: &states,
         };
 
-        // No `$` at all, and a token that resolves: clean.
         assert_eq!(
             substitute_checked("plain text", &ctx(None)),
             ("plain text".to_string(), true)
@@ -309,13 +255,11 @@ mod tests {
             substitute_checked("hi $N", &ctx(Some(&s))),
             ("hi Thrall".to_string(), true)
         );
-        // No subject: the person-token fails, the `$` comes back, flag false.
         assert_eq!(
             substitute_checked("hi $N", &ctx(None)),
             ("hi $N".to_string(), false)
         );
-        // Outside the accepted set: fails even WITH a subject — the case the chat path drops
-        // outright rather than deferring, because no name query can fix it.
+        // Outside the set: fails even with a subject.
         assert_eq!(
             substitute_checked("hi $X", &ctx(Some(&s))),
             ("hi $X".to_string(), false)
@@ -340,7 +284,6 @@ mod tests {
         let s = subject(0);
         assert_eq!(expand("A $C of $R", Some(&s)), "A Priest of Night Elf");
         assert_eq!(expand("a $c of $r", Some(&s)), "a priest of night elf");
-        // An id outside the table emits nothing (where the reference faults).
         let unknown = Subject {
             class: 6,
             ..subject(0)
@@ -358,14 +301,11 @@ mod tests {
             expand("Well met, $Glad:lass;.", Some(&subject(1))),
             "Well met, lass."
         );
-        // Not "1 = female": zero picks the first arm and everything else the second.
         assert_eq!(expand("$Glad:lass;", Some(&subject(2))), "lass");
-        // The spaces after the marker, after the `:`, and at each arm's end are dropped.
         assert_eq!(
             expand("Well met, $G lad : lass ;.", Some(&subject(1))),
             "Well met, lass."
         );
-        // `$T` has no rank title to find, so it falls back to this same branch, un-lower-cased.
         assert_eq!(expand("$tLad:Lass;", Some(&subject(0))), "Lad");
     }
 
@@ -382,13 +322,10 @@ mod tests {
         let s = subject(0);
         assert_eq!(expand("$2077w gathered", Some(&s)), "0 gathered");
         assert_eq!(expand("$2077e gathered", Some(&s)), "0 gathered");
-        // A bare `$w` is key 0 — a miss like any other.
+        // A bare `$w` is key 0.
         assert_eq!(expand("$w", Some(&s)), "0");
     }
 
-    /// The point of the table: once a zone's states land, `$<n>w` renders the value rather than the
-    /// standing `"0"`. `$<n>e` reads the SAME table at the negated key, so the two tokens with the
-    /// same digits are different lookups — and a value is rendered `%d`, sign and all.
     #[test]
     fn world_state_tokens_render_received_values() {
         let s = subject(0);
@@ -411,7 +348,7 @@ mod tests {
         assert_eq!(filled("$2077e gathered"), "3 gathered");
         assert_eq!(filled("$2264w"), "-5", "rendered %d, not %u");
         assert_eq!(filled("$9999w"), "0", "an id the zone never sent");
-        // Case is not the output switch here — unlike `$R`/`$C`, `W` and `w` are one token.
+        // `W` and `w` are one token.
         assert_eq!(filled("$2077W"), "12");
     }
 
@@ -419,7 +356,6 @@ mod tests {
     fn unaccepted_tokens_keep_the_dollar() {
         let s = subject(0);
         assert_eq!(expand("A $X here", Some(&s)), "A $X here");
-        // The digits are consumed before the letter is judged, so they are lost with it.
         assert_eq!(expand("A $5X here", Some(&s)), "A $X here");
         assert_eq!(expand("Cost: 5$", Some(&s)), "Cost: 5$");
     }
@@ -428,7 +364,6 @@ mod tests {
     fn no_subject_leaves_the_text_literal() {
         assert_eq!(expand("Greetings $N", None), "Greetings $N");
         assert_eq!(expand("$Glad:lass; $C", None), "$Glad:lass; $C");
-        // `$B` and the world-state tokens need no subject.
         assert_eq!(expand("Hail,$Bfriend $w", None), "Hail,\nfriend 0");
     }
 }

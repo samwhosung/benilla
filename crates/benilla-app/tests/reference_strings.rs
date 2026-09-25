@@ -1,73 +1,19 @@
-//! **No user-facing sentence is written in Rust when the reference ships one.**
-//!
-//! The real client never composes display text: every sentence is a key into `GlobalStrings.lua`
-//! (in-game) or `GlueStrings.lua` (the login/character screens) — each with a `Localize()` patch
-//! file laid over it, which is where a good many of the sentences the player actually reads come
-//! from — resolved at runtime from the player's own install. Writing the English in
-//! Rust throws away three things at once —
-//! localization, and, for anything that goes through the message catalog, the *surface* the
-//! message is shown on and the *voice line* it speaks with.
-//!
-//! **Why a tripwire and not a review rule.** Decision 2035 found a loot-refusal table that had
-//! composed its own eight sentences, six of which said something 1.12 never says, under a comment
-//! asserting they were quoted from the reference. The comment was the only check there had ever
-//! been, and a comment cannot fail. What makes that class *findable* is that a re-typed string is
-//! byte-identical to the shipped one — so a walk that normalises both sides and compares them finds
-//! every instance mechanically, which is what this does.
-//!
-//! **What it cannot find, stated plainly.** Text that matches nothing is invisible here: an
-//! *invented* sentence (2035's "Those pockets are already empty.", for a code 1.12 has no string
-//! for) has no shipped counterpart to match against. This tripwire catches the re-typing class,
-//! which is the large one; the invention class needs a reader who checks the reference.
-//!
-//! **A literal beside a key lookup is correct and is not flagged** — a fallback for an install
-//! whose chain lacks the key is the reference's own `UNKNOWNOBJECT` shape. The walk only counts a
-//! literal whose enclosing function resolves nothing.
-//!
-//! [`ALLOWED`] is a **ratchet**: it records what was already drifted when the tripwire was built,
-//! per file, and the counts may only ever go **down**. Converting a file means lowering its number
-//! (or deleting the row); a file not listed may carry none at all. Skips without client data.
+//! No user-facing sentence is written in Rust when the reference ships one: the 1.12 client
+//! resolves display text by key from `GlobalStrings.lua` or `GlueStrings.lua` and their
+//! `Localize()` patches. A re-typed sentence is byte-identical to the shipped one, so this walk
+//! finds it; an invented sentence matches nothing and is invisible here. A literal in a function
+//! that also resolves a key is a fallback and is not flagged. Skips without client data.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// **Empty, and that is the point.** This was decision 2045's ratchet — a per-file budget of
-/// re-typed sentences that might only ever go down — and it went down to nothing.
-///
-/// It stays as an empty list rather than being deleted with the machinery, because the walk below
-/// is still the guard: a row appearing here is a file that started re-typing again, and the
-/// argument for the rule holds whether or not anything is currently breaking it.
-///
-/// **The number went UP once before it went down, and that is the part worth remembering.** Two
-/// defects in the walk itself — a `RESOLVERS` entry that a `sort_by_key` call satisfied, and a
-/// `#[cfg(test)]` stripper blind to the out-of-line `mod tests;` — had it reporting 160 where the
-/// truth was 180, hiding 36 literals inside one function while double-counting a handful
-/// elsewhere. A ratchet is only ever as honest as the walk under it: a number that may only
-/// decrease is worthless if the number was never right.
-///
-/// **What this walk still cannot do**, unchanged from 2045 and worth keeping in view now that the
-/// count is zero: it finds *re-typed* strings, because those are byte-identical to the shipped
-/// ones. It cannot find *invented* ones — text matching nothing has nothing to match against —
-/// and it cannot see a one-word value, which collides with ordinary program text. Three invented
-/// slot words and a hand-typed `LockType` name were found in this arc by reading the reference,
-/// not by this test.
-///
-/// **Regenerate against a clean tree, never mid-edit.** The walk is deterministic on the sources
-/// plus the shipped tables (two consecutive runs agree exactly), but a baseline captured while
-/// other files are half-converted records counts no later tree will reproduce.
+/// Per-file budgets of re-typed sentences, which may only go down; empty, so no file may carry
+/// any. A one-word value is not checked: it collides with ordinary program text.
 const ALLOWED: &[(&str, usize)] = &[];
 
 /// Paths that are never player-facing: dev instruments, probes, capture harnesses and benches.
-/// A `.learn <spell>` GM command is not a UI string even when it collides with one.
-///
-/// **`resolve_bench` is the one entry that is not a *category* but a hole in the walk**, and it is
-/// named here rather than papered over. The file is `#[cfg(test)] mod resolve_bench;` — test-only
-/// code, exactly what [`strip_test_modules`] exists to drop — but that stripper works *within* a
-/// file, and this module's body lives in another one whose name does not contain "test", so the
-/// walk visits it as production source. Its three hits are Lua fixtures inside `#[ignore]`d
-/// release-only benches (`GameTooltip:AddLine("Main Hand", …)` — a line whose only job is to have
-/// a width). Skipping cfg(test)-only *files* properly would mean parsing the module tree; this is
-/// the honest one-line stand-in until something needs the general answer.
+/// `resolve_bench` is a `#[cfg(test)]` module in its own file, which [`strip_test_modules`] cannot
+/// see from its parent, so it is named here.
 fn is_instrument(rel: &str) -> bool {
     [
         "/capture/",
@@ -80,9 +26,8 @@ fn is_instrument(rel: &str) -> bool {
     .any(|p| rel.contains(p))
 }
 
-/// Collapse a shipped value and a Rust literal onto the same shape: every placeholder — the
-/// reference's `%s`/`%d`/`%1$s` and Rust's `{}`/`{name}` alike — becomes one marker, `\32` is the
-/// escaped space it stands for, runs of whitespace collapse, and case is dropped.
+/// Collapse a shipped value and a Rust literal onto one shape: every placeholder (`%s`, `%1$s`,
+/// `{}`, `{name}`) becomes one marker, `\32` becomes a space, whitespace collapses, case drops.
 fn normalize(s: &str) -> String {
     let s = s.replace("\\32", " ");
     let mut out = String::with_capacity(s.len());
@@ -165,13 +110,7 @@ fn walk(dir: &Path, into: &mut Vec<PathBuf>) {
     }
 }
 
-/// Does this function resolve a key at all? If so, a literal inside it is a fallback.
-///
-/// Matched on an **identifier boundary** for the bare-word entries, which is not fussiness:
-/// `by_key(` is a substring of `sort_by_key(`, and one `bonuses.sort_by_key(…)` was exempting the
-/// whole 530-line `render_view` — the largest literal-bearing function in the workspace — from
-/// this walk. A resolver list that can be satisfied by an unrelated method name is not a filter,
-/// it is a blindfold. Entries that begin with punctuation (`.text(`) are already delimited.
+/// Calls that resolve a key; a literal in a function containing one is a fallback.
 const RESOLVERS: &[&str] = &[
     "strings.get(",
     ".text(",
@@ -183,7 +122,8 @@ const RESOLVERS: &[&str] = &[
     "glue_strings",
 ];
 
-/// [`RESOLVERS`], on an identifier boundary for the bare-word entries.
+/// [`RESOLVERS`], on an identifier boundary for the bare-word entries (`by_key(` must not match
+/// `sort_by_key(`).
 fn resolves(body: &str) -> bool {
     RESOLVERS.iter().any(|r| {
         let word = r.starts_with(|c: char| c.is_alphanumeric() || c == '_');
@@ -202,9 +142,8 @@ fn no_user_facing_sentence_is_written_in_rust_when_the_reference_ships_one() {
     let data = benilla_formats::wow_data_or_skip!();
     let mut chain = benilla_formats::open_chain(&data).expect("open chain");
     let mut shipped: HashMap<String, Vec<String>> = HashMap::new();
-    // The base tables AND the locale patches laid over them: where `Localize()`
-    // redefines a key, its wording is the one the player actually reads, so a set that stopped at
-    // the base files would be grading against text this install never shows.
+    // The base tables and the locale patches: where `Localize()` redefines a key, its wording is
+    // the one the player reads.
     for file in [
         "Interface\\FrameXML\\GlobalStrings.lua",
         "Interface\\FrameXML\\Localization.lua",
@@ -220,22 +159,14 @@ fn no_user_facing_sentence_is_written_in_rust_when_the_reference_ships_one() {
             // A one-word or punctuation-only value ("Locked", "%s") is too weak a signal: it
             // collides with ordinary program text. Sentences are what this is after.
             if n.split(' ').count() >= 2 && n.chars().any(|c| c.is_ascii_lowercase()) {
-                // **Every** key with this wording, not the first one seen. A value maps to more
-                // than one key far more often than you would guess — `CHAT_IGNORED` and
-                // `ERR_IGNORING_YOU_S` are the same enUS sentence, and so are
-                // `INVTYPE_SHIELD`/`SECONDARYHANDSLOT`, `CHAR_CREATE_NAME_IN_USE`/
-                // `CHAR_NAME_RESERVED` — and naming one of them is how a reader converts a site
-                // to the wrong key. Which one belongs at a given call site is the *reference's
-                // code* to answer, never this table's; the report's job is to say that a choice
-                // exists ("assert the identifier, not the sentence").
+                // Every key with this wording: several keys share one enUS sentence
+                // (`CHAT_IGNORED`/`ERR_IGNORING_YOU_S`), and the call site decides which applies.
                 shipped.entry(n).or_default().push(k);
                 taken += 1;
             }
         }
-        // A file that reads fine but parses to nothing would make this whole test pass vacuously
-        // — and the two `Localize()` files wrap their assignments in a function, a shape the base
-        // tables never have. Every source has to contribute or the walk is grading against less
-        // than it claims.
+        // Every source must contribute: the `Localize()` files wrap their assignments in a
+        // function, a shape the base tables never have.
         assert!(taken > 0, "{file} contributed no sentences");
     }
 
@@ -248,8 +179,7 @@ fn no_user_facing_sentence_is_written_in_rust_when_the_reference_ships_one() {
     let mut found: HashMap<String, Vec<String>> = HashMap::new();
 
     for path in &sources {
-        // The walk starts at this crate's `src` and at the two sibling crates by relative path;
-        // name every hit `<crate>/src/...` so the ratchet rows read the same wherever it ran.
+        // Name every hit `<crate>/src/...`.
         let raw = path.to_string_lossy().to_string();
         let rel = match raw.strip_prefix("../") {
             Some(sibling) => sibling.to_string(),
@@ -280,10 +210,8 @@ fn no_user_facing_sentence_is_written_in_rust_when_the_reference_ships_one() {
         }
     }
 
-    // A ratchet says only whether a file got worse; converting one needs the list. `cargo test -p
-    // benilla-app --test reference_strings -- --nocapture` with `BENILLA_REFSTRINGS_REPORT=1`
-    // prints every hit — key, function, literal — biggest file first, so a conversion starts from
-    // what is actually there rather than from a count.
+    // `BENILLA_REFSTRINGS_REPORT=1` with `--nocapture` prints every hit (key, function, literal),
+    // biggest file first.
     if std::env::var_os("BENILLA_REFSTRINGS_REPORT").is_some() {
         let mut files: Vec<(&String, &Vec<String>)> = found.iter().collect();
         files.sort_by_key(|(f, h)| (std::cmp::Reverse(h.len()), (*f).clone()));
@@ -310,8 +238,7 @@ fn no_user_facing_sentence_is_written_in_rust_when_the_reference_ships_one() {
             ));
         }
     }
-    // The ratchet only bites downward if a *stale* row is an error too — otherwise a converted
-    // file's row lingers and silently re-permits the drift it was meant to retire.
+    // A stale row is an error too, or it would re-permit the drift it counted.
     for (file, budget) in ALLOWED {
         let actual = found.get(*file).map_or(0, |h| h.len());
         assert!(
@@ -330,18 +257,8 @@ fn no_user_facing_sentence_is_written_in_rust_when_the_reference_ships_one() {
     );
 }
 
-/// Cut every `#[cfg(test)]` item out of a source file before scanning it.
-///
-/// Without this the walk reads test fixtures as production text — `ui_action::cast_fail`'s unit
-/// tests build a *fake* GlobalStrings map whose 48 entries are, by construction, byte-identical to
-/// the shipped strings. Those are the test doing its job, not drift.
-///
-/// **The item's terminator is a brace OR a semicolon, whichever comes first**, and getting that
-/// wrong was silently corrupting this walk in both directions. `#[cfg(test)] mod tests;` — the
-/// out-of-line form, 28 files in this workspace — has no brace of its own, so a brace-only scan
-/// either ran off the end (re-appending the prefix it had already emitted, double-counting every
-/// literal above it: that is the whole of `unit/mod.rs`'s row of "2") or, when any later item had
-/// a brace, matched THAT one and deleted every line between — hiding real drift with no trace.
+/// Cut every `#[cfg(test)]` item out of a source file before scanning it, so test fixtures do not
+/// count. An item ends at its brace or its semicolon, whichever comes first (`mod tests;`).
 fn strip_test_modules(src: &str) -> String {
     let mut out = String::with_capacity(src.len());
     let mut rest = src;
@@ -352,8 +269,7 @@ fn strip_test_modules(src: &str) -> String {
             // A braced item: brace-match it away.
             (Some(open), None) => brace_match(after, open),
             (Some(open), Some(semi)) if open < semi => brace_match(after, open),
-            // `mod tests;` / `use …;` — the item ends at its semicolon and its body, if it has
-            // one, is another file's problem.
+            // `mod tests;` or `use …;`: the item ends at its semicolon.
             (_, Some(semi)) => Some(semi + 1),
             (None, None) => None,
         };
@@ -385,8 +301,8 @@ fn brace_match(src: &str, open: usize) -> Option<usize> {
     None
 }
 
-/// Split a source file into `(fn name, body)` pairs — crude but enough to ask "does the enclosing
-/// function resolve a key?", which is the only question here.
+/// Split a source file into `(fn name, body)` pairs, enough to ask whether the enclosing function
+/// resolves a key.
 fn split_fns(src: &str) -> Vec<(&str, &str)> {
     let mut out = Vec::new();
     let bytes = src.as_bytes();

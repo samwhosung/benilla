@@ -1,30 +1,20 @@
-//! The tutorial system (the reference's `[0x4b5150, 0x4b5a60)`): the two
-//! bit banks, the fire-once trigger, the acknowledge-and-send setter, the timers, the popup
-//! sound, and the trigger sites the app can produce — everything behind the stock
-//! `TutorialFrame.xml`.
+//! The tutorial system (the reference's `[0x4b5150, 0x4b5a60)`) behind the stock
+//! `TutorialFrame.xml`: two bit banks, the fire-once trigger, the acknowledge-and-send setter,
+//! the timers, the popup sound and the trigger sites.
 //!
-//! ## Two banks, not one (`0xb711b8`, `0xb711e4`)
+//! Both banks (`0xb711b8`, `0xb711e4`) are filled from the same `SMSG_TUTORIAL_FLAGS`; until it
+//! lands nothing fires. Bank A is fire-once: [`Tutorials::trigger`] tests and sets it and raises
+//! `TUTORIAL_TRIGGER(id + 1)`, never sending. Bank B is acknowledged: [`Tutorials::acknowledge`]
+//! tests it, sets both banks, cancels the id's timer and sends `CMSG_TUTORIAL_FLAG`. So A ⊇ B, and
+//! doing the thing suppresses its tutorial, account-wide.
 //!
-//! Both are filled byte for byte from the same `SMSG_TUTORIAL_FLAGS`, and until it lands no
-//! tutorial can fire. **Bank A** is the fire-once bank: [`Tutorials::trigger`] tests it, sets it,
-//! and raises `TUTORIAL_TRIGGER(id + 1)` — never sending. **Bank B** is the acknowledged bank:
-//! [`Tutorials::acknowledge`] (Lua's `FlagTutorial` and the C++ auto-acknowledge sites) tests it,
-//! sets the bit in BOTH banks, cancels the id's pending timer, and sends `CMSG_TUTORIAL_FLAG`.
-//! `ClearTutorials`/`ResetTutorials` write both banks and send. So A ⊇ B, and doing the thing
-//! (moving, chatting, adding a friend…) suppresses the tutorial about it, account-wide.
+//! `TriggerTutorial(id, delayMs)` (`0x4b5390`): with a zero delay the `TutorialPopup` cue plays and
+//! the event fires now; otherwise a timer holds it (the 10 s Targeting popup is the one site). The
+//! reference bounds-checks nothing; an id past the bank is a no-op here.
 //!
-//! ## The trigger (`0x4b5390`)
-//!
-//! `TriggerTutorial(id, delayMs)`: no bank → silent; bank-A bit set → silent; else the bit is
-//! set and, with a zero delay, the `TutorialPopup` cue plays and the event fires now; with any
-//! other delay (unsigned — the 10 s Targeting popup is the one site) a timer holds it. The
-//! reference bounds-checks nothing; ours refuses an id past the bank as a no-op.
-//!
-//! ## The sites (the callers of `0x4b5390` and `0x4b54c0`)
-//!
-//! Fifty-one trigger sites and seven acknowledge sites exist in the reference. The ones this app
-//! can produce are wired — the self-descriptor edges here, the packets and drains at their own
-//! seams through [`TutorialEvent`] — and the record names the rest with their conditions.
+//! The reference has fifty-one trigger sites and seven acknowledge sites (the callers of
+//! `0x4b5390` and `0x4b54c0`); the ones this app can produce reach here through
+//! [`TutorialEvent`] or the self-descriptor edges below.
 
 use std::time::{Duration, Instant};
 
@@ -37,8 +27,7 @@ use crate::net::{ClientCommand, EnteredWorldMessage, NetCommands, ObjectStore, S
 use crate::player::Player;
 use crate::ui_script::{UiFeed, UiInput};
 
-/// The popup cue `0x4b5390` plays on both legs (`0x846b68`), gated on `MasterSoundEffects` at
-/// the mixer like every SFX kit.
+/// The popup cue `0x4b5390` plays on both legs (`0x846b68`).
 const TUTORIAL_POPUP_SOUND: &str = "TutorialPopup";
 
 /// The internal (0-based) ids of the sites this app produces, named by their published title.
@@ -90,12 +79,11 @@ const LEVEL_TRIGGERS: [(u32, u32); 8] = [
 /// The Targeting popup's delay at its one site (`0x514a8d mov edx,0x2710`).
 pub(crate) const TARGETING_DELAY_MS: u32 = 10_000;
 
-/// The Movement popup's silence window (`0x482ff7`: elapsed − stamp − 90 000 ≥ 0) — inferred as
-/// ninety seconds after world enter with no movement input (the stamp getter `0x5143e0` is
-/// read, its meaning is not).
+/// The Movement popup's silence window (`0x482ff7`: elapsed - stamp - 90000 >= 0), taken as 90 s
+/// after world enter with no movement input; what the stamp (`0x5143e0`) holds is untraced.
 const MOVEMENT_SILENCE: Duration = Duration::from_millis(90_000);
 
-/// A site's ask of the tutorial system — written from wherever the reference's site lives.
+/// A site's ask of the tutorial system, written from wherever the reference's site lives.
 #[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TutorialEvent {
     /// `TriggerTutorial(id, delayMs)`: the fire-once leg.
@@ -118,8 +106,7 @@ enum TutorialSend {
     Reset,
 }
 
-/// A bank: `bit = bytes[id >> 3] & (1 << (id & 7))` — the client's `word = id >> 5` on
-/// little-endian dwords, byte-wise.
+/// A bank bit, byte-wise: the client's `id >> 5` dword indexing on little-endian dwords.
 fn bank_bit(bank: &[u8], id: u32) -> Option<bool> {
     bank.get((id >> 3) as usize)
         .map(|b| b & (1 << (id & 7)) != 0)
@@ -176,7 +163,7 @@ impl Tutorials {
         };
         match bank_bit(bank, id) {
             Some(false) => set_bank_bit(bank, id),
-            _ => return, // already set — or past the bank, which the reference would overrun
+            _ => return, // already set, or past the bank (the reference would overrun)
         }
         if delay_ms == 0 {
             self.fired.push(id + 1);
@@ -186,9 +173,9 @@ impl Tutorials {
         }
     }
 
-    /// `SetTutorialFlag(id)` (`0x4b54c0`): bank B's bit gates; both banks set; the id's timer
-    /// cancelled; the 0-based id sent. The reference dereferences an absent bank B; ours treats
-    /// that as a no-op.
+    /// `SetTutorialFlag(id)` (`0x4b54c0`): bank B's bit gates, both banks set, the id's timer
+    /// cancelled, the 0-based id sent. The reference dereferences an absent bank B; here it is a
+    /// no-op.
     pub(crate) fn acknowledge(&mut self, id: u32) {
         let Some(bank_b) = self.acknowledged.as_mut() else {
             return;
@@ -216,8 +203,7 @@ impl Tutorials {
         self.sends.push(TutorialSend::Clear);
     }
 
-    /// `ResetTutorials()`: every bit of both banks cleared — the timers NOT flushed — the empty
-    /// reset sent.
+    /// `ResetTutorials()`: every bit of both banks cleared, the timers kept, the empty reset sent.
     fn reset(&mut self) {
         for bank in [&mut self.fire_once, &mut self.acknowledged]
             .into_iter()
@@ -242,7 +228,7 @@ impl Tutorials {
         self.fired.extend(due);
     }
 
-    /// `SMSG_ITEM_PUSH_RESULT` for one of ours — the item-received handler's five sites, resolved
+    /// `SMSG_ITEM_PUSH_RESULT` for one of ours: the item-received handler's five sites, resolved
     /// on the next feed with the item's template.
     pub(crate) fn item_received(&mut self, entry: u32, bag: u8, slot: u32) {
         self.pushes.push((entry, bag, slot));
@@ -296,10 +282,9 @@ fn feed_tutorials(
         }
     }
 
-    // The item-received handler's sites, over the item's template: Backpack unconditionally;
-    // Equippable Items for an inventory type with an equip slot (inferred as any non-zero type —
-    // the reference's 23-bit mask (`0x809200`) is not decoded bit by bit); Hearthstones by entry;
-    // Ranged Weapons for a ranged type on a non-hunter; Keyrings by the slot band.
+    // The item-received sites: Backpack always; Equippable Items for any non-zero inventory type
+    // (the reference's 23-bit mask `0x809200` is not decoded); Hearthstones by entry; Ranged
+    // Weapons for a ranged type on a non-hunter; Keyrings by the slot band.
     let pushes = std::mem::take(&mut tutorials.pushes);
     let class = self_q.single().ok().and_then(|s| s.0.unit_class());
     for (entry, bag, slot) in pushes {
@@ -332,13 +317,8 @@ fn feed_tutorials(
             vec![ScriptValue::Int(i64::from(published))],
         );
     }
-    // **The bank is owed to every VM, not to the process**. What the acknowledged
-    // bank holds is the app's; whether a VM has been *told* it is that VM's, so the memory sits
-    // behind a [`crate::ui_script::VmMemo`] and expires with the session it was written against
-    // (1290/1291 — a `/reload` is a logout and a login back to back). A plain "changed since the
-    // last push" flag is the same mistake 2113 names: it answers "did the bank move?" when the
-    // question is "does THIS VM know it?", and after a reload the answer was no for the rest of
-    // the session.
+    // The bank is owed to every VM: what it has been told is per VM, so a `/reload`'s fresh VM
+    // is told again.
     let told = told.get(&script);
     if *told != tutorials.acknowledged {
         told.clone_from(&tutorials.acknowledged);
@@ -348,8 +328,8 @@ fn feed_tutorials(
 
 /// The self descriptor's `0x4b5390` edge sites: the `SMSG_LEVELUP_INFO` arm on the level rising,
 /// the ghost and resting flags, the PvP flag, the rested table's one live row, and the mover
-/// entering water — a change each, never the login descriptor. The memory is per world session:
-/// the bring-up resets it, so a re-login's first descriptor arms silently like the first one.
+/// entering water. Each fires on a change, never on the login descriptor; the bring-up resets the
+/// memory.
 fn watch_self(
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     player: Res<Player>,
@@ -360,8 +340,7 @@ fn watch_self(
     if std::mem::take(&mut cascade.reset_watch) {
         *watch = SelfWatch::default();
     }
-    // The descriptor edges — a change, never the login descriptor (the watchers run on
-    // field changes; the first sight arms silently).
+    // The first sight of each field arms silently.
     if let Ok(store) = self_q.single() {
         let level = store.0.unit_level();
         let player_flags = store.0.player_flags();
@@ -391,8 +370,7 @@ fn watch_self(
             }
         }
         if let (Some(prev), Some(new)) = (watch.rest_state, rest_state) {
-            // The rested table: only rest state 1 names a tutorial (the other rows carry the
-            // sentinel), on the field's change.
+            // Only rest state 1 names a tutorial; the other rows carry the sentinel.
             if new != prev && new == 1 {
                 asks.write(TutorialEvent::trigger(id::RESTED));
             }
@@ -438,7 +416,7 @@ fn drain_tutorials(
 }
 
 /// The world-enter bring-up: the banks zeroed, then the bank captured during the login handshake
-/// applied if there was one (the world stream's copy lands through `SessionEvent` otherwise).
+/// applied if there was one.
 fn on_world_enter(
     mut entered: MessageReader<EnteredWorldMessage>,
     mut tutorials: ResMut<Tutorials>,
@@ -456,9 +434,9 @@ fn on_world_enter(
     }
 }
 
-/// The enter-world cascade `0x4908c0`'s two unconditional triggers — Welcome (`0x490a48`) then
-/// Questgivers (`0x490a51`) — run once per world session when the local player object exists,
-/// which is after the bank has landed on a stock server; and the Movement popup's silence window.
+/// The enter-world cascade `0x4908c0`'s two unconditional triggers, Welcome (`0x490a48`) then
+/// Questgivers (`0x490a51`), once per world session when the local player exists; and the
+/// Movement popup's silence window.
 #[derive(Resource, Default)]
 pub(crate) struct WorldEnterCascade {
     armed: bool,
@@ -498,7 +476,7 @@ pub(crate) struct InputHooks<'w> {
 }
 
 impl InputHooks<'_> {
-    /// A movement input this frame (`test ecx,0x1030` — INFERRED as the forward/side axes).
+    /// A movement input this frame (`test ecx,0x1030`, taken as the forward and side axes).
     pub(crate) fn moved(&mut self) {
         if let Some(c) = self.cascade.as_mut() {
             c.moved = true;
@@ -520,10 +498,9 @@ impl InputHooks<'_> {
     }
 }
 
-/// The window edges the reference triggers or acknowledges from inside its handlers: the
-/// trainer list (Trainers acknowledged, `0x4d74ae`), the vendor list (Vendors, `0x4fad32`), the
-/// taxi map (Travel, `0x4dbaa2`), and the group turning raid (Raid Groups, `0x4ba60d` — INFERRED
-/// as the raid-type edge; the row names only its non-zero argument).
+/// The window edges the reference's handlers fire from: the trainer list (Trainers acknowledged,
+/// `0x4d74ae`), the vendor list (Vendors, `0x4fad32`), the taxi map (Travel, `0x4dbaa2`), and the
+/// group turning raid (Raid Groups, `0x4ba60d`, taken as the raid-type edge).
 #[derive(Default)]
 struct WindowWatch {
     trainer: Option<u64>,
@@ -581,24 +558,10 @@ impl Plugin for TutorialPlugin {
                     run_world_enter_cascade.before(feed_tutorials),
                     watch_windows.before(feed_tutorials),
                     watch_self.after(on_world_enter).before(feed_tutorials),
-                    // **Not before the in-game UI exists**. This is the one feed
-                    // in 2226's 29-system audit that could still lose a login's own payload:
-                    // `run_world_enter_cascade` triggers WELCOME and QUESTGIVERS the moment
-                    // `SelfPlayer` exists, a 0-delay `trigger` pushes straight into `fired`, and
-                    // the `mem::take(&mut tutorials.fired)` below fires `TUTORIAL_TRIGGER` at
-                    // whatever VM is in the world. No `VmMemo` sits behind that publication, so
-                    // 2226's fresh session cannot bring it back.
-                    //
-                    // The VM guard already covers the *park* — it sits above the take, so a
-                    // parked frame returns with `fired` intact. What it does not cover is the
-                    // one-frame window where the wire is in-world and the boot VM is still live
-                    // (2214): `on_world_enter` reads `EnteredWorldMessage` out of the same drain
-                    // that writes it, so the arm, the trigger and the take can all land in that
-                    // one frame — the coin flip being whether `apply_net_updates`' spawn command
-                    // has applied yet, which nothing here declares an edge against.
-                    //
-                    // The gate costs nothing: the cascade still arms and still triggers, `fired`
-                    // simply waits, and the first frame with an interface delivers the set.
+                    // Not before the in-game UI exists: `fired` is taken once, with no `VmMemo`
+                    // behind it, so the login's Welcome and Questgivers fired into the boot VM
+                    // during the one frame it is still live in the world would be lost. `fired`
+                    // simply waits for the first frame with an interface.
                     feed_tutorials
                         .in_set(UiFeed)
                         .run_if(crate::ui_script::ingame_ui_up),
@@ -609,7 +572,7 @@ impl Plugin for TutorialPlugin {
     }
 }
 
-/// The tutorial flags' packet handler (in the net handler table since 2326).
+/// The tutorial flags' packet handler.
 mod net {
     use benilla_protocol::{SessionEvent, SessionEventKind};
     use bevy::prelude::*;
@@ -617,7 +580,7 @@ mod net {
     use super::Tutorials;
     use crate::net::NetHandlerApp;
 
-    /// Register the handler — called from [`super::TutorialPlugin`].
+    /// Register the handler, from [`super::TutorialPlugin`].
     pub(super) fn register(app: &mut App) {
         app.net_handler(SessionEventKind::TutorialFlags, on_flags);
     }
@@ -747,7 +710,7 @@ mod tests {
         assert_eq!(bank_bit(a.unwrap(), 32), None, "past a 4-byte bank");
     }
 
-    /// A bare app around [`feed_tutorials`] — the one system that owes the VM the bank.
+    /// A bare app around [`feed_tutorials`], the one system that owes the VM the bank.
     fn feeder() -> App {
         let mut app = App::new();
         app.init_resource::<Tutorials>()
@@ -765,19 +728,14 @@ mod tests {
             .unwrap()
     }
 
-    /// **The bank is owed to every VM** — the `/reload` bug, reproduced.
-    ///
-    /// `ReloadUI()` is `end_ui_session` + the entry load back to back (1290/1291), and only the
-    /// first of those mints a VM: the world-entry path that fills the banks
-    /// ([`Tutorials::world_enter`]) never runs, so a push gated on "the bank moved" never fires
-    /// again. `TutorialsEnabled()` then answers nil for the rest of the session, the Show
-    /// Tutorials row loads OFF, and ticking it back on passes `BenillaOptionsFrame_SetTutorialsEnabled`'s
-    /// `~=` guard into `ResetTutorials()` — a `CMSG_TUTORIAL_RESET` that re-arms, account-wide,
-    /// every popup the player had already dismissed.
+    /// A `/reload`'s fresh VM is told the bank again, though no world entry refills it. Untold,
+    /// `TutorialsEnabled()` answers nil, the Show Tutorials row loads off, and ticking it passes
+    /// `UIOptionsFrame.lua:319`'s `~=` guard into `ResetTutorials()`, re-arming every dismissed
+    /// popup account-wide.
     #[test]
     fn a_rebuilt_vm_is_told_the_acknowledged_bank_again() {
         let mut app = feeder();
-        // The packet lands: one unacknowledged bit is all `TutorialsEnabled()` scans for.
+        // One unacknowledged bit is all `TutorialsEnabled()` scans for.
         let mut bank = vec![0xFFu8; 32];
         bank[0] = 0xFE;
         app.world_mut()
@@ -810,8 +768,7 @@ mod tests {
             .apply_flags(&[0u8; 32]);
         app.insert_non_send_resource(UiScript::new().expect("VM"));
         app.update();
-        // A bank the VM has already been told is not handed over again — proven by clearing it
-        // behind the feed's back and watching the next frame leave it cleared.
+        // Cleared behind the feed's back, a bank the VM was told stays cleared.
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
             .set_tutorial_bank(None);
@@ -825,26 +782,16 @@ mod tests {
         assert!(enabled(&mut app), "a moved bank reaches the live VM");
     }
 
-    /// **The login's own tutorials wait for an interface** — built on the REAL
-    /// plugin, so it fails if the gate is taken off the registration rather than off a copy of it.
-    ///
-    /// `TUTORIAL_TRIGGER` has no [`crate::ui_script::VmMemo`] behind it: `trigger` sets the bank
-    /// bit and pushes the id into `fired`, and the feed's `mem::take` fires it once at whatever VM
-    /// is in the world. So unlike every one-shot 2226 covers, a firing lost to a frameless VM
-    /// cannot be recovered by the entry load minting a new session — there is nothing left to
-    /// re-spend. `run_world_enter_cascade` puts WELCOME and QUESTGIVERS into exactly that position
-    /// on every login.
-    ///
-    /// Against the ungated shape the first assertion reads *"`fired` is empty — the login's two
-    /// tutorials were published to a VM with no frames and are gone for the session"*.
+    /// The login's own tutorials wait for an interface, on the real plugin's registration:
+    /// `TUTORIAL_TRIGGER` is fired once, so one published to a frameless VM is gone for the
+    /// session.
     #[test]
     fn the_world_enter_tutorials_are_not_fired_into_a_ui_less_vm() {
         let mut app = App::new();
         app.add_plugins(TutorialPlugin)
             .init_resource::<crate::items::Items>()
             .init_resource::<crate::sound::MessageSounds>()
-            // The plugin's other watchers' inputs — none of them is the subject here; they are
-            // present so the REAL plugin can be driven rather than a copy of one of its systems.
+            // The other watchers' inputs, so the real plugin can run.
             .init_resource::<crate::ui_trainer::TrainerOpen>()
             .init_resource::<crate::ui_merchant::MerchantOpen>()
             .init_resource::<crate::ui_taxi::TaxiState>()
@@ -854,8 +801,8 @@ mod tests {
         let (tx, _rx) = crossbeam_channel::unbounded();
         app.insert_resource(crate::net::NetCommands(tx));
 
-        // The deferral window (1978/2214): in the world on the wire, the entry load still owed,
-        // and a live boot VM that has strings and fonts but not one frame.
+        // The deferral window: in the world on the wire, the entry load still owed, and a live
+        // boot VM with no frames.
         app.insert_resource(State::new(crate::char_select::ClientState::InWorld));
         app.insert_resource(crate::ui_script::PendingEntryUiLoad);
         app.insert_non_send_resource(UiScript::new().expect("the boot VM"));

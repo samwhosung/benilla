@@ -1,22 +1,10 @@
-//! The 1.12 glue string table, read off the MPQ chain at startup — the localized text the glue
-//! screens quote: faction/race/class description paragraphs (`FACTION_INFO_*`, `RACE_INFO_*`,
-//! `ABILITY_INFO_*`, `CLASS_*`), the per-race customization dial labels (`HAIR_<tok>_STYLE`,
-//! `FACIAL_HAIR_<tok>`), the login refusals, and the button captions.
+//! The 1.12 glue string table, read off the MPQ chain at startup: the glue screens' localized
+//! text (race and class paragraphs, customization labels, login refusals, button captions).
 //!
-//! **It is two files, in the reference's own order**. `GlueXML.toc` sources
-//! `GlueStrings.lua` at line 1 and `GlueLocalization.xml` at line 3, and that XML exists only to
-//! load its script and call `Localize()` — a function of nothing but assignments, which *overwrite*
-//! the base table. In 1.12 enGB it rewrites 32 keys, among them every long login refusal
-//! (`AUTH_BANNED`, `LOGIN_UNKNOWN_ACCOUNT`, …) and the realm-type suffixes. Reading only the base
-//! file showed the player sentences their own client never shows. The in-game side already loads
-//! its exact twin — `Interface\FrameXML\Localization.xml`, same two-part shape, sourced from
-//! `benilla.toc` — so the glue side was the half that had been left behind.
-//!
-//! Runtime-read, never embedded: the paragraphs are Blizzard content, so they load from the
-//! player's own client data like every other asset (the repo's never-commit rule) — which is also
-//! what makes the locale *theirs* rather than ours to guess. Both files are plain `KEY = "value";`
-//! Lua assignments, one per line — a full Lua VM would be theater here; [`parse_glue_strings`]
-//! handles exactly that shape (and skips everything else).
+//! Two files, in `GlueXML.toc`'s order: `GlueStrings.lua`, then `GlueLocalization.xml`, whose
+//! script's `Localize()` overwrites keys of the base table (32 in enGB, among them the long login
+//! refusals and the realm-type suffixes). Both are plain `KEY = "value";` lines, parsed without a
+//! Lua VM; the text is read from the player's install, never embedded.
 
 use std::collections::HashMap;
 
@@ -27,14 +15,12 @@ use benilla_assets::{LockRecover, WorldAssets};
 const GLUE_STRINGS: &str = "Interface\\GlueXML\\GlueStrings.lua";
 const GLUE_LOCALIZATION: &str = "Interface\\GlueXML\\GlueLocalization.lua";
 
-/// The glue string table. Present but possibly empty (missing client data — the graceful-absence
-/// posture; callers fall back to their built-in captions).
+/// The glue string table; empty without client data, and callers fall back to built-in captions.
 #[derive(Resource, Default)]
 pub(crate) struct GlueStrings(HashMap<String, String>);
 
 impl GlueStrings {
-    /// Build a table straight from parsed pairs — the test seam for code that has to resolve
-    /// against the *real* shipped file rather than a stub.
+    /// A table from parsed pairs, for tests that resolve against the real file.
     #[cfg(test)]
     pub(crate) fn from_map(map: HashMap<String, String>) -> Self {
         Self(map)
@@ -46,7 +32,6 @@ impl GlueStrings {
         self.0
     }
 
-    /// The string for a key, or `None` (unknown key / no data).
     pub(crate) fn get(&self, key: &str) -> Option<&str> {
         self.0.get(key).map(String::as_str)
     }
@@ -57,11 +42,8 @@ impl GlueStrings {
     }
 }
 
-/// Startup: read + parse the glue string table off the chain (after the chain exists).
-///
-/// Two reads, and the **order is the whole point**: the base file, then the locale patch over it,
-/// exactly as `GlueXML.toc` sources them. A chain missing either one degrades on its own — no
-/// base means built-in captions, no patch means the base text.
+/// Startup: reads the base file, then lays the locale patch over it, in `GlueXML.toc`'s order.
+/// Either may be missing on its own.
 pub(crate) fn load_glue_strings(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
     let mut table = GlueStrings::default();
     if let Some(assets) = assets {
@@ -85,8 +67,8 @@ pub(crate) fn load_glue_strings(mut commands: Commands, assets: Option<Res<World
     commands.insert_resource(table);
 }
 
-/// Parse the `KEY = "value";` assignments (one per line; `\n`/`\t`/`\"`/`\\` escapes unfolded).
-/// Anything else — comments, code, multi-line constructs — is skipped.
+/// Parses the `KEY = "value";` lines, unfolding `\n`/`\t`/`\"`/`\\` escapes; anything else is
+/// skipped.
 fn parse_glue_strings(src: &str) -> HashMap<String, String> {
     let mut out = HashMap::new();
     for line in src.lines() {
@@ -128,24 +110,12 @@ fn parse_glue_strings(src: &str) -> HashMap<String, String> {
     out
 }
 
-/// The assignments inside `GlueLocalization.lua`'s **`Localize()`** — the locale patch the
-/// reference lays over `GlueStrings.lua`.
+/// The assignments inside `GlueLocalization.lua`'s `Localize()`, which `GlueLocalization.xml` runs
+/// as it loads. The file's other function, `LocalizeFrames()`, moves the `WorldOfWarcraftRating`
+/// logo (called on `FRAMES_LOADED`), a frame benilla's glue does not have, so it is not read.
 ///
-/// Scoped to that one function deliberately, because the file defines two and only one of them is
-/// a string table:
-///
-/// - **`Localize()`** is run by `GlueLocalization.xml`'s own inline `<Script>` (l.6) the moment the
-///   file loads, which in `GlueXML.toc` is line 3 — after `GlueStrings.lua` at line 1. Its body is
-///   nothing but `KEY = "value";`, and it is what this reads.
-/// - **`LocalizeFrames()`** is called much later, from `GlueParent_OnEvent`'s `FRAMES_LOADED` arm
-///   (`GlueParent.lua` l.95), and is frame surgery rather than text: in 1.12 enGB, a texture swap
-///   and reposition of the login screen's `WorldOfWarcraftRating` logo — a frame benilla's native
-///   glue does not have at all. Nothing there to apply, so nothing here reads it.
-///
-/// The body runs from `function Localize()` to the first **unindented** `end`, which is Blizzard's
-/// own formatting: nested blocks are indented, a function's own terminator is not. A file whose
-/// shape doesn't match yields no overrides rather than the wrong ones — the loader logs the count,
-/// so a zero is visible rather than silent.
+/// The body ends at the first unindented `end`, as the stock file is formatted; a file of another
+/// shape yields no overrides.
 fn parse_localize_overrides(src: &str) -> HashMap<String, String> {
     let mut body = String::new();
     let mut inside = false;
@@ -160,13 +130,10 @@ fn parse_localize_overrides(src: &str) -> HashMap<String, String> {
         body.push_str(line);
         body.push('\n');
     }
-    // No terminator (or no `Localize()` at all): an unrecognised file patches nothing.
     HashMap::new()
 }
 
-/// Build the table the way [`load_glue_strings`] does — base file, then the locale patch over it.
-/// Every test that resolves against the *real* chain goes through here, so no test can assert a
-/// sentence the running client would not show.
+/// Builds the table as [`load_glue_strings`] does, for tests against the real chain.
 #[cfg(test)]
 pub(crate) fn table_from_chain(chain: &mut benilla_formats::Chain) -> GlueStrings {
     let base = chain.read_file(GLUE_STRINGS).expect("GlueStrings.lua");
@@ -204,9 +171,6 @@ BROKEN = "no close
         assert_eq!(t.len(), 3);
     }
 
-    /// `Localize()`'s body, and **only** its body: the second function in the file is frame
-    /// surgery that the reference calls from somewhere else entirely, so an assignment there must
-    /// not leak into the string table.
     #[test]
     fn the_locale_patch_reads_localize_and_stops_at_its_end() {
         let src = r#"function Localize()
@@ -235,19 +199,13 @@ end
         assert_eq!(t.len(), 2);
     }
 
-    /// A file that is not the shape we understand patches **nothing** — never a partial or a
-    /// guessed table. The two ways it can fail: no `Localize()` at all, and a body with no
-    /// terminator to stop at.
     #[test]
     fn an_unrecognised_file_patches_nothing() {
         assert!(parse_localize_overrides("KEY = \"value\";\n").is_empty());
         assert!(parse_localize_overrides("function Localize()\n\tK = \"v\";\n").is_empty());
     }
 
-    /// **The real chain's patch, applied in the reference's own order.** Reading only the base
-    /// file is what decision 2052 fixed, and this is the regression: three keys whose base text
-    /// and patched text differ, asserted from both ends so neither a lost patch nor a lost base
-    /// can pass. Skips without client data.
+    /// Three keys whose base and patched text differ. Skips without client data.
     #[test]
     fn the_real_chain_patches_the_login_refusals_and_the_realm_suffixes() {
         let data = benilla_formats::wow_data_or_skip!();
@@ -263,16 +221,14 @@ end
             assert_ne!(before, after, "{key} was not patched by Localize()");
         }
 
-        // The suffix is the one a player can read at a glance: the base file parenthesises it,
-        // the enGB patch does not — `CharSelectRealmName` says "Realm PVP", not "Realm (PVP)".
+        // The enGB patch drops the parentheses: `CharSelectRealmName` reads "Realm PVP".
         assert_eq!(
             base.get("PVP_PARENTHESES").map(String::as_str),
             Some("(PVP)")
         );
         assert_eq!(table.get("PVP_PARENTHESES"), Some("PVP"));
 
-        // Every key the base file never had still resolves, and every key it had is still there:
-        // the patch overwrites, it does not replace the table.
+        // The patch overwrites keys; it does not replace the table.
         assert!(table.get("FACTION_INFO_HORDE").is_some(), "base lost");
         assert!(base.len() > 100 && table.0.len() >= base.len());
     }

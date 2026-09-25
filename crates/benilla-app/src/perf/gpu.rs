@@ -1,31 +1,13 @@
-//! **`WOW_GPU_MS=1` — the whole-frame GPU meter** (1389's scoped follow-on, built 2026-08-18;
-//! the drastic-options census' unknown #2 was "GPU frame time and VRAM headroom — no instrument
-//! exists").
+//! `WOW_GPU_MS=1`: the whole-frame GPU meter. Two sentinel render passes bracket the camera
+//! driver and write a timestamp pair at their pass boundaries, which Apple GPUs can sample where
+//! bevy's in-pass diagnostics cannot.
 //!
-//! Two plain render-graph nodes bracket the camera driver — `begin` writes timestamp 0 into a
-//! two-slot query set from its command encoder, `end` writes timestamp 1 — legal on this machine
-//! because we hold `TIMESTAMP_QUERY_INSIDE_ENCODERS` (Apple Silicon samples at stage boundaries;
-//! bevy's own `RenderDiagnosticsPlugin` needs INSIDE_PASSES and reads zero GPU spans here — the
-//! `perf` module header's ⚠ note, measured in 1389).
-//!
-//! **The resolve rides the NEXT frame's command buffer, ahead of that frame's own stamps.**
-//! 1389's recorded trap: resolving the query set in the SAME command buffer as the timed work
-//! returns zeros on Metal (5 of 6 reads; the 6th a plausible-looking near-miss) — resolve on a
-//! later submission. The first build of this meter did that with a submission of its own: a
-//! fresh encoder, a second `queue.submit` and an explicit `device.poll` in `Cleanup`, every
-//! frame — a per-frame poll that traced at 1.8 ms on Intel's DX12 driver (2236) and priced
-//! untraced in 2254. So the query set holds TWO stamp pairs and the frames alternate between
-//! them ([`pairs`]): the `begin` node first resolves the pair the previous frame wrote — a later
-//! submission, 1389's rule kept — and copies it into a free slot of a small ring of MAP_READ
-//! buffers, on the graph's own shared encoder; then it writes this frame's pair. `Cleanup` only
-//! kicks the map on the slot the graph just filled, and that map lands inside the NEXT frame's
-//! own `queue.submit`, which runs wgpu's device maintenance as part of every submit
-//! (`wgpu_core::device::queue::Queue::submit` ends in `Device::maintain(Poll)`) — the shape of
-//! bevy's own `DiagnosticsRecorder`, and no submission or poll of the meter's own. The
-//! published number is the freshest mapped delta, nanoseconds in one `AtomicU64` shared with
-//! the main world — `FPS_PROBE` samples it per frame under the same env and prints its own
-//! percentiles, so a leg gets `gpu_p50/gpu_p99` beside `cpu_ms` with zero cost when the env is
-//! off (nothing registers).
+//! Resolving the query set in the same command buffer as the timed work reads zeros on Metal, so
+//! the query set holds two pairs that alternate by frame ([`pairs`]): the `begin` node resolves
+//! the pair the previous frame wrote into a ring of `MAP_READ` buffers on the graph's own encoder,
+//! then writes this frame's. `Cleanup` only starts the map, which lands in the next frame's
+//! `queue.submit` (every submit maintains the device), so the meter adds no submission or poll.
+//! The freshest delta is published in nanoseconds through one shared `AtomicU64`.
 
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
@@ -45,25 +27,20 @@ use bevy::render::{Render, RenderApp, RenderSystems};
 use bevy::ui_render::TransparentUi;
 use wgpu::{QuerySet, QuerySetDescriptor, QueryType};
 
-/// Is the meter armed? One read; everything registers behind it.
+/// Whether the meter is armed, read once.
 pub(crate) fn enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("WOW_GPU_MS").as_deref() == Ok("1"))
 }
 
-/// The freshest whole-frame GPU duration, nanoseconds. Written by the render app's readback,
-/// read by `FPS_PROBE`/whoever in the main world. 0 = no reading yet.
+/// The freshest whole-frame GPU duration in nanoseconds, written by the render app's readback;
+/// 0 until the first reading.
 #[derive(Resource, Clone)]
 pub(crate) struct GpuMsShared(pub Arc<AtomicU64>);
 
-/// **The wgpu resource census** — live buffers, textures and bind groups, off wgpu-core's own
-/// registry report, refreshed once a frame by the render app and read by `FPS_PROBE` under the
-/// same env (`wgpu_bufs=… wgpu_texs=… wgpu_bgs=…`). It is on the GPU meter because it prices
-/// the GPU *lane's* CPU: every render pass wgpu encodes allocates and clears usage trackers
-/// sized to the device's live buffer and texture counts (`wgpu_core::track::UsageScope`), so a
-/// scene's pass-encode CPU carries a term that scales with residency, not with what is drawn —
-/// a sampled profile of the crowd rig (1929's follow-on) put that term at roughly half of
-/// `encode_render_pass`. The count is the number that lever moves.
+/// The wgpu resource census: live buffers, textures and bind groups from wgpu-core's registry
+/// report, refreshed once a frame. Every pass wgpu encodes sizes its usage trackers to these
+/// counts, so pass-encode CPU scales with residency as well as with what is drawn.
 #[derive(Resource, Clone)]
 pub(crate) struct WgpuCensusShared(pub Arc<WgpuCensus>);
 
@@ -72,15 +49,14 @@ pub(crate) struct WgpuCensus {
     pub buffers: AtomicU64,
     pub textures: AtomicU64,
     pub bind_groups: AtomicU64,
-    /// Draw calls the render phases will issue this frame, per family — see [`count_draws`].
+    /// Draw calls the render phases issue this frame, per family ([`count_draws`]).
     pub draws_opaque: AtomicU64,
     pub draws_transparent: AtomicU64,
     pub draws_shadow: AtomicU64,
     pub draws_ui: AtomicU64,
 }
 
-/// Render world, `Cleanup`: refresh the census. wgpu-core's report takes each registry's read
-/// lock and counts live ids — microseconds, and only under the meter's env.
+/// Render world, `Cleanup`: refresh the census from wgpu-core's report.
 fn census(instance: Res<bevy::render::renderer::RenderInstance>, shared: Res<WgpuCensusShared>) {
     let Some(report) = instance.generate_report() else {
         return;
@@ -95,13 +71,9 @@ fn census(instance: Res<bevy::render::renderer::RenderInstance>, shared: Res<Wgp
         .store(hub.bind_groups.num_allocated as u64, Ordering::Relaxed);
 }
 
-/// Render world, `Cleanup`: the frame's draw-call count per phase family, off the phases bevy
-/// just rendered — the number the pass-encode CPU on the render thread scales with (wgpu-core
-/// validates and wgpu-hal encodes per draw, and on Metal a draw is also what the driver's
-/// kernel-side work is measured in). A binned phase issues one draw per bin (Metal has no
-/// multi-draw indirect, so a multidrawable batch set still draws bin by bin) plus one per
-/// unbatchable entity and per non-mesh item; a sorted phase issues one per item whose batch
-/// range survived batching (a merged item's range is emptied into its predecessor's).
+/// Render world, `Cleanup`: the frame's draw calls per phase family. A binned phase draws once
+/// per bin (Metal has no multi-draw indirect) plus once per unbatchable entity and non-mesh item;
+/// a sorted phase draws once per item whose batch range survived batching.
 #[allow(clippy::type_complexity)]
 fn count_draws(
     shared: Res<WgpuCensusShared>,
@@ -169,49 +141,38 @@ fn count_draws(
 
 const RING: usize = 4;
 
-/// Ring-slot states: a copy may only target a FREE slot — submitting into a mapped (or
-/// map-pending) buffer is a wgpu validation error, which the first live run demonstrated.
+/// Ring-slot states: a copy may only target a `FREE` slot, since submitting into a mapped or
+/// map-pending buffer is a wgpu validation error.
 const FREE: u8 = 0;
 const PENDING: u8 = 1;
 const MAPPED: u8 = 2;
 
-/// Which stamp pair a graph run writes and which it resolves, for the [`GpuStamp::frame`] it
-/// runs under: the two pairs alternate, and a run resolves the pair the run before it wrote —
-/// a later submission than the timed work (1389's rule), and one whose queries the previous
-/// command buffer reset before writing (a resolve of a never-reset query is 2211's hang). Pair
-/// `p` is queries `2p` (begin) and `2p + 1` (end).
+/// `(write, resolve)` pairs for a [`GpuStamp::frame`]: a run resolves the pair the run before
+/// it wrote, a later submission whose queries were reset by being written. Pair `p` is queries
+/// `2p` (begin) and `2p + 1` (end).
 fn pairs(frame: usize) -> (u32, u32) {
     #[allow(clippy::cast_possible_truncation)]
     let write = (frame % 2) as u32;
     (write, 1 - write)
 }
 
-/// Render-world state: the query set (two stamp pairs, alternating by frame), the resolve
-/// buffer, and the mapping ring.
+/// Render-world state: the query set (two alternating stamp pairs), the resolve buffer, and the
+/// mapping ring.
 #[derive(Resource)]
 struct GpuStamp {
     query_set: QuerySet,
-    /// A 1×1 target the sentinel passes clear — real (if trivial) work, because an EMPTY pass
-    /// never reaches the Metal encoder and samples nothing (this meter's second zero-read).
+    /// A 1×1 target the sentinel passes clear: an empty pass never reaches the Metal encoder and
+    /// samples nothing.
     sentinel_view: wgpu::TextureView,
     resolve: Buffer,
     ring: Vec<(Buffer, Arc<AtomicU8>)>,
-    /// `Cleanup`s this resource has seen, counting the one that created it; the graph run that
-    /// follows each writes pair `frame % 2` and resolves the other ([`pairs`]). **The creation
-    /// `Cleanup` precedes the first stamped frame**: `init_stamp` inserts the resource in
-    /// `Cleanup`, the scheduler's sync point applies it before `readback` runs in the same set,
-    /// and the sentinel nodes that write — and, in wgpu, reset — the queries only run in the
-    /// NEXT frame's graph. A resolve on that first run would read a query pool no command has
-    /// ever reset, which Vulkan forbids (`VUID-vkCmdCopyQueryPoolResults-None-09402`) and
-    /// answers, on NVIDIA's driver, by waiting on it forever — a GPU hang, the TDR, and the
-    /// lost device 2205 met at the swapchain acquire. Metal hands back zeros for the same read,
-    /// which is why the meter's first live runs (1389) saw "zeros" and never a hang. Decision
-    /// 2211. So the first run is armed with no [`Self::slot`] and resolves nothing.
+    /// `Cleanup`s seen, counting the creating one; the graph run after each writes pair
+    /// `frame % 2` and resolves the other ([`pairs`]). The first run is armed with no
+    /// [`Self::slot`]: no command has reset its query pool yet, and resolving one is forbidden
+    /// on Vulkan (`VUID-vkCmdCopyQueryPoolResults-None-09402`), a GPU hang on NVIDIA.
     frame: usize,
-    /// The ring slot the NEXT graph run copies the previous run's stamps into: chosen in
-    /// `Cleanup` from the FREE slots — `None` while no run has written a pair yet, or while the
-    /// ring is full (that sample is skipped; the meter is a meter). The `begin` node reads it,
-    /// the `Cleanup` after that run maps it.
+    /// The `FREE` ring slot the next graph run copies the previous run's stamps into; `None`
+    /// before any pair is written or while the ring is full, and that sample is skipped.
     slot: Option<usize>,
     period: f32,
     shared: Arc<AtomicU64>,
@@ -237,9 +198,7 @@ impl Node for GpuStampNode {
             let (write, resolve) = pairs(stamp.frame);
             if self.index == 0 {
                 if let Some(slot) = stamp.slot {
-                    // The previous run's pair, resolved and copied out on the graph's own
-                    // encoder: a later submission than the stamps it reads (1389), and none of
-                    // the meter's own.
+                    // A later submission than the stamps it reads, on the graph's own encoder.
                     let encoder = render_context.command_encoder();
                     encoder.resolve_query_set(
                         &stamp.query_set,
@@ -250,10 +209,8 @@ impl Node for GpuStampNode {
                     encoder.copy_buffer_to_buffer(&stamp.resolve, 0, &stamp.ring[slot].0, 0, 16);
                 }
             }
-            // A SENTINEL PASS, not a bare `write_timestamp`: Apple Silicon samples counters only
-            // at stage boundaries, and an encoder-level stamp with no stages around it resolves
-            // to zero (measured on this meter's first live run — 1389's "two sentinel nodes"
-            // meant exactly this). An empty compute pass is the cheapest stage boundary there is.
+            // A sentinel pass, not a bare `write_timestamp`: Apple GPUs sample counters only at
+            // stage boundaries, and an encoder-level stamp resolves to zero.
             let (begin, end) = if self.index == 0 {
                 (Some(write * 2), None)
             } else {
@@ -285,9 +242,8 @@ impl Node for GpuStampNode {
     }
 }
 
-/// Build [`GpuStamp`] on the first render frame — the device does not exist yet at plugin
-/// build time (`RenderPlugin` creates it in `finish`), which a startup-eager version learned
-/// as a `RenderDevice does not exist` panic on its first live run.
+/// Build [`GpuStamp`] on the first render frame: `RenderPlugin` creates the device in `finish`,
+/// after plugin build.
 fn init_stamp(
     mut commands: Commands,
     stamp: Option<Res<GpuStamp>>,
@@ -353,16 +309,11 @@ fn init_stamp(
     });
 }
 
-/// `Cleanup`, after the graph's own submission: kick the map on the slot the graph just filled,
-/// publish every landed mapping, and arm a slot for the next run. No encoder, no submit and no
-/// poll of the meter's own — the map lands in the next frame's `queue.submit`, which maintains
-/// the device (the module header).
+/// `Cleanup`, after the graph's submission: start the map on the slot the graph just filled,
+/// publish every landed mapping, and arm a slot for the next run.
 fn readback(stamp: Option<ResMut<GpuStamp>>) {
     let Some(mut stamp) = stamp else { return };
-    // The slot the graph run just copied into: FREE when armed, so that submission is the only
-    // one in flight on it, and it is out of the arming below until the mapping is read and
-    // released — submitting into a mapped or map-pending buffer is a wgpu validation error,
-    // which the first live run demonstrated.
+    // The slot stays out of the arming below until its mapping is read and released.
     if let Some(i) = stamp.slot.take() {
         let flag = stamp.ring[i].1.clone();
         flag.store(PENDING, Ordering::Relaxed);
@@ -389,8 +340,7 @@ fn readback(stamp: Option<ResMut<GpuStamp>>) {
             }
         }
     }
-    // Arm the next run — which resolves the pair the run that just finished wrote — unless no
-    // run has written one yet (the creation `Cleanup`; see `frame`). None FREE → no sample.
+    // Not on the creation `Cleanup`, before any pair is written; no `FREE` slot, no sample.
     if stamp.frame >= 1 {
         stamp.slot = (0..RING).find(|&i| stamp.ring[i].1.load(Ordering::Relaxed) == FREE);
     }
@@ -427,8 +377,6 @@ pub(crate) fn plugin(app: &mut App) {
 mod tests {
     use super::pairs;
 
-    /// The ordering law the Vulkan hang (2211) and the Metal zeros (1389) both hang on: a run
-    /// never resolves the pair it writes, and always resolves the one the run before it wrote.
     #[test]
     fn a_run_resolves_the_pair_the_run_before_it_wrote() {
         for frame in 1..12 {

@@ -1,11 +1,5 @@
-//! Drives the reference's own `Blizzard_AuctionUI` addon through the engine (1971
-//! put it on the player's chain) — the auction
-//! twin of `mail_frame.rs`: it loads the same file chain the app does (cut to the auction window's
-//! dependency prefix), pushes a synthetic `AuctionState`, opens the window with the app's own
-//! `AUCTION_HOUSE_SHOW`/`AUCTION_ITEM_LIST_UPDATE` events, and asserts the transcribed Lua actually
-//! paints — the named regions exist, the Browse rows populate from the fed snapshot, a row past the
-//! batch is hidden, and the bid/buyout gates open for an affordable row and stay shut for one the
-//! player cannot pay for.
+//! Drives the stock `Blizzard_AuctionUI` addon off the player's chain with a synthetic
+//! `AuctionState` and the app's own show and list events, and asserts what it paints and queues.
 
 use benilla_ui::script::{
     AuctionCategory, AuctionItemRow, AuctionListState, AuctionState, AuctionSubCategory, UiScript,
@@ -14,49 +8,40 @@ use benilla_ui::script::{
 
 mod common;
 
-/// The auction window's load prefix — the app's own order (`assets/ui/benilla.toc`), members only.
-/// Every one of these is a real dependency: UiPanels for the panel manager + tab kit + StaticPopup
-/// engine, ScrollTemplates for the faux lists, UIPanelTemplates for the button/input/checkbox
-/// templates, UIDropDownMenu for the rarity capsule, MoneyFrame for `SmallMoneyFrameTemplate` +
-/// the `MoneyTypeInfo` table this window registers `AUCTION_DEPOSIT` into, The `MoneyInputFrame_*` money-entry
-/// helpers used to mean loading MerchantFrame.xml as well; 1751 moved that kit to MoneyFrame.xml
-/// on its way to the chain, so the dependency is gone.
+/// The auction window's load prefix, in the app's order (`assets/ui/benilla.toc`): UIParent for
+/// `ShowUIPanel`, UIPanelTemplates for the tab kit and widget templates, StaticPopup for the
+/// dialogs, MoneyFrame for `SmallMoneyFrameTemplate` and `MoneyTypeInfo`, MoneyInputFrame for
+/// the price entry, UIDropDownMenu for the rarity menu, ScrollTemplates for the faux lists.
 const FILES: &[&str] = &[
     "Interface\\FrameXML\\Fonts.xml",
     r"Interface\FrameXML\MoneyFrame.lua",
     r"Interface\FrameXML\MoneyFrame.xml",
-    // The four money-entry frames come off the chain since 1882 — `MoneyInputFrameTemplate` and
-    // the `MoneyInputFrame_*` verbs, replacing our own verbatim copy of both.
+    // `MoneyInputFrameTemplate` and the `MoneyInputFrame_*` verbs.
     r"Interface\FrameXML\MoneyInputFrame.lua",
     r"Interface\FrameXML\MoneyInputFrame.xml",
     r"Interface\FrameXML\UIParent.xml",
-    // `auctionRowName` colours each row from ITEM_QUALITY_COLORS, whose declarer is
-    // UIParent (ref UIParent.lua:65) since 1888 put the font registry on the chain.
+    // UIParent declares `ITEM_QUALITY_COLORS` (`UIParent.lua:65`), which colours each row name.
     "Interface\\FrameXML\\GameTooltip.xml",
     "Interface\\FrameXML\\UIDropDownMenu.xml",
     "ScrollTemplates.xml",
     r"Interface\FrameXML\UIPanelTemplates.lua",
     r"Interface\FrameXML\UIPanelTemplates.xml",
-    // `AuctionTabTemplate` inherits `CharacterFrameTabButtonTemplate`, and `inherits=`
-    // resolves at LOAD (1993).
+    // `AuctionTabTemplate` inherits `CharacterFrameTabButtonTemplate`; `inherits=` resolves at
+    // load, so it comes first.
     r"Interface\FrameXML\CharacterFrameTemplates.xml",
     "Interface\\FrameXML\\GlobalStrings.lua",
     "Interface\\FrameXML\\BasicControls.xml",
     "Interface\\FrameXML\\LocaleProperties.lua",
-    "Interface\\FrameXML\\StaticPopup.xml", // the dialog engine (1960)
-    // The reference's own addon (1971), its toc order: the window (which <Include>s its
-    // templates) and the embedded dress-up pane. An integration test has no addon registry, so
-    // the files load as chain files, the way the manifest's own entries do.
-    // The embedded dress-up pane's OnLoad calls the dressing room's own `DressUpTexturePath`
-    // (stock DressUpFrame.lua, on the chain since 1969) — the manifest seats that window above.
+    "Interface\\FrameXML\\StaticPopup.xml", // the dialog engine
+    // The dress-up pane's OnLoad calls `DressUpTexturePath` (`DressUpFrame.lua`).
     "Interface\\FrameXML\\DressUpFrame.xml",
+    // The addon in its toc order, loaded as chain files: a test has no addon registry.
     "Interface\\AddOns\\Blizzard_AuctionUI\\Blizzard_AuctionUI.xml",
     "Interface\\AddOns\\Blizzard_AuctionUI\\Blizzard_AuctionDressUp.xml",
 ];
 
-/// [`load_ui`] with the Browse tab's class tree seated first: the stock addon reads
-/// `GetAuctionItemClasses()` at its LOAD (`AuctionFrameBrowse_OnLoad`), before any session, so
-/// the classes are login-scoped and must be there before the files are (1971).
+/// [`load_ui`] with the class tree seated first: `AuctionFrameBrowse_OnLoad` reads
+/// `GetAuctionItemClasses()` at load, before any session.
 fn load_ui_with_classes(s: &mut UiScript) {
     s.set_auction_item_classes(vec![AuctionCategory {
         class_id: 4,
@@ -72,9 +57,8 @@ fn load_ui_with_classes(s: &mut UiScript) {
 }
 
 fn load_ui(script: &UiScript) {
-    // `common::load_ui`, not a local read: a manifest entry carrying a path separator is the
-    // REFERENCE's own file and has to come off the player's chain, which `std::fs::read` under
-    // `assets/ui` cannot do. This kit gained such an entry when the dropdown migrated (1751).
+    // `common::load_ui`: an entry with a path separator is a stock file read off the player's
+    // chain, not from `assets/ui`.
     for file in FILES {
         common::load_ui(script, file);
     }
@@ -102,11 +86,8 @@ fn row(name: &str, min_bid: u32, buyout: u32, bid: u32, owner: &str) -> AuctionI
     }
 }
 
-/// A session snapshot: `rows` on the Browse list, nothing on the other two, one category.
-///
-/// Each row gets a DISTINCT `auction_id` here, standing in for the app's own resolve: the engine
-/// remembers a selection by wire id rather than by row position (auction.rs), so rows sharing an id
-/// would all resolve back to the first of them.
+/// A session snapshot: `rows` on the Browse list, nothing on the other two.
+/// Each row gets a distinct `auction_id`: the engine remembers a selection by wire id, not row.
 fn state(mut rows: Vec<AuctionItemRow>) -> AuctionState {
     for (i, r) in rows.iter_mut().enumerate() {
         r.auction_id = i as u32 + 1;
@@ -126,8 +107,7 @@ fn state(mut rows: Vec<AuctionItemRow>) -> AuctionState {
     }
 }
 
-/// The player: a name (the Browse bid gate compares it against the row's owner), a level (the row
-/// level colours off it) and a purse.
+/// The player: a name (the bid gate compares it to the owner), a level and a purse.
 fn seat_player(s: &mut UiScript, money: u64) {
     s.set_unit(
         "player",
@@ -186,8 +166,7 @@ fn auction_frame_loads_and_key_regions_exist() {
     assert!(s.errors().is_empty(), "load errors: {:?}", s.errors());
 }
 
-/// The window is registered `doublewide`, which is the one row of its kind in all of 1.12 — without
-/// it ShowUIPanel takes its unregistered branch and the window flips `IsShown()` without landing.
+/// `doublewide` is the only such `UIPanelWindows` row in 1.12 (`Blizzard_AuctionUI.lua:14`).
 #[test]
 fn the_window_is_registered_doublewide() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -257,21 +236,9 @@ fn auction_house_show_opens_the_window_on_the_browse_tab() {
     assert!(s.errors().is_empty(), "clean open: {:?}", s.errors());
 }
 
-/// **The bug the per-list fires were made for**, in the stock addon's own Lua.
-///
-/// `AuctionFrameAuctions_Update` computes `offset + i + (NUM_AUCTION_ITEMS_PER_PAGE *
-/// AuctionFrameAuctions.page)` on its very first line of loop body, and `AuctionFrameAuctions.page`
-/// is assigned in exactly one place in the whole addon: that tab's `OnShow`, three lines below its
-/// `GetOwnerAuctionItems()`. So the event is only safe to fire *after* the Auctions tab has been
-/// shown at least once — which the reference guarantees structurally, because every caller of
-/// `GetOwnerAuctionItems` lives *inside* that pane (the `OnShow`, and the two page-turner buttons,
-/// which pass `AuctionFrameAuctions.page` as their argument).
-///
-/// The feed used to fire all three list events on any change, so the first browse result of the
-/// session ran this repaint on a tab nobody had opened and put
-/// `attempt to perform arithmetic on field 'page' (a nil value)` on the player's screen. This test
-/// is the hazard itself, pinned: it fails the day the stock Lua stops caring, and `ui_auction`'s
-/// own `a_result_owes_only_its_own_lists_event` is the guarantee that we never hand it that event.
+/// `AuctionFrameAuctions_Update` does arithmetic on `AuctionFrameAuctions.page`, which only that
+/// pane's `OnShow` assigns, so `AUCTION_OWNED_LIST_UPDATE` is safe only once the tab has shown.
+/// The reference never sends it earlier: every `GetOwnerAuctionItems` caller lives in that pane.
 #[test]
 fn the_auctions_tab_cannot_repaint_before_it_has_been_shown() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -286,7 +253,7 @@ fn the_auctions_tab_cannot_repaint_before_it_has_been_shown() {
         "Seller",
     )])));
 
-    // Open, and land a browse result — the whole of what a search does. Clean.
+    // Open, and land a browse result: the whole of a search.
     s.fire_event("AUCTION_HOUSE_SHOW", vec![]);
     s.fire_event("AUCTION_ITEM_LIST_UPDATE", vec![]);
     assert!(
@@ -294,8 +261,7 @@ fn the_auctions_tab_cannot_repaint_before_it_has_been_shown() {
         "a browse result on the Browse tab is clean"
     );
 
-    // The same result also announcing the *owned* list is what crashed: the Auctions tab has never
-    // been shown, so its `page` is nil and the repaint does arithmetic on it.
+    // The owned-list event before the Auctions tab has shown: its `page` is nil.
     s.fire_event("AUCTION_OWNED_LIST_UPDATE", vec![]);
     let errors = s.take_errors();
     assert!(
@@ -303,8 +269,7 @@ fn the_auctions_tab_cannot_repaint_before_it_has_been_shown() {
         "the never-shown Auctions tab raises the nil-page error: {errors:?}"
     );
 
-    // And the same event is harmless the moment the tab has been shown once — which is the only
-    // state the app can now produce it in, since the owned list is only ever asked for from there.
+    // Harmless once the tab has shown, the only state the app sends it in.
     s.run("AuctionFrameTab_OnClick(3)").unwrap();
     assert!(s.take_errors().is_empty(), "opening the tab is clean");
     s.fire_event("AUCTION_OWNED_LIST_UPDATE", vec![]);
@@ -314,19 +279,9 @@ fn the_auctions_tab_cannot_repaint_before_it_has_been_shown() {
     );
 }
 
-/// Why only the Auctions tab was in the screenshot — and why that is an accident of the XML.
-///
-/// All three panes read their `page` field in `_Update`, and each assigns it in exactly one place:
-/// its own `OnShow`. What differs is *when* that `OnShow` first runs, and it is decided by one
-/// attribute in the stock file — `AuctionFrameBrowse` and `AuctionFrameAuctions` are declared
-/// `hidden="true"`, `AuctionFrameBid` is declared **`hidden="false"`**. So the Bids pane becomes
-/// visible with the window itself, its `OnShow` runs on the very first `AUCTION_HOUSE_SHOW` —
-/// before `AuctionFrameTab_OnClick(1)` hides it again — and `AuctionFrameBid.page` is `0` while
-/// the player is still looking at Browse. The Auctions pane gets nothing at all until tab 3.
-///
-/// That is the whole reason a mis-aimed `AUCTION_OWNED_LIST_UPDATE` crashed and a mis-aimed
-/// `AUCTION_BIDDER_LIST_UPDATE` did not — and the reason the fix is the rule (an event names one
-/// list) rather than a guard on the one tab that happened to be reported.
+/// Each pane assigns `page` only in its `OnShow`. `AuctionFrameBid` alone is declared
+/// `hidden="false"` (`Blizzard_AuctionUI.xml:960`), so it shows with the window on the first
+/// `AUCTION_HOUSE_SHOW` before tab 1 hides it; the Auctions pane has no `page` until tab 3.
 #[test]
 fn only_the_bids_pane_gets_its_page_without_being_opened() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -347,8 +302,8 @@ fn only_the_bids_pane_gets_its_page_without_being_opened() {
         assert_eq!(page(&s, pane), "nil", "{pane} before the window opens");
     }
 
-    // The window opens on tab 1. Browse is shown by the tab click; Bid is shown by the window
-    // itself and hidden again a moment later, keeping the page its OnShow assigned.
+    // Browse is shown by the tab click; Bid is shown with the window and hidden again, keeping
+    // the page its OnShow assigned.
     seat_player(&mut s, 500_000);
     s.set_auction(Some(state(vec![row(
         "Linen Cloth",
@@ -376,23 +331,10 @@ fn only_the_bids_pane_gets_its_page_without_being_opened() {
     assert!(s.take_errors().is_empty());
 }
 
-/// The show cascade, against the reference's own order — the mechanism the Bids pane's `page`
-/// rests on, checked rather than assumed. **Every outcome matches; the order does not** (2317).
-///
-/// The reference's `0x76ae10` is **post-order**: a frame marks itself visible (`0x76ae7b`), walks
-/// its children, and fires its **own** `OnShow` last (`0x76aef5`, past both child loops), with no
-/// snapshot anywhere — each loop re-reads the live links, so a `Hide()` issued from a sibling's
-/// handler suppresses a later sibling by clearing its shown flag before the walk reaches it.
-///
-/// benilla fires the parent's own handler **first** and still notifies the descendant the parent's
-/// handler just hid. For this window the two routes land on the same state, which is why the
-/// assertions below are the reference's outcomes and only the order line is ours: the
-/// `hidden="false"` Bids pane gets exactly one `OnShow`, on the first open, taking the `page` its
-/// repaint needs and sending the one `GetBidderAuctionItems()` that pane's handler owes — and the
-/// reopen notifies neither, because the tab click left its own shown flag clear.
-///
-/// If the cascade is ever made post-order, the `ShowOrder` assertions are what should change here;
-/// nothing else in this test should have to.
+/// The reference's show cascade `0x76ae10` is post-order: a frame marks itself visible
+/// (`0x76ae7b`), walks its children re-reading live links, and fires its own `OnShow` last
+/// (`0x76aef5`). benilla's is pre-order, a gap in the engine; for this window both orders reach
+/// the same state, so only the `ShowOrder` assertions are benilla's order.
 #[test]
 fn the_show_cascade_notifies_the_bids_pane_once_and_keeps_its_page() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -407,8 +349,8 @@ fn the_show_cascade_notifies_the_bids_pane_once_and_keeps_its_page() {
         "Seller",
     )])));
 
-    // Both handlers are called by global name from their `<OnShow>`, so wrapping the globals
-    // records the order the cascade actually fired them in.
+    // Both `<OnShow>`s call their handler by global name, so wrapping the globals records the
+    // order.
     s.run(
         "ShowOrder = {}          local pane, window = AuctionFrameBid_OnShow, AuctionFrame_OnShow          AuctionFrameBid_OnShow = function() table.insert(ShowOrder, \"pane\") pane() end          AuctionFrame_OnShow = function() table.insert(ShowOrder, \"window\") window() end",
     )
@@ -440,8 +382,7 @@ fn the_show_cascade_notifies_the_bids_pane_once_and_keeps_its_page() {
         "and that OnShow is what asks for the bids list"
     );
 
-    // Close and reopen. The tab click left the pane's own shown flag clear, so it is skipped:
-    // the page is kept from the first open rather than re-assigned, and nothing new goes out.
+    // Reopen: the tab click left the pane's shown flag clear, so it is skipped and keeps its page.
     s.run("HideUIPanel(AuctionFrame)").unwrap();
     let _ = s.take_auction_close();
     s.fire_event("AUCTION_HOUSE_SHOW", vec![]);
@@ -459,7 +400,7 @@ fn the_show_cascade_notifies_the_bids_pane_once_and_keeps_its_page() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// The part that proves it works: a fed snapshot paints the Browse rows.
+/// A fed snapshot paints the Browse rows.
 #[test]
 fn the_browse_list_populates_from_the_fed_snapshot() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -491,7 +432,7 @@ fn the_browse_list_populates_from_the_fed_snapshot() {
             .unwrap(),
         "Wool Cloth"
     );
-    // The seller column shows the OWNER (the reference's `HighBidder` region name notwithstanding).
+    // The `HighBidder` region shows the owner.
     assert_eq!(
         s.eval::<String>("return BrowseButton1HighBidder:GetText()")
             .unwrap(),
@@ -511,11 +452,7 @@ fn the_browse_list_populates_from_the_fed_snapshot() {
         "25",
         "a bid-on row paints the live bid, not the minimum"
     );
-    // …and the ZERO coins below it stay on. This is the `MoneyTypeInfo["AUCTION"]` collapse rule
-    // — `showSmallerCoins`, which drops only the LEADING zeros — and it is the whole reason this
-    // window is laid out on `SmallMoneyFrameTemplate` rather than the three-slot kit the rest of
-    // benilla uses: that kit drops every zero denomination, so 10s 0c read as a lone "10 🥈" and a
-    // 1g buyout as a lone "1 🥇" (director's report, 2026-08-22).
+    // `MoneyTypeInfo["AUCTION"]` sets `showSmallerCoins`: only leading zero coins collapse.
     assert!(
         !s.eval::<bool>("return BrowseButton1MoneyFrameGoldButton:IsShown()")
             .unwrap(),
@@ -542,8 +479,7 @@ fn the_browse_list_populates_from_the_fed_snapshot() {
     assert!(s
         .eval::<bool>("return BrowseButton1ItemCount:IsShown()")
         .unwrap());
-    // The closing-time bucket resolved to a row word plus a hover detail (both GlobalStrings, so
-    // both are blank without the string table — what matters is that the tooltip field is set).
+    // The closing-time bucket sets a hover tooltip (its GlobalStrings text may be blank here).
     assert!(s
         .eval::<bool>("return BrowseButton1ClosingTime.tooltip ~= nil")
         .unwrap());
@@ -558,14 +494,13 @@ fn the_browse_list_populates_from_the_fed_snapshot() {
     assert!(s.errors().is_empty(), "clean repaint: {:?}", s.errors());
 }
 
-/// The bid/buyout gates: both start shut on every repaint and open only for the SELECTED row, and
-/// only when the purse can actually cover it.
+/// The bid and buyout gates open only for the selected row, and only when the purse covers it.
 #[test]
 fn the_bid_and_buyout_gates_read_the_purse() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     load_ui_with_classes(&mut s);
-    // 2 gold. Row 1 costs 10s to bid and 50s to buy out — affordable. Row 2 wants 5 gold.
+    // 2 gold. Row 1 costs 10s to bid and 50s to buy out; row 2 wants 5 gold.
     seat_player(&mut s, 20_000);
     s.set_auction(Some(state(vec![
         row("Linen Cloth", 1000, 5000, 0, "Seller"),
@@ -642,8 +577,7 @@ fn the_bid_and_buyout_gates_read_the_purse() {
     assert!(s.errors().is_empty(), "clean gating: {:?}", s.errors());
 }
 
-/// You cannot bid on your own auction, however much money you have — the one leg of the Browse gate
-/// that is not about affordability.
+/// The one leg of the Browse bid gate that is not about money.
 #[test]
 fn you_cannot_bid_on_your_own_auction() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -666,15 +600,14 @@ fn you_cannot_bid_on_your_own_auction() {
             .unwrap(),
         "the row's owner is the player"
     );
-    // The buyout gate has no such leg — the reference lets you buy out your own listing.
+    // The buyout gate has no such leg: the reference lets you buy out your own listing.
     assert!(s
         .eval::<bool>("return BrowseBuyoutButton:IsEnabled() ~= 0")
         .unwrap());
     assert!(s.errors().is_empty());
 }
 
-/// A search reads every filter at once, and nothing before the button is pressed: typing a name,
-/// setting a level band and clicking a class row queue no query at all until Search fires.
+/// A search reads every filter at once; nothing before Search queues a query.
 #[test]
 fn search_reads_the_filters_and_nothing_queries_before_it() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -693,7 +626,7 @@ fn search_reads_the_filters_and_nothing_queries_before_it() {
             .unwrap(),
         "Armor"
     );
-    // Clicking it expands the subclass beneath it and queries NOTHING.
+    // Clicking it expands the subclass beneath it and queries nothing.
     s.run("AuctionFilterButton1:Click()").unwrap();
     assert!(
         s.eval::<String>("return AuctionFilterButton2:GetText()")
@@ -717,7 +650,7 @@ fn search_reads_the_filters_and_nothing_queries_before_it() {
     assert_eq!(query.name, "linen");
     assert_eq!(query.min_level, 10);
     assert_eq!(query.max_level, 20);
-    // The stock Lua hands over the class row's POSITION (1); the wire carries its item class id.
+    // The stock Lua hands over the class row's position (1); the wire carries its item class id.
     assert_eq!(
         query.class,
         Some(4),
@@ -728,8 +661,8 @@ fn search_reads_the_filters_and_nothing_queries_before_it() {
     assert!(s.errors().is_empty(), "clean search: {:?}", s.errors());
 }
 
-/// The create form's gate, and the two triggers that move the deposit. The deposit is the client's
-/// own arithmetic over the stack's vendor value and the RUN TIME — never over what you ask for.
+/// The create form's gate and the deposit, which the client computes from the stack's vendor
+/// value and the run time, never the asking price.
 #[test]
 fn the_create_gate_and_the_deposit() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -765,7 +698,7 @@ fn the_create_gate_and_the_deposit() {
         1440
     );
 
-    // With no item, the form does not even reach the price checks — the buyout error stays hidden.
+    // With no item the form never reaches the price checks: the buyout error stays hidden.
     s.run("MoneyInputFrame_SetCopper(StartPrice, 10000)")
         .unwrap();
     s.run("MoneyInputFrame_SetCopper(BuyoutPrice, 5000)")
@@ -778,8 +711,8 @@ fn the_create_gate_and_the_deposit() {
         .eval::<bool>("return AuctionsBuyoutErrorText:IsShown()")
         .unwrap());
 
-    // Now put something in the slot, through the real cursor path: pick a bag item up and click
-    // the slot, which is `ClickAuctionSellItemButton` exactly as a drag or a drop would be.
+    // Fill the slot through the cursor: pick a bag item up and click the slot
+    // (`ClickAuctionSellItemButton`, as a drop would).
     s.set_container(
         0,
         Some(benilla_ui::script::ContainerState {
@@ -806,16 +739,11 @@ fn the_create_gate_and_the_deposit() {
             ..Default::default()
         },
     );
-    // A SPLIT pickup, deliberately. A whole-stack `PickupContainerItem` records `count: None`
-    // ("None = the whole stack", cursor.rs), and `GetAuctionSellItemInfo` then answers a count of
-    // ONE for it — so the slot would show no stack count and the deposit would be computed on a
-    // single unit. That is an ENGINE gap in `script/auction.rs`'s `sell_item_info`, not this
-    // window's: the window shows the count whenever the API reports more than one, which is what
-    // this exercises.
+    // A split pickup: after a whole-stack pickup (`count: None`) `GetAuctionSellItemInfo`
+    // answers a count of 1, an engine gap in `script/auction.rs`'s `sell_item_info`.
     s.run("SplitContainerItem(0, 1, 2)").unwrap();
     s.run("AuctionsItemButton:Click()").unwrap();
-    // The stock create pane paints the slot on NEW_AUCTION_UPDATE, which the app fires the frame
-    // the sell slot changes (`ui_auction`'s feed); a harness with no app fires it itself.
+    // The create pane paints on NEW_AUCTION_UPDATE, which the app fires when the slot changes.
     s.fire_event("NEW_AUCTION_UPDATE", vec![]);
     assert_eq!(
         s.eval::<String>("return AuctionsItemButtonName:GetText()")
@@ -832,14 +760,13 @@ fn the_create_gate_and_the_deposit() {
         .eval::<bool>("return AuctionsItemButtonCount:IsShown()")
         .unwrap());
 
-    // Dropping an item RESETS the form — the stock handler seeds the start price from the item's
-    // sell price and zeroes the buyout (`AuctionSellItemButton_OnEvent`) — so the prices are typed
-    // after the drop, as a player types them.
+    // A drop resets the form (`AuctionSellItemButton_OnEvent` seeds the start price and zeroes
+    // the buyout), so the prices are typed after it.
     s.run("MoneyInputFrame_SetCopper(StartPrice, 10000)")
         .unwrap();
     s.run("MoneyInputFrame_SetCopper(BuyoutPrice, 5000)")
         .unwrap();
-    // With an item in the slot, the buyout-under-start error is the one the form explains out loud.
+    // With an item in the slot, a buyout under the start price shows its error.
     s.run("AuctionsFrameAuctions_ValidateAuction()").unwrap();
     assert!(
         s.eval::<bool>("return AuctionsBuyoutErrorText:IsShown()")
@@ -858,9 +785,7 @@ fn the_create_gate_and_the_deposit() {
             .unwrap(),
         "an item, a 1g start price and no buyout is a valid auction"
     );
-    // The deposit is the CLIENT's own arithmetic (auction.rs §7): 5% of the carried stack's vendor
-    // value (2 x 25c = 50c) floors to 2c, and 24h is twelve two-hour units, so 24c. Two hours would
-    // be 2c — the duration is what moves this, never the asking price.
+    // 5% of the stack's vendor value (2 x 25c = 50c) floors to 2c, per two-hour unit: 24h is 24c.
     assert_eq!(
         s.eval::<i64>("return CalculateAuctionDeposit(1440)")
             .unwrap(),
@@ -908,9 +833,8 @@ fn hiding_the_window_closes_the_session() {
     assert!(s.errors().is_empty(), "clean close: {:?}", s.errors());
 }
 
-/// Paging: with more matches than the server's 50-row page, the turners appear only when the bar is
-/// at the very bottom, and the list is fed one extra row so the bar can travel there. A 50-row
-/// batch out of 120 fills all 8 slots, so the turners stay hidden until the list is scrolled down.
+/// With more matches than the 50-row page, the turners appear only with the list scrolled to the
+/// bottom; the list is fed one extra row so the bar can get there.
 #[test]
 fn paging_shows_the_turners_only_at_the_end_of_the_list() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -933,8 +857,7 @@ fn paging_shows_the_turners_only_at_the_end_of_the_list() {
         "at the top of a full page the turners stay out of the way"
     );
 
-    // Scroll to the very bottom. The list was fed 51 rows for 8 slots, so the last offset is 43 —
-    // which leaves row slot 8 empty and reveals the turners.
+    // 51 rows over 8 slots: offset 43 leaves slot 8 empty, which reveals the turners.
     s.run("FauxScrollFrame_SetOffset(BrowseScrollFrame, 43)")
         .unwrap();
     s.run("AuctionFrameBrowse_Update()").unwrap();
@@ -961,12 +884,8 @@ fn paging_shows_the_turners_only_at_the_end_of_the_list() {
     assert!(s.errors().is_empty(), "clean paging: {:?}", s.errors());
 }
 
-/// The row and sell-slot hovers go through the reference's own tooltip verbs.
-///
-/// Both used `SetHyperlink` while `GameTooltip:SetAuctionItem` / `SetAuctionSellItem` had no
-/// bindings. The rendered tooltip was the same either way — what changes is that an addon hooking
-/// either verb now sees the call it expects, which is the whole point of shipping the reference's
-/// API surface rather than an equivalent one.
+/// The row and sell-slot hovers call `GameTooltip:SetAuctionItem` and `SetAuctionSellItem`, so an
+/// addon hooking either sees the call.
 #[test]
 fn a_row_hover_goes_through_the_reference_tooltip_verb() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -976,7 +895,7 @@ fn a_row_hover_goes_through_the_reference_tooltip_verb() {
     s.fire_event("AUCTION_HOUSE_SHOW", vec![]);
     s.fire_event("AUCTION_ITEM_LIST_UPDATE", vec![]);
 
-    // The verbs exist as tooltip methods at all — the thing that was missing.
+    // Both verbs are tooltip methods.
     assert!(
         s.eval::<bool>("return type(GameTooltip.SetAuctionItem) == 'function'")
             .unwrap(),
@@ -988,11 +907,8 @@ fn a_row_hover_goes_through_the_reference_tooltip_verb() {
         "SetAuctionSellItem is bound"
     );
 
-    // And the row hover drives one without erroring. The tooltip body itself depends on the item
-    // template store, which a bare harness has not been fed — the assertion here is the call path,
-    // not the rendered text.
-    // `this` is what the event dispatcher binds before it calls a handler; a direct call from a
-    // chunk has to bind it the same way or `SetOwner(this, ...)` gets a nil frame.
+    // The row hover runs clean; the harness has no item templates, so this checks the call path.
+    // A direct call binds `this` as the dispatcher would, or `SetOwner(this, ...)` gets nil.
     s.run("this = BrowseButton1Item AuctionFrameItem_OnEnter('list', 1)")
         .unwrap();
     assert!(
@@ -1000,8 +916,7 @@ fn a_row_hover_goes_through_the_reference_tooltip_verb() {
         "the row hover raised no script error"
     );
 
-    // An empty sell slot is a no-op rather than a throw, which is how the window's own OnEnter
-    // gate calls it.
+    // An empty sell slot is a no-op, not an error.
     s.run("GameTooltip:SetAuctionSellItem()").unwrap();
     assert!(s.take_errors().is_empty());
 }

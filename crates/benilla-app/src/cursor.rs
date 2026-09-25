@@ -1,47 +1,18 @@
-//! The mouse cursor — the real client's `Interface\Cursor\*.blp` set, shown as a crisp **hardware
-//! (OS-composited) cursor** so it has zero lag, matching the reference 1.12 client (whose cursor is
-//! lag-free on this same machine). Which cursor shows is the targeting classifier's call
-//! ([`crate::target::WorldCursor`], the reference's decision tree at `0x4828d0`): Point by
-//! default, the sword over an attackable unit, the speech bubble / pouch / trainer / taxi over
-//! service NPCs, loot/skin over corpses — each with its grayed `Unable*` twin out of range. The
-//! whole set preloads at startup (18 tiny BLPs); a stem missing from the archives falls back toward
-//! the base cursor, then Point.
+//! The mouse cursor: the `Interface\Cursor\*.blp` set as a hardware cursor, as the reference
+//! shows it. The mode comes from the world classifier (`0x4828d0`) and FrameXML; a held payload's
+//! icon replaces it, composited to 32×32 (`0x523840`) and uploaded the same way (`0x523790`).
 //!
-//! macOS needs native AppKit. winit drives the cursor through the legacy cursor-rect API
-//! (`addCursorRect`/`resetCursorRects`), which a continuously-redrawing Metal view doesn't honor on
-//! mouse-move — so winit's `CursorIcon::Custom` and `CursorOptions.visible = false` both revert to the
-//! arrow the instant you move (verified against winit's source). We bypass that: build an `NSCursor`
-//! per mode from its BLP, call `NSWindow::disableCursorRects` to stop AppKit's cursor-rect
-//! reconciliation, then `[cursor set]` the current mode directly (re-asserted each non-look frame).
-//! During mouselook we `NSCursor::hide()`/`unhide()` (the reliable app-global hide counter). Other
-//! platforms use winit's `CursorIcon::Custom` (which works there), swapped on mode change; their
-//! hide-on-look goes through `CursorOptions.visible`, handled in `player::control`.
-//!
-//! **The held cursor payload**: while `UiScript::cursor_payload()` holds a
-//! payload with a resolved icon, the HARDWARE cursor becomes that icon instead of the classified
-//! mode — the real client composites the item's `Interface\Icons\…` art into its drag bitmap
-//! (`0x523840`) and uploads it via the same `SetHardwareCursor` path the mode art uses
-//! (`0x523790`). Both platform `drive` fns below check the held payload FIRST, each frame, and fall
-//! back to the mode cursor when nothing is held or its icon fails to decode; each caches its built
-//! cursor per icon path ([`other::PayloadCursorImages`]/[`macos::PayloadCursors`]) — repeated
-//! pickups of the same icon never re-decode. The icons are 64×64 (unlike the mode BLPs, already
-//! 32×32); [`box_downsample_32`] shrinks one to the cursor's fixed 32×32 with hotspot `(0, 0)` —
-//! the pointer sits at the icon's top-left corner, the icon hangs down-right, matching the
-//! reference look (and `ui_script::extract::cursor_icon_quad`'s capture-only stand-in).
+//! On macOS winit's cursor-rect route reverts to the arrow on every mouse move under a
+//! continuously redrawing Metal view, so this builds an `NSCursor` per mode, disables the window's
+//! cursor rects and sets the cursor directly; mouselook uses `NSCursor::hide`/`unhide`. Elsewhere
+//! winit's `CursorIcon::Custom` works and hide-on-look is `CursorOptions.visible`.
 
 use benilla_assets::AssetSet;
 use bevy::prelude::*;
 
-/// The held cursor payload's icon path (`Interface\Icons\…`, extensionless — the DBC/FrameXML
-/// convention), any arm — `None` if nothing is held or that arm's icon hasn't resolved yet
-/// (either way, the caller falls back to the mode cursor).
-///
-/// **`covered` — the loading cover drops the overlay** (VERIFIED). The reference's
-/// world transition ends `0x401900 → 0x495920 → 0x6e4940` with `0x523d20(1)` + `0x523c20(1)`:
-/// cursor index **1**, the plain arrow, with any item/spell overlay dropped, set *before* the
-/// screen goes up. Without this a portal taken with an item on the cursor showed the item's icon
-/// over the loading art for the whole load — the mode half of the same rule is
-/// [`drive_displayed_cursor`]'s.
+/// The held cursor payload's extensionless icon path. `covered` drops it: the reference's world
+/// transition (`0x6e4940`) calls `0x523d20(1)` and `0x523c20(1)` before the loading screen goes up,
+/// the plain arrow with no overlay.
 fn payload_icon(script: &benilla_ui::script::UiScript, covered: bool) -> Option<String> {
     use benilla_ui::script::CursorPayload;
     if covered {
@@ -53,25 +24,19 @@ fn payload_icon(script: &benilla_ui::script::UiScript, covered: bool) -> Option<
         CursorPayload::Action(a) => a.texture,
         CursorPayload::Macro(m) => m.texture,
         CursorPayload::PetAction(p) => p.texture,
-        // Mode 10 — the stabled pet's family icon. Always present: a non-empty
-        // icon path is the grab's own gate.
+        // Mode 10: the stabled pet's family icon; a non-empty path gates the grab.
         CursorPayload::StablePet(p) => Some(p.texture),
-        // Mode 2 (1965) — the coin bitmap by magnitude, `GetCoinIcon`'s own table.
+        // Mode 2: the coin bitmap by magnitude, `GetCoinIcon`'s table.
         CursorPayload::Money(m) => {
             Some(benilla_ui::script::coin_icon(i64::from(m.copper)).to_string())
         }
-        // Mode 5 — the vendor row's icon. The reference stores the row's `ItemDisplayInfo` id
-        // (`0xb4d8ec`) and resolves the art from it; we carry the resolved path, so this is the
-        // same picture one hop later.
+        // Mode 5: the vendor row's icon, which the reference resolves from its `ItemDisplayInfo`
+        // id (`0xb4d8ec`).
         CursorPayload::Merchant(m) => m.texture,
     }
 }
 
-/// Box-downsample a raw RGBA8 image (top-to-bottom raster order —
-/// [`benilla_assets::WorldAssets::decode_rgba`]'s layout) to a fixed 32×32 buffer: each output
-/// texel averages a `(w/32)×(h/32)` block of the source. Vanilla item icons are 64×64 — a clean
-/// 2×2 average per output texel — but this degrades gracefully for any other
-/// source size.
+/// Box-downsample top-to-bottom RGBA8 to 32×32, each texel averaging a `(w/32)×(h/32)` block.
 fn box_downsample_32(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
     const OUT: u32 = 32;
     let mut out = vec![0u8; (OUT * OUT * 4) as usize];
@@ -104,10 +69,8 @@ fn box_downsample_32(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Decode a payload icon and box-downsample it to a 32×32 hardware-cursor-ready RGBA8 buffer
-/// ([`box_downsample_32`]), alpha forced fully opaque — the client's own drag-bitmap composite
-/// (`0x523840`: 64×64 → 2×2 box filter → 32×32, alpha written 0xFF; folded back by 0218). `None`
-/// on a missing/undecodable icon.
+/// Decode a payload icon to an opaque 32×32 RGBA8 cursor, as the client's drag bitmap does
+/// (`0x523840`: a 64×64 icon, 2×2 box filter, alpha 0xFF).
 fn decode_payload_cursor_rgba(
     assets: &mut benilla_assets::WorldAssets,
     path: &str,
@@ -120,8 +83,7 @@ fn decode_payload_cursor_rgba(
     Some(out)
 }
 
-/// Every cursor BLP stem benilla can currently show ([`crate::target::WorldCursor::stem`]): the
-/// classifier's modes + their grayed twins. Preloaded once at startup.
+/// Every stem [`crate::target::WorldCursor::stem`] can name, preloaded at startup.
 const CURSOR_STEMS: &[&str] = &[
     "Point",
     "Attack",
@@ -130,14 +92,14 @@ const CURSOR_STEMS: &[&str] = &[
     "UnableSpeak",
     "Pickup",
     "UnablePickup",
-    // The loot leg's triple pouch: effective auto-loot on (0961's setting XOR shift).
+    // The loot pouch: auto-loot XOR shift.
     "LootAll",
     "UnableLootAll",
     "Interact",
     "UnableInteract",
     "Buy",
     "UnableBuy",
-    "Inspect", // the Ctrl-hover magnifier (ShowInspectCursor) AND the TEXT-GameObject plaque cursor
+    "Inspect", // the Ctrl-hover magnifier (ShowInspectCursor) and the text GameObject cursor
     "UnableInspect",
     "Trainer",
     "UnableTrainer",
@@ -145,9 +107,8 @@ const CURSOR_STEMS: &[&str] = &[
     "UnableTaxi",
     "Skin",
     "UnableSkin",
-    "Repair", // the repair-mode base cursor (never grayed — the shipped UnableRepair is unreachable)
-    // The data-driven GameObject cursors (`0x5f8760`): a mailbox's Mail, a lock's
-    // Mine / GatherHerbs (grayed out of reach), a picked lock's PickLock (never grayed).
+    "Repair", // the repair-mode base, never grayed: the shipped UnableRepair is unreachable
+    // The data-driven GameObject cursors (`0x5f8760`); PickLock is never grayed.
     "Mail",
     "UnableMail",
     "Mine",
@@ -155,9 +116,7 @@ const CURSOR_STEMS: &[&str] = &[
     "GatherHerbs",
     "UnableGatherHerbs",
     "PickLock",
-    // The spell-targeting pair (`0x4820f0`): Cast(2) / UnableCast(22). Cast is
-    // the armed-enchant-pick overlay's mode; the grayed twin preloads with it (the overlay's
-    // valid/invalid split is its named refinement).
+    // The spell-targeting pair (`0x4820f0`): Cast(2) and UnableCast(22).
     "Cast",
     "UnableCast",
 ];
@@ -167,92 +126,47 @@ fn cursor_path(stem: &str) -> String {
     format!("Interface\\Cursor\\{stem}.blp")
 }
 
-/// The **displayed** cursor — the client's single sticky mode global `0xbe2c2c`. Read by the
-/// platform drivers instead of [`crate::target::WorldCursor`], which is only ever *one* of its two
-/// writers.
+/// The displayed cursor, the client's one sticky mode cell `0xbe2c2c`;
+/// [`crate::target::WorldCursor`] is one of its two writers.
 #[derive(Resource, Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub(crate) struct DisplayedCursor(pub(crate) crate::target::WorldCursor);
 
-/// Resolve this frame's displayed cursor — **one sticky mode with two writers**.
-///
-/// The reference has exactly one cursor-mode cell and everything that wants a cursor calls
-/// `CursorSetMode` on it. Two things do:
-///
-/// - **the world**, from the WorldFrame's hover handler `0x481790` — which runs *only while the
-///   WorldFrame is the frame manager's mouse-focus frame* (`4817ae: cmp [[this+0xa0]+0x7c], this;
-///   jne`). Over a UI frame it does not run, and writes nothing.
-/// - **FrameXML**, from a hover handler — `ShowContainerSellCursor`, `ShowInspectCursor`,
-///   `SetCursor`, `ResetCursor`.
-///
-/// **Between those two, nothing writes it, so the last value simply stands.** That is the whole
-/// correction here, and B208's regression was getting it wrong in each direction at once: the old
-/// code recomputed the mode from the world every frame (so a UI hover could never keep a cursor),
-/// and 1055 then made the world *skip* over UI while the classifier still wrote Point underneath
-/// (so every UI element force-reset the cursor). Either way an armed spell lost its cast cursor the
-/// instant the mouse touched a spellbook button — which is what the director saw.
-///
-/// So: a FrameXML write wins the frame it happens; otherwise the world's verdict applies while the
-/// pointer is over the world; otherwise the mode is left exactly as it was. The bag's `ResetCursor()`
-/// still resets over a bag slot, because it is a *write* — and a spellbook button, which calls no
-/// cursor function at all, correctly changes nothing.
+/// Resolve this frame's displayed cursor: one sticky mode with two writers, the world (the
+/// WorldFrame's hover handler `0x481790`, only while it holds mouse focus) and FrameXML
+/// (`SetCursor`, `ResetCursor`, `ShowContainerSellCursor`, `ShowInspectCursor`). Between writes
+/// the last value stands, so a frame that calls no cursor function changes nothing.
 fn drive_displayed_cursor(
     world: Res<crate::target::WorldCursor>,
     over_ui: Res<crate::ui_script::PointerOverUi>,
     targeting: Res<crate::spell::targeting::SpellTargeting>,
     script: Option<bevy::ecs::system::NonSendMut<benilla_ui::script::UiScript>>,
-    // The base last applied by the UI-entry restore below — `None` while the pointer is over the
-    // world, so re-entering the UI always restores once.
+    // The base last restored on entering the UI; `None` over the world, so re-entry restores.
     mut last: Local<crate::ui_script::VmMemo<Option<crate::target::WorldCursor>>>,
     mut displayed: ResMut<DisplayedCursor>,
-    // The loading cover parks the mode at Point — see the arm at the top of the body.
     screen: Res<crate::loading_screen::LoadingScreen>,
 ) {
     use crate::target::{CursorKind, WorldCursor};
     use benilla_ui::script::UiCursorMode;
 
-    // A VM memo — the restore edge below is armed by `take_cursor_write`, a VM read — but unlike
-    // every other feed this system still drives the cursor with **no VM at all** (the character
-    // screen: the VM lives for one login). `get_for` is the shape for exactly that:
-    // no VM is a session in its own right, so the base restore re-arms once on each side of the
-    // glue phase instead of every frame inside it.
+    // This runs with no VM too (the character screen); `get_for` treats that as its own session,
+    // so the restore re-arms once on each side of the glue phase.
     let last = last.get_for(script.as_deref());
 
-    // **Under the loading cover the cursor is the plain arrow** (VERIFIED). The
-    // reference's transition parks cursor index **1** at `0x6e49f5`/`0x6e49ff` before raising the
-    // screen; ours is parked here every covered frame instead of once, which reads the same because
-    // the cover has already taken the input plane and nothing can write the mode under it. Ahead of
-    // every other arm — a FrameXML write, the repair/targeting base, the sticky UI mode — because
-    // the reference's park is likewise unconditional. `last` is cleared like the over-world arm, so
-    // the first crossing back into the UI after the reveal restores the base once.
+    // Under the loading cover the cursor is the plain arrow, ahead of every other arm: the
+    // reference parks index 1 unconditionally before raising the screen (`0x6e49f5`).
     if screen.covering() {
         displayed.0 = WorldCursor::default();
         *last = None;
         return;
     }
 
-    // **The BASE mode is not a constant** (`0xbe2c4c`: it is independently mutable — e.g. a
-    // spell-cancel flow parks it at Cast(2)), and that is the piece B208 kept missing.
-    // `ResetCursor` restores *the value of this cell*, not a hardcoded Point — so what a bag slot's
-    // `ResetCursor()` shows depends entirely on what is parked here.
-    //
-    // While a spell awaits its click, the base is **Cast(2)**. The director watched the reference
-    // do exactly this: with Feed Pet armed the cursor is blue over *"pretty much anything UI
-    // related"* and grey only out in the world. Both halves fall out of one cell — over the world
-    // the classifier writes the per-seam verdict (grey, for a word with no world handler), and over
-    // UI nothing overrides the base, so the blue shows.
-    //
-    // The corroborating gate is `ShowContainerSellCursor 0x4fa460`'s second test, *"base mode is
-    // Point(1), else bail"*: a test that is only ever meaningful because the base is routinely
-    // **not** Point while targeting.
-    //
-    // Note what this blue does NOT mean: it is not a validity verdict. It says "a spell is armed",
-    // not "this item is a legal target" — no hover-time item verdict exists anywhere in 1.12,
-    // so valid and invalid food look identical here, exactly as they do in the
-    // reference.
+    // The base cell (`0xbe2c4c`) is mutable and `ResetCursor` restores its value, not Point.
+    // While a spell awaits its click it is Cast(2), so the UI reads blue whatever the hovered item:
+    // 1.12 has no hover-time validity verdict. `ShowContainerSellCursor` (`0x4fa460`) bails unless
+    // the base is Point.
     let repair = script.as_ref().is_some_and(|s| s.repair_mode());
     let base = if repair {
-        // `ShowRepairCursor 0x4fbcc0` parks the base at Repair for as long as it holds; it is the
-        // explicit modal, so it wins the cell.
+        // `ShowRepairCursor` (`0x4fbcc0`) parks the base at Repair while it holds.
         WorldCursor {
             kind: CursorKind::Repair,
             unable: false,
@@ -262,12 +176,8 @@ fn drive_displayed_cursor(
             .as_ref()
             .is_some_and(|s| s.gift_wrap_armed().is_some())
     {
-        // An armed **gift wrap** parks the base at Cast(2) for the same reason a targeting spell
-        // does, and by the same act: `0x5edea0`'s three calls are `LockItem`, **`SetCursorBaseMode(2)`**
-        // and `CursorSetMode(2)`. Both cells, deliberately — the displayed one so the
-        // cursor changes at the click, the BASE one so it survives the pointer crossing the world,
-        // where the classifier would otherwise write its own verdict over it. Setting only the
-        // displayed mode would lose the wrap cursor the moment the mouse left the bag.
+        // An armed gift wrap sets both cells to Cast(2) (`0x5edea0`: `SetCursorBaseMode(2)`,
+        // `CursorSetMode(2)`), so its cursor survives the pointer crossing the world.
         WorldCursor {
             kind: CursorKind::Cast,
             unable: false,
@@ -300,7 +210,7 @@ fn drive_displayed_cursor(
                     unable: true,
                 },
                 Some(UiCursorMode::Point) => WorldCursor::default(),
-                // `ResetCursor` — displayed goes back to the base mode, Repair included.
+                // `ResetCursor`: back to the base mode, Repair included.
                 None => base,
             };
             *last = Some(base);
@@ -312,18 +222,9 @@ fn drive_displayed_cursor(
         *last = None;
         return;
     }
-    // Over UI with no FrameXML write this frame. The mode is still sticky between writes — a UI
-    // element that calls no cursor function must not disturb it — but **crossing into the UI, and
-    // any later change of the base, restores the base**, which is what makes an armed spell read
-    // blue over the interface at large rather than dragging the world's grey in behind the mouse.
-    //
-    // In the reference that restore is spread across the UI rather than centralised: nearly every
-    // hover handler ends in `ResetCursor()` (`ContainerFrameItemButton_OnEnter`'s else branch,
-    // `CursorUpdate`/`CursorOnUpdate` in `UIParent.lua`, every `OnLeave`), and the world
-    // classifier's own no-hover path is the same `0x523d30` restore. Modelling it as one edge here
-    // gets the same observable without requiring each of our frames to have grown its
-    // `ResetCursor()` call yet — and a frame that DOES write still wins, so the unit-frame
-    // lit/grey split survives.
+    // Over UI with no FrameXML write: crossing in, or a base change, restores the base once. This
+    // one edge stands for the `ResetCursor()` that ends nearly every reference hover handler and
+    // the classifier's no-hover restore (`0x523d30`).
     if *last != Some(base) {
         *last = Some(base);
         displayed.0 = base;
@@ -357,9 +258,7 @@ impl Plugin for CursorPlugin {
     }
 }
 
-/// Non-macOS: winit's custom OS cursor works fine — preload every mode's image and swap the
-/// window's `CursorIcon` when the classified mode changes. Hide-on-look is `CursorOptions.visible`,
-/// driven by `player::control`.
+/// Non-macOS: winit's custom cursor, swapped on change; hide-on-look is in `player::control`.
 #[cfg(not(target_os = "macos"))]
 mod other {
     use super::{cursor_path, payload_icon, CURSOR_STEMS};
@@ -368,13 +267,11 @@ mod other {
     use bevy::prelude::*;
     use bevy::window::{CursorIcon, CustomCursor, CustomCursorImage, PrimaryWindow};
 
-    /// stem → decoded cursor image, preloaded at startup.
+    /// Stem → decoded cursor image, preloaded at startup.
     #[derive(Resource, Default)]
     pub(super) struct CursorImages(HashMap<String, Handle<Image>>);
 
-    /// Held-payload icon path → its decoded 32×32 hardware cursor, built
-    /// lazily on first use (unlike [`CursorImages`]'s fixed startup preload — the icon set is far
-    /// too large to preload) and cached so a repeated pickup never re-decodes.
+    /// Held-payload icon path → its 32×32 cursor, built on first use and cached.
     #[derive(Resource, Default)]
     pub(super) struct PayloadCursorImages(HashMap<String, Handle<Image>>);
 
@@ -398,9 +295,8 @@ mod other {
         commands.insert_resource(CursorImages(map));
     }
 
-    /// Each frame: while a cursor payload with a resolved icon is held, show ITS 32×32 hardware
-    /// cursor (decoded/downsampled on first use, then cached by path); otherwise swap to the
-    /// classified mode (base-stem fallback, then Point, then OS) — unchanged from before 0216 §5.
+    /// Show the held payload's icon when it resolves, else the displayed mode (then its base stem,
+    /// then Point).
     pub(super) fn drive(
         mut commands: Commands,
         cursor: Res<super::DisplayedCursor>,
@@ -409,12 +305,10 @@ mod other {
         world_assets: Option<ResMut<WorldAssets>>,
         mut images: ResMut<Assets<Image>>,
         mut payload_cursors: ResMut<PayloadCursorImages>,
-        // The loading cover drops the payload overlay — see [`payload_icon`].
         screen: Res<crate::loading_screen::LoadingScreen>,
         window: Option<Single<Entity, With<PrimaryWindow>>>,
-        // The key of the cursor we last handed the window — the macOS arm's `last_set` under the
-        // same name, because it is the same fact: OS state, not memory about the VM, so it is not a
-        // [`crate::ui_script::VmMemo`] and does not re-seat at a new login (decision 1290's sweep).
+        // The key of the cursor last handed the window: OS state, so not a
+        // [`crate::ui_script::VmMemo`].
         mut last_set: Local<Option<String>>,
         mut decode_failed: Local<HashSet<String>>,
     ) {
@@ -448,7 +342,7 @@ mod other {
                 *last_set = Some(icon);
                 return;
             }
-            // Decode failed (or still pending catalogs): fall through to the mode cursor below.
+            // Decode failed: fall through to the mode cursor.
         }
 
         let Some(cursors) = cursors else {
@@ -469,9 +363,7 @@ mod other {
         *last_set = Some(stem);
     }
 
-    /// The shared `CustomCursor::Image` insert — hotspot `(0, 0)`: the vanilla mode cursors' active
-    /// tip is their top-left pixel, and the held-payload icon is downsampled to match that same
-    /// top-left hotspot convention.
+    /// Insert a custom cursor with hotspot `(0, 0)`, the vanilla cursors' top-left tip.
     fn set_custom_cursor(commands: &mut Commands, window: Entity, handle: Handle<Image>) {
         commands
             .entity(window)
@@ -502,27 +394,17 @@ mod macos {
 
     use super::{cursor_path, payload_icon, CURSOR_STEMS};
 
-    /// The built `NSCursor` per mode stem. Held as a non-send resource because AppKit types aren't
-    /// `Send`/`Sync` and must only be touched on the main thread. `pub(super)` only so it can appear
-    /// in `drive`'s param list (the plugin registers `drive` from the parent module).
+    /// The built `NSCursor` per mode stem; non-send, as AppKit types are main-thread only.
     pub(super) struct NativeCursors(HashMap<&'static str, Retained<NSCursor>>);
 
-    /// Held-payload icon path → its built 32×32 `NSCursor` — the mac twin of
-    /// [`super::other::PayloadCursorImages`], built lazily on first use and cached by path.
+    /// Held-payload icon path → its 32×32 `NSCursor`, built on first use and cached.
     pub(super) struct PayloadCursors(HashMap<String, Retained<NSCursor>>);
 
-    /// Build every mode's `NSCursor` from its BLP and store them. An **exclusive** system so it runs
-    /// on the main thread (AppKit's requirement) and can insert the non-send resource. The
-    /// window-level `disableCursorRects` + first `set` happen in [`drive`], once the window
-    /// definitely exists.
+    /// Build every mode's `NSCursor`; exclusive, so it runs on the main thread.
     pub(super) fn setup(world: &mut World) {
-        // Inserted unconditionally (ahead of the native-cursor early-return below) — `drive` reads
-        // it every frame regardless of whether any MODE cursor decoded.
+        // Ahead of the early returns: `drive` reads it every frame.
         world.insert_non_send_resource(PayloadCursors(HashMap::new()));
-        // No client data at all → say it ONCE. The per-stem warning below means *this cursor is
-        // missing from an install that exists*, which is worth a line each; with no install it is
-        // 31 lines of the same fact, and they were the loudest thing in the log of the frame-one
-        // crash that decision 1451 is about.
+        // No client data: one warning, not one per stem.
         if world.get_resource::<WorldAssets>().is_none() {
             warn!("no client data — the OS cursor stands in for every mode cursor");
             return;
@@ -549,46 +431,31 @@ mod macos {
         world.insert_non_send_resource(NativeCursors(cursors));
     }
 
-    /// Each frame (main thread, forced by the `NonSend` params): the first frame, stop AppKit's
-    /// cursor-rect reconciliation on our window (the thing that reverts winit's cursor on move);
-    /// then, while not looking, assert the cursor to show — the held payload's icon (decision 0216
-    /// §5, decoded/downsampled to 32×32 on first use and cached by path) if one is held and
-    /// resolved, else the classified mode (base-stem fallback, then Point); on entering/leaving
-    /// mouselook, hide/show it via the app-global hide counter.
+    /// Disable the window's cursor rects once, set the payload or mode cursor while not looking,
+    /// and hide or unhide it across mouselook.
     pub(super) fn drive(
         cursors: Option<NonSend<NativeCursors>>,
         mut payload_cursors: NonSendMut<PayloadCursors>,
         script: Option<NonSend<benilla_ui::script::UiScript>>,
         world_assets: Option<ResMut<WorldAssets>>,
         mode: Res<super::DisplayedCursor>,
-        // The loading cover drops the payload overlay — see [`super::payload_icon`].
         screen: Res<crate::loading_screen::LoadingScreen>,
         rig: Res<CameraControl>,
         cinematic: Option<Res<crate::cinematic::Cinematic>>,
         mut focus: MessageReader<bevy::window::WindowFocused>,
-        // None of the `Local`s below is a [`crate::ui_script::VmMemo`], deliberately (decision
-        // 1290's sweep): every one of them remembers something about the **OS** — what we last told
-        // AppKit, which BLPs failed to decode, whether the pointer rects are off — and the OS keeps
-        // that state across the VM's death and rebirth, so re-seating them at a new login would
-        // re-assert a cursor nothing changed.
+        // The `Local`s below remember OS state, which outlives the VM, so none is a
+        // [`crate::ui_script::VmMemo`].
         mut was_looking: Local<bool>,
         mut rects_disabled: Local<bool>,
         mut decode_failed: Local<HashSet<String>>,
         mut last_set: Local<Option<String>>,
-        // The raw pointer of the NSCursor we last `set` — the drift detector's baseline
-        // (`WOW_CURSOR_TRACE`). Kept alive by the `cursors`/`payload_cursors` caches, and only
-        // ever compared, never dereferenced.
+        // The last `set` cursor's pointer, the drift baseline; only compared, never dereferenced.
         mut last_ptr: Local<usize>,
     ) {
         let Some(cursors) = cursors else {
             return;
         };
-        // macOS resets the app's cursor to the arrow on every activation — a set that happened
-        // while we weren't key (the very first frames run before the window shows; any cmd-tab
-        // away) is simply lost. Re-assert on each focus gain, the moments AppKit forgets us.
-        // (Before this, the glue screens showed the OS arrow: their cursor never changes off
-        // Point, so nothing ever re-asserted after activation; in-world the constant mouselook
-        // transitions masked it.)
+        // macOS resets the cursor to the arrow on every activation: re-assert on focus gain.
         for ev in focus.read() {
             if ev.focused {
                 *last_set = None;
@@ -614,23 +481,12 @@ mod macos {
                 }
             }
         }
-        // **A cinematic hides the pointer too**, and on this platform it can only be done here:
-        // the reference's `0x58b590(0)` at StartCinematic / `(1)` at End. `crate::cinematic` writes
-        // `CursorOptions.visible`, which is the right lever everywhere else and is *inert on
-        // macOS* for the reason this module exists — winit's cursor-rect route does not survive a
-        // continuously-redrawing Metal view. So the fly-by's pointer is hidden by joining the
-        // look session's own `NSCursor::hide()`/`unhide()` pair, which keeps AppKit's app-global
-        // hide counter balanced across both reasons instead of racing a second one against it.
+        // A cinematic hides the pointer too (`0x58b590`); `CursorOptions.visible` is inert here, so
+        // it joins the look's hide/unhide pair, keeping AppKit's hide counter balanced.
         let looking = rig.is_looking() || cinematic.is_some_and(|c| c.is_playing());
         let stem = mode.0.stem();
-        // The held payload's cursor wins over the classified mode (falls back to the mode cursor
-        // when nothing is held, or its icon hasn't resolved/decoded this frame). The KEY names what
-        // we chose, so the set below fires only on a real cursor change or a detected drift —
-        // `NSCursor::set` is a WindowServer round-trip that intermittently stalls the main thread
-        // for milliseconds, and asserting it unconditionally every frame was the single biggest
-        // line of the 0366 frame-time tail. `disableCursorRects` (below, once) stops AppKit's
-        // cursor-RECT reconciliation (the every-mouse-move revert); the drift check in the set
-        // block below catches what that can't — the other in-process `set` callers.
+        // The key names the chosen cursor, so `NSCursor::set`, a WindowServer round-trip that can
+        // stall the main thread for milliseconds, fires only on a change or a drift.
         let key = held_icon
             .as_ref()
             .filter(|icon| payload_cursors.0.contains_key(icon.as_str()))
@@ -642,8 +498,8 @@ mod macos {
             .or_else(|| cursors.0.get(stem.as_str()))
             .or_else(|| cursors.0.get(stem.trim_start_matches("Unable")))
             .or_else(|| cursors.0.get("Point"));
-        // SAFETY: main thread (guaranteed by the `NonSend` params). hide/unhide are balanced across
-        // the look transition so the app-global hide counter never drifts.
+        // SAFETY: main thread, guaranteed by the `NonSend` params; hide and unhide stay balanced
+        // across the look transition.
         unsafe {
             if !*rects_disabled {
                 if let Some(mtm) = MainThreadMarker::new() {
@@ -658,32 +514,22 @@ mod macos {
             }
             if looking && !*was_looking {
                 NSCursor::hide();
-                // The next un-look must re-assert even an unchanged cursor (the hidden period is
-                // AppKit's to fiddle with).
+                // The next un-look re-asserts even an unchanged cursor.
                 *last_set = None;
             } else if !looking && *was_looking {
                 NSCursor::unhide();
             }
             if !looking {
-                // Assert on a key change OR on detected **drift**. The set is not fire-and-forget:
-                // other in-process actors — winit's AppKit view (tracking-area `cursorUpdate:` /
-                // `mouseEntered:` handlers) and AppKit's own activation resets — call `[NSCursor
-                // set]` with THEIR cursor (the arrow) at unpredictable moments, replacing ours.
-                // The mode cursors self-healed by accident (their `key` churns as the hover
-                // classification changes), but a held payload's key is CONSTANT for the whole
-                // carry, so one usurped set left the icon gone for good while the payload was
-                // still held — the "spell disappears from the cursor but is still stuck to it"
-                // bug (reproduced via WOW_CURSOR_TRACE; the drift fired with no input at all).
-                // `currentCursor` is the app-local top of the cursor stack — a plain ObjC read,
-                // no WindowServer round-trip — so checking it every frame is free, and `set`
-                // still fires only on change-or-drift, preserving the 0366 frame-time rule.
+                // Assert on a key change or on drift: winit's view and AppKit's activation resets
+                // set the arrow at any moment, and a held payload's key never changes during a
+                // carry. `currentCursor` is an app-local read, free every frame.
                 let drifted = *last_ptr != 0
                     && Retained::as_ptr(&NSCursor::currentCursor()) as usize != *last_ptr;
                 if drifted || last_set.as_deref() != Some(key.as_str()) {
                     if let Some(cursor) = cursor {
                         cursor.set();
                         *last_ptr = Retained::as_ptr(cursor) as usize;
-                        // `WOW_CURSOR_TRACE=1` — the assert/usurp timeline instrument.
+                        // `WOW_CURSOR_TRACE=1`: the assert and drift timeline.
                         if std::env::var_os("WOW_CURSOR_TRACE").is_some() {
                             eprintln!(
                                 "[cursor-trace] set {key} ({:#x}){}",
@@ -699,8 +545,7 @@ mod macos {
         *was_looking = looking;
     }
 
-    /// RGBA → `NSCursor`. Goes via PNG + `NSImage::initWithData` (standard image data) rather than
-    /// hand-rolling an `NSBitmapImageRep`.
+    /// RGBA → `NSCursor`, via PNG and `NSImage::initWithData`.
     fn build_cursor(width: u32, height: u32, rgba: &[u8]) -> Option<Retained<NSCursor>> {
         let buf = image::RgbaImage::from_raw(width, height, rgba.to_vec())?;
         let mut png = Vec::new();
@@ -709,7 +554,7 @@ mod macos {
             .ok()?;
         let data = NSData::with_bytes(&png);
         let image = NSImage::initWithData(NSImage::alloc(), &data)?;
-        // Hotspot = the vanilla cursors' top-left active tip.
+        // Hotspot: the vanilla cursors' top-left tip.
         Some(NSCursor::initWithImage_hotSpot(
             NSCursor::alloc(),
             &image,
@@ -733,14 +578,12 @@ mod tests {
         unable: false,
     };
 
-    /// Run one frame of [`drive_displayed_cursor`] with the displayed mode pre-set to `standing`,
-    /// and return what it becomes. `lua` is whatever FrameXML did this frame.
+    /// One frame of [`drive_displayed_cursor`] from `standing`; `lua` is what FrameXML did.
     fn frame(standing: WorldCursor, world: WorldCursor, over_ui: bool, lua: &str) -> WorldCursor {
         frame_armed(standing, world, over_ui, lua, false)
     }
 
-    /// One frame, with `armed` deciding whether a spell awaits its click — which is what parks the
-    /// BASE mode at Cast.
+    /// One frame; `armed` parks the base at Cast.
     fn frame_armed(
         standing: WorldCursor,
         world: WorldCursor,
@@ -751,8 +594,7 @@ mod tests {
         frame_covered(standing, world, over_ui, lua, armed, false)
     }
 
-    /// One frame, with `covered` deciding whether the loading cover is up — the arm that parks the
-    /// plain arrow ahead of every other rule.
+    /// One frame; `covered` raises the loading cover.
     fn frame_covered(
         standing: WorldCursor,
         world: WorldCursor,
@@ -775,7 +617,7 @@ mod tests {
         app.insert_resource(DisplayedCursor(standing));
         let mut targeting = crate::spell::SpellTargeting::default();
         if armed {
-            // Feed Pet's own bare ITEM word.
+            // Feed Pet's own bare item word.
             targeting.enter(6991, crate::spell::CastCommit::Spell, 0x0010);
         }
         app.insert_resource(targeting);
@@ -785,13 +627,7 @@ mod tests {
         app.world().resource::<DisplayedCursor>().0
     }
 
-    /// **Under the loading cover the cursor is the plain arrow, whatever else is true** (decision
-    /// 1990). The reference's world transition parks cursor index 1 (`0x6e49f5`/`0x6e49ff`) and
-    /// drops any item/spell overlay *before* the screen goes up, so a portal taken with a spell
-    /// armed — or with an item on the cursor — arrives showing the arrow, not the payload.
-    ///
-    /// Both of the arms that would otherwise win are exercised here: an armed spell (which parks
-    /// the BASE at Cast, so even the UI restore reads blue) and a FrameXML write in the same frame.
+    /// The reference parks cursor index 1 before the loading screen goes up (`0x6e49f5`).
     #[test]
     fn the_loading_cover_parks_the_plain_arrow_over_every_other_rule() {
         for (over_ui, lua, armed) in [
@@ -806,7 +642,7 @@ mod tests {
                 "covered: the arrow wins (over_ui={over_ui}, armed={armed}, lua={lua:?})"
             );
         }
-        // …and the cover is the only reason: the same frame uncovered keeps the world's verdict.
+        // Uncovered, the same frame keeps the world's verdict.
         assert_eq!(
             frame_covered(SWORD, SWORD, false, "", false, false),
             SWORD,
@@ -814,18 +650,8 @@ mod tests {
         );
     }
 
-    /// **The base mode is Cast while a spell awaits its click** (the base cell `0xbe2c4c` is
-    /// independently mutable — e.g. a spell-cancel flow parks it at Cast(2)), and `ResetCursor`
-    /// restores *that value*, never a hardcoded Point.
-    ///
-    /// This is what the director watched the reference do with Feed Pet armed: **blue over the
-    /// interface at large, grey only out in the world**. Both fall out of the one cell — the world
-    /// classifier writes the per-seam verdict (grey, for a word with no world handler), and over UI
-    /// nothing overrides the base.
-    ///
-    /// It is emphatically NOT a validity verdict: no hover-time item verdict exists in 1.12, so
-    /// good food and bad food are the same blue. The last assertion pins that, because reading the
-    /// blue as "this food is correct" is exactly the misreading that sent B208 round twice.
+    /// `ResetCursor` restores the base cell (`0xbe2c4c`): blue over the UI while armed, grey only
+    /// in the world, and no item validity verdict.
     #[test]
     fn an_armed_spell_parks_the_base_at_cast_so_the_ui_reads_blue() {
         const GREY: WorldCursor = CAST_GREY;
@@ -833,40 +659,33 @@ mod tests {
             kind: CursorKind::Cast,
             unable: false,
         };
-        // Out in the world the classifier's verdict stands: an item-only word greys.
+        // In the world an item-only word greys.
         assert_eq!(frame_armed(BLUE, GREY, false, "", true), GREY);
-        // Crossing into the UI restores the base — blue — rather than dragging the world's grey in.
+        // Crossing into the UI restores the base.
         assert_eq!(frame_armed(GREY, GREY, true, "", true), BLUE);
-        // A bag slot's real `ResetCursor()` resolves to the same base, so the food reads blue…
+        // A bag slot's `ResetCursor()` resolves to the base, whatever the slot holds:
         assert_eq!(frame_armed(GREY, GREY, true, "ResetCursor()", true), BLUE);
-        // …and so does a slot holding something the pet would never eat. The blue says "a spell is
-        // armed", not "this item is a legal target".
+        // the blue means a spell is armed, not that the item is a legal target.
         assert_eq!(frame_armed(GREY, GREY, true, "ResetCursor()", true), BLUE);
-        // Nothing armed: the base is Point again, and the UI reads as the ordinary pointer.
+        // Nothing armed: the base is Point.
         assert_eq!(
             frame_armed(GREY, WorldCursor::default(), true, "ResetCursor()", false),
             WorldCursor::default()
         );
     }
 
-    /// **A UI element that writes no cursor does not get to invent one.** The mode has two
-    /// writers and only two — the world (while the pointer is over it) and a FrameXML cursor call.
-    /// Crossing into the UI restores the BASE, which is the reference's own behaviour spread across
-    /// dozens of `ResetCursor()` calls; what must never happen is a *third* party recomputing a
-    /// value each frame, which is what made B208 go round twice.
+    /// A UI element that writes no cursor does not invent one.
     #[test]
     fn only_the_world_and_framexml_write_the_cursor() {
-        // Over the world the classifier's verdict applies, every frame.
+        // Over the world the classifier's verdict applies.
         assert_eq!(frame(CAST_GREY, SWORD, false, ""), SWORD);
-        // Over the UI with nothing armed the base is Point — the ordinary pointer, which is what a
-        // bag slot shows in the reference.
+        // Over the UI with nothing armed the base is Point.
         assert_eq!(frame(SWORD, SWORD, true, ""), WorldCursor::default());
         assert_eq!(
             frame(SWORD, SWORD, true, "ResetCursor()"),
             WorldCursor::default()
         );
-        // An explicit FrameXML write wins and then STAYS — the unit-frame lit/grey split would be
-        // pointless if the next frame's base restore stamped over it.
+        // A FrameXML write wins and stays, or the unit-frame lit/grey split would be stamped over.
         let lit = WorldCursor {
             kind: CursorKind::Cast,
             unable: false,
@@ -886,13 +705,10 @@ mod tests {
         );
     }
 
-    /// `ShowContainerSellCursor` bails on `IsTargeting` at its first instruction, so an armed spell
-    /// keeps its cast cursor over a vendor-open bag instead of getting the coin. With a sticky mode
-    /// this gate is load-bearing: a Buy write would stamp over the cast cursor and no per-frame
-    /// world write would put it back.
+    /// `ShowContainerSellCursor` bails on `IsTargeting` first, so an armed spell keeps its cursor.
     #[test]
     fn the_sell_cursor_does_not_paint_over_an_armed_spell() {
-        // The gate reads the app-fed targeting flag, so drive it the way the app does.
+        // The gate reads the app-fed targeting flag.
         let mut app = App::new();
         let mut script = benilla_ui::script::UiScript::new().unwrap();
         script.set_spell_targeting(true);

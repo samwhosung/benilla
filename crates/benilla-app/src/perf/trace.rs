@@ -1,35 +1,30 @@
-//! The STREAM TRACE (`WOW_STREAM_TRACE=<csv path>`) — B181's instrument.
+//! The stream trace (`WOW_STREAM_TRACE=<csv path>`): a CSV row per frame of terrain streaming.
 
 use bevy::prelude::*;
 use bevy::time::Real;
 
 use super::clock::process_cpu_secs;
 
-/// A frame past this is logged even with no streamer activity — catches a spike whose cost lands
-/// outside the Stream chain (command application, render extraction, asset frees frames later).
+/// A frame past this is logged even with no streamer activity, for a cost that lands outside
+/// the Stream chain (command application, render extraction, later asset frees).
 const TRACE_FRAME_MS: f32 = 25.0;
-/// Frames still logged after the last streamer event: the despawn commands apply after the system,
-/// the asset frees land when the last handle drops, and the render world reacts a frame later —
-/// the tail is where the cost shows, so the window must outlive the event.
+/// Frames still logged after the last streamer event: despawns, asset frees and the render
+/// world's reaction all land after the event itself.
 const TRACE_TAIL_FRAMES: u64 = 10;
 
-/// One row per frame in which the terrain streamer did anything (plus a [`TRACE_TAIL_FRAMES`]
-/// tail, plus any frame over [`TRACE_FRAME_MS`]): what was dropped/requested/spawned, the Stream
-/// chain's own self-times, and the frame's wall delta beside it. **The off-by-one to remember
-/// reading it: `delta_ms` on a row is the interval that *ended* at this frame's start, so frame N's
-/// cost appears in row N+1.**
+/// One row per frame in which the terrain streamer did anything, plus a [`TRACE_TAIL_FRAMES`]
+/// tail and any frame over [`TRACE_FRAME_MS`]. A row's `delta_ms` is the interval that ended at
+/// this frame's start, so frame N's cost appears in row N+1.
 #[derive(Resource)]
 pub(super) struct StreamTrace {
     pub(super) path: String,
     pub(super) frame: u64,
     pub(super) log_until: u64,
-    /// [`process_cpu_secs`] at the previous frame — the row's `cpu_ms` is this frame's process-CPU
-    /// delta (user+system, all threads): the load-robust cost meter beside the wall delta, because
-    /// on this machine wall frame time moves with whoever else is compiling (a parallel
-    /// build polluted this instrument's first A/B).
+    /// [`process_cpu_secs`] at the previous frame; `cpu_ms` is the process-CPU delta (user+system,
+    /// all threads), a cost meter that other load on the machine does not move.
     pub(super) prev_cpu_secs: Option<f64>,
-    /// `PipeWatch::created` at the previous frame, so `pipes_new` is per-frame like every other
-    /// counter (the render world bumps the shared atomic; ±1 frame skew is inherent and fine).
+    /// `PipeWatch::created` at the previous frame, so `pipes_new` is per-frame (±1 frame skew,
+    /// since the render world bumps the shared atomic).
     pub(super) prev_pipes_created: usize,
 }
 
@@ -49,7 +44,7 @@ pub(super) fn trace_stream(
     mut image_events: MessageReader<bevy::asset::AssetEvent<bevy::image::Image>>,
     pipes: Res<crate::pipe_warm::PipeWatch>,
 ) {
-    // Taken every frame — the counters are per-frame by contract, tracing or not.
+    // Taken every frame, tracing or not: the counters are per-frame by contract.
     let a = std::mem::take(&mut *activity);
     let pipes_created = pipes.0.created.load(std::sync::atomic::Ordering::Relaxed);
     let pipes_settled = pipes.0.settled.load(std::sync::atomic::Ordering::Relaxed);
@@ -66,15 +61,9 @@ pub(super) fn trace_stream(
         _ => String::new(),
     };
     trace.prev_cpu_secs = cpu_now;
-    // One pass per reader: `Added` beside `Unused` — B181's recurring spike was the free wave's
-    // family, but the first-contact head frame is the ADD wave (a landed tile's cell meshes +
-    // texture arrays hitting the render world's prepare at once), invisible until counted.
-    //
-    // The freed columns count `Unused` (last strong handle dropped), not `Removed`: a
-    // `RENDER_WORLD`-only asset (chunk-cell meshes, the tile arrays) leaves the
-    // main store at *extract* via the untracked path, so `Removed` never fires for it; `Unused`
-    // is the release signal both usage kinds emit exactly once, and it is what actually frees
-    // the GPU copy.
+    // The freed columns count `Unused`, not `Removed`: a `RENDER_WORLD`-only asset leaves the
+    // main store at extract untracked, so `Removed` never fires for it, while `Unused` fires once
+    // for both usage kinds and is what frees the GPU copy.
     fn count_events<A: bevy::asset::Asset>(
         events: &mut MessageReader<bevy::asset::AssetEvent<A>>,
     ) -> (u32, u32) {
