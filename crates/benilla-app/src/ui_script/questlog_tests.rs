@@ -542,8 +542,8 @@ fn progress_auto_watches_for_five_minutes() {
     load_xml(&s, "Interface\\FrameXML\\QuestLogFrame.xml");
     s.set_quest_log(eight_entries());
 
-    // The app fires this with the log index `AutoQuestWatch_Update` takes; the 1.12 client passes
-    // the index `0x4df880` returns, a separate one that is 0 for an unwatched quest.
+    // The app fires this with the quest's log row, as the 1.12 client does: `0x4df880` searches
+    // the log rows, and `AutoQuestWatch_Update` takes that index.
     s.fire_event(
         "QUEST_WATCH_UPDATE",
         vec![benilla_ui::script::ScriptValue::Int(1)],
