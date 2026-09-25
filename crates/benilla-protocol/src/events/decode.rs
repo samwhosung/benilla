@@ -10,9 +10,9 @@ fn v3(v: Vector3d) -> [f32; 3] {
 }
 
 /// The caster of `SMSG_SPELL_START`/`SMSG_SPELL_GO`. vmangos writes the caster slot from
-/// `m_casterUnit`, null for a GameObject caster (`Spell.cpp:102`, `Spell.cpp:4479`), so a
+/// `m_casterUnit`, null for a GameObject caster (`Spell.cpp:102`, `Spell.cpp:4491`), so a
 /// GameObject's spell (Lightwell, GO 181102) arrives as 0; the first slot then holds the caster
-/// itself, as it does whenever no item is cast (`Spell.cpp:4475-4477`).
+/// itself, as it does whenever no item is cast (`Spell.cpp:4487-4489`).
 fn spell_caster(item_or_caster: u64, caster_slot: u64) -> u64 {
     if caster_slot == 0 {
         item_or_caster

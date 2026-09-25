@@ -281,7 +281,7 @@ pub fn ping(sequence: u32, last_rtt_ms: u32) -> Vec<u8> {
 
 /// Body of a movement-mode ack: unpacked guid, the echoed counter, our `MovementInfo`, then
 /// `u32 apply` for every mode but root (`Server/Packets/Movement.cpp:38-59`). `info.flags` must
-/// carry the applied mode bit: vmangos kicks a root ack without it (`MovementHandler.cpp:722-729`)
+/// carry the applied mode bit: vmangos kicks a root ack without it (`MovementHandler.cpp:715-722`)
 /// and takes the flags as the mover's new ones for the other modes.
 pub fn move_flag_ack(guid: u64, counter: u32, info: &MovementInfo, apply: Option<bool>) -> Vec<u8> {
     let mut body = Vec::with_capacity(48);
@@ -297,7 +297,7 @@ pub fn move_flag_ack(guid: u64, counter: u32, info: &MovementInfo, apply: Option
 /// `CMSG_MOVE_KNOCK_BACK_ACK` body, a movement-mode ack without `apply` (`Movement.cpp:38-68`).
 /// `info` must carry `MOVEFLAG_JUMPING` and the launch quad: the server matches the counter and
 /// all four floats within 0.01 (`Unit::FindPendingMovementKnockbackChange`), builds observers'
-/// `MSG_MOVE_KNOCK_BACK` from this info, and never re-sends a knockback (`Unit.cpp:6887`).
+/// `MSG_MOVE_KNOCK_BACK` from this info, and never re-sends a knockback (`Unit.cpp:6912`).
 pub fn knock_back_ack(guid: u64, counter: u32, info: &MovementInfo) -> Vec<u8> {
     move_flag_ack(guid, counter, info, None)
 }

@@ -172,7 +172,7 @@ pub(super) fn read_pet_spells(r: &mut &[u8]) -> io::Result<PetSpells> {
     }
 
     let spell_count = read_u8(r)?;
-    // A `u8` count with no tighter server bound (`Player.cpp:17471`).
+    // A `u8` count with no tighter server bound (`Player.cpp:17544`).
     let mut spells = Vec::with_capacity(capacity_hint(spell_count, usize::from(u8::MAX)));
     for _ in 0..spell_count {
         spells.push(read_u32_le(r)?.into());
@@ -192,7 +192,7 @@ pub(super) fn read_pet_spells(r: &mut &[u8]) -> io::Result<PetSpells> {
 
 /// The trailing cooldown block. The client reads `u8 count` then 12-byte entries
 /// `{u16 spell, u16 category, u32, u32}` (`0x4bda58`); vmangos writes `u16 count` then 14-byte
-/// entries with a `u32` spell (`Unit.cpp:11225-11258`). Deviation: both are read, told apart
+/// entries with a `u32` spell (`Unit.cpp:11245-11278`). Deviation: both are read, told apart
 /// exactly by the tail length (`12n` vs `1 + 14n`), since the 1.12 client mis-parses vmangos's.
 fn read_cooldown_block(r: &mut &[u8]) -> io::Result<Vec<PetSpellCooldown>> {
     let count = usize::from(read_u8(r)?);
@@ -270,7 +270,7 @@ pub fn pet_tame_failure_key(reason: u8) -> &'static str {
 
 /// Sound selector for an accepted order (vmangos `PET_TALK_SPECIAL_SPELL`, `PetHandler.cpp:523`).
 pub const PET_TALK_ORDER: u32 = 0;
-/// Sound selector for an attack order (vmangos `PET_TALK_ATTACK`, `Unit.cpp:8941`).
+/// Sound selector for an attack order (vmangos `PET_TALK_ATTACK`, `Unit.cpp:8961`).
 pub const PET_TALK_ATTACK: u32 = 1;
 
 /// Read `SMSG_PET_ACTION_SOUND`: `u64 petGuid, u32 selector` (`0x6040ca`, vmangos

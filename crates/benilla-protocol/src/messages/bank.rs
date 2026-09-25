@@ -25,7 +25,7 @@ pub fn buy_bank_slot(banker_guid: u64) -> Vec<u8> {
     banker_guid.to_le_bytes().to_vec()
 }
 
-/// `CMSG_AUTOBANK_ITEM` (`ItemHandler.cpp:874`): deposit only, into the first free bank slot.
+/// `CMSG_AUTOBANK_ITEM` (`ItemHandler.cpp:938`): deposit only, into the first free bank slot.
 pub fn autobank_item(bag: u8, slot: u8) -> Vec<u8> {
     vec![bag, slot]
 }

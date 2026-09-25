@@ -2,7 +2,7 @@
 //! `SMSG_UPDATE_WORLD_STATE` `0x2C3`) that NPC-text `$<n>w`/`$<n>e` tokens and scoreboards read.
 //!
 //! On `0x2C2` the reference clears the table and takes map and zone as its UI filter (`0x4c5650`)
-//! before the pairs run. vmangos counts a trailing `(0, 0)` pair (`Player.cpp:8219-8293`), which
+//! before the pairs run. vmangos counts a trailing `(0, 0)` pair (`Player.cpp:8295-8369`), which
 //! is read as data. Ids and values stay raw dwords: `$<n>e` reads the table at the negated key, so
 //! `$2077e` looks up `0xFFFFF7E3`.
 

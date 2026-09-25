@@ -172,7 +172,7 @@ pub const CMSG_MOVE_SPLINE_DONE: u16 = 0x02C9; // 713
 /// Our movement clock skipped (a stall, a long frame): the mover and the missing milliseconds.
 /// vmangos shifts its clock, and re-creates a just-boarded transport (`MovementHandler.cpp:989`).
 pub const CMSG_MOVE_TIME_SKIPPED: u16 = 0x02CE; // 718
-/// Another mover's clock skip, relayed: packed guid, `u32` lag (`MovementHandler.cpp:1011-1017`).
+/// Another mover's clock skip, relayed: packed guid, `u32` lag (`MovementHandler.cpp:1005-1011`).
 /// The reference (`0x603b40`) adds it to that unit's last wire timestamp (`CMovement+0xac`); if
 /// dropped, the unit's next packet lands `lag` ms late.
 pub const MSG_MOVE_TIME_SKIPPED: u16 = 0x0319; // 793
@@ -191,7 +191,7 @@ pub const SMSG_ATTACKSWING_CANT_ATTACK: u16 = 0x0149; // 329
 /// (`0x5e7dd0`) stops our attack and shows nothing.
 pub const SMSG_CANCEL_COMBAT: u16 = 0x014E; // 334
 
-/// A Feign Death was resisted: empty body (`Unit.cpp:9445-9451`). The reference (`0x6e9800`) only
+/// A Feign Death was resisted: empty body (`Unit.cpp:9465-9471`). The reference (`0x6e9800`) only
 /// shows `ERR_FEIGN_DEATH_RESISTED`.
 pub const SMSG_FEIGN_DEATH_RESISTED: u16 = 0x02B4; // 692
 /// A creature's aggro or alert flare.
@@ -482,8 +482,7 @@ pub const MSG_MOVE_SET_TURN_RATE: u16 = 0x00D8; // 216
 pub const SMSG_MOUNTRESULT: u16 = 0x016E; // 366
 pub const SMSG_DISMOUNTRESULT: u16 = 0x016F; // 367
 
-// The mounted space-bar flourish: an empty CMSG, echoed as `SMSG_MOUNTSPECIAL_ANIM` (raw u64 guid)
-// to all in range, the sender too (`MovementHandler.cpp:967`); receivers play MountSpecial (94).
+// The mounted flourish, an empty CMSG; who gets the echo: `ServerPacket::MountSpecialAnim`.
 pub const CMSG_MOUNTSPECIAL_ANIM: u16 = 0x0171; // 369
 pub const SMSG_MOUNTSPECIAL_ANIM: u16 = 0x0172; // 370
 
@@ -637,7 +636,7 @@ pub const CMSG_STABLE_SWAP_PET: u16 = 0x0275; // 629
 /// Spend a talent point; the rank's `SMSG_LEARNED_SPELL` and `PLAYER_CHARACTER_POINTS1` answer it.
 pub const CMSG_LEARN_TALENT: u16 = 0x0251; // 593
 
-/// The respec, both ways: the trainer's gossip line (`Player.cpp:12330`) makes the server ask with
+/// The respec, both ways: the trainer's gossip line (`Player.cpp:12406`) makes the server ask with
 /// the trainer's guid and the cost; the `CONFIRM_TALENT_WIPE` Accept sends the latched guid back.
 pub const MSG_TALENT_WIPE_CONFIRM: u16 = 0x02AA; // 682
 /// The instance boot timer: `u32 delayMs`, `u32 reason`; boot START for a positive delay, STOP for
@@ -798,7 +797,7 @@ pub const MSG_MOVE_WATER_WALK: u16 = 0x02B1; // 689
 // Knockback. `SMSG_MOVE_KNOCK_BACK` to the mover: packed guid, `u32 counter`, `f32` vcos, vsin,
 // speedXY, speedZ, with speedZ down-positive like the jump tail. The mandatory ack is full u64
 // guid, counter, `MovementInfo`, whose jump tail must echo the four floats within 0.01 with
-// `MOVEFLAG_JUMPING` set; a knockback is never re-sent (`Unit.cpp:6887`). Observers get
+// `MOVEFLAG_JUMPING` set; a knockback is never re-sent (`Unit.cpp:6912`). Observers get
 // `MSG_MOVE_KNOCK_BACK`: the relay shape plus the four floats, re-launched by `0x6026f0`.
 pub const SMSG_MOVE_KNOCK_BACK: u16 = 0x00EF; // 239
 pub const CMSG_MOVE_KNOCK_BACK_ACK: u16 = 0x00F0; // 240

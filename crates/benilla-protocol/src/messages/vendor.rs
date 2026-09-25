@@ -115,7 +115,7 @@ pub(super) fn read_list_inventory(r: &mut &[u8]) -> io::Result<(u64, Vec<VendorI
         let _no_inventory = read_u8(r)?;
         return Ok((vendor_guid, Vec::new()));
     }
-    // vmangos `MAX_VENDOR_ITEMS` 128 (`Objects/CreatureDefines.h:624`).
+    // vmangos `MAX_VENDOR_ITEMS` 128 (`Objects/CreatureDefines.h:617`).
     let mut items = Vec::with_capacity(capacity_hint(count, 128));
     for _ in 0..count {
         items.push(VendorItem {

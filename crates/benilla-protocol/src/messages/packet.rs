@@ -1125,8 +1125,9 @@ pub enum ServerPacket {
         mount: bool,
         code: u32,
     },
-    /// `SMSG_MOUNTSPECIAL_ANIM`: one raw `u64` guid, always another player's mount, since the
-    /// sender is left out of the broadcast (`MovementHandler.cpp:969-970`).
+    /// `SMSG_MOUNTSPECIAL_ANIM`: one raw `u64` guid, sent with `self` false
+    /// (`MovementHandler.cpp:972`), so the sender's own echo depends on vmangos's broadcaster: off
+    /// forces `self` true (`Object.cpp:2273-2274`), on keeps it false (`Object.cpp:2276-2280`).
     MountSpecialAnim {
         guid: u64,
     },

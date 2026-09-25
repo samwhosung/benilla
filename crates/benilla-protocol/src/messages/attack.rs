@@ -69,7 +69,7 @@ pub(super) fn read_attacker_state(r: &mut impl Read) -> io::Result<AttackerState
         resist += read_u32_le(r)? as i32;
     }
     let victim_state = read_u32_le(r)?;
-    // The tail from `victimState` (`Server/Packets/Combat.cpp:81`) lands at `rec+0xa4`..`+0xb0`
+    // The tail from `TargetState` (`Unit.cpp:4601`) lands at `rec+0xa4`..`+0xb0`
     // (`0x625c60`); the reference never reads `attackerState`.
     let _attacker_state = read_u32_le(r)?;
     let melee_spell_id = read_u32_le(r)?;

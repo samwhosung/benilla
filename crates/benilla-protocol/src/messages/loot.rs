@@ -45,7 +45,7 @@ pub mod loot_type {
 
 /// `LootError` (vmangos `LootMgr.h:85-100`): the code on the error shape of `SMSG_LOOT_RESPONSE`.
 /// `CMSG_LOOT` can draw `DIDNT_KILL`, `PLAYER_NOT_FOUND`, `PLAY_TIME_EXCEEDED`, `NOTSTANDING`,
-/// `STUNNED` (`LootHandler.cpp:342-373`) and `TOO_FAR` (`Player.cpp:7938-7947`); the `MASTER_*`
+/// `STUNNED` (`LootHandler.cpp:342-373`) and `TOO_FAR` (`Player.cpp:7952-7956`); the `MASTER_*`
 /// codes answer a refused [`loot_master_give`], to the master looter only.
 pub mod loot_error {
     pub const DIDNT_KILL: u8 = 0;
@@ -123,7 +123,7 @@ pub fn loot_master_give(loot_guid: u64, slot: u8, player_guid: u64) -> Vec<u8> {
 }
 
 /// `SMSG_LOOT_START_ROLL` (`Loot.cpp:43-51`): a group roll opened on one drop, sent to every
-/// eligible roller. Its `randomSuffix` is always 0 (`Group/Group.cpp:764`) and is discarded.
+/// eligible roller. Its `randomSuffix` is always 0 (`Group/Group.cpp:765`) and is discarded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LootStartRoll {
     pub looted_target: u64,
@@ -195,7 +195,7 @@ pub(super) fn read_loot_start_roll(r: &mut &[u8]) -> io::Result<LootStartRoll> {
     let looted_target = read_u64_le(r)?;
     let item_slot = read_u32_le(r)?;
     let item_id = read_u32_le(r)?;
-    let _random_suffix = read_u32_le(r)?; // literal 0 on the wire (Group.cpp:764)
+    let _random_suffix = read_u32_le(r)?; // literal 0 on the wire (Group.cpp:765)
     let random_property_id = read_u32_le(r)?;
     let countdown_ms = read_u32_le(r)?;
     Ok(LootStartRoll {
@@ -231,7 +231,7 @@ pub(super) fn read_loot_roll_won(r: &mut &[u8]) -> io::Result<LootRollWon> {
     let looted_target = read_u64_le(r)?;
     let item_slot = read_u32_le(r)?;
     let item_id = read_u32_le(r)?;
-    let _random_suffix = read_u32_le(r)?; // literal 0 on the wire (Group.cpp:822)
+    let _random_suffix = read_u32_le(r)?; // literal 0 on the wire (Group.cpp:821)
     let random_property_id = read_u32_le(r)?;
     let winner = read_u64_le(r)?;
     let roll_number = read_u8(r)?;
@@ -252,7 +252,7 @@ pub(super) fn read_loot_all_passed(r: &mut &[u8]) -> io::Result<LootAllPassed> {
     let item_slot = read_u32_le(r)?;
     let item_id = read_u32_le(r)?;
     let random_property_id = read_u32_le(r)?;
-    let _random_suffix = read_u32_le(r)?; // the swapped tail, a literal 0 (Group.cpp:849)
+    let _random_suffix = read_u32_le(r)?; // the swapped tail, a literal 0 (Group.cpp:850)
     Ok(LootAllPassed {
         looted_target,
         item_slot,
@@ -274,7 +274,7 @@ pub(super) fn read_loot_master_list(r: &mut &[u8]) -> io::Result<Vec<u64>> {
     Ok(candidates)
 }
 
-/// `SMSG_LOOT_RESPONSE` (vmangos `Player.cpp:8135-8138`): `u64 guid, u8 lootType`, then the
+/// `SMSG_LOOT_RESPONSE` (vmangos `Player.cpp:8138-8141`): `u64 guid, u8 lootType`, then the
 /// error code when `lootType` is 0, else gold and the [`LootItem`] rows.
 pub(super) fn read_loot_response(r: &mut &[u8]) -> io::Result<(u64, LootResponseBody)> {
     let guid = read_u64_le(r)?;
@@ -292,7 +292,7 @@ pub(super) fn read_loot_response(r: &mut &[u8]) -> io::Result<(u64, LootResponse
         let item_id = read_u32_le(r)?;
         let item_count = read_u32_le(r)?;
         let display_info_id = read_u32_le(r)?;
-        let _random_suffix = read_u32_le(r)?; // always a literal 0 on the wire (LootMgr.cpp:841)
+        let _random_suffix = read_u32_le(r)?; // always a literal 0 on the wire (LootMgr.cpp:842)
         let random_property_id = read_u32_le(r)?;
         let slot_type = read_u8(r)?;
         items.push(LootItem {

@@ -374,7 +374,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     // UnitIsPlusMob(unit) (`0x516d40`): `UNIT_FIELD_FLAGS` bit 0x40, never the creature rank
-    // (`0x605620`). The server sets it for a non-pet above normal rank (`Creature.cpp:634`), so a
+    // (`0x605620`). The server sets it for a non-pet above normal rank (`Creature.cpp:637`), so a
     // rare answers 1, and an uncached creature still answers from its flags.
     g.set(
         "UnitIsPlusMob",

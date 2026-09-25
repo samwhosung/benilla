@@ -119,8 +119,8 @@ pub(super) fn read_group_set_leader(r: &mut impl Read) -> io::Result<String> {
     read_cstring(r)
 }
 
-/// Read `SMSG_PARTY_COMMAND_RESULT` (`Group.cpp:100-105`): operation, member name, result; the
-/// name can be empty, as in the ignoring-you refusal (`GroupHandler.cpp:466`).
+/// Read `SMSG_PARTY_COMMAND_RESULT` (`GroupHandler.cpp:47-54`): operation, member name, result;
+/// the name can be empty, as in the raid-convert confirmation (`GroupHandler.cpp:466`).
 pub(super) fn read_party_command_result(r: &mut impl Read) -> io::Result<(u32, String, u32)> {
     Ok((read_u32_le(r)?, read_cstring(r)?, read_u32_le(r)?))
 }
@@ -162,7 +162,7 @@ pub struct PartyMemberStatsInfo {
     pub max_power: Option<u16>,
     pub level: Option<u16>,
     pub zone: Option<u16>,
-    /// Raw WoW x and y, truncated to `i16` by the server (`GroupHandler.cpp:623`).
+    /// Raw WoW x and y, truncated to `i16` by the server (`GroupHandler.cpp:625`).
     pub position: Option<(i16, i16)>,
     /// Active buff spell ids in slot order; the wire's `u32` slot mask is not kept.
     pub auras: Option<Vec<u16>>,
@@ -247,7 +247,7 @@ impl PartyMemberStatsInfo {
     }
 }
 
-/// One `u16` spell id per set bit of `mask`, in bit order (`GroupHandler.cpp:624-644`).
+/// One `u16` spell id per set bit of `mask`, in bit order (`GroupHandler.cpp:627-648`).
 fn read_aura_spells(r: &mut impl Read, mask: u32, bits: u32) -> io::Result<Vec<u16>> {
     let mut spells = Vec::new();
     for bit in 0..bits {
@@ -258,7 +258,7 @@ fn read_aura_spells(r: &mut impl Read, mask: u32, bits: u32) -> io::Result<Vec<u
     Ok(spells)
 }
 
-/// Read `SMSG_PARTY_MEMBER_STATS` or `_FULL`; the guid is packed (`GroupHandler.cpp:768`).
+/// Read `SMSG_PARTY_MEMBER_STATS` or `_FULL`; the guid is packed (`GroupHandler.cpp:593`).
 pub(super) fn read_party_member_stats(
     r: &mut impl Read,
 ) -> io::Result<(u64, PartyMemberStatsInfo)> {

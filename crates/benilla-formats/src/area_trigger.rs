@@ -34,7 +34,7 @@ impl AreaTriggerRow {
     /// distance check, inclusive (`radius² >= Σ(centre − p)²`); a box carries `p` into its frame
     /// through gx's matrix ops (`0x7bdc40` load, `0x7bdd60` rotate by `-box_yaw`, `0x7bd700`
     /// apply), strict against half of `box_size` on all six faces. The server re-tests with 5 yd
-    /// of slop (`MiscHandler.cpp:641`).
+    /// of slop (`MiscHandler.cpp:643`).
     pub fn contains(&self, p: [f32; 3]) -> bool {
         if self.radius != 0.0 {
             let d = [

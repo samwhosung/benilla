@@ -182,7 +182,7 @@ pub(super) fn read_spell_go(r: &mut impl Read) -> io::Result<SpellGo> {
     let spell_id = read_u32_le(r)?;
     let cast_flags = read_u16_le(r)?;
 
-    // Both counts are `u8`s the server backfills (`Spell.cpp:4607-4609`); no tighter bound.
+    // Both counts are `u8`s the server backfills (`Spell.cpp:4657-4658`); no tighter bound.
     let hit_count = read_u8(r)?;
     let mut hits = Vec::with_capacity(capacity_hint(hit_count, usize::from(u8::MAX)));
     for _ in 0..hit_count {
@@ -234,7 +234,7 @@ pub(super) fn read_spell_delayed(r: &mut impl Read) -> io::Result<(u64, u32)> {
     Ok((caster, delay_ms))
 }
 
-/// Read `MSG_CHANNEL_START` (vmangos `Spell.cpp:4951-4954`): `(spell_id, duration_ms)`, sent only
+/// Read `MSG_CHANNEL_START` (vmangos `Spell.cpp:4963-4966`): `(spell_id, duration_ms)`, sent only
 /// to the caster, so no guid.
 pub(super) fn read_channel_start(r: &mut impl Read) -> io::Result<(u32, u32)> {
     let spell_id = read_u32_le(r)?;
@@ -242,7 +242,7 @@ pub(super) fn read_channel_start(r: &mut impl Read) -> io::Result<(u32, u32)> {
     Ok((spell_id, duration_ms))
 }
 
-/// Read `MSG_CHANNEL_UPDATE` (vmangos `Player.cpp:21106-21110`): ms left, caster only; 0 ends the
+/// Read `MSG_CHANNEL_UPDATE` (vmangos `Player.cpp:21141-21146`): ms left, caster only; 0 ends the
 /// channel, whether it finished or was interrupted.
 pub(super) fn read_channel_update(r: &mut impl Read) -> io::Result<u32> {
     read_u32_le(r)

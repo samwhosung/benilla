@@ -20,7 +20,7 @@ use super::{binding_abi, Model};
 
 /// The `SkillLine.dbc` id behind weapon subclass `0..=20` (vmangos `Item.cpp:700-707`), `None`
 /// for the obsolete, exotic and misc rows; with no weapon the skill is [`SKILL_UNARMED`]
-/// (`Player.cpp:20144-20155`).
+/// (`Player.cpp:20175-20186`).
 pub fn weapon_subclass_skill(subclass: u32) -> Option<u32> {
     const TABLE: [u32; 21] = [
         44,  // 0 axe → SKILL_AXES
@@ -48,7 +48,7 @@ pub fn weapon_subclass_skill(subclass: u32) -> Option<u32> {
     TABLE.get(subclass as usize).copied().filter(|&s| s != 0)
 }
 
-/// The melee skill with no weapon equipped (vmangos `SharedDefines.h:987`, `Player.cpp:20153`).
+/// The melee skill with no weapon equipped (vmangos `SharedDefines.h:987`, `Player.cpp:20184`).
 pub const SKILL_UNARMED: u32 = 162;
 
 /// The `SkillLine.dbc` Defense row `UnitDefense` reports (vmangos `SharedDefines.h:961`).
@@ -197,7 +197,7 @@ pub struct InvSlotView {
     /// The resolved `ITEM_FIELD_CREATOR` name, the tooltip's "<Made by %s>" line.
     pub creator: Option<String>,
     /// The resolved enchant slots in slot order. An inspected player's record has all 7 too, but
-    /// vmangos fills only PERM and TEMP (`Player.cpp:10518-10519`).
+    /// vmangos fills only PERM and TEMP (`Player.cpp:10594-10595`).
     pub enchants: Vec<super::EnchantView>,
     /// The instance's remaining lifetime in ms; `None` without a timer.
     pub duration_ms: Option<u64>,

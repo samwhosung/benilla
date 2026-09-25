@@ -372,8 +372,8 @@ fn group_list_empty_you_left_shape_is_14_bytes() {
     }
 }
 
-/// `SMSG_PARTY_COMMAND_RESULT` (Group.cpp:100-105): a named refusal, and the ignoring-you refusal,
-/// which names no one (`Handlers/GroupHandler.cpp:466`).
+/// `SMSG_PARTY_COMMAND_RESULT` (`GroupHandler.cpp:47-54`): a named result, and one with an empty
+/// name, as the raid-convert confirmation sends (`GroupHandler.cpp:466`).
 #[test]
 fn party_command_result_wire() {
     let mut body = party_operation::INVITE.to_le_bytes().to_vec();
@@ -546,7 +546,7 @@ fn party_member_stats_full_position_auras_and_pet_block() {
     }
 }
 
-/// The reply for a member not in our group (`Handlers/GroupHandler.cpp:763-774`):
+/// The reply for a member not in our group (`Handlers/GroupHandler.cpp:773-789`):
 /// `SMSG_PARTY_MEMBER_STATS_FULL` with only `STATUS`, set to offline (0).
 #[test]
 fn party_member_stats_offline_miss_is_status_only() {

@@ -169,7 +169,7 @@ pub fn item_text_query(text_id: u32, mail_id: u32) -> Vec<u8> {
 /// `SMSG_MAIL_LIST_RESULT` (vmangos `HandleGetMailList`): `u8 count`, then [`MailListEntry`] rows.
 pub(super) fn read_mail_list_result(r: &mut &[u8]) -> io::Result<Vec<MailListEntry>> {
     let count = read_u8(r)?;
-    // vmangos stops the list at 254 (`MailHandler.cpp:761`, `mailsCount >= 254`).
+    // vmangos stops the list at 254 (`MailHandler.cpp:765`, `mailsCount >= 254`).
     let mut mails = Vec::with_capacity(capacity_hint(count, 254));
     for _ in 0..count {
         let message_id = read_u32_le(r)?;

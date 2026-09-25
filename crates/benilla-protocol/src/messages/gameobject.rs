@@ -68,7 +68,7 @@ pub(super) fn read_gameobject_custom_anim(r: &mut &[u8]) -> io::Result<(u64, u32
     Ok((guid, anim_id))
 }
 
-/// Read `SMSG_GAMEOBJECT_DESPAWN_ANIM`, only the guid (`Objects/Object.cpp:2307`); the 1.12
+/// Read `SMSG_GAMEOBJECT_DESPAWN_ANIM`, only the guid (`Objects/Object.cpp:2308`); the 1.12
 /// client plays substate 12, AnimationData 157 Despawn.
 pub(super) fn read_gameobject_despawn_anim(r: &mut &[u8]) -> io::Result<u64> {
     read_u64_le(r)

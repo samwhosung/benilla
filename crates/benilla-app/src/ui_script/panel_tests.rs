@@ -675,7 +675,7 @@ fn shipped_panel_slot_pushable_promotes_to_center() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// vmangos sends only `SMSG_SHOW_BANK` for the bank option (`Player.cpp:12349-12351`), and the
+/// vmangos sends only `SMSG_SHOW_BANK` for the bank option (`Player.cpp:12425-12427`), and the
 /// bank (pushable 6) would seat at center, so the app closes gossip itself. Either order ends
 /// with the bank at left; opened first, it slides back when gossip hides (`UIParent.lua:772-783`).
 #[test]

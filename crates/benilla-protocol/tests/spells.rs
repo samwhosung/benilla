@@ -536,7 +536,7 @@ fn spell_visual_wire_golden() {
     }
 
     // A GameObject caster (Lightwell 181102, spell 7001): vmangos writes the null `m_casterUnit`
-    // as a lone zero mask byte (`Spell.cpp:4513`), so the object rides only slot 1.
+    // as a lone zero mask byte (`Spell.cpp:4525`), so the object rides only slot 1.
     const LIGHTWELL: u64 = 0xF110_02C3_6E00_0123; // GO high guid, entry 181102 << 24, counter 0x123
     let body = hx(concat!(
         "fb23016ec30210f1", // item_or_caster pguid: the GameObject (mask 0xfb: byte 2 is zero)
@@ -633,7 +633,7 @@ fn spell_visual_wire_golden() {
     }
 
     // MSG_CHANNEL_START: u32 spellId + u32 duration, no guid since only the caster gets it
-    // (vmangos `Spell.cpp:4951-4954`). 10797 is Starshards.
+    // (vmangos `Spell.cpp:4963-4966`). 10797 is Starshards.
     let body = hx(concat!("2d2a0000", "70170000"));
     let packet = messages::parse_server(messages::opcode::MSG_CHANNEL_START, &body).unwrap();
     match &packet {
@@ -651,7 +651,7 @@ fn spell_visual_wire_golden() {
         other => panic!("channel start event, got {other:?}"),
     }
 
-    // MSG_CHANNEL_UPDATE: u32 ms left, 0 = over (vmangos `Player.cpp:21106-21110`).
+    // MSG_CHANNEL_UPDATE: u32 ms left, 0 = over (vmangos `Player.cpp:21141-21146`).
     let body = hx("b80b0000");
     let packet = messages::parse_server(messages::opcode::MSG_CHANNEL_UPDATE, &body).unwrap();
     match &packet {

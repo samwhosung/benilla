@@ -290,7 +290,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // GetInboxText(index): body, stationeryTexture, isTakeable, isInvoice (`MailFrame.lua:292`);
     // reading a mail queues its open. isTakeable with `not textCreated` gates the copy button
-    // (`MailFrame.lua:366`), the pair vmangos requires (`MailHandler.cpp:863`).
+    // (`MailFrame.lua:366`), the pair vmangos requires (`MailHandler.cpp:867`).
     g.set(
         "GetInboxText",
         lua.create_function(|lua, index: usize| {
@@ -594,7 +594,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetSendMailPrice(): 30 copper, vmangos's fee (`MailHandler.cpp:243`). The reference's is 30
+    // GetSendMailPrice(): 30 copper, vmangos's fee (`MailHandler.cpp:247`). The reference's is 30
     // (`0x4ae756`) plus an uncarried stationery's price, the package's and the enclosed money
     // (`0x4ae7a0`-`0x4ae7d2`); those are not added here.
     g.set(

@@ -131,7 +131,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // The server ignores a `rollType` of 3 or more (`GroupHandler.cpp:376`), so those and unknown
+    // The server ignores a `rollType` of 3 or more (`GroupHandler.cpp:367`), so those and unknown
     // ids are dropped. Need or Greed on a bind-on-pickup item sends nothing and fires
     // `CONFIRM_LOOT_ROLL` (`0x61bdf0`, `0x61be8b`); the gate is in the C function, so it holds for
     // an addon's call too.

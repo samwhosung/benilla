@@ -34,8 +34,9 @@ impl WorldWriter {
     }
 
     /// `CMSG_SET_ACTIVE_MOVER`, full guid: the client's claim after `SMSG_CLIENT_CONTROL_UPDATE`.
-    /// Until it lands, every `MSG_MOVE_*` for that unit is discarded (`MovementHandler.cpp:844`);
-    /// sent at login for our own body and again on possession.
+    /// Until it lands, every `MSG_MOVE_*` for that unit is discarded
+    /// (`MovementHandler.cpp:291-293`, `Player.cpp:20257-20272`); sent at login for our own body
+    /// and again on possession.
     pub fn set_active_mover(&mut self, guid: u64) -> Result<()> {
         self.send(opcode::CMSG_SET_ACTIVE_MOVER, &messages::full_guid(guid))
     }
@@ -47,7 +48,7 @@ impl WorldWriter {
     }
 
     /// `CMSG_MOVE_NOT_ACTIVE_MOVER`: the released full guid, then its parting pose, which vmangos
-    /// re-broadcasts to observers as a stop (`MovementHandler.cpp:886`).
+    /// re-broadcasts to observers as a stop (`MovementHandler.cpp:955-964`).
     pub fn move_not_active_mover(
         &mut self,
         guid: u64,
@@ -132,7 +133,7 @@ impl WorldWriter {
     /// Ack a granted root, water-walk, feather-fall or hover: full guid, echoed counter and our
     /// pose, plus a trailing `u32 apply` for all but root. Unacked, the server never applies it.
     /// `flags` must carry the mode's bit (a root apply-ack without it is a kick, vmangos
-    /// `MovementHandler.cpp:722-729`) and no moving bit beside `MOVEFLAG_ROOT`; turn bits are fine.
+    /// `MovementHandler.cpp:715-722`) and no moving bit beside `MOVEFLAG_ROOT`; turn bits are fine.
     pub fn move_mode_ack(
         &mut self,
         guid: u64,

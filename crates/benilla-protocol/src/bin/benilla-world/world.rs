@@ -489,7 +489,7 @@ impl World {
             } if *guid == self.self_guid => {
                 let pose = self.self_pose();
                 // The ack's MovementInfo must carry the mode's own bit: vmangos kicks a player
-                // whose root ack lacks it (`HandleMoveRootAck`, MovementHandler.cpp:722-729). For
+                // whose root ack lacks it (`HandleMoveRootAck`, MovementHandler.cpp:715-722). For
                 // the other modes the word becomes the mover's flags; the probe keeps no others.
                 let flags = if *apply { mode.flag() } else { 0 };
                 session.move_mode_ack(*guid, *counter, *mode, *apply, flags, pose)?;

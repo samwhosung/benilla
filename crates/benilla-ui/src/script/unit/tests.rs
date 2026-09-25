@@ -861,7 +861,7 @@ fn unit_is_plus_mob_reads_the_flag_bit_and_not_the_rank() {
     let mut s = UiScript::new().unwrap();
     s.set_unit("player", Some(player()));
 
-    // The server sets the bit on `!IsPet() && rank > 0` (`Creature.h:185`), so rare carries it.
+    // The server sets the bit on `!IsPet() && rank > 0` (`Creature.h:186`), so rare carries it.
     for (rank, word) in [
         (1u32, "elite"),
         (2, "rareelite"),

@@ -225,7 +225,7 @@ fn channel_counts_down_not_up() {
 }
 
 /// A channel that runs out closes on the bar's own clock: vmangos defers the stop by 1000 ms on a
-/// natural end and sends it at once only on an interrupt (`Spell.cpp:4894-4904`). The stock
+/// natural end and sends it at once only on an interrupt (`Spell.cpp:4906-4916`). The stock
 /// `OnUpdate` clamps at `endTime` and fades with no green flash, and the late stop lands on a
 /// hidden frame, which both stop-arm guards ignore.
 #[test]

@@ -416,7 +416,7 @@ impl ObjectFields {
     }
 
     /// The piece in equipment slot `slot` (0..18) as `(ItemDisplayInfo id, InventoryType)`, packed
-    /// `display | type << 24` (`Player.cpp:4821`); unlike `PLAYER_VISIBLE_ITEM`, not an item entry.
+    /// `display | type << 24` (`Player.cpp:4822`); unlike `PLAYER_VISIBLE_ITEM`, not an item entry.
     pub fn corpse_item(&self, slot: u8) -> Option<(u32, u8)> {
         let raw = self.get_u32(13 + u16::from(slot))?;
         let display = raw & 0x00ff_ffff;
@@ -474,7 +474,7 @@ impl ObjectFields {
         self.corpse_flags() & 0x10 != 0
     }
 
-    /// `CORPSE_DYNFLAG_LOOTABLE` (`Map.cpp:3660`): the bone pile has insignia; `0x5d6e20` gates the
+    /// `CORPSE_DYNFLAG_LOOTABLE` (`Map.cpp:3655`): the bone pile has insignia; `0x5d6e20` gates the
     /// loot highlight and the `CMSG_LOOT` click on it.
     pub fn corpse_lootable(&self) -> bool {
         self.get_u32(FIELD_CORPSE_DYNAMIC_FLAGS).unwrap_or(0) & 0x01 != 0

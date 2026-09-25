@@ -667,7 +667,7 @@ fn spline_move_mode_family_parses_golden() {
 
 /// The movement-mode opcodes relayed to observers (root, hover, feather fall, water walk,
 /// teleport) use the plain relay shape, no counter. Only root has a separate off opcode: vmangos
-/// updates the others' flag before broadcasting (`MovementHandler.cpp:626-638`, `:743-744`), so
+/// updates the others' flag before broadcasting (`MovementHandler.cpp:620-631`, `:736-737`), so
 /// the flags word carries the state. Only `MSG_MOVE_TELEPORT` is tagged as a teleport.
 #[test]
 fn observer_move_mode_family_parses_golden() {

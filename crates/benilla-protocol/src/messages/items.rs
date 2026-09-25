@@ -565,7 +565,7 @@ pub fn set_ammo(entry: u32) -> Vec<u8> {
 /// Read `SMSG_INVENTORY_CHANGE_FAILURE` into `(reason, required_level, item_guid, bag_slot)`: a
 /// `u8` reason and, unless it is 0, a `u32` level for reason 1 only, two item guids and a bag
 /// slot. That slot is the target bag's player-array slot, 255 for the player's own
-/// (`Player.cpp:8899`); the reference names that bag in reason 16's message (`0x5ede00`).
+/// (`Player.cpp:8975`); the reference names that bag in reason 16's message (`0x5ede00`).
 pub(super) fn read_inventory_change_failure(
     r: &mut &[u8],
 ) -> io::Result<(u8, Option<u32>, u64, u8)> {

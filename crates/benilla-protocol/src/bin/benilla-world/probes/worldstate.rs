@@ -1,6 +1,6 @@
 //! `--worldstate`: `.debug send worldstate <id> <value>` must come back as that exact
 //! `SMSG_UPDATE_WORLD_STATE` pair, and a zone change must re-send `SMSG_INIT_WORLD_STATES`
-//! (`Player::UpdateZone`, `Player.cpp:6660`), which cannot be requested.
+//! (`Player::UpdateZone`, `Player.cpp:6736`), which cannot be requested.
 //!
 //! The command needs SEC_DEVELOPER, 5 (vmangos `Chat.cpp:323`); below it the server only refuses
 //! in chat. The level is read from `realmd.account_access` (a row per `RealmID` and a `-1` row),

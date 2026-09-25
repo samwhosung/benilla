@@ -18,7 +18,7 @@ pub struct TransportSample {
     /// The map of `pos`, which changes as a transport crosses continents.
     pub map: u32,
     pub pos: [f32; 3],
-    /// Radians in `[0, 2π)`, `atan2(dir.y, dir.x) + π` (`Transport.cpp:349`).
+    /// Radians in `[0, 2π)`, `atan2(dir.y, dir.x) + π` (`Transport.cpp:347`).
     pub heading: f32,
     /// False while parked at a stop or on a keyframe's zero-width instant.
     pub moving: bool,

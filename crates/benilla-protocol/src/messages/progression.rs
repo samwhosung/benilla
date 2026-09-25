@@ -63,7 +63,7 @@ pub fn learn_talent(talent_id: u32, requested_rank: u32) -> Vec<u8> {
 }
 
 /// Inbound `MSG_TALENT_WIPE_CONFIRM`: a class trainer asks whether to unlearn every talent
-/// (vmangos `Player.cpp:8338`).
+/// (vmangos `Player.cpp:8414`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TalentWipeConfirm {
     /// The asking trainer, echoed in the answer and required to be a trainer in range there.
