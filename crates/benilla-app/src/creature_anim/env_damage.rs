@@ -1,4 +1,4 @@
-//! Environmental-damage feedback — the fall-landing dust puff and pain grunt (decision 0412).
+//! Environmental-damage feedback — the fall-landing dust puff and pain grunt.
 //! Two independent sources fire it, matching the reference's own double-fire:
 //!
 //! 1. **The wire arm** (`net/apply`): `SMSG_ENVIRONMENTALDAMAGELOG` → [`EnvDamageTable`] maps the
@@ -18,7 +18,7 @@
 //!    (it owns the voice catalog); the dust leg is [`hard_landing_dust`] here; both gate on the
 //!    same descent.
 //!
-//! **Deliberate scope (decision 0412):** benilla drives the predictor from the *self* controller's
+//! **Deliberate scope:** benilla drives the predictor from the *self* controller's
 //! landing edge only — remote movers' landings aren't detected yet, though the reference fires it
 //! for any mover (its call graph reaches `0x602d00` from the networked movement handler). And the
 //! HARD gate's immunity modifier (feather-fall / safe-fall auras force SOFT in the `13 < h < 70`
@@ -56,7 +56,7 @@ pub(super) fn load_env_damage_table(mut commands: Commands, assets: Option<Res<W
 /// the immunity check (feather/safe-fall) — moot for us until those auras are tracked, so every
 /// fall past this floor reads HARD. Note the client grunts from 13.0 yd but the *server* only
 /// damages from ≈14.57 yd, so a 13–14.57 yd fall grunts and puffs with zero damage and no packet —
-/// faithful (decision 0412).
+/// faithful.
 pub(crate) const HARD_LANDING_DESCENT: f32 = 13.0;
 
 /// The controller's landing report, written on **every** landing (ungated — consumers apply

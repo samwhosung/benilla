@@ -1,4 +1,4 @@
-//! Equipment visuals (decisions 0072/0074): held items (weapons, shields, ranged), worn-armor
+//! Equipment visuals: held items (weapons, shields, ranged), worn-armor
 //! resolution, and helm/shoulder attach models on units' bodies.
 //!
 //! Two halves, both per-frame systems chained after [`super::attach_entity_visuals`]:
@@ -49,7 +49,7 @@ const HELD_SLOTS: usize = 3;
 /// OFFHAND/RANGED` = 15/16/17 — the `PLAYER_VISIBLE_ITEM_*` blocks are indexed by equipment slot).
 const PLAYER_HELD_SLOTS: [u8; HELD_SLOTS] = [15, 16, 17];
 
-/// M2 attachment-point ids (empirically pinned on `HumanMale.m2` — decision 0072): the drawn-hand
+/// M2 attachment-point ids (empirically pinned on `HumanMale.m2`): the drawn-hand
 /// points, the shield forearm, and the sheathed family the client's `0x47a070` jump table selects
 /// from (`K − (mainhand)` over `K ∈ {27, 31, 33}`, const 28 for the shield).
 /// `pub(crate)` because the ids are a shared vocabulary, not this module's private numbering:
@@ -116,10 +116,10 @@ impl ItemDisplays {
 }
 
 /// A player's worn-equipment display ids by **bodyslot − 2** (shirt, chest, belt, pants, boots,
-/// wrist, gloves, tabard — the armor-composite slots, decision 0074), `0` = empty. `settled` means
+/// wrist, gloves, tabard — the armor-composite slots), `0` = empty. `settled` means
 /// every non-empty visible-item entry has resolved through the template cache (hit or recorded
 /// miss) — the attach path waits for it so a player composites dressed, not naked-then-flicker.
-/// Players only; a character-model NPC's armor ships pre-baked (decision 0060).
+/// Players only; a character-model NPC's armor ships pre-baked.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub(crate) struct Equipment {
     pub(crate) bodyslots: [u32; 8],
@@ -128,7 +128,7 @@ pub(crate) struct Equipment {
     /// The head slot's display id (0 = no helm) — an attach sub-model, plus the HelmetGeosetVisData
     /// hide-masks that tuck hair/facial/ears under it (`0x4799a0`).
     pub(crate) helm: u32,
-    /// The wearer's guild tabard (decision 1704) — the emblem five, joined off their own PUBLIC
+    /// The wearer's guild tabard — the emblem five, joined off their own PUBLIC
     /// `PLAYER_GUILDID` against the guild identity cache. `None` for a guildless player **and**
     /// for a guild whose `CMSG_GUILD_QUERY` has not answered yet; the tabard shows its own art
     /// until it does.
@@ -137,7 +137,7 @@ pub(crate) struct Equipment {
     /// wears*: the composite key includes it, so the re-dress diff below is the one place a change
     /// of guild, of tabard, and a late-arriving identity all converge — no second latch.
     pub(crate) emblem: Option<benilla_formats::GuildEmblem>,
-    /// The tabard designer's preview (decision 1977, `[cc+0xc]` via `0x5e07d0`): set on the
+    /// The tabard designer's preview (`[cc+0xc]` via `0x5e07d0`): set on the
     /// LOCAL player's body while the designer is open, so the body wears the tabard geoset over an
     /// empty slot and the composite paints `emblem` (the design under preview) onto it.
     pub(crate) tabard_preview: bool,
@@ -147,18 +147,18 @@ pub(crate) struct Equipment {
 /// The [`Equipment`] a player's attached visual was **dressed** with (its composite key's equip
 /// half). [`super::attach::redress_player_looks`] diffs it against the live resolution and re-dresses
 /// the standing visual in place on a change — the reference's own shape, and the reason a weapon
-/// glow no longer blinks when a belt is swapped (decision 0835, superseding 0074's teardown).
+/// glow no longer blinks when a belt is swapped (superseding 0074's teardown).
 #[derive(Component)]
 pub(in crate::entities) struct AppliedEquipment(pub(in crate::entities) Equipment);
 
 /// Marks a unit whose visual was torn down and is being rebuilt for something **other** than a
 /// spawn: the re-attach skips the appear-fade. A mount transition ([`super::mount`]) and a live
 /// display swap ([`super::live_display`]) are the two remaining tear-downs; a gear change is not one
-/// of them any more (decision 0835).
+/// of them any more.
 #[derive(Component)]
 pub(super) struct Reattached;
 
-/// Player equipment slots feeding the armor composite → their bodyslot−2 index (decision 0074):
+/// Player equipment slots feeding the armor composite → their bodyslot−2 index:
 /// shirt(3) chest(4) waist(5) legs(6) feet(7) wrists(8) hands(9) tabard(18). The visible-item block
 /// is indexed by equipment slot, so no invType mapping is needed on this path.
 const COMPOSITE_SLOTS: [(u8, usize); 8] = [
@@ -186,7 +186,7 @@ pub(super) struct HeldItems {
 /// worn quiver (self-only, ranged-drawn — `0x611e10`).
 pub(super) const ATTACH_SLOTS: usize = 8;
 
-/// **What the disarm reflex left attached** (decision 1863). The reference's attachment state is
+/// **What the disarm reflex left attached**. The reference's attachment state is
 /// built by *events*, not recomputed from the descriptor, and disarm is where that difference
 /// becomes visible — so this is the one piece of latched attachment state the equipment layer
 /// keeps.
@@ -243,7 +243,7 @@ struct HeldSlot {
     kind: ItemModelKind,
     attach: u16,
     /// The `ItemVisuals.dbc` id this item glows with — its display's intrinsic visual, else its
-    /// first enchant's (decision 0805, [`super::item_glow`]). `0` on the overwhelming majority.
+    /// first enchant's ([`super::item_glow`]). `0` on the overwhelming majority.
     /// Part of the diff key on purpose: applying or losing an enchant is a different MODEL set, so
     /// the item is rebuilt and the glow follows. (A sheath change is not — same item, new attach
     /// point: that one MOVES the spawned root instead, decision 0826.)
@@ -253,7 +253,7 @@ struct HeldSlot {
 impl HeldSlot {
     /// The same item model, wherever it hangs — the test that separates a **move** (the sheath
     /// swap: one item, a new attach point, so the spawned root is re-parented and everything
-    /// riding it comes along — decision 0826) from a **rebuild** (a different display, model
+    /// riding it comes along) from a **rebuild** (a different display, model
     /// variant, or glow, which is a different model and must be built from scratch).
     fn same_item(&self, other: &Self) -> bool {
         self.display == other.display && self.kind == other.kind && self.visual == other.visual
@@ -284,9 +284,9 @@ pub(crate) enum ItemModelKind {
     Quiver,
 }
 
-/// The per-instance bone-riding surface, inserted at visual attach (decision 0072): the model's
+/// The per-instance bone-riding surface, inserted at visual attach: the model's
 /// attachment points and event markers (id → bone + Bevy-space local offset). **Pure model data**
-/// — the anchor *entities* live in `RigPose.anchors` and spawn on first consumer (decision 1355):
+/// — the anchor *entities* live in `RigPose.anchors` and spawn on first consumer:
 /// a rider that needs a frame to parent under resolves `points`/`markers` here, then
 /// `RigPose::anchor_for(bone)`; a reader that only needs a position goes straight to
 /// `RigPose::posed_point(bone, offset)` and touches no entity at all.
@@ -302,7 +302,7 @@ pub(crate) struct BoneAttach {
 
 /// The held-item children currently spawned for a unit: the [`HeldItems`] they were built from (the
 /// diff key) + the spawned root entity **per slot** — indexed, not a flat list, because the diff is
-/// per slot (decision 0826): a slot that didn't change keeps its root, and a slot that only changed
+/// per slot: a slot that didn't change keeps its root, and a slot that only changed
 /// attach point has its root moved. Only a slot whose item really changed is despawned and rebuilt.
 #[derive(Component, Default)]
 pub(crate) struct HeldAttached {
@@ -314,7 +314,7 @@ impl HeldAttached {
     /// The spawned root per attach slot, read-only — for the **instruments** (`WOW_DRESS_CENSUS`),
     /// which need the *visual* truth and not just the resolution: "is a helm model actually hanging
     /// off this body right now" is a different question from "did we resolve a helm display id",
-    /// and a report about a piece of gear showing when it should not (B123) turns on the gap
+    /// and a report about a piece of gear showing when it should not turns on the gap
     /// between them. Nothing in gameplay reads this — the diff owns the array (decision 0026's
     /// dev seam: dev may see anything, nothing may depend on dev).
     pub(crate) fn spawned_slots(&self) -> &[Option<Entity>; ATTACH_SLOTS] {
@@ -340,7 +340,7 @@ pub(crate) const ATTACH_SLOT_NAMES: [&str; ATTACH_SLOTS] = [
 
 /// The glow id of a slot the reference never glows: **helm (attach 11), shoulders (5/6) and the
 /// quiver (26) push a literal `0`** into the item-attach primitive `0x4798c0` — byte-read at
-/// `0x479aa2`/`0x479e5f`/`0x479cf2`/`0x479db4` (decision 0805). Only the weapon/shield hand attach
+/// `0x479aa2`/`0x479e5f`/`0x479cf2`/`0x479db4`. Only the weapon/shield hand attach
 /// (`0x47a200`) and the ranged/ammo builder pass a display's real visual, so a glowing *shoulder*
 /// display — three robes and a chest carry one — is inert in 1.12, and inert here.
 const NO_GLOW: i32 = 0;
@@ -358,7 +358,7 @@ pub(in crate::entities) fn ensure_item_model(
         return;
     }
     // Per-kind: the ObjectComponents directory, which model/texture column, and the helm's
-    // per-race/sex filename (`<stem>_<Ra><S>.m2` — prefix by race id, empirically pinned, 0074).
+    // per-race/sex filename (`<stem>_<Ra><S>.m2` — prefix by race id, empirically pinned).
     // Ammo follows the missile module's shape rule: a `model[0]` row is a thrown weapon
     // (`Weapon\`), a `model[1]`-only row an arrow/bullet (`Ammo\`).
     let (dir_name, col) = match kind {

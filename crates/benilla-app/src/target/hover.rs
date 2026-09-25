@@ -70,7 +70,7 @@ pub(super) fn update_pick_occlusion(
 }
 
 /// Every model instance whose parts are `unit`'s pick geometry: **the body, everything it wears,
-/// and its mount** (decision 1658; the mount leg is 0441's).
+/// and its mount** (the mount leg is 0441's).
 ///
 /// This is the reference's chained-model set. `0x480d90` registers a pick candidate by walking the
 /// object's CM2 **attachment tree** — `[model+0x1dc]` list head → `[+0x1e4]` sibling, the same two
@@ -97,12 +97,12 @@ pub(crate) fn pick_model_roots(
 ///
 /// They are two halves of one lookup ([`update_hover`]'s `palette_of` reads both, in that order,
 /// and neither has ever been wanted alone) and they are bundled because the picker sits exactly on
-/// Bevy's 16-param function-system ceiling — the seat this freed went to the `IsSelectable` grader
-/// (decision 2060), which has to run *inside* the pick rather than after it so [`Hovered`] is never
+/// Bevy's 16-param function-system ceiling — the seat this freed went to the `IsSelectable` grader,
+/// which has to run *inside* the pick rather than after it so [`Hovered`] is never
 /// published in its ungraded state.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct PickPose<'w, 's> {
-    /// The owned palette table (decision 0720): the picker reads the same world-space matrices the
+    /// The owned palette table: the picker reads the same world-space matrices the
     /// vertex stage skins with, straight from the CPU rows.
     palettes: Res<'w, benilla_world::rig_palette::RigPalettes>,
     rigs: Query<'w, 's, &'static benilla_world::rig_palette::RigSkin>,
@@ -120,7 +120,7 @@ pub(super) struct PickPose<'w, 's> {
 /// (cube fallback) keeps the interim render-mesh AABB test, competing at pass-1 level. Inert while
 /// mouse-looking (cursor hidden) or over the dev UI.
 ///
-/// **A unit's pick geometry includes what it wears** (decision 1658): every model chained to the
+/// **A unit's pick geometry includes what it wears**: every model chained to the
 /// body — held weapons, the helm, the shoulders, a mount — is its own pass-1/pass-2 candidate
 /// resolving to the same unit, because the reference registers the whole CM2 attachment tree into
 /// the pick scene under one candidate node (`0x480d90` walking `[model+0x1dc]`/`[+0x1e4]`).
@@ -146,7 +146,7 @@ pub(super) fn update_hover(
     mut last_pick: Local<Option<Entity>>,
     // Unit roots: pose + scale, the playing animation (for its bounds sphere), the descriptor store
     // (alive-vs-dead sets the pass-2 priority), the part children — and whether the body is drawn
-    // at all. **You cannot click what is not in the scene** (decision 1277): a body the
+    // at all. **You cannot click what is not in the scene**: a body the
     // exterior-scene election sent to pass 2 never reaches the reference's draw list, so it takes
     // no mouseover, no sword cursor and no click. This lane used to ray-test every unit root with a
     // `Guid` and never ask, which is how the director could still target Tanaris mobs through a
@@ -169,7 +169,7 @@ pub(super) fn update_hover(
         ),
         (With<Guid>, Without<SelfPlayer>),
     >,
-    // A mounted unit's mount-child part children (decision 0441): the mount's geometry joins the
+    // A mounted unit's mount-child part children: the mount's geometry joins the
     // unit's pick set — the reference draws mount + rider as one clickable unit.
     child_sets: Query<&Children>,
     // A part child's mesh + its palette-rig link (the rig its vertices pose through).
@@ -188,7 +188,7 @@ pub(super) fn update_hover(
         With<CreaturePickPart>,
     >,
     // The pick's guid resolution — **and its kind**, which the skinless fallback below needs to
-    // apply the same eligibility rule the faithful path states inline (decision 1706: a corpse
+    // apply the same eligibility rule the faithful path states inline (a corpse
     // renders, and renders as a character body with pickable parts, but it is not a unit and a
     // click must never send `CMSG_SET_SELECTION` for it).
     units: Query<(&Guid, &NetEntity), Without<SelfPlayer>>,
@@ -240,7 +240,7 @@ pub(super) fn update_hover(
     // even when the broad phase rejects them — the reference wouldn't click them there either.
     let mut faithful: HashSet<Entity> = HashSet::new();
     for (entity, gt, net, anims, drv, store, children, mount_child, drawn, held) in &roots {
-        // Units, players — and **corpses** (decision 1723). A corpse is a skinned character body
+        // Units, players — and **corpses**. A corpse is a skinned character body
         // like any other, so it belongs in this pass, not in a fourth picker duplicating it; the
         // reference picks every CGObject in one trace and switches on type at the end. Which slot
         // of [`Hovered`] the winner lands in is decided at the publish below, by kind.
@@ -263,7 +263,7 @@ pub(super) fn update_hover(
         // attachment tree (`[model+0x1dc]` list head → `[+0x1e4]` sibling — the same two fields
         // the dress and paperdoll lanes walk) and registers each child model into the pick scene
         // under the SAME candidate node, so a ray that strikes the axe resolves to the unit
-        // holding it (decision 1658). Ours tested the body alone,
+        // holding it. Ours tested the body alone,
         // which is why a Naxxramas weapon mob — an `InvisibleStalker` body that draws nothing,
         // whose entire visible self is the weapon in its hand — could only be targeted through
         // its name plate.
@@ -282,7 +282,7 @@ pub(super) fn update_hover(
         // through (the reference falls back to the header sphere; permissive is the safe direction).
         // A MOUNTED unit passes through too: the rider's Mount-pose sphere doesn't cover the
         // mount's body (the reference recomputes the pick radius from the mount's box — a P2
-        // refinement, decision 0441).
+        // refinement).
         let clip = match (anims, drv) {
             (Some(a), Some(d)) => d.active_anim().and_then(|id| a.find(id)),
             _ => None,
@@ -300,7 +300,7 @@ pub(super) fn update_hover(
         }
         // The posed joint palette (parts of one skeleton share the rig): the same
         // world-from-bind-pose matrices GPU skinning applies, read from the owned palette rows
-        // (decision 0720 — last frame's propagated pose, exactly what the previous
+        // (last frame's propagated pose, exactly what the previous
         // joint-GlobalTransform read gave).
         let palette_of =
             |sk: &[(&Mesh3d, &benilla_world::rig_palette::RigPart)]| -> Option<Vec<Mat4>> {
@@ -331,7 +331,7 @@ pub(super) fn update_hover(
         // The body contributes nothing when it has no parts, which is not a reason to stop: a
         // trigger creature's whole visible self is what it wears. An attached item rides a rigid
         // one-frame palette of its own (`RigRider`, 1609), so it reads here exactly like a body —
-        // its parts, its rig, its pose — and so does a mount child (decision 0441).
+        // its parts, its rig, its pose — and so does a mount child.
         for root in pick_model_roots(entity, worn, mount_child.map(|mc| mc.0)) {
             let Ok(kids) = child_sets.get(root) else {
                 continue;
@@ -377,7 +377,7 @@ pub(super) fn update_hover(
             continue; // posed-mesh-tested above
         }
         // The same eligibility the faithful path states at its head — and **a bone pile lives
-        // here** (decision 1723): the skeletal corpse model ships without a skeleton, so it never
+        // here**: the skeletal corpse model ships without a skeleton, so it never
         // reaches the posed-mesh pass and this box test is the only thing that can ever pick it.
         // The self player is still excluded (its query filter), and so is everything that is not a
         // body: a hit resolves to a `Guid` the click will act on, and the kind decides which slot
@@ -518,7 +518,7 @@ fn selectable_pick(
     super::relations::is_selectable(store, self_guid)
 }
 
-/// Recompute the **GameObject** under the cursor each frame into [`HoveredObject`] (decision 0236):
+/// Recompute the **GameObject** under the cursor each frame into [`HoveredObject`]:
 /// a mesh-accurate ray pick against GameObject parts *only*, reusing the inspector's picker
 /// (the resident-geometry caster of decision 0857, which hits the colliderless props a physics ray
 /// misses and the `RENDER_WORLD`-only static forms Bevy's `MeshRayCast` lost at 0834). Kept
@@ -527,7 +527,7 @@ fn selectable_pick(
 /// mouse-looking (cursor hidden) or over the dev UI, exactly like the unit pick. Cheap — only the
 /// handful of GO parts on screen are in the pick set.
 ///
-/// **Two passes, like the unit pick** (decision 1071 — GameObjects are the same type-1 candidates
+/// **Two passes, like the unit pick** (GameObjects are the same type-1 candidates
 /// as units in the reference's resolve `0x7089c0`): **pass 1** =
 /// the exact resident mesh, pure nearest-wins; **pass 2, only when pass 1 hit nothing anywhere**
 /// (the mouse pick's generous retry): the same geometry with every vertex displaced +1 model-unit
@@ -575,7 +575,7 @@ const NET_WALK_HOPS: usize = 64;
 /// publishes, the cursor classifies and the right-click USEs).
 ///
 /// Two shapes reach here and they attach differently. An ordinary mesh part is a direct child of
-/// the net entity — one `ChildOf` hop. A **billboard card is a world ROOT** (decision 0153: a card
+/// the net entity — one `ChildOf` hop. A **billboard card is a world ROOT** (a card
 /// writes an absolute world transform and lives at the root/identity), so it has no `ChildOf` edge
 /// at all: its link to the model is [`BillboardCard::follows`] — the joint it rides on a rigged
 /// host, the mirror anchor under the net entity otherwise — and the climb continues from there.
@@ -614,8 +614,8 @@ fn net_entity_of(
 /// The state the GameObject gates read beside the object's own store, bundled because this system
 /// sits at Bevy's 16-`SystemParam` ceiling: the ask-once template cache (GENERIC's eligibility is
 /// its `data[1]`, decision 0762; MEETINGSTONE's is its `data[2]`), the faction catalog behind the
-/// eligibility faction term (decision 0764), and the live meeting-stone queue — benilla's
-/// `[0xb72038]`, the other half of MEETINGSTONE(23)'s own highlightable predicate (decision 2283).
+/// eligibility faction term, and the live meeting-stone queue — benilla's
+/// `[0xb72038]`, the other half of MEETINGSTONE(23)'s own highlightable predicate.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct GoGateInputs<'w> {
     pub(crate) templates: Res<'w, crate::go_templates::GameObjectTemplates>,
@@ -839,7 +839,7 @@ pub(super) fn update_hovered_object(
     let Ok(guid) = guids.get(net_entity) else {
         return;
     };
-    // **The mouseover-eligibility gate** (`[obj->vtbl+0x54]` at `0x482982`, decision 0762): an
+    // **The mouseover-eligibility gate** (`[obj->vtbl+0x54]` at `0x482982`): an
     // ineligible object publishes the NULL mouseover, so it gets no tooltip, no +64 brighten and no
     // cursor — nothing. Applied here, at the one place the GO mouseover is published, so all three
     // consumers fall out together exactly as they do in the reference (which reaches `0x492890`,

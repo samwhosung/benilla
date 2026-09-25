@@ -18,7 +18,7 @@
 //!
 //! Three properties of the placement carry the weight:
 //!
-//! - **Attached is not allowed to move** (decision 1281). A control update that forbids a body does
+//! - **Attached is not allowed to move**. A control update that forbids a body does
 //!   not detach us from it: [`Embodied`] stays and only [`ActiveMover`] comes off. That is the
 //!   reference's own shape — `0x5fa600` zeroes the mover globals and never touches the camera
 //!   anchor, so the camera goes on following your feared body, merely smoothed (`0x50d810`).
@@ -67,7 +67,7 @@ pub(super) fn maintain_embodiment(
     //   body we inhabit, or nothing is.
     // - Otherwise our own body.
     //
-    // Being *forbidden to move it* is deliberately not a third answer (decision 1281). It is the
+    // Being *forbidden to move it* is deliberately not a third answer. It is the
     // narrow [`ActiveMover`] marker below that comes off, and `control`'s own gate that stops
     // driving; detaching outright was decision 1279's mistake, and it took the camera, the
     // collision height and — the expensive one — the self-spline ride and its mandatory
@@ -296,7 +296,7 @@ mod tests {
              discard the worldport's own snap and re-run the settle"
         );
     }
-    /// **Forbidden to move it is not letting go of it** (decision 1281) — the split the two markers
+    /// **Forbidden to move it is not letting go of it** — the split the two markers
     /// exist for. Being feared hands the body's *motion* to the server, which is visible and must
     /// be: a mind-controlled player is seen walking where their captor drives them. But it does not
     /// hand back the body, and letting go was expensive in a way nothing on screen showed — the

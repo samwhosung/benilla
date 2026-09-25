@@ -65,7 +65,7 @@ pub(super) struct RingState {
 }
 
 /// The projection's rebuild inputs — a still target under a still camera costs a compare
-/// (0733 §5, the ShadowKey treatment; the old path re-projected every shown frame).
+/// (the ShadowKey treatment; the old path re-projected every shown frame).
 #[derive(Default, PartialEq, Clone, Copy)]
 struct RingKey {
     feet: Vec3,
@@ -84,7 +84,7 @@ pub(super) struct RingAssets {
 /// `0x6146d0`) — a white ring, sampled top-down, tinted + additively blended below.
 const RING_TEXTURE: &str = "mpq://textures/unitselecttexture.blp";
 /// Model-local ring radius for a unit with **no model at all** (a cube fallback), since it has no M2
-/// footprint to measure. The reference's own degenerate-box constant (decision 1658) rather than a
+/// footprint to measure. The reference's own degenerate-box constant rather than a
 /// number of ours: a body whose box measures zero and a body with no box are the same question, and
 /// `0x60aee0` answers it with 1.2.
 const RING_FALLBACK_RADIUS: f32 = benilla_formats::DEGENERATE_RING_FOOTPRINT;
@@ -103,7 +103,7 @@ const RING_FALLBACK_RADIUS: f32 = benilla_formats::DEGENERATE_RING_FOOTPRINT;
 /// selector's 4-slot party-guid table `0xbc6f48` = our roster). Still deferred: the
 /// cross-faction attackability matrix X/Y (approximated as hostile-red on rank ≤ 1) and the
 /// CHARMEDBY/SUMMONEDBY owner resolve inside the PvP-flag read (we read the unit's own flag).
-// GAMMA LANE (0161): raw authored bytes into the gamma framebuffer (see nameplates.rs).
+// GAMMA LANE: raw authored bytes into the gamma framebuffer (see nameplates.rs).
 const RING_HOSTILE: Color = Color::linear_rgb(1.0, 0.0, 0.0);
 const RING_UNFRIENDLY: Color = Color::linear_rgb(1.0, 0.502, 0.0);
 const RING_NEUTRAL: Color = Color::linear_rgb(1.0, 1.0, 0.0);
@@ -120,7 +120,7 @@ pub(crate) struct Factions(FactionCatalog);
 
 impl Factions {
     /// The loaded catalog — for sibling faction consumers (the zone PvP state reads our own
-    /// template's group mask through it, decision 0287).
+    /// template's group mask through it).
     pub(crate) fn catalog(&self) -> &FactionCatalog {
         &self.0
     }
@@ -139,7 +139,7 @@ impl Factions {
 /// unit-testable.
 ///
 /// **This is the single source for BOTH surfaces the selector feeds** — the ground ring here and
-/// the overhead name (`nameplates.rs` fetches the same `vtable+0x2c`, decision 0156). It was a
+/// the overhead name (`nameplates.rs` fetches the same `vtable+0x2c`). It was a
 /// duplicated mirror until decision 0659: the ring gained the PvP/party legs with 0453 and the
 /// name's copy did not, so a flagged player drew a green ring under a blue name. One law, one
 /// function; the name maps this to its own material cache.
@@ -190,7 +190,7 @@ impl RingVariant {
 /// roster — self is never in it, and self reads blue/green exactly like the law's own-guid legs);
 /// **NPCs** — dead → gray, else the rank palette (0–1 red, 2 orange, 3 yellow, 4–7 green).
 ///
-/// Shared with the overhead name (decision 0659) — see [`RingVariant`].
+/// Shared with the overhead name — see [`RingVariant`].
 pub(crate) fn ring_variant(
     rank: u8,
     is_player: bool,
@@ -329,7 +329,7 @@ pub(super) fn update_ring(
                 // (0.05) is what a zero-bounds model landed on: `ring_footprint` now carries the
                 // writer's own degenerate-box answer (1.2) instead of a 0 for the picker to clamp,
                 // so the Naxxramas weapon mobs ring at 1.2 × 2.25 ≈ 2.7 yd like the reference and
-                // not at a coin's width (decision 1658).
+                // not at a coin's width.
                 // Mounted, the footprint and the extra scale column come from the mount child
                 // (the `mount_parts` doc above); a still-loading mount rides the fallback the
                 // way any model-less unit does until its bounds land.
@@ -340,7 +340,7 @@ pub(super) fn update_ring(
                 };
                 let radius = local * (unit.scale.x * mount_scale).max(0.01);
                 *fade_angle = ring_fade_angle(&camera).unwrap_or(*fade_angle);
-                // The rebuild gate (0733 §5): a still target under a still camera keeps the
+                // The rebuild gate: a still target under a still camera keeps the
                 // cached projection — the old path re-projected every shown frame.
                 let key = RingKey {
                     feet: unit.translation,
@@ -552,7 +552,7 @@ pub(super) fn push_ring(
 /// faction falls through to the faction-template comparator (byte-exact `0x606640`) over both
 /// units' `UNIT_FIELD_FACTIONTEMPLATE`.
 ///
-/// **Before either of those, the duel leg** (decision 0633, byte-exact `UnitReaction 0x6061e0`).
+/// **Before either of those, the duel leg** (byte-exact `UnitReaction 0x6061e0`).
 /// The real function runs a player-vs-player ladder *ahead of* the faction work, gated on
 /// `UNIT_FIELD_FLAGS` bit 3 (`0x8` `UNIT_FLAG_PVP_ATTACKABLE`, behaviourally "player-controlled")
 /// being set on **both** parties. Its first rung is the duel ([`duel_reaction`]): when both
@@ -1357,7 +1357,7 @@ mod tests {
     /// fading.** The reference's two teardown routes (`SMSG_DESTROY_OBJECT`, the OUT_OF_RANGE
     /// block) both reach `0x464920` → OnDeactivate `0x5fbb60` → `0x493910`, which clears a
     /// matching selection and sends `CMSG_SET_SELECTION 0` on the spot; only the detached model
-    /// survives into the `SWModelFadeout` scheduler (decision 2198). Driven through the real
+    /// survives into the `SWModelFadeout` scheduler. Driven through the real
     /// handler table on the built client, then the real
     /// ring and the real nearest-enemy scan, one pass each — no fade time elapses.
     mod teardown {

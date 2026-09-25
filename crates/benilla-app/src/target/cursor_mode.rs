@@ -20,7 +20,7 @@
 //!   Loot *rights* never gray — they gate whether the loot cursor shows at all; the mid-loot state
 //!   block and the open-loot-window able-override are not modeled.
 //!
-//! **Both branch predicates are the reference's own, not thresholds** (decision 1674): the
+//! **Both branch predicates are the reference's own, not thresholds**: the
 //! service/loot split is `CanInteract 0x6067f0` (`0x482310`, via the `CanInteractNow 0x606880`
 //! wrapper) and the sword is `CanAttack 0x606980` (`0x48269a`) — [`super::can_interact`] /
 //! [`super::can_attack`], both byte-verified complete. That matters because each reads
@@ -146,7 +146,7 @@ impl WorldCursor {
 /// Vanilla `UNIT_NPC_FLAGS` bits (vmangos `UnitDefines.h`, 1.12 values — later expansions differ).
 /// REPAIR (0x4000) exists but the classifier never consults it (falls `je 0x4826cb`).
 /// `pub(crate)` so the right-click dispatch ([`super::click`]) reuses BANKER to split the shared
-/// Buy cursor kind (banker vs auctioneer) without a duplicate table (decision 0604), and so a live
+/// Buy cursor kind (banker vs auctioneer) without a duplicate table, and so a live
 /// probe scans for a service NPC by the same bits the cursor classifies with instead of keeping a
 /// private copy ([`crate::capture::ProbeCharterPlugin`] and PETITIONER) — a duplicated flag table
 /// is how B249's icon map went stale.
@@ -247,7 +247,7 @@ fn strategy_is_default(type_id: i32) -> bool {
 /// `GAMEOBJECT_TYPE_TEXT` (9) — a readable book/plaque/sign; its per-type behavior shows the
 /// **Inspect** magnifier (`0x5f5890`), not the gear. `pub(super)` so the
 /// right-click dispatch ([`super::act_on_right_click`]) routes it to the client-side reader off the
-/// one type constant (decision 1105), the same shape as the mailbox — and `pub(crate)` beyond that
+/// one type constant, the same shape as the mailbox — and `pub(crate)` beyond that
 /// so the inspector's GO card can report the readable head against the same constant.
 pub(crate) const GO_TYPE_TEXT: i32 = 9;
 /// The three GameObject types that show the **Mail** cursor: RITUAL(18)
@@ -255,10 +255,10 @@ pub(crate) const GO_TYPE_TEXT: i32 = 9;
 /// Type 28 has no live 1.12 data but is included for byte-fidelity with the factory switch.
 const GO_TYPE_RITUAL: i32 = 18;
 /// `pub(super)` so the right-click dispatch ([`super::act_on_right_click`]) reuses the one type
-/// constant to route a mailbox to the client-side window open (decision 0544), not a duplicate.
+/// constant to route a mailbox to the client-side window open, not a duplicate.
 pub(super) const GO_TYPE_MAILBOX: i32 = 19;
 const GO_TYPE_28: i32 = 28;
-/// Interim GameObject interact-range gray (decision 0236): reuse the ~5.56 yd service reach until the
+/// Interim GameObject interact-range gray: reuse the ~5.56 yd service reach until the
 /// size-dependent GO interact distance is byte-pinned. Squared, boundary-inclusive like the unit gates.
 const GO_INTERACT_RANGE_SQ: f32 = SERVICE_RANGE_SQ;
 /// `GAMEOBJECT_TYPE_FISHINGNODE` (17) — the fishing bobber. Its strategy (vtable `0x80bc80`)
@@ -270,7 +270,7 @@ pub(crate) const GO_TYPE_FISHINGNODE: i32 = 17;
 /// **100.0 yd** (`0x5f66b0`, `[0x80b0b0]`) — the bobber is effectively un-range-gated for any real
 /// cast, never the ~5.56 yd reach. Other types stay on the 0236 interim (the base default is 5.0
 /// and several per-type ctors override it — 5.5556/10.0/…; their population is a later byte-pin).
-/// `GAMEOBJECT_TYPE_CHAIR` (7) — the second member of the per-type table (decision 1464). Its
+/// `GAMEOBJECT_TYPE_CHAIR` (7) — the second member of the per-type table. Its
 /// `+0x18` predicate is its own `0x5f5670`, which reports **3.0 yd**
 /// and accepts on `dist² < 9.0` against `[0xc4d808]` — whose only writer image-wide is the static
 /// initializer `0x5f98b0` squaring that same 3.0. Chair-exclusive, and it independently reproduces
@@ -297,7 +297,7 @@ fn go_interact_range_sq(type_id: i32) -> f32 {
         _ => GO_INTERACT_RANGE_SQ,
     }
 }
-/// `GameObjectFlags` bits consulted by the highlightable gate `0x5f2f80` (decision 0243):
+/// `GameObjectFlags` bits consulted by the highlightable gate `0x5f2f80`:
 /// `0x1` IN_USE (busy) and `0x10` NO_INTERACT both suppress interaction; their union is the fast reject.
 const GO_FLAG_IN_USE_OR_NO_INTERACT: u32 = 0x11;
 /// `GO_FLAG_INTERACT_COND` (`0x4`) — the object is usable **only** when its per-player activate dyn-flag
@@ -370,7 +370,7 @@ pub(crate) struct GoOverrides {
 /// `template.data[2] (areaID) != [0xb72038]` — see [`highlightable_flags`]'s `meeting_stone_queued`.
 pub(super) const GO_TYPE_MEETINGSTONE: i32 = 23;
 
-/// The client's GameObject **highlightable** predicate (decision 0243,
+/// The client's GameObject **highlightable** predicate (
 /// `0x5f2f80`) over its wire flags: whether the object shows an interact cursor / is clickable at all.
 /// The types whose vtable constant-falses the slot never get here at all
 /// ([`strategy_never_highlightable`]); of the rest, a busy (IN_USE) or NO_INTERACT object isn't
@@ -394,7 +394,7 @@ pub(super) const GO_TYPE_MEETINGSTONE: i32 = 23;
 /// binding `IsInMeetingStoneQueue`. So a stone is highlightable **unless it is the stone you are
 /// already queued at**, and nothing else about it matters. The caller resolves the equality (as it
 /// does `channel_owned`) against the live queue — [`crate::ui_dialog_verbs::MeetingStone::area`],
-/// benilla's `[0xb72038]` (decision 2283; it was a hardcoded `0` while no queue existed, which is
+/// benilla's `[0xb72038]` (it was a hardcoded `0` while no queue existed, which is
 /// the reference's own not-queued value and so was right for exactly as long as we never queued).
 /// Ignored for every other type.
 fn highlightable_flags(
@@ -415,7 +415,7 @@ fn highlightable_flags(
     if type_id == GO_TYPE_MEETINGSTONE {
         return !overrides.meeting_stone_queued;
     }
-    // The FACTION term (`0x5f2f80` @ `0x5f3026/29`, decision 0764). `reaction` is the GameObject's
+    // The FACTION term (`0x5f2f80` @ `0x5f3026/29`). `reaction` is the GameObject's
     // reaction **toward us** ([`go_reaction`]); the ordinary test is `> 1`, i.e. anything but
     // hostile. `None` = unresolvable (no faction catalog / our store not streamed) and passes, so a
     // data gap never blanks the world.
@@ -469,7 +469,7 @@ pub(crate) fn go_reaction(
 }
 
 /// The **mouseover-eligibility** virtual `[obj->vtbl+0x54]` — the gate that decides whether a picked
-/// object becomes the mouseover **at all** (decision 0762).
+/// object becomes the mouseover **at all**.
 ///
 /// This sits one level above everything the GO tooltip used to be reasoned from. The per-frame
 /// classifier `CGWorldFrame::UpdateMouseoverCursor 0x4828d0` calls it on the picked object and, when
@@ -530,7 +530,7 @@ pub(crate) fn mouseover_eligible(
 /// resolves to a highlightable type rather than being wrongly rejected as "unknown".
 ///
 /// Gates the **cursor**, the `+64` **brighten**, the right-click **USE** (`OnUse 0x5f8660` calls this
-/// same `+0x14` first) and the GO pick's **pass-2 priority** (decision 1071: classify `0x480c90`
+/// same `+0x14` first) and the GO pick's **pass-2 priority** (classify `0x480c90`
 /// ranks a highlightable GameObject `1` via `0x5f8800`, else `0`) — the four consumers of one vtable
 /// slot. It is **not** the mouseover publish, which is the sibling slot `+0xc`
 /// ([`mouseover_eligible`]): the two agree for most types and deliberately disagree for GENERIC(5)
@@ -555,7 +555,7 @@ pub(crate) fn go_highlightable(
 /// of boolean as [`fishing_channel_owned`].
 ///
 /// `queued_area` is benilla's `[0xb72038]` — [`crate::ui_dialog_verbs::MeetingStone::area`], stored
-/// unconditionally by every `SMSG 0x295` and `0` when we are not queued (decision 2283).
+/// unconditionally by every `SMSG 0x295` and `0` when we are not queued.
 ///
 /// A template that hasn't answered yet resolves `false` (⇒ highlightable), the same permissive
 /// default the highlight column takes — a stone isn't dead for the first frames of its query. Note a
@@ -732,7 +732,7 @@ struct CorpseFacts {
     dist_sq: f32,
     /// The already-looting override: `[player+0x1d28/2c] == corpse GUID`.
     looting_this: bool,
-    /// The effective auto-loot's two terms (0961): the knob…
+    /// The effective auto-loot's two terms: the knob…
     auto_loot: bool,
     /// …and the live key-0.
     shift_held: bool,
@@ -779,27 +779,27 @@ pub(super) fn classify_cursor(
         Option<&crate::go_anim::GoAnim>,
     )>,
     self_q: Query<(&Transform, &ObjectStore), With<SelfPlayer>>,
-    // The GameObject cursor is data-driven (decision 0236, `0x5f8760`): the ask-once
+    // The GameObject cursor is data-driven (`0x5f8760`): the ask-once
     // template (its `lockId`) + Lock.dbc + LockType.dbc name the cursor. All absent without client
     // data or before a hovered GO's template answers — a lock-bearing GO then reads as the gear.
-    // The same param carries the lock chain `usable` consults (decision 0752) — one
+    // The same param carries the lock chain `usable` consults — one
     // [`super::lock::GoLockInputs`], so the cursor and the click ask literally the same question.
     go_inputs: super::lock::GoLockInputs,
     player_actions: Res<crate::ui_action::PlayerActions>,
-    // `[0xb700e4]`/`[0xb700e8]` — the skin leg's learned-ability precondition (decision 0752).
+    // `[0xb700e4]`/`[0xb700e8]` — the skin leg's learned-ability precondition.
     learned: Res<crate::ui_action::LearnedAbilities>,
     // The QUESTGIVER leg's gate reads the per-guid `SMSG_QUESTGIVER_STATUS` store — see
     // [`questgiver_has_quest`].
     quest: Res<crate::ui_quest::QuestGiver>,
-    // The loot leg's Pickup/LootAll split (0965): the auto-loot knob (0961) + the live shift.
+    // The loot leg's Pickup/LootAll split: the auto-loot knob + the live shift.
     loot_cfg: Res<crate::ui_loot::LootConfig>,
     keys: Res<ButtonInput<KeyCode>>,
     // `[player+0x1d28/2c]` — the open loot session's object. The corpse leg's already-looting
     // override reads it (the reference keeps the lit pouch on the corpse you are looting even
     // once you have drifted past the range gate).
     loot_latch: Res<crate::ui_loot::LootLatch>,
-    // `[0xb72038]` — the meeting-stone queue, MEETINGSTONE(23)'s own highlightable term
-    // (decision 2283). `Option` because a headless build mounts no UI dialog verbs; absent reads
+    // `[0xb72038]` — the meeting-stone queue, MEETINGSTONE(23)'s own highlightable term.
+    // `Option` because a headless build mounts no UI dialog verbs; absent reads
     // as the reference's zero-initialized global, i.e. not queued.
     stone: Option<Res<crate::ui_dialog_verbs::MeetingStone>>,
 ) {
@@ -807,9 +807,9 @@ pub(super) fn classify_cursor(
     // mailbox's Mail, a plaque's Inspect, a vein's Mine / herb's GatherHerbs / picked lock's PickLock
     // (off its LockType), else the generic Interact gear — each grayed out of interact range (except
     // PickLock, never grayed). A non-highlightable GO yields no cursor, like the reference handler's
-    // clear (decision 0243): a GENERIC decoration, a busy/NO_INTERACT object, or a quest object whose
+    // clear: a GENERIC decoration, a busy/NO_INTERACT object, or a quest object whose
     // per-player activate bit the server hasn't set (INTERACT_COND without the quest). The usable-
-    // grayed twin is still the interim distance gate (decision 0243); the client's fuller `usable`
+    // grayed twin is still the interim distance gate; the client's fuller `usable`
     // (lock satisfaction, player-state) is later.
     let resolve_go = || {
         let (go_tf, store, anim) = units.get(hovered_object.target?).ok()?;
@@ -898,7 +898,7 @@ pub(super) fn classify_cursor(
             // the reference also requires the learn-time latch `[0xb700e4 + 4×isPlayerTarget]` to
             // be non-null (`0x482589`), i.e. **the player must have
             // learned a Skinning spell**. A non-skinner gets no knife on a skinnable corpse; the
-            // corpse falls through to Point like any other unlootable one (decision 0752).
+            // corpse falls through to Point like any other unlootable one.
             if store.0.unit_flags() & UNIT_FLAG_SKINNABLE != 0 && learned.skinning.is_some() {
                 return Some((CursorKind::Skin, !in_melee));
             }
@@ -1049,7 +1049,7 @@ mod tests {
         );
     }
 
-    /// The loot pouch follows the EFFECTIVE auto-loot (0961: setting XOR shift) — the cursor
+    /// The loot pouch follows the EFFECTIVE auto-loot (setting XOR shift) — the cursor
     /// and the click can never disagree about what a pick will do.
     #[test]
     fn the_loot_pouch_triples_with_the_effective_auto_loot() {
@@ -1086,7 +1086,7 @@ mod tests {
         assert_eq!(point.stem(), "Point");
     }
 
-    /// The mouseover-eligibility table (decision 0762) — the gate that decides whether an object
+    /// The mouseover-eligibility table — the gate that decides whether an object
     /// becomes the mouseover at all, so a false here is "no tooltip, no brighten, no cursor".
     #[test]
     fn mouseover_eligibility_matches_the_per_type_slot_table() {
@@ -1182,7 +1182,7 @@ mod tests {
             None,
             GoOverrides::default()
         )); // IN_USE chest
-            // The FACTION term (decision 0764): a door whose template is hostile to us is not
+            // The FACTION term: a door whose template is hostile to us is not
             // eligible — no cursor, no tooltip, no brighten. This is Deadmines' Factory Door
             // (faction 114, flags 0x20), which the director could still hover and open.
         assert!(!mouseover_eligible(

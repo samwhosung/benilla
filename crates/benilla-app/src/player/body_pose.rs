@@ -1,10 +1,10 @@
 //! **Writing the frame onto the body we drive** — the last thing the controller does to the
 //! avatar itself, after the mover has moved it and [`super::gait`] has decided where it faces.
 //!
-//! The driven entity is a streamed unit like any other (decision 0041), so this is not a special
+//! The driven entity is a streamed unit like any other, so this is not a special
 //! "player render" path: it writes the same transform and the same `MovementState` the entity
-//! renderer would, which is exactly why a *possessed creature* needs nothing extra here
-//! (decision 1277). It is also where the frame's landing is reported to the local hard-landing
+//! renderer would, which is exactly why a *possessed creature* needs nothing extra here.
+//! It is also where the frame's landing is reported to the local hard-landing
 //! predictor, and where the camera-pivot target for this frame is read off the body — the one
 //! value that leaves this module, because the camera seat consumes it.
 
@@ -49,7 +49,7 @@ pub(super) fn drive(
         t.rotation =
             crate::creature_anim::swim_body_rotation(player.model_yaw, move_flags_now, swim_pitch);
         // Report every landing's fall height for the client-side landing predictor
-        // (`0x602d00`, decision 0412): its consumers gate on the descent and, past the HARD
+        // (`0x602d00`): its consumers gate on the descent and, past the HARD
         // floor, play the wound grunt + a locally-predicted dust puff at THIS frame — the
         // server's 0x1FC echo arrives ~an RTT later (the reference double-fires the dust the
         // same way). `fall_start_y` still holds this arc's launch height here (it is only

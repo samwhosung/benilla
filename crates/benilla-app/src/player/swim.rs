@@ -20,7 +20,7 @@
 //! `surface − 0.75·collisionHeight`, a hard clamp re-tested each active substep — and
 //! what leaves a *stroking* swimmer above the line is usually not a rise but the surface **descending**
 //! under them, which is why the constraint has to be re-satisfied and not merely guarded against
-//! ([`settle_to_rest`], decision 0644). It is still no spring and no resting *seek* — the old
+//! ([`settle_to_rest`]). It is still no spring and no resting *seek* — the old
 //! `REST_SUBMERSION`/`BUOYANCY_RATE` ease is gone, and a swimmer *below* the line is never pulled up.
 //! Reaching the cap does NOT bleed the stroke off: the capped rise redirects **level, at full
 //! speed** — surface swimming — and the presented pitch levels with it ([`cap_redirect`],
@@ -29,7 +29,7 @@
 //! the director-confirmed ref behavior — and its only leveling regime (travel-derived `asin(dir.z)`
 //! pitch) belongs to spline/CTM movers and would be overwritten per-frame by the 0492 mouselook
 //! direct-set. The redirect is benilla's construction reproducing the validated feel, kept until a
-//! live capture of the reference pins the real surface law (0505).
+//! live capture of the reference pins the real surface law.
 //!
 //! The one way OUT through the top is the **swim jump** ([`breach_step`],
 //! `0x7c6230`): jump clears SWIMMING unconditionally and launches the walk mover's FALLING arc at
@@ -41,8 +41,8 @@
 //! 0487 + 0498): a swimming press fires the jump-exit wherever it happens — at the surface it
 //! breaches out; submerged it's the ~1.6-yd dolphin-hop — and a held key does NOT re-fire
 //! after the re-latch (director-verified on the ref; the byte gate behind that is an open
-//! question, see 0498). The way to RISE is aiming up with the right mouse and swimming
-//! forward — the ref's own mouselook→SetPitch mechanism (`0x7c6f70`, decision 0492).
+//! question). The way to RISE is aiming up with the right mouse and swimming
+//! forward — the ref's own mouselook→SetPitch mechanism (`0x7c6f70`).
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
@@ -133,9 +133,9 @@ pub(crate) fn may_swim(unit_flags: u32) -> bool {
 /// ([`crate::entities::CollisionHeight`]): water covering ~three-quarters of its collision box,
 /// chest/neck deep. ≈1.52 yd for a human male, ≈0.86 for a gnome female, ≈1.83 for a night elf male.
 ///
-/// It was `0.75 × CAPSULE_HEIGHT` — one constant for every race — until decision 0645. The
+/// It was `0.75 × CAPSULE_HEIGHT` — one constant for every race — until. The
 /// *fraction* was right all along; the height it multiplied was a human's, so a gnome's rest line
-/// sat below her own head and she could never surface (B76).
+/// sat below her own head and she could never surface.
 ///
 /// This is also the **wade ceiling**: wading is the implicit in-liquid-but-not-swimming state
 /// (there is no wade movement flag — `0x40000000` is HOVER), so "deepest water you can still wade"
@@ -167,9 +167,9 @@ fn rest_cap(h: f32) -> f32 {
 /// surface height above the feet is the same delta in either space and we lift the feet's Bevy Y by it.
 ///
 /// Asks for **any** liquid, not the water-only wrapper: **you swim in lava and slime too** —
-/// Blackrock's magma and Undercity's sludge are surfaces you enter, not ones you fall through
-/// (decision 0634). The subject is the player, so which ROOM's liquid answers is its own live
-/// interior claim (decision 0696).
+/// Blackrock's magma and Undercity's sludge are surfaces you enter, not ones you fall through.
+/// The subject is the player, so which ROOM's liquid answers is its own live
+/// interior claim.
 pub(super) fn surface_over_feet(world: &WorldPoint, feet: Vec3) -> Option<f32> {
     let wow = bevy_to_wow(feet);
     world
@@ -192,14 +192,14 @@ pub(super) fn surface_over_feet(world: &WorldPoint, feet: Vec3) -> Option<f32> {
 /// the controller clears the arc). `now` is `Time::elapsed_secs`, for the airborne clock.
 ///
 /// The latch deliberately does NOT touch [`Player::settling`]: the settle release is the terrain
-/// streamer's, keyed on the destination's residency in every mover mode alike (decision 0737 —
+/// streamer's, keyed on the destination's residency in every mover mode alike (
 /// this latch used to release it as a special case, because the old release was a ground probe
 /// only the walk mover ran).
 pub(super) fn update_swimming(player: &mut Player, surface_y: Option<f32>, now: f32) -> bool {
     // **LEVITATING bails the whole decision** — the reference's very first instruction here
     // (`0x6030d2 test ah,4` → `0x6031fa`): neither the ENTER
     // arm nor the STOP arm runs, so the latch is left exactly as it stands. Not an optimisation —
-    // it IS the mechanism of GM flight (decision 0726). The server sets SWIMMING and LEVITATING in
+    // it IS the mechanism of GM flight. The server sets SWIMMING and LEVITATING in
     // one packet, and the second is what stops the dry ground under us clearing the first on the
     // very next frame.
     if player.modes.levitating {
@@ -232,7 +232,7 @@ pub(super) fn update_swimming(player: &mut Player, surface_y: Option<f32>, now: 
 /// the *only* zeroing writer of [`Player::mover_pitch`]: mouse release
 /// never levels it, and neither does anything on land.
 ///
-/// Which matters now that the pitch is land-live and water walking reads it (decision 1616): swim
+/// Which matters now that the pitch is land-live and water walking reads it: swim
 /// out of a river nose-down, and without this the aim you left the water with would still be
 /// pointing past −37° when your feet found the surface, and the water would not hold you.
 ///
@@ -266,7 +266,7 @@ pub(super) fn breach_step(
 ) -> Outcome {
     player.vel_y = SWIM_JUMP_SPEED;
     // The breach is a take-off like any other, so it records its launch speed for the arc
-    // bookkeeping to snapshot (decision 1740). Without this the jump tail would send `zspeed = 0`
+    // bookkeeping to snapshot. Without this the jump tail would send `zspeed = 0`
     // for every water exit and observers would replay the breach as a step-off rather than a hop.
     player.launch_vz = SWIM_JUMP_SPEED;
     // Leaving the water starts a fresh arc, and it starts it with the swim keys still down — the
@@ -307,7 +307,7 @@ pub(super) struct SwimOutcome {
 
 /// Cap a rising stroke at the rest line — and REDIRECT the capped speed level rather than bleed
 /// it off: reaching the surface flips a pitched-up swim into full-speed *surface swimming*
-/// (director-verified on the ref, 2026-07-18; decisions 0499+0505). A plain slide against the
+/// (director-verified on the ref, 2026-07-18). A plain slide against the
 /// top-cap plane leaves only `cos(pitch)·speed` — ~0 at a steep aim — pinning the swimmer
 /// under the waterline (the "invisible wall"), and that grind IS what the exe's
 /// own-input resolver computes (`0x634640`) — contradicting the confirmed ref behavior, so
@@ -340,7 +340,7 @@ fn settle_to_rest(feet_y: f32, surface_y: f32, h: f32) -> f32 {
 /// **Does the water own this mover's vertical this frame?** — the rest line [`swim_step`] enforces,
 /// or `None` for none at all.
 ///
-/// `None` means exactly one thing: **GM flight** (decision 0726). `LEVITATING` is the reference's
+/// `None` means exactly one thing: **GM flight**. `LEVITATING` is the reference's
 /// suppression of the water's authority over the mover (`0x6030d2`, the same bail
 /// [`update_swimming`] takes), and the swim regime with no liquid that owns it has nothing to
 /// constrain against — an ascent must be free, or you could dive but never climb.
@@ -351,8 +351,7 @@ fn settle_to_rest(feet_y: f32, surface_y: f32, h: f32) -> f32 {
 ///
 /// This exists as one named function because the constraint has **two arms** — refuse the rise,
 /// satisfy the drop — and B128 was what happened when they read different sources: 0644 added the
-/// second arm after 0726 wrote the first, so flight was exempt from the cap and not from the settle
-/// (decision 0882).
+/// second arm after 0726 wrote the first, so flight was exempt from the cap and not from the settle.
 pub(super) fn rest_line(player: &Player, surface_y: Option<f32>) -> Option<f32> {
     (!player.modes.levitating).then(|| surface_y.unwrap_or(player.pos.y))
 }
@@ -361,8 +360,8 @@ pub(super) fn rest_line(player: &Player, surface_y: Option<f32>) -> Option<f32> 
 /// physics (`0x634640`, gravity bypassed: an idle swimmer's depth is **frozen**, the vertical
 /// comes only from `input_vel`), a collide-and-slide against the lakebed/banks, and the hard
 /// [`rest_cap`] line — where a rise doesn't stop dead but **redirects level into full-speed
-/// surface swimming** ([`cap_redirect`], decision 0499), and where a stroke that ends up *above*
-/// the line settles back onto it ([`settle_to_rest`], decision 0644).
+/// surface swimming** ([`cap_redirect`]), and where a stroke that ends up *above*
+/// the line settles back onto it ([`settle_to_rest`]).
 ///
 /// `input_vel` is the desired 3D velocity from the swim controls (the pitched travel basis +
 /// ascent); `surface_y` is the Bevy-Y waterline over the feet at the START of the frame (the rise
@@ -394,7 +393,7 @@ pub(super) fn swim_step(
     // `depth` drops below the leave threshold, so we walk out. dt-based so it can't overshoot the
     // rest line and dip back under the exit depth (a flicker). No other vertical force exists here —
     // no gravity, no surface-seek (the verified floating resolver).
-    // **No waterline, no rest line.** `None` is GM flight (decision 0726): the swim regime with no
+    // **No waterline, no rest line.** `None` is GM flight: the swim regime with no
     // liquid under it at all, where the one vertical constraint below has nothing to constrain
     // against and an ascent must be free. It is deliberately NOT the same as a *momentary* sample
     // miss in real water — the caller keeps that case as `Some(own feet Y)`, which caps the rise at
@@ -426,7 +425,7 @@ pub(super) fn swim_step(
     // the walk mover took over and fell a few centimetres, swim re-latched, forever: the avatar
     // spent 47% of a downhill swim inside the FALL mover, flipping mode ~10×/s and alternating
     // SWIMMING/FALLING on the wire (director-reported as bouncing off the surface; live-probe
-    // measured, decision 0644).
+    // measured).
     //
     // The correction is a **swept** drop, not a position clamp: an earlier attempt clamped
     // `pos.y` after the slide, which overrode terrain collision, shoved the feet onto the rest
@@ -441,9 +440,9 @@ pub(super) fn swim_step(
     // stays frozen.
     //
     // …and gated on **`surface_y.is_some()` — the very same rest line the cap above reads**, which
-    // is the whole of B128 (decision 0882). The rest line has two arms — refuse the rise, satisfy
+    // is the whole of B128. The rest line has two arms — refuse the rise, satisfy
     // the drop — and they must share one gate, because `None` here means exactly one thing: GM
-    // flight, the swim regime with no liquid that owns it (0726; a momentary sample miss is
+    // flight, the swim regime with no liquid that owns it (a momentary sample miss is
     // `Some(own feet Y)` at the caller, never `None`). 0644 added this second arm *after* 0726 and
     // read the liquid straight from `surface_at` instead, so the exemption covered the cap and not
     // the settle: flying over a lake, `excess` is the entire altitude, the down-cast through open
@@ -504,12 +503,12 @@ pub(super) fn drive_step(
     wobble: f32,
 ) -> SwimFrame {
     let (swim_fwd, swim_side) = amounts;
-    // The drunk porpoise (B210): while swimming and moving, the pitch increments by the
+    // The drunk porpoise: while swimming and moving, the pitch increments by the
     // wobble ×4.0 every frame (`0x60aabc–0x60ab0a`: flag `0x200000` → `pitch +
     // wobble·[0x80306c]`, clamped, committed via the pitch pipeline `0x60de70`). Same
     // wobble as the facing veer above, so the nose and the heading meander together.
     // The clamp is the callee `0x60aba0`'s FIXED ±π/2 bounds (`0x808acc`/`0x80c5e4`),
-    // NOT the mouselook set's ±89° — the reference carries both (decision 1009 §C4).
+    // NOT the mouselook set's ±89° — the reference carries both.
     if wobble != 0.0 {
         player.mover_pitch = (player.mover_pitch + wobble * super::drunk::SWIM_PITCH_WOBBLE_SCALE)
             .clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
@@ -556,7 +555,7 @@ pub(super) fn drive_step(
         rest_line,
         |feet| surface_over_feet(world, feet),
     );
-    // The surface redirect (decisions 0499+0505 — a NAMED DIVERGENCE, see
+    // The surface redirect (a NAMED DIVERGENCE, see
     // [`cap_redirect`]): when the rise capped at the rest line, the stroke went
     // level at full speed — present the *effective* pitch (body pose + wire tail
     // follow the motion, →0 pinned at the line), while the raw aim stays in
@@ -579,14 +578,14 @@ pub(super) fn drive_step(
 }
 
 /// The swim translation amounts — read by [`drive_step`] AND the flag build, so the two can never
-/// disagree (decision 0056: the flags mirror the avatar's motion). W/S, strafe Q/E (+ mouselook
+/// disagree (the flags mirror the avatar's motion). W/S, strafe Q/E (+ mouselook
 /// A/D), and a root cuts both.
 pub(super) fn translate_amounts(
     axes: &super::input::MoveAxes,
     translate_gated: bool,
 ) -> (f32, f32) {
     // The translate predicate being down (`0x514560`: a root, or **death** through the precondition
-    // it shares with the turn gate — decision 1753) kills swim translation like the walk `dir` does
+    // it shares with the turn gate) kills swim translation like the walk `dir` does
     // (decision 0308's regime — the water arm reads its own axes, so it needs its own cut).
     if translate_gated {
         return (0.0, 0.0);
@@ -635,7 +634,7 @@ mod tests {
     }
 
     /// **StopSwim levels the mover pitch, the breach jump does not** — `0x7c6e80`'s zeroing of
-    /// `+0x20`, which only the depth-driven stop routes through (decision 1616, B322). It matters
+    /// `+0x20`, which only the depth-driven stop routes through. It matters
     /// because the pitch is land-live and water walking reads it: leave a river nose-down without
     /// this and the aim you were swimming with is still past −37° when your feet reach the surface,
     /// so the water refuses to hold you.
@@ -742,7 +741,7 @@ mod tests {
         );
     }
 
-    /// **GM flight is the suppression, not a lift** (decision 0726). `LEVITATING` bails the whole
+    /// **GM flight is the suppression, not a lift**. `LEVITATING` bails the whole
     /// water decision (`0x6030d2 test ah,4`), so the two things that would otherwise happen the very
     /// next frame both stop happening: dry land cannot clear a server-granted swim (which is what
     /// keeps you airborne), and deep water cannot grant one (the same bail, the other arm).
@@ -777,7 +776,7 @@ mod tests {
         );
     }
 
-    /// The latch never touches the settle hold (decision 0737): the release is the terrain
+    /// The latch never touches the settle hold: the release is the terrain
     /// streamer's, keyed on residency in every mover mode alike. This pins the *absence* of the
     /// old special case — a swim latch that cleared `settling` here would race the streamer's
     /// judgement (the pre-0737 rule existed only because the old release was a walk-mover ground
@@ -830,7 +829,7 @@ mod tests {
         );
     }
 
-    /// The rest line is a **constraint**, not a one-way cap (decision 0644): a stroking swimmer
+    /// The rest line is a **constraint**, not a one-way cap: a stroking swimmer
     /// left above it settles back onto it, while one below it is never pulled up — the verified
     /// floating resolver has no upward force but your own stroke, and no downward one at all.
     #[test]
@@ -932,7 +931,7 @@ mod tests {
         );
     }
 
-    /// **The director's downhill-river jitter** (decision 0644), as the frame loop that produces
+    /// **The director's downhill-river jitter**, as the frame loop that produces
     /// it. `SLOPE` is Felwood's Felfire Hill channel, measured off the shipped ADT and pinned by
     /// `liquid::real_data::the_felfire_channel_falls_about_a_tenth_of_a_yard_per_yard`.
     ///
@@ -986,7 +985,7 @@ mod tests {
         }
     }
 
-    /// The surface redirect (decision 0499): a pitched-up stroke reaching the rest line keeps its
+    /// The surface redirect: a pitched-up stroke reaching the rest line keeps its
     /// SPEED and turns level — the ref's full-speed surface swimming — instead of sliding against
     /// the cap at `cos(pitch)·speed ≈ 0` (the director's "invisible wall"). The presented pitch
     /// levels with it; free/descending strokes pass through untouched.

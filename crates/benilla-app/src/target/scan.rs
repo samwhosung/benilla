@@ -1,5 +1,5 @@
 //! TAB / nearest-enemy targeting + combat auto-target — the **Classic-priority selection**
-//! (decision 0567) over the 1.12 wire laws.
+//! over the 1.12 wire laws.
 //!
 //! The 1.12 byte algorithm (±30° cone about the *character's* facing, cone-first-then-nearest
 //! sort, 10-yd out-of-cone bubble, snapshot list + cursor cycling — the TAB core `0x493f60`) was
@@ -82,7 +82,7 @@ const W_SCREEN: f32 = 1.0;
 /// The score's distance term weight: per unit of `dist / TAB_RANGE`.
 const W_DIST: f32 = 1.0;
 /// The "attacking me" bonus (`TargetPriorityCombatLock`'s spirit as a score term — the hard
-/// lock itself is retired, decision 0568): a mob whose UNIT_FIELD_TARGET is me and whose
+/// lock itself is retired): a mob whose UNIT_FIELD_TARGET is me and whose
 /// in-combat flag is set outranks anything peaceful at any screen position (the bonus exceeds
 /// the terms' max sum), but never pins the cycle.
 const COMBAT_WITH_ME_BONUS: f32 = 3.0;
@@ -123,7 +123,7 @@ pub(crate) enum ScanSide {
     /// fails (`0x60671e cmp eax,4; jge`, on the internal 0-based rank, so Lua's FRIENDLY(5) is
     /// internal 4). Its NPC arm is `IsPvP 0x605ff0` on the candidate (owner-chased), so a friendly
     /// creature with no `UNIT_FLAG_PVP` is NOT a `TargetNearestFriend` candidate at all — the
-    /// same predicate that already denies its buffs (decision 1035).
+    /// same predicate that already denies its buffs.
     Friend,
 }
 
@@ -161,7 +161,7 @@ fn candidate_order(a: &Candidate, b: &Candidate) -> std::cmp::Ordering {
 /// everything (`AllowAnyOnScreen=1` — "if no 100% correct target is available, allow selecting
 /// any valid in-range target"). Classic's HARD combat lock (`TargetPriorityCombatLock` — the
 /// pool restricted to in-combat units while starting from one) was implemented and then
-/// **retired by the director's feel** (decision 0568): with a single attacker it pinned TAB to
+/// **retired by the director's feel**: with a single attacker it pinned TAB to
 /// that mob with no way off. The fighting-me *score bonus* stays — attackers come first, but
 /// the history walks you off them.
 fn select_pool(cands: &[Candidate]) -> Vec<Candidate> {
@@ -265,7 +265,7 @@ pub(super) fn load_creature_types(mut commands: Commands, world_assets: Option<R
 /// 0 and screen-centre *unconditionally*, so porting the byte-level rule would make `CTRL-TAB`
 /// self-target on **every** press rather than facing-dependently — faithful to the bytes,
 /// unfaithful to the behaviour, which is the trade `docs/METHOD.md` §7 hands to the director rather
-/// than to this file. Recorded here so it is a known divergence and not a gap (decision 1745).
+/// than to this file. Recorded here so it is a known divergence and not a gap.
 #[derive(SystemParam)]
 #[allow(clippy::type_complexity)] // one bundled system param — the app's convention for big query sets
 pub(crate) struct TargetScan<'w, 's> {
@@ -325,7 +325,7 @@ impl TargetScan<'_, '_> {
             // Mode 1 (`0x493e73`) — liveness + hostility (kept byte-law). The liveness leg is the
             // reference's own reads-dead triple `0x605f90` — health, the `UNIT_DYNFLAG_DEAD` bit
             // (feign death) and stand state 7 — the shared predicate rather than a third
-            // transcription of it (decision 1022).
+            // transcription of it.
             ScanSide::Enemy => {
                 if store.is_some_and(|s| s.0.unit_reads_dead()) {
                     return false;
@@ -505,7 +505,7 @@ impl TargetScan<'_, '_> {
             // here (`0x6704c0`), and this scan kept that while nothing hid a unit root. Since the
             // outdoor draw election (1270/1475) hides every body outside the frustum, reading its
             // `Visibility` would be the frustum by another name — and would empty the off-screen
-            // tier the Classic design (0567) keeps as the fallback. Tiering by the camera is the
+            // tier the Classic design keeps as the fallback. Tiering by the camera is the
             // `project` step below; stealth and the like leave through the server's out-of-range.
             let dist = (tf.translation - self_tf.translation).length();
             if dist > TAB_RANGE {
@@ -514,7 +514,7 @@ impl TargetScan<'_, '_> {
             }
             let off_center = project(tf.translation + Vec3::Y);
             // **Enemy side only.** The bonus exists to surface *the thing attacking me*
-            // (`TargetPriorityCombatLock`'s spirit, decisions 0567/0568) — a notion with no
+            // (`TargetPriorityCombatLock`'s spirit) — a notion with no
             // friendly meaning, and the reference has no such term on either side. Left ungated it
             // would fire on an ally who is in combat and targeting me — a healer on you — and
             // shove them to the head of the CTRL-TAB pool ahead of everyone, by accident rather
@@ -559,7 +559,7 @@ impl TargetScan<'_, '_> {
 
 /// The recent-TAB history (`TargetPriorityHighlightHistoryMs`): guids picked within
 /// [`HISTORY_SECS`], skipped by the forward pick so repeated presses walk fresh targets; a wrap
-/// clears it. Replaces the 1.12 snapshot list + cursor (decision 0567).
+/// clears it. Replaces the 1.12 snapshot list + cursor.
 #[derive(Resource, Default)]
 pub(super) struct TabHistory {
     /// `(guid, when)` — insertion-ordered; the back is the most recent (Shift-TAB's walk).
@@ -788,7 +788,7 @@ fn cycle(
     }
 }
 
-/// TARGETNEARESTENEMY / TARGETPREVIOUSENEMY (0997: two commands through the binding table now,
+/// TARGETNEARESTENEMY / TARGETPREVIOUSENEMY (two commands through the binding table now,
 /// defaults TAB / SHIFT-TAB — no shift fork here anymore). The dispatch already applied the typing
 /// gate (a focused EditBox owns TAB) and the exact-modifier law.
 pub(super) fn tab_target(
@@ -1029,7 +1029,7 @@ pub(super) fn acquire_and_attack(
     if selection.guid.is_some() {
         return; // something got selected between the action and this frame — the normal path owns it
     }
-    // The actor-eligibility block (decision 0481, widened to `0x612df0`'s full Phase A): every one
+    // The actor-eligibility block (widened to `0x612df0`'s full Phase A): every one
     // of its refusals sits BEFORE the nearest-core `0x6130b5` — a mounted, stunned or dead press
     // never even scans. Gated at the responder so every requester (the Attack button's no-target
     // arm, the melee probe) shares it. The actor here is us.
@@ -1416,7 +1416,7 @@ mod tests {
 
     /// The sort and the pool: on-screen candidates always precede off-screen ones; the pool is
     /// the on-screen tier when it exists (AllowAnyOnScreen=1), everything otherwise. NO combat
-    /// lock (decision 0568): a fighting-me attacker in the pool never restricts it — TAB can
+    /// lock: a fighting-me attacker in the pool never restricts it — TAB can
     /// always walk off an attacker onto a fresh target (the bonus orders, the history moves).
     #[test]
     fn tier_pool_never_locks() {
@@ -1605,7 +1605,7 @@ mod tests {
     /// the regime that separates the two filters: neutral is **attackable** (`CanAttack`'s mixed
     /// arm is `< 4`) and **not assistable** (`CanAssist`'s ladder is `>= 4`). To get a genuinely
     /// friendly reaction with no catalog the ally here is a **same-team duel partner** — the one
-    /// rung of `UnitReaction 0x6061e0` that answers 4 off descriptor fields alone (decision 0633).
+    /// rung of `UnitReaction 0x6061e0` that answers 4 off descriptor fields alone.
     /// It is also a fair model of the real case: `TargetNearestFriend` is mostly about players.
     ///
     /// Four candidates pin four separate claims:
@@ -1693,7 +1693,7 @@ mod tests {
     }
 
     /// **A unit the draw election culled is still a TAB candidate.** The outdoor election
-    /// (decisions 1270/1475) writes `Visibility::Hidden` on every body root outside the camera
+    /// writes `Visibility::Hidden` on every body root outside the camera
     /// frustum, every frame — so a scan gate on `Hidden` emptied the off-screen tier 0567 keeps
     /// as the fallback, and TAB / attack-with-no-target / pet Attack could never reach a mob
     /// hitting you from behind while nothing was on screen.

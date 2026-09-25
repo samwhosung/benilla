@@ -15,7 +15,7 @@ use benilla_protocol::ObjectFields;
 use crate::entities::{BoneAttach, VisualAttached};
 use crate::net::ObjectStore;
 
-/// `UNIT_FIELD_MOUNTDISPLAYID` (index 133, decision 0441) — the wire's one mounted signal.
+/// `UNIT_FIELD_MOUNTDISPLAYID` (index 133) — the wire's one mounted signal.
 const FIELD_MOUNTDISPLAYID: u16 = 133;
 /// The mount's attachment-0 bone in the fixture mount rig.
 const SEAT_BONE: u16 = 3;
@@ -111,7 +111,7 @@ impl Standing {
     /// give it the attachment-0 anchor the seat hangs from. Returns the child.
     fn mount_attaches(&mut self) -> Entity {
         let child = self.mount_child().expect("a mount child was ordered");
-        // The seat joint spawns on first demand out of the mount's pose (decision 1355) — the
+        // The seat joint spawns on first demand out of the mount's pose — the
         // test provides the pose, not a hand-built joint.
         let pose =
             benilla_world::testing::test_rig_pose(child, &[Vec3::ZERO; SEAT_BONE as usize + 1]);
@@ -166,7 +166,7 @@ impl Standing {
     }
 }
 
-/// **The director's report (B199).** Mounting used to destroy the rider's whole visual, taking the
+/// **The director's report.** Mounting used to destroy the rider's whole visual, taking the
 /// aura's persistent kit instance with it — and because `FxAttached` outlived the teardown holding
 /// a dangling root while the aura never left its slots, the glow never came back, not even after
 /// dismounting. The reference re-parents the body model onto the mount (`0x712f70`); it never

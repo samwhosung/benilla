@@ -14,7 +14,7 @@
 //!    reason the rays are one-sided like the mover's own probes — whether that top is even
 //!    *visible* to a downward sweep under the 0970 facing law.
 //! 3. **The maneuver is re-run at a ladder of advances.** The live step-up advances by this
-//!    frame's own travel (0209), which is 12 cm at 60 fps and 3 cm at 240 — while the capsule
+//!    frame's own travel, which is 12 cm at 60 fps and 3 cm at 240 — while the capsule
 //!    radius is [`super::CAPSULE_RADIUS`]. If a rung further out commits where the live one did
 //!    not, the advance is the defect; if *every* rung says `NO-FLOOR`, the geometry is; if every
 //!    rung says `STEEP-FLOOR`, the walkable gate is. One line, one verdict.
@@ -38,7 +38,7 @@ use super::{CAPSULE_HEIGHT, CAPSULE_RADIUS, SKIN_WIDTH, STEP_UP_HEIGHT};
 
 /// A walk frame counts as blocked when it achieved less than this share of the horizontal distance
 /// the input asked for. A square push into a wall achieves ~0; a legitimate slide along one at 45°
-/// still achieves ~70%, and a walkable-slope ride achieves 100% by construction (decision 0220) —
+/// still achieves ~70%, and a walkable-slope ride achieves 100% by construction —
 /// so the band below this is "went nowhere", not "was deflected".
 const BLOCKED_SHARE: f32 = 0.35;
 
@@ -95,7 +95,7 @@ pub(super) fn watch(
     dt: f32,
     now: f32,
 ) {
-    // **Nobody is reading this in a player build** (decision 1179). Unlike its neighbour
+    // **Nobody is reading this in a player build**. Unlike its neighbour
     // `move_trace`, which gates on `trace::enabled()` in its first line, this ran unconditionally:
     // every blocked walk frame — routine play, walking into a wall — paid a body shape-cast, eight
     // down-rays and seven full re-runs of `step_up`, up to 5×/s, to fill a `static` whose only

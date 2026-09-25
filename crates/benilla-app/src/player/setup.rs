@@ -25,7 +25,7 @@ use super::{
 /// the character controller is in.)
 const DEFAULT_MOVE_SPEED: f32 = 7.0;
 
-/// The world camera's `Camera` — output mode `Skip` (decisions 2206 and 2234,
+/// The world camera's `Camera` — output mode `Skip` (
 /// [`benilla_world::final_pass`]): nothing writes this camera's target, and bevy's `upscaling`
 /// blit — a pure copy of the finished frame into it — is skipped. The world's final pass, the
 /// FFXGlow combine, is the first draw of the player-UI camera's main pass now
@@ -45,7 +45,7 @@ fn spawn_fallback_camera(commands: &mut Commands, msaa: Msaa) {
         WorldCamera,
         // The same level the real camera takes — this one used to name nothing at all, which
         // (`Camera` requires `Msaa`, defaulting to `Sample4`) meant a data-less free-fly quietly
-        // ran four samples no matter what the player had set. Decision 1629.
+        // ran four samples no matter what the player had set.
         msaa,
         Hdr,
         Tonemapping::None,
@@ -67,7 +67,7 @@ pub(super) fn setup_player(
     mut commands: Commands,
     config: Option<Res<RenderConfig>>,
     world_assets: Option<Res<WorldAssets>>,
-    // The pending `gxMultisample` (decision 1629), already resolved: this system is ordered after
+    // The pending `gxMultisample`, already resolved: this system is ordered after
     // [`crate::cvars::CvarLoad`], so `config.toml` has been folded in before the camera is born.
     msaa: Res<benilla_world::view::MsaaSetting>,
 ) {
@@ -110,7 +110,7 @@ pub(super) fn setup_player(
         // THE world camera (the portrait booths are further `Camera3d`s — every "where is the viewer"
         // consumer filters on this marker, never on bare `Camera3d`; see its doc).
         WorldCamera,
-        // The player's `gxMultisample` (decision 1629), read ONCE here and never again — the
+        // The player's `gxMultisample`, read ONCE here and never again — the
         // reference registers this CVar *latched* and its callback echoes "set pending gxRestart",
         // so a change is pending until the next launch. Which is also the only thing we could do:
         // swapping MSAA live leaves our post passes (glow/egui) MSAA-mismatched and freezes the
@@ -133,7 +133,7 @@ pub(super) fn setup_player(
         // tonemapper + scene-referred lighting for a modern look.)
         Hdr,
         Tonemapping::None,
-        // The faithful FFXGlow pass (decision 0158/0161): the byte-pinned `scene + glow·blur²`.
+        // The faithful FFXGlow pass: the byte-pinned `scene + glow·blur²`.
         // This view runs its blur; its combine is the UI camera's own ground pass (2234).
         benilla_world::ffx_glow::FfxGlow::WORLD,
         world_camera_output(),
@@ -170,7 +170,7 @@ pub(super) fn setup_player(
     }
 }
 
-/// The world camera's demand gate (decision 0540): active in world or under the opaque loading
+/// The world camera's demand gate: active in world or under the opaque loading
 /// screen — never behind the glue screens, where the streamed world (25 tiles, tens of thousands
 /// of entities, MSAA 4×) otherwise renders unseen behind an opaque fullscreen glue scene every
 /// frame. The loading-screen case is load-bearing: that covered render is what compiles the
@@ -178,7 +178,7 @@ pub(super) fn setup_player(
 /// Capture runs boot straight `InWorld` (`CharSelectPlugin::start`) — always active there.
 ///
 /// This gate stays deliberately WIDER than [`benilla_world::schedule::world_is_live`], which decides
-/// whether the world is *loaded* at all (decision 0777): the camera must also render while the
+/// whether the world is *loaded* at all: the camera must also render while the
 /// cover is up, which is exactly the window in which the world is streaming in.
 ///
 /// **…but not on the frame the cover owes the glass.** 0962's rule, third consumer: on world

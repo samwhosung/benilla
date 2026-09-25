@@ -1,4 +1,4 @@
-//! GameObject open/close animation (decision 0242; chest lid folded in by 2271) — a **client-side**
+//! GameObject open/close animation (chest lid folded in by 2271) — a **client-side**
 //! `GAMEOBJECT_STATE` drives a skeletal M2 sequence, so a **door** swings, a **button** depresses, and a
 //! **chest lid** opens/closes on its state machine.
 //!
@@ -40,7 +40,7 @@
 //! Clips are keyed by AnimationData.dbc id, so a resolved id becomes a clip by a scan of
 //! [`ModelAnimations::clips`], exactly as `creature_anim` does.
 //!
-//! **A transition motion is a TRANSIENT substate, and the settle is explicit** (decision 1151).
+//! **A transition motion is a TRANSIENT substate, and the settle is explicit**.
 //! The kernel's `flags` bit 0 (`0x714585`) says nothing about how long
 //! a transition lasts: bit 0 clear means the *pose* wraps its band for ever, and the whole
 //! door family (`G_Crate01`, every `World\Goober\` prop, the books) authors Close/Open/Destroy
@@ -50,7 +50,7 @@
 //! 5 Destroy → 6 Destroyed, 7 Rebuild → 1 Closed), arming that pose over the motion. So benilla
 //! arms a motion for exactly ONE window ([`RepeatAnimation::Never`]) and
 //! [`retire_transient_anim`] re-runs the state machine at its end — the same endpoint, and the
-//! same shape the Custom channel already uses (decisions 1099/1100). Honouring the loop bit
+//! same shape the Custom channel already uses. Honouring the loop bit
 //! instead is a chest lid that springs open and slams shut ~1.5×/s for ever, which is the report
 //! this record closes.
 //!
@@ -88,7 +88,7 @@ const GO_STATE_READY: u32 = 1;
 /// object plays this once and *then* goes away; see [`DespawnAnimAnnounced`].
 const ANIM_DESPAWN: u16 = 157;
 
-/// Marker + client-side state for an animated GameObject (decisions 0242/2271). Instanced by
+/// Marker + client-side state for an animated GameObject. Instanced by
 /// [`crate::entities::attach`] on an animatable GO type whose model authors sequences; driven by
 /// [`drive_go_anim`]. Distinct from creatures' `AnimDriver` so the two drivers never touch one entity.
 #[derive(Component, Default)]
@@ -115,11 +115,11 @@ pub(crate) struct GoAnim {
     ///
     /// Written by [`queue_custom_anim`] / [`arm_despawn_anim`], consumed by [`drive_go_anim`]
     /// AFTER the state arm, so the bobber's same-frame pair (the forced `READY → ACTIVE` flip +
-    /// the splash) resolves with the splash on top (decision 1086). Slot 15 pre-gates on the model
-    /// OWNING the resolved id, so this channel takes no remap (decisions 1086/1404).
+    /// the splash) resolves with the splash on top. Slot 15 pre-gates on the model
+    /// OWNING the resolved id, so this channel takes no remap.
     one_shot: Option<u16>,
     /// The clip armed for the current **TRANSIENT substate**, if any — the completion-retire's
-    /// watch (decisions 1100/1151). The reference keeps exactly one current substate in
+    /// watch. The reference keeps exactly one current substate in
     /// `[handler+0x10]`, and its
     /// per-model completion callback fires ONCE at the arm's baked window end (span × replay, the
     /// loop bit ignored); slot 14 `0x5f4120` then advances a transient substate onto its rest one
@@ -203,7 +203,7 @@ pub(crate) fn go_state(anim: Option<&GoAnim>, store: &ObjectStore) -> u32 {
         .unwrap_or(GO_STATE_ACTIVE)
 }
 
-/// The inspector's GameObject **animation** readout (decision 1151): which sequence the state arm
+/// The inspector's GameObject **animation** readout: which sequence the state arm
 /// is actually playing on the object under the cursor — its `AnimationData` id, whether it is the
 /// state's held **rest** pose or a **transient** one (a transition motion, or a Custom block, which
 /// [`retire_transient_anim`]'s advance ends at its window end), and the repeat the player is
@@ -275,7 +275,7 @@ pub(crate) fn go_animates(type_id: i32) -> bool {
 /// an absent `GAMEOBJECT_TYPE_ID` means DOOR.
 const GO_TYPE_DOOR: i32 = 0;
 
-/// Which types drop their collision when open (decision 0249): **DOOR(0) / BUTTON(1)** only. A door's
+/// Which types drop their collision when open: **DOOR(0) / BUTTON(1)** only. A door's
 /// static hull can't swing with the mesh, so an open door is made walkable by disabling the collider —
 /// keyed off the server's wire state, which *is* the door's real passability. A **CHEST(3)** keeps its
 /// collider in every state (you don't walk through an "open" chest), so it is deliberately excluded even
@@ -284,7 +284,7 @@ fn collision_follows_state(type_id: i32) -> bool {
     matches!(type_id, 0 | 1)
 }
 
-/// Whether a door/button's collider is solid, from its **wire** `GAMEOBJECT_STATE` (decision 0757).
+/// Whether a door/button's collider is solid, from its **wire** `GAMEOBJECT_STATE`.
 ///
 /// The load-bearing case is `None`. An absent field is not "unknown" — it is the wire default `0`
 /// = `GO_STATE_ACTIVE` = **open**, because vmangos omits zero-valued fields from the create block
@@ -300,7 +300,7 @@ fn collider_is_solid(wire_state: Option<u32>) -> bool {
 }
 
 /// A cast launched at a GameObject (`SMSG_SPELL_GO` carrying a `TARGET_FLAG_GAMEOBJECT`), bridged from the
-/// net apply layer to this module (decision 2271). [`open_go_lid`] opens the target's lid/door iff the
+/// net apply layer to this module. [`open_go_lid`] opens the target's lid/door iff the
 /// spell carries an open-lock effect and the GO is an animated type — the client's `Spell_C` open path.
 #[derive(Message, Clone, Copy)]
 pub(crate) struct GoLidOpen {
@@ -308,7 +308,7 @@ pub(crate) struct GoLidOpen {
     pub(crate) spell_id: u32,
 }
 
-/// A GameObject's one-shot Custom animation (`SMSG_GAMEOBJECT_CUSTOM_ANIM`, decision 1086), bridged
+/// A GameObject's one-shot Custom animation (`SMSG_GAMEOBJECT_CUSTOM_ANIM`), bridged
 /// from the net apply layer. The wire's `anim_id` is the Custom index (0..3 → AnimationData ids
 /// 153..156); the reference rejects `anim_id >= 4` in the handler and this side keeps that gate.
 /// The load-bearing sender is the fishing bobber's bite (`anim_id 0` — the splash, arriving beside
@@ -435,7 +435,7 @@ fn resolve(prev: Option<u32>, cur: u32) -> Option<Play> {
 /// acting only on a
 /// *genuine* wire change. This is the door/button driver (the server flips their state over the wire) and
 /// the first-sight rest-pose seed for every animated GO (a chest streams in closed). Two inputs, both
-/// exact (decision 2297): the seed (`Added<GoAnim>`, when attach tags the entity — read off the store),
+/// exact: the seed (`Added<GoAnim>`, when attach tags the entity — read off the store),
 /// and the field EDGE on `GAMEOBJECT_STATE` for any later delta. An unrelated field change (position,
 /// dyn-flags) is not an edge on this dword, so a chest whose wire state is constant is never re-closed by
 /// one — its lid is owned by the loot callers below. That used to need a `last_wire` shadow on the
@@ -450,7 +450,7 @@ fn sync_wire_go_state(
     )>,
 ) {
     for (store, mut anim) in &mut gos.p0() {
-        // Absent ⇒ the wire default `0` = ACTIVE (decision 0757) — vmangos omits zero fields, so a
+        // Absent ⇒ the wire default `0` = ACTIVE — vmangos omits zero fields, so a
         // door that spawns OPEN sends none. Reading that as "unknown" left `state` at `None`, and
         // the object rested at its loader pose instead of Opened.
         anim.state = Some(store.0.gameobject_state().unwrap_or(GO_STATE_ACTIVE));
@@ -496,7 +496,7 @@ fn open_go_lid(
     }
 }
 
-/// Caller 4 (the custom-anim opcode, decision 1086): queue the one-shot Custom play. This is the
+/// Caller 4 (the custom-anim opcode): queue the one-shot Custom play. This is the
 /// **disjoint** arm channel (`0x5f8c50`) — it never touches
 /// [`GoAnim::state`] (the lid family), rejects `anim_id >= 4` exactly as the reference handler
 /// does, and maps the index to its AnimationData id (`153 + n`, Custom0..3). Ownership is judged
@@ -553,7 +553,7 @@ pub(crate) struct DespawnAnimAnnounced;
 /// benilla takes the pin on the ONE substate that produces an observable — 12 / [`ANIM_DESPAWN`],
 /// where the whole play happens after the destroy — and [`release_despawn_pin`] is the release.
 /// A GO destroyed mid-transition (a door frozen half-open by a despawn) is the reference's other
-/// pinned case and still pops instantly here; named, not built (decision 1404).
+/// pinned case and still pops instantly here; named, not built.
 ///
 /// One deliberate divergence: the reference's `0x464920` returns *before* removing the object from
 /// the manager, so a pinned object stays addressable by guid for the length of its play. benilla
@@ -593,7 +593,7 @@ fn arm_despawn_anim(mut gos: Query<&mut GoAnim, Changed<DespawnAnimAnnounced>>) 
 /// test on its very first pass and is released the same frame, which is the case for everything
 /// that isn't an egg.
 ///
-/// **"Released" is a fade, not a pop** (decision 2198). What the deferred `0x464920` runs into is
+/// **"Released" is a fade, not a pop**. What the deferred `0x464920` runs into is
 /// the base OnDeactivate `0x6145e0`, which hands the object's model to the `SWModelFadeout`
 /// scheduler `0x672df0` on its way out — so the object stops existing while its model keeps
 /// drawing and ramps to zero. A looted chest whose static model authors no `Despawn` sequence is
@@ -643,8 +643,7 @@ fn close_go_lid(
     *last_source = current;
 }
 
-/// The **completion-driven retire** of the current TRANSIENT substate — the substate advance
-/// (decisions 1100/1151).
+/// The **completion-driven retire** of the current TRANSIENT substate — the substate advance.
 /// The reference registers a per-model completion callback at GO model attach
 /// (`0x5f7d43` → `[M2+0x70]`) which the driver `0x719370` fires ONCE when the armed sequence
 /// reaches its baked window end — span × replay-count, the **loop bit ignored** — and slot 14
@@ -884,7 +883,7 @@ fn drive_go_anim(
                 }
             }
         }
-        // ── The one-shot Custom channel (`0x5f8c50`, decision 1086) — AFTER the state arm, so the
+        // ── The one-shot Custom channel (`0x5f8c50`) — AFTER the state arm, so the
         // bobber's same-frame pair (forced READY→ACTIVE flip + splash) lands splash-on-top.
         // Gated on the model OWNING the id; no remap on this channel — an unowned Custom
         // plays nothing. Armed for ONE window regardless of the sequence's loop flag (decision
@@ -923,7 +922,7 @@ fn drive_go_anim(
 }
 
 /// Gate a door/button's collision on its state: solid when **closed** (`GO_STATE_READY`), passable when
-/// **open** (decision 0249). The model's collision is a single static hull (not bone-bound — it *can't*
+/// **open**. The model's collision is a single static hull (not bone-bound — it *can't*
 /// swing with the mesh), so an open door is made walkable by disabling the collider, not by moving it —
 /// the client's only option, and the faithful one. Keyed off the **wire** state (a door's real
 /// passability is the server's, and it holds for an animation-less door too — no [`GoAnim`] required), and
@@ -931,7 +930,7 @@ fn drive_go_anim(
 /// state.
 ///
 /// **Reconciles on a `GAMEOBJECT_STATE` edge OR on the collider's arrival** (idempotent either way).
-/// The `Added<Collider>` half is load-bearing, not belt-and-braces (decision 0763): a streamed
+/// The `Added<Collider>` half is load-bearing, not belt-and-braces: a streamed
 /// GameObject's descriptor lands with the create block, but its `Collider` is baked from the M2
 /// hull and inserted by `entities::attach` only when the **asset finishes loading**, frames later.
 /// Watching the descriptor alone meant the two conditions were never true in the same frame
@@ -942,7 +941,7 @@ fn drive_go_anim(
 /// reporter's workaround exactly: toggling the object from the GM panel changes the descriptor
 /// *after* the collider exists, so the reconcile finally fires.
 ///
-/// The descriptor half is the field edge on the one dword this reads (decision 2297) — the same
+/// The descriptor half is the field edge on the one dword this reads — the same
 /// seed-plus-edge pair [`sync_wire_go_state`] uses.
 fn drive_go_collision(
     mut commands: Commands,
@@ -981,8 +980,7 @@ fn drive_go_collision(
 /// registrar pair. The consumer is a single instruction, `0x5f85f6 test ah,ah` inside `0x5f85f0` —
 /// `CGGameObject_C`'s collision-candidacy virtual at primary-vtable slot `+0x50` — which reads the
 /// bit through the sign flag and answers *no candidate* for a GameObject whose
-/// `GAMEOBJECT_TYPE_ID` is `0`, DOOR. Nothing else about a ghost's collision differs
-/// (decision 1767).
+/// `GAMEOBJECT_TYPE_ID` is `0`, DOOR. Nothing else about a ghost's collision differs.
 ///
 /// **Off the MOVER's descriptor, not ours.** The producer tests the object being traced, so a
 /// possessed creature is not a player and never sets the bit; `player_is_ghost` reading a field a
@@ -1040,7 +1038,7 @@ type ScannedGo = (
 );
 
 /// Fire the event keyframes an animated GameObject's playing clip crossed this frame — the GO
-/// half of the M2 event-kernel surface (decision 1086): the reference registers an event callback
+/// half of the M2 event-kernel surface: the reference registers an event callback
 /// per **family-A** GO at create
 /// (`0x5f7d1f` → vtable `+0x30` → dispatcher `0x5f3e20`), which is exactly the [`GoAnim`]
 /// population — a loader-idle family-B GO has no dispatcher and stays silent. The events flow
@@ -1064,7 +1062,7 @@ fn fire_go_anim_events(
     mut out: MessageWriter<AnimSoundEvent>,
 ) {
     for (entity, anims, player, parked, world, pose) in &gos {
-        // The election's tick half, GO twin (decision 1482): a parked GO's event track is not
+        // The election's tick half, GO twin: a parked GO's event track is not
         // scanned — and there is no `MORE_AUDIBLE` exception here, because the flag lives on
         // CREATURE templates only (the reference's re-link arm reads the creature query cache).
         // Memory dropped so a wake re-arms instead of scanning the parked gap as one crossing.
@@ -1134,7 +1132,7 @@ mod tests {
     use super::*;
     use benilla_world::model_fade::DespawnFade;
 
-    /// **A ghost's mover drops DOOR GameObjects — and nothing else** (decision 1767).
+    /// **A ghost's mover drops DOOR GameObjects — and nothing else**.
     ///
     /// The third case is the one this test exists for. `GAMEOBJECT_TYPE_ID` is absent on a unit,
     /// and an absent field reads `0`, which *is* DOOR — so the type id alone says "door" for every
@@ -1163,7 +1161,7 @@ mod tests {
         );
     }
 
-    /// The wire default that let open doors block (decision 0757). `None` must read ACTIVE/open,
+    /// The wire default that let open doors block. `None` must read ACTIVE/open,
     /// never "unknown" — vmangos omits the zero-valued field, so `None` IS the open state for
     /// every door that spawns open (ZG's Forcefield, Stratholme's small portcullises).
     #[test]
@@ -1201,7 +1199,7 @@ mod tests {
         assert!(matches!(resolve(Some(2), 1), Some(Play::Motion(0x98))));
     }
 
-    /// The custom-anim channel's wire mapping (`0x5f8930`, decision 1086): indices 0..3 arm
+    /// The custom-anim channel's wire mapping (`0x5f8930`): indices 0..3 arm
     /// Custom0..3 (AnimationData 153..156); anything else is the reference handler's reject.
     /// The fishing bobber's bite is index 0 → 153 — exactly the second sequence
     /// `G_FishingBobber.m2` authors.
@@ -1379,7 +1377,7 @@ mod tests {
         ))
     }
 
-    /// **The report** (decision 1151): loot the crate, close the loot window, and the lid must
+    /// **The report**: loot the crate, close the loot window, and the lid must
     /// settle SHUT — not spring open and slam once a window, for ever.
     ///
     /// The whole door family is `flags` bit 0 clear, so a driver that arms a transition by the
@@ -1663,7 +1661,7 @@ mod tests {
         );
     }
 
-    /// **B140** (decision 1404): UBRS's Rookery Eggs. Walk into a `TRAP`'s radius, the server
+    /// **B140**: UBRS's Rookery Eggs. Walk into a `TRAP`'s radius, the server
     /// spends its last charge and sends `SMSG_GAMEOBJECT_DESPAWN_ANIM` immediately followed by
     /// `SMSG_DESTROY_OBJECT` in the same tick — and the egg must **hatch before it pops**: 157
     /// Despawn, one window (2.667 s on `G_DragonEggFreeze`, whose bone 8 swells 4.76×), with the
@@ -1714,7 +1712,7 @@ mod tests {
     /// animation machine at all — a totem, a DynamicObject, both of which `SendObjectDeSpawnAnim`
     /// also fires for) has nothing to play, so the pin never forms and the release runs on its
     /// first pass — straight to the fade, with no animation in front of it. **This is the looted
-    /// chest** (decision 2198): `DeadmineCargoBoxes.m2` is a fully static model, so the announced
+    /// chest**: `DeadmineCargoBoxes.m2` is a fully static model, so the announced
     /// despawn resolves to nothing and the teardown fade is the whole observable.
     #[test]
     fn an_unownable_despawn_anim_goes_straight_to_the_fade() {
@@ -1846,7 +1844,7 @@ mod tests {
 
     #[test]
     fn chest_animates_but_keeps_its_collider() {
-        // A chest (3) is on the animation machine (2271) but off the collision gate (0249): you see the
+        // A chest (3) is on the animation machine (2271) but off the collision gate: you see the
         // lid move, but you never walk through an open chest.
         assert!(go_animates(3));
         assert!(!collision_follows_state(3));
@@ -1872,7 +1870,7 @@ mod tests {
         // The three that used to be the whole gate are still on it; the ones it wrongly excluded —
         // TEXT (every book) and GOOBER — are the reported regressions this widening closes.
         assert!(go_animates(9) && go_animates(10));
-        // Type 0 is also what an ABSENT type id reads as (decision 0248), so the default animates.
+        // Type 0 is also what an ABSENT type id reads as, so the default animates.
         assert!(go_animates(0));
     }
 }

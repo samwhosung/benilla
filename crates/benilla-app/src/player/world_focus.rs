@@ -35,7 +35,7 @@ pub(super) fn publish_viewer(
     // The viewer's *condition*, off **our own character's** descriptor block: both are whole-screen
     // effects, which is why they ride here rather than on any body in the scene — and why they read
     // `SelfPlayer` rather than the body we drive. Being drunk is a fact about you; possessing a boar
-    // does not sober you up, and a boar has no drunk byte to read (decision 1277).
+    // does not sober you up, and a boar has no drunk byte to read.
     let (drunk, ghost) = match store.single() {
         Ok(s) => (
             s.0.player_drunk_byte()
@@ -86,7 +86,7 @@ pub(super) fn publish_view_focus(
     // terrain. That is what `detached` already means here (the eye is off the body; the zone
     // authority stays on it), so a fly-by borrows free-fly's answer rather than inventing a third
     // mode. The server does the mirror-image thing on its side: while a cinematic runs it
-    // re-anchors object visibility to its own copy of the flying camera (decision 0196).
+    // re-anchors object visibility to its own copy of the flying camera.
     let flying = cinematic.as_deref().is_some_and(|c| c.is_playing());
     // **A detached focus stops keeping the body's own ground resident — so the body goes on the
     // hold for as long as that lasts.** Free-fly never had to answer for this: `control` skips the
@@ -132,7 +132,7 @@ pub(super) fn publish_view_focus(
                 ViewFocus::body(wow, paced)
             }
         }
-        // No avatar: the picked character's row for the entry window (decision 0777), else
+        // No avatar: the picked character's row for the entry window, else
         // whatever the camera can see.
         _ => match entry {
             Some((map, pos)) => ViewFocus::entry(map, pos),
@@ -154,7 +154,7 @@ pub(super) fn release_post_snap_hold(
     net_cmds: Option<Res<crate::net::NetCommands>>,
 ) {
     let Some(p) = progress else { return };
-    // **The facts must be about the ground under our own feet** (decision 1336, B263 round 3).
+    // **The facts must be about the ground under our own feet** (B263 round 3).
     // `WorldLoadProgress` names the tile it describes; a mismatch means the streamer's focus and
     // the avatar diverged — the stale-focus snap frame this guard exists for, or a detached
     // free-fly eye — and residency published for another tile must never unfreeze this body. On a
@@ -205,7 +205,7 @@ pub(super) fn release_post_snap_hold(
     } else if now >= player.settle_deadline {
         player.end_settle(false, now);
     }
-    // **Pay the worldport ack the moment the hold ends** (decision 1340) — on either end, the
+    // **Pay the worldport ack the moment the hold ends** — on either end, the
     // resident release or the stall timeout (a dead stream must still complete the transfer, or
     // the server holds us out-of-world until logout). This is the real client's post-load `0xDC`,
     // re-expressed: its blocking load's "done" is our release.
@@ -298,7 +298,7 @@ mod tests {
     }
 
     /// The other half of the same rule: **nothing here ever ends a hold**, and nothing re-arms one.
-    /// The release is the world's (decision 0737), and a shot whose camera stays on the body's own
+    /// The release is the world's, and a shot whose camera stays on the body's own
     /// tile makes that tile resident — so the release ends the hold correctly, and a per-frame
     /// re-arm would fight it and leave `settling` flickering under the two systems that read it
     /// (the loading screen's clear gate and the zone-channel walk).
@@ -347,7 +347,7 @@ mod tests {
         assert!(!p.world_stale);
     }
 
-    /// B263 (decision 1303): a stream that keeps arriving keeps the hold, however long it takes.
+    /// B263: a stream that keeps arriving keeps the hold, however long it takes.
     /// The old fixed load budget released gravity at 6 s into a live Stormwind arrival — measured
     /// 0.01 s from firing even on a fast machine — and the body fell through the not-yet-collided
     /// city to the canyon under the Valley of Heroes, impact heard under the loading screen.
@@ -468,7 +468,7 @@ mod tests {
         assert!(!settling(&mut app), "baked — the world is really there");
     }
 
-    /// B263 round 3 (decision 1336): residency published for ANOTHER tile never releases the hold
+    /// B263 round 3: residency published for ANOTHER tile never releases the hold
     /// and never clears the stale flag — the live defect was the focus publish racing the teleport
     /// snap, so on the snap frame the streamer described the DEPARTURE city as fully resident and
     /// the hold released into free fall at the destination. The facts now name their tile; facts

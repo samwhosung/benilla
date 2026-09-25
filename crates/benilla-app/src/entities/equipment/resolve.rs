@@ -1,7 +1,7 @@
-//! Equipment **resolution** (decisions 0072/0074, split out of `super`'s one file): what each unit
+//! Equipment **resolution** (split out of `super`'s one file): what each unit
 //! should be holding this frame, and where — the descriptor read (a creature's virtual items, a
 //! player's visible-item entries through the ask-once item layer), the drawn-vs-stowed placement
-//! law, the item/enchant glow id (decision 0805), and the player teardown a gear change forces.
+//! law, the item/enchant glow id, and the player teardown a gear change forces.
 //! The output is [`HeldItems`] + [`Equipment`] + [`Wielded`], which `super::spawn` turns into
 //! children.
 
@@ -28,7 +28,7 @@ use super::{
 /// the matching slots into the hands (shield → forearm). Stowed: the **item's** sheath type picks the
 /// body point — 1 two-hander → back · 2 staff → lower back · 3 one-hander → hip · 4 shield → centre
 /// back (mainhand takes the `K−1` side of each pair — `0x47a070`'s `dl != 0` is the mainhand
-/// bodyslot `0xf`, decision 0370). A sheathed ranged weapon renders **nothing** — the client
+/// bodyslot `0xf`). A sheathed ranged weapon renders **nothing** — the client
 /// detaches it rather than re-pointing it to a body bone (`0x7130a0`: a pure unlink/release,
 /// uniform across bow/gun/crossbow/thrown/wand). Drawn ranged splits by inventory type: a **bow**
 /// rides the left hand, gun/crossbow/wand/thrown the right (`0x611e10`'s invType test).
@@ -90,7 +90,7 @@ fn enchant_fold(
 /// The nocked ammo's attach point (`0x60ba30`): the ONE body-bone attach in the whole mechanism is
 /// HandArrow (35), fired for a **bow** once its BowPull event latches `[+0xd58]&0x4000` —
 /// `nock_latched` is [`NockLatch`], driven by the real `$BWP`/`$BWR` listener
-/// (`drive_nock_latch`, decision 0408). Everything else shows NO nocked
+/// (`drive_nock_latch`). Everything else shows NO nocked
 /// model: gun/crossbow hit the client's `gunXbow` early return, thrown resolves the `0x19`
 /// *directory* (its own weapon-model copy) but fails the `==0x18` attach gate, and a wand's
 /// Shoot has no ammo item.
@@ -101,7 +101,7 @@ fn ammo_attach(ranged_inv_type: Option<u32>, nock_latched: bool) -> Option<u16> 
 
 /// The glow id for one held item, and the model requests it implies: the base-or-enchant fork
 /// ([`item_glow::effective_visual`]) plus the cache entries for whatever it resolves to. `0` when
-/// the glow chain's DBCs are absent — the item simply draws unadorned, as before decision 0805.
+/// the glow chain's DBCs are absent — the item simply draws unadorned, as before.
 fn resolve_glow(
     glows: Option<&mut ItemGlows>,
     enchant_rows: Option<&benilla_formats::EnchantCatalog>,
@@ -197,9 +197,9 @@ pub(in crate::entities) fn resolve_equipment(
     // The creature display cache — a character-model NPC's helm/shoulder ids + race/sex live on its
     // display's `NpcAppearance` (CreatureDisplayInfoExtra), read here to resolve its attach models.
     creatures: Option<Res<Creatures>>,
-    // The item/enchant glow chain (decision 0805): resolved here beside the item itself, so a glow
+    // The item/enchant glow chain: resolved here beside the item itself, so a glow
     // model is requested the same frame its weapon is and an enchant change rides the item diff.
-    // The enchant column rides its own resource (decision 0915) — shared with the tooltip lane.
+    // The enchant column rides its own resource — shared with the tooltip lane.
     glows: Option<ResMut<ItemGlows>>,
     enchants: Option<Res<crate::items::Enchants>>,
     // The [`Items`] template epoch as of the last run — the skip gate's global half. Deliberately
@@ -210,11 +210,11 @@ pub(in crate::entities) fn resolve_equipment(
     // The object lookup the equipped guids resolve through and the item entities' change watch,
     // as one param (the 16-SystemParam ceiling).
     item_objects: (crate::net::Objects, crate::items::ItemChanges),
-    // The guild identity cache (decision 1257) — `ResMut` because it is LAZY: the miss below is
+    // The guild identity cache — `ResMut` because it is LAZY: the miss below is
     // what sends the `CMSG_GUILD_QUERY` whose answer paints the tabard. `Option` for the same
     // reason `creatures` is: a harness without the UI plugins still resolves equipment.
     mut guilds: Option<ResMut<crate::ui_guild::GuildState>>,
-    // The tabard designer's five under preview (decision 1977) — a change re-dresses our body.
+    // The tabard designer's five under preview — a change re-dresses our body.
     tabard_design: Option<Res<crate::ui_tabard::TabardDesign>>,
 ) {
     let Some(mut held) = held else {
@@ -277,7 +277,7 @@ pub(in crate::entities) fn resolve_equipment(
         if current_key != Some(&key) {
             commands.entity(entity).insert(key);
         }
-        // The two **equipment-display preferences** (decision 1472, B123): `PLAYER_FLAGS`'
+        // The two **equipment-display preferences**: `PLAYER_FLAGS`'
         // `HIDE_HELM 0x400` / `HIDE_CLOAK 0x800`, read off THIS unit's own descriptor. The field is
         // public, so this is per rendered body and not a local setting — a remote player who hides
         // their helm hides it on our screen, exactly as ours hides on theirs. A creature has no
@@ -294,7 +294,7 @@ pub(in crate::entities) fn resolve_equipment(
         // `CHARACTER_FLAG_HIDE_*`, which vmangos round-trips into these very bits at login) — the
         // world was the half that never consumed it.
         let (hide_helm, hide_cloak) = (s.player_hides_helm(), s.player_hides_cloak());
-        // Worn armor (players; decision 0074): resolve the composite slots' entries → display ids.
+        // Worn armor (players): resolve the composite slots' entries → display ids.
         // `settled` only once every non-empty entry has an answer, so the first attach composites the
         // dressed atlas directly (the template cache makes later logins instant).
         if net_entity.kind == EntityKind::Player {
@@ -337,14 +337,14 @@ pub(in crate::entities) fn resolve_equipment(
             if hide_helm {
                 eq.helm = 0;
             }
-            // The guild tabard (decision 1704). Resolved for every player, tabard worn or not —
+            // The guild tabard. Resolved for every player, tabard worn or not —
             // the composite's own gate is the tabard DISPLAY's flag, and asking here keeps the
             // query on the same lazy-cache idiom as every other read of that cache. A miss answers
             // `None` for this frame and re-runs when the response bumps the counter above.
             eq.emblem = guilds
                 .as_deref_mut()
                 .and_then(|g| crate::ui_guild::unit_guild_emblem(s, g, &net));
-            // The tabard designer's preview (decision 1977): while it is open on OUR body the
+            // The tabard designer's preview: while it is open on OUR body the
             // five under design replace the guild's emblem and the tabard geoset is forced on
             // over the empty slot — the reference's `[cc+0xc]` flag and its `0x47a610` install,
             // both on the local player's character component and nobody else's.
@@ -367,7 +367,7 @@ pub(in crate::entities) fn resolve_equipment(
         let sheath_of = |slot: usize, inv_type: u32| {
             visual_sheath.map_or(committed, |v| v.for_slot(slot, inv_type))
         };
-        // A player wearing a NON-character display (druid form, GM morph — decision 0695)
+        // A player wearing a NON-character display (druid form, GM morph)
         // attaches no equipment sub-models at all: the reference's held/helm/shoulder attach
         // lives on the CCharacterComponent (`0x47a0c0`), which only
         // a character body builds — a bear-form druid shows no weapon by construction, not by a
@@ -387,7 +387,7 @@ pub(in crate::entities) fn resolve_equipment(
             // The disarm bit, read off this unit's own descriptor exactly where the reference
             // reads it — inside `GetWeapon` (`[[unit+0x110]+0xa0] & 0x200000`, `0x5ec2b8`). It
             // decides the COMBAT reading of the hands ([`Wielded::armed_main`]) and, through
-            // [`DisarmFreeze`] below, what the hidden hand still shows (decision 1863).
+            // [`DisarmFreeze`] below, what the hidden hand still shows.
             disarmed: s.unit_flags() & UNIT_FLAG_DISARMED != 0,
             ..Wielded::default()
         };
@@ -431,7 +431,7 @@ pub(in crate::entities) fn resolve_equipment(
             let Some((_, inv_type, item_sheath, class, subclass, material)) = resolved[slot] else {
                 continue;
             };
-            // The item's Material — the draw/stow sound's only key (decision 0882). Both wire
+            // The item's Material — the draw/stow sound's only key. Both wire
             // sources carry it; neither is a guess.
             wielded.materials[slot] = material;
             // The wielded weapon-class pair (decision 0073's swing/ready selectors) — what's *in*
@@ -459,7 +459,7 @@ pub(in crate::entities) fn resolve_equipment(
                 _ => {}
             }
         }
-        // **The ladder** (decision 1863) — which single hand `UNIT_FLAG_DISARMED` hides, now that
+        // **The ladder** — which single hand `UNIT_FLAG_DISARMED` hides, now that
         // both are known. `None` while the flag is down, or when neither hand holds a weapon.
         let hidden = wielded.disarmed_hand();
         // The rising edge, as SEEN HERE: the reference's reflex `0x5ff580` fires on the bit
@@ -496,7 +496,7 @@ pub(in crate::entities) fn resolve_equipment(
             // enchant change is a model-event producer whether or not the weapon is drawn.
             worn[slot] = Some((display, kind, enchant_fold(s, net_entity.kind, slot)));
             let live = placement(slot, inv_type, item_sheath, sheath_of(slot, inv_type));
-            // The disarm reflex (`0x5ff580`, decision 1863). The hidden hand's weapon is NOT
+            // The disarm reflex (`0x5ff580`). The hidden hand's weapon is NOT
             // placed from the live sheath state — while the flag is up nothing may attach it or
             // move it, so it is wherever the reflex left it at the edge: gone if it was in the
             // hand (`0x5ff676`'s detach), still at its body point if it was stowed, and gone if
@@ -517,7 +517,7 @@ pub(in crate::entities) fn resolve_equipment(
                 continue;
             };
             ensure_item_model(&mut held, display, kind, &asset_server);
-            // The glow (decision 0805): the display's intrinsic visual, else this weapon slot's
+            // The glow: the display's intrinsic visual, else this weapon slot's
             // first enchant with one. The enchant half is **players only** — the enchant ids ride
             // `PLAYER_VISIBLE_ITEM`, and a creature's virtual item carries none, exactly like the
             // synthetic item the reference's `GetVirtualItem` hands its resolver.
@@ -726,7 +726,7 @@ pub(in crate::entities) fn resolve_equipment(
     }
 }
 
-/// **The corpse's dress** (decision 1706) — [`resolve_equipment`]'s sibling for a `TYPEID_CORPSE`
+/// **The corpse's dress** — [`resolve_equipment`]'s sibling for a `TYPEID_CORPSE`
 /// body, kept apart from it rather than threaded through it because almost nothing it does applies.
 ///
 /// A corpse's gear is a *snapshot*, and it is already resolved: the 19 `CORPSE_FIELD_ITEM` slots
@@ -740,7 +740,7 @@ pub(in crate::entities) fn resolve_equipment(
 /// - slot 0 (head) when this corpse's own `CORPSE_FLAG_HIDE_HELM 0x08` is set, and slot 14 (back)
 ///   when `HIDE_CLOAK 0x10` is (`0x5d6465`/`0x5d6470` — its own bits on its own field, snapshotted
 ///   from `PLAYER_FLAGS` at death). Suppression is a display id of **zero**, the same shape the
-///   player lane uses (decision 1472), so the whole downstream chain — the helm's attach model, its
+///   player lane uses, so the whole downstream chain — the helm's attach model, its
 ///   `0x4799a0` hide-masks, the cloak's geoset and cape texture — follows for free.
 /// - slots 15/16/17 (mainhand, offhand, ranged) — **always**. Ranged is skipped outright
 ///   (`0x5d644e`); the two weapon slots take a branch that looks up the packed item word as an
@@ -859,7 +859,7 @@ mod tests {
     use benilla_protocol::messages::{ItemInfo, ObjectFields};
     use benilla_protocol::EntityKind;
 
-    /// A corpse's dress is the descriptor, packed (decision 1706): armour off the
+    /// A corpse's dress is the descriptor, packed: armour off the
     /// `CORPSE_FIELD_ITEM` slots as ItemDisplayInfo ids with no template round trip, the head and
     /// back slots suppressed by the corpse's OWN `CORPSE_FLAG_HIDE_HELM`/`HIDE_CLOAK` bits, and
     /// **never** a weapon or a ranged slot.
@@ -994,7 +994,7 @@ mod tests {
         assert_eq!(placement(0, 21, 3, 1), Some(attach_id::HAND_RIGHT));
     }
 
-    /// The nocked-ammo attach law (`0x60ba30`, decision 0408): HandArrow (35) is the ONE attach,
+    /// The nocked-ammo attach law (`0x60ba30`): HandArrow (35) is the ONE attach,
     /// bow-only, gated on the `$BWP` nock latch.
     /// Gun/crossbow/thrown never attach a nocked model.
     #[test]
@@ -1071,7 +1071,7 @@ mod tests {
         (eq, helm_attached)
     }
 
-    /// **B123** (decision 1472): the two equipment-display preferences are consumed on the WORLD
+    /// **B123**: the two equipment-display preferences are consumed on the WORLD
     /// body, not only on the character-select one. `PLAYER_FLAGS_HIDE_HELM 0x400` /
     /// `HIDE_CLOAK 0x800` zero the resolved display id, which is what makes every downstream
     /// consumer follow — no cape geoset, no cape texture, no helm attach model, and no `0x4799a0`
@@ -1175,7 +1175,7 @@ mod tests {
         drop(rx);
     }
 
-    /// **What a disarm does to the weapon MODEL** (decision 1863). The reference's attachment
+    /// **What a disarm does to the weapon MODEL**. The reference's attachment
     /// state is built by events, and `UNIT_FIELD_FLAGS`' change reflex `0x5ff580` is one of them:
     /// when the DISARM bit goes up it calls `0x47a310(model, 0xf, 0, 0)` — an unlink of the
     /// main-hand attachment — **but only while the weapon is drawn**, and afterwards every attach

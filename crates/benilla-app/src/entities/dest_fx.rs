@@ -1,4 +1,4 @@
-//! **Dest-anchored spell effects** (decision 0797, B132's second half): what a ground cast shows
+//! **Dest-anchored spell effects** (B132's second half): what a ground cast shows
 //! at the point. Two producers, one spawn/attach lane:
 //!
 //! - **The DynamicObject machine** ([`arm_ground_effects`]): a TYPEID-6 create is the anchor a
@@ -57,7 +57,7 @@ const SHARD_MODELS: [&str; 7] = [
 ];
 
 /// The `CharProcType` the dynobj emitter chain scans for (`0x5d55c0`). One key out of the same
-/// dispatch space the aura-state body procs come from (`crate::aura_visual`, decision 0806) — the
+/// dispatch space the aura-state body procs come from (`crate::aura_visual`) — the
 /// kit column is shared, the consumers are not.
 const PROC_TYPE_SHARD_EMITTER: i32 = 9;
 
@@ -131,7 +131,7 @@ pub(crate) struct GroundBurst {
 /// Arm a freshly-created DynamicObject anchor: resolve the spell's visual row and hang the two
 /// visuals + the area sound (module doc). Runs on `Added<ObjectStore>` so the create's fields
 /// are the trigger; a dynobj is created once and never re-created in place (a re-cast is a new
-/// guid — captured live, 0797).
+/// guid — captured live).
 pub(super) fn arm_ground_effects(
     mut commands: Commands,
     created: Query<(Entity, &NetEntity, &ObjectStore), Added<ObjectStore>>,

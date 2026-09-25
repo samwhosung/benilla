@@ -21,7 +21,7 @@ use benilla_world::model_fade::{
 };
 
 /// The reference's up-edge click predicate, in **camera degrees and milliseconds** — the whole
-/// orbit-vs-select law (decision 1122). Verbatim, from `0x514ae0`, which returns
+/// orbit-vs-select law. Verbatim, from `0x514ae0`, which returns
 /// 1 = suppress / 0 = dispatch:
 ///
 /// ```text
@@ -118,7 +118,7 @@ pub(crate) const CAM_DIST_FACTOR_RANGE: std::ops::RangeInclusive<f32> = 1.0..=2.
 pub(super) const CAM_DIST_MAX: f32 = CAM_DIST_BASE_MAX * 2.0;
 pub(super) const CAM_DIST_DEFAULT: f32 = 15.0;
 
-/// The max-orbit knob (decision 1140) — 1.12's `cameraDistanceMaxFactor` over the base above.
+/// The max-orbit knob — 1.12's `cameraDistanceMaxFactor` over the base above.
 /// A fourth frozen constant made reachable: [`CAM_DIST_MAX`] was the only zoom ceiling there was.
 ///
 /// **The default is the reference's 1.0** — `15 yd` (`cameraDistanceMax` defaults to `"15.0"`,
@@ -167,14 +167,14 @@ const CAM_ZOOM_STEP: f32 = 1.0;
 const CAM_MOVE_SPEED: f32 = 8.33;
 /// Mouse-look sensitivity at the slider's neutral notch — radians of camera rotation per pixel of
 /// mouse motion. [`LookConfig::sensitivity`] scales it; this is the ×1.0 case, and it is what the
-/// client felt like before there was a slider at all (decision 1140).
+/// client felt like before there was a slider at all.
 const LOOK_SENSITIVITY: f32 = 0.003;
 /// The `mousespeed` slider's range — 1.12's own (UIOptionsFrameSliders' MOUSE_SENSITIVITY row:
 /// 0.5 … 1.5, step 0.05). A multiplier over [`LOOK_SENSITIVITY`], so the registered default 1.0
 /// reproduces the shipped feel exactly.
 pub(crate) const MOUSE_SPEED_RANGE: std::ops::RangeInclusive<f32> = 0.5..=1.5;
 
-/// The camera rows' change callback (decision 2303) — the look, zoom and follow knobs.
+/// The camera rows' change callback — the look, zoom and follow knobs.
 pub(crate) fn on_cvar(
     ev: On<crate::cvars::CvarChanged>,
     mut look: ResMut<LookConfig>,
@@ -265,9 +265,9 @@ const LOOK_PITCH_PER_SPEED: f32 = LOOK_SENSITIVITY / 90.0;
 /// `"Value out of range (%f - %f)"` and `CVar::Set` skips the store, so the old value stands.
 pub(crate) const CAMERA_SPEED_RANGE: std::ops::RangeInclusive<f32> = 0.1..=360.0;
 
-/// The mouse-look player knobs (decision 0961): `mouseInvertPitch` is 1.12's own Interface
+/// The mouse-look player knobs: `mouseInvertPitch` is 1.12's own Interface
 /// Options checkbox (UIOptionsFrame.lua index 1, CVar-backed), settable from the Options
-/// window's Controls page through the CVar store (0954). Inverted, moving the mouse up pitches
+/// window's Controls page through the CVar store. Inverted, moving the mouse up pitches
 /// the camera down — the delta.y term flips sign at the one apply site, both drag styles alike.
 ///
 /// `sensitivity` is 1.12's `mousespeed` slider (1140), the same story one layer down: the rate was
@@ -304,7 +304,7 @@ impl LookConfig {
     /// Radians of camera rotation per pixel of mouse motion, this session. ONE function because
     /// both readers must agree: the look rotation itself and the click-vs-drag travel budget that
     /// decides whether a press was a click. Splitting them would let the slider move the drag
-    /// threshold out from under the gesture (decision 1140).
+    /// threshold out from under the gesture.
     pub(super) fn yaw_rate(self) -> f32 {
         self.yaw_speed * LOOK_YAW_PER_SPEED * self.sensitivity
     }
@@ -333,7 +333,7 @@ const FOLLOW_TIME_MAX: f32 = 2.0;
 /// (`[0x801360]`, `0x512ce4`/`0x512d41`). A float-equality guard, not a perceptible deadzone.
 const FOLLOW_EPS: f32 = 1.0e-3;
 
-/// **Camera Following Style** — 1.12's `cameraSmoothStyle` (decisions 1493/1502): does the camera
+/// **Camera Following Style** — 1.12's `cameraSmoothStyle`: does the camera
 /// return to behind the character on its own?
 ///
 /// benilla shipped the reference behaviour *removed* from the day the camera was written (the
@@ -466,7 +466,7 @@ pub(super) mod follow_cmd {
     pub(in crate::player) const TURN_BITS: u32 = TURN_LEFT | TURN_RIGHT;
 }
 
-/// The knobs behind the auto-follow (decision 1502) — the style, the style the *externally-driven*
+/// The knobs behind the auto-follow — the style, the style the *externally-driven*
 /// states use instead, and the rate. All three are 1.12 CVars with the reference's own defaults.
 #[derive(Resource, Clone, Copy, PartialEq, Debug)]
 pub(crate) struct FollowConfig {
@@ -856,7 +856,7 @@ pub(crate) struct CameraControl {
     /// the camera zooms into the head (first-person). `control` computes it (it owns the pivot + camera
     /// pose); [`apply_self_model_fade`] applies it to the body parts. Starts opaque.
     pub(super) self_fade_alpha: f32,
-    /// The auto-follow's own state (decision 1502): the input word we last saw, and the armed
+    /// The auto-follow's own state: the input word we last saw, and the armed
     /// return in flight. It lives on the rig rather than beside the knob because it is *pose*, not
     /// setting — a transition survives the frame, not the session.
     pub(super) follow: FollowRig,
@@ -865,13 +865,13 @@ pub(crate) struct CameraControl {
     /// body, which is why it glides *through* a change of subject (a shapeshift, a far-sight
     /// switch) instead of being reset by one.
     pub(super) pivot: PivotGlide,
-    /// `cameraPivot`'s pitch-bias channel ([`SmartPivot`], decision 2149) — pose, like the two
+    /// `cameraPivot`'s pitch-bias channel ([`SmartPivot`]) — pose, like the two
     /// above it.
     pub(super) smart_pivot: SmartPivot,
     /// `cameraTerrainTilt`'s ground-pitch channel and its 100 ms probe throttle ([`TerrainTilt`],
     /// decision 2149).
     pub(super) terrain_tilt: TerrainTilt,
-    /// `cameraBobbing`'s session latch and eye offset ([`HeadBob`], decision 2149).
+    /// `cameraBobbing`'s session latch and eye offset ([`HeadBob`]).
     pub(super) head_bob: HeadBob,
     /// **Did the collision sweep actually clip the camera on the frame just seated?** The
     /// reference's `[cam+0x90] & 0x30000`, which nothing but the solver `0x50e570` writes and the
@@ -888,10 +888,10 @@ impl CameraControl {
     /// Both, or the wheel glide eases `distance` back toward the old target every frame and a
     /// parked shot drifts through the whole zoom while the burst is running.
     ///
-    /// The scripted camera park (`capture::probe_cam`, decision 0653) is the only caller. It gets a
+    /// The scripted camera park (`capture::probe_cam`) is the only caller. It gets a
     /// named method rather than `pub(crate)` fields because an instrument reaching into gameplay is
     /// the allowed direction but not a licence to open gameplay's internals to the whole crate
-    /// (decision 1174) — this is the entire surface the probe needs.
+    /// — this is the entire surface the probe needs.
     pub(crate) fn park_distance(&mut self, d: f32) {
         self.distance = d;
         self.target_distance = d;
@@ -939,7 +939,7 @@ impl LookButton {
 /// turned anyone. Only the look session applied it here; the command word and the both-button run
 /// read the raw buttons, so a right-click on a Who-list row was a `Turn`, whose Smart row is
 /// `(0.0, 1.0)` — an immediate return that ran to completion and swung the camera round to behind
-/// the character (B364). The same raw read had both primaries over a bag running the avatar
+/// the character. The same raw read had both primaries over a bag running the avatar
 /// forward, through [`super::state::forward_axis`]'s both-button term.
 ///
 /// **Latched, not re-tested each frame**, because the reference latches: the down that reached the
@@ -1037,7 +1037,7 @@ pub(super) fn latch_world_mouse(
 
 #[derive(Component)]
 // `pub(crate)` on the TYPE only — the scripted camera park has to name it in a query. Its fields
-// stay `pub(super)`; [`FlyCam::park`] is the whole surface an instrument gets (decision 1174).
+// stay `pub(super)`; [`FlyCam::park`] is the whole surface an instrument gets.
 pub(crate) struct FlyCam {
     pub(super) yaw: f32,
     pub(super) pitch: f32,
@@ -1046,7 +1046,7 @@ pub(crate) struct FlyCam {
 
 impl FlyCam {
     /// Point the rig at an absolute world yaw/pitch — the scripted camera park's one lever
-    /// (`capture::probe_cam`, decision 0653). From here on this is the identical path a mouse-drag
+    /// (`capture::probe_cam`). From here on this is the identical path a mouse-drag
     /// takes.
     pub(crate) fn park(&mut self, yaw: f32, pitch: f32) {
         self.yaw = yaw;
@@ -1078,7 +1078,7 @@ pub(crate) struct CameraPivot {
 /// the character facing too). Called once per frame from [`super::control`]; `both_buttons` is
 /// vanilla's both-button run (steers like a right-drag without its own click test).
 ///
-/// **Orbit and select are independent** (decision 1122): every primary press engages its look
+/// **Orbit and select are independent**: every primary press engages its look
 /// session immediately and *also* arms a click test, and the release decides the click on
 /// [`PressGesture::is_click`] alone. There is no "promotion" and nothing cancels the click for
 /// having moved — the pending click used to be destroyed the moment the cursor crossed a 4 px
@@ -1093,7 +1093,7 @@ pub(super) fn run_look_session(
     window: &mut Window,
     cursor_opts: &mut CursorOptions,
     inspect_enabled: bool,
-    // A left press this frame the UI already consumed as a cursor-payload world drop (0216 §3) —
+    // A left press this frame the UI already consumed as a cursor-payload world drop —
     // the left click test must yield to it exactly as it yields to a UI hover, so dropping a held
     // item never also selects.
     click_consumed: bool,
@@ -1103,7 +1103,7 @@ pub(super) fn run_look_session(
     left_click: &mut Option<PressGesture>,
     right_click: &mut Option<PressGesture>,
     look_cfg: LookConfig,
-    // The camera-option knobs + this frame's gate facts (decision 2149). `cameraPivot`'s routing
+    // The camera-option knobs + this frame's gate facts. `cameraPivot`'s routing
     // lives in the look session because the reference's does: `0x50fee0` IS the mouse-motion
     // handler, and the whole decision is "does THIS motion event go into the pitch or the bias".
     dynamics: &DynamicsInput,
@@ -1114,7 +1114,7 @@ pub(super) fn run_look_session(
     // WorldFrame OnMouseDown fires at the press whether it becomes a click or a turn. Whether the
     // press was the world's at all is [`latch_world_mouse`]'s single answer, shared with the
     // camera's command word: the viewport off the UI, or a right join into a left-orbit, whose
-    // session already owns the cursor. Ground-targeting's cancel reads this edge (decision 0792).
+    // session already owns the cursor. Ground-targeting's cancel reads this edge.
     if rig.world_mouse.down(LookButton::Right) {
         world_right_press.write(WorldRightPress);
     }
@@ -1170,7 +1170,7 @@ pub(super) fn run_look_session(
             // world** (both-button run → single-button), hand the look session off to it rather
             // than ending it — vanilla keeps turning/orbiting seamlessly on the remaining button,
             // cursor staying hidden throughout. A primary the UI is holding is not a candidate:
-            // its binding never fired, so the reference has nothing to hand off to (B364).
+            // its binding never fired, so the reference has nothing to hand off to.
             let other = match active {
                 LookButton::Right => LookButton::Left,
                 LookButton::Left => LookButton::Right,
@@ -1209,7 +1209,7 @@ pub(super) fn run_look_session(
             rig.cursor_stash = window.cursor_position();
             cursor_opts.grab_mode = CursorGrabMode::Locked;
             cursor_opts.visible = false;
-            // A press the UI already consumed as a cursor-payload world drop (0216 §3) still orbits
+            // A press the UI already consumed as a cursor-payload world drop still orbits
             // — the reference's orbit is unconditional on the down edge — but must not also select.
             *right_click = None;
             *left_click = (!click_consumed && !rig.world_mouse.held(LookButton::Right))
@@ -1229,7 +1229,7 @@ pub(super) fn run_look_session(
         } else {
             delta.y
         };
-        // **The pivot's fork** (`0x50fee0`, decision 2149): a pinned camera looking level-or-up,
+        // **The pivot's fork** (`0x50fee0`): a pinned camera looking level-or-up,
         // dragged mostly vertically, spends this delta on the view's pitch BIAS and leaves the
         // arm alone. `None` is the reference's pure-pivot frame — the integrator does not run.
         let d_pitch = -dy * pitch_rate;
@@ -1276,7 +1276,7 @@ pub(super) fn apply_zoom_scroll(scroll: f32, dt: f32, rig: &mut CameraControl, m
 }
 
 /// Seat the camera on **whatever the rig is orbiting this frame** — our own body, or a far-sight
-/// subject (B151: Mind Vision, Sentry Totem, and Mind Control's camera half in B211) while
+/// subject (Mind Vision, Sentry Totem, and Mind Control's camera half in B211) while
 /// `PLAYER_FARSIGHT` names one. Three substitutions and then [`seat_camera`]: the orbit centre,
 /// the collision sweep's origin, and the pivot height's target.
 ///
@@ -1435,13 +1435,13 @@ pub(super) fn seat_on_subject(
 /// Seat the third-person camera: orient it, orbit it behind the avatar's torso with a collision
 /// sweep from the head to the ideal seat (snap-in instantly, ease back out), write the resulting
 /// transform, and compute the self-avatar zoom-in fade from the realized camera-to-pivot distance.
-/// A **keyboard** turn (or the drunk veer, which rides `turn_delta` the same way — decision 1018)
+/// A **keyboard** turn (or the drunk veer, which rides `turn_delta` the same way)
 /// carries the camera rigidly — the character's own turns only: a transport
 /// deck turning under the rider is frame motion and is applied to `cam.yaw` at the ride block in
 /// [`super::control`], bypassing this function's look-session gate (routing it here was the
 /// right-drag drift bug — the gate ate the deck's share while a drag was held). A left-drag orbit
 /// offset is then reeled back in by the **auto-follow**, on the player's `cameraSmoothStyle`
-/// setting ([`FollowStyle`], decision 1493) — or kept forever, on Never.
+/// setting ([`FollowStyle`]) — or kept forever, on Never.
 /// `head`/`player_pos` are precomputed by [`super::control`] (which owns the avatar capsule
 /// constants); `cam_pivot_height` is the world pivot height it derived from [`CameraPivot`] this
 /// frame.
@@ -1465,7 +1465,7 @@ pub(super) fn seat_camera(
     // — no INPUT-turn carry against the user's hand. (A transport deck's turn is not an input and
     // never arrives here — the ride block applies it to `cam.yaw` directly, drag or no drag.)
     //
-    // **The auto-follow** (1.12's `cameraSmoothStyle`, decisions 1493/1502) rides the same gate
+    // **The auto-follow** (1.12's `cameraSmoothStyle`) rides the same gate
     // for the same reason — a held drag owns the camera, hand on it. It is NOT a per-frame chase:
     // an input edge arms a cosine-smoothstep return to directly-behind and that transition then
     // plays out unattended ([`FollowRig::advance`]). It writes an absolute yaw because our camera
@@ -1492,7 +1492,7 @@ pub(super) fn seat_camera(
     // hit — gone; collision wins outright). `cast_move` ignores origin penetration, so a head grazing
     // a surface still casts outward.
     // **The seat is built from the UNBIASED pitch and the view from the biased one** — the whole
-    // of `cameraPivot` is that ordering (decision 2149). The reference computes the eye at
+    // of `cameraPivot` is that ordering. The reference computes the eye at
     // `0x50edcc → 0x50de00` and stores it, and only *then* rotates the camera basis `[cam+0x14]`
     // by `[cam+0x104]` at `0x50ee32`; so the arm never swings and the look direction does. The
     // bias is zero at every default until a pinned camera is dragged, so `arm_rotation` and
@@ -1533,7 +1533,7 @@ pub(super) fn seat_camera(
     // pivot corridor above is not optional: nothing in the trace itself stops a boom that starts
     // on the water plane, so the *origin* is what has to be lifted clear.
     //
-    // **And that water leg is a RAY, not this probe sphere** (decision 2185): `0x7c2c40` is a
+    // **And that water leg is a RAY, not this probe sphere**: `0x7c2c40` is a
     // ray/triangle test and `0x672170` carries no radius, so the `2/9` yd the corridor lifts the
     // origin by is a clearance budgeted for a point. The probe is `0.3` — it does not fit, and a
     // level boom behind a surface swimmer was coming back pinned at zero. The split lives in
@@ -1561,7 +1561,7 @@ pub(super) fn seat_camera(
     // every frame nothing is bobbing, so the no-op write gate below still holds a parked camera
     // bit-stable.
     let translation = seated + rig.head_bob.offset();
-    // The no-op write gate (decision 1362 — 1355's clamp lesson, at the camera): a parked
+    // The no-op write gate (1355's clamp lesson, at the camera): a parked
     // camera's pose is bit-stable once the collision ease settles, but writing it anyway marked
     // the camera's transform changed every frame — which re-ran its propagation and told every
     // camera-watching gate in the app that the view moved when it hadn't. Bit equality, not an
@@ -1590,7 +1590,7 @@ pub(super) fn seat_camera(
     // per-frame collision CAST, so a grazing hit that alternates gives an arm that snaps in and eases
     // back out, and the camera keeps moving for as long as that lasts — with the scripted pose
     // perfectly constant the whole time. B38's "the camera is static by construction, so nothing
-    // camera-derived can be the cause" (0671) rests entirely on that being untrue, and it was never
+    // camera-derived can be the cause" rests entirely on that being untrue, and it was never
     // measured. `open` is printed beside the eased arm so a hit/miss alternation in the CAST is
     // visible even on a frame where the ease has not yet moved the camera far enough to see.
     if cam_dump_enabled() {
@@ -1660,8 +1660,8 @@ pub(super) fn seat_camera(
 /// first-person; cheaper + cleaner than a ≈0-alpha head sitting on the camera).
 ///
 /// Runs **after** the interior classifier + the appear/despawn fades so its override wins the frame; it
-/// overrides while fading (`α < 1`) and, on the frame the fade ends, **releases** the channel back
-/// (decision 0213): the classifier skips settled parts and rewrites only on a classification change, so
+/// overrides while fading (`α < 1`) and, on the frame the fade ends, **releases** the channel back:
+/// the classifier skips settled parts and rewrites only on a classification change, so
 /// without an explicit hand-back a fade episode that ends in a jump past 1 (a hitch frame closing the
 /// camera ease in one step, a pivot jump) left the avatar latched on the blend twin at its last low alpha
 /// — stuck translucent until the player happened to cross a room boundary. At steady `α ≥ 1` it does
@@ -1677,7 +1677,7 @@ pub(super) fn seat_camera(
 ///
 /// **The tree is not the whole model.** An M2's BILLBOARD batches can't be tree children — their mesh is
 /// centred on the bone pivot and their transform belongs to the billboard system, so every one of them is
-/// a world ROOT entity that merely *follows* an anchor inside the tree (decision 0153). The descendant
+/// a world ROOT entity that merely *follows* an anchor inside the tree. The descendant
 /// walk therefore cannot see them, and the night-elf eye glow — two additive `…EYEGLOW.BLP` billboard
 /// quads at head height — went on burning in mid-air after the body it belongs to had gone (reported
 /// first-hand; ledger B71). Cards are picked up here by testing their follow-anchor against the walked
@@ -1774,8 +1774,8 @@ pub(crate) fn apply_self_model_fade(
         // …and the blend twin while feathering, exactly as a mesh part does. The alpha alone is
         // enough for an ADDITIVE card (`wow_model.wgsl` folds it into the colour, so α 0 is black
         // is gone), but an OPAQUE one — a pauldron's camera-facing trim, a chain link — ignores it
-        // entirely and stayed solid in first person until the card carried a twin to swap to
-        // (decision 0836). No `Visibility` here: that channel belongs to the card's hidden-owner
+        // entirely and stayed solid in first person until the card carried a twin to swap to.
+        // No `Visibility` here: that channel belongs to the card's hidden-owner
         // mirror in another system.
         if let (Some(fm), Some(mut mat)) = (fm, mat) {
             let want = benilla_world::model_render::far_resolved(
@@ -1823,7 +1823,7 @@ fn apply_self_fade_to_descendants(
     walked.insert(entity);
     if let Ok((fm, mut tag, mut mat, mut vis, lit, far_side)) = parts.get_mut(entity) {
         if alpha >= 1.0 {
-            // The release edge (runs once, on the frame the fade ends — decision 0213): un-hide,
+            // The release edge (runs once, on the frame the fade ends): un-hide,
             // restore the alpha field this system owns, and hand the material back to the part's
             // law. The alpha restore is unconditional: the classifier's payload writes carry the
             // tag's alpha through since 0755 (that is what lets a part re-lane mid-fade), so
@@ -1866,7 +1866,7 @@ fn apply_self_fade_to_descendants(
                 tag.0 = bits;
             }
             // A bake-classified part feathers on the PROBE-lit blend twin — the room light
-            // rides the fade (the tag re-lane keeps the slot alongside the alpha, 0355); the
+            // rides the fade (the tag re-lane keeps the slot alongside the alpha); the
             // exterior twin at shade byte 0 read as full outdoor intensity deep indoors
             // (director-caught, 2026-07-13). Shared with the appear/despawn ramp since 0755, so
             // the two can never disagree about which twin a law wants.
@@ -2123,7 +2123,7 @@ mod tests {
         }
     }
 
-    /// The report this whole change exists for (ledger B226, decision 1122): **a fast click
+    /// The report this whole change exists for (ledger B226): **a fast click
     /// selects however far the mouse swept.** Under 200 world the reference asks nothing about
     /// motion at all (`0x514ae0`'s first arm, `0x514b24`) — which is the gesture people actually
     /// make, flicking the cursor at a mob and clicking on arrival with the hand still moving.
@@ -2140,7 +2140,7 @@ mod tests {
         // which is the half that makes the reference's gesture possible at all.
     }
 
-    /// The `mousespeed` slider is a MULTIPLIER over the shipped per-pixel rate (decision 1140), and
+    /// The `mousespeed` slider is a MULTIPLIER over the shipped per-pixel rate, and
     /// the neutral notch has to reproduce the old constant exactly — the whole point of registering
     /// the default at 1.0 is that nobody's feel changes until they move the slider. Both the look
     /// rotation and the click-vs-drag travel budget read this one function, so the drag threshold
@@ -2215,7 +2215,7 @@ mod tests {
         assert!(near(both.yaw_rate(), LOOK_SENSITIVITY * 1.5 * 1.5));
     }
 
-    /// **The auto-follow** (decisions 1493/1502) — 1.12's `cameraSmoothStyle`, the setting benilla
+    /// **The auto-follow** — 1.12's `cameraSmoothStyle`, the setting benilla
     /// spent its whole life behaving as "Never". The properties that a re-derivation gets wrong,
     /// and that the reference's mechanism (`0x510960`, `0x50f160`) turns on:
     /// it is armed by an input **edge** and then plays out unattended (not a per-frame chase of a
@@ -2593,7 +2593,7 @@ mod tests {
 
     /// The self-avatar's zoom-to-first-person fade reaches its BILLBOARD cards — the night-elf eye
     /// glow (ledger B71: two additive quads left burning in mid-air after the body was hidden).
-    /// A card is a world ROOT following an anchor inside the model (decision 0153), so the fade's
+    /// A card is a world ROOT following an anchor inside the model, so the fade's
     /// descendant walk can only claim it through that anchor — and must claim ONLY its own: every
     /// brazier and lamppost in the zone is a card too, and dimming those with the player's zoom
     /// would be a far worse bug than the one being fixed.

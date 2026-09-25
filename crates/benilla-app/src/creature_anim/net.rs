@@ -1,7 +1,7 @@
 //! The animation layer's packet handlers (in the net handler table since 2322, moved out of the
 //! drain's combat, anim and mount arm files) — the server packets whose whole content is *a thing
 //! to play on a streamed unit*: the melee engagement brackets, the aggro/alert flare, the swing
-//! refusals, the two emote relays, the spell-visual kit push (decision 0280), a rider's flourish.
+//! refusals, the two emote relays, the spell-visual kit push, a rider's flourish.
 //! Each resolves the guid through the index and writes one message; the animation law itself
 //! lives in [`super`]. Two kinds here have a second handler: the completed-swing record
 //! ([`attacker_state`], with its client-side full-block synthesis) and the environmental-damage
@@ -172,7 +172,7 @@ fn on_play_spell_visual(
 
 /// A unit began melee auto-attack (`SMSG_ATTACKSTART`, including our own echo).
 fn attack_start(attacker: u64, victim: u64, commands: &mut Commands, index: &GuidIndex) {
-    // Engagement brackets (decision 0073): the standing Ready idle rides this window —
+    // Engagement brackets: the standing Ready idle rides this window —
     // the client's gate is the auto-attack-target GUID being set, mirrored here as a
     // marker component on the attacker (including our own echo).
     debug!("net: attack start {attacker:#x} → {victim:#x}");
@@ -243,7 +243,7 @@ fn ai_reaction(
 ) {
     // Aggro (2 HOSTILE) / stealth alert (0 ALERT) flare — pure audio, byte-verified
     // (`0x6056e0` is an exact two-way branch; any other value no-ops, and neither leg
-    // touches animation/nameplate/UI — decision 0280). Vocals: `sound::creature`.
+    // touches animation/nameplate/UI). Vocals: `sound::creature`.
     debug!("net: ai reaction {reaction} on {unit:#x}");
     if matches!(reaction, 0 | 2) {
         if let Some(&e) = index.0.get(&unit) {
@@ -255,7 +255,7 @@ fn ai_reaction(
     }
 }
 
-/// One completed melee swing (`SMSG_ATTACKERSTATEUPDATE`, decision 0073): the attacker's swing
+/// One completed melee swing (`SMSG_ATTACKERSTATEUPDATE`): the attacker's swing
 /// anim starts NOW; the victim feedback (blood/flinch/text/impact sounds) defers to the swing
 /// clip's attack-hit keyframe (`creature_anim::impact`, the client's `0x6247d0` router) — EXCEPT
 /// the center combat text, which the client fires **synchronously at packet parse**
@@ -290,14 +290,14 @@ fn attacker_state(
             ),
         );
     }
-    // The client-side FULL-BLOCK synthesis (`0x625e20`, decision 0279): a resolvable
+    // The client-side FULL-BLOCK synthesis (`0x625e20`): a resolvable
     // victim + zero damage + a nonzero blocked amount rewrites the state to BLOCKS(5)
     // before any consumer sees the record — the only thing the wire's blocked_amount
     // ever does (a PARTIAL block stays state 1, indistinguishable from a plain hit).
     if victim.is_some() && s.damage == 0 && s.blocked != 0 {
         s.victim_state = 5;
     }
-    // The center combat text (decision 0578/0580): self victim, at receive, AFTER the full-block
+    // The center combat text: self victim, at receive, AFTER the full-block
     // synthesis (so a full block reads BLOCK, not MISS) — the packet's absorb/resist/blocked
     // sums feed the confirmed helper-B partial trailers.
     if self_guid.0 == Some(s.victim) {
@@ -371,7 +371,7 @@ fn attacker_state(
 /// `SMSG_TEXT_EMOTE` — someone performed a `/`-emote (the TextEmote.dbc id; the anim, if any, is
 /// the emote row's).
 ///
-/// **Two consequences, and they are independent** (decision 1274): the anim + voice ride the
+/// **Two consequences, and they are independent**: the anim + voice ride the
 /// [`EmoteMessage`] and need the performer *streamed*; the chat sentence is queued for
 /// [`crate::ui_chat`]'s composer and needs only the performer's *name*. An emote from someone
 /// off-screen therefore still prints its line, which is the reference's shape — `0x49dbe0`
@@ -400,7 +400,7 @@ fn emote(guid: u64, emote_id: u32, index: &GuidIndex, out: &mut MessageWriter<Em
     });
 }
 
-/// `SMSG_PLAY_SPELL_VISUAL` — the kit-push opcode (decision 0280): a stage-0 play on the unit, the
+/// `SMSG_PLAY_SPELL_VISUAL` — the kit-push opcode: a stage-0 play on the unit, the
 /// eat/drink kit cadence and mid-channel swaps. Consumer: `creature_anim::spell_visual`. The
 /// [`PlaySeq`] stamp is taken only when the unit is streamed in, so an unstreamed guid never
 /// advances the call-order counter.

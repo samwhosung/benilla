@@ -76,7 +76,7 @@ pub(super) fn update_attachment(
 ) {
     // Transport attach/detach (decision 0438 phase 2). Attach when the walkable support is a
     // transport's collider — the boat's own hull, OR a deck prop's collider child (solid
-    // cargo, 0470): the walk resolves the support upward through the parent chain to the
+    // cargo): the walk resolves the support upward through the parent chain to the
     // Transport that owns it, so standing on a crate is standing on the boat. Detach when
     // support resolves to world geometry or we enter the water. Airborne keeps the current
     // attachment — [`carry`] keeps composing, so a jump above the deck is deck-frame

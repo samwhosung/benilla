@@ -7,7 +7,7 @@
 //! `QuestHandler.cpp:36-77`), never pushes, so every refresh point is the client's own to trigger,
 //! and a status that is never re-asked for is a marker frozen at first sight. The re-ask law —
 //! the reference's self-player descriptor **field watch**, and which of it we implement — is its
-//! own concern and lives in [`query`] (decisions 0650/0654). Answers land in [`QuestGiver`]'s
+//! own concern and lives in [`query`]. Answers land in [`QuestGiver`]'s
 //! per-guid status map (`net/apply`); THIS module is the render half: attach, scale, animate.
 //!
 //! The render law:
@@ -20,7 +20,7 @@
 //!   `UNIT_FIELD_MOUNTDISPLAYID` field-watch handler, so the reference re-runs the whole attach —
 //!   slot included — every time a unit mounts or dismounts. Our seat is *parented* rather than
 //!   read per frame, so re-picking means rebuilding the instance: [`sync_markers`] compares the
-//!   slot the seat was built at against the live pick on every pass (decision 1871).
+//!   slot the seat was built at against the live pick on every pass.
 //! - **Scale** (`0x607570`): `1 / |attach-bone basis|`, computed once at attach and baked into the
 //!   marker's base matrix (`marker+0xbc`). Not distance-based, not unit scale, no clamp or floor.
 //!
@@ -48,7 +48,7 @@
 //!   **benilla is case B by construction**: [`bake_seat_scale`] deliberately waits for propagation
 //!   to produce a settled joint matrix. **That is the right leg, and it is settled by observation,
 //!   not by argument** — the director ran the A/B against the reference and 1.12's `?` looks the
-//!   same as ours (decision 1548, closing 1541's open question). B301 is `not-a-bug`: a
+//!   same as ours (closing 1541's open question). B301 is `not-a-bug`: a
 //!   gnome-sized `?` over a building-sized NPC is what the real client shows too.
 //!
 //!   So do **not** "fix" this by dropping the counter-scale. The report is real, the case-A leg is
@@ -157,7 +157,7 @@ struct QuestMarkerRoot {
     seat: Option<Entity>,
     /// The overhead slot ([`overhead_slot`]) the live [`Self::seat`] was parented at — `None`
     /// until it is built. A parent link bakes the slot in, so this is what [`sync_markers`]
-    /// watches against the live pick to catch a mount or dismount moving it (decision 1871).
+    /// watches against the live pick to catch a mount or dismount moving it.
     slot: Option<u16>,
     /// The unit's body model resolved but authors NEITHER overhead attachment: the client's
     /// marker is created but never parented — invisible. Latched so we stop retrying.
@@ -337,7 +337,7 @@ fn build_markers(
     index: Res<GuidIndex>,
     anchors: Query<&BoneAttach>,
     // The unit's pose buffer: the overhead joint the marker parents under spawns on first
-    // demand (`RigPose::anchor_for`, decision 1355).
+    // demand (`RigPose::anchor_for`).
     mut poses: Query<&mut benilla_world::rig_anim::RigPose>,
     mounts: Query<(), With<crate::entities::mount::MountChild>>,
     time: Res<Time>,
@@ -349,7 +349,7 @@ fn build_markers(
         let Some(model) = m2s.get(&marker.handle) else {
             continue; // marker M2 still loading
         };
-        // The marker's render forms, built NOW (decision 0834): two tiny models per map, on the
+        // The marker's render forms, built NOW: two tiny models per map, on the
         // booth-lane exception — a marker popping a frame late over a questgiver would be a
         // regression nothing here needs.
         forms.ensure_now_rigged(&marker.handle, &model.submeshes, &mut mesh_assets);
@@ -397,7 +397,7 @@ fn build_markers(
         // made laziness the terrain-stream caller's policy, not the host's). A handful of
         // markers exist at once, so eager is the right spend; slot 0 (table full, warned)
         // falls back to the static mesh below exactly as before. `allocate_bones` — the
-        // collapsed shape (decision 1365): the world pass writes the rows off the host's
+        // collapsed shape: the world pass writes the rows off the host's
         // `RigPose`, no joint list exists.
         let marker_slot = host.as_ref().map_or(0, |h| {
             benilla_world::rig_palette::RigSkin::allocate_bones(
@@ -459,7 +459,7 @@ fn build_markers(
                 }
                 None => {
                     // Plain geometry under the seat: the skinned twin bound to the host's palette
-                    // rig when the model animates (the `!` bob — decision 0720); the static mesh
+                    // rig when the model animates (the `!` bob); the static mesh
                     // otherwise (capture mode keeps every marker static, like the doodad rail),
                     // including the palette-full fallback (slot 0).
                     let use_rig = marker_slot != 0;
@@ -490,7 +490,7 @@ fn build_markers(
                 }
             }
         }
-        // Attach the pose buffer, plus the seat-frame cascade marker (decision 1365): the
+        // Attach the pose buffer, plus the seat-frame cascade marker: the
         // marker host root is a rig's `joints_root` living inside the UNIT's anchor subtree, so
         // a patch walk that re-seats the overhead anchor must re-finalize the marker rig the
         // same frame (`RigFrame` — the mount seat's law, `finalize_rig_worlds`).
@@ -593,7 +593,7 @@ fn pose_markers(
 /// frame old is immaterial — bone basis length doesn't animate") was true about the *bone* and
 /// wrong about the *risk*: what varies between the two legs is not the bone, it is whether the
 /// parent's world matrix exists yet. We keep the settled read — it is the reference's intent, the
-/// only leg that is deterministic, and (decision 1548) the leg the reference was observed on.
+/// only leg that is deterministic, and the leg the reference was observed on.
 fn bake_seat_scale(
     mut seats: Query<(&mut MarkerSeat, &ChildOf, &mut Transform)>,
     joints: Query<&GlobalTransform, Without<MarkerSeat>>,

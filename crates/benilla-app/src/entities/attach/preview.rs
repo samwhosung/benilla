@@ -1,4 +1,4 @@
-//! The **tuple-driven character preview** builder (decisions 0423 + 0465, widened by 1060) — the
+//! The **tuple-driven character preview** builder (widened by 1060) — the
 //! entities-side half of every booth that shows a character nobody is standing in. It lives under
 //! `attach` so it can reuse the character body pipeline directly
 //! (`char_skin::build_char_skin_materials`, the geoset filter, the [`super::super::EntityPart`]
@@ -12,7 +12,7 @@
 //!   verbatim; a **Create** look resolves the (race, class, sex) starting outfit (CharStartOutfit,
 //!   decision 0527) into that array — so the create preview is geared exactly like a select body
 //!   (the ref's create screen dresses the model, not the underwear-only body decision 0423 assumed).
-//! - **The dressing room** ([`build_dressup_preview`], decision 1060): the *live player's* own body
+//! - **The dressing room** ([`build_dressup_preview`]): the *live player's* own body
 //!   and appearance, wearing their own visible items with the tried-on ones substituted in. That
 //!   substitution is the whole feature, and it is why the dressing room cannot mirror a world
 //!   entity's spawned children the way the paper doll does (`portrait::sync_body_booth`) — nobody
@@ -62,7 +62,7 @@ const ENUM_CLOAK: usize = 14;
 const ENUM_HELD: [usize; 3] = [15, 16, 17];
 
 /// Map an item's `InventoryType` to its equipment-slot index in the enum-shaped `[_; 19]` array
-/// (`EQUIPMENT_SLOT_*`), so a CharStartOutfit item (decision 0527) lands where the Select pipeline
+/// (`EQUIPMENT_SLOT_*`), so a CharStartOutfit item lands where the Select pipeline
 /// reads it — the render slots the compositor paints (helm 0 · shoulder 2 · shirt 3 · chest 4 ·
 /// waist 5 · legs 6 · feet 7 · wrist 8 · hands 9 · back 14 · tabard 18, `0x478cb0`)
 /// plus the held triple (main 15 · off 16 · ranged 17). `None` for a non-worn / non-rendered type
@@ -107,11 +107,11 @@ pub(in crate::entities) struct PreviewSpec {
     /// Worn **ItemDisplayInfo** ids by equipment slot (`EQUIPMENT_SLOT_*`) — no template hop; the
     /// caller has already resolved entries to displays.
     pub(in crate::entities) equipment: [CharEnumItem; 19],
-    /// The wearer's guild tabard (decision 1704), or `None` for no crest.
+    /// The wearer's guild tabard, or `None` for no crest.
     pub(in crate::entities) emblem: Option<benilla_formats::GuildEmblem>,
     /// `CHARACTER_FLAG_*` bits; only hide-helm / hide-cloak are read here.
     pub(in crate::entities) flags: u32,
-    /// **Whose held law this look follows** (decision 1076) — the one place the two previews
+    /// **Whose held law this look follows** — the one place the two previews
     /// genuinely differ, and a *verified* difference rather than a convenience.
     ///
     /// `false` — the **character-select mannequin** (`0x472950`), whose equipment loop skips
@@ -144,7 +144,7 @@ pub(in crate::entities) struct PreviewCtx<'a, 'w> {
     pub(in crate::entities) creatures: &'a Creatures,
     pub(in crate::entities) characters: Option<&'a Characters>,
     pub(in crate::entities) displays: Option<&'a mut ItemDisplays>,
-    /// The item/enchant glow chain (decision 0805): both previews resolve it themselves — the
+    /// The item/enchant glow chain: both previews resolve it themselves — the
     /// world's `resolve_equipment` never runs pre-world, and never runs for a look nobody wears.
     pub(in crate::entities) glows: Option<&'a mut ItemGlows>,
     pub(in crate::entities) sections: Option<&'a SkinSections>,
@@ -166,7 +166,7 @@ pub(in crate::entities) fn build_glue_preview(
     characters: Option<Res<Characters>>,
     char_create: Option<Res<CharCreate>>,
     mut displays: Option<ResMut<ItemDisplays>>,
-    // The item/enchant glow chain (decision 0805): the glue screens resolve it themselves — the
+    // The item/enchant glow chain: the glue screens resolve it themselves — the
     // world's `resolve_equipment` never runs pre-world.
     mut glows: Option<ResMut<ItemGlows>>,
     sections: Option<Res<SkinSections>>,
@@ -227,7 +227,7 @@ pub(in crate::entities) fn build_glue_preview(
 
     // The equipment, unified as an enum-shaped `[CharEnumItem; 19]` + display flags: a Select look
     // carries its roster record verbatim; a Create look resolves the (race, class, sex) starting
-    // outfit (CharStartOutfit, decision 0527) into the same slot array — each worn item at the
+    // outfit (CharStartOutfit) into the same slot array — each worn item at the
     // equipment slot its InventoryType maps to. Display ids are ItemDisplayInfo ids in both cases
     // (no template hop). A level-1 outfit carries no helm/cloak and there is no hide flag, so the
     // create preview's flags are 0 — the create body is dressed exactly like a geared select body.
@@ -257,7 +257,7 @@ pub(in crate::entities) fn build_glue_preview(
         hair_color,
         facial_hair,
         equipment,
-        // No crest at character select (decision 1704). `SMSG_CHAR_ENUM` carries a `guildId` but
+        // No crest at character select. `SMSG_CHAR_ENUM` carries a `guildId` but
         // not the five emblem indices, and there is no world session to `CMSG_GUILD_QUERY` with —
         // so a Guild Tabard on the mannequin wears its own `Tabard_A_05Default` art, which is what
         // the reference's own empty guild cache leaves it with too.
@@ -345,7 +345,7 @@ pub(in crate::entities) fn build_glue_preview(
     state.built = true;
 }
 
-/// Assemble the **dressing room**'s look (decision 1060) — the same law as the glue driver above,
+/// Assemble the **dressing room**'s look — the same law as the glue driver above,
 /// over a look whose equipment [`crate::ui_dressup`] composed from the player's own visible items
 /// plus the tried-on substitutions. The body display is the player's own, so it is already built
 /// (they are standing in the world); an ITEM model still has to load, which is what the retry latch
@@ -400,7 +400,7 @@ pub(in crate::entities) fn build_dressup_preview(
         facial_hair: look.facial_hair,
         equipment: look.equipment,
         emblem: look.emblem,
-        // **No hide flags here, because the hiding already happened upstream** (decision 1472).
+        // **No hide flags here, because the hiding already happened upstream**.
         // The dressing room DOES honour show-helm/show-cloak — byte-verified: `SetUnit 0x476cb0`
         // clones the live player's per-bodyslot display pointers, so a suppressed piece is not in
         // what is cloned — but a TRY-ON must preview the helm regardless, and only
@@ -408,7 +408,7 @@ pub(in crate::entities) fn build_dressup_preview(
         // So it applies the preference there, per slot, and hands us an already-correct array;
         // re-applying a flag mask over it here would hide the very item being previewed.
         flags: 0,
-        // The widget's law, not the mannequin's (decision 1076). Unconditional, because the ranged
+        // The widget's law, not the mannequin's. Unconditional, because the ranged
         // slot of a dressing-room look is only ever filled by a TRY-ON: `crate::ui_dressup` leaves
         // a worn ranged weapon out, since the reference's Dress()/SetUnit clones the live world
         // model and a ranged weapon shows there only while ranged-drawn.
@@ -638,7 +638,7 @@ fn assemble(spec: &PreviewSpec, ctx: &mut PreviewCtx<'_, '_>) -> Option<Assemble
         for w in &held {
             ensure_item_model(d, w.display, w.kind, ctx.asset_server);
         }
-        // The glow ids (decision 0805), and the models they imply: **held weapons/shields only**
+        // The glow ids, and the models they imply: **held weapons/shields only**
         // — the reference passes a display's visual from the hand attach and a literal `0` from
         // the helm/shoulder ones (`crate::entities::item_glow`). The world lane resolves this in
         // `resolve_equipment`, which never runs pre-world.
@@ -744,7 +744,7 @@ fn assemble(spec: &PreviewSpec, ctx: &mut PreviewCtx<'_, '_>) -> Option<Assemble
 
     // The riders: each want's item-model parts seated at the body's attach point (bone + offset),
     // the world path's `PortraitRider` shape — plus, for a held weapon, the glows its display's
-    // `ItemVisuals` id hangs on the weapon's OWN attachment points (decision 0805). The reference
+    // `ItemVisuals` id hangs on the weapon's OWN attachment points. The reference
     // reaches those through the same primitive here as in the world (`0x472c91` → `0x47a0c0`
     // hands `ItemDisplayInfo+0x58` to `0x4798c0`), so a permanently-glowing weapon glows on the
     // select screen too; the enum carries no enchant ids (vmangos `BuildEnumData` sends displayId
@@ -754,7 +754,7 @@ fn assemble(spec: &PreviewSpec, ctx: &mut PreviewCtx<'_, '_>) -> Option<Assemble
     // the batches with no billboard flag and dropped everything else on the floor, so at character
     // select a worn item's own **effects** (its emitters, its camera-facing batches) simply did not
     // exist. The R14 PVP shoulders' sparkle is the item
-    // model's own emitters (decision 0813), and no part of it reached the booth. So each want
+    // model's own emitters, and no part of it reached the booth. So each want
     // contributes up to four things at one seat: plain meshes ([`PreviewRider`]), camera-facing
     // batches ([`PreviewBillboard`]), its emitters ([`PreviewEffects`]), and — held weapons only —
     // the same three off each glow model its `ItemVisuals` names.
@@ -802,8 +802,8 @@ fn assemble(spec: &PreviewSpec, ctx: &mut PreviewCtx<'_, '_>) -> Option<Assemble
                     }),
                 }
             }
-            // The item model's OWN particle emitters — the R14 PVP pauldron's `SPARKLE` twinkle
-            // (decision 0813), the held torch's flame. 95 `Item\` models hang one on a
+            // The item model's OWN particle emitters — the R14 PVP pauldron's `SPARKLE` twinkle,
+            // the held torch's flame. 95 `Item\` models hang one on a
             // billboard bone alone; the booth spawns them off a host at the attach point, each
             // billboard-chain emitter through a booth-camera frame.
             if !item.emitters.is_empty() {
@@ -888,7 +888,7 @@ fn assemble(spec: &PreviewSpec, ctx: &mut PreviewCtx<'_, '_>) -> Option<Assemble
 /// One wanted rider model: which display + model kind, the body attach point it seats on, and —
 /// filled in by the caller once the display catalog is in hand — the `ItemVisuals` id its glow
 /// comes from (`0` for everything that never glows: helm, shoulders, and any weapon whose display
-/// authors none). Decision 0805.
+/// authors none).
 struct HeldWant {
     display: u32,
     kind: ItemModelKind,
@@ -906,7 +906,7 @@ struct HeldWant {
 /// (INVTYPE_HOLDABLE) rides the same hand law — the reference confirms it at `0x47a0c0` for
 /// weapons/shields only, and the world's held placement is the natural reading for the rest.
 ///
-/// **`ranged_in_hand` is the dressing room's departure from that** (decision 1076): the dress-up
+/// **`ranged_in_hand` is the dressing room's departure from that**: the dress-up
 /// widget does *not* skip the ranged slot, and installs it at a hand. That is the same mapping
 /// [`placement`]'s **ranged-drawn** arm already carries, so the flag simply chooses which sheath
 /// state the ranged slot is asked with — the melee pair is always asked drawn.
@@ -948,7 +948,7 @@ fn held_wants(
         // Per-slot, because the two arms want opposite sheath states: the melee pair yields while
         // melee-drawn (1), the ranged slot only while ranged-drawn (2). The mannequin asks every
         // slot drawn-melee, which is its own ranged skip; the dressing room asks the ranged slot
-        // drawn-ranged, which is the widget's hand install (decision 1076).
+        // drawn-ranged, which is the widget's hand install.
         let unit_sheath = if held_slot == 2 && ranged_in_hand {
             2
         } else {
@@ -1058,7 +1058,7 @@ pub(in crate::entities) fn build_glue_pet(
     preview: Res<GluePreview>,
     mut bake: ResMut<GluePetBake>,
     creatures: Option<Res<Creatures>>,
-    // The `CreatureFamily` size ramp (decision 1538) — the pet's scale is its family's, read at its
+    // The `CreatureFamily` size ramp — the pet's scale is its family's, read at its
     // level. Absent (the DBC failed to load) ⇒ every pet falls back to its display's own scale
     // product, which is the reference's own family-miss fallthrough.
     families: Option<Res<crate::ui_pet_stats::PetFamilyTables>>,
@@ -1254,7 +1254,7 @@ mod tests {
         );
     }
 
-    /// **The bug the imp filed** (decision 1539): a pet is a *creature* display, and creature models
+    /// **The bug the imp filed**: a pet is a *creature* display, and creature models
     /// routinely author their own particle emitters — the Imp's three flame jets, the Voidwalker's
     /// four smoke plumes. `assemble_pet` read `parts` and nothing else, so they never reached the
     /// booth and the select screen stood a grey imp beside the warlock.
@@ -1370,7 +1370,7 @@ mod tests {
         }
     }
 
-    /// **The two held laws, side by side** (decision 1076). The character-select mannequin skips
+    /// **The two held laws, side by side**. The character-select mannequin skips
     /// `EQUIPMENT_SLOT_RANGED` outright (`0x472bfe`); the dressing-room widget installs it at a
     /// hand, by the world's own split — bow (INVTYPE_RANGED 15) to HandLeft, gun/crossbow/wand
     /// (26) and thrown (25) to HandRight.

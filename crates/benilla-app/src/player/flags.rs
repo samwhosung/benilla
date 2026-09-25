@@ -2,7 +2,7 @@
 //! every frame and then read by three different consumers, which is the whole reason it is built
 //! in one place: the animation selector, the outbound `MSG_MOVE_*` stream, and the local gates
 //! (the sit refusal, the cast self-cancel) must never disagree about what the avatar is doing
-//! (decision 0056 — the wire mirrors the avatar's actual motion).
+//! (the wire mirrors the avatar's actual motion).
 //!
 //! Two words come out, and the difference between them is verified, not cosmetic: the **wire**
 //! word keeps the direction bits live mid-air (the 1.12.1 sniff proves the real client's do), while
@@ -71,7 +71,7 @@ pub(super) fn this_frame(
     // arc (animation-only — it is masked off before going on the wire, see the send block).
     // **Every granted mover mode rides every packet**, in or out of the water — the reference's
     // builder reads the one `[cmov+0x40]` the server's merge wrote them into, so it echoes back
-    // whatever was granted for free (decisions 0726, 0866). Ours has to put them back
+    // whatever was granted for free. Ours has to put them back
     // explicitly, because this word is rebuilt from state each frame; drop one and the server
     // forgets the mode, then the next server-authored move echoes a mode-less word back and
     // clears it under us. Root rides too — moving bits are what must not accompany it, and
@@ -84,8 +84,8 @@ pub(super) fn this_frame(
         // Swimming: `MOVEFLAG_SWIMMING` (the swim-pitch tail rides with it) plus the travel-direction
         // bits the swim gait selector cascades on (`0x5fd100`: turn→41, strafe→43/44, back→45,
         // fwd→42, idle→41). The bits mirror the NET swim amounts that actually drive the mover —
-        // one source, so a rooted or key-cancelled swimmer can't stream a phantom direction
-        // (decision 0056). Space sets nothing here — its whole swim role is the jump-exit,
+        // one source, so a rooted or key-cancelled swimmer can't stream a phantom direction.
+        // Space sets nothing here — its whole swim role is the jump-exit,
         // which runs the breach arm (`0x7c6230`). No FALLING, no airborne bookkeeping: the
         // arc state is cleared so leaving the water starts a clean walk/fall from rest.
         move_flags_now |= move_flags::SWIMMING;
@@ -113,7 +113,7 @@ pub(super) fn this_frame(
         }
         // Straight off the netted strafe axis, so a cancelled press pair streams NO strafe bit —
         // the two are mutually exclusive on the wire, and both-set is silently dropped by the
-        // server (decision 0622).
+        // server.
         match axes.side.signum() {
             -1 => move_flags_now |= move_flags::STRAFE_LEFT,
             1 => move_flags_now |= move_flags::STRAFE_RIGHT,
@@ -130,7 +130,7 @@ pub(super) fn this_frame(
         // Airborne (a jump or a step-off a ledge) — the caller's hoisted value. The arc's
         // snapshot / far-latch / landing edges live in [`Player::advance_airborne_arc`] (a
         // fresh jump is always a NEW arc, even a same-frame land+relaunch — see there). FALLING
-        // also rides the wire (decision 0053), so observers replay it.
+        // also rides the wire, so observers replay it.
         let arc = player.advance_airborne_arc(airborne, jumped, now, launch_y);
         landed = arc.landed;
         if airborne {
@@ -150,7 +150,7 @@ pub(super) fn this_frame(
                 player.airborne_dirs = move_flags_now & move_flags::ANY_MOVE;
             }
             // FALLINGFAR (latched by `advance_airborne_arc` above — the exclusive distance/timer
-            // legs, decision 0179) rides the live flags: the mid-air Fall(40) pose, the
+            // legs) rides the live flags: the mid-air Fall(40) pose, the
             // landing-anim gate, and the wire (heartbeats carry it; the axis differ ignores it).
             if player.fall_far {
                 move_flags_now |= move_flags::FALLING_FAR;
@@ -160,15 +160,15 @@ pub(super) fn this_frame(
         // so it has no locomotion to report — clear the flags so we never stream a phantom walk/turn
         // the server would extrapolate onto observers while we sit on the settle. The frozen position
         // was already reported by the teleport Stop; a facing change still streams a harmless
-        // SET_FACING. The same bitset drives the local animation (0052), so this also keeps the
-        // held avatar idle rather than moonwalking in place. (Decision 0056 — the wire mirrors the
+        // SET_FACING. The same bitset drives the local animation, so this also keeps the
+        // held avatar idle rather than moonwalking in place. (the wire mirrors the
         // avatar's actual motion.)
         if held {
             move_flags_now = 0;
         }
     }
     // **The walk gait rides every packet** — `MOVEFLAG_WALK_MODE` `0x100`, latched by the
-    // `TOGGLERUN` keybind ([`super::walk`], decision 1752). Deliberately OUTSIDE the branches
+    // `TOGGLERUN` keybind ([`super::walk`]). Deliberately OUTSIDE the branches
     // above, and after the settle's `move_flags_now = 0`: this is a MODE, not a motion. The
     // settle's wipe exists so a frozen avatar reports no locomotion, and clearing the walk bit
     // with it would tell the server we went back to running — a spurious SET_RUN_MODE, then a
@@ -179,7 +179,7 @@ pub(super) fn this_frame(
     if player.walking {
         move_flags_now |= move_flags::WALK_MODE;
     }
-    // **A knockback arc streams FORWARD for its whole length** (decision 1740). The reference's
+    // **A knockback arc streams FORWARD for its whole length**. The reference's
     // apply plants it as part of the launch (`0x6179c0`'s `0x617a18 or edx,0x8001` — set bit 0,
     // clear bit 1) and nothing clears it until the arc ends, and the send mask
     // (`0x618909 and edx,0x75a07dff`) keeps bit 0, so observers see it. It is also the mechanism
@@ -192,8 +192,8 @@ pub(super) fn this_frame(
     // The two incapacitate suppressions — the translate predicate down drops the direction bits,
     // the turn predicate down drops the turn bits — applied to the whole word in one place,
     // whichever branch built it, and with the reference's byte trail in
-    // [`state::incapacitated_flags`] (decision 0880). Death drops both, through the precondition
-    // the two predicates share (decision 1753), so a corpse streams a bare word.
+    // [`state::incapacitated_flags`]. Death drops both, through the precondition
+    // the two predicates share, so a corpse streams a bare word.
     move_flags_now = state::incapacitated_flags(move_flags_now, !may_translate, !may_turn);
     // Riding a transport: the ON_TRANSPORT bit rides every packet with its local-pose tail
     // (built at the send). Set from the POST-attach state so flag and tail agree the
@@ -241,7 +241,7 @@ mod tests {
         }
     }
 
-    /// **Walk mode is a MODE, so it survives everything that clears locomotion** (decision 1752).
+    /// **Walk mode is a MODE, so it survives everything that clears locomotion**.
     /// Three states that each wipe or narrow the word, and the bit must be in both the wire and
     /// the pose word out of every one of them:
     ///
@@ -273,7 +273,7 @@ mod tests {
                 held,
                 false,
                 // The two predicates, as this case's root and stun leave them — the body is alive,
-                // so each is simply its own term (decision 1753).
+                // so each is simply its own term.
                 !rooted,
                 !stunned,
                 1.0,
@@ -328,7 +328,7 @@ mod tests {
         assert_eq!(f.wire & move_flags::WALK_MODE, 0);
     }
 
-    /// **A knockback arc streams FORWARD for its whole length** (decision 1740). The reference's
+    /// **A knockback arc streams FORWARD for its whole length**. The reference's
     /// apply plants the bit as part of the launch (`0x6179c0`'s `0x617a18 or edx,0x8001` — set bit
     /// 0, clear bit 1) and only the arc's end clears it; the send mask
     /// (`0x618909 and edx,0x75a07dff`) keeps bit 0, so observers get it on every packet of the

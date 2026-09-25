@@ -1,4 +1,4 @@
-//! Selection **by name** — the shared resolver behind `/target` and `/assist` (decision 0886).
+//! Selection **by name** — the shared resolver behind `/target` and `/assist`.
 //!
 //! The reference has ONE resolver, `0x493aa0`, parameterised per caller; `/target`, `/assist` and
 //! `/follow` are the same search with different arguments:
@@ -503,7 +503,7 @@ pub(super) fn assist_requests(
 }
 
 /// Drain `/follow [name]`: resolve the subject and hand it to [`crate::player`], which owns the
-/// motion (decision 0890). Nothing goes on the wire — follow is client-side movement only.
+/// motion. Nothing goes on the wire — follow is client-side movement only.
 ///
 /// The two forms differ in how the subject is **found** — a name goes through the resolver with
 /// the reference's filter mode 2 (players only, alive and assistable), a token takes whatever it

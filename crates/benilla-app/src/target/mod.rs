@@ -29,7 +29,7 @@
 //! dispatch that would have chosen a cursor never runs. It is the **same predicate** the selection
 //! commit runs (`0x60be60`, reached there through the `+0x58` thunk), not a second rule: no
 //! tooltip, no cursor, no brighten, no click. The pick itself reads no unit field — the flagged
-//! unit is a candidate and wins — which is why this is a grader and not a filter (decision 2060).
+//! unit is a candidate and wins — which is why this is a grader and not a filter.
 //!
 //! The mouseover/target "light-up" has two consumers: the per-model **emissive lift**
 //! ([`highlight`], the byte-verified additive term) and the V-plate's reaction-tinted **glow**
@@ -57,7 +57,7 @@ use benilla_world::interact::{WorldClick, WorldRightClick};
 use benilla_world::schedule::WorldStage;
 
 mod by_name;
-// `pub(crate)` for the chest live probe alone (decision 1471): it resolves a GameObject's
+// `pub(crate)` for the chest live probe alone: it resolves a GameObject's
 // right-click action through the very same [`click::resolve_go_action`] the mouse does, rather
 // than re-deciding lockless-vs-opener itself — an instrument that guesses the packet is testing
 // its own guess (`probe_book`'s pattern: drive the click's own route, never a parallel one).
@@ -125,12 +125,12 @@ pub(crate) use flash::CombatFlash;
 // the frame it was pressed carrying the acquired guid, so it cannot go round through a request.
 pub(crate) use relations::{can_assist, can_attack, can_interact};
 pub(crate) use scan::{attack_order_target, AttackNearestRequest, TargetScan};
-// The chat layer's by-name selection asks (`/target`, `/assist` — decision 0886), answered by the
+// The chat layer's by-name selection asks (`/target`, `/assist`), answered by the
 // shared resolver the reference parameterises per caller.
 pub(crate) use by_name::{AssistRequest, TargetByNameRequest};
 // The byte-verified reaction decode + its faction catalog, reused by the unit-frame feed to tint the
 // target's name plate (`TargetFrame_CheckFaction`) the same way the selection ring colours itself.
-// `duel_rung` is the diagnostic face of the same walk, for `/reaction` (decision 0637).
+// `duel_rung` is the diagnostic face of the same walk, for `/reaction`.
 pub(crate) use ring::{duel_rung, ring_reaction, ring_variant, Factions, RingVariant};
 
 pub(crate) use click::DeselectGuid;
@@ -168,7 +168,7 @@ pub(crate) struct Hovered {
     /// arbiter picks the nearer of the character pick vs. a hovered GameObject ([`go_is_nearest`]),
     /// the reference's single nearest-CGObject pick.
     pub(crate) distance: f32,
-    /// The hovered **corpse object** (decision 1723) — a streamed body with a guid and a character
+    /// The hovered **corpse object** — a streamed body with a guid and a character
     /// model that is nonetheless not a unit: the reference's `CGCorpse_C` fills the interact slot
     /// `+0x60` with its own `0x5d6bf0`, never `SetTarget`. Read by the cursor classifier's corpse
     /// leg and the right-click corpse route; deliberately invisible to everything that means
@@ -196,8 +196,8 @@ impl Hovered {
     }
 }
 
-/// The **GameObject** under the cursor this frame — the interaction arc's separate hover authority
-/// (decision 0236), kept out of the byte-verified unit [`Hovered`] path because a GameObject is
+/// The **GameObject** under the cursor this frame — the interaction arc's separate hover authority,
+/// kept out of the byte-verified unit [`Hovered`] path because a GameObject is
 /// *usable but never selected*. Filled by [`hover::update_hovered_object`] (a GO-only mesh-ray pick);
 /// read by the cursor classifier (the Interact gear) and the right-click USE action. Both compose it
 /// with the unit hover by [`go_is_nearest`] — a GO acts only when it is the nearer object.
@@ -220,8 +220,8 @@ pub(crate) struct HoveredObject {
 pub(crate) struct PickOcclusion {
     pub(crate) distance: f32,
     /// The hit itself — the world-space point `distance` names along the cursor ray, or `None`
-    /// with no hit (sky, mouselook, no cursor). The ground-targeting machine's hover/commit point
-    /// (decision 0792): the same world trace the reference's targeting position rides.
+    /// with no hit (sky, mouselook, no cursor). The ground-targeting machine's hover/commit point:
+    /// the same world trace the reference's targeting position rides.
     pub(crate) point: Option<Vec3>,
 }
 
@@ -246,7 +246,7 @@ impl Default for PickOcclusion {
 /// benilla had no latch — every click consumer read the *live* hover, which
 /// [`hover::update_hover`] clears outright the moment a look session engages. So the release found
 /// an empty hover and [`click::select_on_click`] fell into its deselect arm: a drag didn't merely
-/// fail to select, it would have **cleared** the target (decision 1122, ledger B226).
+/// fail to select, it would have **cleared** the target (ledger B226).
 ///
 /// Note this is a *different* thing from the hover highlight, which the reference **does** suppress
 /// during freelook (`0x483e80` sets the WorldFrame cursor-suppress bit `[wf+0x38c]&2`, tested by the
@@ -256,7 +256,7 @@ impl Default for PickOcclusion {
 /// Written by [`latch_press_pick`] at the head of the target chain, which runs **before**
 /// [`hover::update_hover`] can clear anything, so the values it copies are the pick as of the press.
 ///
-/// **Both buttons read it** (decision 2230). 1122 built this for the left button and left
+/// **Both buttons read it**. 1122 built this for the left button and left
 /// [`click::act_on_right_click`] on the live hover, where it appeared to work only because the
 /// release frame re-picks at the restored cursor and — for a body click that moved nothing —
 /// lands back on the same unit. It is not the same pick: the plate case has no body under the
@@ -351,12 +351,11 @@ pub(crate) struct SelectionRadius(pub(crate) f32);
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct TargetUpdate;
 
-/// The click-behavior player knob (decision 0961): `deselectOnClick` is 1.12's own CVar behind
+/// The click-behavior player knob: `deselectOnClick` is 1.12's own CVar behind
 /// the "Sticky Targeting" Interface Options checkbox (inverted there AND in era — checked means
 /// the CVar at 0). Default true = the reference default: an empty-world click clears the
 /// target, which is exactly the behavior [`click::select_on_click`] shipped with (0571/0574's
-/// terrain/nothing legs); the knob only makes its gate player-settable through the CVar store
-/// (0954).
+/// terrain/nothing legs); the knob only makes its gate player-settable through the CVar store.
 #[derive(Resource)]
 pub(crate) struct ClickConfig {
     pub(crate) deselect_on_click: bool,
@@ -388,7 +387,7 @@ impl Default for ClickConfig {
 #[derive(Resource, Default)]
 pub(crate) struct AssistAttack(pub(crate) bool);
 
-/// The targeting rows' change callback (decision 2303): two flags.
+/// The targeting rows' change callback: two flags.
 pub(crate) fn on_cvar(
     ev: On<crate::cvars::CvarChanged>,
     mut click: ResMut<ClickConfig>,
@@ -432,7 +431,7 @@ impl Plugin for TargetPlugin {
             )
             // All after input (so this frame's `WorldClick` from `player::control` is available), in
             // order: refresh the hovered unit, resolve its context cursor, route the right-click
-            // cursor-payload leg (decisions 0571 + 0574), let a click select it, handle Esc,
+            // cursor-payload leg, let a click select it, handle Esc,
             // drain the UI's `TargetUnit` requests (the PlayerFrame self-target), then the
             // selection writers that don't come from the mouse (the auto-acquires + TAB), then
             // the flash verdict and the ring off the frame's final selection.
@@ -441,7 +440,7 @@ impl Plugin for TargetPlugin {
                 (
                     // Grouped as one element (the outer chain is at Bevy's 20-tuple limit), and
                     // ordered: the latch FIRST, ahead of every pick refresh, to freeze what the
-                    // press was over while it still exists (decision 1122 — see [`latch_press_pick`]).
+                    // press was over while it still exists (see [`latch_press_pick`]).
                     (latch_press_pick, hover::update_pick_occlusion).chain(),
                     hover::update_hover,
                     hover::update_hovered_object,
@@ -450,7 +449,7 @@ impl Plugin for TargetPlugin {
                     // 0792): the frame the press lands, the cursor drive below already reads
                     // the mode cleared and the classifier's verdict stands.
                     crate::spell::targeting::cancel_targeting_on_right_press,
-                    // The ground-targeting pre-empt (decision 0792): overwrites the classifier's
+                    // The ground-targeting pre-empt: overwrites the classifier's
                     // verdict while the targeting cursor is up — the ref's dispatcher runs this
                     // branch before the object classifier; last-writer-wins reads the same.
                     crate::spell::targeting::drive_targeting_cursor,
@@ -464,7 +463,7 @@ impl Plugin for TargetPlugin {
                     // AFTER the gated select (which holds while the mode is active): the commit
                     // may clear the mode, and the selection gate must have read it first. The two
                     // world legs are siblings, not a fallback chain — the pending spell's word
-                    // decides which of them a click can even feed (decision 0939), so their order
+                    // decides which of them a click can even feed, so their order
                     // relative to each other never matters.
                     crate::spell::targeting::commit_ground_cast_on_click,
                     crate::spell::targeting::commit_object_cast_on_click,
@@ -473,19 +472,19 @@ impl Plugin for TargetPlugin {
                     // The two unit-token drains, grouped as one element (the outer chain is at
                     // Bevy's 20-tuple limit): the selection asks' commit (`TargetUnit`,
                     // `AssistUnit`, `TargetLastEnemy` — one queue, one drain, as the reference has
-                    // one `0x489a40`), and `DropItemOnUnit`'s pet-leg feed (decision 1055).
+                    // one `0x489a40`), and `DropItemOnUnit`'s pet-leg feed.
                     // Independent of each other — one writes `Selection`, the other sends a cast —
                     // so they need no order.
                     (
                         click::selection_requests,
                         crate::ui_action::drop_item::drop_item_on_unit,
                     ),
-                    // The chat layer's by-name asks (decision 0886), beside the UI's token asks:
+                    // The chat layer's by-name asks, beside the UI's token asks:
                     // both are non-mouse selection writers committing through `scan::commit`.
                     // The chat layer's by-name asks, grouped as one chained element (the outer
                     // chain is at Bevy's 20-tuple limit): `/target` and `/assist` commit through
                     // `scan::commit` like every other non-mouse selection writer, and `/follow`
-                    // resolves its subject for `crate::player` to move (decision 0890) without
+                    // resolves its subject for `crate::player` to move without
                     // touching `Selection` at all.
                     (
                         by_name::target_by_name_requests,
@@ -558,7 +557,7 @@ mod tests {
         assert!(go_is_nearest(&hov(true, 10.0), &obj(true, 4.0)));
         assert!(!go_is_nearest(&hov(true, 4.0), &obj(true, 10.0)));
         assert!(!go_is_nearest(&hov(true, 5.0), &obj(true, 5.0)));
-        // A hovered CORPSE competes on exactly the same terms as a unit (decision 1723): it is the
+        // A hovered CORPSE competes on exactly the same terms as a unit: it is the
         // other slot of the same pick, so it keeps the click from a farther or tied GameObject and
         // yields only to a strictly nearer one.
         assert!(!go_is_nearest(&corpse(true, 5.0), &obj(false, 0.0)));

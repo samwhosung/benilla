@@ -19,7 +19,7 @@ use super::*;
 /// Camera + avatar controller. Free-flies until the server reports our position; then takes
 /// third-person control (WASD walks the avatar; right-drag turns it, left-drag orbits the camera,
 /// wheel zooms) and streams our movement to the server as the confirmed mover. The dev chord + `F`
-/// toggles free-fly (decision 1043).
+/// toggles free-fly.
 #[allow(clippy::type_complexity)]
 pub(super) fn control(
     time: Res<Time>,
@@ -28,7 +28,7 @@ pub(super) fn control(
     // Nested into one param to stay within Bevy's 16-element system-param tuple limit. (The
     // scroll wheel left this tuple with 0997: zoom reads the CAMERAZOOM bindings now.)
     // The pointer's motion this frame + the camera knobs that scale what it does with it — the
-    // two look/zoom knobs and the auto-follow style (decision 1493). Bundled because a Bevy system
+    // two look/zoom knobs and the auto-follow style. Bundled because a Bevy system
     // takes at most 16 parameters and this one is at the ceiling — the grouping is the existing
     // `mouse` tuple, widened rather than a seventeenth argument.
     pointer: (
@@ -36,7 +36,7 @@ pub(super) fn control(
         Res<camera::LookConfig>,
         Res<camera::ZoomLimit>,
         Res<camera::FollowConfig>,
-        // The four 1.12 camera option toggles and their numeric siblings (decision 2149).
+        // The four 1.12 camera option toggles and their numeric siblings.
         Res<camera_dynamics::CameraOptions>,
         // `nearclip`/`farclip` (2163) — the camera's own clip pair. Only the near half is read
         // here, for the self-avatar fade's reference plane; the far half is the wall's, read by
@@ -45,14 +45,14 @@ pub(super) fn control(
     ),
     // The net bridge, bundled into one param (16-param limit): the outbound command channel + the
     // inbound teleport/worldport messages `apply_net_updates` wrote earlier this frame
-    // (WorldStage::Net), + the sheath-setter queue (the Z toggle's request — decision 0080).
+    // (WorldStage::Net), + the sheath-setter queue (the Z toggle's request).
     mut net: (
         Res<NetCommands>,
         MessageReader<TeleportMessage>,
         MessageReader<WorldportMessage>,
         MessageWriter<crate::creature_anim::SheathRequest>,
         MessageReader<crate::net::SpeedChangeMessage>,
-        // The ack'd movement-mode family (decisions 0308, 0866): root / water-walk / feather-fall /
+        // The ack'd movement-mode family: root / water-walk / feather-fall /
         // hover, granted on our mover — applied to `player.modes` and acked here with the live pose.
         MessageReader<crate::net::MoveModeMessage>,
         // The landing report for the client-side hard-landing predictor (`0x602d00` — wound
@@ -64,26 +64,26 @@ pub(super) fn control(
         // The mounted space-bar flourish (decision 0441 P2): our own MountSpecial(94) plays
         // locally at send time; the net drain self-suppresses any broadcast echo.
         MessageWriter<crate::creature_anim::MountFlourish>,
-        // A `MSG_MOVE_*` the server addressed to our OWN mover (decision 0725) — a pose it wrote,
+        // A `MSG_MOVE_*` the server addressed to our OWN mover — a pose it wrote,
         // with no handshake and no ack owed. `wire_in` snaps to it.
         MessageReader<crate::net::SelfMoveMessage>,
-        // The posture queue (decision 0881): `/sit` and its family ask here; the X key is read
+        // The posture queue: `/sit` and its family ask here; the X key is read
         // inline in [`super::posture`]. One setter, either way.
         MessageReader<StandStateRequest>,
-        // The possession handoff (B211): control of a unit granted or revoked. Lands here rather
+        // The possession handoff: control of a unit granted or revoked. Lands here rather
         // than at the net drain because both answers it needs — the mover claim and the parting
         // pose — are the controller's to give.
         MessageReader<crate::net::ClientControlMessage>,
-        // A knockback the server aimed at our mover (decision 1702) — `wire_in` latches it, the
+        // A knockback the server aimed at our mover — `wire_in` latches it, the
         // take-off site below flies it, and the movement stream acks it with the post-launch pose.
         MessageReader<crate::net::KnockBackMessage>,
         // The tutorial system's world-input sites (1976): Movement acknowledged + the 10 s
         // Targeting popup on a movement input, Cameras acknowledged on a mouse-look.
         crate::tutorial::InputHooks,
-        // The loot window's move-start close (decision 2097): the reference's movement-START
+        // The loot window's move-start close: the reference's movement-START
         // guard `0x60e990`, reported here beside the cast bar's edge and consumed by `ui_loot`.
         ResMut<crate::ui_loot::LootMoveStart>,
-        // The server's own stand state for our body (decision 2339): `SMSG_STANDSTATE_UPDATE`,
+        // The server's own stand state for our body: `SMSG_STANDSTATE_UPDATE`,
         // applied through the posture setter's local half — ungated, nothing sent back.
         MessageReader<super::ServerStandState>,
     ),
@@ -94,15 +94,15 @@ pub(super) fn control(
         Res<InspectMode>,
         Res<crate::ui_script::UiKeyboardCapture>,
         Res<crate::ui_script::PlayerUiClickConsumed>,
-        // The binding dispatch (decision 0997): every rebindable input below reads command
+        // The binding dispatch: every rebindable input below reads command
         // state from here — raw `keys` remain only for the dev chord's free-fly toggle
-        // (decision 1043) and the look-session mouse.
+        // and the look-session mouse.
         Res<crate::bindings::BindingsState>,
-        // What the camera orbits, when that is not our body ([`view_subject`], B151). Resolved by
+        // What the camera orbits, when that is not our body ([`view_subject`]). Resolved by
         // a system ordered just before us, because `control` holds the self `Transform` mutably
         // and so cannot also read the far-sight object's.
         Res<view_subject::ViewSubject>,
-        // Our own guid — the control handoff (B211) is a statement about *some* unit, and telling
+        // Our own guid — the control handoff is a statement about *some* unit, and telling
         // "the server revoked my body" from "the server handed me a creature" is exactly this test.
         Res<crate::net::SelfGuid>,
         // The spyglass scope ([`scoped_view`]): while held, the rig is pinned to first person and
@@ -116,7 +116,7 @@ pub(super) fn control(
     mut commands: Commands,
     mut player: ResMut<Player>,
     mut rig: ResMut<CameraControl>,
-    // Avian's kinematic move-and-slide: sweeps the capsule against the streamed colliders (decision 0009).
+    // Avian's kinematic move-and-slide: sweeps the capsule against the streamed colliders.
     collide: benilla_world::collision::WorldCollision,
     mut cameras: Query<(&mut Transform, &mut FlyCam), With<Camera>>,
     // **The body in our hands** — see [`BodyQuery`] for what rides on it and why a possessed
@@ -124,9 +124,9 @@ pub(super) fn control(
     mut body: BodyQuery,
     window: Single<(&mut Window, &mut CursorOptions), With<PrimaryWindow>>,
     // Clicks go out here — left for the target picker, right for the context action (attack) — and
-    // the third is the right button's raw DOWN edge (targeting's cancel, decision 0792). A press
+    // the third is the right button's raw DOWN edge (targeting's cancel). A press
     // engages its camera look *and* arms a click test; the release settles that test on the
-    // reference's time/travel predicate, so one gesture can orbit and select both (decision 1122).
+    // reference's time/travel predicate, so one gesture can orbit and select both.
     // The locals hold each button's pending [`camera::PressGesture`] (`None` = no press pending).
     mut world_clicks: (
         MessageWriter<WorldClick>,
@@ -141,7 +141,7 @@ pub(super) fn control(
     // swim mode + buoyant float ask the liquid through (see [`swim`]), the armed transports (the
     // platform-frame carry/attach — decision 0438 phase 2; `Without`s only disjoint the borrows),
     // and the parent chain (the attach walk resolves a deck prop's collider child to the
-    // transport that owns it — solid cargo, 0470).
+    // transport that owns it — solid cargo).
     world_q: (
         benilla_world::world_point::WorldPoint,
         TransportQuery,
@@ -169,7 +169,7 @@ pub(super) fn control(
     let self_guid = speed_capsule.7 .0;
     let scoped = &speed_capsule.8;
     let covered = speed_capsule.9.covering();
-    // The auto-follow knobs (decisions 1493/1502), with far sight's one exception folded in here so
+    // The auto-follow knobs, with far sight's one exception folded in here so
     // both camera seats below agree: while the rig orbits somebody ELSE's body (Mind Vision, Sentry
     // Totem), our own facing is not what "behind" means, so the return is forced off rather than
     // reeling that camera toward a heading with nothing to do with the view.
@@ -194,9 +194,9 @@ pub(super) fn control(
     // key, whose business is that key's binding, not whether a dev free-cam may read WASD. The free-fly
     // chord below is deliberately outside it, like every dev chord ([`modkeys::dev_chord`]).
     let typing = ui_capture.typing;
-    // The rebindable inputs all read `binds` (decision 0997): the dispatch already enforced the
+    // The rebindable inputs all read `binds`: the dispatch already enforced the
     // typing gate and 0585's exact-modifier law when it latched, so this module carries neither
-    // anymore. Nothing here reads a bare key any more (decision 1043) — the free-fly toggle is on
+    // anymore. Nothing here reads a bare key any more — the free-fly toggle is on
     // the dev chord, and the Ctrl run boost is gone.
 
     // Which mouse buttons the world owns this frame is [`camera::latch_world_mouse`]'s, decided
@@ -212,7 +212,7 @@ pub(super) fn control(
         follow_command,
     } = input::look_input(binds, &player, &rig);
 
-    // The camera-option inputs (decision 2149). `translating` is **last frame's** wire word, and
+    // The camera-option inputs. `translating` is **last frame's** wire word, and
     // deliberately: the reference's `0x50fee0` runs from the input handler `0x514446`, which
     // precedes the mover lookup, so it reads the movement flags the previous update left. It is
     // also all this path can read — `flags::this_frame` runs several hundred lines below, after
@@ -265,7 +265,7 @@ pub(super) fn control(
     // writes `face_yaw` directly — any change is a real mouse TURN of the character (a left-drag
     // orbits the camera only and never touches it).
     let yaw_before_look = player.face_yaw;
-    // **Stunned** (`UNIT_FIELD_FLAGS & 0x40000` — decision 0872): read once here, because the very
+    // **Stunned** (`UNIT_FIELD_FLAGS & 0x40000`): read once here, because the very
     // first thing a stun suppresses is the mouse turn below. This is a descriptor bit, NOT a
     // movement flag and NOT an aura: the reference's `0x5145b0` computes `!STUNNED` straight off
     // `[[unit+0x110]+0xa0]` (`not eax; shr eax,0x12; and eax,1`) and `0x514755` consumes it to skip
@@ -275,10 +275,10 @@ pub(super) fn control(
     // — UNIT_FIELD_HEALTH, the `jle` at `0x5144f8` — so a body at zero health answers *no* to both
     // "may I translate?" (`0x514560`) and "am I not stunned?" (`0x5145b0`). **A corpse is stunned**
     // as far as the input tick is concerned, and that is the whole reason the reference will not
-    // let you spin your own body on the ground (decision 1753). Off the MOVER's descriptor, not
+    // let you spin your own body on the ground. Off the MOVER's descriptor, not
     // ours — `esi` in `0x5144e0` is whatever we are driving (1277) — and a ghost is not dead by it,
-    // because the server puts a released player's health at 1 (0308).
-    // **The stand state** is read in the same pass for the mouse alone (decision 2025): the
+    // because the server puts a released player's health at 1.
+    // **The stand state** is read in the same pass for the mouse alone: the
     // reference's camera→body hand-off predicate `0x5145e0` ends on `GetStandState() == 0`
     // (`0x51460c`, the CGPlayer override `0x5ed570` = the client-predicted cache), so a seated
     // body — sitting, in a chair, asleep — is never re-faced by a right-drag, and never stood up
@@ -319,7 +319,7 @@ pub(super) fn control(
     // `0x5145e0`, the mouse's own hand-off gate — `may_turn` plus the stand-state conjunct the
     // keyboard path does not have (it stands you up instead; the mouse is refused).
     let mouse_turns_body = mover.mouse_may_turn_body(stunned, stand_state);
-    // Drunkenness (B210): this frame's wobble angle, computed once — the facing veer and the
+    // Drunkenness: this frame's wobble angle, computed once — the facing veer and the
     // swim-pitch porpoise ([`swim::drive_step`]) both read it. Zero while sober (`wobble` early-outs on a 0.0
     // fraction), and zero whenever the turn predicate is down — the reference's wobble sits behind
     // the same input-allowed chain as the turn emitters (`0x60aa47` → `0x5145b0`), so a stun stops
@@ -387,7 +387,7 @@ pub(super) fn control(
     // we are driving, and once the marker has caught up that is the creature, whose `Transform` is
     // the one this `face_yaw` writes.
     //
-    // **Death enters through the same door** (decision 1753) — but by its own byte trail, not the
+    // **Death enters through the same door** — but by its own byte trail, not the
     // keyboard's, and the two are worth keeping apart. The reference's right-drag lives in
     // `0x514400`, off the mouse-MOVE handler `0x492c00`, and its body hand-off
     // `0x51447b call 0x5103e0` is gated at `0x514474` by a THIRD predicate, `0x5145e0`, whose first
@@ -398,14 +398,14 @@ pub(super) fn control(
     // every route health-gated. So the mouse and the keys do NOT share `0x514755`; they share
     // `0x5144e0`, and `may_turn` is where that term lives on our side.
     //
-    // That is the line this file was missing: benilla modelled the server's root on death (0308),
-    // and a root deliberately leaves turning live (0872), so a right-drag went on spinning the body
+    // That is the line this file was missing: benilla modelled the server's root on death,
+    // and a root deliberately leaves turning live, so a right-drag went on spinning the body
     // on the ground. Note the reference has **nothing to restore** — it never writes the facing at
     // all, because `0x50fee0` (the camera rotate at `0x514446`) runs before any object lookup and
     // the hand-off simply does not run. Ours writes and puts back, which is indistinguishable
     // downstream and keeps the approved camera path intact — a shape difference, not a copy.
     //
-    // **A seated body enters through the same door too** (decision 2025). `0x5145e0`'s last
+    // **A seated body enters through the same door too**. `0x5145e0`'s last
     // conjunct is `GetStandState() == 0` — the right-drag orbits the camera round a body that keeps
     // facing its chair, sends nothing, and does not stand it up (1766 had already taken the stand
     // off this gesture; this takes the turn off it). Stand up — X, a turn key, a flick — and the
@@ -424,7 +424,7 @@ pub(super) fn control(
         }
     }
 
-    // Camera zoom rides the CAMERAZOOMIN/OUT bindings (0997; defaults = the wheel pair). The
+    // Camera zoom rides the CAMERAZOOMIN/OUT bindings (defaults = the wheel pair). The
     // wheel-over-UI routing lives in the dispatch now — a wheel the quest log consumed never
     // reaches these commands — and a rebound zoom KEY steps 1.0 per press, 1.12's own
     // `CameraZoomIn(1.0)` argument.
@@ -432,9 +432,9 @@ pub(super) fn control(
         - binds.amount(crate::bindings::cmd::CAMERA_ZOOM_OUT);
     apply_zoom_scroll(zoom, dt, &mut rig, zoom_max);
 
-    // Free-fly is a dev instrument, so it sits on the dev chord, not a bare `F` (decision 1043).
+    // Free-fly is a dev instrument, so it sits on the dev chord, not a bare `F`.
     // A bare `F` is a key the reference lets a player bind — our own store test binds it to JUMP —
-    // and a dev doesn't get to squat on the game's namespace (0585, the same rule that moved the
+    // and a dev doesn't get to squat on the game's namespace (the same rule that moved the
     // perf HUD off bare `P`). Ungated on `typing` like every chord: it can't be mistaken for text.
     if crate::run_mode::dev_chord(&keys, KeyCode::KeyF) {
         player.detached = !player.detached;
@@ -484,7 +484,7 @@ pub(super) fn control(
         //   avatar. `drive_self_ride`, ordered just before us, has already mirrored the sampled
         //   transform into `Player`, so there is nothing to sync and nothing to park: it is
         //   reporting FORWARD on the wire on purpose.
-        // - `control_lost` (B211) — somebody else is driving our body, or the body in our hands has
+        // - `control_lost` — somebody else is driving our body, or the body in our hands has
         //   been feared out of our control. It is NOT the free-fly branch below, which would fly
         //   the camera off the body; and it is not root, which leaves turning live. Nothing else
         //   will stop us: the server neither roots the victim nor validates their movement, so this
@@ -497,10 +497,10 @@ pub(super) fn control(
         //   normally a single frame.
         //
         // Note the middle one is deliberately NOT "we are possessing": once the marker has caught
-        // up, possession runs the *ordinary* controlled path below, on the creature (decision 1277).
+        // up, possession runs the *ordinary* controlled path below, on the creature.
         if player.server_riding || player.control_lost || player.reseat {
-            // Whoever is moving the body, its transform is the truth and `Player` follows it
-            // (decision 1281). Skipping this is what stranded the camera during a fear: the body
+            // Whoever is moving the body, its transform is the truth and `Player` follows it.
+            // Skipping this is what stranded the camera during a fear: the body
             // ran off on its spline while the orbit stayed at the pose the controller last wrote,
             // which reads as the view detaching into free flight (director, 2026-08-13). A
             // `reseat` window is excluded — there the resource still describes the body we are
@@ -599,7 +599,7 @@ pub(super) fn control(
         // **The mover's own** six speeds, read once here for the whole frame — the turn below and
         // the run/backpedal selection further down. All six live on the driven unit's `CMovement`
         // and nothing in the reference's applied-input path ever reads *our* speeds when the mover
-        // is a different object (VERIFIED, decision 1278), so a possessed creature moves and turns
+        // is a different object (VERIFIED), so a possessed creature moves and turns
         // at its own numbers for free: the component was on its entity all along.
         let mover_speeds = body.single().ok().and_then(|q| q.7).map(|s| s.0);
         // The 6th speed. Zero is the ctor state, not a rate — the client keeps no default of its
@@ -627,7 +627,7 @@ pub(super) fn control(
             turn_delta = turn * rate * dt;
             player.face_yaw += turn_delta;
         }
-        // The drunk veer (B210): while moving, the facing increments by the wobble angle every
+        // The drunk veer: while moving, the facing increments by the wobble angle every
         // frame (`0x60aa70–0x60aab7`: `facing + wobble`, 2π-wrapped, committed via the normal
         // facing pipeline `0x60de30` — so it streams on the wire like any turn). The slow sign
         // oscillation of the pulse is what makes the walk meander. Skipped while a keyboard turn
@@ -635,7 +635,7 @@ pub(super) fn control(
         // stays crisp; both yaw conventions increase turning left, so the add maps sign-for-sign.
         // The veer joins `turn_delta` so `seat_camera` carries the camera with it exactly like a
         // keyboard turn (char and camera turn as one) — the reference's camera follows the drunk
-        // meander too (director's ref observation, decision 1018); without the carry the character
+        // meander too (director's ref observation); without the carry the character
         // staggers out from under a fixed camera.
         if drunk_wobble != 0.0 && translating && !turning {
             player.face_yaw += drunk_wobble;
@@ -661,7 +661,7 @@ pub(super) fn control(
             _ => {}
         }
         // **The translate predicate down: translation intent dies here — and under a plain root,
-        // turning above stays live.** Confirmed at the bytes (decisions 0866/0872) and it is
+        // turning above stays live.** Confirmed at the bytes and it is
         // *authored*, not accidental: the reference's input
         // tick consults an allow-list (`0x615c71` → the byte table at `0x618054`) which blocks the
         // translation command ids and **explicitly permits** the turn ids 8/9/0xa, pitch, run/walk
@@ -676,7 +676,7 @@ pub(super) fn control(
         // The character's own KEYBOARD turn this frame (or the drunk veer, which rides `turn_delta`
         // the same way) — one of the movement inputs that stands a seated avatar back up.
         //
-        // **A mouse turn is deliberately not in this set** (decision 1766). It was, on the strength
+        // **A mouse turn is deliberately not in this set**. It was, on the strength
         // of a director observation that a right-drag stands you. The observation is right and the
         // attribution wrong: the body-facing commit is refused for a
         // seated player by two independent gates (`0x5145e0` @`0x51460c` on the prediction cache,
@@ -762,7 +762,7 @@ pub(super) fn control(
         let mut want_jump = binds.fired(crate::bindings::cmd::JUMP) && may_translate;
 
         // Swim vs walk: the water over our feet decides. Hysteresis-latched (`update_swimming`,
-        // the verified `0x6030c0` boundary — B7 resolved, decision 0226) so wading the line
+        // the verified `0x6030c0` boundary — B7 resolved) so wading the line
         // doesn't flicker between the two physics regimes.
         let surface_y = swim::surface_over_feet(world, player.pos);
         // Cache it for the camera's water corridor, which reads it a frame later exactly as the
@@ -772,9 +772,9 @@ pub(super) fn control(
         if let Some(surface) = surface_y {
             move_trace::swim(player.pos.y, surface, swimming, player.collision_height.0);
         }
-        // Space while swimming = the ref's Jump routing (decision 0487, superseding 0479),
+        // Space while swimming = the ref's Jump routing (superseding 0479),
         // fired on the PRESS EDGE only — one hop per press, a held key does not re-fire
-        // (decision 0498, director-verified on the ref; 0487's held-chaining was our
+        // (director-verified on the ref; 0487's held-chaining was our
         // over-extension of the swim Jump routing, and near the surface its re-latch→re-fire loop
         // bounced the avatar under the waterline — the "invisible wall"). The routing
         // (`0x7c6230`) has no depth gate and no swim re-route — at the surface the press
@@ -791,19 +791,19 @@ pub(super) fn control(
         // lives in [`mover::step`],
         // the same handler's grounded arm.
         // **The wire's jump** — the `Jump(force = 0)` a `SetHover(true)` owes
-        // ([`Player::hover_launch`], decision 1620). It differs from Space in exactly one gate and
+        // ([`Player::hover_launch`]). It differs from Space in exactly one gate and
         // that gate is the point: `0x7c6236 test eax,eax; je 0x7c6243` skips the hover refusal when
         // `force` is 0, so this leg jumps a body that is *already* hovering — which is every body
         // that just got granted hover. The two refusals it keeps are ROOT and FALLING
         // (`0x7c625c test ah,0x30`); the seed select at `0x7c6261` is shared, so the swim/land
         // choice is made below by the same two take-off sites Space uses.
         let wire_jump = player.take_wire_jump();
-        // **The knockback the server aimed at us** (decision 1702) — taken at the same site as the
+        // **The knockback the server aimed at us** — taken at the same site as the
         // other two take-offs so all three enter the mover through one door. Resolved here from the
         // wire quad into one Bevy launch velocity: the horizontal is `(cos, sin)·xy_speed` in
         // **absolute world XY** (nothing to do with our facing or our keys), and the vertical is
         // `−zspeed`, because the wire's take-off speed is DOWN-positive — the same convention the
-        // jump tail this quad is about to be echoed back as already uses (decision 0054).
+        // jump tail this quad is about to be echoed back as already uses.
         let knockback = player.take_knockback();
         let knock_launch = knockback.map(|k| {
             let (c, sn, xy) = (k.launch.cos_angle, k.launch.sin_angle, k.launch.xy_speed);
@@ -822,7 +822,7 @@ pub(super) fn control(
         let swimming = swimming && !breach && !knock_breach;
 
         // The netted swim translation amounts ([`swim::translate_amounts`]) — read by the swim
-        // mover arm AND the flag build, so the two can never disagree (decision 0056).
+        // mover arm AND the flag build, so the two can never disagree.
         let (swim_fwd, swim_side) = if swimming {
             swim::translate_amounts(&axes, !may_translate)
         } else {
@@ -861,7 +861,7 @@ pub(super) fn control(
         // **The mover pitch, set — in every mode, not just the swim one** ([`Player::mover_pitch`]
         // = `CMovement+0x20`). HELD when unsteered (`0x7c4f80` — an idle floater keeps its
         // pitch, never auto-levels), and steered by mouselook as a DIRECT set of the camera aim
-        // (decision 0492, closing 0488's INTERIM): the ref's mouse-move
+        // (closing 0488's INTERIM): the ref's mouse-move
         // chain ends in `SetPitch 0x7c6f70`, an unconditional store — no integrator, no rate limit
         // — clamped ±89° ([`MOUSELOOK_PITCH_CLAMP`], the byte constant; the ±π/2 clamp belongs to
         // the unbound pitch-KEY integrator), with the velocity basis rebuilt in-call: the aim
@@ -870,7 +870,7 @@ pub(super) fn control(
         // NOTHING — it moves the camera without turning the character (the walk rule at `move_fwd`
         // above), so it must not bend the swim either (director-reported, 2026-07-18).
         //
-        // It lived inside the swimming branch until decision 1616 (B322). Nothing on the ref's
+        // It lived inside the swimming branch until decision 1616. Nothing on the ref's
         // write path is swim-gated — not the mouse handler `0x514400`, not the applier `0x5103e0`,
         // not the relay `0x515330`, not the enqueuer `0x6198a0`, and not `SetPitch`'s own store at
         // `0x7c6f91`, which precedes the `test [esi+0x40],0x200000` that splits the two arms.
@@ -882,7 +882,7 @@ pub(super) fn control(
         // enqueue hangs off the mouse-MOTION event `0x400500cb`, so a still mouse pushes nothing
         // and the other writers of the field — the wobble, StopSwim's levelling — survive.
         //
-        // **The aim is the COMPOSITE, not the camera's own pitch** (decision 2149): the reference's
+        // **The aim is the COMPOSITE, not the camera's own pitch**: the reference's
         // camera→body hand-off `0x5103e0` clamps `[cam+0x104] + [cam+0xf4]` to ±89° before passing
         // the pitch on, so a smart-pivot frame — where the arm's pitch does not move and the view's
         // does — still aims the body. The bias is zero except on those frames, so this reads as
@@ -938,7 +938,7 @@ pub(super) fn control(
         } else {
             // The kinematic mover step — walk/fall physics + the step-down snap (decisions
             // 0009/0182/0190); the mechanism lives in [`mover`].
-            // **Water walking** (decisions 0866 + 1611): hand the mover the liquid surface, which
+            // **Water walking**: hand the mover the liquid surface, which
             // it treats as ordinary ground — the classify sees it, the grounded arm runs, and the
             // clamp finalises Y ([`mover::step`], where the *why* of both halves lives). In the
             // reference this is not a floor that gets handed anywhere: `MOVEFLAG_WATERWALKING` ORs
@@ -969,7 +969,7 @@ pub(super) fn control(
                 knock_launch,
                 water_floor,
                 // **The air-control nudge speed is `min(MOVE_WALK, MOVE_RUN)`, read live**
-                // (decision 1740) — the walk override inside the reference's `0x7c4c90(1)`
+                // — the walk override inside the reference's `0x7c4c90(1)`
                 // (`0x7c4d19`/`0x7c4d1b`), not a constant. `AIR_NUDGE_SPEED`'s 2.5 is the default
                 // `MOVE_WALK` and stays as the fallback for before the server has sent us speeds;
                 // once it has, a walk aura, a Slow or a daze moves this with them, and the min is
@@ -978,7 +978,7 @@ pub(super) fn control(
             )
         };
 
-        // The knockback's own trace line (decision 1702) — flown or refused, with the quad. Emitted
+        // The knockback's own trace line — flown or refused, with the quad. Emitted
         // here because this is the first point where both halves are known: the latch we took, and
         // the mover's verdict on it.
         if let Some(k) = knockback {
@@ -989,7 +989,7 @@ pub(super) fn control(
         // Airborne is a walk-only concept — swimming never falls, so the body-heading / anim-flags
         // logic below reads this hoisted value (false while swimming) instead of the walk branch's.
         //
-        // **A root ends the arc outright** (decision 0880): `airborne` is our `MOVEFLAG_FALLING`,
+        // **A root ends the arc outright**: `airborne` is our `MOVEFLAG_FALLING`,
         // and `SetRoot 0x7c7340`'s second act is `StopFalling 0x7c6290`, which clears FALLING and
         // FALLINGFAR together. So a root or a stun taken mid-air is not a body that lands — it is a
         // body that is no longer falling, hanging where it was ([`mover::step`]'s anchor holds the
@@ -1067,7 +1067,7 @@ pub(super) fn control(
         if scoped.active() {
             rig.park_distance(0.0);
         }
-        // Far sight (B151): while `PLAYER_FARSIGHT` names an object, the rig orbits IT instead of
+        // Far sight: while `PLAYER_FARSIGHT` names an object, the rig orbits IT instead of
         // the body — the substitution is [`camera::seat_on_subject`]'s, and it is the entire
         // feature. Everything else in this system runs untouched, which is the point: Mind Vision
         // leaves you walking, streaming, hearing and sending movement as yourself while only the
@@ -1098,7 +1098,7 @@ pub(super) fn control(
                 player.pos.y,
                 player.pos.z,
                 // The pivot channel's live height and where it is heading — the two columns that
-                // answer "does the camera snap?" numerically (decision 0404: timing is measured).
+                // answer "does the camera snap?" numerically (timing is measured).
                 rig.pivot.probe().0,
                 rig.pivot.probe().1,
             );
@@ -1107,7 +1107,7 @@ pub(super) fn control(
         // — the deck's yaw delta was already applied to `cam.yaw` at the ride block (frame motion
         // carries the camera unconditionally; only input turns respect `seat_camera`'s
         // look-session gate).
-        // The auto-follow's own three facts (decisions 1493/1502): the knobs, where "behind" is,
+        // The auto-follow's own three facts: the knobs, where "behind" is,
         // and the input word whose edges arm a return.
         let follow = camera::FollowInput {
             cfg: follow_cfg,
@@ -1132,7 +1132,7 @@ pub(super) fn control(
         // The cast bar's local self-cancel trigger (`spell::local_self_cancel`): a fresh
         // *directional* start (the same wire-axis edge the stream below turns into a
         // MSG_MOVE_START_*; diffed against the pre-stream `player.move_flags`) or a jump launch.
-        // Turn-in-place and pitch deliberately absent (0445): the client's interrupt mask `0x10f0`
+        // Turn-in-place and pitch deliberately absent: the client's interrupt mask `0x10f0`
         // (`0x5150ce`) is {fwd, back, strafe L/R, autorun};
         // turn/pitch flags sit outside it and never cancel.
         // `autorun_armed` is 0445's dormant fifth mask member waking up — the `0x1000` bit IS in the
@@ -1144,8 +1144,8 @@ pub(super) fn control(
         // yet the reference still cancels. (0445's row says "YES" unqualified; only the ON edge
         // cancels.)
         //
-        // **And it is a fact about our own character, not about whatever we are steering**
-        // (decision 1281). The whole point of Mind Control is walking the victim around while the
+        // **And it is a fact about our own character, not about whatever we are steering**.
+        // The whole point of Mind Control is walking the victim around while the
         // channel holds, and the interrupt this feeds is the *caster's*: vmangos breaks a channel on
         // `m_caster`'s own position moving (`Spell::update`), and a possessed creature's steps never
         // touch it. Without this gate the first movement key after a Mind Control shipped
@@ -1161,7 +1161,7 @@ pub(super) fn control(
         {
             net.7 .0 = true;
         }
-        // The loot window's own walk-away (decision 2097) — the reference's movement-START guard
+        // The loot window's own walk-away — the reference's movement-START guard
         // `0x60e990`, called first by every player-initiated START emitter: forward/back, strafe,
         // keyboard-turn and pitch START, pitch STOP, `SetPitch` and Jump pass `arg2 = 0` and close
         // an open loot at distance zero; mouse-look `SetFacing` passes `arg2 = 1` and does not.
@@ -1183,7 +1183,7 @@ pub(super) fn control(
         // [`movement_net`] module (the outbound mirror of `net::motion`'s remote integration).
         // The rider's local pose for the wire's ON_TRANSPORT tail.
         let wire_transport = movement_net::wire_transport(&player);
-        // The skipped-time clock (decision 1935): a held frame is a frame of movement simulation
+        // The skipped-time clock: a held frame is a frame of movement simulation
         // we advanced through without integrating, and the mover we name is the one we are
         // actually driving — a possessed unit while we hold its reins. Read out before the call
         // takes `player` mutably.
@@ -1199,8 +1199,8 @@ pub(super) fn control(
             swim_pitch,
             movement_net::ArcEdges {
                 jumped,
-                // **The wire's own take-offs announce themselves, and not with `MSG_MOVE_JUMP`**
-                // (decision 1702). `wire_jump` covers the hover grant's `CMovement::Jump(force = 0)`,
+                // **The wire's own take-offs announce themselves, and not with `MSG_MOVE_JUMP`**.
+                // `wire_jump` covers the hover grant's `CMovement::Jump(force = 0)`,
                 // whose handler `0x61a620` sends nothing at all — and it cannot be racing a keyboard
                 // jump, because the body it launches was granted HOVER in the same breath and hover
                 // is the first refusal Space takes (`0x7c623a`). `knocked` covers the knockback,

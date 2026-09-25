@@ -1,6 +1,6 @@
 //! Streamed world entities: give each network entity ([`crate::net::NetEntity`]) a visual. NPCs **and
 //! other players** render as their real M2 (resolved from the display id via `CreatureCatalog` — a
-//! player's body resolves through the same creature chain, decision 0041), GameObjects as their model
+//! player's body resolves through the same creature chain), GameObjects as their model
 //! (`GameObjectCatalog`), and everything else as a colored cube.
 //!
 //! The entity itself — its identity, pose, and movement — is owned by the net bridge: `apply_net_updates`
@@ -48,29 +48,29 @@ use attach::{attach_entity_visuals, build_dressup_preview, build_glue_pet, build
 mod carried_light;
 use carried_light::spawn_carried_lights;
 
-/// Equipment visuals (decisions 0072/0074): held items (weapon/shield/ranged) plus worn-armor and
+/// Equipment visuals: held items (weapon/shield/ranged) plus worn-armor and
 /// helm/shoulder resolution, all resolved from the unit descriptor + ItemDisplayInfo and spawned as
 /// children of the body's attach-point joints.
 mod equipment;
 use equipment::{attach_held_items, resolve_corpse_equipment, resolve_equipment};
 
-/// Item / enchant glow effects (decision 0805): the `Spells\Enchantments\*.mdx` models an item's
+/// Item / enchant glow effects: the `Spells\Enchantments\*.mdx` models an item's
 /// `ItemVisuals` id hangs on the item's OWN attachment points — the permanent weapon glows and
 /// the shaman/oil enchant visuals.
 mod item_glow;
 pub(crate) use item_glow::ItemGlowAttached;
 use item_glow::{attach_item_glows, ItemGlows};
 
-/// Mounts (decision 0441): the `UNIT_FIELD_MOUNTDISPLAYID` → second-creature-visual projection —
-/// the mount child + seat components and the transition's **re-seat** (B199: the reference
+/// Mounts: the `UNIT_FIELD_MOUNTDISPLAYID` → second-creature-visual projection —
+/// the mount child + seat components and the transition's **re-seat** (the reference
 /// re-parents the rider's model onto the mount, it never rebuilds it).
 pub(crate) mod mount;
 use mount::reseat_mounts;
 
-/// Live descriptor appearance (decision 0695): a `Values` delta moving the display id swaps the
+/// Live descriptor appearance: a `Values` delta moving the display id swaps the
 /// model in place (druid forms, GM morphs — ledger B69/F04) and one moving `SCALE_X` eases the
 /// render scale (the reference's 2 s cosine smoothstep); both restamp the collision height.
-/// The corpse OBJECT (decision 1706): a `TYPEID_CORPSE` create rendered as the dead body — the
+/// The corpse OBJECT: a `TYPEID_CORPSE` create rendered as the dead body — the
 /// character-model chain dressed from the corpse's own `CORPSE_FIELD_*` snapshot, or the
 /// `<Race><Sex>DeathSkeleton` prop once the server has converted it to bones.
 pub(crate) mod corpse;
@@ -79,12 +79,12 @@ mod live_display;
 pub(crate) use live_display::DisplaySwapped;
 use live_display::{refresh_live_display, tick_scale_ease};
 
-/// Terrain conform (decisions 0482/0486): every flagged model (`GlobalModelFlags & 3 ∈ {1,3}` —
+/// Terrain conform: every flagged model (`GlobalModelFlags & 3 ∈ {1,3}` —
 /// mounts and wild quadrupeds alike) tilts to the ground under its unit, through the conform
 /// node its root bones parent under.
 mod conform;
 
-/// The per-unit collision height (decision 0645): the display id's `CreatureModelData` column,
+/// The per-unit collision height: the display id's `CreatureModelData` column,
 /// scaled — the `h` the swim/wade/splash/foam depth lines are each a verified fraction of.
 mod collision_height;
 use collision_height::stamp_collision_heights;
@@ -103,7 +103,7 @@ use wmo_props::{resolve_wmo_gameobject_props, spawn_wmo_gameobject_props};
 pub(crate) mod spell_fx;
 use spell_fx::{attach_spell_fx, resolve_spell_fx};
 
-/// Dest-anchored spell effects (decision 0797): a DynamicObject's persistent area visuals
+/// Dest-anchored spell effects: a DynamicObject's persistent area visuals
 /// (Blizzard's storm, Flamestrike's burn) + the GO dest one-shot burst. (Distinct from
 /// `crate::ground_fx`, the flat-quad decal renderer this lane's models feed into.)
 pub(crate) mod dest_fx;
@@ -111,7 +111,7 @@ use dest_fx::{
     arm_ground_effects, attach_ground_fx_models, spawn_ground_bursts, tick_shard_emitters,
 };
 
-/// Spell **chain beams** (decision 0955): the polyline of hops a kit's chain `CharProc` draws —
+/// Spell **chain beams**: the polyline of hops a kit's chain `CharProc` draws —
 /// Chain Lightning's arcs, Drain Life's rope of soul, C'Thun's eye beam. Its geometry rides the
 /// shared effect-quad stream beside the ribbon trails.
 mod chain_beam;
@@ -119,7 +119,7 @@ pub(crate) use chain_beam::ChainHops;
 use chain_beam::{simulate_chain_beams, spawn_chain_beams};
 // The container feed reads the icon column off the same catalog resource (one DBC parse).
 // The one InventoryType → equipment-slot table (`attach::preview`): the dressing-room feed places a
-// tried-on item by the very same map the preview it feeds dresses by (decision 1060).
+// tried-on item by the very same map the preview it feeds dresses by.
 pub(crate) use attach::{equip_slot, BodyPartsDesc};
 pub(crate) use equipment::ItemDisplays;
 pub(crate) use equipment::{BoneAttach, Equipment};
@@ -151,7 +151,7 @@ pub(crate) const ATTACH_OVERHEAD_MOUNTED: u16 = 29;
 /// ecx,3`), the very handler [`mount::reseat_mounts`] ports — so the reference re-runs the whole
 /// attach, slot choice included, on every mount and dismount. A per-frame *reader*
 /// ([`overhead_anchor`]) gets that for free; a consumer that PARENTS something at the slot
-/// ([`crate::quest_markers`]) has to notice the move and re-parent itself (decision 1871).
+/// ([`crate::quest_markers`]) has to notice the move and re-parent itself.
 pub(crate) fn overhead_slot(attach: &BoneAttach, mounted: bool) -> Option<u16> {
     if mounted && attach.points.contains_key(&ATTACH_OVERHEAD_MOUNTED) {
         Some(ATTACH_OVERHEAD_MOUNTED)
@@ -197,8 +197,7 @@ pub(crate) struct OverheadFallback(pub(crate) f32);
 /// nameplate placer) can pass a disjoint query.
 ///
 /// A pure position read: it computes through `RigPose::posed_point` — the composed pose × the
-/// rig root's frame — and never touches an anchor entity, so the overhead bone spawns nothing
-/// (decision 1355).
+/// rig root's frame — and never touches an anchor entity, so the overhead bone spawns nothing.
 ///
 /// **The rig root's frame is taken from `tf`, not from its propagated `GlobalTransform`, whenever
 /// the rig root IS the unit** — which is the normal case (a mounted rider's root is the seat
@@ -322,7 +321,7 @@ pub(crate) struct CubeAssets {
 }
 
 impl CubeAssets {
-    /// The pipeline-warm rig parts ([`crate::pipe_warm`], decision 0938): the production cube
+    /// The pipeline-warm rig parts ([`crate::pipe_warm`]): the production cube
     /// mesh + both materials, so the fallback-cube pipeline compiles behind the cover instead of
     /// on the first model-less spawn in view.
     pub(crate) fn warm_parts(&self) -> (Handle<Mesh>, [Handle<StandardMaterial>; 2]) {
@@ -514,34 +513,34 @@ struct GameObjects {
     models: HashMap<u32, DisplayModel>,
 }
 
-/// Character geoset selection (decision 0041, Milestone B): the customization → visible-geoset tables.
+/// Character geoset selection (Milestone B): the customization → visible-geoset tables.
 /// Optional — if the DBCs fail to load, players simply render every geoset (the un-filtered body), the
 /// same as before this feature.
 #[derive(Resource)]
 struct Characters(CharacterGeosets);
 
-/// Character skin textures (decision 0041, Milestone B): the CharSections base-skin lookup. Optional —
+/// Character skin textures (Milestone B): the CharSections base-skin lookup. Optional —
 /// if it fails to load, a player's body-skin batches stay untextured (the muted fallback), as before.
 #[derive(Resource)]
 struct SkinSections(CharSections);
 
-/// Character-creation source data (decision 0423): per-race body displayIds, race/class combos, and
+/// Character-creation source data: per-race body displayIds, race/class combos, and
 /// the appearance-dial ranges. Read by the glue-preview builder ([`attach`]) — displayId +
 /// look — and by the char-create screen. Optional — absent ⇒ the create screen has no data (it
 /// degrades to disabled), but the rest of the game is unaffected.
 #[derive(Resource)]
 pub(crate) struct CharCreate(pub(crate) CharCreateCatalog);
 
-/// Per-appearance cache of composited body-skin atlases (decision 0044): each distinct character look
+/// Per-appearance cache of composited body-skin atlases: each distinct character look
 /// composites + uploads its 256² skin once, and every player sharing that look reuses the handle. A
 /// composite is a fresh `Image` asset per build (unlike an `asset_server.load` path, which dedups by
 /// path), so without this cache every player would re-composite and break material dedup downstream.
 #[derive(Resource, Default)]
 struct SkinComposites(benilla_assets::SpatialCache<SkinKey, Handle<Image>>);
 
-/// The appearance fields that determine a composited body skin (decision 0044): race/sex pick the
+/// The appearance fields that determine a composited body skin: race/sex pick the
 /// CharSections rows; skin/face/facialHair/hairStyle/hairColor pick the base + overlay variations;
-/// `equip` (decision 0074) the worn armor display ids whose region textures paint over it, by
+/// `equip` the worn armor display ids whose region textures paint over it, by
 /// bodyslot−2 — so each distinct dressed look composites + uploads once.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct SkinKey {
@@ -553,7 +552,7 @@ pub(super) struct SkinKey {
     pub(super) hair_style: u8,
     pub(super) hair_color: u8,
     pub(super) equip: [u32; 8],
-    /// The wearer's guild tabard (decision 1704) — part of the key, not of `equip`, because two
+    /// The wearer's guild tabard — part of the key, not of `equip`, because two
     /// guilds' members wear the *same* tabard display and must not share one atlas. Without it the
     /// first guild to composite would lend its crest to every other guild on screen.
     pub(super) emblem: Option<benilla_formats::GuildEmblem>,
@@ -579,7 +578,7 @@ pub(crate) struct EntityVisualsSet;
 ///
 /// It exists for one caller, the `fxview` fixture's driver — which registers itself against this
 /// from `capture` rather than being listed in the chain above, because a fixture's driver belongs
-/// with its fixture and gameplay may not name the harness (decisions 1173/1174). Same shape as the
+/// with its fixture and gameplay may not name the harness. Same shape as the
 /// `waterfx` fixture's registration against the engine's `WaterFoamSet`.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct DisplayBuildSet;
@@ -596,7 +595,7 @@ fn evict_display_caches(
     gos: Option<ResMut<GameObjects>>,
     items: Option<ResMut<equipment::ItemDisplays>>,
     glows: Option<ResMut<ItemGlows>>,
-    // The bone-pile bodies (decision 1706) — 16 at most, but they hold M2 handles like any other
+    // The bone-pile bodies — 16 at most, but they hold M2 handles like any other
     // display cache and must die with the map for the same reason (the teleport asset leak).
     mut bones: ResMut<corpse::BonesModels>,
 ) {
@@ -630,9 +629,9 @@ fn evict_display_caches(
     bones.0.clear();
 }
 
-/// Expire the streamed-entity dedups by **distance** (decision 0793) — the within-map half of
+/// Expire the streamed-entity dedups by **distance** — the within-map half of
 /// [`evict_display_caches`]. The composited skins are the notable half: each distinct dressed look is
-/// its own 256² `Image` (decision 0044), so a session that meets a lot of players accumulates
+/// its own 256² `Image`, so a session that meets a lot of players accumulates
 /// uploads no map change ever reaches. The display-id → model caches (`Creatures`/`GameObjects`/
 /// `ItemDisplays`/`SpellFx`) are deliberately *not* swept: they key on ids, not places, and hold M2
 /// assets whose count is bounded by the catalogs rather than by where you have been.
@@ -648,7 +647,7 @@ fn scope_entity_art(
 /// [`WorldUnit::bound`](benilla_world::world_unit::WorldUnit::bound) by [`publish_world_units`].
 ///
 /// Split from the field it feeds for the same reason `CollisionHeight` is: the attach knows the
-/// number, the reconciler owns the component, and one writer per component is decision 0025. Absent
+/// number, the reconciler owns the component, and one writer per component is. Absent
 /// until a body's model resolves — and on a body that never gets one, absent for good.
 #[derive(Component, Clone, Copy)]
 pub(crate) struct ModelBound(pub(crate) bevy::camera::primitives::Aabb);
@@ -725,7 +724,7 @@ fn publish_world_units(
             // swims on dry land". A body whose display has not resolved yet must read as a
             // default-sized body, which is what the foam site did before this component existed.
             height: height.copied().unwrap_or_default().0,
-            // The box the exterior cull may elect this body by (decision 1270). **A transport
+            // The box the exterior cull may elect this body by. **A transport
             // answers `None` on purpose**: `transport::tick_transports` writes that root's
             // `Visibility` every frame off its own timetable, and a second writer there is the
             // fight decision 0025 exists to prevent — so the world is told not to decide, rather
@@ -789,7 +788,7 @@ impl Plugin for EntitiesPlugin {
         )
         .init_resource::<SkinComposites>()
         .init_resource::<attach::MergedFormsCache>()
-        // The 16 bone-pile body models (decision 1706), keyed (race, sex) rather than by a
+        // The 16 bone-pile body models, keyed (race, sex) rather than by a
         // display id — a skeleton has no CreatureDisplayInfo row.
         .init_resource::<corpse::BonesModels>()
         .init_resource::<spell_fx::SpellFx>()
@@ -798,9 +797,9 @@ impl Plugin for EntitiesPlugin {
         .init_resource::<missile::PendingMissiles>()
         // The projectile flight-loop edges (`crate::sound::missile` consumes them).
         .add_message::<MissileSound>()
-        // A travelling spell's DEFERRED outcome word (`crate::combat_text`, decision 2229).
+        // A travelling spell's DEFERRED outcome word (`crate::combat_text`).
         .add_message::<MissileMiss>()
-        // The cast router's dest one-shot orders (`dest_fx`, decision 0797).
+        // The cast router's dest one-shot orders (`dest_fx`).
         .add_message::<dest_fx::GroundBurst>()
         // A live display-id swap's rebuild edge — consumed by the morph-latch replay
         // (`crate::creature_anim`), the reference's `0x60abe0` impact-kit replay tail.
@@ -823,9 +822,9 @@ impl Plugin for EntitiesPlugin {
         .add_systems(
             Update,
             (
-                // Equipment resolution first (decisions 0072/0074): it *creates* item
+                // Equipment resolution first: it *creates* item
                 // DisplayModel entries, which update_display_models then builds the same frame.
-                // The corpse's dress rides beside it (decision 1706, one nested unordered
+                // The corpse's dress rides beside it (one nested unordered
                 // element — the outer tuple is at `chain()`'s 20-element ceiling): a disjoint
                 // entity set, the same item-model cache, the same must-be-before-the-build.
                 (resolve_equipment, resolve_corpse_equipment),
@@ -834,13 +833,13 @@ impl Plugin for EntitiesPlugin {
                 resolve_spell_fx,
                 move_missiles,
                 spawn_missiles,
-                // The dest-anchored lane (0797): the dynobj arm + the GO burst + the shard
+                // The dest-anchored lane: the dynobj arm + the GO burst + the shard
                 // tick all create cache entries too — before the same-frame build below.
                 // One nested (unordered) element: three independent producers, and the
                 // outer tuple is at `chain()`'s 20-element ceiling.
                 (arm_ground_effects, spawn_ground_bursts, tick_shard_emitters),
                 update_display_models.in_set(DisplayBuildSet),
-                // The char-create preview (decision 0423): assemble the selected look's parts from
+                // The char-create preview: assemble the selected look's parts from
                 // the freshly-built display model, for the create booth to bake. After
                 // `update_display_models` (its want-list built the body) — server-less, at char select.
                 build_glue_preview,
@@ -848,7 +847,7 @@ impl Plugin for EntitiesPlugin {
                 // off the same freshly-built cache, on its own latch so a slow pet model never
                 // holds the character back.
                 build_glue_pet,
-                // The dressing room's preview (decision 1060): the same tuple-driven assembly,
+                // The dressing room's preview: the same tuple-driven assembly,
                 // for the item nobody in the world is wearing. Beside the glue one — same
                 // dependency (the display cache built by `update_display_models` above), same
                 // retry-until-ready latch.
@@ -862,12 +861,12 @@ impl Plugin for EntitiesPlugin {
                 attach_held_items,
                 // One nested (unordered) element — the two passes that hang effect models on
                 // a unit: its spell-kit instances, and the glows its held items' `ItemVisuals`
-                // ids name (0805 — after `attach_held_items`, which makes the item roots).
+                // ids name (after `attach_held_items`, which makes the item roots).
                 // Independent of each other, both before the tint tick below; the outer tuple
                 // is at `chain()`'s 20-element ceiling.
                 (attach_item_glows, attach_spell_fx),
                 // One nested (unordered) element — two independent free-model attach
-                // passes, plus the world-plant tender (0850: sweeps orphaned plants,
+                // passes, plus the world-plant tender (sweeps orphaned plants,
                 // re-plants root-aura ones on owner displacement); the outer tuple is at
                 // `chain()`'s 20-element ceiling.
                 (
@@ -878,7 +877,7 @@ impl Plugin for EntitiesPlugin {
                 // Tick the live per-instance tint clones AFTER the attach passes registered
                 // them, so a clone's first drawn frame is already on its own clock.
                 spell_fx::tick_fx_tint,
-                // Fire each live instance's crossed event keyframes (decision 0304) — after
+                // Fire each live instance's crossed event keyframes — after
                 // attach so a just-spawned instance's head window [0, cur] fires this frame.
                 // Beside it (one nested, unordered element — the outer tuple is at `chain()`'s
                 // 20-element ceiling): the effect-model completion callbacks, which advance an
@@ -890,18 +889,18 @@ impl Plugin for EntitiesPlugin {
                 // 20-element ceiling. Two independent post-attach touch-ups on a standing
                 // visual: a gear change re-dresses it in place — a re-composited atlas on the
                 // same parts, the equipment geosets re-selected, every attachment left alone
-                // (decision 0835, the reference's own shape) — and a freshly attached corpse
-                // arms its settled Dead/Drowned pose (decision 1706).
+                // (the reference's own shape) — and a freshly attached corpse
+                // arms its settled Dead/Drowned pose.
                 (attach::redress_player_looks, corpse::pose_corpses),
-                // A mount transition does the same, and for the same reason (B199): the
+                // A mount transition does the same, and for the same reason: the
                 // field diff **re-seats** the standing rig — onto the mount's attachment-0
                 // joint, or back onto its own frame — where it used to tear the whole rider
                 // down and let attach rebuild it. The reference re-parents the body model
                 // (`0x712f70`/`0x713020`); it never re-creates it.
                 reseat_mounts,
-                // A live display-id / scale change (decision 0695): the display swap is the
+                // A live display-id / scale change: the display swap is the
                 // same teardown-and-rebuild; the scale change arms the reference's 2 s ease.
-                // The rig heal (decision 0863) rides the same nest (Bevy's 20-tuple ceiling):
+                // The rig heal rides the same nest (Bevy's 20-tuple ceiling):
                 // a unit denied a palette rig at attach rebuilds — the same teardown — once
                 // the table has headroom again; never a permanent statue.
                 (
@@ -915,7 +914,7 @@ impl Plugin for EntitiesPlugin {
                 .in_set(EntityVisualsSet)
                 .after(WorldStage::Net),
         )
-        // The chain-beam spawner (0955): in the visuals set, so the cast router — which is
+        // The chain-beam spawner: in the visuals set, so the cast router — which is
         // `.before(EntityVisualsSet)` — has already emitted this frame's beam plays, and the
         // net stage's Commands (the hop arrays) have already been applied.
         .add_systems(
@@ -929,7 +928,7 @@ impl Plugin for EntitiesPlugin {
         // palette and the rig finalizer just wrote.
         //
         // `.after(begin_effect_frame)` is the load-bearing one, and its omission is what made
-        // the whole beam invisible on first ship (B161): the clear carries an extra
+        // the whole beam invisible on first ship: the clear carries an extra
         // `.after(face_billboards)` the beam sim does not, so without this edge the sim
         // becomes runnable a step EARLIER and its vertices are wiped before extract — every
         // frame, silently, with the arithmetic perfect. Every writer into the shared stream
@@ -942,7 +941,7 @@ impl Plugin for EntitiesPlugin {
                 .after(benilla_world::rig_anim::finalize_rig_worlds)
                 .after(benilla_world::particles::buffer::begin_effect_frame),
         )
-        // Terrain conform (decisions 0482/0486, the byte law of `0x614cd0` → `0x7106c0`):
+        // Terrain conform (the byte law of `0x614cd0` → `0x7106c0`):
         // reads each flagged unit's Update-final transform, writes its conform node's
         // local rotation — before propagation so the composite's globals carry this
         // frame's stance.
@@ -1084,7 +1083,7 @@ fn setup_entities(
             p.err().or(l.err()).expect("at least one of the two failed")
         ),
     }
-    // The family pair (decision 1062) — its own resource, so it degrades independently of the
+    // The family pair — its own resource, so it degrades independently of the
     // happiness tables above rather than taking them down with it.
     match (
         benilla_formats::load_creature_families(&mut chain),
@@ -1129,7 +1128,7 @@ fn setup_entities(
         }
         Err(e) => warn!("item displays unavailable, units hold nothing: {e:#}"),
     }
-    // The glow chain's ItemVisuals join (decision 0805). Absent, weapons draw unadorned.
+    // The glow chain's ItemVisuals join. Absent, weapons draw unadorned.
     match benilla_formats::load_item_visual_catalog(&mut chain) {
         Ok(visuals) => {
             info!("item visual catalog: {} glow rows", visuals.len());
@@ -1138,7 +1137,7 @@ fn setup_entities(
         Err(e) => warn!("item visuals unavailable, weapons never glow: {e:#}"),
     }
     // `SpellItemEnchantment`'s two consumer columns — the enchant half of that glow chain, and
-    // the tooltip's enchant line (decision 0915). One load, one resource, both lanes.
+    // the tooltip's enchant line. One load, one resource, both lanes.
     match benilla_formats::load_enchant_catalog(&mut chain) {
         Ok(enchants) => {
             info!(
@@ -1188,7 +1187,7 @@ fn setup_entities(
 /// per-submesh material, with creature skin slots filled from the display's variations).
 fn update_display_models(
     // `ObjectStore` rides along for the corpses: which cache holds a corpse's model is a
-    // descriptor question (`CORPSE_FLAG_BONES`), not a display-id one — decision 1706.
+    // descriptor question (`CORPSE_FLAG_BONES`), not a display-id one.
     entities: Query<(&NetEntity, Option<&crate::net::ObjectStore>)>,
     mut creatures: Option<ResMut<Creatures>>,
     mut gameobjects: Option<ResMut<GameObjects>>,
@@ -1199,13 +1198,13 @@ fn update_display_models(
     mut forms: ResMut<benilla_world::model_forms::ModelForms>,
     asset_server: Res<AssetServer>,
     mut mats: benilla_world::model_render::M2BatchMaterials,
-    // The UV lane a batch's texture transform is delivered on (decision 2295): an entity batch is
+    // The UV lane a batch's texture transform is delivered on: an entity batch is
     // seeded AND registered in one call, so a display built here can never be marked-but-frozen.
     mut uv_reg: ResMut<benilla_world::doodad_anim::UvAnimMaterials>,
     mut anim_table: ResMut<benilla_world::mat_anim_table::MatAnimTable>,
     // The bone-pile display cache + the ChrRaces fileStrings its paths are built from (1706).
     mut bones: ResMut<corpse::BonesModels>,
-    // The glue-preview want (decisions 0423 + 0465): the glue screens' look's body displayId, so
+    // The glue-preview want: the glue screens' look's body displayId, so
     // its model builds with no wire entity (the screens run pre-world, where no NetEntity carries it).
     glue_preview: Option<Res<crate::portrait::GluePreview>>,
     char_create: Option<Res<CharCreate>>,
@@ -1231,7 +1230,7 @@ fn update_display_models(
     // The (kind, display) pairs live in the world this frame — cheap to collect.
     let mut actives: Vec<(EntityKind, u32)> = entities
         .iter()
-        // A **bone pile** is skipped here (decision 1706): it carries a perfectly valid display id
+        // A **bone pile** is skipped here: it carries a perfectly valid display id
         // — the server's corpse→bones conversion copies the field verbatim — and the client
         // deliberately ignores it, so requesting the body it names would load and build a
         // character model nothing will ever render. Its own model is collected below.
@@ -1243,7 +1242,7 @@ fn update_display_models(
         })
         .filter_map(|(e, _)| e.display_id.map(|d| (e.kind, d)))
         .collect();
-    // The bone piles want the OTHER cache (decision 1706): their model is keyed (race, sex), so
+    // The bone piles want the OTHER cache: their model is keyed (race, sex), so
     // they are collected separately and never enter the display-id want list above — a bone pile's
     // display id is a live field the client deliberately ignores, and building the body it names
     // would load a model nothing renders. Their FLESH siblings need nothing here: a corpse's
@@ -1256,7 +1255,7 @@ fn update_display_models(
             _ => None,
         })
         .collect();
-    // The glue-preview body (decisions 0423 + 0465): a want beside the NetEntity scan, so the
+    // The glue-preview body: a want beside the NetEntity scan, so the
     // character on the glue stage has a model even though nothing streamed it in.
     if let (Some(preview), Some(cc)) = (glue_preview.as_deref(), char_create.as_deref()) {
         if let Some(look) = preview.look {
@@ -1286,9 +1285,9 @@ fn update_display_models(
 
     for (kind, disp) in actives {
         match kind {
-            // Players resolve their body model through the very same creature chain (decision 0041):
+            // Players resolve their body model through the very same creature chain:
             // displayId → CreatureDisplayInfo → CreatureModelData → a `Character\…\…\….mdx` body.
-            // …and so does a **corpse** that is not a bone pile (decision 1706): its
+            // …and so does a **corpse** that is not a bone pile: its
             // `CORPSE_FIELD_DISPLAY_ID` is the dead player's own body display, which is the
             // reference's own lookup at `0x5d6759`.
             EntityKind::Unit | EntityKind::Player | EntityKind::Corpse => {
@@ -1360,7 +1359,7 @@ fn update_display_models(
         }
     }
 
-    // The bone piles (decision 1706): request each wanted `(race, sex)` skeleton once, then build
+    // The bone piles: request each wanted `(race, sex)` skeleton once, then build
     // its parts as the M2 lands — the same two-step as every other display, on its own tiny cache.
     // Character-creation data is the source of the race fileString the path is built from, so a
     // session that could not load it simply shows no skeletons rather than guessing at names.
@@ -1384,7 +1383,7 @@ fn update_display_models(
         }
     }
 
-    // Held-item displays (decision 0072): entries are created by `resolve_equipment`; build each
+    // Held-item displays: entries are created by `resolve_equipment`; build each
     // one's parts once its M2 loads. Items are static meshes — no collider, unit lighting.
     // Each of the three path-keyed caches below is `&mut`-borrowed only when it holds an
     // unbuilt entry — the read-side scan is a few hundred `Option` tests, the write-side tick
@@ -1432,7 +1431,7 @@ fn update_display_models(
         }
     }
 
-    // Item/enchant glow models (decision 0805): path-keyed like the effect cache above, entries
+    // Item/enchant glow models: path-keyed like the effect cache above, entries
     // created by `resolve_equipment`'s glow resolve.
     if glows.as_deref().is_some_and(|g| unbuilt(&g.models)) {
         if let Some(glows) = glows.as_deref_mut() {

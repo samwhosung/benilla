@@ -1,4 +1,4 @@
-//! Movement-driven character & creature animation (decision 0019, Milestone C; the locomotion controller
+//! Movement-driven character & creature animation (Milestone C; the locomotion controller
 //! of decisions 0047 + 0049). Each animated unit carries a [`ModelAnimations`] component (its clips, by
 //! `AnimationData.dbc` id), an [`AnimationPlayer`], and an
 //! [`AnimationTransitions`][bevy::animation::transition::AnimationTransitions]; this module is a
@@ -11,10 +11,10 @@
 //!   WalkBackwards when moving back, the swim ids when swimming (the client's selector `0x5fd8b0`).
 //!   A change cross-fades to the new clip over its `blend_time` instead of snapping.
 //! - **Special** — the stand-state poses (sit/sleep/kneel: down → loop → up) as one-shot-bracketed
-//!   loops, **preemptible** (decision 0055), plus the jump's enter/hang. The jump's *landing* is NOT a
+//!   loops, **preemptible**, plus the jump's enter/hang. The jump's *landing* is NOT a
 //!   bracket: [`select::Mode::Land`] is a plain pick from the input at touchdown, freely overwritten the
-//!   instant a movement flag changes (decisions 0083/0087 — land-then-press runs immediately).
-//! - **One-shots (swings, emotes)** — routed **per play from live state** (decision 0087, the
+//!   instant a movement flag changes (land-then-press runs immediately).
+//! - **One-shots (swings, emotes)** — routed **per play from live state** (the
 //!   byte-verified `0x5fe2f0` route): a standing-idle unit plays them full-body on the base track
 //!   ([`select::Mode::Swing`]); a moving / seated / combat-airborne unit plays them on the SpineLow
 //!   torso-masked overlay ([`AnimClip::upper_node`]) while the base keeps driving the legs underneath —
@@ -56,9 +56,9 @@ use select::{Mode, Special};
 mod twist;
 pub(crate) use twist::{wrap_pi, BodyTwist};
 
-/// The unit animation-LOD gate (decision 0448): park an off-frustum rig's per-bone pose
+/// The unit animation-LOD gate: park an off-frustum rig's per-bone pose
 /// evaluation — the clocks, the driver state machine, and the event tracks keep running, so
-/// off-screen combat stays audible (0075) and a re-appearing unit snaps to the absolute-clock
+/// off-screen combat stays audible and a re-appearing unit snaps to the absolute-clock
 /// pose. Shipped as a modernization, it is the faithful direction instead: the reference does not
 /// tick an off-frustum unit (`0x683dd0`'s second walk) — decision 1473
 /// records that, and what still diverges (parked rigs keep drawing; the reference keeps only
@@ -66,11 +66,11 @@ pub(crate) use twist::{wrap_pi, BodyTwist};
 mod lod;
 
 /// The unit's wielded weapon classes — `(item class, item subclass)` per hand, `None` for an empty
-/// (or non-item) hand. Written by the held-item resolution ([`crate::entities`], decision 0072) from
+/// (or non-item) hand. Written by the held-item resolution ([`crate::entities`]) from
 /// the same descriptor data that places the weapon models; read by the swing/ready animation
-/// selectors (decision 0073 — the byte-verified `GetWeapon` byte pair `0x605e30`).
+/// selectors (the byte-verified `GetWeapon` byte pair `0x605e30`).
 ///
-/// **The two readings of a hand** (decision 1863). The reference's accessor takes a `visFlag`:
+/// **The two readings of a hand**. The reference's accessor takes a `visFlag`:
 /// `GetWeapon(slot, 1)` is what is *worn* there, `GetWeapon(slot, 0)` is what the unit can
 /// *fight* with — and the two differ by exactly one live descriptor bit, [`UNIT_FLAG_DISARMED`].
 /// The fields below are the `visFlag == 1` reading — what the paperdoll and the dress-up model
@@ -102,7 +102,7 @@ pub(crate) struct Wielded {
     /// drawers). `0` when nothing is in the ranged slot.
     pub(crate) ranged_inv: u32,
     /// Each slot's `Material` id — the **only** key the draw/stow sound pick uses
-    /// (`SheatheSoundLookups`, decision 0882). Not derivable from the weapon class: real 5875 data
+    /// (`SheatheSoundLookups`). Not derivable from the weapon class: real 5875 data
     /// has maces (subclass 4) in both metal and wood, and puts every bow, crossbow and wand in
     /// wood while guns and thrown are metal. It rides the wire — `SMSG_ITEM_QUERY_SINGLE_RESPONSE`
     /// for players, the `UNIT_VIRTUAL_ITEM_INFO` byte triple for creatures — so nothing here is a
@@ -129,7 +129,7 @@ pub(crate) const UNIT_FLAG_DISARMED: u32 = 0x0020_0000;
 pub(crate) const ITEM_CLASS_WEAPON: u8 = 2;
 
 /// **The disarm ladder** — which single held slot `UNIT_FLAG_DISARMED` hides, given what each
-/// melee hand holds (decision 1863; both class bodies identical).
+/// melee hand holds (both class bodies identical).
 ///
 /// The reference does not "empty a disarmed unit's hands". `GetWeapon(slot, visFlag = 0)` runs a
 /// **two-probe ladder with main-hand precedence**, and the off-hand probe's polarity is the
@@ -190,7 +190,7 @@ impl Wielded {
     }
 }
 
-/// The unit is engaged in melee auto-attack (`SMSG_ATTACKSTART` .. `ATTACKSTOP`, decision 0073):
+/// The unit is engaged in melee auto-attack (`SMSG_ATTACKSTART` .. `ATTACKSTOP`):
 /// standing still it plays the weapon-class Ready idle — the client's `0x5fd360` arm gates on the
 /// auto-attack-target GUID being set, i.e. engagement, **not** sheath state.
 ///
@@ -232,8 +232,8 @@ pub(crate) struct AutoRepeatArmed;
 /// **It gates nothing here — but no longer for the reason this doc used to give.** `0x400` is
 /// tested in exactly one place image-wide: `0x5fc3f0`'s Hold self-loop gates (`test ah,0x6` for
 /// HoldBow 109, `test ah,0x4` for 110/111/112). 0994 recorded that the dispatcher is never
-/// reached for a bow id and concluded the bit is dead. **That absence proof is wrong**
-/// (decision 1544): the dispatcher has a second, deferred fire site (`0x7075af`), so those gates
+/// reached for a bow id and concluded the bit is dead. **That absence proof is wrong**:
+/// the dispatcher has a second, deferred fire site (`0x7075af`), so those gates
 /// DO execute — they are the Hold's own per-completion re-arm.
 ///
 /// We still gate nothing on it, and that is now a *modelling* choice with a stated equivalence
@@ -243,7 +243,7 @@ pub(crate) struct AutoRepeatArmed;
 /// hold — and a remote shooter never enters the drawn idle at all (`0x5fd460` claims on `0x200`,
 /// which only the local cast-send sets), so the case cannot arise. Reading the bit as a second
 /// *entry* into the drawn idle remains wrong: that is what left a shooter aiming forever after
-/// one Serpent Sting (decision 0991).
+/// one Serpent Sting.
 #[derive(Component)]
 pub(crate) struct RangedHold;
 
@@ -396,7 +396,7 @@ pub(crate) fn start_attack_local(
     net: &crate::net::NetCommands,
 ) {
     // **Starting an attack stands you up** — `0x5ecc9b call 0x5ed430(0)`, inside this function and
-    // ahead of everything else it does (decision 1768).
+    // ahead of everything else it does.
     //
     // Its position is the content. It sits **after** the attackability cluster
     // (`0x5ecc2e`/`0x5ecc35`, whose not-attackable leg diverts to `0x5ecc37` and never reaches the
@@ -510,7 +510,7 @@ impl AttackSeam<'_, '_> {
 /// wire-truth state seam. Inserted on `SpellStart` only when it carries a nonzero cast time (an
 /// instant cast's `SpellGo` follows with nothing to interrupt, so it never gets one); removed on
 /// the matching-spell-id `SpellGo`/`SpellFailedOther` (the client's reap `0x614150(spellId, 0)` is
-/// keyed — a triggered proc's GO mid-cast never clears a different spell's precast, decision 0107).
+/// keyed — a triggered proc's GO mid-cast never clears a different spell's precast).
 /// The *animation* side rides [`CastEvent`]/[`CastHold`] (the resolved layer,
 /// [`spell_visual::route_cast_visuals`]), not this component. `until` is `Option` rather than a
 /// bare deadline so a later channel (an open-ended cast, no fixed end) can land here without a
@@ -544,7 +544,7 @@ impl PlaySeq {
 
 /// A cast lifecycle edge on a streamed unit, straight off the wire (written by the net bridge,
 /// consumed by [`spell_visual::route_cast_visuals`], which resolves spell → `SpellVisual` → kit →
-/// animation/sound — the DBC knowledge stays in the anim layer, decision 0107).
+/// animation/sound — the DBC knowledge stays in the anim layer).
 #[derive(Message, Clone, Copy)]
 pub(crate) struct CastEvent {
     pub(crate) entity: Entity,
@@ -572,7 +572,7 @@ pub(crate) enum CastEventKind {
     /// them inline at the GO (same resolve, no round-trip). `weapon_visual` = the caster's
     /// ranged-weapon substitute `SpellVisual` id, resolved at GO time and carried through the
     /// flight (the caster may despawn mid-flight; the client's missile carries its kit context)
-    /// — the `0x60d450` fallback a basic shot's impact kit resolves through (decision 0370).
+    /// — the `0x60d450` fallback a basic shot's impact kit resolves through.
     Impact { weapon_visual: Option<u32> },
     /// A projectile arrived at a **ground point** instead of on a unit — the client's per-tick
     /// missile dispatch taking `0x61e1d0` → `0x61d870`, which is the **no-live-target** arm, not
@@ -587,7 +587,7 @@ pub(crate) enum CastEventKind {
 }
 
 /// The resolved casting **hold** — the animation a unit sustains while a cast or channel is in
-/// flight (`SpellVisualKit` field 2 of the precast/channel kit, decision 0107). Managed entirely
+/// flight (`SpellVisualKit` field 2 of the precast/channel kit). Managed entirely
 /// by [`spell_visual::route_cast_visuals`]; the driver renders it per frame: **standing → the
 /// gait slot, full-body** (the client's stationary-cast pin — the settled `[CGUnit+0xb4]` gate) —
 /// **moving → a looping masked overlay** (the ordinary torso-masked route a moving caster falls
@@ -609,7 +609,7 @@ pub(crate) struct CastHold {
 /// curl into a grip. The real client arms `HandsClosed` (AnimationData 15) on a hand's finger key-bones
 /// **purely by that hand's attach point being occupied by a weapon** — not combat, not sheath state; a
 /// forearm-mounted shield or an empty hand stays open (`0x60b590` /
-/// paperdoll `0x5059a0`). Written by the held-item resolver ([`crate::entities`], decision 0072) from the
+/// paperdoll `0x5059a0`). Written by the held-item resolver ([`crate::entities`]) from the
 /// weapon's hand attach point; read by [`driver::drive_hand_grip`] to hold/release the finger overlay.
 #[derive(Component, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct HandGrip {
@@ -658,10 +658,10 @@ pub(crate) struct SwingMessage {
 
 /// Play a one-shot **anim-emote** on a unit: the given `AnimationData.dbc` id, played over the
 /// gait and returning to it when it finishes (the [`select::Mode::Swing`] one-shot pattern). The
-/// gossip/vendor interact route ([`crate::target`], decision 0081) uses it to play EmoteTalk
+/// gossip/vendor interact route ([`crate::target`]) uses it to play EmoteTalk
 /// (id 60) on the self-player: the per-animation sheath reconcile then reads that clip's
 /// WeaponFlags (`0x10`) and stows the drawn weapon — a committed state change that *persists*
-/// after the emote (nothing restores it; weapons stay stowed until re-triggered — decision 0080).
+/// after the emote (nothing restores it; weapons stay stowed until re-triggered).
 /// The stow is the emote's flags, not a sheath wire. Also fed by the `SMSG_EMOTE` receive path
 /// ([`emote_anim::emote_to_anim`]), which maps a bridged anim emote's `Emotes.dbc` id to its
 /// `AnimID` — `/wave`, `/bow`, `/laugh`, `/cheer`, … all play through this same one-shot.
@@ -675,7 +675,7 @@ pub(crate) struct EmoteAnim {
 }
 
 /// A **state kit's animation id, which is a comparison and never a play** — `PlaySpellVisualKit`'s
-/// stage-2 leg (decision 2085).
+/// stage-2 leg.
 ///
 /// `0x60edf0`'s tail has exactly one site that hands a kit's `+0x8` to the play primitive
 /// (`0x60f3c5 call 0x5fe2f0`), and **stage 2 is diverted around it**: `0x60f387 jne` takes the
@@ -741,7 +741,7 @@ fn flourish_to_anim(
 }
 
 /// A **spell-side wound flinch** on `entity` — the client's `0x60ea70(unit, severity = 0)`
-/// reached from three spell paths (decision 2058): the kit player's own branch (`0x60edf0` @
+/// reached from three spell paths: the kit player's own branch (`0x60edf0` @
 /// `0x60f3ad`: a kit anim in `[8,10]` goes here instead of `PlayAnimation`), the instant-hit
 /// impact loop (`0x6e8bf0` @ `0x6e8c89` — after the impact kit, iff the spell targets enemies,
 /// [`benilla_formats::SpellDisplay::is_harmful`]), and the missile impact hand-off (`0x61dc50` @
@@ -749,7 +749,7 @@ fn flourish_to_anim(
 /// the id is never the kit's own column: the trigger picks CombatWound(9) / StandWound(8) by the
 /// victim's engagement exactly like a non-crit melee hit ([`select::wound_anim`]) and lays it
 /// into the SECONDARY-blend slot — a decaying overlay that never interrupts what plays
-/// underneath (decision 0111). Never the [`EmoteAnim`] one-shot route: that replaces the base
+/// underneath. Never the [`EmoteAnim`] one-shot route: that replaces the base
 /// track, the exact routing 0111 falsified. Written by [`spell_visual::route_cast_visuals`];
 /// consumed by [`driver::drive_animations`] into the same per-frame wound slot as a melee hit.
 #[derive(Message, Clone, Copy)]
@@ -790,7 +790,7 @@ pub(crate) struct SpellGoTargets {
     pub(crate) seq: u64,
 }
 
-/// The sheath **policy layer**'s types + ceremony mechanics (decision 0080) — the one-setter
+/// The sheath **policy layer**'s types + ceremony mechanics — the one-setter
 /// request, the ceremony overlays, the `AnimationData.dbc` policy table. The driver below
 /// executes them, so every sheath transition has exactly one author.
 mod sheath;
@@ -803,14 +803,14 @@ pub(crate) use sheath::{
 /// alongside `sheath` as its own small concern.
 mod emote_anim;
 
-/// The client-local gesture producers (decision 1469): the chat talk/question/exclamation/shout/
+/// The client-local gesture producers: the chat talk/question/exclamation/shout/
 /// laugh, and the NPC-interact talk. The reference's `0x60bb30`, which shares the one-shot player
 /// with `SMSG_EMOTE`.
 mod gesture;
 use emote_anim::emote_to_anim;
 pub(crate) use gesture::{select_gesture, Gesture, GestureQueue};
 
-/// The Bevy driver systems that execute the state machine [`select`] picks (decision 0049 + 0073,
+/// The Bevy driver systems that execute the state machine [`select`] picks (
 /// decision 0087's one-shot routing, decision 0080's sheath execution) — kept in its own file as
 /// it carries the bulk of the per-frame system logic, separate from this module face and from the
 /// pure selector logic in [`select`].
@@ -827,7 +827,7 @@ pub(crate) use events::{
     EventFrame, TrackMemory,
 };
 
-/// The `$BTH` breath puffs — a unit's visible cold vapour in a snow zone (B233, decision 1149).
+/// The `$BTH` breath puffs — a unit's visible cold vapour in a snow zone.
 mod breath;
 use breath::{classify_breath, fire_breath};
 
@@ -862,7 +862,7 @@ pub(crate) use spell_visual::{
 /// The per-unit animation state machine.
 ///
 /// `Transform` is required, not optional: the driver reads the entity's render scale as the
-/// locomotion rate divisor (decision 0903), so a driver on a transform-less entity would silently
+/// locomotion rate divisor, so a driver on a transform-less entity would silently
 /// stop being driven at all. Every real unit is spawned with one — the requirement is here so a
 /// hand-assembled entity (a test world, a future harness) can't quietly miss it.
 #[derive(Component)]
@@ -874,7 +874,7 @@ pub(crate) struct AnimDriver {
     gait: Option<u16>,
     /// The movement flags the **base slot** was last armed for — the reference has no per-one-shot
     /// latch, so "the movement state changed" means *since the base last took a request*, never
-    /// "since this one-shot started" (decision 0894). The distinction is invisible until a one-shot
+    /// "since this one-shot started". The distinction is invisible until a one-shot
     /// and a movement change land on the SAME frame: Ice Block's root wipes the direction bits in
     /// the very frame the cast one-shot arrives, so an arm-time comparison sees no edge at all and
     /// the cast keeps bone 0 — where the reference's next base request overwrites it and leaves the
@@ -883,10 +883,10 @@ pub(crate) struct AnimDriver {
     /// The **base-animation lock** ([`driver::play::BaseAnimLock`]) — the reference's
     /// `[unit+0xd58] & 0xc0000`. While a `Knockdown`/`LiftOff`/`Land` holds it, every base request
     /// is refused outright, which is how a stunned victim's knockdown survives the root's own
-    /// `Stand` recompute (decision 2096).
+    /// `Stand` recompute.
     base_lock: driver::play::BaseAnimLock,
     /// The unit's **client-side sheath state** — the mirror of the client's committed CUR cache
-    /// (`[unit+0xd40]`, decision 0080): what the weapon placement renders (absent a
+    /// (`[unit+0xd40]`): what the weapon placement renders (absent a
     /// [`VisualSheath`] ceremony pin) and what the setter/reconcile test against. Seeded from
     /// the descriptor byte at first sight; re-adopted whenever the server byte *changes* (the
     /// `0x604c70` field-apply); overwritten by requests ([`SheathRequest`]) and the
@@ -902,7 +902,7 @@ pub(crate) struct AnimDriver {
     /// pass by [`driver::drive_animations`], so a reader one system later sees exactly the
     /// frame's edge.
     ///
-    /// Its one consumer is the weapon-trail latch ([`crate::weapon_trail`], decision 2076). The
+    /// Its one consumer is the weapon-trail latch ([`crate::weapon_trail`]). The
     /// reference consumes `unit+0xd1c`/`+0xd20` inside `CGUnit::PlayAnimation 0x5fe2f0` itself
     /// (`0x5fe48e`, the fields' only reader), and `0x5fe2f0` is the **single** animation entry
     /// point in the image — 40 call sites, locomotion among them (`0x602c60` → `0x5fd9e0` →
@@ -911,14 +911,14 @@ pub(crate) struct AnimDriver {
     /// benilla's driver is one batched system, not
     /// a per-play function, so the arm cannot be read at the call the way the reference reads it.
     started_anim: bool,
-    /// A **masked upper-body one-shot** in flight (decision 0087): a swing/emote the live-state route
+    /// A **masked upper-body one-shot** in flight: a swing/emote the live-state route
     /// sent to the SpineLow overlay (moving / seated / airborne-in-combat), playing *beside* [`Mode`]
     /// while the base track keeps driving the legs (run / sit / jump-arc). `None` = no overlay; a
     /// finished overlay **fades** the subtree back to the base ([`Self::overlay_fade`]) rather than
     /// dropping it. The full-body route never uses this — it replaces the base via [`Mode::Swing`]
-    /// — until a locomotion request **transplants** that clip up here (decision 0878).
+    /// — until a locomotion request **transplants** that clip up here.
     overlay: Option<Overlay>,
-    /// The key-bone slot's **cross-fade in flight** (decision 0878) — the client's per-bone
+    /// The key-bone slot's **cross-fade in flight** — the client's per-bone
     /// SECONDARY as an upper-body arm or release seeds it. Two producers, one curve
     /// ([`select::blend_lambda`], λ decaying 1 → 0): the **fade-to-rest** that releases a finished
     /// one-shot over a fixed 150 ms (`0x5fc920` → op4 `param_3 = −1`, `0x7123af`), and a **blended
@@ -926,7 +926,7 @@ pub(crate) struct AnimDriver {
     /// (`0x7125f2`). A **transplant** arm carries `blendFlag = 0` and seeds nothing — it resumes
     /// the clip at its live frame with no fade at all.
     overlay_fade: Option<OverlayFade>,
-    /// The victim **wound-flinch** in flight (decision 0111) — the client's per-bone **SECONDARY
+    /// The victim **wound-flinch** in flight — the client's per-bone **SECONDARY
     /// blend slot**: a decaying cross-fade overlay (`λ` smoothstep `0.75 → 0` over the wound
     /// clip's own span) layered over whatever else plays, then self-releasing. Deliberately a
     /// separate slot from [`Self::overlay`] — in the client they are two independent per-bone
@@ -947,14 +947,14 @@ pub(crate) struct AnimDriver {
     /// the landing of a bracket-less step-off fall (which must still run the `0x602c60` land pick
     /// even though no Special drove the arc).
     was_falling: bool,
-    /// The **deferred combat one-shot** — the client's `CGUnit+0xd60` cache (decision 0406):
+    /// The **deferred combat one-shot** — the client's `CGUnit+0xd60` cache:
     /// a combat clip requested while another combat
     /// clip plays is NOT armed — the playing clip's rate doubles (op6 2.0f) and the request
     /// parks here, played by the driver the moment no one-shot is live (the client's
     /// base-recompute read). Any normal arm clears it (the client's `0x5fe48e` writes −1 on
     /// every non-fast-path PlayAnimation; the driver clears at its play sites).
     deferred: Option<u16>,
-    /// The armed looping arm's **replay window** (decision 0516): the variation node the loop
+    /// The armed looping arm's **replay window**: the variation node the loop
     /// armed + its rolled budget `R` (the client's
     /// `block+0xbc`; the window is `R` clip-lengths wide, op4 `0x7126d8` — live for LOOPS too,
     /// correcting 0117's "loops ignore it"). The per-frame watchdog (`0x719370`'s transcription
@@ -964,7 +964,7 @@ pub(crate) struct AnimDriver {
     /// repeat) or a deliberate freeze (ranged Load / Loot).
     loop_window: Option<(bevy::animation::graph::AnimationNodeIndex, u32)>,
     /// The playback rate last written to the base slot — `speed / (moveSpeed · |modelScale|)`
-    /// ([`select::playback_rate`], decision 0903); `1.0` for anything that is not a rate-scaled
+    /// ([`select::playback_rate`]); `1.0` for anything that is not a rate-scaled
     /// locomotion clip. Purely an **instrument**: the hover inspector's anim line reads it, so
     /// "this creature's walk looks too fast" is answerable by hovering the creature instead of by
     /// working the divisor out by hand. Recorded rather than re-derived, so the card can never
@@ -977,17 +977,16 @@ pub(crate) struct AnimDriver {
     /// reference's handler is one watcher whose two legs BOTH arm bone 0 of the body: the build
     /// `0x607b44` op4(bone 0, **91 `Mount`**, cross-fade, PRIMARY), the teardown `0x607ce0` op4
     /// seq **0 `Stand`**. The arm is a plain last-writer-wins play, so it *displaces a full-body
-    /// one-shot the transition catches in flight* — which our gait-slot mount pin alone never did
-    /// (decision 0927).
+    /// one-shot the transition catches in flight* — which our gait-slot mount pin alone never did.
     mount_display: u32,
-    /// The Special wanted LAST frame — the driver's Special **edge** detector (decision 0864).
+    /// The Special wanted LAST frame — the driver's Special **edge** detector.
     /// An edge is a play in the client (the jump/pose entry, the FALLINGFAR latch's Fall, the
     /// land pick), so it clears the deferred-combat cache like any normal arm (`0x5fe48e`);
     /// the *level* must not (mid-air the airborne-freeze issues no plays, so a fast-path park
     /// survives to its clip's end).
     last_special: Option<Special>,
     /// The **airborne snapshot** node whose clock [`driver::play::leave_special`] stopped
-    /// (decision 0503, the swim hop's too-short kick — kept as a symptom fix whose mechanism is
+    /// (the swim hop's too-short kick — kept as a symptom fix whose mechanism is
     /// open, because the "blends from a frozen pose" law it was justified by is refuted: the
     /// client's blend source keeps running, decision **1566**. Scoped to the airborne cut and
     /// **not** to be generalised). The per-frame rate write
@@ -995,7 +994,7 @@ pub(crate) struct AnimDriver {
     /// rather than inferred from a zero speed — a rate-scaled clip legitimately reads 0 when the
     /// body is standing still, and skipping *that* would strand it frozen forever. Self-clearing:
     /// the moment anything else is armed the node stops being the main animation and the sync
-    /// drops the name (decision 0906).
+    /// drops the name.
     frozen: Option<bevy::animation::graph::AnimationNodeIndex>,
 }
 
@@ -1003,7 +1002,7 @@ impl AnimDriver {
     /// The `AnimationData` ids currently driving this unit — `(base, masked overlay)` — the
     /// inspector card's anim readout. The base is whatever occupies the full-body slot (gait /
     /// special / landing / swing), as the *requested* ids before any missing-clip substitution
-    /// (the layer the selectors chose — also what the reconcile tests, decision 0125); the
+    /// (the layer the selectors chose — also what the reconcile tests); the
     /// overlay is a masked upper-body one-shot playing beside it, if any. A `None` base = no
     /// gait selected yet (first frame).
     pub(crate) fn playing(&self) -> (Option<u16>, Option<u16>) {
@@ -1028,7 +1027,7 @@ impl AnimDriver {
 /// A masked upper-body play over the base ([`AnimDriver::overlay`]): the graph node it drives
 /// ([`AnimClip::upper_node`]) and the requested `AnimationData.dbc` id (for the event scan +
 /// the sheath reconcile — both must see this play, decision 0087 (d)). `looping` marks the cast
-/// hold's sustained variant (decision 0107): a one-shot auto-releases when its clip finishes; a
+/// hold's sustained variant: a one-shot auto-releases when its clip finishes; a
 /// looping hold never finishes and is released only by [`driver::drive_animations`]'s hold logic
 /// (the [`CastHold`] gone, or the unit stopping — the hold then moves to the gait slot).
 #[derive(Clone, Copy)]
@@ -1038,7 +1037,7 @@ struct Overlay {
     looping: bool,
 }
 
-/// A key-bone cross-fade in flight ([`AnimDriver::overlay_fade`], decision 0878). `out` is the
+/// A key-bone cross-fade in flight ([`AnimDriver::overlay_fade`]). `out` is the
 /// **retiring** node, holding the outgoing pose the client snapshots into the bone's secondary
 /// slot (`0x7123af`: `rep movsd +0x98 → +0xc4`); it is `None` when
 /// a fresh clip fades in over the *inherited base* pose, which needs no node of its own — the base
@@ -1052,7 +1051,7 @@ struct OverlayFade {
     total: f32,
 }
 
-/// A wound-flinch decay in flight ([`AnimDriver::wound`], decision 0111): the graph node the
+/// A wound-flinch decay in flight ([`AnimDriver::wound`]): the graph node the
 /// blend drives (the clip's masked [`AnimClip::upper_node`], or its full-body node when the
 /// bone-selection forces bone 0 — [`select::wound_full_body`]) and the decay window's inputs.
 /// The client seeds `end = clock + span, rate = 1/span, λ₀ = 0.75` (op4 `linkFlag=0`,
@@ -1111,7 +1110,7 @@ impl AnimDriver {
         }
     }
 
-    /// The **resolved** id of the clip actually driving playback right now (decision 0082):
+    /// The **resolved** id of the clip actually driving playback right now:
     /// [`Self::active_anim`] (the selector's *requested* semantic id) run through the model's own
     /// fallback resolution. This is what the real client's per-animation sheath reconcile tests
     /// (`0x5fdb50` reads the record of the sequence **actually playing**, not the semantic pick that
@@ -1192,7 +1191,7 @@ impl Plugin for CreatureAnimPlugin {
             .add_message::<SpellKitShake>()
             .add_message::<SpellKitFx>()
             .add_message::<MissileSpawn>()
-            // The kit's beam edge (0955) — `crate::entities` owns what it becomes.
+            // The kit's beam edge — `crate::entities` owns what it becomes.
             .add_message::<ChainProcPlay>()
             .add_message::<KitPush>()
             // The aura CharProc edges the slot watcher emits alongside its effect-model ones —
@@ -1218,9 +1217,9 @@ impl Plugin for CreatureAnimPlugin {
                     // The lootable-corpse sparkle's edge watcher — a SpellKitFx writer like the
                     // router above, consumed by the same entity-visuals chain this set precedes.
                     arm_loot_fx,
-                    // Its level-edge sibling: the ding (decision 0305) — same shape, same home.
+                    // Its level-edge sibling: the ding — same shape, same home.
                     arm_level_up_fx,
-                    // …and its mount-edge sibling: the poof (decision 0927). Same hardcoded-effect
+                    // …and its mount-edge sibling: the poof. Same hardcoded-effect
                     // spawn shape, one field over.
                     arm_mount_poof_fx,
                     // The aura-slot watcher: state kits persist for the aura's life (the bread).
@@ -1235,7 +1234,7 @@ impl Plugin for CreatureAnimPlugin {
                     // The landing predictor's dust leg (the vocal leg lives in `sound`).
                     hard_landing_dust,
                     emote_to_anim,
-                    // The client-local gestures (decision 1469) — the chat talk/shout/laugh and
+                    // The client-local gestures — the chat talk/shout/laugh and
                     // the NPC-interact talk. The client's second (and only other) producer of a
                     // one-shot emote; same place in the order as the wire one, for the same reason.
                     gesture::drive_gestures,
@@ -1243,7 +1242,7 @@ impl Plugin for CreatureAnimPlugin {
                     // one-shot lands the same frame the packet (or space press) arrived.
                     flourish_to_anim,
                     drive_animations,
-                    // The weapon-trail latch (decision 2076) — immediately after the driver,
+                    // The weapon-trail latch — immediately after the driver,
                     // because the edge it consumes is `AnimDriver::played_anim`, which the driver
                     // rewrites every pass. The reference reads the latch *inside*
                     // `PlayAnimation 0x5fe2f0` itself; one system later is as close as a
@@ -1259,7 +1258,7 @@ impl Plugin for CreatureAnimPlugin {
                     // entity-visuals chain so the arrow appears/vanishes the frame the keyframe
                     // lands, not one behind.
                     drive_nock_latch,
-                    // …and, off the same two keys, the RANGED PROP's own clip (decision 2281):
+                    // …and, off the same two keys, the RANGED PROP's own clip:
                     // the bow's limbs bend on `$BWP`, and on `$BWR` a gun fires the muzzle blast
                     // its BowRelease(161) sequence carries. Beside the latch because the reference
                     // arms both from one handler each, and ahead of the entity-visuals chain so the
@@ -1285,7 +1284,7 @@ impl Plugin for CreatureAnimPlugin {
                 )
                     .chain()
                     .after(WorldStage::Net)
-                    // After predicate B's recompute (decision 1477): the loot leg's self trigger
+                    // After predicate B's recompute: the loot leg's self trigger
                     // is that boolean, and the reference has no gap between arming the latch and
                     // posing — its chest arm force-plays Loot 50 in the same handler. Without
                     // this edge the kneel lands a frame late at every loot window.
@@ -1297,7 +1296,7 @@ impl Plugin for CreatureAnimPlugin {
                     // the weapon placement for a frame (the flash).
                     .before(crate::entities::EntityVisualsSet),
             )
-            // The freeze (CharProc 11, decision 0889): **after the driver**, so this frame's arms
+            // The freeze (CharProc 11): **after the driver**, so this frame's arms
             // are already in when the clocks are held — the Ice Block observable is precisely that
             // the cast one-shot gets armed and then never advances a frame. After the drain too, so
             // the node it reads is this frame's.
@@ -1310,7 +1309,7 @@ impl Plugin for CreatureAnimPlugin {
     }
 }
 
-/// Resolve `id` to the id this model actually plays (decision 0082, `0x711bf0`):
+/// Resolve `id` to the id this model actually plays (`0x711bf0`):
 /// [`ModelAnimations::resolve`] via `catalog` when `AnimationData.dbc` has loaded, else identity — a
 /// brief window at startup ([`load_anim_data`](sheath::load_anim_data) runs at `Startup`, so this
 /// degrade is only ever live for the first few frames, same shape as `anim_data.map_or(0, ..)`
@@ -1335,7 +1334,7 @@ mod attack_stand_tests {
     use super::*;
 
     /// **`StartAttack` stands a seated player** — `0x5ecc9b`, and unconditionally within this
-    /// function (decision 1768).
+    /// function.
     ///
     /// `engaged = true` is the case worth pinning. It takes `0x5ecb70`'s skip, which jumps to the
     /// tail at `0x5ecd78` — **73 bytes past the stand** — so re-issuing an attack you are already
@@ -1448,7 +1447,7 @@ mod nock_latch_tests {
 mod disarm_tests {
     use super::*;
 
-    /// **The ladder, hand by hand** (decision 1863; `0x5ec240`/`0x605e30`). The
+    /// **The ladder, hand by hand** (`0x5ec240`/`0x605e30`). The
     /// reference hides **exactly one weapon**, main hand first — so a disarmed dual-wielder
     /// punches with the main hand and still swings its off-hand weapon. Every selector downstream
     /// reaches its own unarmed leg by its own table; there is no disarm case in any of them.

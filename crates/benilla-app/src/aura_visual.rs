@@ -2,7 +2,7 @@
 //! tint and its animation clock, for exactly as long as the aura lives. This is the half of a stage-2
 //! "state kit" that
 //! isn't an attach-point emitter (those are `creature_anim::spell_visual`'s
-//! [`arm_aura_state_fx`](crate::creature_anim::arm_aura_state_fx), decision 0393): where that
+//! [`arm_aura_state_fx`](crate::creature_anim::arm_aura_state_fx)): where that
 //! watcher hangs *models* on the unit, this one changes how the unit's own model **renders**.
 //!
 //! B114 ("Stealth shows nothing on the character") was this whole layer missing. Stealth's state
@@ -60,7 +60,7 @@
 //! **Proc 14 ships whole** — nodes, the `baseAlpha × head node` target, the 1000 ms cubic ramp both ways,
 //! and the render composition below.
 //!
-//! **Proc 1 ships too** (decision 0812): its nodes live here ([`AuraNodes::tint`], head-node-wins as
+//! **Proc 1 ships too**: its nodes live here ([`AuraNodes::tint`], head-node-wins as
 //! the reference's `unit+0xce0` list is) and [`apply_aura_tint`] publishes the head to
 //! [`benilla_world::instance_tint`], the per-instance modulate channel keyed on the part's rig slot. Written
 //! on change, never eased — the reference's own asymmetry (`unit+0xd04` change-detection straight to
@@ -77,14 +77,14 @@
 //! attached model:
 //!
 //! - the ordinary one **borrows its wearer's slot**: an item's parts, cards and boneless geosets all
-//!   spawn carrying the unit's instance bits (decision 0820), so they read the unit's table entry;
+//!   spawn carrying the unit's instance bits, so they read the unit's table entry;
 //! - a **rigged** one carries its OWN slot, because the vertex stage indexes the skin palette with
 //!   that same field and cannot borrow it (a spell-effect instance; since 0841, the seven shoulder
 //!   models that weld geometry to a billboard bone). [`chained_tint`] walks such an instance's
 //!   [`benilla_world::model_fade::ParentModel`] link up to the unit — the recursion itself, and the same walk
 //!   `ModelAlphas` already does for alpha.
 //!
-//! **Proc 11 ships too** (decisions 0889 + 0891): the **freeze**. Its param is a playback *rate*
+//! **Proc 11 ships too**: the **freeze**. Its param is a playback *rate*
 //! written onto the unit's own animation clocks (`0x60db7e` → `SetBoneAnimSpeed 0x712910` on the
 //! mount's bone 0, the body's key-bone 4 — the upper-body split — and the body's bone 0), old rates
 //! saved in the node and written back when it expires (`0x6203e0`). Rate 0 is Ice Block: the pose
@@ -166,7 +166,7 @@ pub(crate) struct AuraNodes {
     /// Whether [`apply_aura_alpha`] still owns this unit's parts. Set while the unit is translucent
     /// and for the one frame the ramp latches back at opaque — that frame performs the **release**
     /// (writes the settled alpha and hands the material back to the part's light law), the same
-    /// hand-back protocol the self-avatar feather uses (decision 0213). Without it, a unit whose
+    /// hand-back protocol the self-avatar feather uses. Without it, a unit whose
     /// stealth drops stays latched on the blend twin at its last low alpha until something else
     /// happens to rewrite the channel.
     authoring: bool,
@@ -233,7 +233,7 @@ impl AuraNodes {
     }
 
     /// A node list holding one proc-11 rate node — the state a freeze aura leaves on a unit, for
-    /// the driver's wound-refusal tenant (decision 2063) without running the aura-slot watcher.
+    /// the driver's wound-refusal tenant without running the aura-slot watcher.
     #[cfg(test)]
     pub(crate) fn with_rate_node_for_tests(spell_id: u32, rate: f32) -> Self {
         Self {
@@ -288,7 +288,7 @@ pub(crate) fn apply_aura_tint(
 /// for alpha, and the same law `mesh_tag` cites for why an item's parts carry their wearer's slot).
 ///
 /// It exists because a rigged **item** carries its own instance slot rather than its wearer's
-/// (decision 0841 — the vertex stage indexes the palette with that field, so it cannot be borrowed):
+/// (the vertex stage indexes the palette with that field, so it cannot be borrowed):
 /// without the walk, a dwarf's Stoneform tint would stop at exactly the pauldrons the rig was added
 /// for. A despawned link ends the walk.
 fn chained_tint(
@@ -316,7 +316,7 @@ fn chained_tint(
 /// The one machine check for the GPU half of the channel: the region upload, the fragment stage's
 /// slot lookup, the unpack, and the placement of the multiply. No headless test can reach any of
 /// that, and the capture harness cannot stage a real aura to do it with — it sees no networked
-/// entities at all (0799), so a tinted *unit* is unstageable there. Pointed at a scene with animated
+/// entities at all, so a tinted *unit* is unstageable there. Pointed at a scene with animated
 /// (rigged) doodads it turns each of them the probe colour, which the visual harness then diffs.
 ///
 /// It logs the slot count once, so an unchanged capture reads as "nothing in this scene is rigged"
@@ -359,7 +359,7 @@ pub(crate) struct AnimRateFreeze;
 /// holds the reference's current frame) but not the same object: a pause is a bit the clock reads,
 /// where a speed is a *value* other code copies. `transplant_up` copies a clip's speed when it moves a
 /// one-shot to the torso overlay, and that is how the first version welded a cast pose to the upper
-/// body permanently — see [`AnimRateFreeze`] and decision 0891. Nothing here reads or writes a speed, so nothing can
+/// body permanently — see [`AnimRateFreeze`] and. Nothing here reads or writes a speed, so nothing can
 /// inherit the freeze and outlive it.
 ///
 /// **Reasserted every frame, and that is the faithful shape, not a belt-and-braces clamp.** The
@@ -723,7 +723,7 @@ type AuraParts<'w, 's> = Query<
 /// self-avatar zoom feather, so it overrides them for exactly the units that carry a live aura
 /// alpha, and the self feather stays the last word on your own body (it folds this factor in
 /// itself — [`crate::player::apply_self_model_fade`]). This is the same override-then-release
-/// protocol the feather uses (decision 0213); [`AuraNodes::authoring`] is its latch.
+/// protocol the feather uses; [`AuraNodes::authoring`] is its latch.
 ///
 /// The product it writes is the reference's own: this unit's `ramped aura alpha × the part's
 /// animated colour alpha × its live appear/despawn ramp`. Reading the fade back out of
@@ -799,7 +799,7 @@ pub(crate) fn apply_aura_alpha(
 /// Fold the unit's aura alpha into its **billboard cards** — the batches that can't be tree children.
 ///
 /// An M2's billboard batches are world ROOT entities that merely *follow* an anchor inside the model
-/// (decision 0153: their mesh is centred on the bone pivot and their transform belongs to the
+/// (their mesh is centred on the bone pivot and their transform belongs to the
 /// billboard system), so a descendant walk cannot see them. Skipping them is a burned trap, not a
 /// hypothetical: the night-elf eye glow — two additive `…EYEGLOW.BLP` quads at head height — went on
 /// burning in mid-air after the body it belongs to had faded out (ledger B71), and a stealthed night

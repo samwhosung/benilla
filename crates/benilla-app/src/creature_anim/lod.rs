@@ -1,4 +1,4 @@
-//! The animation-LOD gate (decision 0448): park an off-frustum — or, since decision 0739,
+//! The animation-LOD gate: park an off-frustum — or, since decision 0739,
 //! portal-invisible — rig's **per-bone pose evaluation**, keep **every clock** running. Since
 //! 0739 it governs the whole [`RigPose`] population — units, players, AND GameObject rigs (see
 //! the query's comment for why the old `With<AnimDriver>` filter left every animated GO
@@ -18,15 +18,15 @@
 //!   Bevy's `advance_animations` keeps ticking every seek clock, so waking is just sampling
 //!   again — there is no frozen state to resume from.
 //! - **(ii) off-screen combat is audible for `MORE_AUDIBLE` creatures — and only them**
-//!   (decision 1482, the tick half of the election): a parked rig's event tracks are not
+//!   (the tick half of the election): a parked rig's event tracks are not
 //!   scanned ([`super::events::fire_anim_events`] skips it, memory and all), except when its
 //!   cached creature template carries the `0x20` flag — the reference's `0x607da0` re-link arm.
 //!   The driver state machine still arms clips for every parked rig (pose correctness on wake —
 //!   the memo design of 1370 item 9 is the only safe skip there), so a flagged creature's
-//!   `$CSS`/`$CAH`/`$HIT` (0075), `$BWP`/`$BWR`, and `$CSL` (0430) fire off-screen exactly as
+//!   `$CSS`/`$CAH`/`$HIT`, `$BWP`/`$BWR`, and `$CSL` fire off-screen exactly as
 //!   the reference's do.
 //!
-//! The park mechanism is the [`AnimParked`] marker alone (decision 0712 — the evaluator took over
+//! The park mechanism is the [`AnimParked`] marker alone (the evaluator took over
 //! from `animate_targets`, and the old per-joint `AnimatedBy` repoint died with the targets): the
 //! pose evaluator ([`super::pose`]) skips a parked rig, so its bone `Transform`s stop changing,
 //! which quiets transform propagation and `extract_skins`' changed-joint upload by change
@@ -35,7 +35,7 @@
 //! stops the player and re-arms on the shared clock — correct there (no one consumes a doodad's
 //! events off-screen), the exact 0075 trap here.
 //!
-//! **The room leg (decision 0739).** The frustum is the wrong instrument indoors: a dungeon
+//! **The room leg.** The frustum is the wrong instrument indoors: a dungeon
 //! camera's view cone passes through walls, so most of an instance's population stays "in
 //! frustum" while only the current room chain is drawable. The portal PVS
 //! ([`benilla_world::wmo_portal`], the faithful WMO group cull) already knows which rooms the camera can
@@ -83,8 +83,8 @@ const RADIUS_SCALE: f32 = 2.0;
 const RADIUS_PAD: f32 = 4.0;
 const FALLBACK_RADIUS: f32 = 6.0;
 
-/// Park/wake streamed rigs by the padded sphere-vs-frustum test (decision 0448) ANDed with the
-/// portal-PVS room test (decision 0739 — see the module doc's "room leg"). PostUpdate,
+/// Park/wake streamed rigs by the padded sphere-vs-frustum test ANDed with the
+/// portal-PVS room test (see the module doc's "room leg"). PostUpdate,
 /// before [`AnimationSystems`] — a wake drops the marker in time for the same frame's pose
 /// evaluation, so the re-appearing unit samples the absolute-clock pose with no stale
 /// frame. Exempt: the body we drive (the camera rides its attachment-17 pivot, and it must keep
@@ -104,7 +104,7 @@ pub(super) fn gate_rig_animation(
             Option<&MountBody>,
             Option<&UnitWmoRoom>,
         ),
-        // The whole collapsed-rig population (decision 0739), not `With<AnimDriver>`: GameObject
+        // The whole collapsed-rig population, not `With<AnimDriver>`: GameObject
         // rigs deliberately carry no driver (their looping player IS the animation — attach's GO
         // arm), and gating on the driver left every animated GO sampling and refreshing off-view
         // — at the LBRS pin, ~350 of the ~620 per-frame refreshes. Parking preserves their whole
@@ -112,12 +112,12 @@ pub(super) fn gate_rig_animation(
         // events), `go_anim`'s state machine arms the player regardless of the marker, and the
         // wake samples the absolute clock.
         //
-        // `Without<DoodadAnimHost>` (decision 1365): placed doodads joined the collapsed lane,
+        // `Without<DoodadAnimHost>`: placed doodads joined the collapsed lane,
         // and their draw gate (`doodad_anim::gate_doodad_anim`) owns their `AnimParked` marker —
         // it parks on the composed draw verdict + fade sphere, the doodad lane's own law, and
         // two writers to one marker would fight every frame the two policies disagree.
         //
-        // `Without<StageRig>` (decision 1447): booth rigs joined the collapsed lane too (1443),
+        // `Without<StageRig>`: booth rigs joined the collapsed lane too (1443),
         // and a booth stage sits outside every world frustum by construction — unfiltered, this
         // gate froze every pane and glue scene `PARK_AFTER_SECS` after its bake, a marker the
         // booth camera gate (tracking only its own park edges) could not heal. Same one-writer
@@ -356,7 +356,7 @@ mod tests {
         ));
         app.init_asset::<WmoModel>();
         app.add_message::<AnimSoundEvent>();
-        // The event scanner's MORE_AUDIBLE read (decision 1482) — empty ⇒ every parked rig
+        // The event scanner's MORE_AUDIBLE read — empty ⇒ every parked rig
         // reads unflagged, the fail-closed default.
         app.init_resource::<crate::names::NameCache>();
         // The live schedule's shape: the gate ahead of the frame's pose evaluation; the event
@@ -391,7 +391,7 @@ mod tests {
             .translation
     }
 
-    /// The gate laws in one flow (0448, events re-lawed by 1482): an off-frustum rig parks
+    /// The gate laws in one flow (events re-lawed by 1482): an off-frustum rig parks
     /// (joints repointed at the park entity, bones frozen) while its seek clock keeps advancing —
     /// and its event keyframes FALL SILENT, because the reference's pass-2 walk (`0x683dd0`) never
     /// ticks an unflagged model (the 0448 "off-screen swings must not go silent" law rested on the
@@ -483,7 +483,7 @@ mod tests {
         let (behind, _) = spawn_rig(&mut app, Vec3::Z * 50.0);
         // A streamed creature whose descriptor names an entry the cache answers with the flag
         // set. The gate keys on `OBJECT_FIELD_ENTRY` (field 3), the way the reference keys its
-        // creature-query record (decision 2068) — not on the entry inside the guid.
+        // creature-query record — not on the entry inside the guid.
         const ENTRY: u32 = 69;
         app.world_mut()
             .entity_mut(behind)
@@ -636,7 +636,7 @@ mod tests {
         );
     }
 
-    /// The coverage law (decision 0739): a driverless rig — a GameObject's, whose looping
+    /// The coverage law: a driverless rig — a GameObject's, whose looping
     /// player is its whole animation — parks by the same gate. `With<RigPose>`, not
     /// `With<AnimDriver>`.
     #[test]

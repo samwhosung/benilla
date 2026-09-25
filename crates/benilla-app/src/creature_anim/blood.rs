@@ -151,8 +151,8 @@ pub(super) fn blood_spurts(
             stage: super::FxStage::OneShot,
             // One spurt per (record, tag) on a body: five attackers hitting the same flank
             // REPLACE each other's spurt rather than stacking five copies of it — the
-            // reference's `0x6208e0` walk, which `resolve_spell_fx` runs for every slot
-            // (decision 2057). It is why a busy fight does not brighten without bound there.
+            // reference's `0x6208e0` walk, which `resolve_spell_fx` runs for every slot.
+            // It is why a busy fight does not brighten without bound there.
             effects: vec![FxSlot {
                 tag: if front { ATTACH_FRONT } else { ATTACH_BACK },
                 effect,

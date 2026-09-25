@@ -6,7 +6,7 @@
 //! locomotes through the untouched gait driver, fed the host's own movement view
 //! ([`crate::creature_anim`]'s host-view redirect). This module owns the transition.
 //!
-//! ## The transition is a RE-SEAT, not a rebuild (B199)
+//! ## The transition is a RE-SEAT, not a rebuild
 //!
 //! The change handler `0x5ffa50` runs *teardown old, then build new*, and neither half touches the
 //! rider's own model.
@@ -31,7 +31,7 @@
 //! it). That is B199, and 0835 named exactly this teardown as the surviving source.
 //!
 //! So the transition now moves the rig's **consumer anchors** — the only children the rig's model
-//! frame owns (decision 0724) — from the unit's own frame onto the seat anchor and back, and
+//! frame owns — from the unit's own frame onto the seat anchor and back, and
 //! re-points [`RigPose::joints_root`]. Skinned parts render purely from the palette and never move;
 //! held items, spell-effect instances and overhead riders hang off the anchors and ride along, so
 //! nothing on the rider is destroyed, re-created, re-composited or re-faded by mounting.
@@ -104,7 +104,7 @@ pub(super) fn spawn_mount_child(
 /// `0x710620`).
 ///
 /// [`benilla_world::rig_anim::RigFrame`] marks it as `rider`'s model frame so the world pass cascades
-/// a re-seat into the rider's palette (decision 0724).
+/// a re-seat into the rider's palette.
 fn spawn_seat_anchor(
     commands: &mut Commands,
     joint: Entity,
@@ -189,7 +189,7 @@ pub(super) fn seat_or_spawn_mount(
         return Seat::Wait; // the mount child is still building
     };
     // The mount's attachment-0 joint, spawned on first demand from the MOUNT's composed pose
-    // (`RigPose::anchor_for`, decision 1355) — registered into the mount's own `RigPose.anchors`,
+    // (`RigPose::anchor_for`) — registered into the mount's own `RigPose.anchors`,
     // which is what lets the world pass's patch walk find the seat subtree and cascade the rider.
     let Some((joint, offset)) = bones.points.get(&0).and_then(|&(bone, offset)| {
         poses
@@ -214,7 +214,7 @@ pub(super) fn seat_or_spawn_mount(
 }
 
 /// The rider's **ground** frame: its own entity, or — for a model the reference tilts to the
-/// terrain (`GlobalModelFlags & 3 ∈ {1,3}`, decisions 0482/0486) — a fresh conform node under it.
+/// terrain (`GlobalModelFlags & 3 ∈ {1,3}`) — a fresh conform node under it.
 /// The mounted rider never gets one: the tilt dispatch is on the mount-preferred model, and the
 /// composite tilts through the *mount's* node, seat joint included.
 fn ground_frame(
@@ -243,7 +243,7 @@ fn ground_frame(
 
 /// Move a rig's consumer anchors onto `frame` and make it the rig's model frame — the ECS twin of
 /// `0x712f70 CM2Model::attachChild` / `0x713020`'s detach. The anchors are the only children the
-/// frame owns (decision 0724: skinned parts render from the palette and hang off the unit), so
+/// frame owns (skinned parts render from the palette and hang off the unit), so
 /// this one re-parent carries every held item, spell-effect instance and overhead rider with it.
 ///
 /// `pose_dirty` is raised so the same frame's compose re-seats the anchors' locals and re-writes
@@ -290,7 +290,7 @@ pub(super) fn reseat_mounts(
         With<super::VisualAttached>,
     >,
     // One pose query for BOTH sides of the seat — the rider's rig (re-rooted onto the seat) and
-    // the mount's (its attachment-0 anchor resolves on demand, decision 1355). Split from the
+    // the mount's (its attachment-0 anchor resolves on demand). Split from the
     // `units` query because the two sides are different entities out of the same component, and
     // borrowed strictly in sequence below.
     mut poses: Query<&mut RigPose>,

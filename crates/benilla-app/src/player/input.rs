@@ -2,7 +2,7 @@
 //! keyboard, the mouse and the binding table before any of it means anything to the avatar:
 //!
 //! - [`look_input`] — the both-button state and the reference's own **camera command word**
-//!   (1.12's `[InputControl+0x4]`, decision 1502), which the auto-follow is armed by. Read
+//!   (1.12's `[InputControl+0x4]`), which the auto-follow is armed by. Read
 //!   *before* the look session, because both camera seats want it — including the one on the
 //!   not-driving path, which returns before the axes below are ever computed. Its two mouse
 //!   terms come off [`camera::WorldMouse`], never `ButtonInput`: the reference's mouse bits are
@@ -11,7 +11,7 @@
 //! - [`move_axes`] — the **netted** forward/back and strafe axes plus the modes that select
 //!   between them (mouselook, keyboard turn), and the autorun latch with its cancel set. Netted
 //!   once here so that the direction we move, the speed we pick, the swim amounts and the flags we
-//!   stream can never disagree (decision 0056).
+//!   stream can never disagree.
 //!
 //! Nothing here touches the avatar: `move_axes` writes exactly one field ([`Player::autorun`]),
 //! because the autorun latch *is* input state.
@@ -49,7 +49,7 @@ pub(super) fn look_input(
     let steer_held = binds.pressed(crate::bindings::cmd::MOVE_AND_STEER);
     let both_buttons = rig.world_mouse.both() || steer_held;
 
-    // The camera's **input command word** (decision 1502) — 1.12's `[InputControl+0x4]`, bit for
+    // The camera's **input command word** — 1.12's `[InputControl+0x4]`, bit for
     // bit. The auto-follow is armed by *edges on this word* and its state is classified from it, so
     // it is built once here, from the same binding state the movement code reads, and handed
     // to both camera seats. MOVEANDSTEER sets both mouse bits because that is what the reference's
@@ -70,8 +70,8 @@ pub(super) fn look_input(
             rig.world_mouse.held(LookButton::Left) || steer_held,
             bit::LEFT_MOUSE,
         );
-        // `/follow` is the forward bit in the reference too — the same setter the W key drives
-        // (decision 0890), so it arms the camera exactly like a held W.
+        // `/follow` is the forward bit in the reference too — the same setter the W key drives,
+        // so it arms the camera exactly like a held W.
         set(
             binds.pressed(crate::bindings::cmd::MOVE_FORWARD) || player.follow_forward,
             bit::FORWARD,
@@ -145,11 +145,11 @@ pub(super) fn move_axes(
     rig: &CameraControl,
     both_buttons: bool,
     // The reference's two movement-input predicates this frame ([`state::may_translate`],
-    // [`state::may_turn`]) — `0x514560` and `0x5145b0`. Both go down on death (decision 1753).
+    // [`state::may_turn`]) — `0x514560` and `0x5145b0`. Both go down on death.
     may_translate: bool,
     may_turn: bool,
 ) -> MoveAxes {
-    // ── Autorun ── TOGGLEAUTORUN through the binding table (0997; 1.12 defaults NUMLOCK +
+    // ── Autorun ── TOGGLEAUTORUN through the binding table (1.12 defaults NUMLOCK +
     // BUTTON4 — the latter is winit's `Forward`, the thumb button this toggle lived on before
     // the table existed, kept by the codec's BUTTON4 mapping). A latched mode, not a held key:
     // the keyboard chord is typing-gated at dispatch like every binding, the mouse chord is
@@ -214,14 +214,14 @@ pub(super) fn move_axes(
     let autorun = player.autorun;
     // ── The forward/back axis ── one net value ([`state::forward_axis`], whose tests pin the
     // verified state table) read by every forward/back consumer downstream, so the direction we move,
-    // the speed we pick, the swim amounts and the flags we stream can't disagree (decision 0056).
+    // the speed we pick, the swim amounts and the flags we stream can't disagree.
     //
     // Zero is the state no "autorun = held forward" reading can produce, and it is reachable:
     // hold S *first*, then toggle autorun — the toggle pushes X=`0x1000`, so `test cl,0x30` misses
     // and the bit survives — and the client emits MSG_MOVE_STOP with S still held. The other order
     // (autorun, then S) destroys the bit at key-down and walks you backward. Same two keys, two
     // outcomes; that asymmetry is the whole shape of the feature.
-    // `/follow` enters as the FORWARD term, not a fifth source (decision 0890): the reference's
+    // `/follow` enters as the FORWARD term, not a fifth source: the reference's
     // follow pushes the very same move-forward bit `0x100000` the W key does, through the same
     // setter, so it nets against a held S and diagonals with a strafe exactly like a held W. It
     // rides the HELD state and not the key-DOWN edge, so it never trips the autorun cancel set
@@ -232,7 +232,7 @@ pub(super) fn move_axes(
         both_buttons,
         autorun,
     );
-    // Vanilla turn/strafe control model (decision 0050, `0x7c5360`): W/S move
+    // Vanilla turn/strafe control model (`0x7c5360`): W/S move
     // forward/back in the facing; **A/D turn the character** (rotate the facing at the turn rate) so
     // the body faces where it runs — UNLESS right-mouse is held (mouse-look), where A/D strafe and
     // the facing tracks the camera; **Q/E always strafe**. Movement basis is the *character* facing,
@@ -242,7 +242,7 @@ pub(super) fn move_axes(
     // mouse-looking. Netting is not a nicety: the two bits are mutually exclusive on the wire.
     // Holding both keys used to OR `STRAFE_LEFT | STRAFE_RIGHT` into the flags while the avatar
     // stood still (the controller's `dir` sum cancels), and vmangos **silently drops** every movement
-    // packet carrying that pair — never relaying it to anyone (decision 0622). Measured: 48 such
+    // packet carrying that pair — never relaying it to anyone. Measured: 48 such
     // packets in one session, 0 received by a watching client, against 0 in the reference
     // client's entire 1.12.1 capture. That is decision 0056's invariant — the wire mirrors the
     // avatar's actual motion — violated on this one axis only; the swim branch already nets.
@@ -262,7 +262,7 @@ pub(super) fn move_axes(
     // `0x514755` gate. Killing the turn here is also what ends B179's *second* half — the walk
     // animation a stunned character was still playing was the turn-in-place shuffle, which
     // `gait` derives from real yaw change. A **dead** body is down the same gate, through the
-    // precondition `0x5144e0` that both predicates share (decision 1753): health `<= 0` fails it,
+    // precondition `0x5144e0` that both predicates share: health `<= 0` fails it,
     // so as far as `0x5145b0` is concerned a corpse is stunned — which is why our corpses could
     // be spun with A/D until 1753, and why one term fixes the keys and the mouse together.
     let turning = !mouselook && may_turn && (turn_left || turn_right);

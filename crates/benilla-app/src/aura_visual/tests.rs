@@ -333,7 +333,7 @@ fn app_with_chains() -> App {
     app
 }
 
-/// The arming world plus the per-instance tint channel (decision 0812): the table resource, the
+/// The arming world plus the per-instance tint channel: the table resource, the
 /// palette allocator whose slots index it, and the publish system.
 fn app_with_tint_channel() -> App {
     let mut app = app_with_chains();
@@ -593,7 +593,7 @@ fn the_author_owns_the_tree_then_releases_at_opaque() {
     );
 }
 
-// ── The tint's render channel (decision 0812) ─────────────────────────────────────────────────────
+// ── The tint's render channel ─────────────────────────────────────────────────────
 
 /// **The tint end to end**: the ghost aura's CharProc-1 head node lands in the per-instance table at
 /// the unit's own rig slot, packed the way the reference packs it (`param | 0xff000000`) — and the
@@ -647,7 +647,7 @@ fn the_ghost_tint_reaches_the_instance_table_and_clears_with_the_aura() {
     assert_eq!(tints.get(slot), benilla_world::instance_tint::IDENTITY);
 }
 
-/// **The chain (decision 0841).** A rigged ATTACHED model — a spell-effect instance, or one of the
+/// **The chain.** A rigged ATTACHED model — a spell-effect instance, or one of the
 /// seven shoulder models whose welded billboard geometry made the item lane rig — carries its own
 /// instance slot, because the vertex stage indexes the skin palette with that same field and cannot
 /// borrow the wearer's. Its tint therefore has to come up the `ParentModel` link, which is the

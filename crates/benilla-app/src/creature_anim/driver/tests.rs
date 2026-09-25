@@ -1,6 +1,6 @@
 //! Headless integration tests for [`super::drive_animations`] — the full driver system run in a
 //! minimal app on synthetic units, exercising the cross-frame composition the pure-fn tests in
-//! `select::tests` can't reach. First tenant: the caster staff-stow chain (decisions 0080/0107 —
+//! `select::tests` can't reach. First tenant: the caster staff-stow chain (
 //! the stationary cast-hold gait pin feeding the per-animation sheath reconcile), pinned because
 //! vmangos hard-sets every creature's sheath byte to melee at spawn ("creatures always have melee
 //! weapon ready", `Creature.cpp`), so the cast-hold clip's WeaponFlags `&4` is the ONLY signal
@@ -380,7 +380,7 @@ fn spawn_fidgeter(app: &mut App) -> (Entity, Vec<AnimationNodeIndex>) {
     (unit, nodes)
 }
 
-/// The emergent idle fidget (decision 0123): a RELAXED base
+/// The emergent idle fidget: a RELAXED base
 /// arm rolls its variation (the client's `variationIdx = −1`), an engaged one is forced to the
 /// deterministic head, and the idle re-face turn-shuffle ([`crate::net::FacingStep`]) drives the
 /// Shuffle↔Stand churn whose every return to Stand re-rolls.
@@ -458,7 +458,7 @@ fn engaged_base_arms_keep_the_head_variation() {
     );
 }
 
-/// The GnollCaster case (decision 0125 — the director's ref falsification of the resolved-id
+/// The GnollCaster case (the director's ref falsification of the resolved-id
 /// reading): a model with NO spell animations at all falls back to a flags-less Stand for
 /// *playback*, but the sheath reconcile tests the **requested** id — ReadySpellDirected's own
 /// force-stow row — so the staff still leaves the hand for the whole windup, exactly like the
@@ -537,7 +537,7 @@ fn cast_hold_stows_even_when_the_model_lacks_the_spell_anims() {
 
 /// A spell-side flinch rides the wound **secondary slot**, never the one-shot route — the
 /// client's `0x60ea70(severity = 0)` from the kit player's 8–10 branch, the harmful instant
-/// impact, or the missile arrival (decision 2058): the [`WoundAnim`] edge arms the decaying
+/// impact, or the missile arrival: the [`WoundAnim`] edge arms the decaying
 /// overlay and the base track keeps playing untouched underneath (routing it as a one-shot would
 /// replace the base — the exact mistake decision 0111 falsified for melee).
 #[test]
@@ -586,7 +586,7 @@ fn spell_impact_wound_rides_the_secondary_slot() {
     );
 }
 
-/// The spell flinch is the client's **severity-0** wound call (decision 2058): it never carries
+/// The spell flinch is the client's **severity-0** wound call: it never carries
 /// the kit's own id, so the clip is CombatWound(9) on an engaged victim and StandWound(8) on an
 /// unengaged one — `0x60ea70`'s `(severity, engaged)` pick, the same as a non-crit melee hit.
 #[test]
@@ -644,7 +644,7 @@ fn spell_flinch_picks_the_wound_by_engagement() {
     assert_eq!(node(idle), Some(2), "unengaged: StandWound(8)");
 }
 
-/// The wound trigger's fourth entry gate (`0x60eaac`–`0x60eac8`; decision 2063): a CharProc-11
+/// The wound trigger's fourth entry gate (`0x60eaac`–`0x60eac8`): a CharProc-11
 /// rate-override node on
 /// the unit — what a freeze aura (Ice Block, Freezing Trap, petrify, web wrap) leaves attached —
 /// refuses every flinch for its life. The gate is the node's *presence*: kit 3071's rate of 1.0
@@ -800,7 +800,7 @@ fn whiff_slowdown_spares_a_non_swing_oneshot() {
     );
 }
 
-/// A same-frame swing/kit-anim collision runs the client's COMBAT FAST-PATH (decision 0406,
+/// A same-frame swing/kit-anim collision runs the client's COMBAT FAST-PATH (
 /// `0x5fe43c`–`0x5fe48b`): the requests replay in [`PlaySeq`] wire order, the FIRST
 /// arms, and the second — combat over combat — does NOT overwrite it: the armed clip doubles
 /// to 2× and the second parks in the deferred cache. Both wire orders keep the first arrival on
@@ -1061,8 +1061,7 @@ fn a_movement_flag_change_cuts_a_full_body_oneshot_immediately() {
 /// client's cast pin tests `[9e8] & 0x20000f` — translation + swim, NEVER the turn bits
 /// (`0x5fde80`, `move_flags::CAST_PIN_MOVE`) — so the full-body hold stays
 /// pinned through the flap. Routing this through the one-shot mask (`0x20003f`) instead churned
-/// the gait hold↔Shuffle on every mouse-delta frame — the frostbolt right-drag jitter
-/// (decision 0491).
+/// the gait hold↔Shuffle on every mouse-delta frame — the frostbolt right-drag jitter.
 #[test]
 fn turning_in_place_never_unpins_the_stationary_cast_hold() {
     let mut app = app();
@@ -1125,7 +1124,7 @@ fn turning_in_place_never_unpins_the_stationary_cast_hold() {
     assert_eq!(overlay, Some(51), "…and loops the hold masked on the torso");
 }
 
-/// The swim re-latch does NOT cut the hop's kick (decision 0517, director-corrected — amends
+/// The swim re-latch does NOT cut the hop's kick (director-corrected — amends
 /// 0503's swim arm): JumpStart PLAYS OUT over the re-latch, the swim gait waiting at its end.
 /// A GROUND cut (landing on a bank) still cuts immediately with 0503's pose-snapshot freeze.
 #[test]
@@ -1222,7 +1221,7 @@ fn the_swim_relatch_holds_the_kick_but_a_ground_cut_freezes_it() {
     );
 }
 
-/// The loot kneel, REMOTE half (the `0x5fd8b0` chain's loot leg → Loot 50, decision 0515):
+/// The loot kneel, REMOTE half (the `0x5fd8b0` chain's loot leg → Loot 50):
 /// `UNIT_FLAG_LOOTING` (`UNIT_FIELD_FLAGS` = field 46, bit 0x400 — up exactly while the unit's
 /// corpse-loot window is open) holds the authored-clamp kneel in a stationary unit's gait slot;
 /// movement suppresses it (the chain's locomotion-first order); the flag dropping (the loot
@@ -1278,7 +1277,7 @@ fn unit_flag_looting_kneels_stationary_units_only() {
     assert_eq!(gait(&app), Some(0), "released — back to Stand");
 }
 
-/// The loot kneel, SELF half (decision 0515 — the byte predicate `0x6126b0` splits on
+/// The loot kneel, SELF half (the byte predicate `0x6126b0` splits on
 /// IsActivePlayer): the local player's kneel rides the client-local loot-target latch
 /// (predicate B's standing answer over the `[player+0x1d28]` latch — [`crate::ui_loot::LootKneel`],
 /// decision 1477) — NOT its descriptor flag — so it starts the frame the arm lands
@@ -1415,7 +1414,7 @@ fn the_creep_vis_flag_prowls_the_body() {
     assert_eq!(gait(&app), Some(5), "broken stealth runs again");
 }
 
-/// The looping-variation ADVANCE (decision 0516 — the
+/// The looping-variation ADVANCE (the
 /// watchdog `0x719370`): a relaxed looping base arm installs a replay window (here `(1,1)` → one
 /// pass exactly); each completed window re-arms the id through the weighted, MEMORYLESS variation
 /// walk. Over a dozen windows both authored Stand variations must take the main slot — the
@@ -1533,7 +1532,7 @@ fn jumper(app: &mut App) -> Entity {
         .id()
 }
 
-/// **The director's hillside jump** (decision 1137): a run across broken ground micro-detaches for
+/// **The director's hillside jump**: a run across broken ground micro-detaches for
 /// a frame, and the jump pressed in that window lands and relaunches inside one frame — FALLING
 /// never drops, so the old FALLING-edge sample never re-ran and the arc kept the detachment's
 /// `jump_arc = false`. The body sailed upward playing the run gait.
@@ -1544,7 +1543,7 @@ fn a_jump_out_of_a_micro_detachment_still_enters_the_jump_bracket() {
     app.update(); // settle: Stand
     let mode = |app: &App| app.world().entity(unit).get::<AnimDriver>().unwrap().mode;
     // One frame of detachment while running: FALLING with a *downward* speed is a step-off arc —
-    // no bracket, the gait freezes, which is correct on its own (decision 0868).
+    // no bracket, the gait freezes, which is correct on its own.
     app.world_mut().entity_mut(unit).insert(MovementState {
         flags: move_flags::FALLING | move_flags::FORWARD,
         speed: 7.0,
@@ -1574,7 +1573,7 @@ fn a_jump_out_of_a_micro_detachment_still_enters_the_jump_bracket() {
 }
 
 /// The control on the launch rule: a step-off fall must stay a step-off fall for its whole arc.
-/// The gait freeze (`0x5fd8e8`) is the reference's behaviour (decision 0868) and the new edge
+/// The gait freeze (`0x5fd8e8`) is the reference's behaviour and the new edge
 /// must not reach into it — only a rise *past* the threshold is a launch, and a fall only ever
 /// accelerates downward.
 #[test]
@@ -1599,7 +1598,7 @@ fn a_deepening_step_off_fall_never_becomes_a_jump() {
     }
 }
 
-/// The ref's jump-in-place cast (decision 0864 — the report this pins): a cast id is CLASS_A
+/// The ref's jump-in-place cast (the report this pins): a cast id is CLASS_A
 /// but NOT COMBAT, so the airborne route test doesn't mask it — with no move bits it routes
 /// FULL-BODY and REPLACES the jump hang on bone 0 (the client's one-slot last-writer-wins; the
 /// old machine dropped it, which is why the cast only showed on *walking* jumps). The clip then
@@ -1691,7 +1690,7 @@ fn landing_mid_cast_plays_the_land_pick() {
 
 /// The FALLINGFAR latch mid-one-shot is an edge (`Jump → Fall`): the client plays Fall(40)
 /// ONCE, on the substep it latches (`0x61a820` — the 0864-era per-tick re-assert was
-/// refuted, decision 0868), replacing the clip. A fresh cast armed AFTER the latch then
+/// refuted), replacing the clip. A fresh cast armed AFTER the latch then
 /// holds bone 0 like any other airborne one-shot, until the landing pick cuts it.
 #[test]
 fn a_cast_over_the_fall_loop_holds_until_landing() {
@@ -1740,7 +1739,7 @@ fn a_cast_over_the_fall_loop_holds_until_landing() {
         ),
         "the cast arms over the Fall loop"
     );
-    // … and HOLDS through the rest of the fall: no per-tick re-assert exists (0868), and the
+    // … and HOLDS through the rest of the fall: no per-tick re-assert exists, and the
     // Fall level is not an edge.
     app.update();
     app.update();
@@ -1800,7 +1799,7 @@ fn a_moving_jump_cast_masks_onto_the_overlay() {
     );
 }
 
-/// **The transplant** (decision 0878 — the director's "jump right after a cast should only play
+/// **The transplant** (the director's "jump right after a cast should only play
 /// the lower body animation and finish the upper body one"). A standing cast routes full-body to
 /// bone 0; the jump that follows is a LOCOMOTION request, so the client does **not** overwrite it
 /// — `0x5fe919` copies the bone-0 descriptor (id, rate, and its **live play position**) onto the
@@ -1848,7 +1847,7 @@ fn a_jump_over_a_live_cast_transplants_it_to_the_torso() {
     );
 }
 
-/// A **Special is a bone-0 play, so it cannot cut the torso** (decision 0878 — the jump-running
+/// A **Special is a bone-0 play, so it cannot cut the torso** (the jump-running
 /// half of the director's report). A moving caster's hold rides the key-bone; taking off routes
 /// JumpStart to bone 0 (`0x5fe912`: with the key-bone armed the locomotion request goes straight
 /// there) and leaves the hold running. The old `special.is_none()` filter dropped it on takeoff.
@@ -1903,7 +1902,7 @@ fn a_jump_does_not_cut_the_moving_cast_hold() {
     );
 }
 
-/// **The fade-to-rest** (decision 0878 — "the end of the cast animation is cut off and it
+/// **The fade-to-rest** ("the end of the cast animation is cut off and it
 /// instantly snaps back"). A finished key-bone one-shot is never stopped: the client's completion
 /// event disarms the bone through op4 `param_3 = -1`, which holds the clip's final frame in the
 /// secondary slot and cross-fades it back onto the base over a fixed 150 ms. Real clip assets, so
@@ -2042,7 +2041,7 @@ fn a_finished_masked_cast_fades_out_instead_of_snapping() {
     );
 }
 
-/// The airborne-freeze in the GAIT slot (the step-off arc, decision 0864): live pins — here
+/// The airborne-freeze in the GAIT slot (the step-off arc): live pins — here
 /// the stationary cast hold — cannot swap the clip mid-air; the takeoff gait keeps rolling and
 /// the pin applies at touchdown.
 #[test]
@@ -2062,7 +2061,7 @@ fn the_step_off_arc_freezes_the_gait_against_live_pins() {
     let gait = |app: &App| app.world().entity(unit).get::<AnimDriver>().unwrap().gait;
     assert_eq!(gait(&app), Some(0));
     // Step off a ledge (downward launch: no jump arc, no Special; vz ≠ 0 — the freeze gate
-    // `0x5fd8e8`, `FALLING && (FALLINGFAR || vz ≠ 0)`, decision 0868) …
+    // `0x5fd8e8`, `FALLING && (FALLINGFAR || vz ≠ 0)`) …
     app.world_mut().entity_mut(unit).insert(MovementState {
         flags: move_flags::FALLING,
         vertical_speed: -3.0,
@@ -2149,7 +2148,7 @@ fn a_midair_deferred_park_survives_the_level_and_dies_at_the_landing_play() {
 }
 
 /// The deferred cache's consuming read sits DOWNSTREAM of the airborne-freeze (`0x5fd392`
-/// inside the `0x5fd360` recompute arm; decision 0868): a park made mid-arc is
+/// inside the `0x5fd360` recompute arm): a park made mid-arc is
 /// never consumed mid-air, even with the body free — it waits, and the landing edge's play
 /// clears it.
 #[test]
@@ -2288,7 +2287,7 @@ fn a_landed_swing_snaps_its_attacker_out_of_the_ranged_stance() {
     assert_eq!(sheath(&app), Some(1), "melee holds across the volley");
 }
 
-/// **The ceremony's two movements, end to end** (decision 0872) — the director's report: pressing
+/// **The ceremony's two movements, end to end** — the director's report: pressing
 /// Z with both hands full puts the weapons away, lets the arms come back to neutral, and only
 /// *then* reaches over the shoulder for the bow. Phase 1 is the setter's own play (`0x611b60`);
 /// phase 2 is the on-anim-finish drawer (`0x5fc920` @ `0x5fca8c`/`0x5fcaa1`), which is the half
@@ -2420,7 +2419,7 @@ fn a_melee_to_ranged_toggle_stows_both_hands_before_it_reaches_for_the_bow() {
     );
 }
 
-/// **Ice Block, at the mechanism (decision 0894).** The stun's root wipes the direction bits in the
+/// **Ice Block, at the mechanism.** The stun's root wipes the direction bits in the
 /// SAME frame the cast one-shot arrives, so the one-shot's own arm-time flags already read ROOT and
 /// an arm-time comparison sees no movement edge — ever. The base's flags still hold the run it was
 /// armed for, so the edge is there, the re-arm resolves to **Stand(0)** (not locomotion → no
@@ -2535,7 +2534,7 @@ fn walker_model() -> ModelAnimations {
     }
 }
 
-/// A **mount's** model, as the real assets are shaped (decision 0906): Horse.m2 authors no
+/// A **mount's** model, as the real assets are shaped: Horse.m2 authors no
 /// JumpLandRun 187 at all, and its baked PlayableAnimationLookup answers a 187 request with
 /// **Run(5)** — `playable[187] = 5`, the same row Tiger.m2 (the druid travel form) and Cat.m2
 /// carry. The Run clip's authored design speed is the horse's real 9.028 yd/s.
@@ -2587,7 +2586,7 @@ fn walk_rate(app: &App, unit: Entity) -> f32 {
         .speed()
 }
 
-/// The director's ogre, end to end through the real system (decision 0903): a Gordok Ogre-Mage
+/// The director's ogre, end to end through the real system: a Gordok Ogre-Mage
 /// (`CreatureDisplayInfo.CreatureModelScale` 2.2, so `OBJECT_FIELD_SCALE_X` 2.2) walking at
 /// vmangos' `speed_walk` 1.6 × 2.5 = 4.0 yd/s must cycle its legs at 4.0 / (2.5 × 2.2) = 0.73×.
 /// Scale-blind it read 1.60× — the "too fast walk" report. The control is the same unit at scale
@@ -2675,7 +2674,7 @@ fn a_mounts_gait_rate_composes_the_riders_scale_with_the_mounts() {
     );
 }
 
-/// The director's report (decision 0906): "jumping while running forward, mounted or in druid
+/// The director's report: "jumping while running forward, mounted or in druid
 /// travel form, slows the running animation on landing and it takes ~1-2 s to snap back".
 ///
 /// The landing request is JumpLandRun 187; on every creature model that resolves to **Run(5)**,
@@ -2771,7 +2770,7 @@ fn drv_of(app: &App, unit: Entity) -> &AnimDriver {
 fn the_mount_transition_takes_bone_0_back_from_a_full_body_one_shot() {
     use benilla_protocol::ObjectFields;
 
-    /// `UNIT_FIELD_MOUNTDISPLAYID` (index 133, decision 0441).
+    /// `UNIT_FIELD_MOUNTDISPLAYID` (index 133).
     const FIELD_MOUNTDISPLAYID: u16 = 133;
     const SPELL_CAST_OMNI: u16 = 54;
     const MOUNT: u16 = 91;
@@ -2848,7 +2847,7 @@ fn the_mount_transition_takes_bone_0_back_from_a_full_body_one_shot() {
     assert_eq!(playing(&app), Some(0), "back on its own feet, standing");
 }
 
-/// **B204 — the dismount CUTS the saddle pose; the mount-up blends into it** (decision 0931).
+/// **B204 — the dismount CUTS the saddle pose; the mount-up blends into it**.
 /// The two legs of the `UNIT_FIELD_MOUNTDISPLAYID` watcher issue the same seven-argument op4
 /// `0x7121a0` call and differ in exactly one literal: `0x607b35 push 0x1` (build, cross-fade) vs
 /// `0x607d1c push 0x0` (teardown, no cross-fade). Fading Mount(91) out instead of cutting it is
@@ -3490,7 +3489,7 @@ fn spawn_vendor(app: &mut App) -> (Entity, Vec<AnimationNodeIndex>) {
     (npc, nodes)
 }
 
-/// The **cross-seam** test for the turn-shuffle (decision 1655): `net::motion::facing` produces the
+/// The **cross-seam** test for the turn-shuffle: `net::motion::facing` produces the
 /// [`crate::net::FacingStep`] latch and this driver consumes it, and until this test the two had
 /// only ever been exercised apart — the producer's tests read the transform, the consumer's tests
 /// inserted the component by hand. Neither could see the seam, which is how a mechanism that was
@@ -3606,7 +3605,7 @@ fn the_interaction_face_me_shuffles_its_feet_for_the_whole_turn() {
     assert!(peak > 0.95, "and blends the whole way in: {peak}");
 }
 
-/// **A disarmed attacker fights bare-handed** (decision 1863) — the whole of `UNIT_FLAG_DISARMED`
+/// **A disarmed attacker fights bare-handed** — the whole of `UNIT_FLAG_DISARMED`
 /// on the animation side, run through the real driver against an armed control on the same frame.
 /// The reference gets here with no disarm case in any selector: `GetWeapon(slot, 0)` hands the
 /// swing (`0x6246a0`) and the Ready idle (`0x5fcdc0`) a NULL hand, and their existing unarmed legs
@@ -3873,8 +3872,8 @@ fn a_special_goes_unarmed_only_when_both_hands_are_empty() {
 
 /// A creature whose template carries **DO_NOT_PLAY_WOUND_ANIM** (`type_flags & 0x8`) takes no
 /// wound flinch at all — the reference's `0x60ea9f` gate inside the flinch itself, so it covers
-/// every trigger: the melee hit, the `$HIT` echo and the spell-side severity-0 call alike
-/// (decision 2068). This is the skeleton case: no flesh, no recoil.
+/// every trigger: the melee hit, the `$HIT` echo and the spell-side severity-0 call alike.
+/// This is the skeleton case: no flesh, no recoil.
 ///
 /// The control beside it is the whole point — the gate must key on bit `0x8` and nothing else,
 /// and benilla read the *neighbouring* bit for months. So the unflagged victim here carries
@@ -4066,7 +4065,7 @@ fn the_no_wound_flag_takes_the_parry_but_not_the_dodge() {
     );
 }
 
-/// **The weapon-trail latch's edge** (decision 2076): `AnimDriver::started_anim` must be raised by
+/// **The weapon-trail latch's edge**: `AnimDriver::started_anim` must be raised by
 /// a plain gait change, not only by a one-shot.
 ///
 /// `0x5fe2f0` is the image's single animation entry point — locomotion reaches it through
@@ -4125,7 +4124,7 @@ fn a_gait_change_raises_the_anim_edge_and_a_steady_frame_does_not() {
     assert!(edge(&app), "and so does a one-shot");
 }
 
-/// **The combat fast path must NOT raise the anim edge** (decision 2076).
+/// **The combat fast path must NOT raise the anim edge**.
 ///
 /// `0x5fe43c` returns at `0x5fe48b` — *before* `0x5fe48e`, the weapon-trail latch's only read —
 /// when the unit is already playing a combat animation and requests another one. So a pending
@@ -4135,7 +4134,7 @@ fn a_gait_change_raises_the_anim_edge_and_a_steady_frame_does_not() {
 /// colours and durations, on 23 of the 34 type-8 kits.
 ///
 /// benilla does not need to build that gate: the driver's request loop already fast-paths
-/// combat-over-combat (decision 0406) and `continue`s without playing, so the edge never rises.
+/// combat-over-combat and `continue`s without playing, so the edge never rises.
 /// This pins the connection between the two, which is otherwise invisible — they live in different
 /// modules and neither mentions the other's mechanism.
 #[test]
@@ -4189,7 +4188,7 @@ fn a_combat_over_combat_fast_path_does_not_raise_the_anim_edge() {
     );
 }
 
-/// The **base-animation lock** (decision 2096) —
+/// The **base-animation lock** —
 /// the reason a Lashed player visibly falls over, and the correction to 2085's reading.
 ///
 /// A stun's root recomputes the base unconditionally and the selector resolves `Stand(0)`; what

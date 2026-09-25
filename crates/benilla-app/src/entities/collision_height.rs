@@ -1,5 +1,5 @@
 //! The per-unit **collision height** ([`CollisionHeight`]) — the reference's `CMovement+0xb4`,
-//! derived from the unit's display id and stamped on every streamed entity (decision 0645).
+//! derived from the unit's display id and stamped on every streamed entity.
 //!
 //! It lives beside the display cache because that is where a display id becomes model facts; every
 //! *consumer* is elsewhere (`player::swim`, `sound::water`, `sound::footsteps`, `water_fx`,
@@ -19,7 +19,7 @@ use super::Creatures;
 /// [`crate::player::DEFAULT_COLLISION_HEIGHT`], the client's own empty-world ctor default — so all
 /// five lines were right for a human male (2.031, within 2 mm of it) and wrong for every other
 /// race. A gnome female stands 1.15 yd and was held 1.52 yd under: she could not reach the
-/// surface, which is how the defect finally showed (B76).
+/// surface, which is how the defect finally showed.
 ///
 /// `CreatureModelData.collisionHeight × k`. The column is the model's own MD20 collision-box Z
 /// extent in raw model units — machine-pinned against the shipped client (`benilla_formats`

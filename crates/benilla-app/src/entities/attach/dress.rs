@@ -28,7 +28,7 @@ use super::char_skin::CharSkinMaterials;
 
 /// The display-model batch a spawned part child was built from — its index into
 /// [`DisplayModel::parts`](super::super::DisplayModel), plus the world-root billboard card that
-/// belongs to it when the batch is a camera-facing one (decision 0153: the card is a ROOT entity,
+/// belongs to it when the batch is a camera-facing one (the card is a ROOT entity,
 /// so it does not cascade with its anchor's despawn and must be named here).
 ///
 /// This is the **re-dress edge** ([`super::redress`]): a gear change re-selects the geoset set and
@@ -55,13 +55,13 @@ pub(super) struct PartMaterials<'a> {
     pub(super) fade_blend: Option<&'a Handle<WowModelMaterial>>,
     pub(super) bake: Option<&'a Handle<WowModelMaterial>>,
     pub(super) bake_blend: Option<&'a Handle<WowModelMaterial>>,
-    /// The depth-prime twin (decision 0831) — carried per appearance like the rest, since its
+    /// The depth-prime twin — carried per appearance like the rest, since its
     /// cutout discard samples the same swapped texture.
     pub(super) zfill: Option<&'a Handle<WowModelMaterial>>,
 }
 
 /// Select `part`'s materials: on a character-slot batch the per-appearance variants over the
-/// composited body atlas / hair / cape / extra-skin textures (decisions 0041 / 0044 / 0045) — the
+/// composited body atlas / hair / cape / extra-skin textures — the
 /// body and the extra skin at the batch's own sidedness, since a robe skirt is authored two-sided
 /// and the closed body is not — and on every other batch the ones the shared model was built with.
 pub(super) fn part_materials<'a>(
@@ -104,7 +104,7 @@ pub(super) fn part_materials<'a>(
 }
 
 /// The material store and the two animated-material registries, for the one entity population
-/// that needs a material of its **own** rather than the batch's (decision 2295).
+/// that needs a material of its **own** rather than the batch's.
 ///
 /// Taken as one bundle, and taken by the dressing path itself rather than by a system that fixes
 /// parts up afterwards, because the cloned handles have to be in hand *before* the part's
@@ -142,7 +142,7 @@ impl OwnedMaterials {
 }
 
 /// Give this part a material set of its **own**, registered against its own instance's anim host —
-/// or `None`, which is every part but a measured thirteen batches (decision 2295).
+/// or `None`, which is every part but a measured thirteen batches.
 ///
 /// **Who needs one.** A batch whose file-sequence slots bake *different* UV or tint loops cannot be
 /// served by a material every instance of the model shares: the registries are keyed by material,
@@ -178,7 +178,7 @@ fn own_per_sequence_materials(
     let mut clone = |h: &Handle<WowModelMaterial>| -> Option<Handle<WowModelMaterial>> {
         benilla_world::model_render::lazy::realize(own.store, h.id());
         let mut mat = own.store.get(h.id()).cloned()?;
-        // A clone leaves the shared table (decision 1381): its rows are its own, and a carried
+        // A clone leaves the shared table: its rows are its own, and a carried
         // slot would add the shared delta on top of them.
         mat.extension.anim_slots = Vec4::ZERO;
         Some(own.store.add(mat))
@@ -304,7 +304,7 @@ pub(super) struct PartDress<'a> {
     pub(super) rigged: bool,
     /// Bone index → anchor entity, for a billboard batch's card to ride its live joint. Resolved
     /// by the CALLER through `RigPose::anchor_for` for exactly the card bones this dress will
-    /// spawn (decision 1355) — owned, because the resolver needs `&mut` on the pose and this
+    /// spawn — owned, because the resolver needs `&mut` on the pose and this
     /// context is shared immutably across every part.
     pub(super) anchors: std::collections::HashMap<u16, Entity>,
     /// The model's interior fold reference (model-local) — one verdict per unit, so a body can
@@ -315,7 +315,7 @@ pub(super) struct PartDress<'a> {
     /// `Time::elapsed_secs`, for a part joining a ramp already in progress.
     pub(super) now: f32,
     /// What this part should do about the unit's appear-fade. A fresh visual passes
-    /// `Pending { since: now }` (decision 0032); a part spawned by a **re-dress** JOINS whatever the
+    /// `Pending { since: now }`; a part spawned by a **re-dress** JOINS whatever the
     /// unit's own clock says ([`benilla_world::model_fade::join_unit_appear_fade`]), exactly as a
     /// late-resolving held item does — so a gear change during the login cascade neither pops the
     /// new geoset opaque over a still-feathering body nor restarts a second ramp beside it.
@@ -328,7 +328,7 @@ pub(super) struct PartDress<'a> {
 ///
 /// A **billboard** batch (a glow card / chain) can't spawn as an ordinary child: its mesh is centred
 /// at the bone pivot and its transform belongs to the billboard system, so as a plain child it would
-/// render at the model origin (the "glow on the ground" family, decision 0153). It spawns as a
+/// render at the model origin (the "glow on the ground" family). It spawns as a
 /// lightweight mirror anchor under the unit plus a world-root card following the anchor's live joint.
 /// [`spawn_part`] for a merged group (`attach::merge`): the synthetic group part, the first
 /// member's index, and the member list the redress reads back. A singleton passes `None` and
@@ -366,14 +366,14 @@ pub(super) fn spawn_part(
         None => part_materials(part, dress.char_mats),
     };
     let set = mats.fade_set();
-    // A freshly-streamed CGObject appear-fades in (decision 0032): spawn already on the blend twin
+    // A freshly-streamed CGObject appear-fades in: spawn already on the blend twin
     // with a ≈0 `MeshTag`, so it doesn't flash opaque for a frame before `apply_render_fade` ramps
     // `α = t³`. A joiner computes the ramp's *current* alpha rather than 0, so it doesn't flash
     // invisible for a frame either.
     let effective = PartFade::resolve(dress.fade, &set);
     let (init_mat, tag_alpha) = effective.seed(&set, dress.now);
     // A skinned creature part draws its skinned-mesh twin (the WOW joint attributes → the
-    // owned-palette `WOW_RIG_SKIN` shader path, decision 0720); everything else — and the
+    // owned-palette `WOW_RIG_SKIN` shader path); everything else — and the
     // palette-full fallback (slot 0) — the static mesh. Keyed on the part having a twin, which the
     // slot alone no longer implies.
     let skinned = dress.inst_slot != 0 && part.skinned_mesh.is_some();
@@ -400,7 +400,7 @@ pub(super) fn spawn_part(
             material: mats.steady.clone(),
         },
         dress.object.clone(),
-        // The picker's triangles (decision 0857): the render meshes are `RENDER_WORLD`-only, so
+        // The picker's triangles: the render meshes are `RENDER_WORLD`-only, so
         // the ray pickers read the model's resident geometry instead.
         benilla_world::interact::PickMesh(part.geometry.clone()),
         DressedPart {
@@ -422,7 +422,7 @@ pub(super) fn spawn_part(
         tag_alpha,
     )));
     // `RigPart` stays gated on actually being skinned by that rig — it is the CPU-side link for the
-    // mouseover picker's skinned ray test (decision 0720), which has nothing to say about a static
+    // mouseover picker's skinned ray test, which has nothing to say about a static
     // part.
     if skinned {
         child.insert(benilla_world::rig_palette::RigPart(dress.unit));
@@ -449,13 +449,13 @@ pub(super) fn spawn_part(
         }
     } else if let Some(aabb) = part.aabb {
         // A STATIC part (a boneless GameObject model, a WMO-display batch) keeps Bevy's ordinary
-        // frustum cull — but its bind-pose box must be inserted here now (decision 0834):
+        // frustum cull — but its bind-pose box must be inserted here now:
         // `calculate_bounds` used to derive it from the mesh's main-world data, which the
         // `RENDER_WORLD`-only static form no longer has after extract.
         child.insert(aabb);
     }
     // M2 parts can light off a WMO room they stand in: a `MeshTag` + the classifier pick the law by
-    // location (0354). Anchored at the unit root so every part shares the root's verdict, and the
+    // location. Anchored at the unit root so every part shares the root's verdict, and the
     // indoor LAW is one for every entity M2 — the footprint-MOCV bake (`0x69e4c0`, `0x6a7300`),
     // with the matte ×1.0 as the bake's miss fallback.
     if let Some(lit) = part_interior_lit(
@@ -485,7 +485,7 @@ pub(super) fn spawn_part(
 /// paper-doll booths can rebuild the batch — the visible card is a world ROOT and can never be
 /// mirrored) plus the card itself, following the batch's live joint when the unit is rigged and the
 /// anchor otherwise. Returns whether the card armed the unit's appear-fade, exactly as a mesh part
-/// does: the batch is the model's, so it fades with the model (decision 0836).
+/// does: the batch is the model's, so it fades with the model.
 fn spawn_billboard_part(
     commands: &mut Commands,
     part: &EntityPart,
@@ -524,8 +524,8 @@ fn spawn_billboard_part(
         BillboardCard::following(info, owner)
     };
     // A card is a batch of the unit's own model, so it joins the unit's appear-fade like any other
-    // batch of it — the reference has ONE instance alpha per model and every batch draws through it
-    // (decision 0836). Splitting the batch into a world-root entity is benilla's parenting detail;
+    // batch of it — the reference has ONE instance alpha per model and every batch draws through it.
+    // Splitting the batch into a world-root entity is benilla's parenting detail;
     // it is not a reason for the glow on a weapon's gems to blaze at full strength over a body that
     // has not appeared yet.
     // A card may need a material of its own for exactly the same reason a mesh part does — and
@@ -548,22 +548,22 @@ fn spawn_billboard_part(
             blend: part.blend,
         },
         dress.object.clone(),
-        // The picker's triangles (decision 0857) — the caster centres a card at its pivot, the
+        // The picker's triangles — the caster centres a card at its pivot, the
         // same bake the render form draws with.
         benilla_world::interact::PickMesh(part.geometry.clone()),
         card_follow,
     ));
     insert_pick_marker(&mut card, dress.kind);
     // A card takes its MODEL's indoor law through the same constructor as the sibling meshes it was
-    // split out of (decision 0778), and carries the unit's INSTANCE slot like every sibling part
+    // split out of, and carries the unit's INSTANCE slot like every sibling part
     // even though it is never skinned by it — it is a batch of the unit's own model, so a tinted
-    // unit tints its eye-glow and torch cards too (decision 0812). No char-slot variants are
+    // unit tints its eye-glow and torch cards too. No char-slot variants are
     // consulted: a body/hair/cape/skin-extra batch is never a billboard batch.
     card.insert(MeshTag(benilla_world::mesh_tag::spawn_tag(
         dress.inst_slot,
         tag_alpha,
     )));
-    // The card's build-time bound (decision 0834) — `calculate_bounds` can no longer derive one
+    // The card's build-time bound — `calculate_bounds` can no longer derive one
     // from the `RENDER_WORLD`-only static form's data.
     if let Some(aabb) = part.aabb {
         card.insert(aabb);
@@ -767,8 +767,8 @@ mod tests {
         assert!(!found[0].1, "…without arming an appear fade");
     }
 
-    /// **A camera-facing batch fades with its model** (decision 0836): the split into a world-ROOT
-    /// card is benilla's parenting detail (0153), not a law — the reference has one instance alpha
+    /// **A camera-facing batch fades with its model**: the split into a world-ROOT
+    /// card is benilla's parenting detail, not a law — the reference has one instance alpha
     /// per `CM2Model` and every batch draws through it, billboard batches included. The card used
     /// to open at a flat opaque with no arm and no record, which is a night-elf's eye glow and an
     /// undead's shoulder wisps burning at full strength over a body still at α 0.

@@ -88,7 +88,7 @@
 //! - **`ResetView` writes the CVars back to their defaults; the reference does not.** `0x50fae0`
 //!   re-parses the default strings into the slot array and re-applies the view, and touches no
 //!   CVar — so in the real client a reset comes *back* at the next launch, out of the value
-//!   `SaveView` archived. Here the CVar store is the persistence (0954), so a reset that does not
+//!   `SaveView` archived. Here the CVar store is the persistence, so a reset that does not
 //!   persist is a bug rather than a quirk worth aping; writing the default string verbatim also
 //!   makes [`crate::cvars`]'s diff-shaped file drop the key entirely.
 //! - **`SetView` glides the distance and snaps pitch and yaw.** The reference arms all three of its
@@ -169,7 +169,7 @@ impl ViewPose {
     fn from_reference(distance: f32, pitch_deg: f32, yaw_deg: f32) -> Self {
         Self {
             distance: distance.clamp(CAM_DIST_MIN, CAM_DIST_MAX),
-            // The one bridge, shared with the per-character pose file (decision 1138).
+            // The one bridge, shared with the per-character pose file.
             pitch: pitch_from_file(pitch_deg),
             yaw: wrap_pi(yaw_deg.to_radians()),
         }
@@ -459,7 +459,7 @@ mod tests {
     use super::*;
 
     /// Every shipped view lands the pose the reference's own default table carries — the numbers
-    /// out of `0x84f488`, through the one pitch bridge (decision 1138), clamped where the rig
+    /// out of `0x84f488`, through the one pitch bridge, clamped where the rig
     /// clamps. This is the test that would catch a transcription slip in [`VIEW_DEFAULTS`].
     #[test]
     fn each_shipped_view_lands_its_recorded_pose() {

@@ -17,13 +17,13 @@
 //! `GlobalTransform`s, so riding a moving parent needs nothing special. A boneless prop's glow
 //! card FOLLOWS an anchor child instead of baking a world pivot (`BillboardCard::following`).
 //!
-//! A prop with an authored collision hull is SOLID (0470): its collider spawns as a body-less
+//! A prop with an authored collision hull is SOLID: its collider spawns as a body-less
 //! child, which avian attaches to the nearest `RigidBody` ancestor — the transport's kinematic
 //! body — so the cargo's collision sails with the deck (the same collide-iff-hull law as world
 //! placements; hull-less furniture stays walk-through, exactly like the reference). The mover's
 //! ride-attach walks the support's parent chain, so standing on a crate is standing on the boat.
 //!
-//! The prop's live dressing (0474, closing the 0458 gaps) takes the ENTITY-owned shape, not the
+//! The prop's live dressing (closing the 0458 gaps) takes the ENTITY-owned shape, not the
 //! terrain path's world-baked one:
 //! - **Emitters** (the deck lanterns' flames) spawn with `owner` = the emitter's host-bone joint
 //!   (or the prop's root submesh for a boneless model) and `anchor` = the prop root — the sim
@@ -34,7 +34,7 @@
 //!   none. The emitter entity parents under the gameobject, so the off-map hide reaches it and
 //!   despawn cascades.
 //!   ⚠ **This used to say the population is "bounded by server visibility instead". That was
-//!   wrong, and a transport is the exact counter-example** (decision 0678, bug B39): vmangos
+//!   wrong, and a transport is the exact counter-example** (bug B39): vmangos
 //!   streams transports **map-wide**, so a ship's deck lanterns are resident from anywhere on the
 //!   map. Measured from Durotar: 56 emitters ticking and drawing at 4853–7080 yd, this boat's
 //!   lanterns among them. The bound is now the far-clip wall, applied in
@@ -206,7 +206,7 @@ pub(super) fn spawn_wmo_gameobject_props(
         return; // no shared light buffer yet
     };
     let light = &light;
-    // The animated-prop clock origin (decision 0130) — per-instance phase = spawn time.
+    // The animated-prop clock origin — per-instance phase = spawn time.
     let now = time.elapsed_secs();
     for (entity, host_gt, mut props) in &mut hosts {
         // The host's pose THIS frame — the spawn-time composition base for the interior fold and
@@ -219,7 +219,7 @@ pub(super) fn spawn_wmo_gameobject_props(
             let Some(m) = m2s.get(&prop.handle) else {
                 return true; // still loading — retry next frame
             };
-            // The prop's app-built render forms (decision 0834): a transport's cabin props are
+            // The prop's app-built render forms: a transport's cabin props are
             // the entity lane — priority 0, same as any creature walking into view.
             let ready = if benilla_world::doodad_anim::wants_rig(m) {
                 forms.require_rigged(&prop.handle, 0)
@@ -261,7 +261,7 @@ pub(super) fn spawn_wmo_gameobject_props(
             };
             let (radius, center) = m2_fade(&m.bounds, prop.local.scale.x);
             let anim_bound = m2_anim_bound(&m.bounds);
-            // The interior lane (0474): fold the cabin prop's committed light ONCE, composed
+            // The interior lane: fold the cabin prop's committed light ONCE, composed
             // through the host's current pose. Exact on a mover — see the module doc's
             // invariance argument.
             let interior_slot = prop.interior.as_ref().and_then(|lane| {
@@ -306,7 +306,7 @@ pub(super) fn spawn_wmo_gameobject_props(
                 // (`PropLight::inspector_label`): a prop that looks wrong is almost always on the
                 // wrong lane or reading the wrong probe, and neither is visible from the model
                 // path. This lane's props were the ones the entity shade writer renamed out from
-                // under (B373), and a hover said nothing at all.
+                // under, and a hover said nothing at all.
                 detail: match (&prop.interior, interior_slot) {
                     (Some(lane), Some(slot)) => format!(
                         "WMO gameobject prop · interior amb {} dif {} · {} MOLR · probe slot {slot}",
@@ -362,7 +362,7 @@ pub(super) fn spawn_wmo_gameobject_props(
                 commands.entity(first).insert(PropProbeSlot(slot));
                 interior += 1;
             }
-            // Solid cargo (0470): collide-iff-hull, the world-placement law. The hull bakes the
+            // Solid cargo: collide-iff-hull, the world-placement law. The hull bakes the
             // prop-LOCAL placement into its vertices (the same object-frame the boat's own hull
             // collider uses), and the child carries NO RigidBody — avian attaches a bare collider
             // to the nearest body ancestor, the transport's kinematic body, so the collision
@@ -382,7 +382,7 @@ pub(super) fn spawn_wmo_gameobject_props(
                 commands.entity(entity).add_child(hull);
                 hulls += 1;
             }
-            // The prop's live dressing (0474) — the entity-owned shape, never the terrain path's
+            // The prop's live dressing — the entity-owned shape, never the terrain path's
             // world bake; see the module doc. All of it needs a root entity to ride.
             if let Some(&root) = ents.first() {
                 let placement = host_world.mul_transform(prop.local);
@@ -408,7 +408,7 @@ pub(super) fn spawn_wmo_gameobject_props(
                             // A placed prop's model is destroyed when its placement unloads.
                             on_owner_loss: particles::OwnerLoss::Free,
                             // A placed prop carries no fade component of its own; its emitters
-                            // take the doodad distance fade in the sim instead (0827).
+                            // take the doodad distance fade in the sim instead.
                             // A WMO prop is lit by the CMapDoodadDef provider (`0x6a8050`), not the
                             // WENTITY one this edge feeds — its interior words come from its own MODD
                             // colour and are folded at spawn (`PropLight::Interior`). Wiring that twin
@@ -417,7 +417,7 @@ pub(super) fn spawn_wmo_gameobject_props(
                             alpha: None,
                         },
                         // A placed prop: the doodad law — which is NOT one arm for life. It re-rolls
-                        // its variation every play-window (decision 0768), so the emitter resolves
+                        // its variation every play-window, so the emitter resolves
                         // the slot + clip time off the host's live player each frame.
                         match host.as_ref().and_then(|h| h.arm) {
                             Some(arm) => particles::EmitClock::Host(arm),
@@ -444,7 +444,7 @@ pub(super) fn spawn_wmo_gameobject_props(
                         use_pivot,
                         placement.scale.max_element(),
                         benilla_world::ribbons::RibbonSeq::Host(entity),
-                        // No model-alpha source: a placed prop / effect instance is always drawn (0827).
+                        // No model-alpha source: a placed prop / effect instance is always drawn.
                         None,
                         // No fade sphere: a GameObject's props ride the GameObject, not a
                         // baked world placement — that gate's centre is a fixed world point and a
@@ -453,7 +453,7 @@ pub(super) fn spawn_wmo_gameobject_props(
                         // to give it rooms. The far-clip wall still applies: `simulate_ribbons`
                         // bounds a fade-less trail at the wall exactly as `simulate_particles`
                         // bounds a fade-less emitter, which is what a map-wide-streamed transport
-                        // five kilometres away needs (decision 0678).
+                        // five kilometres away needs.
                         //
                         // Still open, and named rather than guessed at: a `Visibility`-hidden
                         // transport trails. The trail reads its owner's render alpha, not its

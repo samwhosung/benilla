@@ -1,6 +1,6 @@
 //! The self-spline ride: when a server-authored spline drives our own player — an `SMSG_MONSTER_MOVE`
 //! addressed to our guid — input yields, we ride it out, and we acknowledge `CMSG_MOVE_SPLINE_DONE`
-//! so the server hands control back. Warrior **Charge** is the first case (decision 0260); knockback,
+//! so the server hands control back. Warrior **Charge** is the first case; knockback,
 //! taxi flight, and fear reuse the same path.
 //!
 //! The mechanic, pinned live against vmangos: Charge is neither a teleport nor a knockback — the
@@ -12,7 +12,7 @@
 //! Division of labour each frame while riding:
 //! - [`crate::net`]'s `sample_splines` (Net stage) advances the [`Spline`] into the entity
 //!   `Transform` — the horizontal authority for the ride. **Its Z is not authoritative** and never
-//!   was (decision 1927): the reference discards a grounded spline's vertical exactly as it does a
+//!   was: the reference discards a grounded spline's vertical exactly as it does a
 //!   creature's, and [`ride_z`] re-derives it from the ground under us.
 //! - [`drive_self_ride`] (Input stage, *before* `control`) owns the *whole* pose while the ride
 //!   lasts: it mirrors that transform into [`Player`] (`pos`/`face_yaw`/`model_yaw`), drives a
@@ -43,7 +43,7 @@ fn ride_ground(world: &benilla_world::collision::WorldCollision, pos: Vec3) -> O
 }
 
 /// **The Z the body we are attached to rides at** — the ground under the spline's XZ, not the
-/// spline's own vertical (decision 1927).
+/// spline's own vertical.
 ///
 /// The reference's integrate loop makes no distinction between the body it steers and any other
 /// mover here: `0x616de0`'s path-select produces a displacement from *either* the physics path or
@@ -61,7 +61,7 @@ fn ride_ground(world: &benilla_world::collision::WorldCollision, pos: Vec3) -> O
 /// The other bit at `0x616cfa` (`0x800`) has no expression here: our ride carries no live
 /// CMovement flag word of its own, and a knockback — the airborne case that would want it — is not
 /// a spline at all on this build (`SMSG_MOVE_KNOCK_BACK` is a ballistic launch through
-/// [`super::mover`], decision 1702), so it never reaches this function.
+/// [`super::mover`]), so it never reaches this function.
 ///
 /// The arithmetic itself is [`crate::net::grounded_y`], shared with the creature clamp so the two
 /// cannot drift; hover and water-walking come from **our** state, not the granted-mode word — the
@@ -91,7 +91,7 @@ fn ride_z(
 
 /// Extract the Bevy Y-yaw of a facing quaternion. The net bridge and `sample_splines` both write
 /// the self entity's rotation as `Quat::from_rotation_y(facing)` (a pure Y turn), and benilla's
-/// Bevy yaw equals the WoW orientation (decision 0002), so this recovers both the controller's
+/// Bevy yaw equals the WoW orientation, so this recovers both the controller's
 /// `face_yaw` and the wire orientation. Shared with the take-control edge (`wire_in`), which adopts
 /// the streamed spawn pose's facing the same way.
 pub(super) fn yaw_of(rotation: Quat) -> f32 {
@@ -141,7 +141,7 @@ pub(super) fn drive_self_ride(
     // `CMSG_MOVE_SPLINE_DONE` is owed, and the teleport ack + position report already went out).
     // Mirroring the still-present spline this frame would clobber the snap back to the stale
     // flight pose — the 4-yd hover whose settle probe then missed the ground for the full 6 s
-    // timeout at every taxi landing (decision 0501).
+    // timeout at every taxi landing.
     if std::mem::take(&mut player.ride_abort) {
         if spline.is_some() {
             commands.entity(entity).remove::<Spline>();
@@ -232,7 +232,7 @@ pub(super) fn drive_self_ride(
                 motion.stand_state = 0;
             }
             // The ride is a forward run, and the display-facing law's moving-forward case (the
-            // `flags & 0x2003` snap — decisions 0101/0103) puts the body ON the aim: no gap, no
+            // `flags & 0x2003` snap) puts the body ON the aim: no gap, no
             // counter-twist — the same one-frame unwind as releasing a strafe key while running.
             // `control`, the normal gap owner, is parked behind the ride guard, so without this
             // write a charge engaged mid-strafe rode the whole spline with the spine/head frozen
@@ -267,7 +267,7 @@ pub(super) fn drive_self_ride(
             player.server_riding = false;
             player.move_flags = 0;
             player.airborne_since = None;
-            // "Resumes from the endpoint at rest" (decision 0260) — including the velocities. The
+            // "Resumes from the endpoint at rest" — including the velocities. The
             // mover re-derives them only when it reads grounded; a ride ending a hair above our
             // terrain (navmesh Z vs ours) would otherwise inherit the pre-ride momentum — e.g. a
             // strafe-engaged charge sliding sideways out of its landing.
@@ -277,7 +277,7 @@ pub(super) fn drive_self_ride(
             // end leaves the path's id as the newest, but a ride the server *cut short* was cut by
             // launching a fresh stop spline, and vmangos checks the ack against that newest id
             // (`HandleMoveSplineDone`) — so an interrupted flee or charge acked with the path's id
-            // is silently rejected, and every movement packet after it is dropped (decision 1281).
+            // is silently rejected, and every movement packet after it is dropped.
             let spline_id = stopped.map_or(player.ride_spline_id, |s| s.0);
             if stopped.is_some() {
                 commands.entity(entity).remove::<SplineStopped>();
@@ -374,7 +374,7 @@ mod tests {
         (app, entity, rx)
     }
 
-    /// **The ride's Z law** (decision 1927) — the local half of B357, measured live at +0.47 yd on
+    /// **The ride's Z law** — the local half of B357, measured live at +0.47 yd on
     /// a 16-yd Elwynn charge before it landed, and 0.000 after.
     ///
     /// The world is one flat floor and the ride is seated a chord's height above it, which is the
@@ -528,7 +528,7 @@ mod tests {
         }
     }
 
-    /// **A spline re-authors the walk gait, inverted from its own RUNMODE bit** (decision 1758).
+    /// **A spline re-authors the walk gait, inverted from its own RUNMODE bit**.
     /// The reference does this in the `SMSG_MONSTER_MOVE` commit `0x7c6a50`, unconditionally for
     /// every incoming spline: `0x7c6ac2 and edi,0x100` takes `SPLINEFLAG_RUNMODE` and `0x7c6acb`
     /// hands it to `SetRunMode 0x7c71c0`, whose argument is *run*. The two `0x100`s are inverses,
@@ -578,7 +578,7 @@ mod tests {
         );
     }
 
-    /// The landing teleport voids the ride (decision 0501): the server relocates us at ITS
+    /// The landing teleport voids the ride: the server relocates us at ITS
     /// flight end, before our own spline finishes — the mirror must not clobber the snap, the
     /// spline drops, and no `CMSG_MOVE_SPLINE_DONE` goes out (vmangos ignores it mid-teleport).
     #[test]

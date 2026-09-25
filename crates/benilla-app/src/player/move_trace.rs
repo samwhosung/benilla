@@ -8,7 +8,7 @@
 //!   against the two latch thresholds, and which physics regime ran. A water-feel report ("it
 //!   jitters at the surface") is a question about the depth signal frame by frame, and no other
 //!   tag carries it: `move` is emitted by the walk arm only, so the swim frames of a flapping
-//!   latch are exactly the ones it drops (decision 0644).
+//!   latch are exactly the ones it drops.
 //! - **`mvr`** — one line per mover-claim packet ([`mover_claim`]): who we told the server we are
 //!   driving, which is what decides whether anything under `snd` is accepted.
 //! - **`sit`** — one line per **stand-state** decision ([`posture`]): every commit, and every press
@@ -23,14 +23,14 @@
 //!   *granted* half is observable twice over (the body's gait changes and `snd` logs the
 //!   `SET_WALK_MODE`/`SET_RUN_MODE` that went out), but a **refused** press is silent by design —
 //!   indistinguishable from a key that isn't bound, or from a binding whose dispatch never fired.
-//!   The chain also has an open byte (`0x1200`'s second bit, decision 1752 §6), so a live run is
+//!   The chain also has an open byte (`0x1200`'s second bit), so a live run is
 //!   how any answer about it gets checked against a real refusal instead of re-reasoned.
 //! - **`knb`** — one line per **knockback** ([`knockback`]): the launch quad the server aimed and
 //!   whether the mover flew it. The one mover edge with no observable of its own — its ack is not a
 //!   `MSG_MOVE_*` so `snd` misses it, its refusal is silent by design, and a wrong ack's whole
-//!   symptom is *other players seeing nothing* (decision 1702).
+//!   symptom is *other players seeing nothing*.
 //! - **`snd`** — one line per outbound `MSG_MOVE_*` ([`sent`]), the send-side twin of `net::motion`'s
-//!   `rly`: it makes **our own wire cadence measurable** (decision 0617), which is the only way to
+//!   `rly`: it makes **our own wire cadence measurable**, which is the only way to
 //!   compare it against the reference's — the 1.12.1 sniff's client stream is a list of exactly these
 //!   fields, so `grep snd` on a run of mouse-turning and strafing is directly diffable against it.
 //!
@@ -59,18 +59,17 @@ pub(super) struct Frame {
     pub on_walkable: bool,
     /// Whether the keys asked for any horizontal motion this frame. A frame that travelled with
     /// **no** input is a body being moved by the resolve alone — a push-out, a slide off a
-    /// contact — and that is the whole shape of "I sat down and ended up beside the chair"
-    /// (B359), so it is interesting on its own even while grounded and level.
+    /// contact — and that is the whole shape of "I sat down and ended up beside the chair",
+    /// so it is interesting on its own even while grounded and level.
     pub moving: bool,
     pub vel_y: f32,
     /// The step-down snap, when the walk-mode block ran: `(probe reach, what the probe found)`;
     /// the inner pair is `(hit distance, hit normal.y)` — a steep hit is recorded too, so a lip
     /// contact that killed the snap shows up in the trace.
     pub snap: Option<(f32, Option<(f32, f32)>)>,
-    /// The atomic step-up's committed height gain this frame (yd), when the maneuver ran
-    /// (decision 0209).
+    /// The atomic step-up's committed height gain this frame (yd), when the maneuver ran.
     pub climb: Option<f32>,
-    /// The root's anchor ran this frame (decision 0880) — no gravity, no slide, no snap. Without it
+    /// The root's anchor ran this frame — no gravity, no slide, no snap. Without it
     /// on the line, a rooted hang and a genuinely stuck mover are the same column of `dy=+0.000`.
     pub anchored: bool,
 }
@@ -120,7 +119,7 @@ pub(super) fn posture(what: &str, state: u8, from: u8, flags: u32) {
     );
 }
 
-/// One `gait` line per **walk/run toggle** decision, granted or refused (decision 1752).
+/// One `gait` line per **walk/run toggle** decision, granted or refused.
 ///
 /// `what` is `commit` or `REFUSED`; `to` is the gait the press asked for, and the three flags are
 /// the reference's own guard chain at `0x513d8e`–`0x513dcd` spelled out one by one — because
@@ -142,7 +141,7 @@ pub(super) fn gait(what: &str, to: bool, dead: bool, rooted: bool, on_spline: bo
     );
 }
 
-/// One `knb` line per **knockback**, whether we flew it or refused it (decision 1702).
+/// One `knb` line per **knockback**, whether we flew it or refused it.
 ///
 /// The tag exists because a knockback is the one mover edge with **no observable of its own on
 /// either side of the failure**. Its ack is not a `MSG_MOVE_*`, so `snd` never shows it; its refusal
@@ -178,7 +177,7 @@ pub(super) fn knockback(flown: bool, launch: benilla_protocol::JumpInfo) {
 /// the pair decides whether every packet that *does* is accepted at all: vmangos matches each
 /// against the session's confirmed mover and answers a mismatch with a server-side error log the
 /// client never sees. A possession that goes wrong is unreadable from `snd` alone — the stream looks
-/// perfect and lands nowhere (decision 1281; the gap cost a live probe round to notice).
+/// perfect and lands nowhere (the gap cost a live probe round to notice).
 pub(super) fn mover_claim(what: &str, guid: u64) {
     if !trace::enabled() {
         return;
@@ -192,7 +191,7 @@ pub(super) fn mover_claim(what: &str, guid: u64) {
 /// flapping reads as a column of them rather than something to be inferred from a Z column.
 ///
 /// `h` is the avatar's own collision height, and the thresholds are printed **derived from it**
-/// rather than from a constant (decision 0645) — a trace that quoted a human's 1.52 while a gnome
+/// rather than from a constant — a trace that quoted a human's 1.52 while a gnome
 /// latched at 0.86 would read as a bug in the latch instead of the height, which is precisely the
 /// misdirection that let the constant survive this long. It is echoed on the line so a capture says
 /// which body it was taken on.
@@ -221,7 +220,7 @@ pub(super) fn swim(feet_y: f32, surface_y: f32, swimming: bool, h: f32) {
     );
 }
 
-/// One `sett` line per `CMSG_MOVE_TIME_SKIPPED` we send (decision 1935) — how many milliseconds
+/// One `sett` line per `CMSG_MOVE_TIME_SKIPPED` we send — how many milliseconds
 /// of movement simulation the hold ran through without integrating, and for which mover. It rides
 /// the settle's own tag because it reports the settle's own cost: a `skipped` far larger than the
 /// `sett` line beside it means the hold outlived the stream it was waiting for.
@@ -239,7 +238,7 @@ pub(super) fn skipped_time(guid: u64, lag_ms: u32) {
 ///
 /// `resident` means the destination's world arrived (scene spawned + collider queue quiet —
 /// decision 0737's release) and the hold released onto it; `!resident` is the
-/// [`super::SETTLE_TIMEOUT`] backstop firing, which since decision 1303 (B263) means the stream
+/// [`super::SETTLE_TIMEOUT`] backstop firing, which since decision 1303 means the stream
 /// made **no progress at all** for the whole budget — a genuinely dead stream, never a slow one —
 /// and gravity comes on with the world never having become resident. `waited` is measured from
 /// the snap either way. The distinction is invisible from inside the game (both look like "the
@@ -277,7 +276,7 @@ pub(super) fn settle(resident: bool, waited: f32, pos: bevy::prelude::Vec3) {
 }
 
 /// One `rid` line per frame of a **self-spline ride** — the Charge/knockback/fear/taxi instrument,
-/// and the A/B that measured decision 1927.
+/// and the A/B that measured.
 ///
 /// It exists because the ride is the one mover in the client the `move` trace cannot see: the
 /// controller — and with it the mover's own per-frame line — is parked behind `control`'s ride

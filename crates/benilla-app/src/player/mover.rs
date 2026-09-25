@@ -3,7 +3,7 @@
 //! reads).
 //! One call per frame: [`step`].
 //!
-//! Thin kinematic controller (decision 0009) over the **one-sided** mirror of avian's
+//! Thin kinematic controller over the **one-sided** mirror of avian's
 //! `MoveAndSlide` (`benilla_world::collision::one_sided`, decision 0970: a face only blocks motion its
 //! authored winding opposes, the reference's `0x632700` law) — kept simple and robust on the
 //! triangulated heightmap:
@@ -11,15 +11,15 @@
 //!   - "grounded" = on walkable ground AND not rising, so a jump cleanly leaves the ground (and
 //!     isn't re-grounded the next frame — the bug that ate most jumps). While airborne the probe
 //!     tightens to [`LAND_PROBE`], so the arc ends where the slide actually contacts the floor
-//!     rather than snapping the last fraction of a yard (decision 0190);
+//!     rather than snapping the last fraction of a yard;
 //!   - grounded → move horizontally only, with NO gravity fed into the slide (gravity-slide was
 //!     the downhill creep on micro-sloped terrain), then snap onto the surface to follow it;
 //!   - a walkable slope never slows or deflects the walk: the real client's walk is
 //!     two-dimensional (speed·dt of *horizontal* distance), so an opposing walkable plane rides
 //!     instead of clipping ([`walkable_ride_velocity`]) — full 2D speed on every ≤50° surface;
 //!   - a steep face in the way is first *certified* by the atomic step-up ([`step_up`]):
-//!     rise–advance–settle onto a walkable floor, or nothing (decision 0209). What a certified
-//!     obstacle then costs is the reference's two-regime law (decision 1123): a rise inside the
+//!     rise–advance–settle onto a walkable floor, or nothing. What a certified
+//!     obstacle then costs is the reference's two-regime law: a rise inside the
 //!     foot cone ([`FOOT_CONE_HEIGHT`]) is **ridden** up the cone's 61.6° skirt over the frames the
 //!     gait needs ([`foot_cone_ride`]) — a kerb takes three at a run; only a rise above the cone is
 //!     the instant pop, committed whole within the frame. Uncertified, nothing rises at all;
@@ -30,7 +30,7 @@
 //!   - airborne → gravity carries the arc, with a one-shot nudge to steer a standstill jump;
 //!   - a fall whose descent stalls (a capsule wedged between steep faces — the
 //!     tree-pinch funnel) *lands there*: standing, walking control live, instead of hanging in
-//!     the falling pose forever with mid-air control locked (decisions 0211/0212).
+//!     the falling pose forever with mid-air control locked.
 
 use avian3d::character_controller::move_and_slide::MoveHitData;
 use avian3d::prelude::*;
@@ -52,15 +52,15 @@ use super::{
 ///   whole of what the flag does: the surface becomes ordinary swept geometry and the resolver
 ///   stands on it at its raw Z. `0x6367b0` contains **zero** references to the bit.
 /// - **`!swimming`** — `0x631617 test eax,0x200000; jne`. Granting *this* bit to a submerged caster
-///   does **not** eject them, and that is the reference's behaviour too, not a gap of ours
-///   (decision 1616): the swim path traces the same two liquid layers into a *different* container
+///   does **not** eject them, and that is the reference's behaviour too, not a gap of ours:
+/// the swim path traces the same two liquid layers into a *different* container
 ///   with the plane **negated** (`0x6320fe fchs`) — a bound above, not a floor below — so the two
 ///   are mutually exclusive by construction and the same triangles can never enter the solver twice
 ///   with opposite orientation. A swimmer surfaces onto the water on the way *out*, when the
 ///   depth compare `0x6030c0` drops SWIMMING in water shallower than `0.75·h − 1/36`.
 ///
 ///   **Do not read that as "casting Levitate while swimming does nothing" — 1616 did, and it was
-///   wrong** (decision 1620, the director's report from the reference client). Levitate grants
+///   wrong** (the director's report from the reference client). Levitate grants
 ///   three auras, and the *hover* one launches you: `SetHover(true)`'s handler `0x61a620` runs
 ///   `CMovement::Jump(force = 0)` before it ever sets the flag, which clears SWIMMING and seeds an
 ///   upward take-off. Water walking is then what catches the body on the way down. The gate above
@@ -89,10 +89,10 @@ pub(super) struct Outcome {
     pub grounded: bool,
     /// A jump took off this frame.
     pub jumped: bool,
-    /// This frame's take-off was a **server-aimed knockback**, not a jump (decision 1702). Implies
+    /// This frame's take-off was a **server-aimed knockback**, not a jump. Implies
     /// [`Self::jumped`] — the arc bookkeeping cannot tell them apart and must not — but the wire can:
     /// `MSG_MOVE_JUMP` has exactly one emission site in the reference image, the move-command drain's
-    /// jump arm (`0x615ed1`, decision 1464), so a knockback's launch announces itself with
+    /// jump arm (`0x615ed1`), so a knockback's launch announces itself with
     /// `CMSG_MOVE_KNOCK_BACK_ACK` and nothing else. Sending a JUMP for it would also be an
     /// instant `CHEAT_TYPE_OVERSPEED_JUMP` — the one jump check vmangos does *not* exempt during a
     /// knockback (`MovementAnticheat.cpp:650`), and a knockback's horizontal speed is well over run
@@ -109,7 +109,7 @@ pub(super) struct Outcome {
 
 /// Advance the player mover one frame: settle hold, ground classify, the slide, and the
 /// step-down snap. Writes `player.pos`/`vel_y`/`horiz_vel` (the settle *release* is the terrain
-/// streamer's — decision 0737).
+/// streamer's).
 pub(super) fn step(
     player: &mut Player,
     time: &Time,
@@ -139,9 +139,9 @@ pub(super) fn step(
 
     // While airborne, "on the ground" means where the slide actually contacts the floor
     // ([`LAND_PROBE`], ~skin scale). The wider walking probe would end the arc up to 0.2 yd
-    // early and close the gap with a same-frame snap — the visible pop at every silent landing
-    // (decision 0190); the fall's own collision already stops the capsule exactly at contact.
-    // A hovering body rests [`HOVER_HEIGHT`] above the floor (decision 0866), so every downward
+    // early and close the gap with a same-frame snap — the visible pop at every silent landing;
+    // the fall's own collision already stops the capsule exactly at contact.
+    // A hovering body rests [`HOVER_HEIGHT`] above the floor, so every downward
     // reach that decides "am I standing on something" has to grow by the same amount — otherwise
     // the float reads as airborne and it falls, which is the hover bit doing nothing at all.
     let hover_offset = if player.modes.hover {
@@ -158,7 +158,7 @@ pub(super) fn step(
     let classify = probe_down(center, ground_reach);
     let on_walkable = classify.as_ref().is_some_and(|h| h.normal1.y >= GROUND_COS);
     // **Water walking: the liquid surface is GROUND, and the classify above has to see it**
-    // (decision 1611, correcting 0866). In the reference the surface is not a special case at all
+    // (correcting 0866). In the reference the surface is not a special case at all
     // — `MOVEFLAG_WATERWALKING` ORs the two ADT liquid layers into the walk trace's *class mask*
     // (`0x63162e or edi, 0x30000`), so the same swept query that
     // finds terrain finds the water, and the walk resolver stands on it at its raw Z with no
@@ -179,7 +179,7 @@ pub(super) fn step(
     //
     // The reach is [`ground_reach`], hover offset included, because **a hovering water-walker
     // rests a full yard above the surface** — 1611 left that an open question and it is now
-    // **VERIFIED** (decision 1616): the walk resolver's finalize down-probe `0x636e45` calls
+    // **VERIFIED**: the walk resolver's finalize down-probe `0x636e45` calls
     // `0x632ba0`, whose trace `0x632d29` is `0x631e70` — the query whose own head is the mask arm
     // (`0x6320a0 call 0x6315f0`, `0x6320b1` the trace). So the distance `L` that probe reports is
     // measured to the *water*, and `0x636e74`'s hover arm then leaves the body at
@@ -200,13 +200,13 @@ pub(super) fn step(
     // floors + their colliders — arrives over several frames, so the ground under the snap isn't
     // there yet. While settling, `held` keeps gravity OFF and freezes us in place, so we don't
     // fall through the not-yet-loaded city/building (the loading screen stays up too). The
-    // *release* does not live here (decision 0737): it is the terrain streamer's, keyed on the
+    // *release* does not live here: it is the terrain streamer's, keyed on the
     // destination's residency (scene + colliders, `WorldLoadProgress`) with the timeout backstop —
     // never on ground contact, which only the walk mover could observe and which a flyer, a
     // swimmer, or a genuinely airborne teleport never produces (the loading-screen-until-landing
     // hang). The streamer runs every frame in every mover mode, so every mode releases the same way.
     let held = player.settling;
-    // **Rooted: the mover is ANCHORED — nothing advances the body, in any axis** (decision 0880).
+    // **Rooted: the mover is ANCHORED — nothing advances the body, in any axis**.
     // `SetRoot 0x7c7340` is three acts, not one: set `0x1000`, `call 0x7c6290` **StopFalling**
     // (`and eax,0xffff9fff` — FALLING *and* FALLINGFAR together), then wipe the direction bits
     // (`and 0xffe07f00`) and re-run the basis recompute `0x7c5c20`, which with no direction bit left
@@ -222,7 +222,7 @@ pub(super) fn step(
     // (`0x7c61d6 test dword ptr [ecx+0x40], 0x203800` — SWIMMING|FALLING|ROOT|FIXED_Z), so no fall
     // can begin under a root by any path.
     let anchored = !held && player.modes.rooted;
-    // A body part-way up a foot cone is standing (decision 1123). The probe above looks straight
+    // A body part-way up a foot cone is standing. The probe above looks straight
     // down and finds only the steep riser it is riding, so on its own it would call a mid-ride frame
     // airborne — gravity would then undo the climb and the body would dwell on the face, the exact
     // failure 0209's atomic commit was built to make impossible. The ride is re-earned from the
@@ -231,7 +231,7 @@ pub(super) fn step(
     let on_floor =
         !held && (on_walkable || on_water || player.steep_support) && player.vel_y <= 0.0;
 
-    // The wedged rest (decision 0211) stands until real ground takes over or the support
+    // The wedged rest stands until real ground takes over or the support
     // vanishes — we walked off the funnel wall into open air, which resumes a normal fresh fall.
     // Its own reach stays [`LAND_PROBE`] (not the classify reach above), plus the hover offset so a
     // hovering wedge is not read as having lost its support the moment the mode lands.
@@ -250,13 +250,13 @@ pub(super) fn step(
         // **A knockback aimed at a frozen body is dropped here**, not deferred: the latch was already
         // consumed by the caller, and `knocked` stays false so no ack goes out — we did not fly it.
         // The root case is the reference's own law (`CMovement::Jump` refuses under `0x1000`, and
-        // `SetRoot`'s StopFalling means nothing can enter FALLING while rooted at all — 0880), and
+        // `SetRoot`'s StopFalling means nothing can enter FALLING while rooted at all), and
         // the server will not have sent one anyway (`Unit::KnockBack` returns early on
         // `UNIT_STATE_STUNNED | UNIT_STATE_ROOT`).
         player.vel_y = 0.0;
         player.horiz_vel = Vec3::ZERO;
     } else if let Some(launch) = knockback {
-        // **The knockback launch** (decision 1702) — the server aims a jump and we fly it. It is the
+        // **The knockback launch** — the server aims a jump and we fly it. It is the
         // one take-off that seeds BOTH axes at once: the vertical is not `JUMP_SPEED` and the
         // horizontal is not our input, they are the spell's, absolute in world XY and unrelated to
         // where we are facing or which keys are down. Everything downstream is a jump's: the arc
@@ -277,7 +277,7 @@ pub(super) fn step(
         knocked = true;
         // **The launch plants the direction nibble, and that is what freezes the arc** — the
         // reference's `0x617a18 or edx,0x8001` sets FORWARD and clears BACKWARD as part of the
-        // apply (decision 1740). It is set regardless of `xy_speed`, so a purely vertical knockback
+        // apply. It is set regardless of `xy_speed`, so a purely vertical knockback
         // is just as unsteerable as a 25 yd/s one; reading the freeze off the *velocity* instead
         // (what we did until 1740) let that case steer from the second frame. `knock_arc` also
         // rides the wire for the arc's length, which is the half we were not sending at all.
@@ -296,7 +296,7 @@ pub(super) fn step(
         // (`player::control`'s flourish block runs upstream of this call, same order).
         // …and `wire_jump` is the leg that is NOT refused: the reference's own `Jump(force = 0)`
         // skips the test above (`0x7c6236 test eax,eax; je 0x7c6243`) so a `SetHover(true)` can
-        // launch a body that is already hovering (decision 1620). Same seed select, same commit —
+        // launch a body that is already hovering. Same seed select, same commit —
         // it is the *same* jump, entered through the door the wire is given.
         if (want_jump && !player.modes.hover) || wire_jump {
             player.vel_y = JUMP_SPEED;
@@ -311,19 +311,19 @@ pub(super) fn step(
     } else if !player.airborne_prev {
         // **A step-off — the arc nobody launched.** The walk election calls `StartFalling(0)`, so
         // the launch speed is exactly 0 (not the gravity-polluted first tick), which is what the
-        // wire tail sends and what splits the FALLINGFAR legs (0179). The nibble seeds from the
+        // wire tail sends and what splits the FALLINGFAR legs. The nibble seeds from the
         // keys like any other take-off: you walked off this ledge, so you keep your momentum.
         player.launch_vz = 0.0;
         player.arc_dirs_set = moving;
     }
 
-    // **The fall step, for every airborne frame INCLUDING the take-off's** (decision 1740). It used
+    // **The fall step, for every airborne frame INCLUDING the take-off's**. It used
     // to sit inside the `else` above, which meant a launch frame moved a whole `v₀·dt` with no
     // gravity at all while every later frame moved at its END-of-step speed — one overshoot
     // followed by a systematic undershoot. The reference has no such seam: `StartFalling` anchors
     // the arc and the closed form is evaluated from `t = 0`, the launch frame included.
     //
-    // **Feather fall is a terminal-velocity substitution, and nothing else** (decision 0866). The
+    // **Feather fall is a terminal-velocity substitution, and nothing else**. The
     // reference's fall-velocity query `0x7c5d20` picks the clamp from one flag test
     // (`0x7c5d23 test [ecx+0x40], 0x20000000`) — the ordinary 60.148 or 7.0 under
     // `MOVEFLAG_SAFE_FALL`. Gravity itself is unchanged, so a Slow Fall still *accelerates*
@@ -360,8 +360,8 @@ pub(super) fn step(
         // keeps its momentum locked, because its nibble was already set at take-off). The pressed
         // direction *really* moves us, so it re-seeds the frozen airborne direction flags.
         //
-        // **The guard is a velocity proxy for a flag test, and the reference's is the flag**
-        // (decision 1736). `0x7c5a20`/`0x7c5c20` do not bail on
+        // **The guard is a velocity proxy for a flag test, and the reference's is the flag**.
+        // `0x7c5a20`/`0x7c5c20` do not bail on
         // FALLING — they bail on `FALLING && arg == 0`, and the two openers that pass `arg = 1`
         // sit behind `0x7c6afc test al,0xf`: the door opens exactly while the **direction nibble
         // `+0x40 & 0xf` is clear**. That is why a moving jump is locked, and it is a different
@@ -406,7 +406,7 @@ pub(super) fn step(
         // The step-up probe (this is the LOCAL mover; a remote's dead-reckon is not a report
         // anyone is looking at): a walk frame that went nowhere writes the `stup` deep report —
         // the surface profile ahead, the advance ladder, the candidate faces.
-        // **The local controller is the caller that HAS a fall** (decision 2174), so the no-floor
+        // **The local controller is the caller that HAS a fall**, so the no-floor
         // drop is spent here: `pos.z -= achieved` before the classify, exactly as `0x636e45` does,
         // and the frame that leaves a ledge starts its fall lower instead of flat. The two
         // open-loop callers decline it — they have nothing that would ever end it.
@@ -437,12 +437,12 @@ pub(super) fn step(
             player.horiz_vel + Vec3::Y * fall_mean_vy
         };
         // The airborne slide is the OTHER shared resolve ([`airborne_step`]) — the same code a
-        // remote mover's arc runs, so a jump meets our walls whoever is jumping (decision 0627).
+        // remote mover's arc runs, so a jump meets our walls whoever is jumping.
         center = airborne_step(world, capsule, center, velocity, time.delta());
         // Nothing here can be riding a cone: this arm is the arc, the hold and the anchor.
         player.steep_support = false;
     }
-    // Wedge-rest detection (decisions 0211/0212): airborne, already falling fast, yet the
+    // Wedge-rest detection: airborne, already falling fast, yet the
     // descent achieved is a sliver of what gravity intended — [`WEDGE_STILL_FRAMES`] in a row
     // is a capsule held between steep faces (a ball in a V-groove; the trunk-base funnel's
     // walls lean, n.y ≈ +0.2, so there is no downward exit). Land it. Free fall achieves ~100%
@@ -498,7 +498,7 @@ pub(super) fn step(
     // a floor, and a floor catches what falls onto it, never what is on its way up through it; the
     // reference needs no such clause because over there the surface is a swept solid and the sweep
     // is directional for free. Ours is a post-hoc push-out, and without the gate it would swallow
-    // the very launch a hover grant just seeded (decision 1620): cast Levitate a foot under the
+    // the very launch a hover grant just seeded: cast Levitate a foot under the
     // waterline and the `SWIM_JUMP_SPEED` take-off would be clamped flat to the surface with its
     // velocity zeroed, a pop where the reference throws you clear. With `vel_y <= 0` it is still
     // the water-walk *lift* it was built to be — wade in chest-deep, aura up, and this is the frame
@@ -528,14 +528,14 @@ pub(super) fn step(
         }
     }
 
-    // **The hover climb** (decision 0872): the snap above can only lower the body, so the *rise* to
+    // **The hover climb**: the snap above can only lower the body, so the *rise* to
     // the 1.0-yd clearance is this separate rate-limited pass — the reference's second writer at
     // `0x636fa1`–`0x6370f1`, which climbs toward the same clearance at [`HOVER_CLIMB_RATE`]. Without
     // it the grant reads as an instant pop; with it the body floats up over ~0.14 s.
     // (…and never while anchored: the climb is the walk resolver's own second pass, so the rooted
     // mover's stationary early-return skips it exactly like the snap above.)
     //
-    // The water is one more floor to hover over (decision 1616) and the only one `probe_down`
+    // The water is one more floor to hover over and the only one `probe_down`
     // cannot see, so it is measured against the plane and folded in as a candidate — nearest wins,
     // which is what the reference's single trace does for free.
     if hover_offset > 0.0 && !held && !anchored {
@@ -565,7 +565,7 @@ pub(super) fn step(
 
     // The mover's own airborne record for the next step's arc-start test — see
     // [`Player::airborne_prev`]. Held and anchored bodies are not airborne: the anchor ends the arc
-    // (0880) and the settle hold has no arc at all.
+    // and the settle hold has no arc at all.
     // `jumped ||`, not just `!grounded`: a launch frame IS the arc's first airborne frame even
     // though the body is still standing on the floor it pushed off. Without that, the frame after a
     // jump looks like a fresh step-off and re-seeds the arc state the launch just set — which is
@@ -598,7 +598,7 @@ pub(crate) struct Support {
     /// [`super::CREATURE_STEP_UP_HEIGHT`] for a creature the server walks (decision 1125 has the
     /// byte split: `0x5fa550`'s FALSE leg reads the constant `2.0`).
     pub(crate) rise: f32,
-    /// The body rests this far **above** the surface — HOVER's float (decision 0866),
+    /// The body rests this far **above** the surface — HOVER's float,
     /// [`super::HOVER_HEIGHT`] while the mode is up and `0.0` for everyone else, which is the
     /// ordinary case.
     pub(crate) offset: f32,
@@ -611,12 +611,12 @@ pub(crate) struct Support {
     /// class mask (`0x63162e or edi, 0x30000`), so the one trace that finds terrain finds the water
     /// too and the election is over a single candidate set. Ours needs the plane handed in, and
     /// **this is the third site that needed it** — 1611 put it in the classify, 1616 in the hover
-    /// climb, and the snap kept its own blindness until 1623 (B322). The shared shape of all three:
+    /// climb, and the snap kept its own blindness until 1623. The shared shape of all three:
     /// every question of the form "is there ground below me?" has to ask the plane as well as the
     /// sweep, or the two disagree and the body oscillates between their answers.
     pub(crate) water: Option<f32>,
     /// The support entering the frame is a **certified steep contact**, not a walkable floor — the
-    /// reference's `0x4000000` (decision 1125). It is the sole gate on the step-down probe's deep
+    /// reference's `0x4000000`. It is the sole gate on the step-down probe's deep
     /// reach; see the reach in [`grounded_step`].
     pub(crate) steep: bool,
 }
@@ -648,7 +648,7 @@ pub(crate) struct GroundedStep {
     /// The body is **supported by a certified steep contact** rather than standing on a walkable
     /// floor — climbing a foot-cone ride (1123) or following a surface down off a ledge (1127) —
     /// so the caller must keep treating it as grounded until a walkable floor takes over. This is
-    /// the reference's `0x4000000` (decision 1125). `false` for an ordinary frame.
+    /// the reference's `0x4000000`. `false` for an ordinary frame.
     pub(crate) steep_support: bool,
     /// The election snap's `(probe reach, what it found)` — trace fodder, `None` when the step-up
     /// took the frame instead. The inner pair is `(hit distance, hit normal.y)`.
@@ -658,7 +658,7 @@ pub(crate) struct GroundedStep {
     /// found (including a step-up commit and a mid-ledge steep support, which both leave
     /// [`Self::ground`] `None` for their own reasons and must not be confused with this).
     ///
-    /// It is **not applied to [`Self::center`]** (decision 2174). The reference's finalize does
+    /// It is **not applied to [`Self::center`]**. The reference's finalize does
     /// write `pos.z -= achieved` on its no-hit leg — and then *classifies*, electing a fall that
     /// gravity finishes and a landing ends. That election is the **caller's**, and only one of this
     /// function's three callers has one: the local controller ([`step`]) applies this drop and
@@ -700,7 +700,7 @@ pub(crate) fn grounded_step(
     let surface_offset = support.offset;
     let cast = |from: Vec3, disp: Vec3| world.cast_mover(capsule, from, disp, SKIN_WIDTH);
     let speed = horiz_vel.length();
-    // The step-up (decision 0209): ATOMIC — a steep face in the way triggers rise →
+    // The step-up: ATOMIC — a steep face in the way triggers rise →
     // advance-this-frame's-travel-at-the-raised-height → settle onto a walkable floor, all
     // committed inside this one frame, or nothing happens and the plain slide runs. There is
     // no in-between state to be seen wedged or bouncing in (the 0191 ride dwelled mid-face;
@@ -712,7 +712,7 @@ pub(crate) fn grounded_step(
         // The look-ahead is this frame's travel — "is there a steep face in my way *now*" is a
         // question about this frame. The **advance** is not: how far forward the maneuver must
         // reach to see the tread it would stand on is a property of the body, so it is at least
-        // [`STEP_UP_ADVANCE`] whatever the frame rate or the gait (decision 1121). Travel still
+        // [`STEP_UP_ADVANCE`] whatever the frame rate or the gait. Travel still
         // wins when it is longer, so a very low frame rate never steps you less far than you asked
         // to walk.
         step_up(
@@ -753,7 +753,7 @@ pub(crate) fn grounded_step(
             );
         }
     }
-    // **Which regime** (decisions 1123/1126; `0x631be0`, `0x635c00`). The certification
+    // **Which regime** (`0x631be0`, `0x635c00`). The certification
     // above settles *whether* the obstacle can be cleared; the height of the **blocking edge** — the
     // face the look-ahead is pressed against, measured from the feet — settles *how*. The real
     // client's solid is a cone below [`FOOT_CONE_HEIGHT`] and a vertical box above it, so a low edge
@@ -783,7 +783,7 @@ pub(crate) fn grounded_step(
         }
         _ => None,
     };
-    // **The pop is a RISE, not a jump forward** (decision 1130). 0209 committed the whole maneuver as
+    // **The pop is a RISE, not a jump forward**. 0209 committed the whole maneuver as
     // one position — rise, advance the probe's full [`STEP_UP_ADVANCE`], and land on the floor the
     // probe found — which put a **1.19 yd horizontal teleport** in every step-up: ten frames' worth
     // of travel in one frame, at ten times walking speed. That lurch, not the height, is what the
@@ -848,10 +848,10 @@ pub(crate) fn grounded_step(
     // [`STEP_SLOPE_RATIO`]·travel + [`STEP_SNAP_SLACK`], and snaps only onto a *walkable* floor
     // (≤50°, the election's own `cos50°` = [`GROUND_COS`]).
     //
-    // **The reach is the cone's own slope, and nothing else, on an ordinary walking frame**
-    // (decision 1129). It used to carry a flat `+`[`CAPSULE_HEIGHT`] — 2.028 yd of unconditional
+    // **The reach is the cone's own slope, and nothing else, on an ordinary walking frame**.
+    // It used to carry a flat `+`[`CAPSULE_HEIGHT`] — 2.028 yd of unconditional
     // extra depth — on the reading that `0x617430` returned a collision height. Both halves of that
-    // were wrong (decision 1125): `0x617430` is `[unit+0xb8]`, the dimensionless scale ratio
+    // were wrong: `0x617430` is `[unit+0xb8]`, the dimensionless scale ratio
     // `max(SCALE_X / CreatureModelScale, 1)`, so `H` is **1.0** for a player and not 2.028; and the
     // reference adds it only while `0x4000000` is set (`0x636dfc`) — "the current support is a
     // certified STEEP contact, not a walkable floor", which is [`Support::steep`]. So the deep
@@ -862,7 +862,7 @@ pub(crate) fn grounded_step(
     // What that costs is real and intended: a drop deeper than the cone is NOT absorbed. No snap,
     // the next frame's ground probe misses, and the gap becomes a fall (the client's
     // `StartFalling(0)` election) — a short ledge drop reads as a quick, continuous, steep descent,
-    // which is what the director's eye confirmed against the reference (decision 0190; 0189's
+    // which is what the director's eye confirmed against the reference (0189's
     // instant absorbed step read as a teleport and was reverted). At 2.028 yd we were absorbing
     // nearly two body-heights of ledge in one frame, which is the same teleport by another route.
     //
@@ -870,7 +870,7 @@ pub(crate) fn grounded_step(
     // when it is genuinely resting on the floor; a body left floating above one falls the float and
     // lands, rather than being pulled down through up to two yards of air.
     //
-    // [`Support::offset`] is HOVER (decision 0866): the reference's WALK resolver `0x6367b0` adds
+    // [`Support::offset`] is HOVER: the reference's WALK resolver `0x6367b0` adds
     // `[0x7ff9d8]` = 1.0 to this same surface offset while `MOVEFLAG_HOVER` is set, and widens the
     // step-down reach by the same yard (`0x633e35`) so the float still follows the ground down.
     // Both halves are here: the reach grows by the offset, and the snap stops that far short of the
@@ -885,7 +885,7 @@ pub(crate) fn grounded_step(
         }
         + surface_offset;
     let hit = cast(slid, Vec3::NEG_Y * reach);
-    // **The water is one more candidate in the same election** ([`Support::water`], decision 1623).
+    // **The water is one more candidate in the same election** ([`Support::water`]).
     // The sweep above cannot see liquid, so the plane is measured against the same probe: feet to
     // surface, in sight only within the same `reach`, and flat (`normal.y = 1.0`) because a liquid
     // surface always is. Nearest wins — which is what the reference's single masked trace does for
@@ -923,7 +923,7 @@ pub(crate) fn grounded_step(
     // The height this frame's ride earned, read before the snap can spend any of it. (The two snap
     // arms below are mutually exclusive — walkable or steep — so one value serves both.)
     let ride_rise = (slid.y - start.y).max(0.0);
-    // **The step-down follows the surface; it does not leave it** (decision 1127). The reference's
+    // **The step-down follows the surface; it does not leave it**. The reference's
     // finalize writes `pos.z -= min(clearance, d_h·1.8493990)` *before* it classifies anything, and a
     // steep landing is answered by the multipass rather than by a fall — a `ret 2` continues,
     // grounded, with the "my support is a certified steep contact" bit set (`0x636f21`; the
@@ -936,7 +936,7 @@ pub(crate) fn grounded_step(
     // downrange. That is the dive.
     //
     // **The reach is how far we can SEE; the descent is how far we may GO — and for a capsule those
-    // are not the same number** (decision 1132). Byte-exact the finalize is one line
+    // are not the same number**. Byte-exact the finalize is one line
     // (`0x636e45`–`0x636e52`): sweep down by `L`, write
     // `pos.z -= achieved`, *then* classify. `achieved` is the sweep's own output, so on the reference
     // the descent is bounded only by `L` — no second, smaller cap exists anywhere on that path.
@@ -996,7 +996,7 @@ pub(crate) fn grounded_step(
         // the director was still feeling after 1132 capped the other two legs: their fence
         // step-downs came through *this* branch, `snap miss (reach 1.25) dy=-1.250`, five of them in
         // one capture. The cap is a property of our body, not of which leg found the floor.
-        // **Measured, not applied** (decision 2174) — [`GroundedStep::unsupported`] is the whole
+        // **Measured, not applied** — [`GroundedStep::unsupported`] is the whole
         // story: this is the first frame of a fall, and only a caller that can finish one may
         // spend it.
         unsupported = Some((reach - surface_offset).max(0.0).min(cone_reach));
@@ -1030,7 +1030,7 @@ pub(crate) fn grounded_step(
 /// **remote** mover's ballistic dead-reckon calls it for the arc it invents between packets
 /// ([`crate::net::motion::remote`]). Without that, a watched player who jumps into a building is
 /// drawn *inside* it for the length of the jump and pops back out on the landing packet — the
-/// airborne half of the very defect 0626 fixed on the ground (decision 0627).
+/// airborne half of the very defect 0626 fixed on the ground.
 /// **One frame of the fall, integrated exactly** — the end-of-step vertical speed and the *mean*
 /// speed to move at, given the speed at the step's start.
 ///
@@ -1038,7 +1038,7 @@ pub(crate) fn grounded_step(
 /// `mean · dt` is the closed form `v₀·dt − ½g·dt²`, not an approximation of it. That matters
 /// because the reference does not integrate at all: it evaluates a closed form anchored at the
 /// launch every substep (`+0x7c − D(+0x78)` via `0x7c5e70`), so its arc is frame-rate independent
-/// and cannot drift (decision 1740). Stepping at either
+/// and cannot drift. Stepping at either
 /// endpoint's velocity instead of the mean loses `½·g·dt²` per frame — and both of ours did, in
 /// opposite directions:
 ///
@@ -1134,7 +1134,7 @@ fn walkable_ride_velocity(n: Vec3, v: Vec3) -> Option<Vec3> {
     Some(Vec3::new(v.x, -(v.x * n.x + v.z * n.z) / n.y, v.z))
 }
 
-/// **The foot cone's ride** — the smooth half of the reference's climb law (decision 1123).
+/// **The foot cone's ride** — the smooth half of the reference's climb law.
 ///
 /// The real client's movement solid is a **cone below the waist**: the k-DOP build at `0x631440`
 /// emits four bevels running from a point at the foot out to the full radius at
@@ -1194,7 +1194,7 @@ fn foot_cone_ride(n: Vec3, v: Vec3) -> Option<Vec3> {
 ///
 /// - **No geometry can add upward motion, at any steepness or approach angle.** The predecessor
 ///   rules here reconstructed that invariant twice — first by testing the *sign* of the clipped
-///   vertical (0970), then by stripping the into-face push before an orthogonal clip (1135). The
+///   vertical, then by stripping the into-face push before an orthogonal clip (1135). The
 ///   reference gets it structurally, because the vertical is not an output.
 /// - **A fall against a steep face descends at the full free-fall rate**, so along-surface speed is
 ///   `V/sinθ` — *faster* than free fall. This is the reference's slippery steep-slope slide. An
@@ -1254,8 +1254,8 @@ pub(crate) enum StepVerdict {
         dy: f32,
     },
     /// Certified: the obstacle can be cleared. What the frame then *does* is
-    /// [`grounded_step`]'s — a foot-cone ride or a pop of `up`, never this probe's own advance
-    /// (decision 1130). `landed` is where the probe's settle found floor, kept for the trace: it is
+    /// [`grounded_step`]'s — a foot-cone ride or a pop of `up`, never this probe's own advance.
+    /// `landed` is where the probe's settle found floor, kept for the trace: it is
     /// a **diagnostic**, one full [`STEP_UP_ADVANCE`] downrange, and committing it was the teleport.
     Commit {
         landed: Vec3,
@@ -1302,8 +1302,8 @@ pub(crate) struct StepAttempt {
     pub(crate) verdict: StepVerdict,
 }
 
-/// The atomic step-up (decision 0209) — the standard kinematic-controller maneuver, *not* the
-/// reference resolver's (that direction is closed, 0207): a steep opposing face within `look`
+/// The atomic step-up — the standard kinematic-controller maneuver, *not* the
+/// reference resolver's (that direction is closed): a steep opposing face within `look`
 /// triggers **rise → advance → settle**, committed whole inside this one frame, or nothing.
 ///
 /// - **Rise** by the free headroom, at most [`STEP_UP_HEIGHT`] — the deliberately low ceiling
@@ -1360,7 +1360,7 @@ pub(crate) fn step_up(
     let fwd = cast(raised, dir_h * advance).map_or(advance, |h| h.distance);
     let over = raised + dir_h * fwd;
     // Settle: the walk election's reach below the advanced point — the rise undone, plus the
-    // travel-scaled step-down allowance (decisions 0182/0190) — onto a WALKABLE floor only.
+    // travel-scaled step-down allowance — onto a WALKABLE floor only.
     let reach = up + advance * STEP_SLOPE_RATIO + STEP_SNAP_SLACK;
     let Some(down) = cast(over, Vec3::NEG_Y * reach) else {
         return at(StepVerdict::NoFloor { up, fwd });
@@ -1406,7 +1406,7 @@ mod tests {
     /// fixture is the geometry, not an idea of it.
     ///
     /// The profile is a `(x, y)` polyline extruded across `z`, wound so every face's **authored**
-    /// normal points up and back at the approaching body — the one-sided law (0970) is live in
+    /// normal points up and back at the approaching body — the one-sided law is live in
     /// these casts, so a mis-wound fixture would silently be a hole to fall through.
     fn world_with_kerb() -> App {
         const PROFILE: [(f32, f32); 4] = [(-2.0, 0.0), (0.29, 0.0), (0.446, 0.28), (3.0, 0.28)];
@@ -2006,7 +2006,7 @@ mod tests {
 
     #[test]
     fn the_kerb_is_out_of_reach_of_one_frames_travel() {
-        // The defect the capture pinned (decision 1121): the settle probe is still over the bevel
+        // The defect the capture pinned: the settle probe is still over the bevel
         // at 0.117 yd, so it lands on a 61° face and the walkable gate — correctly — refuses it.
         // The step-up is not wrong about the face; it never looked far enough to see the tread.
         let v = step_at(TRAVEL_60FPS);
@@ -2033,7 +2033,7 @@ mod tests {
 
     #[test]
     fn the_advance_never_climbs_past_the_rise_ceiling() {
-        // The reach grew; what may be climbed did not (decision 1121). A wall taller than
+        // The reach grew; what may be climbed did not. A wall taller than
         // [`STEP_UP_HEIGHT`] clips the elevated sweep, so the settle falls back to the origin
         // floor and the plain slide keeps the frame — the fence/trunk behaviour 0209 was built
         // for, asserted at the advance that made the kerb work.
@@ -2239,7 +2239,7 @@ mod tests {
         assert_eq!(water_floor(true, false, 0.0, None), None);
     }
 
-    /// **B322, the height half** (decision 1616): Levitate is hover **and** water walking, and the
+    /// **B322, the height half**: Levitate is hover **and** water walking, and the
     /// two compose — the body rests a full yard *above* the waterline, not with its feet in it.
     ///
     /// 1611 left this open. It is settled at the bytes: the walk resolver's finalize down-probe
@@ -2319,7 +2319,7 @@ mod tests {
         );
     }
 
-    /// **B322, the lift** (decision 1616): the director's *"it doesn't bring you to surface when
+    /// **B322, the lift**: the director's *"it doesn't bring you to surface when
     /// used in water"*, for the case the reference actually surfaces — a body standing in liquid
     /// too shallow to swim in. The surface is solid geometry over there, so a body inside it is a
     /// body inside a wall that the swept resolve keeps on top. Ours is a queried plane with no
@@ -2387,7 +2387,7 @@ mod tests {
         );
     }
 
-    /// **B322, the lost-control half** (decision 1611): a body walking off land onto water with
+    /// **B322, the lost-control half**: a body walking off land onto water with
     /// `MOVEFLAG_WATERWALKING` up must keep steering and must stop when the keys are released.
     ///
     /// Before 1611 it did neither, and the reason was structural rather than numeric: the liquid
@@ -2532,7 +2532,7 @@ mod tests {
         );
     }
 
-    /// **The jump hover cannot refuse** (decision 1620, B322) — the same handler, entered through
+    /// **The jump hover cannot refuse** — the same handler, entered through
     /// the wire's door. `0x7c6236 test eax,eax; je 0x7c6243` skips the hover test above whenever
     /// `force` is 0, and the sole `force = 0` call site is `0x61a62e`, inside the `SetHover(true)`
     /// handler. So the body that is hovering — the one the test above proves Space cannot move — is
@@ -2586,7 +2586,7 @@ mod tests {
         );
     }
 
-    /// **The fall step is EXACT, not merely close** (decision 1740). Under constant acceleration
+    /// **The fall step is EXACT, not merely close**. Under constant acceleration
     /// the mean of the endpoint velocities is the true displacement rate, so one step of `dt` and
     /// `n` steps of `dt/n` must land on the same height — that is the whole property the reference
     /// gets for free by evaluating a closed form, and the one both of our integrators lacked.
@@ -2619,7 +2619,7 @@ mod tests {
 
     /// The jump apex is the reference's, to the millimetre: `v₀²/2g` = 1.640 yd. The old
     /// integrator undershot it by 4.0% at 60 fps and 8% at 30 — visible as a jump that could not
-    /// quite clear what it should (decision 1740).
+    /// quite clear what it should.
     #[test]
     fn the_jump_apex_is_the_analytic_one_at_any_frame_rate() {
         let apex = JUMP_SPEED * JUMP_SPEED / (2.0 * GRAVITY);
@@ -2641,7 +2641,7 @@ mod tests {
         }
     }
 
-    /// **Terminal is a piecewise clamp, not a clamped mean** (decision 1740). A step that reaches
+    /// **Terminal is a piecewise clamp, not a clamped mean**. A step that reaches
     /// terminal partway is two regimes, and clamping the mean instead would under-move it by up to
     /// `½·g·dt²`. Below terminal the clamp must not perturb the exact answer at all.
     #[test]
@@ -2667,7 +2667,7 @@ mod tests {
     }
 
     /// **A knockback is unsteerable because its launch plants a direction bit — not because it is
-    /// fast** (decision 1740).
+    /// fast**.
     ///
     /// This is the case the old gate got wrong, and it is the reason the gate changed. Air control
     /// opens on the reference exactly while the direction nibble `[CMovement+0x40] & 0xf` is clear
@@ -2738,7 +2738,7 @@ mod tests {
     }
 
     /// **The air-control nudge is `min(MOVE_WALK, MOVE_RUN)` off the unit's live speeds, not a
-    /// constant** (decision 1740). `0x7c5c20(1)` → `0x7c4c90(1)`, whose non-zero argument is a walk
+    /// constant**. `0x7c5c20(1)` → `0x7c4c90(1)`, whose non-zero argument is a walk
     /// override returning `min(+0x88, +0x8c)`. `AIR_NUDGE_SPEED`'s 2.5 is merely the *default*
     /// `MOVE_WALK`, so the constant is right until a walk aura, a Slow or a daze moves either
     /// speed — and the `min` is why a slowed run still cannot out-steer a walk.
@@ -2824,7 +2824,7 @@ mod tests {
     }
 
     /// **The knockback launch seeds BOTH axes, overrides the keys, and is refused only by the
-    /// anchor** (decision 1702).
+    /// anchor**.
     ///
     /// The three things that make it a different take-off from every other one, in one fixture. Its
     /// vertical is not `JUMP_SPEED`; its horizontal is the server's, not `input_horiz` — the arm
@@ -2940,7 +2940,7 @@ mod tests {
     }
 
     /// **The waterline is a floor, and a floor does not catch a body on its way up** (decision
-    /// 1620, B322). The depenetration half of the water resolve is ours, not the reference's — over
+    /// 1620). The depenetration half of the water resolve is ours, not the reference's — over
     /// there the surface is a swept solid and the sweep is directional for free — so it needs the
     /// clause the sweep gets for nothing. Without it, casting Levitate a foot under the waterline
     /// would have the launch clamped flat to the surface with its velocity zeroed on the very next
@@ -3005,7 +3005,7 @@ mod tests {
         assert_eq!(rest_vy, 0.0, "and the floor takes its velocity");
     }
 
-    /// **A Levitating walker holds its line over water, moving or still** (decision 1623, B322) —
+    /// **A Levitating walker holds its line over water, moving or still** —
     /// the director's report: *"when I start walking it drop a bit lower and then when I stop it
     /// goes up again, over land it's fine somehow."*
     ///
@@ -3195,7 +3195,7 @@ mod tests {
         // horizontal push into upward motion (`v'.y - v.y = -(v·n)·n.y`), and against a 55° face a
         // run into the hill very nearly cancels gravity: the capture's stalled frames descended
         // 1-7% of what gravity intended, three in a row, which is what tripped the wedge rest into
-        // "landed standing" (decisions 0211/0212) part-way up an open hillside.
+        // "landed standing" part-way up an open hillside.
         //
         // What geometry may take is bounded: a body sliding down a face of pitch θ keeps
         // `sin²θ` of its descent (0.67 at 55°). Anything under that is the push holding the body

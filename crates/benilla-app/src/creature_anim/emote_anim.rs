@@ -37,7 +37,7 @@ use super::{move_flags, EmoteAnim, Engaged, MovementState};
 /// any streamed unit incl. self), the movement flags (`MovementState` on our own avatar,
 /// `RemoteMotion` on a remote player — see `creature_anim`'s `unify`; a creature's spline carries
 /// no swim bit, so it defaults false), and the [`Engaged`] marker (the client's auto-attack
-/// target, decision 2067).
+/// target).
 pub(super) type PerformerQuery<'w, 's> = Query<
     'w,
     's,
@@ -133,9 +133,9 @@ pub(super) fn play_eligible(
 /// **vmangos never sets this bit on a fighting player or creature**: its in-combat flag is
 /// `UNIT_FLAG_IN_COMBAT = 0x80000`, and `0x800` is `UNIT_FLAG_PET_IN_COMBAT`, a pet-only bit. So
 /// on our server the flag half is dormant and the attack-target half carries the whole gate — which
-/// is why checking the wire flag alone (decision 1469) let every crit's `EMOTE_ONESHOT_WOUNDCRITICAL`
-/// play as a full CombatCritical one-shot on a fighting unit, cutting or fast-pathing its own swing
-/// (decision 2067). The bit is kept for fidelity to the byte, not because it fires here.
+/// is why checking the wire flag alone let every crit's `EMOTE_ONESHOT_WOUNDCRITICAL`
+/// play as a full CombatCritical one-shot on a fighting unit, cutting or fast-pathing its own swing.
+/// The bit is kept for fidelity to the byte, not because it fires here.
 const UNIT_FLAGS_COMBAT_BIT: u32 = 0x800;
 
 /// The pure mapping: an `Anim` emote resolves through `lookup` (the catalog's `Emotes.dbc` →
@@ -188,7 +188,7 @@ mod tests {
         assert!(!player_eligible(false, true), "in combat suppresses");
     }
 
-    /// The attack-target half of `0x60ecd0` (decision 2067): a unit with the [`super::super::Engaged`]
+    /// The attack-target half of `0x60ecd0`: a unit with the [`super::super::Engaged`]
     /// marker — ATTACKSTART..ATTACKSTOP, the client's `[+0xc48]` — refuses the play even with no
     /// store at all (vmangos's `0x80000` in-combat flag is not the bit the client tests, so the
     /// marker is what makes a brawl's crit emote silent, exactly like the reference).

@@ -7,7 +7,7 @@
 //! driver, the animation player and the transition set. In particular it touches **none** of the
 //! frame-local flags the rest of the pass threads through itself (`base_played`, `masked_played`,
 //! `played_oneshot`, `hold_played`, `sheath_frame_start`) — the seam is real, not just a line
-//! count. The phases either side of it are not separable that way today; see decision 0933.
+//! count. The phases either side of it are not separable that way today; see.
 //!
 //! The five modes and their transitions are documented on [`super::select::Mode`]; this file is
 //! the executor, not the law.
@@ -52,7 +52,7 @@ pub(super) struct Frame<'a> {
     pub(super) walk: f32,
     pub(super) model_scale: f32,
     /// Whether this body's plays go to the `WOW_MOVE_TRACE` anim trace, and under which label —
-    /// the rider's own, or the mount it is sitting on (decision 0906).
+    /// the rider's own, or the mount it is sitting on.
     pub(super) traced: bool,
     pub(super) subject: &'a str,
 }
@@ -90,7 +90,7 @@ pub(super) fn run(
     match drv.mode {
         Mode::Entering(sp) => {
             // The swim re-latch does NOT cut the hop's kick: JumpStart PLAYS OUT over the
-            // re-latch and the swim gait resumes only at its end (decision 0517 —
+            // re-latch and the swim gait resumes only at its end (
             // director-corrected against the ref; the static byte reading, a cut where the freeze
             // gate `0x5fd8e8` releases, could not reproduce the screen and is unconfirmed live).
             // Only the swim re-latch holds — a ground landing, a water exit, or a new
@@ -216,7 +216,7 @@ pub(super) fn run(
                 // [`leave_special`] exactly like the un-replaced machine: the latch
                 // handoff, the landing pick, and the pose exits all apply unchanged.
                 //
-                // …but FIRST the **transplant** (decision 0878): when what the base is about
+                // …but FIRST the **transplant**: when what the base is about
                 // to play is a LOCOMOTION clip — a jump entry (37), a land pick (39/187) — and
                 // this one-shot is a live CAST/COMBAT clip, the client moves it up onto the
                 // key-bone rather than letting the request overwrite it. Fall(40) and the pose
@@ -269,7 +269,7 @@ pub(super) fn run(
                 // the arc (the clamp at `0x7145db`), and a mid-air flag change is a keep-current
                 // no-op. The only exits are the edges above: the FALLINGFAR latch's Fall
                 // and the land pick at touchdown. This holds over Fall too: 0864's per-tick
-                // Fall(40) re-assert was refuted (decision 0868 — Fall plays ONCE, at the
+                // Fall(40) re-assert was refuted (Fall plays ONCE, at the
                 // latch edge `0x61a820@0x61a9eb`; `0x5ff030` is a wire-apply path, not a
                 // tick), so a clip that takes bone 0 after the latch holds until landing.
             } else if let Some(sp) = under {
@@ -293,7 +293,7 @@ pub(super) fn run(
                 }
             } else if oneshot_finished(player, anims, id, catalog) || mv.flags != drv.gait_flags {
                 // A finished one-shot recomputes the base — the ranged FIRE clips included
-                // (decision 1544, superseding 0994 §1). 0994 held them out on the claim that
+                // (superseding 0994 §1). 0994 held them out on the claim that
                 // the completion dispatcher `0x5fc3f0` is never reached for a bow id; it is,
                 // through a second fire site — the natural-completion path
                 // enqueues the callback as a plain ARGUMENT (`0x7194f5` pushes mode 0) and
@@ -316,7 +316,7 @@ pub(super) fn run(
                 // here already moving, and steady flags must let that clip play out.
                 //
                 // Against `drv.gait_flags` — what the **base** was last armed for — not this
-                // one-shot's own arm-time `flags` (decision 0894). The reference keeps no
+                // one-shot's own arm-time `flags`. The reference keeps no
                 // per-one-shot latch: a movement-state change requests the base and bone 0
                 // takes it, whenever the one-shot happened to start. Ice Block is the case that
                 // separates them — its root wipes the direction bits in the SAME frame the cast
@@ -325,12 +325,12 @@ pub(super) fn run(
                 // Stand overwrites the cast, and the character is neutral when the freeze lands.
                 if mv.flags != drv.gait_flags {
                     // The locomotion re-arm is a normal PlayAnimation — the deferred-combat
-                    // cache clears with it (decision 0406; a finished clip instead had its
+                    // cache clears with it (a finished clip instead had its
                     // cache consumed by the injection above, before this machine ran).
                     drv.deferred = None;
                     // …and **if** the re-arm resolves to a LOCOMOTION id, a still-playing
                     // CAST/COMBAT clip transplants up to the key-bone instead of being
-                    // overwritten (decision 0878; the client's gate is `0x5fee80` on the
+                    // overwritten (the client's gate is `0x5fee80` on the
                     // *requested* id, `0x5fe912`). A *finished* clip has nothing to move: the
                     // client's descriptor probe reports a completed slot as id −1 (`0x5fe1f0`
                     // reads the completion latch, not the armed record), so the transplant
@@ -379,14 +379,14 @@ pub(super) fn run(
             } else {
                 // A bracket-less step-off fall landing needs NO case of its own: the arc never
                 // latched FALLINGFAR, so the `0x602c60` land dispatcher is a verified no-op
-                // (decision 0179) — and a no-op means the gait must keep rolling mid-cycle,
+                // — and a no-op means the gait must keep rolling mid-cycle,
                 // not be re-picked (a re-pick replays the run cycle from its head: the
-                // landing-frame leg pop, decision 0187). Falling through keeps the clip when
+                // landing-frame leg pop). Falling through keeps the clip when
                 // the flags still agree and cross-fades normally when they changed mid-air.
                 // Normal gait: select, cross-fade on change, keep the rate synced each frame.
-                // The engaged standing idle: the weapon-class Ready pick (decision 0073).
+                // The engaged standing idle: the weapon-class Ready pick.
                 // `GetWeapon(0, 0)` again ([`Wielded::armed_main`]) — `0x5fcdc0` passes
-                // visFlag 0, so a disarmed unit stands in ReadyUnarmed(25) (decision 1863).
+                // visFlag 0, so a disarmed unit stands in ReadyUnarmed(25).
                 let ready =
                     (engaged && !moving).then(|| ready_anim(wielded.and_then(|w| w.armed_main())));
                 // The ranged standing idle (0099 phase 5): the byte-verified entry gate
@@ -394,7 +394,7 @@ pub(super) fn run(
                 // ONCE, then promoted to the Hold by its own completion. ENTRY is the local
                 // `0x200` ([`auto_repeat`]) alone — `0x5fd460`'s own and only claim test
                 // besides the sheath. The HOLD twin is real and this is where it comes back
-                // (decision 1544, superseding 0994 §2, which deleted it on a refuted absence
+                // (superseding 0994 §2, which deleted it on a refuted absence
                 // proof): 105 → 109, 106 → 110, 112 → 111, unconditionally at the Load's
                 // completion. Mid-volley the base IS re-picked — every fire clip's completion
                 // recomputes — so the cycle is fire → re-pull → hold, per shot.
@@ -420,13 +420,13 @@ pub(super) fn run(
                     });
                 let cands = gait_candidates(&mv, walk, ready, ranged_load);
                 // The stationary cast/channel hold pins its pose **full-body in the gait slot**
-                // (decision 0107 — the client's `[CGUnit+0xb4]` stationary-cast gate),
+                // (the client's `[CGUnit+0xb4]` stationary-cast gate),
                 // outranking the Ready idle and the state-emote idle below. "Stationary" is
                 // the client's `[9e8] & 0x20000f` test ([`move_flags::CAST_PIN_MOVE`]:
                 // translation + swim, NEVER the turn bits) — a turning caster keeps the pin,
                 // feet sliding; only a translating/swimming one falls through to the masked
                 // hold overlay (the hold block after the mode machine). Testing the turn bits
-                // here was the frostbolt right-drag jitter (decision 0491).
+                // here was the frostbolt right-drag jitter.
                 let hold_cands;
                 let cands: &[u16] = match cast_hold {
                     Some(h) if mv.flags & move_flags::CAST_PIN_MOVE == 0 => {
@@ -479,7 +479,7 @@ pub(super) fn run(
                 // **steady state** exactly; what it does NOT render is the *attach* arm's
                 // displacement of a full-body one-shot already holding bone 0 (the pin waits
                 // on `Mode::Swing`, the reference's play does not) — which is why the
-                // transition edge above arms separately (decision 0927, B203). 91 is not
+                // transition edge above arms separately. 91 is not
                 // rate-scaled, and the resolver's Stand fallback covers a body that doesn't
                 // author it.
                 let mount_cands;
@@ -490,8 +490,7 @@ pub(super) fn run(
                     cands
                 };
                 let target = cands[0];
-                // **The turn-shuffle is released by its own clip window, not by the turn ending**
-                // (decision 1655).
+                // **The turn-shuffle is released by its own clip window, not by the turn ending**.
                 //
                 // The client's only per-frame poll of a standing unit's base animation is
                 // `0x607ed0`'s tail, and it *refuses* this exact transition: with the shuffle
@@ -519,7 +518,7 @@ pub(super) fn run(
                     _ => target,
                 };
                 // Each `0x5fd8b0` candidate, in priority order, resolved through the model's own
-                // baked fallback (decision 0082) before moving to the next candidate — a model
+                // baked fallback before moving to the next candidate — a model
                 // missing the exact id still plays its baked substitute rather than stepping
                 // down the selector's own list early. The state-emote idle's id (above) resolves
                 // through the same call, like every other candidate.
@@ -532,9 +531,9 @@ pub(super) fn run(
                 if drv.gait == Some(target) {
                     // The gait is already armed and stays armed — its rate is
                     // [`play::sync_base_rate`]'s per-frame write below, which finds whichever
-                    // *rolled variation* (decision 0123) is actually the live one rather than
+                    // *rolled variation* is actually the live one rather than
                     // sweeping every node of the id. A completed ranged Load simply clamps at
-                    // full draw and stays there; nothing promotes it (0994).
+                    // full draw and stays there; nothing promotes it.
                 } else if let Some(c) = clip {
                     // **The two bypasses the reference keeps** (`0x5fc563`,
                     // `0x607b44`): the death poses and the mount attach
@@ -554,9 +553,9 @@ pub(super) fn run(
                     if drv.base_lock.refuses() {
                         armed = false;
                     } else {
-                        // A looping base arm rolls its variation when relaxed (decision 0123 —
+                        // A looping base arm rolls its variation when relaxed (
                         // the client's base-arm `variationIdx = −1`; a combat/cast arm keeps the
-                        // deterministic head) AND its replay budget (decision 0516, `0x712784`
+                        // deterministic head) AND its replay budget (`0x712784`
                         // — the watchdog window). A re-armed Stand landing on its rare look-around
                         // variations IS the idle fidget.
                         let (c, budget) = roll_loop(anims, c, relaxed, rng);
@@ -578,8 +577,8 @@ pub(super) fn run(
                         // gait it WRAPPED to its head at completion — the frames + cross-fade
                         // against the restarted reach-to-quiver were the director's "jumps
                         // back to the start the moment it gets fully pulled", in every build
-                        // that replayed a pull (trace-caught, decision 2276). The clamp IS the
-                        // drawn pose; nothing follows it (0994).
+                        // that replayed a pull (trace-caught). The clamp IS the
+                        // drawn pose; nothing follows it.
                         // Loot 50 is likewise authored clamp — one 0.5 s kneel-down that must
                         // FREEZE in the rummage pose; as Forever it would wrap back to standing
                         // and re-kneel every half second.
@@ -608,7 +607,7 @@ pub(super) fn run(
                     // The base is now arm-consistent with this movement state — every branch above
                     // leaves `drv.gait == Some(target)`. A one-shot that displaces it later reads
                     // this, not its own arm-time flags, to know whether the movement state has
-                    // moved on since (decision 0894).
+                    // moved on since.
                     drv.gait_flags = mv.flags;
                 }
             }
@@ -617,7 +616,7 @@ pub(super) fn run(
 }
 
 /// Has the base slot's armed looping clip finished its **replay window** — the client's
-/// `windowHi = windowLo + span·R` (`0x712784`, decision 0516)?
+/// `windowHi = windowLo + span·R` (`0x712784`)?
 ///
 /// `true` when there is no window to wait on at all: a slot with nothing armed, or one whose
 /// window a newer arm superseded, is not something to hold a shuffle against. The driver's own

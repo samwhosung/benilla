@@ -1,9 +1,9 @@
-//! Attaching a visual to a streamed entity (decision 0006) — the back half of [`super`].
+//! Attaching a visual to a streamed entity — the back half of [`super`].
 //!
 //! [`super`] resolves + builds a [`DisplayModel`](super::DisplayModel) per display id (shared across
 //! every entity of that display); this module gives each net entity its visual once that model has
 //! loaded: the submesh children + skeleton/animation infra (creatures + player bodies), the per-player
-//! character geoset selection + skin material (decision 0041 — the appearance/material resolution
+//! character geoset selection + skin material (the appearance/material resolution
 //! lives in [`char_skin`]), particle emitters, GameObject collision, or a colored cube fallback. It
 //! reaches the shared types + caches in the parent via `super::`.
 
@@ -85,21 +85,21 @@ impl BodyPartsDesc<'_, '_> {
 }
 pub(super) use redress::redress_player_looks;
 
-/// Set up the skinned instance shared by creatures/players (decision 0019) and animated
-/// GameObjects (decision 0242): the pose buffer, the palette rig slot, and the global-sequence
+/// Set up the skinned instance shared by creatures/players and animated
+/// GameObjects: the pose buffer, the palette rig slot, and the global-sequence
 /// drive.
 ///
 /// The **sequence clock** — the `AnimationPlayer` + graph + [`ModelAnimations`] + the driver that
 /// owns the choice — is NOT set up here; it is [`arm_sequence_clock`], called by the spawn site
-/// whether or not this rig was built (decision 0941). Everything in this function costs a palette
+/// whether or not this rig was built. Everything in this function costs a palette
 /// slot and a skinned twin, and is worth spending only on a model whose bones actually move; the
 /// clock is worth arming on every instance, because a sequence drives far more than a pose.
 ///
-/// This lane spawns **no joint entities** (decision 0724) — the pose lives in a
+/// This lane spawns **no joint entities** — the pose lives in a
 /// [`benilla_world::rig_anim::RigPose`] array — and **no anchor entities either** (decision
 /// 1355): a bone gets its anchor from `RigPose::anchor_for` the moment something actually
 /// consumes it, re-seated from the composed pose each frame it changes. Returns the pose (still
-/// in hand — see [`RigBuild`]) + the palette rig slot (decision 0720), or `None` when the model
+/// in hand — see [`RigBuild`]) + the palette rig slot, or `None` when the model
 /// has no inverse bindposes. Slot `0` = the palette table was full: anchors still resolve
 /// (emitters/attachments ride them), but parts fall back to the static bind-pose mesh. No
 /// animations ⇒ the pose just holds bind pose (Milestone A).
@@ -107,7 +107,7 @@ pub(super) use redress::redress_player_looks;
 /// `skins` is whether anything will actually **skin through this slot** — the same law the item
 /// lane's rider states (`equipment::spawn`: "a slot only earns its keep if something will
 /// actually SKIN through it"). A body that drew no batch at all (the invisible trigger creature
-/// holding a visible weapon — decision 1656) still needs the *pose*, because its attachment
+/// holding a visible weapon) still needs the *pose*, because its attachment
 /// points carry what IS drawn, but it has nothing of its own to skin: it takes the slot-less rig
 /// [`benilla_world::rig_anim::finalize_rig_worlds`] has supported since 1365, and no `RigStarved`
 /// marker either (there is no starvation to heal).
@@ -122,17 +122,17 @@ fn setup_skinned_instance(
     let ibp = d.inverse_bindposes.as_ref()?;
     let nbones = d.skeleton.joints.len();
     // `joints_root` — the rig's model-space frame — is normally `entity` itself; a MOUNTED
-    // rider's frame is the seat anchor instead (decision 0441), a conform-tilted model's its
+    // rider's frame is the seat anchor instead, a conform-tilted model's its
     // conform node, while the `AnimationPlayer`/driver components stay on `entity`. Skinned
     // parts render purely from the palette, so their own parentage is free.
-    // No anchor entities are spawned here (decision 1355). A consumer bone gets its anchor the
+    // No anchor entities are spawned here. A consumer bone gets its anchor the
     // moment something actually consumes it — [`benilla_world::rig_anim::RigPose::anchor_for`],
     // called by the emitter/ribbon/light arms, the billboard dress, held items, the mount seat,
     // spell kits and quest markers — and the position-only readers (the overhead anchor, missile
     // launch points, the bowstring) read `RigPose::posed_point` and never need an entity at all.
-    // The eager population this replaced was 96 % never-consumed at the LBRS pin (decision 1354).
+    // The eager population this replaced was 96 % never-consumed at the LBRS pin.
     let pose = benilla_world::rig_anim::RigPose::new(joints_root, &d.skeleton);
-    // The owned palette rig (decision 0720): the world pass writes this rig's composed frames ×
+    // The owned palette rig: the world pass writes this rig's composed frames ×
     // these bindposes into the slot; every skinned part below tags the slot so the vertex stage
     // finds its palette. The on-replace hook frees the slot with the visual teardown.
     let slot = match skins
@@ -161,7 +161,7 @@ fn setup_skinned_instance(
         None if !skins => 0,
         None => {
             // Table full (warned): parts render the static bind-pose mesh — but no longer
-            // for ever. The marker hands the unit to `heal_rig_starved` (decision 0863),
+            // for ever. The marker hands the unit to `heal_rig_starved`,
             // which rebuilds the visual once the table has headroom; without it a mob that
             // streamed in during a full-table window stayed a statue for its whole life.
             commands
@@ -184,7 +184,7 @@ fn setup_skinned_instance(
     // The pose buffer travels in the build result, NOT onto the entity yet: the arms of
     // `attach_entity_visuals` below still resolve anchors into it (`RigPose::anchor_for` needs
     // `&mut`), and it lands on the entity in one piece once the build is dressed. The evaluator
-    // (decision 0712) samples the player state straight into `locals`; with no joint entities and
+    // samples the player state straight into `locals`; with no joint entities and
     // no `AnimationTargetId`s, Bevy's `animate_targets` has nothing of ours to touch.
     Some(RigBuild { pose, slot })
 }
@@ -193,7 +193,7 @@ fn setup_skinned_instance(
 /// say which sequence is playing and how far into it, plus the driver that owns the choice
 /// ([`crate::go_anim::GoAnim`] for a state GameObject, `AnimDriver` for a unit).
 ///
-/// Separate from the rig on purpose (decision 0941). The two used to be one call — the clock was
+/// Separate from the rig on purpose. The two used to be one call — the clock was
 /// armed inside [`setup_skinned_instance`], so an instance that wasn't worth skinning got no clock
 /// either. But a skinned pose is only ONE of the things a sequence drives: the particle emitters'
 /// rate/enable/params tracks read it (`EmitClock::Host`), so do the material alpha/colour/UV loops
@@ -224,7 +224,7 @@ fn arm_sequence_clock(
         // `idle_clip`, NOT `first_seq`: the loader arm's identity answer, taken without the
         // rendering content gate (decision 0936's split). A GameObject whose sequences pose no
         // bone has no `first_seq` at all and used to arm nothing — which is precisely how its
-        // emitters ended up reading file slot 0 at t = 0 for ever (0941).
+        // emitters ended up reading file slot 0 at t = 0 for ever.
         if let Some(clip) = anims.idle_clip() {
             // Loop iff the sequence says so (`M2Sequence.flags & 1 == 0`) — the kernel's own
             // end-of-band law (`0x714585`): bit0 clear loops on the modulo wrap, bit0 set plays
@@ -244,7 +244,7 @@ fn arm_sequence_clock(
     match kind {
         EntityKind::GameObject if go_state_machine => {
             commands.entity(entity).insert((
-                // Cross-fades the open/close transition over the clip's blend-in time (0242/0049),
+                // Cross-fades the open/close transition over the clip's blend-in time,
                 // and carries the seed above as the pose the first arm transitions out of.
                 transitions,
                 crate::go_anim::GoAnim::default(),
@@ -268,20 +268,20 @@ fn arm_sequence_clock(
             commands
                 .entity(entity)
                 .insert((
-                    // Cross-fades over each clip's blend-in time, so a gait change eases (0049).
+                    // Cross-fades over each clip's blend-in time, so a gait change eases.
                     AnimationTransitions::new(),
                     AnimDriver::default(),
                 ))
                 // A (re)built rig is born live: fresh joints spawn pointing at the root, so a
                 // stale park marker from the torn-down visual would desync the LOD gate's
-                // edge-triggered bookkeeping (decision 0448). It re-parks on its own merits.
+                // edge-triggered bookkeeping. It re-parks on its own merits.
                 .remove::<benilla_world::rig_anim::AnimParked>();
         }
     }
 }
 
-/// A collapsed rig's build result (decision 0724): the pose buffer, still in hand so the build's
-/// own arms can resolve anchors into it (decision 1355 — anchors spawn on first consumer, via
+/// A collapsed rig's build result: the pose buffer, still in hand so the build's
+/// own arms can resolve anchors into it (anchors spawn on first consumer, via
 /// [`benilla_world::rig_anim::RigPose::anchor_for`]), + the palette slot each skinned part tags.
 /// The pose lands on the entity at the end of the build.
 struct RigBuild {
@@ -308,31 +308,31 @@ pub(super) fn attach_entity_visuals(
         ),
         Without<VisualAttached>,
     >,
-    // The mount children's build state (decision 0441): a mounted unit's rider waits on its mount
+    // The mount children's build state: a mounted unit's rider waits on its mount
     // child's attach — the seat resolves through the mount's attachment-0 point (`BoneAttach`)
     // into its `RigPose` below; the `NetEntity` is the staleness check (the field moved while
     // the unit was still pending).
     mount_children: super::mount::MountChildren,
     // Already-built rigs' pose buffers — the mount child's, for its seat anchor to resolve on
-    // demand (decision 1355). The unit being built here has no `RigPose` component yet (its pose
+    // demand. The unit being built here has no `RigPose` component yet (its pose
     // is still in `RigBuild`), so the two never alias.
     mut built_poses: Query<&mut benilla_world::rig_anim::RigPose>,
-    // The ItemDisplayInfo catalog (armor region textures, decision 0074). Read-only here; the
+    // The ItemDisplayInfo catalog (armor region textures). Read-only here; the
     // held-item systems in the same chain hold it mutably in their own turns.
     displays: Option<Res<super::ItemDisplays>>,
     mut transforms: Query<&mut Transform>,
     assets: Res<CubeAssets>,
     creatures: Option<Res<Creatures>>,
     gameobjects: Option<Res<GameObjects>>,
-    // The bone-pile body cache (decision 1706) — the corpse lane's second model source.
+    // The bone-pile body cache — the corpse lane's second model source.
     bones: Res<super::corpse::BonesModels>,
-    // Character geoset selection (decision 0041, Milestone B): the customization tables + the entity's
+    // Character geoset selection (Milestone B): the customization tables + the entity's
     // decoded appearance, to pick which body geosets a player shows. Absent ⇒ no filtering (every geoset).
     characters: Option<Res<Characters>>,
     // A character body's race/sex + customization for the geoset filter + skin materials: for a player,
     // its decoded descriptor fields ([`ObjectStore`]); a character-model NPC reads its display instead.
     stores: Query<&ObjectStore>,
-    // Character skin (decisions 0041 / 0044 / 0045): the CharSections lookup + the bits to composite +
+    // Character skin: the CharSections lookup + the bits to composite +
     // upload the per-appearance body atlas and to load + build the hair material — the shared chain (read
     // the BLPs), the `Image` assets + per-appearance composite cache, the asset server (async hair-BLP
     // load), the `WowModelMaterial` assets + dedup cache, and the light buffer. Nested into one param to
@@ -348,7 +348,7 @@ pub(super) fn attach_entity_visuals(
         ResMut<Assets<Mesh>>,
         ResMut<merge::MergedFormsCache>,
         // …and the animated-material lane a spawned part may need a material of its OWN on
-        // (decision 2295) — a GameObject whose file-sequence slots bake different UV or tint
+        // — a GameObject whose file-sequence slots bake different UV or tint
         // loops. Taken by the dressing path itself, because the clone has to exist before the
         // part's interior and fade records are built from it; nested here for this tuple's own
         // stated reason, the 16-param limit.
@@ -356,7 +356,7 @@ pub(super) fn attach_entity_visuals(
         ResMut<benilla_world::doodad_anim::TintAnimMaterials>,
         ResMut<benilla_world::mat_anim_table::MatAnimTable>,
     ),
-    // The owned skin-palette table (decision 0720): every skinned instance claims a rig slot.
+    // The owned skin-palette table: every skinned instance claims a rig slot.
     mut palettes: ResMut<benilla_world::rig_palette::RigPalettes>,
     // The collider-set stamp (1384): the GameObject hull insert below is the one collider lane
     // outside the streamer's attach queue, so it dates the world itself.
@@ -379,13 +379,13 @@ pub(super) fn attach_entity_visuals(
     // Arm each entity's appear-fade at the moment its visual attaches (≈ its first-visible moment).
     let now = time.elapsed_secs();
     for (entity, net, equipment, reattached, mount_child, mount_body, anchored) in &pending {
-        // A player attaches only once its worn-equipment resolution settles (decision 0074): the
+        // A player attaches only once its worn-equipment resolution settles: the
         // template round trips are far faster than the model load, and waiting composites the
         // dressed atlas directly instead of flashing naked. (`None` = the resolver hasn't run yet.)
         if net.kind == EntityKind::Player && !equipment.is_some_and(|e| e.settled) {
             continue;
         }
-        // A **corpse** waits on the same component for a different reason (decision 1706): its gear
+        // A **corpse** waits on the same component for a different reason: its gear
         // is final on arrival, so this is not a round-trip wait but a *descriptor* wait —
         // `resolve_corpse_equipment` runs one step earlier in this same chain and inserts the
         // component from the store. It matters because the corpse lane has no re-dress: its gear
@@ -423,7 +423,7 @@ pub(super) fn attach_entity_visuals(
         let worn = resolve_worn_equip(net, equipment, dm);
         let equip = worn.bodyslots;
         // **Did the display name a model file at all?** An empty `parts` list means two opposite
-        // things, and the cube below may only answer one of them (decision 1403): a display that
+        // things, and the cube below may only answer one of them: a display that
         // resolved to a model which built zero batches has been *answered* — the model draws
         // nothing — while a display that resolved to no model at all is a gap of ours.
         let named_a_model = dm.is_some_and(DisplayModel::names_a_model);
@@ -450,12 +450,12 @@ pub(super) fn attach_entity_visuals(
         // carry a *transparent* placeholder M2, and invisible **trigger creatures** an empty or
         // constant-zero-alpha one: the real client's mesh gate is **type-independent** — it draws
         // any loaded model and the per-batch zero-alpha cull skips the transparent geometry
-        // (decision 0024, superseding 0023's wrong marker-type gate; zero-alpha cull `0x707b3a`).
+        // (superseding 0023's wrong marker-type gate; zero-alpha cull `0x707b3a`).
         // Our M2 alpha cull already reduces those models to zero submeshes, so `parts` below is
         // EMPTY for them: the spawn loop draws nothing, and `named_a_model` is what keeps the unit
         // arm's debug cube off them (1403).
         if let Some(parts) = model {
-            // ── Mounts (decision 0441): a mounted unit is TWO skeletons. The mount is a child
+            // ── Mounts: a mounted unit is TWO skeletons. The mount is a child
             // entity carrying a plain creature `NetEntity` — this very system builds it like any
             // beast next frame(s) — and the rider's rig then roots under the mount's attachment-0
             // seat joint. Until the mount child has attached, the unit builds nothing (no
@@ -510,7 +510,7 @@ pub(super) fn attach_entity_visuals(
             // A GameObject's interior-fold reference point (model-local; the anchor transform
             // applies the entity scale when the classifier folds).
             let bake_center = dm.map(|d| d.bake_center_local).unwrap_or(Vec3::ZERO);
-            // The dynamic ground-shade root (decision 0173): one light-node state per object, like
+            // The dynamic ground-shade root: one light-node state per object, like
             // the reference's `[obj+0xe0]`; every M2 part below (body, held items) reads it from the
             // tree walk. Kind-independent — a unit and a GameObject run the same 2.5/0.5 MCSH chase,
             // which is the byte-shared target law (0814 restored this; 0809 had split it by kind on
@@ -533,7 +533,7 @@ pub(super) fn attach_entity_visuals(
             // `0x6a86d0`: a GameObject attaches by CONTAINMENT (`0x6a8c10`), anchored at the world
             // bounding-box centre; a unit/player by DOWN-RAY (`0x6a8a20`), anchored at the position.
             // The kind can't change under a live display-id swap, but the remove arm keeps the two
-            // mutually exclusive by construction rather than by that argument (decision 0776).
+            // mutually exclusive by construction rather than by that argument.
             match net.kind {
                 EntityKind::GameObject => {
                     commands
@@ -553,7 +553,7 @@ pub(super) fn attach_entity_visuals(
                 id: net.display_id.unwrap_or(0),
                 detail: format!("emitters: {}", emitters.len()),
             };
-            // Skeletal skin (decision 0019): a creature (Unit/Player) — and now any animated
+            // Skeletal skin: a creature (Unit/Player) — and now any animated
             // GameObject — draws through the skinned-mesh twin and a **per-instance** joint hierarchy
             // whose entities are children of this entity (so they inherit its world pose; at bind pose
             // every joint matrix collapses to that pose, so the model renders exactly where the static
@@ -573,17 +573,17 @@ pub(super) fn attach_entity_visuals(
             // without the slot — see [`setup_skinned_instance`].
             let skins = parts.iter().any(|p| p.skinned_mesh.is_some());
             let mut skin: Option<RigBuild> = match (net.kind, dm) {
-                // A creature (or player body — decision 0041) with a real skeleton. The `!is_empty`
+                // A creature (or player body) with a real skeleton. The `!is_empty`
                 // guard keeps a degenerate boneless model on the static mesh (its skinned twin would
                 // carry joint attributes but have no joints to index — out of bounds).
                 (EntityKind::Unit | EntityKind::Player, Some(d))
                     if !d.skeleton.joints.is_empty() =>
                 {
                     // `rider_root`: the unit itself, or — mounted — the seat anchor under the
-                    // mount's attachment-0 joint (decision 0441). The `AnimationPlayer` stays
+                    // mount's attachment-0 joint. The `AnimationPlayer` stays
                     // on the unit entity either way (targets bind by entity, not by path).
                     //
-                    // Terrain conform (decisions 0482/0486): a flagged model's root bones
+                    // Terrain conform: a flagged model's root bones
                     // parent one level deeper, under a conform node `conform_units` rotates —
                     // wild quadruped and mount child alike. A mounted RIDER never gets one
                     // (`rider_root != entity`): the ref's `0x7106c0` dispatch is on the
@@ -616,7 +616,7 @@ pub(super) fn attach_entity_visuals(
                         skins,
                     )
                 }
-                // A **corpse** (decision 1706). A fresh body is a character model and its held
+                // A **corpse**. A fresh body is a character model and its held
                 // Death pose is a bone pose, so it has to skin or it lies in bind pose — standing
                 // up. The `animations` guard is what keeps a **bone pile** off this path: the 16
                 // shipped skeletons are fully static two-bone props with no sequence at all, so
@@ -646,7 +646,7 @@ pub(super) fn attach_entity_visuals(
                     );
                     // A state GO whose model poses NO bone in any sequence gets no rig: skinning
                     // it could only reproduce the bind-pose mesh it already renders, at the cost
-                    // of a scarce palette slot (decision 0941 — 147 display models are this
+                    // of a scarce palette slot (147 display models are this
                     // shape). It still gets the clock below, which is the half it was missing.
                     let poses = d
                         .animations
@@ -668,7 +668,7 @@ pub(super) fn attach_entity_visuals(
                 _ => None,
             };
             // The instance's SEQUENCE CLOCK — armed for every M2 instance whose model has one,
-            // rigged or not (decision 0941). The rig above is a palette slot and a skinned twin,
+            // rigged or not. The rig above is a palette slot and a skinned twin,
             // and is worth spending only when bones actually move; the clock is a player and a
             // handle, and everything per-sequence reads it — the emitters' rate/enable/params
             // tracks, the material alpha/colour/UV loops, the GameObject state arm. Bundling the
@@ -682,10 +682,10 @@ pub(super) fn attach_entity_visuals(
                     arm_sequence_clock(&mut commands, entity, anims, net.kind, go_state_machine);
                 }
             }
-            // The bone-riding surface (decision 0072): the model's attachment points + event
+            // The bone-riding surface: the model's attachment points + event
             // markers, so held items (and future bone riders) can hang from the hand/hip/back
             // joints. Pure model data — the anchor *entities* live in `RigPose.anchors` and
-            // spawn on first consumer (decision 1355).
+            // spawn on first consumer.
             if let (Some(_), Some(d)) = (&skin, dm) {
                 // The event markers keep the client's first-match scan order: an ident already
                 // present wins (character models carry six `$CSD` records — the first is the one
@@ -717,17 +717,17 @@ pub(super) fn attach_entity_visuals(
                         .insert(crate::creature_anim::BodyTwist::new(spine, head));
                 }
             }
-            // Character geoset selection (decision 0041, Milestone B): a player body model carries
+            // Character geoset selection (Milestone B): a player body model carries
             // *every* hairstyle / facial-hair / body-option geoset; show only the selected ones. The
             // model (and its `parts`) is shared across all players of this displayId, so the filter is
             // **per-entity** here — from this player's decoded appearance — not baked into the cache.
             // `None` (no look, or the tables unavailable) ⇒ render every part, as before.
             //
             // The character look: a player takes it from the wire, a character-model NPC from its
-            // display's CreatureDisplayInfoExtra (decision 0041). Both then drive the same geoset filter
+            // display's CreatureDisplayInfoExtra. Both then drive the same geoset filter
             // + skin/hair materials below; a beast NPC / GameObject has no look and is unaffected.
             let look = resolve_char_look(net, dm, entity, &stores);
-            // The worn geoset selectors (decisions 0074/1864, the B1–B8 branches): a player's from the
+            // The worn geoset selectors (the B1–B8 branches): a player's from the
             // resolved equipment display rows; an NPC / naked default otherwise.
             // (The helm's hide-mask row pair, `0x4799a0`: hair/facial/ears tuck under it. For a
             // character-model NPC the helm id is its CreatureDisplayInfoExtra head column.)
@@ -748,7 +748,7 @@ pub(super) fn attach_entity_visuals(
                     &equip_geosets,
                 ))
             });
-            // Character skin (decisions 0041 / 0044 / 0045): a character body's body-skin batches (M2
+            // Character skin: a character body's body-skin batches (M2
             // type 1) get the body atlas, and its hair batches (type 6) get the hair-mesh texture — both
             // per-appearance over the shared model, so built here (not in the shared model cache);
             // `model_material` then dedups by texture so bodies of one look share them. `(None, None)` ⇒
@@ -779,9 +779,9 @@ pub(super) fn attach_entity_visuals(
             let mut unit_will_fade = false;
             // This unit's **instance slot**, in tag-field form — one value for the whole unit, worn by
             // every part and card below. See the per-part note at the spawn for why it is the
-            // instance's identity rather than a skinning detail (decision 0812).
+            // instance's identity rather than a skinning detail.
             let inst_slot = skin.as_ref().map_or(0, |rb| rb.slot);
-            // The armed idle's **authored** CAaBox (decision 0637) — the mouseover picker's
+            // The armed idle's **authored** CAaBox — the mouseover picker's
             // volume for a skinned part, NOT a culling volume (skinned entity parts are never
             // frustum-culled; see the `NoFrustumCulling` note at the insert below). The bind-pose
             // box the mesh would otherwise get is only a fair stand-in while the animation keeps
@@ -796,7 +796,7 @@ pub(super) fn attach_entity_visuals(
                     bevy::camera::primitives::Aabb::from_min_max(clip.bounds_min, clip.bounds_max)
                 })
             });
-            // This body's **election bound** (decision 1270): standing in a sealed WMO room the
+            // This body's **election bound**: standing in a sealed WMO room the
             // reference never submits an outdoor object at all, so the cull needs one whole-object
             // AABB per body, on its root. Recorded here and restated onto `WorldUnit::bound` by
             // `publish_world_units` — the one reconciler that answers every "what is this body to
@@ -827,7 +827,7 @@ pub(super) fn attach_entity_visuals(
             //
             // Billboard-card bones are the one dress input that needs an anchor ENTITY (the card
             // rides its live joint), so they resolve here — through the same first-consumer
-            // resolver as everything else (decision 1355), over the same geoset predicate as the
+            // resolver as everything else, over the same geoset predicate as the
             // spawn loop below, so a hidden variant's card bone spawns nothing.
             let card_anchors: std::collections::HashMap<u16, Entity> = match skin.as_mut() {
                 Some(rb) => parts
@@ -857,7 +857,7 @@ pub(super) fn attach_entity_visuals(
                 bake_center,
                 idle_aabb,
                 now,
-                // A fresh visual arms the appear-fade on every fade-capable part (decision 0032).
+                // A fresh visual arms the appear-fade on every fade-capable part.
                 // A rebuild that is NOT a spawn — a mount transition, a display swap — spawns
                 // steady: `Reattached` says the unit was already standing there.
                 fade: if reattached {
@@ -922,7 +922,7 @@ pub(super) fn attach_entity_visuals(
             } else {
                 Transform::default()
             };
-            // The equipment this visual was dressed with (decision 0074): `redress_player_looks`
+            // The equipment this visual was dressed with: `redress_player_looks`
             // diffs it against the live resolution and re-dresses the standing visual on a change.
             if let (EntityKind::Player, Some(e)) = (net.kind, equipment) {
                 commands
@@ -978,11 +978,11 @@ pub(super) fn attach_entity_visuals(
                             // it used to claim to be.)
                             anchor: Some(entity),
                             // The unit's model going away IS this emitter's model going away
-                            // (stream-out, a visual rebuild) — free the pool with it (0826).
+                            // (stream-out, a visual rebuild) — free the pool with it.
                             on_owner_loss: particles::OwnerLoss::Free,
                             // The unit IS the model instance here, so its own render alpha
                             // (appear ramp, stream-out ramp, the self-avatar feather) multiplies
-                            // its clouds — decision 0827.
+                            // its clouds.
                             alpha: Some(entity),
                             // …and the entity IS the light node: one node per object, created
                             // from its TYPEID and filled every frame whether or not a mesh batch
@@ -994,12 +994,12 @@ pub(super) fn attach_entity_visuals(
                         // The emitters' rate/enabled read this instance's PLAYING sequence — a
                         // unit's or GameObject's `AnimationPlayer` on the root. A quest object's
                         // explosion is authored inside its one-shot clips with an OFF window at
-                        // idle (B27); a creature's death-only smoke is the same shape.
+                        // idle; a creature's death-only smoke is the same shape.
                         particles::EmitClock::Host(entity),
                     );
                 }
             }
-            // The model's own M2 point lights (decision 0016) — a fire elemental's glow, a lit
+            // The model's own M2 point lights — a fire elemental's glow, a lit
             // GameObject brazier. Same host-bone ride as the emitters, for the same reason: the
             // reference re-registers each light at its LIVE bone position every frame. (The far more
             // common carried light is the held torch — that one spawns on the item model, in
@@ -1033,7 +1033,7 @@ pub(super) fn attach_entity_visuals(
                     // "body models don't author a gate" shortcut, true of creatures and false of
                     // GameObjects) drew every trail a model authored in every state: the Frost
                     // Trap's twelve trigger-only streamers became a permanent spinning column
-                    // over the placed trap (decision 1011).
+                    // over the placed trap.
                     benilla_world::ribbons::spawn_ribbon(
                         &mut commands,
                         rb,
@@ -1041,7 +1041,7 @@ pub(super) fn attach_entity_visuals(
                         use_pivot,
                         placement.scale.max_element(),
                         benilla_world::ribbons::RibbonSeq::Host(entity),
-                        // The unit's own render alpha gates its trail (0827).
+                        // The unit's own render alpha gates its trail.
                         Some(entity),
                         // No fade sphere: a streamed unit is not a placed model — its
                         // population is bounded by server visibility, and its trail by the
@@ -1050,7 +1050,7 @@ pub(super) fn attach_entity_visuals(
                     );
                 }
             }
-            // The pose buffer lands last (decision 1355): every build arm above has resolved its
+            // The pose buffer lands last: every build arm above has resolved its
             // anchors into it, so it arrives on the entity in one piece — the evaluator, the
             // compose pass and every later `anchor_for` (a weapon equipped in combat, a spell
             // kit) find the same buffer the build populated.
@@ -1071,10 +1071,9 @@ pub(super) fn attach_entity_visuals(
                         RigidBody::Static
                     };
                     commands.entity(entity).insert((body, col));
-                    // This lane bypasses the streamer's attach queue entirely (0761), so it stamps
+                    // This lane bypasses the streamer's attach queue entirely, so it stamps
                     // the collider set itself — otherwise a creature standing where a GameObject
-                    // hull lands frames later keeps the answer it took before there was one
-                    // (decision 1384).
+                    // hull lands frames later keeps the answer it took before there was one.
                     collider_epoch.bump();
                 }
             }
@@ -1084,9 +1083,9 @@ pub(super) fn attach_entity_visuals(
             // centered, so a child offset lifts it onto the ground.
             //
             // A display that DID name a model renders exactly what that model built — including
-            // nothing (decision 1403, bug B13). The reference's mesh gate is type-independent: it
+            // nothing (bug B13). The reference's mesh gate is type-independent: it
             // draws any loaded model and the per-batch zero-alpha cull skips what is transparent
-            // (decision 0024, zero-alpha cull `0x707b3a`), so a model with no surviving batch
+            // (zero-alpha cull `0x707b3a`), so a model with no surviving batch
             // submits no geometry and the unit is invisible. Byte-exact, folded back at 1407: the
             // batch loop's TRIP COUNT is the selected ModelView's texUnit count (`0x707a72`), so a
             // view with none skips the whole loop — and the unit lane reaches that same loop, on
@@ -1114,7 +1113,7 @@ pub(super) fn attach_entity_visuals(
                 // A DynamicObject is deliberately invisible as an *object* — its look is the
                 // spell's area effect (the dest-anchored visual lane), never a fallback cube.
                 //
-                // A **corpse** takes no cube either (decision 1706), and for the GameObject arm's
+                // A **corpse** takes no cube either, and for the GameObject arm's
                 // reason rather than the DynamicObject's: it reached here only because its display
                 // named no model — a `CORPSE_FIELD_DISPLAY_ID` absent from `CreatureDisplayInfo`,
                 // or a bone pile whose race has no shipped skeleton. Both are the reference's own
@@ -1148,7 +1147,7 @@ pub(super) fn attach_entity_visuals(
                         // dressed creature part.
                         benilla_world::interact::CreaturePickPart,
                         // The cube has no resident `RenderSubmesh` to cast against — its `Aabb` IS
-                        // its shape, which it must SAY (decision 0929): the picker requires pick
+                        // its shape, which it must SAY: the picker requires pick
                         // geometry rather than inferring a box from its absence.
                         benilla_world::interact::PickBox,
                         // What makes "we are standing a cube here" a number a probe can read
@@ -1158,7 +1157,7 @@ pub(super) fn attach_entity_visuals(
                 });
             }
         }
-        // The mount this visual was built with (decision 0441, the `AppliedEquipment` pattern):
+        // The mount this visual was built with (the `AppliedEquipment` pattern):
         // `refresh_mounts` diffs it against the live field and rebuilds on any transition. Written
         // on the cube fallback too (same read, no seat), so a model-less unit can never churn.
         if matches!(net.kind, EntityKind::Unit | EntityKind::Player) {
@@ -1172,7 +1171,7 @@ pub(super) fn attach_entity_visuals(
         commands
             .entity(entity)
             .insert(VisualAttached)
-            // The display this visual was built with (decision 0695, the same pattern):
+            // The display this visual was built with (the same pattern):
             // `refresh_live_display` diffs it against the live descriptor and rebuilds on a
             // change (druid form, GM morph). Stamped on the cube fallback too, so a model-less
             // unit can never churn.
@@ -1181,18 +1180,18 @@ pub(super) fn attach_entity_visuals(
     }
 }
 
-/// Spawn a rig's joint-entity hierarchy under `root` (decision 0019): one entity per bone
+/// Spawn a rig's joint-entity hierarchy under `root`: one entity per bone
 /// carrying its rest-local translation, parented per the skeleton — root bones under `root` so
 /// they inherit the entity's world pose, others under their parent joint. Returns the joints in
 /// bone order, so a vertex's joint index maps straight in and every submesh's palette rig shares
-/// this one set. **The doodad/effect/booth lane only** (decision 0724): a streamed unit's rig is
+/// this one set. **The doodad/effect/booth lane only**: a streamed unit's rig is
 /// the joint-less [`benilla_world::rig_anim::RigPose`] buffer instead — this hierarchy remains for
 /// the Bevy-graph-driven hosts. `holder` is the rig root that carries (or will carry) the
 /// [`benilla_world::rig_palette::RigSkin`] — every joint marks it with a `RigJoint`, which is what the
-/// palette change-sweep iterates (0720).
+/// palette change-sweep iterates.
 /// The enclosing box of a model's parts — its bind-pose extent, in model space.
 ///
-/// The election bound's fallback (decision 1270) for a body whose armed idle authors no CAaBox.
+/// The election bound's fallback for a body whose armed idle authors no CAaBox.
 /// Every part of one model shares that space, so their union is the model, and for a body that is
 /// not armed at all it is exactly what gets drawn. A bind box can be a poor bound for a body whose
 /// idle moves it far (0637's duel flag, modelled 9 yd up and planted by its Stand) — which is why
@@ -1254,7 +1253,7 @@ mod tests {
         }
     }
 
-    /// **A body with nothing to skin gets the rig without the palette slot** (decision 1656).
+    /// **A body with nothing to skin gets the rig without the palette slot**.
     ///
     /// The invisible trigger creature holding a visible weapon is a complete model instance — it
     /// needs the pose, because its attachment points carry what IS drawn — and has no geometry of

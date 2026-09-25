@@ -8,7 +8,7 @@
 //! toast). That is why it lives here rather than inside either caller: the icon and the
 //! click agree by construction only if they ask the same question.
 //!
-//! ## The Action gate — the piece that was missing (0752)
+//! ## The Action gate — the piece that was missing
 //!
 //! Before the resolver will *consider* a `Lock.dbc` slot it asks `0x5f81d0(GO, Action[i])`, which
 //! answers from the GameObject's own **state** and its `GO_FLAG_LOCKED` wire bit — see
@@ -38,14 +38,14 @@ use bevy::prelude::*;
 
 use crate::net::ObjectStore;
 
-/// The lock chain's full data set as ONE [`SystemParam`] (decisions 0239 / 0545 / 0752): the
+/// The lock chain's full data set as ONE [`SystemParam`]: the
 /// ask-once GO-template cache, `Lock.dbc` + `LockType.dbc`, the spell catalog, and the ask-once
 /// item-template cache (key-item names for the "Requires \<key\>" toast, and the key's own ON_USE
 /// spell). The `Option` members are absent without client data.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct GoLockInputs<'w, 's> {
     // Shared: the tooltip arm's ask-once template request on a miss marks itself through
-    // `&self` (decision 2288), so neither arm needs the store exclusively.
+    // `&self`, so neither arm needs the store exclusively.
     pub(crate) templates: Res<'w, crate::go_templates::GameObjectTemplates>,
     pub(crate) locks: Option<Res<'w, crate::go_templates::Locks>>,
     pub(crate) lock_types: Option<Res<'w, crate::go_templates::LockTypes>>,
@@ -120,7 +120,7 @@ pub(crate) fn go_facts(go: Option<(&ObjectStore, u32)>) -> GoFacts {
 /// ("unlock") slots and arms `usable`'s lock check (`0x5f32a6`).
 pub(crate) const GO_FLAG_LOCKED: u32 = 0x2;
 
-/// The client's lock resolver **`0x5f83d0`**, transcribed (decision 0752).
+/// The client's lock resolver **`0x5f83d0`**, transcribed.
 ///
 /// Walks the 8 `Lock.dbc` slots **in order**, dispatching each by `Type`:
 /// - **SKILL (2)** — gate on [`LockSlot::available`], then linear-scan the player's known spells
@@ -138,7 +138,7 @@ pub(crate) const GO_FLAG_LOCKED: u32 = 0x2;
 /// `matched_spell` is the out-param the toast routing needs; it is written for a LockType match
 /// even when the value test then fails.
 ///
-/// **The scan order is part of the answer, not an implementation detail** (decision 1312). The
+/// **The scan order is part of the answer, not an implementation detail**. The
 /// reference walks its known-spell **array** in index order and *returns on the first sufficient
 /// match*, so when two known spells both match the LockType and both clear the requirement, the
 /// order decides which one is cast — and that spell's name is what the cast bar reads. This was
@@ -146,8 +146,8 @@ pub(crate) const GO_FLAG_LOCKED: u32 = 0x2;
 /// `matched_spell`, never the outcome"), which is false: every character knows both 6478 "Opening"
 /// and 22810 **"Opening - No Text"** — both `SPELL_EFFECT_OPEN_LOCK` on `LockType 13` (Open
 /// Kneeling), both trivially sufficient against the `Skill == 0` slots the ground containers carry
-/// — so iterating a `HashSet` put Blizzard's placeholder name on the cast bar at the hash's whim
-/// (B247). `known` is a [`BTreeSet`] for exactly that reason: ascending spell id is the reference
+/// — so iterating a `HashSet` put Blizzard's placeholder name on the cast bar at the hash's whim.
+/// `known` is a [`BTreeSet`] for exactly that reason: ascending spell id is the reference
 /// array's own order after login, the server building `SMSG_INITIAL_SPELLS` out of a `std::map`.
 pub(crate) fn resolve_lock(
     slots: &[LockSlot],
@@ -243,8 +243,8 @@ fn line_skill_value(
     0
 }
 
-/// **`0x5f8260`** — the *targeting cursor's* lock question, and this chain's **third** consumer
-/// (decision 0949). Reached from the object dispatcher `0x4828d0`'s targeting step
+/// **`0x5f8260`** — the *targeting cursor's* lock question, and this chain's **third** consumer.
+/// Reached from the object dispatcher `0x4828d0`'s targeting step
 /// (`0x482910 → 0x6e6460`, whose GameObject arm calls it at `6e670f` with the GO, the cast-item
 /// guid `0xceac48` and the pending spell id `[0xceac58]`).
 ///
@@ -271,7 +271,7 @@ fn line_skill_value(
 /// **cast item's** entry against a `LOCK_KEY_ITEM` slot (`5f8360`: `Type[i] == 1`, `5f836c`: the
 /// item's entry `== Index[i]`, then the same gate). It needs a per-effect id the catalog does not
 /// carry yet, and it only fires for a key's own ON_USE spell armed at a GameObject — a seam 0939
-/// built but no 5875 key is known to use. Named residual, decision 0949.
+/// built but no 5875 key is known to use. Named residual.
 pub(crate) fn spell_opens_lock(
     slots: &[LockSlot],
     spell: &benilla_formats::SpellDisplay,
@@ -304,7 +304,7 @@ pub(crate) fn required_skill(slot: &LockSlot, go_level: u32) -> i32 {
 /// benilla already transcribes once as [`crate::ui_items::find_item`]; it used to be a second,
 /// hand-rolled walk here that missed the equipment slots and read 32 keyring slots where the wire
 /// has 16. One walker, one answer — and the caller needs the POSITION it returns anyway, to address
-/// `CMSG_USE_ITEM` (decision 0769).
+/// `CMSG_USE_ITEM`.
 fn holds_item(
     store: &benilla_protocol::messages::ObjectFields,
     objects: &crate::net::Objects,
@@ -333,7 +333,7 @@ mod tests {
         }
     }
 
-    /// **`0x5f8260` is not `0x5f83d0`** (decision 0949). The cursor's question differs from the
+    /// **`0x5f8260` is not `0x5f83d0`**. The cursor's question differs from the
     /// right-click resolver's in three ways that all show on screen, and getting any of them
     /// wrong greys the wrong chest.
     #[test]
@@ -547,8 +547,8 @@ mod tests {
         assert!(!out.blocks_usable(false));
     }
 
-    /// The reported bug, end to end, on the **real** shipped `Lock.dbc` / `Spell.dbc` values
-    /// (decision 0752). `benilla-formats`' own `real_lock_catalog_reads_the_action_column` and
+    /// The reported bug, end to end, on the **real** shipped `Lock.dbc` / `Spell.dbc` values.
+    /// `benilla-formats`' own `real_lock_catalog_reads_the_action_column` and
     /// `real_spell_catalog_computes_the_lock_skill_an_opener_provides` pin these numbers against
     /// the files, so this stays a pure unit test while still describing real data.
     ///
@@ -735,7 +735,7 @@ mod tests {
         );
     }
 
-    /// **B247** (decision 1312): two known openers on one LockType, both sufficient — the LOWEST
+    /// **B247**: two known openers on one LockType, both sufficient — the LOWEST
     /// spell id wins, deterministically, because that is the reference array's order and the scan
     /// returns on its first sufficient match.
     ///

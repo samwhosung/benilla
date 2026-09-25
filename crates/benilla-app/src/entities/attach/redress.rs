@@ -79,7 +79,7 @@ pub(in crate::entities) fn redress_player_looks(
             Option<&benilla_world::rig_palette::RigSkin>,
             Option<&super::super::BoneAttach>,
             // The pose buffer: a revealed billboard batch's card bone resolves its anchor on
-            // first demand (`RigPose::anchor_for`, decision 1355).
+            // first demand (`RigPose::anchor_for`).
             Option<&mut benilla_world::rig_anim::RigPose>,
             Option<&benilla_world::interior::BodyBakeCenter>,
             Option<&benilla_world::model_fade::UnitAppearFade>,
@@ -138,7 +138,7 @@ pub(in crate::entities) fn redress_player_looks(
     for (entity, net, live, mut applied, children, rig, bones, mut pose, bake_center, unit_fade) in
         &mut players
     {
-        // `settled` (decision 0074): every non-empty visible-item entry has resolved through the
+        // `settled`: every non-empty visible-item entry has resolved through the
         // template cache. Re-dressing on a half-resolved set would composite a half-dressed atlas
         // and then composite again a frame later.
         if net.kind != EntityKind::Player || !live.settled || *live == applied.0 {
@@ -258,7 +258,7 @@ pub(in crate::entities) fn redress_player_looks(
         // one is still in flight (the login gear cascade lands mid-ramp), exactly as a
         // late-resolving held item does — never a second ramp of their own, never a pop.
         //
-        // A revealed billboard batch's card bone resolves its anchor first (decision 1355), over
+        // A revealed billboard batch's card bone resolves its anchor first, over
         // exactly the parts the spawn loop below will dress.
         let card_anchors: std::collections::HashMap<u16, Entity> = match pose.as_mut() {
             Some(p) => parts

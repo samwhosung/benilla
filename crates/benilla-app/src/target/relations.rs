@@ -13,7 +13,7 @@
 //! - `CanAssist 0x6066f0` → still the reaction-rank derivation below, on [`ring_reaction`].
 //!
 //! They lived in `scan.rs` while `can_attack` had exactly one caller; `can_assist` (the `UnitBuff`
-//! gate, decision 1035) made that a second concern in a file about TAB targeting.
+//! gate) made that a second concern in a file about TAB targeting.
 
 use benilla_protocol::messages::{ObjectType, OwnerFallback};
 
@@ -51,7 +51,7 @@ fn is_player_object(store: Option<&ObjectStore>) -> bool {
 /// and corrected for nameplates alone. `0x606980`'s mixed arm is `UnitReaction(**player** → target)
 /// < 4`, and that direction answers a reputation-slot faction with the **at-war bit**, never the
 /// standing. Keeping the standing here made every not-at-war neutral faction attackable: hovering
-/// a Cenarion Circle NPC drew the sword, TAB targeted it, and `UnitCanAttack` agreed (decision 1674).
+/// a Cenarion Circle NPC drew the sword, TAB targeted it, and `UnitCanAttack` agreed.
 pub(crate) fn can_attack(
     store: Option<&ObjectStore>,
     factions: Option<&Factions>,

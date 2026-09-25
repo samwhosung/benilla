@@ -20,7 +20,7 @@ pub(super) enum WoundEdge {
     Spell,
 }
 
-/// Wound-flinch decay upkeep (decision 0111): the client's kernel advances every armed
+/// Wound-flinch decay upkeep: the client's kernel advances every armed
 /// SECONDARY slot per bone per frame **unconditionally** — before any state logic, through
 /// death itself — and the slot self-releases at the decay's end (`0x7147b9`: `+0xd0 = -1`
 /// and λ = 0 the same frame). So this runs above the death override and touches nothing
@@ -59,7 +59,7 @@ pub(super) fn wound_upkeep(entity: Entity, drv: &mut AnimDriver, player: &mut An
     }
 }
 
-/// Wound-flinch eviction (decision 0114): the wound occupies its bone's SECONDARY slot,
+/// Wound-flinch eviction: the wound occupies its bone's SECONDARY slot,
 /// and a **blended primary re-arm on the same bone overwrites it** (op4 `blendFlag≠0`
 /// copies the outgoing pose over `+0xc4..` — the standard 150 ms transition fade takes
 /// the slot). So this frame's full-body plays (bone 0: a swing on the base, a gait/mode
@@ -100,7 +100,7 @@ pub(super) fn wound_evict(
     }
 }
 
-/// The victim wound flinch (decision 0111 — rebuilt from bytes after
+/// The victim wound flinch (rebuilt from bytes after
 /// the first routing was director-falsified): a landed hit lays the wound clip into this
 /// unit's **secondary slot** (`0x60ea70` → op4 `linkFlag=0`) — a decaying 0.75-amplitude
 /// blend overlay over whatever plays. It never touches the base track or the one-shot
@@ -109,7 +109,7 @@ pub(super) fn wound_evict(
 /// out and self-releases — until a same-bone re-arm evicts it (the block above; a wound
 /// triggered here is this frame's *last* write, matching the client's packet order).
 /// The trigger's own entry gates live in the caller ([`super::drive_animations`]): the victim's
-/// `DO_NOT_PLAY_WOUND_ANIM` template flag (decision 2068) and the CharProc-11 rate-override node
+/// `DO_NOT_PLAY_WOUND_ANIM` template flag and the CharProc-11 rate-override node
 /// (2063), in the reference's own order. The one client gate still without a benilla counterpart
 /// is the attached-spell-effect marker (no CEffect system until the VFX phases). The client
 /// calls op4 directly — not PlayAnimation — so the flinch is faithfully invisible to the
@@ -133,7 +133,7 @@ pub(super) fn wound_trigger(
         let base = drv.resolved_anim(anims, catalog).unwrap_or(STAND);
         let full = select::wound_full_body(id, base, mv.flags, mounted);
         // The wound rolls its variation like any one-shot (op4 is called with
-        // variationIdx −1 — decision 0114); span 0 = the client's degenerate seed
+        // variationIdx −1); span 0 = the client's degenerate seed
         // (`end = clock`, expired on arrival) — skip. No resolvable clip at all is the
         // `0x711a20` asset-presence abort.
         let clip = find_resolved(anims, id, catalog)
@@ -167,7 +167,7 @@ pub(super) fn wound_trigger(
                 active.replay();
                 // One pass only, and never a stale repeat from a prior play of this node: the
                 // client does roll a replay budget on this arm too, but the flinch's decay window
-                // is seeded from a single span (`+0x100 = clock + span`, decision 0111) — λ hits 0
+                // is seeded from a single span (`+0x100 = clock + span`) — λ hits 0
                 // and the slot self-releases at first span-end, so R is moot for the wound.
                 active.set_repeat(bevy::animation::RepeatAnimation::Never);
                 active.set_weight(select::wound_weight(1.0, others));
@@ -178,7 +178,7 @@ pub(super) fn wound_trigger(
                 });
                 // The `WOW_MOVE_TRACE` line a flinch report is read against: which id, which
                 // bone, over what span, and what it lays over (`others` = the subtree's other
-                // weight, so the peak share is always 75% — decision 0111).
+                // weight, so the peak share is always 75%).
                 if benilla_assets::trace::enabled() {
                     benilla_assets::trace::line(
                         "fct",

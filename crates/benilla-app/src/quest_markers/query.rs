@@ -2,14 +2,14 @@
 //! be — and, for a GameObject, when to ask a question whose answer is thrown away. The rendering
 //! half is [`super`].
 //!
-//! **Both markers, not just the questgiver one** (decision 1918). The gold `!` and the flight
+//! **Both markers, not just the questgiver one**. The gold `!` and the flight
 //! master's green `!` are the same `unit+0xb2c`: `0x607480` installs whichever arrives into that
 //! one slot, `0x6073f0` zeroes it (along with `+0xcb8`), and `0x607380` — the per-unit path — tears
 //! it down once and then re-issues *both* queries, `0x182` on `UNIT_NPC_FLAGS` bit 1 and `0x1aa` on
 //! bit 3. One slot cannot have two lifetimes, so one system owns both asks; `ui_taxi` keeps the
 //! resulting fact ([`crate::ui_taxi::FlightMasterStatus`]) and nothing else.
 //!
-//! **A GameObject is queried and never rendered** (decision 1872). The reference sends
+//! **A GameObject is queried and never rendered**. The reference sends
 //! `CMSG_QUESTGIVER_STATUS_QUERY` for a quest-flagged GameObject from both object sweeps, but its
 //! answer handler `0x5dc9f0` resolves the GUID with typemask **8** (`0x468460` is a bitmask AND
 //! against `OBJECT_FIELD_TYPE`), so a GameObject's `0x21` returns NULL and the packet dies at
@@ -95,8 +95,8 @@ const GO_FLAG_INTERACT_COND: u32 = 0x4;
 /// an [`unit_ask_key`] analogue. Nothing visible turns on any of this: the answer is dropped
 /// ([`crate::net::apply`]'s own typemask gate), which is decision 1872's whole point.
 ///
-/// **The teardown legs — and there are two of them, neither the one this file used to claim**
-/// (decision 1906). `0x5eb0a0` is a **2×2 on (questgiver bit × reaction)**, and its
+/// **The teardown legs — and there are two of them, neither the one this file used to claim**.
+/// `0x5eb0a0` is a **2×2 on (questgiver bit × reaction)**, and its
 /// `0x5eb134` is a *convergent* block — reached both when the bit is clear (`0x5eb125 je`) and when
 /// the bit is set but the reaction failed (`0x5eb132 jg` not taken). That convergence is why three
 /// incompatible readings of this callback were live at once. The table:
@@ -404,7 +404,7 @@ pub(super) struct QueryState {
 mod tests {
     use super::*;
 
-    /// The re-ask law (decision 0654). The server only *answers* queries, so a status we never
+    /// The re-ask law. The server only *answers* queries, so a status we never
     /// re-ask for is a marker frozen at whatever it was when the NPC came into view. Three
     /// invalidations, all exercised here and all faithful: our own level (the ding that turns a
     /// grey `!` gold — the reference's `UNIT_FIELD_LEVEL` field watch), the object leaving and
@@ -518,7 +518,7 @@ mod tests {
     /// (`FollowerAI::StartFollow` / `ScriptedEscortAI`'s "disable npcflags"). So the quest-log write
     /// bumps the generation, `asked.clear()` runs first, `remove` finds nothing, and the cached
     /// AVAILABLE status stays — forever, because the flag stays off and this arm never queries.
-    /// The reference tears down on the flag test alone (`0x5eb0a0`, decision 0647).
+    /// The reference tears down on the flag test alone (`0x5eb0a0`).
     ///
     /// The control below is the half that must NOT change: an ordinary giver, whose flag stays on,
     /// is re-asked by the same sweep rather than torn down.
@@ -617,7 +617,7 @@ mod tests {
         );
     }
 
-    /// **The light sweep re-asks; only the FULL sweep tears down first** (decision 1906).
+    /// **The light sweep re-asks; only the FULL sweep tears down first**.
     /// The two sweeps are not interchangeable and this is the difference:
     /// `0x5eb0a0` (11 callers — level, money, the quest log, a skill, `PLAYER_FLAGS`, an item, your
     /// **death**, reputation, the group roster, the quest packets) sends and never tears down,
@@ -735,7 +735,7 @@ mod tests {
         assert_eq!(held(&app), None, "…fully");
     }
 
-    /// **The sweep tears down on HOSTILITY, never on the questgiver flag** (decision 1906).
+    /// **The sweep tears down on HOSTILITY, never on the questgiver flag**.
     /// `0x5eb0a0`'s `0x5eb134` is a convergent block, so the reaction test runs for
     /// every creature and `0x5eb143` is the callback's only teardown; the flag decides the *send*
     /// alone. On the real `FactionTemplate.dbc`, because a reaction gate that never resolves a real
@@ -846,7 +846,7 @@ mod tests {
     }
 
     /// **The flight master's green `!` shares one slot with the gold one, so it shares its
-    /// lifetime** (decision 1918). Three things, and the middle one is the asymmetry
+    /// lifetime**. Three things, and the middle one is the asymmetry
     /// a re-implementer gets wrong:
     ///
     /// - `CMSG_TAXINODE_STATUS_QUERY` has **one** live sender site image-wide, `0x607380`
@@ -1003,7 +1003,7 @@ mod tests {
         );
     }
 
-    /// **A GameObject is asked about on a SWEEP, and only on a sweep** (decision 1872; its only
+    /// **A GameObject is asked about on a SWEEP, and only on a sweep** (its only
     /// send sites, `0x5eb159` and `0x5eb456`, sit in sweep callbacks). Three things are being
     /// pinned here, and the third is the one a client "improves" without noticing:
     ///
@@ -1144,7 +1144,7 @@ mod tests {
         );
     }
 
-    /// The rest of the reference's trigger set (0654): the remaining self-descriptor watches, the
+    /// The rest of the reference's trigger set: the remaining self-descriptor watches, the
     /// packet epoch that stands in for its four packet handlers, and the per-unit key that catches
     /// a unit's own service bits or faction moving. Each leg must re-ask exactly once.
     #[test]

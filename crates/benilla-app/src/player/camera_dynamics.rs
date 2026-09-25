@@ -1,5 +1,5 @@
 //! **The 1.12 camera option toggles** — the four `UIOptionsFrame` checkboxes `FOLLOW_TERRAIN` /
-//! `HEAD_BOB` / `SMART_PIVOT` / `WATER_COLLISION` and the mechanisms behind them (decision 2149).
+//! `HEAD_BOB` / `SMART_PIVOT` / `WATER_COLLISION` and the mechanisms behind them.
 //!
 //! Each is a CVar the reference registers and this client ticked at nothing: the census in
 //! `ui_script::options_tests` had all four on its unbacked list with a byte-level spec and no
@@ -56,7 +56,7 @@ const BOB_SPEED_CLAMP: (f32, f32) = (0.5, 1.5);
 /// first-person switch (`dist − [cam+0x38] <= 1/360`).
 pub(crate) const BOB_FIRST_PERSON_DISTANCE: f32 = 1.0 / 6.0;
 
-/// The camera option knobs — the CVar-backed half of this module (decision 1804: each default is
+/// The camera option knobs — the CVar-backed half of this module (each default is
 /// the reference's registrar value, and [`crate::cvars`] carries the provenance per row).
 #[derive(Resource, Clone, Copy, Debug)]
 pub(crate) struct CameraOptions {

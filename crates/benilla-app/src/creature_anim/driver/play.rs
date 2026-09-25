@@ -14,7 +14,7 @@ use super::super::{find_resolved, AnimDriver};
 use super::select::{self, jump_land_pick, Mode, Special};
 
 /// The **base-animation lock** — the reference's `[unit+0xd58]` bits `0xc0000`, which are the whole
-/// reason a Lashed player visibly falls over (decision 2096, correcting 2085's §3).
+/// reason a Lashed player visibly falls over (correcting 2085's §3).
 ///
 /// `CGUnit::PlayAnimation 0x5fe2f0` opens with a guard that returns having done nothing at all:
 ///
@@ -136,7 +136,7 @@ pub(super) fn play_clip(
 /// - the primary's own bookkeeping still runs: `[bone+0xf8] = animId` at `0x71252f` is gated on
 ///   arg7 (the slot selector) alone, so bone 0 changes hands either way.
 ///
-/// The dismount teardown `0x607ce0` is the call site this exists for (decision 0931); the mount-up
+/// The dismount teardown `0x607ce0` is the call site this exists for; the mount-up
 /// build `0x607b44` passes `1` and takes [`play_clip`]'s ordinary cross-fade.
 pub(super) fn cut_loop(
     tr: &mut AnimationTransitions,
@@ -171,7 +171,7 @@ fn arm(
 }
 
 /// The one-shot arm's two rolls, in the client's order (op4: variation at `0x71249a`, replay count
-/// at `0x712698` — decision 0117): pick the resolved id's **variation** (the `_rand()`-weighted
+/// at `0x712698`): pick the resolved id's **variation** (the `_rand()`-weighted
 /// walk, alternating the 1H swing arcs), then roll the **replay budget** `R` from the picked
 /// clip's `(minReplay, maxReplay)` — the client multiplies `R` into the play window; benilla
 /// expresses the same window as a `Count(R)` repeat, which `is_finished` honors.
@@ -190,7 +190,7 @@ pub(super) fn roll_oneshot<'a>(
     (c, repeat)
 }
 
-/// Pick a looping arm's **variation** (decision 0123 — the client's base-arm `variationIdx = −1`,
+/// Pick a looping arm's **variation** (the client's base-arm `variationIdx = −1`,
 /// `0x5fe697`): a **relaxed** arm makes the weighted `_rand` walk (the
 /// same roll as a one-shot's — this is where a re-armed Stand lands on its rare look-around
 /// variations, the fidget); a combat/cast arm is forced to the deterministic head
@@ -213,7 +213,7 @@ pub(super) fn pick_loop_variation<'a>(
 }
 
 /// The looping arm's two rolls in op4's order (variation `0x71249a`, then the replay budget
-/// `0x712692..` — the same two `_rand` sites as a one-shot's; decision 0516): the budget is live
+/// `0x712692..` — the same two `_rand` sites as a one-shot's): the budget is live
 /// for **loops** too — not as a repeat cap but
 /// as the watchdog **window**, `R` clip-lengths wide (`windowHi = arm + span·R`). Returns the
 /// armed clip + `R` = total passes before the watchdog re-arms (`R ∈ [min, max−1]` floored to 1
@@ -229,12 +229,12 @@ pub(super) fn roll_loop<'a>(
     (c, r)
 }
 
-/// Cross-fade into clip `id`, resolved through the model's own baked fallback first (decision 0082 —
+/// Cross-fade into clip `id`, resolved through the model's own baked fallback first (
 /// see [`find_resolved`]) so a model lacking `id` plays its baked substitute rather than nothing.
 /// `looping` repeats it; `rate` sets its playback speed. No-op if resolution still comes up empty.
 /// A **one-shot** (`!looping`) rolls the resolved id's **variation and replay budget** per play
-/// ([`roll_oneshot`] — decisions 0114/0117); a looping play rolls its variation (when `relaxed` —
-/// decision 0123) **and its budget** ([`roll_loop`] — decision 0516), publishing the armed
+/// ([`roll_oneshot`]); a looping play rolls its variation (when `relaxed` —
+/// decision 0123) **and its budget** ([`roll_loop`]), publishing the armed
 /// `(node, R)` into `window` for the watchdog's advance; a one-shot arm clears it (its budget is
 /// the `Count` repeat — no window outlives the arm).
 pub(super) fn play(
@@ -253,7 +253,7 @@ pub(super) fn play(
     // The lock's guard is `PlayAnimation`'s **front door**, above the arm helper that draws the
     // rolls (`0x5fe2f0`'s epilogue return is at `0x5fe3a1`; the `_rand()` sites live inside
     // `0x5fdba0`'s op4 call). So a refused play must not roll either: the variation and replay
-    // draws come off the ONE shared stream (decision 0114), and rolling them for a body that
+    // draws come off the ONE shared stream, and rolling them for a body that
     // cannot move would perturb every other unit's picks for the clip's whole 2 s — the same
     // churn 2096 caught in the gait selector's live trace, at the event-play door instead.
     if lock.refuses() {
@@ -278,8 +278,8 @@ pub(super) fn play(
 /// The client's rate write lives **outside the selector** (`0x5fe2f0`, per-frame over the armed
 /// clip), so it is not the gait's private business: it applies to a landing, a bracket, a swing —
 /// anything the base slot holds. Ours used to be two loops inside [`Mode::Gait`]'s arms, which left
-/// every other mode playing at its arm-time literal `1.0` — and that is the jump-landing bug
-/// (decision 0906). [`jump_land_pick`] requests JumpLandRun **187**, and **every creature model
+/// every other mode playing at its arm-time literal `1.0` — and that is the jump-landing bug.
+/// [`jump_land_pick`] requests JumpLandRun **187**, and **every creature model
 /// resolves 187 → Run(5)** through its own baked PlayableAnimationLookup: Horse, Tiger (the druid
 /// travel form) and Cat all carry `playable[187] = 5`; only character models author 187 itself. So
 /// a mount's landing clip *is* its gallop cycle — a rate-scaled locomotion clip — and playing it at
@@ -299,7 +299,7 @@ pub(super) fn play(
 /// cleared as soon as anything else is armed.
 ///
 /// It also records what the slot ended up running at in [`AnimDriver::gait_rate`] — the hover
-/// card's `rate` readout and the trace's `rate=` (decision 0903). Read back off the node rather
+/// card's `rate` readout and the trace's `rate=`. Read back off the node rather
 /// than recomputed, so the instrument reports the swing's 2× or the freeze's 0× as faithfully as
 /// it reports a gait.
 pub(super) fn sync_base_rate(
@@ -331,8 +331,8 @@ pub(super) fn sync_base_rate(
 
 /// Whether the one-shot clip `id` has finished playing (resolved through the model's own baked
 /// fallback first, decision 0082 — matching [`play`], which is what started it) — or the model lacks
-/// even the substitute, so the machine doesn't wait forever. Checked across the id's **variations**
-/// (decision 0114): the play rolled one of them, and whichever it was, "finished" means no variation
+/// even the substitute, so the machine doesn't wait forever. Checked across the id's **variations**:
+/// the play rolled one of them, and whichever it was, "finished" means no variation
 /// of the id is still running.
 pub(super) fn oneshot_finished(
     player: &AnimationPlayer,
@@ -351,17 +351,17 @@ pub(super) fn oneshot_finished(
 }
 
 /// Whether bone 0 still holds `sp`'s **own** clip — the arc's enter or its loop, resolved through
-/// the model's baked fallback exactly as [`play`] resolved it when it armed (decision 0082) and
+/// the model's baked fallback exactly as [`play`] resolved it when it armed and
 /// compared on the *resolved* id, so a rolled variation counts as the same clip.
 ///
-/// This is the predicate the airborne snapshot-freeze (decision 0503, scoped by 1566) never had.
+/// This is the predicate the airborne snapshot-freeze (scoped by 1566) never had.
 /// The freeze exists to still **the cut airborne clip** before the landing cross-fades over it;
 /// both its sites took whatever bone 0 happened to hold, on the unstated assumption that the arc's
 /// own clip is what is there. The base-anim lock (2096) is the first thing that ever falsified it,
 /// and it falsified it catastrophically: every play the arc asked for was refused, so bone 0 still
 /// held the `Knockdown` that took the lock — and the landing stopped **that** dead. A clip stopped
 /// dead never finishes, and the lock clears on the finished id, so the body stayed on its back for
-/// the rest of the session with every later play refused (the director's report, decision 2098).
+/// the rest of the session with every later play refused (the director's report).
 pub(super) fn holds_own_clip(
     anims: &ModelAnimations,
     catalog: Option<&AnimDataCatalog>,
@@ -452,7 +452,7 @@ pub(super) fn leave_special(
     // 833 ms JumpStart) the clip's remaining frames are the leg RECOVERY, and ours read far
     // shorter than the reference's lingering mid-kick — the director's report behind 0503.
     //
-    // **This is a symptom fix whose mechanism is open** (decision 1566). 0503 justified it with
+    // **This is a symptom fix whose mechanism is open**. 0503 justified it with
     // "the client blends from a pose snapshot, universally", which the bytes REFUTE: the blend
     // source keeps running on its own clock — `0x7125ea` copies the outgoing track's base, rate
     // and bias, and the kernel re-derives its time every frame (`0x7146b2`–`0x7147a5`). It looks
@@ -461,7 +461,7 @@ pub(super) fn leave_special(
     // recorded follow-up and 1566 strikes it; it would freeze every gait and turn transition in
     // the client. It stays HERE because the director saw the symptom and their eye outranks a
     // derivation; what produces the reference's lingering kick is not yet known.
-    // …and the frozen node is NAMED (decision 0906), so the per-frame rate write
+    // …and the frozen node is NAMED, so the per-frame rate write
     // ([`sync_base_rate`]) skips it instead of restarting the clock a line above just stopped.
     //
     // …and it is **the arc's own clip** that is stilled, never merely whatever bone 0 holds

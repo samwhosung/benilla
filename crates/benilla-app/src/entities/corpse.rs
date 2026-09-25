@@ -1,4 +1,4 @@
-//! **The corpse OBJECT rendered as the dead body** (decision 1706) — the deferral decision 0308 §7
+//! **The corpse OBJECT rendered as the dead body** — the deferral decision 0308 §7
 //! opened ("the corpse *object* rendered as the dead body — CGCorpse law") and this closes.
 //!
 //! A `TYPEID_CORPSE` (7) object is what you run back to: the body a released player leaves behind,
@@ -17,7 +17,7 @@
 //!   and the 19 `CORPSE_FIELD_ITEM` slots (`+0x1c + slot*4`, low 24 bits = the ItemDisplayInfo id)
 //!   — through the very same compositor entry `0x478cb0` a living player is dressed by. Its model
 //!   is `CORPSE_FIELD_DISPLAY_ID` down the ordinary CreatureDisplayInfo → CreatureModelData chain
-//!   (`0x5d6759`), which is why the whole character pipeline (decisions 0041/0044/0045/0074) simply
+//!   (`0x5d6759`), which is why the whole character pipeline simply
 //!   applies: a corpse *is* a player body wearing a wire-supplied look.
 //! - **A bone pile** (`0x5d6291 jne`) builds **no component at all** — no appearance, no gear — and
 //!   takes its model from race/sex instead: `0x5d670c` formats
@@ -235,7 +235,7 @@ pub(super) fn pose_corpses(
             .liquid_at(benilla_world::world_point::Subject::Unit(entity), wow)
             .is_some_and(|hit| hit.surface_z - wow[2] > DROWNED_DEPTH);
         let want = if submerged { DROWNED } else { DEAD };
-        // The model's own fallback resolution (decision 0082) — a character body authors neither
+        // The model's own fallback resolution — a character body authors neither
         // `Dead` nor `Drowned` directly and walks to `Death`/`Drown`.
         let catalog = anim_data.as_deref().map(|a| &a.0);
         let resolved = catalog.map_or(want, |cat| anims.resolve(want, cat).id);

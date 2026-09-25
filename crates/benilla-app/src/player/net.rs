@@ -1,5 +1,5 @@
-//! The player's packet handlers (the net handler table, decision 2327) — today one: the server's
-//! own stand state for our body (`SMSG_STANDSTATE_UPDATE`, decision 2339), handed to
+//! The player's packet handlers (the net handler table) — today one: the server's
+//! own stand state for our body (`SMSG_STANDSTATE_UPDATE`), handed to
 //! [`super::posture`] as a [`ServerStandState`] message because the apply wants the frame's body
 //! query and sheath queue, which live in `control`.
 

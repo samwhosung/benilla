@@ -8,7 +8,7 @@
 //! Both halves are **silent-refusal** mechanisms — the reference builds no packet and says
 //! nothing when a press is rejected — which is why the stand half writes the `sit` trace tag
 //! ([`super::move_trace::posture`]) at every commit *and* every refusal: on screen a granted sit
-//! and a refused one are the same picture (decisions 0080, 0881; bug B155).
+//! and a refused one are the same picture (bug B155).
 
 use bevy::prelude::*;
 
@@ -42,7 +42,7 @@ pub(super) fn update(
             // `SetStandState`'s own first two guards, read together with the byte they gate:
             // health ≤ 0, **or** `UNIT_DYNAMIC_FLAGS & 0x20` — a feigner, whose health never moved.
             // Deliberately NOT `unit_reads_dead`, which folds in stand state 7 as a third term the
-            // setter does not test (`0x5ed4a9`–`0x5ed4bd`; decision 1753).
+            // setter does not test (`0x5ed4a9`–`0x5ed4bd`).
             store.map(|s| {
                 (
                     s.0.unit_stand_state(),
@@ -54,7 +54,7 @@ pub(super) fn update(
     if player.stand_pending == Some(stand_byte) {
         player.stand_pending = None; // the echo landed
     }
-    // The server's own stand state first (decision 2339): `SMSG_STANDSTATE_UPDATE` reaches the
+    // The server's own stand state first: `SMSG_STANDSTATE_UPDATE` reaches the
     // setter's local half directly — no refusal gate, no `CMSG_STANDSTATECHANGE` back — so the
     // volunteered logic below sees the state the server just put us in. The last packet wins,
     // as it does in the reference's handler order.
@@ -64,7 +64,7 @@ pub(super) fn update(
         apply_locally(player, s, stand_now, body, sheath);
     }
     let stand_state = player.stand_pending.unwrap_or(stand_byte);
-    // The queued asks first (the `/sit` family — decision 0881), then the X key, which is the
+    // The queued asks first (the `/sit` family), then the X key, which is the
     // reference's own precedence: a queued `SetStandState` ran during the frame's message pass,
     // the key is read now. The last writer wins, and every one of them lands on the single
     // commit-and-send below.
@@ -79,14 +79,14 @@ pub(super) fn update(
     // `0x60be30(0)`; a left-drag camera orbit provably does not; sit(1)/chair(2)/sleep(3)
     // all stand identically (the value-agnostic `GetStandState() != 0` gate).
     //
-    // **The MOUSE turn is not in this set, and that corner is now closed** (decision 1766).
+    // **The MOUSE turn is not in this set, and that corner is now closed**.
     // A deliberate right-drag turn cannot stand a seated
     // player — two independent gates refuse the body-facing commit for a seated body, and
     // `0x514f50` skips its stand arm outright while the RMB bit is held. The director's
     // observation was right and this file's attribution was wrong: what stands you is the
     // sub-200 ms RELEASE being dispatched as a right-CLICK, so the stand belongs to the click's
     // action and not here.
-    // **A knockback stands you up too** (decision 1702) — the one entry here that is nobody's
+    // **A knockback stands you up too** — the one entry here that is nobody's
     // input. The reference's knockback apply carries it as a side effect of the launch (the
     // `0x60e139` block, whose indirect `call [edx+0xa4]` resolves to `GetStandState 0x60be50`),
     // which is the same guarded wrapper every trigger above reaches. Read off the armed latch
@@ -103,13 +103,13 @@ pub(super) fn update(
     // ([`state::stand_state_refused`], bug B155): a body the movement layer is already driving
     // cannot be seated, and **swimming is one of the driving states**, so the press is refused
     // for as long as we are in the water — and a body that reads dead is refused in EITHER
-    // direction, which is the setter's own first guard (decision 1753). Silently, and before the packet — like the reference,
+    // direction, which is the setter's own first guard. Silently, and before the packet — like the reference,
     // which returns from `SetStandState` without building `CMSG_STANDSTATECHANGE` at all.
     // Placed on the shared commit below rather than on the X key, so it covers the posture
     // emotes (`/sit`, `/sleep`, `/kneel`) in the same stroke — their own `Emotes.dbc` gate
     // does NOT carry the swim bit (`ui_chat::tests::the_posture_emotes_carry_no_swim_suppression_flag`).
     // The word is the live outbound one, a frame old — the same `[[this+0x118]+0x40]` the cast
-    // gates read (decision 1056), so all three refusals can never disagree about "am I moving".
+    // gates read, so all three refusals can never disagree about "am I moving".
     if let Some(s) =
         request_stand.filter(|&s| state::stand_state_refused(reads_dead, player.move_flags(), s))
     {
@@ -132,7 +132,7 @@ pub(super) fn update(
     }
     let stand_now = player.stand_pending.unwrap_or(stand_byte);
     // Sheath toggle (Z) — vanilla's draw/stow, through the anim layer's ONE setter
-    // ([`crate::creature_anim::SheathRequest`], decision 0080): walk the *committed*
+    // ([`crate::creature_anim::SheathRequest`]): walk the *committed*
     // client-side state (the setter cache — attacking auto-draws and the anim reconcile
     // force-stows, which a local bool or the raw echo byte would drift from), commit + send
     // `CMSG_SETSHEATHED` there, and play the ceremony — the manual toggle is the ONLY path
@@ -189,7 +189,7 @@ pub(super) fn update(
 /// The stand-state setter's **local half** — the reference's `0x6127b0`, reached by the
 /// volunteered change (`0x5ed430`, after it has sent `CMSG_STANDSTATECHANGE`) and by the server's
 /// own `SMSG_STANDSTATE_UPDATE` (`0x603e50`) alike; it sends no `CMSG_STANDSTATECHANGE` itself —
-/// its four callers image-wide hold none of the five send sites (decision 2339).
+/// its four callers image-wide hold none of the five send sites.
 ///
 /// On a CHANGE it writes the predicted state (`[player+0x1d68]`, our `stand_pending`), which the
 /// pose reads until the `UNIT_FIELD_BYTES_1` echo lands ([`predict`]). Whether or not the state

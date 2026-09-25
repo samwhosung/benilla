@@ -1,4 +1,4 @@
-//! **Cold breath** — the visible vapour a unit puffs from its mouth in a cold zone (B233,
+//! **Cold breath** — the visible vapour a unit puffs from its mouth in a cold zone (
 //! decision 1149).
 //!
 //! The client hangs three mutually-exclusive puffs off one animation event, and they are the

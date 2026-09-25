@@ -1,5 +1,5 @@
 //! **A body's batches, merged by material** — one mesh entity per *material group* of a dressed
-//! body instead of one per authored M2 batch (decision 1940, the crowd rig's first proposal).
+//! body instead of one per authored M2 batch (the crowd rig's first proposal).
 //!
 //! A geared level-60 body stands as 12–27 mesh parts binding 5–16 distinct materials (the dress
 //! census's `parts=`/`mats=`, read off a 40-man raid at the Stormwind auction house): the skin

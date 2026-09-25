@@ -45,7 +45,7 @@ impl Default for CombatFlash {
     fn default() -> Self {
         Self {
             unit: None,
-            // The default writer `0x5fa3f0`: 0xFFFF0000. GAMMA LANE (0161): authored bytes go
+            // The default writer `0x5fa3f0`: 0xFFFF0000. GAMMA LANE: authored bytes go
             // raw into the gamma framebuffer — `linear_rgb`, like the ring/name palettes.
             color: Color::linear_rgb(1.0, 0.0, 0.0),
             last_reset_ms: 0,
@@ -113,7 +113,7 @@ pub(super) fn drive_flash(
             ..
         } = &mut *flash;
         let g = wave_g(now, last_reset_ms, rising);
-        // The wave byte, raw into the gamma lane (0161): G=128 lands exactly on the authored
+        // The wave byte, raw into the gamma lane: G=128 lands exactly on the authored
         // orange 0xFF8000 = linear_rgb(1.0, 0.502, 0.0).
         flash.color = Color::linear_rgb(1.0, g as f32 / 255.0, 0.0);
     }

@@ -282,7 +282,7 @@ fn precast_kit_sound_rings_once_at_start() {
 }
 
 /// The `$TRD` resolver ([`super::held_strike_sound`]): the held spell's `SpellVisual` field-14
-/// strike sound (decision 0562) — Mining's real shape (visual 93 → 1143 "Mining Impact") rings;
+/// strike sound — Mining's real shape (visual 93 → 1143 "Mining Impact") rings;
 /// a visual without the field (Fireball's 67 shape) and an unknown spell stay `None`.
 #[test]
 fn held_strike_sound_reads_the_visuals_field_14() {
@@ -493,7 +493,7 @@ fn aura_state_kit_arms_persistent_and_reaps_on_aura_end() {
     app.add_message::<SpellKitFx>();
     app.add_message::<crate::net::FieldChanged>();
     // The watcher's other fan-outs: the kit's CharProc edges (`crate::aura_visual`) and its
-    // sound leg (0852). Food's kit 409 carries neither, so nothing is asserted here — the
+    // sound leg. Food's kit 409 carries neither, so nothing is asserted here — the
     // messages just have to exist for the writers.
     app.add_message::<crate::aura_visual::AuraProc>();
     app.add_message::<SpellKitSound>()
@@ -552,7 +552,7 @@ fn aura_state_kit_arms_persistent_and_reaps_on_aura_end() {
 
     // The aura lands in slot 0: UNIT_FIELD_AURA[0] = 47 carries the spell id; the slot's
     // AURAFLAGS nibble (field 95, low nibble) needs an effect-index bit (occupancy is the
-    // flags test, decision 0257).
+    // flags test).
     let eating = ObjectFields::from_pairs(&[(47, FOOD), (95, 0x0E)]);
     let fasted = ObjectFields::from_pairs(&[(95, 0)]);
 
@@ -623,7 +623,7 @@ fn aura_state_kit_arms_persistent_and_reaps_on_aura_end() {
 /// cast kit plays a body animation emits its [`MissileSpawn`] deferred (`awaits_release`) —
 /// the launch waits for the animation's release keyframe — while a cast kit with no animation
 /// (or none at all) launches at GO.
-/// The spell impact body twitch (decision 2058, sharpened by 2063): an instant harmful spell's GO
+/// The spell impact body twitch (sharpened by 2063): an instant harmful spell's GO
 /// lays ONE severity-0 wound on each hit target (`0x6e8bf0` @ `0x6e8c89`), a helpful one lays none;
 /// a state kit naming a wound anim adds nothing on either (the client's stage-2 play never reaches
 /// the `[8,10]` test, `0x60f383`); and a missile ARRIVAL wounds unconditionally (`0x61dc50` @
@@ -1045,17 +1045,17 @@ fn ranged_visual_play_arms_the_any_caster_hold_and_a_non_ranged_play_clears_it()
     );
 }
 
-/// **The mount poof** ([`super::arm_mount_poof_fx`], decision 0927) — the three properties the
+/// **The mount poof** ([`super::arm_mount_poof_fx`]) — the three properties the
 /// reference's `UNIT_FIELD_MOUNTDISPLAYID` watcher gives it, each a real fork in `0x5ffa50`:
 /// **the build leg only** (the whole allocation sits behind `5ffa87 je 0x5ffade` on the NEW
 /// value, so a dismount spawns nothing), **any changed value** (0→N and N→N′ alike), and
 /// **first sight silent** (a unit that streams in already mounted did not just mount — the
-/// level-up ding's own treatment, decision 0305).
+/// level-up ding's own treatment).
 #[test]
 fn the_mount_poof_puffs_on_the_build_leg_only() {
     use benilla_protocol::ObjectFields;
 
-    /// `UNIT_FIELD_MOUNTDISPLAYID` (index 133, decision 0441).
+    /// `UNIT_FIELD_MOUNTDISPLAYID` (index 133).
     const FIELD_MOUNTDISPLAYID: u16 = 133;
     /// `SpellVisualEffectName` row 1185's shipped path — the druid-morph cloud.
     const POOF: &str = "Spells\\DruidMorph_Impact_Base.mdx";
@@ -1077,7 +1077,7 @@ fn the_mount_poof_puffs_on_the_build_leg_only() {
     app.add_systems(Update, super::arm_mount_poof_fx);
 
     let fields = |v: u32| ObjectFields::from_pairs(&[(FIELD_MOUNTDISPLAYID, v)]);
-    // Streams in ALREADY mounted: the create block is no edge (decision 2297), so silence.
+    // Streams in ALREADY mounted: the create block is no edge, so silence.
     let unit = app
         .world_mut()
         .spawn(crate::net::ObjectStore(
@@ -1562,7 +1562,7 @@ fn a_shooter_with_no_ranged_weapon_resolves_no_clip_at_all() {
     );
 }
 
-/// **A state kit's animation id is a comparison, never a play** (decision 2085): `0x60edf0`'s tail
+/// **A state kit's animation id is a comparison, never a play**: `0x60edf0`'s tail
 /// has exactly one site that hands a kit's `AnimID` to the animation primitive
 /// (`0x60f3c5 call 0x5fe2f0`) and `0x60f387 jne` diverts stage 2 around it. Both `SpellVisual`
 /// field-4 consumers hardcode stage 2 — the aura watcher and this one, the impact hand-off
@@ -1681,7 +1681,7 @@ fn a_state_kits_anim_is_a_recompute_and_never_a_second_play() {
     );
 }
 
-/// A state kit whose **whole visual is its animation id** still arms (decision 2085). The aura
+/// A state kit whose **whole visual is its animation id** still arms. The aura
 /// watcher's entry test asks "does this kit do anything we model?", and the anim was missing from
 /// it — the B114 shape one level over, where an effects-only test dropped Stealth's proc-only kit.
 /// 15 of the shipped state kits are anim-only (`benilla-extract kitanim`), among them kit 586's

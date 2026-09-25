@@ -1,5 +1,5 @@
 //! Spell **chain beams** — Chain Lightning's arcs, Drain Life's rope of soul, Mind Flay's mana
-//! beam, Chain Heal's arc, C'Thun's eye beam (decision 0955, slice 2: the renderer).
+//! beam, Chain Heal's arc, C'Thun's eye beam (slice 2: the renderer).
 //!
 //! A kit whose `CharProc` decodes to a chain ([`benilla_formats::ChainProc`]) draws a **polyline of
 //! hops** — `caster → t1 → t2 → t3` — with one ribbon per hop, each subdivided, jittered per frame
@@ -570,7 +570,7 @@ pub(crate) fn simulate_chain_beams(
 /// The beam's arithmetic, against the numbers read out of the binary — the subdivision floor,
 /// the spindle taper, the view-plane cross-section and its degenerate regime, and the signed
 /// scroll. Each of these is a value that would go straight into pixels, and two of the four columns
-/// they read are mis-named in the community schemas (decision 0955).
+/// they read are mis-named in the community schemas.
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;

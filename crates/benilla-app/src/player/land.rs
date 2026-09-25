@@ -11,7 +11,7 @@
 //! `MSG_MOVE_TELEPORT_ACK` this client already handles ([`super::wire_in`]) — so the destination
 //! is one the server agrees with, zone/area/grid bookkeeping included, and nothing here invents a
 //! pose on the wire. It also means the affordance needs the account's GM rights, which is the
-//! default for this project's characters (decision 0679); a refused command shows up as the
+//! default for this project's characters; a refused command shows up as the
 //! timeout warning below rather than as silence.
 //!
 //! Two details worth stating, because both are choices:

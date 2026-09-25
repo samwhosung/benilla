@@ -1,4 +1,4 @@
-//! Drunkenness — the client-side inebriation math (B210).
+//! Drunkenness — the client-side inebriation math.
 //!
 //! The server streams a drunk value in `PLAYER_BYTES_3` byte 1
 //! ([`benilla_protocol::messages::ObjectFields::player_drunk_byte`]); the reference client turns
@@ -76,7 +76,7 @@ pub(super) fn wobble(now_ms: u32, fraction: f32) -> f32 {
 // change at any drunk value in normal play — held: the lane's ease rate is the CVar
 // `cameraFoVSmoothSpeed` (default 0.5°/s → a 178 s full swing whose zero-slope cosine onset
 // restarts on every drunk-byte tick, creeping <1° before each reset). Effectively invisible in
-// ordinary play, so benilla renders none (decision 1018). The one visible corner — entering
+// ordinary play, so benilla renders none. The one visible corner — entering
 // world already drunk SNAPs the full fisheye instantly (camera-acquisition path, `0x50d0f0`) —
 // is deliberately unbuilt.
 

@@ -19,7 +19,7 @@
 //! the sequence moves a bone (the eat/drink tankard is a 6.667 s sequence with zero bone keys,
 //! so it outlives the ~5 s kit-resend cadence and the jug is held continuously).
 //!
-//! Every spawn first runs the **same-slot replace** ([`replace_same_slot`], decision 2057): the
+//! Every spawn first runs the **same-slot replace** ([`replace_same_slot`]): the
 //! reference's `0x6208e0`, which destroys any live instance of the same `SpellVisualEffectName`
 //! record at the same attach tag. It is what keeps a busy fight's effect count flat in the number
 //! of attackers, and it is also what swaps the tankard out on each resend.
@@ -40,11 +40,11 @@
 //! to red; per instance because one cast = one phase, unlike the doodad lane's shared-clock
 //! loops in [`benilla_world::doodad_anim::TintAnimMaterials`]), and a **texture transform** scrolls
 //! that same clone's UVs off the instance's own clip — translation, rotation and scale, through
-//! [`register_fx_uv`](benilla_world::doodad_anim::register_fx_uv)'s effect lane (decision 2282;
+//! [`register_fx_uv`](benilla_world::doodad_anim::register_fx_uv)'s effect lane (
 //! the druid's claw trail is nothing but that scroll, so until it landed the trail did not draw
 //! at all).
 //!
-//! Effect instances **fire their model's event track** ([`fire_fx_anim_events`], decision 0304):
+//! Effect instances **fire their model's event track** ([`fire_fx_anim_events`]):
 //! the playing clip's `$SND`-family keyframes emit the same [`AnimSoundEvent`] stream creatures
 //! emit (spatialized at the host unit), so an effect whose sound lives in its own M2 — the
 //! level-up pillar's `$SND(888)` at t=0.033s — rings without any code-side kit. (The ding's
@@ -52,7 +52,7 @@
 //! sibling in `creature_anim::spell_visual::arm_level_up_fx`, the SpellKitFx writers' home.)
 //!
 //! Approximations, named: a ground-anchored effect's flat quad parts carry no UV offset — their
-//! draw identity rides a `GroundFxDecal` record rather than a `WowModelMaterial` (0733), and no
+//! draw identity rides a `GroundFxDecal` record rather than a `WowModelMaterial`, and no
 //! transform-animating effect model authors one, so the population is empty (`benilla-extract
 //! fxuvscan` is where that stays measured rather than remembered); the span-based
 //! self-termination stands in for the client's model-event completion callback; and the kit sound
@@ -118,7 +118,7 @@ pub(crate) struct SpellFx {
 /// world already carrying an aura is arming that aura's state kit. A **persistent** instance
 /// stranded there is silent and permanent — the `PENDING_TIMEOUT` reaper is gated
 /// `!inst.persistent`, so it is never spawned, never expired, and never traced. Measured at 9 runs
-/// in 10 (decision 2085; bug: the stun swirl not showing).
+/// in 10 (bug: the stun swirl not showing).
 pub(super) fn ensure_model(fx: &mut SpellFx, asset_server: &AssetServer, path: &str) {
     fx.models
         .entry(path.to_string())
@@ -165,7 +165,7 @@ pub(crate) fn tick_fx_tint(
 
 /// The material side of an effect attach, in one parameter: the store a part's clone is made
 /// from, and the three places that clone can be registered for per-instance animation — the tint
-/// loop ([`FxTintAnims`], decision 0271), the UV scroll ([`UvAnimMaterials`]' effect lane,
+/// loop ([`FxTintAnims`]), the UV scroll ([`UvAnimMaterials`]' effect lane,
 /// decision 2282) and the delta table both scrolls write their rows into. They always travel
 /// together, and a caller that threaded some of them silently dropped a channel.
 pub(crate) struct FxMaterials<'a> {
@@ -176,8 +176,8 @@ pub(crate) struct FxMaterials<'a> {
 }
 
 /// Resolve one part's material for a NEW effect instance. The shared handle, unless a channel has
-/// to run **per instance** — an animated M2Color RGB (decision 0271) or a texture transform
-/// (decision 2282) — and then a clone of it, seeded at each live loop's first key and registered
+/// to run **per instance** — an animated M2Color RGB or a texture transform
+/// — and then a clone of it, seeded at each live loop's first key and registered
 /// for the per-frame ticks. `host` is the instance root, whose `AnimationPlayer` the UV lane reads
 /// its clip off (the sequence source `MatAnim::following_host` takes beside it).
 fn fx_part_material(
@@ -200,7 +200,7 @@ fn fx_part_material(
         let t0 = anim.sample(0.0);
         mat.extension.tint = Vec4::new(t0[0], t0[1], t0[2], 1.0);
     }
-    // The clone must leave the shared mat-anim table (decision 1381): its channels are ticked per
+    // The clone must leave the shared mat-anim table: its channels are ticked per
     // INSTANCE, and a carried world slot would add the shared delta on top — a double animation
     // the old asset-mutating lane could never produce. `register_fx_uv` below hands it rows of
     // its own.
@@ -240,7 +240,7 @@ fn fx_part_material(
 /// Where an effect-model instance sits in the client's **model graph** — the two facts every
 /// caller of [`attach_effect_visuals`] states, together, because they are one fact seen from two
 /// sides and a lane that answered only the first is what left a weapon's enchant glow with no
-/// alpha source and no owner (decision 0833).
+/// alpha source and no owner.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct EffectHost {
     /// The model instance this one is **chained to** ([`benilla_world::model_fade::ParentModel`]): the
@@ -290,7 +290,7 @@ pub(crate) fn attach_effect_visuals(
     };
     // Chain this instance onto the model it hangs from, so its effects compose through the
     // parent's computed alpha the way `0x714000` does — a weapon's glow through the item, the
-    // item through its wearer (decision 0833).
+    // item through its wearer.
     if let Some(parent) = host.parent {
         commands
             .entity(root)
@@ -320,7 +320,7 @@ pub(crate) fn attach_effect_visuals(
         })
         .collect();
     let (joints, armed) = arm_effect_rig(commands, root, dm, preferred_anim, stage);
-    // The owned palette rig (decision 0720): allocated when the effect draws skinned parts; the
+    // The owned palette rig: allocated when the effect draws skinned parts; the
     // hook frees the slot when the instance despawns (impact reap, missile arrival).
     let rig_slot = match (&dm.inverse_bindposes, joints.is_empty()) {
         (Some(ibp), false) => {
@@ -371,7 +371,7 @@ pub(crate) fn attach_effect_visuals(
                     kind: ModelKind::Creature,
                     blend: part.blend,
                 },
-                // The picker's triangles (decision 0857): the probe names fx batches through
+                // The picker's triangles: the probe names fx batches through
                 // `ModelPart`, and the render meshes are `RENDER_WORLD`-only.
                 benilla_world::interact::PickMesh(part.geometry.clone()),
             ));
@@ -383,7 +383,7 @@ pub(crate) fn attach_effect_visuals(
             }
             // The part's colour-alpha × weight loops, on this instance's clock: the sampler owns
             // the child's render-alpha tag (`drives_tag` — no other writer touches fx parts).
-            // The rig field rides the whole-tag seed (decision 0720).
+            // The rig field rides the whole-tag seed.
             if let Some(anim) = &part.alpha_anim {
                 let mat_anim =
                     benilla_world::doodad_anim::MatAnim::driving_tag(anim.clone(), now, played_seq)
@@ -419,11 +419,11 @@ pub(crate) fn attach_effect_visuals(
                 kind: ModelKind::Creature,
                 blend: part.blend,
             },
-            // The picker's triangles (decision 0857), pivot-centred by the caster like the bake.
+            // The picker's triangles, pivot-centred by the caster like the bake.
             benilla_world::interact::PickMesh(part.geometry.clone()),
             card,
         ));
-        // The card's build-time bound (decision 0834): `calculate_bounds` can no longer derive
+        // The card's build-time bound: `calculate_bounds` can no longer derive
         // one from the `RENDER_WORLD`-only static form's data.
         if let Some(aabb) = part.aabb {
             spawned.insert(aabb);
@@ -442,8 +442,8 @@ pub(crate) fn attach_effect_visuals(
     // Ground-plane quad parts of a ground-anchored instance → projected surface decals
     // ([`crate::ground_fx`]): each rides its own joint (posed through the bone's inverse
     // bindpose, exactly the skinned-vertex path). The part's draw identity — texture, blend,
-    // the shared material's baked `0x70baf0` fog policy, its RGB loop — rides the decal record
-    // (0733); the alpha loop stays a `MatAnim` rider whose `current` the push samples.
+    // the shared material's baked `0x70baf0` fog policy, its RGB loop — rides the decal record;
+    // the alpha loop stays a `MatAnim` rider whose `current` the push samples.
     let binds = dm.inverse_bindposes.as_ref().and_then(|h| ibps.get(h));
     for part in parts.iter() {
         let Some(quad) = part.ground_quad.filter(|_| is_ground_decal(part)) else {
@@ -508,7 +508,7 @@ pub(crate) fn attach_effect_visuals(
                 // alone (the impacting missile's trail — 0202's case). See `on_owner_loss` above.
                 on_owner_loss,
                 // This instance IS the model these particles belong to; its chain (set above)
-                // carries the host's fade down to them — decision 0833.
+                // carries the host's fade down to them.
                 alpha: Some(root),
                 // A spell effect has no light node wired: the whole `Spells\` corpus SETS the
                 // emitter unlit bit, so nothing here consumes one today. A lit one would fall
@@ -520,7 +520,7 @@ pub(crate) fn attach_effect_visuals(
             // unit's do — the phase in the reference's animate kernel `0x714260` samples the
             // CURRENT sequence record either way. A lane that never advances (a missile, whose
             // InFlight is not the model's Stand) keeps its slot pinned on the spawn clock. gseq
-            // loops ride the instance's own spawn age in both (0856/0858 — an effect instance is
+            // loops ride the instance's own spawn age in both (an effect instance is
             // fresh per play).
             match seq_host {
                 Some(h) => particles::EmitClock::Host(h),
@@ -545,7 +545,7 @@ pub(crate) fn attach_effect_visuals(
             // Stand -> Hold -> Decay re-answers the gate at each step, instead of freezing the
             // birth clip's answer for the whole life.
             benilla_world::ribbons::RibbonSeq::Host(root),
-            // This instance's own model alpha, chained to its host (0827/0833): a standalone
+            // This instance's own model alpha, chained to its host: a standalone
             // instance has none above it and draws exactly as before.
             Some(root),
             // No fade sphere: an effect instance is not a placed model — it lives for its
@@ -621,7 +621,7 @@ pub(super) fn arm_effect_rig(
         if let Some(drive) =
             benilla_world::rig_anim::GlobalSeqDrive::new(&anims.global_bones, &joints)
         {
-            // Fresh anchor per play — the byte-verified effect lifecycle (0858): CreateModel
+            // Fresh anchor per play — the byte-verified effect lifecycle: CreateModel
             // always allocates+attaches, so every cast's gseq loops open at phase 0, exactly
             // like the ref (the director's 3-cast trace: the flash at +16 frames every time).
             commands.entity(root).insert(drive);
@@ -645,10 +645,10 @@ struct FxInstance {
     /// channel.
     stage: FxStage,
     /// The M2 attachment id to hang from ([`benilla_formats::KIT_SLOT_TAGS`]), or
-    /// [`benilla_formats::WORLD_EFFECT_TAG`] for the field-12 world-plant slot (0848/0850).
+    /// [`benilla_formats::WORLD_EFFECT_TAG`] for the field-12 world-plant slot.
     tag: u16,
     /// The `SpellVisualEffectName` record id — with [`Self::tag`], the reference's same-slot
-    /// replace key (`0x6208e0`; [`replace_same_slot`], decision 2057).
+    /// replace key (`0x6208e0`; [`replace_same_slot`]).
     effect: u32,
     /// The model-cache key.
     path: String,
@@ -670,7 +670,7 @@ pub(super) struct FxAttached {
     instances: Vec<FxInstance>,
 }
 
-/// A **world-planted** kit instance root (the field-12 slot, decisions 0848/0850): a free world
+/// A **world-planted** kit instance root (the field-12 slot): a free world
 /// entity, NOT a scene child of its owner — so [`tend_world_plants`] owns the two jobs the tree
 /// would otherwise do. The reference plants it once at the owner's position × yaw × scale
 /// (`0x620a90`); a **root-aura** spell's plant (`EffectApplyAuraName` 26 anywhere in the spell —
@@ -795,7 +795,7 @@ pub(super) fn resolve_spell_fx(
                     for FxSlot { tag, effect, path } in effects {
                         // **The same-slot replace**, run per slot exactly where the reference
                         // runs it: `CEffect::AddEffect 0x61fdd0` opens with
-                        // `0x6208e0(owner, rec, tag)` (decision 2057).
+                        // `0x6208e0(owner, rec, tag)`.
                         replace_same_slot(
                             &mut instances,
                             *effect,
@@ -870,7 +870,7 @@ fn drain_instance_emitters(
     }
 }
 
-/// **The same-slot replace walk** (`0x6208e0`, `[0x6208e0, 0x62092c]`; decision 2057): every
+/// **The same-slot replace walk** (`0x6208e0`, `[0x6208e0, 0x62092c]`): every
 /// `CEffect::AddEffect` (`0x61fdd0`) opens by walking the owner's `+0xb4` list and **destroying**
 /// (`0x6203e0`) each node carrying the same `SpellVisualEffectName` record at the same attach tag,
 /// so a re-play *replaces* a still-live same-model-same-slot emitter instead of stacking on it.
@@ -965,7 +965,7 @@ pub(super) fn attach_spell_fx(
         &mut FxAttached,
         Option<&BoneAttach>,
         // The unit's pose buffer: the attach joint spawns on first demand from the composed
-        // pose (`RigPose::anchor_for`, decision 1355).
+        // pose (`RigPose::anchor_for`).
         Option<&mut benilla_world::rig_anim::RigPose>,
         &GlobalTransform,
         // The body is built (model or fallback cube) — see the wait below.
@@ -1060,7 +1060,7 @@ pub(super) fn attach_spell_fx(
             if dm.parts.is_none() {
                 return true; // model still loading — spawn on a later pass
             }
-            // The world-plant slot (kit field 12, decisions 0848/0850): the client passes NO
+            // The world-plant slot (kit field 12): the client passes NO
             // attach tag (`0x61fcf0` pushes −1), skips the bone pipeline entirely and plants the
             // model once, world-space, at the owner's position × yaw × scale (`0x620c86` via
             // `0x620a90`) — it does not ride a bone and does not turn with the unit afterwards.
@@ -1134,7 +1134,7 @@ pub(super) fn attach_spell_fx(
                 now,
                 ground_anchor,
                 // A kit instance on a unit is an attached model, chained to that unit: it fades
-                // with the body it is cast on, and it is freed with it (0833) — where before, a
+                // with the body it is cast on, and it is freed with it — where before, a
                 // gear change that tore the unit's visual down left its cloud in the air.
                 EffectHost { parent: Some(unit) },
                 // A kit effect IS a `CEffect`: it runs the stage's animation lifecycle.
@@ -1179,7 +1179,7 @@ pub(super) fn attach_spell_fx(
 }
 
 /// Fire the event keyframes each live effect instance's playing clip crossed since last frame
-/// (module doc; decision 0304) — the same `(prev, cur]` window scan as the creature scanner
+/// (module doc) — the same `(prev, cur]` window scan as the creature scanner
 /// ([`scan_events`]), emitting with the HOST UNIT as the event entity (the unit's transform is
 /// the world position; an instance root's own is joint-local). Unlike a streamed creature, an
 /// instance is born under our eyes at t = 0, so first sight fires the head window `[0, cur]` —
@@ -1392,7 +1392,7 @@ mod tests {
         assert_eq!(instances_of(&app, unit), vec![(true, Some(roots[0]))]);
     }
 
-    // ---- the same-slot replace (`0x6208e0`, decision 2057) ----
+    // ---- the same-slot replace (`0x6208e0`) ----
 
     /// The blood spurt's record and the two flank tags — the case the rule exists for.
     const SPURT: u32 = 63;
@@ -1509,7 +1509,7 @@ mod tests {
         assert_eq!(slots_of(&app, unit), vec![(SPURT, tag), (SPURT, tag)]);
     }
 
-    /// The stun swirl that never appeared (decision 2085): a kit instance whose cache entry was
+    /// The stun swirl that never appeared: a kit instance whose cache entry was
     /// wiped by the login `MapChange` between its `Begin` and its spawn pass.
     ///
     /// The fixture is the aftermath, not the race — an instance holding a path the cache no longer

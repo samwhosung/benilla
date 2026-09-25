@@ -2,9 +2,9 @@
 //!
 //! [`super`] (attach) spawns a streamed entity's visual; this module resolves the character-specific
 //! inputs it swaps in: the entity's [`CharLook`] (race/sex/customization — wire fields for a player,
-//! CreatureDisplayInfoExtra for a character-model NPC, decision 0041), its worn-equipment display ids
-//! ([`WornEquip`], decision 0074), and the per-appearance material quints over the composited body
-//! atlas / hair / cape textures ([`build_char_skin_materials`], decisions 0044 / 0045).
+//! CreatureDisplayInfoExtra for a character-model NPC), its worn-equipment display ids
+//! ([`WornEquip`]), and the per-appearance material quints over the composited body
+//! atlas / hair / cape textures ([`build_char_skin_materials`]).
 
 use benilla_formats::{CharSkinSlot, ModelBlend};
 use benilla_protocol::EntityKind;
@@ -18,7 +18,7 @@ use super::super::{DisplayModel, EntityPart, SkinKey, SkinSections};
 
 /// The resolved character appearance for one entity that renders as a character-model body — either a
 /// **player** (appearance decoded from the wire) or a **character-model NPC** (from its display's
-/// CreatureDisplayInfoExtra, decision 0041). It drives both the geoset selection and the per-appearance
+/// CreatureDisplayInfoExtra). It drives both the geoset selection and the per-appearance
 /// skin/hair materials, so the two cases share one code path. `None` for a beast NPC / GameObject / a
 /// unit with no appearance data — those render whole, with their built textures, as before.
 pub(super) struct CharLook {
@@ -56,7 +56,7 @@ pub(super) fn resolve_char_look(
     entity: Entity,
     stores: &Query<&ObjectStore>,
 ) -> Option<CharLook> {
-    // The look follows the DISPLAY, not the entity kind (decision 0695): with live display-id
+    // The look follows the DISPLAY, not the entity kind: with live display-id
     // swaps a Player-kind entity can wear any display — a druid's bear form is a plain creature
     // model (no look; Monster skins instead), and a GM-morphed player wearing a humanoid NPC
     // display wears ITS CreatureDisplayInfoExtra appearance. The reference's own race/gender
@@ -80,7 +80,7 @@ pub(super) fn resolve_char_look(
             },
         });
     }
-    // A **corpse** that is not a bone pile (decision 1706): its look is its own
+    // A **corpse** that is not a bone pile: its look is its own
     // `CORPSE_FIELD_BYTES_1/_2` snapshot, taken at death — not the owner's live `PLAYER_BYTES`,
     // which the corpse cannot see and which may belong to a player who has since logged out. This
     // is the reference's own source: `0x5d6260` reads `[[corpse+0x110]+0x69..+0x6f]` into the
@@ -138,7 +138,7 @@ fn baked_npc_url(bake_name: &str) -> String {
 /// the cloak, and the helm.
 ///
 /// A **player** takes them from its resolved [`super::Equipment`] (the wire's visible-item entries →
-/// item template → display id, decision 0074). A **character-model NPC** takes them from its display's
+/// item template → display id). A **character-model NPC** takes them from its display's
 /// [`NpcAppearance`](benilla_formats::NpcAppearance) equipment columns (CreatureDisplayInfoExtra —
 /// decision 0060 named the gap; this is the fill): its bodyslots 2..9 (shirt..tabard) map straight onto
 /// the 8 slots, field 0 (head) is the helm, and there is no NPC cloak column (the row stops at bodyslot
@@ -149,7 +149,7 @@ pub(super) struct WornEquip {
     pub(super) bodyslots: [u32; 8],
     pub(super) cloak: u32,
     pub(super) helm: u32,
-    /// The wearer's guild tabard (decision 1704) — a **player's** only, off their resolved
+    /// The wearer's guild tabard — a **player's** only, off their resolved
     /// [`super::Equipment`]. A character-model NPC has no guild: CreatureDisplayInfoExtra carries
     /// no guild column, and a display-driven body never joins one, so this stays `None` there and a
     /// tabard in an NPC's bodyslot-9 column keeps its own art.
@@ -163,7 +163,7 @@ pub(super) fn resolve_worn_equip(
     dm: Option<&DisplayModel>,
 ) -> WornEquip {
     match net.kind {
-        // A **corpse** rides the player arm (decision 1706): its `Equipment` is resolved from the
+        // A **corpse** rides the player arm: its `Equipment` is resolved from the
         // 19 `CORPSE_FIELD_ITEM` slots, which are already ItemDisplayInfo ids — the same values a
         // player's items resolve to, so the geoset + region-composite law downstream is literally
         // the same law, on a different source.
@@ -197,7 +197,7 @@ pub(super) fn resolve_worn_equip(
 /// branches + the cloak group + the helm's `0x4799a0` hide-mask row pair): each non-zero display
 /// resolves its ItemDisplayInfo row's geoset columns, and B3's forearm gate comes off the same
 /// composite plan the atlas blits. One helper for the world attach path and the glue-preview
-/// builder — the selection law can't fork (decision 0465).
+/// builder — the selection law can't fork.
 ///
 /// [`EquipGeosets::tabard_preview`](benilla_formats::EquipGeosets::tabard_preview) (B6) is the
 /// tabard designer's flag, up on the local player's body while that window is open (decision
@@ -222,14 +222,14 @@ pub(in crate::entities) fn equip_geosets(
             }
         }
         // B3's gate is the ArmLower tile's own occupancy, not "is a chest equipped" — the same
-        // plan the composite blits (decision 1864).
+        // plan the composite blits.
         eg.forearm_dressed = benilla_formats::forearm_dressed(&worn);
         if cloak != 0 {
             eg.cloak = d.catalog.get(cloak).map(|row| row.geoset_groups[0]);
         }
         if helm != 0 {
             // Only a display that names a head MODEL is a worn helm, and only a worn helm tucks
-            // hair/facial/ears away (B93: `CreatureDisplayInfoExtra`'s head column points 126
+            // hair/facial/ears away (`CreatureDisplayInfoExtra`'s head column points 126
             // character-model NPC displays at model-less jewellery rows that still carry a full
             // hide mask — see [`benilla_formats::ItemDisplay::worn_helm_vis`]).
             eg.helm_vis = d
@@ -272,9 +272,9 @@ fn shared_skin_probe() -> bool {
 
 /// Build a character body's per-appearance materials — the **body** atlas (as a (single-sided,
 /// two-sided) pair — a body batch keeps its own M2 0x04, e.g. the robe skirt) and the **hair**-mesh
-/// texture (a single CharSections BLP, decision 0045) — each as a (steady, interior-matte, fade,
+/// texture (a single CharSections BLP) — each as a (steady, interior-matte, fade,
 /// interior-bake) quad. Works for a
-/// player (atlas composited live from CharSections + overlays, decisions 0041 / 0044) *and* a
+/// player (atlas composited live from CharSections + overlays) *and* a
 /// character-model NPC (atlas = the shipped pre-baked BLP), selected by [`CharLook::body`]. Returns
 /// `(body, hair, object, skin_extra)`; each is `None` for an absent row (e.g. a bald style has no hair
 /// texture, only tauren author an extra skin) or when the tables / world chain / lighting aren't
@@ -285,12 +285,12 @@ fn shared_skin_probe() -> bool {
 pub(super) fn build_char_skin_materials(
     look: &CharLook,
     // The worn armor display ids (bodyslot 2–9) + the cloak's, and the ItemDisplayInfo catalog to
-    // resolve their region textures (decision 0074). Consumed **only** on the live-composite path
+    // resolve their region textures. Consumed **only** on the live-composite path
     // (a player, or the rare bake-less NPC row); a baked NPC atlas already owns the skin, so its
     // equip ids don't paint here — they drive the geosets only. `[0; 8]`/`0`/`None` = the naked body.
     equip: [u32; 8],
     cloak: u32,
-    // The wearer's guild tabard (decision 1704), painted over the torso layers of a tabard whose
+    // The wearer's guild tabard, painted over the torso layers of a tabard whose
     // display asks for it. `None` = no guild, or its identity has not arrived; both leave the
     // tabard garment showing its own art.
     emblem: Option<benilla_formats::GuildEmblem>,
@@ -360,8 +360,8 @@ pub(super) fn build_char_skin_materials(
             match skin_cache.fetch(&key) {
                 Some(handle) => Some(handle),
                 None => {
-                    // The worn ItemDisplayInfo rows whose region textures dress the atlas
-                    // (decision 0074); an unknown/zero display id contributes nothing.
+                    // The worn ItemDisplayInfo rows whose region textures dress the atlas;
+                    // an unknown/zero display id contributes nothing.
                     let catalog = displays.map(|d| &d.catalog);
                     let mut worn: [Option<&benilla_formats::ItemDisplay>; 8] = [None; 8];
                     if let Some(catalog) = catalog {
@@ -391,7 +391,7 @@ pub(super) fn build_char_skin_materials(
                     // Through the upload gate like every other texture: a composite is
                     // layered texel-by-texel on the CPU so it is already RGBA8, and
                     // `for_upload` is a no-op on it — but going through it is what makes
-                    // the format and the bytes provably agree (decision 1626).
+                    // the format and the bytes provably agree.
                     let handle = images.add(repeat_texture_authored(
                         benilla_assets::for_upload(composed),
                         (true, true),

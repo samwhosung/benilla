@@ -1,5 +1,5 @@
 //! The **ground-targeting AoE reticle** — the terrain-projected decal a **location** cast's
-//! cursor drags across the world (decisions 0797 / 0943). Only a word that passes
+//! cursor drags across the world. Only a word that passes
 //! `TargetingWantsLocation`'s `& 0x60` has one: the other two seams (a bag click, a world
 //! GameObject click) arm the same cursor and draw no decal at all — see [`update_reticle`]'s guard.
 //!
@@ -19,7 +19,7 @@
 //! radius to 0.0** — the decal shrinks to the 1.3888889 default *and* turns red. `r == 0` (no
 //! radius rows — a dest spell with no area) also draws at the default. Spell-mod op 6
 //! (SPELLMOD_RADIUS) is not folded in: the tables are live (`crate::spell::mods`), this consumer
-//! is not wired to them (the same residual as the range gate, 0792).
+//! is not wired to them (the same residual as the range gate).
 //!
 //! **States**: in range → Acceptable at `r`; out of range → Unacceptable at the default size;
 //! cursor over sky / no world hit → **nothing is drawn** (the ref resets its draw state every
@@ -88,7 +88,7 @@ pub(super) fn setup_reticle(mut commands: Commands, asset_server: Res<AssetServe
 /// range verdict (the one `CheckGroundPointInRange` caller — the cursor and the decal state are
 /// the same read in the ref).
 ///
-/// **Both of `0x4820f0`'s guards, in its order** (decision 0943): `4820f9 IsTargeting 0x6e48a0`
+/// **Both of `0x4820f0`'s guards, in its order**: `4820f9 IsTargeting 0x6e48a0`
 /// **and** `482106 TargetingWantsLocation 0x6e6320` — either false and it returns having never
 /// touched the draw state, which the hover handler already reset to `3` = *do not draw*
 /// (`481840`, every pass). The *word's* mask decides, not the mere fact of targeting: a lock or
@@ -193,7 +193,7 @@ pub(super) fn push_reticle(
         .batch(cam, texture)
         .anchored(state.key.center)
         // Sort rung from the pre-water decal band — the reference draws this pass at `0x4836c5`
-        // with flags `0x200122`, before the water (B347); its liquid-receiver twin at `0x483727`
+        // with flags `0x200122`, before the water; its liquid-receiver twin at `0x483727`
         // is the half that draws after it, and has no counterpart here until liquid becomes a
         // receiving surface. Raster margin from the family's shared coplanarity constant.
         .rung(
@@ -216,7 +216,7 @@ mod tests {
     use benilla_world::collision::GroundDecalSurface;
     use bevy::ecs::system::RunSystemOnce;
 
-    /// **`0x4820f0`'s second guard** (decision 0943). One armed cursor, three seams, one decal:
+    /// **`0x4820f0`'s second guard**. One armed cursor, three seams, one decal:
     /// only a word that answers `TargetingWantsLocation`'s `& 0x60` may draw. Before this, the
     /// reticle asked `IsTargeting` alone, so arming Pick Lock (`0x4000`), Opening (`0x4800`) or an
     /// enchant (`0x0010`) dropped a green AoE circle on the ground under a cursor whose click is a

@@ -1,4 +1,4 @@
-//! Live descriptor **appearance** changes (decision 0695): a `Values` delta that moves
+//! Live descriptor **appearance** changes: a `Values` delta that moves
 //! `UNIT_FIELD_DISPLAYID` / `GAMEOBJECT_DISPLAYID` swaps the entity's model in place, and one that
 //! moves `OBJECT_FIELD_SCALE_X` eases its render scale — the druid-shapeshift / GM-morph gap
 //! (ledger B69/F04) and `NetEntity::scale`'s old standing deferral, closed together because they
@@ -21,7 +21,7 @@
 //!
 //! A **teardown is right here and only here**: a display swap is a different model, so there is
 //! nothing to keep. The two siblings that used to share this shape no longer do — a gear change
-//! re-dresses in place (0835) and a mount transition re-seats in place (B199), because in the
+//! re-dresses in place and a mount transition re-seats in place, because in the
 //! reference neither touches the body model at all. What survives a teardown is the unit's own
 //! per-unit state, and one piece of it is load-bearing: its [`super::spell_fx::FxAttached`] list
 //! outlives the model exactly as the reference's `+0xb4` does, so its persistent instances
@@ -80,7 +80,7 @@ fn live_display_id(kind: EntityKind, store: &ObjectStore) -> Option<u32> {
             .gameobject_displayid()
             .filter(|&d| d > 0)
             .map(|d| d as u32),
-        // A corpse's body display (decision 1706). It is not expected to move — the field is a
+        // A corpse's body display. It is not expected to move — the field is a
         // death-time snapshot — but it is the same field the create interpreted, so the same
         // differ answers for it. **Not** covered here: the flesh→bones flip, which the reference
         // reacts to with a full model reload (its `CORPSE_FIELD_FLAGS` mirror handler
@@ -99,7 +99,7 @@ fn live_display_id(kind: EntityKind, store: &ObjectStore) -> Option<u32> {
 /// [`CollisionHeight`] in the same commit (its two inputs are exactly these two fields; decision
 /// 0645's stamp-once rule was correct only while neither could change).
 ///
-/// The self-avatar needs nothing special: it is the streamed entity (decision 0042), so the swap
+/// The self-avatar needs nothing special: it is the streamed entity, so the swap
 /// rebuilds its body like any other unit and `player::mirror_self_collision_height` re-syncs the
 /// swim lines from the restamp next frame. Mount children carry no [`ObjectStore`], so they can
 /// never take this path (their display is the host's field, diffed by `mount::reseat_mounts`).
@@ -188,7 +188,7 @@ pub(super) fn refresh_live_display(
 
         // ── The collision prism ──────────────────────────────────────────────────────────────
         // Derived from the unit's **native** display, so the rendered swap above is NOT one of its
-        // inputs (decision 1574 — the reference reads `NATIVEDISPLAYID` at `[unit+0x110]+0x1f8`).
+        // inputs (the reference reads `NATIVEDISPLAYID` at `[unit+0x110]+0x1f8`).
         // Its two real inputs are `UNIT_FIELD_NATIVEDISPLAYID` and `SCALE_X`, and neither has a
         // change-gate we can piggyback on, so it is recomputed and diffed against the stamped
         // component instead: two `HashMap` lookups per attached unit per frame, the same order as
@@ -245,7 +245,7 @@ const HEAL_MIN_HEADROOM: usize = 128;
 /// heals over a second or two instead of one spike of teardown+reattach commands.
 const HEAL_PER_FRAME: usize = 2;
 
-/// Rebuild the visuals of units whose attach was DENIED a palette rig (decision 0863 — the
+/// Rebuild the visuals of units whose attach was DENIED a palette rig (the
 /// [`RigStarved`](benilla_world::rig_palette::RigStarved) marker): the same teardown set as the
 /// display-id swap above (the reference's `0x60abe0` rebuild), fade-skipped via `Reattached` —
 /// a heal is not a spawn. `attach_entity_visuals` rebuilds next frame(s), allocating with the
@@ -304,7 +304,7 @@ pub(super) fn heal_rig_starved(
 mod tests {
     use super::*;
 
-    /// The heal law (decision 0863): a rig-starved unit rebuilds — visual children despawned,
+    /// The heal law: a rig-starved unit rebuilds — visual children despawned,
     /// the attach trigger re-armed (`VisualAttached` off, `Reattached` on), the marker consumed
     /// — but ONLY when the palette has real headroom; against a still-tight table the healer
     /// waits (rebuilding into it would just re-starve).

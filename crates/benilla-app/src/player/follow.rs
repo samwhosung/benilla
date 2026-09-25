@@ -1,4 +1,4 @@
-//! `/follow` — the auto-follow movement mode (decisions 0890, 0893).
+//! `/follow` — the auto-follow movement mode.
 //!
 //! The finding that shapes this module: **follow synthesizes keyboard input.** It owns no
 //! translation of its own. Every state change in the reference funnels through the movement
@@ -251,7 +251,7 @@ fn steer(face: f32, bearing: f32, dt: f32) -> f32 {
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct FollowInput<'w, 's> {
     buttons: Res<'w, ButtonInput<MouseButton>>,
-    /// The binding dispatch (0997) — the movement commands' press edges, wherever they are bound.
+    /// The binding dispatch — the movement commands' press edges, wherever they are bound.
     /// It already carries the typing gate this struct used to hold `UiKeyboardCapture` for
     /// (typing "we should go" in chat must not break the follow).
     binds: Res<'w, crate::bindings::BindingsState>,
@@ -267,7 +267,7 @@ pub(super) struct FollowInput<'w, 's> {
     mover: Query<'w, 's, &'static crate::net::ObjectStore, With<crate::net::Embodied>>,
     /// What the camera orbits ([`super::view_subject`]) — the resolved half of the shared
     /// precondition's far-sight conjunct, which takes both predicates down and so reaches the
-    /// teardown leg on its own (decision 1761).
+    /// teardown leg on its own.
     ///
     /// Read possibly one frame behind, like `rig` above and for the same benign reason: the
     /// publisher and this system are both merely `.before(control)` and are unordered against each
@@ -276,7 +276,7 @@ pub(super) struct FollowInput<'w, 's> {
 }
 
 impl FollowInput<'_, '_> {
-    /// The press edge of any movement command (0997: wherever the six are bound today). The turn
+    /// The press edge of any movement command (wherever the six are bound today). The turn
     /// pair are turn commands normally and strafe under mouse-look; either way they are a
     /// movement start and either way they cancel, so the distinction the controller draws does
     /// not matter here.
@@ -408,7 +408,7 @@ pub(super) fn steer_follow(
     }
     // `WOW_FOLLOW_TRACE=1` — the field instrument for "follow won't catch up / overshoots": one
     // line a second carrying the closing distance and the ground we actually covered, so the
-    // travel rate is a measured number rather than an end-to-end guess (decision 0404: timing and
+    // travel rate is a measured number rather than an end-to-end guess (timing and
     // feel are measured, never eyeballed). Gated because this one IS per-frame.
     if follow_trace_on() {
         let now = time.elapsed_secs_f64();

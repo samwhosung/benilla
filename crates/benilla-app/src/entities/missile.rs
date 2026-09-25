@@ -28,7 +28,7 @@
 //! so a moving target bends the path (homing) and arrival lands exactly on schedule. Arrival on a
 //! landed target writes [`CastEventKind::Impact`] back to the router (the client's unit-impact
 //! hand-off `0x61dc50`); arrival on a missed target plays the victim's dodge/block defense clip
-//! instead ([`miss_defense_state`]) and floats the outcome WORD ([`MissileMiss`], decision 2229).
+//! instead ([`miss_defense_state`]) and floats the outcome WORD ([`MissileMiss`]).
 //!
 //! **`0x61e1d0` picks between THREE arms, and the selector is not ground-vs-unit**: first whether
 //! the missile's target guid still resolves to a live object, then a **HIT bit** —
@@ -199,14 +199,14 @@ pub(super) struct Missile {
     parts_spawned: bool,
     /// The caster's ranged-weapon fallback `SpellVisual` id (resolved at GO time) — handed back
     /// in the arrival's [`CastEventKind::Impact`] so a basic shot's impact kit resolves through
-    /// it (the caster may despawn mid-flight; decision 0370).
+    /// it (the caster may despawn mid-flight).
     weapon_visual: Option<u32>,
 }
 
 /// The unit-side inputs every attach/marker **position read** shares: the base frame, the
 /// attachment/marker tables, and the pose the point is computed from. A pure read — the point
 /// comes from `RigPose::posed_point` (composed pose × rig root frame), so these reads spawn no
-/// anchor entity (decision 1355). Shared with the chain-beam lane.
+/// anchor entity. Shared with the chain-beam lane.
 pub(super) type AttachPosQuery<'w, 's> = Query<
     'w,
     's,
@@ -219,7 +219,7 @@ pub(super) type AttachPosQuery<'w, 's> = Query<
 
 /// A unit's attach-point world position through the given tag cascade, else its base translation.
 /// `None` only when the unit itself is gone. Shared with the chain-beam lane, whose non-caster
-/// endpoints anchor through the very same table and cascade (`0x6ec780`; decision 0955).
+/// endpoints anchor through the very same table and cascade (`0x6ec780`).
 pub(super) fn attach_world_pos(
     unit: Entity,
     tags: impl IntoIterator<Item = u16>,
@@ -293,7 +293,7 @@ struct QueuedGo {
 /// Every caster's pending queue (the client's per-unit `+0xac` list heads). A caster that
 /// streams out drops its queue with it.
 ///
-/// **It is also a GATE, not only a queue** (decision 2288). `[CGUnit+0xac]` holds `CMissile`
+/// **It is also a GATE, not only a queue**. `[CGUnit+0xac]` holds `CMissile`
 /// nodes — the binary names them itself (`Missile_C.cpp`) — inserted by the missile spawner
 /// `0x60a3d0` and drained by the release event, and the `$BWR` handler reads it *before* draining
 /// it (`0x600182 mov eax,[esi+0xac]; test eax,eax; je 0x600299`). Everything between those two
@@ -375,7 +375,7 @@ fn ensure_ammo_model(
     Some(key)
 }
 
-/// A travelling spell's **deferred outcome word** (decision 2229) — the arrival half of the
+/// A travelling spell's **deferred outcome word** — the arrival half of the
 /// floating-combat-text miss word.
 ///
 /// `SMSG_SPELL_GO`'s inline word emit is skipped whenever `Spell.dbc` Speed is nonzero
@@ -452,7 +452,7 @@ pub(super) struct ArrivalOut<'w> {
 /// per [`miss_defense_state`], and no impact kit plays; a **ground** arrival routes
 /// [`CastEventKind::GroundImpact`] to the CASTER carrying the landing point (`0x61d870`).
 ///
-/// A missed arrival ALSO floats the outcome WORD ([`MissileMiss`], decision 2229) — the deferred
+/// A missed arrival ALSO floats the outcome WORD ([`MissileMiss`]) — the deferred
 /// half of the miss text, which `SMSG_SPELL_GO` skipped because this spell has a travel speed.
 fn arrival_handoff(
     missile: &Missile,
@@ -872,7 +872,7 @@ mod tests {
     }
 
     /// A caster whose `$CSL` marker sits at `hand` (the release launch point) — bone 0 of its
-    /// pose is seated there, and the read computes through `posed_point` (decision 1355).
+    /// pose is seated there, and the read computes through `posed_point`.
     fn caster(app: &mut App, hand: Vec3) -> Entity {
         let caster = app
             .world_mut()
@@ -1110,7 +1110,7 @@ mod tests {
     /// `0x61dd50` arm of `0x61e1d0`'s dispatch): DODGE(3) → the dodge state, BLOCK(5) → the
     /// block state, a plain MISS(1) → nothing — and PARRY(4) → nothing.
     ///
-    /// It also floats the outcome WORD (decision 2229), and two of its legs are only visible
+    /// It also floats the outcome WORD, and two of its legs are only visible
     /// here:
     /// - **PARRY is gone by arrival.** [`launch_outcome_code`] rewrote it to DEFLECT(9) at
     ///   launch (`0x61d756`), so the word reads "Deflect" — which is *why* no parry clip plays,

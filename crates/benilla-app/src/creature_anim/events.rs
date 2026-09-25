@@ -26,7 +26,7 @@ pub(crate) struct AnimSoundEvent {
     /// This is the reference's `0x5fdb50` answer at the instant a handler runs: that helper reads
     /// the model's currently-playing animation id, and a key fires from a clip the model is
     /// playing, at that key's own time in it. Two dispatch arms branch on it — the `$BWR` weapon
-    /// family fork (`0x5fcfb0` bow {46,105,109} vs `0x5fcfd0` rifle {49,106,110}, decision 2281) —
+    /// family fork (`0x5fcfb0` bow {46,105,109} vs `0x5fcfd0` rifle {49,106,110}) —
     /// and carrying it here is what lets them ask without re-deriving "what is this unit playing"
     /// from a player whose one-shot overlays outrank its base clip in weight.
     pub(crate) anim_id: u16,
@@ -79,7 +79,7 @@ impl EventFrame<'_> {
 /// So a gait that authors both fires **one** sound per `$FSD` key, not one per key of either
 /// family: HumanMale's Walk keys `$FR0 · $FSD · $FL0 · $FSD` over 1 s and the real client plays
 /// **two** steps there, while its turn-in-place ShuffleLeft/Right key only `$SL0 $SR0` at
-/// `t = 0.000` and are **silent** (decision 1080).
+/// `t = 0.000` and are **silent**.
 ///
 /// The **sound** channel: the dispatch tag `$FSD` alone.
 pub(crate) fn is_footstep_sound(ident: &[u8; 4]) -> bool {
@@ -91,7 +91,7 @@ pub(crate) fn is_footstep_sound(ident: &[u8; 4]) -> bool {
 /// footprint decal ([`crate::footprints`]), the footstep camera shake
 /// ([`crate::camera_shake`]) and the 25 yd spray branch below it all live under it, so it is one
 /// constant and not one per consumer — they held a copy each until they disagreed about its
-/// origin (decision 1856).
+/// origin.
 ///
 /// **Measured from the CAMERA EYE, not the local player.** `FUN_004818f0()` returns
 /// `[[0xb4b2bc]+0x65b8]` — the *active camera* — and its `+0x8/+0xc/+0x10` is the eye.
@@ -192,7 +192,7 @@ pub(super) fn fire_anim_events(
     // position read).
     globals: Query<&GlobalTransform>,
     mut last: Local<TrackMemory>,
-    // The **masked overlay** track's own memory (decision 0087): a swing/emote routed to the
+    // The **masked overlay** track's own memory: a swing/emote routed to the
     // SpineLow overlay plays *beside* the base, so its events (a swing's `$CSS`, an emote's `$CSD`)
     // are scanned on their own node — the base scan above never sees them.
     mut last_overlay: Local<TrackMemory>,
@@ -202,7 +202,7 @@ pub(super) fn fire_anim_events(
 ) {
     let catalog = anim_data.as_deref().map(|d| &d.0);
     for (entity, anims, player, drv, parked, store, world, pose) in &units {
-        // The election's TICK half (decision 1482): a parked unit's event tracks are not
+        // The election's TICK half: a parked unit's event tracks are not
         // scanned — the reference's pass-2 walk never inserts the model into the tick worklist
         // (`0x683dd0` walk 2 skips `0x710b90`) — unless its cached template carries
         // `MORE_AUDIBLE`, the `0x607da0` re-link arm that keeps an off-screen flagged
@@ -221,9 +221,9 @@ pub(super) fn fire_anim_events(
             last_overlay.remove(&entity);
             continue;
         }
-        // Base track: the **resolved** id (decision 0082) — the clip whose timeline is actually
+        // Base track: the **resolved** id — the clip whose timeline is actually
         // advancing, which can differ from the requested `active_anim()` when this model falls back —
-        // then the id's **playing variation** (decision 0114: a one-shot rolled one of the id's
+        // then the id's **playing variation** (a one-shot rolled one of the id's
         // variation clips, each its own node with its own event track). During a same-id cross-fade
         // (swing variation A fading under fresh variation B) the newest play — the smallest seek —
         // is the track; the node-keyed memory then treats the switch as a clip change.
@@ -245,7 +245,7 @@ pub(super) fn fire_anim_events(
             }
         }
         // Masked overlay track: events fire from whichever track plays the clip. The overlay knows
-        // its exact node — match it back to its clip (a variation's `upper_node`, decision 0114).
+        // its exact node — match it back to its clip (a variation's `upper_node`).
         // A freshly-started overlay fires its head window one frame after the arm via
         // [`advance_track`], so an emote's `t = 0` `$CSD` voice still rings; a swing's mid-clip
         // `$CSS` fires as normal.
@@ -270,11 +270,11 @@ pub(super) fn fire_anim_events(
 
 /// Advance a per-track memory and return the `prev` seek to scan events from, or `None` to only
 /// arm this frame. Keyed by the playing **graph node** (not the semantic id): two variations of
-/// the same id are different timelines with different event tracks (decision 0114), and a node
+/// the same id are different timelines with different event tracks, and a node
 /// switch is a clip change like any other.
 ///
 /// **The arm frame fires nothing** — the reference's own rule, and the reason this is not simply
-/// "fire the head window when you see a new clip" (decision 1273). The client's animation arm
+/// "fire the head window when you see a new clip". The client's animation arm
 /// `0x7121a0` bakes the block's window start `+0xa8 = now` (`0x712758`), so on that frame the
 /// walker computes `prev == cur` and `0x719518 jae` abandons the block before reading a single
 /// key. The window only opens on the **next** frame, and it opens at the arm stamp — local
@@ -356,7 +356,7 @@ pub(crate) fn scan_events(
                             pos.y,
                             pos.z,
                             // How far the key fired from the model's own origin — the whole
-                            // question this line was extended to answer (decision 1904). A
+                            // question this line was extended to answer. A
                             // non-zero `off` is the marker being honoured; all-zero across a run
                             // is the model-root fallback, which is what it used to be everywhere.
                             pos.distance(frame.world.translation()),
@@ -438,7 +438,7 @@ mod tests {
         );
     }
 
-    /// The two channels are disjoint (decision 1080): `$FSD` is the whole sound channel, the
+    /// The two channels are disjoint: `$FSD` is the whole sound channel, the
     /// per-foot side tags the whole visual one. HumanMale's Walk keys one of each family per
     /// footfall — routing both to sound is exactly the doubled step rate.
     #[test]
@@ -504,7 +504,7 @@ mod tests {
     }
 
     /// **A clip armed and abandoned inside one frame fires nothing** — the report this rule was
-    /// written for (decision 1273). A stuttering mouse-turn flickers the gait Shuffle↔Stand at
+    /// written for. A stuttering mouse-turn flickers the gait Shuffle↔Stand at
     /// input cadence, and HumanMale's ShuffleLeft keys `$SL0`+`$SR0` at `t = 0.000`: firing on the
     /// arm frame laid a footprint pair per flicker, where the reference lays none.
     #[test]

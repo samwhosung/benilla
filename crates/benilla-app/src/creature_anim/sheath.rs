@@ -1,4 +1,4 @@
-//! The sheath **policy layer**'s types + ceremony mechanics (decision 0080): the one-setter
+//! The sheath **policy layer**'s types + ceremony mechanics: the one-setter
 //! request, the client-side state cache's visual pin, the draw/stow ceremony overlays, and the
 //! `AnimationData.dbc` policy table. The driver systems in [`super::driver`] execute these — the setter,
 //! the field-apply adopt, and the per-animation reconcile all live in `drive_animations`, so
@@ -299,7 +299,7 @@ pub(super) fn load_anim_data(mut commands: Commands, assets: Option<Res<WorldAss
 }
 
 /// Arm an [`ArmLeg`] as a live masked overlay on one arm's subtree: the clip resolved through the
-/// model's own baked fallback first (decision 0082), played over whatever the body is doing. `None`
+/// model's own baked fallback first, played over whatever the body is doing. `None`
 /// when the model has no such clip or no arm mask — that arm then simply snaps.
 fn arm_leg(
     arm: usize,

@@ -1,4 +1,4 @@
-//! The **camera pose** the client remembers (decision 1131) — orbit distance and pitch, per
+//! The **camera pose** the client remembers — orbit distance and pitch, per
 //! character. The fourth resident of 0954's folder to be character-scoped, and the smallest: two
 //! floats.
 //!
@@ -11,7 +11,7 @@
 //! ```
 //!
 //! Two keys, LF, six decimals, trailing newline — VERIFIED at the writer (`0x50c4d0`) and reader
-//! (`0x50c5a0`), decision 1138. **No yaw**: the live heading is never persisted anywhere. (The
+//! (`0x50c5a0`). **No yaw**: the live heading is never persisted anywhere. (The
 //! `SaveView(2..5)` custom views *are* persisted, but as archived `config.wtf` CVars —
 //! `cameraYaw`/`cameraYawA..D` and their Distance/Pitch — not in this file. 1131 §3 said otherwise;
 //! 1138 corrects it. benilla has no `SaveView`, so nothing is owed here yet.)
@@ -67,7 +67,7 @@ pub(super) struct CameraPoseFile {
 
 /// The persisted `cameraPitch` → the live [`FlyCam::pitch`].
 ///
-/// **Both halves VERIFIED** at the bytes (decision 1138; 1131 §2.1 had the right conversion for the
+/// **Both halves VERIFIED** at the bytes (1131 §2.1 had the right conversion for the
 /// wrong reason). The file is **degrees**, and the client's own reader is a pure unit conversion
 /// with **no sign flip**: `deg × 0.01745329238474369` at `0x50c6f9` on load, `× 57.295780181884766`
 /// at `0x50c54f` on save. The client's internal pitch is itself **positive = looking down** — its
@@ -252,7 +252,7 @@ pub(super) fn plugin(app: &mut App) {
             load_camera_pose.before(super::control).in_set(InWorldGated),
         )
         .add_systems(OnExit(ClientState::InWorld), save_on_session_end);
-    // The quit root goes on the exit edge, never `Update` (decision 1528): the close button's
+    // The quit root goes on the exit edge, never `Update`: the close button's
     // `AppExit` is not written until `PostUpdate`, so an `Update` reader watched the pose die with
     // the process — a `/logout` saved it and quitting from in-world did not.
     crate::shutdown::on_app_exit(app, save_on_exit.into_configs());

@@ -19,8 +19,8 @@ pub(super) struct ArcEdges {
 }
 
 impl Player {
-    /// Advance the airborne-arc bookkeeping one frame and return the wire lifecycle edges
-    /// (decisions 0053/0058/0179). Call once per non-swim frame, **after** the mover has written
+    /// Advance the airborne-arc bookkeeping one frame and return the wire lifecycle edges.
+    /// Call once per non-swim frame, **after** the mover has written
     /// this frame's `pos`/`vel_y`. `airborne` is this frame's airborne state; `jumped` whether a
     /// fresh jump launched this frame; `launch_y` the ground height the mover started this frame at
     /// (the pre-step feet Y) — the true takeoff height.
@@ -44,7 +44,7 @@ impl Player {
     /// landing, worse the lower the frame rate (the bug the director hit spamming jumps). Landing
     /// clears the clock.
     ///
-    /// Then the FALLINGFAR latch (`0x633240`, decision 0179): the two legs are **exclusive on the
+    /// Then the FALLINGFAR latch (`0x633240`): the two legs are **exclusive on the
     /// launch vz** — a jump (vz ≠ 0) latches by DESCENT [`FALL_FAR_DROP`] below its launch, a
     /// step-off fall (vz = 0) by TIME [`FALL_FAR_TIME`] airborne. Latched once per arc (only a
     /// landing clears `fall_far`, like the client's StopFalling). A flat jump returns exactly to its
@@ -61,7 +61,7 @@ impl Player {
         let new_arc = airborne && (!was_airborne || jumped);
         if new_arc {
             self.airborne_since = Some(now);
-            // From `launch_vz`, NOT `vel_y` (decision 1740): the mover now integrates gravity on
+            // From `launch_vz`, NOT `vel_y`: the mover now integrates gravity on
             // the take-off frame too, so `vel_y` has already moved `g·dt` down the parabola by the
             // time this runs and would seat the arc's launch speed a step short — visible on the
             // wire, where the jump tail sends this value on every packet of the arc, and in the
@@ -72,8 +72,8 @@ impl Player {
         } else if !airborne {
             self.airborne_since = None;
             // The arc is over: its direction nibble and its knockback provenance go with it, so
-            // the next standstill jump gets its one steer back and the wire stops planting FORWARD
-            // (decision 1740). The reference's `StopFalling` is the same edge.
+            // the next standstill jump gets its one steer back and the wire stops planting FORWARD.
+            // The reference's `StopFalling` is the same edge.
             self.arc_dirs_set = false;
             self.knock_arc = false;
         }
@@ -93,7 +93,7 @@ impl Player {
             // A landing closes the arc (→ MSG_MOVE_FALL_LAND). A same-frame relaunch keeps
             // `airborne` true, so no FALL_LAND fires — the bounce streams a fresh JUMP instead.
             //
-            // **A root ends the arc without landing it** (decision 0880). `SetRoot`'s `StopFalling`
+            // **A root ends the arc without landing it**. `SetRoot`'s `StopFalling`
             // clears FALLING wherever the body happens to be, and the reference *separately*
             // suppresses the land packet while rooted (`0x602df3 test ah,0x10` gating opcode
             // `0xc9`). Both halves matter here: without the suppression a stun caught mid-fall would
@@ -136,7 +136,7 @@ mod tests {
         Player {
             vel_y: JUMP_SPEED,
             // The mover records this the instant the take-off is decided, and the arc snapshot
-            // reads it rather than `vel_y` (decision 1740) — by the time the bookkeeping runs, the
+            // reads it rather than `vel_y` — by the time the bookkeeping runs, the
             // real mover has already stepped `vel_y` one `g·dt` down the parabola.
             launch_vz: JUMP_SPEED,
             pos: Vec3::new(0.0, ground, 0.0),
@@ -181,7 +181,7 @@ mod tests {
 
     /// The arc's direction nibble and its knockback provenance are **arc-scoped**: a landing
     /// clears both, so the next standstill jump gets its one steer back and the wire stops
-    /// planting FORWARD (decision 1740 — the reference's `StopFalling` edge).
+    /// planting FORWARD (the reference's `StopFalling` edge).
     #[test]
     fn landing_clears_the_arc_nibble_and_the_knockback_provenance() {
         let mut p = grounded_at(100.0);
@@ -328,7 +328,7 @@ mod tests {
         );
     }
 
-    /// A root or a stun caught mid-fall **ends the arc without landing it** (decision 0880). The
+    /// A root or a stun caught mid-fall **ends the arc without landing it**. The
     /// mover holds the body where it was (its anchor), so `airborne` goes false in mid-air — and the
     /// reference suppresses the land packet on exactly that state (`0x602df3`). Were it not
     /// suppressed, the frame the stun lands would report a touchdown 30 yd up carrying the whole

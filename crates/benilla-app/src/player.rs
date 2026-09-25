@@ -17,7 +17,7 @@
 //! The **dev chord + `F`** toggles free-fly (1043); the **dev chord + `G`** lands the avatar where
 //! the camera is ([`land`]).
 //!
-//! Movement is a thin kinematic capsule controller over avian's `MoveAndSlide` (decision 0009).
+//! Movement is a thin kinematic capsule controller over avian's `MoveAndSlide`.
 //!
 //! **This file is the map, not the machine.** It holds the plugin and its ordering edges, the
 //! shared types the concern modules trade in ([`Player`], [`BodyQuery`], [`TransportQuery`],
@@ -48,46 +48,46 @@ pub(crate) mod camera;
 // The one smoothed-scalar channel the reference instantiates four times (all stepped by
 // `0x50f160`) — pitch, pitch-bias, ground tilt and the pivot height, one template.
 mod camera_channel;
-// The four 1.12 camera option toggles and the mechanisms behind them (decision 2149).
+// The four 1.12 camera option toggles and the mechanisms behind them.
 pub(crate) mod camera_dynamics;
 // The per-frame controller itself — the one system, split out so the root stays the map.
 mod controller;
 mod world_focus;
-// The remembered camera pose (decision 1131) — it lives inside `player/` so it can read the rig's
+// The remembered camera pose — it lives inside `player/` so it can read the rig's
 // own `pub(super)` fields instead of widening them for a module outside.
 mod camera_saved;
 mod camera_water;
-// The five NAMED camera poses the player can jump between (decision 1745) — `camera_saved`'s
+// The five NAMED camera poses the player can jump between — `camera_saved`'s
 // complement: that one remembers where you left the camera, this one where you decided it should
 // be able to go. Same reason for living inside `player/`: it writes the rig's `pub(super)` fields.
 pub(crate) mod camera_view;
 mod drunk;
-// Which single unit the client embodies (decision 1277) — the `Embodied` marker's owner.
+// Which single unit the client embodies — the `Embodied` marker's owner.
 mod embody;
 // This frame's move-flag word — the one bitset the animation, the wire and the local gates all
-// read (decision 0056).
+// read.
 mod flags;
 mod follow;
 
 mod gait;
-// This frame's decoded input — the netted movement axes and the camera's command word
-// (decisions 0056, 1502). Everything downstream reads the axes, never the keys.
+// This frame's decoded input — the netted movement axes and the camera's command word.
+// Everything downstream reads the axes, never the keys.
 mod input;
 // The land-here affordance (free-fly's other half). `pub(crate)` for its `LandHere` message, which
 // the debug panel's button writes.
 pub(crate) mod land;
 mod move_trace;
 mod movement_net;
-// The stand state + the sheath toggle — how the body HOLDS itself (decisions 0080, 0881).
+// The stand state + the sheath toggle — how the body HOLDS itself.
 mod posture;
 // The kinematic mover step. `pub(crate)` because the grounded walk resolve is **not** the local
 // player's alone: a remote mover's dead-reckon (`crate::net::motion::remote`) runs its extrapolated
 // step through the very same code, the way the reference runs every mover through one controller
 // (decision 0059's byte trail).
 pub(crate) mod mover;
-/// The spyglass zoom — aura 76, a client-local camera override with no wire half at all (B151).
+/// The spyglass zoom — aura 76, a client-local camera override with no wire half at all.
 mod scoped_view;
-// Riding a transport — the platform-frame carry/attach (decisions 0438, 0470).
+// Riding a transport — the platform-frame carry/attach.
 mod ride;
 mod server_ride;
 mod setup;
@@ -95,7 +95,7 @@ mod state;
 /// The step-up diagnostic probe — the blocked-frame report behind the `stup` trace tag.
 pub(crate) mod step_probe;
 mod swim;
-/// What the camera orbits, when that is not our own body — the far-sight anchor (B151, and Mind
+/// What the camera orbits, when that is not our own body — the far-sight anchor (and Mind
 /// Control's camera half in B211, which rides the same field).
 mod view_subject;
 /// The walk/run gait toggle (`TOGGLERUN`) — one latched bit and the reference's refusal chain.
@@ -109,7 +109,7 @@ pub(crate) use camera::apply_self_model_fade;
 // The controller system, named unqualified here so the plugin's ordering edges (and the ones
 // sibling modules declare against it) read as they always have.
 use controller::control;
-// `/follow` (decision 0890): chat asks with the message, `crate::target` resolves the subject into
+// `/follow`: chat asks with the message, `crate::target` resolves the subject into
 // the state, and this module owns the motion.
 use camera::{
     apply_zoom_scroll, model_pivot_height, run_look_session, FlyCam, LookButton, CAM_DIST_DEFAULT,
@@ -127,7 +127,7 @@ use state::{
 };
 // `SETTLE_TIMEOUT` is `pub(crate)`: the settle release lives in the terrain streamer (decision
 // 0737 — residency releases the hold, not ground contact), which owns the deadline push while the
-// resident world is still the departed map's (0710).
+// resident world is still the departed map's.
 pub(crate) use state::{
     Player, PlayerCapsule, CAPSULE_HEIGHT, CAPSULE_RADIUS, CREATURE_STEP_UP_HEIGHT,
     DEFAULT_COLLISION_HEIGHT, FEATHER_TERMINAL_VELOCITY, GRAVITY, HOVER_CLIMB_RATE, HOVER_HEIGHT,
@@ -141,8 +141,8 @@ pub(crate) use swim::{may_swim, swim_enter_depth};
 /// the shake's body frame and its two suspend gates, which the reference takes off `[cam+0x88]`.
 pub(crate) use view_subject::ViewSubject;
 
-/// **`UNIT_FLAG_STUNNED`** — the `UNIT_FIELD_FLAGS` bit that freezes a character's *turning*
-/// (decision 0872). Not a movement flag and not an aura: the reference reads it straight off the
+/// **`UNIT_FLAG_STUNNED`** — the `UNIT_FIELD_FLAGS` bit that freezes a character's *turning*.
+/// Not a movement flag and not an aura: the reference reads it straight off the
 /// descriptor block at `[[unit+0x110]+0xa0]` (predicate `0x5145b0` — note the inverted
 /// `not/shr/and` form, which a census grepping only `test …,0x40000` misses — consumed at
 /// `0x514755`, which skips both the turn and pitch emitters and force-stops either in flight).
@@ -180,7 +180,7 @@ pub(crate) const UNIT_FLAG_STUNNED: u32 = 0x0004_0000;
 /// reference redirects at `0x5fa582` to the charmer's GUID and **recurses** into itself, so the
 /// answer is the charmer's. Reproducing that needs the charmer's descriptor, and the only
 /// consumer that would notice is whether a red toast appears while mind-controlled. Named rather
-/// than invented (decision 1904).
+/// than invented.
 pub(crate) fn self_controlled(unit_flags: u32) -> bool {
     /// `DISABLE_MOVE | CONFUSED | FLEEING` — the reference's literal `0xc00004`.
     const NOT_SELF_CONTROLLED: u32 = 0x0000_0004 | 0x0040_0000 | 0x0080_0000;
@@ -217,7 +217,7 @@ pub(crate) const UNIT_FLAG_TAXI_FLIGHT: u32 = 0x0010_0000;
 ///
 /// Two senders today: the `X` key reads the toggle inline in [`posture`], and the **posture emotes**
 /// (`/sit`, `/sleep`, `/kneel`, `/stand`, `/lay`) send this — `DoEmote`'s `EmoteSpecProc == 1`
-/// branch calls the same `0x5ed430` the key does (decision 0881).
+/// branch calls the same `0x5ed430` the key does.
 /// Routing them here is what makes `/sit` sit at all: the *server*
 /// does nothing for a STATE text emote (vmangos `HandleTextEmoteOpcode` breaks out of the switch
 /// for SIT/SLEEP/KNEEL), so the posture is the client's own to set.
@@ -229,7 +229,7 @@ pub(crate) struct StandStateRequest {
 }
 
 /// The server's own stand state for OUR body (`SMSG_STANDSTATE_UPDATE` — the eat/drink sit, the
-/// stand on damage; decision 2339). Applied by [`posture`] through the same local setter the
+/// stand on damage). Applied by [`posture`] through the same local setter the
 /// volunteered change uses, with no refusal gate and no packet back — the reference's `0x603e50`
 /// → `0x6127b0`. Written by [`net`], read in `control`.
 #[derive(bevy::ecs::message::Message, Clone, Copy, Debug)]
@@ -238,10 +238,10 @@ pub(crate) struct ServerStandState {
 }
 
 /// **The body in our hands** — normally our own streamed avatar, and a possessed creature while we
-/// hold its reins (decision 1277). The controller reads its server pose to take control, then
+/// hold its reins. The controller reads its server pose to take control, then
 /// drives its transform (feet position + facing) and feeds its movement to the animation selector
 /// via `MovementState`. Its model is attached by the entity renderer through the same path as any
-/// other unit (0041), which is exactly why a creature needs nothing special: everything downstream
+/// other unit, which is exactly why a creature needs nothing special: everything downstream
 /// reads the body's own pivot, speeds, scale and descriptor off the entity.
 ///
 /// An alias because three modules take it — [`control`], [`posture`] (read-only, for the sheath
@@ -295,7 +295,7 @@ pub(super) type TransportQuery<'w, 's> = Query<
 
 /// The player controller's **ordering handle**. Anything that must write the aim or the camera rig
 /// before the controller reads them orders against this — the two scripted probe drivers do
-/// (`capture::probe_look` / `capture::probe_cam`, decision 1174). A set rather than the `control`
+/// (`capture::probe_look` / `capture::probe_cam`). A set rather than the `control`
 /// symbol itself: an instrument may name the gameplay system it runs against, but exporting
 /// `control` would drag its private parameter types (`MoveSpeed`, `PlayerCapsule`, `PressGesture`)
 /// out with it, which is exactly the internals-publishing 1173 rejected a crate wall to avoid.
@@ -316,7 +316,7 @@ impl Plugin for PlayerPlugin {
         // "where do I stream from" before the stream stage, and reads the residency the world
         // publishes after it to end its own post-snap hold.
         //
-        // **Both ordering edges are load-bearing** (B263 round 3, decision 1336). `.before(Stream)`
+        // **Both ordering edges are load-bearing** (B263 round 3). `.before(Stream)`
         // alone left the publish free to run before `control`'s teleport snap (conflicting access,
         // no edge — the executor picks either order), and on the snap frame the streamer then
         // streamed around the DEPARTURE position: residency read "world resident", the settle hold
@@ -367,14 +367,14 @@ impl Plugin for PlayerPlugin {
                 .after(AssetSet::Open)
                 .after(crate::cvars::CvarLoad),
         )
-        // The world camera renders only when the world can be seen (decision 0540): in world,
+        // The world camera renders only when the world can be seen: in world,
         // or under the opaque loading screen (whose covered render is what compiles the
         // world's pipelines before the first visible frame). At the glue screens the fully
         // streamed world otherwise burns real GPU time behind an opaque fullscreen scene.
         .add_systems(Update, setup::gate_world_camera)
         // In capture mode the harness ([`crate::capture`]) pins the camera (and thus the stream
         // focus), so `control` must not also drive it — gate it off when capturing. In-world
-        // only (decision 0193): at the character-select glue screen the controller must not
+        // only: at the character-select glue screen the controller must not
         // grab the cursor, fly the camera, or queue movement sends behind the overlay.
         .add_systems(
             Update,
@@ -387,7 +387,7 @@ impl Plugin for PlayerPlugin {
         // The posture setter's queue (the `/sit` family — decision 0881; `control` is the sole
         // executor, like the sheath queue).
         .add_message::<StandStateRequest>()
-        // The server's own stand state for our body (decision 2339), written by [`net`].
+        // The server's own stand state for our body, written by [`net`].
         .add_message::<ServerStandState>()
         // Land-here ([`land`]): the ask, and the re-attach when the server's teleport lands.
         // Before `control` so the frame that applies the teleport is the frame that takes
@@ -415,15 +415,15 @@ impl Plugin for PlayerPlugin {
                 .run_if(not(resource_exists::<crate::run_mode::CaptureMode>))
                 .in_set(crate::char_select::InWorldGated),
         )
-        // A session END releases the avatar — a confirmed `/logout`, or a lost session
-        // (decision 1262): the streamed entity is despawned by the net drain either way, and
+        // A session END releases the avatar — a confirmed `/logout`, or a lost session:
+        // the streamed entity is despawned by the net drain either way, and
         // dropping `active` re-arms the take-control latch for the next login (possibly a
         // different character). Ungated — the message lands as the state flips.
         .add_systems(
             Update,
             wire_in::release_on_session_end.in_set(WorldStage::Input),
         )
-        // Which body the client drives at all (decision 1277). Strictly before everything that
+        // Which body the client drives at all. Strictly before everything that
         // reads the marker — the controller, and the collision-height mirror below.
         .add_systems(
             Update,
@@ -444,7 +444,7 @@ impl Plugin for PlayerPlugin {
                 .in_set(WorldStage::Input)
                 .before(control),
         )
-        // The camera shake (B298, decision 1540) lands on the camera AFTER `control` has
+        // The camera shake lands on the camera AFTER `control` has
         // seated it: the applier adds its offset to the pose `seat_camera` just wrote, so the
         // eye it measures the distance falloff against is the un-shaken one. `control` is at
         // Bevy's 16-param ceiling, so the offset cannot be threaded into it as a resource —
@@ -471,7 +471,7 @@ impl Plugin for PlayerPlugin {
                 .before(follow::steer_follow)
                 .in_set(crate::char_select::InWorldGated),
         )
-        // `/follow` (decision 0890): steer the facing and decide this tick's synthesized forward
+        // `/follow`: steer the facing and decide this tick's synthesized forward
         // input immediately BEFORE the controller, which folds the flag into its forward axis.
         // The player's own turn input therefore runs after us and wins, which is exactly what
         // makes the turn-away cancel reachable.
@@ -503,7 +503,7 @@ impl Plugin for PlayerPlugin {
 }
 
 /// Mirror the driven body's [`crate::entities::CollisionHeight`] onto [`Player`] — its swim depth
-/// lines are fractions of it (decision 0645), and the swim arm runs off the resource, not the
+/// lines are fractions of it, and the swim arm runs off the resource, not the
 /// entity. One entity, one copy: no work until a body streams in, and it re-syncs itself after a
 /// worldport re-streams that entity under a new one — or after a possession puts a different-sized
 /// body in our hands.

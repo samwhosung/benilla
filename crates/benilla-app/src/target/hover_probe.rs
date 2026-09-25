@@ -1,4 +1,4 @@
-//! **The headless hover probe** (decision 2250) — aim the mouseover pick from a screen point when
+//! **The headless hover probe** — aim the mouseover pick from a screen point when
 //! the window has no OS cursor of its own, and say what the pick found.
 //!
 //! ## Why this exists

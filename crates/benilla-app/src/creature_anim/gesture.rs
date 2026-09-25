@@ -1,5 +1,5 @@
 //! The **client-local gesture** — the second producer of a one-shot emote, and the one benilla was
-//! missing (bug B157, decision 1469).
+//! missing (bug B157).
 //!
 //! Nothing on the wire announces it. The real client's chat *display* path picks a gesture code from
 //! the message itself and calls `0x60bb30(unit, code)`; that resolves the code through a five-slot

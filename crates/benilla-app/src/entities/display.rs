@@ -1,4 +1,4 @@
-//! Per-display model cache + build (decision 0006) — the front half of [`super`].
+//! Per-display model cache + build — the front half of [`super`].
 //!
 //! Resolves a creature/GameObject/held-item display id to a [`DisplayModel`] (loading its M2/WMO
 //! through the standard `AssetServer`, deduped by path) and, once the asset loads, builds its spawn
@@ -29,23 +29,23 @@ pub(crate) enum ModelHandle {
 
 /// One spawn part of a display model: a submesh's mesh + its built `WowModelMaterial` + blend (for the
 /// `ModelPart` toggle). Built once the model asset loads **and** the model-forms furnisher has
-/// built its render forms (decision 0834 — the handles here come from the app-side cache, not the
+/// built its render forms (the handles here come from the app-side cache, not the
 /// loader).
 #[derive(Clone)]
 pub(super) struct EntityPart {
     pub(super) mesh: Handle<Mesh>,
     /// The batch's decoded geometry — the model's resident CPU copy (`ModelSubmesh::geometry`),
     /// cloned onto every spawned part/card as [`benilla_world::interact::PickMesh`] so the ray pickers read
-    /// triangles from here: the static render form is `RENDER_WORLD`-only (decision 0834), so no
-    /// main-world mesh data exists to ray-cast (decision 0857).
+    /// triangles from here: the static render form is `RENDER_WORLD`-only, so no
+    /// main-world mesh data exists to ray-cast.
     pub(super) geometry: std::sync::Arc<benilla_formats::RenderSubmesh>,
-    /// The static form's build-time `Aabb` (decision 0834): the static mesh is `RENDER_WORLD`-only,
+    /// The static form's build-time `Aabb`: the static mesh is `RENDER_WORLD`-only,
     /// so a consumer that used to compute a bound from its main-world data (the attach path's
     /// picker-volume fallback) reads this instead. `None` for degenerate geometry.
     pub(super) aabb: Option<bevy::camera::primitives::Aabb>,
-    /// The skinned twin of [`Self::mesh`] (decision 0019), present for every M2 part. An animated
+    /// The skinned twin of [`Self::mesh`], present for every M2 part. An animated
     /// instance (a creature, or a GameObject that runs the state machine / loops a loader-idle seq)
-    /// renders this, skinned through its palette slot's rows (decision 0720); a truly static
+    /// renders this, skinned through its palette slot's rows; a truly static
     /// instance uses `mesh`. `None` for WMO-display parts (no skeleton).
     pub(super) skinned_mesh: Option<Handle<Mesh>>,
     pub(super) material: Handle<WowModelMaterial>,
@@ -62,7 +62,7 @@ pub(super) struct EntityPart {
     pub(super) material_interior_bake: Option<Handle<WowModelMaterial>>,
     /// The bake variant's own `AlphaMode::Blend` twin — a fade (the self-avatar zoom feather, a
     /// despawn ramp) on a bake-classified part rides THIS, keeping the probe light through the
-    /// feather instead of jumping to the exterior twin's lit-outdoor intensity (0355).
+    /// feather instead of jumping to the exterior twin's lit-outdoor intensity.
     pub(super) material_interior_bake_blend: Option<Handle<WowModelMaterial>>,
     /// The `AlphaMode::Blend` twin of the exterior material, for the spawn appear-fade ([`RenderFade`]):
     /// the entity feathers in on this while `α < 1`, then swaps back to `material`. `Some` for M2 parts
@@ -102,8 +102,8 @@ pub(super) struct EntityPart {
     /// anywhere in its render band.
     pub(super) geoset_id: u16,
     /// The character runtime texture slot this part carries (M2 type 1 = body, type 6 = hair). For a
-    /// player the per-entity attach swaps its material to one carrying that per-appearance texture
-    /// (decisions 0041 / 0044 / 0045); `None` and ignored otherwise (it keeps its built material).
+    /// player the per-entity attach swaps its material to one carrying that per-appearance texture;
+    /// `None` and ignored otherwise (it keeps its built material).
     pub(super) char_slot: Option<CharSkinSlot>,
     /// A billboard batch (glow card / chain): its pivot + facing info. The spawn sites must NOT
     /// spawn it as an ordinary child — its mesh is centred at the bone pivot and its transform is
@@ -111,10 +111,10 @@ pub(super) struct EntityPart {
     /// 0153: the brazier/torch "glow on the ground" family). `None` for ordinary geometry.
     pub(super) billboard: Option<benilla_assets::BillboardInfo>,
     /// This part's geometry is **welded** to a billboard bone the card split refused
-    /// ([`benilla_formats::RenderSubmesh::welded_billboard`], decision 0839): a shoulder flap whose
+    /// ([`benilla_formats::RenderSubmesh::welded_billboard`]): a shoulder flap whose
     /// root ring is half-weighted to the plate and whose tip swings to the camera. It draws right
     /// only through a joint palette, which is why a display carrying one makes even the **item**
-    /// lane rig ([`DisplayModel::welds_billboard`], decision 0841). `false` for every ordinary part.
+    /// lane rig ([`DisplayModel::welds_billboard`]). `false` for every ordinary part.
     pub(super) welded_billboard: bool,
     /// The part's animated material-alpha loops (colour-alpha × transparency-weight, decision 0130
     /// phase 2, per-sequence since 0641). The **effect lane** ([`super::spell_fx`]) samples them
@@ -128,23 +128,23 @@ pub(super) struct EntityPart {
     /// the effect lane clones + ticks the tint per instance. `None` for constant tints.
     pub(super) rgb_anim: Option<std::sync::Arc<benilla_formats::RgbAnim>>,
     /// The per-file-sequence-slot form of [`Self::rgb_anim`], carried only where the slots
-    /// disagree (decision 1408) — [`Self::uv_seq`]'s twin, and the reason a GameObject may need a
+    /// disagree — [`Self::uv_seq`]'s twin, and the reason a GameObject may need a
     /// material of its own. Five batches on three GameObject models author one, and **four of
     /// them bake nothing in slot 0**, so `rgb_anim` is `None` for them and a shared material can
-    /// only ever seed white: the hunter's Freezing Trap glow card is the class (decision 2295).
+    /// only ever seed white: the hunter's Freezing Trap glow card is the class.
     pub(super) rgb_seq: Option<std::sync::Arc<benilla_formats::SeqLoops<[f32; 3]>>>,
     /// The part's **texture-transform (UV) loop** — the translation track that scrolls this
     /// batch's stage UVs (decision 0130 phase 3, `0x70b740`). The **effect lane**
     /// ([`super::spell_fx`]) samples it per instance on its own clip clock, through a material
-    /// clone (decision 2282); the unit/GameObject lane runs it on the shared, deduped material
-    /// (decision 2295). `None` for the ~98.6% of batches with no texture transform, and for all
+    /// clone; the unit/GameObject lane runs it on the shared, deduped material.
+    /// `None` for the ~98.6% of batches with no texture transform, and for all
     /// WMO parts.
     pub(super) uv_anim: Option<std::sync::Arc<benilla_formats::UvAnim>>,
     /// The per-file-sequence-slot form of [`Self::uv_anim`], carried only where the slots
-    /// disagree (decision 1408) — an effect that advances `Stand` → `Hold` → `Decay` reads the
+    /// disagree — an effect that advances `Stand` → `Hold` → `Decay` reads the
     /// slot it is actually playing. `None` for every batch whose slots agree.
     pub(super) uv_seq: Option<std::sync::Arc<benilla_formats::SeqLoops<[f32; 2]>>>,
-    /// The texture transform's **rotation** loop per file sequence slot (decision 2019) and its
+    /// The texture transform's **rotation** loop per file sequence slot and its
     /// scaling twin. Three effect models in the whole 1.12 corpus author them — Shield Wall's
     /// halo turns *and* scales, Grounding Totem's glow is a scale-only transform — which is
     /// precisely why the effect lane has to read them from the asset rather than from memory
@@ -190,8 +190,8 @@ pub(crate) struct DisplayModel {
     /// display (a player's appearance is on the wire — its `ObjectStore`, not here). The per-entity
     /// attach reads it to skin + geoset-filter a character-model NPC the same way it does a player.
     pub(super) npc_appearance: Option<NpcAppearance>,
-    /// A held item display's runtime **object skin** — the ItemDisplayInfo model-texture basename
-    /// (decision 0072), bound to the model's type-2 batches ([`CharSkinSlot::Object`]) at build, from
+    /// A held item display's runtime **object skin** — the ItemDisplayInfo model-texture basename,
+    /// bound to the model's type-2 batches ([`CharSkinSlot::Object`]) at build, from
     /// [`Self::dir`]. `None` for creature/GameObject displays (their type-2 batches — a body model's
     /// cape slot — stay untextured until equipment provides one).
     pub(super) object_texture: Option<String>,
@@ -203,7 +203,7 @@ pub(crate) struct DisplayModel {
     /// The model's ribbon emitters (weapon trails, wisp streamers), captured like `emitters`.
     pub(super) ribbons: Vec<benilla_assets::ModelRibbon>,
     /// The model's **M2 light blocks**, captured like `emitters` — the authored dynamic light an
-    /// entity carries into the world (decision 0016). The common case is the **held torch**:
+    /// entity carries into the world. The common case is the **held torch**:
     /// `Club_1H_Torch_A_01.m2` authors one warm `type==1` point light, which is why a torch-bearing
     /// NPC lights the fence rails and grass around him on the reference. Empty for WMOs and for the
     /// ~all models that author none.
@@ -214,11 +214,11 @@ pub(crate) struct DisplayModel {
     /// vein, or door collides. Cloned (Arc-shared shape) onto each instance in [`attach_entity_visuals`],
     /// where the entity's own pose places it.
     pub(super) collider: Option<Collider>,
-    /// The model's rest skeleton (decision 0019), captured with `parts` when an M2 asset loads. The
+    /// The model's rest skeleton, captured with `parts` when an M2 asset loads. The
     /// creature attach path spawns one joint entity per bone from it, per instance. Empty for WMO /
     /// boneless / model-less displays.
     pub(super) skeleton: ModelSkeleton,
-    /// The model's attachment points (decision 0072), captured with `parts` on load: id → bone +
+    /// The model's attachment points, captured with `parts` on load: id → bone +
     /// Bevy-space offset. The attach path folds them into each instance's [`BoneAttach`] so held
     /// items (and future bone riders) can hang from the hand/hip/back joints. Empty for WMO / static.
     pub(super) attachments: Vec<benilla_assets::ModelAttachment>,
@@ -229,7 +229,7 @@ pub(crate) struct DisplayModel {
     /// The matching inverse bind poses, shared across every instance of this display. `Some` for an M2
     /// display, `None` for WMO / model-less. Paired with `skeleton` to build each instance's palette rig.
     pub(super) inverse_bindposes: Option<Handle<SkinnedMeshInverseBindposes>>,
-    /// The model's animations (decision 0019), captured with `parts` on load. The creature attach path
+    /// The model's animations, captured with `parts` on load. The creature attach path
     /// gives each instance an `AnimationPlayer` driving them (playing Stand). `None` for WMO / static.
     pub(super) animations: Option<ModelAnimations>,
     /// The file-order-first sequence's authored duration ([`M2Model::first_seq_span`]), captured with
@@ -293,7 +293,7 @@ pub(crate) struct DisplayModel {
     pub(super) terrain_tilt: u8,
     /// Whether this display resolves to a **character body** (a `Character\…` model path) — the
     /// gate for the char-customization pipeline (geoset filter + skin composite). The look follows
-    /// the DISPLAY, not the entity kind (decision 0695): a druid in bear form is a Player-kind
+    /// the DISPLAY, not the entity kind: a druid in bear form is a Player-kind
     /// entity wearing a plain creature model, and the reference's own race/gender getters answer
     /// from the display's cached row, not the unit's descriptor (the `0x60c690` getter family).
     pub(super) is_character_body: bool,
@@ -301,10 +301,10 @@ pub(crate) struct DisplayModel {
 
 impl DisplayModel {
     /// Does any built part weld geometry to a billboard bone
-    /// ([`EntityPart::welded_billboard`], decision 0839)? Such a part has no correct rigid
+    /// ([`EntityPart::welded_billboard`])? Such a part has no correct rigid
     /// placement — the reference blends it per vertex — so the lane that draws it must run a joint
     /// palette even where it otherwise wouldn't. The rigged lanes always do; this is the gate that
-    /// makes the **item** lane rig for the seven shoulder models that need it (decision 0841).
+    /// makes the **item** lane rig for the seven shoulder models that need it.
     /// `false` while the model is still loading, and for the other 9684 models in the game.
     pub(super) fn welds_billboard(&self) -> bool {
         self.parts
@@ -314,7 +314,7 @@ impl DisplayModel {
 
     /// Does this display name a model FILE at all? The line between **"the model's own answer is
     /// draw nothing"** and **"we could not resolve one"** — which are the same empty `parts` list
-    /// and must never be treated alike (decision 1403).
+    /// and must never be treated alike.
     ///
     /// `true` once a display resolved through its catalog to a path we handed the asset server;
     /// `false` only for [`empty_display`] — a display id absent from `CreatureDisplayInfo` /
@@ -419,13 +419,13 @@ pub(super) fn build_parts(
     dm: &mut DisplayModel,
     m2s: &Assets<M2Model>,
     wmos: &Assets<WmoModel>,
-    // The app-built render forms (decision 0834): parts wait for the furnisher exactly as they
+    // The app-built render forms: parts wait for the furnisher exactly as they
     // wait for the asset. Entity displays request at priority 0 — a mob walking into view never
     // queues behind a city crossing's scenery (whose placements request at 16+).
     forms: &mut benilla_world::model_forms::ModelForms,
     asset_server: &AssetServer,
     mats: &mut benilla_world::model_render::M2BatchMaterials,
-    // Where this display's animated texture transforms are delivered (decision 2295) — taken
+    // Where this display's animated texture transforms are delivered — taken
     // rather than reached for, because building an entity batch's material and putting it on the
     // lane are one act.
     uv: &mut benilla_world::model_render::EntityUvLane<'_>,
@@ -514,7 +514,7 @@ pub(super) fn build_parts(
                     (b.bbox_min[2] + b.bbox_max[2]) * 0.5,
                 ])
             });
-            // The rest skeleton + shared inverse bind poses + the animation graph (decision 0019) — the
+            // The rest skeleton + shared inverse bind poses + the animation graph — the
             // creature attach path spawns a joint hierarchy + an AnimationPlayer from these. Captured
             // here, with `parts`, on load.
             skeleton = model.skeleton.clone();
@@ -692,7 +692,7 @@ fn model_local_collider(hull: &CollisionMesh) -> Option<Collider> {
 
 /// A submesh's texture: its embedded one; for an unfilled creature skin slot, the display's variation
 /// (`<dir>\<name>.blp`); for a runtime **object** slot (M2 type 2 — a held item's blade/face skin),
-/// the display's ItemDisplayInfo model texture, same folder (decision 0072). `None` ⇒ untextured
+/// the display's ItemDisplayInfo model texture, same folder. `None` ⇒ untextured
 /// (the material's muted fallback — e.g. a body model's cape slot with nothing equipped).
 fn resolve_skin(
     sub: &ModelSubmesh,
@@ -727,7 +727,7 @@ fn model_dir(model_path: &str) -> &str {
 mod tests {
     use super::*;
 
-    /// The line the attach path's debug cube hangs on (decision 1403, bug B13). Both sides of it
+    /// The line the attach path's debug cube hangs on (bug B13). Both sides of it
     /// carry the SAME empty `parts` list once built, so the handle is the only thing that can tell
     /// them apart: `empty_display` is a display that named no model — our gap, worth a cube —
     /// while a display holding a real handle has been answered by its model, even when the answer

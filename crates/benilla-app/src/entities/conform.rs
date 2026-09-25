@@ -1,4 +1,4 @@
-//! Terrain conform — **fidelity** (decisions 0482/0486; `0x7106c0`): the
+//! Terrain conform — **fidelity** (`0x7106c0`): the
 //! reference tilts every model whose M2 authors `GlobalModelFlags & 3 ∈ {1,3}` — all 152 mounts
 //! + quadrupeds pitch (flag 1), the 74 low-wide models (kodo/basilisk/crab/crocodile/spider)
 //! pitch AND roll (flag 3) — wild or mounted alike: the gate is the model flag, not mountedness.
@@ -81,7 +81,7 @@ fn conform_rotation(mode: u8, n_local: Vec3) -> Quat {
     }
 }
 
-/// Conform every flagged model to the terrain under its unit (decisions 0482/0486). The pipeline
+/// Conform every flagged model to the terrain under its unit. The pipeline
 /// mirrors the ref's three stages: a ground normal per unit (theirs: the averaged walkable
 /// collision-contact normal `CMovement+0x24`; ours: ONE ground-face normal from a down-ray
 /// against the decal-receiver set — a named approximation that coincides on uniform slopes),

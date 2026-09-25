@@ -24,12 +24,12 @@ use super::*;
 ///   normally in the systems that follow, item or spell still on the cursor.
 ///
 /// The left-click legs live in the UI engine's world drop ([`benilla_ui::script`]'s
-/// `world_drop_click`, routed by the app-fed pick — decisions 0218/0571/0574); that press is
+/// `world_drop_click`, routed by the app-fed pick); that press is
 /// consumed when it would drop, so no `WorldClick` fires for them. The put-down sound rides the
 /// app's cursor-transition watcher (`crate::sound`), matching the ref's `ClearCursor` play.
 pub(super) fn world_right_click_payload(
     mut right_clicks: MessageReader<WorldRightClick>,
-    // The **press** pick, not the live hover (decision 2230) — this leg and [`act_on_right_click`]
+    // The **press** pick, not the live hover — this leg and [`act_on_right_click`]
     // are two halves of one click's routing, so they must classify the same pick or a right-click
     // can dismiss the cursor payload *and* interact with the thing it was held over.
     press: Res<PressPick>,
@@ -48,7 +48,7 @@ pub(super) fn world_right_click_payload(
 }
 
 /// **A plate click is a click on its unit** — the plate's own click slot (`0x7cb910`) ends in the
-/// same `SetSelection` a click on the body does (decision 2148).
+/// same `SetSelection` a click on the body does.
 ///
 /// It **carries its own unit** rather than reading the press pick, and that is the whole design:
 /// pfUI's click-through calls `plate:Click("LeftButton")` with the cursor wherever the player left
@@ -84,7 +84,7 @@ pub(super) fn select_on_plate_click(
         std::mem::take(&mut plate.left),
         std::mem::take(&mut plate.right),
     );
-    // The ground-targeting cursor owns the click, exactly as it does for a world one (0792).
+    // The ground-targeting cursor owns the click, exactly as it does for a world one.
     if ground.active() {
         return;
     }
@@ -122,10 +122,10 @@ pub(super) fn select_on_plate_click(
 /// server; a click on empty ground / a non-unit clears the target — except a click on NOTHING (sky
 /// — no occlusion-ray hit) while a payload is held: the reference's nothing-leg deselect is
 /// no-payload-gated (`0x492d30`'s local flag test), while the terrain leg deselects regardless of a
-/// surviving spell/action payload (`0x5e03bb` — decisions 0571 + 0574). Skipped while the inspector
+/// surviving spell/action payload (`0x5e03bb`). Skipped while the inspector
 /// is armed (left-click is its copy affordance).
 ///
-/// **The press pick, not the live hover** (decision 1122). A click may now arrive at the end of a
+/// **The press pick, not the live hover**. A click may now arrive at the end of a
 /// gesture that orbited the camera, and the live hover is empty by then — `update_hover` clears it
 /// for the whole look session, as the reference suppresses its own hover during freelook. Reading
 /// the live hover here would take the `_ =>` arm below and *clear* the player's target on every
@@ -152,7 +152,7 @@ pub(super) fn select_on_click(
     if !clicked || inspect.enabled {
         return;
     }
-    // The ground-targeting cursor owns the click (decision 0792): the ref's terrain leg tries
+    // The ground-targeting cursor owns the click: the ref's terrain leg tries
     // the ground commit BEFORE its select/deselect half and skips it when the commit fires
     // (`0x492580`'s "otherwise"). The commit system runs after this one in the chain, so the
     // mode is still readable here — selection changes not at all, in range or out.
@@ -193,16 +193,16 @@ pub(super) fn select_on_click(
         // press is consumed for the drop/dismiss (input.rs's `would_drop`), so a payload
         // normally never reaches this arm at all — the gate still holds the nothing-leg law
         // for the residual GameObject-hover case (`Object` pick, unit arm empty).
-        // `deselectOnClick` (0961) gates the whole arm: "Sticky Targeting" checked = the CVar
+        // `deselectOnClick` gates the whole arm: "Sticky Targeting" checked = the CVar
         // at 0 = an empty-world click keeps the target (1.12's own inverted checkbox).
         _ => {
-            // A **corpse** is an object hit, not empty world (decision 1723): the reference's
+            // A **corpse** is an object hit, not empty world: the reference's
             // deselect lives in the terrain and nothing legs, and an object leg clears no
             // selection — so a left-click on a body must leave the target exactly where it was.
             // Without this the corpse would arrive here (its guid is in the other slot) and read
             // as "clicked nothing", dropping the player's target every time they clicked a body.
             //
-            // **A REFUSED pick is the same kind of object hit** (decision 2060). The hover grader
+            // **A REFUSED pick is the same kind of object hit**. The hover grader
             // `0x4828d0` takes the mouseover away from a `NOT_SELECTABLE` unit, but the *click*
             // never went through it: the down-edge pick `0x481f00` still found the object, so the
             // release takes the object leg `0x4925d0`, whose tail `0x49280c call 0x493540` hits
@@ -277,13 +277,13 @@ fn interaction_already_open_on(target: u64, interact: &crate::ui_session::Intera
 
 /// On a clean right-*click* (vanilla's context action — [`WorldRightClick`], never a turn-drag):
 /// select the hovered unit, then act by the same classification the cursor used (the INTERACT
-/// leg `0x492820`). Three branches (decision 0081):
+/// leg `0x492820`). Three branches:
 /// - **Attack** (alive + reaction ≤ neutral): auto-draw and start melee auto-attack, exactly the
 ///   action-bar attack's path (decision 0073's verified attack-start: SETSHEATHED then ATTACKSWING).
 /// - **Loot** (dead + `UNIT_DYNFLAG_LOOTABLE` — the state, not the Pickup cursor kind, which a
-///   live vendor shares): open the corpse's loot (`CMSG_LOOT`), decision 0084.
+///   live vendor shares): open the corpse's loot (`CMSG_LOOT`).
 /// - **Interact** on an in-range friendly service NPC: the reference's own first-match-wins ladder
-///   over `UNIT_NPC_FLAGS` ([`service_arm`] → [`service_action`], decision 1861) — bit 0 GOSSIP
+///   over `UNIT_NPC_FLAGS` ([`service_arm`] → [`service_action`]) — bit 0 GOSSIP
 ///   first, so a trainer or questgiver that also carries the bit still opens a menu and only a
 ///   flagless one opens its own window (1865). A click that lands on the NPC whose window is
 ///   already open is eaten before any of it ([`interaction_already_open_on`], 1905). On a taken
@@ -297,7 +297,7 @@ fn interaction_already_open_on(target: u64, interact: &crate::ui_session::Intera
 #[allow(clippy::type_complexity)]
 pub(super) fn act_on_right_click(
     mut clicks: MessageReader<WorldRightClick>,
-    // **The press pick, not the live hover** (decision 2230) — the same latch the left button has
+    // **The press pick, not the live hover** — the same latch the left button has
     // read since 1122, and for the same reason: the reference picks exactly once, on the down edge
     // (`0x481f00`, one caller image-wide), into the WorldFrame's own slots, and nothing re-picks on
     // move or on release. Reading the live hover here only looked right because the release frame
@@ -313,36 +313,35 @@ pub(super) fn act_on_right_click(
     // The interact talk gesture. The reference's NPC-interact dispatcher calls the SAME gesture
     // entry point the chat display path does, always with code 0 — so this goes through
     // `creature_anim::gesture` rather than writing a raw AnimID, and inherits its gate chain
-    // (decision 1469; before that it played unconditionally, even asleep or mid-combat).
+    // (before that it played unconditionally, even asleep or mid-combat).
     mut gestures: ResMut<crate::creature_anim::GestureQueue>,
-    // The GameObject lock-routing inputs (decisions 0239 / 0545 / 0752) as one [`GoLockInputs`]
+    // The GameObject lock-routing inputs as one [`GoLockInputs`]
     // (the 16-SystemParam ceiling).
     mut go_inputs: GoLockInputs,
     player_actions: Res<crate::ui_action::PlayerActions>,
-    // `[0xb700e4]`'s mirror — the skin leg's spell, already gated by the classifier (0752).
+    // `[0xb700e4]`'s mirror — the skin leg's spell, already gated by the classifier.
     learned: Res<crate::ui_action::LearnedAbilities>,
-    // The GO leg needs the object's stored state too (the Action gate, decision 0752); the unit
+    // The GO leg needs the object's stored state too (the Action gate); the unit
     // legs ignore the second member.
     stores: Query<(&ObjectStore, Option<&crate::go_anim::GoAnim>)>,
     // One tuple param (the 16-SystemParam ceiling): the red-error keys + the reason-coded cast
-    // line (the opener cast's local totem refusal, decision 0552) + the loot-target latch
-    // the loot branch arms (decision 0515), and the mailbox session the mailbox branch opens
-    // (decision 0544).
-    // The three non-packet service arms (decision 1861), bundled — see [`ServiceArms`].
+    // line (the opener cast's local totem refusal) + the loot-target latch
+    // the loot branch arms, and the mailbox session the mailbox branch opens.
+    // The three non-packet service arms, bundled — see [`ServiceArms`].
     mut service: ServiceArms,
     ui_feedback: (
         ResMut<crate::ui_action::UiErrorKeys>,
         ResMut<crate::ui_action::CastErrors>,
         ResMut<crate::ui_loot::LootLatch>,
         ResMut<crate::ui_mail::MailOpen>,
-        // The reader session the TEXT branch opens (decision 1105) — like the mailbox, a
+        // The reader session the TEXT branch opens — like the mailbox, a
         // client-side window with no packet behind it.
         ResMut<crate::ui_item_text::ItemTextOpen>,
-        // The GameObject opener's one-frame queue (decision 2199): this system cannot hold
+        // The GameObject opener's one-frame queue: this system cannot hold
         // `CastLadder` (it would reach `Items`/`CastErrors` twice), so the lock chain's verdict
         // travels to `ui_action::drain::drain_go_openers` instead of becoming a packet here.
         ResMut<crate::ui_action::GoOpenerCasts>,
-        // The meeting stone's use slot (decision 2283), here for the same reason: its four
+        // The meeting stone's use slot, here for the same reason: its four
         // refusals read the roster and the template cache, so the click hands the object to
         // `ui_dialog_verbs::drain_meeting_stone_joins` rather than validating and sending here.
         MessageWriter<crate::ui_dialog_verbs::MeetingStoneUse>,
@@ -368,7 +367,7 @@ pub(super) fn act_on_right_click(
     // distinction, this field and nothing else). 0481 built the gate for the two action families
     // the director reported then — casts (`0x6094f0`'s reason `0x39` "You are mounted") and
     // attack-start (`0x612df0`'s `ERR_ATTACK_MOUNTED`) — and wrote interaction explicitly out of
-    // scope. This is that third family (decision 1851): the right-click interact dispatchers read
+    // scope. This is that third family: the right-click interact dispatchers read
     // the very same field, in their own ladders, and until now we read it in none of them.
     let self_store = self_player
         .single()
@@ -376,14 +375,14 @@ pub(super) fn act_on_right_click(
         .and_then(|(e, _, _)| stores.get(e).ok())
         .map(|(s, _)| s);
     let self_mounted = self_store.is_some_and(|s| s.0.unit_mount_display_id() != 0);
-    // A GameObject is the nearest thing under the cursor → use it (decision 0236), and never fall
+    // A GameObject is the nearest thing under the cursor → use it, and never fall
     // through to unit handling: a GO is not selectable, and a right-click on it acts on the GO or
     // does nothing. The reference's `OnUse 0x5f8660` gates on the same two predicates the cursor
     // computes: **highlightable** first — false is a silent no-op, which for us is
     // `cursor.kind == Point` — then **usable**, whose failure toasts an error and sends nothing.
     //
-    // `usable`'s two arms we model land in different places, so the routing is split accordingly
-    // (decision 0752): the **lock** arm comes back out of [`resolve_go_action`] as
+    // `usable`'s two arms we model land in different places, so the routing is split accordingly:
+    // the **lock** arm comes back out of [`resolve_go_action`] as
     // `GoAction::Refuse`, which carries the lock-fail toast routing (`0x5f3427..`); the **range**
     // arm is `cursor.unable`, which suppresses the send with no toast (the reference auto-walks
     // there instead — `0x610300`, also no packet). The lock arm runs first in `0x5f3130`, and it
@@ -464,7 +463,7 @@ pub(super) fn act_on_right_click(
                     );
                     return;
                 }
-                // Mailbox (GO type 19): open the mail window client-side (decision 0544), BEFORE the
+                // Mailbox (GO type 19): open the mail window client-side, BEFORE the
                 // lock fork (a mailbox is never locked). The MAILBOX use handler `0x5f6820`
                 // overrides the shared use-sender to a LOCAL open — it sends NO packet (no
                 // CMSG_GAMEOBJ_USE); the window's own MAIL_SHOW → CheckInbox drives the first
@@ -502,7 +501,7 @@ pub(super) fn act_on_right_click(
                 }
                 // MEETINGSTONE (GO type 23): **not** the shared use-sender. `[0x80bf40+0x1c]`
                 // is `0x5f69d0`, this type's own validator — four client-side refusals and then
-                // `CMSG 0x292 {u64 goGuid}` from `0x4c9ff0` (decision 2283). The shared sender
+                // `CMSG 0x292 {u64 goGuid}` from `0x4c9ff0`. The shared sender
                 // `0x5f33e0` is **unreachable** from here: it
                 // has zero direct callers and 29 `.rdata` refs, every one at some vtable's
                 // `+0x1c`, and `0x80bf5c` is not among them — so a meeting stone cannot emit
@@ -529,7 +528,7 @@ pub(super) fn act_on_right_click(
                     }
                     return;
                 }
-                // Branch on the lock (decisions 0239 / 0545 / 0752): a lockless GameObject is USEd;
+                // Branch on the lock: a lockless GameObject is USEd;
                 // a lockable one casts the opener (a known OPEN_LOCK spell, or a carried key's own
                 // ON_USE) at it; an unopenable lock shows the client-local red toast — "The door is
                 // locked.", "Requires Herbalism", "Requires Mining 100", "Requires <key item>" —
@@ -555,7 +554,7 @@ pub(super) fn act_on_right_click(
                         }
                         let _ = seam.net.0.send(ClientCommand::GameObjUse { guid });
                     }
-                    // **Both opener arms queue for the one cast path** (decision 2199) — they
+                    // **Both opener arms queue for the one cast path** — they
                     // do not send. The reference reaches `TryCast 0x6e4b60` from the GameObject
                     // strategy's use-sender (`0x5f35c0 → 0x6e5a90 → 0x6e4b60`) exactly as it
                     // does from a button press, so an opener owes the whole ladder — the in-flight
@@ -656,7 +655,7 @@ pub(super) fn act_on_right_click(
             if !cursor.unable {
                 debug!("right-click corpse loot: {guid:#x}");
                 let _ = seam.net.0.send(ClientCommand::Loot { guid });
-                // Same client-side prediction as the unit corpse (decision 0515): the reference's
+                // Same client-side prediction as the unit corpse: the reference's
                 // `CMSG_LOOT` sender arms `[player+0x1d28]` and kneels before any reply.
                 loot_latch.0 = Some(guid);
             }
@@ -702,11 +701,11 @@ pub(super) fn act_on_right_click(
     // classification; its dead-unit row sends CMSG_LOOT). The loot cursor's
     // base mode is Pickup(8), which a live vendor also shows, so the kind alone can't name loot.
     //
-    // **The fork's first test is the rider**, and we never carried it (decision 1851): `0x60bf98`
+    // **The fork's first test is the rider**, and we never carried it: `0x60bf98`
     // reads `[ecx+0x1fc]` off the *player's* descriptor block — the one still in `ecx` from
     // `0x60bee5` — and `jg 0x60c01f` skips the whole loot leg for a mounted player, landing on the
     // skin leg. That is a **fall-through, not a refusal**: no packet, no red line, no "You are
-    // mounted". The cast and attack families of this same gate (0481) each announce themselves;
+    // mounted". The cast and attack families of this same gate each announce themselves;
     // this one is silent, which is exactly why it could sit here unbuilt without ever looking
     // broken from the inside.
     // Step 0 of the fork, hoisted because the trace prints it too: a corpse the dispatcher will
@@ -792,7 +791,7 @@ pub(super) fn act_on_right_click(
             }
         }
         UnitBranch::Dead(DeadUnitLeg::Loot) => {
-            // A dead unit carrying UNIT_DYNFLAG_LOOTABLE (the Pickup loot cursor, decision 0084): open
+            // A dead unit carrying UNIT_DYNFLAG_LOOTABLE (the Pickup loot cursor): open
             // its loot (`CMSG_LOOT`). Range-gated like the interact branch — the cursor grays a corpse
             // beyond the melee interact reach (`unable`), and we don't send then (no auto-approach yet).
             // No EmoteTalk: looting is not an NPC interaction, the corpse plays no talk.
@@ -815,16 +814,16 @@ pub(super) fn act_on_right_click(
                 let _ = seam.net.0.send(ClientCommand::Loot { guid });
                 // The kneel is client-predicted AT THE SEND: the real client's `CMSG_LOOT` sender
                 // (`0x5df253`) sets the loot-target latch `[player+0x1d28]` and plays Loot 50 before
-                // any server response (decision 0515). Arm the latch the anim driver's loot leg
+                // any server response. Arm the latch the anim driver's loot leg
                 // reads for the self unit; the release/refusal drops it.
                 loot_latch.0 = Some(guid);
             }
         }
         UnitBranch::Dead(DeadUnitLeg::Skin) => {
             // A dead SKINNABLE corpse the loot leg declined (`0x60c01f`): cast our known Skinning spell
-            // at it — the unit-side mirror of the GO lock split (0239; decision 0437's gathering
+            // at it — the unit-side mirror of the GO lock split (decision 0437's gathering
             // finish). The spell comes from the reference's own learn-time latch
-            // ([`crate::ui_action::LearnedAbilities`] = `[0xb700e4]`, decision 0752), which is the same
+            // ([`crate::ui_action::LearnedAbilities`] = `[0xb700e4]`), which is the same
             // thing the classifier gated the Skin cursor on. Ordinarily that means an unlootable
             // corpse; **while mounted it also means a still-lootable one**, and the cast then meets the
             // cast family's own mounted gate (`0x6094f0`'s reason `0x39`) and says "You are mounted" —
@@ -849,7 +848,7 @@ pub(super) fn act_on_right_click(
                 }
             }
         }
-        // **The silent leg — and it is TERMINAL.** That is the whole of decision 1858. A dead
+        // **The silent leg — and it is TERMINAL.** That is the whole of. A dead
         // unit whose fork declined both legs (a rider over a lootable corpse; a corpse someone
         // else killed; a skinnable one without the skill) is DONE: the reference reaches its
         // NPC-service dispatch only down the ALIVE branch (`0x60c162`), never off the back of
@@ -870,14 +869,14 @@ pub(super) fn act_on_right_click(
             // An in-range friendly service NPC (the cursor already gated friendly + service +
             // range): run **the reference's own ladder over `UNIT_NPC_FLAGS`** ([`service_arm`]).
             //
-            // Not the cursor's kind, which is what this dispatched on until decision 1861. The
+            // Not the cursor's kind, which is what this dispatched on until. The
             // reference runs two structurally identical ladders — one for the cursor
             // (`0x482336`), one for the send (`0x5f0289`) — and the cursor MODE is a lossy
             // projection of the winning bit: eight arms collapse to Speak(6) and two to Buy(3),
             // so a kind-keyed dispatch cannot tell a banker from an auctioneer, nor a trainer
             // from an innkeeper from a spirit healer. It sent `CMSG_GOSSIP_HELLO` for all eight.
             // `0x5f0251` — the click that lands on the NPC we are already talking to is eaten
-            // whole, before the ladder and before the gesture (decision 1905).
+            // whole, before the ladder and before the gesture.
             if interaction_already_open_on(guid, &service.interact) {
                 debug!(
                     "right-click interact: {guid:#x} — its window is already open, nothing sent"
@@ -970,7 +969,7 @@ pub(super) fn act_on_right_click(
             // the reference calls the gesture after the arm's handler RETURNS, not after a send
             // (each arm of `0x5f0130` ends `call 0x60bb30(0)` then `ret 8`). The gesture's own
             // anim carries WeaponFlags `0x10`, so the per-animation sheath reconcile stows a drawn
-            // weapon — a committed change that persists after the talk (decisions 0080/0081).
+            // weapon — a committed change that persists after the talk.
             if let Some((_, my_guid, _)) = me {
                 gestures.push(my_guid.0, crate::creature_anim::Gesture::Talk);
             }
@@ -982,7 +981,7 @@ pub(super) fn act_on_right_click(
     }
 }
 
-/// The right-click action a hovered GameObject resolves to (decisions 0239 / 0545 / 0752) — chosen
+/// The right-click action a hovered GameObject resolves to — chosen
 /// by its lock, through the shared chain in [`super::lock`].
 pub(crate) enum GoAction {
     /// No lock (or no lock data): `CMSG_GAMEOBJ_USE` — door / lever / quest object / mailbox /
@@ -993,12 +992,12 @@ pub(crate) enum GoAction {
     OpenLock(u32),
     /// A lock whose **KEY** slot we satisfy: *use the key at the object* — `CMSG_USE_ITEM` with the
     /// key's wire position and `TARGET_FLAG_GAMEOBJECT`, NOT a bare cast of the key's spell
-    /// (decision 0769; the client never sends a bare CMSG_CAST_SPELL for a key lock: the cast
+    /// (the client never sends a bare CMSG_CAST_SPELL for a key lock: the cast
     /// sender `0x6e54f0` takes its item arm). The distinction is the whole ballgame:
     /// `Spell::CanOpenLock` honours a `Lock.dbc` KEY slot only when `m_CastItem` is set, which only
     /// USE_ITEM supplies.
     ///
-    /// Carried as a whole [`crate::ui_items::ItemUse`] (decision 2199) because the reference's
+    /// Carried as a whole [`crate::ui_items::ItemUse`] because the reference's
     /// lock chain calls `CGItem::Use` with the lock's guid — the one item-use fork every surface
     /// takes — rather than building a packet of its own. `on_object` is that guid.
     OpenByKey(crate::ui_items::ItemUse),
@@ -1071,7 +1070,7 @@ pub(crate) fn resolve_go_action(
     let key_entry = match outcome {
         super::lock::LockOutcome::Unlocked => return GoAction::Use,
         super::lock::LockOutcome::OpenBySpell(spell_id) => {
-            // The retest instrument for B247 (decision 1312): which of the player's openers this
+            // The retest instrument for B247: which of the player's openers this
             // lock resolved to, by id. The spell's Spell.dbc name is what the cast bar prints, so
             // reading the id off a probe run is how "the bar says Opening - No Text" becomes a
             // machine-checkable fact instead of a screenshot.
@@ -1107,7 +1106,7 @@ pub(crate) fn resolve_go_action(
     // key's ON_USE spell id AND the item object itself; it is the sender `0x6e54f0` that then
     // discriminates on cast-item-vs-caster and takes the item arm — `0x6e57d8 push 0xab`,
     // CMSG_USE_ITEM carrying `u8 bag · u8 slot · u8 spellSlot · SpellCastTargets(GO)`, with no raw
-    // spell id at all (the server re-resolves the Item* from bag+slot). Decision 0769.
+    // spell id at all (the server re-resolves the Item* from bag+slot).
     //
     // So what the wire needs is the key's POSITION, which the same walker that found it gives us.
     let Some(store) = me_store else {
@@ -1138,14 +1137,14 @@ pub(crate) fn resolve_go_action(
         entry: key_entry,
         spell_index,
         use_spell: tmpl.use_spell.as_ref().map(|u| u.spell_id),
-        // The bound lock — `CGItem::Use`'s own target argument (decision 0769).
+        // The bound lock — `CGItem::Use`'s own target argument.
         on_object: Some(guid),
         is_charter: tmpl.flags & benilla_protocol::messages::ITEM_FLAG_CHARTER != 0,
     })
 }
 
-/// The client-local toast for an unopenable lock — the ref's routing (`0x5f3427..`), transcribed
-/// (decision 0545). Two layers, exactly as the binary orders them:
+/// The client-local toast for an unopenable lock — the ref's routing (`0x5f3427..`), transcribed.
+/// Two layers, exactly as the binary orders them:
 ///
 /// 1. **`GO_FLAG_LOCKED` set** (a padlocked chest/door — gather nodes never set it): the `usable`
 ///    gate refuses with the strategy default `[strat+8]` before the rich routing ever runs —
@@ -1205,16 +1204,16 @@ fn route_lock_refusal(
 /// The reference's order, and ours:
 ///
 /// 0. **`0x60bf75`/`0x60bf86` — is it a corpse at all?** `HEALTH <= 0` **and** the target's
-///    `UNIT_DYNFLAG_DEAD` (`[+0x224]` bit 5, the feign-death bit — decision 1022) **clear**; either
+///    `UNIT_DYNFLAG_DEAD` (`[+0x224]` bit 5, the feign-death bit) **clear**; either
 ///    failing routes to the alive branch `0x60c162` instead. The caller passes this as `dead`.
 /// 1. **`0x60bf98` — am I mounted?** `mov eax,[ecx+0x1fc]` on the *player's* descriptor block
-///    (`UNIT_FIELD_MOUNTDISPLAYID`, the one mounted signal — decision 0481), `jg 0x60c01f`. A
+///    (`UNIT_FIELD_MOUNTDISPLAYID`, the one mounted signal), `jg 0x60c01f`. A
 ///    rider does not loot. It is a jump into the skin leg, not a refusal: nothing is sent and
 ///    nothing is said.
 /// 2. **`0x6003a0` — is it lootable?** (`UNIT_DYNFLAG_LOOTABLE`, plus the decay deadline the server
 ///    owns.) Yes ⇒ [`DeadUnitLeg::Loot`] and `CMSG_LOOT`.
 /// 3. **`0x60c01f` — is it skinnable?** `UNIT_FIELD_FLAGS` bit 26, on the TARGET, plus the
-///    learn-time latch `[0xb700e4]` that says we know a Skinning spell (decision 0752). Yes ⇒
+///    learn-time latch `[0xb700e4]` that says we know a Skinning spell. Yes ⇒
 ///    [`DeadUnitLeg::Skin`] and the skin cast — which, being a cast, meets the mounted gate's cast
 ///    face (`0x6094f0`, reason `0x39`) and is where a rider finally gets told something.
 /// 4. Otherwise nothing at all (`0x60c25f`, the bare epilogue).
@@ -1304,8 +1303,7 @@ fn unit_branch(attack: bool, dead_fork: bool, leg: DeadUnitLeg) -> UnitBranch {
 /// field in the same order, which is why keying the send on the classified kind looked right for
 /// so long. It is not: the projection is lossy. Speak(6) is bits 0, 1, 5, 6, 9, 10, 11 and 13 —
 /// eight arms, two of which send nothing — and Buy(3) is bits 8 and 12. A kind-keyed dispatch
-/// cannot express this ladder, and benilla's sent `CMSG_GOSSIP_HELLO` for all eight Speak arms
-/// (decision 1861).
+/// cannot express this ladder, and benilla's sent `CMSG_GOSSIP_HELLO` for all eight Speak arms.
 ///
 /// **First-match-wins is load-bearing**: a GOSSIP+VENDOR NPC sends `CMSG_GOSSIP_HELLO` only, and
 /// a stable master with a menu keeps the menu — which is where 1677's hand-written
@@ -1494,7 +1492,7 @@ pub(super) fn clear_target_requests(
     mut guid_asks: MessageReader<DeselectGuid>,
 ) {
     // The engine-side teardown ask (`0x493910(guid, 1)`): a no-op unless the selection IS that
-    // guid — the loot window's move-start close is its one producer today (decision 2097).
+    // guid — the loot window's move-start close is its one producer today.
     let asked = guid_asks.read().any(|ask| selection.guid == Some(ask.0));
     let Some(mut script) = script else {
         if asked {
@@ -1513,7 +1511,7 @@ pub(super) fn clear_target_requests(
 /// Ask for the selection teardown **if the selection is this guid** — the reference's
 /// `CGGameUI::SelectionTeardown 0x493910(guid, ecx=1)`, which no-ops unless a selection exists
 /// and equals the argument. The loot window's move-start close raises it for a dead corpse
-/// (`0x48f369`, decision 2097); drained by [`clear_target_requests`], so the attack-stop and the
+/// (`0x48f369`); drained by [`clear_target_requests`], so the attack-stop and the
 /// wire clear stay the teardown's.
 #[derive(bevy::ecs::message::Message, Clone, Copy, Debug)]
 pub(crate) struct DeselectGuid(pub(crate) u64);
@@ -1535,8 +1533,8 @@ pub(crate) struct DeselectGuid(pub(crate) u64);
 /// no-op); `"partyN"`/`"raidN"` → that roster slot when its entity is in range (an out-of-range
 /// member needs the guid-only selection the phase-4 out-of-range slice owns — until then the click
 /// no-ops, like the real client on a nonexistent unit); `"pet"` → the bar's cached pet guid
-/// (decision 0990, the pet frame's left click); `"targettarget"` → the selection's own
-/// `UNIT_FIELD_TARGET` (decision 1576, the ToT frame's). Everything else (mouseover/name) waits
+/// (the pet frame's left click); `"targettarget"` → the selection's own
+/// `UNIT_FIELD_TARGET` (the ToT frame's). Everything else (mouseover/name) waits
 /// for its wire.
 ///
 /// `AssistUnit` resolves the same token and then runs the shared assist tail
@@ -1547,11 +1545,11 @@ pub(super) fn selection_requests(
     script: Option<NonSendMut<UiScript>>,
     // The one unit-token resolver (`crate::ui_unit::UnitTokens`) — the arms this drain used to
     // spell out inline. It is shared with the reach feed precisely so `TargetUnit("target")` and
-    // `CheckInteractDistance("target", …)` can never mean two different units (B304).
+    // `CheckInteractDistance("target", …)` can never mean two different units.
     tokens: crate::ui_unit::UnitTokens,
     // `TargetLastEnemy`'s memory — `[0xb4e2e8]/[0xb4e2ec]`, stamped by `scan::remember_last_enemy`.
     last_enemy: Res<scan::LastEnemy>,
-    // The one SetSelection tail, shared with `/target` and `/assist` (decision 1583). It carries
+    // The one SetSelection tail, shared with `/target` and `/assist`. It carries
     // the classification too, which is why this drain no longer states one: hand-stating it here
     // is exactly how a `false` that the binary refutes got written down.
     mut commit: super::by_name::SelectCommit,
@@ -1633,7 +1631,7 @@ pub(super) fn clear(
 mod tests {
     use super::*;
 
-    /// The `0x5f3427..` toast routing, case by case (decision 0545). The slot/flag/type
+    /// The `0x5f3427..` toast routing, case by case. The slot/flag/type
     /// combinations mirror real data: Peacebloom (lock 29: skill slot, LockType 2, Skill 0), a
     /// rank-155 vein (lock 42: LockType 3, Skill 155), a keyed door, a padlocked chest.
     #[test]
@@ -1705,7 +1703,7 @@ mod tests {
         assert_eq!(e.arg_s(), Some("UNKNOWN"));
         // Key lock, key absent + named → 0xde "Requires %s" with the item name; the template
         // miss is silent, like the ref (a key we DO hold never reaches the toast at all — the
-        // resolver returns `OpenByKey` and the click casts it, decision 0752).
+        // resolver returns `OpenByKey` and the click casts it).
         let key_slot = LockSlot {
             key_type: LOCK_KEY_ITEM,
             index: 11000,
@@ -1804,7 +1802,7 @@ mod tests {
             dead_unit_leg(false, true, false, true, true),
             DeadUnitLeg::Skin
         );
-        // The learn-time latch `[0xb700e4]` is the leg's second precondition (0752): a
+        // The learn-time latch `[0xb700e4]` is the leg's second precondition: a
         // non-skinner gets nothing on the same corpse.
         assert_eq!(
             dead_unit_leg(false, true, false, true, false),
@@ -1866,7 +1864,7 @@ mod tests {
         );
     }
 
-    /// **The ladder, bit by bit** — decision 1861. Every arm of `0x5f0130`'s first-match-wins walk
+    /// **The ladder, bit by bit**. Every arm of `0x5f0130`'s first-match-wins walk
     /// over `UNIT_NPC_FLAGS`, in the order the binary tests them.
     #[test]
     fn the_service_ladder_walks_the_reference_bit_order() {
@@ -1994,7 +1992,7 @@ mod tests {
         ));
     }
 
-    /// **The vendor arm is a fork, and only the vendor arm** — decision 1914.
+    /// **The vendor arm is a fork, and only the vendor arm**.
     ///
     /// `0x5df5d0` asks `GetCursorItem 0x494c60` before anything else, and a mode-1 item on the
     /// cursor sends `CMSG_SELL_ITEM` instead of `CMSG_LIST_INVENTORY`. What this pins is the
@@ -2063,7 +2061,7 @@ mod tests {
         }
     }
 
-    /// **The re-click gate, and the wiring it rests on** — decision 1905.
+    /// **The re-click gate, and the wiring it rests on**.
     ///
     /// The comparison itself is one `==`; what could actually be wrong is the *latch*. The
     /// reference arms `[0xb4e2d0]` from fourteen window openers and from nothing on the click
@@ -2376,7 +2374,7 @@ mod tests {
 
     /// **A right-click that began on a V-plate acts on that plate's unit** — the bug the director
     /// reported as "right click on nameplates no longer works", and the reason
-    /// [`act_on_right_click`] reads [`PressPick`] (decision 2230).
+    /// [`act_on_right_click`] reads [`PressPick`].
     ///
     /// The gesture it reconstructs is the whole of it: the plate published the mouseover at the
     /// press, the press engaged freelook (the camera looks *through* a plate — 2159), freelook
@@ -2414,7 +2412,7 @@ mod tests {
             "the release must act on the unit whose plate the press was over"
         );
     }
-    /// **A meeting stone is JOINED, not USEd** (decision 2283). The GO type's own use slot
+    /// **A meeting stone is JOINED, not USEd**. The GO type's own use slot
     /// (`0x5f69d0`) replaces the shared `CMSG_GAMEOBJ_USE` sender, so the click must hand the
     /// object to the join validator and put **no** `0xB1` on the wire — which is what left every
     /// stone dead, since vmangos' `GameObject::Use` has an explicit do-nothing arm for type 23.

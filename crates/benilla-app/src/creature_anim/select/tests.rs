@@ -50,7 +50,7 @@ fn walk_run_boundary_is_twice_walk_speed() {
     assert_eq!(gait_candidates(&moving_forward(5.1), 2.5, None, None)[0], 5);
 }
 
-/// **The walk gait, composed end to end** (decision 1752) — the one assertion that says the
+/// **The walk gait, composed end to end** — the one assertion that says the
 /// feature actually works rather than that each half does.
 ///
 /// The selector never reads `MOVEFLAG_WALK_MODE`; it reads the *speed*. So the walk gait is real
@@ -255,7 +255,7 @@ fn jump_land_pick_is_the_0x602c60_rule() {
     assert_eq!(jump_land_pick(FORWARD | WALK_MODE), None);
     assert_eq!(jump_land_pick(SWIMMING), None);
     assert_eq!(jump_land_pick(FORWARD | SWIMMING), None);
-    // …and ROOTED → no clip either (decision 0880): a root or a stun caught mid-air ends the fall
+    // …and ROOTED → no clip either: a root or a stun caught mid-air ends the fall
     // in mid-air, and the reference suppresses the FALL_LAND this dispatcher runs on
     // (`0x602df3`). Without it the body plays JumpEnd 39 while hanging 400 yd up — measured, and
     // exactly what "the animation doesn't freeze" looked like.
@@ -328,7 +328,7 @@ fn sheath_clip_is_the_0x88_test() {
 
 #[test]
 fn swing_ids_by_weapon_class() {
-    // The byte-verified 0x6246a0 mainhand table (decision 0073).
+    // The byte-verified 0x6246a0 mainhand table.
     assert_eq!(swing_anim_main(Some((2, 7))), 17); // 1H sword
     assert_eq!(swing_anim_main(Some((2, 5))), 18); // 2H mace
     assert_eq!(swing_anim_main(Some((2, 0xa))), 19); // staff
@@ -388,7 +388,7 @@ fn reconcile_priority_is_stow_over_draw() {
 
 #[test]
 fn reconcile_mounted_is_a_persistent_draw_block() {
-    // Mounted forces stow on every recompute (decision 0441, `0x5fdfd9`): it beats
+    // Mounted forces stow on every recompute (`0x5fdfd9`): it beats
     // the engaged draw, the &0x20 draw, and the remote server-byte pull-through alike — a
     // volunteered drawn byte can never re-arm a rider.
     assert_eq!(reconcile_sheath(1, 0, 0, true, true, 1, true), Some(0));
@@ -441,7 +441,7 @@ fn non_locomotion_clips_play_at_unit_rate() {
     assert_eq!(playback_rate(&clip(60, 2.0), 9.0, 1.0), 1.0); // an id outside the scaled set
 }
 
-/// The `0x5fe2f0` divisor is `moveSpeed · |modelScale|`, not `moveSpeed` alone (decision 0903) —
+/// The `0x5fe2f0` divisor is `moveSpeed · |modelScale|`, not `moveSpeed` alone —
 /// the real numbers behind the director's two reports, so a regression names the creature it broke.
 #[test]
 fn a_big_model_cycles_its_legs_slower_for_the_same_ground_speed() {
@@ -536,7 +536,7 @@ fn the_ranged_idle_is_entered_by_the_auto_repeat_bit_and_the_ranged_sheath_alone
 }
 
 /// The Load → Hold promotion ([`ranged_hold_anim`]) — the completion dispatch's slot 11/12/15
-/// arms (decision 1544). Each ranged Load yields its weapon family's Hold, which is the one clip
+/// arms. Each ranged Load yields its weapon family's Hold, which is the one clip
 /// in the cycle authored as a LOOP and therefore the one that can sit between shots.
 ///
 /// This replaces 0994's `is_ranged_fire` law test, which asserted the opposite mechanism: that a
@@ -602,7 +602,7 @@ fn state_emote_idle_only_fills_the_bare_stand_slot() {
     }
 }
 
-// ── The per-play one-shot route (decision 0087) — one test per director-signed acceptance row.
+// ── The per-play one-shot route — one test per director-signed acceptance row.
 // Ids: Attack1H 17 (a combat swing), EmoteApplaud 80 / EmoteBow 66 (waist-up-authored emotes),
 // EmoteCheer 68 (full-body-authored emote). `stand_state` 1 = seated.
 use OneShotRoute::{FullBody, Masked};
@@ -815,7 +815,7 @@ fn wound_route_full_body_on_ready_stance_or_stationary_standwound() {
     assert!(!wound_full_body(9, 17, 0, false));
     assert!(!wound_full_body(9, 5, FORWARD, false));
     assert!(!wound_full_body(9, 0, 0, false));
-    // Mounted masks the stationary StandWound (decision 0441, the `[unit+0xdc]==0` companion
+    // Mounted masks the stationary StandWound (the `[unit+0xdc]==0` companion
     // clause): a rider's flinch never replaces the seat pose.
     assert!(!wound_full_body(8, 0, 0, true));
 }
@@ -906,7 +906,7 @@ fn unify_stamps_flying_from_the_live_spline_on_every_leg() {
     assert!(v.flying && v.flags & move_flags::FORWARD != 0 && v.speed > 0.0);
 }
 
-/// **The server-granted modes reach the selector's flags word** (decision 1780). They are bits of
+/// **The server-granted modes reach the selector's flags word**. They are bits of
 /// the same `CMovement+0x40` word the selector already tests, so a creature the server has put in
 /// walk mode or rooted must read as one — the reference re-runs this very selector on the spot when
 /// the grant lands (`0x6014ec push edi; call 0x60e480`, then `push -1; call 0x5fd9e0`), which is

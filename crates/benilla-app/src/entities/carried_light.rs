@@ -5,7 +5,7 @@
 //! doodad, a creature, a GameObject, and (recursing at `7191b9`/`719286`) each attached child model —
 //! gathers that model's own `type==1` light blocks, transforms each def position by its **live bone
 //! matrix**, and registers the result into the world scene's light DB (`0x71b650` → `0x71bb60`). Every
-//! lit surface then selects its ≤3 nearest from that same DB (decisions 0016/0273/0285). Nothing in the
+//! lit surface then selects its ≤3 nearest from that same DB. Nothing in the
 //! chain distinguishes "prop" from "unit": a torch is a torch whether it is staked in the ground or
 //! held in a hand.
 //!

@@ -73,7 +73,7 @@ pub(crate) fn wrap_pi(angle: f32) -> f32 {
 /// action), but `[0xc4d888]` is the click-to-move action type and `0xc` = disabled is its normal
 /// in-world value — so half is the effective share for everyone in
 /// ordinary play, exactly as the director's reference eye called it when the full-share variant
-/// was tried and rejected (decision 0104). Full share would fire only during click-to-move, which
+/// was tried and rejected. Full share would fire only during click-to-move, which
 /// benilla doesn't have.
 fn twist_shares(gap: f32) -> (f32, f32) {
     use std::f32::consts::FRAC_PI_4;
@@ -120,7 +120,7 @@ fn armed_shares(gap: f32, mounted: bool) -> (f32, f32) {
 /// conform node's tilt; a mounted rider's seat — splicing through the mount's bone chain via its
 /// [`benilla_world::rig_anim::RigAnchor`]), exactly the frames the joint-entity walk used to compose.
 pub(super) fn apply_body_twist(
-    // A parked rig's bones are frozen (decision 0448) — composing the twist onto them would
+    // A parked rig's bones are frozen — composing the twist onto them would
     // recompute the palette every frame for a unit no one sees; the wake re-seats `base` from the
     // fresh sample on its own (`cur != last_out`).
     mut units: Query<(Entity, &mut BodyTwist), Without<benilla_world::rig_anim::AnimParked>>,

@@ -8,7 +8,7 @@
 //! reaches the dispatcher** — it is a CEffect-model tag that re-fires only the wound flinch, and
 //! it also rides hit-REACTION clips, so matching it would fire pending swings at wrong moments.
 //!
-//! Two more consequences ride the same event router (decision 0279):
+//! Two more consequences ride the same event router:
 //!
 //! - **`$CPP` — the victim DEFENSE animation** (`0x624a01`): a defended outcome (dodge/parry/
 //!   block/deflect) plays a dedicated primary clip on the victim ([`DefenseAnim`]) and **clears
@@ -31,7 +31,7 @@
 //! benilla's twin: [`route_swing_impacts`] caches each [`SwingMessage`], consumes the first
 //! matching tag from the [`AnimSoundEvent`] stream, and emits [`SwingImpact`] — full on the tag,
 //! `text_only` on supersede/attack-stop. Consumers: blood + flinch + the contact sounds
-//! (`sound::combat`, decision 0529) skip `text_only`; the floating number takes all.
+//! (`sound::combat`) skip `text_only`; the floating number takes all.
 
 use bevy::prelude::*;
 
@@ -89,7 +89,7 @@ pub(crate) struct SwingImpact {
 #[derive(Message, Clone, Copy)]
 pub(crate) struct SwingFlush(pub(crate) Entity);
 
-/// The victim plays its defense reaction (decision 0279 — the `$CPP` dispatch `0x624a01`):
+/// The victim plays its defense reaction (the `$CPP` dispatch `0x624a01`):
 /// dodge/deflect → Dodge, block → ShieldBlock, parry → by the victim's own weapon
 /// ([`super::select::defense_anim`] resolves in the driver, which holds the victim's `Wielded`
 /// and death state — the client gates on alive there too).
@@ -99,7 +99,7 @@ pub(crate) struct DefenseAnim {
     pub(crate) victim_state: u32,
 }
 
-/// The attacker's in-flight swing drops to half speed for its remainder (decision 0279 — the
+/// The attacker's in-flight swing drops to half speed for its remainder (the
 /// whiff slow-down `0x712910`, fired at the impact tag when victimState ∈ {0, 2, 6}).
 #[derive(Message, Clone, Copy)]
 pub(crate) struct SwingSlowdown(pub(crate) Entity);

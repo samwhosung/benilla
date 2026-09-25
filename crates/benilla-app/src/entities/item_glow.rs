@@ -1,4 +1,4 @@
-//! **Item / enchant glow effects** (decision 0805): the permanent weapon glow a display authors,
+//! **Item / enchant glow effects**: the permanent weapon glow a display authors,
 //! and the enchant glow a weapon's enchant carries — `Spells\Enchantments\*.mdx` effect models
 //! hung on the ITEM's own model, not on the wearer's body.
 //!
@@ -64,7 +64,7 @@ use super::{DisplayModel, ModelHandle};
 /// glows, exactly as before this lane existed.
 ///
 /// The enchant half of the fork lives in [`crate::items::Enchants`] — the same
-/// `SpellItemEnchantment` load the tooltip's enchant line reads (decision 0915). Without it a
+/// `SpellItemEnchantment` load the tooltip's enchant line reads. Without it a
 /// weapon still shows its INTRINSIC glow; only the enchant leg goes quiet.
 #[derive(Resource)]
 pub(crate) struct ItemGlows {
@@ -151,7 +151,7 @@ pub(in crate::entities) struct ItemGlow {
     pub(in crate::entities) visual: i32,
     /// The ITEM's seat on the wearer's body — the attach point's bone and offset
     /// ([`super::BoneAttach`]). Carried purely so this lane can publish the booth mirrors of what it
-    /// spawns (decision 0822): a glow's seat is this offset plus the slot's point on the item model,
+    /// spawns: a glow's seat is this offset plus the slot's point on the item model,
     /// and by the time the glow models load the attach path that knew the body bone is long gone.
     pub(in crate::entities) bone: u16,
     pub(in crate::entities) offset: bevy::prelude::Vec3,
@@ -164,7 +164,7 @@ pub(in crate::entities) struct ItemGlow {
 /// Set once an item root's glow instances are spawned (or resolved to nothing) — the once-only
 /// gate. The instances are children of the root, so they need no lifetime bookkeeping of their
 /// own: a gear change or the unit despawning takes the root and them with it. A **sheath swap**
-/// keeps them: it moves the root to the new attach point (decision 0826), so a glowing weapon
+/// keeps them: it moves the root to the new attach point, so a glowing weapon
 /// keeps its glow — and its live particles — across the draw.
 #[derive(Component)]
 pub(crate) struct ItemGlowAttached;
@@ -243,7 +243,7 @@ pub(super) fn attach_item_glows(
                 .spawn((Transform::from_translation(at), Visibility::default()))
                 .id();
             commands.entity(root).add_child(instance);
-            // The booth mirrors for this instance (decision 0822), at its seat on the BODY: the item's
+            // The booth mirrors for this instance, at its seat on the BODY: the item's
             // attach point plus this slot's point on the item model. `attach_effect_visuals` below
             // spawns the effect's real geometry and emitters — the meshes as instance children, the
             // emitters as free owner-followed entities — and the shared spell-fx lane is deliberately
@@ -302,10 +302,10 @@ pub(super) fn attach_item_glows(
                 // An attached model in the client's sense — it rides the ITEM (`0x712f70`), so it
                 // is chained to that item root and through it to the wearer: the glow fades in
                 // with the body instead of blazing over a character that has not appeared yet,
-                // and it dies with the weapon instead of hanging in the air behind it (0833).
+                // and it dies with the weapon instead of hanging in the air behind it.
                 EffectHost { parent: Some(root) },
                 // An `ItemVisuals` glow is armed by a different leg than `PlaySpellVisualKit`
-                // (0805) and carries no kit stage — the plain single-clip arm, as before.
+                // and carries no kit stage — the plain single-clip arm, as before.
                 None,
                 &mut FxMaterials {
                     store: &mut wow_materials,

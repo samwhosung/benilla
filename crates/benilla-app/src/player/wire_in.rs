@@ -1,12 +1,12 @@
 //! Server-authored movement edges applied to our mover — the inbound mirror of
 //! [`super::movement_net`] (which streams our own movement out). One entry point,
 //! [`apply_server_moves`], called by [`super::control`] before input integrates: cross-map
-//! worldports (incl. the riding-through-the-seam branch, decision 0455), same-map teleports, the
+//! worldports (incl. the riding-through-the-seam branch), same-map teleports, the
 //! **granted movement-mode family** (root, water-walk, feather-fall, hover — decisions 0308/0866,
 //! applied to [`super::state::MoveModes`] and acked here), the one-shot take-control edge, the
 //! pre-control forced-speed acks (the controlled branch answers those through the movement
 //! stream's own per-frame payload instead — the returned list), and the **bare self-addressed
-//! move** ([`apply_self_move`], decision 0725).
+//! move** ([`apply_self_move`]).
 //!
 //! All but the last carry a **mandatory ack**, which is what made the last one easy to miss: a
 //! `MSG_MOVE_*` the server addresses to our own guid arrives with no handshake and owes no answer,
@@ -58,7 +58,7 @@ enum ControlVerdict {
 /// something other than the player while the player's mover still is it. There is no such packet for
 /// a creature we are handing back.
 ///
-/// **And none for a body merely frozen, either** (decision 1281). Being feared, confused or
+/// **And none for a body merely frozen, either**. Being feared, confused or
 /// mind-controlled is not a mover change: our own body is still the mover, and the server still
 /// expects us to answer for it. What this packet does server-side is clear `m_clientMoverGuid`, and
 /// that single field is the key to two doors — `HandleMoveSplineDone` refuses any acknowledgement
@@ -130,7 +130,7 @@ pub(super) fn apply_server_moves(
     >,
     self_pose: Option<(Vec3, f32)>,
 ) -> Vec<SpeedChangeMessage> {
-    // The control handoff (B211). Two questions, and they are NOT the same one: "is this about my
+    // The control handoff. Two questions, and they are NOT the same one: "is this about my
     // own body?" and "may that unit move?". The server revokes by naming *us* with allowMove=0 —
     // which is what a mind-controlled player receives about themselves — and grants by naming
     // somebody else, so a single "the mover is now `mover`" reading gets the victim backwards.
@@ -223,7 +223,7 @@ pub(super) fn apply_server_moves(
     for w in worldports.read() {
         let riding = w.transport_entry.is_some() && player.ride.is_some();
         if riding {
-            // Riding through the transfer (decision 0455): the pose is BOAT-LOCAL (vmangos
+            // Riding through the transfer: the pose is BOAT-LOCAL (vmangos
             // `SendNewWorld` sends the rider's `GetTransportPos()`), and the boat entity was
             // spared through the worldport purge — recompose the world pose through its live
             // transform. NO settle hold: the deck is the support and its collider never
@@ -274,7 +274,7 @@ pub(super) fn apply_server_moves(
         commands.insert_resource(CurrentMap(w.map_id));
         if w.needs_ack {
             if riding {
-                // A riding crossing never settles (the deck is the support, 0455) — ack now,
+                // A riding crossing never settles (the deck is the support) — ack now,
                 // exactly as before 1340.
                 let _ = net_cmds.0.send(ClientCommand::WorldportAck);
                 info!(
@@ -282,7 +282,7 @@ pub(super) fn apply_server_moves(
                     w.map_id, w.position
                 );
             } else {
-                // The ack rides the settle release (decision 1340): the real client sends
+                // The ack rides the settle release: the real client sends
                 // MSG_MOVE_WORLDPORT_ACK only after its blocking destination load completes, and
                 // vmangos keeps us out-of-world — dropping everything we'd send — until the ack
                 // lands, with no load timeout. See [`Player::owes_worldport_ack`].
@@ -303,7 +303,7 @@ pub(super) fn apply_server_moves(
     // freezes our movement until relog.
     for t in teleports.read() {
         snap_near_teleport(player, &mut cam.yaw, t, time.elapsed_secs());
-        // The echo goes now, and it is the WHOLE near-teleport handshake (decision 1340). The
+        // The echo goes now, and it is the WHOLE near-teleport handshake. The
         // real client echoes on the very next movement tick (the 0xC7 drain applies the
         // snap, then `0x60e0a0` sends guid+counter+time) and sends nothing else — no
         // `MSG_MOVE_STOP` exists anywhere in its chain. vmangos holds us at the OLD position
@@ -318,7 +318,7 @@ pub(super) fn apply_server_moves(
         });
         info!("teleport: snapped to {:?}, acked", t.position);
     }
-    // A bare server-authored move for our own mover (decision 0725) — no handshake, no ack. Drained
+    // A bare server-authored move for our own mover — no handshake, no ack. Drained
     // after the teleport arms deliberately: a teleport in the same frame is the larger edge (it
     // swaps maps, holds the settle and owes an ack), so it wins the pose.
     for m in self_moves.read() {
@@ -327,7 +327,7 @@ pub(super) fn apply_server_moves(
         }
     }
 
-    // **The ack'd movement-mode family** (decisions 0308, 0866) — root, water-walk, feather-fall,
+    // **The ack'd movement-mode family** — root, water-walk, feather-fall,
     // hover. Apply the mode to our typed state FIRST, then ack with the flag word that state
     // rebuilds to: that ordering is the real client's, and it is also the server's law — an
     // apply-ack whose `MovementInfo` lacks the mode bit un-grants the very mode it is accepting,
@@ -348,7 +348,7 @@ pub(super) fn apply_server_moves(
             player.vel_y = 0.0;
             player.fall_far = false;
         }
-        // **A hover grant jumps you** ([`Player::hover_launch`], decision 1620). The reference's
+        // **A hover grant jumps you** ([`Player::hover_launch`]). The reference's
         // handler for this very opcode is `0x61a620`, and setting the flag is its *last* act:
         // `61a62c je` splits enable from disable, enable runs `CMovement::Jump(force = 0)`
         // (`61a62e push 0; 61a630 call 0x7c6230`) and disable runs `StartFalling` (`61a637 call
@@ -380,7 +380,7 @@ pub(super) fn apply_server_moves(
         );
     }
 
-    // **The knockback** (decision 1702) — the one server-authored movement edge here that is neither
+    // **The knockback** — the one server-authored movement edge here that is neither
     // a snap nor a granted mode: a ballistic launch we fly ourselves, with the ack owed only if we
     // actually fly it. Nothing is applied here and nothing is acked here, and both halves are the
     // reference's own shape: `0x617a30` merely **enqueues** the knockback as a due-timed record, and
@@ -388,7 +388,7 @@ pub(super) fn apply_server_moves(
     // (`0x61624d call 0x6179c0` → `0x616261 push 0xf0`), so the `MovementInfo` that goes on the wire
     // is always the post-launch one. Arming a latch the take-off site consumes is that ordering,
     // written the way our mover works — and it is the same latch shape the hover launch uses, for
-    // the same reason (decision 1620): our mover re-derives ground contact from probes every frame
+    // the same reason: our mover re-derives ground contact from probes every frame
     // and would zero a velocity written from out here on its very next step.
     //
     // **Two in one frame collapse to the last, and that is ours, not the reference's.** Its queue
@@ -407,10 +407,10 @@ pub(super) fn apply_server_moves(
 
     // Take control once the server first reports our position (the streamed mover entity, whose
     // transform is already in Bevy space). From here the controller drives that entity directly;
-    // the entity renderer attaches its body model (0041) the same way it does for any other player.
+    // the entity renderer attaches its body model the same way it does for any other player.
     //
     // The same edge serves a *mover change* — a possessed creature arriving in our hands, or our
-    // own body coming back (decision 1277). It is one path deliberately: seizing a body means the
+    // own body coming back. It is one path deliberately: seizing a body means the
     // same thing either way, and the resource's pose describes whatever we were driving a moment
     // ago. What differs is only the login-once half below (`first`), which owns the settle, the
     // stale-world flag and the initial camera seat.
@@ -533,7 +533,7 @@ fn snap_near_teleport(player: &mut Player, cam_yaw: &mut f32, t: &TeleportMessag
     player.world_stale = true;
     // The relocation voids any in-progress self server-ride (the taxi flight-end teleport beats our
     // own spline end by ~latency): `drive_self_ride` takes this flag next frame and drops the ride
-    // instead of mirroring the stale flight pose back over this snap (decision 0501 — the 4-yd
+    // instead of mirroring the stale flight pose back over this snap (the 4-yd
     // hover + full-6s settle at every taxi landing).
     player.ride_abort = true;
 }
@@ -548,7 +548,7 @@ pub(super) fn merge_server_flags(local: u32, wire: u32) -> u32 {
 }
 
 /// Apply one bare self-addressed `MSG_MOVE_*` — a pose the *server* wrote for our own mover, with
-/// no handshake (decision 0725). `.go forward`/`up`/`relative`,
+/// no handshake. `.go forward`/`up`/`relative`,
 /// `.cheat fly`/`fixedz` and the movement anticheat's snap-back all land here.
 ///
 /// **A hard snap, and nothing goes back.** The reference writes the wire pose into both its live
@@ -589,7 +589,7 @@ fn apply_self_move(
     player.move_flags = merge_server_flags(player.move_flags, m.flags);
     let now_falling = player.move_flags & move_flags::FALLING != 0;
 
-    // **Lift the granted mover MODES out of the merged word into typed state** (decision 0726).
+    // **Lift the granted mover MODES out of the merged word into typed state**.
     // `move_flags` is our last-streamed wire bookkeeping and is rebuilt from state every frame, so a
     // bit parked there alone would be gone before the mover ever read it; the modes live as fields,
     // the way `rooted` does. The reference needs no such step — it has one `[cmov+0x40]` that is both
@@ -597,7 +597,7 @@ fn apply_self_move(
     // runs `0x61a1af → 0x61a230 → SetSwim`, the local unit's server echo included. This pair is
     // GM flight: `.cheat fly` sends SWIMMING + LEVITATING together.
     player.swimming = player.move_flags & move_flags::SWIMMING != 0;
-    // …and the walk gait rides out on the same lift (decision 1752). `0x100` is inside the
+    // …and the walk gait rides out on the same lift. `0x100` is inside the
     // `SERVER_AUTHORED` mask like the modes above, so a move the server authors for our mover
     // carries whatever walk bit *it* last saw — normally our own, echoed back from the
     // `m_movementInfo` our last packet refreshed, which makes this idempotent. Dropping the lift
@@ -607,7 +607,7 @@ fn apply_self_move(
     player.walking = player.move_flags & move_flags::WALK_MODE != 0;
     player.modes.merge_from_wire(player.move_flags);
     // Neither mode touches `settling`: the settle release is the terrain streamer's, keyed on the
-    // destination's residency in every mover mode alike (decision 0737). The pre-0737 special case
+    // destination's residency in every mover mode alike. The pre-0737 special case
     // here (swim clears the hold) existed only because the old release was a walk-mover ground
     // probe a swimmer/flyer never reached.
 
@@ -627,7 +627,7 @@ fn apply_self_move(
     // recompose from it; without the re-anchor the next frame's carry reinstates the stale one and
     // undoes the snap.
     //
-    // **Take the wire's own deck-local pose when the packet carried one** (decision 2026). The
+    // **Take the wire's own deck-local pose when the packet carried one**. The
     // subtraction below is only the server's answer while client and server agree about where the
     // boat is, and at a cross-map seam they provably do not: our path clock has not crossed yet, so
     // [`crate::transport::tick_transports`] is holding the boat's transform frozen at the *source*
@@ -691,13 +691,13 @@ fn apply_self_move(
 /// — the boot path) owing nothing to the session that ended. The entity itself is despawned by the
 /// net drain the same frame these messages are written.
 ///
-/// Two edges, one answer (decision 1262): a confirmed `/logout` (decision 0193), and a **lost**
+/// Two edges, one answer: a confirmed `/logout`, and a **lost**
 /// session, which since 1262 takes the avatar too — there is no reconnect left for it to be the
 /// puppet of. Missing the second edge would leave `Player.active` true over a despawned entity: a
 /// controller driving nothing, which is the shape of the free camera this arc is about.
 ///
-/// **Everything on this resource belonged to the mover that just ended, so all of it dies here**
-/// (decision 1542). It used to clear a hand-picked six
+/// **Everything on this resource belonged to the mover that just ended, so all of it dies here**.
+/// It used to clear a hand-picked six
 /// fields, and the field it did not name was `modes`: `/logout` has vmangos root us for the
 /// countdown (`MiscHandler.cpp` `SetRooted(true)`), we ack the grant, and the next session never
 /// hears an unroot — the fresh server-side `Player` was never rooted, so there is nothing for it
@@ -726,7 +726,7 @@ pub(super) fn release_on_session_end(
         // re-applies the aura family), the reins (`control_lost`, `foreign_mover`) which would
         // otherwise leave the next login driving a guid that no longer exists, the autorun latch,
         // and — as before — `active`, the movement flags, the fall/wedge state and the worldport
-        // ack debt (decision 1340: an ack from the old transfer is rejected by a player who is
+        // ack debt (an ack from the old transfer is rejected by a player who is
         // already in world, and the server force-acked it at logout anyway).
         *player = Player::default();
     }
@@ -773,7 +773,7 @@ mod session_end_tests {
         p.wedged = true;
     }
 
-    /// **B306, at its own edge** (decision 1542). `/logout` has
+    /// **B306, at its own edge**. `/logout` has
     /// vmangos root the player for the countdown (`MiscHandler.cpp:329 SetRooted(true)`), which
     /// reaches us as the ack'd `SMSG_FORCE_MOVE_ROOT` above; the next login gets no unroot, because
     /// server-side the fresh `Player` was never rooted (`SendInitialPacketsBeforeAddToMap` re-sends
@@ -804,7 +804,7 @@ mod session_end_tests {
         );
     }
 
-    /// The second edge (decision 1262) is the same answer: a lost session takes the avatar too, so
+    /// The second edge is the same answer: a lost session takes the avatar too, so
     /// it takes everything granted to it. Not a variant of the above — it is a different message
     /// on a different reader, and the `|` that drains both is load-bearing.
     #[test]
@@ -824,7 +824,7 @@ mod session_end_tests {
     /// **A teardown that is not the end must not wipe a live avatar.** Both cases that reach this
     /// system with `session_over: false` are ones where the body stays ours: the `/logout`'s own
     /// teardown disconnect (the roster relist *inside* one session — its `LoggedOutMessage` is the
-    /// edge, above) and an unattended run's seamless reconnect (0065). Resetting on the mere
+    /// edge, above) and an unattended run's seamless reconnect. Resetting on the mere
     /// arrival of a `DisconnectedMessage` would drop control from under a probe mid-run.
     #[test]
     fn a_teardown_that_is_not_the_end_keeps_the_avatar() {
@@ -873,7 +873,7 @@ mod self_move_tests {
         assert_eq!(merge_server_flags(0, f::ON_TRANSPORT), 0);
     }
 
-    /// **`.cheat fly` survives the merge intact** (decision 0726). vmangos's `Player::SetFly` sends
+    /// **`.cheat fly` survives the merge intact**. vmangos's `Player::SetFly` sends
     /// `LEVITATING | SWIMMING | MOVED | FLYING`; the two we model must both be inside the mask, or
     /// GM flight arrives half-applied — SWIMMING without LEVITATING is a swimmer on dry land that
     /// the water decision clears on the next frame, and LEVITATING without SWIMMING is a walker

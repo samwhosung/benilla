@@ -1,13 +1,13 @@
 //! Outbound self-movement → the wire — the mirror of [`crate::net::motion`] (which integrates *remote*
 //! movers). [`stream_self_movement`] diffs this frame's CMovement move-flags against last frame's and
 //! emits a `MSG_MOVE_*` per movement-*axis* transition (start/stop forward-back, strafe, turn), the
-//! jump/fall lifecycle (JUMP launch, FALL_LAND — a jumpless fall opens with nothing, decision 1464),
+//! jump/fall lifecycle (JUMP launch, FALL_LAND — a jumpless fall opens with nothing),
 //! a periodic heartbeat while moving,
 //! and a SET_FACING every frame the facing changes off the turn axis — each carrying the live
-//! `MovementInfo` (decisions 0052 + 0053 + 0617). Split out of the controller: the wire stream is its
+//! `MovementInfo`. Split out of the controller: the wire stream is its
 //! own concern.
 //!
-//! **Invariant — the wire mirrors the avatar's *actual* local motion** (decision 0056). vmangos relays
+//! **Invariant — the wire mirrors the avatar's *actual* local motion**. vmangos relays
 //! what we send verbatim and observers extrapolate it from the moveFlags, so any divergence strands them
 //! on stale state: a flag we set but never clear is a *phantom* walk/spin, and an out-of-range value is
 //! silently dropped before relay (vmangos rejects `|orientation| > 4π` in `VerifyMovementInfo`,
@@ -20,7 +20,7 @@
 //!   zeroed flags (so [`stream_self_movement`]'s own diff emits the Stop) — so observers never
 //!   extrapolate motion that isn't happening locally.
 //! - **The server's copy of our *position* may never go stale** — the reconcile at the bottom of
-//!   [`stream_self_movement`] (decision 0907). A resting body whose resolver settles it a fraction
+//!   [`stream_self_movement`]. A resting body whose resolver settles it a fraction
 //!   of a millimetre after the packet that reported the rest used to keep that to itself, and
 //!   vmangos — which compares positions with exact float equality — read the next packet's
 //!   accumulated delta as movement and cancelled the cast in flight. Drift at rest is news; it goes
@@ -42,7 +42,7 @@ use super::Player;
 const HEARTBEAT_INTERVAL: f32 = 0.5;
 /// The move-flag bits we put on the wire — the base directional / turn / walk set **plus `FALLING`**
 /// (= `MOVEFLAG_JUMPING` 0x2000): we serialize the jump tail (`zspeed, cos, sin, xyspeed`) whenever it's
-/// set, so observers replay our jump as a ballistic arc (decision 0053) — **`FALLING_FAR`**
+/// set, so observers replay our jump as a ballistic arc — **`FALLING_FAR`**
 /// (`MOVEFLAG_FALLINGFAR` 0x4000, latched mid-arc past the 1/9-yd descent): the real client's live
 /// flags carry it and vmangos reads it (anticheat, PointMovementGenerator), so ours does too; it
 /// changes no opcode (the axis differ below keys on direction bits only) and just rides whatever
@@ -59,14 +59,14 @@ const OUTBOUND_FLAG_MASK: u32 = move_flags::FORWARD
     | move_flags::FALLING
     | move_flags::FALLING_FAR
     | move_flags::SWIMMING
-    // …**and `LEVITATING`** (0x400, GM flight — decision 0726). Echoing it is not cosmetic: the
+    // …**and `LEVITATING`** (0x400, GM flight). Echoing it is not cosmetic: the
     // reference's packet builder reads the same `[cmov+0x40]` the server's flags merged into, so a
     // real client sends it straight back, and vmangos refreshes its `m_movementInfo` from whatever
     // we report. Drop it from our stream and the server's copy loses the bit — then the next
     // server-authored move (a `.go forward`, a forced speed change) echoes a LEVITATING-less word
     // back at us, our merge clears the mode, and we fall out of the sky mid-flight.
     | move_flags::LEVITATING
-    // …**and the rest of the granted movement-mode family** (decision 0866) — root, water-walk,
+    // …**and the rest of the granted movement-mode family** — root, water-walk,
     // safe-fall, hover: the same reasoning one step stronger. These four are the *ack'd* modes, so
     // the server holds an explicit record of granting each one and notices our stream disagreeing.
     // `MOVEFLAG_ROOT` especially: vmangos re-adds it to anything it writes for a rooted mover
@@ -81,7 +81,7 @@ const OUTBOUND_FLAG_MASK: u32 = move_flags::FORWARD
 /// change every frame: the direction bits, the airborne arc, swimming, and riding a transport. The
 /// position reconcile at the bottom of [`stream_self_movement`] fires only when NONE of them is set
 /// — at rest, a position change is news; in motion it is the whole point of the transition +
-/// heartbeat stream (0052/0053), which already carries it. Turning in place is deliberately absent:
+/// heartbeat stream, which already carries it. Turning in place is deliberately absent:
 /// a keyboard turn moves nothing, so a drift under it is still news.
 const IN_MOTION: u32 = move_flags::ANY_MOVE
     | move_flags::FALLING
@@ -113,11 +113,11 @@ pub(super) struct ArcEdges {
     /// *keyboard's* packet and nothing else's: `0x615ed1`, in the move-command drain's jump arm, is
     /// its one live emission site image-wide, and neither wire door passes through it — the hover
     /// handler `0x61a620` sends nothing at all, and the knockback's own arm of that same drain
-    /// pushes `0xf0`, its ack. (Decision 1702; this corrects 1620, which streamed a JUMP for the
+    /// pushes `0xf0`, its ack. (this corrects 1620, which streamed a JUMP for the
     /// hover launch.)
     pub(super) wire_launch: bool,
     /// The standstill air nudge fired ([`super::mover::step`]) — the one mid-air press that really
-    /// moves us, and so the one that breaks the airborne send silence (decision 0627).
+    /// moves us, and so the one that breaks the airborne send silence.
     pub(super) air_nudged: bool,
     /// The arc ended this frame → `MSG_MOVE_FALL_LAND`.
     pub(super) landed: bool,
@@ -132,7 +132,7 @@ pub(super) struct ArcEdges {
 /// carrying the current `MovementInfo`:
 /// the move-state-change broadcaster `0x61a820` selects the wire opcode *from the flag delta*
 /// (`0x619f00`), and the flag report is exactly "per-transition broadcast + ~500 ms heartbeat" — with
-/// the *facing* report its own independent emitter alongside it (decision 0617: in the 1.12.1 sniff
+/// the *facing* report its own independent emitter alongside it (in the 1.12.1 sniff
 /// SET_FACING outnumbers every other client-sent movement opcode combined, moving or standing).
 /// vmangos relays it all to nearby players, who extrapolate from the flags — how they see us walk/turn/
 /// strafe. (We claimed the mover with CMSG_SET_ACTIVE_MOVER at login.) **Airborne is its own send law**
@@ -176,7 +176,7 @@ pub(super) fn stream_self_movement(
     // phantom spin or run-off that only clears once we turn back in range and emit a fresh transition).
     let facing = player.face_yaw.rem_euclid(std::f32::consts::TAU);
     let wire_flags = move_flags_now & OUTBOUND_FLAG_MASK;
-    // The ballistic launch tail, sent on every airborne packet (decision 0053): `zspeed` is the
+    // The ballistic launch tail, sent on every airborne packet: `zspeed` is the
     // constant take-off vertical speed, the horizontal is the frozen `horiz_vel` mapped to world XY,
     // and `xyspeed` its magnitude. Present iff JUMPING is in `wire_flags` — the serializer gates the
     // tail on the same bit, so the two never disagree. `fall_time` (ms since take-off) is the
@@ -194,7 +194,7 @@ pub(super) fn stream_self_movement(
         JumpInfo {
             // The wire zspeed is DOWN-positive (the real client sends -7.955547 for a rising jump —
             // VERIFIED, vanilla-sniffs), so negate our +up `jump_zspeed`. A real-client observer reads
-            // the up-speed as `-zspeed`; sending +up here would make them see us sink (decision 0054).
+            // the up-speed as `-zspeed`; sending +up here would make them see us sink.
             zspeed: -player.jump_zspeed,
             cos_angle,
             sin_angle,
@@ -223,7 +223,7 @@ pub(super) fn stream_self_movement(
         player.last_pos = wow_pos;
     }
 
-    // **The knockback ack** (decision 1702) — owed only if the mover actually took off this frame,
+    // **The knockback ack** — owed only if the mover actually took off this frame,
     // and carrying the pose it took off from. `apply → send, inside one call` is the reference's own
     // order (`0x61624d call 0x6179c0` → `0x616261 push 0xf0`), which is why this sits here and not
     // back at the opcode: everything on the wire must describe the arc we are already flying.
@@ -297,8 +297,8 @@ pub(super) fn stream_self_movement(
     // simply ride every packet that does go out. The TURN axis is the exception (below): turning
     // genuinely works mid-air, and the sniff shows START_TURN_RIGHT/STOP_TURN with `Falling` set.
     //
-    // **The standstill air nudge is the other exception** (decision 0627), and it is the *same* rule,
-    // not a carve-out: the wire mirrors actual motion (0056). The reference's airborne silence is a
+    // **The standstill air nudge is the other exception**, and it is the *same* rule,
+    // not a carve-out: the wire mirrors actual motion. The reference's airborne silence is a
     // real flags-side mechanism — while FALLING, `StartMove 0x7c6ae0` defers a new press into an inert
     // latch (`0x20000`/`0x40000`) instead of flipping the direction bit, "**unless nothing is
     // currently moving**" — and the broadcaster
@@ -334,8 +334,8 @@ pub(super) fn stream_self_movement(
     // with a source comment saying the test is there *because* sitting on a chair teleports you.
     // A chair seats you inside the collider we bake for it, where the mover's down-shapecast can
     // report nothing and the body reads airborne while moving `dy=+0.000` for six frames; this
-    // packet then told the server we were falling, and stood us up (B79, decision 1458).
-    // **…and a WIRE-driven take-off sends no JUMP at all** (decision 1702). Same law read the other
+    // packet then told the server we were falling, and stood us up.
+    // **…and a WIRE-driven take-off sends no JUMP at all**. Same law read the other
     // way — `MSG_MOVE_JUMP` is the keyboard's packet ([`ArcEdges::wire_launch`] carries the bytes).
     // For a knockback the server agrees from its own side: `CHEAT_TYPE_OVERSPEED_JUMP` is one of the
     // few vmangos checks with **no** knockback exemption (`MovementAnticheat.cpp:650`), and a
@@ -364,7 +364,7 @@ pub(super) fn stream_self_movement(
     // regardless. And it must fire while standing perfectly still, which is the whole reason the
     // reference gives the toggle its own enqueue rather than letting the move-state broadcaster
     // find it: that broadcaster gates on the locomotion nibble (`0x61a99d test al,0xf`) and would
-    // drop it. This differ has no such gate (decision 1752).
+    // drop it. This differ has no such gate.
     if added & move_flags::WALK_MODE != 0 {
         send_move!(MoveKind::SetWalkMode);
     } else if removed & move_flags::WALK_MODE != 0 {
@@ -400,7 +400,7 @@ pub(super) fn stream_self_movement(
         send_move!(MoveKind::StopTurn);
     }
     // The facing report: one `MSG_MOVE_SET_FACING` per frame in which the facing actually changed —
-    // **the single biggest thing our wire stream was missing** (decision 0617). **VERIFIED** against the
+    // **the single biggest thing our wire stream was missing**. **VERIFIED** against the
     // real 1.12.1.5875 sniff (`dwarf_rogue_dun_morogh`): 179 of its 336 client-sent movement packets are
     // SET_FACING — more than every other movement opcode combined — streamed at *frame* cadence (median
     // 41 ms between them, p25 23 ms, minimum 17 ms) and, decisively, **while moving**: 116 of the 179
@@ -431,10 +431,10 @@ pub(super) fn stream_self_movement(
     }
     // Heartbeat keeps a moving/turning mover's position + facing flowing between transitions. While
     // riding, ON_TRANSPORT alone keeps this stream alive — the deck carries us, so our world pose
-    // really is changing (decision 0056: the wire mirrors actual motion) and observers on reference
+    // really is changing (the wire mirrors actual motion) and observers on reference
     // clients keep a fresh compose anchor.
     //
-    // **And it runs while FALLING too** (decision 1464). This arm used to carry `&& !falling`,
+    // **And it runs while FALLING too**. This arm used to carry `&& !falling`,
     // defended as "the real client sends a normal-length jump with no mid-air packet at all
     // (sniff-verified)" — which the same 1.12.1 capture refutes on both halves.
     // `MSG_MOVE_JUMP` is the **44-byte** form (the jump quad is present, `vz = -7.955547`, matching
@@ -452,7 +452,7 @@ pub(super) fn stream_self_movement(
     if !sent && wire_flags != 0 && now - player.last_heartbeat >= HEARTBEAT_INTERVAL {
         send_move!(MoveKind::Heartbeat);
     }
-    // ── The position reconcile (decision 0907) ── **the server's copy of where we are may never go
+    // ── The position reconcile ── **the server's copy of where we are may never go
     // stale.** Our resolver settles a body that is already at rest by a fraction of a millimetre
     // *after* the packet that reported the rest: a landing reports the touchdown pose and the next
     // frame's step-down snap takes 2e-5 yd off it; a login/teleport lands on a server-authored
@@ -491,8 +491,8 @@ pub(super) fn stream_self_movement(
 /// Park our mover on the wire: flush a single `MSG_MOVE_STOP` (flags cleared) so the server — and the
 /// observers extrapolating from it — drop whatever locomotion flags we last reported, then zero our
 /// bookkeeping. Called when the controller stops driving the avatar with stale flags still live on the
-/// **`CMSG_MOVE_TIME_SKIPPED` — the milliseconds the mover advanced through without integrating**
-/// (decision 1935). Accumulate while the mover holds; report the total once, on the release edge.
+/// **`CMSG_MOVE_TIME_SKIPPED` — the milliseconds the mover advanced through without integrating**.
+/// Accumulate while the mover holds; report the total once, on the release edge.
 ///
 /// **The law is "time the movement simulation advanced through without integrating"** — not "a
 /// long frame", which is what this packet is usually described as. The reference has **four**
@@ -506,8 +506,8 @@ pub(super) fn stream_self_movement(
 ///
 /// **benilla's no-geometry state is the settle hold**, and that is what this reports: the frames
 /// after a login, teleport or worldport where the destination's terrain and building colliders
-/// have not streamed in, so the mover freezes rather than falling through a city that isn't there
-/// (decision 0737). Same cause, same quantity, same moments the reference's own captures show it.
+/// have not streamed in, so the mover freezes rather than falling through a city that isn't there.
+/// Same cause, same quantity, same moments the reference's own captures show it.
 ///
 /// **The coalescing is ours, deliberately.** The reference sends once per firing, which for it is
 /// once per skipped substep — and its no-geometry window is a substep or two wide, because it
@@ -562,7 +562,7 @@ pub(super) fn park_mover(sender: &Sender<ClientCommand>, player: &mut Player) {
     player.last_pos = pos; // the park is a position report too (decision 0907's reconcile)
                            // Traced like every other outbound move: the park is a real `MSG_MOVE_STOP` on the wire, and
                            // leaving it off `snd` made the trace lie by omission at exactly the edges it was wanted for —
-                           // the handover, the free-fly detach, the moment control is taken (decision 1281).
+                           // the handover, the free-fly detach, the moment control is taken.
     super::move_trace::sent(MoveKind::Stop, 0, facing, pos);
     let _ = sender.send(ClientCommand::Move {
         kind: MoveKind::Stop,
@@ -652,7 +652,7 @@ mod tests {
     use std::f32::consts::TAU;
 
     /// **The gait toggle announces itself standing perfectly still** — which is the whole reason
-    /// **The skipped-time report** (decision 1935): held frames accumulate, the release edge sends
+    /// **The skipped-time report**: held frames accumulate, the release edge sends
     /// the total ONCE, and nothing is sent for a frame that actually integrated. The three
     /// properties together are the whole contract — a per-frame send would be hundreds of packets
     /// per settle, a lost accumulator would tell the server nothing, and a send with no hold
@@ -705,7 +705,7 @@ mod tests {
     /// locomotion nibble (`0x61a99d test al,0xf`), so a toggle with no direction bit set would
     /// never leave the client through it. Ours rides the flag differ, which has no such gate.
     /// Observers derive a walker's speed from the relayed bit, so a swallowed packet is a
-    /// remote body that keeps running at 7 yd/s while its owner walks (decision 1752).
+    /// remote body that keeps running at 7 yd/s while its owner walks.
     #[test]
     fn the_walk_toggle_sends_its_own_opcode_with_no_movement_at_all() {
         let (tx, rx) = crossbeam_channel::unbounded();
@@ -1000,7 +1000,7 @@ mod tests {
     /// The opener is the load-bearing half. It is the only packet that could put `MOVEFLAG_JUMPING`
     /// on the wire for a jumpless arc, and vmangos answers a reported moving flag with
     /// `SetStandState(STAND)` — which is what un-seated a chair-sitter for six frames of
-    /// `dy=+0.000` inside the chair's own collider (B79, decision 1458).
+    /// `dy=+0.000` inside the chair's own collider.
     #[test]
     fn a_jumpless_fall_opens_with_nothing_and_heartbeats_on_the_deadline() {
         let (tx, rx) = crossbeam_channel::unbounded();
@@ -1213,7 +1213,7 @@ mod tests {
 
     #[test]
     fn facing_streams_while_running() {
-        // **The regression this law exists for** (decision 0617). A mouse-turn while running used to
+        // **The regression this law exists for**. A mouse-turn while running used to
         // put nothing on the wire until the next ~500 ms heartbeat, so observers dead-reckoned us in a
         // stale direction for half a second and then watched us snap. The reference streams SET_FACING
         // *while moving* — 116 of the capture's 179 carry a direction bit — so every frame the facing
@@ -1451,7 +1451,7 @@ mod tests {
     #[test]
     fn the_reconcile_never_fires_while_the_body_is_in_motion() {
         // In motion the position changes every frame BY DESIGN, and the transition + ~500 ms
-        // heartbeat stream is what carries it (0052/0053) — a per-frame reconcile there would be a
+        // heartbeat stream is what carries it — a per-frame reconcile there would be a
         // packet flood, and the reference sends nothing of the kind. The gate is the motion mask, so
         // a runner mid-stride and a body mid-arc are both silent between their own packets.
         let (tx, rx) = crossbeam_channel::unbounded();
@@ -1563,7 +1563,7 @@ mod tests {
         assert_eq!(transport.map(|t| t.guid), Some(0x1F));
     }
 
-    /// **A knockback launch acks, and sends no `MSG_MOVE_JUMP`** (decision 1702).
+    /// **A knockback launch acks, and sends no `MSG_MOVE_JUMP`**.
     ///
     /// Two laws in one frame, and they are the same law read from both ends. `MSG_MOVE_JUMP` has a
     /// single live emission site image-wide — `0x615ed1`, the move-command drain's jump arm — and
