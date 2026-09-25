@@ -54,7 +54,7 @@ const SAVE_QUIET: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// The file's header, as comment lines: the reference's reader has no comments, ours skips them.
 const HEADER: &str = "\
-# benilla chat cache (decisions 1589, 1948) — the reference's chat-cache.txt grammar (written by
+# benilla chat cache, in the reference's chat-cache.txt grammar (written by
 # 0x499a80, read by 0x498a60): the custom channels to re-join, the joined zone channels as bits, the
 # per-type COLORS table, then one WINDOW block per chat frame — NAME (when one was set), SIZE,
 # COLOR r g b a as bytes, LOCKED, DOCKED, SHOWN, the MESSAGES … END list of the groups the window
@@ -64,8 +64,9 @@ const HEADER: &str = "\
 
 /// benilla's repair marker, a header comment line, not the reference's grammar. A file without it
 /// may hold `ZONECHANNELS 0` words from an empty roster, which strip window 1 of its channels;
-/// [`restore_chat_looks`] re-seeds such a file once, and the next save stamps the marker.
-const WRITER_GENERATION: &str = "# benilla-writer 2 (decision 2120)";
+/// [`restore_chat_looks`] re-seeds such a file once, and the next save stamps the marker. It is
+/// matched with `contains`, so a marker line with more text after it still counts.
+const WRITER_GENERATION: &str = "# benilla-writer 2";
 
 /// Which character's file we are on, where it lives, and whether it is owed a write.
 #[derive(Resource, Default)]
@@ -475,7 +476,7 @@ pub(crate) fn restore_chat_looks(world: &mut World, script: &mut UiScript) {
             parsed.zone_mask = Some(parsed.zone_mask.unwrap_or(0) | seed_mask);
             // Owed a write, which stamps the marker; it saves next frame (`last_change` is `None`).
             *file.dirty.get(script) = true;
-            info!("chat cache: repaired a pre-2120 file's zone channels for {who}");
+            info!("chat cache: repaired an unmarked file's zone channels for {who}");
         }
     }
     // The durable mask: the file's word, else the DBC seed; confirmed joins OR into it after.
@@ -771,7 +772,7 @@ mod tests {
         assert_eq!(
             parsed.looks[0].1.channels,
             vec![("General".to_string(), 1), ("Trade".to_string(), 2)],
-            "window 1 keeps both channels — pre-2120 this came back empty and stayed empty"
+            "window 1 keeps both channels, where an unmarked file's came back empty"
         );
     }
 
@@ -883,7 +884,7 @@ mod tests {
 
     /// benilla's older one-line rows (no `ADDEDVERSION`), with the back-fill into window 2.
     #[test]
-    fn the_pre_1948_one_line_rows_still_parse() {
+    fn one_line_rows_without_addedversion_still_parse() {
         let got = parse(
             "window 1  size 16  color 10 20 30 40\n\
              WINDOW 2  SHOWN 0  COLOR 1 2 3 4  DOCKED 2  BOGUS 9\n\

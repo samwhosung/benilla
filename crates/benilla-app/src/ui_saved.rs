@@ -95,7 +95,7 @@ pub(crate) fn save(script: &mut UiScript) {
 /// Deviation: a header saying what the file is, because the folder is in plain view; the
 /// reference's file opens with a bare blank line.
 const HEADER: &str = "\
--- benilla saved variables (decision 1128) — the UI's own remembered settings.
+-- benilla saved variables: the UI's own remembered settings.
 -- Written at logout/exit from the live values; executed as a Lua chunk at UI load.
 ";
 

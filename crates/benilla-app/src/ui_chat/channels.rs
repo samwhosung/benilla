@@ -620,7 +620,7 @@ mod tests {
         assert_eq!(
             channels.zone_mask,
             Some(SEED),
-            "the mask is the character's file, not the session's (2120)"
+            "the mask is the character's file, not the session's"
         );
         assert!(
             cascade.observe_guild_id(7),

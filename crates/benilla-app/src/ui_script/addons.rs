@@ -697,7 +697,7 @@ pub(super) fn save_addon_variables(script: &mut UiScript, identity: Option<&(Str
 /// The per-addon file's header. Deviation: the reference writes none (its file opens with a blank
 /// line); ours names the file, because players open this folder.
 const SAVED_HEADER: &str = "\
--- benilla per-addon saved variables (decision 1188 phase 3).
+-- benilla per-addon saved variables.
 -- Written at logout/exit from the live globals; executed as a Lua chunk at addon load.
 ";
 
@@ -1163,7 +1163,7 @@ mod tests {
                 .read(&join_ref(src, "..\\..\\ProbeLib\\core\\lib.xml"))
                 .as_deref(),
             Some(&b"sibling"[..]),
-            "a shared library addon must be reachable — this is what 1184 wrongly blocked"
+            "a shared library addon must be reachable from the addon that includes it"
         );
 
         // Above the AddOns root touches no file: the collapsed path leaves `Interface/AddOns/` and
@@ -1381,14 +1381,14 @@ mod tests {
         assert_eq!(
             script.eval::<bool>("return ProbeAddonInclude == true").ok(),
             Some(true),
-            "a bare-name <Include> resolved against the INCLUDING FILE's directory (src/), not \
-             the addon root — Bagnon's `templates.xml` missed entirely before 1186"
+            "a bare-name <Include> resolves against the including file's directory (src/), not \
+             the addon root, which is where Bagnon's `templates.xml` is found"
         );
         assert_eq!(
             script.eval::<bool>("return ProbeLibLoaded == true").ok(),
             Some(true),
-            "`..\\..\\ProbeLib\\core\\lib.xml` reached a SIBLING addon — the shared-library \
-             pattern 1184's per-addon sandbox blocked"
+            "`..\\..\\ProbeLib\\core\\lib.xml` reaches a sibling addon, the shared-library \
+             pattern a per-addon sandbox would block"
         );
         assert_eq!(
             script.eval::<bool>("return ProbeLibDeep == true").ok(),
