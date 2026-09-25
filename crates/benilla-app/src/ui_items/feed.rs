@@ -1,6 +1,5 @@
-//! The inward half of the container seam (see the parent module doc): the per-frame push from the
-//! self player's descriptor into the VM's `ContainerState`/`ContainerSlot` snapshots, plus the
-//! shared item-tooltip stat feed the bags/paper-doll/etc. all read from.
+//! The per-frame feeds into the VM: the container snapshots built from the player's descriptor,
+//! and the item-tooltip views every window reads.
 
 use std::collections::HashMap;
 
@@ -22,87 +21,50 @@ use super::{
     KEYRING_CONTAINER, KEYRING_SLOTS, PACK_SLOTS,
 };
 
-/// The feed's memory of what it last pushed, for per-bag change events. No cooldown-churn gate:
-/// the pushed triple carries the ABSOLUTE start, which is frame-stable for a running cooldown.
+/// What the container feed last pushed, for per-bag change events.
 #[derive(Default)]
 pub(crate) struct FeedMemory {
     pushed: HashMap<i64, ContainerState>,
-    /// The last `HasKey()` pushed — kept only so the transition can be logged once instead of
-    /// every frame. It is the gate the entire keyring UI hangs off, and "the keyring never
-    /// appeared" is otherwise indistinguishable from "the button is mis-anchored".
+    /// The last `HasKey()` pushed, so its flip is logged once.
     had_key: bool,
-    /// The gate's counter memories (1439) — the stores whose lazy `&mut` resolves poison
-    /// `is_changed` for this feed, watched by their explicit counters instead. The item OBJECTS
-    /// left this list with 2334: an instance is an entity, so its edges come off the ordinary
-    /// `Changed`/removal watch ([`crate::items::ItemChanges`]).
+    /// Counters for the stores whose lazy resolves make `is_changed` always true.
     items_templates: gate::Watch,
     cooldown_epoch: gate::Watch,
     names_generation: gate::Watch,
-    /// `PetitionState::records_epoch` — one step per landed or patched petition record, which is
-    /// what a charter slot's tooltip lines are built from. Lazy, so its arrival moves nothing else
-    /// here (the same reason `names_generation` exists one line up).
     petition_records: gate::Watch,
-    /// `ItemChanges::countdown_steps` — one step per displayable countdown change (the slot
-    /// views read second-floored countdowns), including the last elapse's collapsing push; a
-    /// landing is the item's own change tick.
     enchant_deadlines: gate::Watch,
-    /// The item guid **of the bag itself** in each of the ten bag slots — container ids 1..=10
-    /// (the four equipped, then the six bank bags), indexed `id − 1`. Diffed frame to frame for
-    /// `BAG_CLOSED`, which is a fact about the BAG, not about its contents, and which the pushed
-    /// [`ContainerState`] therefore cannot answer: two different empty 16-slot bags swapped
-    /// between two slots produce identical container states and must still close both windows.
+    /// The last [`SlotGuids::bags`], diffed for `BAG_CLOSED`.
     bag_guids: [u64; 10],
-    /// The item guid in each of the **24 vault slots** (absolute player slots 39..62), indexed
-    /// `slot − 1`. Diffed frame to frame to tell `PLAYERBANKSLOTS_CHANGED`'s two producers apart —
-    /// see [`SlotGuids`] and the fire site below. Same reason [`Self::bag_guids`] exists: the
-    /// pushed [`ContainerState`] cannot answer a question about item IDENTITY, because two
-    /// different instances of one template push the same slot view.
+    /// The last [`SlotGuids::vault`], diffed for `PLAYERBANKSLOTS_CHANGED`.
     vault_guids: [u64; BANK_SLOTS as usize],
 }
 
-/// The player descriptor's own item-slot guids, as the reference's watchers read them — the ten
-/// bag slots and the 24 vault slots, in one value because they are one registration family
-/// (`0x5dd8a0` installs `0x5ddcf0` over four bands of `PLAYER_FIELD_*_SLOT_*` with `len = 8`, the
-/// guid's width).
-///
-/// These ride beside the pushed containers rather than inside them because they are read off the
-/// player descriptor, not built from the containers — and because they answer what a derived view
-/// cannot: *which item*, not *what it looks like*.
+/// The item guids in the player's bag and vault slots, as the reference's watchers read them
+/// (`0x5dd8a0` installs `0x5ddcf0` over the guid fields): which item, where a pushed slot view only
+/// says what it looks like, so two identical items swapped still register.
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub(crate) struct SlotGuids {
-    /// Container ids 1..=10 — the four equipped bag slots, then the six bank bag slots — indexed
-    /// `id − 1`. `BAG_CLOSED`'s diff.
+    /// The bag in containers 1..=10 (equipped, then bank bags), indexed `id - 1`.
     pub bags: [u64; 10],
-    /// The 24 vault slots, indexed `slot − 1`. `PLAYERBANKSLOTS_CHANGED`'s producer discriminator.
+    /// The 24 vault slots, indexed `slot - 1`.
     pub vault: [u64; BANK_SLOTS as usize],
 }
 
-/// A spell's tooltip text: the $-substituted description (the real "Use: Restores 392 to 653
-/// health over 21 sec" shape). Shared by the item trigger lines and the set-bonus lines.
-///
-/// **An empty description yields `None`, and the caller drops the whole line** — byte-verified at
-/// the item builder `0x52d8a0`: it runs the $-expander into a buffer (`0x52da24` → `0x5075f0`),
-/// tests the FIRST BYTE of the result (`0x52da29 mov al,[ebp-0x4f0]` / `0x52da2f test al,al`) and
-/// on zero **jumps clean past the entire trigger block** (`0x52da31 je 0x52dd3d`) — past the
-/// ONUSE/ONEQUIP/ONPROC prefix select and the `"%s %s"` join alike. No prefix, no line.
-///
-/// This used to fall back to the spell's bare NAME, which is where "Use: Opening" on a dungeon key
-/// came from (director-reported): `Opening` (3365/3366/6247/6477) carries no description in
-/// Spell.dbc, so the real client prints nothing and we printed the name. The fallback was an
-/// invention, not a transcription — no such branch exists in the builder.
+/// A spell's `$`-substituted description, for item trigger and set-bonus lines. An empty one
+/// yields `None` and the caller drops the whole line, prefix included: the item builder
+/// (`0x52d8a0`) expands it (`0x5075f0`), tests the first byte (`0x52da29`) and on zero skips the
+/// trigger block (`0x52da31`), so an undescribed spell such as a key's `Opening` prints no line.
 fn spell_desc_text(
     spells: Option<&crate::ui_action::Spells>,
     id: u32,
     home_area: Option<&str>,
-    // The `$d`/`$s` tokens resolve `INT_SPELL_DURATION_*` / `INT_SPELL_POINTS_SPREAD_TEMPLATE`
-    // out of the VM; `benilla-formats` names the key, this side renders it.
+    // The VM's strings for the keyed `$d`/`$s` tokens.
     text: &dyn Fn(&str, &[i64]) -> Option<String>,
 ) -> Option<String> {
     let sp = spells?;
     let d = sp.catalog.get(id)?;
     match d.description.as_deref().filter(|t| !t.is_empty()) {
-        // The $-expander can still yield an empty string from a non-empty template; the builder's
-        // test is on the EXPANDED text, so ours is too.
+        // The builder tests the expanded text, which can be empty from a non-empty template.
         Some(desc) => {
             let ctx = benilla_formats::TokenContext {
                 durations: &sp.durations,
@@ -117,15 +79,10 @@ fn spell_desc_text(
     }
 }
 
-/// The tooltip's "N Charge(s)" count — 0 = no line. The real builder's charge gate
-/// (byte-VERIFIED, tooltip builder `0x52d8a0`): per spell slot it normalizes a template charge
-/// value of 0 to the `-1` sentinel (`0x52da01-0x52da0d`), skips the ITEM_SPELL_CHARGES line
-/// entirely when the resolved value is `-1` (`0x52db51-54`), and otherwise prints `abs(value)`
-/// (the cdq/xor/sub at `0x52db56-5b`). So a consumable's `-1` — "the item IS the last charge":
-/// food, water, potions — shows NO line, while a real charge pool (a wand-style `-5`) shows
-/// "5 Charges". We emit one line for the first surviving slot — the builder prints per slot,
-/// but no item in the data carries two charge pools (VERIFIED against the live vmangos
-/// `item_template`: 111 rows with a pool, none with a second).
+/// The tooltip's "N Charges" count, 0 for no line. The builder (`0x52d8a0`) reads a template 0 as
+/// `-1` (`0x52da01`), prints nothing for `-1` (`0x52db51`) and otherwise the absolute value
+/// (`0x52db56`): food's `-1` shows no line, a `-5` pool "5 Charges". It prints per spell slot; one
+/// line here, as no vmangos `item_template` row has two pools.
 fn charges_count(spells: &[benilla_protocol::messages::ItemSpellEntry]) -> i32 {
     spells
         .iter()
@@ -134,23 +91,14 @@ fn charges_count(spells: &[benilla_protocol::messages::ItemSpellEntry]) -> i32 {
         .unwrap_or(0)
 }
 
-/// A reputation rank (0..=7) → its standing label, `FACTION_STANDING_LABEL{rank+1}` off the
-/// player's own `GlobalStrings.lua` — the tail of the `ITEM_REQ_REPUTATION` line.
-///
-/// Keys rather than an eight-string table: the bare tokens, not the `_FEMALE`
-/// twins, which is the spelling the reference itself uses wherever it builds a standing label
-/// (`FACTION_STANDING_LABEL%d` `0x84b5dc`).
-/// `None` for an install that does not carry the row — the line then names no standing.
+/// A reputation rank (0..=7) to `FACTION_STANDING_LABEL{rank+1}`, the unsuffixed key the reference
+/// builds (`0x84b5dc`), from the player's own `GlobalStrings.lua`.
 fn standing_label(rank: u32, get: &dyn Fn(&str) -> Option<String>) -> Option<String> {
     get(&format!("FACTION_STANDING_LABEL{}", rank.min(7) + 1))
 }
 
-/// Build an item template's tooltip view (decision 0274 P1): the full wire fields plus the
-/// display strings only the app can resolve — trigger-spell TEXT off the spell catalog (the
-/// spell's $-substituted description when it has one, per the verified law's item `$`-expander
-/// `0x506f70`; its bare name otherwise), the skill requirement's name off `SkillLine.dbc`, the
-/// reputation requirement off `Faction.dbc` names (the red check is the engine's, against the
-/// player's rank map).
+/// An item template's tooltip view: the wire fields plus the strings only the app resolves, the
+/// trigger-spell text and the skill, spell and reputation requirements.
 fn template_view(
     t: &ItemInfo,
     spells: Option<&crate::ui_action::Spells>,
@@ -162,7 +110,7 @@ fn template_view(
     icons: Option<&ItemDisplays>,
     // The VM's own `GlobalStrings.lua`, for the reputation-requirement line.
     get: &dyn Fn(&str) -> Option<String>,
-    // The same table, for the `$`-engine's own keyed tokens — see [`spell_desc_text`].
+    // The same table, for the `$`-engine's keyed tokens.
     text: &dyn Fn(&str, &[i64]) -> Option<String>,
 ) -> benilla_ui::script::ItemTemplateView {
     let spell_name = |id: u32| -> Option<String> {
@@ -179,26 +127,22 @@ fn template_view(
         inventory_type: t.inventory_type,
         proficiency_alt: sub_classes.and_then(|c| c.proficiency_alt(t.class, t.subclass)),
         hide_subclass: sub_classes.is_some_and(|c| c.hides_name(t.class, t.subclass)),
-        // `GetItemInfo`'s type pair. The subclass spelling is `name()` — VerboseName first —
-        // because that is the binding's own two-step (`0x48e311`), and it is deliberately NOT the
-        // `display_name()` the tooltip's type cell prints: a one-handed sword is "One-Handed
-        // Swords" to an addon and "Sword" on the tooltip. Both spellings are in the same row.
+        // `GetItemInfo`'s type pair: the subclass is `name()`, verbose name first (`0x48e311`),
+        // so a one-handed sword is "One-Handed Swords" to an addon and "Sword" on the tooltip.
         item_type: classes.and_then(|c| c.name(t.class)).map(str::to_string),
         item_sub_type: sub_classes
             .and_then(|c| c.name(t.class, t.subclass))
             .map(str::to_string),
-        // …and the tooltip's own spelling of the same row — DisplayName alone.
+        // The tooltip's spelling: the display name alone.
         sub_class_display: sub_classes
             .and_then(|c| c.display_name(t.class, t.subclass))
             .map(str::to_string),
         flags: t.flags,
         bonding: t.bonding,
         max_count: t.max_count,
-        // The stack size — a DIFFERENT wire field from `max_count` (the account-wide unique cap).
-        // Linen Cloth is `max_count 0, stackable 20`; `GetItemInfo`'s `itemStackCount` is this one.
+        // The stack size, `GetItemInfo`'s `itemStackCount`; `max_count` is the unique cap.
         stackable: t.stackable,
-        // The same `ItemDisplayInfo.dbc` icon the bag slots resolve, as a ready
-        // `Interface\Icons\…` path — `GetItemInfo`'s `itemTexture`.
+        // `GetItemInfo`'s `itemTexture`, the bag slots' `ItemDisplayInfo.dbc` icon.
         icon: icons
             .and_then(|i| i.catalog.get(t.display_info_id))
             .and_then(|d| d.icon.clone()),
@@ -229,9 +173,8 @@ fn template_view(
             .flatten(),
         required_honor_rank: t.required_honor_rank,
         required_city_rank: t.required_city_rank,
-        // `ITEM_REQ_REPUTATION` ("%s - %s" after its own "Requires ") — `0x854b8c`, the key the
-        // reference's own item tooltip builds this line with. Both holes are
-        // filled in the template's order; an install missing either key shows no line.
+        // `ITEM_REQ_REPUTATION`, the reference's key for this line (`0x854b8c`): faction, then
+        // standing; an install missing a key shows no line.
         required_rep_line: (t.required_rep_faction != 0)
             .then(|| {
                 let faction = factions.and_then(|c| c.faction_name(t.required_rep_faction))?;
@@ -263,13 +206,9 @@ fn template_view(
     }
 }
 
-/// The item SET-block feed: answer the engine's ask-once set ids from ItemSet.dbc, joining
-/// member NAMES from the template cache (each miss fires its own `CMSG_ITEM_QUERY` through
-/// [`Items::template`], like the real client querying set members) and bonus TEXT from the
-/// spell catalog's `$`-engine. A set with members still in flight stays pending and re-pushes
-/// as answers land; it leaves the pending map once every member resolved. (`TokenContext.home_
-/// area` is `None` here: set bonuses are equip auras — no `$z`; the passthrough would surface
-/// one if the data ever carried it.)
+/// Answers the engine's set-id asks from `ItemSet.dbc`: member names from the template cache, each
+/// miss queried as the reference queries set members, and bonus text from the `$`-engine. A set
+/// stays pending, re-pushing, until every member resolves.
 pub(super) fn feed_item_sets(
     script: Option<NonSendMut<UiScript>>,
     sets: Option<Res<super::ItemSets>>,
@@ -292,18 +231,17 @@ pub(super) fn feed_item_sets(
         return;
     }
     let Some(sets) = sets.as_deref() else {
-        return; // catalog absent (no client data): the asks stay parked, the block stays off
+        return; // no catalog without client data: the asks stay parked
     };
     let spell_res = spells.as_deref();
     let skill_catalog = skill_lines.as_deref().map(|s| &s.catalog);
     let mut done: Vec<u32> = Vec::new();
     let mut push: Vec<(u32, benilla_ui::script::ItemSetView)> = Vec::new();
-    // Scoped, so the push below can take the VM mutably: the build reads the string table, the
-    // push writes the store, and the two cannot hold it at once.
+    // Dropped before the push, which needs the VM mutably.
     let token_text = crate::ui_script::token_text(&script);
     for (&set_id, last) in pending.iter_mut() {
         let Some(row) = sets.0.set(set_id) else {
-            done.push(set_id); // no such row — drop the ask for good
+            done.push(set_id); // no such row: drop the ask
             continue;
         };
         let members: Vec<(u32, Option<String>)> = row
@@ -348,19 +286,8 @@ pub(super) fn feed_item_sets(
     }
 }
 
-/// The shared item-tooltip feed, both halves. **Push**: every template that lands in the app
-/// cache goes to the UI store unprompted (`Items::take_fresh`) — so by the time an item's name is
-/// on screen its tooltip stats are already there, and the first hover never misses (the real
-/// client reads one item cache synchronously; a store the UI only fills on a read miss re-created
-/// the "hover twice" flake this replaces). **Ask**: a renderer read of an id the app never
-/// resolved still records a miss, which triggers the `CMSG_ITEM_QUERY` here and lands via the
-/// same push when the answer arrives.
-/// Push the **whole** random-suffix table into the engine, once per VM.
-///
-/// Not an ask-once feed like the templates beside it: the roll table is a static DBC the app holds
-/// from load, and its consumers are click-driven — a chat-link tooltip has no hover re-enter loop
-/// to repaint on a late answer. One push per VM (a `/reload` mints a new one), and it waits for
-/// both catalogs, so a session that starts before the DBC load simply pushes on the next frame.
+/// Pushes the whole random-suffix table once per VM, when both catalogs are in: its consumers are
+/// click-driven, and a chat-link tooltip has no hover loop to repaint a late answer.
 pub(super) fn feed_random_properties(
     script: Option<NonSendMut<UiScript>>,
     props: Option<Res<crate::items::RandomProperties>>,
@@ -373,8 +300,7 @@ pub(super) fn feed_random_properties(
     if *pushed.get(&script) {
         return;
     }
-    // The enchant catalog is what turns the roll's five ids into lines; without it every row would
-    // push empty and the push would never be retried. Both, or neither.
+    // Without the enchant catalog every row would push empty, never to be retried.
     let (Some(props), Some(enchants)) = (props, enchants) else {
         return;
     };
@@ -388,20 +314,21 @@ pub(super) fn feed_random_properties(
     *pushed.get(&script) = true;
 }
 
+/// The item-tooltip feed: every template that lands is pushed unprompted, so the first hover never
+/// misses, as the reference reads one item cache synchronously; a read of an unresolved id records
+/// a miss, which queries it here.
 pub(super) fn feed_item_stats(
     script: Option<NonSendMut<UiScript>>,
     mut items: ResMut<Items>,
     commands: Res<NetCommands>,
     spells: Option<Res<crate::ui_action::Spells>>,
     skill_lines: Option<Res<crate::ui_spellbook::SkillLines>>,
-    // The $z token's inputs: the bind-point area id (SMSG_BINDPOINTUPDATE) named through the
-    // AreaTable catalog the quest-log/zone-text already carry.
+    // The `$z` token: the bind point's area (`SMSG_BINDPOINTUPDATE`), named through `AreaTable`.
     home_bind: Option<Res<crate::net::HomeBind>>,
     area_names: Option<Res<crate::ui_quest_log::QuestHeaderNamesRes>>,
     factions: Option<Res<crate::target::Factions>>,
     sub_classes: Option<Res<super::ItemSubClasses>>,
-    // `GetItemInfo`'s `itemType` and `itemTexture`: the class-name table, and the same
-    // ItemDisplayInfo icons the bag slots already resolve through.
+    // `GetItemInfo`'s `itemType` and `itemTexture`.
     classes: Option<Res<super::ItemClasses>>,
     icons: Option<Res<ItemDisplays>>,
     mut pending: Local<crate::ui_script::VmMemo<std::collections::HashSet<u32>>>,
@@ -412,28 +339,17 @@ pub(super) fn feed_item_stats(
     };
     let pending = pending.get(&script);
     let last_home = last_home.get(&script);
-    // **`GetBindLocation()`'s push, and it happens BEFORE the early return below.**
-    //
-    // The name resolution lives here because this system already owns it for the hearthstone's
-    // `$z` token, and a second AreaTable lookup elsewhere is the two-parallel-paths drift that has
-    // cost this codebase real bugs — the binding and the token must never disagree about where the
-    // player is bound. But the item feed idles whenever nothing is pending, and the bind point
-    // arrives long after world entry (`SMSG_BINDPOINTUPDATE` at login and on every re-bind), so the
-    // push cannot sit behind that gate.
+    // `GetBindLocation()`'s push, here so it and the `$z` token share one name, and ahead of the
+    // pending gate below: the bind point can arrive while the feed idles.
     let home_area: Option<&str> = home_bind
         .as_deref()
         .and_then(|b| b.0)
         .and_then(|id| area_names.as_deref()?.0.resolve(id as i32));
-    // …pushed on CHANGE, per VM: the memo resets with the VM, so a rebuilt one is fed again
-    // the frame it appears. It used to push every frame — with a fresh String each time —
-    // because it cannot sit behind the pending gate below; the memo compare is the gate it can
-    // sit behind, and the re-substitute rides the same edge.
+    // Pushed on change, per VM: a rebuilt VM is fed again the frame it appears.
     if last_home.as_deref() != home_area {
         script.set_bind_location(home_area.unwrap_or_default());
         *last_home = home_area.map(str::to_string);
-        // A bind-point change re-substitutes every held view: templates pushed before the
-        // login's SMSG_BINDPOINTUPDATE landed carry a raw $z otherwise (the hearthstone's login
-        // race).
+        // Re-substitute every held view, or one pushed before the bind point carries a raw `$z`.
         pending.extend(items.cached_template_ids());
     }
 
@@ -449,8 +365,7 @@ pub(super) fn feed_item_stats(
         .copied()
         .filter(|&id| items.template(id, 0, &commands).is_some())
         .collect();
-    // Built first, pushed after: the reference-string lookup borrows the VM and `set_item_template`
-    // needs it mutably, so the resolve and the push cannot interleave.
+    // Built first, pushed after: the lookup borrows the VM that `set_item_template` needs mutably.
     let views: Vec<(u32, benilla_ui::script::ItemTemplateView)> = {
         let get = |key: &str| {
             script
@@ -488,10 +403,9 @@ pub(super) fn feed_item_stats(
     }
 }
 
-/// The red-line law's player state (decision 0274 P1): level + class/race ids (the allowable-mask
-/// bits) + the full skill-rank map, read off the self player's descriptor, plus the equip
-/// proficiencies (`SMSG_SET_PROFICIENCY`) and the faction → reputation-rank map (DBC base for our
-/// race/class + the `SMSG_INITIALIZE_FACTIONS` standing, ranked) — pushed on change.
+/// The player state the tooltip's red requirement lines check: level, class, race, skills,
+/// proficiencies (`SMSG_SET_PROFICIENCY`) and reputation ranks (the DBC base plus the
+/// `SMSG_INITIALIZE_FACTIONS` standing), pushed on change.
 pub(super) fn feed_player_req(
     script: Option<NonSendMut<UiScript>>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
@@ -507,9 +421,7 @@ pub(super) fn feed_player_req(
         return;
     };
     let (last, vm_reset) = last.get_reset(&script);
-    // The gate (1439): the state below is a pure function of these six — the self descriptor
-    // (skills/level/race/class/honor; its absence returns pushless), the proficiency and
-    // reputation mirrors, the faction catalog, and the known-spell set with its catalog.
+    // The state is a function of these inputs alone.
     let self_changed = !changed_self.is_empty();
     let prof_changed = proficiencies.is_changed();
     let reps_changed = reputations.is_changed();
@@ -549,10 +461,8 @@ pub(super) fn feed_player_req(
             continue;
         };
         if s.skill_id != 0 {
-            // The gate laws (`0x5eaae0`, `0x5ea930`) read value + PERM bonus (the talent half;
-            // the temp half never counts toward requirements). The client zero-extends the bonus
-            // word before a signed compare — a negative perm bonus can't happen in live data, so
-            // the sane saturating add mirrors every reachable case.
+            // The requirement checks (`0x5eaae0`, `0x5ea930`) read the value plus the permanent
+            // bonus, never the temporary one; the bonus is never negative in live data.
             skills.insert(
                 u32::from(s.skill_id),
                 u32::from(s.value).saturating_add_signed(i32::from(s.perm_bonus)),
@@ -575,8 +485,7 @@ pub(super) fn feed_player_req(
             );
         }
     }
-    // The client's `0xc4d770`: set when a spell whose Effect[0] is 40 (SPELL_EFFECT_DUAL_WIELD)
-    // is learned, cleared on its unlearn — mirrored as a spellbook scan.
+    // The reference's `0xc4d770`: a known spell whose Effect[0] is 40 (`SPELL_EFFECT_DUAL_WIELD`).
     let can_dual_wield = spells.as_deref().is_some_and(|s| {
         actions
             .spells
@@ -600,11 +509,8 @@ pub(super) fn feed_player_req(
     }
 }
 
-/// One bag slot from its item guid: the instance (store) + template (cache, ask-once) + icon
-/// (DBC) + the use-spell's running cooldown (`GetContainerItemCooldown`'s data — the same store
-/// read the action feed's ITEM arm does). `None` = the slot is empty (guid 0/unsent) — an
-/// *unresolved* occupied slot is `Some` with empty fields instead, so the bag shows the item
-/// exists before its query answers.
+/// One bag slot from its item guid: instance, template, icon and use-spell cooldown. `None` is an
+/// empty slot; an occupied one not yet resolved is `Some` with empty fields.
 fn resolve_slot(
     guid: u64,
     objects: &Objects,
@@ -615,22 +521,17 @@ fn resolve_slot(
     cooldowns: &crate::spell::Cooldowns,
     spells: Option<&benilla_formats::SpellCatalog>,
     names: &crate::names::NameCache,
-    // The petition record cache, for a charter slot's tooltip lines — a LAZY fill, so it is taken
-    // mutably for the same reason `names` is: the read is what issues the query.
+    // Mutable: reading a charter's record is what queries it.
     petitions: &mut crate::ui_petition::PetitionState,
     now: std::time::Instant,
     ui_now: f64,
-    // The player's own `ChrClasses.dbc` relic flag — `find_equip_slot`'s second half. It decides
-    // ONE slot (INVSLOT 17) and it decides it both ways, so it has to reach every fit-rule read
-    // rather than being applied at one of them (1803).
+    // The class's `ChrClasses.dbc` relic flag, which decides slot 17 for every fit-rule read.
     has_relic_slot: bool,
 ) -> Option<ContainerSlot> {
     if guid == 0 {
         return None;
     }
-    // The item's own countdown cells: one `Option<ms>` per temporary-enchant
-    // slot, and its lifetime — `SMSG_ITEM_TIME_UPDATE`'s only surface — both
-    // second-floored for the snapshot.
+    // The enchant and lifetime (`SMSG_ITEM_TIME_UPDATE`) countdowns, in whole seconds.
     let countdowns = objects.countdowns(guid);
     let enchant_ms: [Option<u64>; crate::items::ENCHANT_SLOTS] =
         std::array::from_fn(|s| countdowns.and_then(|c| c.enchant_remaining_display_ms(s as u32)));
@@ -640,36 +541,28 @@ fn resolve_slot(
             Some(fields) => (
                 fields.object_entry().unwrap_or(0),
                 fields.item_stack_count().unwrap_or(1),
-                // The live instance pair — the wire updates ITEM_FIELD_DURABILITY on damage/repair
-                // (death 10%, spirit healer 25%); max 0 = indestructible ⇒ no line.
+                // Max 0 is indestructible: no line.
                 fields
                     .item_durability()
                     .zip(fields.item_max_durability())
                     .filter(|&(_, max)| max > 0),
-                // The instance carries letter text (a mail permanent copy) — the same gate the
-                // right-click reader fork uses (`ui_items::drain`); the hover magnifier keys off it.
-                // Template-`PageText` books join when the books read path lands.
+                // Letter text on the instance, which the hover magnifier keys off; a template
+                // `PageText` book does not set it.
                 fields.item_text_id().is_some_and(|id| id != 0),
-                // `ITEM_FIELD_CREATOR` → the ask-once name cache: the tooltip's "Written by %s" /
-                // "<Made by %s>" line. `None` while the query is in flight — the changed re-push
-                // repaints the hover when the answer lands (the ref's cache-callback shape).
+                // The creator's name for "<Made by %s>" and "Written by %s", `None` until the
+                // name query answers.
                 fields
                     .item_creator()
                     .filter(|&g| g != 0)
                     .and_then(|g| names.resolve(g, commands).map(str::to_string)),
-                // `ITEM_FIELD_FLAGS` — the tooltip's UNLOCKED (0x4) / WRAPPED (0x8) sub-gates.
+                // The tooltip's unlocked (0x4) and wrapped (0x8) bits.
                 fields.item_flags().unwrap_or(0),
-                // `0x5da2c0` — soulbound, or carrying a binding enchant: the Soulbound
-                // override. Read off the raw descriptor, not off the enchant LINES below.
+                // `0x5da2c0`: soulbound, or carrying a binding enchant, off the raw descriptor.
                 crate::items::already_bound(fields, rolls.enchants),
-                // `ITEM_FIELD_RANDOM_PROPERTIES_ID` — the roll behind the NAME's "of the Bear".
-                // Only the name: the roll's own enchants are already in the
-                // instance's slots 2..6 below, written there by the server.
+                // The roll behind the name's suffix; its enchants are already in slots 2..6.
                 fields.item_random_properties_id(),
-                // The instance's own 7 enchant slots — the tooltip's enchant lines. An
-                // item we hold streams as an OBJECT, so all seven are here, with their charges and
-                // their `SMSG_ITEM_ENCHANT_TIME_UPDATE` countdowns; the wire's 2-slot broadcast is
-                // what everyone ELSE's items are limited to.
+                // All seven enchant slots with charges and countdowns: our own items stream whole,
+                // where others' carry two slots.
                 crate::items::enchant_lines(
                     (0..7).map(|s| {
                         (
@@ -682,8 +575,7 @@ fn resolve_slot(
                     rolls.enchants,
                 ),
             ),
-            // The player descriptor references a guid whose create hasn't landed (yet) —
-            // occupied, unresolved.
+            // A guid whose create has not landed: occupied, unresolved.
             None => return Some(ContainerSlot::default()),
         };
     if entry == 0 {
@@ -706,16 +598,9 @@ fn resolve_slot(
         });
     };
     Some(ContainerSlot {
-        // **Line 3 of the tooltip law** — a charter's guild name and master. Gated on the template's
-        // signable flag, then keyed by the petition id the server stuffs into the item's
-        // `ITEM_FIELD_ENCHANTMENT` slot 0 (`PetitionsHandler.cpp:126`) — which is the same field the
-        // client reads it from (`0x5ef337`), and the same one the tooltip's ENCHANT lines are
-        // forced to skip for exactly this reason (`0x52c9e0 test ah,0x20`). So slot 0 on a charter
-        // is a petition id by contract on both ends, and this is its one consumer here.
-        //
-        // The lookup is lazy: hovering an unopened charter is what sends the query, so the first
-        // hover shows the name and the green line alone. The creator line right below has the same
-        // rule.
+        // A charter's guild name and master, keyed by the petition id the server puts in
+        // enchantment slot 0 (`PetitionsHandler.cpp:126`), where the reference reads it
+        // (`0x5ef337`) and its enchant lines skip it (`0x52c9e0`). The first hover sends the query.
         petition: (t.flags & benilla_protocol::messages::ITEM_FLAG_CHARTER != 0)
             .then(|| {
                 let id = objects
@@ -732,9 +617,8 @@ fn resolve_slot(
         durability,
         quality: Some(t.quality),
         item_id: entry,
-        // The link carries the roll — both in its `randomPropertyId` field and in the bracketed
-        // NAME, which the reference builds out of the suffix-joining formatter `0x5d8b00`. The
-        // slot's tooltip plate reads its name back off this string.
+        // The link carries the roll in `randomPropertyId` and in the suffixed name (`0x5d8b00`);
+        // the tooltip reads its name back off it.
         link: Some(crate::ui_items::item_link_full(
             entry,
             0,
@@ -761,26 +645,11 @@ fn resolve_slot(
     })
 }
 
-/// Reason 16's `%s`: the destination bag's **`BagFamily` name** — "Arrows", "Soul Shards",
-/// "Herbs" — for *"Only %s can be placed in that."* `None` = no bag to name, so the caller keeps
-/// the generic `ERR_WRONG_BAG_TYPE` line.
-///
-/// `bag_slot` is the wire's ABSOLUTE player slot (see
-/// `benilla_protocol::messages::items::read_inventory_change_failure`), and the reference's helper
-/// `0x5ede00` bails on exactly two shapes we mirror: `slot == 0xFF` (`INVENTORY_SLOT_BAG_0`, the
-/// player's own array — a backpack/equipment refusal names no container), and a slot past the
-/// player's slot array. Everything else it indexes straight into that array and resolves as an
-/// item.
-///
-/// Despite the errorId's `_SUBCLASS` name this reads the bag's `BagFamily`, **not** its
-/// ItemSubClass — which is what makes a quiver say "Only Arrows can be placed in that." rather
-/// than naming the quiver's own type (`benilla_formats::itembagfamily`, and the DBC read there).
-///
-/// The bank-bag leg (63..=68) is ours by symmetry rather than byte-pinned: the reference bounds
-/// this on `[player+0x1d38]`, whose value is unresolved, so whether a bank bag reaches
-/// the substitution or falls to the generic line is unverified. Both outcomes are ordinary
-/// sentences; resolving it is the strictly more useful one, and it is flagged here rather than
-/// silently assumed.
+/// Reason 16's `%s`, the target bag's `BagFamily` name ("Only Arrows can be placed in that."), or
+/// `None` to keep the generic line. `bag_slot` is the bag's player-array slot, and the reference's
+/// `0x5ede00` names nothing for 255 (the player's own array) or for a slot at or past
+/// `[player+0x1d38]`, 113 for the local player, so equipped bags (19..22) and bank bags (63..68)
+/// both resolve. It reads the bag family, not the subclass the errorId's name suggests.
 fn bag_family_name(
     player: Option<&ObjectStore>,
     bag_slot: u8,
@@ -792,13 +661,11 @@ fn bag_family_name(
     let store = player?;
     let families = families?;
     let guid = match bag_slot {
-        // The equipped bag slots.
         s if (BAG_SLOT_FIRST..BAG_SLOT_FIRST + BAGS).contains(&s) => store.0.player_inv_slot(s),
-        // The purchasable bank bag slots.
         s if (BANK_BAG_SLOT_FIRST..BANK_BAG_SLOT_FIRST + BANK_BAGS).contains(&s) => {
             store.0.player_bank_bag_slot(s - BANK_BAG_SLOT_FIRST)
         }
-        // 255 = the player's own array, and anything past the bag slots: no container to name.
+        // 255, the player's own array, names no bag.
         _ => None,
     }
     .filter(|&g| g != 0)?;
@@ -807,20 +674,9 @@ fn bag_family_name(
     families.name(family).map(str::to_string)
 }
 
-/// The pending-lock **resolving clear** (decision 0216 §4 / 0218 §3 "the field-update watcher"):
-/// release any outstanding op whose slots have moved on, and queue what unlocked for
-/// [`feed_containers`] to announce with `ITEM_LOCK_CHANGED`.
-///
-/// **Its own system, ordered ahead of BOTH feeds** (1771). It used to live inside
-/// `feed_containers`, which is ordered *after* `feed_char` — so `feed_char`, which owns the
-/// doll's and the bank bags' `locked`, read a lock set that the same frame was about to clear,
-/// pushed `locked: true`, and then went quiet: its gate closed the next frame (nothing in flight,
-/// no object moved) and the stale lock stood until something else forced a repush. On the bank's
-/// six bag buttons — whose only repaint signals are `PLAYERBANKSLOTS_CHANGED` and
-/// `BANKFRAME_OPENED` — that showed as a bag greyed out until the window was reopened.
-///
-/// Resolve first, then push, then fire: the house rule, now actually enforceable across the two
-/// feeds because neither of them owns the clear any more.
+/// The pending locks' resolving clear: releases every op whose slots have moved on and queues the
+/// unlocks for [`feed_containers`] to announce. Ordered ahead of both feeds: `feed_char` pushes the
+/// doll's and bank bags' `locked` from the same set, and a clear after it strands a stale lock.
 pub(crate) fn resolve_item_locks(
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     objects: Objects,
@@ -839,40 +695,29 @@ pub(crate) fn resolve_item_locks(
         .extend(pending.resolve(|bag, slot1| slot_guid_count(player, bag, slot1, &objects)));
 }
 
-#[allow(clippy::type_complexity)] // the param list IS the input set
+#[allow(clippy::type_complexity)] // the param list is the input set
 pub(crate) fn feed_containers(
     script: Option<NonSendMut<UiScript>>,
-    // `ChrClasses.dbc` field 16, for the fit rule's relic half — see `find_equip_slot` (1803).
+    // `ChrClasses.dbc` field 16, the fit rule's relic flag.
     classes: Option<Res<crate::chr_classes::ChrClassTable>>,
     items: Res<Items>,
     icons: Option<Res<ItemDisplays>>,
-    // The two item-DBC catalogs, as one param (the 16-SystemParam ceiling): `SpellItemEnchantment`'s
-    // name column — the tooltip's enchant lines — and `ItemRandomProperties`, the
-    // roll behind a slot's "of the Monkey" name.
+    // The tuples below pair parameters under Bevy's 16-parameter ceiling.
     catalogs: (
         Option<Res<crate::items::Enchants>>,
         Option<Res<crate::items::RandomProperties>>,
     ),
-    // The inventory read (2334): the self store the slot arrays come off and its change tick —
-    // the gate's cheapest input (1439) — the object lookup the guids resolve through, and the
-    // item entities' own change watch.
     mut inv: crate::items::Inventory,
     commands: Res<NetCommands>,
     cooldowns: Res<crate::spell::Cooldowns>,
     spells: Option<Res<crate::ui_action::Spells>>,
-    // The refusals and where they land, as one param (the 16-SystemParam ceiling this signature
-    // already sits at): the queue, and `show_messages`' chat + sound sinks (1815).
     equip: (ResMut<EquipErrors>, crate::ui_action::MessageSink),
-    // Reason 16's `%s` source; absent = every 16 keeps the generic line.
+    // Reason 16's `%s` source; absent, every 16 keeps the generic line.
     bag_families: Option<Res<crate::ui_items::ItemBagFamilies>>,
     pending: Res<PendingItemOps>,
-    // The two handler-fed queues this feed fires for (the 16-SystemParam ceiling): the lock
-    // transitions (`ITEM_LOCK_CHANGED`) and the server-opened containers (`BAG_OPEN`, 2339).
     queues: (ResMut<LockTransitions>, ResMut<super::net::BagOpens>),
     names: Res<crate::names::NameCache>,
-    // Paired into one param (the 16-SystemParam ceiling this signature already sits at): the UI
-    // clock, and the petition record cache a charter slot's tooltip lines read — `ResMut` because
-    // that cache is LAZY and the hover is what issues its query.
+    // The petition cache is mutable: a charter's hover is what queries it.
     clock_and_petitions: (
         Res<crate::ui_script::UiClock>,
         ResMut<crate::ui_petition::PetitionState>,
@@ -886,34 +731,24 @@ pub(crate) fn feed_containers(
     let (mut equip_errors, mut sink) = equip;
     let (mut lock_cleared, mut opens) = queues;
     let (memory, vm_reset) = memory.get_reset(&script);
-    // The gate (1439): the snapshot below is a function of the self descriptor's slot arrays,
-    // the item stores (both epochs — `is_changed` on `Items`/`NameCache`/`Cooldowns` is
-    // poisoned by per-frame lazy resolves, so the counters carry the truth), the four
-    // catalogs, and the drained side-channels (each held open while non-empty; their
-    // *arrival* frames are covered because a drain writer marks them non-empty). `UiClock`
-    // is deliberately NOT an input: the pushed cooldown triple carries the ABSOLUTE start
-    // (frame-stable, the memory struct's own doc), and natural expiry moves the store's
-    // `feed_epoch` through the prune.
+    // The snapshot is a function of these inputs; the stores' counters stand in for their
+    // `is_changed`, which lazy resolves make always true. `UiClock` is not an input: a running
+    // cooldown's pushed start is absolute, and expiry moves `feed_epoch` through the prune.
     let objects_moved = inv.changes.moved();
     let templates_moved = memory.items_templates.moved(items.template_epoch());
     let cooldowns_moved = memory.cooldown_epoch.moved(cooldowns.feed_epoch());
     let names_moved = memory.names_generation.moved(names.generation());
     let petitions_moved = memory.petition_records.moved(petitions.records_epoch());
-    // The DISPLAY epoch (see `feed_char`'s twin comment): the snapshot's countdowns are
-    // second-floored, so one watch step per displayable change replaces the per-frame hold-open
-    // that rebuilt every bag snapshot for the whole life of a ticking enchant.
+    // Countdowns are pushed in whole seconds, so only a displayed change reopens the gate.
     let deadlines_moved = memory
         .enchant_deadlines
         .moved(inv.changes.countdown_steps());
-    // Bound as `let`s (not a bare OR-chain) so the gate trace below can name each input.
     let sweep = cooldowns.sweep_pending(clock.anchor);
     let self_changed = !inv.self_changed.is_empty();
-    // `is_added`, NOT `is_changed`: the feeds read only the load-once icon CATALOG off this
-    // resource (its struct doc says so verbatim); the world's held-model cache half is
-    // get-or-insert every frame, so `is_changed` reads true forever — 1439's gate-trace found
-    // the containers gate held open by exactly this.
+    // `is_added`, not `is_changed`: only the load-once icon catalog is read here, and the
+    // resource's model cache changes every frame.
     let icons_changed = icons.as_ref().is_some_and(|r| r.is_added());
-    // Both DBC catalogs load once, at startup — one input covers the pair.
+    // Both catalogs load once, at startup: one input covers the pair.
     let enchants_changed = catalogs.0.as_ref().is_some_and(|r| r.is_changed())
         || catalogs.1.as_ref().is_some_and(|r| r.is_changed());
     let spells_changed = spells.as_ref().is_some_and(|r| r.is_changed());
@@ -945,8 +780,7 @@ pub(crate) fn feed_containers(
             || objects_moved
             || templates_moved
             || cooldowns_moved
-            // The frame a timer crosses zero, BEFORE the per-frame prune has moved the epoch
-            // (`sweep_pending`'s own doc) — the slot triple flips to None right then.
+            // The frame a timer crosses zero, before the prune moves the epoch.
             || sweep
             || names_moved
             || petitions_moved
@@ -962,43 +796,23 @@ pub(crate) fn feed_containers(
     if gate.skip() {
         return;
     }
-    // `WOW_FEED_COST=1` — the counter that PRICED gating this feed (the 2026-08-15 ledger's #8,
-    // built when the snapshot+diff below still ran every frame; the gate above is 1439's
-    // answer). Kept as the gate's wiring instrument: it accumulates only when the body runs, so
-    // a parked gated run prints (almost) nothing where the ungated binary printed once a second.
+    // `WOW_FEED_COST=1` prints the body's mean cost every 60 runs.
     let cost_t0 = std::env::var_os("WOW_FEED_COST")
         .is_some()
         .then(std::time::Instant::now);
-    // The frame's atomic clock pair (`crate::ui_script::UiClock`): the slot resolves read the
-    // cooldown store and convert triples through ONE coherent instant, so a running cooldown's
-    // pushed start is frame-stable (the resource's own doc).
+    // One clock pair for every slot, so a running cooldown's pushed start is frame-stable.
     let (now, ui_now) = (clock.anchor, clock.ui_now);
     let spell_catalog = spells.as_deref().map(|s| &s.catalog);
     let rolls = crate::items::RollCatalogs {
         enchants: catalogs.0.as_deref(),
         props: catalogs.1.as_deref(),
     };
-    // Inventory refusals surface as the client's red error line (the cast path's exact shape):
-    // the wire code keys into the VM's own GlobalStrings ([`equip_error_key`], total), reason 1
-    // filling its `%d` with the packet's required level.
-    //
-    // **An unresolvable or empty key prints NOTHING** — this is the reference's own behaviour,
-    // not a fallback: `CGGameUI::DisplayError` is called unconditionally and the sink's
-    // `cmp byte [ecx],0` guard (`0x4945b4`) drops an empty string before it renders or sounds.
-    // It is what silences reason 59, the lock-clear sentinel that rides alongside a real refusal
-    // and used to print a second, hex-debug line over it — and it is the same law
-    // `ui_action::cast_fail` already runs. No hex debug line on the player's screen: a code we
-    // failed to map can't reach here (the table is total), and a key we typo'd is caught by
-    // `equip_error`'s resolution test against the real `GlobalStrings.lua`, not at runtime.
+    // Refusals become the red error line through `equip_error_key`. An empty or missing string
+    // prints nothing, as the reference's sink guard (`0x4945b4`) drops it; that silences 59.
     let player = inv.self_store.iter().next();
     let mut refusals = Vec::new();
     for e in equip_errors.0.drain(..) {
-        // Reason 16's substitution — the ONE reason whose text is chosen by the app rather than
-        // by the table, because the choice needs the named bag. The reference's
-        // helper `0x5ede00(player, bagSlot)` resolves the bag and calls
-        // `DisplayError(ERR_WRONG_BAG_TYPE_SUBCLASS, familyName)` *itself*, returning 1 so the
-        // caller skips the generic line; a bag that doesn't resolve leaves the generic
-        // `ERR_WRONG_BAG_TYPE` standing. Same fork, same fallback.
+        // Reason 16 names the bag's family when the bag resolves, as `0x5ede00` does.
         let subclass_fill = (e.reason == 16)
             .then(|| {
                 bag_family_name(
@@ -1023,8 +837,7 @@ pub(crate) fn feed_containers(
         if text.is_empty() {
             continue;
         }
-        // The two argument-taking reasons, each filling its own specifier. Neither code ever
-        // carries the other's fill, so the order is bookkeeping, not precedence.
+        // Reason 1 fills `%d` and 16 `%s`; neither carries the other's fill.
         let text = match e.required_level {
             Some(d) => text.replace("%d", &d.to_string()),
             None => text,
@@ -1035,29 +848,16 @@ pub(crate) fn feed_containers(
         };
         refusals.push(crate::ui_action::Shown::keyed(key, text));
     }
-    // Through the one sink, so the row that named the text also names the surface and the SOUND —
-    // 18 of these keys carry an error-speech line (`ERR_INV_FULL`, `ERR_BAG_FULL`,
-    // `ERR_NOT_ENOUGH_MONEY`, …), which is the largest single source of it in the client.
-    // Every key this table can emit is `kind = 2`, so nothing moved off the red
-    // line when the surface stopped being hardcoded here.
+    // Through the one sink, which also plays the error speech 18 of these keys carry.
     crate::ui_action::show_messages(&mut script, &mut sink, "ui_items", refusals);
-    // Both lock clears of the frame — the resolving field-update watch ([`resolve_item_locks`],
-    // which runs ahead of EVERY feed) and the failure-driven clears
-    // `net/apply/loot.rs::inventory_failure` queued (it has no `UiScript` to fire through). Both
-    // fire `ITEM_LOCK_CHANGED` here, the bag windows' own repaint trigger (the popup's
-    // No/ESC clear paths the bag never clicked through, so only the event reaches it). Fired
-    // AFTER the slot loop below pushes the corrected `.locked` state, so the repaint they trigger
-    // sees the unlocked slot, not stale data — and after `feed_char`'s own push, for the same
-    // reason on the doll and bank-bag bands (1771).
+    // The frame's unlocks, from `resolve_item_locks` and the inventory-failure handler, fire
+    // `ITEM_LOCK_CHANGED` after the slot push below and after `feed_char`'s, so a repaint sees
+    // the unlocked slot; server-opened bags fire `BAG_OPEN(id)` then too.
     let transitioned: Vec<(i64, u32)> = std::mem::take(&mut lock_cleared.0);
-    // The containers the server opened this frame (`SMSG_OPEN_CONTAINER`) — the
-    // packet handler queued them; they fire as `BAG_OPEN(id)` after the push below, like the locks.
     let opened: Vec<i64> = std::mem::take(&mut opens.0);
 
     let mut fresh: HashMap<i64, ContainerState> = HashMap::new();
-    // The player's own relic flag, resolved once. `find_equip_slot` reads it for INVSLOT 17 and
-    // reads it BOTH ways, so an absent table (no client data) answers false — every class then
-    // reads as an ordinary ranged wielder, which is the safe degradation.
+    // The class's relic flag; without client data it is false, an ordinary ranged slot.
     let has_relic_slot = player.is_some_and(|p| {
         p.0.unit_class().is_some_and(|c| {
             classes
@@ -1066,7 +866,6 @@ pub(crate) fn feed_containers(
         })
     });
     if let Some(store) = player {
-        // Bag 0: the backpack — its slots live directly in the player descriptor.
         let mut slots = HashMap::new();
         for i in 0..PACK_SLOTS {
             let guid = store.0.player_pack_slot(i).unwrap_or(0);
@@ -1155,10 +954,8 @@ pub(crate) fn feed_containers(
             );
         }
 
-        // The bank: container −1 = the 24 generic vault slots straight off the
-        // player descriptor, containers 5..=10 = the bank bags — each a container object exactly
-        // like an equipped bag. Fed unconditionally like the backpack: the descriptor streams at
-        // login, the window (BANKFRAME_OPENED) is a UI concern, not a data one.
+        // The bank, container -1 (the vault) and 5..=10 (its bags), fed whether or not the window
+        // is open: the descriptor streams at login.
         let mut slots = HashMap::new();
         for i in 0..BANK_SLOTS {
             let guid = store.0.player_bank_slot(i).unwrap_or(0);
@@ -1243,13 +1040,9 @@ pub(crate) fn feed_containers(
             );
         }
 
-        // The keyring: container −2, the player array's slots 81.., no container
-        // object of its own — structurally the bank's twin. Its capacity is NOT a wire field: both
-        // the reference (`GetKeyRingSize`) and the server (`GetMaxKeyringSize`) derive it from the
-        // player's level with the same ladder, so [`keyring_size`] computes it here and Lua's
-        // `GetKeyRingSize()` reads it back off this snapshot. Slots past that count are never fed
-        // (they can't hold anything — the server refuses to store there), so the window's own
-        // physIndex-past-size branch hides exactly the right buttons with no keyring-specific code.
+        // The keyring, container -2: player slots 81.., sized by the level ladder that stock
+        // `GetKeyRingSize` (`ContainerFrame.lua:773`) reads off `UnitLevel` and the server shares.
+        // Slots past the size, which the server refuses, are not fed.
         let size = keyring_size(store.0.unit_level().unwrap_or(1));
         let mut slots = HashMap::new();
         for i in 0..size.min(u32::from(KEYRING_SLOTS)) as u8 {
@@ -1282,9 +1075,8 @@ pub(crate) fn feed_containers(
             },
         );
 
-        // `HasKey()` — the gate that decides whether the keyring exists in the UI at all. Pushed
-        // beside the containers because it is the same knowledge (item templates) read over the
-        // same slot arrays, and it must be fresh on exactly the frames a BAG_UPDATE fires.
+        // `HasKey()`, which decides whether the keyring shows at all, pushed with the containers
+        // so it is fresh on every `BAG_UPDATE` frame.
         let key = has_key(&store.0, &inv.objects, &items, &commands);
         if key != memory.had_key {
             gate.audit("feed_containers", "the HasKey() flip");
@@ -1330,84 +1122,56 @@ pub(crate) fn feed_containers(
     }
 }
 
-/// The feed's outward half: diff `source` against what was last pushed, push each changed bag into
-/// the VM and fire the reference's events — `BAG_UPDATE(bagID)` (`PLAYERBANKSLOTS_CHANGED` for
-/// the vault), one `BAG_UPDATE_DELAYED` per batch, then the lock transitions.
+/// Diffs `source` against the last push, pushes each changed bag and fires the reference's events:
+/// `BAG_UPDATE(bagID)` (`PLAYERBANKSLOTS_CHANGED` for the vault), the lock transitions, `BAG_OPEN`.
 ///
-/// **`source: None` means the self player STORE is absent this frame — "no data source", never
-/// "the player has no items."** The two absent windows are pre-arrival at login (the fresh VM's
-/// containers are already empty; nothing to say) and the logout despawn frames:
-/// `SMSG_LOGOUT_COMPLETE` despawns the self entity (`net/apply/session.rs::logged_out`) at least
-/// one full Update before the `OnExit(InWorld)` shutdown, so this runs against a still-live VM.
-/// Diffing the absence as an all-empty snapshot fired a full `BAG_UPDATE` burst whose every bag
-/// read `GetContainerNumSlots() == 0` — and an addon that mirrors bags into its saved variables
-/// deletes a bag's record on size 0 (Bagnon_Forever's `SaveBagData`), so the burst erased the
-/// whole record moments before [`crate::ui_script::shutdown_ui_state`] wrote the file. That was
-/// the director's offline-bags report: every recently-logged-out character money-only, the view
-/// stale. The reference never delivers such a burst — its UI shutdown (`0x490bd0`) runs with the
-/// inventory intact — so here the VM simply keeps its last-pushed state and the shutdown writes
-/// the bags the player actually had. Lock-clear events still flush either way: they are
-/// packet-driven and must not sit around to fire into a later VM.
+/// `None` is an absent self store (before login, or the logout despawn frames before the VM shuts
+/// down), never "no items": the VM keeps its last push, as the reference's UI shutdown
+/// (`0x490bd0`) runs with the inventory intact, where a burst of size-0 `BAG_UPDATE`s would have a
+/// bag-saving addon record empty bags. Lock events still flush, never to fire into a later VM.
 pub(crate) fn apply_container_source(
     script: &mut UiScript,
     memory: &mut FeedMemory,
     source: Option<HashMap<i64, ContainerState>>,
-    // The player's item-slot guids ([`bag_slot_guid`], [`vault_slot_guid`]) — `BAG_CLOSED`'s diff
-    // and `PLAYERBANKSLOTS_CHANGED`'s producer discriminator. Rides beside the source rather than
-    // inside it because it is read off the player descriptor, not built from the containers, and
-    // the absent-source path must leave the memory alone rather than diff against zeros (that path
-    // is the logout despawn window — see this function's own note).
+    // Beside the source, since an absent source must leave the guid memory alone too.
     guids: SlotGuids,
     transitioned: Vec<(i64, u32)>,
     opened: Vec<i64>,
 ) -> bool {
-    // Diff whole bags; push + fire BAG_UPDATE per transition, one BAG_UPDATE_DELAYED per batch. A
-    // pending-lock transition always flips a slot's `.locked` (part of `ContainerSlot`'s equality),
-    // so it always shows up here too — but `transitioned`'s ITEM_LOCK_CHANGED fires unconditionally
-    // below rather than leaning on that invariant.
+    // A lock transition also flips a slot's `locked`, so it shows in the diff, but its
+    // `ITEM_LOCK_CHANGED` fires below regardless.
     let mut pushed = false;
     if let Some(fresh) = source {
         pushed |= diff_and_push(script, memory, fresh, guids);
     }
-    // The lock-transition event (the bag windows' own repaint trigger) — after the
-    // container push above, so a listener's repaint reads the corrected `.locked` state.
+    // After the push, so a repaint reads the corrected `locked`.
     pushed |= !transitioned.is_empty();
-    // **`ITEM_LOCK_CHANGED` carries NO arguments** (found by the argument gate).
-    // All five fire sites in the image — `0x495415`, `0x495455`, `0x49557d` (the local lock/unlock
-    // paths), `0x5d859a` and `0x5d94b9` (the item field watchers) — are
-    // `FrameScript_SignalEvent 0x703e50`, an `__fastcall(ecx = id)` with a plain `ret` and no vararg
-    // mechanism at all, so the event cannot carry one. Every stock consumer repaints from `this`
-    // (`ContainerFrame.lua:39`, `PaperDollFrame.lua:601`, `BankFrame.lua:209`). The `(bag, slot)`
-    // pair benilla pushed is the LATER clients' shape, invented here.
+    // No arguments: the reference's five fire sites (`0x495415`, `0x495455`, `0x49557d`,
+    // `0x5d859a`, `0x5d94b9`) call `FrameScript_SignalEvent` (`0x703e50`), which pushes none, and
+    // stock consumers repaint from `this` (`ContainerFrame.lua:39`, `PaperDollFrame.lua:601`,
+    // `BankFrame.lua:209`).
     for _ in transitioned {
         script.fire_event("ITEM_LOCK_CHANGED", Vec::new());
     }
-    // `SMSG_OPEN_CONTAINER` → `BAG_OPEN(containerId)`. The reference's arm
-    // `0x5e3b35` fires it from the packet handler; ours reaches the VM here — after this frame's
-    // `BAG_UPDATE`s, so the frame the stock `ContainerFrame_OnEvent` shows paints the bag as it now
-    // is. The id is the reference's own: 0 backpack, 1..4 equipped, 5..10 bank.
+    // The reference fires `BAG_OPEN(id)` from the handler (`0x5e3b35`); here it follows this
+    // frame's `BAG_UPDATE`s, so the frame shown paints the bag as it is.
     pushed |= !opened.is_empty();
     for bag in opened {
         script.fire_event("BAG_OPEN", vec![ScriptValue::Int(bag)]);
     }
-    // Whether anything went into the VM — the caller's gate audit reads it (1439).
+    // Whether anything went into the VM, for the caller's gate audit.
     pushed
 }
 
-/// The guid of the **bag itself** in container `id` (1..=10) — the four equipped bag slots, then
-/// the six bank bag slots. `0` = that slot is empty. Anything else (the backpack 0, the vault −1,
-/// the keyring −2) has no bag slot behind it and answers 0.
-///
-/// This is what `BAG_CLOSED`/`BAG_UPDATE`'s watcher reads: `0x4f8cc0`'s four install loops cover
-/// the descriptor bytes `0x540`–`0x55f` (equipped bags 19–22) and `0x6a0`–`0x6cf` (bank bags
-/// 63–68) with callback `0x4f8ec0`, and the backpack and keyring loops with `0x4f8db0`, which
-/// never reaches the event at all. So exactly these ten slots close a window.
-/// The guid of the item in vault slot `i` (0-based, 24 of them — absolute player slots 39..62).
-/// `0` = empty. The band `0x5dd8a0`'s L2 loop registers `0x5ddcf0` over (`edi=0x5e0`..`0x698`).
+/// The item guid in vault slot `i` (0-based; player slots 39..62), 0 when empty. The reference's
+/// band `0x5dd8a0` watches these fields with `0x5ddcf0`.
 fn vault_slot_guid(store: &ObjectStore, i: u8) -> u64 {
     store.0.player_bank_slot(i).unwrap_or(0)
 }
 
+/// The guid of the bag in container `id` (1..=10, equipped then bank bags), 0 when empty or for any
+/// other id. These are the ten slots whose watcher (`0x4f8cc0` installs `0x4f8ec0`) can close a
+/// window; the backpack and keyring loops (`0x4f8db0`) never reach the event.
 fn bag_slot_guid(store: &ObjectStore, id: i64) -> u64 {
     match id {
         1..=4 => store.0.player_inv_slot(BAG_SLOT_FIRST + (id as u8 - 1)),
@@ -1424,15 +1188,9 @@ fn diff_and_push(
     fresh: HashMap<i64, ContainerState>,
     guids: SlotGuids,
 ) -> bool {
-    // **`BAG_CLOSED` — the only thing in the image that hides an open bag window** (one fire site,
-    // `0x4f92b5`, and `ContainerFrame_OnEvent`'s `this:Hide()` is its one consumer;
-    // `CloseBag`/`CloseAllBags` are not even strings in `WoW.exe`). Its condition is **not** "the
-    // bag went away" — it is `new != old && old != 0` (`0x4f923d je` unchanged, `0x4f9247 je`
-    // old-was-empty), so a bag SWAPPED for another fires `BAG_CLOSED(n)` and then `BAG_UPDATE(n)`.
-    //
-    // Diffed on the BAG's own guid rather than on the pushed `ContainerState` below, because it is
-    // a fact about the bag and not about its contents: two identical empty bags exchanged between
-    // two slots leave both container states equal and must still close both windows.
+    // `BAG_CLOSED` (one fire site, `0x4f92b5`) is the only thing that hides a bag window. It fires
+    // when the bag's guid changes from nonzero (`0x4f923d`, `0x4f9247`), so a swapped bag closes
+    // and then updates; diffed on the guid, as two identical bags swapped leave the states equal.
     let closed: Vec<i64> = (1..=10)
         .filter(|&id| {
             let (was, now) = (
@@ -1442,8 +1200,7 @@ fn diff_and_push(
             was != 0 && now != was
         })
         .collect();
-    // The other half of the same branch: a bag REMOVED fires `BAG_CLOSED` and no `BAG_UPDATE`
-    // (`0x4f92cc`). Every other transition still announces.
+    // A removed bag fires `BAG_CLOSED` and no `BAG_UPDATE` (`0x4f92cc`).
     let emptied: Vec<i64> = closed
         .iter()
         .copied()
@@ -1453,29 +1210,11 @@ fn diff_and_push(
     for id in &closed {
         script.fire_event("BAG_CLOSED", vec![ScriptValue::Int(*id)]);
     }
-    // **`PLAYERBANKSLOTS_CHANGED` has TWO producers in the reference, and they carry different
-    // arguments**. benilla had one fire for both, so half of them were argless
-    // where the reference pushes a string:
-    //
-    // * **P1, the player-descriptor path** — `0x5ddcf0`'s watcher sees the slot's own GUID field
-    //   change and fires `0x5ddd6e`, `FrameScript_SignalEvent 0x703e50`, `__fastcall(ecx = id)`
-    //   with a plain `ret`: **zero Lua values**. This is an item arriving, leaving, or being
-    //   exchanged for a different one.
-    // * **P2, the item-object path** — the changed ITEM's own watched fields move (stack count,
-    //   spell charges, enchantment, flags, durability, entry) or its `CGItem` enters the world;
-    //   `0x4c7180` resolves it to a flat slot and fires `0x4c728d`,
-    //   `SignalEvent2(347, "%s", "player")`: **`arg1` is the unit token `"player"`**. This is the
-    //   same item, changed.
-    //
-    // So the discriminator is the slot's item GUID, not its pushed view — and that is not a
-    // refinement, it is the only thing that answers: two different instances of one template push
-    // an identical `ContainerSlot`, so a view diff reads a swap of two identical stacks as *no
-    // change at all* and fires nothing where the reference fires P1 twice. Exactly 1777's reason
-    // for diffing `BAG_CLOSED` on the bag's own guid, one band over.
-    //
-    // Planned here, before `memory` is rewritten, and fired below after the push — a listener must
-    // repaint off the corrected state. It is deliberately OUTSIDE the `changed` gate for the same
-    // identical-swap reason: that transition moves no container state.
+    // `PLAYERBANKSLOTS_CHANGED` has two producers in the reference: the slot's guid changing
+    // (`0x5ddcf0` fires `0x5ddd6e`) with no arguments, and the same item's fields changing
+    // (`0x4c7180` fires `0x4c728d`) with `arg1 = "player"`. So the slot's guid decides, not its
+    // view: two identical stacks swapped push equal views and still fire the argless one twice.
+    // Planned before `memory` is rewritten, fired after the push, outside the `changed` gate.
     let vault: Vec<bool> = {
         let empty = HashMap::new();
         let now = fresh.get(&BANK_CONTAINER).map_or(&empty, |c| &c.slots);
@@ -1504,15 +1243,9 @@ fn diff_and_push(
         .filter(|b| fresh.get(b) != memory.pushed.get(b))
         .collect();
     if !changed.is_empty() {
-        // **The spent-ammo signal**. The reference registers a field mirror on
-        // `ITEM_FIELD_STACK_COUNT` for TYPEID ITEM (`ClntObjMgrSetTypeMirrorHandler 0x468070` at
-        // `0x5d9360`, handler `0x5d9400`); for any item the active player owns, a stack-count
-        // write fires **ITEM_LOCK_CHANGED first**, ahead of the `BAG_UPDATE` the same handler
-        // emits further down. Nothing else in the image reaches that event from a server update —
-        // its other four fire sites are all local lock/unlock — so it is the ONLY per-shot signal
-        // an addon can detect a spent arrow with, and every auto-shot timer is built on it.
-        //
-        // Computed before `memory.pushed` is replaced at the bottom of this block.
+        // A stack-count write on an item we own fires `ITEM_LOCK_CHANGED` ahead of `BAG_UPDATE`
+        // (the reference's mirror handler `0x5d9400`, registered at `0x5d9360` via `0x468070`):
+        // an auto-shot timer's only per-shot signal. Computed before `memory.pushed` is replaced.
         let restacked = {
             let empty = HashMap::new();
             let mut v: Vec<(i64, u32)> = Vec::new();
@@ -1520,8 +1253,7 @@ fn diff_and_push(
                 let now = fresh.get(&bag).map_or(&empty, |c| &c.slots);
                 let was = memory.pushed.get(&bag).map_or(&empty, |c| &c.slots);
                 for (&slot, n) in now {
-                    // The SAME item, restacked. A slot whose entry changed is a create or a swap,
-                    // not a field write on one item, and it does not take this path.
+                    // The same item restacked; a changed entry is a create or a swap.
                     if was.get(&slot).is_some_and(|w| {
                         w.item_id != 0 && w.item_id == n.item_id && w.count != n.count
                     }) {
@@ -1529,22 +1261,17 @@ fn diff_and_push(
                     }
                 }
             }
-            // Map order is not an order, and an event stream has to be reproducible.
+            // Sorted: an event stream has to be reproducible.
             v.sort_unstable();
             v
         };
         for &bag in &changed {
             script.set_container(bag, fresh.get(&bag).cloned());
         }
-        // Ahead of BAG_UPDATE below, which is the reference handler's own order. One event per
-        // restacked slot and no arguments (see the note above) — `restacked` keeps the `(bag,
-        // slot)` pairs rather than a count because they are what identifies the slot for anyone
-        // reading this at a breakpoint; the event itself has never carried them.
+        // Ahead of `BAG_UPDATE`, one argless event per restacked slot.
         for _ in &restacked {
             script.fire_event("ITEM_LOCK_CHANGED", Vec::new());
         }
-        // Name the bags, not just the count: "3 changed" can't tell you WHICH container moved, and
-        // the negative ids (−1 bank, −2 keyring) are exactly the ones you go looking for.
         debug!(
             "ui_items: fed {} changed bag(s) — {}",
             changed.len(),
@@ -1555,27 +1282,16 @@ fn diff_and_push(
                 .join(" ")
         );
         for &bag in &changed {
-            // The vault fires the reference's own event, once per changed slot and **with no
-            // arguments** (`0x5ddd6e` calls `FrameScript_SignalEvent 0x703e50`, an
-            // `__fastcall(ecx = id)` with a plain `ret` and no vararg push). It is a broadcast:
-            // every bank button repaints from its own `GetInventorySlot()`, which is why no slot id
-            // is needed and why the bank BAG band's copy of this event — fired by
-            // `ui_char::feed_char`, the feed that owns that band — is indistinguishable from this
-            // one.
-            //
-            // Everything else — backpack, equipped bags, AND bank bags (ordinary container frames
-            // in the reference) — fires BAG_UPDATE(bagID). The vault is the one band that fires
-            // NEITHER `BAG_UPDATE` nor `BAG_CLOSED`: `0x4f8cc0` installs its container listener
-            // over the six bank-bag fields (`0x6a0`–`0x6c8`) and over nothing in the 24 vault
-            // fields (`0x5e0`–`0x698`).
+            // Every changed bag but the vault fires `BAG_UPDATE`: `0x4f8cc0` installs no container
+            // listener over the vault's fields, which fire only `PLAYERBANKSLOTS_CHANGED`.
             if bag != BANK_CONTAINER && !emptied.contains(&bag) {
                 script.fire_event("BAG_UPDATE", vec![ScriptValue::Int(bag)]);
             }
         }
         memory.pushed = fresh;
     }
-    // The vault band's announce, planned above. One event per changed slot, as the watcher does —
-    // the slot travels in *how many times it fires*, never in an argument (1776).
+    // One event per changed vault slot, with no slot argument: every bank button repaints from
+    // its own slot (`feed_char` fires the same event for the bank-bag buttons).
     for &same_item in &vault {
         let args = if same_item {
             vec![ScriptValue::Str("player".into())]
@@ -1584,9 +1300,7 @@ fn diff_and_push(
         };
         script.fire_event("PLAYERBANKSLOTS_CHANGED", args);
     }
-    // A `BAG_CLOSED` or a vault event with nothing else to say still went into the VM — two
-    // identical bags (or two identical items) swapped between two slots change no container state
-    // at all.
+    // A `BAG_CLOSED` or vault event alone still went into the VM.
     !changed.is_empty() || !closed.is_empty() || !vault.is_empty()
 }
 
@@ -1597,26 +1311,13 @@ mod tests {
         BANK_CONTAINER, BANK_SLOTS,
     };
 
-    /// No bag in any of the ten bag slots, nothing in the vault — every test below drives the
-    /// backpack (container 0), which has no bag slot behind it and can never raise `BAG_CLOSED`.
+    /// No bags and an empty vault.
     const NO_BAGS: SlotGuids = SlotGuids {
         bags: [0; 10],
         vault: [0; BANK_SLOTS as usize],
     };
 
-    /// **`PLAYERBANKSLOTS_CHANGED` has two producers and they carry different arguments**.
-    ///
-    /// benilla fired the argless one for every transition, which is right for half of them and
-    /// wrong for the other half — and the half it got wrong is the one a view diff cannot even
-    /// see. The three arms below are the three the reference distinguishes:
-    ///
-    ///  · a slot's item GUID changes (arrive / leave / exchange) → `0x5ddd6e`, **no arguments**;
-    ///  · the same item's own fields change (a restack) → `0x4c728d`, **`arg1 = "player"`**;
-    ///  · two IDENTICAL items exchanged between two slots → the pushed views are equal, so the
-    ///    container diff sees nothing at all, and the reference fires the argless one **twice**.
-    /// `SMSG_OPEN_CONTAINER` → `BAG_OPEN(containerId)`: the ids the handler
-    /// resolved reach the VM in order, after the frame's container push, and the stock
-    /// `ContainerFrame_OnEvent` sees the id as `arg1` — the reference's own event shape.
+    /// The handler's container ids reach the VM as `BAG_OPEN`'s `arg1`.
     #[test]
     fn a_server_opened_bag_fires_bag_open_with_its_container_id() {
         let mut s = UiScript::new().unwrap();
@@ -1654,6 +1355,8 @@ mod tests {
         assert!(s.eval::<Vec<String>>("return SEEN").unwrap().is_empty());
     }
 
+    /// A new guid fires the argless event, a restack fires it with `"player"`, and two identical
+    /// items swapped fire the argless one twice though the views are equal.
     #[test]
     fn playerbankslots_changed_names_its_producer_by_the_slot_guid() {
         let mut s = UiScript::new().unwrap();
@@ -1691,7 +1394,7 @@ mod tests {
         let mut guids = NO_BAGS;
         let mut memory = FeedMemory::default();
 
-        // An item ARRIVES in vault slot 1 — the descriptor path, no arguments.
+        // An item arrives in vault slot 1: the descriptor path, no arguments.
         guids.vault[0] = 0xF00D;
         apply_container_source(
             &mut s,
@@ -1703,8 +1406,7 @@ mod tests {
         );
         assert_eq!(seen(&mut s), vec!["PLAYERBANKSLOTS_CHANGED nil"]);
 
-        // The SAME item restacks — its own `ITEM_FIELD_STACK_COUNT` moved, which is the item
-        // watcher's path, and the reference pushes the unit token there.
+        // The same item restacks: the item watcher's path, with the unit token.
         apply_container_source(
             &mut s,
             &mut memory,
@@ -1715,7 +1417,6 @@ mod tests {
         );
         assert_eq!(seen(&mut s), vec!["PLAYERBANKSLOTS_CHANGED player"]);
 
-        // Nothing moved at all.
         apply_container_source(
             &mut s,
             &mut memory,
@@ -1726,9 +1427,7 @@ mod tests {
         );
         assert!(seen(&mut s).is_empty(), "an unchanged vault says nothing");
 
-        // Two IDENTICAL stacks exchanged between slots 1 and 2. Both slot views are equal before
-        // and after, so `fresh == memory.pushed` and the container diff is empty — the guids are
-        // the only witness, and the reference fires twice.
+        // Two identical stacks swapped between slots 1 and 2: the guids are the only witness.
         let two = || {
             HashMap::from([(
                 BANK_CONTAINER,
@@ -1786,20 +1485,8 @@ mod tests {
         assert!(pushed, "and the feed reports that it spoke to the VM");
     }
 
-    /// **`BAG_CLOSED`, the only thing that hides an open bag window** — and the three ways to get
-    /// its condition wrong (`0x4f92b5`).
-    ///
-    /// benilla never fired this event at all, so a `ContainerFrame` outlived the bag it belonged
-    /// to: `ContainerFrame_OnEvent`'s `this:Hide()` arm is its one consumer in all of FrameXML,
-    /// and `CloseBag`/`CloseAllBags` are not even strings in `WoW.exe` — there is no other
-    /// mechanism, for either band.
-    ///
-    /// The three traps, each asserted below:
-    ///  · the condition is `new != old && old != 0`, NOT "the bag went away" — a SWAP fires it;
-    ///  · an unequip fires `BAG_CLOSED` and **no** `BAG_UPDATE`, while a swap fires both;
-    ///  · the diff is on the BAG's own guid, not on the pushed container — two identical empty
-    ///    bags exchanged between two slots leave every container state equal, and both windows
-    ///    must still close.
+    /// `BAG_CLOSED` (`0x4f92b5`): a swap fires it, an unequip fires it without `BAG_UPDATE`, and
+    /// two identical bags swapped still close both windows.
     #[test]
     fn bag_closed_fires_on_the_bag_guid_moving_and_only_off_a_non_empty_slot() {
         let mut s = UiScript::new().unwrap();
@@ -1830,8 +1517,7 @@ mod tests {
         let mut guids = NO_BAGS;
         let mut memory = FeedMemory::default();
 
-        // Equip a bag into the first equipped bag slot: BAG_UPDATE, and no BAG_CLOSED — the slot
-        // was empty, which is the `0x4f9247 je` arm.
+        // Equipped into an empty slot: `BAG_UPDATE` only (`0x4f9247`).
         guids.bags[0] = 0xAAAA;
         apply_container_source(
             &mut s,
@@ -1843,8 +1529,6 @@ mod tests {
         );
         assert_eq!(seen(&mut s), vec!["BAG_UPDATE 1"]);
 
-        // Its contents change: the bag guid stands, so neither the close nor its suppression
-        // applies and the ordinary announce runs.
         apply_container_source(
             &mut s,
             &mut memory,
@@ -1858,8 +1542,7 @@ mod tests {
             "an unchanged container says nothing"
         );
 
-        // SWAP for a different bag: closed FIRST, then updated. This is the arm a "the bag went
-        // away" reading gets wrong — the slot is still occupied.
+        // Swapped for another bag: closed, then updated.
         guids.bags[0] = 0xBBBB;
         apply_container_source(
             &mut s,
@@ -1871,7 +1554,7 @@ mod tests {
         );
         assert_eq!(seen(&mut s), vec!["BAG_CLOSED 1", "BAG_UPDATE 1"]);
 
-        // UNEQUIP: closed, and **no** BAG_UPDATE.
+        // Unequipped: closed, and no `BAG_UPDATE`.
         guids.bags[0] = 0;
         apply_container_source(
             &mut s,
@@ -1883,9 +1566,7 @@ mod tests {
         );
         assert_eq!(seen(&mut s), vec!["BAG_CLOSED 1"]);
 
-        // Two IDENTICAL empty bags exchanged between bank bag slots 5 and 6. Every container
-        // state is equal, so the container diff sees nothing at all — and both windows must still
-        // close. This is the case that makes the guid the right thing to watch.
+        // Two identical empty bags swapped between containers 5 and 6: equal states, both close.
         let mut memory = FeedMemory::default();
         let two = || {
             HashMap::from([
@@ -1939,13 +1620,8 @@ mod tests {
     use benilla_ui::script::{ContainerState, UiScript};
     use std::collections::HashMap;
 
-    /// The logout-wipe law (the director's stale-offline-bags report): an **absent** self player
-    /// store is "no data source", never "the player has no items". `SMSG_LOGOUT_COMPLETE` despawns
-    /// the self entity a full Update before `OnExit(InWorld)` shuts the VM down, and the feed used
-    /// to diff that absence as an all-empty snapshot — a `BAG_UPDATE` burst whose every bag read
-    /// `GetContainerNumSlots() == 0`, which made Bagnon_Forever erase its records right before the
-    /// saved-variables write. A *present* source that lost a bag is a real transition and must
-    /// still announce — the law gates on the source's existence, not on its emptiness.
+    /// An absent self store is no source, never an empty bag burst; a present source that lost a
+    /// bag still announces.
     #[test]
     fn an_absent_self_player_is_no_source_never_an_empty_bag_burst() {
         let mut s = UiScript::new().unwrap();
@@ -1963,7 +1639,7 @@ mod tests {
         };
         let mut memory = FeedMemory::default();
 
-        // The in-session push: source present, bag new → pushed + announced.
+        // In session: a new bag is pushed and announced.
         apply_container_source(
             &mut s,
             &mut memory,
@@ -1975,8 +1651,7 @@ mod tests {
         assert_eq!(s.eval::<i64>("return GetContainerNumSlots(0)").unwrap(), 16);
         assert_eq!(s.eval::<i64>("return BAG_EVENTS").unwrap(), 1);
 
-        // The logout despawn frame: no store. The VM keeps its last-pushed bags and no event
-        // fires — an addon reading its bags out of the PLAYER_LOGOUT edge sees them intact.
+        // The logout despawn frame: the VM keeps its bags and nothing fires.
         apply_container_source(&mut s, &mut memory, None, NO_BAGS, Vec::new(), Vec::new());
         assert_eq!(
             s.eval::<i64>("return GetContainerNumSlots(0)").unwrap(),
@@ -1989,7 +1664,7 @@ mod tests {
             "an absent source must not fire a BAG_UPDATE burst"
         );
 
-        // A PRESENT source without the bag is a genuine transition: push + announce.
+        // A present source without the bag is a real transition.
         apply_container_source(
             &mut s,
             &mut memory,
@@ -2002,18 +1677,9 @@ mod tests {
         assert_eq!(s.eval::<i64>("return BAG_EVENTS").unwrap(), 2);
     }
 
-    /// **The spent-ammo signal** (B267's second half). A stack ticking down must
-    /// fire `ITEM_LOCK_CHANGED`, **before** the `BAG_UPDATE` for its bag — the reference's
-    /// `ITEM_FIELD_STACK_COUNT` mirror handler's own order. The event carries no arguments
-    /// (2140): `0x5d94b9` is a `SignalEvent` site, which has no vararg mechanism at all.
-    ///
-    /// This is not cosmetic ordering. Quiver's auto-shot timer has no other way to learn a shot
-    /// fired: it starts the reload drain from this event, and without it the bar fills once and
-    /// sits at 100% forever (the director's report). Every vanilla shot timer works this way.
-    ///
-    /// The negative half matters as much: a slot whose ENTRY changed is a swap or a create, not a
-    /// field write on one item, and must NOT fire it — over-firing would make the addon count
-    /// shots that never happened.
+    /// A stack ticking down fires an argless `ITEM_LOCK_CHANGED` before its bag's `BAG_UPDATE`
+    /// (`0x5d94b9`): an auto-shot timer such as Quiver's learns of a shot from it alone. A changed
+    /// entry is a swap and must not fire it, or the timer counts shots never fired.
     #[test]
     fn a_stack_ticking_down_fires_item_lock_changed_before_bag_update() {
         use benilla_ui::script::ContainerSlot;
@@ -2047,7 +1713,7 @@ mod tests {
         };
         let mut memory = FeedMemory::default();
 
-        // The quiver arrives full — a create, not a restack. No lock event.
+        // The quiver arrives full: a create, no lock event.
         apply_container_source(
             &mut s,
             &mut memory,
@@ -2081,8 +1747,7 @@ mod tests {
              and Quiver's shot timer only needs to know that A shot happened"
         );
 
-        // A DIFFERENT item in the same slot: a swap. The count differs too, and it must still
-        // not fire — otherwise an addon counts a shot every time you rearrange your bags.
+        // A different item in the slot, with a different count: a swap, no lock event.
         s.run("ORDER = {}").unwrap();
         let mut other = arrows(20);
         other.item_id = 3033; // Razor Arrow
@@ -2113,34 +1778,23 @@ mod tests {
         }
     }
 
-    /// The real builder's charge gate (`0x52da01`/`0x52db51`): the `-1` consume-on-use sentinel
-    /// prints NO line — the fix for food/water/potions (Tough Hunk of Bread's wire `-1` was
-    /// rendering "1 Charge") — while a real pool prints its absolute value.
+    /// The builder's charge gate (`0x52da01`, `0x52db51`).
     #[test]
     fn charge_gate_matches_the_real_builder() {
-        // Food/water/potions: spellcharges -1 (VERIFIED live vmangos item_template — bread 4540,
-        // spring water 159, conjured water 5350 all carry `433/430, -1`). No line.
+        // Food and water carry `-1` in vmangos `item_template` (bread 4540, water 159 and 5350).
         assert_eq!(charges_count(&[slot(433, -1)]), 0, "food's -1 = no line");
-        // A real charge pool, negative = item destroyed when depleted (Flame Deflector 4376:
-        // `4057, -5`) — prints the absolute count.
+        // A pool that uses the item up: Flame Deflector 4376 (`4057, -5`).
         assert_eq!(charges_count(&[slot(4057, -5)]), 5, "wand-style pool");
-        // A positive pool would print as-is (the abs is a no-op).
         assert_eq!(charges_count(&[slot(4057, 3)]), 3);
-        // Chargeless slots and empty slots: no line.
         assert_eq!(charges_count(&[slot(433, 0)]), 0, "template 0 = sentinel");
         assert_eq!(charges_count(&[slot(0, -5)]), 0, "no spell = no slot");
         assert_eq!(charges_count(&[]), 0);
-        // The election walks slots: a leading sentinel slot doesn't mask a later pool.
+        // A leading sentinel slot does not mask a later pool.
         assert_eq!(charges_count(&[slot(433, -1), slot(4057, -10)]), 10);
     }
 
-    /// The trigger line's **empty-description law**, byte-verified at the item builder
-    /// (`0x52da29`-`0x52da31`: test the expanded text's first byte, jump past the whole block on
-    /// zero) — checked against the REAL 5875 Spell.dbc, because the whole point is what the actual
-    /// data holds.
-    ///
-    /// The director's report: a dungeon key's tooltip read "Use: Opening". `Opening` is a real
-    /// spell with a real name and NO description, and the old code fell back to the name.
+    /// On the real Spell.dbc, an undescribed spell such as a key's `Opening` builds no trigger
+    /// line (`0x52da29`-`0x52da31`), and a described one does.
     #[test]
     fn an_undescribed_spell_prints_no_trigger_line_on_real_data() {
         let data = benilla_formats::wow_data_or_skip!();
@@ -2157,14 +1811,10 @@ mod tests {
             radii: benilla_formats::load_spell_radii(&mut chain).expect("SpellRadius.dbc"),
         };
 
-        // No string table: what this test is about is whether a line is built at all, and
-        // Fireball's description reaches no keyed token — a `$s1` spread renders from the spell's
-        // own columns. A fixture that pretended to hold GlobalStrings would be claiming coverage
-        // this assertion does not have.
+        // No string table: Fireball's description reaches no keyed token.
         let no_strings = |_: &str, _: &[i64]| None;
 
-        // Every "Opening"/"Closing" the lock chain can reach — the key spells (3365/3366/6247/6477
-        // are all literally named "Opening") carry no description, so NO Use: line may be built.
+        // The lock chain's Opening and Closing spells, none with a description.
         for id in [3365u32, 3366, 6246, 6247, 6477, 21651] {
             let d = spells.catalog.get(id).expect("a real Spell.dbc row");
             assert!(
@@ -2179,8 +1829,7 @@ mod tests {
             );
         }
 
-        // The control: a described spell still produces its line, so this is a law about EMPTY
-        // descriptions and not a blanket mute. Fireball (133) is the tooltip suite's own anchor.
+        // The control: Fireball (133), described, still yields its line.
         let fireball = super::spell_desc_text(Some(&spells), 133, None, &no_strings)
             .expect("a described spell still yields its line");
         assert!(

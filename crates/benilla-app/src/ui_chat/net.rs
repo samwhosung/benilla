@@ -1,10 +1,6 @@
-//! The chat window's packet handlers (in the net handler table since 2323, moved out of the
-//! drain's chat arm file) — the spoken line itself, plus the server notices and query answers
-//! that render as chat lines (the channel roster, whisper refusals, `/played`).
-//!
-//! Two handlers here do NOT render as chat: `SMSG_NOTIFICATION` and `SMSG_AREA_TRIGGER_MESSAGE`
-//! are the reference's UIErrorsFrame toasts, and queue onto [`UiErrorTexts`]. They live in this
-//! file because they are text-carrying server notices, not because they share a sink.
+//! The chat window's packet handlers: the spoken line, and the notices and answers that print as
+//! chat. `SMSG_NOTIFICATION` and `SMSG_AREA_TRIGGER_MESSAGE` are `UIErrorsFrame` toasts instead,
+//! queued on [`UiErrorTexts`].
 
 use benilla_protocol::messages::{ChatMessage, CHAT_MSG_WHISPER};
 use benilla_protocol::{SessionEvent, SessionEventKind};
@@ -15,8 +11,7 @@ use crate::net::{ClientCommand, NetCommands, NetHandlerApp, PlayedTimeAnswer, Se
 use crate::ui_action::{UiErrorKeys, UiErrorTexts};
 use crate::ui_social::SocialState;
 
-/// Register the chat window's handlers — called from [`super::UiChatPlugin`]. One per kind
-/// (the four world broadcasts share one), plus the session-end listener.
+/// Register the chat window's handlers and its session-end listener.
 pub(super) fn register(app: &mut App) {
     use SessionEventKind as K;
     app.net_handler(K::Chat, on_chat)
@@ -64,8 +59,7 @@ fn on_whisper_refusal(In(ev): In<SessionEvent>, mut errors: ResMut<UiErrorKeys>)
     }
 }
 
-/// The four world broadcasts — parked for [`super::broadcast`]'s resolve pass, which owns the
-/// AreaTable/ServerMessages lookups and the joined-defense-channel walk.
+/// The four world broadcasts, parked for [`super::broadcast`]'s resolve pass.
 fn on_broadcast(In(ev): In<SessionEvent>, mut chat_log: ResMut<ChatLog>) {
     let b = match ev {
         SessionEvent::ZoneUnderAttack { area_id } => Broadcast::ZoneUnderAttack { area_id },
@@ -87,9 +81,8 @@ fn on_toast(In(ev): In<SessionEvent>, mut errors: ResMut<UiErrorTexts>) {
     }
 }
 
-/// BOTH halves, and they are not redundant. The chat breakdown is our stand-in for the
-/// reference's `ChatFrame_DisplayTimePlayed`, which we do not ship; the mailbox is what becomes
-/// `TIME_PLAYED_MSG(total, level)` for an addon that asked.
+/// Print the `/played` breakdown, and fill the mailbox `feed::played_time_bridge` fires as
+/// `TIME_PLAYED_MSG`.
 fn on_played_time(
     In(ev): In<SessionEvent>,
     mut answer: ResMut<PlayedTimeAnswer>,
@@ -124,23 +117,13 @@ fn on_random_roll(In(ev): In<SessionEvent>, mut chat_log: ResMut<ChatLog>) {
     }
 }
 
-/// The chat log's session state dies with the socket. A listener on the session end
-/// (a second handler on the kind, after the bridge's own teardown).
+/// Clear the chat log's session state when the session ends.
 fn on_session_end(In(_): In<SessionEvent>, mut chat_log: ResMut<ChatLog>) {
     chat_log.clear_session();
 }
 
-/// A spoken line (`SMSG_MESSAGECHAT`) — the chat window's own feed:
-/// [`super`] formats + colors per type, resolves the sender name ask-once, and
-/// AddMessages it into ChatFrame1.
-///
-/// System lines (`CHAT_MSG_SYSTEM` 0x0A, vmangos `SharedDefines.h`) are the SERVER'S ANSWER to a GM
-/// dot-command — "Premade gear template N applied", "No matching premade player template found",
-/// "There is no such command". For a headless probe that is the only channel the server has to say
-/// *why* something did not happen, so it rides at `info!`: at `debug!` it was in the log but
-/// invisible at the default level, and a refused command read exactly like an applied one
-/// (the rig's whole batch silently no-op'd on a too-low GM level and nothing said
-/// so). Ordinary chat stays at `debug!`: conversation, not diagnosis, and high volume.
+/// A spoken line (`SMSG_MESSAGECHAT`). System lines (`0x0A`), the server's answers to GM
+/// commands, log at `info!` and go out as [`ServerSaidMessage`]; other chat logs at `debug!`.
 fn chat(
     m: ChatMessage,
     chat_log: &mut ChatLog,
@@ -148,54 +131,12 @@ fn chat(
     net_commands: &NetCommands,
     server_said: &mut MessageWriter<ServerSaidMessage>,
 ) {
-    // The ADDON gate: a line whose `language` is `LANG_ADDON` is not speech
-    // at all — it is one addon talking to another over the party/raid/guild/channel lane, because
-    // 1.12.1 has no addon opcode and no addon `ChatMsg` type. The real client never renders it; it
-    // fires `CHAT_MSG_ADDON` instead. Rendering it printed a partied real-client player's
-    // `[Party] [Soreen]: Quiver VERSION:3.1.4` version ping as ordinary party chat, and a
-    // mixed-client party makes that constant background noise.
-    //
-    // In `WoW.exe` (5875) the test is
-    // `0x49a89b`/`0x49a89e cmp edi,-0x1`, in the DISPLAY function `0x49a870`, and every branch of
-    // the addon arm `[0x49a8a7, 0x49a96d)` jumps below the normal render path at `0x49a970` — the
-    // chat frame is unreachable for such a line by construction. The **language field is the whole
-    // discriminator**: the type byte takes no part in the comparison, and the wire parser
-    // `0x49d560` never inspects language at all.
-    //
-    // **Ignore beats addon**, so that check comes first even though it costs a duplicated call:
-    // the reference drops an ignored sender's line at `0x49d72d`, *upstream* of the language test,
-    // so an ignored player's addon traffic fires nothing at all. Unobservable while both paths
-    // merely drop, but it is the precedence that has to already be right the day there is
-    // something to fire. (`CMSG_CHAT_IGNORED` is not owed here — the server refuses `LANG_ADDON`
-    // on WHISPER, the only type that answers on the wire.)
-    //
-    // **One divergence, named:** the reference suppresses *after* name resolution — an uncached
-    // sender parks the line in `__AUPENDINGCHAT__` (`0x49d7ba`) behind `CMSG_NAME_QUERY`, and
-    // `CHAT_MSG_ADDON` fires late from the callback `0x49ccc0`. We drop here instead, ahead of the
-    // name query [`ChatLog::push_wire`] would queue, which saves a name query per addon sender.
-    //
-    // **THE CHANNEL IS NOW HALF-OPEN, and that is the state of it — not a claim that it works.**
-    // Decision 1235 landed the SEND half: `SendAddonMessage` composes, validates against the
-    // client's four-lane whitelist and puts a real `CMSG_MESSAGECHAT`/`LANG_ADDON` on the wire.
-    // Nothing on THIS side changed, so an addon can broadcast and **cannot hear** — including its
-    // own echo (vmangos's `Group::BroadcastPacket` takes no ignore-guid, so the party lane returns
-    // a sender's own line, and an addon that sequences on that echo sees nothing).
-    //
-    // Opening the receive half is NOT deleting this `return`, which is why it is separate work:
-    //
-    //   - `CHAT_MSG_ADDON` (event 227, `0x49a95f push 0xe3`) is **not a `ChatTypeInfo` key** and
-    //     cannot ride [`crate::ui_chat::event`]'s pipeline — it has its own format string and its
-    //     own 4-argument shape `(prefix, message, distribution, sender)`, against the chat
-    //     family's ten. `every_fired_event_name_is_a_chat_type_info_key` would rightly fail it.
-    //   - `prefix`/`message` come from splitting the text on its **FIRST** tab (`0x49a8d0`); with
-    //     no tab the whole text is the *prefix* and the message is `""`, not the other way round.
-    //   - `distribution` is the remap table `0x49aff4` → jump table `0x49afe0`: only
-    //     PARTY/RAID/GUILD/BATTLEGROUND get names, every other type byte reports `"UNKNOWN"`.
-    //   - the *fire* must move downstream of the name resolve (`0x49ccc0`) so `sender` is a name,
-    //     not a guid. The drop can stay here; the fire cannot.
-    //
-    // The payload rides `debug!` and its own `addon` trace tag rather than vanishing, so
-    // mixed-client traffic stays diagnosable: invisible in chat, never invisible to us.
+    // Addon traffic: 1.12 has no addon opcode or chat type, so `LANG_ADDON` on any lane is the
+    // whole test (`0x49a89e`, in the display function `0x49a870`). The line never renders
+    // (`0x49a970`); it fires `CHAT_MSG_ADDON` once the sender's name resolves (`0x49d7ba`,
+    // `0x49ccc0`). An ignored sender's fires nothing, as the reference drops ignored lines first
+    // (`0x49d72d`), and needs no `CMSG_CHAT_IGNORED`: vmangos refuses addon whispers
+    // (`ChatHandler.cpp:84-103`).
     if m.is_addon() {
         if !social.is_ignored(m.sender_guid) {
             debug!(
@@ -203,53 +144,34 @@ fn chat(
                 m.chat_type, m.sender_guid, m.text
             );
             if benilla_assets::trace::enabled() {
-                // `<-` inbound, matching the `->` the outbound drain writes to this same tag
-                // (`ui_chat::input::drain_addon_message_sends`): one tag, both directions, so a
-                // live run's trace reads as the conversation it is.
+                // `<-` inbound; the outbound drain writes `->` under the same tag.
                 benilla_assets::trace::line(
                     "addon",
                     &format!("<- [{:#04x}] {:?}", m.chat_type, m.text),
                 );
             }
-            // **The channel is whole now.** Parked for the sender-name resolve rather than fired
-            // here, because the reference fires `CHAT_MSG_ADDON` DOWNSTREAM of the name query
-            // (`0x49ccc0`) so `sender` is a name and never a guid — the one requirement of the
-            // four that is about WHERE rather than what. `push_addon` carries the other three: the
-            // first-tab split, the no-tab-means-all-prefix direction, and the four-lane
-            // distribution remap.
             chat_log.push_addon(&m.text, m.chat_type, m.sender_guid);
         }
-        // The line still never reaches a chat window: an addon message is not speech, and the
-        // reference's addon arm jumps below the render path (`0x49a970`). An IGNORED sender fires
-        // nothing at all — ignore beats addon, which is why that check still wraps this.
         return;
     }
     if m.chat_type == 0x0A {
         info!("net: server says — {}", m.text);
-        // …and as a message, for the senders that must know whether their command landed. Server
-        // state with no descriptor field (god mode) has no other tell.
+        // Also as a message: server state with no descriptor field (god mode) has no other tell.
         server_said.write(ServerSaidMessage {
             text: m.text.clone(),
         });
     } else {
         debug!("net: chat [{:#04x}] {}", m.chat_type, m.text);
     }
-    // …and on the trace clock too. A GM dot-command is the only way to ask the
-    // SERVER what it believes — `.gps` reads back the server-side position of a mover whose packets
-    // may or may not be reaching it — and its answer is only usable if it lands on the same
-    // timeline as the `snd`/`rly`/`run` lines it must be read against. `debug!` timestamps are
-    // wall-clock in a different format; this is one clock, one file.
+    // On the trace clock too, so a `.gps` answer lines up with the movement trace.
     if benilla_assets::trace::enabled() {
         benilla_assets::trace::line(
             "sys",
             &format!("[{:#04x}] {}", m.chat_type, m.text.replace('\n', " ⏎ ")),
         );
     }
-    // The ignore gate: an ignored speaker is dropped SILENTLY — no line at all —
-    // which is the client's own `FriendList::IsIgnored 0x5ae5a0` check, read on the sibling
-    // text-emote path (`0x49dbe0`). A dropped WHISPER
-    // additionally tells the server, so the sender gets the "is ignoring you" answer: that is what
-    // `CMSG_CHAT_IGNORED` is for, and only the client can send it.
+    // An ignored speaker is dropped silently (`FriendList::IsIgnored`, `0x5ae5a0`); a dropped
+    // whisper also sends `CMSG_CHAT_IGNORED`, so the sender hears "is ignoring you".
     if social.is_ignored(m.sender_guid) {
         if m.chat_type == CHAT_MSG_WHISPER {
             let _ = net_commands.0.send(ClientCommand::ChatIgnored {
@@ -261,9 +183,8 @@ fn chat(
     chat_log.push_wire(m);
 }
 
-/// The `/chatlist` roster (`SMSG_CHANNEL_LIST`) — CHAT_CHANNEL_LIST_GET "[%s] " + the roster.
-/// Names arrive as guids; v1 renders the count (the per-member resolve fan-out lands with the
-/// P6 channel wiring — /chatlist is rare enough that a count is honest, never wrong).
+/// The `/chatlist` roster (`SMSG_CHANNEL_LIST`). Members arrive as guids and are not resolved,
+/// so the line gives their count where the reference lists their names (`0x49c690`).
 fn channel_list(channel: String, members: &[(u64, u8)], chat_log: &mut ChatLog) {
     let mut ev = ChatEvent::text_only(
         ChatEventKind::ChannelList,
@@ -273,13 +194,8 @@ fn channel_list(channel: String, members: &[(u64, u8)], chat_log: &mut ChatLog) 
     chat_log.push_event(ev);
 }
 
-/// A whisper target wasn't online — `ERR_CHAT_PLAYER_NOT_FOUND_S`, catalog row 241, whose `%s`
-/// the server's own name fills.
-///
-/// The KEY travels rather than a composed sentence: this is the net-apply pass and
-/// there is no VM here, so `ui_action`'s drain is what resolves it against the player's own
-/// `GlobalStrings.lua` — and the row, not this call site, is what says the line goes to chat
-/// (`kind 0`) and makes no sound.
+/// A whisper target is offline: message 241, `ERR_CHAT_PLAYER_NOT_FOUND_S`, with the server's
+/// name. The key travels, since there is no VM here; its row routes it to chat.
 fn chat_player_not_found(name: &str, errors: &mut crate::ui_action::UiErrorKeys) {
     errors.0.push(crate::ui_action::UiError::s(
         "ERR_CHAT_PLAYER_NOT_FOUND_S",
@@ -287,70 +203,38 @@ fn chat_player_not_found(name: &str, errors: &mut crate::ui_action::UiErrorKeys)
     ));
 }
 
-/// A cross-faction whisper was refused — `ERR_CHAT_WRONG_FACTION`, catalog row 240. Same route and
-/// the same reason as [`chat_player_not_found`], with no argument to fill.
+/// A cross-faction whisper was refused: message 240, `ERR_CHAT_WRONG_FACTION`.
 fn chat_wrong_faction(errors: &mut crate::ui_action::UiErrorKeys) {
     errors
         .0
         .push(crate::ui_action::UiError::key("ERR_CHAT_WRONG_FACTION"));
 }
 
-/// A server notice (`SMSG_NOTIFICATION`) — the **red UIErrorsFrame line**, never a chat line.
-///
-/// Byte-verified in the reference: opcode `0x1cb`'s handler is `0x401800` (registered at
-/// `0x40172f`, torn down at `0x401f09`), whose whole body is "read the cstring, then
-/// `mov edx,1; lea ecx,[buf]; call 0x4945b0`" plus a console log (`0x63cd00(…, 3, buf)` — our
-/// `info!` below). `0x4945b0(text, 1)` fires FrameScript event `0xe0` = `UI_ERROR_MESSAGE`.
-/// Nothing on this path touches the chat composer.
-///
-/// **This used to push into the chat feed**, as a stand-in from before benilla had an errors
-/// frame. It has had a real one for a long time — the ref `UIErrorsFrame`, a genuine
-/// `MessageFrame` (ours until 1751's fourteenth window, the chain's own
-/// `Interface\FrameXML\UIErrorsFrame.xml` since) — and the stand-in outlived its reason: vmangos
-/// `Player::SetGameMaster` answers `.gm on|off` with **both** `SendSysMessage` and
-/// `SendNotification` (`Objects/Player.cpp:2676-2677`/`2701-2702`), so a client that sinks the
-/// notification into chat prints "GM mode is ON" **twice** where the reference prints it once.
+/// `SMSG_NOTIFICATION` (`0x1cb`, handler `0x401800`): the red `UIErrorsFrame` line,
+/// `UI_ERROR_MESSAGE` from `0x4945b0(text, 1)`, never a chat line. vmangos sends `.gm on` as both
+/// a system line and a notification (`Objects/Player.cpp:2676-2677`).
 fn notification(text: String, errors: &mut UiErrorTexts) {
-    // The handler's own console leg, and the same reason 0651 logs the dot-command answers: a
-    // toast that flashed for five seconds and one that never arrived look identical afterwards.
+    // The reference also logs it to the console (`0x63cd00`).
     info!("net: notification — {text}");
     errors.error(text);
 }
 
-/// An area trigger's refusal (`SMSG_AREA_TRIGGER_MESSAGE`) — "You must be at least level 58 to
-/// enter…", "You cannot enter … while in ghost form." The same frame as [`notification`], the
-/// **yellow** arm: `0x2b8` shares the multi-opcode handler `0x48f690`, whose arm at `0x48f8ff`
-/// ends `xor edx,edx; call 0x4945b0` — flag 0, so event `0xe1` = `UI_INFO_MESSAGE`. (The older
-/// comment here called it the same sink as the notification and left it at that; the sink is the
-/// same, the arm is not.) Without it, a refused portal is silent, which reads exactly like a
-/// portal that is still broken.
+/// An area trigger's refusal (`SMSG_AREA_TRIGGER_MESSAGE`, `0x2b8`, arm `0x48f8ff` of
+/// `0x48f690`): the yellow `UIErrorsFrame` line, `UI_INFO_MESSAGE` from `0x4945b0(text, 0)`.
 fn area_trigger_message(text: String, errors: &mut UiErrorTexts) {
-    // Logged for the same reason 0651 logs the server's dot-command answers: a trigger that
-    // refused and a trigger the client never noticed look identical from outside.
     info!("net: area-trigger message — {text}");
     errors.info(text);
 }
 
-/// The four **world broadcasts** — parked on [`ChatLog`]'s broadcast queue for
-/// [`super`]'s resolve pass, which holds the AreaTable/ServerMessages catalogs and the
-/// joined-channel walk this site does not (`ui_chat::broadcast` carries the whole mechanism).
-///
-/// Only the parking happens here, deliberately: half-resolving at the packet — naming the area
-/// here and picking the channels there — would put one mechanism in two files.
-///
-/// They are logged at `info!` for the same reason [`notification`] is, and more so: three of the
-/// four are things the *world* did, so "the server is restarting in 15 minutes" and "nothing
-/// arrived" have to be distinguishable in a log afterwards. A defense broadcast that reaches a
-/// character in neither defense channel prints nothing on screen and is faithful in doing so — the
-/// log line is the only trace it happened at all.
+/// Park a world broadcast for `ui_chat::broadcast`'s resolve pass, logged: a defense broadcast
+/// outside the defense channels prints nothing, so the log is its only trace.
 fn broadcast(b: Broadcast, chat_log: &mut ChatLog) {
     info!("net: world broadcast — {b:?}");
     chat_log.push_broadcast(b);
 }
 
-/// The `/played` answer (`SMSG_PLAYED_TIME`) — TIME_PLAYED_TOTAL/LEVEL over
-/// TIME_DAYHOURMINUTESECOND (GlobalStrings:4243-4247; the ref's
-/// ChatFrame_DisplayTimePlayed breakdown).
+/// The `/played` answer as two system lines, in English, shaped like `TIME_PLAYED_TOTAL` and
+/// `TIME_PLAYED_LEVEL` over `TIME_DAYHOURMINUTESECOND` (`GlobalStrings.lua:4243-4247`).
 fn played_time(total: u32, level: u32, chat_log: &mut ChatLog) {
     for (label, secs) in [
         ("Total time played", total),
@@ -418,29 +302,22 @@ mod tests {
         world.resource::<ChatLog>().pending_len()
     }
 
-    /// B215 / decision 1029: an addon broadcast never reaches the chat window. It arrives as an
-    /// ordinary `CHAT_MSG_PARTY` — the lane a mixed-client party's hunter addon talks over — so the
-    /// `language` sentinel is the only thing standing between it and a rendered `[Party]` line.
+    /// An addon line rides an ordinary lane; only its `language` keeps it out of the window.
     #[test]
     fn addon_chat_never_reaches_the_chat_window() {
         assert!(
             !reaches_the_chat_window(a_party_line(LANGUAGE_ADDON, "Quiver\tVERSION:3.1.4")),
             "an addon broadcast must be dropped before the chat log"
         );
-        // A payload with no tab is still addon traffic — the gate reads the language field, never
-        // the shape of the text.
+        // No tab, or no text: still addon traffic, since the gate reads the language alone.
         assert!(!reaches_the_chat_window(a_party_line(
             LANGUAGE_ADDON,
             "nopayloadseparator"
         )));
-        // An empty addon payload likewise: nothing about the text can un-addon a line.
         assert!(!reaches_the_chat_window(a_party_line(LANGUAGE_ADDON, "")));
     }
 
-    /// ...and since the receive half opened, "never reaches the chat window" must not be allowed to
-    /// mean "vanished". The same line is PARKED for `CHAT_MSG_ADDON`, which is the distinction that
-    /// stopped being free the moment `Pending::Addon` existed — `pending_len` excludes addon items
-    /// precisely so the test above keeps asserting what it says, and this one covers the other half.
+    /// `pending_len` excludes parked addon items; this checks the line is parked, not lost.
     #[test]
     fn an_addon_line_is_parked_for_the_addon_event_not_discarded() {
         let mut world = World::new();
@@ -479,9 +356,6 @@ mod tests {
         assert_eq!(log.pending_len(), 0, "and still never headed for a window");
     }
 
-    /// The control the gate must not swallow: real speech on the same lane, in every tongue a
-    /// character can speak. A gate that keyed on "unknown language" instead of the sentinel would
-    /// silently eat Demonic and Gutterspeak.
     #[test]
     fn speech_on_the_addon_lane_still_renders() {
         for language in [0, 1, 2, 3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 33] {
@@ -492,19 +366,8 @@ mod tests {
         }
     }
 
-    /// **The GM-mode double line** — the director's report, pinned end to end.
-    ///
-    /// vmangos answers `.gm on|off` with **two** packets, not one: `Player::SetGameMaster` calls
-    /// `SendSysMessage(LANG_GM_ON)` *and* `GetSession()->SendNotification(LANG_GM_ON)`
-    /// (`src/game/Objects/Player.cpp:2676-2677` and `2701-2702`). They carry the same words down
-    /// different roads, and only the first is a chat line: the reference's `SMSG_NOTIFICATION`
-    /// handler `0x401800` is "read the cstring, `mov edx,1`, `call 0x4945b0`" — event `0xe0`
-    /// `UI_ERROR_MESSAGE`, the UIErrorsFrame toast — plus a console log, and it never reaches the
-    /// chat composer. Benilla used to park the notice in the chat feed for want of an errors
-    /// frame; it has had one since our own `ErrorsFrame.xml` (the chain's `UIErrorsFrame.xml`
-    /// since 1751), and the stand-in was what printed "GM mode is ON" twice.
-    ///
-    /// The pair is the test: BOTH halves of one toggle, one chat line, one toast.
+    /// `.gm on` arrives as a system line and a notification (`Objects/Player.cpp:2676-2677`): one
+    /// chat line, one red toast.
     #[test]
     fn toggling_gm_mode_prints_one_chat_line_and_one_toast() {
         let sys_line = ChatMessage {
@@ -529,10 +392,6 @@ mod tests {
         );
     }
 
-    /// The notification's sibling arm shares the frame and **not** the colour: `0x2b8`
-    /// `SMSG_AREA_TRIGGER_MESSAGE` runs the multi-opcode handler `0x48f690`, whose arm at
-    /// `0x48f8ff` ends `xor edx,edx; call 0x4945b0` — flag 0, so event `0xe1` `UI_INFO_MESSAGE`,
-    /// the yellow line. This is the half the old "same sink as the notification" comment missed.
     #[test]
     fn an_area_trigger_refusal_takes_the_yellow_arm() {
         let mut errors = UiErrorTexts::default();

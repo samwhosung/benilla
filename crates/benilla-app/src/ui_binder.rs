@@ -1,42 +1,22 @@
-//! Setting your hearthstone — the innkeeper's bind question, its dialog, and its answer.
+//! The innkeeper's bind question. Selecting the gossip line binds nothing: the server closes the
+//! gossip and asks (`SMSG_BINDER_CONFIRM`, vmangos `Player::SetBindPoint`), and the bind happens
+//! only on `CMSG_BINDER_ACTIVATE`, when the innkeeper casts spell 3286 and `SPELL_EFFECT_BIND`
+//! sends `SMSG_BINDPOINTUPDATE` and `SMSG_PLAYERBOUND`.
 //!
-//! **The law this module exists for: selecting the innkeeper's gossip line binds nothing.** It
-//! makes the server close the gossip menu and ask (`SMSG_BINDER_CONFIRM`, vmangos
-//! `Player::SetBindPoint`); the bind happens only when the client answers `CMSG_BINDER_ACTIVATE`,
-//! at which point the innkeeper casts spell 3286 "Bind" and `SPELL_EFFECT_BIND` sends
-//! `SMSG_BINDPOINTUPDATE` + `SMSG_PLAYERBOUND`. Before this module the question was parsed as an
-//! unknown opcode and dropped, so the click looked like it did nothing at all — half of B249.
+//! The stock surface (`StaticPopup.lua:1321-1335`, `UIParent.lua:125`, `547-548`) is the
+//! `CONFIRM_BINDER` event, whose one argument fills the dialog's `%s`; `ConfirmBinder()`, the
+//! Accept that sends the activate; and `CheckBinderDist()`, polled from `OnUpdate`, which hides
+//! the dialog the frame it goes false. The reference's handler is `0x5dfdc0`, its
+//! `SMSG_BINDER_CONFIRM` arm `0x5e4aa2`.
 //!
-//! The Era surface it drives is the reference's own, and it is small (`StaticPopup.lua:1308-1322`,
-//! `UIParent.lua:125`/`547-548`):
+//! `CheckBinderDist()` tests `d² <= [0xc4c28c]` (`5.55555534362793²`), the same constant and
+//! inclusive bound as [`crate::target::SERVICE_RANGE_SQ`], so the question is an [`NpcSession`]
+//! closed by [`crate::ui_session::close_npc_session_out_of_range`]; an unstreamed guid reads as
+//! gone, so a disconnect needs no teardown.
 //!
-//! - the `CONFIRM_BINDER` event, whose **one argument** is the name that fills
-//!   `"Do you want to make %s your new home?"`;
-//! - `ConfirmBinder()` — the dialog's Accept, the only call that sends the activate;
-//! - `CheckBinderDist()` — polled from the dialog's `OnUpdate`, and the dialog hides itself the
-//!   frame it goes false.
-//!
-//! Both halves are now **byte-pinned** against the reference's own handler `0x5dfdc0` and its
-//! `SMSG_BINDER_CONFIRM` arm `0x5e4aa2` (folded back by decision 1335, which promotes what
-//! decision 1331 had to leave INFERRED):
-//!
-//! 1. **`arg1` is an AREA name, never the NPC's** — the handler never looks a name up. It resolves
-//!    the player's own **sub-area** through `AreaTable.dbc`, falls back to the **parent zone** when
-//!    that row is missing, and falls back again to the localized `HOME_INN` GlobalString. It always
-//!    fires; there is no path on which the question is withheld for want of a name. [`area_name`]
-//!    is that chain.
-//! 2. **`CheckBinderDist()` is the same gate the rest of the NPC surface uses** — not a
-//!    resemblance: the reference's range test is `d² <= [0xc4c28c]`, and `[0xc4c28c]` is
-//!    `5.55555534362793²`, the identical constant behind [`crate::target::SERVICE_RANGE_SQ`]
-//!    (boundary-inclusive at both sites). So modelling the question as an [`NpcSession`] and
-//!    letting [`crate::ui_session::close_npc_session_out_of_range`] close it is faithful, not a
-//!    convenience. It is also why nothing here needs a disconnect teardown: an unstreamed guid
-//!    reads as gone and closes the question on the next frame.
-//!
-//! One deviation remains, and it is deliberate: **the reference never clears its latched guid**
-//! (`0xc4d7c0`), so a second `ConfirmBinder()` while still in range re-sends the activate. We drop
-//! the guid when `SMSG_PLAYERBOUND` says the bind took, because a question that has been answered
-//! is not a question — the reference's own dialog is gone by then either way.
+//! Deviation: the reference never clears its latched guid (`0xc4d7c0`), so a second
+//! `ConfirmBinder()` in range re-sends the activate; this drops the guid on `SMSG_PLAYERBOUND`,
+//! because an answered question is not a question and the reference's dialog is gone by then.
 
 use benilla_ui::script::{ScriptValue, UiScript};
 use bevy::prelude::*;
@@ -46,25 +26,18 @@ use crate::net::{ClientCommand, NetCommands};
 use crate::ui_script::{UiFeed, UiInput};
 use crate::ui_session::{close_npc_session_out_of_range, NpcSession};
 
-/// The innkeeper's pending bind question. Written by the net drain's `BinderConfirm` arm, read by
-/// [`feed_binder`] (which fires `CONFIRM_BINDER` and publishes `CheckBinderDist`'s answer) and by
-/// [`drain_binder`] (which turns the dialog's Accept into the activate).
-///
-/// There is no snapshot beside it: everything the dialog reads arrives as the event's argument —
-/// [`crate::ui_duel::DuelState`]'s shape, for the same reason.
+/// The innkeeper's pending bind question; everything the dialog reads rides the event's argument.
 #[derive(Resource, Default)]
 pub(crate) struct BinderState {
-    /// The innkeeper who asked; `None` = no question pending. This guid is what goes back on the
-    /// wire, and vmangos resolves it to a live innkeeper in range — a stale one binds nothing.
+    /// The innkeeper who asked, sent back on the wire; vmangos binds only a live one in range.
     npc: Option<u64>,
-    /// A question the feed still owes the UI. Set per *packet*, not per state edge: asking the
-    /// same innkeeper twice in a row (decline, then click the line again) is two dialogs, and an
-    /// edge-diff would swallow the second.
+    /// A dialog the feed still owes, set per packet: asking again after a decline is a second
+    /// dialog, which a state diff would swallow.
     ask: bool,
 }
 
 impl BinderState {
-    /// `SMSG_BINDER_CONFIRM` — park the innkeeper's guid and owe the UI a dialog.
+    /// `SMSG_BINDER_CONFIRM`: parks the innkeeper's guid and owes the UI a dialog.
     pub(crate) fn ask(&mut self, npc: u64) {
         self.npc = Some(npc);
         self.ask = true;
@@ -75,18 +48,15 @@ impl BinderState {
         self.npc
     }
 
-    /// Retract the question — the range guard's close, and `SMSG_PLAYERBOUND`'s (the bind landed,
-    /// so there is nothing left to ask). Inherent so the net drain can call it without importing
-    /// [`NpcSession`], exactly as [`crate::ui_gossip::GossipState::clear`] is.
+    /// Retracts the question: the range guard's close, and `SMSG_PLAYERBOUND`'s.
     pub(crate) fn clear(&mut self) {
         self.npc = None;
         self.ask = false;
     }
 }
 
-/// The question is an NPC session: the standardized range guard closes it — the same
-/// no-packet clear declining does — when the player walks out of the innkeeper's service range or
-/// the innkeeper despawns. That close is what `CheckBinderDist()` reports (module doc, deviation 2).
+/// The range guard closes the question without a packet, as declining does, when the player
+/// leaves service range or the innkeeper despawns; that close is what `CheckBinderDist()` reports.
 impl NpcSession for BinderState {
     fn npc(&self) -> Option<u64> {
         self.npc
@@ -97,11 +67,8 @@ impl NpcSession for BinderState {
     }
 }
 
-/// Fire `CONFIRM_BINDER` for a question the UI is still owed, and publish `CheckBinderDist()`'s
-/// answer every frame.
-///
-/// The fire is **unconditional** once a packet has asked — [`area_name`] always yields a string,
-/// exactly as the reference's handler always reaches its `SignalEvent2`.
+/// Publishes `CheckBinderDist()` every frame and fires `CONFIRM_BINDER` for each packet that
+/// asked, unconditionally, as the reference's handler always reaches its `SignalEvent2`.
 fn feed_binder(
     script: Option<NonSendMut<UiScript>>,
     mut binder: ResMut<BinderState>,
@@ -128,13 +95,8 @@ fn feed_binder(
     script.fire_event("CONFIRM_BINDER", vec![ScriptValue::Str(name)]);
 }
 
-/// The name that fills the dialog's `%s` — the reference's own three-step chain (`0x5dfe5e`):
-/// **sub-area, else parent zone, else `HOME_INN`**.
-///
-/// Never `None`, because the reference never withholds the question: a missing catalog or an
-/// unresolvable area still fires, carrying the GlobalString. That is the difference between "we
-/// don't know where you are" and "there is nothing to ask" — only the second should be silent, and
-/// only the packet decides it.
+/// The dialog's `%s`, an area and never the NPC's name (`0x5dfe5e`): the player's sub-area, else
+/// its parent zone, else `HOME_INN`. The reference never withholds the question for want of one.
 fn area_name(
     world: &benilla_world::world_point::WorldPoint,
     areas: Option<&AreaTableRes>,
@@ -143,13 +105,8 @@ fn area_name(
     area_name_of(world.area(), areas, get)
 }
 
-/// [`area_name`]'s chain over a bare leaf id — split out so the three legs are testable against the
-/// real `AreaTable` without standing up a world.
-///
-/// The tail is the `HOME_INN` GlobalString (`GetBindLocation 0x48dae0` uses the identical
-/// fallback), read off the player's own table rather than re-typed;
-/// an install that does not carry it yields the empty string, which is the
-/// reference's data-suppression face and still fires the question.
+/// [`area_name`] over a bare leaf id. The tail is the install's `HOME_INN`, the same fallback as
+/// `GetBindLocation` (`0x48dae0`); an install without it gives an empty name and still asks.
 fn area_name_of(
     leaf: Option<u32>,
     areas: Option<&AreaTableRes>,
@@ -161,8 +118,7 @@ fn area_name_of(
             .filter(|row| !row.name.is_empty())
             .map(|row| row.name.clone())
     };
-    // The parent zone is the leaf's single-hop `zone_id` (itself when 0) — the same walk
-    // `crate::area`'s zone-text resolve does.
+    // The parent zone is the leaf's single-hop `zone_id`; 0 means the leaf is itself a zone.
     let zone = leaf
         .and_then(|id| areas.and_then(|a| a.0.get(id)))
         .map(|row| row.zone_id)
@@ -173,11 +129,8 @@ fn area_name_of(
         .unwrap_or_default()
 }
 
-/// Turn the dialog's Accept into `CMSG_BINDER_ACTIVATE`.
-///
-/// Gated on a question still being pending, exactly as the arbiter gate guards
-/// [`crate::ui_duel`]'s accept: a `ConfirmBinder()` typed at the console with no innkeeper asking
-/// would otherwise send a zero guid the server can only drop.
+/// Turns the dialog's Accept into `CMSG_BINDER_ACTIVATE`, only while a question is pending: with
+/// no guid latched, the reference's `ConfirmBinder()` finds no unit and sends nothing (`0x5dfdfe`).
 fn drain_binder(
     script: Option<NonSendMut<UiScript>>,
     binder: Res<BinderState>,
@@ -200,13 +153,11 @@ fn drain_binder(
     }
 }
 
-/// `SoundEntries.dbc` id 1141 — played on `SMSG_PLAYERBOUND` **unconditionally**, before the area
-/// is resolved (`0x5e3d6e`, ahead of the bounds test). So an area id the catalog cannot name is
-/// silent but still audible, which is the reference's own ordering rather than an accident of ours.
+/// `SoundEntries.dbc` 1141, played on `SMSG_PLAYERBOUND` before the area is resolved (`0x5e3d6e`),
+/// so an area the catalog cannot name gets the sound and no line.
 const SOUND_PLAYERBOUND: u32 = 1141;
 
-/// The innkeeper's packet handlers (in the net handler table since 2312), beside the state they
-/// drive.
+/// The innkeeper's packet handlers.
 pub(crate) mod net {
     use super::*;
 
@@ -217,7 +168,6 @@ pub(crate) mod net {
 
     use crate::net::NetHandlerApp;
 
-    /// Register the binder's handlers — called from [`UiBinderPlugin`].
     pub(super) fn register(app: &mut App) {
         use SessionEventKind as K;
         app.net_handler(K::BinderConfirm, on_confirm)
@@ -249,21 +199,10 @@ pub(crate) mod net {
         }
     }
 
-    /// `SMSG_PLAYERBOUND` — the bind took. Retract the question, play the sound, and queue
-    /// `DisplayError(0x138)` = `ERR_DEATHBIND_SUCCESS_S` (catalog row 312, `kind 0` — a system
-    /// chat line) with the packet's own area id resolved through `AreaTable` — the handler's own
-    /// order at `0x5e3d3f`: the sound first, then the message.
-    ///
-    /// The line rides the by-key queue rather than being composed here: this is
-    /// the net-apply pass and there is no VM in hand, so the KEY travels to `ui_action`'s drain,
-    /// which resolves it against the player's own `GlobalStrings.lua` and puts it on the surface
-    /// the catalog names. The `SoundEntries` cue below is the *handler's* own, separate from the
-    /// row's `+0x08` (which is `None` for this row).
-    ///
-    /// This is the **feedback half of B249** — "accepting appears to change nothing" was partly
-    /// that nothing ever said it had. The hearthstone itself moves on `SMSG_BINDPOINTUPDATE`, the
-    /// packet beside this one; this arm deliberately does not touch it, exactly as the reference's
-    /// does not (its `GetBindLocation` reads a different global entirely).
+    /// `SMSG_PLAYERBOUND`, in the handler's order (`0x5e3d3f`): retract the question, play the
+    /// handler's own sound (the error row has none), then queue `ERR_DEATHBIND_SUCCESS_S`
+    /// (`DisplayError(0x138)`, a system chat line) named by the area. The hearthstone moves on
+    /// `SMSG_BINDPOINTUPDATE`, which this leaves alone, as the reference does.
     pub(crate) fn bound(
         area: u32,
         binder: &mut BinderState,
@@ -297,8 +236,7 @@ impl Plugin for UiBinderPlugin {
         app.init_resource::<BinderState>().add_systems(
             Update,
             (
-                // Range-close before the feed so walking away takes the dialog down the same
-                // frame (the gossip window's ordering, for the same reason).
+                // Range-close before the feed, so walking away hides the dialog the same frame.
                 close_npc_session_out_of_range::<BinderState>.before(feed_binder),
                 feed_binder.in_set(UiFeed),
                 drain_binder.after(UiInput),
@@ -311,9 +249,6 @@ impl Plugin for UiBinderPlugin {
 mod tests {
     use super::*;
 
-    /// A second question from the same innkeeper is a second dialog. The `ask` flag is per packet
-    /// precisely so a decline-then-click-again (which never passes through `None`) is not
-    /// swallowed by a state diff.
     #[test]
     fn asking_twice_owes_two_dialogs() {
         let mut binder = BinderState::default();
@@ -328,13 +263,7 @@ mod tests {
         assert!(binder.ask, "the same innkeeper asking again owes a dialog");
     }
 
-    /// The `arg1` chain, against the REAL AreaTable and the REAL `GlobalStrings.lua` (`0x5dfe5e`):
-    /// sub-area, else parent zone, else the `HOME_INN` GlobalString — and never nothing, because
-    /// the reference never withholds the question for want of a name. 186 is Dolanaar, the leaf
-    /// the bug's own innkeeper stands in.
-    ///
-    /// The tail resolves off the player's own table rather than a stub, so a `HOME_INN` that the
-    /// install words differently is what this reads. Skips without client data.
+    /// Area 186 is Dolanaar, a leaf area with an innkeeper.
     #[test]
     fn the_dialogs_name_falls_back_sub_area_then_zone_then_home_inn() {
         let data = benilla_formats::wow_data_or_skip!();
@@ -357,21 +286,15 @@ mod tests {
         let inn = get("HOME_INN").expect("HOME_INN ships");
 
         assert_eq!(area_name_of(Some(186), Some(&areas), &get), "Dolanaar");
-        // No row, no catalog, no id at all — all three reach the GlobalString rather than "".
+        // No row, no catalog, no id: all three reach the GlobalString.
         assert_eq!(area_name_of(Some(0xffff), Some(&areas), &get), inn);
         assert_eq!(area_name_of(Some(186), None, &get), inn);
         assert_eq!(area_name_of(None, Some(&areas), &get), inn);
-        // …and an install with no such key withholds the *name*, never the question.
+        // An install without the key withholds the name, never the question.
         assert_eq!(area_name_of(None, None, &|_| None), "");
     }
 
-    /// The line the bind lands with — the feedback half of B249, since "accepting appears to change
-    /// nothing" was partly that nothing ever said it had.
-    ///
-    /// The assertion is the KEY and its one argument, not the sentence (2045): the wording is the
-    /// install's, and `ui_action::ui_error_text` is what fills it. Resolved here against the real
-    /// table so a typo'd key — which would degrade the line to silence, not to a wrong sentence —
-    /// still fails. Skips without client data.
+    /// Resolved against the install's table: a mistyped key would silence the line, not garble it.
     #[test]
     fn the_bind_queues_the_deathbind_success_line_named_by_the_area() {
         let data = benilla_formats::wow_data_or_skip!();
@@ -391,8 +314,6 @@ mod tests {
         );
     }
 
-    /// Closing (the range guard, or the bind landing) retracts both the guid and any unfired
-    /// question — so `CheckBinderDist()` goes false and a later `ConfirmBinder()` sends nothing.
     #[test]
     fn closing_retracts_the_guid_and_the_unfired_dialog() {
         let mut binder = BinderState::default();

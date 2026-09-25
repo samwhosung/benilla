@@ -1,55 +1,17 @@
-//! The app-side **honor feed** — the local player's PRIVATE honor descriptor
-//! fields turned into the snapshot both Honor tabs read, the inspect-honor request/reply round
-//! trip, and the `SMSG_PVP_CREDIT` award turned into its chat line and floating number.
+//! The honor feed: our own honor descriptor fields become the snapshot the Honor tabs read, and
+//! the inspect-honor reply is matched to the inspected player. The honor block streams only to
+//! its owner, so another player's numbers come only from `MSG_INSPECT_HONOR_STATS`, which vmangos
+//! refuses by not answering (`MiscHandler.cpp:962-972`); the stock pane re-asks from its `OnShow`
+//! while it holds nothing, the only retry.
 //!
-//! The display law lives in `benilla-ui`'s `script::pvp`; this is the **data** law it consumes,
-//! and there are three pieces of it.
+//! The reference fires the pane's events from three field watches (`0x467e70`, callback
+//! `0x5de4b0`): `PLAYER_FIELD_SESSION_KILLS` fires `PLAYER_PVP_KILLS_CHANGED`, and
+//! `PLAYER_BYTES_3` and `PLAYER_FIELD_BYTES2` byte 0 fire `PLAYER_PVP_RANK_CHANGED`. Nothing
+//! watches the weekly, lifetime or highest-rank fields, which `HonorFrame.lua:10-11` repaints only
+//! on `PLAYER_ENTERING_WORLD`.
 //!
-//! ## 1 · The self snapshot is one descriptor read, and every field of it is PRIVATE
-//!
-//! The whole honor block (`PLAYER_FIELD_SESSION_KILLS` … `PLAYER_FIELD_BYTES2`) streams for
-//! nobody but the local player, so there is no per-unit form of this feed and there cannot be one.
-//! What a *foreign* player exposes is exactly two things — the PUBLIC current-rank byte, which
-//! rides [`crate::ui_unit`]'s snapshot, and whatever `MSG_INSPECT_HONOR_STATS` chooses to answer.
-//! That asymmetry is the shape of the entire arc.
-//!
-//! ## 2 · The two events are a field diff, and the reference watches **exactly three fields**
-//!
-//! The pane repaints on `PLAYER_PVP_KILLS_CHANGED` and `PLAYER_PVP_RANK_CHANGED`, which the real
-//! engine fires from field watches. In the watch table (`0x467e70`, callback
-//! `0x5de4b0` carrying the event id) there are **three registrations and no more**:
-//!
-//! | watched | fires |
-//! |---|---|
-//! | `PLAYER_FIELD_SESSION_KILLS` | `PLAYER_PVP_KILLS_CHANGED` (523) |
-//! | `PLAYER_BYTES_3` | `PLAYER_PVP_RANK_CHANGED` (524) |
-//! | `PLAYER_FIELD_BYTES2` byte 0 | `PLAYER_PVP_RANK_CHANGED` (524) |
-//!
-//! **Nothing watches the yesterday / this-week / last-week / lifetime / contribution fields, and
-//! nothing watches `+0x102b` (the highest-lifetime rank).** That is not an omission in the client;
-//! it is *why* `HonorFrame.lua` refreshes those rows on `PLAYER_ENTERING_WORLD` alone. The two
-//! facts are one fact, and a feed that fired `KILLS_CHANGED` on a lifetime total — which this one
-//! once did — would be firing an event the real client has no source for.
-//!
-//! One divergence, stated: the reference watches the **whole `PLAYER_BYTES_3` dword**, so a
-//! drunkenness change fires `PLAYER_PVP_RANK_CHANGED` there too. We watch byte 3 alone. The
-//! repaint that spurious fire produces is byte-identical to the one before it, so the difference
-//! is unobservable; carrying the other three bytes in an honor snapshot to reproduce it would cost
-//! a field nothing reads.
-//!
-//! ## 3 · The inspect round trip is a real one, unlike `CMSG_INSPECT`
-//!
-//! 0631's inspect request is fire-and-forget: the gear was already streamed and `SMSG_INSPECT`
-//! echoes the guid. This one is the opposite — `MSG_INSPECT_HONOR_STATS` is the *only* source of
-//! another player's honor numbers, the reply rides the **same opcode** as the request, and the
-//! reference's pane gates on `HasInspectHonorData()` precisely because the data may not be here
-//! yet. So: the pane asks, we resolve the inspect target's guid and send, the reply lands in
-//! [`InspectHonor`], and `INSPECT_HONOR_UPDATE` tells the pane to repaint.
-//!
-//! **A refusal is silent by construction.** The server answers nothing when the target is gone,
-//! out of the 10-yard `INSPECT_DISTANCE`, or attackable (`MiscHandler.cpp:962-977`) — there is no
-//! error shape on this opcode. The pane's own `OnShow` re-asks whenever it holds nothing, which is
-//! the reference's retry and the only one there is.
+//! Deviation: the reference watches the whole `PLAYER_BYTES_3` dword, so a drunkenness change also
+//! fires `PLAYER_PVP_RANK_CHANGED`; we watch byte 3 alone, because that repaint is identical.
 
 use bevy::prelude::*;
 
@@ -58,35 +20,24 @@ use benilla_ui::script::{HonorState, InspectHonorData, ScriptValue, UiScript};
 use crate::net::{ClientCommand, NetCommands, ObjectStore, SelfPlayer};
 use crate::ui_script::{UiFeed, VmMemo};
 
-/// The inspect-honor reply we currently hold, or `None` before one lands.
-///
-/// Keyed by nothing but its own `player_guid`: the reply carries whose it is, and the pane is
-/// keyed by a unit token, so the app is where the two are matched. One slot rather than a map —
-/// the reference's `HasInspectHonorData` is a single latch, and a window that can only inspect one
-/// player at a time needs no more.
+/// The inspect-honor reply held: one slot, like the reference's `HasInspectHonorData` latch.
 #[derive(Resource, Default)]
 pub(crate) struct InspectHonor(pub(crate) Option<benilla_protocol::messages::InspectHonorStats>);
 
-/// What the last push told this VM, so the feed pushes and fires only on real change.
-///
-/// Behind a [`VmMemo`] (1290/1291) for the reason every other feed's is: a `/reload` replaces the
-/// VM without despawning the world, and a memory of what the *old* VM was told would leave the new
-/// one with an empty pane and no event ever coming.
+/// What the last push told this VM, keyed on the VM so a `/reload`'s fresh VM is told again.
 #[derive(Resource, Default)]
 struct HonorFeedState {
     vm: VmMemo<HonorFeedMemo>,
 }
 
-/// The per-VM change bases — the self snapshot and the inspect reply's guid.
+/// The per-VM change bases: the last snapshot and the held reply's guid.
 #[derive(Default)]
 struct HonorFeedMemo {
     last: Option<HonorState>,
     last_inspect: Option<u64>,
 }
 
-/// The honor pane's packet handler (in the net handler table since 2313). The
-/// honor arc's other inbound message, the award (`PvpCredit`), is a chat line and a floating
-/// number and stays with the chat family.
+/// The inspect-honor reply's handler; the honor award, `SMSG_PVP_CREDIT`, is the chat family's.
 mod net {
     use benilla_protocol::{SessionEvent, SessionEventKind};
     use bevy::prelude::*;
@@ -94,14 +45,11 @@ mod net {
     use super::InspectHonor;
     use crate::net::NetHandlerApp;
 
-    /// Register the handler — called from [`super::UiHonorPlugin`].
     pub(super) fn register(app: &mut App) {
         app.net_handler(SessionEventKind::InspectHonorStats, on_inspect_stats);
     }
 
-    /// The inspect reply REPLACES whatever is held, including for a different player: the
-    /// reference's latch is a single slot, and a pane still showing the last target's kills is
-    /// the failure keeping the old one produces.
+    /// A reply replaces whatever is held, whoever it is for: the reference's latch is one slot.
     fn on_inspect_stats(In(ev): In<SessionEvent>, mut inspect: ResMut<InspectHonor>) {
         if let SessionEvent::InspectHonorStats(stats) = ev {
             inspect.0 = Some(stats);
@@ -120,29 +68,16 @@ impl Plugin for UiHonorPlugin {
     }
 }
 
-/// Read the honor block off our own descriptor, or `None` while none of it has streamed.
-///
-/// **`None` and all-zeroes are the same thing on screen, and that is the point of the gate, not a
-/// flaw in it.** This doc used to say the reference "paints a player whose fields have not arrived
-/// as blank, not as zero". It does not: `0x51a4b0`–`0x51a7c0`'s "absent → 0.0" tails are about the
-/// absent player OBJECT, and once the object exists every one of those bindings reads a
-/// descriptor array that is allocated and zeroed, so a field the server never sent reads `0`.
-/// Our bindings answer the same zeros — `honor(lua).unwrap_or_default()` — so what the gate
-/// actually decides is only *when the first snapshot is pushed*, and with it when
-/// `PLAYER_PVP_KILLS_CHANGED`/`PLAYER_PVP_RANK_CHANGED` first fire. It cannot make a row differ
-/// from the reference.
-///
-/// That is worth stating because this gate was the other candidate cause of report B378, and it
-/// is ruled out by exactly this: a missing snapshot and a zeroed one paint the same pane. The
-/// cause was the rank title's team digit.
+/// Read the honor block off our own descriptor, `None` until it streams. That decides only when
+/// the first push and its events happen: the reference reads a field it was never sent as 0
+/// (`0x51a4b0`-`0x51a7c0`), and so do our bindings.
 fn honor_snapshot(store: &ObjectStore) -> Option<HonorState> {
     let f = &store.0;
     let session = f.player_session_kills();
     let yesterday = f.player_yesterday_kills();
     let last_week = f.player_last_week_kills();
     let this_week = f.player_this_week_kills();
-    // The rank byte is PUBLIC and arrives with the unit block, so it alone is a poor presence
-    // test; the honor block proper is what we wait for.
+    // Presence is tested on a private field: the public rank byte streams with the unit block.
     session?;
     Some(HonorState {
         session_hk: session.map_or(0, |(hk, _)| hk),
@@ -158,33 +93,24 @@ fn honor_snapshot(store: &ObjectStore) -> Option<HonorState> {
         last_week_standing: f.player_last_week_rank().unwrap_or(0),
         lifetime_hk: f.player_lifetime_honorable_kills().unwrap_or(0),
         lifetime_dk: f.player_lifetime_dishonorable_kills().unwrap_or(0),
-        // The HIGHEST lifetime rank (PRIVATE, `PLAYER_FIELD_BYTES` byte 3) …
+        // The highest lifetime rank, private `PLAYER_FIELD_BYTES` byte 3.
         highest_rank: f.player_honor_rank().unwrap_or(0),
-        // … and the CURRENT one (PUBLIC, `PLAYER_BYTES_3` byte 3). Two bytes, two fields, and
-        // they are equal for anyone who has never ranked down — which is exactly why reading one
-        // for the other would have shipped green.
+        // The current rank, public `PLAYER_BYTES_3` byte 3: another field, equal to the highest
+        // until the player ranks down, so a swap would pass unnoticed.
         rank: f.player_pvp_rank().unwrap_or(0),
         rank_bar: f.player_honor_rank_bar().unwrap_or(0),
     })
 }
 
-/// Which of the two reference events a change between two snapshots deserves — the module doc's
-/// three-row watch table, written out. A first push is both: the pane has never painted, and
-/// either event repaints it.
-///
-/// **Most of `HonorState` fires nothing at all.** The weekly figures, the two lifetime totals and
-/// the highest-lifetime rank are unwatched in the real client, so they ride the pane's world-entry
-/// repaint and move here in silence. Listing the watched fields positively — rather than
-/// "everything that is not a rank byte", which is what this did before — is what
-/// keeps a field added later from inventing an event for itself.
+/// `(kills changed, rank changed)` between two snapshots, from the three watched fields only; a
+/// first push fires both. The watched fields are listed so that a new field fires nothing.
 fn events_for(before: Option<&HonorState>, after: &HonorState) -> (bool, bool) {
     let Some(b) = before else {
         return (true, true);
     };
-    // `PLAYER_FIELD_SESSION_KILLS`, both halves — the one field behind `PLAYER_PVP_KILLS_CHANGED`.
+    // `PLAYER_FIELD_SESSION_KILLS`, both halves.
     let kills = |h: &HonorState| (h.session_hk, h.session_dk);
-    // `PLAYER_BYTES_3` byte 3 and `PLAYER_FIELD_BYTES2` byte 0 — the two behind
-    // `PLAYER_PVP_RANK_CHANGED`. NOT `highest_rank`: that is `+0x102b`, and nothing watches it.
+    // `PLAYER_BYTES_3` byte 3 and `PLAYER_FIELD_BYTES2` byte 0; not `highest_rank`, unwatched.
     let ranks = |h: &HonorState| (h.rank, h.rank_bar);
     (kills(b) != kills(after), ranks(b) != ranks(after))
 }
@@ -223,28 +149,11 @@ fn feed_honor(
     }
 
     // --- the inspect reply -------------------------------------------------------------------
-    //
-    // **A reply is only valid while it is about the player currently being inspected.** The
-    // reference's `HasInspectHonorData()` is the latch its pane's `OnShow` gates on: hold stale
-    // data and inspecting a SECOND player repaints the FIRST one's kills, with no request ever
-    // sent and nothing on screen to say so.
-    //
-    // **The real client's latch is invalidated by exactly one thing, and it is not this one**:
-    // the slot is a single un-keyed store, and `0x4c6f70` — reached
-    // from `NotifyInspect` — is its only GUID writer *and* its only invalidator. A `NotifyInspect`
-    // naming a different player zeroes both flags; the same player is a no-op; there is no timeout;
-    // and `ClearInspectPlayer` (the stock `InspectFrame_OnHide`) clears it outright.
-    //
-    // **We invalidate on the inspected TOKEN's guid moving instead, deliberately.** Our inspect
-    // window re-resolves its token every frame so the paper doll follows a re-target, and
-    // the honor page reads that same token rather than the reference's hardcoded `"target"` — so
-    // matching the reference's latch exactly would let one window show two different players'
-    // data at once, on its two tabs. The reference cannot notice because its two pages disagree
-    // about whose player they show in the first place. Ours agree, and this comparison is what
-    // keeps them agreeing.
-    //
-    // (`ClearInspectPlayer` is covered too, one level up: it drops the token, `inspected` reads
-    // `None`, and the mismatch below clears the slot.)
+    // The reference's latch clears only at `0x4c6f70`, from a `NotifyInspect` naming another
+    // player, and on `ClearInspectPlayer`. Deviation: we clear it whenever the inspected token's
+    // guid moves, because our window re-resolves its token each frame and both tabs read it, so
+    // the reference's rule would let the two tabs show different players. `ClearInspectPlayer`
+    // drops the token, which clears the slot here too.
     let inspected = inspect_target
         .token
         .as_deref()
@@ -254,9 +163,7 @@ fn feed_honor(
         .as_ref()
         .is_some_and(|reply| Some(reply.player_guid) != inspected)
     {
-        // Dropped from the RESOURCE, not merely filtered on the way out: a reply nobody may read
-        // is not data we are keeping, and leaving it here would make `HasInspectHonorData` and
-        // this store disagree about what is held.
+        // Dropped from the resource, so `HasInspectHonorData` and this store agree.
         inspect_honor.0 = None;
     }
     let held = inspect_honor.0.as_ref().map(|r| r.player_guid);
@@ -281,18 +188,13 @@ fn feed_honor(
             }
         }));
         memo.last_inspect = held;
-        // Fired on a *clear* as well as on an arrival: the pane's handler re-reads
-        // `GetInspectHonorData`, and a window left showing the previous player's kills is the
-        // failure a silent clear produces.
+        // Fired on a clear too, so the pane stops showing the previous player's numbers.
         script.fire_event("INSPECT_HONOR_UPDATE", Vec::<ScriptValue>::new());
     }
 
     // --- the pane's request ------------------------------------------------------------------
-    //
-    // `RequestInspectHonorData()` takes no argument — the engine holds the inspected player, so
-    // the app resolves it, exactly as `NotifyInspect`'s token is resolved. The token is re-read
-    // now rather than remembered from the notify, so a re-target between opening the window and
-    // opening its Honor tab asks about whoever is actually being inspected.
+    // `RequestInspectHonorData()` takes no argument: it asks about the inspected token's guid now,
+    // so a re-target before the Honor tab opens asks about the new player.
     let requests = script.take_inspect_honor_requests();
     if requests > 0 {
         match inspected {
@@ -302,8 +204,7 @@ fn feed_honor(
                     .0
                     .send(ClientCommand::InspectHonorStats { target: guid });
             }
-            // No inspect target (or it is not streamed): nothing to ask about. The pane will ask
-            // again from its next `OnShow`, which is the reference's only retry.
+            // Nothing to ask about; the pane asks again from its next `OnShow`.
             None => debug!("honor: inspect-honor request with no resolvable target — not sent"),
         }
     }
@@ -324,9 +225,6 @@ mod tests {
         }
     }
 
-    /// The event split is the whole point of [`events_for`]: a kill must not claim a rank change,
-    /// and a rank must not claim a kill. An addon that registers only one of the two is what makes
-    /// the distinction observable.
     #[test]
     fn each_event_fires_only_for_its_own_half() {
         let base = state();
@@ -339,16 +237,12 @@ mod tests {
         ranked.rank = 9;
         assert_eq!(events_for(Some(&base), &ranked), (false, true));
 
-        // The bar moving is a rank event too — it is the rank's own progress, and the reference's
-        // pane redraws the bar from the same handler as the title.
+        // The rank bar is `PLAYER_FIELD_BYTES2` byte 0, a rank event.
         let mut barred = base;
         barred.rank_bar = 200;
         assert_eq!(events_for(Some(&base), &barred), (false, true));
 
-        // The unwatched half: a weekly figure, a lifetime total and the highest-lifetime rank all
-        // move in silence, because the real client registers no watch on any of them (`0x467e70` —
-        // the module doc's table). This is the assertion the earlier implementation failed: it
-        // fired `KILLS_CHANGED` for all three.
+        // Unwatched in the reference (`0x467e70`), so these fire nothing.
         for mutate in [
             (|h: &mut HonorState| h.last_week_standing = 42) as fn(&mut HonorState),
             |h: &mut HonorState| h.lifetime_hk = 5_000,
@@ -365,8 +259,7 @@ mod tests {
         }
     }
 
-    /// A first push has to fire both, or a pane whose numbers arrived before it existed never
-    /// paints — the `ui_unit` "first resolve counts as a transition" rule.
+    /// Otherwise a pane whose numbers arrived before it existed would never paint.
     #[test]
     fn the_first_push_fires_both() {
         assert_eq!(events_for(None, &state()), (true, true));

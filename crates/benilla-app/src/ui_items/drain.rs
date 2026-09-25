@@ -1,7 +1,5 @@
-//! The outward half of the container seam (see the parent module doc): the per-frame drains that
-//! turn queued Lua intents (`UseContainerItem`, the cursor pick/place/swap/split moves, the
-//! delete-confirm popup's destroy) into `ClientCommand`s on the wire, locking the slots each send
-//! touches ([`crate::pending_item_ops::PendingItemOps`]) along the way.
+//! The per-frame drains that send the queued Lua container intents as `ClientCommand`s, locking
+//! the slots each send touches in [`crate::pending_item_ops::PendingItemOps`].
 
 use bevy::prelude::*;
 
@@ -14,22 +12,10 @@ use crate::pending_item_ops::PendingItemOps;
 
 use super::{slot_guid, slot_guid_count, wire_pos, INVTYPE_AMMO};
 
-/// **The one auto-equip sender** — the reference has exactly one (`0x5e1480`
-/// `AutoEquipCursorItem`), reached from several verbs, and until decision 1750 benilla had three
-/// copies of it. Three copies is what made the soulbind confirm impossible to add correctly: the
-/// gate would have had to be written, and kept agreeing, in three places.
-///
-/// Takes the WIRE position and the item's guid, and answers whether the send happened. The two
-/// forks it owns:
-///
-/// - **ammo**: an ammo-class item loads by entry with `CMSG_SET_AMMO`
-///   rather than the equip wire — the stack stays in the bag and `PLAYER_AMMO_ID` references it.
-/// A missing template falls back to `CMSG_AUTOEQUIP_ITEM`, whose refusal is at
-///   least visible.
-/// - **the soulbind deferral** (`0x5e163b`): a not-yet-bound, equippable
-///   `bonding == 2` item raises `AUTOEQUIP_BIND_CONFIRM` and sends NOTHING. `suppress` is the
-///   reference's own parameter, set on the re-issue `EquipPendingItem` drives — which is what stops
-///   the accept from asking the same question again forever.
+/// The one auto-equip sender, as in the reference (`AutoEquipCursorItem`, `0x5e1480`); answers
+/// whether it sent. An ammo item loads by entry with `CMSG_SET_AMMO` and stays in its bag. An
+/// unbound, equippable `bonding == 2` item raises `AUTOEQUIP_BIND_CONFIRM` and sends nothing
+/// (`0x5e163b`) unless `suppress`, the reference's flag, which the accept's re-issue sets.
 pub(crate) fn send_auto_equip(
     script: &mut UiScript,
     gate: &mut crate::ui_bind_confirm::BindGate,
@@ -73,21 +59,8 @@ pub(crate) fn send_auto_equip(
     true
 }
 
-/// Drain the `(bag, slot)` sources `AutoEquipCursorItem` queued (decision 0208 phase 1b: the
-/// model-pane's click-with-payload path) and send `CMSG_AUTOEQUIP_ITEM` — the engine's own
-/// contract (`cursor::doll::auto_equip_cursor_item`) already guarantees only a whole-stack,
-/// CONTAINER-sourced Item payload (`bag >= 0`) ever reaches this queue.
-///
-/// The same ammo sub-fork as [`drain_container_uses`] (the one auto-equip sender `0x5e1480`
-/// forks ammo-class → `CMSG_SET_AMMO`): a dropped ammo-class item loads by entry
-/// instead, which is also the wire for the ammo slot's own drop (the XML routes it here via
-/// `AutoEquipCursorItem`).
-///
-/// No pending-lock recording here (unlike the move/split/destroy drains) — matching this
-/// codebase's own existing precedent for the SAME wire send: `drain_container_uses`'s
-/// equip-vs-use fork already sends `AutoEquipItem` for an equippable bag-slot click with no lock
-/// bookkeeping of its own. A real gap either way (an in-flight autoequip's source slot isn't
-/// visibly dimmed), pre-existing and out of this slice's scope to fix.
+/// Sends the auto-equips `AutoEquipCursorItem` queued through [`send_auto_equip`]. It takes no
+/// pending lock, so the source slot does not dim while the equip is in flight.
 pub(super) fn drain_container_autoequips(
     script: Option<NonSendMut<UiScript>>,
     items: Res<Items>,
@@ -104,9 +77,6 @@ pub(super) fn drain_container_autoequips(
             debug!("ui_items: autoequip ({bag}, {slot}) out of range — ignored");
             continue;
         };
-        // The dropped item, by guid (source is a 0-based inner slot) — the sender needs it for both
-        // of its forks. Unresolved (rare: the bag needed the template for the icon) sends a plain
-        // AUTOEQUIP, whose refusal is at least visible.
         let slot0 = u8::try_from(slot.saturating_sub(1)).unwrap_or(0);
         let guid = self_q
             .iter()
@@ -126,22 +96,10 @@ pub(super) fn drain_container_autoequips(
     }
 }
 
-/// Drain the auto-stores `PutItemInBag`/`PutItemInBackpack` queued (`benilla_ui`'s
-/// `cursor::bag_verbs`) and send them on the wire.
-///
-/// **The destination is a BAG, not a slot** — that is the finding this drain exists to carry
-/// (`0x4c7c00` → `0x5e12e0`): `CMSG_AUTOSTORE_BAG_ITEM` names `(srcbag, srcslot, dstbag)` and
-/// the server picks where inside it the item lands, which is why an ordinary item dropped on a
-/// bag BUTTON goes in the bag rather than swapping with it. The destination bag byte is
-/// [`wire_pos`]'s own answer for that container's first slot (255 for the backpack, the bag's
-/// player-array slot 19..22 / 63..68 for an equipped or bank bag), so one map serves both ends.
-///
-/// A **split carry** takes `CMSG_SPLIT_ITEM` instead — the reference's own fork on `[0xb4b40c]`
-/// — with the literal `0xFF` where a destination slot would go, because that wire has a slot
-/// field and this one does not.
-///
-/// No pending-lock recording, matching [`drain_container_autoequips`]'s own precedent for the same
-/// class of send: the destination is not a slot, so there is no second end to lock.
+/// Sends the auto-stores `PutItemInBag`/`PutItemInBackpack` queued. The destination is a bag, not
+/// a slot (`0x4c7c00` to `0x5e12e0`): `CMSG_AUTOSTORE_BAG_ITEM` names `(srcbag, srcslot, dstbag)`
+/// and the server picks the slot. A split carry sends `CMSG_SPLIT_ITEM` instead (the reference's
+/// fork on `[0xb4b40c]`). Takes no pending lock.
 pub(super) fn drain_bag_autostores(
     script: Option<NonSendMut<UiScript>>,
     commands: Res<NetCommands>,
@@ -178,8 +136,7 @@ pub(super) fn drain_bag_autostores(
                     src_bag,
                     src_slot,
                     dst_bag,
-                    // `0xFF` — the reference's own literal for "no destination slot"; the split
-                    // wire has the field, the verb has no value for it.
+                    // The reference's literal for no destination slot.
                     dst_slot: 0xFF,
                     count,
                 });
@@ -188,15 +145,9 @@ pub(super) fn drain_bag_autostores(
     }
 }
 
-/// Drain the inventory-slot ids `UseInventoryItem` queued (decision 0208 phase 1b: the doll
-/// slot's right-click) and route the equipped position (bag 255 plus the 0-based wire slot —
-/// `HandleUseItemOpcode` takes equipped positions the same as bag ones, vmangos `ItemHandler.cpp`)
-/// through the shared use fork (`super::item_use_command`): the reference's doll click lands in
-/// the same `CGItem::Use` a bag click does (`0x4c7af0`), quest fork included — one of the five
-/// equippable quest-starters, worn and right-clicked, offers its quest instead of casting nothing.
-/// Ids outside 1..=19 (ammo, the bag icons) are a no-op — the engine's own queue never receives
-/// them from the shipped XML (only the 19 named slot buttons wire `UseInventoryItem` this slice),
-/// but a stray Lua call is still refused rather than sent as nonsense.
+/// Sends the doll right-clicks `UseInventoryItem` queued through [`super::send_item_use`], as the
+/// reference's doll click reaches the same `CGItem::Use` a bag click does (`0x4c7af0`): a worn
+/// quest-starter offers its quest. Ids outside 1..=19 are refused.
 pub(super) fn drain_inventory_uses(
     script: Option<NonSendMut<UiScript>>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
@@ -214,8 +165,6 @@ pub(super) fn drain_inventory_uses(
             continue;
         }
         let slot = (id - 1) as u8;
-        // The doll's own slot ids ARE the wire slots (`wire_pos`'s EQUIPMENT_BAG law), so the
-        // equipped instance resolves off the player's INV array directly.
         let (guid, start_quest, spell_index, use_spell, entry, is_charter) = self_q
             .iter()
             .next()
@@ -223,8 +172,6 @@ pub(super) fn drain_inventory_uses(
             .and_then(|guid| {
                 let entry = ladder.objects.object(guid)?.object_entry()?;
                 let t = ladder.items.template(entry, guid, &ladder.commands)?;
-                // The wire's spell byte is a template BLOCK ordinal — the
-                // template is already in hand here for `start_quest`, so name the real one.
                 Some((
                     Some(guid),
                     t.start_quest,
@@ -266,10 +213,8 @@ pub(super) fn drain_container_uses(
     mut equip_sound: MessageWriter<crate::sound::AutoEquipSound>,
     mut item_text: ResMut<crate::ui_item_text::ItemTextOpen>,
     targeting: crate::spell::cast_target::CastTargeting,
-    // The client-side pending ("gray") lock — the right-click-open arm arms it.
     mut pending_items: ResMut<PendingItemOps>,
-    // The loot-target latch — the right-click-open arm is one of its five arm sites, and the one
-    // that lets `SMSG_LOOT_RESPONSE`'s admission gate recognise an item loot.
+    // The loot latch the open arm sets, so `SMSG_LOOT_RESPONSE` admits an item loot.
     mut loot_latch: ResMut<crate::ui_loot::LootLatch>,
     mut ladder: crate::spell::CastLadder,
     mut ui_errors: ResMut<crate::ui_action::UiErrorKeys>,
@@ -278,9 +223,8 @@ pub(super) fn drain_container_uses(
     let Some(mut script) = script else {
         return;
     };
-    // Repair-mode clicks (the engine's pickup intercept — the real client's `0x4f9c7b` route):
-    // resolve the clicked slot's item guid and send its single-item repair. The affordability
-    // pre-check the client does (error 0x25) is left to the server's own refusal.
+    // Repair-mode clicks (the reference's `0x4f9c7b` route) repair the one item. The reference's
+    // affordability check (error 0x25) is not built; the server refuses instead.
     for (bag, slot) in script.take_container_repairs() {
         let Some(vendor) = merchant.vendor else {
             continue;
@@ -302,23 +246,16 @@ pub(super) fn drain_container_uses(
         }
     }
     for (bag, slot) in script.take_container_uses() {
-        // **A right-click cancels an armed gift wrap, whatever it then does**:
-        // only a LEFT-click on a container slot spends the paper, and the reference's use path
-        // clears the cursor on its way. Above every affordance below, because a sell or a
-        // deposit is still a right-click. Re-arming is not a special case: a right-click on a
-        // second piece of paper cancels the first here and arms itself in the dispatcher.
+        // Any right-click, a sell or a deposit included, cancels an armed gift wrap: the
+        // reference's use path clears the cursor first (`0x4fa198`).
         if let Some(w) = script.cancel_gift_wrap() {
             debug!(
                 "ui_items: right-click cancels the armed gift wrap on bag {} slot {}",
                 w.bag, w.slot
             );
         }
-        // Lua (bagID, 1-based slot) → the wire's player-array addressing.
         let slot0 = u8::try_from(slot.saturating_sub(1)).ok();
-        // Sell affordance (decision 0081 v1): while a merchant is open, a bag-slot click sells the
-        // slot's item instead of using/equipping it (`CMSG_SELL_ITEM`, count 0 = the whole stack —
-        // the item is addressed by its concrete guid, not a bag slot). An empty slot has no guid, so
-        // the click is a harmless no-op.
+        // With a merchant open, the click sells the whole stack (`CMSG_SELL_ITEM`, count 0).
         if let (true, Some(vendor)) = (merchant.is_open(), merchant.vendor) {
             let item_guid = self_q
                 .iter()
@@ -341,14 +278,10 @@ pub(super) fn drain_container_uses(
             debug!("ui_items: UseContainerItem({bag}, {slot}) out of range — ignored");
             continue;
         };
-        // The deposit/withdraw affordance: while the bank is open, a container
-        // click routes as the reference's at-bank auto-move instead of using/equipping — a bank
-        // position (the vault or a bank bag) withdraws (`CMSG_AUTOSTORE_BANK_ITEM`), a carried
-        // bag's item deposits (`CMSG_AUTOBANK_ITEM`). Which of the two opcodes the reference
-        // fires per direction is INFERRED — vmangos routes AUTOSTORE by source position,
-        // so either choice lands correctly. An empty slot refuses server-side, harmlessly.
-        // Doll clicks never reach this drain (they flow through `drain_inventory_uses`), so
-        // equipped gear keeps its plain use at the bank, like the reference.
+        // With the bank open, a vault or bank-bag item withdraws (`CMSG_AUTOSTORE_BANK_ITEM`) and
+        // any other deposits (`CMSG_AUTOBANK_ITEM`): the reference's bank flag, set for bags -1
+        // and 5..10 (`0x4f9820`), picks the opcode (`0x4fa2f2`). Doll clicks come through
+        // `drain_inventory_uses`, so worn gear keeps its plain use.
         if bank.is_open() {
             let withdrawing = bag == super::BANK_CONTAINER || (5..=10).contains(&bag);
             if withdrawing {
@@ -366,10 +299,7 @@ pub(super) fn drain_container_uses(
             }
             continue;
         }
-        // Everything the reference's click law reads off the clicked slot, resolved once. `None` =
-        // an empty slot, or a template still in flight — the click then falls all the way through
-        // to a plain USE, whose refusal is at least visible (the template is all but always cached
-        // by click time; the bag needed it for the icon).
+        // `None` (empty, or the template in flight) falls through to a plain use.
         let clicked = self_q
             .iter()
             .next()
@@ -387,8 +317,6 @@ pub(super) fn drain_container_uses(
                     inventory_type: t.inventory_type,
                     display_info_id: t.display_info_id,
                     start_quest: t.start_quest,
-                    // The wire's spell byte is a template BLOCK ordinal — the
-                    // template is right here, so send the real one rather than assuming 0.
                     spell_index: t.use_spell_index().unwrap_or(0),
                     use_spell: t.use_spell.map(|u| u.spell_id),
                     unwraps_gift: t.unwraps_gift(inst_flags),
@@ -399,24 +327,12 @@ pub(super) fn drain_container_uses(
                 })
             });
 
-        // The reference's equip-vs-use fork (`0x4fa3b9`/`0x4fa3bd`), with the ammo sub-fork: the
-        // auto-equip sender `0x5e1480` sends `CMSG_SET_AMMO` (the item entry) for an ammo-class
-        // item, `CMSG_AUTOEQUIP_ITEM` for any other equippable (inventoryType != 0 — weapons,
-        // armor, bags). display_id feeds the synthetic pickup→place auto-equip sound (this path
-        // never moves the cursor; a drag already gets that pair via the cursor-payload
-        // transitions).
-        //
-        // The arm carries the reference's own **quest guard** (`0x4fa3bd`–`0x4fa3cc`, decision
-        // 0664): it equips only when `StartQuest` (`[rec+0x1a8]`) is 0, so a quest-starter falls
-        // through *whatever* its inventoryType — the five equippable ones (Pendant of Myzrael,
-        // Arena Master, …) offer their quest on a right-click, they don't put themselves on.
-        //
-        // **Everything below this fork is `0x5d8d00`, the USE dispatcher, in ITS OWN order** — an
-        // equippable item never reaches any of it.
+        // The reference's equip-vs-use fork (`0x4fa3b9`): an equippable item auto-equips unless
+        // its `StartQuest` (`[rec+0x1a8]`) is set (`0x4fa3bd`). Everything below is the use
+        // dispatcher `0x5d8d00`, in its own order.
         if let Some(c) = clicked.filter(|c| c.start_quest == 0 && c.inventory_type != 0) {
-            // Through the one sender: it owns the ammo fork AND the soulbind
-            // deferral. A deferred equip plays no sound — the reference's own equip kit rides the
-            // arm that sends, and a question is not an equip.
+            // This path never moves the cursor, so it plays the equip sound itself; a deferred
+            // equip plays none, as the reference's sound rides the arm that sends.
             if send_auto_equip(
                 &mut script,
                 &mut gate,
@@ -434,10 +350,8 @@ pub(super) fn drain_container_uses(
             }
             continue;
         }
-        // #2 — the wrapped gift (`0x5d8d92`/`0x5d8d9d` → emitter `0x5edd60`): `CMSG_OPEN_ITEM`
-        // unwraps it. FIRST in the dispatcher, ahead of the quest and readable arms, so a gift
-        // that also carries letter text unwraps rather than reads. (vmangos answers this one with
-        // an entry swap out of `character_gifts`, not a loot window.)
+        // A wrapped gift unwraps with `CMSG_OPEN_ITEM` (`0x5d8d92`, emitter `0x5edd60`), first in
+        // the dispatcher; vmangos swaps the entry back from `character_gifts`.
         if let Some(c) = clicked.filter(|c| c.unwraps_gift) {
             debug!(
                 "ui_items: unwrap gift {:#x} (lua bag {bag} → wire {bag_index}/{wire_slot})",
@@ -449,26 +363,17 @@ pub(super) fn drain_container_uses(
             });
             continue;
         }
-        // …and arm #2's OTHER side: a piece of wrapping paper (`0x5d8d9d`'s clear branch →
-        // `0x5edea0`). **Purely local — nothing is sent.** The paper's slot locks, the displayed
-        // cursor becomes mode 2, and the next LEFT-click on a container slot is what sends
-        // `CMSG_WRAP_ITEM` (`ui_items::feed`'s wrap drain, through the engine's
-        // `pickup_container_item`).
+        // Wrapping paper (`0x5d8d9d`'s other branch, `0x5edea0`) sends nothing: its slot locks and
+        // the cursor becomes mode 2 until a left-click on a container slot sends `CMSG_WRAP_ITEM`.
         if let Some(c) = clicked.filter(|c| c.begins_gift_wrap) {
             debug!(
                 "ui_items: arm gift wrap with {:#x} (lua bag {bag} slot {slot})",
                 c.guid
             );
-            // `arm_gift_wrap` queues the slot's own `ITEM_LOCK_CHANGED` — the paper dims from
-            // the lock the arm takes, exactly as a held item's source slot does.
             script.arm_gift_wrap(bag, slot);
             continue;
         }
-        // #3 — the quest-starter (`0x5d8dd2`): the item's own guid is the
-        // questgiver. Placed at the reference's position rather than at the tail, so a starter
-        // that is *also* readable or lootable offers its quest instead of reading/opening. Routed
-        // through the one shared use fork, which is what turns a non-zero StartQuest into the
-        // item-guid query.
+        // A quest-starter (`0x5d8dd2`) offers its quest, ahead of the readable and open arms.
         if let Some(c) = clicked.filter(|c| c.start_quest != 0) {
             debug!(
                 "ui_items: quest-starter {:#x} offers quest {}",
@@ -495,12 +400,9 @@ pub(super) fn drain_container_uses(
             );
             continue;
         }
-        // #5 — readable: an item TEMPLATE carrying `PageText` (`0x5d8e4c`) — a book — opens the
-        // reader on its page chain, client-side, no permission packet (`0x4e32e0(itemGuid)`;
-        // decision 1105). Above #6 and above the open arm, which is the reference's own order and
-        // the INVERSE of the tooltip's, where OPENABLE wins over READABLE: a template that is both
-        // readable and lootable *shows* `<Right Click to Open>` and *reads* on click —
-        // byte-verified, not a slip of ours.
+        // A book, a template with `PageText` (`0x5d8e4c`), opens the reader with no packet
+        // (`0x4e32e0`). It precedes the open arm, the inverse of the tooltip: an item both
+        // readable and lootable shows `<Right Click to Open>` and reads on click.
         if let Some(c) = clicked.filter(|c| c.page_text != 0) {
             if item_text.toggle_closed(c.guid) {
                 debug!("ui_items: re-click closes the book {:#x}", c.guid);
@@ -513,10 +415,8 @@ pub(super) fn drain_container_uses(
             }
             continue;
         }
-        // #6 — readable: an item INSTANCE carrying `ITEM_FIELD_ITEM_TEXT_ID` (a mail-made
-        // permanent letter) opens the reader — client-side, no permission packet (vmangos'
-        // `CMSG_READ_ITEM` handler gates on the *template*'s PageText, which is 0 for the Plain
-        // Letter; the text rides the ask-once `CMSG_ITEM_TEXT_QUERY` instead).
+        // A letter from mail (`ITEM_FIELD_ITEM_TEXT_ID`) opens the reader with no packet; vmangos's
+        // `CMSG_READ_ITEM` wants a template `PageText`, so the text comes by item-text query.
         if let Some(c) = clicked.filter(|c| c.item_text_id != 0) {
             if item_text.toggle_closed(c.guid) {
                 debug!("ui_items: re-click closes the letter {:#x}", c.guid);
@@ -529,48 +429,21 @@ pub(super) fn drain_container_uses(
             }
             continue;
         }
-        // #8 — the open arm (`0x5d8f7c: test al,4` → emitter `0x5edc80`): a **bare** template
-        // LOOTABLE test. `CMSG_OPEN_ITEM`, not `CMSG_USE_ITEM` — the server's
-        // `HandleOpenItemOpcode` is the only handler that answers with
-        // `SendLoot(item guid, LOOT_CORPSE)`, i.e. a loot window over a thing in your bag; sending
-        // USE_ITEM instead casts the item's (absent) on-use spell and nothing happens, which was
-        // exactly the "no way to open clams" symptom.
-        //
-        // Deliberately looser than the tooltip line's predicate (`ItemInfo::shows_open_line`): the
-        // send consults **neither** LockID nor the instance UNLOCKED bit (VERIFIED both ways — no
-        // `[rec+0x1ac]` operand exists anywhere on the send path). So a still-locked junkbox DOES
-        // send, and the server's `EQUIP_ERR_ITEM_LOCKED` is where the player's "Item is locked"
-        // line comes from. Gating locally would eat the click in silence.
+        // A lootable template (`0x5d8f7c`, emitter `0x5edc80`) sends `CMSG_OPEN_ITEM`, which the
+        // server answers with a loot window on the item (`SpellHandler.cpp:227`). Unlike the
+        // tooltip line, the send tests neither the lock id nor the unlocked bit, so a locked box
+        // sends and the server's `EQUIP_ERR_ITEM_LOCKED` is the "Item is locked" line.
         if let Some(c) = clicked.filter(|c| c.opens_loot) {
             debug!(
                 "ui_items: open item {:#x} (lua bag {bag} → wire {bag_index}/{wire_slot})",
                 c.guid
             );
-            // **The loot latch, armed before the send** — arm site four of five (`0x5edcc0`, in
-            // this same emitter `0x5edc80`, immediately ahead of the lock setter and the
-            // `0x5edce5 push 0xac`). The latch is
-            // the **item's own guid** (`[[edi+8]+0]`) because that is what the answer names:
-            // vmangos' `HandleOpenItemOpcode` ends in `SendLoot(pItem->GetObjectGuid(),
-            // LOOT_CORPSE)`, so `SMSG_LOOT_RESPONSE` comes back on the item guid with wire type
-            // **1** — and 1477's admission gate refuses a type-1 answer against a *cold* latch.
-            // Without this arm the window never opens.
-            //
-            // It arms no pose: predicate B `0x612710` answers false for an ITEM, and
-            // [`crate::ui_loot::resolve_loot_kneel`] reaches the same false through a guid the
-            // object manager cannot resolve — we stream no item entities.
+            // The loot latch on the item's guid, before the send (`0x5edcc0`); the admission gate
+            // refuses the type-1 `SMSG_LOOT_RESPONSE` without it. No kneel (`0x612710`).
             loot_latch.0 = Some(c.guid);
-            // **The gray lock, armed before the send** — the reference's emitter `0x5edc80` calls
-            // the lock setter `0x4953e0` at `0x5edcd9` and only then ships `CMSG_OPEN_ITEM`.
-            // So a clam,
-            // lockbox or loot bag greys the instant you right-click it and stays grey until the
-            // open resolves — the emptied item vanishing (a resolving field update), a refusal
-            // (`EQUIP_ERR_ITEM_LOCKED` on a still-locked junkbox), or the window closed with loot
-            // left, whose `SMSG_LOOT_RELEASE_RESPONSE` unlocks it by guid (`ui_loot::net`'s
-            // `loot_release_response`, the reference's `UnlockItem` at `48f299`).
-            //
-            // Deliberately NOT armed on the gift-unwrap arm above, which sends the same opcode:
-            // its emitter `0x5edd60` contains neither call — no lock setter and no latch write.
-            // That asymmetry is the reference's, verified, and copying it is the point.
+            // The grey lock, also before the send (lock setter `0x4953e0` at `0x5edcd9`); it holds
+            // until the item empties, the server refuses, or `SMSG_LOOT_RELEASE_RESPONSE` unlocks
+            // it by guid. The unwrap arm's emitter (`0x5edd60`) takes neither lock nor latch.
             let (guid, count) = self_q
                 .iter()
                 .next()
@@ -584,8 +457,7 @@ pub(super) fn drain_container_uses(
             });
             continue;
         }
-        // The tail: a plain use (food, potions, hearthstone). The quest arm already fired above,
-        // so the shared fork's own quest leg is inert here by construction.
+        // A plain use (food, potions, the hearthstone); quest-starters took the arm above.
         debug!("ui_items: use item (lua bag {bag} → wire {bag_index}/{wire_slot})");
         super::send_item_use(
             super::ItemUse {
@@ -609,60 +481,29 @@ pub(super) fn drain_container_uses(
     }
 }
 
-/// One clicked bag slot, resolved: the live instance's guid and the template scalars the
-/// reference's fork chain tests, read once so the chain above is a plain ordered cascade rather
-/// than five repeats of the same lookup. Copy-cheap on purpose — no borrow of [`Items`] outlives
-/// the resolve.
+/// One clicked bag slot, resolved once: the fields the reference's fork chain tests.
 #[derive(Clone, Copy)]
 struct Clicked {
     guid: u64,
-    /// `OBJECT_FIELD_ENTRY` — the ammo arm addresses by entry, not by slot.
     entry: u32,
-    /// Instance `ITEM_FIELD_ITEM_TEXT_ID` (a mail-made permanent letter); 0 = not a letter.
+    /// Instance `ITEM_FIELD_ITEM_TEXT_ID`, nonzero on a letter made from mail.
     item_text_id: u32,
     inventory_type: u32,
     display_info_id: u32,
     start_quest: u32,
     spell_index: u8,
-    /// The template's on-use SPELL id — what the cast tail's in-flight guard is keyed on;
-    /// `None` = this item casts nothing.
+    /// The template's on-use spell, the key of the cast tail's in-flight guard.
     use_spell: Option<u32>,
-    /// `ItemInfo::unwraps_gift` for this instance — dispatcher arm #2.
     unwraps_gift: bool,
-    /// `ItemInfo::begins_gift_wrap` — arm #2's OTHER side: a piece of wrapping paper. Arms the
-    /// local wrap cursor and sends nothing.
     begins_gift_wrap: bool,
-    /// `ItemInfo::opens_loot` for this template — dispatcher arm #8.
     opens_loot: bool,
-    /// The template's `PageText` — dispatcher arm #5's book gate; `0` = not a
-    /// book. The reader re-reads the head (and the material) off the template itself as it paints,
-    /// like the reference, so only the fork's predicate is carried here.
+    /// The template's `PageText`, nonzero on a book.
     page_text: u32,
-    /// The template's `ITEM_FLAG_CHARTER` — a guild petition.
     is_charter: bool,
 }
 
-/// Drain the pick/place/swap/split moves `PickupContainerItem`/`SplitContainerItem` queued and
-/// send them on the wire (whole-space since slice 2).
-///
-/// `count: None` (a whole-stack move/swap): both ends map through [`wire_pos`]. Both landing on
-/// [`BAG_PLAYER_INVENTORY`] (the player's own grid — equipment, bag buttons, and the backpack) is
-/// a `CMSG_SWAP_INV_ITEM` on the two player-array slots, unchanged; otherwise (either end an
-/// equipped bag 1..4) it's the general `CMSG_SWAP_ITEM` — VERIFIED vmangos
-/// `Server/Packets/Item.cpp:30-36`: body order is **dstbag, dstslot, srcbag, srcslot** (opcode
-/// `0x10C`; the builder's arg order and the golden in `messages/items.rs::swap_item_body_destination_first`
-/// already match this). An empty destination is still a swap on either wire (a move).
-///
-/// `count: Some(n)` (a split placement): both ends map through [`wire_pos`] (all five bags valid,
-/// since `SplitContainerItem`'s pickup already resolved a real slot) → `CMSG_SPLIT_ITEM`, `count`
-/// clamped to the wire's `u8`.
-///
-/// Every send locks the Lua-space slots it touches — both ends ("a send locks
-/// both ends") — recording each slot's CURRENT item guid as the resolving clear's baseline
-/// ([`PendingItemOps::add`]) and firing `ITEM_LOCK_CHANGED` immediately, so a bag window's own
-/// synchronous post-click repaint and every later frame agree (only the SOURCE slot's repaint at
-/// the exact moment of THIS click can still show briefly stale — see the parent module doc —
-/// corrected by this same-frame event).
+/// Sends the gift wraps and the moves `PickupContainerItem`/`SplitContainerItem` queued, the moves
+/// through [`send_container_move`].
 pub(super) fn drain_container_moves(
     script: Option<NonSendMut<UiScript>>,
     commands: Res<NetCommands>,
@@ -676,10 +517,8 @@ pub(super) fn drain_container_moves(
         return;
     };
     let store = self_q.iter().next();
-    // **The completed gift wraps**: a left-click that spent an armed paper. Both
-    // pairs go out in the wire's own order — the paper first — and the whole eligibility question
-    // is the server's: it answers an ineligible target with one of the six `ERR_CANT_WRAP_*`
-    // reasons through the ordinary `SMSG_INVENTORY_CHANGE_FAILURE` line.
+    // A left-click that spent an armed paper: paper first, then the target. Eligibility is the
+    // server's, refused with an `ERR_CANT_WRAP_*` reason.
     for (gift_bag, gift_slot, item_bag, item_slot) in script.take_container_wraps() {
         let (Some((gift_bag_index, gift_wire_slot)), Some((item_bag_index, item_wire_slot))) =
             (wire_pos(gift_bag, gift_slot), wire_pos(item_bag, item_slot))
@@ -716,21 +555,16 @@ pub(super) fn drain_container_moves(
     }
 }
 
-/// **The player-direct slot ranges** the equip deferral elects on (`0x5e0c40`):
-/// `[0, 22]` — the 19 equipment slots plus the four equipped-bag slots — and `[63, 68]`, the bank
-/// bag slots. A wire position is player-direct when its bag byte is the player's own array AND its
-/// slot falls in one of these; the backpack (`23..38`), the keyring and a bag's inner slots are all
-/// on the same bag byte and are deliberately NOT in the set, which is what makes the election
-/// pick out exactly "one side of this swap is an equip".
+/// The equip deferral's positions (`0x5e0c40`): slots 0..=22 (equipment and equipped bags) and
+/// 63..=68 (bank bags) of the player's own array; the backpack and keyring are not.
 fn is_equip_position(bag_index: u8, slot: u8) -> bool {
     bag_index == BAG_PLAYER_INVENTORY && (slot <= 22 || (63..=68).contains(&slot))
 }
 
-/// One container move — the whole-stack swap, the split, the pending lock, and the
-/// equip soulbind deferral. Split out of the drain so `EquipPendingItem`'s re-issue runs the very
-/// same body with `suppress` set, rather than a second copy of it that has to be kept agreeing.
-///
-/// Returns whether the move was sent (`false` = deferred behind `EQUIP_BIND_CONFIRM`).
+/// One container move: the soulbind deferral, then the send and a lock on both ends. A whole stack
+/// is `CMSG_SWAP_INV_ITEM` when both ends are in the player's own array, else `CMSG_SWAP_ITEM`
+/// (destination first, `Server/Packets/Item.cpp:30-36`); a split is `CMSG_SPLIT_ITEM`. The
+/// accept's re-issue runs it with `suppress`. False when deferred behind `EQUIP_BIND_CONFIRM`.
 pub(crate) fn send_container_move(
     script: &mut UiScript,
     gate: &mut crate::ui_bind_confirm::BindGate,
@@ -750,12 +584,8 @@ pub(crate) fn send_container_move(
             debug!("ui_items: container move {mv:?} out of range — ignored");
             return false;
         };
-        // The equip deferral's ELECTION (`0x5e0c40`): exactly one end is a player-direct equip
-        // position, and the item that would bind is then whatever occupies the OTHER end. That
-        // asymmetry is the whole rule and it falls out right in both directions — dragging a BoE
-        // from a bag onto a worn slot asks about the bag's item, and swapping a worn item out onto
-        // a bag slot that already holds a BoE asks about THAT one, because the swap equips it.
-        // Unequipping onto an empty slot asks about nothing, which is why it never prompts.
+        // The deferral (`0x5e0c40`) asks when exactly one end is an equip position, about the item
+        // at the other end, which the swap equips; an unequip to an empty slot asks nothing.
         if !suppress
             && mv.count.is_none()
             && is_equip_position(dst.0, dst.1) != is_equip_position(src.0, src.1)
@@ -824,17 +654,14 @@ pub(crate) fn send_container_move(
                 });
             }
         }
-        // The pending lock: both ends, baselined on their CURRENT (guid, count) — the resolving
-        // clear then watches for either to move (an empty destination baselines (0, 0) and watches
-        // for an item to land there).
+        // Both ends lock on their current (guid, count), which the resolving clear watches.
         let (src_guid, src_count) = slot_guid_count(store, mv.src_bag, mv.src_slot, objects);
         let (dst_guid, dst_count) = slot_guid_count(store, mv.dst_bag, mv.dst_slot, objects);
         pending.add([
             (mv.src_bag, mv.src_slot, src_guid, src_count),
             (mv.dst_bag, mv.dst_slot, dst_guid, dst_count),
         ]);
-        // One per locked end, as the reference's own per-slot unlock does — the slot travels in
-        // how many times it fires, never in an argument (see `feed`'s note).
+        // One argless event per locked end, as the reference fires per slot.
         for _ in 0..2 {
             script.fire_event("ITEM_LOCK_CHANGED", Vec::new());
         }
@@ -842,13 +669,8 @@ pub(crate) fn send_container_move(
     true
 }
 
-/// Drain the `(bag, slot, count)` destroys `DeleteCursorItem` queued (the delete-confirm popup's
-/// accept) and send `CMSG_DESTROYITEM`. `count == 0` is the engine's "whole
-/// stack" convention — it rides straight onto the wire, which shares the same convention.
-///
-/// Locks the one slot touched — baselined on its CURRENT `(guid, count)`, same as
-/// [`drain_container_moves`] — and fires `ITEM_LOCK_CHANGED` immediately. Unlike a move/split
-/// there is no second "displaced" slot: a destroy only ever removes from where it's aimed.
+/// Sends the destroys `DeleteCursorItem` queued as `CMSG_DESTROYITEM` (count 0 is the whole stack
+/// on both sides) and locks the one slot.
 pub(super) fn drain_container_destroys(
     script: Option<NonSendMut<UiScript>>,
     commands: Res<NetCommands>,
@@ -884,16 +706,15 @@ mod tests {
     use benilla_protocol::messages::{ItemInfo, ObjectFields, ITEM_FLAG_LOOTABLE};
     use bevy::ecs::system::RunSystemOnce;
 
-    /// "Small Barnacled Clam", entry 7973 — the director's own case, and the `--open-item` probe's.
+    /// Small Barnacled Clam.
     const CLAM_ENTRY: u32 = 7973;
-    /// The clam's item guid (`HIGHGUID_ITEM` 0x4000…, as the live probe read it back).
     const CLAM: u64 = 0x4000_0000_0000_1939;
-    /// `PLAYER_FIELD_PACK_SLOT_1` — backpack slot 1's guid pair, so `slot_guid(0, 0)` resolves.
+    /// `PLAYER_FIELD_PACK_SLOT_1`, backpack slot 1's guid pair.
     const F_PACK_SLOT_1: u16 = 532;
-    /// `OBJECT_FIELD_ENTRY` on the item object — what `Items::object(…).object_entry()` reads.
+    /// `OBJECT_FIELD_ENTRY` on the item object.
     const F_OBJECT_ENTRY: u16 = 3;
 
-    /// Right-click backpack slot 1 (holding a LOOTABLE template) and run the click dispatcher.
+    /// Right-clicks backpack slot 1, holding a lootable template, and runs the click dispatcher.
     fn open_the_clam() -> (App, crossbeam_channel::Receiver<ClientCommand>) {
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
@@ -924,7 +745,6 @@ mod tests {
             .init_resource::<crate::net::GuidIndex>()
             .insert_resource(NetCommands(tx));
 
-        // The player, holding the clam in backpack slot 1.
         app.world_mut().spawn((
             SelfPlayer,
             ObjectStore(ObjectFields::from_pairs(&[
@@ -932,8 +752,7 @@ mod tests {
                 (F_PACK_SLOT_1 + 1, (CLAM >> 32) as u32),
             ])),
         ));
-        // The item object (an entity in the one index, 2334) and its landed template —
-        // LOOTABLE, so the dispatcher's open arm claims the click (`ItemInfo::opens_loot`).
+        // The item object and its lootable template, so the open arm claims the click.
         crate::items::test_spawn_item(
             app.world_mut(),
             CLAM,
@@ -958,13 +777,8 @@ mod tests {
         (app, rx)
     }
 
-    /// **The clam regression.** Arm site four of five: the `CMSG_OPEN_ITEM` send
-    /// latches the ITEM's own guid (`0x5edcc0`). It is not cosmetic
-    /// and it is not about the pose — vmangos answers this opcode with `SendLoot(item guid,
-    /// LOOT_CORPSE)`, i.e. `SMSG_LOOT_RESPONSE` type **1** on that same guid (live-verified by
-    /// `benilla-world --open-item`), and 1477's admission gate *refuses* a type-1 answer against a
-    /// cold latch. Without the arm the clam greys and no window ever opens, which is exactly what
-    /// the director saw.
+    /// vmangos answers with a type-1 `SMSG_LOOT_RESPONSE` on the item's guid, refused against a
+    /// cold latch: without the latch the clam greys and no window opens.
     #[test]
     fn the_open_item_send_arms_the_loot_latch_on_the_items_own_guid() {
         let (app, rx) = open_the_clam();
@@ -983,24 +797,20 @@ mod tests {
             Some(CLAM),
             "…having first latched the item's own guid, or the type-1 answer is refused"
         );
-        // The grey lock is the reference's other pre-send write, and still there.
+        // The grey lock, the reference's other pre-send write.
         assert!(
             app.world().resource::<PendingItemOps>().contains(0, 1),
             "the slot greys at the click"
         );
     }
 
-    /// **Right-clicking wrapping paper arms the wrap and sends NOTHING** — the
-    /// same dispatcher arm the wrapped-gift unwrap takes, on its other side. This is the bug:
-    /// benilla fell through to `CMSG_USE_ITEM`, which casts a spell the paper does
-    /// not have.
+    /// The unwrap arm's other side: wrapping paper arms the wrap cursor and sends nothing.
     #[test]
     fn a_wrapper_right_click_arms_the_cursor_and_ships_no_packet() {
         let (mut app, rx) = open_the_clam();
         while rx.try_recv().is_ok() {} // drain the clam's own send
-                                       // Re-dress backpack slot 1 as a piece of wrapping paper: WRAPPER on the template, and no
-                                       // WRAPPED bit on the instance (that combination is the begin-wrap arm; with the bit set it
-                                       // would be a present, and would send `CMSG_OPEN_ITEM`).
+                                       // Slot 1 becomes wrapping paper: WRAPPER on the
+                                       // template, no WRAPPED bit on the instance.
         let mut items = app.world_mut().resource_mut::<Items>();
         items.insert_template(
             CLAM_ENTRY,
@@ -1031,23 +841,13 @@ mod tests {
     }
 }
 
-/// **The bind confirmations' answers** — `EquipPendingItem`/`CancelPendingEquip`
-/// and `ConfirmBindOnUse`, drained where the senders they re-issue live.
+/// The answers to `EquipPendingItem`/`CancelPendingEquip`. Accept re-runs the original sender with
+/// `suppress` set, as the reference's `0x5e1be0` does: 1.12 has no confirm opcode, and a slot that
+/// changed under the dialog is judged afresh. Cancel sends nothing and frees the record.
 ///
-/// Accept is a **re-issue with `suppress` set**, not a confirm packet: 1.12 has no such opcode, and
-/// the reference's two verbs both land on `0x5e1be0(index, accept)`, whose accept arm re-runs the
-/// original action. Running the very same sender is what makes the re-issue re-read the world — a
-/// slot that changed under the open dialog is re-judged rather than sent stale — and `suppress` is
-/// what stops the gate from asking the same question forever.
-///
-/// **Cancel sends nothing and only frees the record.** NAMED DIVERGENCE: the reference's cancel
-/// also unlocks the src/dst occupants (`UnlockItem 0x495420`), because its deferral *took* those
-/// locks on the way in. benilla's does not take them — [`send_container_move`]'s
-/// [`PendingItemOps`] lock is a *pending wire op* lock, and a deferred action has no wire op for it
-/// to resolve against, so filing one would leave a lock nothing could clear. The visible
-/// consequence is that an item is not dimmed while its bind question is up; the auto-equip path
-/// never dimmed at all (a gap this codebase already named), so this keeps the three arms consistent
-/// instead of half-fixing one of them.
+/// Deviation: the reference's cancel also unlocks both occupants (`UnlockItem`, `0x495420`), which
+/// its deferral locked; ours locks nothing while the question is up, because a [`PendingItemOps`]
+/// lock clears only against a wire op and a deferred action has none.
 pub(super) fn drain_bind_confirm_answers(
     script: Option<NonSendMut<UiScript>>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
@@ -1062,8 +862,7 @@ pub(super) fn drain_bind_confirm_answers(
     };
     let store = self_q.iter().next();
     for answer in script.take_pending_equip_answers() {
-        // An index nobody filed is dropped in silence — `0x5e1be0` bounds-checks against the live
-        // element count and returns, so a stray `EquipPendingItem(99)` from an addon does nothing.
+        // An unfiled index does nothing: `0x5e1be0` bounds-checks it and returns.
         let Some(rec) = gate.equips.take(answer.index) else {
             debug!(
                 "ui_items: bind answer for index {} — no such pending equip",
@@ -1121,11 +920,8 @@ pub(super) fn drain_bind_confirm_answers(
     }
 }
 
-/// `ConfirmBindOnUse()` — arm 290's accept, its own system because it is the only one of the three
-/// that re-issues through the **cast ladder** (an item use IS a cast). No
-/// index and no argument: that arm's pending state is one cell, not an array element. A count
-/// rather than a bool for the same reason [`UiScript::take_binder_confirms`] is one; the record is
-/// taken on the first, so a doubled accept re-uses nothing.
+/// `ConfirmBindOnUse()`: re-issues the pending use through the cast ladder with `suppress` set.
+/// The pending state is one cell, taken on the first accept, so a doubled accept does nothing.
 pub(super) fn drain_bind_on_use_confirms(
     script: Option<NonSendMut<UiScript>>,
     targeting: crate::spell::cast_target::CastTargeting,
@@ -1164,19 +960,17 @@ mod bind_confirm_tests {
     use benilla_ui::script::{ContainerSlot, ContainerState};
     use bevy::ecs::system::RunSystemOnce;
 
-    /// 871 Flurry Axe — a real `item_template` row, quality 4 **bonding 2** (bind on EQUIP): the
-    /// equip arms' whole predicate is `bonding == 2`, with no quality leg at all.
+    /// Flurry Axe, a real `item_template` row: quality 4, bonding 2 (bind on equip).
     const FLURRY_AXE: u32 = 871;
     const AXE_GUID: u64 = 0x4000_0000_0000_0871;
-    /// `ITEM_FIELD_FLAGS` (wire field 21) — bit 0 is soulbound, the first half of `0x5da2c0`.
+    /// `ITEM_FIELD_FLAGS` (field 21); bit 0 is soulbound (`0x5da2c0`).
     const F_ITEM_FLAGS: u16 = 21;
-    /// `PLAYER_FIELD_PACK_SLOT_1` — backpack slot 1's guid pair.
+    /// `PLAYER_FIELD_PACK_SLOT_1`, backpack slot 1's guid pair.
     const F_PACK_SLOT_1: u16 = 532;
     const F_OBJECT_ENTRY: u16 = 3;
 
     fn load_ui(s: &UiScript) {
-        // Through the chain-aware reader: this list names chain files now, and a
-        // reader that joins `assets/ui` cannot resolve one (1838, 1887, 1888).
+        // Chain files, so through the chain-aware reader.
         for file in [
             "Interface\\FrameXML\\Fonts.xml",
             r"Interface\FrameXML\MoneyFrame.lua",
@@ -1222,22 +1016,18 @@ mod bind_confirm_tests {
         }
     }
 
-    /// Place the axe from backpack slot 1 onto the empty MainHand doll slot, then run the move
-    /// drain. Returns the app, the wire receiver, and the script back.
+    /// Places the axe from backpack slot 1 on the empty main hand and runs the move drain.
     fn place_the_axe_on_the_doll() -> (App, crossbeam_channel::Receiver<ClientCommand>) {
         place_the_axe_with(2, 4, false)
     }
 
-    /// The same place with a chosen `bonding` — the one field the equip arm's predicate reads.
     fn place_the_axe_with_bonding(
         bonding: u32,
     ) -> (App, crossbeam_channel::Receiver<ClientCommand>) {
         place_the_axe_with(bonding, 4, false)
     }
 
-    /// The place, parameterised over everything the gate looks at: the template's `bonding`, its
-    /// `quality` (which this arm must ignore), and whether the instance is already soulbound
-    /// (`ITEM_FIELD_FLAGS & 1`, the `0x5da2c0` bit).
+    /// The place, over everything the gate reads; `quality` must not matter.
     fn place_the_axe_with(
         bonding: u32,
         quality: u32,
@@ -1284,7 +1074,7 @@ mod bind_confirm_tests {
         script.set_container(0, Some(bag_with_the_axe(quality)));
         let doll: benilla_ui::script::InventorySlots = Default::default();
         script.set_inventory_slots(doll);
-        // Pick it up, drop it on MainHand — the queued move plus a pending CURSOR_UPDATE.
+        // Pick up and drop on the main hand: a queued move and a pending CURSOR_UPDATE.
         script.run("PickupContainerItem(0, 1)").unwrap();
         script.run("PickupInventoryItem(16)").unwrap();
         app.insert_non_send_resource(script);
@@ -1303,15 +1093,9 @@ mod bind_confirm_tests {
             .unwrap()
     }
 
-    /// The equip arm end to end, and **the ordering law that makes it work at all** (decision
-    /// 1750). Placing a bind-on-equip item into a worn slot sends nothing and asks; the question
-    /// is QUEUED, so it lands in the same flush as — and after — the `CURSOR_UPDATE` that same
-    /// place queued, whose `StaticPopup_Hide` would otherwise cancel it before the player saw it.
-    /// A *later* cursor change still retires it, which is what `UIParent.lua:356-360` is for.
-    ///
-    /// The first version of this test failed on exactly that cancellation, which is how the
-    /// ordering hazard was found rather than assumed: benilla drains a step behind the input pass
-    /// that fed it, where the reference defers inside the call that consumed the cursor.
+    /// The question is queued behind the place's own `CURSOR_UPDATE`, whose `StaticPopup_Hide`
+    /// (`UIParent.lua:357-359`) would otherwise cancel it unseen: benilla drains a step after the
+    /// input pass, where the reference defers inside the call. A later cursor change retires it.
     #[test]
     fn placing_a_boe_on_the_doll_asks_and_survives_its_own_cursor_update() {
         benilla_formats::wow_data_or_skip!();
@@ -1325,8 +1109,7 @@ mod bind_confirm_tests {
             "the question is queued, so it is not up in the drain's own frame"
         );
 
-        // The next tick flushes both, in queue order: the place's CURSOR_UPDATE first, then the
-        // question. This is the whole point of queueing it.
+        // The next tick flushes the place's CURSOR_UPDATE, then the question.
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
             .tick(0.01);
@@ -1349,8 +1132,7 @@ mod bind_confirm_tests {
             .tick(0.01);
         assert!(shown(&mut app, "EQUIP_BIND"), "and stays up");
 
-        // A LATER cursor change — the player picked something else up — retires it, exactly as the
-        // reference's arm intends, and the OnHide cancels the record.
+        // A later cursor change retires it, and its OnHide cancels the record.
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
             .fire_event("CURSOR_UPDATE", vec![]);
@@ -1374,10 +1156,7 @@ mod bind_confirm_tests {
         );
     }
 
-    /// Accept: `EquipPendingItem(index)` **re-issues the original action** — there is no confirm
-    /// opcode in 1.12 — and the re-issue does NOT ask again, because it carries the reference's own
-    /// `suppress` flag. Without that flag the accept would re-enter the same gate and the question
-    /// would be unanswerable.
+    /// The accept re-issues the place (1.12 has no confirm opcode); `suppress` stops a second ask.
     #[test]
     fn accepting_re_issues_the_place_and_does_not_ask_again() {
         benilla_formats::wow_data_or_skip!();
@@ -1395,8 +1174,7 @@ mod bind_confirm_tests {
             .run_system_once(drain_bind_confirm_answers)
             .unwrap();
 
-        // Backpack slot 1 is wire 255/23, MainHand is wire 255/15 — both player-direct, so the
-        // re-issue is CMSG_SWAP_INV_ITEM on the two player-array slots.
+        // Backpack slot 1 is 255/23 and the main hand 255/15, both in the player's own array.
         let sent: Vec<_> = rx.try_iter().collect();
         assert!(
             matches!(
@@ -1424,9 +1202,8 @@ mod bind_confirm_tests {
         );
     }
 
-    /// Cancel sends nothing and frees the record. The doubled `CancelPendingEquip` the reference's
-    /// own entry causes — `OnCancel` then `OnHide`, both naming it — is harmless by construction:
-    /// the second call finds the element already free.
+    /// The stock popup cancels twice, from `OnCancel` and `OnHide`; the second finds the record
+    /// already free.
     #[test]
     fn cancelling_sends_nothing_and_the_doubled_cancel_is_harmless() {
         benilla_formats::wow_data_or_skip!();
@@ -1438,7 +1215,6 @@ mod bind_confirm_tests {
             .non_send_resource_mut::<UiScript>()
             .run("StaticPopup_OnClick(StaticPopup_FindVisible(\"EQUIP_BIND\"), 2)")
             .unwrap();
-        // Two answers for one index — the entry names CancelPendingEquip twice on this path.
         assert_eq!(
             app.world_mut()
                 .non_send_resource_mut::<UiScript>()
@@ -1453,9 +1229,7 @@ mod bind_confirm_tests {
         assert!(rx.try_iter().next().is_none(), "a cancel never sends");
     }
 
-    /// The equip predicate is `bonding == 2` and **nothing else about the item** — no quality leg
-    /// at all (`0x5e0e54`; benilla was about to carry the loot arm's
-    /// `quality >= 2` across). Every other bonding value places straight through.
+    /// The equip predicate is `bonding == 2` alone, with no quality leg (`0x5e0e54`).
     #[test]
     fn only_bind_on_equip_defers_the_place() {
         benilla_formats::wow_data_or_skip!();
@@ -1480,8 +1254,6 @@ mod bind_confirm_tests {
         }
     }
 
-    /// A WHITE bind-on-equip item still asks — the proof that no quality leg exists on this arm.
-    /// (The loot arm's `quality >= 2` would have silenced exactly this case.)
     #[test]
     fn a_white_bind_on_equip_item_still_asks() {
         benilla_formats::wow_data_or_skip!();
@@ -1496,8 +1268,7 @@ mod bind_confirm_tests {
         assert!(rx.try_iter().next().is_none());
     }
 
-    /// An item that is ALREADY soulbound never asks — `0x5da2c0`, the same predicate the enchant
-    /// cursor and the tooltip's Soulbound override use.
+    /// `0x5da2c0`, the predicate the tooltip's Soulbound override also uses.
     #[test]
     fn an_already_bound_item_places_without_asking() {
         benilla_formats::wow_data_or_skip!();
@@ -1512,10 +1283,7 @@ mod bind_confirm_tests {
         assert!(rx.try_iter().next().is_some(), "and it places");
     }
 
-    /// The AUTO-EQUIP arm (`0x5e1480`, event 289): the same predicate, a different event, and the
-    /// same accept-is-a-re-issue. Driven through `AutoEquipCursorItem`, one of the three verbs
-    /// benilla used to have three separate senders for — decision 1750 funnelled them into one so
-    /// this gate could exist in a single place.
+    /// The auto-equip arm (`0x5e1480`, event 289): the same predicate and re-issue, its own dialog.
     #[test]
     fn auto_equipping_a_boe_asks_and_the_accept_re_issues() {
         benilla_formats::wow_data_or_skip!();
@@ -1602,16 +1370,12 @@ mod bind_confirm_tests {
         );
     }
 
-    /// The `0x5ea930` conjunct: an item the player **cannot** equip is never asked about — the
-    /// question would be confirming an action the server can only refuse. Driven by a required
-    /// level above the player's, the gate's first leg.
+    /// The `0x5ea930` conjunct, driven by its level leg.
     #[test]
     fn an_unusable_item_is_never_asked_about() {
         benilla_formats::wow_data_or_skip!();
         let (mut app, rx) = place_the_axe_with(2, 4, false);
-        // Re-push the player's requirement state and a template the level leg refuses. (The
-        // fixture's own push leaves `level == 0`, the "decline to judge" state, so this test has
-        // to establish a real player first for the leg to be reachable at all.)
+        // A real player level (the fixture's 0 declines to judge) and a template it refuses.
         {
             let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
             s.set_player_req_state(benilla_ui::script::PlayerReqState {
@@ -1653,14 +1417,9 @@ mod bind_confirm_tests {
         );
     }
 
-    /// **The USE arm** (`0x5d8d00`, event 290) end to end, and the correction the reference
-    /// forced. Right-clicking a bind-on-**use** item in a bag raises `USE_BIND` and sends nothing;
-    /// `ConfirmBindOnUse()` re-issues the use with `suppress` set.
-    ///
-    /// `no_use_spell` drives the case that caught the first version of this code out: `0x5d91d3`
-    /// has five predecessors and four are on-use-spell lookup FAILURES, so the reference asks the
-    /// bind question even for an item with no usable on-use spell. Gating on the plain-cast route
-    /// alone was narrower than the reference; both routes now carry it.
+    /// Right-clicks a bind-on-use item in a bag (the use arm, `0x5d8d00`, event 290);
+    /// `no_use_spell` drops its on-use spell, since four of `0x5d91d3`'s five predecessors are
+    /// failed spell lookups and the reference still asks.
     fn right_click_a_bind_on_use_item(
         no_use_spell: bool,
     ) -> (App, crossbeam_channel::Receiver<ClientCommand>) {
@@ -1778,9 +1537,6 @@ mod bind_confirm_tests {
         );
     }
 
-    /// The correction, pinned (`0x5d91d3`): an item with **no usable on-use spell** still raises
-    /// the bind question. Under the first placement (inside the plain-cast route only) this asked
-    /// nothing.
     #[test]
     fn a_bind_on_use_item_with_no_on_use_spell_still_asks() {
         benilla_formats::wow_data_or_skip!();

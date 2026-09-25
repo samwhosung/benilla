@@ -1,28 +1,7 @@
-//! **Inward** — the action bar's *identity* feed: what each of the 120 slots shows.
-//!
-//! [`feed_actions`] resolves each occupied slot's icon (spell: Spell.dbc × SpellIcon.dbc; item: the
-//! item template chain, the same ask-once store the bags use) and count (item: the bag walk,
-//! `ui_items::count_of`), diffs against what the VM already holds, pushes the changed slots and
-//! fires `ACTIONBAR_SLOT_CHANGED` per transition.
-//!
-//! **What is gated and what is not** is the whole design here. The identity resolve runs on its two
-//! inputs having changed — `PlayerActions::dirty` (a real, if occasional, event: login or a local
-//! pickup/place) OR a landed item template ([`Items::template_epoch`], decision 0660: an ITEM
-//! icon's template is fetched ask-once, so the *first* resolve of a cold entry is the one that
-//! ISSUES the query and reads back nothing). Two things drift independently of BOTH and so refresh
-//! every frame instead: an ITEM slot's bag **count** (eating a stack down never touches
-//! `SMSG_ACTION_BUTTONS`) and a weapon-substituting **icon** ([`super::weapon_icon`], decisions
-//! 0230/0231 — a swap changes it without touching the action table). Gating those on the same flag
-//! is what leaves a stale Count fontstring or a stale Attack face.
-//!
-//! The feed also pumps the UIErrorsFrame queues (cast fails, mount refusals, the app's by-key
-//! local refusals, the ENGINE's own — `benilla_ui` is engine-free and cannot reach
-//! [`UiErrorKeys`], so a refusal raised inside the script crate queues its GlobalStrings key here
-//! instead — and [`UiErrorTexts`], the lines that arrive already resolved) into
-//! `UI_ERROR_MESSAGE`, or `UI_INFO_MESSAGE` for the yellow arm; and the stance page
-//! (`GetBonusBarOffset`) — our descriptor's
-//! shapeshift-form byte indexed into `SpellShapeshiftForm.dbc`'s BonusActionBar column
-//! (`0x4e4fc0`), firing `UPDATE_BONUS_ACTIONBAR` on change.
+//! The action bar's identity feed: each of the 120 slots' icon and count, pushed to the VM with
+//! `ACTIONBAR_SLOT_CHANGED` per changed slot. [`feed_actions`] also drains the UI error queues
+//! and feeds the stance page (`GetBonusBarOffset`: the form's `SpellShapeshiftForm.dbc`
+//! BonusActionBar column, `0x4e4fc0`).
 
 use crate::ui_items::{count_of, InventoryScope};
 use std::collections::{HashMap, HashSet};
@@ -43,11 +22,8 @@ use super::{
     PlayerActions, Shown, Spells, UiError, UiErrorKeys, UiErrorTexts,
 };
 
-/// What an ITEM action shows when its icon cannot be resolved — the reference's own hardcoded
-/// literal at `0x847fe4`, returned by the item-icon resolver's failure block `0x5d8927` (exactly
-/// two engine sites binary-wide, zero Lua). Reached two ways:
-/// the template hasn't answered yet (displayId 0 — the login window decision 0660 closes), or the
-/// displayId has no `ItemDisplayInfo` row at all.
+/// An item action's icon when its template has not answered or its display id has no
+/// `ItemDisplayInfo` row: the reference's literal `0x847fe4`, from the resolver's `0x5d8927`.
 pub(super) const MISSING_ITEM_ICON: &str = "Interface\\Icons\\INV_Misc_QuestionMark";
 
 /// The feed's memory of what it last pushed, for per-slot change events.
@@ -55,40 +31,25 @@ pub(super) const MISSING_ITEM_ICON: &str = "Interface\\Icons\\INV_Misc_QuestionM
 pub(super) struct FeedMemory {
     pushed: HashMap<u32, ActionSlot>,
     bonus_offset: u8,
-    /// **Has the identity resolve run against the VM this memory is about?**
-    ///
-    /// Wrapping the memory in `VmMemo` (1290) makes a login's fresh VM reset `pushed` — but the
-    /// diff that reads `pushed` lives *inside* the gate below, and every other input to that gate
-    /// is host-side and survives the VM. `dirty` is false, and both `template_epoch` and
-    /// `macro_generation` can legitimately match the reset memory's zeros. The bar would then be
-    /// fed nothing at all, for the whole session.
-    ///
-    /// So the gate takes the memory's own freshness as an input. It is not a fourth *reason* to
-    /// re-resolve; it is the statement that a resolve is only valid for the VM it ran against.
+    /// Whether the identity resolve has run against this VM: a new VM resets this memory, while
+    /// every other input to the gate is host-side and may still match.
     resolved: bool,
-    /// The [`Items::template_epoch`] the last identity resolve ran at — the feed's half of the
-    /// landed-template redisplay. An advance re-resolves, exactly like a bar edit.
+    /// The [`Items::template_epoch`] of the last resolve; an advance re-resolves.
     template_epoch: u64,
-    /// The macro-table generation the last identity resolve ran at — the THIRD
-    /// input, exactly like `template_epoch` above: editing a macro changes its bar icon while
+    /// The macro-table generation of the last resolve: a macro edit changes a bar icon while
     /// touching neither the action table nor any item template.
     macro_generation: u64,
 }
 
-/// The DBC name tables the cast-fail **argument arms** read (`FailArgs`), as one parameter — three
-/// `Option<Res<…>>` that are one concept and were pushing this system past Bevy's parameter arity.
-/// Each is `Option` for the same reason `FailArgs`' fields are: a client with no
-/// game data has none, and the arm then declines and the template strips.
-///
-/// The fourth table, `SpellShapeshiftForm.dbc` (`0x56`), is not here: it already rides
-/// [`Spells`], which this system takes anyway, so [`Self::args`] takes that and joins them.
+/// The DBC name tables the cast-fail argument arms read, as one parameter to stay within Bevy's
+/// parameter limit; each is absent without game data. The shapeshift forms ride [`Spells`].
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct FailNameTables<'w> {
-    /// `SpellFocusObject.dbc` — the crafting book's catalog, for `0x5e`.
+    /// `SpellFocusObject.dbc`, for `0x5e`.
     focus: Option<Res<'w, crate::ui_tradeskill::SpellFocus>>,
-    /// `AreaTable.dbc` — the map arc's, for `0x5d`.
+    /// `AreaTable.dbc`, for `0x5d`.
     areas: Option<Res<'w, crate::area::AreaTableRes>>,
-    /// `SpellMechanic.dbc` — for `0x8d`, the one arm whose word is produced locally.
+    /// `SpellMechanic.dbc`, for `0x8d`.
     mechanics: Option<Res<'w, super::SpellMechanics>>,
 }
 
@@ -110,14 +71,10 @@ pub(super) fn feed_actions(
     mut cast_errors: ResMut<CastErrors>,
     mut mount_errors: ResMut<MountErrors>,
     mut pet_tame_failures: ResMut<PetTameFailures>,
-    // The two client-local refusal queues as one param (the 16-SystemParam ceiling this
-    // signature already sits at): the by-KEY route (`DisplayError`) and the already-resolved
-    // TEXT route, both drained onto the same red line below.
+    // The by-key and resolved-text queues as one parameter, at Bevy's 16-parameter limit.
     ui_errors: (ResMut<UiErrorKeys>, ResMut<UiErrorTexts>),
     spells: Option<Res<Spells>>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    // The inventory read (2334): every count, reagent and totem question below walks the bags
-    // through it, and the weapon-icon arms resolve the equipped instance here.
     objects: crate::net::Objects,
     items: Res<Items>,
     icons: Option<Res<ItemDisplays>>,
@@ -125,8 +82,6 @@ pub(super) fn feed_actions(
     name_tables: FailNameTables,
     commands: Res<NetCommands>,
     mut memory: Local<crate::ui_script::VmMemo<FeedMemory>>,
-    // Where a displayed message lands: the chat window (the combat log's own record of a failed
-    // cast, 1703, rides the same resource) and the catalog's sound queue (1815).
     mut sink: MessageSink,
 ) {
     let Some(mut script) = script else {
@@ -135,24 +90,14 @@ pub(super) fn feed_actions(
     let (mut ui_error_keys, mut ui_error_texts) = ui_errors;
     let memory = memory.get(&script);
 
-    // Rejected casts surface as the client's red error line (UI_ERROR_MESSAGE → the errors
-    // frame), resolved through the byte-verified two-layer display ([`cast_fail`]) against the
-    // VM's own GlobalStrings — resolve first (immutable script), then fire (mutable).
-    // 0x78 TOTEMS / 0x5c REAGENTS are the argument-formatted reasons whose `%s` fill benilla
-    // models (the ref's shared fill arm `0x6e1e7f`): "Requires %s" /
-    // "Missing reagent: %s" + the FAILING slot's item name — re-derived here exactly as the
-    // check derived it (first missing totem / first short reagent against our bags). On an
-    // item-cache miss the ref queries and shows nothing that frame, then its DBCACHECALLBACK
-    // `0x6e29b0` REDISPLAYS when the answer lands — modeled by keeping the entry queued: the
-    // ask-once query is away, and the frame the template answers, the fill succeeds and fires.
-    // The DBC-only arms (0x5d REQUIRES_AREA, 0x5e REQUIRES_SPELL_FOCUS) need no round trip and
-    // are filled inside [`cast_fail`] itself, off the wire's argument word.
+    // Cast failures become error lines through [`cast_fail`], all resolved before any event
+    // fires. The drain owns the arms that need our bags or the item cache: `0x78` and `0x5c`
+    // (`0x6e1e7f`) name the failing slot's item, found as the pre-send check finds it. On a cache
+    // miss the entry stays queued, as the reference's callback `0x6e29b0` redisplays on the answer.
     let self_store = self_q.iter().next();
     let mut await_template: Vec<crate::ui_action::CastFail> = Vec::new();
-    // The same failures, worded for the combat log. Collected beside the red line rather than
-    // instead of it: `0x6e1a00` calls `0x62c360` AND `DisplayError`, which frame the one string
-    // two ways — "Not enough mana." on the screen, "You fail to cast Frostbolt: Not enough mana."
-    // in the log.
+    // The same failures for the combat log: `0x6e1a00` calls both `DisplayError` and the log
+    // formatter `0x62c360`.
     let mut fail_lines: Vec<crate::ui_chat::combat::PendingCombat> = Vec::new();
     let fail_args = name_tables.args(spells.as_deref());
     let texts: Vec<cast_fail::CastFailLine> = cast_errors
@@ -168,16 +113,12 @@ pub(super) fn feed_actions(
             let pet = caster == crate::ui_action::Caster::Pet;
             let d = spells.as_ref().and_then(|s| s.catalog.get(spell_id));
             let get = |key: &str| script.lua().globals().get::<String>(key).ok();
-            // The displayed line first, the log line off it — the reference's own order, and the
-            // reason the two can no longer drift apart (see the combat-log twin below).
+            // The displayed line first and the log line from it, the reference's order.
             let line = (|| -> Option<cast_fail::CastFailLine> {
-                // 0x19/0x1a/0x1b EQUIPPED_ITEM_CLASS* — the other argument-formatted family whose
-                // `%s` benilla models (`0x6e1db7`, the arm that resolves an item class/subclass name
-                // through `0x6e2380`): "Must have a **Wand** equipped", the SINGULAR DisplayName,
-                // where the spell tooltip's own requirement line takes the verbose plural. Purely a
-                // DBC read, so no query/redisplay round trip. A multi-bit mask resolves too — through
-                // ItemSubClassMask.dbc's group name, else the FIRST matching subclass (the
-                // tooltip's twin at `0x52eea7` joins instead).
+                // `0x19`-`0x1b` (`0x6e1db7`, through `0x6e2380`): the singular subclass name,
+                // "Must have a Wand equipped"; a multi-bit mask names its `ItemSubClassMask.dbc`
+                // group, else the first subclass, where the tooltip (`0x52eea7`) uses the plural
+                // and joins. The pet's table fills it too (`0x6e904d`).
                 if let (0x19..=0x1b, Some(d), Some(subs)) = (reason, d, sub_classes.as_deref()) {
                     if let Some(name) = (d.equipped_item_class >= 0)
                         .then(|| {
@@ -194,26 +135,10 @@ pub(super) fn feed_actions(
                             .map(|t| cast_fail::CastFailLine::passthrough(t.replace("%s", &name)));
                     }
                 }
-                // `0x31` NEED_EXOTIC_AMMO (`0x6e1e54`) — the same `0x6e2380` helper as the arm
-                // above, one class over: `requirement_display_name(6 /* Projectile */, 1 << arg)`
-                // reads the singular DisplayName at `row + 0x28 + locale*4`, so "Requires exotic
-                // ammo: %s" names the ammo type. The shift is masked to five bits because the
-                // reference's is — `0x6e1e5c: shl edx,cl` takes x86's own `cl & 31` — and a
-                // subclass naming no row declines to the strip fallback exactly as
-                // `0x6e1e6a: je 0x6e21d8` does.
-                //
-                // **The player's arm only.** The pet handler's index table (`0x6e93d0`) is gated
-                // `cmp reason,0x8d; ja default` and carries no `0x31` entry, so a pet's exotic-ammo
-                // refusal takes its generic arm `0x6e936a` and shows the bare template — unlike
-                // `0x19`–`0x1b` just above, which the pet's own table *does* fill (`0x6e904d`).
-                // Same shape as `0x78`/`0x5c` below, and the same trap decision 2033 named.
-                //
-                // **It declines on a vmangos server, every time**, and that is the server's shape
-                // rather than a gap here: `Spell::SendCastResult` fills `failureArg1` for
-                // NOT_READY, REQUIRES_SPELL_FOCUS, REQUIRES_AREA and the EQUIPPED_ITEM_CLASS
-                // family and for nothing else, so `0x31` arrives with no word and the line reads
-                // "Requires exotic ammo:". Modeled anyway because the arm is the mechanism and the
-                // word is the server's to supply.
+                // `0x31` (`0x6e1e54`): the same helper for class 6 (Projectile), mask `1 << arg`,
+                // the shift masked to five bits as x86 `shl` masks it (`0x6e1e5c`). The player's
+                // arm only: the pet's table (`0x6e93d0`) has no `0x31` entry. vmangos never sends
+                // the word (`Spell.cpp:4419-4443`), so against it this declines to the stem.
                 if let (false, 0x31, Some(arg), Some(subs)) =
                     (pet, reason, fail.arg, sub_classes.as_deref())
                 {
@@ -228,16 +153,14 @@ pub(super) fn feed_actions(
                             .map(|t| cast_fail::CastFailLine::passthrough(t.replace("%s", &name)));
                     }
                 }
-                // `0x78` TOTEMS / `0x5c` REAGENTS — **the player's arms only**. The pet handler's
-                // index table (`0x6e93d0`) sends both to its generic arm, so a pet's refusal takes the
-                // shared passthrough below and never runs the bag walk or the item query (decision
-                // 2033).
+                // `0x78` and `0x5c`, the player's arms only: the pet's table sends both to its
+                // generic arm.
                 if !pet && (reason == 0x78 || reason == 0x5c) {
                     let d = d?;
                     let failing = if reason == 0x78 {
                         self_store
                             .and_then(|s| first_missing_totem(d, s, &objects))
-                            // No store to test against (a race): name the first tool at all.
+                            // No self store yet: name the first tool.
                             .or_else(|| d.totems.iter().copied().find(|&t| t != 0))
                     } else {
                         self_store
@@ -249,12 +172,10 @@ pub(super) fn feed_actions(
                         .map(|i| i.name.clone());
                     let name = match cached {
                         Some(name) => name,
-                        // Answered-unknown → the ref's callback fallback literal (`0x838044`);
-                        // still pending → keep the entry queued for the redisplay.
+                        // Answered unknown: the reference's callback literal (`0x838044`).
                         None if items.template_answered_unknown(failing) => "UNKNOWN".to_string(),
                         None => {
-                            // The cache-miss re-queue — and it comes back MARKED, because the
-                            // reference's retry is a different raise (see `CastFail::redisplay`).
+                            // Pending: requeued as a redisplay, which is not logged.
                             await_template.push(fail.requeued());
                             return None;
                         }
@@ -279,57 +200,23 @@ pub(super) fn feed_actions(
                     &get,
                 )
             })();
-            // The retest instrument for this whole bug class. A red-line defect is
-            // reported as *seen* — B255 arrived as a screenshot of the word "Requires" — and until
-            // this line the only way to read what the client resolved was to look at the screen.
-            // Logging the reason, its wire argument and the resolved line makes an argument arm
-            // that silently declined (a missing word, an unnamed id) legible from a probe run.
-            // The line's `Debug` carries BOTH buffers, so a probe also reads the toast string
-            // beside the log string — the one reading that makes 2285's class of drift visible
-            // without opening the chat window.
+            // The reason, its wire word and both resolved buffers, so a declined arm is readable
+            // from a probe run.
             debug!(
                 "ui_action: cast fail — {caster:?} spell {spell_id} reason {reason:#04x} \
                  arg {:?} → {:?}",
                 fail.arg, line
             );
-            // **The combat-log twin — the reference's OTHER buffer, not the displayed text**
-            // (correcting 2280). It runs after the resolution because the
-            // reference's does: `0x6e1a00` calls `DisplayError 0x496720` at `0x6e21dd` and the
-            // log formatter `0x62c360` at `0x6e21fc`. But what it hands the formatter is `edi`
-            // (`0x6e21e2`), the **argText** buffer — which is the first-layer
-            // `SPELL_FAILED_<name>` string for every reason no argument arm claims, *including*
-            // the eighteen the second layer re-words on screen. A cooldown refusal toasts "Spell
-            // is not ready yet." and logs "Not yet recovered"; `0x09` toasts "You have no target."
-            // and logs "No target". [`CastFailLine::logged`] is that one-byte test.
-            //
-            // The trap this corrects is that deriving the log's `%s` a *second* time, from the
-            // key table, gets six of the seven divergent rows right by accident and the filled
-            // arms wrong — which is how a raw "Must be in %s" sat in the log while the red line
-            // read "Must be in Cat Form". One resolution, two buffers, is the shape that holds.
-            //
-            // A refusal that resolved to nothing logs nothing, which is the same control flow:
-            // `0x17` DONT_REPORT, the keys 5875 leaves out of `GlobalStrings.lua`, and `0x56`'s
-            // no-forms exit all jump past `0x62c360` as well as past `DisplayError`.
-            //
-            // **A redisplay is not a raise.** The item-cache retry (`0x6e29b0`) calls
-            // `DisplayError` directly and never reaches the log formatter, so an entry that had
-            // to wait for its item name shows the toast alone — `CastFail::redisplay`.
-            //
-            // **Only the `…SELF` half is reachable here**: `SMSG_CAST_FAILED` is addressed to the
-            // caster alone, so benilla never learns that somebody *else's* cast failed — the
-            // `…OTHER` keys exist and stay unproduced, exactly as the reference leaves its own
-            // two unreachable `…SELFSTART` keys.
-            //
-            // **The pet's refusal is not logged.** `0x6e1a00` calls the log formatter `0x62c360`
-            // beside its `DisplayError`; `Spell_C::HandlePetCastFailed 0x6e8eb0` calls neither it
-            // nor the error sound — its entire call set is the two packet readers, `0x496720` and
-            // the string plumbing. Before decision 2033 a pet's refused Growl printed "You fail to
-            // cast Growl: ..." in the combat log, attributed to the player.
+            // The combat-log line, after the display as in the reference (`DisplayError` at
+            // `0x6e21dd`, the log formatter `0x62c360` at `0x6e21fc`), from the argText buffer
+            // ([`CastFailLine::logged`]). Nothing is logged for a line that shows nothing, for a
+            // redisplay (`0x6e29b0` skips the log) or for the pet (`0x6e8eb0` never calls
+            // `0x62c360`). `SMSG_CAST_RESULT` goes to the caster alone, so the `OTHER` keys stay
+            // unused.
             if let (Some(shown), Some(display), false, false) =
                 (line.as_ref(), d, pet, fail.redisplay)
             {
-                // `0x62aff0`: `Attributes` bit 4 marks an ABILITY, which "performs" rather than
-                // "casts".
+                // `0x62aff0`: `Attributes` bit 4 marks an ability, which "performs", not "casts".
                 const ATTR_IS_ABILITY: u32 = 0x10;
                 let family = if display.attributes & ATTR_IS_ABILITY != 0 {
                     crate::ui_chat::combat::SPELLFAILPERFORM
@@ -367,8 +254,7 @@ pub(super) fn feed_actions(
         texts.into_iter().map(|l| Shown::keyed(l.key, l.text)),
     );
 
-    // (Dis)mount refusals ride the same route, keyed straight into GlobalStrings
-    // ([`mount_result_key`] — no format arguments in any of these strings).
+    // (Dis)mount refusals by key ([`mount_result_key`]); none of these strings takes arguments.
     let mount_texts: Vec<(&'static str, String)> = mount_errors
         .0
         .drain(..)
@@ -386,11 +272,8 @@ pub(super) fn feed_actions(
             .map(|(key, text)| Shown::keyed(key, text)),
     );
 
-    // Taming refusals ([`PetTameFailures`]) — the one message whose argText is itself a
-    // GlobalStrings lookup. The reference resolves the reason's `PETTAME_*` key first
-    // (`0x6e6a20`'s `0x703bf0` call) and passes the resulting STRING as `DisplayError(0xee)`'s
-    // argument, so `ERR_TAME_FAILED` ("%s.") renders "Creature is too high level for you to
-    // tame." — two lookups, in this order, and neither can be folded into the other.
+    // Taming refusals ([`PetTameFailures`]): the reason's `PETTAME_*` string fills
+    // `ERR_TAME_FAILED` ("%s."), two lookups in that order.
     let tame_texts: Vec<Shown> = pet_tame_failures
         .0
         .drain(..)
@@ -402,10 +285,7 @@ pub(super) fn feed_actions(
         .collect();
     show_messages(&mut script, &mut sink, "ui_action", tame_texts);
 
-    // Client-local by-key refusals (the `DisplayError` route — [`UiErrorKeys`]); the key IS the
-    // GlobalStrings lookup, no code table between, and the key is also what names the surface:
-    // [`UiError::kind`] reads the message record straight out of the catalog instead of the queue
-    // carrying a hand-set flag alongside every push.
+    // Client-local refusals by key ([`UiErrorKeys`]); the key also names the catalog record.
     let key_lines: Vec<Shown> = ui_error_keys
         .0
         .drain(..)
@@ -416,8 +296,7 @@ pub(super) fn feed_actions(
         .collect();
     show_messages(&mut script, &mut sink, "ui_action", key_lines);
 
-    // Already-resolved lines ([`UiErrorTexts`]) — the wire's own text, no key to look up and no
-    // record behind it; the queued kind IS the reference's `0x4945b0` flag.
+    // Already-resolved lines ([`UiErrorTexts`]); the queued kind is the `0x4945b0` flag.
     let resolved: Vec<Shown> = ui_error_texts
         .0
         .drain(..)
@@ -425,12 +304,8 @@ pub(super) fn feed_actions(
         .collect();
     show_messages(&mut script, &mut sink, "ui_action", resolved);
 
-    // The ENGINE's own by-key refusals ride the very same line. `benilla_ui` is engine-free and
-    // cannot reach [`UiErrorKeys`], so a refusal raised inside the script crate (today: dropping a
-    // passive spell on the bar, `ERR_PASSIVE_ABILITY`) queues its key and we resolve it here —
-    // standing in for the reference's inline `push <errorId>; call CGGameUI::DisplayError`. One
-    // frame late by construction (the refusal happens during the input pass this feed precedes),
-    // which is invisible on a toast.
+    // The engine's own by-key refusals (`ERR_PASSIVE_ABILITY`): `benilla_ui` cannot reach
+    // [`UiErrorKeys`], so it queues keys that show here, one frame late.
     let engine_keys = script.take_ui_errors();
     let engine_lines: Vec<Shown> = engine_keys
         .into_iter()
@@ -444,8 +319,7 @@ pub(super) fn feed_actions(
 
     let store = self_q.iter().next();
 
-    // Stance page: our own descriptor's form byte, pushed on change (UPDATE_BONUS_ACTIONBAR is
-    // the client's event for exactly this transition — the bar re-picks its page on it).
+    // Stance page: our form's bonus bar offset, with `UPDATE_BONUS_ACTIONBAR` on change.
     let form = store.map(|s| s.0.unit_shapeshift_form()).unwrap_or(0);
     let offset = spells
         .as_ref()
@@ -459,15 +333,9 @@ pub(super) fn feed_actions(
         script.fire_event("UPDATE_BONUS_ACTIONBAR", vec![]);
     }
 
-    // The identity resolve has TWO inputs, not one. `dirty` covers the action table; the item
-    // TEMPLATE cache is the other, and it fills asynchronously — an ITEM slot's icon needs a
-    // template that `Items::template` fetches **ask-once**, so the very first resolve of a cold
-    // entry is the call that ISSUES the query and it necessarily reads back `None`. Gating on
-    // `dirty` alone left that slot on the fallback question mark until some unrelated bar edit
-    // happened to re-dirty it — the login race that put a question mark on every fresh
-    // character's food/water button (verified live 2026-07-26: the Tough Jerky
-    // ask and the one and only feed landed 0.5 ms apart, in that order, and nothing re-fed).
-    // The epoch is the second input, so a landed answer redisplays like the ref's DBCACHECALLBACK.
+    // The identity resolve reruns on a new VM, a bar edit, a macro edit or a landed item
+    // template: a template is fetched ask-once, so a cold slot's first resolve only issues the
+    // query, and the epoch advance redisplays it, like the reference's cache callback.
     let template_epoch = items.template_epoch();
     let macro_generation = script.macros_generation();
     let macros_moved = macro_generation != memory.macro_generation;
@@ -477,14 +345,10 @@ pub(super) fn feed_actions(
         memory.resolved = true;
         memory.template_epoch = template_epoch;
         memory.macro_generation = macro_generation;
-        // Cloned once per re-resolve, never per frame: the gate above is a `u64` compare.
         let macros = script.macros();
 
-        // Resolve every occupied wire slot to its display, diff against what the VM holds, push +
-        // fire ACTIONBAR_SLOT_CHANGED (arg1 = the Lua action id) per transition. Item icons/counts
-        // resolve via the same ask-once template chain + bag walk the bags use
-        // (`ui_items::count_of`) — an in-flight template shows the fallback (no texture), and the
-        // epoch gate above re-runs this whole resolve the frame the answer lands.
+        // Each occupied slot's display, diffed against what the VM holds; a changed slot is
+        // pushed and fires `ACTIONBAR_SLOT_CHANGED` with its Lua action id.
         let mut fresh: HashMap<u32, ActionSlot> = HashMap::new();
         for (slot, button) in &actions.buttons {
             let (texture, count, consumable) = match button.kind {
@@ -505,14 +369,8 @@ pub(super) fn feed_actions(
                     (icon, 0, false)
                 }
                 ACTION_KIND_ITEM => {
-                    // The question mark belongs HERE, not in the Lua (correcting
-                    // 0660's modeling note): the reference's resolver never returns nil for a
-                    // populated ITEM slot — an un-cached template (displayId 0) or a displayId
-                    // with no row both fall into `0x5d88b0`'s failure block `0x5d8927`, which
-                    // returns the hardcoded `INV_Misc_QuestionMark` at `0x847fe4`. Since ref
-                    // FrameXML *hides* the icon on a nil texture, feeding nil here and letting a
-                    // Lua `or` paint the fallback would show a BLANK button on faithful
-                    // FrameXML — the placeholder is the engine's, at two sites binary-wide.
+                    // Never nil: the reference's resolver `0x5d88b0` returns the question mark,
+                    // and the stock `ActionButton.lua:158` hides the icon on a nil texture.
                     let template = items.template(button.action, 0, &commands).cloned();
                     let texture = template
                         .as_ref()
@@ -521,22 +379,13 @@ pub(super) fn feed_actions(
                     let count = store
                         .map(|s| count_of(&s.0, &objects, button.action, InventoryScope::CARRIED))
                         .unwrap_or(0);
-                    // The Count fontstring's gate — `IsConsumableAction 0x4e5250`: ammo/thrown by
-                    // InventoryType, or an ON_USE block with NEGATIVE charges
-                    // ([`ItemInfo::is_consumable`], byte-cited there). It comes
-                    // from the SAME ask-once template the icon does, so it belongs on the same
-                    // push: fed from the per-frame state map instead, it answered the Lua one
-                    // frame late for ever and left a fresh character's food with no stack number
-                    // (the count's half of 0660's login race).
+                    // The Count gate (`0x4e5250`, [`ItemInfo::is_consumable`]) reads the icon's
+                    // template, so it rides the same push.
                     let consumable = template.as_ref().is_some_and(|t| t.is_consumable());
                     (Some(texture), count, consumable)
                 }
-                // A MACRO slot serves **the macro's own icon, never its bound spell's** — the one
-                // asymmetry in the icon resolver: `0x4e6a50`'s macro arm (`0x4e6bf9`) validates the
-                // slot and calls `0x4f0fd0(idx, buf, 0x104)`, the macro record's own icon-path
-                // builder, without ever touching `[rec+0x564]`. Its dynamic state DOES go
-                // through the bound spell — that split is the whole design (`state`'s macro
-                // arm).
+                // A macro slot shows the macro's own icon (`0x4e6bf9` calls `0x4f0fd0`), never its
+                // bound spell's, though its state follows the bound spell.
                 ACTION_KIND_MACRO => (
                     macros
                         .get(button.action as usize)
@@ -557,10 +406,8 @@ pub(super) fn feed_actions(
                 },
             );
         }
-        // A MACRO slot's observable is wider than its `ActionSlot`: the name line under the icon
-        // reads the macro table through `GetActionText` at repaint, so a rename —
-        // which moves the table and nothing in the slot value — must re-fire the slot exactly as
-        // a re-icon does, or the bar keeps the old name until an unrelated edit repaints it.
+        // A macro rename changes the name line (`GetActionText`) but not the slot value, so a
+        // macro edit re-fires every macro slot.
         let changed: Vec<u32> = fresh
             .keys()
             .chain(memory.pushed.keys())
@@ -589,13 +436,8 @@ pub(super) fn feed_actions(
         }
     }
 
-    // Two things drift independently of `dirty` (decision 0216 §7's module-doc note) and so must
-    // refresh every frame, not just on an action-table edit: an ITEM slot's COUNT (eating down a
-    // stack never touches SMSG_ACTION_BUTTONS) and the auto-attack's ICON (it tracks the equipped
-    // main-hand weapon, which a weapon swap changes without touching the action table — decision
-    // 0230). Gating either on `dirty` leaves it stale until the next unrelated action-bar edit.
-    // Bounded to the already-pushed slots (normally a handful) — the same per-frame bag walk /
-    // template lookup `count_of` already pays for the quest log's item objectives.
+    // An item slot's count and a live icon change without an action-table edit (eating a stack
+    // sends no `SMSG_ACTION_BUTTONS`), so the pushed slots refresh every frame.
     if let Some(store) = store {
         for (&action, slot) in memory.pushed.iter_mut() {
             let changed = match slot.kind {
@@ -607,12 +449,8 @@ pub(super) fn feed_actions(
                     }
                     changed
                 }
-                // Two icon families track live character state, not the action table, so they
-                // refresh every frame: a weapon-substituting icon follows the equipped weapon
-                // AND the current form (Attack's `0x4e6870` — decisions 0230/0231 + the form
-                // face), and a toggle spell with a nonzero ActiveIconID swaps faces with its own
-                // aura (`0x4e6a50`'s `0x4e6bbd` predicate — a shift in/out never touches
-                // SMSG_ACTION_BUTTONS). A plain spell's icon is stable, so it's skipped.
+                // Live icons: a weapon face follows the equipped weapon and form (Attack's
+                // `0x4e6870`), and a toggle's `ActiveIconID` follows its own aura (`0x4e6bbd`).
                 ACTION_KIND_SPELL => {
                     let d = spells
                         .as_ref()
@@ -656,21 +494,11 @@ pub(super) fn feed_actions(
     }
 }
 
-/// The whole SPELL-slot icon rule — the reference's `GetActionTexture` resolver `0x4e6a50`, arms
-/// in its execution order:
-///
-/// 1. The **pre-emptive arms** ([`auto_attack_icon`]): Attack serves the current form's face /
-///    the main-hand weapon (`0x4e6870`), an auto-repeat shot the ranged weapon (`0x4e6990`) —
-///    before the spell's own icon fields are ever read.
-/// 2. The **active-toggle swap** (`0x4e6bbd → 0x4e6bc6`): `ActiveIconID` while the button's OWN
-///    spell id sits live-and-cancelable in the player's aura slots — the literal `0x4e55f0`
-///    predicate `UseAction`'s cancel fork rides ([`super::toggle::active_action_toggle`]; the
-///    same function in the binary, by call-target address). Ghost Wolf's swirl while shifted.
-/// 3. The spell's own `SpellIconID` face.
-///
-/// The spellbook's `GetSpellTexture` (`0x4b3f50`) deliberately runs ONLY arms 1 and 3 — it never
-/// serves `ActiveIconID` (proof by exhaustion of its return paths). `ui_spellbook` keeps that
-/// asymmetry; do not "fix" it to match the bar.
+/// A spell slot's icon, by the reference's `GetActionTexture` resolver `0x4e6a50` in order: the
+/// auto-attack faces ([`auto_attack_icon`], `0x4e6870`, `0x4e6990`), then `ActiveIconID` while
+/// the spell's own aura is live and cancelable (`0x4e6bbd`, the `0x4e55f0` predicate of
+/// [`super::toggle::active_action_toggle`]), then the spell's icon. The spellbook's
+/// `GetSpellTexture` (`0x4b3f50`) never serves `ActiveIconID`.
 fn spell_action_icon(
     spell_id: u32,
     d: &benilla_formats::SpellDisplay,

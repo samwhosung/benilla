@@ -1,46 +1,14 @@
-//! The slash-command **table**: every `/command` the client answers, built at boot
-//! from the reference's OWN alias strings rather than hand-typed here.
-//!
-//! ## Why a table
-//!
-//! `ChatEdit_ParseText` (ChatFrame.lua l.2163-2199) resolves a typed command in three passes, and
-//! **none of them holds a literal**: the chat-type switches walk `SLASH_<ChatTypeInfo index><n>`,
-//! the actions walk `SLASH_<SlashCmdList index><n>`, and the emotes walk `EMOTE<i>_CMD<j>` →
-//! `EMOTE<i>_TOKEN` → `DoEmote(token)`. The aliases are DATA (`GlobalStrings.lua`), the handlers
-//! are code, and the two are joined by an index name.
-//!
-//! Benilla used to re-type each command's aliases into a Rust `match` as its system was built.
-//! Every alias nobody happened to copy was a command that silently did not exist: the audit behind
-//! 0881 found **61 live reference aliases dead** (`/lol`, `/hi`, `/ty`, `/congrats`, `/sorry`,
-//! `/yes`, `/bravo`, …) because the emote arm matched the *`EmotesText.dbc` name* instead of the
-//! alias table — and four names the reference has NO command for (`/joke`, `/puzzle`,
-//! `/attackmytarget`, and `/follow`, which fired a text emote where the real client follows your
-//! target) answering as emotes. A table keyed on the shipped strings cannot have that class of bug:
-//! registering a handler is naming its index, and the aliases come from the data.
-//!
-//! ## Where each half comes from
-//!
-//! - **`SLASH_<INDEX><n>`** — the real `GlobalStrings.lua`, already executed into the UI VM at boot
-//!   (`crate::ui_script`). One [`SlashIndex`] per command benilla implements; the reference's own
-//!   index name is the key.
-//! - **`EMOTE<i>_CMD<j>` / `EMOTE<i>_TOKEN`** — the alias→token join, also read off the VM globals
-//!   (`crate::ui_script::load_emote_tokens` runs the token half's data lines out of the shipped
-//!   `ChatFrame.lua`). The token resolves to an `EmotesText` id through the emote catalog.
-//! - **benilla's own instruments** ([`DevCmd`]) — `/castvis`, `/chattest`, `/shot`, … have no
-//!   reference strings because they are not reference commands; their aliases are literals here,
-//!   the one place in this module where that is honest.
-//!
-//! Precedence is the reference's resolution ORDER, made static at insert time: a slash index wins
-//! over an emote alias of the same name (the reference reaches `SlashCmdList` first), and benilla's
-//! instruments are inserted last so they can never shadow a real command.
+//! The slash-command table: every `/command` the client answers, keyed by the aliases the
+//! player's own strings define, read off the UI VM's globals the way `ChatEdit_ParseText` walks
+//! them (`ChatFrame.lua:2164-2200`): `SLASH_<INDEX><n>` for the actions, `EMOTE<i>_CMD<j>` →
+//! `EMOTE<i>_TOKEN` for the emotes. An action wins over an emote alias of the same name, as the
+//! reference tries `SlashCmdList` first; benilla's own commands, literals, go in after both.
 
 use std::collections::HashMap;
 
 use bevy::prelude::*;
 
-/// A command benilla implements, identified by the reference's own `SlashCmdList` index — the
-/// `SLASH_<INDEX><n>` alias-string prefix ([`SlashIndex::key`]). Adding a command is adding a
-/// variant + its handler arm; its aliases arrive with the shipped strings.
+/// A command benilla implements, named by its `SlashCmdList` index, the `SLASH_<INDEX><n>` prefix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SlashIndex {
     Reply,
@@ -74,42 +42,28 @@ pub(crate) enum SlashIndex {
     Target,
     Assist,
     Follow,
-    /// `/cast <name>` — the reference's `SlashCmdList["CAST"]` is one line, `CastSpellByName(msg)`,
-    /// and that binding is the engine seam benilla implements over the spell book.
-    /// The command the whole macro system exists to run.
+    /// `/cast <name>`: the reference's handler calls `CastSpellByName(msg)` (`ChatFrame.lua:1120`).
     Cast,
-    /// `/macro` `/m` — opens the macro window (the ref's `ShowMacroFrame()`).
+    /// `/macro`, `/m`: the reference's `ShowMacroFrame()`.
     MacroUi,
-    /// `/macrohelp` — the reference's own five-line help text.
+    /// `/macrohelp`: the reference's five-line help text.
     MacroHelp,
-    /// `/console <cmd>` — the reference's `SlashCmdList["CONSOLE"]` pipes into the engine's
-    /// debug-console command table. Ours implements the one console command this client has:
-    /// `reloadUI` (the reference's `"reloadUI" 0x82ea38` → `CCommand::ReloadUI 0x4035f0` →
-    /// `0x491380`, the same flag `ReloadUI()` sets). Anything else answers a plain system line
-    /// rather than silently doing nothing.
+    /// `/console <line>`: `ConsoleExec(msg)`, as the reference's handler (`ChatFrame.lua:671`).
     Console,
-    /// `/reload` — **benilla's own addition**: 1.12 ships `ReloadUI()` and
-    /// `/console reloadUI` but no slash alias for it (that arrived in later clients — the shipped
-    /// `GlobalStrings.lua` has no `SLASH_RELOADUI`), so this alias is a literal in [`Self::build`]
-    /// rather than data read off the chain, exactly like the ESC-menu AddOns window is ours (1197).
+    /// `/reload`, the rebuild `/console reloadUI` runs. Deviation: 1.12 has no such alias (later
+    /// clients added it); kept so a player can reload the interface after toggling addons.
     ReloadUi,
-    /// `/errors` `/err` — **benilla's own addition**: opens the script error log,
-    /// which is ours because 1.12 has no such window to alias. The reference's whole answer to a
-    /// Lua fault is the `ScriptErrors` modal, which shows a burst's first message and remembers
-    /// nothing; B293 is two reporters asking for the list that modal cannot be. **Player-facing,
-    /// not a `DevCmd`**: the people who need it are the people running addons, and gating it on a
-    /// dev build would leave exactly the reporters who asked unable to type it.
+    /// `/errors`, `/err`: opens benilla's script error log. Deviation: 1.12 has only the
+    /// `ScriptErrors` modal, which shows a burst's first error and keeps none; addon users need
+    /// the list, so it is in every build.
     ScriptErrors,
-    /// `/convertraid` — **benilla's own addition**: convert the party to a raid
-    /// (`CMSG_GROUP_RAID_CONVERT`, leader only, server-judged). 1.12's only trigger is the
-    /// RaidFrame tab's Convert button, which is not built yet — until it is, this is the one way
-    /// to form a raid, so it is player-facing by the `/errors` reasoning, not a `DevCmd`. When
-    /// the Raid tab lands this alias stays, the way `/reload` outlived `/console reloadUI`.
+    /// `/convertraid`: convert the party to a raid (`CMSG_GROUP_RAID_CONVERT`, leader only).
+    /// Deviation: 1.12's only trigger is the Raid tab's Convert button (`RaidFrame.xml`).
     ConvertRaid,
 }
 
 impl SlashIndex {
-    /// The reference's index name — the `SLASH_<KEY><n>` prefix its aliases live under.
+    /// The reference's index name, the `SLASH_<KEY><n>` prefix its aliases live under.
     fn key(self) -> &'static str {
         match self {
             Self::Reply => "REPLY",
@@ -147,20 +101,14 @@ impl SlashIndex {
             Self::MacroUi => "MACRO",
             Self::MacroHelp => "MACROHELP",
             Self::Console => "CONSOLE",
-            // No shipped alias string exists under this key (the walk finds nothing); the `/reload`
-            // alias is inserted as a literal in `build` — see the variant's doc.
+            // No shipped strings under these three keys: their aliases are literals in `build`.
             Self::ReloadUi => "RELOADUI",
-            // No shipped `SLASH_BENILLASCRIPTERRORS1` exists — the aliases are literals in
-            // `build`. The key is still ours to name so the variant round-trips like any other.
             Self::ScriptErrors => "BENILLASCRIPTERRORS",
-            // Same shape: a benilla addition, alias a literal in `build`.
             Self::ConvertRaid => "BENILLACONVERTRAID",
         }
     }
 
-    /// Every registered index — the registry proper. A reference command NOT in this list resolves
-    /// nowhere and answers `HELP_TEXT_SIMPLE`, exactly as an unknown command does in the reference
-    /// (better than a registered handler that silently does nothing).
+    /// Every registered index; any other command answers `HELP_TEXT_SIMPLE`, as unknown ones do.
     const ALL: [Self; 38] = [
         Self::Reply,
         Self::Join,
@@ -203,9 +151,7 @@ impl SlashIndex {
     ];
 }
 
-/// Benilla's own diagnostic commands — instruments we built, with no reference strings behind them
-/// (decisions 0099 `/castvis`, 0288 `/chattest`, 0434 `/partytest`, 0600 `/shot`, 0634 `/liquid`,
-/// 0637 `/reaction`). Their aliases are literals because there is nothing shipped to read.
+/// benilla's own diagnostic commands, in dev builds only; their aliases are literals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DevCmd {
     CastVis,
@@ -243,7 +189,7 @@ impl DevCmd {
 pub(crate) enum Command {
     /// A reference `SlashCmdList` command benilla implements.
     Slash(SlashIndex),
-    /// An emote alias — carrying the `EmotesText` id its token resolved to (`/lol` → LAUGH → 45).
+    /// An emote alias, with its token's `EmotesText` id (`/lol` → LAUGH → 45).
     Emote { text_id: u32 },
     /// One of benilla's own instruments.
     Dev(DevCmd),
@@ -253,9 +199,7 @@ pub(crate) enum Command {
 #[derive(Resource, Default)]
 pub(crate) struct SlashCommands {
     by_alias: HashMap<String, Command>,
-    /// How many aliases each source contributed — the boot line that makes a broken table (an
-    /// unreadable `GlobalStrings.lua`, a missing token table) visible immediately instead of at
-    /// the first command someone types. `(slash, emote, benilla additions, dev instruments)`.
+    /// Aliases per source, logged at boot: `(slash, emote, benilla additions, dev instruments)`.
     counts: (usize, usize, usize, usize),
 }
 
@@ -265,17 +209,14 @@ impl SlashCommands {
         self.by_alias.get(&cmd.to_ascii_lowercase()).copied()
     }
 
-    /// Build from the reference's alias strings. `get` reads a global string (the UI VM's globals in
-    /// production, a stub map in tests); `text_id` resolves an `EmotesText` NAME to its id (the
-    /// emote catalog). Pure over those two, so the whole table is testable without a VM.
+    /// Build from `get`, a global-string lookup, and `text_id`, an `EmotesText` name → id map.
     pub(crate) fn build(
         get: impl Fn(&str) -> Option<String>,
         text_id: impl Fn(&str) -> Option<u32>,
     ) -> Self {
         let mut by_alias: HashMap<String, Command> = HashMap::new();
 
-        // 1 · the action commands: SLASH_<INDEX><n>, walked from 1 until the first gap (the
-        // reference's own `while cmdString` walk).
+        // 1 · the actions: `SLASH_<INDEX><n>` from 1 to the first gap, as `while cmdString` walks.
         for index in SlashIndex::ALL {
             for n in 1.. {
                 let Some(alias) = get(&format!("SLASH_{}{n}", index.key())) else {
@@ -286,14 +227,12 @@ impl SlashCommands {
         }
         let slash_aliases = by_alias.len();
 
-        // 2 · the emotes: EMOTE<i>_CMD<j> → EMOTE<i>_TOKEN → EmotesText id. The outer walk stops at
-        // the first index with no CMD1, exactly like `ChatEdit_ParseText`'s.
+        // 2 · the emotes, `EMOTE<i>_CMD<j>` → `EMOTE<i>_TOKEN` → id, to the first missing `CMD1`.
         for i in 1.. {
             let Some(first) = get(&format!("EMOTE{i}_CMD1")) else {
                 break;
             };
-            // A token with no `EmotesText` row (EMOTE27 is "UNUSED") has nothing to send: the
-            // reference's `DoEmote` would find no record either.
+            // A token with no `EmotesText` row (EMOTE27 is "UNUSED") has nothing to send.
             let resolved = get(&format!("EMOTE{i}_TOKEN")).and_then(|t| text_id(&t));
             if let Some(text_id) = resolved {
                 insert(&mut by_alias, &first, Command::Emote { text_id });
@@ -307,11 +246,7 @@ impl SlashCommands {
         }
         let emote_aliases = by_alias.len() - slash_aliases;
 
-        // 3 · benilla's own player-facing additions — literals, because they are OURS and no
-        // shipped string carries them (each variant's doc records the why). NOT gated on dev
-        // affordances: `/reload` belongs to a player build as much as the ESC-menu AddOns window
-        // does (1197, 1291). Inserted after the walks so a shipped alias could never be shadowed
-        // even if a later client's strings arrived on the chain.
+        // 3 · benilla's player-facing additions, in every build; after the walks, so shipped wins.
         insert(
             &mut by_alias,
             "reload",
@@ -331,11 +266,7 @@ impl SlashCommands {
         );
         let added_aliases = by_alias.len() - slash_aliases - emote_aliases;
 
-        // 4 · benilla's instruments, last so they can never shadow a shipped command.
-        // benilla's own instruments — `/castvis`, `/partytest`, `/chattest`, `/shot`, `/liquid`,
-        // `/reaction`. A player build claims none of the aliases, so typing one falls through to
-        // the reference's "unknown command" exactly as it should. They are gated
-        // HERE, at the table, rather than at each dispatch arm: one door, like the dev chord's.
+        // 4 · the dev instruments, dev builds only; a player build answers them as unknown.
         let before_dev = by_alias.len();
         if crate::run_mode::dev_affordances() {
             for dev in DevCmd::ALL {
@@ -352,22 +283,14 @@ impl SlashCommands {
         }
     }
 
-    /// `(slash aliases, emote aliases, benilla additions, dev aliases)` — how many DISTINCT
-    /// commands each source made reachable (the shipped strings repeat: `EMOTE87_CMD1` and `_CMD2`
-    /// are both `"/sit"`). The boot report.
-    ///
-    /// The last number is the seam, **made observable**: benilla's own instrument
-    /// commands are gated on `run_mode::dev_affordances()`, and a gate nobody can see the effect of
-    /// is a gate nobody checks. A player build must print `0`, and one line of its own log says so.
-    /// The third — the player-facing additions (`/reload`, 1291) — is deliberately separate from
-    /// both: present in every build, and never passed off as a shipped command.
+    /// Distinct aliases per source (the shipped strings repeat: `EMOTE87_CMD1` and `_CMD2` are
+    /// both `"/sit"`); a player build reports 0 dev aliases.
     pub(super) fn counts(&self) -> (usize, usize, usize, usize) {
         self.counts
     }
 }
 
-/// Insert-if-vacant: the FIRST source to claim an alias keeps it, which is how the reference's pass
-/// order (`SlashCmdList` before emotes) becomes a static table.
+/// The first source to claim an alias keeps it: the reference's pass order, made static.
 fn insert(map: &mut HashMap<String, Command>, alias: &str, cmd: Command) {
     let key = alias.trim().trim_start_matches('/').to_ascii_lowercase();
     if !key.is_empty() {
@@ -375,9 +298,7 @@ fn insert(map: &mut HashMap<String, Command>, alias: &str, cmd: Command) {
     }
 }
 
-/// Build the table once the VM (its globals) and the emote catalog both exist. `PostStartup` rather
-/// than an ordering constraint: both producers are `Startup` systems whose `insert_resource` lands
-/// at the schedule boundary, so this needs no fragile `.after()` chain into two other modules.
+/// Build the table in `PostStartup`, after `Startup` has inserted the VM and the emote catalog.
 pub(crate) fn build_slash_commands(
     mut commands: Commands,
     script: Option<NonSend<benilla_ui::script::UiScript>>,
@@ -394,8 +315,7 @@ pub(crate) fn build_slash_commands(
         |token| emotes.text_id(token),
     );
     let (slash, emote, added, dev) = table.counts();
-    // The "it loaded" signal: the shipped 1.12 data yields the pinned alias counts (see
-    // `real_alias_table_resolves_the_shipped_commands`), plus benilla's own additions (1291).
+    // The shipped 1.12 data gives the counts `real_alias_table_resolves_the_shipped_commands` pins.
     info!(
         "chat: slash table — {slash} command aliases, {emote} emote aliases, \
          {added} benilla additions, {dev} instrument aliases"

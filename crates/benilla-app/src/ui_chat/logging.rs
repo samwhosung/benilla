@@ -1,17 +1,9 @@
-//! `LoggingChat` / `LoggingCombat` — the two log files the `/chatlog` and `/combatlog` handlers
-//! toggle (stock `ChatFrame.lua` l.677-693: the handler reads the flag, flips it, and prints
-//! `CHATLOGENABLED`/`COMBATLOGENABLED` itself, so the engine's whole job is the flag and the
-//! file).
-//!
-//! The flags live in the VM (`chat_misc`); this is the file end. The reference writes
-//! `Logs\WoWChatLog.txt` and `Logs\WoWCombatLog.txt` beside `WTF`; ours are the same two names
-//! under `benilla-config/Logs/` ([`crate::local_state::logs_dir`]) — the install is read-only,
-//! so the folder is ours, not the game's. Lines are appended as the chat window
-//! shows them, each stamped `M/D HH:MM:SS.mmm` the way the reference's log reads, in UTC (this
-//! process has no local-zone source and would rather be honest than guess an offset).
-//!
-//! A file that cannot be opened logs once and the flag stays set — the Lua printed "enabled",
-//! and a silent flip back would make the next `/chatlog` do the opposite of what it says.
+//! The `LoggingChat`/`LoggingCombat` files, `WoWChatLog.txt` and `WoWCombatLog.txt`: the stock
+//! `/chatlog` and `/combatlog` flip the VM's flag and print the notice (`ChatFrame.lua:675-695`);
+//! this appends each line as the window shows it, stamped `M/D HH:MM:SS.mmm` in UTC, as the
+//! process has no local time zone. Deviation: the files live in `benilla-config/Logs/`, not the
+//! install's `Logs`, because the install is read-only. A file that fails to open leaves the flag
+//! set: Lua already printed "enabled".
 
 use std::io::Write as _;
 
@@ -19,8 +11,7 @@ use bevy::prelude::*;
 
 use benilla_ui::script::UiScript;
 
-/// The open log files, held by the chat windows because that is where every rendered line
-/// passes ([`super::frames::route`]).
+/// The open log files, kept on the chat windows since every line passes [`super::frames::route`].
 #[derive(Default)]
 pub(crate) struct ChatLogFiles {
     chat: Option<std::fs::File>,
@@ -28,8 +19,7 @@ pub(crate) struct ChatLogFiles {
 }
 
 impl ChatLogFiles {
-    /// One rendered line — to the combat log when the kind is a combat-log kind, else the chat
-    /// log; either only when that file is open.
+    /// Append a rendered line to the combat or the chat log, when that file is open.
     pub(super) fn record(&mut self, combat: bool, line: &str) {
         let slot = if combat {
             &mut self.combat
@@ -98,8 +88,8 @@ fn stamp() -> String {
     )
 }
 
-/// Days since 1970-01-01 → `(year, month, day)`, the proleptic Gregorian calendar (Howard
-/// Hinnant's `civil_from_days`).
+/// Days since 1970-01-01 → `(year, month, day)`, proleptic Gregorian: the `civil_from_days`
+/// algorithm.
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = z.div_euclid(146_097);
@@ -130,8 +120,7 @@ pub(super) fn sync_chat_logging(
 pub(super) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
-        // After the tick: the flags are Lua's (`LoggingChat`/`LoggingCombat`), read the frame
-        // they move.
+        // After the UI tick, so a flag Lua moved is read the same frame.
         sync_chat_logging
             .after(crate::ui_script::UiInput)
             .in_set(crate::char_select::InWorldGated),

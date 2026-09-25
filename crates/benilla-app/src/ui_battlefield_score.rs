@@ -1,22 +1,9 @@
-//! The battleground **scoreboard** feed:
-//! the app's half of the stock `WorldStateFrame.lua` score frame — the name-resolution barrier,
-//! the team derivation, the column headers, the request throttle and the leave.
+//! The battleground scoreboard feed, the app half of the stock `WorldStateFrame.lua` score frame.
 //!
-//! - **The board arrives raw** (`MSG_PVP_LOG_DATA`, GUIDs and numbers, wire order) and the
-//!   reference does nothing with it until EVERY row's name has resolved (`0x4aa580` → `0x4aa200`:
-//!   the last name arrival is what rebuilds and fires). Ours asks the name cache for each row every
-//!   frame it is unresolved and pushes the board the frame the last one lands.
-//! - **Team is derived, never wire data** (`0x4aa200`): race → faction; `0` Horde, `1` Alliance,
-//!   `-1` for a race the tables do not carry. Race and class strings come off the same traits the
-//!   name query answered with.
-//! - **Columns are `WorldStateUI.dbc` rows** (the `0x2D4` status-3 arm, `0x4aa9c3`–`0x4aaa17`):
-//!   in table order, the first contiguous run of rows whose `MapID` is the battleground's map or
-//!   `-1` and whose `Type` is 2; the text raw, the icon, the tooltip.
-//! - **`UPDATE_BATTLEFIELD_SCORE`** fires here — on a pushed board, and on the status-3 arrival
-//!   the queue flags — BEFORE the queue feed fires `UPDATE_BATTLEFIELD_STATUS` (`0x4aaa5a` before
-//!   `0x4aab05`).
-//! - **The request is throttled to 5000 ms** (`0x4aa170`) and the leave carries the active map
-//!   (`LeaveBattlefield 0x4abe60`).
+//! The reference holds a `MSG_PVP_LOG_DATA` board until every row's name has resolved, and the last
+//! name arrival rebuilds it (`0x4aa580` → `0x4aa200`); here the board is pushed the frame the last
+//! name lands. `UPDATE_BATTLEFIELD_SCORE` fires on a pushed board and on the status-3 arrival,
+//! before `UPDATE_BATTLEFIELD_STATUS` (`0x4aaa5a` before `0x4aab05`).
 
 use std::time::{Duration, Instant};
 
@@ -31,11 +18,10 @@ use crate::ui_dialog_verbs::BattlefieldQueue;
 use crate::ui_script::{UiFeed, UiInput};
 use crate::world_state_ui::WorldStateUiRes;
 
-/// `RequestBattlefieldScoreData`'s throttle — `0x4aa170`: `now + 0x1388`.
+/// `RequestBattlefieldScoreData`'s throttle (`0x4aa170`).
 const REQUEST_THROTTLE: Duration = Duration::from_millis(5000);
 
-/// The last `MSG_PVP_LOG_DATA`, and the request stamp. Both die with the session
-/// (`net::on_session_end`).
+/// The last `MSG_PVP_LOG_DATA` and the request stamp, both zeroed when the session ends.
 #[derive(Resource, Default)]
 pub(crate) struct BattlefieldScoreboard {
     log: Option<PvpLogData>,
@@ -43,15 +29,14 @@ pub(crate) struct BattlefieldScoreboard {
 }
 
 impl BattlefieldScoreboard {
-    /// `SessionEvent::PvpLogData` — the whole board, replacing the last.
     pub(crate) fn apply(&mut self, data: PvpLogData) {
         self.log = Some(data);
     }
 }
 
-/// The scoreboard's column headers for `map`: `WorldStateUI.dbc` in table order, the first
-/// contiguous run of `(MapID == map || MapID == -1) && Type == 2` — once a run has started, the
-/// first non-matching row ends it (`0x4aa9fe`).
+/// The column headers for `map`: the first contiguous run of matching `WorldStateUI.dbc` rows in
+/// table order, as the status-3 arm builds them (`0x4aa9c3`–`0x4aaa17`; the run ends at
+/// `0x4aa9fe`).
 pub(crate) fn score_columns(catalog: &WorldStateUiRes, map: u32) -> Vec<BattlefieldStatColumn> {
     let mut out = Vec::new();
     for (_, row) in catalog.0.rows() {
@@ -81,11 +66,8 @@ fn resolve_board(
         let (race, class) = names
             .player_traits(r.guid)
             .map_or((0, 0), |(race, class, _)| (race, class));
-        // `0` Horde, `1` Alliance, `-1` neither. `0x4aa200` walks the name-cache record's race
-        // through `ChrRaces` → `FactionTemplate` → factionGroupMask, which is `0x5efe00`'s walk
-        // with the null-row guards omitted — so it is [`crate::ui_unit::race_pvp_team`] and not a
-        // second copy of it. (It used to be one, re-derived here out of `race_faction_group`; a
-        // second copy of this walk is exactly what report B378 was, one surface over.)
+        // The team comes from race, never the wire (`0x4aa200`, `0x5efe00`'s walk): 0 Horde,
+        // 1 Alliance, -1 neither.
         let faction = i32::from(crate::ui_unit::race_pvp_team(race));
         let mut stats = [0u32; 8];
         for (slot, v) in stats.iter_mut().zip(&r.stats) {
@@ -174,7 +156,7 @@ fn drain_battlefield_score(
     }
 }
 
-/// The scoreboard's packet handler (in the net handler table since 2313).
+/// The scoreboard's packet handlers.
 mod net {
     use benilla_protocol::{SessionEvent, SessionEventKind};
     use bevy::prelude::*;
@@ -182,15 +164,13 @@ mod net {
     use super::BattlefieldScoreboard;
     use crate::net::NetHandlerApp;
 
-    /// Register the handler — called from [`super::BattlefieldScorePlugin`].
     pub(super) fn register(app: &mut App) {
         app.net_handler(SessionEventKind::PvpLogData, on_pvp_log_data)
             .net_handler(SessionEventKind::Disconnected, on_session_end);
     }
 
-    /// The board and the request stamp are zeroed at every login (module init `0x4a9c40` zeroes
-    /// the score scalars) — a listener on the session end (a second handler on the kind, after the
-    /// bridge's own teardown).
+    /// Zeroes the board and the stamp, as the reference's module init (`0x4a9c40`) does at every
+    /// login.
     fn on_session_end(In(_): In<SessionEvent>, mut board: ResMut<BattlefieldScoreboard>) {
         *board = BattlefieldScoreboard::default();
     }
@@ -210,8 +190,7 @@ impl Plugin for BattlefieldScorePlugin {
         app.init_resource::<BattlefieldScoreboard>().add_systems(
             Update,
             (
-                // Before the queue feed: the score event precedes the status event on the
-                // status-3 message, as in the client.
+                // Before the queue feed: on status 3 the score event precedes the status event.
                 feed_battlefield_score
                     .before(crate::ui_dialog_verbs::feed_dialog_verbs)
                     .in_set(UiFeed),
@@ -242,8 +221,6 @@ mod tests {
         }
     }
 
-    /// The column scan: table order, the map's or the wildcard's `Type == 2` rows, and the first
-    /// non-matching row after the run has started ends it.
     #[test]
     fn the_columns_are_the_first_contiguous_run_of_type_two_rows_for_the_map() {
         let cat = WorldStateUiRes(WorldStateUiCatalog::from_rows(vec![
@@ -259,7 +236,7 @@ mod tests {
             .map(|c| c.text)
             .collect();
         assert_eq!(cols, ["Flags Captured", "Flags Returned"]);
-        // Another map keeps the wildcard row alone — the reference's `-1` rows serve every map.
+        // Another map gets the wildcard row alone: `-1` rows serve every map.
         let cols: Vec<String> = score_columns(&cat, 30)
             .into_iter()
             .map(|c| c.text)
@@ -267,10 +244,6 @@ mod tests {
         assert_eq!(cols, ["Flags Returned"]);
     }
 
-    /// **The board is zeroed at every login** (module
-    /// init `0x4a9c40`, from `InitializeGame`, zeroes the score scalars) — the last session's
-    /// `MSG_PVP_LOG_DATA` must not come back as the next character's scoreboard, and its request
-    /// stamp must not throttle that character's first ask.
     #[test]
     fn the_session_end_zeroes_the_scoreboard() {
         let mut app = App::new();

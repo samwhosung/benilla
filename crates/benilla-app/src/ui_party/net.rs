@@ -1,16 +1,7 @@
-//! The group/party packet handlers (superseded by 0440; in the net handler
-//! table since 2321, moved out of the drain's group arm file). [`GroupState`] mirrors the wire and
-//! names the **messages** its roster diff implies; these are the shims that put them on the
-//! shared by-key queue. Two bodies here are not packet handlers but the object layer's hook on a
-//! roster member's stream-out ([`member_deactivated`], [`roster_deactivated`]); the drain's
-//! object arms still call them, and they become listeners on the object kinds once those are
-//! peeled.
-//!
-//! **They are message ids, not sentences**. The reference reaches all twelve
-//! through one `CGGameUI::DisplayError(msgId)`, and the catalog row that id names answers three
-//! questions at once — the text, the surface, and the sound. Composing the English here answered
-//! only the first, and got the third wrong for free: `ERR_DECLINE_GROUP_S` carries the
-//! `igPlayerInviteDecline` cue, which a straight chat push had no way to play.
+//! The group packet handlers. [`GroupState`] names the messages each packet implies and these
+//! queue them by key, as the reference's `DisplayError` (`0x496720`) takes a message id: the
+//! catalog row gives the text, the surface and the sound. [`member_deactivated`] and
+//! [`roster_deactivated`] are the object layer's hooks on a roster member's stream-out.
 
 use benilla_protocol::messages::{
     member_status, GroupLootInfo, GroupMemberEntry, PartyMemberStatsInfo,
@@ -25,8 +16,7 @@ use crate::net::{ClientCommand, GuidIndex, NetCommands, NetHandlerApp, ObjectSto
 use crate::ui_action::{UiError, UiErrorKeys};
 use crate::ui_quest::QuestGiver;
 
-/// Register the group handlers — called from [`super::UiPartyPlugin`]. One per kind, plus the
-/// session-end listener.
+/// One handler per group kind, plus the session-end listener.
 pub(super) fn register(app: &mut App) {
     use SessionEventKind as K;
     app.net_handler(K::GroupInvite, on_invite)
@@ -190,49 +180,39 @@ fn on_raid_instance_info(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>
     }
 }
 
-/// The group dies with the socket. A listener on the session end
-/// (a second handler on the kind, after the bridge's own teardown).
+/// The group state dies with the socket, after the bridge's own teardown.
 fn on_session_end(In(_): In<SessionEvent>, mut group: ResMut<GroupState>) {
     group.clear_session();
 }
 
-/// Queue the messages a `GroupState::apply_*` named. `ui_action::feed_actions` resolves each key
-/// against the VM's own `GlobalStrings.lua` and puts the line on the surface its catalog row
-/// names — `ui_guild`'s `push_lines`, one window over.
+/// Queue the messages an `apply_*` named; `ui_action::feed_actions` resolves and shows them.
 fn push_group_lines(errors: &mut UiErrorKeys, lines: Vec<UiError>) {
     errors.0.extend(lines);
 }
 
-/// `MSG_RAID_READY_CHECK`, the open form: our own echo as leader takes the
-/// response-collection arm and prints nothing; as anyone else we print the leader's line and take
-/// the popup ticket. The leader test is the reference's guid compare (`0x4ba3a0`).
+/// We lead when our guid is the leader's, the reference's test at `0x4ba3a0`.
 fn ready_check_request(group: &mut GroupState, errors: &mut UiErrorKeys, self_guid: &SelfGuid) {
     let we_lead = self_guid.0 == Some(group.leader);
     push_group_lines(errors, group.apply_ready_check_request(we_lead));
 }
 
-/// `SMSG_GROUP_INVITE` — someone asked us into their group.
 fn invited(group: &mut GroupState, errors: &mut UiErrorKeys, inviter: &str) {
     push_group_lines(errors, group.apply_invited(inviter));
 }
 
-/// `SMSG_GROUP_DECLINE` — our invitee said no (sent to the inviter only).
 fn declined(group: &mut GroupState, errors: &mut UiErrorKeys, name: &str) {
     push_group_lines(errors, group.apply_declined(name));
 }
 
-/// `SMSG_GROUP_UNINVITE` — we were kicked.
 fn uninvited(group: &mut GroupState, errors: &mut UiErrorKeys) {
     push_group_lines(errors, group.apply_uninvited());
 }
 
-/// `SMSG_GROUP_DESTROYED` — the group is gone outright.
 fn destroyed(group: &mut GroupState, errors: &mut UiErrorKeys) {
     push_group_lines(errors, group.apply_destroyed());
 }
 
-/// `SMSG_GROUP_SET_LEADER` — the line reads differently when the new leader is us, so the composer
-/// needs our own name. It is cache-seeded at login (`session::connected`), so this never asks.
+/// Our own name, cached from login (`session::connected`), picks the line; this never queries.
 fn leader_changed(
     group: &mut GroupState,
     errors: &mut UiErrorKeys,
@@ -247,17 +227,9 @@ fn leader_changed(
     push_group_lines(errors, group.apply_leader_changed(name, own.as_deref()));
 }
 
-/// `SMSG_GROUP_LIST` — the roster echo (and the join/leave diff's line source). Roster changes move
-/// shared-quest availability, so the questgiver sweep re-asks from here.
-///
-/// **A roster entry is a sighting**: every member guid is warmed into the
-/// [`NameCache`] here, the same ask-once discipline `net::objects` applies the moment a unit
-/// streams in. The roster wire carries a member's *name*, so this is not asked for the name — it is
-/// asked for the `(race, class, gender)` triple that rides the same answer, and which is the ONLY
-/// source of those three for a member we never see: their descriptor never arrives. Two surfaces
-/// read them and both were empty for an out-of-area member before this — the raid grid's class
-/// column (`ui_party::feed::raid_roster`, whose own-row twin of this hole 1549 §7 found live), and
-/// the party frame's 2D portrait stand-in (`portrait::temporary_portrait`, report B315).
+/// `SMSG_GROUP_LIST`: apply the roster, seat new members' records and re-ask the questgiver sweep
+/// (shared-quest availability follows the roster). Every member is name-queried once: the
+/// answer's race, class and gender are the only source of them for a member we never see streamed.
 fn list(
     group: &mut GroupState,
     errors: &mut UiErrorKeys,
@@ -274,8 +246,8 @@ fn list(
     for m in &members {
         let _ = names.resolve(m.guid, net_commands);
     }
-    // The roster BEFORE the apply, so the "new to this roster" test below is the slot writer's
-    // own `srcRec == 0` (see `seat_new_records`), not a re-read of what we just stored.
+    // Taken before `apply_list` consumes the list; `seat_new_records` then treats a member with
+    // no record as new, the reference's `srcRec == 0`.
     let seats: Vec<(u64, bool)> = members
         .iter()
         .map(|m| (m.guid, m.status & member_status::ONLINE != 0))
@@ -286,19 +258,10 @@ fn list(
     quest.bump_reask();
 }
 
-/// **The GROUP_LIST slot writer's record leg** — `0x4e82d0`, the second of the two places the
-/// reference asks for a member's stats.
-///
-/// Per member the writer has two legs, chosen on whether the member already had a record
-/// (`srcRec`): a **known** member's record is copied forward and *nothing is sent* — a resync of a
-/// group you are already in must not fire four queries — while a member **new to the roster** gets
-/// a zeroed record with the `1/1` placeholder ([`PartyMemberStatsInfo::placeholder`]), and then, if
-/// their player object is not in the object manager (`4e8398 74 4a je`), the request
-/// (`4e83e4 39 7d f8 cmp [ebp-8],edi; 75 5f jne` — the second gate, on `srcRec` again).
-///
-/// The consequence worth stating: after this, **every roster member owns a record**, which is what
-/// makes the merged view's out-of-range leg total. A member you have never seen shows a full `1/1`
-/// bar rather than an empty `0/0` one until their stats land — the reference's own picture.
+/// `SMSG_GROUP_LIST`'s record leg (`0x4e82d0`, raid twin `0x4ba5f0`): a known member's record
+/// carries over and nothing is sent; a new member gets the 1/1 placeholder and, when we hold no
+/// object for them, a stats request (`0x4e83f1`, raid `0x4bab6e`). Every member therefore owns a
+/// record, so an unseen one shows full bars, not 0/0, until their stats land.
 fn seat_new_records(
     group: &mut GroupState,
     seats: &[(u64, bool)],
@@ -306,8 +269,7 @@ fn seat_new_records(
     net_commands: &NetCommands,
 ) {
     for (guid, online) in seats {
-        // `apply_list` has already dropped the records of everyone who left, and kept the rest —
-        // so "no record now" is exactly the writer's `srcRec == 0`.
+        // `apply_list` kept only the staying members' records, so a missing one means new.
         if group.stats.contains_key(guid) {
             continue;
         }
@@ -322,22 +284,10 @@ fn seat_new_records(
     }
 }
 
-/// **The despawn edge** — CGPlayer_C vtable slot 1 `0x5e9aa0`, which `0x464920` invokes on both
-/// `SMSG_DESTROY_OBJECT` and the `SMSG_UPDATE_OBJECT` OUT_OF_RANGE block. A party or raid
-/// member's object is leaving the object manager, so:
-/// **snapshot its live descriptor into the roster record** (`0x5f0880`), then **ask the server for
-/// the member's stats** (`CMSG_REQUEST_PARTY_MEMBER_STATS`, `0x4e8646`), in that order and on that
-/// same instruction sequence.
-///
-/// The pair is why the reference's party frame does not blank when somebody walks over the hill
-/// (report B334): the snapshot means the bars keep the numbers they were showing at the edge, and
-/// the request means the server answers `_FULL` rather than leaving us on whatever delta its
-/// accumulated mask happens to carry next. Neither existed here before.
-///
-/// **Two gates, and both are the reference's.** This runs on every despawn, so a guid that is not
-/// on the roster falls straight through; and a guid we hold **no object for** falls through too —
-/// the hook is a *virtual on the object*, so no object means it never ran, and a server that
-/// re-announces a stream-out we have already applied must not cost a packet.
+/// The despawn hook, the reference's deactivate virtual `0x5e9aa0` (object destroyed or out of
+/// range): for a roster member, snapshot the live descriptor into their record (`0x5f0880`), then
+/// request their stats (`0x4e8646`). Nothing happens off the roster or without an object, since
+/// the hook is a virtual on the object.
 pub(crate) fn member_deactivated(
     guid: u64,
     group: &mut GroupState,
@@ -360,9 +310,8 @@ pub(crate) fn member_deactivated(
         .send(ClientCommand::RequestPartyMemberStats { guid });
 }
 
-/// [`member_deactivated`] for **every** streamed roster member at once — the bulk teardown a
-/// cross-map transfer performs, where the reference destroys the same objects one at a time and
-/// runs the same hook on each.
+/// [`member_deactivated`] for every streamed roster member: a cross-map transfer's teardown, where
+/// the reference destroys each object and runs the hook on each.
 pub(crate) fn roster_deactivated(
     group: &mut GroupState,
     index: &GuidIndex,
@@ -381,7 +330,6 @@ pub(crate) fn roster_deactivated(
     }
 }
 
-/// `SMSG_PARTY_COMMAND_RESULT` — the verdict on an invite/kick/leave we asked for.
 fn command_result(
     group: &mut GroupState,
     errors: &mut crate::ui_action::UiErrorKeys,
@@ -389,10 +337,7 @@ fn command_result(
     member: &str,
     result: u32,
 ) {
-    // By KEY, not by sentence, and into the shared queue rather than straight into chat: the
-    // catalog row decides the surface, so `result == 7` reaches the red `UIErrorsFrame` line while
-    // the other nine stay chat lines (`0x496720`; decision 2035's shape). `None` is the
-    // reference's own silence — three inputs display nothing at all.
+    // By key, so the catalog row picks the surface; `None` is the reference's silence.
     errors
         .0
         .extend(group.apply_command_result(operation, member, result));
@@ -413,13 +358,6 @@ mod tests {
         }
     }
 
-    /// The roster edge is where a member we may never SEE becomes askable. Their descriptor is the
-    /// only other source of race/class/gender, and it never arrives while they are out of the local
-    /// area — so without this ask the raid grid's class column and the party frame's portrait
-    /// stand-in are both permanently blank for exactly the members that need them.
-    ///
-    /// Ask-ONCE: a re-sent roster (every join, leave, loot-method change re-sends the whole list)
-    /// must not re-ask, or a busy group would spam a query per member per packet.
     #[test]
     fn the_roster_warms_every_member_into_the_name_cache_once() {
         let (tx, rx) = crossbeam_channel::unbounded();
@@ -430,7 +368,7 @@ mod tests {
             QuestGiver::default(),
         );
         let mut names = NameCache::default();
-        // A player guid: `counter | (high << 48)` — the shape `NameCache::resolve` routes on.
+        // A player guid, `counter | (high << 48)`, the shape `NameCache::resolve` routes on.
         let player_guid = |counter: u64| counter | (u64::from(guid::HIGH_PLAYER) << 48);
         let (leader, far) = (player_guid(7), player_guid(8));
 
@@ -484,13 +422,12 @@ mod tests {
         assert_eq!(names.player_traits(leader), Some((1, 4, 1)));
     }
 
-    // ── The out-of-range record (report B334) ────────────────────────────────
+    // ── The out-of-range record ──────────────────────────────────────────────
 
-    /// Descriptor field indices, spelled locally the way the other app-side descriptor tests do
-    /// (`ui_unit`'s vitals block) — the private `FIELD_UNIT_*` values, build 5875.
+    /// Unit descriptor field indices, build 5875.
     const HEALTH: u16 = 22;
     const MAXHEALTH: u16 = 28;
-    /// `UNIT_FIELD_POWER2` / `MAXPOWER2` — the RAGE slot (`POWER1 + POWER_RAGE`).
+    /// `UNIT_FIELD_POWER2`/`MAXPOWER2`, the rage slot (`POWER1 + POWER_RAGE`).
     const POWER2: u16 = 24;
     const MAXPOWER2: u16 = 30;
     const LEVEL: u16 = 34;
@@ -511,23 +448,15 @@ mod tests {
         group
     }
 
-    /// **The despawn edge is where the numbers are kept** (the deactivate virtual `0x5e9aa0`
-    /// snapshots `0x5f0880` and sends `0x27f`, in that order).
-    ///
-    /// Falsifier for the whole report: delete the snapshot and this member's record stays whatever
-    /// the wire last said — which, for a member who has never had a stats packet, is nothing, and
-    /// the frame reads `0/0`. Delete the send and the server is never asked for a `_FULL`, so the
-    /// record stays frozen at the snapshot until the member's health happens to change.
     #[test]
     fn a_members_despawn_snapshots_their_descriptor_and_asks_for_their_stats() {
         let (tx, rx) = crossbeam_channel::unbounded();
         let net = NetCommands(tx);
         let guid = 0x1234;
         let mut group = grouped(&[member(guid, "Brisca"), member(0x99, "Aldwyn")]);
-        let _ = asked(&rx); // the roster's own seat-time asks (they are unstreamed here)
+        let _ = asked(&rx); // start from an empty queue
 
-        // A warrior: rage rides the wire ×10, and the record stores it raw exactly as the
-        // descriptor does.
+        // A warrior: rage is stored raw, ten times the shown value, as in the descriptor.
         let store = ObjectStore(benilla_protocol::messages::ObjectFields::from_pairs(&[
             (HEALTH, 2400),
             (MAXHEALTH, 3000),
@@ -558,9 +487,6 @@ mod tests {
         assert_eq!(asked(&rx), vec![guid], "and the server is asked, once");
     }
 
-    /// The hook runs on **every** despawn — a mob, a totem, a stranger — and must be silent for
-    /// everyone who is not on the roster. Without the guard every stream-out in a busy city would
-    /// put a `CMSG_REQUEST_PARTY_MEMBER_STATS` on the wire.
     #[test]
     fn a_despawn_that_is_not_a_party_member_asks_nothing() {
         let (tx, rx) = crossbeam_channel::unbounded();
@@ -575,16 +501,11 @@ mod tests {
         assert!(asked(&rx).is_empty());
         assert!(!group.stats.contains_key(&0xdead));
 
-        // …and the object gate on its own: a roster member we hold no object for never
-        // deactivated, so re-announcing their stream-out costs nothing.
+        // The object gate alone: a roster member we hold no object for asks nothing.
         member_deactivated(0x1234, &mut group, None, &net);
         assert!(asked(&rx).is_empty());
     }
 
-    /// **The roster seat** (`0x4e82d0`): a member new to the roster gets the `1/1`
-    /// placeholder, and is asked for only when we hold no object for them. A resync asks nothing —
-    /// the gate the reference puts on `srcRec`, and the reason a busy group does not fire four
-    /// queries per GROUP_LIST.
     #[test]
     fn a_roster_new_member_is_seated_at_one_one_and_asked_for_only_when_unseen() {
         let (tx, rx) = crossbeam_channel::unbounded();
@@ -634,8 +555,7 @@ mod tests {
             );
         }
 
-        // The wire answers for `far`, and then the roster is re-sent (somebody changed the loot
-        // method). The cached record is restored and nothing is asked again.
+        // The wire answers for `far`, then the roster is re-sent: nothing is asked again.
         group.apply_stats(
             far,
             true,

@@ -1,43 +1,8 @@
-//! The app-side **character-window feed** (decision 0208 §3/§4): the bridge that turns our own
-//! avatar's descriptor + the item stores into the plain snapshots the paper doll's Lua bindings
-//! read, and into the Era events that drive its `OnEvent` repaints — the [`crate::ui_unit`]
-//! pattern, for the combat-stats/inventory surface.
-//!
-//! Three jobs, each frame, before the VM ticks ([`UiInput`]):
-//!
-//! - **[`UnitCombatStats`]** from the self player's [`ObjectStore`] — the stat/resistance/
-//!   damage/attack-power fields (all OWNER_ONLY, verified streamed in 0208) plus the three resolved
-//!   skill pairs: the app picks WHICH skill line the equipped main-hand/ranged item uses
-//!   (`weapon_subclass_skill` — vmangos `Item.cpp`'s table; no weapon = unarmed 162), reads its
-//!   `PLAYER_SKILL_INFO` triplet and the Defense line's ([`SKILL_DEFENSE`]), so the engine-free
-//!   bindings just serve the pairs.
-//!
-//!   The descriptor half is [`unit_combat_stats`], which any unit's store goes through — the pet
-//!   paper doll's feed ([`crate::ui_pet_doll`]) is the second caller. What
-//!   [`combat_stats`] adds on top is exactly the player-only half: the four values derived from the
-//!   equipped items, and the skill pairs, neither of which a creature has.
-//! - **`InventorySlots`** from the inv-slot guids → [`Items`] objects → templates → the
-//!   [`ItemDisplays`] icon — index 0 the ammo slot (`PLAYER_AMMO_ID`, its count summed across the
-//!   backpack + the four equipped bags), 1..=19 the equipment slots, 20..=23 the four equipped-bag
-//!   ICONS (decision 0216 slice 2's bag bar — the bag item itself, `INV_SLOT` 19..22, not its
-//!   contents), all by the client's `GetInventorySlotInfo` ids. A slot whose template answer is
-//!   still in flight carries its `item_id` with `icon: None` and fills on a later frame (the
-//!   ask-once cache repaints via `UNIT_INVENTORY_CHANGED` when the view changes). Each equipment
-//!   slot (1..=23) also carries an `|Hitem:…|h[Name]|h` `link`, its `PendingItemOps`-derived
-//!   `locked` (decision 0208 phase 1b — the doll twin of `ui_items::feed_containers`'s bag-slot
-//!   `.locked`), and its resolved `equip_slots` (`ui_items::find_equip_slot` over the item
-//!   template's `inventoryType` — the cursor arc's "fit rule").
-//! - **The paper-doll booth yaw**: the stock pane's rotate buttons call the reference's own
-//!   `Model_RotateLeft`/`_RotateRight`, which write `CharacterModelFrame:SetRotation`; the feed
-//!   mirrors that pane's facing onto [`PaperDollBooth`] so the booth re-bakes at the new angle
-//!   (off the pane itself since 1751).
-//!
-//! Events, fired on snapshot transitions (grouped by the ref's own registration set,
-//! `PaperDollFrame.lua:14-28` — arg1 `"player"`): `UNIT_STATS`, `UNIT_RESISTANCES`, `UNIT_DAMAGE`,
-//! `UNIT_ATTACK_SPEED`, `UNIT_ATTACK_POWER`, `UNIT_RANGED_ATTACK_POWER`, `UNIT_RANGEDDAMAGE`,
-//! `UNIT_ATTACK` (the weapon-skill pairs) — [`fire_stat_transitions`], shared with the pet feed —
-//! and `UNIT_INVENTORY_CHANGED` on any slot-view change. A first snapshot counts as a transition of
-//! every group (the `ui_unit` rule).
+//! The character-window feed: the [`UnitCombatStats`] and `InventorySlots` snapshots the paper
+//! doll's Lua bindings read, built from our avatar's descriptor and item stores; the events that
+//! repaint it; and the booth's yaw from the stock `CharacterModelFrame`. [`unit_combat_stats`] is
+//! the half any unit shares: a creature has no player fields, so those read absent and keep their
+//! defaults.
 
 use bevy::prelude::*;
 
@@ -57,66 +22,49 @@ use crate::portrait::PaperDollBooth;
 use crate::ui_items::{find_equip_slot, item_link};
 use crate::ui_script::{gate, UiFeed, UiInput};
 
-/// Equipment slots, 0-based (`EQUIPMENT_SLOT_*`): the inv-slot array index of the main hand,
-/// off hand, and ranged slots the weapon-skill / offhand / wand resolutions read.
+/// Equipment slots, 0-based (`EQUIPMENT_SLOT_*`): main hand, off hand, ranged.
 const SLOT_MAIN_HAND: u8 = 15;
 const SLOT_OFF_HAND: u8 = 16;
 const SLOT_RANGED: u8 = 17;
-/// `ItemPrototype` class 2 = weapon (vmangos `ItemPrototype.h`); the offhand-speed gate.
+/// Item class 2, weapon (vmangos `ItemPrototype.h:139`).
 const ITEM_CLASS_WEAPON: u32 = 2;
-/// Weapon subclass 19 = wand (`HasWandEquipped`).
+/// Weapon subclass 19, wand (`ItemPrototype.h:211`), for `HasWandEquipped`.
 const SUBCLASS_WAND: u32 = 19;
 
-/// A stable comparison key for an f32 snapshot field (the event-transition diffs): quantized to
-/// 1/32 so equal wire values always compare equal and real changes always register.
+/// An f32 snapshot field as a diff key, quantized to 1/32 so equal wire values compare equal.
 fn fixed(v: f32) -> i64 {
     (v * 32.0).round() as i64
 }
 
-/// The feed's change-tracking memory (the [`crate::ui_unit::UnitFeedState`] shape): the last
-/// snapshots pushed, so events fire on transitions only.
-///
-/// All of it is what-we-told-the-VM, so all of it lives behind a [`crate::ui_script::VmMemo`]: a
-/// memory about one VM is unreadable against the next (1290), so a `/reload` (1291) — which
-/// replaces the VM without despawning the avatar — re-pushes both snapshots and re-fires their
-/// events exactly as a fresh login does.
+/// The last snapshots pushed, so events fire on transitions only; held per VM
+/// ([`crate::ui_script::VmMemo`]), so a `/reload` re-pushes and re-fires as a login does.
 #[derive(Resource, Default)]
 pub(crate) struct CharFeedState {
     vm: crate::ui_script::VmMemo<CharFeedMemo>,
 }
 
-/// The per-VM half of [`CharFeedState`] — the transition-diff bases.
+/// The per-VM half of [`CharFeedState`]: the transition-diff bases.
 #[derive(Default)]
 struct CharFeedMemo {
     last_stats: Option<UnitCombatStats>,
     last_inv: Option<InventorySlots>,
     last_bank_bags: Option<BankBagSlots>,
-    /// The item guid **of the bag itself** in each of the six bank bag slots (absolute player
-    /// slots 63..68). `PLAYERBANKSLOTS_CHANGED`'s producer discriminator for this band — the same
-    /// question `ui_items::feed`'s `SlotGuids::vault` answers for the vault, and for the same
-    /// reason: the pushed view cannot tell two instances of one bag model apart, so a swap of two
-    /// identical bags between two slots reads as no change and the reference fires twice.
+    /// The bag guid in each bank bag slot, `PLAYERBANKSLOTS_CHANGED`'s discriminator: the pushed
+    /// view cannot tell two copies of one bag apart, and the reference fires when they swap.
     last_bank_bag_guids: [u64; BANK_BAG_SLOT_COUNT],
-    /// The gate's counter memories (1439) — the stores whose lazy resolves poison `is_changed`
-    /// for this feed (the equipment templates' ask-once, the enchant-name creator lookups). The
-    /// item OBJECTS are not among them since 2334: an instance is an entity, so its edges arrive
-    /// on the ordinary `Changed`/removal watch ([`crate::items::ItemChanges`]).
+    /// Counters for the stores whose lazy resolves poison `is_changed` (item templates, creator
+    /// names); item objects are entities, watched through [`crate::items::ItemChanges`].
     items_templates: gate::Watch,
     names_generation: gate::Watch,
-    /// `ItemChanges::countdown_steps` — one step per displayable countdown change (the slot
-    /// views read second-floored countdowns), including the last elapse's collapsing push; a
-    /// landing is the item's own change tick.
+    /// `ItemChanges::countdown_steps`: one step per displayed-second change, the final elapse too.
     enchant_deadlines: gate::Watch,
-    /// `PendingItemOps::epoch` — one step per change to the in-flight lock set. Watched BESIDE
-    /// `!is_empty()` and not instead of it: `is_empty()` holds the gate open *while* an op is in
-    /// flight, and this catches the frame it goes away. Without it a clear that moves no object
-    /// (`SMSG_INVENTORY_CHANGE_FAILURE`) closes the gate on the same frame it unlocks, and the
-    /// last `locked: true` this feed pushed stands (1771).
+    /// `PendingItemOps::epoch`, beside `!is_empty()`: that holds the gate open while an op is in
+    /// flight, this catches the frame a lock clears with no object moving
+    /// (`SMSG_INVENTORY_CHANGE_FAILURE`).
     pending_epoch: gate::Watch,
 }
 
-/// Adds the per-frame character-window feed. The bindings live in `benilla-ui`'s `char_stats`;
-/// this supplies their data (and the events) from ECS state.
+/// The character-window feed; its bindings are `benilla-ui`'s `char_stats`.
 pub(crate) struct UiCharPlugin;
 
 impl Plugin for UiCharPlugin {
@@ -124,13 +72,9 @@ impl Plugin for UiCharPlugin {
         app.init_resource::<CharFeedState>().add_systems(
             Update,
             (
-                // `.before(feed_containers)`: the container feed's `BAG_UPDATE` handlers read the
-                // inventory surface synchronously — an addon mirroring a bag asks the bag ITEM's
-                // own row (`GetInventoryItemLink("player", ContainerIDToInventoryID(bag))`,
-                // Bagnon_Forever's size row) — so the inventory push must land first. Unordered,
-                // the first in-world burst raced it and recorded every equipped bag linkless
-                // (`s = "8,0,"` in the director's Bagnon_Forever data). The house "push before
-                // fire" rule, across the two feeds.
+                // Before `feed_containers`: a `BAG_UPDATE` handler may read the bag item's own
+                // row (`GetInventoryItemLink("player", ContainerIDToInventoryID(bag))`), so the
+                // inventory push lands first.
                 feed_char
                     .before(crate::ui_items::feed::feed_containers)
                     .in_set(UiFeed),
@@ -142,43 +86,16 @@ impl Plugin for UiCharPlugin {
     }
 }
 
-/// The skill block [`watch_skill_ups`] last announced: the self guid it was read off, and that
-/// character's `skillId → value` map — the diff base for both the chat lines and the event.
-/// `None` = nothing announced yet.
+/// The skill block [`watch_skill_ups`] last announced: the self guid and its `skillId → value`
+/// map, the diff base for the chat lines and the event.
 type SkillBlock = Option<(u64, std::collections::HashMap<u16, u16>)>;
 
-/// The client-generated skill-up feedback (landed with phase 2; gate corrected by
-/// 1309): the server sends NO skill-up message at all — skills mutate only as
-/// `PLAYER_SKILL_INFO` descriptor deltas (verified at the vmangos source: no chat send anywhere
-/// in `UpdateSkill*`/`SetSkill`) — so the client diff-watches its own skill block exactly as the
-/// real one does (the rank-field UpdateField watcher `0x5de180` → message facility `0x496720`,
-/// tokens `ERR_SKILL_UP_SI` / `ERR_SKILL_GAINED_S` — correcting 0437's "SKILL_RANK_UP" token
-/// guess), prints the GlobalStrings lines on the Skill chat channel, and fires
-/// `SKILL_LINES_CHANGED` on ANY block change (the skills pane's repaint event; the real client
-/// fires it from a separate skill-manager TU (`0x4d2fec`) on add/remove only — ours riding the
-/// same watcher is a benign coarsening, the pane just repaints). **The message gate** (
-/// decisions 1309/1314): both lines are skipped when the line's `SkillRaceClassInfo.flags`
-/// carries `0x402` (`SkillRaceClass::skill_up_silent`) — the class spec lines, racials,
-/// `GENERIC (DND)`, `Dual Wield` and the mount lines — **or when no row admits this race/class
-/// at all** (the resolve's own empty branch, `0x5de352`) — which is why a real 1.12 ding
-/// announces no skill at all (the level-up movers are all flagged) while weapon/profession
-/// skill-ups still print. The
-/// login fill (empty → populated) and a character switch (self guid change) re-seed silently —
-/// the event fires, the lines don't. Still open: the exact chat channel of the real emitter
-/// (`0x496720`'s routing is untraced; Skill is the `ChatTypeInfo` family's own key).
-/// One skill-watcher line: resolve the key off the player's own `GlobalStrings.lua`, fill it, and
-/// push it as `CHAT_MSG_SKILL`.
-///
-/// **Deliberately not `ui_action::show_messages`, and the reason is a real gap rather than a
-/// preference.** `ERR_SKILL_UP_SI`/`ERR_SKILL_GAINED_S` (rows 54/53) are the two of the three
-/// catalog rows whose `chat_type` is **23 = `CHAT_MSG_SKILL`**, not the `10 = CHAT_MSG_SYSTEM`
-/// every other `kind 0` row carries — and that field is exactly what the shared sink does not
-/// read yet (its own doc says so: "benilla raises none of them yet; when it does, this is the
-/// line that has to read the field"). Routing these through it today would silently demote them
-/// to SYSTEM and out of the Skill filter. So the key, the fill and the data-suppression rule are
-/// the shared ones; only the surface is carried here, until the sink learns `chat_type`.
-///
-/// An absent or empty key shows nothing — the reference's own null/empty guard.
+/// One skill-up chat line, `ERR_SKILL_UP_SI` or `ERR_SKILL_GAINED_S`, pushed as `CHAT_MSG_SKILL`.
+/// The server sends no skill-up message; the reference's watcher on the skill value words
+/// (`0x5de180`) prints these through `0x496720`, silent for a line whose `SkillRaceClassInfo`
+/// flags carry `0x402` or that no row admits for this race and class (`0x5de352`), so a level-up
+/// prints none. Not `ui_action::show_messages`: that sink sends every chat row as
+/// `CHAT_MSG_SYSTEM`, and these two ask for `CHAT_MSG_SKILL` (23).
 fn skill_line(script: &UiScript, chat: &mut crate::ui_chat::ChatLog, key: &str, args: &[Arg<'_>]) {
     let Some(template) = script
         .lua()
@@ -206,10 +123,11 @@ fn watch_skill_ups(
     let (Some(guid), Ok(store)) = (self_guid.0, self_store.single()) else {
         return;
     };
-    // The memo is about the VM — it gates `SKILL_LINES_CHANGED`, the pane's only repaint wire — so
-    // it re-seeds with the VM. With no VM there is nothing to announce to and
-    // nothing worth remembering: the diff would only queue chat lines for a VM that does not exist
-    // yet, which is a stale skill-up replayed at the next login. The next VM re-seeds silently.
+    // The memo is per VM and a new VM re-seeds silently; with no VM nothing is diffed, or a stale
+    // skill-up would replay at the next login. `SKILL_LINES_CHANGED` fires here only when a line
+    // is added, removed or changes value; the reference fires it at the end of every skill-list
+    // rebuild (`0x4d2fec`), which its value, max, permanent-bonus and temporary-bonus watchers
+    // run (registered `0x5dda54`-`0x5ddaf0`), and from both header collapse and expand verbs.
     let Some(mut script) = script else {
         return;
     };
@@ -223,7 +141,7 @@ fn watch_skill_ups(
         }
     }
     match prev.as_ref() {
-        // First fill for this character: seed silently (no lines), announce the block once.
+        // First fill: seed silently, no lines; the event fires once.
         None => {
             if cur.is_empty() {
                 return;
@@ -232,7 +150,7 @@ fn watch_skill_ups(
             *prev = Some((guid, cur));
         }
         Some((prev_guid, _)) if *prev_guid != guid => {
-            // A different character logged in — re-seed, never diff across characters.
+            // A different character: re-seed, never diff across characters.
             script.fire_event("SKILL_LINES_CHANGED", vec![]);
             *prev = Some((guid, cur));
         }
@@ -240,8 +158,7 @@ fn watch_skill_ups(
             if *prev_map == cur {
                 return;
             }
-            // The 0x402 message gate resolves through the player's own race/class row, the same
-            // lookup the pane's display law makes ([`skills_row`]).
+            // The `0x402` gate reads the player's own race and class row, as `skills_row` does.
             let (race, class) = (
                 store.0.unit_race().unwrap_or(0),
                 store.0.unit_class().unwrap_or(0),
@@ -254,20 +171,16 @@ fn watch_skill_ups(
                         .and_then(|s| s.catalog.line(line_id))
                         .map(|l| l.name.clone())
                 };
-                // The fn doc's message gate; `false` with no catalog (nothing to name it by
-                // either — the line stays silent, as before the catalog loads).
                 let announces = || {
                     skill_lines
                         .as_ref()
                         .is_some_and(|s| s.catalog.announces_skill_ups(line_id, race, class))
                 };
                 match prev_map.get(&id) {
-                    // A rank-up: `ERR_SKILL_UP_SI`, catalog row 54 — **not** `SKILL_RANK_UP`,
-                    // which is the same enUS sentence and no catalog row at all.
+                    // A rank-up: `ERR_SKILL_UP_SI` (catalog row 54), not `SKILL_RANK_UP`, the
+                    // same enUS sentence with no catalog row.
                     Some(&old) if value > old => {
                         if let Some(name) = name() {
-                            // Both verdicts are logged — the retest's instrument: a moved line
-                            // either announces or names the gate that held it.
                             if announces() {
                                 debug!("chat: skill-up announced ({name} {old}→{value})");
                                 skill_line(
@@ -281,9 +194,7 @@ fn watch_skill_ups(
                             }
                         }
                     }
-                    // A NEW line: the ERR_SKILL_GAINED_S line (GlobalStrings.lua:1837) — the
-                    // fold-back's second token (the watcher `0x5de180` emits both, first-gain vs
-                    // rank-up).
+                    // A new line: `ERR_SKILL_GAINED_S` (catalog row 53).
                     None => {
                         if let Some(name) = name() {
                             if announces() {
@@ -310,19 +221,8 @@ fn watch_skill_ups(
     }
 }
 
-/// The skills-pane feed (decision 0437 phase 4, corrected by 1091): every `PLAYER_SKILL_INFO` line
-/// the real client would LIST, resolved to a flat [`SkillEntry`] — name off `SkillLine.dbc`, group
-/// off the line's `categoryId` × `SkillLineCategory.dbc` (name + displayOrder) — pushed via
-/// `set_skills` on change; the ENGINE groups/sorts/folds.
-///
-/// The inclusion predicate is the client's own list build (`0x4d2cb0`), transcribed in its
-/// order: a line needs
-/// a `SkillLine.dbc` row, an admitting `SkillRaceClassInfo` row and a real `SkillLineCategory` row;
-/// `flags & 0x2` drops it outright; and a line held at **rank 0** appears only if its flags admit
-/// it at this player's level. Note what is NOT a filter: the `Not Displayed` category (12). We used
-/// to hide on it, which happened to hide `GENERIC (DND)` for the right-looking reason — the client
-/// drops that line by its `0x2` bit like `Dual Wield` and the racials, and lists a category-12 line
-/// without `0x2` under its own header.
+/// The skills-pane feed: every `PLAYER_SKILL_INFO` line the reference lists, as a flat
+/// [`SkillEntry`] pushed through `set_skills` on change; the engine groups, sorts and folds.
 fn feed_skills(
     script: Option<NonSendMut<UiScript>>,
     self_store: Query<Ref<ObjectStore>, With<SelfPlayer>>,
@@ -337,15 +237,10 @@ fn feed_skills(
     let (Ok(store), Some(skill_lines)) = (self_store.single(), skill_lines.as_deref()) else {
         return;
     };
-    // The list is a pure function of our descriptor and the catalog: with both still and a
-    // push already made on this VM, nothing below can differ from what the memo holds. It used
-    // to build ~40 rows with a cloned name each, every frame, to compare and drop them.
+    // A pure function of the descriptor and the catalog: with both still, nothing can differ.
     if last.is_some() && !store.is_changed() && !lines_moved {
         return;
     }
-    // The display predicate reads the player's own race/class (the SkillRaceClassInfo row-match —
-    // the spellbook's own General-collapse inputs, `ui_spellbook::build_book`) and level (the
-    // untrained gate).
     let (race, class) = (
         store.0.unit_race().unwrap_or(0),
         store.0.unit_class().unwrap_or(0),
@@ -368,10 +263,8 @@ fn feed_skills(
     *last = Some(fresh);
 }
 
-/// One `PLAYER_SKILL_INFO` slot as the Skills tab's row — or `None` when the real client's list
-/// build would not list it at all ([`feed_skills`]'s doc for the citations; the order of the tests
-/// is the client's own, `0x4d2cb0`). Pure, so the whole display predicate is testable against real
-/// DBC data and a real character's skill block (`ui_script::skills_frame_tests`).
+/// One skill slot as a Skills-tab row, or `None` where the reference's list build (`0x4d2cb0`)
+/// skips it; the checks run in that build's order.
 pub(crate) fn skills_row(
     slot: &benilla_protocol::messages::PlayerSkillSlot,
     catalog: &benilla_formats::SkillLineCatalog,
@@ -383,14 +276,11 @@ pub(crate) fn skills_row(
         return None;
     }
     let id = u32::from(slot.skill_id);
-    // No SkillLine row — nothing to name it by, and the client lists nothing.
     let line = catalog.line(id)?;
-    // No row admitting this race/class → the client drops the line (its `!srci → continue`).
     let rc = catalog.race_class(id, race, class)?;
-    // A category that must really exist (the client's own null-row test) — and note the category
-    // ITSELF is never a filter: `Not Displayed` (12) is a header like any other.
+    // The category row must exist; no category filters, `Not Displayed` (12) included.
     let (category_name, category_order) = catalog.category(line.category_id)?;
-    // The hide bit: `Dual Wield`, the racials, the mount lines, `GENERIC (DND)`.
+    // Flag `0x2` hides `Dual Wield`, the racials, the mount lines and `GENERIC (DND)`.
     if rc.hidden() {
         return None;
     }
@@ -411,17 +301,14 @@ pub(crate) fn skills_row(
         category_name: category_name.to_string(),
         category_order,
         description: line.description.clone(),
-        // The client ANDs the DBC's unlearnable bit with a nonzero skill STEP (`0x4d3953`).
+        // The unlearnable bit and a nonzero skill step (`0x4d3953`).
         abandonable: slot.step != 0 && rc.unlearnable(),
         mono: rc.mono(),
     })
 }
 
-/// The abandon drain (the skills pane's unlearn button → the `UNLEARN_SKILL` popup's accept →
-/// the engine's `AbandonSkill` queue): each queued skill line id becomes one
-/// `CMSG_UNLEARN_SKILL`. Nothing else happens client-side — the server's `SetSkill(id, 0, 0)`
-/// returns as a `PLAYER_SKILL_INFO` delta and [`feed_skills`] re-pushes the shrunken list
-/// (vmangos `SkillHandler.cpp`; the gossip/trainer drains' own shape).
+/// Each queued `AbandonSkill` becomes one `CMSG_UNLEARN_SKILL`; nothing changes locally, as the
+/// server's `SetSkill(id, 0, 0)` (vmangos `SkillHandler.cpp:69`) returns as a skill-field update.
 fn drain_skill_abandons(script: Option<NonSendMut<UiScript>>, commands: Res<NetCommands>) {
     let Some(mut script) = script else {
         return;
@@ -432,15 +319,14 @@ fn drain_skill_abandons(script: Option<NonSendMut<UiScript>>, commands: Res<NetC
     }
 }
 
-/// Resolve one equipped slot's item template entry (`None` = empty slot, or the item object /
-/// template hasn't streamed yet).
+/// The item entry in an equipped slot; `None` for an empty slot or an item not yet streamed.
 fn slot_entry(store: &ObjectStore, objects: &Objects, slot0: u8) -> Option<u32> {
     let guid = store.0.player_inv_slot(slot0)?;
     objects.object(guid)?.object_entry()
 }
 
-/// The equipped item's weapon-skill line id: the vmangos `Item.cpp` subclass table for a class-2
-/// item, unarmed (162) for an empty hand or a non-weapon / unmapped subclass.
+/// The weapon-skill line for `slot0`: vmangos's subclass table (`Item.cpp:700`) for a weapon,
+/// Unarmed (162) for anything else.
 fn weapon_skill_id(
     store: &ObjectStore,
     objects: &Objects,
@@ -452,7 +338,7 @@ fn weapon_skill_id(
         return SKILL_UNARMED;
     };
     let Some(t) = items.template(entry, 0, commands) else {
-        return SKILL_UNARMED; // in flight — refined next frame when the template lands
+        return SKILL_UNARMED; // in flight: refined when the template lands
     };
     if t.class != ITEM_CLASS_WEAPON {
         return SKILL_UNARMED;
@@ -460,25 +346,8 @@ fn weapon_skill_id(
     weapon_subclass_skill(t.subclass).unwrap_or(SKILL_UNARMED)
 }
 
-/// Read a skill line's `(value + PERM bonus, TEMP bonus)` pair from the `PLAYER_SKILL_INFO`
-/// triplets; `(0, 0)` when the line isn't known (a ranged pair with nothing equipped).
-///
-/// **The split is not `(value, temp + perm)`, which is what this returned until decision 1812.**
-/// The reader every skill-shaped binding goes through is `0x5ea460`, and it writes
-/// `*out1 = value + permBonus` / `*out2 = tempBonus` — the permanent half folds into the BASE and
-/// only the temporary half is the modifier (the field reads are `+0x84C` `movzx` value,
-/// `+0x850` `movsx` temp — the block's only sign-extended read — and `+0x852` `movzx` perm).
-///
-/// The old shape had the right TOTAL and the wrong halves, which is why nothing caught it: the
-/// paper doll's Attack row prints `base` and colours `base + mod`, so a 300-value line with a +5
-/// talent and a +10 aura read "300" with a green +15 where the reference reads "305" with a green
-/// +10.
-///
-/// **The perm add is skipped when the value is 0** (`0x5ea4b4 jle`), so an unknown line stays a
-/// flat 0 rather than reading back a bare talent bonus.
-///
-/// Signed, because the sum is: `fild dword` on both pushes, and a perm malus deeper than the skill
-/// is representable on the wire even if no live server sends one.
+/// A skill's `(value + permanent bonus, temporary bonus)`, split as the reference's `0x5ea460`
+/// splits it; value 0 skips the permanent add (`0x5ea4b4`). Signed: a malus can exceed the value.
 fn skill_pair(store: &ObjectStore, skill_id: u32) -> (i32, i32) {
     for i in 0..PLAYER_SKILL_SLOTS {
         if let Some(s) = store.0.player_skill(i) {
@@ -496,22 +365,8 @@ fn skill_pair(store: &ObjectStore, skill_id: u32) -> (i32, i32) {
     (0, 0)
 }
 
-/// Build the **descriptor-only** combat-stats snapshot for ANY unit's store (field mappings pinned
-/// in decision 0208; the absent shapes are the descriptor's zero defaults, `percent` 1.0).
-///
-/// Nothing here reads inventory, templates or skill lines — so it is exactly the part a pet can go
-/// through ([`crate::ui_pet_doll`]). The `player_*` reads are deliberately left in:
-/// a creature has no PLAYER block, so they read absent and fall to their defaults, which is the
-/// right pet answer (no buff decomposition, `damage_percent` the divide-safe 1.0) rather than a
-/// second unit-only copy of the same twenty lines.
-///
-/// **That premise is load-bearing, and it was false until decision 1081.** A created store used to
-/// answer `Some(0)` for *any* absent index, PLAYER block or not, so on a live pet every default
-/// here was dead code — `damage_percent` came through as `0` and the ref's `damage / percent` made
-/// the pet sheet read `inf - inf` / `nan`. The protocol layer now bounds "absent = 0" to the
-/// object's own descriptor, which is what makes this shared core honest for a creature.
-/// A swing time in ms, with `0` (and absent) read as "no swing time yet" → the vanilla 2000. Never
-/// zero, because it is the reference's `damage / speed` divisor.
+/// A swing time in ms, with 0 or absent read as not yet streamed: the vanilla 2000, never zero,
+/// as the reference divides damage by it.
 fn base_swing(streamed: Option<u32>) -> u32 {
     streamed.filter(|&ms| ms != 0).unwrap_or(2000)
 }
@@ -524,9 +379,7 @@ pub(crate) fn unit_combat_stats(store: &ObjectStore) -> UnitCombatStats {
     let mut stat_neg = [0i32; 5];
     for i in 0..5u8 {
         stats[usize::from(i)] = f.unit_stat(i).unwrap_or(0) as i32;
-        // The four buff-split arrays are INT on the wire — they used to be read as
-        // f32 and rounded, which turned every real value into `0` and is why B165/B251's stats
-        // never went green.
+        // The buff-split arrays are integers on the wire, not floats.
         stat_pos[usize::from(i)] = f.player_posstat(i).unwrap_or(0);
         stat_neg[usize::from(i)] = f.player_negstat(i).unwrap_or(0);
     }
@@ -556,11 +409,8 @@ pub(crate) fn unit_combat_stats(store: &ObjectStore) -> UnitCombatStats {
         physical_bonus_pos: f.player_mod_damage_done_pos(0).unwrap_or(0),
         physical_bonus_neg: f.player_mod_damage_done_neg(0).unwrap_or(0),
         damage_percent: f.player_mod_damage_done_pct(0).unwrap_or(1.0),
-        // 2000 ms is the vanilla base swing when the field hasn't streamed — keeps the ref's
-        // damage/speed division finite on the first frames. **`0` counts as unstreamed**, not as a
-        // swing time: on a created store an absent in-block field reads `Some(0)` (the descriptor's
-        // zero), so a plain `unwrap_or` would never fire and `damage / speed` would go to infinity
-        // (the shape of the bug decision 1081 is about, one field over).
+        // `0` counts as unstreamed: a created store reads an absent in-block field as `Some(0)`,
+        // so a plain `unwrap_or` would leave `damage / speed` infinite.
         main_attack_time_ms: base_swing(f.unit_base_attack_time(0)),
         offhand_attack_time_ms: base_swing(f.unit_base_attack_time(1)),
         attack_power: f.unit_attack_power().unwrap_or(0),
@@ -572,32 +422,28 @@ pub(crate) fn unit_combat_stats(store: &ObjectStore) -> UnitCombatStats {
         ranged_attack_time_ms: base_swing(f.unit_ranged_attack_time()),
         ranged_min_damage: f.unit_min_ranged_damage().unwrap_or(0.0),
         ranged_max_damage: f.unit_max_ranged_damage().unwrap_or(0.0),
-        // The equipment- and skill-derived half is the PLAYER feed's ([`combat_stats`]); a unit
-        // with neither keeps these defaults.
+        // The equipment and skill half is `combat_stats`'s; any other unit keeps these defaults.
         has_offhand: false,
         has_wand: false,
         main_weapon_skill: (0, 0),
         offhand_weapon_skill: (0, 0),
         ranged_weapon_skill: (0, 0),
         defense_skill: (0, 0),
-        // Player fields — the player's own snapshot fills them (`combat_stats`); a pet has none.
         dodge_percent: 0.0,
         parry_percent: 0.0,
         block_percent: 0.0,
     }
 }
 
-/// The player's snapshot: [`unit_combat_stats`] plus the half only *we* have — the two values that
-/// need the equipped items' templates, and the three `PLAYER_SKILL_INFO` pairs.
+/// The player's snapshot: [`unit_combat_stats`] plus the equipment flags and the skill pairs.
 fn combat_stats(
     store: &ObjectStore,
     objects: &Objects,
     items: &Items,
     commands: &NetCommands,
 ) -> UnitCombatStats {
-    // The offhand-speed gate is an offhand *weapon* (a shield doesn't swing); the wand check is
-    // the ranged item's subclass. Both read the equipped item's template (ask-once in flight →
-    // false this frame, refined when it lands).
+    // The off hand counts only as a weapon (a shield does not swing); both flags read false
+    // until the template lands.
     let has_offhand = slot_entry(store, objects, SLOT_OFF_HAND)
         .and_then(|e| items.template(e, 0, commands))
         .is_some_and(|t| t.class == ITEM_CLASS_WEAPON);
@@ -616,18 +462,13 @@ fn combat_stats(
         has_offhand,
         has_wand,
         main_weapon_skill: skill_pair(store, main_skill),
-        // `UnitAttackBothHands`'s SECOND pair — the binding pushes one per hand,
-        // and `weapon_skill_id` already answers Unarmed for an empty or non-weapon off hand, which
-        // is what a shield or an empty hand reads as.
+        // `UnitAttackBothHands`'s second pair; a shield or an empty off hand reads Unarmed.
         offhand_weapon_skill: skill_pair(store, offhand_skill),
         ranged_weapon_skill: ranged_skill_id.map_or((0, 0), |id| skill_pair(store, id)),
-        // `UnitDefense`'s pair. Its repaint wire is `SKILL_LINES_CHANGED` (which the ref's
-        // `PaperDollFrame` registers, l.28, and `watch_skill_ups` already fires), NOT a
-        // `UNIT_DEFENSE` — the character sheet never registers one.
+        // `UnitDefense`'s pair. The 1.12 player sheet has no Defense row: its `SKILL_LINES_CHANGED`
+        // arm (`PaperDollFrame.lua:70-72`) redraws only the Attack row.
         defense_skill: skill_pair(store, SKILL_DEFENSE),
-        // `GetDodgeChance`/`GetParryChance`/`GetBlockChance` — player fields, so they live on the
-        // player's snapshot and not on the shared core a pet also fills. Already a percent on the
-        // wire; an unstreamed field is 0, which is the wire's own default.
+        // `GetDodgeChance`/`GetParryChance`/`GetBlockChance`: player fields, already percentages.
         dodge_percent: store.0.player_dodge_percentage().unwrap_or(0.0),
         parry_percent: store.0.player_parry_percentage().unwrap_or(0.0),
         block_percent: store.0.player_block_percentage().unwrap_or(0.0),
@@ -635,18 +476,9 @@ fn combat_stats(
     }
 }
 
-/// One equipped slot's view: entry + count from the item object, icon/name/quality/link/
-/// equip_slots from the ask-once template (icon `None` while the answer is in flight — the
-/// empty-slot art shows and the landing template flips the view, which fires
-/// `UNIT_INVENTORY_CHANGED`), `locked` from the app's `PendingItemOps` (decision 0208 phase 1b —
-/// the same feed `ui_items::feed_containers` reads for a bag slot's own `.locked`).
-///
-/// Takes the item's **guid and its live-API id** rather than a wire slot index, because the two
-/// bands that use it resolve their guid out of two different descriptor arrays: the doll's
-/// `PLAYER_FIELD_INV_SLOT_*` (live id = wire slot + 1, so equipment 1..=19 and the four
-/// equipped-bag icons 20..=23) and the bank bags' own `PLAYER_FIELD_BANK_BAG_SLOT_*` (live ids
-/// 64..=69). Everything past the guid — template, enchants, durability, the pending lock — is
-/// identical for both, which is the whole reason there is one function here and not two.
+/// One slot's view from the item object and its ask-once template (no icon while in flight).
+/// Keyed by guid and live id: the doll (`PLAYER_FIELD_INV_SLOT_*`, live id = slot + 1) and the
+/// bank bags (`PLAYER_FIELD_BANK_BAG_SLOT_*`, 64..=69) read their guids from different arrays.
 fn slot_view(
     objects: &Objects,
     items: &Items,
@@ -655,16 +487,13 @@ fn slot_view(
     commands: &NetCommands,
     pending: &PendingItemOps,
     names: &crate::names::NameCache,
-    // `ItemSubClass.dbc` — the count gate below reads its `DisplayFlags` bit 2. `None` (the DBC
-    // failed to load) leaves every bag at 0, which is the plain-bag answer and the safe one.
+    // `ItemSubClass.dbc`, for the count gate below; absent, every bag counts 0.
     sub_classes: Option<&crate::ui_items::ItemSubClasses>,
-    // The player's own `ChrClasses.dbc` relic flag — `find_equip_slot`'s second half (1803). It
-    // decides INVSLOT 17 both ways, so it reaches every fit-rule read rather than one of them.
+    // The player's `ChrClasses.dbc` relic flag, which decides `find_equip_slot`'s INVSLOT 17.
     has_relic_slot: bool,
     guid: u64,
     live_id: u32,
 ) -> Option<InvSlotView> {
-    // The item's own countdown cells — the bag feed's twin.
     let countdowns = objects.countdowns(guid);
     let enchant_ms: [Option<u64>; crate::items::ENCHANT_SLOTS] =
         std::array::from_fn(|s| countdowns.and_then(|c| c.enchant_remaining_display_ms(s as u32)));
@@ -672,36 +501,28 @@ fn slot_view(
     let obj = objects.object(guid)?;
     let entry = obj.object_entry()?;
     let count = obj.item_stack_count().unwrap_or(1).max(1);
-    // `OBJECT_FIELD_TYPE & TYPEMASK_CONTAINER` — the fork `GetInventoryItemCount` takes first
-    // (`0x4c87a6`), read off the object exactly as the reference reads it rather than inferred
-    // from the template.
+    // `OBJECT_FIELD_TYPE & TYPEMASK_CONTAINER`, read off the object as `GetInventoryItemCount`'s
+    // first fork reads it (`0x4c87a6`).
     let is_container = obj.is_container();
-    // A worn container's contents, collected while the bag object is borrowed — summed below if
-    // its subclass row carries the count gate.
     let content_guids: Vec<u64> = {
         let slots = obj.container_num_slots().unwrap_or(0).min(36) as u8;
         (0..slots).filter_map(|s| obj.container_slot(s)).collect()
     };
-    // The live durability pair (see the bag feed's twin) — the equipped tooltip's line.
     let durability = obj
         .item_durability()
         .zip(obj.item_max_durability())
         .filter(|&(_, max)| max > 0);
-    // ITEM_FIELD_FLAGS — the broken/alert laws' wrapped (0x08) and force-red (0x10) bits.
+    // `ITEM_FIELD_FLAGS`, for its wrapped (0x08) and force-red (0x10) bits.
     let flags = obj.item_flags().unwrap_or(0);
-    // `0x5da2c0` — soulbound, or carrying a binding enchant: the equipped tooltip's Soulbound
-    // override (the doll is exactly where it was reported). Read off the raw descriptor,
-    // never off the enchant LINES below.
+    // Soulbound or carrying a binding enchant (`0x5da2c0`), read off the raw descriptor, never off
+    // the enchant lines below.
     let already_bound = crate::items::already_bound(obj, rolls.enchants);
-    // ITEM_FIELD_CREATOR → the ask-once name cache — the equipped tooltip's "<Made by %s>"
-    // line (see the bag feed's twin in `ui_items::feed::resolve_slot`).
     let creator = obj
         .item_creator()
         .filter(|&g| g != 0)
         .and_then(|g| names.resolve(g, commands).map(str::to_string));
-    // The item's own 7 enchant slots — the equipped tooltip's enchant lines. OUR
-    // gear streams as item objects, so this is the full array; an INSPECTED player's tooltip sees
-    // only the 2 slots their descriptor broadcasts (`ui_inspect`), as the reference does.
+    // All seven enchant slots: our own gear streams as item objects, where an inspected player's
+    // descriptor carries only two.
     let enchants = crate::items::enchant_lines(
         (0..7).map(|s| {
             (
@@ -713,8 +534,8 @@ fn slot_view(
         }),
         rolls.enchants,
     );
-    // `ITEM_FIELD_RANDOM_PROPERTIES_ID` — the roll behind the NAME's "of the Bear" (1547); the
-    // roll's enchants are already in the slots read just above.
+    // `ITEM_FIELD_RANDOM_PROPERTIES_ID`, the roll behind an "of the Bear" name; its enchants are
+    // already in the slots above.
     let roll = obj.item_random_properties_id();
     let t = items.template(entry, guid, commands);
     let (name, quality, display, link, equip_slots, kind, bar_placeable) = match t {
@@ -734,16 +555,9 @@ fn slot_view(
         }
         None => (None, 0, 0, None, Vec::new(), (0, 0), false),
     };
-    // **A container's count is not its stack count** — `GetInventoryItemCount 0x4c8680` forks on
-    // the TYPEMASK bit and then on `ItemSubClass.dbc`'s `DisplayFlags & 0x4` (`0x4c881a`): set →
-    // `[CGContainer vtbl+0x10]` → `0x622130`, the sum of the contents' stack counts; clear → 0.
-    // In the shipped file that bit is on Soul Bag (1/1) and the Quiver class (11/0..3) only, so a
-    // quiver shows its arrows on the bag bar and an ordinary bag shows nothing at all.
-    //
-    // This REPLACES a `class == 11` guess whose own comment admitted it was inferred from what the
-    // reference UI looked like, and which was wrong twice over: it missed the soul bag, and it
-    // answered a plain bag's stack count (1) where the client answers 0 — the digit the director
-    // saw on `BankFrameBag1` after 1751's swap put a real `isBag` button in front of it.
+    // A container counts its contents' stacks when its subclass's `DisplayFlags` has 0x4, else 0
+    // (`GetInventoryItemCount` `0x4c8680`: `0x4c881a`, summed by `0x622130`); the bit is on Soul
+    // Bag (1/1) and the Quiver class (11/0..3) only, so a plain bag shows no count.
     let counts_contents = sub_classes.is_some_and(|c| c.0.display_flags(kind.0, kind.1) & 0x4 != 0);
     let contents_count = is_container.then(|| {
         if counts_contents {
@@ -779,9 +593,8 @@ fn slot_view(
     })
 }
 
-/// Total carried ammo matching `ammo_id`: the backpack's 16 slots + the four equipped bags'
-/// contents (`GetInventoryItemCount("player", ammo)` counts what you can actually shoot — bank
-/// and buyback never join).
+/// Carried ammo matching `ammo_id`, in the backpack and the four equipped bags; bank and buyback
+/// never count.
 fn ammo_count(store: &ObjectStore, objects: &Objects, ammo_id: u32) -> u32 {
     let mut n = 0;
     let mut add = |guid: Option<u64>| {
@@ -809,10 +622,8 @@ fn ammo_count(store: &ObjectStore, objects: &Objects, ammo_id: u32) -> u32 {
     n
 }
 
-/// Build the 24-wide inventory snapshot: `[0]` ammo, `[1..=19]` the equipment slots, `[20..=23]`
-/// the four equipped-bag icons (decision 0216 slice 2's bag bar — the bag ITEM occupying `INV_SLOT`
-/// 19..22, not its contents) — all the client's 1-based `GetInventorySlotInfo` ids over the
-/// 0-based inv-slot array.
+/// The 24-wide inventory snapshot by `GetInventorySlotInfo` id: 0 ammo, 1..=19 the equipment,
+/// 20..=23 the equipped bags themselves (inv slots 19..22).
 fn inventory_slots(
     store: &ObjectStore,
     objects: &Objects,
@@ -825,8 +636,6 @@ fn inventory_slots(
     sub_classes: Option<&crate::ui_items::ItemSubClasses>,
     classes: Option<&benilla_formats::ChrClasses>,
 ) -> InventorySlots {
-    // Resolved once from the player's own class byte, right here — the store is already in scope,
-    // so nothing new is threaded through the callers for the class half.
     let has_relic_slot = store
         .0
         .unit_class()
@@ -850,37 +659,28 @@ fn inventory_slots(
         inv[0] = Some(InvSlotView {
             durability: None,
             flags: 0,
-            // Ammo is the one doll slot with no item OBJECT behind it (it is built from the
-            // template alone), so the runtime-bind predicate has nothing to read.
+            // Ammo has no item object, only its template, so there is no bind to read.
             already_bound: false,
             item_id: ammo_id,
             icon,
             count: ammo_count(store, objects, ammo_id),
-            // Ammo is not a container — slot 0 is `GetInventoryItemCount`'s own `PLAYER_AMMO_ID`
-            // leg, which never reaches the TYPEMASK fork.
+            // `GetInventoryItemCount`'s `PLAYER_AMMO_ID` leg, before the container fork.
             contents_count: None,
             quality,
             name,
             link,
-            // The ammo slot is a named deferral this slice (decision 0208 phase 1b): no click
-            // path wires it, so there's nothing for a pending op to lock and nowhere for it to
-            // fit — both stay the inert default.
+            // No click or drag path reaches the ammo slot: nothing locks it, it fits nowhere.
             locked: false,
             equip_slots: Vec::new(),
-            // Ammo is a named deferral too: no drag path reaches the bar from this slot.
             bar_placeable: false,
             creator: None,
-            // Ammo carries no enchant slots to read: the wire never streams an ammo instance
-            // here, only the template id off the player descriptor — and for the same reason it
-            // carries no expiry countdown either (there is no instance guid to key one on).
+            // No ammo instance streams, only its template id: no enchants, no countdown.
             enchants: Vec::new(),
             duration_ms: None,
         });
     }
-    // Equipment 1..=19, then Bag0Slot..Bag3Slot (ids 20..23, PaperDollItemFrame.dbc-verified) —
-    // the bag bar's icon source: the equipped bag ITEM at INV_SLOT 19..22 (BAG_SLOT_FIRST../
-    // SLOT_BAG_FIRST in the container feed's own numbering). One band: the doll's live id is its
-    // wire slot plus one across the whole range.
+    // Equipment 1..=19, then `Bag0Slot`..`Bag3Slot` (20..=23 in `PaperDollItemFrame.dbc`), the
+    // equipped bag items: the live id is the inv slot plus one across the band.
     for live in 1..=23u32 {
         let Some(guid) = store.0.player_inv_slot(live as u8 - 1).filter(|g| *g != 0) else {
             continue;
@@ -902,14 +702,9 @@ fn inventory_slots(
     inv
 }
 
-/// The six bank-bag slots' views (live ids 64..=69) — the same [`slot_view`] resolution as any
-/// doll slot, off the descriptor's own `PLAYER_FIELD_BANK_BAG_SLOT_*` guids.
-///
-/// These are inventory slots, not bank-*window* state: the reference's bank paints and picks up a
-/// bank bag through `GetInventoryItemTexture`/`PickupBagFromSlot` at
-/// `BankButtonIDToInvSlotID(i, 1)` (BankFrame.lua:28-35, 194-198), and the guids stream in the
-/// player descriptor whether or not a banker is open. So they ride the inventory feed, beside the
-/// doll snapshot, rather than the `BankState` the bank window pushes.
+/// The six bank-bag slots' views (live ids 64..=69). They are inventory slots, streamed whether
+/// or not a banker is open, and the stock bank reads them through `BankButtonIDToInvSlotID(i, 1)`
+/// (`BankFrame.lua:28-35, 199-204`), so they ride this feed rather than the bank window's state.
 fn bank_bag_slots(
     store: &ObjectStore,
     objects: &Objects,
@@ -935,9 +730,7 @@ fn bank_bag_slots(
             pending,
             names,
             sub_classes,
-            // A bank bag slot holds a BAG, and `find_equip_slot(INVTYPE_BAG)` answers the four
-            // bag slots whatever this says — the flag decides INVSLOT 17 alone, which no item in
-            // this band can reach. `false` here is provable, not a default.
+            // A bank bag slot holds a bag; the relic flag decides INVSLOT 17 alone.
             false,
             guid,
             BANK_BAG_LIVE_FIRST + i as u32,
@@ -946,21 +739,13 @@ fn bank_bag_slots(
     bags
 }
 
-/// `BankButtonIDToInvSlotID(1, isBag)` — the live-API id of the FIRST bank-bag slot. The band is
-/// six wide (`BANK_BAG_SLOT_COUNT`).
+/// `BankButtonIDToInvSlotID(1, isBag)`: the first of the six bank-bag slots' live ids.
 const BANK_BAG_LIVE_FIRST: u32 = 64;
 
-/// Fire the paper doll's per-group repaint events for one unit's snapshot transition, `arg1 =
-/// token` — the [`crate::ui_unit::fire_transitions`] shape, for the combat-stats surface.
-///
-/// The groups ARE the ref's own event registrations (`PaperDollFrame.lua:14-28`, which
-/// `PetPaperDollFrame.lua:12-20` repeats verbatim for the pet page), so each event fires exactly
-/// when a value some handler of it reads has moved; `prev == None` (a first snapshot) counts as a
-/// transition of every group, the `ui_unit` rule.
-///
-/// Shared by both feeds rather than transcribed twice: the pet page calls the same
-/// `PaperDollFrame_Set*` helpers off the same events, so two copies of this grouping could only
-/// ever drift into one page repainting on an edge the other misses.
+/// Fire the paper doll's repaint events for one unit's snapshot transition, `arg1 = token`: the
+/// eight unit-stat events both pages register (`PaperDollFrame.lua:14-28`,
+/// `PetPaperDollFrame.lua:12-20`), each when a value its handlers read moved. A first snapshot
+/// fires them all.
 pub(crate) fn fire_stat_transitions(
     script: &mut UiScript,
     token: &str,
@@ -1054,91 +839,63 @@ pub(crate) fn fire_stat_transitions(
 }
 
 pub(crate) fn feed_char(
-    // `ChrClasses.dbc` field 16, for the fit rule's relic half — `ui_items::find_equip_slot`
-    // (1803). Absent client data reads every class as an ordinary ranged wielder.
+    // `ChrClasses.dbc` field 16, the relic flag `find_equip_slot` reads; absent, no class has one.
     classes: Option<Res<crate::chr_classes::ChrClassTable>>,
     script: Option<NonSendMut<UiScript>>,
-    // The inventory read (2334): the self store, its change tick, the object lookup and the item
-    // entities' change watch.
     mut inv: crate::items::Inventory,
     items: Res<Items>,
     icons: Option<Res<ItemDisplays>>,
-    // `SpellItemEnchantment`'s name column — the equipped tooltip's enchant lines.
     enchants: Option<Res<crate::items::Enchants>>,
-    // `ItemRandomProperties` — the roll behind an equipped item's "of the Monkey" name (1547).
     props: Option<Res<crate::items::RandomProperties>>,
     commands: Res<NetCommands>,
     mut feed: ResMut<CharFeedState>,
     mut booth: ResMut<PaperDollBooth>,
     pending: Res<PendingItemOps>,
     names: Res<crate::names::NameCache>,
-    // `ItemSubClass.dbc` — `GetInventoryItemCount`'s bag gate (`slot_view`'s own note).
+    // `ItemSubClass.dbc`, for `GetInventoryItemCount`'s container count bit.
     sub_classes: Option<Res<crate::ui_items::ItemSubClasses>>,
 ) {
     let Some(mut script) = script else {
         return;
     };
-    // The pane owns the yaw and the booth mirrors it. Read off the widget's own
-    // `SetRotation` state since decision 1751 put the reference's `PaperDollFrame.xml` on the
-    // chain: the stock file declares a real `<PlayerModel name="CharacterModelFrame">` and drives
-    // it with `Model_OnLoad`/`Model_Rotate*`/`Model_OnUpdate`, where ours used to call a
-    // benilla-named `BenillaPaperDollModel_SetFacing` into a scalar on the VM.
-    // Write-if-different: an unconditional write would mark the booth changed every frame.
+    // The stock `CharacterModelFrame` owns the yaw (`Model_Rotate*` call `SetRotation`); the booth
+    // mirrors it, written only on change so it is not marked changed every frame.
     let yaw = script.model_pane_facing("CharacterModelFrame");
     if booth.yaw != yaw {
         booth.yaw = yaw;
     }
 
-    // Resolved against THIS VM (1290/1291): a `/reload`'s replacement reads a fresh memo, so both
-    // snapshots below re-push and their events re-fire for it.
+    // Per VM: after a `/reload` both snapshots re-push and their events re-fire.
     let (memo, vm_reset) = feed.vm.get_reset(&script);
 
     let Some(store) = inv.self_store.iter().next() else {
-        // The self store's absence is NO DATA, never "the player has nothing equipped". The one
-        // window this branch runs with a previously-fed VM is the logout despawn frames —
-        // `SMSG_LOGOUT_COMPLETE` despawns the entity a full Update before `OnExit(InWorld)` runs
-        // the shutdown, and the `PLAYER_LOGOUT` handlers that follow still read equipment
-        // (`GetInventoryItemLink("player", …)` at logout is a stock addon save pattern; the
-        // reference keeps it valid through its shutdown). The clear this branch used to push was
-        // a pre-1290 relic: one VM then lived across logouts and the next character must not see
-        // this one's inventory — now the VM dies with the session and a fresh one starts empty
-        // ([`crate::ui_script::end_ui_session`]), so the clear only ever fired into a VM about to
-        // run its logout handlers. Same law as the container feed
-        // (`ui_items::feed::apply_container_source`).
+        // No self store is no data, not an empty inventory: it happens in the logout frames, where
+        // `PLAYER_LOGOUT` handlers still read equipment, so nothing is cleared (the next session
+        // starts a fresh VM).
         return;
     };
 
-    // `GetWeaponEnchantInfo`'s whole data path (the buff bar's TemporaryEnchantFrame row, plus 8
-    // corpus addons). Pushed EVERY frame and change-gated by nothing — including the 1439 gate
-    // below: the remaining time is a live countdown, so riding a snapshot diff would fire
-    // `UNIT_INVENTORY_CHANGED` on every tick. The reference recomputes it per call for exactly
-    // the same reason (`0x5d9d00`). Hoisted above the gate (it used to sit last): the push is
-    // order-free of the two snapshots, and a handler they fire reads the fresher value this way.
-    // Bound before the snapshot build below shadows `inv` with the pushed slot array.
+    // `GetWeaponEnchantInfo`'s data, pushed every frame outside the gate: the remaining time is a
+    // live countdown, which the reference also recomputes per call (`0x5d9d00`). Pushed first, so
+    // handlers the snapshots fire read the fresh value.
     let objects = &inv.objects;
     script.set_weapon_enchants(
         weapon_enchant(store, objects, EQUIPMENT_SLOT_MAINHAND),
         weapon_enchant(store, objects, EQUIPMENT_SLOT_OFFHAND),
     );
 
-    // The gate (1439), around the two snapshot builds only: the self descriptor (equipment
-    // slots, every stat field), the item stores behind the equipped templates and enchant
-    // names, the two catalogs, and the pending-op locks (held open while in flight; the
-    // resolving frame's own field update moves the object epoch).
+    // The gate, around the two snapshot builds only.
     let objects_moved = inv.changes.moved();
     let templates_moved = memo.items_templates.moved(items.template_epoch());
     let names_moved = memo.names_generation.moved(names.generation());
-    // The DISPLAY epoch, not a per-frame hold-open: the snapshot reads second-floored countdowns
-    // (`enchant_remaining_display_ms`), so it can only differ when this counter steps — once a
-    // second per ticking enchant, plus one final step at the elapse. Holding the gate open on
-    // `live_enchant_deadlines() > 0` (the first 1439 shape) rebuilt both snapshots and fired
-    // `UNIT_INVENTORY_CHANGED` at frame rate for the whole life of a poison.
+    // The display epoch, not a per-frame hold-open: the views read whole-second countdowns, so
+    // they can change only when it steps.
     let deadlines_moved = memo.enchant_deadlines.moved(inv.changes.countdown_steps());
     let self_changed = !inv.self_changed.is_empty();
-    // `is_added` for the icon catalog: the feeds read only its load-once icon column;
-    // its model-cache half churns every frame (the containers gate's own note).
+    // `is_added`, not `is_changed`: only the load-once icon column is read, and the model-cache
+    // half churns every frame.
     let icons_added = icons.as_ref().is_some_and(|r| r.is_added());
-    // Both DBC catalogs load once, at startup — one input covers the pair.
+    // Both catalogs load once at startup; one input covers the pair.
     let enchants_changed = enchants.as_ref().is_some_and(|r| r.is_changed())
         || props.as_ref().is_some_and(|r| r.is_changed());
     let pending_held = !pending.is_empty();
@@ -1177,9 +934,7 @@ pub(crate) fn feed_char(
     let stats = combat_stats(store, objects, &items, &commands);
     if memo.last_stats.as_ref() != Some(&stats) {
         gate.audit("feed_char", "the combat-stats snapshot");
-        // PUSH before firing: event dispatch runs the Lua handlers synchronously, so the snapshot
-        // must already be in the VM when they repaint (the ui_unit rule — a fire-first ordering
-        // paints the OLD values and, being transition-gated, never corrects itself).
+        // Push before firing: handlers run synchronously and would paint the old values.
         let prev = memo.last_stats.take();
         script.set_player_combat_stats(Some(stats.clone()));
         fire_stat_transitions(&mut script, "player", prev.as_ref(), &stats);
@@ -1215,14 +970,10 @@ pub(crate) fn feed_char(
         &names,
         sub_classes.as_deref(),
     );
-    // One transition for both bands: they are the same descriptor read at two offsets, and
-    // `UNIT_INVENTORY_CHANGED` is the one repaint signal either has. Pushing them separately
-    // would fire it twice for a single wire update.
-    // `PLAYERBANKSLOTS_CHANGED`'s two producers, planned off the OLD memo before the push
-    // replaces it. `false` = P1, the player-descriptor path (`0x5ddd6e`, no arguments — a bag
-    // arriving, leaving or exchanged); `true` = P2, the item-object path (`0x4c728d`,
-    // `arg1 = "player"` — the same bag, its own fields changed). The full account and why the guid
-    // is the only sound discriminator are at `ui_items::feed`'s vault twin.
+    // Both bands push under one `UNIT_INVENTORY_CHANGED`: one wire update, one event.
+    // `PLAYERBANKSLOTS_CHANGED`'s two producers, planned off the old memo: `false` is the
+    // descriptor watcher (`0x5ddd6e`: a bag arrived, left or was swapped), `true` the item-object
+    // path (`0x4c728d`: the same bag's own fields changed).
     let bank_bag_guids: [u64; BANK_BAG_SLOT_COUNT] =
         std::array::from_fn(|i| store.0.player_bank_bag_slot(i as u8).unwrap_or(0));
     let repainted: Vec<bool> = (0..BANK_BAG_SLOT_COUNT)
@@ -1244,29 +995,14 @@ pub(crate) fn feed_char(
             "UNIT_INVENTORY_CHANGED",
             vec![ScriptValue::Str("player".to_string())],
         );
-        // The six bank BAG buttons' only repaint signal (1771). `BankItemButtonTemplate`'s
-        // `<OnUpdate>` is `CursorOnUpdate()` — despite its name, `BankFrameItemButton_OnUpdate`
-        // (the icon/count/lock repaint) is reached ONLY from `BankFrameItemButton_OnEvent`, and
-        // only for `PLAYERBANKSLOTS_CHANGED` and `BANKFRAME_OPENED`. Without this the buttons
-        // showed whatever was true at the last unrelated vault-slot event: a bag dropped in never
-        // appeared, one moved between slots stayed drawn in its old one, and a lock left over from
-        // the drop stood greyed until the window was reopened.
-        //
-        // The VAULT band's copy of this event is `ui_items::feed_containers`' — each feed
-        // announces the band whose data it owns, and `feed_char` is ordered first, so both fire
-        // after their own push.
-        //
-        // **Which arguments it carries depends on WHICH producer fired** (folded back in 2140).
-        // The descriptor watcher `0x5ddd6e` calls `FrameScript_SignalEvent 0x703e50`, an
-        // `__fastcall(ecx = id)` with a plain `ret` and no vararg push — zero Lua values; the
-        // item-object notifier `0x4c728d` goes through `SignalEvent2` and pushes the literal
-        // string `"player"`. benilla fired the argless one for both until 2140. An event is fired
-        // per changed slot, as the watcher does — the slot travels in *how many* times it fires,
-        // never in an argument (1776).
+        // The bank bag buttons repaint only on this and `BANKFRAME_OPENED`
+        // (`BankFrame.lua:206-208`). One event per changed slot: the descriptor watcher signals
+        // through `0x703e50` with no arguments, the item path through `SignalEvent2` with
+        // `"player"`.
         memo.last_inv = Some(inv);
         memo.last_bank_bags = Some(bank_bags);
     }
-    // Outside the push block, because the identical-bag swap it exists for moves no view at all.
+    // Outside the push block: an identical-bag swap moves no view at all.
     if !repainted.is_empty() {
         gate.audit("feed_char", "a bank bag slot transition");
     }
@@ -1280,8 +1016,7 @@ pub(crate) fn feed_char(
     }
 }
 
-/// Whether two bank-bag views hold the same ITEM — everything but `locked`, which is
-/// `ITEM_LOCK_CHANGED`'s business and must not masquerade as a slot change.
+/// Whether two bank-bag views hold the same item; `locked` is `ITEM_LOCK_CHANGED`'s business.
 fn same_item(a: Option<&InvSlotView>, b: Option<&InvSlotView>) -> bool {
     match (a, b) {
         (None, None) => true,
@@ -1296,32 +1031,25 @@ fn same_item(a: Option<&InvSlotView>, b: Option<&InvSlotView>) -> bool {
     }
 }
 
-/// The client's own 0-based `EQUIPMENT_SLOT_*` ids for the two weapon slots — the numbers
-/// `GetWeaponEnchantInfo 0x4c9790` hands its container lookup (`push 0xf` at `0x4c97c3`,
-/// `push 0x10` at `0x4c988b`). The live-API `GetInventorySlotInfo` ids the *frames* use are one
-/// higher (16 `MainHandSlot`, 17 `SecondaryHandSlot`).
+/// The 0-based weapon slots `GetWeaponEnchantInfo` (`0x4c9790`) reads (`0x4c97c3`, `0x4c988b`);
+/// the frames' live ids are one higher.
 const EQUIPMENT_SLOT_MAINHAND: u8 = 15;
 const EQUIPMENT_SLOT_OFFHAND: u8 = 16;
 
-/// `ITEM_FIELD_ENCHANTMENT`'s temporary slot (0 = permanent, 1 = temporary, 2..6 random property)
-/// — the slot index the reference passes to its remaining-time reader (`push 0x1`, `0x4c9828`).
+/// The temporary enchantment slot (0 permanent, 2..6 random properties), as the reference's
+/// remaining-time read passes it (`0x4c9828`).
 const TEMP_ENCHANTMENT_SLOT: u8 = 1;
 
-/// One weapon's temporary enchantment for [`benilla_ui::script::WeaponEnchant`], read off the
-/// equipped item object.
-///
-/// **The RAW enchantment triple, not [`InvSlotView::enchants`]**: that view is tooltip-shaped and
-/// drops both an id the `SpellItemEnchantment` catalog cannot name and the whole `Flags & 0x2`
-/// print-no-line family (the totem weapon imbues), which is exactly the set the
-/// enchant row exists to show. The binary's gate is `[descriptor+0x4c] != 0`, the id and nothing
-/// else, and `item_enchant` already answers `None` for a zero id.
+/// One weapon's temporary enchantment, read off the raw descriptor rather than
+/// [`InvSlotView::enchants`], which drops unnamed ids and the totem imbues; the reference's only
+/// gate is a nonzero id (`[descriptor+0x4c]`).
 fn weapon_enchant(
     store: &ObjectStore,
     objects: &Objects,
     slot0: u8,
 ) -> Option<benilla_ui::script::WeaponEnchant> {
     let guid = store.0.player_inv_slot(slot0)?;
-    // The *deadline* read, not the tooltip's: an elapsed timer must answer 0, not "no timer".
+    // The deadline read, not the tooltip's: an elapsed timer answers 0, not "no timer".
     let remaining_ms = objects
         .countdowns(guid)
         .and_then(|c| c.enchant_deadline_ms(u32::from(TEMP_ENCHANTMENT_SLOT)));
@@ -1339,24 +1067,14 @@ mod tests {
     use benilla_protocol::messages::ObjectFields;
     use bevy::ecs::system::RunSystemOnce;
 
-    /// **The skill pair splits `(value + PERM, TEMP)`, not `(value, temp + perm)`** — the reader
-    /// every skill-shaped binding goes through (`0x5ea460`).
-    ///
-    /// It reported the right TOTAL and the wrong halves until decision 1812, which is exactly why
-    /// nothing caught it: `UnitAttackBothHands`'s caller prints the base and colours `base + mod`,
-    /// so both shapes agree on the number a player adds up and disagree on the two they read. The
-    /// fixture below is the one the record quotes — 300 / +5 talent / +10 aura — where the
-    /// reference shows **305** with a green **+10** and ours showed 300 with a green +15.
-    ///
-    /// The zero-value leg is the other half of the law (`0x5ea4b4 jle`): an unknown line must stay
-    /// a flat 0 rather than reading back a bare talent bonus.
+    /// The reference's split (`0x5ea460`); a value-0 line skips the permanent add (`0x5ea4b4`).
     #[test]
     fn a_skill_pair_folds_the_permanent_bonus_into_the_base() {
-        /// `PLAYER_SKILL_INFO_1_1` — id|step, then value|max, then temp|perm, per slot.
+        /// `PLAYER_SKILL_INFO_1_1`: id|step, value|max, temp|perm per slot.
         const F_SKILL: u16 = 718;
         let pair = |lo: u16, hi: u16| u32::from(lo) | (u32::from(hi) << 16);
         // Slot 0: Defense (95) at 300, +10 temporary, +5 permanent.
-        // Slot 1: Swords (43) at 0 — known id, no value, a +7 permanent that must NOT surface.
+        // Slot 1: Swords (43) at 0, with a +7 permanent that must not surface.
         let store = ObjectStore(ObjectFields::from_pairs(&[
             (F_SKILL, pair(95, 0)),
             (F_SKILL + 1, pair(300, 300)),
@@ -1389,19 +1107,17 @@ mod tests {
         assert_eq!(skill_pair(&cursed, 95), (-5, 0));
     }
 
-    /// `PLAYER_FIELD_BANK_BAG_SLOT_1` — bank bag slot 0's guid pair (protocol test `bank.rs`).
+    /// `PLAYER_FIELD_BANK_BAG_SLOT_1`, bank bag slot 0's guid pair.
     const F_BANK_BAG_1: u16 = 612;
     /// `OBJECT_FIELD_ENTRY` on the item object.
     const F_OBJECT_ENTRY: u16 = 3;
-    /// `ITEM_FIELD_STACK_COUNT` — one of the six item fields the reference's own watcher covers.
+    /// `ITEM_FIELD_STACK_COUNT`, one of the six item fields the reference's watcher covers.
     const F_ITEM_STACK_COUNT: u16 = 14;
-    /// "Traveler's Backpack" — any container entry; the feed only needs it to resolve.
+    /// Any container entry ("Traveler's Backpack"); the feed only needs it to resolve.
     const BAG_ENTRY: u32 = 4500;
     const BAG: u64 = 0x4000_0000_0000_0abc;
 
-    /// Re-stream one live item object's fields — the wire's values delta, which is what moves
-    /// the item entity's own change tick (2334); the create-time spawn is
-    /// [`crate::items::test_spawn_item`].
+    /// Re-stream a live item object's fields as a values update does, moving its change tick.
     fn restream(app: &mut App, guid: u64, fields: ObjectFields) {
         let entity = app
             .world()
@@ -1413,8 +1129,7 @@ mod tests {
         *app.world_mut().get_mut::<ObjectStore>(entity).unwrap() = ObjectStore(fields);
     }
 
-    /// A world with the player carrying `bag` (or nothing) in the FIRST bank bag slot, and a
-    /// recorder frame registered for the two events the reference's bank bag buttons repaint on.
+    /// A world with `bag`, or nothing, in the first bank bag slot, and a frame recording events.
     fn world_with_bank_bag(bag: Option<u64>) -> App {
         let (tx, _rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
@@ -1434,7 +1149,7 @@ mod tests {
         };
         app.world_mut().spawn((SelfPlayer, ObjectStore(fields)));
         if let Some(g) = bag {
-            // The bag is an object in the one index (2334), its template still on `Items`.
+            // The bag is an item entity; its template lives on `Items`.
             crate::items::test_spawn_item(
                 app.world_mut(),
                 g,
@@ -1471,12 +1186,6 @@ mod tests {
         out
     }
 
-    /// **A bank bag slot's only repaint signal** (1771). `PLAYERBANKSLOTS_CHANGED` is the one
-    /// event that reaches `BankFrameItemButton_OnUpdate` for the six bag buttons —
-    /// `UNIT_INVENTORY_CHANGED`, which this feed already fired, is not registered by them at all,
-    /// and `ITEM_LOCK_CHANGED` repaints the desaturation without ever touching the icon. Without
-    /// this fire a bag dropped into the bank never appeared, and one moved between slots stayed
-    /// drawn where it had been.
     #[test]
     fn a_bank_bag_slot_filling_fires_playerbankslots_changed() {
         let mut app = world_with_bank_bag(Some(BAG));
@@ -1493,18 +1202,14 @@ mod tests {
         );
     }
 
-    /// **The second producer**. The same bag, its own `ITEM_FIELD_STACK_COUNT`
-    /// moving, is not the descriptor path — it is `0x4c7180`'s item-object path, which goes
-    /// through `SignalEvent2` and pushes the unit token `"player"`. benilla fired the argless
-    /// descriptor shape for both.
+    /// A bag's own field moving is the item-object path (`0x4c7180`), which pushes `"player"`.
     #[test]
     fn a_bank_bags_own_field_moving_fires_the_item_object_producer() {
         let mut app = world_with_bank_bag(Some(BAG));
         app.world_mut().run_system_once(feed_char).unwrap();
         assert!(seen(&mut app).contains(&"PLAYERBANKSLOTS_CHANGED nil".to_string()));
 
-        // The SAME bag guid, restacked. Only the item object moved — a values update on the
-        // live item entity, which is what the wire's own delta is (2334).
+        // The same bag guid, restacked: only the item object moved.
         restream(
             &mut app,
             BAG,
@@ -1518,17 +1223,13 @@ mod tests {
         );
     }
 
-    /// Two IDENTICAL bags exchanged between two bank bag slots — the case the pushed view cannot
-    /// see, because two instances of one bag model push the same `InvSlotView`. The reference
-    /// watches the descriptor GUIDs, so it fires the argless event twice; benilla, diffing the
-    /// view, fired nothing at all. Same shape as 1777's `BAG_CLOSED`, one band over.
+    /// Identical bags push identical views; the reference watches the guids and fires twice.
     #[test]
     fn two_identical_bags_swapped_between_bank_bag_slots_still_announce() {
         let mut app = world_with_bank_bag(Some(BAG));
         // A second, byte-identical bag in bank bag slot 2.
         const BAG2: u64 = 0x4000_0000_0000_0abd;
-        // The two bank bag slots' guids, rewritten wholesale — `ObjectFields` has no setter, and
-        // a fresh store is what a descriptor update produces anyway.
+        // Rewritten wholesale: `ObjectFields` has no setter.
         let set_slots = |app: &mut App, a: u64, b: u64| {
             let mut q = app
                 .world_mut()
@@ -1565,10 +1266,7 @@ mod tests {
         );
     }
 
-    /// The other half of the same rule: a LOCK flip is not a slot change. The reference has a
-    /// separate event for it (`ITEM_LOCK_CHANGED`, fired by `ui_items::feed_containers` off
-    /// `LockTransitions`), and firing the repaint event for it too would announce a change to the
-    /// item that did not happen.
+    /// A lock flip is `ITEM_LOCK_CHANGED`'s, not a slot change.
     #[test]
     fn a_lock_flip_alone_does_not_fire_the_repaint_event() {
         let mut app = world_with_bank_bag(Some(BAG));
@@ -1596,10 +1294,8 @@ mod tests {
         );
     }
 
-    /// The gate hole behind the stuck grey: the frame an op's lock CLEARS, `!pending.is_empty()`
-    /// reads false and every "is anything in flight?" input closes — so a feed that had pushed
-    /// `locked: true` must have some other reason to run, or the stale lock stands forever.
-    /// [`PendingItemOps::epoch`] is that reason.
+    /// The frame a lock clears, `!pending.is_empty()` already reads false;
+    /// [`PendingItemOps::epoch`] is what still runs the feed.
     #[test]
     fn the_frame_a_lock_clears_still_repushes_the_slot() {
         let mut app = world_with_bank_bag(Some(BAG));
@@ -1619,8 +1315,7 @@ mod tests {
             "in flight, the slot reads locked"
         );
 
-        // The server answers with a refusal: the lock clears without any object moving, which is
-        // exactly the case `!is_empty()` cannot see.
+        // A refusal: the lock clears without any object moving.
         let cleared = app
             .world_mut()
             .resource_mut::<PendingItemOps>()

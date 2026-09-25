@@ -1,37 +1,16 @@
-//! The reputation pane's app half: resolve the player's wire reputation slots against
-//! `Faction.dbc`, push the flat snapshot into the VM's reputation seam
-//! ([`benilla_ui::script::ReputationState`]), fire `UPDATE_FACTION` on a change, and drain the
-//! pane's three outbound verbs back onto the wire.
+//! The reputation pane's feed: the player's wire reputation slots resolved against `Faction.dbc`,
+//! pushed as one snapshot with `UPDATE_FACTION` on a change, and the pane's three verbs sent.
 //!
-//! The seam's module doc (`benilla-ui`'s `script::reputation`) is the display law; this file is the
-//! **data** law it consumes, and there are exactly three pieces of it:
+//! A faction is a row when it has a reputation slot and one of its four race/class mask slots
+//! fits the player; the client adds it inside the accept block that picks the base value
+//! (`0x4d5555`). The pane lists only rows with `VISIBLE`, which `SMSG_SET_FACTION_VISIBLE` sets,
+//! but unlisted rows are pushed too: they carry the header names, and only one of the five header
+//! factions is `VISIBLE`. Flag `0x08` is `HEADER`, not "force invisible".
 //!
-//! 1. **Which factions are rows.** A `Faction.dbc` row participates iff it has a reputation slot
-//!    (`reputationIndex >= 0`) **and at least one of its four race/class mask slots fits the
-//!    player** — the client's own membership gate at `0x4d5555`, where the add call sits inside the
-//!    accept block of the same loop that picks the base value. Whether the pane then *lists* it is
-//!    the single flag `VISIBLE`, off until the player first meets them — which is why
-//!    `SMSG_SET_FACTION_VISIBLE` has to be applied (`net::session::reputation_visible`).
-//!
-//!    **Unlisted factions are pushed anyway, carrying `visible: false`.** They are how the pane's
-//!    headers learn their names: all five header factions carry `HEADER` (`0x08`) and only one of
-//!    them carries `VISIBLE` as well, so filtering on visibility would group the tree correctly and
-//!    then label every header with an empty string.
-//! 2. **The standing.** The wire standing EXCLUDES the DBC race/class base value; the total the
-//!    pane ranks is `base_for(race, class) + wire`. Verified on the server side, which is the side
-//!    that authors both numbers: vmangos stores `faction.Standing = standing - BaseRep`
-//!    (`ReputationMgr::SetOneFactionReputation`) and reports
-//!    `GetBaseReputation(entry) + state->Standing` (`GetReputation`).
-//! 3. **The rank window.** [`benilla_formats::reputation_rank`] ranks the total on the 0..=7 scale
-//!    (shared with the unit-reaction decode, so the pane and the nameplate can never disagree); the
-//!    absolute floor/ceiling of that rank are [`RANK_BOUNDS`] — byte-for-byte the client's own
-//!    `.rdata` table at `0x80928c`. The Lua tuple's `standingID` is the rank plus one.
-//!
-//! And one flag reading that is easy to get wrong and was: **`0x08` is `HEADER`, not
-//! "force-invisible"** — see `benilla_formats::faction_flags`. `canToggleAtWar` is
-//! `!PEACE_FORCED && standing >= -3000`; the client's toggle enforces more than it reports, but the
-//! extra conditions (in combat, and the floor applying only toward peace) are the app's to add if
-//! the pane ever needs them.
+//! The wire standing excludes the race/class base, so the pane's total is base plus wire: vmangos
+//! stores `standing - BaseRep` (`ReputationMgr.cpp:261`) and reports the sum
+//! (`ReputationMgr.cpp:82`). The rank is [`benilla_formats::reputation_rank`], shared with the
+//! unit-reaction decode so the pane and the nameplate agree.
 
 use bevy::prelude::*;
 
@@ -41,15 +20,12 @@ use crate::net::{ClientCommand, NetCommands, ObjectStore, Reputations, SelfPlaye
 use crate::target::Factions;
 use crate::ui_script::{UiFeed, UiInput};
 
-/// The cumulative standing edges of the eight ranks: `RANK_BOUNDS[r]` is rank `r`'s absolute floor
-/// and `RANK_BOUNDS[r + 1]` its ceiling. The widths between them are vmangos's `PointsInRank`
-/// (36000, 3000, 3000, 3000, 6000, 12000, 21000, 1000) walked up from the −42000 floor, so this
-/// table and [`benilla_formats::reputation_rank`]'s thresholds are the same numbers read two ways —
-/// `rank_bounds_agree_with_the_rank_function` pins them together.
+/// Rank `r` spans `RANK_BOUNDS[r]..RANK_BOUNDS[r + 1]`, the client's table at `0x80928c`: vmangos's
+/// `PointsInRank` walked up from -42000 (`ReputationMgr.cpp:30`), the edges
+/// [`benilla_formats::reputation_rank`] ranks by. The Lua `standingID` is the rank plus one.
 const RANK_BOUNDS: [i32; 9] = [-42000, -6000, -3000, 0, 3000, 9000, 21000, 42000, 43000];
 
-/// Adds the reputation pane's feed and its outbound drain. The bindings live in `benilla-ui`'s
-/// `script::reputation`; this supplies their data (and the event) from ECS state.
+/// The reputation pane's feed and outbound drain; the bindings are `benilla-ui`'s.
 pub(crate) struct UiReputationPlugin;
 
 impl Plugin for UiReputationPlugin {
@@ -64,15 +40,8 @@ impl Plugin for UiReputationPlugin {
     }
 }
 
-/// One faction's row, or `None` when the faction is not in the player's list at all — no reputation
-/// slot, no name, or no race/class mask slot that fits them.
-///
-/// A faction the pane declines to *draw* is **not** a `None`: that answer rides on
-/// [`FactionEntry::visible`], because an unlisted row is still the source of a header's name (see
-/// the module doc).
-///
-/// Split out as a pure function for the same reason [`crate::ui_char::skills_row`] is: the display
-/// predicate is the half a test can drive against the real DBC without standing up a VM.
+/// One faction's row, or `None` when it is not in the player's list at all; a row the pane does
+/// not draw is still a row, with `visible: false`.
 pub(crate) fn reputation_row(
     faction_id: u32,
     info: &benilla_formats::FactionInfo,
@@ -103,32 +72,19 @@ pub(crate) fn reputation_row(
         visible: flags & flag::VISIBLE != 0,
         is_header: flags & flag::HEADER != 0,
         at_war: flags & flag::AT_WAR != 0,
-        // What GetFactionInfo REPORTS. The toggle itself is stricter (`0x4d5fd0`).
+        // What `GetFactionInfo` reports; the toggle itself is stricter (`0x4d5fd0`).
         can_toggle_at_war: flags & flag::PEACE_FORCED == 0 && standing >= -3000,
         inactive: flags & flag::INACTIVE != 0,
     })
 }
 
-/// The two cheap inputs [`feed_reputation`]'s gate watches by value — `(race, class, watched
-/// faction id)`; the other two are resources, watched with Bevy's own change detection. `None` =
-/// not yet read.
+/// The by-value inputs of the feed's gate, `(race, class, watched)`; the other two are resources.
 type ReputationInputs = Option<(u8, u8, Option<u32>)>;
 
-/// Push the snapshot when one of its inputs moves, and fire `UPDATE_FACTION` when the result
-/// actually differs — the whole-snapshot-replace seam [`crate::ui_char::feed_skills`] established,
-/// with one addition.
-///
-/// **The rebuild is gated, unlike the skills feed's.** A snapshot here is 54 rows each carrying a
-/// name and a description paragraph, so rebuilding it every frame to discover it is unchanged would
-/// allocate ~100 strings a frame forever. Its inputs are exactly four — the wire slots, the
-/// catalog, the player's race/class, and the watched index — and all four are cheap to watch, so
-/// the expensive build only runs when one of them says something happened. The whole-snapshot
-/// equality check stays *behind* that gate: a change to the store that does not change any listed
-/// row (a hidden faction's standing ticking up) must not fire the event.
-///
-/// The event fires on **every** accepted push including the first, which is what the reference's own
-/// login seam relies on: `ReputationWatchBar`'s `OnEvent` initializes the watch bar off
-/// `UPDATE_FACTION`, and the faction list lands at every login.
+/// Push the snapshot and fire `UPDATE_FACTION` when it differs. The build (54 rows of names and
+/// descriptions) runs only when the wire slots, the catalog, race/class or the watched index
+/// move, and the equality check behind it keeps a change to no listed row quiet. The first push
+/// fires too: the stock watch bar initializes off `UPDATE_FACTION` at login.
 fn feed_reputation(
     script: Option<NonSendMut<UiScript>>,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
@@ -167,11 +123,7 @@ fn feed_reputation(
 
     let mut entries = Vec::new();
     for (faction_id, info) in catalog.reputation_factions() {
-        // A slot the wire has not covered reads as `(0, 0)` — no flags, no standing — rather than
-        // dropping the faction. That is the honest reading (flags of 0 lack VISIBLE, so the row is
-        // unlisted, which is exactly "you have not met them"), and it keeps the push COMPLETE:
-        // every header's name is carried by its parent's row, so a short or not-yet-arrived
-        // standings array must not be able to take a header's label away with it.
+        // An uncovered slot reads `(0, 0)`, unmet, and its row stays: a header's name rides on it.
         let (flags, wire) = usize::try_from(info.rep_index)
             .ok()
             .and_then(|i| reputations.0.get(i))
@@ -181,9 +133,7 @@ fn feed_reputation(
             entries.push(row);
         }
     }
-    // The engine sorts, so the iteration order of the catalog's map must not reach it as noise:
-    // sort by the row's own stable identity before the equality check, or a HashMap reshuffle
-    // would look like a change and fire UPDATE_FACTION every frame.
+    // Sorted before the equality check, so a map reshuffle is not a change.
     entries.sort_by_key(|e| e.faction_id);
 
     let fresh = ReputationState { entries, watched };
@@ -195,8 +145,7 @@ fn feed_reputation(
     script.fire_event("UPDATE_FACTION", vec![]);
 }
 
-/// Send the pane's queued verbs. None is acked — the engine already flipped its own copy — so this
-/// is pure outbound.
+/// Send the pane's queued verbs; none is acked, and the engine already holds its own copy.
 fn drain_reputation_sends(script: Option<NonSendMut<UiScript>>, commands: Res<NetCommands>) {
     let Some(mut script) = script else {
         return;
@@ -217,8 +166,7 @@ fn drain_reputation_sends(script: Option<NonSendMut<UiScript>>, commands: Res<Ne
                 rep_list_id,
                 inactive,
             },
-            // The `None` → `-1` translation the wire needs: slot 0 is the Bloodsail Buccaneers, so
-            // a 0 here would watch them rather than clear the bar.
+            // No watch is -1 on the wire: slot 0 is the Bloodsail Buccaneers.
             ReputationSend::Watch(slot) => ClientCommand::SetWatchedFaction {
                 rep_list_id: slot.map_or(benilla_protocol::messages::WATCHED_FACTION_NONE, |s| {
                     s as i32
@@ -233,10 +181,7 @@ fn drain_reputation_sends(script: Option<NonSendMut<UiScript>>, commands: Res<Ne
 mod tests {
     use super::*;
 
-    /// [`RANK_BOUNDS`] and [`benilla_formats::reputation_rank`] are the same `PointsInRank` widths
-    /// read two ways, so every edge must round-trip: the floor of rank `r` ranks as `r`, and one
-    /// below it ranks as `r - 1`. Nothing else keeps the pane's bar from disagreeing with the
-    /// nameplate's colour, since only one of them goes through the rank function.
+    /// The pane's bar reads [`RANK_BOUNDS`], the nameplate the rank function: they must agree.
     #[test]
     fn rank_bounds_agree_with_the_rank_function() {
         for rank in 0u8..=7 {
@@ -260,21 +205,13 @@ mod tests {
                 );
             }
         }
-        // The widths ARE vmangos's PointsInRank, stated rather than implied.
+        // vmangos's `PointsInRank` (`ReputationMgr.cpp:30`).
         let widths: Vec<i32> = RANK_BOUNDS.windows(2).map(|w| w[1] - w[0]).collect();
         assert_eq!(widths, [36000, 3000, 3000, 3000, 6000, 12000, 21000, 1000]);
     }
 
-    /// The display predicate and the base-plus-wire sum, on the real `Faction.dbc`.
-    ///
-    /// Stormwind (72) is the decisive row, and it exercises the slot pick as well as the sum. Its
-    /// four DBC base slots are race-gated — `0x4c` (Dwarf/Night Elf/Gnome) → 3100, `0xb2` (the Horde
-    /// races) → −42000, `0x01` (Human) → 4000, then an all-zero slot — so a human matches the THIRD
-    /// one and starts at 4000, Friendly. Reading the wire standing alone would show Neutral, and
-    /// taking slot 0 because it is first in the row would show 3100: both wrong, and both silently.
-    ///
-    /// The Horde slot is the same law's other end — an orc reading this faction gets −42000, Hated,
-    /// which is how a Horde character sees an Alliance city without anything ever being sent.
+    /// Stormwind (72) has four race-gated base slots, `0x4c` 3100, `0xb2` (Horde) -42000, `0x01`
+    /// (Human) 4000 and an empty one, so a human starts at 4000, Friendly, from the third slot.
     /// Skips without client data.
     #[test]
     fn real_stormwind_starts_friendly_for_a_human_and_hidden_factions_never_list() {
@@ -298,41 +235,31 @@ mod tests {
             !row.can_toggle_at_war,
             "PEACE_FORCED: you cannot go to war with your own people"
         );
-        // A wire gain rides on top of the base, and carries the rank with it.
+        // A wire gain rides on top of the base.
         let honored = reputation_row(72, sw, &cat, flag::VISIBLE, 5000, 1, 1).expect("lists");
         assert_eq!(honored.standing, 9000);
         assert_eq!(honored.standing_id, 6, "Honored begins exactly at 9000");
         assert_eq!((honored.bar_min, honored.bar_max), (9000, 21000));
 
-        // The same faction and the same empty wire slot, read by an orc: the Horde-gated slot.
+        // The same empty wire slot, read by an orc: the Horde-gated slot.
         let orc = reputation_row(72, sw, &cat, flag::VISIBLE, 0, 2, 1).expect("lists");
         assert_eq!(orc.standing, -42000, "the Horde race mask's base");
         assert_eq!(orc.standing_id, 1, "FACTION_STANDING_LABEL1 = Hated");
 
-        // Unmet means NOT VISIBLE, not absent — the row still comes back, carrying its name.
+        // Unmet is not visible, not absent: the row comes back with its name.
         let unmet = reputation_row(72, sw, &cat, 0, 0, 1, 1).unwrap();
         assert!(!unmet.visible, "unmet");
         assert_eq!(unmet.name, "Stormwind", "and still carries its name");
-        // HIDDEN does NOT hide the row: it suppresses the auto-reveal and the rank-change chat
-        // notification, and nothing else. Reading it as a list gate — which every emulator's naming
-        // invites — would silently drop rows the real client draws.
+        // `HIDDEN` suppresses the auto-reveal and the rank-change chat line, never the row.
         let hidden = reputation_row(72, sw, &cat, flag::VISIBLE | flag::HIDDEN, 0, 1, 1).unwrap();
         assert!(hidden.visible, "HIDDEN is not a list gate");
         assert!(!hidden.is_header, "and it is not the header bit either");
     }
 
-    /// **The membership gate, and the slot rule it shares with the base pick.**
-    ///
-    /// A faction no race/class mask slot fits is not in that character's list at all — the client
-    /// calls its add inside the accept block of the very loop that picks the base (`0x4d5555`). On
-    /// 1.12's shipped data the gate turns out to exclude **nothing a player can actually roll**, and
-    /// this pins that: the complete set of excluded pairs is druids of the six races that cannot be
-    /// druids, which is to say no real character at all.
-    ///
-    /// Cenarion Circle is the row that makes the whole rule visible, and the reason it is asserted
-    /// by value: its first slot takes all eight races but a class mask of `0x1df` that deliberately
-    /// omits druids, and its second takes Night Elf + Tauren druids at 2000. A rule that stopped at
-    /// the FIRST match would hand a Night Elf druid slot 0's zero. Skips without client data.
+    /// On 1.12's data the membership gate (`0x4d5555`) excludes only Cenarion Circle (609) for
+    /// druids of the six races that cannot be druids. Its first slot takes every race with class
+    /// mask `0x1df`, no druids, and its second Night Elf and Tauren druids at 2000, so a rule that
+    /// stopped at the first match would give a Night Elf druid 0. Skips without client data.
     #[test]
     fn real_membership_gate_excludes_only_druids_of_the_six_non_druid_races() {
         let data = benilla_formats::wow_data_or_skip!();
@@ -363,7 +290,7 @@ mod tests {
              cannot be druids — i.e. nothing a player can roll"
         );
 
-        // The slot rule itself, on that same row: last match wins, and the druid slot is second.
+        // Last match wins, and the druid slot is second.
         let cc = cat.reputation_faction(609).expect("Cenarion Circle");
         assert_eq!(
             cc.slot_for(4, DRUID),
@@ -376,16 +303,8 @@ mod tests {
         assert_eq!(cc.base_for(1, 1), 0);
     }
 
-    /// **The header factions are flagged, mostly invisible, and must be pushed anyway.**
-    ///
-    /// This is the bug the `visible` flag exists for, asserted at the site that had it: all five
-    /// parents carry the `HEADER` bit and four of the five lack `VISIBLE`, so a feed that filtered
-    /// invisible factions out would hand the engine a correct tree with no header names in it — and
-    /// the pane would draw the right rows under blank headers. Nothing else catches that: the
-    /// grouping is right, the counts are right, and only the label is empty.
-    ///
-    /// The flags asserted here are the DBC's own defaults for a human warrior, read through the
-    /// same race/class slot pick the server seeds a fresh character's state from
+    /// All five header factions carry `HEADER` and four lack `VISIBLE`, so filtering on visibility
+    /// would leave the headers blank. The flags are the DBC defaults a human warrior is seeded with
     /// (`ReputationMgr::GetDefaultStateFlags`). Skips without client data.
     #[test]
     fn real_header_factions_carry_the_header_bit_and_still_reach_the_engine() {
@@ -394,7 +313,7 @@ mod tests {
         let cat = benilla_formats::load_faction_catalog(&mut chain).expect("factions");
         use benilla_formats::faction_flags as flag;
 
-        // Every faction some reputation faction names as its `team` — the pane's headers.
+        // Every faction some reputation faction names as its `team`: the pane's headers.
         let parents: std::collections::BTreeSet<u32> = cat
             .reputation_factions()
             .map(|(_, f)| f.team)
@@ -410,7 +329,6 @@ mod tests {
             let info = cat
                 .reputation_faction(id)
                 .unwrap_or_else(|| panic!("parent {id} has its own reputation slot"));
-            // The DBC default flag byte a human warrior would be seeded with.
             let flags = u8::try_from(info.default_flags_for(1, 1)).expect("a flag byte");
             assert!(
                 flags & flag::HEADER != 0,
@@ -424,8 +342,7 @@ mod tests {
                 "parent {id} reaches the engine WITH its name — that name is the header"
             );
         }
-        // …and only ONE of the five is VISIBLE as well, which is exactly why visibility cannot be
-        // the test for "is this a header" and why an invisible row still has to be pushed.
+        // Only one of the five is also `VISIBLE`.
         let visible_parents = [67u32, 169, 469, 891, 892]
             .into_iter()
             .filter(|&id| {
@@ -442,15 +359,8 @@ mod live_wire_tests {
     use super::*;
     use benilla_ui::script::UiScript;
 
-    /// The `SMSG_INITIALIZE_FACTIONS` flag bytes a **live vmangos** sends a fresh level-1 human
-    /// warrior, captured 2026-08-13 from this slot's probe character via
-    /// `cargo run -p benilla-protocol --example faction_probe`. All 64 standings were 0; every slot
-    /// not listed here had a flag byte of 0 too.
-    ///
-    /// Kept as real bytes rather than a hand-built fixture because this is the one input the whole
-    /// pane is a function of, and a plausible-looking invention would agree with whatever the code
-    /// did. It also settles, at the wire, the single claim the binary alone could only leave
-    /// inferred: that the live server marks exactly the five header factions with `0x08`.
+    /// The `SMSG_INITIALIZE_FACTIONS` flag bytes live vmangos sends a fresh level-1 human warrior
+    /// (the `faction_probe` example); every other slot's flags and all 64 standings are 0.
     const LIVE_FLAGS: &[(usize, u8)] = &[
         (0, 0x02),
         (2, 0x02),
@@ -506,18 +416,8 @@ mod live_wire_tests {
         slots
     }
 
-    /// **The whole data law, end to end, on real bytes: what a fresh Alliance character's pane
-    /// actually says.**
-    ///
-    /// Live wire flags → `Faction.dbc` → the feed's rows → the engine's tree → the visible row list
-    /// `GetNumFactions`/`GetFactionInfo` report. No fixture anywhere in the chain except the capture.
-    ///
-    /// The expected answer is checkable against the game itself: a brand-new human warrior's
-    /// Reputation tab shows the Alliance header and its four city factions, all Neutral-or-better
-    /// from their DBC bases alone, and nothing else. Exactly five slots carry `VISIBLE`, and the one
-    /// of them that is also a header (Alliance, `0x09`) must come out as the header rather than as a
-    /// fifth bar — which is the assertion that would have failed under the emulators' reading of
-    /// `0x08`. Skips without client data.
+    /// A new human warrior's Reputation tab shows the Alliance header (`0x09`, a header that is
+    /// also visible) over its four cities, and nothing else. Skips without client data.
     #[test]
     fn a_fresh_alliance_characters_pane_off_live_wire_bytes() {
         let data = benilla_formats::wow_data_or_skip!();
@@ -525,7 +425,7 @@ mod live_wire_tests {
         let cat = benilla_formats::load_faction_catalog(&mut chain).expect("factions");
         let store = live_store();
 
-        // The five header factions, asserted at the wire — the one claim the binary left inferred.
+        // The live server marks exactly the five parents with `HEADER`.
         use benilla_formats::faction_flags as flag;
         let headers: Vec<usize> = LIVE_FLAGS
             .iter()
@@ -585,7 +485,7 @@ mod live_wire_tests {
             "the Alliance header and its four cities — Alliance is the HEADER, not a fifth bar"
         );
 
-        // …and the bars read their DBC bases, with no wire standing anywhere in the capture.
+        // The bars read their DBC bases; the capture has no standing.
         let (name, sid, min, max, val) = s
             .eval::<(String, i64, i64, i64, i64)>(
                 "local n,_,s,mn,mx,v = GetFactionInfo(5) return n,s,mn,mx,v",

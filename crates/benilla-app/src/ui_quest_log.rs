@@ -1,37 +1,7 @@
-//! The app-side **quest-log state + feed** — decision 0088's deferred second slice (the giver-panel
-//! decision named the log window, `SMSG_QUEST_QUERY_RESPONSE`, and the `PLAYER_QUEST_LOG` field
-//! accessors as a follow-up; the wire is now pinned, and this is the app
-//! layer over it). The inward half of the seam around [`benilla_ui::script::quest_log`], the log's
-//! twin of [`crate::ui_quest`]'s questgiver-panel feed.
-//!
-//! Unlike the questgiver panels (a transient NPC-session window), the quest log is **durable
-//! player state**: [`feed_quest_log`] reads the self player's `PLAYER_QUEST_LOG` descriptor slots
-//! every frame (the wire pin's field 198 + 3·slot) rather than reacting to one wire event, and
-//! resolves EVERY occupied slot's title/level/tag/objectives from the `SMSG_QUEST_QUERY_RESPONSE`
-//! template cache ([`QuestLog`] — the exact ask-once twin of [`crate::items::Items`]'s template
-//! cache): [`build_objectives`] turns the template's fixed objective quads + the slot's counters
-//! (creature/GO objectives) or the live bag count (item objectives; the wire pin: item-objective
-//! progress is *not* one of the slot's 6-bit counters, the client counts bags itself) into every
-//! entry's [`QuestLogEntryView::objectives`] — not just the selection's, since the Era API answers
-//! `GetNumQuestLeaderBoards`/`GetQuestLogLeaderBoard` for ANY index (the watch tracker HUD reads
-//! non-selected quests' lines). [`build_detail`] resolves only the selection's description/money/
-//! rewards/choices. The snapshot pushes via `set_quest_log` + fires `QUEST_LOG_UPDATE` — plus,
-//! per quest whose objectives moved ([`quests_with_progressed_objectives`]), the progress-toast
-//! `UI_INFO_MESSAGE`s (each moved leaderboard line's fresh text — the yellow top-center popup —
-//! and the COMPLETE flip's "%s (Complete)"), the native `QUEST_WATCH_UPDATE(watchIndex)` (the
-//! byte arg, `0x4df880`), and `BENILLA_QUEST_PROGRESS(logIndex)` (the auto-watch's feed — the
-//! divergence note at the fire site / decision 0340) — diffed against a `Local`, exactly like
-//! every other feed in this crate.
-//!
-//! [`drain_quest_log_abandons`] maps the confirmed abandon's quest id to its descriptor slot (this
-//! frame's rows, kept on [`QuestLog`]) and sends `CMSG_QUESTLOG_REMOVE_QUEST`.
-//!
-//! This module used to also answer the questgiver greeting's active/available split, via a
-//! `contains` membership test over the live descriptor slots. **It doesn't any more, and must not
-//! again** — the reference splits that list on the wire icon alone and never consults its quest log
-//! there ([`crate::ui_quest::row_is_active`]). Membership was wrong for exactly the
-//! quests that are never in the log: auto-complete turn-ins. The state that backed it is gone
-//! rather than left dead, so the retired law can't be reached for by accident.
+//! The quest log's app side: reads the player's `PLAYER_QUEST_LOG` slots every frame, resolves
+//! each quest through the `SMSG_QUEST_QUERY_RESPONSE` cache and pushes the log, every quest with
+//! its objective lines, firing `QUEST_LOG_UPDATE` on a change. An advanced objective also toasts
+//! its line and fires `QUEST_WATCH_UPDATE`. Abandons, shares and header folds drain from here.
 
 use crate::ui_items::{count_of, InventoryScope};
 use std::collections::HashSet;
@@ -58,37 +28,25 @@ use crate::ui_action::Spells;
 use crate::ui_script::{UiFeed, UiInput};
 use crate::ui_unit::UnitFeed;
 
-/// The top bit `QuestObjective::creature_or_go` carries for a gameobject objective —
-/// `(−id) | 0x8000_0000` (vmangos `Quest.cpp:512-516`; the wire pin's finding, same raw shape
-/// `SMSG_QUESTUPDATE_ADD_KILL`'s `entry` carries for a GO kill/use).
+/// Marks a GameObject objective's entry on the wire (vmangos `Quest.cpp:512-516`).
 const GO_OBJECTIVE_BIT: u32 = 0x8000_0000;
 
-/// One occupied `PLAYER_QUEST_LOG` slot this frame — the feed's working row before it's turned into
-/// a pushed [`QuestLogEntryView`].
+/// One occupied `PLAYER_QUEST_LOG` slot this frame.
 struct Row {
     slot: u8,
     quest_id: u32,
     log_slot: QuestLogSlot,
 }
 
-/// The quest-log state cache + per-frame bookkeeping.
-///
-/// - `templates` — the `SMSG_QUEST_QUERY_RESPONSE` cache, ask-once by quest id through
-///   [`QueryCache`] (the exact twin of [`Items`]'s item-template cache).
-/// - `row_slots` — this frame's quest rows as `(quest id, descriptor slot)`, folded ones included:
-///   the reference's row table `0xbb71c0`, which [`drain_quest_log_abandons`] searches by the
-///   confirmed abandon's quest id for the `CMSG_QUESTLOG_REMOVE_QUEST` slot (slots aren't
-///   contiguous — an abandoned/turned-in quest leaves a gap).
+/// The template cache, asked once per quest id, and this frame's quests as `(quest id, slot)`,
+/// folded ones included: the reference's row table `0xbb71c0`, which an abandon searches.
 #[derive(Resource, Default)]
 pub(crate) struct QuestLog {
     templates: QueryCache<u32, QuestTemplate>,
     row_slots: Vec<(u32, u8)>,
-    /// Collapsed section headers, keyed by header TITLE (two zones sharing a name share a header
-    /// row, so the fold state naturally shares too). Owned here — the engine only reports the
-    /// flag and drains toggle intents ([`drain_quest_log_collapses`]).
+    /// The collapsed headers, by title.
     collapsed: HashSet<String>,
-    /// This frame's pushed entry order → the header title for header rows (`None` for quests) —
-    /// the collapse drain's index→identity map.
+    /// Per pushed entry, the header's title, `None` for a quest: the fold drain's index map.
     header_keys: Vec<Option<String>>,
 }
 
@@ -99,9 +57,8 @@ impl crate::query_cache::AskOnce for QuestLog {
 }
 
 impl QuestLog {
-    /// The template for `quest_id`, if known — ask-once: a miss sends `CMSG_QUEST_QUERY` (deduped
-    /// while in flight) and returns `None`; a cached negative (the server doesn't know the id) is
-    /// also `None`, without a re-ask. The exact twin of [`Items::template`].
+    /// The template, asked once: a miss sends `CMSG_QUEST_QUERY` (once while in flight); an id
+    /// the server does not know stays `None` without a re-ask.
     pub(crate) fn template(&self, quest_id: u32, commands: &NetCommands) -> Option<&QuestTemplate> {
         self.templates.get_or_ask(quest_id, || {
             debug!("ui_quest_log: asking quest template (quest {quest_id})");
@@ -116,10 +73,7 @@ impl QuestLog {
         self.templates.insert(template.quest_id, Some(template));
     }
 
-    /// Disconnect: drop everything, including the templates. Unlike item templates (which persist —
-    /// decision: static, stable across sessions), a stale log slice carried across a reconnect would
-    /// pair fresh descriptor slots (possibly renumbered) with old titles; templates are cheap enough
-    /// to re-ask that there's no reason to risk it.
+    /// Disconnect: drops everything, the templates included.
     pub(crate) fn clear_session(&mut self) {
         self.templates.clear();
         self.row_slots.clear();
@@ -128,8 +82,7 @@ impl QuestLog {
     }
 }
 
-/// The quest log's packet handler (decision 0088's second slice; in the net handler table since
-/// 2320, moved out of the drain's quests arm file).
+/// The quest log's packet handlers.
 mod net {
     use benilla_protocol::messages::QuestTemplate;
     use benilla_protocol::{SessionEvent, SessionEventKind};
@@ -138,8 +91,7 @@ mod net {
     use super::QuestLog;
     use crate::net::NetHandlerApp;
 
-    /// Register the handler and the session-end listener — called from
-    /// [`super::UiQuestLogPlugin`].
+    /// Registers the template handler and the session-end listener.
     pub(super) fn register(app: &mut App) {
         use SessionEventKind as K;
         app.net_handler(K::QuestTemplate, on_template)
@@ -152,14 +104,12 @@ mod net {
         }
     }
 
-    /// The log's session state dies with the socket. A listener on the session end
-    /// (a second handler on the kind, after the bridge's own teardown).
+    /// The log's state dies with the socket: a second handler on the kind, after the bridge's own.
     fn on_session_end(In(_): In<SessionEvent>, mut quest_log: ResMut<QuestLog>) {
         quest_log.clear_session();
     }
 
-    /// The full quest template (`SMSG_QUEST_QUERY_RESPONSE`, answering our `CMSG_QUEST_QUERY`) — the
-    /// quest log's ask-once detail source, cached by `quest_id`.
+    /// `SMSG_QUEST_QUERY_RESPONSE`, the answer to our `CMSG_QUEST_QUERY`, cached by quest id.
     fn quest_template(t: Box<QuestTemplate>, quest_log: &mut QuestLog) {
         debug!("net: quest template {} ({})", t.quest_id, t.title);
         quest_log.insert_template(*t);
@@ -182,8 +132,7 @@ impl Plugin for UiQuestLogPlugin {
                 Update,
                 (
                     feed_quest_log.in_set(UnitFeed),
-                    // Before the script tick, so a QuestTimerFrame OnUpdate this frame reads this
-                    // frame's clock (the `minimap::feed_game_time` shape).
+                    // Before the script tick, so `QuestTimerFrame` reads this frame's clock.
                     feed_server_clock.in_set(UiFeed),
                     drain_quest_log_abandons.after(UiInput),
                     drain_quest_log_pushes.after(UiInput),
@@ -193,25 +142,15 @@ impl Plugin for UiQuestLogPlugin {
     }
 }
 
-/// The name a still-in-flight cache miss wears. The reference's miss reads `" "` (a single space,
-/// `0x82ee00`); ours reads this, a longer-standing
-/// divergence that says "still in flight" rather than looking like a nameless objective.
+/// Deviation: an in-flight name reads `...`, where the reference's reads `" "` (`0x82ee00`),
+/// because a blank looks like a nameless objective.
 const NAME_PLACEHOLDER: &str = "...";
 
-/// Format one leaderboard line from its `%s`/`%d`/`%d` key — the shared tail of both passes below.
-///
-/// **The three format keys are the leaderboard's own, and are NOT the progress toast's** (decision
-/// 2045's central trap: `QUEST_MONSTERS_KILLED` and `ERR_QUEST_ADD_KILL_SII` are the same enUS
-/// sentence, and `QUEST_OBJECTS_FOUND`/`QUEST_ITEMS_NEEDED`/`ERR_QUEST_ADD_FOUND_SII`/
-/// `ERR_QUEST_ADD_ITEM_SII` are the same four). `GetQuestLogLeaderBoard 0x4e0000` resolves
-/// `QUEST_MONSTERS_KILLED` `0x84b61c` (creature, no override), `QUEST_OBJECTS_FOUND` `0x84b634`
-/// (the override leg AND both GameObject legs) and `QUEST_ITEMS_NEEDED` `0x84b5f8` (item). Only
-/// the toast handler `0x5e5ad0` names the `ERR_*` twins, and it names them because they are
-/// *message-catalog* rows; these three are not.
-///
-/// A key the install does not carry renders the line with **empty text rather than no line**: the
-/// reference's `FrameScript_GetText` hands back its pre-seeded empty string and the leaderboard
-/// entry still exists, which is what `GetNumQuestLeaderBoards` counts.
+/// One leaderboard line from its `%s`/`%d`/`%d` key. The keys are the leaderboard's own, not the
+/// toast's `ERR_QUEST_ADD_*` twins that share their enUS sentences: `GetQuestLogLeaderBoard`
+/// (`0x4e0110`) takes `QUEST_MONSTERS_KILLED` `0x84b61c` (creature), `QUEST_OBJECTS_FOUND`
+/// `0x84b634` (override text, GameObject) and `QUEST_ITEMS_NEEDED` `0x84b5f8` (item). A key the
+/// install lacks gives an empty line, not no line, as `GetNumQuestLeaderBoards` still counts it.
 fn leaderboard_text(
     // The VM's own `GlobalStrings.lua`.
     get: &dyn Fn(&str) -> Option<String>,
@@ -228,15 +167,9 @@ fn leaderboard_text(
     })
 }
 
-/// One creature/GameObject leaderboard line — the reference's **pass 2**, whose predicate is
-/// `ReqCreatureOrGOId[i] != 0` alone (`0x4e00c0`/`0x4e02d7`). Pure: the caller has already resolved
-/// the creature name (ask-once — `None` while the answer is in flight) and `counter`, the
-/// descriptor slot's 6-bit counter for this array index.
-///
-/// The custom `text` field, when non-empty, REPLACES the auto-generated name in the line but keeps
-/// the "cur/req" suffix (`0x4e03da`: a creature objective carrying `ObjectiveText[i]` formats with
-/// `QUEST_OBJECTS_FOUND`, not the "slain" key, and that text IS the name — while `type` still
-/// answers `"monster"`, read from a fresh sign test of the id, `0x4e04ca`).
+/// One creature or GameObject line, for `ReqCreatureOrGOId[i] != 0` (`0x4e00c0`, `0x4e02d7`);
+/// `counter` is the slot's 6-bit counter for index i. A non-empty `text` is the name and takes
+/// `QUEST_OBJECTS_FOUND` (`0x4e03da`), while `type` stays `"monster"` (`0x4e04ca`).
 fn creature_line(
     obj: &QuestObjective,
     counter: u8,
@@ -249,11 +182,8 @@ fn creature_line(
     let req = obj.required_count;
     let is_go = obj.creature_or_go & GO_OBJECTIVE_BIT != 0;
     let cur = u32::from(counter).min(req);
-    // The reference's fork, in its own order: a non-empty override IS the name and takes
-    // `QUEST_OBJECTS_FOUND` on either kind; a GameObject takes that key on both its legs (the
-    // binding fetches it once, above its cache test, at `0x4e031e`); only a plain creature reaches
-    // `QUEST_MONSTERS_KILLED`. No gameobject-name cache yet — a later CMSG_GAMEOBJECT_QUERY slice
-    // — so a GO with no override wears the placeholder.
+    // A GameObject takes `QUEST_OBJECTS_FOUND` on both legs (`0x4e031e`); with no GameObject
+    // name cache here, one without an override wears the placeholder.
     let (key, name) = if !obj.text.is_empty() {
         ("QUEST_OBJECTS_FOUND", obj.text.as_str())
     } else if is_go {
@@ -273,16 +203,9 @@ fn creature_line(
     })
 }
 
-/// One item ("collect") leaderboard line — the reference's **pass 3**, whose predicate is
-/// `ReqItemId[i] > 0 && ReqItemId[i] != SrcItemId` (`0x4e04f4`–`0x4e04fd`): the `+0x34` test drops
-/// the quest's own provided/starter item from the board. `bag_count` is the live inventory walk
-/// ([`crate::ui_items::count_of`]) — item progress is NOT one of the slot's 6-bit counters, the
-/// client counts bags itself.
-///
-/// **The name comes from the item cache alone.** The per-objective override buffer
-/// (`template+0x14dc + i*0x100`) is read only by the creature and GameObject branches
-/// (`0x4e033f`, `0x4e03c9`), and on a quad that carries both kinds that buffer belongs to the
-/// *creature* objective — reading it here would label the item with the creature's text.
+/// One item line, for `ReqItemId[i] > 0 && ReqItemId[i] != SrcItemId` (`0x4e04f4`-`0x4e04fd`).
+/// `bag_count` is the live inventory count, as an item has no slot counter; the name comes from
+/// the item cache alone, the override text being the creature branch's (`0x4e033f`, `0x4e03c9`).
 fn item_line(
     obj: &QuestObjective,
     src_item_id: u32,
@@ -310,8 +233,7 @@ fn item_line(
     })
 }
 
-/// Split a `SMSG_QUEST_QUERY_RESPONSE` `money` value into (required, reward) — negative demands
-/// money at turn-in, non-negative grants it (`QuestLogDetail::required_money`/`reward_money`).
+/// The template's `money` as (required, reward): a negative value is demanded at turn-in.
 fn money_split(money: i32) -> (u32, u32) {
     if money < 0 {
         ((-money) as u32, 0)
@@ -320,11 +242,8 @@ fn money_split(money: i32) -> (u32, u32) {
     }
 }
 
-/// Resolve one template reward/choice `(itemId, count)` pair into a Lua-facing [`QuestItemView`] —
-/// the quest-log twin of [`crate::ui_quest::resolve_item`]. The icon path differs from the
-/// questgiver panels: `SMSG_QUEST_QUERY_RESPONSE`'s reward arrays carry **no display id** (the wire
-/// pin), so the icon comes from the item template's `display_info_id` instead — the same
-/// `ItemDisplayInfo.dbc` catalog lookup a bag slot uses ([`crate::ui_items::resolve_slot`]).
+/// One reward or choice `(item id, count)` as a [`QuestItemView`]. `SMSG_QUEST_QUERY_RESPONSE`
+/// carries no display id, so the icon comes from the item template's `display_info_id`.
 fn resolve_template_item(
     entry: u32,
     count: u32,
@@ -340,8 +259,7 @@ fn resolve_template_item(
             .and_then(|i| i.catalog.get(t.display_info_id))
             .and_then(|d| d.icon.clone())
     });
-    // `GetQuestLogItemLink`'s payload — the same shared link builder, and the
-    // same in-flight `None`, as the questgiver panels' [`crate::ui_quest::resolve_item`].
+    // `GetQuestLogItemLink`'s payload; `None` until the template gives the name and quality.
     let link = name
         .as_ref()
         .map(|n| crate::ui_items::item_link(entry, n, quality));
@@ -351,26 +269,15 @@ fn resolve_template_item(
         count,
         quality,
         item_id: entry,
-        usable: true, // v1: soft-gray only, server authoritative (mirrors ui_quest.rs's resolve_item)
+        usable: true, // not computed; the stock frame tints unusable ones red
         link,
     }
 }
 
-/// Build one occupied slot's objective ("leaderboard") lines from its template + this frame's
-/// descriptor slot counters/bag counts — every entry gets these (`GetNumQuestLeaderBoards`/
-/// `GetQuestLogLeaderBoard` answer ANY index, not just the selection: the watch tracker HUD reads
-/// non-selected quests' lines, ref `QuestLogFrame.lua:613-663`).
-///
-/// **The passes are independent walks of the whole array, not one walk of merged quads** — the
-/// reference enumerates `event`, then creature/GO over `ReqCreatureOrGOId[0..3]`, then item over
-/// `ReqItemId[0..3]`, then reputation (`0x4e0000`/`0x4e0110`; decision 1156 §5 named the ORDER
-/// half of this and its worse half went unnoticed). Our merged
-/// walk emitted at most ONE line per index, so an objective quad carrying BOTH kinds lost its item
-/// line outright: quest 358 "Graverobbers" (creature 1941 ×8 and item 2834 ×8, both at index 0)
-/// showed 2 lines where the reference shows 3, and `GetNumQuestLeaderBoards` under-counted with it.
-///
-/// Still not emitted, and still gaps rather than errors (1156 §4): the `event` line and the
-/// reputation line.
+/// One quest's objective lines, for every quest, as the watch frame reads any quest's
+/// (`QuestLogFrame.lua:613-663`). The reference walks the array once per kind, `event`, creature
+/// or GameObject, item, reputation (`0x4e0000`, `0x4e0110`), so one quad can give two lines. The
+/// `event` and reputation lines are not built.
 fn build_objectives(
     template: &QuestTemplate,
     log_slot: &QuestLogSlot,
@@ -383,9 +290,7 @@ fn build_objectives(
     get: &dyn Fn(&str) -> Option<String>,
 ) -> Vec<QuestLogObjectiveView> {
     let mut objectives = Vec::with_capacity(template.objectives.len());
-    // Pass 2 — creature/GameObject. The counter index is this array index (1156: the reference
-    // increments it per array ELEMENT, including elements that produce no line, which is what makes
-    // `log_slot.counters[i]` the right read over the fixed 4).
+    // Creature or GameObject: the counter index is the array index, empty elements included.
     for (i, obj) in template.objectives.iter().enumerate() {
         let is_go = obj.creature_or_go & GO_OBJECTIVE_BIT != 0;
         let creature_name = (obj.creature_or_go != 0 && !is_go)
@@ -400,7 +305,7 @@ fn build_objectives(
             objectives.push(line);
         }
     }
-    // Pass 3 — item.
+    // Item.
     for obj in template.objectives.iter() {
         if obj.item_id == 0 {
             continue;
@@ -422,9 +327,7 @@ fn build_objectives(
     objectives
 }
 
-/// Build a row's detail pane from its template — description/money/rewards/choices
-/// only (the objective lines live on every [`QuestLogEntryView::objectives`], selection or
-/// not — see [`build_objectives`]), so this no longer needs the descriptor slot at all.
+/// A quest's detail pane from its template: description, money, rewards and choices.
 fn build_detail(
     template: &QuestTemplate,
     items: &Items,
@@ -448,8 +351,7 @@ fn build_detail(
         .collect();
 
     QuestLogDetail {
-        // The wire delivers quest text with its chat macros ($N/$B/$G/$<n>w) un-expanded; the
-        // client substitutes (crate::npc_text — the 0109 look fix's shared mechanism).
+        // Quest text arrives with its `$N`, `$B`, `$G` and `$<n>w` macros unexpanded.
         description: crate::npc_text::substitute(&template.details, macros),
         objectives_text: crate::npc_text::substitute(&template.objectives_text, macros),
         required_money,
@@ -460,10 +362,8 @@ fn build_detail(
     }
 }
 
-/// The descriptor slot of the row carrying `quest_id` — `AbandonQuest`'s search (`0x4df070`: walk
-/// the 40-row table `0xbb71c0`, skip headers, match the row's quest id, send its slot `+0x4`);
-/// `None` when no row carries it, which the reference answers by doing nothing. Pure, so it's
-/// testable without a live [`QuestLog`]/ECS.
+/// `AbandonQuest`'s search (`0x4df070`): the slot (`+0x4`) of the non-header row of the 40 in
+/// `0xbb71c0` that carries `quest_id`; with no such row, nothing is sent.
 fn abandon_slot(quest_id: u32, row_slots: &[(u32, u8)]) -> Option<u8> {
     row_slots
         .iter()
@@ -471,13 +371,9 @@ fn abandon_slot(quest_id: u32, row_slots: &[(u32, u8)]) -> Option<u8> {
         .map(|&(_, slot)| slot)
 }
 
-/// Re-point the engine's quest-log selection (a 1-based entry INDEX) across a snapshot rebuild —
-/// headers/folds shift indexes between pushes, so the selection follows the SAME quest to its new
-/// position. A header is NEVER a valid selection (ref `QuestLog_SetSelection`'s header branch only
-/// folds, and `QuestLog_GetFirstSelectableQuest` skips headers), so a selection that no longer
-/// lands on a visible quest — folded away, abandoned, or resting on a header — resets to 0, and
-/// the Lua update's transcribed `SetFirstValidSelection` picks the first visible quest, exactly
-/// the ref's maintenance loop (`QuestLog_Update`, ref l.293-296). 0 in, 0 out.
+/// Moves the 1-based selection to its quest's new index. A header is never a selection
+/// (`QuestLog_GetFirstSelectableQuest` skips them), so one with no visible quest becomes 0 and
+/// `QuestLog_Update` selects the first quest (`QuestLogFrame.lua:293-296`).
 fn remap_selection(old: &[QuestLogEntryView], new: &[QuestLogEntryView], sel: u32) -> u32 {
     let Some(prev) = (sel as usize)
         .checked_sub(1)
@@ -492,17 +388,8 @@ fn remap_selection(old: &[QuestLogEntryView], new: &[QuestLogEntryView], sel: u3
         .unwrap_or(0)
 }
 
-/// Push the server's wall clock into the VM every frame — the number every
-/// countdown binding subtracts against.
-///
-/// Every frame, not on change: it is a *clock*, so "changed" is always, and the whole point is that
-/// `GetQuestTimers()` answers a fresh value on each of the reference `QuestTimerFrame`'s OnUpdate
-/// calls. Cheap by construction — one scalar write, no event, no diff, nothing downstream unless
-/// some frame actually reads it.
-///
-/// Silent before the first `SMSG_QUERY_TIME_RESPONSE` (the world-enter query answers within a round
-/// trip). The bindings then report *no* timer rather than a guessed one — see
-/// `benilla_ui::script::quest_log::seconds_left`.
+/// Pushes the server's wall clock every frame, for `GetQuestTimers()`; before the first
+/// `SMSG_QUERY_TIME_RESPONSE` nothing is pushed and the bindings report no timer.
 fn feed_server_clock(
     script: Option<NonSendMut<UiScript>>,
     clock: Res<crate::net::ServerWallClock>,
@@ -513,39 +400,25 @@ fn feed_server_clock(
     script.set_server_unix_time(now);
 }
 
-/// The header literal the reference paints for a header whose id is exactly `0` (`0x84b4ec`, its
-/// only reference image-wide). It is a **designer-data tell, not a transient**: the only value that
-/// can become a header id is a CACHED template's `zoneOrSort` (`0x4de6f6`), so it cannot appear
-/// while a template is in flight — which is what makes it safe to render at all.
+/// The reference's header for `zoneOrSort` 0 (`0x84b4ec`). Only a cached template makes a header
+/// (`0x4de6f6`), so it never stands for a template in flight.
 const MISSING_HEADER: &str = "Missing header! (quest designers)";
 
-/// One row's grouping/ordering inputs — everything [`order_groups`] needs, and nothing else, so
-/// the display order is testable without a Bevy world.
+/// One row's grouping and ordering inputs.
 struct GroupRow {
     zone_or_sort: i32,
-    /// The resolved header name for `zone_or_sort` — [`MISSING_HEADER`] for `0`, and the empty
-    /// string for an id neither `AreaTable` nor `QuestSort` names (the reference's lookup simply
-    /// finds no string there, and collates it as `""`).
+    /// [`MISSING_HEADER`] for 0, empty for an id neither `AreaTable` nor `QuestSort` names.
     header: String,
     level: u32,
     title: String,
     slot: u8,
 }
 
-/// **The quest log's display order** (rebuild `0x4de510`, group sort `0x4de751`/`0x4de8f0`, row
-/// comparator `0x4deac0`). Returns the header groups in order, each with its rows' indices in
-/// order.
-///
-/// - **Groups**: one per distinct `ZoneOrSort`, and `id == 0` is forced **FIRST**, before any name
-///   lookup (`0x4de913`). An id that names no row collates as `""` and lands next. The rest go by
-///   resolved name through the client's collator `0x64a4c0`, which is **case-INSENSITIVE**
-///   (`_strnicmp 0x414310`) — a byte-wise `cmp` puts `"Elwynn Forest"` and `"eastern kingdoms"` in
-///   the wrong relative place.
-/// - **Within a group**: **level ASC** (`0x4decd9`), then **title** through that same collator
-///   (`0x4decfb`). Descriptor-slot order — what this used to do, and what benilla claimed — was
-///   REFUTED: `0x4deac0` reads `entry+0x4` into a stack slot it never uses.
-/// - The reference's `qsort` is **unstable**, so a full (level, title) tie is unspecified there.
-///   We break it on slot, which is deterministic and so cannot contradict an unspecified order.
+/// The quest log's display order (rebuild `0x4de510`): the header groups, each with its rows.
+/// Groups (`0x4de751`, comparator `0x4de8f0`) put id 0 first (`0x4de913`), then go by name
+/// through the case-insensitive collator `0x64a4c0` (`_strnicmp 0x414310`), an unnamed id as `""`.
+/// Rows (`0x4deac0`) go by level (`0x4decd9`), then title (`0x4decfb`), never by slot; the
+/// reference's `qsort` is unstable, so a full tie has no order there, and ties break on slot here.
 fn order_groups(rows: &[GroupRow]) -> Vec<(i32, String, Vec<usize>)> {
     let mut groups: Vec<(i32, String, Vec<usize>)> = Vec::new();
     for (i, r) in rows.iter().enumerate() {
@@ -554,8 +427,6 @@ fn order_groups(rows: &[GroupRow]) -> Vec<(i32, String, Vec<usize>)> {
             None => groups.push((r.zone_or_sort, r.header.clone(), vec![i])),
         }
     }
-    // `id == 0` first (rank 0), then everything else by case-folded name — `""` for an
-    // unresolvable id, so it sorts immediately after.
     groups.sort_by_key(|(zos, name, _)| {
         if *zos == 0 {
             (0u8, String::new())
@@ -572,15 +443,14 @@ fn order_groups(rows: &[GroupRow]) -> Vec<(i32, String, Vec<usize>)> {
     groups
 }
 
-/// Read the self player's `PLAYER_QUEST_LOG` descriptor slots each frame, resolve entries/detail,
-/// and push a [`QuestLogState`] snapshot on change (diffed against a `Local`, the crate's standard
-/// feed shape). Also refreshes [`QuestLog`]'s `row_slots` for the abandon drain.
+/// Reads the player's `PLAYER_QUEST_LOG` slots each frame and pushes a [`QuestLogState`] on a
+/// change; also refreshes `row_slots` for the abandon drain.
 fn feed_quest_log(
     script: Option<NonSendMut<UiScript>>,
     self_q: Query<(&ObjectStore, &Guid), With<SelfPlayer>>,
     mut quest_log: ResMut<QuestLog>,
     names: Res<NameCache>,
-    // The bag walk behind an item objective's carried count (2334).
+    // The bag walk behind an item objective's count.
     objects: crate::net::Objects,
     items: Res<Items>,
     icons: Option<Res<ItemDisplays>>,
@@ -589,8 +459,7 @@ fn feed_quest_log(
     tag_names: Option<Res<QuestTagNamesRes>>,
     states: Res<crate::world_state::WorldStates>,
     spells: Option<Res<Spells>>,
-    // The completion toasts are message-catalog rows, so they go out through the one sink that
-    // reads the row's surface and sound (`crate::ui_action::show_messages`).
+    // The completion toast is a message-catalog row, whose surface and sound the sink reads.
     mut sink: crate::ui_action::MessageSink,
     mut last: Local<crate::ui_script::VmMemo<QuestLogState>>,
     mut prior_quest_ids: Local<crate::ui_script::VmMemo<Option<HashSet<u32>>>>,
@@ -601,8 +470,6 @@ fn feed_quest_log(
     let last = last.get(&script);
     let prior_quest_ids = prior_quest_ids.get(&script);
     let Some((store, _)) = self_q.iter().next() else {
-        // No self player streamed yet — nothing to show; `last` stays at its (empty) default, so
-        // this is a no-op rather than a repeated empty push.
         return;
     };
 
@@ -612,7 +479,7 @@ fn feed_quest_log(
             continue;
         };
         if log_slot.quest_id == 0 {
-            continue; // an explicitly-cleared slot (abandon/turn-in) — not a row
+            continue; // a slot an abandon or turn-in cleared
         }
         rows.push(Row {
             slot,
@@ -621,10 +488,9 @@ fn feed_quest_log(
         });
     }
 
-    // The accept chord (QUESTADDED → iQuestActivate.wav): the client's C++ plays it when a quest
-    // ENTERS the log — no Lua handler owns it. Diffed against the previous frame's occupied ids;
-    // the FIRST snapshot after login is silent (the initial object-create floods the whole log —
-    // `prior` = None until one real snapshot exists).
+    // A quest entering the log plays `QUESTADDED`, the sound of the chat line the reference's
+    // quest-slot watcher raises, `ERR_QUEST_ACCEPTED_S` (`0x5dde61`); the line is not printed
+    // here. The first snapshot after login is silent: the initial create fills the whole log.
     {
         let current: HashSet<u32> = rows.iter().map(|r| r.quest_id).collect();
         if let Some(prior) = prior_quest_ids.as_ref() {
@@ -635,8 +501,7 @@ fn feed_quest_log(
         *prior_quest_ids = Some(current);
     }
 
-    // The player's own `GlobalStrings.lua`, for the leaderboard's three format keys (2045). Taken
-    // here, above the build, because everything between this and the push below reads the VM only.
+    // The player's own `GlobalStrings.lua`, for the leaderboard's three format keys.
     let get = |key: &str| {
         script
             .lua()
@@ -646,28 +511,12 @@ fn feed_quest_log(
             .filter(|t| !t.is_empty())
     };
 
-    // ── The IN-FLIGHT SKIP — the cached rows, and only those ────────────────────────────────────
-    // The reference's rebuild (`0x4de510`) counts cache misses into `[0xbb7498]` and skips the
-    // MISSING QUEST — not the pass. The miss at `0x4de67e` is a `jmp 0x4de729`, which is the slot
-    // loop's own increment block, one instruction above the back-edge: every later slot is still
-    // visited and every later cache hit still appends its row at `0x4de68e`. The hit path's own
-    // "this group already has a header" branch (`0x4de6f1`) jumps to the same address right after
-    // appending a row, which a discard could not do. The tail past the loop is unconditional —
-    // both sorts, the collapse restore, the watch prune, and `QUEST_LOG_UPDATE` (`0x4de811`).
-    // `0x4de545` then makes any FURTHER rebuild a no-op until the last outstanding response
-    // decrements the counter to 0 and `0x4de8b0` rebuilds once more.
-    //
-    // So `GetNumQuestLogEntries()` answers `(visible rows, CACHED quest count)`, and `0, 0` is the
-    // all-cold extreme rather than the general law. Skipping the whole log on any miss — what this
-    // did, reading the cold case as the rule — blanked the entire window for a round
-    // trip every time a quest whose template we had never seen entered the log. That took the
-    // engine selection with it (`remap_selection` reads an empty list as "your quest is gone"), so
-    // the detail pane jumped to row 1 on every single pickup, and addons reading the log across
-    // the blank saw a log that briefly held nothing.
-    //
-    // `template()` is called for EVERY row before any filtering, because the miss is what SENDS
-    // the query (our `pending` set is the reference's once-per-id dedupe) — short-circuiting would
-    // leave the rest of a cold log unrequested, and then nothing would arrive to fill it in.
+    // ── In-flight templates: only cached quests are listed ──────────────────────────────────────
+    // The rebuild (`0x4de510`) skips a quest whose template is uncached, counting it in
+    // `[0xbb7498]` (`0x4de67e`), and lists every other one, so `GetNumQuestLogEntries()` counts
+    // cached quests. The reference then holds that list until the last template lands
+    // (`0x4de545`, `0x4de8b0`); here each quest shows as its template lands. `template()` runs for
+    // every row before the filter: the miss is what sends the query.
     let cached: Vec<bool> = rows
         .iter()
         .map(|r| quest_log.template(r.quest_id, &commands).is_some())
@@ -678,22 +527,8 @@ fn feed_quest_log(
         .filter_map(|(r, hit)| hit.then_some(r))
         .collect();
 
-    // ── Section headers (the ref's zone/sort groups) ────────────────────────────────────────────
-    // One header per distinct `ZoneOrSort` (positive → AreaTable zone, negative → QuestSort sort —
-    // [`benilla_formats::QuestHeaderNames`]), in first-appearance order, then sorted. Every row
-    // here has a cached template, so `zone_or_sort` is always the real one — the gate above is
-    // what makes that true.
-    //
-    // **The group order** (`0x4de751`, comparator `0x4de8f0`): `id == 0` is forced FIRST, before
-    // any name lookup (`0x4de913`); an id that names no row collates as `""` and lands next; the
-    // rest are ordered by resolved name through the client's collator `0x64a4c0`, which is
-    // **case-INSENSITIVE** (`_strnicmp 0x414310`) — not the byte `cmp` we had.
-    //
-    // **`id == 0` renders as the literal `"Missing header! (quest designers)"`** (`0x84b4ec`, its
-    // only reference image-wide). That string is a **designer-data tell, not a transient**: the
-    // only value that can become a header id is a CACHED template's `zoneOrSort`, so it cannot
-    // appear while anything is in flight. Which is precisely why it is safe to render — and why it
-    // could not have been, before the gate above existed.
+    // ── Section headers ─────────────────────────────────────────────────────────────────────────
+    // One per `ZoneOrSort`: a positive id names an `AreaTable` zone, a negative a `QuestSort`.
     let ordered = {
         let keyed: Vec<GroupRow> = rows
             .iter()
@@ -721,8 +556,6 @@ fn feed_quest_log(
     };
     let groups = ordered;
 
-    // Above the row loop because every row's detail substitutes through it now (the chat macros
-    // in a quest's description/objectives paragraph), not just the selection's.
     let player = crate::npc_text::player_identity(&self_q, &names, &commands);
     let macros = crate::npc_text::MacroContext {
         subject: player.as_ref(),
@@ -731,10 +564,8 @@ fn feed_quest_log(
 
     let mut entries: Vec<QuestLogEntryView> = Vec::new();
     let mut header_keys: Vec<Option<String>> = Vec::new();
-    // The quests folded under a collapsed header: out of the visible list, still in the log. The
-    // engine's watch prune counts them, as the reference's does (`0x4de7a7`–`0x4de80f` scans the
-    // whole row array, hidden rows included); leaving
-    // them out made every collapse drop its quests' watches for good.
+    // Quests under a collapsed header: out of the visible list, still in the log, and counted by
+    // the watch prune, as the reference's scans the whole row array (`0x4de7a7`-`0x4de80f`).
     let mut hidden_quest_ids: Vec<u32> = Vec::new();
     for (_, name, row_idxs) in &groups {
         let collapsed = quest_log.collapsed.contains(name);
@@ -742,20 +573,19 @@ fn feed_quest_log(
             quest_id: 0,
             title: name.clone(),
             level: 0,
-            tag: None, // a header names a zone/sort, never a quest — it can carry no tag
+            tag: None,
             is_header: true,
             collapsed,
             complete: 0,
-            timer: 0,        // a header row is not a quest and never carries a timer
-            pushable: false, // nor is it shareable — there is no quest under the row
+            timer: 0,
+            pushable: false,
             objectives: Vec::new(),
-            detail: None, // a header names a zone/sort; there is no quest to describe
+            detail: None,
         });
         header_keys.push(Some(name.clone()));
         for &ri in row_idxs {
             let r = &rows[ri];
             if collapsed {
-                // Folded: the quest stays in the log, just not in the visible list.
                 hidden_quest_ids.push(r.quest_id);
                 continue;
             }
@@ -764,20 +594,15 @@ fn feed_quest_log(
                     Some(t) => (
                         t.title.clone(),
                         t.level,
-                        // The `(Elite)`/`(Dungeon)`/`(Raid)`/`(PvP)` suffix: the template's `Type` is
-                        // a `QuestInfo.dbc` row id ([`benilla_formats::QuestTagNames`]), and `Type`
-                        // 0 — the untagged majority — names no row. Absent table (no client data) =
-                        // no tag, never an empty string: the row Lua branches on presence.
+                        // The tag: `Type` is a `QuestInfo.dbc` id, 0 naming none. No table gives
+                        // `None`, never `""`: the row's Lua tests presence.
                         tag_names
                             .as_ref()
                             .and_then(|tags| tags.0.resolve(t.quest_type))
                             .map(str::to_string),
-                        // `QUEST_FLAGS_SHARABLE` (vmangos `QuestDef.h:153`) — the whole of the
-                        // shareable test, and it is the CLIENT's alone: vmangos's
-                        // `HandlePushQuestToParty` never checks the bit, it only re-tests it on the
-                        // receiver's accept (`Player::CanShareQuest`). So an unshareable quest whose
-                        // button we wrongly enabled would push, and the party would get a detail panel
-                        // for a quest the server then refuses.
+                        // `QUEST_FLAGS_SHARABLE` (vmangos `QuestDef.h:153`) is the client's test
+                        // alone: vmangos pushes without it (`QuestHandler.cpp:403-459`) and checks
+                        // it only at the accept (`QuestHandler.cpp:114`).
                         t.flags & quest_flags::SHARABLE != 0,
                         build_objectives(
                             t,
@@ -789,9 +614,7 @@ fn feed_quest_log(
                             &commands,
                             &get,
                         ),
-                        // Every row, not just the selection — the detail bindings
-                        // resolve the live selection against these at call time, the way the
-                        // reference peeks its quest cache inside the call.
+                        // Every row's: the bindings resolve the selection per call.
                         Some(build_detail(
                             t,
                             &items,
@@ -801,9 +624,7 @@ fn feed_quest_log(
                             spells.as_deref(),
                         )),
                     ),
-                    // Unreachable: the in-flight gate above emptied `rows` unless EVERY template is
-                    // cached, which is the reference's own all-or-nothing rebuild. This arm used to
-                    // paint a `"..."` placeholder row, which the reference never does (`0x4de67e`).
+                    // The in-flight filter above kept only cached rows.
                     None => unreachable!("the in-flight gate leaves only cached rows"),
                 };
             let complete = if r.log_slot.state & quest_slot_state::COMPLETE != 0 {
@@ -822,9 +643,7 @@ fn feed_quest_log(
                 collapsed: false,
                 complete,
                 pushable,
-                // The slot's raw deadline (absolute unix seconds; 0 = untimed) — carried, never
-                // converted here. The countdown is subtracted per Lua call against the server
-                // clock, so this snapshot stays stable while the number on screen ticks.
+                // Absolute unix seconds, 0 untimed; the bindings subtract the server clock.
                 timer: r.log_slot.timer,
                 objectives,
                 detail,
@@ -839,7 +658,7 @@ fn feed_quest_log(
     if new_sel != sel {
         script.set_quest_log_selection(new_sel);
     }
-    // Every cached row, folded or not — the table `AbandonQuest` searches by quest id.
+    // Every cached row, folded or not: the table `AbandonQuest` searches.
     quest_log.row_slots = rows.iter().map(|r| (r.quest_id, r.slot)).collect();
     quest_log.header_keys = header_keys;
 
@@ -851,31 +670,10 @@ fn feed_quest_log(
     if fresh == *last {
         return;
     }
-    // The objective-progress announces (the quest-update handler
-    // `0x5e5ad0`), all fired AFTER the log push so a handler reading the log sees the fresh
-    // state. Per progressed quest ([`quests_with_progressed_objectives`] — present in BOTH
-    // states; a fresh accept or a turn-in is not "achieved a quest objective"):
-    //  - UI_INFO_MESSAGE with each moved line's fresh text — the yellow top-center toast. The
-    //    verified keys `ERR_QUEST_ADD_KILL_SII "%s slain: %d/%d"` (creature) /
-    //    `ERR_QUEST_ADD_FOUND_SII "%s: %d/%d"` (GO) / `ERR_QUEST_ADD_ITEM_SII "%s: %d/%d"`
-    //    compose exactly the leaderboard line, which is why the line IS the message. And on the
-    //    whole-quest COMPLETE flip: `ERR_QUEST_OBJECTIVE_COMPLETE_S "%s (Complete)"`, falling to
-    //    `ERR_QUEST_UNKNOWN_COMPLETE "Objective Complete."` when the name is unresolvable — the
-    //    verified 0x198 pair (never `ERR_QUEST_COMPLETE_S`, a different call site). INTERIM
-    //    (named divergence): the real client fires from the SMSG handlers and SKIPS a toast
-    //    whose name is uncached (peek-only lookups); ours rides the log diff that feeds the
-    //    lines, so the toast always agrees with the log (an in-flight name shows the log's own
-    //    placeholder). The diff announces an objective only when it ADVANCED — never on a
-    //    regression or a re-render ([`advanced`]).
-    //  - QUEST_WATCH_UPDATE with the byte law's arg: the quest's **1-based WATCH-LIST position,
-    //    0 when unwatched** (`0x703f50(0x221)` ← `0x4df880` — NOT the quest-log index the ref
-    //    FrameXML's `AutoQuestWatch_Update(arg1)` treats it as; the shipped 1.12 auto-watch
-    //    chain is broken at exactly this seam).
-    //  - BENILLA_QUEST_PROGRESS with the quest's 1-based LOG index — our own event carrying what
-    //    the ref Lua *needed*: the auto-watch (`OPTION_TOOLTIP_AUTO_QUEST_WATCH`, "watched for 5
-    //    minutes when you achieve a quest objective") runs off this, a deliberate
-    //    intent-over-letter divergence from the ref's broken chain (QuestLogFrame.xml's
-    //    auto-watch comment; decision record with this fold-back).
+    // Announced after the push, so a handler reads the new log. The reference announces from the
+    // `SMSG_QUESTUPDATE_*` handler (`0x5e5ad0`), dropping a toast whose name is uncached; this
+    // rides the log diff, so a quest under a collapsed header announces nothing. A progress toast
+    // is the leaderboard line, as the `ERR_QUEST_ADD_*_SII` keys compose the same sentence.
     let progressed = quests_with_progressed_objectives(last, &fresh);
     script.set_quest_log(fresh.clone());
     script.fire_event("QUEST_LOG_UPDATE", vec![]);
@@ -885,12 +683,10 @@ fn feed_quest_log(
                 script.fire_event("UI_INFO_MESSAGE", vec![ScriptValue::Str(line)]);
             }
             if quest.completed {
-                // The 0x198 pair — msgId `0xf8` `ERR_QUEST_OBJECTIVE_COMPLETE_S` when
-                // the handler has the objective text, `0xf9` `ERR_QUEST_UNKNOWN_COMPLETE` when it
-                // does not (`0x5e5d12`; never `ERR_QUEST_COMPLETE_S`, which is the turn-in's own
-                // call site).
-                // Both are catalog rows, so the surface and the sound come from there rather than
-                // from a hand-picked `fire_event` here.
+                // Catalog row `0xf8`, or `0xf9` with no text, never the turn-in's
+                // `ERR_QUEST_COMPLETE_S`. The reference shows it only on
+                // `SMSG_QUESTUPDATE_COMPLETE` (`0x5e5d12`), its `%s` the quest's end text
+                // (`+0x129c`, `0x5e5d22`); this shows the title, on any completion flip.
                 let line = if quest.title.is_empty() {
                     crate::ui_action::keyed_line(&script, "ERR_QUEST_UNKNOWN_COMPLETE")
                 } else {
@@ -902,11 +698,9 @@ fn feed_quest_log(
                 };
                 crate::ui_action::show_messages(&mut script, &mut sink, "ui_quest_log", line);
             }
-            // QUEST_WATCH_UPDATE's arg1 is the quest's LOG index: stock QuestLog_OnEvent hands it
-            // to AutoQuestWatch_Update(questIndex), whose end is AddQuestWatch(questIndex)
-            // (QuestLogFrame.lua:68, 752-769). Ours used to pass the watch-list position and
-            // fire a BENILLA_QUEST_PROGRESS twin carrying the log index; the twin went with the
-            // window (1944).
+            // The quest's 1-based log row: the reference's arg is `0x4df880`'s search of the row
+            // array `0xbb71c0`, not of the five-slot watch list `0xbb70a0`, and stock
+            // `AutoQuestWatch_Update(questIndex)` takes it (`QuestLogFrame.lua:67-69`).
             script.fire_event(
                 "QUEST_WATCH_UPDATE",
                 vec![ScriptValue::Int(i64::from(quest.index))],
@@ -916,55 +710,27 @@ fn feed_quest_log(
     *last = fresh;
 }
 
-/// Did one objective **advance** between two log states — the announce predicate, and the whole of
-/// decision 1152's fix for B237.
-///
-/// The reference's law (handler
-/// `0x5e5ad0`) is that the progress toast fires from the server's *additive* announcements alone —
-/// `SMSG_QUESTUPDATE_ADD_KILL` (`ERR_QUEST_ADD_KILL_SII`) and `_ADD_ITEM`
-/// (`ERR_QUEST_ADD_ITEM_SII`, via `0x5dd060`). There is no removal opcode and no client-side
-/// re-announce, so the reference **cannot** toast on an objective going backwards. Ours rides the
-/// log diff (0340's named divergence — the same state feeds the toast and the log, so they always
-/// agree), which made the predicate "the rendered line changed" — strictly wider than the law, and
-/// wrong in exactly one director-visible way: a **turn-in** destroys the required items via an
-/// inline `SMSG_DESTROY_OBJECT` while the quest-log slot clears only in the tick's batched
-/// `SMSG_UPDATE_OBJECT` (vmangos `Player::RewardQuest` — `DestroyItemCount` at the top, the
-/// `SetQuestSlot(log_slot, 0)` ~40 lines later), so for a frame or two the quest is still in the
-/// log with an empty bag and the line dips to `0/req`. The old predicate read that dip as progress
-/// and popped "Rumbleshot's Ammo: 0/1" in the middle of the screen.
-///
-/// Comparing the numbers rather than the string also drops the re-announce 0340 named as INTERIM
-/// (an item/creature **name** landing late rewrote `text` with `cur` unmoved, toasting the same
-/// line twice) — the reference skips a toast whose name is uncached outright, so suppressing the
-/// second is a step toward it, not away.
-///
-/// The whole-quest COMPLETE flip is deliberately NOT part of this: it is the reference's own
-/// separate `SMSG_QUESTUPDATE_COMPLETE` message (`ERR_QUEST_OBJECTIVE_COMPLETE_S`, one line for
-/// the quest), carried by [`QuestProgress::completed`].
+/// Whether an objective advanced. The reference toasts only on the server's additive
+/// `SMSG_QUESTUPDATE_ADD_KILL` and `_ADD_ITEM` (`0x5e5ad0`, `0x5dd060`), with no removal opcode,
+/// so a count going down or a name landing late announces nothing. A turn-in destroys the items
+/// (vmangos `Player.cpp:13252`) before the slot clears (`Player.cpp:13294`): a silent dip.
 fn advanced(now: &QuestLogObjectiveView, was: &QuestLogObjectiveView) -> bool {
     now.cur > was.cur
 }
 
-/// One quest whose objectives advanced between log states — the announce unit of
-/// [`feed_quest_log`].
+/// One quest whose objectives advanced between two log states.
 struct QuestProgress {
-    /// The quest's 1-based index in the NEW log (the Era API's quest-log index space).
+    /// The quest's 1-based row in the new log, `GetQuestLogTitle`'s index.
     index: u32,
-    /// The quest title (the COMPLETE toast's `%s`; empty falls to the UNKNOWN form).
+    /// The COMPLETE toast's `%s` here; empty takes `ERR_QUEST_UNKNOWN_COMPLETE`.
     title: String,
-    /// The fresh text of every objective line that ADVANCED ([`advanced`]), in objective order.
     changed_lines: Vec<String>,
-    /// The whole-quest COMPLETE state flipped on this diff (the `0x198` toast).
+    /// The quest's COMPLETE state turned on in this diff.
     completed: bool,
 }
 
-/// The quests present in BOTH states with a same-position objective line that **advanced**, or
-/// whose whole-quest COMPLETE state flipped on — "achieved a quest objective", the trigger for
-/// the progress toasts and the auto-watch. A quest appearing (fresh accept — or its template
-/// resolving late and growing lines from zero) or leaving (turn-in/abandon) does NOT count: the
-/// pairwise zip skips added/removed lines by construction. Pure, so it's testable without the
-/// ECS/ask-once caches — the exact shape [`abandon_slot`] already keeps this file's
-/// feed-vs-logic split in.
+/// The quests in both states with a same-position line that advanced, or whose COMPLETE state
+/// turned on. A quest or a line appearing or leaving is not progress.
 fn quests_with_progressed_objectives(
     old: &QuestLogState,
     new: &QuestLogState,
@@ -996,17 +762,11 @@ fn quests_with_progressed_objectives(
         .collect()
 }
 
-/// Drain the confirmed abandons (the quest id marked at click time — see
-/// `benilla_ui::script::quest_log`'s module doc) and map each to `CMSG_QUESTLOG_REMOVE_QUEST` via
-/// this frame's `row_slots`.
-/// The `ZoneOrSort → header name` lookup ([`benilla_formats::QuestHeaderNames`]), loaded once at
-/// startup. Absent when the client data didn't load — the feed then buckets everything under
-/// "Quests".
+/// The `ZoneOrSort` header names; without client data only id 0's header has a name.
 #[derive(Resource)]
 pub(crate) struct QuestHeaderNamesRes(pub benilla_formats::QuestHeaderNames);
 
-/// Startup: read AreaTable/QuestSort names through the patch chain (the zone-audio catalog's
-/// exact load shape).
+/// Startup: reads the `AreaTable` and `QuestSort` names off the patch chain.
 fn load_quest_header_names(
     mut commands: Commands,
     assets: Option<Res<benilla_assets::WorldAssets>>,
@@ -1023,14 +783,11 @@ fn load_quest_header_names(
     }
 }
 
-/// The quest `Type → tag name` lookup ([`benilla_formats::QuestTagNames`] — `QuestInfo.dbc`),
-/// loaded once at startup. Absent when the client data didn't load; the feed then pushes no tag,
-/// which is what an untagged quest pushes anyway.
+/// The quest tag names by `Type` (`QuestInfo.dbc`); without client data no quest has a tag.
 #[derive(Resource)]
 pub(crate) struct QuestTagNamesRes(pub benilla_formats::QuestTagNames);
 
-/// Startup: read the `QuestInfo.dbc` tag names through the patch chain (the header-names load's
-/// exact shape).
+/// Startup: reads the `QuestInfo.dbc` tag names off the patch chain.
 fn load_quest_tag_names(mut commands: Commands, assets: Option<Res<benilla_assets::WorldAssets>>) {
     use benilla_assets::LockRecover;
     let Some(assets) = assets else { return };
@@ -1044,10 +801,8 @@ fn load_quest_tag_names(mut commands: Commands, assets: Option<Res<benilla_asset
     }
 }
 
-/// Drain the header fold intents (`CollapseQuestHeader`/`ExpandQuestHeader`): map each 1-based
-/// entry index through this frame's `header_keys` to the header TITLE and toggle it in the
-/// app-owned collapse set; index 0 = every header (the ref's collapse-all button). The next
-/// [`feed_quest_log`] pass rebuilds the filtered list.
+/// Drains `CollapseQuestHeader` and `ExpandQuestHeader`: an entry index names a header by its
+/// title, and 0 is every header (the collapse-all button).
 fn drain_quest_log_collapses(
     script: Option<NonSendMut<UiScript>>,
     mut quest_log: ResMut<QuestLog>,
@@ -1073,9 +828,7 @@ fn drain_quest_log_collapses(
     }
 }
 
-/// `QuestLogPushQuest()` — the *Share Quest* button. The engine already resolved
-/// the selection to a quest id at click time, so this is a straight relay; the server addresses the
-/// party itself.
+/// `QuestLogPushQuest()`: the quest id taken at the click goes out; the server finds the party.
 fn drain_quest_log_pushes(script: Option<NonSendMut<UiScript>>, commands: Res<NetCommands>) {
     let Some(mut script) = script else {
         return;
@@ -1109,7 +862,7 @@ fn drain_quest_log_abandons(
 mod tests {
     use super::*;
 
-    // ── order_groups — the reference's display order ────────────────────────────────────────────
+    // ── order_groups ────────────────────────────────────────────────────────────────────────────
 
     fn grow(zos: i32, header: &str, level: u32, title: &str, slot: u8) -> GroupRow {
         GroupRow {
@@ -1121,27 +874,19 @@ mod tests {
         }
     }
 
-    /// Group order: `id == 0` first regardless of its name, then an unnamed id (`""`), then the
-    /// rest by CASE-INSENSITIVE name — the client's collator is `_strnicmp`, so a byte-wise
-    /// compare (which is what this used to do) puts an all-lowercase name in the wrong place.
     #[test]
     fn groups_put_id_zero_first_then_unnamed_then_case_folded_names() {
         let rows = vec![
             grow(12, "Elwynn Forest", 1, "a", 0),
-            grow(-3, "warlock", 1, "b", 1), // lowercase: byte-cmp would sort it after "Westfall"
+            grow(-3, "warlock", 1, "b", 1), // a byte compare sorts it after "Westfall"
             grow(0, MISSING_HEADER, 1, "c", 2),
             grow(40, "Westfall", 1, "d", 3),
             grow(999, "", 1, "e", 4), // an id neither table names
         ];
         let order: Vec<i32> = order_groups(&rows).into_iter().map(|(z, _, _)| z).collect();
-        // `warlock` before `Westfall` is the discriminating pair: case-folded, `wa` < `we`; by
-        // BYTES, `W`(0x57) < `w`(0x77) puts `Westfall` first. Everything else about this list is
-        // the same either way, which is why the old byte-wise sort looked fine.
         assert_eq!(order, vec![0, 999, 12, -3, 40]);
     }
 
-    /// The `id == 0` header carries the reference's own literal — a designer-data tell, and
-    /// reachable only because a row is never listed before its template is cached.
     #[test]
     fn the_zero_header_is_the_references_literal() {
         let rows = vec![grow(0, MISSING_HEADER, 1, "a", 0)];
@@ -1149,11 +894,9 @@ mod tests {
         assert_eq!(groups[0].1, "Missing header! (quest designers)");
     }
 
-    /// Within a group: level ASC, then title (case-insensitively) — NOT descriptor-slot order,
-    /// which is what benilla claimed and `0x4deac0` refuted.
     #[test]
     fn within_a_group_it_is_level_then_title_not_slot_order() {
-        // Deliberately seeded in the reverse of the expected order by slot.
+        // Seeded in the reverse of the expected order by slot.
         let rows = vec![
             grow(12, "Elwynn Forest", 9, "Zzz", 0),
             grow(12, "Elwynn Forest", 3, "beta", 1),
@@ -1167,14 +910,9 @@ mod tests {
             .iter()
             .map(|&i| rows[i].title.as_str())
             .collect();
-        // level 1, then the two level-3s by case-folded title ("Alpha" < "beta" — a byte compare
-        // would put uppercase "Alpha" before "beta" too, so the discriminating pair is below),
-        // then level 9.
         assert_eq!(titles, vec!["Anything", "Alpha", "beta", "Zzz"]);
     }
 
-    /// The case-folding is load-bearing in its own right: `"apple"` must precede `"Banana"`, which
-    /// a byte-wise compare gets wrong (uppercase `B` = 0x42 sorts before lowercase `a` = 0x61).
     #[test]
     fn title_order_is_case_insensitive() {
         let rows = vec![
@@ -1234,10 +972,7 @@ mod tests {
 
     #[test]
     fn fold_hiding_the_selection_resets_to_zero_never_the_header() {
-        // The director's defect: selecting quest 7, folding "A" used to re-point the selection at
-        // the HEADER row — the detail pane painted the category. A header is never a valid
-        // selection (ref QuestLog_GetFirstSelectableQuest skips headers): reset to 0 so the Lua
-        // update's SetFirstValidSelection picks the first visible quest.
+        // A header is never a selection: 0 lets `QuestLog_SetFirstValidSelection` pick a quest.
         let old = vec![header("A"), quest(7)];
         let new = vec![header("A")]; // folded: the quest left the visible list
         assert_eq!(remap_selection(&old, &new, 2), 0);
@@ -1247,7 +982,6 @@ mod tests {
     fn a_header_selection_is_evicted_not_preserved() {
         let old = vec![header("A"), quest(7)];
         let new = vec![header("A"), quest(7)];
-        // However a header got selected, the remap never keeps it.
         assert_eq!(remap_selection(&old, &new, 1), 0);
     }
 
@@ -1277,15 +1011,8 @@ mod tests {
 
     // ── creature_line / item_line ───────────────────────────────────────────────────────────────
 
-    /// A stand-in string table whose three templates are **deliberately not** the shipped wording.
-    ///
-    /// That is the point, and it is decision 2045's: in enUS `QUEST_MONSTERS_KILLED` and
-    /// `ERR_QUEST_ADD_KILL_SII` are the same sentence, and `QUEST_OBJECTS_FOUND`,
-    /// `QUEST_ITEMS_NEEDED` and their two `ERR_QUEST_ADD_*` twins are the same four — so an
-    /// assertion on English cannot tell a right key from a wrong one. These name the key in the
-    /// rendered line, so each case below asserts *which lookup happened*. The real wording is
-    /// checked against the player's own table by
-    /// [`the_leaderboard_keys_resolve_in_the_real_global_strings`].
+    /// Templates that name their key, as enUS gives each leaderboard key the same sentence as its
+    /// `ERR_QUEST_ADD_*` twin.
     fn probe_strings(key: &str) -> Option<String> {
         match key {
             "QUEST_MONSTERS_KILLED" => Some("<KILLED %s %d of %d>".into()),
@@ -1311,10 +1038,7 @@ mod tests {
         assert_eq!(line.text, "<KILLED ... 0 of 10>");
     }
 
-    /// A GameObject objective with no name takes `QUEST_OBJECTS_FOUND` on the placeholder — the
-    /// binding fetches that key once, ABOVE its cache test (`0x4e031e`), so both its legs share
-    /// it. Before decision 2045 this composed an invented `"Objective: %d/%d"` line, which is a
-    /// sentence 1.12 never says.
+    /// The GameObject key is fetched above the cache test (`0x4e031e`), so a nameless one keeps it.
     #[test]
     fn go_objective_falls_back_without_a_name_cache() {
         let go_id = ((-57i32) as u32) | 0x8000_0000;
@@ -1337,7 +1061,7 @@ mod tests {
     #[test]
     fn item_objective_counts_bags_and_clamps_to_required() {
         let o = obj(0, 0, 2000, 5, "");
-        // 8 in the bags, but required is only 5 — the line clamps, doesn't overshoot.
+        // 8 carried, 5 required: the line clamps.
         let line = item_line(&o, 0, Some("Kobold Ear"), 8, &probe_strings).unwrap();
         assert_eq!(line.text, "<NEEDED Kobold Ear 5 of 5>");
         assert_eq!(line.kind, "item");
@@ -1351,11 +1075,7 @@ mod tests {
         assert_eq!(line.text, "<NEEDED ... 2 of 5>");
     }
 
-    /// **The key fork**, and the one an English assertion could never see: a creature
-    /// objective carrying `ObjectiveText[i]` stops being "slain" — the override IS the name and
-    /// the format becomes `QUEST_OBJECTS_FOUND` (`mov ecx,0x84b634` @`0x4e03e1`) — while `type`
-    /// still answers `"monster"`, because that is read from a fresh sign test of
-    /// `ReqCreatureOrGOId[i]`.
+    /// An override takes `QUEST_OBJECTS_FOUND` (`0x84b634` at `0x4e03e1`); `type` is `"monster"`.
     #[test]
     fn custom_text_overrides_the_creature_auto_line() {
         let o = obj(100, 10, 0, 0, "Slay the vermin");
@@ -1364,9 +1084,7 @@ mod tests {
         assert_eq!(line.kind, "monster");
     }
 
-    /// The three keys against the player's REAL `GlobalStrings.lua` — the guard a key assertion
-    /// needs beside it, since a typo'd key degrades a line to empty rather than to a wrong
-    /// sentence. Skips without client data.
+    /// Against the real `GlobalStrings.lua`; skips without client data.
     #[test]
     fn the_leaderboard_keys_resolve_in_the_real_global_strings() {
         let data = benilla_formats::wow_data_or_skip!();
@@ -1395,16 +1113,12 @@ mod tests {
         assert_eq!(line.text, "Kobold Vermin slain: 3/10");
     }
 
-    /// Decision 1158, correcting 0109: a line's `finished` is `cur >= req` and **nothing else**.
-    /// The reference reads the whole-quest COMPLETE bit exactly once in `GetQuestLogLeaderBoard`
-    /// (`0x4e02a2`), in the `event` branch, where it is that line's only predicate — it is never
-    /// or-ed into a counted line's verdict. Only the whole-quest turn-in predicate `0x4df580` reads
-    /// the bit and the counts together.
+    /// A line's `finished` is `cur >= req` alone: `GetQuestLogLeaderBoard` reads the COMPLETE bit
+    /// only for the `event` line (`0x4e02a2`); the turn-in predicate `0x4df580` reads both.
     #[test]
     fn a_complete_quest_does_not_mark_a_short_objective_finished() {
         let o = obj(100, 10, 0, 0, "");
-        // The counter (1) is well short of required (10). Whatever the quest's state byte says,
-        // THIS line is not finished.
+        // 1 of 10: not finished, whatever the quest's state.
         let line = creature_line(&o, 1, Some("Kobold"), &probe_strings).unwrap();
         assert_eq!(line.text, "<KILLED Kobold 1 of 10>");
         assert!(!line.finished);
@@ -1417,9 +1131,7 @@ mod tests {
         assert!(item_line(&o, 0, None, 0, &probe_strings).is_none());
     }
 
-    // ── build_objectives: every occupied slot gets its own lines, not just the selection ────────────
-    // (the seam this Part-A change is built on: `QuestLogEntryView::objectives` moved off the
-    // selection-only `QuestLogDetail` — `benilla-ui/src/script/quest_log.rs`'s module doc.)
+    // ── build_objectives ────────────────────────────────────────────────────────────────────────
 
     fn quest_template(objectives: [QuestObjective; 4]) -> QuestTemplate {
         QuestTemplate {
@@ -1454,7 +1166,7 @@ mod tests {
     fn build_objectives_reads_every_occupied_quad_via_the_slots_counters_and_skips_empties() {
         let template = quest_template([
             obj(100, 10, 0, 0, ""), // creature objective, counter[0]
-            obj(0, 0, 0, 0, ""),    // unused quad — emits no line
+            obj(0, 0, 0, 0, ""),    // unused quad: no line
             obj(0, 0, 2000, 5, ""), // item objective (counted from the bags, not a counter)
             obj(0, 0, 0, 0, ""),    // unused quad
         ]);
@@ -1464,9 +1176,8 @@ mod tests {
             state: 0,
             timer: 0,
         };
-        let store = ObjectFields::default(); // empty bags — the item objective reads 0/5
+        let store = ObjectFields::default(); // empty bags: the item objective reads 0/5
         let items = Items::default();
-        // Empty bags — every item objective here reads 0 owned (2334).
         let mut objs = crate::ui_items::TestObjects::new();
         let objects = objs.get();
         let names = NameCache::default();
@@ -1484,9 +1195,7 @@ mod tests {
             &probe_strings,
         );
 
-        // The two unused quads emit nothing; the two real ones resolve in order — creature/item
-        // names are unresolved (ask-once mid-flight, no answer seeded) so they fall to the same
-        // placeholder path the line builders' own tests already cover directly.
+        // The unused quads emit nothing; no names are seeded, so both lines wear the placeholder.
         assert_eq!(objectives.len(), 2);
         assert_eq!(objectives[0].text, "<KILLED ... 3 of 10>");
         assert_eq!(objectives[0].kind, "monster");
@@ -1495,18 +1204,13 @@ mod tests {
         assert_eq!(objectives[1].kind, "item");
     }
 
-    /// **The bug this split exists for** (director, 2026-09-15): the reference walks
-    /// `ReqCreatureOrGOId[0..3]` (`0x4e02d7`) and `ReqItemId[0..3]` (`0x4e04f4`) as two
-    /// INDEPENDENT passes, so one objective quad carrying both kinds produces two lines. Merging
-    /// them per quad returned on the creature branch and dropped the item outright.
-    ///
-    /// The fixture is quest 358 "Graverobbers"' own shape — `ReqCreatureOrGOId1` 1941 ×8 and
-    /// `ReqItemId1` 2834 ×8 both at index 0, plus a second creature at index 1 — which showed 2
-    /// lines where the reference shows 3.
+    /// Creatures (`0x4e02d7`) and items (`0x4e04f4`) are separate passes, so a quad carrying both
+    /// gives two lines. The fixture is quest 358's shape: creature 1941 ×8 and item 2834 ×8 at
+    /// index 0, a second creature at 1.
     #[test]
     fn a_quad_carrying_both_a_creature_and_an_item_emits_both_lines() {
         let template = quest_template([
-            obj(1941, 8, 2834, 8, ""), // BOTH kinds, same index
+            obj(1941, 8, 2834, 8, ""), // both kinds, one index
             obj(1675, 5, 0, 0, ""),
             obj(0, 0, 0, 0, ""),
             obj(0, 0, 0, 0, ""),
@@ -1519,7 +1223,7 @@ mod tests {
         };
         let store = ObjectFields::default();
         let items = Items::default();
-        // Empty bags — every item objective here reads 0 owned (2334).
+        // Empty bags: every item objective reads 0.
         let mut objs = crate::ui_items::TestObjects::new();
         let objects = objs.get();
         let names = NameCache::default();
@@ -1537,8 +1241,7 @@ mod tests {
             &probe_strings,
         );
 
-        // Three lines, in the reference's pass order: both creatures, THEN the item — not the
-        // quad order, which would interleave them.
+        // Pass order: both creatures, then the item.
         assert_eq!(objectives.len(), 3, "{objectives:#?}");
         assert_eq!(objectives[0].text, "<KILLED ... 8 of 8>");
         assert_eq!(objectives[1].text, "<KILLED ... 1 of 5>");
@@ -1546,9 +1249,7 @@ mod tests {
         assert_eq!(objectives[2].kind, "item");
     }
 
-    /// The override buffer belongs to the CREATURE branch (`0x4e03da`) — on a shared quad it must
-    /// not leak into the item line, which takes its name from the item cache alone. The split made
-    /// this reachable for the first time, so it is asserted rather than assumed.
+    /// The override text is the creature branch's (`0x4e03da`), never the item line's.
     #[test]
     fn a_shared_quads_objective_text_names_the_creature_not_the_item() {
         let template = quest_template([
@@ -1565,7 +1266,7 @@ mod tests {
         };
         let store = ObjectFields::default();
         let items = Items::default();
-        // Empty bags — every item objective here reads 0 owned (2334).
+        // Empty bags: every item objective reads 0.
         let mut objs = crate::ui_items::TestObjects::new();
         let objects = objs.get();
         let names = NameCache::default();
@@ -1583,15 +1284,13 @@ mod tests {
             &probe_strings,
         );
         assert_eq!(objectives.len(), 2);
-        // The override IS the creature's name, and flips its key to QUEST_OBJECTS_FOUND
-        // (`0x4e03e1`).
+        // The override is the creature's name, under `QUEST_OBJECTS_FOUND` (`0x4e03e1`).
         assert_eq!(objectives[0].text, "<FOUND Graverobbers routed 8 of 8>");
         // The item line wears the in-flight placeholder, never the creature's text.
         assert_eq!(objectives[1].text, "<NEEDED ... 0 of 8>");
     }
 
-    /// `ReqItemId[i] != SrcItemId` (`0x4e00ce`/`0x4e04fa`): the quest's own provided/starter item
-    /// is excluded from the board even when it also sits in the required array.
+    /// `ReqItemId[i] != SrcItemId` (`0x4e00ce`, `0x4e04fa`).
     #[test]
     fn the_quests_own_source_item_is_not_a_leaderboard_line() {
         let mut template = quest_template([
@@ -1609,7 +1308,7 @@ mod tests {
         };
         let store = ObjectFields::default();
         let items = Items::default();
-        // Empty bags — every item objective here reads 0 owned (2334).
+        // Empty bags: every item objective reads 0.
         let mut objs = crate::ui_items::TestObjects::new();
         let objects = objs.get();
         let names = NameCache::default();
@@ -1629,9 +1328,6 @@ mod tests {
         assert!(objectives.is_empty(), "{objectives:#?}");
     }
 
-    /// The 0109-era behaviour this inverts: a COMPLETE slot state used to mark every line
-    /// finished. Decision 1158 — the reference's per-line verdict never reads that bit
-    /// (`0x4e0110`); only the whole-quest turn-in predicate (`0x4df580`) combines the two.
     #[test]
     fn a_complete_slot_state_does_not_finish_a_short_line() {
         let template = quest_template([
@@ -1642,13 +1338,13 @@ mod tests {
         ]);
         let log_slot = QuestLogSlot {
             quest_id: 1,
-            counters: [1, 0, 0, 0], // well short of required (10)...
-            state: quest_slot_state::COMPLETE, // ...but the whole quest is complete
+            counters: [1, 0, 0, 0],            // 1 of the 10 required
+            state: quest_slot_state::COMPLETE, // yet the quest is complete
             timer: 0,
         };
         let store = ObjectFields::default();
         let items = Items::default();
-        // Empty bags — every item objective here reads 0 owned (2334).
+        // Empty bags: every item objective reads 0.
         let mut objs = crate::ui_items::TestObjects::new();
         let objects = objs.get();
         let names = NameCache::default();
@@ -1682,11 +1378,11 @@ mod tests {
         assert_eq!(money_split(0), (0, 0));
     }
 
-    // ── abandon_slot: quest id → descriptor slot across gaps ───────────────────────────────────────
+    // ── abandon_slot ────────────────────────────────────────────────────────────────────────────
 
     #[test]
     fn abandon_maps_quest_id_to_slot_across_a_gap() {
-        // Slots 0 and 2 (slot 1 empty in the descriptor array) — the id finds its own slot.
+        // Slots 0 and 2, slot 1 empty: each id finds its own slot.
         let row_slots = vec![(783u32, 0u8), (7, 2)];
         assert_eq!(abandon_slot(783, &row_slots), Some(0));
         assert_eq!(abandon_slot(7, &row_slots), Some(2));
@@ -1694,21 +1390,17 @@ mod tests {
         assert_eq!(abandon_slot(0, &row_slots), None); // 0 is never a quest
     }
 
-    // ── The abandon mark is a QUEST ID (0x4dfb50 / 0x4df070) ─────────────────────────────────────
+    // ── The abandon mark is a quest id ──────────────────────────────────────────────────────────
 
-    /// **An abandon names a quest, not a row.** `SetAbandonQuest` (`0x4dfb50`) copies the
-    /// selection `0xbb7480` — which holds the selected row's QUEST ID (`0x4def30`, `0x4def5d`) —
-    /// into the mark `0xbb7484`; `AbandonQuest` (`0x4dfe00` → `0x4df070`) searches the row table
-    /// `0xbb71c0` for that id and removes that row's slot. So a log that re-indexes while the
-    /// confirm popup is up — a fold, a quest arriving or leaving — cannot move the abandon onto a
-    /// neighbour. Ours pinned the 1-based row index and resolved it against the rows current at
-    /// confirm time: fold the group above and the popup's Yes abandoned the quest below.
+    /// `SetAbandonQuest` (`0x4dfb50`) copies the selection `0xbb7480`, a quest id (`0x4def30`,
+    /// `0x4def5d`), into the mark `0xbb7484`, and `AbandonQuest` (`0x4dfe00`, `0x4df070`) finds its
+    /// row in `0xbb71c0` again, so a fold while the popup is up cannot retarget the abandon.
     #[test]
     fn a_fold_between_mark_and_confirm_does_not_retarget_the_abandon() {
         use benilla_protocol::messages::field::FIELD_PLAYER_QUEST_LOG_1_1;
 
         // Z1 = zone 0 ("Missing header!", forced first) holding A; Z2 = zone 7 holding B and C.
-        // Entries: [Z1, A, Z2, B, C] — B is row 4.
+        // Entries: [Z1, A, Z2, B, C]; B is row 4.
         const A: u32 = 101;
         const B: u32 = 201;
         const C: u32 = 202;
@@ -1765,7 +1457,7 @@ mod tests {
                 .unwrap(),
             "B"
         );
-        // The popup is up; the player folds Z1 — B moves from row 4 to row 3, C takes row 4.
+        // With the popup up, fold Z1: B moves to row 3 and C takes row 4.
         run(&mut app, "CollapseQuestHeader(1)");
         app.update();
         run(&mut app, "AbandonQuest()");
@@ -1781,12 +1473,10 @@ mod tests {
         );
     }
 
-    // ── quests_with_progressed_objectives: the QUEST_WATCH_UPDATE per-quest trigger ─────────────────
+    // ── quests_with_progressed_objectives ───────────────────────────────────────────────────────
 
-    /// A one-objective entry built the way [`creature_line`] builds one: the `cur`/`req` carried
-    /// on the view are READ BACK OUT of the line's own trailing `%d/%d`, so a fixture can never
-    /// claim a count its text disagrees with (the production invariant — the text is formatted
-    /// FROM the numbers).
+    /// A one-objective entry whose `cur`/`req` are parsed from its text's trailing `cur/req`, so
+    /// the two cannot disagree.
     fn entry(quest_id: u32, objective_text: &str) -> QuestLogEntryView {
         let (cur, req) = objective_text
             .rsplit_once(' ')
@@ -1835,7 +1525,7 @@ mod tests {
         assert_eq!(fired.len(), 1);
         assert_eq!(fired[0].index, 2);
         assert_eq!(fired[0].changed_lines, ["Tough Wolf Meat: 3/8"]);
-        // Both moving fires both, each at its own 1-based index with its own fresh line.
+        // Both advancing fires both, each at its own index with its own line.
         let both = state(vec![
             entry(1, "Kobold Vermin slain: 4/10"),
             entry(2, "Tough Wolf Meat: 3/8"),
@@ -1857,8 +1547,7 @@ mod tests {
     fn appearing_or_leaving_the_log_is_not_progress() {
         let empty = state(vec![]);
         let with_entry = state(vec![entry(7, "Kobold Worker slain: 0/10")]);
-        // A fresh accept must NOT toast or auto-watch (the ref triggers on "achieved an
-        // objective") — and neither may a template resolving late and growing lines from zero.
+        // A fresh accept is not progress, nor is a late template growing lines from none.
         assert!(quests_with_progressed_objectives(&empty, &with_entry).is_empty());
         let grown = state(vec![QuestLogEntryView {
             quest_id: 7,
@@ -1866,15 +1555,13 @@ mod tests {
             ..Default::default()
         }]);
         assert!(quests_with_progressed_objectives(&grown, &with_entry).is_empty());
-        // A turn-in/abandon that removes the quest fires nothing either.
+        // Nor a turn-in or abandon removing the quest.
         assert!(quests_with_progressed_objectives(&with_entry, &empty).is_empty());
     }
 
-    /// B237 / decision 1152 — the turn-in flash. `Player::RewardQuest` destroys the required items
-    /// at the top (an inline `SMSG_DESTROY_OBJECT`) and clears the log slot ~40 lines later (the
-    /// tick's batched `SMSG_UPDATE_OBJECT`), so the client holds a complete collect quest over an
-    /// empty bag for a frame or two and the line dips to `0/req`. That dip must announce NOTHING:
-    /// the reference's toast is `SMSG_QUESTUPDATE_ADD_ITEM` only, and no removal opcode exists.
+    /// A turn-in destroys the items (an immediate `SMSG_DESTROY_OBJECT`) before the slot clears in
+    /// the batched `SMSG_UPDATE_OBJECT` (`Player::RewardQuest`), so the line dips to `0/req` for a
+    /// frame; the reference toasts only on `SMSG_QUESTUPDATE_ADD_ITEM`.
     #[test]
     fn a_regressing_objective_never_announces() {
         let held = state(vec![entry(313, "Rumbleshot's Ammo: 1/1")]);
@@ -1883,7 +1570,7 @@ mod tests {
             quests_with_progressed_objectives(&held, &emptied).is_empty(),
             "the bag emptying under a still-logged quest is not progress"
         );
-        // The slot clearing on the next frame was already silent (the quest leaves the log).
+        // The slot clearing next frame is silent too: the quest leaves the log.
         assert!(quests_with_progressed_objectives(&emptied, &state(vec![])).is_empty());
         // The control: the same quest actually being collected still announces.
         let looted = state(vec![entry(313, "Rumbleshot's Ammo: 1/1")]);
@@ -1893,10 +1580,7 @@ mod tests {
         );
     }
 
-    /// The ask-once name caches answer a frame or more after the line first renders. That rewrite
-    /// moves `text` with the count standing still — the reference skips a toast whose name is
-    /// uncached outright, so re-announcing the line when the name lands (0340's named INTERIM) is
-    /// a toast the reference never fires.
+    /// A name landing late rewrites the text with the count unmoved: no toast.
     #[test]
     fn a_name_landing_late_does_not_re_announce() {
         let placeholder = state(vec![entry(5, "...: 3/5")]);
@@ -1904,9 +1588,7 @@ mod tests {
         assert!(quests_with_progressed_objectives(&placeholder, &named).is_empty());
     }
 
-    /// The whole-quest COMPLETE flip is its own reference message (`SMSG_QUESTUPDATE_COMPLETE` →
-    /// `ERR_QUEST_OBJECTIVE_COMPLETE_S`, one line for the quest) — it must not also re-announce
-    /// every objective line just because their `finished` flag flipped with it.
+    /// The COMPLETE flip announces once for the quest, not again per objective line.
     #[test]
     fn the_complete_flip_announces_once_not_per_objective() {
         let mut before = entry(9, "Kobold Vermin slain: 10/10");

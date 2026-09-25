@@ -1,33 +1,11 @@
-//! **A bar slot never holds a rank the character has outgrown** — the one place
-//! that keeps the action bar's spell ids in step with the spell book's ranks.
-//!
-//! The bar is client-authoritative: the server stores 120 packed words and
-//! hands them back at login, and nothing on the server side ever rewrites them when a rank is
-//! learned (VERIFIED vmangos — `Player::AddSpell`'s supersede path touches only the spell store;
-//! the only `ConvertSpell` that walks `character_action` is the race-change tool). So the stored
-//! bar drifts, and it drifts *silently*: a superseded rank is dropped from the book
-//! (`Player::SendInitialSpells` skips `!active` spells), so the button comes back pointing at a
-//! spell the character no longer knows — dead, with no way to tell from the icon, which is the
-//! same art on every rank. That is the reported bug: a level-60 rogue's saved slot 1 still held
-//! Sinister Strike **rank 1** (`character_action.action = 1752`) while the book held only rank 8
-//! (11294), so the button did nothing.
-//!
-//! The chain lives in `SkillLineAbility.dbc`'s `forward_spellid` — 406 of the build's 4753 spells
-//! carry it, and they are exactly the abilities the server supersedes (every
-//! `SMSG_SUPERCEDED_SPELL` vmangos sends is gated on `GetSpellBookSuccessorSpellId`, which reads
-//! that column). Warrior/rogue physical abilities and the profession tier openers are chained;
-//! caster nukes and heals are not — their lower ranks stay known and castable, which is what
-//! makes vanilla down-ranking work. Normalization therefore cannot touch a deliberate down-rank:
-//! it only ever moves within a chain, and a chain is precisely a family where only one rank is
-//! ever known at a time.
-//!
-//! This runs on the `dirty` flag — every book arrival, rank-up and local slot write — so it is
-//! ONE mechanism covering all of them, not a login special case. Hence
-//! [`super::spells::superceded_spell`] no longer re-points buttons itself: the server's
-//! `SMSG_SUPERCEDED_SPELL` moves the *book*, and the bar follows from here. It has to be that way
-//! round, because the case that bit us got no supersede packet at all (vmangos suppresses them
-//! while the character is loading, so ranks gained offline — a `.levelup`, a boost — arrive as a
-//! book that silently disagrees with the bar).
+//! Keeps each spell slot on the highest rank of its chain the book holds, and sends each move. A
+//! chain is `SkillLineAbility.dbc`'s `forward_spellid`, the column the server's supersede reads;
+//! caster ranks are unchained, so a deliberate down-rank is never moved. Deviation: this runs on
+//! every book or bar change, where the reference re-points slots in memory only on
+//! `SMSG_SUPERCEDED_SPELL` (`0x4e5e60`), because vmangos never rewrites stored slots on a rank-up
+//! (`Player::AddSpell`), drops superseded ranks from the book (`Player.cpp:3463`) and sends no
+//! supersede while loading (`Player.cpp:3704`), so a stored slot can name a spell the character
+//! no longer knows.
 
 use bevy::prelude::*;
 
@@ -37,13 +15,8 @@ use super::PlayerActions;
 use crate::net::{ClientCommand, NetCommands};
 use crate::ui_spellbook::SkillLines;
 
-/// Re-point every spell button at the highest rank of its ability the book actually holds, and
-/// persist each move (a local slot mutation IS a `CMSG_SET_ACTION_BUTTON` — the
-/// bar has no other writer, so a fix we keep to ourselves would be re-applied every single login
-/// while the server's copy stayed wrong).
-///
-/// Gated on `dirty` and run before [`super::feed::feed_actions`] consumes it, so the corrected id
-/// is what the feed resolves and pushes — the stale rank never reaches a frame.
+/// Re-points each spell slot at the highest known rank of its chain and sends the move, so the
+/// server's stored copy is fixed too. Runs on `dirty`, before the feed consumes it.
 pub(super) fn normalize_action_ranks(
     mut actions: ResMut<PlayerActions>,
     skill_lines: Option<Res<SkillLines>>,
@@ -55,8 +28,7 @@ pub(super) fn normalize_action_ranks(
     if !actions.dirty {
         return;
     }
-    // Resolve first (the walk reads `buttons` and `spells` together), then write: an empty book
-    // yields no fixes at all, which is what keeps a bar-before-book packet order harmless.
+    // Resolve, then write. An empty book yields no fixes, so a bar arriving first is harmless.
     let fixes: Vec<(u8, u32)> = actions
         .buttons
         .values()
@@ -90,12 +62,10 @@ mod tests {
 
     use super::*;
 
-    /// Sinister Strike's real chain, ranks 1..8 (pinned against the DBC by `benilla_formats`'
-    /// own `real_rank_chains_resolve_the_highest_known_rank`).
+    /// Sinister Strike's chain, ranks 1 to 8.
     const SS: [u32; 8] = [1752, 1757, 1758, 1759, 1760, 8621, 11293, 11294];
 
-    /// These run the walk against the **real** `SkillLineAbility.dbc` — the chain is the thing
-    /// under test, and a hand-built fake chain would only test the walk against itself.
+    /// These run against the real `SkillLineAbility.dbc`: the chain is what is under test.
     fn client_data() -> Option<std::path::PathBuf> {
         let data = benilla_formats::wow_data_or_skip!(None);
         Some(data)
@@ -109,8 +79,7 @@ mod tests {
         }
     }
 
-    /// Run the system once over `buttons` + a book of `spells`, on the real catalog. Returns the
-    /// resulting store and the `(button, packed)` pairs that went out on the wire.
+    /// Runs the pass once; returns the store and the `(button, packed)` pairs sent.
     fn normalize(
         data: &std::path::Path,
         buttons: &[ActionButton],
@@ -142,9 +111,6 @@ mod tests {
         (store, sent)
     }
 
-    /// **The reported bug.** A level-60 rogue's saved slot 1 holds Sinister Strike rank 1 while
-    /// the book holds only rank 8: the slot moves to rank 8 AND the move goes out on the wire, so
-    /// the server's stored copy stops being wrong.
     #[test]
     fn a_stale_rank_1_slot_moves_to_the_known_rank_and_persists() {
         let Some(data) = client_data() else { return };
@@ -154,9 +120,6 @@ mod tests {
         assert_eq!(sent, vec![(0, 11294)]);
     }
 
-    /// Every rank below the known one lands on the same answer — including from *above* it, the
-    /// down-rank direction a forward-only walk can't reach. The already-correct slot doesn't move
-    /// and doesn't send.
     #[test]
     fn every_wrong_rank_converges_and_the_right_one_stays_put() {
         let Some(data) = client_data() else { return };
@@ -165,7 +128,7 @@ mod tests {
             .enumerate()
             .map(|(i, &id)| spell_button(i as u8, id))
             .collect();
-        // Rank 4 (1759) known: ranks 1-3 move UP to it, ranks 5-8 move DOWN to it.
+        // Rank 4 (spell 1759) known: ranks 1-3 move up to it, ranks 5-8 down.
         let (store, sent) = normalize(&data, &buttons, &[1759]);
         for slot in 0..8u8 {
             assert_eq!(store.buttons[&slot].action, 1759, "slot {slot}");
@@ -174,8 +137,7 @@ mod tests {
         assert!(!sent.iter().any(|(b, _)| *b == 3));
     }
 
-    /// A caster's down-rank is NOT a mistake: Fireball's ranks carry no `forward_spellid`, so a
-    /// slot holding rank 1 stays on rank 1 even with rank 2 known and castable.
+    /// Fireball's ranks 1 and 2 (133, 143) carry no `forward_spellid`.
     #[test]
     fn an_unchained_caster_rank_is_left_alone() {
         let Some(data) = client_data() else { return };
@@ -184,8 +146,6 @@ mod tests {
         assert!(sent.is_empty(), "nothing to persist");
     }
 
-    /// With no rank of the chain known — the book hasn't arrived yet, or the ability was never
-    /// learned — the slot is left exactly as it is rather than pointed somewhere arbitrary.
     #[test]
     fn an_unknown_chain_leaves_the_slot_untouched() {
         let Some(data) = client_data() else { return };
@@ -194,8 +154,6 @@ mod tests {
         assert!(sent.is_empty());
     }
 
-    /// Macro and item slots carry ids from other namespaces — walking them as spell ranks would
-    /// be nonsense, so the kind byte gates it.
     #[test]
     fn macro_and_item_slots_are_never_walked() {
         let Some(data) = client_data() else { return };
@@ -217,8 +175,6 @@ mod tests {
         assert!(sent.is_empty());
     }
 
-    /// A correct bar is a no-op — nothing moves, nothing is sent. That is what lets this ride the
-    /// `dirty` flag (set by every drag-and-drop) without adding traffic.
     #[test]
     fn a_correct_bar_sends_nothing() {
         let Some(data) = client_data() else { return };

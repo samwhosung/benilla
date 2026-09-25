@@ -1,13 +1,5 @@
-//! [`super::feed::feed_actions`] as a real Bevy system through a real Lua VM — the seam where the
-//! action bar's slot identity is resolved and pushed.
-//!
-//! What these pin is the **landed-template redisplay**: an ITEM slot's icon needs
-//! an item template that arrives asynchronously, so the resolve that first touches a cold entry is
-//! the one that ISSUES the ask-once query and necessarily reads back nothing. The regression these
-//! guard is a question mark that never goes away — the fresh character's food button.
-//!
-//! `run_system_once` is deliberately NOT used: the feed's memory is a `Local`, which that helper
-//! rebuilds per call, so a two-frame test has to run a registered system across two `app.update()`s.
+//! [`super::feed::feed_actions`] as a registered system through a real Lua VM. Not
+//! `run_system_once`: the feed's memory is a `Local`, which that helper rebuilds per call.
 
 use std::collections::HashMap;
 
@@ -22,17 +14,16 @@ use crate::entities::ItemDisplays;
 use crate::items::{test_template, Items};
 use crate::net::{ClientCommand, NetCommands};
 
-/// The fresh human warrior's default bar (vmangos `playercreateinfo_action`): Tough Jerky, item
-/// **117**, on wire slot **83** (the Battle Stance bonus page) — Lua action id 84.
+/// A new human warrior's food button (vmangos `playercreateinfo_action`): Tough Jerky on wire
+/// slot 83, the Battle Stance page.
 const JERKY: u32 = 117;
 const JERKY_SLOT: u8 = 83;
 const JERKY_ACTION: u32 = JERKY_SLOT as u32 + 1;
-/// Tough Jerky's real display id and the icon that display carries (`ItemDisplayInfo.dbc`).
+/// Tough Jerky's display id and its `ItemDisplayInfo.dbc` icon.
 const JERKY_DISPLAY: u32 = 2473;
 const JERKY_ICON: &str = "Interface\\Icons\\INV_Misc_Food_16";
 
-/// An app with the feed registered and the fresh character's food button on the bar — but a cold
-/// template cache, exactly as at login.
+/// The feed with the food button on the bar and a cold template cache, as at login.
 fn app_with_food_on_the_bar() -> (App, crossbeam_channel::Receiver<ClientCommand>) {
     let (tx, rx) = crossbeam_channel::unbounded();
     let mut app = App::new();
@@ -45,7 +36,7 @@ fn app_with_food_on_the_bar() -> (App, crossbeam_channel::Receiver<ClientCommand
             kind: ACTION_KIND_ITEM,
         },
     );
-    // SMSG_ACTION_BUTTONS' own arm sets this; the feed's first pass is what clears it.
+    // As `SMSG_ACTION_BUTTONS` sets it; the feed's first pass clears it.
     actions.dirty = true;
 
     let displays = HashMap::from([(
@@ -64,7 +55,7 @@ fn app_with_food_on_the_bar() -> (App, crossbeam_channel::Receiver<ClientCommand
         .init_resource::<PetTameFailures>()
         .init_resource::<UiErrorKeys>()
         .init_resource::<UiErrorTexts>()
-        // The cast-failure combat-log line (1703) rides the same drain.
+        // The cast-failure combat-log line rides the same drain.
         .init_resource::<crate::ui_chat::ChatLog>()
         .init_resource::<crate::sound::MessageSounds>()
         .insert_resource(ItemDisplays::icons_for_tests(
@@ -76,8 +67,8 @@ fn app_with_food_on_the_bar() -> (App, crossbeam_channel::Receiver<ClientCommand
     (app, rx)
 }
 
-/// What the VM believes the food button's icon is — the exact read `ActionBar.xml` does before it
-/// falls back to `BENILLA_FALLBACK_ICON` (the question mark).
+/// The food button's `GetActionTexture`, as `ActionButton_Update` reads it
+/// (`ActionButton.lua:157`); a nil hides the icon.
 fn fed_texture(app: &mut App) -> Option<String> {
     app.world_mut()
         .non_send_resource::<UiScript>()
@@ -85,7 +76,8 @@ fn fed_texture(app: &mut App) -> Option<String> {
         .unwrap()
 }
 
-/// What the VM answers `ActionBar.xml`'s Count gate — the ref's 1/nil, so `None` is "no".
+/// The food button's `IsConsumableAction`, the count gate in `ActionButton_UpdateCount`
+/// (`ActionButton.lua:287`): 1 or nil.
 fn fed_consumable(app: &mut App) -> Option<i64> {
     app.world_mut()
         .non_send_resource::<UiScript>()
@@ -93,10 +85,7 @@ fn fed_consumable(app: &mut App) -> Option<i64> {
         .unwrap()
 }
 
-/// The whole bug in one test: the first resolve issues the query and can only show the
-/// placeholder; the frame the answer lands, the slot re-resolves and the real icon arrives.
-/// Before decision 0660 the second half never happened — the button kept the question mark for the
-/// whole session, until some unrelated bar edit re-dirtied the feed.
+/// The first resolve asks for the template and shows the placeholder; the answer re-resolves.
 #[test]
 fn a_landed_item_template_redisplays_the_action_slot() {
     let (mut app, rx) = app_with_food_on_the_bar();
@@ -114,7 +103,6 @@ fn a_landed_item_template_redisplays_the_action_slot() {
         "…and it must have asked the server for the template"
     );
 
-    // Nothing else changes: no bar edit, no new spell, no local pickup — only the answer arriving.
     let mut info = test_template("Tough Jerky");
     info.display_info_id = JERKY_DISPLAY;
     app.world_mut()
@@ -129,15 +117,8 @@ fn a_landed_item_template_redisplays_the_action_slot() {
     );
 }
 
-/// The Count fontstring's **gate** rides the same landed template as the icon.
-///
-/// `IsConsumableAction 0x4e5250` reads nothing but the slot's item template, so it moves exactly
-/// when the icon does. Fed from the per-frame *state* map it could not: that feed runs `.after`
-/// this one and fires no event of its own for the flag, so the `ACTIONBAR_SLOT_CHANGED` that
-/// repaints the button always carried the previous frame's answer — and at login the previous
-/// frame had no template at all. The button kept its icon and lost its stack number for the whole
-/// session (the director's report, 2026-08-14). This is 0660's race again, one field over, which
-/// is why the guard belongs beside it: the two are one push or they are two bugs.
+/// `IsConsumableAction 0x4e5250` reads only the item template, so it rides the icon's push: the
+/// `ACTIONBAR_SLOT_CHANGED` repaint reads both.
 #[test]
 fn a_landed_item_template_also_lands_the_consumable_gate() {
     let (mut app, _rx) = app_with_food_on_the_bar();
@@ -149,8 +130,7 @@ fn a_landed_item_template_also_lands_the_consumable_gate() {
         "a cold template cannot answer the gate — the ask is still in flight"
     );
 
-    // Tough Jerky's real row (vmangos `item_template` 117, read 2026-08-14): one ON_USE block,
-    // spell 433 Food, SpellCharges **-1** — the destroy-on-use sign `is_consumable` tests.
+    // Tough Jerky's row (vmangos `item_template` 117): one ON_USE block, spell 433, charges -1.
     let mut info = test_template("Tough Jerky");
     info.display_info_id = JERKY_DISPLAY;
     info.spells = vec![ItemSpellEntry {
@@ -179,10 +159,7 @@ fn a_landed_item_template_also_lands_the_consumable_gate() {
     );
 }
 
-/// `IsConsumableAction 0x4e5250` — the gate's own law
-/// ([`benilla_protocol::ItemInfo::is_consumable`], fed into [`benilla_ui::script::ActionSlot`]).
-/// The director's B201 is the mount row: an on-use item with no charges wore a stack number under
-/// it because we tested `Class == 0` instead of the reference's two clauses.
+/// `IsConsumableAction 0x4e5250`'s two clauses; the item class is neither.
 #[test]
 fn is_consumable_is_ammo_thrown_or_a_negative_charge_use_block() {
     let block = |trigger: u32, charges: i32| ItemSpellEntry {
@@ -195,24 +172,22 @@ fn is_consumable_is_ammo_thrown_or_a_negative_charge_use_block() {
         category_cooldown_ms: -1,
     };
 
-    // The report: a mount. Class 15 Miscellaneous, InventoryType 0, one ON_USE block whose
-    // SpellCharges is 0 — the item is not destroyed by using it.
+    // A mount: class 15, InventoryType 0, one ON_USE block with charges 0 (not used up).
     let mut mount = test_template("Red Skeletal Horse");
     mount.class = 15;
     mount.spells = vec![block(0, 0)];
     assert!(!mount.is_consumable(), "a mount has no stack to show");
 
-    // A potion: Class 0, but that is not what decides it — the ON_USE block's -1 charges is.
+    // A potion: its ON_USE block's -1 charges decide, not its class 0.
     let mut potion = test_template("Minor Healing Potion");
     potion.spells = vec![block(0, -1)];
     assert!(potion.is_consumable());
 
-    // …and Class 0 alone (a conjured-water-shaped template with no on-use block at all) is
-    // NOT enough, which is exactly what the old `class == 0` read got wrong in reverse.
+    // Class 0 with no ON_USE block is not consumable.
     let classless = test_template("Trade Good");
     assert!(!classless.is_consumable());
 
-    // The InventoryType clause, both members — ammo and thrown always count, charges or not.
+    // Ammo (24) and thrown (25) always count, charges or not.
     for inv in [24u32, 25] {
         let mut ammo = test_template("Rough Arrow");
         ammo.inventory_type = inv;
@@ -228,9 +203,6 @@ fn is_consumable_is_ammo_thrown_or_a_negative_charge_use_block() {
     assert!(!proc_item.is_consumable());
 }
 
-/// The epoch is a *change* gate, not a per-frame re-resolve: once the answer has landed and been
-/// fed, an idle frame re-resolves nothing. (Guards the obvious over-correction — turning the feed
-/// into an every-frame rebuild of all 120 slots.)
 #[test]
 fn a_quiet_frame_after_the_answer_re_resolves_nothing() {
     let (mut app, _rx) = app_with_food_on_the_bar();
@@ -256,9 +228,7 @@ fn a_quiet_frame_after_the_answer_re_resolves_nothing() {
     );
 }
 
-/// A NEGATIVE answer (the server does not know the entry) also advances the epoch — it is a real
-/// transition for anything that waits on the ask — but it resolves to no icon, so the slot keeps
-/// the fallback. Pins that the gate cannot spin: one re-resolve, then quiet.
+/// A negative answer advances the epoch once and keeps the placeholder.
 #[test]
 fn an_unknown_entry_answers_once_and_settles() {
     let (mut app, _rx) = app_with_food_on_the_bar();
@@ -281,15 +251,8 @@ fn an_unknown_entry_answers_once_and_settles() {
     );
 }
 
-/// A MACRO slot serves **the macro's own icon**, and follows an EDIT of that macro without any
-/// bar-table change at all.
-///
-/// Two things are pinned. The icon rule: `GetActionTexture`'s macro arm (`0x4e6bf9`) builds the
-/// macro record's own icon path and never touches the bound spell. And the *trigger* is the
-/// macro-table generation — the third
-/// input beside `dirty` and the item-template epoch — because renaming or re-iconing a macro moves
-/// neither of those, and gating on them alone leaves a stale icon on the bar until some unrelated
-/// edit happens to re-dirty the feed (exactly decision 0660's bug, one seam over).
+/// `GetActionTexture`'s macro arm (`0x4e6bf9`) shows the macro's own icon, never the bound
+/// spell's; the macro-table generation, beside `dirty` and the template epoch, re-resolves it.
 #[test]
 fn a_macro_slot_shows_the_macros_own_icon_and_follows_an_edit() {
     use benilla_protocol::messages::ACTION_KIND_MACRO;
@@ -317,7 +280,7 @@ fn a_macro_slot_shows_the_macros_own_icon_and_follows_an_edit() {
         .init_resource::<PetTameFailures>()
         .init_resource::<UiErrorKeys>()
         .init_resource::<UiErrorTexts>()
-        // The cast-failure combat-log line (1703) rides the same drain.
+        // The cast-failure combat-log line rides the same drain.
         .init_resource::<crate::ui_chat::ChatLog>()
         .init_resource::<crate::sound::MessageSounds>()
         .insert_resource(NetCommands(tx));
@@ -326,7 +289,7 @@ fn a_macro_slot_shows_the_macros_own_icon_and_follows_an_edit() {
         account: vec![MacroView {
             name: "Ambush".into(),
             texture: Some("Interface\\Icons\\Ability_Ambush".into()),
-            // The bound spell is deliberately NOT what the icon shows.
+            // The bound spell is not what the icon shows.
             body: "/cast Ambush".into(),
             local_only: false,
         }],
@@ -348,7 +311,6 @@ fn a_macro_slot_shows_the_macros_own_icon_and_follows_an_edit() {
         "the MACRO's own icon"
     );
 
-    // Re-icon the macro. Nothing touches `PlayerActions` — only the macro table moves.
     app.world_mut()
         .non_send_resource_mut::<UiScript>()
         .run(r#"EditMacro(1, nil, "Interface\\Icons\\Spell_Fire_FlameBolt")"#)
@@ -365,9 +327,8 @@ fn a_macro_slot_shows_the_macros_own_icon_and_follows_an_edit() {
         "the generation gate re-resolved the slot"
     );
 
-    // RENAME the macro. The slot's value — texture, kind, id — is byte-identical
-    // after this, so a value diff alone would fire nothing and the bar would keep drawing the old
-    // name line until some unrelated edit repainted it. The feed must re-fire the slot anyway.
+    // A rename leaves the slot's texture, kind and id unchanged, so a value diff alone would
+    // fire nothing; the feed must re-fire the slot anyway.
     let events = |app: &mut App| {
         app.world_mut()
             .non_send_resource::<UiScript>()
@@ -402,19 +363,13 @@ fn a_macro_slot_shows_the_macros_own_icon_and_follows_an_edit() {
         Some("Shadowstep"),
         "and the repaint reads the new name"
     );
-    // A frame with nothing moved fires nothing more — the re-fire is gated on the table moving.
+    // A frame with nothing moved fires nothing more.
     app.update();
     assert_eq!(events(&mut app), 1);
 }
 
-/// **The pre-resolved lines reach the frame, on the arm they asked for** — `UiErrorTexts` end to
-/// end: the queue the net drain writes, through this feed, into the shipped `UIErrorsFrame`'s own
-/// drawn quads.
-///
-/// This is the seam the GM-mode double line lived in. `SMSG_NOTIFICATION` used to be pushed into
-/// the chat feed (a stand-in from before benilla had an errors frame), so vmangos answering
-/// `.gm on` with both a `SendSysMessage` and a `SendNotification` printed the words twice. The
-/// notice belongs here, red — and its `SMSG_AREA_TRIGGER_MESSAGE` sibling here, yellow.
+/// `UiErrorTexts` end to end into the stock `UIErrorsFrame`: an `SMSG_NOTIFICATION` draws red,
+/// an `SMSG_AREA_TRIGGER_MESSAGE` yellow.
 #[test]
 fn pre_resolved_lines_land_on_the_errors_frame_in_the_arms_colour() {
     benilla_formats::wow_data_or_skip!();
@@ -422,8 +377,7 @@ fn pre_resolved_lines_land_on_the_errors_frame_in_the_arms_colour() {
     {
         let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
         script.set_screen_size(1024.0, 768.0);
-        // The errors frame is the reference's own file since 1751 window 14, so this reads both
-        // stores through the one loader that speaks them.
+        // Stock files, read from the install.
         for file in [
             "Interface\\FrameXML\\Fonts.xml",
             "Interface\\FrameXML\\UIErrorsFrame.xml",
@@ -432,7 +386,7 @@ fn pre_resolved_lines_land_on_the_errors_frame_in_the_arms_colour() {
         }
     }
 
-    // What the net drain queues for one `.gm on` toggle, plus a refused portal.
+    // What the net drain queues for one `.gm on`, plus a refused portal.
     let mut texts = app.world_mut().resource_mut::<UiErrorTexts>();
     texts.error("GM mode is ON".to_string());
     texts.info("You must be at least level 58 to enter.".to_string());
@@ -466,8 +420,7 @@ fn pre_resolved_lines_land_on_the_errors_frame_in_the_arms_colour() {
     assert_eq!(
         drawn,
         [
-            // `AddMessage` byte-quantizes every channel (`ftol(v*255 + 0.5)`), so 0.1 draws as
-            // 26/255 — the same arithmetic `ui_script::errors_tests` pins.
+            // `AddMessage` quantizes each channel to a byte (`ftol(v*255 + 0.5)`): 0.1 is 26/255.
             (
                 "GM mode is ON".to_string(),
                 [1.0, 26.0 / 255.0, 26.0 / 255.0, 1.0]
@@ -481,17 +434,9 @@ fn pre_resolved_lines_land_on_the_errors_frame_in_the_arms_colour() {
     );
 }
 
-/// **A pet's refused cast is not written to the combat log**.
-///
-/// `HandleCastFailed 0x6e1a00` calls the log formatter `0x62c360` beside its `DisplayError`;
-/// `HandlePetCastFailed 0x6e8eb0` calls neither it nor the error sound — its whole call set is the
-/// two packet readers, `0x496720`, and the string plumbing behind it. Until this guard the drain
-/// treated both queue entries alike, so a pet's refused Growl printed "You fail to cast Growl:
-/// ..." in the log, worded as the player's own failure.
-///
-/// Driven through the real system with the two entries **side by side and the same spell**, so the
-/// assert cannot pass by the line failing to build for some unrelated reason: one goes in, one
-/// comes out.
+/// `HandleCastFailed 0x6e1a00` logs through `0x62c360`; `HandlePetCastFailed 0x6e8eb0` calls only
+/// the packet readers and `0x496720`, with no log line and no error sound. Both entries name the
+/// same spell, so only the caster differs.
 #[test]
 fn a_pets_refused_cast_writes_no_combat_log_line() {
     use crate::ui_action::{CastFail, Caster, Spells};
@@ -502,8 +447,7 @@ fn a_pets_refused_cast_writes_no_combat_log_line() {
     let (tx, _rx) = crossbeam_channel::unbounded();
     let mut app = App::new();
     let mut errors = CastErrors::default();
-    // 0x5f ROOTED: an override on BOTH tables, so neither entry can be dropped for want of a
-    // string, and the red line still gets two lines — it is only the log that differs.
+    // 0x5f ROOTED has a string on both tables, so neither entry drops for want of one.
     errors.0.push(CastFail {
         spell_id: GROWL,
         reason: 0x5F,
@@ -535,8 +479,7 @@ fn a_pets_refused_cast_writes_no_combat_log_line() {
         .init_resource::<crate::sound::MessageSounds>()
         .insert_resource(NetCommands(tx));
     let script = UiScript::new().unwrap();
-    // Only the two strings the log line needs; the red line's own text is `cast_fail`'s business
-    // and has its own tests.
+    // Only what the log line needs; the red line's text has its own tests.
     script
         .run(r#"SPELL_FAILED_ROOTED = "You are unable to move";"#)
         .unwrap();
@@ -553,21 +496,14 @@ fn a_pets_refused_cast_writes_no_combat_log_line() {
     );
 }
 
-/// **The taming refusal is TWO GlobalStrings lookups, in order** — the one
-/// message benilla shows whose argText is itself a key.
-///
-/// The reference's `0x6e6a20` resolves `PETTAME_<reason>` through the script VM first and hands
-/// the resulting *string* to `DisplayError(0xee)`, so `ERR_TAME_FAILED` ("%s.") renders the
-/// reason's sentence with a period after it. Getting the order wrong is not a compile error and
-/// not a silent no-op — it would print the literal key on the red line — so it is pinned here at
-/// both ends of the reason table's bounds check.
+/// `0x6e6a20` resolves `PETTAME_<reason>` first and passes the string to `DisplayError(0xee)`,
+/// so `ERR_TAME_FAILED` ("%s.") prints the sentence, not the key.
 #[test]
 fn a_tame_failure_composes_the_reason_string_into_err_tame_failed() {
     let (mut app, _rx) = app_with_food_on_the_bar();
     {
         let script = app.world_mut().non_send_resource_mut::<UiScript>();
-        // The two strings verbatim from 1.12's `GlobalStrings.lua`, plus a recorder for the
-        // event the sink fires — this test is about the composition, not the frame.
+        // The strings verbatim from 1.12's `GlobalStrings.lua`, and a recorder for the event.
         script
             .run(
                 r#"
@@ -591,8 +527,8 @@ fn a_tame_failure_composes_the_reason_string_into_err_tame_failed() {
             .unwrap()
     };
 
-    // 9 = PETTAME_TOOHIGHLEVEL, the middle of the jump table; 12 is vmangos's own out-of-range
-    // twelfth value, which the reference's `reason - 1 > 0xa` bound sends to the default arm.
+    // 9 is `PETTAME_TOOHIGHLEVEL`; 12, a vmangos value past the reference's `reason - 1 > 0xa`
+    // bound, takes the default arm.
     app.world_mut().resource_mut::<PetTameFailures>().0.push(9);
     app.world_mut().resource_mut::<PetTameFailures>().0.push(12);
     app.update();
@@ -612,8 +548,7 @@ fn a_tame_failure_composes_the_reason_string_into_err_tame_failed() {
         "out of range takes the default arm rather than showing nothing"
     );
 
-    // The reference's data-suppression face: a reason whose PETTAME string is not loaded shows
-    // NOTHING rather than a bare "." — the inner lookup fails, so the whole line is suppressed.
+    // A reason whose `PETTAME_` string is not loaded shows nothing, not a bare ".".
     app.world_mut().resource_mut::<PetTameFailures>().0.push(1);
     app.update();
     assert_eq!(

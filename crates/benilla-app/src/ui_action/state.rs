@@ -1,25 +1,10 @@
-//! The per-action **dynamic-state feed** (decision 0137 phase 4) — the app-side computation
-//! behind the engine's `IsUsableAction`/`IsActionInRange`/`IsCurrentAction`/`GetActionCooldown`
-//! family: each occupied action slot's [`ActionState`], recomputed per frame, diff-pushed into
-//! the VM, with the reference client's own event edges fired on these transitions:
-//!
-//! - a cooldown-store change → `ACTIONBAR_UPDATE_COOLDOWN` + `SPELL_UPDATE_COOLDOWN` +
-//!   `BAG_UPDATE_COOLDOWN` (the `0x4b31b0`/`0x4f93d0` flush pair the SMSG handlers call);
-//! - a usable/oom change on any slot → `ACTIONBAR_UPDATE_USABLE` + `SPELL_UPDATE_USABLE`
-//!   (`0x4b31c0`; the client fires only on a cache CHANGE — `0x4e5c00` — hence the diff edge);
-//! - a current/auto-repeat change → `ACTIONBAR_UPDATE_STATE` + `CURRENT_SPELL_CAST_CHANGED`
-//!   (`0x4b3250`);
-//! - our own melee engage/disengage → `PLAYER_ENTER_COMBAT`/`PLAYER_LEAVE_COMBAT`
-//!   (`0x6256ff`/`0x625778` — the attack-start/stop handlers);
-//! - the live autorepeat key's edges → `START_AUTOREPEAT_SPELL` (`0x6e5952`, at cast-send) /
-//!   `STOP_AUTOREPEAT_SPELL` (`0x6ea170`).
-//!
-//! The per-flag semantics are the reference's: `notEnoughMana` is strictly the power-cost verdict,
-//! `IsCurrentAction` (`0x4e53a0`) keys on the engaged attack GUID / the in-flight cast id,
-//! `IsAutoRepeatAction` on the `0xceac30` key, and the range test is squared distance against the
-//! `GetMinMaxRange 0x6e3480` (its constants transcribed below). The usable pair itself is the full
-//! `IsSpellUsableNow 0x6e3d60` gate walk — [`crate::spell::usable`]: reagents, forms, stealth,
-//! aura states (the Execute-family target dependence), the works.
+//! Each action slot's per-frame state behind `IsUsableAction`, `IsActionInRange`,
+//! `IsCurrentAction` and `GetActionCooldown`, diff-pushed into the VM with the reference's events
+//! on each change: the cooldown trio (`0x4b31b0`, `0x4f93d0`), the usable pair (`0x4b31c0`, on a
+//! cache change only, `0x4e5c00`), the state pair (`0x4b3250`), combat enter and leave
+//! (`0x6256ff`, `0x625778`), and autorepeat start and stop (`0x6e5952`, `0x6ea170`). Usability is
+//! `IsSpellUsableNow 0x6e3d60` ([`crate::spell::usable`]), auto-repeat the `0xceac30` key, and
+//! range the squared distance against `GetMinMaxRange 0x6e3480`.
 
 use crate::ui_items::carried_counts;
 use std::collections::HashMap;
@@ -47,41 +32,25 @@ pub(super) struct StateMemory {
     last_generation: Option<u64>,
     engaged: bool,
     auto_repeat: Option<u32>,
-    /// Last `benilla_assets::trace` "cd tick" stamp — the once-per-second gate (trace runs only).
     last_cd_trace: Option<Instant>,
 }
 
-/// What a slot *is* once the MACRO indirection is applied — the reference's slot→spell resolver
-/// `0x4e5a50` plus the leg of the usable compute `0x4e5050` that reads its zero.
+/// A slot after the macro indirection (`0x4e5a50`), as the usable compute `0x4e5050` reads it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlotResolve {
-    /// The slot IS this `(kind, id)` from here down: a SPELL or ITEM slot, or a macro whose
-    /// bound spell is live (`[rec+0x564] > 0`).
+    /// A spell or item slot, or a macro whose bound spell is live (`[rec+0x564] > 0`).
     Action(u8, u32),
-    /// A macro that exists but casts nothing (`[rec+0x564] == 0`): `0x4e5050`'s spell-less leg
-    /// (`0x4e50f4`–`0x4e516f`) answers **usable=1** off `0x4e5030` — "the slot's macro id is in
-    /// the macro table" — and computes nothing else: no cooldown, no range, no checked ring.
+    /// A macro that casts nothing (`[rec+0x564] == 0`): usable while it exists (`0x4e5030`),
+    /// with no cooldown, range or check (`0x4e50f4`-`0x4e516f`).
     BareMacro,
-    /// Not usable and nothing to report: a `/cast` whose name did not resolve (`-1`, which the
-    /// spell path refuses at `0x4e518b: jl`), or a slot whose macro no longer exists (`0x4e5030`
-    /// is 0 and `IsActionActive 0x4e55f0` has no spell to find).
+    /// Grey with nothing to report: a `/cast` that did not resolve (`-1`, refused at
+    /// `0x4e518b`), or a macro that no longer exists.
     Dead,
 }
 
-/// Resolve a slot **through** a macro before any state is computed — the reference's own shape,
-/// and the reason a macro button on the bar wears its spell's cooldown swirl, usability tint,
-/// range colour and checked ring while showing its own icon.
-///
-/// Every `Is*Action`/`GetActionCooldown` binding routes through the one slot→spell resolver
-/// `0x4e5a50`, whose MACRO arm resolves the macro record and returns `[rec+0x564]` as the slot's
-/// spell id. So from here down, a macro that casts Fireball simply *is* the Fireball slot.
-/// `GetActionTexture` is the deliberate exception — its macro arm keeps the macro's own icon
-/// (`super::feed`).
-///
-/// The zero is NOT "nothing to report" (0983's reading — B340's grey `.spawn` macro): the field
-/// is three-valued and the usable compute reads each value differently, which [`SlotResolve`]
-/// carries. Only the SPELL indirection is modelled: 1.12 has no `/use <item>` slash command, so
-/// no 1.12 macro body can name an item and the resolver's item leg is unreachable from one.
+/// Resolves a slot through its macro: every `Is*Action`/`GetActionCooldown` binding goes through
+/// `0x4e5a50`, so a macro that casts Fireball is the Fireball slot, its own icon aside. Spells
+/// only: 1.12 has no `/use`, so no macro names an item.
 fn resolve_through_macro(
     kind: u8,
     action: u32,
@@ -98,7 +67,7 @@ fn resolve_through_macro(
     }
 }
 
-/// Compute + diff-push every occupied slot's dynamic state, and fire the reference event edges.
+/// Computes and diff-pushes every occupied slot's state, and fires the reference's events.
 #[allow(clippy::type_complexity)] // a Bevy system's full input set
 pub(super) fn feed_action_state(
     script: Option<NonSendMut<UiScript>>,
@@ -107,11 +76,7 @@ pub(super) fn feed_action_state(
     mut cooldowns: ResMut<Cooldowns>,
     clock: Res<crate::ui_script::UiClock>,
     auto_repeat: Res<AutoRepeatActive>,
-    // One tuple param (Bevy's 16-SystemParam ceiling): our own cast tracking — the in-flight
-    // guard, the queued on-next-swing strike, the running channel, and the awaiting-click
-    // ground targeting — plus the macro→spell binding the MACRO arm resolves through
-    // and the talent spell-modifier tables that leg 12's cost reads through,
-    // both of which ride here for the same ceiling reason.
+    // One tuple for Bevy's 16-param ceiling: cast tracking, macro bindings and spell mods.
     cast_state: (
         Res<crate::spell::PendingCast>,
         Res<crate::spell::QueuedMeleeSpell>,
@@ -122,9 +87,7 @@ pub(super) fn feed_action_state(
     ),
     self_q: Query<(&ObjectStore, &Transform, Has<Engaged>, Option<&Casting>), With<SelfPlayer>>,
     selection: Res<Selection>,
-    // The object lookup (2334) — the guid index this system already resolved its selection
-    // through, plus the item-store read the ITEM arms need. One param, not two: this signature
-    // sits at Bevy's 16-SystemParam ceiling.
+    // One param for the guid index and the item store, for the same ceiling.
     objects: crate::net::Objects,
     units: Query<(&ObjectStore, &Transform), Without<SelfPlayer>>,
     factions: Option<Res<crate::target::Factions>>,
@@ -138,9 +101,8 @@ pub(super) fn feed_action_state(
     };
     let memory = memory.get(&script);
     let now = Instant::now();
-    // The frame's atomic clock pair — `ui_triple`'s conversion base: every cooldown is pushed as
-    // its absolute start on the GetTime clock, derived through the ONE lawful pair
-    // ([`crate::ui_script::UiClock`]) so a running cooldown re-derives the same start every frame.
+    // Every cooldown pushes its absolute start on the `GetTime` clock, derived from this one
+    // pair, so a running cooldown derives the same start every frame.
     let (anchor, ui_now) = (clock.anchor, clock.ui_now);
     cooldowns.prune(now);
     let gen_changed = memory.last_generation != Some(cooldowns.generation);
@@ -156,9 +118,7 @@ pub(super) fn feed_action_state(
 
     let (pending, queued_melee, channel, targeting, bound, spell_mods) = &cast_state;
     let me = self_q.iter().next();
-    // The bags, walked ONCE for the frame: every reagent, totem and item-count question below
-    // reads this table. It used to be one whole walk per question — per reagent per spell slot,
-    // per item slot — for the same bags each time (1697 item 13).
+    // The bags, walked once per frame for every reagent, totem and item count below.
     let carried = me
         .map(|(s, _, _, _)| carried_counts(&s.0, &objects))
         .unwrap_or_default();
@@ -170,7 +130,7 @@ pub(super) fn feed_action_state(
     let current_cast = pending.current(now).or(casting_spell);
     let self_reach = me.map_or(1.5, |(s, _, _, _)| s.0.unit_combat_reach());
     let self_pos = me.map(|(_, t, _, _)| t.translation);
-    // The current target's reach + squared distance (the client tests dx²+dy²+dz² — 0x6e47b0).
+    // The target's reach and squared distance (the reference tests dx²+dy²+dz², `0x6e47b0`).
     let target = selection
         .guid
         .and_then(|g| objects.entity(g))
@@ -188,12 +148,9 @@ pub(super) fn feed_action_state(
         let (kind, id) = match resolve_through_macro(button.kind, button.action, bound) {
             SlotResolve::Action(kind, id) => (kind, id),
             SlotResolve::BareMacro => {
-                // The spell-less leg of `0x4e5050`: the macro exists, so the slot is usable —
-                // full colour on the bar — and there is no other state to compute (1636). The
-                // leg's one gate benilla does not model is `[0xb4b3e4]`, the player-control
-                // flag (1 from boot, `0x48f626`; 0 only across a control loss — taxi/fear/charm —
-                // through `0x4958e0`); for that span the reference greys every spell-less
-                // macro and item.
+                // `0x4e5050`'s spell-less leg: usable. It also greys every spell-less macro and
+                // item while the player-control flag `[0xb4b3e4]` is clear (taxi, fear, charm,
+                // `0x4958e0`; set at boot, `0x48f626`); that gate is not built.
                 st.usable = true;
                 fresh.insert(action, st);
                 continue;
@@ -216,32 +173,22 @@ pub(super) fn feed_action_state(
                     continue;
                 };
                 st.is_attack = d.is_melee_auto_attack();
-                // The Attack action is "current" while auto-attack is engaged; a castable
-                // spell while it is our in-flight cast OR our queued on-next-swing strike OR our
-                // running channel (the ref reads one inflight id `0xceca88` — which a queued
-                // Heroic Strike *occupies* until the swing fires it — plus the channel id
-                // `0xceac58`; our model splits the queue into its own slot, same observable) —
-                // OR the shapeshift arm (`IsCurrentAction`'s predicate `0x4e53a0` @ `0x4e5556`):
-                // a MOD_SHAPESHIFT spell whose form == the player's form byte reads checked.
-                // Deliberately NOT the icon's aura-scan predicate — the two are different
-                // functions in the binary and the asymmetry is load-bearing (a form granted by a
-                // different spell lights the check without swapping the icon).
+                // `IsCurrentAction 0x4e53a0`: Attack while engaged; a spell while in flight
+                // (`0xceca88`, which a queued on-swing strike holds), channelled (`0xceac58`), or
+                // when its form is ours (`0x4e5556`). The form arm is not the icon's aura scan:
+                // a form granted by another spell lights the check but not the icon.
                 st.current = if st.is_attack {
                     engaged
                 } else {
                     current_cast == Some(button.action)
                         || queued_melee.current() == Some(button.action)
                         || channel.current(now) == Some(button.action)
-                        // The awaiting-target arm (`0x4e53a0` @ `0x4e54d0`: the `0x6e48e0`
-                        // targeting-spell read) — checked while the ground click is pending.
+                        // Checked while its ground click is pending (`0x4e54d0`, `0x6e48e0`).
                         || targeting.spell() == Some(button.action)
                         || (form_byte != 0 && d.shapeshift_form == Some(u32::from(form_byte)))
                 };
                 st.auto_repeat = auto_repeat.0 == Some(button.action);
-                // The full usable walk (`0x6e3d60` — [`super::usable`]): reagents, combo
-                // points, forms, stealth, aura states, the bit-25 cooldown fold, and the power
-                // gate (the sole notEnoughMana writer). Target-dependent for the Execute family
-                // only. `spells` is necessarily Some here — `d` came out of it.
+                // The usable walk (`0x6e3d60`); only its power gate sets `notEnoughMana`.
                 if let (Some((store, _, _, _)), Some(sp)) = (me, spells.as_deref()) {
                     let ctx = usable::UsableCtx {
                         store,
@@ -266,7 +213,7 @@ pub(super) fn feed_action_state(
                 } else {
                     st.usable = true;
                 }
-                // The range verdict vs the current target (`0x4e56f0`); nil without one.
+                // The range verdict against the target (`0x4e56f0`); nil without one.
                 let row = spells.as_ref().and_then(|s| s.ranges.get(d.range_index));
                 let resolved = benilla_formats::min_max_range(d, row, self_reach, target_reach);
                 st.has_range = resolved
@@ -280,8 +227,7 @@ pub(super) fn feed_action_state(
                 let info = cooldowns.info(button.action, 0, Some(d), now);
                 st.cooldown = info.ui_triple(anchor, ui_now);
                 if st.cooldown.is_some() && trace_cd {
-                    // The store (Instant clock) vs the widget (GetTime clock) — the sink
-                    // stamps the wall time, so drift between the two clocks reads directly.
+                    // The store's clock against the widget's; the sink stamps wall time.
                     benilla_assets::trace::line(
                         "cd",
                         &format!(
@@ -292,16 +238,14 @@ pub(super) fn feed_action_state(
                 }
             }
             ACTION_KIND_ITEM => {
-                // Only the on-use spell leaves the template (`ItemUseSpell` is `Copy`) — not a
-                // clone of the whole `ItemInfo` (its Strings and Vecs) per item slot per frame.
+                // Only the `Copy` on-use spell, not a clone of the template per slot per frame.
                 let use_spell = items
                     .template(button.action, 0, &commands)
                     .and_then(|t| t.use_spell);
-                // `IsConsumableAction` is NOT fed from here. It reads nothing but this template
-                // (`0x4e5250`), so it is slot IDENTITY, and it rides the identity feed's push
-                // beside the count it gates — `super::feed`'s ITEM arm.
+                // `IsConsumableAction` (`0x4e5250`) reads only the template, so the identity
+                // feed pushes it with the count it gates, not this one.
                 let count = carried.get(&button.action).copied().unwrap_or(0);
-                // Worn on any equipment slot (0..18) — the green border's IsEquippedAction.
+                // `IsEquippedAction`, the green border: worn in any equipment slot (0..18).
                 st.equipped = me.is_some_and(|(s, _, _, _)| {
                     (0..19).any(|i| {
                         s.0.player_inv_slot(i)
@@ -310,11 +254,9 @@ pub(super) fn feed_action_state(
                             == Some(button.action)
                     })
                 });
-                // The rest of `0x4e5050`'s ITEM arm — the count gate, `IsItemOnCooldown`, and
-                // the item's on-use spell run through the SAME `0x6e3d60` walk a spell slot
-                // takes ([`super::usable::item_usable`]). Food greys in combat from leg 8 there.
-                // No active player and the reference answers (0,0) before resolving anything
-                // (`0x4e5080`) — which is `ActionState::default()`'s `usable`.
+                // `0x4e5050`'s item arm runs the count, `IsItemOnCooldown` and the on-use spell
+                // through the same `0x6e3d60` walk. With no player the reference answers (0, 0)
+                // (`0x4e5080`), the default state.
                 if let Some((store, _, _, _)) = me {
                     let ctx = usable::UsableCtx {
                         store,
@@ -346,15 +288,11 @@ pub(super) fn feed_action_state(
             }
             _ => {}
         }
-        // No between-generation carry: the triple holds the ABSOLUTE start, so one running
-        // cooldown re-derives the same value every frame (no diff churn) and a re-arm derives a
-        // new one (the sweep restarts). The old `(remaining, duration)` carry-the-stale-triple
-        // scheme aliased a fail-clear+re-arm inside one inter-feed gap into "unchanged" — the
-        // vanished-GCD-pie-on-spam bug.
+        // The triple holds the absolute start, so a running cooldown diffs equal every frame and
+        // a re-arm, even within one frame gap, restarts the sweep.
         fresh.insert(action, st);
     }
 
-    // Diff-push + collect which event families changed.
     let mut usable_changed = false;
     let mut state_changed = false;
     let keys: Vec<u32> = fresh
@@ -391,7 +329,7 @@ pub(super) fn feed_action_state(
     }
     memory.pushed = fresh;
 
-    // The event edges, in the client's own flush order (the ACTIONBAR_* sibling first).
+    // The events in the reference's flush order, the `ACTIONBAR_*` one first.
     if gen_changed {
         script.fire_event("ACTIONBAR_UPDATE_COOLDOWN", vec![]);
         script.fire_event("SPELL_UPDATE_COOLDOWN", vec![]);
@@ -434,11 +372,7 @@ mod tests {
     use super::*;
     use benilla_formats::SpellDisplay;
 
-    /// A MACRO slot resolves through its bound spell for EVERY dynamic read —
-    /// the `0x4e5a50` law — and the three values of `[rec+0x564]` split three ways at the usable
-    /// compute: a live spell IS that spell; a macro that casts nothing is a bare,
-    /// usable button (B340's `.spawn` macro); an unresolved `/cast` — or a slot whose macro is
-    /// gone — is grey.
+    /// `[rec+0x564]`'s three values (`0x4e5a50`): a live spell, a bare macro, and grey.
     #[test]
     fn a_macro_slot_resolves_through_its_bound_spell() {
         use crate::ui_macro::BoundSpell;
@@ -469,7 +403,6 @@ mod tests {
             SlotResolve::Dead,
             "a slot whose macro no longer exists: grey"
         );
-        // Spell and item slots pass through untouched.
         assert_eq!(
             resolve_through_macro(ACTION_KIND_SPELL, 133, &bound),
             SlotResolve::Action(ACTION_KIND_SPELL, 133)
@@ -480,11 +413,6 @@ mod tests {
         );
     }
 
-    /// The feed end to end, at the symptom: a MACRO slot whose macro casts nothing is
-    /// pushed **usable** — `IsUsableAction` answers true in the VM, the full-colour icon — while
-    /// a `/cast` of an unknown spell, and a slot whose macro is gone, are pushed grey. The
-    /// pre-1636 feed pushed `ActionState::default()` for all three, whose `usable` is false: every
-    /// GM `.spawn` macro on the bar was grey.
     #[test]
     fn the_feed_pushes_a_bare_macro_as_usable() {
         use crate::ui_macro::{BoundSpell, MacroBoundSpells};
@@ -503,8 +431,7 @@ mod tests {
                 },
             );
         }
-        // Macro 1 is `.spawn 16032`, macro 2 is `/cast Pyroblast` with Pyroblast unknown, and
-        // macro 3 does not exist.
+        // Macro 1 is `.spawn 16032`, 2 an unknown `/cast Pyroblast`, and 3 does not exist.
         let mut bound = MacroBoundSpells::default();
         bound.0.insert(1, BoundSpell::None);
         bound.0.insert(2, BoundSpell::Unresolved);
@@ -549,24 +476,17 @@ mod tests {
         );
     }
 
-    /// **Food on the bar greys in combat** — the feed end to end, at the symptom. An ITEM slot's
-    /// usable verdict is the reference's `0x4e5050` ITEM arm, which resolves the item's on-use
-    /// spell (`0x4e5a50`) and walks it through `Spell_C::IsSpellUsableNow 0x6e3d60`; every
-    /// Food/Drink spell in the shipped `Spell.dbc` carries `Attributes` bit 28
-    /// (`ATTR_NOT_IN_COMBAT`, the walk's leg 8), so a stack of food is grey while
-    /// `UNIT_FLAG_IN_COMBAT` is up and full-colour the moment it drops. Before this test the
-    /// ITEM arm answered `count > 0 || equipped` and nothing else, and food stayed lit.
+    /// An item slot's on-use spell takes the `0x6e3d60` walk (`0x4e5050`), and every shipped
+    /// Food/Drink spell has `Attributes` bit 28, `ATTR_NOT_IN_COMBAT` (the walk's leg 8).
     #[test]
     fn food_on_the_bar_greys_while_the_player_is_in_combat() {
         use benilla_protocol::messages::{ActionButton, ItemUseSpell};
         use benilla_protocol::ObjectFields;
 
-        // `Conjured Muffin`-shaped: one ON_USE block casting spell 433 "Food", which the shipped
-        // DBC gives `Attributes = 0x18000100` — bit 28 among them.
+        // One ON_USE block casting 433 "Food", whose shipped `Attributes` are `0x18000100`.
         const FOOD_ITEM: u32 = 1487;
         const FOOD_SPELL: u32 = 433;
-        // Descriptor indices, raw (the codebase's test idiom): `ITEM_FIELD_STACK_COUNT` and
-        // `PLAYER_FIELD_PACK_SLOT_1` — the backpack's first slot, the walker's CARRIED section.
+        // Raw indices: `ITEM_FIELD_STACK_COUNT`, and `PLAYER_FIELD_PACK_SLOT_1`, backpack slot 1.
         const STACK: u16 = 14;
         const PACK_SLOT_1: u16 = 532;
 
@@ -624,7 +544,6 @@ mod tests {
                 .init_resource::<crate::net::Reputations>()
                 .insert_resource(items)
                 .insert_resource(NetCommands(tx));
-            // The ten muffins, as the one index's own item entity (2334).
             crate::items::test_spawn_item(
                 app.world_mut(),
                 0xF0,

@@ -1,32 +1,13 @@
-//! The item-text reader session (`ItemTextFrame.xml`) — the one window every *readable* opens in:
-//! a bag letter, a book in your bags, and a book/plaque lying in the world.
+//! The item-text reader (`ItemTextFrame.xml`) a bag letter, a book or a readable world object
+//! opens in, locally with no packet as in the reference: every route ends at
+//! `0x4e32e0(guid, flag)`, which looks the guid up as any object and asks it for its text
+//! (`vtbl+0x74`), a mail-made letter's `ITEM_FIELD_ITEM_TEXT_ID` or else a page chain from an
+//! item template's `PageText` or a `GAMEOBJECT_TYPE_TEXT` object's `data[0]`. vmangos has no use
+//! arm for a type-9 object and refuses `CMSG_READ_ITEM` without a template `PageText`, which the
+//! Plain Letter lacks (`ItemHandler.cpp:421`).
 //!
-//! **One reader, keyed on an object guid, opened locally with no permission packet.** That is the
-//! reference's own shape, byte-verified: every route ends at `0x4e32e0(guid, flag)`,
-//! which looks the guid up with typemask `1` (*any* object — item or GameObject), asks the object
-//! for its page id through the shared `vtbl+0x74` getter, and pulls the text out of a cache. Which
-//! of the two text sources applies is the object's own answer, not the caller's:
-//!
-//! - **a letter** — an item *instance* carrying `ITEM_FIELD_ITEM_TEXT_ID` (a mail-made permanent
-//!   copy). One body, no pages; it rides the ask-once `CMSG_ITEM_TEXT_QUERY` cache mail letters use
-//!   ([`crate::ui_mail::MailOpen::bodies`] — that map is the client's item-text cache, mail is just
-//!   its first tenant), and its creator line resolves `ITEM_FIELD_CREATOR` through the name cache.
-//! - **a page chain** — a readable item *template*'s `PageText`, or a `GAMEOBJECT_TYPE_TEXT` world
-//!   object's template `data[0]`. Pages chain by `nextPageId` over the ask-once
-//!   [`PageTexts`] cache (`CMSG_PAGE_TEXT_QUERY`), and the reader's prev/next buttons walk them.
-//!   Authorless — a book has no `From,` tail.
-//!
-//! The routes in: `ui_items::drain::drain_container_uses` (the bag click's dispatcher arms #5 and
-//! #6) and `target::click::act_on_right_click` (the world right-click's GO type-9 arm). None of
-//! them sends a use/read packet — vmangos has no `GameObject::Use` case for type 9 at all, and its
-//! `CMSG_READ_ITEM` handler gates on a template `PageText` the Plain Letter doesn't have, so both
-//! would be answered with silence even if we asked.
-//!
-//! The feed mirrors the reference event flow (ItemTextFrame.lua l.10-96): open →
-//! `ITEM_TEXT_BEGIN` (title known), everything fetched → `ITEM_TEXT_READY`, `CloseItemText()` →
-//! session cleared + `ITEM_TEXT_CLOSED`. `ITEM_TEXT_TRANSLATION` (the foreign-language progress
-//! bar) never fires — no translation mechanic on a private server's readables, and the `language`
-//! column (`data[1]`/`LanguageID`) is carried by neither source here.
+//! The events follow `ItemTextFrame.lua:10-96`; `ITEM_TEXT_TRANSLATION`, the foreign-language
+//! bar, never fires, as neither source carries the language column.
 
 use bevy::prelude::*;
 
@@ -43,16 +24,12 @@ use crate::ui_script::{UiFeed, UiInput};
 /// One page of a book as the wire gave it (`SMSG_PAGE_TEXT_QUERY_RESPONSE`).
 pub(crate) struct PageText {
     pub(crate) text: String,
-    /// The next page's id; `0` = this is the last page.
+    /// The next page's id; 0 on the last page.
     pub(crate) next: u32,
 }
 
-/// The ask-once page cache — the client's `PageText` dbcache (`0xc0e174`). Keyed by
-/// page id, filled by [`crate::net::apply`]'s `SessionEvent::PageText` arm.
-///
-/// vmangos answers a single `CMSG_PAGE_TEXT_QUERY` with the **whole chain** (one response per page),
-/// so asking for page 1 normally lands the entire book at once and a page turn is a cache hit. The
-/// per-page fetch is still here for the server that answers one at a time.
+/// The ask-once page cache, the client's `PageText` dbcache (`0xc0e174`), keyed by page id.
+/// vmangos answers one query with the whole chain; a missing page is still asked for alone.
 #[derive(Resource, Default)]
 pub(crate) struct PageTexts {
     pages: QueryCache<u32, PageText>,
@@ -65,13 +42,11 @@ impl crate::query_cache::AskOnce for PageTexts {
 }
 
 impl PageTexts {
-    /// Record a page (and clear its in-flight flag).
     pub(crate) fn insert(&mut self, page_id: u32, text: String, next: u32) {
         self.pages.insert(page_id, Some(PageText { text, next }));
     }
 
-    /// The cached page, asking for it once if this is the first asker. `guid` names the object
-    /// doing the reading (the reference writes it after the page id; vmangos discards it).
+    /// The cached page, asked for once; `guid` is the reading object, which vmangos discards.
     fn get_or_ask(&self, page_id: u32, guid: u64, commands: &NetCommands) -> Option<&PageText> {
         self.pages.get_or_ask(page_id, || {
             debug!("page text: asking page {page_id} (object {guid:#x})");
@@ -82,63 +57,45 @@ impl PageTexts {
     }
 }
 
-/// Which text a read session is showing — the reference's two sources, which it picks between by
-/// asking the *object* (an instance text id, else a page id), not by how the click arrived.
+/// Which of the reference's two text sources a session shows; the object decides, not the click.
 pub(crate) enum ReadSource {
-    /// An item instance's `ITEM_FIELD_ITEM_TEXT_ID` — a mail-made letter. Single body, has a
-    /// creator line.
+    /// A mail-made letter's `ITEM_FIELD_ITEM_TEXT_ID`: one body and a creator line.
     Letter { text_id: u32 },
-    /// A page chain — a readable item template's `PageText`, or a TEXT GameObject's `data[0]`.
-    /// `visited` is the trail of page ids from the first to the one on screen, so **Prev** can walk
-    /// back a chain that only links forwards (the reference keeps the same array, `[0xbc3fd0]`).
-    /// **Empty until the object's template answers**: the reference asks the *object* for its page
-    /// id at paint time (`vtbl+0x74`, with an ask-once template callback that re-enters the whole
-    /// open — `0x5f59d0`), so a click that lands before the template does still opens a reader.
+    /// A page chain. `visited` runs from the first page to the one shown, as pages link only
+    /// forwards (the reference's array at `0xbc3fd0`); it is empty until the object's template
+    /// answers, since the reference asks for the page id at paint time (`0x5f59d0`).
     Pages { visited: Vec<u32> },
 }
 
-/// The open read session; `None` in [`ItemTextOpen::pending`] = no reader open.
 pub(crate) struct ReadSession {
-    /// The read object's guid — an item's or a GameObject's. Title/creator resolve off it each
-    /// frame until ready, and re-using the *same* object closes the reader (the reference's toggle).
+    /// An item's or a GameObject's guid; reading the same object again closes the reader.
     pub(crate) object_guid: u64,
     pub(crate) source: ReadSource,
-    /// What the live VM has been told about this session — keyed on the VM (decisions
-    /// 1290/1291), because the session is world state (the letter is still open) while the
-    /// fires are VM state: a `/reload` with a book up replaces the frame tree, and the fresh
-    /// one needs the `ITEM_TEXT_BEGIN` and repaint the old one already consumed. Before this,
-    /// the reader never came back after a reload while the host still believed it was open.
+    /// Keyed on the VM, so a `/reload` re-fires `ITEM_TEXT_BEGIN` for a reader still open.
     told: crate::ui_script::VmMemo<ItemTextTold>,
 }
 
-/// [`ReadSession::told`]'s payload — the per-VM fire latches.
 #[derive(Default)]
 struct ItemTextTold {
-    /// `ITEM_TEXT_BEGIN` fired (the reference fires it once per open, before the text lands).
+    /// `ITEM_TEXT_BEGIN` fired: once per open, before the text lands.
     begun: bool,
-    /// `ITEM_TEXT_READY` fired — the session is fully painted.
     ready: bool,
 }
 
-/// The reader-session resource ([`ReadSession`]).
 #[derive(Resource, Default)]
 pub(crate) struct ItemTextOpen {
     pub(crate) pending: Option<ReadSession>,
-    /// A [`ItemTextOpen::toggle_closed`] fired and the frame has not been told yet. The click
-    /// routes have no `UiScript` in reach, so the close event is handed to the feed — which owns
-    /// the script — rather than each caller re-implementing it.
+    /// A toggle closed the reader and the frame is not told yet; the feed holds the script.
     closing: bool,
 }
 
 impl ItemTextOpen {
-    /// Open a read for a bag letter (dispatcher arm #6). Re-opening restarts the reference event
-    /// flow from `ITEM_TEXT_BEGIN`.
+    /// Open a bag letter; re-opening restarts from `ITEM_TEXT_BEGIN`.
     pub(crate) fn open_letter(&mut self, item_guid: u64, text_id: u32) {
         self.open(item_guid, ReadSource::Letter { text_id });
     }
 
-    /// Open a read for a page chain — a readable item template (arm #5) or a TEXT GameObject. The
-    /// page head is not passed in: the feed asks the object's template for it, like the reference.
+    /// Open a page chain; the feed asks the object's template for the first page.
     pub(crate) fn open_pages(&mut self, object_guid: u64) {
         self.open(
             object_guid,
@@ -148,10 +105,8 @@ impl ItemTextOpen {
         );
     }
 
-    /// The reference's **toggle** (`0x4e32e0`'s `arg2 == 0` head, which *every* click route passes —
-    /// the bag readable at `0x5d8e5e` and the TEXT GameObject at `0x5f58e7` both `xor edx,edx`):
-    /// re-clicking the readable whose reader is already open *closes* it. Returns whether it fired,
-    /// so the caller stops there.
+    /// The reference's toggle, `0x4e32e0` with flag 0 from both click routes (`0x5d8e5e`,
+    /// `0x5f58e7`): reading the open object again closes it. Returns whether it closed.
     pub(crate) fn toggle_closed(&mut self, object_guid: u64) -> bool {
         let open = self
             .pending
@@ -164,7 +119,6 @@ impl ItemTextOpen {
         open
     }
 
-    /// Take the pending toggle-close, for the feed to turn into `ITEM_TEXT_CLOSED`.
     fn take_closing(&mut self) -> bool {
         std::mem::take(&mut self.closing)
     }
@@ -178,7 +132,7 @@ impl ItemTextOpen {
     }
 }
 
-/// The book reader's packet handler (in the net handler table since 2313).
+/// The page-text reply's handler.
 mod net {
     use benilla_protocol::{SessionEvent, SessionEventKind};
     use bevy::prelude::*;
@@ -186,13 +140,11 @@ mod net {
     use super::PageTexts;
     use crate::net::NetHandlerApp;
 
-    /// Register the handler — called from [`super::UiItemTextPlugin`].
     pub(super) fn register(app: &mut App) {
         app.net_handler(SessionEventKind::PageText, on_page_text);
     }
 
-    /// The book-page cache — one page per packet, the whole chain in answer to the first ask;
-    /// the reader repaints off it on the next feed.
+    /// One page per packet; the reader repaints off the cache on the next feed.
     fn on_page_text(In(ev): In<SessionEvent>, mut pages: ResMut<PageTexts>) {
         if let SessionEvent::PageText {
             page_id,
@@ -216,8 +168,8 @@ impl Plugin for UiItemTextPlugin {
             .add_systems(
                 Update,
                 (
-                    // Feed before the input pass so an open paints the same frame; drain after it so
-                    // a Close click clears the same frame (the ui_mail ordering).
+                    // Feed before the input pass so an open paints this frame; drain after it
+                    // so a close clears this frame.
                     feed_item_text.in_set(UiFeed),
                     drain_item_text.after(UiInput),
                 ),
@@ -225,24 +177,19 @@ impl Plugin for UiItemTextPlugin {
     }
 }
 
-/// What the reader's *object* answers, whichever source its text comes from: the window title
-/// (`ItemTextGetItem 0x4e38f0` → the looked-up object's `vtbl+0x70` name) and the frame material
-/// (`ItemTextGetMaterial 0x4e39f0` → an item template's `PageMaterial`, a GameObject's `data[2]`),
-/// plus the page head a page chain starts at. `None` = the template is still in flight.
+/// What the read object answers: its name for the title (`ItemTextGetItem` `0x4e38f0`), its
+/// material (`ItemTextGetMaterial` `0x4e39f0`: an item's `PageMaterial`, a GameObject's
+/// `data[2]`) and its first page.
 struct Readable {
     title: String,
-    /// `PageTextMaterial.dbc` id → basename; `None` = the Lua's Parchment default.
+    /// The `PageTextMaterial.dbc` basename; `None` is the Lua's Parchment default.
     material: Option<String>,
-    /// The first `PageText` id — `0` for a letter (which has no page chain) and for a readable
-    /// whose template carries no page.
+    /// The first `PageText` id; 0 for a letter or a template with no page.
     page_head: u32,
 }
 
-/// The material a quest sourced from `guid` paints on — `GetQuestBackgroundMaterial 0x502230`,
-/// whose body is `ItemTextGetMaterial`'s: the source object by guid, an item's template
-/// `PageMaterial` or a GameObject's template data by type, the id named through
-/// `PageTextMaterial.dbc`; a creature, an uncached template or an id with no row is `None`, which
-/// is FrameXML's "Parchment". A GameObject whose template is not cached yet is asked for.
+/// The material a quest from `guid` paints on, `GetQuestBackgroundMaterial` (`0x502230`), the
+/// body of `ItemTextGetMaterial`; `None` is FrameXML's Parchment. Asks for an uncached GameObject.
 pub(crate) fn object_material(
     guid: u64,
     objects: &Objects,
@@ -266,9 +213,7 @@ pub(crate) fn object_material(
     name(t.page_material)
 }
 
-/// Resolve the object's title + material + page head, whether it is an item or a GameObject. The
-/// reference does exactly this — one guid lookup with typemask 1, then virtual getters — so a
-/// single resolve serves both sources.
+/// The object's [`Readable`], item or GameObject alike; `None` while its template is in flight.
 fn readable(
     guid: u64,
     objects: &Objects,
@@ -294,12 +239,9 @@ fn readable(
     })
 }
 
-/// Drive the open session to `ITEM_TEXT_BEGIN`/`ITEM_TEXT_READY` as its pieces land. BEGIN holds
-/// until the object's template resolves — it carries the title *and* the material, and the Lua's
-/// BEGIN handler picks the page font and text colour off the material, so firing it early would
-/// paint a Stone plaque in parchment ink. READY holds until the body and, for a letter, the creator
-/// line are both in. (The window itself only shows on READY — `ItemTextFrame.lua` calls
-/// `ShowUIPanel` there, not on BEGIN.)
+/// Drive the open session to `ITEM_TEXT_BEGIN` once the template resolves, as the stock handler
+/// takes the text colour from the material (`ItemTextFrame.lua:18-23`), then to
+/// `ITEM_TEXT_READY`, which shows the window, once the body and any creator line are in.
 fn feed_item_text(
     script: Option<NonSendMut<UiScript>>,
     mut open: ResMut<ItemTextOpen>,
@@ -311,15 +253,14 @@ fn feed_item_text(
     go_templates: Res<GameObjectTemplates>,
     materials: Option<Res<PageMaterials>>,
     commands: Res<NetCommands>,
-    // The `$`-macro subject for the page body: the local player, as at every panel seam.
+    // The `$`-macro subject for the page body: the local player.
     self_q: Query<(&crate::net::ObjectStore, &crate::net::Guid), With<crate::net::SelfPlayer>>,
     states: Res<crate::world_state::WorldStates>,
 ) {
     let Some(mut script) = script else {
         return;
     };
-    // A re-click closed the reader (the reference's toggle → its `0x128`). The click route cleared
-    // the session; the frame is told here, where the script is.
+    // A toggle closed the reader; the frame is told here, where the script is.
     if open.take_closing() {
         script.set_item_text(None);
         script.fire_event("ITEM_TEXT_CLOSED", vec![]);
@@ -338,11 +279,10 @@ fn feed_item_text(
         materials.as_deref(),
         &commands,
     ) else {
-        return; // template in flight — the reference re-enters the whole open when it lands
+        return; // template in flight; the reference re-enters the open when it lands
     };
 
-    // A page read whose template answers with no page has nothing to show — the reference bails
-    // before firing anything (`0x4e341d`, both text sources zero). Drop the session silently.
+    // No page to show: the reference bails before firing anything (`0x4e341d`).
     if matches!(sess.source, ReadSource::Pages { .. }) && readable.page_head == 0 {
         debug!(
             "item text: {:#x} has no page to read — closing",
@@ -367,8 +307,6 @@ fn feed_item_text(
 
     let (creator, text, page, has_next) = match &mut sess.source {
         ReadSource::Letter { text_id } => {
-            // The creator line: `ITEM_FIELD_CREATOR` → name cache (ask-once). `None` guid =
-            // authorless.
             let creator_guid = objects
                 .object(sess.object_guid)
                 .and_then(|o| o.item_creator());
@@ -379,7 +317,7 @@ fn feed_item_text(
                     None => return, // name query in flight
                 },
             };
-            // The body: the shared ask-once item-text cache (fetch if this is the first asker).
+            // The body, from the client's one item-text cache, which mail shares.
             let body = mail
                 .bodies
                 .get_or_ask(*text_id, || {
@@ -402,7 +340,7 @@ fn feed_item_text(
             let Some(page) = pages.get_or_ask(page_id, sess.object_guid, &commands) else {
                 return; // page query in flight
             };
-            // A book is authorless — the creator leg is the reference's item-instance one.
+            // A book has no creator line.
             (
                 None,
                 page.text.clone(),
@@ -412,8 +350,7 @@ fn feed_item_text(
         }
     };
 
-    // Page/book text is server-authored, so it runs the `$`-macro expander — the reference does it
-    // from two sites in `ItemTextFrame.cpp`, subject = the local player.
+    // Server-authored text runs the `$`-macro expander, as in the reference's `ItemTextFrame.cpp`.
     let subject = crate::npc_text::player_identity(&self_q, &names, &commands);
     let text = crate::npc_text::substitute(
         &text,
@@ -434,16 +371,12 @@ fn feed_item_text(
     sess.told.get(&script).ready = true;
 }
 
-/// `PageTextMaterial.dbc` as a resource — the reader frame's material basename,
-/// loaded once at startup ([`crate::entities`]); absent when the client data is, in which case every
-/// readable falls to the Lua's Parchment default.
+/// `PageTextMaterial.dbc`; absent without client data, leaving every reader on Parchment.
 #[derive(Resource)]
 pub(crate) struct PageMaterials(pub(crate) benilla_formats::PageTextMaterialCatalog);
 
-/// Drain the reader's intents: `CloseItemText()` clears the session (+ `ITEM_TEXT_CLOSED`, the
-/// reference C-side answer the frame's OnHide relies on); a page turn walks the chain — Next
-/// appends the current page's `nextPageId` to the trail, Prev pops back — and re-runs the feed from
-/// `ITEM_TEXT_READY` (the reference repaints the same frame, it does not re-fire BEGIN).
+/// Drain the reader's intents: `CloseItemText()` clears the session and fires `ITEM_TEXT_CLOSED`;
+/// a page turn re-runs the feed from `ITEM_TEXT_READY`, as the reference does not re-fire BEGIN.
 fn drain_item_text(
     script: Option<NonSendMut<UiScript>>,
     mut open: ResMut<ItemTextOpen>,
@@ -460,8 +393,7 @@ fn drain_item_text(
             continue; // a letter has no pages; its buttons never show
         };
         if turn_page(visited, delta, |id| pages.pages.get(id).map(|p| p.next)) {
-            // Repaint on the next feed, without re-firing BEGIN (within this VM; a fresh VM
-            // re-begins regardless, which is the reload repaint).
+            // Repaint on the next feed without re-firing BEGIN.
             sess.told.get(&script).ready = false;
         }
     }
@@ -471,16 +403,12 @@ fn drain_item_text(
     }
 }
 
-/// Walk the visited-page trail one step. A `PageText` chain only links **forwards**, so Prev is a
-/// pop off the trail rather than a lookup — the reference keeps the same array (`[0xbc3fd0]`).
-/// Returns whether the page actually changed (a no-op turn must not repaint).
-///
-/// `next_of` is the page cache: `None` = the page hasn't landed yet, `Some(0)` = last page. Both
-/// refuse the turn; neither can normally be clicked, since the Next button only shows while the
-/// painted page reported a next.
+/// Walk the trail one step: Next pushes the page's `nextPageId` from `next_of`, the cache, and
+/// Prev pops (the reference's array at `0xbc3fd0`). A page not landed or a last page refuses;
+/// returns whether the page changed.
 fn turn_page(visited: &mut Vec<u32>, delta: i32, next_of: impl Fn(u32) -> Option<u32>) -> bool {
     let Some(&current) = visited.last() else {
-        return false; // head not resolved yet — no page is painted to turn from
+        return false; // head not resolved yet
     };
     if delta > 0 {
         match next_of(current) {
@@ -499,7 +427,6 @@ fn turn_page(visited: &mut Vec<u32>, delta: i32, next_of: impl Fn(u32) -> Option
 mod tests {
     use super::*;
 
-    /// A three-page book: 100 → 101 → 102. Next walks it, Prev walks back, and the ends refuse.
     #[test]
     fn page_turns_walk_the_chain_both_ways() {
         let chain = |id: u32| match id {
@@ -524,7 +451,6 @@ mod tests {
         assert_eq!(visited, [100, 101], "Prev pops the forward-only trail");
     }
 
-    /// A Next clicked before the page landed is refused rather than pushing a bogus id.
     #[test]
     fn a_page_still_in_flight_refuses_the_turn() {
         let mut visited = vec![7];
@@ -532,8 +458,6 @@ mod tests {
         assert_eq!(visited, [7]);
     }
 
-    /// The reference's toggle: re-clicking the readable that is already open closes it; a
-    /// *different* one does not.
     #[test]
     fn re_reading_the_same_object_toggles_closed() {
         let mut open = ItemTextOpen::default();
@@ -551,8 +475,6 @@ mod tests {
         assert!(!open.take_closing(), "a no-op toggle closes nothing");
     }
 
-    /// A page chain opens with an EMPTY trail — the head comes from the object's template as the
-    /// feed paints, so a click that beats the ask-once template query still opens a reader.
     #[test]
     fn a_page_read_opens_before_its_template_lands() {
         let mut open = ItemTextOpen::default();
@@ -570,13 +492,10 @@ mod quest_material_tests {
         (u64::from(benilla_protocol::guid::HIGH_GAMEOBJECT) << 48) | (entry << 24) | 1
     }
 
-    /// `GetQuestBackgroundMaterial`'s resolve, the reader's twin: a GameObject source answers its
-    /// template data by type through `PageTextMaterial.dbc`; a creature source answers nothing
-    /// (FrameXML's Parchment); an uncached GameObject is asked for and answers nothing meanwhile.
+    /// A GameObject's material is its template data by type; a creature's is Parchment.
     #[test]
     fn a_quest_sourced_from_an_object_paints_the_objects_material() {
         let items = Items::default();
-        // No item source in this case — every one of these is a GameObject or a creature (2334).
         let mut objs = crate::ui_items::TestObjects::new();
         let objects = objs.get();
         let mut gos = GameObjectTemplates::default();

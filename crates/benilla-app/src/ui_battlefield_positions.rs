@@ -1,26 +1,11 @@
-//! The battleground **teammate and flag positions** on the world map:
-//! `MSG_BATTLEGROUND_PLAYER_POSITIONS` both ways, resolved
-//! into the engine's `GetBattlefieldPosition` / `GetBattlefieldFlagPosition` /
-//! `GetBattlefieldMapIconScale` backing the stock `WorldMapFrame.lua` and
-//! `Blizzard_BattlefieldMinimap.lua` poll every update.
+//! Battleground teammate and flag positions on the world map: `MSG_BATTLEGROUND_PLAYER_POSITIONS`
+//! resolved into the view behind `GetBattlefieldPosition`, `GetBattlefieldFlagPosition` and
+//! `GetBattlefieldMapIconScale`, which `WorldMapFrame.lua` and the battlefield minimap poll.
 //!
-//! **The reference's law, and where each half lives.** The packet carries the teammates outside
-//! the requester's own group as raw world floats, plus the friendly flag carrier. The handler
-//! (`0x4aad40`) keeps them as sent; the *getter* (`0x4abf90`) does the work per call: it skips
-//! the player itself, the four party slots and the raid roster (all of which the map already
-//! draws through `GetPlayerMapPosition`), prefers the live object's position when the guid is
-//! streamed to us, and normalizes through the world-map projection under the **active queue
-//! slot's map** — which is why the getter answers `(0, 0)` off that map. Every one of those is an
-//! app-side fact (the group, the entity index, the projection, the catalog), so the app resolves
-//! the whole list here each frame and the engine holds only the finished view.
-//!
-//! **The name** is the name cache's answer (a `CMSG_NAME_QUERY` goes out for a guid it has not
-//! seen), `nil` until it lands — and when it lands the reference fires `WORLD_MAP_NAME_UPDATE`,
-//! which `WorldMapFrame_OnEvent` turns into a repaint; that is produced here, once per landing.
-//!
-//! **The request** (`RequestBattlefieldPositions()`) is the reference's own 5000 ms throttle
-//! (`0x4ac0f0`, the `[0xb6ec00]` stamp) and goes out only with an active slot — outside a
-//! battleground the list is cleared instead, so a stale roster never draws on the next map.
+//! The reference's getter (`0x4abf90`) does the work per call: it skips the player, the party and
+//! the raid roster, prefers a streamed object's live position, and projects under the active queue
+//! slot's map, answering `(0, 0)` off it. The app resolves the list that way each frame. A name
+//! landing fires `WORLD_MAP_NAME_UPDATE`, as in the reference.
 
 use std::time::{Duration, Instant};
 
@@ -38,22 +23,21 @@ use crate::ui_party::GroupState;
 use crate::ui_script::{UiFeed, UiInput};
 use crate::ui_world_map::{project_on_displayed, WorldMapUiData};
 
-/// The reference's request throttle: `RequestBattlefieldPositions` sends at most once per 5000 ms.
+/// `RequestBattlefieldPositions` (`0x4aa5c0`) sends at most once per 5000 ms (stamp
+/// `[0xb6ebe0]`), and only with an active queue slot; without one it clears the list.
 pub(crate) const REQUEST_THROTTLE: Duration = Duration::from_millis(5000);
 
 /// The last positions packet and the request stamp.
 #[derive(Resource, Default)]
 pub(crate) struct BattlefieldPositions {
-    /// The last `MSG_BATTLEGROUND_PLAYER_POSITIONS`, as sent; `None` outside a battleground.
     packet: Option<PositionsPacket>,
-    /// When the last request went out — the throttle's stamp.
     last_request: Option<Instant>,
-    /// Guids whose name the cache has not answered yet; a landing fires `WORLD_MAP_NAME_UPDATE`.
+    /// Guids whose name the cache has not answered yet.
     pending_names: Vec<u64>,
 }
 
 impl BattlefieldPositions {
-    /// `SessionEvent::BattlefieldPositions` — replaces the list.
+    /// `MSG_BATTLEGROUND_PLAYER_POSITIONS` in: kept as sent, as the handler (`0x4aad40`) does.
     pub(crate) fn apply(&mut self, packet: PositionsPacket) {
         self.packet = Some(packet);
     }
@@ -63,7 +47,7 @@ impl BattlefieldPositions {
         self.pending_names.clear();
     }
 
-    /// The throttle: `true` (and the stamp moves) when a request may go out now.
+    /// The throttle: `true`, and the stamp moves, when a request may go out now.
     fn request_due(&mut self, now: Instant) -> bool {
         let due = self
             .last_request
@@ -75,8 +59,8 @@ impl BattlefieldPositions {
     }
 }
 
-/// The getter's position source (`0x4abf90`): the live object's when the guid is streamed to us,
-/// else the packet's floats. Both in wow space `(x, y)`.
+/// The getter's position source (`0x4abf90`): a streamed object's live position, else the
+/// packet's, as wow `(x, y)`.
 fn live_or_packet(
     p: &BattlefieldPosition,
     guids: &GuidIndex,
@@ -91,8 +75,7 @@ fn live_or_packet(
     }
 }
 
-/// The flag texture token the local faction selects: the friendly carrier is carrying the OTHER
-/// side's flag, so an Alliance viewer sees `HordeFlag` and a Horde viewer `AllianceFlag`.
+/// The flag texture token: the friendly carrier holds the other side's flag.
 fn flag_token(faction: Option<&str>) -> Option<&'static str> {
     match faction {
         Some("Alliance") => Some("HordeFlag"),
@@ -113,8 +96,7 @@ fn feed_battlefield_positions(
     unit_pos: Query<&GlobalTransform, With<NetEntity>>,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
-    // What the empty push last carried (`(has_list, icon_scale bits)`): with no list the engine
-    // is told once per change, not per frame; with one, every frame — the positions move.
+    // The last empty push: with no list the engine is told on change, with one every frame.
     mut last_empty: Local<crate::ui_script::VmMemo<Option<(bool, u32)>>>,
 ) {
     let Some(mut script) = script else {
@@ -223,7 +205,7 @@ fn reset_on_world_enter(
     state.last_request = None;
 }
 
-/// The battlefield map's packet handler (in the net handler table since 2313).
+/// The battlefield map's packet handler.
 mod net {
     use benilla_protocol::{SessionEvent, SessionEventKind};
     use bevy::prelude::*;
@@ -231,7 +213,6 @@ mod net {
     use super::BattlefieldPositions;
     use crate::net::NetHandlerApp;
 
-    /// Register the handler — called from [`super::BattlefieldPositionsPlugin`].
     pub(super) fn register(app: &mut App) {
         app.net_handler(SessionEventKind::BattlefieldPositions, on_positions);
     }

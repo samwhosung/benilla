@@ -1,24 +1,6 @@
-//! The app-side **merchant feed** (decision 0081 phase 4) — the inward half of the merchant seam
-//! around [`benilla_ui::script`]'s `merchant` module, the twin of [`crate::ui_gossip`]'s gossip seam
-//! and [`crate::ui_items`]'s container seam.
-//!
-//! The net bridge fills [`MerchantOpen`] from the wire (`SMSG_LIST_INVENTORY` → the vendor's rows;
-//! `SMSG_BUY_ITEM` → a stock update; the two refusals → [`MerchantErrors`]). Each frame
-//! [`feed_merchant`] resolves each wire [`VendorItem`] to a Lua-facing [`MerchantItem`] (name via the
-//! ask-once item-template cache, icon straight from the wire `display_id` through
-//! `ItemDisplayInfo.dbc` — the same catalog the bags use), pushes the snapshot
-//! ([`benilla_ui::script::UiScript::set_merchant`]), and fires `MERCHANT_SHOW` on open /
-//! `MERCHANT_UPDATE` on a content change / `MERCHANT_CLOSED` on clear. It also pushes the player's
-//! purse (`PLAYER_FIELD_COINAGE` via `set_money`) each frame it changes, firing `PLAYER_MONEY` with
-//! it (the money displays repaint on the event). [`drain_merchant`] pulls the Lua intents back out:
-//! `BuyMerchantItem(index)` → [`ClientCommand::BuyItem`] (mapped from the 1-based row to the item
-//! *entry* the wire addresses — buy is by entry, not the vendor `muid`), and `CloseMerchant` → a
-//! local clear (vanilla's client-side close sends no packet). The standardized NPC-session range
-//! guard ([`crate::ui_session`]) applies the same client-side close when the player walks out of
-//! the NPC-service range (or the vendor despawns).
-//!
-//! The sell affordance (decision 0081 v1) lives one module over in [`crate::ui_items`]: while a
-//! merchant is open, a bag-slot click sells the slot's item instead of using/equipping it.
+//! The merchant window's app side: [`MerchantOpen`] holds the `SMSG_LIST_INVENTORY` rows,
+//! [`feed_merchant`] pushes them with the buyback and repair rows, the purse and the refusals, and
+//! [`drain_merchant`] sends the Lua intents. A bag click sells through [`crate::ui_items`].
 
 use benilla_protocol::messages::{buy_result, sell_result, VendorItem};
 use bevy::prelude::*;
@@ -34,48 +16,39 @@ use crate::ui_script::{UiFeed, UiInput};
 use crate::ui_session::{close_npc_session_out_of_range, npc_switched, NpcSession};
 use benilla_protocol::messages::BAG_PLAYER_INVENTORY;
 
-/// The wire's "unlimited stock" sentinel for a vendor row's `current_count` (vmangos
-/// `ItemHandler.cpp`); the Lua side sees it as `numAvailable == -1`.
+/// A vendor row's unlimited `current_count` (vmangos `ItemHandler.cpp:795`), `-1` to Lua.
 const STOCK_UNLIMITED: u32 = 0xFFFF_FFFF;
 
-/// `UNIT_NPC_FLAG_REPAIR` — the vendor-can-repair service bit `CanMerchantRepair` tests
-/// (`0x4fadb0`: a merchant-frame gate, deliberately never in the cursor ladder).
+/// `UNIT_NPC_FLAG_REPAIR`, the bit `CanMerchantRepair` tests (`0x4fadb0`).
 const NPC_FLAG_REPAIR: u32 = 0x4000;
 
-/// The wire's first absolute buyback inventory slot (`BUYBACK_SLOT_START`; slots 69–80).
+/// The first absolute buyback slot (`BUYBACK_SLOT_START`, slots 69-80).
 const BUYBACK_SLOT_FIRST: u32 = 69;
 
-/// The client-side repair-cost tables (`DurabilityCosts.dbc` + `DurabilityQuality.dbc`), loaded
-/// with the entity catalogs ([`crate::entities`]). Optional resource — absent, every repair cost
-/// displays 0 and the repair-all button stays disabled (the wire still works).
+/// `DurabilityCosts.dbc` and `DurabilityQuality.dbc`, the client's repair prices; absent, every
+/// cost shows 0.
 #[derive(Resource)]
 pub(crate) struct RepairTables(pub(crate) benilla_formats::DurabilityTables);
 
-/// The open merchant, filled by the net bridge ([`crate::net`]) and read by [`feed_merchant`]. Holds
-/// the vendor guid and its rows exactly as the wire delivered them (`SMSG_LIST_INVENTORY`); the feed
-/// resolves each to a display row and the drain maps a clicked 1-based row to its item entry. Cleared
-/// on a client-side close and on disconnect.
+/// The open vendor and its `SMSG_LIST_INVENTORY` rows, until a close or a disconnect.
 #[derive(Resource, Default)]
 pub(crate) struct MerchantOpen {
-    /// The vendor whose window is open; `None` = no vendor open.
     pub(crate) vendor: Option<u64>,
-    /// The vendor's rows (wire order = 1-based display order).
+    /// In wire order, which is the 1-based display order.
     pub(crate) items: Vec<VendorItem>,
 }
 
 impl MerchantOpen {
-    /// Open (or replace) the window with a vendor's freshly-listed stock.
     pub(crate) fn open(&mut self, vendor: u64, items: Vec<VendorItem>) {
         self.vendor = Some(vendor);
         self.items = items;
     }
 
-    /// Whether a vendor window is currently open.
     pub(crate) fn is_open(&self) -> bool {
         self.vendor.is_some()
     }
 
-    /// The item **entry** at a 1-based display row — what `CMSG_BUY_ITEM` addresses.
+    /// The item entry at a 1-based row: `CMSG_BUY_ITEM` buys by entry, not by vendor slot.
     pub(crate) fn entry_at(&self, index_1based: u32) -> Option<u32> {
         index_1based
             .checked_sub(1)
@@ -83,45 +56,39 @@ impl MerchantOpen {
             .map(|it| it.entry)
     }
 
-    /// Apply a post-purchase stock update (`SMSG_BUY_ITEM`): the row's remaining count changes. The
-    /// wire keys it by the 1-based vendor `slot`; the purchased item itself lands via the normal
-    /// item-create path (already handled), so only the count display moves here.
+    /// `SMSG_BUY_ITEM`'s new count for the row at 1-based vendor `slot`; the bought item itself
+    /// arrives as an object create.
     pub(crate) fn update_stock(&mut self, slot: u32, new_count: u32) {
         if let Some(it) = self.items.iter_mut().find(|it| it.slot == slot) {
             it.current_count = new_count;
         }
     }
 
-    /// Mark every row of an item **sold out** — the `SMSG_BUY_FAILED` `ITEM_ALREADY_SOLD` arm
-    /// (`0x5dcdbf mov DWORD PTR [esi],0x0`), so a limited-stock row that just refused the click
-    /// stops showing the count that tempted it. Unconditional, as the reference's write is: only a
-    /// limited row can raise this refusal, and the reference does not break on the first match
-    /// either (`0x5dcdcd` walks all 128 cache rows).
+    /// Zero every row of `entry`, as the reference's `ITEM_ALREADY_SOLD` arm writes 0 (`0x5dcdbf`)
+    /// into each matching row of its 128-row cache (`0x5dcdcd`).
     pub(crate) fn sold_out(&mut self, entry: u32) {
         for it in self.items.iter_mut().filter(|it| it.entry == entry) {
             it.current_count = 0;
         }
     }
 
-    /// Close the open window (a client-side close). Keeps nothing — a re-open re-lists.
+    /// A client-side close; a re-open re-lists.
     pub(crate) fn clear(&mut self) {
         self.vendor = None;
         self.items.clear();
     }
 
-    /// Disconnect: drop the open window (mirrors the gossip/item session clears).
+    /// The disconnect clear.
     pub(crate) fn clear_session(&mut self) {
         self.clear();
     }
 }
 
-/// A merchant refusal (`SMSG_BUY_FAILED` / `SMSG_SELL_ITEM`'s error path) queued by the net bridge for
-/// the UI error line — the merchant twin of [`crate::ui_items::EquipErrors`]. A *successful* buy/sell
-/// never lands here (a sell is silent, a buy answers `SMSG_BUY_ITEM`); only the error path does.
+/// Buy and sell refusals waiting for the feed's message line.
 #[derive(Resource, Default)]
 pub(crate) struct MerchantErrors(pub Vec<MerchantRefusal>);
 
-/// One refusal: a buy or a sell, carrying the wire's `u8` reason code.
+/// A refused buy or sell and its wire reason code.
 pub(crate) enum MerchantRefusal {
     Buy(u8),
     Sell(u8),
@@ -139,14 +106,9 @@ impl Plugin for UiMerchantPlugin {
             .add_systems(
                 Update,
                 (
-                    // Range-close before the feed so the clear turns into MERCHANT_CLOSED the same
-                    // frame; push before the input pass so an open/close is on screen the same
-                    // frame; drain after it so a buy's intent goes out the same frame (mirrors
-                    // ui_gossip/ui_items). After the UnitFeed set: the paint MERCHANT_SHOW
-                    // triggers reads the engine's item-template + player-req stores
-                    // (GetMerchantItemInfo's isUsable), so this frame's pushes must land first —
-                    // unordered, the first paint races feed_item_stats/feed_player_req and the
-                    // usable reds drop until the next content repaint.
+                    // Range-close first so the clear fires `MERCHANT_CLOSED` the same frame. The
+                    // feed follows `UnitFeed`: `MERCHANT_SHOW`'s paint reads the item and
+                    // player-requirement stores for `GetMerchantItemInfo`'s `isUsable`.
                     close_npc_session_out_of_range::<MerchantOpen>.before(feed_merchant),
                     feed_merchant.after(crate::ui_unit::UnitFeed).in_set(UiFeed),
                     drain_merchant.after(UiInput),
@@ -155,44 +117,30 @@ impl Plugin for UiMerchantPlugin {
     }
 }
 
-/// The one `BuyResult` code the reference deliberately says **nothing** for. It has no vmangos
-/// name because vmangos never sends it: `0x5dcde7`'s jump table sends code 6 to the handler's own
-/// `ret`, past the `DisplayError` its neighbours land on.
+/// The one `BuyResult` code the reference shows nothing for: `0x5dcde7`'s jump table sends 6 to
+/// the handler's `ret`. vmangos never sends it.
 const BUY_SILENT: u8 = 6;
 
-/// The GlobalStrings key a `BuyResult` refusal (`SMSG_BUY_FAILED`) shows — the reference's switch
-/// at `0x5dcdd8`, each arm a `CGGameUI::DisplayError(msgId)` call, read off the binary for
-/// decision 1821. `None` is silence the reference chose, not a hole in the table.
-///
-/// **The `default` arm is a real message, not an invented fallback**: every code outside the
-/// table — 0, 3, 9, 10 and everything from 13 up — shows `ERR_ITEM_NOT_FOUND` (`0x5dce81`, the
-/// `ja` target of `cmp eax,0xc`).
+/// The message a `SMSG_BUY_FAILED` code shows, from the reference's switch at `0x5dcdd8`; its
+/// default arm (`0x5dce81`) shows `ERR_ITEM_NOT_FOUND` for 0, 3, 9, 10 and 13 up.
 fn buy_error_key(reason: u8) -> Option<&'static str> {
     Some(match reason {
-        // One arm (`0x5dcdee`) for both: vmangos calls 1 ALREADY_SOLD and 7 SOLD_OUT, and the
-        // reference tells them apart only by code 1 also zeroing the row
-        // ([`crate::ui_merchant::net::vendor_buy_failed`]).
+        // One arm (`0x5dcdee`) for both; only code 1 also zeroes the row.
         buy_result::ITEM_ALREADY_SOLD | buy_result::ITEM_SOLD_OUT => "ERR_VENDOR_SOLD_OUT", // 0x23
-        buy_result::NOT_ENOUGH_MONEY => "ERR_NOT_ENOUGH_MONEY", // 0x25 — speaks, line 0x28
+        buy_result::NOT_ENOUGH_MONEY => "ERR_NOT_ENOUGH_MONEY", // 0x25, speaks line 0x28
         buy_result::SELLER_DONT_LIKE_YOU => "ERR_VENDOR_HATES_YOU", // 0x22
         buy_result::DISTANCE_TOO_FAR => "ERR_VENDOR_TOO_FAR",   // 0x24
         BUY_SILENT => return None,
-        buy_result::CANT_CARRY_MORE => "ERR_ITEM_MAX_COUNT", // 0x12 — speaks, line 0x1e
+        buy_result::CANT_CARRY_MORE => "ERR_ITEM_MAX_COUNT", // 0x12, speaks line 0x1e
         buy_result::RANK_REQUIRE => "ERR_CANT_EQUIP_RANK",   // 0x05
         buy_result::REPUTATION_REQUIRE => "ERR_CANT_EQUIP_REPUTATION", // 0x06
-        _ => "ERR_ITEM_NOT_FOUND",                           // 0x17 — the switch's own default
+        _ => "ERR_ITEM_NOT_FOUND",                           // 0x17, the switch's default
     })
 }
 
-/// The GlobalStrings key a `SellResult` refusal (`SMSG_SELL_ITEM`'s error path) shows — the
-/// reference's switch at `0x5dd22c`.
-///
-/// **Silence is the default here**, the opposite of [`buy_error_key`]: code 0 returns before the
-/// switch (`0x5dd21e`), and 5 and everything from 7 up jump past the `DisplayError` to the
-/// handler's tail. vmangos's own header agrees line for line — its comment on `SELL_ERR_UNK = 5`
-/// is *"nothing appears…"*, and its comments on 2 and 3 (*"merchant doesn't like that item"* /
-/// *"merchant doesn't like you"*) name the two strings the reference picks, which its `CANT_SELL`
-/// / `CANT_FIND_VENDOR` identifiers do not.
+/// The message a `SMSG_SELL_ITEM` error code shows, from the reference's switch at `0x5dd22c`.
+/// Its default is silence: 0 returns before the switch (`0x5dd21e`), and 5 and 7 up skip the
+/// `DisplayError`.
 fn sell_error_key(reason: u8) -> Option<&'static str> {
     Some(match reason {
         sell_result::CANT_FIND_ITEM => "ERR_ITEM_NOT_FOUND", // 0x17
@@ -204,10 +152,8 @@ fn sell_error_key(reason: u8) -> Option<&'static str> {
     })
 }
 
-/// Resolve one wire [`VendorItem`] into the Lua-facing [`MerchantItem`]: the icon comes straight from
-/// the wire `display_id` (no template wait — the row shows its icon immediately), the name + the
-/// tooltip stat head from the ask-once template cache (`None` while in flight — the row shows a
-/// placeholder and fills in when the answer lands, exactly like a bag slot).
+/// One wire row as a Lua row: the icon from the wire `display_id` at once, the name and stats once
+/// the item template answers.
 fn resolve_item(
     item: &VendorItem,
     items: &Items,
@@ -237,11 +183,8 @@ fn resolve_item(
     } else {
         item.current_count as i32
     };
-    // The row's link (`GetMerchantItemLink`) — what the row click's ctrl/shift arms
-    // hand on. Off the SAME one template answer as `name`/`stats`, through the one shared builder
-    // ([`crate::ui_items::item_link`], our transcription of the client's own `0x52adb0`): a vendor
-    // row carries no enchant and no random property on the wire, so the no-ids form is the right
-    // one here.
+    // `GetMerchantItemLink`'s link, built as the reference's `0x52adb0` builds it; a vendor row
+    // has no enchant or random property.
     let link = template.map(|t| item_link(item.entry, &t.name, t.quality));
     MerchantItem {
         name,
@@ -256,10 +199,9 @@ fn resolve_item(
     }
 }
 
-/// The occupied buyback slots' player-descriptor indices (0–11) in the client's display order —
-/// timestamp-ascending, oldest first (`0x4fafd0`: scan slots 69–80 for a non-zero
-/// guid+price pair, sort by the timestamp fields). Index `i` here is Lua's `GetBuybackItemInfo(i+1)`;
-/// the wire's absolute slot for an entry is `BUYBACK_SLOT_FIRST + index`.
+/// The occupied buyback slots (0-11) in the reference's display order, oldest first: `0x4fafd0`
+/// takes the slots with a guid and a price and sorts them by timestamp. Entry `i` is
+/// `GetBuybackItemInfo(i + 1)`.
 fn buyback_order(store: &benilla_protocol::ObjectFields) -> Vec<u8> {
     let mut v: Vec<(u8, u32)> = (0..12u8)
         .filter_map(|i| {
@@ -272,9 +214,8 @@ fn buyback_order(store: &benilla_protocol::ObjectFields) -> Vec<u8> {
     v.into_iter().map(|(i, _)| i).collect()
 }
 
-/// Resolve one buyback slot to its Lua-facing row: identity from the parked item object (it stays
-/// streamed while in the buyback slots), name/stats/icon from its template, the price from the
-/// player's BUYBACK_PRICE field.
+/// One buyback slot as a Lua row: the item from its object, which stays streamed while it sits in
+/// the slot, and the price from the player's buyback price field.
 fn resolve_buyback(
     idx: u8,
     store: &benilla_protocol::ObjectFields,
@@ -314,20 +255,17 @@ fn resolve_buyback(
         num_available: 0,
         item_id: entry,
         stats,
-        // No link on a buyback row: 1.12 has no `GetBuybackItemLink`, and the reference's buyback
-        // click carries no ctrl/shift branch at all — it is a bare `BuybackItem(this:GetID())`
-        // (`MerchantFrame.lua:358-361`). Nothing reads it, so nothing builds it.
+        // No link: 1.12 has no `GetBuybackItemLink`, and the buyback click is a bare
+        // `BuybackItem(this:GetID())` (`MerchantFrame.lua:358-361`).
         link: None,
-        // …and no max stack, for the same shape of reason: `GetMerchantItemMaxStack` indexes the
-        // MERCHANT list, and a buyback row is bought whole rather than by the stackful. Nothing
-        // asks, so nothing is answered.
+        // No max stack: `GetMerchantItemMaxStack` indexes the merchant list, and a buyback row
+        // is bought whole.
         max_stack: None,
     }
 }
 
-/// One item's displayed repair cost — durability off the item object, the head off its template,
-/// the arithmetic in [`benilla_formats::DurabilityTables`] (the client's own `0x4faf30` chain).
-/// No reputation model yet → discount 0.
+/// One item's repair cost, by the reference's `0x4faf30` arithmetic
+/// ([`benilla_formats::DurabilityTables`]); its reputation discount is not applied (passed as 0).
 fn item_repair_cost(
     guid: u64,
     objects: &Objects,
@@ -354,9 +292,8 @@ fn item_repair_cost(
         .repair_cost(points, level, quality, class, subclass, 0.0)
 }
 
-/// The repair-all total: the client's three sweeps (`0x4fbd60`) —
-/// equipped 0–18, the backpack, and the CONTENTS of the 4 equipped bags (never bank/keyring/
-/// buyback).
+/// The repair-all total over the reference's three sweeps (`0x4fbd60`): equipped slots 0-18, the
+/// backpack and the four bags' contents; never the bank, keyring or buyback.
 fn repair_all_cost(
     store: &benilla_protocol::ObjectFields,
     objects: &Objects,
@@ -395,8 +332,6 @@ fn repair_all_cost(
     total.min(u64::from(u32::MAX)) as u32
 }
 
-/// Build the Lua-facing snapshot from [`MerchantOpen`] + the player/vendor descriptors — `None`
-/// when no vendor is open.
 fn snapshot(
     open: &MerchantOpen,
     objects: &Objects,
@@ -433,10 +368,8 @@ fn snapshot(
     })
 }
 
-/// Push the current merchant into the VM and fire the show/update/close events on a transition (or a
-/// content change — the async name landing, a post-buy stock update). Also surfaces refusals on the
-/// red error line and pushes the player's purse each frame it changes. Diffed against a `Local`
-/// memory, exactly like the gossip/container feeds.
+/// Push the merchant into the VM and fire its events on a change; show the refusals and push the
+/// purse.
 fn feed_merchant(
     script: Option<NonSendMut<UiScript>>,
     open: Res<MerchantOpen>,
@@ -462,9 +395,7 @@ fn feed_merchant(
     let last_money = last_money.get(&script);
     let last_name = last_name.get(&script);
     let last_vendor = last_vendor.get(&script);
-    // Refusals go to the surface — and the voice — their message record names:
-    // the vendor's "not enough money" carries error-speech line 0x28, "you can't carry any more"
-    // line 0x1e. A code the reference says nothing for resolves to no key and reaches nothing.
+    // Refusals show, and speak, as their message rows say; a silent code has no key.
     let refusals: Vec<_> = errors
         .0
         .drain(..)
@@ -477,10 +408,8 @@ fn feed_merchant(
         })
         .collect();
     crate::ui_action::show_messages(&mut script, &mut sink, "ui_merchant", refusals);
-    // The purse: push it only when it changes (u64 copper straight from PLAYER_FIELD_COINAGE),
-    // and fire the real client's PLAYER_MONEY event with it — the money displays (bag + merchant
-    // purses) repaint on the event rather than riding some window-content repaint that happens to
-    // coincide (a sell repainted the bag purse only because it also moved bag contents).
+    // The purse (`PLAYER_FIELD_COINAGE`): on a change, push it and fire `PLAYER_MONEY`, which the
+    // money frames repaint on.
     if let Some(store) = self_q.iter().next() {
         if let Some(copper) = store.0.player_money() {
             let copper = u64::from(copper);
@@ -509,18 +438,15 @@ fn feed_merchant(
         vendor_npc_flags,
         tables.as_deref(),
     );
-    // The vendor's name resolves through the NameCache (a creature-name query, ask-once — the gossip
-    // feed's pattern). `None`/empty while in flight; the title shows "Merchant" until it lands, then
-    // re-fires MERCHANT_UPDATE with the name (the diff below tracks the name too, so a name-only
-    // change still repaints the title). It rides an event arg rather than a `MerchantState` field so
-    // no benilla-ui engine change is needed for the title.
+    // The vendor's name rides `MERCHANT_SHOW` and `MERCHANT_UPDATE` as arg1, and its landing alone
+    // re-fires `MERCHANT_UPDATE`; the reference fires both bare (`0x4fad92`, `0x4facaa`), and
+    // stock `MerchantFrame.lua:67` titles with `UnitName("NPC")`.
     let vendor_name = open
         .vendor
         .and_then(|g| names.resolve(g, &commands).map(str::to_string));
     let name_changed = *last_name != vendor_name;
-    // A different vendor while the window is already open is a real close+open (the client's
-    // ShowUIPanel early-returns when visible, so the open sound only re-plays after a hide —
-    // decision 0096 / [`crate::ui_session::npc_switched`]).
+    // A different vendor while open is a close then an open: `ShowUIPanel` returns early on a
+    // visible frame, so only a hide replays the open sound.
     let switched = npc_switched(*last_vendor, open.vendor);
     if fresh == *last && !name_changed && !switched {
         return;
@@ -528,17 +454,15 @@ fn feed_merchant(
     script.set_merchant(fresh.clone());
     let name_arg = || vec![ScriptValue::Str(vendor_name.clone().unwrap_or_default())];
     if switched {
-        // Close the old vendor, open the new: the frame hides then shows, playing the close then
-        // open kits (and closing/reopening the bag). The MERCHANT_CLOSED routes through the window's
-        // OnHide → CloseMerchant, which queues a close intent — consume it here so
-        // the drain does NOT clear the vendor we just re-opened to.
+        // `MERCHANT_CLOSED` queues a close intent through OnHide; consume it so the drain keeps
+        // the new vendor.
         script.fire_event("MERCHANT_CLOSED", vec![]);
         script.fire_event("MERCHANT_SHOW", name_arg());
         let _ = script.take_merchant_close();
     } else {
         match (&*last, &fresh) {
             (None, Some(_)) => script.fire_event("MERCHANT_SHOW", name_arg()),
-            // A content change while open (async item/vendor name landed, stock moved) → repaint.
+            // A change while open: an item or the name landed, or the stock moved.
             (Some(_), Some(_)) => script.fire_event("MERCHANT_UPDATE", name_arg()),
             (Some(_), None) => script.fire_event("MERCHANT_CLOSED", vec![]),
             (None, None) => {}
@@ -549,9 +473,8 @@ fn feed_merchant(
     *last_vendor = open.vendor;
 }
 
-/// The merchant window is an NPC session: the standardized range guard
-/// ([`crate::ui_session`]) client-side-closes it — the exact `CloseMerchant` clear — when the
-/// player walks out of the vendor's service range or the vendor despawns.
+/// The range guard closes the window, as `CloseMerchant` does, when the vendor is out of range or
+/// gone.
 impl NpcSession for MerchantOpen {
     fn npc(&self) -> Option<u64> {
         self.vendor
@@ -562,10 +485,9 @@ impl NpcSession for MerchantOpen {
     }
 }
 
-/// Drain the Lua intents: a bought row → `CMSG_BUY_ITEM` (mapped to the row's item entry; buy is by
-/// entry, not the vendor `muid`); a buyback → `CMSG_BUYBACK_ITEM` (the clicked
-/// 1-based, timestamp-sorted list index mapped to its ABSOLUTE slot 69–80); a repair-all →
-/// `CMSG_REPAIR_ITEM` with guid 0; a close → a local clear (no packet, vanilla).
+/// Drain the Lua intents: a buy sends `CMSG_BUY_ITEM` by item entry, a buyback
+/// `CMSG_BUYBACK_ITEM` with the absolute slot (69-80), a repair-all `CMSG_REPAIR_ITEM` with guid
+/// 0, and a close clears locally, as there is no close packet.
 fn drain_merchant(
     script: Option<NonSendMut<UiScript>>,
     mut open: ResMut<MerchantOpen>,
@@ -622,14 +544,9 @@ fn drain_merchant(
             None => debug!("ui_merchant: BuyMerchantItem({index}) out of range — ignored"),
         }
     }
-    // `PickupMerchantItem`'s SELL arm — a bag item dropped on the vendor window. Resolved the
-    // same way the bag-click sell route resolves it: the wire addresses the item by its concrete
-    // guid, not by a slot, so a slot that emptied under us is a no-op rather than a wrong sell.
-    //
-    // **No merchant-open gate**, deliberately: `0x4fb760`'s sell arm runs before the vendor check
-    // (`0x4fb7f7` gates only the grab). The vendor guid is still needed to address the packet, so
-    // in practice a closed window drops it — but the ORDER matters, because it is why dropping an
-    // item on a vendor window that is closing still sells.
+    // `PickupMerchantItem`'s sell arm, a bag item dropped on the window, sold by its item guid so
+    // an emptied slot is a no-op. It runs before the close below, as `0x4fb760`'s sell arm runs
+    // before its vendor check (`0x4fb7f7`), so a drop on a closing window still sells.
     for (bag, slot) in script.take_merchant_cursor_sells() {
         let Some(vendor) = open.vendor else { continue };
         let slot0 = u8::try_from(slot.saturating_sub(1)).unwrap_or(0);
@@ -645,17 +562,16 @@ fn drain_merchant(
             None => debug!("ui_merchant: cursor sell on an empty slot ({bag}, {slot}) — ignored"),
         }
     }
-    // A held vendor row dropped into a slot — `CMSG_BUY_ITEM_IN_SLOT`, count 1 (the reference's
-    // own hardcoded stack count on all three drop paths).
+    // A held vendor row dropped into a slot: `CMSG_BUY_ITEM_IN_SLOT` with count 1, the
+    // reference's fixed count on all three drop paths.
     for (bag, slot, entry) in script.take_merchant_slot_buys() {
         let Some(vendor) = open.vendor else { continue };
         let (Some(store), Some((bag_index, bag_slot))) = (self_store, wire_pos(bag, slot)) else {
             debug!("ui_merchant: slot buy to an unaddressable slot ({bag}, {slot}) — ignored");
             continue;
         };
-        // The wire wants the destination CONTAINER'S GUID, not its slot index: the player's own
-        // for the backpack, the keyring, the bank and the equipment slots (all of which live in
-        // the player's array, `BAG_PLAYER_INVENTORY`), and the bag object's for a real bag.
+        // The wire wants the container's guid: the player's for a slot in the player's own
+        // array (`BAG_PLAYER_INVENTORY`), the bag's for a real bag.
         let bag_guid = if bag_index == BAG_PLAYER_INVENTORY {
             self_pair.map(|(_, g)| g.0)
         } else {
@@ -700,9 +616,7 @@ mod tests {
         }
     }
 
-    /// **The two refusal tables, welded to the message ids they were read from**.
-    /// Asserting the key alone would let a plausible-looking rename through; asserting the id it
-    /// resolves to is asserting the `push <id>; call 0x496720` that was actually disassembled.
+    /// The ids are asserted, not just the keys: each is its arm's `push <id>; call 0x496720`.
     #[test]
     fn the_refusal_tables_are_the_references_own() {
         let id = |key: &str| {
@@ -710,8 +624,8 @@ mod tests {
                 .unwrap_or_else(|| panic!("{key} is not a catalog row"))
                 .id
         };
-        // `SMSG_BUY_FAILED` — the switch at `0x5dcdd8`. Note 1 and 7 share `0x23`, 6 is silent,
-        // and the arms outside the table fall to `0x17` rather than to nothing.
+        // `SMSG_BUY_FAILED`, the switch at `0x5dcdd8`: 1 and 7 share `0x23`, 6 is silent, and
+        // codes outside the table fall to `0x17`.
         for (code, want) in [
             (0u8, Some(0x17u16)),
             (1, Some(0x23)),
@@ -731,7 +645,7 @@ mod tests {
         ] {
             assert_eq!(buy_error_key(code).map(id), want, "buy code {code}");
         }
-        // `SMSG_SELL_ITEM` — the switch at `0x5dd22c`, where the default is silence.
+        // `SMSG_SELL_ITEM`, the switch at `0x5dd22c`, where the default is silence.
         for (code, want) in [
             (0u8, None),
             (1, Some(0x17u16)),
@@ -747,8 +661,7 @@ mod tests {
         }
     }
 
-    /// The two vendor refusals that **speak** — the reason the keys had to replace the hand-written
-    /// English at all (decision 1815's join). Everything else in the two tables is a silent row.
+    /// Only these two vendor refusals speak.
     #[test]
     fn the_purse_refusals_carry_their_voice_lines() {
         let tag = |key: &str| benilla_ui::messages::by_key(key).expect("row").type_tag;
@@ -769,8 +682,7 @@ mod tests {
         }
     }
 
-    /// `ITEM_ALREADY_SOLD` zeroes the row it refused, and only that row — the reference's own
-    /// cache write (`0x5dcdbf`), keyed by entry because vmangos puts the entry in that field.
+    /// The reference's cache write (`0x5dcdbf`), keyed by entry as vmangos fills the field.
     #[test]
     fn a_sold_out_refusal_zeroes_only_that_rows_count() {
         let mut open = MerchantOpen::default();
@@ -809,13 +721,13 @@ mod tests {
         let items = Items::default();
         let (tx, _rx) = crossbeam_channel::unbounded();
         let commands = NetCommands(tx);
-        // Unlimited stock → numAvailable -1; a finite count passes through.
+        // Unlimited stock is `numAvailable` -1; a finite count passes through.
         let unlimited = resolve_item(&row(159, 1, STOCK_UNLIMITED), &items, None, &commands);
         assert_eq!(unlimited.num_available, -1);
         assert_eq!(unlimited.item_id, 159);
         let finite = resolve_item(&row(4540, 2, 5), &items, None, &commands);
         assert_eq!(finite.num_available, 5);
-        // No template answer yet → name + tooltip stats in flight (nil), the rest present.
+        // No template answer yet: no name or stats, the rest present.
         assert!(finite.name.is_none());
         assert!(finite.stats.is_none());
         assert_eq!(finite.price, 500);
@@ -903,7 +815,7 @@ mod tests {
         open.open(0x42, vec![row(159, 1, STOCK_UNLIMITED), row(4540, 2, 5)]);
         open.update_stock(2, 4);
         assert_eq!(open.items[1].current_count, 4);
-        open.update_stock(99, 0); // no such slot — no-op
+        open.update_stock(99, 0); // no such slot: a no-op
         assert_eq!(open.items[0].current_count, STOCK_UNLIMITED);
     }
 

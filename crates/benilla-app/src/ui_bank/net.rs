@@ -1,6 +1,4 @@
-//! The bank's packet handlers (in the net handler table since 2318, moved out of
-//! the drain's npc arm file) — the [`BankOpen`] session and the [`BankErrors`] line queue the bank
-//! feed ([`super`]) reads.
+//! The bank's packet handlers: they fill [`BankOpen`] and [`BankErrors`] for the bank feed.
 
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
@@ -10,8 +8,7 @@ use crate::net::NetHandlerApp;
 use crate::ui_gossip::GossipState;
 use crate::ui_quest::QuestGiver;
 
-/// Register the bank handlers — called from [`super::UiBankPlugin`]. One per kind, plus the
-/// session-end listener.
+/// Register the bank handlers and the session-end listener.
 pub(super) fn register(app: &mut App) {
     use SessionEventKind as K;
     app.net_handler(K::ShowBank, on_show_bank)
@@ -36,26 +33,16 @@ fn on_buy_slot_result(In(ev): In<SessionEvent>, mut errors: ResMut<BankErrors>) 
     }
 }
 
-/// The bank window dies with the socket — a reconnect re-opens via the banker.
-/// A listener on the session end (a second handler on the kind, after the bridge's own teardown).
+/// The bank window closes with the connection.
 fn on_session_end(In(_): In<SessionEvent>, mut bank: ResMut<BankOpen>) {
     bank.clear_session();
 }
 
-/// The bank opened (`SMSG_SHOW_BANK`): point the [`BankOpen`] session the bank feed
-/// ([`super`]) reads at the banker. Sent for our own `CMSG_BANKER_ACTIVATE` *and*
-/// volunteered by the server for the gossip menu's bank option (`GOSSIP_OPTION_BANKER` →
-/// `SendShowBank`) — so this never assumes we asked. The vault's contents are
-/// descriptor fields already streamed; the window renders from local state.
-///
-/// Opening the bank ends any open gossip interaction (the `SMSG_GOSSIP_COMPLETE` clear): vmangos
-/// sends no `SMSG_GOSSIP_COMPLETE` for the gossip menu's bank option (VERIFIED
-/// `Player::OnGossipSelect` — BANKER only calls `SendShowBank`), and the panel slots alone can't
-/// close the menu — the bank's `pushable = 6` sends it to the *center* slot beside a pushable-0
-/// gossip instead of replacing it, so the menu would linger beside the vault
-/// (director-observed). The real client ends the old NPC interaction when the new one starts
-/// (INFERRED — the exact C++ `GOSSIP_CLOSED` fire isn't RE'd; the observable is vanilla's: the
-/// menu is gone once the vault is up).
+/// `SMSG_SHOW_BANK`, sent for `CMSG_BANKER_ACTIVATE` and unprompted for the gossip bank option.
+/// It ends an open gossip interaction: vmangos sends no `SMSG_GOSSIP_COMPLETE` for that option
+/// (`Player::OnGossipSelect`), and the bank's `pushable = 6` (`UIParent.lua:28`) would open beside
+/// the gossip frame rather than replace it. The reference's gossip menu is gone once the vault
+/// shows; its mechanism for that is untraced.
 fn show_bank(banker: u64, bank: &mut BankOpen, gossip: &mut GossipState, quest: &mut QuestGiver) {
     debug!("net: bank opened at {banker:#x}");
     if gossip.npc.is_some() {
@@ -64,8 +51,7 @@ fn show_bank(banker: u64, bank: &mut BankOpen, gossip: &mut GossipState, quest: 
     bank.open(banker);
 }
 
-/// A bank-slot purchase refusal (`SMSG_BUY_BANK_SLOT_RESULT` — vmangos sends it only on failure;
-/// success is the PLAYER_BYTES_2 delta): queue it for the bank feed's red error line.
+/// `SMSG_BUY_BANK_SLOT_RESULT`, a refusal: vmangos sends it only on failure.
 fn bank_buy_slot_result(result: u32, errors: &mut BankErrors) {
     debug!("net: bank slot purchase refused (code {result})");
     errors.0.push(result);
@@ -75,9 +61,6 @@ fn bank_buy_slot_result(result: u32, errors: &mut BankErrors) {
 mod tests {
     use super::*;
 
-    /// `SMSG_SHOW_BANK` ends an open gossip interaction (the gossip menu's bank option arrives
-    /// with no `SMSG_GOSSIP_COMPLETE` — `show_bank`'s doc): the gossip/quest sessions clear and
-    /// the bank session opens. A direct right-click (no gossip open) just opens the bank.
     #[test]
     fn show_bank_ends_the_gossip_interaction() {
         let mut bank = BankOpen::default();

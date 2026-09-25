@@ -1,32 +1,6 @@
-//! The app-side **taxi feed/drain** (decision 0484 phases 1-2) — the two-way half of the taxi-map
-//! seam around [`benilla_ui::script`]'s `taxi` module ([`crate::ui_trainer`]'s feed/drain shape).
-//!
-//! **Phase 1** (unchanged): the net bridge (`crate::ui_taxi::net`) fills [`TaxiState`] from the
-//! wire — `SMSG_SHOWTAXINODES` opens the map (flight master + nearest node + known-node bitmask),
-//! `SMSG_ACTIVATETAXIREPLY` stages the activate verdict, the first-visit "learn" pair stages the
-//! discovery flag — and the standardized NPC-session range guard client-side-closes the map when
-//! the player walks out of the flight master's service range.
-//!
-//! **Phase 2 + the 0496 fold-back** (the laws below are byte-verified — decision 0496 resolves
-//! every 0484 INTERIM): [`routing`] loads `TaxiNodes.dbc`/`TaxiPath.dbc`/`WorldMapContinent.dbc`
-//! once and holds the pure projection/route-search/node-building logic. [`feed_taxi`] turns
-//! [`TaxiOpen`] into the engine-facing `TaxiUiState` snapshot each frame: every known
-//! `TaxiNodes.dbc` row on the **current node's own continent** (packet-cached, never a live
-//! player-map read), the flight master's node typed `Current`, every other node routed from it
-//! over the **geo-distance** search — `Reachable` with its fare/route-hop segments, or **absent**
-//! when unroutable (the ref's DISTANT is a dead branch). It fires `TAXIMAP_OPENED`/
-//! `TAXIMAP_CLOSED`, surfaces a refusal (`SMSG_ACTIVATETAXIREPLY` ≠ OK) on the red error line
-//! (byte-exact `ERR_TAXI*` `GlobalStrings`), closes the map on an OK verdict (the flight starts —
-//! 0260's self-spline rails render it), and presents the first-visit discovery (the yellow
-//! ERR_NEWTAXIPATH info line + the "TaxiNodeDiscovered" sound kit). [`drain_taxi`] pulls
-//! `TakeTaxiNode`/`CloseTaxiMap` back out: a target with a **direct `TaxiPath` edge** sends
-//! `CMSG_ACTIVATETAXI` (even when the drawn route detours), an edge-less one
-//! `CMSG_ACTIVATETAXIEXPRESS` with the full node chain; a click on the `Current` node is a
-//! client-side no-op.
-//!
-//! Stock `Interface\FrameXML\TaxiFrame.xml` is the window; the toc's header comment
-//! carries the three engine-forced deviations from the literal reference Lua (a static node-button
-//! pool, the title reading an event arg, the error line's call target).
+//! The taxi map's app side: [`TaxiState`] holds the `SMSG_SHOWTAXINODES` map and the one-shot
+//! replies, [`feed_taxi`] pushes the known nodes on the current node's continent with their
+//! routes (built in [`routing`]) and fires the map events, and [`drain_taxi`] sends the activate.
 
 use benilla_protocol::messages::TaxiMask;
 use bevy::prelude::*;
@@ -42,38 +16,27 @@ use crate::ui_session::{close_npc_session_out_of_range, NpcSession};
 mod routing;
 use routing::{build_nodes, load_taxi_catalogs, taxi_error_key, TaxiCatalogs, TaxiRouteCache};
 
-/// The open taxi map (`SMSG_SHOWTAXINODES`'s payload, held exactly as the wire delivered it).
+/// The open map, `SMSG_SHOWTAXINODES` as the wire gave it.
 pub(crate) struct TaxiOpen {
-    /// The flight master the map opened on.
     pub(crate) flightmaster: u64,
-    /// The node nearest the flight master — the map's "you are here" marker, typed `Current`.
+    /// The node nearest the flight master, typed `Current`.
     pub(crate) nearest_node: u32,
-    /// The full known-node bitmask — the node list's visibility gate and the route search's
-    /// traversal restriction (the byte-verified route law).
+    /// The known nodes: the only ones listed, and the only ones a route passes through.
     pub(crate) known: TaxiMask,
 }
 
-/// The taxi session, filled by the net bridge and read by phase 2's feed. `open` is the live map
-/// (`None` = no map open); `reply`/`discovered` are one-shot wire events staged for the window to
-/// drain and clear — the [`crate::ui_trainer::TrainerErrors`] pattern, folded into one resource
-/// since the taxi window has no other error-line consumer yet.
+/// The taxi session: the open map, plus the one-shot replies [`feed_taxi`] consumes.
 #[derive(Resource, Default)]
 pub(crate) struct TaxiState {
-    /// The open taxi map; `None` = no flight-master window open.
     pub(crate) open: Option<TaxiOpen>,
-    /// The last `SMSG_ACTIVATETAXIREPLY` code (a [`benilla_protocol::messages::taxi_reply`]
-    /// value), staged for [`feed_taxi`] to surface as the red error line (or, on `OK`, close the
-    /// map) and clear.
+    /// The last `SMSG_ACTIVATETAXIREPLY` code, for [`feed_taxi`] to show, or on `OK` to close the
+    /// map.
     pub(crate) reply: Option<u32>,
-    /// Whether a first-visit "learn" landed (`SMSG_NEW_TAXI_PATH` + `SMSG_TAXINODE_STATUS(known
-    /// = true)`) since the last feed frame — [`feed_taxi`] presents it (the byte-verified yellow
-    /// ERR_NEWTAXIPATH info line + the "TaxiNodeDiscovered" sound kit) and
-    /// clears it.
+    /// A first-visit learn (`SMSG_NEW_TAXI_PATH`) for [`feed_taxi`] to announce.
     pub(crate) discovered: bool,
 }
 
 impl TaxiState {
-    /// The map opened or refreshed (`SMSG_SHOWTAXINODES`).
     pub(crate) fn open(&mut self, flightmaster: u64, nearest_node: u32, known: TaxiMask) {
         self.open = Some(TaxiOpen {
             flightmaster,
@@ -82,13 +45,12 @@ impl TaxiState {
         });
     }
 
-    /// Close the open map (a client-side close — the range guard, or the window's close button).
-    /// Keeps nothing: a re-open re-lists off a fresh `SMSG_SHOWTAXINODES`.
+    /// A client-side close; the staged replies stay.
     pub(crate) fn clear(&mut self) {
         self.open = None;
     }
 
-    /// Disconnect: drop the whole session (mirrors the gossip/merchant/trainer session clears).
+    /// The disconnect clear, staged replies included.
     pub(crate) fn clear_session(&mut self) {
         self.open = None;
         self.reply = None;
@@ -96,25 +58,18 @@ impl TaxiState {
     }
 }
 
-/// A flight master's answered node status (`SMSG_TAXINODE_STATUS`, upserted by the net bridge):
-/// `known = false` (an undiscovered nearest node) shows the green `TalkToMeGreen` overhead icon —
-/// the client's `0x5ecdd0` handler → `0x607480` marker swap (resource table `0xc4d9d8` index 4,
-/// decision 0497).
-///
-/// **The query and the teardown are [`crate::quest_markers::query`]'s, not this module's**.
-/// `0x5eb170` — the only `CMSG_TAXINODE_STATUS_QUERY` sender in the image — has
-/// exactly one live caller, `0x607380` @`0x6073e8`, which is the same per-unit function that issues
-/// the questgiver query and which tears the shared marker slot down before either. The green `!`
-/// and the gold `!` are the *same* `unit+0xb2c`, so they cannot have separate lifetimes; this
-/// component is the fact, and its owner is the sweep.
+/// A flight master's `SMSG_TAXINODE_STATUS`: `known = false` shows the green `TalkToMeGreen`
+/// overhead icon (`0x5ecdd0` to `0x607480`, resource table `0xc4d9d8` index 4). The query and the
+/// teardown belong to [`crate::quest_markers::query`]: the reference's only sender, `0x5eb170`, is
+/// called only from `0x607380` (at `0x6073e8`), the per-unit function that also sends the
+/// questgiver query, and both icons share one marker slot (`unit+0xb2c`).
 #[derive(Component, Clone, Copy)]
 pub(crate) struct FlightMasterStatus {
     pub(crate) known: bool,
 }
 
-/// The taxi window is an NPC session: the standardized range guard ([`crate::ui_session`])
-/// client-side-closes it — the exact clear the close button does — when the player walks out of
-/// the flight master's service range or it despawns.
+/// The range guard closes the map, as the close button does, when the flight master is out of
+/// range or gone.
 impl NpcSession for TaxiState {
     fn npc(&self) -> Option<u64> {
         self.open.as_ref().map(|o| o.flightmaster)
@@ -125,11 +80,8 @@ impl NpcSession for TaxiState {
     }
 }
 
-/// Push the current taxi map into the VM, fire `TAXIMAP_OPENED`/`TAXIMAP_CLOSED` on a transition
-/// (or a content/name change), surface an activate refusal on the red error line (closing the map
-/// on `OK` instead — the flight starts and the map has nothing left to show), present a
-/// first-visit discovery. Diffed against `Local` memory, the trainer/merchant feed shape. (The
-/// `UnitOnTaxi` flag is [`feed_on_taxi`]'s — it reads the descriptor, not the taxi window.)
+/// Push the map into the VM and fire its events, show an activate refusal or close on `OK`, and
+/// announce a first-visit discovery.
 fn feed_taxi(
     script: Option<NonSendMut<UiScript>>,
     mut state: ResMut<TaxiState>,
@@ -147,12 +99,8 @@ fn feed_taxi(
     let last = last.get(&script);
     let last_name = last_name.get(&script);
 
-    // The activate verdict (SMSG_ACTIVATETAXIREPLY), staged by the net bridge: a refusal goes to
-    // the surface its message record names ([`taxi_error_key`] — seven of the twelve are the
-    // YELLOW info line, not the red one); OK clears the map — vmangos's own send order is mount +
-    // the flight's SMSG_MONSTER_MOVE right behind the reply, so by the time this lands the ride is
-    // already starting (0260's self-spline rails render it) and the taxi map has nothing left to
-    // show, matching the real client's own close-on-success.
+    // The activate reply: a refusal shows where its message row says; `OK` closes the map, as
+    // the reference's handler does for code 0.
     if let Some(code) = state.reply.take() {
         match taxi_error_key(code) {
             Some(key) => {
@@ -174,19 +122,9 @@ fn feed_taxi(
         }
     }
 
-    // The first-visit "learn" (SMSG_NEW_TAXI_PATH): the real client shows message 0xf2 —
-    // ERR_NEWTAXIPATH, "New flight path discovered!" — via its descriptor (decision 0516
-    // resolving 0501 §1's INTERIM): channel 1 routes the text to the
-    // YELLOW `UI_INFO_MESSAGE` FrameScript event (`0x4945b0` → event 0xe1 — good news, not the
-    // red warning), and tag 0x44 plays the descriptor's `+0x08` string as a SOUND-KIT NAME
-    // through `PlaySoundByName` (`0x458030`, the `MasterSoundEffects`-gated kit lookup) —
-    // "TaxiNodeDiscovered", `igNewTaxiNodeDiscovered.wav`. There is NO FrameScript event of
-    // that name — 0496 §TU-5's "named-event hashtable" was a mislabel of the sound-kit table
-    // (the 0516 correction).
-    //
-    // **All three of those facts now come from the row itself** — the surface from
-    // `+0x04`, the text from the key, the cue from `+0x08` — where the surface and the cue used to
-    // be hand-carried here, which is exactly the drift the catalog exists to stop.
+    // The first-visit learn: the reference shows message `0xf2`, `ERR_NEWTAXIPATH`, whose row
+    // routes it to the yellow `UI_INFO_MESSAGE` (`0x4945b0`) and plays its `TaxiNodeDiscovered`
+    // sound kit (`0x458030`); the catalog row carries both.
     if std::mem::take(&mut state.discovered) {
         let text = script
             .lua()
@@ -207,8 +145,7 @@ fn feed_taxi(
         return;
     };
 
-    // The continent (art + rect + node filter) is the CURRENT NODE's own continentId,
-    // packet-cached — never a live player-map lookup (`build_nodes` resolves it).
+    // The continent is the current node's own, as the packet left it (`build_nodes`).
     let fresh = state.open.as_ref().and_then(|open| {
         let (map_id, nodes, resolved) = build_nodes(open, &catalogs)?;
         cache.0 = resolved;
@@ -221,9 +158,9 @@ fn feed_taxi(
         cache.0.clear();
     }
 
-    // The flight master's name resolves through the NameCache (ask-once, `UnitName("npc")`'s
-    // real-client equivalent — see TaxiFrame.xml's deviation note on why the name rides an event
-    // arg rather than a live "npc" UnitState read). None/empty while in flight.
+    // The flight master's name is tracked so its landing re-fires `TAXIMAP_OPENED`, whose stock
+    // handler titles the map with `UnitName("npc")` (`TaxiFrame.lua:27`); the reference fires it
+    // only on open.
     let flightmaster_name = state
         .open
         .as_ref()
@@ -234,11 +171,8 @@ fn feed_taxi(
     if fresh != *last || (fresh.is_some() && name_changed) {
         script.set_taxi(fresh.clone());
         match (&*last, &fresh) {
-            // **No arguments** — `0x4dba96` is the event's one fire site image-wide and it is a
-            // `FrameScript_SignalEvent 0x703e50`, `__fastcall(ecx = id)` with a plain `ret` and
-            // no vararg push at all. The flight master's name we used to pass was an invention:
-            // `TaxiFrame_OnEvent` reads `UnitName("npc")` for it and never looks at `arg1`
-            // (found by the argument gate).
+            // No arguments: the event's one fire site, `0x4dba96`, is a plain
+            // `FrameScript_SignalEvent` (`0x703e50`).
             (None, Some(_)) | (Some(_), Some(_)) => {
                 script.fire_event("TAXIMAP_OPENED", Vec::new());
             }
@@ -250,19 +184,11 @@ fn feed_taxi(
     }
 }
 
-/// Push `UnitOnTaxi("player")` — **our own descriptor's `UNIT_FLAG_TAXI_FLIGHT`, and nothing
-/// else**. The reference's verb (`0x517a40`) resolves the token, then reads `UNIT_FIELD_FLAGS`
-/// (`[[obj+0x110]+0xa0]`) and answers `1` iff bit 20 is set (`0x517a86 shr ecx,0x14; test cl,1`).
-/// vmangos sets and clears that bit exactly around a flight (`WaypointMovementGenerator.cpp`, the
-/// `FlightPathMovementGenerator` initialize/finalize).
-///
-/// It used to read [`crate::player::Player::server_riding`] — "a server spline owns the avatar" —
-/// which is also true under a fear's flee path, a Charge and a knockback. That was not a cosmetic
-/// over-answer: stock `UIParent.lua`'s `PLAYER_CONTROL_LOST` handler returns early on
-/// `UnitOnTaxi("player")`, so a feared player kept every window open that the reference closes.
-///
-/// No self store streamed yet reads as not on a taxi — the verb's own absent-object `nil`.
-/// Diffed like every other single-value push.
+/// Push `UnitOnTaxi("player")`: the reference's verb (`0x517a40`) answers bit 20 of
+/// `UNIT_FIELD_FLAGS` (`0x517a86`), which vmangos sets only for a flight
+/// (`FlightPathMovementGenerator`). Any other server spline, such as a fear, is not a taxi: stock
+/// `UIParent.lua:474-478` closes the windows on `PLAYER_CONTROL_LOST` unless on a taxi. No self
+/// store reads as not on a taxi.
 fn feed_on_taxi(
     script: Option<NonSendMut<UiScript>>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
@@ -282,13 +208,10 @@ fn feed_on_taxi(
     }
 }
 
-/// Drain the Lua intents: `TakeTaxiNode(i)` maps `i` back to its resolved route
-/// ([`TaxiRouteCache`]) and sends the activate — the discriminator is the byte-verified one
-/// (`0x4dbad0`): **a direct `TaxiPath` edge current→target sends
-/// `CMSG_ACTIVATETAXI`** — even when the drawn route detours multi-hop — and only an edge-less
-/// target sends `CMSG_ACTIVATETAXIEXPRESS` with the full node chain and its shown fare. A
-/// routeless click (`Current`) is a client-side no-op. `CloseTaxiMap()` → a local clear (no
-/// packet — the server holds no open-window session for the map).
+/// Drain the Lua intents. `TakeTaxiNode(i)` sends `CMSG_ACTIVATETAXI` when a direct `TaxiPath`
+/// edge joins the current node and the target, even if the drawn route detours, and otherwise
+/// `CMSG_ACTIVATETAXIEXPRESS` with the chain and its fare, as the reference's `0x4dbad0` test
+/// decides; the `Current` node sends nothing. `CloseTaxiMap()` clears locally, with no packet.
 fn drain_taxi(
     script: Option<NonSendMut<UiScript>>,
     mut state: ResMut<TaxiState>,
@@ -356,9 +279,7 @@ impl Plugin for UiTaxiPlugin {
                 Update,
                 (
                     load_taxi_catalogs,
-                    // Range-close before the feed so the clear turns into TAXIMAP_CLOSED the same
-                    // frame; push before the input pass so an open/close is on screen the same
-                    // frame; drain after it (mirrors ui_merchant/ui_trainer).
+                    // Range-close first so the clear fires `TAXIMAP_CLOSED` the same frame.
                     close_npc_session_out_of_range::<TaxiState>.before(feed_taxi),
                     feed_taxi.in_set(UiFeed),
                     feed_on_taxi.in_set(UiFeed),
@@ -374,10 +295,7 @@ mod tests {
     use benilla_protocol::field::FIELD_UNIT_FLAGS;
     use benilla_protocol::ObjectFields;
 
-    /// `UnitOnTaxi("player")` answers our descriptor's `UNIT_FLAG_TAXI_FLIGHT` — `1` with the
-    /// bit, `nil` without it — whatever else owns the avatar's movement. (A fear's flee path, a
-    /// Charge or a knockback are server splines too, and the feed reads nothing that knows about
-    /// them: it takes no `Player` at all.)
+    /// `1` with the bit, `nil` without it; the feed reads nothing about server splines.
     #[test]
     fn unit_on_taxi_reads_the_taxi_flight_flag() {
         let mut app = App::new();
@@ -425,7 +343,7 @@ mod tests {
         assert_eq!(state.npc(), Some(0x42));
         assert_eq!(state.open.as_ref().unwrap().nearest_node, 2);
 
-        // A client-side close (the range guard) drops the map, nothing else.
+        // A client-side close drops the map, nothing else.
         state.reply = Some(3);
         state.discovered = true;
         NpcSession::close(&mut state);

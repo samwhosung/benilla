@@ -1,46 +1,12 @@
-//! Duels — the challenge, the countdown, the bounds timer, and the outcome line.
+//! Duels: the challenge, the countdown, the bounds and the outcome line, after the 1.12 client's
+//! handlers (registered at `0x4d4710`). The challenge (`0x4d49d0`) reaches both players, and the
+//! challenger's own copy accepts at once (`0x4d4830`). Bounds (`0x4d4aa0`, `0x4d4ac0`) only fire
+//! events: the server enforces them (`Player::CheckDuelDistance`: 75 yd out, 70 yd back in, 10 s
+//! to return).
 //!
-//! The smallest complete multiplayer verb: no window of its own, two StaticPopups, four events,
-//! four Era globals, and one descriptor-driven consequence — a duel opponent reads *hostile*, so
-//! the whole targeting/attack stack lights up without a special case (see
-//! [`crate::target::ring`]'s duel leg).
-//!
-//! **Both ends of every mechanism here are byte-pinned** — vmangos for what the server sends,
-//! WoW.exe's own duel TU (`E:\build\buildWoW\WoW\Source\Ui\DuelInfo.cpp`, handlers registered at
-//! `0x4d4710`) for what the client does with it. The laws this module implements, each with its
-//! address:
-//!
-//! - **The challenge is symmetric** (`0x4d49d0`). `SMSG_DUEL_REQUESTED` goes to challenger and
-//!   challenged alike. The client stores the arbiter guid, then compares the challenger guid
-//!   against its own: **equal** ⇒ show `ERR_DUEL_REQUESTED` ("You have requested a duel.") and
-//!   **immediately send `CMSG_DUEL_ACCEPTED`** (`call 0x4d4830` — a no-op server-side, which
-//!   drops an accept from the initiator, but it is what goes on the wire); **different** ⇒ resolve
-//!   the challenger's player object and fire `DUEL_REQUESTED` with its name.
-//! - **The countdown is client-driven** (`0x4d4ae0` → `0x4d4930`, timer named `ProcessCountdown`).
-//!   The wire carries milliseconds; the client divides by 1000, prints
-//!   `format(DUEL_COUNTDOWN, n)` as a **CHAT_MSG_SYSTEM chat line** — not an on-screen banner —
-//!   then decrements and re-arms a 1000 ms timer while non-zero. vmangos's 3000 therefore reads
-//!   "Duel starting: 3 / 2 / 1" one second apart.
-//! - **Completion** (`0x4d4b20`). Only acts if an arbiter is held. `started == 0` (the duel never
-//!   began) additionally shows `ERR_DUEL_CANCELLED` ("Duel cancelled."). Either way the arbiter is
-//!   cleared, `DUEL_FINISHED` fires, and any running countdown is cancelled.
-//! - **The outcome line** (`0x4d4ba0`) is composed client-side from `SMSG_DUEL_WINNER`'s flag and
-//!   two names against `DUEL_WINNER_KNOCKOUT` / `DUEL_WINNER_RETREAT`, and printed as
-//!   CHAT_MSG_SYSTEM. The server broadcasts it to everyone nearby, so bystanders read it too.
-//! - **Bounds** (`0x4d4aa0` / `0x4d4ac0`) are bare event fires; the 10 s forfeit clock and its
-//!   text belong to the `DUEL_OUTOFBOUNDS` popup, and the *enforcement* is entirely the server's
-//!   (`Player::CheckDuelDistance`: 75 yd out, 70 yd back in, 10 s to return).
-//!
-//! One deviation, stated rather than hidden (the ignore branch — `0x4d4a33`'s silent
-//! `CMSG_DUEL_CANCELLED` for a challenge from an ignored player — is implemented as of decision
-//! 0668, which supplied the ignore list it needs):
-//!
-//! 1. **The challenger's name is resolved asynchronously.** The reference reads it off the
-//!    challenger's `CGPlayer` and fires nothing at all if the object is missing (`0x4d4a72`).
-//!    benilla resolves through the [`NameCache`], which may need a `CMSG_NAME_QUERY` round trip —
-//!    so the popup can arrive a frame or two late instead of never. In practice the challenger is
-//!    always streamed (the duel spell's range is 10 yd), which is exactly the case where the
-//!    reference has the name for free.
+//! Deviation: the challenger's name comes from the [`NameCache`], so a name still being queried
+//! delays the popup rather than dropping it; the reference reads it off the streamed player and
+//! fires nothing without one (`0x4d4a72`).
 
 use benilla_ui::script::{DuelRequest, ScriptValue, UiScript};
 use bevy::prelude::*;
@@ -51,33 +17,19 @@ use crate::target::Selection;
 use crate::ui_action::Spells;
 use crate::ui_script::{UiFeed, UiInput};
 
-/// `SPELL_EFFECT_DUEL` — the `Effect[0]` value that identifies the duel spell in the player's own
-/// spellbook (7266 "Duel" on 1.12 data, granted to every race/class at creation). The reference
-/// does exactly this lookup rather than hardcoding the id: its spell-learned walk stores the id
-/// of any learned spell whose `SpellRec+0xf4` is `0x53` into the duel-spell global `[0xb71130]`
-/// (`0x4b2605`), which `StartDuel`/`StartDuelUnit` then cast (`0x4d4810`). We mirror the
-/// mechanism, so a data change moves with the data.
+/// The `Effect[0]` that marks the duel spell (7266 on 1.12 data): the reference's spell-learned
+/// walk stores any learned spell with `SpellRec+0xf4 == 0x53` in `[0xb71130]` (`0x4b2605`), which
+/// `0x4d4810` casts.
 const SPELL_EFFECT_DUEL: u32 = 83;
 
-/// A line this window owes but cannot yet write: the VM that holds the string table is
-/// [`feed_duel`]'s, not the net drain's (the text is the player's `GlobalStrings`,
-/// so it is resolved where the VM is, and named by key everywhere else).
-///
-/// **These three keys are not message-catalog rows** — `DUEL_COUNTDOWN` and the two
-/// `DUEL_WINNER_*` appear nowhere in the reference's FrameXML either, which is what marks them
-/// engine-composed. So they cannot ride `UiErrorKeys`: an unknown key takes `Shown::keyed`'s
-/// fallback and turns the line red. They go out as `Shown::unkeyed` on the system chat channel
-/// they have always used (2054's `/ginfo` shape). The two `ERR_DUEL_*` lines beside them ARE rows
-/// and take the other road entirely.
+/// A line named by its `GlobalStrings` key, resolved in [`feed_duel`] where the VM is. The three
+/// keys are engine-composed, not message-catalog rows, so they go out as `Shown::unkeyed`: through
+/// `Shown::keyed` an unknown key turns the line red.
 enum OwedLine {
     /// `DUEL_COUNTDOWN` ("Duel starting: %d") with the seconds left.
     Countdown(u32),
-    /// `DUEL_WINNER_RETREAT` when the loser fled, else `DUEL_WINNER_KNOCKOUT`.
-    ///
-    /// Both templates are **positional** — `"%1$s has defeated %2$s in a duel"` against
-    /// `"%2$s has fled from %1$s in a duel"` — so the same (winner, loser) pair fills them in
-    /// opposite orders. It is the canonical case for why an ordered fill is not enough and why a
-    /// re-typed English sentence cannot carry the rule at all.
+    /// `DUEL_WINNER_RETREAT` when the loser fled, else `DUEL_WINNER_KNOCKOUT`; both are positional
+    /// (`%1$s` winner, `%2$s` loser), and the retreat line names the loser first.
     Winner {
         fled: bool,
         winner: String,
@@ -85,40 +37,29 @@ enum OwedLine {
     },
 }
 
-/// The duel session mirror. Written by the net drain's duel arms, read by [`feed_duel`] (which
-/// fires the Era events on its edges) and [`tick_countdown`]. Cleared on disconnect beside the
-/// other per-login resources.
+/// The duel session: written by the net handlers, read by [`feed_duel`], which fires the events on
+/// its edges, and by [`tick_countdown`].
 #[derive(Resource, Default)]
 pub(crate) struct DuelState {
-    /// Lines composed here but resolvable only where the VM is — [`feed_duel`] drains them
-    /// (see [`OwedLine`]). The `ui_guild`/`ui_petition` shape.
     owed: Vec<OwedLine>,
-    /// The duel-flag GameObject guid identifying the pending or running duel; `0` = none. This is
-    /// the client's `[0xb73240]`: set by the request, echoed on accept/cancel, cleared only by
-    /// completion. Its non-zero→zero edge is what fires `DUEL_FINISHED`.
+    /// The duel flag's guid, `[0xb73240]`: set by the request, echoed on accept and cancel, and
+    /// cleared only by completion, which fires `DUEL_FINISHED`. `0` is no duel.
     pub(crate) arbiter: u64,
-    /// The challenger's guid while a challenge popup is owed to the UI — `None` once fired (or
-    /// when we are ourselves the challenger, who never gets a popup).
+    /// Set while the challenge popup is owed; the challenger never gets one.
     challenger: Option<u64>,
-    /// We are outside the duel bubble; drives the `DUEL_OUTOFBOUNDS`/`DUEL_INBOUNDS` edge pair.
     out_of_bounds: bool,
-    /// The running "Duel starting: N" countdown: ticks left to print, and the 1 s re-arm.
     countdown: Option<Countdown>,
 }
 
-/// The `ProcessCountdown` timer's state (`0x4d4930`): a remaining count and a one-second re-arm.
+/// The `ProcessCountdown` timer (`0x4d4930`).
 struct Countdown {
     remaining: u32,
     tick: Timer,
 }
 
 impl DuelState {
-    /// `SMSG_DUEL_REQUESTED`. Returns the error line to display when the challenge is our own —
-    /// the reference's `DisplayError(ERR_DUEL_REQUESTED)` — and leaves [`Self::challenger`] set
-    /// for the feed to turn into the popup when it is someone else's.
-    ///
-    /// The caller sends the challenger's auto-accept: the reference's own request handler calls
-    /// `AcceptDuel` inline (`0x4d4a12`), so the accept is on the wire before any UI runs.
+    /// `SMSG_DUEL_REQUESTED`: true when the challenge is our own, and the caller then shows
+    /// `ERR_DUEL_REQUESTED` and accepts inline, as the reference's handler does (`0x4d4a12`).
     fn apply_requested(&mut self, arbiter: u64, challenger: u64, own: Option<u64>) -> bool {
         self.arbiter = arbiter;
         let ours = Some(challenger) == own;
@@ -126,18 +67,14 @@ impl DuelState {
         ours
     }
 
-    /// Take the challenger owed a response, if any — the partner probe's accept hook
-    /// (`WOW_PROBE=partner`). Taking it discharges the popup
-    /// debt exactly as the feed's `DUEL_REQUESTED` edge does, so the probe never leaves a dialog
-    /// owed to a UI it isn't driving.
+    /// The partner probe's accept hook (`WOW_PROBE=partner`): taking the challenger discharges the
+    /// popup as the feed's `DUEL_REQUESTED` edge does.
     pub(crate) fn take_challenger(&mut self) -> Option<u64> {
         self.challenger.take()
     }
 
-    /// `SMSG_DUEL_COMPLETE`. Returns whether the "Duel cancelled." line is owed (the duel never
-    /// started). Gated on holding an arbiter, exactly like `0x4d4b20` — a stray completion with
-    /// no duel in flight is silent. Cancels any countdown unconditionally, which the reference
-    /// does *outside* that gate.
+    /// `SMSG_DUEL_COMPLETE`: true when "Duel cancelled." is owed. Gated on an arbiter, as
+    /// `0x4d4b20` is, except the countdown cancel, which the reference also runs outside the gate.
     fn apply_complete(&mut self, started: bool) -> bool {
         self.countdown = None;
         if self.arbiter == 0 {
@@ -149,9 +86,8 @@ impl DuelState {
         !started
     }
 
-    /// `SMSG_DUEL_COUNTDOWN`. A zero count arms nothing: the reference would print "Duel starting:
-    /// 0" and then re-arm forever on the `dec`'s wraparound, an unreachable path on 1.12 servers
-    /// (vmangos always sends 3000) that is not worth reproducing.
+    /// `SMSG_DUEL_COUNTDOWN`. Deviation: zero arms nothing, where the reference prints 0 and
+    /// re-arms forever on the `dec`'s wraparound, a bug vmangos never reaches (it sends 3000).
     fn apply_countdown(&mut self, seconds: u32) {
         self.countdown = (seconds > 0).then(|| Countdown {
             remaining: seconds,
@@ -160,8 +96,7 @@ impl DuelState {
     }
 }
 
-/// Resolve one owed line against the VM's own string table. `None` = no string, no line — the
-/// reference's data-suppression face.
+/// Resolve an owed line against the VM's string table; a missing string is no line.
 fn owed_text(line: &OwedLine, get: &dyn Fn(&str) -> Option<String>) -> Option<String> {
     use benilla_ui::strings::{fill, Arg};
     let text = match line {
@@ -176,26 +111,20 @@ fn owed_text(line: &OwedLine, get: &dyn Fn(&str) -> Option<String>) -> Option<St
             } else {
                 "DUEL_WINNER_KNOCKOUT"
             };
-            // Winner first, loser second — always. Which one the sentence *names* first is the
-            // template's business, through its `%1$s`/`%2$s`.
+            // Always winner then loser; the template's `%1$s`/`%2$s` picks the order.
             fill(&get(key)?, &[Arg::S(winner), Arg::S(loser)])
         }
     };
     (!text.is_empty()).then_some(text)
 }
 
-/// The duel's packet handlers (in the net handler table since 2312), beside the
-/// state they drive: the session mirror + the two `DisplayError` lines the handlers emit inline;
-/// the Era events fire off the mirror's edges in [`feed_duel`], and the countdown ticks in its own
-/// system. `own` is our own guid.
+/// The duel's packet handlers; the events fire off the state's edges in [`feed_duel`].
 pub(crate) mod net {
     use super::*;
     use benilla_protocol::{SessionEvent, SessionEventKind};
 
     use crate::net::NetHandlerApp;
 
-    /// Register the duel's handlers — called from [`UiDuelPlugin`]. One per kind, plus the
-    /// session-end listener.
     pub(super) fn register(app: &mut App) {
         use SessionEventKind as K;
         app.net_handler(K::DuelRequested, on_requested)
@@ -267,20 +196,14 @@ pub(crate) mod net {
         }
     }
 
-    /// A pending challenge, a running duel, and its countdown all die with the socket (decision
-    /// 0633) — the server drops the duel too (`Player::DuelComplete(DUEL_FLED)` on logout), and a
-    /// stale arbiter guid would make the next AcceptDuel echo a dead object. A listener on the
-    /// session end (a second handler on the kind, after the bridge's own teardown).
+    /// The duel dies with the socket, as on the server (`Player::DuelComplete(DUEL_FLED)` on
+    /// logout); a stale arbiter would make the next `AcceptDuel` echo a dead object.
     fn on_session_end(In(_): In<SessionEvent>, mut duel: ResMut<DuelState>) {
         *duel = DuelState::default();
     }
 
-    /// `SMSG_DUEL_REQUESTED` — store the arbiter, and either own the challenge (error line +
-    /// immediate accept) or hand the popup to the feed.
-    ///
-    /// `ignored` short-circuits both: a challenge from a player on the ignore list is answered
-    /// with `CMSG_DUEL_CANCELLED` and nothing is shown (`0x4d4a33`). This is the branch decision
-    /// 0633 recorded as absent for want of an ignore list; decision 0668 supplies one.
+    /// `SMSG_DUEL_REQUESTED`. A challenge from an ignored player is declined with
+    /// `CMSG_DUEL_CANCELLED` and shows nothing (`0x4d4a33`).
     pub(crate) fn requested(
         duel: &mut DuelState,
         errors: &mut crate::ui_action::UiErrorKeys,
@@ -302,8 +225,6 @@ pub(crate) mod net {
         }
     }
 
-    /// `SMSG_DUEL_COMPLETE` — clear the session, cancel the countdown, and raise
-    /// `ERR_DUEL_CANCELLED` when the duel never started.
     pub(crate) fn complete(
         duel: &mut DuelState,
         errors: &mut crate::ui_action::UiErrorKeys,
@@ -316,7 +237,8 @@ pub(crate) mod net {
         }
     }
 
-    /// `SMSG_DUEL_WINNER` — the outcome line, owed to the feed.
+    /// `SMSG_DUEL_WINNER`: the outcome line, composed client-side (`0x4d4ba0`); the server
+    /// broadcasts it, so bystanders see it too.
     pub(crate) fn winner(duel: &mut DuelState, fled: bool, winner: &str, loser: &str) {
         duel.owed.push(OwedLine::Winner {
             fled,
@@ -325,19 +247,16 @@ pub(crate) mod net {
         });
     }
 
-    /// `SMSG_DUEL_COUNTDOWN` — arm the client-side tick.
     pub(crate) fn countdown(duel: &mut DuelState, seconds: u32) {
         duel.apply_countdown(seconds);
     }
 
-    /// `SMSG_DUEL_OUTOFBOUNDS` / `SMSG_DUEL_INBOUNDS` — the feed turns the edge into its event.
     pub(crate) fn bounds(duel: &mut DuelState, outside: bool) {
         duel.out_of_bounds = outside;
     }
 }
 
-/// Fire the four duel events on their state edges — the [`crate::ui_party::feed`] pattern: the
-/// drain mutates [`DuelState`], the feed diffs it against what it last announced.
+/// Fire the four duel events on [`DuelState`]'s edges.
 fn feed_duel(
     script: Option<NonSendMut<UiScript>>,
     mut duel: ResMut<DuelState>,
@@ -351,9 +270,7 @@ fn feed_duel(
     };
     let fed = fed.get(&script);
 
-    // The owed countdown/outcome lines, resolved against the VM's own string table. They land
-    // ahead of the event edges below for the same reason the social feed's do: the line describes
-    // the transition the event announces.
+    // Lines before events: a line describes the transition its event announces.
     let owed = std::mem::take(&mut duel.owed);
     let lines: Vec<crate::ui_action::Shown> = {
         let get = |key: &str| script.lua().globals().get::<String>(key).ok();
@@ -367,7 +284,7 @@ fn feed_duel(
     };
     crate::ui_action::show_messages(&mut script, &mut sink, "ui_duel", lines);
 
-    // DUEL_REQUESTED(challengerName) — held until the name resolves (module doc, deviation 2).
+    // `DUEL_REQUESTED(name)`, held until the name resolves (the module's deviation).
     if let Some(guid) = duel.challenger {
         if let Some(name) = names.resolve(guid, &commands).map(str::to_string) {
             script.fire_event("DUEL_REQUESTED", vec![ScriptValue::Str(name)]);
@@ -375,14 +292,14 @@ fn feed_duel(
         }
     }
 
-    // DUEL_FINISHED on the arbiter's non-zero→zero edge (`0x4d4b51`).
+    // `DUEL_FINISHED` when the arbiter clears (`0x4d4b51`).
     let held = duel.arbiter != 0;
     if fed.held && !held {
         script.fire_event("DUEL_FINISHED", Vec::new());
     }
     fed.held = held;
 
-    // The bounds pair (`0x4d4aa0` / `0x4d4ac0`).
+    // The bounds pair (`0x4d4aa0`, `0x4d4ac0`).
     if fed.out_of_bounds != duel.out_of_bounds {
         fed.out_of_bounds = duel.out_of_bounds;
         let event = if duel.out_of_bounds {
@@ -401,9 +318,8 @@ struct FedDuel {
     out_of_bounds: bool,
 }
 
-/// `ProcessCountdown` (`0x4d4930`): print "Duel starting: N" now, then once a second while the
-/// count is non-zero. The first line lands the frame the packet arrives — the reference calls the
-/// tick body directly before arming the timer — so the timer here starts already elapsed.
+/// `ProcessCountdown` (`0x4d4930`, armed by `0x4d4ae0`): a `DUEL_COUNTDOWN` system chat line on
+/// arrival, since the reference runs the tick body before arming its timer, then one a second.
 fn tick_countdown(time: Res<Time>, mut duel: ResMut<DuelState>, mut started: Local<bool>) {
     let Some(countdown) = duel.countdown.as_mut() else {
         *started = false;
@@ -428,7 +344,7 @@ fn tick_countdown(time: Res<Time>, mut duel: ResMut<DuelState>, mut started: Loc
     }
 }
 
-/// Drain the Era API's duel intents into their sends.
+/// Drain the duel verbs' intents into their sends.
 fn drain_duel(
     script: Option<NonSendMut<UiScript>>,
     duel: Res<DuelState>,
@@ -465,8 +381,8 @@ fn drain_duel(
                 }
             }
             DuelRequest::StartByUnit(token) => {
-                // The reference resolves the token to a CGObject and requires typemask 0x10 —
-                // a player (`0x4d4c66`). Ours are the tokens the unit popup actually passes.
+                // `StartDuelUnit` (`0x4d4c90`) resolves the token through `0x515970`, with no
+                // player gate; these are the tokens the unit popup passes.
                 let guid = match token.as_str() {
                     "target" => selection.guid,
                     "player" => self_guid,
@@ -475,10 +391,9 @@ fn drain_duel(
                 challenge(guid, self_guid, &index, &spells, &actions, &commands);
             }
             DuelRequest::StartByName(name) => {
-                // `/duel <name>`: the reference looks the name up in the **object manager**
-                // (`0x515970`) — only a streamed player can be found this way, which is also the
-                // spell's own requirement. Same population here: the streamed guid index, named
-                // through the cache.
+                // `/duel <name>`: `StartDuel` (`0x4d4c40`) matches the name through `0x493aa0`
+                // with typemask `0x10` (`0x4d4c66`), players only; here, the streamed guid index
+                // named through the cache.
                 let guid = streamed_player_named(&name, &index, &names);
                 challenge(guid, self_guid, &index, &spells, &actions, &commands);
             }
@@ -486,8 +401,7 @@ fn drain_duel(
     }
 }
 
-/// Find a streamed player by name — the reference's object-manager name lookup. Case-insensitive:
-/// the caller is a `/duel` argument the player typed.
+/// A streamed player by name, case-insensitive, for a typed `/duel` argument.
 pub(crate) fn streamed_player_named(
     name: &str,
     index: &GuidIndex,
@@ -501,9 +415,9 @@ pub(crate) fn streamed_player_named(
         .find(|g| names.peek(*g).is_some_and(|n| n.eq_ignore_ascii_case(name)))
 }
 
-/// Cast the duel spell at `guid` — the reference's `0x4d4810`, which is a plain spell cast at a
-/// unit target, not a duel opcode. Silently drops a missing/self/non-player/unstreamed target the
-/// way the reference's guid and typemask gates do.
+/// Cast the duel spell at `guid`, a plain spell cast as in the reference's `0x4d4810`, not a duel
+/// opcode. Drops a missing, self, non-player or unstreamed target; the reference's bindings drop
+/// only a zero guid, plus a non-player in `StartDuel`'s name match.
 fn challenge(
     guid: Option<u64>,
     own: Option<u64>,
@@ -527,8 +441,7 @@ fn challenge(
     });
 }
 
-/// The learned spell whose `Effect[0]` is [`SPELL_EFFECT_DUEL`] — the reference's `[0xb71130]`,
-/// filled by its spell-learned walk rather than hardcoded (see the constant's note).
+/// The learned spell whose `Effect[0]` is [`SPELL_EFFECT_DUEL`], the reference's `[0xb71130]`.
 fn duel_spell(
     spells: &Option<Res<Spells>>,
     actions: &crate::ui_action::PlayerActions,
@@ -542,7 +455,7 @@ fn duel_spell(
     })
 }
 
-/// Duels: the wire session, the countdown tick, the Era events, and the outbound intents.
+/// Duels: the wire session, the countdown tick, the events and the outbound intents.
 pub(crate) struct UiDuelPlugin;
 
 impl Plugin for UiDuelPlugin {
@@ -551,9 +464,8 @@ impl Plugin for UiDuelPlugin {
         app.init_resource::<DuelState>().add_systems(
             Update,
             (
-                // `tick_countdown` only *names* its line now — `feed_duel` resolves it against
-                // the VM — so the tick has to run first or every "Duel starting: N" lands a
-                // frame late.
+                // The tick names its line and `feed_duel` resolves it, so the tick runs first or
+                // each "Duel starting: N" lands a frame late.
                 tick_countdown.before(feed_duel),
                 feed_duel.in_set(UiFeed),
                 drain_duel.after(UiInput),
@@ -566,9 +478,7 @@ impl Plugin for UiDuelPlugin {
 mod tests {
     use super::*;
 
-    /// The challenge is symmetric: our own request takes the error-line branch and leaves no
-    /// popup owed; someone else's leaves the challenger for the feed. Either way the arbiter is
-    /// stored — the challenger holds one too, which is why `DUEL_FINISHED` reaches both.
+    /// Both sides store the arbiter, so `DUEL_FINISHED` reaches both.
     #[test]
     fn our_own_challenge_takes_the_error_branch() {
         let mut duel = DuelState::default();
@@ -581,8 +491,7 @@ mod tests {
         assert_eq!(duel.challenger, Some(9));
     }
 
-    /// Completion is gated on holding an arbiter (`0x4d4b20`), and only an unstarted duel earns
-    /// "Duel cancelled.".
+    /// Only an unstarted duel earns "Duel cancelled." (`0x4d4b20`).
     #[test]
     fn completion_is_gated_on_holding_an_arbiter() {
         let mut duel = DuelState::default();
@@ -601,7 +510,6 @@ mod tests {
         );
     }
 
-    /// A zero countdown arms nothing (the reference's unreachable wraparound path).
     #[test]
     fn zero_countdown_arms_nothing() {
         let mut duel = DuelState::default();
@@ -611,14 +519,8 @@ mod tests {
         assert_eq!(duel.countdown.as_ref().map(|c| c.remaining), Some(3));
     }
 
-    /// The duel-spell lookup against the **real 5875 Spell.dbc** — the fact the whole challenge
-    /// path rests on, and the one a unit test with a synthetic catalog could not catch. Asserts
-    /// what the reference's own spell-learned walk asserts by construction: scanning a spellbook
-    /// for `Effect[0] == SPELL_EFFECT_DUEL` finds **exactly one** spell, and it is 7266 "Duel"
-    /// (the id vmangos grants every race/class in `playercreateinfo_spell` and re-grants at every
-    /// login through `Player::LoadFromDB` → `LearnDefaultSpells`). A second match would mean the
-    /// reference's single global `[0xb71130]` is ambiguous — worth knowing if it ever happens.
-    /// Skips without client data.
+    /// 7266 "Duel", which vmangos grants every race and class (`playercreateinfo_spell`), is the
+    /// only `SPELL_EFFECT_DUEL` spell in the shipped `Spell.dbc`, so `[0xb71130]` is unambiguous.
     #[test]
     fn the_duel_spell_resolves_to_7266_on_real_data() {
         let data = benilla_formats::wow_data_or_skip!();
@@ -634,14 +536,7 @@ mod tests {
         assert_eq!(catalog.get(7266).unwrap().name, "Duel");
     }
 
-    /// **The two outcome templates take (winner, loser) in that order, and one of them prints
-    /// them back to front.** That is the whole reason they are positional, and the reason this is
-    /// resolved from the player's own `GlobalStrings.lua` rather than typed here: the swap lives
-    /// in the *string*, so a locale that orders the clause differently gets it right for free and
-    /// a re-typed English sentence never could.
-    ///
-    /// Resolved against the real shipped file, because a stub would be asserting our own idea of
-    /// the templates back at us.
+    /// Against the shipped `GlobalStrings.lua`: the retreat template names the loser first.
     #[test]
     fn the_outcome_line_places_both_names_positionally() {
         let data = benilla_formats::wow_data_or_skip!();
@@ -677,15 +572,8 @@ mod tests {
         );
     }
 
-    /// **The two `ERR_DUEL_*` lines are catalog rows, and the catalog disagrees with where this
-    /// window used to put them.** `ERR_DUEL_CANCELLED` is `MsgKind::Info` — the yellow
-    /// `UI_INFO_MESSAGE`, not a chat line — and `ERR_DUEL_REQUESTED` carries the `LEVELUP` cue,
-    /// which a straight `chat_log.push_event` had no row in hand to play. Both were invisible
-    /// while the sentences were composed here; both are read now.
-    ///
-    /// The three engine-composed templates are asserted to be the opposite case — **not** rows —
-    /// because that is what forbids them the `Shown::keyed` road, where an unknown key takes the
-    /// red-line fallback.
+    /// `ERR_DUEL_CANCELLED` is the yellow info line and `ERR_DUEL_REQUESTED` plays `LEVELUP`; the
+    /// three templates are not rows, which `Shown::keyed` would turn red.
     #[test]
     fn the_error_pair_are_catalog_rows_and_the_templates_are_not() {
         use benilla_ui::messages::{by_key, MsgKind};

@@ -1,6 +1,4 @@
-//! The stable master's packet handlers (in the net handler table since
-//! 2318, moved out of the drain's npc arm file) — the [`StableOpen`] session and the
-//! [`StableErrors`] line queue the stable feed ([`super`]) reads.
+//! The stable master's packet handlers: they fill [`StableOpen`] and [`StableErrors`].
 
 use benilla_protocol::messages::StabledPet;
 use benilla_protocol::{SessionEvent, SessionEventKind};
@@ -10,7 +8,7 @@ use super::{StableErrors, StableOpen};
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands, NetHandlerApp};
 
-/// Register the stable handlers — called from [`super::UiStablePlugin`].
+/// Register the stable handlers and the session-end listener.
 pub(super) fn register(app: &mut App) {
     use SessionEventKind as K;
     app.net_handler(K::ListStabledPets, on_list)
@@ -18,9 +16,8 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::Disconnected, on_session_end);
 }
 
-/// The stable window dies with the socket — a listener on the session end (a second handler on the
-/// kind, after the bridge's own teardown). The walk-away guard cannot stand in: it measures from a
-/// self player, and there is none between the drop and the next world entry.
+/// The stable closes with the connection; the range guard cannot close it, as it has no self
+/// player to measure from after the drop.
 fn on_session_end(In(_): In<SessionEvent>, mut stable_open: ResMut<StableOpen>) {
     stable_open.clear();
 }
@@ -51,9 +48,8 @@ fn on_result(
     }
 }
 
-/// A stable master's pet list (`MSG_LIST_STABLED_PETS`): fill the [`StableOpen`] the stable feed
-/// ([`super`]) reads. Arrives unprompted off the gossip stable option — that is how the
-/// window opens — and again in answer to our own refresh send.
+/// `MSG_LIST_STABLED_PETS`, sent unprompted for the gossip stable option, which opens the window,
+/// and in answer to a refresh.
 fn list_stabled_pets(
     npc: u64,
     num_stable_slots: u8,
@@ -65,22 +61,9 @@ fn list_stabled_pets(
         "net: stable master {npc:#x} listed {} pets ({num_stable_slots} slots bought)",
         pets.len()
     );
-    // **Seed the pet-name cache from the list**. Every row carries the pet's own
-    // number and the name its owner gave it — the exact `(pet_number, name)` pair
-    // `SMSG_PET_NAME_QUERY_RESPONSE` would answer with — so the pet a player unstables has a
-    // resolvable `UnitName("pet")` the moment it is summoned, instead of after a round trip.
-    //
-    // The window this closes is a real one the director hit: `PetStable_Update` sets the current
-    // pet's button tooltip to a bare `UnitName("pet")` (`PetStable.lua:161`, transcribed
-    // unguarded because the reference is unguarded), and hands it to `GameTooltip:SetText`, whose
-    // byte-pinned signature REQUIRES a string (`0x531b90`) and raises otherwise. Nil name ⇒ Lua
-    // error dialog, once per unstable.
-    //
-    // Why the reference does not trip over its own unguarded line: its pet-name cache is
-    // `petnamecache.wdb`, which **persists across sessions**, so a pet you have owned before is
-    // already warm before the packet arrives. benilla has no such file, so a window the reference
-    // has practically closed is wide open for us. Seeding is not a workaround for the missing
-    // cache — it is using the answer the server has already sent us in this very packet.
+    // Seed the pet-name cache from the rows, the pair `SMSG_PET_NAME_QUERY_RESPONSE` would carry:
+    // stock `PetStable.lua:163` hands `UnitName("pet")` to a tooltip whose `SetText` raises on nil
+    // (`0x531b90`), and unlike the reference's `petnamecache.wdb` this cache starts empty.
     for pet in &pets {
         if !pet.name.is_empty() {
             names.insert_pet(pet.pet_number, pet.name.clone());
@@ -89,26 +72,10 @@ fn list_stabled_pets(
     stable_open.open(npc, num_stable_slots, pets);
 }
 
-/// The answer to a stable verb (`SMSG_STABLE_RESULT`) — one byte, and the client's whole response
-/// to it is a five-way jump table (the raw remap/jump bytes at `0x4cadac`/`0x4cad98`; decision
-/// 1677):
-///
-/// | code | what the client does |
-/// |---|---|
-/// | 1 | `DisplayError(0x25)` = **`ERR_NOT_ENOUGH_MONEY`** — the only code that says anything |
-/// | 2–7 | **absolutely nothing** — vmangos's catch-all `STABLE_ERR_STABLE = 6` included |
-/// | 8, 9 | re-request the list |
-/// | 10 | **`inc` the local purchased-slot count**, then re-request |
-/// | 11 | fire `PET_STABLE_UPDATE` (no vmangos counterpart — nothing in 1.12 sends it) |
-/// | 0, ≥12 | nothing |
-///
-/// The re-request is not a benilla convenience: no success carries an updated list, so without it
-/// the window would go on showing the pre-action arrangement.
-///
-/// **Code 10's local increment happens BEFORE the guid test**, so a buy-slot success arriving with
-/// no stable master open still bumps the count without refreshing. That ordering is reproduced
-/// deliberately — it is what makes the purchase row correct if the window is reopened, and the
-/// alternative would be to invent a tidier client than the one being reimplemented.
+/// `SMSG_STABLE_RESULT`, handled as the reference's jump table (`0x4cadac`, `0x4cad98`) does: 1
+/// shows `ERR_NOT_ENOUGH_MONEY` (`DisplayError(0x25)`), 8 and 9 re-request the list, as no success
+/// carries one, 10 counts a bought slot and re-requests, and 0, 2-7 and 12 up show nothing. 11
+/// fires `PET_STABLE_UPDATE` in the reference and nothing here: vmangos never sends it.
 fn stable_result(
     result: u8,
     stable_open: &mut StableOpen,
@@ -116,13 +83,12 @@ fn stable_result(
     net_commands: &NetCommands,
 ) {
     use benilla_protocol::messages::stable_result as code;
-    // Ahead of the guid test, exactly as `0x4cacf3` sits ahead of `0x4cad05`.
+    // Before the guid test, as `0x4cacf3` precedes `0x4cad05`: the count moves even with no
+    // stable open.
     if result == code::SUCCESS_BUY_SLOT {
         stable_open.num_stable_slots = stable_open.num_stable_slots.saturating_add(1);
     }
     match result {
-        // The one code that speaks. Its text is the reference's own `GlobalStrings` value for
-        // `ERR_NOT_ENOUGH_MONEY`, reached through `DisplayError` row 0x25.
         code::ERR_MONEY => {
             debug!("net: stable purchase refused — not enough money");
             errors.0.push("ERR_NOT_ENOUGH_MONEY");
@@ -135,9 +101,7 @@ fn stable_result(
             debug!("net: stable action succeeded (code {result}) — re-listing");
             let _ = net_commands.0.send(ClientCommand::ListStabledPets { npc });
         }
-        // Codes 2–7 (the generic ERR_STABLE among them), 0 and ≥12: the client shows NOTHING.
-        // Not an omission — the catch-all is one code for six causes, and the reference declines to
-        // guess which.
+        // The reference shows nothing for these.
         _ => debug!("net: stable result {result} — no client-visible effect"),
     }
 }

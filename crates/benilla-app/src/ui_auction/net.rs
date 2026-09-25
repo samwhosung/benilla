@@ -1,7 +1,5 @@
-//! The auction house's packet handlers (decision 1511 P1; in the net handler table since 2305 —
-//! the first family out of the drain's dispatch match) — every `SMSG_AUCTION_*` lands here and
-//! becomes state on [`AuctionOpen`], which [`super::feed_auction`] turns into the window's events
-//! on the next frame. Nothing here touches the VM: the feed owns the script.
+//! The auction house's packet handlers: every `SMSG_AUCTION_*` becomes state on [`AuctionOpen`],
+//! which [`super::feed_auction`] turns into the window's events; nothing here touches the VM.
 
 use benilla_protocol::messages::{
     auction_action, auction_error, AuctionBidderNotification, AuctionCommandTail, AuctionListEntry,
@@ -14,8 +12,7 @@ use bevy::prelude::*;
 use super::{AuctionMessage, AuctionOpen};
 use crate::net::NetHandlerApp;
 
-/// Register the house's handlers — called from [`super::UiAuctionPlugin`]. One per `SMSG_AUCTION_*`
-/// kind, plus the session-end listener.
+/// One handler per `SMSG_AUCTION_*` kind, plus the session-end listener.
 pub(super) fn register(app: &mut App) {
     use SessionEventKind as K;
     app.net_handler(K::AuctionHello, on_hello)
@@ -99,32 +96,27 @@ fn on_removed_notification(In(ev): In<SessionEvent>, mut auction: ResMut<Auction
     }
 }
 
-/// An open auction house dies with the socket: every auction command
-/// re-validates the auctioneer server-side, so a session that survived a reconnect would be a
-/// window whose every button silently failed. A listener on the session end (a second handler
-/// on `Disconnected`, after the bridge's own teardown, `net::session::on_disconnected`).
+/// The window dies with the socket: the server re-validates the auctioneer on every command, so
+/// a window kept across a reconnect would fail silently.
 fn on_session_end(In(_): In<SessionEvent>, mut auction: ResMut<AuctionOpen>) {
     auction.clear_session();
 }
 
-/// `MSG_AUCTION_HELLO`'s reply — **this**, not our send, is what opens the window (the window's
-/// opener runs inside the hello handler `0x4cc420`). The house id keys the deposit rate.
+/// The `MSG_AUCTION_HELLO` reply opens the window, as in the reference's hello handler `0x4cc420`.
 fn auction_hello(auctioneer: u64, house_id: u32, auction: &mut AuctionOpen) {
     auction.open(auctioneer, house_id);
 }
 
-/// One of the three list results. They share a frame and a record; only the tab differs.
+/// Any of the three list results, which share a record and differ only in their tab.
 fn auction_list(
     which: usize,
     auctions: Vec<AuctionListEntry>,
     total_count: u32,
     auction: &mut AuctionOpen,
 ) {
-    // Tallied before the drop below, because "it arrived and there was nowhere to put it" and "it
-    // never arrived" are different answers (`AuctionWireLog`).
+    // Counted before the drop below, so a dropped result still shows as arrived.
     auction.wire.list_results[which] += 1;
-    // A list can arrive for a window that just closed (we walked away while the page was in
-    // flight); dropping it is the same thing the reference does by having nowhere to put it.
+    // A page in flight when the window closed is dropped: the reference has nowhere to put it.
     if auction.auctioneer.is_none() {
         return;
     }
@@ -147,10 +139,8 @@ fn auction_owner_list_result(
     auction_list(OWNER, auctions, total_count, auction);
 }
 
-/// The bidder page. The server emits the explicitly-refreshed ids first and then every auction we
-/// currently hold the bid on, so **one auction can appear twice in a page** — deduped here by
-/// auction id, keeping the first occurrence, because a duplicated row would be two rows the player
-/// can click that address the same auction.
+/// The bidder page, deduped by auction id: the server lists the refreshed ids, then every auction
+/// we lead, so one auction can appear twice.
 fn auction_bidder_list_result(
     auctions: Vec<AuctionListEntry>,
     total_count: u32,
@@ -164,12 +154,8 @@ fn auction_bidder_list_result(
     auction_list(BIDDER, deduped, total_count, auction);
 }
 
-/// `SMSG_AUCTION_COMMAND_RESULT` — the verdict on a sell, a cancel or a bid.
-///
-/// Two shapes of failure the UI has to survive: `auction_id` is **`0`** on most failure paths (the
-/// server writes `auc ? auc->Id : 0`), so it is not a correlation handle on an error; and several
-/// refusals send **no packet at all** (a bid the player cannot afford, a cancel whose cut they
-/// cannot pay), which is why nothing in this arc blocks its UI waiting for an ack.
+/// `SMSG_AUCTION_COMMAND_RESULT`, the verdict on a sell, a cancel or a bid. `auction_id` is 0 on
+/// most failures, and some refusals send nothing at all, so nothing waits on this.
 fn auction_command_result(
     auction_id: u32,
     action: u32,
@@ -178,40 +164,15 @@ fn auction_command_result(
     auction: &mut AuctionOpen,
 ) {
     let _ = tail;
-    // The verdict itself, kept for the live probe only (`AuctionWireLog`): a SUCCESSFUL result
-    // turns into a re-query below and otherwise leaves no trace, so without this a probe cannot
-    // tell "the server said STARTED/OK" from "the server said nothing at all".
+    // For the live probe: a success otherwise leaves no trace but a re-query.
     auction.wire.last_command = Some((auction_id, action, error));
     if error == auction_error::OK {
-        // A successful sell/cancel/bid changes a list we are showing, so we re-ask: the server is
-        // the only thing that knows what the page looks like now, and the result carries an
-        // auction id, not a row.
-        //
-        // **The reference re-asks on two of these three, and neither ask is page 0** (both list
-        // senders have exactly two callers each and zero address-takes):
-        //
-        // - `STARTED` — `[0xb7263c] = 1`, then `0x4cc4e0 call 0x4cd680` = `CMSG 0x259` at the
-        //   **saved page offset** `[0xb72650]`. No row patch, no event of its own.
-        // - `BID_PLACED` — drops the id from the outbid list, `[0xb72640] = 1`, then
-        //   `0x4cc528 call 0x4cd720` = `CMSG 0x264` at `[0xb72654]` — and *then* patches the
-        //   browse row optimistically (bid ← the amount we sent, high bidder ← our own guid,
-        //   deadline ← `max(deadline, now + 90 s)`) and fires 424.
-        // - `REMOVED` — **no query at all**: `0x4cc658 call 0x4cdfe0` deletes the id from all
-        //   three arrays locally, each list firing only if it actually lost a row.
-        //
-        // We re-ask on all three, always at page 0, and patch nothing. Two live differences fall
-        // out: a player on page 2 of their own auctions is thrown back to page 1 by a sale, and
-        // their own bid does not appear on the row until the next result lands. Both belong to the
-        // freshness-model slice 2308 leaves open, not to this arm. What 2308 *does* enforce here
-        // is that a re-ask may never **introduce** a list the interface never asked for — the
-        // reference cannot, because its notification handlers patch instead of asking
-        // (`AuctionOpen::refresh_owner`).
-        //
-        // Each success also says so, in **chat** — the success arm `0x4cc4be` shows
-        // `0x178`/`0x179`/`0x17f` keyed on the action field, with zero varargs.
+        // A success re-asks page 0 and patches nothing. The reference re-asks at the saved page
+        // (`[0xb72650]`, `[0xb72654]`) on `STARTED` (`0x4cc4e0`) and `BID_PLACED` (`0x4cc528`,
+        // then patches the browse row), deletes the row locally on `REMOVED` (`0x4cdfe0`), and
+        // prints each success in chat with no fill (`0x4cc4be`).
         match action {
             auction_action::STARTED => {
-                // The item is gone from the bag; the sell slot must stop claiming to hold it.
                 auction.sell_slot_taken();
                 auction.refresh_owner();
                 auction
@@ -234,10 +195,8 @@ fn auction_command_result(
         }
         return;
     }
-    // **HIGHER_BID says nothing here.** Its arm (`0x4cc672`) reads two extra fields and takes the
-    // live *outbid update* path — it patches the row rather than raising a message, and the line
-    // the player actually sees is `ERR_AUCTION_OUTBID_S`, off the bidder notification. Printing a
-    // refusal here would double it.
+    // `HIGHER_BID` prints nothing: its arm (`0x4cc672`) patches the row, and the player's line is
+    // `ERR_AUCTION_OUTBID_S` from the bidder notification.
     if error == auction_error::HIGHER_BID {
         auction.refresh_bidder();
         return;
@@ -247,31 +206,21 @@ fn auction_command_result(
     }
 }
 
-/// The failed command's GlobalStrings key — resolved to text in the feed against the player's own
-/// table, never carried as English here.
-///
-/// **INTERIM on three arms.** In the reference's dispatch (`0x4cc460`), code 1 computes its id from
-/// the packet's own second field through the *inventory*-result formatter (`0x622630`) — a
-/// different message family, whose keys are not yet decoded; code 4 raises `0x17`; code 13 raises
-/// `0x1be`. Those three ids are outside the `ERR_AUCTION_*` block and their GlobalStrings names are
-/// not recorded yet, so they fall to the catch-all here rather than being invented. Everything else
-/// is the dispatch table verbatim, including that `2, 6, 8, 9, 11, 12` and anything above 13 are
-/// the reference's own `ja` default.
+/// The failed command's GlobalStrings key, per the reference's dispatch (`0x4cc460`), whose
+/// default arm takes 2, 6, 8, 9, 11, 12 and anything past 13. Codes 1, 4 and 13 fall to that
+/// default here; the reference formats 1 through the inventory results (`0x622630`) and raises
+/// `ERR_ITEM_NOT_FOUND` (`0x17`) for 4 and `ERR_RESTRICTED_ACCOUNT` (`0x1be`) for 13.
 fn command_error_key(error: u32) -> Option<&'static str> {
     Some(match error {
         auction_error::NOT_ENOUGH_MONEY => "ERR_NOT_ENOUGH_MONEY", // `0x25`, the shared id
         auction_error::BID_INCREMENT => "ERR_AUCTION_BID_INCREMENT", // `0x174`
         auction_error::BID_OWN => "ERR_AUCTION_BID_OWN",           // `0x173`
-        // `0x172` — the server's catch-all, and the reference's default arm for every code
-        // without one of its own.
+        // `0x172`, the server's catch-all and the reference's default arm.
         _ => "ERR_AUCTION_DATABASE_ERROR",
     })
 }
 
-/// `SMSG_AUCTION_BIDDER_NOTIFICATION` — we won, or we were outbid.
-///
-/// **`bid_or_zero == 0` means WON**, not "no bid" — the server overloads the field, and reading it
-/// the obvious way turns every win into an outbid notice.
+/// `SMSG_AUCTION_BIDDER_NOTIFICATION`: a zero `bid_or_zero` means we won, else we were outbid.
 fn auction_bidder_notification(notice: &AuctionBidderNotification, auction: &mut AuctionOpen) {
     let won = notice.bid_or_zero == 0;
     auction.messages.push(AuctionMessage::chat_item(
@@ -285,13 +234,10 @@ fn auction_bidder_notification(notice: &AuctionBidderNotification, auction: &mut
     auction.refresh_bidder();
 }
 
-/// `SMSG_AUCTION_OWNER_NOTIFICATION` — one of ours sold, or took a bid. An all-zero bidder guid is
-/// the "sold" signal (the server zeroes it on a sale).
+/// `SMSG_AUCTION_OWNER_NOTIFICATION`: one of ours took a bid, sold or expired.
 fn auction_owner_notification(notice: &AuctionOwnerNotification, auction: &mut AuctionOpen) {
-    // **Two stages, and the first one decides whether anything is said at all** (`0x4cd1f0`).
-    // A NON-zero bidder guid is "somebody bid on your auction": the row updates and the client says
-    // nothing — `[0x4cd25f, 0x4cd3bd)` holds no display call. Only a zeroed guid reaches the message
-    // path, and there the *bid* picks the line: non-zero sold, zero expired.
+    // A bidder guid means a new bid, which the reference does not announce (no display call in
+    // `[0x4cd25f, 0x4cd3bd)`); a zero guid is a close, sold if the bid is non-zero (`0x4cd1f0`).
     if notice.bidder_guid == 0 {
         auction.messages.push(AuctionMessage::chat_item(
             if notice.bid != 0 {
@@ -305,10 +251,8 @@ fn auction_owner_notification(notice: &AuctionOwnerNotification, auction: &mut A
     auction.refresh_owner();
 }
 
-/// `SMSG_AUCTION_REMOVED_NOTIFICATION` — an auction we had bid on was cancelled by its seller.
-///
-/// One id, unconditionally (`0x4cd480` has exactly one `call 0x496720` and no branch selecting
-/// an id).
+/// `SMSG_AUCTION_REMOVED_NOTIFICATION`: the seller cancelled an auction we bid on; the reference
+/// always prints `ERR_AUCTION_REMOVED_S` (`0x4cd480`).
 fn auction_removed_notification(item_entry: u32, auction: &mut AuctionOpen) {
     auction.messages.push(AuctionMessage::chat_item(
         "ERR_AUCTION_REMOVED_S",
@@ -322,7 +266,6 @@ mod tests {
     use super::*;
     use benilla_ui::messages::MsgKind;
 
-    /// The registration, end to end: a hello and a session end through the real table.
     #[test]
     fn the_table_routes_the_hello_and_the_session_end_to_the_house() {
         let mut app = App::new();
@@ -378,10 +321,6 @@ mod tests {
         }
     }
 
-    /// The owner notification's **two-stage** discrimination (`0x4cd1f0`), and the first stage is
-    /// the one a re-implementation gets wrong: a NON-zero bidder guid means "somebody bid on your
-    /// auction", and the client says **nothing at all** — the row updates and that is the whole
-    /// response. Only a zeroed guid reaches the message path, and there the *bid* picks the line.
     #[test]
     fn a_bid_on_your_auction_updates_the_row_and_says_nothing() {
         let mut a = AuctionOpen::default();
@@ -409,7 +348,6 @@ mod tests {
         );
     }
 
-    /// The bidder side's discriminator is the zero bid field and nothing else.
     #[test]
     fn a_zero_bid_field_means_you_won() {
         let mut a = AuctionOpen::default();
@@ -427,9 +365,6 @@ mod tests {
         );
     }
 
-    /// Every one of the eight OUTCOMES goes to CHAT, which is the director's report of 2026-08-22
-    /// ("I just saw a red center screen message that one of my auc sold, pretty sure that the wrong
-    /// place"). Catalog rows `0x178`-`0x17f` are kind 0; the twelve refusals below are kind 2.
     #[test]
     fn the_outcomes_are_chat_and_the_refusals_are_the_error_frame() {
         let tail = AuctionCommandTail::Empty;
@@ -462,8 +397,7 @@ mod tests {
             vec![("ERR_AUCTION_BID_OWN", MsgKind::Error, None)]
         );
 
-        // HIGHER_BID is the live outbid UPDATE path, not a message — the line the player sees is
-        // ERR_AUCTION_OUTBID_S off the bidder notification, and printing here would double it.
+        // `HIGHER_BID` patches the row; the outbid line comes from the bidder notification.
         let mut a = AuctionOpen::default();
         auction_command_result(7, auction_action::BID_PLACED, 5, &tail, &mut a);
         assert!(
@@ -472,8 +406,6 @@ mod tests {
         );
     }
 
-    /// A notice outlives the window. "Your auction sold" arrives wherever the player is standing,
-    /// and closing an auctioneer's window between the packet and the next feed must not swallow it.
     #[test]
     fn closing_the_window_does_not_swallow_a_pending_notice() {
         let mut a = AuctionOpen::default();

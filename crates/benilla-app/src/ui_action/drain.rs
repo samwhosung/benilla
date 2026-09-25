@@ -1,18 +1,6 @@
-//! **Outward** — the two action-bar drains, and the law that decides what a click *does*.
-//!
-//! - **Use** ([`drain_action_uses`]): a queued `UseAction(n)` becomes wire. A SPELL action goes
-//!   through the one cast-send path ([`crate::spell::CastLadder::send`]); the auto-attack action
-//!   (6603) sends `CMSG_ATTACKSWING` at the selection, or acquires the nearest enemy when there is
-//!   none; an ITEM action names an *entry*, not a position, so it must first find a copy and then
-//!   decide equip-vs-use — [`item_action_route`], the byte-verified two-stage law of.
-//!   A MACRO action runs its body's lines through the chat-input door (`crate::ui_macro::run`,
-//!   decision 0983) — the `0x4f1460` fork of the reference's own `UseAction`.
-//! - **Set** ([`drain_action_sets`]): a queued `PickupAction`/`PlaceAction` mutation becomes one
-//!   `CMSG_SET_ACTION_BUTTON` per entry (the bar is client-authoritative, there is no
-//!   answer packet to lock against, and a drag-swap is two independent sends — never atomic).
-//!
-//! Both run `.after(UiInput)` so a click's intent goes out the same frame it was made. The two
-//! queues are disjoint per gesture, so their relative order does not matter.
+//! The action-bar drains: a queued `UseAction` becomes a cast, a swing, an item use or a macro
+//! run; a queued `PickupAction`/`PlaceAction` becomes one `CMSG_SET_ACTION_BUTTON`, which gets no
+//! reply, so a drag-swap is two independent sends.
 
 use bevy::prelude::*;
 
@@ -27,35 +15,19 @@ use crate::spell::{cast_target, CastCommit, CastLadder};
 
 use super::{attack_actor_refusal, PlayerActions, UiErrorKeys, SPELL_ATTACK};
 
-/// What clicking an ITEM action does, and to which copy — [`item_action_route`]'s verdict.
+/// What clicking an item action does, and to which copy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ItemRoute {
-    /// Use this copy — the wire `(bag_index, slot)` plus the instance guid the shared use fork
-    /// needs (`ui_items::item_use_command`).
+    /// Use this copy: the wire `(bag_index, slot)` and its instance guid.
     Use((u8, u8, u64)),
-    /// Equip this copy — the same triple.
     Equip((u8, u8, u64)),
-    /// No copy anywhere the walk reaches — the click does nothing.
+    /// No copy found: the click does nothing.
     Nowhere,
 }
 
-/// The reference's **two-stage** equip-vs-use decision for an ITEM action (`0x4e5fdd`–`0x4e5ff7`;
-/// decision 0666, which supersedes 0216 §7's guessed one):
-///
-/// ```text
-/// InventoryType == 0            → USE          (a consumable is never equipped)
-/// InventoryType != 0, worn      → USE IN PLACE (a copy is in equipment slots 0..18)
-/// InventoryType != 0, not worn  → EQUIP        (the full walk finds the copy to equip)
-/// ```
-///
-/// The second stage is the whole point. A ONE-stage `equippable → equip` fork can never *use* an
-/// equipped trinket — it re-equips it forever — and before 0666 the walk did not look at the
-/// equipment slots at all, so an equipped item's button was simply inert (reproduced live
-/// 2026-07-26: `item action 1 (entry 25) not in any bag — skipped`).
-///
-/// `find` is the inventory walk ([`crate::ui_items::find_item`]) with the entry already bound, so
-/// this stays a pure function of the template and the walk's answers — the law is testable
-/// without a world.
+/// The reference's equip-or-use decision for an item action (`0x4e5fdd`-`0x4e5ff7`):
+/// `InventoryType` 0 always uses; otherwise a worn copy (equipment slots 0..18) uses in place and
+/// a carried one equips. `find` is the inventory walk with the entry already bound.
 pub(super) fn item_action_route(
     template: &benilla_protocol::ItemInfo,
     find: impl Fn(crate::ui_items::ItemSearch) -> Option<(u8, u8, u64)>,
@@ -65,8 +37,7 @@ pub(super) fn item_action_route(
         live_charges_only,
     };
     if template.inventory_type == 0 {
-        // The use leg's mode-`0x20` charge filter (`0x4e603a`): only when the TEMPLATE says this
-        // item carries finite charges does the search skip spent copies.
+        // The use leg's charge filter (`0x4e603a`): spent copies are skipped for finite charges.
         return match find(anywhere(template.has_finite_charges())) {
             Some(pos) => ItemRoute::Use(pos),
             None => ItemRoute::Nowhere,
@@ -84,11 +55,8 @@ pub(super) fn item_action_route(
     }
 }
 
-/// ATTACKTARGET through the binding table (default T — 1.12's `AttackTarget()`): exactly
-/// the action-bar attack arm below, without the action slot — the Phase A actor refusal first
-/// ([`attack_actor_refusal`], the full `0x612df0` gate set), then the with-target attack-start
-/// (auto-draw + swing) or the no-target nearest-acquire. One law, two doors, the reference's
-/// own shape (`AttackTarget` and `UseAction`'s SPELL_ATTACK both land in `0x612df0`).
+/// The ATTACKTARGET binding (default T): the action bar's attack arm without a slot, as in the
+/// reference, where `AttackTarget` and `UseAction`'s Attack both land in `0x612df0`.
 pub(super) fn attack_target_binding(
     binds: Res<crate::bindings::BindingsState>,
     targeting: cast_target::CastTargeting,
@@ -115,8 +83,7 @@ pub(super) fn attack_target_binding(
                 "bindings: ATTACKTARGET {} at {guid:#x}",
                 if engaged { "toggled off" } else { "swing" }
             );
-            // The same `0x6131a0` this binding's doc says it shares with the action button — so
-            // it takes the same seam, toggle and all, instead of a second copy that drifts.
+            // The action button's own toggle (`0x6131a0`).
             crate::creature_anim::toggle_attack_local(
                 e,
                 guid,
@@ -135,24 +102,15 @@ pub(super) fn attack_target_binding(
     }
 }
 
-/// **The world right-click's GameObject opener**, run through the one cast path —
-/// the seam [`crate::ui_action::GoOpenerCasts`] exists for.
-///
-/// The reference reaches TryCast from the GameObject strategy's use-sender exactly as it does from
-/// a button press (`0x5f35c0 → 0x6e5a90 → 0x6e4b60`), so an opener
-/// takes **every rung** — in-flight, cooldown/GCD, power, crowd control, mounted, water, moving,
-/// form, reagents — and not the two the click used to check on its own. The rung that matters for
-/// the report this closes is the in-flight one: the second right-click on a chest whose Opening
-/// cast is still running is `6e4d43`'s **silent** same-spell bail, so no duplicate ever reaches the
-/// wire and the running bar is never red-faded by the server's answer to a packet we should not
-/// have sent.
+/// Sends the queued GameObject openers through the cast ladder. The reference reaches `TryCast`
+/// from a right-click as from a button (`0x5f35c0`, `0x6e5a90`, `0x6e4b60`), so every rung
+/// applies: a second click on a chest mid-cast is `0x6e4d43`'s silent same-spell bail.
 pub(super) fn drain_go_openers(
     mut queue: ResMut<crate::ui_action::GoOpenerCasts>,
     script: Option<NonSendMut<UiScript>>,
     targeting: cast_target::CastTargeting,
     mut ladder: CastLadder,
-    // The by-key local-refusal sink, passed explicitly for the same reason `drain_action_uses`
-    // does: a resource reachable twice from one system is a `B0002` panic.
+    // Not a `CastLadder` field: Bevy panics on a resource reachable twice from one system.
     mut ui_errors: ResMut<UiErrorKeys>,
     mut gate: crate::ui_bind_confirm::BindGate,
 ) {
@@ -167,8 +125,7 @@ pub(super) fn drain_go_openers(
                 debug!("ui_action: gameobject opener casts {spell_id} at {go_guid:#x}");
                 ladder.send_at_object(spell_id, &ctx, go_guid);
             }
-            // The key's own `CGItem::Use` fork — one function for every use surface (decision
-            // 0664), so the key reaches the wire through the same route a bag click does.
+            // The key goes through the shared `CGItem::Use` fork, as a bag click does.
             super::GoOpener::Key(it) => {
                 let Some(script) = script.as_deref_mut() else {
                     continue;
@@ -191,22 +148,10 @@ pub(super) fn drain_go_openers(
     }
 }
 
-/// The **self-cast modifier**, applied to a cast's targeting inputs: `UseAction`'s third argument
-/// (1.12's `SELFACTIONBUTTON1`-`12`, `ALT-1`…`ALT-=`, through `ActionButtonUp(id, 1)`).
-///
-/// It substitutes the caster for the selection as the bind candidate — both halves of the
-/// substitution, the guid *and* the store the relation checks read, which is exactly the pair
-/// `resolve_cast_target`'s own autoSelfCast fallback swaps at `0x6e53d7`. So a self-cast runs the
-/// ordinary binder against the ordinary candidate and needs no leg of its own; a spell that
-/// cannot target a friendly unit refuses for the reason it always would, and one that needs no
-/// target at all is still `SelfImplicit`.
-///
-/// **The behaviour is not in doubt; the byte attribution is INFERRED.** The reference's
-/// `UseAction 0x4f1460` was not traced for this — the modelling here is that `onSelf` fills
-/// `ArmCast 0x6e5250`'s explicit-guid argument (`6e5393`), the slot every benilla caster passes
-/// zero in, because that is the one input that already means "bind this unit instead of the
-/// selection". A forced-self leg of its own would be observationally identical, so nothing
-/// downstream rests on which it is.
+/// Applies the self-cast modifier, `UseAction`'s `onSelf` (`SELFACTIONBUTTON1`-`12`): the caster
+/// replaces the selection as the bind candidate, guid and store both, the pair the autoSelfCast
+/// fallback swaps (`0x6e53d7`). Where `UseAction 0x4e5ee0` applies `onSelf` is untraced; this
+/// fills `ArmCast 0x6e5250`'s explicit guid (`0x6e5393`); a forced-self leg would look the same.
 fn self_bound<'a>(
     mut ctx: cast_target::CastContext<'a>,
     press: benilla_ui::script::ActionUse,
@@ -223,10 +168,8 @@ pub(super) fn drain_action_uses(
     actions: Res<PlayerActions>,
     targeting: cast_target::CastTargeting,
     mut acquire: MessageWriter<crate::target::AttackNearestRequest>,
-    // The by-key local error line — the only sink here that is not the ladder's own
-    // (`ladder.cast_errors` is the reason-coded one, `ladder.ground` the targeting mode). It is
-    // deliberately NOT a `CastLadder` field: a resource reachable twice from one system is a
-    // `B0002` panic on the first live frame, which compiles and passes every unit test.
+    // The by-key error line. Not a `CastLadder` field: Bevy panics, at runtime and not in unit
+    // tests, on a resource reachable twice from one system.
     mut ui_errors: ResMut<UiErrorKeys>,
     mut ladder: CastLadder,
     mut gate: crate::ui_bind_confirm::BindGate,
@@ -243,12 +186,8 @@ pub(super) fn drain_action_uses(
         };
         match actions.buttons.get(&slot) {
             Some(b) if b.kind == ACTION_KIND_SPELL && b.action == SPELL_ATTACK => {
-                // The attack-start validator's Phase A ([`attack_actor_refusal`]) — for a melee
-                // swing the actor is US. It refuses BEFORE the with-target swing and before the
-                // nearest-enemy scan (every Phase A gate precedes `0x6130b5`), so both arms gate
-                // here. Widened from mounted-only to the rest of `0x612df0`:
-                // stunned, pacified, fleeing, confused, charmed by somebody else, and dead now
-                // refuse the swing too, each with its own red line.
+                // The attack validator's actor gates (`0x612df0`) precede both the swing and the
+                // nearest-enemy scan (`0x6130b5`), so both arms gate here.
                 if attack_actor_refusal(
                     targeting.self_store.iter().next(),
                     targeting.context().self_guid,
@@ -258,17 +197,10 @@ pub(super) fn drain_action_uses(
                 }
                 match selection.guid {
                     Some(guid) => {
-                        // **The Attack button is a TOGGLE** — `0x6131a0`, which the base Attack
-                        // pseudo-spell reaches through `TryCast`'s effect-0x4e short-circuit
-                        // (`0x6e4c7a`), forks on `0x60ecb0`: already attacking →
-                        // `0x6131d9 call 0x5ecac0` **StopAttack**, else `0x6131ee call 0x5ecb70`
-                        // **StartAttack**.
-                        //
-                        // Both halves were wrong here. There was no toggle-off at all, and the
-                        // press cancelled a running auto-repeat *unconditionally* — but only the
-                        // START arm reaches `0x5ecd8c`, so in the reference toggling melee OFF
-                        // leaves Auto Shot running. The seams carry the sheath snap and the cancel
-                        // now, so neither is spelled out twice.
+                        // A toggle (`0x6131a0`, via `TryCast`'s effect-0x4e short-circuit
+                        // `0x6e4c7a`): attacking (`0x60ecb0`) stops (`0x5ecac0`), else starts
+                        // (`0x5ecb70`). Only the start cancels auto-repeat (`0x5ecd8c`), so
+                        // stopping melee leaves Auto Shot running.
                         let Ok((e, engaged)) = ladder.self_player.single() else {
                             continue;
                         };
@@ -287,8 +219,7 @@ pub(super) fn drain_action_uses(
                             &ladder.commands,
                         );
                     }
-                    // No target: the client's attack resolver runs the nearest-enemy core and
-                    // swings at the winner (`0x612df0` @ `6130b5`) — `target::scan` answers.
+                    // No target: the reference swings at the nearest enemy (`0x6130b5`).
                     None => {
                         debug!("ui_action: attack with no target — acquiring nearest");
                         acquire.write(crate::target::AttackNearestRequest);
@@ -296,11 +227,9 @@ pub(super) fn drain_action_uses(
                 }
             }
             Some(b) if b.kind == ACTION_KIND_SPELL => {
-                // UseAction's toggle-cancel (`0x4e5ee0`: `GetTargetingSpellId 0x6e48e0` +
-                // `StopTargeting 0x6e4900`): re-pressing the spell whose
-                // targeting cursor is up cancels the targeting instead of re-arming it —
-                // press-again-to-cancel, before TryCast ever runs. (A spellbook re-press stays
-                // the ref's abort-and-re-enter — it never passes through UseAction.)
+                // In `UseAction 0x4e5ee0` only: re-pressing the spell whose targeting cursor is
+                // up cancels it before `TryCast` (`GetTargetingSpellId 0x6e48e0`,
+                // `StopTargeting 0x6e4900`). A spellbook re-press aborts and re-enters.
                 if ladder.ground.spell() == Some(b.action) {
                     debug!(
                         "ui_action: cast {} re-pressed — targeting toggles off",
@@ -309,11 +238,8 @@ pub(super) fn drain_action_uses(
                     ladder.ground.clear();
                     continue;
                 }
-                // The active-action toggle (`0x4e55f0` → the `0x4e60c1` cancel): a live
-                // ActiveIconID spell re-pressed on its button cancels its own aura — Ghost Wolf,
-                // the druid forms, Stealth. The
-                // form-match toggle is deliberately NOT here (the ref's `UseAction` has no such
-                // leg — the `CastSpell` dispatcher alone carries it; keep the asymmetry).
+                // A live `ActiveIconID` spell re-pressed cancels its aura (`0x4e55f0`, cancel
+                // `0x4e60c1`). The form-match toggle is `CastSpell`'s alone, not `UseAction`'s.
                 if let Some(d) = ladder.spells.as_ref().and_then(|s| s.catalog.get(b.action)) {
                     if let Some(store) = targeting.self_store.iter().next() {
                         if super::toggle::active_action_toggle(b.action, d, store) {
@@ -338,11 +264,8 @@ pub(super) fn drain_action_uses(
                     CastCommit::Spell,
                 );
             }
-            // An item action names an item ENTRY, not a position, so the click has to find a copy
-            // — [`item_action_route`] is that law. A miss (the copy left the bags between the
-            // click and this drain, or a stale action from a previous session) is a
-            // debug-log-and-skip, NOT the red error line: nothing was attempted against the
-            // server, so "Item is not ready" would be a lie.
+            // An item action names an entry, so the click finds a copy. A miss only logs, with no
+            // red error line: nothing was attempted.
             Some(b) if b.kind == ACTION_KIND_ITEM => {
                 let Some(store) = targeting.self_store.iter().next() else {
                     continue;
@@ -351,8 +274,7 @@ pub(super) fn drain_action_uses(
                     .items
                     .template(b.action, 0, &ladder.commands)
                     .cloned();
-                // The reference reads the template first and bails on a null record; ours is all
-                // but always cached by click time (the icon resolve needed it).
+                // The reference bails on a null template too; the icon resolve usually cached it.
                 let Some(template) = template else {
                     debug!(
                         "ui_action: item action {action} (entry {}) has no template yet — skipped",
@@ -375,14 +297,10 @@ pub(super) fn drain_action_uses(
                     }
                 };
                 if equip {
-                    // Deliberately WITHOUT the bag click's quest guard: the bar's own engine tests
-                    // only `[rec+0x2c]` (inventoryType) before the equip route (`0x4e5fdd`), where
-                    // `Script::UseContainerItem` also tests `StartQuest` (`0x4fa3c4`) — so an
-                    // equippable quest-starter on the bar equips, exactly as the reference does.
+                    // No quest guard: the bar tests only `InventoryType` (`0x4e5fdd`), unlike
+                    // the bag click (`StartQuest`, `0x4fa3c4`), so a quest-starter equips.
                     debug!("ui_action: item action {action} auto-equip (wire {bag_index}/{slot0})");
-                    // Through the one auto-equip sender, which carries the ammo
-                    // fork and the soulbind deferral: a BoE dragged to the bar and pressed asks
-                    // before it binds, exactly as the same item right-clicked in the bag does.
+                    // The shared auto-equip sender, so a BoE asks before binding, as from a bag.
                     crate::ui_items::send_auto_equip(
                         &mut script,
                         &mut gate,
@@ -395,14 +313,9 @@ pub(super) fn drain_action_uses(
                         false,
                     );
                 } else {
-                    // …then the shared use fork (`CGItem::Use` — the bar's engine calls the very
-                    // same function at `0x4e607b`), so a quest-starter on the bar offers its quest
-                    // instead of a `CMSG_USE_ITEM` the server can only refuse. The
-                    // wire's third byte is the spell BLOCK ordinal, not a flag.
-                    // The fork runs the WHOLE cast ladder — an item use IS a cast through the same
-                    // `TryCast` ([`crate::ui_items::send_item_use`] is the
-                    // law), so the cooldown/GCD/in-flight/mounted/moving/form rungs and the local
-                    // "Item is not ready yet." live there now, for the bag and doll clicks too.
+                    // The shared `CGItem::Use` fork (called at `0x4e607b`): a quest-starter offers
+                    // its quest, and the use runs the whole cast ladder. The wire's third byte is
+                    // the spell block ordinal, not a flag.
                     let spell_index = template.use_spell_index().unwrap_or(0);
                     debug!(
                         "ui_action: item action {action} use (wire {bag_index}/{slot0}, spell #{spell_index})"
@@ -430,10 +343,8 @@ pub(super) fn drain_action_uses(
                     );
                 }
             }
-            // The MACRO arm (`0x4e5ee0`'s `and ecx,0xbfffffff; call 0x4f1460` fork): run the
-            // macro's body. Every line goes onto the chat-input queue — the door a typed line
-            // comes through — so `/cast`, `/target`, `/script`, the chat types and the 225 emotes
-            // all work in a macro by construction (`crate::ui_macro::run`'s module doc).
+            // The macro arm (`0x4e5ee0` calls `0x4f1460`): each body line goes through the chat
+            // input, as if typed.
             Some(b) if b.kind == ACTION_KIND_MACRO => {
                 if !crate::ui_macro::run_macro(&mut script, b.action) {
                     debug!(
@@ -453,14 +364,8 @@ pub(super) fn drain_action_uses(
     }
 }
 
-/// Drain the `(lua action id, packed)` pairs the cursor seam's `PickupAction`/`PlaceAction`
-/// queued — the engine's own local mutation already agrees with what lands
-/// here (it wrote the same value into its optimistic `model.actions` mirror before queuing this).
-/// Each entry: write `PlayerActions.buttons` (`packed == 0` removes the slot, else inserts),
-/// mark `dirty` so [`super::feed::feed_actions`] re-resolves + re-pushes + fires
-/// `ACTIONBAR_SLOT_CHANGED` (the existing diff machinery — no bespoke event here), and send ONE
-/// `CMSG_SET_ACTION_BUTTON` (client-authoritative, no answer packet, a drag-swap is two
-/// independent sends).
+/// Applies the queued `PickupAction`/`PlaceAction` writes (packed 0 clears) to the store, which
+/// the VM already mirrors, marks it dirty for the feed and sends each as `CMSG_SET_ACTION_BUTTON`.
 pub(super) fn drain_action_sets(
     script: Option<NonSendMut<UiScript>>,
     mut actions: ResMut<PlayerActions>,

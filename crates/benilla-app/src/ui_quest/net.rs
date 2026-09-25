@@ -1,9 +1,5 @@
-//! The questgiver panels' packet handlers (in the net handler table since 2320,
-//! moved out of the drain's quests arm file) — each fills the [`QuestGiver`] the quest feed
-//! ([`super`]) reads; each panel packet replaces the open view, and the greeting/gossip quest-row
-//! clicks and the panel buttons flow back out through the quest/gossip drains. The quest log's
-//! template answer is [`crate::ui_quest_log`]'s and the party share's pair is
-//! [`crate::ui_quest_share`]'s.
+//! The questgiver packet handlers: each fills the [`QuestGiver`] the feed reads, and each panel
+//! packet replaces the open view.
 
 use benilla_protocol::messages::{
     QuestComplete, QuestDetails, QuestGiverList, QuestOfferReward, QuestRequestItems, QuestShareMsg,
@@ -16,8 +12,7 @@ use crate::net::{ClientCommand, NetCommands, NetHandlerApp};
 use crate::ui_action::UiError;
 use crate::ui_quest_log::QuestLog;
 
-/// Register the questgiver handlers — called from [`super::UiQuestPlugin`]. One per kind, plus
-/// the session-end listener.
+/// One handler per kind, plus the session-end and world-enter listeners.
 pub(super) fn register(app: &mut App) {
     use SessionEventKind as K;
     app.net_handler(K::QuestGiverStatus, on_giver_status)
@@ -38,16 +33,15 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::Worldport, on_worldport);
 }
 
-/// The world-enter reset `0x500af0` (sole caller `0x49099c`, inside the enter-world cascade
-/// `0x4908c0` that runs on a fresh login and on every worldport) zeroes the `0xbe0824` latch —
-/// its only clear (`0x500af0`). A second listener on each kind, after the bridge's.
+/// The reference's world-enter reset `0x500af0`, run by the enter-world cascade `0x4908c0` on a
+/// login and on every worldport, is the `0xbe0824` latch's only clear.
 fn on_login(In(ev): In<SessionEvent>, mut quest: ResMut<QuestGiver>) {
     if let SessionEvent::Connected { .. } = ev {
         world_enter_reset(&mut quest);
     }
 }
 
-/// [`on_login`]'s twin for the other entry into the cascade, the worldport.
+/// The same reset on a worldport.
 fn on_worldport(In(ev): In<SessionEvent>, mut quest: ResMut<QuestGiver>) {
     if let SessionEvent::Worldport { .. } = ev {
         world_enter_reset(&mut quest);
@@ -152,39 +146,17 @@ fn on_giver_failed(
     }
 }
 
-/// An open questgiver panel dies with the socket. A listener on the session end
-/// (a second handler on the kind, after the bridge's own teardown).
+/// An open questgiver panel dies with the socket.
 fn on_session_end(In(_): In<SessionEvent>, mut quest: ResMut<QuestGiver>) {
     quest.clear_session();
 }
 
-/// A questgiver dialog status for one NPC (`SMSG_QUESTGIVER_STATUS`) — the `!`/`?` marker's
-/// [`crate::messages::dialog_status`] value, stored per guid for the marker layer and the minimap
-/// quest dot.
-///
-/// **A GameObject's answer is DROPPED, and that is the reference's own behaviour** (decision
-/// 1872): the handler `0x5dc9f0` resolves the packet's GUID with `0x5dca22 mov ecx,8` — typemask
-/// `TYPEMASK_UNIT` — and `0x468460` is a bitmask AND against `OBJECT_FIELD_TYPE`, so a
-/// GameObject's `0x21` misses bit 3, returns NULL, and the handler exits at `0x5dca2f` without
-/// ever reaching the `UNIT_NPC_FLAGS` test, let alone the marker.
-///
-/// This is not a hypothetical branch here: benilla now *sends* the query for quest-flagged
-/// GameObjects, exactly as the reference does ([`crate::quest_markers`]), and **vmangos answers
-/// it** — `GetObjectByTypeMask(guid, TYPEMASK_CREATURE_OR_GAMEOBJECT)`, `QuestHandler.cpp:41` —
-/// where the real 1.12 service never did (zero GameObject GUIDs across 1292 in the sniff corpus).
-/// So the drop is what keeps a vmangos-only answer from putting a `!` over a wanted poster that
-/// the reference client leaves bare.
-///
-/// The test is the GUID's own shape rather than a live type lookup: it gives the same partition
-/// as typemask 8 for anything a server can send us. It was chosen when this was an arm of the
-/// drain's match, where a status arriving in the same drain as its object's create block would
-/// have read a not-yet-seeded store (descriptors were flushed at the end of the drain) and
-/// dropped a *unit's* answer that would then never be re-asked for. As a packet handler it runs
-/// after the create has landed, so that reason is gone; the shape test stays
-/// because it is the same partition. The reference's second conjunct — `UNIT_NPC_FLAGS & 0x2` on
-/// the resolved unit — was left unmodelled for the same ordering reason and is buildable now;
-/// until it is, [`crate::quest_markers::query`]'s teardown leg covers the flag-clearing case from
-/// the other end.
+/// `SMSG_QUESTGIVER_STATUS`: one guid's `dialog_status`, for the markers and the minimap dot. A
+/// GameObject's answer is dropped, as the reference's `0x5dc9f0` resolves the guid by
+/// `TYPEMASK_UNIT` (`0x5dca22`) and exits at `0x5dca2f`; vmangos answers GameObjects
+/// (`QuestHandler.cpp:40`). The guid's shape gives the same partition. The reference's second
+/// test, `UNIT_NPC_FLAGS & 0x2` on the unit, is not built; the marker query's teardown covers a
+/// giver whose flag clears.
 fn quest_giver_status(npc: u64, status: u32, quest: &mut QuestGiver) {
     use benilla_protocol::guid;
     if !(guid::is_player(npc) || guid::is_creature_or_pet(npc)) {
@@ -195,7 +167,7 @@ fn quest_giver_status(npc: u64, status: u32, quest: &mut QuestGiver) {
     quest.set_status(npc, status);
 }
 
-/// The greeting panel: an NPC's offered/active quest rows (`SMSG_QUESTGIVER_QUEST_LIST`).
+/// `SMSG_QUESTGIVER_QUEST_LIST`: the greeting panel's quest rows.
 fn quest_greeting(list: QuestGiverList, quest: &mut QuestGiver) {
     debug!(
         "net: quest greeting on {:#x} — {} quests",
@@ -205,14 +177,11 @@ fn quest_greeting(list: QuestGiverList, quest: &mut QuestGiver) {
     quest.open(list.npc, crate::ui_quest::QuestView::Greeting(list));
 }
 
-/// The accept panel: full quest text + rewards on offer (`SMSG_QUESTGIVER_QUEST_DETAILS`).
+/// `SMSG_QUESTGIVER_QUEST_DETAILS`: the accept panel.
 fn quest_detail(d: QuestDetails, quest: &mut QuestGiver, commands: &NetCommands) {
     debug!("net: quest detail — quest {} on {:#x}", d.quest_id, d.npc);
-    // **A share that arrives on top of an open window is refused, by the client** (`0x5dbf85`,
-    // decision 1738): `MSG_QUEST_PUSH_RESULT{sharer, BUSY}` and the panel we are reading stays.
-    // `BUSY` is the second and last verdict the client originates. The server has a busy test of
-    // its own (`Player::GetQuestShareInfo`), but it only knows about shares — it cannot see that we
-    // are mid-turn-in at an NPC, which is exactly the case this covers.
+    // A share landing on an open window is refused by the client with `BUSY` (`0x5dbf85`), and
+    // the open panel stays; the server's own busy test only knows about other shares.
     if benilla_protocol::guid::is_player(d.npc) && quest.is_open() {
         debug!(
             "net: busy — refusing {:#x}'s shared quest {}",
@@ -224,13 +193,12 @@ fn quest_detail(d: QuestDetails, quest: &mut QuestGiver, commands: &NetCommands)
         });
         return;
     }
-    // The trailing flag is a latch, not a field of the view (see `QuestGiver::close_on_cancel`).
+    // The trailing flag is the latch, not part of the view.
     quest.close_on_cancel = d.auto_finish;
     quest.open(d.npc, crate::ui_quest::QuestView::Detail(d));
 }
 
-/// The progress panel: "bring me these" text + required items/money + completability
-/// (`SMSG_QUESTGIVER_REQUEST_ITEMS`).
+/// `SMSG_QUESTGIVER_REQUEST_ITEMS`: the progress panel.
 fn quest_progress(p: QuestRequestItems, quest: &mut QuestGiver) {
     debug!(
         "net: quest progress — quest {} on {:#x} (complete: {})",
@@ -241,25 +209,23 @@ fn quest_progress(p: QuestRequestItems, quest: &mut QuestGiver) {
     quest.open(p.npc, crate::ui_quest::QuestView::Progress(p));
 }
 
-/// The reward panel: turn-in text + rewards to grant (`SMSG_QUESTGIVER_OFFER_REWARD`).
+/// `SMSG_QUESTGIVER_OFFER_REWARD`: the reward panel.
 fn quest_offer(o: QuestOfferReward, quest: &mut QuestGiver) {
     debug!(
         "net: quest reward offer — quest {} on {:#x}",
         o.quest_id, o.npc
     );
-    // The `u32` after the reward text lands in the same latch as DETAILS' trailing one — one
-    // publisher, `0x500ef0` (`0x50101a`).
+    // The `u32` after the reward text lands in the latch through DETAILS' publisher `0x500ef0`
+    // (`0x50101a`).
     quest.close_on_cancel = o.auto_finish;
     quest.open(o.npc, crate::ui_quest::QuestView::Reward(o));
 }
 
-/// The turn-in result: XP/money granted + fixed items (`SMSG_QUESTGIVER_QUEST_COMPLETE`).
+/// `SMSG_QUESTGIVER_QUEST_COMPLETE`: the turn-in result, which closes the window.
 fn quest_complete(c: QuestComplete, quest: &mut QuestGiver) {
-    // The completion fanfare (QUESTCOMPLETED kit → iQuestComplete.wav) — the client's C++ plays
-    // it on exactly this packet; the giver feed drains the flag into the UI sound path.
+    // The reference plays the `QUESTCOMPLETED` fanfare on this packet.
     quest.completed_fanfare = true;
-    // The turn-in result: log the reward summary and close the window (the XP/money/item
-    // grants arrive separately via UPDATE_OBJECT + ITEM_PUSH_RESULT).
+    // The XP, money and items arrive separately, by `UPDATE_OBJECT` and `ITEM_PUSH_RESULT`.
     debug!(
         "net: quest {} complete — +{} XP, +{} copper, {} item(s)",
         c.quest_id,
@@ -268,58 +234,36 @@ fn quest_complete(c: QuestComplete, quest: &mut QuestGiver) {
         c.items.len()
     );
     quest.clear();
-    // The turn-in result is one of the `SMSG_QUESTGIVER_*` the reference sweeps from: every
-    // other giver's `!`/`?` can move the moment a quest is handed in.
+    // A turn-in can move every giver's marker, so the reference re-asks from here.
     quest.bump_reask();
 }
 
-/// A kill/use objective ticked (`SMSG_QUESTUPDATE_ADD_KILL`) / an item-collection tick
-/// (`SMSG_QUESTUPDATE_ADD_ITEM`). The visible surface — the yellow `UI_INFO_MESSAGE` toast, the
-/// ref's `ERR_QUEST_ADD_*_SII` popups — no longer fires from here: it rides the quest-log
-/// objective diff (`crate::ui_quest_log::feed_quest_log`), which composes the same line from the
-/// same descriptor/template/bag state the SMSG announces (the wire's item tick carries only the
-/// ADDED count — the "cur/req" is client-computed either way, the wire pin's finding). The old
-/// chat-line stopgap here is retired: the reference shows no chat echo for objective progress
-/// (inferred from reference screenshots, unconfirmed in the binary; if the real handler does
-/// more, a sound or a distinct format, it goes here).
+/// `SMSG_QUESTUPDATE_ADD_KILL`: the progress toast comes from the quest-log objective diff
+/// (`crate::ui_quest_log::feed_quest_log`), and the reference prints no chat line for it.
 fn quest_objective_kill(entry: u32, count: u32, required: u32, quest: &mut QuestGiver) {
     debug!("net: quest kill/use objective {entry:#x} at {count}/{required}");
     quest.bump_reask();
 }
 
-/// See [`quest_objective_kill`] — same surface, item flavor.
+/// `SMSG_QUESTUPDATE_ADD_ITEM`, which carries only the count added; its toast comes from the same
+/// objective diff.
 fn quest_objective_item(item_id: u32, count: u32, quest: &mut QuestGiver) {
     debug!("net: quest item objective {item_id} +{count}");
     quest.bump_reask();
 }
 
-/// Every objective on the quest is complete (`SMSG_QUESTUPDATE_COMPLETE`, 0x198). The visible
-/// surface — the yellow `"%s (Complete)"` toast (`ERR_QUEST_OBJECTIVE_COMPLETE_S`, verified
-/// kind-1 → UI_INFO_MESSAGE, never a chat line) — rides the quest-log diff's COMPLETE-flip
-/// detection (`crate::ui_quest_log::feed_quest_log`), same as the progress toasts; the slot's
-/// state byte carries the durable fact.
+/// `SMSG_QUESTUPDATE_COMPLETE` (0x198): the `ERR_QUEST_OBJECTIVE_COMPLETE_S` toast (kind 1, never
+/// chat) comes from the quest-log diff's complete flip, as the progress toasts do.
 fn quest_objectives_complete(quest_id: u32, quest: &mut QuestGiver) {
     debug!("net: quest {quest_id} objectives complete");
-    // The turn-in `?` can go gold with no quest-log field change of its own, so the reference
-    // sweeps from these `SMSG_QUESTUPDATE_*` handlers.
+    // The turn-in `?` can turn gold with no quest-log change, so the reference re-asks here.
     quest.bump_reask();
 }
 
-/// The quest failed (`SMSG_QUESTUPDATE_FAILED` `0x196` / `_FAILEDTIMER` `0x197` — `timed` picks
-/// which): the one quest-update with a CHAT surface — msgId `0x8b` = `ERR_QUEST_FAILED_S`, catalog
-/// row 139, `kind 0`, named with the quest's title (the handler pushes `template+0x9c`).
-///
-/// **An uncached template is SILENT, and that is the handler's own gate rather than a fallback.**
-/// `0x5e5ad0`'s FAILED arm reads the questId, then *bails* if the template is not in the cache (or
-/// if the per-slot flag `byte[slot+7]&2` is set) — it never reaches `0x496720`. This used to
-/// compose `"Quest failed."` there, a sentence 1.12 has no string for and never says (decision
-/// 2045 named it as one of two remaining inventions).
-///
-/// The line rides `QuestGiver`'s by-key queue — the route `quest_log_full` and
-/// `quest_giver_invalid` already take — so `ui_quest::feed_quest` resolves it against the player's
-/// own `GlobalStrings.lua` and `show_messages` reads the row. **That also lands the sound the old
-/// path was dropping**: row 139 names the cue `igQuestFailed`, which the reference plays here and
-/// benilla had noted as an unbuilt follow-up.
+/// `SMSG_QUESTUPDATE_FAILED` (`0x196`) or `_FAILEDTIMER` (`0x197`): `ERR_QUEST_FAILED_S` (msg
+/// `0x8b`) in chat, named by the quest's title. The reference's arm (`0x5e5ad0`) prints nothing
+/// without a cached template, as here, or when the slot's `byte[slot+7] & 2` is set, which this
+/// does not check.
 fn quest_failed(
     quest_id: u32,
     timed: bool,
@@ -333,29 +277,20 @@ fn quest_failed(
     } else {
         debug!("net: quest {quest_id} has no cached template — the reference shows nothing");
     }
-    // A failure moves what the givers offer — the reference sweeps from these `SMSG_QUESTUPDATE_*`
-    // handlers too.
+    // A failure moves what the givers offer, so the reference re-asks here too.
     quest.bump_reask();
 }
 
-/// The log refused a new quest — no free slot (`SMSG_QUESTLOG_FULL`). The ref's `0x195` arm is a
-/// bare `DisplayError(153)` and nothing else (no panel close): `ERR_QUEST_LOG_FULL` is a kind-2
-/// record, so it is the RED line, not a chat line (it used to be a hardcoded
-/// English chat push here).
+/// `SMSG_QUESTLOG_FULL`: the reference's `0x195` arm only raises msg 153, `ERR_QUEST_LOG_FULL`, a
+/// red error line, and leaves the panel open.
 fn quest_log_full(quest: &mut QuestGiver) {
     debug!("net: quest log full");
     quest.push_message(UiError::key("ERR_QUEST_LOG_FULL"));
 }
 
-/// The giver won't offer the quest (`SMSG_QUESTGIVER_QUEST_INVALID`, ref handler `0x5dbca0`): one
-/// `QuestFailedReason` code, no quest id. Its chat line comes from [`questgiver_invalid_key`]'s
-/// byte-verified table — reason 13 is "You are already on that quest", the line the director's
-/// bare `Quest failed (0x0d).` used to be.
-///
-/// Then the ref **closes the window**: both refusal handlers end in `0x501130(0,0)`, which zeroes
-/// the current questgiver guid (`0xbe0810`) and signals Lua event `0x130` = `QUEST_FINISHED` —
-/// our [`QuestGiver::clear`] plus the feed's own `QUEST_FINISHED` on the cleared view. Without
-/// this the panel sat open on a refused accept.
+/// `SMSG_QUESTGIVER_QUEST_INVALID` (`0x5dbca0`): a `QuestFailedReason` and no quest id, shown in
+/// chat through `questgiver_invalid_key`. Both refusal handlers then close the window with
+/// `0x501130(0,0)`, which zeroes the giver guid (`0xbe0810`) and fires `QUEST_FINISHED`.
 fn quest_giver_invalid(reason: u32, quest: &mut QuestGiver) {
     debug!("net: questgiver refused to offer the quest (reason {reason})");
     quest.push_message(UiError::key(crate::ui_quest::questgiver_invalid_key(
@@ -364,12 +299,9 @@ fn quest_giver_invalid(reason: u32, quest: &mut QuestGiver) {
     quest.clear();
 }
 
-/// The accept failed on a quest the giver DID offer (`SMSG_QUESTGIVER_QUEST_FAILED`, ref handler
-/// `0x5dc840`): `{questId, reason}`, and the line names the quest — the ref pushes the quest
-/// record's title (`+0x9c`) as the format's `%s`, so we fill it from the open view (the panel that
-/// is refusing IS this quest) and fall back to the template cache. A full-bag refusal shows a
-/// SECOND line, the ref's bare `DisplayError(0)` = `ERR_INV_FULL` on the red surface. Closes the
-/// window like [`quest_giver_invalid`].
+/// `SMSG_QUESTGIVER_QUEST_FAILED` (`0x5dc840`): the line's `%s` is the quest's title, from the
+/// open panel or the template cache. A full bag adds msg 0, `ERR_INV_FULL`, on the red surface,
+/// and the window closes as on an invalid quest.
 fn quest_giver_failed(
     quest_id: u32,
     reason: u32,
@@ -400,21 +332,13 @@ fn quest_giver_failed(
 mod tests {
     use super::*;
 
-    /// **The typemask-8 refusal**. benilla now sends
-    /// `CMSG_QUESTGIVER_STATUS_QUERY` for quest-flagged GameObjects because the reference
-    /// does — and vmangos, unlike the real 1.12 service, *answers*. The reference's handler drops
-    /// that answer at the lookup (`0x5dca22 mov ecx,8`), so we must too: otherwise a wanted poster
-    /// would wear a gold `!` the reference client never puts there.
-    ///
-    /// The control is the half that must not change: a creature's answer, and a player's, still
-    /// land — typemask 8 is `TYPEMASK_UNIT`, which a creature (`0x9`) and a player (`0x19`) both
-    /// carry.
+    /// Typemask 8 is `TYPEMASK_UNIT`, which a creature (`0x9`) and a player (`0x19`) both carry.
     #[test]
     fn a_gameobjects_dialog_status_is_dropped_and_a_creatures_is_not() {
         use benilla_protocol::messages::dialog_status;
 
-        // The Goldshire `Wanted Poster` (HIGHGUID_GAMEOBJECT), an elevator (HIGHGUID_TRANSPORT —
-        // a GameObject in every respect but its high word), a creature, and a player.
+        // A GameObject (Goldshire's Wanted Poster), a transport (an elevator), a creature and a
+        // player.
         const POSTER: u64 = 0xf110_0000_0044_68db;
         const ELEVATOR: u64 = 0xf120_0000_0384_1092;
         const CREATURE: u64 = 0xf130_0000_0060_0abc;
@@ -467,10 +391,7 @@ mod tests {
         giver
     }
 
-    /// The director's repro: the quest is already in the log, so the accept comes back
-    /// `QUEST_INVALID` reason 13. The line must be the ref's string key — never the bare
-    /// `Quest failed (0x0d).` — and the panel must CLOSE (`0x501130(0,0)` → `QUEST_FINISHED`),
-    /// which is what left it sitting open before.
+    /// Reason 13: the quest is already in the log.
     #[test]
     fn an_already_on_refusal_speaks_and_closes_the_panel() {
         let mut giver = open_detail(373);
@@ -485,8 +406,6 @@ mod tests {
         assert!(!giver.is_open(), "the ref closes the window on a refusal");
     }
 
-    /// The named half: the `%s` comes off the open panel, and a full bag adds the ref's second
-    /// line (`DisplayError(0)` = `ERR_INV_FULL`) on the RED surface.
     #[test]
     fn a_full_bag_refusal_names_the_quest_and_adds_the_inventory_line() {
         let mut giver = open_detail(373);
@@ -512,8 +431,6 @@ mod tests {
         assert!(!giver.is_open());
     }
 
-    /// `SMSG_QUESTLOG_FULL` is the odd one out: the ref's arm is a bare `DisplayError(153)` — the
-    /// RED line, and NO close.
     #[test]
     fn a_full_log_takes_the_red_line_and_leaves_the_panel_alone() {
         let mut giver = open_detail(373);
@@ -531,8 +448,6 @@ mod tests {
         );
     }
 
-    /// A refusal for a quest the open panel is NOT showing leaves the `%s` empty rather than
-    /// naming the wrong quest.
     #[test]
     fn a_refusal_for_another_quest_does_not_borrow_the_open_title() {
         let mut giver = open_detail(373);
@@ -562,10 +477,6 @@ mod tests {
         }
     }
 
-    /// **A share arriving on top of an open window is refused by the CLIENT**, with `BUSY` — the
-    /// second and last verdict the client originates (`0x5dbf85`). The window we are already
-    /// reading is not replaced, which is the point: the server's own busy test only knows about
-    /// other shares, so a player mid-turn-in at an NPC is invisible to it.
     #[test]
     fn a_share_on_top_of_an_open_window_is_refused_as_busy() {
         const SHARER: u64 = 0x0000_0000_0000_002A;
@@ -574,12 +485,10 @@ mod tests {
         let commands = NetCommands(tx);
         let mut quest = QuestGiver::default();
 
-        // An NPC's panel is up…
         quest_detail(detail(NPC, 100), &mut quest, &commands);
         assert_eq!(quest.npc, Some(NPC));
         assert!(rx.try_iter().next().is_none(), "opening sends nothing");
 
-        // …and a party member's share lands on top of it.
         quest_detail(detail(SHARER, 200), &mut quest, &commands);
         assert_eq!(quest.npc, Some(NPC), "the open window survives the refusal");
         let sent: Vec<_> = rx.try_iter().collect();
@@ -595,8 +504,6 @@ mod tests {
         );
     }
 
-    /// With nothing open, the same share opens the panel normally and answers nothing — the
-    /// control the refusal above would pass without.
     #[test]
     fn a_share_with_no_window_open_just_opens() {
         const SHARER: u64 = 0x0000_0000_0000_002A;
@@ -609,13 +516,6 @@ mod tests {
         assert!(rx.try_iter().next().is_none(), "no verdict, no refusal");
     }
 
-    /// The `0xbe0824` latch is written by all THREE panel packets — DETAILS' trailing `u32`,
-    /// OFFER_REWARD's `u32` after the reward text (both through `0x500ef0`, `0x50101a`) and
-    /// REQUEST_ITEMS' `closeOnCancel` (`0x501070`, `0x50111a`) — and zeroed by the world-enter
-    /// reset `0x500af0`. It is a latch, not a field of the open view: its one reader runs
-    /// whichever panel is up. benilla used to write it from DETAILS alone and never clear it, so
-    /// a single-quest auto-open's progress panel (`closeOnCancel` = 1) re-opened the NPC on
-    /// Cancel, which answers with the same panel again.
     #[test]
     fn the_latch_is_written_by_every_panel_packet_and_cleared_on_world_enter() {
         const NPC: u64 = 0xF130_0000_0000_0007;

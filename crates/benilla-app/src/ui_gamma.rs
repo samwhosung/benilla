@@ -1,24 +1,13 @@
-//! The player-UI **gamma composite lane**'s single decode — the UI-arc twin of
-//! [`benilla_world::ffx_glow`], which owns the world lane's one decode.
+//! The player-UI gamma lane's one decode. [`ui_quad.wgsl`](shaders/ui_quad.wgsl) composites the
+//! UI in gamma bytes, as the reference's fixed-function device does into its 8-bit backbuffer:
+//! blends are gamma arithmetic clamped at each write, and `alphaMode="ADD"` is `dst + texel·α`
+//! (EGxBlend 3, `glBlendFunc(GL_SRC_ALPHA, GL_ONE)`; factor tables `0x85c1f8`/`0x85c224`). This
+//! node decodes the finished image to linear once, straight into the swapchain (output mode
+//! `Skip`, no blit), whose sRGB write re-encodes the client's byte. Without it the UI presents
+//! about 2.2 times too bright. [`UiGammaLane`] gates it off every other `Camera2d` on `Core2d`.
 //!
-//! [`ui_quad.wgsl`](shaders/ui_quad.wgsl) composites the UI in gamma bytes, the way the
-//! reference's fixed-function device composites into its 8-bit backbuffer: every tint is a gamma
-//! multiply, every blend is gamma arithmetic clamped at each write, and `alphaMode="ADD"` is the
-//! byte add `dst + texel·α` (EGxBlend 3 = `glBlendFunc(GL_SRC_ALPHA, GL_ONE)`;
-//! factor tables `0x85c1f8`/`0x85c224`). This node converts that finished gamma
-//! image to linear ONCE, rendering straight into the swapchain — the camera's output mode is
-//! `Skip`, so there is no output blit ([`benilla_world::final_pass`]) — whose sRGB
-//! write re-encodes it to the exact client byte.
-//!
-//! The node is **mandatory** on the player-UI camera: without it the whole UI presents ~2.2× bright
-//! (the same failure mode `$WOW_NO_FFX` produces for the world). It is gated on [`UiGammaLane`], so
-//! it runs on that camera and no other `Camera2d` sharing the `Core2d` graph (the egui dev overlay).
-//!
-//! The module also carries the lane's **Bevy-UI half**: the glue + loading screens
-//! are Bevy UI trees rather than quads, so they need the same gamma conversion in their own shaders
-//! before this decode is correct for them — see [`use_gamma_ui_shaders`]. That is why
-//! [`crate::ui_pass`] marks the player-UI camera `IsDefaultUiCamera`: Bevy UI has to land on the one
-//! camera this node runs on.
+//! Bevy UI (the glue and loading screens) converts in its own shaders ([`use_gamma_ui_shaders`])
+//! and lands on this camera, which [`crate::ui_pass`] makes `IsDefaultUiCamera`.
 
 use bevy::core_pipeline::core_2d::graph::{Core2d, Node2d};
 use bevy::core_pipeline::FullscreenShader;
@@ -43,11 +32,11 @@ use bevy::ui_render::{init_ui_pipeline, UiPipeline};
 
 use benilla_world::final_pass::FinalPassTarget;
 
-/// Marks the camera whose target holds a gamma-composited image awaiting this pass's one decode,
-/// and carries the [`DisplayGamma`] exponent that decode applies on the way through (2182).
+/// Marks the camera whose target holds the gamma-composited UI, with the [`DisplayGamma`]
+/// exponent the decode applies.
 #[derive(Component, Clone, Copy, ExtractComponent)]
 pub(crate) struct UiGammaLane {
-    /// The `gamma` CVar's value, ready for the shader. `1.0` is the identity ramp.
+    /// The clamped `gamma` CVar; `1.0` is the identity ramp.
     pub(crate) gamma: f32,
 }
 
@@ -59,38 +48,25 @@ impl Default for UiGammaLane {
     }
 }
 
-/// **The display-brightness correction** — the `gamma` CVar, as the reference
-/// registers it (`0x402d70`, name `0x82e924`, default string `0x82e92c` = `"1.0"`, flags 0).
+/// The `gamma` CVar (registered at `0x402d70`, name `0x82e924`, default `"1.0"` at `0x82e92c`,
+/// flags 0). The reference's callback `0x4034d0` hands `SetDeviceGammaRamp` the ramp
+/// `__ftol(pow(i / 255, gamma) · 65535)` (`0x591680`); there is no other whole-frame grade and
+/// no `Brightness` or `Contrast` CVar.
 ///
-/// The reference applies it as an OS **hardware gamma ramp**: its change callback `0x4034d0`
-/// builds `ramp[i] = __ftol(pow(i · 1/255, gamma) · 65535)` at `0x591680` and hands the 3×256 words
-/// to `GDI32!SetDeviceGammaRamp` (there is no other whole-frame grade in the client, and
-/// `Brightness`/`Contrast` CVars do not exist in the binary at all). That upload is **skipped
-/// windowed** — `byte[dev+0x20b]` is `CGxFormat +0x07`, which is `gxWindow` — and windowed is every
-/// mode benilla has (1627), so copying the mechanism byte for byte would ship a slider that never
-/// moves a pixel.
-///
-/// So the ramp goes where a ramp goes when you own the compositor: **the same curve, applied to the
-/// same values, one stage later.** `i/255` is the framebuffer byte the RAMDAC would have read;
-/// [`UiGammaNode`] samples exactly that value (the UI lane composites in gamma bytes — the module
-/// doc above) and raising it to `gamma` before the one decode is the continuous form of the
-/// reference's 256-entry LUT.
+/// Deviation: the reference skips that upload when windowed (`byte[dev+0x20b]` is `gxWindow`), and
+/// every benilla mode is windowed, so the same curve applies in the compositor, where the slider
+/// can move pixels: [`UiGammaNode`] raises the gamma byte the RAMDAC would have read to `gamma`
+/// before its decode, the continuous form of the 256-entry ramp.
 #[derive(Resource, Debug, Clone, Copy, PartialEq)]
 pub(crate) struct DisplayGamma(pub(crate) f32);
 
-/// The reference's registered `"1.0"` — the identity ramp, and the value the pass is a **no-op**
-/// at, byte for byte (see [`UiGammaNode`]'s uniform branch).
+/// The registered `"1.0"`: the identity ramp, at which the pass changes no byte.
 pub(crate) const DEFAULT_GAMMA: f32 = 1.0;
 
-/// **The clamp is ours, and the reference has none** — `SetGamma(5)` writes `gamma = "-4.000000"`
-/// there with no arm anywhere to catch it (`SetGamma 0x4891f0`, with
-/// `baseMip`'s validating callback `0x689090` as the positive control). The reference can afford
-/// that because its ramp is a fullscreen-only OS call a player can escape by alt-tabbing; ours is
-/// the image itself, and `pow(x, 12)` is a black screen with the panel that undoes it somewhere
-/// inside it. This range is the widest that keeps the client legible enough to reach that panel —
-/// it spans the stock slider's own `[0.5, 1.5]` four times over, so nothing a player can do from
-/// the UI ever meets it, and the CVar still keeps whatever truth was written to it (0959's posture:
-/// the consumer clamps at its own edge, the store does not lie).
+/// Deviation: the reference never clamps (`SetGamma` `0x4891f0` writes `-4.000000` for 5), but its
+/// ramp is a fullscreen OS call and ours is the image, where an extreme exponent blacks out the
+/// panel that would undo it. The range spans the stock slider's `[0.5, 1.5]` four times over; the
+/// CVar keeps the value written and only its consumers clamp.
 pub(crate) const GAMMA_RANGE: std::ops::RangeInclusive<f32> = 0.25..=4.0;
 
 impl Default for DisplayGamma {
@@ -99,8 +75,7 @@ impl Default for DisplayGamma {
     }
 }
 
-/// Carry the knob onto the camera the pass runs on. Change-detected on the resource, so a settled
-/// session writes nothing.
+/// Copies the clamped gamma onto the lane camera when it changes.
 fn stamp_lane_gamma(gamma: Res<DisplayGamma>, mut lanes: Query<&mut UiGammaLane>) {
     if !gamma.is_changed() {
         return;
@@ -113,17 +88,15 @@ fn stamp_lane_gamma(gamma: Res<DisplayGamma>, mut lanes: Query<&mut UiGammaLane>
 #[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
 struct UiGammaLabel;
 
-/// The decode's shared halves. The pipeline itself is specialised per view on the format it
-/// renders in ([`ViewUiGammaPipeline`]).
+/// The decode's shared parts; the pipeline is specialised per view ([`ViewUiGammaPipeline`]).
 #[derive(Resource)]
 struct UiGammaPipeline {
     layout: BindGroupLayoutDescriptor,
     sampler: Sampler,
     shader: Handle<Shader>,
     fullscreen: FullscreenShader,
-    /// The ramp exponent's 16-byte uniform, rewritten each frame with a queue write (which lands
-    /// before the graph's submit executes) — the same shape `ffx_glow`'s combine uses. One buffer,
-    /// not one per view: [`UiGammaLane`] is on exactly one camera.
+    /// The exponent's 16-byte uniform, queue-written each frame, which lands before the graph's
+    /// submit. One buffer, not one per view: [`UiGammaLane`] is on exactly one camera.
     ramp: Buffer,
 }
 
@@ -139,10 +112,8 @@ impl SpecializedRenderPipeline for UiGammaPipeline {
                 shader: self.shader.clone(),
                 shader_defs: vec![],
                 entry_point: Some("fs_decode".into()),
-                // An 8-bit sRGB target either way: the swapchain's view for the player-UI camera
-                // (`Skip`, 2206), or — for a `Write` camera — its own main texture, which is not
-                // `Hdr` and so carries Bevy's default 8-bit sRGB format, the one that makes the
-                // lane clamp at every blend like the reference.
+                // An 8-bit sRGB target either way (the swapchain, or a `Write` camera's non-`Hdr`
+                // main texture), so the lane clamps at every blend like the reference.
                 targets: vec![Some(ColorTargetState {
                     format,
                     blend: None,
@@ -154,9 +125,8 @@ impl SpecializedRenderPipeline for UiGammaPipeline {
     }
 }
 
-/// The decode pipeline for one view — specialised on where the decode lands (2206,
-/// [`benilla_world::final_pass`]): the swapchain, for the player-UI camera, whose output mode is
-/// `Skip`. Stamped every frame, the way bevy stamps its own `ViewUpscalingPipeline`.
+/// The decode pipeline for one view, specialised on where the decode lands
+/// ([`benilla_world::final_pass`]); stamped every frame, as Bevy stamps `ViewUpscalingPipeline`.
 #[derive(Component)]
 struct ViewUiGammaPipeline(CachedRenderPipelineId);
 
@@ -187,8 +157,7 @@ fn init_pipeline(
             (
                 texture_2d(TextureSampleType::Float { filterable: true }),
                 sampler(SamplerBindingType::Filtering),
-                // The ramp exponent, as a `vec4<f32>` — one scalar, but a uniform struct is
-                // 16-byte aligned and a vec4 says so without a padding field to keep in step.
+                // The exponent as a `vec4<f32>`: a uniform is 16-byte aligned, so no padding field.
                 uniform_buffer_sized(false, Some(std::num::NonZero::new(16).unwrap())),
             ),
         ),
@@ -237,18 +206,16 @@ impl ViewNode for UiGammaNode {
         let pipelines = world.resource::<UiGammaPipeline>();
         let pipeline_cache = world.resource::<PipelineCache>();
         let Some(decode) = pipeline_cache.get_render_pipeline(pipeline.0) else {
-            // Still compiling. Skipping leaves the UI undecoded (over-bright) for a frame or two,
-            // which beats dropping the UI entirely.
+            // Still compiling: the UI stays undecoded, over-bright, for a frame or two.
             return Ok(());
         };
-        // The ramp exponent for this frame (2182). `[g, 0, 0, 0]` — the shader reads `.x`.
+        // This frame's exponent as `[g, 0, 0, 0]`; the shader reads `.x`.
         world.resource::<RenderQueue>().write_buffer(
             &pipelines.ramp,
             0,
             bytemuck::cast_slice(&[lane.gamma, 0.0, 0.0, 0.0]),
         );
-        // Where the decode lands (2206, `final_pass`): the swapchain itself for the player-UI
-        // camera (`Skip`), the ping-pong for a `Write` camera.
+        // The swapchain for the `Skip` player-UI camera, the ping-pong target for a `Write` one.
         let out = FinalPassTarget::resolve(camera, view_target);
         let layout = pipeline_cache.get_bind_group_layout(&pipelines.layout);
         let bind = render_context.render_device().create_bind_group(
@@ -260,7 +227,7 @@ impl ViewNode for UiGammaNode {
                 pipelines.ramp.as_entire_binding(),
             )),
         );
-        // Its diagnostic span: the journal's `gpu_ui` column counts this decode (2008).
+        // The perf journal buckets this span's name into `gpu_ui`.
         let diagnostics = render_context.diagnostic_recorder();
         let scissor = out.scissor_rect();
         let mut pass = render_context
@@ -284,25 +251,10 @@ impl ViewNode for UiGammaNode {
     }
 }
 
-/// Put **Bevy UI** on the gamma lane too: swap the two stock pipelines' shaders for
-/// our gamma-emitting copies.
-///
-/// The glue screens (login / character select / character create) and the loading screen are Bevy UI
-/// trees, not [`crate::ui_pass`] quads, so they never went through `ui_quad.wgsl`'s conversion — they
-/// composited in LINEAR while the rest of the client composited in the reference's gamma bytes. Over
-/// the login scene's bright sky that washed the edit-box fills from byte ~77 to ~138 (measured).
-///
-/// Bevy UI exposes no colour-space hook, so the conversion goes where `ui_quad.wgsl` puts it: the
-/// fragment shader. [`UiPipeline`] and [`UiTextureSlicePipeline`] each hold a public `shader` handle
-/// they clone into every specialisation, so replacing it here — once, at `RenderStartup`, after the
-/// upstream init systems have built the resources — redirects every UI draw with no other change:
-/// art keeps loading as sRGB, colours keep being authored as `Color::srgb`, and the booth's linear
-/// scene image is converted by the same `linear_to_srgb` as everything else.
-///
-/// The shaders are vendored copies (see their headers) — the maintenance cost of Bevy not exposing
-/// the seam. The long-term exit is decision 0068's engine: the reference's glue screens are
-/// themselves FrameXML, so when they migrate onto our own quad pass this whole module's Bevy-UI half
-/// is deleted rather than maintained.
+/// Puts Bevy UI on the gamma lane: the glue and loading screens are Bevy UI trees, not quads, and
+/// would otherwise composite in linear. Bevy UI has no colour-space hook, so this swaps the
+/// `shader` handle [`UiPipeline`] and [`UiTextureSlicePipeline`] clone into every specialisation
+/// for vendored gamma-emitting copies, once, after their init systems.
 fn use_gamma_ui_shaders(
     asset_server: Res<AssetServer>,
     mut node: ResMut<UiPipeline>,
@@ -314,9 +266,7 @@ fn use_gamma_ui_shaders(
 
 pub(crate) struct UiGammaPlugin;
 
-/// Brightness's change callback (2182, 2303). The clamp is OURS and the reference has none —
-/// the reason it costs one is on [`GAMMA_RANGE`], and nothing a player can reach from the panel
-/// meets it.
+/// The `gamma` CVar's change callback, clamped to [`GAMMA_RANGE`].
 pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut gamma: ResMut<DisplayGamma>) {
     if ev.is(benilla_ui::script::CVAR_GAMMA) {
         gamma.0 = ev.num().clamp(*GAMMA_RANGE.start(), *GAMMA_RANGE.end());
@@ -346,16 +296,14 @@ impl Plugin for UiGammaPlugin {
                     .after(init_ui_texture_slice_pipeline),
             )
             .add_render_graph_node::<ViewNodeRunner<UiGammaNode>>(Core2d, UiGammaLabel)
-            // After the quads are composited, in the slot before the output blit's — which a
-            // `Skip` camera leaves empty: the decode IS the output write.
+            // After the quads, before the output blit, which a `Skip` camera skips: the decode is
+            // the output write.
             .add_render_graph_edges(
                 Core2d,
                 (Node2d::EndMainPass, UiGammaLabel, Node2d::Upscaling),
             )
-            // ...and after the Bevy-UI subgraph, whose nodes now write gamma into the same target.
-            // Upstream orders `UiPass` only against `EndMainPass`/`Upscaling`, which leaves it and
-            // the decode mutually unordered — the glue screens would decode or not depending on how
-            // the graph happened to sort. This edge pins it.
+            // And after Bevy UI, which writes gamma into the same target: upstream orders `UiPass`
+            // only against `EndMainPass` and `Upscaling`, leaving it unordered against the decode.
             .add_render_graph_edge(Core2d, NodeUi::UiPass, UiGammaLabel);
     }
 }

@@ -1,6 +1,4 @@
-//! The gossip window's packet handlers (decision 0081 phase 3; in the net handler table since
-//! 2318, moved out of the drain's npc arm file) — each fills the [`GossipState`] the gossip feed
-//! ([`super`]) reads; nothing here touches the VM.
+//! The gossip window's packet handlers: they fill [`GossipState`] and never touch the VM.
 
 use benilla_protocol::messages::{GossipOption, NpcTextBlock};
 use benilla_protocol::{SessionEvent, SessionEventKind};
@@ -10,8 +8,7 @@ use super::GossipState;
 use crate::net::{ClientCommand, GuidIndex, NetCommands, NetHandlerApp, ObjectStore};
 use crate::ui_quest::QuestGiver;
 
-/// Register the gossip handlers — called from [`super::UiGossipPlugin`]. One per kind, plus the
-/// session-end listener.
+/// Register the gossip handlers and the session-end listener.
 pub(super) fn register(app: &mut App) {
     use SessionEventKind as K;
     app.net_handler(K::GossipMenu, on_gossip_menu)
@@ -68,16 +65,15 @@ fn on_gossip_complete(
     }
 }
 
-/// An open gossip menu dies with the socket. A listener on the session end
-/// (a second handler on the kind, after the bridge's own teardown).
+/// The menu closes with the connection.
 fn on_session_end(In(_): In<SessionEvent>, mut gossip: ResMut<GossipState>) {
     gossip.clear_session();
 }
 
-/// A streamed unit's gender (`UNIT_FIELD_BYTES_0` byte 2) by guid — the gossip greeting's column
-/// selector (`0x4e20c1`: tested `== 1` for female, so genderless `2` reads as
-/// male). `0` when the guid isn't streamed in or carries no descriptor yet, which is the same
-/// column the reference takes for a gossip target that isn't a unit at all.
+/// A streamed unit's gender (`UNIT_FIELD_BYTES_0` byte 2), which picks the greeting's column: the
+/// reference tests `== 1` for female (`0x4e20c1`), so genderless 2 reads male. `0` when the guid
+/// is not a streamed unit; the reference's non-unit arm takes the female column only when block
+/// 0 has no male text.
 fn npc_gender(guid: u64, index: &GuidIndex, stores: &Query<&ObjectStore>) -> u8 {
     index
         .0
@@ -87,16 +83,8 @@ fn npc_gender(guid: u64, index: &GuidIndex, stores: &Query<&ObjectStore>) -> u8 
         .unwrap_or(0)
 }
 
-/// A gossip menu opened (`SMSG_GOSSIP_MESSAGE`): fill the [`GossipState`] the gossip feed
-/// ([`super`]) reads. A first visit to the text id sends the ask-once
-/// `CMSG_NPC_TEXT_QUERY` and **the feed fires nothing until [`npc_greeting`] answers it** — a
-/// hidden frame stays hidden, an open one keeps its previous menu painted (B292's hold and
-/// 1994's no-event edge; the mechanics and the reference law live on
-/// [`GossipState::open_menu`]); a revisit serves from the cache and repaints right away.
-/// [`gossip_complete`] closes it.
-///
-/// The greeting is **drawn here**, not at the packet — this is the reference's own moment for it
-/// (`0x4e2010`), and the draw needs both this NPC's gender ([`npc_gender`]) and a fresh roll.
+/// `SMSG_GOSSIP_MESSAGE`: latch the menu, and on a first visit to its text send the query. The
+/// greeting is drawn at menu open, as the reference's `0x4e2010` draws it.
 fn gossip_menu(
     npc: u64,
     text_id: u32,
@@ -120,12 +108,8 @@ fn gossip_menu(
     }
 }
 
-/// The NPC-text answer (`SMSG_NPC_TEXT_UPDATE`) — seed the cache with the whole record, and open
-/// the menu still waiting on it (a late answer for a menu we already closed or switched just
-/// seeds the cache; the next open draws its own line).
-///
-/// The record answers a query we sent for the waiting menu, so its NPC is the one whose gender
-/// picks the column (decision 0081's ask-once flow).
+/// `SMSG_NPC_TEXT_UPDATE`: cache the record and open the menu waiting on it, whose NPC's gender
+/// picks the column.
 fn npc_greeting(
     text_id: u32,
     blocks: Vec<NpcTextBlock>,
@@ -137,8 +121,7 @@ fn npc_greeting(
     gossip.text_arrived(text_id, blocks, npc_gender);
 }
 
-/// `SMSG_GOSSIP_COMPLETE` ends the whole interaction (e.g. right after a quest accept), so the
-/// quest window closes with the gossip menu.
+/// `SMSG_GOSSIP_COMPLETE` ends the whole interaction, so the quest window closes with the menu.
 pub(crate) fn gossip_complete(gossip: &mut GossipState, quest: &mut QuestGiver) {
     debug!("net: gossip complete — closing the menu");
     gossip.clear();

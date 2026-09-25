@@ -1,6 +1,4 @@
-//! The pet system's unit tests — one module for all three concerns, because they share one set of
-//! fixtures (a packed word, a slot view, a `PetSpells` state) and splitting them per module would
-//! fork those three ways.
+//! The pet system's tests, in one module because they share their fixtures.
 
 use benilla_protocol::messages::{
     PetActionEntry, PetSpells, PET_ACT_COMMAND, PET_ACT_DISABLED, PET_ACT_ENABLED, PET_ACT_PASSIVE,
@@ -22,9 +20,7 @@ fn packed(action: u32, kind: u8) -> PetActionEntry {
     PetActionEntry::from(action | (u32::from(kind) << 24))
 }
 
-/// [`slot_view`] for a slot that is **not** showing active — the ordinary case, and the only
-/// one the token/spell/cooldown tests care about. The showing-active leg has its own tests,
-/// which call `slot_view` directly so the flag is visible at the call.
+/// [`slot_view`] for a slot not showing active.
 fn view(
     entry: PetActionEntry,
     bar: &PetSpells,
@@ -53,8 +49,6 @@ fn state(command: u32, react: u32) -> PetSpells {
     }
 }
 
-/// A command token returns GLOBAL NAMES for both name and texture, and is lit exactly when it
-/// IS the pet's current command — the whole reason three command buttons can share one state.
 #[test]
 fn command_tokens_light_on_the_current_command() {
     let bar = state(PET_COMMAND_FOLLOW, PET_REACT_DEFENSIVE);
@@ -81,9 +75,6 @@ fn command_tokens_light_on_the_current_command() {
     assert!(!stay.active, "only the CURRENT command is lit");
 }
 
-/// The Attack button's second clause: the attack latch lights it and arms the call-off fork
-/// **independently of the command state**, which is how a pet told to Follow can still show
-/// Attack lit while it is on something.
 #[test]
 fn the_attack_latch_lights_attack_whatever_the_command_state_says() {
     let following = state(PET_COMMAND_FOLLOW, PET_REACT_DEFENSIVE);
@@ -96,7 +87,6 @@ fn the_attack_latch_lights_attack_whatever_the_command_state_says() {
     assert!(on.active, "the latch lights it even on a FOLLOW command");
     assert!(on.attack_active, "and the next press calls the pet off");
 
-    // The latch never reaches another command's button, however busy the pet is.
     let follow = view(
         packed(PET_COMMAND_FOLLOW, PET_ACT_COMMAND),
         &following,
@@ -108,8 +98,6 @@ fn the_attack_latch_lights_attack_whatever_the_command_state_says() {
     assert!(follow.active, "…but Follow is still the standing command");
 }
 
-/// Reaction tokens use the `PET_MODE_*` keys — the state words — not the right-click menu's
-/// `PET_AGGRESSIVE` imperatives. Identical in enUS, distinguishable only by key.
 #[test]
 fn reaction_tokens_use_the_mode_keys_and_light_on_the_current_react() {
     let bar = state(PET_COMMAND_FOLLOW, PET_REACT_DEFENSIVE);
@@ -135,9 +123,6 @@ fn reaction_tokens_use_the_mode_keys_and_light_on_the_current_react() {
     );
 }
 
-/// A DISABLED bar (bit 27) changes what both token classes report, and neither is a special
-/// case we wrote: the reaction compare's left side is forced to Passive, and the command
-/// compare — unmasked `state >> 8` — is put out of range of every command at once.
 #[test]
 fn a_disabled_bar_reads_passive_and_lights_no_command() {
     let mut bar = state(PET_COMMAND_FOLLOW, PET_REACT_DEFENSIVE);
@@ -175,8 +160,6 @@ fn a_disabled_bar_reads_passive_and_lights_no_command() {
     );
 }
 
-/// `GetPetActionsUsable` — bit 27 OR the pet's own crowd-control flags. The second half is the
-/// leg benilla was missing: a feared/stunned/confused pet's bar greys.
 #[test]
 fn usability_is_the_disabled_bit_and_the_pets_crowd_control() {
     let mut bar = PetBar {
@@ -192,15 +175,13 @@ fn usability_is_the_disabled_bit_and_the_pets_crowd_control() {
     for flag in [0x0004_0000, 0x0040_0000, 0x0080_0000] {
         assert!(!actions_usable(&bar, Some(flag)), "flag {flag:#x} disables");
     }
-    // POSSESSED is deliberately not one of them — that IS the pet-bar case.
+    // Those three are stunned, confused, fleeing; POSSESSED is not among them.
     assert!(actions_usable(&bar, Some(0x0100_0000)));
 
     bar.spells.state |= PET_STATE_BAR_DISABLED;
     assert!(!actions_usable(&bar, Some(0)));
 }
 
-/// A spell slot: real name, rank subtext, icon PATH — and the autocast pair read off **bits
-/// 31/30**, not the type byte. `isActive` is nil on every spell path.
 #[test]
 fn spell_slots_read_their_autocast_off_bits_31_and_30() {
     let bar = state(PET_COMMAND_FOLLOW, PET_REACT_DEFENSIVE);
@@ -229,7 +210,6 @@ fn spell_slots_read_their_autocast_off_bits_31_and_30() {
     );
     assert!(off.autocast_allowed && !off.autocast_enabled);
 
-    // A passive pet spell shows, but can never autocast — no ring, no sparkle.
     let passive = view(
         packed(3010, PET_ACT_PASSIVE),
         &bar,
@@ -240,9 +220,7 @@ fn spell_slots_read_their_autocast_off_bits_31_and_30() {
     assert!(!passive.autocast_allowed && !passive.autocast_enabled);
 }
 
-/// The two routes to an empty-looking button: the client's zero WORD, and vmangos's own
-/// `(0, ACT_DISABLED)` filler, which takes the spell branch and misses the catalog. Both must
-/// draw nothing — reading either one wrong puts four "?" buttons mid-bar.
+/// The client's zero word, and vmangos's `(0, ACT_DISABLED)` filler, which misses the catalog.
 #[test]
 fn both_kinds_of_empty_slot_draw_nothing() {
     let bar = state(PET_COMMAND_FOLLOW, PET_REACT_DEFENSIVE);
@@ -259,9 +237,7 @@ fn both_kinds_of_empty_slot_draw_nothing() {
     assert_eq!(
         view(filler, &bar, None, None, false),
         PetActionView {
-            // Draws nothing and still CARRIES its word — this is the exact
-            // slot the drop core hunts for as a relocation candidate (type 1, low 16 zero),
-            // so zeroing it here would both send the wrong word and lose the candidate.
+            // The word stays: it is the drag's relocation candidate.
             packed: filler.packed,
             ..Default::default()
         },
@@ -269,8 +245,6 @@ fn both_kinds_of_empty_slot_draw_nothing() {
     );
 }
 
-/// A spell the catalog cannot name draws nothing rather than a nameless icon — and with it
-/// goes the autocast pair, which the client also gates on the record resolving.
 #[test]
 fn an_unresolvable_spell_draws_nothing() {
     let bar = state(PET_COMMAND_FOLLOW, PET_REACT_DEFENSIVE);
@@ -286,9 +260,7 @@ fn an_unresolvable_spell_draws_nothing() {
     assert!(!v.autocast_allowed && !v.autocast_enabled);
 }
 
-/// A type outside 1–7 is inert. The client's own default arm under-pushes here (`0x4bde6f`);
-/// we answer the empty slot instead, and in particular never reach the spell catalog with an
-/// arbitrary number.
+/// A type outside 1-7 draws empty; the reference's default arm under-pushes there (`0x4bde6f`).
 #[test]
 fn an_unknown_type_byte_is_inert() {
     let bar = state(PET_COMMAND_FOLLOW, PET_REACT_DEFENSIVE);
@@ -303,8 +275,6 @@ fn an_unknown_type_byte_is_inert() {
     );
 }
 
-/// The slot index map is 1-based and bounded — a stale index from the VM cannot read past the
-/// ten words or wrap into slot 10.
 #[test]
 fn slot_lookup_is_one_based_and_bounded() {
     let mut bar = PetBar {
@@ -322,10 +292,6 @@ fn slot_lookup_is_one_based_and_bounded() {
     assert!(slot_entry_mut(&mut bar, 11).is_none());
 }
 
-/// The local latch, which exists because the server confirms none of it (module doc), written
-/// with the client's own masks: a command press moves bits 8–15 and keeps byte 0 **and bit
-/// 27**, a reaction press moves byte 0 only, a spell press moves neither — and DISMISS moves
-/// nothing, because it ends the pet rather than becoming its standing order.
 #[test]
 fn a_press_latches_the_state_the_server_never_echoes() {
     let mut bar = PetBar {
@@ -367,16 +333,8 @@ fn a_press_latches_the_state_the_server_never_echoes() {
     );
 }
 
-/// **The director's report: clicking a lit Follow or Passive un-toggles it.**
-///
-/// The CheckButton flips itself before `OnClick` runs and the reference's first line is
-/// `this:SetChecked(0)`, so every press starts by taking the light off. `0x4bc940`/`0x4bc960`
-/// put it back by signalling `PET_BAR_UPDATE` **unconditionally** — no old-vs-new compare — so
-/// pressing the mode the pet is already in still repaints. Our feed dedups on what it pushed,
-/// so without a counter in that key the light had no way back.
-///
-/// A press that the reference does NOT signal must not bump: DISMISS and a spell reach
-/// `0x4bd444` straight, and a hunter's ATTACK skips `0x4bd429` with the latch it never raises.
+/// `OnClick`'s `SetChecked(0)` unlights every press; `0x4bc940`/`0x4bc960` relight it by
+/// signalling unconditionally, and a hunter's Attack skips the signal at `0x4bd429`.
 #[test]
 fn every_press_the_reference_signals_forces_a_repaint() {
     let mut bar = PetBar {
@@ -385,8 +343,7 @@ fn every_press_the_reference_signals_forces_a_repaint() {
     };
     let signals = |b: &PetBar| b.bar_signals;
 
-    // Pressing the mode the pet is ALREADY in: nothing about the state moves, and the signal
-    // still fires. This is the whole bug.
+    // The mode the pet is already in: the state does not move, the signal still fires.
     let before = signals(&bar);
     latch_press(&mut bar, packed(PET_COMMAND_FOLLOW, PET_ACT_COMMAND), false);
     assert_eq!(bar.spells.command_state(), PET_COMMAND_FOLLOW, "unmoved");
@@ -416,14 +373,12 @@ fn every_press_the_reference_signals_forces_a_repaint() {
         "Dismiss, a spell and a pet's Attack all reach 0x4bd444 without signalling"
     );
 
-    // A POSSESSED unit's Attack does signal — `0x4bd429`, one instruction before the latch.
+    // A possessed unit's Attack signals (`0x4bd429`).
     latch_press(&mut bar, packed(PET_COMMAND_ATTACK, PET_ACT_COMMAND), true);
     assert_ne!(signals(&bar), before);
 }
 
-/// ATTACK is the one command press that can raise the attack latch — **and only while we are
-/// possessing the unit** (`0x4bd420`). On an ordinary pet bar the arm is unreachable, which is
-/// the whole reason its button never checks.
+/// The latch's possession gate is `0x4bd420`.
 #[test]
 fn only_a_possessed_units_attack_press_raises_the_latch() {
     let mut bar = PetBar {
@@ -433,7 +388,6 @@ fn only_a_possessed_units_attack_press_raises_the_latch() {
     let attack = packed(PET_COMMAND_ATTACK, PET_ACT_COMMAND);
     assert!(!bar.attacking);
 
-    // A hunter's pet: the press goes out (the caller sends regardless) and latches nothing.
     latch_press(&mut bar, attack, false);
     assert!(
         !bar.attacking,
@@ -449,11 +403,7 @@ fn only_a_possessed_units_attack_press_raises_the_latch() {
     assert!(!bar.attacking, "only ATTACK raises it");
 }
 
-/// `0x5ee5a0` itself — the compare that decides all of the above.
-///
-/// This is the fact the pet bar was missing: the reference is not asking "is this my pet", it
-/// is asking "is this the unit I am *driving*". A hunter pet answers no on the flag, so no
-/// hunter press ever reaches the latch.
+/// `0x5ee5a0` asks for the unit we possess, not the one we own.
 #[test]
 fn the_latch_gate_is_possession_not_ownership() {
     const FLAGS: u16 = 46;
@@ -463,7 +413,7 @@ fn the_latch_gate_is_possession_not_ownership() {
         |pairs: &[(u16, u32)]| ObjectStore(benilla_protocol::ObjectFields::from_pairs(pairs));
     let me = Some(0x77u64);
 
-    // An ordinary hunter pet: ours, in combat, not possessed. The answer is no.
+    // An ordinary hunter pet: ours, in combat, not possessed.
     let hunter_pet = unit(&[
         (CREATEDBY, 0x77),
         (CREATEDBY + 1, 0),
@@ -471,7 +421,7 @@ fn the_latch_gate_is_possession_not_ownership() {
     ]);
     assert!(!possessing(Some(&hunter_pet), me));
 
-    // The same pet under Eyes of the Beast — possessed, and now the latch arm is live.
+    // The same pet under Eyes of the Beast.
     let driven = unit(&[
         (CREATEDBY, 0x77),
         (CREATEDBY + 1, 0),
@@ -479,11 +429,11 @@ fn the_latch_gate_is_possession_not_ownership() {
     ]);
     assert!(possessing(Some(&driven), me));
 
-    // A mind-controlled mob: CHARMEDBY is the primary leg, so it needs no CREATEDBY at all.
+    // A mind-controlled mob: CHARMEDBY comes first, so it needs no CREATEDBY.
     let charmed = unit(&[(CHARMEDBY, 0x77), (CHARMEDBY + 1, 0), (FLAGS, 0x0100_0000)]);
     assert!(possessing(Some(&charmed), me));
 
-    // Somebody ELSE's possessed unit is not ours to latch for.
+    // Another player's possessed unit.
     let theirs = unit(&[
         (CHARMEDBY, 0x99),
         (CHARMEDBY + 1, 0),
@@ -491,19 +441,9 @@ fn the_latch_gate_is_possession_not_ownership() {
     ]);
     assert!(!possessing(Some(&theirs), me));
 
-    // No descriptor is no possession — the honest reading of missing data, and the same
-    // posture the rest of the bar takes.
     assert!(!possessing(None, me));
 }
 
-/// **The director's report, twice over: the Attack button is never a toggle.**
-///
-/// Reported by eye against the reference client — *"there is no way in the ref client for the
-/// attack button to stay lit up/toggled like the follow or stay… it's simply a button to send
-/// the pet"* — and the first fix was wrong because it took the latch's *lifetime* to be the
-/// question. It is not: the latch never rises at all on a pet bar, because `0x4bd420` gates it
-/// on possession. This drives a whole pet's worth of ATTACK presses and asserts the button
-/// stays dark through every one.
 #[test]
 fn a_pets_attack_button_never_lights() {
     let mut bar = PetBar {
@@ -535,14 +475,10 @@ fn a_pets_attack_button_never_lights() {
         "and Follow keeps the light that is actually a mode's"
     );
 
-    // Stay is still reachable as a mode — the command byte was never hijacked.
     latch_press(&mut bar, packed(PET_COMMAND_STAY, PET_ACT_COMMAND), false);
     assert_eq!(bar.spells.command_state(), PET_COMMAND_STAY);
 }
 
-/// The **possess** bar is the other half of the same button, and it does light — which is why
-/// the `isActive` clause, `IsPetAttackActive` and `PetStopAttack` are all still modelled rather
-/// than deleted as dead weight.
 #[test]
 fn a_possessed_units_attack_button_does_light() {
     let mut bar = PetBar {
@@ -560,20 +496,14 @@ fn a_possessed_units_attack_button_does_light() {
         "the latch is not the command byte — Follow keeps its own light"
     );
 
-    // The call-off: `PetStopAttack` clears the latch, and the latch was the ONLY thing lighting
-    // the button — so it goes out.
+    // `PetStopAttack` lowers the latch, the only thing lighting Attack.
     bar.attacking = false;
     let called_off = view(attack, &bar.spells, None, None, bar.attacking);
     assert!(!called_off.active);
     assert!(!called_off.attack_active);
 }
 
-/// **A refused ATTACK costs everything** — no packet, no latch, no light. The reference's veto
-/// jumps to the function epilogue rather than the shared send (`0x4bd414 je 0x4bd4c6`), so a
-/// pet that is dead, stunned, feared, confused, pacified or charmed away simply does not take
-/// the order, and the button must not report that it did.
-///
-/// This is the join decision 0998 could not test: the gate and the latch, composed.
+/// The veto jumps past the send (`0x4bd414 je 0x4bd4c6`).
 #[test]
 fn a_refused_attack_neither_sends_nor_lights_the_button() {
     let mut bar = PetBar {
@@ -597,20 +527,13 @@ fn a_refused_attack_neither_sends_nor_lights_the_button() {
         "a refusal cannot move the standing command either"
     );
 
-    // The same press with the gate clear is the ordinary attack, unchanged. The two gates are
-    // NOT symmetric: this one costs the packet, possession costs only the latch.
+    // With the gate clear, the same press sends and latches.
     assert!(commit_press(&mut bar, attack, false, true));
     assert!(bar.attacking);
     assert!(view(attack, &bar.spells, None, None, bar.attacking).active);
 }
 
-/// **Touching your target calls the pet off** — `0x493910`'s `0x493a18`, the second call site
-/// of `PetStopAttack`'s core and the one benilla was missing.
-///
-/// This is the mechanism behind the director's report that Attack is not a toggle. Without it
-/// the latch had only two ways down (the lit button's own second press and a new pet), so an
-/// order lit the button for the rest of the pet's life and read exactly like the Stay/Follow
-/// modes it is supposed to contrast with.
+/// The old-target clear's `PetStopAttack` (`0x493910`, at `0x493a18`).
 #[test]
 fn touching_your_target_calls_the_pet_off() {
     let (tx, rx) = crossbeam_channel::unbounded();
@@ -624,13 +547,12 @@ fn touching_your_target_calls_the_pet_off() {
         ..Default::default()
     };
 
-    // Selecting when nothing was selected is NOT a clear — `0x493937` returns before anything.
+    // Selecting from nothing is not a clear (`0x493937`).
     assert!(!old_target_cleared(None, Some(7)));
-    // Replacing one target with another IS, and so is dropping it: the guard is on the OLD
-    // selection existing, never on the new one being empty.
+    // Replacing a selection is, and so is dropping it.
     assert!(old_target_cleared(Some(7), Some(9)));
     assert!(old_target_cleared(Some(7), None));
-    // A no-op re-select never reaches the clear at all (`0x493540`'s own dedup).
+    // A re-select never reaches the clear (`0x493540`).
     assert!(!old_target_cleared(Some(7), Some(7)));
 
     assert!(stop_pet_attack(&mut bar, &commands));
@@ -640,20 +562,15 @@ fn touching_your_target_calls_the_pet_off() {
         "and the server is told, with the BAR's guid"
     );
 
-    // The button is dark now, because the latch was the only thing lighting it.
     let attack = packed(PET_COMMAND_ATTACK, PET_ACT_COMMAND);
     assert!(!view(attack, &bar.spells, None, None, bar.attacking).active);
 
-    // Re-clearing is a no-op: `0x4bd65e` returns before the send when the latch is already
-    // down, so a target change per second does not spray packets.
+    // With the latch down it sends nothing (`0x4bd65e`).
     assert!(!stop_pet_attack(&mut bar, &commands));
     assert!(rx.try_recv().is_err());
 }
 
-/// `PET_ATTACK_START`/`STOP` read the pet's **server-owned** in-combat flag, and only for a
-/// unit we own — the correction to decision 0990, which derived them from the local click
-/// latch. The owner test uses SUMMONEDBY as its fallback, which is the callback's own choice
-/// and not the one `0x5ee5a0` makes for the same-shaped read.
+/// The owner test falls back to SUMMONEDBY, not `0x5ee5a0`'s CREATEDBY.
 #[test]
 fn the_attack_events_read_the_pets_combat_flag_not_the_click_latch() {
     const FLAGS: u16 = 46;
@@ -663,17 +580,17 @@ fn the_attack_events_read_the_pets_combat_flag_not_the_click_latch() {
         |pairs: &[(u16, u32)]| ObjectStore(benilla_protocol::ObjectFields::from_pairs(pairs));
     let me = Some(0x77u64);
 
-    // Ours by SUMMONEDBY, fighting / not fighting.
+    // Ours by SUMMONEDBY, fighting or not.
     let mine = |flags: u32| unit(&[(SUMMONEDBY, 0x77), (SUMMONEDBY + 1, 0), (FLAGS, flags)]);
     assert_eq!(
         pet_combat_flag(&mine(UNIT_FLAG_PET_IN_COMBAT), me),
         Some(true)
     );
     assert_eq!(pet_combat_flag(&mine(0), me), Some(false));
-    // An unrelated flag bit is not combat — the callback tests one bit.
+    // The callback tests one bit.
     assert_eq!(pet_combat_flag(&mine(0x1000), me), Some(false));
 
-    // Somebody else's minion never fires, however hard it is fighting.
+    // Another player's minion never fires.
     let theirs = unit(&[
         (SUMMONEDBY, 0x99),
         (SUMMONEDBY + 1, 0),
@@ -681,8 +598,7 @@ fn the_attack_events_read_the_pets_combat_flag_not_the_click_latch() {
     ]);
     assert_eq!(pet_combat_flag(&theirs, me), None);
 
-    // CHARMEDBY wins over SUMMONEDBY: a mob WE mind-controlled is ours even though it was
-    // summoned by nobody, and a minion charmed AWAY from us stops being ours.
+    // CHARMEDBY wins over SUMMONEDBY, both ways.
     let charmed_by_me = unit(&[
         (CHARMEDBY, 0x77),
         (CHARMEDBY + 1, 0),
@@ -699,10 +615,6 @@ fn the_attack_events_read_the_pets_combat_flag_not_the_click_latch() {
     assert_eq!(pet_combat_flag(&stolen, me), None);
 }
 
-/// Only the ATTACK order consults the validator. The reference's type-7 arm branches exactly
-/// twice, and every other action — the two modes, DISMISS, and anything `>= 4` — leaves down a
-/// path that sends unconditionally. Gating them too would make a stunned pet impossible to
-/// dismiss or to put back on Follow, which is not what the binary does.
 #[test]
 fn only_the_attack_order_is_gated() {
     assert!(is_attack_order(packed(PET_COMMAND_ATTACK, PET_ACT_COMMAND)));
@@ -718,17 +630,15 @@ fn only_the_attack_order_is_gated() {
             "command {action} sends unconditionally"
         );
     }
-    // A REACTION slot whose action happens to equal ATTACK's 2 (that is Aggressive) is a
-    // different word entirely — the type byte decides, never the action alone.
+    // Aggressive shares Attack's action 2; the type decides.
     assert!(!is_attack_order(packed(
         PET_REACT_AGGRESSIVE,
         PET_ACT_REACTION
     )));
 }
 
-/// A pet with one aura in slot 0. `AURAFLAGS` is nibble-packed 8 slots to the u32, so slot 0's
-/// nibble is the low four bits: `0x2` is an effect-index bit (what makes the slot *live*) and
-/// `0x1` is `AFLAG_CANCELABLE` — the bit `0x4bcea0` actually tests.
+/// A pet with one aura in slot 0. `AURAFLAGS` packs a nibble per slot: `0x2` is an effect-index
+/// bit (the slot is live), `0x1` is `AFLAG_CANCELABLE`, the bit `0x4bcea0` tests.
 fn pet_running(spell_id: u32, nibble: u32) -> ObjectStore {
     const AURA: u16 = 47;
     const AURAFLAGS: u16 = 95;
@@ -738,7 +648,7 @@ fn pet_running(spell_id: u32, nibble: u32) -> ObjectStore {
     ]))
 }
 
-/// A spell with an active icon — the shape the predicate needs before it can ever fire.
+/// A spell with an active icon, which the predicate requires.
 fn toggle_spell() -> benilla_formats::SpellDisplay {
     benilla_formats::SpellDisplay {
         active_icon_id: 122,
@@ -747,9 +657,6 @@ fn toggle_spell() -> benilla_formats::SpellDisplay {
     }
 }
 
-/// The showing-active predicate, all four of its ways to say no. The pet-side twin of
-/// `0x4e55f0` is the *same function* we already had, so what these assert is the wiring: the
-/// pet's store goes in, and the three tests are the reference's three.
 #[test]
 fn a_pet_spell_shows_active_only_while_it_is_a_live_cancelable_aura_on_the_pet() {
     let slot = packed(2645, benilla_protocol::messages::PET_TYPE_SPELL_FIRST);
@@ -761,11 +668,10 @@ fn a_pet_spell_shows_active_only_while_it_is_a_live_cancelable_aura_on_the_pet()
         Some(2645)
     );
 
-    // No ActiveIconID: never a toggle — and that gate is on the SEND too, so this spell
-    // re-casts rather than cancelling however live its aura is (the reference's own quirk).
+    // No ActiveIconID: never active, so a press re-casts.
     let plain = spell("Growl", None);
     assert_eq!(active_aura_press(slot, Some(&running), Some(&plain)), None);
-    // Live but NOT cancelable (effect-index bit only).
+    // Live but not cancelable.
     let uncancelable = pet_running(2645, 0x2);
     assert_eq!(active_aura_press(slot, Some(&uncancelable), Some(&d)), None);
     // A different spell's aura, and no pet descriptor at all.
@@ -774,16 +680,13 @@ fn a_pet_spell_shows_active_only_while_it_is_a_live_cancelable_aura_on_the_pet()
         None
     );
     assert_eq!(active_aura_press(slot, None, Some(&d)), None);
-    // A COMMAND slot whose action equals the spell id is a different word entirely — the type
-    // byte decides here exactly as it does for the ATTACK gate.
+    // A command slot with the same action: the type decides.
     assert_eq!(
         active_aura_press(packed(2645, PET_ACT_COMMAND), Some(&running), Some(&d)),
         None
     );
 }
 
-/// The icon swap itself: `ActiveIconID`'s texture replaces `SpellIconID`'s while the spell is
-/// running, and the button keeps everything else it had.
 #[test]
 fn an_active_pet_spell_draws_its_active_icon() {
     let slot = packed(2645, benilla_protocol::messages::PET_TYPE_SPELL_FIRST);
@@ -804,10 +707,7 @@ fn an_active_pet_spell_draws_its_active_icon() {
     );
 }
 
-/// An active spell whose `ActiveIconID` does not resolve in `SpellIcon.dbc` pushes **nil**,
-/// not the inactive art. The reference looks up whichever id the predicate chose and gives up
-/// if that lookup fails (`0x4bdd50`) — falling back would draw "not running" on a running
-/// spell, which is worse than drawing nothing.
+/// The reference pushes nil when the chosen icon is not in `SpellIcon.dbc` (`0x4bdd50`).
 #[test]
 fn an_unresolvable_active_icon_hides_rather_than_falling_back() {
     let slot = packed(2645, benilla_protocol::messages::PET_TYPE_SPELL_FIRST);
@@ -822,70 +722,46 @@ fn an_unresolvable_active_icon_hides_rather_than_falling_back() {
         .is_none());
 }
 
-/// **The menu's fork, and the direction of each mask**.
-///
-/// This is the test that exists because the two bits are one nibble apart and the failure is
-/// silent both ways: a hunter offered *Dismiss* loses the taming chain's only exit, and a warlock
-/// offered *Abandon* is offered a row the reference never shows them.
 #[test]
 fn the_menu_fork_reads_abandon_and_rename_off_the_right_bits() {
-    // A freshly tamed hunter pet carries both: abandon/rename/paperdoll show, dismiss hides.
+    // A freshly tamed hunter pet carries both.
     assert_eq!(menu_predicates(0x30), (true, true));
-    // …and after its first rename the server clears only the rename bit.
+    // After its first rename the server clears the rename bit.
     assert_eq!(menu_predicates(0x20), (true, false));
-    // A warlock's demon carries neither — the whole menu flips to Dismiss.
+    // A warlock's demon carries neither.
     assert_eq!(menu_predicates(0), (false, false));
-    // The masks are not interchangeable, which is the point of the test.
     assert_eq!(menu_predicates(0x10), (false, true));
-    // Neighbouring flags are not these two: 0x8 is PLAYER_CONTROLLED (on every pet) and 0x40 is
-    // PLUS_MOB. Reading the pair as a byte rather than as two bits would swallow both.
+    // 0x8 is PLAYER_CONTROLLED, on every pet; 0x40 is PLUS_MOB.
     assert_eq!(menu_predicates(0x8 | 0x40), (false, false));
 }
 
-/// The rename signal: a pet's cached name is dropped when *that pet's* timestamp moves, and on no
-/// other transition. The guid half of the pair is what keeps the NEXT pet from reading as a
-/// rename of the last one.
 #[test]
 fn only_the_same_pets_moving_timestamp_reads_as_a_rename() {
-    // Nothing seen before — a login, or the pet's object just streamed.
+    // Nothing seen before: a login, or the pet just streamed.
     assert!(!was_renamed(None, (0xF14, Some(100))));
-    // The same pet, the same stamp: the ordinary frame, which is nearly all of them.
     assert!(!was_renamed(Some((0xF14, Some(100))), (0xF14, Some(100))));
-    // The same pet, a moved stamp: the rename.
     assert!(was_renamed(Some((0xF14, Some(100))), (0xF14, Some(200))));
-    // A field that had never been sent starting to arrive is also a move — a pet named for the
-    // first time goes from absent to a stamp, and its cached name is just as stale.
+    // A stamp first arriving is a move: a pet named for the first time.
     assert!(was_renamed(Some((0xF14, None)), (0xF14, Some(200))));
-    // A DIFFERENT pet is never a rename, whatever the stamps do — dismiss one pet, summon
-    // another, and the second must not have its name dropped on the first's account.
+    // A different pet is never a rename, whatever the stamps do.
     assert!(!was_renamed(Some((0xF14, Some(100))), (0xABC, Some(200))));
     assert!(!was_renamed(Some((0xF14, Some(100))), (0xABC, Some(100))));
 }
 
-/// **Dismiss is a bar press with no button.** `PetDismiss 0x4be4d0` opens no packet: it stages
-/// the packed word `0x07000003` and hands it to the same dispatcher every pet-bar click uses, so it
-/// leaves as `CMSG_PET_ACTION`.
-///
-/// The literal is pinned here against the word the constants build, because the two ways of saying
-/// it are the two halves of the finding, and the first draft of this feature sent
-/// `CMSG_PET_ABANDON` for both rows — which vmangos would have honoured, silently.
+/// `PetDismiss` (`0x4be4d0`) stages `0x07000003` for the bar's dispatcher.
 #[test]
 fn the_dismiss_word_is_the_carved_literal() {
     assert_eq!(
         PET_COMMAND_DISMISS | (u32::from(PET_ACT_COMMAND) << 24),
         0x0700_0003,
     );
-    // …and it decodes back as the command token it is, through the client's own masked read.
     let entry = PetActionEntry::from(0x0700_0003u32);
     assert_eq!(entry.kind(), PET_ACT_COMMAND);
     assert_eq!(entry.action(), PET_COMMAND_DISMISS);
     assert!(!entry.is_spell(), "dismiss is a command, never a cast");
 }
 
-/// The bar's two events are two edges (1953): a change of the slots fires `PET_BAR_UPDATE`; a
-/// change of the cooldown triples alone fires `PET_BAR_UPDATE_COOLDOWN` — the reference's
-/// cooldown-subsystem fire for the pet bank (`0x6e2e8e`) — and the
-/// pushed state carries the new triple either way.
+/// The reference fires `PET_BAR_UPDATE_COOLDOWN` from the pet's cooldown bank (`0x6e2e8e`).
 #[test]
 fn a_cooldown_alone_fires_the_cooldown_event_and_not_the_bar_update() {
     use bevy::prelude::*;
@@ -960,12 +836,7 @@ fn a_cooldown_alone_fires_the_cooldown_event_and_not_the_bar_update() {
     assert_eq!(enable, 1);
 }
 
-/// **A bar toggle reaches the spellbook**: after the
-/// local write-back, `0x4bcc19` calls `0x4bd190(&bar[slot])`, which scans the raw pet-spell
-/// array backwards for the entry equal to the slot under `& 0x3FFFFFFF` and copies the slot's
-/// FULL word into it. The book renders from that array, so without the copy the Pet tab kept
-/// the old autocast ring until the next `SMSG_PET_SPELLS`. The book→bar direction is
-/// `ui_pet_book::flip_autocast`; this is its twin.
+/// `0x4bcc19` calls `0x4bd190`, which copies the toggled word into the pet spellbook.
 #[test]
 fn a_bar_autocast_toggle_reaches_the_pet_spellbook() {
     const CLAW: u32 = 16827;
@@ -996,20 +867,16 @@ fn a_bar_autocast_toggle_reaches_the_pet_spellbook() {
         "a different spell's book entry is untouched"
     );
 
-    // And back on: the copy is the full word, both directions.
     toggle_slot_autocast(&mut bar, 4);
     assert!(bar.spells.spells[1].autocast_on());
 
-    // `0x4bcbf1`: a word without bit 31 aborts before anything is written, book included.
+    // `0x4bcbf1`: a word without bit 31 aborts before any write, book included.
     bar.spells.bar[5] = packed(3025, PET_ACT_PASSIVE);
     bar.spells.spells.push(packed(3025, PET_ACT_PASSIVE));
     assert!(toggle_slot_autocast(&mut bar, 6).is_none());
     assert_eq!(bar.spells.spells[2], packed(3025, PET_ACT_PASSIVE));
 }
 
-/// **The pet bar dies with the session.** Only the zero-guid `SMSG_PET_SPELLS` cleared it, and a
-/// dropped socket never sends one — so the next session kept the old pet's bar: presses went out
-/// as `CMSG_PET_ACTION` to a guid that no longer exists, and the stable read `has_live_pet`.
 #[test]
 fn the_session_end_tears_the_pet_bar_down() {
     let mut app = bevy::prelude::App::new();

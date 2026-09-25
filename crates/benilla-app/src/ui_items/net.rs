@@ -1,7 +1,5 @@
-//! The item feed's packet handlers (in the net handler table since 2319; the refusal moved out of
-//! the drain's loot arm file) — `SMSG_INVENTORY_CHANGE_FAILURE` onto the equip-error line, the
-//! pending item locks, and the loot latch's sixth clear; and `SMSG_OPEN_CONTAINER` onto the
-//! `BAG_OPEN` queue.
+//! The item packet handlers: `SMSG_INVENTORY_CHANGE_FAILURE` onto the error line, the pending
+//! item locks and the loot latch, and `SMSG_OPEN_CONTAINER` onto the `BAG_OPEN` queue.
 
 use benilla_protocol::{ObjectFields, SessionEvent, SessionEventKind};
 use bevy::prelude::*;
@@ -11,16 +9,14 @@ use crate::net::{NetHandlerApp, ObjectStore, SelfGuid, SelfPlayer};
 use crate::pending_item_ops::{LockTransitions, PendingItemOps};
 use crate::ui_loot::LootLatch;
 
-/// Register the handlers — called from [`super::UiItemsPlugin`].
 pub(super) fn register(app: &mut App) {
     app.net_handler(SessionEventKind::InventoryFailure, on_inventory_failure)
         .net_handler(SessionEventKind::OpenContainer, on_open_container)
         .net_handler(SessionEventKind::Disconnected, on_session_end);
 }
 
-/// The pending item locks die with the socket — a listener on the session end (a second handler on
-/// the kind, after the bridge's own teardown). The unlock transitions still queued for the feed go
-/// too: they name the old session's slots, and the next session's VM starts with nothing locked.
+/// The item locks and the queued unlocks die with the session: the reference's lock is item-object
+/// state (`item+0x314`), and the objects are rebuilt at every world entry.
 fn on_session_end(
     In(_): In<SessionEvent>,
     mut pending: ResMut<PendingItemOps>,
@@ -30,9 +26,8 @@ fn on_session_end(
     lock_cleared.0.clear();
 }
 
-/// The containers the server told us to open (`SMSG_OPEN_CONTAINER`), by container id, waiting
-/// for the feed ([`super::feed::feed_containers`]) to fire `BAG_OPEN(id)` through the VM — this
-/// handler has no `UiScript`, the [`LockTransitions`] shape.
+/// Container ids from `SMSG_OPEN_CONTAINER`, for [`super::feed::feed_containers`] to fire as
+/// `BAG_OPEN(id)`: this handler has no `UiScript`.
 #[derive(Resource, Default)]
 pub(crate) struct BagOpens(pub(crate) Vec<i64>);
 
@@ -51,13 +46,9 @@ fn on_open_container(
     }
 }
 
-/// The reference's `BAG_OPEN` raiser `0x4f9410`, transcribed: our own guid names the
-/// backpack, container **0**; otherwise the guid is looked up in the ten bag slots — the four
-/// equipped bags (`PLAYER_FIELD_INV_SLOT_HEAD` 19..22 → containers **1..4**) and the six bank
-/// bags (→ **5..10**), the same numbering `BAG_CLOSED` uses — and a guid in none of them fires
-/// nothing. vmangos sends the packet from `HandleAutoEquipItemOpcode` when the destination is a
-/// bag slot, i.e. when a bag gets equipped, which is why the stock `ContainerFrame_OnEvent`
-/// answers `BAG_OPEN` with `Show()` on the frame carrying that id.
+/// The reference's `BAG_OPEN` raiser (`0x4f9410`): our own guid is the backpack (0), an equipped
+/// bag (slots 19..22) is 1..4, a bank bag 5..10, and any other guid fires nothing. vmangos sends
+/// the packet when an auto-equip puts a bag in a bag slot.
 pub(super) fn container_of(
     self_guid: Option<u64>,
     store: Option<&ObjectFields>,
@@ -104,14 +95,9 @@ fn on_inventory_failure(
     }
 }
 
-/// The server refused an inventory operation (`SMSG_INVENTORY_CHANGE_FAILURE` — equip level,
-/// proficiency, bag full, …): the UI error line's inventory vocabulary, the equip twin of the
-/// cast-result failure path. Also the pending-lock's failure-driven clear (decision 0216 §4 /
-/// 0218 §3): every arrival here already has reason ≠ 0 (reason 0 is filtered before this event
-/// exists at all — `benilla_protocol::events`'s `if reason != 0` guard), so it always tries a
-/// [`PendingItemOps::clear_by_failure`]. This site has no `UiScript` to fire `ITEM_LOCK_CHANGED`
-/// through, so the transitioned slots queue in [`LockTransitions`] for the container feed
-/// ([`super::feed::feed_containers`]) to drain and fire next time it runs.
+/// A refused inventory operation (reason 0 never arrives: `benilla_protocol::events` drops it):
+/// queues the error line and clears the item's pending lock, the unlocked slots waiting in
+/// [`LockTransitions`] for [`super::feed::feed_containers`], since this site has no `UiScript`.
 fn inventory_failure(
     reason: u8,
     required_level: Option<u32>,
@@ -129,10 +115,7 @@ fn inventory_failure(
         bag_slot,
     });
     lock_cleared.0.extend(pending.clear_by_failure(item_guid));
-    // The sixth loot-latch clear (`0x5e3a84`): when
-    // the packet's **first item guid** is the object we are looting, the session ends here. It is
-    // how an item-container loot (a lockbox) closes when the move out of it fails — the one clear
-    // the 1471 census was missing. Guid-matched, as the bytes are.
+    // A failure whose first item guid is the looted item (a lockbox) ends the loot (`0x5e3a84`).
     if item_guid != 0 {
         latch.clear_for(item_guid);
     }
@@ -142,8 +125,6 @@ fn inventory_failure(
 mod tests {
     use super::*;
 
-    /// The sixth clear (`0x5e3a84`): an inventory-move failure whose first item guid IS the loot
-    /// target ends that session. Guid-matched, so an unrelated bag failure leaves it alone.
     #[test]
     fn an_inventory_failure_on_the_looted_object_clears_the_latch() {
         const LOCKBOX: u64 = 0x4000_0000_0000_0007;
@@ -177,11 +158,7 @@ mod tests {
         );
         assert_eq!(latch.0, None);
     }
-    /// **The item locks die with the session.** The lock is item-object state in the reference
-    /// (`item+0x314`), and the objects are rebuilt at every world entry — but ours is a resource,
-    /// and only a resolving field update, a failure or the loot close cleared it. A lockbox opened
-    /// in the frame the socket died never saw any of those, so it stayed greyed and locked for
-    /// the whole next session. Driven through the real registration.
+    /// Driven through the real registration.
     #[test]
     fn the_session_end_drops_every_item_lock() {
         let mut app = App::new();
@@ -224,7 +201,7 @@ mod open_container_tests {
     use super::*;
     use benilla_protocol::field::FIELD_PLAYER_INV_SLOT_HEAD;
 
-    /// `PLAYER_FIELD_BANK_BAG_SLOT_1` (index 612; private to the fields module, so spelled here).
+    /// `PLAYER_FIELD_BANK_BAG_SLOT_1`, field 612 (private to the fields module).
     const BANK_BAG_SLOT_1: u16 = 612;
 
     /// A self descriptor holding the given guids at the given first-dword indices.

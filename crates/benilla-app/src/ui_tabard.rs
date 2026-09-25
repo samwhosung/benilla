@@ -1,30 +1,9 @@
-//! The guild tabard designer:
-//! the app half of the stock `TabardFrame.xml` — the vendor session, the body preview, the save's
-//! pre-flight checks and wire, the reply, and the four events.
+//! The guild tabard designer, the app half of the stock `TabardFrame.xml`. Only
+//! `MSG_TABARDVENDOR_ACTIVATE` opens it (`0x5e70c0` → `0x4f5840`); no Lua verb does. Our own body
+//! wears the design over a forced tabard geoset (`[cc+0xc]`, `0x47a610`).
 //!
-//! **The frame opens only from the wire.** `MSG_TABARDVENDOR_ACTIVATE` in (`0x5e70c0` → `0x4f5840`)
-//! stores the vendor guid, raises the designer-preview flag on the local player's character
-//! component, sets the global interaction target, and fires `OPEN_TABARD_FRAME`; there is no Lua
-//! verb that opens it. The stock handler then `SetUnit("player")`s the pane, seeds the design
-//! (`InitializeTabardColors`, the engine's) and `ShowUIPanel`s.
-//!
-//! **The body preview.** The five under design replace the guild's emblem on OUR body, over the
-//! tabard geoset forced on with an empty slot (`Equipment::tabard_preview` → the composite and the
-//! geoset law; `[cc+0xc]` and `0x47a610` in the reference). The `TabardModel` pane samples the
-//! paper-doll booth, which bakes that same body — the reference's pane is a `PlayerModel` of the
-//! player, so what the world shows and what the pane shows are one look.
-//!
-//! **`Save()`** runs the reference's fourteen pre-flight checks in order (`0x5e03f0`), each a
-//! `UI_ERROR_MESSAGE` line — none silent — then sends `MSG_SAVE_GUILD_EMBLEM` and fires
-//! `TABARD_SAVE_PENDING` with the latch already set. The reply's `u32` clears the latch and shows
-//! its table row; a failure fires `TABARD_SAVE_PENDING` again; success evicts the guild record so
-//! the next query anywhere re-fetches it (no event, no packet — `0x5e715f`).
-//!
-//! **Close.** `CloseTabardCreation()` (the OnHide's call), the walk-away leash and the world-leave
-//! run one close core: with a vendor stored, drop the preview flag, clear the guid, fire
-//! `CLOSE_TABARD_FRAME`; with none, nothing. The reference fires the event twice on the Lua route
-//! (a re-entrancy through the interaction-target clear, `0x4f58a0 → 0x4931c0 → 0x493310 →
-//! 0x4934a0`) — a shape the stock `HideUIPanel` handler absorbs and this close does not reproduce.
+//! `CLOSE_TABARD_FRAME` fires once per close; the reference fires it twice on the Lua route, a
+//! re-entrancy (`0x4f58a0 → 0x4931c0 → 0x493310 → 0x4934a0`) the stock `HideUIPanel` absorbs.
 
 use bevy::prelude::*;
 
@@ -38,39 +17,35 @@ use crate::ui_guild::GuildState;
 use crate::ui_script::{UiFeed, UiInput};
 use crate::ui_session::{close_npc_session_out_of_range, NpcSession};
 
-/// The open designer: the vendor it was opened on (`[0xbdcee8]`), and the save-in-flight latch
-/// (`[0xc4d780]`).
+/// The open designer: its vendor (`[0xbdcee8]`), the save-in-flight latch (`[0xc4d780]`), and
+/// the events and lines owed to the next feed.
 #[derive(Resource, Default)]
 pub(crate) struct TabardOpen {
     vendor: Option<u64>,
     save_pending: bool,
-    /// `OPEN_TABARD_FRAME` owed to the next feed.
     open_event: bool,
-    /// `CLOSE_TABARD_FRAME` owed to the next feed.
     close_event: bool,
-    /// `TABARD_SAVE_PENDING` fires owed to the next feed.
     pending_events: u32,
-    /// The reply's line, keyed, owed to the next feed.
     lines: Vec<&'static str>,
 }
 
 impl TabardOpen {
-    /// `MSG_TABARDVENDOR_ACTIVATE` in — `0x4f5840`.
+    /// `MSG_TABARDVENDOR_ACTIVATE` in (`0x4f5840`).
     pub(crate) fn open(&mut self, vendor: u64) {
         self.vendor = Some(vendor);
         self.open_event = true;
     }
 
-    /// The close core `0x4f58a0`: only with a vendor stored.
+    /// The close core (`0x4f58a0`) that `CloseTabardCreation()`, the walk-away leash and the
+    /// world leave share; it fires only with a vendor stored.
     fn close_core(&mut self) {
         if self.vendor.take().is_some() {
             self.close_event = true;
         }
     }
 
-    /// `MSG_SAVE_GUILD_EMBLEM` in — `0x5e70f0`: the latch clears first; a result past the six-row
-    /// table is ignored; the row's line shows unless it is the sentinel; a failure re-fires
-    /// `TABARD_SAVE_PENDING`. Returns whether the save SUCCEEDED (the caller evicts the record).
+    /// `MSG_SAVE_GUILD_EMBLEM` in (`0x5e70f0`), true on success; a failure re-fires
+    /// `TABARD_SAVE_PENDING`.
     pub(crate) fn apply_result(&mut self, result: u32) -> bool {
         let Some(row) = usize::try_from(result)
             .ok()
@@ -98,8 +73,7 @@ impl NpcSession for TabardOpen {
     }
 }
 
-/// The five under design while the frame is open — what the local player's body wears
-/// (`entities::equipment::resolve`). `None` closes the preview.
+/// The design our own body wears while the frame is open.
 #[derive(Resource, Default)]
 pub(crate) struct TabardDesign(Option<[i32; 5]>);
 
@@ -115,9 +89,9 @@ impl TabardDesign {
     }
 }
 
-/// The sender's fourteen rejections in order (`0x5e03f0`), each a `UI_ERROR_MESSAGE` key — the
-/// ten range checks share one line; the money check is the client's `ERR_NOT_ENOUGH_MONEY`
-/// (0x25), not the server's `ERR_GUILDEMBLEM_NOTENOUGHMONEY`. `Ok` means send.
+/// The save's fourteen checks in the reference's order (`0x5e03f0`), each a `UI_ERROR_MESSAGE`
+/// key: the ten range checks share one, and the money check is the client's own
+/// `ERR_NOT_ENOUGH_MONEY` (0x25), not the server's.
 pub(crate) fn preflight(
     design: [i32; 5],
     record: Option<[i32; 5]>,
@@ -164,8 +138,7 @@ fn feed_tabard(
     let Some(mut script) = script else {
         return;
     };
-    // The host facts: our guild's cached record (a lazy-cache read — a miss sends the query) and
-    // the latch. Pushed on change so the getters read the current state on every call.
+    // Our guild's cached record (a miss sends the query) and the latch, pushed on change.
     let guild_id = self_q.iter().next().map_or(0, |s| s.0.player_guild_id());
     let host = TabardHost {
         guild_record: guilds.own_emblem_record(guild_id, &commands),
@@ -177,7 +150,7 @@ fn feed_tabard(
         script.set_tabard_host(host);
     }
 
-    // The events, in the order the reference's flow produces them.
+    // The events, in the reference's order.
     if std::mem::take(&mut open.open_event) {
         script.fire_event("OPEN_TABARD_FRAME", vec![]);
     }
@@ -187,8 +160,8 @@ fn feed_tabard(
     for _ in 0..std::mem::take(&mut open.pending_events) {
         script.fire_event("TABARD_SAVE_PENDING", vec![]);
     }
-    // `TABARD_CANSAVE_CHANGED`: the guild-appearance refresh that a guild record's arrival runs
-    // on every member in sight (`0x5e08e0`, its second act) — here, our identity cache moving.
+    // `TABARD_CANSAVE_CHANGED` fires when a guild record arrives (`0x5e08e0`); here, when our
+    // identity cache moves.
     let gen = guilds.identity_generation();
     let last_gen = last_identity.get(&script);
     if last_gen.is_some() && *last_gen != Some(gen) {
@@ -196,7 +169,6 @@ fn feed_tabard(
     }
     *last_gen = Some(gen);
 
-    // The reply's line.
     let lines: Vec<_> = open
         .lines
         .drain(..)
@@ -204,8 +176,7 @@ fn feed_tabard(
         .collect();
     crate::ui_action::show_messages(&mut script, &mut sink, "ui_tabard", lines);
 
-    // The body preview follows the pane's five while the designer is open; the pane's yaw drives
-    // the paper-doll booth it samples.
+    // The body wears the pane's design while the designer is open; the pane's yaw turns the booth.
     let shown = open.vendor.is_some() && script.frame_visible("TabardFrame");
     let current = shown.then(|| script.tabard_design()).flatten();
     if design.0 != current {
@@ -234,9 +205,8 @@ fn drain_tabard(
         match intent {
             TabardIntent::Close => open.close_core(),
             TabardIntent::Save(design) => {
-                // The vendor guid is the global UI interaction target, which the open set to
-                // this vendor (`0x502a60` reads `[0xb4e2d0]`); ours is the session's stored guid,
-                // the same value.
+                // The reference sends the global interaction target (`0x502a60` reads
+                // `[0xb4e2d0]`), which the open set to this vendor: the same guid.
                 let Some(vendor) = open.vendor else {
                     continue;
                 };
@@ -260,8 +230,8 @@ fn drain_tabard(
                         let _ = commands
                             .0
                             .send(ClientCommand::SaveGuildEmblem { vendor, design });
-                        // `0x5e05f5` then `0x5e05fc`: the latch, then the event — a handler
-                        // reading `CanSaveTabardNow()` inside it already sees nil.
+                        // The latch, then the event (`0x5e05f5`, `0x5e05fc`): a handler
+                        // calling `CanSaveTabardNow()` already sees nil.
                         open.save_pending = true;
                         script.set_tabard_host(TabardHost {
                             guild_record: record,
@@ -288,8 +258,7 @@ fn reset_on_world_enter(
     design.0 = None;
 }
 
-/// The tabard vendor's packet handlers (in the net handler table since 2312), beside the state
-/// they drive.
+/// The tabard vendor's packet handlers.
 mod net {
     use benilla_protocol::{SessionEvent, SessionEventKind};
     use bevy::prelude::*;
@@ -298,7 +267,6 @@ mod net {
     use crate::net::NetHandlerApp;
     use crate::ui_guild::GuildState;
 
-    /// Register the two handlers — called from [`super::TabardUiPlugin`].
     pub(super) fn register(app: &mut App) {
         use SessionEventKind as K;
         app.net_handler(K::TabardVendorActivate, on_activate)
@@ -311,8 +279,8 @@ mod net {
         }
     }
 
-    /// A saved emblem evicts our guild's cached record (`0x5e715f`): the next query anywhere
-    /// re-fetches it — no event, no packet.
+    /// A saved emblem evicts our guild's cached record (`0x5e715f`), with no event or packet; the
+    /// next query re-fetches it.
     fn on_save_result(
         In(ev): In<SessionEvent>,
         mut tabard: ResMut<TabardOpen>,
@@ -384,7 +352,7 @@ mod tests {
             preflight([169, 16, 5, 16, 50], rec, 0, 100_000),
             Ok([169, 16, 5, 16, 50])
         );
-        // An undesigned record (-1s) is a cached record: the SAME check compares and passes.
+        // An undesigned record (-1s) is a cached record: the same check compares and passes.
         assert_eq!(preflight([0; 5], Some([-1; 5]), 0, 100_000), Ok([0; 5]));
     }
 

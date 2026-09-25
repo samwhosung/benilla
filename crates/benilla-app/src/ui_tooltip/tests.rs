@@ -1,30 +1,21 @@
-//! The spell-view cell tests, against the REAL 5875 data (the module doc's line laws; moved
-//! out of `mod.rs` whole at the 1000-line seam — same tests, file module).
+//! The spell-view cell tests, against the real 5875 data.
 
 use super::*;
 use crate::ui_action::Spells;
 
-/// A view context with no player state — the DBC-only half of the builder (the shape the
-/// pre-0616 test used). `sub_classes` is threaded in by the caller when the case needs it.
+/// A view context with no player state, the DBC-only half of the builder.
 struct TestCtx {
     items: Items,
     commands: NetCommands,
     _rx: crossbeam_channel::Receiver<crate::net::ClientCommand>,
-    /// The two lookups the builder resolves through, over the **shipped** `GlobalStrings.lua` in
-    /// a VM this harness owns.
-    ///
-    /// Every cell this builder composes is a key resolved at runtime, so a test
-    /// that asserts a rendered cell has to grade it against the player's own table — a stub would
-    /// pass on wording the client never shows, which is the trap 2052 named when it moved the
-    /// glue tests onto the loader's own assembly.
+    /// The builder's two lookups, over the shipped `GlobalStrings.lua`: a stub would pass on
+    /// wording the client never shows.
     get: Box<Getter>,
     text: Box<Filler>,
-    /// Empty tables, which is the un-talented character every cell here is graded as: the cost
-    /// cell's modifier hop must be the identity when nothing has been sent.
+    /// Empty: every cell here is graded as an untalented character.
     spell_mods: crate::spell::SpellModifiers,
 }
 
-/// The two lookup shapes, named so the harness's fields read.
 type Getter = dyn Fn(&str) -> Option<String>;
 type Filler = dyn Fn(&str, &[i64]) -> Option<String>;
 
@@ -60,9 +51,6 @@ impl TestCtx {
         self.ctx_for(objects, form, sub_classes, None)
     }
 
-    /// The same context with an auto-attack target engaged — the melee range arm's second
-    /// reach, which `0x6e3480` resolves out of `[caster+0xc48]` rather than taking as an
-    /// argument.
     fn ctx_engaged<'a, 'w, 's>(
         &'a mut self,
         objects: &'a Objects<'w, 's>,
@@ -86,8 +74,6 @@ impl TestCtx {
             form,
             store,
             combat_reach: store.map_or(1.5, |s| s.0.unit_combat_reach()),
-            // The tests drive the melee arm through `combat_reach` alone; the engaged-target
-            // reach has its own case in `range_cell_on_real_data`.
             attack_target_reach: None,
             objects,
             items: &mut self.items,
@@ -100,25 +86,18 @@ impl TestCtx {
     }
 }
 
-/// The object index the possession cells resolve through — nothing streamed, which is what
-/// every case here is graded against: the worn-item search finds no instance and each reagent's
-/// carried count reads 0. Held beside the [`TestCtx`] because the lookup borrows
-/// the world it reads.
+/// An object index with nothing streamed: no worn item, and every reagent count 0.
 fn no_objects() -> crate::ui_items::TestObjects {
     crate::ui_items::TestObjects::new()
 }
 
-/// A player descriptor with nothing worn and nothing in the bags — the "owns none of it"
-/// pole of both possession tests.
 fn empty_player() -> ObjectStore {
     ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(
         22u16, 100u32,
     )]))
 }
 
-/// The full spell-tooltip view off the REAL 5875 data — Fireball rank 1 (133) end to end:
-/// the pinned columns (description 138, cast index 18→1500 ms, duration 30), the token
-/// engine's byte formulas, and the view's verified cell shapes. Skips without client data.
+/// Fireball rank 1 (133) end to end: description 138, cast index 18 (1500 ms), duration 30.
 #[test]
 fn fireball_view_on_real_data() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -161,9 +140,8 @@ fn fireball_view_on_real_data() {
         v.description
     );
 
-    // Charge rank 1 (100) — the director's reference shot, end to end: the dual-bound range
-    // row (SpellRange 95 = {8, 25}), the CATEGORY-column cooldown (recoveryTime 0 /
-    // categoryRecoveryTime 15000), and the Stances-mask form line (0x10000 → form 17).
+    // Charge rank 1 (100): range row 95 = {8, 25}, a cooldown only in the category column
+    // (15000), and the Stances form line (0x10000 is form 17).
     let v = spell_tooltip_view(100, &spells, &mut t.ctx(&objects, 0, None)).expect("Charge view");
     assert_eq!(v.name, "Charge");
     assert_eq!(v.rank.as_deref(), Some("Rank 1"));
@@ -180,11 +158,8 @@ fn fireball_view_on_real_data() {
     let v = spell_tooltip_view(100, &spells, &mut t.ctx(&objects, 17, None)).expect("Charge view");
     assert!(v.form_met, "form 17 = Battle Stance satisfies the mask");
 
-    // 1483 — a PERMISSIVE Stances mask prints no line at all. 5875 overloads the column: with
-    // `AttributesEx2` bit 19 set the bits say "may ALSO be cast in these forms", so reading them
-    // as a requirement invented a red "Requires Shadowform" on Inner Fire / Psychic Scream and
-    // "Requires Spirit of Redemption" on Flash Heal. Bit 27 = form 28, bit 31 = form 32 — the
-    // names resolve, which is exactly why the bug looked plausible.
+    // A permissive Stances mask (`AttributesEx2` bit 19) prints no line, though its forms have
+    // names: bit 27 is form 28, bit 31 form 32.
     for (id, name, mask) in [
         (588u32, "Inner Fire", 0x0800_0000u32),
         (8122, "Psychic Scream", 0x0800_0000),
@@ -202,12 +177,6 @@ fn fireball_view_on_real_data() {
     }
 }
 
-/// The cost and cast cells' full law on the REAL 5875 data: the health
-/// fallback and pct resolution (Bloodrage), the empty Life Tap cell (1.12 carries no cost
-/// columns for it — the trade lives in the description), the `_PER_TIME` composite (Health
-/// Funnel), the resolved pct-of-base-mana with no percentage line (Judgement — the B152
-/// reframe), and the cast ladder's attr arms (Next melee / Attack speed / Channeled) with
-/// the mana-keyed Instant fork. Skips without client data.
 #[test]
 fn cost_and_cast_cells_on_real_data() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -223,8 +192,8 @@ fn cost_and_cast_cells_on_real_data() {
     let mut t = TestCtx::new();
     let mut objs = no_objects();
     let objects = objs.get();
-    // A level-60 warrior-shaped store: max health 4000, base mana 1000 (field indices are
-    // the protocol crate's: health 22, maxhealth 28, level 34, base mana 162).
+    // A level-60 store: max health 4000, base mana 1000 (fields: health 22, max health 28,
+    // level 34, base mana 162).
     let store = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
         (22u16, 3500u32),
         (28, 4000),
@@ -232,9 +201,8 @@ fn cost_and_cast_cells_on_real_data() {
         (162, 1000),
     ]));
 
-    // Bloodrage (2687): pct-ONLY health cost — 20% of MAX health resolves to a flat number
-    // through the health fallback; never a percentage line. Instant on a non-mana type reads
-    // bare "Instant" whatever it costs.
+    // Bloodrage (2687): 20% of max health, a flat number through the health fallback; bare
+    // "Instant" on a non-mana type.
     let v = spell_tooltip_view(
         2687,
         &spells,
@@ -244,8 +212,7 @@ fn cost_and_cast_cells_on_real_data() {
     assert_eq!(v.cost.as_deref(), Some("800 Health"), "20% of 4000");
     assert_eq!(v.cast_time.as_deref(), Some("Instant"));
 
-    // Life Tap (1454): the 5875 file carries NO cost columns for any rank — the cell is
-    // empty, exactly the reference render (the printed health cost is 2.x's change).
+    // Life Tap (1454): the 5875 data has no cost columns for any rank, so the cell is empty.
     let v = spell_tooltip_view(
         1454,
         &spells,
@@ -259,8 +226,7 @@ fn cost_and_cast_cells_on_real_data() {
         "health type, not mana"
     );
 
-    // Health Funnel (755): the `_PER_TIME` composite in the health lane, and the channeled
-    // cast cell.
+    // Health Funnel (755): the `_PER_TIME` form in health, and a channeled cast cell.
     let v = spell_tooltip_view(
         755,
         &spells,
@@ -270,9 +236,8 @@ fn cost_and_cast_cells_on_real_data() {
     assert_eq!(v.cost.as_deref(), Some("11 Health, plus 5 per sec"));
     assert_eq!(v.cast_time.as_deref(), Some("Channeled"));
 
-    // Judgement (20271): pct-of-base-mana resolves to its flat number — the line B152
-    // reported as "% of base mana" never exists on the reference. DBC-only (no store)
-    // degrades to the flat cost: none here.
+    // Judgement (20271): 6% of base mana resolves to a flat number; a DBC-only view has only
+    // the flat cost, none here.
     let v = spell_tooltip_view(
         20271,
         &spells,
@@ -284,16 +249,14 @@ fn cost_and_cast_cells_on_real_data() {
         spell_tooltip_view(20271, &spells, &mut t.ctx(&objects, 0, None)).expect("Judgement view");
     assert_eq!(v.cost, None, "a DBC-only view cannot resolve a pct cost");
 
-    // Heroic Strike (78): the cost cell keeps its rage (wire 150 ÷ 10) and "Next melee"
-    // moves to the CAST cell where the ref's ladder puts it.
+    // Heroic Strike (78): rage is wire 150 ÷ 10, and "Next melee" is the cast cell.
     let v = spell_tooltip_view(78, &spells, &mut t.ctx_for(&objects, 0, None, Some(&store)))
         .expect("Heroic Strike view");
     assert_eq!(v.cost.as_deref(), Some("15 Rage"));
     assert_eq!(v.cast_time.as_deref(), Some("Next melee"));
 
-    // Throw (2764) and Auto Shot (75): the ranged bit reads "Attack speed" — and for Throw
-    // the bit is ALONE (`Attributes & 0x2`, not the auto-repeat or-pair). Melee Attack
-    // (6603) is the cast line's skip at `0x52eb3c`: Effect[0] == ATTACK omits the whole line.
+    // Throw (2764) and Auto Shot (75) read "Attack speed" off `Attributes & 0x2` alone; Attack
+    // (6603), `Effect[0]` ATTACK, omits the line (`0x52eb3c`).
     let v = spell_tooltip_view(
         2764,
         &spells,
@@ -312,8 +275,7 @@ fn cost_and_cast_cells_on_real_data() {
     .expect("Attack view");
     assert_eq!(v.cast_time, None, "ATTACK Effect[0] omits the line");
 
-    // Mind Flay (15407): a channeled MANA spell — the cost cell and the channeled cell
-    // together.
+    // Mind Flay (15407): a channeled mana spell.
     let v = spell_tooltip_view(
         15407,
         &spells,
@@ -324,11 +286,8 @@ fn cost_and_cast_cells_on_real_data() {
     assert_eq!(v.cast_time.as_deref(), Some("Channeled"));
 }
 
-/// The RANGE cell's whole law (`[0x52e9a2, 0x52ea8c)`) on the REAL 5875 data: the melee family
-/// renders through `SPELL_RANGE` off the caster's own combat reach — the
-/// invented "Melee Range" decision 2080 named is gone — the authored rows print their own numbers
-/// through the same key, and the on-next-swing class and the self-only rows print no cell at all.
-/// Skips without client data.
+/// The range cell (`0x52e9a2`-`0x52ea8c`): the melee row prints a number off the reaches, an
+/// authored row its own, and the on-next-swing and self rows nothing.
 #[test]
 fn range_cell_on_real_data() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -347,9 +306,8 @@ fn range_cell_on_real_data() {
     // A default-reach player: `UNIT_FIELD_COMBATREACH` (130) unset reads the descriptor's 1.5.
     let store = empty_player();
 
-    // Sinister Strike (1752) sits on SpellRange row 2 "Combat Range" — the ONE shipped row with
-    // flags bit 0. 1.5 + 1.5 + 1.3333334 = 4.333 does not clear the 5.0 floor, so the cell reads
-    // the floor: the melee family's normal render is a NUMBER, not a word.
+    // Sinister Strike (1752) is on row 2 "Combat Range", the one row with flags bit 0:
+    // 1.5 + 1.5 + 1.3333334 = 4.333 is under the 5.0 floor.
     let d = spells.catalog.get(1752).expect("Sinister Strike 1752");
     assert_eq!(d.range_index, 2, "the melee row");
     assert!(spells.ranges.get(2).expect("row 2").is_melee());
@@ -361,8 +319,7 @@ fn range_cell_on_real_data() {
     .expect("Sinister Strike view");
     assert_eq!(v.range.as_deref(), Some("5 yd range"));
 
-    // …and it MOVES with the caster's reach, which is the whole reason the cell needs a store:
-    // 4.0 + 4.0 + 1.3333334 = 9.333 clears the floor and `fistp` rounds it to 9.
+    // A 4.0 reach: 4.0 + 4.0 + 1.3333334 = 9.333, rounded to 9.
     let big = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(
         130u16,
         4.0f32.to_bits(),
@@ -371,8 +328,7 @@ fn range_cell_on_real_data() {
         .expect("Sinister Strike view");
     assert_eq!(v.range.as_deref(), Some("9 yd range"));
 
-    // …and the second reach is the AUTO-ATTACK target's, not the caster's doubled: swinging at
-    // a 4.0-reach mob with a default 1.5 body reads 1.5 + 4.0 + 1.3333334 = 6.833 -> 7.
+    // The second reach is the auto-attack target's: 1.5 + 4.0 + 1.3333334 = 6.833, rounded to 7.
     let v = spell_tooltip_view(
         1752,
         &spells,
@@ -381,7 +337,7 @@ fn range_cell_on_real_data() {
     .expect("Sinister Strike view");
     assert_eq!(v.range.as_deref(), Some("7 yd range"));
 
-    // An authored single-number row: Fireball's 0–35.
+    // An authored row: Fireball's 0-35.
     let v = spell_tooltip_view(
         133,
         &spells,
@@ -390,15 +346,13 @@ fn range_cell_on_real_data() {
     .expect("Fireball view");
     assert_eq!(v.range.as_deref(), Some("35 yd range"));
 
-    // An authored PAIR (the `"%d-%d"` nested fill): Charge's 8–25, unpadded — the tooltip's own
-    // `GetMinMaxRange` call passes `target = NULL`, so the reach never joins these two.
+    // An authored pair, `"%d-%d"`: Charge's 8-25, which the reach does not change.
     let v = spell_tooltip_view(100, &spells, &mut t.ctx_for(&objects, 0, None, Some(&big)))
         .expect("Charge view");
     assert_eq!(v.range.as_deref(), Some("8-25 yd range"));
 
-    // The two absences. Heroic Strike (78) carries the on-next-swing pair, which jumps the cell
-    // before the resolver runs — it does NOT read "Melee Range", and it does not read 5 yd
-    // either. Bloodrage (2687) sits on the self row, whose resolved max is 0.
+    // No cell: Heroic Strike (78)'s on-next-swing attributes skip it before the resolver, and
+    // Bloodrage (2687)'s self row resolves max 0.
     let v = spell_tooltip_view(78, &spells, &mut t.ctx_for(&objects, 0, None, Some(&store)))
         .expect("Heroic Strike view");
     assert_eq!(v.range, None, "Attributes & 0x404 → no range cell");
@@ -411,8 +365,7 @@ fn range_cell_on_real_data() {
     assert_eq!(v.range, None, "the self row resolves max 0");
 }
 
-/// The three lines the 2026-07-25 reference captures pinned, each against the
-/// REAL 5875 data. Skips without client data.
+/// The required-item, chance-to-X and reagents lines on the real data.
 #[test]
 fn the_pinned_c6_lines_on_real_data() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -431,8 +384,8 @@ fn the_pinned_c6_lines_on_real_data() {
     let objects = objs.get();
     let store = empty_player();
 
-    // 1 · The wand Shoot (5019, class 2 / submask bit 19) — "Requires Wands", red with no
-    // wand worn. The same row feeds the cast-fail line's SINGULAR "Wand" (see `cast_fail`).
+    // 1. The wand Shoot (5019, class 2, subclass bit 19): "Requires Wands", red with no wand
+    // worn; the same row gives the cast-fail line its singular "Wand".
     assert_eq!(subs.name(2, 19), Some("Wands"), "the verbose plural");
     assert_eq!(subs.display_name(2, 19), Some("Wand"), "the singular");
     let v = spell_tooltip_view(
@@ -443,9 +396,8 @@ fn the_pinned_c6_lines_on_real_data() {
     .expect("Shoot view");
     assert_eq!(v.requires_item.as_deref(), Some("Requires Wands"));
     assert!(!v.item_met, "nothing worn satisfies class 2 / bit 19 → red");
-    // A multi-bit mask is named by ItemSubClassMask.dbc, not skipped (`0x52eef0` — we
-    // printed nothing here until `0x6e2380` was decoded): Parry's 0x2a5f3 is exactly the eleven
-    // melee subclasses, which that table names in one word.
+    // A multi-bit mask is named by `ItemSubClassMask.dbc` (`0x52eef0`, `0x6e2380`): Parry's
+    // 0x2a5f3 is the eleven melee subclasses, one name.
     let parry = spells.catalog.get(3127).expect("Parry 3127");
     assert!(parry.equipped_item_subclass_mask.count_ones() > 1);
     let v = spell_tooltip_view(
@@ -456,17 +408,15 @@ fn the_pinned_c6_lines_on_real_data() {
     .expect("Parry view");
     assert_eq!(v.requires_item.as_deref(), Some("Requires Melee Weapon"));
 
-    // 2 · Attack (6603) — `Effect[0] == 78` omits the cast|cooldown line WHOLE, even though
-    // `Attributes & 0x40` is clear. Before the cast-line gate `0x52eb15` widened, this read
-    // "Instant".
+    // 2. Attack (6603): `Effect[0] == 78` omits the cast line (`0x52eb15`), though
+    // `Attributes & 0x40` is clear.
     let d = spells.catalog.get(6603).expect("Attack 6603");
     assert_eq!(d.effects[0], 78, "SPELL_EFFECT_ATTACK");
     assert!(!d.passive, "6603 carries Attributes 0x10, not 0x40");
     let v = spell_tooltip_view(6603, &spells, &mut t.ctx(&objects, 0, None)).expect("Attack view");
     assert_eq!(v.cast_time, None, "the law's Effect[0] gate");
-    // …and the chance line the same Effect[0] selects (`[0x52f5b1, 0x52f697)`). ATTACK
-    // BYPASSES the passive gate, which is the whole reason a non-passive Attack shows a crit
-    // line at all. No descriptor = no line; the percentages are already percents on the wire.
+    // The chance line `Effect[0]` selects (`0x52f5b1`): ATTACK skips the passive gate. No
+    // descriptor, no line; the wire's values are already percents.
     assert_eq!(v.chance, None, "no player streamed yet");
     let rated = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
         (22u16, 100u32),
@@ -487,7 +437,7 @@ fn the_pinned_c6_lines_on_real_data() {
     let v = spell_tooltip_view(81, &spells, &mut t.ctx_for(&objects, 0, None, Some(&rated)))
         .expect("Dodge view");
     assert_eq!(v.chance.as_deref(), Some("5.50% chance to dodge"));
-    // A spell naming none of the four effects has no line at all.
+    // None of the four effects: no line.
     let v = spell_tooltip_view(
         133,
         &spells,
@@ -496,8 +446,8 @@ fn the_pinned_c6_lines_on_real_data() {
     .expect("Fireball view");
     assert_eq!(v.chance, None);
 
-    // 3 · Slow Fall (130) — "Reagents: Light Feather", inline-red while unowned (no store =
-    // owns nothing). The name rides the ask-once item cache, seeded here as the server would.
+    // 3. Slow Fall (130): "Reagents: Light Feather", red while unowned; the name comes from the
+    // item cache, seeded here as the server would.
     let d = spells.catalog.get(130).expect("Slow Fall 130");
     assert_eq!(d.reagents[0], (17056, 1), "Light Feather ×1");
     let v = spell_tooltip_view(
@@ -525,31 +475,25 @@ fn the_pinned_c6_lines_on_real_data() {
     );
 }
 
-/// The "Locked" line's colour law — the director's report: a door they held
-/// the key for read RED, where the reference reads green.
-///
-/// The builder's own shape is "red unless the resolver found an opener", and *every* kind of
-/// opener lands on the same green — so the mapping is a one-way test on `Unmet`, not a
-/// per-arm table. A flag-locked object with no `Lock.dbc` row is the reference's
-/// no-requirement arm and is green too: the flag alone never means "you can't".
+/// Red only when the resolver finds no opener; a key, a known skill, no requirement and no
+/// `Lock.dbc` row all read green.
 #[test]
 fn the_locked_line_greens_when_the_lock_can_be_opened() {
     use crate::target::lock::LockOutcome;
 
-    // The report: the Scarlet Key in hand, the Armory Door in front of you.
+    // The Scarlet Key in hand at the Armory Door.
     assert_eq!(
         locked_line_tint(Some(LockOutcome::OpenByKey(7146))),
         TooltipTint::LockOpen,
         "holding the key must read green"
     );
-    // The same door without the key — unchanged, and the control for the fix.
+    // The same door without the key.
     assert_eq!(
         locked_line_tint(Some(LockOutcome::Unmet)),
         TooltipTint::Red,
         "no key still reads red"
     );
-    // A skill opener you know: green. (The reference would ramp this by margin; green is that
-    // ramp's comfortable rung — see `locked_line_tint`'s note.)
+    // A known skill opener: green, where the reference ramps by margin (`locked_line_tint`).
     assert_eq!(
         locked_line_tint(Some(LockOutcome::OpenBySpell(2575))),
         TooltipTint::LockOpen
