@@ -38,7 +38,7 @@ pub enum MusicRequest {
 
 impl super::UiScript {
     /// Queue a kit play from the app side, for the UI sounds the client fires from C++
-    /// (`QUESTADDED` on a log add, `QUESTCOMPLETED` on the turn-in) that no Lua handler owns.
+    /// (`QUESTCOMPLETED` on the turn-in) that no Lua handler or message row owns.
     pub fn queue_sound_kit(&mut self, name: &str) {
         self.model_mut()
             .sound_queue

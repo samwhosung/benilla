@@ -68,6 +68,11 @@ impl QuestLog {
         })
     }
 
+    /// Whether the server answered `quest_id` as unknown, not still pending.
+    pub(crate) fn template_answered_unknown(&self, quest_id: u32) -> bool {
+        self.templates.answered_unknown(quest_id)
+    }
+
     /// Record a template answer (`SMSG_QUEST_QUERY_RESPONSE`).
     pub(crate) fn insert_template(&mut self, template: QuestTemplate) {
         self.templates.insert(template.quest_id, Some(template));
@@ -445,7 +450,7 @@ fn order_groups(rows: &[GroupRow]) -> Vec<(i32, String, Vec<usize>)> {
 
 /// Reads the player's `PLAYER_QUEST_LOG` slots each frame and pushes a [`QuestLogState`] on a
 /// change; also refreshes `row_slots` for the abandon drain.
-fn feed_quest_log(
+pub(crate) fn feed_quest_log(
     script: Option<NonSendMut<UiScript>>,
     self_q: Query<(&ObjectStore, &Guid), With<SelfPlayer>>,
     mut quest_log: ResMut<QuestLog>,
@@ -462,22 +467,27 @@ fn feed_quest_log(
     // The completion toast is a message-catalog row, whose surface and sound the sink reads.
     mut sink: crate::ui_action::MessageSink,
     mut last: Local<crate::ui_script::VmMemo<QuestLogState>>,
-    mut prior_quest_ids: Local<crate::ui_script::VmMemo<Option<HashSet<u32>>>>,
+    // The accept line's queue.
+    mut quest_lines: ResMut<crate::ui_quest::QuestLines>,
+    mut prior_slots: Local<crate::ui_script::VmMemo<Option<SlotStates>>>,
 ) {
     let Some(mut script) = script else {
         return;
     };
     let last = last.get(&script);
-    let prior_quest_ids = prior_quest_ids.get(&script);
+    let prior_slots = prior_slots.get(&script);
     let Some((store, _)) = self_q.iter().next() else {
         return;
     };
 
     let mut rows = Vec::new();
+    let mut slots = Vec::with_capacity(usize::from(PLAYER_QUEST_LOG_SLOTS));
     for slot in 0..PLAYER_QUEST_LOG_SLOTS {
         let Some(log_slot) = store.0.player_quest_log(slot) else {
+            slots.push((0, 0));
             continue;
         };
+        slots.push((log_slot.quest_id, log_slot.state));
         if log_slot.quest_id == 0 {
             continue; // a slot an abandon or turn-in cleared
         }
@@ -488,18 +498,14 @@ fn feed_quest_log(
         });
     }
 
-    // A quest entering the log plays `QUESTADDED`, the sound of the chat line the reference's
-    // quest-slot watcher raises, `ERR_QUEST_ACCEPTED_S` (`0x5dde61`); the line is not printed
-    // here. The first snapshot after login is silent: the initial create fills the whole log.
-    {
-        let current: HashSet<u32> = rows.iter().map(|r| r.quest_id).collect();
-        if let Some(prior) = prior_quest_ids.as_ref() {
-            if current.iter().any(|id| !prior.contains(id)) {
-                script.queue_sound_kit("QUESTADDED");
-            }
+    // The quest-slot watcher's accept line, whose catalog row carries `QUESTADDED`. The first
+    // snapshot after login is silent: the initial create fills the whole log.
+    if let Some(prior) = prior_slots.as_ref() {
+        for quest_id in accepted_quests(prior, &slots) {
+            quest_lines.push(crate::ui_quest::QuestLine::Accepted(quest_id));
         }
-        *prior_quest_ids = Some(current);
     }
+    *prior_slots = Some(slots);
 
     // The player's own `GlobalStrings.lua`, for the leaderboard's three format keys.
     let get = |key: &str| {
@@ -708,6 +714,26 @@ fn feed_quest_log(
         }
     }
     *last = fresh;
+}
+
+/// Every quest-log slot as `(quest id, state)`, the slot watcher's input.
+type SlotStates = Vec<(u32, u8)>;
+
+/// The quests the slot watcher `0x5ddd80` announces, per slot as `(quest id, state)`: a quest in a
+/// slot that held none, or the same quest with its fail bit cleared (`0x5dde17`-`0x5dde34`). A slot
+/// that swaps one quest for another announces nothing.
+fn accepted_quests(prior: &[(u32, u8)], now: &[(u32, u8)]) -> Vec<u32> {
+    now.iter()
+        .zip(prior)
+        .filter(|&(&(id, state), &(was_id, was_state))| {
+            id != 0
+                && (was_id == 0
+                    || (was_id == id
+                        && state & quest_slot_state::FAIL == 0
+                        && was_state & quest_slot_state::FAIL != 0))
+        })
+        .map(|(&(id, _), _)| id)
+        .collect()
 }
 
 /// Whether an objective advanced. The reference toasts only on the server's additive
@@ -1414,7 +1440,8 @@ mod tests {
             .init_resource::<Items>()
             .init_resource::<crate::world_state::WorldStates>()
             .init_resource::<crate::ui_chat::ChatLog>()
-            .init_resource::<crate::sound::MessageSounds>();
+            .init_resource::<crate::sound::MessageSounds>()
+            .init_resource::<crate::ui_quest::QuestLines>();
         let mut log = QuestLog::default();
         let mut pairs = Vec::new();
         for (slot, id, zos, title) in quests {
@@ -1470,6 +1497,76 @@ mod tests {
         assert!(
             matches!(sent.as_slice(), [ClientCommand::QuestlogRemove { slot: 1 }]),
             "the abandon removes B's slot (1), never C's (2): {sent:?}"
+        );
+    }
+
+    // ── The accept line ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn the_slot_watcher_announces_a_filled_slot_and_a_cleared_failure_only() {
+        use quest_slot_state::FAIL;
+        let prior = [(0, 0), (7, 0), (8, FAIL), (9, FAIL), (10, 0), (11, 0)];
+        let now = [(783, 0), (7, 0), (8, 0), (9, FAIL), (12, 0), (0, 0)];
+        assert_eq!(
+            accepted_quests(&prior, &now),
+            [783, 8],
+            "an empty slot filled, and the same quest with its fail bit cleared; a kept quest, a \
+             kept failure, a slot swapping quests and a cleared slot say nothing"
+        );
+    }
+
+    /// The watcher runs on the log's slots, not its rows: an accepted quest is announced before its
+    /// template lands, and the login snapshot is silent.
+    #[test]
+    fn a_quest_entering_the_log_queues_its_accept_line() {
+        use crate::ui_quest::{QuestLine, QuestLines};
+        use benilla_protocol::messages::field::FIELD_PLAYER_QUEST_LOG_1_1;
+
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.insert_resource(NetCommands(tx));
+        app.init_resource::<crate::net::GuidIndex>()
+            .init_resource::<NameCache>()
+            .init_resource::<Items>()
+            .init_resource::<crate::world_state::WorldStates>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .init_resource::<QuestLines>()
+            .init_resource::<QuestLog>();
+        let player = app
+            .world_mut()
+            .spawn((
+                ObjectStore(ObjectFields::from_pairs(&[(FIELD_PLAYER_QUEST_LOG_1_1, 7)])),
+                Guid(0x2A),
+                SelfPlayer,
+            ))
+            .id();
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        app.add_systems(Update, feed_quest_log);
+
+        app.update();
+        assert!(
+            app.world().resource::<QuestLines>().queued().is_empty(),
+            "the login snapshot fills the log silently"
+        );
+
+        app.world_mut()
+            .entity_mut(player)
+            .insert(ObjectStore(ObjectFields::from_pairs(&[
+                (FIELD_PLAYER_QUEST_LOG_1_1, 7),
+                (FIELD_PLAYER_QUEST_LOG_1_1 + 3, 783),
+            ])));
+        app.update();
+        assert_eq!(
+            app.world().resource::<QuestLines>().queued(),
+            [QuestLine::Accepted(783)]
+        );
+        assert!(
+            app.world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .take_sounds()
+                .is_empty(),
+            "the sound is the accept row's, played with its line"
         );
     }
 

@@ -46,6 +46,10 @@ pub(crate) struct QuestGiver {
     /// `DeclineQuest`, which keeps the panel up; both refuse while it is set (`0x5013a8`,
     /// `0x5013fe`) until a panel publish clears it ([`Self::open`]).
     pub(crate) acted: bool,
+    /// The reference's `0xbe0828`: the chosen reward's item id, latched by `GetQuestReward`
+    /// (`0x50161a`) for the turn-in's item line (`0x5dc676`-`0x5dc6c6`), and zeroed by a panel
+    /// publish (`0x500d8c`), world enter (`0x500b15`) and the turn-in.
+    pub(crate) chosen_reward: u32,
     /// Per-guid dialog status from `SMSG_QUESTGIVER_STATUS`, the `!`/`?` marker's value.
     statuses: HashMap<u64, u32>,
     /// Messages queued for [`feed_quest`], each a GlobalStrings key and its fills.
@@ -62,8 +66,10 @@ impl QuestGiver {
     pub(crate) fn open(&mut self, npc: u64, view: QuestView) {
         self.npc = Some(npc);
         self.view = Some(view);
-        // `0x500bd0` clears the already-acted latch on every panel publish (`0x500d91`).
+        // `0x500bd0` clears the already-acted latch (`0x500d91`) and the chosen reward
+        // (`0x500d8c`) on every panel publish.
         self.acted = false;
+        self.chosen_reward = 0;
     }
 
     #[allow(dead_code)]
@@ -158,6 +164,7 @@ impl QuestGiver {
         self.messages.clear();
         self.close_on_cancel = 0;
         self.acted = false;
+        self.chosen_reward = 0;
     }
 }
 
@@ -186,13 +193,17 @@ pub(crate) fn questgiver_failed_key(reason: u32) -> &'static str {
     }
 }
 
+mod lines;
 mod net;
+
+pub(crate) use lines::{QuestLine, QuestLines};
 
 pub(crate) struct UiQuestPlugin;
 
 impl Plugin for UiQuestPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
+        lines::register(app);
         app.init_resource::<QuestGiver>().add_systems(
             Update,
             (
@@ -649,6 +660,12 @@ fn drain_quest(
             }
             QuestAction::Reward(choice) => {
                 if let Some(quest) = view_quest {
+                    // `0x5015b0` latches the chosen row's item when the panel offers a choice.
+                    if let Some(QuestView::Reward(o)) = giver.view.as_ref() {
+                        if let Some(it) = o.choices.get(choice as usize) {
+                            giver.chosen_reward = it.item_id;
+                        }
+                    }
                     let _ = commands.0.send(ClientCommand::QuestgiverChooseReward {
                         npc,
                         quest,

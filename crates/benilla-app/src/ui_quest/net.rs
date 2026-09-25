@@ -7,7 +7,7 @@ use benilla_protocol::messages::{
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
 
-use super::QuestGiver;
+use super::{QuestGiver, QuestLine, QuestLines};
 use crate::net::{ClientCommand, NetCommands, NetHandlerApp};
 use crate::ui_action::UiError;
 use crate::ui_quest_log::QuestLog;
@@ -50,6 +50,8 @@ fn on_worldport(In(ev): In<SessionEvent>, mut quest: ResMut<QuestGiver>) {
 
 fn world_enter_reset(quest: &mut QuestGiver) {
     quest.close_on_cancel = 0;
+    // The same reset zeroes the chosen reward (`0x500b15`).
+    quest.chosen_reward = 0;
 }
 
 fn on_giver_status(In(ev): In<SessionEvent>, mut quest: ResMut<QuestGiver>) {
@@ -82,9 +84,13 @@ fn on_offer(In(ev): In<SessionEvent>, mut quest: ResMut<QuestGiver>) {
     }
 }
 
-fn on_complete(In(ev): In<SessionEvent>, mut quest: ResMut<QuestGiver>) {
+fn on_complete(
+    In(ev): In<SessionEvent>,
+    mut quest: ResMut<QuestGiver>,
+    mut lines: ResMut<QuestLines>,
+) {
     if let SessionEvent::QuestComplete(c) = ev {
-        quest_complete(c, &mut quest);
+        quest_complete(c, &mut quest, &mut lines);
     }
 }
 
@@ -221,11 +227,12 @@ fn quest_offer(o: QuestOfferReward, quest: &mut QuestGiver) {
     quest.open(o.npc, crate::ui_quest::QuestView::Reward(o));
 }
 
-/// `SMSG_QUESTGIVER_QUEST_COMPLETE`: the turn-in result, which closes the window.
-fn quest_complete(c: QuestComplete, quest: &mut QuestGiver) {
+/// `SMSG_QUESTGIVER_QUEST_COMPLETE` (`0x5dc400`): the turn-in's chat lines, in the reference's
+/// order, then the window closes. The XP, money and items themselves arrive by `UPDATE_OBJECT`
+/// and `ITEM_PUSH_RESULT`.
+fn quest_complete(c: QuestComplete, quest: &mut QuestGiver, lines: &mut QuestLines) {
     // The reference plays the `QUESTCOMPLETED` fanfare on this packet.
     quest.completed_fanfare = true;
-    // The XP, money and items arrive separately, by `UPDATE_OBJECT` and `ITEM_PUSH_RESULT`.
     debug!(
         "net: quest {} complete — +{} XP, +{} copper, {} item(s)",
         c.quest_id,
@@ -233,6 +240,20 @@ fn quest_complete(c: QuestComplete, quest: &mut QuestGiver) {
         c.money,
         c.items.len()
     );
+    lines.push(QuestLine::Completed(c.quest_id));
+    if c.xp != 0 {
+        lines.push(QuestLine::Experience(c.xp));
+    }
+    // A signed test (`0x5dc50b`).
+    if (c.money as i32) > 0 {
+        lines.push(QuestLine::Money(c.money));
+    }
+    for &(item, _count) in &c.items {
+        lines.push(QuestLine::Item(item));
+    }
+    if quest.chosen_reward != 0 {
+        lines.push(QuestLine::Item(std::mem::take(&mut quest.chosen_reward)));
+    }
     quest.clear();
     // A turn-in can move every giver's marker, so the reference re-asks from here.
     quest.bump_reask();
@@ -369,6 +390,53 @@ mod tests {
             Some(dialog_status::REWARD2),
             "and a player passes the same typemask, as it does in the reference"
         );
+    }
+
+    /// `0x5dc400`'s order: the completion, the XP, the money, each packet item, then the chosen
+    /// reward, which the turn-in spends.
+    #[test]
+    fn a_turn_in_raises_its_lines_in_the_reference_order() {
+        let mut giver = QuestGiver {
+            chosen_reward: 2_047,
+            ..Default::default()
+        };
+        let mut lines = QuestLines::default();
+        quest_complete(
+            QuestComplete {
+                quest_id: 7,
+                xp: 450,
+                money: 1_025,
+                items: vec![(6_529, 1), (159, 5)],
+            },
+            &mut giver,
+            &mut lines,
+        );
+        assert_eq!(
+            lines.queued(),
+            [
+                QuestLine::Completed(7),
+                QuestLine::Experience(450),
+                QuestLine::Money(1_025),
+                QuestLine::Item(6_529),
+                QuestLine::Item(159),
+                QuestLine::Item(2_047),
+            ]
+        );
+        assert_eq!(giver.chosen_reward, 0, "the turn-in zeroes the latch");
+
+        // No XP (a capped level) and no money: only the completion line.
+        let mut lines = QuestLines::default();
+        quest_complete(
+            QuestComplete {
+                quest_id: 7,
+                xp: 0,
+                money: 0,
+                items: vec![],
+            },
+            &mut giver,
+            &mut lines,
+        );
+        assert_eq!(lines.queued(), [QuestLine::Completed(7)]);
     }
 
     fn open_detail(quest_id: u32) -> QuestGiver {
