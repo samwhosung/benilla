@@ -2,7 +2,7 @@
 
 use mlua::{Lua, MultiValue, Value};
 
-use crate::script::binding_abi::number_arg;
+use crate::script::binding_abi::{self, number_arg};
 use crate::script::item_stats::item_link;
 use crate::script::Model;
 
@@ -17,15 +17,6 @@ fn opt_str(lua: &Lua, s: Option<&String>) -> mlua::Result<Value> {
         Some(s) => Value::String(lua.create_string(s)?),
         None => Value::Nil,
     })
-}
-
-/// A `bool` as the 1.12 API's `1` or `nil`.
-fn era_bool(b: bool) -> Value {
-    if b {
-        Value::Integer(1)
-    } else {
-        Value::Nil
-    }
 }
 
 /// Register the tradeskill globals.
@@ -139,7 +130,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                         Value::String(lua.create_string(&name)?),
                         Value::String(lua.create_string("header")?),
                         Value::Integer(0),
-                        era_bool(expanded),
+                        binding_abi::flag(expanded),
                     ]))
                 }
                 Row::Entry(ei) => {
@@ -276,7 +267,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             if let Some(r) = recipe_at(&model, index) {
                 for (name, have) in &r.tools {
                     out.push(Value::String(lua.create_string(name)?));
-                    out.push(era_bool(*have));
+                    out.push(binding_abi::flag(*have));
                 }
             }
             Ok(MultiValue::from_vec(out))
@@ -349,16 +340,16 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, index: usize| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(t) = model.trade_skill.as_ref() else {
-                return Ok(era_bool(false));
+                return Ok(binding_abi::flag(false));
             };
             let groups = build_groups(&t.recipes);
             Ok(match index.checked_sub(1) {
-                None => era_bool(
+                None => binding_abi::flag(
                     !groups
                         .iter()
                         .any(|g| model.trade_skill_subclass_hidden.contains(&g.key)),
                 ),
-                Some(n) => era_bool(
+                Some(n) => binding_abi::flag(
                     groups
                         .get(n)
                         .is_some_and(|g| !model.trade_skill_subclass_hidden.contains(&g.key)),
@@ -425,16 +416,16 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, index: usize| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             if model.trade_skill.is_none() {
-                return Ok(era_bool(false));
+                return Ok(binding_abi::flag(false));
             }
             let bits = present_inv_slots(&model);
             Ok(match index.checked_sub(1) {
                 // Everything shown: (present & mask) == present (`0x4fffd0`).
-                None => era_bool(
+                None => binding_abi::flag(
                     bits.iter()
                         .all(|&b| model.trade_skill_invslot_mask & (1 << b) != 0),
                 ),
-                Some(n) => era_bool(
+                Some(n) => binding_abi::flag(
                     bits.get(n)
                         .is_some_and(|&b| model.trade_skill_invslot_mask & (1 << b) != 0),
                 ),

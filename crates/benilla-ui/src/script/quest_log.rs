@@ -379,7 +379,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     Value::Integer(i64::from(it.count)),
                     Value::Integer(i64::from(it.quality)),
                     Value::Boolean(it.usable),
-                    // The item id, `BenillaGetItemStats`'s key, a sixth return that is not 1.12's.
+                    // The item id, a sixth return that is not 1.12's.
                     Value::Integer(i64::from(it.item_id)),
                 ]))
             })?,

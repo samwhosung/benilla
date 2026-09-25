@@ -448,39 +448,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // BenillaGetItemStats(itemId) → name, quality, invType, class, subclass, dmgMin, dmgMax,
-    // dmgType, delayMs, armor, block, sellPrice, or nil and an ask.
-    lua.globals().set(
-        "BenillaGetItemStats",
-        lua.create_function(|lua, item_id: u32| {
-            let view = {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                let v = model.item_templates.get(&item_id).cloned();
-                if v.is_none() && item_id != 0 {
-                    model.item_stat_asks.insert(item_id);
-                }
-                v
-            };
-            let Some(v) = view else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
-            };
-            let (dmg_min, dmg_max, dmg_type) = v.damages.first().copied().unwrap_or_default();
-            Ok(MultiValue::from_vec(vec![
-                Value::String(lua.create_string(&v.name)?),
-                Value::Integer(i64::from(v.quality)),
-                Value::Integer(i64::from(v.inventory_type)),
-                Value::Integer(i64::from(v.class)),
-                Value::Integer(i64::from(v.subclass)),
-                Value::Number(f64::from(dmg_min)),
-                Value::Number(f64::from(dmg_max)),
-                Value::Integer(i64::from(dmg_type)),
-                Value::Integer(i64::from(v.delay_ms)),
-                Value::Integer(i64::from(v.armor)),
-                Value::Integer(i64::from(v.block)),
-                Value::Integer(i64::from(v.sell_price)),
-            ]))
-        })?,
-    )
+    Ok(())
 }
 
 #[cfg(test)]
@@ -580,9 +548,7 @@ mod tests {
     #[test]
     fn miss_records_ask_and_push_serves_the_stats() {
         let mut s = UiScript::new().unwrap();
-        assert!(s
-            .eval::<bool>("return BenillaGetItemStats(25) == nil")
-            .unwrap());
+        assert!(s.eval::<bool>("return GetItemInfo(25) == nil").unwrap());
         assert_eq!(s.take_item_stat_asks(), vec![25]);
 
         s.set_item_template(
@@ -598,14 +564,13 @@ mod tests {
                 ..Default::default()
             },
         );
-        let (name, quality, inv): (String, i64, i64) =
-            s.eval("return BenillaGetItemStats(25)").unwrap();
-        assert_eq!((name.as_str(), quality, inv), ("Worn Shortsword", 1, 21));
+        let (name, quality): (String, i64) = s
+            .eval("local n, _, q = GetItemInfo(25) return n, q")
+            .unwrap();
+        assert_eq!((name.as_str(), quality), ("Worn Shortsword", 1));
         assert!(s.take_item_stat_asks().is_empty(), "push cleared the ask");
         // Id 0 records no ask.
-        assert!(s
-            .eval::<bool>("return BenillaGetItemStats(0) == nil")
-            .unwrap());
+        assert!(s.eval::<bool>("return GetItemInfo(0) == nil").unwrap());
         assert!(s.take_item_stat_asks().is_empty());
     }
 }

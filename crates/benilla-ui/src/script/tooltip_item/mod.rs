@@ -846,7 +846,6 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         render_view(lua, &this, &v, BuilderFlags::default(), None)?;
                         // Nothing to arm: the vendor tab's row seats `ShoppingTooltip1/2` itself
                         // (`MerchantFrame.xml:67-80`), and the buyback tab seats none.
-                        if buyback {}
                     }
                     None => {
                         // Template in flight: the row's own stat head as a minimal view, the

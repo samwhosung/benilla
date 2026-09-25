@@ -232,12 +232,6 @@ impl super::UiScript {
     pub fn set_saved_instances(&mut self, saved: Vec<SavedInstanceInfo>) {
         self.model_mut().saved_instances = saved;
     }
-
-    /// Drain the names `ChatFrame_SendTell` queued; the app opens the chat edit box on
-    /// `/w <name> ` for each.
-    pub fn take_tell_requests(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.model_mut().tell_requests)
-    }
 }
 
 /// Whether the player leads the group. `IsRaidLeader` (`0x4bb8c0`) and `IsPartyLeader`
@@ -703,18 +697,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // ChatFrame_SendTell(name) is FrameXML in the reference (`ChatFrame.lua:1606`, opening the
-    // edit box on `/w name `); the chat edit box is app-side here, so this queues the name for
-    // `UiScript::take_tell_requests`.
-    g.set(
-        "ChatFrame_SendTell",
-        lua.create_function(|lua, name: String| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.tell_requests.push(name);
-            Ok(())
-        })?,
-    )?;
-
     Ok(())
 }
 
@@ -1165,15 +1147,6 @@ mod tests {
     fn is_raid_officer_is_still_nil_and_that_is_a_missing_carve_not_a_missing_feature() {
         let s = UiScript::new().unwrap();
         assert!(s.eval::<bool>("return IsRaidOfficer() == nil").unwrap());
-    }
-
-    #[test]
-    fn chat_frame_send_tell_queues_the_name() {
-        let mut s = UiScript::new().unwrap();
-        assert!(s.take_tell_requests().is_empty());
-        s.run(r#"ChatFrame_SendTell("Alice")"#).unwrap();
-        assert_eq!(s.take_tell_requests(), vec!["Alice".to_string()]);
-        assert!(s.take_tell_requests().is_empty());
     }
 
     // ── The identity predicates ─────────────────────────────────────────────

@@ -9,7 +9,7 @@
 
 use mlua::{Lua, MultiValue, Value, Variadic};
 
-use super::binding_abi::number_arg;
+use super::binding_abi::{self, number_arg};
 use super::item_stats::item_link;
 use super::Model;
 
@@ -175,15 +175,6 @@ fn opt_str(lua: &Lua, s: Option<&String>) -> mlua::Result<Value> {
         Some(s) => Value::String(lua.create_string(s)?),
         None => Value::Nil,
     })
-}
-
-/// A `bool` as the reference's `1` or nil.
-fn era_bool(b: bool) -> Value {
-    if b {
-        Value::Integer(1)
-    } else {
-        Value::Nil
-    }
 }
 
 /// Register the craft globals.
@@ -362,7 +353,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             if let Some(r) = recipe(&model, index) {
                 for (name, have) in &r.tools {
                     out.push(Value::String(lua.create_string(name)?));
-                    out.push(era_bool(*have));
+                    out.push(binding_abi::flag(*have));
                 }
             }
             Ok(MultiValue::from_vec(out))

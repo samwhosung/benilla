@@ -280,10 +280,6 @@ pub(crate) struct Model {
     pub(crate) petition: petition::PetitionState,
     /// Charter calls (`BuyGuildCharter`, `SignPetition`, `TurnInGuildCharter`, …) queued.
     pub(crate) petition_requests: Vec<petition::PetitionRequest>,
-    /// Names `ChatFrame_SendTell` queued; the app opens the chat box prefilled `/w <name> `.
-    pub(crate) tell_requests: Vec<String>,
-    /// Draft lines `ChatFrame_OpenChat` queued, for the app to prefill the chat box.
-    pub(crate) open_chat_requests: Vec<String>,
     /// Per chat window from `ChatFrame1`, the tint, alpha and font size its tab menu can change.
     pub(crate) chat_window_looks: [chat_window::ChatWindowLook; chat_window::NUM_CHAT_WINDOWS],
     /// 0-based windows whose look Lua changed, the persist cue.
@@ -1080,8 +1076,6 @@ impl Model {
             guild_requests: Vec::new(),
             petition: petition::PetitionState::default(),
             petition_requests: Vec::new(),
-            tell_requests: Vec::new(),
-            open_chat_requests: Vec::new(),
             // Per window, as the stock dock differs: 1 and 2 are the dock, the rest undocked.
             chat_window_looks: std::array::from_fn(chat_window::ChatWindowLook::stock),
             chat_window_changes: HashSet::new(),

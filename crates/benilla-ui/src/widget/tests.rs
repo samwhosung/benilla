@@ -114,10 +114,10 @@ fn level_shift_saturates_at_zero() {
     let root = a.create(FrameKind::Frame, None, None);
     let child = a.create(FrameKind::Frame, None, Some(root));
     a.set_frame_level(root, 10, true);
-    a.set_frame_level(child, 12, true);
-    // Root drops by 10, taking the child from 12 to 2.
+    a.set_frame_level(child, 3, true);
+    // Root drops by 10, which would take the child to -7: it stops at 0.
     a.set_frame_level(root, 0, true);
-    assert_eq!(a.frame(child).unwrap().level, 2);
+    assert_eq!(a.frame(child).unwrap().level, 0);
 }
 
 // ── Scale ────────────────────────────────────────────────────────────────────────────────────

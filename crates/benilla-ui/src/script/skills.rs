@@ -16,6 +16,7 @@ use std::collections::HashMap;
 
 use mlua::{Lua, MultiValue, Value};
 
+use super::binding_abi;
 use super::Model;
 
 /// One known skill line off the player's `PLAYER_SKILL_INFO` block, resolved by the app.
@@ -261,15 +262,6 @@ fn displayed_ranks(e: &SkillEntry) -> (i64, i64) {
     (rank, max)
 }
 
-/// A `bool` as the 1.12 `1`/nil shape.
-fn era_bool(b: bool) -> Value {
-    if b {
-        Value::Integer(1)
-    } else {
-        Value::Nil
-    }
-}
-
 /// Register the skills-pane globals.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
@@ -303,7 +295,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     Ok(MultiValue::from_vec(vec![
                         Value::String(lua.create_string(&grp.name)?),
                         Value::Integer(1), // isHeader
-                        era_bool(expanded),
+                        binding_abi::flag(expanded),
                         Value::Integer(0), // skillRank
                         Value::Integer(0), // numTempPoints
                         Value::Integer(0), // skillModifier
@@ -326,7 +318,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         Value::Integer(0),                       // numTempPoints
                         Value::Integer(i64::from(e.temp_bonus)), // skillModifier: temp only
                         Value::Integer(max),
-                        era_bool(e.abandonable), // isAbandonable
+                        binding_abi::flag(e.abandonable), // isAbandonable
                         // stepCost, rankCost: nil, since Lua reads `0` as true.
                         Value::Nil,
                         Value::Nil,

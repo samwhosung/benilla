@@ -1,4 +1,4 @@
-//! The chat window settings bindings: `GetChatWindowInfo`, its setters and `ChatFrame_OpenChat`.
+//! The chat window settings bindings: `GetChatWindowInfo` and its setters.
 //!
 //! The reference keeps one record per window (`0xb4fe50`, stride 0x98, 10 slots), loaded from and
 //! saved to `chat-cache.txt`: name `+0x00`, message-group flags `+0x20`, channel names and ids
@@ -331,13 +331,6 @@ impl super::UiScript {
     }
 }
 
-impl super::UiScript {
-    /// Drains the texts `ChatFrame_OpenChat` queued since the last call.
-    pub fn take_open_chat_requests(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.model_mut().open_chat_requests)
-    }
-}
-
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GetChatWindowInfo(id) → name, fontSize, r, g, b, a, shown, locked, docked.
     lua.globals().set(
@@ -466,19 +459,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 look.font_size = s;
                 model.chat_window_changes.insert(i);
             }
-            Ok(())
-        })?,
-    )?;
-
-    // ChatFrame_OpenChat(text, chatFrame) queues `text` for the host to open the chat box with. The
-    // frame is inert: in 1.12 every chat frame's `editBox` is the one `ChatFrameEditBox`
-    // (FloatingChatFrame.lua:30, FloatingChatFrame.xml:742). The stock ChatFrame.lua:1545 defines
-    // the same global and replaces this one when it loads.
-    lua.globals().set(
-        "ChatFrame_OpenChat",
-        lua.create_function(|lua, (text, _chat_frame): (Option<String>, Value)| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.open_chat_requests.push(text.unwrap_or_default());
             Ok(())
         })?,
     )?;
@@ -929,21 +909,6 @@ mod tests {
         s.run("SetChatWindowColor(1, 0, 0, 0)").unwrap();
         s.run("SetChatWindowSize(1, 0)").unwrap();
         assert!(s.take_chat_window_changes().is_empty());
-    }
-
-    #[test]
-    fn chat_frame_open_chat_queues_its_text_and_ignores_the_frame() {
-        let mut s = UiScript::new().unwrap();
-        s.run("ChatFrame_OpenChat('/w Bob ')").unwrap();
-        s.run("ChatFrame_OpenChat('', 'not even a frame')").unwrap();
-        assert_eq!(
-            s.take_open_chat_requests(),
-            vec!["/w Bob ".to_string(), String::new()]
-        );
-        assert!(
-            s.take_open_chat_requests().is_empty(),
-            "the drain is a take"
-        );
     }
 }
 

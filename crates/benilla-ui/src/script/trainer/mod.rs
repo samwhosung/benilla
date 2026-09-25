@@ -6,6 +6,7 @@
 
 use mlua::{Lua, MultiValue, Value};
 
+use super::binding_abi;
 use super::Model;
 
 /// A service's state (the wire's `TrainerSpellState`): green learnable, red gated, gray known.
@@ -424,15 +425,6 @@ fn opt_str(lua: &Lua, s: Option<&String>) -> mlua::Result<Value> {
     })
 }
 
-/// A `bool` as the reference's `1` or nil.
-fn era_bool(b: bool) -> Value {
-    if b {
-        Value::Integer(1)
-    } else {
-        Value::Nil
-    }
-}
-
 /// Register the trainer globals.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
@@ -468,7 +460,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         Value::String(lua.create_string(&g.name)?),
                         Value::Nil,
                         Value::String(lua.create_string("header")?),
-                        era_bool(expanded),
+                        binding_abi::flag(expanded),
                     ]))
                 }
                 Row::Service(si) => {
@@ -560,7 +552,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(MultiValue::from_vec(vec![
                 Value::String(lua.create_string(&req.name)?),
                 Value::Integer(i64::from(req.rank)),
-                era_bool(req.met),
+                binding_abi::flag(req.met),
             ]))
         })?,
     )?;
@@ -584,7 +576,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             };
             Ok(MultiValue::from_vec(vec![
                 Value::String(lua.create_string(&req.name)?),
-                era_bool(req.met),
+                binding_abi::flag(req.met),
             ]))
         })?,
     )?;
@@ -599,7 +591,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "IsTrainerServiceTradeSkill",
         lua.create_function(|lua, index: usize| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(era_bool(
+            Ok(binding_abi::flag(
                 service(&model, index).is_some_and(|s| s.is_trade_skill),
             ))
         })?,
@@ -612,7 +604,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, index: usize| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let learn = service(&model, index).is_some_and(|s| !s.is_trade_skill);
-            Ok(MultiValue::from_vec(vec![era_bool(learn), Value::Nil]))
+            Ok(MultiValue::from_vec(vec![
+                binding_abi::flag(learn),
+                Value::Nil,
+            ]))
         })?,
     )?;
 
@@ -621,7 +616,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "IsTradeskillTrainer",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(era_bool(model.trainer.as_ref().is_some_and(|t| {
+            Ok(binding_abi::flag(model.trainer.as_ref().is_some_and(|t| {
                 t.trainer_type == TRAINER_TYPE_TRADESKILL
             })))
         })?,
@@ -632,7 +627,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "IsTalentTrainer",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(era_bool(
+            Ok(binding_abi::flag(
                 model.trainer.as_ref().is_some_and(|t| t.trainer_type == 1),
             ))
         })?,
@@ -656,7 +651,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, kind: String| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(match TrainerServiceCategory::from_filter_str(&kind) {
-                Some(c) => era_bool(model.trainer_filter[c.filter_slot()]),
+                Some(c) => binding_abi::flag(model.trainer_filter[c.filter_slot()]),
                 None => Value::Nil,
             })
         })?,

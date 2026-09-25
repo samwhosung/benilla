@@ -95,11 +95,6 @@ impl super::UiScript {
     pub fn take_social_requests(&mut self) -> Vec<SocialRequest> {
         std::mem::take(&mut self.model_mut().social_requests)
     }
-
-    /// Queue an intent from the app side.
-    pub fn queue_social_request(&mut self, request: SocialRequest) {
-        self.model_mut().social_requests.push(request);
-    }
 }
 
 /// Register the social globals against the snapshot store.

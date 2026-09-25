@@ -10,6 +10,7 @@
 
 use crate::layout::Rect;
 use crate::order::ZTarget;
+use crate::script::object::frame_handle_of;
 use crate::widget::{FrameHandle, InsertMode, KindState, MessageLine};
 
 use super::layout::FramePaint;
@@ -38,8 +39,6 @@ pub(super) fn message_text(lua: &mlua::Lua, v: &mlua::Value) -> Option<String> {
 /// Install `SetJustifyH`, `GetJustifyH`, `SetJustifyV` and `GetJustifyV`, which both classes carry,
 /// under [`crate::justify`]'s rules: an unknown token raises the usage line, and a token of the
 /// other axis clears this one, so `GetJustifyH()` then answers `"UNKNOWN"`.
-use crate::script::object::frame_handle_of;
-
 pub(super) fn install_justify(
     lua: &mlua::Lua,
     m: &mlua::Table,

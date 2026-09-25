@@ -9,6 +9,7 @@
 
 use mlua::{Lua, MultiValue, Value};
 
+use super::binding_abi;
 use super::Model;
 
 /// The thirteen rank rights in `GuildControlGetRankFlags`' return order, which is also the
@@ -258,16 +259,6 @@ fn truthy(value: &Value) -> bool {
     }
 }
 
-/// The 1.12 boolean, `1` or `nil`: the FrameXML stores what it tests, so a `false` would survive
-/// where the reference's `nil` does not.
-fn era_bool(on: bool) -> Value {
-    if on {
-        Value::Integer(1)
-    } else {
-        Value::Nil
-    }
-}
-
 /// Whether the player's own rank holds right `index`, 1-based into [`RANK_RIGHT_BITS`].
 fn has_right(model: &Model, index: usize) -> bool {
     model.guild.in_guild && model.guild.rights & RANK_RIGHT_BITS[index - 1] != 0
@@ -305,7 +296,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "IsInGuild",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(era_bool(model.guild.in_guild))
+            Ok(binding_abi::flag(model.guild.in_guild))
         })?,
     )?;
 
@@ -314,7 +305,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "IsGuildLeader",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(era_bool(model.guild.is_leader))
+            Ok(binding_abi::flag(model.guild.is_leader))
         })?,
     )?;
 
@@ -375,7 +366,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Value::String(lua.create_string(&m.zone)?),
                 Value::String(lua.create_string(&m.note)?),
                 Value::String(lua.create_string(&m.officer_note)?),
-                era_bool(m.online),
+                binding_abi::flag(m.online),
                 Value::String(lua.create_string(&m.status)?),
             ]))
         })?,
@@ -444,7 +435,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetGuildRosterShowOffline",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(era_bool(model.guild.show_offline))
+            Ok(binding_abi::flag(model.guild.show_offline))
         })?,
     )?;
     // With no argument it turns show-offline on, unlike an explicit `nil`, hence `MultiValue`.
@@ -593,7 +584,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             global,
             lua.create_function(move |lua, ()| {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                Ok(era_bool(has_right(&model, index)))
+                Ok(binding_abi::flag(has_right(&model, index)))
             })?,
         )?;
     }
@@ -653,7 +644,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(MultiValue::from_vec(
                 RANK_RIGHT_BITS
                     .iter()
-                    .map(|bit| era_bool(rights & bit != 0))
+                    .map(|bit| binding_abi::flag(rights & bit != 0))
                     .collect(),
             ))
         })?,

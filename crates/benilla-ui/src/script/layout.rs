@@ -403,8 +403,6 @@ struct PreambleProf {
     scroll: u128,
     /// `region_resolved`'s liveness retain.
     retain: u128,
-    /// Never set, so always 0: the frame roster is built inside `fp_frames`.
-    plan: u128,
     /// `LayoutScope::begin_full`.
     begin: u128,
     /// The fingerprint and scope walk over every live frame.
@@ -447,14 +445,13 @@ impl PreambleProf {
             + self.ids
             + self.scroll
             + self.retain
-            + self.plan
             + self.begin
             + self.fp_frames
             + self.fp_regions
             + self.seed;
         eprintln!(
             "[layout-pre] skips={} incr={} frames={frames} anchored={regions} total_us={total} \
-             tooltip={} watched={} ids={} scroll={} retain={} plan={} begin={} \
+             tooltip={} watched={} ids={} scroll={} retain={} begin={} \
              fp_frames={} fp_regions={} seed={}",
             u8::from(skips),
             u8::from(self.incremental),
@@ -463,7 +460,6 @@ impl PreambleProf {
             self.ids,
             self.scroll,
             self.retain,
-            self.plan,
             self.begin,
             self.fp_frames,
             self.fp_regions,

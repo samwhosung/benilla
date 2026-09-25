@@ -12,6 +12,7 @@ use std::collections::HashMap;
 
 use mlua::{Lua, MultiValue, Value};
 
+use super::binding_abi;
 use super::Model;
 
 /// The synthetic header key for factions the player moved to the inactive bucket.
@@ -144,15 +145,6 @@ fn collate(a: &str, b: &str) -> std::cmp::Ordering {
     a.to_lowercase()
         .cmp(&b.to_lowercase())
         .then_with(|| a.as_bytes().cmp(b.as_bytes()))
-}
-
-/// `1` or nil, never `0`: `0` is truthy in Lua, and the stock pane tests `if ( atWarWith )`.
-fn era_bool(b: bool) -> Value {
-    if b {
-        Value::Integer(1)
-    } else {
-        Value::Nil
-    }
 }
 
 /// Build the header groups: the visible non-header rows by [`header_key`], sorted by name. A group
@@ -305,7 +297,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         Value::Nil,                            // atWarWith
                         Value::Nil,                            // canToggleAtWar
                         Value::Integer(1),                     // isHeader
-                        era_bool(collapsed),                   // isCollapsed
+                        binding_abi::flag(collapsed),          // isCollapsed
                         Value::Nil,                            // isWatched
                     ]))
                 }
@@ -318,11 +310,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         Value::Integer(i64::from(e.bar_min)),
                         Value::Integer(i64::from(e.bar_max)),
                         Value::Integer(i64::from(e.standing)),
-                        era_bool(e.at_war),
-                        era_bool(e.can_toggle_at_war),
+                        binding_abi::flag(e.at_war),
+                        binding_abi::flag(e.can_toggle_at_war),
                         Value::Nil, // isHeader
                         Value::Nil, // isCollapsed
-                        era_bool(model.reputation.watched == Some(e.rep_list_id)),
+                        binding_abi::flag(model.reputation.watched == Some(e.rep_list_id)),
                     ]))
                 }
             }
@@ -412,7 +404,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "IsFactionInactive",
         lua.create_function(|lua, index: usize| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(era_bool(
+            Ok(binding_abi::flag(
                 entry_at(&model, index).is_some_and(|e| e.inactive),
             ))
         })?,

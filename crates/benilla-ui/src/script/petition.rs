@@ -6,6 +6,7 @@
 
 use mlua::{Lua, MultiValue, Value};
 
+use super::binding_abi;
 use super::Model;
 
 /// `GetPetitionInfo`'s first return when the record's charter bit is set (`0x84cf8c`, selected at
@@ -131,15 +132,6 @@ pub fn validate_guild_name(name: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// 1.12's `1` or nil, never `true`/`false`: this client has no `lua_pushboolean`.
-fn era_bool(on: bool) -> Value {
-    if on {
-        Value::Integer(1)
-    } else {
-        Value::Nil
-    }
-}
-
 /// A cached name as a string, an uncached one as nil.
 fn name_value(lua: &Lua, name: Option<&String>) -> mlua::Result<Value> {
     match name {
@@ -176,7 +168,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Value::String(lua.create_string(&r.body_text)?),
                 Value::Integer(i64::from(r.max_signatures)),
                 name_value(lua, r.originator.as_ref())?,
-                era_bool(r.is_originator),
+                binding_abi::flag(r.is_originator),
             ]))
         })?,
     )?;
@@ -215,7 +207,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "CanSignPetition",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(era_bool(model.petition.can_sign))
+            Ok(binding_abi::flag(model.petition.can_sign))
         })?,
     )?;
 
