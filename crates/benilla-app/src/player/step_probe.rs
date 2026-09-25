@@ -1,33 +1,10 @@
-//! **The step-up probe** — the instrument that answers "why won't it climb *this* kerb?".
-//!
-//! The symptom is always the same from outside the window: you walk into something small, the
-//! avatar keeps running on the spot, and nothing in the ordinary trace says why — the atomic
-//! step-up ([`super::mover::step_up`]) declined, and one of six different reasons is the truth.
-//! Reasoning cannot pick between them (0209's whole history is sessions that tried), and neither
-//! can a screenshot, so this measures instead:
-//!
-//! 1. **The blocked frame is detected, not hunted.** A grounded walk frame whose achieved
-//!    horizontal displacement is a fraction of what the input asked for *is* the report. No
-//!    keybind to remember, no guessing which of the director's frames were the bad ones.
-//! 2. **The surface profile ahead is measured** with one-sided down rays at a ladder of forward
-//!    offsets: how tall the thing actually is, whether it has a walkable top at all, and — the
-//!    reason the rays are one-sided like the mover's own probes — whether that top is even
-//!    *visible* to a downward sweep under the 0970 facing law.
-//! 3. **The maneuver is re-run at a ladder of advances.** The live step-up advances by this
-//!    frame's own travel, which is 12 cm at 60 fps and 3 cm at 240 — while the capsule
-//!    radius is [`super::CAPSULE_RADIUS`]. If a rung further out commits where the live one did
-//!    not, the advance is the defect; if *every* rung says `NO-FLOOR`, the geometry is; if every
-//!    rung says `STEEP-FLOOR`, the walkable gate is. One line, one verdict.
-//! 4. **The candidate faces are dumped** ([`benilla_world::collision::WorldCollision::faces_near_body`]), with the
-//!    facing gate's own answer per face, when the trace asks for them.
-//!
-//! Output goes two places: the `stup` tag of `WOW_MOVE_TRACE` (the record we read afterwards) and
-//! [`latest`], a small ring the debug panel renders live — so the director can *see* the probe
-//! fire at the spot they meant, which is what makes a capture worth reading (method §6).
-//!
-//! Cost: nothing at all on a frame that moves. On a blocked one it is rate-limited to
-//! [`REPORT_HZ`] reports a second, each a handful of shape casts and rays — so leaning on a wall
-//! forever cannot turn into a frame-rate story of its own.
+//! The step-up probe: when [`super::mover::step_up`] declines and a grounded walk frame achieves a
+//! fraction of the asked distance, it reports the wall ahead, the surface profile from one-sided
+//! down rays, the maneuver re-run at a ladder of advances and, traced, the candidate faces. A rung
+//! committing beyond the live one blames the advance; `NO-FLOOR` on every rung, the geometry;
+//! `STEEP` on every rung, the walkable gate. Output goes to the `stup` trace tag and to
+//! [`latest`], which the debug panel shows live, so a run shows the probe fired at the intended
+//! spot (`docs/METHOD.md`, loop step 5).
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
@@ -36,34 +13,28 @@ use std::sync::Mutex;
 use super::mover::{step_up, StepVerdict};
 use super::{CAPSULE_HEIGHT, CAPSULE_RADIUS, SKIN_WIDTH, STEP_UP_HEIGHT};
 
-/// A walk frame counts as blocked when it achieved less than this share of the horizontal distance
-/// the input asked for. A square push into a wall achieves ~0; a legitimate slide along one at 45°
-/// still achieves ~70%, and a walkable-slope ride achieves 100% by construction —
-/// so the band below this is "went nowhere", not "was deflected".
+/// A walk frame is blocked below this share of the asked horizontal distance: a push into a wall
+/// achieves about 0, a 45° slide along one about 70%.
 const BLOCKED_SHARE: f32 = 0.35;
 
-/// Reports per second while blocked. Enough to catch a bump-and-retry, cheap enough to lean on.
+/// Reports per second while blocked.
 const REPORT_HZ: f32 = 5.0;
 
-/// Forward offsets the surface profile is sampled at (yd). The last two are past anything the
-/// maneuver could reach — they say what the geometry *is*, which is how a "there is no top surface
-/// here" reads differently from "the top is 0.9 yd away".
+/// Forward offsets of the surface profile in yd; the last two lie past the maneuver's reach.
 const PROFILE: [f32; 8] = [0.0, 0.1, 0.2, 0.35, 0.5, 0.7, 1.0, 1.4];
 
-/// Advances the maneuver is re-run at (yd). The live rung — this frame's own travel — is prepended
-/// at report time, so the table always opens with what actually happened.
+/// Advances the maneuver is re-run at in yd, after the live rung (this frame's own travel).
 const LADDER: [f32; 6] = [0.1, 0.2, CAPSULE_RADIUS, 0.5, 0.8, 1.2];
 
 /// How many candidate faces the geometry dump prints, nearest first.
 const FACE_DUMP: usize = 24;
 
-/// The probe's own state: the rate limiter, and the last report for the panel to render.
+/// The rate limiter and the last report, for the panel.
 struct Probe {
     /// App-elapsed seconds of the last report; `f32::MIN` before the first.
     last: f32,
-    /// The most recent report, one string per line — what [`latest`] hands the debug panel.
     report: Vec<String>,
-    /// App-elapsed seconds the report was taken, so the panel can grey out a stale one.
+    /// App-elapsed seconds the report was taken; the panel greys out a stale one.
     at: f32,
 }
 
@@ -73,7 +44,7 @@ static PROBE: Mutex<Probe> = Mutex::new(Probe {
     at: f32::MIN,
 });
 
-/// The last blocked report (lines) and the app-elapsed time it was taken — the debug panel's read.
+/// The last blocked report's lines and the app-elapsed time it was taken, for the debug panel.
 pub(crate) fn latest() -> (Vec<String>, f32) {
     PROBE
         .lock()
@@ -81,11 +52,8 @@ pub(crate) fn latest() -> (Vec<String>, f32) {
         .unwrap_or_default()
 }
 
-/// Watch one **local** grounded walk frame, and report it if the body went nowhere.
-///
-/// `from`/`to` are the capsule centre either side of [`super::mover::grounded_step`] — the walk
-/// resolve alone, before the hover climb and the water-walk clamp, both of which move the body for
-/// reasons that have nothing to do with a kerb.
+/// Reports one local grounded walk frame if the body went nowhere. `from`/`to` are the capsule
+/// centre around [`super::mover::grounded_step`] alone, before the hover and water-walk moves.
 pub(super) fn watch(
     world: &benilla_world::collision::WorldCollision<'_, '_>,
     capsule: &Collider,
@@ -95,21 +63,13 @@ pub(super) fn watch(
     dt: f32,
     now: f32,
 ) {
-    // **Nobody is reading this in a player build**. Unlike its neighbour
-    // `move_trace`, which gates on `trace::enabled()` in its first line, this ran unconditionally:
-    // every blocked walk frame — routine play, walking into a wall — paid a body shape-cast, eight
-    // down-rays and seven full re-runs of `step_up`, up to 5×/s, to fill a `static` whose only
-    // reader is the debug panel. 1174 filed this file as residue, "weight, not behaviour"; that was
-    // wrong, and this is the correction. (Narrowing it further in a DEV build — to "the panel is
-    // open or the trace is on" — is a live question the panel's readout has an opinion about, and
-    // is deliberately not done here.)
+    // Dev builds only: the debug panel is the result's reader.
     if !crate::run_mode::dev_affordances() {
         return;
     }
     let speed = horiz_vel.length();
     let wanted = speed * dt;
-    // Below a millimetre of intent there is no "blocked" to speak of — standing still, or a frame
-    // so short that every ratio is noise.
+    // Under a millimetre of intent every ratio is noise.
     if wanted < 1.0e-3 {
         return;
     }
@@ -130,10 +90,7 @@ pub(super) fn watch(
     let feet_y = from.y - CAPSULE_HEIGHT * 0.5;
     let cast = |c: Vec3, disp: Vec3| world.cast_body(capsule, c, disp, SKIN_WIDTH);
 
-    // The spot is stamped in **WoW** coordinates as well as Bevy's: every other probe, every `.go
-    // xyz`, and the director's own `/gps` speak that frame, so a blocked report is walkable-back-to
-    // without anyone converting by hand. (Bevy's are what the rest of this report's geometry is in,
-    // so both are on the line.)
+    // WoW coordinates, as `.go xyz` takes them, and Bevy's, as the rest of the report uses.
     let feet_wow = benilla_assets::coords::bevy_to_wow(Vec3::new(from.x, feet_y, from.z));
     let mut lines = Vec::with_capacity(5);
     lines.push(format!(
@@ -151,8 +108,7 @@ pub(super) fn watch(
         d.y,
     ));
 
-    // What we are pressed against — a look-ahead a full radius deep, so the face is found even
-    // when this frame's own travel is a centimetre and the live maneuver never saw it.
+    // A full radius ahead, so the face is found even when this frame's travel is tiny.
     let wall = cast(from, dir_h * CAPSULE_RADIUS);
     lines.push(match &wall {
         None => format!("  wall  none within {CAPSULE_RADIUS:.2} yd ahead"),
@@ -170,10 +126,8 @@ pub(super) fn watch(
         ),
     });
 
-    // The surface profile ahead: one-sided down rays from above the capsule, reported as height
-    // above the feet. `miss` on a rung with solid geometry under it is the facing law rejecting a
-    // top face — the reading no shape cast can give, because a sweep that finds nothing and a
-    // sweep that finds a backface are the same `None`.
+    // One-sided down rays, as height above the feet: `miss` over solid geometry is the facing law
+    // rejecting a top face, which a shape cast cannot tell from empty space.
     let eye = from + Vec3::Y * STEP_UP_HEIGHT;
     let ray_len = STEP_UP_HEIGHT + CAPSULE_HEIGHT * 0.5 + 1.0;
     let profile: Vec<String> = PROFILE
@@ -191,14 +145,12 @@ pub(super) fn watch(
         .collect();
     lines.push(format!("  ahead {}", profile.join(" ")));
 
-    // The ladder: the same maneuver, at advances the live one never tries. The live rung first.
+    // The same maneuver at advances the live one never tries, the live rung first.
     let rungs: Vec<String> = std::iter::once(wanted)
         .chain(LADDER)
         .map(|adv| {
             let v = step_up(&cast, from, dir_h, adv.max(wanted), adv, STEP_UP_HEIGHT).verdict;
-            // `fwd` — how far the elevated sweep ACTUALLY got — is on every rung, because without
-            // it a failing far rung is two different stories: "we advanced that far and the floor
-            // there is steep" and "something at head height stopped us short of it".
+            // `fwd`, the raised sweep's reach, tells a steep floor from a stop at head height.
             let tag = match v {
                 StepVerdict::NoFace => "no-face".to_string(),
                 StepVerdict::NoHeadroom => "NO-HEADROOM".to_string(),
@@ -212,8 +164,7 @@ pub(super) fn watch(
         .collect();
     lines.push(format!("  ladder {}", rungs.join(" | ")));
 
-    // The faces themselves, when the trace asks. Kept off the panel and off an untraced run: it is
-    // two dozen lines, and it is the answer only when the three readings above disagree.
+    // The faces, traced runs only: two dozen lines, needed when the readings above disagree.
     let mut faces = Vec::new();
     if benilla_assets::trace::enabled_for("stup") {
         let at = from + dir_h * CAPSULE_RADIUS;

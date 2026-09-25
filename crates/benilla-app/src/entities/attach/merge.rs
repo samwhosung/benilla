@@ -1,39 +1,9 @@
-//! **A body's batches, merged by material** — one mesh entity per *material group* of a dressed
-//! body instead of one per authored M2 batch (the crowd rig's first proposal).
-//!
-//! A geared level-60 body stands as 12–27 mesh parts binding 5–16 distinct materials (the dress
-//! census's `parts=`/`mats=`, read off a 40-man raid at the Stormwind auction house): the skin
-//! composite serves the torso, arms, legs, hands and feet as separate opaque batches, the hair
-//! texture serves the hair and the facial geosets, and every one of those was its own entity —
-//! its own row in every per-entity sweep Bevy and we run each frame (bounds, specialization,
-//! visibility, extraction, the material walk), its own phase item, its own draw with its own
-//! bind-group and vertex-buffer sets in wgpu's pass encoder. The raid's cost is that population,
-//! not a hot function (1929), and per body about 40 % of it is batches that draw with a material
-//! the batch beside it already binds.
-//!
-//! **What merges.** Two visible batches of one body join when they would be *indistinguishable*
-//! to everything downstream of the spawn: the same six-handle material set (steady, the two
-//! interior lanes, the fade twins, the depth-prime twin — every component derived from them is
-//! then identical), the same blend/sidedness, both static or both skinned, and neither carrying
-//! per-batch state the merge cannot represent: an animated alpha track, a billboard, a welded
-//! billboard seam, a ground-decal quad. Transparent batches never meet — their material key
-//! carries the authored batch order (`model_render::MatKey::batch_order`), so each has its own
-//! handle by construction and painter's order is untouched. The key is *static*: which slot a
-//! batch's texture comes from and its authored flags, never the texture itself — so a gear change
-//! that swaps the composite re-points a group's material in place exactly as it re-pointed a
-//! part's, and only a change to the *visible set* (a geoset the new gear hides or reveals)
-//! rebuilds the groups it touches.
-//!
-//! **What a group is.** A synthetic [`EntityPart`] cloned from its first member, with the
-//! geometry replaced by the members' concatenation and the render forms built from it the way
-//! `model_forms` builds a batch's — the static form `RENDER_WORLD`-only, the skinned twin keeping
-//! its main-world copy for the picker (0834's contract, unchanged). The concatenated
-//! [`RenderSubmesh`] is also the group's [`PickMesh`], so the mouseover ray still tests the
-//! resident geometry it always did. Merged forms are cached per (model geometry, member set):
-//! forty humans in the same gear silhouette share them the way they shared the per-batch forms.
-//!
-//! Attach models (helm, shoulders, held items) are their own M2s with their own roots and are not
-//! in scope here; a body's billboard cards keep their own spawner (`dress::spawn_billboard_part`).
+//! A body's batches merged by material: one mesh entity per group of batches that nothing
+//! downstream of the spawn can tell apart (the same six-handle material set, blend, sidedness and
+//! skinning, and no alpha track, billboard, welded seam or ground quad), not one per M2 batch.
+//! A batch's own materials are keyed by its authored order (`MatKey`'s `batch_order`), so two
+//! transparent batches never merge. The key names a texture slot, never a texture, so a gear
+//! change re-points a group in place and only a change to the shown set rebuilds groups.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -50,17 +20,16 @@ use super::super::EntityPart;
 use super::char_skin::CharSkinMaterials;
 use super::dress::part_materials;
 
-/// The members of a merged group, on the group's entity beside its `DressedPart` (whose `index`
-/// is the first member). Absent on a singleton.
+/// A merged group's member indices, beside its `DressedPart` (whose `index` is the first member);
+/// absent on a singleton.
 #[derive(Component, Clone)]
 pub(in crate::entities) struct DressedGroup(pub(in crate::entities) Arc<[u32]>);
 
-/// What makes two of one body's batches interchangeable downstream of the spawn. Built from the
-/// part's *slot* and flags, never from a resolved texture — see the module doc.
+/// What makes two of a body's batches interchangeable: the material slot and flags, never a
+/// resolved texture.
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct MergeKey {
-    /// The slot the material comes from: a character slot, or the batch's own built materials
-    /// (identified by their handles — the same six for every batch sharing a texture).
+    /// A character slot, or the batch's own six built material handles.
     source: MaterialSource,
     blend: ModelBlend,
     additive: bool,
@@ -116,8 +85,8 @@ impl BodyGroup {
     }
 }
 
-/// Partition the shown parts of a body into spawn groups, in first-member order. `shows` is the
-/// geoset predicate the dress and the redress both evaluate.
+/// Partition a body's parts that `shows` (the geoset predicate) into spawn groups, in
+/// first-member order.
 pub(in crate::entities) fn group_parts(
     parts: &[EntityPart],
     shows: impl Fn(&EntityPart) -> bool,
@@ -144,15 +113,10 @@ pub(in crate::entities) fn group_parts(
     groups
 }
 
-/// The members' geometry as one submesh: attributes concatenated, indices re-based. Every member
-/// shares the first's material facts by construction of the key, so the first's texture, flags
-/// and slots are the group's.
+/// The members' geometry as one submesh, indices re-based; the key makes the first member's
+/// material facts the group's.
 fn concat_geometry(first: &RenderSubmesh, rest: &[&RenderSubmesh]) -> RenderSubmesh {
     let mut out = first.clone();
-    // Per-vertex attributes that are either full-length or absent on every member: a mismatch
-    // in presence would leave the group half-attributed, so the merge key keeps such batches
-    // apart only implicitly (a model authors these per skin, not per batch); assert the
-    // invariant rather than guess.
     for sub in rest {
         let base = u32::try_from(out.positions.len()).expect("merged vertex count fits u32");
         out.positions.extend_from_slice(&sub.positions);
@@ -170,9 +134,8 @@ fn concat_geometry(first: &RenderSubmesh, rest: &[&RenderSubmesh]) -> RenderSubm
     out
 }
 
-/// Extend a per-vertex attribute so it stays either exactly full-length or empty: a member
-/// without it drops the attribute for the whole group (the renderer recomputes normals; a
-/// missing skin on any member means the group is not skinned, which the key already ensured).
+/// Extend a per-vertex attribute so it stays full-length or empty: one member without it drops it
+/// for the whole group.
 fn extend_matched<T: Copy>(dst: &mut Vec<T>, src: &[T], full: usize) {
     if dst.is_empty() && src.is_empty() {
         return;
@@ -185,8 +148,7 @@ fn extend_matched<T: Copy>(dst: &mut Vec<T>, src: &[T], full: usize) {
     }
 }
 
-/// A group's built render forms: the merged geometry (the group's `PickMesh`), its static form,
-/// its skinned twin when every member skins, and the static form's build-time bound.
+/// A group's render forms; `geometry` is also its `PickMesh`.
 #[derive(Clone)]
 pub(in crate::entities) struct MergedForms {
     pub(in crate::entities) geometry: Arc<RenderSubmesh>,
@@ -195,19 +157,15 @@ pub(in crate::entities) struct MergedForms {
     pub(in crate::entities) aabb: Option<Aabb>,
 }
 
-/// The merged-form cache, keyed by (the first member's geometry, the member set) — the geometry
-/// `Arc` is the model's own, shared by every unit of that display, so the key names one model's
-/// one silhouette. Strong handles: a cached form outlives its units the way a model's per-batch
-/// forms do, and the whole table drops past [`MERGED_FORMS_CAP`] entries rather than growing
-/// with every silhouette a session ever sees.
+/// Merged forms keyed by (the first member's geometry `Arc`, the member set): one model's one
+/// silhouette, shared by every unit of that display. Cleared whole past [`MERGED_FORMS_CAP`].
 #[derive(Resource, Default)]
 pub(crate) struct MergedFormsCache(HashMap<(usize, Vec<u32>), MergedForms>);
 
 const MERGED_FORMS_CAP: usize = 1024;
 
 impl MergedFormsCache {
-    /// The forms of `group` over `parts`, built on a miss. A singleton borrows the model's own
-    /// forms and never enters the cache.
+    /// The forms of `group`, built on a miss; a singleton borrows the model's own, uncached.
     pub(in crate::entities) fn forms(
         &mut self,
         parts: &[EntityPart],
@@ -237,8 +195,7 @@ impl MergedFormsCache {
         let merged = concat_geometry(&first.geometry, &rest);
         let stat = benilla_assets::submesh_to_static_mesh(&merged);
         let aabb = stat.compute_aabb();
-        // The skinned twin exists only when every member skins AND the concatenation kept a
-        // full joint set — a group drawn static on a rigged body would stand in bind pose.
+        // Skinned only when every member skins and the joints survived the concatenation.
         let skinned = (group
             .members
             .iter()
@@ -270,9 +227,8 @@ pub(in crate::entities) fn group_part(
     part
 }
 
-/// Do two members resolve the same materials? The key promises it for the static half; this is
-/// the check the character half makes at dress time (a slot resolving to `None` — no look, no
-/// tables — falls back to the batch's own materials, which the key did not compare).
+/// Whether every member resolves the same materials at dress time: a character slot with no
+/// look falls back to each batch's own materials, which the key does not compare.
 pub(in crate::entities) fn same_materials(
     parts: &[EntityPart],
     group: &BodyGroup,
@@ -295,8 +251,7 @@ pub(in crate::entities) fn same_materials(
         .all(|&i| ids(&part_materials(&parts[i as usize], char_mats)) == want)
 }
 
-/// Split every group whose members do not resolve the same materials into singletons — the
-/// dress-time guard behind [`same_materials`]. Cheap: the resolve is a slot match.
+/// Split into singletons every group that fails [`same_materials`].
 pub(in crate::entities) fn guard_groups(
     groups: Vec<BodyGroup>,
     parts: &[EntityPart],
@@ -378,9 +333,9 @@ mod tests {
         let mut parts = vec![
             part(1, 0),    // skin
             part(2, 100),  // hair
-            part(1, 400),  // gloves — the skin's material
-            part(1, 500),  // boots — the skin's material, hidden below
-            part(2, 200),  // facial — the hair's material, but animated: singleton
+            part(1, 400),  // gloves: the skin's material
+            part(1, 500),  // boots: the skin's material, hidden below
+            part(2, 200),  // facial: the hair's material, but a welded billboard
             part(3, 1500), // cloak: static form, its own material
         ];
         parts[4].welded_billboard = true;

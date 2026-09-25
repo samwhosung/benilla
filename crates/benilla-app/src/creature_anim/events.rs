@@ -1,7 +1,5 @@
-//! The model event-keyframe scanner: [`fire_anim_events`] and its helpers, plus the
-//! [`AnimSoundEvent`] message it emits — the animation timeline's outbound trigger surface
-//! (decision 0070 slice 3). Kept in its own file as its own small concern, separate from the
-//! driver ([`super::driver`]) that advances the clips it scans.
+//! The model event-keyframe scanner: [`fire_anim_events`] fires the M2 `$xxx` keys each playing
+//! clip crossed this frame as [`AnimSoundEvent`]s.
 
 use benilla_assets::{AnimClip, ModelAnimations};
 use bevy::animation::graph::AnimationNodeIndex;
@@ -10,10 +8,7 @@ use bevy::prelude::*;
 use super::{resolved_id, AnimData, AnimDriver};
 use crate::names::type_flags::MORE_AUDIBLE;
 
-/// A model **event keyframe** crossed during playback this frame (the M2 `$xxx` tags — decision
-/// 0070 slice 3): the animation timeline's outbound trigger surface. The sound subsystem routes
-/// the audio tags (`$SND` kits, footsteps, `$CSS` swings, fidgets); future consumers (camera
-/// shake `$SHK`, footprints) read the same stream.
+/// A model event keyframe (an M2 `$xxx` tag) crossed during playback this frame.
 #[derive(Message, Clone, Copy)]
 pub(crate) struct AnimSoundEvent {
     pub(crate) entity: Entity,
@@ -21,39 +16,22 @@ pub(crate) struct AnimSoundEvent {
     pub(crate) ident: [u8; 4],
     /// The tag payload (a SoundEntries id for `$SND`/`$DSL`/`$DSO`; 0 otherwise).
     pub(crate) data: u32,
-    /// The `AnimationData.dbc` id of the **clip that fired the key**.
-    ///
-    /// This is the reference's `0x5fdb50` answer at the instant a handler runs: that helper reads
-    /// the model's currently-playing animation id, and a key fires from a clip the model is
-    /// playing, at that key's own time in it. Two dispatch arms branch on it — the `$BWR` weapon
-    /// family fork (`0x5fcfb0` bow {46,105,109} vs `0x5fcfd0` rifle {49,106,110}) —
-    /// and carrying it here is what lets them ask without re-deriving "what is this unit playing"
-    /// from a player whose one-shot overlays outrank its base clip in weight.
+    /// The `AnimationData.dbc` id of the clip that fired the key: the reference's `0x5fdb50`
+    /// answer when a handler runs, which the `$BWR` bow/rifle fork reads (`0x5fcfb0` bow
+    /// {46,105,109}, `0x5fcfd0` rifle {49,106,110}).
     pub(crate) anim_id: u16,
-    /// **Where the key fired** — the reference's own `placementMatrix · (boneMatrix[event.bone] ·
-    /// event.position)`, resolved here at the fire and carried by value exactly as the M2 event
-    /// kernel `0x719370` snapshots it into the deferred callback record that every dispatcher
-    /// (`0x5ffbd0` units, `0x5f3e20` GameObjects, `0x6951e0` placed models) then reads (decision
-    /// 1904).
-    ///
-    /// It is emphatically not the object's origin: corpus-wide 149 of 244 `$DSL` records sit off
-    /// it, out to **67.6 yd** on `Maraudon_Waterfall01.m2`, and the six `$CSD` records every
-    /// player model authors ride the head. `None` only when the model carries no rig *and* no
-    /// world frame to place it in — the consumer then falls back to the object's own transform,
-    /// which is what all of them used to do unconditionally.
+    /// Where the key fired, `placementMatrix · (boneMatrix[bone] · position)`, snapshotted at the
+    /// fire as the event kernel `0x719370` does for every dispatcher (`0x5ffbd0` units,
+    /// `0x5f3e20` GameObjects, `0x6951e0` placed models). Not the object's origin: 149 of 244
+    /// shipped `$DSL` keys sit off it, up to 67.6 yd. `None` uses the object's own transform.
     pub(crate) pos: Option<Vec3>,
 }
 
-/// The frame a scanner resolves a fired key's world point in — the two exact cases, named.
-///
-/// A **rigged** model composes the record's bone-local offset through that bone's live joint
-/// global, which is the kernel's `boneMatrix[bone] · position` and then the placement. A model
-/// with **no rig** has no bone matrices at all, and with no keys every bone composes to the
-/// identity — so `placement · position` is not an approximation of the kernel's quantity, it *is*
-/// it. That second case is the whole placed-doodad population: 0 of 244 `$DSL` records ride a bone
-/// any sequence keys (`benilla-extract eventmarkerscan`).
+/// The frame a fired key's world point resolves in: a rigged model composes the key's bone-local
+/// offset through that bone's live joint; a rig-less one has only identity bones, so
+/// `placement · point` is the kernel's value exactly.
 pub(crate) struct EventFrame<'a> {
-    /// The model's own world frame — the reference's placement matrix.
+    /// The model's world frame, the reference's placement matrix.
     pub(crate) world: &'a GlobalTransform,
     /// The composed pose and its joints root, for a model that has a rig.
     pub(crate) rig: Option<(&'a benilla_world::rig_anim::RigPose, &'a GlobalTransform)>,
@@ -68,75 +46,35 @@ impl EventFrame<'_> {
     }
 }
 
-/// A footfall is **two independent channels**, and a tag belongs to exactly one of them — the
-/// client's event dispatcher `0x5ffbd0` routes them to two different handlers:
-///
-/// - **`$FSD` → `0x623390`: the footstep SOUND**, and nothing else — it never reaches the decal
-///   path ([`is_footstep_sound`]).
-/// - **the per-foot side tags → `0x5fbf70`: the VISUAL footfall** — the footprint decal and the
-///   spray/splash particle, and no sound at all ([`footfall_side`]).
-///
-/// So a gait that authors both fires **one** sound per `$FSD` key, not one per key of either
-/// family: HumanMale's Walk keys `$FR0 · $FSD · $FL0 · $FSD` over 1 s and the real client plays
-/// **two** steps there, while its turn-in-place ShuffleLeft/Right key only `$SL0 $SR0` at
-/// `t = 0.000` and are **silent**.
-///
-/// The **sound** channel: the dispatch tag `$FSD` alone.
+/// The footstep sound channel: `$FSD` alone, which the dispatcher `0x5ffbd0` routes to
+/// `0x623390`; the per-foot side tags go to the visual handler `0x5fbf70` and never sound.
 pub(crate) fn is_footstep_sound(ident: &[u8; 4]) -> bool {
     ident == b"$FSD"
 }
 
-/// **The footfall handler's own radius**, `2500 yd²` (50 yd) — `[0x80c5b4]`, read at `0x5fc00a`
-/// inside `0x5fbf70`. This gate stands *above* everything that handler goes on to spawn: the
-/// footprint decal ([`crate::footprints`]), the footstep camera shake
-/// ([`crate::camera_shake`]) and the 25 yd spray branch below it all live under it, so it is one
-/// constant and not one per consumer — they held a copy each until they disagreed about its
-/// origin.
-///
-/// **Measured from the CAMERA EYE, not the local player.** `FUN_004818f0()` returns
-/// `[[0xb4b2bc]+0x65b8]` — the *active camera* — and its `+0x8/+0xc/+0x10` is the eye.
-///
-/// **Unconditional** — the local player's own feet are gated like anyone else's. The reference's
-/// `GUID == local player` compare (`0x5fc042`–`0x5fc06b`) is the decal call's fifth argument, the
-/// **ring-pool select**, not an early bypass.
+/// The footfall handler's radius, 2500 yd² (50 yd, `[0x80c5b4]` read at `0x5fc00a` in
+/// `0x5fbf70`), measured from the active camera's eye (`0x4818f0`, `[[0xb4b2bc]+0x65b8]`). It
+/// gates all the handler spawns (decal, camera shake, spray), the local player's feet included:
+/// the `GUID == local player` compare (`0x5fc042`–`0x5fc06b`) only picks the decal's ring pool.
 const FOOTFALL_RADIUS_SQ: f32 = 2500.0;
 
-/// **Is this footfall out of range?** The handler's distance gate, whole: the kernel, the
-/// threshold and the compare, because all three are load-bearing and splitting them is what
-/// let two consumers disagree.
-///
-/// The kernel rounds **once, at the end**. The reference is x87: it loads the two `C3Vector`s as f32, and keeps every difference, square
-/// and sum in 80-bit extended, then `fstp`s the sum to a **single f32** (`0x5fbffe` store,
-/// `0x5fc007` reload) before the compare. A plain `Vec3::distance_squared` rounds six times
-/// instead of once and can land on the other side of the branch for a footfall sitting on the
-/// 50 yd edge.
-///
-/// f64 reproduces it exactly and needs no x87: an `f32 − f32` widened first is exact, a 24×24→48
-/// bit product is exact, and the sum of three ≤50-bit values is exact — which also makes the
-/// reference's `(dz² + dy²) + dx²` summation order unobservable here, so this does not pretend to
-/// map its axis names onto ours. Round once on the way out and the f32 handed to the compare is
-/// bit-identical.
-///
-/// The compare is **strict** — bail iff `> FOOTFALL_RADIUS_SQ`, so exactly 50 yd passes, and so
-/// does a NaN: `test ah,0x41; je` reads ZF and takes the unordered result as "keep", which Rust's
-/// `>` reproduces for free. It lives here rather than at the call sites so the strictness and the
-/// NaN edge are stated once instead of re-spelled per consumer.
+/// Whether a footfall is out of the handler's range. The reference sums in x87 extended and
+/// rounds once to f32 (`0x5fbffe` store, `0x5fc007` reload); f64 holds every difference, square
+/// and sum exactly, so this matches bit for bit where `Vec3::distance_squared` can round across
+/// the 50 yd edge. The compare is strict and keeps a NaN (`test ah,0x41; je`), as `>` does.
 pub(crate) fn footfall_culls(a: Vec3, b: Vec3) -> bool {
     footfall_dist2(a, b) > FOOTFALL_RADIUS_SQ
 }
 
-/// The gate's `dist²`, split out so the tests can see the number the compare is handed.
+/// The gate's `dist²`, rounded to f32 once.
 fn footfall_dist2(a: Vec3, b: Vec3) -> f32 {
     let d = |p: f32, q: f32| p as f64 - q as f64;
     let (dx, dy, dz) = (d(a.x, b.x), d(a.y, b.y), d(a.z, b.z));
     (dx * dx + dy * dy + dz * dz) as f32
 }
 
-/// The **visual** channel: the foot side a per-foot plant tag names (`$FL0` → `L`), or `None` for
-/// every other tag — the trigger for footfall-driven *visuals* ([`crate::footprints`]). The ten
-/// families the dispatcher tables, each with its `0/1/2/3` variants: `$FL/$FR` (front),
-/// `$RL/$RR` (rear), `$SL/$SR` (shuffle), `$BL/$BR` (backwards), `$WL/$WR` — call sites
-/// `0x5ffe32` (`push 1`, LEFT) and `0x5ffc82` (`push 0`, RIGHT).
+/// The visual footfall channel: the foot side a per-foot tag names (`$FL0` gives `L`), over the
+/// ten families the dispatcher tables (`0x5ffe32` left, `0x5ffc82` right).
 pub(crate) fn footfall_side(ident: &[u8; 4]) -> Option<u8> {
     matches!(
         &ident[..3],
@@ -145,15 +83,11 @@ pub(crate) fn footfall_side(ident: &[u8; 4]) -> Option<u8> {
     .then_some(ident[2])
 }
 
-/// How far (seconds) into a just-armed clip the playhead may have been *at the arm* for
-/// [`advance_track`] to open the next frame's window at the clip's head (`t = 0` keyframes
-/// included). Comfortably above a frame (even a hitchy one), comfortably below the corpse
-/// settle's `seek_to(duration)` (every Death clip is > 1 s).
+/// How far (s) into its clip an arm may land and still open the next window at the head: above
+/// a hitchy frame, below the corpse settle's `seek_to(duration)` (every Death clip is over 1 s).
 const FRESH_CLIP_HEAD: f32 = 0.25;
 
-/// One scanned track's memory: the graph node playing, the seek last seen on it, and whether that
-/// seek is an **arm stamp** — the frame the clip was armed, which fires nothing (see
-/// [`advance_track`]).
+/// One scanned track's memory: the playing node, its last seek, and whether that seek is the arm.
 #[derive(Clone, Copy)]
 pub(crate) struct TrackSeek {
     node: AnimationNodeIndex,
@@ -161,20 +95,13 @@ pub(crate) struct TrackSeek {
     armed: bool,
 }
 
-/// A scanner's per-entity track memory — the `Local` every [`advance_track`] caller owns.
+/// A scanner's per-entity track memory, the `Local` each [`advance_track`] caller owns.
 pub(crate) type TrackMemory = bevy::ecs::entity::EntityHashMap<TrackSeek>;
 
-/// Fire the event keyframes the current clip crossed since last frame. Runs after
-/// [`super::driver::drive_animations`] so the clip/seek state is this frame's. Per unit we
-/// remember the playing node and its seek ([`TrackSeek`]); a loop wrap fires the tail
-/// `(prev, duration]` then the head `[0, cur]` — a `t = 0` key really does re-fire on every wrap,
-/// in the reference too (the walker `0x719370`), which is why a held turn-in-place
-/// lays a footprint pair twice a second there as well.
-///
-/// Arming is [`advance_track`]'s: an arm frame fires nothing, the frame after it opens the clip's
-/// head window (so `t = 0` keyframes are real), and a clip that doesn't survive its arm frame
-/// fires nothing at all — the reference's own walker rule, byte-cited there.
-#[allow(clippy::type_complexity)] // one Bevy query tuple — the house convention
+/// Fire the event keys each unit's base and overlay clips crossed since last frame; runs after
+/// [`super::driver::drive_animations`]. A `t = 0` key re-fires on every loop wrap, as in the
+/// reference's walker `0x719370`.
+#[allow(clippy::type_complexity)] // one Bevy query tuple, the house convention
 pub(super) fn fire_anim_events(
     units: Query<(
         Entity,
@@ -182,19 +109,16 @@ pub(super) fn fire_anim_events(
         &AnimationPlayer,
         &AnimDriver,
         Has<benilla_world::rig_anim::AnimParked>,
-        // The unit's descriptor — read for ONE field, `OBJECT_FIELD_ENTRY`, the key its cached
-        // creature template hangs off (see the `MORE_AUDIBLE` read below).
+        // Read only for `OBJECT_FIELD_ENTRY`, the key of the cached creature template.
         Option<&crate::net::ObjectStore>,
         &GlobalTransform,
         Option<&benilla_world::rig_anim::RigPose>,
     )>,
-    // The joint roots the composed poses hang off — read, never spawned (decision 1355's pure
-    // position read).
+    // The joint roots the composed poses hang off.
     globals: Query<&GlobalTransform>,
     mut last: Local<TrackMemory>,
-    // The **masked overlay** track's own memory: a swing/emote routed to the
-    // SpineLow overlay plays *beside* the base, so its events (a swing's `$CSS`, an emote's `$CSD`)
-    // are scanned on their own node — the base scan above never sees them.
+    // The masked overlay's own memory: a swing or emote there plays beside the base, so its keys
+    // are scanned on their own node.
     mut last_overlay: Local<TrackMemory>,
     mut out: MessageWriter<AnimSoundEvent>,
     anim_data: Option<Res<AnimData>>,
@@ -202,15 +126,10 @@ pub(super) fn fire_anim_events(
 ) {
     let catalog = anim_data.as_deref().map(|d| &d.0);
     for (entity, anims, player, drv, parked, store, world, pose) in &units {
-        // The election's TICK half: a parked unit's event tracks are not
-        // scanned — the reference's pass-2 walk never inserts the model into the tick worklist
-        // (`0x683dd0` walk 2 skips `0x710b90`) — unless its cached template carries
-        // `MORE_AUDIBLE`, the `0x607da0` re-link arm that keeps an off-screen flagged
-        // creature's combat audible. A missing template record reads NOT audible (the
-        // reference's `0x623b70` null leg — fail closed; the record lands within a second of
-        // streaming anyway). The track memories are dropped so a waking track re-ARMS — firing
-        // nothing on the wake frame — instead of scanning the whole parked gap as one
-        // crossing; the reference's re-admission is likewise a fresh record.
+        // A parked unit's tracks are not scanned, as the reference's second walk never ticks it
+        // (`0x683dd0` skips `0x710b90`), unless its template carries `MORE_AUDIBLE` (the
+        // `0x607da0` re-link); a missing template reads not audible (`0x623b70`). Dropping the
+        // memories makes a waking track re-arm rather than scan the whole parked gap.
         if parked
             && !store
                 .and_then(|s| s.0.object_entry())
@@ -221,12 +140,8 @@ pub(super) fn fire_anim_events(
             last_overlay.remove(&entity);
             continue;
         }
-        // Base track: the **resolved** id — the clip whose timeline is actually
-        // advancing, which can differ from the requested `active_anim()` when this model falls back —
-        // then the id's **playing variation** (a one-shot rolled one of the id's
-        // variation clips, each its own node with its own event track). During a same-id cross-fade
-        // (swing variation A fading under fresh variation B) the newest play — the smallest seek —
-        // is the track; the node-keyed memory then treats the switch as a clip change.
+        // Base track: the resolved id's playing variation, each variation its own node and event
+        // track; in a same-id cross-fade the newest play (the smallest seek) is scanned.
         let frame = EventFrame {
             world,
             rig: pose.and_then(|p| Some((p, globals.get(p.joints_root).ok()?))),
@@ -244,11 +159,7 @@ pub(super) fn fire_anim_events(
                 }
             }
         }
-        // Masked overlay track: events fire from whichever track plays the clip. The overlay knows
-        // its exact node — match it back to its clip (a variation's `upper_node`).
-        // A freshly-started overlay fires its head window one frame after the arm via
-        // [`advance_track`], so an emote's `t = 0` `$CSD` voice still rings; a swing's mid-clip
-        // `$CSS` fires as normal.
+        // Masked overlay track: its node matched back to the variation whose `upper_node` it is.
         if let Some(ov) = drv.overlay {
             let id = resolved_id(anims, ov.id, catalog);
             let clip = anims
@@ -268,27 +179,11 @@ pub(super) fn fire_anim_events(
     }
 }
 
-/// Advance a per-track memory and return the `prev` seek to scan events from, or `None` to only
-/// arm this frame. Keyed by the playing **graph node** (not the semantic id): two variations of
-/// the same id are different timelines with different event tracks, and a node
-/// switch is a clip change like any other.
-///
-/// **The arm frame fires nothing** — the reference's own rule, and the reason this is not simply
-/// "fire the head window when you see a new clip". The client's animation arm
-/// `0x7121a0` bakes the block's window start `+0xa8 = now` (`0x712758`), so on that frame the
-/// walker computes `prev == cur` and `0x719518 jae` abandons the block before reading a single
-/// key. The window only opens on the **next** frame, and it opens at the arm stamp — local
-/// `t = 0` — with the fire test `prevL <= t < curL` (`0x7196d5`–`0x7196d9`), so `t = 0` keyframes
-/// are real (the emote voices carry `$CSD` at `0.000`) but only for a clip that is **still armed a
-/// frame later**. A clip armed and abandoned inside one frame fires nothing at all, which is what
-/// keeps a flickering Shuffle↔Stand churn silent in the reference — and is exactly what our
-/// fire-on-the-arm-frame rule turned into a footprint carpet under a stuttering mouse-turn.
-///
-/// So: a clip change (and first sight of a unit — it may have streamed in mid-clip) records the
-/// arm and returns `None`; the frame after an arm returns `-1.0`, opening the head window
-/// `[0, cur]`. An arm that *starts* deep in its timeline (the corpse settle's `seek_to(duration)`,
-/// past [`FRESH_CLIP_HEAD`]) opens at its own stamp instead, so a settled corpse never replays its
-/// collapse's keys.
+/// Advance a track's memory, keyed by graph node, and return the seek to scan from, or `None` on
+/// an arm frame. The reference's arm `0x7121a0` stamps the window start at now (`0x712758`), so
+/// the walker skips that frame (`0x719518`) and opens the next at the stamp, lower-inclusive
+/// (`0x7196d5`–`0x7196d9`): `t = 0` keys fire only for a clip still armed a frame later. An arm
+/// deep in its timeline (past [`FRESH_CLIP_HEAD`]) opens at its own stamp, not the head.
 pub(crate) fn advance_track(
     last: &mut TrackMemory,
     entity: Entity,
@@ -312,17 +207,9 @@ pub(crate) fn advance_track(
     })
 }
 
-/// Fire the event keyframes `clip` crossed on `(prev, cur]`. A loop wrap (`cur < prev`) fires the
-/// tail `(prev, duration]` of the last cycle then the head `[0, cur]` of the new one.
-///
-/// **Every fired key is traced under `aev`** (`WOW_MOVE_TRACE`, `WOW_MOVE_TRACE_TAGS=aev`). This is
-/// the *asking* half of the sound instrument, and it was the half we did not have: the play log
-/// (`RUST_LOG=benilla_app::sound=debug`) says what sounded, but a report of the shape "this
-/// creature vocalises far too often" needs to separate *the tag fired too often* from *the tag
-/// fired as authored and the gate above it is missing*. Those are different bugs with different
-/// fixes — decision 1399 had to answer exactly that question for a pet owl and could only do it by
-/// reading the M2 by hand. One line per key, on the same clock as the mover and wire traces, so a
-/// vocal can be read against the clip that asked for it.
+/// Fire the keys `clip` crossed on `(prev, cur]`; a loop wrap (`cur < prev`) fires the tail
+/// `(prev, duration]` then the head `[0, cur]`. Every fired key is traced under the `aev` tag
+/// (`WOW_MOVE_TRACE`, `WOW_MOVE_TRACE_TAGS=aev`), on the clock of the mover and wire traces.
 pub(crate) fn scan_events(
     clip: &AnimClip,
     entity: Entity,
@@ -355,10 +242,7 @@ pub(crate) fn scan_events(
                             pos.x,
                             pos.y,
                             pos.z,
-                            // How far the key fired from the model's own origin — the whole
-                            // question this line was extended to answer. A
-                            // non-zero `off` is the marker being honoured; all-zero across a run
-                            // is the model-root fallback, which is what it used to be everywhere.
+                            // Distance from the model's origin; 0 is the model-root fallback.
                             pos.distance(frame.world.translation()),
                         ),
                     );
@@ -385,9 +269,6 @@ pub(crate) fn scan_events(
 mod tests {
     use super::*;
 
-    /// The gate's edge behaviour, which is the whole reason the kernel is not
-    /// `Vec3::distance_squared`: exactly 50 yd **passes** (the compare is strict), a NaN passes
-    /// with it, and the sum is rounded to f32 exactly once.
     #[test]
     fn the_footfall_gate_edge_and_nan_both_pass() {
         let at = |d: f32| Vec3::new(d, 0.0, 0.0);
@@ -407,15 +288,8 @@ mod tests {
         );
     }
 
-    /// **Rounding once is not cosmetic** — this pair flips the branch.
-    ///
-    /// Two points 50 yd apart out at the map's edge, where the coordinates are large enough that
-    /// f32 differences and squares stop being exact. Rounding six times (each difference, each
-    /// square, each partial sum — what a plain f32 `distance_squared` does) lands on **exactly**
-    /// `2500.0`, which the strict compare *keeps*; the reference's single rounding lands one ulp
-    /// above, which it *culls*. Same two points, opposite answers, and ours has to be the second.
-    ///
-    /// The literals are the shortest decimals that round-trip to the intended f32s.
+    /// Two points 50 yd apart at the map's edge: six f32 roundings land exactly on 2500, one
+    /// lands an ulp above. The literals round-trip to the intended f32s.
     #[test]
     fn a_six_rounding_kernel_lands_on_the_wrong_side_of_the_branch() {
         let a = Vec3::new(-6157.2476, 16978.16, -14441.062);
@@ -438,9 +312,7 @@ mod tests {
         );
     }
 
-    /// The two channels are disjoint: `$FSD` is the whole sound channel, the
-    /// per-foot side tags the whole visual one. HumanMale's Walk keys one of each family per
-    /// footfall — routing both to sound is exactly the doubled step rate.
+    /// The channels are disjoint: HumanMale's Walk keys one tag of each per footfall.
     #[test]
     fn the_sound_channel_is_fsd_alone() {
         assert!(is_footstep_sound(b"$FSD"));
@@ -453,7 +325,6 @@ mod tests {
         assert_eq!(footfall_side(b"$FSD"), None);
     }
 
-    /// The side letter a per-foot tag names; every other tag is `None`.
     #[test]
     fn footfall_side_reads_the_side_letter() {
         assert_eq!(footfall_side(b"$FL0"), Some(b'L'));
@@ -478,11 +349,6 @@ mod tests {
         )
     }
 
-    /// **The arm frame scans nothing, and the frame after it opens the clip's head.** The
-    /// reference's arm (`0x7121a0`) stamps the block's window start at `now`, so the walker's
-    /// `prev == cur` abandons the block that frame (`0x719518`); the next frame's window opens at
-    /// that stamp — local `t = 0`, lower-inclusive — which is what makes an emote's `t = 0.000`
-    /// `$CSD` real without making it fire a frame early.
     #[test]
     fn an_arm_frame_is_silent_and_the_next_frame_opens_the_head() {
         let (mut last, unit, shuffle, _) = track();
@@ -503,10 +369,7 @@ mod tests {
         );
     }
 
-    /// **A clip armed and abandoned inside one frame fires nothing** — the report this rule was
-    /// written for. A stuttering mouse-turn flickers the gait Shuffle↔Stand at
-    /// input cadence, and HumanMale's ShuffleLeft keys `$SL0`+`$SR0` at `t = 0.000`: firing on the
-    /// arm frame laid a footprint pair per flicker, where the reference lays none.
+    /// Shuffle and Stand alternating every frame, as under a stuttering mouse-turn.
     #[test]
     fn a_clip_armed_for_one_frame_never_fires() {
         let (mut last, unit, shuffle, stand) = track();
@@ -516,9 +379,7 @@ mod tests {
         }
     }
 
-    /// An arm that *starts* deep in its timeline — the corpse settle's `seek_to(duration)` —
-    /// opens at its own stamp, never at the head: a body that streamed in dead must not replay
-    /// the collapse's `$DTH` keys.
+    /// The corpse settle's `seek_to(duration)`: a body streamed in dead replays no collapse keys.
     #[test]
     fn an_arm_deep_in_the_timeline_never_opens_the_head() {
         let (mut last, unit, death, _) = track();
@@ -530,11 +391,7 @@ mod tests {
         );
     }
 
-    /// The turn-in-place cadence, which this change deliberately leaves alone: HumanMale's
-    /// ShuffleLeft (anim 11) is a **0.500 s loop** whose only keys are `$SL0` and `$SR0`, both at
-    /// `t = 0.000`, and the reference re-fires a `t = 0` key on **every wrap** (the walker
-    /// `0x719370`) — so a held turn lays a print pair twice a
-    /// second in the real client too.
+    /// A held turn lays a print pair on every 0.5 s wrap, as the reference's walker does.
     #[test]
     fn a_loop_wrap_refires_the_head_keys() {
         let clip = shuffle_clip();
@@ -550,8 +407,7 @@ mod tests {
         );
     }
 
-    /// HumanMale ShuffleLeft's real shape (`benilla-extract m2events`): 0.500 s, looping, keys
-    /// `$SL0` and `$SR0` both at 0.000.
+    /// HumanMale ShuffleLeft (`benilla-extract m2events`): 0.5 s, looping, `$SL0` and `$SR0` at 0.
     fn shuffle_clip() -> AnimClip {
         AnimClip {
             anim_id: 11,
@@ -604,8 +460,7 @@ mod tests {
             .run_system_once(
                 |win: bevy::prelude::Res<Window>, mut out: MessageWriter<_>| {
                     let unit = Entity::from_raw_u32(1).expect("valid entity id");
-                    // Identity placement, no rig: the fired point is the key's own model-space
-                    // one, which is what this test's zero-offset keys make `Vec3::ZERO`.
+                    // Identity placement, no rig: the fired point is the key's own, zero here.
                     let world = GlobalTransform::IDENTITY;
                     let frame = EventFrame {
                         world: &world,
@@ -619,14 +474,6 @@ mod tests {
         msgs.drain().map(|m| m.ident).collect()
     }
 
-    /// **A rig-less model's event point is the placement times the key's own model-space point** —
-    /// and that is not an approximation of the kernel's `placementMatrix · (boneMatrix[bone] ·
-    /// position)`: with no keys every bone matrix composes to the identity, so the two are equal.
-    ///
-    /// This is the whole placed-doodad population, where the offsets are largest (149 of 244
-    /// shipped `$DSL` records sit off their origin, out to 67.6 yd) and **none** rides a bone any
-    /// sequence keys. A model *placed* somewhere and *scaled* must carry its marker with it, which
-    /// is what the transform below checks and what a bare `translation()` read could not do.
     #[test]
     fn a_rigless_models_key_fires_at_its_placed_and_scaled_point() {
         use bevy::ecs::system::RunSystemOnce;
@@ -637,7 +484,7 @@ mod tests {
             ident: *b"$DSL",
             data: 1,
             bone: 3,
-            offset: Vec3::new(1.0, 2.0, 3.0), // ignored on this leg — there is no rig to compose
+            offset: Vec3::new(1.0, 2.0, 3.0), // ignored: there is no rig to compose
             point: Vec3::new(10.0, 0.0, 0.0),
         }]
         .into();

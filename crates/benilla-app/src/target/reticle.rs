@@ -1,35 +1,22 @@
-//! The **ground-targeting AoE reticle** — the terrain-projected decal a **location** cast's
-//! cursor drags across the world. Only a word that passes
-//! `TargetingWantsLocation`'s `& 0x60` has one: the other two seams (a bag click, a world
-//! GameObject click) arm the same cursor and draw no decal at all — see [`update_reticle`]'s guard.
+//! The ground-targeting AoE reticle: the terrain-projected decal under a location cast's cursor.
+//! Only a targeting word passing `TargetingWantsLocation`'s `& 0x60` draws one; a bag click or a
+//! world GameObject click arms the same cursor and draws none.
 //!
-//! For every ordinary area spell (Blizzard, Flamestrike — no object-placement effect), the
-//! reference draws a **projected decal**, not a model: box = the picked ground point ± r in the
-//! horizontal plane, **± 2.0 vertically** (`0x4837b0`); textures
-//! `Interface\SpellShadow\Spell-Shadow-Acceptable.blp` (in range) /
-//! `…-Unacceptable.blp` (out), vertex colour `0xffffffff` — the *texture* carries the
-//! green/red, not a tint. It projects through **the same ground-decal projector as the
-//! selection ring** (`0x6d7330 → 0x6d6fa0 → 0x6d7480` — [`benilla_world::decal`]), axis-aligned (no
-//! rotation term; the effect-0x51 placement rotate orients a GameObject *preview model*, a
-//! machine we don't carry — that family of spells is a named residual).
+//! The reference projects a decal for an area spell: the picked ground point ± r horizontally and
+//! ± 2.0 vertically (`0x4837b0`), axis-aligned, through the selection ring's ground-decal projector
+//! (`0x6d7330 → 0x6d6fa0 → 0x6d7480`, [`benilla_world::decal`]). The texture carries the colour,
+//! `Spell-Shadow-Acceptable.blp` in range and `Spell-Shadow-Unacceptable.blp` out of it, under a
+//! white vertex colour. The reference also rotates a GameObject preview model for an
+//! object-placement spell (effect `0x51`); that model is not built.
 //!
-//! **Radius**: `r = min(GetCurrentCastRadius, 20.0)` (`0x6e6350`, clamp `0x4820f0`):
-//! per-effect `radius + casterLevel × perLevel` over **EffectRadiusIndex[0] and [1] only**
-//! (slot 2 is never read), max with candidate-1 winning ties/NaN. **Out of range forces the
-//! radius to 0.0** — the decal shrinks to the 1.3888889 default *and* turns red. `r == 0` (no
-//! radius rows — a dest spell with no area) also draws at the default. Spell-mod op 6
-//! (SPELLMOD_RADIUS) is not folded in: the tables are live (`crate::spell::mods`), this consumer
-//! is not wired to them (the same residual as the range gate).
+//! The radius is `ground_cast_radius` (`GetCurrentCastRadius 0x6e6350`, clamped to 20.0 in
+//! `0x4820f0`), with no spell mod applied. Out of range forces it to 0.0, and 0.0 draws at the
+//! 1.3888889 default. With no world hit nothing is drawn: the
+//! reference resets its draw state every hover pass. Over a unit the decal lands on the ground
+//! behind it, since a dest-only word's pick skips the object trace (`0x480e7b`).
 //!
-//! **States**: in range → Acceptable at `r`; out of range → Unacceptable at the default size;
-//! cursor over sky / no world hit → **nothing is drawn** (the ref resets its draw state every
-//! hover pass before the pick — the "frozen at the last point" reading was refuted at the
-//! bytes). Over a unit the decal draws on the ground behind it (the pick can't see units while
-//! a dest-only word is up — its flags skip the object trace at `0x480e7b`).
-//!
-//! Named gap (shared with the blob shadow): the ref's second projection pass (`0x483727`) takes
-//! **liquid** surfaces (flags `0x0f0000`) — our [`GroundDecalSurface`] set has no liquid yet, so
-//! the reticle vanishes over water instead of floating on it.
+//! The reference's second pass (`0x483727`) also projects onto liquid (flags `0x0f0000`); the
+//! decal surfaces have no liquid yet, so the reticle vanishes over water.
 
 use bevy::prelude::*;
 
@@ -41,22 +28,20 @@ use benilla_world::decal::{DecalFrame, WorldDecal};
 use benilla_world::particles::buffer::EffectVertex;
 use benilla_world::view::WorldCamera;
 
-/// The default footprint when the radius is 0 — out of range, or a rowless spell
-/// (`[0xb4b3b0] == 0.0 → 1.3888889`, the ref's literal).
+/// The footprint for a zero radius, out of range or rowless (the reference's literal for
+/// `[0xb4b3b0] == 0.0`).
 const RETICLE_DEFAULT_RADIUS: f32 = 1.388_889;
-/// The projection box's vertical slab: ± 2.0 around the picked point (`0x4837b0` — fixed, not
-/// radius-scaled like the ring's).
+/// The box's vertical half-height (`0x4837b0`), fixed, not radius-scaled like the ring's.
 const RETICLE_VERT: f32 = 2.0;
 
-/// The two state textures (the render-side residency gate withholds the draw until loaded).
+/// The two state textures; the draw waits until they are loaded.
 #[derive(Resource)]
 pub(super) struct ReticleAssets {
     acceptable: Handle<Image>,
     unacceptable: Handle<Image>,
 }
 
-/// The single reticle record — the ring's resource pattern (projection cached against a key,
-/// pushed onto the effect stream per frame).
+/// The reticle: its projection, cached against a key and pushed onto the effect stream each frame.
 #[derive(Resource, Default)]
 pub(super) struct ReticleState {
     verts: Vec<EffectVertex>,
@@ -65,7 +50,7 @@ pub(super) struct ReticleState {
     shown: bool,
 }
 
-/// The projection's rebuild inputs — a still cursor costs a compare.
+/// The projection's rebuild inputs: a still cursor costs one compare.
 #[derive(Default, PartialEq, Clone, Copy)]
 struct ReticleKey {
     center: Vec3,
@@ -83,21 +68,15 @@ pub(super) fn setup_reticle(mut commands: Commands, asset_server: Res<AssetServe
     commands.init_resource::<ReticleState>();
 }
 
-/// Place/size/state the reticle each frame while a **location** cast awaits its click. Runs
-/// after the targeting cursor drive in the target chain: `WorldCursor.unable` IS the frame's
-/// range verdict (the one `CheckGroundPointInRange` caller — the cursor and the decal state are
-/// the same read in the ref).
+/// Places, sizes and colours the reticle while a location cast awaits its click. Runs after the
+/// targeting cursor drive: `WorldCursor.unable` is the frame's range verdict, one read for the
+/// cursor and the decal, as in the reference.
 ///
-/// **Both of `0x4820f0`'s guards, in its order**: `4820f9 IsTargeting 0x6e48a0`
-/// **and** `482106 TargetingWantsLocation 0x6e6320` — either false and it returns having never
-/// touched the draw state, which the hover handler already reset to `3` = *do not draw*
-/// (`481840`, every pass). The *word's* mask decides, not the mere fact of targeting: a lock or
-/// an enchant word (`0x4000` / `0x0010`) fails `& 0x60`, so no decal is drawn for one. The
-/// reference does not even reach here for such a word — `0x481050`'s targeting arm builds the
-/// pick flags from the word alone, and one without `0x60` gets no bit `0x1`, so the pick reports
-/// state 2 (object → `0x4828d0`) or 0, never state 1. Our picks are not word-gated, so this
-/// consumer carries the guard; asking [`SpellTargeting::spell_for`] rather than `spell()` is what
-/// keeps the next seam from forgetting it.
+/// Both of `0x4820f0`'s guards, in order: `IsTargeting 0x6e48a0`, then `TargetingWantsLocation
+/// 0x6e6320`. Either false returns before the draw state, which the hover handler reset to 3, do
+/// not draw (`0x481840`), so a lock or enchant word (`0x4000`, `0x0010`) draws no decal. The
+/// reference's pick is word-gated (`0x481050`) and ours is not, so this consumer carries the guard,
+/// through [`SpellTargeting::spell_for`].
 pub(super) fn update_reticle(
     targeting: Res<SpellTargeting>,
     occlusion: Res<PickOcclusion>,
@@ -112,14 +91,12 @@ pub(super) fn update_reticle(
         targeting.spell_for(TargetingWants::Location),
         occlusion.point,
     ) else {
-        // Not targeting, targeting a word that wants no location, or the pick hit nothing (sky):
-        // nothing is drawn — the ref resets the draw state on every hover pass before the pick.
+        // Not targeting, a word that wants no location, or no world hit: nothing is drawn.
         state.shown = false;
         return;
     };
     let acceptable = !cursor.unable;
-    // Out of range forces radius 0.0 (the ref writes the global before the state fork), and a
-    // zero radius draws at the literal default.
+    // Out of range forces radius 0.0, which draws at the default.
     let radius = if acceptable {
         let level = self_store
             .single()
@@ -144,9 +121,8 @@ pub(super) fn update_reticle(
         state.verts.clear();
         state.key = key;
         state.acceptable = acceptable;
-        // Axis-aligned box (no rotation term), the fixed ±2.0 vertical slab, box → [0,1]² UVs
-        // (the ref's 0.5 UV bias is exactly this center mapping). Vertical fade mirrors the
-        // ring's treatment so a draped wall piece dims instead of smearing at full strength.
+        // Box to [0,1]² UVs, the reference's 0.5 UV bias. The vertical fade is the ring's, so a
+        // draped wall piece dims rather than smears.
         let frame = DecalFrame {
             center: point,
             sin: 0.0,
@@ -168,9 +144,8 @@ pub(super) fn update_reticle(
     state.shown = !state.verts.is_empty();
 }
 
-/// Push the shown reticle onto the effect stream — vertex colour white (the ref writes
-/// `0xffffffff`; the state picks the TEXTURE), standard alpha blend (the ref's GxRs blend-mode
-/// 2), fog off, at the ring's decal rung.
+/// Pushes the shown reticle onto the effect stream: vertex colour `0xffffffff`, alpha blend (the
+/// reference's blend mode 2), no fog.
 pub(super) fn push_reticle(
     assets: Option<Res<ReticleAssets>>,
     state: Option<Res<ReticleState>>,
@@ -192,10 +167,7 @@ pub(super) fn push_reticle(
     let mut batch = draw
         .batch(cam, texture)
         .anchored(state.key.center)
-        // Sort rung from the pre-water decal band — the reference draws this pass at `0x4836c5`
-        // with flags `0x200122`, before the water; its liquid-receiver twin at `0x483727`
-        // is the half that draws after it, and has no counterpart here until liquid becomes a
-        // receiving surface. Raster margin from the family's shared coplanarity constant.
+        // The pre-water decal band, the reference's pass at `0x4836c5` (flags `0x200122`).
         .rung(
             benilla_world::sky_order::Rung::RETICLE,
             benilla_world::sky_order::Rung::DECAL_RASTER,
@@ -216,14 +188,8 @@ mod tests {
     use benilla_world::collision::GroundDecalSurface;
     use bevy::ecs::system::RunSystemOnce;
 
-    /// **`0x4820f0`'s second guard**. One armed cursor, three seams, one decal:
-    /// only a word that answers `TargetingWantsLocation`'s `& 0x60` may draw. Before this, the
-    /// reticle asked `IsTargeting` alone, so arming Pick Lock (`0x4000`), Opening (`0x4800`) or an
-    /// enchant (`0x0010`) dropped a green AoE circle on the ground under a cursor whose click is a
-    /// hover-pick — director-reported, and true of the item seam since 0928.
-    ///
-    /// The ground is a real trimesh so "nothing drawn" is a verdict and not an empty scene: the
-    /// same fixture with a DEST word must draw, or this test proves nothing.
+    /// `0x4820f0`'s second guard. The ground is a real trimesh, so a DEST word draws and "nothing
+    /// drawn" is a verdict, not an empty scene.
     #[test]
     fn only_a_location_word_draws_a_decal() {
         let drawn_for = |word: u16| {
@@ -238,8 +204,8 @@ mod tests {
             world
                 .resource_mut::<SpellTargeting>()
                 .enter(2120, CastCommit::Spell, word);
-            // A flat 100×100 yd ground quad at y = 0, world-space verts (the marked colliders'
-            // identity-pose contract) — inside the ±2.0 slab and wide enough for any radius.
+            // A flat 100×100 yd quad at y = 0 in world space (the marked colliders' identity-pose
+            // contract), inside the ±2.0 slab and wider than any radius.
             let q = 50.0;
             world.spawn((
                 GroundDecalSurface,
@@ -257,11 +223,11 @@ mod tests {
             world.resource::<ReticleState>().shown
         };
 
-        // Blizzard's bare DEST word — the seam the decal belongs to.
+        // Blizzard's bare DEST word.
         assert!(drawn_for(0x0040), "a DEST word draws its reticle");
         // SOURCE|DEST is still `& 0x60`.
         assert!(drawn_for(0x0060), "a SOURCE|DEST word draws its reticle");
-        // The three words the director saw a grenade circle under.
+        // Lock, Opening (lock and GameObject), item and GameObject words.
         for word in [0x4000, 0x4800, 0x0010, 0x0800] {
             assert!(
                 !drawn_for(word),

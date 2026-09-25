@@ -1,86 +1,25 @@
-//! Overhead questgiver markers — the client's own `Interface\Buttons\TalkToMe*` M2s floating
-//! above NPC heads: gold `!` (quest available), gold `?` (turn-in ready), grey `!`/`?` and the
-//! light-blue `?` per the status map.
+//! Overhead questgiver markers: the reference's `Interface\Buttons\TalkToMe*` M2s over NPC heads,
+//! gold `!` for a quest available, gold `?` for a turn-in, grey `!` and `?`, and the light-blue
+//! `?`. This module renders them; [`query`] decides when to ask, and the answers land in
+//! [`QuestGiver`].
 //!
-//! The data plane is the era wire: every visible creature flagged `UNIT_NPC_FLAG_QUESTGIVER`
-//! gets one `CMSG_QUESTGIVER_STATUS_QUERY` — the server only ever *answers* queries (vmangos
-//! `QuestHandler.cpp:36-77`), never pushes, so every refresh point is the client's own to trigger,
-//! and a status that is never re-asked for is a marker frozen at first sight. The re-ask law —
-//! the reference's self-player descriptor **field watch**, and which of it we implement — is its
-//! own concern and lives in [`query`]. Answers land in [`QuestGiver`]'s
-//! per-guid status map (`net/apply`); THIS module is the render half: attach, scale, animate.
+//! - Attach (`0x6074c0`): a child of the unit's body M2 at attachment 18, or 29
+//!   (`PlayerNameMounted`) when a mount model exists and the body authors it ([`overhead_slot`]).
+//!   With neither, the marker is never parented and so invisible. The reference re-runs the attach
+//!   from the `UNIT_FIELD_MOUNTDISPLAYID` watch (`0x5ffa50`), so a mount moves the slot.
+//! - Scale (`0x607570`): `1/L`, `L = ‖row0‖` of the attach point's world matrix, computed once at
+//!   attach into the marker's base matrix (`marker+0xbc`); not distance-based, no clamp. The
+//!   compose is `marker+0xfc = marker+0xbc × parentAttachMatrix` (`0x71439b`), so `1/L` cancels the
+//!   whole attach basis, model scale included. [`bake_seat_scale`] has the reference's race.
+//! - Animation (`0x6076c0`): the marker's own looping bob, anim 0 at the attach point (WoW z 0 to
+//!   −0.089), anim 190 raised (+0.517 to +0.427) while the unit has a live overhead name
+//!   (`unit+0xc7c`, via `0x6c7950`), clear of the text.
 //!
-//! The render law:
-//! - **Attach** (`0x6074c0`): the marker is a CHILD of the unit's own body M2 at attachment slot
-//!   **18** (0x12), or **29** (`PlayerNameMounted`) when a mount model exists and the body authors
-//!   it — [`overhead_slot`], one definition shared with the overhead name/plate/FCT readers. No
-//!   slot ⇒ the marker is created but never parented — invisible; we render nothing.
-//!
-//!   **That pick is LIVE.** `0x6074c0` is a call site of `0x5ffa50`, the
-//!   `UNIT_FIELD_MOUNTDISPLAYID` field-watch handler, so the reference re-runs the whole attach —
-//!   slot included — every time a unit mounts or dismounts. Our seat is *parented* rather than
-//!   read per frame, so re-picking means rebuilding the instance: [`sync_markers`] compares the
-//!   slot the seat was built at against the live pick on every pass.
-//! - **Scale** (`0x607570`): `1 / |attach-bone basis|`, computed once at attach and baked into the
-//!   marker's base matrix (`marker+0xbc`). Not distance-based, not unit scale, no clamp or floor.
-//!
-//!   **The `1/L` is a SNAPSHOT, not an invariant** (`0x607570` executed on the reference's own
-//!   bytes, not only read). The arithmetic is confirmed —
-//!   `L = ‖row0‖` of the attach point's WORLD matrix, so the compensation cancels the whole attach
-//!   basis (`s` and any bone-chain scale alike). What was wrong is the *published consequence*: the
-//!   old sentence here — "a constant world size regardless of the NPC's model scale, a gnome and an
-//!   ogre get the same-sized `!`" — was unconditional and **is not**. `0x607570` reads the parent's
-//!   `model+0xbc` **as it stands at attach**, and the reference has legs where it has not been
-//!   stamped yet, each leaving the ctor identity ⇒ **no counter-scale at all**:
-//!
-//!   | ordering at attach | `L` | `marker+0xbc` | final world scale at `s = 3` |
-//!   |---|---|---|---|
-//!   | parent already placed (**case B**) | `3.0` | `diag(1/3)` | **1.0 — constant** |
-//!   | parent still ctor identity (**case A**) | `≈1.0` | identity (skip) | **3.0 — proportional** |
-//!
-//!   Case A fires when `SMSG_QUESTGIVER_STATUS` lands while the body model is still streaming (the
-//!   query goes out at object-create, in the same breath as the load starts, so it is a race), and
-//!   *structurally* for a mounted questgiver whose mount M2 is still resident-pending (`0x6075ac`
-//!   tests the MOUNT model too, which `0x6074c0` does not). Nothing re-runs the bake afterwards, so
-//!   case A is permanent for that unit. Both are invisible at `s = 1`, which is why this went
-//!   unnoticed — it is visible only on a scaled creature, which is exactly where B301 came from.
-//!
-//!   **benilla is case B by construction**: [`bake_seat_scale`] deliberately waits for propagation
-//!   to produce a settled joint matrix. **That is the right leg, and it is settled by observation,
-//!   not by argument** — the director ran the A/B against the reference and 1.12's `?` looks the
-//!   same as ours (closing 1541's open question). B301 is `not-a-bug`: a
-//!   gnome-sized `?` over a building-sized NPC is what the real client shows too.
-//!
-//!   So do **not** "fix" this by dropping the counter-scale. The report is real, the case-A leg is
-//!   real, and the change is one line — which is exactly why this paragraph exists.
-//!
-//!   One correction worth carrying: the post-multiply operand is `CM2Scene+0xdc` = **inverse(view)**,
-//!   not "the model's world transform" (`CM2Shared+0xdc`). The bone matrices
-//!   live in VIEW space and already carry `model+0xbc`; the final compose is
-//!   `marker+0xfc = marker+0xbc × parentAttachMatrix` at `0x71439b`.
-//! - **Animation** (`0x6076c0`): the marker's own M2 animation is armed looping — anim **0**
-//!   normally, anim **190** while the unit has a live overhead-name object (`unit+0xc7c` via
-//!   `0x6c7950`). The two bands hold the same 3-key bob SHAPE at different heights: anim 0 at the
-//!   attach point (WoW z 0 → −0.089), anim 190 raised (+0.517 → +0.427) — the authored push-up
-//!   that lifts the marker clear of the name text (m2bones key-value probe, all five models; an
-//!   earlier count-only probe recorded them as "the same bob" — falsified by the director's
-//!   reference eye, decision record with this change).
-//!
-//! benilla's translation (m2bones-probed: every marker M2 is ONE bone with a 3-key translation
-//! bob): a **seat** entity parented under the unit's overhead joint (18 or 29 — the held-items
-//! rail) carries the one-time `1/L` counter-scale; the `!` models (plain bone) animate through
-//! the doodad rail
-//! ([`benilla_world::doodad_anim::spawn_anim_host`] — skinned twin + the one-time sequence-0 arm); the `?`
-//! models (cylindrical-billboard bone) render as [`BillboardCard`]s under the identity root —
-//! cards write ABSOLUTE world transforms, so they can't sit under the moving seat; instead
-//! [`re_seat_cards`] re-seats them from the seat's world placement each frame (PostUpdate, the
-//! same-frame propagated pose), and the card's own
-//! armed [`seq_translation`](BillboardCard::with_seq_translation) loop plays the bob. Markers are
-//! few and player-adjacent, so the anim host runs ungated (no draw-gate `DoodadAnimHost`).
-//! [`pose_markers`] swaps every marker between the low and raised bob as the unit's overhead
-//! elements toggle (the floating name [`Nameplates::shows`] OR a live V-plate — our `unit+0xc7c`;
-//! the plate leg is a director-pinned deviation, rationale on [`pose_markers`], 2274/2275):
-//! cards re-arm the matching loop, hosts switch the playing clip.
+//! Every marker M2 is one bone with a three-key translation bob. A seat entity under the unit's
+//! overhead joint carries the `1/L`. The `!` models (a plain bone) animate through the doodad rail
+//! ([`benilla_world::doodad_anim::spawn_anim_host`]), ungated, since markers are few. The `?`
+//! models (a cylindrical billboard bone) are [`BillboardCard`]s under the identity root, which
+//! [`re_seat_cards`] re-seats from the seat each frame, their bob played by the card's own loop.
 
 mod query;
 
@@ -105,13 +44,11 @@ use bevy::mesh::MeshTag;
 
 use crate::entities::overhead_slot;
 
-/// The marker anim ids the client arms (`0x6076c0`): the low bob, and the raised bob played while
-/// the unit shows an overhead name (`unit+0xc7c` live — [`Nameplates::shows`] here).
+/// The bobs `0x6076c0` arms: low, and raised while the unit shows a name ([`Nameplates::shows`]).
 const ANIM_MARKER_LOW: u16 = 0;
 const ANIM_MARKER_RAISED: u16 = 190;
 
-/// The billboard bone's translation loop for `anim_id`, if authored. The marker models are
-/// single-bone, so every card of one marker shares the bone's loop.
+/// The billboard bone's translation loop for `anim_id`; the one bone's loop serves every card.
 fn seq_loop(info: &BillboardInfo, anim_id: u16) -> Option<BoneScaleAnim> {
     info.seq_translations
         .iter()
@@ -119,14 +56,11 @@ fn seq_loop(info: &BillboardInfo, anim_id: u16) -> Option<BoneScaleAnim> {
         .map(|(_, l)| l.clone())
 }
 
-/// The marker M2 per dialog status — the client's own dispatch (file table `0xc4d9d8` × status
-/// map `0x80c454` = `{0,3,0,2,7,1,6,6}`; the binary ships `.mdx` names, the loader maps them to
-/// `.m2`):
-/// UNAVAILABLE(1) → grey `!`, INCOMPLETE(3) → grey `?`, REWARD_REP(4) → light-blue `?`,
-/// AVAILABLE(5) → gold `!`, REWARD_OLD/REWARD2(6/7) → gold `?`; NONE(0)/CHAT(2) → nothing.
-/// (The Green/Blue `!` variants are driven by sibling handlers off NPC_FLAGS, not this status
-/// packet — the flight-master green (`TalkToMeGreen`, table index 4) now feeds [`sync_markers`]
-/// from [`crate::ui_taxi::FlightMasterStatus`]; the rest stay out of scope, same as the client.)
+/// The marker M2 per dialog status: the reference's file table `0xc4d9d8` through the status map
+/// `0x80c454` = `{0,3,0,2,7,1,6,6}`, its `.mdx` names loaded as `.m2`. The statuses are
+/// UNAVAILABLE 1, INCOMPLETE 3, REWARD_REP 4, AVAILABLE 5, REWARD_OLD 6 and REWARD2 7; NONE 0 and
+/// CHAT 2 draw nothing. File index 4, the green `!`, comes from the flight-master status instead,
+/// and index 5, the blue `!`, is unreachable in 1.12.1.
 fn marker_model(status: u32) -> Option<&'static str> {
     match status {
         1 => Some("Interface\\Buttons\\TalkToMeGrey.m2"),
@@ -138,52 +72,42 @@ fn marker_model(status: u32) -> Option<&'static str> {
     }
 }
 
-/// One live marker: the root entity (billboard-card children live here) and which model it shows —
-/// a status change swaps the whole thing (the client's model-swap `0x607480`).
+/// One live marker's root and model; a status change swaps the whole instance (`0x607480`).
 struct MarkerInst {
     root: Entity,
     path: &'static str,
 }
 
-/// The marker root: the lifecycle handle. Stays at the WORLD origin (identity) — billboard cards
-/// under it write absolute world transforms. The attach seat (under the UNIT's joint) is tracked
-/// here so a swap/prune can despawn it too.
+/// The marker root, at the world origin because its billboard cards write absolute transforms.
 #[derive(Component)]
 struct QuestMarkerRoot {
     npc: u64,
     handle: Handle<M2Model>,
-    /// The seat under the unit's overhead joint, once built. Lives OUTSIDE this root's hierarchy —
-    /// [`sync_markers`] despawns it explicitly (guarded: a despawned unit already cascaded it).
+    /// The seat under the unit's overhead joint, once built; outside this root's hierarchy.
     seat: Option<Entity>,
-    /// The overhead slot ([`overhead_slot`]) the live [`Self::seat`] was parented at — `None`
-    /// until it is built. A parent link bakes the slot in, so this is what [`sync_markers`]
-    /// watches against the live pick to catch a mount or dismount moving it.
+    /// The overhead slot [`Self::seat`] was parented at, which [`sync_markers`] compares against
+    /// the live pick to catch a mount or dismount.
     slot: Option<u16>,
-    /// The unit's body model resolved but authors NEITHER overhead attachment: the client's
-    /// marker is created but never parented — invisible. Latched so we stop retrying.
+    /// The body model authors neither overhead attachment: never parented, invisible. Latched.
     no_anchor: bool,
-    /// The armed pose: `Some(true)` = the raised (anim 190) bob, `Some(false)` = the low (anim 0)
-    /// bob, `None` = not yet posed (fresh build) — [`pose_markers`] arms on the first pass and
-    /// re-arms on every name-visibility flip.
+    /// The armed bob: raised (anim 190), low (anim 0), or `None`, not yet posed.
     raised: Option<bool>,
 }
 
-/// The attach seat: a child of the unit's overhead joint (18/29) at the attachment offset.
-/// Carries the marker joints + plain submeshes as children; [`bake_seat_scale`] bakes the `1/L`
-/// counter-scale into its local transform (the client's `0x607570` base matrix).
+/// The attach seat under the unit's overhead joint, at the attachment offset. It carries the
+/// marker's joints and plain meshes, and [`bake_seat_scale`] bakes the `1/L` into its transform.
 #[derive(Component)]
 struct MarkerSeat {
-    /// The one-time scale latch (the client computes it once at attach, not per frame).
+    /// Latched once baked: the reference computes the scale once, at attach.
     scaled: bool,
 }
 
-/// A marker billboard card's model-local pivot — [`BillboardCard::re_place`]'s second argument
-/// each frame.
+/// A billboard card's model-local pivot, [`BillboardCard::re_place`]'s second argument.
 #[derive(Component)]
 struct MarkerCardPivot(Vec3);
 
-/// Despawn one marker instance: the root (cards cascade) and its seat — which lives under the
-/// UNIT's joint, so it needs the explicit, guarded kill (a despawned unit already cascaded it).
+/// Despawns the root (its cards cascade) and the seat, which lives under the unit's joint; a
+/// despawned unit has already taken the seat with it.
 fn despawn_marker(commands: &mut Commands, roots: &Query<&QuestMarkerRoot>, root: Entity) {
     if let Some(seat) = roots.get(root).ok().and_then(|m| m.seat) {
         if let Ok(mut e) = commands.get_entity(seat) {
@@ -193,13 +117,13 @@ fn despawn_marker(commands: &mut Commands, roots: &Query<&QuestMarkerRoot>, root
     commands.entity(root).despawn();
 }
 
-/// Reconcile the marker set with the per-guid statuses: spawn/swap/despawn marker roots. Two
-/// sources feed the one overhead slot: the questgiver dialog status (this module's own wire),
-/// and the flight-master node status ([`crate::ui_taxi::FlightMasterStatus`], decision 0497 —
-/// `known = false` shows `TalkToMeGreen`, the client's `0x607480` with resource index 4). The
-/// client's two handlers race last-write-wins on the same attach slot; we compose
-/// deterministically instead — a quest marker, when the status yields one, outranks the green
-/// (a named deviation, invisible in practice: a flight master carrying an active quest marker).
+/// Spawns, swaps and despawns marker roots to match two sources for the one overhead slot: the
+/// questgiver status, and the flight master's green `!` while its node is unknown
+/// ([`crate::ui_taxi::FlightMasterStatus`], `0x607480` with file index 4).
+///
+/// Deviation: a quest marker outranks the green, where the reference's two handlers race
+/// last-write-wins on the slot, because a fixed order is deterministic; the two meet only on a
+/// flight master with a live quest marker, invisible in practice.
 fn sync_markers(
     mut commands: Commands,
     quest: Res<QuestGiver>,
@@ -209,28 +133,16 @@ fn sync_markers(
     assets: Option<Res<WorldAssets>>,
     roots: Query<&QuestMarkerRoot>,
     seats: Query<(), With<MarkerSeat>>,
-    // The live overhead-slot pick's two inputs, read per pass off the unit (a handful of markers
-    // exist at once, so this is a few map lookups a frame).
     anchors: Query<&BoneAttach>,
     mounts: Query<(), With<crate::entities::mount::MountChild>>,
     mut live: Local<HashMap<u64, MarkerInst>>,
 ) {
     if assets.is_none() {
-        return; // no client data — nothing could build anyway
+        return; // no client data: nothing could build
     }
-    // Rebuild the whole instance whenever the built seat has stopped describing the unit — all
-    // or nothing, because a partial rebuild would duplicate the root's billboard cards. The next
-    // pass then re-attaches under the joints and the slot that are true now. Two triggers:
-    //
-    // - **the seat entity is gone** — the unit's visual was rebuilt out from under it, taking the
-    //   joint tree the seat lived under with it (a redress, a display change);
-    // - **the overhead slot has moved** (18 ↔ 29) — the unit mounted or dismounted since the
-    //   build. Nothing else would notice, and this is the trigger benilla was missing (1871): a
-    //   mount transition deliberately leaves the rider's visual intact — `reseat_mounts`
-    //   RE-PARENTS the rig's joint anchors onto the seat frame instead of despawning them — so
-    //   the marker's seat survives the transition, riding the right bone at the WRONG slot,
-    //   permanently. The reference re-runs the whole attach here: `0x6074c0` is a call site of
-    //   `0x5ffa50`, the `UNIT_FIELD_MOUNTDISPLAYID` watch handler.
+    // Rebuild the whole instance, never part of it (that duplicates the root's cards), when the
+    // seat is gone with a rebuilt visual or the slot moved on a mount or dismount, which keeps the
+    // seat. The reference re-runs the attach from the mount watch (`0x5ffa50` calls `0x6074c0`).
     let rebuild: Vec<u64> =
         live.iter()
             .filter(|(&npc, inst)| {
@@ -250,7 +162,6 @@ fn sync_markers(
             despawn_marker(&mut commands, &roots, old.root);
         }
     }
-    // The desired marker per guid, composed from both sources (still-streamed units only).
     let mut desired_by_npc: HashMap<u64, &'static str> = HashMap::new();
     for (&npc, &status) in quest.statuses() {
         if index.0.contains_key(&npc) {
@@ -305,27 +216,18 @@ fn sync_markers(
     }
 }
 
-/// [`sync_markers`]' rebuild test for one live instance, split out because each of its three legs
-/// has a trap in it:
-///
-/// - **not built yet** (`seat: None`) is never stale — [`build_markers`] owns that instance, and
-///   calling it stale would despawn a root that is still waiting on its M2.
-/// - **`seat_alive == false`** is stale: the unit's visual was rebuilt out from under the seat,
-///   taking the joint tree it lived under with it.
-/// - **`want` differs from the slot the seat was built at** is stale: the unit mounted or
-///   dismounted. `want` is [`overhead_slot`]'s live pick, and `None` means *unreadable this pass*
-///   (the unit is still streaming, or gone) — which must NOT count as a move, or a marker would
-///   rebuild its whole instance every frame its unit's attachment table is out of reach. A unit
-///   that really is gone is pruned below on its own terms.
+/// [`sync_markers`]' rebuild test for one instance. Unbuilt (`seat: None`) is never stale:
+/// [`build_markers`] owns it, and a rebuild would despawn a root still waiting on its M2. A dead
+/// seat is stale, and so is a `want` that differs from the built slot; but a `None` want is
+/// unreadable this pass (the unit streaming or gone), not a move, or the instance would rebuild
+/// every frame its unit's attachment table is out of reach.
 fn seat_is_stale(marker: &QuestMarkerRoot, seat_alive: bool, want: Option<u16>) -> bool {
     marker.seat.is_some() && (!seat_alive || (want.is_some() && want != marker.slot))
 }
 
-/// Build a marker once its M2 AND its unit's joint set ([`BoneAttach`]) have both landed: the seat
-/// under the slot-18 joint, the anim host + skinned plain submeshes on it (the `!` bob), and the
-/// billboard cards under the identity root with their bob loop armed (the `?`). Retries silently
-/// while either half still loads; latches [`QuestMarkerRoot::no_anchor`] when the body model has
-/// no overhead point (the client's marker never parents — invisible).
+/// Builds a marker once its M2 and its unit's [`BoneAttach`] have both loaded: the seat under the
+/// overhead joint with the `!` models' plain meshes, and the `?` models' cards under the root.
+/// Latches [`QuestMarkerRoot::no_anchor`] when the body has no overhead point.
 fn build_markers(
     mut commands: Commands,
     mut roots: Query<(Entity, &mut QuestMarkerRoot)>,
@@ -336,8 +238,7 @@ fn build_markers(
     mut palettes: ResMut<benilla_world::rig_palette::RigPalettes>,
     index: Res<GuidIndex>,
     anchors: Query<&BoneAttach>,
-    // The unit's pose buffer: the overhead joint the marker parents under spawns on first
-    // demand (`RigPose::anchor_for`).
+    // The overhead joint spawns on first demand (`RigPose::anchor_for`).
     mut poses: Query<&mut benilla_world::rig_anim::RigPose>,
     mounts: Query<(), With<crate::entities::mount::MountChild>>,
     time: Res<Time>,
@@ -349,12 +250,10 @@ fn build_markers(
         let Some(model) = m2s.get(&marker.handle) else {
             continue; // marker M2 still loading
         };
-        // The marker's render forms, built NOW: two tiny models per map, on the
-        // booth-lane exception — a marker popping a frame late over a questgiver would be a
-        // regression nothing here needs.
+        // Render forms built now, uncapped, like the booths': two tiny models, and a marker a
+        // frame late over its questgiver would be seen.
         forms.ensure_now_rigged(&marker.handle, &model.submeshes, &mut mesh_assets);
-        // The unit's joint set + attachment table — absent while its own model still loads (or
-        // forever on a boneless/model-less unit, which then simply never shows a marker).
+        // Absent while the unit's model loads, and for good on a unit without one.
         let Some((unit, anchor)) = index
             .0
             .get(&marker.npc)
@@ -362,10 +261,8 @@ fn build_markers(
         else {
             continue;
         };
-        // The overhead slot as it stands THIS pass — 29 while a mount model is attached and the
-        // body authors it, else 18 (`0x6074c0`'s own pick). It is recorded on the root below so
-        // `sync_markers` can rebuild the instance when a mount or dismount moves it. Neither slot
-        // ⇒ never parented ⇒ invisible, like the client.
+        // This pass's slot, `0x6074c0`'s pick: 29 while mounted if the body authors it, else 18.
+        // Neither: never parented, so invisible, as in the reference.
         let Some((slot, joint, offset)) =
             overhead_slot(anchor, mounts.contains(unit)).and_then(|slot| {
                 let &(bone, offset) = anchor.points.get(&slot)?;
@@ -382,10 +279,8 @@ fn build_markers(
             continue;
         };
 
-        // The seat: a child of the attach joint, so the marker rides the live bone with zero lag
-        // (the held-items rail). The `!` models' plain geometry animates through the doodad rail —
-        // the client's one-time load arm IS sequence 0 here (anim id 0, m2bones-verified, the same
-        // file-order-first clip). The all-billboard `?` models skip the host (nothing to skin).
+        // The seat rides the attach joint's live bone. The `!` models animate through the doodad
+        // rail (sequence 0, anim 0); the all-billboard `?` models have nothing to skin.
         let seat_tf = Transform::from_translation(offset);
         let host = model
             .submeshes
@@ -393,12 +288,8 @@ fn build_markers(
             .any(|s| s.billboard.is_none())
             .then(|| benilla_world::doodad_anim::spawn_anim_host(&mut commands, model, seat_tf))
             .flatten();
-        // EAGER slot allocation — this lane has no draw gate to promote lazily (decision 0863
-        // made laziness the terrain-stream caller's policy, not the host's). A handful of
-        // markers exist at once, so eager is the right spend; slot 0 (table full, warned)
-        // falls back to the static mesh below exactly as before. `allocate_bones` — the
-        // collapsed shape: the world pass writes the rows off the host's
-        // `RigPose`, no joint list exists.
+        // Allocated eagerly: this lane has no draw gate to promote lazily. Slot 0 (table full)
+        // falls back to the static mesh below.
         let marker_slot = host.as_ref().map_or(0, |h| {
             benilla_world::rig_palette::RigSkin::allocate_bones(
                 &mut palettes,
@@ -423,22 +314,19 @@ fn build_markers(
             host.is_some()
         );
 
-        // The client arms the marker's animation at status receive — the cards' bob loop starts
-        // its cursor here (the same clock `face_billboards` samples).
+        // The reference arms the animation at status receive; the cards' loop starts here, on
+        // the clock `face_billboards` samples.
         let arm_ms = time.elapsed().as_millis() as u32;
         let built = forms.slices(&marker.handle);
         let (stat_forms, skin_forms) = (built.stat, built.skin.unwrap_or(&[]));
         for (pi, sub) in model.submeshes.iter().enumerate() {
-            // A floating marker is an ordinary world-lit batch: one steady material, batch
-            // order 0 (a `?` is a single 353-vert mesh, not a coplanar stack).
+            // An ordinary world-lit batch: one steady material, batch order 0 (a `?` is one
+            // 353-vertex mesh, not a coplanar stack).
             let Some(material) = mats.steady(sub, sub.texture.clone(), 0) else {
                 continue; // no shared light buffer yet
             };
             match &sub.billboard {
                 Some(info) => {
-                    // Cards write ABSOLUTE world transforms (`face_billboards`), so they live
-                    // under the identity root and `re_seat_cards` re-seats them from the seat's
-                    // world placement each frame; the armed loop plays the bob at the pivot.
                     let child = commands
                         .spawn((
                             Mesh3d(
@@ -458,10 +346,8 @@ fn build_markers(
                     commands.entity(root).add_child(child);
                 }
                 None => {
-                    // Plain geometry under the seat: the skinned twin bound to the host's palette
-                    // rig when the model animates (the `!` bob); the static mesh
-                    // otherwise (capture mode keeps every marker static, like the doodad rail),
-                    // including the palette-full fallback (slot 0).
+                    // Plain geometry under the seat: the skinned twin on the host's palette rig
+                    // when the model animates, else the static mesh (capture mode, a full palette).
                     let use_rig = marker_slot != 0;
                     let mesh = if use_rig {
                         skin_forms.get(pi).cloned().unwrap_or_default()
@@ -490,10 +376,8 @@ fn build_markers(
                 }
             }
         }
-        // Attach the pose buffer, plus the seat-frame cascade marker: the
-        // marker host root is a rig's `joints_root` living inside the UNIT's anchor subtree, so
-        // a patch walk that re-seats the overhead anchor must re-finalize the marker rig the
-        // same frame (`RigFrame` — the mount seat's law, `finalize_rig_worlds`).
+        // `RigFrame`: the host root is a rig inside the unit's anchor subtree, so re-seating the
+        // overhead anchor must re-finalize the marker rig the same frame (`finalize_rig_worlds`).
         if let Some(h) = host {
             commands
                 .entity(h.root)
@@ -505,17 +389,14 @@ fn build_markers(
     }
 }
 
-/// Swap each built marker between its LOW (anim 0) and RAISED (anim 190) bob as the unit's
-/// overhead elements toggle — the client's `0x6076c0` selector: anim 190 while the unit's name
-/// object (`unit+0xc7c`) is live, anim 0 otherwise. The 190 band is the authored raised loop
-/// (WoW z +0.427..+0.517 vs anim 0's −0.089..0), lifting the marker clear of the name text.
-/// Benilla raises for the floating name ([`Nameplates::shows`]) OR a live V-plate
-/// ([`VPlates`](crate::vplates::VPlates)) — the plate leg is a **director-pinned deviation**
-/// (2275): the reference arms anim 0 under a live plate (ShouldShowName's plate suppression
-/// destroys the rendered name and nulls the `desc+0x8` handle the selector `0x6c7950` tests),
-/// leaving its marker low behind the plate; the director rejected that overlap on sight. The
-/// re-arm law is settled faithful: the reference arms at attach AND re-arms on the frame the name
-/// shown-state flips (an edge inside `0x6c6e90`, never per-frame) — exactly our re-arm-on-flip.
+/// Swaps each built marker between the low (anim 0) and raised (anim 190) bob, `0x6076c0`'s
+/// selector: raised while the unit's name object (`unit+0xc7c`) is live. The reference arms at
+/// attach and re-arms on the frame the name's shown state flips (an edge in `0x6c6e90`), never
+/// per frame.
+///
+/// Deviation: a live V-plate ([`VPlates`](crate::vplates::VPlates)) raises the marker too,
+/// because the reference's marker sits low behind the plate: it arms anim 0 under a plate, whose
+/// name suppression nulls the `desc+0x8` handle `0x6c7950` tests.
 #[allow(clippy::type_complexity)] // a Bevy system: each param is one resource, the app's convention
 fn pose_markers(
     plates: Res<Nameplates>,
@@ -523,16 +404,14 @@ fn pose_markers(
     index: Res<GuidIndex>,
     m2s: Res<Assets<M2Model>>,
     time: Res<Time>,
-    // `Children` is OPTIONAL: a `!` marker's plain meshes live under the SEAT, so its root has no
-    // children at all — a `&Children` query silently skipped every `!` marker (caught by the live
-    // run: two Northshire TalkToMe markers, zero pose lines).
+    // Optional: a `!` marker's meshes live under the seat, so its root may have no children.
     mut roots: Query<(&mut QuestMarkerRoot, Option<&Children>)>,
     mut cards: Query<&mut BillboardCard, With<MarkerCardPivot>>,
     mut players: Query<&mut AnimationPlayer>,
 ) {
     for (mut marker, children) in &mut roots {
         let Some(seat) = marker.seat else {
-            continue; // not built yet — first pose lands right after the build, same frame
+            continue; // not built yet; posed the frame it builds
         };
         let raised = index
             .0
@@ -542,7 +421,7 @@ fn pose_markers(
             continue;
         }
         let Some(model) = m2s.get(&marker.handle) else {
-            continue; // a swap mid-load — retry next frame
+            continue; // a swap mid-load: retry next frame
         };
         marker.raised = Some(raised);
         let anim_id = if raised {
@@ -556,8 +435,8 @@ fn pose_markers(
             if raised { "raised" } else { "low" }
         );
         let arm_ms = time.elapsed().as_millis() as u32;
-        // The `?` path: re-arm each card's loop with a fresh cursor (the client's arm law). A
-        // model without the raised band keeps its low bob rather than going static.
+        // `?`: re-arm each card's loop from a fresh cursor; a model without the raised band keeps
+        // its low bob rather than going still.
         let bob = model
             .submeshes
             .iter()
@@ -568,10 +447,8 @@ fn pose_markers(
                 card.arm_seq_translation(bob.clone(), arm_ms);
             }
         }
-        // The `!` path: switch the anim host's playing clip (the host, when one exists, IS the
-        // seat entity). `stop_all` first — bevy's `play` only ADDS to the active set, and two
-        // live clips BLEND (the director caught the `!` floating at half raise: anim 0 + 190
-        // averaged). No 190 clip ⇒ re-arm what's there.
+        // `!`: switch the clip on the anim host, which is the seat entity. `stop_all` first:
+        // `play` adds to the active set, and two live clips blend to a half raise.
         if let Ok(mut player) = players.get_mut(seat) {
             if let Some(clip) = model.animations.as_ref().and_then(|a| a.find(anim_id)) {
                 player.stop_all();
@@ -581,19 +458,14 @@ fn pose_markers(
     }
 }
 
-/// Bake each new seat's one-time counter-scale — the client's `0x607570` computes
-/// `L = |attach-bone basis|` once at attach and writes `diag(1/L)` into the marker's base matrix
-/// (the exact-`1.0` skip is the client's own identity guard). One-time per seat (latched).
+/// Bakes each new seat's `1/L` once, as `0x607570` does at attach, skipped at exactly 1.0 (the
+/// reference's identity guard).
 ///
-/// **This is the module doc's "case B" leg, and choosing it is a decision, not a transcription.**
-/// We retry until propagation yields a real joint matrix, so our `L` is always the *settled* world
-/// basis and the marker is always constant-size. The reference reads whatever `model+0xbc` happens
-/// to hold at attach, and on a still-streaming parent that is the ctor identity — no counter-scale,
-/// a marker proportional to the NPC, permanently. So the old note here ("the joint global being a
-/// frame old is immaterial — bone basis length doesn't animate") was true about the *bone* and
-/// wrong about the *risk*: what varies between the two legs is not the bone, it is whether the
-/// parent's world matrix exists yet. We keep the settled read — it is the reference's intent, the
-/// only leg that is deterministic, and the leg the reference was observed on.
+/// Deviation: we wait for propagation to settle the joint matrix, so the marker is always constant
+/// size. The reference reads the parent's `model+0xbc` as it stands at attach, and a parent still
+/// at its constructor identity (a body still streaming, or a mount model pending, `0x6075ac`)
+/// leaves the marker unscaled and proportional to the NPC for good. We keep the settled read
+/// because it is deterministic and is what the reference shows over a placed NPC.
 fn bake_seat_scale(
     mut seats: Query<(&mut MarkerSeat, &ChildOf, &mut Transform)>,
     joints: Query<&GlobalTransform, Without<MarkerSeat>>,
@@ -607,9 +479,9 @@ fn bake_seat_scale(
         };
         let l = joint.affine().matrix3.x_axis.length();
         if l <= 0.0 {
-            continue; // propagation hasn't produced a real matrix yet — retry next frame
+            continue; // not propagated yet: retry next frame
         }
-        #[allow(clippy::float_cmp)] // the client's own exact-identity guard (fcomp 1.0)
+        #[allow(clippy::float_cmp)] // the reference's exact identity guard (fcomp 1.0)
         if l != 1.0 {
             tf.scale = Vec3::splat(1.0 / l);
         }
@@ -617,11 +489,8 @@ fn bake_seat_scale(
     }
 }
 
-/// Re-seat every billboard card from its seat's world placement (cards write absolute world
-/// transforms, so they can't be parented under the moving seat). Runs in PostUpdate after
-/// transform propagation and before [`benilla_world::billboard::BillboardPlace`] writes the card
-/// transforms — the card
-/// rides the SAME-frame posed seat, no trailing frame.
+/// Re-seats every card from its seat's world placement. Runs in PostUpdate after propagation and
+/// before [`benilla_world::billboard::BillboardPlace`], so a card rides the same frame's seat.
 fn re_seat_cards(
     seats: Query<&GlobalTransform, With<MarkerSeat>>,
     roots: Query<(&QuestMarkerRoot, &Children)>,
@@ -680,9 +549,8 @@ mod tests {
         }
     }
 
-    /// The rebuild test the mounted marker turns on (1871). A seat bakes its slot into a parent
-    /// link, and a mount transition leaves the rider's visual — and therefore the seat — intact,
-    /// so this comparison is the ONLY thing that can notice 18 ↔ 29 moving.
+    /// A mount keeps the rider's visual and so the seat, so only this comparison sees the slot
+    /// move between 18 and 29.
     #[test]
     fn a_seat_goes_stale_when_its_slot_moves_but_never_on_a_reading_it_could_not_take() {
         let built_at_18 = root(
@@ -704,16 +572,13 @@ mod tests {
             "the seat entity is gone — the visual was rebuilt out from under it"
         );
 
-        // Not built yet: `build_markers` owns the instance, and a rebuild would despawn a root
-        // still waiting on its M2. True even when the seat is reported dead — it has none.
+        // Unbuilt is never stale, even with the seat reported dead: it has none.
         let unbuilt = root(None, None);
         assert!(!seat_is_stale(&unbuilt, false, Some(29)));
         assert!(!seat_is_stale(&unbuilt, true, Some(29)));
     }
 
-    /// The seat's counter-scale is the client's `0x607570`: `1/L` from the attach joint's world
-    /// basis, baked ONCE at attach — a later joint rescale does not re-bake (the one-time latch),
-    /// and an exactly-1.0 basis skips the write (the client's own identity guard).
+    /// `0x607570`: `1/L` baked once, never re-baked on a later rescale, and skipped at 1.0.
     #[test]
     fn seat_counter_scale_bakes_once_from_the_attach_basis() {
         let mut app = App::new();
@@ -738,7 +603,7 @@ mod tests {
         let scale = |app: &App, e: Entity| app.world().entity(e).get::<Transform>().unwrap().scale;
         assert_eq!(scale(&app, seat), Vec3::splat(0.5), "1/L off the basis");
 
-        // Rescale the joint afterwards: the latch holds (the client computes once at attach).
+        // A later joint rescale: the latch holds.
         *app.world_mut()
             .entity_mut(joint)
             .get_mut::<GlobalTransform>()
@@ -746,7 +611,7 @@ mod tests {
         app.update();
         assert_eq!(scale(&app, seat), Vec3::splat(0.5), "one-time latch");
 
-        // An identity basis skips the write entirely (`fcomp 1.0`'s no-op leg) but still latches.
+        // An identity basis skips the write (`fcomp 1.0`) but still latches.
         let plain_joint = app
             .world_mut()
             .spawn((Transform::default(), GlobalTransform::IDENTITY))

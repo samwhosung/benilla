@@ -1,25 +1,8 @@
-//! **Land here** — free-fly's missing other half: put the avatar where the camera is.
-//!
-//! `F` detaches the camera and the avatar freezes ([`super::camera::fly_free`]); the terrain
-//! streamer follows the *camera* while detached, so you can fly anywhere and the world loads
-//! around you — but there was no way to bring the body along. This is that: fly to a spot, ask to
-//! land, and the avatar arrives there. Unreal's eject → possess, in our shape.
-//!
-//! **The teleport is the server's, not ours.** The ask goes out as the GM command `.go xyz x y z
-//! <map>` (vmangos `HandleGoXYZCommand` → `HandleGoHelper`, which keeps the exact Z when one is
-//! given and saves the recall position on the way), and the answer comes back as the ordinary
-//! `MSG_MOVE_TELEPORT_ACK` this client already handles ([`super::wire_in`]) — so the destination
-//! is one the server agrees with, zone/area/grid bookkeeping included, and nothing here invents a
-//! pose on the wire. It also means the affordance needs the account's GM rights, which is the
-//! default for this project's characters; a refused command shows up as the
-//! timeout warning below rather than as silence.
-//!
-//! Two details worth stating, because both are choices:
-//! - **The feet land at the camera point**, not the eye — the camera translation IS the
-//!   destination, so you arrive standing where you were floating (a ~2 yd eye rise on arrival).
-//! - **Re-attach waits for the teleport**, rather than happening at the ask. Staying detached
-//!   through the round trip means the camera is already at the destination while the body flies
-//!   to it, so the tiles are resident before the landing instead of streaming in under it.
+//! Land here: moves the avatar frozen by free-fly ([`super::camera::fly_free`]) to the camera
+//! through the GM command `.go xyz x y z <map>` (vmangos `HandleGoXYZCommand`,
+//! `TeleportCommands.cpp:854`, which keeps the given Z and saves the recall position), answered by
+//! the ordinary teleport or worldport. Control re-attaches only then, so the destination's tiles
+//! are resident before the landing.
 
 use benilla_assets::coords::bevy_to_wow;
 use bevy::prelude::*;
@@ -30,19 +13,17 @@ use benilla_world::world_map::CurrentMap;
 use super::state::Player;
 use benilla_world::view::WorldCamera;
 
-/// Ask to land the avatar at the free-flying camera. Written by the debug panel's **land here**
-/// button; the dev chord's `G` is read directly by [`land_here`].
+/// Asks to land the avatar at the free-flying camera, from the debug panel's button; the dev
+/// chord's `G` is read directly by [`land_here`].
 #[derive(Message)]
 pub(crate) struct LandHere;
 
-/// How long to wait for the server's teleport before giving up on the ask and saying so. Generous
-/// next to a local round trip: the point is to name a *refused* command (no GM rights, coordinates
-/// off the map), not to race the network.
+/// Seconds to wait for the teleport before reporting the command refused (no GM rights,
+/// coordinates off the map).
 const LAND_TIMEOUT: f32 = 5.0;
 
-/// The land-here ask, and the re-attach that closes it. Runs before [`super::control`], so the
-/// frame that applies the teleport is the frame that takes third-person control again.
-// One system phase's input set, like the controller's own params.
+/// Sends the land-here ask and re-attaches when it lands. Runs before [`super::control`], so the
+/// frame that applies the teleport takes third-person control again.
 pub(crate) fn land_here(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
@@ -53,12 +34,11 @@ pub(crate) fn land_here(
     net: Res<NetCommands>,
     mut teleports: MessageReader<TeleportMessage>,
     mut worldports: MessageReader<WorldportMessage>,
-    // The pending ask's give-up deadline. A `Local` rather than a resource because this system is
-    // the only writer AND the only reader — nothing else in the app has an opinion about it.
+    // The pending ask's give-up deadline.
     mut pending: Local<Option<f32>>,
 ) {
-    // Drain both teleport readers every frame (own cursors — `wire_in` reads the same messages
-    // through its own): any teleport while an ask is out is our landing.
+    // Both readers drain every frame on their own cursors; a teleport while an ask is out is the
+    // landing.
     let arrived = teleports.read().count() > 0 || worldports.read().count() > 0;
     let asked = asks.read().count() > 0 || crate::run_mode::dev_chord(&keys, KeyCode::KeyG);
 

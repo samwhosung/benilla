@@ -1,30 +1,9 @@
-//! **Re-dressing** a character in place when its worn equipment changes — the gear-change half of
-//! [`super`] (decision 0074's teardown, replaced).
-//!
-//! A gear change used to tear the whole visual down (`despawn_related::<Children>()` + strip the rig,
-//! the animation player, the bone-attach table and the held-item bookkeeping) and let
-//! [`super::attach_entity_visuals`] rebuild it the next frame. That is not what the reference does,
-//! and the difference is visible: it destroys and re-creates *every* attached model too — both
-//! weapons, their enchant glows, the helm, the shoulders, every persistent aura visual — so swapping
-//! a belt blinked things that had nothing to do with the belt (and, before decision 0833 chained an
-//! effect's lifetime to its model, smeared their particle clouds across the ground behind a running
-//! character).
-//!
-//! The reference re-dresses on the SAME `CM2Model`. Its character compositor re-blits the dirty
-//! region groups into the component's own 256² target and re-runs the geoset selection `0x477520`,
-//! whose only reach into the model is the per-instance visibility array `+0x98` — a range filter
-//! writing ordinals (`0x7110d0`), nothing more; the character compositor is the *only* thing in
-//! the binary that can hide a submesh. Attachments are installed through a different mechanism
-//! entirely (`0x712f70 CM2Model::attachChild`) and the compositor never touches them.
-//!
-//! So this system is that law, and only that law:
-//!
-//! 1. re-composite the body atlas + re-resolve the cape texture for the new equipment, and re-point
-//!    every standing part's material variants at them ([`super::dress::part_materials`]);
-//! 2. re-run the geoset selection — a batch the new gear hides is despawned, one it reveals is
-//!    spawned by the same [`super::dress::spawn_part`] the first build used;
-//! 3. touch nothing else. The rig, the pose buffer, the bone anchors, the held items and everything
-//!    hanging off them are the same objects they were a frame ago.
+//! Re-dressing a character in place when its worn equipment changes. The reference re-dresses the
+//! same `CM2Model`: its compositor re-blits the atlas and re-runs the geoset selection
+//! (`0x477520`), which writes only the model's visibility array (`+0x98`, through `0x7110d0`), and
+//! never touches the attachments (`0x712f70`). So a re-dress re-points the standing parts at the
+//! new materials, despawns the batches the gear hides, spawns the ones it reveals, and leaves the
+//! rig and everything hanging off it alone.
 
 use benilla_protocol::EntityKind;
 use bevy::prelude::*;
@@ -50,11 +29,8 @@ use super::char_skin::{
 use super::dress::{part_materials, spawn_group, DressedPart, PartDress};
 use super::merge::{self, DressedGroup, MergedFormsCache};
 
-/// The per-part write surface of a re-dress: the displayed material and the three records that
-/// decide what a part draws when something *else* owns that channel — the interior classifier's law
-/// variants, the fade ramps' twin pair, and the portrait booths' steady mirror. All optional
-/// because a [`DressedPart`] is also carried by a billboard batch's **anchor**, which draws nothing
-/// (its card is a world root) and holds none of them.
+/// What a re-dress writes on a part: its material and its interior, fade and portrait records;
+/// all optional, since a billboard anchor carries a [`DressedPart`] and none of them.
 type PartWrites<'a> = (
     Option<Mut<'a, MeshMaterial3d<WowModelMaterial>>>,
     Option<Mut<'a, InteriorLit>>,
@@ -62,10 +38,8 @@ type PartWrites<'a> = (
     Option<Mut<'a, PortraitPart>>,
 );
 
-/// Re-dress every player whose worn equipment changed, in place (module docs). Players only: a
-/// creature's look never changes this way, and a character-model NPC wears its display's columns —
-/// a *display* change is a different model and stays a teardown
-/// ([`super::super::live_display::refresh_live_display`]).
+/// Re-dress every player whose worn equipment changed. A display change is a different model and
+/// stays a teardown (`refresh_live_display`).
 #[allow(clippy::type_complexity)]
 pub(in crate::entities) fn redress_player_looks(
     mut commands: Commands,
@@ -78,15 +52,14 @@ pub(in crate::entities) fn redress_player_looks(
             &Children,
             Option<&benilla_world::rig_palette::RigSkin>,
             Option<&super::super::BoneAttach>,
-            // The pose buffer: a revealed billboard batch's card bone resolves its anchor on
-            // first demand (`RigPose::anchor_for`).
+            // A revealed billboard batch's card bone resolves its anchor here.
             Option<&mut benilla_world::rig_anim::RigPose>,
             Option<&benilla_world::interior::BodyBakeCenter>,
             Option<&benilla_world::model_fade::UnitAppearFade>,
         ),
         With<VisualAttached>,
     >,
-    // The parts already standing under those players — found again by the batch index each carries.
+    // The standing parts, found again by their batch index.
     mut standing: Query<(
         &DressedPart,
         Option<&DressedGroup>,
@@ -101,8 +74,7 @@ pub(in crate::entities) fn redress_player_looks(
     creatures: Option<Res<Creatures>>,
     displays: Option<Res<ItemDisplays>>,
     characters: Option<Res<Characters>>,
-    // The character-skin build chain, nested to stay inside Bevy's system-param tuple limit — the
-    // same set [`super::attach_entity_visuals`] composites with, because it is the same composite.
+    // The skin build chain, nested for Bevy's system-param limit.
     skin_build: (
         Option<Res<SkinSections>>,
         Option<Res<WorldAssets>>,
@@ -113,10 +85,7 @@ pub(in crate::entities) fn redress_player_looks(
         ResMut<Assets<Mesh>>,
         ResMut<MergedFormsCache>,
     ),
-    // The animated-material lane a re-dressed part may need a material of its own on (2295).
-    // Plumbing here rather than a live case: a re-dress is a PLAYER's gear change, and no
-    // character batch in the corpus carries a per-sequence loop — but the dressing law is one law,
-    // and a path that could not express it would be a place for the two to drift.
+    // The own-material lane `spawn_part` takes; no character batch in the shipped data uses it.
     mut own_lane: (
         ResMut<benilla_world::doodad_anim::UvAnimMaterials>,
         ResMut<benilla_world::doodad_anim::TintAnimMaterials>,
@@ -138,14 +107,11 @@ pub(in crate::entities) fn redress_player_looks(
     for (entity, net, live, mut applied, children, rig, bones, mut pose, bake_center, unit_fade) in
         &mut players
     {
-        // `settled`: every non-empty visible-item entry has resolved through the
-        // template cache. Re-dressing on a half-resolved set would composite a half-dressed atlas
-        // and then composite again a frame later.
+        // Wait until every visible item has resolved, or a half-dressed atlas composites first.
         if net.kind != EntityKind::Player || !live.settled || *live == applied.0 {
             continue;
         }
-        // Stamp first, unconditionally: a player whose display resolved to no model at all (the
-        // cube fallback) has nothing to re-dress, and must not re-enter this arm every frame.
+        // Stamp first: a model-less player has nothing to re-dress and must not retry every frame.
         applied.0 = *live;
         let Some(dm) = net
             .display_id
@@ -157,7 +123,6 @@ pub(in crate::entities) fn redress_player_looks(
             continue;
         };
 
-        // The dressing inputs, re-resolved exactly as the first build resolved them.
         let worn = resolve_worn_equip(net, Some(live), Some(dm));
         let look = resolve_char_look(net, Some(dm), entity, &stores);
         let eg = equip_geosets(
@@ -171,8 +136,7 @@ pub(in crate::entities) fn redress_player_looks(
             let cg = characters.as_deref()?;
             Some(cg.0.visible_geosets(l.race, l.sex, l.hair_style, l.facial_hair, &eg))
         });
-        // The re-composite. Cached per (appearance, worn set) in `SkinComposites`, so a swap back
-        // to a set already worn this session costs a lookup.
+        // Cached per (appearance, worn set), so a swap back costs a lookup.
         let char_mats: CharSkinMaterials = match look.as_ref() {
             Some(l) => build_char_skin_materials(
                 l,
@@ -191,13 +155,10 @@ pub(in crate::entities) fn redress_player_looks(
             ),
             None => (None, None, None, (None, None)),
         };
-        // No look (a druid form, a GM morph — a Player-kind entity on a beast display) means no
-        // geoset filter, exactly as at build: every batch the model authors draws.
+        // No look (a druid form on a beast display) means no geoset filter, as at build.
         let shows = |geoset: u16| visible.as_ref().is_none_or(|v| v.contains(&geoset));
-        // The grouping the new gear asks for (`merge`): a standing group survives exactly when
-        // the new grouping contains its member set unchanged — then it re-points in place like
-        // any part; otherwise it is torn down and the new group spawns whole. Keyed by first
-        // member, which is what a standing entity's `DressedPart::index` carries.
+        // A standing group survives only if the new grouping keeps its member set; keyed by the
+        // first member, the standing entity's `DressedPart::index`.
         let groups = merge::guard_groups(
             merge::group_parts(parts, |p| shows(p.geoset_id)),
             parts,
@@ -206,7 +167,7 @@ pub(in crate::entities) fn redress_player_looks(
         let group_of: std::collections::HashMap<u32, &merge::BodyGroup> =
             groups.iter().map(|g| (g.first(), g)).collect();
 
-        // Pass 1 — the parts already standing: hide-by-despawn, or re-point.
+        // Pass 1, the standing parts: despawn if hidden, else re-point.
         let mut present = vec![false; parts.len()];
         let (mut hidden, mut repointed) = (0usize, 0usize);
         for child in children.iter() {
@@ -217,7 +178,7 @@ pub(in crate::entities) fn redress_player_looks(
             };
             let dp = *dp;
             let Some(part) = parts.get(dp.index as usize) else {
-                continue; // a stale index (the model rebuilt under us) — leave it to the teardown
+                continue; // a stale index: the teardown handles it
             };
             let standing_members: &[u32] = match group {
                 Some(g) => &g.0,
@@ -227,8 +188,7 @@ pub(in crate::entities) fn redress_player_looks(
                 .get(&dp.index)
                 .is_some_and(|g| g.members == standing_members);
             if !shows(part.geoset_id) || !still_grouped {
-                // A billboard batch's card is a world ROOT following this anchor's joint, so it does
-                // not cascade — reap it by name (decision 0153's lifecycle, [`DressedPart::card`]).
+                // A billboard card is a world root, so it is reaped by name.
                 if let Some(card) = dp.card {
                     if let Ok(mut ec) = commands.get_entity(card) {
                         ec.despawn();
@@ -241,8 +201,7 @@ pub(in crate::entities) fn redress_player_looks(
             for &m in standing_members {
                 present[m as usize] = true;
             }
-            // A card's material is the model's own batch material — never a character slot — so a
-            // billboard part has nothing to re-point.
+            // A billboard batch is never a character slot, so it has nothing to re-point.
             if part.billboard.is_none() {
                 repoint_part(
                     part,
@@ -254,12 +213,8 @@ pub(in crate::entities) fn redress_player_looks(
             }
         }
 
-        // Pass 2 — the batches the new gear reveals. They join the unit's own appear-fade clock if
-        // one is still in flight (the login gear cascade lands mid-ramp), exactly as a
-        // late-resolving held item does — never a second ramp of their own, never a pop.
-        //
-        // A revealed billboard batch's card bone resolves its anchor first, over
-        // exactly the parts the spawn loop below will dress.
+        // Pass 2, the revealed batches, which join the unit's appear-fade if one is in flight (the
+        // login gear cascade lands mid-ramp). Their card bones resolve anchors first.
         let card_anchors: std::collections::HashMap<u16, Entity> = match pose.as_mut() {
             Some(p) => parts
                 .iter()
@@ -309,12 +264,7 @@ pub(in crate::entities) fn redress_player_looks(
             );
             shown += 1;
         }
-        // One line per re-dress — a handful per session, and the only readout of a mechanism whose
-        // whole point is that nothing else moves. `atlas` is the composited body material's id: it
-        // must CHANGE when the worn set changes a body region, which is what says the re-composite
-        // reached the parts rather than merely being built. The counts say which batches the new
-        // gear hid and revealed. Nothing about the unit's attachments appears here because this
-        // system cannot touch them.
+        // `atlas` must change when the worn set changes a body region.
         info!(
             "redress: {entity} — {hidden} batch(es) hidden, {shown} shown, {repointed} re-pointed, \
              atlas {:?}",
@@ -323,24 +273,16 @@ pub(in crate::entities) fn redress_player_looks(
     }
 }
 
-/// Re-point one standing part at the freshly-built material set its unit now wears.
-///
-/// The three records are updated whatever the part is doing, because each is read by a *different*
-/// owner at a different moment: the interior classifier resolves the law's steady material, the fade
-/// ramps resolve their twin every frame from [`FadeMaterials`] + the law, and the portrait booths
-/// mirror the steady one whenever a booth rebuilds. The **displayed** material is only written when
-/// no ramp owns that channel — a part mid-appear-fade wears its blend twin, and
-/// [`benilla_world::model_fade::apply_render_fade`] re-resolves it from the two records above on its next
-/// tick, so writing the steady handle here would flash it opaque for a frame.
+/// Re-point one standing part at its unit's new materials. The records always update; the
+/// displayed material only when no fade ramp owns it, since `apply_render_fade` re-resolves a
+/// ramping part from the records and a steady write would flash it opaque for a frame.
 fn repoint_part(
     part: &EntityPart,
     char_mats: &CharSkinMaterials,
     (mat, lit, fade_mats, portrait): PartWrites,
     fading: bool,
 ) {
-    // A batch with no character texture slot draws its shared model's own built materials, which no
-    // amount of gear can change — the body atlas, the hair, the cape and the extra skin are the
-    // whole of what a re-dress can touch.
+    // Gear changes only the character slots' textures.
     if part.char_slot.is_none() {
         return;
     }
@@ -366,9 +308,7 @@ fn repoint_part(
     }
 }
 
-/// The armed idle's authored CAaBox — the mouseover picker's volume for a skinned part (decision
-/// 0637). Same read as the first build's; see the note there for why the bind box is not a fair
-/// stand-in.
+/// The armed idle's authored CAaBox, the picker's volume for a skinned part, read as at build.
 fn idle_aabb(dm: &super::super::DisplayModel) -> Option<bevy::camera::primitives::Aabb> {
     let anims = dm.animations.as_ref()?;
     let clip = anims.first_seq.and_then(|i| anims.clips.get(i))?;
@@ -388,10 +328,7 @@ mod tests {
 
     /// One synthetic body batch at `geoset`.
     fn part(geoset: u16) -> EntityPart {
-        // A DISTINCT material per stub batch: every real batch of a model has its own built
-        // material unless it shares a texture, and a fixture whose batches all bound the one
-        // default handle would merge into a single group (`merge`) and stop being the
-        // per-batch hide/show/re-point walk these tests are about.
+        // A distinct material per batch, or the fixture would merge into one group (`merge`).
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         EntityPart {
@@ -425,9 +362,7 @@ mod tests {
         }
     }
 
-    /// A player standing fully dressed: the display model behind it, the resource set the re-dress
-    /// reads, and — the point of the whole change — a bone anchor with a held item hanging off it,
-    /// exactly where a weapon and its enchant glow live.
+    /// A dressed player with a bone anchor and a held item hanging off it.
     struct Standing {
         app: App,
         player: Entity,
@@ -435,9 +370,8 @@ mod tests {
         held: Entity,
     }
 
-    /// Build one. `geosets` are the model's batches in order; `showing` the batch indices already
-    /// spawned as children (what the first build selected); `characters` the geoset tables (absent ⇒
-    /// no filter at all, the druid-form / beast-display arm).
+    /// `geosets` are the model's batches, `showing` the indices already spawned, `characters` the
+    /// geoset tables (absent: no filter).
     fn stand(geosets: &[u16], showing: &[usize], characters: Option<CharacterGeosets>) -> Standing {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()))
@@ -446,19 +380,16 @@ mod tests {
             .init_asset::<WowModelMaterial>()
             .init_resource::<SkinComposites>()
             .init_resource::<MergedFormsCache>()
-            // The engine's material cache — normally `model_render::plugin`'s, which this bare
-            // harness does not install.
+            // Normally `model_render::plugin`'s.
             .init_resource::<benilla_world::model_render::ModelMaterials>()
-            // The animated-material lane the dressing path now takes (2295) — never exercised by
-            // a re-dress, which is a player's gear change, but the system asks for it.
+            // The own-material lane the system takes, which a re-dress never uses.
             .init_resource::<benilla_world::doodad_anim::UvAnimMaterials>()
             .init_resource::<benilla_world::doodad_anim::TintAnimMaterials>()
             .init_resource::<benilla_world::mat_anim_table::MatAnimTable>();
 
         let mut dm = empty_display();
         dm.parts = Some(geosets.iter().map(|g| part(*g)).collect());
-        // The look comes off the DISPLAY here (a character-model NPC row), which is the same
-        // `CharLook` the wire path builds — and needs no `ObjectStore` to stand one up.
+        // A look off the display (an NPC row) needs no `ObjectStore`.
         dm.npc_appearance = Some(NpcAppearance {
             race: 1,
             sex: 0,
@@ -474,8 +405,7 @@ mod tests {
             catalog: Default::default(),
             models: HashMap::from([(42u32, dm)]),
         });
-        // Display 7 = a pair of gloves whose `geosetGroup[0]` is 1 (→ geoset 402, the glove group's
-        // own range disabled).
+        // Display 7: gloves whose `geosetGroup[0]` is 1, selecting geoset 402.
         app.insert_resource(ItemDisplays::icons_for_tests(
             ItemDisplayCatalog::from_displays(HashMap::from([(
                 7u32,
@@ -510,8 +440,7 @@ mod tests {
                 Visibility::default(),
             ))
             .id();
-        // The rig's bone anchor and the item hanging off it — the weapon root a gear change used to
-        // take with it.
+        // A bone anchor and the item hanging off it.
         let joint = app
             .world_mut()
             .spawn((Transform::default(), Visibility::default(), ChildOf(player)))
@@ -571,10 +500,7 @@ mod tests {
         }
     }
 
-    /// **The director's report.** A gear change used to `despawn_related::<Children>()` the whole
-    /// visual, taking both weapons, their enchant glows, the helm, the shoulders and every aura
-    /// visual with it — everything hanging off a bone was destroyed and re-created because a belt
-    /// changed. Nothing on the unit but its own body batches may be touched.
+    /// A gear change touches nothing on the unit but its own body batches.
     #[test]
     fn a_gear_change_leaves_the_rig_and_every_attachment_standing() {
         let mut s = stand(&[0, 401], &[0, 1], None);
@@ -597,8 +523,7 @@ mod tests {
         );
     }
 
-    /// …and the diff is stamped, so the re-dress fires **once** per change rather than every frame
-    /// (the composite behind it is a synchronous BLP read on a miss).
+    /// The re-dress fires once per change: the composite behind it reads BLPs synchronously.
     #[test]
     fn a_gear_change_restamps_what_the_visual_is_dressed_with() {
         let mut s = stand(&[0], &[0], None);
@@ -614,11 +539,8 @@ mod tests {
         );
     }
 
-    /// The **geoset half**, against the shipped customization tables: putting gloves on replaces the
-    /// glove group — the naked 401 batch stops drawing and the item's 402 batch starts — and that
-    /// now happens by despawning/spawning exactly those two batches instead of rebuilding the unit.
-    /// (The reference flips two entries of the model's own visibility array; the visible result is
-    /// the same set, which is what this pins.)
+    /// Against the shipped tables: gloves hide the bare-hand 401 batch and show the item's 402, by
+    /// despawning and spawning just those two, the reference's two visibility-array flips.
     #[test]
     fn worn_gloves_replace_the_glove_geoset_in_place() {
         let data = benilla_formats::wow_data_or_skip!();

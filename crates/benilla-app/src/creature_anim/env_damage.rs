@@ -1,40 +1,18 @@
-//! Environmental-damage feedback — the fall-landing dust puff and pain grunt.
-//! Two independent sources fire it, matching the reference's own double-fire:
-//!
-//! 1. **The wire arm** (`net/apply`): `SMSG_ENVIRONMENTALDAMAGELOG` → [`EnvDamageTable`] maps the
-//!    damage type (0 exhausted · 1 drowning · 2 fall · 3 lava · 4 slime · 5 fire) to a
-//!    `SpellVisualKit` id, played on the victim through the ordinary discrete kit play
-//!    ([`super::KitPush`] → `PlaySpellVisualKit` `0x60edf0`). This is the *unconditional tail* of
-//!    the reference's 0x1FC consequence method `0x624f30` (fires for any resolved unit; the
-//!    floating damage number + self-only chat line are the method's other two legs, not modeled).
-//!    The server sends no sound with it — `0x624f30` plays no vocal at all.
-//!
-//! 2. **The client-side landing predictor** (`0x602d00`, the movement tick's *other* caller of
-//!    `0x624f30`): on a hard landing the client plays the unit's wound vocal (class 2 →
-//!    CreatureSoundData) AND re-fires the *same* fall kit locally with damage 0 — without waiting
-//!    for the server. So a damaging local fall shows the puff twice (predicted, then echoed an
-//!    RTT later) and the grunt is heard immediately. The metric is **fall height in yards**
-//!    (`0x7c60c0`), gated at [`HARD_LANDING_DESCENT`]. The vocal leg lives in [`crate::sound`]
-//!    (it owns the voice catalog); the dust leg is [`hard_landing_dust`] here; both gate on the
-//!    same descent.
-//!
-//! **Deliberate scope:** benilla drives the predictor from the *self* controller's
-//! landing edge only — remote movers' landings aren't detected yet, though the reference fires it
-//! for any mover (its call graph reaches `0x602d00` from the networked movement handler). And the
-//! HARD gate's immunity modifier (feather-fall / safe-fall auras force SOFT in the `13 < h < 70`
-//! band; `h ≥ 70` bypasses it) isn't modeled — those auras aren't tracked, so every fall past the
-//! floor reads HARD, which is the common case.
+//! Environmental-damage feedback: the fall dust puff, fired by two independent sources as in the
+//! reference. `SMSG_ENVIRONMENTALDAMAGELOG` plays its damage type's kit on the victim and no sound
+//! (`0x624f30`, through `0x60edf0`); the landing predictor `0x602d00`, run for every mover, plays
+//! the wound vocal ([`crate::sound`]) and re-fires the fall kit at once ([`hard_landing_dust`]), so
+//! a damaging fall puffs twice.
 
 use bevy::prelude::*;
 
 use benilla_assets::{LockRecover, WorldAssets};
 
-/// The loaded 6-slot table (`None` until the startup load lands; absent = no environmental
-/// feedback kits, like every optional DBC face).
+/// `EnvironmentalDamage.dbc`'s six damage-type kits; absent, no environmental kit plays.
 #[derive(Resource)]
 pub(crate) struct EnvDamageTable(pub(crate) benilla_formats::EnvironmentalDamageTable);
 
-/// Load the table off the patch chain at startup (the [`super::blood`] pattern).
+/// Load the table off the patch chain at startup.
 pub(super) fn load_env_damage_table(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
     let Some(assets) = assets else { return };
     let loaded = {
@@ -49,30 +27,22 @@ pub(super) fn load_env_damage_table(mut commands: Commands, assets: Option<Res<W
     }
 }
 
-/// The landing predictor's HARD-landing gate — the client's `[0x80c414]` = **13.0** yd of fall
-/// height (`0x602d00`'s `fcomp 13.0`, byte-verified). Below it the client plays only its
-/// jump-end/land sound (SOFT — class 0xc, not modeled here); above it comes the wound grunt + the
-/// dust puff. The sibling constant `[0x80c418]` = 70.0 yd is the *unconditional* tier that bypasses
-/// the immunity check (feather/safe-fall) — moot for us until those auras are tracked, so every
-/// fall past this floor reads HARD. Note the client grunts from 13.0 yd but the *server* only
-/// damages from ≈14.57 yd, so a 13–14.57 yd fall grunts and puffs with zero damage and no packet —
-/// faithful.
+/// The hard-landing floor, `[0x80c414]` = 13.0 yd of fall height (`0x602d00`); below it only the
+/// land sound plays. Below `[0x80c418]` = 70.0 yd a dead or ghost mover lands soft (`0x605f30`),
+/// which is not built. The server damages only from 14.57 yd (vmangos `Player.cpp:20968`), so a
+/// shorter hard landing grunts and puffs with no damage packet.
 pub(crate) const HARD_LANDING_DESCENT: f32 = 13.0;
 
-/// The controller's landing report, written on **every** landing (ungated — consumers apply
-/// [`HARD_LANDING_DESCENT`], keeping the predictor's threshold law in this byte-cited module).
+/// A mover's landing, reported on every landing; consumers apply [`HARD_LANDING_DESCENT`].
 #[derive(Message, Clone, Copy)]
 pub(crate) struct HardLanding {
     pub(crate) entity: Entity,
-    /// Fall height in yd: the arc's launch height − the landing height. The reference's metric is
-    /// apex−current (`0x7c60c0`), which equals this for a step-off (launch *is* the apex) and
-    /// overcounts ours by at most the jump rise (~1.6 yd) for a jump *off* a ledge — negligible
-    /// against the 13-yd floor, and only near the boundary.
+    /// Fall height in yd, launch height minus landing height. The reference's `0x7c60c0` measures
+    /// from the apex, which a jump off a ledge puts up to about 1.6 yd above the launch.
     pub(crate) descent: f32,
 }
 
-/// The dust leg of the landing predictor: `0x602d00`'s tail re-fires `0x624f30(type 2, damage 0)`
-/// — the same fall kit the wire arm plays — locally, at the landing frame.
+/// The predictor's dust leg: `0x602d00` re-fires `0x624f30(type 2, damage 0)` at the landing frame.
 pub(super) fn hard_landing_dust(
     mut landings: MessageReader<HardLanding>,
     table: Option<Res<EnvDamageTable>>,
@@ -83,7 +53,7 @@ pub(super) fn hard_landing_dust(
         if l.descent <= HARD_LANDING_DESCENT {
             continue;
         }
-        // Damage type 2 = fall (the predictor is fall-only; the other five types are wire-only).
+        // Type 2, fall: the predictor's only type.
         if let Some(kit_id) = table.as_ref().and_then(|t| t.0.kit_id(2)) {
             debug!(
                 "anim: hard landing ({:.1} yd) → predicted dust kit {kit_id}",

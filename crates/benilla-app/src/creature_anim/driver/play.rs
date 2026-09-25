@@ -1,6 +1,4 @@
-//! Playback primitives for [`super::drive_animations`]: resolving and cross-fading into a clip
-//! ([`play_clip`], [`play`]), checking whether a one-shot has finished ([`oneshot_finished`]), and
-//! leaving a Special state ([`leave_special`]) — split out of [`super`] as its own concern.
+//! Base-track playback: arming clips, the base-animation lock, entering and leaving Specials.
 
 use std::time::Duration;
 
@@ -13,59 +11,35 @@ use bevy::prelude::*;
 use super::super::{find_resolved, AnimDriver};
 use super::select::{self, jump_land_pick, Mode, Special};
 
-/// The **base-animation lock** — the reference's `[unit+0xd58]` bits `0xc0000`, which are the whole
-/// reason a Lashed player visibly falls over (correcting 2085's §3).
-///
-/// `CGUnit::PlayAnimation 0x5fe2f0` opens with a guard that returns having done nothing at all:
-///
-/// ```text
-/// 5fe396  mov  eax,[ebx+0xd58]
-/// 5fe39c  test eax,0xc0000
-/// 5fe3a1  jne  0x5fec29        ; bare epilogue — no routing, no arm, no deferral
-/// ```
-///
-/// The bits are set by `PlayAnimation`'s **own** arm helper `0x5fdba0`, in a tail keyed on the id
-/// *actually armed* (`0x5fdcf7`'s byte table `0x5fdd90`): **121 `Knockdown` → `0x80000`**, **192
-/// `LiftOff` / 200 `Land` → `0x40000`**. They are cleared in `CGUnit::OnAnimationFinished
-/// `0x5fc9c6`, above that function's reason branch — so on natural completion *and* on pre-emption
-/// — and again on a model rebuild (`0x60adee`).
-///
-/// So a stun's root **does** recompute the base and the selector **does** resolve `Stand(0)`, and
-/// the `0x5fda20 call 0x5fe2f0(0)` that would overwrite the Knockdown is simply **refused**. The
-/// clip runs its full 2000 ms. Order-independent, which is why it holds whatever the packet timing.
-///
-/// The reference carries two independent bits; a unit can only ever hold one, because the second
-/// arm would itself be refused — so this models the holder as the id, which also expresses the
-/// "keyed on the FINISHED id" clearing rule directly. The two weaker relatives (`0x4` on 39
-/// `JumpEnd`, which only makes the fallback idle decline, and `0x8` on 127 `Birth`, which makes the
-/// whole selector return keep-current) are separate mechanisms at their own sites and are not
-/// modelled here.
+/// The base-animation lock, the reference's `[unit+0xd58] & 0xc0000`: while it is held,
+/// `CGUnit::PlayAnimation 0x5fe2f0` returns at once (`0x5fe3a1 jne 0x5fec29`), so a stun's
+/// `Stand(0)` recompute (`0x5fda20`) is refused and a `Knockdown` runs its full 2000 ms. The arm
+/// helper `0x5fdba0` sets it on the id actually armed (table `0x5fdd90`: 121 `Knockdown`, 192
+/// `LiftOff`, 200 `Land`); `OnAnimationFinished 0x5fc9c6` clears it on completion or pre-emption,
+/// as does a model rebuild (`0x60adee`). Held as the id, since a second arm would be refused.
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct BaseAnimLock(Option<u16>);
 
 impl BaseAnimLock {
-    /// The three ids whose arm takes the lock — `0x5fdd90`'s table, `0xc0000` half.
+    /// The ids whose arm takes the lock (`0x5fdd90`).
     fn locking(id: u16) -> bool {
         matches!(id, select::KNOCKDOWN | select::LIFT_OFF | select::LAND)
     }
 
-    /// The guard: is a play refused right now? An **unconditional early return**, not a priority
-    /// comparison and not a dedup (`0x5fe3a1`).
+    /// Whether a play is refused: an unconditional early return, not a priority test (`0x5fe3a1`).
     pub(super) fn refuses(self) -> bool {
         self.0.is_some()
     }
 
-    /// The setter, run on the id **actually armed** and only when the arm happened.
+    /// The setter, run on the id actually armed and only when the arm happened.
     fn took(&mut self, id: u16) {
         if Self::locking(id) {
             self.0 = Some(id);
         }
     }
 
-    /// The clearer, keyed on the **finished** id. Called once a frame before anything re-picks the
-    /// base, so completion and pre-emption both release it: an overridden clip's node still reports
-    /// finished at the end of its own span, which is exactly the reference's "the base stays locked
-    /// for the rest of the clip's window" when a mount arms over a knockdown (`0x607b44`).
+    /// The clearer, keyed on the finished id (`0x5fc9c6`): run once a frame before anything
+    /// re-picks the base, so a clip that completes or is pre-empted releases it.
     pub(super) fn release_finished(
         &mut self,
         player: &AnimationPlayer,
@@ -79,26 +53,17 @@ impl BaseAnimLock {
         }
     }
 
-    /// Drop the lock outright — the reference's other two clearing sites.
-    ///
-    /// A **model rebuild** needs no call here: benilla's rebuild removes [`AnimDriver`] itself
-    /// (`entities::live_display`), so the lock goes with it and the unit comes back with the base
-    /// unheld — which is the reference's own outcome at `0x60adee`, reached differently. What does
-    /// call it is the pair of arms the reference never gates: the death pose (`0x5fc563`) and the
-    /// mount attach (`0x607b44`).
+    /// Drops the lock outright, for the arms the reference never gates: the death pose
+    /// (`0x5fc563`) and the mount attach (`0x607b44`). A model rebuild needs no call: it removes
+    /// [`AnimDriver`].
     pub(super) fn release(&mut self) {
         self.0 = None;
     }
 }
 
-/// Cross-fade the player into an **already-resolved** clip over its blend-in time. `repeat` sets its
-/// repetition (`Forever` for a loop, `Count(R)` for a rolled replay budget, `Never` for a plain
-/// one-shot — always set, so a reused graph node never carries a stale count from a prior play);
-/// `rate` sets its playback speed. The primitive [`play`] (and the gait picker, which already has
-/// the resolved [`AnimClip`] in hand) both funnel through this so resolution never runs twice.
-/// Returns whether the clip was actually armed — `false` is the lock's refusal, and a caller whose
-/// bookkeeping says "the base now holds this" must not write it on a `false` (the reference's guard
-/// returns before the arm's own `[bone+0xf8] = animId`, so nothing downstream believes it played).
+/// Cross-fades into an already-resolved clip unless the lock refuses, returning whether it armed;
+/// `repeat` is always set, so a reused node keeps no stale count. On `false` the caller must not
+/// record the clip as held: the reference's guard returns before the arm's `[bone+0xf8] = animId`.
 pub(super) fn play_clip(
     lock: &mut BaseAnimLock,
     tr: &mut AnimationTransitions,
@@ -107,9 +72,8 @@ pub(super) fn play_clip(
     repeat: RepeatAnimation,
     rate: f32,
 ) -> bool {
-    // The guard, at the very top — before any routing, descriptor build or slot election
-    // ([`BaseAnimLock`]). `arm` below is the primitive the reference reaches past this guard from
-    // the dismount, the sheath family and the weapon attach, so it stays ungated.
+    // The guard comes first. `arm` stays ungated: the reference reaches it past the guard from the
+    // dismount, the sheath family and the weapon attach.
     if lock.refuses() {
         return false;
     }
@@ -125,19 +89,10 @@ pub(super) fn play_clip(
     true
 }
 
-/// Arm an already-resolved **looping** clip with the cross-fade SUPPRESSED — op4 `0x7121a0` called
-/// with `crossFadeFlag = 0`, which is a genuinely different arm, not a fast blend:
-///
-/// - the outgoing pose is **not** carried. `0x71253e`–`0x712543` tests arg6 and, when it is zero,
-///   jumps clean past the whole blend block — including the `rep movsd` at `0x7125d9`–`0x7125ea`
-///   that copies the primary block `[bone+0x98..]` into the secondary `[bone+0xc4..]`. So the new
-///   clip's first frame IS the pose, immediately, and a **full-body secondary overlay survives**
-///   (only the blended arm evicts it — decision 0114's shared-slot eviction is a *blend* law).
-/// - the primary's own bookkeeping still runs: `[bone+0xf8] = animId` at `0x71252f` is gated on
-///   arg7 (the slot selector) alone, so bone 0 changes hands either way.
-///
-/// The dismount teardown `0x607ce0` is the call site this exists for; the mount-up
-/// build `0x607b44` passes `1` and takes [`play_clip`]'s ordinary cross-fade.
+/// Arms a looping clip with no cross-fade, as the dismount teardown `0x607ce0` calls op4
+/// `0x7121a0` with `crossFadeFlag = 0`: `0x71253e`–`0x712543` skips the blend block and its
+/// primary-to-secondary copy (`0x7125d9`–`0x7125ea`), so the clip is the pose at once and a
+/// full-body secondary overlay survives, while `[bone+0xf8] = animId` (`0x71252f`) still runs.
 pub(super) fn cut_loop(
     tr: &mut AnimationTransitions,
     player: &mut AnimationPlayer,
@@ -150,8 +105,7 @@ pub(super) fn cut_loop(
     let Some(head) = find_resolved(anims, id, catalog) else {
         return;
     };
-    // op4's arg3 here is a literal `-1` (`0x607d25`), so the variation rolls unconditionally — the
-    // teardown is not one of the arms [`select::arm_forces_head`] pins to the head.
+    // op4's arg3 is a literal `-1` here (`0x607d25`): the variation always rolls.
     let (c, r) = roll_loop(anims, head, true, rng);
     *window = Some((c.node, r));
     arm(tr, player, c, RepeatAnimation::Forever, 1.0, Duration::ZERO);
@@ -170,11 +124,8 @@ fn arm(
     active.set_speed(rate);
 }
 
-/// The one-shot arm's two rolls, in the client's order (op4: variation at `0x71249a`, replay count
-/// at `0x712698`): pick the resolved id's **variation** (the `_rand()`-weighted
-/// walk, alternating the 1H swing arcs), then roll the **replay budget** `R` from the picked
-/// clip's `(minReplay, maxReplay)` — the client multiplies `R` into the play window; benilla
-/// expresses the same window as a `Count(R)` repeat, which `is_finished` honors.
+/// A one-shot arm's rolls in op4's order: the variation (`0x71249a`), then the picked clip's replay
+/// budget `R` (`0x712698`), which multiplies the play window and plays here as `Count(R)`.
 pub(super) fn roll_oneshot<'a>(
     anims: &'a ModelAnimations,
     head: &'a AnimClip,
@@ -190,13 +141,8 @@ pub(super) fn roll_oneshot<'a>(
     (c, repeat)
 }
 
-/// Pick a looping arm's **variation** (the client's base-arm `variationIdx = −1`,
-/// `0x5fe697`): a **relaxed** arm makes the weighted `_rand` walk (the
-/// same roll as a one-shot's — this is where a re-armed Stand lands on its rare look-around
-/// variations, the fidget); a combat/cast arm is forced to the deterministic head
-/// ([`select::arm_forces_head`] decides which, at the call site). The kernel itself never
-/// re-rolls — the advance between variations is the WATCHDOG's re-arm ([`roll_loop`]'s window,
-/// decision 0516), not a kernel cycle.
+/// A looping arm's variation (`variationIdx = −1`, `0x5fe697`): relaxed, the weighted walk (the
+/// idle fidget); combat or cast, the head. Only the watchdog's re-arm re-rolls, never the kernel.
 pub(super) fn pick_loop_variation<'a>(
     anims: &'a ModelAnimations,
     head: &'a AnimClip,
@@ -212,12 +158,8 @@ pub(super) fn pick_loop_variation<'a>(
     }
 }
 
-/// The looping arm's two rolls in op4's order (variation `0x71249a`, then the replay budget
-/// `0x712692..` — the same two `_rand` sites as a one-shot's): the budget is live
-/// for **loops** too — not as a repeat cap but
-/// as the watchdog **window**, `R` clip-lengths wide (`windowHi = arm + span·R`). Returns the
-/// armed clip + `R` = total passes before the watchdog re-arms (`R ∈ [min, max−1]` floored to 1
-/// — `replayMax` is exclusive, and `(0,0)`/`(0,1)` both play exactly once, visibly).
+/// A looping arm's rolls in op4's order (`0x71249a`, `0x712692`); the budget `R ∈ [min, max−1]`,
+/// floored to 1, sets the watchdog window `windowHi = arm + span·R`.
 pub(super) fn roll_loop<'a>(
     anims: &'a ModelAnimations,
     head: &'a AnimClip,
@@ -229,14 +171,8 @@ pub(super) fn roll_loop<'a>(
     (c, r)
 }
 
-/// Cross-fade into clip `id`, resolved through the model's own baked fallback first (
-/// see [`find_resolved`]) so a model lacking `id` plays its baked substitute rather than nothing.
-/// `looping` repeats it; `rate` sets its playback speed. No-op if resolution still comes up empty.
-/// A **one-shot** (`!looping`) rolls the resolved id's **variation and replay budget** per play
-/// ([`roll_oneshot`]); a looping play rolls its variation (when `relaxed` —
-/// decision 0123) **and its budget** ([`roll_loop`]), publishing the armed
-/// `(node, R)` into `window` for the watchdog's advance; a one-shot arm clears it (its budget is
-/// the `Count` repeat — no window outlives the arm).
+/// Resolves `id` through the model's baked fallback and cross-fades into it with its rolls; a loop
+/// publishes its `(node, R)` to `window` for the watchdog, a one-shot clears it.
 pub(super) fn play(
     lock: &mut BaseAnimLock,
     tr: &mut AnimationTransitions,
@@ -250,12 +186,8 @@ pub(super) fn play(
     rng: &mut benilla_assets::AnimRng,
     window: &mut Option<(bevy::animation::graph::AnimationNodeIndex, u32)>,
 ) {
-    // The lock's guard is `PlayAnimation`'s **front door**, above the arm helper that draws the
-    // rolls (`0x5fe2f0`'s epilogue return is at `0x5fe3a1`; the `_rand()` sites live inside
-    // `0x5fdba0`'s op4 call). So a refused play must not roll either: the variation and replay
-    // draws come off the ONE shared stream, and rolling them for a body that
-    // cannot move would perturb every other unit's picks for the clip's whole 2 s — the same
-    // churn 2096 caught in the gait selector's live trace, at the event-play door instead.
+    // The guard returns (`0x5fe3a1`) before the arm helper `0x5fdba0` rolls, so a refused play
+    // draws nothing from the one shared random stream.
     if lock.refuses() {
         return;
     }
@@ -272,36 +204,12 @@ pub(super) fn play(
     }
 }
 
-/// Write the **playback rate** of whatever the full-body slot currently holds — run once per frame,
-/// after the mode machine has settled, in every mode alike.
-///
-/// The client's rate write lives **outside the selector** (`0x5fe2f0`, per-frame over the armed
-/// clip), so it is not the gait's private business: it applies to a landing, a bracket, a swing —
-/// anything the base slot holds. Ours used to be two loops inside [`Mode::Gait`]'s arms, which left
-/// every other mode playing at its arm-time literal `1.0` — and that is the jump-landing bug.
-/// [`jump_land_pick`] requests JumpLandRun **187**, and **every creature model
-/// resolves 187 → Run(5)** through its own baked PlayableAnimationLookup: Horse, Tiger (the druid
-/// travel form) and Cat all carry `playable[187] = 5`; only character models author 187 itself. So
-/// a mount's landing clip *is* its gallop cycle — a rate-scaled locomotion clip — and playing it at
-/// 1× ran it at ~65% of the cadence a mount's 14 yd/s calls for (Horse Run moveSpeed 9.028) for the
-/// clip's whole 0.8 s, snapping straight only when the gait re-picked after it. On foot the same
-/// defect is invisible: the character's own 187 carries moveSpeed 6.944 against a run speed of 7.0,
-/// so the correct rate *is* 1×.
-///
-/// It writes **only where the scaler applies** ([`select::scaled_rate`]) — a locomotion clip with
-/// an authored design speed. Everything else keeps whatever armed it: the scaler is one rate
-/// producer among several (the combat fast-path's 2×, the whiff's 0.5×, 0503's 0× freeze), and a
-/// blanket `1.0` here stomps all three.
-///
-/// [`AnimDriver::frozen`] names the one node this must leave alone even so — the airborne snapshot
-/// decision 0503 stopped on purpose ([`leave_special`]), whose clip *is* rate-scaled (Jump 38 is in
-/// the locomotion set; it is only the real assets' `moveSpeed = 0` that would spare it) — and is
-/// cleared as soon as anything else is armed.
-///
-/// It also records what the slot ended up running at in [`AnimDriver::gait_rate`] — the hover
-/// card's `rate` readout and the trace's `rate=`. Read back off the node rather
-/// than recomputed, so the instrument reports the swing's 2× or the freeze's 0× as faithfully as
-/// it reports a gait.
+/// Writes the rate of whatever bone 0 holds, once a frame in every mode: the client's per-frame
+/// write over the armed clip sits outside the selector (`0x5fe2f0`), and a creature's JumpLandRun
+/// (187) resolves to its Run (5) through the model's lookup, a gait cycle that needs the rate.
+/// Only a clip the scaler covers is written, so the fast path's 2× and the whiff's 0.5× survive;
+/// the frozen node is skipped even so. [`AnimDriver::gait_rate`] gets the rate read back off the
+/// node.
 pub(super) fn sync_base_rate(
     drv: &mut AnimDriver,
     tr: &AnimationTransitions,
@@ -329,11 +237,8 @@ pub(super) fn sync_base_rate(
     drv.gait_rate = player.animation(node).map_or(1.0, |a| a.speed());
 }
 
-/// Whether the one-shot clip `id` has finished playing (resolved through the model's own baked
-/// fallback first, decision 0082 — matching [`play`], which is what started it) — or the model lacks
-/// even the substitute, so the machine doesn't wait forever. Checked across the id's **variations**:
-/// the play rolled one of them, and whichever it was, "finished" means no variation
-/// of the id is still running.
+/// Whether one-shot `id`, resolved as [`play`] resolved it, has finished in every variation (the
+/// play rolled one); a model with no clip for it counts as finished.
 pub(super) fn oneshot_finished(
     player: &AnimationPlayer,
     anims: &ModelAnimations,
@@ -350,18 +255,9 @@ pub(super) fn oneshot_finished(
     }
 }
 
-/// Whether bone 0 still holds `sp`'s **own** clip — the arc's enter or its loop, resolved through
-/// the model's baked fallback exactly as [`play`] resolved it when it armed and
-/// compared on the *resolved* id, so a rolled variation counts as the same clip.
-///
-/// This is the predicate the airborne snapshot-freeze (scoped by 1566) never had.
-/// The freeze exists to still **the cut airborne clip** before the landing cross-fades over it;
-/// both its sites took whatever bone 0 happened to hold, on the unstated assumption that the arc's
-/// own clip is what is there. The base-anim lock (2096) is the first thing that ever falsified it,
-/// and it falsified it catastrophically: every play the arc asked for was refused, so bone 0 still
-/// held the `Knockdown` that took the lock — and the landing stopped **that** dead. A clip stopped
-/// dead never finishes, and the lock clears on the finished id, so the body stayed on its back for
-/// the rest of the session with every later play refused (the director's report).
+/// Whether bone 0 holds `sp`'s own enter or loop clip, compared on the resolved id so a rolled
+/// variation counts. The airborne freeze must still only that clip: a refused arc leaves the locked
+/// clip on bone 0, and a stilled clip never finishes, so it would never release the lock.
 pub(super) fn holds_own_clip(
     anims: &ModelAnimations,
     catalog: Option<&AnimDataCatalog>,
@@ -377,10 +273,8 @@ pub(super) fn holds_own_clip(
         .any(|head| head.anim_id == cur.anim_id)
 }
 
-/// Enter the Special `sp`, returning the mode to adopt. A pose or a jump plays its enter one-shot
-/// and settles through [`Mode::Entering`]; **Fall has no enter** — the client plays the Fall(40)
-/// loop directly the tick FALLINGFAR latches (`0x602c40`) — so it goes straight to
-/// [`Mode::Looping`] with a looping play.
+/// Enters Special `sp`, returning the mode to adopt. Fall has no enter: the client loops Fall(40)
+/// from the tick FALLINGFAR latches (`0x602c40`).
 pub(super) fn enter_special(
     lock: &mut BaseAnimLock,
     sp: Special,
@@ -408,7 +302,6 @@ pub(super) fn enter_special(
         );
         Mode::Looping(sp)
     } else {
-        // Enter plays are one-shots — `relaxed` (a looping-arm concern) is moot for them.
         play(
             lock,
             tr,
@@ -426,12 +319,8 @@ pub(super) fn enter_special(
     }
 }
 
-/// Transition out of the Special flow `sp` this frame, given what the unit now wants (`special`,
-/// `moving`). A *different* Special preempts with its own entry (a second jump cutting the first's
-/// landing; a jump handing off to Fall when FALLINGFAR latches); a pose abandoned because the unit
-/// started moving drops straight to the gait, letting the cross-fade carry the half-pose into the
-/// walk; an airborne state landing plays its [`jump_land_pick`]; otherwise `sp` plays its graceful
-/// exit one-shot, which [`super::drive_animations`] then waits out. Returns the mode to adopt.
+/// Leaves Special `sp`, returning the mode to adopt: a new Special's entry, the land pick after an
+/// airborne state, the gait for a pose cut by movement, else `sp`'s exit one-shot.
 pub(super) fn leave_special(
     lock: &mut BaseAnimLock,
     sp: Special,
@@ -447,25 +336,10 @@ pub(super) fn leave_special(
     window: &mut Option<(bevy::animation::graph::AnimationNodeIndex, u32)>,
     frozen: &mut Option<bevy::animation::graph::AnimationNodeIndex>,
 ) -> Mode {
-    // Freeze the cut airborne clip before handing off, so the incoming gait fades in over a
-    // still kick instead of one that actively retracts. On the swim re-latch (~0.24 s into the
-    // 833 ms JumpStart) the clip's remaining frames are the leg RECOVERY, and ours read far
-    // shorter than the reference's lingering mid-kick — the director's report behind 0503.
-    //
-    // **This is a symptom fix whose mechanism is open**. 0503 justified it with
-    // "the client blends from a pose snapshot, universally", which the bytes REFUTE: the blend
-    // source keeps running on its own clock — `0x7125ea` copies the outgoing track's base, rate
-    // and bias, and the kernel re-derives its time every frame (`0x7146b2`–`0x7147a5`). It looks
-    // still only when the source's own window has elapsed AND it is clamp-flagged, which the cut
-    // JumpStart's has not. So do NOT generalise this to other cross-fades — that was 0503's
-    // recorded follow-up and 1566 strikes it; it would freeze every gait and turn transition in
-    // the client. It stays HERE because the director saw the symptom and their eye outranks a
-    // derivation; what produces the reference's lingering kick is not yet known.
-    // …and the frozen node is NAMED, so the per-frame rate write
-    // ([`sync_base_rate`]) skips it instead of restarting the clock a line above just stopped.
-    //
-    // …and it is **the arc's own clip** that is stilled, never merely whatever bone 0 holds
-    // ([`holds_own_clip`]) — the predicate this always meant and never wrote down.
+    // Stills the cut airborne clip, so the gait fades in over a held kick as the reference shows.
+    // How the reference holds it is untraced, and it is no pose snapshot (its blend source keeps
+    // its own clock: `0x7125ea`, `0x7146b2`–`0x7147a5`), so this must not spread to other
+    // cross-fades. Only the arc's own clip is stilled; `frozen` names it for the rate write.
     if matches!(sp, Special::Jump | Special::Fall) {
         if let Some(node) = tr.get_main_animation() {
             if holds_own_clip(anims, catalog, sp, node) {
@@ -474,9 +348,7 @@ pub(super) fn leave_special(
                     *frozen = Some(node);
                 }
             } else if benilla_assets::trace::enabled() {
-                // The declined freeze is TRACED, because the wedge it used to cause was
-                // completely silent: nothing logs a clip being stopped, and a stopped clip that
-                // holds the base-anim lock ends the unit's animation for the session (2098).
+                // Traced, since a declined freeze is otherwise invisible.
                 let held = anims
                     .clips
                     .iter()
@@ -495,10 +367,8 @@ pub(super) fn leave_special(
     if let Some(next) = special {
         enter_special(lock, next, relaxed, tr, player, anims, catalog, rng, window)
     } else if matches!(sp, Special::Jump | Special::Fall) {
-        // The landing is a plain, freely-overwritten pick (decisions 0083/0087 (d)): the clip
-        // is chosen from the input *at touchdown* (`flags`) by the `0x602c60` dispatcher's rule,
-        // and re-picked the instant any movement flag changes — not a non-preemptible bracket.
-        // A backpedal/walk landing picks NO clip: the gait (WalkBackwards) starts the same frame.
+        // The land pick (`0x602c60`) from the flags at touchdown, freely overwritten: any flag
+        // change re-picks. A backpedal or walk landing picks none and the gait starts at once.
         match jump_land_pick(flags) {
             Some(id) => {
                 play(

@@ -1,40 +1,7 @@
-//! **Dest-anchored spell effects** (B132's second half): what a ground cast shows
-//! at the point. Two producers, one spawn/attach lane:
-//!
-//! - **The DynamicObject machine** ([`arm_ground_effects`]): a TYPEID-6 create is the anchor a
-//!   persistent area effect hangs on (Blizzard's storm, Flamestrike's burn). The reference
-//!   builds **two disjoint visuals**, never through the unit-kit pipeline (none of the 15
-//!   `PlaySpellVisualKit` `0x60edf0` call sites is on this class):
-//!   - **Visual A** — the object's own `.mdx`: SPELLID → `Spell.dbc` SpellVisual →
-//!     `SpellVisual` field 11 ≠ 0 gate → field 12 → `SpellVisualEffectName` field 2 path
-//!     (`0x5d57c0`), instanced at the object's position **verbatim** (no terrain projection),
-//!     Z-rotated by `DYNAMICOBJECT_FACING` (`0x613ef0` → `0x7bdd60`), looping its sequence
-//!     (`0x5d5580` re-fires on completion).
-//!   - **Visual B** — the shard emitter (`AUBlizzardObject`, `0x5d55c0` → `0x6ece30`):
-//!     `SpellVisual` field 13 → `SpellVisualKit` → the first `CharProcType == 9` block; its
-//!     `CharParamZero` small-int-decodes (`bits(p0 + 512.0) >> 14 & 0xff`) into a **hardcoded
-//!     7-entry model table** (`0x870e24` — [`SHARD_MODELS`]), `CharParamOne` is the emit rate
-//!     (× the graphics-quality factor — we run max quality, ×1.0). Each emitted shard spawns at
-//!     a random offset inside `DYNAMICOBJECT_RADIUS` — the wire radius IS the visual footprint
-//!     (`0x6ebad0`). The kit's field-13 `SoundEntries` is the looping area sound.
-//! - **The GO dest one-shot** ([`spawn_ground_bursts`] ← the router's [`GroundBurst`]):
-//!   `SMSG_SPELL_GO` itself plays the field-12 model ONCE at the packet's dest point when
-//!   `SpellVisual` field 6 == 0 (no missile owns the arrival) — `0x6e8088`–`0x6e8143`, a
-//!   self-terminating CEffect. Flamestrike's initial burst; it fires **before** the dynobj
-//!   create arrives and must not wait for it (a trap).
-//!
-//! **Teardown is a tail, not a snap** (a trap): `SMSG_DESTROY_OBJECT` despawns the anchor —
-//! visual A and the emitter die with it (the ref zeroes the emit rate at `0x6ecf20`) — but the
-//! already-emitted shards are FREE entities that run out their own one-pass lifetimes, exactly
-//! the ref's "spawned particles finish". The looping sound dies via the sound module's
-//! `RemovedComponents<NetEntity>` hold-loop reaper.
-//!
-//! Named approximations: the ref's 3 s sound fade at destroy is a hard stop here (no channel
-//! fade affordance yet); the hardcoded loop sequence id `0x9e` (fired when `obj+0x190` bit 1 is
-//! set — the bit's source is unpinned) is approximated by looping the model's first clip; the
-//! quality-tier emit factor is pinned at ×1.0 (max); Flamestrike's kit sound plays even though
-//! its kit has no type-9 proc (the ref couples sound to the emitter object — whether a
-//! procless kit still sounds is unread; the burn crackle missing would be the wronger look).
+//! Dest-anchored spell effects: what a ground cast shows at its point. A DynamicObject anchors a
+//! persistent area effect with two visuals, its own looping model and a shard emitter, outside the
+//! unit kit pipeline (no `PlaySpellVisualKit` `0x60edf0` call site is on this class), and
+//! `SMSG_SPELL_GO` plays a one-shot at the dest point.
 
 use bevy::prelude::*;
 
@@ -44,8 +11,7 @@ use benilla_protocol::EntityKind;
 
 use super::spell_fx::{attach_effect_visuals, ensure_model, FxMaterials, SpellFx};
 
-/// The client's hardcoded shard-model table (`0x870e24`, 7 entries). `CharParamZero`'s decoded
-/// small int indexes it.
+/// The client's hardcoded shard-model table (`0x870e24`), indexed by `CharParamZero`'s small int.
 const SHARD_MODELS: [&str; 7] = [
     "Spells\\Blizzard_Impact_Base.mdx",
     "Spells\\RainOfFire_Impact_Base.mdx",
@@ -56,34 +22,25 @@ const SHARD_MODELS: [&str; 7] = [
     "Spells\\StarShards_Impact_Base.mdx",
 ];
 
-/// The `CharProcType` the dynobj emitter chain scans for (`0x5d55c0`). One key out of the same
-/// dispatch space the aura-state body procs come from (`crate::aura_visual`) — the
-/// kit column is shared, the consumers are not.
+/// The `CharProcType` whose first kit block the emitter chain takes (`0x5d55c0`).
 const PROC_TYPE_SHARD_EMITTER: i32 = 9;
 
-/// The exact small-int decode the client applies to `CharParamZero`
-/// ([`benilla_formats::char_proc_small_int`] — the one idiom every integer-in-a-float-column proc
-/// uses, the chain proc included; decision 0955 lifted it into the format crate) — clamped into
-/// [`SHARD_MODELS`] because the client itself has **no bounds check** (`mov cl,al` in `0x5d55c0`
-/// — data ≥ 7 reads past the table; a trap).
+/// `CharParamZero`'s small int ([`benilla_formats::char_proc_small_int`]), clamped into
+/// [`SHARD_MODELS`]: the client has no bounds check (`mov cl,al` in `0x5d55c0`) and reads past it.
 fn shard_model_index(param0: f32) -> usize {
     let idx = benilla_formats::char_proc_small_int(param0) as usize;
     idx.min(SHARD_MODELS.len() - 1)
 }
 
-/// A free-standing dest-anchored effect-model instance (visual A, a shard, a GO burst) —
-/// [`attach_ground_fx_models`] hangs the model parts once the M2 builds.
+/// A dest-anchored effect model: visual A, a shard or a GO burst.
 #[derive(Component)]
 pub(super) struct GroundFx {
     /// The [`SpellFx`] model-cache key.
     path: String,
-    /// `true` = loop the clip for the instance's whole life (visual A — the ref re-fires its
-    /// sequence on completion); `false` = one pass of sequence 0 then despawn (a shard, a
-    /// burst — the kit pipeline's self-termination clock).
+    /// Loop for life (visual A), or one pass of sequence 0 then despawn (a shard, a burst).
     looping: bool,
     /// Parts attached (the model was ready).
     spawned: bool,
-    /// The repeat override landed on the live `AnimationPlayer` (loop instances only).
     loop_armed: bool,
     /// One-shot self-termination deadline (`time.elapsed_secs()`), set at attach.
     expires: Option<f32>,
@@ -101,37 +58,35 @@ impl GroundFx {
     }
 }
 
-/// The shard emitter riding a DynamicObject anchor (visual B — the ref's `AUBlizzardObject`).
-/// Dies with the anchor (emission stops at destroy); its spawned shards are free entities and
-/// finish on their own — the ref's emitter tail.
+/// Visual B, a DynamicObject's shard emitter (`AUBlizzardObject`, `0x5d55c0`, `0x6ece30`). It dies
+/// with the anchor (`0x6ecf20` zeroes the rate); its shards are free entities that run out their
+/// own lifetimes.
 #[derive(Component)]
 pub(super) struct ShardEmitter {
     /// The [`SHARD_MODELS`] path.
     path: String,
-    /// `DYNAMICOBJECT_RADIUS` — the per-shard random spawn spread (the AoE footprint).
+    /// `DYNAMICOBJECT_RADIUS`: the wire radius is the spread (`0x6ebad0`).
     radius: f32,
-    /// Shards per second (`CharParamOne` × the quality factor, ×1.0 here).
+    /// Shards per second: `CharParamOne` times the graphics-quality factor, here its 1.0 maximum.
     rate: f32,
     /// Fractional emissions carried between frames.
     accum: f32,
-    /// A tiny LCG for the spawn offsets (the ref rolls real randoms; seeded per emitter).
+    /// xorshift* state for the spawn offsets, seeded per emitter: no rand dependency.
     rng: u64,
 }
 
-/// The router's dest one-shot order (`SMSG_SPELL_GO` + `TARGET_FLAG_DEST_LOCATION`, gate
-/// `SpellVisual` field 6 == 0 ∧ field 12 ≠ 0 — resolved router-side where the catalogs live).
+/// The router's dest one-shot: `SMSG_SPELL_GO` to a dest location plays `SpellVisual` field 12 once
+/// at the point when field 6, the missile, is 0 (`0x6e8088`..`0x6e8143`).
 #[derive(Message, Clone)]
 pub(crate) struct GroundBurst {
     /// The field-12 `SpellVisualEffectName` model path.
     pub(crate) path: String,
-    /// The dest point, bevy coords (converted at the apply seam).
+    /// The dest point, in Bevy coordinates.
     pub(crate) pos: Vec3,
 }
 
-/// Arm a freshly-created DynamicObject anchor: resolve the spell's visual row and hang the two
-/// visuals + the area sound (module doc). Runs on `Added<ObjectStore>` so the create's fields
-/// are the trigger; a dynobj is created once and never re-created in place (a re-cast is a new
-/// guid — captured live).
+/// Arm each new DynamicObject off its create's fields: visual A, the shard emitter and the area
+/// sound. A re-cast is a new guid, never a re-create in place.
 pub(super) fn arm_ground_effects(
     mut commands: Commands,
     created: Query<(Entity, &NetEntity, &ObjectStore), Added<ObjectStore>>,
@@ -164,8 +119,9 @@ pub(super) fn arm_ground_effects(
             .dynamicobject_position()
             .map(|(_, f)| f)
             .unwrap_or(0.0);
-        // Visual A — the object's own model, gated on field 11, Z-rotated by FACING. A child of
-        // the anchor: the destroy pop takes it exactly like the ref's scene-node teardown.
+        // Visual A (`0x5d57c0`): field 12's model when field 11 is set, at the object's position
+        // with no terrain projection, turned by `DYNAMICOBJECT_FACING` (`0x613ef0`, `0x7bdd60`);
+        // as a child it goes with the anchor.
         if stages.area_gate != 0 && stages.area_effect != 0 {
             if let Some(path) = visuals.0.effect_path(stages.area_effect) {
                 let path = path.to_string();
@@ -180,9 +136,9 @@ pub(super) fn arm_ground_effects(
                 commands.entity(anchor).add_child(child);
             }
         }
-        // Visual B — the shard emitter, from the area kit's first type-9 CharProc block; the
-        // kit's own sound column is the looping area sound (a tracked hold loop the sound
-        // module reaps when the anchor's NetEntity is removed).
+        // Visual B from field 13's kit, whose sound loops as the area sound: stopped at destroy,
+        // where the reference fades it over 3 s. A kit with no type-9 block sounds here; whether
+        // the reference, which ties the sound to the emitter, sounds it is untraced.
         if let Some(kit) = visuals.0.kit(stages.area_kit) {
             if let Some(proc) = kit.char_procs().find(|p| p.ty == PROC_TYPE_SHARD_EMITTER) {
                 let path = SHARD_MODELS[shard_model_index(proc.params[0])].to_string();
@@ -212,8 +168,7 @@ pub(super) fn arm_ground_effects(
     }
 }
 
-/// Spawn the router's GO dest one-shots — free entities at the packet's point, one sequence
-/// pass, then gone. Fired at the GO, never waiting on the dynobj create (a trap).
+/// Spawn the GO dest one-shots at once, never waiting on the DynamicObject create that follows.
 pub(super) fn spawn_ground_bursts(
     mut commands: Commands,
     mut bursts: MessageReader<GroundBurst>,
@@ -231,9 +186,8 @@ pub(super) fn spawn_ground_bursts(
     }
 }
 
-/// Emit shards: `rate` per second, each a free one-shot instance at a random offset inside the
-/// wire radius (uniform over the disc, horizontal plane — the ref's per-particle spread scaled
-/// by `+0x11c`).
+/// Emit `rate` shards per second, each a free one-shot at a uniform random point of the radius's
+/// horizontal disc (the reference's spread scaled by `+0x11c`).
 pub(super) fn tick_shard_emitters(
     mut commands: Commands,
     time: Res<Time>,
@@ -243,7 +197,6 @@ pub(super) fn tick_shard_emitters(
         em.accum += em.rate * time.delta_secs();
         while em.accum >= 1.0 {
             em.accum -= 1.0;
-            // xorshift* — cheap, per-emitter deterministic, no rand dependency.
             let mut next = || {
                 em.rng ^= em.rng >> 12;
                 em.rng ^= em.rng << 25;
@@ -264,9 +217,8 @@ pub(super) fn tick_shard_emitters(
     }
 }
 
-/// Attach model parts to pending instances whose M2 finished building (the missile pattern —
-/// free world models, ground-anchored so authored flat quads decal to the terrain), start the
-/// one-shot clocks, and run both reapers (one-shot expiry; the loop-repeat override).
+/// Attach each pending instance's parts once its M2 builds, start the one-shot clocks, arm the
+/// loops and despawn expired one-shots.
 pub(super) fn attach_ground_fx_models(
     mut commands: Commands,
     time: Res<Time>,
@@ -286,19 +238,17 @@ pub(super) fn attach_ground_fx_models(
         if !inst.spawned {
             ensure_model(&mut fx, &asset_server, &inst.path);
             let Some(dm) = fx.models.get(&inst.path) else {
-                continue; // unreachable — just inserted
+                continue; // unreachable: just inserted
             };
             if !attach_effect_visuals(
                 &mut commands,
                 entity,
                 dm,
                 now,
-                true, // a dest-anchored area model's flat quads ARE ground decals
-                // A free world model standing at the point, chained to nothing: its trail stays
-                // world-frozen and its pool finishes in place when the effect ends.
+                true, // a dest-anchored model's flat quads are ground decals
+                // Chained to nothing: its trail stays world-frozen and its pool finishes in place.
                 super::spell_fx::EffectHost::default(),
-                // The dest one-shot is not a `CEffect` on a unit: it plants at the packet's point and
-                // runs its own span clock, so it keeps the plain single-clip arm.
+                // Not a `CEffect` on a unit: its own span clock, the plain single-clip arm.
                 None,
                 &mut FxMaterials {
                     store: &mut wow_materials,
@@ -310,19 +260,18 @@ pub(super) fn attach_ground_fx_models(
                 &mut palettes,
                 None,
             ) {
-                continue; // model still building — attach on a later pass
+                continue; // model still building
             }
             inst.spawned = true;
             if !inst.looping {
-                // One pass of the first sequence — the kit pipeline's completion-callback
-                // stand-in (`spell_fx`'s span clock, same law).
+                // One pass of the first sequence, as `spell_fx`'s span clock times a kit.
                 let span = dm.first_seq_span.unwrap_or(super::spell_fx::FALLBACK_SPAN);
                 inst.expires = Some(now + span);
             }
-            continue; // the AnimationPlayer lands next frame — the loop override waits
+            continue; // the AnimationPlayer lands next frame
         }
-        // The loop override: the ref re-fires the sequence on completion (`0x5d5580`); ours
-        // marks the live player's animations repeat-forever, once.
+        // The reference re-fires on completion (`0x5d5580`), the hardcoded sequence `0x9e` when
+        // `obj+0x190` bit 1 is set (its source untraced); this repeats the first clip.
         if inst.looping && !inst.loop_armed {
             if let Some(mut player) = player {
                 for (_, anim) in player.playing_animations_mut() {
@@ -343,10 +292,8 @@ pub(super) fn attach_ground_fx_models(
 mod tests {
     use super::*;
 
-    /// The `0x5d55c0` decode: `bits(f32(param0 + 512.0)) >> 14 & 0xff` recovers the small int
-    /// exactly (the real rows carry 0.0 → Blizzard, 1.0 → Rain of Fire), and out-of-table data
-    /// clamps instead of reading past the 7 entries (the client's own missing bounds check — a
-    /// trap).
+    /// The `0x5d55c0` decode, `bits(f32(param0 + 512.0)) >> 14 & 0xff`; the real rows carry 0.0
+    /// (Blizzard) and 1.0 (Rain of Fire).
     #[test]
     fn shard_model_index_decodes_and_clamps() {
         assert_eq!(shard_model_index(0.0), 0);

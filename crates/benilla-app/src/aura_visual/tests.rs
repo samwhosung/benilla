@@ -1,7 +1,5 @@
-//! Tests for the aura-state CharProc layer. The chains are the **real 5875 rows** (read off
-//! `SpellVisualKit.dbc` this session with `benilla-extract charprocs`), so a schema or column-order
-//! regression in the data layer shows up here as a wrong number rather than as a silent nothing —
-//! which is precisely how B114 hid.
+//! Tests for the aura-state CharProc layer over shipped kit rows (`benilla-extract charprocs`), so
+//! a schema or column-order regression shows as a wrong number, not a silent nothing.
 
 use std::collections::HashMap;
 
@@ -13,20 +11,17 @@ use benilla_protocol::messages::ObjectFields;
 use super::*;
 use crate::creature_anim::SpellVisuals;
 
-// ── The real chains, from the shipped table ───────────────────────────────────────────────────────
+// ── The shipped chains ───────────────────────────────────────────────────────────────────────────
 
-/// Stealth rank 1 → `SpellVisual` 184 → state kit 312: proc 7 (unmodelled) + **proc 14 @ 0.3**, no
-/// effect models, no anim. The whole of B114 in one row.
+/// Stealth rank 1 → `SpellVisual` 184 → state kit 312: proc 7 and proc 14 at 0.3, nothing else.
 const STEALTH: u32 = 1784;
 const STEALTH_VISUAL: u32 = 184;
 const STEALTH_KIT: u32 = 312;
-/// The ghost aura → visual 886 → kit 989: proc 1 tint `9222653.0` (= `0x8CB9FD`) + proc 14 @ 0.5.
+/// The ghost aura → visual 886 → kit 989: proc 1 tint `9222653.0` (`0x8CB9FD`) and proc 14 at 0.5.
 const GHOST: u32 = 8326;
 const GHOST_VISUAL: u32 = 886;
 const GHOST_KIT: u32 = 989;
-/// **Ice Block** → `SpellVisual` 4325 → state kit 3709: proc 1 tint `9074175.0` + **proc 11 @ 0.0**
-/// (plus `icebarrier_state.mdx` at attach 0x13, which this layer doesn't own). The freeze, from the
-/// shipped table — `benilla-extract spellvis 11958`.
+/// Ice Block → `SpellVisual` 4325 → state kit 3709: proc 1 tint `9074175.0` and proc 11 at 0.0.
 const ICE_BLOCK: u32 = 11958;
 const ICE_BLOCK_VISUAL: u32 = 4325;
 const ICE_BLOCK_KIT: u32 = 3709;
@@ -38,7 +33,6 @@ fn proc(ty: i32, param0: f32) -> CharProc {
     }
 }
 
-/// A kit carrying `procs` in slot order and nothing else — the shape of every proc-only state kit.
 fn proc_kit(procs: &[CharProc]) -> VisualKit {
     let mut slots = [None; KIT_CHAR_PROCS];
     for (slot, p) in slots.iter_mut().zip(procs) {
@@ -52,8 +46,7 @@ fn proc_kit(procs: &[CharProc]) -> VisualKit {
 
 // ── The dispatch ─────────────────────────────────────────────────────────────────────────────────
 
-/// [`node_for`] is the twin of the client's proc jump table: 14 → an alpha node carrying `params[0]`,
-/// 1 → a tint node with the packed colour unpacked, everything else → no node (and so no arm).
+/// [`node_for`] follows the client's proc jump table: 14 alpha, 1 tint, 11 rate, else no node.
 #[test]
 fn the_dispatch_names_only_the_verified_procs() {
     assert_eq!(
@@ -66,20 +59,17 @@ fn the_dispatch_names_only_the_verified_procs() {
         Some(AuraNode::Alpha(0.0)),
         "kit 5129's 0.0 is a real value, not an absent one"
     );
-    // 9222653 = 0x8CB9FD — the ghost's pale blue-white, 0xFF8CB9FD once the client ORs the opaque
-    // byte on (`0x60d8cc`).
+    // 9222653 is 0x8CB9FD, the ghost's blue-white; the client ORs on the opaque byte (`0x60d8cc`).
     assert_eq!(
         node_for(proc(char_proc_type::TINT, 9_222_653.0)),
         Some(AuraNode::Tint([0x8C, 0xB9, 0xFD])),
     );
-    // 65280 = 0x00FF00 — the poison state kit's pure green.
+    // 65280 is 0x00FF00, the poison state kit's green.
     assert_eq!(
         node_for(proc(char_proc_type::TINT, 65_280.0)),
         Some(AuraNode::Tint([0x00, 0xFF, 0x00])),
     );
-    // Proc 11 is a playback RATE, straight through (`0x60db7e` → `SetBoneAnimSpeed 0x712910`).
-    // Ice Block's 0.0 is the freeze; kit 1744's 8947848.0 goes through unexamined too, exactly as
-    // the reference hands the column on.
+    // Proc 11's rate passes on unexamined (`0x60db7e` → `SetBoneAnimSpeed` `0x712910`).
     assert_eq!(
         node_for(proc(char_proc_type::ANIM_RATE, 0.0)),
         Some(AuraNode::AnimRate(0.0)),
@@ -89,8 +79,7 @@ fn the_dispatch_names_only_the_verified_procs() {
         node_for(proc(char_proc_type::ANIM_RATE, 8_947_848.0)),
         Some(AuraNode::AnimRate(8_947_848.0)),
     );
-    // The four other types that ride real state kits have no verified mechanism yet: no node, so
-    // nothing is invented and the kit doesn't arm on them alone.
+    // Types on shipped state kits whose mechanism is untraced get no node, so none arms a kit.
     for ty in [2, 7, 8, 13] {
         assert_eq!(node_for(proc(ty, 1.0)), None, "type {ty} is unmodelled");
     }
@@ -98,10 +87,7 @@ fn the_dispatch_names_only_the_verified_procs() {
 
 // ── The target and the ramp ──────────────────────────────────────────────────────────────────────
 
-/// `0x60d180`: the target is `baseAlpha × the HEAD node's factor` — at most one node term, the
-/// newest (nodes link at the list head as they install), never a product over the chain.
-/// Stacking stealth (0.3) then the ghost aura (0.5) reads 0.5 — whichever landed last — and
-/// dropping the head hands the term to the next node down.
+/// `0x60d180`: the target is `baseAlpha` times the head (newest) node's factor alone.
 #[test]
 fn the_target_is_base_times_the_newest_node() {
     let mut n = AuraNodes::new(1.0);
@@ -116,13 +102,11 @@ fn the_target_is_base_times_the_newest_node() {
         "the newest node is the term"
     );
 
-    // Reaping the head hands the term back to the older node.
     n.alpha.retain(|(s, _)| *s != GHOST);
     n.retarget(0.0);
     assert!((n.target() - 0.3).abs() < 1e-6);
 
-    // A display authored translucent (CreatureModelAlpha 128/255) multiplies the head term —
-    // and stands alone when no node is live (the display-set leg, no aura anywhere).
+    // A translucent display's base (128/255) scales the head term, or stands alone with no node.
     let mut half = AuraNodes::new(1.0);
     half.base = 128.0 / 255.0;
     install(&mut half, STEALTH, &[AuraNode::Alpha(0.3)], 0.0);
@@ -132,9 +116,7 @@ fn the_target_is_base_times_the_newest_node() {
     assert!((half.target() - 128.0 / 255.0).abs() < 1e-6);
 }
 
-/// The display-swap leg ([`refresh_base_alpha`]'s retarget): a base change rides the same 1000 ms
-/// cubic ramp an aura node does — Ghost Wolf's 102/255 eases in from opaque, and swapping home
-/// eases back — never snaps (the fade, `0x614f80`, is part of the mechanism).
+/// A display swap's base change ([`refresh_base_alpha`]) rides the same ramp (`0x614f80`).
 #[test]
 fn a_base_change_rides_the_same_ramp() {
     let wolf = 102.0 / 255.0;
@@ -148,7 +130,6 @@ fn a_base_change_rides_the_same_ramp() {
     );
     assert!(n.translucent());
 
-    // The swap home: base back to 1.0, eased up from the live value.
     n.base = 1.0;
     n.retarget(AURA_ALPHA_FADE_SECS);
     assert!((n.from - wolf).abs() < 1e-6);
@@ -156,9 +137,7 @@ fn a_base_change_rides_the_same_ramp() {
     assert!(!n.translucent(), "settled opaque again");
 }
 
-/// A re-applied aura installs ONE node set, not a second copy — the reference keys its nodes by spell
-/// id (`node+0x18`) and its own dedup walk returns early on a spell that already has one. Without
-/// this a refresh would square the factor every application.
+/// Nodes are keyed by spell id (`node+0x18`): a re-applied aura replaces its node.
 #[test]
 fn re_arming_the_same_spell_replaces_its_node() {
     let mut n = AuraNodes::new(1.0);
@@ -168,17 +147,14 @@ fn re_arming_the_same_spell_replaces_its_node() {
     assert!((n.target() - 0.3).abs() < 1e-6);
 }
 
-/// The ramp is `StartAlphaFade(target, 1000 ms)` on the `clamp01(t)³` ease, in **both** directions:
-/// arming eases down to the product, reaping eases back up — and a retarget mid-ramp starts from
-/// where the ramp actually is, never from the old endpoint (a stealth dropped 300 ms into the fade
-/// must not jump to 0.3 first).
+/// `StartAlphaFade(target, 1000 ms)` eased `clamp01(t)³` both ways, retargeted from the live value.
 #[test]
 fn the_ramp_eases_over_one_second_both_ways() {
     let mut n = AuraNodes::new(1.0);
     install(&mut n, STEALTH, &[AuraNode::Alpha(0.3)], 0.0);
 
     assert!((n.tick(0.0) - 1.0).abs() < 1e-6, "t=0 is still opaque");
-    // t³ at the halfway mark = 0.125 of the way down.
+    // t³ at the halfway mark is 0.125 of the way down.
     let half = n.tick(0.5);
     assert!(
         (half - (1.0 + (0.3 - 1.0) * 0.125)).abs() < 1e-6,
@@ -191,7 +167,6 @@ fn the_ramp_eases_over_one_second_both_ways() {
     assert!((n.tick(5.0) - 0.3).abs() < 1e-6, "and clamps past the end");
     assert!(n.translucent());
 
-    // The aura drops: ease back to the new product from where we are.
     n.alpha.clear();
     n.retarget(AURA_ALPHA_FADE_SECS);
     assert!((n.from - 0.3).abs() < 1e-6, "ramps from the live value");
@@ -199,7 +174,6 @@ fn the_ramp_eases_over_one_second_both_ways() {
     assert!((n.tick(2.0 * AURA_ALPHA_FADE_SECS) - 1.0).abs() < 1e-6);
     assert!(!n.translucent(), "settled opaque again");
 
-    // A mid-ramp retarget picks up the live value, not the endpoint.
     let mut m = AuraNodes::new(1.0);
     install(&mut m, STEALTH, &[AuraNode::Alpha(0.3)], 0.0);
     let mid = m.tick(0.7);
@@ -208,8 +182,6 @@ fn the_ramp_eases_over_one_second_both_ways() {
     assert!((m.from - mid).abs() < 1e-6);
 }
 
-/// An aura refresh whose factor doesn't change must not restart the ease — otherwise a buff ticking
-/// every few seconds would keep re-easing a settled body.
 #[test]
 fn a_retarget_to_the_same_value_does_not_restart_the_ease() {
     let mut n = AuraNodes::new(1.0);
@@ -221,8 +193,7 @@ fn a_retarget_to_the_same_value_does_not_restart_the_ease() {
     assert!((n.tick(10.0) - 0.3).abs() < 1e-6, "and stays arrived");
 }
 
-/// Proc 1's nodes link at the head like the alpha list's (`unit+0xce0`), so the tint the per-frame
-/// apply reads is the NEWEST aura's — deterministic under stacking.
+/// Proc 1's nodes link at the head of `unit+0xce0`, so the newest aura's tint applies.
 #[test]
 fn the_tint_head_node_is_the_newest_installed() {
     let mut n = AuraNodes::new(1.0);
@@ -230,15 +201,13 @@ fn the_tint_head_node_is_the_newest_installed() {
     install(&mut n, GHOST, &[AuraNode::Tint([0x8C, 0xB9, 0xFD])], 0.0);
     install(&mut n, 12881, &[AuraNode::Tint([0x00, 0xFF, 0x00])], 0.0);
     assert_eq!(n.head_tint(), Some([0x00, 0xFF, 0x00]));
-    // The newest dropping hands the head back.
     n.tint.retain(|(s, _)| *s != 12881);
     assert_eq!(n.head_tint(), Some([0x8C, 0xB9, 0xFD]));
     assert_eq!(n.target(), 1.0, "a tint node is not an alpha term");
 }
 
-// ── The watcher → drain edge, over the real Stealth chain ─────────────────────────────────────────
+// ── The watcher → drain edge ─────────────────────────────────────────────────────────────────────
 
-/// A fixture app carrying the two real chains, the aura watcher and the drain.
 fn app_with_chains() -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
@@ -247,7 +216,6 @@ fn app_with_chains() -> App {
     app.add_message::<crate::creature_anim::SpellKitSound>();
     app.add_message::<AuraProc>();
     app.add_message::<crate::creature_anim::BaseAnimRecompute>();
-    // The water-plane twin map the alpha author composes with (empty here — no water in a fixture).
     app.init_resource::<benilla_world::model_render::FarSideTwins>();
     app.insert_resource(SpellVisuals(SpellVisualCatalog::from_tables(
         HashMap::from([
@@ -274,8 +242,7 @@ fn app_with_chains() -> App {
             ),
         ]),
         HashMap::from([
-            // Kit 312's real slots: the unmodelled proc 7 FIRST, then proc 14 — so this also pins
-            // that an unmodelled proc ahead of a modelled one doesn't shadow it.
+            // Kit 312's shipped order: the unmodelled proc 7 must not shadow proc 14 after it.
             (
                 STEALTH_KIT,
                 proc_kit(&[proc(7, 1.0), proc(char_proc_type::ALPHA, 0.3)]),
@@ -333,8 +300,6 @@ fn app_with_chains() -> App {
     app
 }
 
-/// The arming world plus the per-instance tint channel: the table resource, the
-/// palette allocator whose slots index it, and the publish system.
 fn app_with_tint_channel() -> App {
     let mut app = app_with_chains();
     app.init_resource::<benilla_world::instance_tint::InstanceTints>();
@@ -343,14 +308,12 @@ fn app_with_tint_channel() -> App {
     app
 }
 
-/// **B114, end to end at the mechanism.** Stealth's state kit carries no effect models at all, so the
-/// effects-only watcher never armed it and the character showed nothing. Now the same slot edge
-/// installs a proc-14 node and the unit's target alpha is 0.3 — and dropping the aura ramps it back.
+/// Stealth's proc-only state kit (no effect models) still installs its proc-14 node.
 #[test]
 fn a_proc_only_state_kit_arms_stealth_translucency() {
     let mut app = app_with_chains();
 
-    // The aura lands in slot 0 (UNIT_FIELD_AURA[0] = field 47) with an occupied AURAFLAGS nibble.
+    // The aura lands in slot 0 (UNIT_FIELD_AURA[0], field 47) with an occupied AURAFLAGS nibble.
     let stealthed = ObjectFields::from_pairs(&[(47, STEALTH), (95, 0x0E)]);
     let unit = app
         .world_mut()
@@ -369,7 +332,6 @@ fn a_proc_only_state_kit_arms_stealth_translucency() {
     assert!((n.target() - 0.3).abs() < 1e-6);
     assert!(n.head_tint().is_none(), "kit 312 carries no tint");
 
-    // The aura drops: the node goes and the target ramps back to opaque.
     crate::net::apply_fields_for_test(
         app.world_mut(),
         unit,
@@ -382,8 +344,7 @@ fn a_proc_only_state_kit_arms_stealth_translucency() {
     assert!((n.target() - 1.0).abs() < 1e-6);
 }
 
-/// The ghost aura's kit carries both procs: the tint node lands beside the alpha one off a single
-/// slot edge (the dispatcher walks all four slots), and the alpha is the ghost's 0.5.
+/// One slot edge installs both of the ghost kit's nodes: the dispatcher walks all four proc slots.
 #[test]
 fn a_kit_with_both_procs_installs_both_nodes() {
     let mut app = app_with_chains();
@@ -401,8 +362,7 @@ fn a_kit_with_both_procs_installs_both_nodes() {
     assert_eq!(n.head_tint(), Some([0x8C, 0xB9, 0xFD]));
 }
 
-/// Two auras on one unit: the newest node holds the head (the reference's link-at-head list), and
-/// reaping the other leaves it untouched — the body never snaps opaque while any alpha aura lives.
+/// The newest node holds the head; reaping the older aura leaves it.
 #[test]
 fn two_auras_stack_and_unstack_through_the_slots() {
     let mut app = app_with_chains();
@@ -433,8 +393,6 @@ fn two_auras_stack_and_unstack_through_the_slots() {
     assert!((n.target() - 0.5).abs() < 1e-6);
 }
 
-/// A state kit whose every proc is unmodelled (and which carries no effect models either) must not
-/// arm: no node set, so nothing claims the unit's alpha channel on a mechanism we haven't verified.
 #[test]
 fn an_unmodelled_proc_only_kit_arms_nothing() {
     const SAP: u32 = 6770;
@@ -450,7 +408,7 @@ fn an_unmodelled_proc_only_kit_arms_nothing() {
                 ..Default::default()
             },
         )]),
-        // Kit 691's real content: proc 7 @ 2.0 and nothing else.
+        // Kit 691's shipped content: proc 7 at 2.0 and nothing else.
         HashMap::from([(SAP_KIT, proc_kit(&[proc(7, 2.0)]))]),
     )));
     app.insert_resource(crate::ui_action::Spells {
@@ -480,12 +438,8 @@ fn an_unmodelled_proc_only_kit_arms_nothing() {
 
 // ── The render authoring ─────────────────────────────────────────────────────────────────────────
 
-/// The author owns a translucent unit's parts **through the whole descendant tree** (a held weapon
-/// hangs off a joint several levels down, and the reference's alpha is a per-CGUnit property its
-/// attached models render off), writes the product into the tag's alpha field, and moves the part
-/// onto its blend twin — without which a cutout batch ignores the alpha entirely and B114's symptom
-/// survives the fix. On the frame the ramp latches opaque it releases: settled alpha, steady
-/// material, and the part re-queued for the classifier.
+/// The author writes the alpha down the whole tree (the reference's alpha is per CGUnit) and moves
+/// each part to its blend twin, as a cutout batch ignores alpha; at opaque it releases.
 #[test]
 fn the_author_owns_the_tree_then_releases_at_opaque() {
     use benilla_world::model_fade::FadeMaterials;
@@ -499,7 +453,6 @@ fn the_author_owns_the_tree_then_releases_at_opaque() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.init_resource::<benilla_world::interior::InteriorReauthor>();
-    // The water-plane twin map the author composes with (empty — no water in a fixture).
     app.init_resource::<benilla_world::model_render::FarSideTwins>();
     app.add_systems(Update, apply_aura_alpha);
 
@@ -533,8 +486,7 @@ fn the_author_owns_the_tree_then_releases_at_opaque() {
         ))
         .id();
 
-    // Run the ramp out to its end: `MinimalPlugins`' clock advances a hair per update, so drive the
-    // component's own clock instead of guessing frame counts.
+    // `MinimalPlugins`' clock barely advances per update, so the ramp is ended on its own clock.
     app.update();
     {
         let mut root_mut = app.world_mut().entity_mut(root);
@@ -560,8 +512,7 @@ fn the_author_owns_the_tree_then_releases_at_opaque() {
         );
     }
 
-    // The aura drops and the ramp completes: the release frame restores opacity and the steady
-    // material, and stops authoring.
+    // The aura drops and the ramp completes: the release frame restores opacity and material.
     {
         let mut root_mut = app.world_mut().entity_mut(root);
         let mut n = root_mut.get_mut::<AuraNodes>().unwrap();
@@ -595,9 +546,8 @@ fn the_author_owns_the_tree_then_releases_at_opaque() {
 
 // ── The tint's render channel ─────────────────────────────────────────────────────
 
-/// **The tint end to end**: the ghost aura's CharProc-1 head node lands in the per-instance table at
-/// the unit's own rig slot, packed the way the reference packs it (`param | 0xff000000`) — and the
-/// aura dropping puts the slot back to identity, so the body goes back to its own colours.
+/// The ghost's tint lands at the unit's rig slot packed as `param | 0xff000000`, and clears with
+/// the aura.
 #[test]
 fn the_ghost_tint_reaches_the_instance_table_and_clears_with_the_aura() {
     let mut app = app_with_tint_channel();
@@ -632,8 +582,7 @@ fn the_ghost_tint_reaches_the_instance_table_and_clears_with_the_aura() {
         "the ghost's pale blue-white, alpha byte and all"
     );
 
-    // The aura leaves its slot: the reference drops the tint node (`0x5ff320`) with no ease, and the
-    // channel goes back to identity — which is the shader's no-op word, not a colour.
+    // Dropped with no ease (`0x5ff320`); identity is the shader's no-op word, not a colour.
     crate::net::apply_fields_for_test(
         app.world_mut(),
         unit,
@@ -647,12 +596,8 @@ fn the_ghost_tint_reaches_the_instance_table_and_clears_with_the_aura() {
     assert_eq!(tints.get(slot), benilla_world::instance_tint::IDENTITY);
 }
 
-/// **The chain.** A rigged ATTACHED model — a spell-effect instance, or one of the
-/// seven shoulder models whose welded billboard geometry made the item lane rig — carries its own
-/// instance slot, because the vertex stage indexes the skin palette with that same field and cannot
-/// borrow the wearer's. Its tint therefore has to come up the `ParentModel` link, which is the
-/// reference's own route for an attached model's colours (`0x714000`). Without this walk, adding the
-/// rig would have un-tinted exactly the pauldrons it was added for.
+/// A rigged attached model has its own instance slot, which the vertex stage indexes the palette
+/// by, so its tint comes up the `ParentModel` chain, as the reference composes it (`0x714000`).
 #[test]
 fn a_rigged_attachment_inherits_its_wearers_tint_through_the_model_chain() {
     let mut app = app_with_tint_channel();
@@ -697,7 +642,6 @@ fn a_rigged_attachment_inherits_its_wearers_tint_through_the_model_chain() {
         "and so is the pauldron riding it"
     );
 
-    // The aura drops: both ends of the chain go back to identity, not just the unit's own slot.
     crate::net::apply_fields_for_test(
         app.world_mut(),
         unit,
@@ -715,9 +659,6 @@ fn a_rigged_attachment_inherits_its_wearers_tint_through_the_model_chain() {
     );
 }
 
-/// An unchained rig — a placed doodad, a world effect — has no parent to inherit from and must stay
-/// its own colour. The walk's terminating case, and the guard against a chain lookup that
-/// "helpfully" falls back to some other unit's tint.
 #[test]
 fn an_unchained_rig_inherits_nothing() {
     let mut app = app_with_tint_channel();
@@ -754,9 +695,7 @@ fn an_unchained_rig_inherits_nothing() {
     );
 }
 
-/// A tinted unit going away must not leave its colour on the slot for whoever allocates it next —
-/// the leak that would paint an unrelated creature ghost-blue. Covered structurally by `RigSkin`'s
-/// free hook, so it holds for a despawn AND for a gear/display rebuild that replaces the component.
+/// `RigSkin`'s free hook clears the tint on a despawn or a component swap, before any reuse.
 #[test]
 fn the_rig_free_hook_clears_a_dead_units_tint() {
     let mut app = app_with_tint_channel();
@@ -787,7 +726,7 @@ fn the_rig_free_hook_clears_a_dead_units_tint() {
         0xff8c_b9fd,
     );
 
-    // Despawn without any aura edge — the unit streamed out mid-buff, which is the common case.
+    // Despawn with no aura edge: the unit streamed out mid-buff.
     app.world_mut().entity_mut(unit).despawn();
     assert_eq!(
         app.world()
@@ -800,16 +739,12 @@ fn the_rig_free_hook_clears_a_dead_units_tint() {
 
 // ── The freeze (proc 11) ─────────────────────────────────────────────────────────────────────────
 
-/// The arming world plus the clock-hold leg — the third proc's apply, ordered after the drain the
-/// way the real schedule orders it after the drain *and* the driver.
 fn app_with_freeze() -> App {
     let mut app = app_with_chains();
     app.add_systems(Update, apply_aura_anim_rate.after(drain_aura_procs));
     app
 }
 
-/// A rig mid-animation: two clips playing at the speeds the driver picked for them (a gait scaled to
-/// the mover's speed, and a cast one-shot at 1.0 — the pair Ice Block catches).
 fn rig_playing(speeds: &[(u32, f32)]) -> AnimationPlayer {
     let mut player = AnimationPlayer::default();
     for (node, speed) in speeds {
@@ -820,8 +755,7 @@ fn rig_playing(speeds: &[(u32, f32)]) -> AnimationPlayer {
     player
 }
 
-/// `(paused, speed)` of one armed clip — the two things the freeze is judged on: the clock is held,
-/// and the *value* other code copies is untouched.
+/// `(paused, speed)` of one armed clip: the freeze holds the clock and leaves the speed.
 fn clip(app: &App, rig: Entity, node: u32) -> (bool, f32) {
     let a = app
         .world()
@@ -833,10 +767,7 @@ fn clip(app: &App, rig: Entity, node: u32) -> (bool, f32) {
     (a.is_paused(), a.speed())
 }
 
-/// **The director's retest, at the mechanism.** Ice Block's state kit carries proc 11 at rate 0, so
-/// the unit's clocks stop dead: the run cycle it was mid-stride in and the cast one-shot that had
-/// just been armed both hold the frame they were on — which is why the caster never gets to raise
-/// their hand. Dropping the aura lets both go again, at the speeds the driver gave them.
+/// Ice Block's proc 11 at rate 0 holds the gait and the cast one-shot; the aura's end frees them.
 #[test]
 fn ice_block_holds_the_clocks_and_the_drop_lets_them_go() {
     let mut app = app_with_freeze();
@@ -854,18 +785,16 @@ fn ice_block_holds_the_clocks_and_the_drop_lets_them_go() {
 
     let n = app.world().entity(unit).get::<AuraNodes>().unwrap();
     assert_eq!(n.head_anim_rate(), Some(0.0), "kit 3709's proc 11 is 0");
-    // 9074175 = 0x8A75FF — the ice-blue the same kit tints the body with, beside the freeze.
+    // 9074175 is 0x8A75FF, the same kit's ice-blue tint.
     assert_eq!(n.head_tint(), Some([0x8A, 0x75, 0xFF]), "kit 3709's proc 1");
     assert!(clip(&app, unit, 4).0, "the gait stops mid-stride");
     assert!(clip(&app, unit, 54).0, "so does the cast one-shot");
-    // The SPEEDS are untouched, which is the whole point: nothing that copies a clip's rate
-    // (`transplant_up` does, to move a one-shot onto the torso overlay) can inherit the freeze.
+    // The speeds are untouched, so `transplant_up`, copying a clip's rate, never inherits a freeze.
     assert_eq!(clip(&app, unit, 4).1, 1.35);
     assert_eq!(clip(&app, unit, 54).1, 1.0);
 
     app.update(); // idempotent
 
-    // The aura leaves the slots.
     crate::net::apply_fields_for_test(
         app.world_mut(),
         unit,
@@ -889,12 +818,8 @@ fn ice_block_holds_the_clocks_and_the_drop_lets_them_go() {
     );
 }
 
-/// **The bug the first shipped version had, pinned so it cannot come back.** A one-shot moved to the
-/// torso overlay under the freeze (`transplant_up` copies the source clip's speed and seek) used to
-/// be saved at the frozen `0`, restored to `0`, and left welded to the upper body for the rest of the
-/// session — surviving every later cast, because a clip that never advances never *finishes* and so
-/// never releases the overlay. Pausing carries no value to copy: the transplant inherits the driver's
-/// real speed, and the thaw sets it running.
+/// A one-shot moved to the torso overlay under the freeze copies its source's speed, which the
+/// pause leaves real, so the thaw runs it out; a copied 0 would never finish or free the overlay.
 #[test]
 fn a_clip_armed_under_the_freeze_comes_back_at_its_own_speed() {
     let mut app = app_with_freeze();
@@ -946,8 +871,7 @@ fn a_clip_armed_under_the_freeze_comes_back_at_its_own_speed() {
     );
 }
 
-/// The mount comes with the rider: `0x6201d0` writes `[unit+0xdc]` before it writes `[unit+0xd8]`,
-/// so a frozen rider's mount stops under them rather than running on the spot.
+/// `0x6201d0` writes the mount `[unit+0xdc]` before the body `[unit+0xd8]`: the mount freezes too.
 #[test]
 fn the_freeze_reaches_the_mount_body() {
     let mut app = app_with_freeze();
@@ -982,8 +906,7 @@ fn the_freeze_reaches_the_mount_body() {
     assert_eq!(clip(&app, mount, 5).1, 2.0);
 }
 
-/// An aura with no proc 11 — Stealth — leaves the clocks entirely alone. The freeze is the kit's,
-/// never "any aura", and never the stun flag: nothing in the `0x40000` census touches animation.
+/// The freeze is proc 11's alone, never any aura's and never the stun flag's (`0x40000`).
 #[test]
 fn an_aura_without_the_proc_never_touches_a_clock() {
     let mut app = app_with_freeze();
@@ -1002,9 +925,8 @@ fn an_aura_without_the_proc_never_touches_a_clock() {
     assert!(app.world().entity(unit).get::<AnimRateFreeze>().is_none());
 }
 
-/// Kit 1744's `8947848.0` is a rate our f32-seconds clock cannot express (the reference's is integer
-/// ms with a modulo, where it is noise rather than a freeze). It installs a node — the data is read,
-/// not dropped — and the apply leaves the clocks alone rather than inventing a look for it.
+/// The one shipped non-zero rate, `8947848.0`, installs a node and holds no clock
+/// ([`apply_aura_anim_rate`]).
 #[test]
 fn a_non_zero_rate_installs_a_node_and_holds_nothing() {
     let mut n = AuraNodes::new(1.0);

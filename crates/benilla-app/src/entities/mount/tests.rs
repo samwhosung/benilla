@@ -1,12 +1,5 @@
-//! The mount transition's law: **nothing on the rider is destroyed by mounting**.
-//!
-//! The case these pin: Ice Barrier's shield visual stays on the character through a mount, and is
-//! still there after the dismount. The old transition
-//! `despawn_related::<Children>()`'d the whole rider; the aura's persistent kit instance died with
-//! it and, because `FxAttached` lives on the *unit* and kept a dangling root while the aura never
-//! left its slot, nothing ever noticed. So these fixtures hang the two things that matter off a
-//! bone anchor — a held item and a spell-effect instance root — and assert they are the same
-//! entities on the far side of a mount, a dismount and a re-mount.
+//! The mount transition re-seats the rider and destroys nothing on it: the held item and the aura
+//! glow hung off its bone anchor stay the same entities through a mount, a dismount and a re-mount.
 
 use super::*;
 use benilla_assets::{ModelJoint, ModelSkeleton};
@@ -15,20 +8,17 @@ use benilla_protocol::ObjectFields;
 use crate::entities::{BoneAttach, VisualAttached};
 use crate::net::ObjectStore;
 
-/// `UNIT_FIELD_MOUNTDISPLAYID` (index 133) — the wire's one mounted signal.
+/// `UNIT_FIELD_MOUNTDISPLAYID` (index 133), the wire's one mounted signal.
 const FIELD_MOUNTDISPLAYID: u16 = 133;
 /// The mount's attachment-0 bone in the fixture mount rig.
 const SEAT_BONE: u16 = 3;
 
-/// A rider standing on its own feet, wearing everything a mount transition used to destroy: one
-/// consumer anchor (the rig's only child), a held item under it, and a persistent spell-effect
-/// instance root under it — the Ice Barrier glow, in the shape `attach_spell_fx` builds.
+/// A standing rider: one consumer anchor (the rig's only child) with a held item and a persistent
+/// spell-effect root under it, in the shape `attach_spell_fx` builds.
 struct Standing {
     app: App,
     rider: Entity,
-    /// The rig's consumer anchor — the entity every attachment hangs from.
     anchor: Entity,
-    /// The held weapon root and the aura glow root, both under `anchor`.
     held: Entity,
     glow: Entity,
 }
@@ -49,7 +39,6 @@ fn rig_at(frame: Entity, anchor: Entity) -> RigPose {
     rig
 }
 
-/// The descriptor store for a unit whose mount field reads `display`.
 fn mounted_on(display: u32) -> ObjectStore {
     ObjectStore(ObjectFields::from_pairs(&[(FIELD_MOUNTDISPLAYID, display)]))
 }
@@ -98,7 +87,6 @@ fn stand() -> Standing {
 }
 
 impl Standing {
-    /// Move the wire field and run one pass.
     fn field(&mut self, display: u32) {
         self.app
             .world_mut()
@@ -107,12 +95,11 @@ impl Standing {
         self.app.update();
     }
 
-    /// Finish the mount child's build the way `attach_entity_visuals` would: mark it attached and
-    /// give it the attachment-0 anchor the seat hangs from. Returns the child.
+    /// Finish the mount child's build as `attach_entity_visuals` would: attached, with the
+    /// attachment-0 point the seat hangs from.
     fn mount_attaches(&mut self) -> Entity {
         let child = self.mount_child().expect("a mount child was ordered");
-        // The seat joint spawns on first demand out of the mount's pose — the
-        // test provides the pose, not a hand-built joint.
+        // The seat joint spawns on demand from the mount's pose, so the test gives only the pose.
         let pose =
             benilla_world::testing::test_rig_pose(child, &[Vec3::ZERO; SEAT_BONE as usize + 1]);
         self.app.world_mut().entity_mut(child).insert((
@@ -135,7 +122,6 @@ impl Standing {
             .map(|c| c.0)
     }
 
-    /// The rig's current model frame.
     fn frame(&self) -> Entity {
         self.app
             .world()
@@ -157,7 +143,6 @@ impl Standing {
             .map_or(0, |a| a.0)
     }
 
-    /// Everything that must survive every transition, by entity id.
     fn attachments_alive(&self) -> bool {
         let w = self.app.world();
         w.get_entity(self.anchor).is_ok()
@@ -166,12 +151,8 @@ impl Standing {
     }
 }
 
-/// **The director's report.** Mounting used to destroy the rider's whole visual, taking the
-/// aura's persistent kit instance with it — and because `FxAttached` outlived the teardown holding
-/// a dangling root while the aura never left its slots, the glow never came back, not even after
-/// dismounting. The reference re-parents the body model onto the mount (`0x712f70`); it never
-/// re-creates it. So: the same anchor, the same held item, the same glow root — now hanging under
-/// the mount's seat.
+/// The reference re-parents the body model onto the mount (`0x712f70`) and never re-creates it:
+/// the same anchor, held item and glow root, now under the mount's seat.
 #[test]
 fn mounting_re_seats_the_rig_and_destroys_nothing_on_the_rider() {
     let mut s = stand();
@@ -200,9 +181,7 @@ fn mounting_re_seats_the_rig_and_destroys_nothing_on_the_rider() {
     );
 }
 
-/// The dismount half — `0x607ce0`: detach the body back onto its own frame, destroy the mount
-/// model. The rider is again the rig's root, the mount child and its seat are gone, and the glow
-/// the report says never returns is the same entity it always was.
+/// Dismount (`0x607ce0`) detaches the body onto its own frame and destroys the mount model.
 #[test]
 fn dismounting_puts_the_rig_back_on_its_own_frame_and_keeps_the_glow() {
     let mut s = stand();
@@ -225,9 +204,7 @@ fn dismounting_puts_the_rig_back_on_its_own_frame_and_keeps_the_glow() {
     assert!(s.attachments_alive(), "the rider's own visual is untouched");
 }
 
-/// A re-mount (id→id′) is `0x5ffa50`'s two calls in order: tear the old seat down first, then
-/// build the new one. The old mount dies, the new one is ordered, and the rider — which is not
-/// part of either half — never notices.
+/// A re-mount is `0x5ffa50`'s two calls in order: tear the old seat down, then build the new one.
 #[test]
 fn a_re_mount_tears_the_old_seat_down_before_it_builds_the_new_one() {
     let mut s = stand();
@@ -249,9 +226,8 @@ fn a_re_mount_tears_the_old_seat_down_before_it_builds_the_new_one() {
     assert!(s.attachments_alive());
 }
 
-/// The field can also zero again mid-load — a cast that lands and is cancelled inside the model
-/// load. `AppliedMount` never left 0, so the diff must key on the *ordered* mount too, or the
-/// horse arrives riderless and stays for the unit's life.
+/// A field that zeroes mid-load leaves `AppliedMount` at 0, so the diff also keys on the ordered
+/// mount; otherwise the horse arrives riderless and stays for the unit's life.
 #[test]
 fn a_mount_ordered_and_then_cancelled_mid_load_is_dropped() {
     let mut s = stand();
@@ -268,9 +244,6 @@ fn a_mount_ordered_and_then_cancelled_mid_load_is_dropped() {
     assert!(s.mount_child().is_none(), "and it stays gone — no churn");
 }
 
-/// The field can move again while the mount model is still loading. The pending child is dropped
-/// for one built with the display the field actually says, and the rider — which was never torn
-/// down to begin with — just keeps standing.
 #[test]
 fn a_field_that_moves_mid_load_drops_the_pending_mount() {
     let mut s = stand();
@@ -294,9 +267,8 @@ fn a_field_that_moves_mid_load_drops_the_pending_mount() {
     );
 }
 
-/// A mount that authors no attachment 0 is the reference's `0x60ce70` present-test miss: it logs
-/// and leaves the body at the unit matrix — mounted, but unseated. It must not spin (the field is
-/// stamped) and it must not tear the rider down either.
+/// A mount with no attachment 0 fails `0x60ce70`'s present test: the reference logs and leaves the
+/// body at the unit matrix. The field is still stamped, so the diff cannot churn.
 #[test]
 fn a_mount_without_a_seat_leaves_the_body_at_the_unit_matrix() {
     let mut s = stand();

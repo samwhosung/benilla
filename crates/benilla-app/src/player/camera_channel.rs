@@ -1,69 +1,41 @@
-//! **The camera's smoothed-scalar channel** — the one template the reference instantiates four
-//! times, in one place instead of four.
+//! The camera's smoothed-scalar channel: one template the reference instantiates for pitch
+//! (armer/inner `0x512830`/`0x512980`), pitch bias (`0x512a50`/`0x512ba0`), ground tilt
+//! (`0x512490`/`0x5125e0`) and pivot height (`0x5126b0`/`0x512790`), stepped in one block of
+//! `0x50f160`.
 //!
-//! The finding this module exists to honour: the
-//! camera's pitch, pitch-bias and ground-tilt channels (`0x512830`/`0x512980`,
-//! `0x512a50`/`0x512ba0`, `0x512490`/`0x5125e0`) are **one compiler-emitted template** at three
-//! sets of field offsets, and `0x5126b0`/`0x512790` — the pivot **height** channel this client
-//! already had ([`super::camera::PivotGlide`]) — is a fourth. Their per-frame step is one block of
-//! one function (`0x50f160`).
+//! The armer rewraps the live value into `[target − π, target + π]`, refuses a request when the
+//! channel is already arming the same `{target, delay, factor}` or is within 0.001 of the target,
+//! and otherwise sets `duration = |target − live| / rate · factor`. The step eases by the cosine
+//! smoothstep `0x5b7bb0`, `a + (b − a)·(1 − cos πs)/2` with `s = elapsed / duration`, and lands on
+//! the target at `s ≥ 1`. The duration is seconds, not a rate, and the rate is in the live value's
+//! units: the angular channels convert their deg/s CVar with `π/180`, the height's is yd/s.
 //!
-//! | role | live | start | target | start ms | duration | armed bit | rate CVar |
-//! |---|---|---|---|---|---|---|---|
-//! | pitch | `+0xf4` | `+0x1e4` | `+0x1e0` | `+0x1d8` | `+0x1dc` | `0x2000000` | `cameraPitchSmoothSpeed` `45.0` |
-//! | bias | `+0x104` | `+0x1fc` | `+0x1f8` | `+0x1f0` | `+0x1f4` | `0x8000000` | `cameraTargetSmoothSpeed` `90.0` |
-//! | ground | `+0x108` | `+0x1b4` | `+0x1b0` | `+0x1a8` | `+0x1ac` | `0x10000000` | `cameraGroundSmoothSpeed` `7.5` |
-//! | height | `+0xfc` | `+0x1cc` | `+0x1c8` | `+0x1c0` | `+0x1c4` | `0x20000000` | `cameraHeightSmoothSpeed` `1.2` |
-//!
-//! The armer's contract, byte-derived and identical at all four: shortest-path-rewrap the live
-//! value into `[target − π, target + π]`; **refuse** the request if the channel is already arming
-//! the same `{target, delay, factor}` within `0.001`, or if the live value is already within
-//! `0.001` of the target; otherwise compute `duration = |target − live| / rate · factor` and hand
-//! the tween to the inner. The step is `s = elapsed / duration`, `s ≥ 1` → `live = target`, else
-//! the cosine smoothstep `0x5b7bb0` — `a + (b − a)·(1 − cos πs)/2`.
-//!
-//! **Two things a re-implementation gets wrong.** `+0x1dc`/`+0x1f4`/`+0x1ac`/`+0x1c4` are
-//! **durations in seconds**, not rates — the consumer *divides* elapsed seconds by them; and the
-//! rate is in the **live value's own units**, so the three angular channels convert their deg/s
-//! CVar with `π/180` while the height channel's `1.2` is already yd/s. [`Arm::rate`] is therefore
-//! stated in live-units/s and the conversion belongs to the caller, where the unit is known.
-//!
-//! **The delay is a HOLD here, and the reference's is not** — a named divergence. `0x512830` backs
-//! the start time up by `delay` (`now − (int)(p2 · −1000)`), so `0x50f160`'s `s` goes *negative*
-//! for that long; and because the profile is `cos(π·s)` — an even function — a negative `s`
-//! evaluates the ease as though `|s|`, which makes the live value jump away from `from` at the
-//! instant of arming and walk back. That is an unclamped divide, not an intent, and it is
-//! unreachable at every default this client reads: `Delay` is `0.0` on all thirty rows of the
-//! `cameraTerrainTilt<Style><State>` table, and both the bias and pitch arms pass `0` literally.
-//! benilla holds at `from` until the delay elapses — [`super::camera::FollowRig`] already does
-//! exactly that for the one family whose delay is genuinely nonzero (`Track`/`Fear` under Smart,
-//! `0.4`), so this is the house reading, not a new one.
+//! Deviation: a delay holds the channel at `from`, because the reference's `0x512830` backs the
+//! start time up by the delay, so `s` runs negative and the even cosine jumps the value away and
+//! back, an unclamped divide rather than a behaviour. No default reaches it: every
+//! `cameraTerrainTilt*` row's `Delay` is 0, and the pitch and bias arms pass 0.
 
-/// The channel's "already there / already arming this" epsilon — VERIFIED `0.001` (`[0x801360]`),
-/// shared by all four instantiations and by the `0x5107f0`/`0x5106f0` displacement predicates.
+/// The armer's "already there, already arming this" epsilon, 0.001 at `[0x801360]`, shared by all
+/// four channels and the `0x5107f0`/`0x5106f0` displacement predicates.
 pub(super) const CHANNEL_EPS: f32 = 0.001;
 
-/// What one `arm` call asks for — the armer's four arguments plus the one caller-side clamp.
+/// One `arm` request: the armer's four arguments plus the ground channel's duration clamp.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Arm {
-    /// Where the channel should end up, in the live value's units.
+    /// In the live value's units.
     pub(super) target: f32,
-    /// Dead time before the tween starts, seconds (the module doc's named divergence).
+    /// Seconds held before the tween starts (the module's deviation).
     pub(super) delay: f32,
-    /// Stretches the duration: `duration = |Δ| / rate · factor`. `1.0` is "at the rate".
     pub(super) factor: f32,
-    /// The channel's rate **in the live value's units per second** — `cvar.to_radians()` for the
-    /// three angular channels, the raw yd/s for the height one.
+    /// Live-value units per second: `cvar.to_radians()` for the angular channels, yd/s for height.
     pub(super) rate: f32,
-    /// The duration bound `(min, max)`, when the caller has one. Only the ground channel does:
-    /// `0x50dd29` clamps `[cam+0x1ac]` to `[Factor × cameraTerrainTiltTimeMin, Factor × …TimeMax]`
-    /// *after* the arm, which is why it is the armer's business and not the tween's.
+    /// The ground channel's bound: after the arm, `0x50dd29` clamps `[cam+0x1ac]` between
+    /// `Factor × cameraTerrainTiltTimeMin` and `Factor × cameraTerrainTiltTimeMax`.
     pub(super) duration: Option<(f32, f32)>,
 }
 
 impl Arm {
-    /// An arm with no delay, no stretch and no duration bound — the shape both the pitch
-    /// (`0x512830(target, 0, 1.0f, now)`) and bias (`0x512a50(cam, 0, 0, 1.0f, now)`) sites pass.
+    /// No delay, factor 1 and no bound, as the pitch (`0x512830`) and bias (`0x512a50`) sites arm.
     pub(super) fn at(target: f32, rate: f32) -> Self {
         Self {
             target,
@@ -75,52 +47,43 @@ impl Arm {
     }
 }
 
-/// A tween in flight — the reference's `{start, target, startMs, duration}` quadruple plus the
-/// `{p2, p3}` staleness memo, with the armed bit expressed as `Option<Flight>` rather than a bit.
+/// A tween in flight: the reference's `{start, target, startMs, duration}` plus its
+/// `{delay, factor}` memo; `Some` is the armed bit.
 #[derive(Clone, Copy, Debug)]
 struct Flight {
-    /// Seconds since the arm, and the dead time in front of the tween.
+    /// Seconds since the arm; `delay` is the hold in front of the tween.
     elapsed: f32,
     delay: f32,
-    /// The tween's own length, seconds — never a rate.
     duration: f32,
-    /// What it was armed with (`+0x1ec`/`+0x1e8`), so a repeat asking for the same move is a
-    /// no-op instead of restarting it from its own midpoint.
+    /// The armed `(delay, factor)` (`+0x1ec`/`+0x1e8`), so a repeated request is not a restart.
     memo: (f32, f32),
 }
 
-/// One smoothed scalar channel of the camera — see the module doc.
-///
-/// `Default` is the **linear** channel, because the one instantiation whose live value is not an
-/// angle is the pivot height (yards) — see [`SmoothChannel::angular`].
+/// One smoothed camera scalar. `Default` is linear, for the pivot height in yards;
+/// [`SmoothChannel::angular`] is the other three.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct SmoothChannel {
     live: f32,
     from: f32,
     to: f32,
     flight: Option<Flight>,
-    /// Does the armer's shortest-path rewrap apply? It is a **`2π` rewrap**, so it is meaningful
-    /// only on the three channels whose live value is an angle in radians; running it on the
-    /// height channel would fold yards around a circle.
+    /// Whether the armer's `2π` shortest-path rewrap applies: radians only, never yards.
     wrap: bool,
 }
 
-/// What an [`SmoothChannel::arm`] did — the reference's own three-way return, kept because the
-/// callers branch on it (`0x512a50` returns 1 for "already arming this", 0 for "already there").
+/// What [`SmoothChannel::arm`] did: the reference's three-way return (`0x512a50` returns 1 for
+/// already arming, 0 for already there).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Armed {
-    /// A tween was started.
     Started,
-    /// The channel is already arming this exact request — nothing changed.
+    /// Already arming this exact request; nothing changed.
     Already,
-    /// The live value is already within [`CHANNEL_EPS`] of the target — nothing changed, and
-    /// nothing is in flight afterwards either.
+    /// Already within [`CHANNEL_EPS`] of the target; nothing is in flight afterwards.
     AtRest,
 }
 
 impl SmoothChannel {
-    /// An **angular** channel — pitch, pitch-bias or ground tilt, whose live value is radians and
-    /// whose armer therefore rewraps it into `[target − π, target + π]` (`0x512abe`).
+    /// A radians channel (pitch, bias, ground tilt), which the armer rewraps (`0x512abe`).
     pub(super) fn angular() -> Self {
         Self {
             wrap: true,
@@ -128,20 +91,18 @@ impl SmoothChannel {
         }
     }
 
-    /// The value the camera uses this frame.
     pub(super) fn live(&self) -> f32 {
         self.live
     }
 
-    /// Is a tween in flight? (The reference's armed bit of `[cam+0x90]`.)
+    /// The reference's armed bit in `[cam+0x90]`.
     pub(super) fn in_flight(&self) -> bool {
         self.flight.is_some()
     }
 
-    /// Establish the channel at `v` with nothing in flight — the reference's **hard snap**, which
-    /// is a real leg of two of the four: the water band-crossing writes `[cam+0xf4]` *and*
-    /// `[cam+0x1e0]` directly when `[cam+0x90] & 1` (`0x50ed13`), and the height channel's first
-    /// arm of a camera's life snaps (`0x5127d4`).
+    /// Sets the channel to `v` with nothing in flight, the reference's hard snap: the water band
+    /// crossing writes the pitch's live `[cam+0xf4]` and target `[cam+0x1e0]` directly while
+    /// `[cam+0x90] & 1` (`0x50ed13`), and a camera's first height arm snaps (`0x5127d4`).
     pub(super) fn snap(&mut self, v: f32) {
         self.live = v;
         self.from = v;
@@ -149,11 +110,9 @@ impl SmoothChannel {
         self.flight = None;
     }
 
-    /// The armer (`0x512830`/`0x512a50`/`0x512490`/`0x5126b0`), in its own order.
+    /// The armer, in the reference's order.
     pub(super) fn arm(&mut self, arm: &Arm) -> Armed {
-        // The shortest-path rewrap: the live value is brought into `[target − π, target + π]`
-        // first, so a channel that has accumulated past a half-turn takes the short way round
-        // (`0x512abe fst` — it is stored back, not merely used for the compare).
+        // The rewrap is stored back, not only compared (`0x512abe`).
         if self.wrap {
             let two_pi = std::f32::consts::TAU;
             while self.live - arm.target > std::f32::consts::PI {
@@ -173,8 +132,7 @@ impl SmoothChannel {
         }
         let gap = (arm.target - self.live).abs();
         if gap < CHANNEL_EPS {
-            // Already there: park the target and disarm. This is the steady-state path, and it is
-            // what makes arming every frame identical to arming on change.
+            // Park the target and disarm, so arming every frame equals arming on change.
             self.to = arm.target;
             self.flight = None;
             return Armed::AtRest;
@@ -194,8 +152,7 @@ impl SmoothChannel {
         Armed::Started
     }
 
-    /// Step whatever is in flight and return the live value — `0x50f160`'s block, shared by all
-    /// four channels.
+    /// Steps the tween and returns the live value (`0x50f160`'s block).
     pub(super) fn advance(&mut self, dt: f32) -> f32 {
         if let Some(f) = self.flight.as_mut() {
             f.elapsed += dt;
@@ -206,7 +163,6 @@ impl SmoothChannel {
                     self.live = self.to;
                     self.flight = None;
                 } else {
-                    // `0x5b7bb0` — the cosine smoothstep, eased at both ends.
                     let e = (1.0 - (std::f32::consts::PI * s).cos()) * 0.5;
                     self.live = self.from + (self.to - self.from) * e;
                 }
@@ -215,24 +171,14 @@ impl SmoothChannel {
         self.live
     }
 
-    /// `(live, target)` — what a `WOW_CAM_DUMP` line prints. A channel question is a *timing*
-    /// question, and these two columns are how a trace answers it (method: timing is measured).
+    /// `(live, target)`, the columns of a `WOW_CAM_DUMP` line.
     pub(super) fn probe(&self) -> (f32, f32) {
         (self.live, self.to)
     }
 }
 
-/// **Sweep a regime switch and bound its step** — the check decision 2165 exists because this tree
-/// did not have one.
-///
-/// A mechanism that switches between *regimes* — liquid bands, a slope staircase, a state ladder,
-/// an eligibility gate — is not verified by point assertions inside each regime. Those are
-/// structurally blind to a cliff *between* them, which is how a pivot corridor that moved the
-/// camera's framing point 1.04 yd in one frame shipped behind five green tests, each correct.
-/// Walk the parameter across every boundary instead and bound the step.
-///
-/// Where a jump is intended, `max_jump` is where its size gets **written down** — which is the
-/// second reason to reach for this rather than eyeball a sweep: the bound is the claim.
+/// Walks `f` from `from` to `to` in `step`s and asserts no step moves the output more than
+/// `max_jump`: point tests inside each regime cannot see a cliff between regimes.
 #[cfg(test)]
 pub(super) fn assert_bounded_step(
     (from, to): (f32, f32),
@@ -269,8 +215,6 @@ mod tests {
             .collect()
     }
 
-    /// The template's duration law is `|Δ| / rate · factor`, and it is a **duration**, not a rate:
-    /// the tween takes exactly that long and the value arrives only at its end.
     #[test]
     fn the_duration_is_the_gap_over_the_rate_times_the_factor() {
         for (gap, rate, factor) in [
@@ -304,9 +248,6 @@ mod tests {
         }
     }
 
-    /// Arming every frame with a steady target is exactly arming once — the property the whole
-    /// per-frame-arm design rests on. A memo that only compared the target would still restart the
-    /// tween whenever the *factor* changed, so both are in the compare.
     #[test]
     fn a_per_frame_re_arm_neither_restarts_nor_stretches_the_tween() {
         let mut once = SmoothChannel::default();
@@ -320,15 +261,12 @@ mod tests {
             assert_eq!(every.arm(&arm), Armed::Already);
             assert_eq!(every.advance(dt), once.advance(dt));
         }
-        // …and once it is there, the re-arm reports rest rather than starting a zero move.
         run(&mut once, 1.5);
         run(&mut every, 1.5);
         assert_eq!(every.arm(&arm), Armed::AtRest);
         assert!(!every.in_flight());
     }
 
-    /// The rewrap takes the short way round: a channel sitting just under `+π` asked for a target
-    /// just over `−π` travels the small gap, not the long one.
     #[test]
     fn the_arm_rewraps_the_live_value_to_the_short_side() {
         let mut c = SmoothChannel::angular();
@@ -348,16 +286,14 @@ mod tests {
         assert!(frames
             .iter()
             .all(|v| *v >= wrapped - CHANNEL_EPS && *v <= target + CHANNEL_EPS));
-        // …and a LINEAR channel of the same numbers does not wrap: it travels the long way,
-        // because yards are not radians.
+        // A linear channel with the same numbers does not wrap: it travels the long way.
         let mut linear = SmoothChannel::default();
         linear.snap(3.1);
         linear.arm(&Arm::at(target, 1.0));
         assert!(run(&mut linear, 0.5).iter().any(|v| *v > 0.0));
     }
 
-    /// The delay holds at the start value and then runs the full tween — the module doc's named
-    /// divergence, pinned so it cannot silently become the reference's negative-`s` jump.
+    /// The module's deviation, pinned against the reference's negative-`s` jump.
     #[test]
     fn a_delay_holds_the_channel_before_the_tween_rather_than_jumping_it() {
         let mut c = SmoothChannel::default();
@@ -374,7 +310,6 @@ mod tests {
         assert!((frames[frames.len() - 1] - 1.0).abs() < CHANNEL_EPS);
     }
 
-    /// The ground channel's own clamp (`0x50dd29`): the duration, not the rate, is bounded.
     #[test]
     fn a_duration_bound_clamps_the_tween_not_the_gap() {
         let mut c = SmoothChannel::default();

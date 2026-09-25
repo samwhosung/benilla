@@ -1,12 +1,6 @@
-//! The animation layer's packet handlers (in the net handler table since 2322, moved out of the
-//! drain's combat, anim and mount arm files) — the server packets whose whole content is *a thing
-//! to play on a streamed unit*: the melee engagement brackets, the aggro/alert flare, the swing
-//! refusals, the two emote relays, the spell-visual kit push, a rider's flourish.
-//! Each resolves the guid through the index and writes one message; the animation law itself
-//! lives in [`super`]. Two kinds here have a second handler: the completed-swing record
-//! ([`attacker_state`], with its client-side full-block synthesis) and the environmental-damage
-//! kit ([`environmental_damage_log`]) also feed [`crate::combat_log`]'s chat line, which is
-//! registered ahead of these and so runs first, as the drain's match ran them.
+//! The animation layer's packet handlers: each resolves a guid and writes one message to play on a
+//! streamed unit. The swing record and the environmental-damage log also feed
+//! [`crate::combat_log`], whose handlers are registered first and so run first.
 
 use benilla_protocol::messages::{AttackSwingError, AttackerState, EnvironmentalDamageLog};
 use benilla_protocol::{SessionEvent, SessionEventKind};
@@ -21,7 +15,7 @@ use crate::swing_refusal::SwingRefusalEdge;
 use crate::ui_action::{UiError, UiErrorKeys};
 use crate::ui_unit::CombatTextEvent;
 
-/// Register the layer's handlers — called from [`super::CreatureAnimPlugin`].
+/// Register the layer's handlers, from [`super::CreatureAnimPlugin`].
 pub(super) fn register(app: &mut App) {
     use SessionEventKind as K;
     app.net_handler(K::AttackStart, on_attack_start)
@@ -172,14 +166,11 @@ fn on_play_spell_visual(
 
 /// A unit began melee auto-attack (`SMSG_ATTACKSTART`, including our own echo).
 fn attack_start(attacker: u64, victim: u64, commands: &mut Commands, index: &GuidIndex) {
-    // Engagement brackets: the standing Ready idle rides this window —
-    // the client's gate is the auto-attack-target GUID being set, mirrored here as a
-    // marker component on the attacker (including our own echo).
+    // The Ready idle rides this window: the client's gate is the auto-attack target being set.
     debug!("net: attack start {attacker:#x} → {victim:#x}");
     if let Some(&e) = index.0.get(&attacker) {
-        // Melee-start drops the `0x400` weapon-visual hold unconditionally (the client's
-        // `0x60fc50` sibling clear) — a shooter that closes to melee leaves the drawn idle.
-        // The LOCAL player's melee paths additionally run the full cancel funnel at send.
+        // Melee start drops the `0x400` weapon-visual hold (`0x60fc50`): a shooter closing to
+        // melee leaves the drawn idle.
         commands
             .entity(e)
             .insert(Engaged(victim))
@@ -198,37 +189,25 @@ fn attack_stop(
     debug!("net: attack stop {attacker:#x} → {victim:#x}");
     if let Some(&e) = index.0.get(&attacker) {
         commands.entity(e).remove::<Engaged>();
-        // The client's `0x624e40` (death/stun arrive as this packet too): a pending
-        // swing record flushes text-only and clears.
+        // `0x624e40`: a pending swing flushes as text only; death and stun arrive as this packet.
         flushes.write(SwingFlush(e));
     }
 }
 
-/// The server refused our melee swing (`SMSG_ATTACKSWING_NOTINRANGE`/`_BADFACING`/`_DEADTARGET`/
-/// `_CANT_ATTACK`) — forwarded verbatim to [`crate::swing_refusal`], which owns the latch, the 4 s
-/// repeat, and arm 4's silent StopAttack. Nothing is decided here: the arms differ only in what
-/// that module does with them, and it holds the write set for all three.
+/// The server refused our swing (`SMSG_ATTACKSWING_*`); [`crate::swing_refusal`] owns the rest.
 fn attack_swing_error(error: AttackSwingError, edges: &mut MessageWriter<SwingRefusalEdge>) {
     edges.write(SwingRefusalEdge::Refused(error));
 }
 
-/// `SMSG_CANCEL_COMBAT` — the server forced our attack to stop. The swing family's fourth arm,
-/// and the same act as `0x148`/`0x149`: the reference's handler `0x5e7dd0` is arm 4's body
-/// verbatim.
+/// `SMSG_CANCEL_COMBAT`: the server stopped our attack. The reference's handler `0x5e7dd0` is the
+/// refusal family's fourth arm verbatim.
 fn cancel_combat(edges: &mut MessageWriter<SwingRefusalEdge>) {
     edges.write(SwingRefusalEdge::CombatCancelled);
 }
 
-/// `SMSG_FEIGN_DEATH_RESISTED` — the target shrugged off our Feign Death.
-///
-/// One red line and nothing else: the reference's handler `0x6e9800` is `push 0x1a5; call
-/// 0x496720`, a bare `DisplayError(421)` with no latch, no cooldown and no state — the opposite of
-/// its sibling above, and the reason the two do not share a path. Catalog row 421 is
-/// `ERR_FEIGN_DEATH_RESISTED`, whose 1.12 string is the single word "Resisted".
-///
-/// It lives beside the swing arms because vmangos sends it in the same breath as
-/// `SMSG_CANCEL_COMBAT` (`Objects/Unit.cpp:9445-9451`: a resisted feign death cancels the attack
-/// and says so), and finding one without the other is how this family stayed half-built.
+/// `SMSG_FEIGN_DEATH_RESISTED`: one red "Resisted" line and nothing else. The reference's handler
+/// `0x6e9800` is a bare `DisplayError(421)` (`0x496720`), with no latch and no state. vmangos sends
+/// it together with `SMSG_CANCEL_COMBAT` (`Unit.cpp:9469-9470`).
 fn feign_death_resisted(errors: &mut UiErrorKeys) {
     debug!("net: feign death resisted");
     errors.0.push(UiError::key("ERR_FEIGN_DEATH_RESISTED"));
@@ -241,9 +220,7 @@ fn ai_reaction(
     index: &GuidIndex,
     reactions: &mut MessageWriter<AiReactionMessage>,
 ) {
-    // Aggro (2 HOSTILE) / stealth alert (0 ALERT) flare — pure audio, byte-verified
-    // (`0x6056e0` is an exact two-way branch; any other value no-ops, and neither leg
-    // touches animation/nameplate/UI). Vocals: `sound::creature`.
+    // Audio only (`0x6056e0`): 2 hostile and 0 alert flare; any other value does nothing.
     debug!("net: ai reaction {reaction} on {unit:#x}");
     if matches!(reaction, 0 | 2) {
         if let Some(&e) = index.0.get(&unit) {
@@ -255,11 +232,9 @@ fn ai_reaction(
     }
 }
 
-/// One completed melee swing (`SMSG_ATTACKERSTATEUPDATE`): the attacker's swing
-/// anim starts NOW; the victim feedback (blood/flinch/text/impact sounds) defers to the swing
-/// clip's attack-hit keyframe (`creature_anim::impact`, the client's `0x6247d0` router) — EXCEPT
-/// the center combat text, which the client fires **synchronously at packet parse**
-/// (`0x6255b0 → 0x629d30 → 0x703f50`, one call stack; decision 0580's fold-back).
+/// One melee swing (`SMSG_ATTACKERSTATEUPDATE`): the attacker's swing plays now and the victim's
+/// feedback waits for the clip's attack-hit key (`0x6247d0`), except the center combat text, which
+/// the client shows at parse (`0x6255b0` → `0x629d30` → `0x703f50`).
 fn attacker_state(
     mut s: AttackerState,
     index: &GuidIndex,
@@ -273,11 +248,8 @@ fn attacker_state(
     seq: u64,
 ) {
     let victim = index.0.get(&s.victim).copied();
-    // Arm 5's `0x6259b6 call 0x5ea800`, whose first act is the swing-refusal latch clear
-    // (`0x5ecdb0(0)`) — gated exactly as the reference gates it: the attacker IS the active player
-    // (`0x5fa6d0`, a guid compare) and the victim resolves as a streamed unit. Written from here
-    // rather than computed downstream because this is the only place holding both guids, and it
-    // keeps the clear in packet order with the refusals (`crate::swing_refusal`).
+    // Our landed swing clears the refusal latch (`0x6259b6` → `0x5ea800` → `0x5ecdb0(0)`) when we
+    // are the attacker (`0x5fa6d0`) and the victim resolves; sent from here to keep packet order.
     if self_guid.0 == Some(s.attacker) && victim.is_some() {
         edges.write(SwingRefusalEdge::Landed);
     }
@@ -290,16 +262,12 @@ fn attacker_state(
             ),
         );
     }
-    // The client-side FULL-BLOCK synthesis (`0x625e20`): a resolvable
-    // victim + zero damage + a nonzero blocked amount rewrites the state to BLOCKS(5)
-    // before any consumer sees the record — the only thing the wire's blocked_amount
-    // ever does (a PARTIAL block stays state 1, indistinguishable from a plain hit).
+    // The full-block synthesis (`0x625e20`): a resolved victim, no damage and a blocked amount
+    // read as state 5, BLOCK, before any consumer; a partial block stays state 1.
     if victim.is_some() && s.damage == 0 && s.blocked != 0 {
         s.victim_state = 5;
     }
-    // The center combat text: self victim, at receive, AFTER the full-block
-    // synthesis (so a full block reads BLOCK, not MISS) — the packet's absorb/resist/blocked
-    // sums feed the confirmed helper-B partial trailers.
+    // The center text for a hit on us, after the synthesis so a full block reads BLOCK, not MISS.
     if self_guid.0 == Some(s.victim) {
         if let Some((message_type, data, extra)) = crate::combat_log::text::melee_center_text(
             s.hit_info,
@@ -326,17 +294,9 @@ fn attacker_state(
         seq,
     };
     if let Some(&e) = index.0.get(&s.attacker) {
-        // The **observed attacker auto-draws melee** — the ref's SECOND melee draw, independent
-        // of the attack-start one, and the reason a swing is never delivered in the wrong stance:
-        // `0x625829 cmp [attacker+0xd40],1; jne` → `SetSheatheState(1, bInstant=1, bFireEvent=1)`
-        // at `0x62583a`, byte-read here. It sits
-        // immediately after the attacker resolve and **before** any hit-info handling, so even a
-        // swing whose animation is suppressed (`HitInfo & 0x10000`) still draws. Nothing else in
-        // the policy can do this job: the per-animation reconcile's melee force is gated to
-        // `CUR != 2` (`0x5fe0f9`/`0x5fe13b`), so a unit swinging with a bow drawn — a ranged
-        // stance a shot left behind — would otherwise keep swinging with the bow forever. The
-        // setter's own idempotency is the `cmp`: a request equal to the committed state is
-        // refused there, so this is free on every swing after the first.
+        // A resolved attacker draws melee (`0x625829` → `SetSheatheState(1)` at `0x62583a`) before
+        // any hit-info handling, even when `HitInfo & 0x10000` suppresses the swing's animation;
+        // the per-animation reconcile never forces melee over a drawn bow (`0x5fe0f9`/`0x5fe13b`).
         sheaths.write(SheathRequest {
             entity: e,
             state: 1,
@@ -347,35 +307,23 @@ fn attacker_state(
             ..swing
         });
     } else if swing.victim.is_some_and(|v| {
-        // The receive-time arm goes THROUGH the gated dispatcher — `0x625823 je 0x625a3e` takes
-        // the unresolved-attacker leg, which resolves the victim and calls `0x625a6d call
-        // 0x624530`, so the LOOTABLE front gate applies here exactly as it does to the tag path
-        // (`creature_anim::impact::lootable_victim`). It calls no consequence directly.
+        // The unresolved-attacker leg (`0x625823` → `0x625a3e`) calls the gated dispatcher
+        // (`0x625a6d` → `0x624530`), so the lootable gate applies here too.
         !stores.get(v).is_ok_and(|s| s.0.unit_lootable())
     }) {
-        // The client's SMSG-arm fallback: an attacker we can't resolve (out of range)
-        // can't animate a swing — its victim feedback fires immediately and in FULL
-        // (`0x625a6d`, the only receive-time victim dispatch). The PLACEHOLDER
-        // attacker resolves nowhere downstream (blood defaults front).
+        // An attacker we cannot resolve cannot swing, so the victim's feedback fires now, in
+        // full. The placeholder attacker resolves nowhere (blood defaults to the front).
         impacts.write(SwingImpact {
             swing,
             text_only: false,
             natural: None,
-            // The receive-time arm: no tag fired, so the reference has no event point either —
-            // the consumer falls back to the victim, the only anchor the packet leaves us.
             pos: None,
         });
     }
 }
 
-/// `SMSG_TEXT_EMOTE` — someone performed a `/`-emote (the TextEmote.dbc id; the anim, if any, is
-/// the emote row's).
-///
-/// **Two consequences, and they are independent**: the anim + voice ride the
-/// [`EmoteMessage`] and need the performer *streamed*; the chat sentence is queued for
-/// [`crate::ui_chat`]'s composer and needs only the performer's *name*. An emote from someone
-/// off-screen therefore still prints its line, which is the reference's shape — `0x49dbe0`
-/// resolves a name and never touches the object manager.
+/// `SMSG_TEXT_EMOTE`: the animation needs the performer streamed, the chat line only needs their
+/// name, so an off-screen emote still prints (reference: `0x49dbe0`).
 fn text_emote(
     guid: u64,
     text_emote: u32,
@@ -391,8 +339,7 @@ fn text_emote(
     chat_log.push_text_emote(guid, text_emote, target_name);
 }
 
-/// `SMSG_EMOTE` — a bare Emotes.dbc anim id on a unit (the server-driven one-shot: NPC scripts,
-/// the `/`-emote's own anim leg).
+/// `SMSG_EMOTE`: an `Emotes.dbc` id to play on a unit (NPC scripts, a `/`-emote's animation).
 fn emote(guid: u64, emote_id: u32, index: &GuidIndex, out: &mut MessageWriter<EmoteMessage>) {
     out.write(EmoteMessage {
         source: index.0.get(&guid).copied(),
@@ -400,10 +347,8 @@ fn emote(guid: u64, emote_id: u32, index: &GuidIndex, out: &mut MessageWriter<Em
     });
 }
 
-/// `SMSG_PLAY_SPELL_VISUAL` — the kit-push opcode: a stage-0 play on the unit, the
-/// eat/drink kit cadence and mid-channel swaps. Consumer: `creature_anim::spell_visual`. The
-/// [`PlaySeq`] stamp is taken only when the unit is streamed in, so an unstreamed guid never
-/// advances the call-order counter.
+/// `SMSG_PLAY_SPELL_VISUAL`: a stage-0 kit play on the unit (eating, drinking, mid-channel
+/// swaps). Only a streamed unit takes a [`PlaySeq`] stamp.
 fn play_spell_visual(
     unit: u64,
     kit_id: u32,
@@ -420,11 +365,9 @@ fn play_spell_visual(
     }
 }
 
-/// `SMSG_ENVIRONMENTALDAMAGELOG`'s consequence (reader
-/// `0x624fcc` inside `0x624f30`): the EnvironmentalDamage.dbc 6-slot table picks the damage type's
-/// SpellVisualKit — fall's is the DustCloud_Land puff — played on the victim through the ordinary
-/// discrete kit play (`0x60edf0`), the same leg the kit-push opcode rides. The pain vocal's exact
-/// trigger is open — it folds in as its own edge once pinned.
+/// `SMSG_ENVIRONMENTALDAMAGELOG`'s visual (`0x624fcc` in `0x624f30`): the damage type's kit plays
+/// on the victim like any kit push (`0x60edf0`). The packet plays no sound: a fall's pain grunt
+/// is the client's own landing predictor (`0x602d00`, `creature_anim::env_damage`).
 fn environmental_damage_log(
     e: EnvironmentalDamageLog,
     index: &GuidIndex,
@@ -447,14 +390,9 @@ fn environmental_damage_log(
     }
 }
 
-/// `SMSG_MOUNTSPECIAL_ANIM` — a nearby rider's flourish: rear their mount (MountSpecial 94 on the
-/// mount child; the hop happens in `creature_anim::flourish_to_anim`).
-///
-/// Our OWN guid is dropped: we played it locally at send time, and whether the sender gets the
-/// SMSG echoed back is a server-config detail (LIVE-VERIFIED 2026-07-17, double-flourish probe:
-/// vmangos's `SendMovementMessageToSet(.., false)` only cheat-logs on the flag — the
-/// non-broadcaster delivery hardcodes self=true, so our deployment echoes; the optional per-player
-/// broadcaster honors it and would not). Self-suppression on receive is correct under both configs.
+/// `SMSG_MOUNTSPECIAL_ANIM`: a nearby rider rears their mount (MountSpecial, 94). Our own guid is
+/// dropped, as we played it at send: vmangos asks for no echo (`MovementHandler.cpp:972`) but
+/// delivers one anyway unless its per-player broadcaster is on (`Object.cpp:2274`).
 fn mount_special(
     guid: u64,
     self_guid: &SelfGuid,

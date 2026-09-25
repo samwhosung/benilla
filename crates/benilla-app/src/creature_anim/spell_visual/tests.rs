@@ -1,9 +1,5 @@
-//! Headless integration tests for [`super::route_cast_visuals`] — the cast-edge router run in a
-//! minimal app over a synthetic visual chain. First tenant: the instant-cast hold release. An
-//! instant cast's START and GO drain from the wire in the same frame, so the GO's spell-id-keyed
-//! release must see the hold its own batch's START inserted through deferred `commands` — the
-//! stale-query miss left Demon Armor / Ice Armor casters looping the cast pose forever (the
-//! director's stuck-cast report, 2026-07-13).
+//! Headless tests for the cast-edge router [`super::route_cast_visuals`] and the aura and mount
+//! watchers, over synthetic visual chains and, where an install is present, the shipped tables.
 
 use std::collections::HashMap;
 
@@ -20,15 +16,13 @@ use super::{
 };
 use crate::creature_anim::SpellGoTargets;
 
-/// Demon Armor's real chain shape (5875 `spellvis 706`): visual 130 → precast kit 217, anim 52 —
-/// an instant self-buff whose precast kit carries a sustained cast anim.
+/// Demon Armor's shipped chain: visual 130 → precast kit 217 with anim 52, an instant self-buff.
 const SPELL: u32 = 706;
 const VISUAL: u32 = 130;
 const PRECAST_KIT: u32 = 217;
 const HOLD_ANIM: u16 = 52;
 
-/// A ranged-slot spell with its own chain (an Aimed-Shot shape: `Attributes & 0x2` + a real
-/// visual whose cast kit plays the fire clip) — the `0x400` hold tests' subject.
+/// A ranged-slot spell (`Attributes & 0x2`) whose own visual's cast kit plays the fire clip.
 const RANGED_SPELL: u32 = 19434;
 const RANGED_VISUAL: u32 = 3180;
 const RANGED_CAST_KIT: u32 = 900;
@@ -99,7 +93,7 @@ fn app() -> App {
                 RANGED_SPELL,
                 SpellDisplay {
                     visual: RANGED_VISUAL,
-                    attributes: 0x2, // USES_RANGED_SLOT — the `0x400` hold's gate
+                    attributes: 0x2, // USES_RANGED_SLOT, the `0x400` hold's gate
                     ..Default::default()
                 },
             ),
@@ -126,7 +120,6 @@ fn hold(app: &App, unit: Entity) -> Option<u32> {
     })
 }
 
-/// The timed-cast lifecycle: START arms the precast hold, the (later-frame) GO releases it.
 #[test]
 fn timed_cast_hold_arms_and_releases_across_frames() {
     let mut app = app();
@@ -143,8 +136,8 @@ fn timed_cast_hold_arms_and_releases_across_frames() {
     assert_eq!(hold(&app, unit), None, "GO releases it");
 }
 
-/// The instant-cast regression: START and GO in the SAME frame (one wire drain) — the GO must see
-/// the hold its own batch inserted, or it leaks and the cast pose loops forever.
+/// An instant cast's START and GO drain in one frame: the GO must see the hold its own batch
+/// inserted, or the hold leaks and the cast pose loops forever.
 #[test]
 fn same_frame_start_and_go_leave_no_hold() {
     let mut app = app();
@@ -162,14 +155,12 @@ fn same_frame_start_and_go_leave_no_hold() {
     );
 }
 
-/// The spell-id key survives the overlay: a different spell's GO landing mid-cast (a proc) never
-/// drops the held cast — across frames or within one.
+/// The hold is keyed by spell id, so a proc's GO never drops it, in the same frame or later.
 #[test]
 fn a_foreign_go_never_drops_the_hold() {
     let mut app = app();
     let unit = app.world_mut().spawn_empty().id();
 
-    // Same frame as the START (the proc-during-instant shape) …
     app.world_mut()
         .write_message(cast_event(unit, SPELL, CastEventKind::Start));
     app.world_mut()
@@ -181,17 +172,14 @@ fn a_foreign_go_never_drops_the_hold() {
         "same-frame foreign GO ignored"
     );
 
-    // … and a frame later (the classic mid-cast proc).
     app.world_mut()
         .write_message(cast_event(unit, 999, CastEventKind::Go));
     app.update();
     assert_eq!(hold(&app, unit), Some(SPELL), "later foreign GO ignored");
 }
 
-/// The precast kit's own sound (kit field 13) rings at START — the gathering shape: Herb
-/// Gathering's real chain (5875 `spellvis 2366`: visual 91 → precast kit 64, anim 123
-/// "UseStandingLoop", sound 1104 "Gather_Herb"). The hold arms AND the kit-sound edge fires
-/// once; the GO releasing the hold emits no second play.
+/// The precast kit's sound (kit field 13) rings once at START, not again at GO. Herb Gathering's
+/// shipped chain: visual 91 → precast kit 64, anim 123 (UseStandingLoop), sound 1104 (Gather_Herb).
 #[test]
 fn precast_kit_sound_rings_once_at_start() {
     const HERB: u32 = 2366;
@@ -281,9 +269,8 @@ fn precast_kit_sound_rings_once_at_start() {
     );
 }
 
-/// The `$TRD` resolver ([`super::held_strike_sound`]): the held spell's `SpellVisual` field-14
-/// strike sound — Mining's real shape (visual 93 → 1143 "Mining Impact") rings;
-/// a visual without the field (Fireball's 67 shape) and an unknown spell stay `None`.
+/// The `$TRD` strike sound is the held spell's `SpellVisual` field 14: Mining's visual 93 names
+/// 1143 (Mining Impact), Fireball's visual 67 none.
 #[test]
 fn held_strike_sound_reads_the_visuals_field_14() {
     const MINING: u32 = 2575;
@@ -335,7 +322,6 @@ fn held_strike_sound_reads_the_visuals_field_14() {
     assert_eq!(super::held_strike_sound(&spells, &visuals, 999), None);
 }
 
-/// A same-frame START→FAIL (an instant refusal) releases like the GO path.
 #[test]
 fn same_frame_start_and_fail_leave_no_hold() {
     let mut app = app();
@@ -349,18 +335,15 @@ fn same_frame_start_and_fail_leave_no_hold() {
     assert_eq!(hold(&app, unit), None, "the failed cast's hold is released");
 }
 
-/// The ranged weapon-visual MERGE (`0x60d450`, decision 0986 correcting 0370's row-level
-/// reading), on [`super::resolve_stages`] directly: a RANGED-attribute spell (`Attributes & 0x2`)
-/// fills every ZERO slot of its own row from the caster's weapon visual — so a basic shot with no
-/// row at all takes the lot, a hunter shot keeps its impact/missile and gains the body kits, and a
-/// non-ranged spell never looks.
+/// The ranged weapon-visual merge (`0x60d450`): a spell with `Attributes & 0x2` fills every zero
+/// slot of its own row from the caster's weapon visual; a non-ranged spell never looks.
 #[test]
 fn ranged_spells_merge_the_weapon_visual_into_their_empty_slots() {
-    const THROW: u32 = 2764; // Attributes 0x410012, SpellVisual1 0 — the real Throw shape
+    const THROW: u32 = 2764; // Attributes 0x410012, SpellVisual1 0: the shipped Throw row
     const FIREBALL: u32 = 133; // its own visual; the fallback must stay unused
     const MULTI_SHOT: u32 = 2643; // RANGED, own visual 567: impact + missile, no body kits
-    const NO_VIS_MELEE: u32 = 772; // no visual, no RANGED attribute — stays silent
-    const WEAPON_VISUAL: u32 = 98; // the real thrown ItemDisplayInfo col-10 substitute
+    const NO_VIS_MELEE: u32 = 772; // no visual, no RANGED attribute: stays silent
+    const WEAPON_VISUAL: u32 = 98; // a shipped thrown weapon's ItemDisplayInfo col-10 visual
     const MULTI_SHOT_VISUAL: u32 = 567;
 
     let visuals = SpellVisualCatalog::from_tables(
@@ -381,8 +364,7 @@ fn ranged_spells_merge_the_weapon_visual_into_their_empty_slots() {
                 },
             ),
             (
-                // The real 5875 row: impact kit 658, missile model 528, gate 1, attach 1 — and
-                // both body-kit slots empty, which is the whole of B153.
+                // The shipped row: impact kit 658, missile 528, gate 1, attach 1, no body kits.
                 MULTI_SHOT_VISUAL,
                 VisualStages {
                     impact: 658,
@@ -409,7 +391,7 @@ fn ranged_spells_merge_the_weapon_visual_into_their_empty_slots() {
                 FIREBALL,
                 SpellDisplay {
                     visual: VISUAL,
-                    attributes: 0x2, // ranged bit set AND an own visual: own wins (`60d4b4`)
+                    attributes: 0x2, // ranged, with its own visual: its own slot wins (`0x60d4b4`)
                     ..Default::default()
                 },
             ),
@@ -417,7 +399,7 @@ fn ranged_spells_merge_the_weapon_visual_into_their_empty_slots() {
                 MULTI_SHOT,
                 SpellDisplay {
                     visual: MULTI_SHOT_VISUAL,
-                    attributes: 0x10002, // the real word: RANGED set, own visual present
+                    attributes: 0x10002, // the shipped word: RANGED set, own visual present
                     ..Default::default()
                 },
             ),
@@ -472,10 +454,8 @@ fn ranged_spells_merge_the_weapon_visual_into_their_empty_slots() {
     );
 }
 
-/// The aura state watcher (`arm_aura_state_fx`): a spell id appearing in a unit's aura slots
-/// arms its state kit's effects persistent under [`super::FxClass::AuraState`]; the id leaving
-/// the slots reaps them; a slot-hold in between writes nothing. Food's real chain shape
-/// (5875: spell 433 → visual 51 → state kit 409 → effect 393 `Spells\Item_Bread.mdx`).
+/// The aura watcher arms a state kit's effects persistent under [`super::FxClass::AuraState`] as
+/// the spell enters the slots and reaps them as it leaves. Food: spell 433 → visual 51 → kit 409.
 #[test]
 fn aura_state_kit_arms_persistent_and_reaps_on_aura_end() {
     use benilla_protocol::messages::ObjectFields;
@@ -492,9 +472,7 @@ fn aura_state_kit_arms_persistent_and_reaps_on_aura_end() {
     app.add_plugins(MinimalPlugins);
     app.add_message::<SpellKitFx>();
     app.add_message::<crate::net::FieldChanged>();
-    // The watcher's other fan-outs: the kit's CharProc edges (`crate::aura_visual`) and its
-    // sound leg. Food's kit 409 carries neither, so nothing is asserted here — the
-    // messages just have to exist for the writers.
+    // The watcher's CharProc and sound writers need their messages; kit 409 carries neither.
     app.add_message::<crate::aura_visual::AuraProc>();
     app.add_message::<SpellKitSound>()
         .add_message::<SpellKitShake>()
@@ -512,7 +490,7 @@ fn aura_state_kit_arms_persistent_and_reaps_on_aura_end() {
         HashMap::from([(
             STATE_KIT,
             VisualKit {
-                // Slot 4 = the spell-hand tag (KIT_SLOT_TAGS[4] = 0x16) — bread's real slot.
+                // Slot 4 is the spell-hand tag (KIT_SLOT_TAGS[4] = 0x16), bread's shipped slot.
                 effect_slots: [
                     None,
                     None,
@@ -550,9 +528,8 @@ fn aura_state_kit_arms_persistent_and_reaps_on_aura_end() {
             .chain(),
     );
 
-    // The aura lands in slot 0: UNIT_FIELD_AURA[0] = 47 carries the spell id; the slot's
-    // AURAFLAGS nibble (field 95, low nibble) needs an effect-index bit (occupancy is the
-    // flags test).
+    // Slot 0: UNIT_FIELD_AURA[0] (field 47) holds the spell id; occupancy is an effect-index bit
+    // in the slot's AURAFLAGS nibble (field 95's low nibble).
     let eating = ObjectFields::from_pairs(&[(47, FOOD), (95, 0x0E)]);
     let fasted = ObjectFields::from_pairs(&[(95, 0)]);
 
@@ -590,7 +567,6 @@ fn aura_state_kit_arms_persistent_and_reaps_on_aura_end() {
         );
     }
 
-    // Slot held: no further edges.
     app.update();
     assert_eq!(
         app.world().resource::<FxLog>().0.len(),
@@ -598,7 +574,6 @@ fn aura_state_kit_arms_persistent_and_reaps_on_aura_end() {
         "a held aura re-arms nothing"
     );
 
-    // The aura leaves the slots: one AuraState reap.
     crate::net::apply_fields_for_test(
         app.world_mut(),
         unit,
@@ -619,15 +594,9 @@ fn aura_state_kit_arms_persistent_and_reaps_on_aura_end() {
     }
 }
 
-/// The GO's **release gate** (the client's `0x6e7a70` flush condition): a Speed>0 spell whose
-/// cast kit plays a body animation emits its [`MissileSpawn`] deferred (`awaits_release`) —
-/// the launch waits for the animation's release keyframe — while a cast kit with no animation
-/// (or none at all) launches at GO.
-/// The spell impact body twitch (sharpened by 2063): an instant harmful spell's GO
-/// lays ONE severity-0 wound on each hit target (`0x6e8bf0` @ `0x6e8c89`), a helpful one lays none;
-/// a state kit naming a wound anim adds nothing on either (the client's stage-2 play never reaches
-/// the `[8,10]` test, `0x60f383`); and a missile ARRIVAL wounds unconditionally (`0x61dc50` @
-/// `0x61dc74`) — even for the helpful spell.
+/// An instant harmful GO lays one severity-0 wound on each hit (`0x6e8bf0` at `0x6e8c89`), a
+/// helpful one none; a state kit's wound anim adds nothing (stage 2 never reaches the `[8,10]`
+/// test, `0x60f383`); a missile arrival always wounds (`0x61dc50` at `0x61dc74`).
 #[test]
 fn a_harmful_go_wounds_each_hit_once_and_a_missile_arrival_always() {
     const HARMFUL: u32 = 7386; // Sunder Armor's shape: instant, enemy-targeted
@@ -635,7 +604,7 @@ fn a_harmful_go_wounds_each_hit_once_and_a_missile_arrival_always() {
     const VISUAL_H: u32 = 406;
     const VISUAL_F: u32 = 280;
     const IMPACT_KIT: u32 = 556; // no anim
-    const STATE_KIT: u32 = 436; // names CombatWound(9) — must add nothing
+    const STATE_KIT: u32 = 436; // names CombatWound (9), which must add nothing
 
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
@@ -725,7 +694,6 @@ fn a_harmful_go_wounds_each_hit_once_and_a_missile_arrival_always() {
         app.update();
         assert_eq!(wounds(&mut app), expected, "instant GO of spell {spell_id}");
     }
-    // A missile landing wounds whoever it lands on, hostility untested.
     app.world_mut().write_message(cast_event(
         target,
         HELPFUL,
@@ -737,6 +705,8 @@ fn a_harmful_go_wounds_each_hit_once_and_a_missile_arrival_always() {
     assert_eq!(wounds(&mut app), vec![target], "missile arrival");
 }
 
+/// The GO's release gate (`0x6e7a70`): a Speed>0 spell whose cast kit plays a body animation
+/// defers its [`MissileSpawn`] to the animation's release keyframe; any other launches at GO.
 #[test]
 fn missile_spawn_defers_iff_the_cast_kit_animates() {
     const ANIMATED: u32 = 133; // Fireball's shape: cast kit with anim 53
@@ -847,11 +817,8 @@ fn missile_spawn_defers_iff_the_cast_kit_animates() {
     );
 }
 
-/// The **location fallback** and its arrival, end to end through the router (`0x6e8a50`'s empty-hit
-/// arm, then the arrival `0x61d870`): a Speed>0 GO whose hit and miss lists are empty but which
-/// carries a ground point spawns one projectile aimed at the point — the flight a pure ground cast
-/// (Flare, a bomb thrown at empty dirt) shows — and that projectile's ground arrival rings
-/// `SpellVisual` field 13's kit sound **at the landing point**, not at the caster.
+/// A Speed>0 GO with no hits but a ground point spawns one projectile at it (`0x6e8a50`'s empty-hit
+/// arm), whose arrival (`0x61d870`) rings `SpellVisual` field 13's kit sound at the landing point.
 #[test]
 fn a_targetless_dest_go_spawns_a_ground_missile_whose_arrival_sounds_at_the_point() {
     const GROUND: u32 = 1543; // Flare's shape: speed>0, dest-targeted, empty hit list
@@ -959,19 +926,9 @@ fn a_targetless_dest_go_spawns_a_ground_missile_whose_arrival_sounds_at_the_poin
     );
 }
 
-/// **B130's crash** — the second ever reported: a release build panicked on `insert<CastHold>`
-/// while flying at high speed through the Wetlands, applying hold commands to a unit that had
-/// despawned. Both windows are exercised here, because they fail for different reasons:
-///
-/// 1. **Already gone when the edge is read.** Every despawn of an indexed unit runs inside the wire
-///    drain (`DESTROY_OBJECT`, the out-of-range stream-out, the worldport purge), and those are
-///    applied at the sync point this chain sits behind — so a START and its subject's death arrive
-///    in one batch and the edge outlives the unit.
-/// 2. **Queued this frame, no sync point between.** `model_fade::apply_despawn_fade` is
-///    Update-unordered against this chain; its despawn can be queued before ours and applied first,
-///    which a queue-time existence check structurally cannot see.
-///
-/// The pass condition is that the frame completes — and that neither window resurrects the unit.
+/// A cast edge for a despawned unit neither panics the hold insert nor resurrects the unit, whether
+/// it died in the wire drain applied before this chain, or `model_fade::apply_despawn_fade`,
+/// unordered against it, queued the despawn first, which no queue-time check can see.
 #[test]
 fn a_despawned_subject_never_panics_the_router() {
     {
@@ -980,15 +937,15 @@ fn a_despawned_subject_never_panics_the_router() {
         app.world_mut().entity_mut(unit).despawn();
         app.world_mut()
             .write_message(cast_event(unit, SPELL, CastEventKind::Start));
-        app.update(); // window 1: panicked here before the fix
+        app.update(); // window 1: the unit is gone before the edge is read
         assert!(
             app.world().get_entity(unit).is_err(),
             "the hold write must not resurrect a dead subject"
         );
     }
     {
-        // `before_ignore_deferred` is exactly the fade lane's shape — an ordering edge with no sync
-        // point on it, so both command queues flush together and the despawn applies first.
+        // Window 2, the fade lane's shape: an ordering edge with no sync point, so both command
+        // queues flush together and the despawn applies first.
         let mut app = app();
         let unit = app.world_mut().spawn_empty().id();
         app.add_systems(
@@ -1008,15 +965,13 @@ fn a_despawned_subject_never_panics_the_router() {
     }
 }
 
-/// The `0x400` weapon-visual hold (set by `0x60d020`): a RANGED spell's visual play inserts
-/// [`RangedHold`] on ANY caster — what keeps a remote shooter in the drawn Load/Hold idle between
-/// shots — and a non-ranged visual play clears it (the client's stale-visual cleanup `0x6ec39e`).
+/// The `0x400` weapon-visual hold (`0x60d020`): a ranged spell's visual play inserts [`RangedHold`]
+/// on any caster, and a non-ranged play clears it (the stale-visual cleanup `0x6ec39e`).
 #[test]
 fn ranged_visual_play_arms_the_any_caster_hold_and_a_non_ranged_play_clears_it() {
     let mut app = app();
     let unit = app.world_mut().spawn_empty().id();
 
-    // A remote shooter's per-shot GO (cast kit resolves) → the hold arms.
     app.world_mut()
         .write_message(cast_event(unit, RANGED_SPELL, CastEventKind::Go));
     app.update();
@@ -1025,7 +980,6 @@ fn ranged_visual_play_arms_the_any_caster_hold_and_a_non_ranged_play_clears_it()
         "a ranged GO's visual play sets the hold"
     );
 
-    // A later NON-ranged visual play (the buff's precast kit) → the stale-visual cleanup.
     app.world_mut()
         .write_message(cast_event(unit, SPELL, CastEventKind::Start));
     app.update();
@@ -1034,8 +988,7 @@ fn ranged_visual_play_arms_the_any_caster_hold_and_a_non_ranged_play_clears_it()
         "a non-ranged visual play clears the hold"
     );
 
-    // A ranged START (the volley activation's precast play) re-arms it too — but this shape's
-    // precast stage is empty, so drive it through the GO again after the clear.
+    // A ranged START re-arms it too, but this chain's precast stage is empty, so the GO re-arms it.
     app.world_mut()
         .write_message(cast_event(unit, RANGED_SPELL, CastEventKind::Go));
     app.update();
@@ -1045,22 +998,19 @@ fn ranged_visual_play_arms_the_any_caster_hold_and_a_non_ranged_play_clears_it()
     );
 }
 
-/// **The mount poof** ([`super::arm_mount_poof_fx`]) — the three properties the
-/// reference's `UNIT_FIELD_MOUNTDISPLAYID` watcher gives it, each a real fork in `0x5ffa50`:
-/// **the build leg only** (the whole allocation sits behind `5ffa87 je 0x5ffade` on the NEW
-/// value, so a dismount spawns nothing), **any changed value** (0→N and N→N′ alike), and
-/// **first sight silent** (a unit that streams in already mounted did not just mount — the
-/// level-up ding's own treatment).
+/// The mount poof, as `0x5ffa50` gives it: only the build leg allocates it, behind
+/// `0x5ffa87 je 0x5ffade` on the new value, so a dismount is silent; any changed value puffs; and
+/// a unit streaming in already mounted does not.
 #[test]
 fn the_mount_poof_puffs_on_the_build_leg_only() {
     use benilla_protocol::ObjectFields;
 
     /// `UNIT_FIELD_MOUNTDISPLAYID` (index 133).
     const FIELD_MOUNTDISPLAYID: u16 = 133;
-    /// `SpellVisualEffectName` row 1185's shipped path — the druid-morph cloud.
+    /// The shipped path of `SpellVisualEffectName` row 1185, the druid-morph cloud.
     const POOF: &str = "Spells\\DruidMorph_Impact_Base.mdx";
-    const POOF_FX: u32 = 1185; // the shipped `SpellVisualEffectName` row (decision 0927)
-    /// The M2 attach the hardcoded-effect spawn stamps (`DAT_0080c968[6]`).
+    const POOF_FX: u32 = 1185;
+    /// The M2 attach the hardcoded-effect spawn stamps (`0x80c968[6]`).
     const BASE_ATTACH: u16 = 0x13;
 
     let mut app = App::new();
@@ -1077,7 +1027,7 @@ fn the_mount_poof_puffs_on_the_build_leg_only() {
     app.add_systems(Update, super::arm_mount_poof_fx);
 
     let fields = |v: u32| ObjectFields::from_pairs(&[(FIELD_MOUNTDISPLAYID, v)]);
-    // Streams in ALREADY mounted: the create block is no edge, so silence.
+    // Streams in already mounted: a create block is no edge.
     let unit = app
         .world_mut()
         .spawn(crate::net::ObjectStore(
@@ -1105,12 +1055,11 @@ fn the_mount_poof_puffs_on_the_build_leg_only() {
         "a rider that streams into view did not just mount"
     );
 
-    // Dismount — the NEW value is 0, so the build leg (and the whole allocation) is skipped.
+    // Dismount: the new value is 0, so the build leg is skipped.
     crate::net::apply_fields_for_test(app.world_mut(), unit, fields(0));
     app.update();
     assert!(puffs(&mut app).is_empty(), "no poof on the way down");
 
-    // Mount: 0 → N.
     crate::net::apply_fields_for_test(app.world_mut(), unit, fields(2404));
     app.update();
     assert_eq!(
@@ -1123,12 +1072,11 @@ fn the_mount_poof_puffs_on_the_build_leg_only() {
         "the build leg puffs the druid-morph cloud at the base attach"
     );
 
-    // A steady mounted frame is not an edge — the watcher fires on the field CHANGING.
     crate::net::apply_fields_for_test(app.world_mut(), unit, fields(2404));
     app.update();
     assert!(puffs(&mut app).is_empty(), "no re-puff while just riding");
 
-    // A swap (N → N′) is a change, and the reference rebuilds and puffs again.
+    // A swap (N → N′) is a change: the reference rebuilds and puffs again.
     crate::net::apply_fields_for_test(app.world_mut(), unit, fields(2405));
     app.update();
     assert_eq!(
@@ -1141,13 +1089,9 @@ fn the_mount_poof_puffs_on_the_build_leg_only() {
     );
 }
 
-/// **The link that makes the beam exist at all** (decision 0955 slice 2): a kit carrying a chain
-/// `CharProc` emits a [`ChainProcPlay`] when it plays — from BOTH of the reference's dispatcher
-/// call sites, `PlaySpellVisualKit`'s tail (the cast release) and the channel poll (`0x612b18`,
-/// which is the only way a channelled beam is ever reached). A kit without one emits nothing.
-///
-/// This is the test that fails if the whole lane silently does nothing: the geometry, the hop
-/// array and the wire can all be right while no kit ever asks for a beam.
+/// A kit with a chain `CharProc` emits a `ChainProcPlay` from both dispatcher sites:
+/// `PlaySpellVisualKit`'s tail (the cast release) and the channel poll (`0x612b18`), the only way
+/// a channelled beam is reached.
 #[test]
 fn a_kit_with_a_chain_char_proc_asks_for_a_beam_from_both_dispatcher_sites() {
     use benilla_formats::{char_proc_type, CharProc};
@@ -1158,9 +1102,8 @@ fn a_kit_with_a_chain_char_proc_asks_for_a_beam_from_both_dispatcher_sites() {
     const BEAM_CHANNEL_KIT: u32 = 402;
 
     let mut app = app();
-    // Overlay the beam chain onto the fixture catalog: a cast kit with the real type-12 slot and a
-    // channel kit with the real type-0 one. Params are the shipped shape — chain id 1, one strand,
-    // and the flag that splits cast (0) from channel (1).
+    // A cast kit with a type-12 proc and a channel kit with a type-0 one, in the shipped shape:
+    // chain id 1, one strand, and the flag that splits cast (0) from channel (1).
     let mut visuals = HashMap::from([(
         BEAM_VISUAL,
         VisualStages {
@@ -1190,7 +1133,7 @@ fn a_kit_with_a_chain_char_proc_asks_for_a_beam_from_both_dispatcher_sites() {
             },
         );
     }
-    // …plus a beam-less kit, so "emits nothing" is a real control and not an empty catalog.
+    // A beam-less kit, the control.
     kits.insert(PRECAST_KIT, VisualKit::default());
     visuals.insert(
         VISUAL,
@@ -1228,7 +1171,7 @@ fn a_kit_with_a_chain_char_proc_asks_for_a_beam_from_both_dispatcher_sites() {
             .collect()
     };
 
-    // Site 1 — the cast release (`0x60f35c`).
+    // Site 1, the cast release (`0x60f35c`).
     let unit = app.world_mut().spawn_empty().id();
     app.world_mut()
         .write_message(cast_event(unit, BEAM_SPELL, CastEventKind::Go));
@@ -1239,14 +1182,13 @@ fn a_kit_with_a_chain_char_proc_asks_for_a_beam_from_both_dispatcher_sites() {
         "the cast kit's type-12 proc asks for a one-shot beam"
     );
 
-    // The control: a spell whose cast kit carries no chain proc asks for nothing.
     app.world_mut()
         .write_message(cast_event(unit, SPELL, CastEventKind::Go));
     app.update();
     assert!(plays(&mut app).is_empty(), "a beam-less kit stays silent");
 
-    // Site 2 — the channel poll (`0x612b18`). The rising edge of `UNIT_CHANNEL_SPELL` is what
-    // reaches Drain Life's kit; nothing else ever plays it.
+    // Site 2, the channel poll (`0x612b18`), on the rising edge of `UNIT_CHANNEL_SPELL`: the only
+    // play of a channel kit.
     let channeller = app
         .world_mut()
         .spawn(crate::net::ObjectStore(
@@ -1262,28 +1204,19 @@ fn a_kit_with_a_chain_char_proc_asks_for_a_beam_from_both_dispatcher_sites() {
     );
 }
 
-// ── The real-chain shooter pin (bug B307) ────────────────────────────────────────────────────
+// ── The shipped-table shooter ────────────────────────────────────────────────────────────────
 //
-// The symptom: on Auto Shot, with any ranged weapon (bow, crossbow, gun), a shooter plays no
-// reload animation and fires from a still pose. Every link above this
-// point is tested on SYNTHETIC tables, and every router test spawns a bare unit with no
-// `NetEntity`/`ObjectStore` — so [`super::WeaponVisualSrc::caster`], the one lookup that turns a
-// PLAYER's equipped ranged weapon into the substitute visual the whole merge hangs on, returns
-// `None` in all of them and nothing notices (their ranged spell carries its own cast kit).
-// These tests close that hole: the real 5875 DBCs, a real self-player, a real `item_template`
-// row, one `CastEvent` in, the body's clip out.
+// The tests above use bare units, for which `WeaponVisualSrc::caster` (a player's ranged weapon →
+// its substitute visual) is always `None`. These run the shipped DBCs, a self-player and a real
+// `item_template` row: one `CastEvent` in, the body's clip out.
 
-/// Auto Shot — the one spell every ranged auto-attack fires (one `SMSG_SPELL_GO` per shot).
-/// Its real 5875 row: `Attributes = 0x50012` (so `& 0x2`, USES_RANGED_SLOT, IS set),
-/// `AttributesEx2 = 0x20` (auto-repeat), Speed 40 — and **`SpellVisual1 = 0`**. It authors no
-/// visual whatsoever, so every clip it plays comes from the equipped weapon's substitute visual
-/// through [`super::resolve_stages`]'s merge. If that lookup fails, the shooter is silent.
+/// Auto Shot, one `SMSG_SPELL_GO` per shot. Its shipped row: `Attributes` 0x50012 (`& 0x2` set),
+/// `AttributesEx2` 0x20 (auto-repeat), Speed 40 and `SpellVisual1` 0, so every clip it plays comes
+/// from the weapon's substitute visual through [`super::resolve_stages`]'s merge.
 const AUTO_SHOT: u32 = 75;
 
-/// One real `item_template` row — what the wire hands the client for an equipped ranged weapon.
-/// Entry/display/class/subclass read from the live vmangos `mangos.item_template`; the
-/// display → `ItemDisplayInfo` col 10 → `SpellVisual` → kit → `AnimationData` tail is the real
-/// 5875 DBCs' and is re-derived by the test, never assumed.
+/// A ranged weapon's vmangos `item_template` row; the display → `ItemDisplayInfo` col 10 →
+/// `SpellVisual` → kit → anim chain is re-derived from the shipped DBCs by the test.
 struct RealRanged {
     name: &'static str,
     entry: u32,
@@ -1291,9 +1224,9 @@ struct RealRanged {
     /// `ItemClass` 2 (weapon) and its subclass: 2 bow, 3 gun, 18 crossbow.
     class: u32,
     subclass: u32,
-    /// The pull, from the weapon visual's PRECAST kit: LoadBow 105 / LoadRifle 106.
+    /// The pull, from the weapon visual's precast kit: LoadBow 105 or LoadRifle 106.
     load_anim: u16,
-    /// The release, from its CAST kit: AttackBow 46 / AttackRifle 49.
+    /// The release, from its cast kit: AttackBow 46 or AttackRifle 49.
     fire_anim: u16,
 }
 
@@ -1319,8 +1252,8 @@ const OLD_BLUNDERBUSS: RealRanged = RealRanged {
     fire_anim: 49,
 };
 
-/// A crossbow (`item_template` 12651, display 22929 → visual 743 → kits 803/804 → 106/49 —
-/// crossbows share the rifle clips, they do not have their own).
+/// A crossbow (`item_template` 12651, display 22929 → visual 743 → kits 803/804 → 106/49):
+/// crossbows share the rifle clips.
 const BLACKCROW: RealRanged = RealRanged {
     name: "Blackcrow",
     entry: 12651,
@@ -1331,22 +1264,18 @@ const BLACKCROW: RealRanged = RealRanged {
     fire_anim: 49,
 };
 
-/// `PLAYER_VISIBLE_ITEM_18_0` — the public item ENTRY worn in equipment slot 17 (vmangos
-/// `EQUIPMENT_SLOT_RANGED`), i.e. `PLAYER_VISIBLE_ITEM_1_CREATOR (258) + 2 + 12 × 17`. Spelled
-/// out because that base index is private to `benilla-protocol`; `player_visible_item_entry(17)`
-/// is the accessor it feeds, and this test would fail loudly if the two ever disagreed.
+/// `PLAYER_VISIBLE_ITEM_18_0`, the item entry in equipment slot 17 (vmangos
+/// `EQUIPMENT_SLOT_RANGED`): `PLAYER_VISIBLE_ITEM_1_CREATOR` (258) + 2 + 12 × 17, spelled out as
+/// the base is private to `benilla-protocol`.
 const VISIBLE_RANGED_ENTRY_FIELD: u16 = 258 + 2 + 12 * 17;
 
-/// Keeps the item layer's ask-once channel ALIVE for the app's life, so an unexpected
-/// `ItemQuery` send (the "template not landed" path — the failure mode that would silently
-/// starve the weapon lookup) is observable rather than swallowed by a dropped receiver.
+/// Keeps the item layer's ask-once channel alive, so an unexpected `ItemQuery` (a template not
+/// landed, which starves the weapon lookup) is observable.
 #[derive(Resource)]
 struct AskLog(crossbeam_channel::Receiver<crate::net::ClientCommand>);
 
-/// The cast router wired over the **real 5875 tables**, with a self-player wearing `weapon` in
-/// the ranged slot and its template already landed in the item cache — which is the live state
-/// by the time anything shoots (the equipped weapon rendered through the same ask-once layer
-/// long before). `None`, with the skip note printed, when there is no WoW install to read.
+/// The cast router over the shipped tables, with a self-player wearing `weapon` in the ranged slot
+/// and its template landed, as it is by the time anything shoots; `None` without an install.
 fn real_shooter(weapon: &RealRanged) -> Option<(App, Entity)> {
     let data = benilla_formats::wow_data_or_skip!(None);
     let mut chain = benilla_formats::open_chain(&data).expect("open the install's MPQ chain");
@@ -1385,7 +1314,7 @@ fn real_shooter(weapon: &RealRanged) -> Option<(App, Entity)> {
     template.class = weapon.class;
     template.subclass = weapon.subclass;
     template.display_info_id = weapon.display_id;
-    template.inventory_type = 15; // INVTYPE_RANGED — the real row's; unread by this chain
+    template.inventory_type = 15; // INVTYPE_RANGED, the real row's; unread by this chain
     items.insert_template(weapon.entry, Some(template));
     app.insert_resource(items);
 
@@ -1393,15 +1322,14 @@ fn real_shooter(weapon: &RealRanged) -> Option<(App, Entity)> {
     app.insert_resource(crate::net::NetCommands(tx));
     app.insert_resource(AskLog(rx));
 
-    // The shooter: our own body, a PLAYER on the wire, with the weapon's ENTRY in the public
-    // visible-item field — exactly what `SMSG_UPDATE_OBJECT` carries for equipment.
+    // Our own body, a player, with the weapon's entry in the visible-item field.
     let unit = app
         .world_mut()
         .spawn((
             crate::net::SelfPlayer,
             crate::net::NetEntity {
                 kind: benilla_protocol::EntityKind::Player,
-                display_id: Some(49), // HumanMale — authors 46/49/105/106 internally
+                display_id: Some(49), // HumanMale, which authors 46/49/105/106
                 scale: 1.0,
             },
             crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(
@@ -1424,8 +1352,7 @@ fn emote_anims(app: &mut App, unit: Entity) -> Vec<u16> {
         .collect()
 }
 
-/// The entries the item layer had to ask the server for — empty is the expected reading (the
-/// template is pre-landed); anything here means the weapon lookup starved on a cold cache.
+/// The entries the item layer asked the server for; any means the weapon lookup starved.
 fn asked_entries(app: &App) -> Vec<u32> {
     app.world()
         .resource::<AskLog>()
@@ -1438,12 +1365,8 @@ fn asked_entries(app: &App) -> Vec<u32> {
         .collect()
 }
 
-/// **B307's pin, bow half.** One `SMSG_SPELL_GO` for Auto Shot on a self-player with a real bow
-/// equipped must reach the body as `EmoteAnim { anim_id: 46 }` (AttackBow) — through the live
-/// chain end to end: `Spell.dbc` 75 (`Attributes & 0x2`, no visual of its own) →
-/// [`super::WeaponVisualSrc::caster`] (`PLAYER_VISIBLE_ITEM` slot 17 → the item template →
-/// display 8106) → `ItemDisplayInfo` col 10 (visual 5) → the merge → `SpellVisual` 5's cast kit
-/// 164 → its anim 46.
+/// Auto Shot's GO with a bow equipped reaches the body as AttackBow (46): slot 17's template →
+/// display 8106 → `ItemDisplayInfo` col 10 (visual 5) → the merge → cast kit 164 → anim 46.
 #[test]
 fn a_real_bow_shooters_auto_shot_go_plays_attackbow() {
     let Some((mut app, unit)) = real_shooter(&WORN_SHORTBOW) else {
@@ -1464,9 +1387,7 @@ fn a_real_bow_shooters_auto_shot_go_plays_attackbow() {
     );
 }
 
-/// **B307's pin, "any ranged weapon" half.** A gun and a crossbow take the SAME road to a
-/// different pair of clips (visual 224 / 743 → AttackRifle 49) — so a fix that only ever saw a
-/// bow, or a schema that only decodes one display row, is caught here.
+/// A gun and a crossbow take the same road to AttackRifle (49), through visuals 224 and 743.
 #[test]
 fn a_real_gun_or_crossbow_shooters_auto_shot_go_plays_attackrifle() {
     for weapon in [&OLD_BLUNDERBUSS, &BLACKCROW] {
@@ -1485,10 +1406,8 @@ fn a_real_gun_or_crossbow_shooters_auto_shot_go_plays_attackrifle() {
     }
 }
 
-/// The START arm of the same chain — the **pull**, the reload animation itself:
-/// `SMSG_SPELL_START` for Auto Shot arms `CastHold { anim_id: 105 }` (LoadBow) on a bow
-/// shooter, plus the ranged-slot marks the driver reads ([`RangedHold`], the sheath snap). One
-/// START per auto-repeat activation, so this is the clip that opens a volley.
+/// Auto Shot's START, once per auto-repeat activation, arms the LoadBow (105) pull as the cast
+/// hold, with [`RangedHold`] and the ranged sheath snap; the GO releases it and fires.
 #[test]
 fn a_real_bow_shooters_auto_shot_start_arms_the_loadbow_hold() {
     let Some((mut app, unit)) = real_shooter(&WORN_SHORTBOW) else {
@@ -1516,7 +1435,6 @@ fn a_real_bow_shooters_auto_shot_start_arms_the_loadbow_hold() {
         .collect();
     assert_eq!(sheaths, vec![2], "…and the ranged stance snaps drawn");
 
-    // The GO releases it and fires — the shot's own clip, on the same body.
     app.world_mut()
         .write_message(cast_event(unit, AUTO_SHOT, CastEventKind::Go));
     app.update();
@@ -1531,16 +1449,13 @@ fn a_real_bow_shooters_auto_shot_start_arms_the_loadbow_hold() {
     );
 }
 
-/// The control that proves the tests above are actually exercising
-/// [`super::WeaponVisualSrc::caster`] and not passing for some other reason: the SAME shooter
-/// with an EMPTY ranged slot resolves nothing at all — Auto Shot has no visual of its own to
-/// fall back on.
+/// The control: with the ranged slot empty Auto Shot resolves no clip, having no visual of its own.
 #[test]
 fn a_shooter_with_no_ranged_weapon_resolves_no_clip_at_all() {
     let Some((mut app, unit)) = real_shooter(&WORN_SHORTBOW) else {
         return;
     };
-    // Strip the equipment field — the wire's "nothing in slot 17".
+    // Slot 17 empty, as the wire says it.
     crate::net::apply_fields_for_test(
         app.world_mut(),
         unit,
@@ -1562,22 +1477,11 @@ fn a_shooter_with_no_ranged_weapon_resolves_no_clip_at_all() {
     );
 }
 
-/// **A state kit's animation id is a comparison, never a play**: `0x60edf0`'s tail
-/// has exactly one site that hands a kit's `AnimID` to the animation primitive
-/// (`0x60f3c5 call 0x5fe2f0`) and `0x60f387 jne` diverts stage 2 around it. Both `SpellVisual`
-/// field-4 consumers hardcode stage 2 — the aura watcher and this one, the impact hand-off
-/// `0x61dced` — so the state kit's id is only ever the right-hand side of `0x60f390`'s compare,
-/// spent on a base recompute.
-///
-/// The subject is the real Silithus chain: a Dredge Striker's **Charge** (22911 → visual 3783)
-/// plays `Knockdown`(121) from impact kit 348, and state kit 349 names `Stun`(14). Before this,
-/// benilla played the 14 as a second one-shot — a `Stun` pose the reference never shows on
-/// anything.
-///
-/// **Scope, corrected by decision 2096:** the recompute this emits does NOT cut the Knockdown.
-/// `Knockdown` takes the base-animation lock when it arms, so the `Stand` the recompute resolves is
-/// refused and the clip plays out — which is what the director sees on the reference. The recompute
-/// cuts only what holds no lock. What this test pins is the router's half: one play, not two.
+/// A state kit's anim id is a compare, never a play: `0x60edf0`'s one play site
+/// (`0x60f3c5 call 0x5fe2f0`) is skipped for stage 2 (`0x60f387 jne`), the stage both field-4 users
+/// play (the aura watcher and the impact hand-off `0x61dced`), so the id only feeds `0x60f390`'s
+/// compare and a base recompute. Charge (22911) plays Knockdown (121) from impact kit 348; state
+/// kit 349's Stun (14) is a recompute, which Knockdown's base-animation lock refuses.
 #[test]
 fn a_state_kits_anim_is_a_recompute_and_never_a_second_play() {
     const CHARGE: u32 = 22911;
@@ -1681,11 +1585,8 @@ fn a_state_kits_anim_is_a_recompute_and_never_a_second_play() {
     );
 }
 
-/// A state kit whose **whole visual is its animation id** still arms. The aura
-/// watcher's entry test asks "does this kit do anything we model?", and the anim was missing from
-/// it — the B114 shape one level over, where an effects-only test dropped Stealth's proc-only kit.
-/// 15 of the shipped state kits are anim-only (`benilla-extract kitanim`), among them kit 586's
-/// `Stun`(14) — Sneezing Fit, Smoke Bomb and kin.
+/// An anim-only state kit still arms, and its add edge owes a recompute: 15 shipped state kits are
+/// anim-only (`benilla-extract kitanim`), kit 586's Stun (14) among them.
 #[test]
 fn an_anim_only_state_kit_still_arms_on_the_aura_add_edge() {
     use benilla_protocol::messages::ObjectFields;

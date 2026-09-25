@@ -1,7 +1,4 @@
-//! Equipment **attach** (split out of `super`'s one file): the sub-model
-//! children a unit's resolved [`HeldItems`] spawns — each item model's parts under its attach
-//! point's joint entity, plus everything that rides an item (its billboard cards, emitters,
-//! lights, ribbons, and the glow its `ItemVisuals` id names).
+//! Equipment attach: each item model under its attachment's joint, with everything riding it.
 
 use bevy::mesh::MeshTag;
 use bevy::prelude::*;
@@ -19,9 +16,7 @@ use super::{
     attach_id, BoneAttach, HeldAttached, HeldItems, HeldSlot, ItemDisplays, ATTACH_SLOTS, NO_GLOW,
 };
 
-/// The three material handles one attach-model batch fades through — the item lane's
-/// [`FadeSet`], read straight off the built part (an item batch never carries a character
-/// runtime slot the way a body batch does).
+/// The materials one item batch fades through.
 fn item_fade_set(part: &super::super::EntityPart) -> FadeSet<'_> {
     FadeSet {
         steady: &part.material,
@@ -31,28 +26,23 @@ fn item_fade_set(part: &super::super::EntityPart) -> FadeSet<'_> {
     }
 }
 
-/// Everything one slot's spawn needs from its WEARER, read once per unit — the context
-/// [`spawn_slot`] carries so the per-slot body isn't a fifteen-argument call.
+/// What one slot's spawn needs from its wearer, read once per unit.
 struct WearerCtx<'a> {
-    /// The unit wearing the item — the parent whose tint, light collector and fade it inherits.
+    /// The unit wearing the item, whose tint, light collector and fade it inherits.
     wearer: Entity,
     bones: &'a BoneAttach,
-    /// The unit's appear-fade clock, for a part spawning mid-ramp ([`join_unit_appear_fade`]).
+    /// The unit's appear-fade clock, for a part spawning mid-ramp.
     joined: JoinedFade,
     now: f32,
     /// The wearer's rig-palette slot, pre-shifted into `MeshTag` bits.
     rig_slot: u16,
-    /// The wearer's body bake centre, when it has one — the interior classifier's fold reference.
+    /// The wearer's body bake centre, the interior classifier's fold reference.
     body_center: Option<Vec3>,
-    /// The wire scale the unit renders at: the world yards its held effects' draw-order rung is
-    /// measured in ([`benilla_world::particles::owner_last_bias`]).
+    /// The unit's wire scale, which its held effects' draw-order rung is measured in.
     scale: f32,
 }
 
-/// The **re-seat writers**: everything under an item root that caches *where on the
-/// body* the item sits. A pure attach-point change — the sheath swap — MOVES the root instead of
-/// rebuilding it, and these move by the same delta, so the item's glow instances, its effect hosts
-/// and its live particle clouds all ride along instead of being orphaned and respawned.
+/// Everything under an item root that caches where on the body it sits, re-seated on a move.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(in crate::entities) struct SeatWriters<'w, 's> {
     children: Query<'w, 's, &'static Children>,
@@ -63,17 +53,9 @@ pub(in crate::entities) struct SeatWriters<'w, 's> {
 }
 
 impl SeatWriters<'_, '_> {
-    /// Move every cached seat in `root`'s subtree to the item's new attach point: the body `bone`
-    /// it now hangs from, and `delta` = `new_offset − old_offset` applied to each cached offset.
-    ///
-    /// The delta (rather than an assignment) is what makes this total: a mirror's offset is the
-    /// attach point *plus* something model-local — a card's own pivot, a glow slot's point on the
-    /// item — and only the attach-point term moves. The walk is recursive because an item's glow
-    /// instances hang two levels down.
-    ///
-    /// `attach` is assigned, not delta'd: it names WHICH attachment node the item now sits in, and
-    /// that is what a widget's attach reset filters on ([`crate::portrait::attach_reset`]). A move
-    /// that left it stale would keep, say, a stowed weapon marked with the hand id it left.
+    /// Move every cached seat under `root` to `bone`, shifting each offset by `delta` (a mirror's
+    /// offset also holds a model-local term, a card's pivot, that stays) and setting `attach` for
+    /// the widgets' attach reset. Recursive: glow instances hang two levels down.
     fn reseat(&mut self, root: Entity, bone: u16, attach: u16, delta: Vec3) {
         let mut stack = vec![root];
         while let Some(e) = stack.pop() {
@@ -109,21 +91,10 @@ impl SeatWriters<'_, '_> {
     }
 }
 
-/// Spawn/refresh the held-item children for every unit whose [`HeldItems`] changed (or whose item
-/// model finished loading): each slot's model parts spawn under the attach point's joint entity at
-/// the attachment offset, so they ride the bone. Slots whose model is still loading are left pending
-/// (the `applied` diff key keeps them un-applied) and picked up on a later pass. A part spawning while
-/// the unit's own appear-fade is still in flight joins it ([`join_unit_appear_fade`]) instead of
-/// popping in opaque (decision 0032 read as a per-unit property).
-///
-/// **The diff is per SLOT, and an attach-point change is a MOVE**. The reference's
-/// sheath paths touch only the weapon/quiver attach ids (`0x611770`) and stow a melee weapon by
-/// detaching the sub-model and **re-parenting it** at the sheath point (`0x60b590` → `0x712f70`) —
-/// the model instance, and everything riding it, survives the swap. Rebuilding a unit's whole kit
-/// on any change did neither: drawing a sword respawned the shoulders' and helm's emitters too, and
-/// every orphaned pool then lived out its lifespan FROZEN in world space (`particles::sim`'s drain)
-/// — the sparkle cloud that hung behind the character on every weapon draw and every step of the
-/// login gear cascade.
+/// Spawn each changed slot's item model under its attachment's joint once the model has built.
+/// The diff is per slot, and a new attach point alone moves the root: the reference's sheath
+/// paths touch only the weapon and quiver ids (`0x611770`) and stow a melee weapon by re-parenting
+/// its model (`0x60b590`, `0x712f70`), so the model and everything riding it survive.
 #[allow(clippy::type_complexity)]
 pub(in crate::entities) fn attach_held_items(
     mut commands: Commands,
@@ -134,32 +105,18 @@ pub(in crate::entities) fn attach_held_items(
         Entity,
         Option<&UnitAppearFade>,
         Option<&benilla_world::interior::BodyBakeCenter>,
-        // The unit root's own transform — its scale is the wire `NetEntity::scale` the streamer
-        // writes (`entities::attach`), and the held effects' draw-order rung is measured in the
-        // world yards that scale produces.
         Option<&Transform>,
-        // The WEARER's rig, for its instance slot — the fallback an attached model's parts carry
-        // in their tag when they have no slot of their own, so the wearer's body tint still
-        // reaches them (the reference's attached models inherit the parent CM2's
-        // computed colours, `0x714000`). An item that owns a slot carries its own instead and
-        // inherits the tint up the `ParentModel` chain: the `welds_billboard` joint rig,
-        // and — since 1609 — every ordinary attached model, which rides one rigid palette frame
-        // composed in this rig's frame rather than an absolute world matrix.
+        // The wearer's slot, which a slotless item's parts carry so the body tint reaches them;
+        // an attached model inherits its parent's computed colours (`0x714000`).
         Option<&benilla_world::rig_palette::RigSkin>,
-        // The wearer's pose buffer: the attach joint spawns on first demand from the composed
-        // pose (`RigPose::anchor_for`) — a weapon equipped in combat seats at the
-        // live pose, never the rest pose.
+        // The attach joint spawns on demand from the live pose, never the rest pose.
         Option<&mut benilla_world::rig_anim::RigPose>,
     )>,
     held: Option<Res<ItemDisplays>>,
     time: Res<Time>,
     mut seats: SeatWriters,
-    // The MOVE path re-seats a rider in place: an attach-point change is the one edit that leaves
-    // the item's entity alive while changing the bone its palette frame is composed from (1609).
+    // A move keeps the item alive but changes the bone its palette frame is composed from.
     mut movers: Query<&mut benilla_world::rig_rider::RigRider>,
-    // Every attached model with a skeleton allocates a palette slot of its own: one rigid frame in
-    // the wearer's rig frame (1609), or — for a display that welds geometry to a billboard bone,
-    // which has no correct rigid placement at all — its own camera-replaced joint rig.
     mut palettes: ResMut<benilla_world::rig_palette::RigPalettes>,
 ) {
     let Some(held) = held else {
@@ -169,11 +126,7 @@ pub(in crate::entities) fn attach_held_items(
     for (items, bones, attached, entity, unit_fade, body_center, unit_tf, skin, mut pose) in
         &mut units
     {
-        // A held item / helm / shoulder resolves and spawns asynchronously (a template round trip, a
-        // model load) — often *after* the body has already armed its appear-fade (decision 0032 is a
-        // per-unit property: the reference fades the whole unit, attachments included, as one). Read
-        // the unit root's fade clock once per unit so every part spawned below joins the same ramp
-        // instead of popping in opaque.
+        // The reference fades a unit and its attachments as one, so a late part joins the ramp.
         let ctx = WearerCtx {
             wearer: entity,
             bones,
@@ -183,8 +136,7 @@ pub(in crate::entities) fn attach_held_items(
             body_center: body_center.map(|c| c.0),
             scale: unit_tf.map_or(1.0, |t| t.scale.max_element()),
         };
-        // Diff against what's spawned; skip when unchanged. A slot whose model hasn't built parts yet
-        // is masked out of `next` so it stays "not yet applied" and re-attaches once the parts exist.
+        // A slot whose model has not built stays unapplied, and attaches once it has.
         let mut next = items.clone();
         for slot in next.slots.iter_mut() {
             let ready = slot.is_some_and(|hs| {
@@ -218,9 +170,7 @@ pub(in crate::entities) fn attach_held_items(
             if was == wants {
                 continue;
             }
-            // The MOVE: same item, new attach point (the sheath swap). Everything riding the root
-            // — meshes, cards, glow instances, lights, ribbons and the live particle pools that
-            // owner-follow it — comes along, and the cached booth seats shift with it.
+            // The move: same item, new attach point; everything riding the root comes along.
             if let (Some(w), Some(n), Some(root)) = (was, wants, *root) {
                 if w.same_item(&n) {
                     if let Some((&(bone, offset), &(_, old))) = ctx
@@ -237,10 +187,7 @@ pub(in crate::entities) fn attach_held_items(
                             commands
                                 .entity(root)
                                 .insert(Transform::from_translation(offset));
-                            // The rider's frame is composed from (bone, offset), so the move has
-                            // to carry it — otherwise a sheathed sword keeps drawing at the hand
-                            // it was drawn from while its entity, its glow and its emitters all
-                            // travel to the hip (1609).
+                            // The rider's frame is composed from (bone, offset): carry it too.
                             if let Ok(mut rider) = movers.get_mut(root) {
                                 rider.bone = bone;
                                 rider.local = offset;
@@ -255,8 +202,7 @@ pub(in crate::entities) fn attach_held_items(
                     }
                 }
             }
-            // Otherwise this slot really is a different item (or none): tear the old one down —
-            // model gone, effects gone with it — and build the new one.
+            // A different item, or none: rebuild.
             if let Some(old) = root.take() {
                 commands.entity(old).despawn();
             }
@@ -285,9 +231,7 @@ pub(in crate::entities) fn attach_held_items(
     }
 }
 
-/// Spawn one slot's item model under its attach point, with everything that rides it: the mesh
-/// parts, the camera-facing cards, the booth mirrors, the item glow, the emitters, the lights and
-/// the ribbons. `None` when the display has no built parts or the body has no such attach point.
+/// Spawn one slot's item model and everything riding it, if its parts and attach point exist.
 fn spawn_slot(
     commands: &mut Commands,
     palettes: &mut benilla_world::rig_palette::RigPalettes,
@@ -301,29 +245,20 @@ fn spawn_slot(
     let (bones, joined, now) = (ctx.bones, ctx.joined, ctx.now);
     let dm = held.models.get(&(hs.display, hs.kind))?;
     let parts = dm.parts.as_ref()?;
-    // Body model has no such attach point (a non-character skeleton) — hold nothing.
     let &(bone, offset) = bones.points.get(&hs.attach)?;
-    // The attach joint, spawned on first demand from the wearer's composed pose.
     let joint = pose?.anchor_for(commands, entity, bone)?;
     let root = commands
         .spawn((
             Transform::from_translation(offset),
             Visibility::default(),
-            // This item model is CHAINED to the body wearing it (`0x712f70` attach → the
-            // `[model+0x1cc]` parent link): the wearer's computed render alpha multiplies
-            // everything this root carries, and everything chained below it in turn — its glow
-            // instances included.
+            // Chained to the wearer (`0x712f70` sets `[model+0x1cc]`): the wearer's render alpha
+            // multiplies everything under this root, glow instances included.
             benilla_world::model_fade::ParentModel(entity),
         ))
-        // Chain-only visibility (benilla_world::vis_chain): the wrapper renders nothing —
-        // the item's parts and glows are the children.
         .vis_chain_only()
         .id();
     commands.entity(joint).add_child(root);
-    // The item/enchant glow: its instances hang off the ITEM's own
-    // attachment points, so they are children of this root — spawned by
-    // [`super::item_glow::attach_item_glows`] once the glow models build, and reaped with
-    // the root on any gear/sheath change, which is the whole lifetime rule.
+    // The glow hangs off the item's own attachment points, so it lives and dies with this root.
     if hs.visual != NO_GLOW {
         commands
             .entity(root)
@@ -331,39 +266,28 @@ fn spawn_slot(
                 display: hs.display,
                 kind: hs.kind,
                 visual: hs.visual,
-                // The item's seat on the BODY, carried so the glow attach can publish its own
-                // booth mirrors at a seat composed from it — the glow spawns
-                // asynchronously and knows only this root. The attach id rides along for the
-                // same reason: a glow is chained UNDER the item, so the reference's attach reset
-                // takes it exactly when it takes the item ([`crate::portrait::attach_reset`]).
+                // The item's seat, for the glow's booth mirrors, and its attach id, so the
+                // widgets' attach reset takes the glow with the item.
                 bone,
                 offset,
                 attach: hs.attach,
             });
     }
-    // The engine-drawn bowstring — for the drawn BOW only: the ranged slot's
-    // left-hand fork (a bow is the one ranged weapon placed in HAND_LEFT; the client
-    // registers the string callback bow-only, from the ranged-draw path). The `$WTT`/
-    // `$WTB` anchors alone are NOT the gate — they are generic weapon-TRAIL begin/end
-    // markers (`WTBT`/`WTTT`, the swing-trail vertex build `0x6c67f0`) that melee
-    // weapons author too; keying on their presence drew a phantom "bowstring" chord
-    // across the Whirlwind Axe's blade tips.
+    // The bowstring, for a drawn bow only, the ranged slot in the left hand: `0x611e10` registers
+    // `0x611ff0` for subclass Bow. The `$WTT`/`$WTB` markers are not the gate, as melee weapons
+    // author them too for the swing trail (`0x6c67f0`).
     if slot_idx == 2 && hs.attach == attach_id::HAND_LEFT {
         if let Some([top, bottom]) = dm.string_anchors {
             commands.entity(root).insert(crate::bowstring::Bowstring {
                 owner: entity,
-                // Bone AND offset: the prop flexes, so the tips move.
+                // Bone and offset: the prop flexes, so the tips move.
                 top,
                 bottom,
             });
         }
     }
-    // The **weapon swing trail's** object
-    // — the reference's `WTOBJECT`, built per weapon HAND by `0x608d60` on the model it finds at
-    // that hand's attachment and freed with it. This is the first-class consumer decision 0531
-    // named and deferred: the `$WTB`/`$WTT` pair is a *trail* marker, and the bowstring above is
-    // the special case, not the rule. `0x6c67f0`'s `0x7130e0` presence gate is exactly the
-    // `string_anchors` `Option` — a weapon authoring only one marker draws nothing at all.
+    // The swing trail's `WTOBJECT`, one per weapon hand (`0x608d60`) and freed with the model,
+    // for a model with both markers (`0x6c67f0`'s `0x7130e0` presence gate).
     if slot_idx <= 1 {
         if let Some([top, bottom]) = dm.string_anchors {
             commands
@@ -371,11 +295,8 @@ fn spawn_slot(
                 .insert(crate::weapon_trail::WeaponTrail::new(top.1, bottom.1));
         }
     }
-    // The fishing line's near anchor (`0x61f780`): a MAINHAND prop
-    // whose model authors `$CCH` is the pole (the reference gates on ItemCache {class 2, subclass
-    // 20} + the marker's presence; exactly one weapon model in the chain authors the marker, so
-    // presence alone is data-equivalent — unlike the bow's trail-marker trap above, which is why
-    // the bowstring can't key the same way). The drawer spans it to the owner's channel bobber.
+    // The fishing line's near anchor (`0x61f780`). The reference gates on class 2 subclass 20 and
+    // `$CCH`; only one weapon model in the data authors `$CCH`, so the marker alone is equivalent.
     if slot_idx == 0 {
         if let Some(tip) = dm.cch_marker {
             commands
@@ -383,40 +304,18 @@ fn spawn_slot(
                 .insert(crate::fishing_line::FishingPoleTip { owner: entity, tip });
         }
     }
-    // **The RANGED PROP's own animation** — benilla's `[CGUnit+0xd24]`. The
-    // reference keeps the equipped ranged weapon's M2 *instance* and re-arms its animation from the
-    // body's `$BWP`/`$BWR` keyframes: BowPull(160) on the pull, and on the release either Stand(0)
-    // (a bow's limbs relax) or **BowRelease(161)** — which on a firearm is the muzzle blast, seven
-    // particle emitters keyed to zero in Stand and to a 0.2 s burst in 161. See
-    // [`crate::ranged_flex`] for the byte law and the corpus measurement.
-    //
-    // So this one held model is NOT the lane's "rests at bind pose" case, and it earns the three
-    // things a resting attach model is denied: a pose buffer, a player, and bone ANCHORS for its
-    // emitters (bone 2 of every firearm is keyed +90° in 161 — that rotation is what aims the blast
-    // down the barrel). The gate is the asset: 46 of the 571 shipped weapon models author 160 or
-    // 161, all of them bows, crossbows and firearms, and nothing else in the corpus does.
+    // The ranged prop (`[CGUnit+0xd24]`) animates off the body's `$BWP`/`$BWR` keys: BowPull (160)
+    // on the pull, then Stand or BowRelease (161), a firearm's muzzle blast (`crate::ranged_flex`).
+    // So it gets a pose, a player and bone anchors; only bows, crossbows and firearms author them.
     let flexes = slot_idx == 2
         && !dm.skeleton.joints.is_empty()
         && dm.animations.as_ref().is_some_and(|a| {
             a.owns(crate::ranged_flex::BOW_PULL) || a.owns(crate::ranged_flex::BOW_RELEASE)
         });
-    // **The item rig** (withdrawn by 0847, RESTORED by 0854) — the one case an
-    // attach model runs a joint palette. 0847 pulled it believing a spherical billboard swept the
-    // spikes through the plate; that was wrong (the spikes run ALONG their bone, worst vertex
-    // 12° off axis, so the arc never existed), and the byte answer is that the reference billboards
-    // an attached model exactly as it does a standalone one (`0x718657`–`0x71876f`).
-    // A
-    // display whose geometry is WELDED to a billboard bone (`welds_billboard`: the R14 pauldron's
-    // two spikes, whose root rings are 50/50 with the plate) has no correct rigid placement at all;
-    // 0839 stopped tearing it into a card, which left it whole and *still*. The reference bends it
-    // by blending the billboard bone's camera-replaced palette row per vertex (`0x71a460`) — so
-    // we build exactly that: the joint hierarchy, a palette slot, and the
-    // [`benilla_world::billboard::BillboardJointRig`] that rewrites the billboard joints' world rotations.
-    //
-    // Nothing else about the item lane's "rests at bind pose" law moves: no `AnimationPlayer`, no
-    // global-sequence drive — all seven affected models are **keyless** (`m2bones`: not one
-    // T/R/S key between them), so every non-billboard joint's palette row is the identity the
-    // static mesh already drew, and the emitters/lights/ribbons below keep riding `root`.
+    // The item rig, for geometry welded to a billboard bone (an R14 pauldron's spikes): the
+    // reference billboards an attached model like a standalone one (`0x718657`..`0x71876f`),
+    // blending the bone's camera-replaced row per vertex (`0x71a460`). All seven such models are
+    // keyless, so no other joint moves.
     let item_rig = dm
         .inverse_bindposes
         .as_ref()
@@ -429,15 +328,10 @@ fn spawn_slot(
             {
                 commands.entity(root).insert(bb);
             }
-            // Slot 0 (table full, warned once) ⇒ no rig: the parts below fall back to the static
-            // mesh and the wearer's slot, i.e. exactly the pre-0841 look. Never a crash, never a
-            // missing shoulder.
+            // A full palette table gives no rig: the static mesh and the wearer's slot instead.
             let rig = benilla_world::rig_palette::RigSkin::allocate(palettes, joints, ibp.clone())?;
             let slot = rig.slot;
             commands.entity(root).insert(rig);
-            // The lane is otherwise invisible from outside the renderer — seven models in 9691 take
-            // it, and a run where the gate silently stopped firing looks exactly like a run where
-            // nothing was equipped. Naming the slot is what lets a probe say which it was.
             debug!(
                 "item rig: display {} welds a billboard bone → palette slot {slot} ({} bones)",
                 hs.display,
@@ -445,25 +339,12 @@ fn spawn_slot(
             );
             Some(slot)
         });
-    // **The rider** — the other, and now ordinary, reason an attached model owns a
-    // palette slot. It is not the item's skeleton: an item rests at bind pose, so every row of it
-    // is the same placement matrix, and the lane writes that ONE frame — composed in the WEARER's
-    // rig frame, with the wearer's world position riding the slot's `rig_origin`.
-    //
-    // The picture is unchanged by construction (bind pose ⇒ `row = F` ⇒ the static mesh's own
-    // placement); what changes is that the placement is never an absolute f32 world coordinate.
-    // Built as a `~9500 + ~1` sum every frame, it landed on the 0.98 mm ULP grid of the large map
-    // axis and the helm snapped a whole ULP sideways every other frame while the body under it
-    // moved exactly — the jitter the director reported on the Goldshire guard. See
-    // [`benilla_world::rig_rider`] for the measurement and the residuals.
-    //
-    // A boneless display has no skinned twin to draw and keeps the old route; so does a palette
-    // with no room, which is the same graceful fallback the `welds_billboard` lane already had.
+    // The rider: an item at bind pose draws through one palette frame composed in the wearer's rig
+    // frame, never an absolute f32 world matrix, whose ~9500 yd sums fall on a 0.98 mm grid and
+    // jitter. A boneless display, or a full palette, keeps the static mesh.
     let rider = match item_rig {
         Some(_) => None,
-        // A slot only earns its keep if something will actually SKIN through it: a display with
-        // bones but no skinned twin on any drawn part (a card-only model) would take a slot that
-        // no vertex ever indexes, and keep the absolute placement anyway.
+        // Only when some drawn part has a skinned twin to index the slot.
         None => (!dm.skeleton.joints.is_empty()
             && parts
                 .iter()
@@ -472,9 +353,8 @@ fn spawn_slot(
             benilla_world::rig_palette::RigSkin::allocate_bones(
                 palettes,
                 dm.skeleton.joints.len() as u32,
-                // A resting rider needs no inverse bindposes — at bind pose every row collapses to
-                // the placement and 1609's write never consults them. A FLEXING prop's rows are
-                // `F × model[b] × ibp[b]`, so its slot carries the real handle.
+                // A resting rider's rows are the placement alone; a flexing prop's are
+                // `F × model[b] × ibp[b]`.
                 if flexes {
                     dm.inverse_bindposes.clone().unwrap_or_default()
                 } else {
@@ -497,17 +377,9 @@ fn spawn_slot(
             slot
         }),
     };
-    // The flexing prop's own pose buffer and clock (see `flexes` above). The collapsed lane
-    // ([`benilla_world::rig_anim::RigPose`] — no joint entities; bone anchors are minted on demand
-    // by the emitter loop below), armed on the model-load bootstrap the reference gives every M2
-    // instance: animation id 0 through the model's own `playableAnimationLookup`. From there
-    // [`crate::ranged_flex`] re-arms it per keyframe.
-    //
-    // Its palette rows stay the RIDER lane's — `RigRider` is still on this root, and 2281 taught
-    // that lane to compose a pose rather than repeat one frame. That is deliberate: composing this
-    // prop from its own absolute `GlobalTransform` instead would hand the bow back the 0.98 mm
-    // one-ULP staircase 1609 exists to have removed (the attach point is a ~1 yd quantity summed
-    // onto a ~9500 yd one, recomputed every frame).
+    // The flexing prop's pose and clock, armed as the reference arms every M2 at load (animation 0
+    // through its `playableAnimationLookup`). Its palette rows stay the rider's, composed in the
+    // wearer's frame, not from its own `GlobalTransform`.
     let mut prop_pose = (flexes && rider.is_some()).then(|| {
         let anims = dm.animations.as_ref().expect("flexes ⇒ animations");
         let mut player = AnimationPlayer::default();
@@ -525,16 +397,11 @@ fn spawn_slot(
         ));
         benilla_world::rig_anim::RigPose::new(root, &dm.skeleton)
     });
-    // The instance slot every part below carries in its `MeshTag`. The WEARER's only when the item
-    // has no palette slot of its own — that is what puts a tinted body's colour on a boneless
-    // helm. An item WITH a slot must carry its own, because the vertex stage
-    // indexes the palette with the same field; the wearer's tint reaches it through the
-    // `ParentModel` chain instead, which is the reference's own route for an attached model's
-    // colours (`0x714000`, `aura_visual::chained_tint`).
+    // The slot each part's `MeshTag` carries: the item's own when it has one, as the vertex stage
+    // indexes the palette by it and the tint arrives up the `ParentModel` chain (`0x714000`),
+    // else the wearer's, which carries the body's tint.
     let rig_slot = item_rig.or(rider).unwrap_or(ctx.rig_slot);
-    // Billboard batches (the torch's glow card) collected for the world-root card spawn
-    // below — as plain children they'd render at the item root (the grip), not the
-    // authored pivot (the torch head).
+    // Billboard batches spawn as world-root cards below; as children they would sit at the grip.
     let mut billboard_parts = Vec::new();
     commands.entity(root).with_children(|parent| {
         for part in parts {
@@ -542,16 +409,11 @@ fn spawn_slot(
                 billboard_parts.push((info.clone(), part));
                 continue;
             }
-            // Per-part join decision: `joined` (the unit's clock) combined with whether this
-            // part is fade-capable at all. A pending part opens on the blend twin at ≈0 and a
-            // joiner at the ramp's *current* alpha, so neither flashes for a frame.
+            // A part joining the unit's fade opens at the ramp's current alpha: it never flashes.
             let set = item_fade_set(part);
             let effective = PartFade::resolve(joined, &set);
             let (init_mat, tag_alpha) = effective.seed(&set, now);
-            // An item with a palette slot draws the SKINNED twin — every part of it, not only a
-            // welded batch: the model rests at bind pose, so each non-billboard bone's palette row
-            // is the placement matrix itself and the batches land pixel-for-pixel where the static
-            // mesh had them. Slotless (boneless display, or a full palette) falls back to `mesh`.
+            // An item with a palette slot draws every part's skinned twin, a slotless one `mesh`.
             let skinned = item_rig.or(rider).and(part.skinned_mesh.as_ref());
             let mut child = parent.spawn((
                 Mesh3d(skinned.unwrap_or(&part.mesh).clone()),
@@ -561,14 +423,9 @@ fn spawn_slot(
                     kind: ModelKind::Creature,
                     blend: part.blend,
                 },
-                // The picker's triangles: the `WOW_PICK` probe names worn gear
-                // through `ModelPart`, and the render meshes are `RENDER_WORLD`-only.
+                // The picker's triangles; the render meshes are `RENDER_WORLD`-only.
                 benilla_world::interact::PickMesh(part.geometry.clone()),
-                // The portrait booth mirrors this rider ([`crate::portrait`]): steady
-                // material (not the fade twin) + where it sits, so the bake can seat it at
-                // the bone's bind-pose global (the booth spawns no skeleton). It stays the
-                // STATIC mesh even for a rigged item — the booth has no palette to skin
-                // through, and bind pose is what it wants to bake anyway.
+                // The booth's mirror: the static mesh and steady material at the bone's bind pose.
                 crate::portrait::PortraitRider {
                     static_mesh: part.mesh.clone(),
                     material: part.material.clone(),
@@ -578,42 +435,20 @@ fn spawn_slot(
                 },
             ));
             if skinned.is_some() {
-                // The palette replaces this part's world matrix outright, so its model-local
-                // `Aabb` below is not the volume it draws in — the same reason the effect lane's
-                // skinned parts opt out (`spell_fx`). It also keeps the reference's own rule that
-                // a scene object is elected ONCE, at the body root, never per batch (1473) — which
-                // is what a rider's part would otherwise start doing, since the skinned twin keeps
-                // main-world data and so earns the `calculate_bounds` the static twin never had.
+                // The palette replaces the part's world matrix, so its `Aabb` is not where it
+                // draws; and the reference elects a scene object once, at the body root.
                 child.insert((
                     benilla_world::rig_palette::RigPart(root),
                     bevy::camera::visibility::NoFrustumCulling,
                 ));
             }
-            // Interior-light parity with the body: both material variants + a MeshTag, so the
-            // classifier relights the weapon inside a WMO room like it does its wielder. While
-            // joining the unit's appear-fade the tag carries its alpha instead — the classifier
-            // yields via its own `Without<RenderFade>`/`Without<PendingAppearFade>` filter, same
-            // as a body part.
-            // Anchored at the WEARER's root: an equipped item M2 aliases its wearer's
-            // light collector by pointer (`[item+0x3b8]=[wearer+0x3b8]`, `0x718960`), so it
-            // never runs its own classify/footprint at the carried position. The animating hand
-            // joint once anchored these, and a swing alone could trip the resample gate and
-            // split the shield's light from the body's (director-caught, 2026-07-13).
-            // The fold reference is the wearer's BODY centre for the same reason.
-            //
-            // The tag is unconditional (it used to ride the classifier's `Some`): it carries
-            // the WEARER's instance slot, which is what puts a tinted body's colour on its
-            // helm and shoulders — the director's report on the dwarf Stoneform tint. A part
-            // with no interior variant got no tag at all before, so it was also invisible to
-            // the ground-shade ramp that darkens its wielder; both now follow the body, which
-            // is the same light-collector aliasing the comment above describes.
+            // Lit as its wearer, whose light collector an equipped item aliases
+            // (`[item+0x3b8] = [wearer+0x3b8]`, `0x718960`). Every part gets a tag, interior
+            // variant or not, so the tint and the ground shade reach it.
             child.insert(MeshTag(benilla_world::mesh_tag::spawn_tag(
                 rig_slot, tag_alpha,
             )));
-            // The item part's build-time bound: `calculate_bounds` can no longer
-            // derive one from the `RENDER_WORLD`-only static form's data. Skipped for a skinned
-            // part — it opted out of the frustum cull above, and a stale bound would only mislead
-            // the picker volume that reads it.
+            // The build-time bound, as the render mesh is `RENDER_WORLD`-only; none when skinned.
             if let (None, Some(aabb)) = (skinned, part.aabb) {
                 child.insert(aabb);
             }
@@ -626,46 +461,26 @@ fn spawn_slot(
             ) {
                 child.insert(lit);
             }
-            // The batch's authored **material alpha** — the combine's `colourAlpha × weight`
-            // (`0x707680`). An attach model spawns no rig of its own and rests in its file's first
-            // sequence, so its loops are PINNED there (the doodad lane's clock) while the tag
-            // compose stays the unit lane's, ordered against the appear-fade and the interior
-            // classifier exactly like the wearer's own batches.
-            // Skipping this drew every one of the 321 item models that dim a batch at full
-            // strength — the Hungering Cold's five glow cards blaze at 1.0 where the file says
-            // 0.30.
+            // The authored alpha, `colourAlpha × weight` (`0x707680`), pinned to the file's first
+            // sequence and composed into the tag in the unit lane's order.
             if let Some(anim) = &part.alpha_anim {
-                // `resting` is the attach model's pinned read — right for every held item but the
-                // one that plays sequences: a flexing prop's per-sequence alpha
-                // loops follow its own player, like a creature's do.
+                // A flexing prop's alpha follows its own player.
                 child.insert(if flexes {
                     benilla_world::doodad_anim::MatAnim::following(anim.clone(), root)
                 } else {
                     benilla_world::doodad_anim::MatAnim::resting(anim.clone())
                 });
             }
-            // …and the batch's texture transform, on the same one predicate every
-            // other entity spawn asks. One held-item batch in the whole 1.12 corpus animates one —
-            // `Item\ObjectComponents\Shield\shield_epic_a_01`, the Drillborer Disk, whose
-            // Ragnaros-skinned lava is a 6.7 s global-sequence scroll — which is exactly why the
-            // marker is a property of the batch here and not of a list somebody maintains.
             if part.uv_loops().animates() {
                 child.insert(benilla_world::doodad_anim::AnimMatPart);
             }
             effective.dress(&mut child, &set);
         }
     });
-    // The billboard cards: world-root entities FOLLOWING `root` — it sits
-    // at the attach offset under the hand joint, is fresh per attach, and despawns on a
-    // gear change, so the card's lifecycle and frame both come for free (same owner
-    // contract as the item's emitters below).
+    // The billboard cards: world-root entities following `root`, which they despawn with.
     for (info, part) in billboard_parts {
-        // …and, under `root`, the booth **mirror carrier** for that card.
-        // The card itself is a world-ROOT entity, so the portrait / paper-doll booths — which
-        // mirror the unit's dressed descendants — cannot see it; without this marker an
-        // item's camera-facing batch (a wand's gem, this torch's `GLOWWHITE32` halo) simply
-        // did not exist in those panes. Its seat is the attach point **plus the batch's own
-        // model-local pivot**: an item model spawns no rig, so nothing else bakes that pivot.
+        // The booths mirror only the unit's descendants, so the card's mirror sits under `root`,
+        // seated at the attach point plus the batch's own pivot.
         commands.entity(root).with_child((
             Transform::default(),
             Visibility::default(),
@@ -678,11 +493,7 @@ fn spawn_slot(
                 attach: Some(hs.attach),
             },
         ));
-        // A card is a batch of the item's model and joins the wearer's appear-fade exactly like
-        // its mesh siblings above — same [`PartFade`], same seed, same arm. It used to spawn at
-        // a flat opaque with neither `RenderFade` nor `FadeMaterials`, which is why a weapon's
-        // glowing gems were already blazing before the character carrying them had faded in
-        // (director-reported on the Hungering Cold).
+        // A card joins the wearer's appear-fade like its mesh siblings.
         let set = item_fade_set(part);
         let effective = PartFade::resolve(joined, &set);
         let (init_mat, tag_alpha) = effective.seed(&set, now);
@@ -698,14 +509,10 @@ fn spawn_slot(
             benilla_world::interact::PickMesh(part.geometry.clone()),
             BillboardCard::following(&info, root),
         ));
-        // The card's build-time bound — same rule as its mesh siblings above.
         if let Some(aabb) = part.aabb {
             card.insert(aabb);
         }
-        // Same interior-light membership the item's mesh parts get above, through the same
-        // constructor and anchored at the same WEARER — so a held torch's
-        // glow card can never split from the arm holding it. …and the wearer's instance slot,
-        // like its mesh siblings: a tinted body colours the torch's glow card too.
+        // Tagged and lit as its mesh siblings, anchored at the wearer.
         card.insert(MeshTag(benilla_world::mesh_tag::spawn_tag(
             rig_slot, tag_alpha,
         )));
@@ -718,8 +525,7 @@ fn spawn_slot(
         ) {
             card.insert(lit);
         }
-        // The card's own share of the authored material alpha (the Hungering Cold's gems are
-        // keyed 0.30) — same pinned lane as the mesh parts.
+        // The card's authored alpha, pinned as the mesh parts' is.
         if let Some(anim) = &part.alpha_anim {
             card.insert(benilla_world::doodad_anim::MatAnim::resting(anim.clone()));
         }
@@ -728,26 +534,12 @@ fn spawn_slot(
         }
         effective.dress(&mut card, &set);
     }
-    // The item's own particle emitters — the held torch's flame (0130 phase 4: the same
-    // owner-follow rider as doodad emitters). `root` sits at the attach offset under the
-    // hand joint and its frame IS the item's model frame; a held item spawns no skeleton,
-    // so the rest pose applies and no pivot rebase is needed — the flame burns at its
-    // authored spot (the torch tip) and follows the hand through the swing. Free entities:
-    // they self-despawn with `root` via the owner contract (gear change, unit despawn).
-    // The spawn transform does two jobs, and neither is placing the emitter (the owner
-    // overwrites the position every frame): its TRANSLATION seeds the flicker RNG —
-    // root's entity bits de-sync two torch-bearers standing side by side — and its SCALE
-    // is the wearer's, which is what the effects' draw-order rung is measured in
-    // (`particles::owner_last_bias`). An item on a twice-size wielder reaches twice as
-    // far from its own origin, so its rung has to grow with it; reading the scale off a
-    // transform built as a bare RNG seed silently pinned every held effect at 1×.
+    // The item's emitters: free entities following `root` at rest pose, despawned with it. The
+    // spawn transform does not place them: its translation seeds the flicker RNG per item and its
+    // scale is the wearer's, which the effects' draw-order rung is measured in.
     let spawn_tf = Transform::from_translation(Vec3::splat(root.to_bits() as f32))
         .with_scale(Vec3::splat(ctx.scale));
-    // The booth mirror for those same emitters: they spawn as FREE entities
-    // below (the owner contract), never unit descendants, so a booth that mirrors the dressed
-    // tree cannot see them — which is why the R14 pauldron's sparkle was absent from the paper
-    // doll exactly as it was from the select screen. One marker per item, on
-    // the root that already reaps with it.
+    // The booths' mirror of those emitters, which are not unit descendants.
     if !dm.emitters.is_empty() {
         commands
             .entity(root)
@@ -759,23 +551,10 @@ fn spawn_slot(
             });
     }
     for em in &dm.emitters {
-        // …with ONE exception to "the rest pose applies": a **billboard** bone in the
-        // emitter's chain. Its palette rows are replaced with the camera basis about its
-        // own pivot every frame and children multiply onto that, so the reference's
-        // emitter origin is `pivot + camBasis·(position − pivot)` — camera-dependent, and
-        // up to two chain-offsets away from where the rest pose puts it.
-        // The rig lane gets this from its joint palette; an item model has no rig, so the
-        // frame is realized as a mesh-less billboard card the emitter OWNS-follows
-        // (`BillboardCard::frame_following`). Nothing else in the chain is live: of the
-        // 95 item models whose emitters ride a billboard bone, none animates its chain.
-        //
-        // …and ONE exception to *that*: a **flexing ranged prop** does have a rig,
-        // so its emitter rides its BONE's anchor. The firearm muzzle bank hangs off bone 2, which
-        // BowRelease(161) keys a constant +90° about Y against Stand's 0° — on the root frame the
-        // blast sprays out of the receiver, on the bone it goes down the barrel. `bone_pivot`
-        // rebases the authored model-space origin into that bone's frame, exactly as the doodad and
-        // widget lanes do. A billboard chain still wins the fork above: it is camera-replaced, and
-        // no flexing model in the corpus has one.
+        // A billboard bone in the chain puts the reference's emitter origin at
+        // `pivot + camBasis·(position − pivot)`, so the emitter follows a mesh-less billboard frame
+        // at rest pose. A flexing prop's emitter rides its bone's anchor, rebased by `bone_pivot`:
+        // the firearm muzzle bone turns 90° in BowRelease.
         let posed = prop_pose
             .as_mut()
             .filter(|_| em.billboard.is_none())
@@ -809,30 +588,17 @@ fn spawn_slot(
             spawn_tf,
             benilla_world::particles::EmitterFrames {
                 owner: Some(posed.unwrap_or(owner)),
-                // A held item is an attached model — the flame fans with the swing.
-                // The cloud anchors at the MODEL; the bone composes births only.
+                // The cloud anchors at the model; the bone composes births only.
                 anchor: Some(root),
-                // The item model is destroyed when the item is replaced or unequipped, and the
-                // reference frees a model's emitters at its dtor — so no cloud is left hanging in
-                // the air behind the character. A sheath swap no longer comes
-                // through here at all: the root is MOVED, and this pool rides it.
+                // The reference frees a model's emitters with the model: no cloud is left behind.
                 on_owner_loss: benilla_world::particles::OwnerLoss::Free,
-                // This emitter's own model instance is the item root; `ParentModel` above chains
-                // it to the wearer, and the chain is what an ATTACHED model's composed alpha is
-                // (`0x714000`) — so the sparkle on a pauldron fades in with the body wearing it
-                // and vanishes with the avatar in first person.
+                // The item root, whose chain is an attached model's alpha (`0x714000`).
                 alpha: Some(root),
-                // The light node is the WEARER's, never the item's: the reference has one node
-                // per object and aliases the wearer's collector into each attached model
-                // (`[item+0x3b8] = [wearer+0x3b8]`, `0x718960`) — the same rule this item's mesh
-                // batches already classify under (`BodyBakeCenter`).
+                // The wearer's light node, aliased into each attached model (`0x718960`).
                 light_node: Some(entity),
             },
-            // A held item spawns no rig; its emitters run the item model's own **loader-idle**
-            // slot on the spawn clock (the torch burns always — the doodad law). A flexing ranged
-            // prop does have a player, and its rate/gate tracks read the sequence it is actually
-            // on: the gun's blast is keyed to zero in Stand and to a 0.2 s burst in BowRelease,
-            // so a pinned clock would emit nothing on it for ever.
+            // A resting item's emitters run its loader-idle sequence; a flexing prop's the one it
+            // plays, since a gun's blast is keyed only in BowRelease.
             if flexes {
                 benilla_world::particles::EmitClock::Host(root)
             } else {
@@ -840,18 +606,9 @@ fn spawn_slot(
             },
         );
     }
-    // The item's own M2 point light — **the held torch's glow** (decision 0016's law on the
-    // entity half of the scene; see `super::carried_light`). `Club_1H_Torch_A_01.m2` — the
-    // torch every torch-bearing NPC carries — authors exactly one: a warm
-    // `(0.467, 0.290, 0.133) × 3.0` point light 0.58 yd up the shaft. It rides `root` like
-    // the emitters and for the same reason (the item poses at rest, so its model space IS
-    // the bone-local frame), which walks it through the hand's swing; the fence rails and
-    // grass around the bearer then gather it like any other scene point light.
+    // The item's own M2 point lights (a held torch's glow), riding `root` like the emitters.
     spawn_carried_lights(commands, &dm.lights, root, |_| None);
-    // The item's ribbon trails (weapon enchant streaks): ride the item root — a held item
-    // poses at rest, so the bone-local origin is model-space (no pivot rebase). A held item
-    // rests in Stand (anim 0): a thrown weapon's trail is keyed dark there, so the flight
-    // ribbon never shows in the hand — it lights only on the InFlight missile.
+    // The ribbons ride the item root in Stand, where a thrown weapon's flight trail is keyed dark.
     for rb in &dm.ribbons {
         benilla_world::ribbons::spawn_ribbon(
             commands,
@@ -859,14 +616,11 @@ fn spawn_slot(
             root,
             false,
             ctx.scale,
-            // A worn item rests in `Stand` and nothing on it plays anything else — the one lane
-            // where the enable gate genuinely has a fixed answer for the instance's life.
+            // Stand, the sequence a worn item rests in.
             benilla_world::ribbons::RibbonSeq::Fixed(0),
-            // Its own model instance — chained to the wearer above — so an enchant streamer is
-            // gone with the avatar in first person and absent until the body is shown.
+            // The item root, chained to the wearer, for its alpha.
             Some(root),
-            // No fade sphere: a carried item is not a placed model — it rides its wearer's
-            // residency, and its streamer the wearer's render alpha one line up.
+            // No fade sphere: a carried item follows its wearer's residency.
             None,
         );
     }
@@ -897,9 +651,7 @@ mod tests {
     use super::super::{HeldSlot, ItemModelKind};
     use super::*;
 
-    /// One synthetic item part. `interior` picks whether it carries an interior material variant —
-    /// the axis that used to decide whether the part got a `MeshTag` at all, and so whether it could
-    /// ever be tinted or ground-shaded.
+    /// One synthetic item part, with or without an interior material variant.
     fn part(interior: bool) -> EntityPart {
         EntityPart {
             mesh: Handle::default(),
@@ -930,8 +682,7 @@ mod tests {
         }
     }
 
-    /// A mesh handle distinguishable from the static form's `Handle::default()` — so "which of the
-    /// two forms did the part actually spawn with" is an assertion rather than a guess.
+    /// A mesh handle distinct from the static form's `Handle::default()`.
     fn skinned_handle() -> Handle<Mesh> {
         Handle::Uuid(
             bevy::asset::uuid::Uuid::from_u128(0x5c1_11ed),
@@ -939,14 +690,8 @@ mod tests {
         )
     }
 
-    /// Spawn a wearer with one SHOULDER slot whose display optionally welds geometry to a billboard
-    /// bone, and run the attach. Returns the part tags, the wearer's own instance
-    /// slot, the item root's palette slot (`None` when it spawned no rig), and the mesh the part
-    /// actually drew with.
-    /// What the shoulder harness reports: the spawned parts' tags, the wearer's own slot, the
-    /// item's slot (the one that is not the wearer's), the mesh it drew, and — the fact that
-    /// separates 1609's rider from 0841's joint rig on the same shape — the [`RigRider`] the item
-    /// root carries, if any.
+    /// What the shoulder harness reports: the parts' tags, the wearer's and the item's palette
+    /// slots, the mesh drawn, the item root's rider and the joint rig count.
     struct Attached {
         tags: Vec<u32>,
         wearer_slot: u16,
@@ -969,9 +714,7 @@ mod tests {
         p.welded_billboard = welded;
         p.skinned_mesh = Some(skinned_handle());
         dm.parts = Some(vec![p]);
-        // The shoulder's own skeleton: a root plus one spherical-billboard spike, the shape
-        // `LShoulder_Plate_PVPAlliance_A_01` authors. Both halves are needed — the gate is
-        // "welded geometry AND a skeleton to pose it with".
+        // A root and one spherical-billboard spike, as `LShoulder_Plate_PVPAlliance_A_01` has.
         dm.skeleton = benilla_assets::ModelSkeleton {
             joints: vec![
                 benilla_assets::ModelJoint {
@@ -1029,7 +772,7 @@ mod tests {
             .iter(app.world())
             .map(|t| t.0)
             .collect();
-        // The item root's rig is the one that is NOT the wearer's (the wearer holds its own).
+        // The item root's slot is the one that is not the wearer's.
         let item_rig = app
             .world_mut()
             .query::<&benilla_world::rig_palette::RigSkin>()
@@ -1063,13 +806,11 @@ mod tests {
         }
     }
 
-    /// The welded case, named for the assertion that reads it.
     fn attach_a_welded_shoulder() -> Attached {
         attach_a_shoulder(true)
     }
 
-    /// Spawn a wearer with one helm slot and run the attach. Returns the spawned parts' tags plus the
-    /// wearer's own instance slot (`0` when `rigged` is false — a boneless wearer).
+    /// Attach one helm; returns the parts' tags and the wearer's slot (0 for a boneless wearer).
     fn attach_a_helm(rigged: bool, interior: bool) -> (Vec<u32>, u16) {
         const HELM_KIND: ItemModelKind = ItemModelKind::Helm { race: 3, sex: 0 };
         let mut app = App::new();
@@ -1126,10 +867,7 @@ mod tests {
         (tags, slot)
     }
 
-    /// **The director's report (dwarf Stoneform tinted the body but not the helm/shoulders).** An
-    /// attachment carries its WEARER's instance slot, so the body tint reaches it — decision 0812's
-    /// named gap, closed. The reference's own rule: an attached model inherits the parent CM2's
-    /// computed colours (`0x714000`).
+    /// An attached model inherits its parent's computed colours (`0x714000`).
     #[test]
     fn an_attachment_wears_its_wearers_instance_slot() {
         for interior in [true, false] {
@@ -1144,9 +882,6 @@ mod tests {
         }
     }
 
-    /// The tag is unconditional now. It used to ride the interior classifier's `Some`, so a part with
-    /// no interior variant carried none at all — invisible to the tint AND to the ground-shade ramp
-    /// that darkens its wielder. Both halves of that are asserted: a tag exists, and it is opaque.
     #[test]
     fn a_part_without_an_interior_variant_still_gets_a_tag() {
         let (tags, _) = attach_a_helm(true, false);
@@ -1155,8 +890,6 @@ mod tests {
         assert!((benilla_world::mesh_tag::alpha_of(tags[0]) - 1.0).abs() < 1.0 / 63.0);
     }
 
-    /// A wearer with no rig at all (a boneless model holding something) lands on the identity slot 0
-    /// rather than borrowing someone else's colour.
     #[test]
     fn a_rigless_wearer_leaves_the_slot_at_identity() {
         let (tags, _) = attach_a_helm(false, true);
@@ -1164,19 +897,7 @@ mod tests {
         assert_eq!(benilla_world::mesh_tag::rig_of(tags[0]), 0);
     }
 
-    /// **The item rig (restored by 0854).** A display whose geometry is welded to a
-    /// billboard bone has no correct rigid placement — 0839 stopped tearing it into a card, leaving
-    /// it whole and still. Such an item spawns a rig of its own, and the three things that makes
-    /// true are asserted together because any one of them alone is a silent no-op: the part draws
-    /// the **skinned** twin (a static mesh is never skinned — `WOW_RIG_SKIN` compiles off the vertex
-    /// layout, not the tag), it carries its OWN palette slot rather than the wearer's, and the root
-    /// really holds the `RigSkin` that slot belongs to.
-    ///
-    /// 0847 withdrew this and pinned the withdrawal with the mirror of this test; both are gone
-    /// again. The withdrawal's premise — a spherical billboard sweeping the spikes through the
-    /// plate — was refuted at the geometry and at the bytes (`0x718657`–`0x71876f`), and
-    /// [`benilla_world::billboard::tests::a_spike_along_its_bone_axis_points_screen_down_from_every_angle`]
-    /// is the standing guard that the arc stays absent in our own basis.
+    /// A display welded to a billboard bone gets its own joint rig (`0x718657`..`0x71876f`).
     #[test]
     fn a_welded_billboard_item_spawns_its_own_rig() {
         let a = attach_a_welded_shoulder();
@@ -1199,25 +920,13 @@ mod tests {
             Some(skinned_handle()),
             "…and draws the skinned twin"
         );
-        // The welded lane keeps its own camera-replaced JOINT rig — it is not a rigid frame, and
-        // that is exactly why 1609's rider cannot serve it (see `rig_rider`'s residuals).
+        // A welded display needs the camera-replaced joint rig; a rigid rider frame cannot bend.
         assert_eq!(a.joints, 1, "the welded item runs a billboard joint rig");
         assert!(a.rider.is_none(), "…and is not a rider");
     }
 
-    /// **The rider.** The counter-anchor, on the same harness: an ordinary item —
-    /// the 9684 models that weld nothing — now takes a palette slot too, but a different KIND of
-    /// one. It is one rigid frame composed in the wearer's rig frame, not a joint rig, and the
-    /// four things that makes true are asserted together because any one alone is a silent no-op:
-    /// the part draws the **skinned** twin (a static mesh is never skinned), it carries its OWN
-    /// slot rather than the wearer's (the vertex stage indexes the palette with that field), the
-    /// root holds a [`RigRider`] naming the wearer and the attach bone, and no joint rig was built.
-    ///
-    /// Until 1609 this test asserted the opposite — no slot, the wearer's tag, the static mesh —
-    /// because the ordinary lane placed an item through its entity's absolute `GlobalTransform`.
-    /// At Elwynn's ~9481 yards that sum lands on an 0.98 mm f32 grid and is rebuilt every frame,
-    /// so a standing guard's helm hopped a whole grid step every other frame while the body under
-    /// it moved exactly. The static-mesh route is what this test now forbids coming back.
+    /// An ordinary item rides one rigid frame in the wearer's rig, never an absolute f32 world
+    /// matrix, which at ~9500 yd falls on a 0.98 mm grid.
     #[test]
     fn an_ordinary_item_rides_one_rigid_frame_in_its_wearers_rig() {
         let a = attach_a_shoulder(false);
@@ -1240,19 +949,7 @@ mod tests {
         assert_eq!(a.joints, 0, "a rigid item builds no joint rig");
     }
 
-    /// **The ranged prop gets a clock, and only the ranged prop**.
-    ///
-    /// Four things have to be true together or the gun's muzzle blast never fires, and each one
-    /// alone is a silent no-op: the prop root carries a [`crate::ranged_flex::RangedProp`] naming
-    /// its wearer (that is how a `$BWR` key finds it), a [`benilla_world::rig_anim::RigPose`] and a
-    /// player (so 161 can be armed and posed at all), its emitter is **hosted on that root** rather
-    /// than pinned to the loader idle (the blast's gate track is keyed only in 161 — a pinned
-    /// emitter reads Stand's flat zero for ever), and the emitter rides its BONE's anchor rather
-    /// than the model root (bone 2 is what aims it down the barrel).
-    ///
-    /// The control is the same display in the MAINHAND slot: nothing is ever passed to the
-    /// reference's `[+0xd24]` arms but the ranged weapon, so a melee item keeps the resting lane —
-    /// no player, no pose, a pinned clock.
+    /// Only the ranged prop (`[+0xd24]`) gets a pose, a player and emitters on its bone and clock.
     #[test]
     fn a_flexing_ranged_prop_gets_a_pose_a_clock_and_hosted_emitters() {
         fn attach(slot_idx: usize, attach: u16) -> (App, Option<Entity>) {
@@ -1275,7 +972,7 @@ mod tests {
                         billboard: None,
                         parent_arm: None,
                     },
-                    // The muzzle bone the emitters hang off.
+                    // The muzzle bone the emitter hangs off.
                     benilla_assets::ModelJoint {
                         parent: 0,
                         local_translation: Vec3::X,
@@ -1293,7 +990,7 @@ mod tests {
                 clips: Vec::new(),
                 hand_close: [None, None],
                 playable_animation_lookup: Vec::new(),
-                // `owns(161)` — the gate, the reference's own `0x711960` question.
+                // `owns(161)`, the reference's `0x711960` test.
                 animation_lookup: {
                     let mut v = vec![0xffffu16; 162];
                     v[0] = 0;
@@ -1342,7 +1039,6 @@ mod tests {
             (app, Some(wearer))
         }
 
-        // The ranged slot (2), drawn in the right hand.
         let (mut app, wearer) = attach(2, attach_id::HAND_RIGHT);
         let wearer = wearer.unwrap();
         let (prop, owner) = app
@@ -1372,7 +1068,6 @@ mod tests {
             vec![Some(prop)],
             "its emitter reads the sequence the PROP is playing"
         );
-        // The emitter's owner frame is the muzzle bone's anchor, not the model root.
         let anchors: Vec<(Entity, u16)> = app
             .world_mut()
             .query::<&benilla_world::rig_anim::RigAnchor>()
@@ -1384,7 +1079,7 @@ mod tests {
             "the emitter minted the muzzle bone's anchor: {anchors:?}"
         );
 
-        // The control: the SAME display in the mainhand keeps the resting lane.
+        // The same display in the mainhand keeps the resting lane.
         let (mut app, _) = attach(0, attach_id::HAND_RIGHT);
         assert_eq!(
             app.world_mut()
@@ -1407,16 +1102,8 @@ mod tests {
         );
     }
 
-    /// **What a booth can see of an equipped item** (the paper-doll half).
-    /// An item model's camera-facing batch spawns as a world-ROOT card and its emitters as free
-    /// owner-followed entities — neither is a unit descendant, so the portrait / paper-doll booths,
-    /// which mirror the dressed tree, could not see either one and a worn item's effects were absent
-    /// from every pane. The attach must therefore publish a mirror for both, at the seat the booth
-    /// needs: the attach point **plus the batch's own model-local pivot** for a card (an item spawns no
-    /// rig, so nothing else bakes that pivot), the bare attach point for the effect host.
-    ///
-    /// Both offsets are asserted against a nonzero attach point AND a nonzero pivot, so publishing
-    /// either one alone — or adding them in the wrong frame — fails.
+    /// A card's booth mirror seats at the attach point plus its pivot, the emitters' at the attach
+    /// point; both nonzero, so either term missing fails.
     #[test]
     fn an_equipped_items_card_and_emitters_are_published_for_the_booths() {
         const SHOULDER_KIND: ItemModelKind = ItemModelKind::ShoulderRight;
@@ -1429,7 +1116,7 @@ mod tests {
             benilla_formats::ItemDisplayCatalog::from_displays(HashMap::new()),
         );
         let mut dm = empty_display();
-        // The R14 pauldron's shape: a plain mesh batch, a camera-facing batch, and emitters.
+        // An R14 pauldron's shape: a plain mesh batch, a camera-facing batch, and emitters.
         let mut card = part(false);
         card.billboard = Some(benilla_assets::BillboardInfo {
             pivot: PIVOT,
@@ -1504,15 +1191,7 @@ mod tests {
         );
     }
 
-    /// **The director's report on the Hungering Cold**: a weapon's glowing gems
-    /// were already blazing at full strength before the character carrying them had faded in.
-    /// The sword authors five camera-facing `GENERICGLOW1` batches, and a card used to spawn with
-    /// neither `RenderFade` nor `FadeMaterials` — a batch that pops. It is a batch of the item's
-    /// model like any other, so it joins the wearer's ramp with the mesh parts.
-    ///
-    /// The same spawn also pins the batch's **authored** alpha: the sword's cards are keyed
-    /// `weight 0.30` and every item batch drew at 1.0, because no attach-model part ever carried a
-    /// `MatAnim` at all (321 of the 2681 shipped item models dim a batch this way).
+    /// A card joins the wearer's pending fade and keeps its authored 0.30 weight.
     #[test]
     fn an_items_card_joins_the_wearers_fade_and_keeps_its_authored_alpha() {
         const KIND: ItemModelKind = ItemModelKind::Weapon;
@@ -1563,8 +1242,7 @@ mod tests {
             attach: attach_id::HAND_RIGHT,
             visual: NO_GLOW,
         });
-        // The wearer is mid-login: its own ramp is still pending, so everything attaching to it
-        // must join that ramp rather than open opaque beside it.
+        // The wearer's own fade is still pending.
         let wearer = app
             .world_mut()
             .spawn((
@@ -1616,14 +1294,8 @@ mod tests {
         );
     }
 
-    /// **The director's login report on the Naxx items**: a MULTIPLY sheen batch
-    /// (Mod2x — the ARMORREFLECT family) used to spawn Steady, popping as a full-strength ×2 layer
-    /// over a body still fading in. Its blend equation reads no alpha, so no material swap can
-    /// feather it — instead the part arms the ramp on its STEADY material (the "twin" is
-    /// itself) and the shader lerps its colour toward the blend identity by the tag alpha, which
-    /// is the reference's own preset-5 fade (1489; 0865 built it believing it a deviation).
-    /// Headless, this asserts the arm half: joined ramp, tag alpha ≈ 0, no material swap, and a
-    /// FadeMaterials record so despawn/stealth ramps re-arm it too.
+    /// A Mod2x sheen reads no alpha, so it fades on its steady material while the shader lerps its
+    /// colour toward the blend identity by the tag alpha, the reference's preset-5 fade.
     #[test]
     fn a_multiply_sheen_joins_the_wearers_ramp_on_its_steady_material() {
         const KIND: ItemModelKind = ItemModelKind::Weapon;
@@ -1642,7 +1314,7 @@ mod tests {
         let mut sheen = part(false);
         sheen.blend = benilla_formats::ModelBlend::Mod2x;
         sheen.material = steady.clone();
-        // What `entities::display` now builds for a multiply batch: the steady self as the twin.
+        // As `entities::display` builds a multiply batch: the steady self as the twin.
         sheen.fade_blend = Some(steady.clone());
         dm.parts = Some(vec![sheen]);
         displays.models.insert((7, KIND), dm);
@@ -1699,8 +1371,7 @@ mod tests {
         );
     }
 
-    /// A wearer holding a **weapon** (mainhand, drawn in the hand) and wearing a **shoulder** that
-    /// carries emitters — the bench for the sheath-swap tests below. Returns the app and the wearer.
+    /// A wearer with a drawn mainhand weapon and a shoulder that carries emitters.
     fn dress_a_wearer() -> (App, Entity) {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -1715,8 +1386,7 @@ mod tests {
         ] {
             let mut dm = empty_display();
             let mut p = part(false);
-            // A real item model has a skeleton and a skinned twin, so it takes a rider slot
-            // (1609) — which is what makes the sheath swap's rider re-seat below observable.
+            // A skeleton and a skinned twin, so the item takes a rider slot.
             p.skinned_mesh = Some(skinned_handle());
             dm.parts = Some(vec![p]);
             dm.skeleton = benilla_assets::ModelSkeleton {
@@ -1746,8 +1416,7 @@ mod tests {
         }
         app.insert_resource(displays);
 
-        // Three attach points on three bones: the hand, the back (where a stowed weapon rides)
-        // and the shoulder — their joints spawn on first demand.
+        // The hand, a back sheath point and the shoulder, on three bones.
         let bones = BoneAttach {
             points: HashMap::from([
                 (attach_id::HAND_RIGHT, (1u16, HAND_AT)),
@@ -1783,10 +1452,9 @@ mod tests {
     const HAND_AT: Vec3 = Vec3::new(0.1, 1.0, 0.0);
     const BACK_AT: Vec3 = Vec3::new(-0.2, 1.3, -0.15);
     const SHOULDER_AT: Vec3 = Vec3::new(0.21, 1.42, 0.06);
-    /// A back sheath point (`attach_id`'s `BACK_SHEATH` family — any id the body publishes).
+    /// Stands in for a back sheath point: any id the body publishes will do.
     const SHEATH_BACK: u16 = 6;
 
-    /// The roots this wearer currently has attached, per slot.
     fn roots_of(app: &App, wearer: Entity) -> [Option<Entity>; ATTACH_SLOTS] {
         app.world()
             .entity(wearer)
@@ -1795,22 +1463,14 @@ mod tests {
             .spawned
     }
 
-    /// **The director's report, at its cause**: drawing/stowing a weapon changed one
-    /// slot's attach point, and the old code rebuilt the unit's WHOLE kit — so the shoulders' and
-    /// helm's emitters were orphaned mid-swing and their live particles hung in world space while
-    /// the character walked on ("armor and weapon particles … lag behind when doing a weapon draw").
-    ///
-    /// Three things are asserted, and each one alone would reproduce the bug if it regressed: the
-    /// untouched slot keeps its root entity (so its pool is never orphaned), the moved slot keeps
-    /// ITS root (so the weapon's own effects ride the swap, as the reference's re-parent does), and
-    /// the moved root really is re-seated — new parent joint, new local offset.
+    /// A sheath swap re-parents the weapon's root, and no other slot's root is rebuilt.
     #[test]
     fn a_sheath_swap_moves_the_weapon_and_leaves_the_other_slots_alone() {
         let (mut app, wearer) = dress_a_wearer();
         let before = roots_of(&app, wearer);
         let (weapon, shoulder_root) = (before[0].expect("weapon"), before[4].expect("shoulder"));
 
-        // Stow it: the same item, a new attach point — nothing else about the kit changes.
+        // Stow it: the same item at a new attach point.
         let mut items = app.world_mut().entity_mut(wearer);
         let mut items = items.get_mut::<HeldItems>().unwrap();
         items.slots[0].as_mut().unwrap().attach = SHEATH_BACK;
@@ -1855,7 +1515,6 @@ mod tests {
             BACK_AT,
             "…at the new attach point's offset"
         );
-        // The booth mirrors move with it — a paper doll must show the stowed weapon on the back.
         let seat = app
             .world_mut()
             .query::<&crate::portrait::PortraitRider>()
@@ -1863,11 +1522,7 @@ mod tests {
             .find(|r| r.offset.distance(BACK_AT) < 1e-5)
             .map(|r| r.bone);
         assert_eq!(seat, Some(2), "the rider's cached seat followed the move");
-        // **And the palette rider followed it too**. The MOVE is the one edit that
-        // keeps the item's entity alive while changing the bone its frame is composed from, so the
-        // rider is the one thing a re-parent can silently leave behind: the sword would go on
-        // drawing at the hand it was stowed from while its entity, its glow and its emitters all
-        // travelled to the back.
+        // The palette rider follows too, or the sword would draw at the hand it left.
         let rider = app
             .world()
             .entity(weapon)
@@ -1878,9 +1533,6 @@ mod tests {
         assert_eq!(rider.host, wearer);
     }
 
-    /// The other half of the per-slot diff: a slot whose item genuinely CHANGED is rebuilt (its old
-    /// model is destroyed — the reference's dtor, which takes that model's emitters with it), and
-    /// still nobody else's slot is touched.
     #[test]
     fn a_real_item_change_rebuilds_only_its_own_slot() {
         let (mut app, wearer) = dress_a_wearer();
@@ -1904,14 +1556,6 @@ mod tests {
         assert_eq!(after[4], Some(shoulder_root), "the shoulders are untouched");
     }
 
-    /// The chain's first link, on the real spawn path: an item model is CHAINED to
-    /// the body wearing it, and the emitters it spawns point at **their own** root rather than at
-    /// the wearer. Both halves matter — the item's own sparkle would fade correctly either way,
-    /// but a glow instance hung on this root two links down can only reach the wearer through it,
-    /// and that is the link the enchant-glow lane never had.
-    ///
-    /// It survives the sheath MOVE for the same reason the pool does: the root is re-parented, not
-    /// rebuilt.
     #[test]
     fn an_item_model_is_chained_to_its_wearer() {
         use benilla_world::model_fade::ParentModel;

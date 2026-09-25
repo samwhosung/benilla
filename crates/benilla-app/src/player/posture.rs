@@ -1,22 +1,15 @@
-//! **Posture** — the two things the controller does to how the body *holds* itself, as opposed to
-//! where it goes: the **stand state** (the `/sit` family and the `X` key) and the **sheath**
-//! toggle (`Z`). One module because they are one mechanism in the reference and they interlock
-//! here: entering a stand state ∉ {0 STAND, 2 SIT_CHAIR} force-stows drawn weapons through the
-//! same anim-layer setter the `Z` key drives, and the sheath toggle's own guard chain refuses on
-//! the stand state this frame just committed.
-//!
-//! Both halves are **silent-refusal** mechanisms — the reference builds no packet and says
-//! nothing when a press is rejected — which is why the stand half writes the `sit` trace tag
-//! ([`super::move_trace::posture`]) at every commit *and* every refusal: on screen a granted sit
-//! and a refused one are the same picture (bug B155).
+//! Posture: the stand state (the `/sit` family and `X`) and the sheath toggle (`Z`), one
+//! mechanism in the reference. A stand state other than 0 or 2 stows drawn weapons through the
+//! setter `Z` drives (2 inferred to be the chair sit, vmangos's `UNIT_STAND_STATE_SIT_CHAIR`), and
+//! the toggle refuses on the stand state this frame committed. Both refuse silently, with no
+//! packet, so the `sit` trace tag ([`super::move_trace::posture`]) records each commit and refusal.
 
 use bevy::prelude::*;
 
 use super::{move_trace, state, BodyQuery, ClientCommand, NetCommands, Player, StandStateRequest};
 
-/// Run this frame's stand-state decision and the sheath toggle, and return the **committed**
-/// stand state — the local commit overlaid on the server's echoed byte, which is what the body
-/// pose and the sheath guard both read (decision 0080c).
+/// Runs this frame's stand-state decision and sheath toggle, and returns the committed stand
+/// state: the local commit over the server's echoed byte, which the pose and sheath guard read.
 pub(super) fn update(
     player: &mut Player,
     body: &BodyQuery,
@@ -28,21 +21,14 @@ pub(super) fn update(
     moving: bool,
     turned: bool,
 ) -> u8 {
-    // Stand state (decision 0080c) — a real field, not a local bool: X volunteers
-    // `CMSG_STANDSTATECHANGE` (sit 1 ↔ stand 0) and movement input stands us up; the
-    // server's echo into `UNIT_FIELD_BYTES_1` drives the pose — ours *and* every
-    // observer's. `stand_pending` is the local commit — the client's `SetStandState 0x5ed430`
-    // sends, then applies through the setter's local half `0x6127b0` ([`apply_locally`]), the
-    // same half the server's own `SMSG_STANDSTATE_UPDATE` reaches (2339) — overlaid on the
-    // echoed byte until it lands so the pose never waits on the round-trip.
+    // The echo into `UNIT_FIELD_BYTES_1` drives every observer's pose; `stand_pending`, the local
+    // commit ([`apply_locally`]), overlays it until it lands.
     let (stand_byte, reads_dead) = body
         .single()
         .ok()
         .and_then(|(.., store, _, _, _, _, _)| {
-            // `SetStandState`'s own first two guards, read together with the byte they gate:
-            // health ≤ 0, **or** `UNIT_DYNAMIC_FLAGS & 0x20` — a feigner, whose health never moved.
-            // Deliberately NOT `unit_reads_dead`, which folds in stand state 7 as a third term the
-            // setter does not test (`0x5ed4a9`–`0x5ed4bd`).
+            // `SetStandState`'s first guards, health ≤ 0 or `UNIT_DYNAMIC_FLAGS & 0x20` (feigning),
+            // without `unit_reads_dead`'s stand state 7 (`0x5ed4a9`–`0x5ed4bd`).
             store.map(|s| {
                 (
                     s.0.unit_stand_state(),
@@ -54,44 +40,26 @@ pub(super) fn update(
     if player.stand_pending == Some(stand_byte) {
         player.stand_pending = None; // the echo landed
     }
-    // The server's own stand state first: `SMSG_STANDSTATE_UPDATE` reaches the
-    // setter's local half directly — no refusal gate, no `CMSG_STANDSTATECHANGE` back — so the
-    // volunteered logic below sees the state the server just put us in. The last packet wins,
-    // as it does in the reference's handler order.
+    // `SMSG_STANDSTATE_UPDATE` reaches the local apply directly, with no refusal gate and no
+    // `CMSG_STANDSTATECHANGE` back, before the volunteered logic below; the last packet wins.
     if let Some(s) = server.read().last().map(|m| m.state) {
         let stand_now = player.stand_pending.unwrap_or(stand_byte);
         move_trace::posture("server", s, stand_now, player.move_flags());
         apply_locally(player, s, stand_now, body, sheath);
     }
     let stand_state = player.stand_pending.unwrap_or(stand_byte);
-    // The queued asks first (the `/sit` family), then the X key, which is the
-    // reference's own precedence: a queued `SetStandState` ran during the frame's message pass,
-    // the key is read now. The last writer wins, and every one of them lands on the single
-    // commit-and-send below.
+    // The queued asks (the `/sit` family) ran in the reference's message pass, before the X key
+    // is read; the last writer wins, and all land on the single commit below.
     let mut request_stand = asks.read().last().map(|r| r.state);
     if binds.fired(crate::bindings::cmd::SIT_OR_STAND) {
         request_stand = Some(u8::from(stand_state == 0));
     }
-    // Any movement input stands the avatar back up (the client volunteers the stand — the
-    // server never auto-stands a moving player; verified vmangos MovementHandler). The input
-    // set is byte-pinned: the net
-    // input axes (translation), keyboard turn, and jump all reach the guarded stand wrapper
-    // `0x60be30(0)`; a left-drag camera orbit provably does not; sit(1)/chair(2)/sleep(3)
-    // all stand identically (the value-agnostic `GetStandState() != 0` gate).
-    //
-    // **The MOUSE turn is not in this set, and that corner is now closed**.
-    // A deliberate right-drag turn cannot stand a seated
-    // player — two independent gates refuse the body-facing commit for a seated body, and
-    // `0x514f50` skips its stand arm outright while the RMB bit is held. The director's
-    // observation was right and this file's attribution was wrong: what stands you is the
-    // sub-200 ms RELEASE being dispatched as a right-CLICK, so the stand belongs to the click's
-    // action and not here.
-    // **A knockback stands you up too** — the one entry here that is nobody's
-    // input. The reference's knockback apply carries it as a side effect of the launch (the
-    // `0x60e139` block, whose indirect `call [edx+0xa4]` resolves to `GetStandState 0x60be50`),
-    // which is the same guarded wrapper every trigger above reaches. Read off the armed latch
-    // rather than the take-off, because this block runs before the mover: the latch was written
-    // by [`super::wire_in::apply_server_moves`] at the top of the frame and is still there.
+    // Movement stands us up, volunteered, as the server never does: translation, a keyboard turn
+    // and jump reach the stand wrapper `0x60be30(0)` from any nonzero state; a left-drag orbit
+    // does not, nor a right-drag turn (`0x514f50` skips its stand arm while the button is held),
+    // though a release within 200 ms is a right-click, whose action stands you. A knockback's move
+    // event stands us too (`0x60e139`: `GetStandState` `0x60be50`, then `0x60be30(0)`), read off
+    // the latch [`super::wire_in::apply_server_moves`] armed this frame, as the mover runs later.
     let knocked_out_of_it = player.knockback.is_some();
     if (moving || turned || knocked_out_of_it || binds.fired(crate::bindings::cmd::JUMP))
         && stand_state != 0
@@ -99,17 +67,10 @@ pub(super) fn update(
     {
         request_stand = Some(0);
     }
-    // The sit-down gate — the client's own, inside the ONE setter `0x5ed430`
-    // ([`state::stand_state_refused`], bug B155): a body the movement layer is already driving
-    // cannot be seated, and **swimming is one of the driving states**, so the press is refused
-    // for as long as we are in the water — and a body that reads dead is refused in EITHER
-    // direction, which is the setter's own first guard. Silently, and before the packet — like the reference,
-    // which returns from `SetStandState` without building `CMSG_STANDSTATECHANGE` at all.
-    // Placed on the shared commit below rather than on the X key, so it covers the posture
-    // emotes (`/sit`, `/sleep`, `/kneel`) in the same stroke — their own `Emotes.dbc` gate
-    // does NOT carry the swim bit (`ui_chat::tests::the_posture_emotes_carry_no_swim_suppression_flag`).
-    // The word is the live outbound one, a frame old — the same `[[this+0x118]+0x40]` the cast
-    // gates read, so all three refusals can never disagree about "am I moving".
+    // `SetStandState` `0x5ed430`'s gate ([`state::stand_state_refused`]), silent and before the
+    // packet: no sitting while translating or swimming, no change at all while dead. It covers
+    // the posture emotes too, whose `Emotes.dbc` gate has no swim bit. The flags word is the live
+    // outbound one, a frame old, the `[[this+0x118]+0x40]` the cast gates read.
     if let Some(s) =
         request_stand.filter(|&s| state::stand_state_refused(reads_dead, player.move_flags(), s))
     {
@@ -123,31 +84,21 @@ pub(super) fn update(
     }
     if let Some(s) = request_stand.filter(|&s| s != stand_state) {
         move_trace::posture("commit", s, stand_state, player.move_flags());
-        // The reference's order: `0x5ed430` sends at `0x5ed501`, then calls the local half at
-        // `0x5ed53f` — the packet is the volunteer path's, never the setter's (2339).
+        // `0x5ed430` sends at `0x5ed501`, then calls the local apply at `0x5ed53f`.
         let _ = net.0.send(ClientCommand::StandStateChange {
             state: u32::from(s),
         });
         apply_locally(player, s, stand_state, body, sheath);
     }
     let stand_now = player.stand_pending.unwrap_or(stand_byte);
-    // Sheath toggle (Z) — vanilla's draw/stow, through the anim layer's ONE setter
-    // ([`crate::creature_anim::SheathRequest`]): walk the *committed*
-    // client-side state (the setter cache — attacking auto-draws and the anim reconcile
-    // force-stows, which a local bool or the raw echo byte would drift from), commit + send
-    // `CMSG_SETSHEATHED` there, and play the ceremony — the manual toggle is the ONLY path
-    // in the whole client that plays it (`bInstant = 0` at the 4 ToggleSheath `0x5eb480` sites).
-    // No body model yet (no driver) drops the toggle, the client's own refusal.
+    // The sheath toggle (Z) cycles the anim layer's committed sheath state through its one setter
+    // ([`crate::creature_anim::SheathRequest`]), which sends `CMSG_SETSHEATHED`; only it plays the
+    // ceremony (`bInstant = 0` in `ToggleSheath` `0x5eb480`). No body model yet drops the press.
     if binds.fired(crate::bindings::cmd::TOGGLE_SHEATH) {
         if let Ok((e, _, _, _, Some(drv), store, engaged, _, _, wielded, _)) = body.single() {
-            // The manual toggle's guard chain (decision 0080d) — the guards of the client's
-            // 12-deep silent-refusal chain (`ToggleSheath` `0x5eb480`) whose states exist
-            // today: dead · engaged in combat · not standing (`GetStandState() != 0` —
-            // chairs block the toggle too, unlike the *stow rider's* {0, 2} exemption) ·
-            // mid-ceremony (the 89/90 clip still playing) · MOUNTED (chain check 4,
-            // `UNIT_FIELD_MOUNTDISPLAYID > 0`, wired with
-            // 0441's mounts). Stunned / channeling join when those states exist. A refused
-            // press is simply dropped — no message, like the client.
+            // Of `ToggleSheath`'s 12 silent guards: dead, in combat, any nonzero stand state,
+            // mid-ceremony (clip 89/90) and mounted; its stunned and channeling guards are not
+            // tested here.
             let dead = store.is_some_and(|s| s.0.unit_is_dead());
             let mounted = store.is_some_and(|s| s.0.unit_mount_display_id() != 0);
             let refused =
@@ -159,13 +110,10 @@ pub(super) fn update(
                     drv.sheath_ceremony_active()
                 );
             } else {
-                // The cycle proper ([`crate::creature_anim::toggle_sheath_next`], byte-read):
-                // melee → ranged → stowed, gated on what is actually worn — never a
-                // two-state flip. `None` = the ref makes no call at all (nothing equipped).
+                // Melee, ranged, stowed, skipping what is not worn; `None` makes no call at all.
                 let w = wielded.copied().unwrap_or_default();
-                // `0x5eb5f0`/`0x600`/`0x610` are `GetWeapon(slot, 0)` (1863): a disarmed hand
-                // is not "worn" to the cycle, so the press walks past melee — and with nothing
-                // else equipped makes no call at all, exactly like the ref's unarmed branch.
+                // `GetWeapon(slot, 0)` at `0x5eb5f0`, `0x5eb600` and `0x5eb610`: a disarmed hand
+                // is not worn.
                 let worn = (
                     w.armed_main().is_some() || w.armed_off().is_some(),
                     w.ranged.is_some(),
@@ -186,20 +134,11 @@ pub(super) fn update(
     stand_now
 }
 
-/// The stand-state setter's **local half** — the reference's `0x6127b0`, reached by the
-/// volunteered change (`0x5ed430`, after it has sent `CMSG_STANDSTATECHANGE`) and by the server's
-/// own `SMSG_STANDSTATE_UPDATE` (`0x603e50`) alike; it sends no `CMSG_STANDSTATECHANGE` itself —
-/// its four callers image-wide hold none of the five send sites.
-///
-/// On a CHANGE it writes the predicted state (`[player+0x1d68]`, our `stand_pending`), which the
-/// pose reads until the `UNIT_FIELD_BYTES_1` echo lands ([`predict`]). Whether or not the state
-/// changed, a drawn weapon meeting a state outside {0 STAND, 2 SIT_CHAIR} is stowed through the
-/// anim layer's one setter — `0x6127cc`'s gate is the sheath state, not the same-state compare.
-///
-/// What the reference's local half also does on a change, and this does not yet: release an open
-/// loot window and stop a running attack when sitting down (`0x5f0790` → `0x48f200`, `0x5ecac0`),
-/// re-run the movement input when standing up, and on EVERY call re-acquire the follow camera
-/// behind the body's facing (`0x48ec90`, the stand-state-keyed pivot presets). 2339 names them.
+/// The stand state's local apply, the reference's `0x6127b0`, reached from `SetStandState` after
+/// its send and from `SMSG_STANDSTATE_UPDATE` (`0x603e50`); it sends nothing. A change writes the
+/// prediction (`[player+0x1d68]`); any call stows a drawn weapon for a state but 0 or 2
+/// (`0x6127cc`). Not built: its loot release and attack stop on a sit (`0x5f0790` → `0x48f200`,
+/// `0x5ecac0`), movement re-run on a stand, and follow-camera re-acquire each call (`0x48ec90`).
 fn apply_locally(
     player: &mut Player,
     s: u8,
@@ -221,8 +160,8 @@ fn apply_locally(
     }
 }
 
-/// `0x5f0790`'s first line: the predicted stand state is written only when it changes
-/// (`0x5f0799 cmp [esi+0x1d68], eax; je ret`). Returns whether it did.
+/// `0x5f0790`'s early-out (`0x5f0799`): the predicted stand state is written only on a change.
+/// Returns whether it was.
 fn predict(pending: &mut Option<u8>, s: u8, stand_now: u8) -> bool {
     if s == stand_now {
         return false;
