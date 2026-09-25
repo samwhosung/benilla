@@ -1,4 +1,4 @@
-//! **A crash leaves an artefact** (decision 2266 §B2).
+//! **A crash leaves an artefact**.
 //!
 //! Until this module, a panic printed to stderr and the process was gone — and with it everything
 //! a reporter could have attached. The only log sink was the terminal; a packaged Windows build
@@ -20,7 +20,7 @@
 //! **What it does not cover, said out loud.** A non-unwinding panic — an allocation failure's
 //! abort, a `panic` inside a `Drop` during unwinding, a foreign frame — never reaches any hook;
 //! B390's own was one (`thread caused non-unwinding panic. aborting.`). The hook covers the
-//! unwinding class (B88, B130, B260, B383's shape: four of the six panics the ledger holds).
+//! unwinding class (B383's shape: four of the six panics the ledger holds).
 //! Flushing saved variables and the CVar diff from inside a panic is a second, riskier item —
 //! the world is half-torn by then — and is deliberately not bundled here (2265 §B2).
 //!

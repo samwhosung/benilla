@@ -73,13 +73,13 @@ pub(crate) struct GlueDialogAnswer {
 pub(crate) enum DialogKind {
     Status,
     Error,
-    /// **Queued for a full realm** (decision 1681). The reference has no queue dialog *type*: it
+    /// **Queued for a full realm**. The reference has no queue dialog *type*: it
     /// opens the ordinary `CANCEL` status dialog and re-texts it every frame, relabelling the one
     /// button to `CHANGE_REALM`. This is that, as a kind — the relabel is the only thing that
     /// distinguishes it from [`Self::Status`], and a kind is how this screen spells "different
     /// button caption".
     Queued,
-    /// The realmlist editor (decision 1667) — the reference's `GlueDialog` `hasEditBox` shape,
+    /// The realmlist editor — the reference's `GlueDialog` `hasEditBox` shape,
     /// which is how the shipped dialog asks for a typed value (`GlueDialog.lua`: it shows
     /// `GlueDialogEditBox` and re-heights the box to
     /// `16 + text + 8 + editbox + 8 + button + 16`). The reference never opens this particular
@@ -152,8 +152,8 @@ pub(crate) struct GlueDialog {
     pub(crate) dirty: bool,
     pub(crate) root: Option<Entity>,
     /// The ref's `GlueDialogEditBox` — a real [`EditBoxState`] like the two on the screen behind
-    /// it, so the realmlist box gets the same caret, selection, Ctrl+A and clipboard law
-    /// (decision 0704). Only meaningful while a [`DialogKind::has_edit_box`] dialog is up; it is
+    /// it, so the realmlist box gets the same caret, selection, Ctrl+A and clipboard law.
+    /// Only meaningful while a [`DialogKind::has_edit_box`] dialog is up; it is
     /// rebuilt from the current value on every open, so a cancelled edit leaves nothing behind.
     pub(crate) edit: EditBoxState,
     /// The queue's sample ring and the realm it is for — live only while [`DialogKind::Queued`]
@@ -493,7 +493,7 @@ pub(crate) fn drive_glue_dialog(
 }
 
 /// Paint the dialog's edit box from [`GlueDialog::edit`], through the same
-/// [`paint_glue_field`] the two screen boxes use (decision 0704) — so the realmlist box gets the
+/// [`paint_glue_field`] the two screen boxes use — so the realmlist box gets the
 /// identical caret, selection highlight and scrolling.
 ///
 /// Runs **after** [`drive_glue_dialog`], which is what spawns the box: on the frame a dialog

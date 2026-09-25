@@ -6,7 +6,7 @@
 //! - the NPC-text expander's `$<n>w` / `$<n>e` tokens ([`crate::npc_text`]) — the reference
 //!   renders a hit as `%d` and a **miss as `"0"`**, so every such token printed `"0"` until this
 //!   landed: faithful while the table was empty, wrong the moment a zone sent real states;
-//! - the **world map's landmark pass** ([`crate::ui_world_map`], decision 1586) — an `AreaPOI.dbc`
+//! - the **world map's landmark pass** ([`crate::ui_world_map`]) — an `AreaPOI.dbc`
 //!   row carrying a `WorldStateID` shows only while that state reads non-zero, which is what makes
 //!   the Eastern Plaguelands tower icons and the capitals' "Under Attack" markers appear and
 //!   change side. [`WorldStates::generation`] is the edge it rebuilds on.

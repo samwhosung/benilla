@@ -16,7 +16,7 @@ use benilla_world::modkeys::DEV_CHORD;
 use benilla_world::view::WorldCamera;
 
 /// The **dev chord + `I`** (for *inspect*) arms/disarms the inspector — off the bare-letter plane the
-/// game's own bindings own (0585), on whichever plane this OS leaves free (0867). Unmistakable as a
+/// game's own bindings own, on whichever plane this OS leaves free. Unmistakable as a
 /// chord, so unlike the old bare `i` it needs no chat-bar/EditBox gate.
 pub(super) fn toggle_inspect(keys: Res<ButtonInput<KeyCode>>, mut inspect: ResMut<InspectMode>) {
     if benilla_world::modkeys::dev_chord(&keys, KeyCode::KeyI) {
@@ -39,7 +39,7 @@ fn kind_color(kind: ModelKind) -> egui::Color32 {
     }
 }
 
-/// The granted movement modes as the card names them (decision 1780) — `None` when the unit has
+/// The granted movement modes as the card names them — `None` when the unit has
 /// none, which is nearly all of them, so the common line is unchanged. Named rather than derived
 /// from the raw word on the card: `0x40001000` says nothing to the eye, and the whole reason this
 /// is on the card is that the modes explain a body that looks wrong and is not.
@@ -61,7 +61,7 @@ fn granted_modes(modes: Option<&crate::net::UnitMoveModes>) -> Option<String> {
     (!named.is_empty()).then(|| format!("granted {}", named.join("+")))
 }
 
-/// The inspector's GameObject collision readout (decision 0763): does a hull exist, is it disabled
+/// The inspector's GameObject collision readout: does a hull exist, is it disabled
 /// right now, and what stored state does the passability gate see. Named so the bundled `stores`
 /// param stays readable.
 type GoCollisionReadout = (
@@ -95,7 +95,7 @@ type MotionReadout = (
     &'static Transform,
 );
 
-/// The inspector's entity LIGHT readout (decision 0776): the lane this object's parts render
+/// The inspector's entity LIGHT readout: the lane this object's parts render
 /// under, and which attach found the room — "two identical GameObjects a few yards apart, one lit
 /// like the room and one like the street" is the report that made this a card line rather than a
 /// rebuild with `WOW_INTERIOR_LOG`.
@@ -121,7 +121,7 @@ type PartReadout = (
 
 /// Everything the identity card reads off the **net entity** under the cursor, as one named
 /// [`SystemParam`] — the descriptor store and the coarse kind the line gates go by, the GameObject
-/// collision readout (decision 0763), the light readout, and the two remaining inputs of the
+/// collision readout, the light readout, and the two remaining inputs of the
 /// **interact gate** ([`crate::target::cursor_mode::go_highlightable`]): the faction catalog and our
 /// own store. A bundle because `inspect_ui` sits at Bevy's 16-param ceiling; a named struct rather
 /// than the tuple it grew out of, so each member says what it is at the point of use.
@@ -154,11 +154,11 @@ pub(super) struct InspectStores<'w, 's> {
     /// Which of the two master bits are on, so a `plate ✗` can say whether the unit lost its plate
     /// on the category gate or on something else.
     plate_mode: Res<'w, crate::vplates::VPlateMode>,
-    /// The ask-once GO template cache — the readable head a TEXT object's line reports
-    /// (decision 1105), and the highlight column + name the tooltip ladder reports (2246).
+    /// The ask-once GO template cache — the readable head a TEXT object's line reports,
+    /// and the highlight column + name the tooltip ladder reports (2246).
     go_templates: Res<'w, crate::go_templates::GameObjectTemplates>,
     /// `[0xb72038]` — the meeting-stone queue, the other half of MEETINGSTONE(23)'s own
-    /// highlightable term (decision 2283), so the card's `interact` verdict reads the same
+    /// highlightable term, so the card's `interact` verdict reads the same
     /// predicate the cursor and the click do.
     stone: Option<Res<'w, crate::ui_dialog_verbs::MeetingStone>>,
     /// **The published GameObject mouseover** — the one the tooltip actually reads
@@ -166,7 +166,7 @@ pub(super) struct InspectStores<'w, 's> {
     /// through the publish, so without this the card can show an object the game is not hovering
     /// at all and give no sign of the difference (2246).
     hovered_go: Res<'w, crate::target::HoveredObject>,
-    /// The GameObject **animation** readout (decision 1151) — what the state machine's arm
+    /// The GameObject **animation** readout — what the state machine's arm
     /// (`0x5f3930`) is playing right now, for the card's `anim` line. Its own query rather than a
     /// `collision` member because it needs the model components: they sit on the same entity as
     /// [`crate::go_anim::GoAnim`], but a GO whose model authors no skeleton renders as a static
@@ -214,7 +214,7 @@ pub(super) fn inspect_ui(
     net_commands: Res<crate::net::NetCommands>,
     // Bundled into one param (Bevy's system-function arity ceiling): the copy-click button, and
     // the flag it must yield to — a left press this frame the UI already consumed as a
-    // cursor-payload world drop (0216 §3) must not ALSO land as an inspector copy-click, the same
+    // cursor-payload world drop must not ALSO land as an inspector copy-click, the same
     // yield every other world left-press consumer gives it (see `PointerOverUi` above for the
     // hover-time twin).
     click_input: (
@@ -365,7 +365,7 @@ pub(super) fn inspect_ui(
         Some(benilla_protocol::EntityKind::Unit | benilla_protocol::EntityKind::Player)
     );
     let is_player = kind == Some(benilla_protocol::EntityKind::Player);
-    // The GameObject collision + state readout (decision 0763) — the line that closes the loop on
+    // The GameObject collision + state readout — the line that closes the loop on
     // "this door is drawn open but I can't walk through it". It answers, for the object under the
     // cursor, the three facts the passability gate turns on: the client's stored `GAMEOBJECT_STATE`
     // (`go_anim::go_state`, i.e. what we believe open/closed is), whether a collision hull exists at
@@ -431,7 +431,7 @@ pub(super) fn inspect_ui(
             } else {
                 "interact ✗"
             };
-            // **The TOOLTIP's own ladder** (decision 2246), which `interact` above is not and is
+            // **The TOOLTIP's own ladder**, which `interact` above is not and is
             // routinely mistaken for. "No tooltip on this" has three possible stages and the card
             // could name none of them, so every report of it cost a session of code reading:
             //
@@ -469,7 +469,7 @@ pub(super) fn inspect_ui(
                     Some(t) => format!("{:?}", t.name),
                 }
             );
-            // TEXT (type 9) only: the **readable head** (decision 1105). A book that opens no
+            // TEXT (type 9) only: the **readable head**. A book that opens no
             // window is either "no page in the template" or a fault downstream, and only this
             // line tells the two apart — the symptom is identical from the chair, and the first
             // one is the reference behaving correctly. `page —` = the template says none;
@@ -488,7 +488,7 @@ pub(super) fn inspect_ui(
             } else {
                 String::new()
             };
-            // The **placement tilt** (decision 1459) — shown only when there is one. A GameObject
+            // The **placement tilt** — shown only when there is one. A GameObject
             // is placed by its `GAMEOBJECT_ROTATION` quaternion, and 96.7% of live spawns encode a
             // plain yaw in it; the rest carry a tilt that swings the model's off-origin geometry
             // yards from the spawn point. So `tilt 70°` on a prop that looks misplaced says "this
@@ -687,7 +687,7 @@ pub(super) fn inspect_ui(
     let anim_line = net_entity.and_then(|p| drivers.get(p).ok()).map(|d| {
         let (base, overlay) = d.playing();
         let base = base.map(&fmt).unwrap_or_else(|| "—".into());
-        // The base slot's live playback rate (decision 0903) — `speed / (moveSpeed · modelScale)`
+        // The base slot's live playback rate — `speed / (moveSpeed · modelScale)`
         // on a locomotion clip, a flat 1× on everything else. Shown so a "its walk is too fast"
         // report is a hover away from a number instead of a hand-worked divisor; suppressed at
         // exactly 1× so the ordinary case doesn't carry noise.
@@ -702,7 +702,7 @@ pub(super) fn inspect_ui(
             None => format!("anim {base}{rate}"),
         }
     });
-    // The same line for a **GameObject** (decision 1151), which is driven by `GoAnim` rather than
+    // The same line for a **GameObject**, which is driven by `GoAnim` rather than
     // `AnimDriver` and so never reached the branch above: the sequence the state machine's arm
     // (`0x5f3930`) is playing, whether it is a transient one (a transition motion / a Custom block
     // — something the completion advance `0x5f4120` must end) or the state's held rest pose, and
@@ -720,7 +720,7 @@ pub(super) fn inspect_ui(
         };
         Some(format!("anim {} · {kind}{repeat}", fmt(id)))
     });
-    // The light lane + the attach that found it (decision 0776). Absent until the classifier has
+    // The light lane + the attach that found it. Absent until the classifier has
     // resolved the anchor once — a freshly streamed object shows no line rather than a wrong one.
     let light_line = net_entity
         .and_then(|p| lit.get(p).ok())
@@ -862,7 +862,7 @@ pub(super) fn inspect_ui(
 ///
 /// The identity is the resource's own (`object`), not something the consumer looks up off `entity`:
 /// most of the static world draws from a consolidated lane and has **no entity** to look anything
-/// up on (decision 1534). `entity` is `Some` only when one owns the geometry — which is exactly
+/// up on. `entity` is `Some` only when one owns the geometry — which is exactly
 /// when the extra per-entity readouts (a unit's descriptor store, a GameObject's collision) mean
 /// anything.
 #[derive(Resource, Default)]

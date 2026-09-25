@@ -1,4 +1,4 @@
-//! The chord codec (decision 0997): Bevy's physical input ↔ the reference's canonical binding
+//! The chord codec: Bevy's physical input ↔ the reference's canonical binding
 //! strings — `[ALT-][CTRL-][SHIFT-]<TOKEN>`, where the token set is 1.12's own (`W`, `SPACE`,
 //! `NUMPAD0`, `BUTTON4`, `MOUSEWHEELUP`, the bare punctuation characters). These strings are what
 //! the table stores, the window displays (through the `KEY_*` GlobalStrings), and the files save.
@@ -68,7 +68,7 @@ impl Chord {
 
     /// The **one** retry the reference allows after an exact miss — drop the leftmost modifier
     /// present, in the emitted prefix order ALT → CTRL → SHIFT. `None` once there is none left,
-    /// which is where the lookup ends (decision 1142).
+    /// which is where the lookup ends.
     ///
     /// `CBindings::ExecuteBinding` (`0x4b7990`) does this by string surgery: on a miss it calls
     /// `strchr(chord, '-')` (`0x4b7a2b`/`0x4b7a2d`) and re-probes the text after the **first**
@@ -470,7 +470,7 @@ fn token_key(t: &str) -> Option<BindKey> {
 mod tests {
     use super::*;
 
-    /// **Every token this codec names is one `SetBinding` will actually take** (decision 1295).
+    /// **Every token this codec names is one `SetBinding` will actually take**.
     /// The namer here and `IsValidBindingKeyString` in the engine table are two transcriptions of
     /// the same reference, and nothing but this ties them together — a token we name but the
     /// validator refuses is a key the capture seam happily offers and `SetBinding` then drops on
@@ -659,7 +659,7 @@ mod tests {
         assert_eq!(token_key("ENTER"), Some(BindKey::Key(KeyCode::Enter)));
     }
 
-    /// The Mac print-screen fold (decision 1487). macOS delivers no `PrintScreen` at all — a PC
+    /// The Mac print-screen fold. macOS delivers no `PrintScreen` at all — a PC
     /// keyboard's PrtSc arrives as F13 — so BOTH arms have to agree that F13 *is* `PRINTSCREEN`,
     /// or the shipped `PRINTSCREEN SCREENSHOT` default is a key nobody on a Mac can press.
     #[cfg(target_os = "macos")]

@@ -1,4 +1,4 @@
-//! The shared glue-screen vocabulary (decision 0465) — everything the pre-world screens (character
+//! The shared glue-screen vocabulary — everything the pre-world screens (character
 //! select + character create) draw with, factored out of the create screen when select joined it:
 //! the client-data art set ([`art::GlueArt`]), the widget builders ([`widgets`]), the ADD-mode UI
 //! material ([`add_material`]), and the screen-agnostic interaction systems below. Each screen
@@ -183,7 +183,7 @@ pub(crate) const ROTATE_RATE: f32 = 120.0 * std::f32::consts::PI / 180.0;
 /// each screen's lifecycle system compares its tree's baked scale against this to know when a
 /// window resize (mac fullscreen, a drag) has invalidated the tree.
 ///
-/// **There is no lower clamp** (B120). A floor of 1.0 draws the 768-unit-tall authored layout into a
+/// **There is no lower clamp**. A floor of 1.0 draws the 768-unit-tall authored layout into a
 /// shorter window and the overflow simply falls off the bottom — silently, and always the
 /// *bottom-most* controls: on the create screen that is the last customization row and the
 /// **RANDOMIZE** button (reproduced at `WOW_WIN=1276x677` — both gone, along with the foot of the
@@ -196,7 +196,7 @@ pub(crate) fn screen_scale(window: Option<&Window>) -> f32 {
 }
 
 /// **The rect a glue screen's chrome lays out into: the boxed scene, never the window** (decision
-/// 2091, B377).
+/// 2091).
 ///
 /// [`screen_scale`] answers *how big* an authored coordinate draws; this answers *what it is
 /// measured from*. The two are not the same question once the scene is pillarboxed (decision
@@ -256,7 +256,7 @@ pub(crate) fn fit_glue_canvas(
     if canvases.is_empty() {
         return;
     }
-    // Off the **window**, not off `CreateScene` (decision 2187): the frame is one aspect for every
+    // Off the **window**, not off `CreateScene`: the frame is one aspect for every
     // scene now, so the canvas has no reason to wait on the booth — which is what used to move it
     // when a stage swap cleared the box for a frame, and what made a screen spawned before its
     // scene lay out against the window once and snap in.
@@ -579,7 +579,7 @@ mod tests {
         assert_ne!(colour(&app), GOLD, "it grays (the ref's GlueFontDisable)");
     }
 
-    /// **The chrome canvas passes what it does not take** (decision 2091). `ui_focus_system`
+    /// **The chrome canvas passes what it does not take**. `ui_focus_system`
     /// reads a hovered node with no `FocusPolicy` as `Block` and stops the walk there, so a canvas
     /// spanning the whole boxed scene would eat every hover and press before the full-bleed scene
     /// pane under it saw one — and drag-to-rotate on the select and create screens would go dead

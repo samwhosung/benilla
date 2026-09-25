@@ -1,18 +1,18 @@
-//! Character select — the faithful glue screen (decision 0465, superseding 0193 §4's v1 overlay).
+//! Character select — the faithful glue screen (superseding 0193 §4's v1 overlay).
 //!
 //! Owns [`ClientState`], the app's lifecycle state machine: `CharSelect` is the pre-world "glue"
 //! layer (the real client's GlueXML universe — login/realm/select screens), `InWorld` is the game.
 //! The IO thread parks after the world handshake and emits the account roster
 //! ([`CharListMessage`]); the **pick policy** here decides what answers it — the pending pick
-//! (seamless reconnect, decision 0065), the `WOW_CHAR` env fast path, or the director's choice on
+//! (seamless reconnect), the `WOW_CHAR` env fast path, or the director's choice on
 //! the screen, which opens on whoever they last entered the world as (`lastCharacterIndex`,
 //! decision 1622). The pick travels the [`CharPick`] channel; `Connected` flips us `InWorld`;
 //! a `/logout` round-trip ([`LoggedOutMessage`]) flips back to select with the pending pick
-//! cleared, and a **lost** session flips all the way back to the login screen (decision 1262 —
+//! cleared, and a **lost** session flips all the way back to the login screen (
 //! the reference's `DISCONNECTED_FROM_SERVER`).
 //!
 //! The screen is the reference's own arrangement (`CharacterSelect.xml/.lua`, extracted off the
-//! patch chain — decision 0465): the fullscreen `UI_<Race>` glue scene with the **selected
+//! patch chain): the fullscreen `UI_<Race>` glue scene with the **selected
 //! character standing in it, geared from its enum record** (the glue booth), the right-column
 //! character list (realm banner, ten row buttons, Create New Character), Enter World / Back /
 //! Delete Character along the bottom, the rotate pair, drag-to-rotate, arrow-key cycling,
@@ -39,10 +39,10 @@ use crate::net::{
     EnteredWorldMessage, LoggedOutMessage,
 };
 
-/// The app's lifecycle: which screen owns the session (decision 0193).
+/// The app's lifecycle: which screen owns the session.
 #[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub(crate) enum ClientState {
-    /// Parked pre-logon at the login screen (decision 0539): the IO thread waits for credentials;
+    /// Parked pre-logon at the login screen: the IO thread waits for credentials;
     /// [`crate::login`]'s policy decides what answers it (the env fast path, the reconnect
     /// resubmit, or the director's typed submit).
     ///
@@ -56,7 +56,7 @@ pub(crate) enum ClientState {
     /// Parked at character select: the select screen is up, the IO thread waits for a pick, and
     /// the in-world input surfaces (player controller, FrameXML keyboard) are gated off.
     CharSelect,
-    /// The character-creation screen (decision 0423): still parked at select (the IO thread
+    /// The character-creation screen: still parked at select (the IO thread
     /// services create/delete in place), a sibling glue screen. Entered from the select screen's
     /// "Create New Character" button; Back returns to `CharSelect`. In-world input stays gated off
     /// (any `in_state(InWorld)` system is off here, mechanically).
@@ -65,7 +65,7 @@ pub(crate) enum ClientState {
     InWorld,
 }
 
-/// **The one "only while in the world" gate** (decision 2265 §C3). A system that has no business
+/// **The one "only while in the world" gate**. A system that has no business
 /// at a glue screen — an input reader, a world-packet feed, a per-character file watcher — joins
 /// this set instead of carrying its own `run_if(in_state(ClientState::InWorld))`: twenty-odd
 /// copies of that condition said one thing in twenty-odd places, and the condition a set carries
@@ -83,7 +83,7 @@ pub(crate) struct InWorldGated;
 pub(crate) struct CharSelectPlugin {
     /// The screen this session opens on.
     ///
-    /// A connected boot starts at [`ClientState::Login`] (decision 0539) and the roster's arrival
+    /// A connected boot starts at [`ClientState::Login`] and the roster's arrival
     /// flips it. A world capture starts straight at [`ClientState::InWorld`] — no net thread, no
     /// picker — so the deterministic scene harness is untouched by the glue layer. A **glue**
     /// capture starts on the glue screen it photographs, which is the reason this is a state and
@@ -136,7 +136,7 @@ impl Plugin for CharSelectPlugin {
                     // The policy + transitions run in BOTH states: the roster auto-answer (reconnect
                     // relogin) happens while `InWorld`, and the logout edge arrives there too.
                     // `back_on_disconnect` LAST: a session that died during entry queues both
-                    // edges into one frame, and the dead one has to win (decision 1262).
+                    // edges into one frame, and the dead one has to win.
                     (
                         apply_roster_policy,
                         enter_on_connected,
@@ -164,7 +164,7 @@ impl Plugin for CharSelectPlugin {
                         // here — needs no answer at all.
                         crate::glue::dialog::drive_glue_dialog,
                         // Before the list refresh, and before `select_input` reads a click that
-                        // landed on the panel rather than the screen (decision 1196).
+                        // landed on the panel rather than the screen.
                         debug_select_addons,
                         debug_select_walk,
                         addons::drive_addons_panel,
@@ -177,7 +177,7 @@ impl Plugin for CharSelectPlugin {
                         .before(crate::glue::GlueVisuals)
                         // After the UI tick: one member holds the VM (the addons panel reads
                         // the manifest through it), and every VM holder in `Update` declares
-                        // its side of the tick (decision 2304). A glue screen has no push the
+                        // its side of the tick. A glue screen has no push the
                         // tick must see, so the whole chain takes the drain side.
                         .after(crate::ui_script::UiInput)
                         .run_if(in_state(ClientState::CharSelect)),
@@ -218,7 +218,7 @@ pub(crate) struct Roster {
     /// it with the index it already holds.
     ///
     /// **The click is the one caller that does not reach it**, and the gate is in the stock Lua
-    /// rather than in the engine — see [`Roster::click_row`] and decision 2194. Of the ten Lua call
+    /// rather than in the engine — see [`Roster::click_row`] and. Of the ten Lua call
     /// sites only the two click handlers are gated, and of `0x472740`'s four C callers two are the
     /// roster teardown passing `-1` (so `0x472950` exits above the reset) — every ungated path
     /// re-squares.
@@ -228,12 +228,12 @@ pub(crate) struct Roster {
     /// `WOW_CHAR`, when explicitly set: auto-pick this name on the FIRST roster (the dev fast
     /// path past the screen). `take()`n once — a later `/logout` shows the screen normally.
     env_char: Option<String>,
-    /// A just-created character's name (decision 0423): its row gets selected (the ref's
+    /// A just-created character's name: its row gets selected (the ref's
     /// `SELECT_LAST_CHARACTER`, keyed by name so it survives the create/enum race). Armed by
     /// [`Roster::note_created`], which consumes it against the roster **already in hand** —
     /// [`apply_roster_policy`] only has to answer the other arrival order.
     just_created: Option<String>,
-    /// The auth realm-list entry this session connected to (the screen's realm banner, 0465);
+    /// The auth realm-list entry this session connected to (the screen's realm banner);
     /// refreshed with each roster.
     pub(super) realm: Option<benilla_protocol::RealmInfo>,
     /// `WOW_CHAR` read latch (env read once at first policy run).
@@ -257,7 +257,7 @@ impl Roster {
 
     /// Note a character the create screen just made, and select its row.
     ///
-    /// **The consume happens here, not on the next roster message** (B119): the IO thread
+    /// **The consume happens here, not on the next roster message**: the IO thread
     /// re-enumerates and emits the fresh roster *before* the create result (`net::io`), so by the
     /// time the result reaches [`crate::char_create`] the new row is normally already in
     /// [`Self::chars`] and [`apply_roster_policy`] has already run for that list. Arming a flag for
@@ -324,13 +324,12 @@ impl Roster {
     }
 
     /// The pending pick's map — the loading screen resolves the *destination's* art from the
-    /// roster at the entry edge, before the server's `SMSG_LOGIN_VERIFY_WORLD` snap lands
-    /// (decision 0737).
+    /// roster at the entry edge, before the server's `SMSG_LOGIN_VERIFY_WORLD` snap lands.
     pub(crate) fn pending_map(&self) -> Option<u32> {
         self.pending_row().map(|c| c.map)
     }
 
-    /// The pending pick's level — the loading screen's tip-of-the-day guard (decision 2077). The
+    /// The pending pick's level — the loading screen's tip-of-the-day guard. The
     /// reference keeps a synthesised flag at `[selChar+0x10a]` that `0x5b42a0` sets iff this byte
     /// arrived as `0` in `SMSG_CHAR_ENUM`, and a set flag suppresses the tip. vmangos always sends
     /// a real level, so the arm is unreachable against our server; it is honoured because it costs
@@ -341,7 +340,7 @@ impl Roster {
 
     /// The picked character's `(map, wow xyz)` — **where the world we are about to load actually
     /// is**, known from the roster row a whole server round-trip before `SMSG_LOGIN_VERIFY_WORLD`
-    /// says so. The streamers aim at this during world entry (decision 0777); without it the only
+    /// says so. The streamers aim at this during world entry; without it the only
     /// answer available before the snap is the hardcoded Northshire anchor
     /// ([`crate::SPAWN_XY`]), which is a guess that is wrong for every character who isn't a fresh
     /// human — and a wrong guess here does not merely idle, it spends the entry's IO budget
@@ -364,7 +363,7 @@ impl Roster {
     }
 
     /// The **roster position** of the pick in flight — what the reference persists as
-    /// `lastCharacterIndex` at Enter World (decision 1622). By guid rather than by the live
+    /// `lastCharacterIndex` at Enter World. By guid rather than by the live
     /// selection, so the row it names is the one actually being entered even if the selection has
     /// since moved.
     pub(super) fn pending_index(&self) -> Option<usize> {
@@ -373,7 +372,7 @@ impl Roster {
     }
 }
 
-// ── The remembered character (`lastCharacterIndex`, decision 1622) ───────────────────────────────
+// ── The remembered character (`lastCharacterIndex`) ───────────────────────────────
 
 /// The CVar the select screen remembers you by — a **real 1.12 CVar**
 /// (registered at `0x402d93`, name `0x82e8f8`, help "Last character selected", default `"0"`,
@@ -454,7 +453,7 @@ fn persist_last_character(
 }
 
 /// Ask the parked IO thread to log in as `guid` (the pick channel) and remember it as pending.
-/// `pub(crate)` for the probe rig (decision 0651), which picks a character it may have had to
+/// `pub(crate)` for the probe rig, which picks a character it may have had to
 /// *create* first — going through here is what keeps `pending_pick` truthful, so 0065's reconnect
 /// re-answers with the rigged body rather than showing the roster.
 pub(crate) fn send_pick(roster: &mut Roster, pick: &CharPick, guid: u64) {
@@ -470,7 +469,7 @@ fn apply_roster_policy(
     mut msgs: MessageReader<CharListMessage>,
     mut roster: ResMut<Roster>,
     pick: Res<CharPick>,
-    // The remembered row (decision 1622) — read off the registry rather than the VM's table
+    // The remembered row — read off the registry rather than the VM's table
     // because the registry is the store that outlives every VM (2303), and because reading it
     // here keeps this system send-able. It is consulted exactly once per process: `selected` is
     // `None` only before the first roster lands.
@@ -493,7 +492,7 @@ fn apply_roster_policy(
                 }
                 None
             }
-            // `WOW_CHAR`, or the login smoke's optional third field (decision 1262): the seat
+            // `WOW_CHAR`, or the login smoke's optional third field: the seat
             // exists because `WOW_CHAR` *was* also an unattended marker, so using it to reach the
             // world switched the very branch a session test was trying to exercise. 1769 severed
             // that — `WOW_CHAR` now only means "skip the click" — and the seat stays as the
@@ -531,7 +530,7 @@ fn apply_roster_policy(
         if roster.chars.is_empty() {
             roster.select(None);
         } else if !created {
-            // The remembered character (decision 1622), re-applied on **every** roster — the
+            // The remembered character, re-applied on **every** roster — the
             // reference reads the CVar in the char-list rebuild itself (`0x4724d0` → `0x472740`),
             // not once at startup, so the screen always opens on whoever you last entered the
             // world as. Out of range falls back to the first row; see `remembered_row`.
@@ -604,7 +603,7 @@ fn enter_on_connected(
     }
 }
 
-/// **The session died** → all the way back to the login screen (decision 1262), which is where the
+/// **The session died** → all the way back to the login screen, which is where the
 /// reference's `GlueParent.lua` puts it: `SetGlueScreen("login")` on `DISCONNECTED_FROM_SERVER`,
 /// with [`crate::login`] raising the "Disconnected from server" dialog over it.
 ///
@@ -622,7 +621,7 @@ fn back_on_disconnect(
     if !msgs.read().any(|m| m.session_over) {
         return;
     }
-    // The pending pick is the reconnect's memory (0065). With no reconnect coming it would only
+    // The pending pick is the reconnect's memory. With no reconnect coming it would only
     // auto-answer the *next* roster — sending the player straight back into the world they were
     // just thrown out of, without ever seeing the screen.
     roster.pending_pick = None;
@@ -633,7 +632,7 @@ fn back_on_disconnect(
 /// glue layer, pick cleared, and the refusal said out loud.
 ///
 /// The entry it undoes was optimistic: the IO thread announces the connection in the same breath
-/// as the pick (so the destination's tiles start streaming a round-trip early, decision 0777), and
+/// as the pick (so the destination's tiles start streaming a round-trip early), and
 /// the refusal arrives after. So this runs the logout's transition on a world that was only ever
 /// half-built — the cover comes down with it ([`crate::loading_screen`]), and the IO thread's
 /// relist puts the roster back underneath.
@@ -784,7 +783,7 @@ pub(crate) fn char_delete_refusal_text(strings: &GlueStrings, code: u8) -> Optio
     Some(strings.text(key, fallback))
 }
 
-/// Glue-flow smoke (`WOW_GLUE_ROUNDTRIP=1`, decision 0423): once a real roster is up, bounce
+/// Glue-flow smoke (`WOW_GLUE_ROUNDTRIP=1`): once a real roster is up, bounce
 /// CharSelect → CharCreate → **Back** → CharSelect and exit — so the return-to-select rebuild is
 /// provable headlessly from the logs. Runs ungated (it crosses states); inert without the env.
 fn debug_glue_roundtrip(
@@ -838,7 +837,7 @@ fn debug_glue_roundtrip(
 /// boundary this smoke was written for is still checked on the way through.
 ///
 /// **It ends the way a player ends a session** — by closing the window, not by writing an
-/// `AppExit` of its own (decision 1528). That is not cosmetic: the close is the *latest*
+/// `AppExit` of its own. That is not cosmetic: the close is the *latest*
 /// announcement Bevy makes (`exit_on_all_closed` in `PostUpdate`, a frame after the request), so
 /// it is the only exit that actually tests whether the shutdown tail is reachable. Exiting by a
 /// hand-written `AppExit` from `Update` skipped that question for this smoke's whole life, and the
@@ -903,8 +902,8 @@ fn debug_logout_smoke(
             }
         },
         4 if *state.get() == ClientState::InWorld && player.active && now - *mark > 3.0 => {
-            // **The suppressor reading is the point of the second entry, not a decoration on it**
-            // (B306, decision 1542). This leg has crossed the boundary on every run since 2277 and
+            // **The suppressor reading is the point of the second entry, not a decoration on it**.
+            // This leg has crossed the boundary on every run since 2277 and
             // could only ever report that it *happened* — tiles, UI rebuilds, error counts — none
             // of which a character who re-entered unable to move would disturb. `scripts/smoke.sh`
             // fails on anything but `none`, and separately reports whether the run's logout was
@@ -1017,7 +1016,7 @@ fn debug_select_walk(
 /// When the select screen came up: `Time::elapsed_secs()` at `OnEnter(CharSelect)`, gone again
 /// at `OnExit`. The one clock the screen's "a few seconds after the screen is up" instruments
 /// ([`debug_select_dialog`], [`debug_select_addons`], [`debug_select_shot`]) measure from, in
-/// place of a `Local` each stamped on its own first run (decision 2265 §C3). Those three run
+/// place of a `Local` each stamped on its own first run. Those three run
 /// under `in_state(CharSelect)` in `Update`, so the resource is always there when they read it.
 #[derive(Resource, Clone, Copy)]
 struct CharSelectEnteredAt(f32);
@@ -1111,7 +1110,7 @@ fn debug_select_addons(
 /// enough for the art, the glue scene and the geared model to settle.
 const SELECT_SHOT_AT: f32 = 8.0;
 
-/// The select-screen shot instrument (`WOW_CHARSELECT_SHOT_OUT=<path>`, decision 0465): once the
+/// The select-screen shot instrument (`WOW_CHARSELECT_SHOT_OUT=<path>`): once the
 /// screen has been up a few seconds (art + scene + model settled), write one PNG of the window via
 /// Bevy's own framebuffer readback — machine-checkable geometry without macOS screen-recording
 /// permission. Inert without the env.
@@ -1243,8 +1242,7 @@ mod tests {
 
     use super::test_character as character;
 
-    /// **A session that dies during world entry does not leave the client in the world**
-    /// (decision 1262).
+    /// **A session that dies during world entry does not leave the client in the world**.
     ///
     /// The IO thread emits `Connected` *before* its read loop starts, so a socket that dies mid-
     /// entry — which is exactly what a displacement kick looks like, a bare EOF and nothing else —
@@ -1335,7 +1333,7 @@ mod tests {
     /// entry was announced in.
     ///
     /// The IO thread sends `CMSG_PLAYER_LOGIN` and emits `Connected` in the same breath (the
-    /// entry's head start, decision 0777), so when the server refuses immediately — which is the
+    /// entry's head start), so when the server refuses immediately — which is the
     /// vmangos guard's whole shape: `PlayerLoading() || GetPlayer() || !guid.IsPlayer()` answers
     /// before it touches the database — `Connected` and `SMSG_CHARACTER_LOGIN_FAILED` reach the
     /// app in ONE drain. Both edges then fire in one `Update`, and the refusal has to be the last
@@ -1538,7 +1536,7 @@ mod tests {
         assert_eq!(roster.selected, Some(1));
     }
 
-    // ── The remembered character (`lastCharacterIndex`, decision 1622) ───────────────────────────
+    // ── The remembered character (`lastCharacterIndex`) ───────────────────────────
 
     /// Drive the REAL [`apply_roster_policy`] over one roster message, with `config.toml` already
     /// holding `stored` for `lastCharacterIndex` (`None` = a launch that has never entered a

@@ -1,4 +1,4 @@
-//! The glue screens' client-data art (decisions 0423 + 0465) — everything the reference
+//! The glue screens' client-data art — everything the reference
 //! `CharacterCreate.xml` / `CharacterSelect.xml` / `GlueButtons.xml` draw with, loaded off the
 //! player's own patch chain (never embedded): the icon sheets, the tower frame pieces, the rotate
 //! buttons, the select list's row highlight, and the `Backdrop` edge files split into their
@@ -132,7 +132,7 @@ pub(crate) struct GlueArt {
     /// two 75×32 pieces overhanging the 130-wide box by 10 each side.
     pub(crate) chat_input_left: Option<(Handle<Image>, Vec2)>,
     pub(crate) chat_input_right: Option<(Handle<Image>, Vec2)>,
-    /// The login screen's set (decision 0539): the Blizzard logo (`Glues-BlizzardLogo`, bottom
+    /// The login screen's set: the Blizzard logo (`Glues-BlizzardLogo`, bottom
     /// center) and the Save Account Name checkbox states.
     pub(crate) blizzard_logo: Option<Handle<Image>>,
     pub(crate) checkbox: Option<CheckboxArt>,
@@ -340,7 +340,7 @@ impl GlueArt {
                 ),
             })
         })();
-        // The select screen's set (decision 0465): the row highlight + the delete dialog's box.
+        // The select screen's set: the row highlight + the delete dialog's box.
         self.select_highlight = add_overlay(
             assets,
             "Interface\\Glues\\CharacterSelect\\Glue-CharacterSelect-Highlight",
@@ -367,7 +367,7 @@ impl GlueArt {
             "Interface\\ChatFrame\\UI-ChatInputBorder-Right",
             images,
         );
-        // The login screen's set (decision 0539).
+        // The login screen's set.
         self.blizzard_logo =
             assets.sprite_texture("Interface\\Glues\\Mainmenu\\Glues-BlizzardLogo", images);
         self.checkbox = (|| {

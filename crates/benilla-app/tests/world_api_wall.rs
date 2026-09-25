@@ -114,14 +114,14 @@ const INSTRUMENT_ROOTS: &[&str] = &["art_scope", "debug_panel", "perf", "pipe_wa
 /// hides a number is worse than no rule. `art_scope` is not here: it is registered by
 /// `WorldPlugins` and lives inside the engine, so it never crosses.
 ///
-/// `crash` (decision 2266 §B2) is the fourth: the panic hook that writes the crash report. It is
+/// `crash` is the fourth: the panic hook that writes the crash report. It is
 /// `perf::stall`'s sibling — a diagnostic that writes into `Diagnostics/` and nothing gameplay
 /// reads — and the one engine item it names, `log_ring::recent`, is a diagnostic feed kept beside
 /// the engine's `LogPlugin` because that is where the layer has to be installed. An API shaped
 /// by what a crash report wanted to attach is 1163's failure exactly, so it is counted here, not
 /// in the doorway.
 ///
-/// `capture` (decision 2338) is the fifth, and the oldest ruling of the five: 1164 §Measured
+/// `capture` is the fifth, and the oldest ruling of the five: 1164 §Measured
 /// already counted `capture/*` among the instruments outside the doorway (its "21 named only by
 /// instruments"), but this list never said so, and a probe's reach — `static_gx::StaticGx`,
 /// `liquid::FoamPatch`, `ride_frame::ride_matrix`, the water-effect fixtures — was gated as if
@@ -135,7 +135,7 @@ fn is_instrument_consumer(rel: &str) -> bool {
 }
 
 /// **The designed API** — every engine item game code may name, and the record that published
-/// it (decision 2338). `1164` is the sort's own PUBLISH bucket and its facades; a four-digit
+/// it. `1164` is the sort's own PUBLISH bucket and its facades; a four-digit
 /// number is the record whose paragraph in the raise log below said "a PUBLISH"; `wall` is a
 /// raise-log paragraph that published the item without naming a record (grep the name below);
 /// `1167` published the facades the crate move landed; `2338` is the boot seam — the process-level
@@ -447,7 +447,7 @@ const SORTED_LEAKS: &[(&str, &str)] = &[
 /// count. The items were always crossing; the measurement improved. That is the only kind of raise
 /// that is not a retreat — a raise for a NEW leak is the failure this number exists to catch.
 ///
-/// And 158 → 159: `vis_chain::VisChainOnly`, a PUBLISH by 1164's test (decision 1441). The
+/// And 158 → 159: `vis_chain::VisChainOnly`, a PUBLISH by 1164's test. The
 /// chain-only visibility idiom — keep `Visibility`+`InheritedVisibility` (hide-propagation),
 /// remove `ViewVisibility` (the per-camera sweep row) — is an ENGINE law about bevy's visibility
 /// pipeline, but half the never-rendering hierarchy nodes it applies to are spawned game-side
@@ -456,7 +456,7 @@ const SORTED_LEAKS: &[(&str, &str)] = &[
 /// the why — the exact drift a named idiom exists to prevent; the trait is the smallest honest
 /// carrier of the law.
 ///
-/// And 157 → 158: `collision::ColliderEpoch`, a PUBLISH by 1164's test (decision 1384). It is the
+/// And 157 → 158: `collision::ColliderEpoch`, a PUBLISH by 1164's test. It is the
 /// stamp on the world's collider set — "the geometry you last asked has changed" — and the whole
 /// point of it is that a *cached* collision answer must not outlive the world it described. The
 /// engine owns the fact (the streamer's attach queue is what changes the set), the game owns two of
@@ -466,7 +466,7 @@ const SORTED_LEAKS: &[(&str, &str)] = &[
 /// arrive — which is B197's bug with a different collider class — or an engine system reaching into
 /// game components to invalidate them, which crosses this line the other way and worse.
 ///
-/// And 156 → 157: `mat_anim_table::MatAnimTable`, a PUBLISH by 1164's test (decision 1381). The
+/// And 156 → 157: `mat_anim_table::MatAnimTable`, a PUBLISH by 1164's test. The
 /// mat-anim delta table replaced per-frame material mutation, and registration must happen where
 /// materials are BUILT — which for WMO GameObject props (transport interiors) is a game-side
 /// spawner (`entities::wmo_props`) that already threads the two registries this table serves
@@ -474,7 +474,7 @@ const SORTED_LEAKS: &[(&str, &str)] = &[
 /// that allocates the slots is the smallest honest addition beside them; hiding it would mean
 /// a game-side material registering without a slot and silently freezing at its seed.
 ///
-/// And 155 → 156: `doodad_anim::DoodadAnimHost`, a PUBLISH by 1164's test (decision 1365). The
+/// And 155 → 156: `doodad_anim::DoodadAnimHost`, a PUBLISH by 1164's test. The
 /// doodad joint collapse put placed doodads on the collapsed-rig lane (`RigPose`), which made
 /// them visible to the game's animation-LOD gate — whose park marker the engine's own doodad
 /// draw gate already owns, on a different law (the composed draw verdict + fade sphere, not the
@@ -500,7 +500,7 @@ const SORTED_LEAKS: &[(&str, &str)] = &[
 /// nothing until its region bakes — and the game reads residency for two decisions the engine
 /// does not own: when the loading cover may lift, and when the post-snap physics hold may
 /// release (decision 0737's split). Both were answering "is the world there" with a fact that
-/// had stopped meaning it (decision 1498). The alternative was the game reaching into
+/// had stopped meaning it. The alternative was the game reaching into
 /// `StaticGx` itself, which is a whole engine subsystem through the door instead of one
 /// `usize` on the residency struct that exists to be read from outside.
 /// And 160 → 161: `mac_quit::MacQuitPlugin`, a PUBLISH in the exact class of the two engine
@@ -520,7 +520,7 @@ const SORTED_LEAKS: &[(&str, &str)] = &[
 /// deciding that a particular booth camera is being *paced* rather than put to sleep is policy,
 /// and it is `portrait::gate_booth_cameras`'s, in the game. There is no engine-side way to tell
 /// the two apart — a camera's `is_active` bit says only that it did not draw — which is precisely
-/// the conflation that ran the body panes' item effects at half speed (decision 1559, B312). The
+/// the conflation that ran the body panes' item effects at half speed. The
 /// alternative was passing a `Res<PaneRate>`-shaped opinion down into the engine's own sim, which
 /// puts the game's knob inside the renderer to keep a count flat.
 /// And 162 → 163: `rig_rider::RigRider`, a PUBLISH of the same shape as `rig_anim::AnimParked`
@@ -532,20 +532,20 @@ const SORTED_LEAKS: &[(&str, &str)] = &[
 /// policy, and it is `entities::equipment`'s, in the game — the same M2 attachment table that
 /// decides where a weapon is drawn versus stowed. There is no engine-side way to know it: the
 /// engine sees a scene-graph child, and a child is not an attachment. The alternative was passing
-/// the game's attach-slot table down into the renderer to keep a count flat (decision 1609).
+/// the game's attach-slot table down into the renderer to keep a count flat.
 /// And 163 → 164: `instance_tint::InstanceTintMirrors`, the twin of `rig_palette::RigPaletteMirrors`
 /// already through this door and registered at exactly the same site — an off-world `wow_light`
 /// buffer the engine must also fill with the per-instance tint region, because the shader reads
 /// that region out of whichever buffer the draw binds. Uploading a region to the buffers that
 /// carry it is machinery. *Which* off-world buffers carry it is policy, and it has to be: a
 /// portrait bake must NOT (the reference builds a fresh CM2 with colour `(1,1,1)`, so a ghost's
-/// portrait shows the living face — `0x524f60`, report B49, decision 1481)
+/// portrait shows the living face — `0x524f60`, report B49)
 /// while the glue scene MUST (it is the screen itself, and its character component is the very
 /// instance the reference tints). The engine cannot tell those two render targets apart — both are
 /// a camera writing to an image — and encoding "a bake standing in for a UI model widget" inside
 /// the uploader is exactly the game opinion the wall exists to keep out. The alternative was
 /// mirroring the region into every registered buffer to keep the count flat, which re-opens B49 in
-/// the tint lane (decision 1731).
+/// the tint lane.
 /// And 164 → 165: `ffx_glow::GlueFfx`, a PUBLISH of the same shape as `rig_anim::AnimParked` and
 /// the two above — a resource the ENGINE reads and the GAME writes, and exactly ONE bit wide.
 /// Running an FFX pass pair is machinery; *which* pair a screen installs is the screen's own, and
@@ -554,15 +554,15 @@ const SORTED_LEAKS: &[(&str, &str)] = &[
 /// engine's reach — `PLAYER_FLAGS_GHOST` on the live player — but the glue's is not and cannot be:
 /// it is the ghost bit of the **selected roster row** (`0x472fd9 test dh,0x20`), a character
 /// nobody is standing in, on a screen the engine has no concept of. The alternative was handing the
-/// renderer a roster to read to keep a count flat (decision 1731). Note the direction of travel:
+/// renderer a roster to read to keep a count flat. Note the direction of travel:
 /// this replaced `FfxGlow::state_scale`, a float that let a bake inherit a player-state lane by
 /// arithmetic — the enum that took its place makes report B49's invariant structural.
 /// And 165 → 166: `collision::MoverTraceExclusions`, a PUBLISH in the same class as the two
 /// one-bit resources above — a resource the ENGINE reads and the GAME writes. The reference's
 /// world trace carries a per-trace mask, and the local mover's gains bit `0x8000` when the body it
 /// drives is a player in ghost form; the GameObject collision-candidacy virtual `0x5f85f0` reads
-/// it and drops every `GAMEOBJECT_TYPE_ID == 0` object, so a ghost walks through closed doors
-/// (decision 1767). The engine cannot compute that set — "a DOOR GameObject, while the player is a
+/// it and drops every `GAMEOBJECT_TYPE_ID == 0` object, so a ghost walks through closed doors.
+/// The engine cannot compute that set — "a DOOR GameObject, while the player is a
 /// ghost" names two gameplay concepts, which is precisely what the wall pointing the other way
 /// forbids an engine file from knowing. The alternatives were both worse: dropping or re-laning
 /// the door's collider makes it stop existing for the particle snap, the precipitation probe, the
@@ -586,7 +586,7 @@ const SORTED_LEAKS: &[(&str, &str)] = &[
 /// And 172 → 173: `model_render::lazy::realize`, a PUBLISH. A built `WowModelMaterial` is no
 /// longer an asset the moment a spawner builds it — the engine parks the value behind a
 /// reserved handle and inserts the asset the first frame something visible is bound to it
-/// (decision 1940: 9.9k materials, 20.7k buffers and 10.2k bind groups were alive at the
+/// (9.9k materials, 20.7k buffers and 10.2k bind groups were alive at the
 /// Stormwind auction house for 36 drawn entity batches, the variant set every spawner is handed
 /// and never switches to). A game lane that CLONES a material before anything binds it — the
 /// portrait booth relighting a part's twins onto its own light buffer, a spell kit deriving its
@@ -597,14 +597,14 @@ const SORTED_LEAKS: &[(&str, &str)] = &[
 /// And 173 → 174: `particles::render::EFFECT_DRAW_STATS`, an instrument PUBLISH — the effect
 /// lane's own per-frame draw census (items in the transparent phase, draws after the merge),
 /// the number the `FPS_PROBE` line prints as `fx=`. It is the reading that refuted the
-/// additive-window regroup on the crowd rig (decision 1955): a lane whose merge walk is the
+/// additive-window regroup on the crowd rig: a lane whose merge walk is the
 /// only place the count exists has to publish it or stay unmeasurable.
 /// And 174 → 175: `dev_state::STILL_INPUTS_CHANGED`, an instrument PUBLISH — how many frames
 /// each whole-scene input of the still-frame skips (1979) read as changed. Counted in the
 /// world crate so the probe names ONE static instead of the four resources the skips read; the
 /// reading is what says whether a gate ever engages.
 /// And 175 → 176: `mat_anim_table::affine_row`, a PUBLISH. The mat-anim table's second row
-/// kind (decision 2019): a texture transform's rotation and scale as deltas from the identity,
+/// kind: a texture transform's rotation and scale as deltas from the identity,
 /// `[cos − 1, sin, sx − 1, sy − 1]`, so that row 0 — the pinned zero every static material
 /// reads — IS the identity. That encoding is the table's own law (the same zero-is-identity
 /// rule its translation rows and the tint table run under), and the shader's fold is written
@@ -612,7 +612,7 @@ const SORTED_LEAKS: &[(&str, &str)] = &[
 /// quadrant rotations off the pane's play head — has to write them in the table's encoding,
 /// not one of its own. One function, "encode this affine the way the table reads it".
 /// And 176 → 177: `mat_anim_table::MatAnimMirrors`, a PUBLISH — the mat-anim table's twin of
-/// `instance_tint::InstanceTintMirrors` (decision 2023). A lane whose materials bind a light
+/// `instance_tint::InstanceTintMirrors`. A lane whose materials bind a light
 /// buffer of their own reads the table out of THAT buffer, so the UI model tiles' rows — the
 /// cooldown sweep's rotations, written every frame off the pane's play head — reached a region
 /// nothing in a tile ever sampled until the tile's buffer was on a mirror list. Registered once
@@ -633,7 +633,7 @@ const SORTED_LEAKS: &[(&str, &str)] = &[
 /// folded into the whole fixed-function term (`ambient + 0.9·diffuse + Σ lamps`), which is what a
 /// lit particle quad receives; this is the read side for a draw whose vertex format carries **no
 /// normal**, so the normal array is disabled outright and its term is the ambient product and
-/// nothing else (the weapon swing trail, decisions 2079/2086). Published rather than reconstructed
+/// nothing else (the weapon swing trail). Published rather than reconstructed
 /// for the reason the entry above gives: the caller cannot rebuild it from `ParticleLight` — the
 /// diffuse lobe and the MOLT points are already summed in and cannot be subtracted back out — and
 /// a caller that reached for the *scene* ambient instead, which is what this replaces, tinted
@@ -651,7 +651,7 @@ const SORTED_LEAKS: &[(&str, &str)] = &[
 /// that a game module names it now, which is exactly the crossing this gate exists to make
 /// visible.
 /// And 180 → 181: `final_pass::FinalPassTarget`, a PUBLISH — where a colour lane's final pass
-/// lands, as one noun (decision 2206). The client has two colour lanes that end in a full-screen
+/// lands, as one noun. The client has two colour lanes that end in a full-screen
 /// decode: the world's (the FFXGlow combine, engine-side) and the UI's (`crate::ui_gamma`'s,
 /// game-side since 0254 — the interface is the game's). Both used to write bevy's main texture
 /// and let its `upscaling` blit copy the result out; 2206 has each render straight into its
@@ -661,15 +661,15 @@ const SORTED_LEAKS: &[(&str, &str)] = &[
 /// colour law on the wrong side of the wall. So the engine publishes the rule as one type with
 /// two associated functions, and the game names it once.
 /// And 181 → 182: `ffx_glow::FfxBackdrop`, a PUBLISH — the component that makes the world's
-/// FFX combine the first draw of the player-UI camera's main pass (decision 2234). The combine is engine-side
-/// (the world lane's byte math, 0161); the camera it now runs on is the game's (the interface,
+/// FFX combine the first draw of the player-UI camera's main pass. The combine is engine-side
+/// (the world lane's byte math); the camera it now runs on is the game's (the interface,
 /// 0254); so the engine publishes the claim as one component the game puts on its camera and
 /// points at the world camera it owns, and the two nodes behind it stay private. It retires a
 /// full-window float image that one camera wrote and the next read back — the seam 1603 built
 /// and 2215 measured — and it could not go the other way for 2206's reason: the UI camera cannot
 /// move into the engine.
 /// And 182 → 183: `doodad_anim::register_fx_uv`, a PUBLISH — put one spell-effect material clone
-/// on the per-instance UV-scroll lane (decision 2282). The clone is the GAME's: `entities::spell_fx`
+/// on the per-instance UV-scroll lane. The clone is the GAME's: `entities::spell_fx`
 /// makes it because one cast is one phase (the same reason 0271's animated tint clones it), and
 /// nothing engine-side knows an effect instance exists. Everything after that is the engine's —
 /// which registry, which delta-table row, which of 1408's two baked loop spellings, and the
@@ -690,14 +690,14 @@ const SORTED_LEAKS: &[(&str, &str)] = &[
 /// in the engine, where the bake's rules live, instead of copied into the effect attach where they
 /// would drift. Four positional `Option`s would have been the alternative, and swapping two of
 /// them is a silent wrong-channel bug the compiler cannot see.
-/// And 184 → 186, both for the ENTITY lane (decision 2295), which is the same crossing 2282 made
+/// And 184 → 186, both for the ENTITY lane, which is the same crossing 2282 made
 /// for the effect lane and made for the same reason.
 /// `doodad_anim::register_entity_uv` is the second PUBLISH verb on this lane: put a unit /
 /// GameObject / held-item batch material on the UV lane, picking the shared clock or the
 /// instance's play head from the authored record rather than making the caller reason about it.
 /// It is a separate verb from `register_fx_uv` and not a flag on it because the two lanes differ
 /// in the one thing a caller cannot get right by accident — an effect's clocks are measured from
-/// its own attach (0856/0858) and a resident entity's are the scene's — and a boolean spelling of
+/// its own attach and a resident entity's are the scene's — and a boolean spelling of
 /// that would read as a preference.
 /// `model_render::EntityUvLane` is the argument `entity_variants` grew, and the crossing it buys
 /// is the point of the decision: building an entity batch's material and putting it on the lane
@@ -719,7 +719,7 @@ const SORTED_LEAKS: &[(&str, &str)] = &[
 /// **nothing** in file slot 0, so a shared material can only ever seed white however faithfully it
 /// is ticked. They were already `pub` for the world streamer; what crosses here is the game naming
 /// them, and it is the same crossing the UV half makes one line up.
-/// And 189 → 190: `terrain_stream::CurrentArea`, taken by `capture/probe_bg.rs` (decision 2290).
+/// And 189 → 190: `terrain_stream::CurrentArea`, taken by `capture/probe_bg.rs`.
 /// It is the engine's own area authority — the `AreaTable.dbc` leaf under the player's feet, which
 /// the engine already publishes for its own audio and zone-text consumers — and the probe reports
 /// it for one reason: a battleground census has to be able to say *where the body actually is*,
@@ -728,7 +728,7 @@ const SORTED_LEAKS: &[(&str, &str)] = &[
 /// release lands at the graveyard. The alternative was to re-derive the leaf in the probe from
 /// tiles the engine already resolved, which is the copy-the-rule drift this wall exists to stop.
 ///
-/// **190 → the leaks (decision 2338).** The surface stood at 190 published-and-leaked items
+/// **190 → the leaks.** The surface stood at 190 published-and-leaked items
 /// together; the tables above split it, `capture` joined the instruments as 1164 always counted
 /// it, and the scanner learned to read a `use` group that spans lines (nine imports, twenty-one
 /// items counted nowhere until then — see [`logical_lines`]). What this constant gates from here
@@ -748,7 +748,7 @@ fn the_world_api_doorway_stays_shut() {
     let (probes, surface): (BTreeMap<_, _>, BTreeMap<_, _>) = all
         .into_iter()
         .partition(|(_, files)| files.iter().all(|f| is_instrument_consumer(f)));
-    // Partition two (decision 2338): the doorway is the published API plus the leaks, and only
+    // Partition two: the doorway is the published API plus the leaks, and only
     // the leaks gate.
     let published_by: BTreeMap<&str, &str> = PUBLISHED.iter().copied().collect();
     let sorted_by: BTreeMap<&str, &str> = SORTED_LEAKS.iter().copied().collect();
@@ -1152,7 +1152,7 @@ fn paths_in(text: &str, split: bool, want_engine: bool) -> Vec<(String, usize)> 
 /// joined into one. The scan is line-based, and [`expand`] given a `{` with nothing after it
 /// yielded nothing — so every member of such a group was invisible to both walls: nine imports
 /// in game files, twenty-one items counted nowhere, among them a 1164 CLOSE row and the twelve
-/// `terrain_stream::*` names `entities/wmo_props.rs` reaches for (decision 2338). Each joined
+/// `terrain_stream::*` names `entities/wmo_props.rs` reaches for. Each joined
 /// line keeps its first physical line's number; a `//` comment inside the group is cut at the
 /// comment (a `use` statement has no string literal a `//` could sit in).
 fn logical_lines(text: &str) -> Vec<(usize, String)> {

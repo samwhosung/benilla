@@ -1,4 +1,4 @@
-//! **The name cache, kept across sessions** (decision 1689) — the load/save half of
+//! **The name cache, kept across sessions** — the load/save half of
 //! [`crate::names::NameCache`], and benilla's answer to the reference's `WDB/*.wdb` files.
 //!
 //! ## Why this exists at all
@@ -10,7 +10,7 @@
 //! and are cleared at world-session start instead; a real 1.12 install's `WDB/` holds
 //! `creaturecache.wdb`, `npccache.wdb`, `itemcache.wdb` … and no `namecache.wdb`. 1689 read the
 //! reference as "all three" and wrote player and pet names to disk too, which is what answered a
-//! wiped server's brand-new character with a deleted one's name (B386); **decision 2223** took them
+//! wiped server's brand-new character with a deleted one's name; **decision 2223** took them
 //! back out and put the wipe in ([`NameCache::clear_world_session`]).
 //!
 //! What survives is the half that carried the value anyway: a city's worth of creature-template
@@ -58,7 +58,7 @@ impl Plugin for NamePersistPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<NameCacheFile>()
             .add_systems(Update, (load_name_cache, save_name_cache).chain());
-        // The exit edge (decision 1528): the last burst of answers is worth the one write, and it
+        // The exit edge: the last burst of answers is worth the one write, and it
         // is the only chance to take it — the debounce above will not fire again.
         crate::shutdown::on_app_exit(app, save_on_exit.into_configs());
     }
@@ -103,7 +103,7 @@ fn load_name_cache(
     match NameCache::from_tsv(&text, &realm) {
         Some(loaded) => {
             let n = loaded.len();
-            // **The file's own records go in; nothing else is touched** (decision 2260). This used
+            // **The file's own records go in; nothing else is touched**. This used
             // to be `*names = loaded`, on the premise stated here that "world entry clears the
             // guid-keyed stores a moment later regardless" — and the ordering is the other way
             // round. This loader fires the first frame `identity` answers, which is the frame the
@@ -139,7 +139,7 @@ fn save_name_cache(time: Res<Time>, mut file: ResMut<NameCacheFile>, names: Res<
     write_now(&mut file, &names);
 }
 
-/// The exit-edge write (decision 1528) — unconditional on the debounce, because there is no next
+/// The exit-edge write — unconditional on the debounce, because there is no next
 /// frame to defer to.
 fn save_on_exit(mut file: ResMut<NameCacheFile>, names: Res<NameCache>) {
     write_now(&mut file, &names);
@@ -207,7 +207,7 @@ mod tests {
         )
     }
 
-    /// **The director's report, at the seam that produced it** (decision 2260).
+    /// **The director's report, at the seam that produced it**.
     ///
     /// The realm cache is read off disk the first frame the pick's identity is known, and the
     /// login's seed of our OWN name lands in the same neighbourhood — so the two race, and the

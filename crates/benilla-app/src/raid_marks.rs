@@ -1,5 +1,5 @@
 //! Raid-target marker **overhead billboards** — the name render's marker leg `0x6c709a`: for
-//! each unit holding a mark on the 8-slot board (decision 0434 §6,
+//! each unit holding a mark on the 8-slot board (
 //! `GroupState::raid_targets`) and NOT carrying a live V-nameplate (the `[CGUnit+0xe60]==0`
 //! mutual exclusion — the plate shows its own raid-icon child instead, `vplates`), the client
 //! draws a separate world billboard: the anchor unit-quad LUT `(−.5,1,0),(.5,1,0),(.5,0,0),

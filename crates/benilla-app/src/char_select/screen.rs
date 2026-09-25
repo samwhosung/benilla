@@ -1,5 +1,5 @@
 //! The select screen's **layout** — the reference `CharacterSelect.xml` arrangement rebuilt in
-//! Bevy UI (decision 0465), full-bleed and scaled to the window: the glue engine renders a
+//! Bevy UI, full-bleed and scaled to the window: the glue engine renders a
 //! 1024×768 virtual screen scaled to the display, so every authored offset/size below is the
 //! ref's number times `height / 768`.
 //!
@@ -43,7 +43,7 @@ pub(super) enum SelectAction {
     CreateChar,
     /// Back to the realm list — drops the parked session, keeps the logon.
     ChangeRealm,
-    /// Open the AddOns list (decision 1197) — the reference's `CharacterSelectAddonsButton`.
+    /// Open the AddOns list — the reference's `CharacterSelectAddonsButton`.
     Addons,
     RotateLeft,
     RotateRight,
@@ -207,7 +207,7 @@ fn spawn_screen(
 
     // ...and every piece of chrome hangs off the CANVAS — the boxed scene's own rect (decision
     // 2091). Anchored to the window instead, the logo and the whole right-hand character frame
-    // (with Delete Character and Back) stood out in the bars at 21:9 (B377).
+    // (with Delete Character and Back) stood out in the bars at 21:9.
     let mut canvas = commands.spawn((crate::glue::glue_canvas(), ChildOf(root)));
     canvas.with_children(|ui| {
         // The WoW logo (`CharacterSelectLogo`, 256×128 at TOPLEFT (3,−7)).
@@ -265,7 +265,7 @@ fn spawn_screen(
 
         rotate_cluster(ui, art, &font, s);
 
-        // **AddOns** (decision 1197) — the reference's `CharacterSelectAddonsButton`, which 1191
+        // **AddOns** — the reference's `CharacterSelectAddonsButton`, which 1191
         // §5 recorded as never built because there was no list behind it. There is now. Bottom
         // LEFT, out of the way of the Enter World / Back cluster; the reference sits it in the
         // same lower band. Shown only when something is installed, exactly as the reference's

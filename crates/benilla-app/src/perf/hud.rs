@@ -2,7 +2,7 @@
 //!
 //! **The pill is two small numbers** (1448 pared it back; 1454 made it the whole HUD; 1455
 //! dropped the spike arrow). fps dim — the familiar anchor, and by construction the number that
-//! cannot see cost (0717) — then process-CPU cost per frame, the meter vsync cannot rail; both
+//! cannot see cost — then process-CPU cost per frame, the meter vsync cannot rail; both
 //! under-size, because the pill sits over the game all session. Anything deeper is an
 //! instrument's job, not a panel's: the journal (`WOW_FPS_JOURNAL`), the probes, Tracy, the
 //! `frame hitch` log line and the stall self-sampler. The expanded egui readout that used to
@@ -122,7 +122,7 @@ impl PerfHud {
 
 pub(super) fn toggle_hud(keys: Res<ButtonInput<KeyCode>>, mut hud: ResMut<PerfHud>) {
     // The dev chord + `P`, not a bare `p` — `P` is the reference's TOGGLESPELLBOOK, and a dev
-    // doesn't get to squat on a game binding (decision 0585). The chord can't be mistaken for typed
+    // doesn't get to squat on a game binding. The chord can't be mistaken for typed
     // text, so unlike the old bare key it needs no chat-bar/EditBox gate.
     if benilla_world::modkeys::dev_chord(&keys, KeyCode::KeyP) {
         hud.visible = !hud.visible;
@@ -158,7 +158,7 @@ pub(super) fn refresh_hud_snapshot(
 ///
 /// The pill has sat at the top centre since 1453 because that band was empty. It is not empty
 /// everywhere: the always-up world-state readout (`WorldStateAlwaysUpFrame` — the tower counters
-/// and battleground scores, decision 1590) is anchored to the top centre too, and in Eastern
+/// and battleground scores) is anchored to the top centre too, and in Eastern
 /// Plaguelands or a battleground the two drew straight through each other. **The dev instrument is
 /// the one that yields** — the readout is the game, the pill is scaffolding — and it yields by
 /// stepping below it rather than by moving house, because a 1.12 UI has no corner a standing
@@ -212,7 +212,7 @@ pub(crate) fn top_centre_claimed(script: &UiScript, win_h: f32) -> f32 {
     frac * win_h
 }
 
-/// The pill as ~20 quads on the player-UI pass (decision 1453). The append lane is rebuilt every
+/// The pill as ~20 quads on the player-UI pass. The append lane is rebuilt every
 /// frame anyway, so the marginal cost is the clone of a cached Vec — where the old egui pill woke
 /// bevy_egui's whole pipeline plus a full-screen compositing camera (~1 ms on the director's live
 /// toggle). Glyphs are laid out only when the snapshot ticks or the window resizes.
@@ -344,7 +344,7 @@ mod tests {
     ///
     /// **Why it lives here and not beside the frame it drives.** It was written in
     /// `ui_script/world_state_tests.rs`, next to the readout — but `perf` is compiled out of a player
-    /// build, so the `player-tests` gate (`--no-default-features --lib`, decision 1175) could not
+    /// build, so the `player-tests` gate (`--no-default-features --lib`) could not
     /// compile that file, and gating the one test with `#[cfg(feature = "dev")]` trips `run_mode`'s
     /// dev-plane enforcer (1179: seam knowledge has exactly three addresses, and a gameplay module is
     /// not one of them). Both laws point the same way — a test of a dev instrument belongs in a dev
@@ -354,7 +354,7 @@ mod tests {
     fn the_readout_tells_the_dev_pill_how_much_of_the_top_it_uses() {
         benilla_formats::wow_data_or_skip!();
         // NOT 768. The layout answers in WoW UI units — a screen that is always 768 units tall
-        // whatever the window is (decision 0582) — and the pill draws in window px, so a probe that
+        // whatever the window is — and the pill draws in window px, so a probe that
         // subtracts one from the other is right only when the two happen to coincide. Feeding a
         // window height that is NOT the virtual one is the whole point of this test: it is what the
         // director's client does, and the first version of this probe put the pill back on top of the
@@ -451,7 +451,7 @@ mod tests {
 
     /// The pill's seat: its usual place while the top-centre band is clear, and below the game UI
     /// the moment something claims it — the always-up world-state readout is the one frame that
-    /// shares this band (decision 1590), and before this the two drew through each other.
+    /// shares this band, and before this the two drew through each other.
     #[test]
     fn the_pill_steps_below_whatever_claims_the_top_centre() {
         let mut hud = PerfHud::default();

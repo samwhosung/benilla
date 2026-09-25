@@ -26,11 +26,11 @@ pub(crate) fn smoke_character(spec: &str) -> Option<String> {
     smoke_spec(spec).2.map(str::to_string)
 }
 
-/// The login smoke (`WOW_LOGIN_SMOKE=user:pass[:Character]`, decision 0539 §7): once the screen is
+/// The login smoke (`WOW_LOGIN_SMOKE=user:pass[:Character]`): once the screen is
 /// up, submit those credentials through the real screen path; exit success on reaching CharSelect,
 /// log + exit failure on a refusal — the wrong-password path is provable headlessly.
 ///
-/// **Naming a character keeps the run going into the world instead of exiting** (decision 1262).
+/// **Naming a character keeps the run going into the world instead of exiting**.
 /// It was the only headless way to reach the world down the *player's* path, back when setting
 /// `WOW_CHAR` also made the run unattended and so switched the very branch a session test wanted
 /// to exercise; decision 1769 severed that, and `WOW_CHAR` now says nothing about who is in the

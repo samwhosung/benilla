@@ -3,7 +3,7 @@
 //! `ABILITY_INFO_*`, `CLASS_*`), the per-race customization dial labels (`HAIR_<tok>_STYLE`,
 //! `FACIAL_HAIR_<tok>`), the login refusals, and the button captions.
 //!
-//! **It is two files, in the reference's own order** (decision 2052). `GlueXML.toc` sources
+//! **It is two files, in the reference's own order**. `GlueXML.toc` sources
 //! `GlueStrings.lua` at line 1 and `GlueLocalization.xml` at line 3, and that XML exists only to
 //! load its script and call `Localize()` — a function of nothing but assignments, which *overwrite*
 //! the base table. In 1.12 enGB it rewrites 32 keys, among them every long login refusal

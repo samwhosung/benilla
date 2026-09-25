@@ -28,13 +28,13 @@
 //!   **constant screen size**: the geometry globals `[0x87d9cc]=0.1` × `[0x87d9d0]=0.025` in gx
 //!   screencoord units, where one unit = the screen **diagonal** `√(W²+H²)` (`0x41ad10` — and never
 //!   uiScale: plates live outside the UIParent cascade). **Our basis is growth-damped** past
-//!   [`PLATE_DIAG_KNEE`] — a director-pinned deviation (0185/0186): the real client grows
+//!   [`PLATE_DIAG_KNEE`] — a director-pinned deviation: the real client grows
 //!   plates diagonal-linear without limit (`0x7705b0`) and the director rejected that
 //!   look; past 1024×768 the plate grows at half the real rate (midway between faithful and
 //!   the native size).
 //! - **Anatomy — not here any more.** The plate's six regions, its health-bar child, their
 //!   layers and the anchors between them live with the widgets that carry them
-//!   ([`benilla_ui::script::nameplate`], decision 2148): the plate is a real `Button` under the
+//!   ([`benilla_ui::script::nameplate`]): the plate is a real `Button` under the
 //!   `WorldFrame` and the shared frame→quad path draws it. What stays this file's is everything
 //!   about the WORLD — the gate above, the anchor, the projection, the seat, and the damped
 //!   basis the geometry is computed in ([`plate_basis`], [`gx_px`], [`text_px`]).
@@ -74,7 +74,7 @@ use crate::target::{ring_reaction, Factions, Hovered, Selection, TargetUpdate};
 use benilla_world::view::WorldCamera;
 
 /// Sharp-resampling the frame border ([`border::resample_sharp`]) so the 128×32 art reads crisp at
-/// the plate's larger size instead of bilinear-magnified soft (0188).
+/// the plate's larger size instead of bilinear-magnified soft.
 pub(crate) mod border;
 
 /// The master bitmask (`[0xc4da34]`): bit 0 enemy plates, bit 3 friendly. **Both boot OFF, the
@@ -90,7 +90,7 @@ pub(crate) mod border;
 /// beside it for saving (`RegisterForSave`, UIOptionsFrame.lua) — pushing changes back through
 /// `ShowNameplates()`/`HideNameplates()`. 1.12 registers **no** nameplate CVar (no such string
 /// exists in the binary), so the names are the LATER-era engine's, the same posture
-/// as `autoLootDefault` — benilla's persistence lives in the CVar store (0954), and a setting with
+/// as `autoLootDefault` — benilla's persistence lives in the CVar store, and a setting with
 /// no 1.12 CVar takes the era name rather than inventing one.
 ///
 /// **Both boot OFF — the reference's own state**, and verified on both of its halves, because
@@ -236,7 +236,7 @@ fn con_color(pl_level: u32, unit_level: u32) -> [f32; 4] {
 /// (a benilla divergence: the reference draws at fractional device coords).
 ///
 /// The plate rect is snapped so the sharp-resampled border art blits 1:1 and reads crisp instead
-/// of bilinear-smeared (0188). Alignment is a property of the **framebuffer**, though, and the
+/// of bilinear-smeared. Alignment is a property of the **framebuffer**, though, and the
 /// quad lane is *logical* px ([`crate::ui_pass`]: 1 world unit = 1 logical px) — so the plain
 /// `round()` this shipped with quantized the plate to `scale_factor` PHYSICAL pixels: two pixels
 /// of stepping on the 2× display we develop and play on, against a world that slides continuously
@@ -256,10 +256,10 @@ pub(crate) fn device_snap(v: f32, scale: f32) -> f32 {
     (v * scale).round() / scale
 }
 
-/// The knee of the plate's gx basis — **a director-pinned DEVIATION from the byte law**
-/// (0185/0186). The real client's plates grow diagonal-linear without limit (`0x7705b0`:
+/// The knee of the plate's gx basis — **a director-pinned DEVIATION from the byte law**.
+/// The real client's plates grow diagonal-linear without limit (`0x7705b0`:
 /// ~294 px plate + em-29 name at 2560×1440, bilinear-softened) — the director
-/// rejected that look as too big/thick/soft, and a hard cap at native (0185) as too small.
+/// rejected that look as too big/thick/soft, and a hard cap at native as too small.
 /// 1280 is the diagonal where the 0.1 × 0.025 frame is EXACTLY the border art's native
 /// 128 × 32 px; past it the basis grows at [`PLATE_GROWTH_DAMP`] of the real rate — at every
 /// window the plate lands midway between the faithful size and the native pin.
@@ -300,8 +300,8 @@ pub(crate) fn text_px(h: f32, basis: f32) -> f32 {
     (h * basis).round().min(32.0)
 }
 
-/// **The FrameXML mirror of the two toggles** — `NAMEPLATES_ON` and `FRIENDNAMEPLATES_ON`
-/// (decision 2132), pushed into whichever VM is live.
+/// **The FrameXML mirror of the two toggles** — `NAMEPLATES_ON` and `FRIENDNAMEPLATES_ON`,
+/// pushed into whichever VM is live.
 ///
 /// The reference keeps the plate state in **two** levels: the engine bitmask `[0xc4da34]`, which
 /// is volatile and cleared on every `EnterWorld`, and those two FrameXML globals, which are the
@@ -354,7 +354,7 @@ fn feed_plate_globals(
     }
 }
 
-/// NAMEPLATES / FRIENDNAMEPLATES / ALLNAMEPLATES through the binding table (0997; defaults V /
+/// NAMEPLATES / FRIENDNAMEPLATES / ALLNAMEPLATES through the binding table (defaults V /
 /// SHIFT-V / CTRL-V). The typing gate and 0585's modifier law live in the dispatch now.
 ///
 /// The V and SHIFT-V halves stay benilla's **independent** toggles (the shipped behavior) rather
@@ -449,7 +449,7 @@ fn drive_vplates(
     world: PlateWorld,
     names: Res<NameCache>,
     net_commands: Res<NetCommands>,
-    // The widget layer this drives (decision 2148). `None` in a VM-less run (a capture with the
+    // The widget layer this drives. `None` in a VM-less run (a capture with the
     // interface off, a bare test app) — the gate below then costs one early return.
     script: Option<NonSendMut<benilla_ui::script::UiScript>>,
     // The seam this frame's px↔unit conversion runs at (`windowH/768 × uiScale`).
@@ -465,7 +465,7 @@ fn drive_vplates(
     // The frame's claim bucket 0 (nameplates) — cleared and rebuilt every pass; worldtext owns
     // bucket 1 in `combat_text` and the two never interact (a plate never pushes a number).
     mut bucket: Local<crate::smart_rect::SmartBucket>,
-    // The raid-target board (decision 0434 §6) — the plate's raid-icon child reads it.
+    // The raid-target board — the plate's raid-icon child reads it.
     group: Res<crate::ui_party::GroupState>,
     // Whether this VM's plates have been told about freelook (the `0x60f830` edge).
     mut mouse_told: Local<crate::ui_script::VmMemo<Option<bool>>>,
@@ -567,7 +567,7 @@ fn drive_vplates(
         // (`vtable+0x38` = `0x607ed0`). So the flag arriving on a plated unit takes its plate away
         // on the next tick, which falls out of this per-frame gate for free.
         //
-        // **This suppression is load-bearing, not cosmetic** (decision 2060): a plate hover
+        // **This suppression is load-bearing, not cosmetic**: a plate hover
         // publishes the mouseover *directly* — `0x7cb850 OnEnter` → `0x7cb869 call 0x492890`, with
         // none of the `IsSelectable` grading the world hover gets at `0x482982`. If a flagged unit
         // ever kept its plate, hovering that plate would hand it a name tooltip the reference never
@@ -579,7 +579,7 @@ fn drive_vplates(
         // test: signed `UNIT_FIELD_HEALTH ≤ 0`, absent = 0 (the
         // zero-init descriptor). A poll, not a death callback; the lootable bit is never
         // consulted. Feign death keeps health > 0, so it clears THIS leg — the gate that takes a
-        // feigning body's plate away is the hostile-only one below (decision 1022).
+        // feigning body's plate away is the hostile-only one below.
         if store.is_none_or(|s| s.0.unit_health().unwrap_or(0) == 0) {
             continue;
         }
@@ -633,7 +633,7 @@ fn drive_vplates(
         // (`0x60f72f test al,al; jne` → friendly goes to the creature-type check `0x60f750`;
         // hostile falls into `0x60f733 shr eax,5; test al,1` → hide). So a feigning hunter's
         // plate vanishes for the enemies he is hiding from, which is the point of the spell,
-        // while a friendly one keeps his (decision 1022).
+        // while a friendly one keeps his.
         if !friendly && store.is_some_and(|s| s.0.unit_reads_dead()) {
             continue;
         }
@@ -777,10 +777,10 @@ fn drive_vplates(
         // the widget layer speaks. Dividing it out here is deliberate and is a DIVERGENCE worth
         // naming: the reference's plates are outside the `uiScale` cascade (uiScale is
         // `UIParent`'s own frame scale there, and the WorldFrame is a sibling root), while
-        // benilla folds uiScale into one global seam (0582/0584). Until that seam grows a
+        // benilla folds uiScale into one global seam. Until that seam grows a
         // per-cascade answer, the driver compensates, so a plate's PIXELS stay uiScale-blind the
         // way the reference's are.
-        // The raid-target board (decision 0434 §6): 1-based here, 0-based for the atlas cell.
+        // The raid-target board: 1-based here, 0-based for the atlas cell.
         let mark = group.raid_target_index(guid.0);
         let x_units = (plate.min.x + plate.max.x) * 0.5 / seam;
         let y_units = (viewport.y - plate.min.y) / seam;
@@ -849,7 +849,7 @@ fn drive_vplates(
 
     // The window-derived half, once per frame — the widget layer rewrites the static anchors only
     // when this actually moves, which is what keeps an addon's own re-anchoring alive between
-    // resizes (decision 2148 §5).
+    // resizes.
     script.sync_nameplates(
         PlateGeometry {
             width: pw / seam,
@@ -881,7 +881,7 @@ pub(crate) struct VPlateSet;
 /// V-key nameplates: the toggles + the per-frame gate/draw.
 pub(crate) struct VPlatesPlugin;
 
-/// The two V-plate toggles' change callback (decision 2303) — the bitmask's two bits, flags
+/// The two V-plate toggles' change callback — the bitmask's two bits, flags
 /// like every other checkbox. Lowercased here like every arm; the consts carry the registered
 /// spelling.
 pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut mode: ResMut<VPlateMode>) {
@@ -1067,7 +1067,7 @@ mod tests {
         assert!(moved(&mut app).is_empty());
     }
 
-    /// **The FrameXML mirror is owed to every VM** (decision 2132) — the mode's two bits reach
+    /// **The FrameXML mirror is owed to every VM** — the mode's two bits reach
     /// `NAMEPLATES_ON`/`FRIENDNAMEPLATES_ON` as the reference's `1`-or-nil, follow a change, and
     /// are handed to a rebuilt VM (a `/reload`) without one.
     #[test]

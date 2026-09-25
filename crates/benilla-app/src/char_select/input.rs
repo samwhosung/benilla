@@ -68,7 +68,7 @@ pub(super) fn select_input(
                 // Selecting is gated on the row actually CHANGING — the ref's own
                 // `CharacterSelectButton_OnClick` is that gate and nothing else, so the row you
                 // are already on is not re-selected and keeps the facing you dragged into it
-                // (`Roster::click_row`, decision 2194).
+                // (`Roster::click_row`).
                 roster.click_row(i);
                 // `OnDoubleClick` runs the same gated select and then enters the world
                 // unconditionally — it does not re-test what was selected before.
@@ -94,9 +94,9 @@ pub(super) fn select_input(
                 // the create-screen open sound rather than inventing a name the client lacks.
                 sounds.write(GlueSound("gsCharacterSelectionCreateNew"));
                 // The whole roster rides along so the panel's "Configure Addons For:" dropdown
-                // can fan out over every character (decision 1293). The realm resolves exactly
+                // can fan out over every character. The realm resolves exactly
                 // as `ui_macro::identity`'s does — same fallback, so the enable files the panel
-                // writes stay keyed the way the world-entry walk reads them (0997, 1191 §7).
+                // writes stay keyed the way the world-entry walk reads them (1191 §7).
                 let realm = roster
                     .realm
                     .as_ref()
@@ -128,7 +128,7 @@ pub(super) fn select_input(
         back_to_login = true;
     }
     if back_to_login {
-        // The ref's Back leaves select for the login screen (decision 0539): drop the parked
+        // The ref's Back leaves select for the login screen: drop the parked
         // session (the IO thread re-parks pre-logon) and forget both intents — a deliberate Back
         // must not auto-relogin.
         sounds.write(GlueSound("gsCharacterSelectionExit"));

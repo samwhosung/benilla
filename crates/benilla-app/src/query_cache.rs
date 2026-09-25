@@ -1,4 +1,4 @@
-//! **`QueryCache<K, V>` — the one ask-once cache** (decision 2288; 2265 §A4).
+//! **`QueryCache<K, V>` — the one ask-once cache**.
 //!
 //! The reference has one `DBCache<T>` (vtable `0x80912c`): a consumer's miss
 //! sends the query and queues a callback; a second lookup of a pending key appends a callback
@@ -18,7 +18,7 @@
 //!
 //! A negative answer is cached as `None` (the server's high-bit miss), so a dead key is never
 //! re-asked; [`QueryCache::answered_unknown`] is for the consumer that waits (the cast-fail
-//! redisplay, decision 0552) to know when to stop.
+//! redisplay) to know when to stop.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
@@ -36,7 +36,7 @@ pub(crate) struct QueryCache<K, V> {
     /// and a miss is the rare path).
     pending: Mutex<HashSet<K>>,
     /// Bumped by every landing, positive or negative — the broadcast a consumer that caches a
-    /// view derived from an answer keys on (the reference's `DBCACHECALLBACK` redisplay, 0660).
+    /// view derived from an answer keys on (the reference's `DBCACHECALLBACK` redisplay).
     generation: u64,
 }
 

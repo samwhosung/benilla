@@ -1,4 +1,4 @@
-//! The loading screen's **tip of the day** (decision 2077).
+//! The loading screen's **tip of the day**.
 //!
 //! `showGameTips`' only mention in 1.12's FrameXML is its options row and the tooltip string
 //! "Uncheck this to hide the tip of the day in the load screens", so the whole feature is
@@ -267,7 +267,7 @@ pub(crate) fn tip_bundle() -> impl Bundle {
 
 pub(crate) struct GameTipPlugin;
 
-/// The tip rows' change callback (decision 2303): the switch, and the cursor — which is not a
+/// The tip rows' change callback: the switch, and the cursor — which is not a
 /// preference: a hand-edited or downgraded value lands here verbatim and [`raise`] clamps it,
 /// which is the reference's own tolerance (`0x46b682`).
 pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut setting: ResMut<GameTipSetting>) {
@@ -303,7 +303,7 @@ impl Plugin for GameTipPlugin {
 ///
 /// Two callers empty this node and both want the same end state: hidden, childless, and holding no
 /// text. Only the second of them used to clear the ROOT's own run, and that difference crashed the
-/// client (B383, decision 2212). Despawning a `Text` root's last `TextSpan` child does not *change*
+/// client. Despawning a `Text` root's last `TextSpan` child does not *change*
 /// `Children` — it REMOVES the component — and bevy 0.18's `detect_text_needs_rerender` watches
 /// `Changed<Children>`, which a removal cannot satisfy. So the dismiss left a two-run shaped buffer
 /// behind a one-run span list, and the first window resize after world entry re-laid-out that
@@ -342,7 +342,7 @@ fn drive_game_tip(
     assets: Res<AssetServer>,
     mut commands: Commands,
     // The cursor persists through the registry, not the knob alone: a host write there is what
-    // the file is composed from and what the VM's mirror learns (decision 2303).
+    // the file is composed from and what the VM's mirror learns.
     mut cvars: ResMut<crate::cvars::Cvars>,
 ) {
     let Some(edge) = screen.take_tip_edge() else {
@@ -375,7 +375,7 @@ fn drive_game_tip(
         // Our own `setup_loading_screen` spawns this node, so a miss is a STRUCTURAL bug — the
         // bundle no longer answering the shape of this query — and never a state a run can
         // legitimately be in. It was a silent `return` for one release, and it cost the whole
-        // feature while every other instrument read green (decision 2083).
+        // feature while every other instrument read green.
         warn!("loading screen: the tip node is missing — no tip can draw");
         return;
     };
@@ -576,7 +576,7 @@ mod tests {
 
     /// An app holding the real node and the real system, one tip in the table — plus the text
     /// stack and the real `detect_text_needs_rerender`, so what the paint and the dismiss do to
-    /// the node's `ComputedTextBlock` is observable (B383, decision 2212).
+    /// the node's `ComputedTextBlock` is observable.
     fn tip_app() -> (App, Entity) {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()));
@@ -649,8 +649,8 @@ mod tests {
         assert_eq!(w.resource::<GameTipSetting>().next, 1);
     }
 
-    /// **A tip outlives every raise and dies with the screen** — [`crate::loading_screen`]'s law
-    /// (decision 2081), seen from the painting end. That module's own test asserts which *edges*
+    /// **A tip outlives every raise and dies with the screen** — [`crate::loading_screen`]'s law,
+    /// seen from the painting end. That module's own test asserts which *edges*
     /// the state machine emits; this one asserts what the painter does with them, and the case that
     /// matters is the one with no edge at all: a raise landing on a live screen must leave the line
     /// exactly where it is, same text and same cursor. Between them the two cover the login snap

@@ -21,12 +21,12 @@
 //! (PetMeleeDamage cvar); pet spell → GOLD (PetSpellDamage cvar); **any OTHER source is
 //! suppressed entirely** — another unit's fight floats nothing (the emitter returns before
 //! submitting; it was never "white"). Crit does NOT recolor (it only picks the pop row); there
-//! is NO school coloring. The bit-15 flip is [`melee_styled`] (decision 0376): the flag is
+//! is NO school coloring. The bit-15 flip is [`melee_styled`]: the flag is
 //! `SPELL_ATTR3_NORMAL_RANGED_ATTACK` — set on exactly 8 rows of the real DBC, the ranged
 //! auto-attack family — so a Throw/Auto Shot number floats white off
 //! `SMSG_SPELLNONMELEEDAMAGELOG`.
 //!
-//! **The WORD emitter runs that same law** (decision 2229, closing what phase 2 left open). The
+//! **The WORD emitter runs that same law** (closing what phase 2 left open). The
 //! two emitters are separate functions — `0x607140` takes three stack args and `0x6128b0` four,
 //! so they are not the "byte-identical twins" the first reading called them — but they compute
 //! `B` and `K` identically, and **seven of the eight `0x607140` call sites push a resolved
@@ -116,7 +116,7 @@
 mod law;
 
 /// The spell-gold override, re-exported so the emitter arms' own tests can assert the colour they
-/// now pass through (decision 2229). Live code never names it — [`damage_color`] picks it.
+/// now pass through. Live code never names it — [`damage_color`] picks it.
 #[cfg(test)]
 pub(crate) use law::COLOR_SPELL_GOLD;
 use law::{
@@ -173,7 +173,7 @@ struct WorldText {
 pub(crate) struct WorldTexts(Vec<WorldText>);
 
 /// **The face the floating numbers draw in — the Lua global `DAMAGE_TEXT_FONT`, resolved once per
-/// world session** (decision 2156).
+/// world session**.
 ///
 /// `0x6c8470` reads the global's *value* eagerly and hands it straight to the font factory:
 /// `6c847c mov ecx,0x86c9ac` ("DAMAGE_TEXT_FONT") → `0x703bf0` `FrameScript_GetText`'s fast arm
@@ -356,7 +356,7 @@ pub(crate) fn float_combat_text(
         // Laid out AT the target size. The crit pop animates through a continuum of sizes, which
         // under the old fixed ladder meant shaping at the nearest rung and rescaling every quad
         // about the anchor — a resampled bitmap for the whole animation. Now the pop steps through
-        // whole device-pixel sizes and each one is rasterized crisp (decision 1342). The real
+        // whole device-pixel sizes and each one is rasterized crisp. The real
         // client stretched a ≤32 px raster here; rendering the true size is the recorded upgrade.
         let mut e = atlas.lock();
         let mut glyphs = layout_text_quads(
@@ -491,7 +491,7 @@ fn source_class(
 }
 
 /// The **deferred** outcome-word producer: a travelling spell's miss word, floated when the
-/// projectile lands rather than when `SMSG_SPELL_GO` arrives (decision 2229).
+/// projectile lands rather than when `SMSG_SPELL_GO` arrives.
 ///
 /// `0x6e7a70`'s inline word emit is skipped whenever the spell's `Spell.dbc` Speed is nonzero
 /// (`0x6e7d4e fld [SpellRec+0x94]; fcomp 0.0; test ah,0x44; jp 0x6e7e71`); the projectile's own
@@ -579,7 +579,7 @@ fn melee_impact_text(
 /// inside the append window the mesh rebuild waits on).
 pub(crate) struct CombatTextPlugin;
 
-/// The damage-text rows' change callback (decision 2303): three flags.
+/// The damage-text rows' change callback: three flags.
 pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut gates: ResMut<DamageTextGates>) {
     match ev.key().as_str() {
         "combatdamage" => gates.combat_damage = ev.flag(),
@@ -656,7 +656,7 @@ mod tests {
         assert_eq!(gold.color, COLOR_SPELL_GOLD);
     }
 
-    /// **A travelling spell's outcome word is DEFERRED, and it is GOLD** (decision 2229) — the
+    /// **A travelling spell's outcome word is DEFERRED, and it is GOLD** — the
     /// arrival half of the miss text: a resisted Fireball reads "Resist" in spell gold when the
     /// ball lands, not white at GO.
     ///

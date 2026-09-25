@@ -1,9 +1,9 @@
 //! `benilla` — a from-scratch World of Warcraft 1.12.1 client on Bevy, talking to a local vmangos server.
 //!
 //! Opens the vanilla patch chain from wherever the install is (`$WOW_DATA`, the project folder on a
-//! dev build, else beside the binary — decision 1175) and streams the world around the
+//! dev build, else beside the binary) and streams the world around the
 //! player through Bevy's `AssetServer` (the `benilla-assets` `mpq://` pipeline): ADT terrain tiles within
-//! the live Terrain Distance window (decision 1513) — their splat-blended ground, doodads/WMOs, water,
+//! the live Terrain Distance window — their splat-blended ground, doodads/WMOs, water,
 //! and ground clutter — plus the avian colliders the character controller walks on. Lit by a time-of-day WoW
 //! lighting model (`Light.dbc` sampled against the server clock) with a sky dome, sun/moon discs, and
 //! distance fog; a faithful `EffectGlow` bloom on top.
@@ -13,12 +13,12 @@
 //! render as their real models (resolved from the display id via the creature/GameObject catalogs); other
 //! players stay cyan cubes, and our own avatar is blue until we take third-person control of it.
 //! **The world is loaded when a character enters it, and released when they leave** — the glue
-//! screens have no world behind them (decision 0777). With no server there is no world: the client
+//! screens have no world behind them. With no server there is no world: the client
 //! sits at the login screen, which is what the real one does. The scene harness (`$WOW_CAPTURE`)
 //! boots straight in-world and is unaffected.
 //!
 //! Controls: WASD walks the avatar; right-drag turns it, left-drag orbits the camera (both
-//! hide/freeze the cursor while held), scroll wheel zooms. Those are all **bindings** now (0997) —
+//! hide/freeze the cursor while held), scroll wheel zooms. Those are all **bindings** now —
 //! rebindable, and nothing in the client squats on a bare key beside them (1043). The dev chord
 //! (`Ctrl`+`Shift`) + `F` toggles free-fly, then WASD flies the camera with Space up / C down and
 //! `Ctrl` boosts — a boost that exists only inside free-fly, itself behind the chord.
@@ -31,7 +31,7 @@
 // spent its whole diff clearing it out of. Dev builds still warn normally.
 #![cfg_attr(not(feature = "dev"), allow(dead_code))]
 
-/// The realtime-audio allocation tripwire (decision 1857). In debug builds an allocation inside
+/// The realtime-audio allocation tripwire. In debug builds an allocation inside
 /// the output IO callback or the render pass (`sound::output`'s `no_alloc` scopes) aborts the
 /// process, so a realtime-safety regression fails a test or a smoke instead of reaching an ear;
 /// release builds carry no wrapper at all.
@@ -67,7 +67,7 @@ mod cvars;
 mod death;
 #[cfg(feature = "dev")]
 mod debug_panel;
-/// **The dev/player seam** (decisions 0026/1173, built in 1174) — the group, and the boundary
+/// **The dev/player seam** (built in 1174) — the group, and the boundary
 /// rule, in one file. Always compiled; what it *holds* is not.
 mod dev;
 mod doodad_events;
@@ -115,8 +115,8 @@ mod shaders;
 mod game_tip;
 mod name_persist;
 mod opaque2d;
-/// Where "the client is going down" may be observed, and why that is `Last` and not `Update`
-/// (decision 1528). Every system that persists state on the way out registers through it.
+/// Where "the client is going down" may be observed, and why that is `Last` and not `Update`.
+/// Every system that persists state on the way out registers through it.
 mod shutdown;
 mod smart_rect;
 mod sound;
@@ -213,14 +213,14 @@ use bevy::prelude::*;
 // build id at compile time and hands it into [`run`]. Re-exported so the shim needs no bevy
 // dep of its own.
 pub use benilla_world::build_id::BuildId;
-/// The world viewer's entry point — the engine with no game attached (decision 1160).
+/// The world viewer's entry point — the engine with no game attached.
 /// Its shim (`benilla-worldview`) is this library's second caller; see [`worldview`].
 pub use benilla_world::worldview::run as run_worldview;
 pub use bevy::app::AppExit;
 
 /// Build and run the client app. `build` is the launcher shim's compile-time git stamp
 /// ([`build_id`]) — passed in as plain data so the sha lives in the shim's fingerprint, not
-/// this crate's, and a commit stops recompiling the app (decision 0993).
+/// this crate's, and a commit stops recompiling the app.
 pub fn run(build: BuildId) -> AppExit {
     // `WOW_CAPTURE=list` just prints the harness scenario names (the source of truth `scripts/visual.sh`
     // reads) and exits before any window/asset setup.
@@ -248,7 +248,7 @@ pub fn run(build: BuildId) -> AppExit {
     let mut app = App::new();
     // The stamp is plain data from here on — the panel footer and preflight banner read it back.
     app.insert_resource(build);
-    // Pin Bevy's static-scene transform tracking ON (decision 1356). At the default threshold
+    // Pin Bevy's static-scene transform tracking ON. At the default threshold
     // `mark_dirty_trees` re-decides per frame by counting every changed-Transform row and every
     // tree row — two full scans of the very population the tracking exists to skip. This scene
     // is provably static-heavy (terrain/WMO batches and parked units barely move), so the
@@ -256,7 +256,7 @@ pub fn run(build: BuildId) -> AppExit {
     // when MOST rows move in one frame (a load burst into a near-empty world), where
     // dirty-marking briefly costs more than it saves — a loading-band term, accepted knowingly.
     app.insert_resource(bevy::transform::systems::StaticTransformOptimizations::enabled());
-    // The Update schedule runs on the SINGLE-THREADED executor (decision 1366). Not a tuning
+    // The Update schedule runs on the SINGLE-THREADED executor. Not a tuning
     // whim: ~60% of our per-frame Update systems are non-Send (mlua's UiScript, kira's audio
     // handles) and serialize through the multi-threaded executor's one `local_thread_running`
     // flag anyway, so the cross-thread dispatch machinery was pure overhead — measured
@@ -268,7 +268,7 @@ pub fn run(build: BuildId) -> AppExit {
             s.set_executor_kind(bevy::ecs::schedule::ExecutorKind::SingleThreaded);
         });
     }
-    // PostUpdate too (decision 1437, closing 1366's named open probe — which expected a
+    // PostUpdate too (closing 1366's named open probe — which expected a
     // REGRESSION here and was refuted by measurement). The census: 208 systems paying
     // ~10 µs/system of MT dispatch parked (schedule self 2.09 ms/f in the 1435 band map) while
     // the wide bands the 1366 expectation leaned on are exactly the ones later work gated or
@@ -294,20 +294,20 @@ pub fn run(build: BuildId) -> AppExit {
     // the case; 1174 moved the file without re-reading it).
     app.add_systems(Startup, benilla_world::build_id::banner);
 
-    // Visual A/B harness (decision 0008): with `$WOW_CAPTURE` set, the app runs a deterministic,
+    // Visual A/B harness: with `$WOW_CAPTURE` set, the app runs a deterministic,
     // server-less capture (net off so no NPCs stream in nondeterministically) and exits. See `capture`.
     let capturing = run_mode::scenario_active();
     // Any instrumented run — captures AND the live-probe fleet — opens in the background so it
-    // never fights the director's screen (decision 0703; `WOW_BG` overrides). See `bgwin`.
+    // never fights the director's screen (`WOW_BG` overrides). See `bgwin`.
     let background = benilla_world::bgwin::background_run();
     if capturing {
         // Ground clutter scatters with per-run randomness, so disable it for byte-stable baselines
         // — clutter isn't what the lighting rework validates, and the regression diff must not be
         // masked by grass wobble. Set before plugins build so `ClutterConfig::from_env` reads it.
         // It is not the only source of per-run drift, though it was long documented as such: the
-        // other is the frame clock itself, frozen in `capture` (decision 0723).
+        // other is the frame clock itself, frozen in `capture`.
         std::env::set_var("WOW_CLUTTER_DENSITY", "0");
-        // Third source of per-run drift, and the one the lighting matrix (decision 0746) hit: the
+        // Third source of per-run drift, and the one the lighting matrix hit: the
         // anim-LOD park/wake gate (`creature_anim::lod::gate_rig_animation`). Whether a rig is
         // parked, and which pose it wakes into, depends on when its model finished loading relative
         // to the frustum/room evaluation — asset-load timing, which the frozen clock does not
@@ -341,7 +341,7 @@ pub fn run(build: BuildId) -> AppExit {
         ),
     }
 
-    // NOTE: there is deliberately no `game://` asset source here (decision 1175). 1171 gave the
+    // NOTE: there is deliberately no `game://` asset source here. 1171 gave the
     // game's five UI shaders their own source pointed at this crate's `assets/` — with the path
     // baked from `CARGO_MANIFEST_DIR`, so it named the build machine's source tree and resolved
     // to nothing anywhere else. The line 1171 drew survives: those five are still this crate's,
@@ -350,7 +350,7 @@ pub fn run(build: BuildId) -> AppExit {
 
     app.add_plugins(benilla_world::boot::tuned_default_plugins(Window {
         title: "benilla".into(),
-        // **Born in the player's display mode, not flipped into it** (decision 1627). `gxWindow`
+        // **Born in the player's display mode, not flipped into it**. `gxWindow`
         // is read straight off `config.toml` here rather than waiting for `Startup`'s
         // `load_config`, because a launch that opens windowed and goes fullscreen one frame later
         // is a visible flash on every start — and, under a compositor that only maps a fullscreen
@@ -405,11 +405,11 @@ pub fn run(build: BuildId) -> AppExit {
                 video::requested_window_size()
                     // A run that reads no pixels gets a SMALL window. It is held `AlwaysOnTop` for its
                     // whole life so it can never be occluded into the ~1 fps throttle
-                    // (`capture::ProbeFocusPlugin`, decision 0906) — at the full default that meant
+                    // (`capture::ProbeFocusPlugin`) — at the full default that meant
                     // every agent probe planted a screen-filling window over the director's work. Small
                     // + cornered (`ProbeFocusPlugin` parks it) is un-occludable AND out of the way;
                     // anything photographing pixels keeps the full size, and `WOW_WIN` overrides either
-                    // way (decision 1148).
+                    // way.
                     .unwrap_or(if benilla_world::bgwin::no_pixel_run() {
                         UVec2::new(640, 360)
                     } else {
@@ -428,7 +428,7 @@ pub fn run(build: BuildId) -> AppExit {
         // screens, where no capture scenario runs). Absent it, we boot synced and the player's
         // `gxVSync` setting takes over from `Startup` on ([`crate::video`]).
         present_mode: video::present_mode(!video::novsync_env()),
-        // An instrumented run must never fight the director's screen (decision 0703).
+        // An instrumented run must never fight the director's screen.
         // Focused, it steals the keyboard — on 2026-07-19 a login-shot run swallowed
         // their keystrokes out of another app and typed them into the account box,
         // which is also how that capture lost the bare caret it was taken to measure.
@@ -442,7 +442,7 @@ pub fn run(build: BuildId) -> AppExit {
         // STAY there: that level is a cage, and 0703 leaving it on for the whole run
         // is why an instrumented window could never be raised again however hard you
         // clicked it. `BgWinPlugin` promotes it back to Normal the moment the launch
-        // settles (decision 0709), and owns the app-level half — winit's forced macOS
+        // settles, and owns the app-level half — winit's forced macOS
         // app activation — as well.
         focused: !background,
         window_level: if background {
@@ -455,14 +455,14 @@ pub fn run(build: BuildId) -> AppExit {
     .add_plugins(benilla_world::thread_qos::ThreadQosPlugin)
     // The app-side half of background instrumented runs: undo winit's forced macOS app
     // activation so a probe/capture launch never yanks focus off the director's screen. The
-    // window-side half (unfocused + always-on-bottom) is in the `Window` above. Decision 0703.
+    // window-side half (unfocused + always-on-bottom) is in the `Window` above.
     .add_plugins(benilla_world::bgwin::BgWinPlugin)
-    // The other winit-default the client has to undo (decision 1528): macOS's `Cmd+Q` is wired
+    // The other winit-default the client has to undo: macOS's `Cmd+Q` is wired
     // straight to `terminate:`, which never runs another frame — so the gesture a Mac player
     // reaches for first exited without writing one line of their session. Re-pointed at the
     // window close, which the shutdown tail in [`shutdown`] already sees.
     .add_plugins(benilla_world::mac_quit::MacQuitPlugin)
-    // **The engine, as one name** (decision 1164). Everything `benilla-world` will own,
+    // **The engine, as one name**. Everything `benilla-world` will own,
     // in the order both binaries used before this group existed — see `world_plugins.rs`
     // for the two ordering edges inside it that are load-bearing, and for what is
     // deliberately left out (`pipe_warm`).
@@ -470,7 +470,7 @@ pub fn run(build: BuildId) -> AppExit {
     // The instruments, which the engine group deliberately does not carry (1160: instruments at
     // the top of the stack). The panel first — `PerfPlugin` needs the egui plugin/context it sets
     // up. Toggles: the dev chord + D, and P.
-    // **The instruments** (decisions 1173/1174): the debug panel, the perf HUD, the object
+    // **The instruments**: the debug panel, the perf HUD, the object
     // inspector, the hover-cost recorder, the asset-churn meter, the session preflight and the
     // probe shield — one group, in the slot the panel has always held (it sets up the egui
     // context the perf pill needs). `--no-default-features` compiles every one of them out; see
@@ -480,7 +480,7 @@ pub fn run(build: BuildId) -> AppExit {
     // build appends a per-second row of position, frame cost and the GPU's per-pass split to
     // `benilla-config/Diagnostics/fps-journal.csv`; `WOW_FPS_JOURNAL=<csv>` is the harness lever.
     .add_plugins(perf::FpsJournalPlugin)
-    // **The game, as one name** (decision 2279): everything the client adds on top of the
+    // **The game, as one name**: everything the client adds on top of the
     // engine, in the order it always had. See `game_plugins.rs` for the members, the ordering
     // edges inside it that are load-bearing, and the test that builds it headless.
     .add_plugins(game_plugins::GamePlugins {
@@ -491,7 +491,7 @@ pub fn run(build: BuildId) -> AppExit {
     // Register benilla-assets' loaders AFTER `AssetPlugin` (they go into the live `AssetServer`).
     benilla_assets::register_asset_loaders(&mut app);
 
-    // The render app's `ExtractSchedule` runs SINGLE-THREADED too (decision 1437, same grading
+    // The render app's `ExtractSchedule` runs SINGLE-THREADED too (same grading
     // as the PostUpdate flip above): bevy_render never sets an executor kind, so it ran the
     // multi-threaded one by default — 0.34 ms/f of schedule self in the 1435 parked band map
     // over 165 systems (census) with zero true non-Send members. Graded −0.26 parked alone,
@@ -523,12 +523,12 @@ pub fn run(build: BuildId) -> AppExit {
 
     // **The probe fleet** — the capture harness and every scripted live probe, each armed by its
     // own environment variable and inert without it. Added last so they observe the fully-built
-    // app; compiled out entirely by `--no-default-features` (decisions 1173/1174), which is why
+    // app; compiled out entirely by `--no-default-features`, which is why
     // this is one line and the twenty env checks behind it live in `dev.rs`.
     app.add_plugins(dev::DevProbesPlugin);
 
     // Return the app's own exit status instead of dropping it: a failed capture writes
     // `AppExit::error()` (see `capture::drive_capture`), and discarding it made the process exit 0
-    // with no PNG on disk — which is how a sweep carried on around a missing shot (decision 0743).
+    // with no PNG on disk — which is how a sweep carried on around a missing shot.
     app.run()
 }

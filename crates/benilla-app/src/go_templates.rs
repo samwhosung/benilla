@@ -1,4 +1,4 @@
-//! The ask-once GameObject template cache (decision 0239) — benilla's `GAMEOBJECT_QUERY` store.
+//! The ask-once GameObject template cache — benilla's `GAMEOBJECT_QUERY` store.
 //!
 //! A GameObject's **lockId** (a type-specific slot of its template `data[]`) decides its right-click
 //! action: a locked object (chest / mining vein / herb node / locked door) casts an `OPEN_LOCK` spell
@@ -14,13 +14,13 @@ use bevy::prelude::*;
 use crate::net::{ClientCommand, NetCommands};
 use crate::query_cache::QueryCache;
 
-/// `Lock.dbc` as a resource (decision 0239) — `lockId → requirement slots`, read by the interact
+/// `Lock.dbc` as a resource — `lockId → requirement slots`, read by the interact
 /// routing to decide use-vs-cast and, for a lockable object, which `LockType` the opener spell must
 /// match. Loaded once at startup ([`crate::entities`]); absent when the client data is.
 #[derive(Resource)]
 pub(crate) struct Locks(pub(crate) LockCatalog);
 
-/// `LockType.dbc` as a resource (decision 0236) — `LockType.Id → cursor stem`, read by the world
+/// `LockType.dbc` as a resource — `LockType.Id → cursor stem`, read by the world
 /// cursor's GameObject branch ([`crate::target`]) to name a lockable object's cursor by data
 /// (`PickLock`/`GatherHerbs`/`Mine`), the client's own lock → LockType → CursorName chain. Loaded
 /// once at startup; absent when the client data is, in which case a lock-bearing GO shows the
@@ -38,7 +38,7 @@ pub(crate) struct GoTemplate {
     /// The display name — the hover tooltip's gold first line (decision 0276's GO law).
     pub(crate) name: String,
     /// The vanilla **highlight** column, for the two types whose mouseover-eligibility slot reads
-    /// it instead of running a predicate (decision 1110): GENERIC(5)'s `data[1]` (`0x5f4830`,
+    /// it instead of running a predicate: GENERIC(5)'s `data[1]` (`0x5f4830`,
     /// decision 0762 — nonzero on 1387 of the 1870 shipped type-5 templates, which is why a road
     /// signpost hovers and the scenery beside it never does) and CAPTURE_POINT(29)'s `data[19]`
     /// (`0x5f6d80` — byte-for-byte the same shape, a different slot). `false` for every other type,
@@ -52,7 +52,7 @@ pub(crate) struct GoTemplate {
     ///
     /// The slot is named by `0x621b00(type, semantic 0x13)`, a key that resolves for exactly one
     /// of the 31 GO types — so no other type can take the cursor arm, and 0766's INTERIM "GENERIC
-    /// vs not" proxy is replaced by the real key (decision 2259). **Distinct from
+    /// vs not" proxy is replaced by the real key. **Distinct from
     /// [`Self::highlight_column`]**, which is `data[1]` via semantic `0x12` and gates *eligibility*
     /// rather than *placement*: an object can be hoverable and still be corner-seated.
     ///
@@ -61,14 +61,14 @@ pub(crate) struct GoTemplate {
     /// own `gameobjectcache.wdb` — 1890 entries, zero disagreements with the server's.)
     pub(crate) floating_tooltip: bool,
     /// MEETINGSTONE (type 23) only: the three template slots the stone's own strategy reads —
-    /// `data[0]`/`data[1]` = minLevel/maxLevel and `data[2]` = areaID (decisions 1110, 2283).
+    /// `data[0]`/`data[1]` = minLevel/maxLevel and `data[2]` = areaID.
     /// `None` for every other type.
     pub(crate) meeting_stone: Option<MeetingStoneTemplate>,
-    /// MO_TRANSPORT (type 15) path parameters — `Some` only for boats/zeppelins (decision 0438):
+    /// MO_TRANSPORT (type 15) path parameters — `Some` only for boats/zeppelins:
     /// the template's `data0..2` = (taxiPathId, moveSpeed, accelRate), the inputs the transport
     /// timetable is built from.
     pub(crate) mo_transport: Option<MoTransport>,
-    /// TEXT (type 9) only: the book/plaque's page chain head + frame material (decision 1105).
+    /// TEXT (type 9) only: the book/plaque's page chain head + frame material.
     /// `Some` with a nonzero `page_id` is what makes a right-click *read* it; a type-9 template
     /// with no page (vanilla ships a handful) opens nothing at all, exactly like the reference.
     pub(crate) text_page: Option<TextPage>,
@@ -80,7 +80,7 @@ pub(crate) struct GoTemplate {
 
 /// A MEETINGSTONE (type 23) template's three slots, all of them read by the stone's own strategy
 /// through the per-type attribute table `0x621b00`: keys `0x33`/`0x34`/`0x35` → indices 0/1/2
-/// (vmangos `GameObjectInfo::meetingstone` = `minLevel, maxLevel, areaID`; decision 2283).
+/// (vmangos `GameObjectInfo::meetingstone` = `minLevel, maxLevel, areaID`).
 ///
 /// The **areaID** is the input of the type's own `highlightable` slot `0x5f6990`
 /// ([`crate::target::cursor_mode::meeting_stone_queued`]); the **level pair** is the input of the
@@ -95,7 +95,7 @@ pub(crate) struct MeetingStoneTemplate {
     pub(crate) area: u32,
 }
 
-/// A MO_TRANSPORT template's path tuple (`gameobject_template.data0..2`, decision 0438).
+/// A MO_TRANSPORT template's path tuple (`gameobject_template.data0..2`).
 #[derive(Clone, Copy)]
 pub(crate) struct MoTransport {
     pub(crate) taxi_path_id: u32,
@@ -104,7 +104,7 @@ pub(crate) struct MoTransport {
 }
 
 /// A TEXT (type 9) template's readable head — `data[0]`/`data[2]` (vmangos `GameObjectInfo::text`
-/// = `pageID, language, pageMaterial, allowMounted`; decision 1105). The client reads both through
+/// = `pageID, language, pageMaterial, allowMounted`). The client reads both through
 /// the same per-type attribute→slot table (`0x621b00`, attribute `0x11` = pageMaterial), so the
 /// two layouts are the one layout.
 #[derive(Clone, Copy)]
@@ -150,7 +150,7 @@ impl GameObjectTemplates {
             .and_then(|slot| data.get(slot))
             .map(|&v| v.max(0) as u32)
             .unwrap_or(0);
-        // The highlight column, at the slot its type reads it from (decision 1110): GENERIC(5)
+        // The highlight column, at the slot its type reads it from: GENERIC(5)
         // `data[1]`, CAPTURE_POINT(29) `data[19]`. Both slots are resolved by the same
         // `0x621b00(type, semantic 0x12)` lookup in the reference; the two shipped answers are
         // inlined here for the same reason [`go_lock_slot`] inlines the lock's.
@@ -159,26 +159,26 @@ impl GameObjectTemplates {
             29 => data[19] != 0,
             _ => false,
         };
-        // GENERIC(5): data[0] = the tooltip-placement fork's input (decision 2259). Same shape as
+        // GENERIC(5): data[0] = the tooltip-placement fork's input. Same shape as
         // the highlight column above and deliberately beside it — they are adjacent slots that
         // answer different questions, and reading them as one is the mistake 0766 made.
         let floating_tooltip = type_id == 5 && data[0] != 0;
         // MEETINGSTONE (23): data[0..2] = minLevel, maxLevel, areaID (vmangos
         // `gameobject_template`) — the area feeds that type's own highlightable slot, the level
-        // pair the use-slot validator's level refusal (decision 2283).
+        // pair the use-slot validator's level refusal.
         let meeting_stone = (type_id == 23).then(|| MeetingStoneTemplate {
             min_level: data[0].max(0) as u32,
             max_level: data[1].max(0) as u32,
             area: data[2].max(0) as u32,
         });
         // MO_TRANSPORT (15): data0..2 = taxiPathId / moveSpeed / accelRate (vmangos
-        // `GameObjectInfo::moTransport`; decision 0438).
+        // `GameObjectInfo::moTransport`).
         let mo_transport = (type_id == 15).then(|| MoTransport {
             taxi_path_id: data[0].max(0) as u32,
             move_speed: data[1].max(0) as f32,
             accel_rate: data[2].max(0) as f32,
         });
-        // TEXT (9): data[0] = pageID, data[2] = pageMaterial (decision 1105).
+        // TEXT (9): data[0] = pageID, data[2] = pageMaterial.
         let text_page = (type_id == 9).then(|| TextPage {
             page_id: data[0].max(0) as u32,
             material: data[2].max(0) as u32,
@@ -266,7 +266,7 @@ mod tests {
         let mut t = GameObjectTemplates::default();
         let mut data = [0i32; 24];
         // The Menethil–Theramore boat (entry 176231): taxiPathId 292, moveSpeed 30, accelRate 1
-        // (vmangos gameobject_template, decision 0438).
+        // (vmangos gameobject_template).
         data[0] = 292;
         data[1] = 30;
         data[2] = 1;
@@ -325,7 +325,7 @@ mod tests {
     }
 
     /// **`data[0]` and `data[1]` are different questions, and a GENERIC object can answer them
-    /// differently** — the pin that replaces 0766's INTERIM proxy (decision 2259).
+    /// differently** — the pin that replaces 0766's INTERIM proxy.
     ///
     /// `data[1]` (semantic `0x12`, `0x5f4830`) is mouseover ELIGIBILITY: is this hoverable at all.
     /// `data[0]` (semantic `0x13`, `0x5f8630`) is PLACEMENT: does its plate follow the cursor or

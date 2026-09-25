@@ -9,7 +9,7 @@
 //!
 //! Until this module existed, benilla sent that opcode from nowhere: a portal did nothing, and an
 //! instance entrance did nothing, because the server was never told we were standing in one (ledger
-//! **B70**, **N02**). The teleport that answers it has worked since decision 0455.
+//! **B70**, **N02**). The teleport that answers it has worked since.
 //!
 //! ## The law, from the reference
 //!
@@ -170,7 +170,7 @@ mod tests {
     }
 
     /// The whole state machine over the **real** table, walking the exact route the live probe
-    /// walked: the Darnassus portal pair (B70) and the Southshore inn's box (the shape the sphere
+    /// walked: the Darnassus portal pair and the Southshore inn's box (the shape the sphere
     /// tests can't reach). Skips without client data.
     ///
     /// The second assertion is the load-bearing one — a portal that reported every frame would

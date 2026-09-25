@@ -10,7 +10,7 @@
 //! timing — lives in [`crate::combat_text`].
 //!
 //! Each spell arm ALSO feeds the **`UNIT_COMBAT` event** ([`UnitCombatFeedback`] — the portrait
-//! hit indicator, decision 0576) — that channel is the worldtext's inverse: **ungated** (no
+//! hit indicator) — that channel is the worldtext's inverse: **ungated** (no
 //! Gate A, no source class; it exists to show what anyone does to you), fired at packet receive.
 //! The melee arm's twin rides the swing impact keyframe instead (`ui_unit::melee_unit_combat`).
 
@@ -66,7 +66,7 @@ pub(crate) fn classify_source(
 /// The color law's `B` bit for a spell-packet emit, over the catalog the arms carry: resolve the
 /// spell's record and hand it to [`crate::combat_text::melee_styled`] (which owns the law and its
 /// NULL-record degradation). This is how a ranged basic shot's `SMSG_SPELLNONMELEEDAMAGELOG`
-/// floats white (decision 0376) while an ordinary spell floats gold.
+/// floats white while an ordinary spell floats gold.
 pub(super) fn melee_styled(spells: Option<&crate::ui_action::Spells>, spell_id: u32) -> bool {
     crate::combat_text::melee_styled(spells.and_then(|s| s.catalog.get(spell_id)))
 }
@@ -74,7 +74,7 @@ pub(super) fn melee_styled(spells: Option<&crate::ui_action::Spells>, spell_id: 
 /// The spell arms' shared `UNIT_COMBAT` split: a landed amount is `WOUND` (`CRITICAL` descriptor
 /// on crit), zero damage degrades to the full-`ABSORB`/`RESIST` descriptor, else nothing (a clean
 /// spell miss arrives via `SMSG_SPELLLOGMISS` instead). PROVISIONAL string mapping until the
-/// reference's UNIT_COMBAT emission is pinned down (decision 0576).
+/// reference's UNIT_COMBAT emission is pinned down.
 fn spell_feedback(
     damage: u32,
     absorb: u32,
@@ -211,7 +211,7 @@ pub(super) fn spell_damage_log(
             school: u32::from(s.school),
         });
     }
-    // The center combat text (decision 0578): self recipient only.
+    // The center combat text: self recipient only.
     if self_guid.0 == Some(s.target) {
         if let Some((message_type, data)) = spell_center_text(s.damage, s.absorb, s.resist) {
             center.write(CombatTextEvent {
@@ -225,7 +225,7 @@ pub(super) fn spell_damage_log(
         return; // K = other: never drawn
     };
     // B = the melee-styled bit: a ranged basic shot (Throw/Auto Shot — AttributesEx3 & 0x8000)
-    // floats WHITE off this spell packet, exactly like the client (decision 0376).
+    // floats WHITE off this spell packet, exactly like the client.
     let Some(color) = damage_color(gates, source, melee_styled(spells, s.spell_id)) else {
         return; // the CombatDamage / PetSpellDamage gates
     };
@@ -268,7 +268,7 @@ pub(super) fn periodic_aura_log(
             ),
         );
     }
-    // The center combat text (decision 0578): self recipient only — damage ticks like direct
+    // The center combat text: self recipient only — damage ticks like direct
     // damage, heal ticks PERIODIC_HEAL (arg2 = the caster's name, arg3 = amount; the name only
     // displays under COMBAT_TEXT_SHOW_FRIENDLY_NAMES), energize ticks the power-gain family.
     if self_guid.0 == Some(s.target) {
@@ -299,7 +299,7 @@ pub(super) fn periodic_aura_log(
                 // The displayed figure, not the wire's — `0x626dd0` divides by
                 // `0x6e7130(powerType)` at `0x627087` **before** it pushes the COMBAT_TEXT tag
                 // (`0x494770`) and before it words the chat line, so both consumers see the same
-                // number (decision 2117).
+                // number.
                 PeriodicTick::Energize { power, amount } => {
                     power_message_type(power).map(|message_type| CombatTextEvent {
                         message_type,
@@ -463,7 +463,7 @@ pub(super) fn spell_heal_log(
 ///
 /// The amount is the **displayed** figure: the handler `0x5e8a90` divides by
 /// `0x6e7130(powerType)` at `0x5e8af3` and hands that one number to the COMBAT_TEXT push
-/// (`0x494770`) and to the chat formatter (`0x62ca00`) alike (decision 2117).
+/// (`0x494770`) and to the chat formatter (`0x62ca00`) alike.
 pub(super) fn spell_energize_log(
     s: SpellEnergizeLog,
     self_guid: &SelfGuid,
@@ -520,7 +520,7 @@ fn miss_action(code: u8) -> Option<&'static str> {
 /// SPELL_GO miss list in practice: vmangos routes only impact-time outcomes (immune, evade) here.
 /// Source-classified like every emitter (the classifier lives inside the word twin too), and
 /// **coloured by the same B/K law as a number** — `0x5e7f63 mov ecx,[ebp-0x8]; 0x5e7f66 push ecx`
-/// pushes the resolved SpellRec, not NULL, so this site's words are spell-GOLD (decision 2229).
+/// pushes the resolved SpellRec, not NULL, so this site's words are spell-GOLD.
 pub(super) fn spell_log_miss(
     s: SpellLogMiss,
     index: &GuidIndex,
@@ -534,7 +534,7 @@ pub(super) fn spell_log_miss(
 ) {
     // The ungated UNIT_COMBAT feed: the outcome word over each missed target, any source — a
     // mob's bolt you resist is YOUR portrait's "Resist". A self target also feeds the center
-    // text's SPELL_* word family (decision 0578).
+    // text's SPELL_* word family.
     for &(target, code) in &s.misses {
         if let (Some(&unit), Some(action)) = (index.0.get(&target), miss_action(code)) {
             feedback.write(UnitCombatFeedback {
@@ -601,8 +601,8 @@ pub(super) fn xp_gain(
     chat_log.push_xp_gain(&x);
 }
 
-/// `SMSG_EXPLORATION_EXPERIENCE` → the discovery announcement (decision 0828; surfaces and
-/// sound from the reference, 0829). Three legs, mirroring the real handler's case body
+/// `SMSG_EXPLORATION_EXPERIENCE` → the discovery announcement (surfaces and
+/// sound from the reference). Three legs, mirroring the real handler's case body
 /// `[0x5e41d2, 0x5e42bb]`:
 /// - the ERR_ZONE_EXPLORED toast + (xp > 0) the ERR_ZONE_EXPLORED_XP chat line, queued via
 ///   [`ChatLog::push_exploration`] — the area name is the packet's `AreaTable.dbc` row id
@@ -654,7 +654,7 @@ pub(super) fn exploration_xp(
     }
 }
 
-/// `SMSG_LEVELUP_INFO` → the ding's chat lines (decision 0304). The talent-count arg is not on the
+/// `SMSG_LEVELUP_INFO` → the ding's chat lines. The talent-count arg is not on the
 /// wire — the client computes `(newLevel >= 10) ? 1 : 0` (`0x5e407c`, the 0305 fold-back), exactly
 /// this. The ding's VISUAL is deliberately absent here: it rides the UNIT_FIELD_LEVEL
 /// change-watcher (`entities` spell_fx::level_up_flash), never this packet.
@@ -680,7 +680,7 @@ mod tests {
     use crate::net::{Guid, SelfPlayer};
     use bevy::ecs::system::RunSystemOnce;
 
-    /// **`SMSG_SPELLLOGMISS`'s word is spell GOLD** (decision 2229) — the third and last of the
+    /// **`SMSG_SPELLLOGMISS`'s word is spell GOLD** — the third and last of the
     /// three word paths this client had drawing white on a hardcoded `color: None`.
     ///
     /// `0x5e7f63 mov ecx,[ebp-0x8]` / `0x5e7f66 push ecx` hands `0x607140` the resolved SpellRec,

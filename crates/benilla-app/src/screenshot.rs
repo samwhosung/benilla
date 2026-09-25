@@ -1,4 +1,4 @@
-//! **Print screen** (decision 1487) — the capture key, the writer, and the "Screen Captured" text
+//! **Print screen** — the capture key, the writer, and the "Screen Captured" text
 //! that must never appear in the file it announces.
 //!
 //! The reference's shape, which this reproduces exactly (its own `Bindings.xml` + `WorldFrame.lua`,
@@ -32,7 +32,7 @@
 //! with the frame hidden. One frame is the whole fix and also the minimum: any less and the stale
 //! quads are what gets photographed, any more and the shutter drifts from the keypress for no
 //! reason. `ui_script::screenshot_tests` pins the UI contract; this file's own test pins the
-//! deferral, and the live falsifier is a double press 0.6 s apart (decision 1487).
+//! deferral, and the live falsifier is a double press 0.6 s apart.
 //!
 //! **Two deliberate divergences, both recorded in 1487:**
 //!
@@ -235,7 +235,7 @@ fn report_captures(script: Option<NonSendMut<UiScript>>, state: Res<ScreenshotSt
         match outcome {
             Outcome::Saved(path) => {
                 // Announced at info: "where did my screenshot go" is the first question a player
-                // asks about a folder that is deliberately not where WoW put it (decision 1486).
+                // asks about a folder that is deliberately not where WoW put it.
                 info!("screenshot: wrote {}", path.display());
                 script.fire_event("SCREENSHOT_SUCCEEDED", Vec::new());
             }

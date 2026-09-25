@@ -119,7 +119,7 @@ pub(super) fn world_section(ui: &mut egui::Ui, world: &mut WorldReadout) {
         ui.label(egui::RichText::new(format!("leaf area {leaf}")).color(OVERLAY_TEXT_DIM));
     }
 
-    // The exterior-scene gate, in the two terms that decide it (decision 0774): which WMO ROOM the
+    // The exterior-scene gate, in the two terms that decide it: which WMO ROOM the
     // camera's own down-ray claims, and how many portal windows that room's flood left onto the
     // outdoor world. Terrain draws iff a window admits it, so "why can I still see the ground from
     // in here?" has exactly three answers and this line says which:

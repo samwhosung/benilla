@@ -1,4 +1,4 @@
-//! Where benilla keeps **local state** — THE LAW (decision 0954, placement amended by 1175). Every
+//! Where benilla keeps **local state** — THE LAW (placement amended by 1175). Every
 //! file benilla persists on a player's machine — config today; realmlist, caches, per-character
 //! state as they arrive — lives in **one visible folder, `benilla-config/`, beside the benilla binary**.
 //! Never scattered into the install, never hidden in a platform config dir: the 1.12 client is
@@ -17,7 +17,7 @@
 //! all. Everything else about 0954 stands, including this module being the only place in the tree
 //! that may compute a persistence path (grep `local_state::` for every resident) — a new file gets
 //! a path fn here with a doc comment saying what it holds and why it is scoped the way it is.
-//! **Those doc comments are the layout table** (decision 1689): 0954's own table is a
+//! **Those doc comments are the layout table**: 0954's own table is a
 //! point-in-time snapshot of the law it set and, like every decision record, immutable — it lists
 //! none of the residents added since, and it should not.
 //!
@@ -122,7 +122,7 @@ pub(crate) fn config_path() -> Option<PathBuf> {
     home().map(|h| h.join("config.toml"))
 }
 
-/// `benilla-config/macros/account.txt` — the account-wide macro tab (indices 1..=18; decision 0983). One
+/// `benilla-config/macros/account.txt` — the account-wide macro tab (indices 1..=18). One
 /// file per scope rather than one file with two sections, because the two have different lifetimes:
 /// the account tab follows the install, a character tab dies with its character.
 pub(crate) fn macros_account_path() -> Option<PathBuf> {
@@ -137,7 +137,7 @@ pub(crate) fn macros_character_path(realm: &str, character: &str) -> Option<Path
     home().map(|h| h.join("macros").join(format!("{key}.txt")))
 }
 
-/// `benilla-config/bindings/account.txt` — the account-wide key bindings (decision 0997; the
+/// `benilla-config/bindings/account.txt` — the account-wide key bindings (the
 /// `bindings-cache.wtf` analog, command-centric diff-vs-defaults so a growing command set keeps
 /// its new defaults).
 pub(crate) fn bindings_account_path() -> Option<PathBuf> {
@@ -152,7 +152,7 @@ pub(crate) fn bindings_character_path(realm: &str, character: &str) -> Option<Pa
     home().map(|h| h.join("bindings").join(format!("{key}.txt")))
 }
 
-/// `benilla-config/saved-variables.lua` — the Lua saved-variables file (decision 1128; the
+/// `benilla-config/saved-variables.lua` — the Lua saved-variables file (the
 /// `WTF/Account/<ACC>/SavedVariables.lua` analog). Install-scoped, like the reference's account
 /// scope: written whole at logout/exit, executed as a chunk at UI load. One file, because our
 /// ported UI is one FrameXML tree rather than a set of addons — when third-party addons land they
@@ -178,7 +178,7 @@ pub(crate) fn addons_state_path(realm: &str, character: &str) -> Option<PathBuf>
 ///
 /// The reference's shape, one level flatter: it writes
 /// `WTF/Account/<ACC>/SavedVariables/<Addon>.lua`, and our whole state folder is already
-/// per-install, so the folder IS the account scope (0954, and 1128 reserved this exact path —
+/// per-install, so the folder IS the account scope (and 1128 reserved this exact path —
 /// spelled `benilla/saved/` before 1180 renamed the folder).
 ///
 /// Distinct from [`saved_variables_path`], which is the *flat* channel our own FrameXML uses
@@ -194,7 +194,7 @@ pub(crate) fn addon_saved_character_dir(realm: &str, character: &str) -> Option<
     home().map(|h| h.join("saved").join(key))
 }
 
-/// `benilla-config/camera/<realm>-<character>.txt` — the third-person camera pose (decision 1131; the
+/// `benilla-config/camera/<realm>-<character>.txt` — the third-person camera pose (the
 /// `<Char>/camera-settings.txt` analog, and character-scoped for the same reason it is there: a
 /// gnome rogue and a tauren warrior want different zooms). Two lines, the reference's own keys and
 /// order, so the file stays readable beside its ancestor.
@@ -203,7 +203,7 @@ pub(crate) fn camera_character_path(realm: &str, character: &str) -> Option<Path
     home().map(|h| h.join("camera").join(format!("{key}.txt")))
 }
 
-/// `benilla-config/account` — the account name the login screen remembers (decision 0539 §4; the
+/// `benilla-config/account` — the account name the login screen remembers (the
 /// reference's `GetSavedAccountName`/`SetSavedAccountName`, whose own store is `WTF/Config.wtf`'s
 /// `accountName`). Install-scoped like every other resident here.
 ///
@@ -216,7 +216,7 @@ pub(crate) fn saved_account_path() -> Option<PathBuf> {
     home().map(|h| h.join("account"))
 }
 
-/// `benilla-config/chat/<realm>-<character>.txt` — the chat windows' saved state (decision 1589):
+/// `benilla-config/chat/<realm>-<character>.txt` — the chat windows' saved state:
 /// the background tint, the background alpha, the font size a chat tab's right-click menu sets,
 /// and the window's lock. **Character-scoped**, where the reference keeps the same four inside its
 /// per-character `chat-cache.txt` — a raid alt and a questing alt want different chat boxes. See
@@ -249,7 +249,7 @@ pub(crate) fn layout_character_path(realm: &str, character: &str) -> Option<Path
 }
 
 /// `benilla-config/cache/<realm>.tsv` — the **name cache**: the player, creature and pet names the
-/// server has already answered for, kept across sessions (decision 1689).
+/// server has already answered for, kept across sessions.
 ///
 /// The reference's residents are `WDB/namecache.wdb`, `creaturecache.wdb` and `petnamecache.wdb`
 /// — three files **inside the install**, which is exactly where benilla may not write (the install
@@ -270,7 +270,7 @@ pub(crate) fn name_cache_path(realm: &str) -> Option<PathBuf> {
     )
 }
 
-/// `benilla-config/shots.txt` — the framing instrument's appended camera poses (decision 0600). A dev
+/// `benilla-config/shots.txt` — the framing instrument's appended camera poses. A dev
 /// affordance (`/shot`, compiled out by `--no-default-features` since 1179), but it persists on a
 /// real machine, so it resolves here like everything else rather than through a private path.
 /// `Logs/` — `WoWChatLog.txt` and `WoWCombatLog.txt`, the reference's two names beside its
@@ -283,10 +283,10 @@ pub(crate) fn shots_path() -> Option<PathBuf> {
     home().map(|h| h.join("shots.txt"))
 }
 
-/// `benilla-config/Screenshots/` — where the print-screen key writes (decisions 1486, 1487).
+/// `benilla-config/Screenshots/` — where the print-screen key writes.
 ///
 /// **The reference writes `Screenshots\\` inside the install and we deliberately do not.** benilla
-/// reads a WoW install; it never writes to one (decision 1486, the director's rule) — the folder is
+/// reads a WoW install; it never writes to one (the director's rule) — the folder is
 /// somebody else's, it is shared with other tools on this machine, and a client that
 /// scatters its output through it makes "what here is benilla's?" unanswerable. So the reference's
 /// own folder NAME is kept, capital S and all, and only its parent moves: a player who knows where
@@ -322,7 +322,7 @@ pub(crate) fn diagnostics_dir() -> Option<PathBuf> {
 }
 
 /// `benilla-config/Diagnostics/fps-journal.csv` — the FPS journal's rows while the `fpsJournal`
-/// CVar is on (decision 2008): the file a reporter attaches. `None` on a hermetic run like
+/// CVar is on: the file a reporter attaches. `None` on a hermetic run like
 /// everything here; the harness names its own path through `WOW_FPS_JOURNAL` instead.
 pub(crate) fn fps_journal_path() -> Option<PathBuf> {
     diagnostics_dir().map(|d| d.join("fps-journal.csv"))
@@ -449,13 +449,13 @@ mod tests {
         let _h = EnvGuard::set("BENILLA_HOME", tmp.join(STATE_DIR).to_str().unwrap());
         assert_eq!(home(), Some(tmp.join(STATE_DIR)));
         assert_eq!(config_path(), Some(tmp.join("benilla-config/config.toml")));
-        // The macro residents (decision 0983): one account file, one per character, and every
+        // The macro residents: one account file, one per character, and every
         // realm/character name reduced to a safe single path component.
         assert_eq!(
             macros_account_path(),
             Some(tmp.join("benilla-config/macros/account.txt"))
         );
-        // The saved-variables resident (decision 1128) — one install-scoped file.
+        // The saved-variables resident — one install-scoped file.
         assert_eq!(
             saved_variables_path(),
             Some(tmp.join("benilla-config/saved-variables.lua"))
@@ -469,12 +469,12 @@ mod tests {
             Some(tmp.join("benilla-config/macros/___evil-a_b.txt")),
             "no name can escape the folder"
         );
-        // The camera-pose resident (decision 1131) — character-scoped, same key shape.
+        // The camera-pose resident — character-scoped, same key shape.
         assert_eq!(
             camera_character_path("Hydraxian Waterlords", "Probeone"),
             Some(tmp.join("benilla-config/camera/Hydraxian_Waterlords-Probeone.txt"))
         );
-        // The chat windows' saved look (decision 1589) — character-scoped, same key shape again.
+        // The chat windows' saved look — character-scoped, same key shape again.
         assert_eq!(
             chat_character_path("Hydraxian Waterlords", "Probeone"),
             Some(tmp.join("benilla-config/chat/Hydraxian_Waterlords-Probeone.txt"))
@@ -486,15 +486,15 @@ mod tests {
             Some(tmp.join("benilla-config/layout/Hydraxian_Waterlords-Probeone.txt"))
         );
 
-        // The login screen's remembered account name (decision 0539 §4) and the framing
-        // instrument's pose log (0600) — the two residents that computed their own path in
+        // The login screen's remembered account name and the framing
+        // instrument's pose log — the two residents that computed their own path in
         // `login::config_base` (`$HOME/.benilla`) until decision 1181 folded them in here.
         assert_eq!(
             saved_account_path(),
             Some(tmp.join("benilla-config/account"))
         );
         assert_eq!(shots_path(), Some(tmp.join("benilla-config/shots.txt")));
-        // The print-screen folder (decisions 1486/1487) — the one resident that is a DIRECTORY,
+        // The print-screen folder — the one resident that is a DIRECTORY,
         // and the one whose reference lives inside the install we refuse to write to.
         assert_eq!(
             screenshots_dir(),
@@ -504,7 +504,7 @@ mod tests {
         // 0 · hermetic: a capture run resolves nothing, even with an override set. The account
         // name is the reason this line now matters more than it did: `config_base` had no such
         // guard, so a login-screen capture read whatever account the host machine had saved and
-        // photographed it into the frame (decision 1181).
+        // photographed it into the frame.
         let _c2 = EnvGuard::set("WOW_CAPTURE", "ui-options");
         assert_eq!(home(), None);
         assert_eq!(

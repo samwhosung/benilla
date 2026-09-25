@@ -1,6 +1,6 @@
 //! The **unit blob shadow** — the soft dark oval under every unit (the player, every NPC, every
 //! creature), the reference's per-frame shadow pass rebuilt on the shared surface-decal projector
-//! ([`benilla_world::decal`]), drawn on the shared effect stream (0733).
+//! ([`benilla_world::decal`]), drawn on the shared effect stream.
 //!
 //! **The mechanism** (`0x6d7920` IS the unit shadow draw):
 //! - **Draw path**: a per-frame pass over registered model nodes (`0x683dd0`, list `[0xc7cb10]`)
@@ -31,8 +31,8 @@
 //!   facing then **axis-aligned-bounded**. Vertical about the model origin: `+1.0·(zExt/2)` up,
 //!   `−(5/3)·(zExt/2)` down. A degenerate horizontal box is the reference's no-op exit (no
 //!   shadow). **No** `OBJECT_FIELD_SCALE_X` re-read (the transform scale already carries it), no
-//!   ring-style `sqrt` compression, no floor. **WHICH sequence — settled at bytes + pixels**
-//!   (decision 0316): the draw re-reads
+//!   ring-style `sqrt` compression, no floor. **WHICH sequence — settled at bytes + pixels**:
+//! the draw re-reads
 //!   `playableAnimationLookup[0]` every frame — **slot 0 = Stand for characters, from the file
 //!   image, so the value never changes** (not the playing sequence: the director's gait-stable
 //!   observation falsified that first reading, and reference captures confirmed — 1,682 measured
@@ -62,7 +62,7 @@
 //!
 //!   The darkness lives in the texture RGB. Unlit, no fog, no depth write. The texture loads as the default `WorldArt`
 //!   `Rgba8Unorm`, so the modulate multiplies raw bytes in the gamma lane — the reference's own
-//!   arithmetic (0161).
+//!   arithmetic.
 //! - **Gating**: the reference's `shadowLOD` cvar {0,1} is the master toggle (default on) — we are
 //!   always-on; `shadowBias` (default 0.1) is its depth-bias knob — [`SHADOW_DEPTH_BIAS`] plays
 //!   that role here. No dead/mount/kind test exists on the draw path, and **which** objects
@@ -175,7 +175,7 @@ fn sync_shadows(
     mut commands: Commands,
     // A mount child never gets its own decal: its `Transform` is parent-relative (a shadow
     // keyed on it would project at the world origin) — the mounted composite casts ONE shadow,
-    // the unit's, which reads the mount's box while mounted (`update_shadows`, decision 0441).
+    // the unit's, which reads the mount's box while mounted (`update_shadows`).
     units: Query<
         (Entity, &NetEntity),
         (
@@ -239,7 +239,7 @@ fn update_shadows(
             Has<Embodied>,
             Option<&crate::entities::mount::MountChild>,
             // …and whether the owner is drawn at all. A body the exterior-scene election sent to
-            // pass 2 is not in the reference's scene, so it casts nothing (decision 1277). The
+            // pass 2 is not in the reference's scene, so it casts nothing. The
             // election writes the ROOT's `Visibility`; this is that verdict after propagation.
             Option<&InheritedVisibility>,
         ),
@@ -267,7 +267,7 @@ fn update_shadows(
         (0u32, 0u32, 0u32, 0u32, 0u32, 0u32);
     // Counted apart from `n_no_owner`: a body the exterior election sent to pass 2 HAS an owner,
     // and folding the two would make the census answer "why did it hide" with a lie. This is the
-    // instrument's whole job (decision 1283).
+    // instrument's whole job.
     let mut n_undrawn = 0u32;
     let surface_count = decals.receiver_count();
     for (shadow, mut key, mut verts) in &mut shadows {
@@ -279,7 +279,7 @@ fn update_shadows(
             continue;
         };
         // An owner that is not drawn casts nothing. The director's report from inside Caverns of
-        // Time (decision 1277): the exterior election had correctly stopped drawing the Tanaris
+        // Time: the exterior election had correctly stopped drawing the Tanaris
         // mobs overhead, and their shadows carried on being projected onto the cavern floor,
         // because this lane keys off the unit's `Transform` and never asked whether the unit was
         // in the scene. The census counts it separately, so "why is there a shadow with no
@@ -295,7 +295,7 @@ fn update_shadows(
             Some((mnet, manims)) => (manims, mnet.scale),
             None => (anims, 1.0),
         };
-        // The byte+pixel law (0316): the box is playableAnimationLookup[0]'s
+        // The byte+pixel law: the box is playableAnimationLookup[0]'s
         // sequence — Stand, permanently (the reference re-reads it per frame from the file image;
         // the value can't change). resolve(0) walks the same baked table, so Stand-less models
         // land on their substitute exactly like the binary's row-0 fast path.

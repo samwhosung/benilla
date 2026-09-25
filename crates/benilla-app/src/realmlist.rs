@@ -1,5 +1,5 @@
 //! The **realmlist** — the address benilla dials for the logon (realmd) handshake, and the one
-//! setting a player cannot start the game without (decision 1667).
+//! setting a player cannot start the game without.
 //!
 //! The reference client has no UI for this at all: it registers a CVar named `realmList` — help
 //! text *"Address of realm list server"*, default `us.logon.worldofwarcraft.com:3724` — and loads

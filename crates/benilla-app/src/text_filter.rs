@@ -1,5 +1,5 @@
 //! The two 1.12 text filters — `profanityFilter`'s **masker** and `spamFilter`'s **predicate**
-//! (decision 2077; an emulated run of the binary's own compile/exec over the shipped lists).
+//! (an emulated run of the binary's own compile/exec over the shipped lists).
 //!
 //! Both are **PCRE over shipped DBCs**, not word lists: `ChatProfanity.dbc` (2289 rows) feeds the
 //! masker `0x4a1a60`, `SpamMessages.dbc` (28 gold-seller URL patterns) feeds the predicate
@@ -592,7 +592,7 @@ fn load_text_filter_lists(
 
 pub(crate) struct TextFilterPlugin;
 
-/// The two filter switches' change callback (decision 2303): flags — the reference's own
+/// The two filter switches' change callback: flags — the reference's own
 /// callbacks (`0x403570`, `0x4035b0`) mirror `SStrToInt(newValue)` into a global the same way.
 pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut switches: ResMut<TextFilterSwitches>) {
     match ev.key().as_str() {

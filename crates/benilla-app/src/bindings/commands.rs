@@ -1,15 +1,15 @@
-//! The command registry (decision 0997) — every binding command benilla actually implements, in
+//! The command registry — every binding command benilla actually implements, in
 //! 1.12 `Bindings.xml` order, with the 1.12 default chords (byte-real: the client's own
 //! `bindings-cache.wtf`, account ONE) and each command's dispatch class.
 //!
 //! **Honest tree**: a command appears here only over a real engine action — the same law as the
-//! options rows (0954). The 1.12 commands with no benilla mechanism yet are absent, not stubbed;
+//! options rows. The 1.12 commands with no benilla mechanism yet are absent, not stubbed;
 //! the page shows only what's here, and only non-empty categories (era law). Labels/headers are
 //! the 1.12 GlobalStrings (`BINDING_NAME_*`/`BINDING_HEADER_*`), defined in the window's XML.
 //!
-//! **…and the absence is written down** ([`ABSENT`], decision 1745). The honest tree's one hole
+//! **…and the absence is written down** ([`ABSENT`]). The honest tree's one hole
 //! was that nothing noticed when a mechanism ARRIVED: 0997 promised "each returns the day its
-//! mechanism lands, one registry row", and then the keyring (0765), the pet book (1050), the
+//! mechanism lands, one registry row", and then the keyring, the pet book (1050), the
 //! reputation and honor pages, the six action-bar pages and the two vertical multibars (1500)
 //! all shipped their mechanism with no row — some for five hundred commits, none of them a
 //! mistake anyone could see. `SPECS` ∪ `ABSENT` is now exactly the client's 228 live bindings,
@@ -23,7 +23,7 @@
 //! - [`Kind::Host`] — fires into [`super::BindingsState::fired`]; an engine system consumes it
 //!   (chat open, TAB targeting, nameplates, autorun, …).
 //!
-//! Recorded default divergences (0997): `TOGGLEUI` ships `ALT-Z` (0870: the cache's `CTRL-Z` is
+//! Recorded default divergences: `TOGGLEUI` ships `ALT-Z` (the cache's `CTRL-Z` is
 //! a player rebind all three accounts inherited, not the shipped default — the one row that does
 //! not trust the cache). That is now the ONLY one — the bag row's divergence (`OPENALLBAGS` wearing
 //! both `B` and `SHIFT-B`, because benilla had a single all-bags knob) is gone as of 1494: the
@@ -545,7 +545,7 @@ const TABLE: &[Spec] = &[
     // PetActionButtonDown/Up (BonusActionBarFrame.lua:106-112) — the PET bar's buttons, not the
     // bonus bar's. benilla has no bonus bar at all, so the pet bar is the whole lane, exactly as
     // the reference wires it. Defaults are byte-real and unanimous: CTRL-1..CTRL-0 in all three
-    // of the install's `bindings-cache.wtf` files (unlike TOGGLEUI's rebind, 0870).
+    // of the install's `bindings-cache.wtf` files (unlike TOGGLEUI's rebind).
     spec!(
         "BONUSACTIONBUTTON1",
         ACTIONBAR,
@@ -696,7 +696,7 @@ const TABLE: &[Spec] = &[
         Some("SHIFT-DOWN"),
         Some("SHIFT-MOUSEWHEELDOWN")
     ),
-    // The action-bar lock (decision 1136), the ref's own binding body verbatim (Bindings.xml:433-
+    // The action-bar lock, the ref's own binding body verbatim (Bindings.xml:433-
     // 439) — it flips the `LOCK_ACTIONBAR` uvar OptionsFrame.xml declares (1938), the same global the
     // Options window's Action Bars row writes. It sits here because the reference files it under
     // this header (l.433 carries no `header=`, so it inherits l.121's ACTIONBAR), and it ships
@@ -886,7 +886,7 @@ const TABLE: &[Spec] = &[
     //
     // Every default here is byte-real from the client's own `bindings-cache.wtf`, identical across
     // all three independent accounts (ONE, TWO, WINUSER) — which is what rules out a player rebind
-    // (the `TOGGLEUI` trap, 0870).
+    // (the `TOGGLEUI` trap).
     //
     // Each body is the bare GLOBAL, exactly the ref's own `Bindings.xml` — NOT a button's OnClick
     // handler: a handler carries the button's checked bookkeeping, and routing a key through it
@@ -982,7 +982,7 @@ const TABLE: &[Spec] = &[
     ),
     // `SHIFT-P` is byte-real from the client's own `bindings-cache.wtf`, and identical in two
     // independent accounts (ONE and WINUSER) — which is what rules out a player rebind (the
-    // `TOGGLEUI` trap, 0870). Decision 1057.
+    // `TOGGLEUI` trap).
     spec!(
         "TOGGLECHARACTER3",
         INTERFACE,
@@ -1144,7 +1144,7 @@ const TABLE: &[Spec] = &[
     // descend from one profile whose TOGGLEUI had been rebound; ALT-Z is the shipped default
     // (the one command whose default does NOT trust the cache file).
     spec!("TOGGLEUI", MISC, Kind::Host, Some("ALT-Z"), None),
-    // Print screen (decision 1487). The body is the reference's own one-liner because our
+    // Print screen. The body is the reference's own one-liner because our
     // `TakeScreenshot` has the same contract its does (ScreenshotStatus.xml) — hide the last
     // shot's confirmation, then ask the engine.
     //
@@ -1156,7 +1156,7 @@ const TABLE: &[Spec] = &[
     //
     // On a Mac keyboard the token arrives as F13, which is the reference's own Mac mapping rather
     // than an accommodation (`KEY_PRINTSCREEN_MAC = "F13"`); `super::chord` does the translation.
-    // The stock WorldFrame.lua's framerate readout (decision 1983): `FramerateLabel`/`FramerateText`
+    // The stock WorldFrame.lua's framerate readout: `FramerateLabel`/`FramerateText`
     // toggled by `ToggleFramerate()`, refreshed off `GetFramerate()` every quarter second by
     // `WorldFrame_OnUpdate`. CTRL-R is the install's own DefaultBindings.wtf chord (1804).
     spec!(
@@ -1174,7 +1174,7 @@ const TABLE: &[Spec] = &[
         None
     ),
     // ── Camera (BINDING_HEADER_CAMERA) ──────────────────────────────────────────────────
-    // The five named camera views (decision 1745) — `player::camera_view`, whose defaults are the
+    // The five named camera views — `player::camera_view`, whose defaults are the
     // reference's own `0x84f488` table. NEXTVIEW/PREVVIEW ship on END/HOME and **do not wrap**
     // (`0x50faa0`/`0x50fac0` are hard stops); Set/Save/Reset ship unbound, and 1.12 files no
     // SAVEVIEW1/RESETVIEW1 row even though its engine accepts view 1 — that is a `Bindings.xml`
@@ -1789,10 +1789,10 @@ const TABLE: &[Spec] = &[
 
 /// One 1.12 binding command this client does **not** register — and the mechanism it waits on.
 ///
-/// The honest tree (0997) says a command appears in [`SPECS`] only over a real engine action. That
+/// The honest tree says a command appears in [`SPECS`] only over a real engine action. That
 /// rule is right and it stays; what it never had was a way to notice when the action *arrived*.
 /// 0997's own residue promised "each returns the day its mechanism lands, one registry row" and
-/// then five mechanisms landed without their rows: the keyring (0765), the pet book (1050), the
+/// then five mechanisms landed without their rows: the keyring, the pet book (1050), the
 /// reputation and honor pages (1057-era), the six action-bar pages and the two vertical multibars
 /// (1500). Nothing was wrong with any of those commits — nothing was *watching*.
 ///
@@ -2076,7 +2076,7 @@ mod tests {
         }
     }
 
-    /// **The coverage gate** (decision 1745): every one of the client's 228 live bindings is
+    /// **The coverage gate**: every one of the client's 228 live bindings is
     /// either in [`SPECS`] or in [`ABSENT`], and never both.
     ///
     /// This is the half [`the_registry_matches_the_installs_own_bindings`] could not see. That

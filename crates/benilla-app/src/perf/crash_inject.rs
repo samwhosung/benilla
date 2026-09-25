@@ -1,5 +1,5 @@
 //! `WOW_CRASH_INJECT=<at_secs>` — one deliberate main-thread panic, mid-run: the crash reporter's
-//! standing test affordance (`crate::crash`, decision 2266 §B2), in the shape of the stall
+//! standing test affordance (`crate::crash`), in the shape of the stall
 //! sampler's own injectors. The end-to-end falsifier is a run with it set: the process must die
 //! with a `crash-<unix>.txt` whose log tail ends in the `crash-inject` line below.
 //!

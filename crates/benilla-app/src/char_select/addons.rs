@@ -1,4 +1,4 @@
-//! The **character-select AddOns screen** (decisions 1197, 1293) — the one addon surface (the
+//! The **character-select AddOns screen** — the one addon surface (the
 //! in-game panel was retired at the director's call, 2026-08-14; `ReloadUI` itself stays).
 //!
 //! The reference is `Interface\GlueXML\AddonList.xml/.lua`, read off the player's own patch chain
@@ -231,7 +231,7 @@ impl AddonsPanel {
     /// staged column per character off the enable store. The reference's `AddonList_OnShow` also
     /// re-reads (`AddonList_Update`), so a folder that changed under us is picked up.
     ///
-    /// **The store is loaded for the whole roster, not per character** (decision 2311). A column
+    /// **The store is loaded for the whole roster, not per character**. A column
     /// is not "that character's file, everything else enabled": an addon the character has no row
     /// for takes what the realm's *other* characters agree on, and only falls to the manifest's
     /// `## DefaultState` when they disagree or nobody has said anything. Reading it the other way
@@ -393,7 +393,7 @@ impl AddonsPanel {
     /// since confirmed: `AddonList_Update` computes `enabled = (checkboxState > 0)` off
     /// `GetAddOnEnableState(nil, i)`, whose `1` (enabled for some) therefore counts as on
     /// (`0x51e470`). What 1293 got wrong was not this fold but what each column holds — see
-    /// [`Self::open_for`] and decision 2311.
+    /// [`Self::open_for`] and.
     fn effective_enabled(&self, i: usize) -> bool {
         self.box_state(i) != BoxState::Off
     }
@@ -657,7 +657,7 @@ pub(super) fn drive_addons_panel(
         }
     }
 
-    // ── the scroll bar's drag (B274) ──────────────────────────────────────────────────────────
+    // ── the scroll bar's drag ──────────────────────────────────────────────────────────
     // Benilla's one slider law, reached from the glue lane: the press grabs ([`slider_grab`] —
     // on the knob it keeps the grabbed point, off it the knob's centre warps under the cursor),
     // and press and every move after it share the one absolute cursor→value map
@@ -2021,7 +2021,7 @@ mod tests {
     ///
     /// The reference does not do this: its enable query `0x51e470` counts only nodes with an
     /// **explicit** entry, so a character with no file contributes no opinion and inherits the
-    /// aggregate — here, the unanimous `disabled` the player just saved. Decision 2311.
+    /// aggregate — here, the unanimous `disabled` the player just saved.
     #[test]
     fn a_new_character_inherits_the_disable_it_did_not_ask_for() {
         let _l = crate::local_state::test_env::ENV_LOCK

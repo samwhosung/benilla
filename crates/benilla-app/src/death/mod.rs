@@ -1,7 +1,7 @@
-//! The death arc (decision 0308): the wire-fed stores, the state-machine edges into the Lua UI,
+//! The death arc: the wire-fed stores, the state-machine edges into the Lua UI,
 //! the intent drain back to the wire, and the root/water-walk messages the controller acks.
 //!
-//! The state machine is derived, never simulated (0308 §1): dead = health 0, ghost =
+//! The state machine is derived, never simulated: dead = health 0, ghost =
 //! `PLAYER_FLAGS` bit 0x10 — read off the self descriptor each frame, edges fired as the
 //! reference's own events (`PLAYER_DEAD` / `PLAYER_ALIVE` / `PLAYER_UNGHOST`, the classic
 //! semantics: ALIVE fires on release *and* on a pre-release res; UNGHOST on ghost → alive). What
@@ -20,7 +20,7 @@ use crate::ui_script::{UiFeed, UiInput};
 
 pub(crate) mod net;
 
-/// Where our corpse is — the `MSG_CORPSE_QUERY` answer (decision 0308 §5). Raw WoW coords.
+/// Where our corpse is — the `MSG_CORPSE_QUERY` answer. Raw WoW coords.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct CorpsePoint {
     /// The map to show/route toward — dungeon-entrance-adjusted server-side (a corpse inside an
@@ -80,7 +80,7 @@ pub(crate) struct DeathNet {
     /// two-step; its Accept sends `CMSG_SPIRIT_HEALER_ACTIVATE` with this guid.
     pub(crate) spirit_healer: Option<u64>,
     /// Bumped on every `SMSG_SPIRIT_HEALER_CONFIRM` — the confirm announces per MESSAGE, not per
-    /// Some-edge (decision 1068): a Cancel sends nothing and clears nothing, so only a fresh
+    /// Some-edge: a Cancel sends nothing and clears nothing, so only a fresh
     /// message can re-show the dialog, and the healer re-sends one on every gossip ask.
     pub(crate) confirm_generation: u32,
     /// Water-walking is granted on our mover (the ghost's walk-on-water). Mirrored for the swim
@@ -102,14 +102,14 @@ impl DeathNet {
     /// roads in.
     ///
     /// The generation bump is what makes a re-ask re-show a cancelled dialog: the confirm
-    /// announces per MESSAGE, not per `Some`-edge (decision 1068).
+    /// announces per MESSAGE, not per `Some`-edge.
     pub(crate) fn ask_spirit_healer(&mut self, npc: u64) {
         self.spirit_healer = Some(npc);
         self.confirm_generation = self.confirm_generation.wrapping_add(1);
     }
 }
 
-/// The feed's memory, in **two scopes** (decisions 1290/1291): the body's own state machine is
+/// The feed's memory, in **two scopes**: the body's own state machine is
 /// world memory and survives a `/reload`; what this VM has been *told* dies with the VM.
 ///
 /// The reference draws the same line by construction — its death mirror is engine-side
@@ -141,7 +141,7 @@ struct DeathAnnounced {
     /// The last `(guid, dead, ghost)` THIS VM was given an event for; `None` for a fresh VM.
     last: Option<(u64, bool, bool)>,
     /// The last corpse-range verdict announced to the UI (`None` = nothing announced): the
-    /// CORPSE_IN_RANGE / CORPSE_OUT_OF_RANGE / CORPSE_IN_INSTANCE edge memory (decision 0308 §5).
+    /// CORPSE_IN_RANGE / CORPSE_OUT_OF_RANGE / CORPSE_IN_INSTANCE edge memory.
     corpse_range: Option<CorpseRange>,
     /// The [`DeathNet::reclaim_generation`] this latch last saw — a fresh `0x269` re-fires the
     /// range events through the latch (the client's own re-announce, `0x4962d0`), so the
@@ -151,7 +151,7 @@ struct DeathAnnounced {
     /// fired) — held back while a player-caster's name is still resolving through the name cache.
     offer_generation: u32,
     /// The [`DeathNet::confirm_generation`] this latch last announced — a fresh
-    /// `SMSG_SPIRIT_HEALER_CONFIRM` re-fires `CONFIRM_XP_LOSS` through the latch (decision 1068;
+    /// `SMSG_SPIRIT_HEALER_CONFIRM` re-fires `CONFIRM_XP_LOSS` through the latch (
     /// the reclaim-latch pattern above). The old Some-edge latch here was B80's deadlock: it
     /// reset only when `spirit_healer` went `None`, which nothing but Accept ever does, so one
     /// Cancel swallowed every later confirm.
@@ -206,8 +206,8 @@ fn feed_death(
     spells: Option<Res<Spells>>,
     items: Res<crate::items::Items>,
 ) {
-    // **Only a LIVE session's descriptor is a snapshot** (decision 1732). A reconnect-able
-    // disconnect keeps the self avatar as the local puppet (0065) — descriptor and all — so
+    // **Only a LIVE session's descriptor is a snapshot**. A reconnect-able
+    // disconnect keeps the self avatar as the local puppet — descriptor and all — so
     // without this gate the frames between the socket dying and the reconnect landing would
     // re-arm `mirror` from a frozen relic, and the reconnect would then find no edge to fire.
     // That is the same hole from the other side as [`end_session_death_feed`]: the body's state
@@ -312,7 +312,7 @@ fn feed_death(
     // ── The VM edges: the classic events, fired off what THIS VM has heard (module doc). A
     // fresh VM's memo is empty, so a reload-while-dead re-fires PLAYER_DEAD to the rebuilt
     // frame tree — the same first-snapshot-counts-as-edge that brings the popup up at a
-    // login-while-dead, which is our design's own posture for both (decision 1291).
+    // login-while-dead, which is our design's own posture for both.
     let memo = feed.vm.get(&script);
     let prev = memo.last.filter(|&(g, ..)| g == guid);
     memo.last = Some((guid, dead, ghost));
@@ -341,7 +341,7 @@ fn feed_death(
     }) {
         script.fire_event("RESURRECT_REQUEST", vec![ScriptValue::Str(name)]);
     }
-    // The confirm is message-fired, not state-edged (decision 1068): each SMSG bumps the
+    // The confirm is message-fired, not state-edged: each SMSG bumps the
     // generation, so asking the healer again after a Cancel brings the dialog back.
     if death_net.spirit_healer.is_some() && memo.confirm_generation != death_net.confirm_generation
     {
@@ -371,7 +371,7 @@ fn feed_death(
         script.fire_event("CONFIRM_XP_LOSS", vec![ScriptValue::Int(xp_cost)]);
     }
 
-    // ── The corpse-run range gate (0308 §5): fires the reference's range events on the edges. ──
+    // ── The corpse-run range gate: fires the reference's range events on the edges. ──
     // Only a ghost runs its corpse; the verdict compares 3-D distance to the query's DISPLAY
     // position (for a dungeon corpse that's the entrance — standing there with the corpse on
     // another map is exactly the CORPSE_IN_INSTANCE case). Distances are isometric across the
@@ -516,11 +516,11 @@ fn resolve_self_res(
 }
 
 /// The sickness-duration string a spirit-healer res would apply at `level` — the verified server
-/// table (vmangos `Player::ResurrectPlayer` + `Death.SicknessLevel` 11, 0308 §6): nil below 11,
+/// table (vmangos `Player::ResurrectPlayer` + `Death.SicknessLevel` 11): nil below 11,
 /// `(level − 10)` minutes through 19, the aura's full 10 minutes from 20.
 ///
 /// **The wording is the `GENERIC_MIN`/`GENERIC_MIN_P1` pair, read off the player's own
-/// `GlobalStrings.lua`** (decision 2045). That is the reference's own key: `GetResSicknessDuration`
+/// `GlobalStrings.lua`**. That is the reference's own key: `GetResSicknessDuration`
 /// (`0x51a3a0`) computes a millisecond duration off `Spell.dbc` 15007 × `SpellDuration.dbc` and
 /// hands it to the shared formatter `0x52fa50(ms, "GENERIC", 0, 1)`, whose minute arm is
 /// `GENERIC_MIN[_P1]` with `ms / 60000`. Every value this table can produce — 1 to 10 minutes —
@@ -545,7 +545,7 @@ fn sickness_duration(level: u32, get: &dyn Fn(&str) -> Option<String>) -> Option
     ))
 }
 
-/// Drive the ghost-world look (decision 0308 §7): the FFXDeath screen pass gates on
+/// Drive the ghost-world look: the FFXDeath screen pass gates on
 /// `PLAYER_FLAGS_GHOST` — instant on release, instant off at resurrect (the flag's CMirrorHandler
 /// watcher `0x5ee990` is the single driver of the FFX pass swap,
 /// the death light profile, and the ghost ambience — one watcher, several consumers; ours splits
@@ -563,7 +563,7 @@ fn drive_death_look(
 }
 
 /// `WOW_GHOST_PROBE=1|0` — pin the **ghost world** on or off without dying, so the ghost-world look
-/// (and everything that must NOT inherit it — the portrait bakes, decision 1481) can be A/B'd from a
+/// (and everything that must NOT inherit it — the portrait bakes) can be A/B'd from a
 /// capture instead of from a corpse run.
 ///
 /// It drives all three halves of that look together, because they are one state: this screen pass,
@@ -644,7 +644,7 @@ fn drain_death(
                     Some(SelfRes::Spell { .. }) => net.0.send(ClientCommand::SelfRes),
                     // The item leg is an ordinary item use — the same `CGItem_C::Use 0x5d8d00`
                     // every bag click and action button ends at, which is why it goes through the
-                    // one send rather than growing a second path (decision 0914).
+                    // one send rather than growing a second path.
                     Some(SelfRes::Item {
                         bag_index,
                         slot,
@@ -687,7 +687,7 @@ fn drain_death(
     }
 }
 
-/// **The world scope of [`DeathFeedState`] dies with the world session** (decision 1732) — the
+/// **The world scope of [`DeathFeedState`] dies with the world session** — the
 /// teardown [`DeathNet`]'s own has had since 0065, which this half never got.
 ///
 /// `mirror` is the body's state machine and `died_at` its release-window anchor; both are
@@ -715,7 +715,7 @@ fn end_session_death_feed(
     }
 }
 
-/// The death arc's app plugin (decision 0308): the net-fed stores, the state-machine feed + the
+/// The death arc's app plugin: the net-fed stores, the state-machine feed + the
 /// intent drain, and the controller-facing root/water-walk messages.
 pub(crate) struct DeathPlugin;
 
@@ -818,7 +818,7 @@ mod tests {
         );
     }
 
-    /// **The world scope dies with the session, and only with the session** (decision 1732).
+    /// **The world scope dies with the session, and only with the session**.
     ///
     /// Both halves matter and they pull opposite ways: a `/reload` must NOT restart the six
     /// minutes (which is why `mirror`/`died_at` are not per-VM in the first place), and a relog
@@ -881,7 +881,7 @@ mod self_res_tests {
     use crate::ui_action::Spells;
 
     /// Reincarnation's effect spell — what the server writes into the field, named in `Spell.dbc`
-    /// as the button text (decision 1746).
+    /// as the button text.
     const REINCARNATION: u32 = 21169;
     /// `PLAYER_SELF_RES_SPELL`.
     const F_SELF_RES: u16 = 1224;

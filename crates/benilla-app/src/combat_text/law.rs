@@ -169,7 +169,7 @@ pub(crate) enum DamageSource {
 /// damage shield) and "we have no catalog" — the client degrades a NULL record to melee-styled,
 /// so a missing catalog degrades the same way.
 ///
-/// **It is the WORD emitter's bit as much as the number's** (decision 2229). `0x607140` and
+/// **It is the WORD emitter's bit as much as the number's**. `0x607140` and
 /// `0x6128b0` are separate functions — different arg counts, different register allocation, not
 /// the "byte-identical twins" an earlier reading called them — but they compute `B` and `K`
 /// identically, and seven of the eight `0x607140` call sites push a resolved SpellRec. Only the
@@ -201,7 +201,7 @@ pub(crate) fn damage_color(
     }
 }
 
-/// The melee emitter split — `0x6243e0`'s branch order, byte-verified (decision 0279, closing
+/// The melee emitter split — `0x6243e0`'s branch order, byte-verified (closing
 /// the phase-2 INFERRED flag): a **word state** (victim states 2 dodge · 3 parry · 5 block ·
 /// 6 evade · 7 immune · 8 deflect) floats its word UNCONDITIONALLY, Damage ignored; otherwise
 /// (states 0/1/4) landed damage floats the bare post-mitigation number (category 0, or 2 on

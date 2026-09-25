@@ -1,4 +1,4 @@
-//! The client-side pending-operation lock (decision 0216 §4, byte-verified by decision 0218 §3 —
+//! The client-side pending-operation lock (byte-verified by decision 0218 §3 —
 //! `item+0x314` bit0: "the send locks both ends", cleared by the resolving field update or a
 //! non-zero `SMSG_INVENTORY_CHANGE_FAILURE"). [`PendingItemOps`] is a Resource wrapping plain
 //! bookkeeping — every method is engine-free (no ECS/Bevy types past the `#[derive(Resource)]`
@@ -53,7 +53,7 @@ impl PendingItemOps {
         );
     }
 
-    /// No outstanding ops at all — the container feed's gate reads this (decision 1439): while
+    /// No outstanding ops at all — the container feed's gate reads this: while
     /// anything is in flight the resolving walk must run every frame, and once nothing is, the
     /// last resolve's own change tick already covered the final unlock.
     pub(crate) fn is_empty(&self) -> bool {
@@ -74,7 +74,7 @@ impl PendingItemOps {
             .any(|e| e.iter().any(|&(pos, _)| pos == (bag, slot)))
     }
 
-    /// The resolving clear (0218: "the field-update watcher"): an entry clears the moment ANY of
+    /// The resolving clear ("the field-update watcher"): an entry clears the moment ANY of
     /// its slots' CURRENT `(guid, count)` (`current` — the same descriptor walk the container feed
     /// already does) differs from what was recorded at send time (see the module doc for why count
     /// joins guid). The WHOLE entry clears together (every slot it covered unlocks at once) rather
@@ -124,7 +124,7 @@ impl PendingItemOps {
     /// **`UnlockItem 0x495420`** — clear every entry naming `item_guid`, and nothing else: a guid
     /// no entry recorded (a corpse, a chest, 0) unlocks nothing, exactly as the reference's
     /// resolve-as-ITEM (typemask 2) finds nothing to clear for a non-item. The loot close is the
-    /// caller that needs it: an opened lockbox/clam is locked at the `CMSG_OPEN_ITEM` send (0916)
+    /// caller that needs it: an opened lockbox/clam is locked at the `CMSG_OPEN_ITEM` send
     /// and, closed with loot left, never changes its slot — so neither [`Self::resolve`] nor a
     /// failure ever clears it (`0x48f200` @ `48f299`). Returns the
     /// deduplicated `(bag, slot)` pairs that unlocked.

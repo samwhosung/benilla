@@ -13,7 +13,7 @@
 //!
 //! The pieces:
 //!
-//! **The burst is paced** (decision 1116). Compiling behind the cover fixed *where* the stall
+//! **The burst is paced**. Compiling behind the cover fixed *where* the stall
 //! lands, not its shape: all ~1480 variants became drawable in one frame, so one frame blocked
 //! 1.0–2.3 s — the cover frozen solid, and CoreAudio missing a device cycle inside it (the
 //! crackle of 1114/1115). Rigs now spawn hidden and are revealed [`WARM_REVEAL_PER_FRAME`] at a
@@ -25,17 +25,17 @@
 //!   variant — the model lane with its shard-rung and far-side twins, and the sky/water lanes
 //!   (celestial, stars, clouds, gradient dome, WMO skybox, liquid; decision 0945 widened 0837's
 //!   model-only scope) — parented to the world camera, spawned a few frames AFTER the entry
-//!   cover rises (so the cover is on the glass before the burst, not racing it — 0962); the
+//!   cover rises (so the cover is on the glass before the burst, not racing it); the
 //!   loading screen's clear condition holds on [`WarmPass::satisfied`] until the pipeline cache
 //!   drains (10 s backstop, 0737's rule), then the menagerie despawns (roots only — recursion
-//!   takes the twin booth's children, 0962). Captures skip it.
-//!   Booth twins ride a real booth's layer (samples=1, 0938) AND the pass's own twin booth
+//!   takes the twin booth's children). Captures skip it.
+//!   Booth twins ride a real booth's layer (samples=1) AND the pass's own twin booth
 //!   ([`crate::portrait::spawn_warm_booth`] — the custom-projection view key real bakes install;
 //!   decision 0958), and [`warm_effect_lane`] pushes the `wow_effect` lane's whole key cross
-//!   through the production stream each warm frame (the ring's first-target stall, 0958).
+//!   through the production stream each warm frame (the ring's first-target stall).
 //! - [`PipeWatch`] — an `Arc` shared by the main and render worlds: how many pipelines the cache
 //!   has ever queued, how many have settled (Ok/Err), and whether a cover currently hides the
-//!   frame (loading screen up, or not in world — the glue scene is its own cover, 0540).
+//!   frame (loading screen up, or not in world — the glue scene is its own cover).
 //! - [`watch_pipelines`] (render world, after the cache's own process step): maintains the
 //!   counters and — the permanent tripwire — logs a `warn!` for every pipeline compiled while
 //!   **uncovered**. That line firing in a session log IS the regression signal: it means the
@@ -141,7 +141,7 @@ pub(crate) fn plugin(app: &mut App) {
 
 /// Main world → render thread: the render thread is about to spend this window blocked inside
 /// Metal pipeline compilation with nothing but a still cover on screen, so it drops out of the
-/// frame-critical QoS band for the duration (decision 1117; the band itself is `thread_qos`).
+/// frame-critical QoS band for the duration (the band itself is `thread_qos`).
 fn publish_compile_burst(warm: Res<WarmPass>) {
     let bursting = warm.spawned_at.is_some() && !warm.done;
     benilla_world::thread_qos::COMPILE_BURST.store(bursting, Ordering::Relaxed);
@@ -299,7 +299,7 @@ fn describe(desc: &PipelineDescriptor) -> String {
 struct WarmRig;
 
 /// Marker on the menagerie's twin booth camera ([`crate::portrait::spawn_warm_booth`] — the
-/// custom-projection view key space, decision 0958), so [`warm_effect_lane`] can address its
+/// custom-projection view key space), so [`warm_effect_lane`] can address its
 /// view. It also carries [`WarmRig`], which despawns it with the rest of the pass.
 #[derive(Component)]
 struct WarmBoothCam;
@@ -312,7 +312,7 @@ pub(crate) struct WarmPass {
     /// idle (no cover, or the pass already finished for this cover). **Real, not virtual**: the
     /// pass's whole subject is a burst that stalls frames, and `Time<Virtual>` clamps its delta
     /// at 250 ms — so on the virtual clock this pass measured its own 1.3–2.3 s burst as
-    /// "0.27 s" and its 10 s backstop was 10 *virtual* seconds (decision 1116).
+    /// "0.27 s" and its 10 s backstop was 10 *virtual* seconds.
     spawned_at: Option<f32>,
     /// This cover's warm work is done (drained, timed out, or not applicable).
     done: bool,
@@ -357,7 +357,7 @@ impl WarmPass {
 /// `pending == 0` means anything (the counters cross worlds ±1 frame) — anchored to the last
 /// reveal, not to the spawn, now that the reveal is paced.
 const WARM_SETTLE_SECS: f32 = 0.25;
-/// Rigs revealed per frame — the pacing slice (decision 1116).
+/// Rigs revealed per frame — the pacing slice.
 ///
 /// On macOS Bevy compiles every pipeline with `block_on` **inline on the render thread**, and
 /// `PipelineCache::process_queue` drains the whole backlog in one frame with no budget
@@ -457,7 +457,7 @@ fn run_warm_pass(
         // spawn the menagerie once the camera + shared light exist (both are entry-frame-early;
         // until they do, the gate holds the cover, which is exactly right) — and once the cover
         // has actually reached the glass ([`EntryCover`]), so the burst is hidden rather than
-        // holding the frozen character screen (0962).
+        // holding the frozen character screen.
         warm.done = false;
         let Ok(cam) = camera.single() else { return };
         let Some(light) = shared_light.as_ref() else {
@@ -470,7 +470,7 @@ fn run_warm_pass(
         warm.last_reveal = now;
         warm.revealed = 0;
         warm.reveal_frames = 0;
-        // The twin booth (0958): the custom-projection view key space real bakes use — the real
+        // The twin booth: the custom-projection view key space real bakes use — the real
         // booths warm the placeholder-Perspective class, this camera the NONSTANDARD one. It is
         // a WarmRig, so every despawn path below cleans it up with the rigs.
         let warm_booth = crate::portrait::spawn_warm_booth(&mut commands, &mut lanes.images);
@@ -506,7 +506,7 @@ fn run_warm_pass(
     if warm.done {
         return;
     }
-    // The gizmo-line lane (0938): gizmos are immediate-mode, so the warm draw happens per frame
+    // The gizmo-line lane: gizmos are immediate-mode, so the warm draw happens per frame
     // while the pass runs — one tiny line through the DEFAULT config group, exactly the config
     // the bowstring draws with, compiles the `LineGizmo` pipeline that otherwise waits for the
     // first bow-wielder in view.
@@ -721,7 +721,7 @@ fn record_warmed_views(mut warm: ResMut<WarmPass>, cams: AnchorViewQuery) {
 /// Tear the pass down by despawning only its ROOT entities. `despawn` is recursive, and the twin
 /// booth's rigs are *children* of the twin booth camera — itself a `WarmRig` — so despawning
 /// every query row queues the children twice (once explicitly, once via the parent's recursion):
-/// a warn per child on the teardown frame (0962). Children of a live camera (the world camera,
+/// a warn per child on the teardown frame. Children of a live camera (the world camera,
 /// a real booth) still get their explicit despawn.
 fn despawn_rigs(commands: &mut Commands, rigs: &Query<(Entity, Option<&ChildOf>), With<WarmRig>>) {
     for (e, child_of) in rigs {
@@ -732,7 +732,7 @@ fn despawn_rigs(commands: &mut Commands, rigs: &Query<(Entity, Option<&ChildOf>)
     }
 }
 
-/// The **effect-lane** warm writer (decision 0958 — the 07:45 log's [831], the selection ring's
+/// The **effect-lane** warm writer (the 07:45 log's [831], the selection ring's
 /// first-target stall). `wow_effect` is a custom `SpecializedRenderPipeline` lane, not a
 /// `MaterialPlugin` one, so no menagerie *entity* can reach it: its pipelines exist only when a
 /// draw record sits in the shared stream at queue time. So while the pass runs, this pushes one

@@ -1,6 +1,6 @@
 //! **The re-shape a `bevy_ui` text root loses when its LAST span is despawned** — an upstream
 //! change-detection hole, netted here because falling into it is a hard crash whose panic names
-//! none of our code (decision 2212). The way in: enter the world in window mode, then maximize the
+//! none of our code. The way in: enter the world in window mode, then maximize the
 //! window on Linux.
 //!
 //! ## The hole
@@ -43,7 +43,7 @@
 //!
 //! **Scope: `bevy_ui` text only.** `bevy_sprite`'s `Text2d` has the identical hole and no entry
 //! here, because this tree spawns none — and the in-game interface's own `FontString`s do not go
-//! through `bevy_ui` at all (they shape through `cosmic-text` under the UI pass, 0068 §2). What is
+//! through `bevy_ui` at all (they shape through `cosmic-text` under the UI pass). What is
 //! left on `bevy_ui::Text` is the glue screens, the debug panel, and the loading screen's tip.
 
 use bevy::prelude::*;

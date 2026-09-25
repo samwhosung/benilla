@@ -29,7 +29,7 @@
 //!
 //! The FrameXML underneath is not optional either — an addon calls `UIDropDownMenu_Initialize` and
 //! `GameTooltip_SetDefaultAnchor` as readily as it calls `UnitName`, and roughly half of what looks
-//! like "the WoW API" is Lua the client ships (decision 1190: 1,100 engine functions vs 1,075
+//! like "the WoW API" is Lua the client ships (1,100 engine functions vs 1,075
 //! FrameXML ones). Surveying against a bare VM would report most of FrameXML as missing.
 //!
 //! ## What "missing" means here, and what it does not
@@ -52,7 +52,7 @@
 //! arrived last and had been invisible the longest — a method is not a global, so nothing here
 //! could rank one, and the error row that carried them collapsed the name away.
 //!
-//! The method queue then turned out to be **two** questions, not one (decision 1228):
+//! The method queue then turned out to be **two** questions, not one:
 //! `missing_methods` asks whether *any* widget answers a name, which is blind to a verb wired to
 //! one class and forgotten on its sibling — `MessageFrame:AddMessage` scored zero on it while three
 //! corpus addons had exactly that call as their first load error.
@@ -108,7 +108,7 @@ pub use use_probe::{UseReport, Used, MAX_USE_TARGETS};
 pub struct AddonReport {
     pub name: String,
     /// `## Interface`, as written. 1.12 is `11200`; the corpus is full of older values, and we
-    /// deliberately do not refuse them (decision 1191 §6).
+    /// deliberately do not refuse them.
     pub interface: Vec<u32>,
     /// **Did anything in its manifest RAISE, fail to parse, or drop a frame?**
     ///
@@ -154,7 +154,7 @@ pub struct AddonReport {
     /// Dependencies named in its `.toc` that are not in the folder.
     pub missing_deps: Vec<String>,
     /// Templates it names in `CreateFrame(kind, name, parent, "Template")` that the VM has never
-    /// declared (decision 1203).
+    /// declared.
     ///
     /// **A blind spot by construction until it was measured.** `CreateFrame`'s fourth argument was
     /// ignored outright until today; now it is honoured, and the survey's headline did not move at
@@ -311,8 +311,8 @@ pub struct AddonReport {
     /// different question, and redefining an existing number would make every past run
     /// incomparable.
     pub probe_errors: Vec<String>,
-    /// **Warnings raised while this addon loaded and ran** — the engine's own non-fatal channel
-    /// (decision 2135), which nothing in this survey could see until it had one.
+    /// **Warnings raised while this addon loaded and ran** — the engine's own non-fatal channel,
+    /// which nothing in this survey could see until it had one.
     ///
     /// A warning is the class of failure that *does not announce itself*: an `inherits=` argument
     /// that was not a template name and got dropped, a `SetPoint` whose `relativeTo` did not
@@ -488,7 +488,7 @@ fn manifest_path(root: &Path, name: &str) -> Option<PathBuf> {
 }
 
 /// The per-addon VM-instruction bound (see its use in [`survey_one`]) — the ONE number, shared
-/// with the live client's world-entry arming (decision 1306) so the corpus measurement behind it
+/// with the live client's world-entry arming so the corpus measurement behind it
 /// (heaviest legitimate addon 4M, 214 of 218 under 1M) cannot drift apart from the bound players
 /// actually run under.
 const ADDON_INSTRUCTION_BUDGET: u64 = crate::ui_script::addons::LOAD_INSTRUCTION_BUDGET;
@@ -509,7 +509,7 @@ fn survey_one(
     };
     // Decoded, not `read_to_string`'d: five of the corpus's 218 manifests are cp1252 and would
     // otherwise parse as an empty `.toc` — an addon with no files and no dependencies, which reads
-    // as a clean pass (decision 1193).
+    // as a clean pass.
     let toc = Toc::parse(&benilla_ui::source::decode(
         &std::fs::read(&toc_path).unwrap_or_default(),
     ));
@@ -551,7 +551,7 @@ fn survey_one(
     // Before anything runs: the AddOn API must answer for the whole installed set, not for nothing.
     // The **saved-variable** roots are `None` — a survey must never read or write the director's
     // real ones (the same reason `drive_session_start` is not `finish_ui_load`, 1213 §4). The
-    // ADDONS root is not one of those and is passed in full (decision 2102): without it every
+    // ADDONS root is not one of those and is passed in full: without it every
     // `LoadAddOn("<a folder addon>")` answered `MISSING`, which is a state the real client cannot
     // produce and is exactly the 1193/1212 fault one level up — `/msbt`'s
     // `UIParentLoadAddOn("MikScrollingBattleTextOptions")` is the shape it hides.
@@ -594,7 +594,7 @@ fn survey_one(
     let baseline = RenderBaseline::of(&script);
     // THE WARNING MARK, taken at the same seam and for the same reason: everything the FrameXML
     // underneath and this addon's dependency chain warned about is already behind us, so what
-    // follows is this addon's (decision 2135). `seq` is monotonic and never reused, which is what
+    // follows is this addon's. `seq` is monotonic and never reused, which is what
     // makes a high-water mark a valid cut of a log that also evicts and dedupes.
     let warn_mark = script.diagnostics().last().map_or(0, |d| d.seq);
 
@@ -603,7 +603,7 @@ fn survey_one(
     // addon at `0x51f5ad`'s position (`ui_script::addons`'s `mark_addon_loaded`, just before
     // `ADDON_LOADED`), and without it here `IsAddOnLoaded` answered nil for an addon whose files
     // had just run — and a LoadOnDemand dependent of it got `DEP_NOT_DEMAND_LOADED` rather than
-    // loading (decision 2102). The dependency chain stamped itself as it loaded, each one beside
+    // loading. The dependency chain stamped itself as it loaded, each one beside
     // its own `ADDON_LOADED` (`load_dependencies`, 2166); only the surveyed addon is left.
     script.mark_addon_loaded(name);
     let wants = missing_calls(root, name, &toc, &known, &dep_methods);
@@ -989,7 +989,7 @@ fn drive_session_start(
     // firing every dependency's event here; 2166 moved each one to where the client fires it.
     //
     // **Attribution is by the RAISING CHUNK, not by which event window the raise fell in**
-    // (decision 1226 — recorded when this was still window-based, fixed since). The window proxy
+    // (recorded when this was still window-based, fixed since). The window proxy
     // broke on the shape it was written for: AceAddon drains its ENTIRE `nextAddon` queue on any
     // `ADDON_LOADED` it sees (`AceAddon-2.0.lua:104-105`) and calls each consumer's
     // `OnInitialize` there (`:230`). So the SURVEYED addon's own code can run inside a
@@ -1026,7 +1026,7 @@ fn drive_session_start(
 /// frames below it are the call path, and a consumer calling into a library that then raises is
 /// still the library's fault, exactly as it is at load time.
 ///
-/// **The exemption was "a DECLARED DEPENDENCY's file" and that was too narrow** (decision 2107).
+/// **The exemption was "a DECLARED DEPENDENCY's file" and that was too narrow**.
 /// Once the harness's VMs got a real AddOns root, `LoadAddOn` began doing what it does in a real
 /// session, and the corpus's largest family drives it deliberately: `FuBar.lua:1034`'s
 /// `LoadLoadOnDemandPlugins` demand-loads **every** installed `FuBar_*` plugin the moment any one
@@ -1476,7 +1476,7 @@ fn missing_inherits(script: &UiScript, root: &Path, name: &str, toc: &Toc) -> Ve
 
 /// Every source file an addon reaches — its manifest entries plus the `<Script file=>`/`<Include>`
 /// tree hanging off them. An addon's real Lua often hangs off its XML rather than its `.toc`, the
-/// same trap the 1.12 corpus set in decision 1190.
+/// same trap the 1.12 corpus set in.
 fn source_files(root: &Path, name: &str, toc: &Toc) -> Vec<String> {
     let base = addon_base(name);
     let mut pending: Vec<String> = toc
@@ -1588,7 +1588,7 @@ fn global_strings() -> Option<&'static str> {
     .as_deref()
 }
 
-/// Put a **player and a realm** in the VM before the addon loads (decision 1195).
+/// Put a **player and a realm** in the VM before the addon loads.
 ///
 /// Not decoration, and not optimism: the reference runs `AddOn_Load` from inside `UI_Init`, which
 /// is *after* the world is entered, so an addon's file scope always sees a real character. A bare
@@ -2079,7 +2079,7 @@ struct FileLoad {
     /// whose package is incomplete.
     absent: AbsentFiles,
     /// **Did anything raise, fail to parse, or drop a frame** — the question
-    /// [`AddonReport::loaded`] asks (decision 2155).
+    /// [`AddonReport::loaded`] asks.
     ///
     /// It is `false` for an addon whose only failures are absent files, because on the reference
     /// that addon *loads*: `0x6edaa0` logs `"Couldn't open %s"` and returns null, and the walk
@@ -2091,7 +2091,7 @@ struct FileLoad {
 }
 
 /// Run the addon's manifest through the same two arms the real loader uses — `.lua` as a chunk,
-/// anything else as FrameXML — in the client's **install-relative** path space (decision 2155:
+/// anything else as FrameXML — in the client's **install-relative** path space (
 /// `Interface/AddOns/<Folder>`, exactly what `ui_script::addons::Addon::prefix` hands its own
 /// loader, so a chunk name here and a chunk name in a live session are the same string).
 fn load_addon_files(script: &UiScript, root: &Path, name: &str, toc: &Toc) -> FileLoad {
@@ -2142,7 +2142,7 @@ fn load_addon_files(script: &UiScript, root: &Path, name: &str, toc: &Toc) -> Fi
                     script.report_warning(&format!("{file}: {w}"));
                 }
                 // A file the DOCUMENT named and the provider does not have — the `.toc` arm's rule
-                // one level down (decision 2155). Recorded as absent, under the same own/foreign
+                // one level down. Recorded as absent, under the same own/foreign
                 // split, and never as something that raised: the reference logs `Couldn't open %s`
                 // for an `<Include>` and `Error loading %s` for a `<Script file=>`, and carries on.
                 for m in report.missing_files {
@@ -2186,7 +2186,7 @@ fn is_lua(entry: &str) -> bool {
 }
 
 /// One addon file, read **through the client's own reader** — the loose AddOns tree, then the
-/// player's patch chain ([`crate::ui_script::addons::read_addon_file`], decision 2155).
+/// player's patch chain ([`crate::ui_script::addons::read_addon_file`]).
 ///
 /// It delegates rather than re-implementing, and that is the whole point of it still existing as a
 /// name: this was a private copy of the loader's `read_under`, and a copy of a resolution rule is
@@ -2194,7 +2194,7 @@ fn is_lua(entry: &str) -> bool {
 /// and `..\..\FrameXML\…` off the chain and this could not, so the survey reported two addon
 /// families as broken packages when the miss was the instrument's.
 ///
-/// **Bytes, like the loader's** (decision 1193). Until then this function carried a private
+/// **Bytes, like the loader's**. Until then this function carried a private
 /// lossy-UTF-8 + BOM-strip of its own, so the harness could survey files the *client* refused to
 /// load — an instrument reporting on a world its host could not reach, which is the wrong way
 /// round. The client reads bytes now, so the harness can simply read bytes too, and the one place
@@ -2436,7 +2436,7 @@ fn strip_lua(text: &str, keep_strings: bool) -> String {
 /// `[[ ]]`, so an `<!-- … -->` header survived it whole. XML attribute values happen to be blanked
 /// already (they are `"…"`, which the Lua string rule eats) and tag names are never followed by
 /// `(`/`.`/`:` — the comment was the entire hole, and it was enough to put five license-boilerplate
-/// words at the top of the frames/tables ranking (decision 1218).
+/// words at the top of the frames/tables ranking.
 fn scan_source(path: &str, text: &str, scan: &mut Scan) {
     let text: std::borrow::Cow<'_, str> = if is_lua(path) {
         std::borrow::Cow::Borrowed(text)
@@ -2964,7 +2964,7 @@ fn rank(
     out
 }
 
-/// [`demand`]'s twin for **templates** (decision 1203) — how many addons name each template we
+/// [`demand`]'s twin for **templates** — how many addons name each template we
 /// have never declared, most-wanted first.
 ///
 /// The list `CreateFrame`'s fourth argument working made measurable: honouring it moved the
@@ -3057,7 +3057,7 @@ pub fn inherits_demand(reports: &[AddonReport]) -> Vec<(String, usize)> {
     rank(reports, |r| &r.missing_inherits)
 }
 
-/// The **first** error of every addon that failed to load, normalised and ranked (decision 1193).
+/// The **first** error of every addon that failed to load, normalised and ranked.
 ///
 /// [`demand`]'s twin, and the more useful of the two for a while. `demand` answers *what would an
 /// addon like to call*; this answers **what actually stopped it**, and those are different
@@ -3304,7 +3304,7 @@ mod tests {
 
     /// Two addons hitting one wall must produce **one** row — that collapse is the whole value of
     /// [`blockers`], and it is what made the Lua-dialect gap readable as `61` rather than as sixty
-    /// unrelated-looking lines (decision 1193).
+    /// unrelated-looking lines.
     #[test]
     fn one_wall_is_one_row_however_it_was_reported() {
         let same = [
@@ -3321,7 +3321,7 @@ mod tests {
     }
 
     /// **A raise in a DEMAND-LOADED SIBLING is that sibling's row, not the surveyed addon's**
-    /// (decision 2107) — the FuBar shape, verbatim from the corpus.
+    /// — the FuBar shape, verbatim from the corpus.
     ///
     /// `FuBar.lua:1034`'s `LoadLoadOnDemandPlugins` demand-loads every installed `FuBar_*` the
     /// moment any one of them seats, so surveying `FuBar_MoneyFu` runs `FuBar_BattlegroundFu`'s
@@ -3366,7 +3366,7 @@ mod tests {
     }
 
     /// **A raise inside a `LoadAddOn` the surveyed addon made is the LOADED addon's row** — even
-    /// when the raise site names no file at all (decision 2107).
+    /// when the raise site names no file at all.
     ///
     /// An inline `<OnEvent>` body is compiled under the frame's name, so the folder test is blind
     /// to it. `Stubby.lua:581` demand-loads every addon it finds; Auctioneer's
@@ -3427,8 +3427,7 @@ mod tests {
     /// `.xml` files are scanned as Lua deliberately — `<Script>` CDATA and `<OnLoad>` bodies are
     /// Lua and skipping the file loses them. But `strip_lua_noise` only knows `--` and `[[ ]]`, so
     /// a GPL header in an `<!-- … -->` came through whole, and `PURPOSE.  See the` reads exactly
-    /// like a table index. Five of the frames/tables ranking's top rows were this boilerplate
-    /// (decision 1218).
+    /// like a table index. Five of the frames/tables ranking's top rows were this boilerplate.
     ///
     /// The other half of the claim matters as much: the Lua INSIDE the file must survive, or the
     /// fix trades a wrong ranking for a blind one.

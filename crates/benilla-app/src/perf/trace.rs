@@ -25,7 +25,7 @@ pub(super) struct StreamTrace {
     pub(super) log_until: u64,
     /// [`process_cpu_secs`] at the previous frame — the row's `cpu_ms` is this frame's process-CPU
     /// delta (user+system, all threads): the load-robust cost meter beside the wall delta, because
-    /// on this machine wall frame time moves with whoever else is compiling (0711; a parallel
+    /// on this machine wall frame time moves with whoever else is compiling (a parallel
     /// build polluted this instrument's first A/B).
     pub(super) prev_cpu_secs: Option<f64>,
     /// `PipeWatch::created` at the previous frame, so `pipes_new` is per-frame like every other
@@ -71,7 +71,7 @@ pub(super) fn trace_stream(
     // texture arrays hitting the render world's prepare at once), invisible until counted.
     //
     // The freed columns count `Unused` (last strong handle dropped), not `Removed`: a
-    // `RENDER_WORLD`-only asset (chunk-cell meshes, the tile arrays — decision 0832) leaves the
+    // `RENDER_WORLD`-only asset (chunk-cell meshes, the tile arrays) leaves the
     // main store at *extract* via the untracked path, so `Removed` never fires for it; `Unused`
     // is the release signal both usage kinds emit exactly once, and it is what actually frees
     // the GPU copy.

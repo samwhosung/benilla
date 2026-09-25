@@ -1,5 +1,5 @@
 //! **The login queue** — our place in line for a full realm, and the reference's own estimate of
-//! how long it will take (decision 1681).
+//! how long it will take.
 //!
 //! The realm server answers a login to a full realm with `SMSG_AUTH_RESPONSE(AUTH_WAIT_QUEUE)` and
 //! a position, re-sending as the line moves and ending with `AUTH_OK` when we are admitted. It is

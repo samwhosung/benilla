@@ -1,6 +1,6 @@
 //! The player's area identity, published to the UI — the real 1.12 `ZONE_CHANGED` event family
 //! and the zone-text host globals behind `GetZoneText`/`GetSubZoneText`/`GetRealZoneText`/
-//! `GetMinimapZoneText`/`GetZonePVPInfo` (decision 0287; corrected to the bytes by its fold-back
+//! `GetMinimapZoneText`/`GetZonePVPInfo` (corrected to the bytes by its fold-back
 //! record).
 //!
 //! The model (`0x494780` is the one updater all three zone events fire from, on the per-update
@@ -45,7 +45,7 @@
 //! (`0x67e510` never reaches this updater with a zero zone id), read off our own area feed rather
 //! than off the cache below.
 //!
-//! The area *authority* stays `terrain_stream::CurrentArea` (decision 0232 — the MCNK `areaId`
+//! The area *authority* stays `terrain_stream::CurrentArea` (the MCNK `areaId`
 //! with the WMO-interior override, now off the same faces-only claim). Host globals are written
 //! before the event fires, so a handler's `GetZoneText()` already sees the new state.
 //!
@@ -95,7 +95,7 @@ fn load_area_table(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
 ///
 /// Held as a [`crate::ui_script::VmMemo`], which is not a deviation from that BSS model but the
 /// completion of it: the cache's whole purpose is deduping what was last *pushed into the VM*, and
-/// the VM is built at world entry and destroyed at the character screen (decision 1290). A fresh VM
+/// the VM is built at world entry and destroyed at the character screen. A fresh VM
 /// is the client's own fresh BSS — the zeroed cache below is exactly the state the real client is in
 /// at that moment, so the first resolve of every login is a NEW_AREA with the globals written, which
 /// is what the zone splash and the minimap line need.

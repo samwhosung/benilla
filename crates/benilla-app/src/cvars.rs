@@ -1,4 +1,4 @@
-//! benilla's **CVar registry** — the client's configuration store, host side (decisions 0954,
+//! benilla's **CVar registry** — the client's configuration store, host side (
 //! 2303). The reference keeps every player setting in one engine-side table
 //! (`ConsoleVar.cpp`, a `TSHashTable<CVar>` of 0xc4-byte records: name, value, default, the
 //! latch slot, and a change callback the owning subsystem hands `CVar::Register 0x63db90`).
@@ -8,8 +8,8 @@
 //! ([`benilla_ui::script::UiScript::seed_cvars`]); the mirror's writes ride a queue back here.
 //!
 //! - **The registered set** ([`REGISTERED`]): only vars something actually reads — a host knob,
-//!   or (since 1140) a live Lua consumer. **A row's default is the REFERENCE's default**
-//!   (decision 1804), and every row says where it stands against it — [`Registered::reference`],
+//!   or (since 1140) a live Lua consumer. **A row's default is the REFERENCE's default**,
+//! and every row says where it stands against it — [`Registered::reference`],
 //!   a mandatory column with no "unknown" variant. Two tests hold it: one checks each row's claim
 //!   in both directions, the other pins the deviation set as a readable list. A row the reference
 //!   **latches** (flag bit1 at its register site) says so with [`Registered::latched`]; a
@@ -81,7 +81,7 @@ pub(crate) struct Registered {
     /// choice above it, never a value this client acts on.
     #[allow(dead_code)]
     pub(crate) reference: Reference,
-    /// The reference registers it with flag bit1 (`rec+0x1c & 0x2`, decision 2303): a write is
+    /// The reference registers it with flag bit1 (`rec+0x1c & 0x2`): a write is
     /// staged in [`Row::pending`] and applied only at the latch boundary
     /// ([`Cvars::commit_latched`]). Read off each register site's `flags` argument (2 or 3); a test
     /// pins the set.
@@ -273,7 +273,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // (indices 1, 2, 4-8) and four sliders, none of them this. `CVar::Register` is the only
     // creation path, so `Config.wtf` can hold no such key either. The spelling is the later-era
     // engine's — the `autoLootDefault` / `nameplateShowEnemies` posture, where benilla's
-    // persistence IS the CVar store (0954) and a setting 1.12 never made settable takes the era
+    // persistence IS the CVar store and a setting 1.12 never made settable takes the era
     // name rather than an invented one.
     //
     // **`same`, not `ours`**, for the nameplate pair's reason: the reference has no CVar to match
@@ -334,7 +334,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // false since the interface went stock: `ContainerFrame.lua:483` and `UIDropDownMenu.lua:525`
     // both branch on `GetCVar("useUiScale") == "1"`, and `OptionsFrame.lua:13` gives it a
     // checkbox. Nobody noticed because the only thing that said so was a host warning with
-    // nowhere to go (decision 2135, which is how this was found).
+    // nowhere to go (which is how this was found).
     //
     // Registering it changes no behaviour today — `nil ~= "1"` and `"0" ~= "1"` take the same
     // branch — and makes the read the reference's read rather than an accident. The ON path
@@ -365,13 +365,13 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // extended stops) — every value inside the reference's own `[0.01, 0.33]`, which is why that
     // module could ask for it.
     same("nearclip", "0.1"),
-    // The Controls-page trio (0961). `deselectOnClick`/`mouseInvertPitch` are 1.12's own
+    // The Controls-page trio. `deselectOnClick`/`mouseInvertPitch` are 1.12's own
     // Interface Options CVars (UIOptionsFrame.lua indices 45/1); their defaults are the
     // reference behaviors benilla already shipped (empty-world click clears the target; no
     // pitch invert). `autoLootDefault` is era's — no 1.12 CVar exists, vanilla only had the
     // shift gesture — default off, like era's engine registrar.
     same("deselectOnClick", "1"),
-    // *Block Trades* (decision 1764) — 1.12's own `BlockTrades` (`0x842fbc`), the General-box
+    // *Block Trades* — 1.12's own `BlockTrades` (`0x842fbc`), the General-box
     // checkbox at index 14 whose tooltip is "Block all incoming trade requests.". Registered
     // **"0"**: the reference's own `0x4bf7bc` leg only refuses when the CVar is set, so an
     // unset/absent value has to mean "trades allowed" — and a client that shipped with trades
@@ -381,7 +381,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // 1.12's own `autoSelfCast` — a friendly cast that binds nothing falls back to the caster.
     // The behaviour has been here since the cast arm landed, welded to a Resource default; it is a
     // CVar now because 1.12's `TOGGLEAUTOSELFCAST` binding is `GetCVar`/`SetCVar` over this exact
-    // name and there was nothing for it to toggle (decision 1745).
+    // name and there was nothing for it to toggle.
     //
     // Register site `0x6e731d`, default string `"0"`, record `[0xceac34]`, one reader at
     // `0x6e53d7` (1804). **This row used to cite `0x870dc0` as the record; that is the NAME
@@ -399,7 +399,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
          targeting-cursor machine, which is unmodeled — leaving no path at all. Flip when that \
          machine lands",
     ),
-    // The five saved camera views and the live index (decision 1745) — the reference's own
+    // The five saved camera views and the live index — the reference's own
     // sixteen names and its own shipped default strings, both read out of `WoW.exe` and owned by
     // [`crate::player::camera_view`], which is also the only writer. Registered here so they are
     // ordinary CVars: persisted as a diff like everything else, readable from a macro, and
@@ -475,7 +475,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "0961: 1.12 has no auto-loot CVar at all — vanilla offers only the shift gesture, so OFF \
          IS the reference's own behaviour; the spelling is era's",
     ),
-    // The overhead-name trio (0992): 1.12's own UnitName* CVars (UIOptionsFrame.lua indices
+    // The overhead-name trio: 1.12's own UnitName* CVars (UIOptionsFrame.lua indices
     // 21/30/67) over the nameplates module's gates. Defaults mirror `NameConfig::default()` and
     // are the binary's own, byte-read at the `0x6c7470` registrar (name string / default string
     // per row, folded into
@@ -500,7 +500,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // bit 3. 1.12 registers NO nameplate CVar (the bitmask is a plain runtime
     // global, persisted FrameXML-side as the `RegisterForSave`'d `NAMEPLATES_ON` /
     // `FRIENDNAMEPLATES_ON`), so these take the LATER-era engine's names: the `autoLootDefault`
-    // posture, where benilla's persistence IS the CVar store (0954) and a setting with no 1.12
+    // posture, where benilla's persistence IS the CVar store and a setting with no 1.12
     // CVar gets the era spelling rather than an invented one.
     //
     // **`same`, not `ours`, and that distinction is the point**: the reference has no CVar to
@@ -513,7 +513,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // until 1804 — `VPlateMode::default()` carries that history.
     same(crate::vplates::CVAR_ENEMIES, "0"),
     same(crate::vplates::CVAR_FRIENDS, "0"),
-    // World detail (0992) — the ENVIRONMENT_DETAIL slider's 0..2, over the clutter-density knob.
+    // World detail — the ENVIRONMENT_DETAIL slider's 0..2, over the clutter-density knob.
     // 0 is the client's bare `frillDensity` baseline (×1 = 16 visits), each step +1×, so 0/1/2 are
     // the 16/32/48 `SetWorldDetail` itself writes.
     //
@@ -714,7 +714,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // `cameraPitchSmoothSpeed` at a quarter of it: that name is deliberately unregistered here,
     // because `FollowRig` has a single rate and a key with no reader is 1134 §4's pretence.
     same("cameraYawSmoothSpeed", "180"),
-    // **The four 1.12 camera-option toggles** (decision 2149) — the `UIOptionsFrame` checkboxes
+    // **The four 1.12 camera-option toggles** — the `UIOptionsFrame` checkboxes
     // FOLLOW_TERRAIN / HEAD_BOB / SMART_PIVOT / WATER_COLLISION, all four of which sat on the
     // unbacked-CVar census with a byte-level spec and no feature until now. Defaults are the
     // registrar's own, and two of them are **"1"** — which is why building them was not cosmetic:
@@ -780,7 +780,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // this CVar is FrameXML's alone, which is exactly the shape this row was built for. It used to
     // concede "behaviour-derived, not byte-read"; that hedge is retired.
     same("statusBarText", "0"),
-    // Enhanced Tooltips (B230): 1.12's `UberTooltips`, the *Enhanced Tooltips* checkbox
+    // Enhanced Tooltips: 1.12's `UberTooltips`, the *Enhanced Tooltips* checkbox
     // (`UIOptionsFrame.lua:15`, `USE_UBERTOOLTIPS`). **No host knob** — its consumers are Lua, and
     // there are three: PetActionBar.xml forks the whole tooltip on it (a token's own text with the
     // binding appended, vs the engine's pet-spell channel), the stock action and shapeshift buttons fork
@@ -848,7 +848,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // [`crate::minimap::MinimapZoom`], the widget's live index is seeded from it at UI load.
     same("minimapZoom", "3"),
     same("minimapInsideZoom", "3"),
-    // The addon version gate (decision 1292): 1.12's own `checkAddonVersion`, the *Load out of
+    // The addon version gate: 1.12's own `checkAddonVersion`, the *Load out of
     // date AddOns* checkbox INVERTED. Registrar default "1" = check enforced = box unticked
     // (`0x402c3b`; the key appears in Config.wtf exactly
     // while force-load is on and vanishes when it is turned off, `SaveConfig 0x63d980`'s
@@ -901,7 +901,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // `gxRestart = 1` does not apply (wgpu swaps the presentation interval live, so the box takes
     // effect on click), and `$WOW_NOVSYNC=1` overrides it session-only, below.
     same("gxVSync", "1").latched(),
-    // **Display mode** (decisions 1627, 1650) — 1.12's own `gxWindow`, worn since 1650 as modern
+    // **Display mode** — 1.12's own `gxWindow`, worn since 1650 as modern
     // Classic's two-entry *Display Mode* dropdown rather than 1.12's *Windowed Mode* checkbox: the
     // two states 1627 settled on ARE that client's two (its own `Graphics.lua` builds the list from
     // `VIDEO_OPTIONS_WINDOWED_FULLSCREEN` and `VIDEO_OPTIONS_WINDOWED`, and nothing else), and a
@@ -939,14 +939,14 @@ pub(crate) const REGISTERED: &[Registered] = &[
          no mode list, and 640x480 is not a window anyone would ship a client at",
     )
     .latched(),
-    // The body panes' half-rate render (decision 1444) — **benilla's own CVar**, no 1.12
+    // The body panes' half-rate render — **benilla's own CVar**, no 1.12
     // counterpart: the reference draws its doll inside the main pass (no second view exists to
     // rate-limit), while our RTT booths (1069) re-run the render graph per pane per frame. "1" =
     // the doll renders at half the frame rate while its pane is open; the knob is
     // [`crate::portrait::PaneRate`], and the default mirrors it (welded below).
     //
     // **Default ON (half-rate) — restored by 1607.** 1444 shipped it on; 1559 turned it off for
-    // a smoother doll (a look-call); the 08-25 weak-GPU perf reports (B329) measured the cost —
+    // a smoother doll (a look-call); the 08-25 weak-GPU perf reports measured the cost —
     // ~1.6 ms at 1600×900, 7.6 ms at 4K, per frame while a body pane is open — and the director
     // retested the 30 fps doll as fine. Full-rate is one `SetCVar("boothHalfRate", 0)` away.
     ours(
@@ -955,7 +955,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "1444/1607: benilla's own — the reference draws its doll inside the main pass and has no \
          second view to rate-limit",
     ),
-    // The select screen's memory of who you last entered the world as (decision 1622) — 1.12's
+    // The select screen's memory of who you last entered the world as — 1.12's
     // own `lastCharacterIndex`, help string "Last character selected". **No host knob**: the live
     // value is the character screen's own state ([`crate::char_select::Roster::pending_index`]),
     // which this row only mirrors — the `statusBarText` posture, and why no observer watches it.
@@ -1021,7 +1021,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // the `Image` at load and lives in the uploaded texture, so a live change would mean rebuilding
     // every texture in the world. The reference's own UI says "enabled upon restart".
     // `$WOW_TRILINEAR` / `$WOW_ANISO` override session-only, below.
-    // **`trilinear` registers "1", not the registrar's "0"** (decision 1645, correcting 1642).
+    // **`trilinear` registers "1", not the registrar's "0"** (correcting 1642).
     // The reference's `CVar::Register` string is `"0"`, but `hwDetect` — registered `"1"` — runs
     // `DetectHardware 0x641260` at boot and `CVar::Set`s sixteen video CVars from the matched
     // `VideoHardware.dbc` row before the first frame, then self-clears. Every GPU this client runs
@@ -1066,7 +1066,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
          side-by-side is correct at, and the registered 2 would thin every rate to 0.66 against \
          the only client we compare with. The slider is how a player takes it back down",
     ),
-    // **Brightness** (decision 2182) — the reference's `gamma`, registered at `0x402d70` with
+    // **Brightness** — the reference's `gamma`, registered at `0x402d70` with
     // name `0x82e924` `"Gamma"`, default string `0x82e92c` **`"1.0"`** and flags **0** (not
     // latched, so its change callback `0x4034d0` applies on the write).
     //
@@ -1091,7 +1091,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // [`sync_cvars`] seeds it the same way. `Same` is still exact: the test parse-compares, and
     // the reference registers this value as `"1.0"` (`0x82e92c`).
     same("gamma", "1.000000"),
-    // **Render scale** (decision 1639) — benilla's own CVar, no 1.12 counterpart, in the
+    // **Render scale** — benilla's own CVar, no 1.12 counterpart, in the
     // `boothHalfRate` / `SoundOutputLimiter` mould: the reference has no such dial because it has
     // no second buffer to hang one on. The world renders into the composite lane's off-screen image
     // at `window × this` while the UI stays at native resolution; the knob is
@@ -1109,7 +1109,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "1639: benilla's own — the reference has no off-screen buffer to hang a resolution dial \
          on; its nearest equivalent, `gxResolution`, drops the interface with the world",
     ),
-    // **The FPS journal** (decision 2008) — benilla's own, and the one instrument that ships:
+    // **The FPS journal** — benilla's own, and the one instrument that ships:
     // `/console fpsJournal 1` appends a per-second row of position, frame cost and the GPU's
     // per-pass split to `benilla-config/Diagnostics/fps-journal.csv` in any build, which is how
     // a player on hardware we do not own measures for us. The knob is
@@ -1137,7 +1137,7 @@ struct LocalConfig {
 // ─── The registry ────────────────────────────────────────────────────────────────────────────
 
 /// **One accepted move of a CVar's applied value** — the reference's change callback, as the
-/// Bevy event it is (decision 2303). Triggered by the registry's flushers for every write that
+/// Bevy event it is. Triggered by the registry's flushers for every write that
 /// changed a row's applied value (a Lua `SetCVar`, a `/console` line, a host write, a committed
 /// latch, and the loaded file at boot); observed by the subsystem that owns the knob, beside the
 /// knob, writing only its own resource.
@@ -1188,7 +1188,7 @@ pub(crate) struct Row {
     pub(crate) pending: Option<String>,
     /// [`Registered::latched`] — the reference's flag bit1.
     pub(crate) latched: bool,
-    /// Declared by an addon's `RegisterCVar` rather than by [`REGISTERED`] (decision 1195): it
+    /// Declared by an addon's `RegisterCVar` rather than by [`REGISTERED`]: it
     /// persists like any other row, and it is re-seeded into every later VM so the addon's own
     /// re-declaration finds it and no-ops.
     pub(crate) addon: bool,
@@ -1324,7 +1324,7 @@ impl Cvars {
         self.session_owned.contains(&name.to_ascii_lowercase())
     }
 
-    /// The persisted `checkAddonVersion` (decision 1292) — what the addon load walk gates on.
+    /// The persisted `checkAddonVersion` — what the addon load walk gates on.
     /// The registrar default is check ON.
     pub(crate) fn addon_version_check(&self) -> bool {
         self.flag("checkAddonVersion").unwrap_or(true)
@@ -1487,7 +1487,7 @@ impl Cvars {
         }
     }
 
-    /// An addon's `RegisterCVar` (decision 1195), reported by the VM: a row of its own, starting
+    /// An addon's `RegisterCVar`, reported by the VM: a row of its own, starting
     /// at the file's value for that name when it carries one (the 1291 bridge, now on the store
     /// that survives the VM), else at the declared default. A name already registered — the
     /// client's own, or the same addon's earlier declaration — is the no-op it always was.
@@ -1546,7 +1546,7 @@ impl Cvars {
 
     /// The file's entries no row claims — a newer build's keys, or an addon's before it
     /// registers them this session. Handed to the VM as its saved base, so an addon's
-    /// `RegisterCVar` starts at the player's value (decision 1291).
+    /// `RegisterCVar` starts at the player's value.
     pub(crate) fn orphans(&self) -> Vec<(String, String)> {
         self.file
             .iter()
@@ -1637,7 +1637,7 @@ const SAVE_QUIET: std::time::Duration = std::time::Duration::from_secs(1);
 /// ([`load_config`]).
 ///
 /// A set rather than a bare system because one knob is **read once and never again**: the world
-/// camera takes its `Msaa` at spawn (decision 1629, the reference's latched `gxMultisample`), so
+/// camera takes its `Msaa` at spawn (the reference's latched `gxMultisample`), so
 /// `setup_player` must not be able to run before the file has been folded in. Every other knob is
 /// live-read and does not care.
 ///
@@ -1661,12 +1661,12 @@ impl Plugin for CvarPlugin {
                     .chain()
                     .in_set(CvarLoad),
             )
-            // After the tick (decision 2304): a `SetCVar` the interface made this frame reaches
+            // After the tick: a `SetCVar` the interface made this frame reaches
             // the registry — and its observers — before the frame's drains read it. The video
             // window's Okay is the case: `SetCVar` per changed row, then `RestartGx()`, in one
             // handler; `video::drain_restart_gx` orders after this so the commit finds the stage.
             .add_systems(Update, sync_cvars.after(crate::ui_script::UiInput));
-        // **The flush is on the exit edge, not beside its feed** (decision 1528). It used to be
+        // **The flush is on the exit edge, not beside its feed**. It used to be
         // `(sync_cvars, save_config).chain()` in `Update`, which made the "or the app exiting"
         // half of its own gate dead on the exit a player actually causes: the close button's
         // `AppExit` is not written until `PostUpdate`, so the last second of slider drags went
@@ -1722,7 +1722,7 @@ fn session_values(world: &World) -> Vec<(&'static str, Option<String>)> {
         out.push(("anisotropic", tex.map(|t| t.aniso.to_string())));
     }
     // `$WOW_WIN`, a capture scenario, or any instrumented run owns the window's geometry for the
-    // session (decision 1627), so the two CVars that would otherwise move it mid-run are
+    // session, so the two CVars that would otherwise move it mid-run are
     // session-only under exactly the same law as the levers above.
     if crate::video::windowed_env() {
         let v = world.get_resource::<crate::video::VideoConfig>();
@@ -1839,8 +1839,7 @@ fn stored_config() -> StoredConfig {
     }
 }
 
-/// One CVar as `config.toml` holds it, matched case-insensitively — **before the `App` exists**
-/// (decision 1627).
+/// One CVar as `config.toml` holds it, matched case-insensitively — **before the `App` exists**.
 ///
 /// Every other consumer wants [`Cvars::get`], which answers from the registry once it is a
 /// resource and stays current across a VM replacement (1291). This one exists for the
@@ -1906,7 +1905,7 @@ pub(crate) fn sync_cvars(
         }
     }
     if seeded.claim(&script) {
-        // The file's unclaimed entries go in FIRST (decision 1291): an addon's `RegisterCVar`
+        // The file's unclaimed entries go in FIRST: an addon's `RegisterCVar`
         // later starts its key at the saved value. Then the table itself, at its live values.
         script.set_cvar_saved_base(cvars.orphans());
         script.seed_cvars(cvars.vm_seed());
@@ -1914,7 +1913,7 @@ pub(crate) fn sync_cvars(
             cvars.take_outbox(); // the seed just carried everything
         }
         // The Video dropdown's menu — what this device actually accepts, enumerated once at
-        // `finish()` by `view::MsaaSupportPlugin` (decision 1631) and handed over whole. Pushed
+        // `finish()` by `view::MsaaSupportPlugin` and handed over whole. Pushed
         // here rather than owned by the VM because the list is a fact about the render adapter,
         // which `benilla-ui` has no way to ask and should not grow one.
         script.set_multisample_formats(
@@ -1934,7 +1933,7 @@ pub(crate) fn sync_cvars(
                 })
                 .unwrap_or_default(),
         );
-        // **What `GetVideoCaps` answers with** (decision 2177) — the seven values the stock video
+        // **What `GetVideoCaps` answers with** — the seven values the stock video
         // window's `OptionsFrame_Load` destructures. Pushed beside the multisample list because it
         // is the same kind of fact: what this client's device and presentation path really offer,
         // which the VM has no way to ask.
@@ -2109,7 +2108,7 @@ mod tests {
     use benilla_world::clutter::ClutterConfig;
     use benilla_world::view::{MsaaSetting, ViewDistance, FARCLIP_RANGE, MSAA_RANGE};
 
-    /// **The standard, enforced: a benilla option's default IS the reference's** (decision 1804)
+    /// **The standard, enforced: a benilla option's default IS the reference's**
     /// — every row's [`Reference`] column stands up.
     ///
     /// This is the half that could not be a convention. Before it, the reference's value for a row
@@ -2266,7 +2265,7 @@ mod tests {
         // Same shape as farclip: `MsaaSetting::default()` reads $WOW_MSAA, so the registered
         // default mirrors the env-less literal — 1, the reference's own (1629).
         assert_eq!(d["gxMultisample"], 1.0);
-        // The Controls trio (0961) welds to its knob Defaults the same way.
+        // The Controls trio welds to its knob Defaults the same way.
         assert_eq!(
             d["deselectOnClick"] != 0.0,
             ClickConfig::default().deselect_on_click
@@ -2311,7 +2310,7 @@ mod tests {
             crate::ui_trade::BlockTrades::default().0
         );
         assert_eq!(d["BlockTrades"], 0.0, "an unset BlockTrades allows trades");
-        // The name trio (0992) welds to NameConfig's defaults the same way — and all three are
+        // The name trio welds to NameConfig's defaults the same way — and all three are
         // the binary's own registrar values now (1804), not two director pins over one.
         let names = NameConfig::default();
         assert_eq!(d["UnitNamePlayer"] != 0.0, names.player);
@@ -2495,7 +2494,7 @@ mod tests {
         assert!(!res::<benilla_assets::TexFilterSetting>(&app).trilinear);
         apply(&mut app, "trilinear", "1");
         assert!(res::<benilla_assets::TexFilterSetting>(&app).trilinear);
-        // **The DEVICE's ceiling, not the reference's** (decision 1643). 99 clamps to the
+        // **The DEVICE's ceiling, not the reference's**. 99 clamps to the
         // reference's 16 and then to the 4 this GPU offers — before 1643 it stopped at 16 and the
         // camera was handed a sample count wgpu refuses, killing the render thread on frame one.
         apply(&mut app, "gxmultisample", "99");
@@ -2584,7 +2583,7 @@ mod tests {
         // Block Trades (1764) — the other row that ships OFF; its ON is what refuses a trade.
         apply(&mut app, "BlockTrades", "1");
         assert!(res::<crate::ui_trade::BlockTrades>(&app).0);
-        // The name trio lands on its gates (0992).
+        // The name trio lands on its gates.
         apply(&mut app, "UnitNameNPC", "0");
         assert!(!res::<NameConfig>(&app).npc);
         apply(&mut app, "unitnameown", "1");
@@ -2990,7 +2989,7 @@ mod tests {
         app.world().resource::<T>()
     }
 
-    /// **The reported bug, end to end** (decision 1622): "char screen doesn't remember the last
+    /// **The reported bug, end to end**: "char screen doesn't remember the last
     /// logged in char, the ref does". Two launches over one `benilla-config/`, with the real
     /// [`CvarPlugin`] and the real [`crate::char_select`] systems in between — entering the world
     /// as somebody has to survive the quit and bring the screen back to them.
@@ -3074,7 +3073,7 @@ mod tests {
     }
 
     /// The minimap's zoom rides the same loop, driven from the **engine** rather than a Lua
-    /// `SetCVar` (decision 1131): the `+`/`-` buttons call `Minimap:SetZoom`, which writes the live
+    /// `SetCVar`: the `+`/`-` buttons call `Minimap:SetZoom`, which writes the live
     /// index and its CVar together — and that has to reach the knob and the file exactly like a
     /// settings row's write does, or the level is forgotten at the next launch.
     #[test]
@@ -3173,7 +3172,7 @@ mod tests {
     /// resolved — `""` is what `Ace/AceState.lua:27`'s `ace.trim(GetCVar("realmName"))` handles
     /// cleanly, and inventing a realm name would be worse than admitting we have none yet.
     ///
-    /// **`gxResolution` defaults to the pre-1627 window** (decision 1627), and **`realmList` to
+    /// **`gxResolution` defaults to the pre-1627 window**, and **`realmList` to
     /// `localhost`** (1667). These are the rows the registry takes any string for (a row's
     /// default decides whether it is numeric — [`Cvars::set`]), so each default is asserted
     /// through the parser its observer uses on the live value — a spelling this table accepts
@@ -3232,7 +3231,7 @@ mod tests {
         cvars
     }
 
-    /// **The latch** (decision 2303): a write to a row the reference registers with flag bit1
+    /// **The latch**: a write to a row the reference registers with flag bit1
     /// is staged, the applied value stands, nothing fires and nothing dirties — the reference's
     /// `Set 0x63df50` storing to `latchedValue` with `InternalSet` skipped — until the boundary
     /// commits it (`CVar::Update 0x63e060`), at which point it fires, persists and reaches the
@@ -3329,7 +3328,7 @@ mod tests {
         assert_eq!(cvars.set("nosuchrow", "1"), SetOutcome::Unknown);
     }
 
-    /// **An addon-declared row persists like the client's own** (decisions 1195, 1291, 2303):
+    /// **An addon-declared row persists like the client's own**:
     /// the VM reports the registration, the registry gives it a row starting at the file's
     /// value when the file carries one, a write to it dirties the config, and the save writes it
     /// as a diff against the addon's default. Before the registry the write reached the VM's

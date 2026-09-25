@@ -1,4 +1,4 @@
-//! The probe shield (decision 0677) — **a probe body cannot die, and does not need GM mode to stay
+//! The probe shield — **a probe body cannot die, and does not need GM mode to stay
 //! alive.**
 //!
 //! ## The failure it removes
@@ -7,10 +7,10 @@
 //! mode**, and GM mode is exactly what a session has to switch off to measure anything real.
 //! `Player::SetGameMaster(true)` re-templates the player to faction 35 ("Friendly", enemy mask 0)
 //! and freezes the mirror timers, so with it on nothing is hostile, nothing aggros, environmental
-//! damage is skipped and breath/fatigue never tick (0649, 0657). Every session doing hostility,
+//! damage is skipped and breath/fatigue never tick. Every session doing hostility,
 //! reaction-colour, nameplate, threat, damage or drowning work therefore sends `.gm off` — and the
 //! moment it does, the body is a level-1 standing wherever the last session parked it. Measured on
-//! this project's own transcripts: `.gm off` **257×**, `.revive` **121×** (0651). Measured live
+//! this project's own transcripts: `.gm off` **257×**, `.revive` **121×**. Measured live
 //! while writing this: `.gm off` on a probe parked in Valley of Spears killed it in **~2 seconds**,
 //! inside the gap between two probe-chat lines.
 //!
@@ -29,7 +29,7 @@
 //! still faithful — the body simply cannot reach 0.
 //!
 //! **The shield is therefore always on** — and, since it does not stop *aggro*, GM mode **stays on
-//! by default too** (decision 0679). The two do different jobs: GM mode stops the town attacking a
+//! by default too**. The two do different jobs: GM mode stops the town attacking a
 //! parked body, the shield stops anything killing it. Without the shield, `.gm off` was a two-second
 //! death sentence; with it, `.gm off` (`WOW_GM=off`) is a free, safe switch a session flips whenever
 //! it needs faithful factions. That — making the drop safe, not making it the default — is the whole
@@ -46,7 +46,7 @@
 //!    out. MEASURED: a probe left at 1 hp in a centaur camp entered the world at `29.41`, had the
 //!    shield confirmed at `29.75` (+337 ms) and was already **dead** when the banner printed at
 //!    `29.97`. This is the "it was alive at 1 hp when I closed the window, it was dead next login"
-//!    report, and it is why **GM mode stays on by default** (0679): the fix is to never let the body
+//!    report, and it is why **GM mode stays on by default**: the fix is to never let the body
 //!    be whittled down and mobbed in the first place, not to arm faster.
 //! 2. **It is target-sensitive.** `.cheat god on` re-targets to the current selection
 //!    (`ChatHandler::GetSelectedPlayer` → `sObjectMgr.GetPlayer(guid)`), which is `nullptr` for a
@@ -173,7 +173,7 @@ fn is_probe_account(user: &str) -> bool {
 }
 
 /// Whether this run wants GM mode **off** — `WOW_GM=off`, or an explicit `gm:off` in `WOW_RIG`.
-/// The default is on (decision 0679), so this is the flag a session sets when it needs faithful
+/// The default is on, so this is the flag a session sets when it needs faithful
 /// factions, hostility, colours, threat, damage or timers. An explicit ask always beats the
 /// default, and the rig's token is an explicit ask: two modules must not send `.gm` at each other,
 /// so the one with the spec in front of it wins (0651's rig owns its own `gm:` step).
@@ -331,7 +331,7 @@ fn drive_shield(
         shield.confirm_by = time.elapsed_secs() + CONFIRM_SECS;
         let gm_is_on = store.0.player_flags() & PLAYER_FLAGS_GM != 0;
         match (gm_is_on, wants_gm_off()) {
-            // The default (decision 0679): GM mode stays on, so nothing aggros a parked body. The
+            // The default: GM mode stays on, so nothing aggros a parked body. The
             // shield is what makes it SAFE to drop, not a reason to drop it by default.
             (false, false) => {
                 info!(
@@ -440,7 +440,7 @@ mod tests {
 
     #[test]
     fn the_rigs_own_gm_token_wins_over_the_default() {
-        // GM mode is ON by default (0679), so the rig's token only matters when it asks for OFF —
+        // GM mode is ON by default, so the rig's token only matters when it asks for OFF —
         // and then the shield must not fight it back on.
         assert!(rig_asks_for_gm_off("gnome mage 39 gm:off"));
         assert!(rig_asks_for_gm_off("GM:0"));

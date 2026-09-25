@@ -369,7 +369,7 @@ fn reagent_slots_carry_the_questitemtemplate_shape_in_both_windows() {
 }
 
 /// **A row click paints the selection glow, and a row hover paints nothing** — the two things the
-/// director saw wrong in a live window, pinned in both directions (decision 1598).
+/// director saw wrong in a live window, pinned in both directions.
 ///
 /// Neither was subtle. Both survived because this suite drove the window's tabs, dropdowns and
 /// reagent slots without ever clicking or hovering a LIST ROW:
@@ -478,7 +478,7 @@ fn a_row_click_shows_the_selection_glow_and_a_row_hover_shows_nothing() {
 /// (Blizzard_TradeSkillUI.lua l.113/144). A `SetTextColor` writes the NORMAL font instance only, so
 /// it cannot reach a highlighted label — which is exactly why the reference's rows still turn white.
 ///
-/// Ours could not, for two reasons that had to be fixed together (decision 1605): the row's label
+/// Ours could not, for two reasons that had to be fixed together: the row's label
 /// was a child `$parentName` FontString rather than the button's own `<ButtonText>`, so no per-state
 /// font could reach it; and the engine's highlighted label fell back to the normal state's colour,
 /// so even a ButtonText would have stayed orange. This test is the end-to-end pin — it reads the
@@ -594,8 +594,7 @@ fn a_hovered_or_selected_recipe_row_paints_its_label_white() {
 /// `<HighlightFont inherits="GameFontHighlight">` is one mechanism serving both windows — and
 /// `Craft_Update` locks its selected row exactly as the tradeskill one does (Blizzard_CraftUI.lua
 /// l.234). Ours had the same `$parentName`-FontString workaround in both files, so fixing only the
-/// window the director was looking at would have left the enchanting book wrong beside it
-/// (decision 1605).
+/// window the director was looking at would have left the enchanting book wrong beside it.
 #[test]
 fn a_hovered_or_selected_craft_row_paints_its_label_white() {
     benilla_formats::wow_data_or_skip!();

@@ -1,5 +1,4 @@
-//! The WMO-interior minimap's **offscreen composite** — the client's own compositing pipeline
-//! (decision 1466).
+//! The WMO-interior minimap's **offscreen composite** — the client's own compositing pipeline.
 //!
 //! Indoors the reference does not draw the group tiles onto the screen. It draws them into a fixed
 //! **256 × 256** render target created once at `0x4eda42`/`0x4eda48`, under an ortho half-extent of
@@ -90,7 +89,7 @@ pub(super) struct CompositeRig {
 
 /// Build the target, its camera and the shared quad once, at startup.
 ///
-/// The target is **un-encoded** and float, exactly like the portrait booths' (decisions 0254/0804):
+/// The target is **un-encoded** and float, exactly like the portrait booths':
 /// the UI arc composites in gamma bytes and does its one sRGB encode at the end, so a target that
 /// pre-encoded would land a second encode downstream — and quantising un-encoded values to 8 bits
 /// is B126's banding collapse, which a map of large flat colour fields would show as plainly as the

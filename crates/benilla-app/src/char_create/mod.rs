@@ -1,4 +1,4 @@
-//! The character-creation screen — the v1 glue overlay (decision 0423, phase 4).
+//! The character-creation screen — the v1 glue overlay (phase 4).
 //!
 //! A disposable Bevy-UI screen (the same register as [`crate::char_select`], not GlueXML — the
 //! faithful glue arc is 0193's) arranged like the reference client's `CharacterCreate.xml` and
@@ -55,7 +55,7 @@ const HORDE: [u8; 4] = [2, 5, 6, 8]; // Orc, Scourge, Tauren, Troll
 /// The ref's initial model facing (`SetCharacterCreateFacing(-15)`), reset on every race switch.
 const INITIAL_FACING: f32 = -15.0 * std::f32::consts::PI / 180.0;
 
-/// The character-creation subsystem (decision 0423): the screen + its selection state.
+/// The character-creation subsystem: the screen + its selection state.
 pub(crate) struct CharCreatePlugin;
 
 impl Plugin for CharCreatePlugin {
@@ -89,7 +89,7 @@ impl Plugin for CharCreatePlugin {
     }
 }
 
-/// The end-to-end create instrument (`WOW_CHARCREATE_NAME=<name>`, decision 0423): a few seconds
+/// The end-to-end create instrument (`WOW_CHARCREATE_NAME=<name>`): a few seconds
 /// after the create screen is up, fill the name and fire Create — so the whole screen → wire →
 /// server → result → back-to-select path is verifiable headlessly (pair with `WOW_CHARCREATE_SHOT=1`
 /// to reach the screen). Inert without the env; fires once.
@@ -119,7 +119,7 @@ fn debug_auto_create(
     info!("char create: auto-create fired for {:?}", sel.name.text);
 }
 
-/// The screen-shot instrument (`WOW_CHARCREATE_SHOT=1`, decision 0423): jump to the create screen a
+/// The screen-shot instrument (`WOW_CHARCREATE_SHOT=1`): jump to the create screen a
 /// few seconds after boot so a live shot / eyeball reaches it without a click. Inert without the env.
 fn debug_enter(
     state: Res<State<ClientState>>,
@@ -140,7 +140,7 @@ fn debug_enter(
 /// The shot instrument's race/sex/class pick (`WOW_CHARCREATE_PICK="race,sex[,class]"`): applied
 /// once as soon as the create screen is up (after its enter reset), so a probe shot can capture any
 /// race's scene — the ref comparisons are per-race. The optional third field picks the class, which
-/// selects the starting outfit the preview wears (decision 0527) — so an A/B of the same race at two
+/// selects the starting outfit the preview wears — so an A/B of the same race at two
 /// classes machine-checks the dressing path. An out-of-range class for the race is ignored (the
 /// race's first class stands). Inert without the env.
 fn debug_pick(
@@ -239,14 +239,14 @@ fn debug_shot(
 /// What the create screen currently has selected. The five dials are `[skin, face, hairStyle,
 /// hairColor, facialHair]` indices; the ranges come from [`CharCreate`], and are re-clamped whenever
 /// race/gender changes (so a dial never points past the new race's range). `class` reaches the booth
-/// too — it picks the starting outfit the preview wears (decision 0527).
+/// too — it picks the starting outfit the preview wears.
 #[derive(Resource, Default)]
 pub(crate) struct CreateSelection {
     race: u8,
     sex: u8,
     class: u8,
     dials: [u8; 5],
-    /// The typed name — a real [`EditBoxState`] (decision 0704), so it has the caret, selection,
+    /// The typed name — a real [`EditBoxState`], so it has the caret, selection,
     /// Ctrl+A and clipboard the chat box has. Letters-only and the 12-cap are enforced by the
     /// shared feed, on pasted text as well as typed.
     name: EditBoxState,
@@ -295,7 +295,7 @@ impl CreateSelection {
     }
 
     /// The look to show in the booth: race/gender/class + appearance. Class dresses the preview in
-    /// the (race, class, sex) starting outfit (decision 0527), so a class change re-bakes the model.
+    /// the (race, class, sex) starting outfit, so a class change re-bakes the model.
     fn look(&self) -> CreateLook {
         CreateLook {
             race: self.race,
@@ -386,7 +386,7 @@ fn create_input(
     keys: Res<ButtonInput<KeyCode>>,
     catalog: Option<Res<CharCreate>>,
     mut sel: ResMut<CreateSelection>,
-    // The host pasteboard + the window handle its Wayland backend needs (decision 0702).
+    // The host pasteboard + the window handle its Wayland backend needs.
     mut clipboard: NonSendMut<HostClipboard>,
     raw_handle: Query<&bevy::window::RawHandleWrapper, With<bevy::window::PrimaryWindow>>,
     time: Res<Time>,
@@ -435,7 +435,7 @@ fn create_input(
             CreateAction::ClassSlot(slot) => {
                 // The ref plays the click always, and re-dresses the model only on a real change:
                 // `SelectClass` (`0x470f50`) → `cc_apply_sections` re-applies equipment, because the
-                // class picks the starting outfit the preview wears (decision 0527).
+                // class picks the starting outfit the preview wears.
                 if let Some(&class) = race_classes(cat, sel.race).get(slot as usize) {
                     sounds.write(GlueSound("gsCharacterCreationClass"));
                     if sel.class != class {
@@ -521,7 +521,7 @@ fn randomize(sel: &mut CreateSelection, catalog: Option<&CharCreate>, rng: &mut 
 
 /// Paint the name box from its [`EditBoxState`] — the display segments, the selection highlight and
 /// the caret at the cursor — through the shared [`crate::glue::widgets::paint_glue_field`], so it
-/// draws exactly like the login boxes (decision 0704). Only the five name-box row items carry a
+/// draws exactly like the login boxes. Only the five name-box row items carry a
 /// `GlueFieldPart`, so requiring it is enough to pick them out of every other `DynText`.
 fn refresh_name_box(
     sel: Res<CreateSelection>,
@@ -594,7 +594,7 @@ fn create_result(
             // The fresh roster already arrived (`net::io` re-enumerates and emits it BEFORE the
             // result), so `note_created` selects the new row against the list already in hand —
             // arming a flag for "the next roster update" waited for a message that never comes
-            // again, and the select screen came back on the old row (B119).
+            // again, and the select screen came back on the old row.
             roster.note_created(sel.name.text.clone());
             next.set(ClientState::CharSelect);
         } else if let Ok(mut text) = status.single_mut() {
@@ -610,7 +610,7 @@ fn create_result(
 /// The codes are vmangos's `ResponseCodes`, anchored at `CHAR_CREATE_SUCCESS = 0x2E`; every key
 /// below was derived by matching our old text against the shipped file rather than by name, then
 /// corrected where the *semantics* disagreed with the match. Three things that hiding behind
-/// literals had concealed (decision 2045):
+/// literals had concealed:
 ///
 /// - **`0x36` was missing a sentence.** Our copy of `CHAR_CREATE_SERVER_QUEUE` stopped at
 ///   "…temporarily disabled." where the shipped string continues "Please try again during off peak
@@ -787,7 +787,7 @@ mod tests {
         assert!(HORDE.windows(2).all(|w| w[0] < w[1]));
     }
 
-    /// The booth look carries the class, so a class click re-dresses the model (decision 0527).
+    /// The booth look carries the class, so a class click re-dresses the model.
     /// Guards the regression this test was written for: `CreateSelection.class` was set by the
     /// class buttons but never reached `GluePreview`, so the starting outfit never changed.
     #[test]

@@ -1,10 +1,10 @@
-//! Binding persistence (decision 0997): `benilla-config/bindings/account.txt` and
+//! Binding persistence: `benilla-config/bindings/account.txt` and
 //! `benilla-config/bindings/<Realm>-<Char>.txt`, through [`crate::local_state`] like every resident.
 //!
 //! Format is **command-centric diff-vs-defaults** — one line per command whose keys moved:
 //!
 //! ```text
-//! # benilla key bindings (decision 0997)
+//! # benilla key bindings
 //! bind JUMP F
 //! bind MOVEFORWARD W
 //! bind TOGGLESHEATH
@@ -187,7 +187,7 @@ mod tests {
                 ("BOGUSCMD".to_string(), vec!["Q".to_string()]),
             ]
         );
-        // **A command the registry does not know is KEPT** (decision 1201). It used to be
+        // **A command the registry does not know is KEPT**. It used to be
         // dropped after its keys were stolen, which was right for a genuinely bogus line and
         // catastrophic for the case that actually occurs: an ADDON's command, whose
         // `Bindings.xml` registers at world entry, hours after this file was read. Dropping it

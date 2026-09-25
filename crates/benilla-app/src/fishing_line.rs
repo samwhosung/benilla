@@ -16,7 +16,7 @@
 //! light-collector accumulated ambient, alpha opaque, GL_LIGHTING forced off, drawn as a plain
 //! line strip in scene state.
 //!
-//! Named deviations (same class as the bowstring's, decision 1099): the anchor rides the static
+//! Named deviations (same class as the bowstring's): the anchor rides the static
 //! prop frame (the pole's bone 1 is not posed — item props rest at bind pose here); the color
 //! samples the scene ambient ([`benilla_world::lighting::WowLighting`]) rather than a per-model light
 //! collector; gizmo lines are unfogged. The reference's sheath side-trigger (`0x60d2f0` calls

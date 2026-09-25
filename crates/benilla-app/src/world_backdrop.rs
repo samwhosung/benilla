@@ -4,9 +4,9 @@
 //! ## The seam that was left
 //!
 //! Both halves of the frame already composite the way the reference's fixed-function device does,
-//! and each does it by the same trick. The world (0161): every world shader emits raw gamma bytes,
+//! and each does it by the same trick. The world: every world shader emits raw gamma bytes,
 //! the blur runs on them, and the FFXGlow combine takes the frame's one `srgb_to_linear` so the
-//! sRGB present-encode restores the byte. The UI (0254): `ui_quad.wgsl` emits gamma values into an
+//! sRGB present-encode restores the byte. The UI: `ui_quad.wgsl` emits gamma values into an
 //! `Rgba8UnormSrgb` target, so the store encodes, the blend's destination read decodes, and every
 //! hardware blend is therefore arithmetic on the gamma value — `alphaMode="ADD"` really is
 //! `dst + texel·α`, clamped, exactly as EGxBlend 3 does it.
@@ -54,7 +54,7 @@
 //! frame still holds exactly one decode — the UI lane's, at its end — and an opaque world pixel
 //! comes out the byte it came out before, minus the float image's own rounding on the way.
 //!
-//! ## …and that seam turned out to be a dial: **render scale** (decision 1639)
+//! ## …and that seam turned out to be a dial: **render scale**
 //!
 //! Once the world is a picture the UI paints on, the picture does not have to be the window's size.
 //! [`RenderScale`] sizes it — the world renders at `window × scale`, the combine still covers the
@@ -88,11 +88,11 @@ use benilla_world::view::WorldCamera;
 ///
 /// The era's answer to "my machine is too slow" was `gxResolution`: drop the whole backbuffer, UI
 /// and all, and in fullscreen mode-set the display to match. We ship no exclusive mode at all
-/// (decision 1627) and our UI is a separate pass over an off-screen world, so we can offer the
+/// and our UI is a separate pass over an off-screen world, so we can offer the
 /// strictly better version of that trade — **shrink the 3D, keep the interface**. It is the same
 /// knob every engine since has grown (Godot's `scaling_3d_scale`, Unity URP's `renderScale`,
 /// Unreal's `r.ScreenPercentage`), and it is the standard lever for the one machine class we have a
-/// real measurement from: the Steam Deck sitting at 94 % GPU busy (B329).
+/// real measurement from: the Steam Deck sitting at 94 % GPU busy.
 ///
 /// **Default 1.0 — off, and it has to be**, so every visual golden in the tree keeps meaning what
 /// it meant: at 1.0 [`render_target_for`] returns the window's own physical size and the window's
@@ -106,7 +106,7 @@ pub(crate) struct RenderScale(pub(crate) f32);
 /// Wider than a settings row would offer (a slider belongs at 50–200 %, where every engine puts
 /// it): this is the clamp that stops an absurd *value*, not the one that shapes the UI. The upper
 /// end is deliberately past 2 because supersampling is also the instrument — the only way to price
-/// a pixel on a machine whose present is railed at the display's grant (0362, and `crate::video`'s
+/// a pixel on a machine whose present is railed at the display's grant (and `crate::video`'s
 /// note that macOS honours neither `AutoNoVsync` nor `Immediate`).
 pub(crate) const RENDER_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.25..=4.0;
 
@@ -278,7 +278,7 @@ fn setup_backdrop(
 /// Runs before the stamp (the plugin's `.chain()`), so the factor is always computed against the
 /// image that now exists.
 ///
-/// ## The rebuild publishes a NEW asset — it does not write through the old handle (decision 1647)
+/// ## The rebuild publishes a NEW asset — it does not write through the old handle
 ///
 /// It used to do exactly that (`*images.get_mut(&handle) = new_backdrop_image(size)`), and **the
 /// world froze**: change any graphics setting or resize the window in the world and the 3D stopped
@@ -456,7 +456,7 @@ mod tests {
     use super::*;
     use bevy::image::TextureFormatPixelInfo as _;
 
-    /// **The world camera's target is a size-carrier and nothing else** (decision 2234): one byte
+    /// **The world camera's target is a size-carrier and nothing else**: one byte
     /// a pixel, a render attachment because a camera target must be one, and NOT a texture —
     /// nothing samples it. The float image this used to be (1603) carried the world to the UI
     /// pass's first quad; the combine carries it now, straight into the UI target, and a future
@@ -674,7 +674,7 @@ mod tests {
     }
 
     /// **A rebuild publishes a NEW image, and the camera follows it onto the new one** — the
-    /// 2026-08-27 world-freeze (decision 1647).
+    /// 2026-08-27 world-freeze.
     ///
     /// Writing the new size through the OLD handle is what froze the world: `ui_pass` keys its
     /// material cache on `AssetId<Image>`, and Bevy prepares a material's bind group once, so the

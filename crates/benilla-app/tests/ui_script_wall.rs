@@ -5,7 +5,7 @@
 //! of the Lua VM, and everything else produces model values. Its instrument was 1160's — a wall
 //! test in `tests/` whose number is ratcheted down by the work — and it named the number: **141
 //! files**. The instrument was never built, and with nothing failing the count went the other
-//! way: 164 files by 2026-09-16 (decision 2265 §A3). This file is the instrument. It does not
+//! way: 164 files by 2026-09-16. This file is the instrument. It does not
 //! decide whether the crate move happens — that stays the director's — it only makes the number
 //! visible on every test run and refuses to let it grow unnoticed.
 //!
@@ -19,14 +19,14 @@
 //! closure from failing the gate while making it impossible to bank a whole stage of work without
 //! writing the new number down. `WOW_UISCRIPT_DUMP=1` prints the files.
 //!
-//! **Four families, one gated** (decision 2338). The `ui_*` window feeds are 1177's feed layer
+//! **Four families, one gated**. The `ui_*` window feeds are 1177's feed layer
 //! in a hundred modules (2265 §A3 makes them one); `capture/` probes read the stock binding on
 //! purpose; test modules test. None of those is what 1177 meant, so they are reported, and only
 //! the remaining gameplay files — the ones that can reach zero — are ratcheted.
 
 use std::path::{Path, PathBuf};
 
-/// Where a file that names the VM stands under 1177 (decision 2338).
+/// Where a file that names the VM stands under 1177.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 enum Family {
     /// Gameplay code that knows the FrameXML VM exists — the camera, targeting, the minimap,

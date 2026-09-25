@@ -118,7 +118,7 @@ pub(super) fn refresh_dynamic(
                     .to_string(),
             },
             // The name box is five flex items (segments + carets), painted from its
-            // `EditBoxState` by `refresh_name_box` — never a single string here (decision 0704).
+            // `EditBoxState` by `refresh_name_box` — never a single string here.
             DynText::Name => continue,
             DynText::InfoTitle(InfoKind::Faction) => strings
                 .text(

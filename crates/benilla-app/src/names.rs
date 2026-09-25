@@ -1,4 +1,4 @@
-//! Unit-name resolution — the query-cache seam of decision 0068 §3.
+//! Unit-name resolution — the query-cache seam of.
 //!
 //! The 1.12 wire carries **no names in descriptors**: a player's name answers `CMSG_NAME_QUERY`
 //! (keyed by guid), a creature's answers `CMSG_CREATURE_QUERY` (keyed by the template *entry*,
@@ -16,12 +16,12 @@
 //!
 //! **Two of the three live for one world session; one persists.** Creature templates are keyed by
 //! a template entry that means the same thing forever, and the reference writes them to
-//! `creaturecache.wdb` — so ours persist too (decision 1689, corrected scope). Player names and
+//! `creaturecache.wdb` — so ours persist too (corrected scope). Player names and
 //! pet names are keyed by a guid and a pet number, which name *one character* and *one spawn*, and
 //! the reference neither writes them to disk nor carries them across a world entry — it clears
 //! both stores at world-session start ([`NameCache::clear_world_session`]). Persisting them was
 //! benilla's own addition, and it is what answered a wiped server's brand-new character with a
-//! deleted one's name (report B386, decision 2223).
+//! deleted one's name (report B386).
 
 use std::collections::HashMap;
 
@@ -38,7 +38,7 @@ use crate::query_cache::QueryCache;
 ///
 /// Named because the bits are one-apart neighbours with wholly unrelated meanings, and reading a
 /// literal `& 0x10` at a call site is how the wound gate below spent months testing the faction
-/// tooltip's bit instead of its own (decision 2068). The reference gives each bit its own getter,
+/// tooltip's bit instead of its own. The reference gives each bit its own getter,
 /// which is the shape mirrored here — every consumer names the bit it wants:
 ///
 /// | bit | reference getter | meaning |
@@ -60,7 +60,7 @@ pub(crate) mod type_flags {
     /// flinch `0x60ea70`), whatever the trigger — a skeleton, a ghost, an elemental takes hits
     /// without recoiling. It gates **only** the animation: the blood spurt is unaffected
     /// (the reference has no blood-, creature-type- or display-record-keyed mechanism that
-    /// suppresses it — a skeleton bleeds), and so is the floating combat text. Decision 2068.
+    /// suppresses it — a skeleton bleeds), and so is the floating combat text.
     pub(crate) const DO_NOT_PLAY_WOUND_ANIM: u32 = 0x8;
 
     /// `0x10` — **NO_FACTION_TOOLTIP**: the unit tooltip drops its faction-name line
@@ -68,7 +68,7 @@ pub(crate) mod type_flags {
     pub(crate) const NO_FACTION_TOOLTIP: u32 = 0x10;
 
     /// `0x20` — **MORE_AUDIBLE**: the pass-2 election re-links an off-screen creature for
-    /// tick-only so its combat stays audible (`0x607da0`'s `0x623b70` arm, decision 1482).
+    /// tick-only so its combat stays audible (`0x607da0`'s `0x623b70` arm).
     pub(crate) const MORE_AUDIBLE: u32 = 0x20;
 }
 
@@ -93,14 +93,14 @@ pub(crate) struct NameCache {
     /// Creature template records by entry; the outer `None` = the server flagged the entry
     /// unknown. The subname is the overhead/tooltip title line ("Stable Master", …); the type is
     /// the `CreatureType.dbc` id the TAB-target critter filter reads; rank/civilian feed the
-    /// unit tooltip's level-line word + CIVILIAN line (decision 0276).
+    /// unit tooltip's level-line word + CIVILIAN line.
     creatures: QueryCache<u32, CreatureRecord>,
     /// Pet names by **pet number** — the third naming path (see [`Self::resolve`]'s pet branch).
     /// No negative entry exists: the server answers for a live pet or says nothing at all, so an
     /// unanswered ask stays unanswered, exactly as it does for the real client.
     pets: QueryCache<u32, String>,
     /// Bumped by every **landed** answer (and the pet-rename eviction) — never by an ask. The
-    /// gated feeds' watch counter (decision 1439): a feed that resolved a miss re-runs when the
+    /// gated feeds' watch counter: a feed that resolved a miss re-runs when the
     /// answer lands, and only then. Born because `is_changed` could not say this while the
     /// resolves took `&mut self` every frame; 2288 made them `&self` (the in-flight marks live
     /// behind [`QueryCache`]'s lock), and the counter stays as the one number the three caches
@@ -115,7 +115,7 @@ pub(crate) struct CreatureRecord {
     pub(crate) subname: Option<String>,
     pub(crate) creature_type: u32,
     /// `CreatureFamily.dbc` id — the pet paper doll's family word and, through the row's food
-    /// mask, its diet tooltip (decision 1062). `0` on everything that is neither a tameable beast
+    /// mask, its diet tooltip. `0` on everything that is neither a tameable beast
     /// nor a warlock minion, which is most of the table; the family table has no row 0, so a `0`
     /// resolves to nil without needing a sentinel of its own.
     pub(crate) pet_family: u32,
@@ -123,14 +123,14 @@ pub(crate) struct CreatureRecord {
     /// directly, unless you specifically want the ungated template value.
     pub(crate) rank: u32,
     /// Template type flags — the wire dword, read bit by bit through [`type_flags`]. Never test a
-    /// literal against it: its bits are unrelated neighbours (decision 2068).
+    /// literal against it: its bits are unrelated neighbours.
     pub(crate) type_flags: u32,
     pub(crate) civilian: bool,
     /// Racial leader — the tooltip's white LEADER line (`0x6125c0`).
     pub(crate) racial_leader: bool,
     /// `CreatureDisplayInfo.dbc` id — the template's model. The **only** way to draw a creature
-    /// with no world object to read `UNIT_FIELD_DISPLAYID` off, which is exactly a stabled pet
-    /// (decision 1676): its wire row names a template entry and nothing else. `0` when the
+    /// with no world object to read `UNIT_FIELD_DISPLAYID` off, which is exactly a stabled pet:
+    /// its wire row names a template entry and nothing else. `0` when the
     /// template ships none.
     ///
     /// For anything actually on screen the unit's own descriptor field still wins — vmangos picks
@@ -144,7 +144,7 @@ pub(crate) struct CreatureRecord {
 }
 
 /// The client's **creature-rank getter**, `0x605620` — 33 bytes, and the single source every rank
-/// reader in the real client goes through (decision 0782):
+/// reader in the real client goes through:
 ///
 /// ```text
 /// 605620: mov eax,[ecx+0xb30]   ; the cached creature record
@@ -358,7 +358,7 @@ impl NameCache {
     /// player **guid** names one character on one realm, and a **pet number** names one live spawn
     /// — and nothing on the 1.12 wire ever says either has been handed to somebody else. So the
     /// reference does not keep them, and benilla keeping them is what let a server's brand-new
-    /// character wear a deleted one's name (B386, decision 2223).
+    /// character wear a deleted one's name.
     ///
     /// Called at world entry, **before** the login seeds our own name — the seed is about the
     /// session we are starting, not the one we just left.
@@ -369,8 +369,7 @@ impl NameCache {
         self.generation = self.generation.wrapping_add(1);
     }
 
-    /// **Install a realm cache read off disk — its CREATURE templates, and nothing else**
-    /// (decision 2260).
+    /// **Install a realm cache read off disk — its CREATURE templates, and nothing else**.
     ///
     /// The persisted file has carried creature templates alone since 2223, so this is the whole of
     /// what a load can legitimately say. It used to be spelled `*names = loaded` in
@@ -416,7 +415,7 @@ impl NameCache {
         self.generation = self.generation.wrapping_add(1);
     }
 
-    /// Forget a pet's cached name so the next [`Self::resolve`] asks for it again (decision 1066).
+    /// Forget a pet's cached name so the next [`Self::resolve`] asks for it again.
     ///
     /// **The one hole in the ask-once discipline, and the one place it has to have one.** A player's
     /// or a creature's name cannot change under a cache entry; a pet's can — its owner renames
@@ -446,14 +445,14 @@ impl NameCache {
     /// rank word, civilian — decision 0276's level-line law), and the one route to a live unit's
     /// [`type_flags`]. Read-only, the subname's ask-once discipline.
     ///
-    /// **Key it off the unit's descriptor `OBJECT_FIELD_ENTRY`, never the entry in its guid**
-    /// (decision 2068): the reference registers this record under `[[unit+8]+0xc]` (`0x60b160`),
+    /// **Key it off the unit's descriptor `OBJECT_FIELD_ENTRY`, never the entry in its guid**:
+    /// the reference registers this record under `[[unit+8]+0xc]` (`0x60b160`),
     /// there is exactly one record per unit, and only the descriptor carries a template entry for
     /// a `HIGHGUID_PET` guid — whose entry slot holds a pet number instead. A guid-keyed twin of
     /// this read used to exist and is gone: two keys onto one field is how the readers drift.
     ///
     /// `None` = no template answer yet, and **each consumer decides what that means, because the
-    /// reference's per-bit getters do**: the parked-event gate (`MORE_AUDIBLE`, decision 1482)
+    /// reference's per-bit getters do**: the parked-event gate (`MORE_AUDIBLE`)
     /// fails CLOSED like `0x623b70`'s null leg, the wound gate (`DO_NOT_PLAY_WOUND_ANIM`, 2068)
     /// fails OPEN like `0x6125f0`'s.
     pub(crate) fn creature_record(&self, entry: u32) -> Option<&CreatureRecord> {
@@ -485,7 +484,7 @@ impl crate::query_cache::AskOnce for NameCache {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-// Persistence — the `.wdb` law, in benilla's own folder (decision 1689)
+// Persistence — the `.wdb` law, in benilla's own folder
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 /// The file's first line. Every field is compared by **equality** on load and any mismatch
@@ -500,7 +499,7 @@ const CACHE_MAGIC: &str = "benilla-namecache";
 /// it whenever a column below is added, removed or reordered; the old file is then discarded
 /// rather than misparsed.
 ///
-/// **2** — the player (`P`/`p`) and pet (`E`) records are gone (decision 2223). They were never the
+/// **2** — the player (`P`/`p`) and pet (`E`) records are gone. They were never the
 /// reference's to write: `'WNAM'` and `'WPNM'` are constructed with persistence disabled and are
 /// wiped at world-session start instead ([`NameCache::clear_world_session`]). A version-1 file
 /// still holding them is discarded whole, which is the header's job and exactly the right thing —
@@ -718,7 +717,7 @@ pub(crate) mod net {
         names.insert_pet(pet_number, name);
     }
 
-    /// `SMSG_INVALIDATE_PLAYER` — drop this guid so the next resolve re-asks (decision 1689).
+    /// `SMSG_INVALIDATE_PLAYER` — drop this guid so the next resolve re-asks.
     ///
     /// The name cache has **no TTL** (eviction is explicit only, `0x555600`), so this is the
     /// one thing that unsticks a player's name. It matters more to benilla than it did before the
@@ -841,8 +840,8 @@ mod tests {
         assert_eq!(cache.peek(voidwalker), None);
     }
 
-    /// **A stable list warms the pet-name cache, so an unstabled pet is named on arrival**
-    /// (decision 1688). The list carries the same `(pet_number, name)` pair the pet-name query
+    /// **A stable list warms the pet-name cache, so an unstabled pet is named on arrival**.
+    /// The list carries the same `(pet_number, name)` pair the pet-name query
     /// would answer with, and the guid slot benilla reads that number out of is the very one
     /// vmangos packs it into (`Object::_Create(guidlow, petNumber, HIGHGUID_PET)`).
     ///
@@ -875,7 +874,7 @@ mod tests {
         );
     }
 
-    /// **The round trip keeps every record kind and every shape of answer** (decision 1689) —
+    /// **The round trip keeps every record kind and every shape of answer** —
     /// including the "the server said no" negative, which is the one a naive serializer drops:
     /// cached as absent, it is what stops us re-asking an unknown entry on every login, forever.
     ///

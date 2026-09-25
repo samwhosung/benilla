@@ -536,7 +536,7 @@ fn name_cluster(
                 font,
                 s,
             );
-            // The shared glue edit-box chrome (decision 0539) — Alliance-tinted, always (the
+            // The shared glue edit-box chrome — Alliance-tinted, always (the
             // ref's `OnLoad`); the create refresh writes the typed name into the marker.
             crate::glue::widgets::glue_edit_box(
                 cluster,

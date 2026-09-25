@@ -25,7 +25,7 @@ use bevy::time::Real;
 use benilla_ui::script::UiScript;
 
 /// The per-frame phase split this recorder writes to the CSV. Produced and owned by the UI pass
-/// itself (decision 1174) — an instrument reads the fact, it does not define it.
+/// itself — an instrument reads the fact, it does not define it.
 use crate::ui_script::{UiCostWanted, UiFrameCost};
 
 /// Where to write, from `$WOW_HOVER_LOG`: unset ⇒ off, `1` ⇒
@@ -88,7 +88,7 @@ impl Plugin for HoverLogPlugin {
         }
         let path = log_path().expect("enabled() checked");
         // Ask the UI pass for its phase split. `init_resource` first so this holds whichever
-        // plugin builds first — `UiScriptPlugin`'s own init is then a no-op (decision 1174).
+        // plugin builds first — `UiScriptPlugin`'s own init is then a no-op.
         app.init_resource::<UiCostWanted>();
         app.world_mut().resource_mut::<UiCostWanted>().0 = true;
         if let Some(dir) = std::path::Path::new(&path).parent() {
@@ -242,7 +242,7 @@ fn summarize(label: &str, rows: &[&Row]) -> String {
     // extract gate skipped the conversion+rasterize loop outright.
     #[allow(clippy::cast_precision_loss)]
     let solves = rows.iter().map(|r| r.cost.solves as f64).sum::<f64>() / f64::from(n);
-    // The term `solves` hides (decision 1625): a solve that had to DERIVE the layout graph first
+    // The term `solves` hides: a solve that had to DERIVE the layout graph first
     // costs an order of magnitude more than one that used the ledger, and both count as one solve.
     // The law is zero — anything else is a write site that gave up naming its node, which
     // `WOW_LAYOUT_DERIVE_TRACE=<secs>:<n>` will backtrace on a live run.
@@ -256,7 +256,7 @@ fn summarize(label: &str, rows: &[&Row]) -> String {
     let rebuilt = 100.0 * rows.iter().filter(|r| r.mesh.rebuilt).count() as f32 / n;
     let mesh_runs = rows.iter().map(|r| r.mesh.runs as f64).sum::<f64>() / f64::from(n);
     // The number that reaches Bevy: a rewritten batch re-extracts, and `rewrites` tracking `runs`
-    // means the skip gate is being defeated for every batch at once (decision 1632).
+    // means the skip gate is being defeated for every batch at once.
     let mesh_rw = rows.iter().map(|r| r.mesh.rewrites as f64).sum::<f64>() / f64::from(n);
     let skips = 100.0 * rows.iter().filter(|r| r.cost.skipped).count() as f32 / n;
     // Counted against the DROPPED threshold, not the raw budget: synced wall time rails at the
@@ -402,7 +402,7 @@ fn parse_row(line: &str) -> Option<Row> {
             spliced: fields.get(17).and_then(|f| f.parse().ok()).unwrap_or(0),
             // Appended after the mesh block for the same reason `spliced` was appended after
             // the tip block: a new column goes on the END so every recording made before it
-            // still reads (decision 1638).
+            // still reads.
             dropped: fields.get(25).and_then(|f| f.parse().ok()).unwrap_or(0),
         },
         mesh,

@@ -1,6 +1,5 @@
 //! **The application-exit edge** — the one place that says *where* "the client is going down" may
-//! be observed, because getting that wrong is silent and costs the player everything they changed
-//! (decision 1528).
+//! be observed, because getting that wrong is silent and costs the player everything they changed.
 //!
 //! ## The frame the app decides to quit is the last frame there is — but it is not always the only one
 //!
@@ -9,7 +8,7 @@
 //! wants to run "on the way out" gets its chance in the same `Main` pass in which the exit was
 //! announced — and only if it runs *after* the announcement.
 //!
-//! What it does **not** get is a guarantee that the pass is the last one (decision 1537). On macOS
+//! What it does **not** get is a guarantee that the pass is the last one. On macOS
 //! `event_loop.exit()` is a request, not a return: events already queued still dispatch, and one
 //! more `about_to_wait` → `run_app_update` can land before the loop unwinds. `exit_on_all_closed`
 //! has no latch of its own — it writes an `AppExit` on **every** frame its window query is empty —
@@ -73,7 +72,7 @@ pub(crate) struct OnAppExit;
 struct ExitSetLatched;
 
 /// **The rising edge of "the app is exiting"** — true on the first frame of a run of `AppExit`
-/// announcements, false for every frame the run continues (decision 1537).
+/// announcements, false for every frame the run continues.
 ///
 /// An *edge*, not a once-per-process latch, because that is what the tail is for and because the
 /// two are not the same thing. `exit_on_all_closed` re-announces on every frame its window query is

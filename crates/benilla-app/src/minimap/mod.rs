@@ -33,7 +33,7 @@ pub(crate) mod blips;
 pub(crate) use blips::party_member_pos;
 mod composite;
 mod interior;
-/// The minimap ping (decision 1596) — engine-owned and pinned to a world point.
+/// The minimap ping — engine-owned and pinned to a world point.
 mod ping;
 pub(crate) use ping::MinimapPing;
 
@@ -149,7 +149,7 @@ const CORPSE_BLIP_FRACTION: f32 = 0.11;
 ///
 /// Inputs and output are **gamma-space** (`WowLighting`'s sRGB 0..1 convention); handed to the UI
 /// quad as its vertex colour, whose own linearize→re-encode reproduces the client's gamma-space
-/// MODULATE (decision 0089). Interior (WMO) tiles are drawn full white and skip this.
+/// MODULATE. Interior (WMO) tiles are drawn full white and skip this.
 fn minimap_day_tint(ambient: [f32; 3], diffuse: [f32; 3]) -> [f32; 3] {
     let (color_a, color_b) = (diffuse, ambient);
     // Rec.601 luma on 0..255 bytes: the weights (77,151,28) sum to 256, so the parenthesised sum is
@@ -220,7 +220,7 @@ pub(crate) struct MinimapWidget(pub(crate) Option<MinimapSlot>);
 #[derive(Resource, Default)]
 pub(crate) struct MinimapInside(pub(crate) bool);
 
-/// The **persisted** half of the minimap zoom (decision 1131) — the client's two CVar objects
+/// The **persisted** half of the minimap zoom — the client's two CVar objects
 /// `minimapZoom` / `minimapInsideZoom`, whose registered default is `"3"` in both cases (at the
 /// `RegisterCVar 0x63db90` argument slot). The *live* indices are the widget's
 /// ([`benilla_ui::widget::MinimapState`]); this is the durable knob [`crate::cvars`] loads out of
@@ -284,7 +284,7 @@ struct MinimapAssets {
     mask: Option<Handle<Image>>,
     arrow: Option<Handle<Image>>,
     /// The shared POI atlas (`Interface\Minimap\POIIcons`) — the corpse blip's skull cell
-    /// (decision 0308 §5) and any later POI rides it.
+    /// and any later POI rides it.
     poi: Option<Handle<Image>>,
     /// The **four** rim-arrow arts — the flat `.blp` stand-ins for the one `minimapArrowModel`
     /// (`Rotating-MinimapArrow.mdx`) the reference re-animates per blip source. See
@@ -294,7 +294,7 @@ struct MinimapAssets {
     /// quest-giver dots.
     object_icons: Option<Handle<Image>>,
     /// `SpellShapeshiftForm.dbc` — the tracking dots' creature-type override (a cat-form
-    /// druid is a Beast; decision 0564). `None` = no override (unshifted resolution only).
+    /// druid is a Beast). `None` = no override (unshifted resolution only).
     forms: Option<HashMap<u32, benilla_formats::ShapeshiftForm>>,
 }
 
@@ -456,7 +456,7 @@ fn emit_minimap(
     // Drain this frame's `Minimap:PingLocation` click BEFORE any early return below, so it is
     // always spent in the frame it was made. Held across frames it would seat against geometry
     // the player never clicked on; and a click made on a frame the map does not draw is simply
-    // not a ping (decision 1596).
+    // not a ping.
     let click = script.and_then(|mut s| s.take_minimap_ping_request());
     let (Some(slot), Some(assets), Some(map), Some(catalog)) =
         (widget.0.as_ref(), assets, map, catalog)
@@ -525,7 +525,7 @@ fn emit_minimap(
         blip_px_per_yd = px_per_yd;
 
         // The tiles are composited into the client's own 256² TARGET, not drawn at the screen —
-        // both halves of the mechanism matter and only work together (decision 1466; the module
+        // both halves of the mechanism matter and only work together (the module
         // docs in [`composite`] carry the why). Target space: y-UP, origin at the target's centre
         // (= the player), and `RT_HALF_EXTENT_SCALE · radius` yards to an edge.
         #[allow(clippy::cast_precision_loss)] // 256 is exact in f32
@@ -894,7 +894,7 @@ fn emit_minimap(
     }
     *blip_hover = hover;
 
-    // The corpse blip (decision 0308 §5): in range, the POIIcons skull cell (the same art the
+    // The corpse blip: in range, the POIIcons skull cell (the same art the
     // ref's world-map corpse uses; the engine-drawn in-range minimap corpse art is INTERIM until
     // named) at the corpse's true position, through the same north-up point mapping as the
     // tiles. OUT of range the corpse is the fifth slot of `0x6dad10`'s placement — the rotating
@@ -923,9 +923,9 @@ fn emit_minimap(
     }
 
     // A `Minimap:PingLocation` click is seated here, against the geometry standing right here,
-    // this frame (decision 1596). The marker itself is the stock `MiniMapPing` `<Model>`, a Lua
+    // this frame. The marker itself is the stock `MiniMapPing` `<Model>`, a Lua
     // child of the Minimap that composites over everything the engine drew into the widget's
-    // hole — rendered by `crate::ui_models` since decision 2008.
+    // hole — rendered by `crate::ui_models` since.
     if let Some(ctx) = &blip_ctx {
         ping::seat_click(ctx, &mut ping, click);
     }
@@ -1091,7 +1091,7 @@ impl Plugin for MinimapPlugin {
                         .in_set(UiQuadAppend)
                         .before(emit_minimap),
                     // Deliberately NOT on the lighting resolve's read side, though it reads
-                    // `WowLighting` (decision 2032): joining `LightingConsumeSet` would put a
+                    // `WowLighting`: joining `LightingConsumeSet` would put a
                     // 178th engine item through the world API wall, and what it buys is one
                     // frame of the right day-night tint on a 140 px map — invisible even on a
                     // submersion crossing, which is the one moment that value jumps.
@@ -1115,7 +1115,7 @@ impl Plugin for MinimapPlugin {
                     // Before the script tick, and after the containment verdict it reads: the
                     // `MINIMAP_PING` event and `Minimap:GetPingPosition()`'s value land in the
                     // same tick, on a ping the renderer already drew at the end of last frame.
-                    // Gated on the interface being up (decision 2279): a group member's
+                    // Gated on the interface being up: a group member's
                     // `MSG_MINIMAP_PING` can land in the same drain as the login burst, and the
                     // `fresh` latch it sets is spent by this system's take — on the boot VM, with
                     // no `MiniMapPing` frame to show it, if this ran in 2214's one-frame window.

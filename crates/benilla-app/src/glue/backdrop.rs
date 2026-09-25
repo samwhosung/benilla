@@ -103,7 +103,7 @@ pub(super) fn backdrop_edges(
 /// silently shrank the entire border on any frame shorter than 3·`e`. A 37-tall edit box drew its
 /// 16-unit border at 12.3 — pulling the art clear of the authored `BackgroundInsets`, which are
 /// cut so the fill butts against each edge's bright line, and leaving the scene showing bare
-/// between frame and fill (decision 0543).
+/// between frame and fill.
 pub(crate) fn backdrop_border(
     b: &mut ChildSpawnerCommands,
     edges: &BackdropEdges,

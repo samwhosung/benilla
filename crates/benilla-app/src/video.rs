@@ -3,7 +3,7 @@
 //! Two, both of them 1.12's own CVars over the Graphics page: **Display Mode** (`gxWindow`, the
 //! *Display Mode* row) and **VSync** (`gxVSync`, the *Vertical Sync* row).
 //!
-//! # Display mode — the reference's CVar, deliberately not the reference's meaning (decision 1627)
+//! # Display mode — the reference's CVar, deliberately not the reference's meaning
 //!
 //! 1.12 ships a **two-state** display model: `gxWindow "0"` takes the display with an exclusive
 //! mode-set at `gxResolution`, `gxWindow "1"` runs in a window (with `gxMaximize` for a maximized
@@ -49,7 +49,7 @@
 //!
 //! **Why it is a player setting and not a dev toggle.** It briefly lived as a checkbox on the perf
 //! HUD, where it existed to answer one instrument question — "is the GPU keeping up?" — because a
-//! synced frame reads as the display's grant whether it needed 3 ms or 16 (0717). That is the wrong
+//! synced frame reads as the display's grant whether it needed 3 ms or 16. That is the wrong
 //! home twice over: the HUD is `#[cfg(feature = "dev")]`, so a player build could never reach it,
 //! and vsync is not a diagnostic in the first place. It is the same option 1.12 shipped —
 //! `OptionsFrameCheckButtons["VERTICAL_SYNC"] = { index = 5, cvar = "gxVSync", gxRestart = 1 }`,
@@ -81,7 +81,7 @@ pub(crate) fn novsync_env() -> bool {
 /// scenario's — every visual regression diff in the tree is denominated in the window the scenario
 /// asks for, so this one must not depend on the machine's panel. The third is the general rule: an
 /// instrumented run's window is plumbing ([`benilla_world::bgwin`]), and the probe fleet sizes and
-/// parks it deliberately (decisions 0703/0709/1148).
+/// parks it deliberately.
 ///
 /// Session-only, exactly like [`novsync_env`]: `gxWindow`/`gxResolution` are registered
 /// env-overridden while it holds, so the file's value neither reaches the window nor is saved over.
@@ -109,7 +109,7 @@ pub(crate) fn requested_window_size() -> Option<UVec2> {
 /// snap (`ui_text::layout::snap_block_top`) — are both *quantizers*, and a quantizer's error is
 /// denominated in device pixels: at 1× the same layout rounds twice as coarsely as it does here.
 /// A defect that is half a pixel at 2× is a whole one at 1×, which is the difference between
-/// invisible and reported (B209, B231, B232 — all from 1×, all reproduced here only by forcing
+/// invisible and reported (all from 1×, all reproduced here only by forcing
 /// this).
 ///
 /// The override goes on the *window*, so `Window::scale_factor()` — the one number the text engine,
@@ -253,7 +253,7 @@ pub(crate) fn present_mode(vsync: bool) -> PresentMode {
 
 pub(crate) struct VideoPlugin;
 
-/// **The Video Options block's change callbacks** (decision 2303) — the rows the reference
+/// **The Video Options block's change callbacks** — the rows the reference
 /// registers from its one video-options registration block (`0x688470`), landing on the resources
 /// they drive. Each arm writes only its own resource, so a `ViewDistance` change is `farclip`
 /// moving and nothing else; the clamps are each row's own, stated beside it.
@@ -397,8 +397,7 @@ impl Plugin for VideoPlugin {
                 (
                     // After the tick, and after the CVar sync: the stock video window's Okay is
                     // `SetCVar` per changed row and then `RestartGx()`, in one handler, so the
-                    // staged rows have to be in the registry before the commit reads it
-                    // (decision 2304).
+                    // staged rows have to be in the registry before the commit reads it.
                     (drain_restart_gx, (apply_present_mode, apply_window_mode))
                         .chain()
                         .after(crate::ui_script::UiInput)
@@ -411,7 +410,7 @@ impl Plugin for VideoPlugin {
 }
 
 /// How many `RestartGx()` calls the interface has made — the video window's "apply the staged
-/// settings now" (decision 2177).
+/// settings now".
 ///
 /// A generation counter rather than a flag: [`apply_present_mode`] and [`apply_window_mode`] each
 /// keep their own `Local` of the last value they acted on, so one bump forces exactly one
@@ -421,7 +420,7 @@ pub(crate) struct GxRestarts(u32);
 
 /// Move the interface's `RestartGx()` calls into [`GxRestarts`] — and **commit the latch**.
 ///
-/// The `gx*` rows are latched, as the reference registers them (flags `3`, decision 2303): a
+/// The `gx*` rows are latched, as the reference registers them (flags `3`): a
 /// `SetCVar("gxVSync", 0)` or a `/console gxWindow 1` is staged, `GetCVar` keeps answering the
 /// applied value, and nothing moves until `RestartGx()` — which in the reference re-creates the
 /// device and calls `CVar::Update 0x63e060` on each row from inside it. Here the commit is
@@ -499,8 +498,7 @@ const SCREEN_FALLBACK: [ScreenResolution; 4] = [
 type PublishedModes = Option<(Vec<ScreenResolution>, Option<ScreenResolution>)>;
 
 /// **What the Video options window's resolution dropdown offers, and where the client is in it** —
-/// the host half of `GetScreenResolutions` / `GetCurrentResolution` / `SetScreenResolution`
-/// (decision 2177).
+/// the host half of `GetScreenResolutions` / `GetCurrentResolution` / `SetScreenResolution`.
 ///
 /// The reference enumerates the graphics device's display modes, because picking one is a
 /// mode-set. benilla ships no exclusive mode at all (this module's doc walks why, per target), so
@@ -566,7 +564,7 @@ fn publish_display_modes(
     }
     offered.sort_by_key(|r| (u64::from(r.width) * u64::from(r.height), r.width, r.height));
     offered.dedup();
-    // **VM-keyed** (decision 1290): a `ReloadUI` replaces the VM, and the fresh one has been
+    // **VM-keyed**: a `ReloadUI` replaces the VM, and the fresh one has been
     // pushed nothing. A plain `Local` here would remember the OLD VM's list and skip the push
     // that the new VM needs, leaving `GetScreenResolutions` empty for the rest of the session.
     let memo = last.get(&script);
@@ -676,7 +674,7 @@ fn log_display_session(windows: Query<&Window, With<PrimaryWindow>>) {
 }
 
 /// The display-server facts worth naming, as a trailing clause. Empty everywhere but a Linux/BSD
-/// session, where the same `cfg` the Wayland clipboard uses (decision 0702) marks the one platform
+/// session, where the same `cfg` the Wayland clipboard uses marks the one platform
 /// whose windowing backend is a runtime choice rather than the only one there is.
 fn display_session() -> String {
     #[cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))]

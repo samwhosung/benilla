@@ -1,4 +1,4 @@
-//! Drives the reference's own `Blizzard_AuctionUI` addon through the engine (decision 1511; 1971
+//! Drives the reference's own `Blizzard_AuctionUI` addon through the engine (1971
 //! put it on the player's chain) — the auction
 //! twin of `mail_frame.rs`: it loads the same file chain the app does (cut to the auction window's
 //! dependency prefix), pushes a synthetic `AuctionState`, opens the window with the app's own
@@ -257,7 +257,7 @@ fn auction_house_show_opens_the_window_on_the_browse_tab() {
     assert!(s.errors().is_empty(), "clean open: {:?}", s.errors());
 }
 
-/// **The bug the per-list fires were made for** (decision 2308), in the stock addon's own Lua.
+/// **The bug the per-list fires were made for**, in the stock addon's own Lua.
 ///
 /// `AuctionFrameAuctions_Update` computes `offset + i + (NUM_AUCTION_ITEMS_PER_PAGE *
 /// AuctionFrameAuctions.page)` on its very first line of loop body, and `AuctionFrameAuctions.page`
@@ -961,7 +961,7 @@ fn paging_shows_the_turners_only_at_the_end_of_the_list() {
     assert!(s.errors().is_empty(), "clean paging: {:?}", s.errors());
 }
 
-/// The row and sell-slot hovers go through the reference's own tooltip verbs (decision 1511).
+/// The row and sell-slot hovers go through the reference's own tooltip verbs.
 ///
 /// Both used `SetHyperlink` while `GameTooltip:SetAuctionItem` / `SetAuctionSellItem` had no
 /// bindings. The rendered tooltip was the same either way — what changes is that an addon hooking

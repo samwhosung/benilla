@@ -1,5 +1,5 @@
 //! Helpers for the crate's **structural tests** — the ones that read this crate's own source
-//! and insist on a shape (decisions 1290, 2220, 2279). A structural test exists where the
+//! and insist on a shape. A structural test exists where the
 //! failure is silent at runtime, so the check has to happen at the line; these are the readers
 //! they share.
 

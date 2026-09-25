@@ -9,7 +9,7 @@
 //! deviation (decision record): the string color/width are inferred (the callback emits a
 //! packed vertex color that is not decoded — a dark cord is used).
 //!
-//! **The tips are POSED** (decision 2281). The bow prop animates — `$BWP` arms BowPull(160) on the
+//! **The tips are POSED**. The bow prop animates — `$BWP` arms BowPull(160) on the
 //! prop's own model and `$BWR` returns it to Stand(0) — so the `$WTT`/`$WTB` markers ride limb
 //! bones that bend through the draw. Composing them through the prop's rigid root frame instead
 //! (which is all this file could do while the prop rested at bind pose) leaves the chord pinned to
@@ -76,8 +76,7 @@ fn draw_bowstrings(
             .ok()
             .filter(|(_, _, latched)| *latched)
             .and_then(|(bones, pose, _)| {
-                // A pure position read — `posed_point` off the composed pose, no anchor entity
-                // (decision 1355).
+                // A pure position read — `posed_point` off the composed pose, no anchor entity.
                 let &(bone, offset) = bones.points.get(&HAND_ARROW)?;
                 pose.posed_point(joints.get(pose.joints_root).ok()?, bone, offset)
             })

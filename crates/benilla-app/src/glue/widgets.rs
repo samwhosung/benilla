@@ -190,7 +190,7 @@ pub(crate) fn outlined_text_centered<W: Bundle, T: Bundle>(
 ///
 /// **This lives in the primitive on purpose.** It used to be one call site's private helper (the
 /// AddOns row title), which is exactly how the same `|cff0055FF…|r` came out coloured in a list
-/// row and literal in the tooltip an inch to its left (B273): a FontString property implemented
+/// row and literal in the tooltip an inch to its left: a FontString property implemented
 /// per-caller is a property no caller reliably has. In the real client the decode is
 /// `CSimpleFontString`'s own and takes no opt-in — `0x5c2810` parses `|c`/`|r`/`|H`/`|h`/`||`
 /// unconditionally for every one of them (the flags word that could disable them has no writer
@@ -513,7 +513,7 @@ pub(crate) fn dial_arrow<A: Component>(
 /// A glue button template (`GlueButtons.xml` / `GlueDialog.xml`): the caption font it authors, and
 /// its `<ButtonText>` CENTER-anchor **offset**. The offset is real and per-template — the big
 /// `GlueButtonTemplate` pulls its caption 3 units LEFT and 3 UP of dead centre — and drawing every
-/// caption dead centre instead sat them all low, and the big buttons' right (decision 0543).
+/// caption dead centre instead sat them all low, and the big buttons' right.
 #[derive(Clone, Copy)]
 pub(crate) enum GlueBtnKind {
     /// `GlueButtonTemplate` (170×45) — GlueFontNormal, ButtonText CENTER (−3, 3).
@@ -562,7 +562,7 @@ const EDIT_TEXT_COLOR: Color = Color::WHITE;
 /// four float caret-*position* args). benilla used to append a `"|"` glyph (login) or a static `"_"`
 /// (create), which put a font's shape on a font's baseline and re-laid the text out every blink.
 ///
-/// **Width is 4.0 UI units** — byte-verified, not the 1 px this shipped with first (decision 0542).
+/// **Width is 4.0 UI units** — byte-verified, not the 1 px this shipped with first.
 /// `0x77ba2d–0x77ba67` stores `G1·4/(G3·1024)`, which the client's own internal→Lua converter maps
 /// to exactly 4.0 at every aspect and resolution. Same units as every other authored glue number,
 /// so it scales with `s` like the rest. Height is the FontString's line height; the bar is

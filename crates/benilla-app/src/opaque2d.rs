@@ -1,8 +1,8 @@
-//! **The 2D opaque pass, skipped when it has nothing to draw** (decision 2225).
+//! **The 2D opaque pass, skipped when it has nothing to draw**.
 //!
 //! bevy's `MainOpaquePass2dNode` opens a command encoder and a render pass whether or not its two
 //! phases hold an item, and on every camera of ours they never do: each player-UI quad is in the
-//! transparent phase (`AlphaMode2d::Blend`, decision 0254), Bevy UI paints through its own node,
+//! transparent phase (`AlphaMode2d::Blend`), Bevy UI paints through its own node,
 //! egui through its own. 2197 parked the pass as "price it on an immediate-mode GPU"; 2205 priced
 //! its GPU at zero; the crowd profile of 2225 priced its CPU at ~0.2 ms a frame, parked, traced —
 //! an encoder and a pass that wgpu sizes and clears its usage trackers for, empty or not (the

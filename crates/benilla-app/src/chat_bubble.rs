@@ -57,7 +57,7 @@
 //!   keeps `0x608640`; the bubble now takes the Stand-box constant the bytes actually specify. It
 //!   sits **0.199 model units lower** on a human male (2.0128 vs the attachment's 2.2120) — a
 //!   deliberate, measured move toward the reference, not a regression.
-//! - **Sizes ride the plates' damped diagonal basis** ([`plate_basis`], decisions 0185/0186)
+//! - **Sizes ride the plates' damped diagonal basis** ([`plate_basis`])
 //!   so bubble text and plate text stay the same em at every window — the same director-pinned
 //!   deviation from the unbounded byte law.
 //! - **No per-frame occlusion fade**: the client also fades a bubble whose speaker model isn't
@@ -141,7 +141,7 @@ const Z_TAIL: u64 = 2;
 const Z_TEXT: u64 = 3;
 
 /// The z base for the bubble at `rank` in this frame's farthest→nearest order — the port of the
-/// reference's per-frame `SetFrameLevel(2 + i)` walk (`0x4b12d5`–`0x4b1312`, decision 1504). One
+/// reference's per-frame `SetFrameLevel(2 + i)` walk (`0x4b12d5`–`0x4b1312`). One
 /// LEVEL per bubble, [`overlay_z::BUBBLE_STRIDE`] keys wide, so a whole bubble stacks over a whole
 /// bubble; the whole band stays under the V-plates ([`crate::ui_pass::overlay_z`]).
 fn level_z(rank: usize) -> u64 {

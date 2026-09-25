@@ -4,14 +4,14 @@
 //!
 //! - **Objects** — the item/container *instances* the server streamed at us (`ItemCreate`: our own
 //!   inventory at login, loot, trades; they are private, so only ours ever arrive). **An item is
-//!   an object** (decision 2334): it is an entity in the one guid index with the same
+//!   an object**: it is an entity in the one guid index with the same
 //!   [`ObjectStore`] every unit has — `Guid` + `ObjectStore` + [`ItemObject`] — created, merged
 //!   and destroyed by the object layer's handlers like any other kind, its field edges on the
 //!   same watch (`FieldChanged`, kind `Item`/`Container`), gone with the session's sweep. Which
 //!   *slot* holds a guid lives one level up, in the player descriptor's `INV_SLOT`/`PACK_SLOT`
 //!   arrays and a bag's `CONTAINER_FIELD_SLOT` array; [`crate::net::Objects`] resolves those guids
 //!   to the item's fields. Its countdowns (temporary enchants, its own lifetime) are its own
-//!   [`Countdowns`] component — the reference's per-object deadline cells (decision 2340).
+//!   [`Countdowns`] component — the reference's per-object deadline cells.
 //!
 //! - **Templates** — the static item *definitions* (`SMSG_ITEM_QUERY_SINGLE_RESPONSE`: name,
 //!   quality, class, display id), keyed by entry and shared by every copy. The exact twin of
@@ -32,7 +32,7 @@ use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, ObjectStore, Objec
 use crate::query_cache::QueryCache;
 
 /// **An item or container entity's kind** — the reference's `TYPEMASK_ITEM` / `TYPEMASK_CONTAINER`
-/// on the one object index (decision 2334). An item is `Guid` + [`ObjectStore`] + this; it has no
+/// on the one object index. An item is `Guid` + [`ObjectStore`] + this; it has no
 /// `NetEntity` and no `Transform` because it has no model and no pose. Every system that iterates
 /// stores as *units* filters this out (`Without<ItemObject>`): an item block's dwords overlap the
 /// unit block's indices, so an unfiltered unit read of an item's store answers with item fields.
@@ -70,7 +70,7 @@ pub(crate) fn spawn_item(
 pub(crate) const ENCHANT_SLOTS: usize = 7;
 
 /// **An item's countdowns** — the reference's per-object deadline cells on `CGItem_C` (decision
-/// 2340): its own lifetime at `+0x320` (fed only by `SMSG_ITEM_TIME_UPDATE`, decision 1933) and
+/// 2340): its own lifetime at `+0x320` (fed only by `SMSG_ITEM_TIME_UPDATE`) and
 /// one temporary-enchant deadline per enchant slot at `+0x324` (fed only by
 /// `SMSG_ITEM_ENCHANT_TIME_UPDATE`, decision 0920; the item's `ITEM_FIELD_ENCHANTMENT` duration
 /// field is never read for it). Every item object carries one from its spawn, so the cells die
@@ -199,7 +199,7 @@ type ItemMoved = (
 );
 
 /// **Did any item object move this frame** — the gate input the inventory feeds watch in place of
-/// the item map's old epoch (decision 2334): a create, a values delta, a countdown landing or a
+/// the item map's old epoch: a create, a values delta, a countdown landing or a
 /// destroy on any item entity. `Changed` covers the first three (a spawn is a change, and so is a
 /// write to either component), the removal reader the fourth — a bag's slot going empty is the
 /// player's own field, but the *item* vanishing is only this.
@@ -230,7 +230,7 @@ impl ItemChanges<'_, '_> {
 }
 
 /// **The player's inventory, as one read** — what a bag, paper-doll or spellbook feed resolves
-/// its slots from (decision 2334): the self descriptor's slot arrays and their change tick, the
+/// its slots from: the self descriptor's slot arrays and their change tick, the
 /// object lookup those guids resolve through, and the item entities' own change watch.
 #[derive(SystemParam)]
 pub(crate) struct Inventory<'w, 's> {
@@ -254,12 +254,12 @@ pub(crate) struct HeldTemplate {
     /// `Material` — the item's `Material.dbc` id (1 metal · 2 wood · 5 chain · 6 plate · 7 cloth ·
     /// 8 leather · 0 undefined). On the wire in `SMSG_ITEM_QUERY_SINGLE_RESPONSE`, and the **only**
     /// input to the draw/stow sound pick: `SheatheSoundLookups` carries one row per weapon subclass
-    /// per material, and every row of a material agrees — the subclass is inert (decision 0882).
+    /// per material, and every row of a material agrees — the subclass is inert.
     pub(crate) material: u32,
 }
 
 /// `SpellItemEnchantment.dbc`'s two consumer columns, loaded once and read by both lanes that
-/// need them: the **visual** by the weapon-glow chain (decision 0805,
+/// need them: the **visual** by the weapon-glow chain (
 /// [`crate::entities::item_glow`]) and the **name** by the item tooltip's enchant line (decision
 /// 0915, [`crate::ui_items`]). It lives here rather than inside either consumer because it is
 /// item *data*, and because a second loader over one DBC is how a schema quietly drifts.
@@ -275,7 +275,7 @@ pub(crate) struct Enchants(pub(crate) benilla_formats::EnchantCatalog);
 pub(crate) type EnchantSlot = (u8, i32, u32, Option<u64>);
 
 /// The tooltip lines an item instance's enchant slots contribute — the one place the app turns
-/// enchant *ids* into text (decisions 0915/0920). Every tooltip surface feeds through here, so a
+/// enchant *ids* into text. Every tooltip surface feeds through here, so a
 /// bag hover, a paper-doll hover and an inspect hover can never disagree.
 ///
 /// The per-slot gate is the reference's (`0x52c9f9`–`0x52ca23`): `id != 0`, then `abs(id)` must
@@ -312,12 +312,12 @@ pub(crate) fn enchant_lines(
 ///
 /// One predicate, two consumers — the enchant cursor's bind question
 /// ([`crate::ui_action`]'s `ClickedItem::already_bound`, the `0x495d60` gate) and the item
-/// tooltip's **Soulbound** override (B310). They must agree: an item the cursor considers
+/// tooltip's **Soulbound** override. They must agree: an item the cursor considers
 /// already bound is exactly an item whose tooltip says *Soulbound*.
 ///
 /// Read off the RAW descriptor, never off the rendered [`enchant_lines`] list. That list is a
 /// *display* view: it drops rows the catalog cannot name, and it drops every
-/// `Flags & 0x2` row outright (the line the reference refuses to print — decision 0928). The two
+/// `Flags & 0x2` row outright (the line the reference refuses to print). The two
 /// flag sets **overlap**, so this is not a hypothetical: **Firestone 1-4 and Orb of Fire carry
 /// both bits** — they bind the item AND print no line — so an imbued weapon would read back as
 /// "not bound" from the lines while the reference calls it bound.
@@ -363,7 +363,7 @@ fn enchant_lines_quiet(
         // name (`6290e4` / `62923e`, each `testb $0x2, 0x5c(...)` → `jne <retl>`). Twelve shipped
         // rows, one family: the totem-granted weapon imbues, Firestone, Orb of Fire — buffs whose
         // source already shows elsewhere on screen, so the weapon does not repeat them. Found and
-        // closed while transcribing the *other* bit of that column (decision 0928); 0915 read the
+        // closed while transcribing the *other* bit of that column; 0915 read the
         // name column alone and printed all twelve.
         .filter(|&(_, id, _, _)| !enchants.0.tooltip_hides_name(id.unsigned_abs()))
         .filter_map(|(slot, id, charges, remaining_ms)| {
@@ -381,7 +381,7 @@ fn enchant_lines_quiet(
 }
 
 /// `ItemRandomProperties.dbc` — the **random-suffix roll**: the "of the Monkey" a drop rolled, and
-/// the enchants that roll grants (decision 1547). One table, two consumers, exactly as in the
+/// the enchants that roll grants. One table, two consumers, exactly as in the
 /// reference: the display NAME ([`item_display_name`], its `0x5d8b00`) and the tooltip's enchant
 /// slots 2..6 ([`random_property_lines`], its `0x52b7e0` suffix-row copy).
 ///
@@ -505,7 +505,7 @@ impl RollCatalogs<'_> {
 /// Filled by the net bridge; read by the container APIs (`GetContainerItemInfo` and kin).
 #[derive(Resource, Default)]
 pub(crate) struct Items {
-    /// The template cache — ask-once through [`QueryCache`] (decision 2288); a `None` answer is
+    /// The template cache — ask-once through [`QueryCache`]; a `None` answer is
     /// the server's "unknown entry" (the top-bit miss branch), cached so it is never re-asked.
     templates: QueryCache<u32, ItemInfo>,
     /// Entries whose template landed since the last [`Self::take_fresh`] drain — the push half of
@@ -513,7 +513,7 @@ pub(crate) struct Items {
     /// an item whose name is already on screen never misses).
     fresh: Vec<u32>,
     /// **`PlayerPendingItemExpiration`** — the temporary-enchant updates that named an item not
-    /// yet held, kept for the item's arrival (decision 2340). The reference's `0x1EB` arm, on an
+    /// yet held, kept for the item's arrival. The reference's `0x1EB` arm, on an
     /// item-lookup miss, links a `{item guid, slot, seconds}` record onto the active player's list
     /// (`0x5ebd40`, the list at `CGPlayer_C + 0x1cc8`); `0x5ebde0` walks it when an item of ours is
     /// set up (`0x5d8440`), applies each match through the setter — `seconds` counted from then,
@@ -564,7 +564,7 @@ impl Items {
 
     /// Whether the server has ANSWERED the `entry` query with "unknown item" — the cached
     /// negative, distinct from a still-pending ask (both read `None` from [`Self::template`]).
-    /// The cast-fail redisplay queue (decision 0552) keys on it: pending → keep waiting for the
+    /// The cast-fail redisplay queue keys on it: pending → keep waiting for the
     /// answer (the ref's `DBCACHECALLBACK` redisplay), negative → give up and show the ref's
     /// `"UNKNOWN"` fallback instead of waiting forever.
     pub(crate) fn template_answered_unknown(&self, entry: u32) -> bool {
@@ -610,7 +610,7 @@ impl Items {
     /// consumer that caches a template-derived view needs its own signal; it keeps the epoch it
     /// last resolved at and re-resolves when it advances — the modern stand-in for the ref's
     /// `DBCACHECALLBACK` redisplay (`0x6e29b0`), which is how the real client repaints a view
-    /// drawn while the item cache was still answering (decision 0660).
+    /// drawn while the item cache was still answering.
     pub(crate) fn template_epoch(&self) -> u64 {
         self.templates.generation()
     }
@@ -648,7 +648,7 @@ impl Items {
     }
 
     /// The objects themselves — and their countdowns — are the index's, swept with every other
-    /// entity (decisions 2334, 2340); the pending enchant times die with the player they were
+    /// entity; the pending enchant times die with the player they were
     /// queued on.
     pub(crate) fn clear_session(&mut self) {
         self.pending_enchant_times.clear();
@@ -675,7 +675,7 @@ impl crate::query_cache::AskOnce for Items {
 pub(crate) struct TestDeps {
     pub(crate) items: Items,
     pub(crate) commands: NetCommands,
-    /// The object index the item objects live in (decision 2334) — seed it with
+    /// The object index the item objects live in — seed it with
     /// [`Self::spawn_item`], read it through [`Self::with_objects`].
     pub(crate) world: World,
     rx: crossbeam_channel::Receiver<ClientCommand>,
@@ -783,7 +783,7 @@ pub(crate) fn disarmed_equipment_slot(
     crate::creature_anim::disarmed_hand(main, off).map(|hand| EQUIPMENT_SLOT_MAINHAND + hand as u8)
 }
 
-/// [`disarmed_equipment_slot`]'s read-only twin — same ladder, no ask (decision 1925).
+/// [`disarmed_equipment_slot`]'s read-only twin — same ladder, no ask.
 pub(crate) fn disarmed_equipment_slot_cached(
     store: &ObjectStore,
     objects: &Objects,
@@ -924,7 +924,7 @@ mod tests {
         assert_ne!(items.template_epoch(), t0, "a landing is");
     }
 
-    /// The display step/quantize pair on one item's cells (decision 2340): a parked deadline
+    /// The display step/quantize pair on one item's cells: a parked deadline
     /// contributes `floor(secs)+1` (bounded here, not exact — the test can't pin the sub-second
     /// phase), the display read is floored to the whole second, and clearing the cell takes its
     /// term away (the `Some(0) → None` collapse is the term's own last step).
@@ -1015,7 +1015,7 @@ mod tests {
     }
 
     /// The right-click-to-open predicates — and the fact that the **line and the click are not the
-    /// same test** (decision 0896). The tooltip's `shows_open_line` carries the lock sub-gate (a
+    /// same test**. The tooltip's `shows_open_line` carries the lock sub-gate (a
     /// `LockID` template earns the line only once the INSTANCE says UNLOCKED); the click's
     /// `opens_loot` is the BARE template bit, so a still-locked junkbox sends anyway and the
     /// server supplies the refusal. Getting that backwards eats the click in silence.
@@ -1072,7 +1072,7 @@ mod tests {
         );
     }
 
-    /// **An item is an object** (decision 2334): spawned into the one index with its store,
+    /// **An item is an object**: spawned into the one index with its store,
     /// resolved through [`Objects`] like a unit, and its create, its delta, a countdown landing
     /// and its despawn each move [`ItemChanges`] exactly once — the gate the inventory feeds watch.
     #[test]
@@ -1123,7 +1123,7 @@ mod tests {
             .merge(ObjectFields::from_pairs(&[(14, 4)]));
         assert_eq!(world.run_system(read).unwrap(), (Some(117), Some(4), true));
         assert!(!world.run_system(read).unwrap().2);
-        // A countdown landing is the item's own change too (decision 2340), and its cell joins
+        // A countdown landing is the item's own change too, and its cell joins
         // the step sum the feeds watch between landings.
         world
             .get_mut::<Countdowns>(e)
@@ -1144,7 +1144,7 @@ mod tests {
         assert!(!world.run_system(read).unwrap().2);
     }
 
-    /// **`PlayerPendingItemExpiration`** (decision 2340): an enchant time for an item not yet held
+    /// **`PlayerPendingItemExpiration`**: an enchant time for an item not yet held
     /// waits for it, is handed over in arrival order once, and a disconnect drops what never
     /// arrived — while the templates the session learned survive it.
     #[test]
@@ -1180,7 +1180,7 @@ mod tests {
         ));
     }
 
-    /// The id → row join (decisions 0915/0920): slot order is preserved, a `0` slot and an id with
+    /// The id → row join: slot order is preserved, a `0` slot and an id with
     /// no `SpellItemEnchantment` name are both silently absent (never a placeholder line), and with
     /// no catalog at all nothing renders. Plus the reference's sign rule — **`abs(id)` names the
     /// row, the sign only travels** (`0x52c9f9`), which is why a negative id resolves at all.

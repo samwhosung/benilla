@@ -351,7 +351,7 @@ fn fade_step(dt_ms: u32, alpha: u8) -> u32 {
 /// the reference **supersedes before firing** (`0x60d835` is a plain `mov` into a one-slot field,
 /// so a second proc overwrites the first), with the superseded colours and durations, on 23 of the
 /// 34 type-8 kits. We do not fire there because the driver's own request loop already models the
-/// fast path (decision 0406, `select::is_combat_anim` = `0x5fcc10`'s byte-decoded set): it
+/// fast path (`select::is_combat_anim` = `0x5fcc10`'s byte-decoded set): it
 /// `continue`s without playing, so neither `base_played` nor `masked_played` is raised and the
 /// edge stays low. Pinned by
 /// [`the fast path test`](crate::creature_anim::driver::tests).

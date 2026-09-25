@@ -2,7 +2,7 @@
 //!
 //! The instruments we had bracket this question from both sides and answer neither half of it.
 //! `WOW_STREAM_TRACE` says a frame cost 411 ms and how many tiles/meshes/pipelines it touched;
-//! the stall sampler (0713) shells `/usr/bin/sample` at a *600 ms* main-thread stall and hands
+//! the stall sampler shells `/usr/bin/sample` at a *600 ms* main-thread stall and hands
 //! back a stack. Between them sits the whole class this project actually reports — the
 //! 40–500 ms world-entry and teleport hitches (0962, 1116, 1345) — where the diagnosis has each
 //! time been *"guess the suspect, then time it by hand"*. 1345 named that cost outright: the

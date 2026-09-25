@@ -1,4 +1,4 @@
-//! The combat log's **chat line** leg (B297) — one of the two consumers of every combat packet;
+//! The combat log's **chat line** leg — one of the two consumers of every combat packet;
 //! the floating number is [`super::text`]'s, and [`super`]'s handlers call this leg first.
 //!
 //! The split is the reference's own. `0x629b60` is the display dispatcher: one classification of
@@ -223,7 +223,7 @@ pub(super) fn spell_damage_log(
         if !ctx.periodic {
             return;
         }
-        // **The TARGET's class, not the caster's** (decision 2127): this leg lands in the shared
+        // **The TARGET's class, not the caster's**: this leg lands in the shared
         // `PERIODICAURADAMAGE` formatter `0x628100`, whose msg-id selector takes `outClassB`
         // (`0x628235`), and B is the victim at every call site.
         let Some(kind) = combat::periodic_kind(victim, false) else {
@@ -391,7 +391,7 @@ pub(super) fn spell_heal_log(
 
 /// `SMSG_SPELLENERGIZELOG` → a power-gain line, also a BUFF type.
 ///
-/// **The wire amount is RAW and the sentence wants the displayed figure** (decision 2117): the
+/// **The wire amount is RAW and the sentence wants the displayed figure**: the
 /// reference's own handler `0x5e8a90` divides by `0x6e7130(powerType)` at `0x5e8af3` before it
 /// hands the number to anything, so a warrior's one point of Unbridled Wrath rage — 10 on the
 /// wire — words as *"You gain 1 Rage from …"*, not 10.
@@ -831,7 +831,7 @@ pub(super) fn enchantment_log(
 /// different family, a different chat type and a different argument convention. So this arm is a
 /// switch, not a sentence — the seven effects below are the ones that word themselves.
 ///
-/// **Deliberately not wired, and named rather than dropped** (decision 1703): effects 33/59
+/// **Deliberately not wired, and named rather than dropped**: effects 33/59
 /// `OPEN_LOCK` (`OPEN_LOCK_{SELF,OTHER}` — its trailing `%s` is a *gameobject* name, and benilla
 /// has no GO-name cache to resolve one from a guid), and the `SIMPLECAST*`/`SIMPLEPERFORM*`/
 /// `SPELLTERSE_*` catch-all the reference falls back to for the guid-only tail of the switch (its
@@ -1051,14 +1051,13 @@ fn power_divisor(power: u32) -> i64 {
 /// The reference does this **in the packet handler**, once per packet — `0x5e8af3` for
 /// `SMSG_SPELLENERGIZELOG`, `0x627087` for an energize tick — so the chat line and the
 /// `COMBAT_TEXT_UPDATE` push can never disagree. We have two consumers instead of one call, so the
-/// law is a named function rather than a local (decision 2117).
+/// law is a named function rather than a local.
 fn power_gain(power: u32, amount: u32) -> i64 {
     i64::from(amount) / power_divisor(power)
 }
 
 /// Which endpoint a periodic tick's formatter hands its **msg-id selector** — the choice that
-/// decides whether a line types as `SPELL_PERIODIC_SELF_*` or `SPELL_PERIODIC_CREATURE_*`
-/// (decision 2127).
+/// decides whether a line types as `SPELL_PERIODIC_SELF_*` or `SPELL_PERIODIC_CREATURE_*`.
 ///
 /// It is a function, exhaustive over the wire enum, because the four periodic formatters disagree
 /// and one shared `periodic_kind(caster, …)` was wrong for half of them: `0x628100`
@@ -1487,7 +1486,7 @@ mod tests {
         rounded_product, PeriodicTick, UnitClass,
     };
 
-    /// **A periodic line is typed off the endpoint its own formatter reads** (decision 2127).
+    /// **A periodic line is typed off the endpoint its own formatter reads**.
     ///
     /// The report: MikScrollingBattleText showed no DoT lines at all, in either direction. Every
     /// periodic tick took `periodic_kind(caster, …)`, so a creature's poison ticking you came out

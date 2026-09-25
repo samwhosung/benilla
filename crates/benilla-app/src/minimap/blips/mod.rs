@@ -22,7 +22,7 @@
 //! hard-cull at the live zoom radius in **3-D** world distance (no rim ride), and draw
 //! LAST — above every arrow.
 //!
-//! **Tracking dots** (decisions 0560/0564) — the classifier's fall-through for objects NOT
+//! **Tracking dots** — the classifier's fall-through for objects NOT
 //! at quest status 7: a GameObject passing `0x5ed2b0` draws the gold **cell 0**
 //! (Find Herbs/Minerals), a unit passing `0x5ed210` the red **cell 1**. The
 //! masks are the `PLAYER_TRACK_CREATURES`/`PLAYER_TRACK_RESOURCES` descriptor mirror
@@ -41,7 +41,7 @@
 //! geometry-exact at the model's own quad size — no uv crop, the padding is authored. The rim
 //! model stacks six of them, but only ever shows one at a time ([`RimArrow`]).
 //!
-//! **The guard's directions marker** ([`crate::poi_marker`], decisions 1514/1516) is a landmark
+//! **The guard's directions marker** ([`crate::poi_marker`]) is a landmark
 //! candidate like any other, appended after the DBC filter the way the reference appends its
 //! static blip slot — everything above applies to it unchanged, except the one thing that is
 //! *about* being a different kind of thing: its rim arrow is the gold guide arrow ([`RimArrow`]).
@@ -310,7 +310,7 @@ pub(super) struct BlipCtx {
     /// anchor point (the reference seats the blip tooltip at the cursor; director-verified,
     /// exact engine offset pending the anchor-law pin).
     pub(super) cursor_ui: Option<Vec2>,
-    /// THE seam scale (decision 0582): **window px per UI unit**. Everything else in this struct
+    /// THE seam scale: **window px per UI unit**. Everything else in this struct
     /// is window px; anything arriving from Lua ([`Minimap:PingLocation`](super::ping)) is in UI
     /// units, and this is the one number that crosses them. Mixing the two silently is decision
     /// 1596's first root cause.

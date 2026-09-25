@@ -65,7 +65,7 @@ pub(crate) fn substitute(text: &str, ctx: &MacroContext) -> String {
 /// callers branch on it. The panel seams ignore it (they show the `$`-preserving text either way,
 /// which is what [`substitute`] hands back); the **chat** seam must not, because the reference's
 /// chat path never displays a `$` — it drops or defers the line instead. See
-/// `ui_chat::feed`'s use, decision 0759.
+/// `ui_chat::feed`'s use.
 ///
 /// Note what the flag does NOT mean: it says nothing about truncation, and a `false` can come
 /// either from an unresolvable subject or from a token outside the accepted set.
@@ -290,7 +290,7 @@ mod tests {
 
     /// The driver's return flag ([`substitute_checked`]) — `true` only when no token failed. The
     /// chat seam branches on it (drop / defer / show raw), so a wrong flag silently loses chat lines
-    /// rather than merely showing a stray `$`. Decision 0759.
+    /// rather than merely showing a stray `$`.
     #[test]
     fn the_return_flag_reports_whether_any_token_failed() {
         let s = subject(0);

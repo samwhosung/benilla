@@ -81,7 +81,7 @@ fn every_error_key_in_the_source_is_a_catalog_row() {
     );
 }
 
-/// **The claim this file's own doc has always made, finally checked** (decision 1821): a key the
+/// **The claim this file's own doc has always made, finally checked**: a key the
 /// source names must not only be a catalog row, it must **resolve to text**.
 ///
 /// The two are not the same, and the difference is the failure this file exists to catch. A row's
@@ -103,8 +103,8 @@ fn every_error_key_in_the_source_resolves_to_real_text() {
     /// `ERR_PET_SPELL_NOPATH` is the one worth reading twice, because it is a trap: 5875 *does*
     /// ship a `PET_SPELL_NOPATH` ("No path available for your pet"), one letter-group away and
     /// perfectly plausible on screen — but it is not row 337's key and no code path in the client
-    /// raises it. benilla named it for months and showed the wrong string for the wrong byte
-    /// (decision 2033). Silence here is the reference's behaviour, not a gap.
+    /// raises it. benilla named it for months and showed the wrong string for the wrong byte.
+    /// Silence here is the reference's behaviour, not a gap.
     const SILENT_IN_5875: &[&str] = &[
         "ERR_CANT_BE_DISENCHANTED",
         "ERR_NOT_HAPPY_ENOUGH",
@@ -149,7 +149,7 @@ fn every_error_key_in_the_source_resolves_to_real_text() {
 }
 
 /// **The other half of the same claim, on real data: a key that carries a VOICE line can actually
-/// be spoken** (decision 1815).
+/// be spoken**.
 ///
 /// 56 catalog rows put an error-speech id in `+0x0c` instead of a cue name, and the client says
 /// those aloud in the player's own race and gender. The join runs
@@ -271,7 +271,7 @@ fn every_sounding_catalog_row_also_has_text_to_show() {
     assert_eq!(sounding, 86, "56 voice lines + 30 named cues");
 }
 
-/// **The non-`ERR_` half of the same tripwire, for the one family that has one** (decision 2039):
+/// **The non-`ERR_` half of the same tripwire, for the one family that has one**:
 /// every string `pet_tame_failure_key` can return must be a real global of the 1.12 client.
 ///
 /// The walk above collects `"ERR_…"` literals, which is every catalog row — and is therefore
@@ -280,7 +280,7 @@ fn every_sounding_catalog_row_also_has_text_to_show() {
 /// of a `PETTAME_*` key, and an invented one there would fail exactly the way this file's header
 /// describes — silently, with no line shown and nobody to file it.
 ///
-/// Checked against `reference/1.12-globals.tsv`, the running client's own `_G` (decision 1189),
+/// Checked against `reference/1.12-globals.tsv`, the running client's own `_G`,
 /// rather than against the install: it is in-tree, so this holds on a machine with no client.
 #[test]
 fn every_pettame_key_is_a_real_1_12_global() {

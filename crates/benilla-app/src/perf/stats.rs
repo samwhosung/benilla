@@ -1,7 +1,7 @@
 //! The frame-cost meters the pill reads: a rolling window each of wall frame time and process
 //! CPU per frame.
 //!
-//! **The law (0717): while synced, wall frame time measures the display's present grant, not our
+//! **The law: while synced, wall frame time measures the display's present grant, not our
 //! cost.** Only the CPU series measures work — it is the pill's headline. `wall` exists for the
 //! dim fps anchor and the hitch log below, nothing else.
 //!
@@ -67,7 +67,7 @@ pub(super) struct FrameStats {
     /// Wall frame interval. The grant while synced; our real cost only when uncapped.
     pub(super) wall: Series,
     /// Process CPU per frame, user+system across every thread (`getrusage`) — the campaign's
-    /// currency (0736) and the meter the rail cannot fool (0717).
+    /// currency and the meter the rail cannot fool.
     pub(super) cpu: Series,
     prev_cpu_secs: Option<f64>,
     /// The MAIN thread's CPU per frame — the part of the frame the player can feel: the wall
@@ -90,7 +90,7 @@ impl Default for FrameStats {
 
 impl FrameStats {
     /// Windowed mean frames per second. A mean, and labelled as one — it is the number that
-    /// cannot see cost (0717), which is why the pill draws it dim and small, never as the
+    /// cannot see cost, which is why the pill draws it dim and small, never as the
     /// headline.
     pub(super) fn fps(&self) -> f32 {
         match self.wall.mean() {

@@ -1,17 +1,17 @@
-//! **Footprint decals** — the prints a walking unit leaves on snow and sand (B212, decisions
+//! **Footprint decals** — the prints a walking unit leaves on snow and sand (decisions
 //! 1006/1012): the fourth client of the shared surface-decal projector ([`benilla_world::decal`]), drawn
 //! on the shared effect stream like the blob shadow, but **spawn-once**: a print is projected the
 //! frame its foot plants and the cached triangles replay every frame until the fade retires it —
 //! exactly the reference's own shape (baked once at spawn over collector-gathered ground
 //! triangles; the per-frame draw `0x69a3e0` only re-copies with the current alpha).
 //!
-//! **The mechanism** (decision 1012):
+//! **The mechanism**:
 //! - **Surface gate**: `TerrainType.Flags & 1` (`0x699eb6`) — set on exactly **Snow** and
 //!   **Sand** — on the surface [`benilla_world::surface`] resolves under the unit, the *same* value the
 //!   footstep sound uses. The reference resolves it once per unit into `CGUnit+0xc60` and the
 //!   decal, the spray and `$FSD` all read that one dword (`0x5fc06e`, `0x5fc20f`, `0x62341d`), so
 //!   indoors the gate reads the building's own floor: a tavern's floorboards take no prints while
-//!   the snow outside its door does (decision 1161).
+//!   the snow outside its door does.
 //! - **Trigger**: each per-foot animation event tag (`$xL*`/`$xR*`; the same [`AnimSoundEvent`]
 //!   stream the sounds read). **`$FSD` is sound-only** — a quadruped whose run authors only
 //!   `$FSD` leaves no prints, faithfully. Position = the event record's authored offset through
@@ -30,7 +30,7 @@
 //! - **Suppressions**: hover (`MOVEFLAG 0x4000_0000`) · stealth (`BYTES_1` byte 3 bit 0x2 —
 //!   NOT death) · player ghost (`PLAYER_FLAGS & 0x10`) · farther than **50 yd** from the
 //!   **camera eye** ([`footfall_culls`] — the handler's own gate, shared with the footstep
-//!   camera shake, and applied to the local player's feet like anyone else's; decision 1856) ·
+//!   camera shake, and applied to the local player's feet like anyone else's) ·
 //!   the terrain flag / printless id / no ground triangles. Water does NOT suppress
 //!   the decal (only the spray branch wades). The reference's `showfootprints` cvar (default on)
 //!   is the **decal's** toggle and only the decal's: `0x5fc023` skips the decal block alone, so
@@ -161,7 +161,7 @@ type RootState = (
 fn spawn_footprints(
     mut events: MessageReader<AnimSoundEvent>,
     time: Res<Time>,
-    // GlobalTransform for the same reason as the footstep sounds (0441): a mounted unit's steps
+    // GlobalTransform for the same reason as the footstep sounds: a mounted unit's steps
     // are the MOUNT child's tags, whose local Transform is the seat-relative ~origin.
     units: Query<(&NetEntity, &GlobalTransform)>,
     // The spawner's ROOT (the rider for a mount child): the pool select, the print scale (the
@@ -225,7 +225,7 @@ fn spawn_footprints(
             }
         }
         // The planted foot: the FIRED key's own point, resolved once by the scanner as the kernel
-        // snapshots it (decision 1904). It used to be a by-4CC re-find of the marker table, which
+        // snapshots it. It used to be a by-4CC re-find of the marker table, which
         // is the *launch-point* mechanism (`0x7130e0`, first match) and not this one — a model that
         // authors a side tag twice would have printed both feet at the first record's bone.
         let foot = ev.pos.unwrap_or_else(|| transform.translation());

@@ -1,4 +1,4 @@
-//! Sharpening the V-plate frame border (decision 0188).
+//! Sharpening the V-plate frame border.
 //!
 //! The frame art `Interface\Tooltips\Nameplate-Border` is a **128 × 32** BLP. The plate frame is
 //! `0.1 × 0.025` gx; past the 1024×768 knee (and always on a retina framebuffer) it is drawn

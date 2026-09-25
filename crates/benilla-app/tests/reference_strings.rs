@@ -3,10 +3,10 @@
 //! The real client never composes display text: every sentence is a key into `GlobalStrings.lua`
 //! (in-game) or `GlueStrings.lua` (the login/character screens) — each with a `Localize()` patch
 //! file laid over it, which is where a good many of the sentences the player actually reads come
-//! from (decision 2052) — resolved at runtime from the player's own install. Writing the English in
+//! from — resolved at runtime from the player's own install. Writing the English in
 //! Rust throws away three things at once —
 //! localization, and, for anything that goes through the message catalog, the *surface* the
-//! message is shown on and the *voice line* it speaks with (decisions 1770, 1815, 2035).
+//! message is shown on and the *voice line* it speaks with.
 //!
 //! **Why a tripwire and not a review rule.** Decision 2035 found a loot-refusal table that had
 //! composed its own eight sentences, six of which said something 1.12 never says, under a comment
@@ -202,7 +202,7 @@ fn no_user_facing_sentence_is_written_in_rust_when_the_reference_ships_one() {
     let data = benilla_formats::wow_data_or_skip!();
     let mut chain = benilla_formats::open_chain(&data).expect("open chain");
     let mut shipped: HashMap<String, Vec<String>> = HashMap::new();
-    // The base tables AND the locale patches laid over them (decision 2052): where `Localize()`
+    // The base tables AND the locale patches laid over them: where `Localize()`
     // redefines a key, its wording is the one the player actually reads, so a set that stopped at
     // the base files would be grading against text this install never shows.
     for file in [
@@ -227,7 +227,7 @@ fn no_user_facing_sentence_is_written_in_rust_when_the_reference_ships_one() {
                 // `CHAR_NAME_RESERVED` — and naming one of them is how a reader converts a site
                 // to the wrong key. Which one belongs at a given call site is the *reference's
                 // code* to answer, never this table's; the report's job is to say that a choice
-                // exists (decision 2045, "assert the identifier, not the sentence").
+                // exists ("assert the identifier, not the sentence").
                 shipped.entry(n).or_default().push(k);
                 taken += 1;
             }

@@ -1,4 +1,4 @@
-//! **The ranged weapon prop's own animation** (decision 2281) — the bow's limbs bend, the gun
+//! **The ranged weapon prop's own animation** — the bow's limbs bend, the gun
 //! fires its muzzle blast.
 //!
 //! An equipped ranged weapon is not just a mesh in a hand. The reference keeps its M2 *instance*
@@ -30,7 +30,7 @@
 //! ever on a sequence whose gate is shut, and a gun shot is silent art.
 //!
 //! **It is the GATE that is keyed, never the rate** — the track at `def+0x1dc`, outside the ten
-//! scalar ones, `u8`-valued, step-interpolated (decision 2286). A consumer that asks "does this
+//! scalar ones, `u8`-valued, step-interpolated. A consumer that asks "does this
 //! emitter emit anything?" of the *rate* sees a non-zero constant in every sequence, for a bank
 //! that has never once been switched on; that false negative is why this shipped broken.
 //!
@@ -40,7 +40,7 @@
 //! predicate `0x5fcf90` = {107, 111, 112} exists and the `$BWR` handler never calls it, so those
 //! two match neither arm and get no prop animation at all.
 //!
-//! **Both arms sit under a gate, and it is the projectile queue** (decision 2288). `[CGUnit+0xac]`
+//! **Both arms sit under a gate, and it is the projectile queue**. `[CGUnit+0xac]`
 //! is not a spell-visual list, as this file first guessed from its readers — it is the queue of
 //! `CMissile` nodes waiting for the caster's release event, and `$BWR` reads it (`0x600182`) before
 //! draining it (`0x600294` → `0x60c940`, the launcher). So the prop's re-anim and the projectile's
@@ -444,7 +444,7 @@ mod tests {
         );
     }
 
-    /// **The `[+0xac]` gate** (`0x600182`/`0x60018a`, decision 2288): a `$BWR` with no projectile
+    /// **The `[+0xac]` gate** (`0x600182`/`0x60018a`): a `$BWR` with no projectile
     /// waiting to be released arms nothing on the prop. The reference skips the whole block —
     /// prop re-anim and cast-point reposition together — because the flex and the launch are two
     /// effects of one act, and there is no act without a missile to throw.
@@ -607,7 +607,7 @@ mod tests {
 
         let emitters = benilla_formats::parse_m2_particle_emitters(&bytes).expect("emitters");
         assert_eq!(emitters.len(), 7, "the muzzle bank");
-        // **The discriminator is the GATE, not the rate** (decision 2286). Every one of the seven
+        // **The discriminator is the GATE, not the rate**. Every one of the seven
         // holds a constant rate in every sequence (100/s, 50/s, 40/s, 30/s, 20/s) and keys only
         // `enabled` — the eleventh track at `def+0x1dc`, `u8`, step: flat 0 across Stand, and
         // `0.000 = 1 → <its own window> = 0` in BowRelease. That is precisely why this defect was

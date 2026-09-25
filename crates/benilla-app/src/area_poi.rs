@@ -2,7 +2,7 @@
 //! of that table in the process.
 //!
 //! It used to live inside `MinimapAssets`, because the minimap's nearest-3 landmark blips
-//! (decision 0203 phase 3) were its only reader. The world map is the second (decision 1586: the
+//! (decision 0203 phase 3) were its only reader. The world map is the second (the
 //! `0x4a67a0` landmark pass — city icons, the "Under Attack" indicators, the Eastern Plaguelands
 //! towers), and two owners of one DBC is how the two surfaces drift apart on what a POI *is*. So
 //! it is hoisted here, beside [`crate::area::AreaTableRes`], on 0287's precedent — the same move,

@@ -1,4 +1,4 @@
-//! The login screen (decision 0539) — the faithful `AccountLogin` glue, functional core only:
+//! The login screen — the faithful `AccountLogin` glue, functional core only:
 //! the `UI_MainMenu` scene with its authored fog/fires, the account/password boxes, Remember
 //! Account Name, Login/Quit, the version block, and the connecting/error dialogs. The Credits/
 //! Cinematics/TOS side of the reference screen is deliberately cut (the director's call).
@@ -10,10 +10,10 @@
 //! and the director's typed submit. A *refused* code (bad password) clears the intent and shows
 //! the authored `AUTH_*` dialog — never an auto-retry against a refusal.
 //!
-//! **A session that is lost is over** (decision 1262): the reference's `GlueParent.lua` answers
+//! **A session that is lost is over**: the reference's `GlueParent.lua` answers
 //! `DISCONNECTED_FROM_SERVER` with `SetGlueScreen("login")` + `GlueDialog_Show("DISCONNECTED")`,
 //! and so does this. 0065's seamless reconnect survives only where the run has *declared* that
-//! nobody is here ([`crate::run_mode::unattended`], decision 1769) — because a client that
+//! nobody is here ([`crate::run_mode::unattended`]) — because a client that
 //! re-authenticates on its own takes the account back off whoever just displaced it.
 //!
 //! Module split: this file (state, policy, input, dialogs, the saved-account persistence),
@@ -97,7 +97,7 @@ impl Plugin for LoginPlugin {
                         .before(crate::glue::GlueVisuals)
                         // After the UI tick: one member holds the VM (`answer_dialog` writes
                         // into it), and every VM holder in `Update` declares its side of the
-                        // tick (decision 2304). A glue screen has no push the tick must see,
+                        // tick. A glue screen has no push the tick must see,
                         // so the whole chain takes the drain side.
                         .after(crate::ui_script::UiInput)
                         .run_if(in_state(ClientState::Login)),
@@ -127,7 +127,7 @@ enum IoPark {
 #[derive(Resource, Default)]
 pub(crate) struct LoginIntent {
     /// The session's credentials — kept while in-world so the logout relist and an unattended
-    /// run's reconnect re-authenticate silently (0065); cleared by select's Back, a refusal code,
+    /// run's reconnect re-authenticate silently; cleared by select's Back, a refusal code,
     /// a Cancel, and by a lost session (1262 — they are the session's, and the session is over).
     creds: Option<(String, String)>,
     /// A submit is in flight (between our send and its LoginFailed/CharacterList answer).
@@ -151,7 +151,7 @@ impl LoginIntent {
 
     /// The account this session authenticated as, however it got there — the env fast path or the
     /// login screen. The one honest answer to "whose body is this?", which is what decides whether
-    /// the probe shield has any business touching it (decision 0677).
+    /// the probe shield has any business touching it.
     pub(crate) fn account(&self) -> Option<&str> {
         self.creds.as_ref().map(|(user, _)| user.as_str())
     }
@@ -178,7 +178,7 @@ impl Attempt<'_> {
     /// Send one login attempt to the parked IO thread, stamped with the current abandon
     /// generation.
     ///
-    /// The realmlist is read **at submit time** (decision 1667) rather than by the IO thread, so a
+    /// The realmlist is read **at submit time** rather than by the IO thread, so a
     /// resubmit fired after the player repointed the client dials the new server while an attempt
     /// already on the wire keeps the one it started with.
     fn send(&mut self, user: &str, pass: &str, announced: bool) {
@@ -469,26 +469,26 @@ fn drive_policy(
     // nobody at the keyboard: a login failure no resubmit can change would leave it parked on a
     // dialog for its whole wall-clock, and every retry a runner grants it is spent the same way.
     // Those failures exit non-zero instead, on one greppable marker — "login: FATAL" — that
-    // a leg runner keys on (decision 1371).
+    // a leg runner keys on.
     //
-    // **Nobody is here only if the run says so** (decision 1769). Whether the client may end the
+    // **Nobody is here only if the run says so**. Whether the client may end the
     // run itself is [`crate::run_mode::fatal_when_driverless`]'s to answer; the two facts this
     // scope adds are local ones. The smoke owns its own verdict, so it is never ours to end.
     let smoke = std::env::var_os("WOW_LOGIN_SMOKE").is_some();
     let empty = GlueStrings::default();
     let strings = strings.as_deref().unwrap_or(&empty);
 
-    // The env fast path, once (decision 0539 §3): WOW_USER and WOW_PASS both set → auto-submit
+    // The env fast path, once: WOW_USER and WOW_PASS both set → auto-submit
     // them, so every probe/smoke/harness invocation keeps working. There is no default account.
     // The login smoke drives its own credentials instead.
     if !attempt.intent.env_read {
         attempt.intent.env_read = true;
-        // Purely "are the credentials in the environment?" (decision 1769) — whether anybody is
+        // Purely "are the credentials in the environment?" — whether anybody is
         // here to *react* is a different fact with a different home, `run_mode::unattended`.
         if crate::run_mode::env_login() && std::env::var_os("WOW_LOGIN_SMOKE").is_none() {
             let user = std::env::var("WOW_USER").unwrap_or_default();
             let pass = std::env::var("WOW_PASS").unwrap_or_default();
-            // The account guard (decision 0649): a vmangos login KICKS whoever holds the account,
+            // The account guard: a vmangos login KICKS whoever holds the account,
             // so an unattended run authenticates as the account its checkout declares
             // (`.probe-identity`) and nothing else. Only the *automated* path is gated — a typed
             // login is the player's own and is never second-guessed.
@@ -530,7 +530,7 @@ fn drive_policy(
     if realm_list_up.shown && matches!(dialog.kind, Some(DialogKind::Status)) {
         dialog.close();
     }
-    // **The queue** (decision 1681): each packet is one sample, and the first one turns the
+    // **The queue**: each packet is one sample, and the first one turns the
     // connecting dialog into the queue dialog. A queue is not a failure — the attempt is still in
     // flight and `in_flight` deliberately stays set, so nothing resubmits underneath it.
     for msg in queued.read() {
@@ -617,7 +617,7 @@ fn drive_policy(
         attempt.intent.park = IoPark::AtLogin;
         attempt.intent.in_flight = false;
         if msg.session_over {
-            // The reference's `DISCONNECTED_FROM_SERVER` (decision 1262): `GlueParent.lua` answers
+            // The reference's `DISCONNECTED_FROM_SERVER`: `GlueParent.lua` answers
             // it with `SetGlueScreen("login")` + `GlueDialog_Show("DISCONNECTED")` — the account
             // screen and one Okay button. Nothing retries, and the credentials go with the session:
             // a client that re-authenticates on its own steals the account back from whoever just
@@ -632,7 +632,7 @@ fn drive_policy(
         }
         // Otherwise the session continues through the park and the re-auth is silent: immediate
         // after a clean logout (the roster IS the select screen the app now shows), paced after a
-        // stream death an unattended run must recover from on its own (0065, paced app-side).
+        // stream death an unattended run must recover from on its own (paced app-side).
         if attempt.intent.creds.is_some() {
             let delay = if msg.end == benilla_protocol::SessionEnd::LoggedOut {
                 0.0
@@ -699,7 +699,7 @@ pub(super) enum Field {
 /// The typed form: both boxes, the focus, and the Remember checkbox. Each box is a real
 /// [`EditBoxState`] — the same byte-verified model the chat box uses — so the login fields get
 /// caret movement, selection, Ctrl+A and the clipboard from the shared law rather than the
-/// three-case imitation they used to carry (decision 0704). The caret clock lives in the box too
+/// three-case imitation they used to carry. The caret clock lives in the box too
 /// (`blink_accum`/`caret_shown`), so it blinks on the client's own 0.5 s period.
 #[derive(Resource)]
 pub(crate) struct LoginForm {
@@ -802,7 +802,7 @@ fn login_input(
     clicks: Res<crate::glue::GlueClicks>,
     mut keyboard: MessageReader<KeyboardInput>,
     keys: Res<ButtonInput<KeyCode>>,
-    // The host pasteboard + the window handle the Wayland backend needs (decision 0702).
+    // The host pasteboard + the window handle the Wayland backend needs.
     mut clipboard: NonSendMut<HostClipboard>,
     raw_handle: Query<&bevy::window::RawHandleWrapper, With<bevy::window::PrimaryWindow>>,
     mut form: ResMut<LoginForm>,
@@ -1002,7 +1002,7 @@ fn login_input(
 
 /// The caret's clock. Exactly one box owns the keyboard, so the focused one is the one that blinks
 /// — on the shared law's 0.5 s period, so the login caret keeps time with the create-name box, the
-/// delete dialog and the chat box (decision 0704). It keeps blinking under an open dialog: a dialog
+/// delete dialog and the chat box. It keeps blinking under an open dialog: a dialog
 /// eats the keys, not the clock.
 ///
 /// Its own system, not a line inside [`login_input`]: a blink is a clock, not input, and as a
@@ -1137,7 +1137,7 @@ fn accept_realmlist(
     true
 }
 
-// ── The saved account name (decision 0539 §4) ────────────────────────────────────────────────────
+// ── The saved account name ────────────────────────────────────────────────────
 
 /// Read the saved account name from `base` (missing file/dir = empty). Takes the *file* rather
 /// than resolving one, so the round-trip is testable from a tempdir.
@@ -1219,7 +1219,7 @@ mod tests {
         (app, rx)
     }
 
-    /// **A lost session does not log itself back in** (decision 1262).
+    /// **A lost session does not log itself back in**.
     ///
     /// This is the whole of the displacement report: log into the same account from the reference
     /// client, vmangos kicks us with a bare socket close, and 0065's paced resubmit — which cannot
@@ -1351,7 +1351,7 @@ mod tests {
         assert!(app.world().resource::<GlueDialog>().kind.is_none());
     }
 
-    /// **The submitted attempt dials the configured realmlist** (decision 1667) — the whole
+    /// **The submitted attempt dials the configured realmlist** — the whole
     /// point of the setting. Before this, the address was latched out of `$WOW_HOST` once at
     /// process start and the request had no say in it; now the request carries it, so a change
     /// made between attempts is the one the next attempt uses.
@@ -1575,7 +1575,7 @@ mod tests {
     /// "a harness". Two answers, both here, because they close the hole from both ends: whether
     /// an *attempt* was typed is direct evidence (`announced`, set by the screen's own submit and
     /// by nothing else), and whether the *run* is driverless is a declaration the run makes
-    /// (`WOW_UNATTENDED`, decision 1769) — never an inference off credentials the director's own
+    /// (`WOW_UNATTENDED`) — never an inference off credentials the director's own
     /// launch line carries.
     #[test]
     fn a_typed_password_refusal_never_exits() {

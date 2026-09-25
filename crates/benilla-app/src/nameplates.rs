@@ -15,7 +15,7 @@
 //!   hostile red, else the `¬X∧¬Y` split — PvP-flagged green (party pale-green), unflagged the
 //!   soft blue (party pale-blue). benilla does not re-derive any of that: it calls the ring's own
 //!   [`ring_variant`] and paints what it answers, because "the SAME selector" above is the literal
-//!   claim (decision 0659 — a hand-copied mirror had drifted and a flagged player wore a green
+//!   claim (a hand-copied mirror had drifted and a flagged player wore a green
 //!   ring under a blue name). The selector's **first-priority branch** — the combat-flash
 //!   red↔orange pulse — is live too: [`CombatFlash`] (recomputed per frame from the selection +
 //!   our server-echoed attack bracket, exactly the client's per-frame `[unit+0xc58]` bit 0x10)
@@ -192,13 +192,13 @@ pub(crate) fn height_scale(d: f32) -> f32 {
 
 /// What a name line is painted with. The classification is **not** ours: the per-frame name render
 /// fetches `unit->vtable[0x2c]` = `CGUnit::GetSelectionCircleColor 0x605960` — literally the same
-/// selector as the ground ring (decision 0156) — so [`ring_variant`] IS the law and this only adds
+/// selector as the ground ring — so [`ring_variant`] IS the law and this only adds
 /// the flash seat that lives outside the palette.
 ///
 /// It used to be a hand-copied mirror of that selector, and the copy went stale: decision 0453
 /// taught the ring the player path's `¬X∧¬Y` legs (PvP-flagged → green, party → pale) and the
-/// mirror kept answering plain blue, so a flagged player drew a green ring under a blue name
-/// (decision 0659). Deleting the mirror is the fix; there is one selector now.
+/// mirror kept answering plain blue, so a flagged player drew a green ring under a blue name.
+/// Deleting the mirror is the fix; there is one selector now.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum NamePaint {
     /// The selector's own answer — the whole palette.
@@ -209,7 +209,7 @@ enum NamePaint {
 }
 
 impl NamePaint {
-    // GAMMA LANE (0161): `linear_rgb` passes the authored byte values RAW into the gamma
+    // GAMMA LANE: `linear_rgb` passes the authored byte values RAW into the gamma
     // framebuffer (stock-PBR unlit writes base_color as-is; the frame decodes once at FFXGlow).
     fn color(self) -> Color {
         match self {
@@ -232,7 +232,7 @@ impl NamePaint {
 /// handle, and since decision 1342 that texture is written in place and its handle never changes.
 /// It was the old size ladder's re-bake — a whole new image asset per window resize — that made a
 /// bound handle go stale, and drawing new-bake UVs through the old-bake texture is what turned unit
-/// names into fragments of other letters (B272, decision 1339). There is no successor texture now,
+/// names into fragments of other letters. There is no successor texture now,
 /// so there is nothing for a material to go stale against; only the UVs can move, and only when the
 /// sheet fills and resets.
 #[derive(Resource, Default)]
@@ -392,8 +392,8 @@ pub(crate) fn drive_nameplates(
         &Transform,
         Option<&ObjectStore>,
         Has<SelfPlayer>,
-        // Whether the body is drawn at all — the ShouldShowName gate's unwritten first term
-        // (decision 1277). A body the exterior-scene election sent to pass 2 never enters the
+        // Whether the body is drawn at all — the ShouldShowName gate's unwritten first term.
+        // A body the exterior-scene election sent to pass 2 never enters the
         // reference's scene, so there is nothing over which to float a name.
         Option<&InheritedVisibility>,
     )>,
@@ -409,7 +409,7 @@ pub(crate) fn drive_nameplates(
         Res<crate::chat_bubble::BubblesActive>,
         // The selector's party roster (`0xbc6f48`) — the `¬X∧¬Y` leg's pale variants.
         Res<crate::ui_party::GroupState>,
-        // The UnitName* cvar mask (0992) — the kind gates below read it.
+        // The UnitName* cvar mask — the kind gates below read it.
         Res<NameConfig>,
     ),
     names: Res<NameCache>,
@@ -462,9 +462,9 @@ pub(crate) fn drive_nameplates(
                     // a POSITIVE bias draws last = on top — the sign law is in `sky_order`).
                     // Without it a WATER chunk whose center sat nearer the camera than the plate
                     // sorted in front and tinted the name — the "name looks underwater from some
-                    // angles" artifact (director-reported, 2026-07-18; decision 0519). With the
+                    // angles" artifact (director-reported, 2026-07-18). With the
                     // sign inverted, as 0519 shipped it, deep water (alpha 1.0) erased the
-                    // glyphs outright — the canal report of 2026-07-25 (decision 0639). The ref
+                    // glyphs outright — the canal report of 2026-07-25. The ref
                     // draws its world text late in the frame, after the liquid — this reproduces
                     // that order; walls still occlude via the depth test, and plate-vs-plate
                     // ordering is unchanged (uniform bias).
@@ -768,7 +768,7 @@ fn place_nameplates(
             rotation: facing,
             scale: Vec3::splat(scale),
         };
-        // The no-op write gate (decision 1362 — the camera's pattern, at the plate): a parked
+        // The no-op write gate (the camera's pattern, at the plate): a parked
         // unit's seat is bit-stable, but writing it anyway marked every plate's transform changed
         // every frame. Bit equality, not an epsilon: a real sub-epsilon drift must still land.
         // The global rides the same branch — a root entity's global IS its transform, so the two
@@ -793,11 +793,11 @@ pub(crate) struct NameplatesPlugin;
 
 /// `WOW_PROBE_NAME_TRACE=1`: per-frame `NAME_TRACE` lines for the self player's plate seat —
 /// the numeric instrument for "the name moves weirdly" reports (a smoothness/lag question is
-/// measured, never eyeballed — decision 0404).
+/// measured, never eyeballed).
 #[derive(Resource)]
 struct NameAnchorTrace(bool);
 
-/// The overhead-name rows' change callback (decision 2303): the name trio and the guild line.
+/// The overhead-name rows' change callback: the name trio and the guild line.
 pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut names: ResMut<NameConfig>) {
     match ev.key().as_str() {
         "unitnameplayer" => names.player = ev.flag(),
@@ -845,7 +845,7 @@ impl Plugin for NameplatesPlugin {
 /// `Mesh3d` handles, so they are despawned too and rebuilt on this same frame's walk below (which
 /// re-enters every visible unit). That one-frame rebuild is the whole cost of a reset here.
 ///
-/// The **materials survive**, because the sheet's texture handle does (decision 1342). Under the
+/// The **materials survive**, because the sheet's texture handle does. Under the
 /// old size ladder this edge fired on every window resize and had to drop them too; now it fires
 /// only when the sheet fills, which the occupancy instrument (`WOW_GLYPH_CACHE=1`) exists to keep
 /// honest.
@@ -929,7 +929,7 @@ mod tests {
     /// The name paints itself from the ring's own selector — one law, not a copy of one (decision
     /// 0659). The regression this locks: a **PvP-flagged** friendly player is GREEN, the same
     /// green the ring under their feet draws. The name used to keep a private mirror of the
-    /// selector that predated the `¬X∧¬Y` legs (0453), so a flagged player wore a green ring under
+    /// selector that predated the `¬X∧¬Y` legs, so a flagged player wore a green ring under
     /// a blue name — which is exactly what the director saw.
     #[test]
     fn name_color_is_the_ring_selector_itself() {
@@ -1082,7 +1082,7 @@ mod tests {
         plates
     }
 
-    /// **A sheet reset empties every UV-bearing cache, live plates included** (B272, decision
+    /// **A sheet reset empties every UV-bearing cache, live plates included** (decision
     /// 1339; narrowed by 1342).
     ///
     /// The meshes carry glyph-cell UVs in vertex data, and a reset repacks the sheet from empty, so

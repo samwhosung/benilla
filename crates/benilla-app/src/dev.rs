@@ -23,7 +23,7 @@
 //! **What is deliberately NOT in here:** `benilla_world::dev_state` (the always-present config
 //! layer — its defaults *are* the player behaviour, so it ships), `pipe_warm` (a player on macOS
 //! eats every synchronous pipeline stall without it — 0837/1116), and `art_scope` (within-map art
-//! residency: engine, and it travels with `WorldPlugins` — 0729).
+//! residency: engine, and it travels with `WorldPlugins`).
 
 use bevy::prelude::*;
 
@@ -62,19 +62,19 @@ impl Plugin for DevToolsPlugin {
             app.add_plugins(crate::debug_panel::DebugPanelPlugin)
                 .add_plugins(crate::perf::PerfPlugin)
                 // `WOW_FX_CENSUS=1`: where this frame's particle draws are addressed, and whether
-                // the view they name is switched on (decision 0775). An instrument, and one that
+                // the view they name is switched on. An instrument, and one that
                 // reads the portrait booths — so it belongs on this side of the line.
                 .add_plugins(crate::capture::fx_draw_census_plugin)
                 // The hover-cost recorder (`WOW_HOVER_LOG`) and the asset-churn meter
                 // (`WOW_ASSET_CHURN`) — both no-ops without their variable.
                 .add_plugins(crate::hover_log::HoverLogPlugin)
                 .add_plugins(crate::asset_churn::AssetChurnPlugin)
-                // The session preflight (decision 0649): one banner per world entry naming the body
+                // The session preflight: one banner per world entry naming the body
                 // we logged into, and loud warnings for the states — dead/ghost, GM mode,
                 // server-blocked movement — that silently invalidate a session's readings. Never
                 // env-gated; a warning nobody switches on isn't one.
                 .add_plugins(crate::preflight::PreflightPlugin)
-                // The probe shield (decision 0677): a body on a probe account is put into vmangos's
+                // The probe shield: a body on a probe account is put into vmangos's
                 // `.cheat god` on every world entry — damage clamps at 1 hp instead of killing —
                 // and GM mode is turned OFF, because the shield replaces the only reason it was
                 // ever on. Inert on any other account.
@@ -104,7 +104,7 @@ impl Plugin for DevProbesPlugin {
             if std::env::var("WOW_LIVE_SHOT").is_ok() {
                 app.add_plugins(crate::capture::LiveShotPlugin);
             }
-            // The probe RIG (decision 0651): `WOW_RIG="tauren druid 60 gear:heal-preraid-bis"` finds-or-
+            // The probe RIG: `WOW_RIG="tauren druid 60 gear:heal-preraid-bis"` finds-or-
             // creates that body on this slot's probe account, logs in as it, and applies level/spells/gear/
             // spec/place — the one verb that replaces the hand-assembled GM recipe every session used to
             // re-derive (see `capture::ProbeRigPlugin`).
@@ -113,7 +113,7 @@ impl Plugin for DevProbesPlugin {
             }
             // Any scripted probe keeps its window un-occludable: a fully covered macOS window drops to
             // ~1 fps drawables, and every probe schedule is wall-clock — a throttled run doesn't measure
-            // slowly, it runs the wrong script (see `capture::ProbeFocusPlugin`, decision 0906).
+            // slowly, it runs the wrong script (see `capture::ProbeFocusPlugin`).
             // Which probe variables count is the registry's `wall_clock` column
             // (`capture::probe_env::PROBE_VARS`), not a list kept here: this list was hand-kept
             // and had drifted to ten of the twenty-five wall-clock variables when 2265 §A5 read
@@ -246,7 +246,7 @@ impl Plugin for DevProbesPlugin {
             // streamed entity near the body — whether it got a debug cube, real geometry, or
             // nothing at all. The instrument B13 was missing: a black slab in a screenshot cannot
             // say whether the display named no model (our gap) or named one that draws nothing
-            // (an invisible trigger creature — see `capture::UnitVisualsPlugin`, decision 1403).
+            // (an invisible trigger creature — see `capture::UnitVisualsPlugin`).
             if std::env::var("WOW_UNIT_VISUALS").is_ok() {
                 app.add_plugins(crate::capture::UnitVisualsPlugin);
             }
@@ -263,7 +263,7 @@ impl Plugin for DevProbesPlugin {
             // PLAYER — what the wire asked for (`PLAYER_FLAGS`' hide bits), what we resolved
             // (helm/cloak display ids) and what is actually attached — plus a `contradictions=`
             // count for a body dressed in a piece its own preference asked us to hide. B123's
-            // instrument (see `capture::DressCensusPlugin`, decision 1472).
+            // instrument (see `capture::DressCensusPlugin`).
             if std::env::var("WOW_DRESS_CENSUS").is_ok() {
                 app.add_plugins(crate::capture::DressCensusPlugin);
             }
@@ -281,7 +281,7 @@ impl Plugin for DevProbesPlugin {
             }
             // The schedule census: `WOW_SCHED_CENSUS=1` prints every schedule's systems with their
             // executor-relevant flags, both worlds, then exits — the structural inventory under
-            // the orchestration bands (see `capture::SchedCensusPlugin`, decision 1437).
+            // the orchestration bands (see `capture::SchedCensusPlugin`).
             if std::env::var("WOW_SCHED_CENSUS").is_ok() {
                 app.add_plugins(crate::capture::SchedCensusPlugin);
             }
@@ -291,7 +291,7 @@ impl Plugin for DevProbesPlugin {
                 app.add_plugins(crate::capture::ProbeMeleePlugin);
             }
             // The partner live probe: `WOW_PROBE=partner` auto-accepts group invites — the party arc's
-            // second-client instrument (decision 0434; see `capture::ProbePartnerPlugin`).
+            // second-client instrument (see `capture::ProbePartnerPlugin`).
             if std::env::var("WOW_PROBE").as_deref() == Ok("partner") {
                 app.add_plugins(crate::capture::ProbePartnerPlugin);
             }
@@ -404,7 +404,7 @@ impl Plugin for DevProbesPlugin {
             }
             // The chest live probe: `WOW_PROBE_CHEST=1` parks at a real chest spawn, opens it on the
             // click's own route and reports the self unit's base anim id before/during/after — B84's
-            // instrument, the numeric answer to "does the player kneel at a chest" (decision 1471;
+            // instrument, the numeric answer to "does the player kneel at a chest" (
             // see `capture::ProbeChestPlugin`).
             if std::env::var("WOW_PROBE_CHEST").is_ok() {
                 app.add_plugins(crate::capture::ProbeChestPlugin);
@@ -412,14 +412,14 @@ impl Plugin for DevProbesPlugin {
             // The GameObject-questgiver live probe: `WOW_PROBE_GOQUEST=1` parks at the Goldshire
             // wanted poster and reports the dialog status the server answers for it, below and
             // above the quest's own MinLevel — the numeric answer to "quest objects are never
-            // status-queried" (decision 1872; see `capture::ProbeGoQuestPlugin`).
+            // status-queried" (see `capture::ProbeGoQuestPlugin`).
             if std::env::var("WOW_PROBE_GOQUEST").is_ok() {
                 app.add_plugins(crate::capture::ProbeGoQuestPlugin);
             }
             // The openable-item live probe: `WOW_PROBE_CLAM=1` stocks a clam, right-clicks it
             // through the live VM's own `UseContainerItem` and reports whether a loot window opens
             // on the item's own guid — the numeric answer to the director's "clams don't open"
-            // (decision 1531; see `capture::ProbeClamPlugin`).
+            // (see `capture::ProbeClamPlugin`).
             if std::env::var("WOW_PROBE_CLAM").is_ok() {
                 app.add_plugins(crate::capture::ProbeClamPlugin);
             }
@@ -440,8 +440,8 @@ impl Plugin for DevProbesPlugin {
                 app.add_plugins(crate::capture::LiveFpsPlugin);
             }
             // The scripted probe drivers that live beside `capture` rather than in `player/`
-            // (decision 1174) — the mouse-turn (`WOW_PROBE_LOOK`, decision 0621), the swim-pitch aim
-            // (`WOW_PROBE_PITCH`) and the camera park (`WOW_PROBE_CAM`, decision 0653). Added
+            // — the mouse-turn (`WOW_PROBE_LOOK`), the swim-pitch aim
+            // (`WOW_PROBE_PITCH`) and the camera park (`WOW_PROBE_CAM`). Added
             // unconditionally because each plugin's own `from_env` is its gate, so the variable's name is
             // spelled in exactly one place; all three order themselves before `player::PlayerControlSet`.
             app.add_plugins(crate::capture::ProbeLookPlugin);

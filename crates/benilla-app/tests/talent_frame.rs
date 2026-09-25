@@ -30,12 +30,12 @@ const FILES: &[&str] = &[
     r"Interface\FrameXML\MoneyFrame.lua",
     r"Interface\FrameXML\MoneyFrame.xml",
     r"Interface\FrameXML\UIParent.xml",
-    // `ToggleTalentFrame` lives here now, not in the window's own file (decision 1833).
+    // `ToggleTalentFrame` lives here now, not in the window's own file.
     "Interface\\FrameXML\\GameTooltip.xml",
     // `UIPanelScrollFrameTemplate` — the stock scroll frame's whole substance: its `$parentScrollBar`
     // Slider AND its `<OnMouseWheel>`. Nothing else in the tree declares it, and a missing template
     // is a loader WARNING, not an error, so without this the window still built — just with no
-    // scrollbar and no wheel (decision 1833). `load_ui_strict` below is what makes that loud.
+    // scrollbar and no wheel. `load_ui_strict` below is what makes that loud.
     r"Interface\FrameXML\UIPanelTemplates.lua",
     r"Interface\FrameXML\UIPanelTemplates.xml",
     "Interface\\FrameXML\\LocaleProperties.lua",
@@ -46,7 +46,7 @@ const FILES: &[&str] = &[
     "ScrollTemplates.xml",
     // Stock `TalentFrame_OnShow` opens with `SetButtonPulse(TalentMicroButton, 0, 1)` and then
     // `UpdateMicroButtons()` — both live here, and a nil `TalentMicroButton` throws out of OnShow
-    // BEFORE `TalentFrame_Update()`, so the whole window comes up empty (decision 1833). Our
+    // BEFORE `TalentFrame_Update()`, so the whole window comes up empty. Our
     // retired file's OnShow called neither, which is why this was never a dependency before.
     r"Interface\FrameXML\MainMenuBarMicroButtons.xml",
     // Five files behind one line: the `.xml` sources its own `.lua` and `<Include>`s the
@@ -116,8 +116,7 @@ fn fixture(points_spent: u32) -> TalentUiState {
 /// reference derives its extent from the buttons anchored into it via `UpdateScrollChildRect`
 /// (`Blizzard_TalentUI.lua:311`). So a two-talent tree genuinely does not scroll, and asking it to
 /// would be asserting our retired file's behaviour rather than the reference's: ours pinned the
-/// child to a fixed full-height rect, which made every tree scrollable regardless of content
-/// (decision 1833).
+/// child to a fixed full-height rect, which made every tree scrollable regardless of content.
 fn tall_fixture() -> TalentUiState {
     let mut state = fixture(10);
     let mut deep = state.talents[0][1].clone();
@@ -142,7 +141,7 @@ fn view(name: &str, desc: &str) -> SpellTooltipView {
 ///
 /// The stock `Blizzard_TalentUITemplates.xml` writes the tooltip code INLINE in the button's
 /// `<OnEnter>` (`GameTooltip:SetOwner` + `GameTooltip:SetTalent`), so there is no named function to
-/// invoke the way our retired file's `BenillaTalentButton_OnEnter` could be (decision 1833). Moving
+/// invoke the way our retired file's `BenillaTalentButton_OnEnter` could be. Moving
 /// the mouse is closer to the thing under test anyway: it drives the hit test as well as the
 /// handler.
 fn hover(script: &mut UiScript, frame: &str) {
@@ -171,7 +170,7 @@ fn open_window(points_spent: u32) -> UiScript {
     let mut script = UiScript::new().expect("engine");
     script.set_screen_size(1024.0, 768.0);
     load_ui(&script);
-    // The reference's `ToggleTalentFrame` opens nothing below level 10 (decision 1833) — that is
+    // The reference's `ToggleTalentFrame` opens nothing below level 10 — that is
     // real behaviour, not a guard, so the window needs a player who has talents at all. Our
     // retired file had no such gate, which is why this fixture was never needed before.
     script.set_unit("player", Some(probe_player()));

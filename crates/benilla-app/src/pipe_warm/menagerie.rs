@@ -3,7 +3,7 @@
 //! why of the whole pass) lives in the parent module; this file owns WHAT gets warmed — the
 //! model lane and its derived keys, the sky/water lanes, the plain-`StandardMaterial` lanes,
 //! and the portrait-booth samples=1 twins — plus the lane-coverage gate test that keeps a new
-//! material lane from shipping unwarmed (decisions 0837 / 0937 / 0938).
+//! material lane from shipping unwarmed.
 
 use benilla_formats::{FogPolicy, ModelBlend, RenderSubmesh};
 use bevy::asset::RenderAssetUsages;
@@ -52,12 +52,12 @@ pub(super) struct WarmLanes<'w> {
     clouds: ResMut<'w, Assets<CloudMaterial>>,
     sky: ResMut<'w, Assets<SkyMaterial>>,
     liquid: ResMut<'w, Assets<LiquidMaterial>>,
-    /// The plain-`StandardMaterial` lanes (0938): representatives for the on-demand nameplate
+    /// The plain-`StandardMaterial` lanes: representatives for the on-demand nameplate
     /// and raid-mark materials go through this store the way their builders do.
     standard: ResMut<'w, Assets<StandardMaterial>>,
-    /// The fallback cube (0938): production mesh + materials, drawn while a model streams.
+    /// The fallback cube: production mesh + materials, drawn while a model streams.
     cubes: Option<Res<'w, crate::entities::CubeAssets>>,
-    /// The image store (0958): the twin booth's render target and the effect-lane warm's
+    /// The image store: the twin booth's render target and the effect-lane warm's
     /// stand-in texture are created here for the life of the pass.
     pub(super) images: ResMut<'w, Assets<Image>>,
     /// The UI quad store (2262): the minimap interior composite's tile material is built here
@@ -65,13 +65,13 @@ pub(super) struct WarmLanes<'w> {
     ui_quads: ResMut<'w, Assets<crate::ui_pass::UiQuadMaterial>>,
 }
 
-/// One portrait/paperdoll booth camera + its layer ([`crate::portrait`], 0938): the booths run
+/// One portrait/paperdoll booth camera + its layer ([`crate::portrait`]): the booths run
 /// `Msaa::Off`, so every model-lane pipeline has a samples=1 twin that otherwise compiles live
 /// on the first in-world portrait (the first click-target). The booth cameras exist from
 /// `Startup` and render during the warm window (the demand gate counts the pass as demand), so
 /// menagerie rigs duplicated onto ONE booth's layer compile that twin space behind the cover —
 /// the view shape (HDR, no tonemap, the glow node) is otherwise the world camera's, leaving TWO
-/// twin axes: samples, and the projection CLASS (0958). A real booth carries the Perspective
+/// twin axes: samples, and the projection CLASS. A real booth carries the Perspective
 /// placeholder until its first bake installs `Projection::custom(WowPortraitProjection)` — a
 /// distinct bevy_pbr view key — so the rigs are ALSO duplicated onto the pass's own twin booth
 /// ([`crate::portrait::spawn_warm_booth`]), which is that custom-projection space; 0938 warmed
@@ -219,7 +219,7 @@ pub(super) fn spawn_menagerie(
                 cache, materials, None, two_sided, cutout, light,
             ));
         }
-        // The **WMO-skybox lane** (decision 1264): `sky_depth` is a `WowModelKey` axis — it
+        // The **WMO-skybox lane**: `sky_depth` is a `WowModelKey` axis — it
         // compiles the shader's forced-far-depth branch — so every skybox batch is a pipeline the
         // world cross above does not cover, however identical the rest of its key. Built exactly
         // the way `M2BatchMaterials::skybox` builds them: depth-write pinned off, depth-test
@@ -315,7 +315,7 @@ pub(super) fn spawn_menagerie(
         }
     }
 
-    // The shard-rung rows (decision 0945). A 3-D model particle's instance material carries its
+    // The shard-rung rows. A 3-D model particle's instance material carries its
     // owner-last rung in `depth_bias`, which is ALSO a pipeline-key axis (0837's law) — so the
     // runtime stamps only the closed bucket set (`owner_last_rung_bucket`), and this table
     // compiles that set. Families are the corpus census's floor plus the depth-write axis
@@ -366,7 +366,7 @@ pub(super) fn spawn_menagerie(
         }
     }
 
-    // The far-side-of-water twins (decision 0945). `classify_water_side` swaps every transparent
+    // The far-side-of-water twins. `classify_water_side` swaps every transparent
     // model material for its `far_twin_of` — a DISTINCT pipeline key (the far marker bit + the
     // shifted bias integer) that the cache never dedups against the near one even though
     // `specialize` makes the descriptors byte-identical. Unwarmed, the first eye-and-model
@@ -380,7 +380,7 @@ pub(super) fn spawn_menagerie(
     // skinned, plain or vertex-coloured — a submerged character's skinned gear classifies far
     // too); the shard rows and their far twins ride the static layouts only (shard geometry
     // models are static meshes by construction — `particles::model`). Every main-cross rig is
-    // ALSO duplicated onto one portrait booth's layer (0938) AND the twin booth's (0958): the
+    // ALSO duplicated onto one portrait booth's layer AND the twin booth's: the
     // booths render at `Msaa::Off`, so each model pipeline has a samples=1 twin per projection
     // CLASS — the real booth's Perspective placeholder and the twin booth's custom projection
     // (the class real bakes install) — that otherwise compiles live on the first in-world
@@ -466,7 +466,7 @@ pub(super) fn spawn_menagerie(
         }
     }
 
-    // The WMO-skybox rows (decision 1264): the STATIC PLAIN layout only, and only on the world
+    // The WMO-skybox rows: the STATIC PLAIN layout only, and only on the world
     // camera. `skybox::build_skybox` inserts POSITION + NORMAL + UV_0 — `layouts[0]` exactly — a
     // skybox is never skinned (the asteroid belts' bones are a deferral, not a shipped lane), never
     // vertex-coloured (M2 carries no MOCV), never far-twinned, and never reaches a portrait booth.
@@ -478,7 +478,7 @@ pub(super) fn spawn_menagerie(
         }
     }
 
-    // The sky and water lanes (decision 0945 — 0837's scope was model-lane-only, and every hole
+    // The sky and water lanes (0837's scope was model-lane-only, and every hole
     // was a director-felt stall: the sun disc first drawn on stepping outdoors, the first water
     // in view, a spell's shards mid-cast). Every material that EXISTS in these Startup-populated
     // stores gets a rig with its production mesh layout — iterating the store can't drift from
@@ -566,7 +566,7 @@ pub(super) fn spawn_menagerie(
             &mut count,
         );
     }
-    // The plain-`StandardMaterial` lanes (0938 — the director's evening log). The fallback cube
+    // The plain-`StandardMaterial` lanes (the director's evening log). The fallback cube
     // (`entities::CubeAssets`, drawn while any entity's model streams) uses the production mesh
     // + materials, on the world camera AND a booth layer (a cube-bodied target can reach a
     // portrait pane) — but NOT the orthographic twin (2262): `ui_models` has no cube fallback at
@@ -729,7 +729,7 @@ fn spawn_model_rig(
         WarmRig,
         // Hidden at spawn: a hidden rig is never extracted, so it queues no pipeline. The pass
         // reveals rigs a slice at a time (`super::reveal_slice`) — that is what paces the
-        // compile burst instead of paying all 1480 in one blocking frame (decision 1116).
+        // compile burst instead of paying all 1480 in one blocking frame.
         Visibility::Hidden,
         ChildOf(cam),
     ));
@@ -887,7 +887,7 @@ fn warm_quad(colors: bool, skinned: bool) -> RenderSubmesh {
 
 #[cfg(test)]
 mod tests {
-    /// The gate's second half (decision 0958): a lane can also be a hand-rolled
+    /// The gate's second half: a lane can also be a hand-rolled
     /// `SpecializedRenderPipeline`/`SpecializedMeshPipeline`/`SpecializedComputePipeline` impl —
     /// invisible to the `MaterialPlugin` scan below, which is exactly how the `wow_effect` lane
     /// (particles, decals, the selection ring) shipped unwarmed and the ring's first-target
@@ -896,7 +896,7 @@ mod tests {
     #[test]
     fn every_custom_pipeline_lane_has_a_warm_contributor() {
         // Lanes whose one pipeline compiles covered BY CONSTRUCTION, each with the reason:
-        // - UiGammaPipeline (`ui_gamma`, decision 2206): one variant, keyed on the swapchain's
+        // - UiGammaPipeline (`ui_gamma`): one variant, keyed on the swapchain's
         //   view format, specialised in the first frame's prepare — pre-world, so covered
         //   (`publish_cover`: `state != InWorld`) — and the surface's format never changes
         //   after, so no later variant exists. Not a timing race like `UiQuadMaterial`'s: the
@@ -999,7 +999,7 @@ mod tests {
         out
     }
 
-    /// The lane-coverage gate (decision 0938, widened by 0958): every material lane registered
+    /// The lane-coverage gate (widened by 0958): every material lane registered
     /// anywhere in this crate — 3-D (`MaterialPlugin::<X>`), 2-D (`Material2dPlugin::<X>`), and
     /// UI (`UiMaterialPlugin::<X>`) — must be NAMED in this file. The warm pass is the one place
     /// that compiles a lane's pipelines behind the loading cover, so a lane nobody considered

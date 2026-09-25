@@ -253,7 +253,7 @@ fn closing_queues_the_close_intent() {
 /// *Alliance Military Ranks* wall plaque in Stormwind's Old Town) went through the reader and came
 /// out as its own source — `<HTML><BODY><H1 align="center">…` drawn literally, and cut off with
 /// "..." partway down. Both were the page being a plain FontString where the reference has a
-/// `SimpleHTML` (decisions 1337/1338).
+/// `SimpleHTML`.
 ///
 /// What this pins is the whole path the report exercises: the app's page feed → the reader's
 /// `"\n" .. body .. "\n"` padding → the markup parse → the drawn blocks. The falsification is
@@ -321,7 +321,7 @@ fn the_reported_html_page_draws_as_blocks_not_as_its_own_markup() {
 /// The body is `page_text` 2654, quoted verbatim below, and its one `<IMG>` carries **no `width=`
 /// and no `height=`**. In the reference that is the CONTENT-derived span: the resolver's size call
 /// is virtual, and `CSimpleTexture`'s override answers an authored `0.0` with the loaded texture's
-/// texel extent, one texel to one FrameXML unit (`0x770720`, decision 1349).
+/// texel extent, one texel to one FrameXML unit (`0x770720`).
 /// `Interface\PvPRankBadges\PvPRankAlliance` is a 128×128 BLP, so the crest is a 128-unit
 /// square inside a 270-wide page.
 ///
@@ -442,7 +442,7 @@ fn the_reported_book_crest_draws_at_the_blps_own_size() {
     }
 }
 
-/// **B288, closed at the reported symptom** (decision 1507): the Verdant Note open from
+/// **B288, closed at the reported symptom**: the Verdant Note open from
 /// the bag, then a quest giver's gossip — both frames drew at the same TOPLEFT 0,-104 anchor,
 /// page text and greeting interleaved. The cause was the reader's missing `UIPanelWindows` row:
 /// registered (the ref's own `{ area = "left", pushable = 0 }`, UIParent.lua l.20), the two are

@@ -1,5 +1,5 @@
 //! The login screen's **layout** — the reference `AccountLogin.xml` arrangement rebuilt in Bevy
-//! UI (decision 0539), full-bleed and scaled to the window (`height / 768`, the glue engine's
+//! UI, full-bleed and scaled to the window (`height / 768`, the glue engine's
 //! virtual screen).
 //!
 //! Bottom layer: the glue booth's fullscreen render (the `UI_MainMenu` scene — the burning gate,
@@ -12,7 +12,7 @@
 //! shadowed gold label at LEFT+24), the Blizzard logo (100×100 at BOTTOM (0,8)) under the
 //! `BLIZZ_DISCLAIMER` line (BOTTOM (0,10)), and the version block (BOTTOMLEFT (0,10),
 //! `VERSION_TEMPLATE` filled with the 5875 build facts). The Credits/Cinematics/TOS side of the
-//! reference layout is deliberately absent (decision 0539 §1). The dialog is the ref's shared
+//! reference layout is deliberately absent. The dialog is the ref's shared
 //! `GlueDialog` box (512-wide `UI-DialogBox`, text wrapping at 440, one 200×40 button).
 
 use bevy::prelude::*;
@@ -46,7 +46,7 @@ pub(crate) enum LoginAction {
     Login,
     Quit,
     ToggleSave,
-    /// Open the realmlist editor (decision 1667) — on the button and on the address readout under
+    /// Open the realmlist editor — on the button and on the address readout under
     /// it, so clicking the address you want to change does what it looks like it does.
     Realmlist,
 }
@@ -186,7 +186,7 @@ fn spawn_screen(
 
     // ...and every piece of chrome hangs off the CANVAS — the boxed scene's own rect (decision
     // 2091). Anchored to the window instead, the logo, the version line and Realmlist/Quit stood
-    // out in the bars at 21:9 (B377).
+    // out in the bars at 21:9.
     let mut canvas = commands.spawn((crate::glue::glue_canvas(), ChildOf(root)));
     canvas.with_children(|ui| {
         // The WoW logo (`AccountLoginLogo`, 256×128 at TOPLEFT (3,−7), OVERLAY).
@@ -414,7 +414,7 @@ fn spawn_screen(
                 );
             });
 
-        // **The realmlist control** (decision 1667) — benilla's, in the reference's coordinates.
+        // **The realmlist control** — benilla's, in the reference's coordinates.
         //
         // The bottom-right column of `AccountLogin.xml` is a stack anchored off the Quit button:
         // TOS sits BOTTOM ← `AccountLoginExitButton`'s TOP at (0, 80), with Credits and Cinematics
@@ -580,7 +580,7 @@ fn spawn_screen(
 }
 
 /// Paint both boxes from their [`EditBoxState`]s — segments, selection highlight, and the caret at
-/// the cursor — through the shared [`paint_glue_field`] (decision 0704).
+/// the cursor — through the shared [`paint_glue_field`].
 #[allow(clippy::type_complexity)]
 pub(super) fn refresh_boxes(
     form: Res<LoginForm>,
@@ -675,7 +675,7 @@ pub(super) fn exit_login(
     dialog.close();
 }
 
-/// The login-screen shot instrument (`WOW_LOGIN_SHOT_OUT=<path>`, decision 0539 §7): once the
+/// The login-screen shot instrument (`WOW_LOGIN_SHOT_OUT=<path>`): once the
 /// screen has been up a few seconds (art + scene settled), write one PNG via Bevy's framebuffer
 /// readback. Inert without the env.
 pub(super) fn debug_login_shot(

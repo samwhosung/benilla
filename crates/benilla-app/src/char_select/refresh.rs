@@ -196,7 +196,7 @@ pub(super) fn refresh_banner_and_buttons(
     }
 }
 
-/// Feed the glue booth from the roster (decision 0465): the scene is the SELECTED character's
+/// Feed the glue booth from the roster: the scene is the SELECTED character's
 /// race's (the ref's `SetBackgroundModel` on the enum fileString — Orc before a list arrives or
 /// with an empty account, the ref's OnLoad default), the look its geared enum record. Runs every
 /// frame (cheap compares inside `GluePreview` writers — the builder keys on value change).

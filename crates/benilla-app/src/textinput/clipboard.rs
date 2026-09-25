@@ -5,8 +5,7 @@
 //! hand back, paste reads the pasteboard and feeds `UiScript::paste`.
 //!
 //! **Why this is a held resource with a per-platform backend, and not `arboard::Clipboard::new()`
-//! per call.** Both halves of copy/paste were broken on Linux, for two independent reasons
-//! (decision 0702):
+//! per call.** Both halves of copy/paste were broken on Linux, for two independent reasons:
 //!
 //! 1. **On X11 the handle *is* the clipboard.** An X11 selection has no backing store: the owning
 //!    client serves the bytes on request, so the clipboard lives exactly as long as the connection

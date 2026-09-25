@@ -1,7 +1,7 @@
 //! The CPU clocks the instruments are denominated in — process, main thread, and machine.
 //!
 //! Three different questions, three different calls. [`process_cpu_secs`] is the campaign's
-//! currency (decisions 0711/0736/0717): *work per frame*, immune to the present grant.
+//! currency: *work per frame*, immune to the present grant.
 //! [`main_thread_cpu_secs`] narrows that to the serialized half — the part a hitch is actually made
 //! of. [`system_cpu_ticks`] says how loaded the machine was while we measured, so two legs can be
 //! told apart from two moods of the same leg (1157).
@@ -16,7 +16,7 @@
 /// report is written in ("250 % CPU at 59 fps" against 1.12.1's "100 % at 160"), so a probe that
 /// prints it can be compared against a reporter's number directly.
 ///
-/// Unix answers through `getrusage`, Windows through `GetProcessTimes` (decision 2219);
+/// Unix answers through `getrusage`, Windows through `GetProcessTimes`;
 /// elsewhere `None`: the probes print the field only where the platform answers.
 pub(crate) fn process_cpu_secs() -> Option<f64> {
     #[cfg(unix)]
@@ -112,7 +112,7 @@ pub(crate) fn process_faults() -> Option<(u64, u64)> {
 /// measurement.
 ///
 /// Unix answers through `clock_gettime`, Windows through `GetThreadTimes` on the calling
-/// thread's pseudo-handle — the same "whichever thread calls" contract (decision 2219);
+/// thread's pseudo-handle — the same "whichever thread calls" contract;
 /// elsewhere `None`, like its twin.
 pub(crate) fn main_thread_cpu_secs() -> Option<f64> {
     #[cfg(unix)]
@@ -165,7 +165,7 @@ pub(crate) fn main_thread_cpu_secs() -> Option<f64> {
 /// than wall time, so it shrugs off the scheduling delay that makes frame time useless under load
 /// — but it is not immune. The same LBRS pin leg, same binary, same day, read **25.93** while two
 /// other slots ran `cargo test --workspace` (load 20-32 on 14 cores) and **18.80-20.12** on a quiet
-/// machine: a ~35 % inflation, far outside the ±0.4 band the campaign reasons in (0736). Cache and
+/// machine: a ~35 % inflation, far outside the ±0.4 band the campaign reasons in. Cache and
 /// memory-bandwidth contention is work we genuinely do; `getrusage` counts it and cannot tell us
 /// it was someone else's fault.
 ///
@@ -237,8 +237,8 @@ pub(crate) fn system_cpu_ticks() -> Option<(u64, u64)> {
 
 /// CPU seconds consumed so far by **every thread of this process, by name** — the split of
 /// [`process_cpu_secs`] that says *which* thread a tax landed on. A frame's `cpu_ms` rose by
-/// ~1.8 ms under vsync with no system growing on a sampled profile and no thread spinning
-/// (decision 1947): the number that resolves that is per-thread CPU across a window, which
+/// ~1.8 ms under vsync with no system growing on a sampled profile and no thread spinning:
+/// the number that resolves that is per-thread CPU across a window, which
 /// no sampler reports and this call does.
 ///
 /// macOS only (`task_threads` + `thread_info(THREAD_BASIC_INFO)`, names through

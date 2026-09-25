@@ -2,7 +2,7 @@
 //! to what it *means* for a focused EditBox — an engine [`EditAction`], or one of the three
 //! clipboard operations (kept host-side: they need the OS pasteboard). The engine owns what each
 //! action *does* (the byte-verified box law); this module owns only which chord means which
-//! action on which OS — the director's "everything OS-native" call (decision 0301).
+//! action on which OS — the director's "everything OS-native" call.
 //!
 //! The Windows/Linux table doubles as the reference law where the 1.12 client had a chord at all
 //! (the key handler `0x77b160`: Ctrl+arrows word-granular, Ctrl+A/C/X/V, the Ctrl/Shift+Insert +
@@ -12,7 +12,7 @@
 //!
 //! One rule spans both of those platforms and is easy to miss: **AltGr is not Ctrl**. Windows and
 //! Linux both deliver AltGr as Ctrl+Alt, and European layouts type real letters with it, so the
-//! Ctrl letter chords all exclude it (decision 0702) — see [`chord_pc`].
+//! Ctrl letter chords all exclude it — see [`chord_pc`].
 
 use benilla_ui::script::{EditAction, EditUnit};
 use bevy::input::keyboard::KeyCode;
@@ -52,7 +52,7 @@ pub(crate) fn chord(key: KeyCode, m: Mods, mac: bool) -> Option<Chord> {
 
 /// macOS: the Cocoa text-field law. Option = word, Cmd = line edge (moves and deletes alike);
 /// Cmd+A/C/X/V; plain Up/Down = history recall, Shift/Cmd'd Up/Down = the line edges. The
-/// Ctrl-plane (Cocoa's Emacs set: Ctrl+A/E/K…) is deliberately unbound — decision 0301.
+/// Ctrl-plane (Cocoa's Emacs set: Ctrl+A/E/K…) is deliberately unbound.
 fn chord_mac(key: KeyCode, m: Mods) -> Option<Chord> {
     use EditUnit::{Char, Edge, Word};
     let mv = |unit, back| {
@@ -178,7 +178,7 @@ fn chord_pc(key: KeyCode, m: Mods) -> Option<Chord> {
         // the character is simply untypeable in chat. Both platforms' own edit controls resolve it
         // this way (Ctrl+Alt+A is not Select All anywhere AltGr exists), and the char-input branch
         // in `input.rs` already lets the AltGr plane through for exactly this reason; the chord
-        // table has to agree with it or it just intercepts the key first. Decision 0702.
+        // table has to agree with it or it just intercepts the key first.
         KeyCode::KeyA if m.ctrl && !m.alt => Some(Chord::Edit(EditAction::SelectAll)),
         KeyCode::KeyC if m.ctrl && !m.alt => Some(Chord::Copy),
         KeyCode::KeyX if m.ctrl && !m.alt => Some(Chord::Cut),
@@ -363,7 +363,7 @@ mod tests {
 
     /// AltGr — delivered as Ctrl+Alt on both Windows and Linux — types real letters on European
     /// layouts (`ą`/`ć`/`ź` on a Polish one), so it must fall through to character input rather
-    /// than being swallowed as the Ctrl clipboard chord. Regression for decision 0702.
+    /// than being swallowed as the Ctrl clipboard chord. Regression for.
     #[test]
     fn altgr_letters_are_not_clipboard_chords() {
         const ALTGR: Mods = Mods {

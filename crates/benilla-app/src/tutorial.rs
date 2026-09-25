@@ -1,4 +1,4 @@
-//! The tutorial system (decision 1976; the reference's `[0x4b5150, 0x4b5a60)`): the two
+//! The tutorial system (the reference's `[0x4b5150, 0x4b5a60)`): the two
 //! bit banks, the fire-once trigger, the acknowledge-and-send setter, the timers, the popup
 //! sound, and the trigger sites the app can produce — everything behind the stock
 //! `TutorialFrame.xml`.
@@ -332,7 +332,7 @@ fn feed_tutorials(
             vec![ScriptValue::Int(i64::from(published))],
         );
     }
-    // **The bank is owed to every VM, not to the process** (decision 2131). What the acknowledged
+    // **The bank is owed to every VM, not to the process**. What the acknowledged
     // bank holds is the app's; whether a VM has been *told* it is that VM's, so the memory sits
     // behind a [`crate::ui_script::VmMemo`] and expires with the session it was written against
     // (1290/1291 — a `/reload` is a logout and a login back to back). A plain "changed since the
@@ -581,7 +581,7 @@ impl Plugin for TutorialPlugin {
                     run_world_enter_cascade.before(feed_tutorials),
                     watch_windows.before(feed_tutorials),
                     watch_self.after(on_world_enter).before(feed_tutorials),
-                    // **Not before the in-game UI exists** (decision 2232). This is the one feed
+                    // **Not before the in-game UI exists**. This is the one feed
                     // in 2226's 29-system audit that could still lose a login's own payload:
                     // `run_world_enter_cascade` triggers WELCOME and QUESTGIVERS the moment
                     // `SelfPlayer` exists, a 0-delay `trigger` pushes straight into `fired`, and
@@ -765,7 +765,7 @@ mod tests {
             .unwrap()
     }
 
-    /// **The bank is owed to every VM** (decision 2131) — the `/reload` bug, reproduced.
+    /// **The bank is owed to every VM** — the `/reload` bug, reproduced.
     ///
     /// `ReloadUI()` is `end_ui_session` + the entry load back to back (1290/1291), and only the
     /// first of those mints a VM: the world-entry path that fills the banks
@@ -825,7 +825,7 @@ mod tests {
         assert!(enabled(&mut app), "a moved bank reaches the live VM");
     }
 
-    /// **The login's own tutorials wait for an interface** (decision 2232) — built on the REAL
+    /// **The login's own tutorials wait for an interface** — built on the REAL
     /// plugin, so it fails if the gate is taken off the registration rather than off a copy of it.
     ///
     /// `TUTORIAL_TRIGGER` has no [`crate::ui_script::VmMemo`] behind it: `trigger` sets the bank

@@ -1,4 +1,4 @@
-//! **The game's WGSL, compiled into the binary** (decision 1175).
+//! **The game's WGSL, compiled into the binary**.
 //!
 //! The five shaders under `src/shaders/` draw the *game's* own surface — the UI quad lane, the
 //! glue screen's additive pass, and the three gamma passes. 1171 moved them out of the engine's

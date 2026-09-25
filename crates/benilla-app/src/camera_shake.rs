@@ -1,5 +1,5 @@
 //! **Camera shake** — the thump a heavy creature's footfall puts through the camera, the one-off
-//! jolt as its body lands, and the jolt a spell effect puts through it (B298; decisions 1540/1849).
+//! jolt as its body lands, and the jolt a spell effect puts through it.
 //!
 //! **Four producers, two id spaces, one evaluator.** Every producer ends at the same spawner —
 //! `AddShake(id, worldPos)` (`0x511d40`), whose five call sites are the whole population (proven by
@@ -19,7 +19,7 @@
 //! - **`SpellVisualKit` field 14** (`kit+0x38`, the `ShakeID` column) → once per kit play, via
 //!   [`SpellKitShake`] and [`fire_kit_shakes`], which carries the mechanism and the one deviation.
 //! - **the `$SHK` animation event** → its payload *is* a group id, fired ungated at the event's own
-//!   bone-transformed point — the fired key's own, carried on the event (decision 1904).
+//!   bone-transformed point — the fired key's own, carried on the event.
 //!
 //! **`$SHK` is decoded by exactly two handlers**, hanging off the GameObject (typemask `0x20`,
 //! `0x5f3e20`) and DynamicObject (`0x40`, `0x5d58c0`) trampolines — the dword `0x4b485324` occurs
@@ -376,7 +376,7 @@ fn fire_shakes(
             }
         }
         // The planted foot: the FIRED key's own point, resolved once by the scanner exactly as
-        // the kernel snapshots it (decision 1904), not a by-4CC re-find of the marker table. The
+        // the kernel snapshots it, not a by-4CC re-find of the marker table. The
         // difference is real — 75 shipped models author some 4CC more than once at different
         // points — and it is the same quantity the decal derives.
         let foot = ev.pos.unwrap_or_else(|| transform.translation());
@@ -387,8 +387,8 @@ fn fire_shakes(
     }
 }
 
-/// Fire the camera shake a spell-visual kit's field 14 names — the **spell-side producer**
-/// (decision 1849), the counterpart of `crate::sound::spell`'s kit-sound route.
+/// Fire the camera shake a spell-visual kit's field 14 names — the **spell-side producer**,
+/// the counterpart of `crate::sound::spell`'s kit-sound route.
 ///
 /// One shake per kit play, unconditionally: the reference reaches it from the first-created effect
 /// node's one-time arm pass (`0x620e11`, gated on that node's flags snapshot carrying bit `0x10`)
@@ -477,7 +477,7 @@ fn suspended(mv: Option<&MovementState>, spline: Option<&Spline>) -> bool {
 /// Runs **after** the camera is seated, which is what makes the falloff honest: `control` rewrites
 /// the base pose every frame, so the transform this reads is the un-shaken eye rather than last
 /// frame's shaken one. A zero offset writes nothing at all, preserving the camera's bit-equality
-/// no-op gate (decision 1362) — a still camera stays bit-stable and its propagation stays quiet.
+/// no-op gate — a still camera stays bit-stable and its propagation stays quiet.
 ///
 /// **The body frame and both suspend gates come from the FOLLOWED unit** — `[cam+0x88/0x8c]` in
 /// the reference, never `0x468550` (the active player). Ordinarily they are the same object; under

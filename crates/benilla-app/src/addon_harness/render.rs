@@ -185,7 +185,7 @@ pub const MAX_NAMED_FRAMES: usize = 6;
 /// | `OpenBackpack()` | Bagnon replaces it — and with an *open*, not a toggle, unlike its `ToggleBackpack`/`OpenAllBags` |
 /// | `CooldownFrame_SetTimer` on a real button | `!OmniCC` hooks exactly this global; its text exists only while a cooldown runs |
 /// | `ActionButton_Update` | zBar, zBarEx, CT_BarMod |
-/// | a shown `GameTooltip` | the hover class (decision 1220) — left SHOWN, where the UI probe hides it |
+/// | a shown `GameTooltip` | the hover class — left SHOWN, where the UI probe hides it |
 ///
 /// Then ten ticks, because a great deal of addon painting happens on the first `OnUpdate` —
 /// OmniCC's countdown text is written there and nowhere else, so a probe that never ticked would

@@ -53,7 +53,7 @@ pub struct ProbeOutcome {
 /// Wrap a caller's chunk so a raise comes back as a value instead of killing the probe.
 ///
 /// **`pcall` + `tostring`, and only the FIRST result.** Multi-return would need `table.getn` or
-/// `select`, and this VM is deliberately 5.0-shaped (decisions 1194/1215) — a probe that depended
+/// `select`, and this VM is deliberately 5.0-shaped — a probe that depended
 /// on which of those the dialect layer publishes would be an instrument with a dialect bug in it.
 /// A caller that wants more concatenates its own string, which is what `..` is for.
 fn wrapped(chunk: &str) -> String {
@@ -115,7 +115,7 @@ pub fn probe(root: &Path, name: &str, steps: &[Step]) -> Option<ProbeOutcome> {
     // `None` **saved-variable** roots: a probe must never read or write the director's real ones,
     // for the same reason the survey does not call `finish_ui_load` (1213 §4). The AddOns root is
     // passed, exactly as [`super::survey_one`] passes it — a probe VM that answers `MISSING` to
-    // every `LoadAddOn` is not the VM the row came from (decision 2102).
+    // every `LoadAddOn` is not the VM the row came from.
     script.register_addons(registry, Some(root.to_path_buf()), None, None);
     super::seat_a_session(&mut script);
     let _ = crate::ui_script::load_default_ui(&script);

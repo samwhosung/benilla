@@ -17,7 +17,7 @@
 //! platforms use winit's `CursorIcon::Custom` (which works there), swapped on mode change; their
 //! hide-on-look goes through `CursorOptions.visible`, handled in `player::control`.
 //!
-//! **The held cursor payload** (decision 0216 §5): while `UiScript::cursor_payload()` holds a
+//! **The held cursor payload**: while `UiScript::cursor_payload()` holds a
 //! payload with a resolved icon, the HARDWARE cursor becomes that icon instead of the classified
 //! mode — the real client composites the item's `Interface\Icons\…` art into its drag bitmap
 //! (`0x523840`) and uploads it via the same `SetHardwareCursor` path the mode art uses
@@ -36,7 +36,7 @@ use bevy::prelude::*;
 /// convention), any arm — `None` if nothing is held or that arm's icon hasn't resolved yet
 /// (either way, the caller falls back to the mode cursor).
 ///
-/// **`covered` — the loading cover drops the overlay** (decision 1990, VERIFIED). The reference's
+/// **`covered` — the loading cover drops the overlay** (VERIFIED). The reference's
 /// world transition ends `0x401900 → 0x495920 → 0x6e4940` with `0x523d20(1)` + `0x523c20(1)`:
 /// cursor index **1**, the plain arrow, with any item/spell overlay dropped, set *before* the
 /// screen goes up. Without this a portal taken with an item on the cursor showed the item's icon
@@ -53,7 +53,7 @@ fn payload_icon(script: &benilla_ui::script::UiScript, covered: bool) -> Option<
         CursorPayload::Action(a) => a.texture,
         CursorPayload::Macro(m) => m.texture,
         CursorPayload::PetAction(p) => p.texture,
-        // Mode 10 — the stabled pet's family icon (decision 1677). Always present: a non-empty
+        // Mode 10 — the stabled pet's family icon. Always present: a non-empty
         // icon path is the grab's own gate.
         CursorPayload::StablePet(p) => Some(p.texture),
         // Mode 2 (1965) — the coin bitmap by magnitude, `GetCoinIcon`'s own table.
@@ -70,7 +70,7 @@ fn payload_icon(script: &benilla_ui::script::UiScript, covered: bool) -> Option<
 /// Box-downsample a raw RGBA8 image (top-to-bottom raster order —
 /// [`benilla_assets::WorldAssets::decode_rgba`]'s layout) to a fixed 32×32 buffer: each output
 /// texel averages a `(w/32)×(h/32)` block of the source. Vanilla item icons are 64×64 — a clean
-/// 2×2 average per output texel (decision 0216 §5) — but this degrades gracefully for any other
+/// 2×2 average per output texel — but this degrades gracefully for any other
 /// source size.
 fn box_downsample_32(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
     const OUT: u32 = 32;
@@ -130,7 +130,7 @@ const CURSOR_STEMS: &[&str] = &[
     "UnableSpeak",
     "Pickup",
     "UnablePickup",
-    // The loot leg's triple pouch (0965): effective auto-loot on (0961's setting XOR shift).
+    // The loot leg's triple pouch: effective auto-loot on (0961's setting XOR shift).
     "LootAll",
     "UnableLootAll",
     "Interact",
@@ -146,7 +146,7 @@ const CURSOR_STEMS: &[&str] = &[
     "Skin",
     "UnableSkin",
     "Repair", // the repair-mode base cursor (never grayed — the shipped UnableRepair is unreachable)
-    // The data-driven GameObject cursors (decision 0236, `0x5f8760`): a mailbox's Mail, a lock's
+    // The data-driven GameObject cursors (`0x5f8760`): a mailbox's Mail, a lock's
     // Mine / GatherHerbs (grayed out of reach), a picked lock's PickLock (never grayed).
     "Mail",
     "UnableMail",
@@ -173,7 +173,7 @@ fn cursor_path(stem: &str) -> String {
 #[derive(Resource, Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub(crate) struct DisplayedCursor(pub(crate) crate::target::WorldCursor);
 
-/// Resolve this frame's displayed cursor — **one sticky mode with two writers** (decision 1064).
+/// Resolve this frame's displayed cursor — **one sticky mode with two writers**.
 ///
 /// The reference has exactly one cursor-mode cell and everything that wants a cursor calls
 /// `CursorSetMode` on it. Two things do:
@@ -212,12 +212,12 @@ fn drive_displayed_cursor(
 
     // A VM memo — the restore edge below is armed by `take_cursor_write`, a VM read — but unlike
     // every other feed this system still drives the cursor with **no VM at all** (the character
-    // screen: the VM lives for one login, decision 1290). `get_for` is the shape for exactly that:
+    // screen: the VM lives for one login). `get_for` is the shape for exactly that:
     // no VM is a session in its own right, so the base restore re-arms once on each side of the
     // glue phase instead of every frame inside it.
     let last = last.get_for(script.as_deref());
 
-    // **Under the loading cover the cursor is the plain arrow** (decision 1990, VERIFIED). The
+    // **Under the loading cover the cursor is the plain arrow** (VERIFIED). The
     // reference's transition parks cursor index **1** at `0x6e49f5`/`0x6e49ff` before raising the
     // screen; ours is parked here every covered frame instead of once, which reads the same because
     // the cover has already taken the input plane and nothing can write the mode under it. Ahead of
@@ -246,8 +246,8 @@ fn drive_displayed_cursor(
     // **not** Point while targeting.
     //
     // Note what this blue does NOT mean: it is not a validity verdict. It says "a spell is armed",
-    // not "this item is a legal target" — no hover-time item verdict exists anywhere in 1.12
-    // (decision 1055), so valid and invalid food look identical here, exactly as they do in the
+    // not "this item is a legal target" — no hover-time item verdict exists anywhere in 1.12,
+    // so valid and invalid food look identical here, exactly as they do in the
     // reference.
     let repair = script.as_ref().is_some_and(|s| s.repair_mode());
     let base = if repair {
@@ -264,7 +264,7 @@ fn drive_displayed_cursor(
     {
         // An armed **gift wrap** parks the base at Cast(2) for the same reason a targeting spell
         // does, and by the same act: `0x5edea0`'s three calls are `LockItem`, **`SetCursorBaseMode(2)`**
-        // and `CursorSetMode(2)` (decision 1934). Both cells, deliberately — the displayed one so the
+        // and `CursorSetMode(2)`. Both cells, deliberately — the displayed one so the
         // cursor changes at the click, the BASE one so it survives the pointer crossing the world,
         // where the classifier would otherwise write its own verdict over it. Setting only the
         // displayed mode would lose the wrap cursor the moment the mouse left the bag.
@@ -372,7 +372,7 @@ mod other {
     #[derive(Resource, Default)]
     pub(super) struct CursorImages(HashMap<String, Handle<Image>>);
 
-    /// Held-payload icon path → its decoded 32×32 hardware cursor (decision 0216 §5), built
+    /// Held-payload icon path → its decoded 32×32 hardware cursor, built
     /// lazily on first use (unlike [`CursorImages`]'s fixed startup preload — the icon set is far
     /// too large to preload) and cached so a repeated pickup never re-decodes.
     #[derive(Resource, Default)]
@@ -471,7 +471,7 @@ mod other {
 
     /// The shared `CustomCursor::Image` insert — hotspot `(0, 0)`: the vanilla mode cursors' active
     /// tip is their top-left pixel, and the held-payload icon is downsampled to match that same
-    /// top-left hotspot convention (decision 0216 §5).
+    /// top-left hotspot convention.
     fn set_custom_cursor(commands: &mut Commands, window: Entity, handle: Handle<Image>) {
         commands
             .entity(window)
@@ -507,7 +507,7 @@ mod macos {
     /// in `drive`'s param list (the plugin registers `drive` from the parent module).
     pub(super) struct NativeCursors(HashMap<&'static str, Retained<NSCursor>>);
 
-    /// Held-payload icon path → its built 32×32 `NSCursor` (decision 0216 §5) — the mac twin of
+    /// Held-payload icon path → its built 32×32 `NSCursor` — the mac twin of
     /// [`super::other::PayloadCursorImages`], built lazily on first use and cached by path.
     pub(super) struct PayloadCursors(HashMap<String, Retained<NSCursor>>);
 

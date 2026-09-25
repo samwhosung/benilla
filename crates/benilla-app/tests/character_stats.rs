@@ -4,7 +4,7 @@
 //!
 //! That gap is why this file exists. The character sheet's whole buff-decomposition surface — the
 //! green number, the red number, the `(base +x -y)` tooltip — sat broken from the day it shipped
-//! (B165, B251) because the four `POSSTAT`/`NEGSTAT`/`RESISTANCEBUFFMODS*` descriptor arrays were
+//! because the four `POSSTAT`/`NEGSTAT`/`RESISTANCEBUFFMODS*` descriptor arrays were
 //! decoded as f32 when the wire carries INT, so every real buff arrived as a rounded `0` and every
 //! row took its "nothing is modifying this" leg. Both gates were green throughout: the bindings'
 //! own unit tests fed the snapshot directly, and nothing ever ran the Lua that colours the row.
@@ -13,7 +13,7 @@
 //! and `MagicResTextN` actually carry after a repaint, colour escapes included. Three shapes per
 //! family — untouched (plain), buffed (green), debuffed (red) — plus the tooltip's base arithmetic,
 //! which is the guard for `UnitStat`'s first return being the RAW field rather than a pre-subtracted
-//! one (decision 1397: the ref Lua subtracts `posBuff`/`negBuff` itself, so a pre-subtracted first
+//! one (the ref Lua subtracts `posBuff`/`negBuff` itself, so a pre-subtracted first
 //! return deducts the buff twice — a defect the f32 bug was hiding).
 
 mod common;
@@ -73,7 +73,7 @@ const RED: &str = "|cffff2020";
 /// A level-60 body carrying one of each case: strength heavily geared (+105), agility cursed
 /// (−12), stamina untouched, and the same three shapes across the resistance schools. The negative
 /// halves are the wire words an **x86**-hosted server sends; an arm64 host saturates a debuff to a
-/// flat `0` on the way out (decision 1397), which is exactly why the red leg has to be exercised
+/// flat `0` on the way out, which is exactly why the red leg has to be exercised
 /// here and cannot be exercised against the local deploy.
 fn stats() -> UnitCombatStats {
     UnitCombatStats {

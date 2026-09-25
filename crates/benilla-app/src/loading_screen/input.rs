@@ -123,7 +123,7 @@ pub(crate) struct CoverInput;
 /// back dead after a teleport, and the first click would land nowhere, which is the same defect in
 /// the other direction.
 ///
-/// # `set_physical_cursor_position` MOVES THE MOUSE (decision 2090)
+/// # `set_physical_cursor_position` MOVES THE MOUSE
 ///
 /// The load-bearing fact, because the name does not say it and getting it wrong shipped a bug for
 /// months: **`Window::set_physical_cursor_position` is not "tell bevy where the pointer is", it is
@@ -502,7 +502,7 @@ mod tests {
         );
     }
 
-    /// **The hand-back never invents a position** (decision 2090). Writing the window's cursor
+    /// **The hand-back never invents a position**. Writing the window's cursor
     /// position is a hardware warp, so the cover may only write one it knows is still true — which
     /// is the difference between handing the pointer back and dragging it across the player's
     /// screen. Three cases, one harness: winit's fresher answer wins; a departed pointer and an

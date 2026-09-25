@@ -1,5 +1,5 @@
 //! **What kind of run is this, and whose** — the always-present layer, on the player's side of the
-//! `dev` seam (decisions 0026 / 1173, built in 1174).
+//! `dev` seam (built in 1174).
 //!
 //! Everything here answers a question about *the run itself*, and every answer has a
 //! **player-faithful default**: nobody is driving the camera, the client starts at the login
@@ -31,7 +31,7 @@ use bevy::prelude::*;
 #[derive(Resource)]
 pub(crate) struct CaptureMode;
 
-/// The rig's derived character name (decision 0651), when `$WOW_RIG` names a body.
+/// The rig's derived character name, when `$WOW_RIG` names a body.
 ///
 /// Inserted by `capture::ProbeRigPlugin` at build time; absent otherwise — which is the player
 /// answer, and the answer in any run the rig is not driving. The character-select roster reads it
@@ -75,7 +75,7 @@ pub(crate) fn capture_ui_opted_in() -> bool {
 /// The player answer is `false`, and it is the default: with neither set the client opens at the
 /// login screen and waits for somebody to type. Setting both says *"log in without waiting for me
 /// to type"* — and **that is the only thing it says.** It is not a claim about who is in the room;
-/// [`unattended`] is the fact for that, and keeping the two apart is decision 1769. There is no
+/// [`unattended`] is the fact for that, and keeping the two apart is. There is no
 /// default account: one credential without the other is a typed login, and `$WOW_CHAR` alone is
 /// the roster's fast path after one (`char_select`), not a login.
 pub(crate) fn env_login() -> bool {
@@ -109,10 +109,10 @@ pub(crate) fn env_login() -> bool {
 /// and an ad-hoc probe run (`docs/CONTRIBUTING.md`, "Running it unattended") all pass
 /// `WOW_UNATTENDED=1`.
 ///
-/// Read by whatever may act *instead of* a person: the lost-session verdict (decision 1262 — the
+/// Read by whatever may act *instead of* a person: the lost-session verdict (the
 /// session-loss readers never call this directly, [`crate::net::DisconnectedMessage::new`] asks
 /// once at the wire edge and every reader acts on the verdict it carries) and the two `FATAL`
-/// exits that keep a driverless run from burning its wall-clock on a dialog (decision 1371).
+/// exits that keep a driverless run from burning its wall-clock on a dialog.
 pub(crate) fn unattended() -> bool {
     ["WOW_UNATTENDED", "WOW_CAPTURE", "WOW_RIG"]
         .iter()
@@ -167,8 +167,8 @@ pub(crate) fn start_state() -> crate::char_select::ClientState {
 
 /// **Does this build offer developer affordances at all?** `false` in a player build.
 ///
-/// The generalisation of 1176's one-door rule, and the thing that record should have written
-/// (decision 1179). A dev affordance does not have to live in a dev module: the world map's
+/// The generalisation of 1176's one-door rule, and the thing that record should have written.
+/// A dev affordance does not have to live in a dev module: the world map's
 /// Alt-click jump is in `ui_world_map`, the `/castvis` family is in `ui_chat`, the dev key plane's
 /// cost is in `bindings`. None of them names a dev root, so none of them fails to compile, and all
 /// of them shipped to players in 1174 exactly as free-fly did.
@@ -189,7 +189,7 @@ pub(crate) fn dev_affordances() -> bool {
 /// module**, compiles clean with `--no-default-features`, and ships a live dev affordance to a
 /// player. That is exactly what happened: 1174 landed a green player build in which `Ctrl+Shift+F`
 /// still flew the camera through the world, `+G` still teleported the avatar, and `+M` still muted
-/// the game (decision 1176).
+/// the game.
 ///
 /// Routing every non-dev reader through here makes the whole plane dark at once rather than five
 /// keys at a time, and makes the next dev chord dark for free. The build gate cannot see this class
@@ -276,7 +276,7 @@ pub(crate) struct DeclaredIdentity {
 }
 
 /// The declaration, read off the project folder — `dev` only, the install resolver's own
-/// project-folder rung: a player build has no source tree to name (decision 1175), and no
+/// project-folder rung: a player build has no source tree to name, and no
 /// declared identity to keep.
 #[cfg(feature = "dev")]
 pub(crate) fn declared_identity() -> Option<DeclaredIdentity> {
@@ -348,7 +348,7 @@ fn suffix_of(character: &str) -> String {
 mod tests {
     use super::*;
 
-    /// **The dev plane has exactly one door** (decision 1176).
+    /// **The dev plane has exactly one door**.
     ///
     /// The player-build gate (`cargo build -p benilla --no-default-features`) catches a *symbol*
     /// crossing into a dev module. It cannot catch this: `benilla_world::modkeys::dev_chord` is
@@ -433,7 +433,7 @@ mod tests {
         );
     }
 
-    /// **Two questions, two facts** (decision 1769) — and the fixture is the line the director
+    /// **Two questions, two facts** — and the fixture is the line the director
     /// actually types, so a future merge of the two answers fails here rather than in their game.
     #[test]
     fn env_credentials_are_not_a_claim_about_who_is_in_the_room() {

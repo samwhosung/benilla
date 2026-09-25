@@ -1,4 +1,4 @@
-//! The delete confirm dialog (`CharacterDeleteDialog`, decision 0465) — the ref's typed-confirm:
+//! The delete confirm dialog (`CharacterDeleteDialog`) — the ref's typed-confirm:
 //! the 512×256 `UI-DialogBox` centered over the screen, `CONFIRM_CHAR_DELETE` naming the selected
 //! character, the alert icon, an edit box where typing `DELETE_CONFIRM_STRING` ("DELETE") enables
 //! Okay, and Okay/Cancel (`GlueDialogButtonTemplate` 200×40). Esc cancels, Enter confirms when
@@ -36,7 +36,7 @@ pub(super) struct DeleteDialog {
     pub(super) open: bool,
     /// The snapshotted delete target (guid) + its display line pieces (name, level, class name).
     target: Option<(u64, String, u8, &'static str)>,
-    /// What's been typed into the confirm box — a real [`EditBoxState`] (decision 0704), so it
+    /// What's been typed into the confirm box — a real [`EditBoxState`], so it
     /// has the caret, selection, Ctrl+A and clipboard every other field has. The ref's
     /// `letters="32"` cap is the box's own `max_letters`. (`pub(super)` for the shot instrument.)
     pub(super) typed: EditBoxState,
@@ -111,7 +111,7 @@ pub(super) fn drive_delete_dialog(
     )>,
     mut clipboard: NonSendMut<HostClipboard>,
     // One query: the window drives the glue scale, and its raw handle carries the `wl_display` the
-    // Wayland clipboard backend is built from (decision 0702).
+    // Wayland clipboard backend is built from.
     window: Query<
         (&Window, Option<&bevy::window::RawHandleWrapper>),
         With<bevy::window::PrimaryWindow>,
@@ -151,7 +151,7 @@ pub(super) fn drive_delete_dialog(
         dialog.spawned_s = s;
     }
 
-    // Typing: the shared law (decision 0704) — editing, caret, selection and the clipboard trio.
+    // Typing: the shared law — editing, caret, selection and the clipboard trio.
     // ENTER/ESCAPE come back unclaimed and are handled by the button/key block above.
     let mods = textinput::mods_now(&keys);
     let wl = textinput::wayland_display(window.iter().next().and_then(|(_, h)| h));

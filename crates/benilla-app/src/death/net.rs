@@ -1,4 +1,4 @@
-//! The death arc's packet handlers (decision 0308; in the net handler table since 2322, moved out
+//! The death arc's packet handlers (in the net handler table since 2322, moved out
 //! of the drain's death arm file) — the wire-fed [`DeathNet`] stores (the corpse marker and its
 //! guid latch, the reclaim clock, the resurrect offer, the spirit-healer confirm, the death
 //! durability notice) plus the granted movement-mode forward the server addresses to our own
@@ -104,7 +104,7 @@ fn on_session_end(In(_): In<SessionEvent>, mut death_net: ResMut<DeathNet>) {
 }
 
 /// OUR corpse streaming into range (a `TYPEID_CORPSE` create whose owner is us): remember its guid
-/// for the reclaim send (decision 0308 §5). The kind is exact ([`EntityKind::Corpse`] since 1706 —
+/// for the reclaim send. The kind is exact ([`EntityKind::Corpse`] since 1706 —
 /// it was `Other` while nothing rendered a corpse), and the owner field is corpse-only, so nothing
 /// else can match. Rides the `ObjectCreate` arm.
 ///
@@ -165,7 +165,7 @@ pub(crate) fn recheck_corpse(
     }
 }
 
-/// The corpse-to-bones swap destroys the corpse object under its guid (0308 §1); a stale guid must
+/// The corpse-to-bones swap destroys the corpse object under its guid; a stale guid must
 /// not ride a later reclaim. Rides the `ObjectDestroyed` arm.
 pub(crate) fn forget_corpse(guid: u64, death_net: &mut DeathNet) {
     if death_net.corpse_guid == Some(guid) {
@@ -216,13 +216,13 @@ fn resurrect_request(
 }
 
 /// `SMSG_SPIRIT_HEALER_CONFIRM` — the healer awaiting the XP-loss two-step's Accept. The message
-/// IS the announce (decision 1068): the healer's gossip re-sends it on every ask, and the
+/// IS the announce: the healer's gossip re-sends it on every ask, and the
 /// reference fires `CONFIRM_XP_LOSS` per arrival — so the generation bump is what re-shows a
 /// cancelled confirm, exactly the `SMSG_CORPSE_RECLAIM_DELAY` re-fire pattern above.
 fn spirit_healer_confirm(npc: u64, death_net: &mut DeathNet) {
     // Through [`DeathNet::ask_spirit_healer`], which the right-click's own bit-5 arm also calls —
     // the reference raises this dialog client-side and vmangos also pushes it, and one entry
-    // point is what keeps the two roads saying the same thing (decision 1861).
+    // point is what keeps the two roads saying the same thing.
     death_net.ask_spirit_healer(npc);
 }
 
@@ -247,7 +247,7 @@ fn durability_damage_death(log: &mut crate::ui_chat::ChatLog) {
     });
 }
 
-/// **The ack'd movement-mode family** (decision 0866) — root, water-walk, feather-fall, hover. The
+/// **The ack'd movement-mode family** — root, water-walk, feather-fall, hover. The
 /// server only ever addresses the controlling client's own mover; the guard keeps a stray relay
 /// harmless. Water-walk is additionally mirrored into [`DeathNet`], which reads it as a ghost-form
 /// cue — but the *mover* effect of every mode, this one included, is the controller's

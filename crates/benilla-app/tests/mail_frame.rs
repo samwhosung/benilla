@@ -260,7 +260,7 @@ fn opening_a_letter_shows_the_open_frame_and_queues_the_body() {
     assert!(s.take_errors().is_empty());
 }
 
-/// **The letter and the centre seat exclude each other, in BOTH arrival orders** (decision 1520,
+/// **The letter and the centre seat exclude each other, in BOTH arrival orders** (
 /// director-reported and ref-checked): with the mailbox at the left slot and the character sheet
 /// pushed to centre beside it (its pushable=2 row), clicking a mail item must EVICT the sheet —
 /// the letter's OnShow is the ref's own (`if GetCenterFrame() then HideUIPanel(...)`, ref
@@ -543,7 +543,7 @@ fn inbox_page_label_stays_empty_like_the_reference() {
     );
 }
 
-/// A runtime-shown child `<Frame>` renders its own `<Layers>` FontStrings (decision 1517).
+/// A runtime-shown child `<Frame>` renders its own `<Layers>` FontStrings.
 ///
 /// This pins a fact three window files spent months asserting the opposite of. `SendMailFrame`
 /// ships `hidden="true"` and is shown by the tab click; its title lives in its OWN Layers, not on
@@ -568,7 +568,7 @@ fn a_runtime_shown_pane_renders_its_own_layers() {
     );
 }
 
-/// The auction house's mail is a RECEIPT, not a letter (decision 1522). Before this the window
+/// The auction house's mail is a RECEIPT, not a letter. Before this the window
 /// showed exactly what the server wrote — `From: Unknown / Subject: 5529:0:2` over a body of
 /// `6C:10000:10000:25:500` — because nothing parsed it. The subject rewrite is the engine's
 /// (`ui_mail::invoice`); this is the pane, and it comes in two shapes off one set of seven values.
@@ -779,7 +779,7 @@ fn the_open_letters_ring_icon_is_masked_but_the_inboxs_is_not() {
 /// script present → fire → stop. Nothing downstream of it ever saw a character. The reference
 /// cannot do that — `CSimpleEditBox` replaces slot `+0x5c` with `0x77a900`, which asks about focus
 /// and declines (`0x77a956`) when another box owns it, and never chains to the base gate at all
-/// ([`benilla_ui`]'s `script::keyboard::is_editbox`, decision 2145).
+/// ([`benilla_ui`]'s `script::keyboard::is_editbox`).
 ///
 /// The one box that DID work is the assertion's control: the autocomplete box types, once per
 /// character, and the four that were dead now type too.
@@ -843,7 +843,7 @@ fn every_send_tab_box_takes_a_keystroke_not_just_the_one_with_an_onchar() {
 /// (`SendMailFrame_Update` → `GetSendMailItem`) painted the just-sent item straight back into the
 /// form it had blanked one line earlier. `UiScript::reset_compose_tab` is now `0x4acdc0(1)` whole —
 /// zero the globals, THEN tail-fire the three events — so there is no window in which the two
-/// disagree (decision 2145).
+/// disagree.
 #[test]
 fn the_compose_reset_clears_the_subject_and_the_attachment_together() {
     let _data = benilla_formats::wow_data_or_skip!();

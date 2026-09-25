@@ -503,7 +503,7 @@ fn a_hidden_weapon_draws_nothing() {
     assert!(app.world().resource::<EffectQuads>().draws.is_empty());
 }
 
-/// **The trail takes its WEARER's light, not the scene's** (decision 2086).
+/// **The trail takes its WEARER's light, not the scene's**.
 ///
 /// The draw runs inside the weapon model's own per-frame callback, during the wearer's model draw,
 /// so the enabled lights it inherits are the ones the M2 collector committed for that unit —

@@ -182,7 +182,7 @@ fn band_flags(r: Rect, viewport: Vec2) -> u8 {
 /// **The offending edge is ASSIGNED the boundary and its opposite derived from the size** — the
 /// law's own spelling (`bit2 → top = Y_hi; bottom = Y_hi − height`), and not the equivalent
 /// translate-by-the-gap this shipped with, because the two are not equivalent in `f32` and the
-/// difference is a whole plate jumping 19 px for one frame (decision 2172).
+/// difference is a whole plate jumping 19 px for one frame.
 ///
 /// The seed this returns is immediately re-tested by [`band_flags`] inside [`SmartBucket::solve`]
 /// (the per-node skip, `0x509bf0` mode 1), and the boundary test is a strict `<`/`>`, so a seed

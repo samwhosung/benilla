@@ -2,12 +2,12 @@
 //! thread notices the main-thread heartbeat has gone stale and shells the stock profiler
 //! (`/usr/bin/sample`) at our own PID, so an intermittent stall or teardown hang **diagnoses
 //! itself the next time it happens** — on anyone's run, no reproduction needed. **Except while
-//! an audio device is open** (decision 1857): `sample` suspends every thread of the task,
+//! an audio device is open**: `sample` suspends every thread of the task,
 //! CoreAudio's realtime IO thread included, and each suspended cycle is a crackle — the one
 //! the director heard on every desktop switch and world entry, because those are exactly the
 //! ≥600 ms main-thread stalls this watchdog fires on. In-frame sampling now waits for a run
 //! nobody is listening to; `WOW_STALL_SAMPLE=force` opts a sounding run back in, knowingly. Two bugs that
-//! each lost their reproduction motivated it (decision 0713): the ~1 s silent frame stalls at
+//! each lost their reproduction motivated it: the ~1 s silent frame stalls at
 //! the BWL pin, and the on-close beachball the director had to force-quit — where even the probe
 //! backstop's `process::exit(0)` can wedge, because libc `exit(3)` runs the same atexit teardown
 //! the hang may own. Samples land in `benilla-config/Diagnostics/` and the path prints on stderr
@@ -24,7 +24,7 @@
 //! `$WOW_CAPTURE`), and for one day in 1631 that turned the whole plugin off for exactly the runs
 //! that most need a liveness guarantee — an agent-driven run with nobody watching it. So the split
 //! is by concern, not by run: the watchdog thread and its `_exit` always run; the sample *file* is
-//! written only where there is a folder that may hold one. Decision 1637.
+//! written only where there is a folder that may hold one.
 //!
 //! Verification is end-to-end via two injectors (used by the 0713 probe rounds, kept as standing
 //! test affordances): `WOW_STALL_INJECT=<at_secs>:<ms>` sleeps the main thread mid-run, and
@@ -185,7 +185,7 @@ fn watchdog(dir: Option<std::path::PathBuf>) {
             // [`SAMPLE_GAP_MS`] of process uptime (caught by the 0713 injector runs).
             && (taken == 0 || now.saturating_sub(last_sample_ms) > SAMPLE_GAP_MS)
         {
-            // **Never while the speakers are live** (decision 1857). `sample` suspends the whole
+            // **Never while the speakers are live**. `sample` suspends the whole
             // task for each of its ~1000 snapshots — the CoreAudio IO thread and our realtime
             // render thread included — and coreaudiod times the client out: every stall this
             // watchdog sampled in a run with a device open was also a crackle ("client timeout"

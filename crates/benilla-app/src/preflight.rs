@@ -1,4 +1,4 @@
-//! The session preflight (decision 0649) — one always-on banner naming **what body we just logged
+//! The session preflight — one always-on banner naming **what body we just logged
 //! into**, plus loud warnings for the avatar states that silently invalidate a session's work.
 //!
 //! This is instrumentation for the *reader of the log*, not a game system. It exists because three
@@ -16,12 +16,12 @@
 //!    mask 0, enemy mask 0 — it is hostile to nothing and nothing is hostile to it. Any hostility,
 //!    reaction-colour, nameplate, aggro, threat, damage or drowning measurement taken with GM on is
 //!    simply wrong, quietly. It also silently suspends the **indoor dismount**: the outdoor-only
-//!    aura sweep is `!IsGameMaster()`-gated, so a GM rides into the Goldshire inn and stays mounted
-//!    (decision 0934). It is now **off** by default: [`crate::probe_shield`] keeps the body
-//!    alive without poisoning any of that (decision 0677), and this banner reports which it is.
+//!    aura sweep is `!IsGameMaster()`-gated, so a GM rides into the Goldshire inn and stays mounted.
+//! It is now **off** by default: [`crate::probe_shield`] keeps the body
+//!    alive without poisoning any of that, and this banner reports which it is.
 //! 3. **Movement is server-blocked** — rooted, stunned, confused, fleeing, or mid-taxi-flight. The
 //!    controller ignores input and the honest report is "the mover is broken".
-//! 4. **The run has no server at all** ([`offline_notice`], decision 0728). Capture mode passes
+//! 4. **The run has no server at all** ([`offline_notice`]). Capture mode passes
 //!    `NetPlugin { connect: false }`, so no IO thread is spawned and the drain receives nothing —
 //!    the whole packet path (`net::apply`, the movement wire, every `MSG_MOVE_*`) simply does not
 //!    execute. This one is the mirror image of the other three: they make a healthy client *look*
@@ -43,7 +43,7 @@
 //! `.character race` forced logout, a reconnect) because the state can have changed.
 //!
 //! The same audience — the reader of the log — is why [`benilla_world::build_id::banner`] exists.
-//! It is **not** registered here any more (decision 1179): this module is dev-only since 1174, and
+//! It is **not** registered here any more: this module is dev-only since 1174, and
 //! "which build produced this log" is the first thing a report from *someone else's machine* has to
 //! establish — which is precisely the player build. The banner now registers beside the stamp
 //! itself, in `lib::run`, where it is always compiled.
@@ -73,7 +73,7 @@ const PLAYER_FLAGS_GM: u32 = 0x0000_0008;
 /// The `UNIT_FIELD_FLAGS` bits that mean "the server is driving, or refusing to let you drive"
 /// (vmangos `UnitDefines.h`) — each is a distinct reason the **mover** looks broken.
 ///
-/// **PACIFIED and DISARMED used to sit in here and do not belong** (decision 1903): neither
+/// **PACIFIED and DISARMED used to sit in here and do not belong**: neither
 /// touches movement, and a banner telling a session "movement is server-blocked" because the
 /// character is disarmed sends someone hunting a mover bug that is not there. They moved to
 /// [`ABILITY_BLOCKERS`]. What is left is movement — and note they are **not one gate**: STUNNED
@@ -155,7 +155,7 @@ impl Plugin for PreflightPlugin {
 }
 
 /// Say out loud, once at startup, that this run has **no server** — so nobody reads its clean exit
-/// as evidence about code that never ran (module header §4, decision 0728).
+/// as evidence about code that never ran (module header §4).
 ///
 /// Deliberately a `warn!` rather than an `info!`. A netless run is completely normal and completely
 /// fine — it is what every visual capture wants — so this is not a complaint about the run. It is
@@ -174,7 +174,7 @@ fn offline_notice(net: Option<Res<crate::net::NetOffline>>) {
 }
 
 /// **Every `Camera2d` sharing a render target must carry the same `Msaa`** — checked out loud on
-/// the frame they spawn, because the failure is fatal, immediate, and names nobody (decision 1659).
+/// the frame they spawn, because the failure is fatal, immediate, and names nobody.
 ///
 /// Bevy's two prepare passes disagree about whether the sample count is part of a texture's
 /// identity. `view::prepare_view_targets` keys the **colour** target on `(target, usage, hdr,
@@ -264,7 +264,7 @@ fn report_session(
         state.armed_at = Some(time.elapsed_secs());
     }
     // **A session that ended disarms the wait** — after the arm, so the entry-and-death-in-one-drain
-    // race (decision 1262) resolves the way it does everywhere else: the dead session is the last
+    // race resolves the way it does everywhere else: the dead session is the last
     // word. Without this the latch outlives the session that armed it and the banner fires from the
     // glue screen, telling a future reader that "the avatar never streamed in" when the truth is
     // that nobody ever entered a world for it to stream into. A refused character login makes that
@@ -346,7 +346,7 @@ fn report_session(
         faction = store.0.unit_faction_template().unwrap_or(0),
         // A shielded body is good news, so it rides the banner rather than the warning ladder —
         // but it is still *stated*, because "can this thing die?" is the first question an
-        // unattended run needs answered (decision 0677).
+        // unattended run needs answered.
         shielded = match shield.report() {
             ShieldReport::Armed => ", SHIELDED (cannot die)",
             ShieldReport::Arming => ", shield arming",
@@ -364,7 +364,7 @@ fn report_session(
 ///
 /// All four clauses matter. Only a run that *asked* for GM off waits; only a body the shield
 /// actually commands (`probe<N>`) can have a `.gm off` in flight at all — on the director's own
-/// account `WOW_GM` is inert (0677), so waiting there would just delay a true warning; and the
+/// account `WOW_GM` is inert, so waiting there would just delay a true warning; and the
 /// grace expires, so a `.gm off` that never lands is still reported, one grace later.
 fn hold_for_gm_off(gm_flag_set: bool, wants_off: bool, shield: ShieldReport, waited: f32) -> bool {
     gm_flag_set
@@ -375,7 +375,7 @@ fn hold_for_gm_off(gm_flag_set: bool, wants_off: bool, shield: ShieldReport, wai
 
 /// Everything about this avatar that will quietly invalidate a session's work, worst first. Pure
 /// over the descriptor (plus the one piece of state that rides no descriptor field — the probe
-/// shield, decision 0677) so the whole ladder is unit-testable.
+/// shield) so the whole ladder is unit-testable.
 fn findings(
     fields: &benilla_protocol::messages::ObjectFields,
     shield: ShieldReport,
@@ -427,14 +427,14 @@ fn findings(
              `CheckAreaExploreAndOutdoor` drops outdoor-only auras only `if (… && \
              !IsGameMaster())`, so a GM rides into a building and stays mounted (decision 0934). {}",
             match shield {
-                // GM mode is the DEFAULT (0679) — it is what stops a parked body being mobbed, and
+                // GM mode is the DEFAULT — it is what stops a parked body being mobbed, and
                 // the shield is what makes dropping it safe. So this warning is expected on most
                 // runs, and its job is to make sure nobody measures hostility through faction 35.
                 ShieldReport::Arming | ShieldReport::Armed =>
                     "This is the default. Re-run with WOW_GM=off for those readings — safe, \
                      because the probe shield (decision 0677) keeps the body alive without it.",
                 // Not a probe body — a player's account, or a plain test account. `WOW_GM` would be
-                // inert here (the shield only ever commands `probe<N>`, 0677), and saying otherwise
+                // inert here (the shield only ever commands `probe<N>`), and saying otherwise
                 // sends the reader after a switch that does nothing. The state is also PERSISTED:
                 // vmangos saves it in `characters.extra_flags` bit 0 and `GM.LoginState = 2`
                 // restores it, so it stays on across logins until somebody turns it off.
@@ -523,11 +523,11 @@ mod tests {
             GM_OFF_WAIT_SECS + 0.1
         ));
 
-        // Nothing else ever waits. GM mode is the DEFAULT (0679): a run that did not ask for it off
+        // Nothing else ever waits. GM mode is the DEFAULT: a run that did not ask for it off
         // must be warned immediately, not three seconds late…
         assert!(!hold_for_gm_off(true, false, ShieldReport::Armed, 0.4));
         // …a body the shield does not command (the director's own account) can have no `.gm off`
-        // in flight at all, so waiting there would only delay a true warning (0677)…
+        // in flight at all, so waiting there would only delay a true warning…
         assert!(!hold_for_gm_off(true, true, ShieldReport::NotOurs, 0.4));
         assert!(!hold_for_gm_off(true, true, ShieldReport::Disabled, 0.4));
         // …and with the flag already clear there is nothing to wait for.
@@ -546,7 +546,7 @@ mod tests {
         let dead = findings(&player(&[(MAXHEALTH, 60)]), ShieldReport::Armed);
         assert_eq!(dead.len(), 1);
         assert!(dead[0].contains("IS DEAD"));
-        // Ghost: health 1 and PLAYER_FLAGS_GHOST — the wire never shows both (decision 0308 §1).
+        // Ghost: health 1 and PLAYER_FLAGS_GHOST — the wire never shows both.
         let ghost = findings(
             &player(&[(HEALTH, 1), (MAXHEALTH, 60), (PLAYER_FLAGS, 0x10)]),
             ShieldReport::Armed,
@@ -590,10 +590,10 @@ mod tests {
 
     #[test]
     fn the_gm_warning_always_names_the_way_out() {
-        // GM mode is the default (0679), so this warning fires on nearly every probe run. Its whole
+        // GM mode is the default, so this warning fires on nearly every probe run. Its whole
         // job is that nobody measures hostility through faction 35 without being told how to stop —
         // and the old advice ("put it back on when you are done") must not come back, because a
-        // session that complies re-poisons every faction reading (0657).
+        // session that complies re-poisons every faction reading.
         let gm = player(&[
             (HEALTH, 60),
             (MAXHEALTH, 60),
@@ -611,7 +611,7 @@ mod tests {
             assert!(!line.contains("put it back on"), "{report:?}: {line}");
         }
         // …but the way out has to be one that WORKS on this body. `WOW_GM` only ever commands a
-        // probe account (0677), so on anyone else's — the director's own, which is exactly who
+        // probe account, so on anyone else's — the director's own, which is exactly who
         // rides into an inn and asks why they are still mounted — the switch is `.gm off`, typed.
         let not_ours = findings(&gm, ShieldReport::NotOurs);
         let line = not_ours
@@ -626,7 +626,7 @@ mod tests {
 
     #[test]
     fn the_gm_warning_names_the_indoor_dismount() {
-        // The consequence that cost a session (decision 0934): the outdoor-only aura sweep is
+        // The consequence that cost a session: the outdoor-only aura sweep is
         // `!IsGameMaster()`-gated server-side, so a GM never dismounts riding into a building — and
         // the client, whose mount lane is nothing but the MOUNTDISPLAYID watcher, has no say in it.
         let gm = player(&[

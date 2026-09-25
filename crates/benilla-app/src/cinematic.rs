@@ -59,7 +59,7 @@
 //!
 //! Three things, all released on the way out. The **camera** — its *pose* only; the projection is
 //! left alone, because a fly-by is framed by the world camera's own optics and the M2 record's
-//! `fov` reaches nothing on this path (decision 1711). Written after `control` has seated it, the
+//! `fov` reaches nothing on this path. Written after `control` has seated it, the
 //! same slot `apply_camera_shake` uses. The **streaming focus**, which has to follow the camera
 //! rather than the body, because a Tauren's shot opens 1741 yards from where the body stands and would
 //! otherwise fly over unstreamed terrain; and the **UI's cinematic flag**, which drives
@@ -404,7 +404,7 @@ fn take_trigger(
             .is_some_and(|c| !c.0.shots(id).is_empty());
         if !playable {
             // Nothing to play — ack on the spot rather than leaving the server flying a path
-            // nobody is watching (decision 0196).
+            // nobody is watching.
             warn!("cinematic: {id} names no shot we can play — acking it");
             ack(net.as_deref());
             continue;
@@ -729,7 +729,7 @@ fn feed_ui(
         return;
     };
     let playing = cine.is_playing();
-    // VM-scoped (decision 1290): the memo is memory *about a VM*, so a `/reload` mid-cinematic
+    // VM-scoped: the memo is memory *about a VM*, so a `/reload` mid-cinematic
     // resets it and the edge re-fires into the rebuilt frame tree — which is the whole point,
     // because the new tree's `CinematicFrame` is hidden and knows nothing about the shot still on
     // screen. A plain `Local` here would leave the letterbox down and ESC dead for the rest of a

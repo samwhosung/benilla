@@ -490,7 +490,7 @@ fn main() {
         "  loaded without a single load error : {loaded}/{}",
         reports.len()
     );
-    // **The reconciliation line, printed always** (decision 2155). `loaded` counts what RAISED;
+    // **The reconciliation line, printed always**. `loaded` counts what RAISED;
     // a manifest entry naming a file the package does not contain is not that — the reference logs
     // `Couldn't open %s` and carries on — and it used to be counted here. Every past record's
     // figure was the stricter one, so the stricter one is printed beside the honest one rather
@@ -798,14 +798,14 @@ fn main() {
     }
 
     // What actually STOPPED them — the ranked first error. Read this before the demand list: a
-    // wall 60 addons hit is worth more than a verb 60 addons would like (decision 1193).
+    // wall 60 addons hit is worth more than a verb 60 addons would like.
     println!("\n  what stopped them (addons whose FIRST load error was each):");
     for (err, count) in addon_harness::blockers(&reports).into_iter().take(12) {
         println!("    {count:>4}  {err}");
     }
 
-    // Templates an addon names in `CreateFrame(..., "Template")` that we have never declared
-    // (decision 1203). Its own list because it is invisible to every other number here: an
+    // Templates an addon names in `CreateFrame(..., "Template")` that we have never declared.
+    // Its own list because it is invisible to every other number here: an
     // unresolved template raises no load error, so the addon scores as a pass and paints nothing.
     let templates = addon_harness::template_demand(&reports);
     if !templates.is_empty() {
@@ -847,8 +847,8 @@ fn main() {
     // `--why <name>` now reads any row back by name.
     let methods = addon_harness::method_demand(&reports);
     if !methods.is_empty() {
-        // The header states BOTH limits, because the list read as a build queue and is not one
-        // (decision 1240). It counts addons that NAME the verb, which is neither "addons blocked
+        // The header states BOTH limits, because the list read as a build queue and is not one.
+        // It counts addons that NAME the verb, which is neither "addons blocked
         // by it" nor "call sites": its top three were once RegisterTabCompletion/IsModule/
         // IsModuleActive — AceConsole-2.0's and AceAddon-2.0's own methods on their own objects,
         // one library file replicated into 56 and 38 addons — and its fourth, EnableKeyboard, was
@@ -868,7 +868,7 @@ fn main() {
     // against every probe and stops at the first hit, so a verb wired to one class and forgotten on
     // its sibling comes back present: `MessageFrame:AddMessage` scored zero for as long as it
     // existed, answered by the ScrollingMessageFrame probe, while three corpus addons had
-    // `UIErrorsFrame:AddMessage` as their FIRST load error (decision 1228). These rows are the
+    // `UIErrorsFrame:AddMessage` as their FIRST load error. These rows are the
     // call sites whose receiver the survey could TYPE — from a `CreateFrame("Kind", …)` local, or
     // from the kind our own arena publishes that name as — asked against that kind alone.
     let by_kind = addon_harness::kind_method_demand(&reports);
@@ -928,7 +928,7 @@ fn main() {
             // Two lines, not one. The first is the message; the SECOND is mlua's first traceback
             // frame, and for the row this instrument is most often pointed at that frame is the
             // whole answer — `in local '(for generator)'` is what tells a generic-for
-            // (decision 1202) apart from any other call of a table value.
+            // apart from any other call of a table value.
             for line in err.lines().take(WHY_TRACEBACK_LINES) {
                 println!("        {}", line.trim());
             }

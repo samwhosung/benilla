@@ -1,4 +1,4 @@
-//! The minimap **ping** (decision 1596; the feature 0471 paused and this brings back).
+//! The minimap **ping** (the feature 0471 paused and this brings back).
 //!
 //! ## The pin
 //!
@@ -9,7 +9,7 @@
 //! cannot drift from the map, cannot lag the pan by a frame, and cannot survive a zoom change at
 //! the old scale: there is no second copy of the position to fall out of step with.
 //!
-//! That is the whole difference from the first attempt (decision 0453 / 0471), which stored the
+//! That is the whole difference from the first attempt, which stored the
 //! world point in the engine but drew the marker from **Lua** off a stale push; 1596 §2 has the
 //! autopsy.
 //!
@@ -41,7 +41,7 @@
 //! (`Interface\MiniMap\Ping\MinimapPing.mdx`, through `crate::ui_models`): the spinner on its
 //! global-sequence clock, the static centre, the ring on the looping Stand — the model's own
 //! bones, weight tracks and additive quads, on the pane's private clock that runs only while the
-//! frame is shown (decision 2007). The sprite this module used to draw in their place (1596/1599's
+//! frame is shown. The sprite this module used to draw in their place (1596/1599's
 //! byte-measured re-expression of those quads) is gone with it, and so is the world-map ping gap
 //! 1980 named: `WorldMapPing` is the same file on the map sheet.
 //!
@@ -71,7 +71,7 @@ struct LivePing {
     sender: u64,
 }
 
-/// The engine-owned ping state (decision 1596). Seated by a click (drained in the renderer, with
+/// The engine-owned ping state. Seated by a click (drained in the renderer, with
 /// that frame's geometry) or by a group member's `MSG_MINIMAP_PING`; announced by
 /// [`drive_minimap_ping`]; drawn by the stock `MiniMapPing` frame for exactly as long as that
 /// frame shows itself.
@@ -217,7 +217,7 @@ pub(super) fn register(app: &mut App) {
     );
 }
 
-/// A group member pinged (decision 1596). The wire carries raw world floats and the relay is
+/// A group member pinged. The wire carries raw world floats and the relay is
 /// stateless in the reference too — we seat them as the pin and the minimap derives the rest.
 /// The server only relays a ping between people who are grouped, and a ping from another map
 /// would be dropped by the renderer's own map test anyway.
@@ -251,7 +251,7 @@ mod tests {
         }
     }
 
-    /// **The first version's ping landed in the wrong place** (decision 1596 §2.1): the click
+    /// **The first version's ping landed in the wrong place**: the click
     /// arrives in UI units and the map's `px_per_yd` is in *window* px, and it divided one by the
     /// other. At the shipped default (0.9 uiScale on a 1080p window) the seam is ≈1.27, so every
     /// ping seated ≈27 % further from the player than the player clicked — worse the further out
@@ -322,7 +322,7 @@ mod tests {
         );
     }
 
-    /// **No proximity clear** (decision 1596 §2.2). The first version applied the client's 10-yd
+    /// **No proximity clear**. The first version applied the client's 10-yd
     /// `d² < 100` auto-clear to the party ping; that clear belongs to the `SMSG_GOSSIP_POI` marker
     /// (`0x6d99aa`–`0x6d9a4c`), and `MSG_MINIMAP_PING` has no C-side storage to clear at all.
     /// Standing on your own ping must not delete it — and a frame with no click seats nothing

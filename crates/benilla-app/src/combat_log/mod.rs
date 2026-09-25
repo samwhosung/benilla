@@ -313,7 +313,7 @@ fn on_level_up(In(ev): In<SessionEvent>, mut l: Sinks) {
     }
 }
 
-/// An honor award (decision 1512 — the arc's other inbound message, the inspect reply, is
+/// An honor award (the arc's other inbound message, the inspect reply, is
 /// `ui_honor`'s own handler): the combat-log line (name-resolved, so it queues) and the floating
 /// number, which are two different surfaces of one packet and are both the reference's. A
 /// DISHONORABLE kill arrives here too, carrying NEGATIVE honor — the floating text takes it

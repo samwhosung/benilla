@@ -4,12 +4,10 @@
 //!
 //! There are three parts, and the split is deliberate:
 //!
-//! - [`keymap`] — *which chord means what*, per OS. The one place Ctrl+V vs Cmd+V is decided
-//!   (decision 0301).
-//! - [`clipboard`] — *the OS pasteboard*, one held handle per process, per-platform backend
-//!   (decision 0702).
+//! - [`keymap`] — *which chord means what*, per OS. The one place Ctrl+V vs Cmd+V is decided.
+//! - [`clipboard`] — *the OS pasteboard*, one held handle per process, per-platform backend.
 //! - [`feed_key`] (here) — the glue between them and the **engine's** byte-verified box law
-//!   ([`EditBoxState`], decision 0704). It owns no editing semantics of its own.
+//!   ([`EditBoxState`]). It owns no editing semantics of its own.
 //!
 //! ## Why this module exists
 //!
@@ -19,7 +17,7 @@
 //! winit's `logical_key`, which is `Character("v")` for Ctrl+V, so **pasting into the login box
 //! typed a literal `v` into the password**. Four fields, four different laws, three of them wrong.
 //!
-//! Now the law is [`EditBoxState`]'s (pure, no Lua — decision 0704) and the *routing* is this
+//! Now the law is [`EditBoxState`]'s (pure, no Lua) and the *routing* is this
 //! module's, so a field gets the whole thing by owning an `EditBoxState` and calling [`feed_key`].
 //! The FrameXML path keeps its own dispatcher because it must also fire Lua handlers and route
 //! focus through the widget arena, but it reads the same [`keymap`] and the same [`clipboard`].
@@ -46,8 +44,8 @@ pub(crate) struct TextInputPlugin;
 
 impl Plugin for TextInputPlugin {
     fn build(&self, app: &mut App) {
-        // Held for the whole run: on X11 dropping the handle *is* clearing the clipboard
-        // (decision 0702). `NonSend` — no backend is `Sync`, NSPasteboard is main-thread-only.
+        // Held for the whole run: on X11 dropping the handle *is* clearing the clipboard.
+        // `NonSend` — no backend is `Sync`, NSPasteboard is main-thread-only.
         app.init_non_send_resource::<HostClipboard>();
     }
 }
@@ -153,8 +151,7 @@ pub(crate) fn feed_key(
     }
     // Plain character input. A command-modified char never types (Cmd/Ctrl+L must not insert "l"),
     // but Ctrl+Alt passes: that is AltGr, the plane European layouts type real characters with —
-    // the same guard the FrameXML feed uses, and the reason the chord table excludes AltGr too
-    // (decision 0702).
+    // the same guard the FrameXML feed uses, and the reason the chord table excludes AltGr too.
     if !(mods.sup || (mods.ctrl && !mods.alt)) {
         if let Some(text) = &ev.text {
             // C0 control characters are consumed-but-inert, as in the box's own `char_input`.
@@ -202,7 +199,7 @@ mod tests {
 
     /// The name box takes letters only — and the filter runs on **pasted** text too, which is the
     /// case the old hand-rolled screens could not express at all (they had no paste). Regression
-    /// for decision 0704.
+    /// for.
     #[test]
     fn letters_filter_applies_to_pasted_text() {
         assert_eq!(CharFilter::Letters.keep("Bob123"), "Bob");

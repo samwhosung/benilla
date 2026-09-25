@@ -60,7 +60,7 @@ pub(crate) struct PoiMarker {
     /// reference leaves `+0x18 Z` unwritten for the same reason).
     pub(crate) poi: Option<AreaPoi>,
     /// `Time<Real>` seconds at which the marker expires — meaningless while `poi` is `None`. Real,
-    /// not virtual: this is a wall-clock span like the corpse reclaim delay (decision 0846).
+    /// not virtual: this is a wall-clock span like the corpse reclaim delay.
     expires_at: f64,
 }
 
@@ -163,7 +163,7 @@ fn on_gossip_poi(
 /// `map_id` is the map the player is standing on, which is the only place the marker can mean
 /// anything — the wire carries no map field, and the reference reads its own current-map global at
 /// exactly this point. `now_secs` starts the marker's 8-minute clock (this module); it
-/// is the same real clock the corpse reclaim delay is stamped against (decision 0846).
+/// is the same real clock the corpse reclaim delay is stamped against.
 fn gossip_poi(
     poi: &benilla_protocol::messages::GossipPoi,
     marker: &mut PoiMarker,

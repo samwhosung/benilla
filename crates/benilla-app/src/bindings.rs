@@ -1,8 +1,8 @@
-//! **Key bindings** (decision 0997) — the one chord→command engine every rebindable input runs
+//! **Key bindings** — the one chord→command engine every rebindable input runs
 //! through, replacing the per-site hardcoded key reads (and the four independent copies of
 //! 0585's bare-binding modifier rule they carried).
 //!
-//! The split mirrors the CVar table (0954): the **string-domain truth** lives engine-side
+//! The split mirrors the CVar table: the **string-domain truth** lives engine-side
 //! ([`benilla_ui::script::keybind`] — the table the Key Bindings window's Lua edits
 //! synchronously), and this module derives the app's **dispatch view** from it whenever its
 //! generation moves: canonical chord strings parsed ([`chord`]) into an exact-match map.
@@ -10,14 +10,14 @@
 //! Dispatch (the [`latch_and_dispatch`] system, ordered inside [`crate::ui_script::UiInput`]
 //! right after the UI key feed):
 //! - a press probes its **exact** chord and then, only on a miss, **once more** with its leftmost
-//!   modifier dropped ([`Chord::fallback`], decision 1142) — which is why `Shift`+`W` walks while
+//!   modifier dropped ([`Chord::fallback`]) — which is why `Shift`+`W` walks while
 //!   `SHIFT-W` is bound to nothing, and why a bound `SHIFT-TAB` still beats bare `TAB` (the exact
 //!   probe is always first). Super held matches nothing;
 //! - [`Kind::Held`] commands **latch** on the matching press and unlatch on the *base key's*
 //!   release — the reference's `runOnUp` movement law, which is why tapping Shift mid-run does
 //!   not stop you, and why **nothing the UI does stops you**: a chat box taking focus and a
-//!   fullscreen frame eating a key both suppress the *press* and release nothing already held
-//!   (decision 2196). The only things that end a latch are the base key's release, the
+//!   fullscreen frame eating a key both suppress the *press* and release nothing already held.
+//! The only things that end a latch are the base key's release, the
 //!   [stuck-latch sweep](latch_and_dispatch) that stands in for a release the window never saw
 //!   (OS focus loss, the loading cover), and the VM swap;
 //! - [`Kind::Edge`]/[`Kind::EdgeUpDown`] run their 1.12 Lua bodies in the VM;
@@ -94,7 +94,7 @@ struct BindingDispatch {
 
 impl BindingDispatch {
     /// Resolve a press to its command — the reference's lookup (`CBindings::ExecuteBinding`
-    /// `0x4b7990`, decision 1142): the exact chord, then **one** retry with the leftmost modifier
+    /// `0x4b7990`): the exact chord, then **one** retry with the leftmost modifier
     /// dropped ([`Chord::fallback`]). The exact probe always runs first, so a bound specific chord
     /// always beats the general one.
     ///
@@ -134,7 +134,7 @@ pub(crate) struct BindingsState {
     /// Accumulated analog amount per host command this frame (wheel notches; a key press adds
     /// the reference's own 1.0 step) — the camera zoom's input.
     amounts: Vec<(Cmd, f32)>,
-    /// **The pressed-key set — what makes a press a REPEAT** (decision 2204). The reference
+    /// **The pressed-key set — what makes a press a REPEAT**. The reference
     /// classifies auto-repeat off its own list of keys it believes are down (`0x4248b3`), *not*
     /// off the Win32 `lParam` repeat bit — so the OS bit is not what this reads either.
     ///
@@ -186,7 +186,7 @@ impl BindingsState {
 /// ([`crate::ui_macro::MacroFiles`]), written by [`seed_bindings_for_vm`] and read by the save
 /// verb. It carried a session-keyed `identity` memo while the character set was loaded from a
 /// per-frame system and had to recognise "same character, new VM"; the seed runs exactly once per
-/// VM by construction, so there is nothing left to dedupe (decision 2241).
+/// VM by construction, so there is nothing left to dedupe.
 #[derive(Resource, Default)]
 struct BindingFiles {
     account: Option<std::path::PathBuf>,
@@ -209,8 +209,8 @@ impl Plugin for BindingsPlugin {
             .add_systems(
                 Update,
                 (
-                    // **The registry and both sets are seeded at the VM's birth, not here**
-                    // (decision 2241): [`seed_bindings_for_vm`] runs inside
+                    // **The registry and both sets are seeded at the VM's birth, not here**:
+                    // [`seed_bindings_for_vm`] runs inside
                     // `load_ingame_ui_on_world_entry`, before FrameXML and every addon. A
                     // session-keyed `Update` claim answered *which* VM but not *when* inside its
                     // life — and this table's readers are load-edge readers: stock
@@ -245,7 +245,7 @@ pub(crate) fn registry_commands() -> Vec<KeybindCommand> {
         .collect()
 }
 
-/// **The keybinding table goes into the VM before a single interface file runs** (decision 2241,
+/// **The keybinding table goes into the VM before a single interface file runs** (
 /// through the seam 2240 established): the command registry, the account set, and the character's
 /// own set if it has one — all of it in one call at the VM's birth.
 ///
@@ -273,8 +273,7 @@ pub(crate) fn seed_bindings_for_vm(world: &mut World, script: &mut UiScript) {
     script.seed_binding_set(1, Some(store::resolve(&overrides)));
     script.load_binding_set(1);
     // The pair, not just the first half: `SPECS` ∪ `ABSENT` is the client's whole 1.12 command
-    // surface, and a log line that says only how many landed cannot say how much is left
-    // (decision 1745).
+    // surface, and a log line that says only how many landed cannot say how much is left.
     info!(
         "bindings: {} of {} 1.12 commands registered ({} recorded absent)",
         SPECS.len(),
@@ -328,7 +327,7 @@ fn read_diff(path: &Option<std::path::PathBuf>) -> Option<Vec<(String, Vec<Strin
 /// account while a character file exists deletes it — the confirmed permanent delete. `Run` fires
 /// a named command's action outright, which is `RunBinding(name)` — the reference's own
 /// passthrough verb, whose one shipped caller is `CinematicFrame`'s `OnKeyDown` handing the
-/// SCREENSHOT chord back to its binding while it swallows every other key (decision 1724).
+/// SCREENSHOT chord back to its binding while it swallows every other key.
 fn drain_binding_requests(script: Option<NonSendMut<UiScript>>, files: Res<BindingFiles>) {
     let Some(mut script) = script else { return };
     for req in script.take_keybind_requests() {
@@ -410,7 +409,7 @@ fn sync_dispatch(script: Option<NonSendMut<UiScript>>, mut dispatch: ResMut<Bind
             // purpose) or a 1.12 command this client does not implement. The second case is the
             // one that used to mystify — a player carrying their own bindings over presses the
             // key they have always pressed and nothing happens, with nothing anywhere saying
-            // why. `ABSENT` knows why, so say it (decision 1745).
+            // why. `ABSENT` knows why, so say it.
             if let Some(absent) = commands::ABSENT.iter().find(|a| a.name == name) {
                 if !keys.is_empty() {
                     warn!(
@@ -502,7 +501,7 @@ fn latch_and_dispatch(
     // A latch indexes the dispatch table snapshotted from the VM that latched it. When the VM is
     // replaced mid-hold (a `/reload` with a key down), releasing against the NEW table would run
     // the wrong addon's `keystate="up"` body — or swallow the release and leave a Held latched
-    // with no Stop. So latches die with the VM they were made against (decision 1291); a key
+    // with no Stop. So latches die with the VM they were made against; a key
     // still physically down re-latches on its next press edge. The reference keeps a held key
     // running through a `ReloadUI` (its dispatch is engine-side) — dropping is the safe
     // divergence, over the moment the key is pressed again.
@@ -520,7 +519,7 @@ fn latch_and_dispatch(
     // below already covers) — it costs the keyboard its fallback probe. See
     // [`BindingDispatch::resolve`].
     //
-    // **Only when there is something on the plane** (decision 1179). A player build holds no dev
+    // **Only when there is something on the plane**. A player build holds no dev
     // chord at all, so suppressing the reference's fallback there buys nothing and costs fidelity:
     // `CTRL-SHIFT-P` would resolve to `None` instead of falling through to `SHIFT-P`
     // (`TOGGLECHARACTER3`, the pet paper doll) the way the binary does. 1176 gated what the plane
@@ -599,7 +598,7 @@ fn latch_and_dispatch(
     // ── The pressed-key reconcile ── the reference keeps its own list of keys it believes are
     // down and calls a press a REPEAT when the key is already on it (`0x4248b3`) — it never reads
     // the Win32 `lParam` repeat bit. Ours is reconciled against bevy's button planes here, before
-    // this frame's messages are read, which buys two things at once (decision 2204):
+    // this frame's messages are read, which buys two things at once:
     //
     // - a release the window never saw drops off the list, exactly as it drops off `latched` in
     //   the sweep below — the list cannot go stale and start swallowing real presses;
@@ -633,7 +632,7 @@ fn latch_and_dispatch(
                             | KeyCode::ArrowUp
                             | KeyCode::ArrowDown
                     );
-                // A keyboard frame's existence gate ate this one key (decision 1319) — the
+                // A keyboard frame's existence gate ate this one key — the
                 // world map's fullscreen `OnKeyDown`, a cinematic, the stack-split spinner. Per
                 // key, so the map eating its own `M` leaves every other binding alone.
                 let eaten = capture.consumed.contains(&ev.key_code);
@@ -1251,7 +1250,7 @@ mod tests {
         );
     }
 
-    /// **The armed capture seam, driven by real input events** (B265). The page's own tests call
+    /// **The armed capture seam, driven by real input events**. The page's own tests call
     /// `KeyBindings_OnHostKey` directly, so nothing asserted that a real notch/press ever
     /// produces that call — and the wheel is the one input that reaches this branch through
     /// neither `KeyboardInput` nor `MouseButtonInput`.
@@ -1305,7 +1304,7 @@ mod tests {
         assert_eq!(lua_str(&app, "tostring(CAPTURED)"), "SHIFT-MOUSEWHEELUP");
     }
 
-    /// **The whole wheel-bind path in one harness** (B265): the real Keybindings page, a capsule
+    /// **The whole wheel-bind path in one harness**: the real Keybindings page, a capsule
     /// armed by a real click, a real notch fed the way winit feeds it, and then the bound chord
     /// dispatching. The page's own tests call `KeyBindings_OnHostKey` by hand and this module's
     /// tests carry no page — between them the join was never asserted.
@@ -1496,7 +1495,7 @@ mod tests {
         assert!(!state(&app).just_pressed(cmd::MOVE_FORWARD));
     }
 
-    /// **The two-probe lookup, table-wide** (decision 1142): the exact chord, then one retry with
+    /// **The two-probe lookup, table-wide**: the exact chord, then one retry with
     /// the leftmost modifier dropped, and never a third. The bug that bought this test was a
     /// modifier held over a movement key eating the movement — so the movement case leads.
     #[test]
@@ -1606,7 +1605,7 @@ mod tests {
         );
     }
 
-    /// **The pet lane routes on the CTRL digits, and the number row is untouched** (B218,
+    /// **The pet lane routes on the CTRL digits, and the number row is untouched** (
     /// decision 1052). The two share their base keys, so the only thing keeping them apart is
     /// the exact-modifier law — worth pinning on the pair that actually collides rather than
     /// trusting the law in the abstract. CTRL-0 is slot **10**, the 1.12 cache's own wrap.
@@ -1687,7 +1686,7 @@ mod tests {
     ///
     /// `WorldMapFrame` is `frameStrata="FULLSCREEN" enableKeyboard="true"` with an `<OnKeyDown>`
     /// that re-matches `GetBindingKey("TOGGLEWORLDMAP")` in Lua and calls `RunBinding` itself, so
-    /// under the existence gate (decision 1319) it consumes every key while shown — including the
+    /// under the existence gate it consumes every key while shown — including the
     /// `M` that closes it. benilla reported that consumption as `typing`, whose rising edge then
     /// dropped the movement latch: holding W and tapping `M` twice left you standing in a closed
     /// map. The consumption is per KEY now, and releases nothing.
@@ -1830,7 +1829,7 @@ mod tests {
         script.set_screen_size(1024.0, 768.0);
         // The in-game UI materializes on world entry (1051), so a player always exists by the time
         // the manifest loads — and the stock macro window's character tab formats
-        // `UnitName("player")` into its label in its own OnLoad (decision 1848).
+        // `UnitName("player")` into its label in its own OnLoad.
         script.set_unit(
             "player",
             Some(benilla_ui::script::UnitState {

@@ -29,7 +29,7 @@
 //! every pass — the GPU's busy time inside passes, which is what "GPU-bound" reads against the
 //! wall `mean_ms` beside it.
 //!
-//! The residency columns make it the **leak curve** instrument too (B131): `FPS_PROBE`'s residency
+//! The residency columns make it the **leak curve** instrument too: `FPS_PROBE`'s residency
 //! meter samples once per run, which can only compare two runs at one point each — it cannot tell
 //! "grows with distance streamed" from "grows with time elapsed", and cannot show *where* on a
 //! route the cost arrives. A per-second row of `cpu_ms` beside `mats/images/uv/tint` plots the
@@ -289,10 +289,10 @@ fn preamble(adapter: Option<&RenderAdapterInfo>, device: Option<&RenderDevice>) 
 /// arity limit.
 ///
 /// The `Assets<T>` counts are the totals — what the process holds. The [`ArtCensus`] half is the
-/// same population **broken down by the cache that holds it** (decision 0793), which is what turns
+/// same population **broken down by the cache that holds it**, which is what turns
 /// "materials are growing" into a named holder in one row instead of a run-length probe. `evicted`
 /// is the running total dropped by distance: on a same-map traverse it was structurally zero before
-/// 0793, because nothing but a `MapChange` evicted anything (0729).
+/// 0793, because nothing but a `MapChange` evicted anything.
 ///
 /// [`ArtCensus`]: benilla_world::art_scope::ArtCensus
 #[derive(bevy::ecs::system::SystemParam)]

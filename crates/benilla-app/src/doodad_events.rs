@@ -22,7 +22,7 @@
 //! the arm bookkeeping, no player — and this scanner reads that arm.
 //!
 //! **The scan is gated on the frame's ANIMATE SET, and that gate is the whole mechanism** — not a
-//! budget, and not an optimisation (decision 2059). The reference's event scan `0x719370` is
+//! budget, and not an optimisation. The reference's event scan `0x719370` is
 //! reached from exactly one place: `0x7074b0`'s walk of the per-frame M2 scene worklist
 //! `[CM2Scene+0x20]`, which is **emptied every frame** and refilled only by `0x710b90(model, 1)`
 //! from the terrain doodad drain `0x683f80` — and the drain walks only the bucket the scene-walk

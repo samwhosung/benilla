@@ -1,4 +1,4 @@
-//! Transports (decision 0438) — the client-computed cycle, two drives, one subsystem.
+//! Transports — the client-computed cycle, two drives, one subsystem.
 //!
 //! The server never streams a transport's position. It sends one **anchor** — the movement
 //! block's `UPDATE_FLAG_TRANSPORT` u32, the server's path-progress ms clock at create — and the
@@ -18,8 +18,8 @@
 //! decision 0318's replace semantics make that free.
 //!
 //! The armed entity is the ordinary streamed GameObject — the display (WMO for boats, M2 for
-//! elevator cars), its collider, and its `Transform` all pre-exist on the GO-entity path
-//! (decision 0438 §2); this module only *moves* it. Riding hangs off the same component set for
+//! elevator cars), its collider, and its `Transform` all pre-exist on the GO-entity path;
+//! this module only *moves* it. Riding hangs off the same component set for
 //! both drives — the mover's platform frame keys on [`Transport`], not on the drive.
 
 use std::collections::HashMap;
@@ -63,7 +63,7 @@ impl Plugin for TransportPlugin {
                 // the world (phase 2's platform carry rides exactly this edge).
                 //
                 // **[`republish_moved_collider_aabbs`] is the third link, and it is here because
-                // of a general engine truth, not a lift one** (decision 1663): *a collider moved
+                // of a general engine truth, not a lift one**: *a collider moved
                 // in `Update` is invisible to `Update`'s own spatial queries until the next
                 // physics step, by up to one frame of its own travel.* avian refreshes
                 // `ColliderAabb`, `EnlargedAabb` and the `ColliderTrees` proxies in
@@ -75,7 +75,7 @@ impl Plugin for TransportPlugin {
                 // therefore pruned against the deck's **previous-frame** box.
                 //
                 // At 60 Hz that is centimetres and harmless. On one long frame — a backgrounded
-                // window is at least one ~1 s frame (decisions 0713/0906) — a Thunder Bluff lift
+                // window is at least one ~1 s frame — a Thunder Bluff lift
                 // descends 7.3 yd while its box stays put, the box ends up *above* the rider it
                 // is carrying, the down-probe enumerates no deck at all, and the rider is
                 // declared airborne on the very platform they are standing on. Two such frames in
@@ -154,7 +154,7 @@ pub(crate) struct Transport {
     was_moving: bool,
 }
 
-/// The two cycle evaluators behind one component (decision 0438 §5: elevators are "the same
+/// The two cycle evaluators behind one component (elevators are "the same
 /// subsystem, second consumer" — the rider frame, the worldport spare, and the instruments all
 /// key on [`Transport`] and never care which drive is underneath).
 enum Drive {
@@ -164,7 +164,7 @@ enum Drive {
     Lift(Lift),
 }
 
-/// **No map field, deliberately** (decision 1654). A lift's map is not a datum it owns: vmangos
+/// **No map field, deliberately**. A lift's map is not a datum it owns: vmangos
 /// hands a player the whole map's transport set on entry (`Map::SendInitTransports`) and takes it
 /// back on the way out, so a type-11 is only ever resident for someone standing on its own map —
 /// the car is always on the map *you* are on. 0611 stamped `CurrentMap` here at arm time, which in
@@ -182,7 +182,7 @@ struct Lift {
 
 impl Transport {
     /// Which drive is underneath — for the instruments only (`WOW_LIFT_CENSUS`); no consumer
-    /// keys on it (decision 0438 §5: the drive is private by design).
+    /// keys on it (the drive is private by design).
     pub(crate) fn drive_label(&self) -> &'static str {
         match &self.drive {
             Drive::Taxi(_) => "taxi",
@@ -241,7 +241,7 @@ impl Transport {
     }
 
     /// Whether any leg of this transport's cycle lies on `map_id` — the cross-map worldport's
-    /// spare predicate (decision 0455). **A lift always answers no** (1654): the spare exists so a
+    /// spare predicate. **A lift always answers no** (1654): the spare exists so a
     /// *ridden boat* survives the seam mid-cycle, and a lift never spans one — the server re-sends
     /// the destination map's whole transport set on arrival (`SendInitTransports`), so a lift
     /// despawns and streams back like every other object.
@@ -454,11 +454,11 @@ fn arm_transports(
 }
 
 /// The per-frame transport tick — the client's own `(progress + anchor) % period` leg walk
-/// (`0x5f50a0`, decision 0438): sample the timetable, write the pose. Translation +
+/// (`0x5f50a0`): sample the timetable, write the pose. Translation +
 /// rotation only — the renderer bakes model scale into the transform (`write_pose`'s law).
 /// Off-map samples (the boat is sailing the other continent's leg) hide the model; the server
 /// removes the GO around the same time, so this is belt-and-braces for the transition frames.
-/// **A lift can never trip it** (decision 1654): its sample is expressed in the map passed in, so
+/// **A lift can never trip it**: its sample is expressed in the map passed in, so
 /// the term is a boat's alone — which is what it always meant, and what 0611's stamped map broke.
 #[allow(clippy::type_complexity)] // one Bevy system's full input set
 fn tick_transports(
@@ -650,7 +650,7 @@ const DISAGREEMENT_GRACE_FRAMES: u32 = 3;
 /// [`tick_transports`] leaves an off-map transport's `Transform` unwritten (and hides it) — for a
 /// boat sailing the other continent's leg that is right, and for a boat we are *riding* it is the
 /// one state that must never happen. Its pose is what [`crate::player::wire_in`] composes our own
-/// world position from at a cross-map worldport (decision 0455), so a frozen source-map pose puts
+/// world position from at a cross-map worldport, so a frozen source-map pose puts
 /// the body at *that continent's* coordinates on *this* map: off the destination's WDT grid, where
 /// nothing streams, the loading cover cannot clear (`total == 0` never reads ready) and there is no
 /// ground to stand on. That is the 2026-09-05 report — a minute of loading screen on the
@@ -911,8 +911,8 @@ mod tests {
         }
     }
 
-    /// **The seam re-anchor moves the clock onto the destination map — and only when it has to**
-    /// (decision 2026). Composing the rider through a transport still sampling the *source*
+    /// **The seam re-anchor moves the clock onto the destination map — and only when it has to**.
+    /// Composing the rider through a transport still sampling the *source*
     /// continent is what put a body at Booty Bay's coordinates on Kalimdor, off the destination's
     /// tile grid, where nothing streams and the loading cover cannot clear.
     ///
@@ -1077,11 +1077,11 @@ mod tests {
         );
     }
 
-    /// **A lift is never hidden by the off-map term, whatever `CurrentMap` says** (decision 1654).
+    /// **A lift is never hidden by the off-map term, whatever `CurrentMap` says**.
     /// The off-map hide is the boat's: a ferry mid-cycle on the other continent's leg. 0611 gave
     /// the lift a `map` stamped from `CurrentMap` at arm time — and `arm_transports` runs a stage
     /// *before* `player::wire_in` writes that resource, so at login every type-11 on the map armed
-    /// against the startup seed and the term hid all of them for the session (Thunder Bluff; B168).
+    /// against the startup seed and the term hid all of them for the session (Thunder Bluff).
     /// Driving the tick on a map the arm never saw is exactly that shape, and the car must show.
     #[test]
     fn a_lift_is_visible_on_whatever_map_the_viewer_is_on() {

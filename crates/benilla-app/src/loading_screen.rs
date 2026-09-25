@@ -11,7 +11,7 @@
 //! The two cases out of current scope (taxi/boat/zeppelin's moving flight-path icon; a richer
 //! progress model) slot in as an extra overlay layer / a different progress source without restructure.
 //!
-//! **The lifecycle is event-raised, readiness-cleared (decision 0737)** — and the reference's is
+//! **The lifecycle is event-raised, readiness-cleared** — and the reference's is
 //! too, which 0737 assumed it was not. This header claimed for months that the reference *blocks*
 //! on its world load and so covers "by construction"; decision 1990 says
 //! half of that is wrong. The reference runs ordinary frames with **one** blocking stretch inside
@@ -20,7 +20,7 @@
 //! but the screen is raised *frames earlier*, at `TRANSFER_PENDING`, and dismissed *frames later*
 //! by a per-frame readiness poll. Which is this file's shape. What an async-streaming client has to
 //! build explicitly is not the lifecycle after all: it is the **input suppression** the blocking
-//! stretch does not provide either (see [`input`], decision 1990). The screen
+//! stretch does not provide either (see [`input`]). The screen
 //! rises at the **transition edges and only those** — the character pick's `Connected` edge (before
 //! the glue tears down) and `SMSG_TRANSFER_PENDING` (the portal walk-in), which are precisely the
 //! reference's two entries into `0x406640`'s tail — all observed *here*, from the
@@ -29,14 +29,14 @@
 //! `0x401de0`) and neither can reach the raise `0x406800` or the screen's map global `[0x82f00c]`,
 //! so a snap only ends the wait its raise armed and can never re-point a live screen
 //! ([`LoadingScreen::far_snap`]). And what a live screen *shows* is latched harder still: the
-//! resolved texture, not the map id ([`LoadingScreen::art_resolved`], decision 2087). A residency backstop catches any
+//! resolved texture, not the map id ([`LoadingScreen::art_resolved`]). A residency backstop catches any
 //! path with no edge, **in world only** — it used to fire at boot too, and that is what warmed the
-//! world's pipelines behind the glue (0540), which only worked while a world was being streamed
+//! world's pipelines behind the glue, which only worked while a world was being streamed
 //! there at all. Since 0777 none is, and the warm-up rides the entry cover instead. It clears when
 //! the destination is **scene-presentable** ([`WorldLoadProgress`],
 //! published by `terrain_stream` + the collider queue): every wanted tile spawned, the focus
 //! neighbourhood's placements up, colliders quiet, the snap no longer awaited. Never anything
-//! about the *body* — feet-on-ground is not a load condition (the flying-teleport hang, 0737).
+//! about the *body* — feet-on-ground is not a load condition (the flying-teleport hang).
 
 use bevy::prelude::*;
 use std::collections::HashMap;
@@ -82,7 +82,7 @@ const BACKDROP_ASPECT: f32 = 4.0 / 3.0;
 /// Frames the world must read fully-resident before we clear the screen — debounces the post-teleport
 /// frame where `loaded` is drained (`total > 0`, `ready` momentarily 0) so we don't flicker off/on.
 const CLEAR_AFTER_READY_FRAMES: u32 = 3;
-/// The wait instrument (decision 0737): once the screen has been up this long, say *which term*
+/// The wait instrument: once the screen has been up this long, say *which term*
 /// still blocks the clear, every [`WAIT_LOG_EVERY`] seconds — so a "loading screen stuck" report is
 /// a one-line diagnosis instead of a session. Ordinary loads finish under the threshold and log
 /// nothing extra.
@@ -114,7 +114,7 @@ const COVER_PRESENT_FRAMES: u32 = 3;
 /// — for its whole duration. That is the director's report, three times now (0962, 1345, and the
 /// world camera below), and each time it was one consumer nobody had counted:
 ///
-/// - the **pipeline-warm menagerie** (0962) — its own `covered_frames`, now this;
+/// - the **pipeline-warm menagerie** — its own `covered_frames`, now this;
 /// - the **world-entry FrameXML load** (1345) — its own `covered_frames`, now this;
 /// - the **world camera and the booth wake** — never deferred at all, and measured (this record's
 ///   round) as **57 of the flip frame's 60 ms**: the first render of a 3 000-entity world with
@@ -183,7 +183,7 @@ fn count_entry_cover(
 #[derive(Resource)]
 struct LoadingScreenCatalogRes(LoadingScreenCatalog);
 
-/// What a raise means for the tip of the day (decision 2077).
+/// What a raise means for the tip of the day.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum TipEdge {
     /// The glue→world entry: pick the next row and advance the cursor.
@@ -192,7 +192,7 @@ pub(crate) enum TipEdge {
     Clear,
 }
 
-/// Loading-screen state machine (decision 0737: event-raised, readiness-cleared).
+/// Loading-screen state machine (event-raised, readiness-cleared).
 #[derive(Resource, Default)]
 pub(crate) struct LoadingScreen {
     active: bool,
@@ -216,14 +216,14 @@ pub(crate) struct LoadingScreen {
     /// from `CurrentMap` made the dungeon backdrop switch to the continent one mid-load; nothing
     /// on the wire can do that in the reference ([`Self::snap_landed`]).
     ///
-    /// **This field is not the latch, though — [`Self::art_resolved`] is** (decision 2087). Five
+    /// **This field is not the latch, though — [`Self::art_resolved`] is**. Five
     /// writers touch `[0x82f00c]` image-wide, all inside the `LoadingScreen.cpp` TU: `0x4067e6`
     /// and `0x4072d3` store a map id (the two transition entries), and `0x406d0e`/`0x4073d4`/
     /// `0x407e59` store `-1`. A raise landing on a screen that is already up re-points it
     /// *unconditionally* — and repaints nothing, because the texture is already resolved.
     map: Option<u32>,
     /// **Has this screen resolved its backdrop yet?** — the reference's `[0x882e04]`, the loaded
-    /// texture handle, and the thing the art is actually latched by (decision 2087). `0x406cf0`
+    /// texture handle, and the thing the art is actually latched by. `0x406cf0`
     /// reads the map id only to reject `-1`, then `0x406cfc`/`0x406d01`/`0x406d03` skip the
     /// resolver `0x406e20` outright whenever the handle is non-null; the handle's three writers
     /// image-wide are the resolver's two stores and `0x407ed7 = 0` inside the dismiss `0x407e80`.
@@ -231,7 +231,7 @@ pub(crate) struct LoadingScreen {
     /// So the map id decides the picture on **exactly one frame per screen**, and nothing that
     /// happens afterwards can change it. Cleared by [`Self::dismiss`], never by a raise.
     art_resolved: bool,
-    /// **Plain black cover, no art, no bar** — the logout transition (decision 0738). The logout
+    /// **Plain black cover, no art, no bar** — the logout transition. The logout
     /// teardown despawns the avatar and the streamed world in the same frame's Net stage, but
     /// `CharSelect` (and the glue screen with it) only applies at the NEXT frame's state
     /// transition — without this the dead world renders uncovered for that frame, and it is
@@ -253,8 +253,8 @@ pub(crate) struct LoadingScreen {
     pub(crate) tip_edge: Option<TipEdge>,
     /// **Capture only** — the clear below is skipped while this is set. A loading screen is a
     /// picture that is up for a second and then gone: nothing in the tree could photograph one,
-    /// which is how the tip of the day shipped dead and stayed dead through a live smoke run
-    /// (decision 2083). Written by [`Self::hold_for_capture`] and by nothing a player can reach.
+    /// which is how the tip of the day shipped dead and stayed dead through a live smoke run.
+    /// Written by [`Self::hold_for_capture`] and by nothing a player can reach.
     held: bool,
 
     /// `Time::elapsed_secs` at the last raise + at the last wait-instrument line (see
@@ -269,7 +269,7 @@ pub(crate) struct LoadingScreen {
 
 impl LoadingScreen {
     /// Whether the opaque loading backdrop currently covers the frame — the world camera renders
-    /// under it (pipeline warm-up), never behind the glue screens (decision 0540).
+    /// under it (pipeline warm-up), never behind the glue screens.
     pub(crate) fn covering(&self) -> bool {
         self.active
     }
@@ -388,7 +388,7 @@ struct LoadingBackdrop;
 struct LoadingBarFill;
 #[derive(Component)]
 struct LoadingBarBorder;
-/// The tip-of-the-day text block (decision 2077) — its `Text` root; the coloured runs are its
+/// The tip-of-the-day text block — its `Text` root; the coloured runs are its
 /// children, rebuilt when the shown tip changes.
 #[derive(Component)]
 pub(crate) struct LoadingTip;
@@ -500,7 +500,7 @@ fn setup_loading_screen(
                     ..default()
                 },
             ));
-            // The tip of the day (decision 2077), drawn between the background quad and the
+            // The tip of the day, drawn between the background quad and the
             // progress bar — the reference's own order (`0x406e12`/`0x406e18`). The block is
             // positioned in PERCENT of this 4:3 area, which is exactly the space
             // `crate::game_tip`'s constants are in; only the font size and the shadow need pixels,
@@ -591,7 +591,7 @@ fn drive_loading_screen(
     // pending the reveal would show a world with no interface — the reference's reveal always
     // has the UI up, because its UI load happens inside its blocking world load.
     entry_ui_pending: Option<Res<crate::ui_script::PendingEntryUiLoad>>,
-    // The lifecycle edges (decisions 0737/0738), all observed from what the net bridge already
+    // The lifecycle edges, all observed from what the net bridge already
     // publishes — this module owns the whole state machine, nothing else is instrumented for it.
     edges: (
         Res<State<crate::char_select::ClientState>>,
@@ -633,7 +633,7 @@ fn drive_loading_screen(
     if entered.read().next().is_some() && *state.get() != crate::char_select::ClientState::InWorld {
         let map = roster.as_ref().and_then(|r| r.pending_map());
         screen.raise("world entry", true, map, now);
-        // **The tip of the day rides THIS edge and no other** (decision 2077): the reference's
+        // **The tip of the day rides THIS edge and no other**: the reference's
         // setter `0x406630` has exactly one caller, inside `CGlueMgr::EnterWorld`, and neither
         // `SMSG_TRANSFER_PENDING` arm reaches it — so a portal or worldport screen carries no tip.
         // The pick itself is `crate::game_tip`'s, one system over; this list is at Bevy's
@@ -642,7 +642,7 @@ fn drive_loading_screen(
     }
     // A portal walk-in (`SMSG_TRANSFER_PENDING`, no transport): the server is about to unload us
     // and the `SMSG_NEW_WORLD` snap follows after its own load — cover now, like the reference.
-    // Transport crossings (0455) keep riding visibly until their worldport lands below.
+    // Transport crossings keep riding visibly until their worldport lands below.
     if let Some(t) = transfer.as_ref().filter(|t| t.is_changed()) {
         match &t.0 {
             Some(info) if info.transport_entry.is_none() => {
@@ -670,11 +670,11 @@ fn drive_loading_screen(
     if teleported {
         screen.snap_landed(None);
     }
-    // Logout (decision 0738): the same frame's Net stage despawned the avatar and tore the world
+    // Logout: the same frame's Net stage despawned the avatar and tore the world
     // down, but `CharSelect` only applies at the NEXT frame's state transition — cover the dead
     // world with plain black until the glue owns the screen. No art, no bar: the ref's
     // world→glue swap is a black cut, not a loading screen.
-    // A dead session is the same world→glue cut (decision 1262), and it needs this arm more than
+    // A dead session is the same world→glue cut, and it needs this arm more than
     // logout does: the entry race raises the cover on `EnteredWorldMessage` a few lines up and
     // arms `awaiting_snap` for a snap the dead socket will never send, so without the disarm here
     // the cover is what the player would have been left staring at.
@@ -709,8 +709,8 @@ fn drive_loading_screen(
     // (a far same-map `.tele`, or any path with no edge). Normal streaming keeps the focus tile
     // resident, so this never fires while walking.
     //
-    // **In world only** (decision 0777). It used to fire at boot as well, and that was load-bearing
-    // by accident: a raised screen keeps the world camera active (0540), which is what compiled the
+    // **In world only**. It used to fire at boot as well, and that was load-bearing
+    // by accident: a raised screen keeps the world camera active, which is what compiled the
     // world's pipelines behind the glue. But it only worked because the world was being streamed
     // behind the glue in the first place — with no world to load there, the same trigger would put
     // an invisible screen up forever against residency that never arrives. The warm-up is not lost,
@@ -787,7 +787,7 @@ fn drive_loading_screen(
             }
         } else {
             screen.ready_frames = 0;
-            // The wait instrument (0737): a screen up past the threshold names the blocking term.
+            // The wait instrument: a screen up past the threshold names the blocking term.
             if now - screen.active_since > WAIT_LOG_AFTER
                 && now - screen.last_wait_log >= WAIT_LOG_EVERY
             {
@@ -839,7 +839,7 @@ fn drive_loading_screen(
         return;
     }
 
-    // --- Backdrop art — `0x406cf0`'s gate in shape (decision 2087): the map id is read ONCE per
+    // --- Backdrop art — `0x406cf0`'s gate in shape: the map id is read ONCE per
     // screen, to resolve the texture; from then on the resolved texture is what draws, and only
     // the dismiss clears it. A raise landing on a live screen re-points [`LoadingScreen::map`] and
     // repaints nothing, which is why "the screen you were given is the screen you keep" survives
@@ -1022,7 +1022,7 @@ mod tests {
     }
 
     /// **What a live screen SHOWS is latched by the resolved texture, not by the map id**
-    /// (decision 2087, correcting 2081's reading). A raise onto a screen that is already up
+    /// (correcting 2081's reading). A raise onto a screen that is already up
     /// re-points `[0x82f00c]` unconditionally — the reference's `0x406640`/`0x4072c0` have no
     /// guard on that store — and repaints nothing, because `0x406cf0` skips the resolver whenever
     /// `[0x882e04]` is non-null. Only the dismiss `0x407ed7` clears it.

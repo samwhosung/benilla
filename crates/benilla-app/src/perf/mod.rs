@@ -1,10 +1,10 @@
 //! `perf` — performance instrumentation + the standing dev HUD ([`PerfPlugin`]), and the one
-//! instrument that ships to players: the FPS journal ([`FpsJournalPlugin`], decision 2008).
+//! instrument that ships to players: the FPS journal ([`FpsJournalPlugin`]).
 //!
 //! Owns the **frame-cost measurement layer** that every future subsystem is measured against (the
 //! standard), and draws the always-on cost pill (top-center) — the whole HUD since 1454; anything
 //! deeper is an instrument's job (the journal, the probes, Tracy). The **dev chord + `P`** toggles
-//! it (`Ctrl+Shift+P` — decisions 0585/0867/0870).
+//! it (`Ctrl+Shift+P`).
 //!
 //! The concerns, one file each:
 //! - [`clock`] — the three CPU clocks (process, main thread, machine) every number is denominated in,
@@ -21,7 +21,7 @@
 //! itself — is `#[cfg(feature = "dev")]`. The rule is unchanged (`dev.rs`): dev may see anything;
 //! nothing may depend on dev. The journal depends on nothing on the dev side.
 //!
-//! **The law the whole surface obeys (0717): while synced, wall frame time measures the display's
+//! **The law the whole surface obeys: while synced, wall frame time measures the display's
 //! present grant, not our cost.** Only the CPU series measure work. That is why the pill's headline
 //! is `cpu ms` and not fps — on a 120 Hz-adaptive panel, cost can double with the granted interval
 //! unchanged and framerate unmoved, and the pill's old red threshold (fps < 58) sat ~5.7× above a
@@ -115,7 +115,7 @@ impl Plugin for PerfPlugin {
             .add_systems(
                 Update,
                 // `toggle_hud` needs no ordering against the UI keyboard feed any more: its dev
-                // chord can't be typed text, so there's no `UiKeyboardCapture` to read (decision 0585).
+                // chord can't be typed text, so there's no `UiKeyboardCapture` to read.
                 (
                     hud::toggle_hud,
                     hud::refresh_hud_snapshot,

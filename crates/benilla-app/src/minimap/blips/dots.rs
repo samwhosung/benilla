@@ -49,7 +49,7 @@ fn quest_dot_cell(status: u32) -> Option<[f32; 4]> {
 }
 
 /// The three preconditions `0x4eaa90` applies to a **UNIT or PLAYER** before either dot category
-/// is even chosen (decision 1906). They sit upstream of the `cmp [edi+0xcb8],7` at `0x4eac31`,
+/// is even chosen. They sit upstream of the `cmp [edi+0xcb8],7` at `0x4eac31`,
 /// whose only predecessor is the fall-through, so they gate the gold **quest** dot (cell 3) and the
 /// red **tracking** dot (cell 1) alike. They do **not** touch the GameObject leg (cell 0) or the
 /// party dots (cell 4), which are reached by other paths entirely.
@@ -223,7 +223,7 @@ fn creature_type_of(
     }
 }
 
-/// Draw the tracking dots (decision 0560): the gold cell-0 dot per tracked GameObject, then
+/// Draw the tracking dots: the gold cell-0 dot per tracked GameObject, then
 /// the red cell-1 dot per tracked unit — the classifier's fall-through for objects NOT at
 /// quest status 7 (those draw the quest dot instead; the `==7` branch is tested first,
 /// byte-verified `0x4eac31`). Same hard 3-D radius cull, cross-interior grey, and hover law
@@ -281,7 +281,7 @@ pub(in crate::minimap) fn emit_tracking_dots(
     };
     // Cell 0 — tracked GameObjects (gold): template lockId through Lock.dbc.
     //
-    // **No quest-status precedence on this leg** (decision 1872). This loop used to skip a
+    // **No quest-status precedence on this leg**. This loop used to skip a
     // GameObject whose status was 7, mirroring the unit loop below — but the classifier's
     // `cmp dword ptr [edi+0xcb8],7` at `0x4eac31` is reachable **only** from the UNIT and PLAYER
     // legs (machine-enumerated predecessors): the GameObject leg at `0x4eab43` falls straight
@@ -384,7 +384,7 @@ pub(in crate::minimap) fn emit_party_dots(
 mod tests {
     use super::*;
 
-    /// **The three preconditions upstream of BOTH dot categories** (decision 1906). They live in
+    /// **The three preconditions upstream of BOTH dot categories**. They live in
     /// `0x4eaa90` between the type gate and the `cmp [edi+0xcb8],7`, whose only predecessor is
     /// the fall-through — so a unit that fails any of them draws neither the gold quest dot nor
     /// the red tracking dot. benilla had none of them.
@@ -476,7 +476,7 @@ mod tests {
         }
     }
 
-    /// The tracking predicates' mask-bit law (decision 0560): bit `1 << (n − 1)` where `n` is
+    /// The tracking predicates' mask-bit law: bit `1 << (n − 1)` where `n` is
     /// the GO lock's skill-slot `LockType` id (resources) or the unit's creature type
     /// (creatures) — the exact bit the server sets from the tracking aura's MiscValue — plus
     /// the always-show dyn-flag clause that needs no mask at all.

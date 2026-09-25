@@ -1,4 +1,4 @@
-//! **[`GamePlugins`] — the game, as one name** (decision 2279, 2265 §C2).
+//! **[`GamePlugins`] — the game, as one name**.
 //!
 //! `benilla_world::world_plugins::WorldPlugins` is the engine as one name (1164); this is the
 //! client on top of it: every plugin the game adds, in the order `run()` always added them.
@@ -116,7 +116,7 @@ pub(crate) struct GamePlugins {
 impl PluginGroup for GamePlugins {
     fn build(self) -> PluginGroupBuilder {
         PluginGroupBuilder::start::<Self>()
-            // The game's own WGSL, compiled into the binary (decision 1175) — before anything that could
+            // The game's own WGSL, compiled into the binary — before anything that could
             // ask for one. The engine's seven register themselves inside `WorldPlugins`, which
             // `run()` adds ahead of this group.
             .add(crate::shaders::plugin)
@@ -124,25 +124,25 @@ impl PluginGroup for GamePlugins {
             .add(crate::weapon_trail::WeaponTrailPlugin)
             .add(FishingLinePlugin)
             .add(QuestMarkersPlugin)
-            // Pipeline-compile counters + the live-compile tripwire (decision 0837: macOS builds every
+            // Pipeline-compile counters + the live-compile tripwire (macOS builds every
             // pipeline synchronously on the render thread, so a live compile is a felt stall).
             .add(crate::pipe_warm::plugin)
             // Streamed world entities: cube assets + display catalogs at startup, sync each frame.
             .add(EntitiesPlugin)
             // Creature animation: pick Stand/Walk/Run from each creature's movement state each frame (Milestone C).
-            // The combat log — every combat packet's chat line and floating number, one handler each
-            // (decision 2323); ahead of the animation layer, whose two shared kinds run second.
+            // The combat log — every combat packet's chat line and floating number, one handler each;
+            // ahead of the animation layer, whose two shared kinds run second.
             .add(crate::combat_log::CombatLogPlugin)
             .add(CreatureAnimPlugin)
             // The unit blob shadow: the dark ground oval under every unit, sized from the playing
             // animation's box (`0x6d7920`), on the same
             // surface-decal projector as the selection ring.
             .add(BlobShadowPlugin)
-            // Footprint decals (B212, decision 1006): the prints a walking unit leaves on snow/sand,
+            // Footprint decals: the prints a walking unit leaves on snow/sand,
             // spawn-once projections on the same decal projector, fading off the effect stream.
             .add(CameraShakePlugin)
             .add(FootprintsPlugin)
-            // GameObject animation (decision 0242): net-streamed GObjects (doors/chests) play an M2 sequence
+            // GameObject animation: net-streamed GObjects (doors/chests) play an M2 sequence
             // on GAMEOBJECT_STATE change — the state-machine sibling of the doodad idle loop above.
             .add(crate::go_anim::plugin)
             .add(crate::doodad_events::plugin)
@@ -160,24 +160,24 @@ impl PluginGroup for GamePlugins {
             .add(NetPlugin {
                 connect: self.connect,
             })
-            // The death arc (decision 0308): the wire-fed death stores + the root/water-walk ack messages.
+            // The death arc: the wire-fed death stores + the root/water-walk ack messages.
             .add(crate::death::DeathPlugin)
-            // The shared glue vocabulary both pre-world screens stand on (decision 0465): the ADD-mode UI
+            // The shared glue vocabulary both pre-world screens stand on: the ADD-mode UI
             // material, the client-data art set, the GlueStrings table.
             .add(crate::glue::GluePlugin)
-            // The glue layer (decision 0193): the ClientState machine + the character-select screen
+            // The glue layer: the ClientState machine + the character-select screen
             // that answers the parked IO thread's pick. A world capture boots straight InWorld (no net,
             // no picker); a glue capture boots onto the screen it photographs.
             .add(crate::char_select::CharSelectPlugin { start: self.start })
-            // The login screen (decision 0539): the faithful AccountLogin glue + the credential policy
+            // The login screen: the faithful AccountLogin glue + the credential policy
             // that answers the IO thread's pre-logon park.
             .add(crate::login::LoginPlugin)
             // The realm list: the faithful RealmList glue + the policy that answers the IO thread's
             // realm park. The client used to take `realms.first()` and offer no way to say otherwise.
             .add(crate::realm_select::RealmSelectPlugin)
-            // The character-creation screen + its live preview booth (decision 0423).
+            // The character-creation screen + its live preview booth.
             .add(crate::char_create::CharCreatePlugin)
-            // Audio: the delegated mixer + WoW's owned selection layer (decision 0070).
+            // Audio: the delegated mixer + WoW's owned selection layer.
             .add(SoundPlugin)
             // Targeting: left-click a unit to select it (→ CMSG_SET_SELECTION) + draw its ground ring.
             .add(TargetPlugin)
@@ -185,7 +185,7 @@ impl PluginGroup for GamePlugins {
             // Faithful world-load splash + progress bar on startup + cross-map teleport (the load latency
             // streaming can't hide); per-map art via the Map.dbc→LoadingScreens.dbc→BLP chain.
             .add(LoadingScreenPlugin)
-            // The player-UI quad pass (decision 0068 §2): its own composited-above-the-world,
+            // The player-UI quad pass: its own composited-above-the-world,
             // below-the-egui-dev-overlays camera + sorted-quad renderer. `$WOW_UI_DEMO=1` seeds a proof scene.
             .add(PlayerUiPlugin)
             // The world's frame, rendered off-screen and drawn first in the UI camera's main pass —
@@ -197,12 +197,12 @@ impl PluginGroup for GamePlugins {
             // the streamed tile window + mask + player arrow, and feeds the zone text.
             .add(crate::minimap::MinimapPlugin)
             // The pet-bar / spellbook autocast shine, drawn on the append lane from the conversion's
-            // parked sites — zero per-frame script-layout traffic (decision 1383, B282).
+            // parked sites — zero per-frame script-layout traffic.
             // The `<Model>` widgets' M2s, rendered as tiles of one atlas and composited at the
-            // callback rank (decision 2008).
+            // callback rank.
             .add(crate::ui_models::UiModelsPlugin)
             // The shared AreaTable catalog + the ZONE_CHANGED event family / zone-text host globals
-            // behind GetZoneText & co. (the zone-entry splash arc, decision 0287).
+            // behind GetZoneText & co. (the zone-entry splash arc).
             .add(crate::area::AreaPlugin)
             .add(crate::area_poi::AreaPoiPlugin)
             .add(crate::world_state_ui::WorldStateUiPlugin)
@@ -215,10 +215,10 @@ impl PluginGroup for GamePlugins {
             // minimap's landmark pass and the world map's POI child, cleared by arriving at it.
             .add(crate::poi_marker::PoiMarkerPlugin)
             // The glyph atlas (client TTFs -> baked bitmap) `ui_script`'s extraction draws `FontString`
-            // regions through. Loads at Startup, after the asset chain opens (decision 0068 §2).
+            // regions through. Loads at Startup, after the asset chain opens.
             .add(UiTextPlugin)
             // The one "which NPC am I interacting with" answer, shared by the portrait booth's `"npc"`
-            // token and the interaction face-me (decision 1467) — hence its own plugin, ahead of both.
+            // token and the interaction face-me — hence its own plugin, ahead of both.
             .add(crate::ui_session::UiSessionPlugin)
             // Unit-frame portraits: the token -> off-screen-baked-face bridge the UI extract samples for a
             // `SetPortraitTexture`-bound region (the modern high-res 2D model bake).
@@ -228,30 +228,30 @@ impl PluginGroup for GamePlugins {
             // The video knobs the CVar host writes into (today: `gxVSync`). Before CvarPlugin so the
             // resource exists when `load_config` applies the saved value at Startup.
             .add(crate::video::VideoPlugin)
-            // The realmlist (decision 1667) — the logon address the login screen edits. Same reason as
+            // The realmlist — the logon address the login screen edits. Same reason as
             // VideoPlugin above: it is a CVar knob, so its resource has to exist before `load_config`.
             .add(crate::realmlist::RealmlistPlugin)
-            // The CVar host (decision 0954): registration, knob sync, config.toml persistence. After
+            // The CVar host: registration, knob sync, config.toml persistence. After
             // UiScriptPlugin only for reading order — its systems gate on the VM existing anyway.
             .add(crate::cvars::CvarPlugin)
-            // The console command registry (decision 2303): the reference's `ConsoleCommand` table,
+            // The console command registry: the reference's `ConsoleCommand` table,
             // its four CVar commands and `help`; subsystems register their own from their plugins.
             .add(crate::console::ConsolePlugin)
-            // The key-binding engine (decision 0997): the chord→command dispatch every rebindable input
+            // The key-binding engine: the chord→command dispatch every rebindable input
             // runs through, its persistence, and the Key Bindings window's capture seam.
             .add(crate::bindings::BindingsPlugin)
-            // The unit snapshot + event feed (decision 0068 §3): pushes ECS game state into the VM as the
+            // The unit snapshot + event feed: pushes ECS game state into the VM as the
             // plain data the `Unit*` bindings read, and fires the matching WoW events.
             .add(UiUnitPlugin)
             .add(UiPartyPlugin)
-            // Duels (decision 0633): the wire session, the client-side countdown tick, the four Era
+            // Duels: the wire session, the client-side countdown tick, the four Era
             // events, and the accept/cancel/challenge intents.
             .add(UiDuelPlugin)
-            // Setting your hearthstone (decision 1331): the innkeeper's SMSG_BINDER_CONFIRM question, the
+            // Setting your hearthstone: the innkeeper's SMSG_BINDER_CONFIRM question, the
             // CONFIRM_BINDER dialog it raises, and the CMSG_BINDER_ACTIVATE its Accept sends — the only
             // packet in the flow that actually binds anything.
             .add(UiBinderPlugin)
-            // The dialog engine's own verbs (decision 1963): the pet trainer's question, the instance
+            // The dialog engine's own verbs: the pet trainer's question, the instance
             // boot clock, the area spirit healer, the battleground queue, the meeting stone.
             .add(UiDialogVerbsPlugin)
             .add(BattlefieldScorePlugin)
@@ -259,8 +259,8 @@ impl PluginGroup for GamePlugins {
             .add(BattlefieldPositionsPlugin)
             .add(crate::game_tip::GameTipPlugin)
             .add(crate::text_filter::TextFilterPlugin)
-            // The re-shape a `bevy_ui` text root loses when its last span is despawned
-            // (decision 2212, B383): an upstream change-detection hole whose only symptom is a
+            // The re-shape a `bevy_ui` text root loses when its last span is despawned:
+            // an upstream change-detection hole whose only symptom is a
             // panic inside `bevy_text` on the next window resize.
             .add(crate::text_reshape::TextReshapePlugin)
             .add(TutorialPlugin)
@@ -268,11 +268,11 @@ impl PluginGroup for GamePlugins {
             // `_CANT_ATTACK`): the latch the packets set, and the 4 s repeat that shows it while an
             // attack target stands and no swing lands.
             .add(crate::swing_refusal::SwingRefusalPlugin)
-            // Being summoned (decision 1747): SMSG_SUMMON_REQUEST's latch, the CONFIRM_SUMMON dialog it
+            // Being summoned: SMSG_SUMMON_REQUEST's latch, the CONFIRM_SUMMON dialog it
             // raises, and the CMSG_SUMMON_RESPONSE its Accept sends. The binder's twin one line up — a
             // server-asked question whose only wire answer is yes — and here for that reason.
             .add(UiSummonPlugin)
-            // The GM trouble-ticket flow (decision 1673): the Help window's five sends, the UPDATE_TICKET
+            // The GM trouble-ticket flow: the Help window's five sends, the UPDATE_TICKET
             // answer ticket behind its 10-minute poll, and the GMTicketCategory.dbc list its "page a GM"
             // rows are built from. Beside the binder because it is the same feed/drain shape, and after it
             // because both want UiInput ordering and this reads better grouped.
@@ -280,69 +280,69 @@ impl PluginGroup for GamePlugins {
             // Auto-follow's UI seam: the popup's Follow row + `FollowUnit`/`FollowByName` inbound, and
             // the AUTOFOLLOW_BEGIN/END pair that drives the centre-screen status line outbound.
             .add(UiFollowPlugin)
-            // Instance/raid lockouts (decision 1748): the four CHAT_MSG_SYSTEM lines the client composes
+            // Instance/raid lockouts: the four CHAT_MSG_SYSTEM lines the client composes
             // itself out of GlobalStrings, the last-dungeon/ownership bookkeeping behind
             // `CanShowResetInstances()`, and the SELF menu's one send. Beside the binder family for the
             // same feed/drain shape; it needs the map catalog, which is up long before Update runs.
             .add(UiInstancePlugin)
-            // Leaving (decision 0674): the game menu's Logout/Exit Game — the request, the server's
+            // Leaving: the game menu's Logout/Exit Game — the request, the server's
             // 20-second answer narrated as the CAMP/QUIT countdown, and the process exit.
             .add(UiLogoutPlugin)
             .add(UiSocialPlugin)
-            // Guilds (decision 1257): the identity/roster mirror behind the four guild windows, the
+            // Guilds: the identity/roster mirror behind the four guild windows, the
             // membership verbs, and the `ERR_GUILD_*` lines. Right after the social session, whose
             // FriendsFrame it shares a window with and whose ignore list its sign-on lines consult.
             .add(UiGuildPlugin)
-            // Founding a guild (decision 1672): the guild registrar and the charter window — the slice
+            // Founding a guild: the guild registrar and the charter window — the slice
             // 1257 §2 left out. Right after the guild session, whose error channel its refusals ride and
             // whose roster its success produces.
             .add(UiPetitionPlugin)
             .add(UiTooltipPlugin)
-            // The character-window feed (decision 0208): the combat-stats/inventory snapshots + events
+            // The character-window feed: the combat-stats/inventory snapshots + events
             // the paper doll reads, and the paper-doll booth's yaw mirror.
             .add(UiCharPlugin)
             // The reputation-pane feed: the player's wire faction slots resolved against Faction.dbc into
             // the pane's snapshot, plus the pane's three outbound verbs. Beside the character feed because
             // it is the same window's other tab.
             .add(crate::ui_reputation::UiReputationPlugin)
-            // The inspect feed (decision 0631): another player's equipment off their PUBLIC visible-item
+            // The inspect feed: another player's equipment off their PUBLIC visible-item
             // entries, plus the "inspect" booth's unit + yaw. Right after the character feed it mirrors.
             .add(crate::ui_inspect::InspectUiPlugin)
-            // The honor feed (decision 1512): the PRIVATE honor descriptor block as the snapshot both
+            // The honor feed: the PRIVATE honor descriptor block as the snapshot both
             // Honor tabs read, plus the inspect-honor round trip. After the inspect feed because it
             // resolves that feed's target to address its request at.
             .add(crate::ui_honor::UiHonorPlugin)
-            // The dressing-room feed (decision 1060): the window's try-on intents → the player's own look
+            // The dressing-room feed: the window's try-on intents → the player's own look
             // with the tried-on items substituted in, plus the "dressup" booth's yaw. Beside the inspect
             // feed, whose shape it shares (intents in, a booth look out).
             .add(crate::ui_dressup::DressUpUiPlugin)
             .add(UiActionPlugin)
             // The spell (2265 §A7's owner): the cast lifecycle's state — the pending cast, the queued
             // strike, the running channel, the auto-repeat key, the chain outbox — its local cancel,
-            // the cooldown store, the talent modifier tables and the packet handlers (decisions 2324,
+            // the cooldown store, the talent modifier tables and the packet handlers (
             // 2328). After UiActionPlugin, whose feeds and cast ladder read the state through it.
             .add(crate::spell::SpellPlugin)
-            // The aura feed (decisions 0255/0257): the player's insertion-ordered buff/debuff cache + the
+            // The aura feed: the player's insertion-ordered buff/debuff cache + the
             // self-only durations, pushed as the data the `UnitAura` bindings read; fires UNIT_AURA and
             // drains the right-click cancels. After UiActionPlugin (shares its `Spells` catalog).
             .add(UiAuraPlugin)
-            // The spellbook window feed (decision 0216 §8, slice 5): builds the book from
+            // The spellbook window feed (slice 5): builds the book from
             // PlayerActions.spells through the Spell.dbc/SkillLine.dbc join and drives
             // SpellBookFrame.xml's snapshot + cast-drain seam — the spell SOURCE for the cursor payload
             // arc (bags/doll/bars/book). After UiActionPlugin (shares its `Spells` resource + the cast
             // tail `send_spell_cast`).
             .add(UiSpellbookPlugin)
-            // The macro system (decision 0983): the icon chooser's catalog, the `benilla-config/macros/`
+            // The macro system: the icon chooser's catalog, the `benilla-config/macros/`
             // files, `UPDATE_MACROS`, and the macro→bound-spell table the action bar's MACRO slots
             // resolve their cooldown/usability through. After UiSpellbookPlugin — the bound spell is
             // resolved against the book that feed pushes, by the same law `CastSpellByName` uses.
             .add(crate::ui_macro::UiMacroPlugin)
-            // The talent window feed (decision 0304): builds the class pages from Talent.dbc × the
+            // The talent window feed: builds the class pages from Talent.dbc × the
             // known-spell set + PLAYER_CHARACTER_POINTS, drives TalentFrame.xml through the engine's
             // talent seam, and drains learn clicks into CMSG_LEARN_TALENT. After UiActionPlugin
             // (shares its `Spells` catalog), beside the spellbook it mirrors.
             .add(UiTalentPlugin)
-            // Unlearning them again (decision 1580): the class trainer's respec question, its
+            // Unlearning them again: the class trainer's respec question, its
             // CONFIRM_TALENT_WIPE dialog, and the answer that is the only packet in the flow which
             // unlearns anything. Beside UiTalentPlugin for the subject, but it is UiBinderPlugin's twin
             // in shape — a guid-carrying question over an already-closed gossip menu.
@@ -353,7 +353,7 @@ impl PluginGroup for GamePlugins {
             // (cancel-if-active else cast). After UiActionPlugin (shares `Spells`) and SpellPlugin
             // (the `usable` walk, the cast tail).
             .add(UiShapeshiftPlugin)
-            // The pet action bar (decision 0982) — the stance bar's mirror image: server-authoritative,
+            // The pet action bar — the stance bar's mirror image: server-authoritative,
             // so this renders the ten packed words the last `SMSG_PET_SPELLS` delivered and sends
             // intents back. After UiActionPlugin (shares `Spells` and the cooldown triple's clock).
             .add(UiPetPlugin)
@@ -362,15 +362,15 @@ impl PluginGroup for GamePlugins {
             // The pet's paper-doll stat block (happiness/loyalty/XP/training points). Its own plugin
             // because it runs off descriptor fields and two DBC tables rather than off `SMSG_PET_SPELLS`.
             .add(UiPetStatsPlugin)
-            // The pet paper doll's SHARED surface (decision 1057) — the combat-stats snapshot under the
+            // The pet paper doll's SHARED surface — the combat-stats snapshot under the
             // `"pet"` token and the page's model booth. Apart from the block above because these values
             // pass through the character sheet's own bindings and events, with no hunter gate.
             .add(UiPetDollPlugin)
             // The connection-telemetry feed: the averaged ping RTT behind `GetNetStats()`, which the main
-            // bar's performance meter polls (decision 0658).
+            // bar's performance meter polls.
             .add(UiNetPlugin)
             .add(UiCastPlugin)
-            // The breath / fatigue bars (decision 0874): server-authoritative mirror timers off the
+            // The breath / fatigue bars: server-authoritative mirror timers off the
             // wire into the transcribed MirrorTimer1/2/3 frames. Beside the cast bar it shares its
             // feed→drain shape (and its art: the same UI-CastingBar-Border chrome).
             .add(UiMirrorPlugin)
@@ -379,28 +379,28 @@ impl PluginGroup for GamePlugins {
             .add(crate::combat_text::CombatTextPlugin)
             // Overhead unit names (nameplates): world-billboard name text over players + NPCs.
             .add(crate::nameplates::NameplatesPlugin)
-            // Raid-target marker billboards (0434 §6): the mark icon over marked units, one line-pitch
+            // Raid-target marker billboards: the mark icon over marked units, one line-pitch
             // above the overhead name; plated units show the plate's raid child instead.
             .add(crate::raid_marks::RaidMarksPlugin)
-            // V-key nameplates (0167): the toggled health-bar plates, a 2-D overlay replacing the
+            // V-key nameplates: the toggled health-bar plates, a 2-D overlay replacing the
             // overhead name on plated units.
             .add(crate::vplates::VPlatesPlugin)
-            // Chat speech bubbles (0598): the over-the-head bubble a say/yell/party line spawns, the
+            // Chat speech bubbles: the over-the-head bubble a say/yell/party line spawns, the
             // plates' 2-D overlay sibling — mutually exclusive with both the plate and the name.
             .add(crate::chat_bubble::ChatBubblePlugin)
             // TOGGLEUI (`CTRL-Z`/`Cmd-Z`): the whole quad layer goes dark — frames, minimap, plates,
             // bubbles, combat text — leaving the world and the cursor.
             .add(crate::ui_hide::UiHidePlugin)
             .add(UiItemsPlugin)
-            // The gossip window (decision 0081): fills from the net drain's GossipState and drives
+            // The gossip window: fills from the net drain's GossipState and drives
             // GossipFrame.xml over the Era gossip API.
             .add(UiGossipPlugin)
             // The merchant window (decision 0081 phase 4): fills from the net drain's MerchantOpen and
             // drives MerchantFrame.xml over the Era vendor API + the money display.
             .add(UiMerchantPlugin)
-            // The bank window (decision 0604): the SHOW_BANK session (BankOpen) + the purchase row;
+            // The bank window: the SHOW_BANK session (BankOpen) + the purchase row;
             // the vault's slots ride the container feed as bags −1/5..=10.
-            // The auction house (decision 1511) — an NPC-session window like the bank beside it, but the
+            // The auction house — an NPC-session window like the bank beside it, but the
             // only `doublewide` panel in the UI, so it displaces both the left and center seats.
             .add(UiAuctionPlugin)
             .add(UiBankPlugin)
@@ -425,18 +425,18 @@ impl PluginGroup for GamePlugins {
             .add(UiTaxiPlugin)
             .add(UiTradeSkillPlugin)
             .add(UiCraftPlugin)
-            // The loot window (decision 0084): fills from the net drain's LootState and drives
+            // The loot window: fills from the net drain's LootState and drives
             // LootFrame.xml over the Era loot API (coin + rows, paging).
             .add(UiLootPlugin)
             .add(UiLootRollPlugin)
-            // The questgiver window (decision 0088): fills from the net drain's QuestGiver and drives
+            // The questgiver window: fills from the net drain's QuestGiver and drives
             // the stock questgiver window's four sub-panels over the Era quest API (1944).
             .add(UiQuestPlugin)
             // The quest-log window (decision 0088's deferred second slice): fills from the self player's
             // PLAYER_QUEST_LOG descriptor slots + the SMSG_QUEST_QUERY_RESPONSE template cache, and drives
             // the stock quest log over the Era quest-log API (1944).
             .add(UiQuestLogPlugin)
-            // The party quest-share (decision 1733): the verdict lines on a quest we pushed, and the
+            // The party quest-share: the verdict lines on a quest we pushed, and the
             // escort-quest confirm. Neither is bound to a window, so it is its own plugin rather than a
             // lodger in either quest plugin above.
             .add(QuestSharePlugin)
@@ -446,8 +446,8 @@ impl PluginGroup for GamePlugins {
             // (`benilla-config/layout/<realm>-<character>.txt`). The consumer of the engine's userPlaced
             // bit, which nothing read before it.
             .add(UiLayoutPlugin)
-            // Print screen (decision 1487): the SCREENSHOT binding's engine half — one PNG per
-            // `Screenshot()` call into `benilla-config/Screenshots/` (never the install — decision 1486),
+            // Print screen: the SCREENSHOT binding's engine half — one PNG per
+            // `Screenshot()` call into `benilla-config/Screenshots/` (never the install),
             // answered to the UI as SCREENSHOT_SUCCEEDED/FAILED so the status text can never be in the
             // frame it announces.
             .add(crate::screenshot::ScreenshotPlugin)
@@ -520,7 +520,7 @@ pub(crate) mod schedule_tests {
         /// Everything any pair fights over, by name (a placeholder in a build without type
         /// names — [`type_names_available`]).
         pub components: HashMap<ComponentId, String>,
-        /// The explained classes, resolved against this world (decision 2287).
+        /// The explained classes, resolved against this world.
         pub classes: Classes,
         /// Every declared `a` runs before `b`, at the system level.
         pub dependencies: Vec<(SystemKey, SystemKey)>,
@@ -545,7 +545,7 @@ pub(crate) mod schedule_tests {
         }
     }
 
-    /// Which graph a census reads (decision 2337).
+    /// Which graph a census reads.
     ///
     /// Bevy's build inserts an `ApplyDeferred` barrier between a system with commands and its
     /// dependents, and it **shares one barrier per "distance"** (the number of barriers between
@@ -719,7 +719,7 @@ pub(crate) mod schedule_tests {
     }
 
     /// **Does this build carry type names?** bevy only does under its `debug` feature, which
-    /// rides with ours (`benilla-world`'s `dev`, decision 1451); a player build names every
+    /// rides with ours (`benilla-world`'s `dev`); a player build names every
     /// system and resource `<Enable the debug feature …>`. Probed off the census itself rather
     /// than off a feature flag — a `cfg(feature = "dev")` outside `run_mode` is a seam leak (1179),
     /// and what these tests need is the capability, not the plane. The name-dependent tests
@@ -728,7 +728,7 @@ pub(crate) mod schedule_tests {
         c.systems.values().any(|s| s.name.contains("benilla_app::"))
     }
 
-    /// **The explained classes** (decision 2287) — what an undeclared order may be about
+    /// **The explained classes** — what an undeclared order may be about
     /// without anyone declaring it, argued once here instead of by every session that adds a
     /// system. On 2287's eve three sessions raised the two constants this table replaced,
     /// each with a paragraph, each through a rebase conflict on the same lines, none declaring
@@ -738,7 +738,7 @@ pub(crate) mod schedule_tests {
     /// - **A non-`Send` owner** — the Lua VM, the audio layer's handles. Their systems run on
     ///   the main thread one at a time under any executor, so no order among them is a race.
     ///   *Which feed fires its Lua events first* is a real question, answered by the `UiFeed`
-    ///   phase (decision 2304): every push after the drain and before the tick, and among the
+    ///   phase: every push after the drain and before the tick, and among the
     ///   pushes an order declared where it matters (the chat cascade, the cooldown events),
     ///   registration order otherwise. Derived, not listed: every registration that is not
     ///   `Send + Sync`.
@@ -750,7 +750,7 @@ pub(crate) mod schedule_tests {
     ///   inside `WorldStage::Net`. *Pure* is the condition: a resource that is a cache **and**
     ///   a window's state (`Items`, `MailOpen`, `GuildState`, `QuestLog`, `PetitionState`) is
     ///   not here, because its other writers do not commute; 2265 §A4 is what lets those
-    ///   split (decision 2288).
+    ///   split.
     /// - **An append-only sink** — `ChatLog`, `MessageSounds`, `UiErrorKeys`, `UiErrorTexts`:
     ///   writers commute, and a drain's order against a writer is one frame of latency, never
     ///   a loss. (2283's ten pairs were all this shape: a new verb drain against its siblings
@@ -804,7 +804,7 @@ pub(crate) mod schedule_tests {
         ];
         const STREAMS: &[ClassRow] = &[
             ("SoundKits", TypeId::of::<crate::sound::SoundKits>),
-            // The client's ONE `rand()` stream (decision 2301). Four lanes draw from it — the
+            // The client's ONE `rand()` stream. Four lanes draw from it — the
             // placed-doodad host, the creature driver, the GameObject arm and the portrait booth —
             // and in the reference they draw from one TLS cell in whatever order the frame runs
             // them. The interleaving IS the mechanism: a shared sequence is what de-syncs a stand
@@ -895,18 +895,18 @@ pub(crate) mod schedule_tests {
     }
 
     /// `PostUpdate`, 181 systems: `GlobalTransform` and the particle `EffectQuads` are most of it.
-    /// **371 (decision 2337)** — the declared-graph count, re-measured beside `Update`'s when
+    /// **371** — the declared-graph count, re-measured beside `Update`'s when
     /// the census stopped reading bevy's barriers as orders (see the ledger below).
     const POST_UPDATE_CEILING: usize = 371;
     const POST_UPDATE_SLACK: usize = 20;
     /// The **actionable** pairs in `Update` — two systems with conflicting access and no
     /// declared order, where [`Classes`] explains none of what they share, so the executor
-    /// runs them in whatever order the graph around them happens to produce (B354, 2220). Same
+    /// runs them in whatever order the graph around them happens to produce (2220). Same
     /// shape as `world_api_wall.rs`: the count may not rise past the ceiling, and the ceiling
     /// follows the count down. `WOW_AMBIGUITY_DUMP=1` prints every actionable pair with what
     /// it fights over.
     ///
-    /// **Measured 2026-09-17 (decision 2287), 662 systems:** 16,548 pairs in all, 12,849 of
+    /// **Measured 2026-09-17, 662 systems:** 16,548 pairs in all, 12,849 of
     /// them explained — 10,703 on the VM alone, 431 on the other non-`Send` owners, 556 on
     /// the pure caches, 87 on the sinks, 41 on the stream, 1,031 on a mix of those — and
     /// 3,699 actionable. The largest part of those is `Transform` on disjoint lanes (716 pairs
@@ -931,13 +931,13 @@ pub(crate) mod schedule_tests {
     ///   a frame reads as the material's own built seed — the batch's authored `t = 0`, not a
     ///   wrong value — because the same call seeds `sun_scale.zw` at the loop's opening.
     ///
-    /// **3,280 (decision 2288)** — the one query cache: a read that asks marks its miss through
+    /// **3,280** — the one query cache: a read that asks marks its miss through
     /// `&self`, so a feed that only resolves a name or a template holds the owner shared, and
     /// its pairs over `Items` (725 → 104, the largest non-class resource in the count) are gone;
     /// the pairs over the pure caches moved into the VM-only class, where the same systems still
     /// meet over the VM alone.
     ///
-    /// **3,288 (decision 2291, corrected)** — the area-spirit-healer poll. Its **four** remaining
+    /// **3,288 (corrected)** — the area-spirit-healer poll. Its **four** remaining
     /// pairs, named one by one because the first version of this paragraph named the wrong ones:
     /// `portrait::booth::face_booth_billboards`, `quest_markers::bake_seat_scale` and
     /// `entities::live_display::tick_scale_ease` over `Transform`, and
@@ -969,7 +969,7 @@ pub(crate) mod schedule_tests {
     /// A ceiling raised with the wrong reason is a ratchet that has stopped meaning anything. The
     /// lesson this one cost: **read the dump, do not reason about what the new pairs must be.**
     ///
-    /// **3,291 (decision 2300)** — the glue create/main-menu scene's material lane: exactly **one**
+    /// **3,291** — the glue create/main-menu scene's material lane: exactly **one**
     /// new pair, `ui_models::forget_dead_vm_tiles` against `portrait::glue_booth::sync_glue_scene`
     /// over `MatAnimTable`, measured pair by pair on the tree that lands rather than assumed
     /// additive (the scene builder's other three new resources add none — it already held
@@ -981,14 +981,14 @@ pub(crate) mod schedule_tests {
     /// the row behind it is, and it is written by whoever owns it. A scene is also built **once**,
     /// the frame its model asset lands, against a reaper that fires only when a tile dies.
     ///
-    /// **2,886 (decision 2330)** — read off the dump on the tree that lands, after the
+    /// **2,886** — read off the dump on the tree that lands, after the
     /// `modalNextSpell` outbox's drain retired: `drain_chain_casts` held the whole cast ladder
     /// (`CastLadder`'s fourteen parameters and `CastTargeting`'s ten) with no declared order
     /// against anything but `UiInput`, and the cast reply's handler now casts the chain itself,
     /// as a one-shot outside the schedule. The three targeting systems the same record moved
     /// from `UiActionPlugin` to `SpellPlugin` kept their orders and their sets.
     ///
-    /// **2,888 (decision 2333)** — the trainer feed became the state re-evaluator's host and
+    /// **2,888** — the trainer feed became the state re-evaluator's host and
     /// reads the pet bar, the player's descriptor and its field edges. Read off the dump on the
     /// tree that lands: undeclared, the feed met six systems; `.after(UnitFeed)` (the shape the
     /// demo unit feed already takes) declares five of them, and the one it keeps —
@@ -1002,7 +1002,7 @@ pub(crate) mod schedule_tests {
     /// a new undeclared order; 2333 hands it to this ratchet's owner (2287) as a finding. The
     /// number is the dump's, not a sum.
     ///
-    /// **5,063 (decision 2337)** — not a raise: a re-measurement. Until here the census read
+    /// **5,063** — not a raise: a re-measurement. Until here the census read
     /// the *built* schedule, barriers included, and bevy shares one `ApplyDeferred` barrier per
     /// distance from the schedule's start — so 2,175 pairs (43%) were "ordered" only through a
     /// barrier the build happened to place between them, and moved whenever an edge anywhere
@@ -1016,11 +1016,11 @@ pub(crate) mod schedule_tests {
     /// Raising this ceiling is a claim that a new undeclared order is acceptable; make it with
     /// the reason, or declare the order instead (`.after`, a set, a `chain`). If the pair is
     /// about a resource that commutes by construction, the claim belongs in [`Classes`].
-    /// **5,608 (decision 2343)** — not a raise: a re-measurement. The 556 pairs with an
+    /// **5,608** — not a raise: a re-measurement. The 556 pairs with an
     /// exclusive system on one side were read as "explained" by a class argued for the build's
     /// barriers, which the declared graph (2337) no longer has; 413 are `finish_colliders`', 143
     /// the net drain's. Same tree, the class dropped, nothing else moved: 5,052 + 556.
-    /// **5,554 (decision 2345)** — lowered: the TAB scan stopped reading `Visibility` (the draw
+    /// **5,554** — lowered: the TAB scan stopped reading `Visibility` (the draw
     /// election's verdict), which ended its pairs with every `Visibility` writer.
     const UPDATE_ACTIONABLE_CEILING: usize = 5_554;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
@@ -1446,8 +1446,7 @@ pub(crate) mod schedule_tests {
         PlayerRoundTrip,
         /// Consumed in the window or not, the state is re-asked or re-derived once the UI is up.
         SelfHealing,
-        /// The publication is driven by a `VmMemo` diff, so a new VM re-derives and re-fires it
-        /// (decision 2226).
+        /// The publication is driven by a `VmMemo` diff, so a new VM re-derives and re-fires it.
         MemoLatched,
         /// Documented at the line as intentional.
         Deliberate,
@@ -1456,7 +1455,7 @@ pub(crate) mod schedule_tests {
     /// Every one-shot consumer that holds the VM, is not gated on `ingame_ui_up` (by its own
     /// run condition or a set's — read off the real schedule, not off the registration text),
     /// and is not a memo-diffed `fire_event` — each with the reason it is safe. Keyed
-    /// `(path under src/, fn)`. Audited 2026-09-16 (decision 2279) against the fill sites;
+    /// `(path under src/, fn)`. Audited 2026-09-16 against the fill sites;
     /// the reason names them. Adding a consumer the ordinary way (gated) passes; adding one
     /// ungated fails here, at the line, until it is either gated or argued.
     const EXEMPT: &[(&str, &str, Because, &str)] = &[

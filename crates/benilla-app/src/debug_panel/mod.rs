@@ -16,7 +16,7 @@
 //!   this section is time controls + a readout, not knobs.)
 //! - [`EguiPointerOver`] publishes "the mouse is talking to the egui overlays" each pass; both it
 //!   and the combined source of truth gameplay reads ([`crate::ui_script::PointerOverUi`]) are
-//!   *defined* by that combiner, and this module only writes them (decisions 0026/1174 — dev
+//!   *defined* by that combiner, and this module only writes them (dev
 //!   plugins must be droppable without breaking gameplay reads, so gameplay may not name a
 //!   dev-owned type).
 //!
@@ -43,7 +43,7 @@ use benilla_world::model_render::{ModelKind, ModelPart};
 use benilla_world::modkeys::{dev_chord, DEV_CHORD};
 
 /// The egui half of the pointer arbitration: this panel *writes* it, `ui_script` owns it —
-/// so a build without these overlays still compiles gameplay's reads (decision 1174; the
+/// so a build without these overlays still compiles gameplay's reads (the
 /// module-doc note above). `InspectMode`, the other half of 0026's named pair, lives there too
 /// and is imported by the two files that touch it (`inspect`, `journal`).
 use crate::ui_script::EguiPointerOver;
@@ -51,7 +51,7 @@ use crate::ui_script::EguiPointerOver;
 mod inspect;
 mod journal;
 
-/// The dev state this panel edits — resource-only, faithful defaults (decision 0026: the
+/// The dev state this panel edits — resource-only, faithful defaults (the
 /// always-present config layer; this module is only its editor). The engine owns and inits it,
 /// and the per-frame model-visibility apply system that reads its toggles is `model_render`'s.
 use benilla_world::dev_state::DebugState;
@@ -88,7 +88,7 @@ pub(crate) fn overlay_text(ui: &mut egui::Ui) {
 
 /// Strip the **Tab** key from egui's per-frame input so egui never treats it as focus navigation.
 ///
-/// Tab is a bound game key — `TargetNearestEnemy` (decision 0166). Left to itself, egui reads Tab at
+/// Tab is a bound game key — `TargetNearestEnemy`. Left to itself, egui reads Tab at
 /// `begin_pass` (`Focus::begin_pass`) and pulls keyboard focus into whatever focusable widget is on
 /// screen — the always-on perf pill — ringing it and then owning the keyboard. Our egui surfaces are
 /// mouse-driven dev overlays with no tab-to-next-field need, so we drop Tab before the pass sees it.
@@ -176,7 +176,7 @@ impl Plugin for DebugPanelPlugin {
         }
 
         // `DebugState` itself is `benilla_world::dev_state`'s and the engine inits it — this panel is only
-        // its editor (decision 0026), and eight other subsystems read it whether or not the panel
+        // its editor, and eight other subsystems read it whether or not the panel
         // is installed.
         // The inspector surface and the cast journal — the two instruments that stood on
         // `interact` and were registered by it until decision 1160's stage zero. The mouseover
@@ -230,7 +230,7 @@ impl Plugin for DebugPanelPlugin {
     }
 }
 
-/// The 1445 gate's missing half (decision 1452). Upstream, `run_manually` means "the app will run
+/// The 1445 gate's missing half. Upstream, `run_manually` means "the app will run
 /// the egui pass itself this frame" — never "off": `process_output_system` still `take()`s an
 /// output from every context every frame and logs at ERROR when none was prepared (bevy_egui
 /// 0.39 and 0.41 alike, `output.rs`). With the lane gated that was one ERROR per frame — a red
@@ -252,7 +252,7 @@ fn feed_gated_egui_output(
     // The empty pass's output after its first run, with the one-time texture delta (the font
     // atlas) already delivered: every later gated frame feeds this clone instead of running a
     // real begin/end pass — memory GC, a fresh `FullOutput`, a tessellation of nothing —
-    // 1.4 % of a parked frame's main thread for a panel that is closed (decision 1979).
+    // 1.4 % of a parked frame's main thread for a panel that is closed.
     mut cached: Local<Option<egui::FullOutput>>,
 ) {
     for (mut ctx, mut full_output, settings) in &mut contexts {
@@ -285,10 +285,10 @@ fn spawn_egui_camera(mut commands: Commands) {
     commands.spawn((
         PrimaryEguiContext, // `#[require(EguiContext)]` ⇒ this camera carries EguiContext
         // Named so [`crate::preflight`]'s MSAA check can say WHICH cameras disagree — an
-        // entity id in that error is a lookup, a name is the answer (decision 1659).
+        // entity id in that error is a lookup, a name is the answer.
         Name::new("egui dev-overlay camera"),
         Camera2d,
-        // **No MSAA — and saying so is what keeps the panel openable at all** (decision 1659).
+        // **No MSAA — and saying so is what keeps the panel openable at all**.
         // Silence here does not mean "none": `Camera` requires `Msaa`, whose `Default` is
         // `Sample4`, so this camera used to carry four samples without ever naming them. That was
         // invisible while the player-UI camera silently carried four too — and became a fatal
@@ -335,7 +335,7 @@ fn spawn_egui_camera(mut commands: Commands) {
     ));
 }
 
-/// Demand-gate the whole egui lane (decision 1445): when no dev overlay is open — panel closed,
+/// Demand-gate the whole egui lane: when no dev overlay is open — panel closed,
 /// inspect off (the perf HUD's pill is quads on the player-UI pass and never needs this lane;
 /// 1453/1454) — the primary context goes `run_manually` (which
 /// `bevy_egui`'s context-pass loop honors by skipping it outright: no begin/end pass, no
@@ -367,7 +367,7 @@ fn gate_egui_lane(
 }
 
 fn toggle_panel(keys: Res<ButtonInput<KeyCode>>, mut debug: ResMut<DebugState>) {
-    // The dev chord + `D` (decision 1048). It was a *bare* backtick until 1043 — backtick reads as
+    // The dev chord + `D`. It was a *bare* backtick until 1043 — backtick reads as
     // "not a game key", but it is one ([`crate::bindings::chord`] gives it the token `` ` ``, so the
     // reference's binding UI can bind it like any other), which made a bare toggle here exactly the
     // squat 0585 moved the perf HUD off `P` for. 1043 put it on the chord; `` ` `` is a bad key to
@@ -475,7 +475,7 @@ fn debug_panel_ui(
                                     format!("{}  ·  {}", kind_label(k), kind_counts[kind_index(k)]),
                                 );
                             }
-                            // The doodad-animation cost meter (decision 0130): how many placed
+                            // The doodad-animation cost meter: how many placed
                             // doodads carry an anim host, how many are ticking right now (the
                             // draw gate pauses hidden ones), how many batches sample a
                             // material-alpha loop (phase 2), and how many materials scroll their
@@ -505,10 +505,10 @@ fn debug_panel_ui(
                             ));
 
                             ui.add_space(6.0);
-                            // WMO portal cull A/B (decision 0031): off ⇒ every building group always
+                            // WMO portal cull A/B: off ⇒ every building group always
                             // draws (the cathedral reappears from the Trade District).
                             ui.checkbox(&mut m.portal_cull, "WMO portal visibility cull");
-                            // The cull probe (decision 0022): a one-click full trace dump — stand where a
+                            // The cull probe: a one-click full trace dump — stand where a
                             // room vanishes, click, and the exact seed evidence + per-portal verdicts land
                             // in a file.
                             if ui.button("dump WMO cull trace").clicked() {
@@ -598,7 +598,7 @@ fn debug_panel_ui(
                     egui::CollapsingHeader::new("Weather")
                         .default_open(false)
                         .show(ui, |ui| {
-                            // Live state readout (the two ramped channels, decision 0302).
+                            // Live state readout (the two ramped channels).
                             if let Some(ws) = weather_state.as_ref() {
                                 ui.strong(format!(
                                     "{:?}  ·  effect {:.2}  ·  sky {:.2}  ·  storm blend {:.2}",

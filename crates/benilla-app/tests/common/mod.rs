@@ -1,4 +1,4 @@
-//! **The integration tests' interface loader — one copy, both stores** (decision 1751).
+//! **The integration tests' interface loader — one copy, both stores**.
 //!
 //! The in-crate sibling of `ui_script::test_ui::load_ui`, which integration tests cannot reach:
 //! they link this crate as a library, so its `#[cfg(test)]` items are not compiled for them. Each
@@ -67,9 +67,9 @@ pub fn load_ui(script: &UiScript, entry: &str) {
 
 /// The stock micro-button row's unguarded reads, stood in for on the row's first call — one copy
 /// per store, like the loader itself. `ui_script::test_ui::MICRO_BUTTON_STAND_INS` is the
-/// original and carries the why (decision 1987).
+/// original and carries the why.
 /// The stock `UIParent.xml`'s unguarded callees, stood in for at load — see
-/// `ui_script::test_ui::UIPARENT_STAND_INS` (decision 1988).
+/// `ui_script::test_ui::UIPARENT_STAND_INS`.
 const UIPARENT_STAND_INS: &str = r#"
     -- Callees of the stock UIParent.xml's <OnUpdate> and of UIParent_OnEvent's arms that live in
     -- files a kit may stop short of, plus the bag verbs the stock ShowUIPanel calls and the two

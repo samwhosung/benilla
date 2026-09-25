@@ -1,4 +1,4 @@
-//! The in-game **console command registry** (decision 2303) — the reference's `ConsoleCommand`
+//! The in-game **console command registry** — the reference's `ConsoleCommand`
 //! table, host side: `ConsoleCommandRegister 0x63f9e0` over a `TSExplicitList<CONSOLECOMMAND>`,
 //! with parse / register / lookup / execute (the registry runtime, `[0x63f880, 0x640c50)`). A
 //! subsystem registers its commands from its own plugin ([`ConsoleCommandApp::console_command`]),
