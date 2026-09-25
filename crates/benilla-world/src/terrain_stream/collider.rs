@@ -408,7 +408,7 @@ mod tests {
     /// On the shipped data, through the real cast: a body walking east from the pin stops at the
     /// flagged chunk's boundary 1.46 yd away, as 1.12.1 stops it, and walks through without walls.
     #[test]
-    fn a_body_walking_east_from_the_b129_pin_is_stopped_at_the_wall() {
+    fn a_body_walking_east_from_the_pin_is_stopped_at_the_wall() {
         /// The pin, and the MCNK boundary the flagged chunk starts at (WoW y; east is −y).
         const PIN: [f32; 3] = [-6601.98, -531.87, 335.60];
         const WALL_Y: f32 = 32.0 * benilla_formats::TILE_SIZE - 528.0 * CHUNK_SIZE;

@@ -33,8 +33,8 @@ enum Arm {
 impl Arm {
     fn label(self) -> &'static str {
         match self {
-            Arm::Zeros => "zeros    (pre-1263)",
-            Arm::Computed => "computed (1263)   ",
+            Arm::Zeros => "zeros   ",
+            Arm::Computed => "computed",
         }
     }
 }

@@ -445,7 +445,7 @@ mod tests {
         assert!(
             !src.contains("@builtin(frag_depth)"),
             "the model lane writes a fragment depth again — the sky pin is the vertex stage's, \
-             and a fragment write costs every draw on this lane its early-Z (decision 2016)"
+             and a fragment write costs every draw on this lane its early-Z"
         );
     }
 
@@ -457,21 +457,21 @@ mod tests {
         // The row accumulator `c0 + floor(i*(c1 - c0)/64)`, not a lerp to the deep endpoint.
         assert!(
             src.contains("let row = c0 + floor(i * (c1 - c0) / 64.0);"),
-            "the swatch stopped building its rows the way FUN_0068a830 does — a plain lerp to the \
-             deep endpoint runs a 64th of a ramp that does not exist (decision 2074)"
+            "the swatch stopped building its rows the way `0x68a830` does: a plain lerp to the \
+             deep endpoint runs a 64th of a ramp that does not exist"
         );
         // The ocean-only tail: floor(0.9*byte) on the last row, alpha forced opaque.
         assert!(
             src.contains("if ocean && i >= 63.0 {")
                 && src.contains("vec4<f32>(floor(row.rgb * 0.9), 255.0)"),
             "the ocean's last-row darkening is gone — ~80% of the world's ocean vertices sample \
-             that row, so this is the open sea's colour (decision 2074)"
+             that row, so this is the open sea's colour"
         );
         // Linear sampling across the two rows V falls between, at texel `V*64 - 0.5`.
         assert!(
             src.contains("let t = clamp(v * 64.0 - 0.5, 0.0, 63.0);"),
             "the swatch stopped sampling as an 8x64 LINEAR/CLAMP texture — the ocean darkening \
-             would step instead of ramping across the final 1/64 of V (decision 2074)"
+             would step instead of ramping across the final 1/64 of V"
         );
 
         /// `row(i)` for one channel, `swatch_row`'s byte arithmetic.

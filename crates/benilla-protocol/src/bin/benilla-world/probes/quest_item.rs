@@ -178,7 +178,7 @@ impl Probe for QuestItem {
         )?;
         anyhow::ensure!(
             refusal == "13",
-            "--quest-item: expected QUEST_INVALID reason 13 (ALREADY_ON, the director's 0x0d), \
+            "--quest-item: expected QUEST_INVALID reason 13 (ALREADY_ON, 0x0d), \
              got {refusal}"
         );
         println!("✅ refusal: QUEST_INVALID reason 13 → ERR_QUEST_ALREADY_ON (the ref's 0x5dbca0)");

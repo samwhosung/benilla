@@ -65,7 +65,7 @@ fn main() {
                 hex_from_le(&verifier),
                 hex_from_le(&salt),
             );
-            println!("-- then mint the character over the real wire (0423's probe; KEEP it):");
+            println!("-- then mint the character over the real wire (keep it):");
             println!(
                 "-- WOW_USER={user_s} WOW_PASS={pass_s} WOW_PROBE_CHARCREATE=Probe{} \\",
                 spelled(n)

@@ -308,7 +308,7 @@ fn player_bytes_3_byte_3_is_the_current_pvp_rank_not_the_highest() {
     assert_eq!(
         f.player_honor_rank(),
         None,
-        "the HIGHEST rank is a different field (1222) — absent means absent"
+        "the HIGHEST rank is a different field: absent means absent"
     );
     // A demoted player keeps the higher lifetime rank.
     let demoted = ObjectFields::from_pairs(&[(195, 0x03_00_00_00), (1222, 0x0B_00_00_00)]);

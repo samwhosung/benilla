@@ -750,7 +750,7 @@ mod tests {
     /// The reference stops a mover 1.46 yd east of `.go xyz -6601.98 -531.87 335.60 0`: the MCNK
     /// there is flagged [`benilla_adt::MCNK_IMPASSABLE`] and the pin's own is not.
     #[test]
-    fn the_b129_pin_stands_one_chunk_west_of_an_impassable_band() {
+    fn the_pin_stands_one_chunk_west_of_an_impassable_band() {
         let data = crate::wow_data_or_skip!();
         let mut chain = crate::open_chain(&data).expect("open chain");
 

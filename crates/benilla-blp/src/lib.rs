@@ -603,7 +603,7 @@ mod tests {
         );
         assert!(
             tail.bytes[short as usize..].iter().any(|&x| x != 0),
-            "nothing was zero-filled — that was B358's black"
+            "nothing is zero-filled, which would draw black"
         );
         // `decode` reads the same span.
         let decoded = decode(&b).unwrap();
