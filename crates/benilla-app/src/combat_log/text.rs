@@ -101,8 +101,9 @@ fn spell_center_text(
 }
 
 /// Melee packet to the centre text's messageType and args (`0x629d30`), fired at packet receive,
-/// not at the impact keyframe. A landed hit with a partial block, absorb or resist fires that
-/// word with `(damage, partial)`, tested ahead of the crit.
+/// not at the impact keyframe. A landed hit with a partial fires the first of resist
+/// (`0x629efd`), block (`0x629f15`) and absorb (`0x629f30`) with `(damage, partial)`, ahead of
+/// the crit.
 pub(crate) fn melee_center_text(
     hit_info: u32,
     victim_state: u32,
@@ -120,12 +121,12 @@ pub(crate) fn melee_center_text(
         8 => Some(("DEFLECT", None, None)),
         _ => {
             if damage > 0 {
-                if absorb > 0 {
-                    Some(("ABSORB", Some(damage.to_string()), Some(absorb.to_string())))
+                if resist > 0 {
+                    Some(("RESIST", Some(damage.to_string()), Some(resist.to_string())))
                 } else if blocked > 0 {
                     Some(("BLOCK", Some(damage.to_string()), Some(blocked.to_string())))
-                } else if resist > 0 {
-                    Some(("RESIST", Some(damage.to_string()), Some(resist.to_string())))
+                } else if absorb > 0 {
+                    Some(("ABSORB", Some(damage.to_string()), Some(absorb.to_string())))
                 } else if hit_info & 0x80 != 0 {
                     Some(("DAMAGE_CRIT", Some(damage.to_string()), None))
                 } else {
@@ -627,6 +628,45 @@ mod tests {
     use crate::combat_text::COLOR_SPELL_GOLD;
     use crate::net::{Guid, SelfPlayer};
     use bevy::ecs::system::RunSystemOnce;
+
+    fn words(
+        message_type: &'static str,
+        data: Option<u32>,
+        extra: Option<u32>,
+    ) -> Option<(&'static str, Option<String>, Option<String>)> {
+        Some((
+            message_type,
+            data.map(|d| d.to_string()),
+            extra.map(|e| e.to_string()),
+        ))
+    }
+
+    /// A landed melee hit with several partials takes the first of resist, block and absorb
+    /// (`0x629efd`, `0x629f15`, `0x629f30`).
+    #[test]
+    fn melee_partials_are_tested_resist_block_absorb() {
+        // (hit_info, victim_state, damage, absorb, resist, blocked)
+        assert_eq!(
+            melee_center_text(0, 1, 300, 50, 0, 40),
+            words("BLOCK", Some(300), Some(40))
+        );
+        assert_eq!(
+            melee_center_text(0, 1, 300, 50, 20, 0),
+            words("RESIST", Some(300), Some(20))
+        );
+        assert_eq!(
+            melee_center_text(0x80, 1, 300, 50, 20, 40),
+            words("RESIST", Some(300), Some(20))
+        );
+        assert_eq!(
+            melee_center_text(0x80, 1, 300, 50, 0, 0),
+            words("ABSORB", Some(300), Some(50))
+        );
+        assert_eq!(
+            melee_center_text(0x80, 1, 300, 0, 0, 0),
+            words("DAMAGE_CRIT", Some(300), None)
+        );
+    }
 
     /// `SMSG_SPELLLOGMISS`'s word is spell gold: `0x5e7f66` pushes the resolved spell record, not
     /// the melee site's NULL, and unlike the GO's inline emit there is no speed test here.
