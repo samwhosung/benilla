@@ -665,7 +665,7 @@ mod tests {
                 announce(1, 57, roll_vote::NEED),
                 me,
                 true,
-                "Need Roll - 57 for {L} by Sam",
+                "Need Roll - 57 for {L} by Aldric",
             ),
             (
                 announce(1, 57, roll_vote::GREED),
@@ -677,7 +677,7 @@ mod tests {
                 announce(1, 57, roll_vote::GREED),
                 me,
                 true,
-                "Greed Roll - 57 for {L} by Sam",
+                "Greed Roll - 57 for {L} by Aldric",
             ),
         ];
         for (p, name, is_self, expect) in cases {
@@ -705,7 +705,7 @@ mod tests {
             )
             .expect("detail on emits the dice line");
             assert!(
-                got.ends_with("by Sam"),
+                got.ends_with("by Aldric"),
                 "our own roll must name us third-person: {got}"
             );
             assert!(
