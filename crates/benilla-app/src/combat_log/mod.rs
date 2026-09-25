@@ -117,6 +117,7 @@ fn on_spell_damage_log(In(ev): In<SessionEvent>, c: Ctx, mut l: Sinks) {
             &l.stores,
             c.spells.as_deref(),
             *l.damage_text,
+            c.periodic.0,
             &mut l.text,
             &mut l.feedback,
             &mut l.center,

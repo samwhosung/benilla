@@ -81,20 +81,74 @@ fn spell_feedback(
     }
 }
 
-/// Spell packet to the centre text's messageType: landed damage is always `SPELL_DAMAGE`, crit or
-/// not (`0x62cd80` has no crit type); zero damage is the `SPELL_ABSORBED`/`SPELL_RESISTED` word.
-/// The reference's partial words on a landed spell hit are not built here.
-fn spell_center_text(
+/// A centre-text line: the messageType, `arg2` and `arg3`.
+pub(crate) type CenterText = (&'static str, Option<String>, Option<String>);
+
+/// `SMSG_SPELLNONMELEEDAMAGELOG`'s centre text, routed as the handler `0x5e85e0` routes the log:
+/// split damage (`hit_info & 8`, `0x5e8700`) is `0x62de60`'s `SPLIT_DAMAGE` with the damage; a
+/// periodic log (`0x5e876d`) takes the periodic tick's words, and none at all while
+/// `CombatLogPeriodicSpells` is off (`0x62d9ae`); anything else takes the direct hit's.
+fn spell_damage_center_text(s: &SpellDamageLog, log_periodic: bool) -> Option<CenterText> {
+    if s.hit_info & 0x8 != 0 {
+        Some(("SPLIT_DAMAGE", Some(s.damage.to_string()), None))
+    } else if s.periodic {
+        log_periodic
+            .then(|| periodic_center_text(s.damage, s.absorb, s.resist))
+            .flatten()
+    } else {
+        direct_spell_center_text(s.damage, s.absorb, s.resist, s.blocked)
+    }
+}
+
+/// The direct spell hit's words (`0x62cd80`), with no crit type. A landed hit takes the first of
+/// `SPELL_RESISTED` (damage, resisted; `0x62d048`), `SPELL_BLOCKED` (blocked; `0x62d062`) and
+/// `SPELL_ABSORBED` (damage, absorbed; `0x62d07b`), else `SPELL_DAMAGE` (`0x62d098`). Nothing
+/// through is worded absorbed, then blocked (miss code 5, `0x62cec7`), then resisted.
+fn direct_spell_center_text(
     damage: u32,
     absorb: u32,
     resist: i32,
-) -> Option<(&'static str, Option<String>)> {
+    blocked: u32,
+) -> Option<CenterText> {
+    let amount = |n: u32| Some(n.to_string());
     if damage > 0 {
-        Some(("SPELL_DAMAGE", Some(damage.to_string())))
-    } else if absorb > 0 {
-        Some(("SPELL_ABSORBED", None))
-    } else if resist > 0 {
-        Some(("SPELL_RESISTED", None))
+        Some(if resist > 0 {
+            ("SPELL_RESISTED", amount(damage), Some(resist.to_string()))
+        } else if blocked != 0 {
+            ("SPELL_BLOCKED", amount(blocked), None)
+        } else if absorb != 0 {
+            ("SPELL_ABSORBED", amount(damage), amount(absorb))
+        } else {
+            ("SPELL_DAMAGE", amount(damage), None)
+        })
+    } else if absorb != 0 {
+        Some(("SPELL_ABSORBED", None, None))
+    } else if blocked != 0 {
+        Some(("SPELL_BLOCKED", None, None))
+    } else if resist != 0 {
+        Some(("SPELL_RESISTED", None, None))
+    } else {
+        None
+    }
+}
+
+/// A periodic damage tick's words (`0x628100`), the melee family's: a landed tick takes `RESIST`
+/// (damage, resisted; `0x628354`), else `ABSORB` (damage, absorbed; `0x62836c`), else `DAMAGE`
+/// (`0x62837f`). Nothing through is `SPELL_ABSORBED`, else `SPELL_RESISTED`.
+fn periodic_center_text(damage: u32, absorb: u32, resist: i32) -> Option<CenterText> {
+    let amount = |n: u32| Some(n.to_string());
+    if damage > 0 {
+        Some(if resist > 0 {
+            ("RESIST", amount(damage), Some(resist.to_string()))
+        } else if absorb != 0 {
+            ("ABSORB", amount(damage), amount(absorb))
+        } else {
+            ("DAMAGE", amount(damage), None)
+        })
+    } else if absorb != 0 {
+        Some(("SPELL_ABSORBED", None, None))
+    } else if resist != 0 {
+        Some(("SPELL_RESISTED", None, None))
     } else {
         None
     }
@@ -111,7 +165,7 @@ pub(crate) fn melee_center_text(
     absorb: u32,
     resist: i32,
     blocked: u32,
-) -> Option<(&'static str, Option<String>, Option<String>)> {
+) -> Option<CenterText> {
     match victim_state {
         2 => Some(("DODGE", None, None)),
         3 => Some(("PARRY", None, None)),
@@ -164,6 +218,7 @@ pub(super) fn spell_damage_log(
     stores: &Query<&mut ObjectStore>,
     spells: Option<&crate::ui_action::Spells>,
     gates: DamageTextGates,
+    log_periodic: bool,
     text: &mut MessageWriter<CombatTextSpawn>,
     feedback: &mut MessageWriter<UnitCombatFeedback>,
     center: &mut MessageWriter<CombatTextEvent>,
@@ -195,11 +250,11 @@ pub(super) fn spell_damage_log(
     }
     // The center combat text: self recipient only.
     if self_guid.0 == Some(s.target) {
-        if let Some((message_type, data)) = spell_center_text(s.damage, s.absorb, s.resist) {
+        if let Some((message_type, data, extra)) = spell_damage_center_text(&s, log_periodic) {
             center.write(CombatTextEvent {
                 message_type,
                 data,
-                extra: None,
+                extra,
             });
         }
     }
@@ -249,7 +304,7 @@ pub(super) fn periodic_aura_log(
             ),
         );
     }
-    // Centre text, self recipient only: damage ticks as direct damage, heal ticks `PERIODIC_HEAL`
+    // Centre text, self recipient only: damage ticks the periodic words, heal ticks `PERIODIC_HEAL`
     // (arg2 the caster's name, arg3 the amount), energize ticks the power-gain family.
     if self_guid.0 == Some(s.target) {
         for tick in &s.ticks {
@@ -259,13 +314,13 @@ pub(super) fn periodic_aura_log(
                     absorb,
                     resist,
                     ..
-                } => spell_center_text(amount, absorb, resist).map(|(message_type, data)| {
-                    CombatTextEvent {
+                } => periodic_center_text(amount, absorb, resist).map(
+                    |(message_type, data, extra)| CombatTextEvent {
                         message_type,
                         data,
-                        extra: None,
-                    }
-                }),
+                        extra,
+                    },
+                ),
                 PeriodicTick::Heal { amount } => Some(CombatTextEvent {
                     message_type: "PERIODIC_HEAL",
                     data: Some(
@@ -634,7 +689,7 @@ mod tests {
         message_type: &'static str,
         data: Option<u32>,
         extra: Option<u32>,
-    ) -> Option<(&'static str, Option<String>, Option<String>)> {
+    ) -> Option<CenterText> {
         Some((
             message_type,
             data.map(|d| d.to_string()),
@@ -667,6 +722,109 @@ mod tests {
             melee_center_text(0x80, 1, 300, 0, 0, 0),
             words("DAMAGE_CRIT", Some(300), None)
         );
+    }
+
+    fn spell_hit(damage: u32, absorb: u32, resist: i32, blocked: u32) -> SpellDamageLog {
+        SpellDamageLog {
+            target: 10,
+            attacker: 20,
+            spell_id: 133,
+            damage,
+            school: 2,
+            absorb,
+            resist,
+            periodic: false,
+            blocked,
+            hit_info: 0,
+        }
+    }
+
+    /// A direct spell hit on you with partials takes the first of resisted, blocked and absorbed
+    /// (`0x62d048`, `0x62d062`, `0x62d07b`), crit or not; blocked carries its amount alone.
+    #[test]
+    fn a_direct_spell_hit_words_its_first_partial() {
+        let direct = |damage, absorb, resist, blocked| {
+            spell_damage_center_text(&spell_hit(damage, absorb, resist, blocked), true)
+        };
+        assert_eq!(
+            direct(300, 50, 100, 40),
+            words("SPELL_RESISTED", Some(300), Some(100))
+        );
+        assert_eq!(
+            direct(300, 50, 0, 40),
+            words("SPELL_BLOCKED", Some(40), None)
+        );
+        assert_eq!(
+            direct(300, 50, 0, 0),
+            words("SPELL_ABSORBED", Some(300), Some(50))
+        );
+        assert_eq!(direct(300, 0, 0, 0), words("SPELL_DAMAGE", Some(300), None));
+        // A crit has no word of its own.
+        let crit = SpellDamageLog {
+            hit_info: 0x2,
+            ..spell_hit(300, 0, 0, 0)
+        };
+        assert_eq!(
+            spell_damage_center_text(&crit, true),
+            words("SPELL_DAMAGE", Some(300), None)
+        );
+        // Nothing through: absorbed, then blocked, then resisted, bare.
+        assert_eq!(direct(0, 50, 100, 40), words("SPELL_ABSORBED", None, None));
+        assert_eq!(direct(0, 0, 100, 40), words("SPELL_BLOCKED", None, None));
+        assert_eq!(direct(0, 0, 100, 0), words("SPELL_RESISTED", None, None));
+        assert_eq!(direct(0, 0, 0, 0), None);
+    }
+
+    /// A periodic tick takes the melee words, `RESIST` before `ABSORB` before `DAMAGE`
+    /// (`0x628354`, `0x62836c`, `0x62837f`); nothing through keeps the `SPELL_*` words.
+    #[test]
+    fn a_periodic_tick_words_resist_absorb_damage() {
+        assert_eq!(
+            periodic_center_text(300, 50, 100),
+            words("RESIST", Some(300), Some(100))
+        );
+        assert_eq!(
+            periodic_center_text(300, 50, 0),
+            words("ABSORB", Some(300), Some(50))
+        );
+        assert_eq!(
+            periodic_center_text(300, 0, 0),
+            words("DAMAGE", Some(300), None)
+        );
+        assert_eq!(
+            periodic_center_text(0, 50, 100),
+            words("SPELL_ABSORBED", None, None)
+        );
+        assert_eq!(
+            periodic_center_text(0, 0, 100),
+            words("SPELL_RESISTED", None, None)
+        );
+        assert_eq!(periodic_center_text(0, 0, 0), None);
+    }
+
+    /// `SMSG_SPELLNONMELEEDAMAGELOG` routes as `0x5e85e0`: split damage first (`0x5e8700`), then a
+    /// periodic log to the tick's words behind `CombatLogPeriodicSpells` (`0x62d9ae`), which
+    /// ignore the blocked amount.
+    #[test]
+    fn a_spell_damage_log_routes_split_and_periodic_first() {
+        let split = SpellDamageLog {
+            hit_info: 0x8,
+            periodic: true,
+            ..spell_hit(120, 0, 30, 0)
+        };
+        assert_eq!(
+            spell_damage_center_text(&split, true),
+            words("SPLIT_DAMAGE", Some(120), None)
+        );
+        let periodic = SpellDamageLog {
+            periodic: true,
+            ..spell_hit(300, 50, 0, 40)
+        };
+        assert_eq!(
+            spell_damage_center_text(&periodic, true),
+            words("ABSORB", Some(300), Some(50))
+        );
+        assert_eq!(spell_damage_center_text(&periodic, false), None);
     }
 
     /// The spell-miss word per code, as the jump table `0x62be10`: absorb (10) and every code past

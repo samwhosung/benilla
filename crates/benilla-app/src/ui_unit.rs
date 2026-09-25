@@ -42,8 +42,8 @@ pub(crate) struct UnitCombatFeedback {
 
 /// One `COMBAT_TEXT_UPDATE` (event `0x21E`, via `0x703f50`), fired at packet parse by every
 /// producer, melee included (`0x6255b0` → `0x629d30`); `data`/`extra` are `arg2`/`arg3`. Fired only
-/// for the player as recipient; the reference's emit shares the chat combat log's category scope,
-/// so it can fire for other participants, by a rule untraced.
+/// when the unit the line is about is the player: each emitter tests that unit's class (`0x5efea0`)
+/// for 0 before its helper (`0x629ef1`, `0x62d046`, `0x62834b`).
 #[derive(Message, Clone)]
 pub(crate) struct CombatTextEvent {
     pub(crate) message_type: &'static str,
