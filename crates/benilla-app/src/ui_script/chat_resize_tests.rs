@@ -1,19 +1,9 @@
-//! The chat window's **move, resize and lock**, end to end.
-//!
-//! Like `chat_options_tests` next door, these drive the shipped `ChatFrame.xml` from the mouse
-//! event inward — a press on the real grip button, a drag of the real window body, a click on the
-//! real menu row — because what is being built is a *path*, not a function. Every hop it names is
-//! a hop where the feature could be absent while every unit underneath it passed: is the grip a
-//! hit target at all? does the lock stop it? does the clamp hold? does the geometry reach the file
-//! and come back?
-//!
-//! The manifest is `chat_options_tests`' — `benilla.toc`'s own order, up to `ChatFrame.xml`.
+//! The chat window's move, resize and lock, driven from the mouse through the stock frames.
 
 use benilla_ui::script::UiScript;
 
 use super::test_ui::load_ui as load_xml;
 
-/// The chat dock with everything its tab menu and its grips reach under it.
 fn chat_ui() -> UiScript {
     let mut s = UiScript::new().unwrap();
     for file in [
@@ -34,8 +24,7 @@ fn chat_ui() -> UiScript {
         "Interface\\FrameXML\\UIMenu.xml", // the kit ChatMenu/EmoteMenu/VoiceMacroMenu build from
         "Interface\\FrameXML\\GlobalStrings.lua",
         "Interface\\FrameXML\\BasicControls.xml",
-        // `FCF_ValidateChatFramePosition` (a tab-drag stop) reads `MainMenuBar:GetHeight()`; the
-        // bar's own load-time chain precedes it, as in the action-bar harness.
+        // A tab-drag stop's `FCF_ValidateChatFramePosition` reads `MainMenuBar:GetHeight()`.
         "Interface\\FrameXML\\Cooldown.xml",
         "Interface\\FrameXML\\ActionButtonTemplate.xml",
         "Interface\\FrameXML\\TextStatusBar.lua",
@@ -54,7 +43,6 @@ fn chat_ui() -> UiScript {
     s
 }
 
-/// A frame's centre, through the real layout.
 fn centre(s: &mut UiScript, frame: &str) -> (f32, f32) {
     s.resolve();
     let (x, y): (f64, f64) = s
@@ -78,7 +66,6 @@ fn left(s: &mut UiScript) -> f32 {
     s.eval::<f64>("return ChatFrame1:GetLeft()").unwrap() as f32
 }
 
-/// Right-click a frame's centre through the real hit path.
 fn right_click(s: &mut UiScript, frame: &str) {
     let (x, y) = centre(s, frame);
     s.mouse_button(x, y, "RightButton", true);
@@ -86,7 +73,6 @@ fn right_click(s: &mut UiScript, frame: &str) {
     s.resolve();
 }
 
-/// Left-click a frame's centre through the real hit path.
 fn left_click(s: &mut UiScript, frame: &str) {
     let (x, y) = centre(s, frame);
     s.mouse_button(x, y, "LeftButton", true);
@@ -94,10 +80,8 @@ fn left_click(s: &mut UiScript, frame: &str) {
     s.resolve();
 }
 
-/// Press a grip and walk the cursor to `(x, y)` — the real gesture, without releasing.
-/// The tabs ship hidden; a stationary hover over the dock reveals them (`FCF_OnUpdate`), and
-/// the reference moves a window by dragging its TAB (ChatTabTemplate's OnDragStart →
-/// `StartMoving`), so every drag here starts with the reveal.
+/// The tabs ship hidden until a stationary hover reveals them (`FCF_OnUpdate`), and a window
+/// moves by its tab (`OnDragStart` calls `StartMoving`), so every drag starts here.
 fn reveal(s: &mut UiScript) {
     let (cx, cy) = centre(s, "ChatFrame1");
     s.mouse_move(cx, cy);
@@ -107,7 +91,6 @@ fn reveal(s: &mut UiScript) {
     }
 }
 
-/// Drag `ChatFrame1Tab` by `dx, dy` — the reference's move gesture — and release.
 fn drag_tab(s: &mut UiScript, dx: f32, dy: f32) {
     reveal(s);
     let (tx, ty) = centre(s, "ChatFrame1Tab");
@@ -125,8 +108,7 @@ fn grab_grip(s: &mut UiScript, grip: &str) -> (f32, f32) {
     (x, y)
 }
 
-/// The reference's stock state: **both dock windows ship locked**, and that is what
-/// `GetChatWindowInfo` answers, because it is the chat-cache's own `LOCKED 1`.
+/// The stock chat cache carries `LOCKED 1` for both dock windows.
 #[test]
 fn both_dock_windows_ship_locked() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -152,10 +134,7 @@ fn both_dock_windows_ship_locked() {
         .is_none());
 }
 
-/// **The tab menu's Lock row: it is there, it toggles, and its label flips.**
-///
-/// The reference's FIRST row (FloatingChatFrame.lua l.236-246): `UNLOCK_WINDOW` when the frame is
-/// locked, `LOCK_WINDOW` when it is not, `notCheckable`.
+/// The lock verb is the menu's first row (`FloatingChatFrame.lua:239`).
 #[test]
 fn the_tab_menus_lock_row_toggles_the_window_and_flips_its_label() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -197,17 +176,13 @@ fn the_tab_menus_lock_row_toggles_the_window_and_flips_its_label() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **A locked window refuses the grip.** Two things have to hold and only one of them is the
-/// early return: the grip must not take the click at all (or it would shadow the chat line under
-/// it — see the template's note), and `FCF_Resize` must refuse even if something did reach it.
 #[test]
 fn a_locked_window_refuses_a_grip_drag() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = chat_ui();
     let before = width(&mut s);
     assert_eq!(before, 430.0, "the authored width");
-    // The reference's grips take the mouse whatever the lock says — the refusal is
-    // `FCF_Resize`'s `isLocked` gate, not a disabled button.
+    // The grips take the mouse whatever the lock; `FCF_Resize`'s `isLocked` gate refuses.
     assert!(s
         .eval::<bool>("return ChatFrame1ResizeBottomRight:IsMouseEnabled()")
         .unwrap());
@@ -224,11 +199,7 @@ fn a_locked_window_refuses_a_grip_drag() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **An unlocked window resizes from its BOTTOMRIGHT grip, and stops at the reference's bounds.**
-///
-/// 430×120 authored, `<ResizeBounds>` 296×75 … 608×400. The clamp is the half a naive pump gets
-/// wrong twice over: without the rebate the size pins at the bound while the anchor keeps sliding,
-/// so a window held past its minimum stops shrinking and starts *walking*.
+/// Authored 430x120; `<ResizeBounds>` 296x75 to 608x400 (`FloatingChatFrame.xml`).
 #[test]
 fn an_unlocked_bottom_right_grip_resizes_and_clamps_at_the_bounds() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -248,7 +219,7 @@ fn an_unlocked_bottom_right_grip_resizes_and_clamps_at_the_bounds() {
 
     let bottom_before: f64 = s.eval("return ChatFrame1:GetBottom()").unwrap();
     grab_grip(&mut s, "ChatFrame1ResizeBottomRight");
-    // Right and DOWN: the BOTTOMRIGHT corner follows the cursor, so both grow.
+    // Right and down: the `BOTTOMRIGHT` corner follows the cursor, so both grow.
     s.mouse_move(x + 50.0, y - 30.0);
     assert_eq!(width(&mut s), 480.0, "the right edge followed the cursor");
     assert_eq!(height(&mut s), 150.0, "and the bottom edge with it");
@@ -258,11 +229,9 @@ fn an_unlocked_bottom_right_grip_resizes_and_clamps_at_the_bounds() {
         "the planted TOP edge stayed put: {bottom_before} -> {bottom_after}"
     );
 
-    // Past the maximum: the edge lands ON the bound and stays there.
     s.mouse_move(x + 900.0, y - 900.0);
     assert_eq!(width(&mut s), 608.0, "maxResize x");
     assert_eq!(height(&mut s), 400.0, "maxResize y");
-    // Past the minimum, from there.
     s.mouse_move(x - 900.0, y + 900.0);
     assert_eq!(width(&mut s), 296.0, "minResize x");
     assert_eq!(height(&mut s), 75.0, "minResize y");
@@ -271,13 +240,7 @@ fn an_unlocked_bottom_right_grip_resizes_and_clamps_at_the_bounds() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **The release ends the resize even when the cursor is nowhere near the grip.**
-///
-/// The failure this pins is not hypothetical: drag past `maxResize` and the grip *stops following*
-/// (the clamp plants the edge while the cursor runs on), so the release lands on empty screen. If
-/// `OnMouseUp` went to whatever is under the cursor rather than to the button that took the press,
-/// `FCF_StopResize` would never run and the window would stay glued to the mouse for the rest of
-/// the session.
+/// `OnMouseUp` goes to the button that took the press, not to the frame under the cursor.
 #[test]
 fn the_release_ends_the_resize_from_anywhere_on_screen() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -287,7 +250,6 @@ fn the_release_ends_the_resize_from_anywhere_on_screen() {
 
     s.mouse_move(x + 900.0, y);
     assert_eq!(width(&mut s), 608.0, "held against the maximum");
-    // The cursor is 900px past the grip; release there.
     s.mouse_button(x + 900.0, y, "LeftButton", false);
     s.resolve();
     assert!(
@@ -297,7 +259,7 @@ fn the_release_ends_the_resize_from_anywhere_on_screen() {
         "FCF_StopResize ran"
     );
 
-    // The falsifier: with the drag still live, walking back would shrink the window.
+    // With the drag still live, walking back would shrink the window.
     s.mouse_move(x - 200.0, y);
     assert_eq!(
         width(&mut s),
@@ -307,9 +269,6 @@ fn the_release_ends_the_resize_from_anywhere_on_screen() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **The window moves by a body drag, and only while unlocked.** A plain click is untouched — the
-/// gesture has to cross the drag threshold before anything moves, which is what keeps 0843's
-/// held-spell dismissal working on the same button.
 #[test]
 fn the_tab_drag_moves_an_unlocked_window_and_a_locked_one_stays_put() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -342,9 +301,8 @@ fn the_tab_drag_moves_an_unlocked_window_and_a_locked_one_stays_put() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The dragged window is **user-placed**, and `UIParent_ManageFramePositions` therefore leaves it
-/// alone. Without that the next stance-bar show/hide would `ClearAllPoints` the window and drop it
-/// back on the bottom-stack seat.
+/// `UIParent_ManageFramePositions` skips a user-placed frame, the chat frames only outside simple
+/// chat (`UIParent.lua:1690-1692`).
 #[test]
 fn a_moved_window_is_user_placed_and_the_managed_pass_skips_it() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -376,16 +334,12 @@ fn a_moved_window_is_user_placed_and_the_managed_pass_skips_it() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **The geometry survives a relog** — the whole round trip, in one test: drag and resize the
-/// shipped window, snapshot it through the engine seam, write the file text, read it back, and
-/// seat it into a *fresh* VM whose windows are all on their authored anchors.
 #[test]
 fn the_geometry_round_trips_through_the_save_file() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = chat_ui();
     s.run("FCF_SetLocked(ChatFrame1, nil)").unwrap();
 
-    // Resize from the bottom-right, then move the whole window.
     let (gx, gy) = grab_grip(&mut s, "ChatFrame1ResizeBottomRight");
     s.mouse_move(gx + 70.0, gy - 40.0);
     s.mouse_button(gx + 70.0, gy - 40.0, "LeftButton", false);
@@ -400,7 +354,6 @@ fn the_geometry_round_trips_through_the_save_file() {
     assert_ne!(want.0, 430.0, "the resize happened");
     assert_ne!(want.2, 32.0, "the move happened");
 
-    // The engine seam, then the file.
     let saved = s.user_placed_layouts();
     assert_eq!(saved.len(), 1, "one window was placed: {saved:?}");
     assert_eq!(saved[0].name, "ChatFrame1");
@@ -411,7 +364,7 @@ fn the_geometry_round_trips_through_the_save_file() {
         "the file expresses what the seam produced"
     );
 
-    // A fresh VM — the relog. Everything starts on its authored anchors.
+    // A fresh VM is the relog: every window starts on its authored anchors.
     let mut fresh = chat_ui();
     assert_eq!(width(&mut fresh), 430.0);
     fresh.restore_user_placed_layouts(read_back);
@@ -439,9 +392,7 @@ fn the_geometry_round_trips_through_the_save_file() {
     );
 }
 
-/// The **grip art rides the window's own reveal**, which is what the reference's
-/// `CHAT_FRAME_TEXTURES` is for: the eight pieces and the background are tinted and faded as one,
-/// so the handles appear with the box and are invisible without it.
+/// `CHAT_FRAME_TEXTURES` fades and tints the background and the eight grip pieces as one.
 #[test]
 fn the_grip_art_follows_the_windows_reveal_and_tint() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -477,9 +428,7 @@ fn the_grip_art_follows_the_windows_reveal_and_tint() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **A drag in flight pins the chrome open.** The cursor moves during a resize, which keeps
-/// resetting the stationary-hover delay — without the reference's own `or chatFrame.resizing`
-/// clause the box would fade out from under the hand holding it.
+/// `FCF_OnUpdate`'s `or chatFrame.resizing` clause keeps the box open with the cursor off it.
 #[test]
 fn a_drag_in_flight_holds_the_chrome_visible() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -520,8 +469,7 @@ fn a_drag_in_flight_holds_the_chrome_visible() {
     );
 }
 
-/// The **blanket** `CHAT_LOCKED` switch overrides the per-window lock, both ways — the reference's
-/// `FCF_Get_ChatLocked()` gate, which is the first line of both verbs.
+/// `FCF_Get_ChatLocked()` is `FCF_Resize`'s first gate, ahead of the window's own lock.
 #[test]
 fn the_chat_locked_global_overrides_the_per_window_lock() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -546,9 +494,8 @@ fn the_chat_locked_global_overrides_the_per_window_lock() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **ChatFrame2 is not independently movable or resizable**, whatever its own lock says: it takes
-/// its rect from ChatFrame1's corners, so a drag of its own would stretch it off the dock. The
-/// reference's third gate — `isDocked and chatFrame ~= DEFAULT_CHAT_FRAME`.
+/// A docked non-default window takes its rect from `ChatFrame1`, so `FCF_Resize`'s third gate
+/// (`isDocked and chatFrame ~= DEFAULT_CHAT_FRAME`) refuses it.
 #[test]
 fn the_docked_combat_log_cannot_be_moved_or_resized_on_its_own() {
     let _data = benilla_formats::wow_data_or_skip!();

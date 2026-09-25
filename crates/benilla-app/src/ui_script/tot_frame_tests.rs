@@ -1,29 +1,8 @@
-//! The target-of-target frame, driven end to end — the **reference's own**
-//! `TargetofTargetFrame`, declared in `Interface\FrameXML\TargetFrame.xml` (l.515-680) and
-//! driven by `TargetFrame.lua`, off the player's patch chain. Decision 1751 retired our
-//! `assets/ui/UnitFrames.xml` transcription, so what is under test here is the stock file over
-//! synthetic `"targettarget"` snapshots.
-//!
-//! Three things here are not ordinary unit-frame plumbing and are what most of these test:
-//!
-//! * **The visibility law is six gates deep** — a switch, five display modes, and the four unit
-//!   tests the reference wraps them in — and a frame that gets any of them wrong is either always
-//!   there or never there. The mode leg leaks by construction: its solo arm calls neither `Show`
-//!   nor `Hide` when you are in a raid (ref TargetFrame.lua l.513-520), so the frame keeps
-//!   whatever state it had. Our transcription closed that; the stock file is the end state, so the
-//!   leak is now the behaviour under test.
-//! * **Nothing on this frame is event-driven.** Its bars carry no `OnEvent` at all (ref
-//!   TargetFrame.xml l.593-625 — the health bar has only `OnValueChanged`, the mana bar no
-//!   `<Scripts>` block), so the `UNIT_HEALTH`/`UNIT_MANA` registrations
-//!   `UnitFrameHealthBar_Initialize`/`UnitFrameManaBar_Initialize` make (ref UnitFrame.lua
-//!   l.150-151, l.190-200) are dead, and so is the frame's own `UNIT_AURA` registration (ref
-//!   TargetFrame.xml l.668) — `UnitFrame_OnEvent` handles three events and that is not one of
-//!   them. `TargetofTarget_OnUpdate` → `TargetofTarget_Update` is the only driver of the name, the
-//!   bars, the dead word, the portrait tint and the aura row. **That is why nearly every step in
-//!   this file is a `tick`, not a `fire_event`.**
-//! * **A token going away is silent.** The feed clears `"targettarget"` without an event, by the
-//!   same convention `"target"` uses, so the frame's own events cannot take it down — that is what
-//!   `TargetFrame_OnUpdate`'s one-compare reconcile is for, and it has a test.
+//! The stock target-of-target frame (`TargetFrame.xml:515-680`) over synthetic `"targettarget"`
+//! snapshots. Nothing on it answers a unit event: its bars' `UNIT_HEALTH`/`UNIT_MANA`
+//! registrations reach no handler that uses them (`TargetFrame.xml:593-625`) and
+//! `UnitFrame_OnEvent` ignores `UNIT_AURA` (`UnitFrame.lua:31-45`). `TargetofTarget_OnUpdate` is
+//! the only driver, so most steps here are a `tick`.
 
 use benilla_ui::script::{
     AuraState, PartyMemberInfo, PartyState, QuadContent, RaidMemberInfo, ScriptValue,
@@ -32,8 +11,7 @@ use benilla_ui::script::{
 
 use super::test_ui::load_ui as load_xml;
 
-/// A unit snapshot with a guid — the identity `UnitIsUnit` compares, which the "your target is
-/// you" gate reads.
+/// A unit snapshot; the guid is what `UnitIsUnit` compares for the "target is you" gate.
 fn unit(name: &str, guid: u64, health: u32) -> UnitState {
     UnitState {
         exists: true,
@@ -50,13 +28,8 @@ fn unit(name: &str, guid: u64, health: u32) -> UnitState {
     }
 }
 
-/// The frame's production load prefix, plus a player, a target and a target's target — the state
-/// in which everything but the switch itself already allows the frame.
-///
-/// The tail is the target-aura tests' set and is here for the same reasons: `BuffFrame` defines
-/// `DebuffTypeColor`, which the debuff row's dispel tint indexes, and it will not TICK without
-/// `ActionBar`'s `TOOLTIP_UPDATE_TIME` — which almost every test in this file needs, because the
-/// stock frame is driven from its OnUpdate and nowhere else (see the module doc).
+/// The stock unit frames over a player, a target and a target's target: everything but the switch
+/// already allows the frame.
 fn load_tot() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
@@ -85,10 +58,8 @@ fn load_tot() -> UiScript {
     load_xml(&s, "Interface\\FrameXML\\PartyFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\TargetFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\PetFrame.xml");
-    // The target-of-target pair's home is `OptionsFrame.xml` (the reference keeps them in
-    // `UIOptionsFrame.lua`'s uvar defaults block, l.116-119). That file sits at the BOTTOM of our
-    // manifest where the reference's sits near the top, so a test that loads the unit kit alone
-    // has to state them itself — the same thing this harness already does for `DEAD`.
+    // The pair's defaults from stock `UIOptionsFrame_Init` (`UIOptionsFrame.lua:116-119`), which
+    // this kit does not load.
     s.run(r#"SHOW_TARGET_OF_TARGET = "0" SHOW_TARGET_OF_TARGET_STATE = "5""#)
         .unwrap();
     s.set_unit("player", Some(unit("Tri", 0x100, 100)));
@@ -98,7 +69,7 @@ fn load_tot() -> UiScript {
     s
 }
 
-/// Turn the frame on the way the option row does — the write plus its `applyFunc`.
+/// Turn the frame on as the option row does: the write, then its `applyFunc`.
 fn switch_on(s: &mut UiScript) {
     s.run(r#"SHOW_TARGET_OF_TARGET = "1" this = TargetofTargetFrame TargetofTarget_Update() this = nil"#)
         .unwrap();
@@ -109,7 +80,7 @@ fn shown(s: &mut UiScript) -> bool {
         .unwrap()
 }
 
-/// Every texture path the UI actually draws this frame (the pet-frame tests' render probe).
+/// Every texture path the UI draws this frame.
 fn drawn(s: &mut UiScript) -> Vec<String> {
     s.resolve();
     s.extract()
@@ -128,7 +99,7 @@ fn debuff(spell_id: u32, name: &str, debuff_type: Option<&str>) -> AuraState {
         icon: Some(format!("Interface\\Icons\\Spell_{spell_id}")),
         count: 1,
         debuff_type: debuff_type.map(str::to_string),
-        // No unit but yourself carries a duration on the 1.12 wire (decision 0257 B6).
+        // Only auras on the player carry a duration on the wire (vmangos `SpellAuras.cpp:7516`).
         duration: 0.0,
         expiration_time: 0.0,
         helpful: false,
@@ -151,7 +122,7 @@ fn party(n: usize) -> PartyState {
     }
 }
 
-/// A raid of `n` (the roster INCLUDES the player, per `GetRaidRosterInfo`'s array).
+/// A raid of `n`, the player included, as `GetRaidRosterInfo` counts.
 fn raid(n: usize) -> PartyState {
     PartyState {
         raid: (0..n)
@@ -165,9 +136,7 @@ fn raid(n: usize) -> PartyState {
     }
 }
 
-/// The switch is the outer gate, and it ships OFF — 1.12's own default (`SHOW_TARGET_OF_TARGET`
-/// = `"0"`, ref UIOptionsFrame.lua l.116). Everything else about the state already allows the
-/// frame, so this is the switch alone.
+/// `SHOW_TARGET_OF_TARGET` defaults to `"0"` in 1.12 (`UIOptionsFrame.lua:116`).
 #[test]
 fn the_frame_ships_off_and_the_switch_is_what_shows_it() {
     benilla_formats::wow_data_or_skip!();
@@ -188,8 +157,7 @@ fn the_frame_ships_off_and_the_switch_is_what_shows_it() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The four unit gates the reference wraps the switch in (ref TargetofTarget_Update l.504): a
-/// target, a target OF it, a target that is not you, and a target that is alive.
+/// The four unit gates around the switch (`TargetFrame.lua:504`).
 #[test]
 fn the_four_unit_gates_each_take_the_frame_down() {
     benilla_formats::wow_data_or_skip!();
@@ -197,29 +165,25 @@ fn the_four_unit_gates_each_take_the_frame_down() {
     switch_on(&mut s);
     assert!(shown(&mut s));
 
-    // No target of target.
     s.set_unit("targettarget", None);
     s.run("this = TargetofTargetFrame TargetofTarget_Update() this = nil")
         .unwrap();
     assert!(!shown(&mut s), "nothing to show");
     s.set_unit("targettarget", Some(unit("Tri", 0x100, 100)));
 
-    // No target at all.
     s.set_unit("target", None);
     s.run("this = TargetofTargetFrame TargetofTarget_Update() this = nil")
         .unwrap();
     assert!(!shown(&mut s), "no target, no target's target");
     s.set_unit("target", Some(unit("Kobold Miner", 0x200, 80)));
 
-    // The target is YOU: its target is your own target, and the frame would restate the frame it
-    // hangs off.
+    // The target is the player (same guid).
     s.set_unit("target", Some(unit("Tri", 0x100, 100)));
     s.run("this = TargetofTargetFrame TargetofTarget_Update() this = nil")
         .unwrap();
     assert!(!shown(&mut s), "self-target: nothing to add");
     s.set_unit("target", Some(unit("Kobold Miner", 0x200, 80)));
 
-    // A dead target.
     s.set_unit("target", Some(unit("Kobold Miner", 0x200, 0)));
     s.run("this = TargetofTargetFrame TargetofTarget_Update() this = nil")
         .unwrap();
@@ -232,14 +196,8 @@ fn the_four_unit_gates_each_take_the_frame_down() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The five display modes, each against solo / party / raid.
-///
-/// Mode 3 in a raid is not a rule the ladder states — it is the hole in it. The
-/// `SHOW_TARGET_OF_TARGET_STATE == "3"` arm acts only while `GetNumRaidMembers() == 0` (ref
-/// TargetFrame.lua l.513-520), so in a raid it calls neither Show nor Hide and the frame keeps
-/// whatever it had. It reads `false` here because the preceding `party` step left it hidden, and
-/// that sequencing is the only reason. The leak itself is
-/// [`the_solo_mode_keeps_the_frame_when_a_raid_forms`], which shows the frame first.
+/// Mode 3 in a raid reads hidden only because the party step before it hid the frame: that arm
+/// calls neither `Show` nor `Hide` in a raid (`TargetFrame.lua:513-520`).
 #[test]
 fn the_five_modes_answer_solo_party_and_raid() {
     benilla_formats::wow_data_or_skip!();
@@ -277,20 +235,8 @@ fn the_five_modes_answer_solo_party_and_raid() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// Mode 3 in a raid, as a STATE question rather than a fresh evaluation — the leaked branch, which
-/// can only be seen by showing the frame first.
-///
-/// **This assertion flipped with 1751.** Our deleted `UnitFrames.xml` answered the question the
-/// option asks and took the frame down; the stock file does not. `TargetofTarget_Update`'s
-/// `SHOW_TARGET_OF_TARGET_STATE == "3"` arm is `if ( GetNumRaidMembers() == 0 ) then … end` with
-/// no `else` (ref TargetFrame.lua l.513-520), so in a raid it reaches neither `Show` nor `Hide`
-/// and the frame keeps whatever it had. The stock file is the end state, so the reference's answer
-/// is the assertion.
-///
-/// Driven by a `tick`, which is the strong form: `TargetofTarget_OnUpdate` re-runs
-/// `TargetofTarget_Update` on **every** frame (ref TargetFrame.xml l.673-675 → TargetFrame.lua
-/// l.500), so this is not one stale evaluation left standing — the reference re-asks the question
-/// sixty times a second and still never takes the frame down.
+/// In a raid the mode-3 arm reaches neither `Show` nor `Hide` (`TargetFrame.lua:513-520`), though
+/// `TargetofTarget_OnUpdate` re-asks every frame (`TargetFrame.lua:494-501`), so the frame stays.
 #[test]
 fn the_solo_mode_keeps_the_frame_when_a_raid_forms() {
     benilla_formats::wow_data_or_skip!();
@@ -309,24 +255,9 @@ fn the_solo_mode_keeps_the_frame_when_a_raid_forms() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The paint: name, health, and the powerless unit's mana rail — which the reference **never
-/// hides**.
-///
-/// **Two things flipped with 1751**, and both are the stock file being the end state:
-///
-/// * **The name arrives on a tick, not on the switch.** `TargetofTarget_Update` (ref
-///   TargetFrame.lua l.503-540) touches the bars, the dead word and the aura rows and never the
-///   name; the `SetText` lives in `TargetofTarget_OnUpdate`'s `CURRENT_TARGETTARGET` compare
-///   (l.494-501), off the frame's own OnUpdate. Turning the switch on alone leaves it nil.
-/// * **A powerless unit still gets a rail.** `UnitFrameManaBar_Update` (ref UnitFrame.lua
-///   l.203-224) sets 0..0 and calls neither `Show` nor `Hide` — there is no hide leg anywhere in
-///   the reference's mana path. Our deleted `UnitFrames.xml` hid the bar and this asserted that;
-///   the stock answer is an empty 0/0 rail, still drawn, so that is what is asserted now.
-///
-/// The powerless step is a `tick` for the same reason as everything else here: 1.12 has no
-/// `UNIT_MAXPOWER` event at all (the reference registers `UNIT_MAXMANA`/`RAGE`/`FOCUS`/`ENERGY`/
-/// `HAPPINESS`, ref UnitFrame.lua l.195-199), and this frame's mana bar carries no `OnEvent` to
-/// answer one with if it did (ref TargetFrame.xml l.612-625).
+/// The name is set only by `TargetofTarget_OnUpdate`'s `CURRENT_TARGETTARGET` compare
+/// (`TargetFrame.lua:494-501`), so it waits for a tick. A powerless unit keeps a 0/0 rail:
+/// `UnitFrameManaBar_Update` never hides the bar (`UnitFrame.lua:203-224`).
 #[test]
 fn the_frame_paints_its_unit() {
     benilla_formats::wow_data_or_skip!();
@@ -373,15 +304,8 @@ fn the_frame_paints_its_unit() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// DEAD over a dimmed trough — and the reference's connected test, which is what tells a corpse
-/// from a linkdead player (both read zero health). Ref `TargetofTarget_CheckDead`, TargetFrame.lua
-/// l.559-567.
-///
-/// Every step is a `tick` rather than a `UNIT_HEALTH`: `TargetofTargetHealthBar` registers that
-/// event through `UnitFrameHealthBar_Initialize` (ref UnitFrame.lua l.150) but declares **no**
-/// `OnEvent` to answer it with (ref TargetFrame.xml l.593-611 — `OnValueChanged` and nothing
-/// else), so the registration is dead and `TargetofTarget_Update` off the frame's OnUpdate is the
-/// only thing that ever calls `TargetofTarget_CheckDead`.
+/// Zero health shows the dead text only while connected, which tells a corpse from a linkdead
+/// player (`TargetofTarget_CheckDead`, `TargetFrame.lua:559-567`).
 #[test]
 fn the_dead_word_needs_a_connected_corpse() {
     benilla_formats::wow_data_or_skip!();
@@ -416,14 +340,8 @@ fn the_dead_word_needs_a_connected_corpse() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The portrait tint (ref `TargetofTargetHealthCheck`, TargetFrame.lua l.569-585), and its
-/// PLAYERS-ONLY gate: a creature's portrait is never tinted, which is why the check has to run off
-/// the bar's own value rather than off the snapshot.
-///
-/// Ticks, not `UNIT_HEALTH`, and here the chain is one link longer than the dead word's: the check
-/// hangs off the health bar's `OnValueChanged` (ref TargetFrame.xml l.604-608), and the only thing
-/// that moves that value is `UnitFrameHealthBar_Update` inside `TargetofTarget_Update` — which is
-/// reached from the frame's OnUpdate and nowhere else.
+/// The tint (`TargetofTargetHealthCheck`, `TargetFrame.lua:569-585`) runs off the health bar's
+/// `OnValueChanged` (`TargetFrame.xml:604-608`) and only for players.
 #[test]
 fn the_portrait_tints_with_a_players_state_and_never_a_creatures() {
     benilla_formats::wow_data_or_skip!();
@@ -449,7 +367,7 @@ fn the_portrait_tints_with_a_players_state_and_never_a_creatures() {
         .unwrap();
     assert_eq!((r, g, b), (1.0, 1.0, 1.0), "and white again");
 
-    // A creature at the same 15%: the tint must not move (the check returns before touching it).
+    // A creature at 15%: the check returns before touching the tint.
     s.set_unit("targettarget", Some(unit("Kobold", 0x500, 15)));
     s.tick(0.016);
     let (r, g, b) = s
@@ -459,8 +377,6 @@ fn the_portrait_tints_with_a_players_state_and_never_a_creatures() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The left click selects — the one leg the target frame's own click does not have, and the whole
-/// reason the frame is clickable.
 #[test]
 fn the_left_click_targets_the_unit() {
     benilla_formats::wow_data_or_skip!();
@@ -472,21 +388,15 @@ fn the_left_click_targets_the_unit() {
         vec![SelectionRequest::Unit("targettarget".into())]
     );
 
-    // A right click is not a menu here: the reference gives this frame none.
+    // A right click opens no menu here (`TargetFrame.lua:543-557`).
     s.run(r#"TargetofTarget_OnClick("RightButton")"#).unwrap();
     assert!(s.take_selection_requests().is_empty());
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The four debuff buttons, dispel-tinted (ref `RefreshBuffs` over `MAX_PARTY_DEBUFFS`,
-/// BuffFrame.lua l.262-313, called from `TargetofTarget_Update` l.538).
-///
-/// The `UNIT_AURA` fire is what the feed really does and is kept for that reason, but it is inert
-/// here: the frame registers the event in its own OnLoad (ref TargetFrame.xml l.668) and answers
-/// it with `UnitFrame_OnEvent`, which handles `UNIT_NAME_UPDATE`, `UNIT_PORTRAIT_UPDATE` and
-/// `UNIT_DISPLAYPOWER` and nothing else (ref UnitFrame.lua l.31-45). A dead registration in the
-/// stock file — the row is redrawn by `RefreshBuffs` off the OnUpdate, so the `tick` is what makes
-/// it appear.
+/// The row is `RefreshBuffs` over `MAX_PARTY_DEBUFFS` (`BuffFrame.lua:262-313`), called from
+/// `TargetofTarget_Update` (`TargetFrame.lua:538`). The `UNIT_AURA` fire is what the feed does,
+/// but it is inert: `UnitFrame_OnEvent` ignores it, so the `tick` draws the row.
 #[test]
 fn the_debuff_row_draws_what_the_unit_carries() {
     benilla_formats::wow_data_or_skip!();
@@ -519,14 +429,9 @@ fn the_debuff_row_draws_what_the_unit_carries() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The target's OWN aura rows re-wrap around this frame: 5 to a row instead of 6, and the buffs
-/// open under the second debuff row instead of the seventh icon (ref `TargetDebuffButton_Update`,
-/// TargetFrame.lua l.312-338 for the wrap and l.370-385 for the row anchors).
-///
-/// Both directions, and they are not symmetric: the reference re-runs the rows on the way **in**
-/// only. `TargetDebuffButton_Update` is called from inside `TargetofTarget_Update`'s
-/// `if ( TargetofTargetFrame:IsShown() )` (l.532-537), so turning the frame off leaves the rows
-/// wrapped short behind it.
+/// While this frame shows, the target's own aura rows wrap at 5 instead of 6
+/// (`TargetDebuffButton_Update`, `TargetFrame.lua:312-338`, `:370-385`). They re-lay only on the
+/// way in: the call sits inside `if ( TargetofTargetFrame:IsShown() )` (`TargetFrame.lua:532-539`).
 #[test]
 fn the_target_rows_wrap_short_while_the_frame_stands_beside_them() {
     benilla_formats::wow_data_or_skip!();
@@ -560,12 +465,7 @@ fn the_target_rows_wrap_short_while_the_frame_stands_beside_them() {
         "and the sixth icon starts the second row"
     );
 
-    // Back off — and the rows STAY wrapped short. **This assertion flipped with 1751.**
-    // `TargetofTarget_Update` calls `TargetDebuffButton_Update` from inside
-    // `if ( TargetofTargetFrame:IsShown() )` (ref TargetFrame.lua l.532-537), so the pass that
-    // hides the frame is exactly the pass that does not re-lay the target's rows. They keep the
-    // 5-wide wrap until something else runs the update — the next target change or `UNIT_AURA`.
-    // Our deleted `UnitFrames.xml` re-laid them on the way out; the stock file is the end state.
+    // Back off: the rows stay wrapped short until the next target change or `UNIT_AURA`.
     s.run(r#"SHOW_TARGET_OF_TARGET = "0" this = TargetofTargetFrame TargetofTarget_Update() this = nil"#)
         .unwrap();
     assert_eq!(
@@ -576,9 +476,8 @@ fn the_target_rows_wrap_short_while_the_frame_stands_beside_them() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The reconcile. A token going away is CLEARED, not announced — no UNIT_* event carries it — so
-/// the frame's own registrations cannot take it down. `TargetFrame_OnUpdate` is what does, and it
-/// runs only while you have a target.
+/// A token going away fires no event, so `TargetFrame_OnUpdate` reconciles it
+/// (`TargetFrame.lua:257-261`); it runs only while you have a target.
 #[test]
 fn the_reconcile_takes_the_frame_down_when_the_token_goes_silent() {
     benilla_formats::wow_data_or_skip!();
@@ -586,14 +485,14 @@ fn the_reconcile_takes_the_frame_down_when_the_token_goes_silent() {
     switch_on(&mut s);
     assert!(shown(&mut s));
 
-    // Exactly what the feed does: clear the token, fire nothing.
+    // As the feed does: clear the token, fire nothing.
     s.set_unit("targettarget", None);
     assert!(shown(&mut s), "no event, so nothing has told the frame yet");
 
     s.tick(0.016);
     assert!(!shown(&mut s), "the reconcile notices within a frame");
 
-    // And the other direction: a token appearing DOES fire, but the reconcile covers it anyway.
+    // A token appearing does fire, and the reconcile covers it too.
     s.set_unit("targettarget", Some(unit("Tri", 0x100, 100)));
     s.tick(0.016);
     assert!(shown(&mut s), "and brings it back");

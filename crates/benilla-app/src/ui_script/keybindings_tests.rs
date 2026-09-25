@@ -1,34 +1,13 @@
-//! The shipped `assets/ui/KeyBindingsPage.xml` + OptionsFrame.xml's Keybindings body — the
-//! Options window's Keybindings category over the engine's binding table (
-//! superseding 0997's standalone window; the provenance block in the XML).
-//!
-//! What these guard: the module + the options window load clean together; the page is an
-//! ordinary category (body-swapped, Defaults live, the Unbind button only here); the section
-//! tree is the honest tree's non-empty categories in 1.12 `Bindings.xml` order, COLLAPSED by
-//! default (the era's own state) and toggling like the era's expandable sections; the capture
-//! flow — select a capsule → the host arm arms → the canonical chord lands through
-//! `KeyBindings_OnHostKey` — binds LIVE-COMMIT (every mutation queues the host persist,
-//! 1008's law; closing the window keeps everything), steals with the red 1.12 message only
-//! when the victim goes bare, takes the wheel onto ANY command (1295 — the engine refuses
-//! nothing but a key string that is not a key, and that refusal restores the old key); the
-//! character-specific checkbox runs 1.12's set model with the era's
-//! confirm-on-uncheck-only; search surfaces binding matches as LIVE rows under the
-//! Keybindings redirect head; and the action bar's abbreviation law (`GetBindingText`
-//! transcribed in UIParent.xml) reads `s-2`, the ref's own Lua.
-//!
-//! Labels are read the way the page reads them — `KeyBindings_String(token, raw)`, the
-//! GlobalStrings global with the raw token as fallback ([`label`]). The harness carries the
-//! real 1.12 GlobalStrings.lua since the dialog engine became the reference's file (1960; the
-//! stock StaticPopup.lua reads the strings at load), so a label here is the app's own
-//! "Movement Keys" / "Jump", never the raw token the strings-less harness used to show.
+//! The options window's Keybindings page (`KeyBindingsPage.xml`, its body in `OptionsFrame.xml`)
+//! over the engine's binding table. Deviation: it is the era Settings panel's page, because 1.12's
+//! settings screens are much worse to use; capture and set follow 1.12's `Blizzard_BindingUI`.
 
 use benilla_ui::script::keybind::{KeybindCommand, KeybindRequest};
 use benilla_ui::script::{QuadContent, UiScript};
 
 use crate::bindings::commands::SPECS;
 
-/// The page's real neighbourhood, in the manifest's own order, with the registry seeded the
-/// way the app seeds it (`crate::bindings::seed_bindings` — registration before any show).
+/// The page's files in manifest order, the registry seeded first, as `seed_bindings_for_vm` does.
 pub(crate) fn harness() -> UiScript {
     let mut s = UiScript::new().unwrap();
     let cmds: Vec<KeybindCommand> = SPECS
@@ -61,14 +40,7 @@ pub(crate) fn harness() -> UiScript {
         "OptionsFrame.xml",
         "GameMenuFrame.xml",
     ] {
-        // `test_ui::load_ui`, not a local read: a manifest entry carrying a path separator is the
-        // REFERENCE's own file and must come off the player's chain, which
-        // `std::fs::read_to_string` under `assets/ui` cannot do — it goes looking for
-        // `assets/ui/Interface/FrameXML/...` and fails. The shared loader resolves both shapes, and
-        // its own doc already records this consolidation happening once before. Hand-rolling it
-        // here is what made this kit break the moment a file it loads migrated (1751).
-        // `load_ui_strict` for the files whose art actually matters here: an unknown template is
-        // a loader WARNING, not an error, so a silently skinless window would otherwise pass.
+        // Strict for ours: an unknown template only warns, so a skinless window would pass.
         if file == "KeyBindingsPage.xml" || file == "OptionsFrame.xml" {
             super::test_ui::load_ui_strict(&s, file);
         } else {
@@ -115,8 +87,7 @@ fn the_page_is_an_options_category_with_the_collapsed_honest_tree() {
     assert!(s
         .eval::<bool>("return BenillaOptionsFrameContainerDefaults:IsEnabled() ~= 0")
         .unwrap());
-    // The section tree: the registry's category tokens, first-appearance order — exactly
-    // 1.12's file order — every section a COLLAPSED header row (the era default).
+    // The categories in `Bindings.xml` order, each a header collapsed by default, as in the era.
     let mut expected: Vec<&str> = Vec::new();
     for spec in SPECS {
         if !expected.contains(&spec.category) {
@@ -134,9 +105,7 @@ fn the_page_is_an_options_category_with_the_collapsed_honest_tree() {
             .unwrap(),
         "all sections collapsed: nothing past the headers"
     );
-    // The multibar section is real (1008): its header token sits in the tree.
     assert!(expected.contains(&"BINDING_HEADER_MULTIACTIONBAR"));
-    // Expanding Movement puts its rows under the header, byte-real defaults on the capsules.
     s.run(&format!("{ROW}1Header:Click()")).unwrap();
     assert_eq!(
         s.eval::<String>(&format!("return {ROW}2Description:GetText()"))
@@ -148,7 +117,7 @@ fn the_page_is_an_options_category_with_the_collapsed_honest_tree() {
             .unwrap(),
         label(&s, "KEY_BUTTON3", "BUTTON3")
     );
-    // The same rows with the strings pinned by hand, so the expectation is literal 1.12 text.
+    // The strings pinned by hand, so the expectation is literal 1.12 text.
     s.run(
         r#"BINDING_HEADER_MOVEMENT = "Movement Keys"
              BINDING_NAME_MOVEANDSTEER = "Move and Steer"
@@ -171,14 +140,13 @@ fn the_page_is_an_options_category_with_the_collapsed_honest_tree() {
             .unwrap(),
         "Middle Mouse"
     );
-    // Collapse again: the next header slides back up under the first.
+    // Collapsing slides the next header back under the first.
     s.run(&format!("{ROW}1Header:Click()")).unwrap();
     assert_eq!(
         s.eval::<String>(&format!("return {ROW}2HeaderText:GetText()"))
             .unwrap(),
         label(&s, "BINDING_HEADER_CHAT", "BINDING_HEADER_CHAT")
     );
-    // Leaving the page hides its body and the Unbind button.
     s.run(r#"BenillaOptionsFrame_SelectCategory("Controls")"#)
         .unwrap();
     assert!(!s
@@ -196,8 +164,8 @@ fn the_capture_flow_binds_steals_and_refuses_like_112() {
     let mut s = harness();
     on_page(&mut s);
     s.run(&format!("{ROW}1Header:Click()")).unwrap(); // expand Movement
-    s.take_keybind_requests(); // drop any noise before the flow under test
-                               // Row 3 is MOVEFORWARD (W, UP). Selecting its Key 1 capsule arms the host seam.
+    s.take_keybind_requests();
+    // Row 3 is MOVEFORWARD (W, UP); selecting its Key 1 capsule arms the capture.
     assert!(!s.bind_capture_armed());
     s.run(&format!("{ROW}3Key1Button:Click()")).unwrap();
     assert!(
@@ -209,13 +177,7 @@ fn the_capture_flow_binds_steals_and_refuses_like_112() {
             .unwrap(),
         "Unbind arms with the selection"
     );
-    // The host hands back a canonical chord: J binds into slot 1, W's old seat; UP survives
-    // in slot 2; the capture disarms; the table is LIVE and the bind COMMITTED (Save queued —
-    // 1008's live-commit law, where 0997 waited for Okay).
-    //
-    // **`J`, not `F`** — this leg is about the plain bind, so its key has to be one nothing else
-    // holds, and `F` stopped being one when 1745 registered `ASSISTTARGET` on its byte-real
-    // default. The steal path has its own leg below (`T`), which is where a taken key belongs.
+    // J, a key no command holds, takes slot 1 from W; UP stays in slot 2 and the bind saves.
     s.run(r#"KeyBindings_OnHostKey("J")"#).unwrap();
     assert!(!s.bind_capture_armed(), "a completed bind disarms");
     assert!(s
@@ -234,8 +196,8 @@ fn the_capture_flow_binds_steals_and_refuses_like_112() {
             .unwrap(),
         "Key Bound Successfully"
     );
-    // Stealing the LAST key of another command names the victim in red (1.12's
-    // KEY_UNBOUND_ERROR). T is ATTACKTARGET's only key.
+    // T is ATTACKTARGET's only key, so taking it names the victim in red (1.12's
+    // `KEY_UNBOUND_ERROR`, `Blizzard_BindingUI.lua:185-190`).
     s.run(&format!("{ROW}3Key2Button:Click()")).unwrap();
     s.run(r#"KeyBindings_OnHostKey("T")"#).unwrap();
     assert_eq!(
@@ -249,9 +211,7 @@ fn the_capture_flow_binds_steals_and_refuses_like_112() {
             .contains(&victim),
         "the newly-bare victim is named"
     );
-    // **The wheel binds like any other key** — including onto MOVEFORWARD,
-    // which has press+release state. This block used to assert the opposite; `0x4b7490` never
-    // reads a command node, so the refusal it asserted is not in the client.
+    // The wheel binds onto a press+release command too: `0x4b7490` never reads the command.
     s.run(&format!("{ROW}3Key1Button:Click()")).unwrap();
     s.run(r#"KeyBindings_OnHostKey("MOUSEWHEELUP")"#).unwrap();
     assert!(
@@ -259,9 +219,7 @@ fn the_capture_flow_binds_steals_and_refuses_like_112() {
             .unwrap(),
         "the notch takes the slot"
     );
-    // …and the notch STEALS the wheel from the camera, whose last key it was — so the page says
-    // so in red, exactly as it would for any other stolen key. That the wheel's own default
-    // victim is a real command is half of why the old refusal read as plausible.
+    // It was the camera zoom's last key, so the page names that in red.
     assert_eq!(
         s.eval::<String>("return BenillaOptionsFrameContainerBodyKeybindingsOutput:GetText()")
             .unwrap(),
@@ -270,9 +228,8 @@ fn the_capture_flow_binds_steals_and_refuses_like_112() {
             label(&s, "BINDING_NAME_CAMERAZOOMIN", "CAMERAZOOMIN")
         )
     );
-    // The refusal that IS there is the key-string validator, and this is the page arm that
-    // reports it: a chord the engine will not take restores the slot's old key and says why
-    // (1.12's KeyBindingFrame_SetBinding, its wheel-shaped message and all).
+    // A key string the engine rejects restores the slot's old key and shows the only refusal text
+    // 1.12 has, the wheel's (`KeyBindingFrame_SetBinding`, `Blizzard_BindingUI.lua:260-270`).
     s.run(&format!("{ROW}3Key1Button:Click()")).unwrap();
     s.run(r#"KeyBindings_OnHostKey("SCROLLLOCK")"#).unwrap();
     assert!(
@@ -285,14 +242,12 @@ fn the_capture_flow_binds_steals_and_refuses_like_112() {
             .unwrap(),
         "Can't bind mousewheel to actions with up and down states"
     );
-    // A right-click on the armed capsule deselects without binding.
     s.run(&format!("{ROW}3Key1Button:Click()")).unwrap();
     assert!(s.bind_capture_armed());
     s.run(&format!(r#"{ROW}3Key1Button:Click("RightButton")"#))
         .unwrap();
     assert!(!s.bind_capture_armed(), "right-click deselects");
-    // Hiding the window disarms a straggling capture (the OnHide hook — a locked-out client
-    // otherwise: the armed seam swallows all input with no window on screen).
+    // Hiding the window disarms: an armed capture with no window would swallow all input.
     s.run(&format!("{ROW}3Key1Button:Click()")).unwrap();
     assert!(s.bind_capture_armed());
     s.run("HideUIPanel(BenillaOptionsFrame)").unwrap();
@@ -307,8 +262,8 @@ fn unbind_reset_and_the_live_commit_replace_okay_cancel() {
     on_page(&mut s);
     s.run(&format!("{ROW}1Header:Click()")).unwrap(); // expand Movement
     s.take_keybind_requests();
-    // JUMP is Movement's 8th command → row 9 under the header. Unbind its Key 1: SPACE goes,
-    // NUMPAD0 slides into slot 1 (the 1.12 slot dance), and the change commits at once.
+    // JUMP is Movement's 8th command, row 9. Unbinding its Key 1 (SPACE) slides NUMPAD0 into
+    // slot 1, as 1.12's Unbind does (`Blizzard_BindingUI.xml:507-527`).
     assert_eq!(
         s.eval::<String>(&format!("return {ROW}9Description:GetText()"))
             .unwrap(),
@@ -322,8 +277,8 @@ fn unbind_reset_and_the_live_commit_replace_okay_cancel() {
         )
         .unwrap());
     assert_eq!(s.take_keybind_requests(), vec![KeybindRequest::Save(1)]);
-    // LIVE-COMMIT is the law now (1008): bind G, close the window — the bind KEEPS (0997's
-    // Cancel/ESC revert died with the standalone window).
+    // Deviation: a bind saves at once, as the era panel commits, where 1.12 had Okay and Cancel;
+    // closing the window keeps it.
     s.run(&format!("{ROW}9Key1Button:Click()")).unwrap();
     s.run(r#"KeyBindings_OnHostKey("G")"#).unwrap();
     assert_eq!(s.take_keybind_requests(), vec![KeybindRequest::Save(1)]);
@@ -333,8 +288,7 @@ fn unbind_reset_and_the_live_commit_replace_okay_cancel() {
         "JUMP",
         "closing keeps the live-committed bind"
     );
-    // Reset To Default: the page's Defaults button behind the era confirm — JUMP's real
-    // defaults return and the reset itself commits.
+    // Defaults, behind a confirm, restores JUMP's default keys and saves.
     on_page(&mut s);
     s.run("BenillaOptionsFrameContainerDefaults:Click()")
         .unwrap();
@@ -354,15 +308,12 @@ fn the_esc_ladder_closes_the_window_and_the_checkbox_switches_sets() {
     benilla_formats::wow_data_or_skip!();
     let mut s = harness();
     on_page(&mut s);
-    // The ladder (the ESC binding's own body): the options rung hides the window — since 1008
-    // that IS the whole gesture for keybinds too (live-commit; nothing to revert).
+    // ESC's options rung hides the window; with binds already saved there is nothing to revert.
     s.run("ToggleGameMenu()").unwrap();
     assert!(!s
         .eval::<bool>("return BenillaOptionsFrame:IsVisible()")
         .unwrap());
 
-    // The character-specific checkbox (1.12's set model, era confirm-on-uncheck-only law):
-    // CHECK switches to the character set and saves it into existence at once.
     on_page(&mut s);
     s.take_keybind_requests();
     s.run("BenillaOptionsFrameContainerBodyKeybindingsCharacterRowCheck:Click()")
@@ -370,8 +321,8 @@ fn the_esc_ladder_closes_the_window_and_the_checkbox_switches_sets() {
     assert_eq!(s.current_binding_set(), 2);
     assert!(s.character_bindings_exist());
     assert_eq!(s.take_keybind_requests(), vec![KeybindRequest::Save(2)]);
-    // UNCHECK is destructive: the box springs back and the 1.12 confirm decides. Cancel
-    // first — still on the character set.
+    // Unchecking deletes the set, so the box springs back until 1.12's confirm decides; Cancel
+    // keeps it.
     s.run("BenillaOptionsFrameContainerBodyKeybindingsCharacterRowCheck:Click()")
         .unwrap();
     assert!(
@@ -388,8 +339,7 @@ fn the_esc_ladder_closes_the_window_and_the_checkbox_switches_sets() {
     s.run("StaticPopup1Button2:Click()").unwrap();
     assert_eq!(s.current_binding_set(), 2);
     assert!(s.character_bindings_exist());
-    // Accept: back to the account set, the character set dropped (load-then-save order — the
-    // account file must not inherit the character binds).
+    // Accept: the account set loads before the save, so it does not inherit the character binds.
     s.run("BenillaOptionsFrameContainerBodyKeybindingsCharacterRowCheck:Click()")
         .unwrap();
     s.run("StaticPopup1Button1:Click()").unwrap();
@@ -409,12 +359,10 @@ fn search_surfaces_bindings_as_live_rows_under_the_redirect_head() {
     s.run(r#"BINDING_NAME_JUMP = "Jump""#).unwrap();
     s.run("ShowUIPanel(BenillaOptionsFrame)").unwrap();
     s.take_keybind_requests();
-    // A query that matches one binding and no CVar row: the Keybindings group head shows,
-    // with the match painted LIVE on the search pool (the era reflows its real rows the
-    // same way).
+    // "jump" matches one binding and no CVar row.
     s.run(r#"BenillaOptionsFrameSearchBox:SetText("jump")"#)
         .unwrap();
-    s.tick(0.0); // the deferred OnTextChanged drains here (decision 1831)
+    s.tick(0.0); // the deferred OnTextChanged drains here
     assert!(s
         .eval::<bool>("return BenillaOptionsFrameContainerBodySearchHeadKeybindings:IsVisible()")
         .unwrap());
@@ -431,7 +379,6 @@ fn search_surfaces_bindings_as_live_rows_under_the_redirect_head() {
     assert!(!s
         .eval::<bool>("return BenillaOptionsFrameContainerBodyKeybindSearch2:IsVisible()")
         .unwrap());
-    // The result row is LIVE: its capsule arms, the bind lands and commits, the row relabels.
     s.run("BenillaOptionsFrameContainerBodyKeybindSearch1Key1Button:Click()")
         .unwrap();
     assert!(s.bind_capture_armed());
@@ -448,10 +395,9 @@ fn search_surfaces_bindings_as_live_rows_under_the_redirect_head() {
         .unwrap(),
         "H"
     );
-    // The head is the era redirect: clicking it ends the search on the Keybindings page.
     s.run("BenillaOptionsFrameContainerBodySearchHeadKeybindings:Click()")
         .unwrap();
-    s.tick(0.0); // the deferred OnTextChanged drains here (decision 1831)
+    s.tick(0.0); // the deferred OnTextChanged drains here
     assert_eq!(
         s.eval::<String>("return BenillaOptionsFrame.selectedCategory")
             .unwrap(),
@@ -470,7 +416,7 @@ fn search_surfaces_bindings_as_live_rows_under_the_redirect_head() {
 fn the_action_bar_abbreviation_is_the_refs_own_getbindingtext() {
     benilla_formats::wow_data_or_skip!();
     let s = harness();
-    // ref UIParent.lua:1819 transcribed (UIParent.xml): one modifier abbreviates…
+    // Stock `GetBindingText` (`UIParent.lua:1819`): one modifier abbreviates…
     assert_eq!(
         s.eval::<String>(r#"return GetBindingText("SHIFT-2", "KEY_", 1)"#)
             .unwrap(),
@@ -487,8 +433,8 @@ fn the_action_bar_abbreviation_is_the_refs_own_getbindingtext() {
             .unwrap(),
         "W"
     );
-    // …two or more collapse to the ref's dot — including the CTRL-- oddity, whose second
-    // dash the ref's dash-counting loop counts as a second modifier (their quirk, pinned).
+    // …two or more collapse to a dot, `CTRL--` included: the dash-counting loop counts its second
+    // dash as a modifier.
     assert_eq!(
         s.eval::<String>(r#"return GetBindingText("CTRL-SHIFT-2", "KEY_", 1)"#)
             .unwrap(),
@@ -516,19 +462,14 @@ fn the_action_bar_abbreviation_is_the_refs_own_getbindingtext() {
         .unwrap());
 }
 
-/// The wheel and the bar's seat (the director's scuff report, same day 1008 landed). The wheel
-/// is the QuestLog/Trainer lesson relearned: a spin bubbles up the PARENT chain (pointer.rs),
-/// so a handler on the sibling faux frame never sees it — it lives on the page body, which is
-/// mouse-enabled so a spin over a row's NAME (a plain-Frame area no child claims) is caught
-/// too, not just the bubbles from capsule/header Buttons. The bar rides the gutter INSIDE the
-/// body: the kit hangs it 6px right of the faux frame's edge, so the frame ends at the rows'
-/// own -32 — anchoring it to body-right hung the bar on the window border.
+/// A spin bubbles up the parent chain, so the wheel handler sits on the mouse-enabled page body,
+/// which also catches a spin over a row's name. The bar sits in the gutter inside the body.
 #[test]
 fn the_wheel_bubbles_from_the_rows_and_the_bar_rides_the_gutter() {
     benilla_formats::wow_data_or_skip!();
     let mut s = harness();
     on_page(&mut s);
-    // Every section open: 100+ flat rows — the list overflows its 19 slots and the bar shows.
+    // Every section open: over 100 rows overflow the list's 19 slots.
     s.run(
         r#"for i = 1, table.getn(KeyBindingsPage.sections) do KeyBindings_ExpandSection(i, true) end
            KeyBindingsPage_Update()"#,
@@ -539,24 +480,13 @@ fn the_wheel_bubbles_from_the_rows_and_the_bar_rides_the_gutter() {
         .eval::<bool>(&format!("return {SF}ScrollBar:IsVisible()"))
         .unwrap());
     s.resolve();
-    // The page area's OWN scroll stays out of it: this page fills the body exactly, so the
-    // outer range is 0 and its bar never joins this one in the gutter the two share.
     for _ in 0..4 {
         s.tick(0.016);
         s.resolve();
     }
-    // **B217's property is the BAR, not the range, and since 1860 those differ.** The page scroll
-    // now reports a nonzero range here, and that is not a defect in either half: the chain's
-    // `FauxScrollFrameTemplate` carries a real `<ScrollChild>` which `FauxScrollFrame_Update` sizes
-    // to `numItems * valueStep` (~5275px with every section open), our old template had none, and
-    // the range is measured by unioning the scroll child's whole SUBTREE — the reference's own
-    // `0x786f80` recursion, which re-enters itself for each shown child frame with no clip or
-    // ScrollFrame exception. The reference would measure
-    // the same; it simply never nests a faux list inside a real-scroll page, which our options
-    // window is alone in doing.
-    //
-    // What B217 actually cleared — a second bar in the shared gutter — still holds, and that is
-    // what is asserted.
+    // Only the list's bar shows in the shared gutter. The outer page's range is not 0, as the
+    // reference would measure it: the stock faux list sizes its scroll child to
+    // `numItems * valueStep`, and the range unions the child's whole subtree (`0x786f80`).
     assert!(
         !s.eval::<bool>("return BenillaOptionsFrameContainerScrollBar:IsVisible()")
             .unwrap(),
@@ -580,11 +510,8 @@ fn the_wheel_bubbles_from_the_rows_and_the_bar_rides_the_gutter() {
         bar_right <= body_right - 8.0,
         "bar inset from the body edge ({bar_right} vs body {body_right})"
     );
-    // …wearing its TROUGH: the recessed channel (the shared kit's, shown and hidden with the bar),
-    // which seats ITSELF on the bar — 31 wide against the bar's 16, hung 8 units left, and
-    // overhanging it 21/20 so each arrow drops into the 16-tall socket the art carries (the
-    // law and its ref citation are in BenillaScrollTrough_Seat). Asserted off the ARROWS here,
-    // which is the half the eye judges: 5 units of cap above the up arrow, 4 below the down arrow.
+    // The trough seats itself on the bar (`BenillaScrollTrough_Seat`): 31 wide, 8 left of it,
+    // 21 above and 20 below, which leaves 5 units over the up arrow and 4 under the down arrow.
     const TROUGH: &str = "BenillaOptionsFrameContainerBodyKeybindingsScrollFrameScrollBarTrough";
     let bar = format!("{SF}ScrollBar");
     let g = |f: &str, m: &str| s.eval::<f64>(&format!("return {f}:{m}()")).unwrap();
@@ -604,7 +531,6 @@ fn the_wheel_bubbles_from_the_rows_and_the_bar_rides_the_gutter() {
         (g(&format!("{bar}ScrollDownButton"), "GetBottom") - g(TROUGH, "GetBottom") - 4.0).abs()
             < 0.01
     );
-    // A list that FITS shows neither.
     let set_all = |s: &UiScript, open: bool| {
         s.run(&format!(
             "for i = 1, table.getn(KeyBindingsPage.sections) do KeyBindings_ExpandSection(i, {}) end
@@ -623,7 +549,7 @@ fn the_wheel_bubbles_from_the_rows_and_the_bar_rides_the_gutter() {
     set_all(&s, true);
     s.resolve();
 
-    // A spin over a row NAME — the dead zone when the handler lived on the sibling.
+    // A spin over a row's name, which no child frame claims.
     let steer = label(&s, "BINDING_NAME_MOVEANDSTEER", "MOVEANDSTEER");
     let quads = s.extract();
     let (wx, wy) = quads
@@ -637,9 +563,8 @@ fn the_wheel_bubbles_from_the_rows_and_the_bar_rides_the_gutter() {
         .expect("a MOVEANDSTEER description quad");
     s.mouse_wheel(wx, wy, -1.0);
     assert!(s.errors().is_empty(), "wheel over a name: {:?}", s.errors());
-    // The spin REACHED the list, which is what this dead zone was about. The distance is the
-    // reference's half-bar page (`ScrollFrameTemplate_OnMouseWheel` moves `GetHeight()/2` pixels),
-    // not the single row our deleted kit stepped — 1860 re-pointed that everywhere it is asserted.
+    // A spin moves half the bar's height (`ScrollFrameTemplate_OnMouseWheel`,
+    // `UIPanelTemplates.lua:150-157`), more than a row.
     let after_name = s
         .eval::<f64>(&format!("return FauxScrollFrame_GetOffset({SF})"))
         .unwrap();
@@ -647,9 +572,8 @@ fn the_wheel_bubbles_from_the_rows_and_the_bar_rides_the_gutter() {
         after_name > 1.0,
         "a spin over a row NAME scrolled the list by a page, got {after_name}"
     );
-    // …and over a CAPSULE (a Button: the bubble path, capsule → row → body). GetLeft-family
-    // reads are scale-LOCAL (the 1.12 contract; this window wears ERA_WINDOW_SCALE) — the
-    // pointer lives in screen px, so the aim converts through GetEffectiveScale.
+    // Over a capsule the spin bubbles through the row to the body. `GetLeft` answers in the
+    // frame's own scale and the pointer is in screen pixels, hence `GetEffectiveScale`.
     let (cx, cy) = {
         let k = s
             .eval::<f64>(&format!("return {ROW}2Key1Button:GetEffectiveScale()"))
@@ -676,9 +600,8 @@ fn the_wheel_bubbles_from_the_rows_and_the_bar_rides_the_gutter() {
         after_capsule > after_name,
         "a spin over a CAPSULE bubbles to the page too: {after_name} -> {after_capsule}"
     );
-    // While a capsule is armed the wheel is a BIND, never a scroll (1.12's law) — in the app
-    // the host seam swallows the spin before the UI sees one; the Lua guard is the belt for
-    // a spin that reaches the page anyway.
+    // While a capsule is armed a spin binds, never scrolls; the page's guard catches a spin the
+    // host lets through.
     s.run(&format!("{ROW}2Key1Button:Click()")).unwrap();
     s.mouse_wheel(wx, wy, -1.0);
     assert_eq!(
@@ -691,22 +614,15 @@ fn the_wheel_bubbles_from_the_rows_and_the_bar_rides_the_gutter() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// **The pet lane reaches the page**. 1008 registered the two multibars
-/// and stopped; 1.12's `BONUSACTIONBUTTON1-10` — "Secondary Action Button" in its own window —
-/// never joined, so the pet bar was the one visible bar with no way to bind it.
-///
-/// Pinned on both sides of the seam, because the report is about the *page*: the registry carries
-/// the ten rows under the ACTION BAR header with their byte-real `CTRL-1..CTRL-0` defaults (1.12
-/// files them under l.121's header, having none of their own), and the page's own search — the
-/// path a player actually finds a binding by — paints the row live with that key on its capsule.
+/// The pet bar's bindings, 1.12's `BONUSACTIONBUTTON1-10` (`BonusActionBarFrame.lua:106-112`),
+/// file under the action bar's header (`Bindings.xml:121`, `:321-390`) with `CTRL-1..CTRL-0`
+/// defaults, and the page's search finds them.
 #[test]
 fn the_pet_lane_is_registered_under_the_action_bar_header() {
     benilla_formats::wow_data_or_skip!();
     let mut s = harness();
     on_page(&mut s);
 
-    // Registry side: the whole lane, in Bindings.xml order right after the shapeshift block,
-    // sharing the action bar's category token.
     let category = |s: &mut UiScript, name: &str| {
         s.eval::<String>(&format!(
             r#"for i = 1, GetNumBindings() do
@@ -728,9 +644,7 @@ fn the_pet_lane_is_registered_under_the_action_bar_header() {
             .unwrap();
         assert_eq!(key, format!("CTRL-{}", i % 10), "{name}'s 1.12 default");
     }
-    // …and it is a runOnUp pair like the action bar's own rows — which decides that a press
-    // delivers a release half, and NOT whether the row may wear a wheel chord (1295). It takes
-    // the wheel like any other command; the notch then runs both halves of the pair.
+    // `runOnUp` decides that a press also delivers the release, not whether the wheel may bind.
     assert_eq!(
         s.eval::<Option<u32>>(r#"return SetBinding("MOUSEWHEELUP", "BONUSACTIONBUTTON1")"#)
             .unwrap(),
@@ -738,15 +652,13 @@ fn the_pet_lane_is_registered_under_the_action_bar_header() {
         "a press+release command takes the wheel — the refusal was ours, B265"
     );
 
-    // Page side: search finds it and paints a live row with the capsule filled.
-    // The search tags are the DISPLAY names uppercased (era AddSearchTags), so the query is the
-    // label the app's strings give the row, not its token.
+    // Search matches display names (the era's `AddSearchTags`), so the query is the row's label.
     let query = label(&s, "BINDING_NAME_BONUSACTIONBUTTON1", "BONUSACTIONBUTTON1").to_lowercase();
     s.run(&format!(
         r#"BenillaOptionsFrameSearchBox:SetText("{query}")"#
     ))
     .unwrap();
-    s.tick(0.0); // the deferred OnTextChanged drains here (decision 1831)
+    s.tick(0.0); // the deferred OnTextChanged drains here
     assert!(s
         .eval::<bool>("return BenillaOptionsFrameContainerBodySearchHeadKeybindings:IsVisible()")
         .unwrap());
@@ -768,11 +680,7 @@ fn the_pet_lane_is_registered_under_the_action_bar_header() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **Every registry body is real Lua.** 167 rows carry a Lua chunk as a Rust string literal, and
-/// nothing compiled them: a typo in one shipped as a command that errors on its first press, in a
-/// file whose tests all live one layer up at the page. `loadstring` is the whole check — running
-/// them needs the FrameXML the harness deliberately does not load — and it is exactly the check
-/// that a hand-typed string wants.
+/// `loadstring` on each command body: running one would need FrameXML this test does not load.
 #[test]
 fn every_command_body_compiles() {
     use crate::bindings::commands::Kind;

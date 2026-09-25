@@ -1,14 +1,12 @@
-//! The class trainer's respec confirm (TalentWipeConfirm.xml): the dialog
-//! `ui_talent_wipe`'s feed raises, the money frame that carries the cost, its Accept, and the range
-//! poll that takes it away — driven exactly as that feed and the app's NPC-session guard drive it.
+//! The stock respec confirm, `CONFIRM_TALENT_WIPE`, driven as `ui_talent_wipe`'s feed and the
+//! app's NPC range guard drive it.
 
 use benilla_ui::script::{ScriptValue, UiScript};
 
 use super::test_ui::load_ui as load_xml;
 
-/// The app's own pre-state: a question is pending and in range, which is what
-/// `CheckTalentMasterDist()` reports while the dialog is up. MoneyFrame.xml loads FIRST because
-/// the dialog's coin row inherits `SmallMoneyFrameTemplate` — the TOC's own order (1580).
+/// A respec question pending and in range, so `CheckTalentMasterDist()` holds. MoneyFrame.xml
+/// loads before StaticPopup.xml, whose coin row inherits `SmallMoneyFrameTemplate`.
 fn setup() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
@@ -26,10 +24,7 @@ fn setup() -> UiScript {
     s
 }
 
-/// `CONFIRM_TALENT_WIPE(cost)` raises the dialog, and Accept queues the one `ConfirmTalentWipe()`
-/// that becomes the outbound `MSG_TALENT_WIPE_CONFIRM`. The whole point of the arc: before this
-/// wiring the trainer's line produced no dialog and no packet at all — the packet that asks was
-/// parsed as an unknown opcode and dropped.
+/// Accept's one `ConfirmTalentWipe()` becomes the outbound `MSG_TALENT_WIPE_CONFIRM`.
 #[test]
 fn the_confirm_shows_and_accept_queues_the_wipe() {
     benilla_formats::wow_data_or_skip!();
@@ -54,9 +49,7 @@ fn the_confirm_shows_and_accept_queues_the_wipe() {
     );
 }
 
-/// The cost rides the event's `arg1` into the dialog's MONEY frame, not into its text — so the
-/// coin row is what tells the player a respec costs 1g 50s. This is the first StaticPopup entry to
-/// raise one, and the engine's `hasMoneyFrame` leg is what shows it.
+/// The cost, `arg1`, goes to the dialog's money frame, not its text (`UIParent.lua:536`).
 #[test]
 fn the_cost_lands_in_the_money_frame() {
     benilla_formats::wow_data_or_skip!();
@@ -86,8 +79,7 @@ fn the_cost_lands_in_the_money_frame() {
         "…50 silver"
     );
 
-    // A second, dearer question repaints the same row — the cost climbs with every reset, so a
-    // stale number here would be the one thing the dialog exists to say, said wrong.
+    // The cost climbs with every reset; a second question repaints the row.
     s.run("StaticPopup_OnClick(StaticPopup1, 2)").unwrap();
     s.fire_event("CONFIRM_TALENT_WIPE", vec![ScriptValue::Int(50_000)]);
     assert_eq!(
@@ -97,9 +89,7 @@ fn the_cost_lands_in_the_money_frame() {
     );
 }
 
-/// Cancel and ESC both send **nothing**: declining a respec is silent on the wire (there is no
-/// decline opcode — the question is one direction of a two-way opcode and the answer is the
-/// other), so the only observable is that no confirm was queued.
+/// There is no decline: `MSG_TALENT_WIPE_CONFIRM` asks one way and answers the other.
 #[test]
 fn declining_sends_nothing() {
     benilla_formats::wow_data_or_skip!();
@@ -117,10 +107,7 @@ fn declining_sends_nothing() {
     );
 }
 
-/// Walking away takes the question off screen: the entry's OnUpdate polls
-/// `CheckTalentMasterDist()`, which the app drives from the shared NPC-session range guard — the
-/// same guard, and the same byte-verified distance, that the innkeeper's question runs on. While it
-/// holds, ticking changes nothing; the frame it goes false, the dialog hides itself.
+/// The popup's OnUpdate hides it once `CheckTalentMasterDist()` fails (`StaticPopup.lua:1297`).
 #[test]
 fn leaving_the_trainers_range_hides_the_confirm() {
     benilla_formats::wow_data_or_skip!();

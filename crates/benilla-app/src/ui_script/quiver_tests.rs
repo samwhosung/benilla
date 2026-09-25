@@ -1,46 +1,15 @@
-//! **"`Quiver.CastPetAction` is nil when the addon's own macro runs"** — bug B267, reproduced end
-//! to end and then closed.
-//!
-//! ## Why this file exists
-//!
-//! The report is a `/run Quiver.CastPetAction("Furious Howl")` macro raising
-//! `attempt to call field 'CastPetAction' (a nil value)`. The field is published on the addon's
-//! **last** line of `VARIABLES_LOADED`:
-//!
-//! ```lua
-//! if event == "VARIABLES_LOADED" then
-//!     LoadLocale() Migrations() savedVariablesRestore()
-//!     initSlashCommandsAndModules()      -- builds the whole config UI, HUNTERS ONLY
-//!     RegisterGlobalFunctions()          -- <- Quiver.CastPetAction = … lives here
-//! ```
-//!
-//! so anything that raises in that handler takes every global function with it. Three separate
-//! walls did, one behind the other, and each is a real gap of ours:
-//!
-//! | | what it does | who found it |
-//! |---|---|---|
-//! | the Region method map was two implementations, not one | `Api._Height = WorldFrame.GetHeight` applied to a Texture raised `stale or invalid frame handle` | this bug |
-//! | `Button:SetFontString` missing | every dropdown option row died on its first line | behind wall 1 |
-//! | `Frame:SetMinResize`/`SetMaxResize` missing | `SideEffectMakeMoveable` died on every module frame | behind wall 2 |
-//!
-//! **The addon survey scored Quiver `loaded, session=ok, probe=ok` through all three.** It seats a
-//! WARRIOR, and every one of these is behind `if cl == "HUNTER"` — the same blind spot shape as
-//! Bagnon's (`ui_script::bagnon_render_tests`), one axis over: there the columns asked "did it
-//! raise" and never "did it draw"; here they ask both, of a session the addon declines to run in.
-//! So the fixture below seats a **hunter**, and that is the load-bearing part of it.
-//!
-//! Nothing from the corpus is committed, and the test skips cleanly on a machine without it — the
-//! `ui_chat::ace_gate_tests` rule.
+//! Quiver, a third-party hunter addon, in a hunter's session. Its `VARIABLES_LOADED` handler
+//! builds its modules and then publishes its global functions (`Quiver.CastPetAction` and the
+//! rest), so any raise in that handler loses them all. The modules run only for a hunter, so the
+//! fixture seats one. Nothing from the corpus is committed; the tests skip without it.
 
 use std::path::{Path, PathBuf};
 
 use benilla_ui::script::{ScriptValue, UiScript, UnitState};
 use benilla_ui::toc::Toc;
 
-/// The corpus root **and** a Quiver in it, or `None` — a skip, never a failure. Quiver is a live
-/// third-party addon (`github.com/SabineWren/Quiver`) whose shipped file is a generated bundle, so
-/// a machine that wants this test builds it into the corpus once. The corpus itself resolves
-/// through `benilla_formats::addon_corpus` — the one resolver, whose doc carries the incident.
+/// The corpus root holding a Quiver, or `None` for a skip. Quiver ships a generated bundle, so a
+/// machine that wants these tests builds it into the corpus once.
 fn quiver_root() -> Option<PathBuf> {
     benilla_formats::addon_corpus_candidates()
         .into_iter()
@@ -100,11 +69,8 @@ fn load_addon_files(script: &UiScript, root: &Path, name: &str) -> Vec<String> {
     errors
 }
 
-/// A VM shaped like the reporter's session: our whole interface, and a **hunter** at the keyboard.
-///
-/// The class is the point (see the module doc). Everything else is the addon-survey seat's own
-/// minimum — a named player on a named realm, with a faction group, because a character in a real
-/// session always has all three and a nil one is a failure mode no player can produce.
+/// Our whole interface with a hunter at the keyboard: named, on a named realm, with a faction
+/// group, as every real session has.
 fn seat_a_hunter(root: &Path) -> UiScript {
     let mut s = UiScript::new().expect("VM");
     s.set_screen_size(1024.0, 768.0);
@@ -132,12 +98,8 @@ fn seat_a_hunter(root: &Path) -> UiScript {
             ..Default::default()
         }),
     );
-    // A HUNTER'S SPELLBOOK. Quiver's `Api.Spell.FindSpellIndex` opens
-    // `GetSpellTabInfo(GetNumSpellTabs())` and adds `offset + numSpells`, so an EMPTY book is
-    // `attempt to perform arithmetic on local 'tabOffset'` every tick — the reference answers nil
-    // there too, so that is the addon's own defect on a spell-less character and not a gap of
-    // ours. Seating a book is what lets this test TICK, which is where the module OnUpdates live.
-    // Two tabs and four spells is the addon-survey fixture's own shape, with a hunter's names.
+    // A spellbook: Quiver's `FindSpellIndex` does arithmetic on `GetSpellTabInfo`'s offset, which
+    // is nil for an empty book in the reference too, so without one every tick raises.
     {
         use benilla_ui::script::{SpellBookState, SpellSlotView, SpellTabView};
         let slot = |spell_id: u32, name: &str, rank: Option<&str>| SpellSlotView {
@@ -173,10 +135,7 @@ fn seat_a_hunter(root: &Path) -> UiScript {
 
     let info = super::addons::info_from_toc("Quiver", &read_toc(root, "Quiver"));
     s.register_addons(vec![info], Some(root.to_path_buf()), None, None);
-    // The in-game UI materializes on world entry (1051), so a player always exists by the time the
-    // manifest loads — and the stock macro window's character tab formats `UnitName("player")`
-    // into its label inside its own OnLoad. A manifest load with no player is a state the client
-    // never reaches.
+    // The in-game UI loads on world entry, so a player always exists by then.
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -194,12 +153,8 @@ fn seat_a_hunter(root: &Path) -> UiScript {
     s
 }
 
-/// **The reported symptom.** Load Quiver into a hunter's session, drive the session start the
-/// client drives, and ask the question the macro asked.
-///
-/// The assertion is deliberately the addon's own field and not "no errors": B267 was filed as a
-/// nil field, and a future wall inside `initSlashCommandsAndModules` would take this field out
-/// again even if it left a different error behind.
+/// After a hunter's session start `Quiver.CastPetAction` is a function. Asserted on the field
+/// itself, since a raise anywhere in `initSlashCommandsAndModules` loses it.
 #[test]
 fn quiver_publishes_its_global_functions_for_a_hunter() {
     benilla_formats::wow_data_or_skip!();
@@ -214,7 +169,7 @@ fn quiver_publishes_its_global_functions_for_a_hunter() {
         s.fire_event(e, Vec::new());
     }
 
-    // The macro the report ran: `/run Quiver.CastPetAction("Furious Howl"); …`
+    // What a `/run Quiver.CastPetAction("Furious Howl")` macro calls.
     assert_eq!(
         s.eval::<String>("return type(Quiver.CastPetAction)")
             .unwrap(),
@@ -223,8 +178,7 @@ fn quiver_publishes_its_global_functions_for_a_hunter() {
          before publishing it — errors so far: {:#?}",
         s.errors()
     );
-    // The whole of `RegisterGlobalFunctions`, not just the one the report named — they publish
-    // together, so any of them missing means the same handler died at the same place.
+    // Everything `RegisterGlobalFunctions` publishes; they go together.
     for name in [
         "CastNoClip",
         "CastPetAction",
@@ -244,10 +198,8 @@ fn quiver_publishes_its_global_functions_for_a_hunter() {
     }
 }
 
-/// The session start itself raises **nothing** — the three walls, stated as the thing they were.
-///
-/// Separate from the field assertion above because it fails differently and more usefully: this is
-/// the test that names a *new* wall the moment one appears, instead of reporting a nil field.
+/// A hunter's session start and a second of frames after it raise nothing; a failure here names
+/// the raise.
 #[test]
 fn quiver_survives_a_hunter_session_start_without_raising() {
     benilla_formats::wow_data_or_skip!();
@@ -259,9 +211,8 @@ fn quiver_survives_a_hunter_session_start_without_raising() {
     for e in ["VARIABLES_LOADED", "PLAYER_LOGIN", "PLAYER_ENTERING_WORLD"] {
         s.fire_event(e, Vec::new());
     }
-    // …and then a second of frames, because Quiver's modules are OnUpdate-driven (the auto-shot
-    // timer, the range indicator, the aspect tracker) and a handler that only raises once it is
-    // *running* is invisible to the event burst alone.
+    // Then a second of frames: the modules (the auto-shot timer, the range indicator, the aspect
+    // tracker) run on OnUpdate.
     for _ in 0..10 {
         s.tick(0.1);
     }
@@ -272,14 +223,10 @@ fn quiver_survives_a_hunter_session_start_without_raising() {
     );
 }
 
-// ───────────────────────────────────────────────────────────────────────────────────────────────
-// The Auto Shot Timer's state machine — why the bar "just stays full".
-// ───────────────────────────────────────────────────────────────────────────────────────────────
+// ── The Auto Shot Timer's state machine ────────────────────────────────────────────────────────
 
-/// A ranged weapon on the character sheet, so `UnitRangedDamage("player")` answers a real speed.
-///
-/// 2.8s is a vanilla hunter bow. The addon computes `reloadTime = speed - 0.5`, so this is what
-/// makes the reload phase measurable rather than a divide by zero.
+/// A 2.8 s bow, so `UnitRangedDamage("player")` answers a speed; the addon's reload is
+/// `speed - 0.5`.
 fn seat_a_bow(s: &mut UiScript) {
     use benilla_ui::script::UnitCombatStats;
     s.set_player_combat_stats(Some(UnitCombatStats {
@@ -299,8 +246,8 @@ fn start_session(s: &mut UiScript) {
     }
 }
 
-/// The addon's own state machine, read through the three globals it publishes for macros.
-/// Reading these beats measuring the bar's pixels: they ARE what the bar draws from.
+/// The addon's shot state, read through the three functions it publishes for macros, which the
+/// bar draws from.
 fn shot_state(s: &mut UiScript) -> (bool, bool, f64, f64) {
     let mid = s.eval::<bool>("return Quiver.PredMidShot()").unwrap();
     let (reloading, reload_left) = s
@@ -312,16 +259,8 @@ fn shot_state(s: &mut UiScript) -> (bool, bool, f64, f64) {
     (mid, reloading, reload_left, shoot_left)
 }
 
-/// **The reported symptom, reproduced.** *"the shot timer doesn't seem to work properly when
-/// standing still and shooting, it just stays full."*
-///
-/// Quiver's ONLY detector for "an auto shot actually fired" is `ITEM_LOCK_CHANGED` — in the real
-/// client, spending an arrow toggles the ammo slot's lock, and the addon's own comment says so:
-/// *"Inventory event, such as using ammo or drinking a potion. This is how we detect auto shots."*
-///
-/// benilla fires `ITEM_LOCK_CHANGED` only from bag / cursor / mail / loot paths. Nothing fires it
-/// for ammo spent on a ranged attack. So the addon starts its 0.5s aim, saturates it, and waits
-/// forever for a shot it is never told about — which is a bar pinned at 100%.
+/// Quiver detects a fired auto shot only by `ITEM_LOCK_CHANGED`, which a spent arrow's stack
+/// write fires; with no such event its 0.5 s aim saturates and the bar stays full.
 #[test]
 fn auto_shot_bar_saturates_when_no_ammo_lock_event_ever_arrives() {
     benilla_formats::wow_data_or_skip!();
@@ -351,9 +290,7 @@ fn auto_shot_bar_saturates_when_no_ammo_lock_event_ever_arrives() {
     );
 }
 
-/// **The mechanism, proven.** The same session, plus the one event benilla never sends: the bar
-/// immediately behaves. This is what pins the diagnosis on the missing ammo lock rather than on
-/// the addon, on `SetWidth`, or on the standing-still check.
+/// The same session plus one `ITEM_LOCK_CHANGED`: the reload phase starts at once.
 #[test]
 fn auto_shot_bar_drains_the_moment_an_ammo_lock_event_arrives() {
     benilla_formats::wow_data_or_skip!();
@@ -365,7 +302,7 @@ fn auto_shot_bar_drains_the_moment_an_ammo_lock_event_arrives() {
 
     s.fire_event("START_AUTOREPEAT_SPELL", Vec::new());
     s.tick(0.1);
-    // The arrow leaves the quiver. This is the event the real client fires and we do not.
+    // The arrow leaves the quiver.
     s.fire_event("ITEM_LOCK_CHANGED", Vec::new());
     s.tick(0.1);
 
@@ -381,9 +318,7 @@ fn auto_shot_bar_drains_the_moment_an_ammo_lock_event_arrives() {
     );
 }
 
-// ───────────────────────────────────────────────────────────────────────────────────────────────
-// The Aspect Tracker — what it actually draws, and the one aspect it deliberately does not.
-// ───────────────────────────────────────────────────────────────────────────────────────────────
+// ── The Aspect Tracker ─────────────────────────────────────────────────────────────────────────
 
 /// Seat one active player buff by name and announce it the way the app's aura feed does.
 fn seat_a_buff(s: &mut UiScript, spell_id: u32, name: &str, icon: &str) {
@@ -407,12 +342,8 @@ fn seat_a_buff(s: &mut UiScript, spell_id: u32, name: &str, icon: &str) {
     s.fire_event("PLAYER_AURAS_CHANGED", vec![]);
 }
 
-/// Is any quad drawing this art, visibly?
-///
-/// **The buff bar is hidden first, and that is load-bearing.** An active aura paints its own icon
-/// through `BuffButton*`, so while Aspect of the Hawk is up TWO quads carry
-/// `Spell_Nature_RavenForm` — the tracker's, and the player's buff bar. An earlier cut of this
-/// helper counted both and reported the tracker as drawing when it had correctly hidden itself.
+/// Whether a visible quad draws this art. The buff bar is hidden first: an active aura's own
+/// `BuffButton` icon carries the same art as the tracker's.
 fn draws(s: &mut UiScript, leaf: &str) -> bool {
     use benilla_ui::script::QuadContent;
     s.eval::<()>("if BuffFrame then BuffFrame:Hide() end")
@@ -431,13 +362,8 @@ fn draws(s: &mut UiScript, leaf: &str) -> bool {
     })
 }
 
-/// **The Aspect Tracker draws.** Cheetah up ⇒ the Cheetah icon is on screen.
-///
-/// This is the module end to end on our stack: the scanning tooltip
-/// (`CreateFrame("GameTooltip", …, "GameTooltipTemplate")` → `SetPlayerBuff` → the *named*
-/// `…TextLeft1` font string → a string compare against the localized spell name), then
-/// `Texture:SetTexture` and the backdrop frame it lives in. Every one of those is a real
-/// dependency of ours, and a break in any of them shows up here as a missing quad.
+/// With Aspect of the Cheetah up the tracker draws its icon, found through a scanning tooltip:
+/// `SetPlayerBuff`, then the named `TextLeft1` line compared with the spell name.
 #[test]
 fn aspect_tracker_draws_the_icon_for_an_active_aspect() {
     benilla_formats::wow_data_or_skip!();
@@ -460,26 +386,9 @@ fn aspect_tracker_draws_the_icon_for_an_active_aspect() {
     );
 }
 
-/// **The Hawk arm is gated on the frame LOCK, and getting that wrong looks exactly like a bug.**
-///
-/// `chooseIconTexture` tests seven aspects by name (Beast, Cheetah, Fox, Monkey, Viper, Wild,
-/// Wolf) and then handles Hawk differently:
-///
-/// ```lua
-/// elseif Api.Spell.PredSpellLearned(Hawk) and not Api.Aura.PredBuffActive(Hawk)
-///     or not Quiver_Store.IsLockedFrames
-/// ```
-///
-/// `and` binds tighter than `or`, so this is `(learned and NOT active) or (UNLOCKED)`. Two
-/// clauses, and the second is the one that catches you out:
-///
-/// - the Hawk icon is a **missing-aspect reminder**, not a status light — with Hawk up it is
-///   suppressed by the first clause;
-/// - but **unlocked frames force it on regardless**, so you can see the frame you are dragging.
-///
-/// A fresh profile starts UNLOCKED, so the honest default is *the reminder shows even with Hawk
-/// up*. This test asserts both halves, because an earlier cut of it asserted only "blank while
-/// Hawk is up" and failed — the addon was right and the test was wrong.
+/// `chooseIconTexture` shows the Hawk icon when `(learned and not active) or not IsLockedFrames`:
+/// a reminder while Hawk is missing, and forced on while frames are unlocked, the fresh-profile
+/// default, so the frame can be dragged.
 #[test]
 fn the_hawk_reminder_is_suppressed_only_once_frames_are_locked() {
     benilla_formats::wow_data_or_skip!();
@@ -495,7 +404,7 @@ fn the_hawk_reminder_is_suppressed_only_once_frames_are_locked() {
         "Interface\\Icons\\Spell_Nature_RavenForm",
     );
 
-    // Unlocked (the fresh-profile default): the reminder shows even though Hawk IS up.
+    // Unlocked: the reminder shows even though Hawk is up.
     s.eval::<()>("Quiver_Store.IsLockedFrames = false").unwrap();
     s.fire_event("PLAYER_AURAS_CHANGED", vec![]);
     assert!(
@@ -513,13 +422,8 @@ fn the_hawk_reminder_is_suppressed_only_once_frames_are_locked() {
     );
 }
 
-/// **B267's second half, end to end through the real feed.** Not a hand-fired event this time:
-/// a container snapshot whose arrow stack ticks down by one, pushed through
-/// [`crate::ui_items::feed::apply_container_source`] exactly as a server object update does.
-///
-/// This is the test that would have caught the bug in the first place. The A/B above proves the
-/// addon reacts to `ITEM_LOCK_CHANGED`; this proves **we actually send one when an arrow is
-/// spent**, which is the half that was missing.
+/// An arrow stack one lighter, pushed through [`crate::ui_items::feed::apply_container_source`]
+/// as a server update is, fires `ITEM_LOCK_CHANGED` and starts Quiver's reload.
 #[test]
 fn spending_an_arrow_starts_quivers_reload_through_the_real_item_feed() {
     benilla_formats::wow_data_or_skip!();
@@ -565,8 +469,7 @@ fn spending_an_arrow_starts_quivers_reload_through_the_real_item_feed() {
     let (_, reloading_before, _, _) = shot_state(&mut s);
     assert!(!reloading_before, "no shot has landed yet");
 
-    // The server tells us the stack is one lighter. That is a fired shot, and the only way the
-    // addon can ever know it.
+    // The server's stack count drops by one: a fired shot.
     apply_container_source(
         &mut s,
         &mut memory,

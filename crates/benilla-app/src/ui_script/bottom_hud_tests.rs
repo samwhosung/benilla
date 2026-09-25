@@ -1,34 +1,12 @@
-//! **The bottom-of-screen clearance law, enforced**.
-//!
-//! The bottom band of the screen is shared: the main bar sits on it, the extra action bars, the
-//! stance/pet bar and the reputation watch bar stack above it, and the bag windows, the cast bar,
-//! the chat panes and the default tooltip anchor all have to keep clear of whatever is standing.
-//! `UIParent_ManageFramePositions()` (UIParent.xml) is the ONE thing that decides that — it seats
-//! the managed frames and writes the managed globals — and every one of the defects below was a
-//! frame that quietly opted out of it.
-//!
-//! Three guards, each pinning a different way to opt out:
-//!
-//! 1. [`no_shipped_file_declares_its_own_copy_of_a_managed_offset`] — the *shadow copy*.
-//!    `BagFrame.xml` kept `local BENILLA_CONTAINER_OFFSET_X/Y = 0/70`. Locals, so the pass's
-//!    writes could never reach them; the open-bag stack sat at the no-bars corner forever and a
-//!    raised bottom multibar drew straight through the lowest bag window (director-caught — the
-//!    screenshot that opened 1499). `GameTooltip.xml` carried the softer `X = X or 0` form of the
-//!    same thing. A value with two written statements has no owner.
-//!
-//! 2. [`every_bottom_anchored_top_level_frame_is_accounted_for`] — the *new frame nobody wired
-//!    up*. This is the guard that has to hold for features that do not exist yet: a top-level
-//!    frame anchored to the screen's bottom edge is, by construction, in the contested band, so it
-//!    must be a managed row, a listener consumer, or an exemption someone wrote a reason for.
-//!
-//! 3. [`no_bottom_band_frame_overlaps_a_raised_bar`] — the *symptom itself*, over the real shipped
-//!    XML: for every combination of raised bars, no bottom-band frame's rect may intersect a
-//!    visible bar's. This is the one that would have failed on the director's screenshot.
+//! The bottom-band clearance guards. The main bar, the extra action bars, the stance and pet bars
+//! and the reputation bar stack in the bottom band; everything else there (the bags, the cast bar,
+//! the chat panes, the default tooltip anchor) clears them through `UIParent_ManageFramePositions`
+//! (`UIParent.lua`), which seats the managed frames and writes the managed offsets.
 
 use benilla_ui::script::UiScript;
 
-/// The globals `UIPARENT_MANAGED_FRAME_POSITIONS`'s `isVar` rows own. Only `UIParent.xml` may
-/// write these; everyone else reads them fresh at use (falling back inline, never by assigning).
+/// Offsets the stock FrameXML writes and the manage pass uses: our files may read them, never
+/// assign them.
 const MANAGED_GLOBALS: &[&str] = &[
     "CONTAINER_OFFSET_X",
     "CONTAINER_OFFSET_Y",
@@ -41,10 +19,8 @@ fn ui_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui")
 }
 
-/// Blank out `<!-- … -->` regions, keeping every newline so line numbers still point at the file.
-/// The scan below reads Lua, and an XML comment is prose: `BagFrame.xml`'s own explanation of the
-/// backpack anchor says "CONTAINER_OFFSET_X=0 / CONTAINER_OFFSET_Y=70" in English, which is a
-/// description of the law, not a violation of it.
+/// Blanks out `<!-- … -->` regions, newlines kept so line numbers hold: an XML comment is prose,
+/// not Lua, even when it spells a managed name.
 fn without_xml_comments(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -77,31 +53,21 @@ fn shipped_xml() -> Vec<(String, String)> {
         })
         .collect();
     out.sort();
-    // A sanity floor for the walk, not a census: `assets/ui` retires file by file (1751), so
-    // the floor sits well under the count rather than one step above it (1956).
+    // A floor for the walk, not a census: `assets/ui` shrinks as windows move to the stock files.
     assert!(out.len() >= 6, "only {} xml files swept", out.len());
     out
 }
 
-/// **Nothing outside `UIParent.xml` may ASSIGN a managed offset** — not as a local, not as a
-/// global, not as an `or`-guarded default.
-///
-/// Reading one is fine and expected (`-CONTAINER_OFFSET_X` in the right stack, `CONTAINER_OFFSET_Y`
-/// in the bag stack and the tooltip anchor). Falling back at the point of use is fine
-/// (`local offsetY = CONTAINER_OFFSET_Y or 70`) — that is a read with a default, and it is what the
-/// per-window harnesses that ship no `UIParent.xml` need. What is forbidden is *storing* the value
-/// anywhere the pass cannot reach, because the pass recomputes these on every bar change and a
-/// stored copy is stale from the moment the next bar goes up.
-///
-/// The rule is spelled as "an assignment statement whose left-hand side names a managed global,
-/// or a name containing one" — the second half is what catches `BENILLA_CONTAINER_OFFSET_Y`, which
-/// was not the global's name at all and is exactly why nothing noticed it for so long.
+/// No file of ours assigns a managed offset, as a local, a global or an `or`-guarded default: the
+/// pass recomputes them on every bar change, so a stored copy goes stale. Reading one with an
+/// inline fallback (`CONTAINER_OFFSET_Y or 70`) is fine; a left-hand side that only contains the
+/// name counts as an assignment.
 #[test]
 fn no_shipped_file_declares_its_own_copy_of_a_managed_offset() {
     let mut offences = Vec::new();
     for (name, text) in shipped_xml() {
         if name == r"Interface\FrameXML\UIParent.xml" {
-            continue; // the owner: its var rows are where these numbers are defined
+            continue; // the owner: its var rows define these
         }
         for (n, line) in without_xml_comments(&text).lines().enumerate() {
             let code = line.split("--").next().unwrap_or("");
@@ -130,10 +96,8 @@ fn no_shipped_file_declares_its_own_copy_of_a_managed_offset() {
     );
 }
 
-/// Frames whose seat the manage pass owns — the `UIPARENT_MANAGED_FRAME_POSITIONS` keys that name
-/// a frame, plus the two the pass's custom tail seats by hand. Kept here as literal text so this
-/// test and `UIParent.xml` cannot drift apart silently: the next guard asserts every one of these
-/// really appears in the shipped pass.
+/// Frames the manage pass seats: the `UIPARENT_MANAGED_FRAME_POSITIONS` frame rows and four that
+/// its tail seats by hand. The next guard checks each still appears in the stock `UIParent.lua`.
 const MANAGED_FRAMES: &[&str] = &[
     "MultiBarBottomLeft",
     "GroupLootFrame1",
@@ -149,9 +113,8 @@ const MANAGED_FRAMES: &[&str] = &[
     "QuestWatchFrame",
 ];
 
-/// Top-level frames that ARE anchored to the screen's bottom edge and are deliberately not managed.
-/// Every entry carries the reason, because "it was already like that" is how the bag stack got its
-/// shadow copy. Adding a frame here is a decision; adding one silently is what this test forbids.
+/// Top-level frames anchored to the screen's bottom edge that the pass does not manage, each with
+/// its reason.
 const BOTTOM_EXEMPT: &[(&str, &str)] = &[
     (
         "MainMenuBar",
@@ -196,19 +159,12 @@ const BOTTOM_EXEMPT: &[(&str, &str)] = &[
     ),
 ];
 
-/// **A top-level frame anchored to the screen's bottom edge is either managed, or exempt with a
-/// stated reason.** There is no third option, and this is the guard that covers features nobody
-/// has written yet.
-///
-/// The band at the bottom of the screen is contested by construction: the main bar owns it, and
-/// every optional bar stacks upward into it. So the moment a new window anchors `BOTTOM`,
-/// `BOTTOMLEFT` or `BOTTOMRIGHT` to the screen root, it has taken on a clearance problem — and the
-/// only correct answers are to join `UIPARENT_MANAGED_FRAME_POSITIONS`, to seat itself from a
-/// managed global and register a listener (the bag stack's answer), or to say out loud why it does
-/// not need to. Failing here is not a bug report; it is a prompt to pick one.
+/// A top-level frame anchored to the screen's bottom edge sits in the contested band, so it has a
+/// `UIPARENT_MANAGED_FRAME_POSITIONS` row, seats itself from a managed offset with a listener, or
+/// is listed in `BOTTOM_EXEMPT` with its reason.
 #[test]
 fn every_bottom_anchored_top_level_frame_is_accounted_for() {
-    // The pass is the stock `UIParent.lua`'s since 1988 — read off the player's chain.
+    // The pass is the stock `UIParent.lua`'s, read off the player's chain.
     let _data = benilla_formats::wow_data_or_skip!();
     let pass = String::from_utf8_lossy(
         &super::reference_ui::read(r"Interface\FrameXML\UIParent.lua")
@@ -244,13 +200,9 @@ fn every_bottom_anchored_top_level_frame_is_accounted_for() {
     );
 }
 
-/// Every top-level INSTANCE (a `<Frame>`/`<Button>`/… that is not `virtual` and carries no
-/// `parent` attribute) whose own `<Anchors>` name a BOTTOM point against the screen root — an
-/// anchor with no `relativeTo`, or one naming `UIParent`/`WorldFrame`, all three of which resolve
-/// to the same full-screen rect.
-///
-/// Only the frame's OWN anchors, not its children's: a child that anchors BOTTOM to its parent is
-/// stating a position inside a window, which is nobody's clearance problem.
+/// Top-level instances (not `virtual`, no `parent`) whose own anchors put a BOTTOM point on the
+/// screen root: no `relativeTo`, or `UIParent` or `WorldFrame`, all the full screen. A child's
+/// anchors place it inside its window, so they do not count.
 fn bottom_anchored_top_level(doc: &benilla_ui::framexml::ParsedDocument) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for item in &doc.items {
@@ -285,13 +237,8 @@ fn bottom_anchored_top_level(doc: &benilla_ui::framexml::ParsedDocument) -> Vec<
     out
 }
 
-/// Every bar a player can raise into the band the tenants below have to share.
-///
-/// The two VERTICAL bars are in here deliberately, even though they are the only pair that moves
-/// the tenants sideways rather than upward: `CONTAINER_OFFSET_X`'s `rightLeft = 90` /
-/// `rightRight = 45` arithmetic has never once run in a shipped session, because until the
-/// visibility options (1500) both bars were unconditionally hidden and the flags could not be set.
-/// Half of the managed table was dead arithmetic nothing exercised. It runs here.
+/// The bars a player can raise into the band. The two vertical bars move the tenants sideways,
+/// through the `rightLeft` and `rightRight` terms of `CONTAINER_OFFSET_X`.
 const RAISABLE_BARS: &[&str] = &[
     "MultiBarBottomLeft",
     "MultiBarBottomRight",
@@ -300,22 +247,14 @@ const RAISABLE_BARS: &[&str] = &[
     "MultiBarLeft",
 ];
 
-/// **The symptom, pinned: with any combination of bars raised, nothing in the bottom band overlaps
-/// a raised bar.**
-///
-/// This is the assertion that would have failed on the screenshot that opened 1499 — an open bag
-/// window drawn straight through a bottom multibar's buttons. It runs against the REAL shipped
-/// XML, drives the bars' visibility directly (so it keeps holding however the toggles are
-/// eventually wired), and re-runs the pass between combinations exactly as a live bar change does.
+/// With any combination of bars raised, nothing in the bottom band overlaps a raised bar. Runs the
+/// full UI and reruns the pass after each combination, as a live bar change does.
 #[test]
 fn no_bottom_band_frame_overlaps_a_raised_bar() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1600.0, 900.0);
-    // The in-game UI materializes on world entry (1051), so a player always exists by the time the
-    // manifest loads — and the stock macro window's character tab formats `UnitName("player")`
-    // into its label inside its own OnLoad. A manifest load with no player is a state the client
-    // never reaches.
+    // The in-game UI loads on world entry, so a player always exists by then.
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -328,18 +267,14 @@ fn no_bottom_band_frame_overlaps_a_raised_bar() {
     let failures = super::load_default_ui(&s);
     assert!(failures.is_empty(), "manifest load errors: {failures:#?}");
 
-    // Open every bag window. The stack only exists once something is in it, and an EMPTY stack is
-    // exactly the state that hid this defect from every earlier test — `bag_tests` never loads
-    // `MultiBars.xml` and the multibar tests never open a bag, so no suite had both on screen at
-    // once. Shown through the real OnShow, so the stack layout runs the way a B keypress runs it.
     s.run(
         "for _, f in ipairs({BenillaBagFrame, BenillaBagFrame1, BenillaBagFrame2, \
          BenillaBagFrame3, BenillaBagFrame4}) do if f then f:Show() end end",
     )
     .unwrap();
 
-    // Everything that sits in the band and must give way. Each is checked only while shown, so a
-    // frame that never appears contributes nothing — which is why the pair counter below matters.
+    // The frames in the band that must clear the bars. Each is checked only while shown, hence
+    // the pair floor below.
     const TENANTS: &[&str] = &[
         "BenillaBagFrame",
         "BenillaBagFrame1",
@@ -355,11 +290,8 @@ fn no_bottom_band_frame_overlaps_a_raised_bar() {
         let mut raised = Vec::new();
         for (i, bar) in RAISABLE_BARS.iter().enumerate() {
             let on = mask & (1 << i) != 0;
-            // **Through the saved globals, not a bare Show.** The stock pass reads
-            // `SHOW_MULTI_ACTIONBAR_1`/`_2` for its bottom-bar flags (`UIParent.lua:1598-1606`),
-            // never the frames' shown state, so raising a bar by hand and running the pass is a
-            // state the client never reaches — and it clears nothing (1988; our retired copy of
-            // the pass read `IsShown`, which is what let this drive work before).
+            // The stock pass takes its bottom-bar flags from `SHOW_MULTI_ACTIONBAR_1`/`_2`, not
+            // from the frames' shown state (`UIParent.lua:1599-1607`).
             let global = match *bar {
                 "MultiBarBottomLeft" => Some("SHOW_MULTI_ACTIONBAR_1"),
                 "MultiBarBottomRight" => Some("SHOW_MULTI_ACTIONBAR_2"),
@@ -402,9 +334,7 @@ fn no_bottom_band_frame_overlaps_a_raised_bar() {
         }
     }
 
-    // Never let this pass by testing nothing: a renamed bag frame or a bar that fails to show
-    // would otherwise turn the whole guard green while checking zero pairs. With three raisable
-    // bars over seven tenants the real number is in the dozens.
+    // A floor on the pairs compared, so the sweep cannot pass by comparing nothing.
     assert!(
         pairs >= 24,
         "only {pairs} bar/tenant pairs were actually compared — the sweep is not exercising the \
@@ -427,44 +357,22 @@ fn rect(s: &UiScript, name: &str) -> (f32, f32, f32, f32) {
     .unwrap_or_else(|e| panic!("rect of {name}: {e}"))
 }
 
-/// Touching edges do not overlap — the stack seats windows flush against each other by design.
+/// Touching edges do not overlap: the stack seats windows flush against each other.
 fn overlaps(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> bool {
     a.0 < b.2 && b.0 < a.2 && a.1 < b.3 && b.1 < a.3
 }
 
-/// **The item-push card's travel band overlaps a raised bottom bar — and so does the reference's.**
-///
-/// The director reported the looted-item card as "hidden behind" the extra action bar in the same
-/// breath as the bag overlap, so this measures it instead of reasoning about it. The answer is not
-/// the one the bag half had:
-///
-/// ```text
-/// card at its opaque peak   x 1253.7..1298.0   y 48.9..93.1
-/// MultiBarBottomRight       x  806.0..1306.0   y 57.0..95.0
-/// ```
-///
-/// The card is MEDIUM (a child of a MEDIUM bag button); the bars are `frameStrata="HIGH"`
-/// (`MultiActionBars.xml` l.36/151/266/381). **The reference has exactly this arrangement** — its
-/// bag buttons are `parent="MainMenuBarArtFrame"` under a `MainMenuBar` with no strata at all, and
-/// its `MultiBarBottomRight` runs from `MultiBarBottomLeft`'s right edge +10 for 500 px, which puts
-/// its last buttons directly over the bag bar at every resolution. So a push into a bag draws
-/// behind that bar's twelfth button whenever that slot is filled, in the real 1.12.1 client too.
-/// It goes unnoticed because a multibar's EMPTY wells are hidden, so most players have nothing
-/// there; the director's screenshot has a chicken in exactly that slot.
-///
-/// This is therefore a **finding test, not a guard**: it records what the reference's own geometry
-/// produces so that changing either side has to come and edit these numbers on purpose. If we ever
-/// diverge deliberately — raising the card's strata, or lifting its band clear of the bars — this
-/// is the test that says so out loud rather than the change slipping through green.
+/// The item-push card overlaps a raised bottom bar, as in the reference: the card is MEDIUM under
+/// the bag button, the multibars are `frameStrata="HIGH"` (`MultiActionBars.xml:36`), and
+/// `MultiBarBottomRight`'s last buttons sit over the bag bar, so a push draws behind a filled
+/// twelfth button. At 1600x900 the card peaks at x 1253.7..1298.0, y 48.9..93.1, and the bar
+/// spans x 806..1306, y 57..95.
 #[test]
 fn the_item_push_card_shares_the_band_with_a_raised_bar_exactly_as_the_reference_does() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1600.0, 900.0);
-    // The in-game UI materializes on world entry (1051), so a player always exists by the time the
-    // manifest loads — and the stock macro window's character tab formats `UnitName("player")`
-    // into its label inside its own OnLoad. A manifest load with no player is a state the client
-    // never reaches.
+    // The in-game UI loads on world entry, so a player always exists by then.
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -476,8 +384,8 @@ fn the_item_push_card_shares_the_band_with_a_raised_bar_exactly_as_the_reference
     );
     let failures = super::load_default_ui(&s);
     assert!(failures.is_empty(), "manifest load errors: {failures:#?}");
-    // The card is the stock `<Model>` since 2015, sized by its file's box once the facts land
-    // (`ForcedBackpackItem.m2`: one 1000 ms clamp; the box 0.02707 × 0.07962 model units).
+    // The stock `<Model>` card sizes from its file's box: `ForcedBackpackItem.m2` has one 1000 ms
+    // non-looping sequence and a 0.02707 x 0.07962 box, in model units.
     s.set_model_facts(
         r"Interface\ItemAnimations\ForcedBackpackItem.mdx",
         benilla_ui::widget::ModelFileFacts {
@@ -501,17 +409,15 @@ fn the_item_push_card_shares_the_band_with_a_raised_bar_exactly_as_the_reference
             benilla_ui::script::ScriptValue::Str("Interface\\Icons\\INV_Misc_Bag_08".into()),
         ],
     );
-    s.tick(0.133); // the opaque peak — the instant the card is most visible
+    s.tick(0.133); // the card's opaque peak
     s.resolve();
     assert!(
         shown(&s, "MainMenuBarBackpackButtonItemAnim"),
         "the card plays"
     );
 
-    // The pane's rect is the file's box in layout units at 16:9 — the card's whole travel band,
-    // 42.41 × 124.72 hung off the button's BOTTOMRIGHT (−10, 0) — and the card the file's keys
-    // put inside it at its opaque peak is the reference's 48.9..93.1 above the screen floor
-    // (0887 measured that quad by hand; it sits inside this band).
+    // The pane is the file's box in layout units at 16:9: 42.41 x 124.72, off the button's
+    // BOTTOMRIGHT (-10, 0). The reference's card peaks at 48.9..93.1 above the floor, inside it.
     let card = rect(&s, "MainMenuBarBackpackButtonItemAnim");
     let bar = rect(&s, "MultiBarBottomRight");
     assert!(

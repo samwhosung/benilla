@@ -1,77 +1,36 @@
-//! The overflow law — the pure side of the FontString's three overflow regimes:
-//! the height-limit line stack (regime 2's vertical half, `CGxString+0x40`) and the height-gated
-//! ellipsis-truncate (regime 3, `CSimpleFontString 0x771ec0`). Pure (no atlas, no shaping) — the
-//! parent binds the row-count closure ([`super::ellipsize_to_fit`]), mirroring how [`super::wrap`]
-//! binds its measure; the tests here run on stub row counts.
+//! The pure side of the FontString overflow law: the height-limit line stack (`CGxString+0x40`)
+//! and the height-gated ellipsis truncate (`CSimpleFontString` `0x771ec0`). The tests run on stub
+//! row counts; [`super::ellipsize_to_fit`] binds the real one.
 
-/// The client's truncation marker: three ASCII dots (`.rdata 0x800188` = `2e 2e 2e 00`) — never
-/// the single `…` glyph.
+/// The reference's truncation marker, three ASCII dots (`.rdata 0x800188`), not the `…` glyph.
 const ELLIPSIS: &str = "...";
 
-/// Absorbs float noise in a resolved rect height before the line-stack division: an auto-height
-/// FontString's rect is its own measured block (`rows × pitch`) plus anchor-graph arithmetic, and
-/// a stray `+1e-4` must not read as "one more line started". A quarter pixel is far below any
-/// real layout delta.
+/// Slack on a rect height before the line counts: an auto-height rect is its measured block plus
+/// anchor-graph arithmetic, and a stray `1e-4` must not start or lose a line.
 const HEIGHT_EPS: f32 = 0.25;
 
-/// How many wrapped lines a `box_h`-tall box emits — the client's line-stack law: lines stack
-/// until the accumulated height *passes* the limit (`0x5cdc20`: stop at `accum ≥ +0x40`, checked
-/// after each line), so the count is the smallest `n` with `n·pitch ≥ box_h`, and never 0 (the
-/// first line always emits). `pitch` is the line step ([`super::layout_text_quads`]'s: font height
-/// + the outlined-cell pad; spacing 0 for all shipped UI).
-///
-/// **This is the RENDER law, and it is not the fit law** — see [`lines_fitting`]. Using it for both
-/// is what let a four-line item name overflow a three-line box.
+/// How many wrapped lines a `box_h`-tall box draws, the reference's line stack (`0x5cdc20`: stop
+/// at `accum ≥ +0x40`): the smallest `n` with `n·pitch ≥ box_h`, never 0, `pitch` being the font
+/// height. The render law: fitting by it lets a four-line name overflow a three-line box.
 pub(super) fn lines_allowed(box_h: f32, pitch: f32) -> usize {
     (((box_h - HEIGHT_EPS) / pitch).ceil() as usize).max(1)
 }
 
-/// How many wrapped lines *fit inside* a `box_h`-tall box — the client's *other* line-count law,
-/// the one the ellipsis-truncate measures against.
-///
-/// The truncate loop re-measures each backed-off candidate through
-/// `0x44d960` → **`0x5c21c0` `GxuFont_GetMaxCharsWithinHeight`**, whose per-line test **breaks**
-/// when `boxH + 2⁻²⁰ < accumH + lineH`.
-/// A line is therefore admitted only if it lands *wholly within* the box: the largest `n` with
-/// `n·pitch ≤ box_h`. That is a **floor**, where [`lines_allowed`]'s render stack is a **ceil** —
-/// the render emits a line and *then* notices it overran, so it draws one more line than fits
-/// whenever `box_h` is not a whole multiple of `pitch`.
-///
-/// The two agree on every exact multiple, which is why the split went unnoticed: every consumer
-/// decision 0292/0329 verified (bag title 112×12, unit name 100×10, minimap zone 128×12) is one.
-/// The loot row's 93×38 name at pitch 12 is the first shipped box that is not — `ceil(38/12) = 4`
-/// against `floor(38/12) = 3` — and at exactly four wrapped lines "Schematic: Small Seaforium
-/// Charge" slipped through the fit test and then overflowed its 37px row.
-///
-/// `0` is this floor's honest answer for a box shorter than a single line — but it is NOT what the
-/// ellipsis seam may act on: `0x771ec0` clamps its box height to one line pitch *before* the fit
-/// test (`boxH := max(boxH, lineH+gap)` when maxLines==0 — bytes `0x771f9e..0x771faa`), so
-/// the sub-one-line call this 0 describes never happens in the client. [`ellipsize_in_box`]
-/// mirrors the clamp. Decision 0597's "0 lines → the loop backs off to the bare ellipsis" reading
-/// missed it and turned every sub-one-line fixed box into three dots — money purses, hotkeys,
-/// everywhere. The epsilon is [`HEIGHT_EPS`] rather than the client's `2⁻²⁰` for
-/// the same reason it is on the render law — our `box_h` is the anchor graph's arithmetic, not the
-/// client's, and an exact multiple arriving as `12.0 - 1e-6` must not read as zero lines.
+/// How many wrapped lines fit wholly inside a `box_h`-tall box, the ellipsis's law:
+/// `GxuFont_GetMaxCharsWithinHeight` (`0x5c21c0`, via `0x44d960`) stops when
+/// `boxH + 2⁻²⁰ < accumH + lineH`, the largest `n` with `n·pitch ≤ box_h`, so it floors where
+/// [`lines_allowed`] ceils. Its 0 under one line is never acted on ([`ellipsize_in_box`]). The
+/// slack is [`HEIGHT_EPS`], not `2⁻²⁰`: `box_h` is anchor-graph arithmetic, and `12.0 - 1e-6`
+/// must not lose a line.
 pub(super) fn lines_fitting(box_h: f32, pitch: f32) -> usize {
     ((box_h + HEIGHT_EPS) / pitch).floor().max(0.0) as usize
 }
 
-/// [`ellipsize`] against a *box*, choosing the line-count law for it — the whole point being that
-/// the choice lives here, next to both laws and under test, rather than at the atlas-bound call
-/// site where picking the wrong one is invisible ([`super::ellipsize_to_fit`] has no unit coverage:
-/// it needs a real font atlas). Picking [`lines_allowed`] here instead of [`lines_fitting`] is
-/// precisely the bug decision 0597 corrects, and `the_box_ellipsizer_measures_against_the_fit_law`
-/// pins the difference on the exact geometry that exposed it.
-///
-/// The `box_h.max(pitch)`: the client's own **min-one-line height clamp** — `0x771ec0` raises its
-/// box height to one line pitch before the fit measure (`boxH := max(boxH, lineH+gap)`, bytes
-/// `0x771f9e..0x771faa`; gap is the pixel-quantized spacing, 0 for all shipped UI, so the clamp
-/// floor is exactly `pitch`). The first line is therefore always admitted, even into a box shorter
-/// than one line — the stock client renders the 36×10 HotKey under its 12px font and benilla's
-/// 20×13 money numbers under 14px, and 0597's unclamped floor turned them all into bare `"..."`
-/// (`sub_one_line_boxes_render_their_single_line` pins the exact geometries). The
-/// clamp is a no-op for any box a full line fits in, so the ≥1-line floor law — 0597's loot fix —
-/// is untouched. The render clamp ([`lines_allowed`], floored at one) draws the admitted line.
+/// [`ellipsize`] by the fit law ([`lines_fitting`]), chosen here under test as
+/// [`super::ellipsize_to_fit`] needs a real atlas. The box first clamps up to one pitch, as
+/// `0x771ec0` does with `maxLines` 0 (`boxH := max(boxH, lineH+gap)`, `0x771f9e..0x771faa`, gap 0
+/// in shipped UI), so a box under one line still draws it, like the 36×10 action-button hotkey
+/// under a 12 px font.
 pub(super) fn ellipsize_in_box<F: FnMut(&str) -> usize>(
     text: &str,
     box_h: f32,
@@ -81,16 +40,10 @@ pub(super) fn ellipsize_in_box<F: FnMut(&str) -> usize>(
     ellipsize(text, lines_fitting(box_h.max(pitch), pitch), rows)
 }
 
-/// The height-gated ellipsis-truncate (`0x771ec0`): when `text` wraps into more lines than
-/// `allowed`, back off one char at a time (the client skips UTF-8 continuation bytes; Rust's
-/// `char` walk is the same boundary) and append [`ELLIPSIS`], until the candidate's wrapped row
-/// count (`rows`, bound by the caller over the real wrap walk) fits — or the prefix is empty and
-/// the bare `"..."` ships regardless (the client's loop floor). `None` = the text fits untouched
-/// (the raw string draws; the common case, decided by one `rows` call).
-///
-/// The caller owns the GATE (`boxW > 0 && boxH > 0`; `maxLines` unmodeled): an
-/// auto-height FontString's rect height IS its wrapped block, so it always fits here and never
-/// truncates — the byte law's intrinsic-height escape, geometrically.
+/// The height-gated ellipsis truncate (`0x771ec0`): past `allowed` rows, back off one char at a
+/// time (the reference skips UTF-8 continuation bytes) behind [`ELLIPSIS`] until `rows` fits; an
+/// empty prefix ships the bare `"..."`. `None`: the text fits and draws raw. The caller owns the
+/// gate (`boxW > 0 && boxH > 0`; `maxLines` is not modelled).
 pub(super) fn ellipsize<F: FnMut(&str) -> usize>(
     text: &str,
     allowed: usize,
@@ -99,7 +52,6 @@ pub(super) fn ellipsize<F: FnMut(&str) -> usize>(
     if rows(text) <= allowed {
         return None;
     }
-    // Back off from the full text: each candidate is one char shorter than the last, + "...".
     let mut cut: Vec<usize> = text.char_indices().map(|(i, _)| i).collect();
     while let Some(end) = cut.pop() {
         let candidate = format!("{}{ELLIPSIS}", &text[..end]);
@@ -119,53 +71,44 @@ mod overflow_tests {
         // One-line boxes: the bag title (112×12 at pitch 12) and the unit name (100×10 at 10).
         assert_eq!(lines_allowed(12.0, 12.0), 1);
         assert_eq!(lines_allowed(10.0, 10.0), 1);
-        // The stack stops when accum PASSES the limit: 13 tall at pitch 12 starts a second line.
+        // 13 tall at pitch 12 starts a second line.
         assert_eq!(lines_allowed(13.0, 12.0), 2);
         assert_eq!(lines_allowed(24.0, 12.0), 2);
-        // Float noise on an exact multiple never buys a phantom line.
+        // Float noise on a multiple buys no line.
         assert_eq!(lines_allowed(24.0 + 1e-4, 12.0), 2);
-        // Degenerate small boxes still emit their first line.
+        // A tiny box still draws its first line.
         assert_eq!(lines_allowed(1.5, 12.0), 1);
     }
 
-    /// The fit law is a FLOOR where the render law is a CEIL — a line counts only if it lands
-    /// wholly inside the box (`0x5c21c0`: break when `boxH + eps < accumH + lineH`).
+    /// A line fits only if it lands wholly inside the box (`0x5c21c0`).
     #[test]
     fn lines_fitting_is_the_height_fit_law() {
-        // The loot row's item name — the box that exposed the split. The render stack draws 4
-        // lines in it; only 3 actually fit.
+        // The loot row's 38-tall item name: 4 lines drawn, 3 fit.
         assert_eq!(lines_fitting(38.0, 12.0), 3);
         assert_eq!(lines_allowed(38.0, 12.0), 4, "the render law, for contrast");
 
-        // The two laws agree on every exact multiple — which is why the split hid for so long.
+        // The laws agree on every exact multiple.
         for n in 1..=6 {
             let h = 12.0 * n as f32;
             assert_eq!(lines_fitting(h, 12.0), n, "exact multiple {h}");
             assert_eq!(lines_allowed(h, 12.0), n, "exact multiple {h}");
         }
 
-        // A box shorter than one line: the raw floor honestly says 0, the render law floors at 1.
-        // The ellipsis seam does NOT act on the 0 — ellipsize_in_box clamps to one; see
-        // sub_one_line_boxes_render_their_single_line.
+        // Under one line: fit 0, which `ellipsize_in_box` clamps away, render 1.
         assert_eq!(lines_fitting(6.0, 12.0), 0);
         assert_eq!(lines_allowed(6.0, 12.0), 1);
 
-        // Float noise on an exact multiple must not cost a line (the mirror of lines_allowed's).
+        // Float noise on a multiple costs no line.
         assert_eq!(lines_fitting(24.0 - 1e-4, 12.0), 2);
     }
 
-    /// A stub row count: ceil(chars / 10) — a 10-char-wide box, every char one unit.
+    /// A stub row count: a 10-char-wide box, `ceil(chars / 10)`.
     fn rows10(s: &str) -> usize {
         s.chars().count().div_ceil(10).max(1)
     }
 
-    /// The director's actual overflow, on the loot row's actual geometry (93x38 box, 12px pitch),
-    /// with the stub standing in for the real wrap: 33 chars = 4 rows in a box that fits 3.
-    ///
-    /// The second assertion is the **mutation check, welded in**: under the render law the very
-    /// same string is left untouched — which is what shipped, and what the director saw spill out
-    /// of the row. If someone swaps the law back, the first assertion fails and this one explains
-    /// why.
+    /// The loot row's 93x38 name box at pitch 12, the stub standing in for the wrap: 33 chars are
+    /// 4 rows where 3 fit. By the render law the same string draws untouched and overflows the row.
     #[test]
     fn the_box_ellipsizer_measures_against_the_fit_law() {
         const LONG: &str = "Schematic: Small Seaforium Charge";
@@ -186,45 +129,37 @@ mod overflow_tests {
     #[test]
     fn fitting_text_is_untouched() {
         assert_eq!(ellipsize("Backpack", 1, rows10), None);
-        // Multi-line boxes fit multi-line text raw.
         assert_eq!(ellipsize("a 17-char sentence", 2, rows10), None);
     }
 
     #[test]
     fn overflow_backs_off_to_the_longest_fitting_prefix() {
-        // 17 chars in a one-row (10-char) box: prefix of 7 + "..." = 10 chars = 1 row.
+        // 17 chars in a one-row (10-char) box: a 7-char prefix plus "..." is 10 chars, 1 row.
         let got = ellipsize("Small Brown Pouch", 1, rows10);
         assert_eq!(got.as_deref(), Some("Small B..."));
     }
 
     #[test]
     fn utf8_backs_off_whole_chars() {
-        // Multi-byte chars back off at char boundaries (the client skips continuation bytes).
         let got = ellipsize("Ancêtre éternel", 1, rows10);
         assert_eq!(got.as_deref(), Some("Ancêtre..."));
     }
 
     #[test]
     fn empty_prefix_ships_the_bare_ellipsis() {
-        // Nothing fits: the loop floor is "..." itself, shipped even if over (the client's
-        // buffer after a full back-off).
+        // Nothing fits: the reference's loop floor is "..." itself, shipped even if over.
         let got = ellipsize("abcdef", 0, |_| 1);
         assert_eq!(got.as_deref(), Some("..."));
     }
 
-    /// The 0605 regression, on the exact shipped geometries that went to three dots everywhere:
-    /// a fixed box SHORTER than one line pitch admits its first line anyway — the stock client
-    /// renders the 36×10 HotKey under its 12px font and the 20×13 money numbers under 14px, so
-    /// single-line text that fits the width must ship raw, never as "...". Decision 0597's
-    /// unclamped floor (0 lines fit → back off to bare dots) is the mutation this welds out.
+    /// A fixed box shorter than one pitch still takes its first line: it ships raw, never as "...".
     #[test]
     fn sub_one_line_boxes_render_their_single_line() {
         // The money purse number: "145" in the 20×13 box at NumberFontNormal's 14px pitch.
         assert_eq!(ellipsize_in_box("145", 13.0, 14.0, rows10), None);
         // The action-button hotkey: "1" in the 36×10 box at NumberFontNormalSmallGray's 12px.
         assert_eq!(ellipsize_in_box("1", 10.0, 12.0, rows10), None);
-        // The clamp admits exactly ONE line, not more: text wrapping past it still truncates
-        // to the one-line prefix — never to the bare dots the unclamped floor produced.
+        // The clamp admits one line only: longer text truncates to a one-line prefix.
         assert_eq!(
             ellipsize_in_box("Small Brown Pouch", 10.0, 12.0, rows10).as_deref(),
             Some("Small B...")

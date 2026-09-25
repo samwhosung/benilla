@@ -1,10 +1,5 @@
-//! The escort-quest confirm (`QuestShareFrame.xml`): the Lua wiring between the
-//! `QUEST_ACCEPT_CONFIRM` event `ui_quest_share`'s feed fires and the shared StaticPopup engine,
-//! driven exactly as that feed drives it.
-//!
-//! The asymmetry these tests pin is the reference's: **Yes sends, No does not**. There is no
-//! decline packet for an escort confirm, so a test that only checked "the popup closes" would pass
-//! against a version that silently answered No on the wire.
+//! The stock escort-quest confirm, `QUEST_ACCEPT`, raised by the `QUEST_ACCEPT_CONFIRM` that
+//! `ui_quest_share`'s feed fires. Yes sends; there is no decline packet.
 
 use benilla_ui::script::{ScriptValue, UiScript};
 
@@ -36,10 +31,7 @@ fn confirm(s: &mut UiScript, who: &str, quest: &str) {
     );
 }
 
-/// The event raises the popup with BOTH args filled, in the reference's order: the player first,
-/// the quest title second (`QUEST_ACCEPT = "%s is starting %s\nWould you like to as well?"`). A
-/// swap would read "Escort Duty is starting Thrall", which is exactly the kind of wrong that looks
-/// right at a glance.
+/// `QUEST_ACCEPT` takes the player's name, then the quest title (`GlobalStrings.lua:3227`).
 #[test]
 fn the_confirm_names_the_player_first_and_the_quest_second() {
     benilla_formats::wow_data_or_skip!();
@@ -57,7 +49,6 @@ fn the_confirm_names_the_player_first_and_the_quest_second() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// Yes queues exactly one `ConfirmAcceptQuest()` and closes the popup.
 #[test]
 fn yes_answers_once() {
     benilla_formats::wow_data_or_skip!();
@@ -72,9 +63,8 @@ fn yes_answers_once() {
     );
 }
 
-/// **No sends nothing.** The reference's `QUEST_ACCEPT` entry has an `OnAccept` and no `OnCancel`
-/// at all (`StaticPopup.lua:727-737`), because there is no decline packet — the server's pending
-/// latch is cleared by the next thing that touches it. Same for ESC.
+/// The entry has no OnCancel (`StaticPopup.lua:727`): the server's pending latch clears on the
+/// next thing that touches it.
 #[test]
 fn no_and_escape_send_nothing() {
     benilla_formats::wow_data_or_skip!();
@@ -90,9 +80,8 @@ fn no_and_escape_send_nothing() {
     assert!(!s.eval::<bool>("return StaticPopup1:IsVisible()").unwrap());
 }
 
-/// A second confirm replaces the first rather than stacking — the server keeps ONE share latch per
-/// player, so an older question is already dead by the time a newer one arrives, and answering the
-/// stale popup would send the wrong quest id.
+/// The entry is `exclusive` (`StaticPopup.lua:735`), matching the server's one share latch per
+/// player: a newer question replaces the older.
 #[test]
 fn a_second_confirm_replaces_the_first() {
     benilla_formats::wow_data_or_skip!();

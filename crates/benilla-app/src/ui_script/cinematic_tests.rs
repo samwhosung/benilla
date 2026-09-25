@@ -1,30 +1,18 @@
-//! **The cinematic frame's key-down consumption** — what makes a fly-by something you *watch*.
-//!
-//! `CinematicFrame` is fullscreen, keyboard-enabled, and carries an `OnKeyDown` that answers
-//! ESCAPE. In the reference that is enough to swallow **every** key while it is up, because the
-//! key-down walk's gate is EXISTENCE, not handling (`0x76b7d0`): a shown keyboard frame with the
-//! slot set consumes the key whatever its script does with it, and a 1.12 handler has no way to
-//! signal "not handled" (`0x76ba25`).
-//!
-//! The reference's own Lua is the proof, and it is why these tests exist: that same `OnKeyDown` has
-//! to call `RunBinding("SCREENSHOT")` **by hand** to get one key back. It would not need to if
-//! unhandled keys fell through to their bindings.
-//!
-//! benilla had the walk but fed it only ten key names, so ESCAPE was consumed and
-//! `W` was not — and the player could walk around underneath their own intro cinematic.
+//! The cinematic frame swallows every key while it is up: the key-down walk gates on a shown
+//! keyboard frame with the slot set, not on handling (`0x76b7d0`), and a 1.12 handler cannot
+//! decline a key (`0x76ba25`), so the stock `OnKeyDown` re-runs `SCREENSHOT` by hand.
 
 use benilla_ui::script::UiScript;
 
 use super::test_ui::load_ui as load_xml;
 
-/// The frame tree a cinematic actually runs against: `UIParent` (whose `ShowUIPanel` the frame's
-/// `CINEMATIC_START` arm calls) and the cinematic frame itself.
+/// The cinematic frame over `UIParent`, whose `ShowUIPanel` its `CINEMATIC_START` arm calls.
 fn ui_with_the_cinematic_frame() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
     load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua"); // StaticPopup's money row, or UiPanels errors at load
+    load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua"); // StaticPopup's money row
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.xml");
     load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
     load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
@@ -37,24 +25,20 @@ fn ui_with_the_cinematic_frame() -> UiScript {
     s
 }
 
-/// Show the cinematic frame the way the engine does — the `CINEMATIC_START` edge `feed_ui` fires.
+/// The engine's `CINEMATIC_START` edge, as `feed_ui` fires it.
 fn start_cinematic(s: &mut UiScript) {
     s.set_in_cinematic(true);
     s.fire_event("CINEMATIC_START", vec![]);
     s.resolve();
 }
 
-/// With a fly-by on screen, the movement keys are the cinematic frame's, not the world's.
-///
-/// `frame_key_input` returning `true` is exactly the consumption that suppresses the key's binding
-/// and the gameplay readers ([`super::UiKeyboardCapture`]) — so this *is* the assertion that you
-/// cannot walk during a cinematic.
+/// `frame_key_input` returning true keeps the key from its binding and the gameplay readers
+/// ([`super::UiKeyboardCapture`]).
 #[test]
 fn a_playing_cinematic_swallows_the_movement_keys() {
     benilla_formats::wow_data_or_skip!();
     let mut s = ui_with_the_cinematic_frame();
 
-    // Before it starts, the frame is hidden and declines: the world keeps its keys.
     for key in ["W", "A", "S", "D", "SPACE", "1"] {
         assert!(
             !s.frame_key_input(key),
@@ -77,12 +61,6 @@ fn a_playing_cinematic_swallows_the_movement_keys() {
     }
 }
 
-/// The two keys the reference deliberately keeps working, and the third it does not.
-///
-/// ESCAPE ends the shot; the screenshot binding is re-run by hand from inside the handler
-/// (`RunBinding("SCREENSHOT")`) precisely *because* consumption is unconditional. Both are
-/// consumed at the walk either way — "keeps working" means the frame's own script acts on them,
-/// never that they fall through.
 #[test]
 fn escape_is_consumed_and_acted_on_rather_than_falling_through() {
     benilla_formats::wow_data_or_skip!();
@@ -101,9 +79,7 @@ fn escape_is_consumed_and_acted_on_rather_than_falling_through() {
     );
 }
 
-/// The host feed itself: every key the walk is supposed to carry must actually *have* a name, or
-/// the delivery in [`super::input`] is a silent no-op for it. This is the half that was missing —
-/// the walk was faithful, the feed was ten keys wide.
+/// A key with no name is silently never delivered to a keyboard frame ([`super::input`]).
 #[test]
 fn the_host_has_a_reference_name_for_the_keys_it_now_delivers() {
     use crate::bindings::chord::key_token;
@@ -126,18 +102,11 @@ fn the_host_has_a_reference_name_for_the_keys_it_now_delivers() {
     }
 }
 
-/// **The one key a cinematic gives back.** The module doc above says the reference's `OnKeyDown`
-/// calls `RunBinding("SCREENSHOT")` by hand *because* the walk's gate is existence — and benilla
-/// shipped that transcribed line against a `RunBinding` that did not exist in the whole codebase.
-/// Every press of the screenshot key during a fly-by raised `attempt to call global 'RunBinding'`
-/// and took no picture, and the three tests above stayed green through all of it because they only
-/// ever asked about keys the frame *swallows*.
 #[test]
 fn the_screenshot_key_is_handed_back_to_its_binding() {
     benilla_formats::wow_data_or_skip!();
     let mut s = ui_with_the_cinematic_frame();
-    // The binding table the passthrough reads: `GetBindingKey("SCREENSHOT")` has to answer, or the
-    // arm is skipped and the test proves nothing.
+    // `GetBindingKey("SCREENSHOT")` must answer, or the handler's screenshot arm is skipped.
     s.register_bindings(&crate::bindings::registry_commands());
     s.seed_binding_set(1, None);
     s.load_binding_set(1);
@@ -151,13 +120,10 @@ fn the_screenshot_key_is_handed_back_to_its_binding() {
     start_cinematic(&mut s);
     let _ = s.take_keybind_requests();
 
-    // Consumed like every other key — the frame is up, so the binding layer must not also see it.
     assert!(
         s.frame_key_input(&key),
         "the frame consumes {key} like any other key"
     );
-    // …and handed straight back to its command by hand. This is the whole point of the arm: the
-    // request is what the host runs, and an error here means no screenshot.
     assert_eq!(
         s.take_keybind_requests(),
         vec![benilla_ui::script::keybind::KeybindRequest::Run(
@@ -166,24 +132,13 @@ fn the_screenshot_key_is_handed_back_to_its_binding() {
         "the screenshot key must reach its binding through RunBinding"
     );
 
-    // ESCAPE is still the skip, and still queues nothing on the binding channel.
+    // ESCAPE still skips, and queues nothing on the binding channel.
     assert!(s.frame_key_input("ESCAPE"));
     assert!(s.take_keybind_requests().is_empty());
 }
 
-/// **The HUD hide, end to end — and the frame that must survive it.**
-///
-/// This is the chain decision 1734 restored, and every link was broken until it did:
-/// `CINEMATIC_START` → `CinematicFrame`'s arm calls `ShowUIPanel` → its `area = "full"` row routes
-/// to `SetFullScreenFrame` → which hides `UIParent` → which cascades to every frame declaring
-/// `parent="UIParent"`. Before, `SetFullScreenFrame` had that line dropped, and there was almost
-/// nothing parented to cascade to; the engine hid the HUD with `UiHidden` instead, and paid for it
-/// with a mouse that could not find the cinematic frame.
-///
-/// It replaces a log line. 1699 verified the takeover by watching `cinematic: HUD hidden for
-/// playback` go past, because `UiHidden` hides at the *draw* and leaves every widget answering
-/// `IsVisible() == true` — the predicate was useless. Hiding through the real cascade makes
-/// `IsVisible` the honest question again, so the check is an assertion instead of a log.
+/// `ShowUIPanel`'s `area = "full"` row (`UIParent.lua:31`) routes to `SetFullScreenFrame`, which
+/// hides `UIParent` and so every frame parented to it; `CinematicFrame` declares no parent.
 #[test]
 fn a_cinematic_hides_the_hud_through_uiparent_and_spares_the_cinematic_frame() {
     benilla_formats::wow_data_or_skip!();
@@ -194,8 +149,7 @@ fn a_cinematic_hides_the_hud_through_uiparent_and_spares_the_cinematic_frame() {
             == 1
     };
 
-    // A shown child of UIParent stands in for the HUD: `UiPanels.xml` gives us one without
-    // dragging the whole action bar in, and what is under test is the cascade, not which frame.
+    // `StaticPopup1`, a shown child of `UIParent`, stands in for the HUD.
     s.eval::<i64>("StaticPopup1:Show() return 0").unwrap();
     s.resolve();
     assert!(visible(&s, "UIParent"), "the HUD's parent starts visible");
@@ -227,25 +181,14 @@ fn a_cinematic_hides_the_hud_through_uiparent_and_spares_the_cinematic_frame() {
     assert!(visible(&s, "StaticPopup1"), "with the child that was up");
 }
 
-/// **The screenshot confirmation survives the HUD hide — because the reference seats it outside
-/// the HUD.** `WorldFrame.xml`'s own header states the law in one line: *"Children of the world
-/// frame are visible even when the UI is turned off."* `ScreenshotStatus` is declared inside that
-/// frame, and the case that needs it is this file's: `CinematicFrame`'s `OnKeyDown` hands the
-/// SCREENSHOT key back to its binding by hand (1701) precisely so a fly-by can be captured, so the
-/// one moment the confirmation is most certainly wanted is the one where `UIParent` is hidden.
-///
-/// Ours sat on `UIParent` until decision 1757, on a note that read the two seats as equivalent
-/// because both frames are full-screen and their CENTERs coincide — true of the geometry, and
-/// silent about the hide.
+/// `ScreenshotStatus` is a child of `WorldFrame`, whose children stay visible with the UI hidden
+/// (`WorldFrame.xml`).
 #[test]
 fn the_screenshot_confirmation_shows_during_a_cinematic() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    // The in-game UI materializes on world entry (1051), so a player always exists by the time the
-    // manifest loads — and the stock macro window's character tab formats `UnitName("player")`
-    // into its label inside its own OnLoad. A manifest load with no player is a state the client
-    // never reaches.
+    // The UI loads on world entry, so a player always exists by then.
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -269,7 +212,7 @@ fn the_screenshot_confirmation_shows_during_a_cinematic() {
     start_cinematic(&mut s);
     assert_eq!(visible(&s, "UIParent"), 0, "the fly-by hid the HUD");
 
-    // The engine's own report of a finished capture (`crate::screenshot` → SCREENSHOT_SUCCEEDED).
+    // The engine's report of a finished capture (`crate::screenshot`).
     s.fire_event("SCREENSHOT_SUCCEEDED", vec![]);
     s.resolve();
     assert_eq!(

@@ -1,24 +1,6 @@
-//! The **battle map** — `Blizzard_BattlefieldMinimap`, the reference's own LoadOnDemand addon,
-//! driven through the road stock `UIParent.lua` drives it down: `ToggleBattlefieldMinimap()`
-//! (SHIFT-M) → `BattlefieldMinimap_LoadUI()` → `UIParentLoadAddOn`.
-//!
-//! benilla has registered the addon as a chain row since 1957 and a live run confirmed it loads —
-//! and that was the whole of the evidence. Nothing had ever checked that its twelve overlay
-//! textures get cut from `GetMapOverlayInfo`, that its POI pool grows, that the battleground blips
-//! and the flag carrier reach it, that its arrow is the *mini* singleton rather than the world
-//! map's, or that its tab, dropdown and opacity slider work at all. This file is that check: the
-//! whole addon, top to bottom, against the engine verbs it actually calls.
-//!
-//! **The harness is the whole manifest, not a cut dependency prefix** — the deliberate difference
-//! from `tradeskill_frame.rs` / `talent_frame.rs` / `auction_frame.rs`, whose windows each sit on
-//! a handful of FrameXML files. This one reads `MiniMapBattlefieldFrame.status` (Minimap.xml),
-//! `GetNumWorldStateUI` and `SHOW_BATTLEFIELD_MINIMAP` (WorldStateFrame.lua), `UIOptionsFrame`
-//! (UIOptionsFrame.xml), `OpacityFrameSlider` (ColorPickerFrame.xml), the `WorldMapUnitTemplate`
-//! family (WorldMapFrameTemplates.xml) and `MAX_PARTY_MEMBERS`/`MAX_RAID_MEMBERS` — five corners
-//! of the manifest, which is exactly the state a player is in when they press SHIFT-M. It also
-//! lives *in* the crate rather than under `tests/`, because the LoadOnDemand road needs
-//! [`super::test_ui::seat_chain_addon`] and an integration test cannot reach it (see
-//! `tests/common/mod.rs`'s own note on the `#[cfg(test)]` boundary).
+//! The battle map, the `Blizzard_BattlefieldMinimap` addon, loaded as SHIFT-M loads it
+//! (`ToggleBattlefieldMinimap`, `UIParent.lua:216-220`). The harness is the whole manifest: the
+//! addon reads globals from many of its files.
 
 use benilla_ui::script::{
     BattlefieldFlagView, BattlefieldPositionView, QuadContent, UiScript, UnitState,
@@ -26,15 +8,10 @@ use benilla_ui::script::{
     WorldStateUiView, ARROW_MODEL,
 };
 
-/// **The manifest's own warning floor** — one row, and it is a decided permanent gap rather than
-/// anything this addon does: stock `OptionsFrame.lua:300` reads `GetCVar("gxRefresh")` and 2177
-/// keeps that CVar unregistered on purpose, because nothing here can set a refresh rate.
-/// `world_entry_tests`' own `KNOWN` list carries the same row for the same reason. Pinning the
-/// *exact* set rather than allowing any warning is what makes [`quiet`] a real assertion: a
-/// warning the addon causes shows up as a second row.
+/// The manifest's one warning. Deviation: `gxRefresh`, read at `OptionsFrame.lua:300`, is not
+/// registered, because nothing here can set a refresh rate.
 const MANIFEST_WARNINGS: [&str; 1] = ["unknown CVar 'gxRefresh' (not host-registered) — ignored"];
 
-/// Zero Lua errors, and no host warning the manifest did not already carry.
 fn quiet(s: &UiScript) {
     assert!(s.errors().is_empty(), "script errors: {:#?}", s.errors());
     assert_eq!(
@@ -44,12 +21,8 @@ fn quiet(s: &UiScript) {
     );
 }
 
-/// The full interface with the addon **registered but not loaded** — the state a character is in
-/// the moment before SHIFT-M.
-///
-/// The player exists because the in-game UI materializes on world entry (1051) and several stock
-/// OnLoads format `UnitName("player")` into their labels; a manifest load with no player is a
-/// state the client never reaches (1848).
+/// The full interface with the addon registered but not loaded. A player exists because stock
+/// OnLoads format `UnitName("player")` into their labels.
 fn session() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
@@ -70,10 +43,8 @@ fn session() -> UiScript {
     s
 }
 
-/// The arrow file's facts, as the host hands them over (2007/2015) — `MinimapArrow.m2`'s one
-/// looping 3.333 s Stand and its header box, which the implicit rect and the re-centring read.
-/// Seated *after* the manifest on purpose: the world map's own arrow is created during that load,
-/// so this is the mini arrow's facts and only the mini arrow's.
+/// `MinimapArrow.m2`'s facts (one looping 3.333 s Stand, the header box), seated after the
+/// manifest load that creates the world map's arrow, so only the mini arrow gets them.
 fn arrow_facts(s: &mut UiScript) {
     use benilla_ui::widget::{ModelFileFacts, SequenceFacts};
     s.set_model_facts(
@@ -90,7 +61,6 @@ fn arrow_facts(s: &mut UiScript) {
     );
 }
 
-/// One `WorldMapOverlay` row, revealed by a single explore bit.
 fn overlay(texture: &str, w: u32, h: u32, ox: u32, oy: u32, bit: u32) -> WorldMapOverlayView {
     WorldMapOverlayView {
         texture: format!("Interface\\WorldMap\\WarsongGulch\\{texture}"),
@@ -104,17 +74,9 @@ fn overlay(texture: &str, w: u32, h: u32, ox: u32, oy: u32, bit: u32) -> WorldMa
     }
 }
 
-/// A one-zone catalog whose zone **has overlays that make the slicing loop do real work**.
-///
-/// The sizes are chosen so both arms of the reference's tile walk run. `SilverwingHold` is
-/// 300×200: `ceil(300/256) = 2` wide, `ceil(200/256) = 1` tall, so its second column takes the
-/// remainder arm (`mod(300,256) = 44` px in a 64-px power-of-two file) while the first takes the
-/// full-tile arm, and its single row takes the remainder arm vertically (`mod(200,256) = 200` in a
-/// 256-px file). `WarsongLumberMill` is exactly 256×256 — the one case where *both* `mod`s come
-/// out zero and the reference's `if ( texturePixelWidth == 0 ) then texturePixelWidth = 256` guard
-/// is what keeps the tile from collapsing. Between them they need three textures, which is also
-/// what makes the second half of [`the_overlay_textures_are_cut_from_the_revealed_overlays`] — the
-/// tail that parks — observable.
+/// Overlays that run both arms of the stock tile walk (`Blizzard_BattlefieldMinimap.lua:139-168`):
+/// `SilverwingHold` (300×200) takes a full and a remainder column and a remainder row, and
+/// `WarsongLumberMill` (256×256) zeroes both `mod`s, leaving it to the `== 0 then 256` guard.
 fn catalog() -> Vec<WorldMapContinentView> {
     vec![WorldMapContinentView {
         name: "Kalimdor".into(),
@@ -135,13 +97,9 @@ fn catalog() -> Vec<WorldMapContinentView> {
     }]
 }
 
-/// Put the session in a battleground and press SHIFT-M.
-///
-/// The world-state push is the gate, not scenery: `BattlefieldMinimap_Toggle` shows nothing unless
-/// `MiniMapBattlefieldFrame.status == "active"` **or** `GetNumWorldStateUI() > 0`, which is the
-/// reference refusing to open a battle map outside a battle. The catalog + explored bitset put the
-/// displayed map on a zone that has revealed overlays, and `player_zone` is what the window's own
-/// `<OnShow>` `SetMapToCurrentZone()` lands on.
+/// Put the session in a battleground and press SHIFT-M. The world-state push is the gate:
+/// `BattlefieldMinimap_Toggle` shows nothing unless `MiniMapBattlefieldFrame.status == "active"`
+/// or `GetNumWorldStateUI() > 0` (`Blizzard_BattlefieldMinimap.lua:21`).
 fn open(s: &mut UiScript) {
     s.set_world_map_catalog(catalog());
     s.set_world_map_explored(vec![0b110; 64]);
@@ -168,8 +126,6 @@ fn open(s: &mut UiScript) {
     );
 }
 
-/// The window's own per-frame update, driven the way its `<OnUpdate>` script runs it: `this` is
-/// the frame and the elapsed time its one argument.
 fn update(s: &mut UiScript, elapsed: f64) {
     s.run(&format!(
         "this = BattlefieldMinimap BattlefieldMinimap_OnUpdate({elapsed}) this = nil"
@@ -177,8 +133,6 @@ fn update(s: &mut UiScript, elapsed: f64) {
     .unwrap();
 }
 
-/// A frame's centre in the screen units the pointer speaks (its own layout centre × its effective
-/// scale) — what a hit test and a `mouse_move` want.
 fn screen_centre(s: &mut UiScript, frame: &str) -> (f32, f32) {
     s.resolve();
     let (x, y, eff) = s
@@ -189,9 +143,6 @@ fn screen_centre(s: &mut UiScript, frame: &str) -> (f32, f32) {
     ((x * eff) as f32, (y * eff) as f32)
 }
 
-/// The mini arrow's screen centre. It is anonymous and it is the window's **last** child (its
-/// `Create…` runs in the `<OnLoad>`, after the XML's own forty-eight), so it is found by kind
-/// rather than by name or position.
 fn arrow_centre(s: &mut UiScript) -> (f32, f32) {
     s.resolve();
     let (x, y, eff) = s
@@ -217,18 +168,6 @@ fn num(s: &UiScript, expr: &str) -> f64 {
         .unwrap_or_else(|e| panic!("{expr} — {e}"))
 }
 
-/// **The addon loads on demand and every frame its XML declares materializes.**
-///
-/// Driven down the reference's own road — `ToggleBattlefieldMinimap()` is what SHIFT-M is bound
-/// to, and its first line is `BattlefieldMinimap_LoadUI()` → `UIParentLoadAddOn(...)` → the
-/// registry's `LoadAddOn`. Loading it any other way (running the `.xml` as a chain file, the way
-/// the auction and tradeskill suites load theirs) would skip the registry, `ADDON_LOADED` and its
-/// `arg1` filter — and the `ADDON_LOADED` arm is where the tab gets its seat, the dropdown gets
-/// initialized and the opacity gets applied, so it would skip most of the window's initial state
-/// too.
-///
-/// The gate is asserted in both directions first: the load happens either way, but a battle map
-/// opens only inside a battle.
 #[test]
 fn the_addon_loads_on_demand_through_uiparents_own_road() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -240,8 +179,6 @@ fn the_addon_loads_on_demand_through_uiparents_own_road() {
         "nothing is loaded before the first toggle"
     );
 
-    // Out of a battleground: the addon still loads — `BattlefieldMinimap_LoadUI()` runs
-    // unconditionally — and then `BattlefieldMinimap_Toggle`'s own gate declines to show it.
     s.run("ToggleBattlefieldMinimap()").unwrap();
     assert_eq!(
         s.eval::<i64>("return IsAddOnLoaded(\"Blizzard_BattlefieldMinimap\")")
@@ -259,8 +196,6 @@ fn the_addon_loads_on_demand_through_uiparents_own_road() {
         "the RegisterForSave global stays at WorldStateFrame.lua's own boot value"
     );
 
-    // Every frame, region and font string the `.xml` declares, by name. The loop answers the FIRST
-    // missing one rather than a bare false, so a regression names itself.
     let missing: Option<String> = s
         .eval(
             r#"
@@ -284,8 +219,6 @@ fn the_addon_loads_on_demand_through_uiparents_own_road() {
         .unwrap();
     assert_eq!(missing, None, "a declared frame never materialized");
 
-    // `BattlefieldMinimapRaidUnitTemplate`'s own OnLoad ran on each of the forty: the unit token
-    // from the frame's `id=`, and the party blip art on its `$parentIcon`.
     assert_eq!(
         s.eval::<String>("return BattlefieldMinimapRaid17.unit")
             .unwrap(),
@@ -297,7 +230,7 @@ fn the_addon_loads_on_demand_through_uiparents_own_road() {
         "Interface\\WorldMap\\WorldMapPartyIcon"
     );
 
-    // The `ADDON_LOADED` arm: the saved-variable table came up on `BattlefieldMinimapDefaults`…
+    // The `ADDON_LOADED` arm seeds the saved table from `BattlefieldMinimapDefaults`,
     assert_eq!(
         s.eval::<(f64, bool, bool)>(
             "return BattlefieldMinimapOptions.opacity, BattlefieldMinimapOptions.locked, \
@@ -306,8 +239,7 @@ fn the_addon_loads_on_demand_through_uiparents_own_road() {
         .unwrap(),
         (0.7, true, true)
     );
-    // …the tab took its default seat (no saved position → the `-225-CONTAINER_OFFSET_X` corner,
-    // whose two constants are ContainerFrame.lua's and UIParent.lua's)…
+    // seats the tab at the `-225-CONTAINER_OFFSET_X` corner when no position is saved,
     let (point, relative, rel_point, x, y) = s
         .eval::<(String, String, String, f64, f64)>(
             "local p, r, rp, ox, oy = BattlefieldMinimapTab:GetPoint(1) \
@@ -325,14 +257,13 @@ fn the_addon_loads_on_demand_through_uiparents_own_road() {
             num(&s, "BATTLEFIELD_TAB_OFFSET_Y")
         )
     );
-    // …and `BattlefieldMinimap_SetOpacity()` ran off the seeded slider value, so the window is
-    // already wearing the default 0.7 opacity (its alpha is `1 - value`) before it is ever shown.
+    // and runs `BattlefieldMinimap_SetOpacity()` off the seeded slider, so the default 0.7 opacity
+    // (alpha `1 - value`) is on before the window first shows.
     assert!(
         (num(&s, "BattlefieldMinimapBackground:GetAlpha()") - 0.3).abs() < 1e-6,
         "the load-time opacity pass reached the border texture"
     );
 
-    // Now inside a battleground, the same toggle opens it.
     open(&mut s);
     assert_eq!(
         s.eval::<String>("return SHOW_BATTLEFIELD_MINIMAP").unwrap(),
@@ -345,26 +276,15 @@ fn the_addon_loads_on_demand_through_uiparents_own_road() {
     quiet(&s);
 }
 
-/// **The twelve map tiles and the overlay textures are cut from the map the engine is showing.**
-///
-/// Two loops, both reading host verbs the addon shares with the world map. The tiles are
-/// `GetMapInfo()`'s art folder repeated `NUM_WORLDMAP_DETAIL_TILES` times; the overlays are
-/// `GetNumMapOverlays()` / `GetMapOverlayInfo(i)` sliced into 256-px tiles, each scaled by the
-/// window's own `BattlefieldMinimap1:GetWidth()/256` — a **56/256 = 0.21875** shrink, which is the
-/// whole reason this window's overlay geometry is not the world map's and has to be checked
-/// separately.
-///
-/// Every number below is that arithmetic done by hand from [`catalog`]'s two overlays, so the test
-/// fails on a wrong scale, a wrong remainder, a dropped power-of-two round-up or a sign flip in
-/// the y offset — not merely on "something was drawn".
+/// Overlays are cut into 256-px tiles scaled by `BattlefieldMinimap1:GetWidth()/256` (56/256);
+/// every number below is that arithmetic done by hand from [`catalog`].
 #[test]
 fn the_overlay_textures_are_cut_from_the_revealed_overlays() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = session();
     open(&mut s);
 
-    // The window's `<OnShow>` already ran `SetMapToCurrentZone()` and `BattlefieldMinimap_Update()`,
-    // so the displayed map is the player's zone and the tiles are laid.
+    // The `<OnShow>` already ran `SetMapToCurrentZone()` and `BattlefieldMinimap_Update()`.
     assert_eq!(
         s.eval::<String>("return GetMapInfo()").unwrap(),
         "WarsongGulch"
@@ -385,7 +305,7 @@ fn the_overlay_textures_are_cut_from_the_revealed_overlays() {
         "2 + 1 tiles: the 300×200 overlay needs two, the 256×256 one needs one"
     );
 
-    // The reference reads back `(ULx, ULy, LLx, LLy, URx, URy, LRx, LRy)` since 1840; the old
+    // The reference's `GetTexCoord` returns `(ULx, ULy, LLx, LLy, URx, URy, LRx, LRy)`; the
     // `(left, right, top, bottom)` rect is positions 1, 5, 2, 4.
     let tex_rect = |s: &UiScript, n: u32| -> (f64, f64, f64, f64) {
         let (l, t, _, b, r, ..): (f64, f64, f64, f64, f64, f64, f64, f64) = s
@@ -403,8 +323,7 @@ fn the_overlay_textures_are_cut_from_the_revealed_overlays() {
     };
     const SCALE: f64 = 56.0 / 256.0;
 
-    // Tile 1 of SilverwingHold: a full 256-px column, 200 px tall in a 256-px file, at the
-    // overlay's own (100, 50) offset — x right, y DOWN, both through the shrink.
+    // Tile 1: a full 256-px column, 200 px of a 256-px file tall, at the (100, 50) offset, y down.
     assert_eq!(
         s.eval::<String>("return BattlefieldMinimapOverlay1:GetTexture()")
             .unwrap(),
@@ -428,8 +347,7 @@ fn the_overlay_textures_are_cut_from_the_revealed_overlays() {
         )
     );
 
-    // Tile 2: the remainder column — 44 px of art in the 64-px power-of-two file the client rounds
-    // up to, seated exactly one full tile (256 × scale) to the right of tile 1.
+    // Tile 2, the remainder column: 44 px in a 64-px power-of-two file, one tile right of tile 1.
     assert_eq!(
         s.eval::<String>("return BattlefieldMinimapOverlay2:GetTexture()")
             .unwrap(),
@@ -450,9 +368,7 @@ fn the_overlay_textures_are_cut_from_the_revealed_overlays() {
         )
     );
 
-    // Tile 3 is the second overlay's only tile: exactly 256×256, the case where both `mod`s are
-    // zero and the reference's `== 0 then 256` guards are load-bearing — a missing guard would
-    // give this a zero-width, zero-height, `0..0` cropped tile.
+    // Tile 3: 256×256 zeroes both `mod`s, so only the `== 0 then 256` guards keep it whole.
     assert_eq!(
         s.eval::<String>("return BattlefieldMinimapOverlay3:GetTexture()")
             .unwrap(),
@@ -473,8 +389,7 @@ fn the_overlay_textures_are_cut_from_the_revealed_overlays() {
         );
     }
 
-    // Un-explore the lumber mill: the host stops returning that overlay, the repaint lights two
-    // tiles and PARKS the third — the pool never shrinks, exactly as the world map's does not.
+    // Un-explore the lumber mill: two tiles stay lit and the third parks; the pool never shrinks.
     s.set_world_map_explored(vec![0b010; 64]);
     s.tick(0.0); // the push queues WORLD_MAP_UPDATE, the addon's own repaint event
     assert_eq!(s.eval::<i64>("return GetNumMapOverlays()").unwrap(), 1);
@@ -491,14 +406,8 @@ fn the_overlay_textures_are_cut_from_the_revealed_overlays() {
     quiet(&s);
 }
 
-/// **The POI layer** — `GetNumMapLandmarks` / `GetMapLandmarkInfo` → `BattlefieldMinimap_CreatePOI`
-/// → `WorldMap_GetPOITextureCoords`, the same three verbs the world map's own pool walks, but
-/// seated against the 225×150 battle map and sized by `GetBattlefieldMapIconScale()` rather than
-/// left at the flat 12 px the world map uses.
-///
-/// That scale is the point of the second half: the reference multiplies `DEFAULT_POI_ICON_SIZE` by
-/// it on every repaint, so a battleground whose `MinimapIconScale` is not 1 draws bigger icons on
-/// the battle map and identical ones on the world map.
+/// Each repaint sizes an icon `DEFAULT_POI_ICON_SIZE × GetBattlefieldMapIconScale()`
+/// (`Blizzard_BattlefieldMinimap.lua:111-112`), seated on the 225×150 window.
 #[test]
 fn the_poi_pool_grows_from_the_landmarks_and_parks_its_tail() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -512,8 +421,7 @@ fn the_poi_pool_grows_from_the_landmarks_and_parks_its_tail() {
         texture_index: icon,
         uv,
     };
-    // Icon 6 is `ICON_POI_REDFLAG`, icon 9 the second row's first cell — two different cells of
-    // the 8×8 `POIIcons` atlas, so a hard-coded crop cannot pass both.
+    // Icon 6 is `ICON_POI_REDFLAG`, icon 9 the second row's first cell of the 8×8 `POIIcons` atlas.
     s.set_world_map_landmarks(vec![
         landmark("Silverwing Flag", 6, (0.25, 0.5)),
         landmark("Warsong Flag", 9, (0.75, 0.25)),
@@ -522,7 +430,7 @@ fn the_poi_pool_grows_from_the_landmarks_and_parks_its_tail() {
 
     assert_eq!(s.eval::<i64>("return NUM_BATTLEFIELDMAP_POIS").unwrap(), 2);
     assert!(shown(&s, "BattlefieldMinimapPOI1") && shown(&s, "BattlefieldMinimapPOI2"));
-    // Cell 6 = column 6, row 0; cell 9 = column 1, row 1. `coordIncrement` is 16/128 = 0.125.
+    // Cell 6 is column 6, row 0; cell 9 is column 1, row 1; `coordIncrement` is 16/128 = 0.125.
     let cell = |s: &UiScript, n: u32| -> (f64, f64) {
         let (l, t, ..): (f64, f64, f64, f64, f64, f64, f64, f64) = s
             .eval(&format!(
@@ -533,8 +441,7 @@ fn the_poi_pool_grows_from_the_landmarks_and_parks_its_tail() {
     };
     assert_eq!(cell(&s, 1), (0.75, 0.0));
     assert_eq!(cell(&s, 2), (0.125, 0.125));
-    // Seated CENTER against the window's TOPLEFT, x × its width and y × MINUS its height — v runs
-    // down the sheet where frame y runs up, and the sign is what mirrors every icon if it is wrong.
+    // CENTER on the window's TOPLEFT at (x × width, -y × height): v runs down, frame y runs up.
     assert_eq!(
         s.eval::<(String, String, String, f64, f64)>(
             "local p, r, rp, x, y = BattlefieldMinimapPOI1:GetPoint(1) return p, r:GetName(), rp, x, y"
@@ -563,7 +470,6 @@ fn the_poi_pool_grows_from_the_landmarks_and_parks_its_tail() {
         "DEFAULT_POI_ICON_SIZE × GetBattlefieldMapIconScale()"
     );
 
-    // One landmark left: the pool keeps both frames, re-seats the first and parks the second.
     s.set_world_map_landmarks(vec![landmark("Warsong Flag", 9, (0.75, 0.25))]);
     s.tick(0.0);
     assert_eq!(
@@ -581,14 +487,9 @@ fn the_poi_pool_grows_from_the_landmarks_and_parks_its_tail() {
     quiet(&s);
 }
 
-/// **The battleground blips** — the four position verbs the window polls every frame, plus the
-/// party slots it shares with the world map, driven through the real `<OnUpdate>`.
-///
-/// The team-member loop is the subtle one: with no raid up, `playerCount` stays 0, so
-/// `BattlefieldMinimapRaid<i>` takes `GetBattlefieldPosition(i)` — the raid frames double as the
-/// battleground roster. The `(0, 0)` pair is the hide sentinel on every one of these verbs, and
-/// the name each row carries is what the blip's tooltip shows for a teammate who is in neither
-/// your party nor your raid.
+/// With no raid up `playerCount` stays 0, so `BattlefieldMinimapRaid<i>` takes
+/// `GetBattlefieldPosition(i)`: the raid frames double as the battleground roster
+/// (`Blizzard_BattlefieldMinimap.lua:287-301`). `(0, 0)` hides a blip on every position verb.
 #[test]
 fn the_battleground_blips_and_the_flag_follow_the_position_family() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -667,7 +568,6 @@ fn the_battleground_blips_and_the_flag_follow_the_position_family() {
         "a slot with no position hides"
     );
 
-    // The carrier takes flag frame 1, wearing the token's own art; the second frame stays parked.
     assert!(shown(&s, "BattlefieldMinimapFlag1"));
     assert_eq!(
         s.eval::<String>("return BattlefieldMinimapFlag1Texture:GetTexture()")
@@ -676,8 +576,7 @@ fn the_battleground_blips_and_the_flag_follow_the_position_family() {
     );
     assert!(!shown(&s, "BattlefieldMinimapFlag2"));
 
-    // Hovering a teammate's blip names them — `BattlefieldMinimapUnit_OnEnter` prefers the row's
-    // own `name` over `UnitName(unit)`, which is the only way a non-group teammate gets a label.
+    // The tooltip prefers the row's `name` over `UnitName` (`Blizzard_BattlefieldMinimap.lua:485`).
     let (bx, by) = screen_centre(&mut s, "BattlefieldMinimapRaid1");
     assert_eq!(
         s.hit_test_name(bx, by).as_deref(),
@@ -693,12 +592,9 @@ fn the_battleground_blips_and_the_flag_follow_the_position_family() {
     );
     s.mouse_move(5.0, 5.0);
 
-    // The dropdown's "Show Teammates" off: the party and raid blips go in one pass, before any of
-    // the position verbs are consulted — and **the flag carrier stays**. That asymmetry is the
-    // reference's own: `Blizzard_BattlefieldMinimap.lua:245-252`'s `not showPlayers` arm hides
-    // `BattlefieldMinimapParty1..4` and `BattlefieldMinimapRaid1..40` and nothing else, so the two
-    // flag frames simply keep whatever the last showPlayers-on pass left on them. Pinned in both
-    // directions on purpose: "hide everything" is the obvious tidy-up and it is not what 1.12 does.
+    // Show Teammates off hides the party and raid blips and leaves the flag carrier up: the
+    // `not showPlayers` arm (`Blizzard_BattlefieldMinimap.lua:245-252`) hides only
+    // `BattlefieldMinimapParty1..4` and `BattlefieldMinimapRaid1..40`.
     s.run("BattlefieldMinimapOptions.showPlayers = false")
         .unwrap();
     update(&mut s, 0.1);
@@ -710,7 +606,6 @@ fn the_battleground_blips_and_the_flag_follow_the_position_family() {
         "…but the carrier's flag is not in that arm's two loops, so it stays up"
     );
 
-    // Back on, and then leaving the battleground — the empty push — hides them for real.
     s.run("BattlefieldMinimapOptions.showPlayers = true")
         .unwrap();
     update(&mut s, 0.1);
@@ -724,17 +619,9 @@ fn the_battleground_blips_and_the_flag_follow_the_position_family() {
     quiet(&s);
 }
 
-/// **The player arrow is the MINI singleton, not the world map's.**
-///
-/// The two are separate slots in the engine (`Arrow::World` / `Arrow::Mini`), each created once per
-/// session by its own `Create…` verb and never freed — so the failure this guards against is the
-/// addon's `CreateMiniWorldMapArrowFrame(BattlefieldMinimap)` being answered with the world map's
-/// existing arrow, which would leave the battle map with no arrow at all and yank the world map's
-/// across the screen on every `PositionMini…`.
-///
-/// Told apart by the one property that distinguishes them at the renderer: the mini's model scale
-/// is `G48 · 10/9` where the world map's is `G48 · 5/3` (`G48 = 1/√(aspect²+1)`, so at 4:3 that is
-/// 0.6667 against 1.0). The seat is cross-checked in Lua against the window's own TOPLEFT.
+/// The world map and the battle map each own one arrow (`Arrow::World`, `Arrow::Mini`), created
+/// once by its own `Create…` verb. The mini's model scale is `G48 · 10/9` and the world map's
+/// `G48 · 5/3`, with `G48 = 1/√(aspect²+1)`: 0.6667 against 1.0 at 4:3.
 #[test]
 fn the_player_arrow_is_the_minis_own_singleton_seated_by_the_update() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -742,7 +629,6 @@ fn the_player_arrow_is_the_minis_own_singleton_seated_by_the_update() {
     arrow_facts(&mut s);
     open(&mut s);
 
-    // `BattlefieldMinimap_OnLoad` made it: an anonymous `Model` child of the window.
     assert_eq!(
         s.eval::<i64>(
             r#"local n = 0
@@ -766,8 +652,6 @@ fn the_player_arrow_is_the_minis_own_singleton_seated_by_the_update() {
     );
     update(&mut s, 0.1);
 
-    // The seat, read back in Lua — the arrow is anonymous, so it is found among the children by
-    // kind. Same CENTER-on-TOPLEFT law as every blip.
     let seat = s
         .eval::<(bool, String, String, f64, f64)>(
             r#"for _, c in ipairs({ BattlefieldMinimap:GetChildren() }) do
@@ -789,8 +673,6 @@ fn the_player_arrow_is_the_minis_own_singleton_seated_by_the_update() {
         )
     );
 
-    // The renderer's side: the arrow model, turned to the player's facing by
-    // `UpdateWorldMapArrowFrames`, at the MINI's own model scale, on a rect centred where Lua says.
     let (cx, cy) = arrow_centre(&mut s);
     let pane = s
         .extract()
@@ -821,8 +703,7 @@ fn the_player_arrow_is_the_minis_own_singleton_seated_by_the_update() {
          {model_scale}"
     );
 
-    // Off the displayed map: the `(0, 0)` sentinel routes through `ShowMiniWorldMapArrowFrame(nil)`
-    // and the pane leaves the render list entirely.
+    // Off the displayed map, `(0, 0)` calls `ShowMiniWorldMapArrowFrame(nil)`.
     s.set_world_map_feed(Some((1, 1)), None, 0.0, None, Vec::new(), Vec::new());
     update(&mut s, 0.1);
     s.resolve();
@@ -836,17 +717,9 @@ fn the_player_arrow_is_the_minis_own_singleton_seated_by_the_update() {
     quiet(&s);
 }
 
-/// **The tab** — the strip of chat-frame art the window hangs from: it comes and goes with the
-/// window, fades in under the cursor on the reference's own three-frame ramp, and refuses to be
-/// dragged while the options say the map is locked.
-///
-/// The hover ramp is worth spelling out because it looks like a bug and is not. Frame 1 takes the
-/// `else` arm and only *starts* hovering (it stores the cursor into the globals `CURSOR_OLD_X/Y`
-/// and never into `BattlefieldMinimap.oldX/oldy` — the reference's own slip). Frame 2 therefore
-/// compares a nil `oldX` against the cursor, misses, and resets `hoverTime` to 0 while finally
-/// recording the position. Only frame 3 can accumulate, so the `BATTLEFIELD_TAB_SHOW_DELAY` clock
-/// does not start until the third update after the cursor arrives. A "fix" that fades on frame 2
-/// goes red here, which is the point.
+/// The hover ramp is the reference's own slip (`Blizzard_BattlefieldMinimap.lua:330-356`): frame 1
+/// stores the cursor in `CURSOR_OLD_X/Y`, never `BattlefieldMinimap.oldX`, so frame 2 misses and
+/// resets `hoverTime`, and `BATTLEFIELD_TAB_SHOW_DELAY` counts from frame 3.
 #[test]
 fn the_tab_follows_the_window_fades_in_on_hover_and_gates_its_drag_on_the_lock() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -865,7 +738,6 @@ fn the_tab_follows_the_window_fades_in_on_hover_and_gates_its_drag_on_the_lock()
         "…and starts invisible: the OnLoad's own SetAlpha(0)"
     );
 
-    // The hover ramp.
     let (mx, my) = screen_centre(&mut s, "BattlefieldMinimap");
     s.mouse_move(mx, my);
     update(&mut s, 0.3);
@@ -892,8 +764,8 @@ fn the_tab_follows_the_window_fades_in_on_hover_and_gates_its_drag_on_the_lock()
         (0.3, Some(1)),
         "frame 3 finally crosses BATTLEFIELD_TAB_SHOW_DELAY and starts the fade"
     );
-    // `UIFrameFadeIn` runs on the fade manager's own update, from 0 to DEFAULT_BATTLEFIELD_TAB_ALPHA
-    // over BATTLEFIELD_TAB_FADE_TIME.
+    // `UIFrameFadeIn` runs on the fade manager's update, from 0 to `DEFAULT_BATTLEFIELD_TAB_ALPHA`
+    // (0.75) over `BATTLEFIELD_TAB_FADE_TIME` (0.15 s).
     s.tick(0.05);
     let part_way = num(&s, "BattlefieldMinimapTab:GetAlpha()");
     assert!(
@@ -903,7 +775,6 @@ fn the_tab_follows_the_window_fades_in_on_hover_and_gates_its_drag_on_the_lock()
     s.tick(0.2);
     assert_eq!(num(&s, "BattlefieldMinimapTab:GetAlpha()"), 0.75);
 
-    // The cursor leaves: the else arm fades it back to the alpha it was remembered at.
     s.mouse_move(5.0, 5.0);
     update(&mut s, 0.1);
     assert_eq!(
@@ -915,8 +786,7 @@ fn the_tab_follows_the_window_fades_in_on_hover_and_gates_its_drag_on_the_lock()
     s.tick(0.2);
     assert_eq!(num(&s, "BattlefieldMinimapTab:GetAlpha()"), 0.0);
 
-    // The lock. A left click on a locked tab returns before `StartMoving`, and `StartMoving` is
-    // what stamps the userPlaced bit (2193), so the bit is the observable in both directions.
+    // A left click on a locked tab returns before `StartMoving`, which sets the user-placed bit.
     assert!(!s
         .eval::<bool>("return BattlefieldMinimapTab:IsUserPlaced()")
         .unwrap());
@@ -963,7 +833,6 @@ fn the_tab_follows_the_window_fades_in_on_hover_and_gates_its_drag_on_the_lock()
         "a tab nobody placed clears the saved row"
     );
 
-    // The second toggle closes it, and the tab goes with it through the window's own OnHide.
     s.run("ToggleBattlefieldMinimap()").unwrap();
     assert!(!shown(&s, "BattlefieldMinimap") && !shown(&s, "BattlefieldMinimapTab"));
     assert_eq!(
@@ -971,8 +840,6 @@ fn the_tab_follows_the_window_fades_in_on_hover_and_gates_its_drag_on_the_lock()
         "0"
     );
 
-    // And leaving the battleground closes it on the client's own event, not on a toggle: the
-    // `PLAYER_ENTERING_WORLD` arm hides a battle map with no battle behind it.
     s.run("ToggleBattlefieldMinimap()").unwrap();
     assert!(shown(&s, "BattlefieldMinimap"));
     s.set_world_state_ui(Vec::new());
@@ -985,29 +852,17 @@ fn the_tab_follows_the_window_fades_in_on_hover_and_gates_its_drag_on_the_lock()
     quiet(&s);
 }
 
-/// **The tab's right-click menu and the opacity slider it opens** — the window's whole options
-/// surface, and the only place `BattlefieldMinimapOptions` is written by a player.
-///
-/// Worth stating what this path does **not** touch, because it is easy to assume otherwise:
-/// `BattlefieldMinimap_SetOpacity` reads no CVar. Its input is `OpacityFrameSlider:GetValue()` —
-/// ColorPickerFrame.xml's shared vertical slider, which the addon borrows by pointing
-/// `OpacityFrame.opacityFunc` at itself — and what persists is the addon's own
-/// `SavedVariablesPerCharacter` table plus WorldStateFrame.lua's `RegisterForSave` global
-/// `SHOW_BATTLEFIELD_MINIMAP`. There is no battle-map opacity CVar in 1.12 to register or to give
-/// a reference default to, so 1804's rule does not reach this window.
-///
-/// The alpha formula has two tiers and both are pinned: the border and the twelve detail tiles get
-/// `1 - value`, while the overlays, the close button and the corner get a further 0.15 off it
-/// (and, below 0.15, nothing off at all) — so a regression that applies one tier everywhere shows
-/// up as the map art and its explored overlays being the same brightness.
+/// `BattlefieldMinimap_SetOpacity` reads no CVar: its input is the shared `OpacityFrameSlider`, and
+/// what persists is the `SavedVariablesPerCharacter` table and `SHOW_BATTLEFIELD_MINIMAP`. The
+/// border and the twelve tiles take `1 - value`; the overlays, close button and corner take a
+/// further 0.15 off unless the alpha is under 0.15 (`Blizzard_BattlefieldMinimap.lua:376-390`).
 #[test]
 fn the_dropdown_and_the_opacity_slider_drive_the_saved_options() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = session();
     open(&mut s);
 
-    // A real right-click on the tab — `RegisterForClicks` admits `RightButtonUp`, and the handler's
-    // first arm opens the menu on the tab's own anchor.
+    // A real right-click: the tab registers `RightButtonUp` (`Blizzard_BattlefieldMinimap.xml:96`).
     s.run("BattlefieldMinimapTab:Click(\"RightButton\")")
         .unwrap();
     assert!(shown(&s, "DropDownList1"), "the menu opened");
@@ -1019,8 +874,7 @@ fn the_dropdown_and_the_opacity_slider_drive_the_saved_options() {
                 .unwrap(),
         )
     };
-    // Both toggles come up checked off `BattlefieldMinimapDefaults`; the opacity row is an action,
-    // so it carries no check.
+    // Both toggles are checked off `BattlefieldMinimapDefaults`; the opacity row is an action.
     assert_eq!(row(&s, 1), ("Show Teammates".into(), true));
     assert_eq!(row(&s, 2), ("Lock Battle Map".into(), true));
     assert_eq!(row(&s, 3), ("Change Opacity".into(), false));
@@ -1045,8 +899,7 @@ fn the_dropdown_and_the_opacity_slider_drive_the_saved_options() {
         "row 2 flips the lock"
     );
 
-    // Row 3 borrows the shared opacity frame: re-anchored onto the battle map's left edge, with
-    // both of its hooks pointed at this window.
+    // Row 3 re-anchors the shared opacity frame on the battle map and points its hooks here.
     s.run("BattlefieldMinimapTab:Click(\"RightButton\")")
         .unwrap();
     s.run("DropDownList1Button3:Click()").unwrap();
@@ -1065,8 +918,7 @@ fn the_dropdown_and_the_opacity_slider_drive_the_saved_options() {
         )
     );
 
-    // Dragging the slider repaints through `OpacityFrame.opacityFunc` — the slider's own
-    // `<OnValueChanged>` is the only caller, so this is the live path, not a direct call.
+    // The slider's `<OnValueChanged>` repaints through `OpacityFrame.opacityFunc`.
     s.run("OpacityFrameSlider:SetValue(0.25)").unwrap();
     let alpha = |s: &UiScript, f: &str| num(s, &format!("{f}:GetAlpha()"));
     for f in [
@@ -1098,7 +950,7 @@ fn the_dropdown_and_the_opacity_slider_drive_the_saved_options() {
         "under 0.15 the overlays keep the plain alpha"
     );
 
-    // Dismissing the frame runs `saveOpacityFunc`, which is what puts the value in the saved table.
+    // Dismissing the frame runs `saveOpacityFunc`, which writes the saved table.
     s.run("OpacityFrameCloseButton:Click()").unwrap();
     assert!(!shown(&s, "OpacityFrame"));
     assert!(

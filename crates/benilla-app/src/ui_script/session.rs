@@ -1,45 +1,14 @@
-//! **What the host remembers about the VM, and how it forgets.**
-//!
-//! The UI VM does not live for the process — it is built at world entry and destroyed at the
-//! character screen, once per login (the reference's `0x48fbf0` ↔ `0x490bd0`). That
-//! makes every host-side "I already told the VM about this" a claim with an expiry date, and there
-//! are two kinds of them:
-//!
-//! - **seeds** — a registry, a catalog, a keybinding set: pushed once, because pushing it is
-//!   expensive and its content does not change. A `bool` latch, or a `PostStartup` system, which is
-//!   the same latch written in the scheduler.
-//! - **change memos** — "these are the action slots I last pushed", so an unchanged frame costs
-//!   nothing. A `Local<FeedMemory>`, near-universally.
-//!
-//! Both are *correct* against one VM and *silently wrong* against the next, and the failure has no
-//! error path: the push simply does not happen, and the window is empty. Session 2's action bar,
-//! bags, spellbook, keybinds and macros all failed exactly this way, and one of them — the CVar
-//! table — failed worse than empty: `save_config` composes `config.toml` from the VM's snapshot, so
-//! an unseeded VM would have written the player's settings file back out **stripped**.
-//!
-//! [`VmMemo`] is the one mechanism for both. It keys the memory on
-//! [`UiScript::session`] — a VM-side identity, not a host-side counter someone must remember to
-//! bump — so a memory written against a dead VM cannot be read at all. The failure mode inverts:
-//! forgetting to use it is visible (the memo is a plain `Local` again), while using it and being
-//! wrong costs one redundant push per login.
+//! Host-side memory about the UI VM, which lives for one login: the reference builds it at world
+//! entry and destroys it at the character screen (`0x48fbf0`, `0x490bd0`). A seed or change memo
+//! kept past its VM silently skips the push into the next one; [`VmMemo`] keys it on
+//! [`UiScript::session`], so against a new VM it reads as fresh.
 
 use benilla_ui::script::UiScript;
 
-/// A host-side memory about the UI VM — **valid only for the VM it was written against**.
-///
-/// Wrap the memo type and read it through [`VmMemo::get`]; against a VM other than the one that
-/// last wrote it, the memo resets to `T::default()` first. The wrapped type is unchanged, so the
-/// call sites keep their own shape:
-///
-/// ```ignore
-/// mut memory: Local<VmMemo<FeedMemory>>,
-/// // …
-/// let memory = memory.get(&script);
-/// if memory.pushed.get(&id) != Some(&slot) { /* push */ }
-/// ```
+/// A host-side memo valid only for the VM that wrote it: [`VmMemo::get`] resets it to
+/// `T::default()` when read against another.
 pub(crate) struct VmMemo<T> {
-    /// The VM this memory is about. `0` is "no VM" — [`UiScript::session`] hands out from 1, so a
-    /// freshly defaulted memo matches nothing, and the first read of every session is a miss.
+    /// The VM this memory is about; 0 is no VM, as [`UiScript::session`] counts from 1.
     session: u64,
     inner: T,
 }
@@ -54,26 +23,19 @@ impl<T: Default> Default for VmMemo<T> {
 }
 
 impl<T: Default> VmMemo<T> {
-    /// The memory — **cleared first if this is a different VM** than the one that wrote it.
+    /// The memory, cleared first against a different VM.
     pub(crate) fn get(&mut self, script: &UiScript) -> &mut T {
         self.get_for(Some(script))
     }
 
-    /// [`VmMemo::get`] for a system that also runs with **no VM** — the character screen, where the
-    /// session's Lua state does not exist (1290).
-    ///
-    /// "No VM" is a session in its own right, and it is session `0`: the memory resets once on the
-    /// way into it and once on the way out, and holds in between. Reaching for a scratch default
-    /// each frame instead would quietly turn the memo off for the whole glue phase.
+    /// [`VmMemo::get`] for a system that also runs with no VM, at the character screen; no VM is
+    /// session 0, so the memo holds there too.
     pub(crate) fn get_for(&mut self, script: Option<&UiScript>) -> &mut T {
         self.get_reset_for(script).0
     }
 
-    /// [`VmMemo::get`], also reporting whether the memory RESET on this read — i.e. this is the
-    /// first read against a new VM. A gated feed keys its "must run" on exactly
-    /// this: with every input unchanged, a fresh VM still needs the full re-push, and the reset is
-    /// the only signal that says so. The flag is true at most once per session per memo, so a gate
-    /// that ORs it in costs nothing on the steady frames it exists to skip.
+    /// [`VmMemo::get`], plus whether this read reset it: a gated feed must re-push into a fresh VM
+    /// even when every input is unchanged.
     pub(crate) fn get_reset(&mut self, script: &UiScript) -> (&mut T, bool) {
         self.get_reset_for(Some(script))
     }
@@ -90,8 +52,7 @@ impl<T: Default> VmMemo<T> {
 }
 
 impl VmMemo<bool> {
-    /// **True exactly once per VM** — the seed shape: `if seeded.claim(&script) { …push the
-    /// registry… }`.
+    /// True exactly once per VM, for a seed pushed once per login.
     pub(crate) fn claim(&mut self, script: &UiScript) -> bool {
         let done = self.get(script);
         if *done {
@@ -107,8 +68,6 @@ impl VmMemo<bool> {
 mod tests {
     use super::*;
 
-    /// The property the whole mechanism rests on: a memo written against one VM is not readable
-    /// from the next, and a seed claimed in one session is claimable again in the one after.
     #[test]
     fn a_memo_does_not_survive_the_vm_it_was_written_against() {
         let first = UiScript::new().expect("VM");
@@ -132,8 +91,6 @@ mod tests {
         );
     }
 
-    /// The gate half (1439): `get_reset` reports the reset exactly once per session flip — the
-    /// one frame a gated feed must run with every other input unchanged.
     #[test]
     fn get_reset_reports_each_session_flip_once() {
         let first = UiScript::new().expect("VM");
@@ -163,17 +120,8 @@ mod tests {
         assert!(!seeded.claim(&second));
     }
 
-    /// **The rule, enforced instead of remembered.**
-    ///
-    /// A feed that memoizes what it pushed into the VM and does *not* key that memo on the session
-    /// fails in the one way nothing catches: it pushes nothing into the new VM, the window is
-    /// empty, and no error is raised anywhere. There is no runtime signal to test for — which is
-    /// exactly why the check has to be structural.
-    ///
-    /// So: a `Local<…>` in the parameter list of a system that also takes the VM must be a
-    /// [`VmMemo`], or be named in [`EXEMPT`] with the reason it is not host-memory-about-the-VM.
-    /// Adding a feed the ordinary way passes; adding one with a bare `Local` fails here, at the
-    /// line, before it can reach a login.
+    /// A `Local` in a system that takes the VM must be a [`VmMemo`] or be listed in [`EXEMPT`]: a
+    /// stale memo fails silently, so the check is structural.
     #[test]
     fn a_local_in_a_system_that_holds_the_vm_is_keyed_on_the_session() {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -209,35 +157,20 @@ mod tests {
         );
     }
 
-    /// `Local`s that live in a system holding the VM but are **not memory about the VM**, each with
-    /// the reason. Keyed `(path under src/, parameter name)`.
+    /// `Local`s in VM-holding systems that are not memory about the VM, keyed
+    /// `(path under src/, parameter name)`.
     const EXEMPT: &[(&str, &str)] = &[
-        // A raster fact (the screen seam), not a VM push. The measurer beside it deliberately
-        // re-seats off `!script.has_text_measurer()` — it interrogates the VM instead of a memo,
-        // which is the same guarantee arrived at the other way.
+        // A raster fact; a fresh VM re-seats its measurer on `!has_text_measurer()` anyway.
         ("ui_script/extract/mod.rs", "last_seam"),
-        // The plate driver's anti-overlap scratch (decision 2148 put the VM in that system's
-        // hands). It is cleared at the top of every run and rebuilt from this frame's plates —
-        // a reused allocation, not memory: nothing in it survives the call it was filled in, so
-        // a new VM has nothing to stale.
+        // The plate driver's anti-overlap scratch, cleared at the top of every run.
         ("vplates.rs", "bucket"),
-        // The window's `scale_factor` beside it — the other term a measure is
-        // only correct under, since a logical height becomes an integer DEVICE-pixel raster size.
-        // A fact about the window, not about the VM; it gates the same re-seat `last_seam` does,
-        // and a fresh VM re-seats on `!has_text_measurer()` regardless.
+        // The window's scale factor, which gates the same re-seat as `last_seam`.
         ("ui_script/extract/mod.rs", "last_dpi"),
         // Pushed unconditionally every frame; there is nothing remembered to go stale.
         ("ui_script/mod.rs", "smoothed"),
-        // A fact about the CHAT ROSTER, not about the VM: whether the player has joined a
-        // zone-dependent defense channel (the world-state readout's `Type == 1` gate). It is
-        // recomputed whenever `ChannelState` changes and is the same answer either side of a
-        // login; the push it feeds is memoized beside it in a real `VmMemo`, which is what
-        // re-seats the new VM.
+        // A fact about the chat roster (a defense channel joined); its push has its own `VmMemo`.
         ("world_state_ui.rs", "defense_channel"),
-        // The cursor systems, both platform arms: these track the OS cursor and an `NSCursor` raw
-        // pointer. The OS keeps that state across the VM's death and rebirth, so re-seating them at
-        // a login would re-assert a cursor nothing changed. (`last_set` is the key we last handed
-        // the window — the same fact under the same name on both arms.)
+        // The cursor systems on both platforms track OS cursor state, which outlives the VM.
         ("cursor.rs", "was_looking"),
         ("cursor.rs", "rects_disabled"),
         ("cursor.rs", "decode_failed"),
@@ -247,8 +180,7 @@ mod tests {
 
     use crate::test_support::{fn_parameter_lists, rust_files};
 
-    /// Every `name: Local<Ty>` in a parameter list, as `(name, Ty)` — angle-bracket matched, so a
-    /// nested generic comes back whole.
+    /// Every `name: Local<Ty>` in a parameter list as `(name, Ty)`, nested generics whole.
     fn locals_in(params: &str) -> Vec<(String, String)> {
         let mut out = Vec::new();
         for (i, _) in params.match_indices("Local<") {

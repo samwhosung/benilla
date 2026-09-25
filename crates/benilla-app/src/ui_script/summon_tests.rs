@@ -1,16 +1,10 @@
-//! The summon confirm (ConfirmSummon.xml): the dialog `ui_summon`'s feed raises,
-//! the countdown line the popup engine composes from the four engine globals, the combat lock on
-//! its Accept, and the one call that becomes `CMSG_SUMMON_RESPONSE`.
-//!
-//! This dialog is the only one in the folder whose event carries **no arguments** — everything on
-//! screen is read back out of the engine every tick — so these tests drive the getters' snapshot
-//! (`set_summon_confirm`) rather than an event payload, which is exactly how the app drives it.
+//! The stock summon confirm, `CONFIRM_SUMMON`, raised by `ui_summon`'s feed. The event has no
+//! args: the popup reads the summoner, area and time left from engine getters every tick, so these
+//! tests drive the getters' snapshot.
 
 use benilla_ui::script::{SummonConfirmUiState, UiScript, UnitState};
 
-/// A `"player"` snapshot that exists and is (or is not) fighting — the one field this dialog's
-/// OnUpdate reads. `UnitAffectingCombat` answers on `exists && in_combat`, so the flag alone would
-/// not be enough.
+/// `UnitAffectingCombat` needs `exists` as well as `in_combat`.
 fn player(in_combat: bool) -> UnitState {
     UnitState {
         exists: true,
@@ -21,8 +15,7 @@ fn player(in_combat: bool) -> UnitState {
 
 use super::test_ui::load_ui as load_xml;
 
-/// The app's own pre-state: a live offer from Twomage, out of Stormwind City, with the server's
-/// full two-minute window still on the clock.
+/// A live offer with the server's full two-minute window left.
 fn setup() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
@@ -44,13 +37,8 @@ fn setup() -> UiScript {
     s
 }
 
-/// The whole arc: `CONFIRM_SUMMON` (no args) raises the dialog, the popup engine's countdown tick
-/// composes the line from the three getters, and Accept queues the one `ConfirmSummon()` that
-/// becomes `CMSG_SUMMON_RESPONSE`.
-///
-/// The **text starts blank** and is filled by the tick — that is the engine's countdown contract
-/// (`StaticPopup_Show` writes `" "` for this `which`), and the reason this dialog needs the
-/// per-tick branch at all rather than `StaticPopup_Show`'s arguments.
+/// `StaticPopup_Show` writes " " for a countdown kind (`StaticPopup.lua:1567`) and each tick
+/// composes the line; Accept's `ConfirmSummon()` becomes `CMSG_SUMMON_RESPONSE`.
 #[test]
 fn the_confirm_names_the_summoner_and_accept_queues_the_response() {
     benilla_formats::wow_data_or_skip!();
@@ -83,8 +71,7 @@ fn the_confirm_names_the_summoner_and_accept_queues_the_response() {
     );
 }
 
-/// Under a minute the line counts in **seconds**, and the unit word singularises at one — the
-/// engine's shared `StaticPopupTimeUnit`, reached through this dialog's own four-argument format.
+/// Under a minute the line counts seconds, singular at one (`StaticPopup.lua:1748`).
 #[test]
 fn the_countdown_line_switches_to_seconds_and_singularises() {
     benilla_formats::wow_data_or_skip!();
@@ -102,9 +89,7 @@ fn the_countdown_line_switches_to_seconds_and_singularises() {
         "Twomage wants to summon you to Elwynn Forest.  The spell will be cancelled in 45 Seconds."
     );
 
-    // OnShow seeded 45 and the first tick spent 0.1 of it, so 44.9 stands; spending 44.2 more
-    // lands on 0.7 — inside the last second, which `ceil` reports as 1 and the unit word must
-    // therefore singularise.
+    // 45 - 0.1 - 44.2 leaves 0.7 s, which `ceil` shows as 1.
     s.run("StaticPopup_OnUpdate(StaticPopup1, 44.2)").unwrap();
     assert_eq!(
         s.eval::<String>("return StaticPopup1Text:GetText()")
@@ -113,10 +98,7 @@ fn the_countdown_line_switches_to_seconds_and_singularises() {
     );
 }
 
-/// **A name still in flight paints blank and then fills itself in.** The reference does not hold
-/// the event back for the name (the event has no arguments to hold), so the first frames render
-/// `""` and the getter's next answer lands on the very next tick — which is only true because the
-/// countdown branch re-reads the getters rather than caching `StaticPopup_Show`'s arguments.
+/// A name still resolving paints blank; the tick re-reads the getters, so it fills in on arrival.
 #[test]
 fn a_summoner_whose_name_is_still_resolving_fills_in_on_a_later_tick() {
     benilla_formats::wow_data_or_skip!();
@@ -149,9 +131,7 @@ fn a_summoner_whose_name_is_still_resolving_fills_in_on_a_later_tick() {
     );
 }
 
-/// Accept is **disabled in combat and re-enabled out of it**, with the dialog staying up — this
-/// entry's OnUpdate is a lock, not a teardown, which is what makes it different from every other
-/// confirm in the folder. Cancel is never touched.
+/// OnUpdate disables Accept in combat but leaves the dialog up (`StaticPopup.lua:1346`).
 #[test]
 fn combat_locks_accept_without_taking_the_dialog_down() {
     benilla_formats::wow_data_or_skip!();
@@ -197,9 +177,7 @@ fn combat_locks_accept_without_taking_the_dialog_down() {
     assert_eq!(s.take_summon_confirms(), 1);
 }
 
-/// Cancel and ESC both send **nothing**, and so does letting the clock run out: 1.12 has no
-/// decline opcode and no `CancelSummon`, so every path but Accept is silence plus the server's own
-/// expiry.
+/// 1.12 has no decline opcode and no `CancelSummon`: only Accept sends.
 #[test]
 fn declining_and_expiring_both_send_nothing() {
     benilla_formats::wow_data_or_skip!();
@@ -216,8 +194,7 @@ fn declining_and_expiring_both_send_nothing() {
     );
     assert_eq!(s.take_summon_confirms(), 0, "ESC is silent");
 
-    // The window running out: the popup engine's own timeout leg hides the dialog, and this entry
-    // has no OnCancel, so nothing at all goes to the wire.
+    // Expiry hides the dialog, and the entry has no OnCancel.
     s.set_summon_confirm(SummonConfirmUiState {
         summoner: "Twomage".into(),
         area: "Stormwind City".into(),
@@ -232,9 +209,7 @@ fn declining_and_expiring_both_send_nothing() {
     assert_eq!(s.take_summon_confirms(), 0, "and expiring is silent too");
 }
 
-/// The three getters answer the reference's own no-request values — two empty strings and a zero —
-/// rather than nil, on a VM nothing has ever pushed to. An addon (or the dialog's own `format`)
-/// concatenating a nil here would raise.
+/// With no offer the getters answer "", "" and 0, as the reference does, never nil.
 #[test]
 fn the_getters_answer_empties_before_anything_is_pending() {
     let s = UiScript::new().unwrap();
@@ -254,9 +229,7 @@ fn the_getters_answer_empties_before_anything_is_pending() {
     );
 }
 
-/// `GetSummonConfirmTimeLeft()` answers whole **seconds, truncated** — the binding's own
-/// `/1000` (`0x48b660`), not a round. It matters because the dialog seeds its countdown from this
-/// one call: a rounded-up seed would show one second more than the server is holding.
+/// The binding truncates ms to whole seconds (`0x48b660`); the dialog seeds its countdown from it.
 #[test]
 fn the_time_left_getter_truncates_to_whole_seconds() {
     let mut s = UiScript::new().unwrap();

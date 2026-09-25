@@ -1,14 +1,11 @@
-//! The guild tabard designer — the stock `TabardFrame.xml` off the player's chain (decision
-//! 1977) in a bare engine: the wire's open event seeds and shows the window, the customization
-//! rows cycle the design, the emblem cells wear the mask token, the Save button follows
-//! `CanSaveTabardNow`, and the cancel path closes through `CloseTabardCreation`.
+//! The stock guild tabard designer (`TabardFrame.xml`): the open event seeds and shows it, the rows
+//! cycle the design, Save follows `CanSaveTabardNow`, and closing calls `CloseTabardCreation`.
 
 use benilla_ui::script::{
     emblem_mask_path, TabardHost, TabardIntent, UiScript, UnitGuild, UnitState,
 };
 
-/// The kit, with the player in a guild at `rank` (0 = the master) — `GetGuildInfo("player")`
-/// reads the unit model's own guild tag.
+/// The player in a guild at `rank`, 0 the master; `GetGuildInfo("player")` reads the unit's guild.
 fn harness(rank: u32) -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
@@ -38,7 +35,7 @@ fn harness(rank: u32) -> UiScript {
     for file in [
         "Interface\\FrameXML\\Fonts.xml",
         r"Interface\FrameXML\UIParent.xml",
-        "ScrollTemplates.xml", // our scroll kit + the placeholder icon
+        "ScrollTemplates.xml", // ours: the scroll kits
         r"Interface\FrameXML\MoneyFrame.lua",
         r"Interface\FrameXML\MoneyFrame.xml",
         r"Interface\FrameXML\UIPanelTemplates.lua",
@@ -56,10 +53,8 @@ fn harness(rank: u32) -> UiScript {
     s
 }
 
-/// The reference's open path: `MSG_TABARDVENDOR_ACTIVATE` → `OPEN_TABARD_FRAME`. The stock
-/// handler seeds the design off the guild record, paints the four emblem cells, sets the
-/// greeting and the Save button by the guild rank, and shows the window through the panel
-/// manager.
+/// `MSG_TABARDVENDOR_ACTIVATE` fires `OPEN_TABARD_FRAME`; the handler seeds the design from the
+/// guild record and shows the panel (`TabardFrame.lua:25`).
 #[test]
 fn the_open_event_seeds_the_design_paints_the_cells_and_shows_the_window() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -99,7 +94,6 @@ fn the_open_event_seeds_the_design_paints_the_cells_and_shows_the_window() {
         s.eval::<String>("return TABARDVENDORGREETING").unwrap()
     );
 
-    // The customization rows: the first row's right arrow cycles the emblem style and repaints.
     s.run("TabardCustomization_Right(1)").unwrap();
     assert_eq!(s.tabard_design(), Some([13, 4, 1, 2, 9]));
     let cell = s
@@ -110,7 +104,7 @@ fn the_open_event_seeds_the_design_paints_the_cells_and_shows_the_window() {
         .unwrap();
     assert_eq!(s.tabard_design().unwrap()[4], 7);
 
-    // Save: the intent carries the five; the pending latch greys the button through the event.
+    // Save sends the five values; the pending latch greys the button (`TabardFrame.lua:38`).
     s.run("TabardFrameAcceptButton:Click()").unwrap();
     assert_eq!(
         s.take_tabard_intents(),
@@ -127,7 +121,7 @@ fn the_open_event_seeds_the_design_paints_the_cells_and_shows_the_window() {
         "the latch greys the button"
     );
 
-    // Cancel closes through the panel manager; the OnHide calls CloseTabardCreation.
+    // Cancel hides the panel, whose OnHide calls `CloseTabardCreation` (`TabardFrame.xml:625`).
     s.run("TabardFrameCancelButton:Click()").unwrap();
     s.resolve();
     assert!(!s.eval::<bool>("return TabardFrame:IsVisible()").unwrap());
@@ -135,8 +129,7 @@ fn the_open_event_seeds_the_design_paints_the_cells_and_shows_the_window() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// A non-master, or a player with no guild, gets the no-guild greeting and a dead Save button —
-/// the stock `TabardFrame_UpdateButtons` law over `GetGuildInfo("player")`.
+/// No guild or a rank above 0: the no-guild greeting and no Save (`TabardFrame.lua:97`).
 #[test]
 fn a_non_master_gets_the_no_guild_greeting_and_no_save() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -155,7 +148,6 @@ fn a_non_master_gets_the_no_guild_greeting_and_no_save() {
         s.eval::<String>("return TABARDVENDORNOGUILDGREETING")
             .unwrap()
     );
-    // The close event from the engine side hides the window.
     s.fire_event("CLOSE_TABARD_FRAME", vec![]);
     s.resolve();
     assert!(!s.eval::<bool>("return TabardFrame:IsVisible()").unwrap());

@@ -1,18 +1,11 @@
-//! The errors/info frame — stock `Interface\FrameXML\UIErrorsFrame.xml`, a real
-//! `<MessageFrame>` — driven engine-only: the yellow `UI_INFO_MESSAGE` toast (the quest
-//! objective-progress popup's surface), the red `UI_ERROR_MESSAGE` line, insertMode-TOP stacking,
-//! and the hold+fade expiry.
-//!
-//! Every assertion here reads the **drawn quads**, not Lua state. It used to read
-//! `UIErrorsFrameLine1:GetText()` — the hand-rolled version's three stacked FontStrings — and those
-//! are gone with it: the widget draws its own message bands now, so what a player sees is the only
-//! thing left to test, which is also the thing worth testing.
+//! The stock errors frame (`UIErrorsFrame.xml`), a `<MessageFrame>`, read from its drawn quads:
+//! the widget draws its own message lines, so there is no Lua state to read.
 
 use benilla_ui::script::{ExtractedQuad, QuadContent, ScriptValue, UiScript};
 
 use super::test_ui::load_ui as load_xml;
 
-/// The toast lines as drawn, **top row first**, each with its colour+alpha and its band bottom.
+/// The drawn lines, top row first, each with its colour and alpha and its band's bottom.
 fn toast_lines(s: &mut UiScript) -> Vec<(String, [f32; 4], f32)> {
     s.resolve();
     let mut v: Vec<(String, [f32; 4], f32)> = s
@@ -42,11 +35,9 @@ fn info_and_error_messages_stack_hold_and_expire() {
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
     load_xml(&s, "Interface\\FrameXML\\UIErrorsFrame.xml");
 
-    // Empty at load. The frame itself is shown — a MessageFrame with nothing to say simply draws
-    // nothing, where the hand-rolled version had to `Hide()` itself.
     assert!(toast_lines(&mut s).is_empty());
 
-    // A quest progress toast: yellow (ref UIErrorsFrame.lua:12), on the top line.
+    // A quest progress toast, yellow (`UIErrorsFrame.lua:12`).
     s.fire_event(
         "UI_INFO_MESSAGE",
         vec![ScriptValue::Str("Tough Wolf Meat: 2/8".into())],
@@ -57,8 +48,7 @@ fn info_and_error_messages_stack_hold_and_expire() {
     assert_eq!(lines[0].0, "Tough Wolf Meat: 2/8");
     assert_eq!(lines[0].1, [1.0, 1.0, 0.0, 1.0], "UI_INFO_MESSAGE yellow");
 
-    // A second message lands ON TOP (insertMode="TOP"), red for UI_ERROR_MESSAGE (lua:14), pushing
-    // the toast to the row below — the whole point of the attribute.
+    // insertMode="TOP": the red error (`UIErrorsFrame.lua:14`) lands above the toast.
     s.fire_event(
         "UI_ERROR_MESSAGE",
         vec![ScriptValue::Str("You are too far away!".into())],
@@ -68,21 +58,20 @@ fn info_and_error_messages_stack_hold_and_expire() {
         lines.iter().map(|l| l.0.as_str()).collect::<Vec<_>>(),
         ["You are too far away!", "Tough Wolf Meat: 2/8"]
     );
-    // 0.1 comes back as 26/255: `AddMessage` byte-quantizes every channel round-half-up
-    // (`ftol(v*255 + 0.5)`), so the colour a message draws with is never quite the float handed in.
+    // 0.1 draws as 26/255: `AddMessage` rounds each channel to a byte (`ftol(v*255 + 0.5)`).
     assert_eq!(
         lines[0].1,
         [1.0, 26.0 / 255.0, 26.0 / 255.0, 1.0],
         "UI_ERROR_MESSAGE red, byte-quantized"
     );
 
-    // Hold 5 s (the ref's displayDuration="5"), then the class ctor's 3 s ramp, then gone. The
-    // phase check is per-tick, so the tick that spends the last of the hold still draws full.
+    // Hold 5 s (displayDuration="5"), then the default 3 s fade; the tick that ends the hold
+    // still draws full.
     s.tick(4.0);
     assert_eq!(toast_lines(&mut s).len(), 2);
-    s.tick(2.0); // the hold is spent on this tick; the ramp starts on the next
+    s.tick(2.0); // the hold ends on this tick; the fade starts on the next
     assert_eq!(toast_lines(&mut s).len(), 2);
-    s.tick(1.5); // half the ramp — still drawing, now dimmer
+    s.tick(1.5); // half the fade: dimmer, still drawing
     let mid = toast_lines(&mut s);
     assert_eq!(mid.len(), 2);
     assert!(
@@ -90,20 +79,13 @@ fn info_and_error_messages_stack_hold_and_expire() {
         "mid-ramp alpha: {:?}",
         mid[0].1
     );
-    s.tick(2.0); // ramp done — retired, and this class frees the line rather than blanking it
+    s.tick(2.0); // fade done: the line is freed, not blanked
     assert!(toast_lines(&mut s).is_empty());
     assert!(s.errors().is_empty(), "expiry errors: {:?}", s.errors());
 }
 
-/// **The toast must outrank an open panel window.** `UIErrorsFrame` is 512x60 at TOP (0,-122)
-/// and every left-slot panel is 384-wide at TOPLEFT (0,-104), so they overlap. The reference puts
-/// this frame in HIGH (`UIErrorsFrame.xml` l.4) and benilla had dropped it, leaving it in the
-/// default MEDIUM alongside the panels.
-///
-/// That is not a tie: a panel carries nested child frames (level 1+) while the toast's content
-/// belongs to the errors frame itself (level 0), and level outranks insertion in the draw key. So
-/// the toast lost to any open panel — invisible in exactly the state you most want to read it. Same
-/// defect as the party frame's in decision 0597, one stratum up.
+/// `UIErrorsFrame` overlaps the left-slot panels and outranks them by stratum, HIGH
+/// (`UIErrorsFrame.xml:4`); within one stratum a panel's child frames would win on level.
 #[test]
 fn an_error_toast_draws_over_an_open_panel_window() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -122,18 +104,17 @@ fn an_error_toast_draws_over_an_open_panel_window() {
     load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
     load_xml(&s, "Interface\\FrameXML\\UIErrorsFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\Cooldown.xml");
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit + the placeholder icon
+    load_xml(&s, "ScrollTemplates.xml"); // ours: the scroll kits
     load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml"); // QuestLogDetail's reward money row (1928)
-                                                            // pane's UIPanelScrollFrameTemplate). A MISSING template is a loader *warning*, so an
-                                                            // under-loaded list passes and then dies on the first FauxScrollFrame_Update.
+    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
+    // A missing template only warns at load, so an under-loaded list fails at its first update.
     load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");
     load_xml(&s, "Interface\\FrameXML\\ItemButtonTemplate.xml");
     load_xml(&s, "Interface\\FrameXML\\QuestFrame.xml");
     load_xml(&s, r"Interface\FrameXML\MainMenuBarMicroButtons.xml");
     load_xml(&s, "Interface\\FrameXML\\QuestLogFrame.xml");
 
-    // A left-slot panel open, and the toast raised after it — the order that must not decide.
+    // A left-slot panel opens, then the toast: stratum, not order, must decide.
     s.eval::<()>("ShowUIPanel(QuestLogFrame)").unwrap();
     s.fire_event(
         "UI_ERROR_MESSAGE",
@@ -158,22 +139,13 @@ fn an_error_toast_draws_over_an_open_panel_window() {
         panel_ceiling > 0,
         "sanity: the panel must be drawing something at all"
     );
-    // Everything the quest log draws is below the toast, and by STRATUM — not by luck within one.
-    //
-    // "Above" is measured against **other frames**: UIErrorsFrame's own declared `<FontString>` —
-    // the child that supplies the message font and the CENTER justification — is a real region of
-    // the frame and sorts above its message bands, exactly as a chat frame's does. It carries no
-    // text and draws nothing, so excluding the frame's own quads is what keeps this test about the
-    // thing it is named for.
+    // Only other frames count: the frame's own declared `<FontString>` sorts above its message
+    // lines but carries no text.
     let above: Vec<&ExtractedQuad> = quads
         .iter()
         .filter(|q| q.z > toast)
-        // `RaidWarningFrame` is excluded on exactly the same grounds, and it is the reference's
-        // own arrangement rather than ours: it is HIGH + toplevel too (ref RaidWarning.xml:4), so
-        // it raises above the toast in z — but it sits BELOW UIErrorsFrame on screen (anchored to
-        // its BOTTOM at -10) and its declared `<FontString>` carries no text, so nothing of it is
-        // ever painted over the toast. Excluding it keeps this test about a PANEL WINDOW drawing
-        // over the toast, which is what it is named for.
+        // `RaidWarningFrame` is HIGH and toplevel too (`RaidWarning.xml:4`) but sits below this
+        // frame on screen, and its `<FontString>` carries no text.
         .filter(|q| {
             !matches!(
                 s.quad_owner_name(q.target).as_deref(),

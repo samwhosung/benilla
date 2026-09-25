@@ -1,18 +1,13 @@
-//! The unit right-click popups reached the two ways a solo player invites someone (director
-//! report, 2026-07-17): right-clicking a **target** unit frame, and right-clicking a **chat
-//! name**. Both drive the shared UnitPopup engine (`UnitPopup.xml`); the chat path adds the
-//! `SetItemRef` player branch — the reference's own since 1751 window 6 — and the FRIEND dropdown
-//! it opens, which lives in `FriendsFrame.xml` where 1.12 keeps it. Proven serverless through the
-//! real hit/route paths.
+//! The unit right-click popups, reached by right-clicking a target frame, a chat name or the pet
+//! frame through the real hit paths. All drive `UnitPopup.lua`; a chat name goes through
+//! `SetItemRef`'s player branch to the FRIEND dropdown in `FriendsFrame.xml`.
 
 use benilla_ui::script::{FollowRequest, PartyRequest, UiScript, UnitState};
 
 use super::test_ui::load_ui as load_xml;
 
-/// The production prefix the popups need, in `benilla.toc`'s own order: the dropdown kit, the
-/// unit popups, the reference's chat-link router, the unit frames — and `FriendsFrame.xml`, which
-/// is where `FriendsFrame_ShowDropdown` and the `FriendsDropDown` host live in 1.12 and where they
-/// live here since window 6 (our ItemRef.xml used to carry a private second copy of both).
+/// The files the popups need, in `benilla.toc`'s order, ending with `FriendsFrame.xml`, home of
+/// `FriendsFrame_ShowDropdown` and `FriendsDropDown`.
 fn load_popup_frames(s: &UiScript) {
     for file in [
         "Interface\\FrameXML\\Fonts.xml",
@@ -20,11 +15,10 @@ fn load_popup_frames(s: &UiScript) {
         // `SmallMoneyFrame_OnLoad`, which the chain's StaticPopup money rows call at load.
         r"Interface\FrameXML\MoneyFrame.lua",
         r"Interface\FrameXML\MoneyFrame.xml",
-        // `StaticPopupDialogs` and the `PanelTemplates_*` family, both of which FriendsFrame.xml
-        // reaches at LOAD (its tab row and its confirm dialogs).
+        // `StaticPopupDialogs` and `PanelTemplates_*`, which FriendsFrame.xml reaches at load.
         "Interface\\FrameXML\\GlobalStrings.lua",
-        "Interface\\FrameXML\\BasicControls.xml",
-        "Interface\\FrameXML\\LocaleProperties.lua", // `TEXT`, read at file scope below
+        "Interface\\FrameXML\\BasicControls.xml", // `TEXT`, read at file scope below
+        "Interface\\FrameXML\\LocaleProperties.lua",
         r"Interface\FrameXML\UIPanelTemplates.lua",
         r"Interface\FrameXML\UIPanelTemplates.xml",
         "Interface\\FrameXML\\StaticPopup.xml",
@@ -46,16 +40,15 @@ fn load_popup_frames(s: &UiScript) {
         "ScrollTemplates.xml",
         "Interface\\FrameXML\\CharacterFrameTemplates.xml",
         "Interface\\FrameXML\\FriendsFrame.xml",
-        // Declares ChatFrameEditBox, which the rename dialog's OnHide refocuses (1960).
+        // Declares `ChatFrameEditBox`, which the rename dialog's OnHide refocuses.
         "Interface\\FrameXML\\FloatingChatFrame.xml",
     ] {
         load_xml(s, file);
     }
 }
 
-/// The row labels the FRIEND / PLAYER menus bake at load (production reads GlobalStrings.lua; a
-/// bare harness doesn't). Only the rows these menus actually SHOW need real text — the DEFERRED
-/// rows are hidden before they're added.
+/// The FRIEND and PLAYER menus' labels and the target-frame newbie tip, as the stock
+/// `GlobalStrings.lua` has them.
 fn bake_strings(s: &UiScript) {
     s.run(
         r#"
@@ -89,10 +82,8 @@ fn bake_strings(s: &UiScript) {
     .unwrap();
 }
 
-/// Right-clicking a **chat player name** opens the name-only FRIEND dropdown (the ref's
-/// `FriendsFrame_ShowDropdown`): Whisper + Invite for a stranger. Clicking Invite queues an
-/// invite-by-name; a plain left-click on the name whispers instead. This is the bug the director
-/// hit — the player branch of `SetItemRef` used to be a no-op stub.
+/// Right-clicking a chat player name opens the FRIEND dropdown (`FriendsFrame_ShowDropdown`),
+/// whose Invite invites by name; a left-click on the name whispers instead.
 #[test]
 fn chat_name_right_click_opens_the_invite_menu() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -118,9 +109,8 @@ fn chat_name_right_click_opens_the_invite_menu() {
         s.eval::<bool>("return DropDownList1:IsVisible()").unwrap(),
         "the chat-name right-click opens the FRIEND dropdown"
     );
-    // title (Bob) + Whisper + Invite + Target + Cancel — the reference's FRIEND menu with its two
-    // guild rows hidden by their own predicates (no guild, no guild frame). Our transcription
-    // had deferred Target; the stock row is `TargetByName`, which exists (1958).
+    // Title, Whisper, Invite, Target, Cancel: the FRIEND menu (`UnitPopup.lua:74`) with its two
+    // guild rows hidden (no guild, no guild frame).
     assert_eq!(
         s.eval::<i64>("return DropDownList1.numButtons").unwrap(),
         5,
@@ -150,8 +140,8 @@ fn chat_name_right_click_opens_the_invite_menu() {
         "Invite on a chat name queues an invite-by-name"
     );
 
-    // A plain LEFT-click on the name whispers instead (ref's else branch): the stock
-    // `ChatFrame_SendTell` puts the box into WHISPER mode at the name and opens it (1960).
+    // A left-click on the name whispers instead: the stock `ChatFrame_SendTell` opens the box in
+    // WHISPER mode at the name.
     s.run(r#"SetItemRef("player:Carol", "|Hplayer:Carol|h[Carol]|h", "LeftButton")"#)
         .unwrap();
     s.tick(0.05);
@@ -169,9 +159,7 @@ fn chat_name_right_click_opens_the_invite_menu() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// Right-clicking a **friendly player target** solo opens the PLAYER menu with Whisper + Invite
-/// (the target-frame half of the director's report). Confirms the solo target path is NOT gated
-/// off for players — only NPC/self targets, whose every row needs a party, open nothing.
+/// Solo, right-clicking a friendly player target opens the PLAYER menu; Invite invites the unit.
 #[test]
 fn solo_target_right_click_invites_a_player() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -208,7 +196,6 @@ fn solo_target_right_click_invites_a_player() {
     s.resolve();
     assert!(s.errors().is_empty(), "load errors: {:?}", s.errors());
 
-    // Right-click the target frame through the real hit path.
     let (cx, cy) = s
         .eval::<(f64, f64)>("return TargetFrame:GetCenter()")
         .unwrap();
@@ -219,12 +206,8 @@ fn solo_target_right_click_invites_a_player() {
         s.eval::<bool>("return DropDownList1:IsVisible()").unwrap(),
         "a friendly player target opens the PLAYER menu solo"
     );
-    // title (Ally) + Whisper + Inspect + Invite + Trade + Follow + Duel + Cancel — nothing in the
-    // PLAYER menu is DEFERRED any more, and only the raid-target submenu (which needs a party) is
-    // absent. (Trade came out of the deferred set in decision 0592 P1, Inspect in 0631, Duel in
-    // 0633, Follow in 0893 — Inspect precedes Invite/Trade/Follow/Duel in the reference's own
-    // PLAYER menu order, which is why every row below it sits one later than it did before 0631,
-    // and Duel one later again than before 0893.)
+    // Title, Whisper, Inspect, Invite, Trade, Follow, Duel, Cancel: the PLAYER menu in
+    // `UnitPopup.lua:72`'s order, the raid-target row hidden without a party.
     assert_eq!(
         s.eval::<i64>("return DropDownList1.numButtons").unwrap(),
         8,
@@ -270,10 +253,7 @@ fn solo_target_right_click_invites_a_player() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// Clicking the **Trade** row (the un-deferred 0592 P1 button) through the real hit path fires
-/// `InitiateTrade("target")` — the exact seam the director hit as "click Trade, nothing happens".
-/// The other button tests click Invite; this is the only test that drives the Trade row's OnClick,
-/// so a break between `this.value == "TRADE"` and the queued initiate token shows up here.
+/// Clicking the Trade row calls `InitiateTrade("target")` (`UnitPopup.lua:544`).
 #[test]
 fn solo_target_trade_click_queues_an_initiate() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -309,7 +289,6 @@ fn solo_target_trade_click_queues_an_initiate() {
     s.resolve();
     assert!(s.errors().is_empty(), "load errors: {:?}", s.errors());
 
-    // Right-click the target frame → PLAYER menu.
     let (cx, cy) = s
         .eval::<(f64, f64)>("return TargetFrame:GetCenter()")
         .unwrap();
@@ -324,7 +303,6 @@ fn solo_target_trade_click_queues_an_initiate() {
          ahead of it in decision 0631"
     );
 
-    // Click Trade through the real hit path → UnitPopup_OnClick's TRADE arm → InitiateTrade("target").
     let (tx, ty) = s
         .eval::<(f64, f64)>("return DropDownList1Button5:GetCenter()")
         .unwrap();
@@ -338,12 +316,8 @@ fn solo_target_trade_click_queues_an_initiate() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// Clicking the **Follow** row (un-deferred in decision 0893) through the real hit path reaches
-/// `FollowByName("Ally", 1)` — and the `1` is the point of the test, not decoration. That second
-/// argument is the resolver's exact-only flag: the menu already knows the unit's name to the
-/// letter, so unlike `/follow rag` it must not prefix-match its way onto a bystander. A dispatch
-/// that dropped the argument would still queue a follow and still look right on screen, which is
-/// exactly the kind of break a row-label assertion cannot see.
+/// Clicking Follow calls `FollowByName("Ally", 1)` (`UnitPopup.lua:623`): the `1` asks for an
+/// exact match, so the menu never prefix-matches onto a bystander as `/follow rag` may.
 #[test]
 fn solo_target_follow_click_queues_an_exact_by_name_follow() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -408,11 +382,8 @@ fn solo_target_follow_click_queues_an_exact_by_name_follow() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// Clicking the **Inspect** row (un-deferred in decision 0631) through the real hit path reaches
-/// `InspectUnit("target")` — the same "the row is there but the click does nothing" seam 0592 hit on
-/// Trade, which is a dispatch break (`button == "INSPECT"` never matching) that a row-label test
-/// cannot see. `InspectUnit` is stubbed rather than loading the whole window: this file tests the
-/// popup's dispatch, and `inspect_tests.rs` owns what the window then does.
+/// Clicking Inspect calls `InspectUnit("target")` (`UnitPopup.lua:552`), stubbed here;
+/// `inspect_tests.rs` covers the window.
 #[test]
 fn solo_target_inspect_click_reaches_inspect_unit() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -475,13 +446,9 @@ fn solo_target_inspect_click_reaches_inspect_unit() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-// ── The PET menu (report B219) ───────────────────────────────────────────────────
+// ── The PET menu ─────────────────────────────────────────────────────────────────────
 
-/// The pet menu's own prefix. What joins the popup prefix is `StaticPopup.xml` — the StaticPopup
-/// engine, because two of the four rows go behind a dialog, and since 1953 where the pet arc's
-/// three dialogs are registered (they rode our pet-bar file until it became the reference's).
-/// `Cooldown.xml` and
-/// `ActionBar.xml` are the pet bar's own load deps, not this menu's.
+/// The pet menu's files, with `StaticPopup.xml` for the rename and abandon dialogs.
 fn load_pet_menu_frames(s: &UiScript) {
     for file in [
         "Interface\\FrameXML\\Fonts.xml",
@@ -491,8 +458,8 @@ fn load_pet_menu_frames(s: &UiScript) {
         "Interface\\FrameXML\\GlobalStrings.lua",
         r"Interface\FrameXML\UIPanelTemplates.lua",
         r"Interface\FrameXML\UIPanelTemplates.xml",
-        "Interface\\FrameXML\\BasicControls.xml",
-        "Interface\\FrameXML\\LocaleProperties.lua", // `TEXT`, read at file scope below
+        "Interface\\FrameXML\\BasicControls.xml", // `TEXT`, read at file scope below
+        "Interface\\FrameXML\\LocaleProperties.lua",
         "Interface\\FrameXML\\StaticPopup.xml",
         "Interface\\FrameXML\\GameTooltip.xml",
         "Interface\\FrameXML\\UIMenu.xml",
@@ -513,16 +480,15 @@ fn load_pet_menu_frames(s: &UiScript) {
         "Interface\\FrameXML\\MainMenuBar.xml",
         "Interface\\FrameXML\\ActionBarFrame.xml",
         "Interface\\FrameXML\\BonusActionBarFrame.xml",
-        // Declares ChatFrameEditBox, which the rename dialog's OnHide refocuses (1960).
+        // Declares `ChatFrameEditBox`, which the rename dialog's OnHide refocuses.
         "Interface\\FrameXML\\FloatingChatFrame.xml",
     ] {
         load_xml(s, file);
     }
 }
 
-/// The PET rows' labels and both dialogs' text, verbatim from the real
-/// `Interface\FrameXML\GlobalStrings.lua` off the 1.12.1 patch chain (l.3028-3052 and l.3) — which
-/// is what the app itself runs at boot; this only stands in for it in a bare harness.
+/// The PET rows' labels and both dialogs' text as the stock strings have them
+/// (`GlobalStrings.lua:3`, `:3028-3052`), and a `ToggleCharacter` that records its panel.
 fn bake_pet_strings(s: &UiScript) {
     s.run(
         r#"
@@ -549,12 +515,8 @@ fn bake_pet_strings(s: &UiScript) {
 
 /// A pet that exists, so `UnitExists("pet")` passes the dropdown's own gate.
 fn a_pet(s: &mut UiScript, name: &str) {
-    // A player first: `PetFrame` is a CHILD of `PlayerFrame` (our UnitFrames.xml:1792 and the
-    // reference's PetFrame.xml:4 both say `parent="PlayerFrame"`), and `UnitFrame_Update` hides a
-    // frame whose unit does not exist — so a pet with no player leaves the pet frame inside a
-    // hidden parent and the right-click never lands. A pet without a player is not a state the game
-    // can be in; the fixture was only ever getting away with it because the loader used to ignore
-    // the `parent=` attribute.
+    // A player first: `PetFrame` is a child of `PlayerFrame` (`PetFrame.xml:4`), and a unit
+    // frame whose unit does not exist is hidden, taking the pet frame with it.
     s.set_unit(
         "player",
         Some(UnitState {
@@ -589,21 +551,10 @@ fn a_pet(s: &mut UiScript, name: &str) {
     );
 }
 
-/// Open the pet menu through the real hit path, and return nothing — the assertions read
-/// `DropDownList1` afterwards.
-///
-/// **The click lands in the frame's own HIT RECT, not at its centre** — and on the reference's
-/// file those are two different places. Stock `PetFrame.xml:15-17` ships
-/// `<HitRectInsets><AbsInset left="7" right="66" top="6" bottom="7"/></HitRectInsets>` on a
-/// 128×53 button (`PetFrame.xml:4-7`), so the clickable
-/// band is the PORTRAIT half (x = left+7 … left+62) and the geometric centre (x = left+64) is two
-/// pixels outside it. Worse, the centre sits *inside* `PetFrameHealthBar` (`PetFrame.xml:125-135`:
-/// TOPLEFT 47,-22, 70×8), which is mouse-enabled by the `TextStatusBar` template's OnEnter
-/// (ref `TextStatusBar.xml:11-27`) and sits at `PetFrame.level + 1` — so under the hit law it
-/// takes the point and the click is consumed there. Unlike stock `PlayerFrame`, stock `PetFrame`
-/// ships **no** `<OnMouseUp>` forwarder on its bars, so that click is genuinely eaten in the real
-/// client too; a right-click on a pet's health bar opens nothing. Our deleted transcription had no
-/// hit-rect insets on the pet frame, which is the only reason `GetCenter()` ever worked here.
+/// Right-clicks the centre of the pet frame's hit rect, the portrait half (`PetFrame.xml:15-17`).
+/// The frame's own centre lies on `PetFrameHealthBar` (`PetFrame.xml:125-135`), mouse-enabled by
+/// its `TextStatusBar` OnEnter and forwarding no `OnMouseUp`, so a click there opens nothing, in
+/// the reference too.
 fn right_click_the_pet_frame(s: &mut UiScript) {
     s.resolve();
     let (cx, cy) = s
@@ -618,12 +569,8 @@ fn right_click_the_pet_frame(s: &mut UiScript) {
     s.resolve();
 }
 
-/// **A hunter's pet shows Abandon and hides Dismiss; a warlock's demon does the reverse** — the
-/// one predicate that forks the whole menu (`UnitPopup.lua:402-417`).
-///
-/// This is the assertion B219 turns on. Getting the sense backwards is silent both ways: a hunter
-/// offered only Dismiss still cannot get past a taming step, and a demon offered Abandon is
-/// offered a row the reference never shows.
+/// A hunter's pet shows Abandon and hides Dismiss, a warlock's demon the reverse:
+/// `PetCanBeAbandoned` forks the menu (`UnitPopup.lua:402-417`).
 #[test]
 fn the_pet_menu_forks_between_abandon_and_dismiss() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -658,7 +605,7 @@ fn the_pet_menu_forks_between_abandon_and_dismiss() {
         );
     }
 
-    // The same pet after one rename — the server clears only the rename bit, so only that row goes.
+    // The same pet after one rename: the server clears only the rename bit, so only that row goes.
     s.run("CloseDropDownMenus()").unwrap();
     s.set_pet_menu(true, false);
     right_click_the_pet_frame(&mut s);
@@ -691,9 +638,7 @@ fn the_pet_menu_forks_between_abandon_and_dismiss() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **Dismiss goes straight out; Abandon goes behind the confirm** — the reference's own asymmetry
-/// (`UnitPopup_OnClick` l.590-593), and the one that matters: sending a summon away costs nothing,
-/// giving up a tamed pet is a server-side delete.
+/// Dismiss sends at once; Abandon waits behind the `ABANDON_PET` confirm (`UnitPopup.lua:590-593`).
 #[test]
 fn dismiss_sends_immediately_and_abandon_waits_for_the_confirm() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -732,12 +677,10 @@ fn dismiss_sends_immediately_and_abandon_waits_for_the_confirm() {
         "and sends NOTHING until it is accepted"
     );
 
-    // Cancel really cancels.
     click_frame(&mut s, "StaticPopup1Button2");
     assert_eq!(s.take_pet_gives_up(), (0, 0));
     assert!(!s.eval::<bool>("return StaticPopup1:IsVisible()").unwrap());
 
-    // Accept sends.
     right_click_the_pet_frame(&mut s);
     click_row(&mut s, 4);
     click_frame(&mut s, "StaticPopup1Button1");
@@ -745,12 +688,9 @@ fn dismiss_sends_immediately_and_abandon_waits_for_the_confirm() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **The rename is a chain of two dialogs**, and the second reads the typed name back before
-/// anything is sent (`RENAME_PET` → `PETRENAMECONFIRM`, ref StaticPopup.lua l.1069-1102 + l.365).
-///
-/// The chain is also what proves the popup engine's two instances are both live, and why the
-/// dialogs must read their OWN edit box rather than `StaticPopup1EditBox` by name: the confirm
-/// opens while the name dialog is still up, so the second one lands in instance 2.
+/// The rename chains two dialogs, `RENAME_PET` then `PETRENAMECONFIRM` (`StaticPopup.lua:1069`,
+/// `:365`), and only the confirm sends. The confirm opens while the name dialog is still up, so
+/// it lands in the second popup instance.
 #[test]
 fn renaming_a_pet_reads_the_name_back_before_sending_it() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -801,8 +741,7 @@ fn renaming_a_pet_reads_the_name_back_before_sending_it() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The paperdoll row reaches the pet paper doll panel — the fifth build the menu
-/// was blocked on, and the only row here that opens a window rather than a wire verb.
+/// The Pet Details row calls `ToggleCharacter("PetPaperDollFrame")` (`UnitPopup.lua:594-595`).
 #[test]
 fn the_pet_details_row_opens_the_pet_paper_doll() {
     let _data = benilla_formats::wow_data_or_skip!();

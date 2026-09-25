@@ -1,24 +1,15 @@
-//! Shipped end-to-end tests for the chat window + input (the chat arc): the real
-//! `Interface\FrameXML\ChatFrame.xml` loaded through the engine loader, driven exactly as the app
-//! drives it — `add_chat_message` → `resolve`/`extract` (lines render in the pinned colors), the
-//! wheel → the Lua `OnMouseWheel` handler → `ScrollUp` (which freezes the fade), and the input
-//! EditBox's ENTER → `OnEnterPressed` → `SubmitChatInput` → `take_chat_input` (the app then parses
-//! it — see `crate::ui_chat`'s `parse_line` tests for the `/say`//`/yell`//`/w` mapping).
+//! End-to-end tests of the chat windows and the input box on the stock `ChatFrame.xml` and
+//! `FloatingChatFrame.xml`, driven as the app drives them.
 
 use benilla_ui::script::{ExtractedQuad, QuadContent, UiScript};
 
 use super::test_ui::load_ui as load_xml;
 
-/// The full ChatFrame stack (fonts first, so the FontString's `inherits="ChatFontNormal"` resolves).
+/// The chat stack, fonts first so `inherits="ChatFontNormal"` resolves.
 fn chat_frame() -> UiScript {
     let mut s = UiScript::new().unwrap();
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    // GameTooltip.xml + UIDropDownMenu.xml are real RUNTIME dependencies of the chat tabs since
-    // decision 1589: a left click closes any open menu (`CloseDropDownMenus`, the reference's own
-    // first move in `FCF_Tab_OnClick`) and a right click opens the window's options menu.
-    // `benilla.toc` already orders both ahead of ChatFrame.xml (l.60/64 vs l.399); the harness
-    // says so too, rather than a guard that would hide a real ordering fault. (The tooltip file is
-    // the dropdown kit's own dependency — its MenuBackdrop reads `TOOLTIP_DEFAULT_COLOR`.)
+    // `FCF_Tab_OnClick` uses the dropdown kit, whose backdrop reads GameTooltip.lua's colour.
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml");
@@ -26,14 +17,11 @@ fn chat_frame() -> UiScript {
     load_xml(&s, "Interface\\FrameXML\\UIMenu.xml"); // the kit the chat menus build from
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");
-    // The UIParent slice (RaiseFrameLevel, MouseIsOver, the fade and flash kits) ahead of the
-    // bar and the chat files; `FCF_OnUpdate` — the dock's hover, fade and drag driver — runs
-    // from UIParent's OnUpdate, as in the reference.
+    // UIParent's OnUpdate runs `FCF_OnUpdate`, the dock's driver, as in the reference.
     load_xml(&s, r"Interface\FrameXML\UIParent.xml");
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
     load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
-    // `FCF_ValidateChatFramePosition` (a tab-drag stop) reads `MainMenuBar:GetHeight()`; the bar's
-    // own load-time chain precedes it, as in the action-bar harness.
+    // `FCF_ValidateChatFramePosition` reads `MainMenuBar:GetHeight()`, so the bar loads first.
     load_xml(&s, "Interface\\FrameXML\\Cooldown.xml");
     load_xml(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
     load_xml(&s, "Interface\\FrameXML\\TextStatusBar.lua");
@@ -49,7 +37,6 @@ fn chat_frame() -> UiScript {
     s
 }
 
-/// The color+alpha of the first Text quad whose text equals `t`.
 fn text_color(quads: &[ExtractedQuad], t: &str) -> Option<[f32; 4]> {
     quads.iter().find_map(|q| match &q.content {
         QuadContent::Text {
@@ -69,8 +56,7 @@ fn close(a: f32, b: f32) -> bool {
 fn injected_lines_render_in_the_pinned_colors() {
     benilla_formats::wow_data_or_skip!();
     let mut s = chat_frame();
-    // The app's feed passes 0..1 floats from the pinned type→color table; the seam quantizes them.
-    // SAY white (FFFFFF), SYSTEM yellow (FFFF00 — the GM-feedback color), LOOT green (00AA00).
+    // The app's color table as 0..1 floats: SAY FFFFFF, SYSTEM FFFF00, LOOT 00AA00.
     s.add_chat_message("ChatFrame1", "[Tri] says: hi", 1.0, 1.0, 1.0);
     s.add_chat_message("ChatFrame1", "You give 500 copper.", 1.0, 1.0, 0.0);
     s.add_chat_message(
@@ -124,11 +110,8 @@ fn newest_line_sits_at_the_bottom() {
     assert!(y("newer") < y("older"), "newest renders at the bottom");
 }
 
-/// The whole fade round trip as it reaches a real chat window: a line ramps down, a scroll brings
-/// it back to full, the scrolled-up view then holds it there, and returning to the bottom lets it
-/// ramp again. The re-arm half: every scroll entry reaches
-/// `0x788b80` or the relayout's `0x788af0`; before it, a faded-out chat could not be recovered by
-/// any input the client offers (director-reported, 2026-08-29).
+/// A scroll re-arms a fading line to full and holds it there until the view is back at the
+/// bottom: every scroll entry reaches the re-arm at `0x788b80` or the relayout's `0x788af0`.
 #[test]
 fn wheel_scroll_re_arms_the_fade_then_freezes_it() {
     benilla_formats::wow_data_or_skip!();
@@ -143,8 +126,7 @@ fn wheel_scroll_re_arms_the_fade_then_freezes_it() {
     s.resolve();
     let a1 = text_color(&s.extract(), "L1").expect("L1 visible")[3];
     assert!(a1 < 1.0 && a1 > 0.0, "the line faded partway: {a1}");
-    // The scroll verb is what the reference's scroll buttons call; the 1.12 chat frame takes
-    // no wheel of its own (`enableMouse="false"`, no OnMouseWheel).
+    // The 1.12 chat frame takes no wheel (`enableMouse="false"`), so this is the buttons' verb.
     s.run("ChatFrame1:ScrollUp()").unwrap();
     s.resolve();
     let a2 = text_color(&s.extract(), "L1").expect("L1 still visible")[3];
@@ -169,8 +151,6 @@ fn input_editbox_enter_drains_the_typed_line() {
     assert!(s.has_keyboard_focus(), "focus gates the world's keys");
     s.char_input("/yell hi");
     assert!(s.key_input("ENTER"), "the box consumes ENTER");
-    // The reference's own path: `ChatEdit_OnEnterPressed` → `ChatEdit_SendText` →
-    // `ChatEdit_ParseText` → `SendChatMessage("hi", "YELL", …)`.
     let sends = s.take_chat_sends();
     assert_eq!(
         sends
@@ -197,10 +177,7 @@ fn input_escape_closes_without_submitting() {
     assert!(!s.has_keyboard_focus(), "escape closes the box");
 }
 
-/// The shipped chat box takes plain arrows and history recall — end-to-end over the real XML.
-/// Guards the exact in-game gap the director hit: the ref template's `ignoreArrows="true"` (which
-/// benilla deliberately drops — plain arrows edit; the divergence note in ChatFrame.xml) would
-/// leave LEFT/RIGHT consumed-but-dead here, and an unpushed history would leave Up/Down empty.
+/// The stock chat box edits, and Up/Down walk its history and back to the draft.
 #[test]
 fn chat_box_arrows_edit_and_history_recalls() {
     benilla_formats::wow_data_or_skip!();
@@ -208,9 +185,8 @@ fn chat_box_arrows_edit_and_history_recalls() {
     let mut s = chat_frame();
     assert!(s.focus_editbox("ChatFrameEditBox"));
     s.char_input("ab");
-    // The reference's ChatFrameEditBoxTemplate is `ignoreArrows="true"` — the engine's
-    // AltArrowKeyMode, which the app's key routing reads to hand a plain arrow to the bindings
-    // (the character turns while you type) rather than to the box. The box itself still edits.
+    // The stock template's `ignoreArrows="true"` is AltArrowKeyMode: the app hands a plain arrow
+    // to the bindings (the character turns while you type), and the box still edits.
     assert!(
         s.editbox_alt_arrow_mode(),
         "the stock template's ignoreArrows landed as AltArrowKeyMode on the focused box"
@@ -227,8 +203,6 @@ fn chat_box_arrows_edit_and_history_recalls() {
     s.run("ChatFrameEditBox:SetText('')").unwrap();
     s.char_input("/yell hi");
     assert!(s.key_input("ENTER"));
-    // `ChatEdit_SendText` → `ChatEdit_ParseText` → the YELL type's send, and the reference's
-    // `AddHistoryLine` on the way.
     let sends = s.take_chat_sends();
     assert_eq!(
         sends
@@ -240,10 +214,8 @@ fn chat_box_arrows_edit_and_history_recalls() {
     assert!(s.focus_editbox("ChatFrameEditBox"));
     s.char_input("dra");
     s.editbox_action(EditAction::HistoryPrev);
-    // `ChatEdit_AddHistory` filed `SLASH_YELL1 .. " " .. text` = "/y hi" (ChatFrame.lua
-    // l.1913-1937); the recall lands it in the box, and the box's own `OnTextChanged` live parse
-    // (`ChatEdit_ParseText(this, 0)`) turns it straight into the YELL type with "hi" — which is
-    // what the player sees: a "Yell:" header and the text.
+    // `ChatEdit_AddHistory` filed "/y hi" (`ChatFrame.lua:1916-1937`); the recall's `OnTextSet`
+    // parse (l.2077-2079) turns it back into YELL with "hi".
     assert!(
         s.eval::<bool>(
             "return ChatFrameEditBox.chatType == 'YELL' and ChatFrameEditBox:GetText() == 'hi'"
@@ -264,19 +236,15 @@ fn chat_box_arrows_edit_and_history_recalls() {
     );
 }
 
-/// Decision 0843 — the chat body as a dismiss surface, the director's stuck-spell gesture end to
-/// end through the shipped XML: a spell dragged out of the spellbook and RELEASED over the chat
-/// keeps carrying (a drag release is never a click — 0218's byte-verified trigger), the follow-up
-/// completed LEFT CLICK on the chat body dismisses it, and the same click leaves an ITEM payload
-/// untouched (a silent item dismissal would be a destroy — only the world-drop popup offers that).
+/// A drag released over the chat keeps carrying; the completed left click after it drops a spell,
+/// never an item, which it would destroy. Deviation: the reference drops a spell on a left click
+/// only over empty sky, which leaves no left-click way to drop one over ground.
 #[test]
 fn chat_click_dismisses_a_stuck_spell_but_not_an_item() {
     benilla_formats::wow_data_or_skip!();
     use benilla_ui::script::{
         ContainerSlot, ContainerState, SpellBookState, SpellSlotView, SpellTabView,
     };
-    // The reference's spellbook wants the action-bar chain beneath it (1952); the chat window
-    // loads after it, as in the manifest.
     let mut s = super::spellbook_tests::spellbook_ui(1024.0, 768.0);
     for f in [
         "Interface\\FrameXML\\UIMenu.xml", // the kit ChatMenu/EmoteMenu/VoiceMacroMenu build from
@@ -322,7 +290,7 @@ fn chat_click_dismisses_a_stuck_spell_but_not_an_item() {
         "OnDragStart picked the spell up"
     );
 
-    // Release the DRAG over the chat body: keeps carrying (OnClick never fires on a drag).
+    // Release the drag over the chat body: OnClick never fires on a drag, so it keeps carrying.
     let (cx, cy) = (200.0, 150.0); // inside ChatFrame1 (BOTTOMLEFT 32,85 + 430×120)
     s.mouse_move(cx, cy);
     s.mouse_button(cx, cy, "LeftButton", false);
@@ -331,7 +299,6 @@ fn chat_click_dismisses_a_stuck_spell_but_not_an_item() {
         "a drag release over the chat keeps carrying"
     );
 
-    // The completed click on the chat body dismisses the stuck spell.
     s.mouse_button(cx, cy, "LeftButton", true);
     s.mouse_button(cx, cy, "LeftButton", false);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
@@ -340,7 +307,7 @@ fn chat_click_dismisses_a_stuck_spell_but_not_an_item() {
         "a chat click dismisses a spell payload"
     );
 
-    // An ITEM payload survives the same click untouched.
+    // An item survives the same click.
     let mut slots = std::collections::HashMap::new();
     slots.insert(
         1,
@@ -385,17 +352,14 @@ fn chat_click_dismisses_a_stuck_spell_but_not_an_item() {
 
 // ── ChatTypeInfo: the addon-facing color table ────────────────────────────────────────────────
 
-/// `ChatTypeInfo` carries the shipped default chat colors twice: once in
-/// `Interface\FrameXML\ChatFrame.xml` for addons to read, and once in
-/// [`crate::ui_chat::default_color`] for our own feed to render. Both are the same reference byte
-/// table (the static registry at `.rdata 0x804710`) — so this is the gate
-/// that makes the duplication safe: every kind we model must agree to the byte, and the table's shape (`sticky`/`id`) must be the reference's.
+/// `ChatTypeInfo` and [`crate::ui_chat::default_color`] both carry the reference's registry
+/// (`.rdata 0x804710`): every kind agrees to the byte, and `id` is its registry slot.
 #[test]
 fn chat_type_info_matches_the_host_color_table() {
     benilla_formats::wow_data_or_skip!();
     use crate::ui_chat::{default_color, ChatEventKind as K};
 
-    /// Each modeled kind and its `ChatTypeInfo` key — the reference's own spellings.
+    /// Each modeled kind, its `ChatTypeInfo` key and its registry id.
     const PAIRS: &[(&str, K, i64)] = &[
         ("SAY", K::Say, 1),
         ("PARTY", K::Party, 2),
@@ -448,17 +412,11 @@ fn chat_type_info_matches_the_host_color_table() {
             (b * 255.0).round() as u8,
         ];
         assert_eq!(got, default_color(*kind), r#"ChatTypeInfo["{name}"] color"#);
-        // `id` is GetChatTypeIndex's 1-based registry slot, asserted EXACTLY rather than as a
-        // range: four of these ship the same FFDBB7 and a range check would let a transposition
-        // inside that family through with both colors still matching.
+        // Asserted exactly: four of these share FFDBB7, so only the id catches a transposition.
         assert_eq!(id, *want_id, r#"ChatTypeInfo["{name}"].id"#);
     }
 }
 
-/// The table's *shape*, transcribed rather than derived: the reference's 105 keys, its five sticky
-/// types (the set `ui_chat::edit`'s `SendType::sticky` already quotes), the two keys FrameXML
-/// declares that the engine's color registry does not contain, and the ten boot-seeded channel
-/// extras. An addon reads `.sticky` and `.id` as often as it reads the color.
 #[test]
 fn chat_type_info_has_the_references_shape() {
     benilla_formats::wow_data_or_skip!();
@@ -477,11 +435,9 @@ fn chat_type_info_has_the_references_shape() {
         .unwrap();
     assert_eq!(sticky, "BATTLEGROUND GUILD PARTY RAID SAY");
 
-    // REPLY and COMBAT_ERROR are declared by FrameXML and absent from the engine's 94-entry
-    // registry, so GetChatTypeIndex answers 0 for both — but their COLORS differ, which is the
-    // trap this asserts. Nothing ever writes COMBAT_ERROR. REPLY is written by hand inside the
-    // UPDATE_CHAT_COLOR handler, which mirrors WHISPER into it (ChatFrame.lua l.1357-1365), so
-    // its end state is WHISPER's FF80FF. Seeding both white reads as symmetric and is wrong.
+    // REPLY and COMBAT_ERROR are FrameXML's own, absent from the engine's 94-entry registry, so
+    // both have id 0, but their colors differ: the `UPDATE_CHAT_COLOR` arm copies WHISPER's
+    // FF80FF into REPLY (`ChatFrame.lua:1357-1365`), and nothing overwrites COMBAT_ERROR's white.
     for (name, want) in [
         ("REPLY", [255u8, 128, 255]),
         ("COMBAT_ERROR", [255, 255, 255]),
@@ -517,14 +473,8 @@ fn chat_type_info_has_the_references_shape() {
     }
 }
 
-/// **Every event name we fire is a key the reference's own `ChatTypeInfo` carries.**
-/// `ChatFrame_OnEvent` recovers the type with `strsub(event, 10)` and indexes
-/// `ChatTypeInfo[type]` with it — a name that misses that table is a name whose colour, id and
-/// sticky flag an addon cannot look up, so this is the check that our `CHAT_MSG_*` spellings are
-/// the reference's and not ours.
-///
-/// Swept over `ChatEventKind::ALL` rather than a second hand-written list, so a kind added without
-/// a matching table key fails here instead of shipping a name nothing can resolve.
+/// `ChatFrame_OnEvent` looks a line's type up as `ChatTypeInfo[strsub(event, 10)]`
+/// (`ChatFrame.lua:1370`), so every `CHAT_MSG_*` we fire must name one of its keys.
 #[test]
 fn fired_event_names_are_all_chat_type_info_keys() {
     benilla_formats::wow_data_or_skip!();
@@ -544,14 +494,8 @@ fn fired_event_names_are_all_chat_type_info_keys() {
 }
 
 // ── The seven chat windows (NUM_CHAT_WINDOWS) ────────────────────────────────────────────────
-//
-// benilla shipped two windows against a constant the reference sets to seven. Everything below is
-// a claim about the five that were missing, checked against the shipped `ChatFrame.xml` itself
-// rather than against the loader's idea of it.
 
-/// `NUM_CHAT_WINDOWS = 7` (ref ChatFrame.lua l.5) and every index it promises resolves to a real
-/// `ScrollingMessageFrame`. _LazyPig walks exactly this loop and indexes the result with no nil
-/// guard (`LazyPig.lua:1992`), so the constant without the frames is worse than neither.
+/// `NUM_CHAT_WINDOWS` is 7 (`ChatFrame.lua:5`), and addons index all seven windows unguarded.
 #[test]
 fn every_window_num_chat_windows_promises_is_a_real_frame() {
     benilla_formats::wow_data_or_skip!();
@@ -568,8 +512,7 @@ fn every_window_num_chat_windows_promises_is_a_real_frame() {
     }
 }
 
-/// The corpus walk itself, verbatim from `_LazyPig/LazyPig.lua:1992` down to the unguarded
-/// `getglobal(...):IsVisible()` that used to die at i=3.
+/// The `_LazyPig` window walk, verbatim from `LazyPig.lua:1992`.
 #[test]
 fn the_lazypig_window_walk_survives_all_seven_indices() {
     benilla_formats::wow_data_or_skip!();
@@ -587,16 +530,8 @@ fn the_lazypig_window_walk_survives_all_seven_indices() {
     assert_eq!(visible, 1, "only the selected dock window is visible");
 }
 
-/// ChatFrame3..7 ship hidden and with no `isDocked`, the reference's own chat-cache state
-/// (`DOCKED 0 / SHOWN 0`). This is not cosmetic: `Outfitter.lua:3099` reaches an UNGUARDED
-/// `getglobal('ChatFrame'..i..'Tab'):GetText()` for any window that is visible *or* docked, and we
-/// build no tabs past ChatFrame2Tab.
-///
-/// **ChatFrame1 and ChatFrame2 DO carry it**, and that is the half this test gained with the
-/// move/resize arc: the reference's own gates read `chatFrame.isDocked` — `isDocked and chatFrame
-/// ~= DEFAULT_CHAT_FRAME` is what stops the Combat Log being dragged out of the dock it is
-/// anchored into — so the flag has a consumer now rather than being an advertisement. Both have
-/// tabs (1575), so the Outfitter walk below is still safe.
+/// ChatFrame3..7 ship hidden and undocked, the reference's default chat cache (`DOCKED 0`,
+/// `SHOWN 0`); ChatFrame1 and 2 carry `isDocked`, which the stock dock code reads.
 #[test]
 fn the_undocked_windows_are_hidden_and_carry_no_is_docked() {
     benilla_formats::wow_data_or_skip!();
@@ -617,7 +552,7 @@ fn the_undocked_windows_are_hidden_and_carry_no_is_docked() {
             .unwrap();
         assert!(!docked, "ChatFrame{i} carries no isDocked");
     }
-    // And therefore the Outfitter walk never reaches a tab that does not exist.
+    // `Outfitter.lua:3099` reads the tab of every visible or docked window unguarded.
     let ok: bool = s
         .eval(
             "for i = 1, NUM_CHAT_WINDOWS do\n\
@@ -634,9 +569,6 @@ fn the_undocked_windows_are_hidden_and_carry_no_is_docked() {
     assert!(ok, "the Outfitter tab walk never touches a missing tab");
 }
 
-/// `GetChatWindowInfo`'s `shown` is not an independent opinion — it must agree with the frame the
-/// shipped XML actually built, or an addon that trusts the getter and an addon that trusts the
-/// frame will disagree about the same window. The drift guard between the Rust table and the XML.
 #[test]
 fn get_chat_window_info_shown_matches_the_shipped_frames() {
     benilla_formats::wow_data_or_skip!();
@@ -644,10 +576,7 @@ fn get_chat_window_info_shown_matches_the_shipped_frames() {
     for i in 1..=7 {
         let agrees: bool = s
             .eval(&format!(
-                // Both sides are normalised to a boolean before comparing: `IsShown` answers the
-                // NUMBER 1 or nil (1830), so comparing it straight against `shown ~= nil` compares
-                // a number with a boolean and is false for every window. This test is about the two
-                // AGREEING, not about either one's shape.
+                // `IsShown` answers 1 or nil, so both sides are compared as booleans.
                 "local _, _, _, _, _, _, shown = GetChatWindowInfo({i})\n\
                  return (shown ~= nil) == (ChatFrame{i}:IsShown() ~= nil)"
             ))
@@ -659,9 +588,6 @@ fn get_chat_window_info_shown_matches_the_shipped_frames() {
     }
 }
 
-/// A named debug sink is a real ring of its own: `ChatFrame3:AddMessage` (IgniteStatus does this
-/// seven times, TipBuddy once, Radar guarded, and AceDebug's `debugFrame` stores the frame) lands
-/// in ChatFrame3 and nowhere near the window the player is reading.
 #[test]
 fn a_line_added_to_chat_frame3_lands_in_chat_frame3_only() {
     benilla_formats::wow_data_or_skip!();
@@ -677,7 +603,6 @@ fn a_line_added_to_chat_frame3_lands_in_chat_frame3_only() {
         s.eval::<i64>("return ChatFrame1:GetNumMessages()").unwrap(),
         1
     );
-    // Hidden, so nothing of it reaches the screen.
     s.resolve();
     assert!(
         text_color(&s.extract(), "Radar: debug").is_none(),
@@ -685,17 +610,8 @@ fn a_line_added_to_chat_frame3_lands_in_chat_frame3_only() {
     );
 }
 
-/// `FCF_SelectDockFrame(frame)` — the corpus idiom (CustomNameplates.lua:69, Roid-Macros
-/// Utility.lua:40) is "un-hide the default chat frame before printing into it". It takes a FRAME,
-/// where `BenillaFCF_SelectDock` takes a dock id.
-///
-/// **It used to RAISE on an undocked window and no longer does** (1714). The raise was right for a
-/// client whose dock was the literal `for i = 1, 2`: "select ChatFrame5" had no meaning, and
-/// answering with silence would have left the caller's next `AddMessage` in a still-hidden window.
-/// With a real `DOCKED_CHAT_FRAMES` the reference's own answer applies — the assignment, then
-/// `FCF_DockUpdate` hiding every docked window (none of them is the selection) and leaving the
-/// undocked one exactly as it was. Not a nice answer, but the client's; and neither corpus caller
-/// reaches it, since both pass `DEFAULT_CHAT_FRAME`.
+/// `FCF_SelectDockFrame` takes a frame; for an undocked one the reference assigns the selection and
+/// `FCF_DockUpdate` hides every docked window, leaving the undocked one as it was.
 #[test]
 fn fcf_select_dock_frame_selects_by_frame_and_leaves_an_undocked_one_alone() {
     benilla_formats::wow_data_or_skip!();
@@ -714,9 +630,6 @@ fn fcf_select_dock_frame_selects_by_frame_and_leaves_an_undocked_one_alone() {
         "the corpus guard brings the default frame back"
     );
 
-    // An undocked window: no raise, and the reference's consequence — the dock's members all
-    // hide, because none of them is the selection, and ChatFrame5 is untouched (still hidden,
-    // since nothing showed it).
     let shown5_before: bool = s
         .eval("return ChatFrame5:IsShown() and true or false")
         .unwrap();
@@ -739,21 +652,14 @@ fn fcf_select_dock_frame_selects_by_frame_and_leaves_an_undocked_one_alone() {
     );
 }
 
-/// **The idle dock writes nothing**. `FCF_OnUpdate`'s apply block used to run
-/// unconditionally — ~24 `getglobal`s, two table builds and ~20 `SetAlpha` calls every frame of
-/// every session, writing the values that were already there, at 36 µs/frame (1395 measured it as
-/// the largest single handler in the client).
-///
-/// The probe is a sentinel the applier can never write: it only ever writes `{0, 0.5, 1.0} × reveal`,
-/// and `reveal` is pinned at 0 with the cursor away from the dock. If the gate is removed, the very
-/// next tick overwrites 0.42 with 0 and this goes red.
+/// With the cursor away, `FCF_OnUpdate` writes no tab alpha: a sentinel alpha survives ten ticks.
 #[test]
 fn an_idle_dock_stops_rewriting_the_tab_alpha_every_frame() {
     benilla_formats::wow_data_or_skip!();
     let mut s = chat_frame();
-    s.mouse_move(1500.0, 850.0); // far from the dock: no hover, so `reveal` stays 0
+    s.mouse_move(1500.0, 850.0); // far from the dock, so no hover
     for _ in 0..8 {
-        s.tick(0.016); // let the label measurements land and the applier reach its resting write
+        s.tick(0.016); // let the dock settle
         s.resolve();
     }
 
@@ -771,8 +677,7 @@ fn an_idle_dock_stops_rewriting_the_tab_alpha_every_frame() {
     );
 }
 
-/// The control for the guard above: the gate must not cost the reveal it is gating. A stationary
-/// cursor over the dock for longer than `CHAT_TAB_SHOW_DELAY` fades the selected tab to full.
+/// The control: a stationary hover past `CHAT_TAB_SHOW_DELAY` still fades the selected tab in.
 #[test]
 fn hovering_the_dock_still_reveals_the_tabs() {
     benilla_formats::wow_data_or_skip!();
@@ -805,15 +710,8 @@ fn hovering_the_dock_still_reveals_the_tabs() {
     );
 }
 
-/// **A view at the bottom writes nothing** — `ChatFrame_OnUpdate`'s at-bottom branch used to call
-/// `flash:Hide()` and zero `flashTimer` every frame; the 1.12 reference gates both behind
-/// `flash:IsVisible()` (1396's residual item 3, now restored — our `flashTimer = 0` rides inside
-/// the reference's gate, so a return-to-bottom during a hidden blink phase keeps the residual
-/// phase, a divergence that costs nothing at rest).
-///
-/// The probe is a sentinel the gated branch can only zero: `flashTimer = 0.42` with the flash
-/// hidden survives ten ticks. The controls: scrolled up, the bottom-button blink still runs its
-/// 0.5s toggle; and scrolling back while the flash is LIT still hides it and zeroes the timer.
+/// At the bottom, `ChatFrame_OnUpdate` only hides a lit flash and returns
+/// (`ChatFrame.lua:1508-1513`), so a sentinel `flashTimer` survives; scrolled up, it blinks.
 #[test]
 fn a_chat_view_at_the_bottom_stops_rewriting_the_flash() {
     benilla_formats::wow_data_or_skip!();
@@ -841,8 +739,6 @@ fn a_chat_view_at_the_bottom_stops_rewriting_the_flash() {
             .unwrap(),
         "the flash stays hidden at rest"
     );
-    // The reference's ChatFrameTemplate takes no mouse and has no wheel script (1.12 scrolls its
-    // chat by the buttons), so the scroll is the frame's own verb.
     s.run("ChatFrame1:ScrollUp()").unwrap();
     s.tick(0.3); // 0.42 + 0.3 = 0.72 >= CHAT_BUTTON_FLASH_TIME -> toggle on
     s.resolve();
@@ -859,8 +755,7 @@ fn a_chat_view_at_the_bottom_stops_rewriting_the_flash() {
             .unwrap(),
         "returning to the bottom hides a lit flash"
     );
-    // …and leaves the residual phase where it was: the reference's at-bottom arm hides the flash
-    // and returns, it never zeroes the timer (ChatFrame.lua `ChatFrame_OnUpdate`).
+    // The residual phase stands: the at-bottom arm never zeroes the timer.
     let timer: f64 = s.eval("return ChatFrame1.flashTimer").unwrap();
     assert!(
         (timer - 0.22).abs() < 1e-6,
@@ -869,20 +764,9 @@ fn a_chat_view_at_the_bottom_stops_rewriting_the_flash() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **Selecting the Combat Log must not stop the dock.** The falsification for.
-///
-/// `FCF_OnUpdate` is the dock's whole driver — the hover reveal, both tabs' alphas, the label
-/// settle, the whisper blink — and it used to ride `ChatFrame1`'s own `OnUpdate`.
-/// `BenillaFCF_SelectDock(2)` hides ChatFrame1, and a hidden frame gets no `OnUpdate`
-/// ([`UiScript::tick`] runs only effectively-visible frames, which is the reference's rule), so the
-/// driver died at the exact moment the feature it drives was first used: the tabs froze mid-write,
-/// still showing General as the selected one. That is what the director saw and reported, and every
-/// test we had passed straight through it — including this file's two dock tests, because both only
-/// ever exercise window 1.
-///
-/// The trap this walks around: calling `FCF_OnUpdate()` by hand — which the first live probe did,
-/// and which every earlier test does — bypasses the visibility gate and reports healthy alphas on a
-/// dead driver. So this drives the clock and nothing else.
+/// Selecting the Combat Log hides ChatFrame1, and a hidden frame gets no OnUpdate, but
+/// `FCF_OnUpdate` runs from UIParent's (`UIParent.xml:19`), so the dock keeps its driver. Only the
+/// clock is driven: calling `FCF_OnUpdate()` by hand would skip that visibility gate.
 #[test]
 fn selecting_the_combat_log_keeps_the_dock_driver_running() {
     benilla_formats::wow_data_or_skip!();
@@ -928,8 +812,6 @@ fn selecting_the_combat_log_keeps_the_dock_driver_running() {
     );
 }
 
-/// The other half of the same freeze, and the one a screenshot cannot show: with the driver dead,
-/// `reveal` never decayed either, so the chat box and both tabs stayed lit after the cursor left.
 #[test]
 fn the_dock_still_fades_out_with_the_combat_log_selected() {
     benilla_formats::wow_data_or_skip!();
@@ -970,10 +852,6 @@ fn the_dock_still_fades_out_with_the_combat_log_selected() {
     );
 }
 
-/// The Combat Log window has the scroll column too — the third part of window 2 that was simply
-/// never authored (after the tab, 1575, and the border art, 1579). It is a behavioural check, not
-/// a name check: scroll up and the bottom button's flash must start blinking on window 2's own
-/// button, which only happens if window 2 both HAS the button and runs `ChatFrame_OnUpdate`.
 #[test]
 fn the_combat_log_window_runs_its_own_bottom_button_blink() {
     benilla_formats::wow_data_or_skip!();
@@ -1001,12 +879,6 @@ fn the_combat_log_window_runs_its_own_bottom_button_blink() {
     );
 }
 
-/// **The chat menu runs on the REFERENCE's UIMenu kit** — `Interface\FrameXML\UIMenu.xml` and its
-/// own `UIMenu.lua`, not a transcription of them.
-///
-/// Ours kept the reference's ten names in `ChatFrame.xml`, which loads at manifest 939 against the
-/// chain's 194, so our copies overwrote the chain's from the day that entry landed — the reverse of
-/// 1855's direction, and nothing drove this menu in a test, so nothing said so.
 #[test]
 fn the_chat_menu_builds_its_rows_on_the_references_kit() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -1039,8 +911,6 @@ fn the_chat_menu_builds_its_rows_on_the_references_kit() {
     s.fire_event("PLAYER_ENTERING_WORLD", vec![]);
     let _ = s.errors();
 
-    // `ChatMenu_OnLoad` calls `UIMenu_Initialize()` bare, relying on `this` — the reference's own
-    // idiom — then `UIMenu_AddButton` per row. If the kit were missing, the rows would not exist.
     s.run("ChatMenu:Show()").unwrap();
     assert!(s.errors().is_empty(), "opening it raises: {:?}", s.errors());
     assert!(
@@ -1051,12 +921,10 @@ fn the_chat_menu_builds_its_rows_on_the_references_kit() {
         s.eval::<String>("return ChatMenuButton1:GetText()")
             .unwrap(),
         "Say",
-        // The reference labels a row with `button:SetText(text)` — the Button's own text, not a
-        // named FontString, so there is no `…Button1Text` to read.
+        // A row's label is the Button's own text (`button:SetText`), with no `…Button1Text`.
         "row 1 is the Say row, built by the chain's kit"
     );
 
-    // A row click runs the owner's func and closes the menu — `UIMenuButton_OnClick`'s contract.
     s.run("ChatMenuButton1:Click()").unwrap();
     assert!(
         s.errors().is_empty(),
@@ -1068,8 +936,7 @@ fn the_chat_menu_builds_its_rows_on_the_references_kit() {
             .unwrap(),
         "the reference's row click hides the menu"
     );
-    // `ChatMenu_Say` → `ChatMenu_SetChatType(chatFrame, "SAY")`: the box opens and its type is
-    // set directly — no slash is typed into it (ChatFrame.lua l.2245-2255).
+    // `ChatMenu_Say` sets the box's type directly, typing no slash (`ChatFrame.lua:2245-2255`).
     assert!(
         s.eval::<bool>(
             "return ChatFrameEditBox:IsVisible() and ChatFrameEditBox.chatType == 'SAY'"
@@ -1079,11 +946,8 @@ fn the_chat_menu_builds_its_rows_on_the_references_kit() {
     );
 }
 
-/// **A glass window's plate fades in on every hover, not only the first.** A restored window
-/// (the cache's `COLOR 0 0 0 0`, the stock row) keeps its nine plate textures at alpha 0 and
-/// relies on `FCF_OnUpdate`'s hover arm to lift them to `DEFAULT_CHATFRAME_ALPHA` and drop them
-/// back (FloatingChatFrame.lua l.873-877, l.913-916). The director's report (2026-09-05): hovering
-/// the chat window shows the tabs and the buttons but no plate.
+/// A glass window (chat cache `COLOR 0 0 0 0`) rests its plate at alpha 0, and `FCF_OnUpdate`
+/// fades it to `DEFAULT_CHATFRAME_ALPHA` and back on every hover (`FloatingChatFrame.lua:873-916`).
 #[test]
 fn a_glass_windows_plate_fades_in_on_every_hover() {
     benilla_formats::wow_data_or_skip!();
@@ -1129,7 +993,6 @@ fn a_glass_windows_plate_fades_in_on_every_hover() {
     }
 }
 
-/// The same law under the WHOLE shipped manifest, driven the way the app drives it.
 #[test]
 fn a_glass_windows_plate_fades_in_on_every_hover_under_the_full_manifest() {
     benilla_formats::wow_data_or_skip!();
@@ -1162,8 +1025,7 @@ fn a_glass_windows_plate_fades_in_on_every_hover_under_the_full_manifest() {
             s.resolve();
         }
         assert!(s.errors().is_empty(), "{:?}", s.errors());
-        // The plate as the renderer receives it: one Background quad over ChatFrame1's rect at
-        // the faded alpha, black.
+        // The plate as the renderer gets it: a black Background quad over ChatFrame1, faded.
         let plates: Vec<(Option<benilla_ui::layout::Rect>, f32, Option<[f32; 4]>)> = s
             .extract()
             .iter()
@@ -1216,19 +1078,9 @@ fn a_glass_windows_plate_fades_in_on_every_hover_under_the_full_manifest() {
     }
 }
 
-/// **The plate comes back after a quick exit and re-entry** (the director's
-/// report: an existing window shows tabs but no plate on hover; a new one shows the plate; the
-/// tab menu's opacity slider, used once, makes the hover work again).
-///
-/// The stock `FCF_OnUpdate` traps itself: leave the window (the tabs' fade-out is queued with
-/// `FCF_ChatTabFadeFinished` as its finished callback), re-enter inside `CHAT_FRAME_FADE_TIME`,
-/// and the callback fires `chatFrame.oldAlpha = nil` under the live hover — after which the
-/// plate arm (`oldAlpha < DEFAULT_CHATFRAME_ALPHA`) never passes and no leave clears `hover`, so
-/// the hover-start re-read never runs either. Two VMs prove the guard is what makes the
-/// difference: the bare chat stack (the reference's Lua alone) traps, the shipped manifest (the
-/// guard installed by `bootstrap_positions`) does not. The control keeps this from passing
-/// vacuously — if the stock Lua or the engine ever stop trapping, it says so, and the guard is
-/// then a repair of nothing.
+/// Leaving and re-entering within `CHAT_FRAME_FADE_TIME` traps the stock Lua (the tab fade's
+/// finished callback nils `oldAlpha` under a live hover): the bare chat stack must trap, and the
+/// shipped manifest, with `install_chat_plate_guard`, must not.
 #[test]
 fn a_quick_exit_and_reentry_keeps_the_plates_hover_fade() {
     benilla_formats::wow_data_or_skip!();
@@ -1246,14 +1098,13 @@ fn a_quick_exit_and_reentry_keeps_the_plates_hover_fade() {
             s.tick(0.016);
             s.resolve();
         }
-        // A stationary hover past CHAT_TAB_SHOW_DELAY and the ramp: the plate is up.
         s.mouse_move(x, y);
         for _ in 0..45 {
             s.tick(0.016);
             s.resolve();
         }
         let first = bg(s);
-        // Out for ~50 ms — inside the 0.15 s fade-out — and back, then stationary.
+        // Out for ~50 ms, inside the 0.15 s fade-out, and back, then stationary.
         s.mouse_move(1500.0, 850.0);
         for _ in 0..3 {
             s.tick(0.016);
@@ -1317,24 +1168,9 @@ fn a_quick_exit_and_reentry_keeps_the_plates_hover_fade() {
     );
 }
 
-/// **`/afk` and `/dnd`, through the reference's own parser and out the far side as a SEND.**
-///
-/// The director's report: typing either printed `Unknown chat type "AFK".` and nothing happened —
-/// no away flag, so no `<AFK>` over the head and no `<AFK>` on their chat lines, because both of
-/// those surfaces were already built and were waiting on a flag that never got set.
-///
-/// The break was a seam, which is why this test spans it rather than testing either side. benilla's
-/// own slash grammar has always had a working `/afk` (`ui_chat::input::parse`'s `S::ChatAfk`), but
-/// migrating the chat window (1948) put the stock `ChatFrame.lua` on the chain and **its** parser
-/// claims a slash line first — so the live path became
-/// `ChatEdit_ParseText` → `SlashCmdList["CHAT_AFK"](msg)` → `SendChatMessage(msg, "AFK")` →
-/// `SendType::from_token`, which answered `None` because a doc comment there asserted AFK/DND
-/// "set a flag rather than sending a line". They do not: they are `CMSG_MESSAGECHAT` `0x14`/`0x15`
-/// and the SERVER toggles the bit.
-///
-/// So the assertion runs the two halves in series: the stock file really does emit the token, and
-/// the token really does resolve to a wire kind. Testing either alone passes while the seam is
-/// broken — which is exactly how this shipped.
+/// The stock `/afk` and `/dnd` call `SendChatMessage(msg, "AFK")` or `"DND"`
+/// (`ChatFrame.lua:1005-1011`), and the token must resolve to `CMSG_MESSAGECHAT` type `0x14` or
+/// `0x15`: the server toggles the flag. Either half alone passes with the seam between them broken.
 #[test]
 fn the_stock_afk_and_dnd_commands_reach_the_wire() {
     benilla_formats::wow_data_or_skip!();
@@ -1351,13 +1187,13 @@ fn the_stock_afk_and_dnd_commands_reach_the_wire() {
         (sends[0].text.clone(), sends[0].chat_type.clone())
     };
 
-    // Half one — the stock `SlashCmdList` body, verbatim: `SendChatMessage(msg, "AFK")`.
+    // Half one: the stock `SlashCmdList` body sends the token.
     let (text, token) = typed("/afk Away from Keyboard");
     assert_eq!(
         (text.as_str(), token.as_str()),
         ("Away from Keyboard", "AFK")
     );
-    // Half two — the seam that was cut. `None` here is the reported bug.
+    // Half two: the token resolves to a wire kind.
     assert_eq!(
         SendType::from_token(&token).map(SendType::wire),
         Some(ChatKind::Afk),
@@ -1371,9 +1207,8 @@ fn the_stock_afk_and_dnd_commands_reach_the_wire() {
         Some(ChatKind::Dnd)
     );
 
-    // **A BARE `/afk` still sends** — with an empty body, which is the toggle. The stock body
-    // passes `msg` straight through, and vmangos's `CHAT_MSG_AFK` arm reads an empty message as
-    // "toggle" and a non-empty one as "set, and store this as the auto-reply".
+    // A bare `/afk` sends an empty body, which vmangos reads as a toggle; a non-empty one sets
+    // the flag and the auto-reply (`ChatHandler.cpp:611-630`).
     let (text, token) = typed("/afk");
     assert_eq!((text.as_str(), token.as_str()), ("", "AFK"));
     assert_eq!(
@@ -1382,8 +1217,7 @@ fn the_stock_afk_and_dnd_commands_reach_the_wire() {
         "the bare toggle is a send too, not a no-op"
     );
 
-    // The control: a token the reference has no send for still answers None, so the arms above
-    // are two specific additions and not a blanket "anything goes" that would let a typo through.
+    // The control: a token with no send still answers None.
     assert!(SendType::from_token("NOT_A_CHAT_TYPE").is_none());
     assert!(
         SendType::from_token("TEXT_EMOTE").is_none(),

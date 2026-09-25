@@ -1,20 +1,15 @@
-//! The stock `BattlefieldFrame.xml` and `Minimap.xml`'s queue icon, driven
-//! engine-only over the queue family's pushes: the icon and its tooltip across
-//! `UPDATE_BATTLEFIELD_STATUS`, the confirm dialog, the list window across `BATTLEFIELDS_SHOW`
-//! / `_CLOSED`, and the join button's request.
+//! The stock battleground queue UI, `BattlefieldFrame.xml` and the minimap queue icon, driven by
+//! pushed queue and list state.
 
 use benilla_ui::script::{BattlefieldListView, BattlefieldMapInfo, BattlefieldQueueSlot, UiScript};
 
 use super::test_ui::load_ui as load_xml;
 
-/// The stock pair with everything they call at load and on the events below — the durability
-/// harness's shape (UIParent.xml for the panel kit and `UIPanelWindows`; StaticPopup for the
-/// confirm dialog; UIDropDownMenu for the icon's menu; UIPanelTemplates for the buttons).
+/// The stock pair plus what they call: the panel kit, the confirm dialog, the icon's menu.
 fn session() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    // The list verbs read the local player object at call time (1974) — seat one, as every
-    // in-world call has.
+    // The list verbs answer nothing without a local player, so seat one.
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -25,8 +20,7 @@ fn session() -> UiScript {
         }),
     );
     s.run("function PlaySound() end").unwrap();
-    // `FloatingChatFrame.lua`'s constant (l.9), which the queue icon's fade-in reads; the chat
-    // files are not part of this harness.
+    // `FloatingChatFrame.lua:9`'s value, read by the icon's fade-in (`BattlefieldFrame.lua:142`).
     s.run("CHAT_FRAME_FADE_TIME = 0.15").unwrap();
     for f in [
         "Interface\\FrameXML\\Fonts.xml",
@@ -77,8 +71,6 @@ fn visible(s: &UiScript, frame: &str) -> bool {
         .unwrap()
 }
 
-/// The minimap's queue icon: hidden with no queue, shown by a queued slot with the reference's
-/// three-line tooltip, the confirm dialog on a ready slot, hidden again when the queue clears.
 #[test]
 fn the_queue_icon_follows_the_slots_across_update_battlefield_status() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -98,7 +90,7 @@ fn the_queue_icon_follows_the_slots_across_update_battlefield_status() {
         tooltip.starts_with("You are in the queue for Arathi Basin\n"),
         "{tooltip}"
     );
-    // `SecondsToTime` leaves a trailing space after every unit — the reference's own text.
+    // `SecondsToTime` ends every unit with a space (`UIParent.lua:1023`).
     assert!(
         tooltip.contains("Average wait time: 1 Min  (Last 10 players)"),
         "{tooltip}"
@@ -110,7 +102,7 @@ fn the_queue_icon_follows_the_slots_across_update_battlefield_status() {
     );
     assert!(!visible(&s, "StaticPopup1"), "queued is not yet a question");
 
-    // Ready: the confirm dialog with the map name and the port countdown.
+    // Status 2, ready to enter: the confirm dialog and the port countdown.
     s.set_battlefield_queue(vec![slot(529, "Arathi Basin", 2, 3), empty(), empty()], 0);
     s.fire_event("UPDATE_BATTLEFIELD_STATUS", vec![]);
     assert!(
@@ -131,11 +123,10 @@ fn the_queue_icon_follows_the_slots_across_update_battlefield_status() {
         ),
         "{tooltip}"
     );
-    // The dialog's Enter Battle is AcceptBattlefieldPort(slot, 1).
+    // Enter Battle calls `AcceptBattlefieldPort(slot, 1)` (`StaticPopup.lua:101`).
     s.run("StaticPopup1Button1:Click()").unwrap();
     assert_eq!(s.take_battlefield_port_requests(), vec![(1, true)]);
 
-    // The queue clears: the icon goes.
     s.set_battlefield_queue(vec![empty(), empty(), empty()], 0);
     s.fire_event("UPDATE_BATTLEFIELD_STATUS", vec![]);
     assert!(
@@ -144,9 +135,6 @@ fn the_queue_icon_follows_the_slots_across_update_battlefield_status() {
     );
 }
 
-/// The list window: `BATTLEFIELDS_SHOW` opens it on the pushed list — the fake "First
-/// Available" row, one row per instance, the description — the join button asks for the
-/// selection, and `BATTLEFIELDS_CLOSED` hides it.
 #[test]
 fn the_list_window_opens_on_battlefields_show_and_joins_the_selection() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -209,7 +197,7 @@ fn the_list_window_opens_on_battlefields_show_and_joins_the_selection() {
         "…disabled while not leading a group"
     );
 
-    // Join the default selection (row 1 = first available), then a specific instance.
+    // Row 1, the default selection, is First Available and joins instance 0.
     s.run("BattlefieldFrameJoinButton:Click()").unwrap();
     assert_eq!(s.take_battlefield_join_requests(), vec![(0, false)]);
     assert!(!visible(&s, "BattlefieldFrame"), "joining hides the panel");
@@ -228,8 +216,6 @@ fn the_list_window_opens_on_battlefields_show_and_joins_the_selection() {
     );
 }
 
-/// The queue icon's status pass marks the listed rows: a queued instance reads "(In Queue)"
-/// beside its row, and the first-available row carries it when the queue names no instance.
 #[test]
 fn the_list_rows_carry_the_queue_status() {
     let _data = benilla_formats::wow_data_or_skip!();

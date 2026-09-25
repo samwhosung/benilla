@@ -1,7 +1,5 @@
-//! The group-loot roll popups (stock `Interface\FrameXML\GroupLootFrame.xml`): the
-//! four stacked `GroupLootFrame`s that answer `START_LOOT_ROLL`/`CANCEL_LOOT_ROLL` off a pushed
-//! [`LootRollsState`] snapshot (the `loot_roll.rs` seam's own harness idiom, mirrored here the way
-//! `loot_tests.rs` mirrors it for `set_loot`/`LootState`).
+//! The stock group-loot roll popups (`GroupLootFrame1..4` in `LootFrame.xml`), driven by a pushed
+//! [`LootRollsState`] and `START_LOOT_ROLL`/`CANCEL_LOOT_ROLL`.
 
 use benilla_ui::script::{
     DressUpIntent, ExtractedQuad, LootRollEntry, LootRollsState, QuadContent, ScriptValue, UiScript,
@@ -9,13 +7,7 @@ use benilla_ui::script::{
 
 use super::test_ui::{load_ui as load_xml, load_ui_no_warnings as load_xml_no_warnings};
 
-/// Like [`load_xml`], but also demands zero loader WARNINGS — the bar this file's own assignment
-/// set for `GroupLootFrame.xml` itself (a stale "unknown template" warning, e.g. the kind
-/// LootFrame.xml's now-obsolete `GameFontNormalSmall` caveat would have produced, is exactly what
-/// this catches). Not used for the prerequisite files below: Fonts/UiPanels/GameTooltip aren't this
-/// assignment's to police and may carry warnings of their own.
-/// The centre of the first texture quad whose path contains `needle` (a button's art), for clicking
-/// it — the `loot_tests.rs` `icon_center` idiom.
+/// The centre of the first texture quad whose path contains `needle`, for clicking it.
 fn quad_center(quads: &[ExtractedQuad], needle: &str) -> (f32, f32) {
     let r = quads
         .iter()
@@ -27,7 +19,7 @@ fn quad_center(quads: &[ExtractedQuad], needle: &str) -> (f32, f32) {
     ((r.left + r.right) * 0.5, (r.bottom + r.top) * 0.5)
 }
 
-/// The colour of the first text quad whose text equals `t` (the `loot_tests.rs` `text_color` idiom).
+/// The colour of the first text quad reading `t`.
 fn text_color(quads: &[ExtractedQuad], t: &str) -> Option<[f32; 4]> {
     quads.iter().find_map(|q| match &q.content {
         QuadContent::Text {
@@ -39,26 +31,12 @@ fn text_color(quads: &[ExtractedQuad], t: &str) -> Option<[f32; 4]> {
     })?
 }
 
-/// The four roll popups, off the player's chain.
-///
-/// They are declared in stock `LootFrame.xml` — `GroupLootFrameTemplate` plus `GroupLootFrame1..4`
-/// — and that file has been on the manifest since the loot window migrated. Our own
-/// `GroupLootFrame.xml` re-declared all five names on top of it and won by load order, so what
-/// these tests exercised was our copy shadowing the chain's.
-///
-/// `UIParent.xml` comes with it because the `START_LOOT_ROLL` router lives there now — the
-/// reference's own slot for it — where our file used to carry a dedicated hidden driver frame.
+/// The four popups, declared in stock `LootFrame.xml`. The caller loads `UIParent.xml`, whose
+/// `UIParent_OnEvent` routes `START_LOOT_ROLL` (`UIParent.lua:513-516`).
 fn load_group_loot(s: &UiScript) {
-    // `UIParent.xml` is loaded by `setup()` above — the stock main bar needs it first (1938).
-    // `LootFrame.xml` brings the whole loot window, and its `GroupLootDropDown` calls
-    // `UIDropDownMenu_Initialize` from its own OnLoad — the dropdown kit is on the chain too.
+    // `GroupLootDropDown`'s OnLoad runs its initializer at once, which reads `MAX_PARTY_MEMBERS`
+    // (`LootFrame.lua:217`), a constant of `PartyMemberFrame.lua`.
     load_xml(s, r"Interface\FrameXML\UIDropDownMenu.xml");
-    // `MAX_PARTY_MEMBERS` — `GroupLootDropDown_OnLoad` counts party rows, and the constant lives
-    // in stock `PartyMemberFrame.lua`. A real cross-file dependency the reference has too (its own
-    // toc loads PartyFrame well before LootFrame); the `.lua` alone is the minimal way to satisfy
-    // it here, because its whole top level is four constants and some function definitions — no
-    // frames, no side effects — where `PartyFrame.xml` would drag in the entire unit-frame cluster
-    // for one number.
     load_xml(s, r"Interface\FrameXML\PartyMemberFrame.lua");
     load_xml(s, r"Interface\FrameXML\LootFrame.xml");
 }
@@ -66,14 +44,12 @@ fn load_group_loot(s: &UiScript) {
 fn setup() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    // The loot window's own labels (`ITEMS`, `PREV`, `NEXT`) are GlobalStrings keys, and the
-    // loader warns on a key with no global behind it rather than failing — which is exactly the
-    // kind of warning `load_ui_no_warnings` is here to catch.
+    // The loot window's labels (`ITEMS`, `PREV`, `NEXT`) are GlobalStrings keys; a missing one is
+    // a loader warning, which `load_ui_no_warnings` fails.
     load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
-    load_xml(&s, "Interface\\FrameXML\\Fonts.xml"); // ITEM_QUALITY_COLORS + GameFontNormalSmall
-                                                    // The loot window's slots inherit it — the same dependency the inspect window needed (1832).
+    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
     load_xml(&s, r"Interface\FrameXML\ItemButtonTemplate.xml");
-    // `UIPanelCloseButton`, which the loot window's four close buttons inherit.
+    // `UIPanelCloseButton`, which each popup's pass button inherits (`LootFrame.xml:364`).
     load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
     load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");
@@ -82,7 +58,7 @@ fn setup() -> UiScript {
     load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
     load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
-    load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml"); // PASS/NEED/GREED + item hovers
+    load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml"); // the vote and item hovers
     load_xml(&s, "Interface\\FrameXML\\Cooldown.xml");
     load_xml(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
     load_xml(&s, "Interface\\FrameXML\\TextStatusBar.lua");
@@ -90,18 +66,15 @@ fn setup() -> UiScript {
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\MainMenuBar.xml");
     load_xml(&s, "Interface\\FrameXML\\ActionBarFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\BonusActionBarFrame.xml"); // BENILLA_FALLBACK_ICON (the in-flight icon fallback) —
-                                                                  // buff_tests.rs's own load-order precedent for this same global.
+    load_xml(&s, "Interface\\FrameXML\\BonusActionBarFrame.xml");
     s
 }
 
-/// The two resolved rolls' item links, exactly as `ui_loot_roll.rs` builds them (`item_link`:
-/// quality colour + the four-field `|Hitem:` payload) — what the icon button's ctrl/shift arms read.
+/// The resolved rolls' links as `ui_loot_roll` builds them: quality colour, four-field `|Hitem:`.
 const STAFF_LINK: &str = "|cffa335ee|Hitem:17182:0:0:0|h[Staff of Jordan]|h|r";
 const SWORD_LINK: &str = "|cffffffff|Hitem:25:0:0:0|h[Worn Shortsword]|h|r";
 
-/// A resolved Epic (BoP) roll and an in-flight one (item template not landed yet) — the same two
-/// shapes `loot_roll.rs`'s own test module fixtures, reused here against the real shipped XML.
+/// Roll 7 resolved Epic and bind-on-pickup, roll 8 resolved Common, roll 9 with no template yet.
 fn rolls() -> LootRollsState {
     LootRollsState {
         rolls: vec![
@@ -114,7 +87,6 @@ fn rolls() -> LootRollsState {
                 bind_on_pickup: true,
                 time_left_ms: 42_000,
                 item_id: 17182,
-                // The link lands with the name — one template answer fills both.
                 link: Some(STAFF_LINK.into()),
                 random_property_id: 0,
             },
@@ -130,8 +102,7 @@ fn rolls() -> LootRollsState {
                 link: Some(SWORD_LINK.into()),
                 random_property_id: 0,
             },
-            // The item-template query hasn't landed: name/texture/quality all nil (loot_roll.rs) —
-            // and no link either: it embeds the name, so it cannot exist before the name does.
+            // No template yet: name, texture, quality and link (which embeds the name) are nil.
             LootRollEntry {
                 roll_id: 9,
                 name: None,
@@ -148,8 +119,7 @@ fn rolls() -> LootRollsState {
     }
 }
 
-/// The XML loads with zero loader warnings/errors, and all four `GroupLootFrame1..4` exist
-/// and start hidden.
+/// The popups load with no loader warning of any kind and start hidden.
 #[test]
 fn shipped_group_loot_frame_loads_clean_and_starts_hidden() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -157,11 +127,7 @@ fn shipped_group_loot_frame_loads_clean_and_starts_hidden() {
     load_xml(&s, r"Interface\FrameXML\UIParent.xml");
     load_xml(&s, r"Interface\FrameXML\UIDropDownMenu.xml");
     load_xml(&s, r"Interface\FrameXML\PartyMemberFrame.lua");
-    // The four roll popups arrive INSIDE the chain's loot window, so there is no exact frame count
-    // to assert any more: this used to read `4 * 6 + 1` — six regions per instance plus our own
-    // `BenillaGroupLootFrameDriver` — and both halves of that number were ours.
-    // What survives is the assignment that mattered: the file loads with **no warning of any
-    // kind**, which is what `load_ui_no_warnings` is for.
+    // The popups come inside the whole loot window, so the frame count is only a floor.
     assert!(
         load_xml_no_warnings(&s, r"Interface\FrameXML\LootFrame.xml") > 4,
         "the loot window brought its frames"
@@ -177,10 +143,8 @@ fn shipped_group_loot_frame_loads_clean_and_starts_hidden() {
     }
 }
 
-/// `START_LOOT_ROLL` claims the first free frame and shows it; a second `START_LOOT_ROLL` claims
-/// the second frame, the first staying up. Also exercises the resolved-roll paint (name text +
-/// quality colour + the BoP gold decoration swap + the Timer's primed max) and the Need/Greed/Pass
-/// click wiring end-to-end through `RollOnLoot`.
+/// `START_LOOT_ROLL` claims the first free popup (`LootFrame.lua:246-258`) and paints the roll:
+/// name, quality colour, bind-on-pickup decoration and timer range; Need clicks through.
 #[test]
 fn start_loot_roll_claims_frames_in_order_and_paints_the_roll() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -188,7 +152,6 @@ fn start_loot_roll_claims_frames_in_order_and_paints_the_roll() {
     load_group_loot(&s);
     s.set_loot_rolls(rolls());
 
-    // Roll 7 (BoP, Epic) claims frame 1.
     s.fire_event(
         "START_LOOT_ROLL",
         vec![ScriptValue::Int(7), ScriptValue::Int(42_000)],
@@ -198,18 +161,17 @@ fn start_loot_roll_claims_frames_in_order_and_paints_the_roll() {
         .eval::<bool>("return GroupLootFrame1:IsVisible()")
         .unwrap());
     assert_eq!(s.eval::<i64>("return GroupLootFrame1.rollID").unwrap(), 7);
-    // The Timer's max was primed to the roll's countdown before Show() (GroupLootFrame_OpenNewFrame).
+    // The timer's range is set before `Show()` (`LootFrame.lua:253`).
     assert_eq!(
         s.eval::<(f64, f64)>("return GroupLootFrame1Timer:GetMinMaxValues()")
             .unwrap(),
         (0.0, 42_000.0)
     );
-    // BoP swaps in the gold decoration; frame 2 doesn't exist yet to compare against.
+    // Bind-on-pickup shows the gold decoration (`LootFrame.lua:263-266`).
     assert!(s
         .eval::<bool>("return GroupLootFrame1Decoration:IsShown()")
         .unwrap());
 
-    // Roll 8 (BoE, Common) claims frame 2 — frame 1 stays up, untouched.
     s.fire_event(
         "START_LOOT_ROLL",
         vec![ScriptValue::Int(8), ScriptValue::Int(60_000)],
@@ -222,12 +184,10 @@ fn start_loot_roll_claims_frames_in_order_and_paints_the_roll() {
         .eval::<bool>("return GroupLootFrame2:IsVisible()")
         .unwrap());
     assert_eq!(s.eval::<i64>("return GroupLootFrame2.rollID").unwrap(), 8);
-    // A BoE roll keeps the plain decoration hidden.
     assert!(!s
         .eval::<bool>("return GroupLootFrame2Decoration:IsShown()")
         .unwrap());
 
-    // The names painted, quality-coloured (frame 1 purple/Epic, frame 2 white/Common).
     s.resolve();
     let quads = s.extract();
     assert_eq!(
@@ -246,17 +206,8 @@ fn start_loot_roll_claims_frames_in_order_and_paints_the_roll() {
         "Common item text is white, got {white:?}"
     );
 
-    // Clicking Need on frame 1's roll button reaches RollOnLoot(7, 1) — the same click-through
-    // proof loot_tests.rs runs for LootSlot. Roll 7 is BIND-ON-PICKUP, so the seam's gate holds
-    // the vote back and asks instead: nothing on the wire until the popup is
-    // accepted.
-    //
-    // Taken BY NAME, not by painter order. This used to be
-    // `quad_center(&quads, "UI-GroupLoot-Dice-Up")` — the first dice quad — which silently assumed
-    // declaration order is draw order among the four roll frames. `toplevel="true"` (decision
-    // 1739) ends that: the frame a roll claims raises above its siblings on Show, so the first
-    // dice belonged to frame 2 and the click landed on the BoE roll, which has no confirm gate and
-    // went straight to the wire. The proxy was the fixture, never the assertion.
+    // Found by name: the popups are `toplevel` (`LootFrame.xml:243`), so draw order is not
+    // declaration order. Roll 7 is bind-on-pickup, so the vote waits for the confirm.
     let (nx, ny) = s
         .eval::<(f64, f64)>(
             "return (GroupLootFrame1RollButton:GetLeft() + GroupLootFrame1RollButton:GetRight()) \
@@ -278,12 +229,8 @@ fn start_loot_roll_claims_frames_in_order_and_paints_the_roll() {
     assert_eq!(s.take_loot_roll_confirms(), vec![(7, 1)], "Need on roll 7");
 }
 
-/// The bind-on-pickup confirm, end to end through the real shipped XML: the
-/// driver turns `CONFIRM_LOOT_ROLL` into the popup carrying `(rollID, rollType)`, and the popup's
-/// OK re-enters `ConfirmLootRoll` to land the vote the gate withheld.
-///
-/// 0591 shipped this wrong — a Need on a BoP roll went straight to the wire with no prompt, which
-/// binds an epic to you on a single click. The five-line path below is the whole correction.
+/// `CONFIRM_LOOT_ROLL` opens the dialog carrying `(rollID, rollType)` (`UIParent.lua:517-523`);
+/// its OK calls `ConfirmLootRoll` (`StaticPopup.lua:1375-1377`), which sends the withheld vote.
 #[test]
 fn the_bop_confirm_popup_lands_the_withheld_vote() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -291,15 +238,14 @@ fn the_bop_confirm_popup_lands_the_withheld_vote() {
     load_group_loot(&s);
     s.set_loot_rolls(rolls());
 
-    // The app fires this after draining the seam's confirm queue (`ui_loot_roll::drain_loot_rolls`).
+    // The app fires this after draining the confirm queue (`ui_loot_roll::drain_loot_rolls`).
     s.fire_event(
         "CONFIRM_LOOT_ROLL",
         vec![ScriptValue::Int(7), ScriptValue::Int(1)],
     );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 
-    // The popup is up and carries BOTH halves of the identity — data2 is the rollType, which the
-    // reference threads through precisely so OnAccept can replay the original click.
+    // `data2` is the rollType, so `OnAccept` can replay the click.
     assert!(
         s.eval::<bool>("return StaticPopup_FindVisible(\"CONFIRM_LOOT_ROLL\") ~= nil")
             .unwrap(),
@@ -312,8 +258,7 @@ fn the_bop_confirm_popup_lands_the_withheld_vote() {
         .unwrap();
     assert_eq!((data, data2), (7, 1), "rollID and rollType ride the dialog");
 
-    // The real 1.12 LOOT_NO_DROP/OKAY/CANCEL text, the same bar delete_item_tests holds its own
-    // popup to — these are quoted locals precisely so they render under test too.
+    // The 1.12 `LOOT_NO_DROP` and `OKAY` strings.
     let dialog = s
         .eval::<String>("return StaticPopup_FindVisible(\"CONFIRM_LOOT_ROLL\"):GetName()")
         .unwrap();
@@ -328,10 +273,8 @@ fn the_bop_confirm_popup_lands_the_withheld_vote() {
         "Okay"
     );
 
-    // Still nothing on the wire while the question is open.
     assert!(s.take_loot_roll_votes().is_empty());
 
-    // Accepting re-enters ConfirmLootRoll, which bypasses the bind gate and queues the real vote.
     s.eval::<bool>(
         "local d = StaticPopup_FindVisible(\"CONFIRM_LOOT_ROLL\")\n\
          StaticPopupDialogs[\"CONFIRM_LOOT_ROLL\"].OnAccept(d.data, d.data2)\nreturn true",
@@ -345,7 +288,7 @@ fn the_bop_confirm_popup_lands_the_withheld_vote() {
     );
 }
 
-/// `CANCEL_LOOT_ROLL` for a rollID hides that frame, and ONLY that one.
+/// `CANCEL_LOOT_ROLL` hides the popup holding that rollID and no other (`LootFrame.lua:279-285`).
 #[test]
 fn cancel_loot_roll_hides_only_that_frame() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -363,7 +306,6 @@ fn cancel_loot_roll_hides_only_that_frame() {
     );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 
-    // Cancel roll 7 (frame 1): only frame 1 hides, frame 2 (roll 8) is untouched.
     s.fire_event("CANCEL_LOOT_ROLL", vec![ScriptValue::Int(7)]);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
     assert!(!s
@@ -373,7 +315,7 @@ fn cancel_loot_roll_hides_only_that_frame() {
         .eval::<bool>("return GroupLootFrame2:IsVisible()")
         .unwrap());
 
-    // A cancel for a rollID nobody holds any more (or never held) is a harmless no-op.
+    // A rollID no popup holds is a no-op.
     s.fire_event("CANCEL_LOOT_ROLL", vec![ScriptValue::Int(7)]);
     s.fire_event("CANCEL_LOOT_ROLL", vec![ScriptValue::Int(999)]);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
@@ -381,7 +323,6 @@ fn cancel_loot_roll_hides_only_that_frame() {
         .eval::<bool>("return GroupLootFrame2:IsVisible()")
         .unwrap());
 
-    // Cancel roll 8 (frame 2): the last one standing hides too.
     s.fire_event("CANCEL_LOOT_ROLL", vec![ScriptValue::Int(8)]);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
     assert!(!s
@@ -389,9 +330,7 @@ fn cancel_loot_roll_hides_only_that_frame() {
         .unwrap());
 }
 
-/// A roll whose `GetLootRollItemInfo` answers all-nil (the item template still in flight) opens its
-/// frame without erroring, and paints the fallback icon / blank name / common-quality colour rather
-/// than crashing on the nils.
+/// A roll with its item template in flight opens without error, with no name and no icon.
 #[test]
 fn in_flight_roll_does_not_error_and_falls_back() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -412,26 +351,19 @@ fn in_flight_roll_does_not_error_and_falls_back() {
         .eval::<bool>("return GroupLootFrame1:IsVisible()")
         .unwrap());
     assert_eq!(s.eval::<i64>("return GroupLootFrame1.rollID").unwrap(), 9);
-    // Blank name (not an error, not the literal "nil").
-    // The chain's FontString has NO text until something paints it, where our retired copy
-    // defaulted to `""` — so this reads Option and expects None.
+    // `SetText(nil)` (`LootFrame.lua:274`) leaves no text, not "nil".
     assert_eq!(
         s.eval::<Option<String>>("return GroupLootFrame1Name:GetText()")
             .unwrap(),
         None,
         ""
     );
-    // No BoP decoration for an unresolved (default-false bindOnPickUp) roll.
     assert!(!s
         .eval::<bool>("return GroupLootFrame1Decoration:IsShown()")
         .unwrap());
 
-    // **No fallback icon — and that is the reference's behaviour, not a regression to fix here.**
-    // Our retired file painted `BENILLA_FALLBACK_ICON` (a question mark) whenever the texture was
-    // nil. The chain's `GroupLootFrame_OnShow` just calls `SetTexture(texture)` with whatever
-    // `GetLootRollItemInfo` gave it, so an unresolved item leaves the icon empty. The migration
-    // reverts our embellishment; whether that reads acceptably is a look call, recorded in 1838
-    // rather than re-authored back in.
+    // No placeholder icon: `GroupLootFrame_OnShow` passes the nil texture to `SetTexture`
+    // (`LootFrame.lua:273`), which leaves the icon empty.
     s.resolve();
     let has_fallback_icon = s.extract().iter().any(|q| {
         matches!(&q.content, QuadContent::Texture { path: Some(p), .. }
@@ -441,26 +373,12 @@ fn in_flight_roll_does_not_error_and_falls_back() {
         !has_fallback_icon,
         "the reference paints no placeholder for an unresolved item"
     );
-    // What DOES still hold: no error, and the dialog is up and usable.
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **The chain frame paints once and never again — which is exactly why the app holds the event.**
-///
-/// This is the Lua half of decision 2010's fix (bug B371). It drives the sequence the app used to
-/// produce — `START_LOOT_ROLL` first, against a model that does not carry the roll yet — and pins
-/// that *nothing repairs it*: the snapshot landing afterwards paints no name, no icon and no
-/// decoration, for the life of the dialog. Our retired frame did repair it, from a benilla-only
-/// `UPDATE_LOOT_ROLL(rollID)`; 1838 migrated to the stock frame, which has no such seam and never
-/// listened, and 1883 removed the event.
-///
-/// The reference is in the same position and answers it upstream, in C: `0x61b310` fires
-/// `START_LOOT_ROLL` from the item-template cache's *arrival callback* (`0x61b460`) when the record
-/// is not resident. So `feed_loot_rolls` holds the event until the template is in — pinned
-/// app-side in `ui_loot_roll.rs`'s `the_roll_waits_for_its_item_template`, which is the test that
-/// fails if the hold is lost. This one is its premise: it says what that hold is protecting
-/// against, and it must keep reading blank — a repaint appearing here would mean a seam the 1.12
-/// client does not have had grown back.
+/// The stock popup paints only in `OnShow`, so a `START_LOOT_ROLL` that beats its roll to the model
+/// stays blank. On a cache miss the reference fires it from the item-template arrival callback
+/// (`0x61b460`, armed by `0x61b310`), and `feed_loot_rolls` holds it the same way.
 #[test]
 fn nothing_repaints_a_frame_that_opened_before_its_snapshot() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -476,8 +394,6 @@ fn nothing_repaints_a_frame_that_opened_before_its_snapshot() {
     assert!(s
         .eval::<bool>("return GroupLootFrame1:IsVisible()")
         .unwrap());
-    // The chain's FontString has NO text until something paints it, where our retired copy
-    // defaulted to `""` — so this reads Option and expects None.
     assert_eq!(
         s.eval::<Option<String>>("return GroupLootFrame1Name:GetText()")
             .unwrap(),
@@ -485,19 +401,10 @@ fn nothing_repaints_a_frame_that_opened_before_its_snapshot() {
         "nothing to paint yet — this is the state B371 reported"
     );
 
-    // ...and then the snapshot carrying it lands.
     s.set_loot_rolls(rolls());
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 
-    // **The repaint does not happen — there is no path for it.** Our retired file split the paint
-    // out of `OnShow` precisely so an `UPDATE_LOOT_ROLL` could re-enter it; that is an event the
-    // 1.12 client does not have, and 1883 stopped firing it once the stock frame proved nothing
-    // listened. An adapter was tried before the hold and does not work either (1838): calling
-    // `GroupLootFrame_OnShow()` from inside a handler repaints nothing, and the `Hide()`/`Show()`
-    // round trip that does repaint only does so from a plain chunk.
-    //
-    // So the ordering is the app's to get right, and it now is: `feed_loot_rolls` holds
-    // `START_LOOT_ROLL` until `Items::template` answers, which is the reference's own gate.
+    // No repaint: nothing re-enters `OnShow`, as in 1.12.
     assert_eq!(
         s.eval::<Option<String>>("return GroupLootFrame1Name:GetText()")
             .unwrap(),
@@ -518,8 +425,6 @@ fn nothing_repaints_a_frame_that_opened_before_its_snapshot() {
         }),
         "and no icon arrives either — same missing repaint, same one cause"
     );
-    // A snapshot naming a roll this frame does not hold still leaves it alone and still does not
-    // error — the half of this test that survives the migration intact.
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
     assert_eq!(
         s.eval::<Option<String>>("return GroupLootFrame1Name:GetText()")
@@ -528,16 +433,8 @@ fn nothing_repaints_a_frame_that_opened_before_its_snapshot() {
     );
 }
 
-/// The bare-name payoff (the header's "THE FOUR INSTANCES KEEP THE REFERENCE'S BARE NAMES"): the
-/// ref's `UIPARENT_MANAGED_FRAME_POSITIONS["GroupLootFrame1"]` row actually engages, so the roll
-/// dialogs ride the bottom-bar stack instead of sitting on top of the action bars.
-///
-/// This is the test that FALSIFIES the naming choice: under a `Benilla`-prefixed name
-/// `UIParent_ManageFramePositions`'s literal `getglobal(name)` misses, the row no-ops through the
-/// ref's own `if ( frame )` guard, and every assertion below collapses to the static XML 60.
-/// Mirrors `cast_tests::managed_positions_track_the_bottom_bar_stack` (the same mechanism, the
-/// same bar-visibility stubs); the arithmetic is the ref table's own row — baseY 60, bottomEither
-/// 42, pet 42.
+/// `UIPARENT_MANAGED_FRAME_POSITIONS["GroupLootFrame1"]` (baseY 60, bottomEither 42, pet 42;
+/// `UIParent.lua:1577`) stacks the popups over the bottom bars; the pass finds the frame by name.
 #[test]
 fn managed_positions_engage_for_the_bare_frame_name() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -547,47 +444,32 @@ fn managed_positions_engage_for_the_bare_frame_name() {
     load_xml(&s, r"Interface\FrameXML\UIParent.xml");
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.xml");
-    // UiPanels.xml before GroupLootFrame.xml, mirroring the shipped manifest order
-    // (`ui_script::load_default_ui`): the roll file's CONFIRM_LOOT_ROLL entry indexes
-    // `StaticPopupDialogs`, and indexing a nil there aborts the WHOLE inline <Script> chunk —
-    // taking every BenillaGroupLootFrame_* function down with it, not just the popup.
     load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
     load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
     load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
     load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
-    // `TOOLTIP_DEFAULT_COLOR`, which the chain's dropdown backdrops read in their OnLoad — the
-    // dropdown kit rides in with the loot window now (1838), so this bespoke setup needs it too.
+    // `GameTooltip.xml` brings `TOOLTIP_DEFAULT_COLOR`, which the dropdown lists read in their
+    // OnLoad (`UIDropDownMenuTemplates.xml:186`).
     load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
     load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml");
     load_group_loot(&s);
 
     let bottom = |s: &UiScript| s.eval::<f64>("return GroupLootFrame1:GetBottom()").unwrap();
 
-    // The loader's post-load bootstrap with no bars in existence: the row's bare base, which
-    // already differs from nothing here (the XML anchor is also 60) — the real proof is below.
+    // No bars: the row's base, 60, which the XML anchor also gives.
     s.run("UIParent_ManageFramePositions()").unwrap();
     s.resolve();
     assert_eq!(bottom(&s), 60.0, "baseY");
 
-    // The always-on bottom multibars appear.
-    // The bar stubs carry a no-op SetPoint: `MultiBarBottomLeft` and `ShapeshiftBarFrame` are
-    // themselves rows in UIPARENT_MANAGED_FRAME_POSITIONS, so since those frames wear their
-    // reference names the pass positions them as well as reading their visibility.
-    // **The bottom-bar flags come from the SAVED GLOBALS, not from the frames.** The stock pass
-    // reads `SHOW_MULTI_ACTIONBAR_1`/`_2` (`UIParent.lua:1598-1606`) and never asks the bars
-    // whether they are shown — our retired copy asked, which is why this drive used to fake a
-    // frame with an `IsShown`. The fake also had no `IsObjectType`, which the pass calls on every
-    // row it seats (1988).
+    // The pass reads `SHOW_MULTI_ACTIONBAR_1`/`_2`, not the bars (`UIParent.lua:1599-1606`).
     s.run("SHOW_MULTI_ACTIONBAR_1 = 1 SHOW_MULTI_ACTIONBAR_2 = 1 UIParent_ManageFramePositions()")
         .unwrap();
     s.resolve();
     assert_eq!(bottom(&s), 102.0, "60 + bottomEither 42 — the row engaged");
 
-    // The stance bar shows on top of them.
-    // The pass's shapeshift-appearance arm (the reference's own, UIParent.lua:1705-1732 — in ours
-    // since 1938) touches the bar's three shelf textures by name, unguarded as the reference has
-    // it; a stand-in frame needs stand-in textures.
+    // The stance bar shows too. The pass touches its three shelf textures by name, unguarded
+    // (`UIParent.lua:1705-1732`), so the stand-in bar needs stand-in textures.
     s.run(
         "local t = { Show = function() end, Hide = function() end } \
          ShapeshiftBarLeft, ShapeshiftBarMiddle, ShapeshiftBarRight = t, t, t",
@@ -601,27 +483,20 @@ fn managed_positions_engage_for_the_bare_frame_name() {
     s.resolve();
     assert_eq!(bottom(&s), 144.0, "60 + 42 + pet 42");
 
-    // And it settles back when the stance bar hides.
     s.run("ShapeshiftBarFrame:Hide() UIParent_ManageFramePositions()")
         .unwrap();
     s.resolve();
     assert_eq!(bottom(&s), 102.0, "back to the multibar-only stack");
 }
 
-/// The roll popup's item icon (ref `$parentIconFrame` OnClick, LootFrame.xml l.353-361): CTRL
-/// previews the rolled item in the dressing room, SHIFT posts its link into an open
-/// chat edit box. Both read `GetLootRollItemLink(rollID)`, the binding this arc
-/// added — so this pins that getter against the real shipped XML too.
-///
-/// The control that must not change: the Need/Greed/Pass buttons still vote. The icon button is new
-/// click surface on a frame whose whole job is a three-button vote, and a stray vote from the icon
-/// (or a swallowed one from the dice) is exactly the regression worth catching.
+/// The roll icon's OnClick (`LootFrame.xml:353-361`): ctrl dresses up the item and shift posts
+/// its link to an open chat box, both through `GetLootRollItemLink`; the icon never votes.
 #[test]
 fn ctrl_and_shift_on_the_roll_icon_preview_and_post_its_link() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = setup();
     load_group_loot(&s);
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml"); // UIParent + UIParent.lua, the reference's own (1988)
+    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
     load_xml(&s, "Interface\\FrameXML\\DressUpFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\UIMenu.xml"); // the kit the chat menus build from
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
@@ -634,8 +509,7 @@ fn ctrl_and_shift_on_the_roll_icon_preview_and_post_its_link() {
     load_xml(&s, "Interface\\FrameXML\\FloatingChatFrame.xml");
     s.set_loot_rolls(rolls());
 
-    // Roll 8 (BoE Worn Shortsword) claims frame 1 — a non-BoP roll, so the dice below can land a
-    // real vote rather than the bind-on-pickup confirm.
+    // Roll 8 is not bind-on-pickup, so the dice below vote without a confirm.
     s.fire_event(
         "START_LOOT_ROLL",
         vec![ScriptValue::Int(8), ScriptValue::Int(60_000)],
@@ -645,8 +519,7 @@ fn ctrl_and_shift_on_the_roll_icon_preview_and_post_its_link() {
     let quads = s.extract();
     let (x, y) = quad_center(&quads, "INV_Sword_04");
 
-    // A plain click on the icon does nothing at all — the reference's handler has no third branch,
-    // and the vote is the dice's job, not the icon's.
+    // A plain click does nothing: the handler has only the ctrl and shift arms.
     s.mouse_button(x, y, "LeftButton", true);
     s.mouse_button(x, y, "LeftButton", false);
     assert!(
@@ -654,7 +527,6 @@ fn ctrl_and_shift_on_the_roll_icon_preview_and_post_its_link() {
         "an unmodified icon click votes nothing"
     );
 
-    // SHIFT with the chat edit box open → the link.
     assert!(s.focus_editbox("ChatFrameEditBox"));
     s.set_modifiers(true, false, false);
     s.mouse_button(x, y, "LeftButton", true);
@@ -667,7 +539,6 @@ fn ctrl_and_shift_on_the_roll_icon_preview_and_post_its_link() {
         "the rolled item's full escaped link landed in the chat box"
     );
 
-    // CTRL → the dressing room wearing it.
     s.set_modifiers(false, true, false);
     s.mouse_button(x, y, "LeftButton", true);
     s.mouse_button(x, y, "LeftButton", false);
@@ -682,7 +553,6 @@ fn ctrl_and_shift_on_the_roll_icon_preview_and_post_its_link() {
         "no modified icon click may vote"
     );
 
-    // The control: Need on the dice still reaches the wire (roll 8 is not bind-on-pickup).
     let (nx, ny) = quad_center(&quads, "UI-GroupLoot-Dice-Up");
     s.mouse_button(nx, ny, "LeftButton", true);
     s.mouse_button(nx, ny, "LeftButton", false);
@@ -694,28 +564,15 @@ fn ctrl_and_shift_on_the_roll_icon_preview_and_post_its_link() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The roll-frame template is published under **the reference's own name**, and an addon that
-/// inherits it finds the parts it reaches for.
-///
-/// It shipped as `BenillaGroupLootFrameTemplate`. The `Benilla` prefix exists so a name WE invented
-/// cannot collide with one an addon expects — and this template is the opposite of an invention: a
-/// line-by-line transcription of 1.12's own `GroupLootFrameTemplate`, which addons inherit *by that
-/// name*. `Bongos_RollBar/bar.lua:90` builds its four roll frames with
-/// `CreateFrame("Frame", "BRollBarFrame"..i, bar, "GroupLootFrameTemplate")`; that resolves on the
-/// real client and missed here for no reason but our prefix.
-///
-/// The child names are the actual contract, so they are what this asserts. `bar.lua` reaches for
-/// `<name>IconFrameIcon`, `<name>Name`, `<name>Corner`, `<name>Decoration` and `<name>Timer` — and
-/// `IconFrameIcon` is the one a flat template would get wrong, because it requires the icon texture
-/// to be nested inside the `IconFrame` **button**, not hung off the template root.
+/// Addons inherit `GroupLootFrameTemplate` by its 1.12 name and reach for its children; the icon
+/// is `IconFrameIcon` because it is nested in the `IconFrame` button (`LootFrame.xml:314`).
 #[test]
 fn the_roll_template_carries_the_reference_name_and_the_parts_addons_reach_for() {
     let _data = benilla_formats::wow_data_or_skip!();
     let s = setup();
     load_group_loot(&s);
 
-    // The reference's name resolves — and, since 1253, a miss would RAISE rather than hand back a
-    // bare frame, so this call failing is this test failing.
+    // `CreateFrame` raises on an unknown template, so this call is the check.
     s.run(r#"Probe = CreateFrame("Frame", "ProbeRoll", nil, "GroupLootFrameTemplate")"#)
         .expect("the reference-named template must resolve");
 
@@ -734,27 +591,17 @@ fn the_roll_template_carries_the_reference_name_and_the_parts_addons_reach_for()
         );
     }
 
-    // The timer is a StatusBar, not a plain frame: `bar.lua:33` calls SetMinMaxValues on it.
+    // The timer is a StatusBar (`LootFrame.lua:253` sets its range).
     s.run(r#"ProbeRollTimer:SetMinMaxValues(0, 60000)"#)
         .expect("the timer must answer StatusBar verbs");
 
-    // And the old private name is gone, so nothing can quietly depend on it again.
     assert!(s
         .eval::<bool>(r#"return getglobal("BenillaGroupLootFrameTemplate") == nil"#)
         .unwrap());
 }
 
-/// The **stock** `GroupLootFrame_OnShow` over an in-flight roll — the same defect 1805 fixed one
-/// window over, proven at the file that has not been migrated yet.
-///
-/// `GroupLootFrame1..4`, their template and `GroupLootFrame_OnShow` all live in the stock
-/// `LootFrame.xml`/`.lua`, which has been on the player's chain since 1800; our `GroupLootFrame.xml`
-/// loads after it and shadows the lot. So the stock body is dormant, not absent — and it does
-/// `local color = ITEM_QUALITY_COLORS[quality]` (`LootFrame.lua:275`) then `color.r` (`:276`) off
-/// `GetLootRollItemInfo`, with none of the `or ITEM_QUALITY_COLORS[1]` our copy carries.
-///
-/// This test loads the stock file WITHOUT ours, so the dormant body runs. It is the guard that stops
-/// the eventual GroupLootFrame migration from shipping the loot bug a second time.
+/// The stock `GroupLootFrame_OnShow` reads `ITEM_QUALITY_COLORS[quality].r` with no fallback
+/// (`LootFrame.lua:275-276`), so an unresolved or unknown roll must still answer a quality.
 #[test]
 fn the_stock_group_loot_frame_survives_an_in_flight_roll() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -766,8 +613,8 @@ fn the_stock_group_loot_frame_survives_an_in_flight_roll() {
     load_xml(&s, "Interface\\FrameXML\\LootFrame.xml");
     s.set_loot_rolls(rolls());
 
-    // Roll 9 is the in-flight one; roll 99 does not exist at all (a stale id from a torn-down
-    // frame). Both take the reference's miss tail, so both must paint rather than raise.
+    // Roll 9 is in flight and roll 99 unknown: both answer the reference's miss tail, quality 1
+    // (`0x4c31a3`).
     for roll in [9, 99] {
         s.run(&format!("GroupLootFrame_OpenNewFrame({roll}, 55000)"))
             .unwrap_or_else(|e| panic!("stock OpenNewFrame raised on roll {roll}: {e}"));
@@ -781,8 +628,7 @@ fn the_stock_group_loot_frame_survives_an_in_flight_roll() {
         .eval::<bool>("return GroupLootFrame1:IsVisible() and GroupLootFrame2:IsVisible()")
         .unwrap());
 
-    // …and the colour it painted is the miss tail's Common, read back off the FontString that
-    // `:276` set — not a nil, and not the Epic of the resolved roll sitting beside it.
+    // The name is painted Common, set at `LootFrame.lua:276`.
     let painted: (f64, f64, f64) = s
         .eval("local r, g, b = GroupLootFrame1Name:GetTextColor()\nreturn r, g, b")
         .unwrap();

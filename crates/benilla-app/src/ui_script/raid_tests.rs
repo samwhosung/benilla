@@ -1,24 +1,11 @@
-//! The social window's fourth tab — the raid pane (`RaidFrame.xml`): the tab, the
-//! two states the pane has, the 8x5 grid's seating and colouring, the drag's three landings, the
-//! row menu, the ready-check popup and the saved-instance panel.
-//!
-//! Its own module rather than more of `friends_tests` for `guild_tests`' reason: the pane is Lua
-//! over a **raid** roster, so every test here has to push one first, and a file about the friends
-//! list must not be in that business.
-//!
-//! What these guard that `ui_party`'s Rust tests structurally cannot: the pane is Lua over a
-//! snapshot, so a row seated in the wrong slot, a colour rule inverted, a drag wired to the wrong
-//! verb, or a menu row shown to the wrong person are all invisible there and green in the parse
-//! sweep. Each test below fails on exactly one of those.
+//! The social window's raid tab (`RaidFrame.xml` and `Blizzard_RaidUI`): the 8x5 grid's seating
+//! and colouring, the drag, the row menu, the ready check and the saved-instance panel.
 
 use benilla_ui::script::{
     PartyMemberInfo, PartyRequest, PartyState, RaidMemberInfo, SavedInstanceInfo, SelectionRequest,
     UiScript,
 };
 
-/// The window's slice of the manifest, in `load_default_ui` order. `UIParent.xml` is in it for
-/// two functions the pane really calls — `MouseIsOver` (the drag's hover sweep) and
-/// `SecondsToTime` (the lockout rows) — and for the `READY_CHECK` arm that opens the popup.
 fn setup() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
@@ -36,11 +23,9 @@ fn text_of(s: &UiScript, region: &str) -> String {
         .unwrap()
 }
 
-/// One raid row. `rank` is 2 leader / 1 assistant / 0 member; `subgroup` is the **1-based** number
-/// the pane shows, which the record stores 0-based — the binding is what adds the one
-/// (`RaidMemberInfo::subgroup`'s own doc, the reference's `0x4bb61a inc`). Converting here rather
-/// than at every call site is the point: a fixture that hands the record a 1-based number seats
-/// every row one group to the right, which looks exactly like a seating bug in the pane.
+/// One raid row; `rank` is 2 leader, 1 assistant, 0 member. `subgroup` is the 1-based number the
+/// pane shows: the record stores it 0-based and the binding adds one (`0x4bb61a`), so a 1-based
+/// record would seat every row one group to the right.
 fn row(
     name: &str,
     rank: u32,
@@ -63,10 +48,10 @@ fn row(
     }
 }
 
-/// Push a roster and fire the event that follows it, exactly as `ui_party::feed_party` does.
+/// Pushes a roster and fires its event, as `ui_party`'s `feed_party` does.
 fn push_raid(s: &mut UiScript, raid: Vec<RaidMemberInfo>) {
-    // `members` is our own SUBGROUP's slice — non-empty is what makes `IsPartyLeader()`/
-    // `IsRaidLeader()` answer 1 for leader_index 0 (the shared `leads_the_group` predicate).
+    // `members` is our own subgroup's slice; non-empty, it makes `IsPartyLeader()` and
+    // `IsRaidLeader()` answer 1 for `leader_index` 0.
     let members = raid
         .iter()
         .skip(1)
@@ -89,7 +74,7 @@ fn push_raid(s: &mut UiScript, raid: Vec<RaidMemberInfo>) {
     s.fire_event("RAID_ROSTER_UPDATE", Vec::new());
 }
 
-/// A 12-member raid across three subgroups, us leading — the shape most tests want.
+/// A 12-member raid across three subgroups, led by us, with row 2 an assistant.
 fn twelve() -> Vec<RaidMemberInfo> {
     let mut raid = vec![row("Me", 2, 1, "Warrior", true, false)];
     for i in 1..12u32 {
@@ -106,10 +91,7 @@ fn twelve() -> Vec<RaidMemberInfo> {
     raid
 }
 
-/// Open the tab **and drain what opening it queues**. `RaidFrame`'s OnShow calls
-/// `RequestRaidInfo()` — the reference's own, and the reason the Raid Info button can ever be
-/// right — so every `take_party_requests` after this would otherwise start with that ask and no
-/// test about a button would be about that button.
+/// Opens the tab and drains the `RequestRaidInfo()` its OnShow sends (`RaidFrame.xml:350`).
 fn open_raid_tab(s: &mut UiScript) {
     s.run("ToggleFriendsFrame(4)").unwrap();
     assert_eq!(
@@ -119,14 +101,8 @@ fn open_raid_tab(s: &mut UiScript) {
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// The tab
-// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ── The tab ──────────────────────────────────────────────────────────────────────────────────────
 
-/// Tab 4 exists, opens the pane, titles the window RAID, and puts every other subframe away.
-///
-/// This is the test the whole decision exists for: `FriendsFrame.xml` shipped three tabs and said
-/// so in its header, and the tab strip is the one place a missing pane is visible without a raid.
 #[test]
 fn the_fourth_tab_opens_the_raid_pane() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -147,15 +123,13 @@ fn the_fourth_tab_opens_the_raid_pane() {
     ] {
         assert!(!visible(&s, other), "{other} goes away");
     }
-    // And the tab's own OnClick is wired — a tab that PanelTemplates enables but that does
-    // nothing when clicked is exactly the dead tab the guild arc had to fix.
     s.run("FriendsFrameTab1:Click()").unwrap();
     assert!(!visible(&s, "RaidFrame"));
     s.run("FriendsFrameTab4:Click()").unwrap();
     assert!(visible(&s, "RaidFrame"), "the tab button opens it too");
 }
 
-/// Closing the window closes the Raid Info flyout with it — the ref's fourth satellite.
+/// `FriendsFrame_OnHide` hides `RaidInfoFrame` too (`FriendsFrame.lua:136`).
 #[test]
 fn hiding_the_window_closes_the_raid_info_panel() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -170,12 +144,10 @@ fn hiding_the_window_closes_the_raid_info_panel() {
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// The not-in-a-raid state
-// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ── The not-in-a-raid state ──────────────────────────────────────────────────────────────────────
 
-/// Out of a raid the pane is the blurb plus Convert To Raid, and the button is live only for the
-/// leader of an actual party — the three states, in order.
+/// Out of a raid the pane is the blurb and Convert To Raid, live only for a party's leader
+/// (`RaidFrame.lua:62-69`).
 #[test]
 fn convert_to_raid_is_live_only_for_a_party_leader() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -195,7 +167,7 @@ fn convert_to_raid_is_live_only_for_a_party_leader() {
     );
     assert!(!visible(&s, "RaidFrameAddMemberButton"));
 
-    // A party we lead: `leader_index == 0` with members is the shared leads-the-group predicate.
+    // A party we lead: `leader_index == 0` with members.
     s.set_party(PartyState {
         members: vec![PartyMemberInfo {
             name: "Alice".into(),
@@ -218,7 +190,6 @@ fn convert_to_raid_is_live_only_for_a_party_leader() {
         "and the button really sends it"
     );
 
-    // A party we do NOT lead.
     s.set_party(PartyState {
         members: vec![PartyMemberInfo {
             name: "Alice".into(),
@@ -236,16 +207,9 @@ fn convert_to_raid_is_live_only_for_a_party_leader() {
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// The grid
-// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ── The grid ─────────────────────────────────────────────────────────────────────────────────────
 
-/// The roster paints: each row lands in ITS SUBGROUP's next free slot, carries its rank token, and
-/// rows past the roster stay hidden.
-///
-/// The seating is the assertion with teeth. Row order and slot order are different orders — row 5
-/// of a raid whose first four are in group 1 is group 2's *first* slot — and every drag, kick and
-/// menu action downstream addresses a row by the index this seating implies.
+/// Row order and slot order differ; every drag, kick and menu action addresses a row by row index.
 #[test]
 fn the_grid_seats_each_row_in_its_own_subgroups_next_free_slot() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -268,7 +232,7 @@ fn the_grid_seats_each_row_in_its_own_subgroups_next_free_slot() {
         s.eval::<String>("return RaidGroupButton12.slot").unwrap(),
         "RaidGroup3Slot4"
     );
-    // The slot knows its occupant too — the link the drop code reads to decide move-vs-swap.
+    // The slot knows its occupant, which the drop reads to choose move or swap.
     assert_eq!(
         s.eval::<String>("return RaidGroup2Slot1.button").unwrap(),
         "RaidGroupButton5"
@@ -302,18 +266,14 @@ fn the_grid_seats_each_row_in_its_own_subgroups_next_free_slot() {
         "all eight groups show while in a raid"
     );
 
-    // Leaving the raid puts the whole grid away and brings the blurb back.
     push_raid(&mut s, Vec::new());
     assert!(!visible(&s, "RaidGroup1"));
     assert!(!visible(&s, "RaidGroupButton1"));
     assert!(visible(&s, "RaidFrameRaidDescription"));
 }
 
-/// The colour ladder: offline grey beats everything, then dead red, then the class colour — and
-/// all three columns take it together.
-///
-/// Inverting any two of these is invisible to every other test in this file: the rows still seat,
-/// the names still read, the clicks still fire.
+/// Offline grey is tested first, then dead red, then the class colour, on all three columns
+/// (`Blizzard_RaidUI.lua:135-152`).
 #[test]
 fn a_rows_colour_is_offline_then_dead_then_class() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -325,7 +285,6 @@ fn a_rows_colour_is_offline_then_dead_then_class() {
             row("Me", 2, 1, "Warrior", true, false),
             row("Corpse", 0, 1, "Mage", true, true),
             row("Gone", 0, 1, "Mage", false, false),
-            // Offline AND dead: grey wins, because a disconnected member's health is not news.
             row("GoneDead", 0, 1, "Mage", false, true),
         ],
     );
@@ -342,7 +301,7 @@ fn a_rows_colour_is_offline_then_dead_then_class() {
             (b * 100.0).round() / 100.0,
         )
     };
-    // WARRIOR = 0.78, 0.61, 0.43 (Fonts.xml's RAID_CLASS_COLORS, the reference's own values).
+    // WARRIOR is 0.78, 0.61, 0.43 (`RAID_CLASS_COLORS`, `Fonts.xml:52`).
     let warrior: (f32, f32, f32) = s
         .eval("return RAID_CLASS_COLORS.WARRIOR.r, RAID_CLASS_COLORS.WARRIOR.g, RAID_CLASS_COLORS.WARRIOR.b")
         .unwrap();
@@ -366,11 +325,8 @@ fn a_rows_colour_is_offline_then_dead_then_class() {
         (0.5, 0.5, 0.5),
         "offline AND dead is grey — offline is tested first"
     );
-    // The level column takes the same colour as the name, never a different one. (The CLASS
-    // column is a Button rather than a FontString — the reference makes it one because it is the
-    // class pullout's drag handle — and a Button in this engine has `SetTextColor` but no getter,
-    // so it cannot be read back here. `RaidGroupButton_SetRowColor` writes all three from one
-    // colour in three adjacent lines; these two are the readable half of that.)
+    // Name and level share the row's colour; the class column is a Button, whose text colour
+    // this engine cannot read back.
     assert_eq!(
         round(color("RaidGroupButton2")),
         round(
@@ -383,10 +339,8 @@ fn a_rows_colour_is_offline_then_dead_then_class() {
     );
 }
 
-/// `UNIT_HEALTH`/`UNIT_LEVEL` repaint ONE row and do not go through the roster event.
-///
-/// This is the reason `RAID_ROSTER_UPDATE` is fired on the roster's identity rather than on every
-/// field: a 40-row rebuild per point of damage taken is what the other choice costs.
+/// `UNIT_HEALTH` and `UNIT_LEVEL` repaint one `raidN` row without the roster event
+/// (`Blizzard_RaidUI.lua:27-38`).
 #[test]
 fn a_units_health_and_level_repaint_only_that_row() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -396,7 +350,7 @@ fn a_units_health_and_level_repaint_only_that_row() {
     push_raid(&mut s, raid.clone());
     assert_eq!(text_of(&s, "RaidGroupButton3Level"), "60");
 
-    // The row dies. Only the per-unit event is fired — no RAID_ROSTER_UPDATE.
+    // The row dies; only the per-unit event fires.
     raid[2].ninth = true;
     s.set_party(PartyState {
         members: vec![PartyMemberInfo {
@@ -416,7 +370,7 @@ fn a_units_health_and_level_repaint_only_that_row() {
         .unwrap();
     assert!(red < 0.2, "row 3 went red without a roster rebuild ({red})");
 
-    // A unit event for something that is not a raid token is ignored rather than mis-parsed.
+    // A unit event for a token that is not `raidN` is ignored.
     s.fire_event(
         "UNIT_HEALTH",
         vec![benilla_ui::script::ScriptValue::Str("target".into())],
@@ -432,12 +386,9 @@ fn a_units_health_and_level_repaint_only_that_row() {
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// The management buttons
-// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ── The management buttons ───────────────────────────────────────────────────────────────────────
 
-/// Ready Check is the leader's alone; Add Member shows for everyone in a raid. Both are hidden
-/// outright out of one — they share their seat with Convert To Raid.
+/// Out of a raid both hide, sharing a seat with Convert To Raid (`Blizzard_RaidUI.lua:653-672`).
 #[test]
 fn ready_check_is_the_leaders_and_add_member_is_everyones() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -460,7 +411,6 @@ fn ready_check_is_the_leaders_and_add_member_is_everyones() {
         .take_party_requests()
         .contains(&PartyRequest::ReadyCheckStart));
 
-    // A member, not the leader: no Ready Check button at all.
     let raid = twelve();
     s.set_party(PartyState {
         members: vec![PartyMemberInfo {
@@ -479,15 +429,10 @@ fn ready_check_is_the_leaders_and_add_member_is_everyones() {
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// The drag
-// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ── The drag ─────────────────────────────────────────────────────────────────────────────────────
 
-/// The drag's three landings: an empty slot in another group MOVES, an occupied one SWAPS, and
-/// anything else — including this row's own group — sends nothing and springs the row home.
-///
-/// Driven through the real handlers with `TARGET_RAID_SLOT` standing in for the hover sweep, which
-/// needs a live cursor this harness has no way to place.
+/// An empty slot in another group moves, an occupied one swaps, anything else springs the row home
+/// (`Blizzard_RaidUI.lua:257-273`); `TARGET_RAID_SLOT` stands in for the hover sweep.
 #[test]
 fn dragging_a_row_moves_swaps_or_springs_back() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -503,14 +448,14 @@ fn dragging_a_row_moves_swaps_or_springs_back() {
         .unwrap();
     };
 
-    // Row 12 (group 3, seat 4) onto group 3's fifth seat — its OWN group. Nothing goes out.
+    // Row 12 (group 3, seat 4) onto group 3's fifth seat, its own group: nothing goes out.
     drag(&s, "RaidGroupButton12", "RaidGroup3Slot5");
     assert!(
         s.take_party_requests().is_empty(),
         "a drop inside the row's own group is not a move"
     );
 
-    // Row 12 onto group 5's empty first seat — a MOVE, and the subgroup is the Lua 1-based one.
+    // Row 12 onto group 5's empty first seat: a move, with the 1-based subgroup.
     drag(&s, "RaidGroupButton12", "RaidGroup5Slot1");
     assert_eq!(
         s.take_party_requests(),
@@ -520,7 +465,7 @@ fn dragging_a_row_moves_swaps_or_springs_back() {
         }]
     );
 
-    // Row 12 onto group 1's second seat, which row 2 is in — a SWAP, by the two ROW indices.
+    // Row 12 onto group 1's second seat, which row 2 holds: a swap, by the two row indices.
     drag(&s, "RaidGroupButton12", "RaidGroup1Slot2");
     assert_eq!(
         s.take_party_requests(),
@@ -531,8 +476,7 @@ fn dragging_a_row_moves_swaps_or_springs_back() {
     );
 }
 
-/// A non-leader cannot drag at all — the gate is on both ends, so a drag that never started also
-/// never stops.
+/// `OnDragStart` and `OnDragStop` both return for a non-leader (`Blizzard_RaidUI.lua:236`, `:248`).
 #[test]
 fn only_the_leader_may_drag() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -560,11 +504,8 @@ fn only_the_leader_may_drag() {
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// The row's click and menu
-// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ── The row's click and menu ─────────────────────────────────────────────────────────────────────
 
-/// Left-clicking a row targets that row's `raidN` token — the same token the tooltip reads.
 #[test]
 fn left_clicking_a_row_targets_its_raid_token() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -578,11 +519,7 @@ fn left_clicking_a_row_targets_its_raid_token() {
     );
 }
 
-/// Right-clicking a row opens the RAID menu, and each of its four rows appears for exactly the
-/// person the reference shows it to.
-///
-/// The menu is addressed by ROW INDEX, and every rank rule re-reads that row's rank — so a menu
-/// opened on the wrong index would offer Promote on somebody who is already an assistant.
+/// The RAID menu's rank rules re-read the row's rank by row index (`UnitPopup.lua:382-401`).
 #[test]
 fn the_row_menu_offers_the_rank_verbs_by_rank() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -590,7 +527,6 @@ fn the_row_menu_offers_the_rank_verbs_by_rank() {
     open_raid_tab(&mut s);
     push_raid(&mut s, twelve());
 
-    // Row 3 is a plain member: as the leader we may promote it, not demote it, and may kick it.
     s.run("RaidGroupButton3:Click(\"RightButton\")").unwrap();
     assert!(
         s.eval::<bool>("return DropDownList1:IsVisible()").unwrap(),
@@ -619,7 +555,6 @@ fn the_row_menu_offers_the_rank_verbs_by_rank() {
     assert!(shown(&s, "RAID_DEMOTE"));
     assert!(!shown(&s, "RAID_PROMOTE"));
 
-    // Row 1 is the leader — us. Nothing may be done to the leader.
     s.run("HideDropDownMenu(1) RaidGroupButton1:Click(\"RightButton\")")
         .unwrap();
     assert!(!shown(&s, "RAID_LEADER"));
@@ -629,8 +564,7 @@ fn the_row_menu_offers_the_rank_verbs_by_rank() {
     );
 }
 
-/// The menu's verbs reach the engine addressed the way the wire wants them — three by name, and
-/// the kick by the row index.
+/// Three verbs go by name and the kick by row index (`UnitPopup.lua:624-631`).
 #[test]
 fn the_menu_verbs_queue_the_right_requests() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -666,18 +600,14 @@ fn the_menu_verbs_queue_the_right_requests() {
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// Raid Info
-// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ── Raid Info ────────────────────────────────────────────────────────────────────────────────────
 
-/// The saved-instance panel fills from `GetSavedInstanceInfo`, and its button is live only once
-/// the server has answered with something.
 #[test]
 fn the_raid_info_panel_lists_the_saved_lockouts() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = setup();
     open_raid_tab(&mut s);
-    // The first UPDATE_INSTANCE_INFO only arms the ref's latch (`RaidFrame.hasRaidInfo`).
+    // The first `UPDATE_INSTANCE_INFO` only arms `RaidFrame.hasRaidInfo` (`RaidFrame.lua:43-47`).
     s.fire_event("UPDATE_INSTANCE_INFO", Vec::new());
     s.set_saved_instances(vec![
         SavedInstanceInfo {
@@ -697,8 +627,7 @@ fn the_raid_info_panel_lists_the_saved_lockouts() {
             .unwrap(),
         1
     );
-    // The rows live inside the flyout, so `IsVisible` is false until it is open — open it, which
-    // is what the button does, and then ask.
+    // The rows live inside the flyout, so `IsVisible` is false until it opens.
     s.run("RaidInfoFrame:Show()").unwrap();
     assert!(visible(&s, "RaidInfoInstance1"));
     assert!(visible(&s, "RaidInfoInstance2"));
@@ -718,7 +647,6 @@ fn the_raid_info_panel_lists_the_saved_lockouts() {
         "four rows fit, so two need no bar"
     );
 
-    // Bound to nothing: the button dies, and the panel does not keep a stale bar standing.
     s.set_saved_instances(Vec::new());
     s.fire_event("UPDATE_INSTANCE_INFO", Vec::new());
     assert_eq!(
@@ -726,42 +654,29 @@ fn the_raid_info_panel_lists_the_saved_lockouts() {
             .unwrap(),
         0
     );
-    // **The stale row STAYS, and that is the reference's own defect.** `RaidInfoFrame_Update`
-    // wraps its whole row loop in `if ( savedInstances > 0 )` (RaidFrame.lua:93-106), so the
-    // count dropping to zero never reaches the `Hide()` in its else-arm — the last lockout
-    // remains painted under an already-open panel. Our retired file hid them; the migration
-    // reverts that, and it is the director's call, not ours to re-author (1874).
-    //
-    // What DOES protect the player is the line above: the button is disabled, so the flyout
-    // cannot be reopened onto the stale row.
+    // The stale row stays, as in the reference: `RaidInfoFrame_Update` wraps its row loop in
+    // `if ( savedInstances > 0 )` (`RaidFrame.lua:94`), so a count of zero never reaches the
+    // `Hide()`. The dead button keeps the flyout from reopening onto it.
     assert!(
         visible(&s, "RaidInfoInstance1"),
         "the reference leaves the last row standing when the count hits zero"
     );
 
-    // The button toggles the flyout.
     assert!(visible(&s, "RaidInfoFrame"));
     s.run("RaidFrameRaidInfoButton:GetScript(\"OnClick\")()")
         .unwrap();
     assert!(!visible(&s, "RaidInfoFrame"), "and closes it again");
 }
 
-/// **The player with no lockouts at all** — the case that shipped broken (1561). Two answers, both
-/// empty, is the whole ordinary session: one for `PLAYER_ENTERING_WORLD`'s `RequestRaidInfo` and
-/// one for the pane's own on show. The first arms `RaidFrame.hasRaidInfo` and returns; the second
-/// is the one that has to put the button away and empty the panel behind it.
-///
-/// Its sibling above proves the same arithmetic from a list that had something in it. This one
-/// proves it from a list that never did, which is the case a *diff* cannot reach — and the button
-/// left live over an empty panel is exactly what the director saw.
+/// An ordinary session gets two empty answers, for `PLAYER_ENTERING_WORLD`'s `RequestRaidInfo` and
+/// the pane's OnShow; the first arms the latch, the second disables the button.
 #[test]
 fn a_player_with_no_lockouts_loses_the_raid_info_button_on_the_second_answer() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = setup();
     open_raid_tab(&mut s);
 
-    // Answer one: the latch, and nothing else. The button is still whatever it loaded as — the
-    // reference does not disable it in `RaidFrame_OnLoad` either, so this window is its own.
+    // Answer one only arms the latch; `RaidFrame_OnLoad` leaves the button as it loaded.
     s.fire_event("UPDATE_INSTANCE_INFO", Vec::new());
     assert_eq!(
         s.eval::<i64>("return RaidFrame.hasRaidInfo or 0").unwrap(),
@@ -769,7 +684,6 @@ fn a_player_with_no_lockouts_loses_the_raid_info_button_on_the_second_answer() {
         "the first answer only arms the latch"
     );
 
-    // Answer two, saying the same nothing.
     s.fire_event("UPDATE_INSTANCE_INFO", Vec::new());
     assert_eq!(
         s.eval::<i64>("return RaidFrameRaidInfoButton:IsEnabled()")
@@ -778,16 +692,8 @@ fn a_player_with_no_lockouts_loses_the_raid_info_button_on_the_second_answer() {
         "an empty lockout list is a dead button"
     );
 
-    // **The panel IS left in the state the XML loaded, and that is the reference's own defect.**
-    // `RaidInfoFrame_Update` wraps its entire row loop in `if ( savedInstances > 0 )`
-    // (RaidFrame.lua:93-106), so with a lockout list that has never had anything in it the loop
-    // never runs at all and no row is ever hidden — they keep the visibility stock
-    // `Blizzard_RaidUI.xml` declared. Our retired file cleared them; the migration reverts that,
-    // and a look the migration reverts is the director's call, not ours to re-author (1874).
-    //
-    // What protects the player is the line above: the button is disabled, so this panel cannot be
-    // reached by a click at all. The rows below are only visible because the test showed the frame
-    // by hand.
+    // As in the reference, the row loop never runs (`RaidFrame.lua:94`), so the rows keep the
+    // visibility `RaidFrame.xml` declares; only a frame shown by hand reaches them.
     s.run("RaidInfoFrame:Show()").unwrap();
     assert!(
         visible(&s, "RaidInfoInstance1") && visible(&s, "RaidInfoInstance10"),
@@ -795,8 +701,7 @@ fn a_player_with_no_lockouts_loses_the_raid_info_button_on_the_second_answer() {
     );
     s.run("RaidInfoFrame:Hide()").unwrap();
 
-    // The button is dead to a real click, not merely drawn grey — the half the director asked for
-    // by name. Driven through the pointer, because that is the path a press actually takes.
+    // The button is dead to a real click through the pointer, not merely drawn grey.
     let (bx, by) = {
         let l: f32 = s.eval("return RaidFrameRaidInfoButton:GetLeft()").unwrap();
         let r: f32 = s.eval("return RaidFrameRaidInfoButton:GetRight()").unwrap();
@@ -815,13 +720,8 @@ fn a_player_with_no_lockouts_loses_the_raid_info_button_on_the_second_answer() {
     );
 }
 
-/// The scroll bar the fifth lockout brings on has to land on the trough drawn behind it, not where
-/// `UIPanelScrollFrameTemplate` seats a bare ScrollFrame's bar (1561).
-///
-/// Geometry, asserted as the relationship rather than as four numbers: the bar is CENTRED in the
-/// trough art on X, and its top is the panel's own -3 rather than the template's -16. Both were
-/// wrong before — 2 px left, 13 px low — and neither is visible to any test that only asks whether
-/// the bar is shown.
+/// Past four lockouts `RaidInfoFrame_Update` seats the bar at `(8, -3)` off the scroll frame
+/// (`RaidFrame.lua:108-110`), centred on the trough art, not at the template's `(6, -16)`.
 #[test]
 fn the_scroll_bar_is_seated_on_the_trough_the_panel_draws_behind_it() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -862,20 +762,17 @@ fn the_scroll_bar_is_seated_on_the_trough_the_panel_draws_behind_it() {
             < 0.01,
         "and hangs 3 px under the frame's top, not the template's 16"
     );
-    // The up arrow rides above the bar, so re-seating the bar is what lifts it into the trough's
-    // own cap — the piece of this that is actually visible.
+    // The up arrow rides above the bar, so the re-seat lifts it into the trough's cap.
     assert!(
         top(&s, "RaidInfoScrollFrameScrollBarScrollUpButton") > top(&s, "RaidInfoScrollFrame"),
         "the up arrow clears the scroll frame, where the template left it 13 px inside"
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// The ready check
-// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ── The ready check ──────────────────────────────────────────────────────────────────────────────
 
-/// `READY_CHECK` opens the popup naming the leader, and the two buttons answer opposite ways —
-/// including the No button's argument-less call, which is the reference's own spelling.
+/// `READY_CHECK` opens the popup naming the leader; Yes calls `ConfirmReadyCheck(1)`, No calls it
+/// with no argument (`Blizzard_RaidUI.xml:710`, `:728`).
 #[test]
 fn the_ready_check_popup_opens_and_answers() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -907,7 +804,6 @@ fn the_ready_check_popup_opens_and_answers() {
         "No passes no argument at all, and absent must mean not-ready"
     );
 
-    // The raid ending ends the question.
     s.fire_event("READY_CHECK", Vec::new());
     assert!(visible(&s, "ReadyCheckFrame"));
     push_raid(&mut s, Vec::new());
@@ -917,24 +813,9 @@ fn the_ready_check_popup_opens_and_answers() {
     );
 }
 
-// The reference-geometry diff that stood here is GONE with the transcription it policed (1874).
-// It compared our `RaidFrame.xml`'s numbers against the reference's; the pane is now the
-// reference's own file off the player's chain, so there is nothing left to diff — the geometry is
-// the reference's by construction rather than by assertion.
-
-/// **A drag the cursor carries off the window edge ENDS — it does not glue the row to the mouse
-/// for the rest of the session**.
-///
-/// The defect this pins is not in this file at all; it is the engine's, and the raid grid is
-/// simply where it bites hardest. No release is fed once the OS pointer is outside the window, so
-/// `UiScript::pointer_left_window` used to drop the gesture silently: `OnDragStop` never ran, this
-/// pane's `MOVING_RAID_MEMBER` stayed set, the engine's one `StartMoving` slot stayed taken, and
-/// the row followed the cursor around the screen from then on — swallowing every press aimed at
-/// any row underneath it. "I moved one member and then could not move any other" is what that
-/// looks like from a hand on the mouse.
-///
-/// The three things this asserts are the three the bug broke, in order of how visible they are:
-/// the row goes home, the pane forgets it, and the next row still drags.
+/// No release reaches a gesture once the OS pointer leaves the window, so
+/// `UiScript::pointer_left_window` ends the drag: `OnDragStop` runs, the row goes home, and the
+/// next row still drags.
 #[test]
 fn a_drag_carried_off_the_window_edge_ends_instead_of_gluing_the_row_to_the_cursor() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -976,7 +857,6 @@ fn a_drag_carried_off_the_window_edge_ends_instead_of_gluing_the_row_to_the_curs
         "the row springs back to its slot — a drop on nothing is not a move"
     );
 
-    // The row is no longer following anything.
     s.mouse_move(400.0, 300.0);
     s.tick(0.016);
     s.mouse_move(500.0, 200.0);
@@ -987,7 +867,6 @@ fn a_drag_carried_off_the_window_edge_ends_instead_of_gluing_the_row_to_the_curs
         "…and it stays there however far the cursor travels"
     );
 
-    // And the next row drags normally, which is the thing the director actually lost.
     let (gx, gy) = centre(&s, "RaidGroupButton8");
     let (tx, ty) = centre(&s, "RaidGroup5Slot1");
     s.mouse_button(gx, gy, "LeftButton", true);
@@ -1008,14 +887,8 @@ fn a_drag_carried_off_the_window_edge_ends_instead_of_gluing_the_row_to_the_curs
     );
 }
 
-/// The whole gesture, through the REAL pointer path, three times over — press, cross the
-/// threshold, travel, release — with the roster echo in between, exactly as `/partytest raid`
-/// feeds it.
-///
-/// Its sibling `dragging_a_row_moves_swaps_or_springs_back` calls `RaidGroupButton_OnDragStop`
-/// with the globals set by hand, which is the *landing* logic and nothing else: it never fires
-/// `OnDragStart`, never calls `StartMoving`, never runs the hover sweep, and — the part that
-/// mattered — never drags a SECOND row. This one does all four.
+/// Three whole gestures through the real pointer path, with the roster echo `/partytest raid`
+/// supplies in between.
 #[test]
 fn one_drag_does_not_cost_the_next_one() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -1064,8 +937,7 @@ fn one_drag_does_not_cost_the_next_one() {
             "drag {row_index} onto group {group}"
         );
         assert!(s.errors().is_empty(), "{from}: {:?}", s.errors());
-        // The sandbox echo `/partytest raid` supplies, so the next drag starts from a repainted
-        // grid rather than a frozen one.
+        // The echo, so the next drag starts from a repainted grid.
         raid[row_index as usize - 1].subgroup = group - 1;
         push_raid(&mut s, raid.clone());
     }

@@ -1,20 +1,10 @@
-//! **The outline blit recipe** — the client's baked-outline architecture, byte-for-byte.
-//!
-//! An outlined font (`outline="NORMAL"/"THICK"`, the Number* fonts) does not draw a ring and a fill
-//! as two things. The real client composites both into **one** atlas cell and blits it once
+//! The outline blit recipe, byte for byte. The reference composites an outlined font's ring and
+//! fill (`outline="NORMAL"`/`"THICK"`, the Number* fonts) into one atlas cell and blits it once
 //! (the AA-outline blit `0x5cea30`, dispatched by `0x5cf310` off the font flags at
-//! `[CGxFont+0x180]`), which is what makes an outlined string fade correctly: one quad, one alpha,
-//! ring and fill thinning together. Stamping a ring behind a fill instead — which this codebase did
-//! before the composite cell — blackens mid-fade on the `α(1−α)` compositing term.
-//!
-//! Under the size ladder these variants had to be **planned**: a census walked the shipped
-//! `Fonts.xml` registry for every `(face, size, radius)` triple anything could ask for, baked those,
-//! and left any unplanned runtime combination to a legacy stamped-halo fallback. On demand
-//! there is nothing to plan and no fallback to keep: a radius that is asked for is a
-//! radius that is rasterized, so the composite cell is now the only outline path there is.
+//! `[CGxFont+0x180]`), so ring and fill fade together at one alpha; a ring stamped behind a fill
+//! would blacken mid-fade on the `α(1−α)` term.
 
-/// The cell radius for a font's outline flag: the ring reach in **logical** px (`r=1` NORMAL,
-/// `r=2` THICK) and the glyph cache key's variant discriminant.
+/// An outline flag's ring reach in logical px (NORMAL 1, THICK 2), also the cache key's radius.
 pub(super) fn radius_of(outline: benilla_ui::script::Outline) -> u8 {
     match outline {
         benilla_ui::script::Outline::None => 0,
@@ -23,34 +13,25 @@ pub(super) fn radius_of(outline: benilla_ui::script::Outline) -> u8 {
     }
 }
 
-/// The client's AA neighbour-count → outline-alpha LUT (`DAT_0080a8ec`): index = the number of
-/// marked cells in the in-bounds 3×3 box (centre included), value = the 4-bit alpha, here
-/// pre-widened to 8-bit (`nibble × 17`).
+/// The reference's neighbour-count to outline-alpha table (`0x80a8ec`), indexed by the marked
+/// texels in the in-bounds 3×3 box, centre included; its 4-bit alphas are widened × 17.
 const AA_NEIGHBOUR_LUT: [u8; 10] = [0, 17, 17, 51, 85, 119, 153, 187, 221, 255];
 
-/// Composite one glyph's coverage bitmap into an **outlined cell** — the byte recipe of the
-/// client's AA-outline blit (`0x5cea30`, dispatched by `0x5cf310`):
+/// Composite one glyph's coverage into an outlined cell, the reference's AA-outline blit:
 ///
-/// 1. **Mark** every texel with non-zero coverage.
-/// 2. **Dilate** iteratively — each pass marks every virgin texel 8-adjacent to a marked one.
-///    The binary runs 1 pass for NORMAL, 2 for THICK; we run `r × round(dpi)` so the ring keeps
-///    its logical weight under the device-resolution raster (at `dpi = 1` this IS the byte recipe;
-///    the finer grid at retina is the same deliberate resolution upgrade as the raster itself).
-/// 3. **Alpha** per texel = [`AA_NEIGHBOUR_LUT`]`[count of marked cells in the in-bounds 3×3
-///    box]` — the ring AND the fill edge take the same neighbourhood-graded alpha (interior = 9
-///    marked ⇒ opaque; a THICK ring's outer corners grade down to ~⅓ — the real softer outer edge).
-/// 4. **Pack**: unmarked ⇒ transparent; zero-coverage (pure ring) ⇒ black at the LUT alpha; else
-///    `RGB = the coverage as gray` (the fill ramps *toward the ring's black* at AA edges — not
-///    white-with-thin-alpha) at the LUT alpha. The binary quantizes to ARGB4444; we keep 8-bit
-///    (same law, no banding — the one deliberate widening, like the LUT `×17`).
+/// 1. Mark every texel with coverage.
+/// 2. Dilate: each pass marks every unmarked texel 8-adjacent to a marked one, 1 pass for NORMAL
+///    and 2 for THICK.
+/// 3. Alpha: the [`AA_NEIGHBOUR_LUT`] entry for the marked count in the texel's in-bounds 3×3
+///    box, for ring and fill edge alike.
+/// 4. Pack: the coverage as gray, so the pure ring is black and the fill ramps toward it.
 ///
-/// Draw-side law this feeds: one quad per glyph (the quad builder `0x5ccbe0`), vertex color
-/// MODULATE — white fill takes the text tint, black ring stays black — and ONE alpha per pass, so a
-/// frame fade thins ring+fill together (no `α(1−α)` blackening, the defect the stamped halos had).
+/// Deviation: `r × round(dpi)` passes, so the ring keeps its logical weight on a high-DPI raster,
+/// and 8-bit texels where the reference packs ARGB4444, so nothing bands.
 ///
-/// Returns `(rgba, out_w, out_h, pad)`: the cell grows by `pad = r·round(dpi)` texels each side
-/// (the binary's cell `em+2/+4` and origin col `1/2`, generalized); the caller shifts bearings by
-/// `pad`. The advance is untouched — the step law owns tracking (THICK `+1`, NORMAL none).
+/// It draws as one quad per glyph (`0x5ccbe0`) whose vertex colour tints the fill and leaves the
+/// ring black. Returns `(rgba, out_w, out_h, pad)`: the cell grows `pad` texels each side (the
+/// reference's `em+2`/`em+4`); the caller shifts the bearings by `pad`, and the advance stays.
 pub(super) fn outlined_cell(
     cov: &[u8],
     w: u32,
@@ -63,7 +44,7 @@ pub(super) fn outlined_cell(
     let (out_w, out_h) = (w + 2 * pad, h + 2 * pad);
     let cells = (out_w * out_h) as usize;
 
-    // 1. Mark coverage into the map (1 = glyph ink), coverage kept alongside for the pack.
+    // 1. Mark the ink as 1; the coverage stays alongside for the pack.
     let mut map = vec![0u8; cells];
     for row in 0..h {
         for col in 0..w {
@@ -73,8 +54,8 @@ pub(super) fn outlined_cell(
         }
     }
 
-    // 2. Iterative 8-neighbour dilation: pass k marks virgin cells adjacent to any marked cell
-    //    (the binary's mask-1-write-2 / mask-3-write-4 passes, generalized to k marks).
+    // 2. Pass k marks unmarked cells next to an earlier mark (the reference's mask-1-write-2 and
+    //    mask-3-write-4 passes).
     for pass in 0..passes {
         let mark = (pass + 2) as u8; // 1 = ink, 2.. = ring generations
         for row in 0..out_h {
@@ -100,7 +81,7 @@ pub(super) fn outlined_cell(
         }
     }
 
-    // 3.+4. Neighbourhood-count alpha + pack.
+    // 3 and 4. Neighbourhood-count alpha, and pack.
     let mut rgba = vec![0u8; cells * 4];
     for row in 0..out_h {
         for col in 0..out_w {
@@ -127,7 +108,7 @@ pub(super) fn outlined_cell(
                 0
             };
             let idx = c * 4;
-            // Pure ring: black. Fill: the coverage as gray (ramps toward the ring at AA edges).
+            // The pure ring is black; the fill is its coverage as gray.
             rgba[idx] = fill;
             rgba[idx + 1] = fill;
             rgba[idx + 2] = fill;
@@ -149,9 +130,8 @@ mod outlined_cell_tests {
 
     #[test]
     fn normal_ring_takes_the_lut_grades() {
-        // A 1×1 fully-inked glyph, NORMAL (1 pass), dpi 1 → a 3×3 cell, all 9 texels marked.
-        // Per the byte recipe the alpha is AA_NEIGHBOUR_LUT[in-bounds 3×3 marked count]:
-        // centre 9 → 255, edge-mid 6 → 153, corner 4 → 85 — the graded ring, not hard black.
+        // A 1×1 inked glyph, NORMAL at dpi 1: a 3×3 cell, all marked; in-bounds counts are 9 at
+        // the centre, 6 on an edge, 4 in a corner.
         let (rgba, w, h, pad) = outlined_cell(&[255], 1, 1, 1, 1.0);
         assert_eq!((w, h, pad), (3, 3, 1));
         assert_eq!(px(&rgba, w, 1, 1), [255, 255, 255, 255], "fill core");
@@ -163,9 +143,7 @@ mod outlined_cell_tests {
 
     #[test]
     fn thick_outer_ring_is_the_soft_second_pass() {
-        // THICK = a second dilation pass (the binary's mask-3→4 pass): 5×5, all marked; the
-        // inner ring sits fully surrounded (count 9 → opaque) while the outer edge grades
-        // 153/85 — the real client's softer THICK outer edge.
+        // THICK: 5×5, all marked; the inner ring is fully surrounded, the outer edge grades.
         let (rgba, w, h, pad) = outlined_cell(&[255], 1, 1, 2, 1.0);
         assert_eq!((w, h, pad), (5, 5, 2));
         assert_eq!(px(&rgba, w, 2, 2), [255, 255, 255, 255], "fill core");
@@ -184,8 +162,7 @@ mod outlined_cell_tests {
 
     #[test]
     fn retina_scales_the_pass_count_with_the_raster() {
-        // dpi 2, NORMAL: 2 passes ⇒ a 2-physical-px (1 logical) ring, dense — the iterative
-        // dilation leaves no stride holes (the legacy stamp offsets did).
+        // dpi 2, NORMAL: two passes, a 2 px (1 logical px) ring with no holes.
         let (rgba, w, h, pad) = outlined_cell(&[255], 1, 1, 1, 2.0);
         assert_eq!((w, h, pad), (5, 5, 2));
         assert_eq!(px(&rgba, w, 2, 2), [255, 255, 255, 255]);
@@ -195,8 +172,7 @@ mod outlined_cell_tests {
 
     #[test]
     fn aa_fill_ramps_gray_toward_the_ring() {
-        // Half coverage (128): the fill texel takes the coverage as GRAY at the LUT alpha —
-        // the byte recipe's `RGB = coverage, A = LUT[count]` — never white-with-thin-alpha.
+        // Half coverage packs as gray at the table's alpha, not white at a thin alpha.
         let (rgba, w, _, _) = outlined_cell(&[128], 1, 1, 1, 1.0);
         assert_eq!(
             px(&rgba, w, 1, 1),

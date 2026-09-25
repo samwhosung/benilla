@@ -1,45 +1,8 @@
-//! **The VERB-FIRED event gate** — `reference/1.12-verb-events.tsv` against the module that
-//! registers each verb.
-//!
-//! ## The third question on the event seam
-//!
-//! Two gates compare event NAMES (`reference_ui`: a stock listener nothing feeds, 1889; a fire the
-//! reference has no name for, 1883) and one compares ARGUMENTS (`event_shape_gate`, 2140). None of
-//! them asks **who** fires it, and that is the hole B389/2244 fell through. The reference's
-//! `SetTrainerServiceTypeFilter` commits through `0x4d8c90`, whose whole body is *write the mask,
-//! re-run the finalizer, fire `TRAINER_UPDATE`*; so the stock `Blizzard_TrainerUI.lua` never
-//! repaints the list itself — it calls the verb for its side effect. benilla's verb set the mask
-//! and fired nothing. The name gate stayed green because the packet arm fires the same event, and
-//! the tests stayed green because they asserted the mask. Our own retired `TrainerFrame.xml` had
-//! repainted explicitly, so the behaviour left with the file that was compensating for it (1957),
-//! and the director found it twelve days later. Every window that went stock (1751) carries the
-//! same exposure: a verb the stock Lua calls *for the event*.
-//!
-//! ## The rule
-//!
-//! For every pair the reference fires on the verb's own call path (the table: the verb's body, or
-//! a helper that only registered verbs call), and every verb benilla registers: **a file that
-//! registers the verb also fires the event** — or the pair is declared below, and the declaration
-//! is *checked*, never trusted:
-//!
-//! * [`ELSEWHERE`] — benilla fires it from a named feed instead, on the state the verb changed
-//!   (the verb bumps a generation, sets a touched flag, queues an intent the app drains). That
-//!   file must fire it, and the verb's own file must not, or the row is stale.
-//! * [`GAP`] — nothing fires it on this verb's path, for a stated reason. The verb's own file
-//!   must still not fire it, or the row is stale.
-//!
-//! A verb no file registers is skipped: unbuilt verbs are `scripts/api-coverage.sh`'s queue
-//! (1178), not this gate's.
-//!
-//! ## What "registers" and "fires" mean here, and the limit
-//!
-//! Text, not execution: the quoted literal `"Verb"` or `"EVENT"` in a non-test source file, with
-//! comment lines dropped and the trailing test module cut. Lenient in exactly one direction — any
-//! file that names the verb and fires the event passes — because the honest alternative, proving
-//! the path *executes*, is a per-verb fixture, and 2244's own test is the measure of a fixture that
-//! asserts the wrong thing. What this cannot see: a fire that is in the file but off the verb's
-//! path — an `ELSEWHERE` row is a claim the session that wrote it read at the feed. What it sees
-//! every time is the migration class itself: a verb whose module fires nothing.
+//! The verb-fired event gate: an event the reference fires on a verb's own call path
+//! (`reference/1.12-verb-events.tsv`) must be fired by a file that registers the verb, since stock
+//! Lua calls such a verb for its event (`0x4d8c90`, the trainer filter's commit, fires
+//! `TRAINER_UPDATE`). Otherwise the pair is declared in [`ELSEWHERE`] or [`GAP`], and the verb's
+//! own file must not fire it. The check is textual, so it cannot see a fire off the verb's path.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -52,9 +15,8 @@ struct Pair {
     via: String,
 }
 
-/// Pairs benilla fires from a feed, on the state the verb changes. `(verb, event, the file that
-/// fires it)`; the file is matched as a path suffix. Each was read at the feed when the row was
-/// written — the trigger is named so the next reader can check it in one grep.
+/// Pairs a feed fires on the state the verb changes, as `(verb, event, file)` with the file
+/// matched as a path suffix; each row's comment names the trigger.
 const ELSEWHERE: &[(&str, &str, &str)] = &[
     // The sell slot's diff (`auction_sell_item` moved, or `sell_slot_dirty`).
     (
@@ -141,8 +103,8 @@ const ELSEWHERE: &[(&str, &str, &str)] = &[
         "UPDATE_BINDINGS",
         "benilla-app/src/bindings.rs",
     ),
-    // The toggle goes to the wire and the bar's pushed key changes on the reply — one round trip
-    // later than the reference, which fires locally from the toggle.
+    // Fired when the server's reply changes the bar, a round trip after the reference, which
+    // fires locally from the toggle.
     (
         "TogglePetAutocast",
         "PET_BAR_UPDATE",
@@ -155,8 +117,7 @@ const ELSEWHERE: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// Pairs nothing fires on the verb's path, each with its reason. A row is a gap with a name,
-/// never a reason to stop; the reference's own site is in the table.
+/// Pairs nothing fires on the verb's path, each with its reason.
 const GAP: &[(&str, &str, &str)] = &[
     (
         "CancelSkillUps",
@@ -248,9 +209,7 @@ fn sources() -> Vec<(PathBuf, String)> {
                 stack.push(p);
                 continue;
             }
-            // The same file-name rule the sibling gates use: a test's own literals are not a
-            // surface we ship — and neither are the gates' own declared lists, this file's
-            // included (a `*_gate.rs` is a `#[cfg(test)]` module whose name does not say so).
+            // Skip tests and `*_gate.rs`, test-only modules whose names do not say so.
             let name = p.to_string_lossy();
             if p.extension().is_none_or(|x| x != "rs")
                 || name.contains("test")
@@ -291,8 +250,6 @@ fn verb_module_fires(src: &[(PathBuf, String)], verb: &str, event: &str) -> (Vec
     (registrars.iter().map(|(p, _)| short(p)).collect(), fires)
 }
 
-/// **Every event the reference fires from inside a verb is fired by the module that registers
-/// the verb** — or declared, with the declaration checked.
 #[test]
 fn every_event_the_reference_fires_from_a_verb_is_fired_by_the_verb_s_module() {
     let src = sources();
@@ -308,7 +265,7 @@ fn every_event_the_reference_fires_from_a_verb_is_fired_by_the_verb_s_module() {
     for pair in table() {
         let (registrars, fires) = verb_module_fires(&src, &pair.verb, &pair.event);
         if registrars.is_empty() {
-            continue; // an unbuilt verb: api-coverage.sh's queue, not this gate's
+            continue; // an unbuilt verb: `scripts/api-coverage.sh`'s queue
         }
         seen += 1;
         if fires || declared.contains(&(pair.verb.as_str(), pair.event.as_str())) {
@@ -352,9 +309,6 @@ fn every_event_the_reference_fires_from_a_verb_is_fired_by_the_verb_s_module() {
     );
 }
 
-/// **A declaration is checked, not trusted** — an `ELSEWHERE` file that stopped firing, a verb
-/// module that now fires what its row says it does not, a row for a pair the table no longer
-/// carries: each fails until the row is corrected.
 #[test]
 fn the_declared_rows_are_still_true() {
     let src = sources();

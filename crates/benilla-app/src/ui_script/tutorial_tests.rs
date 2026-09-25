@@ -1,7 +1,4 @@
-//! The stock `TutorialFrame.xml` driven engine-only: an alert button per
-//! `TUTORIAL_TRIGGER`, the window a click opens over the published id's strings, the
-//! `FlagTutorial` it makes, the unticked checkbox's `ClearTutorials` on hide, and
-//! `CINEMATIC_STOP` clicking the Welcome alert.
+//! The stock tutorial alerts and window (`TutorialFrame.xml`), driven by `TUTORIAL_TRIGGER`.
 
 use benilla_ui::script::{ScriptValue, UiScript};
 
@@ -40,8 +37,7 @@ fn trigger(s: &mut UiScript, published: i64) {
     s.fire_event("TUTORIAL_TRIGGER", vec![ScriptValue::Int(published)]);
 }
 
-/// A trigger queues an alert button; its click opens the window on the id's title and text and
-/// acknowledges the id (0-based on the drain); a second trigger queues a second button.
+/// The click's `FlagTutorial` takes the published id; the app drains it 0-based.
 #[test]
 fn a_trigger_queues_an_alert_whose_click_opens_the_window_and_flags_it() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -93,7 +89,7 @@ fn a_trigger_queues_an_alert_whose_click_opens_the_window_and_flags_it() {
     assert_eq!(s.take_tutorial_clears(), 0);
 }
 
-/// Unticking "Display Tips" and closing calls `ClearTutorials` and drops every alert.
+/// Hiding with "Display Tips" unticked clears every tutorial (`TutorialFrame.lua:7`).
 #[test]
 fn an_unticked_checkbox_clears_the_tutorials_on_hide() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -111,8 +107,8 @@ fn an_unticked_checkbox_clears_the_tutorials_on_hide() {
     );
 }
 
-/// `CINEMATIC_STOP` clicks the Welcome alert (id 42) if it is queued — the first thing a new
-/// character sees after the intro — and moves the window to the screen's centre.
+/// `CINEMATIC_STOP` clicks a queued Welcome alert, id 42, and centres the window
+/// (`TutorialFrame.lua:104`).
 #[test]
 fn cinematic_stop_opens_the_welcome_window() {
     let _data = benilla_formats::wow_data_or_skip!();

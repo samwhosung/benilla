@@ -1,12 +1,5 @@
-//! The shipped **trainer window** driven end-to-end, engine-only (no Bevy): the real
-//! The reference's own `Blizzard_TrainerUI` addon — a client-sorted, collapsible **skill-line
-//! tree** with a **dropdown** state filter and a draggable **scroll bar** —
-//! loaded behind its deps (`UiPanels.xml` + `UIDropDownMenu.xml` + `ScrollTemplates.xml` +
-//! `MerchantFrame.xml` for the the stock money frames) and fed a synthetic service list. Covers
-//! what only a runtime load exercises: the Lua parses and every referenced global resolves, the
-//! tree renders interleaved header/service rows, a header click folds its group, the dropdown
-//! filter hides a state, the wheel scrolls the list, the NPC name rides `arg1` into the title, the
-//! byte-exact GlobalStrings render, the Train button gates on available-and-affordable, and the buy queues the row's spell id.
+//! End-to-end tests of the stock `Blizzard_TrainerUI` window, engine-only: loaded behind its
+//! FrameXML dependencies and fed a synthetic service list.
 
 use benilla_ui::script::{
     ExtractedQuad, QuadContent, ScriptValue, SoundRequest, TrainerAbilityReq, TrainerService,
@@ -15,16 +8,9 @@ use benilla_ui::script::{
 
 use super::test_ui::load_ui as load_xml;
 
-/// Load the trainer window + all its deps into a fresh script, screen sized, with every state filter
-/// ON (the XML defaults "Already Known" off — the tests want the full tree, deterministic indices).
-///
-/// The filter's source of truth is the three **saved globals**, which the window
-/// pushes into the engine on every show — so a test that wants the full tree sets those, not the
-/// engine's own `SetTrainerServiceTypeFilter`, which the next `TRAINER_SHOW` would overwrite.
+/// The trainer window with every state filter on, for the full tree at fixed indices.
 fn trainer_script() -> UiScript {
     let mut s = trainer_script_base();
-    // The reference's own LoadOnDemand addon's files, direct off the chain (what its `LoadAddOn`
-    // runs), and the FrameXML templates file its list inherits from (1957).
     load_xml(
         &s,
         "Interface\\AddOns\\Blizzard_TrainerUI\\Blizzard_TrainerUI.xml",
@@ -33,17 +19,14 @@ fn trainer_script() -> UiScript {
     s
 }
 
-/// Everything the manifest loads before the trainer addon — the chain a LoadOnDemand load lands
-/// on. The stock row's label is a width-0 `<ButtonText>` (fit the text), so a measurer is seated
-/// the way the app's VM has one at world entry.
+/// What the manifest loads before the trainer addon, with a text measurer: the stock row's label
+/// is a width-0 `<ButtonText>`, sized to its text.
 fn trainer_script_base() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     s.set_text_measurer(Box::new(super::FixedWidthFont(7.0)));
-    // The reference's window calls `UpdateMicroButtons` on show and inherits the panel kit's
-    // templates, so the harness carries what the manifest loads before it, in the manifest's
-    // order (ScrollTemplates BEFORE UIPanelTemplates, 1846) — and the reference's own
-    // LoadOnDemand addon last, with the FrameXML templates file its list inherits from (1957).
+    // In manifest order (ScrollTemplates before UIPanelTemplates): the window calls
+    // `UpdateMicroButtons` and inherits the panel templates.
     for f in [
         "Interface\\FrameXML\\Fonts.xml",
         "Interface\\FrameXML\\GlobalStrings.lua",
@@ -80,10 +63,8 @@ fn trainer_script_base() -> UiScript {
     s
 }
 
-/// What follows the addon's files in its LoadOnDemand load (1957): the saved chunk (none in a
-/// bare harness) and then its ADDON_LOADED, whose arm pushes the three filter globals into the
-/// engine. The harness wants "used" shown too. The stock title reads `UnitName("npc")`, so the
-/// trainer NPC is seated here as the app seats it on TRAINER_SHOW.
+/// The rest of a LoadOnDemand load: `ADDON_LOADED` pushes the filter globals, "used" on, into the
+/// engine. The title reads `UnitName("npc")`, so the NPC is seated.
 fn finish_trainer_load(s: &mut UiScript) {
     s.set_unit(
         "npc",
@@ -100,8 +81,8 @@ fn finish_trainer_load(s: &mut UiScript) {
     );
 }
 
-/// Whether any rendered text quad carries `color` (within a small tolerance) — used to spot the
-/// reddened cost coins, whose `(1.0, 0.1, 0.1)` is distinct from the unavailable row's `(0.9, 0, 0)`.
+/// Whether any text quad renders in `color`: the red cost's `(1.0, 0.1, 0.1)` is distinct from an
+/// unavailable row's `(0.9, 0, 0)`.
 fn has_text_color(quads: &[ExtractedQuad], color: [f32; 3]) -> bool {
     quads.iter().any(|q| match &q.content {
         QuadContent::Text { color: Some(c), .. } => (0..3).all(|i| (c[i] - color[i]).abs() < 0.02),
@@ -109,8 +90,6 @@ fn has_text_color(quads: &[ExtractedQuad], color: [f32; 3]) -> bool {
     })
 }
 
-/// Whether the first text quad containing `needle` renders in `color` (small tolerance) — used to
-/// assert the selected row's white name vs. a state colour.
 fn text_has_color(quads: &[ExtractedQuad], needle: &str, color: [f32; 3]) -> bool {
     quads.iter().any(|q| match &q.content {
         QuadContent::Text {
@@ -122,7 +101,6 @@ fn text_has_color(quads: &[ExtractedQuad], needle: &str, color: [f32; 3]) -> boo
     })
 }
 
-/// The centre of the first text quad whose text contains `needle` — a point to aim the wheel at.
 fn text_center(quads: &[ExtractedQuad], needle: &str) -> (f32, f32) {
     let r = quads
         .iter()
@@ -134,8 +112,6 @@ fn text_center(quads: &[ExtractedQuad], needle: &str) -> (f32, f32) {
     ((r.left + r.right) * 0.5, (r.bottom + r.top) * 0.5)
 }
 
-/// One service in a named skill line, spelling out every field so the intent is legible at the call
-/// site.
 fn service(
     spell_id: u32,
     name: &str,
@@ -169,8 +145,7 @@ fn service(
     }
 }
 
-/// A two-line warrior menu. Groups sort by name (Arms < Fury); within a group by level then name. The
-/// full-filter tree is:
+/// A two-line warrior menu. Groups sort by name, services by level then name, so the tree is:
 ///   1 H:Arms · 2 Heroic Strike(avail,10c,l1) · 3 Cleave(unavail,l20,skill+ability) ·
 ///   4 H:Fury · 5 Rend(used,30c) · 6 Thunder Clap(avail,500c)
 fn menu() -> TrainerState {
@@ -203,9 +178,7 @@ fn menu() -> TrainerState {
                     rank: 50,
                     met: false,
                 }),
-                // The director's case: Cleave is gated (level/skill), but its prerequisite ability is
-                // already learned — so it reads MET (white) with its rank, decoupled from the
-                // service's unavailable state.
+                // Gated by level and skill, but the prerequisite is learned, so it reads white.
                 vec![TrainerAbilityReq {
                     name: "Charge (Rank 1)".into(),
                     met: true,
@@ -237,22 +210,16 @@ fn menu() -> TrainerState {
     }
 }
 
-/// The whole trainer window minus Bevy: it loads clean, opens on TRAINER_SHOW with the NPC name in the
-/// title, renders the interleaved tree (headers + services), picks the first available service, renders
-/// the exact `Cost:` label, gates Train on available-and-affordable, queues the selected row's spell id
-/// on a buy, reddens the cost of an unaffordable service, builds the `Requires:` line for a gated one,
-/// and hides on TRAINER_CLOSED.
 #[test]
 fn shipped_trainer_frame_drives_end_to_end() {
     benilla_formats::wow_data_or_skip!();
     let mut s = trainer_script();
 
-    // Hidden by default.
     assert!(!s
         .eval::<bool>("return ClassTrainerFrame:IsVisible()")
         .unwrap());
 
-    // The app's feed: 50 copper in the purse + the warrior menu, then the open event with the name.
+    // 50 copper: Heroic Strike (10c) is affordable, Thunder Clap (500c) is not.
     s.set_money(50);
     s.set_trainer(Some(menu()));
     s.fire_event(
@@ -261,7 +228,6 @@ fn shipped_trainer_frame_drives_end_to_end() {
     );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 
-    // Shown, title took the NPC name off arg1.
     assert!(s
         .eval::<bool>("return ClassTrainerFrame:IsVisible()")
         .unwrap());
@@ -271,7 +237,6 @@ fn shipped_trainer_frame_drives_end_to_end() {
         "Sana Winterhoof"
     );
 
-    // Row 1 renders the "Arms" header (its name, no indent); row 2 the first service.
     assert_eq!(
         s.eval::<String>("return ClassTrainerSkill1Text:GetText()")
             .unwrap(),
@@ -283,8 +248,7 @@ fn shipped_trainer_frame_drives_end_to_end() {
         "  Heroic Strike"
     );
 
-    // selectFirstService picked the first available row (Heroic Strike, index 2) → the detail pane
-    // shows the exact "Cost:" label and Train is enabled (available + 10c affordable at 50c).
+    // `ClassTrainer_SelectFirstLearnableSkill` selects row 2, Heroic Strike: Train is enabled.
     assert_eq!(
         s.eval::<i64>("return GetTrainerSelectionIndex()").unwrap(),
         2
@@ -298,14 +262,12 @@ fn shipped_trainer_frame_drives_end_to_end() {
         .eval::<bool>("return ClassTrainerTrainButton:IsEnabled() ~= 0")
         .unwrap());
 
-    // Train buys the selected service — the row's spell id reaches the app's drain.
     s.run("BuyTrainerService(GetTrainerSelectionIndex())")
         .unwrap();
     assert_eq!(s.take_trainer_buys(), vec![78]);
     assert!(s.take_trainer_buys().is_empty(), "drained");
 
-    // Select the available-but-unaffordable service (Thunder Clap, index 6, 500c > 50c): Train disables
-    // and the cost coins redden (SetMoneyFrameColor 1.0, 0.1, 0.1).
+    // Thunder Clap (row 6) is available but unaffordable: Train disables and the cost reddens.
     s.run("this = ClassTrainerSkill6; ClassTrainerSkillButton_OnClick('LeftButton')")
         .unwrap();
     assert!(!s
@@ -317,8 +279,7 @@ fn shipped_trainer_frame_drives_end_to_end() {
         "unaffordable cost coins render red"
     );
 
-    // Select the gated service (Cleave, index 3): the Requires: line is built from the level/skill/
-    // ability gates (byte-exact REQUIRES_LABEL), and Train stays disabled (unavailable).
+    // Cleave (row 3) is gated: the `Requires:` line lists its level, skill and ability gates.
     s.run("this = ClassTrainerSkill3; ClassTrainerSkillButton_OnClick('LeftButton')")
         .unwrap();
     let reqs = s
@@ -328,9 +289,7 @@ fn shipped_trainer_frame_drives_end_to_end() {
     for term in ["Level", "Swords", "Charge"] {
         assert!(reqs.contains(term), "reqs missing {term}: {reqs}");
     }
-    // The met prerequisite renders WHITE (|cffffffff…|r) with its rank, while the unmet level/skill
-    // gates redden — the mixed line the director asked for (a learned prev-rank isn't reddened just
-    // because the spell itself is unavailable).
+    // A met ability renders white (`TRAINER_REQ_ABILITY`) beside the red unmet gates.
     assert!(
         reqs.contains("|cffffffffCharge (Rank 1)|r"),
         "a known prerequisite shows white with its rank: {reqs}"
@@ -339,7 +298,6 @@ fn shipped_trainer_frame_drives_end_to_end() {
         .eval::<bool>("return ClassTrainerTrainButton:IsEnabled() ~= 0")
         .unwrap());
 
-    // The app's client-side close: clear the snapshot + fire TRAINER_CLOSED → the window hides.
     s.set_trainer(None);
     s.fire_event("TRAINER_CLOSED", vec![]);
     assert!(!s
@@ -348,8 +306,6 @@ fn shipped_trainer_frame_drives_end_to_end() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// Clicking a header row folds its group (and expands it back) — the tree collapse, end-to-end through
-/// the row button's OnClick → Collapse/ExpandTrainerSkillLine(headerIndex).
 #[test]
 fn clicking_a_header_row_collapses_its_group() {
     benilla_formats::wow_data_or_skip!();
@@ -367,8 +323,7 @@ fn clicking_a_header_row_collapses_its_group() {
         "  Heroic Strike"
     );
 
-    // Click the Arms header (row 1): its two services fold → 4 rows (H:Arms, H:Fury, Rend, Thunder
-    // Clap). Row 2 is now the Fury header.
+    // Folding Arms leaves 4 rows: H:Arms, H:Fury, Rend, Thunder Clap.
     s.run("this = ClassTrainerSkill1; ClassTrainerSkillButton_OnClick('LeftButton')")
         .unwrap();
     assert_eq!(s.eval::<i64>("return GetNumTrainerServices()").unwrap(), 4);
@@ -379,15 +334,12 @@ fn clicking_a_header_row_collapses_its_group() {
         "Arms folded; its header (row 1) now abuts the Fury header (row 2)"
     );
 
-    // Click it again → expands back to 6 rows.
     s.run("this = ClassTrainerSkill1; ClassTrainerSkillButton_OnClick('LeftButton')")
         .unwrap();
     assert_eq!(s.eval::<i64>("return GetNumTrainerServices()").unwrap(), 6);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The dropdown filter hides a state client-side: toggling "used" off drops the already-known service,
-/// its header stays, and the row count falls.
 #[test]
 fn filter_hides_a_state_keeping_headers() {
     benilla_formats::wow_data_or_skip!();
@@ -398,9 +350,7 @@ fn filter_hides_a_state_keeping_headers() {
 
     assert_eq!(s.eval::<i64>("return GetNumTrainerServices()").unwrap(), 6);
 
-    // Drive the dropdown's own click handler for the "used" row: the row button rides as `this` with
-    // its pre-click state (checked=on, value="used"), exactly as UIDropDownMenuButton_OnClick invokes
-    // the row func. It flips the engine filter off and repaints. Rend drops (6 → 5); headers remain.
+    // Button 3 is the "used" row, clicked through the kit's own handler.
     s.run("ToggleDropDownMenu(1, nil, ClassTrainerFrameFilterDropDown)")
         .unwrap();
     s.run("this = DropDownList1Button3; UIDropDownMenuButton_OnClick()")
@@ -418,13 +368,8 @@ fn filter_hides_a_state_keeping_headers() {
     );
 }
 
-/// The filter rows toggle **through the real dropdown kit** — the path a mouse takes, which the test
-/// above deliberately shortcuts by faking `this`. `UIDropDownMenuButton_OnClick` runs the row's func
-/// and only THEN flips the check for a `keepShownOnClick` row, so the func must not repaint the row
-/// itself: an in-func `UIDropDownMenu_Initialize` re-derived the check from the fresh engine state and
-/// the kit's flip then inverted it straight back — the check never moved on screen, and `this.checked`
-/// stuck true, so a filter turned off could never be turned back on. Click, re-click, and re-open all
-/// have to agree.
+/// `UIDropDownMenuButton_OnClick` flips a `keepShownOnClick` row's check after running its func:
+/// click, re-click and re-open must agree on screen and in the engine.
 #[test]
 fn filter_rows_toggle_through_the_dropdown_kit() {
     benilla_formats::wow_data_or_skip!();
@@ -433,8 +378,7 @@ fn filter_rows_toggle_through_the_dropdown_kit() {
     s.set_trainer(Some(menu()));
     s.fire_event("TRAINER_SHOW", vec![ScriptValue::Str("Sana".into())]);
 
-    // Open the menu the way the capsule's arrow does. Row 2 is "Unavailable" (Initialize's order),
-    // checked because trainer_script() turned every state on.
+    // Row 2 is "Unavailable", checked since `trainer_script` turns every state on.
     s.run("ToggleDropDownMenu(1, nil, ClassTrainerFrameFilterDropDown)")
         .unwrap();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
@@ -445,8 +389,6 @@ fn filter_rows_toggle_through_the_dropdown_kit() {
     assert!(row_checked(&mut s), "Unavailable starts checked");
     assert_eq!(s.eval::<i64>("return GetNumTrainerServices()").unwrap(), 6);
 
-    // Click it: the check clears, the engine filter clears, and Cleave (the unavailable service)
-    // drops out of the tree. Its Arms header stays.
     s.run("this = DropDownList1Button2; UIDropDownMenuButton_OnClick()")
         .unwrap();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
@@ -462,8 +404,6 @@ fn filter_rows_toggle_through_the_dropdown_kit() {
         "Cleave is hidden"
     );
 
-    // Click it again: back on, both on screen and in the engine — the case the old code could never
-    // reach, because `this.checked` never went false.
     s.run("this = DropDownList1Button2; UIDropDownMenuButton_OnClick()")
         .unwrap();
     assert!(row_checked(&mut s), "the re-click restores the check");
@@ -474,8 +414,7 @@ fn filter_rows_toggle_through_the_dropdown_kit() {
     );
     assert_eq!(s.eval::<i64>("return GetNumTrainerServices()").unwrap(), 6);
 
-    // Close and re-open: Initialize re-derives every row from the engine, so the menu agrees with
-    // what the clicks left behind (the two states left on, "used" still on from trainer_script()).
+    // Off again, then close and re-open: `Initialize` re-derives every row from the engine.
     s.run("this = DropDownList1Button2; UIDropDownMenuButton_OnClick()")
         .unwrap();
     s.run("ToggleDropDownMenu(1, nil, ClassTrainerFrameFilterDropDown)")
@@ -489,9 +428,7 @@ fn filter_rows_toggle_through_the_dropdown_kit() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// A menu bigger than the 11 visible rows (one skill line, 15 services → a 16-row tree), so the list
-/// scrolls. The wheel spins the list even when the cursor is over a row — the engine bubbles the spin
-/// up the parent chain to the window, which drives the faux-scroll bar.
+/// One skill line of 15 services, a 16-row tree over 11 visible rows, so the list scrolls.
 fn long_menu() -> TrainerState {
     TrainerState {
         greeting: "Much to learn.".into(),
@@ -525,7 +462,6 @@ fn wheel_over_a_row_scrolls_the_list() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 
     let row1 = "return ClassTrainerSkill1Text:GetText()";
-    // At the top: row 1 is the "Arms" header, row 2 the first service.
     assert_eq!(s.eval::<String>(row1).unwrap(), "Arms");
     assert_eq!(
         s.eval::<String>("return ClassTrainerSkill2Text:GetText()")
@@ -533,21 +469,16 @@ fn wheel_over_a_row_scrolls_the_list() {
         "  Service 01"
     );
 
-    // Aim the wheel at a LIST ROW's text (service 3 — visible at the top): the spot over a row.
+    // Aim over a row's text: the spin must reach the list from a row.
     s.resolve();
     let (x, y) = text_center(&s.extract(), "Service 03");
 
-    // Spin down (WoW convention: negative = down). The REFERENCE's wheel is a PAGE, not a row:
-    // `ScrollFrameTemplate_OnMouseWheel` moves `scrollBar:GetHeight() / 2` pixels
-    // (UIPanelTemplates.lua:150-157), the same half-bar the arrows use. Ours moved one row on
-    // purpose; the migration reverts that (1860), and the expected row is derived from the bar so
-    // this stays the reference's rule rather than a literal.
+    // Negative is down. The reference's wheel moves half the bar's height, a page and not a row
+    // (`ScrollFrameTemplate_OnMouseWheel`, `UIPanelTemplates.lua:150-157`).
     s.mouse_wheel(x, y, -1.0);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
-    // What this test is FOR is the wiring — wheel -> bar -> `<OnVerticalScroll>` ->
-    // `FauxScrollFrame_OnVerticalScroll` -> `frame.offset` -> the repaint. The magnitude is the
-    // reference's and is asserted as "a page, not a row"; pinning the exact row count would pin a
-    // pixel arithmetic whose inputs resolve a frame apart.
+    // The wiring is the subject (wheel, bar, `FauxScrollFrame_OnVerticalScroll`, repaint), so the
+    // magnitude is asserted only as more than a row.
     let offset = s
         .eval::<i64>("return ClassTrainerListScrollFrame.offset or -1")
         .unwrap();
@@ -561,9 +492,7 @@ fn wheel_over_a_row_scrolls_the_list() {
         "row 1 shows the entry the offset names, so the repaint followed the scroll"
     );
 
-    // A second spin cannot go deeper: 16 entries over 11 visible rows makes 5 the deepest legal
-    // offset, and the reference's half-bar page already reached it in one spin. That it STOPS
-    // there is the clamp working, not the wheel failing.
+    // 16 rows over 11 make 5 the deepest offset, which one half-bar page already reaches.
     s.mouse_wheel(x, y, -1.0);
     assert_eq!(
         s.eval::<i64>("return ClassTrainerListScrollFrame.offset or -1")
@@ -572,7 +501,6 @@ fn wheel_over_a_row_scrolls_the_list() {
         "clamped at the bottom (numItems - numToDisplay), never past it"
     );
 
-    // Spin back up twice: the list returns to the top and stops there, never past it.
     s.mouse_wheel(x, y, 1.0);
     s.mouse_wheel(x, y, 1.0);
     assert_eq!(
@@ -584,18 +512,9 @@ fn wheel_over_a_row_scrolls_the_list() {
     assert_eq!(s.eval::<String>(row1).unwrap(), "Arms");
 }
 
-/// The selected service row's name renders white (HIGHLIGHT), legible against its colour glow — and
-/// so does a HOVERED one. Both are the reference's own behaviour, through one mechanism: the row's
-/// name is the button's `<ButtonText>` under a `<HighlightFont inherits="GameFontHighlight">`, the
-/// engine swaps that instance in while the cursor is on the row, and `LockHighlight()` pins it for
-/// the selection (Blizzard_TrainerUI.lua l.183). `SetTextColor` writes the NORMAL instance only, so
-/// the state colour cannot follow the label into either state — which is exactly why it goes white.
-///
-/// An earlier revision of this test called the white name "a deliberate divergence from the ref
-/// (which whitens only the subtext)". The ref whitens the subtext *by hand* precisely BECAUSE the
-/// subtext is a child FontString the lock cannot reach; the name it leaves to the lock. Ours could
-/// not, because the name was a child FontString too and the engine's highlighted label fell back to
-/// the normal state's colour — so the white was hand-painted here and absent on hover entirely.
+/// The row's name is its button's `<ButtonText>`: hover swaps in the `GameFontHighlight` font and
+/// `LockHighlight()` pins it for the selection (`Blizzard_TrainerUI.lua:183`), while `SetTextColor`
+/// writes only the normal font, so both states read white.
 #[test]
 fn a_selected_or_hovered_service_row_paints_its_name_white() {
     benilla_formats::wow_data_or_skip!();
@@ -605,15 +524,12 @@ fn a_selected_or_hovered_service_row_paints_its_name_white() {
     s.fire_event("TRAINER_SHOW", vec![ScriptValue::Str("Sana".into())]);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 
-    // The name really is the button's own label now — a child FontString would leave
-    // GetFontString() nil and no per-state font could reach it.
     assert!(
         s.eval::<bool>("return ClassTrainerSkill1:GetFontString() ~= nil")
             .unwrap(),
         "the row name is the Button's ButtonText, the only region per-state fonts reach"
     );
 
-    // Cleave (index 3) is unavailable → red when not selected. Select it → its name goes white.
     s.run("this = ClassTrainerSkill3; ClassTrainerSkillButton_OnClick('LeftButton')")
         .unwrap();
     s.resolve();
@@ -622,7 +538,6 @@ fn a_selected_or_hovered_service_row_paints_its_name_white() {
         "the selected row's name renders white"
     );
 
-    // Select Heroic Strike (index 2): Cleave is no longer selected → back to unavailable red.
     s.run("this = ClassTrainerSkill2; ClassTrainerSkillButton_OnClick('LeftButton')")
         .unwrap();
     s.resolve();
@@ -631,7 +546,6 @@ fn a_selected_or_hovered_service_row_paints_its_name_white() {
         "an unselected unavailable row is red again"
     );
 
-    // Now hover it, selecting nothing: the HighlightFont instance takes over and the row lights up.
     let (x, y) = text_center(&s.extract(), "Cleave");
     s.mouse_move(x, y);
     s.resolve();
@@ -644,7 +558,6 @@ fn a_selected_or_hovered_service_row_paints_its_name_white() {
         "and the SELECTED row stays white while another is hovered"
     );
 
-    // Cursor off the list: the hovered row falls back to its state colour, the selected one holds.
     s.mouse_move(1000.0, 20.0);
     s.resolve();
     assert!(
@@ -657,9 +570,8 @@ fn a_selected_or_hovered_service_row_paints_its_name_white() {
     );
 }
 
-/// Scrolling is silent, faithfully: the mouse WHEEL plays no sound (the ref's
-/// `ScrollFrameTemplate_OnMouseWheel` is soundless — the director asked for no sound when scrolling),
-/// while the arrow BUTTONS keep the ref's `UChatScrollButton` click.
+/// The wheel scrolls silently, as the stock `ScrollFrameTemplate_OnMouseWheel` plays no sound; the
+/// arrow buttons play `UChatScrollButton`.
 #[test]
 fn wheel_scroll_is_silent_but_the_arrows_click() {
     benilla_formats::wow_data_or_skip!();
@@ -671,7 +583,6 @@ fn wheel_scroll_is_silent_but_the_arrows_click() {
 
     let click = SoundRequest::KitName("UChatScrollButton".into());
 
-    // A wheel spin over the list scrolls it (proven by the wheel test) but plays NOTHING.
     s.resolve();
     let (x, y) = text_center(&s.extract(), "Service 03");
     s.mouse_wheel(x, y, -1.0);
@@ -680,12 +591,9 @@ fn wheel_scroll_is_silent_but_the_arrows_click() {
         "the wheel scroll is silent"
     );
 
-    // That one notch reached the BOTTOM, and the arrow to click afterwards is therefore the UP
-    // one. `ScrollFrameTemplate_OnMouseWheel` moves half the bar's height — 76px on this window's
-    // 152-tall bar — and `SetValue` snaps that onto the row lattice (step 16), which rounds 76 up
-    // to the range's own 80 (2133). `FauxScrollFrame_Update` then greys the DOWN arrow on its
-    // `GetValue() - scrollFrameHeight == 0` test, so clicking it would be clicking a disabled
-    // button. Pinned rather than worked around: this snap is the reference's.
+    // One notch reaches the bottom: half the 152-tall bar is 76px, which `SetValue` snaps to the
+    // 16px step as the range's 80, as the reference does; `FauxScrollFrame_Update` then disables
+    // the down arrow (`UIPanelTemplates.lua:199`).
     assert_eq!(
         s.eval::<f64>("return ClassTrainerListScrollFrameScrollBar:GetValue()")
             .unwrap(),
@@ -693,7 +601,6 @@ fn wheel_scroll_is_silent_but_the_arrows_click() {
         "one wheel notch = 76px, snapped to the 5-row bottom of an 80px range"
     );
 
-    // The up arrow, now the enabled one — clicking it plays the ref's arrow click.
     s.run("ClassTrainerListScrollFrameScrollBarScrollUpButton:Click()")
         .unwrap();
     assert!(
@@ -702,15 +609,8 @@ fn wheel_scroll_is_silent_but_the_arrows_click() {
     );
 }
 
-/// The scrollbar ARROWS move the list the way they point, and stop at the top.
-///
-/// **The STEP is the reference's, not ours, since 1860.** `UIPanelScrollBarTemplate`'s arrow
-/// OnClick is `parent:SetValue(parent:GetValue() -/+ (parent:GetHeight() / 2))` — half the BAR's
-/// height in pixels, which for this window's 144-tall bar over 16px rows is five rows. Our
-/// deleted kit stepped exactly one row on purpose ("the generic ref scrollbar steps half its
-/// height; a discrete row list wants one"); the migration reverts that, and the magnitude here is
-/// computed from the bar rather than written as a literal so it stays the reference's rule and not
-/// a number someone has to re-derive.
+/// The arrows step half the bar's height (`UIPanelScrollBarTemplate`,
+/// `UIPanelTemplates.xml:137-149`), several rows at a time, and stop at the top.
 #[test]
 fn the_scrollbar_arrows_step_the_list_the_way_they_point() {
     benilla_formats::wow_data_or_skip!();
@@ -728,8 +628,7 @@ fn the_scrollbar_arrows_step_the_list_the_way_they_point() {
         ))
         .unwrap();
     };
-    // The reference's own step, read off the bar: half its height in pixels, rounded to rows the
-    // way `FauxScrollFrame_OnVerticalScroll` rounds (`floor(v/itemHeight + 0.5)`).
+    // Pixels round to rows as `floor(v/itemHeight + 0.5)` (`UIPanelTemplates.lua:231`).
     assert_eq!(offset(&mut s), 0, "opens at the top");
     click(&mut s, "Down");
     let step = offset(&mut s);
@@ -745,12 +644,8 @@ fn the_scrollbar_arrows_step_the_list_the_way_they_point() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// **The filter is remembered across a restart** — the whole persistence path, in
-/// The reference's own restart, through its own mechanism (1957): the addon is a LoadOnDemand
-/// registry row read off the chain; `LoadAddOn` runs its files (file-scope defaults), then its
-/// per-addon saved file over them, then fires ADDON_LOADED — whose arm pushes the three filter
-/// globals into the engine. A dropdown toggle writes the GLOBAL; the addon's `## SavedVariables`
-/// carry it into the file; a fresh VM loading the addon comes up with the toggle applied.
+/// A dropdown click writes the global, `## SavedVariables` saves it, and on a restart `LoadAddOn`
+/// runs the files, the saved file, then `ADDON_LOADED`, whose arm pushes it into the engine.
 #[test]
 fn the_state_filter_survives_a_restart_through_the_saved_variables_file() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -793,8 +688,7 @@ fn the_state_filter_survives_a_restart_through_the_saved_variables_file() {
 
     let mut s = trainer_script_base();
     boot(&mut s);
-    // The reference's own file-scope default hides known spells (TRAINER_FILTER_USED = 0), so
-    // the one used service is out on the very first paint: 2 headers + 3 of the 4 services.
+    // The stock default `TRAINER_FILTER_USED = 0` hides the known service: 2 headers, 3 services.
     assert_eq!(s.eval::<i64>("return GetNumTrainerServices()").unwrap(), 5);
     assert_eq!(
         info().saved_variables,
@@ -824,8 +718,7 @@ fn the_state_filter_survives_a_restart_through_the_saved_variables_file() {
     );
     std::fs::write(saved_dir.join("Blizzard_TrainerUI.lua"), &text).unwrap();
 
-    // The restart: a fresh VM loads the addon on demand — files, then the saved file, then
-    // ADDON_LOADED — and the first paint is already filtered.
+    // The restart: a fresh VM loads the addon on demand, and its first paint is filtered.
     let mut fresh = trainer_script_base();
     boot(&mut fresh);
     assert!(
@@ -842,10 +735,8 @@ fn the_state_filter_survives_a_restart_through_the_saved_variables_file() {
     let _ = std::fs::remove_dir_all(&saved_dir);
 }
 
-/// A **new list packet resets the engine's filter mask** to the builder's own default — mask 3 at a
-/// class/tradeskill/pet trainer, mask 5 (available|used) at a mount trainer — and clears the collapse
-/// set, byte-verified. This is the engine half of the pair above: the reset is why
-/// the window re-pushes its saved globals on every show.
+/// A new list resets the filter mask to 3 (available|unavailable), or 5 (available|used) at a
+/// mount trainer, and clears the collapse set, as the reference's list builder does (`0x4d75d9`).
 #[test]
 fn a_new_list_packet_resets_the_filter_mask_and_the_collapse_set() {
     benilla_formats::wow_data_or_skip!();
@@ -855,7 +746,7 @@ fn a_new_list_packet_resets_the_filter_mask_and_the_collapse_set() {
         "ADDON_LOADED",
         vec![ScriptValue::Str("Blizzard_TrainerUI".into())],
     );
-    // Collapse a group, and turn a state off directly (no global) — both are engine-side state.
+    // Engine-side state only: a collapsed group, and `used` set with no global.
     s.run("CollapseTrainerSkillLine(1) SetTrainerServiceTypeFilter('used', 1)")
         .unwrap();
     assert!(s
@@ -881,7 +772,7 @@ fn a_new_list_packet_resets_the_filter_mask_and_the_collapse_set() {
         "nothing collapsed any more (6 rows less the already-known service the mask now hides)"
     );
 
-    // A mount trainer wants available|used instead — what makes a known mount visible at all.
+    // A mount trainer gets available|used, which is what shows a known mount at all.
     s.reset_trainer_list_state(1);
     assert!(s
         .eval::<bool>("return GetTrainerServiceTypeFilter('used') == 1")
@@ -891,8 +782,7 @@ fn a_new_list_packet_resets_the_filter_mask_and_the_collapse_set() {
         .unwrap());
 }
 
-/// A profession trainer's list: one skill line, a long recipe name and a short one, each with a rank
-/// subtext — the shape of the B253 report (a Leatherworking trainer at "Handstitched Leather Pants").
+/// One profession skill line: a long recipe name and a short one, each with a rank subtext.
 fn recipe_menu() -> TrainerState {
     let mut long = service(
         3756,
@@ -926,16 +816,9 @@ fn recipe_menu() -> TrainerState {
     }
 }
 
-/// **B253 — a long row name drew two lines over the row beneath it.** The row is a FLOW, not two
-/// fixed columns: the name carries no width (a FontString given one wraps at it, and a 16 px row
-/// cannot grow), and the rank follows the name's right edge rather than sitting at an invented
-/// x=188. Both halves are the reference's own row
-/// (`ClassTrainerFrameTemplates.xml`'s `<ButtonText>` at width 0 + the per-row
-/// `SetPoint("LEFT", <row>Text, "RIGHT", 10, 0)`), read off the player's chain.
-///
-/// The mutation check is the first assertion: put a `<Size>` back on the row's `<ButtonText>` and
-/// the request
-/// carries a wrap width, the long name measures two lines, and its height passes the row height.
+/// The stock row is a flow: its `<ButtonText>` has width 0 (ClassTrainerFrameTemplates.xml), so a
+/// long name stays on one line in its 16 px row, and the rank is anchored 10 px past the name's
+/// right edge (`Blizzard_TrainerUI.lua:157`).
 #[test]
 fn a_long_row_name_stays_on_one_line_and_carries_its_rank_along() {
     benilla_formats::wow_data_or_skip!();
@@ -945,8 +828,8 @@ fn a_long_row_name_stays_on_one_line_and_carries_its_rank_along() {
     s.fire_event("TRAINER_SHOW", vec![ScriptValue::Str("Nadyia".into())]);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 
-    // The host measure: 6 px per character, 14 px per line, wrapped at whatever width was asked for.
-    // Capture the row names' requests on the way past — what they ASK is the structural fact.
+    // A host measure of 6 px per character and 14 px per line; the name's requests are kept, since
+    // what it asks for is the fact under test.
     let mut name_wraps: Vec<Option<f32>> = Vec::new();
     let mut answer = |s: &mut UiScript, collect: bool| {
         let reqs = s.fontstrings_needing_measure();
@@ -1028,17 +911,8 @@ fn a_long_row_name_stays_on_one_line_and_carries_its_rank_along() {
     );
 }
 
-/// **B256 — "filter to Available, learn a spell, the filter comes back partly reset."** The window
-/// is driven here through the real [`crate::ui_trainer::TrainerOpen`], so the packet→reset decision
-/// under test is the app's own and not this test's: the closure below is the trainer feed's three
-/// lines (`if open.fresh_list { reset } ; set_trainer ; fire`), and everything else is the shipped
-/// Lua.
-///
-/// The reference cannot produce this bug because it never gets a list packet with the window open —
-/// it repaints a purchase from a client-side state re-derivation (`0x4d7d40`).
-/// benilla re-asks the server instead, so the reference's per-packet mask reset (`0x4d75d9`) was
-/// riding in on a packet the reference never sends, and taking the player's choice — and their
-/// collapsed groups, which 1128 recorded as "a collapse does not survive a purchase" — with it.
+/// A purchase repaints in place, as the reference's state re-evaluator (`0x4d7d40`) does, so the
+/// player's filter and collapse stand; only a fresh list resets the mask (`0x4d75d9`).
 #[test]
 fn learning_a_spell_keeps_the_filter_and_the_collapse_a_re_open_still_resets() {
     benilla_formats::wow_data_or_skip!();
@@ -1046,7 +920,7 @@ fn learning_a_spell_keeps_the_filter_and_the_collapse_a_re_open_still_resets() {
     const DAZALAR: u64 = 0xabc;
 
     let mut s = trainer_script();
-    // The reference's own file-scope defaults (1128), then the player's choice below.
+    // The stock file-scope defaults.
     s.run("TRAINER_FILTER_AVAILABLE = 1 TRAINER_FILTER_UNAVAILABLE = 1 TRAINER_FILTER_USED = 0")
         .unwrap();
     s.fire_event(
@@ -1055,7 +929,7 @@ fn learning_a_spell_keeps_the_filter_and_the_collapse_a_re_open_still_resets() {
     );
     s.set_money(5000);
 
-    // The trainer feed (`ui_trainer::feed_trainer`), reduced to the part this bug lives in.
+    // `ui_trainer::feed_trainer`, reduced to its reset-then-fire.
     fn feed(s: &mut UiScript, open: &mut TrainerOpen, state: TrainerState, event: &str) {
         if open.fresh_list {
             s.reset_trainer_list_state(open.trainer_type);
@@ -1091,13 +965,11 @@ fn learning_a_spell_keeps_the_filter_and_the_collapse_a_re_open_still_resets() {
         4,
         "two headers over the two learnable services"
     );
-    // …and folds the first group away while he is at it.
     s.run("CollapseTrainerSkillLine(1)").unwrap();
     assert_eq!(rows(&mut s), 3, "the folded group keeps its header only");
 
-    // He trains. The spell lands (`SMSG_LEARNED_SPELL`) and the state re-evaluator (2333, the
-    // reference's `0x4d7d40`) repaints the bought row gray IN PLACE — no second list, so nothing
-    // that a list packet resets.
+    // He trains: the state re-evaluator (the reference's `0x4d7d40`) repaints the bought row gray
+    // in place, with no second list to reset anything.
     let mut learned = menu();
     learned.services[0].category = TrainerServiceCategory::Used;
     feed(&mut s, &mut open, learned, "TRAINER_UPDATE");
@@ -1122,11 +994,9 @@ fn learning_a_spell_keeps_the_filter_and_the_collapse_a_re_open_still_resets() {
     s.run("ToggleDropDownMenu(1, nil, ClassTrainerFrameFilterDropDown)")
         .unwrap();
 
-    // He walks away and comes back: THIS packet opens a window, so the reference's reset lands
-    // (`0x4d75d9` writes the mask to 3 on every list) — and nothing puts the saved globals back
-    // over it: the stock addon pushes them once, on ITS ADDON_LOADED, which a LoadOnDemand
-    // addon fires on the session's first trainer. The collapse is engine-side and clears too
-    // (1957; the transcription used to re-push on show, which the reference never does).
+    // He walks away and back: a fresh list resets the mask to 3 (`0x4d75d9`), and the stock addon
+    // pushes its globals only on its one `ADDON_LOADED`, so nothing restores his choice; the
+    // collapse clears too.
     open.clear();
     open.open(DAZALAR, 0, vec![], "Hello, hunter!".into());
     let mut learned = menu();
@@ -1149,25 +1019,10 @@ fn learning_a_spell_keeps_the_filter_and_the_collapse_a_re_open_still_resets() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **The detail pane after learning a spell** — the director's report: the trained row vanished, the
-/// highlight landed on the row that slid into its place, and the name/icon/cost/`Requires:` block
-/// below went on describing the spell that was gone.
-///
-/// The stock Lua repaints that pane on `TRAINER_UPDATE` through **one** door:
-/// `ClassTrainer_SelectFirstLearnableSkill`, the only thing that restores
-/// `ClassTrainerFrame.showSkillDetails` after `ClassTrainerTrainButton_OnClick` cleared it —
-/// `ClassTrainer_SetSelection` early-returns while it is nil. Which door `TRAINER_UPDATE` takes is
-/// decided entirely by the engine's `GetTrainerSelectionIndex()`, and the reference's answer for a
-/// service that has gone off screen is its index in the hidden **tail** — past
-/// `GetNumTrainerServices()`, never a live row (`0x4d7520`; see `benilla_ui`'s `selected_row`). So
-/// the reference takes the `> 1` branch, resets the scroll, and hides the pane.
-///
-/// **What a player sees after training, in the reference and now here: an empty detail pane and no
-/// highlighted row.** It does not advance to the next spell — that is the *fresh window's*
-/// behaviour, which is what a selection reading 0 or 1 would have produced.
-///
-/// Driven through the real [`crate::ui_trainer::TrainerOpen`] like B256's test above, for the same
-/// reason: the packet-vs-repaint decision under test is the app's own.
+/// After a purchase the reference shows an empty detail pane and no highlight: the Train click
+/// clears `showSkillDetails`, which `TRAINER_UPDATE` restores only for a selection index of 0 or
+/// 1, and the engine answers the learned service's index in the hidden tail, past
+/// `GetNumTrainerServices()` (`0x4d7520`), so the stock arm hides the pane.
 #[test]
 fn learning_a_spell_takes_the_detail_pane_with_it_instead_of_stranding_the_last_one() {
     benilla_formats::wow_data_or_skip!();
@@ -1175,8 +1030,7 @@ fn learning_a_spell_takes_the_detail_pane_with_it_instead_of_stranding_the_last_
     const DAZALAR: u64 = 0xabc;
 
     let mut s = trainer_script();
-    // The reference's own file-scope defaults (1128) — "already known" OFF, which is what makes a
-    // learned service leave the list at all.
+    // The stock defaults: "already known" off, so a learned service leaves the list.
     s.run("TRAINER_FILTER_AVAILABLE = 1 TRAINER_FILTER_UNAVAILABLE = 1 TRAINER_FILTER_USED = 0")
         .unwrap();
     s.fire_event(
@@ -1185,7 +1039,7 @@ fn learning_a_spell_takes_the_detail_pane_with_it_instead_of_stranding_the_last_
     );
     s.set_money(5000);
 
-    // The trainer feed (`ui_trainer::feed_trainer`), reduced to the part this bug lives in.
+    // `ui_trainer::feed_trainer`, reduced to its reset-then-fire.
     fn feed(s: &mut UiScript, open: &mut TrainerOpen, state: TrainerState, event: &str) {
         if open.fresh_list {
             s.reset_trainer_list_state(open.trainer_type);
@@ -1210,7 +1064,6 @@ fn learning_a_spell_takes_the_detail_pane_with_it_instead_of_stranding_the_last_
     open.open(DAZALAR, 0, vec![], "Hello, warrior!".into());
     feed(&mut s, &mut open, menu(), "TRAINER_SHOW");
 
-    // Row 2 is the first learnable — the row the window opens on, and the one he trains.
     assert_eq!(row_name(&mut s, 2), "Heroic Strike");
     assert_eq!(
         pane(&mut s),
@@ -1224,10 +1077,8 @@ fn learning_a_spell_takes_the_detail_pane_with_it_instead_of_stranding_the_last_
         "the Train button bought the selected row"
     );
 
-    // The spell lands and the re-evaluator (2333) repaints the bought row gray in place; with
-    // "already known" off it leaves the list, and Cleave slides up into row 2 under where the
-    // selection used to be. (Until 2333 this was a second list packet marked as a refresh —
-    // B256.)
+    // The re-evaluator greys the bought row in place; with "already known" off it leaves the
+    // list, and Cleave slides up into row 2.
     let mut learned = menu();
     learned.services[0].category = TrainerServiceCategory::Used;
     feed(&mut s, &mut open, learned, "TRAINER_UPDATE");
@@ -1254,24 +1105,15 @@ fn learning_a_spell_takes_the_detail_pane_with_it_instead_of_stranding_the_last_
         "because the engine answers with the hidden row, which is what steers the window there"
     );
 
-    // And he can pick the next one up by hand, which is the whole of the recovery.
     s.run("this = ClassTrainerSkill2 ClassTrainerSkillButton_OnClick('LeftButton')")
         .unwrap();
     assert_eq!(pane(&mut s), (true, "Cleave".into()));
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **The filter click has to repaint the LIST, not just the engine** — the
-/// director's "filter no longer work", with the dropdown showing Available only and red rows still
-/// under it.
-///
-/// Every other test in this file asserts `GetNumTrainerServices()`, which is the engine's own
-/// answer and moves the instant the mask does. What the player looks at is the row buttons, and
-/// those are painted by `ClassTrainerFrame_Update` — which after a filter click is reached from
-/// exactly one place: `ClassTrainerFrame_OnEvent`'s `TRAINER_UPDATE` arm. The stock click handler
-/// fires no event and calls no update (its `ScrollBar:SetValue(0)` is a no-op at zero), because in
-/// the reference the **engine** fires it from the mask-commit thunk `0x4d8c90`
-/// (`mov ecx,0x136; jmp 0x703e50`). Ours did not, so the checkbox moved and the list did not.
+/// A filter click repaints the row buttons, not just the engine's count: the stock click handler
+/// fires no update, because in the reference the engine's mask-commit thunk fires `TRAINER_UPDATE`
+/// (`0x4d8c90`: `mov ecx,0x136; jmp 0x703e50`), whose arm runs `ClassTrainerFrame_Update`.
 #[test]
 fn a_filter_click_repaints_the_rows_the_player_is_looking_at() {
     benilla_formats::wow_data_or_skip!();
@@ -1280,7 +1122,7 @@ fn a_filter_click_repaints_the_rows_the_player_is_looking_at() {
     s.set_trainer(Some(menu()));
     s.fire_event("TRAINER_SHOW", vec![ScriptValue::Str("Sana".into())]);
 
-    // What the player sees: the painted row buttons, counted the way the eye does.
+    // The painted row buttons, as the player sees them.
     let painted = "\
 local n = 0
 for i = 1, 11 do
@@ -1295,8 +1137,8 @@ return n";
         .unwrap();
     s.run("this = DropDownList1Button3; UIDropDownMenuButton_OnClick()")
         .unwrap();
-    // The engine's queued `TRAINER_UPDATE` lands on the next tick (a binding cannot re-enter the
-    // handler dispatch from inside Lua — the queue's own contract).
+    // The engine's queued `TRAINER_UPDATE` lands on the next tick: a binding cannot re-enter the
+    // handler dispatch from inside Lua.
     s.tick(0.016);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 

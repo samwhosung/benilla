@@ -1,19 +1,10 @@
-//! The XP bar's own tests — the hover plate, the rested/exhaustion-tick system and the
-//! on-bar numerals — split from `action_bar_tests.rs`, which keeps the
-//! action-button machinery. Same file, two concerns: the strip along the bar's top is the
-//! player-progress readout; the buttons are the input surface.
+//! The XP bar: its hover plate, the exhaustion tick and the on-bar numerals.
 
 use benilla_ui::script::{QuadContent, ScriptValue, UiScript, UnitState};
 
-/// The XP bar's load set: the manifest prefix it actually needs — fonts, UIParent, the
-/// tooltip, `TextStatusBar.xml` (the numerals machinery `BenillaExpBar_OnLoad` wires in),
-/// then Cooldown + the bar itself (manifest order).
 fn exp_bar_harness() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    // Through the shared both-stores loader, not a disk read off `assets/ui`: `TextStatusBar.xml`
-    // is the reference's own since 1751, and a hand-rolled reader here would look for it in the
-    // wrong store — and would leave its `<Script file="TextStatusBar.lua"/>` unresolved besides.
     for file in [
         "Interface\\FrameXML\\Fonts.xml",
         r"Interface\FrameXML\UIParent.xml",
@@ -28,10 +19,8 @@ fn exp_bar_harness() -> UiScript {
         "Interface\\FrameXML\\MainMenuBar.xml",
         "Interface\\FrameXML\\ActionBarFrame.xml",
         "Interface\\FrameXML\\BonusActionBarFrame.xml",
-        // The reference declares the reputation WATCH BAR in `ReputationFrame.xml`, and
-        // `ExhaustionTick_Update` reads `ReputationWatchBar:IsShown()` twice — the reference's own
-        // coupling of MainMenuBar to that pane. So an action-bar harness loads it, and with it the
-        // two template files its check boxes inherit through (1875).
+        // `ExhaustionTick_Update` reads `ReputationWatchBar`, which `ReputationFrame.xml`
+        // declares; the two template files before it are what its check boxes inherit.
         r"Interface\FrameXML\UIPanelTemplates.lua",
         r"Interface\FrameXML\UIPanelTemplates.xml",
         r"Interface\FrameXML\OptionsFrameTemplates.xml",
@@ -39,27 +28,18 @@ fn exp_bar_harness() -> UiScript {
     ] {
         super::test_ui::load_ui(&s, file);
     }
-    // 1.12 ships detailed tips ON — `SHOW_NEWBIE_TIPS = "1"` is UIOptionsFrame_Init's (ref
-    // UIOptionsFrame.lua l.100; ours sits in OptionsFrame.xml's uvar block, 1968), and a harness
-    // without the options file says so itself, the way the reference's tooltip would read it.
+    // The stock default, detailed tips on (`UIOptionsFrame.lua:100`); no options file loads here.
     s.run("SHOW_NEWBIE_TIPS = \"1\"").unwrap();
     s
 }
 
-/// The XP bar's hover (ref-MainMenuBar.xml l.136-147): the strip takes the mouse, and the plate is
-/// the ref's two-line `GameTooltip_AddNewbieTip` — "XP Bar" over the wrapped explanation.
-///
-/// `enableMouse` is the load-bearing half and the easy thing to lose: without it the strip is
-/// transparent and the hover silently never fires, which no tooltip assertion alone would catch.
 #[test]
 fn the_xp_bar_takes_the_mouse_and_explains_itself() {
     benilla_formats::wow_data_or_skip!();
     let mut s = exp_bar_harness();
     s.resolve();
 
-    // Mid-height of the strip (the bar's top 13 px), a quarter of the way along — NOT its
-    // horizontal center, where the page arrows straddle the strip's lower edge and rightly take
-    // the mouse ahead of it.
+    // A quarter along, not the centre, where the page arrows overlap the strip and take the mouse.
     let (x, y) = s
         .eval::<(f64, f64)>(
             "return MainMenuExpBar:GetLeft() + MainMenuExpBar:GetWidth() / 4, \
@@ -100,11 +80,8 @@ fn the_xp_bar_takes_the_mouse_and_explains_itself() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The exhaustion tick (ref `ExhaustionTick_Update`): with 1000/10000 XP and a
-/// rested pool of 700 base-XP, the doubled span is 1400 bar-XP, so the tick parks at
-/// (1000+1400)/10000 of the strip's width and the pale fill stretches exactly to it; the bar
-/// paints rested blue. Draining the pool (normal state) hides both and returns the purple; a
-/// pool whose span runs past the level's end hides the tick but keeps the rested blue.
+/// A 700 rested pool doubles to a 1400 XP span, so at 1000/10000 the tick sits at 2400/10000 of
+/// the strip (`ExhaustionTick_Update`).
 #[test]
 fn the_exhaustion_tick_marks_where_rested_runs_out() {
     benilla_formats::wow_data_or_skip!();
@@ -115,8 +92,7 @@ fn the_exhaustion_tick_marks_where_rested_runs_out() {
     s.fire_event("PLAYER_ENTERING_WORLD", vec![]);
     s.resolve();
 
-    // The binding trio underneath (the app-feed shape the XML consumes) — the reference's
-    // contract (`0x48d350`, `0x48d3f0`, `0x516ea0`).
+    // The three bindings under the bar (`0x48d350`, `0x48d3f0`, `0x516ea0`).
     let (id, name, mult) = s
         .eval::<(i64, String, f64)>("return GetRestState()")
         .unwrap();
@@ -150,7 +126,6 @@ fn the_exhaustion_tick_marks_where_rested_runs_out() {
         .unwrap();
     assert!(ok, "tick at the rested boundary, fill up to it, bar blue");
 
-    // The pool drains dry: state normal, no threshold — tick and fill gone, purple back.
     s.set_rest_state(2, 0, false);
     s.fire_event("UPDATE_EXHAUSTION", vec![]);
     let ok: bool = s
@@ -166,10 +141,9 @@ fn the_exhaustion_tick_marks_where_rested_runs_out() {
         .unwrap();
     assert!(ok, "a dry pool hides the tick and returns the purple bar");
 
-    // The nil law is the BYTE's, not the pool's (0x48d3f0's `dec/jne`): a normal-
-    // state player with a nonzero pool — vmangos's 0 < bonus ≤ 10 hysteresis window — still reads
-    // nil, and a rested player with a drained pool reads the NUMBER 0 (the tick then parks at the
-    // bar's current fill). An unmapped byte (0 here) is the binary's nil-triple fail path.
+    // `GetXPExhaustion`'s nil follows the rest-state byte, not the pool (`0x48d3f0`): normal with
+    // a remnant pool (the server's 0 < bonus <= 10 window) is nil, rested and drained is 0. An
+    // unmapped byte fails `GetRestState` to three nils.
     s.set_rest_state(2, 5, false);
     s.fire_event("UPDATE_EXHAUSTION", vec![]);
     assert_eq!(
@@ -193,8 +167,7 @@ fn the_exhaustion_tick_marks_where_rested_runs_out() {
     s.set_rest_state(2, 0, false);
     s.fire_event("UPDATE_EXHAUSTION", vec![]);
 
-    // A pool past the level's end (6000×2 span from 1000/10000): off the strip → hidden tick,
-    // still rested blue (the ref's exhaustionTickSet > width branch).
+    // 6000 doubled runs past the level's end: `exhaustionTickSet > width` hides the tick.
     s.set_rest_state(1, 6000, false);
     s.fire_event("UPDATE_EXHAUSTION", vec![]);
     let ok: bool = s
@@ -214,12 +187,8 @@ fn the_exhaustion_tick_marks_where_rested_runs_out() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The max-level rail (ref `ReputationWatchBar_Update`'s no-watched-faction arm):
-/// at MAX_PLAYER_LEVEL the XP strip and its tick give way to the flat brass rail; below it the
-/// strip is back. Walked over a live ding — 59 → 60 via `PLAYER_LEVEL_UP`'s arg1, the value the
-/// ref reads (not the level field, which may not have landed yet). The tick's own handler runs
-/// first (it loaded first) and re-shows the tick off the rested pool; the rail's handler then
-/// hides it — the ref's own load order, ending hidden.
+/// `ReputationWatchBar_Update` swaps in the rail at `MAX_PLAYER_LEVEL`, read from
+/// `PLAYER_LEVEL_UP`'s arg1; the tick's handler runs first by load order, so the rail's hides it.
 #[test]
 fn the_max_level_rail_replaces_the_xp_bar_at_60() {
     benilla_formats::wow_data_or_skip!();
@@ -266,20 +235,15 @@ fn the_max_level_rail_replaces_the_xp_bar_at_60() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The gryphon end caps stay over the strip and the rail across ANY show/hide history —
-/// including the faithful hidden→visible tail re-stamp (0x76ae10 / 0884, which a stale-rail
-/// recovery exercises: decision 1106's whole bug walked through here). The protection is
-/// 0884's own key order: the caps ride the art frame's OVERLAY and the strip's fill its
-/// ARTWORK, and within a `(strata, level)` bucket the LAYER outranks every stamp — no
-/// re-stamp can lift a lower layer over them.
+/// A hidden-to-visible show re-stamps a frame to the tail (`0x76ae10`), but within a
+/// `(strata, level)` bucket the layer outranks every stamp, so the `OVERLAY` caps stay on top.
 #[test]
 fn the_gryphons_outrank_the_bars_across_hide_show_cycles() {
     benilla_formats::wow_data_or_skip!();
     let mut s = exp_bar_harness();
     s.set_player_xp(300, 400);
     s.fire_event("PLAYER_ENTERING_WORLD", vec![]);
-    // The relog shape: the strip hidden (a stale max-level rail), then re-shown; the rail's
-    // own arrival is ALWAYS a hidden→visible re-stamp (it is born hidden).
+    // The strip hidden then re-shown, and the rail, born hidden, shown: both re-stamp.
     s.run("MainMenuExpBar:Hide() MainMenuExpBar:Show()")
         .unwrap();
     s.run("MainMenuBarMaxLevelBar:Show()").unwrap();
@@ -306,9 +270,7 @@ fn the_gryphons_outrank_the_bars_across_hide_show_cycles() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The hover numerals (ref TextStatusBar.lua over `MainMenuBarExpText`): entering
-/// the strip shows "curr / max" centered on the bar, leaving hides it (the lockShow refcount's
-/// 0↔1 edge — the `statusBarText` cvar that pins it on permanently reads OFF here).
+/// `TextStatusBar.lua`'s `lockShow` count shows the numerals on hover; `statusBarText` is off.
 #[test]
 fn the_xp_bar_numerals_show_on_hover() {
     benilla_formats::wow_data_or_skip!();
@@ -327,10 +289,8 @@ fn the_xp_bar_numerals_show_on_hover() {
         .eval::<bool>("return MainMenuBarExpText:IsShown()")
         .unwrap());
 
-    // `this` bound, because the engine binds it: the stock `HideTextStatusBarText` reads
-    // `this.isZero` on one line where every other line reads `bar` (TextStatusBar.lua:95 — the
-    // reference's own slip, benign there because `this` is always SOME frame during dispatch, and
-    // a nil index only from bare Lua). Called from the bar's own `<OnLeave>` in play.
+    // `HideTextStatusBarText` reads `this.isZero` where it means `bar` (`TextStatusBar.lua:95`);
+    // the engine always binds `this` during dispatch, so the test does too.
     s.run("this = MainMenuExpBar MainMenuExpBar:GetScript(\"OnLeave\")() this = nil")
         .unwrap();
     assert!(
@@ -341,10 +301,6 @@ fn the_xp_bar_numerals_show_on_hover() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The rest-state tooltip line (ref `ExhaustionToolTipText`'s newbie-tips branch):
-/// hovering the BAR arms a 1 s timer and the canAddRestStateLine handshake; when the timer runs
-/// out on the bar's OnUpdate, the "Rested / 200% of normal experience" line is APPENDED to the
-/// held-open newbie tip, once (the handshake is consumed).
 #[test]
 fn the_rest_state_line_joins_the_held_open_tooltip() {
     benilla_formats::wow_data_or_skip!();
@@ -353,7 +309,6 @@ fn the_rest_state_line_joins_the_held_open_tooltip() {
     s.set_rest_state(1, 700, true);
     s.fire_event("PLAYER_ENTERING_WORLD", vec![]);
 
-    // 1.12's default posture: detailed newbie tips ON.
     s.run("SHOW_NEWBIE_TIPS = \"1\"").unwrap();
     s.run("this = MainMenuExpBar MainMenuExpBar:GetScript(\"OnEnter\")()")
         .unwrap();
@@ -363,7 +318,7 @@ fn the_rest_state_line_joins_the_held_open_tooltip() {
         "the bar hover arms the tick's timer"
     );
 
-    // Three OnUpdate ticks walk the timer 1 → 0.4 → −0.2 → fire (the ref's `< 0` edge).
+    // Three 0.6 s ticks take the timer from 1 to below 0, the `< 0` edge.
     for _ in 0..3 {
         s.run("ExhaustionTick_OnUpdate(0.6)").unwrap();
     }

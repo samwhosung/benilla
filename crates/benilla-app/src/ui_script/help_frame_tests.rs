@@ -1,20 +1,11 @@
-//! The GM help window (HelpFrame.xml): the category list the DBC feeds it, the two
-//! faces of `UPDATE_TICKET`, the queue gate, the ticket toast, and the three dialogs.
-//!
-//! Written as the **falsification** pass over the transcription rather than a demonstration of it:
-//! every test is named after one claim the window makes, and each was checked to fail when the
-//! claim is broken. The load-bearing one is
-//! [`clicking_a_category_files_a_ticket_under_that_categorys_dbc_id`] — the id travels from
-//! `GMTicketCategory.dbc` through a button, a page, and the editor onto the wire, and a break
-//! anywhere in that chain files every ticket under the wrong heading with nothing on screen to
-//! show for it.
+//! The stock GM help window (`HelpFrame.xml`): the two faces of `UPDATE_TICKET`, the ticket
+//! toast and its repoll, and the status ask on show.
 
 use benilla_ui::script::{GmTicketIntent, ScriptValue, UiScript};
 
 use super::test_ui::load_ui as load_xml;
 
-/// The window, its dependencies, and the catalog the app pushes — the real ten `GMTicketCategory`
-/// rows, so a test that walks the list is walking the shipped data.
+/// The window and its dependencies, with the ten `GMTicketCategory.dbc` rows the app pushes.
 fn setup() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
@@ -27,18 +18,15 @@ fn setup() -> UiScript {
         r"Interface\FrameXML\MoneyFrame.lua",
         r"Interface\FrameXML\MoneyFrame.xml",
         "Interface\\FrameXML\\GameTooltip.xml",
-        // Before UiPanels.xml: the shared StaticPopup carries a `SmallMoneyFrameTemplate` coin
-        // row, whose OnLoad calls `SmallMoneyFrame_OnLoad` — the TOC's own order (1580's
-        // talent-wipe fixture hit this first).
+        // Before StaticPopup.xml, whose coin row inherits `SmallMoneyFrameTemplate`.
         r"Interface\FrameXML\MoneyFrame.lua",
         r"Interface\FrameXML\MoneyFrame.xml",
         "Interface\\FrameXML\\GlobalStrings.lua",
         r"Interface\FrameXML\UIParent.xml",
         "Interface\\FrameXML\\LocaleProperties.lua",
         "Interface\\FrameXML\\StaticPopup.xml",
-        // The stock file's `HelpFrame_OnShow` calls `UpdateMicroButtons()` before
-        // `GetGMStatus()`, so without the micro row the OnShow raises and the status ask never
-        // happens. Ours never called it. The row needs the bar's button kit under it.
+        // `HelpFrame_OnShow` calls `UpdateMicroButtons()` before `GetGMStatus()`
+        // (`HelpFrame.lua:178`), so the micro row and the bar's button kit load too.
         "Interface\\FrameXML\\Cooldown.xml",
         "Interface\\FrameXML\\ActionButtonTemplate.xml",
         "Interface\\FrameXML\\TextStatusBar.lua",
@@ -47,9 +35,8 @@ fn setup() -> UiScript {
         "Interface\\FrameXML\\ActionBarFrame.xml",
         "Interface\\FrameXML\\BonusActionBarFrame.xml",
         r"Interface\FrameXML\MainMenuBarMicroButtons.xml",
-        // `TicketStatusFrame_OnEvent` re-anchors TemporaryEnchantFrame before it arms the repoll
-        // timer, so without BuffFrame the handler raises and `refreshTime` is never set. This is
-        // the one ordering requirement benilla.toc already calls out for this window.
+        // `TicketStatusFrame_OnEvent` re-anchors `TemporaryEnchantFrame` before it arms the
+        // repoll (`HelpFrame.lua:494`).
         "Interface\\FrameXML\\BuffFrame.xml",
         "Interface\\FrameXML\\HelpFrame.xml",
     ] {
@@ -70,9 +57,7 @@ fn setup() -> UiScript {
     s
 }
 
-/// The `UPDATE_TICKET` argument list the app's feed builds for an open ticket — category first,
-/// text second, exactly as `ui_gm_ticket::update_ticket_args` orders it. Kept in sync by being
-/// written the same way in both places; if they ever disagree, this file's tests are what notices.
+/// `UPDATE_TICKET`'s args for an open ticket; must match `ui_gm_ticket::update_ticket_args`.
 fn open_ticket_args(
     category: i64,
     text: &str,
@@ -91,10 +76,7 @@ fn open_ticket_args(
     ]
 }
 
-/// **`UPDATE_TICKET`'s two faces.** With a ticket the editor becomes an editor (Save Changes /
-/// Exit); with the bare `arg1 = 0` it goes back to being a form (Submit / Cancel). The zero leg is
-/// the one that would silently rot: it is the ordinary answer, so a window stuck in edit mode
-/// looks fine until you try to file a second ticket.
+/// With a ticket the form is an editor (Save Changes, Exit); a bare `arg1 = 0` makes it a form.
 #[test]
 fn an_open_ticket_turns_the_form_into_an_editor_and_a_zero_turns_it_back() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -124,7 +106,7 @@ fn an_open_ticket_turns_the_form_into_an_editor_and_a_zero_turns_it_back() {
         1
     );
 
-    // And now the ordinary answer.
+    // No ticket: a bare 0.
     s.fire_event("UPDATE_TICKET", vec![ScriptValue::Int(0)]);
     assert_eq!(
         s.eval::<String>("return HelpFrameOpenTicketText:GetText()")
@@ -139,8 +121,6 @@ fn an_open_ticket_turns_the_form_into_an_editor_and_a_zero_turns_it_back() {
     );
 }
 
-/// The toast follows the ticket: up while one is open, gone when it is not. It is the only thing
-/// on screen that says a ticket exists at all once the window is closed.
 #[test]
 fn the_ticket_toast_follows_the_ticket() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -162,9 +142,7 @@ fn the_ticket_toast_follows_the_ticket() {
     );
 }
 
-/// The toast's own poll is what keeps a long wait honest: `TicketStatus_OnUpdate` re-asks the
-/// server every `GMTICKET_CHECK_INTERVAL`, and not before. This is the reason the app counts
-/// answers instead of diffing them, so it is worth a test on this side too.
+/// `TicketStatus_OnUpdate` re-asks every `GMTICKET_CHECK_INTERVAL`, 600 s (`HelpFrame.lua:162`).
 #[test]
 fn the_toast_repolls_the_server_only_after_the_full_interval() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -190,9 +168,7 @@ fn the_toast_repolls_the_server_only_after_the_full_interval() {
     );
 }
 
-/// `ToggleHelpFrame` is the micro button's whole wiring, and opening the window asks the server
-/// for the queue status — without that ask the gate above would run on a stale assumption for the
-/// life of the session.
+/// `HelpFrame_OnShow` asks the server for the queue status (`HelpFrame.lua:180`).
 #[test]
 fn toggling_the_window_opens_it_and_asks_for_the_queue_status() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -204,7 +180,6 @@ fn toggling_the_window_opens_it_and_asks_for_the_queue_status() {
         vec![GmTicketIntent::AskStatus],
         "OnShow calls GetGMStatus — the gate must not run on an assumption"
     );
-    // This is the one test that asserts the OnShow traffic itself; the others drain it away first.
     assert!(
         s.eval::<bool>("return HelpFrameHome:IsVisible()").unwrap(),
         "and it opens on Home"

@@ -1,24 +1,16 @@
-//! The instance-lockout **Era surface**: the three engine bindings, and the one
-//! place in the shipped UI that reads them — the SELF menu's "Reset all instances" row and the
-//! `CONFIRM_RESET_INSTANCES` dialog behind it.
-//!
-//! The four chat lines the family's other packets raise are engine-composed and have no Lua at
-//! all (no FrameXML file mentions `RAID_INSTANCE_WELCOME` or its siblings); they are tested at the
-//! composer, in `crate::ui_instance`.
+//! The instance-lockout verbs and their one stock caller, the SELF menu's reset row and its
+//! confirm. The family's chat lines have no Lua; `crate::ui_instance` composes and tests them.
 
 use benilla_ui::script::UiScript;
 
 use super::test_ui::load_ui as load_xml;
 
-/// The three bindings answer with the reference's own shapes — `IsInInstance` a PAIR, both
-/// readers `1`/`nil` rather than `true`/`false` (the reference pushes the double 1.0), and
-/// `ResetInstances` a queue.
+/// `IsInInstance` returns a pair; it and `CanShowResetInstances` answer 1 or nil, not booleans.
 #[test]
 fn the_three_bindings_have_the_reference_shapes() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
 
-    // Nothing pushed yet: the app has not said where we are.
     assert_eq!(
         s.eval::<(Option<f64>, String)>("return IsInInstance()")
             .unwrap(),
@@ -31,7 +23,7 @@ fn the_three_bindings_have_the_reference_shapes() {
         (1, Some(1.0), "party"),
         (2, Some(1.0), "raid"),
         (3, Some(1.0), "pvp"),
-        // Past the reference's own `cmp esi,4; jae` guard.
+        // Type 4 and up fall past the reference's `cmp esi,4; jae` guard.
         (4, Some(1.0), "none"),
     ] {
         s.set_instance_type(Some(ty));
@@ -62,17 +54,13 @@ fn the_three_bindings_have_the_reference_shapes() {
     assert_eq!(s.take_reset_instance_asks(), 0, "the drain is a take");
 }
 
-/// The whole shipped path, through the real hit test: right-click your own portrait, the row is
-/// there only while `CanShowResetInstances()` is true, clicking it raises the reference's confirm,
-/// and Yes is the only thing that sends.
+/// Through the real hit test: right-click the player portrait, click the row, answer the confirm.
 #[test]
 fn the_self_menu_row_gates_on_the_binding_and_confirms_before_sending() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    // The row labels a bare harness has no GlobalStrings.lua for. Verbatim 1.12 values
-    // (`RESET_INSTANCES` l.3342, `CONFIRM_RESET_INSTANCES` l.851, `YES` l.5463, `NO` l.2794,
-    // `GROUP` l.2029) — production runs the player's own string table at boot.
+    // Verbatim 1.12 values from `GlobalStrings.lua`.
     s.run(
         r#"
         -- The stock raid pane concatenates this into each of its eight group headers inside
@@ -95,7 +83,7 @@ fn the_self_menu_row_gates_on_the_binding_and_confirms_before_sending() {
         r"Interface\FrameXML\UIPanelTemplates.xml",
         "Interface\\FrameXML\\GlobalStrings.lua",
         "Interface\\FrameXML\\BasicControls.xml",
-        "Interface\\FrameXML\\LocaleProperties.lua", // `TEXT`, which StaticPopup.lua and UnitPopup.lua read at file scope
+        "Interface\\FrameXML\\LocaleProperties.lua", // `GetText`, the gender and plural lookup
         "Interface\\FrameXML\\StaticPopup.xml",
         "Interface\\FrameXML\\GameTooltip.xml",
         "Interface\\FrameXML\\UIDropDownMenu.xml",
@@ -113,9 +101,8 @@ fn the_self_menu_row_gates_on_the_binding_and_confirms_before_sending() {
     ] {
         load_xml(&s, file);
     }
-    // The window is a LoadOnDemand addon, reached the way the app reaches it: seated off the
-    // chain as a registry row (1957) and loaded by the reference's own `RaidFrame_LoadUI`
-    // (UIParent.xml; 1967).
+    // Blizzard_RaidUI is LoadOnDemand: seated as an addon row, as the app does, then loaded by
+    // `RaidFrame_LoadUI` (`UIParent.lua:182`).
     super::test_ui::seat_chain_addon(&mut s, "Blizzard_RaidUI");
     s.run("RaidFrame_LoadUI()").unwrap();
     s.resolve();
@@ -136,11 +123,8 @@ fn the_self_menu_row_gates_on_the_binding_and_confirms_before_sending() {
             .collect()
     };
 
-    // Off: the row is not in the menu at all — hidden, not greyed (the reference's
-    // `UnitPopupShown[index] = 0`). Solo, it is the ONLY row of the SELF menu that could show
-    // (the loot trio, Leave and the raid marks all need a party), so the menu's "nothing but
-    // CANCEL" early-out fires and no menu opens at all. That is the reference's behaviour too,
-    // and it is the sharpest possible assertion that the row is really gone.
+    // Off, the row is hidden, not greyed (`UnitPopup.lua:379`). Solo it is the SELF menu's only
+    // candidate row, so with it gone the menu does not open at all.
     open_self_menu(&mut s);
     assert!(
         s.eval::<bool>("return not DropDownList1:IsVisible()")
@@ -148,7 +132,6 @@ fn the_self_menu_row_gates_on_the_binding_and_confirms_before_sending() {
         "solo with no lockout to reset, the SELF menu has nothing to show"
     );
 
-    // On: the row appears, and with it the menu.
     s.set_can_reset_instances(true);
     open_self_menu(&mut s);
     assert!(
@@ -161,7 +144,6 @@ fn the_self_menu_row_gates_on_the_binding_and_confirms_before_sending() {
         .position(|l| l == "Reset all instances")
         .unwrap_or_else(|| panic!("the row shows once the binding says so: {labels:?}"));
 
-    // Clicking it sends NOTHING — it raises the confirm.
     let button = format!("DropDownList1Button{}", row + 1);
     let (cx, cy) = s
         .eval::<(f64, f64)>(&format!("return {button}:GetCenter()"))
@@ -194,7 +176,6 @@ fn the_self_menu_row_gates_on_the_binding_and_confirms_before_sending() {
         "No"
     );
 
-    // No sends nothing; Yes sends exactly one.
     let (nx, ny) = s
         .eval::<(f64, f64)>("return StaticPopup1Button2:GetCenter()")
         .unwrap();

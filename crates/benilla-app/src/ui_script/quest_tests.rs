@@ -1,18 +1,11 @@
-//! The shipped **questgiver window** open/close sound, driven engine-only (no Bevy): the real
-//! `Interface\FrameXML\QuestFrame.xml` loaded behind `UIParent.xml` and shown/hidden through the
-//! wire events. The window-sound convention's machine check for the quest arc, the
-//! sibling of the merchant/gossip/bag/loot sound tests.
+//! The stock questgiver window (`QuestFrame.xml`), driven engine-only through the quest events.
 
 use benilla_ui::script::{QuestPanel, QuestState, ScriptValue, SoundRequest, UiScript};
 
 use super::test_ui::load_ui as load_xml;
 
-/// The questgiver window's open/close kits — the window-sound convention. The real
-/// QuestFrame.lua plays igQuestListOpen in QuestFrame_OnShow (l.285) and igQuestListClose in
-/// QuestFrame_OnHide (l.294), wired via the frame OnShow/OnHide (QuestFrame.xml l.1012/1015). A
-/// questgiver event (QUEST_DETAIL here) → ShowUIPanel → Show() fires OnShow; QUEST_FINISHED →
-/// HideUIPanel → Hide() fires OnHide. Nothing queues at load (the frame is authored hidden="true").
-/// Same pair as gossip — questgiver and gossip are the same "list" surface to the client.
+/// Stock `QuestFrame_OnShow` and `QuestFrame_OnHide` play `igQuestListOpen` and `igQuestListClose`
+/// (`QuestFrame.lua:285`, `:294`).
 #[test]
 fn questgiver_show_hide_plays_open_and_close_kits() {
     benilla_formats::wow_data_or_skip!();
@@ -29,9 +22,7 @@ fn questgiver_show_hide_plays_open_and_close_kits() {
     load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
     load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
-    // The BenillaMoney_* purse helpers the quest reward/progress panels repaint through live in
-    // MerchantFrame.xml (the same documented cross-window dep the bag tests load).
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit + the placeholder icon
+    load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
     load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
     load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");
@@ -39,14 +30,11 @@ fn questgiver_show_hide_plays_open_and_close_kits() {
     load_xml(&s, "Interface\\FrameXML\\QuestFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\QuestLogFrame.xml");
 
-    // Hidden at load: no open sound (never transitions on startup).
     assert!(
         s.take_sounds().is_empty(),
         "no sound at load (never transitions)"
     );
 
-    // A quest-details panel arrives (SMSG_QUESTGIVER_QUEST_DETAILS → QUEST_DETAIL) and shows the
-    // window through ShowUIPanel.
     s.set_quest(Some(QuestState {
         panel: QuestPanel::Detail,
         title: "A Threat Within".into(),
@@ -66,7 +54,6 @@ fn questgiver_show_hide_plays_open_and_close_kits() {
         "opening the questgiver window plays igQuestListOpen"
     );
 
-    // QUEST_FINISHED hides it through HideUIPanel → OnHide.
     s.fire_event("QUEST_FINISHED", vec![]);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
     assert!(
@@ -80,11 +67,8 @@ fn questgiver_show_hide_plays_open_and_close_kits() {
     );
 }
 
-/// The four-child-panel restructure (this pass): each questgiver event shows exactly ONE of the four
-/// real sub-panels and hides the other three — mirroring the ref's own `QuestFrame*Panel_OnShow`
-/// (each hides its three siblings on show). No sound on a panel SWITCH (only the outer window's
-/// OnShow/OnHide play kits, per the ref `QuestFrame_OnShow`/`OnHide` — a panel change while the window
-/// stays open is silent).
+/// Each stock `QuestFrame*Panel_OnShow` hides its three siblings; only the window's own show and
+/// hide play a sound.
 #[test]
 fn panel_events_show_exactly_one_child_panel_and_hide_the_others() {
     benilla_formats::wow_data_or_skip!();
@@ -101,7 +85,7 @@ fn panel_events_show_exactly_one_child_panel_and_hide_the_others() {
     load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
     load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit + the placeholder icon
+    load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
     load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
     load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");
@@ -146,8 +130,7 @@ fn panel_events_show_exactly_one_child_panel_and_hide_the_others() {
             .unwrap(),
         "Deputy Willem"
     );
-    // No sound on the panel event itself — the window was already open (well, first open here DOES
-    // play the open kit; drain it so the assertion below is about the SWITCH, not this first show).
+    // Drain the first show's open sound; the switch below must play none.
     s.take_sounds();
 
     s.set_quest(Some(QuestState {
@@ -178,13 +161,8 @@ fn panel_events_show_exactly_one_child_panel_and_hide_the_others() {
     );
 }
 
-/// The reward grid, ported from the ref's shared `QuestFrameItems_Update` — on ONE numbered pool
-/// per panel (`QuestDetailItem1..10`), the reference's own shape: choices first, then the
-/// reward-spell row, then fixed rewards, each positioned at runtime. The fixture is the one the
-/// task's capture drives — 2 choices + 1 fixed reward + money — so the pool reads
-/// `Item1`/`Item2` = the choices, `Item3` = the fixed reward, `Item4`+ unused. It used to run on
-/// two 6-deep pools named `QuestDetailChoice*`/`QuestDetailReward*`, names the reference does not
-/// have and a split the ref's own function cannot be written against.
+/// Stock `QuestFrameItems_Update` fills one pool of 10 per panel: choices, the spell row, then
+/// fixed rewards, so two choices and one reward are `Item1`, `Item2` and `Item3`.
 #[test]
 fn detail_panel_reward_grid_follows_the_refs_two_per_row_layout() {
     benilla_formats::wow_data_or_skip!();
@@ -201,7 +179,7 @@ fn detail_panel_reward_grid_follows_the_refs_two_per_row_layout() {
     load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
     load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit + the placeholder icon
+    load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
     load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
     load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");
@@ -271,14 +249,10 @@ fn detail_panel_reward_grid_follows_the_refs_two_per_row_layout() {
         "Rewards"
     );
 
-    // The detail panel's choice rows are informational only (ref: only the REWARD panel's rows
-    // select). They DO carry an OnClick now (`QuestItem_OnClick`, the ref's own
-    // QuestItemTemplate script — the ctrl/shift fork), but it has no select
-    // arm at all: an unmodified click must not raise and must not set an itemChoice.
+    // Detail rows run `QuestItem_OnClick`, which has no select arm (`QuestFrame.lua:115-125`).
     s.run("QuestDetailItem1:Click()").ok();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
-    // The reward panel's `itemChoice` is set only by its own OnShow (stock QuestFrame.lua:104,
-    // `= 0`) and a reward-row click; on the detail panel it is simply unset.
+    // Only the reward panel's update (`QuestFrame.lua:519`) and its row clicks set `itemChoice`.
     assert_eq!(
         s.eval::<i64>("return QuestFrameRewardPanel.itemChoice or 0")
             .unwrap(),
@@ -287,8 +261,7 @@ fn detail_panel_reward_grid_follows_the_refs_two_per_row_layout() {
     );
 }
 
-/// The reward panel's choice rows ARE selectable (ref `QuestRewardItem_OnClick`) — clicking one moves
-/// the highlight and arms `GetQuestReward`'s 1-based→0-based conversion.
+/// A reward row click selects its choice (`QuestFrame.lua:136-139`).
 #[test]
 fn reward_panel_choice_click_selects_and_completes_with_zero_based_index() {
     benilla_formats::wow_data_or_skip!();
@@ -305,7 +278,7 @@ fn reward_panel_choice_click_selects_and_completes_with_zero_based_index() {
     load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
     load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit + the placeholder icon
+    load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
     load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
     load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");
@@ -345,7 +318,7 @@ fn reward_panel_choice_click_selects_and_completes_with_zero_based_index() {
             .unwrap(),
         "no row picked yet"
     );
-    // Completing without a choice picked is a no-op (ref: QuestChooseRewardError guard).
+    // No choice picked: `QuestChooseRewardError()` instead (`QuestFrame.lua:97-98`).
     s.run("QuestFrameCompleteQuestButton:Click()").unwrap();
     assert!(
         s.take_quest_actions().is_empty(),
@@ -368,8 +341,7 @@ fn reward_panel_choice_click_selects_and_completes_with_zero_based_index() {
     );
 }
 
-/// The greeting panel's own Goodbye button (ref `QuestFrameGreetingGoodbyeButton`, a widget the flat
-/// v1 layout never carried) — a plain client-side close, no `DeclineQuest()` call (ref l.748-752).
+/// Goodbye only hides the window, with no `DeclineQuest()` (`QuestFrame.xml:748-752`).
 #[test]
 fn greeting_goodbye_button_closes_the_window() {
     benilla_formats::wow_data_or_skip!();
@@ -386,7 +358,7 @@ fn greeting_goodbye_button_closes_the_window() {
     load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
     load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit + the placeholder icon
+    load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
     load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
     load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");
@@ -419,16 +391,8 @@ fn greeting_goodbye_button_closes_the_window() {
     );
 }
 
-/// A rect-level regression guard for the exact bug the capture-loop caught: `BenillaQuestPanelButtonTemplate`
-/// is a virtual template declared `hidden="true"` (never itself drawn) — an instance that doesn't
-/// explicitly `:Show()` stays invisible even though it isn't declared `hidden="true"` itself. Every
-/// panel's action buttons must show, extracted at real on-window rects (never dropped/hidden).
-///
-/// It runs the **instant-text** arm, which is not the shipped one: `QUEST_FADING_DISABLE` boots at
-/// the reference's `"0"` since 1804 (it was pinned `"1"` by direction from 2026-07-17 until then),
-/// so the flag is planted below. That arm is the one this guard wants — it is the shorter path to
-/// a settled panel, and its one-frame Accept-disabled window is a state the rects have to survive.
-/// The write-on arm is `write_on_still_fades_when_instant_text_is_off`'s subject.
+/// Accept and Decline keep real on-window rects through the instant-text arm's one frame of
+/// disabled Accept; the test plants `QUEST_FADING_DISABLE = "1"`, the default being `"0"`.
 #[test]
 fn detail_panel_action_buttons_resolve_to_real_onscreen_rects() {
     benilla_formats::wow_data_or_skip!();
@@ -445,14 +409,13 @@ fn detail_panel_action_buttons_resolve_to_real_onscreen_rects() {
     load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
     load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit + the placeholder icon
+    load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
     load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
     load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");
     load_xml(&s, "Interface\\FrameXML\\ItemButtonTemplate.xml");
     load_xml(&s, "Interface\\FrameXML\\QuestFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\QuestLogFrame.xml");
-    // Planted, not shipped: instant text is OFF out of the box (see the doc comment).
     s.eval::<()>(r#"QUEST_FADING_DISABLE = "1""#).unwrap();
     s.set_quest(Some(QuestState {
         panel: QuestPanel::Detail,
@@ -493,8 +456,8 @@ fn detail_panel_action_buttons_resolve_to_real_onscreen_rects() {
         v
     };
 
-    // The instant-text arm (QUEST_FADING_DISABLE planted "1" above): OnShow still disables Accept
-    // and zeroes the block for the ref's one-frame window — the reveal edge just starts at 1024.
+    // `OnShow` still disables Accept and zeroes the block; the reveal just starts at 1024
+    // (`QuestFrame.lua:543-551`).
     let writing = button_art(&mut s);
     assert_eq!(
         writing.len(),
@@ -514,8 +477,8 @@ fn detail_panel_action_buttons_resolve_to_real_onscreen_rects() {
         );
     }
 
-    // First tick: instant text keeps the writing sound — exactly one quill scratch — then the
-    // gradient runs off, the objectives/rewards block SNAPS to opaque (no fade) and Accept wakes.
+    // The first `OnUpdate` scratches once, snaps the block opaque and enables Accept
+    // (`QuestFrame.lua:554-568`).
     let scratches = |sounds: Vec<SoundRequest>| {
         sounds
             .iter()
@@ -554,11 +517,8 @@ fn detail_panel_action_buttons_resolve_to_real_onscreen_rects() {
     );
 }
 
-/// The ref write-on runs verbatim: with QUEST_FADING_DISABLE = "0" — the ref's own default, and
-/// ours too since 1804 (it was pinned "1" from 2026-07-17 until then, which is why this file
-/// still says the value out loud rather than leaning on the shipped one) — the description writes
-/// on at 40 chars/s scratching the quill each tick, Accept stays dead mid-write, and the
-/// objectives/rewards block FADES in over QUESTINFO_FADE_IN rather than snapping.
+/// With the default `QUEST_FADING_DISABLE = "0"` the text writes on at 40 chars/s, scratching each
+/// tick with Accept disabled, then the block fades in (`QuestFrame.lua:5-6`, `:554-568`).
 #[test]
 fn write_on_still_fades_when_instant_text_is_off() {
     benilla_formats::wow_data_or_skip!();
@@ -575,7 +535,7 @@ fn write_on_still_fades_when_instant_text_is_off() {
     load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
     load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit + the placeholder icon
+    load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
     load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
     load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");
@@ -600,7 +560,7 @@ fn write_on_still_fades_when_instant_text_is_off() {
     s.fire_event("QUEST_DETAIL", vec![]);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 
-    // Mid-write (reveal edge at char 4 of 13): the quill scratches, Accept stays dead.
+    // Mid-write: the reveal is at char 4 of 13.
     s.tick(0.1);
     assert!(
         s.take_sounds()
@@ -612,8 +572,7 @@ fn write_on_still_fades_when_instant_text_is_off() {
         .eval::<bool>("return QuestFrameAcceptButton:IsEnabled() ~= 0")
         .unwrap());
 
-    // Half a second more runs the 13-char gradient off (40 chars/s): Accept wakes and the block
-    // is mid-FADE — armed at 0 and ramping over QUESTINFO_FADE_IN, not snapped to opaque.
+    // Half a second more ends the 13-char gradient: Accept wakes and the block is mid-fade.
     s.tick(0.5);
     assert!(s.errors().is_empty(), "tick errors: {:?}", s.errors());
     assert!(s
@@ -635,9 +594,8 @@ fn write_on_still_fades_when_instant_text_is_off() {
     );
 }
 
-/// The giver window's title bar shows the NPC name — the panel-open events carry it as arg1 and
-/// the in-place QUEST_ITEM_UPDATE refresh (how a late ask-once name arrives in live play) must
-/// update it too (the 0112-era capture showed a permanently blank bar).
+/// Every quest event but `QUEST_FINISHED`, `QUEST_ITEM_UPDATE` over a shown window included,
+/// re-reads `UnitName("npc")` into the title bar (`QuestFrame.lua:26`, `:62-63`).
 #[test]
 fn npc_name_reaches_the_title_bar_on_open_and_on_refresh() {
     benilla_formats::wow_data_or_skip!();
@@ -654,7 +612,7 @@ fn npc_name_reaches_the_title_bar_on_open_and_on_refresh() {
     load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
     load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit + the placeholder icon
+    load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
     load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
     load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");
@@ -684,8 +642,6 @@ fn npc_name_reaches_the_title_bar_on_open_and_on_refresh() {
         "Marshal McBride",
         "the panel-open event's arg1 lands in the title bar"
     );
-    // And it RENDERS: the quad extracts with a rect near the window top (the 0112-era capture
-    // showed a blank bar — pin the whole path, not just the Lua-visible text).
     s.resolve();
     let name_quad = s
         .extract()
@@ -700,7 +656,7 @@ fn npc_name_reaches_the_title_bar_on_open_and_on_refresh() {
         "the NPC-name quad carries a resolved rect (got None — under-constrained)"
     );
 
-    // The late-name path: open with an empty name, the refresh brings it.
+    // A cleared name comes back on the refresh.
     s.run("getglobal('QuestFrameNpcNameText'):SetText('')")
         .unwrap();
     s.fire_event(
@@ -715,18 +671,15 @@ fn npc_name_reaches_the_title_bar_on_open_and_on_refresh() {
     );
 }
 
-/// The gossip window's twin law, on the greeting panel's quest-title rows: a title long enough to
-/// WRAP at the row label's 275 px must grow its row, or the static/Lua-chained rows below print
-/// through it (the shape of the gossip overlap the director reported). Same deterministic
-/// 6 px/char × 14 px/line measure fake as the gossip row test.
+/// A title that wraps at the row label's 275px (`QuestFrameTemplates.xml:202`) grows its row, or
+/// the rows below overlap it.
 #[test]
 fn greeting_panel_title_rows_grow_to_their_wrapped_titles() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    // Stock sizes each row at show time — `SetHeight(GetTextHeight() + 2)` right after SetText
-    // (QuestFrame.lua:245) — which the reference can do because its text measure is synchronous.
-    // So is the app's (measure.rs); the harness installs the same seam's stand-in.
+    // Stock sizes each row right after `SetText`, `GetTextHeight() + 2` (`QuestFrame.lua:245`), so
+    // the measure must be synchronous, as the app's is.
     s.set_text_measurer(Box::new(super::FixedWidthFont(7.0)));
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");
@@ -739,7 +692,7 @@ fn greeting_panel_title_rows_grow_to_their_wrapped_titles() {
     load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
     load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit + the placeholder icon
+    load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
     load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
     load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");
@@ -815,16 +768,9 @@ fn greeting_panel_title_rows_grow_to_their_wrapped_titles() {
     );
 }
 
-/// The questgiver rows' modifier fork, on the panel where it can do the most
-/// damage: the REWARD panel, whose choice rows are also the quest's reward *selection*. Ref
-/// `QuestRewardItem_OnClick` (QuestFrame.lua:127-141) — ctrl previews, shift posts the link, and the
-/// choice SELECT is the third arm, so neither modified click may also pick the reward. The fixed
-/// reward row beside it rides the plainer `QuestItem_OnClick` (l.115-125, the base
-/// QuestItemTemplate's own OnClick) and previews the same way with no select arm to disturb.
-///
-/// Ordering note: the dressing room docks the same left UIPanel slot as the questgiver window
-/// (`UiPanels.xml`, `pushable = 2` vs the giver's `0`), so the ctrl arm is exercised last — opening
-/// it closes the giver window, exactly as it does in play.
+/// Stock `QuestRewardItem_OnClick` (`QuestFrame.lua:127-141`): ctrl previews, shift posts the
+/// link, and only a plain click selects. The ctrl arm runs last: the dressing room takes the
+/// questgiver window's left slot (`UIParent.lua:24`, `:41`).
 #[test]
 fn reward_rows_preview_and_post_without_selecting_the_choice() {
     benilla_formats::wow_data_or_skip!();
@@ -841,7 +787,7 @@ fn reward_rows_preview_and_post_without_selecting_the_choice() {
     load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
     load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit + the placeholder icon
+    load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
     load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
     load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");
@@ -893,9 +839,7 @@ fn reward_rows_preview_and_post_without_selecting_the_choice() {
     s.fire_event("QUEST_COMPLETE", vec![]);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 
-    // The regression this fork could break: a PLAIN click still picks the choice (the ref's third
-    // arm). Row 2 is picked here so the modified clicks below — aimed at row 1 — would visibly
-    // move it if they leaked into the select arm.
+    // A plain click selects row 2; the modified clicks below aim at row 1.
     s.run("QuestRewardItem2:Click()").unwrap();
     assert_eq!(
         s.eval::<i64>("return QuestFrameRewardPanel.itemChoice")
@@ -911,7 +855,6 @@ fn reward_rows_preview_and_post_without_selecting_the_choice() {
         "a plain click never opens the dressing room"
     );
 
-    // SHIFT + chat open → the row's full escaped link, and the selection is untouched.
     assert!(s.focus_editbox("ChatFrameEditBox"));
     s.set_modifiers(true, false, false);
     s.run("QuestRewardItem1:Click()").unwrap();
@@ -929,8 +872,7 @@ fn reward_rows_preview_and_post_without_selecting_the_choice() {
         "the shift arm returns — it must NOT also select the clicked choice"
     );
 
-    // A FIXED reward row posts too — same pool, same template now, and the select arm is gated
-    // by `button.kind == "choice"` rather than by which pool the row came from.
+    // A fixed reward row posts too; only `this.type == "choice"` selects (`QuestFrame.lua:136`).
     s.run("ChatFrameEditBox:SetText(\"\")").unwrap();
     s.set_modifiers(true, false, false);
     s.run("QuestRewardItem3:Click()").unwrap();
@@ -941,8 +883,6 @@ fn reward_rows_preview_and_post_without_selecting_the_choice() {
         "|cffffffff|Hitem:2504:0:0:0|h[Worn Shortbow]|h|r"
     );
 
-    // CTRL → the dressing room wearing the clicked reward, and STILL no reselect. The intent pair
-    // is ordered: Dress (the room was closed, so it re-dresses in the player's own gear) then TryOn.
     s.set_modifiers(false, true, false);
     s.run("QuestRewardItem1:Click()").unwrap();
     s.set_modifiers(false, false, false);

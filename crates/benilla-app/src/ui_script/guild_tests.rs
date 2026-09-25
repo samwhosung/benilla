@@ -1,36 +1,15 @@
-//! The four guild windows (`FriendsFrame.xml` l.1719-3438 of the reference): the
-//! roster pane and its two views, the rank editor, the guild-information notice board, and the
-//! member detail card.
-//!
-//! What these guard that the Rust-side unit tests structurally cannot: the windows are Lua over an
-//! engine snapshot, so a getter whose ten returns are in the wrong order, a row template whose
-//! FontString is misnamed, a rank comparison written `>=` where the reference wrote `>`, or a
-//! button wired to the wrong verb are all invisible to `script::guild`'s own tests and green in the
-//! parse sweep. Each test below fails on exactly one of those.
-//!
-//! **The engine API is STOOD IN FOR here, deliberately.** `benilla-ui/src/script/guild.rs` binds
-//! the ~47 real globals over a pushed snapshot; these tests replace all of them with the Lua
-//! fixture below *before* the XML loads, so what is under test is the window and nothing else. It
-//! also means the window's tests do not need the app's feed seated, and that a change to the
-//! engine's plumbing cannot quietly turn one of these green. The fixture's shapes are the ones
-//! `script::guild` promises, and two of them are easy to get wrong and worth restating:
-//!
-//! - **era booleans are `1`/`nil`, never `true`/`false`** — `IsInGuild`, `IsGuildLeader`, every
-//!   `Can*`, and `online` out of `GetGuildRosterInfo`;
-//! - **two index bases coexist**: the roster's `rankIndex` is **0-based** (0 = guild master), while
-//!   the whole `GuildControl*` family is **1-based**, driven straight off dropdown IDs.
+//! The guild windows (`FriendsFrame.xml:1719-3438`): the roster pane and its two views, the rank
+//! editor, the guild-information board and the member detail card. A Lua fixture stands in for
+//! the `script::guild` globals, seated before the XML loads, so only the windows are under test.
+//! Its shapes are the bindings': 1.12 booleans are `1`/`nil`, the roster's `rankIndex` is 0-based
+//! (0 = guild master) and the `GuildControl*` family is 1-based, off dropdown IDs.
 
 use benilla_ui::script::{GuildState, ScriptValue, UiScript, UnitState};
 
-/// The guild engine API, stood in for in Lua (see the module header).
-///
-/// One mutable table, `BenillaGuildFixture`, is the whole model; every getter reads it and every
-/// verb appends to `.calls`, which a test drains with `BenillaGuildCalls()`. Tests mutate the
-/// table's FIELDS — never replace the table, since the closures below hold it as an upvalue.
-///
-/// The three seeded members are chosen to cover the rank comparisons the detail card turns on:
-/// the guild master (ourselves), a rank-1 officer, and an offline member sitting in the BOTTOM
-/// rank — which is also the one that blocks removing that rank in the editor.
+/// One mutable table, `BenillaGuildFixture`, is the whole model: getters read it and verbs append
+/// to `.calls`, drained by `BenillaGuildCalls()`. Tests mutate its fields and never replace it,
+/// since the functions hold it as an upvalue. The members: the guild master (us), a rank-1
+/// officer, and an offline member in the bottom rank.
 const GUILD_FIXTURE: &str = r#"
 BenillaGuildFixture = {
     inGuild = 1,
@@ -177,21 +156,13 @@ end
 function GuildControlDelRank(name) BenillaGuildRecord("GuildControlDelRank:" .. name) end
 "#;
 
-/// The window's own manifest slice, in `benilla.toc` order, with the fixture seated first.
-///
-/// `UIPanelTemplates.xml` is in the slice where `friends_tests` does not need it: the guild frames
-/// inherit the reference's shared `UIPanelButtonTemplate` / `UIPanelCloseButton` /
-/// `UIPanelScrollFrameTemplate` rather than a private copy, exactly as the reference's own XML
-/// does. `BasicControls.xml` is here for `message()`, which `GuildControlCheckboxUpdate` calls on
-/// a missing checkbox.
 fn setup() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    // Before the XML, so `FriendsFrame_OnLoad`'s `GetGuildRosterMOTD()` and
-    // `GuildControlPopupFrame_OnLoad`'s `GuildControlGetRankFlags()` read the fixture.
+    // Before the XML: `FriendsFrame_OnLoad` reads `GetGuildRosterMOTD()` and
+    // `GuildControlPopupFrame_OnLoad` reads `GuildControlGetRankFlags()`.
     s.run(GUILD_FIXTURE).unwrap();
-    // The roster's self-checks (`UnitName("player") == name`) need a seated player, and the
-    // fixture makes us the guild master, so the names must agree.
+    // The player is the fixture's guild master; the roster checks `UnitName("player") == name`.
     s.set_unit(
         "player",
         Some(UnitState {
@@ -229,8 +200,7 @@ fn calls(s: &UiScript) -> String {
     s.eval::<String>("return BenillaGuildCalls()").unwrap()
 }
 
-/// A region's text colour, rounded to two places. The engine stores colours as `f32`, so 0.82 comes
-/// back as 0.8199999928474426 and an exact compare would fail on every one of them.
+/// A region's text colour to two places: colours are `f32`, so 0.82 reads back 0.8199999928474426.
 fn colour(s: &UiScript, region: &str) -> (f64, f64, f64) {
     let (r, g, b) = s
         .eval::<(f64, f64, f64)>(&format!("return {region}:GetTextColor()"))
@@ -239,9 +209,6 @@ fn colour(s: &UiScript, region: &str) -> (f64, f64, f64) {
     (round(r), round(g), round(b))
 }
 
-/// The tab is live for a guilded character, the pane paints its four columns from the roster, the
-/// title is the GUILD'S name rather than a constant, and showing the pane ASKS for the roster —
-/// which the friend list never has to, because that one arrives unasked.
 #[test]
 fn the_guild_tab_opens_the_roster_and_asks_for_it() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -271,7 +238,7 @@ fn the_guild_tab_opens_the_roster_and_asks_for_it() {
         "showing the pane requests the roster"
     );
 
-    // The player view is the one that opens (FriendsFrame.playerStatusFrame starts 1).
+    // The player view opens first: `FriendsFrame_OnLoad` sets `playerStatusFrame = 1`.
     assert!(visible(&s, "GuildPlayerStatusFrame"));
     assert!(!visible(&s, "GuildStatusFrame"));
 
@@ -292,8 +259,6 @@ fn the_guild_tab_opens_the_roster_and_asks_for_it() {
         "rows past the roster are hidden"
     );
 
-    // "|cffffffff3|r Guild Members" + "(|cffffffff2|r |cff00ff00Online|r)" — the plural form for
-    // three, and the online count is a separate string beside it.
     assert_eq!(text(&s, "GuildFrameTotals"), "|cffffffff3|r Guild Members");
     assert_eq!(
         text(&s, "GuildFrameOnlineTotals"),
@@ -301,8 +266,6 @@ fn the_guild_tab_opens_the_roster_and_asks_for_it() {
     );
 }
 
-/// An OFFLINE member keeps every column — level, class and zone all come down for offline members
-/// too, unlike the friends list where an offline friend has no level at all — and only greys.
 #[test]
 fn an_offline_member_keeps_its_columns_and_only_greys() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -329,9 +292,6 @@ fn an_offline_member_keeps_its_columns_and_only_greys() {
     );
 }
 
-/// The little page button between the headers and the list flips to the OTHER view — same 13 rows,
-/// same scroll frame, different four columns — and its own label swaps to name the view it would
-/// take you back to.
 #[test]
 fn the_page_button_flips_to_the_guild_status_view() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -369,14 +329,10 @@ fn the_page_button_flips_to_the_guild_status_view() {
         "an offline member reports how long ago, coarsest unit only"
     );
 
-    // …and back.
     s.run("GuildFrameGuildListToggleButton:Click()").unwrap();
     assert!(visible(&s, "GuildPlayerStatusFrame"));
 }
 
-/// `GuildFrame_GetLastOnline` takes the COARSEST non-zero unit and never composes two, and all
-/// four zero reads "< an hour". Asserted through the function because the four arms are otherwise
-/// only reachable by seeding four different members.
 #[test]
 fn the_last_online_formatter_takes_the_coarsest_unit() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -403,8 +359,6 @@ fn the_last_online_formatter_takes_the_coarsest_unit() {
     assert_eq!(last(3, 0, 0, 0), "3 years");
 }
 
-/// A left-click selects the row and opens the detail card; clicking that SAME row again closes it
-/// and drops the selection, which is the only way back to "nothing selected".
 #[test]
 fn a_row_click_toggles_the_detail_card() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -437,7 +391,6 @@ fn a_row_click_toggles_the_detail_card() {
         "…and clears the selection"
     );
 
-    // A DIFFERENT row while the card is open re-points it rather than closing it.
     s.run("GuildFrameButton2:Click()").unwrap();
     s.run("GuildFrameButton3:Click()").unwrap();
     assert!(visible(&s, "GuildMemberDetailFrame"));
@@ -449,16 +402,13 @@ fn a_row_click_toggles_the_detail_card() {
     );
 }
 
-/// The card's four buttons are the rank law, and each of the reference's comparisons matters:
-/// promote refuses to make a second-in-command your equal, demote refuses on the bottom rank, and
-/// with BOTH arrows dead they leave the card rather than sitting greyed.
+/// The rank comparisons of `FriendsFrame.lua:393-415`; with both arrows dead, they leave the card.
 #[test]
 fn the_detail_buttons_follow_the_rank_comparisons() {
     let _data = benilla_formats::wow_data_or_skip!();
     let s = setup();
     open(&s);
 
-    // Row 2 — the officer directly below us. Nothing to promote him to; demote is fine.
     s.run("GuildFrameButton2:Click()").unwrap();
     assert!(
         !enabled(&s, "GuildFramePromoteButton"),
@@ -475,7 +425,6 @@ fn the_detail_buttons_follow_the_rank_comparisons() {
         "an online guildmate can be invited"
     );
 
-    // Row 3 — the bottom rank. Promotable, but there is nothing below to demote him to.
     s.run("GuildFrameButton3:Click()").unwrap();
     assert!(enabled(&s, "GuildFramePromoteButton"));
     assert!(
@@ -487,7 +436,6 @@ fn the_detail_buttons_follow_the_rank_comparisons() {
         "…and he is offline"
     );
 
-    // Row 1 — ourselves, the guild master. Every rank verb is dead, so the arrows go away.
     s.run("GuildFrameButton1:Click()").unwrap();
     assert!(!enabled(&s, "GuildFramePromoteButton"));
     assert!(!enabled(&s, "GuildFrameDemoteButton"));
@@ -505,7 +453,6 @@ fn the_detail_buttons_follow_the_rank_comparisons() {
         "nor invite yourself"
     );
 
-    // The verbs address the selected NAME.
     s.run("GuildFrameButton3:Click()").unwrap();
     let _ = calls(&s);
     s.run("GuildFramePromoteButton:Click()").unwrap();
@@ -516,8 +463,8 @@ fn the_detail_buttons_follow_the_rank_comparisons() {
     );
 }
 
-/// The officer-note pane is a THREE-state affair, and the third state RESIZES the card: a rank that
-/// may not even see officer notes gets 60px less window rather than an empty pane.
+/// Without `CanViewOfficerNote` the pane goes and the card shrinks from 255 to 195
+/// (`GUILD_DETAIL_OFFICER_HEIGHT`, `GUILD_DETAIL_NORM_HEIGHT`; `FriendsFrame.lua:370-390`).
 #[test]
 fn the_officer_note_pane_resizes_the_card() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -531,12 +478,12 @@ fn the_officer_note_pane_resizes_the_card() {
         255.0
     );
 
-    // May view but not edit: grey text, mouse-dead pane, and no edit-me placeholder.
+    // Can view but not edit: grey text, a mouse-dead pane, no placeholder.
     s.run("BenillaGuildFixture.rights.editOfficerNote = nil; GuildStatus_Update()")
         .unwrap();
     assert_eq!(colour(&s, "OfficerNoteText"), (0.65, 0.65, 0.65));
 
-    // May not view at all: the pane goes, and the card shrinks.
+    // Cannot view: the pane goes, and the card shrinks.
     s.run("BenillaGuildFixture.rights.viewOfficerNote = nil; GuildStatus_Update()")
         .unwrap();
     assert!(!visible(&s, "GuildMemberDetailOfficerNoteLabel"));
@@ -548,9 +495,6 @@ fn the_officer_note_pane_resizes_the_card() {
     );
 }
 
-/// An EMPTY note a rank may edit shows the click-here invitation instead of nothing; the same note
-/// with no edit right shows the empty string and a dead pane. Without this the only affordance on
-/// an empty note is a blank rectangle nobody would click.
 #[test]
 fn an_editable_empty_note_invites_the_click() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -573,9 +517,7 @@ fn an_editable_empty_note_invites_the_click() {
     assert_eq!(colour(&s, "PersonalNoteText"), (0.65, 0.65, 0.65));
 }
 
-/// Clicking a note pane opens the WIDE-box dialog, prefilled with the note it edits, and accepting
-/// sends it against the SELECTED roster index. This is the first customer of the popup engine's
-/// `hasWideEditBox` (UiPanels.xml) and the only test that proves the 420 widen and the box swap.
+/// The guild message dialogs are 420 wide with the wide edit box (`StaticPopup.lua:1581-1587`).
 #[test]
 fn the_note_pane_opens_the_wide_dialog_and_sends_it() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -614,8 +556,6 @@ fn the_note_pane_opens_the_wide_dialog_and_sends_it() {
     assert!(!visible(&s, "StaticPopup1"), "accepting closes it");
 }
 
-/// The message of the day paints the CACHED value, is click-to-edit only for a rank that may set
-/// it, and the GUILD_MOTD event repaints it without a roster round trip.
 #[test]
 fn the_motd_is_cached_click_to_edit_and_right_gated() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -651,7 +591,7 @@ fn the_motd_is_cached_click_to_edit_and_right_gated() {
     s.run("StaticPopup1Button1:Click()").unwrap();
     assert_eq!(calls(&s), "GuildSetMOTD:Raid Wednesday.");
 
-    // The event is what actually repaints the pane — the roster never carries it back.
+    // The pane paints `CURRENT_GUILD_MOTD`, which only `GUILD_MOTD` updates after load.
     s.fire_event(
         "GUILD_MOTD",
         vec![ScriptValue::Str("Raid Thursday.".to_string())],
@@ -659,8 +599,6 @@ fn the_motd_is_cached_click_to_edit_and_right_gated() {
     assert_eq!(text(&s, "GuildFrameNotesText"), "Raid Thursday.");
 }
 
-/// Guild Control is the guild MASTER's alone and Add Member follows the invite right — the two
-/// pane-level buttons, both driven by the repaint rather than by a click.
 #[test]
 fn the_pane_buttons_follow_the_rights() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -677,7 +615,7 @@ fn the_pane_buttons_follow_the_rights() {
     );
     assert!(!enabled(&s, "GuildFrameAddMemberButton"));
 
-    // Add Member opens the name dialog, and it is the NARROW box (a name, not a sentence).
+    // Add Member opens the narrow box: a name, not a sentence.
     s.run("BenillaGuildFixture.rights.invite = 1; GuildStatus_Update()")
         .unwrap();
     let _ = calls(&s);
@@ -693,9 +631,7 @@ fn the_pane_buttons_follow_the_rights() {
     assert_eq!(calls(&s), "GuildInviteByName:Thrall");
 }
 
-/// The rank editor loads its thirteen checkboxes from the rank BUFFER, opens with Accept dead, and
-/// arms it on the first edit. The checkbox IDs are the option indices the engine maps to bits, so
-/// the click has to carry the index it was declared with.
+/// A checkbox's ID is the option index the engine maps to a bit.
 #[test]
 fn the_rank_editor_loads_its_flags_and_arms_accept_on_an_edit() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -736,14 +672,12 @@ fn the_rank_editor_loads_its_flags_and_arms_accept_on_an_edit() {
     s.run("GuildControlPopupFrameCheckbox5:Click()").unwrap();
     assert_eq!(
         calls(&s),
-        // The Lua hands `this:GetChecked()` straight through, and in 1.12 that is the NUMBER 1
-        // (1830) — so 1 is what the reference's own call carries too.
+        // `this:GetChecked()` passes straight through, and in 1.12 it is the number 1.
         "GuildControlSetRankFlag:5:1",
         "the checkbox's own ID is what reaches the engine"
     );
     assert!(enabled(&s, "GuildControlPopupAcceptButton"));
 
-    // Accept flushes the buffer under the name in the box, then closes.
     s.run("GuildControlPopupFrameEditBox:SetText(\"Warchief\")")
         .unwrap();
     let _ = calls(&s);
@@ -755,8 +689,6 @@ fn the_rank_editor_loads_its_flags_and_arms_accept_on_an_edit() {
     assert!(!visible(&s, "GuildControlPopupFrame"));
 }
 
-/// Picking another rank in the dropdown re-loads the buffer, repaints the boxes from THAT rank's
-/// flags, and re-disarms Accept — the edit you were half-way through does not follow you.
 #[test]
 fn switching_rank_reloads_the_buffer_and_disarms_accept() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -766,9 +698,7 @@ fn switching_rank_reloads_the_buffer_and_disarms_accept() {
     s.run("GuildControlPopupFrameCheckbox5:Click()").unwrap();
     assert!(enabled(&s, "GuildControlPopupAcceptButton"));
 
-    // Through the real menu, not the handler: the dropdown's rows ARE the ranks, so the row's own
-    // ID is the rank the buffer loads, and calling the handler by hand would prove nothing about
-    // that wiring.
+    // Through the real menu: a row's ID is the rank the buffer loads (`FriendsFrame.lua:864-871`).
     let _ = calls(&s);
     s.run("ToggleDropDownMenu(1, nil, GuildControlPopupFrameDropDown)")
         .unwrap();
@@ -794,8 +724,8 @@ fn switching_rank_reloads_the_buffer_and_disarms_accept() {
     );
 }
 
-/// The add/remove rank buttons: ten is the ceiling, and the last rank can only be removed once it
-/// is EMPTY — which is why the repaint counts `playersInBotRank` at all.
+/// Ten ranks is the ceiling (`FriendsFrame.lua:887`), and the last rank goes only once
+/// `playersInBotRank` is zero (`:907-918`).
 #[test]
 fn the_rank_buttons_follow_the_count_and_the_bottom_rank() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -820,7 +750,7 @@ fn the_rank_buttons_follow_the_count_and_the_bottom_rank() {
     s.run("BenillaGuildFixture.ranks = { \"Guild Master\",\"Officer\",\"Veteran\",\"Member\",\"Initiate\",\"Peon\" }")
         .unwrap();
 
-    // Remove only shows on the LAST rank, and only past five ranks.
+    // Remove shows only on the last rank, and only past five ranks.
     s.run("UIDropDownMenu_SetSelectedID(GuildControlPopupFrameDropDown, 1); GuildControlPopupFrameRemoveRankButton_OnUpdate()")
         .unwrap();
     assert!(
@@ -851,8 +781,6 @@ fn the_rank_buttons_follow_the_count_and_the_bottom_rank() {
     );
 }
 
-/// Every column header sorts by its own key, in BOTH views — eight headers over one roster, and a
-/// sort is a repaint, never a re-request.
 #[test]
 fn the_column_headers_sort_by_their_own_keys() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -882,14 +810,10 @@ fn the_column_headers_sort_by_their_own_keys() {
     }
 }
 
-/// **The Show Offline Members checkbox EXISTS.** The reference declares it `virtual="true"` inside
-/// a `<Frames>` block, which reads like "this is a template, do not build it" — and is not: the
-/// `virtual` attribute is only consulted by the top-level file loader (`0x6ede10`), while a
-/// `<Frames>` child goes straight to the instantiator via `LoadChildFrames 0x76a060`. So the box
-/// is a real frame in the reference and must be one here.
-///
-/// Its click also DROPS THE SELECTION before re-filtering: the roster is about to be re-ordered,
-/// so index 7 will not be the member index 7 was.
+/// The Show Offline checkbox is declared `virtual="true"` inside a `<Frames>` block
+/// (`FriendsFrame.xml:1816`) and is still a real frame: only the top-level loader reads `virtual`
+/// (`0x6ede10`), while `LoadChildFrames` (`0x76a060`) instantiates every child. Its click drops the
+/// selection before re-filtering (`FriendsFrame.xml:1852`).
 #[test]
 fn the_show_offline_checkbox_is_real_and_drops_the_selection() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -920,8 +844,6 @@ fn the_show_offline_checkbox_is_real_and_drops_the_selection() {
     );
 }
 
-/// The guild-information board is read-only without the right: grey text, a dead Accept, and the
-/// stored text rather than the click-here invitation.
 #[test]
 fn the_guild_information_board_is_right_gated() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -956,7 +878,6 @@ fn the_guild_information_board_is_right_gated() {
     assert!(!enabled(&s, "GuildInfoSaveButton"));
     assert_eq!(colour(&s, "GuildInfoEditBox"), (0.65, 0.65, 0.65));
 
-    // …and with the right, an empty board shows the invitation.
     s.run("ToggleGuildInfoFrame()").unwrap();
     s.run("BenillaGuildFixture.rights.editGuildInfo = 1")
         .unwrap();
@@ -964,8 +885,7 @@ fn the_guild_information_board_is_right_gated() {
     assert_eq!(text(&s, "GuildInfoEditBox"), "Click here to set message");
 }
 
-/// The three satellite windows are mutually exclusive — each one's opener shuts the other two —
-/// and closing the social window takes all three with it, since none of them is its child.
+/// `FriendsFrame_OnHide` closes all three satellites (`FriendsFrame.lua:133-135`).
 #[test]
 fn the_three_satellites_are_exclusive_and_close_with_the_window() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -993,9 +913,8 @@ fn the_three_satellites_are_exclusive_and_close_with_the_window() {
     assert!(!visible(&s, "GuildFrame"));
 }
 
-/// `GUILD_ROSTER_UPDATE`'s `arg1` is the STALE flag, and it is the difference between a repaint and
-/// a wire round-trip: a column-header sort fires this event without it, and re-requesting there
-/// would put a server trip behind every click on a header.
+/// `GUILD_ROSTER_UPDATE` re-requests the roster only when `arg1` marks it stale
+/// (`FriendsFrame.lua:646-653`); a header sort fires the event without it.
 #[test]
 fn the_roster_event_only_re_requests_when_told_the_roster_is_stale() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -1015,16 +934,14 @@ fn the_roster_event_only_re_requests_when_told_the_roster_is_stale() {
         "…but a STALE roster is re-requested"
     );
 
-    // With the pane closed the event does nothing at all — the arm's own visibility gate.
+    // With the pane closed the event does nothing: the arm's visibility gate.
     s.run("HideUIPanel(FriendsFrame)").unwrap();
     let _ = calls(&s);
     s.fire_event("GUILD_ROSTER_UPDATE", vec![ScriptValue::Int(1)]);
     assert_eq!(calls(&s), "", "the pane is closed; nothing repaints");
 }
 
-/// Leaving the guild while STANDING on the guild tab falls back to tab 1 rather than leaving a
-/// pane with no guild behind it on screen — the half of `InGuildCheck` that is easy to omit and
-/// impossible to notice until it happens.
+/// `InGuildCheck` moves a guildless window off the guild tab (`FriendsFrame.lua:920-931`).
 #[test]
 fn losing_the_guild_falls_back_off_the_guild_tab() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -1046,12 +963,11 @@ fn losing_the_guild_falls_back_off_the_guild_tab() {
         "and the window falls back to the friends list"
     );
 
-    // The tab also refuses to be selected by number while guildless (the second lock).
+    // `ToggleFriendsFrame(3)` returns early while guildless (`FriendsFrame.lua:750`).
     s.run("ToggleFriendsFrame(3)").unwrap();
     assert!(!visible(&s, "GuildFrame"));
     assert!(visible(&s, "FriendsListFrame"));
 
-    // Joining one re-arms it.
     s.run("BenillaGuildFixture.inGuild = 1").unwrap();
     s.fire_event("PLAYER_GUILD_UPDATE", vec![]);
     assert_eq!(
@@ -1066,8 +982,8 @@ fn losing_the_guild_falls_back_off_the_guild_tab() {
     );
 }
 
-/// A right-click on a roster row opens the shared FRIEND menu with the two GUILD rows live. They
-/// are gated on this pane being visible, which is what keeps them off a friends-list or /who row.
+/// The FRIEND menu's two guild rows are gated on `GuildFrame:IsVisible()`
+/// (`UnitPopup.lua:323-330`), which keeps them off a friends-list or `/who` row.
 #[test]
 fn right_clicking_a_roster_row_offers_the_guild_rows() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -1108,7 +1024,7 @@ fn right_clicking_a_roster_row_offers_the_guild_rows() {
     s.run("StaticPopup1Button1:Click()").unwrap();
     assert_eq!(calls(&s), "GuildSetLeaderByName:Furor");
 
-    // GUILD_LEAVE is only ever offered on YOURSELF…
+    // GUILD_LEAVE is offered only on yourself.
     s.run("GuildFrameButton1:Click(\"RightButton\")").unwrap();
     assert_eq!(
         s.eval::<Option<i64>>(&row("GUILD_PROMOTE")).unwrap(),
@@ -1126,17 +1042,13 @@ fn right_clicking_a_roster_row_offers_the_guild_rows() {
     assert_eq!(calls(&s), "GuildLeave");
 }
 
-/// The same two rows are ABSENT from a `/who` row's menu, which opens the identical FRIEND menu.
-/// That gate is `GuildFrame:IsVisible()`, and without it a guild verb would sit on every name in
-/// the game.
 #[test]
 fn the_guild_rows_stay_off_a_who_row_menu() {
     let _data = benilla_formats::wow_data_or_skip!();
     let s = setup();
     s.run("ShowWhoPanel()").unwrap();
-    // NOT our own name: the WHISPER row hides on yourself, and with INVITE gated the same way the
-    // menu would have nothing to show and never open — which would make the assertion below pass
-    // for the wrong reason.
+    // Not our own name: on yourself the menu has no row to show and never opens, so the check
+    // below would pass vacuously.
     s.run("FriendsFrame_ShowDropdown(\"Thrall\", 1)").unwrap();
     assert!(s.eval::<bool>("return DropDownList1:IsVisible()").unwrap());
     let present = r#"
@@ -1154,8 +1066,7 @@ fn the_guild_rows_stay_off_a_who_row_menu() {
     );
 }
 
-/// A guild invite raises the accept/decline dialog wherever you are — it does not need the social
-/// window to have ever been opened, which is why it rides its own hidden driver frame.
+/// `UIParent_OnEvent` raises the invite dialog (`UIParent.lua:296-303`), social window shut or not.
 #[test]
 fn a_guild_invite_raises_its_dialog_without_the_window() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -1208,9 +1119,8 @@ fn a_guild_invite_raises_its_dialog_without_the_window() {
     assert!(!visible(&s, "StaticPopup1"));
 }
 
-/// Removing a member goes behind a confirm that NAMES them — the registry line carries a
-/// placeholder and OnShow splices the real name in, which is the one dialog in this file whose
-/// text is rewritten on show.
+/// The confirm names the member: the registry text carries a placeholder that OnShow replaces
+/// (`StaticPopup.lua:903`, `:911`).
 #[test]
 fn removing_a_member_names_them_in_the_confirm() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -1232,17 +1142,9 @@ fn removing_a_member_names_them_in_the_confirm() {
     );
 }
 
-/// **`GuildControlGetRankFlags` really answers THIRTEEN values, and the count survives the
-/// 5.0→5.1 vararg swap.** The one place the window and the engine are coupled by *arity* rather
-/// than by a name.
-///
-/// The reference walks the 5.0 vararg table with `for i = 1, arg.n`, and that stock file is the
-/// one this window loads, so the checkbox loop's bound *is* whatever the binding pushed. The two
-/// agree only while every one of the thirteen returns is actually pushed — and with no rank
-/// loaded, ALL THIRTEEN ARE NIL (era booleans are `1`/`nil`).
-/// A binding that returned "as many values as are true" would look identical at every other
-/// assertion in this file, load without an error, and leave checkboxes stale from the last rank.
-/// So this one deliberately does NOT install the fixture: it asks the real `script::guild`.
+/// `GuildControlCheckboxUpdate` loops `for i=1, arg.n` (`FriendsFrame.lua:876`), so the binding
+/// must push all thirteen returns even when every one is nil. Asks the real `script::guild`, not
+/// the fixture.
 #[test]
 fn the_rank_flags_binding_answers_thirteen_values_even_when_all_are_nil() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -1253,7 +1155,7 @@ fn the_rank_flags_binding_answers_thirteen_values_even_when_all_are_nil() {
         "an unloaded buffer is all-nil, and every one of the thirteen must still be pushed — \
          `GuildControlCheckboxUpdate` drives checkbox i off argument i and nothing else"
     );
-    // …and each of them is nil, not `false`: the era boolean law, which `SetChecked` reads.
+    // Each is nil, not `false`: a 1.12 boolean, which `SetChecked` reads.
     assert_eq!(
         s.eval::<i64>(
             "local function count(...) \
@@ -1268,21 +1170,12 @@ fn the_rank_flags_binding_answers_thirteen_values_even_when_all_are_nil() {
     );
 }
 
-/// **Each `Can*` predicate reads the bit its checkbox owns, end to end.**
-///
-/// `RANK_RIGHT_BITS`' own unit test asserts the table as *data*. That is necessary and not
-/// sufficient: a wrong table is only a bug because the predicates read it, and a mutation that
-/// renumbered Promote/Demote/Invite/Remove into the naive contiguous layout left every window test
-/// in this file green — they drive the fixture's stand-ins, not the engine's predicates. So this
-/// one pushes a real snapshot with exactly ONE right set and asks the real globals.
-///
-/// The four it checks are precisely the four the naive `1 << (i - 1)` layout would swap, which is
-/// what makes it a falsifier rather than a restatement.
+/// Asks the real globals over a snapshot with one right set. Checkboxes 5-8 own bits 0x80, 0x100,
+/// 0x10 and 0x20, out of order, so a `1 << (i - 1)` table reads the wrong bit for each.
 #[test]
 fn each_permission_predicate_reads_the_bit_its_checkbox_owns() {
     let _data = benilla_formats::wow_data_or_skip!();
-    // Index 7, "Invite Member" — bit 0x10. A shift-based table would put 0x10 at index 5,
-    // "Promote", so this single word separates the two layouts in both directions.
+    // Checkbox 7, Invite Member, is bit 0x10, which a shift-based table gives checkbox 5, Promote.
     let mut s = UiScript::new().unwrap();
     s.set_guild(GuildState {
         in_guild: true,
@@ -1304,7 +1197,7 @@ fn each_permission_predicate_reads_the_bit_its_checkbox_owns() {
         );
     }
 
-    // Index 5, "Promote" — bit 0x80, which the naive layout would call Remove Member.
+    // Checkbox 5, Promote, is bit 0x80, which a shift-based table gives checkbox 8, Remove Member.
     s.set_guild(GuildState {
         in_guild: true,
         rights: 0x0000_0080,
@@ -1321,7 +1214,6 @@ fn each_permission_predicate_reads_the_bit_its_checkbox_owns() {
         0
     );
 
-    // And a guildless player holds no right at all, whatever the stale word says.
     s.set_guild(GuildState {
         in_guild: false,
         rights: u32::MAX,
@@ -1337,19 +1229,9 @@ fn each_permission_predicate_reads_the_bit_its_checkbox_owns() {
     }
 }
 
-/// **`GetGuildRosterInfo` really answers TEN values, and the tenth is `status`.** The second
-/// place the window and the engine are coupled by arity, and the one that nearly shipped wrong.
-///
-/// Six of the reference's seven call sites destructure only nine (`FriendsFrame.lua:344`, `:447`,
-/// `:479`, `:709`, `StaticPopup.lua:1008`, `:1045`). Only the player-status view takes the tenth
-/// (`:541`) and branches on `status == ""` to choose between the "Online" label and the
-/// `<AFK>`/`<DND>` tag (`:548-551`). So a nine-value binding leaves exactly one column blank while
-/// every other assertion in this file — and every other window — still passes.
-///
-/// Like the rank-flags falsifier above, this deliberately does NOT install the fixture: the
-/// fixture returns ten by construction, so asking it would prove nothing. It asks the real
-/// `script::guild`, with an empty roster, where every return is nil and only the *count* is
-/// evidence.
+/// Only the guild-status view takes the tenth return, `status`, showing it in place of "Online"
+/// (`FriendsFrame.lua:541`, `:548-551`); the other call sites take nine. Asks the real
+/// `script::guild` with an empty roster, where only the count is evidence.
 #[test]
 fn the_roster_binding_answers_ten_values_and_the_tenth_is_status() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -1368,9 +1250,6 @@ fn the_roster_binding_answers_ten_values_and_the_tenth_is_status() {
     );
 }
 
-/// The whole slice runs clean: no Lua error reaches the session's error sink through any of the
-/// paths above. A handler that raises mid-way still leaves the frames it already touched looking
-/// right, so an assertion on the look is not enough on its own.
 #[test]
 fn driving_the_guild_windows_raises_no_script_errors() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -1392,19 +1271,13 @@ fn driving_the_guild_windows_raises_no_script_errors() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// Every list in this window scrolls with the wheel — friends, ignore, who AND guild.
-///
-/// The guild pane shipped without its `OnMouseWheel` while the comment three lines above its own
-/// scroll frame said the list was "driven by `updateFunc` + the pane's OnMouseWheel", and while
-/// its three siblings each carried one. A gap that the surrounding prose asserts is closed is
-/// invisible to reading, so this asserts the WIRING rather than the comment.
 #[test]
 fn every_list_in_the_window_takes_the_mouse_wheel() {
     let _data = benilla_formats::wow_data_or_skip!();
     let s = setup();
     open(&s);
-    // The reference's wheel lives on each list's FauxScrollFrameTemplate scroll frame, not on
-    // the pane (1959).
+    // The wheel handler is each list's scroll frame's, from `UIPanelScrollFrameTemplate`
+    // (`UIPanelTemplates.xml:208`), not the pane's.
     for frame in [
         "FriendsFrameFriendsScrollFrame",
         "FriendsFrameIgnoreScrollFrame",

@@ -1,9 +1,6 @@
-//! **The Bevy face of the glyph cache** — building it, following the window, and getting each new
-//! cell onto the GPU.
-//!
-//! The upload is a sub-rect `RenderQueue::write_texture` into the sheet's existing texture rather
-//! than an `Assets<Image>` mutation, for a reason that is about correctness rather than cost: see
-//! [`crate::ui_text::pack`]'s module doc.
+//! The glyph cache in Bevy: building it, following the window, and uploading each new cell as a
+//! sub-rect `RenderQueue::write_texture` into the sheet's texture, never through `Assets<Image>`
+//! ([`crate::ui_text::pack`] says why).
 
 use std::sync::{Arc, Mutex};
 
@@ -27,7 +24,7 @@ use crate::ui_text::pack::CellUpload;
 #[derive(Resource, Default)]
 struct GlyphUploadQueue(Vec<CellUpload>);
 
-/// The render world's copy, which also carries anything whose page texture was not ready yet.
+/// The render world's copy, which also keeps cells whose texture was not ready yet.
 #[derive(Resource, Default)]
 struct GlyphUploads(Vec<CellUpload>);
 
@@ -36,10 +33,9 @@ pub(crate) struct UiTextPlugin;
 
 impl Plugin for UiTextPlugin {
     fn build(&self, app: &mut App) {
-        // `init` runs each Update until it succeeds: the engine needs both the patch chain (opened
-        // at `AssetSet::Open`) *and* the primary window's real `scale_factor`, which winit only
-        // reports once the OS window exists. `publish_pages` runs in `Last`, after every producer
-        // of text quads, so a cell rasterized this frame is queued before the render extract.
+        // `init` retries each Update until the patch chain and the window's real `scale_factor`
+        // exist. `publish_sheet` runs in `Last`, after every producer of text quads, so a cell
+        // rasterized this frame is queued before the render extract.
         app.init_resource::<GlyphUploadQueue>()
             .add_systems(Update, init)
             .add_systems(Last, publish_sheet);
@@ -51,15 +47,13 @@ impl Plugin for UiTextPlugin {
             .add_systems(ExtractSchedule, extract_glyph_uploads)
             .add_systems(
                 Render,
-                // After `prepare_assets::<GpuImage>` (PrepareAssets) so a page created this frame
-                // already has its texture, and before the frame's submit.
+                // After `prepare_assets::<GpuImage>`, so a sheet made this frame has its texture.
                 upload_glyph_cells.in_set(RenderSystems::PrepareResources),
             );
     }
 }
 
-/// Build the engine on the first frame both the patch chain and the window's real `scale_factor`
-/// are available.
+/// Build the engine on the first frame with both the patch chain and the window's `scale_factor`.
 fn init(
     mut commands: Commands,
     world_assets: Option<Res<WorldAssets>>,
@@ -83,13 +77,9 @@ fn init(
     });
 }
 
-/// The frame boundary: follow the window's DPI, carry out a pending reset, create any new page's
-/// texture, and hand this frame's cells to the render world.
-///
-/// **Order matters, and it is the order below.** The reset runs *before* the pending cells are
-/// handed over, so the frame that exhausted the pages does not upload into shelves it is about to
-/// free; and it runs here rather than at the point of failure so no UV can move while quads that
-/// reference it are still being pushed (see [`TextEngine::note_exhausted`]).
+/// The frame boundary: follow the window's DPI, carry out a pending reset, create the sheet's
+/// texture once, and hand this frame's cells to the render world. A reset waits for this boundary
+/// so no UV moves while quads that use it are still being pushed.
 fn publish_sheet(
     atlas: Option<ResMut<UiFontAtlas>>,
     mut images: ResMut<Assets<Image>>,
@@ -102,7 +92,6 @@ fn publish_sheet(
     let dpi = windows.single().map_or(1.0, Window::scale_factor);
     let (generation, dpi_moved) = {
         let mut e = atlas.lock();
-        // A DPI change invalidates no cell — it changes which cells get *asked for*.
         let dpi_moved = (e.dpi - dpi).abs() > 1e-6;
         e.dpi = dpi;
         if e.reset_pending {
@@ -115,17 +104,14 @@ fn publish_sheet(
         }
         let (announce, mut cells) = e.sheet.take_pending();
         if announce {
-            // `insert`, once, on a reserved handle — and never `get_mut` afterwards, which would
-            // recreate the texture and blank every glyph on it (see `pack`'s module doc).
-            // A duplicate insert cannot happen (the sheet announces itself once), and there is
-            // no recovery from a failed one anyway — text simply would not draw.
+            // Inserted once on the reserved handle, never `get_mut` after: that would recreate
+            // the texture and blank every glyph. A failed insert has no recovery.
             let _ = images.insert(e.sheet.handle().id(), crate::ui_text::pack::sheet_image());
         }
         queue.0.append(&mut cells);
         (e.generation, dpi_moved)
     };
-    // The one thing a DPI change DOES stale: the ellipsis memo's answers are keyed by a logical
-    // box against a raster size that just moved.
+    // A DPI change does stale the ellipsis memo: its answers fit a box at the old raster size.
     if dpi_moved {
         atlas.ellipsis = crate::ui_text::EllipsisMemo::default();
     }
@@ -133,8 +119,7 @@ fn publish_sheet(
     report_cache(&atlas);
 }
 
-/// Hand the frame's cells to the render world, appending rather than replacing — anything the
-/// previous frame could not write (its page's texture was not ready) is still in there.
+/// Hand the frame's cells to the render world, appending to any a previous frame could not write.
 fn extract_glyph_uploads(
     mut main_world: ResMut<bevy::render::MainWorld>,
     mut uploads: ResMut<GlyphUploads>,
@@ -144,10 +129,8 @@ fn extract_glyph_uploads(
     }
 }
 
-/// Write each new cell into its page's existing texture — a sub-rect `write_texture`, so the
-/// texture's identity never changes and nothing downstream needs invalidating (see `pack`'s module
-/// doc for what the obvious alternative would have broken). A cell whose page texture has not been
-/// prepared yet stays queued for the next frame rather than being dropped.
+/// Write each new cell into the sheet's texture as a sub-rect, so the texture's identity never
+/// changes; a cell whose texture is not prepared yet stays queued.
 fn upload_glyph_cells(
     mut uploads: ResMut<GlyphUploads>,
     gpu_images: Res<RenderAssets<GpuImage>>,
@@ -155,7 +138,7 @@ fn upload_glyph_cells(
 ) {
     uploads.0.retain(|u| {
         let Some(gpu) = gpu_images.get(u.image) else {
-            return true; // the page's texture is not up yet — try again next frame
+            return true; // the texture is not up yet: retry next frame
         };
         render_queue.write_texture(
             TexelCopyTextureInfo {
@@ -184,13 +167,8 @@ fn upload_glyph_cells(
     });
 }
 
-/// `WOW_GLYPH_CACHE=1`: one line a second of what the cache holds.
-///
-/// It exists because `super::pack::SHEET_SIZE` is the number this design can get wrong quietly —
-/// too small and a session resets on a loading screen, too large and we hold VRAM nobody reads. It
-/// is cheap to re-choose *from a measurement* and expensive to re-choose from an argument, so the
-/// measurement ships with it. (The plural it used to name — `MAX_PAGES`/`PAGE_SIZE` — went with
-/// the multi-page design 1342 replaced with one sheet.)
+/// `WOW_GLYPH_CACHE=1`: one line a second of what the cache holds, the measurement that sizes
+/// `super::pack::SHEET_SIZE`.
 fn report_cache(atlas: &UiFontAtlas) {
     use std::sync::atomic::{AtomicU64, Ordering};
     static LAST: AtomicU64 = AtomicU64::new(0);

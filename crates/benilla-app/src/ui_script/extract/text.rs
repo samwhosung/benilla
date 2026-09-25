@@ -1,8 +1,6 @@
-//! The Text-arm rasterization: one `QuadContent::Text` quad — a region FontString, a
-//! message-frame ring line, or the focused editbox's windowed text — into glyph [`UiQuad`]s:
-//! the editbox window + selection/caret, the ellipsis-truncate seam, the drop shadow, and the
-//! hyperlink span collection. Split out of the extraction pass ([`super`]) when it crossed the
-//! size budget; the arm's host-loop context arrives bundled as [`TextHost`].
+//! The Text arm: one `QuadContent::Text` quad (a region FontString, a message-frame line or the
+//! focused editbox's text) into glyph [`UiQuad`]s, with the editbox's selection and caret, the
+//! ellipsis, the drop shadow and the hyperlink spans.
 
 use bevy::prelude::*;
 
@@ -13,12 +11,11 @@ use benilla_ui::widget::FrameHandle;
 use crate::ui_pass::{UiQuad, UvRect};
 use crate::ui_text::{layout_text_quads, layout_text_quads_links, TextSeat, UiFontAtlas};
 
-/// `WOW_TEXT_PROBE=1` — launch-time knob, read once (the check ran per Text quad per frame).
+/// `WOW_TEXT_PROBE=1`: log each Text quad's drawn string, font and ink rows; read once.
 static TEXT_PROBE: std::sync::LazyLock<bool> =
     std::sync::LazyLock::new(|| std::env::var("WOW_TEXT_PROBE").as_deref() == Ok("1"));
 
-/// The `QuadContent::Text` payload minus the text itself — the region's resolved style, passed
-/// verbatim from the destructure at the [`super::paint_script`] call site.
+/// The `QuadContent::Text` payload minus the text: the region's resolved style.
 pub(super) struct TextStyle {
     pub color: Option<[f32; 4]>,
     pub justify_h: JustifyH,
@@ -29,42 +26,31 @@ pub(super) struct TextStyle {
     pub shadow: Option<FontShadow>,
     pub outline: Outline,
     pub alpha_gradient: Option<(f32, f32)>,
-    /// The region's seat claim (`benilla_ui`'s `RegionData::world_seat`) — true for the V-plate's
-    /// name and level, which are rigid to a device-snapped overlay rather than to the UI grid.
+    /// The V-plate's name and level, seated on the plate's device-snapped overlay, not the UI grid.
     pub world_seat: bool,
 }
 
-/// The host-loop context one Text quad draws under: the extracted quad's identity (z/alpha/
-/// target), its y-flipped rect + clip, the focused editbox's text-UI geometry (matched to this
-/// quad inside), and the screen height for the link-span flip back to engine space.
+/// The extraction loop's context for one Text quad.
 pub(super) struct TextHost<'a> {
     pub z: u64,
     pub alpha: f32,
     pub target: ZTarget,
     pub rect: Rect,
     pub clip: Option<Rect>,
-    /// The focused editbox's text-UI geometry, unfiltered — [`emit`] matches it to this quad
-    /// by [`EditBoxTextUi::target`].
+    /// The focused editbox's text UI, unfiltered: [`emit`] matches it to this quad by `target`.
     pub ebox: Option<&'a EditBoxTextUi>,
     pub screen_h: f32,
-    /// The 768-virtual scale `s = windowH/768`: rects arrive pre-scaled (px);
-    /// this converts the remaining unit-space inputs — font heights, shadow offsets, the
-    /// engine's editbox caret/selection x-offsets — into the same px space.
+    /// The seam scale `windowH/768 × uiScale`, for the unit-space inputs; rects arrive in px.
     pub scale: f32,
-    /// The owning frame's `effective_scale` ([`benilla_ui::script::ExtractedQuad::scale`]): the
-    /// rect already carries it; the FONT metrics — glyph raster size and shadow offset, both
-    /// frame-local — multiply by it here (the real client's text rides `SetScale`; 0219 §2's
-    /// divergence, closed). NOT applied to the editbox caret/selection/advance x-offsets: those
-    /// arrive in screen UI units (the advance measure already rode the scale — see
-    /// [`benilla_ui::script::EditBoxAdvanceRequest`]'s `scale` doc).
+    /// The frame's effective scale, already in the rect: glyph size and shadow offset ride it, as
+    /// the 1.12 client's text rides `SetScale`; the editbox x-offsets arrive in screen UI units.
     pub font_scale: f32,
-    /// Captures pin the caret blink ON (deterministic pixels); live, the engine's phase decides.
+    /// Captures pin the caret on for deterministic pixels; live, the engine's blink decides.
     pub caret_pinned: bool,
 }
 
-/// Rasterize one Text quad into `out` (and its hyperlink spans into `link_spans`, message-frame
-/// lines only). The glyph quads share the owning region's `z` — see [`layout_text_quads`]'s doc
-/// for why that's already the correct total-order slot.
+/// Rasterize one Text quad into `out`, and a message-frame line's hyperlink spans into
+/// `link_spans`. Glyph quads take the region's `z` ([`layout_text_quads`]).
 pub(super) fn emit(
     atlas: &mut UiFontAtlas,
     text: &str,
@@ -74,9 +60,7 @@ pub(super) fn emit(
     link_spans: &mut Vec<(FrameHandle, benilla_ui::layout::Rect, String, String)>,
 ) {
     let base_color = style.color.unwrap_or([1.0, 1.0, 1.0, 1.0]);
-    // Which pixel grid this block's top may land on: the interface's, or none —
-    // the WorldFrame overlays carry their own device-pixel seat and their text has to be rigid
-    // to it. The shadow pass below inherits it, like every other layout input.
+    // The block's top snaps to the UI grid, except on a world overlay, which has its own seat.
     let seat = if style.world_seat {
         TextSeat::Exact
     } else {
@@ -84,10 +68,7 @@ pub(super) fn emit(
     };
     let spec = crate::ui_text::FontSpec {
         path: style.font.as_deref(),
-        // The drawn px under the two size regimes × the 768-virtual scale × the owner's frame
-        // scale (`drawn_px`): one-to-one text unit-caps at 32 (a frame-LOCAL cap,
-        // like the seam scale it precedes) then scales; a SetTextHeight override scales uncapped.
-        // The shadow twin below inherits the spec (`..spec`).
+        // One-to-one text caps at 32 frame units, then scales; a `SetTextHeight` size is uncapped.
         height: crate::ui_text::drawn_px(
             style.font_height,
             style.text_height,
@@ -96,11 +77,8 @@ pub(super) fn emit(
         outline: style.outline,
         alpha_gradient: style.alpha_gradient,
     };
-    // The focused edit box's text draws WINDOWED (`0x77da80`): the scroll window's substring,
-    // left-anchored at the line origin in an unbounded rect (the window never wraps — the box
-    // edge clips instead), the selection highlight behind everything, the white caret after.
-    // `line_origin` gives the origin + the line cell; the x-offsets inside it are the engine's
-    // advance-derived geometry.
+    // The focused editbox draws windowed (`0x77da80`): the scroll window's substring from the
+    // line origin, unwrapped and clipped at the box edge, the selection behind, the caret after.
     let ebox = host.ebox.filter(|u| u.target == host.target);
     let mut draw_text: &str = text;
     let mut draw_rect = host.rect;
@@ -109,23 +87,15 @@ pub(super) fn emit(
         v: style.justify_v,
     };
     let mut text_clip = host.clip;
-    // The shadow's whole-pixel displacement ([`shadow_offset_px`]), hoisted: the band scissor
-    // below has to admit the ink it puts under the fill.
+    // Hoisted: the band scissor below admits the ink the shadow puts under the fill.
     let shadow_delta = style.shadow.map(|sh| {
         (
             shadow_offset_px(sh.offset[0] * host.scale * host.font_scale),
             shadow_offset_px(-sh.offset[1] * host.scale * host.font_scale),
         )
     });
-    // A message-frame ring line's scissor follows the seat, at the bottom edge only.
-    //
-    // The band ladder stacks UP from the frame's bottom edge, so the newest line is flush with it
-    // by construction and can never overflow there — the scissor's real job is the OTHER end, the
-    // half-fitting scrollback line at the frame's top, and that edge is untouched. What the bottom
-    // edge did cut was ink the renderer had deliberately placed below the band: the seat nudge
-    // lowers every UI text block one px, and the drop shadow sits one further px under the
-    // fill. Two of our own dials against a scissor that predates them — and the newest chat line
-    // lost the tails of its descenders and the feet of its brackets (director, 2026-07-26).
+    // A message line's scissor gives back the ink the seat nudge and the shadow put below its
+    // band, at the bottom edge only: the top edge still clips a half-fitting scrollback line.
     if matches!(host.target, ZTarget::Frame(_)) {
         if let Some(c) = text_clip.as_mut() {
             c.max.y += band_clip_slack(shadow_delta.map(|(_, dy)| dy));
@@ -139,8 +109,6 @@ pub(super) fn emit(
         ebox_geom = Some((x0, top, cell_h));
         text_clip = Some(host.clip.map_or(host.rect, |c| c.intersect(host.rect)));
         if !ui.multi_line {
-            // Single-line: the windowed draw — the scroll window's substring, left-anchored in
-            // an unbounded rect (the box edge clips instead of wrapping).
             draw_text = drawn;
             draw_rect = Rect::new(x0, host.rect.min.y, x0 + 100_000.0, host.rect.max.y);
             draw_justify = crate::ui_text::Justify {
@@ -148,14 +116,13 @@ pub(super) fn emit(
                 v: style.justify_v,
             };
         }
-        // Multiline draws the whole block through the ordinary wrapped path below (the text
-        // region's justify is already the editbox law: TOP/LEFT) — only the caret/selection are
-        // seated by `(row, x)` at the same row pitch the wrap answered.
+        // A multiline box draws wrapped (its region is TOP/LEFT already); the caret and the
+        // selection seat by `(row, x)` at the wrap's row pitch.
         for &(row, sx0, sx1) in &ui.selection {
             let hc = ui.highlight_color;
             #[allow(clippy::cast_precision_loss)]
             let ry = top + row as f32 * cell_h;
-            // The engine's selection x-span is in UI units (its advance table was fed ÷scale).
+            // The engine's selection x-span is in UI units.
             out.push(UiQuad {
                 rect: Rect::new(
                     x0 + sx0 * host.scale,
@@ -181,15 +148,9 @@ pub(super) fn emit(
             });
         }
     }
-    // The height-gated ellipsis-truncate (`ellipsize_to_fit` — CSimpleFontString `0x771ec0`,
-    // decision 0292's residue landed): a region FontString whose wrapped text needs more lines
-    // than its height-pinned rect allows draws `prefix + "..."` instead — the bag title, the
-    // unit-frame names, the minimap zone text. Region FontStrings only, exactly the client's
-    // seam: the editbox windows (never truncates), message-frame ring lines size their band FROM
-    // the text, and auto-height FontStrings fit by construction (the measure round-trip), so the
-    // gate inside is geometric and needs no fixed-vs-measured flag. Computed before the shadow
-    // so the shadow pass draws the same display string (the client's shadow is a second draw of
-    // the same truncated CGxString).
+    // A region FontString whose wrapped text needs more lines than its rect holds draws
+    // `prefix + "..."` (`CSimpleFontString` `0x771ec0`); an editbox never truncates and a message
+    // line sizes to its text. Before the shadow, which the client draws from the same string.
     let ellipsized = match host.target {
         ZTarget::Region(region) if ebox.is_none() => {
             crate::ui_text::ellipsize_to_fit(atlas, region, draw_text, draw_rect, spec)
@@ -199,26 +160,15 @@ pub(super) fn emit(
     if let Some(display) = ellipsized.as_deref() {
         draw_text = display;
     }
-    // The probe prints the DISPLAY string (post-ellipsis, post-editbox-window) — what this pass
-    // actually draws, which is what a truncation report needs to show.
+    // The probe prints the displayed string, after the ellipsis and the editbox window.
     let probe = *TEXT_PROBE;
     if probe {
-        // For the focused edit box, also the two numbers that must agree: where the engine puts the
-        // caret (`caret=`, advance-table-derived) and how wide the text this pass actually draws is
-        // (`ink=`). They diverge by the width of the markup when the advance table is measured over
-        // the raw buffer — the caret-out-in-space report as a pair of numbers.
+        // For the focused editbox, the engine's caret x and the drawn width, which must agree.
         let ebox_geom = ebox.map(|ui| {
             let ink = crate::ui_text::measure_text(&mut atlas.lock(), draw_text, None, spec).0;
             format!(" caret={:.1} ink={ink:.1}", ui.caret_x * host.scale)
         });
-        // **The FACE and the FLAGS are on this line for a reason.** It used to print the
-        // requested height and nothing else about the font, so the one question a "the text
-        // looks wrong" report actually asks — *which face, at what size, with what outline, did
-        // this quad draw* — could not be answered from the probe at all; it took a live
-        // `SetFont` probe, a control plate and a screenshot to establish for MSBT what these
-        // four fields say directly. `px` is the DRAWN logical height
-        // (`drawn_px`: the requested one through the cap, the 768 seam and the frame scale),
-        // which is the number that disagrees with `h` whenever a size looks wrong.
+        // `px` is the drawn height, after the cap, the seam and the frame scale.
         info!(
             "text probe: [{:.0},{:.0} {:.0}x{:.0}] h={:?} px={:?} flags={:?} face={:?}{} {:?}",
             draw_rect.min.x,
@@ -233,18 +183,10 @@ pub(super) fn emit(
             &draw_text[..draw_text.len().min(60)]
         );
     }
-    // The drop shadow (font object `<Shadow>` — MasterFont's (1,-1) black covers the whole
-    // GameFont* family): the same layout at an offset rect in the shadow color, pushed FIRST so
-    // the stable z-sort keeps it behind the glyph pass. Offset is WoW y-up (`y="-1"` = down) →
-    // y-down screen dy = −y. Markup color codes inside the text tint the shadow run too (v1
-    // corner, invisible for solid-color strings). The shadow is a single flat offset copy —
-    // never itself outlined — it lays out identically to its fill (a shadow with different steps
-    // would smear under long strings) and redraws the same composite cells in the shadow color,
-    // where the ring's black is indistinguishable from the shadow's.
+    // The font object's `<Shadow>` (`MasterFont`'s `(1, -1)` black, `Fonts.xml:55`, which most
+    // GameFonts inherit): the fill's layout and cells again at the offset in the shadow colour,
+    // pushed first so the stable sort draws it behind. WoW's `y="-1"` is down: screen `dy = −y`.
     if let (Some(sh), Some((dx, dy))) = (style.shadow, shadow_delta) {
-        // WHOLE pixels (`shadow_offset_px`, computed above): the shadow is a rigid copy of the
-        // fill, so its displacement must be an integer in the rect's own space — see that fn for
-        // why a fractional one makes the offset itself wobble line to line.
         let srect = Rect::new(
             draw_rect.min.x + dx,
             draw_rect.min.y + dy,
@@ -263,25 +205,19 @@ pub(super) fn emit(
             seat,
         );
         for q in &mut sq {
-            // Flatten rgb to the shadow color (markup tints ride the fill only); the alpha is
-            // every scalar the fill rides plus the shadow's own — see [`shadow_alpha`], which
-            // names the set and the symptom a missing member wears.
+            // Markup tints ride the fill only; the alpha is [`shadow_alpha`].
             q.color = [
                 sh.color[0],
                 sh.color[1],
                 sh.color[2],
                 shadow_alpha(q.color[3], base_color[3], host.alpha),
             ];
-            // Every glyph quad inherits the owning Text quad's ScrollFrame clip — the
-            // FontString's own extract-time clip, not a per-glyph concept.
             q.clip = text_clip;
         }
         out.extend(sq);
     }
-    // `font`/`font_height` come from the region's resolved font object (`Fonts.xml`).
     let mut glyphs = if let ZTarget::Frame(fh) = host.target {
-        // A frame-targeted Text quad is a message-frame ring line: collect its hyperlink spans
-        // for the engine's click hit-test (y-down → y-up flip).
+        // A frame-targeted Text quad is a message line: collect its links for the click hit-test.
         let mut spans = Vec::new();
         let g = layout_text_quads_links(
             &mut atlas.lock(),
@@ -298,7 +234,7 @@ pub(super) fn emit(
             &mut spans,
         );
         for sp in spans {
-            // px → the engine's y-up UI-unit space (÷scale after the flip).
+            // Back to the engine's y-up UI units.
             link_spans.push((
                 fh,
                 benilla_ui::layout::Rect::new(
@@ -326,15 +262,10 @@ pub(super) fn emit(
     };
     for q in &mut glyphs {
         q.color[3] *= host.alpha;
-        // Every glyph quad inherits the Text quad's ScrollFrame clip —
-        // `ui_pass`'s CPU clip already applies uniformly to any `UiQuad`, glyph or not.
         q.clip = text_clip;
     }
-    // The probe's seat line: the drawn INK rows (glyph-quad union, logical px, relative to the
-    // rect top) — the measurable half of the vertical-seat law
-    // (`0x5d1360`): compare `ink` against the law's `d + ascender` seat
-    // when hunting a vertical offset. Fill quads only (the shadow pass above would smear the
-    // bounds one px down-right).
+    // The seat probe: the fill's ink rows relative to the rect top, to compare with the
+    // vertical-seat law's `d + ascender` (`0x5d1360`); the shadow's quads are not in `glyphs`.
     let vpl = style.world_seat && benilla_assets::trace::enabled_for("vpl");
     if (probe || vpl) && !glyphs.is_empty() {
         let (mut y0, mut y1) = (f32::MAX, f32::MIN);
@@ -342,12 +273,7 @@ pub(super) fn emit(
             y0 = y0.min(q.rect.min.y);
             y1 = y1.max(q.rect.max.y);
         }
-        // **Where the plate's text actually inked**, on the same `vpl` tag the driver's `plate=`
-        // seat and the border's `paint=` line ride ([`crate::vplates`], decision 2168's
-        // measurement). The question the three lines answer together is not "does the text
-        // move?" — it is "does it move WITH the border?", which is a difference of two numbers
-        // per frame. Decision 2168 §5 named this line as the missing third; 2172 is what it
-        // found when it was built.
+        // Where the plate's text inked, beside the `vpl` tag's `plate=` and `paint=` lines.
         if vpl {
             benilla_assets::trace::line(
                 "vpl",
@@ -374,15 +300,14 @@ pub(super) fn emit(
         }
     }
     out.extend(glyphs);
-    // The focused box's caret: a 1-px WHITE bar (the client's ctor `0xffffffff` caret texture —
-    // never the text color) one line cell tall at the engine's advance-derived x, pushed after
-    // the glyphs so the stable sort draws it on top.
+    // The caret: a 1 px bar in the constructor's white (`0xffffffff`), one line cell tall at the
+    // engine's x, pushed after the glyphs to draw on top. The reference's is 4 UI units wide
+    // (`0x77b8c0`) and takes the edit box's text colour on a font change (`0x77e2a0`).
     if let (Some(ui), Some((x0, top, cell_h))) = (ebox, ebox_geom) {
         if host.caret_pinned || ui.caret_on {
             #[allow(clippy::cast_precision_loss)]
             let top = top + ui.caret_row as f32 * cell_h;
-            // caret_x is engine UI units (÷scale advances); the 1-px bar width stays device-thin
-            // (the client's 4-unit caret, `0x77b8c0`, is a named residual).
+            // `caret_x` is in engine UI units.
             let cx = x0 + ui.caret_x * host.scale;
             out.push(UiQuad {
                 rect: Rect::new(cx, top, cx + 1.0, top + cell_h),
@@ -406,34 +331,16 @@ pub(super) fn emit(
     }
 }
 
-/// One axis of the drop shadow's displacement, in the rect's own px space: the font object's
-/// unit offset times the seam scale, **rounded to a whole pixel** (never to zero — a shadow the
-/// scale shrank below half a pixel still draws one, the reference's look at any window size).
-///
-/// It must be a whole pixel because the shadow is laid out as a second, offset copy of the fill,
-/// and each copy independently takes the client's single vertical anchor snap (`snap_block_top`
-/// — `ceil(y − 0.5)`). A snap commutes with an integer translate and *only* with an integer
-/// translate: at a fractional offset `d`, `ceil(y + d − 0.5) − ceil(y − 0.5)` is `⌈d⌉` for some
-/// fractional parts of `y` and `⌊d⌋` for others — so the shadow's distance from its own glyphs
-/// changed with where the string happened to land. The chat window made that visible and
-/// permanent: its newest line's band is pinned to the frame's bottom edge, one fixed fractional
-/// position, which sat inside the wide-by-one window — so the most recent message, and only it,
-/// wore a shadow a pixel further out than every line above it (director, 2026-07-26; measured at
-/// 1600×900 ×0.9 UI scale, seam scale 1.055 → the fill/shadow gap alternated 1 px and 2 px).
-///
-/// The world's floating combat text reached the same conclusion from its own law
-/// (`combat_text::law::shadow_offset_px` rounds `0.002·viewport`); this is the UI's half.
-/// How far below its band a message-frame line's ink can reach, in the rect's own px space — the
-/// slack its scissor's bottom edge has to give back.
-///
-/// Two renderer offsets put ink under the geometric band, and neither existed when the band model
-/// was written: the seat nudge ([`crate::ui_text::UI_SEAT_NUDGE`]) drops every UI text block one
-/// px, and the drop shadow ([`shadow_offset_px`]) draws a copy one further px down. A shadow that
-/// rises (`dy < 0`) adds nothing at the bottom.
+/// How far below its band a message-frame line's ink reaches, in the rect's px space: the seat
+/// nudge ([`crate::ui_text::UI_SEAT_NUDGE`]) plus a falling shadow's offset.
 fn band_clip_slack(shadow_dy: Option<f32>) -> f32 {
     crate::ui_text::UI_SEAT_NUDGE + shadow_dy.map_or(0.0, |dy| dy.max(0.0))
 }
 
+/// One axis of the drop shadow's offset in the rect's px space, rounded to a whole pixel but
+/// never to zero, as the reference's shadow shows at any window size. Fill and shadow each take
+/// the client's vertical snap, `ceil(y − 0.5)`, which commutes only with an integer translate: a
+/// fractional offset makes the gap between them alternate between 1 and 2 px.
 fn shadow_offset_px(scaled: f32) -> f32 {
     let rounded = scaled.round();
     if rounded == 0.0 && scaled != 0.0 {
@@ -443,21 +350,9 @@ fn shadow_offset_px(scaled: f32) -> f32 {
     }
 }
 
-/// A shadow glyph's alpha: **every scalar the fill rides, plus its own.**
-///
-/// Named because the set is the whole law and a missing member is invisible until something fades
-/// through the one that was dropped. There are three:
-///
-/// - `layout` — what the shadow pass laid out with: the font object's `<Shadow>` colour alpha,
-///   times the write-on gradient's per-glyph ramp.
-/// - `fill` — the FILL colour's alpha (`base_color[3]`): `SetTextColor(r,g,b,a)`, and every
-///   MessageFrame line, whose fade is a colour ramp rather than a frame-alpha one.
-/// - `host` — the region's effective frame alpha (`SetAlpha` and every parent's).
-///
-/// `fill` was the one missing. A frame that fades through its colour (UIErrorsFrame,
-/// RaidWarningFrame, chat) holds `host` at 1.0 throughout, so the shadow stayed a fully opaque
-/// black copy of a vanishing string: the text read as turning BLACK across the ramp and then
-/// popping out when the line retired, instead of fading.
+/// A shadow glyph's alpha, every scalar the fill rides plus its own: `layout` (the `<Shadow>`
+/// colour's alpha times the write-on gradient), `fill` (the fill colour's alpha, which
+/// `SetTextColor` and a MessageFrame line's fade move) and `host` (the effective frame alpha).
 fn shadow_alpha(layout: f32, fill: f32, host: f32) -> f32 {
     layout * fill * host
 }
@@ -466,47 +361,28 @@ fn shadow_alpha(layout: f32, fill: f32, host: f32) -> f32 {
 mod tests {
     use super::{band_clip_slack, shadow_alpha, shadow_offset_px};
 
-    /// A drop shadow fades with the string it belongs to — through EITHER fade lane.
-    ///
-    /// The regression this pins: `UIErrorsFrame`'s "Requires Mining" and every other MessageFrame
-    /// line ramps its COLOUR alpha and holds frame alpha at 1.0, so a shadow that only rode
-    /// `host` stayed opaque black under a vanishing red fill — the text turned black across the
-    /// ramp and then vanished in one frame (director, 2026-08-22). Anything that fades through
-    /// `SetTextColor`'s alpha wore the same defect.
     #[test]
     fn a_drop_shadow_fades_through_the_colour_lane_as_well_as_the_frame_lane() {
-        // Nothing fading: an opaque shadow, as before.
         assert_eq!(shadow_alpha(1.0, 1.0, 1.0), 1.0);
-        // The colour lane alone (a message-frame line mid-ramp): the shadow follows it. This is
-        // the assertion that fails without the fix — it used to answer 1.0.
+        // The colour lane alone: a message-frame line mid-fade.
         assert_eq!(shadow_alpha(1.0, 0.25, 1.0), 0.25);
-        // The frame lane alone (UIFrameFadeOut, the zone splash): unchanged behaviour.
+        // The frame lane alone (`UIFrameFadeOut`).
         assert_eq!(shadow_alpha(1.0, 1.0, 0.25), 0.25);
-        // Both lanes compose, and the font object's own semi-transparent shadow rides on top.
+        // Both lanes, under a font object's own semi-transparent shadow.
         assert_eq!(shadow_alpha(0.8, 0.5, 0.5), 0.2);
-        // Fully faded fill leaves NO shadow behind — the black that used to outlive the text.
         assert_eq!(shadow_alpha(1.0, 0.0, 1.0), 0.0);
     }
 
-    /// The newest chat line's band bottom IS the frame's bottom edge, so every px the renderer
-    /// adds below the band is a px the scissor would otherwise eat — the descender tails and
-    /// bracket feet the director saw sliced off. The slack is the sum of the two offsets that put
-    /// ink there, and nothing else.
     #[test]
     fn the_band_scissor_gives_back_exactly_the_seat_and_the_shadow() {
         // The shipped GameFont case: seat nudge 1 + a 1px drop shadow.
         assert_eq!(band_clip_slack(Some(1.0)), 2.0);
-        // A font object with no shadow still owes the seat.
         assert_eq!(band_clip_slack(None), 1.0);
-        // A shadow that rises adds nothing under the line.
         assert_eq!(band_clip_slack(Some(-1.0)), 1.0);
-        // A bigger window scales the shadow, and the slack with it.
         assert_eq!(band_clip_slack(Some(2.0)), 3.0);
     }
 
-    /// The whole-pixel law, at the three scales that matter: the 1:1 seam (offset 1 px), the
-    /// director's 1600×900 ×0.9 (1.055 → 1 px, the fix's own case), and a small capture window
-    /// whose scale would otherwise round the shadow away entirely.
+    /// `1.0546875` is the seam scale of a 1600×900 window at uiScale 0.9.
     #[test]
     fn a_shadow_offset_is_a_whole_pixel_and_never_vanishes() {
         assert_eq!(shadow_offset_px(1.0), 1.0);
@@ -516,14 +392,10 @@ mod tests {
         // 377-tall capture window × 0.9: 0.44 px would round to nothing.
         assert_eq!(shadow_offset_px(0.4418), 1.0);
         assert_eq!(shadow_offset_px(-0.4418), -1.0);
-        // A font object with no offset on an axis keeps none.
         assert_eq!(shadow_offset_px(0.0), 0.0);
     }
 
-    /// The property the fix exists for: an integer translate commutes with the client's single
-    /// vertical snap (`ceil(y − 0.5)`), so the fill→shadow gap is the same at every fractional
-    /// position a string can land on. A fractional offset does not — the sweep below is exactly
-    /// the wobble the chat window's newest line wore.
+    /// An integer offset commutes with the client's vertical snap, `ceil(y − 0.5)`.
     #[test]
     fn a_whole_pixel_offset_survives_the_anchor_snap_at_every_fraction() {
         let snap = |y: f32| (y - 0.5).ceil();
@@ -536,7 +408,7 @@ mod tests {
                 "whole-px offset must translate the snapped block exactly, y={y}"
             );
         }
-        // …and the unrounded offset provably does not (both gaps occur over one unit of y).
+        // The unrounded offset gives both a 1 and a 2 px gap over one unit of y.
         let raw = 1.0546875f32;
         let gaps: std::collections::BTreeSet<i32> = (0..1000)
             .map(|step| {

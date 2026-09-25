@@ -1,26 +1,10 @@
-//! The chat tab's **options menu**, end to end (fixing **B246**: *"no chat options
-//! at all — background transparency has no home, and chat can be hard to read"*).
-//!
-//! These drive the shipped `ChatFrame.xml` through the shipped dropdown kit and the shipped colour
-//! picker, from the mouse event inward — a right-click on the real tab, a click on the real
-//! **Background** row, a drag of the real `OpacitySliderFrame` — because the report is about a
-//! path, not about a function. Every hop it names (is the menu reachable? does the row open the
-//! picker? does the slider move the chat box? does the value survive?) is a hop where the feature
-//! could be absent while every unit underneath it passed.
-//!
-//! The manifest is `color_picker_tests`' (fonts → panel manager → widget kit → picker) plus
-//! `ChatFrame.xml` last, which is `benilla.toc`'s own order.
+//! The chat tab's options menu, driven from the mouse through the stock frames and colour picker.
 
 use benilla_ui::script::UiScript;
 
 use super::test_ui::load_ui as load_xml;
 
-/// The GlobalStrings the menu labels itself with. The app runs the real
-/// `Interface\FrameXML\GlobalStrings.lua` off the player's own patch chain at boot
-/// (`load_global_strings`); these stand in for it here, at their real 1.12.1 values —
-/// `BACKGROUND` l.131 (whose own trailing comment in that file reads *"Title in the chat
-/// preferences menu"*, i.e. this exact row), `DISPLAY` l.937, `FONT_SIZE` l.1983,
-/// `FONT_SIZE_TEMPLATE` l.1984, `CHAT_OPTIONS_LABEL` l.673, `NEWBIE_TOOLTIP_CHATOPTIONS` l.2724.
+/// The menu's labels at their stock `GlobalStrings.lua` values.
 fn bake_strings(s: &UiScript) {
     s.run(
         r#"
@@ -35,7 +19,6 @@ fn bake_strings(s: &UiScript) {
     .unwrap();
 }
 
-/// The chat window with everything its tab menu reaches under it.
 fn chat_with_menu() -> UiScript {
     let mut s = UiScript::new().unwrap();
     for file in [
@@ -70,9 +53,8 @@ fn chat_with_menu() -> UiScript {
     s
 }
 
-/// Right-click a frame's centre through the real hit path.
-/// The tabs ship hidden and the dock reveals them on a stationary hover (`FCF_OnUpdate`); a
-/// click on a tab needs that reveal first.
+/// The tabs ship hidden until a stationary hover reveals them (`FCF_OnUpdate`), so a tab click
+/// needs the reveal first.
 fn reveal_then(s: &mut UiScript) {
     reveal_dock(s);
 }
@@ -86,7 +68,6 @@ fn right_click(s: &mut UiScript, frame: &str) {
     s.resolve();
 }
 
-/// Move the mouse onto a frame's centre through the real hit path (fires its `OnEnter`).
 fn hover(s: &mut UiScript, frame: &str) {
     let (x, y) = s
         .eval::<(f64, f64)>(&format!("return {frame}:GetCenter()"))
@@ -95,8 +76,7 @@ fn hover(s: &mut UiScript, frame: &str) {
     s.resolve();
 }
 
-/// Settle the dock's hover fade all the way open: park the cursor in the middle of the window and
-/// run past the 0.2 s stationary arm plus the 0.15 s ramp (`chat_tests`' own idiom).
+/// Parks the cursor mid-window past the dock's 0.2 s show delay and 0.15 s fade.
 fn reveal_dock(s: &mut UiScript) {
     let (x, y): (f32, f32) = s
         .eval(
@@ -111,7 +91,6 @@ fn reveal_dock(s: &mut UiScript) {
     }
 }
 
-/// Left-click a frame's centre through the real hit path.
 fn left_click(s: &mut UiScript, frame: &str) {
     let (x, y) = s
         .eval::<(f64, f64)>(&format!("return {frame}:GetCenter()"))
@@ -121,11 +100,6 @@ fn left_click(s: &mut UiScript, frame: &str) {
     s.resolve();
 }
 
-/// **B246's first half: the menu exists and the right button reaches it.**
-///
-/// Before 1589 the tab registered only `LeftButtonUp`, so the right-click was swallowed by the
-/// engine's default click set and no handler ever ran — which is why the report reads "no chat
-/// options at all" rather than "the menu is missing a row".
 #[test]
 fn right_clicking_a_chat_tab_opens_its_options_menu() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -141,9 +115,8 @@ fn right_clicking_a_chat_tab_opens_its_options_menu() {
         s.eval::<bool>("return DropDownList1:IsVisible()").unwrap(),
         "the tab's right-click opens the options menu"
     );
-    // The reference's first six rows for the default window (FloatingChatFrame.lua
-    // `FCFOptionsDropDown_Initialize`, level 1): the lock verb, Rename, New Window, the Display
-    // title, Font Size and Background — a docked non-default window gets Close before Display.
+    // The default window's level-1 rows (`FCFOptionsDropDown_Initialize`); any other window
+    // adds Close before Display.
     for (n, key) in [
         (1, "UNLOCK_WINDOW"),
         (2, "RENAME_CHAT_WINDOW"),
@@ -161,8 +134,6 @@ fn right_clicking_a_chat_tab_opens_its_options_menu() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// A LEFT click still selects the tab and does not open the menu — the control that must not
-/// change. (The reference's own fork: the right-button arm returns before the select.)
 #[test]
 fn a_left_click_still_selects_the_tab_and_opens_no_menu() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -190,13 +161,8 @@ fn a_left_click_still_selects_the_tab_and_opens_no_menu() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **B246's actual ask: the background slider.** Background → the colour picker with its opacity
-/// slider → dragging the thumb moves the chat window's stored alpha *and* the pixels.
-///
-/// The two numbers this pins are the ones a wrong implementation gets wrong in opposite
-/// directions: the slider is **reversed** (0 at the top is fully opaque), so the seed is `1 - a`
-/// and the read-back is `1 - value`; and the store is a **byte**, so 0.8 comes back as
-/// `204/255`, not as 0.8.
+/// The opacity slider is reversed (0 is fully opaque), so it opens at `1 - a` and writes
+/// `1 - value`; the store is a byte, so 0.8 reads back as 204/255.
 #[test]
 fn the_background_row_opens_the_picker_and_its_opacity_slider_drives_the_window() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -220,8 +186,7 @@ fn the_background_row_opens_the_picker_and_its_opacity_slider_drives_the_window(
             .unwrap(),
         "the Background swatch opens the colour picker"
     );
-    // The player's hand is on the picker now, off the chat frame: the hover's fade-out runs to
-    // its end before the slider is touched, exactly as it does in real time.
+    // The cursor leaves the chat frame for the picker, so the hover fade-out runs first.
     s.mouse_move(1500.0, 850.0);
     for _ in 0..45 {
         s.tick(0.016);
@@ -242,12 +207,8 @@ fn the_background_row_opens_the_picker_and_its_opacity_slider_drives_the_window(
     let stored: f64 = s
         .eval("local _,_,_,_,_,a = GetChatWindowInfo(1) return a")
         .unwrap();
-    // 204/255, and the last byte of that is 2133's doing. The slider carries
-    // `valueStep="0.01"`, so `SetValue` snaps `1 - 0.8` onto the lattice and rebuilds it as
-    // `n·step`; the reconstruction lands a hair BELOW the literal, `1 - value` a hair above 0.8,
-    // and the alpha store's floor quantizer then keeps 204 where it used to shed one to 203.
-    // The player asked for 0.8 and the store holds 0.8 — the client's own arithmetic, improved
-    // by accident.
+    // `valueStep="0.01"` rebuilds `1 - 0.8` as `n * step`, a hair below the literal, so
+    // `1 - value` is a hair above 0.8 and the store's floor quantizer keeps 204, not 203.
     assert!(
         (stored - 204.0 / 255.0).abs() < 1e-9,
         "the drag reached the engine store, quantized to its byte: {stored}"
@@ -265,9 +226,6 @@ fn the_background_row_opens_the_picker_and_its_opacity_slider_drives_the_window(
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The default look is **unchanged** by all of the above — the alpha rule generalised, it did not
-/// move. A window at the shipped base of 0 still rides the full 0 → `DEFAULT_CHATFRAME_ALPHA`
-/// hover ramp, which is the look the director signed off in 0288.
 #[test]
 fn the_shipped_window_still_fades_zero_to_a_quarter() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -292,9 +250,6 @@ fn the_shipped_window_still_fades_zero_to_a_quarter() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The **Font Size** submenu — B246's other half, *"chat can be hard to read"*. The four heights
-/// are the reference's `CHAT_FONT_HEIGHTS`, the tick follows the font the frame is wearing, and a
-/// pick moves both the live font and the stored `SIZE`.
 #[test]
 fn the_font_size_submenu_resizes_the_window_and_stores_the_pick() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -307,9 +262,8 @@ fn the_font_size_submenu_resizes_the_window_and_stores_the_pick() {
         4,
         "CHAT_FONT_HEIGHTS is 12, 14, 16, 18"
     );
-    // The rows come from `for index, value in CHAT_FONT_HEIGHTS` — a `next` walk over a table
-    // built with explicit `[n] =` keys, whose order is the VM's hash order and not necessarily
-    // ascending; the test reads the rows by their values rather than assuming one.
+    // `for index, value in CHAT_FONT_HEIGHTS` walks a `[n] =` keyed table in hash order, so a
+    // row is found by its value.
     let row_with = |s: &UiScript, pt: i64| -> String {
         s.eval::<String>(&format!(
             "for i = 1, DropDownList2.numButtons do \
@@ -346,9 +300,7 @@ fn the_font_size_submenu_resizes_the_window_and_stores_the_pick() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The menu belongs to the tab that opened it: window 2's menu writes window 2. This is what the
-/// `id` on the tab and the per-tab capsule buy — `FCF_GetCurrentChatFrameID` reads the open menu's
-/// parent, so a single shared capsule would have written window 1 whichever tab was clicked.
+/// `FCF_GetCurrentChatFrameID` reads the id of the open dropdown's parent, the clicked tab.
 #[test]
 fn each_tabs_menu_writes_its_own_window() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -359,7 +311,7 @@ fn each_tabs_menu_writes_its_own_window() {
         s.eval::<i64>("return FCF_GetCurrentChatFrameID()").unwrap(),
         2
     );
-    // A docked non-default window's menu carries Close before Display, so Background is row 7.
+    // A non-default window's menu adds Close before Display, so Background is row 7.
     assert!(s
         .eval::<bool>("return DropDownList1Button7:GetText() == BACKGROUND")
         .unwrap());
@@ -380,8 +332,6 @@ fn each_tabs_menu_writes_its_own_window() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// Cancel restores the colour and the alpha the row was opened with — the picker's own
-/// `previousValues` contract, which the reference reaches through the same `cancelFunc` field.
 #[test]
 fn cancelling_the_picker_puts_the_window_back() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -412,10 +362,7 @@ fn cancelling_the_picker_puts_the_window_back() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The `UPDATE_CHAT_WINDOWS` seam: the host restores a player's saved file into the engine table
-/// and fires the reference's own event; the window re-reads it and repaints. Without this the
-/// restore would land in the store and show up only after something else happened to invalidate
-/// the fade latch.
+/// The host restores saved windows into the engine table, then fires `UPDATE_CHAT_WINDOWS`.
 #[test]
 fn the_restore_event_repaints_the_window_from_the_store() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -433,10 +380,8 @@ fn the_restore_event_repaints_the_window_from_the_store() {
             ..Default::default()
         },
     )]);
-    // The reference paints colour, alpha and lock from the record on the FIRST
-    // `UPDATE_CHAT_WINDOWS` a frame sees (`FloatingChatFrame_Update`'s `not isInitialized`
-    // gate) — a login, which is when the app restores the file. The helper already fired that
-    // one, so this is the frame meeting the event fresh, as at the next login.
+    // Colour, alpha and lock paint only on a frame's first `UPDATE_CHAT_WINDOWS`
+    // (`FloatingChatFrame.lua:52`); the helper already fired one, so the latch is reset.
     s.run("ChatFrame1.isInitialized = nil").unwrap();
     s.fire_event("UPDATE_CHAT_WINDOWS", vec![]);
     s.mouse_move(1500.0, 850.0);
@@ -454,9 +399,8 @@ fn the_restore_event_repaints_the_window_from_the_store() {
         .eval("return ChatFrame1Background:GetVertexColor()")
         .unwrap();
     assert_eq!((r, g, b), (1.0, 0.0, 0.0), "and the restored tint");
-    // The restore paints through the `doNotSave` arms, but the reference's dock pass that follows
-    // (`FCF_DockFrame` → `FCF_SaveDock` → `SetChatWindowDocked`) is a real write — the DOCKED 1 /
-    // DOCKED 2 every stock file carries are FrameXML's, not the loader's.
+    // The restore paints without saving, but the dock pass after it (`FCF_DockFrame`,
+    // `FCF_SaveDock`, `SetChatWindowDocked`) writes windows 1 and 2 itself.
     assert_eq!(s.take_chat_window_changes(), vec![0, 1]);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }

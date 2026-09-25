@@ -1,16 +1,5 @@
-//! The target frame's aura rows — the **reference's own** `Interface\FrameXML\TargetFrame.xml`
-//! off the player's patch chain (which retired our `assets/ui/UnitFrames.xml`
-//! transcription) — against its `TargetDebuffButton_Update` law (ref TargetFrame.lua l.263-387).
-//! The stock XML/Lua is the unit under test; the app-side feed (`crate::ui_aura`'s target half) is
-//! stubbed by pushing an [`AuraState`] list through [`UiScript::set_auras`] and firing the events
-//! the feed fires — `PLAYER_TARGET_CHANGED` on a switch, `UNIT_AURA "target"` on a list change.
-//!
-//! Under test: the friend/hostile row swap (buffs first vs debuffs first), the 21→17 shrink when
-//! the debuff count reaches the wrap (6, no target-of-target frame), the dispel-tinted border, the
-//! stack count, and the hide-on-empty lifecycle. Files load in `benilla.toc`'s order, which is the
-//! reference's own (BuffFrame 40 → CombatFeedback 41 → UnitFrame 43 → PlayerFrame 44 → PartyFrame
-//! 45 → TargetFrame 46 → PetFrame 47), so `DebuffTypeColor` is defined ahead of the row that
-//! indexes it and `RefreshBuffs` ahead of the party rows that call it from their own OnLoad.
+//! The stock target frame's aura rows (`TargetFrame.lua:263`) under a stubbed feed.
+//! BuffFrame.xml loads first for the `DebuffTypeColor` and `RefreshBuffs` the frames use.
 
 use benilla_ui::script::{AuraState, QuadContent, ScriptValue, UiScript, UnitState};
 
@@ -22,8 +11,8 @@ fn harness() -> UiScript {
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml"); // TOOLTIP_DEFAULT_* (the dropdown kit's MenuBackdrop)
-    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml"); // the unit popups' kit (TargetFrameDropDown's template)
+    load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml"); // TOOLTIP_DEFAULT_* for the dropdowns
+    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml"); // TargetFrameDropDown's template
     load_xml(&s, "Interface\\FrameXML\\Cooldown.xml");
     load_xml(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
     load_xml(&s, "Interface\\FrameXML\\TextStatusBar.lua");
@@ -32,9 +21,8 @@ fn harness() -> UiScript {
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\MainMenuBar.xml");
     load_xml(&s, "Interface\\FrameXML\\ActionBarFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\BonusActionBarFrame.xml"); // BENILLA_FALLBACK_ICON
-                                                                  // Before UnitPopup: that file reads ITEM_QUALITY_COLORS at FILE SCOPE, and its
-                                                                  // declarer is UIParent (ref UIParent.lua:65) since 1888.
+    load_xml(&s, "Interface\\FrameXML\\BonusActionBarFrame.xml");
+    // UIParent.xml comes first: `UnitPopup.lua:47` reads its `ITEM_QUALITY_COLORS` at file scope.
     load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");
     load_xml(&s, "Interface\\FrameXML\\UnitPopup.xml");
     load_xml(&s, "Interface\\FrameXML\\TextStatusBar.lua");
@@ -47,15 +35,9 @@ fn harness() -> UiScript {
     load_xml(&s, "Interface\\FrameXML\\TargetFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\PetFrame.xml");
 
-    // **Settle the target-of-target frame before any of this measures a row.** Stock
-    // `TargetofTargetFrame` carries no `hidden=` (ref TargetFrame.xml l.515), so it loads SHOWN,
-    // and the only thing that takes it down is `TargetofTarget_Update` — which
-    // `TargetFrame_OnEvent` runs *after* `TargetDebuffButton_Update` (ref TargetFrame.lua l.63-66,
-    // the update sitting inside `TargetFrame_Update` at l.51). So the very first target a freshly
-    // loaded client acquires lays its aura rows out for the 5-wide wrap, and only the next
-    // `TargetDebuffButton_Update` corrects them. One no-target `PLAYER_TARGET_CHANGED` runs that
-    // ladder to its end — exactly what deselecting once does — and leaves the frame in the state
-    // it holds for every target after the first, which is the state these tests are about.
+    // `TargetofTargetFrame` loads shown (`TargetFrame.xml:515`) and hides only after the rows
+    // lay out (`TargetFrame.lua:66`), so a first target lays its rows out for the 5-wide wrap;
+    // one no-target change leaves it in the state every later target sees.
     s.fire_event("PLAYER_TARGET_CHANGED", vec![]);
     s
 }
@@ -85,13 +67,12 @@ fn debuff(spell_id: u32, name: &str, count: u8, debuff_type: Option<&str>) -> Au
         icon: Some(format!("Interface\\Icons\\Spell_{spell_id}")),
         count,
         debuff_type: debuff_type.map(Into::into),
-        // The 1.12 wire carries no duration for another unit (decision 0257 B6).
+        // The 1.12 wire carries no duration for another unit's auras.
         duration: 0.0,
         expiration_time: 0.0,
         helpful: false,
         cancelable: false,
-        // Only the PLAYER cache carries `untilCancelled`, and only `GetPlayerBuff` reads it
-        // (decision 0257 / `benilla::ui_aura`); a target's rows have no such record.
+        // Only the player's auras carry `untilCancelled`, read by `GetPlayerBuff` alone.
         until_cancelled: false,
         channeled: false,
     }
@@ -155,8 +136,7 @@ fn a_hostile_target_draws_debuffs_first_with_tint_and_count() {
     assert!(shown(&s, "TargetFrameBuff1"), "the buff shows");
     assert!(!shown(&s, "TargetFrameBuff2"), "no second buff");
 
-    // Hostile: the debuff row opens at the frame's BOTTOMLEFT (5,32); buffs seat under Debuff7
-    // (the not-shown target-of-target leg, ref l.329).
+    // Hostile: debuffs open at BOTTOMLEFT (5, 32), buffs under Debuff7 (`TargetFrame.lua:329`).
     let (p, rel, rp, x, y) = anchor(&s, "TargetFrameDebuff1");
     assert_eq!(
         (p.as_str(), rel.as_str(), rp.as_str(), x, y),
@@ -183,8 +163,7 @@ fn a_hostile_target_draws_debuffs_first_with_tint_and_count() {
         ""
     );
 
-    // The Magic-tinted border drew (DebuffTypeColor["Magic"] = 0.20, 0.60, 1.00); Rend's untyped
-    // border wears the "none" red (0.80, 0, 0).
+    // `DebuffTypeColor` Magic is 0.20, 0.60, 1.00 and "none" 0.80, 0, 0 (`BuffFrame.lua:10`).
     s.resolve();
     let tints: Vec<[f32; 4]> = s
         .extract()
@@ -250,12 +229,12 @@ fn reaching_the_wrap_shrinks_the_first_row_to_17px() {
         .collect();
     target(&mut s, 2, debuffs);
 
-    // 6 debuffs ≥ wrap (6): 17px icons, 19px borders — the reference resizes only the FIRST row.
+    // 6 debuffs reach the wrap: 17px icons, 19px borders, first row only (`TargetFrame.lua:349`).
     assert_eq!(size(&s, "TargetFrameDebuff1"), (17.0, 17.0));
     assert_eq!(size(&s, "TargetFrameDebuff1Border"), (19.0, 19.0));
     assert_eq!(size(&s, "TargetFrameBuff1"), (17.0, 17.0));
 
-    // Dropping below the wrap grows them back — the feed re-fires UNIT_AURA on the change.
+    // Below the wrap they grow back; the feed re-fires UNIT_AURA on the change.
     s.set_auras("target", Some(vec![debuff(1000, "D0", 1, None)]));
     s.fire_event("UNIT_AURA", vec![ScriptValue::Str("target".into())]);
     assert_eq!(size(&s, "TargetFrameDebuff1"), (21.0, 21.0));
@@ -270,7 +249,6 @@ fn clearing_the_list_or_the_target_hides_the_buttons() {
     target(&mut s, 2, vec![debuff(589, "Pain", 1, Some("Magic"))]);
     assert!(shown(&s, "TargetFrameDebuff1"));
 
-    // The last debuff expires: the feed pushes the emptied list and re-fires.
     s.set_auras("target", Some(vec![]));
     s.fire_event("UNIT_AURA", vec![ScriptValue::Str("target".into())]);
     assert!(
@@ -278,7 +256,7 @@ fn clearing_the_list_or_the_target_hides_the_buttons() {
         "an emptied list hides the button"
     );
 
-    // Deselect: the frame (and every child button) hides; the token clears without a UNIT_AURA.
+    // Deselect: the frame and its buttons hide; the token clears without a UNIT_AURA.
     target(&mut s, 2, vec![debuff(589, "Pain", 1, Some("Magic"))]);
     assert!(shown(&s, "TargetFrameDebuff1"));
     s.set_unit("target", None);

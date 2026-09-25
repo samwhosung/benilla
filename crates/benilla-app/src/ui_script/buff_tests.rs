@@ -1,19 +1,5 @@
-//! The player buff bar (stock `Interface\FrameXML\BuffFrame.xml`) against its
-//! reference behaviour. The XML/Lua is the unit under test; the app-side feed (`crate::ui_aura`) is
-//! stubbed by pushing an [`AuraState`] list straight through [`UiScript::set_auras`] and firing
-//! `PLAYER_AURAS_CHANGED`, so these exercise the *button* handlers — the row/filter wiring, the
-//! dispel-tinted border, the stack count, the countdown, the warning flash, and the right-click
-//! cancel — the way the reference's own `BuffButton_*` do.
-//!
-//! **The window runs on the 1.12 verbs and the reference's index space** (b2ede294 landed the
-//! `GetPlayerBuff` family): a button's `id` is a 0-based ordinal within its own filter,
-//! `GetPlayerBuff` turns it into a CACHE POSITION, and every read below — texture, dispel class,
-//! stacks, time left, cancel, tooltip — consumes that position. The tests drive it the way the
-//! corpus does, including the `while GetPlayerBuff(i) >= 0 do` walk and a cancel by position.
-//!
-//! State is read back through the widget (`IsShown`/`GetText`/`GetAlpha`) and the paint through the
-//! [`draw list`](UiScript::extract) (icon path + border tint), the same two-lens split the cast-bar
-//! tests use — Lua-visible state is blind to what actually renders.
+//! The stock buff bar (`BuffFrame.xml`) under a stubbed aura feed. A button's `id` is an ordinal
+//! within its filter; `GetPlayerBuff` maps it to the cache position every other buff verb takes.
 
 use benilla_ui::script::{AuraState, ExtractedQuad, QuadContent, UiScript};
 
@@ -22,18 +8,14 @@ use super::test_ui::load_ui as load_xml;
 fn harness() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    // The one-letter duration strings (DAY/HOUR/MINUTE/SECOND_ONELETTER_ABBR) the bar prints
-    // under a timed aura. Our copy carried them as `X = X or "%d s"` fallbacks; the reference's
-    // file formats them straight and `format(nil, …)` raises.
+    // The one-letter duration strings, which `SecondsToTimeAbbrev` formats unguarded.
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
-    load_xml(&s, "Interface\\FrameXML\\Fonts.xml"); // NORMAL/HIGHLIGHT_FONT_COLOR + the FontStrings' faces
-                                                    // `GameTooltip`, which the reference's BuffButton_Update indexes on EVERY repaint to ask
-                                                    // `IsOwned(this)` (BuffFrame.lua l.104) — not just on hover. Ours guarded it; the reference
-                                                    // does not, so a session without the tooltip loses the whole repaint.
+    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
+    // `BuffButton_Update` asks `GameTooltip:IsOwned(this)` unguarded (`BuffFrame.lua:104`).
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml");
-    // `SecondsToTimeAbbrev`, which 1.12 keeps in UIParent.lua and so do we since window 18.
+    // `SecondsToTimeAbbrev` comes with `UIParent.xml` (`UIParent.lua:1034`).
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.xml");
     load_xml(&s, r"Interface\FrameXML\UIParent.xml");
@@ -48,27 +30,17 @@ fn harness() -> UiScript {
     load_xml(&s, "Interface\\FrameXML\\TextStatusBar.xml");
     load_xml(&s, "Interface\\FrameXML\\MainMenuBar.xml");
     load_xml(&s, "Interface\\FrameXML\\ActionBarFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\BonusActionBarFrame.xml"); // BENILLA_FALLBACK_ICON (the unknown-icon fallback)
-                                                                  // The timer switch, PLANTED ON — not the shipped value. 1.12 declares it in
-                                                                  // UIOptionsFrame.lua (default "0"); we have no counterpart to that file, so it lives with the
-                                                                  // row that drives it (OptionsFrame.xml), where it shipped "1" from 0255/1139 until 1804 put
-                                                                  // it back on the reference's "0". These tests are about the timer text and the geometry it
-                                                                  // buys, so the harness turns it on the way the Interface page's row does. Order matters: the
-                                                                  // reference's `BuffFrame_OnLoad` calls `BuffButtons_UpdatePositions`, which seats the debuff
-                                                                  // row 20px differently depending on this value, so setting it afterwards leaves the bar laid
-                                                                  // out for the wrong one.
+    load_xml(&s, "Interface\\FrameXML\\BonusActionBarFrame.xml");
+    // Timers on for these tests; the 1.12 default is "0" (`UIOptionsFrame.lua:104`).
     s.run("SHOW_BUFF_DURATIONS = \"1\"").unwrap();
     load_xml(&s, "Interface\\FrameXML\\BuffFrame.xml");
-    // …and APPLIED, the way the app applies it (`manifest::apply_buff_durations`).
-    // `BuffFrame_OnLoad` does not call `BuffButtons_UpdatePositions`: in 1.12 that is
-    // `UIOptionsFrame.lua`'s job and we have no counterpart to that file. A session that skips it
-    // is laid out for durations-OFF while the setting says on.
+    // As the app does: `BuffFrame_OnLoad` never calls `BuffButtons_UpdatePositions`, which 1.12
+    // runs on `VARIABLES_LOADED` (`UIOptionsFrame.lua:206`).
     super::manifest::apply_buff_durations(&s).unwrap();
     s
 }
 
-/// Build an [`AuraState`] as the feed would push it. `expiration_time` 0 = permanent (no wire
-/// duration — the reference's "until cancelled"); the `GetTime()` clock starts at 0 in the harness.
+/// An [`AuraState`]: `expiration_time` 0 is permanent, and the harness's `GetTime()` starts at 0.
 fn aura(
     spell_id: u32,
     name: &str,
@@ -89,20 +61,13 @@ fn aura(
         expiration_time,
         helpful,
         cancelable,
-        // What the feed derives for a permanent aura: no finite duration to display. Here the two
-        // agree by construction, but they are different questions in the real feed — the flag is
-        // DBC-derived and correct on the frame the aura appears, before any duration packet lands
-        // (`benilla::ui_aura::until_cancelled`).
+        // The feed takes this from the spell (`ui_aura::until_cancelled`); here, from the expiry.
         until_cancelled: expiration_time == 0.0,
         channeled: false,
     }
 }
 
-/// Push the list, then fire the discrete-change event the app's feed fires — the buttons repaint.
-///
-/// `PLAYER_AURAS_CHANGED`, no args: the reference's own event, which `ui_aura` fires beside the
-/// Era-shaped `UNIT_AURA` on the same rebuild. It is what the buttons register for now, and it is
-/// what every corpus aura addon registers for.
+/// Push the list and fire `PLAYER_AURAS_CHANGED`, as the app's feed does (`BuffFrame.lua:113`).
 fn push(s: &mut UiScript, auras: Vec<AuraState>) {
     s.set_auras("player", Some(auras));
     s.fire_event("PLAYER_AURAS_CHANGED", vec![]);
@@ -128,7 +93,7 @@ fn alpha(s: &UiScript, name: &str) -> f64 {
     s.eval::<f64>(&format!("return {name}:GetAlpha()")).unwrap()
 }
 
-/// The first quad drawn from `Interface\...\<leaf>` — texture regions keyed by their art.
+/// The first texture quad whose path ends in `leaf`.
 fn tex_quad<'a>(quads: &'a [ExtractedQuad], leaf: &str) -> Option<&'a ExtractedQuad> {
     quads.iter().find(|q| match &q.content {
         QuadContent::Texture { path: Some(p), .. } => p.ends_with(leaf),
@@ -167,13 +132,11 @@ fn buffs_and_debuffs_fill_their_own_rows_with_counts_and_the_dispel_tint() {
     );
     let quads = frame(&mut s, 0.1);
 
-    // The buff takes the first helpful button, the debuff the first harmful one; the rest hide.
     assert!(shown(&s, "BuffButton0"), "first buff -> BuffButton0");
     assert!(!shown(&s, "BuffButton1"), "no second buff");
     assert!(shown(&s, "BuffButton16"), "first debuff -> BuffButton16");
     assert!(!shown(&s, "BuffButton17"), "no second debuff");
 
-    // Both icons drew.
     assert!(
         tex_quad(&quads, "Spell_Nature_Regeneration").is_some(),
         "buff icon drew"
@@ -183,7 +146,7 @@ fn buffs_and_debuffs_fill_their_own_rows_with_counts_and_the_dispel_tint() {
         "debuff icon drew"
     );
 
-    // The debuff border wears the Magic tint (DebuffTypeColor["Magic"] = 0.20, 0.60, 1.00).
+    // `DebuffTypeColor["Magic"]` is 0.20, 0.60, 1.00 (`BuffFrame.lua:11`).
     let border = tex_quad(&quads, "UI-Debuff-Overlays").expect("debuff border drew");
     match &border.content {
         QuadContent::Texture {
@@ -197,7 +160,7 @@ fn buffs_and_debuffs_fill_their_own_rows_with_counts_and_the_dispel_tint() {
                     && (c[2] - 1.00).abs() < 1e-3,
                 "Magic tint, got {c:?}"
             );
-            // The reference's overlay-quadrant crop rode through unchanged.
+            // The overlay crop of `BuffFrame.xml:72`.
             let uv = uv.edges();
             assert!(
                 (uv[0] - 0.296875).abs() < 1e-6 && (uv[3] - 0.515625).abs() < 1e-6,
@@ -207,7 +170,7 @@ fn buffs_and_debuffs_fill_their_own_rows_with_counts_and_the_dispel_tint() {
         other => panic!("border is not a tinted, cropped texture: {other:?}"),
     }
 
-    // Stack count shows only above 1: the 3-stack debuff shows "3", the single buff shows nothing.
+    // The count shows only above 1 (`BuffFrame.lua:97`).
     assert_eq!(text(&s, "BuffButton16Count"), "3");
     assert_eq!(text(&s, "BuffButton0Count"), "");
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
@@ -220,7 +183,6 @@ fn a_timed_aura_counts_down_and_a_permanent_one_shows_no_timer() {
     push(
         &mut s,
         vec![
-            // Permanent (a stance): no wire duration -> expiration 0 -> no timer.
             aura(
                 2457,
                 "Battle Stance",
@@ -231,7 +193,7 @@ fn a_timed_aura_counts_down_and_a_permanent_one_shows_no_timer() {
                 0.0,
                 false,
             ),
-            // Timed: 120s out. After a 0.1s tick GetTime()=0.1, so 119.9s -> SecondsToTimeAbbrev -> "2 m".
+            // Timed, 120 s out: 119.9 s left after the tick, which rounds up to "2 m".
             aura(
                 1126,
                 "Mark of the Wild",
@@ -266,7 +228,7 @@ fn the_warning_flash_pulses_a_low_aura_but_leaves_a_long_one_solid() {
     push(
         &mut s,
         vec![
-            // 5 min out — never inside the 31s warning window, so it stays at full alpha.
+            // 5 min out: never inside the 31 s `BUFF_WARNING_TIME` window, so full alpha.
             aura(
                 1,
                 "Long",
@@ -277,7 +239,6 @@ fn the_warning_flash_pulses_a_low_aura_but_leaves_a_long_one_solid() {
                 300.0,
                 true,
             ),
-            // 20s out — inside the window the whole run, so its button pulses.
             aura(
                 2,
                 "Short",
@@ -331,8 +292,7 @@ fn right_clicking_a_cancelable_buff_queues_its_spell_cancel() {
         s.take_cancel_aura_requests().is_empty(),
         "nothing queued yet"
     );
-    // The RightButtonUp handler -> CancelPlayerBuff(this.buffIndex) -> the app drains one
-    // CMSG_CANCEL_AURA by spell id.
+    // `CancelPlayerBuff(this.buffIndex)`; the app sends `CMSG_CANCEL_AURA` by spell id.
     s.eval::<()>("this = BuffButton0; BuffButton_OnClick()")
         .unwrap();
     assert_eq!(s.take_cancel_aura_requests(), vec![1126]);
@@ -359,9 +319,7 @@ fn an_emptied_bar_hides_every_button() {
     frame(&mut s, 0.1);
     assert!(shown(&s, "BuffButton0"), "shown while the aura is up");
 
-    // The aura drops: the feed pushes an empty list and re-fires. The button hides, and so does its
-    // timer — a HIDDEN region since 1139, where it used to be blanked, so the text it last drew is
-    // stale and beside the point; what the bar promises is that nothing paints.
+    // An empty list and a re-fire hide the button and its timer (`BuffFrame.lua:64-67`).
     push(&mut s, vec![]);
     frame(&mut s, 0.1);
     assert!(!shown(&s, "BuffButton0"), "hidden once the aura is gone");
@@ -369,18 +327,8 @@ fn an_emptied_bar_hides_every_button() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **Decision 0846's second defect, pinned.** The bar's countdown is a per-frame POLL, not a value
-/// cached when the aura event fires — exactly as the reference does it (`BuffButton_OnUpdate` →
-/// `GetPlayerBuffTimeLeft`, extracted 1.12 `BuffFrame.lua` l.128-130, which caches only the buff
-/// *index* on `PLAYER_AURAS_CHANGED`).
-///
-/// This is what makes a *refresh* work. A recast, a reapplied DoT, cast pushback and the server's
-/// replay of every duration at world entry all change an aura's expiry while changing nothing
-/// discrete about it — same spell, same stacks, same dispel class — so the feed's change key does
-/// not trip and **no aura event fires**. The push below therefore deliberately does NOT fire one.
-/// Against the old event-cached bar the button kept counting the stale expiry down, reached zero
-/// and sat at `"0 s"` for as long as the buff lived (live-measured: `app left 59.9s` beside
-/// `lua left -9.9s`).
+/// The countdown polls `GetPlayerBuffTimeLeft` every frame (`BuffFrame.lua:129-130`), so a refresh
+/// (recast, pushback, the replay at world entry), which fires no aura event, still reaches the bar.
 #[test]
 fn a_refreshed_duration_reaches_the_bar_with_no_aura_event() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -397,13 +345,12 @@ fn a_refreshed_duration_reaches_the_bar_with_no_aura_event() {
             true,
         )
     };
-    // 20s out. After the tick GetTime()=0.1 -> 19.9s -> "19 s" (SecondsToTimeAbbrev floors via %d).
+    // 20 s out: 19.9 s after the tick, which `%d` truncates to "19 s".
     push(&mut s, vec![mark(20.0)]);
     frame(&mut s, 0.1);
     assert_eq!(text(&s, "BuffButton0Duration"), "19 s");
 
-    // The refresh: a new expiry, everything discrete unchanged — so the feed pushes the list and
-    // fires NOTHING. The button must still pick the new expiry up on its next frame.
+    // The refresh: a new expiry and no event.
     s.set_auras("player", Some(vec![mark(300.0)]));
     frame(&mut s, 0.1);
     assert_eq!(
@@ -411,23 +358,13 @@ fn a_refreshed_duration_reaches_the_bar_with_no_aura_event() {
         "5 m",
         "the countdown re-reads the aura every frame; it does not wait for an event"
     );
-    // ...and the flash follows it back out of the warning window (20s pulsed, 300s is solid).
     assert!(
         (alpha(&s, "BuffButton0") - 1.0).abs() < 1e-6,
         "no longer inside the 31s warning window, so full alpha"
     );
 
-    // The same poll is what shows a timer that arrived AFTER the icon did — the fresh-apply case,
-    // where the duration packet's stamp lands a frame later than the descriptor delta.
-    //
-    // **What the icon-first frame looks like MOVED when the bar came onto the 1.12 verbs.** The
-    // permanence test used to be `expirationTime > 0`, which cannot tell "no duration, ever" from
-    // "the duration has not landed yet" and so drew nothing for both. It is now `untilCancelled` —
-    // GetPlayerBuff's second return, derived from the SPELL (`ui_aura::until_cancelled`) — so a
-    // timed aura awaiting its stamp is known to be timed, and the reference counts it from `0 s`
-    // and pulses it for the frame or two until the packet joins. `mark` is a timed spell, so that
-    // is what it does here; the permanent case (a stance) is
-    // [`a_timed_aura_counts_down_and_a_permanent_one_shows_no_timer`], and it still shows nothing.
+    // A fresh apply, stamp a frame behind the icon: `untilCancelled` comes from the spell, so a
+    // timed aura with no stamp yet shows "0 s" and pulses until the stamp joins.
     let mut pending = mark(0.0);
     pending.until_cancelled = false; // a timed spell, stamp not yet arrived
     s.set_auras("player", Some(vec![pending]));
@@ -447,13 +384,8 @@ fn a_refreshed_duration_reaches_the_bar_with_no_aura_event() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **`SHOW_BUFF_DURATIONS`** — 0255 shipped the durations-shown geometry with no
-/// switch because there was no panel to hang one on, and said the other branch was already there
-/// waiting. This is it: the global — the reference's "0" since 1804, planted "1" by this file's
-/// harness — hides the timer text and closes the 15px gutter each row leaves for it, down to the
-/// 5px the columns use. What it does NOT touch is the warning flash — with the numbers gone, the
-/// pulse is the only thing left saying an aura is about to drop, and the reference pulses from
-/// `BuffButton_OnUpdate` regardless of the setting.
+/// `SHOW_BUFF_DURATIONS` "0" hides the timers and closes each row's 15px gutter to 5px
+/// (`BuffFrame.lua:152-160`); the warning pulse runs regardless of it (`BuffFrame.lua:131-135`).
 #[test]
 fn the_duration_switch_hides_the_timers_and_closes_their_gutter() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -467,7 +399,7 @@ fn the_duration_switch_hides_the_timers_and_closes_their_gutter() {
             true,
             1,
             None,
-            20.0, // inside the 31s warning window, so the flash is live either way
+            20.0, // inside the 31 s warning window, so the flash runs either way
             true,
         )],
     );
@@ -483,7 +415,6 @@ fn the_duration_switch_hides_the_timers_and_closes_their_gutter() {
         .unwrap();
     assert!((shown_gap - 15.0).abs() < 1e-3, "gutter: {shown_gap}");
 
-    // The switch, applied the way the options row applies it.
     s.run("SHOW_BUFF_DURATIONS = \"0\"; BuffButtons_UpdatePositions()")
         .unwrap();
     frame(&mut s, 0.1);
@@ -499,7 +430,6 @@ fn the_duration_switch_hides_the_timers_and_closes_their_gutter() {
         "the last-31s pulse is not gated on the timers"
     );
 
-    // And back: the text is re-written from the poll, not from anything it kept.
     s.run("SHOW_BUFF_DURATIONS = \"1\"; BuffButtons_UpdatePositions()")
         .unwrap();
     frame(&mut s, 0.1);
@@ -508,10 +438,9 @@ fn the_duration_switch_hides_the_timers_and_closes_their_gutter() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// A mixed bar: three buffs and two debuffs in one insertion-ordered cache.
+/// Positions 0 to 4 of one cache: buff, debuff (Magic, 3), buff, debuff (Poison, 5), a stance.
 fn mixed_bar() -> Vec<AuraState> {
     vec![
-        // pos 0 — buff, cancelable, timed
         aura(
             1126,
             "Mark of the Wild",
@@ -522,7 +451,6 @@ fn mixed_bar() -> Vec<AuraState> {
             120.0,
             true,
         ),
-        // pos 1 — debuff, Magic, 3 stacks
         aura(
             589,
             "Shadow Word: Pain",
@@ -533,7 +461,6 @@ fn mixed_bar() -> Vec<AuraState> {
             18.0,
             false,
         ),
-        // pos 2 — buff, cancelable
         aura(
             1459,
             "Arcane Intellect",
@@ -544,7 +471,6 @@ fn mixed_bar() -> Vec<AuraState> {
             600.0,
             true,
         ),
-        // pos 3 — debuff, Poison
         aura(
             2818,
             "Deadly Poison",
@@ -555,7 +481,6 @@ fn mixed_bar() -> Vec<AuraState> {
             12.0,
             false,
         ),
-        // pos 4 — buff, NOT cancelable (a stance): right-click must be refused
         aura(
             2457,
             "Battle Stance",
@@ -569,15 +494,9 @@ fn mixed_bar() -> Vec<AuraState> {
     ]
 }
 
-/// **The two index spaces, end to end.** The button `id` is a 0-based ordinal within its own
-/// filter; `GetPlayerBuff` turns it into a CACHE POSITION that is absolute across filters. The bar
-/// is only correct if the two agree: button N of a row must draw the aura the corpus's own walk
-/// finds at that ordinal, and the position it cached must be the one an unfiltered walk reports.
-///
-/// The walk is spelled the way the corpus spells it — `while GetPlayerBuff(i) >= 0 do`
-/// (`_LazyPig/LazyPig.lua:1174`, `Zorlen/Zorlen.lua:2797`) — because `-1`, not nil, is the
-/// terminator, and because the default filter is `HELPFUL|HARMFUL`: the walk must see the debuffs
-/// too or the whole thing silently halves.
+/// A button's `id` is an ordinal within its filter and `GetPlayerBuff` maps it to a position
+/// shared across filters. The addon walk `while GetPlayerBuff(i) >= 0 do` stops on `-1`, not nil,
+/// and under the default `HELPFUL|HARMFUL` filter it sees the debuffs too.
 #[test]
 fn the_buttons_and_the_corpus_walk_agree_on_the_cache_positions() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -585,8 +504,7 @@ fn the_buttons_and_the_corpus_walk_agree_on_the_cache_positions() {
     push(&mut s, mixed_bar());
     frame(&mut s, 0.1);
 
-    // The corpus walk: five auras, buffs AND debuffs, positions identical to the ordinals under
-    // the default filter — and it terminates.
+    // Unfiltered, the walk visits all five, each position equal to its ordinal.
     let visited = s
         .eval::<i64>(
             r#"local i = 0
@@ -600,8 +518,7 @@ fn the_buttons_and_the_corpus_walk_agree_on_the_cache_positions() {
         .unwrap();
     assert_eq!(visited, 5, "three buffs and two debuffs, one cache");
 
-    // Each row filled from its own filter, in cache order — and each button's CACHED position is
-    // the absolute one, not its ordinal.
+    // Each button caches the position, not its ordinal.
     for (button, position) in [
         ("BuffButton0", 0),  // helpful ordinal 0 -> position 0
         ("BuffButton1", 2),  // helpful ordinal 1 -> position 2 (the debuff at 1 is skipped)
@@ -617,7 +534,6 @@ fn the_buttons_and_the_corpus_walk_agree_on_the_cache_positions() {
             "{button} caches the CACHE POSITION, not its per-filter ordinal"
         );
     }
-    // The rows stop where the filter runs out; nothing bleeds across.
     assert!(!shown(&s, "BuffButton3"), "only three buffs");
     assert!(!shown(&s, "BuffButton18"), "only two debuffs");
     assert_eq!(
@@ -626,8 +542,6 @@ fn the_buttons_and_the_corpus_walk_agree_on_the_cache_positions() {
         "a miss is -1, the sentinel the corpus terminates on — never nil"
     );
 
-    // The reads that hang off the position land on the right aura: the 3-stack Magic debuff and
-    // the 5-stack Poison one are in the right buttons, tinted from their own dispel classes.
     assert_eq!(text(&s, "BuffButton16Count"), "3");
     assert_eq!(text(&s, "BuffButton17Count"), "5");
     assert_eq!(
@@ -646,20 +560,14 @@ fn the_buttons_and_the_corpus_walk_agree_on_the_cache_positions() {
             } if p.ends_with("UI-Debuff-Overlays") => Some(*c),
             _ => None,
         })
-        // DebuffTypeColor["Poison"] = 0.00, 0.60, 0.00
+        // `DebuffTypeColor["Poison"]` is 0.00, 0.60, 0.00 (`BuffFrame.lua:14`).
         .any(|c| c[0].abs() < 1e-3 && (c[1] - 0.60).abs() < 1e-3 && c[2].abs() < 1e-3);
     assert!(poison, "the second debuff button wears the Poison tint");
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **Right-click cancels by cache position.** `BuffButton_OnClick` is
-/// `CancelPlayerBuff(this.buffIndex)` — the reference's own line — so the button that gets
-/// cancelled is the one under the cursor even when its ordinal and its position differ, which is
-/// the case for every buff after the first debuff.
-///
-/// The gate is the app's, unchanged: a cancelable buff queues its SPELL id, a stance and a debuff
-/// are silent no-ops. That last part is what a per-filter id could not guarantee on its own — here
-/// it is structural, because a harmful button's handle simply names a harmful record.
+/// `BuffButton_OnClick` is `CancelPlayerBuff(this.buffIndex)` (`BuffFrame.lua:149`): it cancels by
+/// position, and a stance or a debuff queues nothing.
 #[test]
 fn right_clicking_cancels_the_aura_under_the_cursor_by_its_cache_position() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -668,8 +576,7 @@ fn right_clicking_cancels_the_aura_under_the_cursor_by_its_cache_position() {
     frame(&mut s, 0.1);
     assert!(s.take_cancel_aura_requests().is_empty());
 
-    // The SECOND buff button: helpful ordinal 1, cache position 2, spell 1459. A bar that cancelled
-    // by ordinal would send 589 — the debuff sitting at position 1.
+    // Ordinal 1 is position 2 (spell 1459); by ordinal it would cancel 589, the debuff at 1.
     s.eval::<()>("this = BuffButton1; BuffButton_OnClick()")
         .unwrap();
     assert_eq!(
@@ -678,7 +585,6 @@ fn right_clicking_cancels_the_aura_under_the_cursor_by_its_cache_position() {
         "the aura under the cursor, not the record at the ordinal"
     );
 
-    // A stance (helpful, not cancelable), both debuff buttons, and an empty slot: all silent.
     for button in ["BuffButton2", "BuffButton16", "BuffButton17", "BuffButton7"] {
         s.eval::<()>(&format!("this = {button}; BuffButton_OnClick()"))
             .unwrap();
@@ -688,47 +594,29 @@ fn right_clicking_cancels_the_aura_under_the_cursor_by_its_cache_position() {
         "a stance, a debuff and an empty button are all no-ops"
     );
 
-    // The first buff still cancels normally.
     s.eval::<()>("this = BuffButton0; BuffButton_OnClick()")
         .unwrap();
     assert_eq!(s.take_cancel_aura_requests(), vec![1126]);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **The temporary-enchant row** (ref `BuffFrame_Enchant_OnUpdate`, l.162-233). With nothing
-/// enchanted it hides both slots and parks the bar on its resting point; with a weapon enchanted it
-/// shows the icon, counts the expiry down from MILLISECONDS, and slides the top buff row left to
-/// clear it — while rows 2 and 3, which hang off TempEnchant1 and TemporaryEnchantFrame, stay put.
+/// The temporary-enchant row (`BuffFrame.lua:162-233`): idle, it hides both slots and parks the
+/// bar; enchanted, it counts down from milliseconds and slides the top buff row left.
 #[test]
 fn the_temporary_enchant_row_shows_a_weapon_enchant_and_moves_the_top_row_aside() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = harness();
-    // A LOADED bar, deliberately: the enchant slots must be driven by GetWeaponEnchantInfo and by
-    // nothing else. The reference builds them from `BuffButtonTemplate` and blanks the four aura
-    // handlers with empty `<OnLoad/>`/`<OnEvent/>`/`<OnClick/>` elements; our loader treats an
-    // empty handler body as "none given" and so KEEPS the inherited one (`compile_handler` returns
-    // None and `apply_scripts` never calls SetScript). Under that idiom TempEnchant1 would take
-    // `BuffButton_OnLoad`, register PLAYER_AURAS_CHANGED, and paint the first buff in the corner —
-    // and a right-click on it would cancel that aura. Hence the standalone template, and hence a
-    // populated bar here: an empty aura list cannot tell the two apart.
+    // Auras up, so one leaking into an enchant slot would show.
     push(&mut s, mixed_bar());
     frame(&mut s, 0.1);
 
-    // Nothing enchanted: both slots hidden, and the bar sits where it has always sat.
     assert!(
         !shown(&s, "TempEnchant1"),
         "the enchant slots are not buff buttons: no aura may reach them"
     );
     assert!(!shown(&s, "TempEnchant2"));
-    // The direct probe, and its exact shape is the point. `BuffButtonTempEnchant` inherits
-    // `BuffButtonTemplate` and blanks its three aura handlers with `<OnLoad>`↵`</OnLoad>` — a
-    // WHITESPACE body, which 1.12 compiles into a valid empty function rather than storing nil
-    // (`SetScript 0x7025c0` tests `text[0]`, and nothing trims). So each handler is still a
-    // FUNCTION here, and it is the
-    // reference's own no-op rather than `BuffButton_OnLoad`.
-    //
-    // Asserting `== nil` instead would be asserting a bug: an addon reading
-    // `TempEnchant1:GetScript("OnLoad")` gets a function on a real client.
+    // `BuffFrame.xml:101-109` blanks three inherited handlers with whitespace bodies, which 1.12
+    // compiles to empty functions, not nil: `0x7025c0` clears only a NULL or empty body.
     for handler in ["OnLoad", "OnEvent", "OnClick"] {
         assert!(
             s.eval::<bool>(&format!(
@@ -738,9 +626,7 @@ fn the_temporary_enchant_row_shows_a_weapon_enchant_and_moves_the_top_row_aside(
             "an enchant slot's {handler} is the reference's compiled no-op, not nil"
         );
     }
-    // …and it is NOT the buff-button body: an aura event reaching it would paint the first buff
-    // into the corner and arm a right-click cancel, which is what a naive "empty means absent"
-    // loader produces.
+    // Nor the inherited body, which would paint the first buff into the slot and arm its cancel.
     assert!(
         s.eval::<bool>(
             "return TempEnchant1:GetScript(\"OnLoad\") ~= BuffButton0:GetScript(\"OnLoad\")"
@@ -756,7 +642,6 @@ fn the_temporary_enchant_row_shows_a_weapon_enchant_and_moves_the_top_row_aside(
         "UIParent TOPRIGHT -175: {resting}"
     );
 
-    // A main-hand enchant, 8 minutes out. The app feeds it the way `ui_char` does.
     s.set_weapon_enchants(
         Some(benilla_ui::script::WeaponEnchant {
             remaining_ms: Some(480_000),
@@ -781,15 +666,8 @@ fn the_temporary_enchant_row_shows_a_weapon_enchant_and_moves_the_top_row_aside(
         "480000 ms / 1000 -> 480 s -> SecondsToTimeAbbrev"
     );
 
-    // The top buff row slid left by one icon plus the 5px gutter; the debuff row did not move.
-    //
-    // That is true only because the harness has APPLIED the durations setting, and the
-    // qualification is worth keeping: `BuffButton16`'s XML anchor is `TOPRIGHT` to `BuffButton8`'s
-    // `BOTTOM` — inside BuffFrame, so it would travel with it — and the only thing that re-anchors
-    // it to `TemporaryEnchantFrame` is `BuffButtons_UpdatePositions`, which `BuffFrame_OnLoad`
-    // does NOT call. A bar that nobody has applied the setting to therefore moves BOTH rows. The
-    // window's own file cannot reach that state in production (our Interface page applies it), and
-    // finding it was what showed the harness had to apply it too.
+    // The debuff row stays only because `BuffButtons_UpdatePositions` re-anchored it to
+    // `TemporaryEnchantFrame`; its XML anchor is inside `BuffFrame`, which moves.
     s.resolve();
     let shifted = s.eval::<f64>("return BuffFrame:GetRight()").unwrap();
     assert!(
@@ -802,7 +680,6 @@ fn the_temporary_enchant_row_shows_a_weapon_enchant_and_moves_the_top_row_aside(
         s.eval::<f64>("return BuffButton16:GetRight()").unwrap()
     );
 
-    // And back: the enchant drops, the row hides and the bar returns to its resting point.
     s.set_weapon_enchants(None, None);
     frame(&mut s, 0.1);
     assert!(!shown(&s, "TempEnchant1"));
@@ -811,35 +688,19 @@ fn the_temporary_enchant_row_shows_a_weapon_enchant_and_moves_the_top_row_aside(
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **The idle enchant row rewrites the bar every frame, because the reference's does** — and this
-/// pins that rather than the write-gating it replaced.
-///
-/// Our own `BuffFrame.xml` latched the no-enchant branch on a `benillaCleared` flag after its first
-/// pass; decision 1396 measured that branch at ~14 µs/frame and took the gate as its post-fix lead.
-/// 1751's eighteenth window made the bar `Interface\FrameXML\BuffFrame.xml`, whose
-/// `BuffFrame_Enchant_OnUpdate` opens with an unconditional `TempEnchant1:Hide()` … `BuffFrame:
-/// SetPoint(…)` and returns. So the writes are back, they are the reference's, and 1751 §2 takes
-/// them: an optimisation is not a divergence we get to keep silently once the file is theirs.
-///
-/// **1396's finding is not withdrawn** — the cost is real and the same measurement would find it
-/// again. If it is ever worth paying down, the fix is an adapter over this one handler with a
-/// record beside it, not a re-transcription of the window.
-///
-/// The sentinels below are inverted from what they were: the branch overwrites both, every frame.
-/// The rest of the test is unchanged and is the part that always mattered — the row DRIVEN with
-/// both hands keeps the reference's off-hand-first packing order, and the drop back to empty
-/// re-parks the bar.
+/// The idle enchant branch hides both slots and re-parks the bar every frame, unconditionally
+/// (`BuffFrame.lua:166-173`), so the sentinels below are overwritten.
 #[test]
 fn an_idle_enchant_row_rewrites_the_bar_as_the_reference_does() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = harness();
     push(&mut s, mixed_bar());
-    frame(&mut s, 0.1); // first pass: the clear + park write once and latch
+    frame(&mut s, 0.1);
     frame(&mut s, 0.1);
     s.resolve();
     let resting = s.eval::<f64>("return BuffFrame:GetRight()").unwrap();
 
-    // Sentinels the no-enchant branch can never leave standing if it still writes.
+    // Sentinels the idle branch must overwrite.
     s.run(
         r#"BuffFrame:SetPoint("TOPRIGHT", "TemporaryEnchantFrame", "TOPRIGHT", -41, 0)
            TempEnchant1:Show()"#,
@@ -859,8 +720,7 @@ fn an_idle_enchant_row_rewrites_the_bar_as_the_reference_does() {
         "…and re-parks the bar with it: got {displaced}, resting {resting}"
     );
 
-    // The control: both hands enchant. Off hand packs slot 1 (the reference's order — main hand
-    // sits to its LEFT in slot 2), the row is 64 wide, the bar starts one 5px gutter left of it.
+    // Both hands: off hand in slot 1, main hand in slot 2 to its left (`BuffFrame.lua:179-223`).
     s.set_weapon_enchants(
         Some(benilla_ui::script::WeaponEnchant {
             remaining_ms: Some(480_000),
@@ -894,7 +754,6 @@ fn an_idle_enchant_row_rewrites_the_bar_as_the_reference_does() {
         "the bar clears both columns + the gutter: {resting} -> {both}"
     );
 
-    // And back to empty: the transition still writes (the latch re-arms, not re-fires).
     s.set_weapon_enchants(None, None);
     frame(&mut s, 0.1);
     assert!(!shown(&s, "TempEnchant1") && !shown(&s, "TempEnchant2"));
@@ -907,20 +766,8 @@ fn an_idle_enchant_row_rewrites_the_bar_as_the_reference_does() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **A settled buff button rewrites its alpha and its duration every frame, because the
-/// reference's does** — the sibling of the enchant-row test above, and the same trade.
-///
-/// Our copy gated both writes on what was last written (the 1396 class, one row down); the
-/// reference's `BuffButton_OnUpdate` polls `GetPlayerBuffTimeLeft` and then writes
-/// `SetAlpha` and `BuffFrame_UpdateDuration` unconditionally, every tick. So the sentinels below —
-/// alpha 0.42 and the text "X", neither of which the handler can produce — are overwritten within
-/// one frame, and that is what is pinned.
-///
-/// **The poll itself was never the divergence** (`GetPlayerBuffTimeLeft` every frame is
-/// load-bearing) and the controls below are unchanged, because they are the part
-/// that describes the WINDOW rather than our implementation of it: the minute rollover drops "5 m"
-/// to "4 m", the warning band turns the number white, and inside the last 31s the pulse ramps the
-/// alpha. Those three are the reference's behaviour and they still hold.
+/// `BuffButton_OnUpdate` writes the alpha and the duration every tick, unconditionally
+/// (`BuffFrame.lua:130-138`), so the sentinels (alpha 0.42, text "X") are overwritten.
 #[test]
 fn a_settled_buff_button_rewrites_alpha_and_duration_as_the_reference_does() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -938,7 +785,7 @@ fn a_settled_buff_button_rewrites_alpha_and_duration_as_the_reference_does() {
             true,
         )],
     );
-    frame(&mut s, 0.1); // the event repaint + the poll's first write ("5 m", alpha 1.0)
+    frame(&mut s, 0.1); // the event repaint and the poll's first write ("5 m", alpha 1.0)
     frame(&mut s, 0.1);
     assert_eq!(text(&s, "BuffButton0Duration"), "5 m");
 
@@ -959,7 +806,6 @@ fn a_settled_buff_button_rewrites_alpha_and_duration_as_the_reference_does() {
         "…and re-writes the duration with it, unchanged or not"
     );
 
-    // Control 1: a REAL text change flows — the abbreviation drops to "4 m" past the boundary.
     s.tick(60.0);
     assert_eq!(
         text(&s, "BuffButton0Duration"),
@@ -967,9 +813,9 @@ fn a_settled_buff_button_rewrites_alpha_and_duration_as_the_reference_does() {
         "the minute rollover overwrites the sentinel: the gate passes real changes"
     );
 
-    // Control 2: inside the last 31s the pulse writes a fresh ramp value every tick, and the
-    // number wears the sub-minute HIGHLIGHT white (the band is part of the write tuple).
-    s.tick(210.0); // ~29.5s left
+    // In the last 31 s the pulse ramps each tick; under a minute the number is
+    // `HIGHLIGHT_FONT_COLOR` white (`BuffFrame.lua:251-252`).
+    s.tick(210.0); // ~29.5 s left
     s.resolve();
     let a1 = alpha(&s, "BuffButton0");
     s.tick(0.2);
@@ -1006,14 +852,8 @@ fn a_settled_buff_button_rewrites_alpha_and_duration_as_the_reference_does() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The duration line against the **real shipped strings**, end to end — the leg the engine's own
-/// synthetic-template tests cannot reach.
-///
-/// The engine formats through `tooltip::duration_text` (`0x52fa50`'s ladder) over whatever
-/// `GlobalStrings.lua` the player's install carries; this runs
-/// that file into a real VM exactly as the boot's `load_global_strings` does, then asserts the
-/// wording that comes back. Every expectation below is a reading the PREVIOUS two-arm formatter got
-/// wrong, so this is the whole delta in one place. Skips without client data.
+/// The aura tooltip's duration line over the install's own `GlobalStrings.lua`, formatted by
+/// `tooltip::duration_text` on the reference's ladder (`0x52fa50`).
 #[test]
 fn the_duration_line_reads_the_real_global_strings() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -1067,7 +907,6 @@ fn the_duration_line_reads_the_real_global_strings() {
         s.eval::<String>("return BENILLA_LAST").unwrap()
     };
 
-    // The headline divergence: anything past an hour was reading in MINUTES.
     assert_eq!(line(7_200.0), "2 hours remaining", "was '120 minutes'");
     assert_eq!(line(3_600.0), "1 hour remaining", "the hour edge, singular");
     assert_eq!(
@@ -1075,7 +914,6 @@ fn the_duration_line_reads_the_real_global_strings() {
         "60 minutes remaining",
         "one ms under the hour stays in minutes — no '1 hour' until it is whole"
     );
-    // The singular half: the shipped pair really is "%d minute" / "%d minutes".
     assert_eq!(line(60.0), "1 minute remaining", "was '1 minutes'");
     assert_eq!(line(61.0), "2 minutes remaining", "the minute arm ceils");
     // The seconds arm truncates where every arm above it ceils.
@@ -1086,7 +924,6 @@ fn the_duration_line_reads_the_real_global_strings() {
         "0 seconds remaining",
         "the lapsing read, plural at zero"
     );
-    // And the top of the ladder, which had no arm at all.
     assert_eq!(line(129_600.0), "2 days remaining", "was '2160 minutes'");
 
     assert!(s.errors().is_empty(), "errors: {:?}", s.errors());

@@ -1,20 +1,11 @@
-//! The pet action bar (the reference's `PetActionBarFrame.xml`, 1953) driven end to end through the REAL shipped XML
-//! — the `multibar_stance_tests` pattern: a self-contained loader, then the
-//! whole chain from a pushed slot list to the quads it actually paints.
+//! The pet action bar, stock `PetActionBarFrame.xml`, from a pushed slot list to its quads.
 
 use benilla_ui::script::{PetActionView, QuadContent, UiScript};
 
 use super::test_ui::load_ui as load_xml;
 
-/// The pet bar's own load prerequisites, in manifest order: UiPanels (`SetDesaturation`, the
-/// disabled-bar grey), UIParent (the managed bottom stack its OnShow/OnHide re-fires), Cooldown
-/// (`CooldownFrame_SetTimer`), ActionBar (the `MainMenuBar` anchor target) — then the bar.
-/// The reference's pet bar needs what the manifest loads before it: the action-bar chain
-/// (`ActionButton_UpdateState`, `MainMenuBar` as its parent, `CooldownFrame_SetTimer`), the
-/// options window's uvars for `MultiActionBars.lua`, `SetDesaturation` and `GetBindingText` from
-/// our UIParent.lua slices, `TEXT` — and the chat window, whose edit box `ShowPetActionBar`
-/// raises over the sliding bar (PetActionBarFrame.lua l.175). One chain, in the manifest's order,
-/// for every test here (1953).
+/// The pet bar's chain in manifest order, then the chat window, whose edit box `ShowPetActionBar`
+/// raises over the sliding bar (PetActionBarFrame.lua:175).
 pub(super) fn load_pet_bar(s: &UiScript) {
     for file in [
         "Interface\\FrameXML\\Fonts.xml",
@@ -51,9 +42,7 @@ pub(super) fn load_pet_bar(s: &UiScript) {
     }
 }
 
-/// GlobalStrings is loaded from the MPQ at runtime, not by the loader — a token slot's `name` is
-/// a KEY into it, so the tests declare the two keys they read. (That the real keys exist in the
-/// shipped file is a separate fact, asserted in `ui_pet`'s own tests by name.)
+/// A token slot's `name` is a `GlobalStrings` key: the two the tests read, at their stock values.
 pub(super) fn declare_token_strings(s: &UiScript) {
     s.run(
         "PET_ACTION_ATTACK = 'Attack' \
@@ -62,13 +51,13 @@ pub(super) fn declare_token_strings(s: &UiScript) {
     .unwrap();
 }
 
-/// The words the drag moves — `ACT_COMMAND`/Attack and `ACT_ENABLED`/Claw as the server packs
-/// them. Carried on the views because the drag is word arithmetic.
+/// Packed words as the server sends them, Attack (`ACT_COMMAND`) and Claw (`ACT_ENABLED`, spell
+/// 3010): the drag moves words.
 const ATTACK_WORD: u32 = 0x0700_0002;
 const CLAW_WORD: u32 = 0xC100_0BC2;
 
-/// A hunter's bar as the server actually sends it: Attack (a lit command token), an empty spell
-/// slot, Claw (a spell with autocast running), and Defensive (a lit reaction token).
+/// A hunter's bar: Attack (a lit command) in slot 1, Claw (autocast on) in 4, Defensive (a lit
+/// reaction) in 9, the rest empty.
 pub(super) fn hunter_slots() -> Vec<PetActionView> {
     let mut slots = vec![PetActionView::default(); 10];
     slots[0] = PetActionView {
@@ -101,11 +90,8 @@ pub(super) fn hunter_slots() -> Vec<PetActionView> {
     slots
 }
 
-/// Count `path` quads **in the pet bar's own row**. The prerequisite `ActionBar.xml` brings 12
-/// action buttons wearing the same `UI-Quickslot2` ring, so an unscoped count would be measuring
-/// the main bar. Cut by the quad's CENTRE, not an edge: the button rings overhang their buttons by
-/// a dozen pixels each way (54 px of ring on a 30 px button), so the two rows' extents actually
-/// overlap even though their centres — 21 for the main bar, 70..75 for the pet bar — do not.
+/// Count `path` quads in the pet bar's row, cut at centre y 50: the rings overhang their buttons
+/// (54 px on 30), so only centres part the rows (main bar 21, pet bar 70-75).
 fn textures(quads: &[benilla_ui::script::ExtractedQuad], path: &str) -> usize {
     quads
         .iter()
@@ -124,8 +110,6 @@ fn texture_rect(
         .and_then(|q| q.rect)
 }
 
-/// The whole bar, end to end: hidden with no pet, shown with one, the three slot classes each
-/// painting what they should, and hidden again when the pet goes.
 #[test]
 fn the_shipped_pet_bar_drives_end_to_end() {
     benilla_formats::wow_data_or_skip!();
@@ -134,7 +118,6 @@ fn the_shipped_pet_bar_drives_end_to_end() {
     load_pet_bar(&s);
     declare_token_strings(&s);
 
-    // No pet: the bar is hidden, and nothing of it reaches the quad pass.
     s.fire_event("PLAYER_ENTERING_WORLD", vec![]);
     s.resolve();
     assert_eq!(
@@ -143,7 +126,6 @@ fn the_shipped_pet_bar_drives_end_to_end() {
         "no pet, no shelf"
     );
 
-    // A pet appears.
     s.set_pet_actions(true, true, true, hunter_slots());
     s.fire_event("PET_BAR_UPDATE", vec![]);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
@@ -151,15 +133,13 @@ fn the_shipped_pet_bar_drives_end_to_end() {
     s.resolve();
     let quads = s.extract();
 
-    // The shelf art: both UI-PetBar strips draw.
     assert_eq!(
         textures(&quads, "Interface\\PetActionBar\\UI-PetBar"),
         2,
         "the two shelf strips"
     );
 
-    // A TOKEN slot resolved its texture through the global the app named — the `getglobal` fork.
-    // Seeing the ICON PATH here (not the literal "PET_ATTACK_TEXTURE") is the whole proof.
+    // A token slot's texture names a global, resolved by `getglobal` (PetActionBarFrame.lua:102).
     assert_eq!(
         textures(&quads, "Interface\\Icons\\Ability_GhoulFrenzy"),
         1,
@@ -170,11 +150,9 @@ fn the_shipped_pet_bar_drives_end_to_end() {
         1,
         "Defensive's icon came from PET_DEFENSIVE_TEXTURE"
     );
-    // A SPELL slot took its path verbatim.
     assert_eq!(textures(&quads, "Interface\\Icons\\Ability_Druid_Rake"), 1);
 
-    // Occupancy: 3 named slots show their filled ring, the 7 unnamed ones are hidden outright
-    // (the reference hides an unnamed button rather than showing an empty well).
+    // An unnamed slot's button hides outright (PetActionBarFrame.lua:122-128).
     assert_eq!(
         textures(&quads, "Interface\\Buttons\\UI-Quickslot2"),
         3,
@@ -186,17 +164,13 @@ fn the_shipped_pet_bar_drives_end_to_end() {
         "an unnamed pet slot hides; it does not draw the empty ring"
     );
 
-    // The checked ring is on both lit slots, and nowhere else.
     assert_eq!(
         textures(&quads, "Interface\\Buttons\\CheckButtonHilight"),
         2,
         "Attack + Defensive are lit; Claw is not"
     );
 
-    // Autocast: the static ring on the one slot that allows it, and the stock shine MODEL on the
-    // one slot where it is running — `$parentAutoCast`, `UI-AutoCastButton.mdx` over the whole
-    // button at `scale="1.2"`, rendered as a tile. A hidden pane is not
-    // extracted, so one pane is exactly one running shine.
+    // The shine is the `$parentAutoCast` model; a hidden pane is not extracted.
     assert_eq!(
         textures(&quads, "Interface\\Buttons\\UI-AutoCastableOverlay"),
         1,
@@ -214,10 +188,8 @@ fn the_shipped_pet_bar_drives_end_to_end() {
         "the shine pane on Claw alone — enabled, not merely allowed"
     );
 
-    // Geometry, quoted from the ref: the bar's TOPLEFT is MainMenuBar's BOTTOMLEFT +(36,97),
-    // and MainMenuBar is the 1024x53 frame at screen BOTTOM ⇒ its BOTTOMLEFT is (0,0), so the
-    // frame spans y[54,97]. Button 1 sits at the frame's own BOTTOMLEFT +(36,2) ⇒ x[72,102]
-    // y[56,86] — the same 72 the reference lands on (its PETACTIONBAR_XPOS 36 + the button's 36).
+    // TOPLEFT at MainMenuBar's BOTTOMLEFT (0, 0) + (36, 97) (UIParent.lua:1589,1736): the 43-tall
+    // frame spans y[54,97], and button 1 at (36, 2) in it is x[72,102] y[56,86].
     let attack =
         texture_rect(&quads, "Interface\\Icons\\Ability_GhoulFrenzy").expect("Attack icon");
     assert_eq!(
@@ -225,8 +197,7 @@ fn the_shipped_pet_bar_drives_end_to_end() {
         (72.0, 56.0, 102.0, 86.0)
     );
 
-    // The pet goes: the bar slides out over the reference's PETACTIONBAR_SLIDETIME (0.09 s,
-    // `PetActionBarFrame_OnUpdate`) and hides at the end of the slide, shine marker and all.
+    // The pet goes: the bar slides out over `PETACTIONBAR_SLIDETIME` (0.09 s) and then hides.
     s.set_pet_actions(false, true, true, Vec::new());
     s.fire_event("PET_BAR_UPDATE", vec![]);
     for _ in 0..3 {
@@ -245,9 +216,8 @@ fn the_shipped_pet_bar_drives_end_to_end() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The click law: left runs the slot, right flips autocast, and a left click on the ATTACK slot
-/// while the pet is already attacking calls it off instead of re-ordering it (the reference's
-/// `IsPetAttackActive` fork — the one branch that makes the Attack button a toggle).
+/// Left casts, right flips autocast, and a left click on an active Attack calls it off
+/// (`IsPetAttackActive`, PetActionBarFrame.lua:257-265).
 #[test]
 fn clicks_route_through_the_attack_toggle_fork() {
     benilla_formats::wow_data_or_skip!();
@@ -259,14 +229,13 @@ fn clicks_route_through_the_attack_toggle_fork() {
     s.fire_event("PET_BAR_UPDATE", vec![]);
     s.resolve();
 
-    // Button 1 (Attack) spans x[72,102] y[56,86] ⇒ centre (87,71). Claw is slot 4: the buttons
-    // chain +8 on a 30 px width, so button 4's left = 72 + 3*38 = 186 ⇒ centre (201,71).
+    // Button 1 (Attack) spans x[72,102] y[56,86], centre (87, 71); the 30 px buttons chain +8, so
+    // button 4 (Claw) starts at 72 + 3 * 38 = 186, centre (201, 71).
     let click = |s: &mut UiScript, x: f32, y: f32, button: &str| {
         s.mouse_button(x, y, button, true);
         s.mouse_button(x, y, button, false);
     };
 
-    // The pet IS attacking, so a left click on Attack calls it off — no action is queued.
     click(&mut s, 87.0, 71.0, "LeftButton");
     assert_eq!(s.take_pet_stop_attacks(), 1);
     assert!(
@@ -274,7 +243,6 @@ fn clicks_route_through_the_attack_toggle_fork() {
         "the call-off replaces the press, it does not accompany it"
     );
 
-    // Not attacking any more: the same click orders the attack.
     let mut slots = hunter_slots();
     slots[0].active = false;
     slots[0].attack_active = false;
@@ -285,8 +253,7 @@ fn clicks_route_through_the_attack_toggle_fork() {
     assert_eq!(s.take_pet_actions(), vec![1]);
     assert_eq!(s.take_pet_stop_attacks(), 0);
 
-    // Right-clicking the spell slot flips its autocast; right-clicking a command token does not
-    // (a token has no spell id for the wire verb to name).
+    // A right-click flips a spell's autocast; a token is not autocastable.
     click(&mut s, 201.0, 71.0, "RightButton");
     assert_eq!(s.take_pet_autocast_toggles(), vec![4]);
     click(&mut s, 87.0, 71.0, "RightButton");
@@ -297,19 +264,10 @@ fn clicks_route_through_the_attack_toggle_fork() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **A click takes the ring off; the repaint puts it back** — the contract decision 1021's signal
-/// count depends on, pinned here so it cannot quietly rot.
-///
-/// `PetActionButton_OnClick`'s first line is `this:SetChecked(0)` and it runs for every click, so
-/// the ring always comes off. What puts it back is `PET_BAR_UPDATE` — and the repaint that answers
-/// it must re-derive `SetChecked` from `isActive` per slot, **not** diff the views, or a press that
-/// changed no state would have no way home.
-///
-/// The reference signals that repaint from the state writes (`0x4bc940`/`0x4bc960`) and **not**
-/// from a `TogglePetAutocast` it refuses (`0x4bcbf7` — a token is not autocastable, i.e. every
-/// right-click on Follow, Stay or a reaction). So on a right-click the ring genuinely stays off
-/// until something else repaints the bar. That is the reference's own quirk, checked there by the
-/// director; decision 1027 diverged from it and 1030 put it back.
+/// Every click starts with `this:SetChecked(0)` (PetActionBarFrame.lua:253); the repaint restores
+/// the ring from `isActive`, never by diffing views. The reference signals it from state writes
+/// (`0x4bc940`/`0x4bc960`), not from a refused `TogglePetAutocast` (`0x4bcbf7`), so a right-click
+/// on a token leaves the ring off until something else repaints.
 #[test]
 fn a_click_drops_the_ring_and_the_repaint_restores_it() {
     benilla_formats::wow_data_or_skip!();
@@ -323,8 +281,7 @@ fn a_click_drops_the_ring_and_the_repaint_restores_it() {
             .unwrap()
     };
 
-    // Button 1 (Attack, lit) spans x[72,102] y[56,86] ⇒ centre (87,71). Both mouse buttons take
-    // the ring off — the CheckButton toggles itself, then `SetChecked(0)` lands it at 0 either way.
+    // Attack's centre. Either button: the CheckButton toggles, then `SetChecked(0)` lands it at 0.
     for button in ["RightButton", "LeftButton"] {
         s.set_pet_actions(true, true, true, hunter_slots());
         s.fire_event("PET_BAR_UPDATE", vec![]);
@@ -338,7 +295,6 @@ fn a_click_drops_the_ring_and_the_repaint_restores_it() {
             "{button}: the ref's own SetChecked(0), reproduced"
         );
 
-        // A repaint carrying the very SAME views restores it — the property the signal count buys.
         s.fire_event("PET_BAR_UPDATE", vec![]);
         assert!(
             checked(&s),
@@ -351,9 +307,8 @@ fn a_click_drops_the_ring_and_the_repaint_restores_it() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// A DISABLED bar still draws — every icon desaturated, nothing hidden. That pair
-/// (`PetHasActionBar` true, `GetPetActionsUsable` false) is what a feared or mind-controlled pet
-/// looks like, and collapsing it to "hide the bar" would lose the state entirely.
+/// An unusable pet's bar (`PetHasActionBar` true, `GetPetActionsUsable` false) still draws, every
+/// icon desaturated (PetActionBarFrame.lua:129-134).
 #[test]
 fn a_disabled_bar_greys_rather_than_hides() {
     benilla_formats::wow_data_or_skip!();
@@ -371,9 +326,8 @@ fn a_disabled_bar_greys_rather_than_hides() {
         2,
         "the bar is still on screen"
     );
-    // Since decision 1327 `SetDesaturation` takes its SHADER arm — the icon carries the greyscale
-    // flag to the renderer and keeps its own tint, rather than the reference's no-shader 0.5
-    // vertex-colour fallback (which is what this asserted while nothing greyed).
+    // `SetDesaturated` reports shader support, so `SetDesaturation` takes its shader arm
+    // (UIParent.lua:1500-1510): a greyscale flag on the icon, not the 0.5 vertex-colour fallback.
     let grey = quads
         .iter()
         .find_map(|q| match &q.content {
@@ -389,10 +343,7 @@ fn a_disabled_bar_greys_rather_than_hides() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The pet bar with and without the bottom-left multibar RAISED. Since 1500 that bar is a player
-/// option shipping off, so the flag now raises it rather than merely loading the file — both states
-/// are ones a real session lands in. `shelf` counts the two `UI-PetBar` strips; `attack_top` is the
-/// top edge of Attack's icon, the bar's own row in one number.
+/// The pet bar with the bottom-left multibar up or not: shelf strips drawn, top of Attack's icon.
 fn pet_bar_row(with_multibar: bool) -> (usize, f32) {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
@@ -422,15 +373,8 @@ fn pet_bar_row(with_multibar: bool) -> (usize, f32) {
     (shelf, attack_top)
 }
 
-/// **The row the pet bar shares with the bottom-left multibar** (director-caught:
-/// the bar drew straight across a live row of spells, border and all).
-///
-/// Two rules, both the reference's, both applied by `UIParent_ManageFramePositions`: with that bar
-/// up the pet bar rises by the ref's 43 px, and its shelf art — which is a border only while the
-/// bar sits directly on the main bar — is hidden rather than drawn over the buttons below.
-///
-/// The regression this locks is specifically that the manage pass RUNS: the bar's own XML anchor
-/// is the base position, so a pass that never fired would leave it exactly where the bug was.
+/// With the bottom-left bar up, `UIParent_ManageFramePositions` raises the pet bar 43 px and hides
+/// its shelf art, which would draw across that row (UIParent.lua:1589,1706-1708).
 #[test]
 fn the_pet_bar_rises_and_sheds_its_shelf_over_the_bottom_left_bar() {
     benilla_formats::wow_data_or_skip!();
@@ -450,13 +394,8 @@ fn the_pet_bar_rises_and_sheds_its_shelf_over_the_bottom_left_bar() {
     );
 }
 
-/// **The drag, through the shipped XML**. One verb serves both ends — the button's
-/// `OnDragStart` and its `OnReceiveDrag` both call `PickupPetAction` — so what makes this a move
-/// rather than two pick-ups is the binding's own fork on whether the cursor is already carrying.
-///
-/// Also locks the grid: while a pet action rides the cursor every slot shows, including the empty
-/// ones, so there is somewhere visible to drop it. That is the whole reason `PET_BAR_SHOWGRID`
-/// exists, and the reason an unnamed button's `Hide()` is conditional.
+/// Both drag ends call `PickupPetAction` (PetActionBarFrame.lua:269-283), a move by the binding's
+/// carrying-cursor fork; meanwhile `PET_BAR_SHOWGRID` shows every slot, the empty ones included.
 #[test]
 fn dragging_a_pet_spell_between_slots_moves_it_through_the_shipped_handlers() {
     benilla_formats::wow_data_or_skip!();
@@ -468,7 +407,7 @@ fn dragging_a_pet_spell_between_slots_moves_it_through_the_shipped_handlers() {
     s.fire_event("PET_BAR_UPDATE", vec![]);
     s.resolve();
 
-    // Slot 5 is empty, so its button is hidden — until the grid comes up.
+    // Slot 5 is empty, so its button hides until the grid comes up.
     assert!(!s.eval::<bool>("return PetActionButton5:IsShown()").unwrap());
 
     s.run("this = PetActionButton4; PetActionButton_OnDragStart()")
@@ -507,10 +446,8 @@ fn dragging_a_pet_spell_between_slots_moves_it_through_the_shipped_handlers() {
     assert!(s.eval::<bool>("return GetCursorInfo() == nil").unwrap());
 }
 
-/// The pet bar honours **Lock ActionBars** too — the reference's second consumer of
-/// the same uvar (`PetActionBarFrame.lua:270/278`), reading the global `ActionBar.xml` declares.
-/// Both drag ends refuse while locked; the shift-click pick-up above stays live, exactly as the
-/// reference leaves it (l.253-255).
+/// `LOCK_ACTIONBAR` stops both drag ends (PetActionBarFrame.lua:270,278) but not the shift-click
+/// pick-up (PetActionBarFrame.lua:254-255).
 #[test]
 fn the_lock_stops_the_pet_bar_drag_but_not_its_shift_click() {
     benilla_formats::wow_data_or_skip!();
@@ -531,7 +468,6 @@ fn the_lock_stops_the_pet_bar_drag_but_not_its_shift_click() {
     );
     assert!(s.eval::<bool>("return GetCursorInfo() == nil").unwrap());
 
-    // Shift-click is still the way through, and then the drop is refused too while locked.
     s.set_modifiers(true, false, false);
     s.run("this = PetActionButton4; PetActionButton_OnClick(\"LeftButton\")")
         .unwrap();
@@ -559,8 +495,7 @@ fn the_lock_stops_the_pet_bar_drag_but_not_its_shift_click() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// A shift-click is the same pick-up, whichever mouse button carried it — the reference's own fork
-/// puts shift above the left/right split, so it never toggles autocast by accident.
+/// Shift is tested above the button split (PetActionBarFrame.lua:254): either button picks up.
 #[test]
 fn shift_clicking_a_pet_button_picks_it_up_rather_than_casting() {
     benilla_formats::wow_data_or_skip!();
@@ -589,21 +524,9 @@ fn shift_clicking_a_pet_button_picks_it_up_rather_than_casting() {
     );
 }
 
-/// **The keybind pair** — what a bound `BONUSACTIONBUTTONn` runs. The ref's
-/// binding body calls `BonusActionButtonDown/Up`, one-liners onto `PetActionButtonDown/Up`
-/// (l.218-231), so the whole lane is these two functions: press shows the pushed art, release
-/// fires the slot.
-///
-/// The load-bearing half is what the key path does NOT do: it is a bare `CastPetAction`, with none
-/// of `PetActionButton_OnClick`'s forks. Pinned below on an Attack token fed as already-active — a
-/// left click on that same view calls the attack off (the test above) while the key re-issues it.
-///
-/// **What that fixture is and is not.** `attack_active` is pushed straight onto the view here, and
-/// on a real *pet* bar it can never be true: `ui_pet`'s `possessing` carve (`0x4bd420`) raises the
-/// latch only for a unit you are POSSESSING, so on a hunter's bar the click fork is dead code and
-/// key and click behave identically. The state below is a **possess** bar's — Mind Control, Eye of
-/// Kilrogg — which is the one case where the two paths genuinely diverge, and therefore the only
-/// one worth pinning. Read as "ordinary pets differ from clicks", this test would be lying.
+/// A bound `BONUSACTIONBUTTONn` runs `PetActionButtonDown/Up` (PetActionBarFrame.lua:218-231), a
+/// bare `CastPetAction` on release. The live Attack is a possess bar's: `0x4bd420` raises the
+/// attack latch only for a possessed unit, so on a hunter's bar key and click agree.
 #[test]
 fn the_keybind_pair_pushes_and_casts_without_the_clicks_forks() {
     benilla_formats::wow_data_or_skip!();
@@ -620,7 +543,6 @@ fn the_keybind_pair_pushes_and_casts_without_the_clicks_forks() {
             .unwrap()
     };
 
-    // Down shows the pushed art and fires nothing (the ref's runOnUp shape).
     s.run("PetActionButtonDown(1)").unwrap();
     assert_eq!(state(&s), "PUSHED");
     assert!(
@@ -628,9 +550,7 @@ fn the_keybind_pair_pushes_and_casts_without_the_clicks_forks() {
         "the press is visual only — the ref fires on the release"
     );
 
-    // Up releases the art and casts — slot 1 is Attack and the view says the order is live, so a
-    // LEFT CLICK here would call it off instead (a possess bar's case; see the header). The key
-    // has no such fork.
+    // A left click on this live Attack would call it off; the key casts.
     s.run("PetActionButtonUp(1)").unwrap();
     assert_eq!(state(&s), "NORMAL");
     assert_eq!(s.take_pet_actions(), vec![1]);
@@ -640,8 +560,7 @@ fn the_keybind_pair_pushes_and_casts_without_the_clicks_forks() {
         "IsPetAttackActive lives in OnClick, which a key press never reaches"
     );
 
-    // The state guard is the whole re-entrancy story: an up with nothing pushed does nothing
-    // (a focus-stolen release, a stuck-latch sweep), and a second down does not re-fire.
+    // The button-state guard: an up with nothing pushed does nothing, a second down no re-fire.
     s.run("PetActionButtonUp(1)").unwrap();
     assert!(
         s.take_pet_actions().is_empty(),
@@ -653,8 +572,7 @@ fn the_keybind_pair_pushes_and_casts_without_the_clicks_forks() {
     s.run("PetActionButtonUp(1)").unwrap();
     assert_eq!(s.take_pet_actions(), vec![1], "one press, one cast");
 
-    // An EMPTY slot is inert through the same path (CastPetAction's own guard): slot 2 of the
-    // hunter bar carries no name, and its button is hidden.
+    // Slot 2 is empty: `CastPetAction`'s own guard makes it inert.
     s.run("PetActionButtonDown(2) PetActionButtonUp(2)")
         .unwrap();
     assert!(
@@ -664,26 +582,14 @@ fn the_keybind_pair_pushes_and_casts_without_the_clicks_forks() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-// The autocast trail's MOTION is the model's own since decisions 2013/2014: the stock
-// `$parentAutoCast` Model's four bones and four emitters, rendered as a tile on the pane's clock
-// — the script layer never moves a spark, and no test here needs to.
-
-/// A hunter bar hovered through the REAL gesture, with the real binding registry and the real CVar
-/// table behind it — `mouse_move` runs the shipped `<OnEnter>` with `this` bound, which is the only
-/// way this fork gets exercised the way a player's hover exercises it.
-///
-/// Buttons are 30 px chained +8 from the bar's own origin: button 1 spans x[72,102] y[56,86] ⇒
-/// centre (87,71), button 4's left = 72 + 3·38 ⇒ centre (201,71) — the geometry
-/// `clicks_route_through_the_attack_toggle_fork` already leans on.
+/// Button centres: button 1 spans x[72,102] y[56,86], and the 30 px buttons chain +8.
 const ATTACK_BUTTON: (f32, f32) = (87.0, 71.0);
 const CLAW_BUTTON: (f32, f32) = (201.0, 71.0);
 
 fn hovered_pet_bar() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    // The real command set and the real registered defaults, the way the app's own seed installs
-    // them — so `GetBindingKey("BONUSACTIONBUTTON1")` answers CTRL-1 (its byte-real default) and
-    // `GetCVar("UberTooltips")` answers "1" (its byte-read registrar value) rather than nil.
+    // The app's registries: `BONUSACTIONBUTTON1` binds CTRL-1 and `UberTooltips` reads "1".
     s.register_bindings(&crate::bindings::registry_commands());
     s.register_cvars(crate::cvars::registered_pairs());
     load_pet_bar(&s);
@@ -699,18 +605,9 @@ fn tooltip_line1(s: &UiScript) -> String {
         .unwrap()
 }
 
-/// **B230 — Attack/Follow/Stay name their keybinding; the pet's own spells do not.**
-///
-/// On 1.12, hovering Attack, Follow or Stay shows the button's keybinding in its tooltip. That is
-/// narrower than "the pet bar": `PetActionButton_OnEnter` (PetActionBarFrame.lua l.285-305) forks
-/// on `isToken or UberTooltips == "0"`, and only THAT branch concatenates
-/// `NORMAL_FONT_COLOR_CODE.." ("..GetBindingText(GetBindingKey("BONUSACTIONBUTTON"..id), "KEY_")..")"`.
-/// The other branch is a bare `SetPetAction` and appends nothing — so a fix that suffixed every
-/// slot would be wrong, and the control below is what says ours doesn't.
-///
-/// The exact string is pinned, colour codes and all, because the ref's concatenation puts the
-/// colour BEFORE the space (`Attack|cffffd200 (CTRL-1)|r`, not `Attack |cffffd200(CTRL-1)|r` —
-/// which is what the stock `MicroButtonTooltipText` — the same idea, the other shape — produces).
+/// `PetActionButton_OnEnter` appends the binding only on its `isToken or UberTooltips == "0"`
+/// branch, colour code before the space: `Attack|cffffd200 (CTRL-1)|r`. The other branch is a
+/// bare `SetPetAction` (PetActionBarFrame.lua:285-305).
 #[test]
 fn token_tooltips_name_their_binding_and_pet_spells_do_not() {
     benilla_formats::wow_data_or_skip!();
@@ -723,14 +620,13 @@ fn token_tooltips_name_their_binding_and_pet_spells_do_not() {
         "Attack|cffffd200 (CTRL-1)|r",
         "a command token carries BONUSACTIONBUTTON1's key in the normal-font colour"
     );
-    // Uber on + a token ⇒ still the default corner; only the CVar-off leg owner-anchors.
+    // With `UberTooltips` on, a token's plate still takes the default anchor.
     assert!(
         s.eval::<bool>("return GameTooltip.default ~= nil").unwrap(),
         "a token's plate takes the default corner while UberTooltips is on"
     );
 
-    // The CONTROL: slot 4 is Claw, a real pet spell, and it goes through the engine channel —
-    // its name, and nothing in parentheses.
+    // The control: Claw, a pet spell, goes through `SetPetAction`.
     s.mouse_move(CLAW_BUTTON.0, CLAW_BUTTON.1);
     s.resolve();
     let claw = tooltip_line1(&s);
@@ -742,13 +638,8 @@ fn token_tooltips_name_their_binding_and_pet_spells_do_not() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The append is UNCONDITIONAL in that branch, so an unbound row really does render empty
-/// parentheses — `GetBindingText` answers `""` for a nil key (UIParent.xml, transcribed from the
-/// ref's own l.1819-1821), and nothing guards the `"("`. That is the reference's behaviour, not a
-/// slip of ours: MicroButtonTooltipText guards its own suffix and this one does not.
-///
-/// Stock it is unreachable — BONUSACTIONBUTTON1-10 default to CTRL-1..CTRL-0 — so it takes a
-/// deliberate unbind to see, which is exactly what this does.
+/// The append is unguarded and `GetBindingText` answers "" for a nil key (UIParent.lua:1819-1821),
+/// so an unbound token shows empty parentheses. Stock binds CTRL-1..CTRL-0, so this unbinds one.
 #[test]
 fn an_unbound_token_row_renders_the_references_empty_parentheses() {
     benilla_formats::wow_data_or_skip!();
@@ -771,13 +662,8 @@ fn an_unbound_token_row_renders_the_references_empty_parentheses() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The CVar is the fork's OTHER half, and it is not decoration: with `UberTooltips` off, a real pet
-/// SPELL stops going through the engine channel and takes the token branch too — same built text,
-/// same binding suffix — and the plate moves from the screen corner to beside the button
-/// (`SetOwner(this, "ANCHOR_RIGHT")`). Both are the reference's, in the same five lines.
-///
-/// This is also the row's reason to exist in `cvars::REGISTERED`: benilla registers `UberTooltips`
-/// at all because these Lua sites read it (the honest-tree rule's live-consumer half).
+/// With `UberTooltips` off a pet spell takes the token branch too, binding suffix and all, and the
+/// plate anchors `ANCHOR_RIGHT` of the button (PetActionBarFrame.lua:290-296).
 #[test]
 fn ubertooltips_off_takes_the_spells_through_the_token_branch_and_moves_the_plate() {
     benilla_formats::wow_data_or_skip!();

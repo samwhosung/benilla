@@ -1,11 +1,5 @@
-//! The always-up world-state readout (stock `Interface\FrameXML\WorldStateFrame.xml`) —
-//! report B190's second half, driven the way the client drives it: rows pushed, then
-//! `UPDATE_WORLD_STATES` fired.
-//!
-//! What these pin is the *frame's* half of the contract — that it reads the ten returns in the
-//! right order, swaps the dynamic icon on the row's own state, and empties itself when a scope
-//! admits nothing. Which rows exist at all is [`crate::world_state_ui`]'s, tested there against
-//! the real `WorldStateUI.dbc`.
+//! The always-up world-state readout, stock `WorldStateFrame.lua`, fed as the client feeds it:
+//! rows pushed, then `UPDATE_WORLD_STATES`. Which rows exist is [`crate::world_state_ui`]'s.
 
 use benilla_ui::script::{QuadContent, ScriptValue, UiScript, WorldStateUiView};
 
@@ -26,13 +20,12 @@ pub(crate) fn harness() -> UiScript {
         "Interface\\FrameXML\\LocaleProperties.lua",
         "Interface\\FrameXML\\StaticPopup.xml",
         "Interface\\FrameXML\\GameTooltip.xml",
-        "Interface\\FrameXML\\WorldStateFrame.xml", // the reference's own (1972)
+        "Interface\\FrameXML\\WorldStateFrame.xml",
     ] {
         load_xml(&s, f);
     }
-    // The outdoor readout is gated on the options uvar `HIDE_OUTDOOR_WORLD_STATE == "0"`
-    // (UIOptionsFrame.lua's default, ours in OptionsFrame.xml's uvar block); a harness without
-    // the options file says so itself.
+    // The outdoor readout needs `HIDE_OUTDOOR_WORLD_STATE == "0"` (`WorldStateFrame.lua:37`), the
+    // stock default (`UIOptionsFrame.lua:120`).
     s.run("HIDE_OUTDOOR_WORLD_STATE = \"0\"").unwrap();
     s
 }
@@ -48,7 +41,6 @@ pub(crate) fn row(icon: &str, text: &str, tooltip: &str) -> WorldStateUiView {
     }
 }
 
-/// Every shown text string, in draw order.
 fn texts(s: &mut UiScript) -> Vec<String> {
     s.resolve();
     s.extract()
@@ -60,7 +52,6 @@ fn texts(s: &mut UiScript) -> Vec<String> {
         .collect()
 }
 
-/// Every shown texture path, in draw order.
 fn textures(s: &mut UiScript) -> Vec<String> {
     s.resolve();
     s.extract()
@@ -78,7 +69,6 @@ pub(crate) fn push(s: &mut UiScript, rows: Vec<WorldStateUiView>) {
     s.fire_event("UPDATE_WORLD_STATES", vec![]);
 }
 
-/// The Eastern Plaguelands readout: two labelled tower counters, each with its faction icon.
 #[test]
 fn the_tower_counters_draw_with_their_icons() {
     benilla_formats::wow_data_or_skip!();
@@ -119,8 +109,6 @@ fn the_tower_counters_draw_with_their_icons() {
     );
 }
 
-/// A scope that admits nothing empties the readout — and the pooled rows from the busier scope
-/// are hidden rather than left painting a stale count.
 #[test]
 fn leaving_the_zone_clears_the_readout() {
     benilla_formats::wow_data_or_skip!();
@@ -148,12 +136,8 @@ fn leaving_the_zone_clears_the_readout() {
     );
 }
 
-/// The dynamic icon is a SECOND slot, not a swap (`GetWorldStateUIInfo 0x4c5a70`; decision
-/// 1604). The `Icon` column and the `DynamicIcon` column feed two different regions — a 42x42
-/// static slot and a 32x32 button off the row's right edge — and only `uiState == 2`, the
-/// flag-taken value, lights the second one. The first pass replaced the static art whenever the
-/// state was non-zero, which fired on the ordinary state 1 and hid the faction shield that should
-/// never have moved; both halves of that are pinned here.
+/// `Icon` and `DynamicIcon` (`0x4c5a70`) feed a 42x42 slot and a 32x32 button off the row's right;
+/// only state 2, flag taken, lights the button (`WorldStateFrame.lua:86`).
 #[test]
 fn the_dynamic_icon_is_a_second_slot_lit_only_by_the_taken_state() {
     benilla_formats::wow_data_or_skip!();
@@ -170,9 +154,7 @@ fn the_dynamic_icon_is_a_second_slot_lit_only_by_the_taken_state() {
         ..Default::default()
     };
 
-    // A zero state is not a quiet row but NO row: the stock `WorldStateAlwaysUpFrame_Update`
-    // draws only `state > 0` (WorldStateFrame.lua) — our transcription had painted the shield at
-    // zero too, and the reference's file retired that (1972).
+    // State 0 is no row at all: the update draws only `state > 0` (`WorldStateFrame.lua:40`).
     push(&mut s, vec![flag_row(0)]);
     let art = textures(&mut s);
     assert!(
@@ -209,8 +191,6 @@ fn the_dynamic_icon_is_a_second_slot_lit_only_by_the_taken_state() {
         "…with its ADD-blend flash overlay, whose path is the icon's plus `Flash`: {art:?}"
     );
 
-    // The pulse runs: the flash overlay's alpha ramps up across the first half-second and back
-    // down across the second, and the handler that does it raises nothing.
     let flash_alpha = |s: &mut UiScript| {
         s.resolve();
         s.extract()
@@ -239,13 +219,10 @@ fn the_dynamic_icon_is_a_second_slot_lit_only_by_the_taken_state() {
     );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 
-    // And it goes out again when the flag is returned.
     push(&mut s, vec![flag_row(1)]);
     assert!(!textures(&mut s).iter().any(|p| p.contains("HordeFlag")));
 }
 
-/// A row with no icon at all (the Eastern Plaguelands progress line) still draws its text — the
-/// icon is optional, and the row must not collapse when the DBC column is empty.
 #[test]
 fn a_row_without_an_icon_still_shows_its_text() {
     benilla_formats::wow_data_or_skip!();
@@ -262,9 +239,8 @@ fn a_row_without_an_icon_still_shows_its_text() {
     assert!(texts(&mut s).contains(&"Progress: 60".to_string()));
 }
 
-/// An `ExtendedUI` row is not a text row at all — the stock update routes it to the extended
-/// kit (`ExtendedUI["CAPTUREPOINT"]`), which builds a capture BAR and never prints the text.
-/// Our transcription had shown the text; the reference's file draws the bar (1972).
+/// The update routes an `ExtendedUI` row to its kit, which builds a capture bar and prints no
+/// text (`WorldStateFrame.lua:44`).
 #[test]
 fn a_capture_point_row_is_a_bar_not_a_line_of_text() {
     benilla_formats::wow_data_or_skip!();
@@ -289,9 +265,8 @@ fn a_capture_point_row_is_a_bar_not_a_line_of_text() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The bindings' own edges, read from Lua the way an addon would. Two are easy to get wrong and
-/// both are the reference's (`0x4c5a40`/`0x4c5a70`): an out-of-range index answers exactly one
-/// value — the number `0`, not nil and not ten nils — and a non-number argument raises.
+/// An out-of-range index answers the single number 0 and a non-number argument raises
+/// (`0x4c5a40`, `0x4c5a70`).
 #[test]
 fn the_bindings_answer_the_reference_shape() {
     benilla_formats::wow_data_or_skip!();
@@ -306,7 +281,6 @@ fn the_bindings_answer_the_reference_shape() {
     }]);
 
     assert_eq!(s.eval::<i64>("return GetNumWorldStateUI()").unwrap(), 1);
-    // Ten values, in order, with no nils among the strings.
     assert_eq!(
         s.eval::<String>(
             "local a,b,c,d,e,f,g,h,i,j = GetWorldStateUIInfo(1)\n\
@@ -319,7 +293,6 @@ fn the_bindings_answer_the_reference_shape() {
     );
     assert_eq!(s.arity("GetWorldStateUIInfo(1)").unwrap(), 10);
 
-    // Out of range: ONE value, the number 0.
     assert_eq!(s.arity("GetWorldStateUIInfo(2)").unwrap(), 1);
     assert_eq!(s.eval::<i64>("return GetWorldStateUIInfo(2)").unwrap(), 0);
     assert_eq!(
@@ -328,12 +301,11 @@ fn the_bindings_answer_the_reference_shape() {
         "the index is 1-based"
     );
 
-    // A non-number argument raises rather than answering quietly.
     assert!(
         s.eval::<i64>("return GetWorldStateUIInfo('nope')").is_err(),
         "a non-numeric argument is an error, not a nil"
     );
-    // ...but a numeric string coerces, as `lua_isnumber` does.
+    // A numeric string coerces, as `lua_isnumber` does.
     assert_eq!(
         s.eval::<i64>("return (GetWorldStateUIInfo('1'))").unwrap(),
         7
@@ -365,15 +337,9 @@ fn ink_box(chain: &mut benilla_formats::Chain, path: &str) -> (f32, f32, f32, f3
     )
 }
 
-/// **Where the ink actually lands** — the test the first pass of this frame needed and did not
-/// have. Every icon the readout names is a sprite authored into the UPPER-LEFT corner of a
-/// power-of-two canvas (`AllianceTower` fills 16x16 of 32x32; `UI-PVP-Alliance` ~40x40 of 64x64),
-/// nothing is cropped, and the reference compensates *geometrically* — a 42x42 slot hung 6 units
-/// off the row's left edge with the label seated 10 above its centreline (`WorldStateFrame.xml`).
-/// Pin the OUTCOME rather than the constants: whatever the numbers, the visible art must sit beside
-/// its label and share its line. A snug icon box — the obvious thing to write, and what we shipped
-/// — puts the ink up and to the left of its own slot, which is exactly what the director saw.
-/// Skips without client data.
+/// The icons are sprites in the upper-left of a power-of-two canvas (`AllianceTower` fills 16x16
+/// of 32x32), uncropped; `WorldStateFrame.xml` compensates with a 42x42 slot hung 6 off the row's
+/// left and the label 10 above its centreline. The test pins the outcome: ink beside its label.
 #[test]
 fn the_visible_ink_sits_beside_its_label_not_adrift_of_it() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -389,9 +355,8 @@ fn the_visible_ink_sits_beside_its_label_not_adrift_of_it() {
         let mut s = harness();
         s.fire_event("PLAYER_ENTERING_WORLD", vec![ScriptValue::Str("".into())]);
         push(&mut s, vec![row(icon, label, "tip")]);
-        // The label is auto-sized, so its box only exists once the host has measured it — the app
-        // measures every frame; an unmeasured FontString has no height of its own and falls back to
-        // its owner's, which would put the label on the row's centreline rather than its anchor's.
+        // The label is auto-sized: unmeasured, it takes its owner's height and sits on the row's
+        // centreline, so it is measured as the app does every frame.
         s.resolve();
         let answers: Vec<(u32, f32, f32, u64)> = s
             .fontstrings_needing_measure()
@@ -413,8 +378,8 @@ fn the_visible_ink_sits_beside_its_label_not_adrift_of_it() {
             .and_then(|q| q.rect)
             .expect("the label resolved");
 
-        // The whole canvas is drawn into the slot (no texcoords anywhere on these regions), so the
-        // ink's screen rect is its texel box scaled into it. Rects are y-UP.
+        // No texcoords on these regions, so the ink's rect is its texel box scaled into the slot.
+        // Rects are y-up.
         let (_, iy0, ix1, iy1, tw, th) = ink_box(&mut chain, &format!("{icon}.blp"));
         let sw = (slot.right - slot.left) / tw;
         let sh = (slot.top - slot.bottom) / th;
@@ -427,22 +392,17 @@ fn the_visible_ink_sits_beside_its_label_not_adrift_of_it() {
             .expect("the row resolved");
         let row_h = (row_top - row_bottom) as f32;
 
-        // 1 · The art reads at the row's scale. This is the one that bites: squeeze the whole
-        //     canvas into a snug box and the 16-texel sprite inside a 32-texel file draws at half
-        //     size — a speck beside its label, which is what the oversized slot exists to prevent.
         let ink_h = (iy1 - iy0) * sh;
         assert!(
             ink_h >= 0.7 * row_h,
             "{icon}: the visible art is {ink_h} tall in a {row_h} row — the slot is sized for the \
              canvas, not for the sprite inside it"
         );
-        // 2 · It ends just before its label rather than half a slot away.
         let gap = text.left - ink_right;
         assert!(
             (0.0..=10.0).contains(&gap),
             "{icon}: the ink must end just before its label — gap {gap}"
         );
-        // 3 · And the two share a line.
         assert!(
             (ink_mid_y - label_mid_y).abs() <= 4.0,
             "{icon}: the ink and its label must share a line — ink centre {ink_mid_y}, \

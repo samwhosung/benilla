@@ -1,62 +1,10 @@
-//! **The reference FrameXML this client EXECUTES off the player's own patch chain**, rather than
-//! shipping a copy of it — the mechanism half of.
+//! The stock 1.12 FrameXML this client runs off the player's own patch chain, as the third
+//! [`super::addons::Source`]; the parse, `<Include>` and `<Script file=>` resolution and chunk
+//! naming are [`super::addons::Addon`]'s.
 //!
-//! ## The rule
-//!
-//! The end state for the in-game interface is the stock 1.12 FrameXML, run off the file the player
-//! already owns. `assets/ui` is scaffolding: it retires file by file, and a migrated window means
-//! *its stock XML + Lua run off the chain and our counterpart file is deleted* (1751 §2). Fidelity
-//! by construction — the reference's text cannot drift from itself, and every frame name, id,
-//! template and stratum an addon reaches for is right because it **is** the reference's.
-//!
-//! What stays ours permanently: the glue screens (GlueXML is a separate engine surface
-//! even in the real client), dev-only frames, and adapter shims only while a genuine engine
-//! difference forces one.
-//!
-//! ## Where the list lives — the manifest, not a second list in Rust
-//!
-//! Until 1751 this module carried its own `SOURCED` array and ran it *before* `assets/ui`, which
-//! was the only ordering a Lua-only mechanism could express. Sourcing **XML** needs a real
-//! position in the load order instead: stock `ContainerFrame.xml` inherits `ItemButtonTemplate`,
-//! `CooldownFrameTemplate`, `SmallMoneyFrameTemplate` and `UIPanelCloseButton`, so it has to load
-//! *after* the files that declare them.
-//!
-//! So there is exactly one ordered list of what loads and when, and it is `assets/ui/benilla.toc`
-//! — the manifest that already had that job. **A manifest entry carrying a path separator is
-//! sourced off the chain; a bare filename is a file we ship** ([`is_chain_entry`]). Our tree is
-//! flat, so the two can never be confused, and the migration reads as what it is: the line
-//! `BagFrame.xml` becomes `Interface\FrameXML\ContainerFrame.xml`, and `BagFrame.xml` is deleted.
-//!
-//! Everything else — the XML parse, `<Include>` / `<Script file=>` resolution against the
-//! document's own directory, chunk naming, the error reporting that reaches the player — is
-//! [`super::addons::Addon`]'s, unchanged. This module is only a third [`super::addons::Source`]:
-//! *the player's install*.
-//!
-//! ## Where a reference file and our own UI still collide, and which one wins
-//!
-//! **Order decides, and the manifest is the order.** A name defined by both goes to whichever line
-//! is later. That is the whole rule; there is no precedence machinery. A file sourced *before* our
-//! own has its collisions overwritten by ours; a file sourced at the position of the window it
-//! replaces owns its names outright, which is what migrating a window means.
-//!
-//! The load-bearing example was `PaperDollFrame.lua`, sourced far above everything for one
-//! frame-agnostic button family while our own `CharacterFrame.xml` won the eighteen names it
-//! collided on. Decision 1751 migrated that window, so the file arrives at its own position now
-//! and there is nothing left for it to collide with — which is what a finished migration looks
-//! like.
-//!
-//! **Nothing is stubbed silently.** A reference body that reaches for something this client does
-//! not have raises, naming it — which is loud, correct, and strictly better than a no-op that
-//! pretends (1203, 1205, 1211, 1230). The answer is to build the verb, or to adapt the body in one
-//! of our own files and say why at the site.
-//!
-//! ## No install, no file
-//!
-//! A machine with no client data (CI, a bare checkout) simply does not get these files, and says so
-//! once, loudly. It is the same condition under which `GlobalStrings` is absent, and the addon
-//! survey already prints which mode it ran in for that reason. An install-less checkout cannot run
-//! most meaningful UI tests anyway — the art, fonts and MPQs come from the install too — so tests
-//! that need these files gate on the install like every other client-data test.
+//! `assets/ui/benilla.toc` is the one load order. An entry with a path separator comes off the
+//! chain, a bare filename is a file we ship ([`is_chain_entry`]), and a name defined by both goes
+//! to the later line. Without client data the chain files are absent, and the log says so once.
 
 use std::sync::OnceLock;
 
@@ -66,31 +14,18 @@ use bevy::prelude::*;
 
 use super::addons::{Addon, Source};
 
-/// The addon name the reference's own files load under — the reference's word for its interface.
-///
-/// It is not `Interface\AddOns\…` anything: FrameXML is not an addon, gets no `ADDON_LOADED`, and
-/// an addon that derives its folder from a `debugstack` pattern (`"\\AddOns\\(.*)\\"` —
-/// `benilla_ui::script::addon_chunk_name`'s reason for existing) must not match a FrameXML frame.
-/// [`Addon::chunk_name`] is what keeps that true: a chain file's chunk is named after its own
-/// chain path, which is exactly what the real client names it.
+/// The addon name the stock files load under. FrameXML is not an addon: it gets no
+/// `ADDON_LOADED`, and [`Addon::chunk_name`] names its chunks by chain path, as the 1.12 client
+/// does, so an addon's `\AddOns\` debugstack pattern never matches a FrameXML frame.
 pub(super) const NAME: &str = "FrameXML";
 
-/// Is this manifest entry **sourced off the player's chain**, rather than shipped by us?
-///
-/// The test is a path separator, and it is decidable because our own shipped tree is *flat*: every
-/// `assets/ui` entry is a bare filename, and every chain entry is a full internal path
-/// (`Interface\FrameXML\ContainerFrame.xml`). `manifest::tests` pins both halves so the day
-/// somebody adds a subdirectory to `assets/ui` is a failing test rather than a file that silently
-/// stops loading.
+/// Whether a manifest entry comes off the player's chain: it has a path separator. Decidable
+/// because `assets/ui` is flat, which `manifest::tests` pins.
 pub(super) fn is_chain_entry(entry: &str) -> bool {
     entry.contains('\\') || entry.contains('/')
 }
 
-/// The reference interface as an [`Addon`] whose files come off the chain — the peer of
-/// [`Addon::builtin`], and the thing [`super::manifest`] hands a manifest's chain entries to.
-///
-/// `files` are full chain paths, so the addon's prefix is empty and each entry is already in its
-/// source's path space.
+/// The stock interface as an [`Addon`] over the chain; `files` are full chain paths.
 pub(super) fn addon(files: Vec<String>) -> Addon {
     Addon::new(
         NAME.to_string(),
@@ -102,11 +37,8 @@ pub(super) fn addon(files: Vec<String>) -> Addon {
     )
 }
 
-/// One file's bytes, read off the player's installed patch chain by internal path.
-///
-/// **Bytes, not text** (1193): a `.lua` chunk goes to Lua as it sits in the archive, and only an
-/// XML parse decodes — a `read_to_string` here would not make a cp1252 file lose a glyph, it would
-/// make the file *not exist*.
+/// One file's bytes off the player's patch chain, by internal path. Bytes, not a string: Lua
+/// takes a chunk as stored, and a cp1252 file is not valid UTF-8.
 pub(super) fn read(req: &str) -> Option<Vec<u8>> {
     let chain = chain()?;
     match chain.read(req) {
@@ -118,12 +50,9 @@ pub(super) fn read(req: &str) -> Option<Vec<u8>> {
     }
 }
 
-/// The player's patch chain, opened once per process and cached.
-///
-/// Cached because the addon survey stands up 218 VMs and this would otherwise be per-VM work. A
-/// process-local chain rather than the one [`benilla_assets`] holds: the interface loads from
-/// places that have no Bevy world to ask (the tests, the addon harness, a bare `UiScript`), and
-/// `Chain`'s reads are `&self` and lock-free, so a second handle costs the mount and nothing else.
+/// The player's patch chain, opened once per process and shared by every VM. Process-local, not
+/// the one [`benilla_assets`] holds: tests, the addon harness and a bare `UiScript` load the
+/// interface with no Bevy world to ask.
 fn chain() -> Option<&'static Chain> {
     static CHAIN: OnceLock<Option<Chain>> = OnceLock::new();
     CHAIN
@@ -156,40 +85,16 @@ fn is_word(c: char) -> bool {
 mod tests {
     use benilla_ui::script::UiScript;
 
-    /// **Every saved UI global we declare defaults to what the reference's own file declares**
-    /// — the FrameXML half of the "a default is the reference's" standard that
-    /// `cvars::REGISTERED`'s [`crate::cvars::Reference`] column holds for the CVar half.
-    ///
-    /// Two stores carry a player's settings in this client and the standard has to cover both.
-    /// CVars are the engine's, and their table now states the reference's value per row. The other
-    /// store is FrameXML's own: the `RegisterForSave`'d globals — *Instant Quest Text*, *Show Buff
-    /// Durations*, *Lock Action Bar* — whose default is a plain assignment in whichever of our
-    /// `assets/ui` files still owns that window. Nothing tied those to anything, and two had
-    /// drifted: `QUEST_FADING_DISABLE` and `SHOW_BUFF_DURATIONS` both shipped `"1"` where 1.12
-    /// ships `"0"`, each a reasonable call on its own day (2026-07-17 and 0255) and neither
-    /// visible as a *divergence from the reference* without opening its file.
-    ///
-    /// The reference's declarations are read off the player's own chain rather than copied here,
-    /// so this cannot rot the way a transcribed list would: `UIOptionsFrame.lua`'s
-    /// `UIOptionsFrame_Init` assigns every options-panel uvar its factory value, and that file is
-    /// the authority. A name we persist that the reference declares **somewhere else**
-    /// (`SHOW_OFFLINE_GUILD_MEMBERS` lives in `FriendsFrame.lua`) or not at all (our own
-    /// `TRAINER_FILTER_*`) is reported as uncovered, not failed — and the covered count is
-    /// asserted, so the day our last options window migrates and this covers nothing, it says so
-    /// instead of passing vacuously.
-    ///
-    /// **This test retires as `assets/ui` does** (1751): a migrated window runs the reference's
-    /// own file, whose assignment IS the reference's value, and the question stops existing.
-    ///
-    /// Skips without client data, like every other test that reads the install.
+    /// Every `RegisterForSave`'d UI global defaults to the value the reference's own
+    /// `UIOptionsFrame_Init` assigns, the FrameXML half of the rule `cvars::REGISTERED` holds for
+    /// CVars. A name the reference declares elsewhere (`SHOW_OFFLINE_GUILD_MEMBERS`,
+    /// `FriendsFrame.lua:13`) is uncovered, not failed; the covered count is asserted.
     #[test]
     fn our_saved_ui_globals_default_to_the_references_own_values() {
         let _data = benilla_formats::wow_data_or_skip!();
 
-        // The reference's own factory assignments, parsed out of the file that makes them. Only
-        // `NAME = "literal"` / `NAME = number` at the head of a line — an assignment guarded by an
-        // `if`, or one that copies another global, is not a factory default and must not be read
-        // as one.
+        // Only `NAME = "literal"` or `NAME = number` at a line's head: a guarded or copied
+        // assignment is not a factory default.
         let src = String::from_utf8_lossy(
             &super::read("Interface\\FrameXML\\UIOptionsFrame.lua")
                 .expect("the reference's own UIOptionsFrame.lua"),
@@ -203,12 +108,12 @@ mod tests {
             };
             let name = name.trim();
             if name.is_empty() || !name.chars().all(|c| super::is_word(c) && !c.is_lowercase()) {
-                continue; // a uvar is SHOUTED; anything else is a local, a field or a comparison
+                continue; // a uvar is upper case; anything else is a local, a field or a comparison
             }
             let value = value.trim().trim_end_matches(';').trim();
             let literal = value.strip_prefix('"').and_then(|v| v.strip_suffix('"'));
             let Some(v) = literal.or_else(|| value.parse::<i64>().ok().map(|_| value)) else {
-                continue; // not a literal — an expression, so not a factory default
+                continue; // an expression, not a factory default
             };
             theirs.insert(name.to_string(), v.to_string());
         }
@@ -231,8 +136,8 @@ mod tests {
                 uncovered.push(name);
                 continue;
             };
-            // Through `tostring`, because the reference is inconsistent about it itself:
-            // `AUTO_QUEST_WATCH` is declared as the number 1 and every other uvar as a string.
+            // Through `tostring`: the reference declares `AUTO_QUEST_WATCH` as the number 1
+            // (`UIOptionsFrame.lua:122`) and the rest as strings.
             let got = s
                 .eval::<String>(&format!("return tostring({name})"))
                 .unwrap_or_else(|e| panic!("{name} is registered for save but unreadable: {e}"));
@@ -256,20 +161,8 @@ mod tests {
         );
     }
 
-    /// Strip what is not code, before any call census over a FrameXML file.
-    ///
-    /// Both `Name(` and `:Name(` counted calls inside comments until decision 1800: the round that
-    /// built `PickupMerchantItem` also asked about `ShowInventorySellCursor`, which
-    /// [`chain_gap_report`] had named as `PaperDollFrame.xml`'s last engine gap — and the answer
-    /// was that stock `PaperDollFrame.lua:754-756` has the call **commented out**, all three
-    /// lines. A real binding, never called, blocking a window that was not blocked.
-    ///
-    /// Line-based and deliberately simple: Lua `--` to end of line (but not `--[[`, which opens a
-    /// block), Lua `--[[ … ]]` blocks, and XML `<!-- … -->` blocks. It does not track string
-    /// literals, so a `"--"` inside a string truncates that line — which can only ever cause an
-    /// UNDER-report, the safe direction for every reader of it.
-    /// Blank the contents of every Lua string literal (`"…"`, `'…'`, `[[…]]`), keeping the quotes,
-    /// so a pattern like `"/([^%s]+)%s(.*)"` cannot read as a call to `s`.
+    /// Blanks the contents of every Lua string literal (`"…"`, `'…'`, `[[…]]`), keeping the
+    /// quotes, so a pattern like `"/([^%s]+)%s(.*)"` cannot read as a call to `s`.
     fn strip_strings(text: &str) -> String {
         let b: Vec<char> = text.chars().collect();
         let mut out = String::with_capacity(text.len());
@@ -348,7 +241,9 @@ mod tests {
                                 in_lua_block = true;
                                 rest = &rest[l + 4..];
                             } else {
-                                // A plain `--` comment runs to end of line.
+                                // A plain `--` comment runs to end of line. Strings are not
+                                // tracked, so a `"--"` in one also cuts the line: this can
+                                // hide a call, never invent one.
                                 rest = "";
                                 break;
                             }
@@ -371,14 +266,8 @@ mod tests {
         out
     }
 
-    /// **A chain entry really loads off the player's install, and order really decides.**
-    ///
-    /// The two halves of this module's rule, asserted rather than described, because nothing else
-    /// would notice if either flipped: a chain entry that silently resolved to nothing would leave
-    /// its globals nil (the failure mode is a window that does not exist, not an error), and the
-    /// collision direction is invisible until an addon calls the wrong body.
-    ///
-    /// Skips without client data, like every other test that reads the install.
+    /// A chain entry that resolved to nothing would leave its globals nil with no error, and a
+    /// collision's winner is invisible until an addon calls the wrong body; both are asserted.
     #[test]
     fn a_chain_entry_loads_and_the_later_line_owns_the_collision() {
         let _data = benilla_formats::wow_data_or_skip!();
@@ -389,8 +278,7 @@ mod tests {
         let failures = super::super::manifest::load_default_ui(&s);
         assert!(failures.is_empty(), "the default UI: {failures:#?}");
 
-        // The item-button family the `ContainerFrame.lua` line is there for — nothing but the
-        // sourced file defines these.
+        // Only the stock `ContainerFrame.lua` defines these.
         for name in [
             "ContainerFrameItemButton_OnEnter",
             "ContainerFrameItemButton_OnClick",
@@ -404,22 +292,16 @@ mod tests {
                 "{name} must come from the sourced reference file"
             );
         }
-        // …and its constants, which the corpus reads directly.
+        // Its constants, which addons read directly.
         assert_eq!(s.eval::<i64>("return NUM_BAG_FRAMES").unwrap(), 4);
         assert_eq!(s.eval::<i64>("return NUM_CONTAINER_FRAMES").unwrap(), 12);
-        // `PaperDollFrame.lua` used to be a manifest line of its own, sourced far above everything
-        // for exactly this family. It arrives through stock `PaperDollFrame.xml`'s own
-        // `<Script file=>` now, at the character window's position — so this
-        // assertion also proves a chain `.xml` really brings its `.lua`.
+        // `PaperDollFrame.lua` arrives through `PaperDollFrame.xml`'s `<Script file=>`: a chain
+        // `.xml` brings its `.lua`.
         assert!(s
             .eval::<bool>("return type(PaperDollItemSlotButton_OnLoad) == \"function\"")
             .unwrap());
 
-        // **The 18-name overlap this test used to assert the winner of is GONE.** Our
-        // `CharacterFrame.xml` redefined 18 of `PaperDollFrame.lua`'s 29 functions and won them all
-        // by loading later; that file is deleted and the reference's own bodies are the only ones.
-        // The check that replaces it is the swap's, not the collision's: the live bodies are the
-        // reference's, and ours are not merely shadowed but absent.
+        // The character sheet runs the stock bodies alone, with no `BenillaPaperDollSlot_OnLoad`.
         assert!(
             s.eval::<bool>(
                 "return type(PaperDollFrame_SetLevel) == \"function\" \
@@ -431,11 +313,8 @@ mod tests {
             "the character sheet's bodies must be the reference's own now"
         );
 
-        // Order still decides, and it is still the whole rule — so it is asserted directly rather
-        // than through whichever window happens to collide this month. Two chunks, the same name,
-        // and the later one stands; `publish_global`'s non-overwriting rule (`0x701bd0`) applies to
-        // FRAMES, never to a plain Lua global, and confusing the two has produced confident wrong
-        // diagnoses before.
+        // Of two definitions of a plain Lua global the later stands; `publish_global`'s
+        // non-overwriting rule (`0x701bd0`) applies to frames only.
         s.run("function _order_probe() return 1 end").unwrap();
         s.run("function _order_probe() return 2 end").unwrap();
         assert_eq!(
@@ -446,67 +325,19 @@ mod tests {
         assert!(s.errors().is_empty(), "{:#?}", s.errors());
     }
 
-    /// **The migration readiness probe** — which stock FrameXML file could be swapped in *today*,
-    /// asked of the running loader rather than guessed from a source scan.
-    ///
-    /// ```text
-    /// cargo test -p benilla-app --lib chain_readiness_report -- --ignored --nocapture
-    /// ```
-    ///
-    /// 1751 is a long migration — 88 manifest entries, three of them chain entries at the time this
-    /// was written — and the expensive question at every step is *which window is ready*. Picking by
-    /// eye means reading a stock file, listing the globals it calls, and grepping each one; that is
-    /// slow, and it is wrong in both directions. It over-reports (a name that exists in a comment
-    /// greps as present — `framexml-file-demand.py` states that crudeness about itself) and it
-    /// under-reports the things a grep cannot see at all: an XML element type the loader does not
-    /// build, a script handler nothing dispatches, an attribute silently dropped (1739 measured 151
-    /// of those), a template inherited before its definer.
-    ///
-    /// So the probe does not analyse. It **loads the file** — the whole shipped manifest first, into
-    /// a fresh VM, exactly as a real run does, and then the candidate off the chain on top — and
-    /// reports what the loader and the VM actually said. That is ground truth: the same machinery
-    /// that would run it for real, answering the same question, with no model of the engine in
-    /// between that could be out of date.
-    ///
-    /// **What a clean line does and does not mean.** It means the file *loads* — every element
-    /// built, every template resolved, every load-time body ran without raising. It does not mean
-    /// the window *works*: a verb that only a click reaches is not exercised by loading, and neither
-    /// is anything behind an event. Clean is "start here", not "done"; the window's own test module
-    /// and the director's eye are what finish it (§7).
-    ///
-    /// **Loading on top of the manifest, not instead of it**, because that is the position a
-    /// migrated file occupies — every template it inherits is declared by an earlier entry, and
-    /// asking whether `ContainerFrame.xml` loads *alone* only measures that it has predecessors.
-    ///
-    /// ## The false positive this method has, and how to recognise it
-    ///
-    /// A candidate whose frame NAMES our own shipped file already owns produces failures that are
-    /// artefacts of the probe, not of the window. `publish_global` is deliberately non-overwriting
-    /// (`0x701bd0`), so the second frame to claim a name gets a wrapper that `_G` never points at —
-    /// and any reference body using the `getglobal(this:GetName())` idiom then reads a DIFFERENT
-    /// table than the `this` it just wrote to.
-    ///
-    /// That is exactly what the money frames look like: stock `TradeFrame.xml` reports
-    /// `MoneyFrame_Update: attempt to index local 'info'`, because `MoneyFrame_SetType` set
-    /// `this.info` on the new frame and `MoneyFrame_Update` read it back off OUR TradeFrame's
-    /// same-named one. Delete our counterpart — which is what migrating the window does — and the
-    /// collision goes with it. The same shape covers `MailFrame` and `QuestLogFrame`.
-    ///
-    /// **So a failure inside a name our own manifest also declares is suspect and has to be
-    /// re-measured with the counterpart removed.** A failure naming something nothing of ours
-    /// declares (`CreateFrame: unknown frame type 'LootButton'`, `attempt to call global
-    /// 'UnitFrame_Initialize'`) is real. The probe does not tell the two apart for you; the
-    /// question to ask of every line is "does our tree already own this name?".
-    ///
-    /// Ignored because it stands up ~90 fresh VMs and each one loads the entire interface; it is an
-    /// instrument you run when choosing the next window, not a gate.
+    /// Which unmigrated stock FrameXML window loads clean on top of the shipped manifest, each
+    /// asked of the real loader in a fresh VM. Clean means it loads, not that it works: nothing
+    /// behind a click or an event runs. A failure in a frame name a file of ours also declares is
+    /// suspect: `publish_global` does not overwrite (`0x701bd0`), so `_G` keeps our frame while
+    /// the stock handlers write to theirs; re-measure with ours removed. Run with `--ignored
+    /// --nocapture`.
     #[test]
     #[ignore = "instrument: run by hand when choosing the next window to migrate"]
     fn chain_readiness_report() {
         let _data = benilla_formats::wow_data_or_skip!();
 
-        // The reference's OWN order, off the chain — never a hand-kept list here. A file's position
-        // in it is also the answer to "where does its manifest line go", so the report prints it.
+        // The stock toc's order, off the chain; a file's position there is where its manifest line
+        // goes, so the report prints it.
         let toc = String::from_utf8_lossy(
             &super::read("Interface\\FrameXML\\FrameXML.toc").expect("the reference's own toc"),
         )
@@ -565,8 +396,7 @@ mod tests {
                 clean.push((pos, name.clone()));
                 println!("{pos:>3}  {name:<32} CLEAN");
             } else {
-                // One line per distinct complaint, deduped and truncated: the same missing verb
-                // reported by twelve frames is one fact, and the tail of a Lua traceback is noise.
+                // One line per distinct complaint: a verb twelve frames miss is one fact.
                 let mut seen: Vec<String> = Vec::new();
                 for e in said {
                     let one = e.lines().next().unwrap_or("").trim().to_string();
@@ -595,97 +425,24 @@ mod tests {
         }
     }
 
-    /// **The readiness probe's companion: not "does it load" but "what would I have to BUILD".**
+    /// What each unmigrated stock window would cost to build. Its calls (the `.xml` and every
+    /// `.lua` it sources, comments stripped), minus what it defines and what the loaded interface
+    /// has, split against the reference's `_G` (`reference/1.12-globals.tsv`):
     ///
-    /// ```text
-    /// cargo test -p benilla-app --lib chain_gap_report -- --ignored --nocapture
-    /// ```
+    /// * `engine`: a reference engine binding we lack, the real work.
+    /// * `fx`: a FrameXML function, which arrives with the file named beside it; a `<?>` is
+    ///   usually a LoadOnDemand `Blizzard_*` addon's, which the chain reads out of `patch.MPQ`.
+    /// * `method`: a `:Name(` call no widget of ours answers to, whatever the receiver.
+    /// * `LOAD`: what loading the stock file on top of the manifest raised.
     ///
-    /// [`chain_readiness_report`] answers one question well and is silent on the next one. A window
-    /// it calls CLEAN can still be a week of work (its verbs are only reached by a click, which
-    /// loading never makes), and a window it reports failing may be blocked on a single name. When
-    /// the migration ran out of drop-in windows, "which of these is actually cheap" became the
-    /// question, and the probe could not answer it.
-    ///
-    /// So this one reads the calls instead of running them. For every stock window not yet in the
-    /// manifest it collects the `Name(` sites across the file and its `.lua`, subtracts what the
-    /// file defines itself and what this client already has, and splits the remainder against
-    /// **the reference's own `_G`** (`reference/1.12-globals.tsv`, captured from the running
-    /// client):
-    ///
-    /// * `engine=` — the reference has it as an engine binding and we do not. **Real work**, and
-    ///   the only column worth planning from.
-    /// * `fx=` — the reference has it as a FrameXML function. Cheap by comparison: it lives in
-    ///   some stock file, and the name beside it says which, so sourcing that file may be the whole
-    ///   fix. `GetText` looked like an engine binding for an hour and turned out to be
-    ///   `LocaleProperties.lua`; this column is that lesson, mechanised.
-    /// * A name in NEITHER is dropped, and that is the load-bearing filter: 1.12's widget methods
-    ///   do not live in `_G`, so `SetText(` and `Hide(` and their two hundred siblings would
-    ///   otherwise drown the report. Anything the reference's own global table does not carry is
-    ///   not a global.
-    ///
-    /// **What "already has" means, and why it is asked of a LOADED VM.** An earlier hand-rolled
-    /// version of this compared against a bare `UiScript::new()`, which is the ENGINE surface
-    /// alone — so every FrameXML function our own interface defines (`ShowUIPanel`,
-    /// `StaticPopup_Visible`, `UpdateMicroButtons`, …) read as missing, and the `fx=` column was
-    /// mostly noise. Here the manifest is loaded first and `_G` is read after, so the answer is
-    /// what this client *actually* answers to.
-    ///
-    /// **Four columns, because a window can be blocked four ways and this could once see one.**
-    /// `engine=` and `fx=` read bare `Name(` globals. `method=` reads `:Name(` calls against the
-    /// method surface this engine actually exposes. `LOAD:` is the stock file loaded on top of our
-    /// manifest in a fresh VM — the same pass [`chain_readiness_report`] makes, run here so the
-    /// answer is in one table.
-    ///
-    /// That last one is 1801, and it is the same mistake as the third column one step later.
-    /// `<LootButton>` and `<TaxiRouteFrame>` are element TAGS: no census of `Name(` or `:Name(`
-    /// can reach them, so `LootFrame.xml` sat in this report's "needs NO engine work" list while
-    /// the readiness probe was printing `4 issue(s)` for it in a different table. Both tables were
-    /// right. Joining them was left to whoever read them, and I read it wrong.
-    ///
-    /// Until 1798 the method sites were **silently dropped**: a name in neither the engine nor the
-    /// FrameXML half of `1.12-globals.tsv` was assumed to be a widget method and skipped, on the
-    /// reasoning that widget methods are not in `_G`. True, and it meant the report could not see
-    /// a widget method we had *not built*. `MerchantFrame.xml` read `0 engine` and
-    /// [`chain_readiness_report`] read CLEAN while the stock row's `<OnEnter>` called
-    /// `ShoppingTooltip1:SetMerchantCompareItem(...)`, which this engine did not have then (1802
-    /// built it) — so the file loaded, every check passed, and hovering a vendor row would have
-    /// raised in play. Both instruments were right about what they measure. Neither measured the
-    /// window.
-    ///
-    /// **A remaining `<?>` in the `fx=` column is usually a LoadOnDemand addon**, not something to
-    /// build. `ClassTrainerFrame_Show`, `CraftFrame_Show`, `MacroFrame_SaveMacro`,
-    /// `InspectFrame_Show`, `TalentFrame_Toggle` and their siblings live in `Blizzard_*` addons, so
-    /// no amount of scanning the extracted **FrameXML** finds them. They arrive when that addon does,
-    /// exactly like an `fx=` name with a home.
-    ///
-    /// **They are NOT unreachable, and this doc used to say they were.** It claimed the install
-    /// ships them "packed as `.pub`", which is a misreading of the loose
-    /// `Interface\AddOns\<name>\` folder — that really does hold only a `.pub` signature file.
-    /// The addon's real `.xml`/`.lua`/`.toc` are inside **`patch.MPQ`**, and `Chain` mounts MPQs, so
-    /// `reference_ui::read` reaches them and `is_chain_entry` accepts the path. Verified by reading
-    /// `Interface\AddOns\Blizzard_MacroUI\Blizzard_MacroUI.xml` and `Blizzard_InspectUI`'s twin
-    /// straight out of the archive. Every one of those windows is buildable today.
-    ///
-    /// One crudeness remains, stated because it decides how to read the output: neither scan can
-    /// see a name reached through `getglobal`, so both can under-report.
-    ///
-    /// They no longer over-report on comments. Both counted commented-out calls until 1800 — 1.12
-    /// comments out whole blocks, and `PaperDollFrame.lua:754-756`'s `ShowInventorySellCursor` is
-    /// three commented lines that this report named as that window's last engine gap. A real
-    /// binding, never called, blocking a window that was not blocked. [`strip_comments`] takes
-    /// Lua `--`/`--[[ ]]` and XML `<!-- -->` out first; it does not track string literals, so it
-    /// can only ever under-report, which is the safe direction here. The `method=` column is also receiver-blind: it asks
-    /// "does ANY widget type answer to this name", not "does *this* receiver", so a method that
-    /// exists on the wrong type still reads as present. It is for ranking work, not for proving a
-    /// window done — [`chain_readiness_report`] and the window's own tests are that, and the
-    /// paragraph above is what those two are worth on their own.
+    /// A name in neither half of the reference's `_G` is dropped: 1.12's widget methods are not
+    /// globals. A name reached through `getglobal` is invisible. Run with `--ignored --nocapture`.
     #[test]
     #[ignore = "instrument: run by hand when choosing what to build next"]
     fn chain_gap_report() {
         let _data = benilla_formats::wow_data_or_skip!();
 
-        // The reference's own global table, with each name's origin.
+        // The reference's `_G`, each name with its origin (`engine`, `framexml`, `lua`).
         let tsv = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../reference/1.12-globals.tsv"
@@ -699,8 +456,7 @@ mod tests {
             }
         }
 
-        // What this client answers to with its whole interface up — engine bindings AND every
-        // global our own FrameXML defines.
+        // What this client answers to with the whole interface up, engine and FrameXML alike.
         let mut s = UiScript::new().expect("VM");
         s.set_screen_size(1024.0, 768.0);
         seat_a_player(&mut s);
@@ -714,13 +470,13 @@ mod tests {
             .into_iter()
             .collect();
 
-        // `:Name(` — a method call, receiver unknown.
+        // `:Name(`: a method call, receiver unknown.
         let called_methods = |text: &str| -> std::collections::HashSet<String> {
             let b: Vec<char> = text.chars().collect();
             let mut out = std::collections::HashSet::new();
             let mut i = 1;
             while i < b.len() {
-                // `::` is not a method call, and neither is a `:` inside a word.
+                // `::` is not a method call.
                 if b[i - 1] == ':' && (i < 2 || b[i - 2] != ':') && b[i].is_ascii_alphabetic() {
                     let mut j = i;
                     while j < b.len() && super::is_word(b[j]) {
@@ -741,11 +497,8 @@ mod tests {
             out
         };
 
-        // Whether this engine's widgets answer to a method name — **asked**, not enumerated. A
-        // widget's methods come through an `__index` FUNCTION, so there is no table to walk; the
-        // only way to know is to look the name up on a real widget. Receiver-blind by design (a
-        // `:Name(` site does not say what it is called on), so this answers "does ANY widget type
-        // answer to this name", which is the question that catches a method we never built.
+        // Asked of a real widget of each type, not enumerated: a widget's methods come through an
+        // `__index` function, so there is no table to walk.
         let answers = |s: &UiScript, names: &[String]| -> std::collections::HashSet<String> {
             let list = names
                 .iter()
@@ -788,8 +541,7 @@ mod tests {
             .into_iter()
             .collect()
         };
-        // The instrument's own tripwire: if the probe stops working, the `method=` column goes
-        // silently empty — which is precisely the failure mode 1798 exists to end.
+        // A broken probe would empty the `method` column silently.
         let control: Vec<String> = ["SetPoint", "SetMerchantItem", "BenillaNotAMethod"]
             .iter()
             .map(|s| (*s).to_string())
@@ -821,9 +573,7 @@ mod tests {
             .map(str::to_string)
             .collect();
 
-        // The `.lua` files a stock `.xml` SOURCES through `<Script file=>`. A window's own sourced
-        // code is part of the window: its functions are not gaps, and they are where most of its
-        // `fx=` names would otherwise be looked for.
+        // The `.lua` files a stock `.xml` sources through `<Script file=>`: the window's own code.
         let sourced_luas = |xml_leaf: &str| -> Vec<String> {
             let Some(b) = super::read(&format!("Interface\\FrameXML\\{xml_leaf}")) else {
                 return Vec::new();
@@ -849,15 +599,8 @@ mod tests {
             out
         };
 
-        // `function Name(` across the whole corpus, so an fx gap can name the file that holds it.
-        //
-        // Each toc `.xml` is scanned together with **every `.lua` it SOURCES**, not just the
-        // `X.lua` its own name suggests. Guessing missed the common case: `ActionBarFrame.xml`
-        // sources `ActionButton.lua`, there is no `ActionBarFrame.lua`, and `ActionButton.lua` is
-        // not a toc line of its own — so the whole `ActionButton_*` family read `<?>`, which says
-        // "nothing defines this" about five functions a stock file defines and brings with it.
-        // The difference matters for how the column is read: a name with a home ARRIVES when that
-        // file does; a `<?>` is something to build.
+        // `function Name(` in every stock `.xml` and each `.lua` it sources (`ActionBarFrame.xml`
+        // sources `ActionButton.lua`), so an `fx` gap can name the file that holds it.
         let mut home: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         for f in &stock {
             let mut cands = vec![f.clone(), format!("{}.lua", &f[..f.len() - 4])];
@@ -885,11 +628,8 @@ mod tests {
             let mut out = std::collections::HashSet::new();
             let mut i = 0;
             while i < b.len() {
-                // A GLOBAL call: uppercase, not inside a word, and **not preceded by `.` or
-                // `:`**. Without that last test `info.UpdateFunc(` and `dialog.OnAccept(` read as
-                // globals — `.` is not a word character — and a dozen `StaticPopupDialogs` /
-                // `MoneyTypeInfo` FIELD names showed up as `<?>` gaps. `:` belongs to the method
-                // scan below; `.` belongs to nobody, since a field call arrives with its table.
+                // A global call: capitalised, not inside a word, and not after `.` (a field call,
+                // which arrives with its table) or `:` (the method scan's).
                 let after_field = i > 0 && (b[i - 1] == '.' || b[i - 1] == ':');
                 if b[i].is_ascii_uppercase()
                     && !after_field
@@ -928,10 +668,7 @@ mod tests {
             if migrated.contains(f) {
                 continue;
             }
-            // The window IS its xml plus every `.lua` it sources — `ActionBarFrame.xml` sources
-            // `ActionButton.lua`, and the whole `ActionButton_*` family is that window's own code,
-            // not a dependency on somebody else's. Gathering only `X.xml` + `X.lua` reported five
-            // of its own functions as gaps.
+            // The window is its `.xml` plus every `.lua` it sources.
             let mut text = String::new();
             let mut parts = vec![f.clone(), format!("{}.lua", &f[..f.len() - 4])];
             parts.extend(sourced_luas(f));
@@ -941,16 +678,8 @@ mod tests {
                 }
             }
             let text = strip_comments(&text);
-            // …and the names the file declares as LOCALS, which a bare call resolves to. The
-            // idiom that needs it is the reference's own dispatch shape:
-            //
-            //     local OnAccept = StaticPopupDialogs[dialog.which].OnAccept
-            //     if ( OnAccept ) then dontHide = OnAccept(dialog.data, dialog.data2) end
-            //
-            // The call is bare, so the global scan sees `OnAccept(` and reports a gap for a name
-            // that is a table field one line up. `OnAccept`, `OnCancel`, `OnShow`, `OnHide` and
-            // the three `EditBoxOn*` all arrived that way. A `local` declaration in the same file
-            // is proof enough: nothing else could be meant.
+            // A bare call can name a local: `StaticPopup.lua:1853` reads a dialog's `OnAccept`
+            // into one and calls it.
             let locals: std::collections::HashSet<String> = text
                 .lines()
                 .filter_map(|l| l.trim_start().strip_prefix("local "))
@@ -983,35 +712,13 @@ mod tests {
                         let h = home.get(&c).cloned().unwrap_or_else(|| "?".into());
                         fx.push(format!("{c}<{h}>"));
                     }
-                    None => {} // not a global at all — the `:Name(` scan below is what sees it
+                    None => {} // not a global; the `:Name(` scan below sees it
                 }
             }
-            // The method half. `own`/`have` do not apply: a method is never a global, so the only
-            // question is whether this engine's widgets answer to the name.
-            // …and does it LOAD? A window can be blocked on a global, on a widget method, or on a
-            // widget TYPE — and the two scans above see only the first two. `<LootButton>` and
-            // `<TaxiRouteFrame>` are element tags: nothing in a `Name(` or `:Name(` census can
-            // reach them, and `LootFrame.xml` sat in this report's "needs NO engine work" list
-            // while `chain_readiness_report` was printing `4 issue(s)` for it in another table.
-            //
-            // Both tables were right. Joining them was left to whoever read them, and I got it
-            // wrong (1801). So this one runs the load itself — the same fresh-VM-plus-manifest
-            // pass the readiness probe does — and reports it in the same row.
-            // **A `LOAD:` line for a window we ALSO ship is suspect**, and the reason is the same
-            // one `chain_readiness_report` carries: `publish_global` is non-overwriting
-            // (`0x701bd0`), so loading the stock file on top of our identically-named one leaves
-            // every colliding frame's global pointing at OUR frame while the stock file's handlers
-            // run against THEIRS. A field set on `this` in an OnLoad is then invisible to
-            // `getglobal(name)`, and the failure looks like a bug in whatever read it back.
-            //
-            // Worked example, because it cost an hour: stock `TradeFrame.xml` reported
-            // `MoneyFrame.xml:525: attempt to index local 'info'`. Nothing was wrong with our
-            // MoneyFrame — `MoneyFrame_SetType` had set `this.info` correctly, and
-            // `getglobal(this:GetName())` answered a DIFFERENT table, because our own
-            // `TradeFrame.xml` already owned `TradeRecipientMoneyFrame`.
-            //
-            // So the column is marked, not trusted. A row whose file we do not ship is a real
-            // load failure; a row whose file we do ship needs the swap attempted to know.
+            // A method is never a global, so `own` and `have` do not apply to it. The load pass
+            // sees what neither census can, a missing widget type (`<LootButton>`). A window we
+            // also ship is suspect there: `publish_global` does not overwrite (`0x701bd0`), so
+            // `_G` keeps our frame while the stock handlers write to theirs.
             let ours_too = !migrated.contains(f)
                 && std::fs::metadata(
                     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1040,7 +747,7 @@ mod tests {
             let known = answers(&s, &asked);
             let mut meth: Vec<String> = asked.into_iter().filter(|m| !known.contains(m)).collect();
             meth.sort();
-            // A suspect LOAD line does not count as a blocker — it is a question, not an answer.
+            // A suspect LOAD line is not counted as a blocker.
             let load_blockers = if ours_too { 0 } else { loads.len() };
             let loads: Vec<String> = loads
                 .into_iter()
@@ -1079,10 +786,8 @@ mod tests {
                 println!("            fx:     {}", fx.join(" "));
             }
         }
-        // "Free" means free of ALL THREE. A window blocked on a widget method, or on a widget type
-        // its XML declares, is exactly as blocked as one missing a global — and the `fx=` column
-        // is deliberately NOT counted, because a FrameXML function another stock file defines
-        // arrives with that file rather than needing to be built.
+        // Unblocked: no missing global, method or load. `fx` names arrive with their own file, so
+        // they do not count.
         let free: Vec<&String> = rows.iter().filter(|r| r.0 == 0).map(|r| &r.1).collect();
         println!(
             "\n=== {} windows are UNBLOCKED — no missing global, no missing method, and the \
@@ -1094,59 +799,16 @@ mod tests {
         }
     }
 
-    /// **Every function of ours that shadows one the player's own chain already defines.**
-    ///
-    /// A window that reads unblocked in [`chain_gap_report`] can still fail to swap, and the third
-    /// reason found (after a missing widget type and a missing widget method) is this one: our
-    /// `assets/ui` file defines a global the reference defines too, our manifest loads a CHAIN file
-    /// that also defines it, and whichever lands second wins. `PartyFrame.xml` was the worked
-    /// example, and it is worth keeping in the past tense because it is what this check was built
-    /// to catch: our `UnitFrames.xml` redefined `UnitFrame_OnEvent`/`UnitFrame_Update` nine
-    /// manifest lines after stock `UnitFrame.lua` defined them, so a stock party row built by the
-    /// reference's own `UnitFrame_Initialize` called OUR update and indexed a field its rows do not
-    /// carry. It loads clean and raises on the first event.
-    ///
-    /// Shadowing is not automatically wrong — where we ship a file the reference would have
-    /// shipped, defining its names is the whole job. It is wrong precisely when **both** copies
-    /// load, which is what this reports: a name ours defines that a chain entry in our own
-    /// manifest also defines.
-    ///
-    /// **Two halves, both exact, because both sides DECLARE rather than mention.** The function
-    /// half is above. The frame half asks the other question a swap has to answer: *can this stock
-    /// window be added at all* — which is different from "does it load", because a stock window we
-    /// do not ship under its own name usually has a counterpart of ours under a different one, and
-    /// both would declare the same frames.
-    ///
-    /// That half used to double as the map nothing else held — `FloatingChatFrame.xml` was our
-    /// `ChatFrame.xml`, `MainMenuBarMicroButtons.xml` our `MicroMenu.xml`, `StaticPopup.xml` our
-    /// `UiPanels.xml`'s dialog half, `PlayerFrame.xml`/`TargetFrame.xml`/`PetFrame.xml` our one
-    /// `UnitFrames.xml`. Every one of those is the reference's own file now (1751; the micro row
-    /// last, 1987), so the frame half names nothing today. It stays because a stock window
-    /// declaring a frame one of ours still holds is the first thing a swap has to rule out —
-    /// such a pair can load individually and cannot load side by side.
-    ///
-    /// Run it before attempting a swap. It predicts which ones will fail without attempting them.
+    /// Every function a file of ours defines that a chain entry also defines, and which one stands
+    /// by load order; every frame name a stock window we do not load shares with a file of ours
+    /// (such a pair cannot load side by side); every function of ours whose parameter count
+    /// differs from the reference's. Run before attempting a window swap.
     #[test]
     #[ignore = "instrument: run by hand before attempting a window swap"]
     fn shadowed_reference_functions() {
         let _data = benilla_formats::wow_data_or_skip!();
 
-        // The FRAME NAMES a document declares — `name="X"` on a widget element, minus the
-        // `$parent`-relative and `virtual` template forms, which name nothing globally.
-        //
-        // The sibling of the function check below and exactly as exact, because both sides
-        // DECLARE rather than mention. This is the version of the "frame names" idea that works:
-        // an earlier attempt scanned names a file *referenced* and was pure noise (it found `UI`
-        // and missed the case it was built for), because a reference can live in any file. A
-        // declaration cannot.
-        //
-        // What it catches, in the case it was built for: our `UnitFrames.xml` declared `PetFrame`,
-        // and so does the stock `PetFrame.xml`, so adding that stock file alongside ours would have
-        // declared the name twice. (That pair is resolved — ours is deleted — but the check is not
-        // about those two files; every window still ahead of 1751 has the same collision waiting.)
-        // Several stock windows we do not ship under their own name have an equivalent of ours
-        // under a different one, and `chain_gap_report` calls every one of them unblocked —
-        // truthfully, because the stock file WOULD load; it just cannot load *beside* ours.
+        // Every `name="X"` a document declares, minus the `$parent`-relative ones.
         let declares = |text: &str| -> Vec<String> {
             let mut out = Vec::new();
             for (i, _) in text.match_indices("name=\"") {
@@ -1156,32 +818,16 @@ mod tests {
                 if name.starts_with('$') || name.is_empty() {
                     continue;
                 }
-                // A `virtual="true"` element is a template: its name is a registry key, not a
-                // frame, and two files may legitimately hold the same template name only if one
-                // replaces the other — which is the same question, so they are reported too.
+                // A template's name is a registry key, not a frame, but two files holding one is
+                // the same collision, so templates count too.
                 out.push(name.to_string());
             }
             out
         };
 
-        // `function Name(a, b, c)` → the name and its PARAMETER LIST. Arity is the third way our
-        // files and the reference's can disagree about a name, and the one that fails most
-        // quietly: `TextStatusBar_Initialize()` takes no argument in 1.12 and acts on `this`, ours
-        // took an optional bar, and `UnitFrames.xml` calls it with one. Swapping that file stopped
-        // initialising the unit-frame bars with no error and no missing global — the numerals
-        // simply never appeared.
-        //
-        // **Both directions are silent, and that is the point.** Lua drops extra arguments without
-        // complaint, so neither an over- nor an under-supplied call raises; they differ only in
-        // WHO loses information:
-        //
-        //   * ours WIDER  — our callers pass the extra argument and the reference's version drops
-        //     it. Breaks when OUR file is swapped out (the `TextStatusBar` case).
-        //   * ours NARROWER — the reference's callers pass more than ours takes and ours drops it.
-        //     Breaks when a STOCK file is added beside ours and calls our version.
-        //
-        // The report names the direction because it says which swap the difference is waiting for,
-        // not because one of them is safe.
+        // `function Name(a, b)` to its name and parameter count. Lua never raises on an argument
+        // count, so a difference is silent: ours wider breaks when our file goes, ours narrower
+        // when a stock caller arrives.
         let params_in = |text: &str| -> Vec<(String, usize)> {
             let mut out = Vec::new();
             for line in text.lines() {
@@ -1223,17 +869,10 @@ mod tests {
                 .collect()
         };
 
-        // Everything the manifest pulls OFF THE CHAIN, and every name each of those defines —
-        // including the `.lua` a chain `.xml` sources, which is where most of them live.
+        // Every function each chain entry and its same-name `.lua` define.
         let toc = &super::super::addons::Addon::builtin().toc.files;
-        // Load order: a manifest entry at its line, a reached addon's file after everything.
-        //
-        // **Every manifest entry, not only the chain half.** The map is read twice — once for a
-        // chain file's own seat, and once for OURS, to decide which of two definitions stands
-        // (`ours_wins` below). Keyed on the chain alone it had no entry for any file of ours, so
-        // the second read was an index into a map that could not contain it and the whole
-        // instrument panicked with `no entry found for key` — on the first of our files that
-        // shares a name with a stock one, which is the only case it exists to report.
+        // Load order: each manifest entry at its line, ours included (`ours_wins` reads both
+        // sides), then each reached addon's files after everything.
         let chain = gated_chain_entries();
         let pos: std::collections::HashMap<&String, usize> = toc
             .iter()
@@ -1271,7 +910,7 @@ mod tests {
             }
         }
 
-        // …against everything OUR files define.
+        // Against everything our files define.
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui");
         let mut hits: Vec<(String, String, String, bool)> = Vec::new();
         for entry in toc.iter().filter(|f| !super::is_chain_entry(f)) {
@@ -1288,10 +927,8 @@ mod tests {
         }
         hits.sort();
         hits.dedup();
-        // The frame names every STOCK window declares — read off the reference's own toc, not off
-        // our manifest's chain entries. Scanning only what we already load was the first attempt
-        // and it answered 0 by construction: a stock file we do not load is exactly the one whose
-        // names could collide, and it was never opened.
+        // Frame names and arities from every window in the stock toc, loaded or not: one we do
+        // not load is the one whose names can collide.
         let ref_toc = String::from_utf8_lossy(
             &super::read("Interface\\FrameXML\\FrameXML.toc").expect("the reference's own toc"),
         )
@@ -1325,9 +962,7 @@ mod tests {
             chain_frames.len()
         );
 
-        // …and the frame-name half, over the stock files the manifest does NOT already take off
-        // the chain. A file of ours whose stock counterpart we already load is a swap that has
-        // happened; this is about the ones that have not.
+        // The frame-name half, over stock windows the manifest does not already load.
         let mut frame_hits: Vec<(String, String, String)> = Vec::new();
         for entry in toc.iter().filter(|f| !super::is_chain_entry(f)) {
             let Ok(text) = std::fs::read_to_string(dir.join(entry)) else {
@@ -1335,19 +970,12 @@ mod tests {
             };
             for name in declares(&text) {
                 if let Some(home) = chain_frames.get(&name) {
-                    // **The LEAF, compared whole — `ends_with` was a mask.** `home` is a bare
-                    // `FrameXML.toc` line (`OptionsFrame.xml`) and the manifest carries full chain
-                    // paths, so a suffix test made `Interface\FrameXML\UIOptionsFrame.xml` answer
-                    // "we already load OptionsFrame.xml". It does not: they are two different
-                    // windows, and that one substring silently emptied this table of every
-                    // collision the VIDEO window has with ours — the exact set the instrument
-                    // exists to print before a swap.
+                    // The leaf compared whole: a suffix test would take `UIOptionsFrame.xml` for
+                    // `OptionsFrame.xml`, a different window.
                     let already = toc
                         .iter()
                         .filter(|f| super::is_chain_entry(f))
                         .any(|f| f.rsplit(['\\', '/']).next() == Some(home.as_str()));
-                    // A template's name is a registry key rather than a frame, but two files
-                    // holding one is the same question, so it is reported the same way.
                     if !already {
                         frame_hits.push((name, entry.clone(), home.clone()));
                     }
@@ -1364,8 +992,7 @@ mod tests {
             println!("{name:<36} {ours:<28} {home:<34} {w}");
         }
 
-        // Grouped by our file, because that is the unit of work: a window cannot swap while OUR
-        // file is still standing on the names its stock counterpart needs.
+        // Grouped by our file, the unit of work.
         let mut by_file: std::collections::BTreeMap<&String, usize> =
             std::collections::BTreeMap::new();
         for (_, ours, _, _) in &hits {
@@ -1380,9 +1007,7 @@ mod tests {
             println!("  {n:>3}  {f}");
         }
 
-        // The ARITY half: a name we define that the reference also defines, with a different
-        // parameter count. Not a collision — the two need never both load for this to bite — so it
-        // is its own section rather than a column.
+        // The arity half: it bites without both files loading, so it is a section of its own.
         let mut arity: Vec<(String, String, usize, usize, String)> = Vec::new();
         for entry in toc.iter().filter(|f| !super::is_chain_entry(f)) {
             let Ok(text) = std::fs::read_to_string(dir.join(entry)) else {
@@ -1404,7 +1029,7 @@ mod tests {
         );
         println!("{:<34} {:<26} ours ref  direction", "name", "ours");
         for (name, ours, a, b, home) in &arity {
-            // Which swap this one is waiting for — see the note above; both are silent.
+            // Which swap the difference bites on; both directions are silent.
             let dir = if a > b {
                 "ours WIDER  — bites when OUR file goes"
             } else {
@@ -1413,8 +1038,7 @@ mod tests {
             println!("{name:<34} {ours:<26} {a:>4} {b:>3}  {dir} — ref in {home}");
         }
 
-        // The frame half, grouped the other way — by the STOCK file, because that is the unit of
-        // the question it answers: "can this stock window be added?"
+        // The frame half, grouped by stock window: can this one be added?
         let mut by_stock: std::collections::BTreeMap<&String, std::collections::BTreeSet<&String>> =
             std::collections::BTreeMap::new();
         for (_, ours, home) in &frame_hits {
@@ -1433,38 +1057,16 @@ mod tests {
         }
     }
 
-    /// **Every global a MIGRATED window calls is answered by the loaded interface.**
-    ///
-    /// The gate the loot window and the character sheet both wanted and neither had.
-    /// [`chain_readiness_report`] asks "does the stock file LOAD"; [`chain_gap_report`] asks "what
-    /// would I have to BUILD before migrating it". Neither asks the question that actually bites
-    /// after a swap: *the file is on the chain now — does everything it calls exist?* A missing
-    /// FrameXML function is invisible to both, because loading a file never runs the body that
-    /// calls it: `LootFrame.xml` shipped load-clean and raised at `LootFrame.lua:85` the first
-    /// time it met real data, and stock `CharacterFrame.xml` would have raised on the first tab
-    /// HOVER, because `MicroButtonTooltipText` did not exist here (it does now — the stock
-    /// `MainMenuBarMicroButtons.xml` declares it, off the chain since 1987).
-    ///
-    /// So: for every chain `.xml` in the manifest, census the bare `Name(` call sites across it
-    /// and its `.lua`, subtract what those two define themselves, keep the names the reference's
-    /// own `_G` carries (`reference/1.12-globals.tsv` — anything else is a local, a widget method,
-    /// or a table field, and 1.12's widget methods are not globals), and require every survivor to
-    /// be non-nil in a VM with the whole shipped manifest up.
-    ///
-    /// **A gate rather than an instrument** (the `assert` is the point): for a window we have
-    /// already migrated, the answer must be zero, and a missing name is a raise waiting for a
-    /// player's first click on it.
-    ///
-    /// Three limits, stated because they decide what a green run is worth. It cannot see a name
-    /// reached through `getglobal` (both censuses share that blind spot). It cannot see a WIDGET
-    /// method — those are not in `_G`, which is exactly why `chain_gap_report` grew a separate
-    /// `method=` column (1798). And "the name exists" is not "the body is right": arity and
-    /// semantics are decision 1793's problem and the window's own tests', not this one's.
+    /// Every global a migrated window calls exists once the shipped interface is up. Loading never
+    /// runs the body that calls it, so a missing one raises on the first click that reaches it.
+    /// Bare `name(` calls in each chain file and its `.lua`, minus its own functions and locals,
+    /// count when the reference's `_G` has them (`reference/1.12-globals.tsv`). Blind to names
+    /// reached through `getglobal` and to widget methods; it checks existence, not the body.
     #[test]
     fn every_global_a_migrated_window_calls_is_answered() {
         let _data = benilla_formats::wow_data_or_skip!();
 
-        // The reference's own global table — the filter that keeps this from drowning in locals.
+        // The reference's `_G`, which filters out locals, fields and widget methods.
         let tsv = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../reference/1.12-globals.tsv"
@@ -1481,9 +1083,9 @@ mod tests {
         seat_a_player(&mut s);
         let failures = super::super::manifest::load_default_ui(&s);
         assert!(failures.is_empty(), "the shipped manifest: {failures:#?}");
-        // The whole interface is the manifest AND every LoadOnDemand addon it reaches (1967):
-        // what `MacroFrame_SaveMacro` answers to is `Blizzard_MacroUI.lua`, loaded on the first
-        // `ShowMacroFrame`, and a call into it from ActionBarFrame.lua is answered exactly then.
+        // The interface includes every LoadOnDemand addon it reaches: `ActionButton.lua` calls
+        // `MacroFrame_SaveMacro`, which `Blizzard_MacroUI.lua` defines once `ShowMacroFrame`
+        // loads it.
         for name in reached_addons() {
             super::super::test_ui::seat_chain_addon(&mut s, &name);
             s.run(&format!("UIParentLoadAddOn(\"{name}\")")).unwrap();
@@ -1502,15 +1104,8 @@ mod tests {
             .into_iter()
             .collect();
 
-        // **The gaps this gate found on the day it was written, each still open, each named with
-        // the window that reaches it and the click that would.** They are listed rather than
-        // silenced: a KNOWN entry here is a defect we have and have not fixed, not a tolerance —
-        // and the assertion below refuses an entry that no longer describes one, so fixing a gap
-        // forces its line out (`frame_flag_gate`'s rule, applied to a second gate).
-        //
-        // None of them belongs to the character sheet, which is the window that prompted this and
-        // reads clean. Each belongs to whichever window's migration left it, and each is one
-        // binding or one sourced file away.
+        // Open gaps, each with the window and the click that reach it. The assertion below
+        // refuses an entry whose gap has closed.
         const KNOWN: &[(&str, &str, &str)] = &[
             (
                 "ContainerFrame.xml",
@@ -1600,12 +1195,7 @@ mod tests {
 
         let mut missing: Vec<(String, String)> = Vec::new();
         for entry in &gated_chain_entries() {
-            // `GlobalStrings.lua` is 4000 lines of `NAME = "…";` and nothing else — it calls no
-            // global at all. What it DOES contain is every format specifier and every English
-            // sentence in the interface, and this scanner's `name(` shape reads `%d (`, `%s (` and
-            // "rank (" out of those literals as calls. It became a manifest entry with 1848 (the
-            // reference's own first line, which ours had been loading out of band); skipping it is
-            // not a workaround for that, it is the scanner declining to parse prose.
+            // `GlobalStrings.lua` only assigns strings; it calls nothing.
             if entry.ends_with("GlobalStrings.lua") {
                 continue;
             }
@@ -1628,18 +1218,11 @@ mod tests {
                 .map(|r| r.chars().take_while(|c| super::is_word(*c)).collect())
                 .collect();
 
-            // `name(` at a call position: any identifier not preceded by `.` or `:` (a field or a
-            // method) and followed by `(`.
-            //
-            // **Not capitalised-only.** An earlier cut of this filtered on a leading capital, on
-            // the reasoning that 1.12's globals are named that way — most are, and the ones that
-            // are not are the ones a stat tooltip is built out of: `strupper`, `strsub`, `abs`,
-            // `max`, `floor`, `format`, `getglobal`. `reference/1.12-globals.tsv` is the filter
-            // that actually belongs here, and it does not care about case.
-            // Names the file binds LOCALLY — `local X`, `local function X`, a `for` loop's
-            // variables — are not globals however they are called: the stock StaticPopup.lua
-            // reads a dialog's handlers into locals (`local OnAccept = …; OnAccept(…)`) and
-            // ChatFrame.lua walks `SlashCmdList` with `for index, value in …; value(msg)`.
+            // A call is `name(` not after `.` or `:`, in any case: `floor` and `format` are 1.12
+            // globals too. Names bound locally (`local X`, `local function X`, a `for` loop's
+            // variables) are not globals: `StaticPopup.lua:1853` calls a dialog's `OnAccept`
+            // through a local, and `ChatFrame.lua:2170` calls each `SlashCmdList` entry as
+            // `value(msg)`.
             let mut locals: std::collections::HashSet<String> = std::collections::HashSet::new();
             for line in text.lines() {
                 let l = line.trim_start();
@@ -1718,8 +1301,7 @@ mod tests {
             news.join("\n  ")
         );
 
-        // …and the other direction: a KNOWN entry whose gap has been closed is documentation
-        // claiming a defect we do not have, so it must go with the fix.
+        // The other direction: a `KNOWN` entry whose gap has closed goes with the fix.
         let stale: Vec<String> = KNOWN
             .iter()
             .filter(|(kf, kn, _)| !missing.iter().any(|(f, n)| f == kf && n == kn))
@@ -1733,23 +1315,9 @@ mod tests {
         );
     }
 
-    /// **A chain `.xml` that does not source its own `.lua` needs TWO manifest lines**, and
-    /// getting it wrong is silent.
-    ///
-    /// Most stock windows pull their code in with `<Script file="X.lua"/>`, so naming the `.xml`
-    /// brings both. A few do not — `TextStatusBar.xml` and `MoneyInputFrame.xml` declare only a
-    /// template, and the reference's own toc lists their `.lua` on the preceding line (l.32-33,
-    /// l.11-12). Name the `.xml` alone and the template loads against nothing: every global that
-    /// file was supposed to define reads nil, every guarded call becomes a no-op, and there is no
-    /// error anywhere.
-    ///
-    /// Both were live. `TextStatusBar` was caught by three tests that happened to assert on the
-    /// numerals; `MoneyInputFrame` was caught only by sweeping for the shape afterwards, and its
-    /// manifest header had claimed for months to bring "the ten `MoneyInputFrame_*` verbs" while a
-    /// full-manifest probe answered nil for all of them.
-    ///
-    /// A gate rather than an instrument, because the answer should always be zero and the failure
-    /// mode is invisible.
+    /// A chain `.xml` that does not source its own `.lua` needs the `.lua` as a manifest line too,
+    /// as the stock toc lists `MoneyInputFrame.lua` and `TextStatusBar.lua` (lines 11 and 32).
+    /// Without it every global the file should define reads nil, and nothing errors.
     #[test]
     fn every_chain_xml_brings_its_own_lua() {
         let _data = benilla_formats::wow_data_or_skip!();
@@ -1789,7 +1357,6 @@ mod tests {
         );
     }
 
-    /// A path is a chain entry; a bare name is ours. The one-line rule the manifest rests on.
     #[test]
     fn a_separator_is_what_makes_an_entry_the_players_own_file() {
         assert!(super::is_chain_entry(
@@ -1801,12 +1368,8 @@ mod tests {
         assert!(!super::is_chain_entry("BagFrame.xml"));
         assert!(!super::is_chain_entry("ScrollTemplates.xml"));
     }
-    /// Every global function and virtual template name a manifest entry declares.
-    ///
-    /// Line-based for `function NAME(`, tag-based for `name="X" … virtual="true"` — the two
-    /// shapes FrameXML actually uses. A chain `.xml` that sources its code with
-    /// `<Script file="X.lua"/>` contributes that file's functions too, because the manifest
-    /// line brings both (`every_chain_xml_brings_its_own_lua`).
+    /// Every global function and virtual template a manifest entry declares, including the
+    /// functions of each `.lua` a chain `.xml` sources.
     fn declared_by(entry: &str) -> std::collections::BTreeSet<String> {
         fn attr(tag: &str, key: &str) -> Option<String> {
             let pat = format!("{key}=\"");
@@ -1866,7 +1429,7 @@ mod tests {
         };
         harvest(&text, &mut out);
 
-        // A chain .xml's own `<Script file="X.lua"/>` — same folder as the .xml.
+        // A chain `.xml`'s `<Script file=>`, resolved in the `.xml`'s own folder.
         if super::is_chain_entry(entry) && entry.to_ascii_lowercase().ends_with(".xml") {
             let dir = {
                 let p = entry.replace('\\', "/");
@@ -1894,21 +1457,9 @@ mod tests {
         out
     }
 
-    /// **A name of ours that a LATER chain entry redeclares is dead code, and nothing says so.**
-    ///
-    /// The manifest's law is "later line wins": template registration is a `HashMap::insert` and a
-    /// global function assignment is an overwrite. So the moment a window migrates and its chain
-    /// entry lands BELOW one of our files, every function and template that file shares with the
-    /// reference stops running — silently, with our copy still on disk, still commented, still
-    /// read by the next session as if it were live.
-    ///
-    /// That is not a tidiness problem. Our copies DIVERGE from the reference deliberately, and the
-    /// divergence is what dies: our retired `UiPanels.xml` carried a `PanelTemplates_TabResize`
-    /// with a benilla-only `return tabWidth` that our tab settle read, and the reference's
-    /// returns nothing (both are gone — 1988, 1993).
-    ///
-    /// The reverse direction — ours seated BELOW the chain's, so we silently override the
-    /// reference — is a real category too, and a wider audit than this gate.
+    /// The later line wins (a template is a `HashMap::insert`, a function an overwrite), so a
+    /// function or template of ours that a later chain entry redeclares is dead while still on
+    /// disk. Ours overriding a stock one from a later line is not checked here.
     #[test]
     fn nothing_we_ship_is_shadowed_by_a_later_chain_entry() {
         let _data = benilla_formats::wow_data_or_skip!();
@@ -1937,21 +1488,8 @@ mod tests {
         );
     }
 
-    /// **A frame that inherits a template the manifest never loads is a WARNING, and warnings are
-    /// invisible.** The frame is still built — bare. It gets none of the template's regions, none
-    /// of its children, and none of its `<Scripts>`, so whatever that `<OnLoad>` was going to
-    /// initialise silently stays nil.
-    ///
-    /// This shipped. `Blizzard_MacroUI.xml`'s `MacroPopupScrollFrame` inherits FrameXML's
-    /// `ClassTrainerListScrollFrameTemplate`; the manifest's own header for that window NAMES that
-    /// dependency and then never lists the file declaring it. So the icon picker's scroll frame
-    /// came up with no `<OnLoad>`, `ScrollFrame_OnLoad` never ran, `this.offset` was never seeded,
-    /// and the reference's `FauxScrollFrame_GetOffset` — `return frame.offset`, with no `or 0`
-    /// fallback of the kind our deleted copy had — handed `MacroPopupFrame_Update` a nil to
-    /// multiply. Clicking "Change Name/Icon" raised.
-    ///
-    /// Static rather than a load probe: it needs no VM, no client state and no player, so it
-    /// answers for every entry including the ones a running load would never reach.
+    /// An inherited template nothing declares is only a warning: the frame is built bare, with none
+    /// of the template's regions, children or `<Scripts>`, so its `<OnLoad>` state stays nil.
     #[test]
     fn every_template_the_manifest_inherits_is_declared_by_the_manifest() {
         let _data = benilla_formats::wow_data_or_skip!();
@@ -1960,12 +1498,8 @@ mod tests {
         let mut declared: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut wanted: Vec<(String, String)> = Vec::new();
         for entry in toc.iter() {
-            // **`<Include>` counts.** The reference's own `FrameXML.toc` lists only two of its
-            // `*Templates.xml` files; the rest are pulled in by the window that needs them
-            // (`HonorFrame.xml` -> `HonorFrameTemplates.xml`, and so on), and the loader follows
-            // that against the including document's own directory (1186). A walk that reads only
-            // the manifest's own lines reports thirteen templates missing that are not — which is
-            // exactly what the first run of this gate did.
+            // `<Include>` counts: the stock toc lists two `*Templates.xml`; the rest arrive with
+            // the window that includes them, as `HonorFrame.xml` does `HonorFrameTemplates.xml`.
             let mut text = String::new();
             for src in entry_sources(entry) {
                 text.push_str(&src);
@@ -2025,17 +1559,10 @@ mod tests {
         None
     }
 
-    /// A manifest entry's source text and everything it `<Include>`s, transitively.
-    ///
-    /// The chain for a path, `assets/ui` for a bare name — and an include resolves against the
-    /// INCLUDING document's own directory in its own source's path space, which is the rule the
-    /// loader follows (1186).
-    /// The reference's LoadOnDemand Blizzard addons this interface REACHES — every `Blizzard_*`
-    /// name a `UIParentLoadAddOn("…")` literal names in our own files or in a manifest chain
-    /// entry's sources (the reference's `*_LoadUI` loaders in UIParent.xml, the options window's
-    /// combat-text load). They have no manifest row, exactly as the reference's `FrameXML.toc`
-    /// has none, so this is how the gates know which addon files are part of the shipped
-    /// interface (1967). An addon nothing loads is an unbuilt window, not a migrated one.
+    /// The LoadOnDemand `Blizzard_*` addons the interface reaches: each one a
+    /// `UIParentLoadAddOn("…")` literal names in our files or a chain entry's sources
+    /// (`UIParent.lua`'s `*_LoadUI` loaders, `UIOptionsFrame.lua`'s combat-text load). Like the
+    /// stock toc, the manifest has no row for them.
     fn reached_addons() -> Vec<String> {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui");
         let mut out: Vec<String> = Vec::new();
@@ -2065,9 +1592,7 @@ mod tests {
     }
 
     /// Every chain file the shipped interface loads, in load order: the manifest's chain entries,
-    /// then each reached addon's files (`Interface\AddOns\<name>\<file>`, the addon's own toc
-    /// order) — LoadOnDemand loads after everything. The set every gate over chain files walks
-    /// (1967); an addon an opener names that the chain does not carry is a finding, not a skip.
+    /// then each reached addon's files in its own toc order.
     fn gated_chain_entries() -> Vec<String> {
         let mut out: Vec<String> = super::super::addons::Addon::builtin()
             .toc
@@ -2123,9 +1648,8 @@ mod tests {
             for chunk in text.split('<').skip(1) {
                 let Some(end) = chunk.find('>') else { continue };
                 let tag = &chunk[..end];
-                // `<Include>` brings a sibling document; `<Script file=>` brings the code, and
-                // that is where nearly every `RegisterEvent` lives — a reader that follows only
-                // the first sees a window's frames without its handlers.
+                // `<Include>` brings a sibling document and `<Script file=>` the code, where
+                // nearly every `RegisterEvent` lives; both resolve in the entry's own folder.
                 let kind = tag.trim_start();
                 if !kind.starts_with("Include") && !kind.starts_with("Script") {
                     continue;
@@ -2143,16 +1667,10 @@ mod tests {
         out
     }
 
-    /// **Every faux list must declare its own `<OnVerticalScroll>`, and no file may still write
-    /// `frame.updateFunc`.**
-    ///
-    /// `FauxScrollFrame_OnVerticalScroll` is the ONLY thing that writes `frame.offset`, and it runs
-    /// from a handler the OWNER declares — the reference has no `updateFunc` field, which is what
-    /// our retired kit used. A window that inherits `FauxScrollFrameTemplate` without that handler
-    /// loads clean, shows its bar, moves its thumb, and never scrolls its list. Nothing errors.
-    ///
-    /// A gate rather than a test per window, because what makes it silent is structural: a list
-    /// only scrolls when something drives it, and most window tests never do.
+    /// A faux list follows its bar only through `FauxScrollFrame_OnVerticalScroll`
+    /// (`UIPanelTemplates.lua:228`), called from the owner's own `<OnVerticalScroll>`; 1.12 has no
+    /// `updateFunc` field. Without the handler the bar moves, the list never does, and nothing
+    /// errors.
     #[test]
     fn every_faux_scroll_frame_declares_its_own_on_vertical_scroll() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui");
@@ -2188,10 +1706,7 @@ mod tests {
                 if !tag.contains("FauxScrollFrameTemplate") {
                     continue;
                 }
-                // A VIRTUAL template is not a list. `BenillaAuctionScrollTemplate` is the auction
-                // window's shared shape and legitimately carries no handler: its four instances
-                // each repaint a different pane, so each declares its own. What must be wired is
-                // the instance.
+                // A virtual template is not a list; each instance declares its own handler.
                 if tag.contains("virtual=\"true\"") {
                     continue;
                 }
@@ -2216,8 +1731,8 @@ mod tests {
             stale.join("\n  ")
         );
     }
-    /// `text` with every whitespace run that precedes a `.` removed — a method chain rustfmt
-    /// broke across lines reads as one call again.
+    /// `text` with every whitespace run before a `.` removed, so a chain rustfmt split across lines
+    /// reads as one call.
     fn glue_chains(text: &str) -> String {
         let mut out = String::with_capacity(text.len());
         let mut pending = String::new();
@@ -2236,30 +1751,17 @@ mod tests {
         out
     }
 
-    /// **A stock file listening for an event nothing produces is silent on both sides.**
-    ///
-    /// This is 1819's shape: `ui_unit.rs` fired the Classic Era power pair while the reference's
-    /// frames registered the 1.12 per-resource names, so no mana bar could live-update — and
-    /// nothing anywhere said so, because an event name is a plain string at both ends. 1818 is the
-    /// same seam one API over. The *arity* half of that class already has an instrument (the shape
-    /// gate, 1842/1843/1845); this is the event half, which had none.
-    ///
-    /// A CENSUS with a declared set, not a hard zero: most of these are features we have not built,
-    /// and listing them is the point. What must not happen is a NEW one appearing — that means a
-    /// window migration just brought a listener nothing feeds, which is exactly how 1819 arrived.
-    ///
-    /// **Constructed names have to be declared**, because a literal scan cannot see them:
-    /// `ui_unit.rs` builds the power events with `format!("UNIT_{}", power_token(...))`, and a gate
-    /// blind to that reports nine false positives — which is what its first run did.
+    /// Every event a chain file registers is fired by something here or listed in `UNPRODUCED`. An
+    /// event name is a plain string at both ends, so a listener nothing feeds is silent; a new one
+    /// means a window migration brought it.
     #[test]
     fn every_event_a_chain_file_registers_has_a_producer() {
         let _data = benilla_formats::wow_data_or_skip!();
 
-        // Names benilla builds at runtime rather than writing as literals. Each is a family, with
-        // the site that constructs it — an entry here is a promise that something fires it.
+        // Names built at runtime, which a literal scan cannot see; each entry is a promise that
+        // something fires it.
         const CONSTRUCTED: &[&str] = &[
-            // `ui_unit.rs`: `format!("UNIT_{}", power_token(ty))` and its `UNIT_MAX…` twin, over
-            // `power_token`'s five resources (`unit/mod.rs`).
+            // `ui_unit.rs` builds `UNIT_{}` and `UNIT_MAX{}` over `power_token`'s five resources.
             "UNIT_MANA",
             "UNIT_RAGE",
             "UNIT_FOCUS",
@@ -2272,12 +1774,9 @@ mod tests {
             "UNIT_MAXHAPPINESS",
         ];
 
-        // Registered by a chain file we load, produced by nothing. Each is a feature we have not
-        // built; none is 1819-shaped, because no PAIR is split (a half-fired pair is the tell).
+        // Registered by a chain file we load and fired by nothing here; each says why.
         const UNPRODUCED: &[(&str, &str)] = &[
-            // ── The stock `UIParent.lua`'s own listeners (1988) — every one is a dialog or a
-            // notice the reference's engine raises for a condition benilla's session does not
-            // reach yet. Each names the arm that would fire.
+            // ── The stock `UIParent.lua`'s listeners first, then the other files' ──
             (
                 "ADDON_ACTION_FORBIDDEN",
                 "UIParent.lua — the protected-action refusal; benilla has no protected-call \
@@ -2403,8 +1902,8 @@ mod tests {
                     .chars()
                     .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
         };
-        // The two literal shapes an indirect fire's file can carry: `"EVENT", vec!` and a match
-        // arm `=> "EVENT",` — the event-name table a `fire_event(name_of(kind), …)` reads.
+        // The event-name table an indirect fire reads: `"EVENT", vec!`, a match arm
+        // `=> "EVENT",`, or a lone `"EVENT"` as a block arm's value.
         let scan_arms = |text: &str, fired: &mut std::collections::HashSet<String>| {
             const SHAPE: &str = "\", vec!";
             for (i, _) in text.match_indices(SHAPE) {
@@ -2436,9 +1935,8 @@ mod tests {
                 }
             }
         };
-        // An indirect fire — `fire_event(EXECUTE_CHAT_LINE, …)`, `fire_event(event_name(kind), …)`
-        // — names a const or a function; the literal lives where THAT is defined, which may be
-        // another file (1948: `ui_chat::event::event_name` answers for `frames::route`'s fire).
+        // An indirect fire names a const or a function, whose literal may live in another file
+        // (`ui_chat::event::event_name`, for the fire in `ui_chat::frames`).
         let mut indirect: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut texts: Vec<String> = Vec::new();
         let mut stack = vec![root];
@@ -2449,11 +1947,10 @@ mod tests {
                     stack.push(p);
                 } else if p.extension().is_some_and(|x| x == "rs") {
                     let text = std::fs::read_to_string(&p).unwrap_or_default();
-                    // rustfmt splits a long chain at its dots (`model\n.pending_events\n.push((`), so
-                    // the three shapes are matched with the whitespace before each `.` removed.
+                    // rustfmt splits a long chain at its dots, so the three shapes are matched
+                    // with the whitespace before each `.` removed.
                     let text = glue_chains(&text);
-                    // The engine's deferred lane (`pending_events.push((name, args))`,
-                    // `cursor.rs`) is a fire too — the pet grid pair rides it (1953).
+                    // The engine's deferred lane, `pending_events.push((name, args))`, fires too.
                     const CALLS: [&str; 3] = [
                         concat!("fire_event", "("),
                         concat!("fire_event_into", "("),
@@ -2552,17 +2049,9 @@ mod tests {
         );
     }
 
-    /// Seat a player before a probe loads the manifest — **what the live client always does.**
-    ///
-    /// The in-game UI materializes on world entry (1051), so a player always exists by the time
-    /// the manifest loads, and the stock macro window's character tab formats `UnitName("player")`
-    /// into its label inside its own `OnLoad`. A manifest load with no player is a state the
-    /// client never reaches — and one a probe reaches by default, where it raises
-    /// `bad argument #2 to 'format'` and looks exactly like a load failure.
-    ///
-    /// This was five identical copies of the same six-line comment and the same seven-line seed,
-    /// inlined at every probe in this file — and the sixth, `chain_gap_report`'s, did not have it,
-    /// which is why that instrument could not run at all. One function is harder to forget.
+    /// Seats a player before a probe loads the manifest, as the live client always has one by
+    /// then: the stock macro window formats `UnitName("player")` into a tab label in its `OnLoad`,
+    /// and without a player that raises like a load failure.
     fn seat_a_player(s: &mut UiScript) {
         s.set_unit(
             "player",
@@ -2575,26 +2064,9 @@ mod tests {
         );
     }
 
-    /// **Every event benilla fires must be an event the 1.12 client HAS** — the 1818/1819 seam,
-    /// in the one direction nothing was checking.
-    ///
-    /// [`every_event_a_chain_file_registers_has_a_producer`] runs the other way: a stock file
-    /// listens, does anything fire it. This asks whether a name we fire is a 1.12 name at all.
-    /// Firing a Classic Era event is invisible to every other gate — our own halves agree with
-    /// each other, the name is spelled correctly, and Lua that never registers it never notices.
-    /// That is exactly how `UNIT_POWER_UPDATE` (1819) survived, and how the three this test found
-    /// on its first run did: `BAG_UPDATE_DELAYED` (Era-only; 1.12 has `BAG_UPDATE` alone),
-    /// `LOOT_UPDATE` and `UPDATE_LOOT_ROLL` (both invented here), each fired into a room with
-    /// nobody in it.
-    ///
-    /// **The oracle is the reference binary's own string table.** An event the client can
-    /// dispatch is a NUL-terminated string in `WoW.exe`; a name that is not there is a name the
-    /// client cannot dispatch. That is a stronger oracle than the FrameXML corpus, which only
-    /// shows what the stock UI happens to consume — and which this repo has only four of the
-    /// LoadOnDemand addons of, so a corpus grep alone flags real events like `CRAFT_UPDATE`.
-    ///
-    /// Test files are skipped: `script/tests/events.rs` fires synthetic names (`E3`) at the
-    /// dispatcher on purpose, and a test's own scaffolding is not a product surface.
+    /// Every event benilla fires exists in the 1.12 client: an event it can dispatch is a
+    /// NUL-terminated string in `WoW.exe`, and a name missing there no stock listener can ever
+    /// receive. Test files are skipped; they fire synthetic names (`E3`) on purpose.
     #[test]
     fn every_event_we_fire_is_an_event_the_reference_has() {
         let data = benilla_formats::wow_data_or_skip!();
@@ -2627,8 +2099,7 @@ mod tests {
                     continue;
                 }
                 let text = std::fs::read_to_string(&p).unwrap_or_default();
-                // Split so this file cannot match its OWN walker — it did on the first run, and
-                // reported four fragments of this function as ghost events.
+                // Split so this file cannot match its own walker.
                 const CALL: &str = concat!("fire_event", "(");
                 let mut from = 0;
                 while let Some(i) = text[from..].find(CALL) {
@@ -2654,11 +2125,7 @@ mod tests {
 
         let ghosts: Vec<String> = fired
             .iter()
-            // A `BENILLA_`-prefixed name declares itself ours and cannot be mistaken for a 1.12
-            // one — the same discipline `BENILLA_ALLOW_OWN_UI` uses. `BENILLA_QUEST_PROGRESS` is
-            // the live example: an engine event our quest log registers, which exists because the
-            // shipped 1.12 auto-watch chain is broken at the `QUEST_WATCH_UPDATE` arg seam. The
-            // prefix is what makes an invented event honest instead of a mistake.
+            // A `BENILLA_` prefix marks an event as ours, never mistaken for a 1.12 name.
             .filter(|(ev, _)| !ev.starts_with("BENILLA_"))
             .filter(|(ev, _)| {
                 let needle: Vec<u8> = ev.bytes().chain(std::iter::once(0)).collect();

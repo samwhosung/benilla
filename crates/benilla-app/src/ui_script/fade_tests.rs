@@ -1,9 +1,5 @@
-//! The fade and flash kits — the stock `UIParent.lua`'s since 1988, walked from `UIParent`'s own
-//! `<OnUpdate>` (`UIFrameFadeUpdate` / `UIFrameFlashUpdate`), which is what the reference does
-//! too: no tick driver of ours, and a cinematic's `UIParent:Hide()` stops both walks the way it
-//! stops the reference's. What these guard is the arithmetic and the list discipline — a fade
-//! ramps linearly to its endAlpha and leaves `FADEFRAMES`; a flash alternates for its duration,
-//! refuses a re-arm while flashing, and ends hidden when `showWhenDone` is nil.
+//! The stock fade and flash kits (`UIParent.lua`), walked from `UIParent`'s own OnUpdate
+//! (`UIParent.xml:17`), so hiding `UIParent` stops both.
 
 use benilla_ui::script::UiScript;
 
@@ -46,7 +42,7 @@ fn a_started_fade_ramps_off_uiparents_tick_and_completes() {
         "half the timeToFade in, half the ramp: {mid}"
     );
 
-    s.tick(0.6); // past timeToFade: the fade completes and leaves the list
+    s.tick(0.6); // past timeToFade
     s.resolve();
     assert_eq!(
         s.eval::<f64>("return BenillaFadeProbe:GetAlpha()").unwrap(),
@@ -61,11 +57,6 @@ fn a_started_fade_ramps_off_uiparents_tick_and_completes() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **The FLASH kit alternates and stops** — the fade kit's twin, transcribed from `UIParent.lua`
-/// because two stock windows call it and nothing answered (1879).
-///
-/// Driven rather than merely loaded: a kit that is present but never exercised is exactly how
-/// twelve faux lists shipped unable to scroll (1868), so this runs a real flash to completion.
 #[test]
 fn a_flash_alternates_then_stops() {
     benilla_formats::wow_data_or_skip!();
@@ -82,7 +73,6 @@ fn a_flash_alternates_then_stops() {
     load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
     s.resolve();
 
-    // Parked until something asks — the whole point of the driver over UIParent's own OnUpdate.
     s.run(
         r#"Probe = CreateFrame("Frame", "BenillaFlashProbe", UIParent)
            Probe:SetWidth(10) Probe:SetHeight(10) Probe:SetPoint("TOPLEFT", 0, 0)
@@ -95,7 +85,7 @@ fn a_flash_alternates_then_stops() {
         "the frame is on the flash list"
     );
 
-    // Re-arming an already-flashing frame is a no-op, not a second entry (ref UIParent.lua:1234).
+    // Re-arming a flashing frame returns early (`UIParent.lua:1235`).
     s.run("UIFrameFlash(BenillaFlashProbe, 1, 1, 1, nil, 0, 0)")
         .unwrap();
     assert_eq!(
@@ -104,8 +94,7 @@ fn a_flash_alternates_then_stops() {
         "already flashing: the reference returns rather than re-arming"
     );
 
-    // Run past flashDuration: the frame leaves both lists, is restored to full alpha, and — with
-    // `showWhenDone` nil — ends hidden.
+    // Past flashDuration the frame leaves both lists at full alpha (`UIParent.lua:1272`).
     for _ in 0..40 {
         s.tick(0.016);
         s.resolve();

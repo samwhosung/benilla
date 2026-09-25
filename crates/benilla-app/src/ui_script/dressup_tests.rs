@@ -1,24 +1,6 @@
-//! The dressing room + the chat-link insert, driven through the real click paths (decisions
-//! 1059/1060).
-//!
-//! What these pin is the **fork**, at the sites a player actually clicks: CTRL opens the room
-//! wearing the item, SHIFT posts its link into an open chat edit box — and, at a bag slot, SHIFT
-//! with chat *closed* still opens the stack splitter it always did (the reference's own `else`,
-//! and the regression these two features could most easily cause).
-//!
-//! **The bag-slot fork is the REFERENCE's own code since 1751.** Both forks used to run through
-//! benilla's `BenillaBagSlot_OnClick`; the bag windows are the reference's recycled
-//! `ContainerFrame1..12` now and the handler is its `ContainerFrameItemButton_OnClick(button,
-//! ignoreModifiers)` — which takes the MOUSE button as its first argument and reads the frame from
-//! `this`, so a test cannot call it directly any more. These drive the mouse instead
-//! ([`super::test_ui::click`]), which is the stronger test regardless: it puts the template's own
-//! `RegisterForClicks("LeftButtonUp", "RightButtonUp")` and script wiring under test too.
-//!
-//! **The doll slots went the same way.** `CharacterFrame.xml` and `PaperDollFrame.xml` are the
-//! reference's own too now, so `BenillaPaperDollSlot_OnClick` is gone and the fork is stock
-//! `PaperDollItemSlotButton_OnClick(button, ignoreModifiers)` (`PaperDollFrame.lua:647-662`) —
-//! which reads `this` exactly as the bag handler does. Those tests drive the mouse as well, over a
-//! window that is genuinely OPEN, which is the only state a player can click a doll slot from.
+//! The dressing room and the chat-link insert through the real click paths: CTRL opens the room
+//! wearing the item, SHIFT posts its link into an open chat box, and at a bag slot SHIFT with chat
+//! closed still opens the stack splitter. The stock handlers read `this`, so these drive the mouse.
 
 use benilla_ui::script::{
     ContainerSlot, ContainerState, DressUpIntent, InvSlotView, InventorySlots, SoundRequest,
@@ -27,18 +9,17 @@ use benilla_ui::script::{
 
 use super::test_ui::{bag_slot_button, click, load_ui as load_xml, BAG_UI, CHARACTER_UI};
 
-/// The jerky stack every bag fixture here uses — a real 1.12 link, quality white.
+/// A real 1.12 item link: Tough Jerky (117), quality white.
 const JERKY_LINK: &str = "|cffffffff|Hitem:117|h[Tough Jerky]|h|r";
 
-/// The room's own files, past whatever bag interface the caller wants — both loaders below end
-/// with these, in manifest order.
+/// The room's own files, in manifest order; both loaders end with these.
 const ROOM_UI: &[&str] = &[
     "Interface\\FrameXML\\UIDropDownMenu.xml",
     "Interface\\FrameXML\\GlobalStrings.lua",
     "Interface\\FrameXML\\BasicControls.xml", // `TEXT`, which UnitPopup.lua reads at file scope
     "Interface\\FrameXML\\UnitPopup.xml",
     "Interface\\FrameXML\\ItemRef.xml",
-    "ScrollTemplates.xml", // our scroll kit + the placeholder icon
+    "ScrollTemplates.xml", // our scroll kits
     "Interface\\FrameXML\\CharacterFrameTemplates.xml",
     "Interface\\FrameXML\\MerchantFrame.xml",
     "Interface\\FrameXML\\StackSplitFrame.xml",
@@ -48,18 +29,14 @@ const ROOM_UI: &[&str] = &[
     "Interface\\FrameXML\\ChatFrame.xml",
     "Interface\\FrameXML\\UIPanelTemplates.lua",
     "Interface\\FrameXML\\UIPanelTemplates.xml",
-    // The reference's own room (1969): its Close/Reset buttons inherit the panel kit's templates,
-    // which resolve at load — so after it, as the manifest has it.
+    // After the panel kit: the room's Close and Reset buttons inherit its templates at load.
     "Interface\\FrameXML\\DressUpFrame.xml",
     r"Interface\FrameXML\UIParent.xml",
     "Interface\\FrameXML\\LocaleProperties.lua",
     "Interface\\FrameXML\\FloatingChatFrame.xml",
 ];
 
-/// The shipped files the dressing room's click sites need, in manifest order — **with no bag
-/// window**, for the sites that never touch a container (a chat link, the room's own controls).
-/// Deliberately install-free: those tests run on a bare checkout, which [`load_room_with_bags`]
-/// cannot.
+/// The room with no bag window, for the click sites that never touch a container.
 fn load_room(s: &UiScript) {
     for file in [
         "Interface\\FrameXML\\Fonts.xml",
@@ -82,13 +59,8 @@ fn load_room(s: &UiScript) {
     }
 }
 
-/// [`load_room`] over the REFERENCE's bag windows (1751). `BAG_UI` is the ordered set a test needs
-/// before it can open one and it already carries the fonts, panels, tooltip, item-button template
-/// and bag bar the room wants, so only the room's own files follow it. `UIParent.xml` leads because
-/// it inherits nothing and every window below parents to it — `BAG_UI` has no line for it.
-///
-/// **Needs client data**: `BAG_UI` names a chain entry, so its callers open with
-/// `wow_data_or_skip!`.
+/// The room over the stock bag windows; `UIParent.xml` leads because every window parents to it
+/// and `BAG_UI` has no line for it.
 fn load_room_with_bags(s: &UiScript) {
     load_xml(s, r"Interface\FrameXML\UIParent.xml");
     for file in BAG_UI {
@@ -99,17 +71,9 @@ fn load_room_with_bags(s: &UiScript) {
     }
 }
 
-/// The character window **open on its paper doll**, with the room and a chat edit box beside it —
-/// the two files [`CHARACTER_UI`] does not already carry. (`UIDropDownMenu.xml`,
-/// `Interface\FrameXML\UIMenu.xml` and `UnitPopup.xml` are in both lists; loading either twice
-/// would redeclare its frames.)
-///
-/// The player behind it carries **both** halves of the race and class pairs: `UnitRace`/`UnitClass`
-/// answer `(localized, file)` or `nil, nil` — the binding `zip`s them — and stock
-/// `PaperDollFrame_SetLevel` formats all three into `CharacterLevelText` unguarded
-/// (`PaperDollFrame.lua:100-104`) on every show.
-///
-/// **Needs client data**, like [`load_room_with_bags`].
+/// The character window on its paper doll, with the room and a chat box beside it. The player
+/// has race and class, which stock `PaperDollFrame_SetLevel` formats unguarded on every show
+/// (`PaperDollFrame.lua:100-104`).
 fn shown_paper_doll() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
@@ -124,7 +88,7 @@ fn shown_paper_doll() -> UiScript {
         "Interface\\FrameXML\\UIDropDownMenu.xml",
         "Interface\\FrameXML\\UIPanelTemplates.lua",
         "Interface\\FrameXML\\UIPanelTemplates.xml",
-        // The reference's room (1969), after the panel kit its buttons inherit from.
+        // After the panel kit its buttons inherit from.
         "Interface\\FrameXML\\DressUpFrame.xml",
         r"Interface\FrameXML\UIParent.xml",
         "Interface\\FrameXML\\LocaleProperties.lua",
@@ -147,15 +111,8 @@ fn shown_paper_doll() -> UiScript {
     s
 }
 
-/// A backpack holding a 5-stack of Tough Jerky in slot 1, opened; returns the NAME of the button
-/// showing that slot.
-///
-/// **Asked, never derived** (1751). The window is one of the reference's recycled
-/// `ContainerFrame1..12` — which one depends on what else is open — and its buttons are numbered
-/// BACKWARDS (`ContainerFrame_GenerateFrame`: `index = size - j + 1`, so `…Item1` is the bag's last
-/// slot), so [`bag_slot_button`] finds the button whose own `GetID()` is the slot. The old body
-/// scanned `BenillaBagSlot<N>` for a `.slot` field and handed back a centre; neither those frames
-/// nor that field exist, and the centre is [`click`]'s business now.
+/// Opens a backpack holding 5 Tough Jerky in slot 1 and returns the name of that slot's button,
+/// asked of the buttons: the stock windows are recycled and number their buttons backwards.
 fn backpack_with_jerky(s: &mut UiScript) -> String {
     s.set_money(0);
     let mut slots = std::collections::HashMap::new();
@@ -185,13 +142,8 @@ fn backpack_with_jerky(s: &mut UiScript) -> String {
     bag_slot_button(s, 0, 1)
 }
 
-/// CTRL + left-click on a bag item opens the dressing room and puts that item on — the ref's
-/// `DressUpItemLink(GetContainerItemLink(...))` (ContainerFrame.lua:565-566). The two intents are
-/// ordered: `Dress` (the window was closed, so it re-dresses in the player's own gear first) then
-/// `TryOn` — reversed, the room would show the player's own gear and not the clicked item.
-///
-/// Since 1751 that arm is the reference's OWN `ContainerFrameItemButton_OnClick` rather than a
-/// transcription of it, so the cited line numbers are now the live code's.
+/// Stock `DressUpItemLink(GetContainerItemLink(...))` (`ContainerFrame.lua:565-566`). `Dress`
+/// must precede `TryOn`, or the room shows the player's own gear instead of the item.
 #[test]
 fn ctrl_click_on_a_bag_item_opens_the_room_wearing_it() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -201,8 +153,7 @@ fn ctrl_click_on_a_bag_item_opens_the_room_wearing_it() {
     let btn = backpack_with_jerky(&mut s);
     assert!(!s.eval::<bool>("return DressUpFrame:IsVisible()").unwrap());
 
-    // The modifier is pushed BEFORE the mouse, exactly as the app's input pass does it: the click
-    // handler's fork reads the state as of the click.
+    // Modifiers go in before the click, as the app's input pass sends them.
     s.set_modifiers(false, true, false);
     click(&mut s, &btn, "LeftButton");
     s.set_modifiers(false, false, false);
@@ -223,16 +174,8 @@ fn ctrl_click_on_a_bag_item_opens_the_room_wearing_it() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// SHIFT + left-click posts the item's link into the chat edit box **when it is open**, and still
-/// opens the stack splitter when it is not — the reference's own if/else (ContainerFrame.lua:
-/// 567-577). Both halves in one test because it is the *fork* that matters: the split was the
-/// behaviour that already shipped, and the insert must not have eaten it.
-///
-/// Since 1751 the fork is the reference's own body and the splitter it opens is still ours
-/// (`OpenStackSplitFrame`, StackSplit.xml): the reference reaches it through the `this.SplitStack`
-/// closure `ContainerFrameItemButton_OnLoad` installs, so what this now also covers is that seam
-/// holding — a stack split confirmed from a bag slot still calls `SplitContainerItem` with the
-/// window's own bag id and the button's own slot id.
+/// Stock shift arm (`ContainerFrame.lua:567-578`): the link with chat open, else the stack
+/// splitter, which calls back through the `this.SplitStack` closure.
 #[test]
 fn shift_click_posts_the_link_with_chat_open_and_splits_with_it_closed() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -241,7 +184,6 @@ fn shift_click_posts_the_link_with_chat_open_and_splits_with_it_closed() {
     load_room_with_bags(&s);
     let btn = backpack_with_jerky(&mut s);
 
-    // Chat closed → the splitter, exactly as before.
     s.set_modifiers(true, false, false);
     click(&mut s, &btn, "LeftButton");
     s.set_modifiers(false, false, false);
@@ -251,7 +193,6 @@ fn shift_click_posts_the_link_with_chat_open_and_splits_with_it_closed() {
     );
     s.run("StackSplitFrame:Hide()").unwrap();
 
-    // Chat open → the link, and no splitter.
     assert!(s.focus_editbox("ChatFrameEditBox"));
     s.set_modifiers(true, false, false);
     click(&mut s, &btn, "LeftButton");
@@ -273,9 +214,8 @@ fn shift_click_posts_the_link_with_chat_open_and_splits_with_it_closed() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// A link already IN chat: ctrl-clicking it previews that item (ref ItemRef.lua:49-50), shift
-/// -clicking it re-inserts it (the branch that already shipped). The router is `SetItemRef`, which
-/// is what the message frame's `OnHyperlinkClick` calls with the full markup.
+/// Stock `SetItemRef`, which a chat frame's `OnHyperlinkClick` calls: ctrl previews the item
+/// (`ItemRef.lua:49-50`).
 #[test]
 fn ctrl_clicking_a_chat_link_previews_it() {
     benilla_formats::wow_data_or_skip!();
@@ -299,17 +239,11 @@ fn ctrl_clicking_a_chat_link_previews_it() {
         s.eval::<bool>("return DressUpFrame:IsVisible()").unwrap(),
         "and the room opened"
     );
-    // The plain click still shows the link tooltip rather than the room (no modifier).
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The paper doll's own slots (`PaperDollFrame.lua:647-662`): ctrl previews what you are wearing,
-/// shift posts its link. Both read the unit-keyed `GetInventoryItemLink`, the binding this arc
-/// added — so this also pins that the getter answers for `"player"`.
-///
-/// Since 1751 that handler is the reference's own `PaperDollItemSlotButton_OnClick(button,
-/// ignoreModifiers)`, which reads the frame from `this` — so this drives the mouse over a window
-/// that is really open, exactly as the bag tests above do.
+/// Stock `PaperDollItemSlotButton_OnClick` (`PaperDollFrame.lua:647-662`) reads
+/// `GetInventoryItemLink("player", slot)` for both the preview and the link.
 #[test]
 fn the_paper_doll_slots_preview_and_post_what_you_wear() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -335,7 +269,6 @@ fn the_paper_doll_slots_preview_and_post_what_you_wear() {
     let _ = s.take_dressup_intents();
     s.resolve();
 
-    // CTRL on the head slot → the room, wearing the helm.
     s.set_modifiers(false, true, false);
     click(&mut s, "CharacterHeadSlot", "LeftButton");
     s.set_modifiers(false, false, false);
@@ -344,7 +277,6 @@ fn the_paper_doll_slots_preview_and_post_what_you_wear() {
         vec![DressUpIntent::Dress, DressUpIntent::TryOn(1234)]
     );
 
-    // SHIFT with chat open → the link; the item is never picked up either way.
     assert!(s.focus_editbox("ChatFrameEditBox"));
     s.set_modifiers(true, false, false);
     click(&mut s, "CharacterHeadSlot", "LeftButton");
@@ -361,19 +293,14 @@ fn the_paper_doll_slots_preview_and_post_what_you_wear() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// A slot whose item template has not answered yet has **no link** — a state the real client never
-/// has (its item cache is synchronous), so the reference carries no guard: stock
-/// `PaperDollItemSlotButton_OnClick` shift-inserts `GetInventoryItemLink(...)` straight
-/// (`PaperDollFrame.lua:653`). Shift-clicking such a slot must post nothing and raise nothing.
-///
-/// That is now the ENGINE's promise rather than a transcription's guard: `EditBox:Insert(nil)` is a
-/// no-op because the reference reads the argument through `lua_tostring`, and this
-/// test is what holds the stock line above harmless over an in-flight item.
+/// An unresolved item has no link, which stock `PaperDollFrame.lua:653` inserts unguarded:
+/// `EditBox:Insert(nil)` is a no-op, as the reference reads its argument with `lua_tostring`
+/// (`0x7984b0`).
 #[test]
 fn shift_clicking_an_unresolved_slot_posts_nothing_and_never_raises() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = shown_paper_doll();
-    // The slot is occupied but unresolved: an item id with no name/quality yet, so no link.
+    // Occupied but unresolved: an item id with no name or quality, so no link.
     let mut slots = InventorySlots::default();
     slots[1] = Some(InvSlotView {
         item_id: 1234,
@@ -397,7 +324,7 @@ fn shift_clicking_an_unresolved_slot_posts_nothing_and_never_raises() {
     );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 
-    // And ctrl on the same unresolved slot is inert too (DressUpItemLink's own nil guard).
+    // Ctrl is inert too: `DressUpItemLink` returns on a nil link (`DressUpFrame.lua:11-13`).
     s.set_modifiers(false, true, false);
     click(&mut s, "CharacterHeadSlot", "LeftButton");
     s.set_modifiers(false, false, false);
@@ -408,9 +335,8 @@ fn shift_clicking_an_unresolved_slot_posts_nothing_and_never_raises() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The window's own controls: Reset re-dresses (and clicks), closing it empties the booth, and the
-/// rotate buttons move the pane's yaw by the reference's own ±0.03 per OnClick — which fires on
-/// BOTH mouse edges, so one tap is 0.06.
+/// The rotate buttons step 0.03 per `OnClick` (`UIParent.lua:1428`) and register both mouse edges
+/// (`DressUpFrame.xml:220`), so one tap turns 0.06.
 #[test]
 fn reset_re_dresses_close_empties_and_the_arrows_spin_the_pane() {
     benilla_formats::wow_data_or_skip!();
@@ -422,7 +348,7 @@ fn reset_re_dresses_close_empties_and_the_arrows_spin_the_pane() {
     let _ = s.take_dressup_intents();
     s.resolve();
 
-    // The pane's OnLoad (`Model_OnLoad`) seeded the ref's default facing on the widget itself.
+    // `Model_OnLoad` seeds the default facing.
     assert!(
         (s.model_pane_facing("DressUpModel") - 0.61).abs() < 1e-6,
         "ref UIParent.lua:1422"
@@ -436,7 +362,6 @@ fn reset_re_dresses_close_empties_and_the_arrows_spin_the_pane() {
         "Reset plays the ref's own kit"
     );
 
-    // One tap of rotate-left: OnClick on press AND release, −0.03 each.
     let before = s.model_pane_facing("DressUpModel");
     let (x, y) = s
         .eval::<(f32, f32)>(
@@ -456,8 +381,7 @@ fn reset_re_dresses_close_empties_and_the_arrows_spin_the_pane() {
     );
 
     s.run("HideUIPanel(DressUpFrame)").unwrap();
-    // Closing the window is what empties the booth, and the app reads it off the frame — the
-    // stock file's OnHide plays its sound and queues nothing (1969).
+    // The app empties the booth off the frame's visibility; the stock `OnHide` queues nothing.
     assert!(!s.frame_visible("DressUpFrame"), "the room is hidden");
     assert!(s.take_dressup_intents().is_empty());
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());

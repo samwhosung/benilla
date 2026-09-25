@@ -1,35 +1,13 @@
-//! The two guild-charter windows: the guild registrar's two panels, and the
-//! charter itself with its two faces.
-//!
-//! What these guard that the Rust-side unit tests structurally cannot: the windows are Lua over an
-//! engine snapshot, so a `GetPetitionInfo` destructured in the wrong order, a name row wired to the
-//! wrong index, the leader/signer swap tested the wrong way round, or a button pointed at the wrong
-//! verb are all invisible to `script::petition`'s own tests and green in the parse sweep. Each test
-//! below fails on exactly one of those.
-//!
-//! **The engine API is STOOD IN FOR here, deliberately** — `guild_tests`' convention, and for its
-//! reasons: what is under test is the window and nothing else, the tests need no app feed seated,
-//! and a change to the engine's plumbing cannot quietly turn one green. Two fixture shapes are the
-//! ones `script::petition` promises and are easy to get wrong:
-//!
-//! - **era booleans are `1`/`nil`, never `true`/`false`** — `isOriginator` and `CanSignPetition`;
-//! - **`GetPetitionInfo` returns SIX values in a fixed order**
-//!   (`petitionType, title, bodyText, maxSignatures, originatorName, isOriginator`), and the
-//!   fourth is the wire's *requirement*, not `MAX_PETITION_SIGNATURES`.
+//! The stock guild registrar and charter windows over a Lua stand-in for the engine's petition API,
+//! so only the windows are under test. The stand-in keeps the API's shapes: booleans are `1`/`nil`,
+//! and `GetPetitionInfo`'s fourth return is the wire's signature requirement.
 
 use benilla_ui::script::UiScript;
 
 use super::test_ui::load_ui_strict as load_xml;
 
-/// The charter engine API, stood in for in Lua.
-///
-/// One mutable table, `BenillaPetitionFixture`, is the whole model; every verb appends to `.calls`,
-/// which a test drains with `BenillaPetitionCalls()`. Tests mutate the table's FIELDS — never
-/// replace the table, since the closures below hold it as an upvalue.
-///
-/// Seeded as a **signer's** view of a charter with two of nine signatures: the case where every
-/// distinction this window makes is live at once (the Sign face showing, rows both filled and
-/// empty, Request still enabled).
+/// The petition API in Lua, seeded as a signer's view with two signatures. Tests mutate
+/// `BenillaPetitionFixture`'s fields, never the table, which the closures hold as an upvalue.
 const PETITION_FIXTURE: &str = r#"
 BenillaPetitionFixture = {
     petitionType = "charter",
@@ -76,19 +54,13 @@ function BuyGuildCharter(name) record("BuyGuildCharter:" .. name) end
 function RenamePetition(name) record("RenamePetition:" .. name) end
 "#;
 
-/// The windows' manifest slice, in `benilla.toc` order, with the fixture seated first.
-///
-/// `MoneyFrame.xml` is load-bearing rather than incidental: `GuildRegistrarMoneyFrame` declares
-/// `inherits="MoneyFrameTemplate"`, which resolves at LOAD, so without it the
-/// registrar's price row would be a bare frame and the unknown-template guard above would fire.
+/// The windows' manifest slice in `benilla.toc` order, the fixture first; `MoneyFrame.xml` comes
+/// before the registrar, whose price row inherits `MoneyFrameTemplate` at load.
 fn setup() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     s.run(PETITION_FIXTURE).unwrap();
-    // The player's own strings: the reference's `PetitionFrame_Update` formats
-    // GUILD_CHARTER_TEMPLATE and reads GUILD_PETITION_*_INSTRUCTIONS and NOT_YET_SIGNED straight
-    // out of GlobalStrings, with no fallback of its own — `format(nil, …)` raises, and the window
-    // never paints.
+    // Stock `PetitionFrame_Update` formats `GlobalStrings` entries with no fallback.
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
     load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");
@@ -99,20 +71,15 @@ fn setup() -> UiScript {
     load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
     load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
-    // `QuestTitleButtonTemplate`, which the reference's registrar inherits for its two service
-    // rows — 1.12 declares it in QuestFrameTemplates.xml, an `<Include>` of QuestFrame.xml, and
-    // ours declares it in QuestFrame.xml directly. An unknown template is a loader WARNING, so
-    // without this the rows build with no art at all and nothing goes red — which is exactly the
-    // failure `load_ui_strict` exists to turn into a red test.
+    // `QuestFrame.xml` includes `QuestTitleButtonTemplate`, which the registrar's rows inherit.
     load_xml(&s, "ScrollTemplates.xml");
     load_xml(&s, "Interface\\FrameXML\\ItemButtonTemplate.xml");
     load_xml(&s, "Interface\\FrameXML\\QuestFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\QuestLogFrame.xml");
-    // `ChatFrameEditBox`, which the reference's own purchase button indexes on every click to
-    // decide where focus goes after the name box closes — a nil there raises before the charter is
-    // bought. Ours guarded it; the reference does not.
-    load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml"); // TOOLTIP_DEFAULT_COLOR, read by the dropdown backdrops
-    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml"); // ChatFrame's seven dropdowns inherit its template
+    // `ChatFrameEditBox`, which the stock purchase button focuses unguarded
+    // (`GuildRegistrarFrame.xml:271`).
+    load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml"); // TOOLTIP_DEFAULT_COLOR, for dropdowns
+    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml"); // ChatFrame's dropdowns inherit it
     load_xml(&s, "Interface\\FrameXML\\UIMenu.xml"); // the kit the chat menus build from
     load_xml(&s, "Interface\\FrameXML\\ChatFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\UIPanelTemplates.lua");
@@ -137,7 +104,6 @@ fn calls(s: &UiScript) -> String {
     s.eval::<String>("return BenillaPetitionCalls()").unwrap()
 }
 
-/// Open the charter window the way the engine does.
 fn show_petition(s: &mut UiScript) {
     s.fire_event("PETITION_SHOW", vec![]);
     assert!(s.errors().is_empty(), "PETITION_SHOW: {:?}", s.errors());
@@ -152,12 +118,7 @@ fn show_registrar(s: &mut UiScript) {
     );
 }
 
-/// A signer's charter paints the header, the signed rows, the unsigned rows, and the member
-/// instructions — and shows Sign, not Request/Rename.
-///
-/// The row assertion is the load-bearing half: rows 1..2 carry the two signers and rows 3..9 must
-/// read `<not yet signed>`. A `GetPetitionNameInfo` bound 0-based would put "Kaplan" in row 1 and
-/// blank row 2 while every other assertion here still passed.
+/// Rows 1-2 carry the signers and 3-9 read `<not yet signed>`: `GetPetitionNameInfo` is 1-based.
 #[test]
 fn a_signers_charter_shows_the_sign_face_and_nine_rows() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -172,7 +133,7 @@ fn a_signers_charter_shows_the_sign_face_and_nine_rows() {
     );
     assert_eq!(text(&s, "PetitionFrameCharterName"), "Legacy of Steel");
     assert_eq!(text(&s, "PetitionFrameMasterName"), "Tigole");
-    // The three static labels come from GlobalStrings via `text=` and are never painted.
+    // The three static labels come from `text=` attributes; no script paints them.
     assert_eq!(text(&s, "PetitionFrameCharterTitle"), "Guild Name");
     assert_eq!(text(&s, "PetitionFrameMasterTitle"), "Guild Master");
     assert_eq!(text(&s, "PetitionFrameMemberTitle"), "Members");
@@ -187,8 +148,7 @@ fn a_signers_charter_shows_the_sign_face_and_nine_rows() {
         );
     }
 
-    // The charter's own static furniture — the three labels, the nine rows and the instructions
-    // all draw, not merely hold text.
+    // Every part draws, not merely holds text.
     for part in [
         "PetitionFrameCharterTitle",
         "PetitionFrameCharterName",
@@ -215,12 +175,7 @@ fn a_signers_charter_shows_the_sign_face_and_nine_rows() {
     );
 }
 
-/// The owner's charter is the same window inside out: Request + Rename replace Sign, and the
-/// instructions change.
-///
-/// Both halves are asserted because the two buttons share one anchor — a Show/Hide written the
-/// wrong way round stacks them and the top one wins, which looks correct from a screenshot of
-/// either view alone.
+/// Request and Rename replace Sign; the buttons share one anchor, so both halves are asserted.
 #[test]
 fn the_owners_charter_swaps_sign_for_request_and_rename() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -238,12 +193,8 @@ fn the_owners_charter_swaps_sign_for_request_and_rename() {
     );
 }
 
-/// Request Signature disables against the **wire's** requirement, never against the nine rows.
-///
-/// The fixture requires 4. At three signatures the button is live; at four it is not — and nine
-/// rows are still painted either way. A window that compared against `MAX_PETITION_SIGNATURES`
-/// would leave Request enabled on a full charter, and every other assertion in this file would
-/// still pass.
+/// Request disables at the wire's requirement, 4 here, not at the nine rows
+/// (`PetitionFrame.lua:38`).
 #[test]
 fn request_signature_disables_at_the_wires_requirement_not_at_nine() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -277,8 +228,7 @@ fn request_signature_disables_at_the_wires_requirement_not_at_nine() {
     );
 }
 
-/// `CanSignPetition` gates the Sign button independently of which face is showing: a charter can be
-/// a signer's view and still be unsignable (already signed, already guilded, full).
+/// A signer's view can still be unsignable: already signed, already guilded, or full.
 #[test]
 fn the_sign_button_follows_can_sign_petition() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -301,10 +251,8 @@ fn the_sign_button_follows_can_sign_petition() {
     );
 }
 
-/// Each button reaches its own verb, and closing the window closes the engine's session.
-///
-/// The `ClosePetition` half is the one worth pinning: it rides `OnHide`, so it fires however the
-/// window closes, and without it the engine keeps a charter session for a window nobody can see.
+/// `ClosePetition` rides `OnHide`, so it fires however the window closes
+/// (`PetitionFrame.xml:391-394`).
 #[test]
 fn the_charter_buttons_reach_their_verbs_and_the_close_clears_the_session() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -326,8 +274,7 @@ fn the_charter_buttons_reach_their_verbs_and_the_close_clears_the_session() {
     assert_eq!(calls(&s), "ClosePetition", "OnHide clears the session");
 }
 
-/// The rename dialog is registered, takes the box's text, and is capped at the server's own
-/// 24-character charter-name limit.
+/// Stock `RENAME_GUILD` caps the name at 24 (`StaticPopup.lua:138`), the server's limit too.
 #[test]
 fn rename_guild_sends_the_box_text_and_caps_at_twenty_four() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -358,9 +305,7 @@ fn rename_guild_sends_the_box_text_and_caps_at_twenty_four() {
     assert_eq!(calls(&s), "RenamePetition:Second Legacy");
 }
 
-/// The registrar opens on its services list, and Purchase swaps panels **locally** — no verb, no
-/// packet. Getting that wrong would send a buy on the first click of "Purchase a Guild Charter",
-/// before the player has typed a name.
+/// Purchase only swaps panels; the buy waits for a typed name.
 #[test]
 fn the_registrar_opens_on_services_and_purchase_is_a_local_panel_swap() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -370,13 +315,7 @@ fn the_registrar_opens_on_services_and_purchase_is_a_local_panel_swap() {
     assert!(visible(&s, "GuildRegistrarFrame"));
     assert!(visible(&s, "GuildRegistrarGreetingFrame"));
     assert!(!visible(&s, "GuildRegistrarPurchaseFrame"));
-    // **The two service rows must be VISIBLE, not merely labelled.** This assertion is here
-    // because its absence shipped the bug: the rows inherited `hidden="true"` from a template
-    // modelled on the quest list's POOLED rows, which are shown one at a time by code. These are
-    // static and nothing ever calls `:Show()` on them, so both were permanently invisible — the
-    // window came up as a bare "Available Services" heading over blank parchment — while every
-    // `GetText()` assertion below passed, because a hidden button still knows its own label.
-    // Decision 0672's lesson in another key: a frame that loads is not a frame that draws.
+    // Visible, not merely labelled: a hidden button still answers `GetText()`.
     for row in ["GuildRegistrarButton1", "GuildRegistrarButton2"] {
         assert!(visible(&s, row), "{row} is on screen, not just loaded");
     }
@@ -393,8 +332,6 @@ fn the_registrar_opens_on_services_and_purchase_is_a_local_panel_swap() {
     s.run("GuildRegistrarButton1:Click()").unwrap();
     assert!(visible(&s, "GuildRegistrarPurchaseFrame"));
     assert!(!visible(&s, "GuildRegistrarGreetingFrame"));
-    // The purchase panel's own furniture, for the reason the services rows above are checked: a
-    // window whose parts load but do not draw passes every text assertion.
     for part in [
         "GuildRegistrarPurchaseText",
         "GuildRegistrarCostLabel",
@@ -408,11 +345,7 @@ fn the_registrar_opens_on_services_and_purchase_is_a_local_panel_swap() {
     assert_eq!(calls(&s), "", "the swap sends nothing");
 }
 
-/// Buying sends the box's text and closes the window; registering sends the no-argument turn-in.
-///
-/// The close-after-buy is the reference's own behaviour and is asserted because it looks like a bug
-/// otherwise: a buy is one-shot, and its answer is an item arriving rather than anything this
-/// window will be told.
+/// The stock purchase button closes the window after the buy (`GuildRegistrarFrame.xml:269-270`).
 #[test]
 fn purchase_sends_the_typed_name_and_register_turns_the_charter_in() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -445,10 +378,8 @@ fn purchase_sends_the_typed_name_and_register_turns_the_charter_in() {
     );
 }
 
-/// The price row is filled at panel-swap time from `GetGuildCharterCost()`, in copper.
-///
-/// Reading it at *show* time instead would paint a 0: the cost belongs to the open registrar's
-/// charter list, and the greeting panel never displays one.
+/// Stock `GuildRegistrar_ShowPurchaseFrame` reads `GetGuildCharterCost()`, in copper, at the swap
+/// (`GuildRegistrarFrame.lua:8-11`).
 #[test]
 fn the_charter_price_is_read_when_the_purchase_panel_opens() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -460,8 +391,8 @@ fn the_charter_price_is_read_when_the_purchase_panel_opens() {
     assert_eq!(text(&s, "GuildRegistrarCostLabel"), "Cost:");
 }
 
-/// Re-opening the registrar always lands on the services list, never on a half-filled purchase
-/// panel left over from last time.
+/// Stock `GuildRegistrar_OnShow` shows the greeting and hides the purchase panel
+/// (`GuildRegistrarFrame.lua:1-3`).
 #[test]
 fn reopening_the_registrar_returns_to_the_services_list() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -477,8 +408,8 @@ fn reopening_the_registrar_returns_to_the_services_list() {
     assert!(!visible(&s, "GuildRegistrarPurchaseFrame"));
 }
 
-/// Both windows are registered UIPanels — without a row, `ShowUIPanel` degrades to a bare `Show()`
-/// in no slot and two left-slot windows paint over each other (B288's shape).
+/// Without a `UIPanelWindows` row, `ShowUIPanel` is a bare `Show()` and the windows overlap
+/// (`UIParent.lua:33-34`).
 #[test]
 fn both_charter_windows_are_registered_left_slot_panels() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -491,7 +422,7 @@ fn both_charter_windows_are_registered_left_slot_panels() {
             "{frame} must hold a panel row"
         );
     }
-    // And they are rivals, not neighbours: opening one seats it where the other was.
+    // Both left with `pushable = 0`: one replaces the other.
     show_registrar(&mut s);
     show_petition(&mut s);
     assert!(visible(&s, "PetitionFrame"));

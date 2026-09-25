@@ -1,19 +1,9 @@
-//! What a UI change costs on the **full shipped UI** — the headless twin of the live hover
-//! recorder (`hover_log`), and the loop that made the tooltip-hover cost reproducible without a
-//! play session.
-//!
-//! The live runs said a hover frame that ran the layout fixpoint cost ~10 ms against ~0.2 ms for
-//! one that did not, but neither the synthetic tooltip probes nor the shipped `BagFrame.xml` hover
-//! loop reproduced it: with content that does not MOVE, the change gate absorbs everything. The
-//! missing ingredient is that a real hover sweep shows a *different item every frame* — line widths
-//! that actually change. That is what [`tooltip_change_costs_a_whole_ui_solve`] drives, and with it
-//! the cost reproduces headlessly and can be measured against a fix.
+//! What a UI change costs on the full shipped UI, headless: the solves, gate walks and graph
+//! derivations a tooltip hover or a moving region pays.
 //!
 //! Run with `cargo test --release -p benilla-app --lib -- --ignored --nocapture resolve_bench`;
-//! `WOW_LAYOUT_PROF=1` adds the per-solve shape — and since decision 1350 its `solved=`/`swept=`
-//! columns are the ones to read: they are the SCOPE of the solve, and 1350's whole claim is that
-//! they stay a handful while `frames=`/`anchored=` grow without bound. A solve whose scope tracks
-//! the graph again is precisely the regression this file exists to catch.
+//! `WOW_LAYOUT_PROF=1` adds each solve's shape, whose `solved=`/`swept=` scope should stay small
+//! while `frames=`/`anchored=` grow.
 
 use std::time::Instant;
 
@@ -23,8 +13,7 @@ fn ms(t: Instant) -> f64 {
     t.elapsed().as_secs_f64() * 1000.0
 }
 
-/// The deterministic stand-in for the app's font engine: every string has one size, so a measure
-/// answer is stable across frames and only real text changes move the layout.
+/// A deterministic font engine: 6 units a character, so only a real text change moves the layout.
 fn answer_measures(s: &mut UiScript) -> usize {
     let reqs = s.fontstrings_needing_measure();
     let n = reqs.len();
@@ -45,14 +34,11 @@ fn answer_measures(s: &mut UiScript) -> usize {
     n
 }
 
-/// The full shipped UI, loaded and settled — the graph a real hover actually pays for.
+/// The full shipped UI, loaded and settled.
 fn settled_default_ui() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1600.0, 900.0);
-    // The in-game UI materializes on world entry (1051), so a player always exists by the time the
-    // manifest loads — and the stock macro window's character tab formats `UnitName("player")`
-    // into its label inside its own OnLoad. A manifest load with no player is a state the client
-    // never reaches.
+    // The UI loads on world entry, so a player always exists by then.
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -73,27 +59,21 @@ fn settled_default_ui() -> UiScript {
     s
 }
 
-/// One frame in the app's own order (`extract::tick_script`): measure FIRST, then resolve.
+/// One frame in the app's order (`extract::tick_script`): measure first, then resolve.
 fn app_frame(s: &mut UiScript) {
     answer_measures(s);
     s.resolve();
 }
 
-/// A frame that also **ticks the VM**, i.e. runs the shipped UI's own `OnUpdate` handlers, in
-/// `tick_script`'s real order (tick → measure → resolve).
-///
-/// [`app_frame`] deliberately models only the measure/resolve half, and the tooltip benches stand
-/// in for the handler by calling it themselves. That is fine when the test IS the driver — but a
-/// test asking "is anything in the shipped UI writing layout on its own?" has to let the shipped
-/// UI actually run, or it answers a question nobody asked.
+/// A frame that also ticks the VM, so the shipped UI's own `OnUpdate` handlers run, in
+/// `tick_script`'s order: tick, measure, resolve.
 fn app_frame_ticked(s: &mut UiScript, dt: f32) {
     s.tick(dt);
     answer_measures(s);
     s.resolve();
 }
 
-/// A tooltip whose lines change width every call — the hover sweep across a bag grid, where each
-/// slot holds a different item.
+/// A tooltip whose lines change width every call, as in a hover sweep across a bag grid.
 fn install_changing_tooltip(s: &UiScript, owner: &str, func: &str) {
     s.run(&format!(
         r#"
@@ -147,20 +127,14 @@ fn tooltip_change_costs_a_whole_ui_solve() {
     );
 }
 
-/// The gate the measure-first order exists to hold: a tooltip content change costs the frame
-/// **one** layout solve, not two.
-///
-/// The old order resolved, then measured, then had to resolve AGAIN because the answers moved the
-/// anchor solve's read set — and on the shipped UI each of those walks 2,164 frames and sweeps
-/// 6,297 regions per round, for a change that touches ten FontStrings inside one frame. Nothing
-/// about the second solve is tooltip-sized, and nothing about it is cheap.
+/// Measuring before resolving makes a tooltip content change cost one layout solve; measured
+/// after, the answers would force a second whole-UI solve.
 #[test]
 fn a_tooltip_content_change_costs_exactly_one_layout_solve() {
     benilla_formats::wow_data_or_skip!();
     let mut s = settled_default_ui();
     install_changing_tooltip(&s, "GateOwner", "gate_change");
 
-    // Settle the newly-created owner + the tooltip's first content.
     for _ in 0..4 {
         s.run("gate_change()").unwrap();
         app_frame(&mut s);
@@ -177,22 +151,15 @@ fn a_tooltip_content_change_costs_exactly_one_layout_solve() {
         "10 content changes must cost 10 solves — one each. Two per change means the measure \
          round-trip is running AFTER the resolve again (extract::tick_script's order)."
     );
-    // …and none of those ten may DERIVE the graph. This is the second shape of
-    // the same law `a_region_moving_every_frame_costs_no_graph_derivation_on_the_shipped_ui`
-    // guards, and it is worth asserting separately because it arrives by a different road: a
-    // hover sweep churns tooltip CONTENT, so its per-frame writes are measure answers and
-    // re-anchors of pooled line regions rather than one moving texture. The bag-hover re-enter
-    // loop is the most common interactive path in the client; a derivation per frame here is
-    // 1.48 ms every frame the cursor sits over a bag.
+    // Nor may they derive the graph: a content change writes measure answers and re-anchors
+    // pooled line regions, nothing structural.
     assert_eq!(
         s.layout_derivations() - derives_before,
         0,
         "a settled tooltip whose CONTENT changes must not re-derive the layout graph — the line \
          pool is already built, so nothing structural is happening (decision 1388)"
     );
-    // …and the measure answers must have landed in that one solve: a frame that resolved before
-    // measuring leaves the fresh text unmeasured until the next frame, which is the visible half
-    // of the same bug (a tooltip plate one frame behind its content).
+    // The answers landed in that one solve, or the plate would lag its text by a frame.
     assert_eq!(
         answer_measures(&mut s),
         0,
@@ -200,36 +167,20 @@ fn a_tooltip_content_change_costs_exactly_one_layout_solve() {
     );
 }
 
-/// **The idle law**: the settled shipped UI, with nothing happening, must cost
-/// **zero** gate walks per frame — not one cheap one, zero.
-///
-/// The other guards in this file pin what the ENGINE charges for a change. This one pins that
-/// nothing in the shipped UI is quietly making a change every frame in the first place, which is
-/// the half a law about the engine cannot see. It is the tripwire for a new always-on toucher
-/// being added to `assets/ui/` — the worst shape of this bug, because it costs on *every* frame of
-/// *every* session rather than only while something is animating. The sweep behind 1385 found real
-/// candidates for it (`TemporaryEnchantFrame`'s OnUpdate is resident for the whole session; the
-/// measure round-trip used to bump the epoch on every same-size re-measure), so the shape is not
-/// hypothetical.
-///
-/// A failure here does not name the culprit — `WOW_LAYOUT_TOUCH_TRACE=<secs>:<n>` does, by
-/// backtracing the touch sites on a live run.
+/// With nothing happening, the settled shipped UI costs zero gate walks per frame: this catches a
+/// shipped handler writing a layout input every frame. `WOW_LAYOUT_TOUCH_TRACE=<secs>:<n>` names
+/// the writer on a live run (`docs/CONTRIBUTING.md`, "Running it unattended").
 #[test]
 fn the_settled_shipped_ui_costs_no_gate_walk_on_a_quiet_frame() {
     benilla_formats::wow_data_or_skip!();
     let mut s = settled_default_ui();
-    // Ticked frames, so the shipped UI's own OnUpdate handlers run — the whole point (see
-    // `app_frame_ticked`). A couple of frames of grace first: `settled_default_ui` stops as soon
-    // as the measure round-trip goes quiet, which is one edge earlier than the layout gate closing
-    // behind it, and the first ticked frames arm handlers that have never run.
+    // Grace frames: the layout gate closes one edge after measuring goes quiet, and the first
+    // ticks arm handlers that have never run.
     for _ in 0..8 {
         app_frame_ticked(&mut s, 1.0 / 60.0);
     }
-    // POSITIVE CONTROL. "Zero walks" only means anything if the shipped UI's handlers actually
-    // ran — a tick that silently fired nothing would also read zero, and would make this test a
-    // green light for exactly the regression it exists to catch. `BuffFrameUpdateTime` is advanced
-    // by `BuffFrame_OnUpdate` on every frame (down by `elapsed`, or up by TOOLTIP_UPDATE_TIME when
-    // it crosses), so one tick must move it.
+    // Positive control: zero walks means nothing unless the handlers ran, and
+    // `BuffFrame_OnUpdate` moves `BuffFrameUpdateTime` every frame (`BuffFrame.lua:29-33`).
     s.run("__probe_bfut = BuffFrameUpdateTime")
         .expect("read the control");
     app_frame_ticked(&mut s, 1.0 / 60.0);
@@ -253,25 +204,10 @@ fn the_settled_shipped_ui_costs_no_gate_walk_on_a_quiet_frame() {
     );
 }
 
-/// **The castbar law** (ledger B283), on the full shipped UI: a region that moves
-/// every frame must cost **one** whole-roster gate walk per frame.
-///
-/// This is the guard for the bug class 1383 named and the castbar then hit. `CastingBar.xml`'s
-/// OnUpdate slides `CastingBarSpark` one `SetPoint` per frame for the length of every cast — the
-/// reference's own architecture, and the classic addon idiom besides. Measured live at the
-/// Stormwind gates it cost **+4.2 ms of CPU per frame** on a default UI: three walks per frame at
-/// ~1.0–1.4 ms each (10,438 anchored regions re-hashed every walk), because the fingerprint was
-/// hashed over the 0294 seeds as well as the inputs and so no walk could ever close tier 1.
-///
-/// Three things make this the falsifier rather than a smoke check:
-/// * it runs on the **shipped** UI, so the whole-roster term is real — a synthetic two-frame model
-///   shows the same *counts* and none of the cost;
-/// * the Lua body ends in a frame getter, because that is what a live tick does. A later handler's
-///   `GetWidth` forces the synchronous mid-tick solve; modelling the frame as a lone `resolve()`
-///   hides two of the three walks;
-/// * it asserts on `layout_gate_walks`, not `layout_solves`. A walk that concludes "nothing moved"
-///   pays the identical preamble and never reaches the solve counter — one of the castbar's three
-///   walks was exactly that, so the old counter under-reported the bug by a third.
+/// A region moving every frame, as `CastingBarFrame_OnUpdate` moves the spark
+/// (`CastingBarFrame.lua:114`), costs one whole-roster gate walk per frame on the shipped UI. The
+/// Lua ends in a frame getter, as a later handler in a live tick would, forcing the mid-tick solve;
+/// the count is walks, since a walk that finds nothing moved never reaches the solve counter.
 #[test]
 fn a_region_moving_every_frame_costs_one_gate_walk_on_the_shipped_ui() {
     benilla_formats::wow_data_or_skip!();
@@ -296,7 +232,7 @@ fn a_region_moving_every_frame_costs_one_gate_walk_on_the_shipped_ui() {
     )
     .unwrap();
 
-    // Settle the newly-created bar and spark — a birth is legitimately a wide, multi-walk solve.
+    // Settle the new bar and spark: a birth is a wide, multi-walk solve.
     for _ in 0..6 {
         s.run("bench_spark_frame()").unwrap();
         app_frame(&mut s);
@@ -329,34 +265,10 @@ fn a_region_moving_every_frame_costs_one_gate_walk_on_the_shipped_ui() {
     );
 }
 
-/// **The castbar law, part two**: those ten gate walks must cost **zero**
-/// derivations of the layout graph.
-///
-/// 1385 got the moving spark from three whole-roster walks per frame down to one, and the test
-/// above is its guard. It did nothing about what the surviving walk *costs*: measured at the
-/// Stormwind pin (3,218 frames, 10,438 anchored regions) the preamble ran 1.48 ms, 79% of it in two
-/// phases — re-hashing every anchored region (919 µs) and re-filtering every seed rect for liveness
-/// (255 µs) — to rediscover a graph whose SHAPE had not changed. At 144 fps that is a fifth of the
-/// frame, on every frame of every cast, and it is paid by anything that animates: floating combat
-/// text moves up to twenty strings a frame, and a frame getter inside an OnUpdate (`GetWidth` calls
-/// `settle`) buys another one each.
-///
-/// So the counter this asserts on is not `layout_gate_walks` but `layout_derivations`. A moving
-/// region names its node, the ledger vouches for the cached roster and edges, and the resolve
-/// re-hashes one node instead of 13,656. Zero is the whole claim: **one** derivation per frame
-/// would mean a write site somewhere fell back to the conservative `touch_layout` and the ledger
-/// is being poisoned every frame, which reads as a perfectly healthy walk count and costs the
-/// entire 1.48 ms.
-///
-/// The positive control is not optional here. "Zero derivations" is exactly what a permanently
-/// broken counter also reports, so the test first proves the counter can move — a frame BIRTH is
-/// structural by construction and must derive.
-///
-/// It ticks the VM (`app_frame_ticked`) rather than driving the resolve alone, so the shipped UI's
-/// own `OnUpdate` handlers run on every one of these frames. That is the difference between "one
-/// synthetic write can use the ledger" and "the ledger survives the real UI": a single handler
-/// anywhere in `assets/ui/` falling back to a conservative touch every frame would poison it for
-/// everything else, and only a ticked frame can see that.
+/// Those walks cost zero derivations of the layout graph: a moving region names its node, so the
+/// resolve re-hashes one node, not the roster; a derivation per frame means a write site fell back
+/// to the conservative `touch_layout`. The VM ticks, so the shipped handlers are held to it too,
+/// and a birth must derive, which proves the counter moves.
 #[test]
 fn a_region_moving_every_frame_costs_no_graph_derivation_on_the_shipped_ui() {
     benilla_formats::wow_data_or_skip!();
@@ -378,9 +290,7 @@ fn a_region_moving_every_frame_costs_no_graph_derivation_on_the_shipped_ui() {
     )
     .unwrap();
 
-    // The positive control, taken across the birth above: a new frame and a new region move the
-    // roster, so they MUST derive. If this reads zero the counter is dead and the real assertion
-    // below proves nothing.
+    // Positive control: a birth moves the roster, so it must derive.
     let born_at = s.layout_derivations();
     for _ in 0..6 {
         s.run("bench_spark2_frame()").unwrap();
@@ -417,23 +327,15 @@ fn a_region_moving_every_frame_costs_no_graph_derivation_on_the_shipped_ui() {
     );
 }
 
-/// The perf half of decision 1350, asserted as a COUNT: a tooltip content change must cost a
-/// solve whose SCOPE is tooltip-sized, on a UI of 3,000 frames and 8,800 anchored regions.
-///
-/// Milliseconds are deliberately not the gate here. This exact cost has now been chased three
-/// times — 0735 (the measure cache), 0771 (the double solve), and this — and on two of those the
-/// ms column was contaminated by machine state (0713's stall class) while the work counts were
-/// clean. The bound is also what makes the regression *reportable*: 1350's pin found the sweep's
-/// cost tripling with no counter behind it, because `regions_swept` counted the entries the sweep
-/// skipped as well as the ones it resolved.
+/// A tooltip content change solves a tooltip-sized scope on the full shipped UI, gated on counts,
+/// not milliseconds, which machine state skews.
 #[test]
 fn a_tooltip_content_change_solves_a_tooltip_sized_scope() {
     benilla_formats::wow_data_or_skip!();
     let mut s = settled_default_ui();
     install_changing_tooltip(&s, "ScopeSizeOwner", "scope_size_change");
 
-    // Settle the newly-created owner and the tooltip's first content — a birth is legitimately a
-    // wide solve (a new node has no cached rect to trust).
+    // Settle the new owner: a birth is a wide solve, with no cached rect to trust.
     for _ in 0..6 {
         s.run("scope_size_change()").unwrap();
         app_frame(&mut s);
@@ -451,15 +353,9 @@ fn a_tooltip_content_change_solves_a_tooltip_sized_scope() {
     }
 }
 
-/// The scoped resolve's falsifier: on the shipped UI, mid-sweep, a solve that
-/// touched only the dirty closure must produce **exactly** the rects a from-scratch whole-graph
-/// solve produces.
-///
-/// This is the gate for the whole change, and it is deliberately run on the frames that never
-/// settle — a hover sweep changes content every frame, so `WOW_LAYOUT_VERIFY`'s settled-frame
-/// comparison never fires there, and those are the only frames the scope was built for. The
-/// comparison is `extract()`, not an internal rect map: a stale rect that no quad carries is not a
-/// bug, and a stale rect that one does carry is the bug in the form the screen would show it.
+/// Mid-sweep, a scoped solve yields exactly the quads a from-scratch whole-graph solve does. It
+/// runs on frames that never settle, where `WOW_LAYOUT_VERIFY`'s settled-frame check never fires,
+/// and compares `extract()`, so only a stale rect that paints counts.
 #[test]
 fn a_scoped_resolve_reproduces_the_whole_graph_solve() {
     benilla_formats::wow_data_or_skip!();
@@ -467,7 +363,6 @@ fn a_scoped_resolve_reproduces_the_whole_graph_solve() {
     install_changing_tooltip(&s, "ScopeOwner", "scope_change");
 
     for step in 0..12 {
-        // A content change, resolved the way the app resolves it — scoped.
         s.run("scope_change()").unwrap();
         app_frame(&mut s);
         let scoped = s.extract();
@@ -487,12 +382,8 @@ fn a_scoped_resolve_reproduces_the_whole_graph_solve() {
     }
 }
 
-/// The steady-state cost of the per-frame measure sweep alone: the UI settled, every FontString
-/// measured, every key a cache hit — what does *asking* cost? It is paid on EVERY frame, quiet
-/// ones included, which made it a suspect on 1350's successor list — and this bench closed it:
-/// 0.046 ms/sweep on the full shipped UI in release (2026-08-15; the ~1.0 ms once quoted was a
-/// dev-build number). Kept as the lane's regression watch: if this climbs toward a milli-
-/// second, the sweep's per-row clones/hash grew or the cache stopped hitting.
+/// The per-frame measure sweep's steady-state cost, every key a cache hit: 0.046 ms a sweep in
+/// release. Near a millisecond, the per-row clones or hash grew or the cache stopped hitting.
 #[test]
 #[ignore]
 fn measure_sweep_steady_state_cost() {
@@ -514,26 +405,9 @@ fn measure_sweep_steady_state_cost() {
     );
 }
 
-/// **The hover-shape law** (ledger B06): a tooltip line that changes ROLE between
-/// WRAPPED and PLAIN must cost **zero** derivations of the layout graph.
-///
-/// `a_tooltip_content_change_costs_exactly_one_layout_solve` above asserts the same zero and could
-/// not see this, because the tooltip it drives always has the same SHAPE — the same lines, the
-/// same wrap flags, only the widths move. A real hover sweep changes shape on every step: one
-/// item's line 2 is a wrapping "Use:" description, the next one's is a plain "Main Hand", and a
-/// spell's line 2 is a plain mana cost where the next spell's is a wrapping tooltip body.
-///
-/// `append_line` re-pins the line's wrap column from that flag on every append, and the write is
-/// gated on a real change — so it fires exactly on the shape flip and nowhere else. It reached the
-/// conservative `Model::touch_layout` (it predates 1388 and was never migrated, being an internal
-/// write rather than a `SetWidth` binding), and the whole graph was therefore re-derived on every
-/// hover from one item to a differently-shaped one: every live frame's scale re-synced, every seed
-/// rect re-filtered, every anchored region re-hashed and its edges rebuilt. Live at 12,465
-/// anchored regions the preamble read `incr=0` on every content-change frame.
-///
-/// The positive control is not optional: "zero derivations" is what a permanently broken counter
-/// reports too, so the flip is driven for a while BEFORE the window opens (a birth is legitimately
-/// structural) and the counter is proved able to move.
+/// A tooltip line flipping between wrapped and plain costs zero derivations: `tooltip::append_line`
+/// re-pins the wrap column only on a real change, and names its region. A real hover changes
+/// shape (a wrapped "Use:" line, then a plain "Main Hand"), which a content-only change never does.
 #[test]
 fn a_tooltip_line_flipping_wrapped_to_plain_costs_no_graph_derivation() {
     benilla_formats::wow_data_or_skip!();
@@ -561,8 +435,7 @@ fn a_tooltip_line_flipping_wrapped_to_plain_costs_no_graph_derivation() {
     )
     .unwrap();
 
-    // The positive control, taken across the owner's birth and the line pool's growth — both move
-    // the roster, which is the one thing a per-node ledger cannot describe, so both MUST derive.
+    // Positive control: the owner's birth and the line pool's growth move the roster and derive.
     let born_at = s.layout_derivations();
     for _ in 0..8 {
         s.run("flip_change()").unwrap();
@@ -589,23 +462,8 @@ fn a_tooltip_line_flipping_wrapped_to_plain_costs_no_graph_derivation() {
     );
 }
 
-/// **The hover-sweep law** (ledger B06): sweeping the cursor across a bag grid or a
-/// spellbook page — a NEW tooltip OWNER on every step — must cost **zero** derivations of the
-/// layout graph.
-///
-/// This is the shape the director's report actually has, and it is the one the guard above still
-/// could not see: that one keeps a single owner and only changes the tooltip's content. A real
-/// sweep does both, and the owner half is the more expensive of the two, because
-/// `GameTooltip:SetOwner` RETARGETS the plate's anchor at the button under the cursor. 1388
-/// classified a retarget as structural — an edge disappears and another appears, which no per-node
-/// hash can describe — and answered it by throwing the cached graph away. That answer cost a full
-/// whole-roster derivation on every slot crossed. 1625 keeps the graph and re-points the one
-/// node's edges instead.
-///
-/// The correctness half of that patch is guarded where it can be *seen*, on rects, by
-/// `benilla-ui`'s `a_retargeted_anchor_follows_its_new_target` (and by `WOW_LAYOUT_VERIFY` behind
-/// every one of that crate's tests). This one guards the COST, on the shipped UI, where the roster
-/// is big enough for the derivation to matter.
+/// A sweep across owners (a new `SetOwner` target every step, as across a bag grid) costs zero
+/// derivations: the retarget re-points the one node's edges instead of discarding the graph.
 #[test]
 fn a_hover_sweep_across_owners_costs_no_graph_derivation() {
     benilla_formats::wow_data_or_skip!();
@@ -635,8 +493,7 @@ fn a_hover_sweep_across_owners_costs_no_graph_derivation() {
     )
     .unwrap();
 
-    // The positive control: twelve owner births and the tooltip's line pool growing are all
-    // roster moves, so the settling pass MUST derive. Zero here would make the assertion vacuous.
+    // Positive control: twelve births and the line pool's growth move the roster and derive.
     let born_at = s.layout_derivations();
     for _ in 0..40 {
         s.run("sweep_change()").unwrap();
@@ -648,8 +505,7 @@ fn a_hover_sweep_across_owners_costs_no_graph_derivation() {
          here means `layout_derivations` never moves and the assertion below proves nothing."
     );
 
-    // Two full laps of the twelve owners, so every step is a re-hover of a button the graph
-    // already knows: nothing structural is left to discover.
+    // Two laps of the twelve owners: every step re-hovers a button the graph already knows.
     let derives_before = s.layout_derivations();
     for _ in 0..24 {
         s.run("sweep_change()").unwrap();
@@ -665,23 +521,10 @@ fn a_hover_sweep_across_owners_costs_no_graph_derivation() {
     );
 }
 
-/// **The action-bar hover law** (ledger B06): sweeping the cursor across ACTION BAR
-/// buttons must cost **zero** derivations of the layout graph.
-///
-/// The two guards above drive `SetOwner(button, "ANCHOR_RIGHT")` — the bag slot's idiom. The bars
-/// do not use it. With `UberTooltips` at its shipped default of `"1"`, every action button routes
-/// through `GameTooltip_SetDefaultAnchor` (stock `ActionButton_SetTooltip`, and the stance/pet/bonus bars the
-/// same), which is `SetOwner(owner, "ANCHOR_NONE")` followed by an explicit `SetPoint` — a
-/// completely different arm of the same verb, and the one that DROPS the tooltip's anchors
-/// (`0x52fe90`'s mode-7 leg reaches `0x52fec2 call 0x767ed0` like every mode but PRESERVE — 2176
-/// re-confirmed that at the bytes after 2142 predicted the opposite).
-///
-/// That drop took the conservative touch, so it re-derived the whole graph on every button the
-/// cursor crossed — and on nothing else, which is why it survived two rounds of fixing and a
-/// live probe: the director's own recording is what named it, every derive frame owned by a
-/// `MultiBarBottomLeftButton*` or `BonusActionButton*`. The lesson worth keeping is in the guards
-/// as much as the fix: a hover guard that only drives one of two anchor idioms is testing the
-/// idiom, not the gesture.
+/// An action-bar hover sweep costs zero derivations. With `UberTooltips` at its 1.12 default "1",
+/// an action button anchors through `GameTooltip_SetDefaultAnchor` (`ActionButton.lua:365-367`):
+/// `SetOwner(owner, "ANCHOR_NONE")`, which drops the tooltip's anchors (`0x52fe90` reaches
+/// `0x52fec2 call 0x767ed0` for every mode but PRESERVE), then an explicit `SetPoint`.
 #[test]
 fn an_action_bar_hover_sweep_costs_no_graph_derivation() {
     benilla_formats::wow_data_or_skip!();
@@ -713,7 +556,7 @@ fn an_action_bar_hover_sweep_costs_no_graph_derivation() {
     )
     .unwrap();
 
-    // Positive control across the births and the line pool's growth — both structural.
+    // Positive control: the births and the line pool's growth are structural.
     let born_at = s.layout_derivations();
     for _ in 0..40 {
         s.run("bar_hover()").unwrap();
@@ -739,26 +582,10 @@ fn an_action_bar_hover_sweep_costs_no_graph_derivation() {
     );
 }
 
-/// **The bag-addon hover law** (ledger B06's third idiom): a hover that owns the
-/// tooltip WITH an anchor and then re-points it by hand must cost **zero** derivations.
-///
-/// The guard above drives `SetOwner(owner, "ANCHOR_NONE")` + `ClearAllPoints()`, and it has always
-/// passed — because ANCHOR_NONE already dropped the anchors, so the `ClearAllPoints()` after it
-/// finds an empty list and touches nothing at all. It is the third idiom that was never driven:
-///
-/// ```lua
-/// -- Bagnon_Core/core/Item.lua -> Bagnon_Core/core/Utility.lua
-/// ContainerFrameItemButton_OnEnter(item)      -- SetOwner(item, "ANCHOR_RIGHT"): sets an anchor
-/// Bagnon_AnchorTooltip(item)                  -- ClearAllPoints(), then GetLeft(), then SetPoint
-/// ```
-///
-/// `ClearAllPoints()` with anchors present took the conservative touch, and the `GetLeft()` on the
-/// next line settles the layout right there — so the whole graph was re-derived INSIDE the handler,
-/// once per bag slot the cursor crossed. Measured live on `Probetwo` with the director's AddOns
-/// folder, `WOW_UI_HANDLERS=8` over a 60 Hz sweep of twelve `BagnonItem*` buttons: `OnEnter` self
-/// 1.75 ms/frame and `[layout-derive]` naming this site in three of its four samples, against
-/// 0.43 ms/frame of total `tick` for the same sweep over stock `ContainerFrame1Item*` with no
-/// addons. `derives/frame` read 0.88 with Bagnon and 0.00 without.
+/// A hover that owns the tooltip with an anchor, then clears and re-points it by hand, costs zero
+/// derivations: the bag-addon idiom of `SetOwner(item, "ANCHOR_RIGHT")`, then `ClearAllPoints()`,
+/// `GetLeft()` and `SetPoint`. Clearing live anchors is a retarget onto the empty set, and the
+/// `GetLeft()` settles the layout inside the handler.
 #[test]
 fn a_bag_addon_hover_sweep_costs_no_graph_derivation() {
     benilla_formats::wow_data_or_skip!();
@@ -796,7 +623,7 @@ fn a_bag_addon_hover_sweep_costs_no_graph_derivation() {
     )
     .unwrap();
 
-    // Positive control across the births and the line pool's growth — both structural.
+    // Positive control: the births and the line pool's growth are structural.
     let born_at = s.layout_derivations();
     for _ in 0..40 {
         s.run("bag_hover()").unwrap();

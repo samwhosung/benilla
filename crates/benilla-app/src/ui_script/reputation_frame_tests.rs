@@ -1,28 +1,9 @@
-//! The stock **Reputation tab** (`Interface\FrameXML\ReputationFrame.xml`) and the **reputation
-//! watch bar** (`Interface\FrameXML\ActionBarFrame.xml`) driven end-to-end, engine-only (no Bevy) —
-//! the per-window test module the skills/spellbook/bank files already establish.
-//!
-//! What it pins is the PAINT law, which is the half `benilla-ui`'s own
-//! `script::reputation::tests` structurally cannot reach: that module drives the twelve globals and
-//! asserts the tuples, and stops at the seam. Everything below is about what the tuples become on
-//! screen — which of the 15 fixed row slots a visible index lands in, whether a header slot draws
-//! the plus or the minus art, the `FACTION_BAR_COLORS[standingID]` fill, the scroll offset
-//! re-binding the slots, the popup's three boxes, and the watch bar's own text and posture.
-//!
-//! The fixture deliberately mirrors the engine module's own (Alliance over Ironforge + Stormwind,
-//! Steamwheedle over Booty Bay, the parentless bucket last) so a failure here reads against a shape
-//! that is already pinned one layer down, and the two can be compared line for line.
-//!
-//! **All of it is the reference's own now** — the window since 1751 (`CharacterFrame.xml`,
-//! `PaperDollFrame.xml`), the page itself (`ReputationFrame.xml`) with it, and the watch bar with
-//! `ActionBar.xml`'s retirement into `ActionBarFrame.xml`. So every test here opens with
-//! `wow_data_or_skip!()` and loads [`super::test_ui::CHARACTER_UI`], and what it pins is our
-//! ENGINE under stock XML rather than XML of ours.
+//! The stock Reputation tab and its watch bar, both `ReputationFrame.xml`, engine-only: what the
+//! faction tuples become on screen.
 
 use benilla_ui::script::{FactionEntry, QuadContent, ReputationState, UiScript, UnitState};
 
-/// An ordinary bar row: visible, not a header, `standing_id` 5 ("Friendly") sitting 1000 into a
-/// 6000-wide rank window. The same numbers `benilla-ui`'s own fixture uses.
+/// A visible bar row: `standing_id` 5 (Friendly), 1000 into a 6000-wide rank window.
 fn entry(faction_id: u32, rep_list_id: u32, parent_id: u32, name: &str) -> FactionEntry {
     FactionEntry {
         faction_id,
@@ -42,8 +23,7 @@ fn entry(faction_id: u32, rep_list_id: u32, parent_id: u32, name: &str) -> Facti
     }
 }
 
-/// A header row as the wire really delivers one: flag `0x08` set and NOT visible (the Steamwheedle
-/// Cartel's actual byte). Its own visibility never gates its group.
+/// A header as the wire delivers one: flag `0x08`, not visible, which never gates its group.
 fn header(faction_id: u32, rep_list_id: u32, name: &str) -> FactionEntry {
     FactionEntry {
         visible: false,
@@ -52,19 +32,9 @@ fn header(faction_id: u32, rep_list_id: u32, name: &str) -> FactionEntry {
     }
 }
 
-/// The engine module's own fixture, pushed out of order so the engine's sort is what shows. The
-/// visible rows it produces, in order:
-///
-/// | slot | row |
-/// |------|-----|
-/// | 1 | header `Alliance` |
-/// | 2 | `Ironforge` |
-/// | 3 | `Stormwind` |
-/// | 4 | header `Steamwheedle Cartel` |
-/// | 5 | `Booty Bay` |
-/// | 6 | header `Other` |
-/// | 7 | `Argent Dawn` |
-/// | 8 | `Bloodsail Buccaneers` |
+/// `benilla-ui`'s own reputation fixture, pushed out of order so the sort shows. Visible slots:
+/// 1 Alliance (header), 2 Ironforge, 3 Stormwind, 4 Steamwheedle Cartel (header), 5 Booty Bay,
+/// 6 Other (header), 7 Argent Dawn, 8 Bloodsail Buccaneers.
 fn state() -> ReputationState {
     ReputationState {
         entries: vec![
@@ -80,27 +50,16 @@ fn state() -> ReputationState {
     }
 }
 
-/// The character window, whose third tab this page is — [`super::test_ui::CHARACTER_UI`], which
-/// already carries `ReputationFrame.xml` (stock `CharacterFrame_ShowSubFrame` hides all five pages
-/// by name, unguarded) and `ActionBar.xml` (the watch bar, and the show/hide pair's
-/// `ShowWatchedReputationBarText`). This page adds nothing of its own.
-///
-/// It was a hand-copied manifest prefix until the window became the reference's:
-/// stock `CharacterFrame_OnLoad` reaches into four other files before it does anything else, so the
-/// list stopped being short enough for a per-module copy to stay honest.
+/// The character window, [`super::test_ui::CHARACTER_UI`], which carries `ReputationFrame.xml`:
+/// `CharacterFrame_ShowSubFrame` hides every page by name, unguarded (CharacterFrame.lua:25-33).
 fn load_page(s: &UiScript) {
     for file in super::test_ui::CHARACTER_UI {
         super::test_ui::load_ui_strict(s, file);
     }
 }
 
-/// A level-`level` player behind the window — enough of one that opening it is quiet.
-///
-/// **Race and class carry both halves of their pairs**, which is not decoration since 1751:
-/// `UnitRace`/`UnitClass` answer `(localized, file)` or `nil, nil` — the binding `zip`s the two —
-/// and stock `PaperDollFrame_SetLevel` formats level, race and class into `CharacterLevelText`
-/// unguarded (`PaperDollFrame.lua:100-104`), on every show of the window this page is a tab of.
-/// A `UnitState::default()` player therefore raises the moment `ToggleCharacter` runs.
+/// A player with both halves of race and class: `UnitRace`/`UnitClass` answer nil without the
+/// pair, and `PaperDollFrame_SetLevel` formats them unguarded (PaperDollFrame.lua:101).
 fn player(level: u32) -> UnitState {
     UnitState {
         exists: true,
@@ -125,8 +84,7 @@ fn shown_reputation_page() -> UiScript {
     s
 }
 
-/// Click the centre of a named frame through the real pointer pipeline, the way the app does — so
-/// a frame silently eating the row's clicks fails here rather than on the director's screen.
+/// Click a named frame's centre through the pointer pipeline, so a frame eating the clicks fails.
 fn click_center(s: &mut UiScript, name: &str) {
     s.resolve();
     let (x, y) = s
@@ -145,11 +103,8 @@ fn text_of(s: &mut UiScript, expr: &str) -> String {
         .unwrap()
 }
 
-/// **`IsVisible`, not `IsShown`, is the right question for the scroll bar since 1860.** The
-/// reference's `FauxScrollFrame_Update` hides the scroll FRAME when the list fits
-/// (`scrollBar:SetValue(0); frame:Hide()`); our deleted kit hid the BAR itself through
-/// `BenillaScrollBar_SetShown`. So the bar's own `IsShown` stays true under the reference and only
-/// its hidden ancestor takes it off screen — which `IsVisible` reports and `IsShown` cannot.
+/// `IsVisible`, not `IsShown`, for the scroll bar: when the list fits, `FauxScrollFrame_Update`
+/// hides the scroll frame, not the bar (UIPanelTemplates.lua:169-170).
 fn visible(s: &mut UiScript, name: &str) -> bool {
     s.eval::<bool>(&format!("return {name}:IsVisible() and true or false"))
         .unwrap_or(false)
@@ -160,10 +115,8 @@ fn shown(s: &mut UiScript, name: &str) -> bool {
         .unwrap()
 }
 
-/// **The page is the character window's tab 3, and it comes up on it.** The whole renumber rides on
-/// this: `ToggleCharacter` selects the row from the page's own `id=`
-/// (ref `CharacterFrame.lua:11`), so a page seated at the wrong id shows the right pane under the
-/// wrong tab. Skills moved to 4 in the same breath and is asserted here for the same reason.
+/// `ToggleCharacter` selects the tab from the page's own `id=` (CharacterFrame.lua:10), and the
+/// tabs open Reputation at 3 and Skills at 4 (CharacterFrame.lua:40-43).
 #[test]
 fn the_reputation_page_opens_on_the_windows_third_tab() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -179,11 +132,6 @@ fn the_reputation_page_opens_on_the_windows_third_tab() {
         3,
         "and the tab row selects 3 — the reference's own slot for Reputation"
     );
-    // **The id IS the tab slot**, and that is the whole coupling: `ToggleCharacter` selects the tab
-    // with `PanelTemplates_SetTab(CharacterFrame, subFrame:GetID())`
-    // (`CharacterFrame.lua:10`), while `CharacterFrameTab_OnClick` hardcodes which page each tab
-    // opens (`:41-43` — tab 3 → Reputation, tab 4 → Skills). A page whose `id=` disagreed would
-    // open on click and light the wrong tab.
     assert_eq!(
         s.eval::<i64>("return ReputationFrame:GetID()").unwrap(),
         3,
@@ -194,15 +142,8 @@ fn the_reputation_page_opens_on_the_windows_third_tab() {
         4,
         "and Skills is the reference's 4 beside it"
     );
-    // **`CHARACTERFRAME_SUBFRAMES` is the hide-all list, not the tab map** — re-pointed here at
-    // 1751, because our deleted `CharacterFrame.xml` wrote the two as one thing and the
-    // reference's does not. Stock line 1 is
-    // `{ "PaperDollFrame", "PetPaperDollFrame", "SkillFrame", "ReputationFrame", "HonorFrame" }` —
-    // Skills THIRD and Reputation FOURTH, the opposite of their tab slots — and it is only ever
-    // walked by `CharacterFrame_ShowSubFrame`, which shows the one it was named and hides the rest
-    // (`CharacterFrame.lua:25-33`). So what this page needs from the list is membership: a page
-    // missing from it is a page nothing ever hides, which is the "one page at a time" assertion at
-    // the end of this test.
+    // `CHARACTERFRAME_SUBFRAMES` is the hide-all list, not the tab map (CharacterFrame.lua:1): a
+    // page missing from it is never hidden.
     assert!(
         s.eval::<bool>(
             "for _, v in CHARACTERFRAME_SUBFRAMES do if v == \"ReputationFrame\" then return true end end return false"
@@ -211,30 +152,23 @@ fn the_reputation_page_opens_on_the_windows_third_tab() {
         "the hide-all list names this page"
     );
 
-    // Eight rows in fifteen slots: the tail goes dark on BOTH twins, and a list that fits raises
-    // neither the scroll bar nor its trough (the kit shows and hides the pair together).
+    // Eight rows in fifteen slots: slot 9 shows neither twin, and a fitting list has no scroll bar.
     assert_eq!(s.eval::<i64>("return GetNumFactions()").unwrap(), 8);
     assert!(
         !shown(&mut s, "ReputationBar9"),
         "slot 9 has nothing to hold"
     );
     assert!(!shown(&mut s, "ReputationHeader9"), "neither twin shows");
-    // No trough line here: it was ours, and the stock pane declares none (1875). Asserting a frame
-    // that cannot exist would pass for the wrong reason.
     assert!(!visible(&mut s, "ReputationListScrollFrameScrollBar"));
 
-    // Switching away hides it again through the same one-page-at-a-time switch.
     s.run(r#"ToggleCharacter("PaperDollFrame")"#).unwrap();
     assert!(!shown(&mut s, "ReputationFrame"), "one page at a time");
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **A header slot draws the fold icon its state calls for, and a click folds the group.**
-///
-/// Two laws in one: the minus/plus art is chosen from `isCollapsed` (ref `ReputationFrame.lua`
-/// l.54-58), and the click has to REPAINT — `CollapseFactionHeader` is a pure model write in this
-/// engine where the client's C binding raises `UPDATE_FACTION`, so a handler that only calls the
-/// global leaves the folded rows on screen (ReputationFrame.xml's deviation 3).
+/// The fold art follows `isCollapsed` (ReputationFrame.lua:54-58). The header's click only calls
+/// the fold binding (ReputationFrame.xml:9-15), which raises `UPDATE_FACTION` as the reference's
+/// does, and that event is the pane's repaint.
 #[test]
 fn a_header_row_paints_its_fold_icon_and_folds_on_click() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -280,16 +214,13 @@ fn a_header_row_paints_its_fold_icon_and_folds_on_click() {
         "the two folded children leave the visible list"
     );
 
-    // …and unfolding puts them straight back, through the same handler.
     click_center(&mut s, "ReputationHeader1");
     assert_eq!(text_of(&mut s, "ReputationBar2FactionName"), "Ironforge");
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **A bar row paints its name, its standing word and its `FACTION_BAR_COLORS[standingID]` fill**,
-/// over a bar whose range is the rank window NORMALIZED — `barMax - barMin` and `barValue - barMin`
-/// (ref `ReputationFrame.lua` l.79-82), which is the entire reason the engine reports those three
-/// absolute.
+/// The bar's range is the rank window normalized, `barMax - barMin` and `barValue - barMin`
+/// (ReputationFrame.lua:79-82), which is why the binding reports all three absolute.
 #[test]
 fn a_bar_row_paints_name_standing_and_the_faction_bar_colour() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -321,8 +252,7 @@ fn a_bar_row_paints_name_standing_and_the_faction_bar_colour() {
         "FACTION_BAR_COLORS[5] — the green every friendly-and-better rank shares"
     );
 
-    // The hover swaps the standing word for the raw progress and lights the glow pair; leaving puts
-    // the word back (ref ReputationFrame.xml l.189-203).
+    // Hover shows progress and glow; leaving restores the word (ReputationFrame.xml:190-203).
     assert!(
         !shown(&mut s, "ReputationBar2Highlight1"),
         "glow starts down"
@@ -354,9 +284,7 @@ fn a_bar_row_paints_name_standing_and_the_faction_bar_colour() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **The 15 row slots are a window onto the list, and the scroll offset is what moves it.** The
-/// faux kit re-binds fixed slots to a moving data offset rather than scrolling anything (decision
-/// 0251), so this is the assertion that the slots really are re-bound and not just clipped.
+/// The faux scroll kit re-binds the 15 fixed slots to a moving offset; nothing scrolls or clips.
 #[test]
 fn the_scroll_offset_rebinds_the_fixed_row_slots() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -385,11 +313,6 @@ fn the_scroll_offset_rebinds_the_fixed_row_slots() {
         visible(&mut s, "ReputationListScrollFrameScrollBar"),
         "21 rows in 15 slots raises the scroll bar"
     );
-    // **The trough is GONE with our pane.** `ReputationListScrollFrameScrollBarTrough` was the one
-    // name in this window that was never the reference's (1844) — it belongs to our own scroll
-    // templates, and stock `ReputationFrame.xml` declares no such thing. B224's law (the 21/20/8
-    // hang that drops each arrow into its socket) is unchanged and still asserted, by the
-    // keybindings page's own trough, which is a window we still own (1875).
     // Scroll three rows down: every slot re-binds, and slot 1 stops being a header.
     s.run("FauxScrollFrame_SetOffset(ReputationListScrollFrame, 3) ReputationFrame_Update()")
         .unwrap();
@@ -400,12 +323,8 @@ fn the_scroll_offset_rebinds_the_fixed_row_slots() {
     assert_eq!(text_of(&mut s, "ReputationBar1FactionName"), "Faction 03");
     assert_eq!(text_of(&mut s, "ReputationBar15FactionName"), "Faction 17");
 
-    // Past the end the REFERENCE does not clamp the offset — it guards the BINDING.
-    // `FauxScrollFrame_SetOffset` is two lines (`frame.offset = offset`), and the reference's own
-    // `ReputationFrame_Update` walks its slots under `if ( factionIndex <= numFactions )`, hiding
-    // the ones that fall off the end (ReputationFrame.lua). Our deleted kit clamped the offset
-    // itself, which is why this used to read back 6. A player cannot reach this state — the bar's
-    // range bounds a real scroll — so it is only ever an out-of-range programmatic ask (1860).
+    // Past the end the offset is stored unclamped (UIPanelTemplates.lua:239-241), and
+    // `ReputationFrame_Update` hides the slots past the list (ReputationFrame.lua:50,141-144).
     s.run("FauxScrollFrame_SetOffset(ReputationListScrollFrame, 9) ReputationFrame_Update()")
         .unwrap();
     assert_eq!(
@@ -422,10 +341,8 @@ fn the_scroll_offset_rebinds_the_fixed_row_slots() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **Clicking a bar opens the detail popup on that faction**, with its name, its description and
-/// its three switches in the states the row's own flags call for — including the disabled, greyed
-/// At War box a peace-forced faction gets (ref `ReputationFrame.lua` l.115-121). Clicking the same
-/// bar again closes it, which is the reference's own toggle (l.152-153).
+/// A peace-forced faction's At War box is disabled and greyed (ReputationFrame.lua:115-121), and
+/// clicking the selected bar again closes the popup (ReputationFrame.lua:152-153).
 #[test]
 fn clicking_a_bar_opens_the_detail_popup_on_that_faction() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -433,7 +350,7 @@ fn clicking_a_bar_opens_the_detail_popup_on_that_faction() {
     s.set_screen_size(1024.0, 768.0);
     load_page(&s);
     s.set_unit("player", Some(player(40)));
-    // Ironforge at war and peace-forced — the two flags the popup reads back off the row.
+    // Ironforge at war and peace-forced.
     let mut st = state();
     for e in &mut st.entries {
         if e.name == "Ironforge" {
@@ -493,14 +410,11 @@ fn clicking_a_bar_opens_the_detail_popup_on_that_faction() {
     assert!(!checked(&mut s, "ReputationDetailInactiveCheckBox"));
     assert!(!checked(&mut s, "ReputationDetailMainScreenCheckBox"));
 
-    // The reference's toggle: the same bar again closes the popup rather than re-opening it.
     click_center(&mut s, "ReputationBar2");
     assert!(!shown(&mut s, "ReputationDetailFrame"), "clicked shut");
 
-    // **The whole ROW is the click target, not just the 137px bar.** The template's
-    // `HitRectInsets left="-126"` (ref `ReputationFrame.xml` l.61-63) is a NEGATIVE inset, which
-    // WIDENS the mouse rect back over the faction name — so clicking "Ironforge" selects it exactly
-    // as clicking its bar does. Driven from the name's own centre, which is outside the bar's rect.
+    // The whole row is the click target: `HitRectInsets left="-126"` (ReputationFrame.xml:61-63)
+    // widens the 137 px bar's mouse rect back over the faction name.
     let name_x = s
         .eval::<f32>(
             "return (ReputationBar2FactionName:GetLeft() + ReputationBar2FactionName:GetRight()) / 2",
@@ -529,20 +443,9 @@ fn clicking_a_bar_opens_the_detail_popup_on_that_faction() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **B369 — a disabled box is still a box.** The reported symptom, at the quad level.
-///
-/// `ReputationDetailAtWarCheckBox` (stock `ReputationFrame.xml`) carries a `<NormalTexture>` and
-/// **no `<DisabledTexture>`**, and `ReputationFrame_Update` `Disable()`s it for every faction whose
-/// war flag cannot be toggled (`ReputationFrame.lua` l.115-120). The client's `SetState 0x779790`
-/// gates its hide-old step on the new state having a texture, so the `UI-CheckBox-Up` box stays up
-/// and the row reads "a greyed **At War** beside an empty box". Ours resolved the shown texture as
-/// a pure function of the state, hid it, and left a bare grey label with nothing beside it — which
-/// is how the Ironforge row drew.
-///
-/// Three rows, because the tick is the half that made the report confusing: a peace-forced faction
-/// that is NOT at war shows the empty box (the shot), a peace-forced faction that IS at war shows
-/// the box plus its grey `DisabledCheckedTexture` (the tick still draws), and a
-/// toggleable one is the control that must not move.
+/// The At War box has a `<NormalTexture>` and no `<DisabledTexture>`, and is disabled for a
+/// peace-forced faction (ReputationFrame.lua:115-120). `SetState` (`0x779790`) hides the old
+/// texture only when the new state has one, so the box stays drawn, under a grey tick at war.
 #[test]
 fn the_at_war_box_keeps_its_art_while_it_is_disabled() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -553,9 +456,7 @@ fn the_at_war_box_keeps_its_art_while_it_is_disabled() {
     let mut st = state();
     for e in &mut st.entries {
         match e.name.as_str() {
-            // The report: peace-forced and at peace.
             "Ironforge" => e.can_toggle_at_war = false,
-            // Peace-forced and at war — the same box, wearing the grey tick.
             "Stormwind" => {
                 e.can_toggle_at_war = false;
                 e.at_war = true;
@@ -582,7 +483,7 @@ fn the_at_war_box_keeps_its_art_while_it_is_disabled() {
     }
     let up = "Interface\\Buttons\\UI-CheckBox-Up".to_string();
 
-    // Ironforge (row 2): peace-forced, at peace — the photographed case.
+    // Ironforge (row 2): peace-forced, at peace.
     click_center(&mut s, "ReputationBar2");
     assert_eq!(
         s.eval::<i64>("return ReputationDetailAtWarCheckBox:IsEnabled()")
@@ -596,7 +497,7 @@ fn the_at_war_box_keeps_its_art_while_it_is_disabled() {
         "and it still draws its box — the sticky shown texture"
     );
 
-    // Stormwind (row 3): peace-forced and at war — box plus the grey disabled tick.
+    // Stormwind (row 3): peace-forced and at war.
     click_center(&mut s, "ReputationBar3");
     assert_eq!(
         box_art(&s),
@@ -607,7 +508,7 @@ fn the_at_war_box_keeps_its_art_while_it_is_disabled() {
         "a peace-forced faction at war keeps the box under its grey tick"
     );
 
-    // Booty Bay (row 5): the control — toggleable, and unchanged by any of this.
+    // Booty Bay (row 5), the control: toggleable.
     click_center(&mut s, "ReputationBar5");
     assert_eq!(
         s.eval::<i64>("return ReputationDetailAtWarCheckBox:IsEnabled()")
@@ -618,13 +519,8 @@ fn the_at_war_box_keeps_its_art_while_it_is_disabled() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **The watch bar shows what is being watched, and swaps posture at max level.**
-///
-/// Below max level it STACKS above the XP bar, 8px tall, wearing the `UI-ReputationWatchBar` end
-/// art; at max level it REPLACES the XP bar, 13px tall on MainMenuBar's own top, wearing the dwarf
-/// art instead so the swap reads as the same bar (ref `ReputationFrame.lua` l.184-230). The rested
-/// tick goes with the XP bar it rode, which is one of the two guards that were cut from
-/// `ExhaustionTick_Update` as unreachable while this bar could never show.
+/// Below 60 the watch bar stacks on the XP bar, 8 px in its own end art; at 60 it replaces it,
+/// 13 px in the dwarf art, and the rested tick hides (ReputationFrame.lua:184-230).
 #[test]
 fn the_watch_bar_shows_the_watched_factions_progress_and_swaps_at_max_level() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -674,12 +570,8 @@ fn the_watch_bar_shows_the_watched_factions_progress_and_swaps_at_max_level() {
         8.0
     );
 
-    // **`UIParent_ManageFramePositions`'s `reputation` branch fires for the first time.** It has
-    // been live in UIParent.xml since decision 0272 and gated on
-    // `ReputationWatchBar:IsShown() and MainMenuExpBar:IsShown()`, which that file's own header
-    // notes "still cannot fire" — it can now, and this is the check that it does. `PETACTIONBAR_YPOS`
-    // is the cheapest witness: an `isVar` row the pass writes as a plain global (baseY 97, plus the
-    // row's own `reputation = 9`), so it needs no frame loaded to read back.
+    // A stacked bar makes the manage pass add each row's `reputation` offset (UIParent.lua:1618):
+    // `PETACTIONBAR_YPOS`, a plain global, is baseY 97 plus 9 (UIParent.lua:1589).
     assert_eq!(
         s.eval::<f64>("return PETACTIONBAR_YPOS").unwrap(),
         106.0,
@@ -736,34 +628,20 @@ fn the_watch_bar_shows_the_watched_factions_progress_and_swaps_at_max_level() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **B368 — "Show as Experience Bar", the whole round trip.** The reported symptom is the one thing
-/// no test here covered: every check above either drives `SetWatchedFactionIndex` from Lua or pushes
-/// `watched` in by hand, so the box itself — the only thing a player touches — had no guard at all
-/// between the pointer and the wire.
-///
-/// What the round trip is, and why it LOOKS broken when a link is missing: the box's `<OnClick>`
-/// (stock `ReputationFrame.xml` l.839-848) calls `SetWatchedFactionIndex(GetSelectedFaction())` and
-/// then `ReputationWatchBar_Update()` — and that update reads `GetWatchedFactionInfo()`, which is
-/// still nil, because watching is **not optimistic** (`0x4d6b60`: the slot is
-/// `PLAYER_FIELD_WATCHED_FACTION_INDEX`, a server field with no client mirror). So the click's own
-/// frame moves NOTHING on screen by design; the bar comes up one round trip later, when the
-/// descriptor update lands as a fresh push plus `UPDATE_FACTION`. A server that never answers the
-/// opcode therefore reads exactly as "the box does nothing", and so does anything between the
-/// pointer and the send.
-///
-/// Driven through the real pointer pipeline, so a frame eating the box's clicks fails here.
+/// The "Show as Experience Bar" box calls `SetWatchedFactionIndex`, then
+/// `ReputationWatchBar_Update` (ReputationFrame.xml:839-848), but watching is not optimistic: the
+/// index is the server field `PLAYER_FIELD_WATCHED_FACTION_INDEX`, with no client mirror
+/// (`0x4d6b60`), so the bar comes up only when the descriptor update lands.
 #[test]
 fn the_show_as_experience_bar_box_sends_the_watch_and_the_server_brings_the_bar_up() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = shown_reputation_page();
-    // The row's checkmark is anchored past `factionName:GetStringWidth()`, so this test needs a
-    // font: without a measurer installed every metric reads 0 (`script::measure`'s "absent by
-    // default" state) and the mark would land on the name's first letter for that reason rather
-    // than for a real one. 6 units a character, the file-wide stand-in.
+    // The checkmark anchors past `GetStringWidth()`, which reads 0 with no measurer installed: a
+    // stand-in font, 6 units a character.
     s.set_text_measurer(Box::new(super::FixedWidthFont(6.0)));
     let _ = s.take_reputation_sends();
 
-    // Ironforge (visible row 2, reputation slot 20) — select it and open the popup by clicking it.
+    // Ironforge: visible row 2, reputation slot 20.
     click_center(&mut s, "ReputationBar2");
     assert!(shown(&mut s, "ReputationDetailFrame"), "the popup opened");
     assert!(
@@ -776,8 +654,8 @@ fn the_show_as_experience_bar_box_sends_the_watch_and_the_server_brings_the_bar_
         "and the strip is down"
     );
 
-    // THE CLICK. The engine ticks the box before the handler runs (the reference's own order), so
-    // the handler takes the `GetChecked()` branch that watches rather than the one that clears.
+    // The box ticks before its handler runs, as in the reference, so the handler takes the
+    // `GetChecked()` branch that watches.
     click_center(&mut s, "ReputationDetailMainScreenCheckBox");
     assert_eq!(
         s.take_reputation_sends(),
@@ -806,8 +684,7 @@ fn the_show_as_experience_bar_box_sends_the_watch_and_the_server_brings_the_bar_
         text_of(&mut s, "ReputationWatchStatusBarText"),
         "Ironforge 1000 / 6000"
     );
-    // The list's own witness: the row grows a checkmark, re-anchored past the name's string width
-    // (ref `ReputationFrame.lua` l.96-103) — the half a player sees without leaving the pane.
+    // The watched row grows a checkmark past the name's string width (ReputationFrame.lua:96-103).
     assert!(
         shown(&mut s, "ReputationBar2Check"),
         "the watched row wears the checkmark"
@@ -821,15 +698,14 @@ fn the_show_as_experience_bar_box_sends_the_watch_and_the_server_brings_the_bar_
             "return ReputationBar2Check:GetLeft(), ReputationBar2FactionName:GetLeft()",
         )
         .unwrap();
-    // "Ironforge" is nine characters, so the stand-in font makes the offset exactly 54 — the
-    // reference's `factionName:GetStringWidth()`, not a guess at one.
+    // "Ironforge" is nine characters: 54 at 6 a character.
     assert_eq!(
         check_l - name_l,
         54.0,
         "the mark sits the name's own string width to its right"
     );
 
-    // Untick: the same box, the same funnel, and `None` — NOT slot 0, which is a real faction.
+    // Untick: stock passes 0 for none, and the send is `None`, not slot 0, which is a real faction.
     click_center(&mut s, "ReputationDetailMainScreenCheckBox");
     assert_eq!(
         s.take_reputation_sends(),

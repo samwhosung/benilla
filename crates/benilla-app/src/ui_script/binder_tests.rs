@@ -1,13 +1,11 @@
-//! The innkeeper bind confirm (BinderConfirm.xml): the dialog `ui_binder`'s feed
-//! raises, its Accept, and the range poll that takes it away — driven exactly as that feed and the
-//! app's NPC-session guard drive it.
+//! The innkeeper bind confirm, the stock `CONFIRM_BINDER` popup, driven as `ui_binder`'s feed
+//! and the app's NPC range guard drive it.
 
 use benilla_ui::script::{ScriptValue, UiScript};
 
 use super::test_ui::load_ui as load_xml;
 
-/// The app's own pre-state: a question is pending and in range, which is what
-/// `CheckBinderDist()` reports while the dialog is up.
+/// A bind question pending and in range, so `CheckBinderDist()` holds.
 fn setup() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
@@ -25,9 +23,7 @@ fn setup() -> UiScript {
     s
 }
 
-/// `CONFIRM_BINDER(area)` raises the dialog with the area name filled in, and Accept queues the
-/// one `ConfirmBinder()` that becomes `CMSG_BINDER_ACTIVATE`. The whole point of the arc: before
-/// this wiring the click produced no dialog and no packet at all.
+/// Accept's one `ConfirmBinder()` becomes `CMSG_BINDER_ACTIVATE`.
 #[test]
 fn the_confirm_shows_the_area_and_accept_queues_the_bind() {
     benilla_formats::wow_data_or_skip!();
@@ -55,8 +51,7 @@ fn the_confirm_shows_the_area_and_accept_queues_the_bind() {
     );
 }
 
-/// Cancel and ESC both send **nothing**: declining an innkeeper is silent on the wire (there is
-/// no decline opcode), so the only observable is that no confirm was queued.
+/// There is no decline opcode: Cancel and Escape send nothing.
 #[test]
 fn declining_sends_nothing() {
     benilla_formats::wow_data_or_skip!();
@@ -74,9 +69,7 @@ fn declining_sends_nothing() {
     );
 }
 
-/// Walking away takes the question off screen: the entry's OnUpdate polls `CheckBinderDist()`,
-/// which the app drives from the shared NPC-session range guard. While it holds, ticking changes
-/// nothing; the frame it goes false, the dialog hides itself — with no packet either way.
+/// The popup's OnUpdate hides it once `CheckBinderDist()` fails (`StaticPopup.lua:1329`).
 #[test]
 fn leaving_the_innkeepers_range_hides_the_confirm() {
     benilla_formats::wow_data_or_skip!();

@@ -1,16 +1,11 @@
-//! The stock `Interface\FrameXML\ActionBarFrame.xml`'s performance ("ping") meter — the tinted bar
-//! in the main bar's last empty recess — over the real files, never a stub.
-//!
-//! What these guard, in order: the ref geometry that puts the bar IN the recess (the whole point of
-//! the slice); the LOW-strata draw order that makes it show *through* the bar art instead of over
-//! it; the latency→color law and its 10 s poll; and the hover tooltip's live number.
+//! The stock latency meter (`MainMenuBar.xml:344`): the tinted bar in the main bar's last empty
+//! recess, its 10 s poll and its hover tooltip.
 
 use benilla_ui::script::{QuadContent, UiScript};
 
 use super::test_ui::load_ui as load_xml;
 
-/// The bar on a 1024×768 screen. 1024 wide is deliberate: the 1024-wide bar then spans x 0..1024,
-/// so every ref offset below is also an absolute screen coordinate.
+/// A 1024-wide screen, so the 1024-wide bar spans x 0..1024 and its offsets are screen coordinates.
 fn harness(extra: &[&str]) -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
@@ -34,8 +29,7 @@ fn harness(extra: &[&str]) -> UiScript {
     s
 }
 
-/// The meter's own paint quad (its `MainMenuBarPerformanceBar` texture) and where it sits in the
-/// painter's order.
+/// The meter texture's quad: its draw-order index, its rect and its tint.
 fn bar_quad(s: &mut UiScript) -> (usize, [f32; 4], Option<[f32; 4]>) {
     s.resolve();
     let quads = s.extract();
@@ -54,11 +48,8 @@ fn bar_quad(s: &mut UiScript) -> (usize, [f32; 4], Option<[f32; 4]>) {
     (i, [rect.left, rect.bottom, rect.right, rect.top], color)
 }
 
-/// ref-MainMenuBar.xml l.344-364: a 16×64 frame at the bar's BOTTOMRIGHT +(-227,-10), carrying a
-/// 20×66 texture off its TOPRIGHT. On a 1024-wide bar that is x 781..797 for the frame and
-/// x 777..797 for the texture — the empty recess between the last micro button (which ends at 763)
-/// and the bag cluster. Both hang below the bar's own bottom, which is what drops the texture's
-/// grey column into the slot rather than floating it above.
+/// `MainMenuBar.xml:344`: a 16x64 frame at the bar's BOTTOMRIGHT (-227, -10) with a 20x66 texture
+/// off its TOPRIGHT, in the recess between the last micro button and the bags.
 #[test]
 fn the_meter_sits_in_the_bar_recess_the_reference_leaves_for_it() {
     benilla_formats::wow_data_or_skip!();
@@ -75,8 +66,7 @@ fn the_meter_sits_in_the_bar_recess_the_reference_leaves_for_it() {
     assert_eq!(left, 781.0, "1024 − 227 − 16");
     assert_eq!(bottom, -10.0, "hangs 10 below the bar's bottom");
 
-    // The texture overspills the frame: 20 wide off the TOPRIGHT ⇒ 4 further left, and 66 tall from
-    // the frame's top (54) ⇒ 2 further down.
+    // 20x66 off the frame's TOPRIGHT (797, 54): 4 past its left edge, 2 below its bottom.
     let (_, rect, _) = bar_quad(&mut s);
     assert_eq!(
         rect,
@@ -86,9 +76,7 @@ fn the_meter_sits_in_the_bar_recess_the_reference_leaves_for_it() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// `frameStrata="LOW"` is the mechanism, not decoration: the bar art is a transparent WINDOW over
-/// this slot, so the meter has to paint UNDERNEATH it. At the default MEDIUM the 20-wide texture
-/// would paint over the metal surround that frames the 10-wide slot.
+/// The meter is LOW strata (`MainMenuBar.xml:344`): it paints under the bar art, through its slot.
 #[test]
 fn the_meter_paints_under_the_bar_art_it_shows_through() {
     benilla_formats::wow_data_or_skip!();
@@ -109,8 +97,7 @@ fn the_meter_paints_under_the_bar_art_it_shows_through() {
          transparent slot, not over it"
     );
 
-    // And the hover button is above everything, the ref's own HIGH-strata split: the LOW frame
-    // beneath the art can't take the mouse itself.
+    // The button is HIGH (`MainMenuBar.xml:395`), as the LOW frame under the art gets no mouse.
     assert_eq!(
         s.eval::<String>("return MainMenuBarPerformanceBarFrameButton:GetFrameStrata()")
             .unwrap(),
@@ -125,16 +112,14 @@ fn the_meter_paints_under_the_bar_art_it_shows_through() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// ref-MainMenuBar.xml l.375-392: the poll runs every `PERFORMANCEBAR_UPDATE_INTERVAL` seconds and
-/// tints the bar green under 300 ms, yellow to 600, red beyond. 1.12 never scales the bar's HEIGHT
-/// — color is the entire readout, which is why this test asserts the tint and the rect separately.
+/// `MainMenuBar.xml:375`: every 10 s the poll tints the bar green to 300 ms, yellow to 600, red
+/// beyond; the tint is the whole readout, the bar never changes height.
 #[test]
 fn the_meter_tints_by_latency_on_the_reference_thresholds() {
     benilla_formats::wow_data_or_skip!();
     let mut s = harness(&[]);
 
-    // The first tick polls immediately (updateInterval starts at 0), so an unmeasured connection
-    // reads 0 ms and shows green rather than sitting untinted grey.
+    // updateInterval starts at 0 (`MainMenuBar.xml:373`), so the first tick polls: 0 ms, green.
     s.tick(0.016);
     let (_, _, color) = bar_quad(&mut s);
     assert_eq!(color, Some([0.0, 1.0, 0.0, 1.0]), "0 ms ⇒ green");
@@ -150,8 +135,6 @@ fn the_meter_tints_by_latency_on_the_reference_thresholds() {
         assert_eq!(color, Some(want), "{latency} ms: {band}");
     }
 
-    // A latency that crosses a threshold does NOT repaint before the next poll beat — the ref's
-    // own 10 s cadence, and the reason a 30 s ping's jitter can't strobe the bar.
     s.set_latency_ms(Some(0));
     s.tick(1.0);
     let (_, _, color) = bar_quad(&mut s);
@@ -170,8 +153,7 @@ fn the_meter_tints_by_latency_on_the_reference_thresholds() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The drawn colour of the tooltip's explanation line — found by its TEXT, so it can't be confused
-/// with the label above it. `None` if that line isn't being painted at all.
+/// The drawn colour of the tooltip's `NEWBIE_TOOLTIP_LATENCY` line, found by its text.
 fn newbie_line_color(s: &mut UiScript) -> Option<[f32; 4]> {
     let want = s
         .eval::<String>("return NEWBIE_TOOLTIP_LATENCY")
@@ -187,17 +169,14 @@ fn newbie_line_color(s: &mut UiScript) -> Option<[f32; 4]> {
     })?
 }
 
-/// Advance exactly one poll beat. The ref's OnUpdate spends the whole remaining interval on one
-/// tick and only polls on the tick that finds it non-positive, so a beat is always two ticks longer
-/// than the interval: the first drains it, the second crosses zero and re-arms it at 10.
+/// One poll beat: OnUpdate polls only on a tick that finds the interval spent, so one tick drains
+/// it and the next polls (`MainMenuBar.xml:376`).
 fn poll_beat(s: &mut UiScript) {
     s.tick(11.0);
     s.tick(11.0);
 }
 
-/// `GetNetStats()` is the whole seam: the app pushes the averaged RTT, the meter reads it. The two
-/// bandwidth returns are the named gap (benilla tallies no throughput) and must stay NUMBERS, so
-/// arithmetic on them can't error.
+/// The app pushes the averaged RTT; both bandwidth returns stay 0, as benilla counts no throughput.
 #[test]
 fn get_net_stats_reports_the_pushed_latency() {
     benilla_formats::wow_data_or_skip!();
@@ -212,8 +191,7 @@ fn get_net_stats_reports_the_pushed_latency() {
         s.eval::<(f64, f64, f64)>("return GetNetStats()").unwrap(),
         (0.0, 0.0, 42.0)
     );
-    // Back to unmeasured (a disconnect clears the app's ring) ⇒ 0, the reference's own reading for
-    // a connection it has no sample for.
+    // A disconnect clears the samples; no sample reads 0, as in the reference.
     s.set_latency_ms(None);
     assert_eq!(
         s.eval::<f64>("local _, _, ms = GetNetStats() return ms")
@@ -223,22 +201,13 @@ fn get_net_stats_reports_the_pushed_latency() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The hover tooltip (ref l.395-406): the HIGH-strata button owns the mouse over the meter, and its
-/// tooltip reads the live number. The held-open plate re-reads it on the same 10 s beat.
-///
-/// The plate is the ref's TWO-line `GameTooltip_AddNewbieTip` — detailed tips ship ON in 1.12
-/// (`SHOW_NEWBIE_TIPS = "1"`, ref UIOptionsFrame.lua l.100), so the explanation under the number is
-/// the DEFAULT hover, not an opt-in. Decision 0661; this test is the guard on that, because a
-/// regression here (the helper's branch flipping, the string going missing) shows up only as a
-/// tooltip that is quietly one line short.
+/// The hover tooltip is `GameTooltip_AddNewbieTip` (`MainMenuBar.xml:400`); each poll rewrites it.
 #[test]
 fn hovering_the_meter_shows_the_live_latency() {
     benilla_formats::wow_data_or_skip!();
     let mut s = harness(&[r"Interface\FrameXML\UIParent.xml"]);
     s.set_latency_ms(Some(42));
-    // 1.12 ships detailed tips ON — `SHOW_NEWBIE_TIPS = "1"` is UIOptionsFrame_Init's (ref
-    // UIOptionsFrame.lua l.100; ours sits in OptionsFrame.xml's uvar block, 1968), and a harness
-    // without the options file says so itself, the way the reference's tooltip would read it.
+    // The 1.12 default (`UIOptionsFrame.lua:100`); the options file is not loaded here.
     s.run("SHOW_NEWBIE_TIPS = \"1\"").unwrap();
     s.resolve();
 
@@ -266,22 +235,20 @@ fn hovering_the_meter_shows_the_live_latency() {
         s.eval::<String>("return NEWBIE_TOOLTIP_LATENCY").unwrap(),
         "line 2 is the ref's own NEWBIE_TOOLTIP_LATENCY, verbatim"
     );
-    // The newbie branch seats the plate at the default screen corner, NOT beside the meter — the
-    // `default` flag GameTooltip_SetDefaultAnchor stamps is the observable half of that.
+    // The newbie branch anchors the plate at the default corner (`GameTooltip.lua:109`).
     assert_eq!(
         s.eval::<i64>("return GameTooltip.default").unwrap(),
         1,
         "the default-corner anchor, not ANCHOR_RIGHT off the button"
     );
-    // …and the explanation draws in NORMAL_FONT_COLOR, the gold that separates it from the white
-    // label above it.
+    // The explanation line is `NORMAL_FONT_COLOR` (`GameTooltip.lua:112`).
     assert_eq!(
         newbie_line_color(&mut s),
         Some([1.0, 0.82, 0.0, 1.0]),
         "NORMAL_FONT_COLOR (Fonts.xml l.37)"
     );
 
-    // Still hovering, and the latency moved: the next poll beat rewrites the plate in place.
+    // Still hovering: the next beat rewrites the plate (`MainMenuBar.xml:388`).
     s.set_latency_ms(Some(7));
     poll_beat(&mut s);
     assert_eq!(
@@ -300,7 +267,6 @@ fn hovering_the_meter_shows_the_live_latency() {
         !s.eval::<bool>("return GameTooltip:IsVisible()").unwrap(),
         "leaving hides the plate"
     );
-    // …and the poll no longer touches it.
     s.set_latency_ms(Some(999));
     poll_beat(&mut s);
     assert!(
@@ -310,8 +276,6 @@ fn hovering_the_meter_shows_the_live_latency() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The meter is a frame slot in the bar's own child list — a regression guard on the frame count
-/// the bar's end-to-end test pins, kept here so the two move together.
 #[test]
 fn the_meter_adds_its_two_frames_to_the_bar() {
     benilla_formats::wow_data_or_skip!();
@@ -325,7 +289,6 @@ fn the_meter_adds_its_two_frames_to_the_bar() {
             "{name} must exist"
         );
     }
-    // The button is the frame's child (the ref's `parent=` attribute, expressed as nesting).
     assert_eq!(
         s.eval::<String>("return MainMenuBarPerformanceBarFrameButton:GetParent():GetName()")
             .unwrap(),

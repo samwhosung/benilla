@@ -1,123 +1,13 @@
-//! **UI model tiles** — the renderer for a `<Model>` widget's M2: the cooldown
-//! sweep, the autocast shine, the minimap and world-map pings, the item-push card, the map's
-//! arrow, and whatever an addon parks in a `CreateFrame("Model")`.
+//! UI model tiles: the renderer for a `<Model>` widget's M2, from the cooldown sweep, the autocast
+//! shine, the pings, the item-push card and the map arrow to an addon's `CreateFrame("Model")`.
 //!
-//! ## The law
-//!
-//! A `<Model>` **whose file supplies a camera** draws its scene through it: the widget holds a raw
-//! camera index (ctor 0, `SetCamera(n)`), and the record's `lookAt(eye, target, up)` plus the
-//! client's diagonal-FOV projection at the pane's own width/height frame the model (`0x76cec0`,
-//! `0x7ac640`). The authored eye and target are carried through the model's root transform, so
-//! `SetModelScale` and `SetPosition` cancel for framing on that leg and bite only on the record's
-//! unscaled near/far. An index past the file's camera count installs a NULL camera, which is the
-//! other leg:
-//!
-//! A `<Model>` with no M2 camera picked draws its scene **orthographically over the frame's
-//! rect**: origin at the rect's bottom-left, `+X` right, `+Y` up, `Z` depth only, with the root
-//! matrix `T(pos · layoutScale) · R(facing, +Z) · S(G48 · 5/3 · modelScale · layoutScale)` — so one
-//! model unit is `1280 · modelScale · layoutScale` FrameXML units, aspect-independent (`0x7ad7f0`,
-//! `0x76d1a0`). Every batch draws once, LEQUAL over a depth buffer cleared for the widget's own
-//! rect, straight into the back buffer (`0x76d240`, `0x70b360`); every in-game UI M2 is UNLIT on
-//! every material (measured over the shipped files); the animator is the world's, on the widget's
-//! private clock (`0x714260`, `0x76d7f0`). A particle's half-extent is the one quantity outside the
-//! unit law — added in eye space, it maps at `768 · √(a²+1)` FrameXML units per model unit and
-//! carries neither scale (`0x7b2a50`).
-//!
-//! ## The shape here: tiles in one atlas, composited at the callback rank
-//!
-//! The reference draws into the back buffer between two 2-D batches; this engine's UI is one
-//! quad pass, so a scene becomes a **tile**: every visible pane holding a file renders into its
-//! own cell of one shared render-target atlas, at the pane's device-pixel size, through ONE
-//! orthographic camera whose view is the atlas plane — each tile's model root is placed at its
-//! cell, scaled to pixels per model unit, and the camera never moves. [`compose_tiles`] then
-//! draws every cell as a premultiplied quad over its pane's rect at `ZKey::callback(Artwork)`
-//! (1995's rank — after every texture and font string of the pane's layer), which is the same
-//! picture the reference's callback drain produces: the cell is cleared to transparent like the
-//! reference clears its depth, the 2-D layers under it stay under it, and the ones over it stay
-//! over it. Cells never overlap, so one depth buffer serves every tile.
-//!
-//! **The composite is this renderer's per-frame output, never the extract's**.
-//! The extract's `ModelPane` arm publishes the request — the pane's rect, paint key, alpha and
-//! clip beside the unit ladder — and pushes no quad; the quad is appended in the
-//! [`UiQuadAppend`] lane (the minimap fill's lane) from THIS frame's cells. The first shape had
-//! the arm draw the cell it found in the bridge, which is last frame's at best and, because the
-//! conversion is memoized on the engine's list, usually never: a cooldown armed on a quiet
-//! interface extracted once (no cell yet), the cell arrived a frame later, and nothing ever
-//! re-ran the conversion — the sweep drew only while the interface happened to be churning (the
-//! stance bar at UI load), and never on an action press.
-//!
-//! The pipeline is the booths' (`crate::portrait`): the same HDR view shape, the same
-//! `FfxGlow::UI_PANE` decode, the same material twin with only the light storage swapped, the
-//! same collapsed rig lane and palette mirror, the same effect lane. What is new is the
-//! orthographic preset, the atlas packing, and the clock: a tile samples the file at the play
-//! head the ENGINE holds (`UiScript::visible_model_panes`, read once per frame),
-//! so the `AnimationPlayer` is paused and seeked rather than advanced, and every per-sequence
-//! material track is sampled off that same cursor.
-//!
-//! ## The two legs in this shape
-//!
-//! The **orthographic** leg is the atlas's one camera: every pane on it shares that camera and its
-//! layer, and its cell is where its root is placed. The **perspective** leg cannot share a camera
-//! with anything — the projection and the view are the pane's own — so a perspective pane takes a
-//! slot of a small pool ([`UI_MODEL_CAM_LAYERS`]) and gets a camera whose **viewport is its cell of
-//! the same atlas** and whose layer is its own. That is the reference's own structure: one target,
-//! one viewport per widget, depth cleared per widget. The orthographic camera runs first and is
-//! the one that CLEARS the atlas; the perspective cameras load into it and clear only depth. And
-//! because the perspective root sits in model space rather than at a cell, each of those cameras
-//! needs a layer of its own or it would draw every other perspective pane over its own cell.
-//!
-//! ## What a tile's light is
-//!
-//! `<Model>`'s embedded light is DISABLED (ctor `0x76c8e0`), and a LIT batch under no light renders
-//! black — which never shows on the shipped UI M2s because all of them are unlit, and which is the
-//! faithful answer for an addon's lit one. So the DEFAULT tile light buffer is a black light (no
-//! ambient, no diffuse, fog off) and unlit batches bypass it.
-//!
-//! A pane that arms one — `SetLight(1, …)`, or fog through `SetFogColor` — takes a slot of the
-//! light pool instead ([`TileRig`]): its own buffer, its own material twins, its scene folded the
-//! way the reference's collector folds it (a directional light into probe slot 0's SH, a point
-//! light into the point table, the fog into rows 4/5 with the batch's authored `UNFOGGED` bit left
-//! to do its own work). Nothing in the shipped interface arms either, so the pool normally holds
-//! exactly the one buffer the tiles have always had.
-//!
-//! ## Texture transforms
-//!
-//! A batch whose texture transform animates gets a material of its own per tile — a clone of
-//! the twin with two mat-anim rows: the translation delta (the world's lane, `anim_slots.x`)
-//! and the **affine** row (`anim_slots.z`: rotation and scale as deltas from the identity), both
-//! sampled here off the pane's play head at the sequence's file slot, never off the world clock.
-//! The shader composes them as the reference does — `uv' = R((uv + t − p) ⊙ s) + p` — which is
-//! how the cooldown indicator's four quadrant quads turn their mask into the clockwise sweep.
-//!
-//! ## What a pane that stops drawing costs: nothing
-//!
-//! A pane that leaves the engine's paint list keeps its tile for [`TILE_LINGER_FRAMES`] so a
-//! cooldown that re-arms every few seconds, a ping, or a bag that reopens keeps its tree — but
-//! the tree has to cost NOTHING while it waits, and hiding the root was never enough. Two of a
-//! tile's three per-frame costs do not travel down the scene graph at all: an emitter entity is
-//! a world root the particle lane walks directly, and the global-sequence bone channels are
-//! written by a driver that reads no `Visibility`. So a hidden tile is **parked**, explicitly,
-//! on the frame it stops drawing — [`AnimParked`] on the root (which holds the pose evaluation,
-//! the compose, the palette write and the global-sequence writes) and
-//! `ParticleEmitter::set_frozen` on every emitter (pool + age held, no quads).
-//!
-//! The emitter half is not a nicety. The particle lane's own freeze asks a CAMERA whether its
-//! scene is drawn, which is exact for a booth (one camera, one scene) and cannot be asked here:
-//! every orthographic pane on the sheet shares one camera, and that camera stays active whenever
-//! ANY cell is packed, because it is the camera that clears the atlas. Before the park, a hidden
-//! autocast-shine pane's four spline emitters kept integrating and kept pushing quads for the
-//! whole linger, at the root's last-written cell — which after a repack belongs to another pane.
-//!
-//! ## What is deliberately NOT here
-//!
-//! - The **character panes** (`PlayerModel`/`DressUpModel`/`TabardModel`) keep their booths
-//!   (`crate::portrait`): the reference frames those through raw camera 1 **frozen** at load, or
-//!   a fixed fallback camera, which is a different selection and a different lifecycle from this
-//!   widget's live one.
-//! - A pane's fog does not reach its **particles**: the effect lane carries its own fog enum and
-//!   reads its span from a render-world params uniform rather than from the light buffer, so a
-//!   fogged pane's cloud draws unfogged. No shipped UI M2 with an emitter is fogged (the shine
-//!   and the pings are UNFOGGED or unlit anyway), and the honest fix is on the effect lane.
+//! The reference draws a pane straight into the back buffer, every batch once and LEQUAL over a
+//! depth buffer cleared for the widget's rect (`0x76d240`, `0x70b360`), through the file camera
+//! the widget names or, with none, orthographically over the frame's rect. Here each pane renders
+//! into its own cell of one shared atlas, through the sheet's one orthographic camera or a pooled
+//! perspective one, and [`compose_tiles`] draws each cell as a quad at the pane's callback rank.
+//! `PlayerModel`, `DressUpModel` and `TabardModel` are booths instead (`crate::portrait`): the
+//! reference frames them through camera 1 frozen at load.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -153,100 +43,78 @@ use crate::portrait::{
 };
 use crate::ui_pass::{UiQuad, UiQuadAppend, UiQuads, UvRect};
 
-/// `WOW_TILE_TRACE=1` — the tile probe: one `tile-trace:` line per pane per frame from the
-/// renderer (the request, the cell, the play head, the sampled alphas and the rows written) and
-/// one from the extract's composite arm (the quad's rect, rank and alpha, or "no cell yet").
-/// A pane that is on the engine's paint list but draws nothing names the gate it stopped at.
-/// The `test_ui` cooldown tests prove the engine scrubs; this is the instrument for the half
-/// they cannot reach — whether the tile exists, where it is, and what it sampled. Read once.
+/// `WOW_TILE_TRACE=1`: a `tile-trace:` line per pane per frame from the renderer and the
+/// extract's arm, naming the gate a listed pane that draws nothing stopped at.
 pub(crate) fn trace_on() -> bool {
     static ON: std::sync::LazyLock<bool> =
         std::sync::LazyLock::new(|| std::env::var("WOW_TILE_TRACE").as_deref() == Ok("1"));
     *ON
 }
 
-/// One pane's request for a tile this frame — what the extract knows about the widget: its
-/// size on the device, the unit ladder `0x76d1a0` derives from it, and the Lua-set scene.
-/// Published by the extract's `ModelPane` arm (keyed by the pane's frame handle, overwritten on
-/// every conversion), read by [`sync_tiles`].
+/// One pane's tile request, published by the extract's `ModelPane` arm: its device size, the unit
+/// ladder `0x76d1a0` derives from it, and the Lua-set scene.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TileRequest {
     /// The `SetModel` path, as written.
     pub path: String,
-    /// The pane's rect on the device, whole pixels — the tile's cell size.
+    /// The pane's rect in whole device pixels: the tile's cell size.
     pub size_px: UVec2,
-    /// Device pixels per **model unit** for the geometry: `1280 · modelScale · layoutScale`
-    /// FrameXML units per unit, times the seam scale, times the DPI.
+    /// Device px per model unit: `1280 · modelScale · layoutScale` FrameXML units × seam × DPI.
     pub px_per_unit: f32,
-    /// Device pixels per **layout unit** — `SetPosition`'s space (`T(pos · layoutScale)`):
-    /// `768 · √(a²+1) · layoutScale` FrameXML units per unit, times seam and DPI.
+    /// Device px per `SetPosition` unit: `768 · √(a²+1) · layoutScale` FrameXML units × seam × DPI.
     pub pos_px_per_unit: f32,
-    /// Device pixels per model unit for a **particle's half-extent** — eye space, no scale:
-    /// `768 · √(a²+1)` FrameXML units per unit, times seam and DPI.
+    /// Device px per model unit of a particle's half-extent, which carries no scale.
     pub star_px_per_unit: f32,
     /// `SetFacing`, radians about the screen normal (CCW positive, the reference's `+Z`).
     pub facing: f32,
     /// `SetPosition`, layout units.
     pub position: Vec3,
-    /// The **perspective** leg's root scale: `s = G48 · (5/3) · modelScale ·
-    /// layoutScale`, a pure number — that leg has no pixels-per-unit, because its projection is
-    /// the file's own camera and its viewport is the cell. Both this and [`Self::root_pos`]
-    /// cancel for framing (the camera is carried through the same matrix) and bite only on the
-    /// record's unscaled near/far.
+    /// The perspective leg's root scale, `G48 · (5/3) · modelScale · layoutScale`.
     pub root_scale: f32,
     /// The perspective leg's root translation: `SetPosition · layoutScale`, model units.
     pub root_pos: Vec3,
-    /// **Which leg.** The installed camera as a raw index into the file's table, or `None` for
-    /// the NULL camera — the orthographic leg, which is every shipped in-game pane. Resolved by
-    /// the engine against the file's camera count, exactly where `0x76cec0` resolves it.
+    /// The installed camera index (ctor 0, `SetCamera(n)`); `None` is the NULL camera an index
+    /// past the file's cameras installs (`0x76cec0`), the orthographic leg of every shipped pane.
     pub camera: Option<u32>,
-    /// The pane's embedded `CGLight` — disabled on a fresh `<Model>`, which is what makes a LIT
-    /// batch draw black.
+    /// The pane's embedded `CGLight`, disabled on a fresh `<Model>`, so a lit batch draws black.
     pub light: ModelLight,
-    /// The pane's fog, only when armed.
     pub fog: Option<ModelFog>,
-    /// `ReplaceIconTexture`'s path — the type-14 batches' texture.
+    /// `ReplaceIconTexture`'s path, the texture of the file's type-14 batches.
     pub icon: Option<String>,
-    /// The pane's rect on the window — y-down logical px, the quad pass's space — where the
-    /// cell composites.
+    /// Where the cell composites: the pane's rect in the quad pass's space, y-down logical px.
     pub rect: Rect,
-    /// The pane's paint key: `ZKey::callback(Artwork)` (1995), the composite's rank.
+    /// `ZKey::callback(Artwork)`: after every texture and font string of the pane's layer.
     pub z_key: u64,
-    /// The frame's OWN alpha (`0x76d120`): the composite draws at it.
+    /// The frame's own alpha, which the composite draws at (`0x76d120`).
     pub alpha: f32,
-    /// The enclosing ScrollFrame clip, if any, in the quad pass's space.
+    /// The enclosing ScrollFrame's clip, in the quad pass's space.
     pub clip: Option<Rect>,
 }
 
-/// Where a tile sits in the atlas — texel space, `y` down — for the composite quad.
+/// Where a tile sits in the atlas, in texels, `y` down.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Cell {
     pub origin: UVec2,
     pub size: UVec2,
 }
 
-/// The extract ↔ renderer bridge (the `BoothPanes` pattern): requests in, cells and the atlas
-/// out. Lives on `crate::portrait::BoothBridge` so the extract reaches it through the seam it
-/// already holds.
+/// The extract-to-renderer bridge, reached through `crate::portrait::BoothBridge`.
 #[derive(Resource, Default)]
 pub(crate) struct UiModelTiles {
-    /// The last request per pane. A pane that stops being extracted keeps its stale entry
-    /// (the memoized conversion cannot tell the renderer it vanished); which panes DRAW is the
-    /// engine's paint list, never this map.
+    /// The last request per pane. An entry outlives its pane, since the memoized conversion never
+    /// says it vanished, so which panes draw is the engine's paint list, never this map.
     pub requests: HashMap<FrameHandle, TileRequest>,
     /// This frame's cell per tile that has something to draw.
     pub cells: HashMap<FrameHandle, Cell>,
-    /// The atlas image and its size — `None` until the first tile.
+    /// The atlas and its size; `None` until the first tile is packed.
     pub atlas: Option<Handle<Image>>,
     pub atlas_size: UVec2,
-    /// The window's DPI as the last extract saw it (device px per logical px) — the extract
-    /// writes it, the arm reads it to size cells.
+    /// Device px per logical px, written by the extract and read by its arm to size cells.
     pub dpi: f32,
 }
 
-/// A pane's whole light input: its embedded `CGLight` and its armed fog. Two panes with the same
-/// scene share one light buffer and one material-twin cache; the DEFAULT scene — a disabled light
-/// and no fog — is every shipped in-game pane, and it is slot 0.
+/// A pane's light input: its embedded `CGLight` and its armed fog. Panes with the same scene
+/// share one light buffer and twin cache; the default, a disabled light and no fog, is slot 0.
 #[derive(Clone, Copy, PartialEq)]
 struct TileScene {
     light: ModelLight,
@@ -254,8 +122,7 @@ struct TileScene {
 }
 
 impl TileScene {
-    /// The `<Model>` ctor's scene: white, **disabled**, unfogged. What every pane the shipped
-    /// interface draws holds, and what makes a LIT batch render black.
+    /// The `<Model>` ctor's scene, a disabled white light and no fog; every shipped UI M2 is unlit.
     fn default_scene() -> Self {
         Self {
             light: ModelLight::default(),
@@ -263,38 +130,24 @@ impl TileScene {
         }
     }
 
-    /// The light buffer this scene wants — the reference's collector, finalized.
-    ///
-    /// The collector is zeroed every frame and gathers only what the fill callback `0x76d680`
-    /// stages: the fog when it is armed, and the light when it is **enabled**.
-    /// With the light off, the finalize writes zero ambient and zero diffuse and a LIT batch draws
-    /// black — the reference's answer, not a gap. With it on, the type decides which arm:
-    /// directional folds ambient + one diffuse lobe through the SH accumulators
-    /// (`0x71bc70`/`0x71bce0`), point drops into the ≤4-nearest heap and contributes **no**
-    /// ambient (`0x71bf90`).
-    ///
-    /// The lit lane here is the rig one, so the ambient and the lobe go into **probe slot 0** —
-    /// the slot every tile part's `MeshTag` names — exactly as the glue booth's own scene blob
-    /// does; rows 0-2 are dead on that lane.
+    /// The light buffer the reference's collector finalizes for this scene. It gathers only what
+    /// `0x76d680` stages, the fog when armed and the light when enabled: a directional light
+    /// folds ambient and one diffuse lobe into the SH (`0x71bc70`, `0x71bce0`), a point light
+    /// joins the 4-nearest heap with no ambient (`0x71bf90`). The ambient and the lobe land in
+    /// probe slot 0, which every tile part's `MeshTag` names; the rig lane reads no rows 0-2.
     fn blob(&self) -> LightBlob {
         let l = self.light;
         let (ambient, lobes, point) = match (l.enabled, l.omni) {
             (false, _) => ([0.0; 3], Vec::new(), None),
-            // Type 1 (point/omni): the position is model space, the falloff is the shared
-            // `1/(0.7d + 0.03d²)` the CGLight ctor's attenuation names and the point lane
-            // already implements — so no range gate, the falloff does the bounding.
+            // Type 1, point: model-space position; `1/(0.7d + 0.03d²)` falloff, no range gate.
             (true, true) => (
                 [0.0; 3],
                 Vec::new(),
                 Some((benilla_assets::coords::wow_to_bevy(l.vector), l.diffuse)),
             ),
-            // Type 0 (directional): `CGLight+0x24` is the direction the light **PROPAGATES**,
-            // and an SH lobe is centred on the TOWARD-light vector — so it goes in negated.
-            // That sign is `0x71bce0`'s own: the moments at `collector+0x18…+0x50` take `d` as it
-            // is, and then three `fchs` (`71be7c`/`71be81`/`71be86`) negate it before the nine SH
-            // basis terms are built from it. The two families take opposite signs off the one
-            // field, which is exactly how two careful readers can disagree about "the direction"
-            // without either misreading a byte; the lobe's is the negated one.
+            // Type 0, directional: `CGLight+0x24` is the direction the light travels. The SH
+            // lobe takes it negated (`fchs` at `0x71be7c`, `0x71be81`, `0x71be86` in `0x71bce0`),
+            // while the moments at `collector+0x18…+0x50` take it as is.
             (true, false) => (
                 l.ambient,
                 vec![(
@@ -315,23 +168,18 @@ impl TileScene {
     }
 }
 
-/// One light rig of the pool: the scene it was built for, its GPU buffer, the mirror key it
-/// registered under, and the material twins bound to it.
+/// One slot of the light pool, with the material twins bound to its buffer.
 struct TileLight {
     scene: TileScene,
     buffer: Buffer,
     variants: HashMap<AssetId<WowModelMaterial>, Handle<WowModelMaterial>>,
 }
 
-/// The candidacy range packed with a pane's point light. The reference's gather has no range gate
-/// at all (a sorted ≤4-nearest heap), so this is effectively unbounded and the `1/(0.7d + 0.03d²)`
-/// falloff does the bounding — the same number and the same reason as the glue scene's.
+/// A point light's candidacy range, unbounded: the reference's 4-nearest gather has none.
 const POINT_RANGE: f32 = 1.0e6;
 
-/// The mirror keys the light pool registers under, one per slot. Static because both mirror maps
-/// are keyed by `&'static str`, and monotone because a key is only ever ADDED: the mat-anim
-/// upload gates on the mirror count, so a set that grew and shrank in one frame could skip an
-/// upload and leave a fresh buffer's rows at the identity.
+/// The light pool's mirror keys, one per slot. A key is only ever added: the mat-anim upload
+/// gates on the mirror count, so a set that grew and shrank in one frame could skip an upload.
 const LIGHT_MIRROR_KEYS: [&str; UI_MODEL_CAM_LAYERS] = [
     "ui_models",
     "ui_models_1",
@@ -343,14 +191,9 @@ const LIGHT_MIRROR_KEYS: [&str; UI_MODEL_CAM_LAYERS] = [
     "ui_models_7",
 ];
 
-/// The renderer's own fixed state: the ortho tiles' layer, and the light pool.
-///
-/// **The pool is lazily grown and capped.** Slot 0 is the default scene and is built at startup;
-/// a pane that arms `SetLight(1, …)` or fog takes the next free slot, and a scene past the cap
-/// falls back to slot 0 (drawn as if it had armed nothing). Every slot costs a whole shared-light
-/// buffer — several megabytes, most of it the palette and probe regions it must carry to be
-/// bindable at all — so the pool is not a per-pane map: the shipped interface arms neither verb
-/// on any pane, so in practice it holds exactly the one buffer the tiles have always had.
+/// The ortho tiles' layer and the light pool, where a pane that arms `SetLight(1, …)` or
+/// `SetFogColor` takes a slot. A slot costs a whole shared-light buffer, so the pool is capped
+/// and a scene past the cap draws as slot 0, the default.
 #[derive(Resource)]
 struct TileRig {
     layer: RenderLayers,
@@ -358,8 +201,7 @@ struct TileRig {
 }
 
 impl TileRig {
-    /// The pool slot for `scene`, growing the pool if it is new and there is room; `0` (the
-    /// default scene's) when there is not.
+    /// The pool slot for `scene`, grown if it is new and there is room, else slot 0.
     fn slot_for(
         &mut self,
         scene: TileScene,
@@ -390,42 +232,36 @@ impl TileRig {
     }
 }
 
-/// Marks the tile atlas's one **orthographic** camera — the leg every pane without a file camera
-/// takes, and the camera that CLEARS the atlas (which is why it stays active whenever any cell is
-/// packed, even with no ortho tile on it: the perspective cameras load, they never clear).
+/// The atlas's orthographic camera, active whenever a cell is packed because it clears the atlas.
 #[derive(Component)]
 struct TileCamera;
 
-/// One of the perspective pool's cameras — `slot` is its layer and its order offset, held for the
-/// life of the app and aimed at whichever pane holds the slot this frame.
+/// A perspective pool camera, aimed each frame at whichever pane holds its `slot`.
 #[derive(Component)]
 pub(crate) struct TilePerspectiveCamera {
     slot: usize,
 }
 
-/// Marks a tile's root entity (the model root, at its cell or in its own perspective layer).
+/// A tile's model root.
 #[derive(Component)]
 pub(crate) struct TileRoot;
 
-/// One batch of a built tile whose alpha the file animates: sampled here off the pane's play
-/// head (a hosted `MatAnim` would read the paused player, which has no node for a sequence
-/// that keys no bone — the cooldown's sweep is exactly that).
+/// A batch whose alpha the file animates, sampled off the pane's play head: a hosted `MatAnim`
+/// reads the paused player, which has no node for a sequence that keys no bone, the cooldown's.
 struct AlphaPart {
     entity: Entity,
     anim: Arc<benilla_formats::AlphaAnim>,
 }
 
-/// One batch whose texture transform animates: the tile's OWN clone of the batch's material
-/// (two panes on one file must not share a row — two cooldowns at different fractions), with
-/// the table rows it writes per frame off the pane's play head.
+/// A batch whose texture transform animates, with the table rows it writes off the pane's play
+/// head; the shader composes them as the reference does, `uv' = R((uv + t − p) ⊙ s) + p`.
 struct UvPart {
-    /// Held so the clone outlives its parts' handles by exactly the tile's lifetime.
+    /// Held so the clone lives exactly as long as the tile.
     #[allow(dead_code)]
     material: Handle<WowModelMaterial>,
-    /// The translation row: its slot, and the built seed the delta is measured from
-    /// (`sun_scale.zw`, the loop's sample at 0).
+    /// The translation row's slot and its seed (`sun_scale.zw`, the loop's sample at 0).
     trans: Option<(u16, [f32; 2])>,
-    /// The affine row's slot — rotation and scale ([`affine_row`]).
+    /// The affine row's slot: rotation and scale ([`affine_row`]).
     affine: Option<u16>,
     uv_anim: Option<Arc<UvAnim>>,
     uv_seq: Option<Arc<SeqLoops<[f32; 2]>>>,
@@ -434,9 +270,7 @@ struct UvPart {
 }
 
 impl UvPart {
-    /// Write this frame's rows for the sequence at `(seq_slot, cursor_s)` on the pane's clock
-    /// `gseq_s`: the translation delta (quantized like the world's lane), and the affine row
-    /// from the raw quaternion and the scale.
+    /// Write the translation delta, quantized like the world's lane, and the affine row.
     fn write_rows(
         &self,
         table: &mut MatAnimTable,
@@ -489,42 +323,31 @@ impl UvPart {
     }
 }
 
-/// A live tile: its entity tree and what it was built from.
+/// A live tile: its entity tree and what it was built from. A new file, icon, light slot or
+/// camera slot rebuilds it, since a twin binds one light buffer and every entity carries the layer.
 struct Tile {
     root: Entity,
-    /// The file key the tree was built for (a `SetModel` to another file rebuilds).
     key: String,
-    /// The icon override the tree was built with (a change rebuilds the materials).
     icon: Option<String>,
     m2: Handle<M2Model>,
-    /// The tree is spawned (parts, rig, emitters) — until then the root is bare.
+    /// The tree (parts, rig, emitters) is spawned; until then the root is bare.
     built: bool,
-    /// The light-pool slot the tree's materials and emitters are bound to. A pane whose light or
-    /// fog changes lands on a different slot, and the tree is rebuilt against it — a material
-    /// twin points at exactly ONE light buffer.
     light_slot: usize,
-    /// The perspective pool slot this tile holds, and therefore its render layer — `None` for an
-    /// orthographic tile, which shares the atlas camera's one layer. Also a rebuild key: the
-    /// layer is on every spawned entity.
+    /// The perspective slot, and so the render layer, it holds; `None` on the orthographic leg.
     cam_slot: Option<usize>,
     /// The graph node per `AnimationData` id the file keys a bone for, and its file slot.
     clips: HashMap<u16, (AnimationNodeIndex, usize)>,
-    /// Which id the player is currently arming (to re-arm only on change).
+    /// The id the player has armed, re-armed only on change.
     armed: Option<u16>,
-    /// The mat-anim row this tile's materials read their **cell clip** from
-    /// (`anim_slots.w`): `[min.x, min.y, max.x, max.y]` in atlas texels, written
-    /// every frame from the cell. `None` only when the table was full at build — the tile then
-    /// draws unclipped, which is the pre-2093 picture rather than a missing widget.
+    /// The mat-anim row its materials read their cell clip from (`anim_slots.w`); `None` when the
+    /// table was full, and the tile draws unclipped.
     clip_slot: Option<u16>,
     alpha_parts: Vec<AlphaPart>,
     uv_parts: Vec<UvPart>,
     emitters: Vec<Entity>,
     /// The last frame this tile was on the engine's paint list.
     last_seen: u64,
-    /// Parked: this tile drew no cell last frame, so its rig and its emitters are held (decision
-    /// 2046; the module doc's "what a pane that stops drawing costs"). A fresh tile starts
-    /// `false` and is parked by the same walk on its first non-drawing frame, so there is one
-    /// code path and no spawn-time special case.
+    /// It drew no cell, so its rig and emitters are held.
     parked: bool,
 }
 
@@ -541,8 +364,7 @@ impl Tile {
     }
 }
 
-/// Frames a tile survives off the paint list before its tree is torn down — long enough that a
-/// cooldown that re-arms every few seconds, or a ping, keeps its tree.
+/// Frames a tile survives off the paint list, so a re-arming cooldown or a ping keeps its tree.
 const TILE_LINGER_FRAMES: u64 = 600;
 
 /// The atlas edge the first tile allocates, and the cap a grown atlas stops at.
@@ -552,47 +374,28 @@ const ATLAS_MAX: u32 = 4096;
 /// Gutter between cells (texels): a tile's bilinear edge never samples a neighbour.
 const GUTTER: u32 = 2;
 
-/// The tile camera's order — after every booth (`-100 …`), before the UI camera (`1`).
+/// The tile camera's order: after every booth (`-100 …`), before the UI camera (`1`).
 const TILE_CAMERA_ORDER: isize = -10;
 
-/// The renderer's per-frame state that is not the bridge.
-///
-/// **Most of this is about a VM, and the VM does not live for the process**: it
-/// is built at world entry and destroyed at the character screen, and `ReloadUI()` is both edges
-/// back to back. [`TileState::session`] is what keeps that honest — see [`TileState::adopt_vm`]
-/// and [`TileState::answer_facts`].
+/// The renderer's state beyond the bridge, most of it one VM's: the VM is built at world entry,
+/// dropped at the character screen and rebuilt by `ReloadUI()`.
 #[derive(Default)]
 struct TileState {
-    /// The VM these tiles and the bridge's handle-keyed maps belong to
-    /// ([`UiScript::session`]); `0` = none (the "no VM" branch, and a freshly built state).
+    /// The VM these tiles and the bridge's maps belong to ([`UiScript::session`]); 0 for none.
     session: u64,
     tiles: HashMap<FrameHandle, Tile>,
     /// Files the engine asked facts for, loading.
     pending_facts: HashMap<String, Handle<M2Model>>,
-    /// Files whose facts have been derived: the asset handle (which keeps the file resident for
-    /// the tiles) beside the facts themselves.
-    ///
-    /// **The facts are cached because they are owed to every VM, not to the process.** This map
-    /// is a HOST fact — "the file is loaded here" — and it stood in for the per-VM fact "this
-    /// VM's engine has been told about the file" until [`TileState::answer_facts`]; the module
-    /// doc of `crate::ui_script::session` names that class and why it has no error path.
+    /// Files whose facts are derived, beside the handle that keeps each resident. It records what
+    /// the host has loaded, not what a VM has been told: every new VM is still owed the facts.
     loaded: HashMap<String, (Handle<M2Model>, ModelFileFacts)>,
     frame: u64,
 }
 
 impl TileState {
-    /// Hand the engine the facts for every file it just asked about, and answer with the keys
-    /// that still need loading (not resident here, and not already in flight).
-    ///
-    /// **Every ask gets an answer, whichever VM is asking.** `model_facts_wanted` DRAINS, and the
-    /// only thing that re-pushes a want is `SetModel` — so a want that is dropped is dropped for
-    /// the life of that VM. Skipping the answer because the file was already loaded *for an
-    /// earlier VM* is therefore permanent: [`UiScript::visible_model_panes`] drops a pane whose
-    /// file the engine knows nothing about, so from the second world entry on, every `<Model>`
-    /// widget in the game — the cooldown pie and the GCD sweep, the autocast shine, the minimap
-    /// and world-map pings, the item-push card, the map arrow — went dark until the process was
-    /// restarted. That is decision 1290's class exactly: a host memory standing in for a per-VM
-    /// one, failing silently, with the window simply empty.
+    /// Hand the engine the facts it asked for and return the keys still to load. Every ask is
+    /// answered, whichever VM asks: `model_facts_wanted` drains and only `SetModel` re-pushes, so
+    /// a skipped want keeps that VM's panes on the file off [`UiScript::visible_model_panes`].
     fn answer_facts(&mut self, script: &mut UiScript) -> Vec<String> {
         let mut to_load = Vec::new();
         for key in script.model_facts_wanted() {
@@ -603,7 +406,7 @@ impl TileState {
                 script.set_model_facts(&key, facts.clone());
                 continue;
             }
-            // Already in flight: the landing below answers whichever VM is asking by then.
+            // Already in flight: its landing answers whichever VM is asking by then.
             if self.pending_facts.contains_key(&key) {
                 continue;
             }
@@ -612,17 +415,9 @@ impl TileState {
         to_load
     }
 
-    /// Adopt the VM `script` names — **forgetting every handle-keyed memory when it is a
-    /// different one than these tiles were built against**.
-    ///
-    /// A [`FrameHandle`] is a generational index into ONE VM's widget arena, and the VM is
-    /// rebuilt at every logout, login and `ReloadUI()` (1290/1291). The next VM starts a fresh
-    /// arena and reissues the SAME indices at the same generations, so a tile or a request that
-    /// outlives its VM is not merely stale: it names a different frame. `None` is "no VM" — a
-    /// session in its own right (session `0`), exactly as [`crate::ui_script::VmMemo`] treats the
-    /// character screen.
-    ///
-    /// **When** this runs is load-bearing: [`forget_dead_vm_tiles`], ahead of the extract.
+    /// Adopt the VM `script` names, forgetting every handle-keyed memory for a new one: its arena
+    /// reissues the same [`FrameHandle`]s, so a survivor would name a different frame. `None`, no
+    /// VM, is session 0.
     fn adopt_vm(
         &mut self,
         script: Option<&UiScript>,
@@ -650,29 +445,27 @@ impl Plugin for UiModelsPlugin {
         app.init_resource::<UiModelTiles>()
             .init_non_send_resource::<TileState>()
             .add_systems(Startup, setup_tiles)
-            // **Before the extract**, which is where a `<Model>` pane's tile request is
-            // published (the UI pass's `paint_script`) — see [`forget_dead_vm_tiles`].
+            // Ahead of the extract, which publishes the tile requests (`paint_script`).
             .add_systems(
                 Update,
                 forget_dead_vm_tiles.in_set(crate::ui_script::UiFeed),
             )
-            // After the extract published this frame's requests, and before the pose/palette
-            // passes read the roots' transforms (they run in PostUpdate).
+            // After the extract publishes this frame's requests, before the pose and palette
+            // passes read the roots in PostUpdate.
             .add_systems(
                 Update,
                 sync_tiles
                     .after(crate::ui_script::UiInput)
                     .after(forget_dead_vm_tiles),
             )
-            // The composite: this frame's cells, appended in the lane the minimap fill uses —
-            // after the cells are packed, before the mesh rebuild reads the lane.
+            // The composite, in the minimap fill's lane: after packing, before the mesh rebuild.
             .add_systems(Update, compose_tiles.in_set(UiQuadAppend).after(sync_tiles))
             .add_systems(Update, reap_tile_variants)
             .add_systems(Update, dump_atlas.after(sync_tiles));
     }
 }
 
-/// Startup: the camera, the layer, the black light.
+/// Startup: the tile cameras, the layer and the default black light.
 fn setup_tiles(
     mut commands: Commands,
     device: Res<RenderDevice>,
@@ -685,13 +478,8 @@ fn setup_tiles(
         layer: layer.clone(),
         lights: Vec::new(),
     };
-    // Slot 0 — the `<Model>` ctor's scene: light disabled, fog off (`0x76c8e0`). Built here
-    // rather than lazily because every shipped pane wants it and nothing else ever does.
-    //
-    // Tile rigs skin from a light buffer's palette region (decision 0720's mirror law), and the
-    // tiles' animated materials read their mat-anim rows from it too: a twin
-    // binds ITS buffer, not the world's, so every buffer the pool creates joins both mirror
-    // lists or the rows the tiles write every frame reach a buffer nothing in a tile samples.
+    // Slot 0, the `<Model>` ctor's scene (`0x76c8e0`). A twin binds its own light buffer, whose
+    // palette and mat-anim rows the tiles read, so every pool buffer joins both mirror lists.
     rig.slot_for(
         TileScene::default_scene(),
         &device,
@@ -705,15 +493,12 @@ fn setup_tiles(
         booth_view_shape(),
         Camera {
             order: TILE_CAMERA_ORDER,
-            // The reference clears DEPTH for the widget's rect and leaves colour to the 2-D
-            // pass; a tile composites over the 2-D pass instead, so its colour clears to
-            // nothing — the premultiplied transparent the booth panes use.
+            // The reference clears only depth; a tile composites, so colour clears to transparent.
             clear_color: ClearColorConfig::Custom(Color::NONE),
             is_active: false,
             ..default()
         },
-        // Decode, no scene glow: a UI model draws in the UI strata after the WorldFrame's
-        // FFX apply (decision 0638's law for the body panes, the same widget family).
+        // Decode, no scene glow: UI models draw after the WorldFrame's FFX apply.
         benilla_world::ffx_glow::FfxGlow::UI_PANE,
         Projection::Orthographic(OrthographicProjection {
             near: 0.1,
@@ -728,21 +513,16 @@ fn setup_tiles(
         layer.clone(),
         TileCamera,
     ));
-    // The perspective pool: one camera per slot, each on its own layer, each parked inactive
-    // until a pane takes the slot. They are built once here rather than spawned on demand — a
-    // camera that appears mid-frame misses the render world's extract, and a pane that took its
-    // slot this frame would draw nothing until the next.
+    // The perspective pool, one inactive camera per slot on its own layer, spawned up front: a
+    // camera spawned mid-frame misses the render world's extract, so its pane would skip a frame.
     for slot in 0..UI_MODEL_CAM_LAYERS {
         commands.spawn((
             Name::new(format!("ui model pane camera {slot}")),
             booth_view_shape(),
             Camera {
                 order: TILE_CAMERA_ORDER + 1 + slot as isize,
-                // **Load, never clear.** These share the atlas with the orthographic camera,
-                // which runs first (a lower order) and clears the whole target; a second clear
-                // here would wipe the cells already drawn into it. Depth is a different matter
-                // and clears per camera by default, which is the reference's own per-widget
-                // depth clear (`76d5e1 GxClear(2)` inside the widget's viewport).
+                // Load, never clear: the orthographic camera clears the atlas first. Depth
+                // clears per camera, the reference's per-widget `GxClear(2)` (`0x76d5e1`).
                 clear_color: ClearColorConfig::None,
                 is_active: false,
                 ..default()
@@ -756,36 +536,15 @@ fn setup_tiles(
     let _ = light_buf;
 }
 
-/// pipe_warm's **orthographic twin camera** — the ortho leg's view key space, the
-/// way [`crate::portrait::spawn_warm_booth`] is the custom-projection one.
-///
-/// bevy_pbr folds the view's projection **class** into `MeshPipelineKey` (`bevy_pbr-0.18.1`
-/// `render/mesh.rs:397` — `Perspective | Orthographic | Custom`, emitted as the
-/// `VIEW_PROJECTION_*` shader def at `:2549`), so one material is a *different pipeline* per
-/// class. 0958's census closed with "the whole 3-D view space is `(samples, projection class)`,
-/// and both classes of both sample counts are now warm" — true on 2026-08-04, when the only
-/// classes were the world camera's Perspective and the booths' custom `WowPortraitProjection`.
-/// Decision 2013 added [`setup_tiles`]' orthographic camera a month later and nothing widened the
-/// warm pass, so the first UI model tile of a session — a cooldown pie, a minimap ping, an
-/// item-push card — compiled its batches live, uncovered, on the render thread.
-///
-/// This camera is that missing class in the tile camera's exact shape: [`booth_view_shape`]
-/// (`Msaa::Off`, HDR, no tonemap) and `FfxGlow::UI_PANE`, spawned right beside the real one above
-/// so the two cannot drift apart. The REAL tile camera is deliberately not borrowed for warming —
-/// it is `is_active: false` until a pane packs a cell, and switching it on would draw the whole
-/// menagerie into the live atlas. Only the projection's CLASS keys the pipeline, never its
-/// numbers; they mirror the real camera's regardless, for the same anti-drift reason.
+/// `pipe_warm`'s orthographic twin of [`setup_tiles`]' camera, kept in its shape: bevy_pbr keys
+/// mesh pipelines on the projection class (`bevy_pbr-0.18.1` `render/mesh.rs:397`). The real one
+/// is not borrowed, since switching it on would draw the warm models into the live atlas.
 pub(crate) fn spawn_warm_tile_cam(
     commands: &mut Commands,
     images: &mut Assets<Image>,
 ) -> (Entity, RenderLayers) {
     let layer = RenderLayers::layer(crate::portrait::WARM_ORTHO_LAYER);
-    // The atlas's own minimum size, the way `spawn_warm_booth` takes the real booths'. A render
-    // target's SIZE reaches no pipeline key (the combine pair is keyed on format; mesh pipelines
-    // specialise at queue time, before anything rasterises), so this could be tiny — and a 64²
-    // arm was measured against this one: 4.59 s vs 4.61 s of warm drain, i.e. nothing. The pass's
-    // extra cost is the wider cross it reveals, not the pixels this camera fills, so the size
-    // stays the one that matches the camera being warmed.
+    // The atlas's minimum size, like the camera it warms; size reaches no pipeline key.
     let image = images.add(new_target_image_sized(ATLAS_MIN, ATLAS_MIN));
     let cam = commands
         .spawn((
@@ -813,9 +572,8 @@ pub(crate) fn spawn_warm_tile_cam(
     (cam, layer)
 }
 
-/// The bevy-space → tile-camera-space rotation: WoW `+X` (bevy `−Z`) to the right, WoW `+Y`
-/// (bevy `−X`) up, WoW `+Z` (bevy `+Y`) toward the viewer — the ortho leg's axes (`0x7ad7f0`).
-/// A proper rotation (determinant +1), so winding survives.
+/// Bevy space to tile-camera space: WoW `+X` right, `+Y` up, `+Z` toward the viewer, the ortho
+/// leg's axes (`0x7ad7f0`). A proper rotation, so winding survives.
 fn wow_to_screen() -> Quat {
     Quat::from_mat3(&Mat3::from_cols(
         Vec3::new(0.0, -1.0, 0.0),
@@ -824,7 +582,7 @@ fn wow_to_screen() -> Quat {
     ))
 }
 
-/// The assets a tile build reads and writes, in one param (the 16-parameter ceiling).
+/// The assets a tile build reads and writes, in one param under Bevy's 16-parameter ceiling.
 #[derive(bevy::ecs::system::SystemParam)]
 struct TileAssets<'w> {
     asset_server: Res<'w, AssetServer>,
@@ -838,31 +596,23 @@ struct TileAssets<'w> {
 /// The render-side resources a tile build spends.
 #[derive(bevy::ecs::system::SystemParam)]
 struct TileRender<'w> {
-    /// The batch materials — and, through it, the material store the twins are added to (a
-    /// second `ResMut<Assets<WowModelMaterial>>` beside it would conflict at schedule time).
+    /// The batch materials, and through it the store the twins go in: a second
+    /// `ResMut<Assets<WowModelMaterial>>` beside it would conflict.
     mats: M2BatchMaterials<'w>,
     palettes: ResMut<'w, RigPalettes>,
     rig: ResMut<'w, TileRig>,
-    /// The shared mat-anim table: the tiles' animated materials own rows in it (2019).
+    /// The shared mat-anim table, where the tiles' materials own rows.
     table: ResMut<'w, MatAnimTable>,
-    /// The light pool grows lazily, so the device, the queue and both mirror lists have to be
-    /// reachable from the per-frame pass, not only from startup.
+    /// The light pool grows lazily, so the per-frame pass needs the device, queue and mirror lists.
     device: Res<'w, RenderDevice>,
     queue: Res<'w, RenderQueue>,
     mirrors: ResMut<'w, RigPaletteMirrors>,
     anim_mirrors: ResMut<'w, MatAnimMirrors>,
 }
 
-/// **The VM edge** ([`TileState::adopt_vm`]) — its own system, and ordered **ahead of the
-/// extract**, which is the whole reason it is not a first step inside [`sync_tiles`].
-///
-/// A logout, a login and a `ReloadUI()` all replace the VM in `PreUpdate`; the extract
-/// (`ui_script`'s `paint_script`) then publishes the NEW tree's tile requests, and
-/// `sync_tiles` reads them after that. Clearing the bridge from inside `sync_tiles` would
-/// therefore throw away the new VM's very first publish — and the extract's conversion is
-/// memoized on the engine's entry list, so an entry that does not change again is never converted
-/// again and the request never comes back (decision 2023's defect, from the other side). Running
-/// on the frame's way IN puts the clear before the publish instead of after it.
+/// The VM edge ([`TileState::adopt_vm`]), ordered ahead of the extract: clearing the bridge in
+/// [`sync_tiles`] would drop the new VM's first requests, and the memoized extract never re-sends
+/// an unchanged one.
 fn forget_dead_vm_tiles(
     mut commands: Commands,
     script: Option<NonSend<UiScript>>,
@@ -928,9 +678,7 @@ fn sync_tiles(
     state.frame += 1;
     let frame = state.frame;
     let Some(mut script) = script else {
-        // No VM: nothing paints. The tiles were retired on the edge
-        // ([`forget_dead_vm_tiles`]); every frame after it must still composite nothing and
-        // leave no live camera.
+        // No VM: the edge retired the tiles; composite nothing and leave no camera live.
         bridge.cells.clear();
         set_camera_active(&mut cams, false);
         for (mut cam, _, _, _, _) in &mut pane_cams {
@@ -939,8 +687,7 @@ fn sync_tiles(
         return;
     };
 
-    // ── 1. Facts: what the engine asked for — answered now when the file is already here
-    //         ([`TileState::answer_facts`]), when it lands otherwise ─────────────────────
+    // ── 1. Facts: answered now if the file is resident, else when it lands ───────────────────
     for key in state.answer_facts(&mut script) {
         if trace_on() {
             info!("tile-trace: facts for {key} wanted — loading the file");
@@ -956,13 +703,11 @@ fn sync_tiles(
         .collect();
     for (key, handle) in landed {
         let Some(model) = assets.m2s.get(&handle) else {
-            continue; // not readable yet — stay in `pending_facts` rather than fall off the loop
+            continue; // not readable yet: it stays in `pending_facts`
         };
         let facts = facts_of(model);
         script.set_model_facts(&key, facts.clone());
         state.pending_facts.remove(&key);
-        // Cached beside the handle so the next VM's want is answered without re-reading the
-        // asset — and so the answer cannot depend on the asset still being resident.
         state.loaded.insert(key, (handle, facts));
     }
 
@@ -981,7 +726,7 @@ fn sync_tiles(
                         .unwrap_or_default()
                 );
             }
-            continue; // not extracted yet — next frame
+            continue; // not extracted yet: next frame
         };
         if req.size_px.x == 0 || req.size_px.y == 0 {
             if trace_on() {
@@ -994,14 +739,10 @@ fn sync_tiles(
         }
         live.push((pane.handle, req.clone(), pane));
     }
-    // Stable cell order: the engine's registry order (creation order), so a pane keeps its
-    // cell across frames.
+    // Cells go in the engine's registry (creation) order, so a pane keeps its cell.
     let _ = &live;
 
     // ── 2a. Which light rig, and which perspective slot ─────────────────────────────────
-    //
-    // The light pool dedups by scene, so every default pane — which is every shipped one —
-    // lands on slot 0 and shares one buffer and one twin cache, exactly as before 2027.
     let light_slots: Vec<usize> = live
         .iter()
         .map(|(_, req, _)| {
@@ -1017,10 +758,7 @@ fn sync_tiles(
             )
         })
         .collect();
-    // A perspective pane needs a camera of its own, and therefore a layer of its own. Slots are
-    // sticky: a pane that already holds one keeps it, so a tile is not rebuilt every frame for
-    // its layer, and the free ones go to whoever is new. A pane past the pool draws nothing —
-    // the same degrade as a tile that does not fit the capped atlas.
+    // Held slots stay put so no tile rebuilds for its layer; a pane past the pool draws nothing.
     let mut taken = [false; UI_MODEL_CAM_LAYERS];
     let mut cam_slots: Vec<Option<usize>> = live
         .iter()
@@ -1051,7 +789,7 @@ fn sync_tiles(
             if trace_on() {
                 info!("tile-trace: {} facts not landed (key {key})", req.path);
             }
-            continue; // facts not landed ⇒ the engine would not have listed it; defensive
+            continue; // facts not landed: the engine would not have listed it
         };
         let (light_slot, cam_slot) = (light_slots[i], cam_slots[i]);
         let stale = state.tiles.get(handle).is_some_and(|t| {
@@ -1111,14 +849,8 @@ fn sync_tiles(
                     light_slot,
                     &layer,
                 ) {
-                    // **Named by its PANE, and at debug.** A tile is per-widget by construction
-                    // (`state.tiles` is keyed by `FrameHandle`, and 2019 requires it: two panes on
-                    // one file must not share their `MatAnimTable` rows, or two cooldowns at
-                    // different fractions would fight). So five cooldowns up at once legitimately
-                    // build five tiles — which, logged at info with only the PATH, arrived as five
-                    // byte-identical lines that read like a caching bug. The path alone also
-                    // recurs: `TILE_LINGER_FRAMES` is ~10 s, so any longer cooldown rebuilds and
-                    // re-logs at combat rate.
+                    // At debug, by pane: five cooldowns build five tiles, and one longer
+                    // than the linger rebuilds at combat rate.
                     debug!(
                         "ui_models: tile built for {} on pane {} — {} parts, {} emitters, \
                          {} animated alphas",
@@ -1172,10 +904,8 @@ fn sync_tiles(
         .iter()
         .filter(|(h, r, _)| {
             state.tiles.get(h).is_some_and(|t| {
-                // A pane that wants the perspective leg and found no free camera holds no cell and
-                // draws nothing — the same degrade as a tile that does not fit the capped atlas.
-                // Falling through to the orthographic placement would draw it at that leg's pixel
-                // ladder, which for a creature is a wall of fur.
+                // A perspective pane with no free camera draws nothing: the orthographic
+                // ladder would draw it far too large.
                 t.built && !(r.camera.is_some() && t.cam_slot.is_none())
             })
         })
@@ -1227,8 +957,6 @@ fn sync_tiles(
             continue;
         };
 
-        // The play head: the engine's cursor drives the paused player, every alpha track, every
-        // material row — and, on the perspective leg, the camera's own authored path.
         let (armed, cursor_s, seq_slot) = match pane.play {
             Some(ph) => {
                 let slot = tile.clips.get(&ph.anim_id).map(|&(_, s)| s);
@@ -1238,25 +966,17 @@ fn sync_tiles(
         };
 
         // ── The leg ────────────────────────────────────────────────────────────────────
-        //
-        // PERSPECTIVE (`0x7ac640`): the file's own camera record frames the
-        // pane, through a camera of this tile's own whose viewport is the tile's cell. The root
-        // is `T(pos·layoutScale) · R(facing) · S(s)` in MODEL units — no pixel ladder, because
-        // the projection is the record's and the viewport is the cell — and the authored
-        // eye/target are carried through that same matrix, which is what `0x718960`'s publish
-        // does and why `SetModelScale` and `SetPosition` cancel for framing here.
-        //
-        // ORTHOGRAPHIC: unchanged since 2013 — the model laid over the cell at
-        // `1280 · modelScale · layoutScale` FrameXML units per model unit.
+        // Perspective (`0x7ac640`): the file's camera frames the pane from this tile's camera,
+        // viewport the cell, and the eye and target ride the model's root (`0x718960`).
+        // Orthographic: one model unit is `1280 · modelScale · layoutScale` FrameXML units.
         let perspective = tile.cam_slot.zip(req.camera).and_then(|(slot, idx)| {
             let cam = assets.m2s.get(&tile.m2)?.cameras.get(idx as usize)?;
             Some((slot, cam.clone()))
         });
         let mut leg_trace = String::from("ortho");
         if let Some((slot, cam)) = perspective {
-            // The camera's tracks read the file's ABSOLUTE timeline, like every other M2 track,
-            // while the pane's play head is a cursor inside the armed band — so the band start
-            // is what turns one into the other. Static on every camera a shipped pane can name.
+            // Camera tracks read the file's absolute timeline and the play head is a cursor in
+            // the armed band, so the band's start is added.
             let file_ms = seq_slot
                 .and_then(|slot| assets.m2s.get(&tile.m2)?.sequences.get(slot))
                 .map_or(0, |seq| seq.start_ms)
@@ -1270,9 +990,8 @@ fn sync_tiles(
                 if marker.slot != slot {
                     continue;
                 }
-                // The target FIRST, and the activation only if there is one: these cameras are
-                // spawned with the default render target, which is the primary window — an
-                // active one without the atlas installed would draw the model over the game.
+                // The target first, and active only with one: the default target is the
+                // window, so an active camera without the atlas would draw over the game.
                 let Some(atlas) = bridge.atlas.clone() else {
                     continue;
                 };
@@ -1311,17 +1030,15 @@ fn sync_tiles(
                 );
             }
         } else {
-            // The root: the cell's bottom-left in camera space, plus `SetPosition` in layout
-            // units.
+            // The root: the cell's bottom-left plus `SetPosition` (layout units), in camera space.
             let cell_bl = Vec2::new(
                 cell.origin.x as f32,
                 atlas_h - (cell.origin.y + cell.size.y) as f32,
             );
             let pos = Vec2::new(req.position.x, req.position.y) * req.pos_px_per_unit;
             let depth = req.position.z * req.pos_px_per_unit;
-            // `T(pos) · R(facing about WoW +Z) · S(px per unit)`, in camera space: the facing
-            // turns about bevy `+Y` (WoW's `+Z` after `wow_to_bevy`), then the axis fix, then
-            // the scale.
+            // `T(pos) · R(facing about WoW +Z) · S(px per unit)`: the facing turns about bevy
+            // `+Y` (WoW's `+Z`), then the axis fix, then the scale.
             *tf = Transform {
                 translation: Vec3::new(cell_bl.x + pos.x, cell_bl.y + pos.y, depth),
                 rotation: wow_to_screen() * Quat::from_rotation_y(req.facing),
@@ -1343,8 +1060,8 @@ fn sync_tiles(
                 }
             }
         }
-        // The file slot the material tracks read: the armed sequence's, or the file's first
-        // when the armed id keys no bone (its slot is still in the facts' order — the cooldown).
+        // The file slot the material tracks read: the armed clip's, or, when the armed id keys
+        // no bone (the cooldown), the file's first sequence with that id.
         let seq_slot = seq_slot.or_else(|| {
             let id = armed?;
             let facts_slot = assets
@@ -1357,14 +1074,11 @@ fn sync_tiles(
             facts_slot
         });
         let gseq_s = pane.clock_ms as f64 / 1000.0;
-        // …and the BONE global-sequence channels read it too, not the world clock (decision
-        // 2046). The animation kernel's Phase B cursor is `[[model+0x2c]+0xc] − [model+0x68]`
-        // (`0x714260`) — the clock of the scene that OWNS the instance, minus the attach
-        // snapshot — and a `<Model>` widget owns a private `CM2Scene` (`CSimpleModel+0x314`)
-        // that only its own `OnUpdate` (`0x76d7f0`) advances. The visible case is the ping's
-        // 4833 ms spinner: its phase belongs to the pane, which is why "ping N resumes where
-        // ping N−1 stopped" needs no accumulator of ours (2013). The drive stamps its own anchor
-        // on its first tick, which is the attach.
+        // The bone global sequences read the pane's clock too: the kernel's cursor,
+        // `[[model+0x2c]+0xc] − [model+0x68]` (`0x714260`), is the owning scene's clock minus the
+        // attach snapshot, and a `<Model>` owns a private `CM2Scene` (`CSimpleModel+0x314`) that
+        // only its `OnUpdate` advances (`0x76d7f0`). So the ping's 4833 ms spinner resumes where
+        // the last ping stopped; the drive anchors on its first tick, the attach.
         if let Some(mut d) = drive {
             d.set_clock(gseq_s);
         }
@@ -1384,8 +1098,7 @@ fn sync_tiles(
                 trace_alphas.push(a);
             }
             if let Ok((mut tag, mut pvis)) = parts.get_mut(part.entity) {
-                // The `A ≤ 0` cull (`0x707b3a`): a batch the artist keyed
-                // off in this sequence is skipped, not drawn at zero.
+                // The `A ≤ 0` cull (`0x707b3a`): a batch keyed off in this sequence is skipped.
                 let want = if a > 0.0 {
                     Visibility::Inherited
                 } else {
@@ -1432,28 +1145,22 @@ fn sync_tiles(
                 rows.join(", ")
             );
         }
-        // A particle's half-extent is added in EYE space, so its unit is the leg's: the
-        // orthographic leg measures the cell in pixels and hands it `768·√(a²+1)` FrameXML units
-        // per model unit (`0x7b2a50`, carrying neither scale), while the perspective leg's eye
-        // space IS the root's, and its own projection does the conversion — the world's plain 1.0.
+        // A particle's half-extent is in eye space: the ortho leg's is the cell's pixels at
+        // `768·√(a²+1)` FrameXML units per model unit (`0x7b2a50`); the perspective leg's is 1.0.
         let star = if tile.cam_slot.is_some() && req.camera.is_some() {
             1.0
         } else {
             req.star_px_per_unit
         };
-        // …and the CELL the cloud may draw in. A tile's particles are quads in
-        // the ATLAS's own space, so without this a cloud that reaches past its cell lands in the
-        // cell the shelf packed beside it — which the composite hands to a different widget.
-        // `Cell::origin` is already in atlas texels, top-left origin, which is exactly
-        // the framebuffer coordinate the fragment tests.
+        // The cell the cloud may draw in, or it spills into its packed neighbour; `Cell::origin`
+        // is atlas texels, top-left, the framebuffer coordinate the fragment tests.
         let clip = Vec4::new(
             cell.origin.x as f32,
             cell.origin.y as f32,
             (cell.origin.x + cell.size.x) as f32,
             (cell.origin.y + cell.size.y) as f32,
         );
-        // The MESH half of the same clip: the tile's own row, read by every one of its materials
-        // through `anim_slots.w`.
+        // The mesh half of the clip: the tile's row, read through `anim_slots.w`.
         if let Some(slot) = tile.clip_slot {
             render.table.set(slot, clip.to_array());
         }
@@ -1465,19 +1172,12 @@ fn sync_tiles(
         }
     }
     // ── 6. Park what is not drawing; thaw what is ──────────────────────────────────────
-    //
-    // "Drawing" is exactly "has a cell this frame" — the same set the placement loop above wrote.
-    // Parking is the module doc's contract: `AnimParked` holds the rig (the 0712 evaluator, the
-    // compose, the palette write and the global-sequence bone writes), the freeze holds every
-    // emitter's pool, age and quads, and the root is hidden so no batch draws. This walk replaces
-    // the `hidden` vector the placement loop used to `retain` out of once per drawing tile — the
-    // same verdict, without the quadratic.
+    // Drawing means holding a cell. Hiding the root stops neither the emitters nor the bone
+    // global sequences, so `AnimParked` holds the rig and the freeze holds each emitter.
     for (handle, tile) in state.tiles.iter_mut() {
         let park = !draws_this_frame(&bridge, handle);
-        // The emitter freeze is COMPARED, not edge-triggered off `tile.parked`: a tile can be
-        // built while it is already parked (its pane is on the paint list but its cell did not
-        // fit the capped atlas), and an emitter is born thawed. The comparison is a `Deref`, so
-        // a steady state touches no change tick.
+        // Compared, not edge-triggered off `tile.parked`: a tile can be built already parked,
+        // and an emitter is born thawed. Reading through `Deref` touches no change tick.
         for &e in &tile.emitters {
             if let Ok(mut em) = emitters.get_mut(e) {
                 if em.is_frozen() != park {
@@ -1503,9 +1203,8 @@ fn sync_tiles(
             }
             commands.entity(tile.root).insert(AnimParked);
         } else {
-            // The marker drops before `AnimationSystems` (this is `Update`, the lane is
-            // `PostUpdate`), so the first thawed frame evaluates and composes before anything
-            // reads the pose — 0739's wake law, the same as every world rig's.
+            // Removed in `Update`, ahead of `AnimationSystems` in `PostUpdate`, so the first
+            // thawed frame evaluates the pose before anything reads it.
             commands.entity(tile.root).remove::<AnimParked>();
         }
     }
@@ -1515,19 +1214,17 @@ fn sync_tiles(
             cam.is_active = want;
         }
     }
-    // The ORTHOGRAPHIC camera stays on whenever anything is packed, even with no ortho tile on
-    // it: it is the one that clears the atlas, and every perspective camera loads.
+    // The orthographic camera clears the atlas for all, so it stays on while anything is packed.
     set_camera_active(
         &mut cams,
         !bridge.cells.is_empty() && bridge.atlas.is_some(),
     );
 }
 
-/// The perspective leg's rig for one pane — the pure half, so the reference's worked numbers can be
-/// checked without a world.
+/// The perspective leg's rig, pure so the reference's worked numbers test without a world.
 struct PerspectiveRig {
-    /// The model's root, `T(pos · layoutScale) · R(facing, +Z) · S(s)` in Bevy model space —
-    /// `0x76d1a0`'s `model+0xbc`, minus the pixel ladder the orthographic leg needs.
+    /// The model's root, `T(pos · layoutScale) · R(facing, +Z) · S(s)` in Bevy model space:
+    /// `0x76d1a0`'s `model+0xbc` without the orthographic leg's pixel ladder.
     root: Transform,
     /// The camera, `lookAt(eye, target, up)`, with the eye as the view origin.
     camera: Transform,
@@ -1535,27 +1232,17 @@ struct PerspectiveRig {
     projection: WowPortraitProjection,
 }
 
-/// Build it.
+/// Build the rig. The authored eye and target ride the root transform (`0x718960` publishes
+/// `eye = (position_base + posTrack) · M_root`), so `SetModelScale` and `SetPosition` cancel for
+/// framing. Scale still matters: near and far are copied unscaled (`0x70ebd0`) while eye depth
+/// scales with `s`, so a large scale pushes it through the far plane, a small one the near.
 ///
-/// **The authored eye and target are carried through the root transform.** That is `0x718960`'s
-/// publish — `eye_published = (position_base + posTrack) · M_root` — and it is the whole reason
-/// `SetModelScale` and `SetPosition` cancel here: the camera moves with the model, so the framing
-/// is invariant to both. They are still applied rather than skipped, because the record's near and
-/// far are copied into the camera **unscaled** (`0x70ebd0`) while every eye-space depth scales
-/// with `s`, so a LARGE `SetModelScale` drives the model through the **far** plane and a small one
-/// through the near (the direction is the opposite of the obvious guess). `near`/`far` reach only
-/// `m22`/`m32`: `near` cancels algebraically out of `m00`/`m11`, so the x/y screen scale is `fov`
-/// and `aspect` alone.
+/// `0x7ac640` builds up from `CCamera` fields the publish never writes, as
+/// `(sin(a₆)·sin(roll), −cos(a₆)·sin(roll), cos(roll))`; `a₆` has no writer and stays 0, so at
+/// roll 0 up is model-space `+Z`, the axis `SetFacing` turns about, and the facing cancels too.
 ///
-/// The **up** vector does not ride the root: `0x7ac640` assembles it out of four `CCamera` fields
-/// the publish never writes — `up = (sin(a₆)·sin(roll), −cos(a₆)·sin(roll), cos(roll))` in WoW
-/// model space, and property `a₆` has **no writer image-wide**, so it holds its constructor `0`
-/// for ever and the vector is `(0, −sin(roll), cos(roll))`. At `roll = 0` that is model-space `+Z`
-/// exactly — which is the very axis `SetFacing` turns the model about, and *that* is why the facing
-/// cancels here too: the eye, the target and the geometry all turn about an axis the up vector lies
-/// on, so the image does not move. The reference's own one-frame publish lag — its paint `0x76d240`
-/// reads the eye before it rebuilds the root, so the frame a facing CHANGES draws one step out of
-/// phase — is a quirk of the ordering, not the mechanism, and is deliberately not reproduced.
+/// Deviation: the reference's paint (`0x76d240`) reads the eye before it rebuilds the root, so a
+/// facing change draws one frame late; not reproduced, because it is an ordering quirk.
 fn perspective_rig(
     record: &benilla_assets::PortraitCamera,
     req: &TileRequest,
@@ -1571,8 +1258,7 @@ fn perspective_rig(
         m.transform_point3(record.eye),
         m.transform_point3(record.target),
     );
-    // `up = (0, −sin(roll), cos(roll))`, WoW model space — the camera's own, not a roll about the
-    // view axis. They agree at `roll = 0`, which is every camera a `<Model>` pane can name.
+    // The camera's own up, not a roll about the view axis; the two agree at roll 0.
     let (sin_roll, cos_roll) = record.roll.sin_cos();
     let up = benilla_assets::coords::wow_to_bevy([0.0, -sin_roll, cos_roll]);
     PerspectiveRig {
@@ -1582,12 +1268,8 @@ fn perspective_rig(
     }
 }
 
-/// Reap the material twins whose world source material died — the same law and the same event as
-/// the booths' (`portrait::light::reap_dead_variants`), which the tiles were missing: a twin is
-/// its own asset pinned only by this cache, so without the reap every UI M2 material a session
-/// ever showed would survive a map-scope teardown (which clears the world material cache, killing
-/// exactly these keys) for the life of the process. A live tile keeps its twin through its own
-/// `MeshMaterial3d`; only the dedup entry drops.
+/// Drop twin-cache entries whose world material died, as the booths do: the cache alone pins a
+/// twin, which would outlive a map teardown; a live tile's `MeshMaterial3d` still holds its own.
 fn reap_tile_variants(
     mut events: MessageReader<AssetEvent<WowModelMaterial>>,
     rig: Option<ResMut<TileRig>>,
@@ -1602,9 +1284,8 @@ fn reap_tile_variants(
     }
 }
 
-/// The render layer a tile's entities live on: the atlas camera's shared one for an orthographic
-/// tile, and the perspective pool's own for a tile with a camera — one layer per camera, or every
-/// perspective camera would draw every other pane's model over its cell.
+/// A tile's render layer: the atlas camera's for an orthographic tile, its own camera's for a
+/// perspective one, or every perspective camera would draw every other pane's model.
 fn tile_layer(rig: &TileRig, cam_slot: Option<usize>) -> RenderLayers {
     match cam_slot {
         Some(slot) => RenderLayers::layer(UI_MODEL_CAM_LAYER_BASE + slot),
@@ -1612,20 +1293,8 @@ fn tile_layer(rig: &TileRig, cam_slot: Option<usize>) -> RenderLayers {
     }
 }
 
-/// `WOW_TILE_DUMP=<path>:<secs>` — **shoot the tile atlas itself**, once, `secs` of app time in.
-///
-/// The composited frame is the wrong place to read a `<Model>` widget: over an action button or a
-/// bag slot the pane sits on the button's own art, so every measurement of what the widget drew is
-/// a measurement of the icon underneath it plus a sub-pixel alignment guess. The atlas cell is the
-/// widget ALONE, on transparent, at exactly the size the pane asked for — and the trace's
-/// `cell=(x,y WxH)` says where each pane's is. Together they answer "what did this widget
-/// actually paint", which nothing else here can (the cooldown's sweep read as a filmstrip,
-/// one cell per phase).
-///
-/// The camera needs no waking, unlike the booths' twin (`portrait::test_bake::dump_booth_target`):
-/// the orthographic tile camera is the one that CLEARS the atlas, so it is active whenever any
-/// cell is packed — which is exactly when there is something to shoot. A dump that comes back
-/// uniformly transparent means no pane was drawing, not a broken widget.
+/// `WOW_TILE_DUMP=<path>:<secs>`: save the tile atlas once, `secs` of app time in; an
+/// all-transparent dump means no pane was drawing.
 fn dump_atlas(
     mut commands: Commands,
     bridge: Res<UiModelTiles>,
@@ -1644,7 +1313,7 @@ fn dump_atlas(
         return;
     }
     let Some(atlas) = bridge.atlas.clone() else {
-        return; // no atlas yet — wait for the first tile rather than shoot nothing
+        return; // no atlas yet: wait for the first tile
     };
     *done = true;
     use bevy::render::view::window::screenshot::{Screenshot, ScreenshotCaptured};
@@ -1692,36 +1361,20 @@ fn set_camera_active(
     }
 }
 
-/// The composite: one premultiplied quad per cell packed THIS frame, over its pane's rect at the
-/// pane's paint key and alpha, clipped as the pane is — appended to the UI pass's overlay lane
-/// every frame (the lane is cleared at the top of [`UiQuadAppend`] and diffed by the rebuild, so
-/// an unchanged set costs no re-batch). A pane with a request and no cell draws nothing; a cell
-/// whose request vanished (the linger reaper) draws nothing.
+/// The composite, a premultiplied quad per cell packed this frame: drawn here, not by the
+/// extract, whose memoized conversion would not re-run when a cell lands.
 pub(crate) fn compose_tiles(bridge: Res<UiModelTiles>, mut quads: ResMut<UiQuads>) {
     quads.overlays.extend(composite_quads(&bridge));
 }
 
-/// **Does this tile draw this frame?** — which is the park verdict inverted, and deliberately
-/// ONE function beside [`composite_quads`] so the two cannot drift apart.
-///
-/// The answer is "the bridge holds a cell for it", and that is exact rather than approximate:
-/// [`composite_quads`] draws precisely the `cells ∩ requests` pairs, and [`sync_tiles`] fills
-/// `cells` in the same pass that reads it — stage 4 clears the map, stage 5 inserts a cell for
-/// every drawing pane the packer placed, and that insert happens BEFORE any of the loop's later
-/// `continue`s. So the two cases that look as though they could strand a visible pane cannot:
-///
-/// - an **atlas repack** (the 512→1024 growth) re-allocates the target image in a separate `if`
-///   that does not touch the insert loop, so every pane the packer placed still gets its cell on
-///   the repack frame;
-/// - a pane that **did not fit the capped atlas** gets no cell at all ([`shelf_pack`] returns a
-///   prefix of its input) — and therefore pushes no quad, so freezing its cloud is the right
-///   answer rather than a dropped frame.
+/// Whether a tile draws this frame, the park verdict inverted: it holds a cell, the set
+/// [`composite_quads`] draws. [`sync_tiles`] inserts each placed pane's cell before any
+/// `continue`, and a pane the capped atlas could not fit has none, so no drawing pane parks.
 fn draws_this_frame(bridge: &UiModelTiles, handle: &FrameHandle) -> bool {
     bridge.cells.contains_key(handle)
 }
 
-/// [`compose_tiles`]'s pure half: the quads for every `(request, cell)` pair the bridge holds,
-/// ordered by paint key so the overlay diff sees the same sequence for the same set.
+/// [`compose_tiles`]'s pure half, sorted by paint key so the overlay diff sees a stable order.
 pub(crate) fn composite_quads(bridge: &UiModelTiles) -> Vec<UiQuad> {
     let Some(atlas) = bridge.atlas.clone() else {
         return Vec::new();
@@ -1745,9 +1398,9 @@ pub(crate) fn composite_quads(bridge: &UiModelTiles) -> Vec<UiQuad> {
                 z_key: req.z_key,
                 texture: Some(atlas.clone()),
                 uv: UvRect::from_tex_coords([u0, u1, v0, v1]),
-                // The instance draws at the widget's OWN alpha (`0x76d120`).
+                // The widget's own alpha (`0x76d120`).
                 color: [1.0, 1.0, 1.0, req.alpha],
-                // A render target: premultiplied by construction (`UiQuad` doc).
+                // A render target is premultiplied.
                 premultiplied: true,
                 clip: req.clip,
                 ..default()
@@ -1758,7 +1411,7 @@ pub(crate) fn composite_quads(bridge: &UiModelTiles) -> Vec<UiQuad> {
     out
 }
 
-/// The engine's facts for a resident file: its sequence table and header bounds.
+/// The engine's facts for a resident file: its sequences, header bounds and camera count.
 fn facts_of(model: &M2Model) -> ModelFileFacts {
     ModelFileFacts {
         sequences: model
@@ -1778,9 +1431,8 @@ fn facts_of(model: &M2Model) -> ModelFileFacts {
     }
 }
 
-/// Shelf-pack `sizes` (with a gutter) into the smallest power-of-two square atlas from
-/// [`ATLAS_MIN`] to [`ATLAS_MAX`] that fits; returns the cells (one per size that fit, in order)
-/// and the atlas size chosen (`0×0` for no sizes).
+/// Shelf-pack `sizes` into the smallest power-of-two square atlas from [`ATLAS_MIN`] to
+/// [`ATLAS_MAX`] that fits: the cells that fit, in order, and the atlas size (`0×0` for none).
 fn pack(sizes: &[UVec2]) -> (Vec<Cell>, UVec2) {
     if sizes.is_empty() {
         return (Vec::new(), UVec2::ZERO);
@@ -1826,16 +1478,14 @@ fn shelf_pack(sizes: &[UVec2], edge: u32) -> Vec<Cell> {
 /// What [`build_tile`] made.
 struct BuiltTile {
     clips: HashMap<u16, (AnimationNodeIndex, usize)>,
-    /// The tile's cell-clip row — see [`Tile::clip_slot`].
     clip_slot: Option<u16>,
     alpha_parts: Vec<AlphaPart>,
     uv_parts: Vec<UvPart>,
     emitters: Vec<Entity>,
 }
 
-/// Spawn a file's parts, rig and emitters under `root` on the tile layer — the booth bake's
-/// recipe (`portrait::booth::spawn_booth_model`) for a file with no unit. `None` when a material
-/// is not resident yet (the caller retries next frame rather than latch a world-lit twin).
+/// Spawn a file's parts, rig and emitters under `root`, the booth bake's recipe for a file with
+/// no unit. `None` until the batch materials are ready; the caller retries next frame.
 fn build_tile(
     commands: &mut Commands,
     root: Entity,
@@ -1854,19 +1504,15 @@ fn build_tile(
     let light = render.rig.lights.get(light_slot)?.buffer.clone();
     let fogged = render.rig.lights[light_slot].scene.fog.is_some();
     let layer = layer.clone();
-    // The render forms, now (the booth/marker lanes' exception to the paced furnisher: one small
-    // model, on demand).
+    // The render forms now, unpaced: one small model, on demand.
     forms.ensure_now_rigged(handle, &model.submeshes, meshes);
     let built = forms.slices(handle);
     let (stat_forms, skin_forms) = (built.stat, built.skin.unwrap_or(&[]));
 
-    // The tile's **cell clip** row: one row per tile, `anim_slots.w` on every
-    // one of its materials, the cell rect written into it each frame. It is why a tile's batches
-    // are all its OWN clones rather than the shared twins — the twin is per (material, light),
-    // and the clip is per PANE.
+    // The cell-clip row, `anim_slots.w` on every material: the clip is per pane and a twin per
+    // (material, light), so every batch draws through a clone of its own.
     let clip_slot = render.table.alloc();
-    // Materials first — every one must be resident before anything spawns, or a retry would
-    // leave half a tree behind.
+    // Materials first, so a `None` return leaves no half-built tree.
     let mut part_mats: Vec<Handle<WowModelMaterial>> = Vec::with_capacity(model.submeshes.len());
     let mut uv_parts: Vec<UvPart> = Vec::new();
     for (i, sub) in model.submeshes.iter().enumerate() {
@@ -1876,11 +1522,8 @@ fn build_tile(
             sub.texture.clone()
         };
         let world = render.mats.steady(sub, texture, (i + 1) as u16)?;
-        // The twin: same material, this rig's light buffer, and the batch's AUTHORED fog policy
-        // when the pane armed fog — which is where the per-material UNFOGGED bit does its own
-        // work (`0x70bb24`: a fogged pane still draws its unfogged materials unfogged). A
-        // pane with no fog forces it off, as every tile did before 2027. The shade selector both
-        // lanes flip is inert on an unlit batch, which is every shipped UI M2.
+        // The twin: this rig's light buffer, and when the pane armed fog the batch's authored
+        // fog policy, so an `UNFOGGED` material stays unfogged (`0x70bb24`); no fog forces it off.
         let lane = if fogged {
             VariantLane::RigFogged
         } else {
@@ -1893,9 +1536,7 @@ fn build_tile(
             render.mats.materials(),
             lane,
         )?;
-        // A batch whose texture transform animates draws through a clone of its own, with its
-        // own table rows — the rows are written off THIS pane's play head, so two panes on one
-        // file cannot share them.
+        // An animated texture transform also gets its own table rows, off this pane's play head.
         let animated = sub.uv_anim.is_some()
             || sub.uv_seq.is_some()
             || sub.uv_rot_seq.is_some()
@@ -1931,9 +1572,8 @@ fn build_tile(
         }
     }
 
-    // The rig: the collapsed pose buffer + a palette slot, when the file has bones. The tile
-    // camera is not the world camera, so bone billboards are left to the rest pose (none of the
-    // shipped UI files authors one).
+    // The rig, when the file has bones: the collapsed pose and a palette slot. Bone billboards
+    // are not applied, since the tile camera is not the world's; no shipped UI file has one.
     let mut pose: Option<RigPose> = None;
     let mut slot: u16 = 0;
     let mut clips: HashMap<u16, (AnimationNodeIndex, usize)> = HashMap::new();
@@ -1954,7 +1594,7 @@ fn build_tile(
             for c in &anims.clips {
                 clips.entry(c.anim_id).or_insert((c.node, c.seq_index));
             }
-            // A paused player: the engine's play head seeks it every frame (2007's clock).
+            // A paused player, seeked every frame to the engine's play head.
             let mut player = AnimationPlayer::default();
             player.stop_all();
             commands.entity(root).insert((
@@ -2004,9 +1644,9 @@ fn build_tile(
         }
     }
 
-    // The emitters: on their bone's anchor (the collapsed rig's demand-spawned entity), or the
-    // root for a boneless file; clocked by the root's player like any hosted cloud; lit by the
-    // tile's buffer; sized in the tile's pixels (`set_size_scale`, written per frame).
+    // The emitters: on their bone's anchor, or the root for a boneless file; clocked by the
+    // root's player, sized per frame, lit by the tile's buffer but not fogged by it (the effect
+    // lane reads its own fog uniform), so a fogged pane's cloud draws unfogged.
     let mut emitters = Vec::new();
     for em in &model.emitters {
         let (owner, pivot) = match pose.as_mut() {
@@ -2041,9 +1681,7 @@ fn build_tile(
     if let Some(p) = pose {
         commands.entity(root).insert((p, StageRig));
     }
-    // `spawn_anim_host` is the world's placement recipe (variation re-rolls, the residency
-    // window); a widget arms exactly what Lua asked and nothing else, so it is not used here —
-    // named so nobody reaches for it.
+    // Not `spawn_anim_host`, the world's placement recipe: a widget arms exactly what Lua asked.
     let _ = spawn_anim_host;
     Some(BuiltTile {
         clips,
@@ -2058,8 +1696,6 @@ fn build_tile(
 mod tests {
     use super::*;
 
-    /// The packer keeps every cell inside the atlas, gutters between, and answers cells in
-    /// request order — the composite's UVs and the roots' placements both index by it.
     #[test]
     fn the_packer_keeps_cells_apart_and_in_order() {
         let sizes: Vec<UVec2> = (0..40).map(|_| UVec2::new(72, 72)).collect();
@@ -2077,8 +1713,6 @@ mod tests {
                 assert!(apart, "cells {i} and another overlap or touch");
             }
         }
-        // Growth: a wall of big tiles needs a bigger atlas; an impossible one is capped and
-        // the tail simply does not fit.
         let big: Vec<UVec2> = (0..8).map(|_| UVec2::new(400, 400)).collect();
         let (cells, atlas) = pack(&big);
         assert_eq!(cells.len(), 8);
@@ -2089,13 +1723,9 @@ mod tests {
         assert_eq!(atlas, UVec2::splat(ATLAS_MAX));
     }
 
-    /// The composite is a function of the bridge alone: a request with no cell
-    /// draws nothing, a cell draws its request's rect at the request's key and alpha with the
-    /// cell's texel window, and a cell whose request is gone draws nothing — no extract in the
-    /// loop.
     #[test]
     fn the_composite_is_the_bridges_cells_over_their_requests() {
-        // Two live handles off a real arena — the bridge is keyed by them, nothing more.
+        // Two real handles; the bridge only keys by them.
         let mut arena = benilla_ui::widget::WidgetArena::new();
         let handle = arena.create(benilla_ui::widget::FrameKind::Frame, None, None);
         let stray = arena.create(benilla_ui::widget::FrameKind::Frame, None, None);
@@ -2156,13 +1786,6 @@ mod tests {
         assert!((br[0] - 130.0 / 512.0).abs() < 1e-6 && (br[1] - 65.0 / 512.0).abs() < 1e-6);
     }
 
-    /// **The park verdict and the composite are the same question**. A tile
-    /// parks exactly when it pushed no quad, and `sync_tiles` reads both off `bridge.cells` in one
-    /// pass — so neither an atlas repack nor an atlas too full for one more pane can freeze a
-    /// cloud on a frame its pane is visibly drawing. This pins the two sides to each other: what
-    /// [`composite_quads`] draws IS the un-parked set, so a later change to either has to change
-    /// both. The third pane here is the one the capped atlas had no room for: it draws nothing,
-    /// which is exactly why parking it is right.
     #[test]
     fn the_park_verdict_is_exactly_what_the_composite_draws() {
         let mut arena = benilla_ui::widget::WidgetArena::new();
@@ -2218,8 +1841,7 @@ mod tests {
                 "pane {i}: the park verdict and the composite must agree"
             );
         }
-        // And the repack: growing the atlas moves every cell's texel window without changing WHO
-        // has one, so no pane's verdict flips on a growth frame.
+        // A repack moves texel windows without changing who has a cell.
         bridge.atlas_size = UVec2::splat(1024);
         let regrown: std::collections::HashSet<u64> =
             composite_quads(&bridge).iter().map(|q| q.z_key).collect();
@@ -2251,8 +1873,8 @@ mod tests {
         }
     }
 
-    /// One freshly built VM with a shown cooldown pane on it — the shape `Cooldown.xml` builds
-    /// per action button, and the shape `!OmniCC` wraps `CooldownFrame_SetTimer` around.
+    /// A fresh VM with a shown cooldown pane, the `CooldownFrameTemplate` (`Cooldown.xml`) every
+    /// action button inherits.
     fn vm_with_a_cooldown_pane() -> UiScript {
         let mut s = UiScript::new().expect("VM");
         s.set_screen_size(1024.0, 768.0);
@@ -2266,23 +1888,14 @@ mod tests {
         s
     }
 
-    /// **A rebuilt VM is told about a file the host already loaded** — decision 1290's class,
-    /// found in the tile renderer's facts cache.
-    ///
-    /// `UiScript::model_facts_wanted` DRAINS, and the only thing that re-pushes a want is
-    /// `SetModel`; `visible_model_panes` drops a pane whose file the engine holds no facts for.
-    /// So an answer skipped once is skipped for that VM's whole life. The host used to skip it
-    /// whenever the ASSET was resident — a fact about the process, not about the VM — and the VM
-    /// is rebuilt at every logout, login and `ReloadUI()`. From the second world entry on, every
-    /// `<Model>` widget in the game (the cooldown pie and the GCD sweep, the autocast shine, the
-    /// minimap and world-map pings, the item-push card, the map arrow) drew nothing at all, and
-    /// only restarting the client brought them back.
+    /// `model_facts_wanted` drains and only `SetModel` re-pushes, so a want skipped because the
+    /// asset is resident would leave every `<Model>` pane dark for the second VM's whole life.
     #[test]
     fn a_rebuilt_vm_is_told_about_a_file_the_host_already_loaded() {
         let key = benilla_ui::widget::model_key(COOLDOWN_FILE);
         let mut state = TileState::default();
 
-        // Session 1 — nothing is resident, so the host is asked to load the file.
+        // Session 1: nothing is resident, so the host is asked to load the file.
         let mut first = vm_with_a_cooldown_pane();
         assert!(
             first.visible_model_panes().is_empty(),
@@ -2296,7 +1909,7 @@ mod tests {
         first.set_model_facts(COOLDOWN_FILE, cooldown_facts());
         assert_eq!(first.visible_model_panes().len(), 1);
 
-        // Session 2 — the logout/login (or `/reload`) rebuild: a fresh VM, the same file.
+        // Session 2, the logout/login (or `/reload`) rebuild: a fresh VM, the same file.
         let mut second = vm_with_a_cooldown_pane();
         assert!(
             second.visible_model_panes().is_empty(),
@@ -2317,12 +1930,6 @@ mod tests {
         );
     }
 
-    /// **A new VM inherits nothing keyed by a `FrameHandle`** — the same edge, its other half.
-    ///
-    /// A handle is a generational index into ONE arena; the next VM reissues the same indices at
-    /// the same generations, so a surviving tile or request does not go stale, it silently
-    /// re-attaches to a different frame. The tile's tree is despawned and its mat-anim rows go
-    /// back to the table, exactly as a reaped tile's do.
     #[test]
     fn a_new_vm_inherits_nothing_keyed_by_a_frame_handle() {
         let mut world = World::new();
@@ -2421,8 +2028,7 @@ mod tests {
         );
     }
 
-    /// A `TileRequest` for the perspective tests: the pane's own size and root terms, nothing
-    /// the leg does not read.
+    /// A perspective-leg `TileRequest` with only the terms the leg reads.
     fn persp_req(size: UVec2, root_scale: f32, root_pos: Vec3, facing: f32) -> TileRequest {
         TileRequest {
             path: String::new(),
@@ -2445,8 +2051,8 @@ mod tests {
         }
     }
 
-    /// `HumanMale`'s camera 1 as `benilla-extract m2cam` reads it — and as the reference records
-    /// it, to the digit.
+    /// `HumanMale`'s camera 1 as `benilla-extract m2cam` reads it, matching the reference to the
+    /// digit.
     fn human_male_cam1() -> benilla_assets::PortraitCamera {
         let wow = benilla_assets::coords::wow_to_bevy;
         benilla_assets::PortraitCamera {
@@ -2459,13 +2065,10 @@ mod tests {
         }
     }
 
-    /// The perspective leg's projection is the client's `0x5c3cc0`: a **diagonal** fov, so
-    /// `t = tan(fovy / (2·√(aspect²+1)))`, `m11 = 1/t`, `m00 = m11/aspect` — not a vertical fov,
-    /// and not an aspect-independent crop.
-    ///
-    /// The numbers are the reference's own worked checks: a `318×224` pane gives
-    /// `θ = 0.287938 · fov` and a `233×224` pane `θ = 0.346523 · fov`. The fallback camera's check:
-    /// `aspect = 1.4196429`, `√(aspect²+1) = 1.7364815`, `tan(0.5/(2·1.7364815)) = 0.1449700`.
+    /// The client's `0x5c3cc0`, a diagonal fov: `t = tan(fovy / (2·√(aspect²+1)))`,
+    /// `m11 = 1/t`, `m00 = m11/aspect`. The numbers are the reference's worked checks:
+    /// `θ = 0.287938 · fov` at 318×224, `0.346523 · fov` at 233×224, and `t = 0.1449700` for the
+    /// fallback camera's `fov = 0.5`.
     #[test]
     fn the_perspective_projection_is_the_clients_diagonal_fov_matrix() {
         use bevy::camera::CameraProjection;
@@ -2482,11 +2085,8 @@ mod tests {
         let aspect: f32 = 318.0 / 224.0;
         assert!((aspect - 1.419_642_9).abs() < 1e-6);
         let m = pane_projection(&cam, aspect).get_clip_from_view();
-        // `m11 = 1/t` with `t = tan(θ)`; the fallback check's `t` is 0.1449700.
         let t = 1.0 / m.y_axis.y;
         assert!((t - 0.144_97).abs() < 1e-5, "t = {t}");
-        // …and `m00 = m11 / aspect` — the one `aspect` doing both jobs, never 1.0 (a transplanted
-        // 1.0 would stretch a sphere 1.42× wider than tall in this pane).
         assert!(
             (m.x_axis.x - m.y_axis.y / aspect).abs() < 1e-6,
             "m00 = m11/aspect: {} vs {}",
@@ -2501,14 +2101,8 @@ mod tests {
         }
     }
 
-    /// **`SetModelScale` and `SetPosition` CANCEL on the perspective leg** (`0x718960`): the
-    /// authored eye and target are carried through the very root transform the geometry is drawn
-    /// through, so the picture is invariant to both. This is the property the leg is built on, and
-    /// the failure mode it guards is applying the root to the geometry but not to the camera,
-    /// which is wrong by `1/s`.
-    ///
-    /// The check is on the pixels, not on the matrices: a model-local point's clip-space `x/w`
-    /// and `y/w` must be identical at any scale and any offset.
+    /// The eye and target ride the root the geometry is drawn through (`0x718960`), so a model
+    /// point's clip-space `x/w` and `y/w` do not move with scale or offset.
     #[test]
     fn scale_and_position_cancel_on_the_perspective_leg() {
         use bevy::camera::CameraProjection;
@@ -2560,26 +2154,16 @@ mod tests {
             }
         }
 
-        // …and the ORTHOGRAPHIC leg is the opposite: its scale is a pixel ladder with no camera
-        // to cancel against, so `px_per_unit` is exactly what the model's size is measured in.
-        // (Stated as the contrast, so nobody carries the cancellation across the fork.)
+        // On the orthographic leg scale does not cancel: `px_per_unit` is the model's size.
         assert_ne!(
             persp_req(UVec2::new(318, 224), 1.0, Vec3::ZERO, 0.0).px_per_unit,
             0.0
         );
     }
 
-    /// **`SetFacing` cancels too** (on `<PlayerModel>`'s FROZEN camera, `0x7acf10`, only
-    /// `SetFacing`/`SetRotation` show; that does not hold here).
-    ///
-    /// The reason is the up vector: `0x7ac640` builds it as `(0, −sin(roll), cos(roll))` in model
-    /// space out of `CCamera` fields the publish never writes, and at `roll = 0` — every camera a
-    /// `<Model>` pane can name — that is model-space `+Z`, the very axis `SetFacing` turns about.
-    /// Eye, target, geometry and up all turn together, so the image does not move.
-    ///
-    /// A re-implementation that rotated the model without rotating its camera would spin the
-    /// model; one that rotated both but kept a screen-space up would tilt it. Both are wrong, and
-    /// both look plausible, which is why this is pinned on the pixels.
+    /// At roll 0 the up `0x7ac640` builds is model-space `+Z`, the axis `SetFacing` turns about, so
+    /// eye, target, geometry and up turn together; on `<PlayerModel>`'s frozen camera (`0x7acf10`)
+    /// a facing does show.
     #[test]
     fn facing_cancels_on_the_perspective_leg_too() {
         use bevy::camera::CameraProjection;
@@ -2612,18 +2196,15 @@ mod tests {
                 );
             }
         }
-        // The ORTHO leg is where a facing shows: there the model turns in the screen plane and
-        // nothing turns with it. Same widget field, opposite outcome — the fork is the point.
+        // On the orthographic leg a facing turns the model in the screen plane.
         let turned = wow_to_screen()
             * Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)
             * benilla_assets::coords::wow_to_bevy([1.0, 0.0, 0.0]);
         assert!((turned - Vec3::Y).length() < 1e-5, "{turned}");
     }
 
-    /// The camera's eye lands where the record says, in Bevy space, and the view looks down the
-    /// eye→target axis with the model's up (WoW `+Z`) up — the `lookAt` half of the leg, checked
-    /// against `HumanMale`'s camera 1: the eye is 4.02 model units in front of the target on the
-    /// model's own `+X`, at chest height.
+    /// `HumanMale`'s camera 1: the eye 4.02 model units in front of the target on the model's own
+    /// `+X`, at chest height, looking at it with WoW `+Z` up.
     #[test]
     fn the_perspective_camera_is_the_records_lookat() {
         let cam = human_male_cam1();
@@ -2639,16 +2220,13 @@ mod tests {
         let fwd = leg.camera.forward().as_vec3();
         let want = (cam.target - cam.eye).normalize();
         assert!((fwd - want).length() < 1e-5, "{fwd:?} vs {want:?}");
-        // The distance the record authors — the whole mechanism behind "the pane looks
-        // normalized" (measured over the shipped models: Blizzard authored a per-model distance).
+        // Each shipped model's record authors its own eye distance: that is what normalizes panes.
         let d = (cam.target - cam.eye).length();
         assert!((d - 4.0234).abs() < 1e-3, "authored eye distance {d}");
         // Up is the model's own up, not the camera's roll-free default in some other frame.
         assert!(leg.camera.up().as_vec3().dot(Vec3::Y) > 0.9);
     }
 
-    /// The axis fix is a proper rotation that puts WoW `+X` right, `+Y` up, `+Z` toward the
-    /// viewer.
     #[test]
     fn the_axis_fix_is_the_ortho_legs_frame() {
         let q = wow_to_screen();

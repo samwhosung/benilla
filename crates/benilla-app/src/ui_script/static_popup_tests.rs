@@ -1,7 +1,5 @@
-//! The shared StaticPopup engine (the ref's registry + Show + OnUpdate
-//! machinery, stock `Interface\FrameXML\StaticPopup.xml` since 1988): the
-//! countdown/StartDelay/cancels/ESC laws the death arc's dialogs ride. Entries here are inline test
-//! dialogs — the real entries (DELETE_ITEM, ABANDON_QUEST, the death family) are covered by their features' own tests.
+//! The stock StaticPopup engine (`StaticPopup.lua`): timeout, StartDelay, cancels, Escape, the
+//! countdown text and addressing an instance by data.
 
 use benilla_ui::script::UiScript;
 
@@ -23,8 +21,7 @@ fn setup() -> UiScript {
     s
 }
 
-/// timeout: the dialog counts down and expires into OnCancel(data, "timeout") + hide
-/// (ref StaticPopup_OnUpdate l.1713-1726).
+/// Expiry runs OnCancel with "timeout", then hides the dialog (`StaticPopup.lua:1716`).
 #[test]
 fn timeout_expires_into_a_timeout_cancel() {
     benilla_formats::wow_data_or_skip!();
@@ -57,10 +54,8 @@ fn timeout_expires_into_a_timeout_cancel() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// StartDelay: button1 is disabled while the delay counts down through delayText, then the real
-/// text swaps in (with the stashed text_arg1) and the button enables (ref l.1684-1690 +
-/// l.1764-1776). RECOVER_CORPSE is a real which on the delay-text list, so the countdown text
-/// itself is exercised too.
+/// StartDelay holds button1 disabled, then swaps the real text in (`StaticPopup.lua:1764`); only
+/// the kinds named at `StaticPopup.lua:1778`, RECOVER_CORPSE among them, render its countdown.
 #[test]
 fn start_delay_gates_button1_then_swaps_the_text_in() {
     benilla_formats::wow_data_or_skip!();
@@ -103,8 +98,7 @@ fn start_delay_gates_button1_then_swaps_the_text_in() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// cancels: showing X hides a visible X.cancels with an "override" cancel (ref l.1470-1485) —
-/// the death arc's RESURRECT-cancels-DEATH chain.
+/// Showing a dialog cancels a visible `cancels` kind with "override" (`StaticPopup.lua:1475`).
 #[test]
 fn showing_a_dialog_cancels_its_named_victim_with_override() {
     benilla_formats::wow_data_or_skip!();
@@ -136,8 +130,7 @@ fn showing_a_dialog_cancels_its_named_victim_with_override() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// ESC only closes hideOnEscape dialogs (ref StaticPopup_EscapePressed l.1879-1893): a
-/// non-escapable entry — the DEATH release popup's law — survives ToggleGameMenu.
+/// Escape closes only `hideOnEscape` dialogs (`StaticPopup.lua:1879`).
 #[test]
 fn escape_skips_dialogs_without_hide_on_escape() {
     benilla_formats::wow_data_or_skip!();
@@ -154,7 +147,6 @@ fn escape_skips_dialogs_without_hide_on_escape() {
         s.eval::<bool>("return StaticPopup1:IsVisible()").unwrap(),
         "a non-hideOnEscape dialog ignores ESC (the DEATH popup law)"
     );
-    // The same entry marked escapable closes.
     s.run(
         r#"StaticPopup_Hide("TEST_STICKY")
            StaticPopupDialogs["TEST_STICKY"].hideOnEscape = 1
@@ -169,8 +161,7 @@ fn escape_skips_dialogs_without_hide_on_escape() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The DEATH-family per-tick countdown text (ref l.1729-1762): a DEATH entry whose OnShow seeds
-/// `timeleft` re-renders "%d %s until release" every tick, minutes above 60 s.
+/// DEATH's text re-renders every tick, in minutes from 60 s up (`StaticPopup.lua:1727`).
 #[test]
 fn the_death_countdown_text_rerenders_each_tick() {
     benilla_formats::wow_data_or_skip!();
@@ -204,17 +195,8 @@ fn the_death_countdown_text_rerenders_each_tick() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **`StaticPopup_Hide`'s and `StaticPopup_FindVisible`'s second argument**.
-///
-/// Both took `which` alone until the arity scan found the drift. The reference takes `(which,
-/// data)`, and the difference is invisible without a test: Lua discards a surplus argument without
-/// complaint, so a stock caller's `StaticPopup_Hide("CONFIRM_BATTLEFIELD_ENTRY", i)` — the shape
-/// `BattlefieldFrame.lua:120` uses — would have hidden every instance of that dialog instead of
-/// the one it named, and said nothing.
-///
-/// The `multiple` gate is the reference's own and is why `data` is not a plain equality: a kind
-/// declared `multiple` can have several instances up at once and is matched by data; every other
-/// kind has at most one, so its data is never consulted.
+/// `StaticPopup_FindVisible` matches data only for a `multiple` kind (`StaticPopup.lua:1421`);
+/// `StaticPopup_Hide` given data hides only the instance carrying it (`StaticPopup.lua:1706`).
 #[test]
 fn hide_and_find_address_one_instance_by_data_only_for_a_multiple_dialog() {
     benilla_formats::wow_data_or_skip!();
@@ -231,8 +213,7 @@ fn hide_and_find_address_one_instance_by_data_only_for_a_multiple_dialog() {
     .unwrap();
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 
-    // A `multiple` kind is addressed by data — both ways round, so this cannot pass by finding
-    // whichever instance happens to be first.
+    // Both ways round, so finding the first instance alone cannot pass.
     for (data, want) in [("alpha", "a"), ("beta", "b")] {
         assert!(
             s.eval::<bool>(&format!(
@@ -242,37 +223,31 @@ fn hide_and_find_address_one_instance_by_data_only_for_a_multiple_dialog() {
             "FindVisible picks the instance carrying {data:?}"
         );
     }
-    // …and a data nothing carries finds nothing, rather than the first instance.
     assert!(s
         .eval::<bool>(r#"return StaticPopup_FindVisible("T_MULTI", "nobody") == nil"#)
         .unwrap());
 
-    // Hiding by data takes ONE instance and leaves its sibling up.
     s.run(r#"StaticPopup_Hide("T_MULTI", "alpha")"#).unwrap();
     assert!(s
         .eval::<bool>("return not a:IsShown() and b:IsShown()")
         .unwrap());
 
-    // No data hides every instance of the kind — which is what every one-argument caller means.
+    // No data hides every instance of the kind.
     s.run(r#"StaticPopup_Hide("T_MULTI")"#).unwrap();
     assert!(s.eval::<bool>("return not b:IsShown()").unwrap());
 
-    // A NON-multiple kind ignores data entirely: the reference gates the comparison on
-    // `info.multiple`, so a wrong data still finds it.
     assert!(s
         .eval::<bool>(r#"return StaticPopup_FindVisible("T_ONE", "wrong") == c"#)
         .unwrap());
 
-    // An unknown kind answers nil rather than scanning — the reference's own early out.
+    // An unknown kind answers nil (`StaticPopup.lua:1416`).
     assert!(s
         .eval::<bool>(r#"return StaticPopup_FindVisible("T_NOPE") == nil"#)
         .unwrap());
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// The dialog engine's verbs: the five UIParent arms the feeds behind them now
-/// reach — each verbatim from UIParent.lua, each raising a stock dialog whose Accept calls a
-/// binding this engine answers.
+/// Five stock `UIParent.lua` event arms raise their dialogs, which call engine verbs.
 #[test]
 fn the_verb_dialogs_open_from_their_events_and_call_their_verbs() {
     benilla_formats::wow_data_or_skip!();
@@ -280,7 +255,6 @@ fn the_verb_dialogs_open_from_their_events_and_call_their_verbs() {
     let mut s = setup();
     load_xml(&s, r"Interface\FrameXML\UIParent.xml"); // the arms
     s.set_money(50_000);
-    // The pet trainer's question: the dialog, its money frame at the cost, Accept → the confirm.
     s.fire_event("CONFIRM_PET_UNLEARN", vec![ScriptValue::Int(12_345)]);
     s.tick(0.0);
     assert_eq!(
@@ -294,7 +268,6 @@ fn the_verb_dialogs_open_from_their_events_and_call_their_verbs() {
     );
     s.run("StaticPopup1Button1:Click()").unwrap();
     assert_eq!(s.take_pet_unlearn_confirms(), 1);
-    // The instance boot: START shows, STOP hides.
     s.set_instance_boot_secs(30);
     s.fire_event("INSTANCE_BOOT_START", vec![]);
     s.tick(0.0);
@@ -306,18 +279,13 @@ fn the_verb_dialogs_open_from_their_events_and_call_their_verbs() {
     assert!(!s
         .eval::<bool>("return StaticPopup_Visible(\"INSTANCE_BOOT\") ~= nil")
         .unwrap());
-    // The area spirit healer: in range shows, out of range hides; Accept queues the heal.
     s.set_area_spirit_healer(true, 20);
     s.fire_event("AREA_SPIRIT_HEALER_IN_RANGE", vec![]);
     s.tick(0.0);
     assert!(s
         .eval::<bool>("return StaticPopup_Visible(\"AREA_SPIRIT_HEAL\") ~= nil")
         .unwrap());
-    // **The reference's dialog accepts on SHOW and its one button CANCELS** — the 1.12 file keeps
-    // the old two-button version commented out and ships the auto-accepting one
-    // (`StaticPopup.lua:1204-1240`): `OnShow` calls `AcceptAreaSpiritHeal()`, `button1` is CANCEL,
-    // and its `OnAccept` calls `CancelAreaSpiritHeal()`. So the accept is already in by the time
-    // the popup is on screen (1988 — our retired UIParent arm showed it without that OnShow).
+    // The shipped dialog accepts on show and its one button cancels (`StaticPopup.lua:1224`).
     assert!(
         s.take_area_spirit_accepts() >= 1,
         "showing the dialog IS the accept"

@@ -1,28 +1,6 @@
-//! The **bank window** driven end-to-end, engine-only (no Bevy): the reference's own
-//! `Interface\FrameXML\BankFrame.xml`, executed off the player's patch chain behind the bag
-//! chain — decision 0604 phase 4's machine checks, re-pointed at the real file by 1751 (window 2).
-//! Split from `merchant_tests`/`bag_tests` along the folder's one-file-per-window convention.
-//!
-//! **What decision 1751 changed in here, in two passes.** First the bank lost six popout windows
-//! of its own — `BenillaBankBagFrame1..6`, six copies of `BagFrame.xml`'s window template — because
-//! a bank bag is an ordinary `ContainerFrame` at container id `NUM_BAG_SLOTS + slot` (5..10), which
-//! is what the real client always did and what 0604 already said it did. Then the window itself
-//! went, and every name below is the reference's: `BankFrameItem1..24`, `BankFrameBag1..6`,
-//! `BankFramePurchaseButton`, `BankFrameDetailMoneyFrame`.
-//!
-//! Two consequences worth stating, because both are places a test could quietly assert our old
-//! behaviour instead of the client's:
-//!
-//! · **The bag buttons' `GetID()` is the CONTAINER id, 5..10** — not a bag number. That is what
-//!   `ButtonInventorySlot` hands `BankButtonIDToInvSlotID`, and what `ToggleBag` takes.
-//! · **Opening the bank does NOT open your bags.** Decision 0561 (a window that opens your bags
-//!   opens every equipped one) is ours and stays for the vendor; the bank goes faithful, and the
-//!   reference's `BankFrame` OnShow plays one sound and nothing else. The director's call.
-//!
-//! The knock-on for the fixtures: the reference generates a window only for a container that
-//! exists (`OpenBag`'s `size > 0` gate), where our own `BenillaBagFrame*` were static frames that
-//! `Show()` regardless. So a test that wants a bank bag open has to feed a bag at id 5 — which is
-//! the honest fixture anyway: an empty bank-bag slot has no window in the real client either.
+//! The bank window, engine-only: the reference's own `BankFrame.xml` off the player's patch chain.
+//! A bank bag is an ordinary `ContainerFrame` at container id `NUM_BAG_SLOTS + slot` (5..10), its
+//! bag button's `GetID()`; `OpenBag` opens only a container that exists, so tests feed one at 5.
 
 use benilla_ui::script::{
     BankState, ContainerSlot, ContainerState, ExtractedQuad, QuadContent, ScriptValue,
@@ -31,7 +9,6 @@ use benilla_ui::script::{
 
 use super::test_ui::{bag_open, load_ui as load_xml, BAG_UI};
 
-/// A container fixture with no items in it — the shape every "is this window open" test wants.
 fn empty_bag(name: &str, num_slots: u32) -> Option<ContainerState> {
     Some(ContainerState {
         name: Some(name.into()),
@@ -40,20 +17,7 @@ fn empty_bag(name: &str, num_slots: u32) -> Option<ContainerState> {
     })
 }
 
-/// The bank's own dependency chain, in `benilla.toc` order: [`BAG_UI`] carries it whole — Fonts
-/// before anything with a font `inherits`, the four templates stock `ContainerFrame.xml` inherits,
-/// UiPanels before any UIPanel/StaticPopup use, GameTooltip before any slot's hover, the
-/// reference's own container file, our bag bar, and the reference's own `BankFrame.xml` (which
-/// BAG_UI already needs, because `updateContainerFrameAnchors` measures every open bag against
-/// `BankFrame:GetRight()`).
-///
-/// `MerchantFrame.xml` used to load here too, for the `BenillaMoney_*` coin rig our own bank
-/// window's purse and cost rows called. The reference's rows are `SmallMoneyFrameTemplate`
-/// instances off `MoneyFrame.xml`, which BAG_UI already carries — so the merchant is not a bank
-/// dependency any more.
-///
-/// **Every caller needs client data**: `BAG_UI` names a chain entry, so each test below opens with
-/// `wow_data_or_skip!`.
+/// [`BAG_UI`] carries the bank's whole chain, `BankFrame.xml` included; it needs client data.
 fn setup() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
@@ -69,27 +33,14 @@ fn has_icon(quads: &[ExtractedQuad], needle: &str) -> bool {
     )
 }
 
-/// Test 1 — BANKFRAME_OPENED shows the frame (through ShowUIPanel, landing at the left slot — the
-/// same NPC-session chain Merchant/Trainer use) and sets the title to the event arg.
-///
-/// **It does NOT open your bags, and that is the change.** Decision 0561 — a window that opens
-/// your bags opens every equipped one — is this client's, and the vendor keeps it; the bank went
-/// faithful with 1751's swap (the director's call), and the reference's `BankFrame` OnShow plays
-/// `igMainMenuOpen` and nothing else. So the one sound is the whole sound list, which is a
-/// stronger assertion than it looks: a stray `OpenBackpack` anywhere on this path would put
-/// `igBackPackOpen` in front of it.
-///
-/// **And the title comes from `UnitName("npc")`, not from the event.** The reference's
-/// `BankFrame_OnEvent` reads no `arg1` (BankFrame.lua:125), so the banker's name has to arrive on
-/// the interaction token `crate::ui_session` points at the banker — which is why this test seats
-/// an `"npc"` unit and why `feed_bank` stopped firing a name argument the reference never fires.
+/// The title is `UnitName("npc")`: `BankFrame_OnEvent` reads no event argument (BankFrame.lua:127).
+/// The bank does not open your bags: its OnShow plays `igMainMenuOpen` and nothing else.
 #[test]
 fn bankframe_opened_shows_and_sets_the_title() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = setup();
 
-    // The reference gives `BankFrameTitleText` no `text=` — it is empty until an event names the
-    // banker (our own file used to author a "Banker" placeholder).
+    // The reference gives `BankFrameTitleText` no `text=`: it is empty until the bank opens.
     assert_eq!(
         s.eval::<String>("return BankFrameTitleText:GetText() or \"\"")
             .unwrap(),
@@ -97,7 +48,7 @@ fn bankframe_opened_shows_and_sets_the_title() {
     );
     assert!(!s.eval::<bool>("return BankFrame:IsVisible()").unwrap());
 
-    let _ = s.take_sounds(); // ignore anything from load (every frame is hidden; nothing should fire)
+    let _ = s.take_sounds();
 
     s.set_money(0);
     s.set_container(0, empty_bag("Backpack", 16));
@@ -134,31 +85,21 @@ fn bankframe_opened_shows_and_sets_the_title() {
     );
 }
 
-/// Test 2 — Hiding the frame (BANKFRAME_CLOSED, routed through HideUIPanel) queues the CloseBankFrame
-/// intent (`take_bank_close()`), closes any open bank bag with it, and plays the close
-/// sound — the reference's own OnHide order (CloseBankBagFrames(); CloseBankFrame(); PlaySound).
-///
-/// **"Popout" is this test's own history, not a widget any more** (1751). It was
-/// `BenillaBankBagFrame1`, one of six copies of `BagFrame.xml`'s window template that our own bank
-/// file owned, and the assertion was `:Show()` it then check `:IsShown()`. A bank bag is an
-/// ordinary container now — id `NUM_BAG_SLOTS + 1` = 5 — so it is OPENED with the reference's own
-/// `OpenBag` and asked for with `IsBagOpen`, and `CloseBankBagFrames` is now the reference's own
-/// `CloseBag(5..10)` loop rather than a transcription of it. The property is unchanged and is the
-/// point of the test: closing the bank must close the bank BAGS, not merely play a sound.
+/// The reference's OnHide order: `CloseBankBagFrames()`, `CloseBankFrame()`, then the close sound
+/// (BankFrame.xml:521-526). A "popout" is a bank bag's `ContainerFrame`.
 #[test]
 fn bankframe_closed_queues_close_closes_open_popouts_and_plays_the_close_kit() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = setup();
     s.set_money(0);
-    // A bag in the FIRST bank bag slot — container 5, which is `BankFrameBag1`'s own `GetID()`.
+    // The first bank bag slot: container 5, `BankFrameBag1`'s `GetID()`.
     s.set_container(5, empty_bag("Bank Bag", 8));
     s.set_bank(Some(BankState::default()));
     s.fire_event("BANKFRAME_OPENED", vec![ScriptValue::Str("Banker".into())]);
     let _ = s.take_sounds();
-    let _ = s.take_bank_close(); // nothing queued yet — the drain would otherwise see a stale flag
+    let _ = s.take_bank_close();
 
-    // A bank bag open when the main window closes (ref CloseBankBagFrames' own reason to exist) —
-    // opened through the reference's own verb, which is what the bag button calls.
+    // A bank bag left open when the bank closes: what `CloseBankBagFrames` exists for.
     s.run("OpenBag(5)").unwrap();
     assert!(bag_open(&s, 5), "the bank bag's window is up");
     let _ = s.take_sounds();
@@ -189,8 +130,6 @@ fn bankframe_closed_queues_close_closes_open_popouts_and_plays_the_close_kit() {
     );
 }
 
-/// Test 3 — A pushed container −1 with an item in slot 3 paints that slot button's icon;
-/// PLAYERBANKSLOTS_CHANGED(3) repaints it after a later change.
 #[test]
 fn item_slot_paints_from_container_minus_one_and_repaints_on_playerbankslots_changed() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -229,7 +168,7 @@ fn item_slot_paints_from_container_minus_one_and_repaints_on_playerbankslots_cha
         "slot 3's icon painted after PLAYERBANKSLOTS_CHANGED(3)"
     );
 
-    // A later change to the same slot (a stack count bump) repaints again.
+    // A stack-count change on the same slot repaints too.
     let mut slots2 = std::collections::HashMap::new();
     slots2.insert(
         3,
@@ -258,9 +197,7 @@ fn item_slot_paints_from_container_minus_one_and_repaints_on_playerbankslots_cha
     );
 }
 
-/// Test 4 — Bag buttons: with `set_bank` num_purchased=2, buttons 1-2 read normal (white) and 3-6
-/// read the red tint (1.0, 0.1, 0.1 — the reference's exact tint, `UpdateBagSlotStatus`
-/// BankFrame.lua:88-95); the bank-bag inventory band drives button 1's icon.
+/// `UpdateBagSlotStatus` tints an unpurchased bag button (1.0, 0.1, 0.1) (BankFrame.lua:96).
 #[test]
 fn bag_buttons_tint_by_purchase_count_and_texture_from_the_bank_bag_band() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -270,9 +207,8 @@ fn bag_buttons_tint_by_purchase_count_and_texture_from_the_bank_bag_band() {
         num_purchased: 2,
         next_cost: 100_000,
     }));
-    // Bank bag slot 1 holds a bag: an inventory slot at live id 64, which is where the
-    // reference's `BankFrameItemButton_OnUpdate` reads its icon from
-    // (`GetInventoryItemTexture("player", ButtonInventorySlot())`).
+    // Bank bag slot 1 holds a bag: inventory id 64, where `BankFrameItemButton_OnUpdate` reads
+    // the icon (`GetInventoryItemTexture`).
     let mut bags: benilla_ui::script::BankBagSlots = Default::default();
     bags[0] = Some(benilla_ui::script::InvSlotView {
         item_id: 4500,
@@ -287,9 +223,7 @@ fn bag_buttons_tint_by_purchase_count_and_texture_from_the_bank_bag_band() {
     s.resolve();
     let quads = s.extract();
 
-    // BagFrame.xml's own bag-bar slots (CharacterBag0Slot..4) fall back to this SAME empty-slot
-    // texture, so the search must be scoped to each named bank button's own rect, not the path
-    // alone — get each button's center via eval, then read the color off the quad sitting there.
+    // The bag bar's slots show the same empty-slot art, so each lookup is scoped to one button.
     let center = |name: &str| -> (f32, f32) {
         let (x, y): (f64, f64) = s
             .eval(&format!(
@@ -316,7 +250,6 @@ fn bag_buttons_tint_by_purchase_count_and_texture_from_the_bank_bag_band() {
         (c[0] - r).abs() < 0.01 && (c[1] - g).abs() < 0.01 && (c[2] - b).abs() < 0.15
     };
 
-    // Button 1: the live inventory slot's own bag icon, purchased -> white.
     let (x1, y1) = center("BankFrameBag1");
     let c1 = color_at(x1, y1, "INV_Misc_Bag_08").expect("button 1 shows the banked bag's icon");
     assert!(
@@ -324,8 +257,8 @@ fn bag_buttons_tint_by_purchase_count_and_texture_from_the_bank_bag_band() {
         "button 1 is purchased: white {c1:?}"
     );
 
-    // Button 2: purchased but empty -> the paper-doll empty bag art, still white. The art comes
-    // from `GetInventorySlotInfo(strsub("BankFrameBag2", 10))` — the DBC's own `"Bag2"` row.
+    // Button 2 is purchased and empty: `GetInventorySlotInfo("Bag2")`'s art, from
+    // `PaperDollItemFrame.dbc`.
     let (x2, y2) = center("BankFrameBag2");
     let c2 = color_at(x2, y2, "UI-PaperDoll-Slot-Bag").expect("button 2 shows the empty-slot art");
     assert!(
@@ -333,7 +266,6 @@ fn bag_buttons_tint_by_purchase_count_and_texture_from_the_bank_bag_band() {
         "button 2 is purchased: white {c2:?}"
     );
 
-    // Buttons 3..6: unpurchased -> the reference's red tint.
     for i in 3..=6 {
         let (x, y) = center(&format!("BankFrameBag{i}"));
         let c = color_at(x, y, "UI-PaperDoll-Slot-Bag")
@@ -345,23 +277,14 @@ fn bag_buttons_tint_by_purchase_count_and_texture_from_the_bank_bag_band() {
     }
 }
 
-/// The purse row at the bottom of the window, and the director's "the gold at bottom you see
-/// 97…" report.
-///
-/// Our own window painted the purse with `BenillaMoney_Set` into a single FontString, which is
-/// what could run out of room. The reference's `BankFrameMoneyFrame` is an ordinary
-/// `SmallMoneyFrameTemplate` — the same three-button gold/silver/copper kit every other window in
-/// this client already uses — so a large amount splits across three buttons instead of
-/// overflowing one string. Asserted on the DIGITS in each button, not on the picture: whether it
-/// reads right on screen is the director's call, but "98765 / 43 / 21 in three separate buttons"
-/// is a fact a test can hold.
+/// The purse is a `SmallMoneyFrameTemplate` (BankFrame.xml:501): a large amount must not truncate.
 #[test]
 fn the_purse_row_splits_a_large_amount_across_three_coin_buttons() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = setup();
     s.set_bank(Some(BankState::default()));
     s.fire_event("BANKFRAME_OPENED", vec![]);
-    // 98765g 43s 21c — wider than any single-string purse could hold.
+    // 98765g 43s 21c.
     s.set_money(987_654_321);
     s.fire_event("PLAYER_MONEY", vec![]);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
@@ -378,15 +301,9 @@ fn the_purse_row_splits_a_large_amount_across_three_coin_buttons() {
     }
 }
 
-/// Test 5 — The purchase flow: the Purchase button's click shows the `CONFIRM_BUY_BANK_SLOT` popup;
-/// the popup's accept queues `take_bank_purchase()`; the whole row hides once `num_purchased`
-/// reaches 6 (`GetNumBankSlots()`'s `full`).
-///
-/// Two things this pins that only the swap made checkable. `BankFramePurchaseButton` is declared
-/// `virtual="true"` INSIDE `<Frames>` — a reference quirk Classic Era still carries — and only a
-/// TOP-LEVEL element is ever a template, so the button really exists and really clicks. And the
-/// dialog itself lives in `UiPanels.xml` now: the reference keeps it in `StaticPopup.lua`, which
-/// this client replaces, so without the re-home the button would be a silent no-op.
+/// `BankFramePurchaseButton` is declared `virtual="true"` inside `<Frames>` (BankFrame.xml:466),
+/// and only a top-level element is a template, so the button exists and clicks. The row hides once
+/// `GetNumBankSlots()` reports `full`.
 #[test]
 fn purchase_flow_shows_popup_queues_the_intent_and_the_row_hides_when_full() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -414,9 +331,8 @@ fn purchase_flow_shows_popup_queues_the_intent_and_the_row_hides_when_full() {
         s.eval::<bool>("return StaticPopup1:IsVisible()").unwrap(),
         "the click shows the confirm popup"
     );
-    // The dialog carries the cost, which is why 1580's `hasMoneyFrame` had to be live before the
-    // reference's own StaticPopup entry could be re-homed into UiPanels.xml: its OnShow reads
-    // `BankFrame.nextSlotCost`, set by `UpdateBagSlotStatus` off `GetBankSlotCost`.
+    // `CONFIRM_BUY_BANK_SLOT`'s OnShow prints `BankFrame.nextSlotCost` (StaticPopup.lua:54-56),
+    // which `UpdateBagSlotStatus` sets from `GetBankSlotCost`.
     assert!(
         s.eval::<bool>("return StaticPopup1MoneyFrame:IsShown()")
             .unwrap(),
@@ -436,8 +352,7 @@ fn purchase_flow_shows_popup_queues_the_intent_and_the_row_hides_when_full() {
     );
     assert!(!s.take_bank_purchase(), "drained");
 
-    // Six purchased: full -> the whole row hides (PLAYERBANKBAGSLOTS_CHANGED is the no-packet
-    // buy's own repaint trigger).
+    // Six is full. A successful buy has no reply packet: `PLAYERBANKBAGSLOTS_CHANGED` repaints.
     s.set_bank(Some(BankState {
         num_purchased: 6,
         next_cost: 999_999_999,
@@ -451,27 +366,14 @@ fn purchase_flow_shows_popup_queues_the_intent_and_the_row_hides_when_full() {
     );
 }
 
-/// The bank's bag buttons take BOTH mouse buttons: the ref's
-/// `BankItemButtonBagTemplate` OnLoad runs `BankFrameBagButton_OnLoad` →
-/// `BankFrameBaseButton_OnLoad`, which registers `("LeftButtonUp","RightButtonUp")`
-/// (BankFrame.lua:12), and `BankFrameItemButtonBag_OnClick` reads no button. Ours registered
-/// nothing, so the widget default (`{"LeftButtonUp"}`) swallowed every right-click.
-///
-/// It was asserted on the click sound alone, because "the one observable that does not need a bag
-/// object fed into the slot" was all there was while the popout was a `BenillaBankBagFrame` our
-/// own file drove by hand. The reference's handler has a real tail — `ToggleBag(this:GetID())` —
-/// so a bag IS fed here now and the right-click is followed all the way to the window it opens.
-///
-/// **The sound ORDER is the reference's, and it is the reverse of ours.** Its handler opens the
-/// bag FIRST and plays `BAGMENUBUTTONPRESS` after (BankFrame.lua:190-197), so the window's own
-/// `igBackPackOpen` leads. Ours played the press kit first. Nothing depends on it; it is here
-/// because a transcription that gets the order wrong is exactly the kind of thing the swap is
-/// meant to stop having to notice.
+/// The bag buttons register both mouse buttons (`BankFrameBaseButton_OnLoad`, BankFrame.lua:12),
+/// and `BankFrameItemButtonBag_OnClick` reads no button. It opens the bag before it plays
+/// `BAGMENUBUTTONPRESS` (BankFrame.lua:193-194), so `igBackPackOpen` leads.
 #[test]
 fn a_bank_bag_button_answers_the_right_button_too() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = setup();
-    // A bag in bank slot 1 ⇒ container id 5, which IS `BankFrameBag1:GetID()`.
+    // Bank bag slot 1: container 5, `BankFrameBag1:GetID()`.
     s.set_container(5, empty_bag("Bank Bag", 8));
     s.set_bank(Some(BankState::default()));
     s.fire_event("BANKFRAME_OPENED", vec![]);
@@ -505,10 +407,8 @@ fn a_bank_bag_button_answers_the_right_button_too() {
     assert!(s.errors().is_empty(), "click errors: {:?}", s.errors());
 }
 
-/// Test 6 — Clicking item slot 1 with an empty cursor queues a `PickupContainerItem(-1, 1)` — read off
-/// the cursor's own resulting payload (`bag_tests`' pattern: drive the real click through
-/// `mouse_button`, not a bare `run()`, so the XML's `OnClick`/`RegisterForClicks` wiring is
-/// actually under test).
+/// Driven through `mouse_button`, not `run()`, so the XML's `OnClick` and `RegisterForClicks`
+/// wiring is under test.
 #[test]
 fn clicking_item_slot_one_with_an_empty_cursor_queues_the_pickup() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -565,14 +465,13 @@ fn clicking_item_slot_one_with_an_empty_cursor_queues_the_pickup() {
     );
 }
 
-/// The icon-texture quad whose path contains `needle`, for the desaturation assertions below.
 fn icon_quad<'a>(quads: &'a [ExtractedQuad], needle: &str) -> Option<&'a ExtractedQuad> {
     quads.iter().find(
         |q| matches!(&q.content, QuadContent::Texture { path: Some(p), .. } if p.contains(needle)),
     )
 }
 
-/// Whether that icon is drawn desaturated (`SetItemButtonDesaturated`'s shader arm).
+/// Whether the icon is drawn desaturated (`SetItemButtonDesaturated`).
 fn is_greyed(quads: &[ExtractedQuad], needle: &str) -> bool {
     match icon_quad(quads, needle).map(|q| &q.content) {
         Some(QuadContent::Texture { desaturated, .. }) => *desaturated,
@@ -580,9 +479,8 @@ fn is_greyed(quads: &[ExtractedQuad], needle: &str) -> bool {
     }
 }
 
-/// A bag view for one bank BAG slot — the drop the director made. `contents_count: Some(_)` is
-/// what makes it a CONTAINER to `GetInventoryItemCount`, and the value is deliberately non-zero:
-/// the binding's `0x16` short-circuit has to be what zeroes it, not an already-zero sum.
+/// A bag in a bank bag slot. `contents_count: Some(_)` makes it a container to
+/// `GetInventoryItemCount`, non-zero so that the binding's slot-`0x16` cutoff does the zeroing.
 fn a_bag(locked: bool) -> benilla_ui::script::InvSlotView {
     benilla_ui::script::InvSlotView {
         item_id: 4500,
@@ -595,20 +493,9 @@ fn a_bag(locked: bool) -> benilla_ui::script::InvSlotView {
     }
 }
 
-/// **The bug of 1771, both halves.** A bag dropped into a bank bag slot came up greyed and stayed
-/// greyed until the window was reopened, and a bag moved between two bag slots stayed drawn in the
-/// one it left.
-///
-/// Both are the same defect: the six bag buttons repaint from `BankFrameItemButton_OnUpdate`,
-/// which is reached ONLY from `BankFrameItemButton_OnEvent` on `PLAYERBANKSLOTS_CHANGED` or
-/// `BANKFRAME_OPENED` — despite the name, it is not an `OnUpdate` handler
-/// (`BankItemButtonTemplate`'s `<OnUpdate>` is `CursorOnUpdate()`). benilla fired that event only
-/// for the vault's 24 slots, so the bag buttons showed whatever had been true at the last
-/// *unrelated* vault change, and `ITEM_LOCK_CHANGED` — the one event that did reach them — repaints
-/// the desaturation only, never the icon.
-///
-/// This test drives the reference's own file through the exact sequence and asserts what the
-/// player sees at each step.
+/// Despite its name, `BankFrameItemButton_OnUpdate` is no `OnUpdate` handler: the bag buttons
+/// repaint only on `PLAYERBANKSLOTS_CHANGED` or `BANKFRAME_OPENED` (BankFrame.lua:206-212), and
+/// `ITEM_LOCK_CHANGED` repaints the desaturation, never the icon.
 #[test]
 fn a_bank_bag_button_paints_the_drop_and_lets_go_of_the_lock() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -636,27 +523,23 @@ fn a_bank_bag_button_paints_the_drop_and_lets_go_of_the_lock() {
     let mut bags: benilla_ui::script::BankBagSlots = Default::default();
     bags[0] = Some(a_bag(true));
     s.set_bank_bag_slots(bags.clone());
-    // The event carries NO arguments (`0x703e50`, `__fastcall(ecx = id)`, no vararg push) — it is
-    // a broadcast, and every bank button repaints from its own `GetInventorySlot()`.
+    // The event carries no arguments (`0x703e50`): every bank button repaints its own slot.
     s.fire_event("PLAYERBANKSLOTS_CHANGED", vec![]);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
     assert!(
         is_greyed(&s.extract(), "INV_Misc_Bag_08"),
         "in flight, the button greys — BankFrameItemButton_UpdateLock's desaturate arm"
     );
-    // **And no digit.** `BankFrameBagButton_OnLoad` sets `isBag = 1`, so `SetItemButtonCount`'s
-    // `isBag and count > 0` arm would print any positive number in the corner — the "1" the
-    // director saw. `GetInventoryItemCount 0x4c8680` short-circuits every container past 0-based
-    // slot 0x16 to a literal 0, and the bank's six bag slots are all in that band.
+    // No count: a bag button's `isBag` makes `SetItemButtonCount` print any count above 0, but
+    // `GetInventoryItemCount` (`0x4c8680`) returns 0 for a container past 0-based slot 0x16.
     assert!(
         !s.eval::<bool>("return BankFrameBag1Count:IsShown()")
             .unwrap(),
         "a bank bag counts nothing — the count fontstring stays hidden"
     );
 
-    // The lock lets go. `ITEM_LOCK_CHANGED` is all the button gets, and it is enough — PROVIDED
-    // the snapshot it reads has already been corrected, which is what moving the resolving clear
-    // ahead of both feeds buys (`ui_items::feed::resolve_item_locks`).
+    // The lock lets go: `ITEM_LOCK_CHANGED` alone must ungrey it, which holds only because
+    // `ui_items::feed::resolve_item_locks` corrects the snapshot ahead of both feeds.
     bags[0] = Some(a_bag(false));
     s.set_bank_bag_slots(bags.clone());
     s.fire_event("ITEM_LOCK_CHANGED", vec![]);
@@ -665,8 +548,7 @@ fn a_bank_bag_button_paints_the_drop_and_lets_go_of_the_lock() {
         "the stuck grey: unlocked, the button must come back to full colour"
     );
 
-    // Moved to the next bag slot: the icon has to LEAVE the first button, which only the repaint
-    // event can do — the lock event never touches the texture.
+    // Moved to the next bag slot: only the repaint event takes the icon off the first button.
     bags[0] = None;
     bags[1] = Some(a_bag(false));
     s.set_bank_bag_slots(bags);

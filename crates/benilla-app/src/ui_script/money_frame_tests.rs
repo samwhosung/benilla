@@ -1,16 +1,5 @@
-//! The stock `Interface\FrameXML\MoneyFrame.xml` — the reference's `MoneyFrameTemplate` /
-//! `SmallMoneyFrameTemplate` kit and the `MoneyTypeInfo` table behind it (a name the
-//! shipped 1.12 UI defines is a name we publish too — under our own implementation of it, 1260).
-//!
-//! Eight shipped windows consume this file (1937 converged the coin cluster onto it; 1962 put the
-//! file itself on the chain). These tests exercise it the way an addon does — declare a frame on
-//! the template, point it at a type, change the type, read the coins back — because that is who
-//! calls it.
-//!
-//! What they guard: the type switch actually rewiring where the number comes from and whether the
-//! coins take the mouse; the collapse rule per type (`collapse`, `showSmallerCoins`, `fixedWidth`);
-//! the denomination split; `MoneyFrame_Update`'s by-name entry point over a STATIC frame; and
-//! `SetMoneyFrameColor` recolouring the digits and not the icons.
+//! The stock `MoneyFrame` kit, driven as an addon drives it: a frame on each template, a type set
+//! and switched, the coins read back.
 
 use benilla_ui::script::{QuadContent, UiScript};
 
@@ -21,9 +10,7 @@ fn harness(money: u64) -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     s.set_money(money);
-    // The digit advances the app feeds once per atlas scale. Fed here so the width arithmetic
-    // below is deliberate rather than an artefact of an unfed VM — a flat 8px per digit makes
-    // every expected number readable as `digits x 8 + icon`.
+    // A flat 8 px per digit, so every expected width reads as `digits * 8 + icon`.
     s.set_text_measurer(Box::new(super::FixedWidthFont(8.0)));
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
     load_xml(&s, "Interface\\FrameXML\\BasicControls.xml"); // `message`, the kit's own error path
@@ -51,7 +38,7 @@ fn harness(money: u64) -> UiScript {
     s
 }
 
-/// The three coins' text, gold → silver → copper.
+/// The three coins' text: gold, silver, copper.
 fn coins(s: &UiScript, frame: &str) -> (String, String, String) {
     let one = |d: &str| {
         s.eval::<String>(&format!("return {frame}{d}ButtonText:GetText() or ''"))
@@ -60,7 +47,7 @@ fn coins(s: &UiScript, frame: &str) -> (String, String, String) {
     (one("Gold"), one("Silver"), one("Copper"))
 }
 
-/// Which of the three coins are showing, gold → silver → copper.
+/// Which coins show: gold, silver, copper.
 fn shown(s: &UiScript, frame: &str) -> (bool, bool, bool) {
     let one = |d: &str| {
         s.eval::<bool>(&format!("return {frame}{d}Button:IsShown()"))
@@ -69,9 +56,7 @@ fn shown(s: &UiScript, frame: &str) -> (bool, bool, bool) {
     (one("Gold"), one("Silver"), one("Copper"))
 }
 
-/// A frame on either template loads as type PLAYER showing the purse, split into denominations —
-/// the reference's `MoneyFrame_OnLoad` / `SmallMoneyFrame_OnLoad`, both of which end in
-/// `MoneyFrame_SetType("PLAYER")`.
+/// Both `MoneyFrame_OnLoad` and `SmallMoneyFrame_OnLoad` end in `MoneyFrame_SetType("PLAYER")`.
 #[test]
 fn a_money_frame_loads_as_the_player_purse_and_splits_the_denominations() {
     benilla_formats::wow_data_or_skip!();
@@ -93,21 +78,16 @@ fn a_money_frame_loads_as_the_player_purse_and_splits_the_denominations() {
         12_345,
         "the frame remembers what it is displaying (ref l.212)"
     );
-    // `small` is what picks the 13px coin over the 19px one — the only difference between the two
-    // OnLoads, and the reason both templates exist.
+    // `small`, the two OnLoads' only difference, picks the 13 px coin over the 19 px one.
     assert_eq!(s.eval::<i64>("return TestPurse.small").unwrap(), 1);
     assert!(s.eval::<bool>("return TestBigPurse.small == nil").unwrap());
 }
 
-/// **`MoneyFrame_SetType` switching a frame between types** — the verb 11 corpus addons call, and
-/// the one that has to rewire three things at once: where the number comes from, whether the coins
-/// take the mouse (`canPickup`), and how they collapse.
 #[test]
 fn set_type_rewires_the_source_the_mouse_and_the_collapse() {
     benilla_formats::wow_data_or_skip!();
     let s = harness(12_345);
 
-    // PLAYER: canPickup, so all three coins are mouse-enabled.
     for d in ["Gold", "Silver", "Copper"] {
         assert!(
             s.eval::<bool>(&format!("return TestPurse{d}Button:IsMouseEnabled()"))
@@ -116,7 +96,6 @@ fn set_type_rewires_the_source_the_mouse_and_the_collapse() {
         );
     }
 
-    // → STATIC: the number now comes from the frame's own staticMoney, and the coins go inert.
     s.run("TestPurse.staticMoney = 7 this = TestPurse MoneyFrame_SetType(\"STATIC\") this = nil")
         .unwrap();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
@@ -132,10 +111,9 @@ fn set_type_rewires_the_source_the_mouse_and_the_collapse() {
             "STATIC has no canPickup, so {d} does not take the mouse"
         );
     }
-    // STATIC collapses and does NOT showSmallerCoins: 7 copper is copper alone.
+    // STATIC collapses without `showSmallerCoins`: 7 copper is copper alone.
     assert_eq!(shown(&s, "TestPurse"), (false, false, true));
 
-    // → back to PLAYER: the purse returns, and so does the mouse.
     s.run("this = TestPurse MoneyFrame_SetType(\"PLAYER\") this = nil")
         .unwrap();
     assert_eq!(
@@ -148,9 +126,6 @@ fn set_type_rewires_the_source_the_mouse_and_the_collapse() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The **collapse rule**, which is the whole reason `MoneyTypeInfo` has fields beyond `UpdateFunc`.
-/// PLAYER carries `showSmallerCoins = "Backpack"`, so a round 5 gold still shows all three coins;
-/// STATIC does not, so the same amount is gold alone.
 #[test]
 fn showsmallercoins_is_what_keeps_the_zero_coins_visible() {
     benilla_formats::wow_data_or_skip!();
@@ -173,16 +148,13 @@ fn showsmallercoins_is_what_keeps_the_zero_coins_visible() {
         "STATIC collapses with no showSmallerCoins — 5g is gold alone (ref l.32-38)"
     );
 
-    // A pure-copper amount under a collapsing type: the leading zeros go, the copper stays.
+    // Under a collapsing type, a copper-only amount drops the leading zero coins.
     s.run("TestPurse.staticMoney = 42 this = TestPurse MoneyFrame_UpdateMoney() this = nil")
         .unwrap();
     assert_eq!(shown(&s, "TestPurse"), (false, false, true));
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// `MoneyFrame_Update(frameName, money)` — the family's one **by-name** entry point, and how an
-/// addon paints a STATIC frame it just filled without going through an event. It is also where the
-/// frame's own width is recomputed from the coins that survived the collapse.
 #[test]
 fn update_paints_a_static_frame_by_name_and_resizes_it() {
     benilla_formats::wow_data_or_skip!();
@@ -199,16 +171,9 @@ fn update_paints_a_static_frame_by_name_and_resizes_it() {
         20_304
     );
 
-    // Every coin is its digits + a 13px icon (MONEY_ICON_WIDTH_SMALL, since this frame is `small`),
-    // and the frame is the surviving coins packed with the -4px MONEY_BUTTON_SPACING gap:
-    // 13 (base) + 21 + 21 + 21 - (-4) - (-4) = 84, each 21 being one 8px digit plus the icon
-    // (2g 3s 4c is a single digit per denomination).
-    //
-    // **The digits used to contribute 0 here and this test asserted the bare 13s that came of it.**
-    // That was the director's cramped gold on a first open: `ShowCoin` sized each coin from a text
-    // measure that lands a frame later, so it read 0 every first time. The engine's font
-    // measurer answers inside the Lua call that asked now (`script/measure.rs`), so the width
-    // is real on the first pass.
+    // A coin is one 8 px digit plus the 13 px small icon, 21; the frame packs three with the -4
+    // spacing: 13 + 21 * 3 + 4 * 2 = 84. The text measure answers inside the Lua call, so this
+    // holds on the first pass.
     assert_eq!(
         s.eval::<f64>("return TestPurseGoldButton:GetWidth()")
             .unwrap(),
@@ -222,14 +187,11 @@ fn update_paints_a_static_frame_by_name_and_resizes_it() {
     assert_eq!(s.eval::<f64>("return TestPurse:GetWidth()").unwrap(), 34.0);
 }
 
-/// The large template uses the 19px icon and its own spacing — the same painter, the other size
-/// constants (`MONEY_ICON_WIDTH` / `MONEY_BUTTON_SPACING`), selected purely by `this.small`.
+/// `this.small` unset picks `MONEY_ICON_WIDTH` (19) and `MONEY_BUTTON_SPACING` (-4).
 #[test]
 fn the_large_template_measures_with_the_nineteen_pixel_icon() {
     benilla_formats::wow_data_or_skip!();
     let s = harness(20_304);
-    // One 8px digit + the 19px icon — the same digit sum as the small template, over the other
-    // icon constant. That the two differ ONLY by the icon is what this test is for.
     assert_eq!(
         s.eval::<f64>("return TestBigPurseGoldButton:GetWidth()")
             .unwrap(),
@@ -248,10 +210,7 @@ fn the_large_template_measures_with_the_nineteen_pixel_icon() {
     assert_eq!(s.eval::<i64>("return COPPER_PER_GOLD").unwrap(), 10_000);
 }
 
-/// An unknown type is refused rather than half-applied — the reference's `MoneyFrame_SetType`
-/// guard (l.144-147). Its `message()` diagnostic is BasicControls.xml's, which we have not
-/// transcribed, so the call is guarded; what must hold either way is that the frame keeps the type
-/// it had.
+/// `MoneyFrame_SetType` returns on an unknown type before touching anything (`MoneyFrame.lua:144`).
 #[test]
 fn an_unknown_money_type_leaves_the_frame_on_the_one_it_had() {
     benilla_formats::wow_data_or_skip!();
@@ -270,22 +229,18 @@ fn an_unknown_money_type_leaves_the_frame_on_the_one_it_had() {
     );
 }
 
-/// `SetMoneyFrameColor` recolours the **digits**, not the coin icons — how the reference reddens a
-/// price you cannot afford (l.348-356). Read off the extracted quads, which is where "the digits
-/// and not the icons" is actually observable.
+/// `SetMoneyFrameColor` sets the three buttons' text colour only (`MoneyFrame.lua:348`).
 #[test]
 fn set_money_frame_color_recolours_the_digits_and_not_the_icons() {
     benilla_formats::wow_data_or_skip!();
-    let mut s = harness(12_345); // 1g 23s 45c — three distinguishable digit strings
+    let mut s = harness(12_345); // 1g 23s 45c: three distinct digit strings
     s.run("SetMoneyFrameColor(\"TestPurse\", 1.0, 0.1, 0.1)")
         .unwrap();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
     s.resolve();
     let quads = s.extract();
 
-    // Both frames show the same purse, so there are six digit quads; exactly the three belonging to
-    // the frame we named are red — which also pins that `SetMoneyFrameColor` is scoped by name and
-    // does not reach a sibling money frame.
+    // Both frames show the purse, so six digit quads; only the named frame's three turn red.
     let digit_colors: Vec<[f32; 4]> = quads
         .iter()
         .filter_map(|q| match &q.content {
@@ -307,8 +262,6 @@ fn set_money_frame_color_recolours_the_digits_and_not_the_icons() {
         "only TestPurse's digits reddened, got {digit_colors:?}"
     );
 
-    // The coin icons keep their own texture untinted — the half of the reference's contract that a
-    // "recolour the whole frame" shortcut would break.
     let icon_colors: Vec<[f32; 4]> = quads
         .iter()
         .filter_map(|q| match &q.content {
@@ -329,9 +282,7 @@ fn set_money_frame_color_recolours_the_digits_and_not_the_icons() {
     }
 }
 
-/// `MoneyTypeInfo` is read directly by addons, so its shape is part of the contract — all seven
-/// reference types, each with an `UpdateFunc`, and the two send-mail rows reading the amounts
-/// their engine getters hold (`GetSendMailMoney`/`GetSendMailCOD`, built by 1962).
+/// Addons read `MoneyTypeInfo` directly; the send-mail rows read their engine getters.
 #[test]
 fn the_money_type_table_carries_all_seven_reference_types() {
     benilla_formats::wow_data_or_skip!();
@@ -353,7 +304,6 @@ fn the_money_type_table_carries_all_seven_reference_types() {
             "MoneyTypeInfo[\"{t}\"] with an UpdateFunc"
         );
     }
-    // The two send-mail rows: with no send-mail amount set, their getters answer 0.
     for t in ["SEND_MAIL", "SEND_MAIL_COD"] {
         s.run(&format!(
             "this = TestPurse MoneyFrame_SetType(\"{t}\") this = nil"
@@ -372,22 +322,14 @@ fn the_money_type_table_carries_all_seven_reference_types() {
     }
 }
 
-/// **`MoneyInputFrame.lua` is `EditBox:SetNumber`'s only caller on the whole chain**, and the verb
-/// did not exist until decision 1831 — so the three-box amount editor could not put a number in a
-/// box at all. This drives the reference's own file: split an amount, read it back, round-trip.
-///
-/// The boxes are `numeric="true"`, which is why the value→text law matters here specifically: a
-/// non-digit abandons the insert wholesale and leaves the box EMPTY. Every value this path passes
-/// is a non-negative integer, so `%.14g` yields plain digits and the gate never trips — but the
-/// zero case below is the one that would show if it ever did.
+/// `MoneyInputFrame.lua` is the only stock caller of `EditBox:SetNumber`.
 #[test]
 fn the_chains_money_input_frame_splits_an_amount_across_its_three_boxes() {
     let _data = benilla_formats::wow_data_or_skip!();
     let s = UiScript::new().unwrap();
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua"); // COPPER_PER_GOLD / COPPER_PER_SILVER live here
+    load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua"); // COPPER_PER_GOLD and COPPER_PER_SILVER
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.xml");
-    // The manifest's own order: the `.lua` brings the ten verbs, the `.xml` the template.
     load_xml(&s, r"Interface\FrameXML\MoneyInputFrame.lua");
     load_xml(&s, r"Interface\FrameXML\MoneyInputFrame.xml");
 
@@ -420,9 +362,8 @@ fn the_chains_money_input_frame_splits_an_amount_across_its_three_boxes() {
         "the amount round-trips back out of the three boxes"
     );
 
-    // Zero is the reference's quiet case: `GetNumber()` on an empty box is already 0, so the
-    // equality test short-circuits and `SetNumber` is never reached — the boxes stay EMPTY rather
-    // than reading "0", and the total still comes back 0.
+    // An empty box's `GetNumber()` is already 0, so `SetNumber` is skipped and the boxes stay
+    // empty (`MoneyInputFrame.lua:46`).
     s.run("MoneyInputFrame_ResetMoney(TestAmount)").unwrap();
     s.run("MoneyInputFrame_SetCopper(TestAmount, 0)").unwrap();
     for box_name in ["Gold", "Silver", "Copper"] {

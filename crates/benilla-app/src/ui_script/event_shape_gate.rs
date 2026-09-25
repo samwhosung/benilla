@@ -1,50 +1,9 @@
-//! **The event ARGUMENT-shape gate** — `reference/1.12-events.tsv` against what benilla actually
-//! pushes at each fire site.
+//! The event argument-shape gate: every fire site with a literal name against
+//! `reference/1.12-events.tsv`, since an event name is a plain string at both ends.
 //!
-//! Two gates already guard the event seam by NAME. [`super::reference_ui`]'s
-//! `every_event_a_chain_file_registers_has_a_producer` asks whether something fires what a stock
-//! file listens for (1889); `every_event_we_fire_is_an_event_the_reference_has` asks whether a
-//! name we fire is a 1.12 name at all (1883). **Neither has ever looked at the arguments**, and an
-//! event name is a plain string at both ends — so a fire with the wrong argument shape is silent
-//! on both sides. It is 1842's finding one API over: the right name, the wrong shape.
-//!
-//! It was not hypothetical. Three live divergences on the first run:
-//!
-//! * `PLAYERBANKSLOTS_CHANGED` — two producers in the reference with **different** shapes
-//!   (`0x5ddd6e` argless, `0x4c728d` `"player"`), one shape here.
-//! * `UNIT_PET_EXPERIENCE` and `UNIT_PET_TRAINING_POINTS` — argless here, `%s` there. The second
-//!   one reaches `PetPaperDollFrame_OnEvent` only through its final `elseif ( arg1 == "pet" )`
-//!   catch-all, so an argless fire reached **nobody**: the stock pet page never repainted its
-//!   training points off the event at all.
-//!
-//! ## What is compared, and what the table can and cannot say
-//!
-//! The oracle is two byte-level censuses of the reference, vendored by
-//! `scripts/gen-reference-events.py`.
-//! Its `conf` column carries the gate rule per row, exactly as `1.12-shapes.tsv` does:
-//!
-//! * `exact` — every producer that reaches the event has a known shape. **This is the column this
-//!   gate reads.**
-//! * `advisory` — a contributing site declares more varargs than its caller pushes (three sites,
-//!   image-wide). Not gated: a faithful client must not copy a bug that hands Lua undefined
-//!   values.
-//! * `none` — no producer family reaches it in that census. **Not a claim that it has none** (the
-//!   census's own header says so in capitals), so a `none` row is skipped, never failed. That is
-//!   where the whole `CHAT_MSG_*` family sits: those reach Lua through a formatted wrapper the
-//!   two-helper census does not see.
-//!
-//! ## Two deliberate narrowings
-//!
-//! **Only a fire whose event name is a literal is measured.** `ui_unit.rs` builds the ten power
-//! events with `format!("UNIT_{}", power_token(…))`, and there is no name to key on at the call
-//! site. Those are covered one gate over — `reference_ui`'s `CONSTRUCTED` list — and their single
-//! `tok()` argument is the same shape all ten share.
-//!
-//! **Only a literal `ScriptValue` element's KIND is asserted.** An argument built from a variable
-//! (`vec![ScriptValue::Int(bag)]` is literal enough — the *variant* is what types it, not the
-//! value) is typed by its variant; anything that is not a `ScriptValue::` constructor at all
-//! counts toward the arity and matches any kind. Arity is the assertion that catches the bug
-//! class; kinds are the free extra.
+//! Only `exact` rows gate: an `advisory` row's site declares more varargs than its caller pushes,
+//! and a `none` row has no producer in the census, which does not mean it has none. Only a
+//! `ScriptValue::` element's kind is asserted; any other argument counts toward the arity alone.
 use std::collections::BTreeMap;
 
 /// One row of `reference/1.12-events.tsv`.
@@ -96,7 +55,7 @@ fn table() -> BTreeMap<String, Row> {
     out
 }
 
-/// Split `body` at its top-level commas — `vec![…]`'s elements, with nested calls left alone.
+/// Splits `body` at its top-level commas: `vec![…]`'s elements, nested calls left whole.
 fn elements(body: &str) -> Vec<String> {
     let mut out = Vec::new();
     let (mut depth, mut cur, mut in_str, mut esc) = (0i32, String::new(), false, false);
@@ -177,9 +136,7 @@ fn fire_sites() -> Vec<(String, Vec<char>, String)> {
             if p.extension().is_none_or(|x| x != "rs") {
                 continue;
             }
-            // A test's own synthetic fires are not a surface we ship — the same rule
-            // `every_event_we_fire_is_an_event_the_reference_has` holds, plus the inline
-            // `#[cfg(test)]` tail a file-name rule cannot see.
+            // Test fires are not shipped: skip test files and every `#[cfg(test)]` tail.
             if p.to_string_lossy().contains("test") {
                 continue;
             }
@@ -187,7 +144,7 @@ fn fire_sites() -> Vec<(String, Vec<char>, String)> {
             let text = whole
                 .split_once("#[cfg(test)]")
                 .map_or(whole.as_str(), |(head, _)| head);
-            // Split so this file cannot match its own scanner (the 1883 gate's lesson).
+            // Split so this file cannot match its own scanner.
             for call in [
                 concat!("fire_event", "("),
                 concat!("fire_event_into", "("),
@@ -228,7 +185,7 @@ fn fire_sites() -> Vec<(String, Vec<char>, String)> {
                     } else if args.starts_with("Vec::new()") {
                         Vec::new()
                     } else {
-                        // An argument list built elsewhere — arity unknowable from here.
+                        // An argument list built elsewhere: arity unknowable here.
                         continue;
                     };
                     out.push((name.to_string(), kinds, p.display().to_string()));
@@ -239,7 +196,6 @@ fn fire_sites() -> Vec<(String, Vec<char>, String)> {
     out
 }
 
-/// **Every event benilla fires must carry the arguments the reference's producer pushes.**
 #[test]
 fn every_event_we_fire_carries_the_reference_s_arguments() {
     let table = table();
@@ -297,27 +253,12 @@ fn every_event_we_fire_carries_the_reference_s_arguments() {
     );
 }
 
-/// **Every event the reference's unit-field bridge produces must have a producer here.**
-///
-/// This is the half that let `UNIT_DYNAMIC_FLAGS` sit unfired for the whole life of the client.
-/// [`super::reference_ui::every_event_a_chain_file_registers_has_a_producer`] asks whether
-/// anything fires what a **stock chain file** listens for — and *nothing in 1.12 FrameXML
-/// registers `UNIT_DYNAMIC_FLAGS`, so the hole was invisible to it by construction. The corpus is
-/// where the demand was (`CT_UnitFrames/CT_TargetFrame.xml:200`, `TipBuddy/TipBuddy.lua:17`), and
-/// the corpus is not in this repo.
-///
-/// So this gate asks the question from the REFERENCE's side instead, over the one family where
-/// that is bounded and exact: `0x51bbb0` registers one watch per named unit-window field, so
-/// every event id below `0xb6` that has a name in the client's own table is produced by that
-/// bridge, always with the unit token. Twenty-five names, one producer function on our side
-/// ([`crate::ui_unit::fire_transitions`] and the two pet-stat feeds), and no judgment call about
-/// which of them "should" exist — the reference fires all of them.
-///
-/// A CENSUS with a declared set, like 1889's: what must not happen is a new name appearing.
+/// `0x51bbb0` registers one watch per named unit-window field, so each of the 25 named event ids
+/// below `0xb6` comes from that bridge with the unit token, and each needs a producer here.
 #[test]
 fn every_unit_field_bridge_event_has_a_producer() {
-    /// Produced by the reference's bridge, by nothing here. Each needs a reason, and an entry
-    /// that comes into production fails the gate so the list cannot outlive its fix.
+    /// Bridge events nothing here produces, each with its reason; an entry that gains a producer
+    /// fails the gate.
     const UNPRODUCED: &[(&str, &str)] = &[(
         "UNIT_LOYALTY",
         "field 138, the hunter pet's loyalty level. benilla's pet-stat feed (`ui_pet_stats`) \
@@ -341,9 +282,8 @@ fn every_unit_field_bridge_event_has_a_producer() {
         .into_iter()
         .map(|(n, _, _)| n)
         .chain(
-            // The ten power events are built with `format!("UNIT_{}", power_token(…))`, so no
-            // literal exists to scan for — the same declared family `reference_ui`'s CONSTRUCTED
-            // list carries, and an entry there is a promise that something fires it.
+            // The ten power events are built with `format!("UNIT_{}", power_token(…))`, so there
+            // is no literal to scan; `reference_ui`'s `CONSTRUCTED` list declares the same family.
             [
                 "MANA",
                 "RAGE",

@@ -1,10 +1,6 @@
-//! The extraction pass: [`tick_script`] + [`paint_script`] turn [`UiScript::extract`]'s per-frame output into
-//! [`UiQuads`] for the render pass (screen size → tick → resolve → extract → quads), including the
-//! held-cursor icon overlay ([`cursor_icon_quad`]) — CAPTURE-ONLY since decision 0216 §5, where
-//! the held payload's icon became the hardware cursor ([`crate::cursor`]) in a normal run; the
-//! quad survives only as the visual harness's machine-checkable view (the OS cursor can't appear
-//! in capture pixels). Split out of [`super`] purely for size — the plugin wiring and the input
-//! pass live there and in [`super::input`] respectively.
+//! The UI pass: [`tick_script`] runs the VM's frame and [`paint_script`] turns
+//! [`UiScript::extract`]'s output into [`UiQuads`]. The held payload's icon is the hardware cursor
+//! ([`crate::cursor`]); a capture, which cannot show that cursor, draws [`cursor_icon_quad`].
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -18,48 +14,32 @@ use benilla_assets::WorldAssets;
 mod colorselect;
 mod text;
 
-/// `WOW_UI_COST=1` — the untraced per-frame cost meter for this system's phases (the premise
-/// instrument for the UI epoch-gate lane, 0730's warm slice): one `[ui-cost]` line per frame with
-/// each phase's wall μs, the quad counts, the layout gate's decision, and whether the diff found
-/// the produced quads changed. Untraced by design — the campaign grades untraced cpu_ms, and
-/// `trace_chrome` inflates exactly the fine-grained spans this measures (0718's calibration).
+/// `WOW_UI_COST=1`: one untraced `[ui-cost]` line per frame, each phase's μs and the quad counts.
 pub(crate) fn ui_cost_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("WOW_UI_COST").as_deref() == Ok("1"))
 }
 
-/// `WOW_UI_GATE=1` — the extract gate's miss reporter ([`report_gate_miss`]). Off by default and
-/// read once, the `[ui-cost]` meter's posture.
+/// `WOW_UI_GATE=1`: log why the extract gate and the splice missed ([`report_gate_miss`]).
 fn gate_log_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("WOW_UI_GATE").as_deref() == Ok("1"))
 }
 
-/// `WOW_UI_DIFF=1` — the base-lane rebuild-trigger probe (`ui_pass`' twin). Read once; it also
-/// pins the conversion to the FULL path (the probe's job is naming the first differing quad of a
-/// whole-list diff, which the per-entry splice below deliberately never computes).
+/// `WOW_UI_DIFF=1`: name the first base-lane quad that changed; it pins the full conversion.
 fn ui_diff_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("WOW_UI_DIFF").is_some())
 }
 
-/// `WOW_UI_SPLICE_VERIFY=1` — the splice's own adversary. Read once, off by
-/// default, and *expensive by design*: it makes every spliced frame also pay the full conversion.
+/// `WOW_UI_SPLICE_VERIFY=1`: also run the full conversion on each spliced frame, and compare.
 fn splice_verify_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("WOW_UI_SPLICE_VERIFY").is_some())
 }
 
-/// `WOW_UI_PICK=<x>,<y>[,<r>]` — **what drew this pixel?** The UI's answer to the world hover
-/// inspector. Every converted quad whose screen rect covers that point (or, with `r`, comes
-/// within `r` px of it — how a hairline thinner than the probe is caught) names itself once: the
-/// `ZTarget` (frame or region handle), the rect, the paint key, and the content — a texture's
-/// BLP path and crop included. Coordinates are LOGICAL window px, y-down from the top-left, the
-/// same space [`convert_entry`]'s `rect` lives in (a 2x-scale capture's device pixel is half
-/// this). Each `z_key` reports once per run, so a 200-frame capture prints the list once.
-///
-/// Built for a hairline nobody could name (the world map's dark seams): without it, "which
-/// region is that one dark row" costs a bisect through FrameXML with a rebuild per guess.
+/// `WOW_UI_PICK=<x>,<y>[,<r>]`: log every quad whose rect covers that point, or comes within `r`
+/// px, once per `z` key; logical window px, y-down, as [`convert_entry`]'s `rect`.
 fn ui_pick_point() -> Option<(Vec2, f32)> {
     static AT: std::sync::OnceLock<Option<(Vec2, f32)>> = std::sync::OnceLock::new();
     *AT.get_or_init(|| {
@@ -72,8 +52,7 @@ fn ui_pick_point() -> Option<(Vec2, f32)> {
     })
 }
 
-/// One `[ui-pick]` line per covering quad — see [`ui_pick_point`]. Deduped by paint key so a
-/// steady UI reports its stack once, not once a frame.
+/// One `[ui-pick]` line per covering quad ([`ui_pick_point`]), deduped by paint key.
 fn report_ui_pick(eq: &benilla_ui::script::ExtractedQuad, rect: Rect, at: Vec2, r: f32) {
     use std::collections::HashSet;
     use std::sync::Mutex;
@@ -109,8 +88,7 @@ fn report_ui_pick(eq: &benilla_ui::script::ExtractedQuad, rect: Rect, at: Vec2, 
     );
 }
 
-/// A content arm's name, for a one-line log ([`report_gate_miss`]'s splice twin). Short and
-/// stable: these strings are histogrammed in the shell, not read as prose.
+/// A content arm's short, stable name for a log line.
 fn content_kind(c: &QuadContent) -> &'static str {
     match c {
         QuadContent::Frame => "frame",
@@ -124,14 +102,9 @@ fn content_kind(c: &QuadContent) -> &'static str {
     }
 }
 
-/// Which axes of a texture region's UV mapping run PAST the texture — the reference's tiling idiom
-/// (`SetTexCoord(0, n, 0, 1)` repeats the art n times along u) — and so must sample with `Repeat`.
-/// Per axis, because the two answers are independent and the wrong one on the bounded axis is a
-/// visible bleed: with both axes on `Repeat`, a strip that spans exactly `[0, 1]`
-/// in v has its top pixel row filtered against the texture's LAST row. The stance shelf's middle
-/// piece keeps an opaque grey row there, and drew it as a hairline along its own top edge at
-/// every four-form bar. The same tolerance [`uv_clamp_window`] uses to tell a tiling axis from a
-/// whole-texture one, so the two laws cannot disagree about which axis is which.
+/// Which axes run past the texture, the reference's tiling idiom (`SetTexCoord(0, n, 0, 1)`
+/// repeats the art n times), and so sample `Repeat`; a bounded axis on `Repeat` would filter its
+/// edge against the opposite one. Its tolerance must match [`uv_clamp_window`]'s.
 pub(crate) fn tiling_axes(uv: &UvRect) -> (bool, bool) {
     let past = |axis: usize| {
         uv.corners
@@ -141,22 +114,11 @@ pub(crate) fn tiling_axes(uv: &UvRect) -> (bool, bool) {
     (past(0), past(1))
 }
 
-/// The half-texel-inset UV window a **cropped** quad may sample — [`UiQuad::uv_clamp`]'s producer,
-/// `None` when neither axis needs one.
-///
-/// `CLAMP_TO_EDGE` clamps at the IMAGE's edge; a `SetTexCoord` crop into an ATLAS has no such
-/// guard, so a magnified cell's outermost destination pixels sample half a texel past the crop and
-/// linear-filter in whatever the neighbouring cell authored. Half a texel of inset is exactly where
-/// a standalone clamped texture of that cell stops — the edge texel's CENTRE.
-///
-/// Decided **per axis**, and the two tests are the whole law:
-/// - an axis running past `[0,1]` is the reference's TILING idiom (`SetTexCoord(0, n, 0, 1)` on the
-///   stance shelf repeats the art n times); insetting it would walk the art along the run, so it is
-///   left alone — the same bounded-axis rule [`benilla_ui::script::inset_atlas_bleed`] applies to
-///   the `Backdrop` slices;
-/// - an axis spanning the whole texture needs nothing: the sampler's own clamp already is this.
+/// The [`UiQuad::uv_clamp`] window of an atlas crop, inset half a texel so a magnified cell does
+/// not filter in its neighbour. A tiling axis is left alone, as
+/// [`benilla_ui::script::inset_atlas_bleed`] does; a whole-texture axis needs no window.
 fn uv_clamp_window(uv: &UvRect, size: (u32, u32)) -> Option<[f32; 4]> {
-    let mut out = [1.0, 1.0, 0.0, 0.0]; // both axes off — `min > max` (see `UiQuad::uv_clamp`)
+    let mut out = [1.0, 1.0, 0.0, 0.0]; // both axes off: `min > max`
     let mut any = false;
     for (axis, texels) in [(0usize, size.0), (1usize, size.1)] {
         if texels < 2 {
@@ -170,8 +132,7 @@ fn uv_clamp_window(uv: &UvRect, size: (u32, u32)) -> Option<[f32; 4]> {
             continue;
         }
         let half = 0.5 / texels as f32;
-        // A crop under one texel wide has no interior either: pin both bounds to its centre, which
-        // is the one texel it means.
+        // A crop under one texel wide pins both bounds to its centre.
         let (lo, hi) = match hi - lo > 2.0 * half {
             true => (lo + half, hi - half),
             false => {
@@ -186,9 +147,7 @@ fn uv_clamp_window(uv: &UvRect, size: (u32, u32)) -> Option<[f32; 4]> {
     any.then_some(out)
 }
 
-/// One line naming why the extract gate did not skip this frame — the input that differed, and for
-/// the render list the first entry that moved. A settled UI is what makes the paint pass free; when
-/// it is never settled, this says what is moving.
+/// Log why the extract gate did not skip: the input that differed, or the first entry that moved.
 fn report_gate_miss(
     script: &UiScript,
     now: &[benilla_ui::script::ExtractedQuad],
@@ -203,9 +162,7 @@ fn report_gate_miss(
         return;
     }
     if !generation_eq {
-        // Named, because it is the one miss with no visible cause at all: the glyph sheet filled
-        // and was repacked from empty, so every held quad's UV moved. It should be very rare —
-        // `WOW_GLYPH_CACHE=1` reports the occupancy that led here.
+        // A full sheet was repacked, moving every UV (`WOW_GLYPH_CACHE=1` shows its occupancy).
         eprintln!("[ui-gate] miss: the glyph sheet reset");
         return;
     }
@@ -241,63 +198,38 @@ fn report_gate_miss(
                 &now_s[..now_s.len().min(280)],
             );
         }
-        // Nothing in this pass's own inputs moved — the miss came from the capture-mode arm.
+        // Nothing moved: capture mode never skips.
         None => eprintln!("[ui-gate] miss: capture mode (the gate never skips under a capture)"),
     }
 }
 
-/// Last frame's extract-gate inputs, held together as one `Local` — the gate
-/// compares all of them or none, and a Bevy system has a hard param budget this was eating.
+/// Last frame's extract-gate inputs, in one `Local` as the gate compares all or none.
 #[derive(Default)]
 pub(super) struct GateInputs {
     extracted: Vec<benilla_ui::script::ExtractedQuad>,
     text_ui: Option<benilla_ui::script::EditBoxTextUi>,
     dims: Option<(u32, u32, u32, u32)>,
     portraits: std::collections::HashMap<String, crate::portrait::PortraitSource>,
-    /// The `UiFontAtlas::generation` the held quads' glyph UVs came from — see the gate's own
-    /// note below. Moves only when the glyph sheet resets.
+    /// The `UiFontAtlas::generation` the held glyph UVs came from; it moves only on a reset.
     generation: Option<u64>,
-    /// Per-entry prefix ends into the conversion's output: entry `i`'s quads occupy
-    /// `spans[i-1]..spans[i]` of `UiQuads::quads` (0 for `i = 0`). Recorded by the full
-    /// conversion, kept current by the splice — this is what lets a one-entry change (the resting
-    /// blink) re-convert one entry instead of the whole interface.
+    /// Per-entry prefix ends: entry `i`'s quads are `spans[i-1]..spans[i]` of `UiQuads::quads`
+    /// (from 0 for `i = 0`), which lets the splice re-convert one entry alone.
     spans: Vec<u32>,
-    /// The stitch's ping-pong buffer: last frame's quad allocation, emptied. A stitch drains the
-    /// live list into a fresh one and parks the drained allocation here, so a steady stream of
-    /// changes (a hovered tooltip re-filling every frame) reuses two buffers forever instead of
-    /// allocating ~1,400 quads a frame.
+    /// The stitch's ping-pong buffer: last frame's emptied allocation.
     held: Vec<UiQuad>,
 }
 
-/// How this frame's entry list lines up with last frame's — what the splice re-converts, and
-/// where everything it keeps came from.
+/// How this frame's entry list lines up with last frame's.
 struct Alignment {
-    /// For each entry of the NEW list: the OLD index whose already-converted quads it reuses, or
-    /// `None` — it must be converted. Kept indices are strictly increasing.
+    /// Per new entry, the old index whose quads it reuses, or `None` to convert.
     source: Vec<Option<usize>>,
-    /// The OLD entries nothing reuses. Their quads leave the list, so their conversion's side
-    /// effects (a parked minimap slot, a link span, a tile request) would have to be *undone* — the
-    /// splice cannot, so it only proceeds when every one of them was quads-only.
+    /// Old entries nothing reuses; the splice cannot undo their side effects.
     dropped: Vec<usize>,
 }
 
-/// The alignment: a merge over `z`, which both lists are sorted by ([`benilla_ui::script::UiScript::extract`]).
-///
-/// **Why `z` and not the index.** `z` is a packed `(strata, level, frame-insertion, layer, …)`
-/// key ([`benilla_ui::order::ZKey`]) — an entry's *identity*, unchanged when a neighbour is
-/// inserted or removed. A positional compare cannot see that: hovering one item slot inserts a
-/// single highlight entry at index 359 of 520 and shifts the 160 entries behind it, every one of
-/// which then compares unequal by index and equal by `z`. Before this, that frame took the full
-/// conversion — 86 % of all hover frames did.
-///
-/// **The merge FINDS the alignment; it is never trusted.** Quads are reused only for a pair that
-/// compares fully equal, and [`convert_entry`] is a pure function of the entry plus the raster
-/// environment the splice's guards pin — so an equal pair converts to equal quads whatever their
-/// indices. A merge that mis-pairs therefore costs conversions and never correctness, which is
-/// what makes it safe to key on a `z` we do not prove unique or even prove sorted. (It is not
-/// quite sorted: a ScrollingMessageFrame's own content line is emitted at its frame's slot and
-/// sorts above the frame's BACKGROUND regions, so the list dips locally around a chat window.
-/// Identical dips on both sides match anyway; a differing one re-converts a handful of entries.)
+/// A merge over `z`, a packed [`benilla_ui::order::ZKey`] that an insertion does not shift. Only
+/// fully equal pairs reuse quads, so a mis-pairing costs conversions, never correctness: `z` is
+/// not proven unique or sorted (a ScrollingMessageFrame's line sorts above its BACKGROUND layer).
 fn align_entries(
     was: &[benilla_ui::script::ExtractedQuad],
     now: &[benilla_ui::script::ExtractedQuad],
@@ -320,9 +252,9 @@ fn align_entries(
                 i += 1;
                 j += 1;
             }
-            // An entry that is gone: last frame drew something this frame does not.
+            // Gone this frame.
             std::cmp::Ordering::Less => i += 1,
-            // An entry that is new.
+            // New this frame.
             std::cmp::Ordering::Greater => {
                 source.push(None);
                 j += 1;
@@ -343,28 +275,18 @@ fn span_bounds(spans: &[u32], i: usize) -> (usize, usize) {
     (a, spans[i] as usize)
 }
 
-/// Whether an entry's conversion writes **quads and nothing else** — the splice's admission test.
-/// The full path plumbs three side channels (the engine's link spans, the parked minimap slot,
-/// the booth panes and tile requests); the splice keeps last frame's values for all of them,
-/// which is only sound for entries that never write one, or write them idempotently.
+/// Whether an entry's conversion writes only quads, or its side channels idempotently: the splice
+/// keeps last frame's link spans, minimap slot, booth panes and tile requests.
 fn splice_simple(eq: &benilla_ui::script::ExtractedQuad) -> bool {
     match &eq.content {
         QuadContent::Frame
         | QuadContent::Backdrop { .. }
-        // A model pane writes at most one quad and one idempotent tile request
-        // — and the map's arrow changes facing on every turn while the map is open.
+        // At most one quad and one idempotent tile request.
         | QuadContent::ModelPane { .. }
-        // Both colour-picker arms write one quad and nothing else — and they change on every
-        // step of a drag, which is exactly the traffic the splice exists for.
         | QuadContent::ColorWheel
         | QuadContent::ColorValue { .. } => true,
-        // A FontString's text writes nothing but quads, and that is every label, every unit
-        // frame's name, every tooltip line — the traffic this whole path exists for (decision
-        // 1638). A FRAME-targeted Text quad is a message-frame ring line, whose hyperlink spans
-        // are a REPLACE-THE-WHOLE-SET channel (`set_link_spans`): a line that stops carrying a
-        // link would leave a stale clickable rect behind, and the splice's post-conversion
-        // tripwire cannot see that, because the scratch it inspects is empty in exactly that
-        // case. So the target, not the tripwire, is the guard.
+        // Region text only: a message line's link spans replace the whole set, and a line losing
+        // its link would leave a stale rect while the tripwire's scratch stays empty.
         QuadContent::Text { .. } => matches!(eq.target, benilla_ui::order::ZTarget::Region(_)),
         QuadContent::Texture {
             portrait_unit: None,
@@ -374,19 +296,8 @@ fn splice_simple(eq: &benilla_ui::script::ExtractedQuad) -> bool {
     }
 }
 
-/// The splice's adversary ([`splice_verify_enabled`]): re-run the FULL conversion over the same
-/// entry list and prove the spliced list is what it would have produced — quads AND span table.
-///
-/// This is the check the splice's whole argument rests on, made by machine instead of by
-/// reasoning. It is what turns "an equal entry converts to equal quads" from a claim about
-/// [`convert_entry`] into a measurement over a real interface: a live client with ~520 entries, a
-/// tooltip re-filling every frame, and a hover highlight inserting and removing itself under it.
-/// A mismatch names the quad, the entry that owns it, and that entry's owner.
-///
-/// The side channels are collected into throwaway buffers and dropped — the point is the quads.
-/// `booths.panes` is the one exception, because [`convert_entry`] writes it through the shared
-/// bridge; re-adding the same tokens is idempotent, so a verify run's panes end up where the full
-/// path would have put them anyway.
+/// Re-run the full conversion and log the first quad or span where the spliced list differs; of
+/// the side channels only `booths.panes` is written, and re-adding its tokens is idempotent.
 fn verify_splice(
     prev: &GateInputs,
     quads: &UiQuads,
@@ -449,7 +360,7 @@ fn verify_splice(
     else {
         return;
     };
-    // Which entry owns quad `i` — the span table is a prefix-end list, so the first end past it.
+    // The entry owning quad `i`: the first prefix end past it.
     let owner = spans.partition_point(|&e| e as usize <= i);
     let name = prev
         .extracted
@@ -468,8 +379,6 @@ fn verify_splice(
     );
 }
 
-/// One quad in a log line — enough to see WHICH way two conversions disagree (geometry, paint,
-/// crop, or which texture), never the whole struct.
 fn quad_summary(q: Option<&UiQuad>) -> String {
     let Some(q) = q else {
         return "<past the end>".into();
@@ -487,20 +396,9 @@ fn quad_summary(q: Option<&UiQuad>) -> String {
     )
 }
 
-/// **Hand the VM the host's font engine** — the one construction site for
-/// [`crate::ui_text::AtlasMeasurer`], so a `SetText` → `GetStringWidth` pair *inside one Lua call*
-/// returns a real number instead of 0 (the reference answers that getter inline, `0x79e510` →
-/// `0x772890`).
-///
-/// `seam` is the raster seam the atlas answers under ([`super::seam_scale`]): a measurer built
-/// under one seam does not answer for another, which is why both callers re-seat rather than
-/// check first.
-///
-/// Two callers, and the second one is the point: this pass, at the seam edge and
-/// on the first frame the atlas exists — and [`super::lifecycle::load_ingame_ui_on_world_entry`],
-/// **before the manifest loads**, because that is where every `<OnLoad>` in the in-game UI runs.
-/// Seated only from here, a VM born and loaded inside one exclusive system — which is exactly
-/// what `ReloadUI()` does — runs its whole load edge measuring 0.
+/// Hand the VM the host's font engine for `seam`, so `GetStringWidth` right after `SetText`
+/// measures, as the reference answers it inline (`0x79e510` → `0x772890`). Also seated before the
+/// manifest loads ([`super::lifecycle::load_ingame_ui_on_world_entry`]), for every `<OnLoad>`.
 pub(crate) fn seat_text_measurer(script: &mut UiScript, atlas: &UiFontAtlas, seam: f32) {
     script.set_text_measurer(Box::new(crate::ui_text::AtlasMeasurer::new(
         atlas.engine(),
@@ -508,92 +406,48 @@ pub(crate) fn seat_text_measurer(script: &mut UiScript, atlas: &UiFontAtlas, sea
     )));
 }
 
-/// **The UI pass, first half: the VM's frame** — screen size -> `tick` (OnUpdate) -> the measure
-/// round-trip -> `resolve`. Script errors drain to the log (throttled by being drained, each fires
-/// once). The quads are the second half's ([`paint_script`]).
-///
-/// **The pass is two systems because a widget can be anchored to the world**. The
-/// hit test has to run before `WorldStage::Input` (`PlayerUiHover` feeds `PointerOverUi`, which the
-/// camera reads), so this half stays there. Building the quads there too made every world-anchored
-/// widget a frame stale, and since 2148 the nameplates ARE widgets — real `WorldFrame` children
-/// positioned by `vplates::drive_vplates` from a camera that only exists later in the frame. The
-/// plate was therefore painted at the unit's PREVIOUS frame's screen point: a median 1.9 px and a
-/// p90 of 16 px of lag per frame at 640x360 while a guard walked (the `vpl` trace, 2026-09-10), and
-/// proportionally more at a real window. That is the director's "way more jittered when the
-/// creature is moving".
+/// The UI pass's first half, before `WorldStage::Input` because the camera reads the UI hover:
+/// screen size, `tick`, the measure round-trip, `resolve` and the script errors. The quads are
+/// [`paint_script`]'s, after the camera that places the `WorldFrame` nameplates.
 pub(super) fn tick_script(
     script: Option<NonSendMut<UiScript>>,
     window: Query<&Window, With<PrimaryWindow>>,
-    // REAL time, deliberately: this drives the VM's `GetTime()` session clock, and the reference
-    // clock is the OS wall clock. Bevy's default virtual time clamps every frame delta to
-    // `max_delta` (250 ms), so hitches, loading stalls, and macOS occlusion throttling (~1 fps
-    // when the window is covered) permanently drop UI-clock time — every GetTime-anchored timer
-    // (the cooldown sweep, aura expirations, fades) then runs LONG against the wall-clock
-    // cooldown store and the server, which is exactly "I can charge before the sweep ends"
-    // (verified live: an occluded run's UI clock fell 27 s behind in 43 s of wall time).
+    // Real time: the reference's `GetTime` is the OS tick count, and virtual time clamps each
+    // delta to 250 ms, so a stall would leave every GetTime-anchored timer running long.
     time: Res<Time<Real>>,
     mut ui_clock: ResMut<super::UiClock>,
     mut font_atlas: Option<ResMut<UiFontAtlas>>,
-    // The booth seam's DPI half, and the pane map this half invalidates when the VM or the window
-    // is gone — see the two early returns.
+    // The booth seam's DPI, and the pane map cleared when the VM or the window is gone.
     mut booths: crate::portrait::BoothBridge,
     ui_cost_wanted: Res<super::UiCostWanted>,
-    // The seam scale the engine's text-metric caches were answered under. When `s` moves (window
-    // resize / fullscreen toggle / uiScale change), every cached measure is stale — see the
-    // invalidation below.
-    //
-    // Deliberately NOT a `VmMemo` (decision 1290's sweep): this is a fact about the RASTER, not
-    // about what the VM has been told, and it stays true across the VM's death and rebirth. A fresh
-    // VM has no cached measures to invalidate and no measurer at all, and the re-seat below already
-    // catches that on its own test (`!script.has_text_measurer()`).
+    // The seam scale the engine's text-metric caches were answered under. Not a `VmMemo`: it is a
+    // fact about the raster, and a new VM re-seats on `!has_text_measurer()` below.
     mut last_seam: Local<f32>,
-    // The `scale_factor` this pass last answered measures under — the other half of the same
-    // staleness edge. `0.0` until the first frame, which is also a real edge.
+    // The `scale_factor` measures were last answered under; 0 until the first frame.
     mut last_dpi: Local<f32>,
-    // The uiScale dial folded into the seam scale.
     ui_scale: Res<super::UiScaleCvar>,
-    // This frame's phase split, published for whoever asked (the `[ui-cost]` line, `hover_log`).
     mut ui_cost: ResMut<super::UiFrameCost>,
-    // What the paint half needs from this one — and whether it may run at all.
     mut pass: ResMut<super::UiPassState>,
 ) {
     pass.live = false;
     let Some(mut script) = script else {
-        // No VM ⇒ no UI is sampling any booth pane. The panes map must not outlive its writer:
-        // every OTHER return in this system provably keeps pane presence unchanged (the settled
-        // gate compares the whole extracted list; the splice refuses `portrait_unit` entries),
-        // but a VM dying mid-world with the character window up would strand its pane here and
-        // the paper-doll camera would render behind a dead UI until the next full conversion.
+        // No VM, no UI sampling a booth pane: a stranded pane would keep the paper-doll camera
+        // rendering behind a dead UI.
         booths.panes.0.clear();
         return;
     };
     let Ok(window) = window.single() else {
-        // Same law as the no-VM arm: no window, no sampling — a pane map with no writer lies.
         booths.panes.0.clear();
         return;
     };
     let (w, h) = (window.width(), window.height());
-    // The 768-virtual UI space (byte law: the client's FrameXML space is ALWAYS
-    // 768 units tall, every aspect, mapped to the window; the converter identity `f(screenH) = 768`
-    // (`0x41ad10`) + the caret `H_px/192` law (`0x77b8c0`)), times the uiScale dial (decision 0584
-    // — the VM's screen is `768/uiScale` units tall, so a dial below 1 shrinks everything). The VM
-    // lives entirely in that space: this seam scales quads ×s on the way out, mouse ÷s on the
-    // way in (input.rs), and measures ÷s on the way back. At a 768-tall window with the dial at
-    // 1 the whole pipeline is bit-identical to the pre-virtual behavior.
+    // The client's UI space is 768 units tall at every aspect (`f(screenH) = 768`, `0x41ad10`; the
+    // caret's `H_px/192`, `0x77b8c0`), `768/uiScale` with the dial. The VM lives in it: quads
+    // scale ×s out, and the mouse and the measures ÷s in.
     let s = super::seam_scale(h, ui_scale.0);
-    // The raster environment moved (resize / fullscreen / uiScale): every text metric the engine
-    // caches — FontString measures, chat row counts, editbox advance tables, the digit feed — was
-    // answered under the OLD `s`, and integer-stepped advances measured at one raster size do not
-    // rescale to another (the font-size snap alone shifts a string's unit width by several
-    // percent — enough that a boot-size measure fails the fullscreen fit test and the ellipsis
-    // eats fitting text: the director's "Contr..." rows, reproduced by `WOW_RESIZE`). Declare the
-    // staleness at the seam and let every round-trip re-answer under the new `s`.
-    //
-    // **The DPI is the other half of the same edge**. A logical height becomes an
-    // integer DEVICE-pixel raster size, so a monitor hop at an unchanged window size leaves `s`
-    // exactly where it was and still moves every measured width. (1296/1339 caught this through
-    // the atlas's bake generation, which followed the same two terms; with nothing to re-bake, the
-    // honest thing to watch is the term itself.)
+    // A moved seam scale or DPI stales every text metric the engine caches: integer-stepped
+    // advances do not rescale, and the size snap moves a string's width by several percent,
+    // enough for the ellipsis to eat fitting text. A monitor hop moves the DPI alone.
     let dpi = window.scale_factor();
     // The tile renderer sizes its cells in device pixels off this.
     booths.tiles.dpi = dpi;
@@ -605,40 +459,22 @@ pub(super) fn tick_script(
         *last_seam = s;
         *last_dpi = dpi;
     }
-    // …and re-seat the VM's own font engine at the same edge, for the same reason: an
-    // [`crate::ui_text::AtlasMeasurer`] answers only for the seam it was built under. This is what
-    // makes a `SetText` → `GetStringWidth` pair *inside one Lua update* return a real number
-    // instead of 0 — the reference answers that getter inline (`0x79e510` → `0x772890`), and the
-    // corpus writes it that way (`Bagnon_Forever/database/ui.lua:58-59`).
-    //
-    // Seated BEFORE the tick below, so the first update that runs already has it, and rebuilt only
-    // on the seam edge or the frame the atlas first exists — an `Arc` clone and an `f32`, never a
-    // per-frame cost. This is the *frame* edge; the *load* edge is
-    // [`super::lifecycle::load_ingame_ui_on_world_entry`]'s own call to the same seat (2028).
+    // Re-seat the VM's measurer on the same edge, before the tick so the first update has it.
     if let Some(atlas) = font_atlas.as_deref() {
         if seam_moved || !script.has_text_measurer() {
             seat_text_measurer(&mut script, atlas, s);
         }
     }
-    // Phase spans (visible under `bevy/trace_chrome`): this system is the biggest flat CPU cost
-    // on an idle frame, and the ledger can only rank what has a name — tick (Lua OnUpdate),
-    // resolve (layout), measure (the text round-trips), extract (tree walk + rasterize), diff.
-    // The phase marks feed two consumers now: the `[ui-cost]` line and the hover recorder
-    // (`hover_log`), which writes the same split per frame to a file. Either one arms them.
+    // The phase marks feed the `[ui-cost]` line and the hover recorder (`hover_log`).
     let printing = ui_cost_enabled();
     let cost_on = printing || ui_cost_wanted.0;
     let solves_before = cost_on.then(|| script.layout_solves());
     let derives_before = cost_on.then(|| script.layout_derivations());
-    // The measure counters are PER FRAME: `measure_fontstrings` adds to them, and both publish
-    // sites below carry them forward so the two measure passes sum into one frame's row. Nothing
-    // else zeroes them, so without this the recorder's "re-shaped strings" column is a lifetime
-    // total wearing a per-frame label — it read a flat 219/frame on a glue screen that measures
-    // nothing after startup, and cost one wrong theory before the CSV contradicted it.
+    // Per frame: both halves' measure passes add to these, and only this zeroes them.
     ui_cost.measured = 0;
     ui_cost.measured_texts.clear();
     let mut t_mark = cost_on.then(std::time::Instant::now);
-    // Marks phase boundaries under the meter: returns μs since the previous mark and re-arms.
-    // With the meter off it does nothing (a run carries six no-op calls, not six clock reads).
+    // μs since the previous mark, re-armed; nothing with the meter off.
     let mut lap = move || -> u128 {
         if !cost_on {
             return 0;
@@ -650,36 +486,22 @@ pub(super) fn tick_script(
     {
         let _span = bevy::log::info_span!("ui_script: tick").entered();
         let resized = script.set_screen_size(w / s, if h > 0.0 { h / s } else { 768.0 });
-        // A resize re-runs everything the interface COMPUTED from the old screen size — see
-        // [`super::manifest::on_screen_resized`].
+        // A resize re-runs what the interface computed from the old screen size.
         if resized {
             super::manifest::on_screen_resized(&script);
         }
         script.tick(time.delta_secs());
     }
-    // The frame's clock pair ([`super::UiClock`]): the VM value the tick just produced, anchored
-    // at the exact `Instant` whose frame-to-frame deltas that clock accumulates — `Time<Real>`'s
-    // own last-update. Every Instant→GetTime conversion goes through this pair; sampling
-    // `Instant::now()` at a conversion site instead re-measures the tick→feed scheduling gap
-    // every frame and wobbles the derived start by that jitter (the resource's own doc).
+    // The VM's clock anchored at `Time<Real>`'s last update, whose deltas it accumulates; every
+    // `Instant` to `GetTime` conversion goes through this pair, never `Instant::now()`.
     *ui_clock = super::UiClock {
         anchor: time.last_update().unwrap_or_else(std::time::Instant::now),
         ui_now: script.now(),
     };
     let us_tick = lap();
-    // ── The FontString measure round-trip, BEFORE the resolve ────────────────────────────────
-    // `fontstrings_needing_measure` reads only `region_data` — each FontString's text, font, and
-    // its explicit/wrap-pinned size — and never a resolved rect; nothing in `resolve` writes a
-    // region's size either. So the answers do not need a layout pass to exist, and running them
-    // first means the frame's ONE resolve already sees them.
-    //
-    // Measuring after the resolve (the old order) cost a second FULL solve on every frame whose
-    // text changed, because answering a measure moves the anchor solve's read set. On the shipped
-    // UI that solve walks 2,164 frames and sweeps 6,297 regions per round — for a hover whose
-    // change touches ten FontStrings inside one frame. Measured on the default UI with a tooltip
-    // content change per frame (`resolve_bench`): 3.22 ms/frame at 2.00 solves → 2.37 ms at 1.00.
-    // The live shape this comes from: a hover frame that solved cost ~10 ms against ~0.2 ms for
-    // one that did not (`WOW_HOVER_LOG`, director's run).
+    // ── The FontString measure round-trip, before the resolve ────────────────────────────────
+    // A request reads only region data, never a resolved rect, and `resolve` writes no region's
+    // size, so measuring first lets the frame's one resolve see the answers.
     let mut measured_any = false;
     if let Some(atlas) = font_atlas.as_deref_mut() {
         measured_any = measure_fontstrings(&mut script, atlas, s, &mut ui_cost, ui_cost_wanted.0);
@@ -688,9 +510,7 @@ pub(super) fn tick_script(
         let _span = bevy::log::info_span!("ui_script: resolve").entered();
         script.resolve();
     }
-    // The backstop: only when this frame actually measured something can a fresh request exist
-    // that the pass above could not have seen. Empty on every frame in the bench — and skipping it
-    // otherwise keeps the quiet frame at ONE sweep of the 6,297-region map, not two.
+    // Only a frame that measured can have a fresh request the pass above missed.
     if measured_any {
         if let Some(atlas) = font_atlas.as_deref_mut() {
             if measure_fontstrings(&mut script, atlas, s, &mut ui_cost, ui_cost_wanted.0) {
@@ -700,10 +520,8 @@ pub(super) fn tick_script(
     }
     let us_resolve = lap();
     let measure_span = bevy::log::info_span!("ui_script: measure").entered();
-    // The message-line half of the round-trip: chat ring lines ask for their wrapped ROW COUNT at
-    // the frame's resolved width, so the emit pass can stack real content heights (a long line
-    // pushes older lines up instead of overlapping them). Same-frame like the FontString half, but
-    // no re-resolve — rows shift only the emitted bands, never the anchor graph.
+    // Message lines ask for their wrapped row count at the frame's width, so a long line pushes
+    // older ones up; no re-resolve, as rows move only the bands, never the anchors.
     if let Some(atlas) = font_atlas.as_deref_mut() {
         let requests = script.message_lines_needing_measure();
         if !requests.is_empty() {
@@ -713,14 +531,12 @@ pub(super) fn tick_script(
                     let n = crate::ui_text::measure_wrapped_rows(
                         &mut atlas.lock(),
                         &r.text,
-                        // wrap_width is the RESOLVED frame width (scale already in it) — ×s only;
-                        // the font height is frame-local — ×s × the frame's scale, the drawn size.
+                        // The resolved width carries the frame scale; the font height does not.
                         r.wrap_width * s,
                         crate::ui_text::FontSpec {
                             path: r.font.as_deref(),
-                            // The band's own drawn px (one-to-one regime; inert ≤ 32).
                             height: crate::ui_text::drawn_px(r.height, None, s * r.scale),
-                            outline: r.outline, // step-law width bias, as in the measures above
+                            outline: r.outline, // the outline biases the stepped width
                             alpha_gradient: None,
                         },
                     );
@@ -732,11 +548,8 @@ pub(super) fn tick_script(
     }
     drop(measure_span);
     let us_measure = lap();
-    // The player's half of the error contract before the host's: every caught
-    // script error goes to the Lua error handler — `_ERRORMESSAGE` → the ScriptErrors dialog
-    // since BasicControls installs it, an addon's own handler if it chose one — and then the
-    // same errors drain to the log as always. Dispatch first so a handler that itself fails
-    // lands in this frame's drain, not the next one's.
+    // Script errors reach the Lua handler (`_ERRORMESSAGE`, `BasicControls.xml:16`) before the
+    // log, so a failing handler lands in this frame's drain.
     script.dispatch_script_errors_to_handler();
     for err in script.take_errors() {
         warn!("ui_script: {err}");
@@ -746,8 +559,6 @@ pub(super) fn tick_script(
     }
 
     // ── The handover ────────────────────────────────────────────────────────────────────────
-    // Everything the paint half derives from the window and the meter, published once here so the
-    // two halves cannot disagree about the frame they are in.
     *pass = super::UiPassState {
         live: true,
         seam: s,
@@ -760,14 +571,8 @@ pub(super) fn tick_script(
     };
 }
 
-/// **The UI pass, second half: the quads** — a second (incremental) measure + `resolve`, the tree
-/// walk, and the conversion into [`UiQuads`].
-///
-/// Split out of [`tick_script`] and scheduled **after the camera and after the
-/// plate driver**, which is the whole point: a widget positioned from this frame's camera has to be
-/// walked after that camera exists. The re-resolve is what makes the plates' fresh anchors real —
-/// it is the layout ledger's incremental pass, so on a frame where nothing but the plates moved it
-/// solves the plates and nothing else.
+/// The UI pass's second half, after the camera and the plate driver: an incremental measure and
+/// `resolve` for what was written since the tick, the walk, and the conversion into [`UiQuads`].
 pub(super) fn paint_script(
     script: Option<NonSendMut<UiScript>>,
     window: Query<&Window, With<PrimaryWindow>>,
@@ -775,56 +580,26 @@ pub(super) fn paint_script(
     world_assets: Option<ResMut<WorldAssets>>,
     mut images: ResMut<Assets<Image>>,
     mut font_atlas: Option<ResMut<UiFontAtlas>>,
-    // Both directions of the booth seam: the token -> off-screen-baked-face bridge a
-    // `SetPortraitTexture`-bound region samples, and the pane geometry this pass publishes back
-    // for the booths' projection aspect + render gate.
+    // The booth seam both ways: the bakes regions sample, and the pane aspects published back.
     mut booths: crate::portrait::BoothBridge,
-    // Two facts about the RUN, tupled to stay inside Bevy's 16-element system-param limit (the
-    // same squeeze `player::control` and `GateInputs` above record):
-    // · the held-cursor icon quad is CAPTURE-ONLY, the same presence check
-    //   every other capture-only system uses (`ui_script::capture_ui_active`'s sibling pattern);
-    // · whether anything wants this pass's phase split at all ([`super::UiCostWanted`]).
+    // Capture mode (the cursor icon quad) and [`super::UiCostWanted`], tupled to stay inside
+    // Bevy's 16-parameter system limit.
     run: (
         Option<Res<crate::run_mode::CaptureMode>>,
         Res<super::UiCostWanted>,
     ),
-    // The append-lane hole this pass parks for its UiQuadAppend producer: the `<Minimap>` widget
-    // slot (`minimap::emit_minimap` fills it with tile/arrow quads — decision 0203 phase 1). (The
-    // autocast shine's sites used to ride beside it; the shine is a model tile since 2014.)
+    // The `<Minimap>` widget slot, parked for `minimap::emit_minimap` to fill later in the frame.
     mut parked_minimap: ResMut<crate::minimap::MinimapWidget>,
-    // ── The extract gate's memory: last frame's conversion inputs ─────────────
-    // The conversion loop below is a pure function of (extracted, text_ui, the RASTER
-    // ENVIRONMENT, the portrait token map, the glyph-sheet generation) — the sprite caches are
-    // monotone path→handle, so equal inputs reproduce the same `UiQuads` the diff would then
-    // discard. Capture mode never skips (the harness wants exact per-frame output, including the
-    // cursor-icon quad's live mouse position).
-    //
-    // The raster environment is window size × seam scale × **`scale_factor`**, and that last term
-    // is decision 1342's correction. A monitor hop at an unchanged window size moves nothing else
-    // in this list, but it changes the integer device-pixel size every glyph rasterizes at
-    // (`TextEngine::ppem`) — so the quads held from last frame are the wrong size and the gate
-    // must miss. (1339 caught the same hole through an atlas-bake counter, which was the right
-    // fix for a design where the atlas re-baked; there is nothing to re-bake now, so the term that
-    // survives is the one that actually moved.)
-    //
-    // The generation term is the glyph sheet RESETTING — the one event that moves a cached cell's
-    // UV, which happens when the sheet fills and is repacked from empty. Held quads carry the old
-    // UVs and would draw letters as fragments of other letters.
-    //
-    // A [`crate::ui_script::VmMemo`] because a skip is not only a quad-conversion skip: it also skips
-    // `set_link_spans` and the minimap-slot / booth-pane refills, which are pushes INTO the VM. The
-    // VM lives for one login, so a fresh VM must never be gated on what the previous
-    // one extracted — its first frame is always a real conversion.
+    // The extract gate's memory. The conversion is a pure function of the extracted list, the
+    // editbox text UI, the raster (window size, seam scale, `scale_factor`), the portraits and the
+    // glyph-sheet generation. A `VmMemo`, since a skip also skips pushes into the VM, so a new
+    // VM's first frame always converts.
     mut prev: Local<crate::ui_script::VmMemo<GateInputs>>,
-    // This frame's phase split, published for whoever asked (the `[ui-cost]` line, `hover_log`).
     mut ui_cost: ResMut<super::UiFrameCost>,
-    // Whether the tick half ran this frame, and what it derived.
     pass: Res<super::UiPassState>,
 ) {
     let (capture, ui_cost_wanted) = run;
-    // The paint half stands down whenever the tick half did — no VM, or no window. Both of those
-    // arms already cleared the booth panes, and re-deriving the seam here would be inventing a
-    // frame the VM never had.
+    // Stand down with the tick half, which already cleared the booth panes.
     if !pass.live {
         return;
     }
@@ -842,7 +617,6 @@ pub(super) fn paint_script(
     let printing = ui_cost_enabled();
     let cost_on = printing || ui_cost_wanted.0;
     let mut t_mark = cost_on.then(std::time::Instant::now);
-    // Marks phase boundaries under the meter: returns μs since the previous mark and re-arms.
     let mut lap = move || -> u128 {
         if !cost_on {
             return 0;
@@ -851,12 +625,9 @@ pub(super) fn paint_script(
             .replace(std::time::Instant::now())
             .map_or(0, |t| t.elapsed().as_micros())
     };
-    // ── The SECOND measure + resolve, and the reason this half is its own system ─────────────
-    // Everything written into the VM since the tick half ran becomes real here — the nameplate
-    // anchors above all, which `vplates::drive_vplates` writes from a camera that did not exist
-    // when the tick half ran. Incremental: the ledger solves what is dirty, so a frame in which
-    // nothing moved pays a walk and no solve. A plate whose unit's NAME changed also needs its
-    // measure served here, which is why the round-trip comes along rather than the resolve alone.
+    // ── The second measure and resolve ───────────────────────────────────────────────────────
+    // What was written since the tick half, above all the nameplate anchors from this frame's
+    // camera (`vplates::drive_vplates`); a renamed plate needs its measure too.
     let mut measured_any = false;
     if let Some(atlas) = font_atlas.as_deref_mut() {
         measured_any = measure_fontstrings(&mut script, atlas, s, &mut ui_cost, ui_cost_wanted.0);
@@ -874,35 +645,25 @@ pub(super) fn paint_script(
     }
     // Folded into the tick half's own measure figure: one frame, one row.
     let us_measure = pass.us_measure + lap();
-    // The glyph sheet's repack counter — the extract gate's term, read here because the gate is
-    // here (a repack moves every cached cell's UV, so held quads would draw letter fragments).
+    // The glyph sheet's repack counter: a repack moves every cached cell's UV.
     let generation = font_atlas.as_deref().map(|a| a.generation);
     let extract_span = bevy::log::info_span!("ui_script: extract").entered();
     let mut out = Vec::new();
     let mut assets = world_assets;
     let mut minimap_slot = None;
-    // Hyperlink spans collected while rasterizing message-line Text quads (frame-targeted only —
-    // chat lines; FontString-region links are a later arc), fed back to the engine's click
-    // hit-test after the loop. Rects flip back to the engine's y-up space.
+    // Message lines' link spans for the click hit-test; region FontStrings' are not collected.
     let mut link_spans: Vec<(
         benilla_ui::widget::FrameHandle,
         benilla_ui::layout::Rect,
         String,
         String,
     )> = Vec::new();
-    // The EditBox advance-table answer (the metrics half of the mouse/selection law): the
-    // focused box's display string measured per-byte under the same shaping + step law as its
-    // draw, so the engine's click→index, drag-select, and scroll window land exactly on the
-    // glyphs. (The request reads the region's load-resolved font; the transient state-font
-    // overlay below never applies to an editbox text region.)
+    // The focused editbox's per-byte advances, measured as it draws, for click and scroll.
     if let Some(atlas) = font_atlas.as_deref_mut() {
         if let Some(req) = script.editbox_advances_request() {
             let spec = crate::ui_text::FontSpec {
                 path: req.font.as_deref(),
-                // Measured at the DRAWN raster size (seam × the box frame's scale) but divided
-                // back by the seam alone: the advances return in screen UI units, the space the
-                // engine's ÷s mouse feed and the box's scale-multiplied rect live in (the
-                // request's `scale` doc).
+                // At the drawn size, divided by the seam alone: screen UI units, like the mouse.
                 height: crate::ui_text::drawn_px(req.height, None, s * req.scale),
                 outline: req.outline,
                 alpha_gradient: None, // alpha never changes metrics
@@ -911,10 +672,7 @@ pub(super) fn paint_script(
                 .iter()
                 .map(|a| a / s)
                 .collect();
-            // A multiline box also gets its wrapped-row starts + row pitch — the same wrap pass
-            // the draw uses, so the engine's (row, x) caret/click law lands on the drawn rows.
-            // Advances/pitch return in UI units (÷s): the engine's click→index and row math
-            // compare them against the ÷s mouse feed.
+            // A multiline box also gets the draw's row starts and pitch, in UI units.
             let (rows, cell_h) = match req.wrap_width {
                 Some(w) => crate::ui_text::line_rows(&mut atlas.lock(), &req.text, w * s, spec),
                 None => (vec![0], 0.0),
@@ -922,22 +680,15 @@ pub(super) fn paint_script(
             script.set_editbox_advances(req.id, req.key, cum, rows, cell_h / s);
         }
     }
-    // The focused edit box's text-UI geometry (the engine leaves caret/highlight geometry to the
-    // host): which Text quad is the box's, the scroll window to draw, and the caret/selection
-    // x-spans within it — advance-derived engine-side (the blink phase too, `0x77a790`'s 0.5 s
-    // law in the engine tick), matched in the Text arm below.
+    // The focused editbox's text UI: its Text quad, scroll window, caret and selection spans,
+    // and the blink phase (0.5 s, `0x77a790`).
     let text_ui = script.focused_editbox_text_ui();
     let _ = lap(); // re-arm: the editbox seam above is not the walk's cost
     let extracted = script.extract();
     let us_exm = lap();
     let n_extracted = extracted.len();
     // ── The extract gate ──────────────────────────────────────────────────────
-    // Every input the conversion below reads, compared against last frame's. Equal inputs make
-    // the loop a pure re-derivation of `UiQuads` the diff at the bottom would discard — at the
-    // LBRS pin that was every single settled frame, ~0.3 ms/frame of glyph re-rasterization for
-    // an identical `Vec`. On a skip, `quads`/the parked minimap slot/the
-    // engine's link spans all keep last frame's values, which the equal inputs prove are this
-    // frame's values too.
+    // Equal inputs skip the conversion; the quads, minimap slot and link spans stay as they are.
     let dims = (w.to_bits(), h.to_bits(), s.to_bits(), dpi.to_bits());
     let settled = capture.is_none()
         && prev.dims == Some(dims)
@@ -978,9 +729,6 @@ pub(super) fn paint_script(
         }
         return;
     }
-    // `WOW_UI_GATE=1` — why the gate MISSED. A skip is worth the whole conversion, so the
-    // question "what moved?" is where a per-frame cost always ends, and a `Vec` inequality does
-    // not answer it. Off by default, like the `[ui-cost]` meter beside it.
     if gate_log_enabled() {
         report_gate_miss(
             &script,
@@ -992,22 +740,10 @@ pub(super) fn paint_script(
             booths.images.0 == prev.portraits,
         );
     }
-    // ── The per-entry splice: 1361's shape one layer up ──────────────────────────────────────
-    // The gate above is all-or-nothing, so ONE animating entry (the resting blink, a sweeping
-    // cooldown) used to re-convert the whole interface every frame. When the only input that
-    // moved is the extracted list itself, the lists are index-aligned (same length — the
-    // traversal is stable when nothing was created/destroyed/restacked), few entries differ,
-    // and every differing entry converts to nothing but quads (no link spans, no minimap slot,
-    // no booth panes), the changed entries re-convert alone — through the same [`convert_entry`]
-    // body, which is what makes the spliced output equal the full path's by construction — and
-    // stitch into last frame's `UiQuads` at the ranges `prev.spans` remembers. Everything else
-    // (the side channels, the panes map, the engine's link spans) keeps last frame's values,
-    // which the unchanged entries prove are this frame's too: the settled path's own argument,
-    // applied per entry.
+    // ── The per-entry splice ─────────────────────────────────────────────────────────────────
+    // When only the list moved and the few changed entries write only quads, they re-convert
+    // alone and stitch into last frame's `UiQuads` at the ranges `prev.spans` holds.
     'splice: {
-        // `WOW_UI_GATE=1` names why the SPLICE declined too — one line per frame, the same dial
-        // and the same posture as `[ui-gate]` above, because "the gate missed, and then the
-        // splice missed too" is one question asked twice. Histogram it in the shell.
         macro_rules! no_splice {
             ($($arg:tt)*) => {{
                 if gate_log_enabled() {
@@ -1028,27 +764,21 @@ pub(super) fn paint_script(
         if prev.generation != generation {
             no_splice!("font atlas generation moved");
         }
-        // The focused edit box carries the caret BLINK — wall-clock state that appears in no
-        // entry, and the one time-dependent input the Text arm reads. It is what makes text
-        // splice-safe at all: everything else the conversion reads is either in
-        // the entry or pinned by a guard above.
+        // The caret blink is wall-clock state in no entry, the Text arm's one time input.
         if text_ui != prev.text_ui {
             no_splice!("focused editbox text-ui moved");
         }
         if booths.images.0 != prev.portraits {
             no_splice!("portrait sources moved");
         }
-        // spans describe last conversion's `quads.quads` — if any future writer replaces the
-        // base lane out from under this pass, degrade to the full conversion instead of
-        // mis-stitching.
+        // The spans describe last conversion's list; if anything replaced it, convert in full.
         if prev.spans.len() != prev.extracted.len()
             || prev.spans.last().copied().unwrap_or(0) as usize != quads.quads.len()
         {
             no_splice!("span table stale");
         }
         let align = align_entries(&prev.extracted, &extracted);
-        // The entries this frame has to pay for, bounded: a real UI transition (a window
-        // opening) moves many, and the full conversion is the right tool there anyway.
+        // A window opening moves many entries, which the full conversion serves.
         const SPLICE_MAX: usize = 64;
         let changed: Vec<usize> = align
             .source
@@ -1063,15 +793,11 @@ pub(super) fn paint_script(
                 align.dropped.len()
             );
         }
-        // The all-equal case belongs to the settled gate above; reaching here with nothing to do
-        // means a comparison razor slipped — take the full path rather than risk skipping a
-        // change. (A frame that only *drops* entries has real work and is not this case.)
+        // All-equal belongs to the gate above; reaching here means two comparisons disagree.
         if changed.is_empty() && align.dropped.is_empty() {
             no_splice!("no entry differs (a comparison razor slipped)");
         }
-        // Checked on both ends: every entry being converted, and every entry LEAVING the list —
-        // a departing minimap slot would have to be un-parked, which the splice has
-        // no way to do.
+        // Departing entries too: the splice cannot un-park a departing minimap slot.
         if let Some(eq) = changed
             .iter()
             .map(|&j| &extracted[j])
@@ -1084,9 +810,7 @@ pub(super) fn paint_script(
                 script.target_owner_name(eq.target).unwrap_or_default()
             );
         }
-        // Re-convert just those entries. The scratch side channels are a tripwire: `simple`
-        // makes them unreachable today, and if an arm ever grows a new side effect the full path
-        // is the only safe answer.
+        // The scratch side channels are a tripwire: an entry that writes one takes the full path.
         let mut scratch: Vec<UiQuad> = Vec::new();
         let mut scratch_ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(changed.len());
         let mut scratch_links = Vec::new();
@@ -1114,9 +838,7 @@ pub(super) fn paint_script(
         if !scratch_links.is_empty() || scratch_slot.is_some() {
             no_splice!("a re-converted entry wrote a side channel");
         }
-        // The in-place case: nothing was inserted or removed, so every kept entry is still at
-        // its own index and every changed one still owns the same stretch of the list. This is
-        // the resting blink's shape and it writes bytes without moving any.
+        // In place: nothing inserted or removed, and each changed entry keeps its quad count.
         let identity = prev.extracted.len() == extracted.len()
             && align
                 .source
@@ -1138,12 +860,8 @@ pub(super) fn paint_script(
                 }
             }
         } else {
-            // Stitch a fresh list: the kept runs MOVED out of last frame's (a `UiQuad` carries an
-            // `Arc` texture handle, and copying ~1,400 of them a frame to rebuild a list is pure
-            // refcount traffic for no pixel), the re-converted entries from the scratch, and a
-            // re-derived span table. `prev.held` is the ping-pong buffer: the drain leaves last
-            // frame's allocation empty and we keep it for the next stitch, so a steady stream of
-            // tooltip changes allocates nothing.
+            // Stitch a fresh list: kept runs moved out of last frame's (no `Arc` clones), the
+            // re-converted entries from the scratch, new spans; `prev.held` keeps the allocation.
             let mut old = std::mem::take(&mut prev.held);
             std::mem::swap(&mut old, &mut quads.quads);
             quads.quads.clear();
@@ -1151,8 +869,7 @@ pub(super) fn paint_script(
             let mut new_spans: Vec<u32> = Vec::with_capacity(extracted.len());
             {
                 let mut src = old.drain(..);
-                // How many of last frame's quads the drain has already yielded — kept runs are
-                // strictly increasing (the merge only ever advances), so one forward pass does it.
+                // Quads the drain has yielded; kept runs strictly increase, so one pass does it.
                 let mut cursor = 0usize;
                 let mut ci = 0usize;
                 for s in &align.source {
@@ -1240,10 +957,8 @@ pub(super) fn paint_script(
     prev.text_ui = text_ui.clone();
     prev.portraits = booths.images.0.clone();
     prev.extracted = extracted.clone();
-    // This frame's booth panes, refilled by the loop below. Cleared only HERE, on
-    // the un-skipped path: a settled frame draws exactly what the last one did, so the map it left
-    // is still this frame's truth — clearing it above the gate would make every quiet frame put the
-    // body panes' cameras to sleep and freeze their animation.
+    // Cleared only on the full-conversion path: a settled frame's map is still true, and
+    // clearing it would put the body panes' cameras to sleep.
     booths.panes.0.clear();
     let mut spans: Vec<u32> = Vec::with_capacity(prev.extracted.len());
     for eq in extracted {
@@ -1266,12 +981,8 @@ pub(super) fn paint_script(
         spans.push(out.len() as u32);
     }
     prev.spans = spans;
-    // The payload held on the cursor draws last (a 32×32 icon at the mouse, over the whole UI) —
-    // but ONLY in capture mode: a normal run shows it as the hardware cursor
-    // instead (`crate::cursor`), which can't appear in a screenshot's pixels, so the quad is the
-    // capture harness's stand-in. Any arm, matching the hardware cursor's own `payload_icon`
-    // (item/spell/action alike — the item-only read here predated the spell/action producers).
-    // Purely visual either way — the drag state lives in the engine; the wire settles the move.
+    // Capture mode only: the held payload's icon at the mouse, for the hardware cursor a capture
+    // cannot show; every payload kind, as `crate::cursor`'s `payload_icon`.
     if capture.is_some() {
         use benilla_ui::script::CursorPayload;
         let texture = script.cursor_payload().and_then(|p| match p {
@@ -1296,12 +1007,10 @@ pub(super) fn paint_script(
         }
     }
 
-    // The rasterized hyperlink spans replace last frame's set — the engine's release dispatch
-    // (`OnHyperlinkClick`) hit-tests against exactly what is on screen.
+    // The link spans replace last frame's set, so `OnHyperlinkClick` hit-tests what is on screen.
     script.set_link_spans(link_spans);
 
-    // Park this frame's Minimap widget slot (or clear it — a hidden cluster extracts nothing);
-    // `minimap::emit_minimap` runs later in the frame (UiQuadAppend) and fills the hole.
+    // Park the slot for `minimap::emit_minimap`; `None` when the minimap is hidden.
     parked_minimap.0 = minimap_slot;
     drop(extract_span);
     let us_exa = lap();
@@ -1310,8 +1019,6 @@ pub(super) fn paint_script(
     let n_quads = out.len();
     let changed = quads.quads != out;
     if changed {
-        // `WOW_UI_DIFF=1` — the base-lane half of the rebuild-trigger probe (`ui_pass`' twin):
-        // names the first Lua-UI quad that differs from last frame's extraction.
         if ui_diff_enabled() {
             match quads.quads.iter().zip(&out).position(|(a, b)| a != b) {
                 Some(i) => {
@@ -1365,23 +1072,16 @@ pub(super) fn paint_script(
     }
 }
 
-/// One extracted entry converted to its screen quads, pushed onto `out` — with the side channels
-/// some arms carry: chat link spans (Text), the minimap widget slot (Minimap), the booth pane
-/// aspects (portrait-bound Texture), the model tile requests (ModelPane). The ONE
-/// conversion body: the full pass and the per-entry
-/// splice both call this, which is what makes the splice's output equal the full path's by
-/// construction. An arm is splice-eligible only if it writes nothing but `out` — keep
-/// [`splice_simple`] in agreement when an arm's side effects change.
+/// One extracted entry to its screen quads, plus the side channels some arms write: link spans,
+/// the minimap slot, booth pane aspects and tile requests. The full pass and the splice both call
+/// this; keep [`splice_simple`] in step with each arm's side effects.
 fn convert_entry(
     eq: benilla_ui::script::ExtractedQuad,
     s: f32,
-    // The window, logical px. `h` flips y-up WoW space into the y-down quad pass; `w` is here for
-    // the one producer whose law needs the SCREEN's shape — a model tile's layout unit and
-    // particle unit run on the screen diagonal.
+    // The window in logical px: `h` flips y, `w` gives model tiles the screen diagonal.
     w: f32,
     h: f32,
-    // The window's DEVICE scale, for the one arm that resamples its art to physical pixels: the
-    // nameplate border's 0188 sharpen, which is a no-op at any other size.
+    // The device scale, for the nameplate border resampled to physical pixels.
     dpi: f32,
     assets: &mut Option<ResMut<WorldAssets>>,
     images: &mut Assets<Image>,
@@ -1399,24 +1099,19 @@ fn convert_entry(
     minimap_slot: &mut Option<crate::minimap::MinimapSlot>,
 ) {
     let Some(r) = eq.rect else { return };
-    // WoW UI space is y-up from the bottom-left in 768-virtual units; the quad pass is
-    // y-down window px from the top-left — scale ×s, then flip through the window height.
+    // WoW UI space is y-up from the bottom-left: scale ×s, then flip through the window height.
     let rect = Rect::new(r.left * s, h - r.top * s, r.right * s, h - r.bottom * s);
     if let Some((at, r)) = ui_pick_point() {
         report_ui_pick(&eq, rect, at, r);
     }
-    // The ScrollFrame clip, through the same conversion as `rect` —
-    // `UiQuad::clip` is the CPU-clip stand-in `ui_pass` already applies uniformly to
-    // every quad (texture, backdrop, and glyph alike), so this is the entire app-side plumb.
+    // The ScrollFrame clip, converted like `rect`.
     let clip = eq
         .clip
         .map(|c| Rect::new(c.left * s, h - c.top * s, c.right * s, h - c.bottom * s));
     match eq.content {
-        // Frames draw nothing themselves in v1 (regions carry the visuals).
+        // A frame draws nothing itself; its regions carry the visuals.
         QuadContent::Frame => {}
-        // The `<Minimap>` widget's content hole: parked for the minimap renderer (an
-        // UiQuadAppend producer), which fills it at this exact z — the widget slot itself
-        // emits nothing here (decision 0203 phase 1).
+        // The `<Minimap>` content hole, parked for the minimap renderer to fill at this `z`.
         QuadContent::Minimap { zoom, inside_zoom } => {
             *minimap_slot = Some(crate::minimap::MinimapSlot {
                 rect,
@@ -1426,19 +1121,9 @@ fn convert_entry(
                 alpha: eq.alpha,
             });
         }
-        // A `<Model>`/`<PlayerModel>` pane's content: the off-screen body bake its window keeps,
-        // sampled square edge to edge. The pane→booth join is
-        // [`crate::portrait::model_pane_booth`], whose doc says why it is a table of frame names.
-        //
-        // This is the same draw the `portrait_unit` arm below makes for a Texture region, and it
-        // used to BE that draw: until decision 1751 a file of ours put a Texture inside each pane
-        // and named the slot with `BenillaSetBoothTexture`. A migrated window runs the reference's
-        // own file, which declares a bare `<PlayerModel>` and no Texture at all — so the widget
-        // itself has to draw, or the character sheet's paper doll is an empty rectangle.
-        //
-        // A FILE pane is a tile (2013; the map arrow among them since 2015); a UNIT pane joins
-        // the booth its window keeps. A pane with no name, or one no window claims, draws
-        // nothing. Nothing is stubbed white.
+        // A `<Model>`/`<PlayerModel>` pane draws itself, as the stock files declare a bare pane
+        // with no Texture: a file pane is a model tile, a unit pane samples its window's body
+        // bake square ([`crate::portrait::model_pane_booth`]), and an unclaimed pane draws nothing.
         QuadContent::ModelPane {
             handle,
             name,
@@ -1453,13 +1138,8 @@ fn convert_entry(
             fog,
         } => {
             use crate::portrait::PortraitSource;
-            // A FILE pane: publish what the tile renderer needs — the pane's
-            // device-pixel size, the reference's unit ladder off it, and where the composite
-            // goes (its rect, paint key, alpha and clip). The request is idempotent, so the
-            // memoized conversion may re-publish it freely; which panes draw is the engine's
-            // paint list, and the quad itself is the renderer's per-frame output
-            // (`ui_models::compose_tiles`) — NOT pushed here, because a cell
-            // packed after this conversion would wait on a re-conversion nothing triggers.
+            // A file pane publishes an idempotent tile request; `ui_models::compose_tiles` draws
+            // its quad each frame, so a cell packed later needs no re-conversion.
             if let Some(path) = model.as_deref() {
                 let tiles = &mut booths.tiles;
                 let dpi = tiles.dpi.max(0.01);
@@ -1475,7 +1155,7 @@ fn convert_entry(
                     crate::ui_models::TileRequest {
                         path: path.to_string(),
                         size_px,
-                        // `1 model unit = 1280 · modelScale · layoutScale` FrameXML units
+                        // 1 model unit is `1280 · modelScale · layoutScale` FrameXML units
                         // (`0x76d1a0`).
                         px_per_unit: 1280.0 * model_scale * layout * s * dpi,
                         // `SetPosition` is in layout units: `768 · √(a²+1)` FrameXML per unit.
@@ -1484,13 +1164,10 @@ fn convert_entry(
                         star_px_per_unit: 768.0 * diag * s * dpi,
                         facing,
                         position: Vec3::new(position.0, position.1, position.2),
-                        // The PERSPECTIVE leg's root, which is in model units,
-                        // not pixels: `T(pos · layoutScale) · R(facing) · S(s)` with
-                        // `s = G48·(5/3)·modelScale·layoutScale` — and `G48·(5/3)` is exactly
-                        // `√((4/3)²+1)/√(a²+1)`, the 4:3 renormalizer (`0x80655c`). The
-                        // camera is carried through the same matrix, so both terms cancel for
-                        // framing; they are here because the record's near/far are NOT scaled
-                        // with them, and because the geometry has to be drawn somewhere.
+                        // The perspective root, in model units: translate `pos · layoutScale`,
+                        // rotate `facing`, scale `G48 · (5/3) · modelScale · layoutScale`, where
+                        // `G48 · (5/3)` is the 4:3 renormalizer `√((4/3)²+1)/√(a²+1)`
+                        // (`0x80655c`); the near and far planes do not scale with it.
                         root_scale: (5.0 / 3.0) / diag * model_scale * layout,
                         root_pos: Vec3::new(position.0, position.1, position.2) * layout,
                         camera,
@@ -1499,7 +1176,7 @@ fn convert_entry(
                         icon: icon.clone(),
                         rect,
                         z_key: eq.z,
-                        // The instance draws at the widget's OWN alpha (`0x76d120`).
+                        // The instance draws at the widget's own alpha (`0x76d120`).
                         alpha: own_alpha,
                         clip,
                     },
@@ -1524,18 +1201,14 @@ fn convert_entry(
             let Some(slot) = name.as_deref().and_then(crate::portrait::model_pane_booth) else {
                 return;
             };
-            // The aspect the bake must render at, and the fact that it is on screen at all
-            // — published before the readiness check below for the same reason the
-            // `portrait_unit` arm does it there: a pane whose bake has not landed yet is still a
-            // pane being drawn, and gating the publish on the image would be a standoff.
+            // The aspect is published before the readiness check: the bake waits on the publish.
             if rect.height() > 0.0 {
                 booths
                     .panes
                     .0
                     .insert(slot.to_string(), rect.width() / rect.height());
             }
-            // The bake is a render target and carries PREMULTIPLIED colour; the 2D stand-in the
-            // slot shows while a model streams is an ordinary straight-alpha BLP.
+            // The bake is premultiplied; the 2D stand-in while a model streams is straight alpha.
             let (handle, premultiplied) = match booths.images.0.get(slot) {
                 Some(PortraitSource::Live(h)) => (Some(h.clone()), true),
                 Some(PortraitSource::File(p)) => (
@@ -1567,35 +1240,20 @@ fn convert_entry(
             rotation,
             desaturated,
         } => {
-            // A live unit portrait (`SetPortraitTexture(region, unit)`): sample this token's
-            // source ([`crate::portrait::PortraitImages`]) — the off-screen model bake, or the
-            // ref's 2D TemporaryPortrait stand-in while the model streams in. Absent entry (no
-            // booth yet) draws nothing rather than the run-splitter's white default.
+            // A live unit portrait (`SetPortraitTexture(region, unit)`): the model bake, or the
+            // reference's 2D TemporaryPortrait while the model streams; no entry yet draws nothing.
             if let Some(token) = &portrait_unit {
                 use crate::portrait::PortraitSource;
-                // Publish the rect's aspect so a booth can bake at the shape it will be
-                // stretched into, and know it is on screen at all. Recorded
-                // before the readiness `continue` below — a pane whose bake hasn't landed yet is
-                // still a pane being drawn, which is also what keeps the gate below from being a
-                // chicken-and-egg (nothing drawn → no bake → nothing drawn). The region's rect is
-                // the whole answer because no pane crops its bake; a pane that grew `<TexCoords>`
-                // would have to fold that UV window in here too.
-                //
-                // ROUND bindings are recorded too, since 1576. The aspect is inert for them (both
-                // of 1069's consumers are body-booth-only — see [`crate::portrait::BoothPanes`]);
-                // what the row carries for a round slot is the fact of being drawn, which is the
-                // `"targettarget"` portrait's cost gate. The `circular` flag itself still decides
-                // the draw below, and nothing else changed here.
+                // The aspect, published before the readiness check as in the model-pane arm; a
+                // round slot's row only marks it drawn, which gates the `"targettarget"` cost.
                 if rect.height() > 0.0 {
                     booths
                         .panes
                         .0
                         .insert(token.clone(), rect.width() / rect.height());
                 }
-                // The bake is a render target and carries PREMULTIPLIED colour; the 2D stand-in
-                // is an ordinary straight-alpha BLP. The quad pass has to be told which, or it
-                // premultiplies the bake a second time and erases every effect the pane draws
-                // over empty space (see [`crate::ui_pass::UiQuad::premultiplied`]).
+                // The bake is premultiplied, the stand-in straight alpha; unflagged, the pass
+                // would premultiply the bake twice and erase what it draws over empty space.
                 let (handle, premultiplied) = match booths.images.0.get(token) {
                     Some(PortraitSource::Live(h)) => (Some(h.clone()), true),
                     Some(PortraitSource::File(p)) => (
@@ -1611,23 +1269,16 @@ fn convert_entry(
                     rect,
                     z_key: eq.z,
                     texture: Some(handle),
-                    // A portrait binding honours `<TexCoords>`/`SetTexCoord` like any other
-                    // texture region — the bake is just the sampled image. The ref crops one
-                    // this way: the character micro button samples the same portrait slot as
-                    // the unit frame through a narrow (0.2..0.8, 0.0666..0.9) window, and
-                    // swaps that window when the button is pushed. This branch used to pin
-                    // UvRect::FULL, which silently squashed the whole square bake into
-                    // whatever rect the region had.
+                    // A portrait binding honours `SetTexCoord`: the character micro button crops
+                    // the player portrait (`MainMenuBarMicroButtons.lua:110,115`).
                     uv: match tex_coords {
                         Some(TexCoords::Rect(edges)) => UvRect::from_tex_coords(edges),
                         Some(TexCoords::Corners(corners)) => UvRect::from_corners(corners),
                         None => UvRect::FULL,
                     },
                     color: [1.0, 1.0, 1.0, eq.alpha],
-                    // The binding's mask flag: `SetPortraitTexture` regions cut the inscribed
-                    // circle (the ref stamps the same shape into its 64² bake's alpha — and
-                    // rounds the square stand-in art the same way); `BenillaSetBoothTexture`
-                    // (the paper-doll model pane) samples the bake square.
+                    // `SetPortraitTexture` cuts the inscribed circle, as the reference stamps into
+                    // its 64² bake's alpha; `BenillaSetBoothTexture` samples square.
                     circular,
                     premultiplied,
                     clip,
@@ -1635,69 +1286,28 @@ fn convert_entry(
                 });
                 return;
             }
-            // An unset texture region (no file, no color — e.g. a cleared icon) draws nothing;
-            // defaulting it to white would paint phantom quads.
+            // An unset texture region (no file, no colour, as a cleared icon) draws nothing.
             if path.is_none() && color.is_none() {
                 return;
             }
-            // A portrait region samples the circular-masked variant so the square icon/model
-            // doesn't poke past the frame ring's thin band (SetPortraitToTexture).
+            // A path the archives lack draws nothing. The reference keeps the widget's previous
+            // texture and returns nil to Lua (`CSimpleTexture::SetTexture`, `0x770200`); a path
+            // here is re-resolved every frame, so the cell is empty. With no `WorldAssets` at all
+            // (a data-less run) the quad draws untextured.
             //
-            // A path the archives don't have draws **nothing** — never a white slab. This arm
-            // used to fall through to `color.unwrap_or(WHITE)` with a `None` texture, which
-            // `ui_pass` renders as the shared 1×1 white image tinted white: an opaque white
-            // rectangle at the region's rect, which is how B221's macro icons reached the
-            // director's screen. What the reference does: `TextureCreate` does
-            // build an 8×8 placeholder, but `CSimpleTexture::SetTexture` (`0x770200`) checks the
-            // status severity and at ≥2 releases it and returns **without touching the widget's
-            // texture** — the widget keeps what it had, and Lua gets `nil`. Nothing goes white.
-            // We can't keep the *previous* art (a path is re-resolved per frame at extract, not
-            // latched at `SetTexture`), so the faithful-enough result is an empty cell; what
-            // matters is that it is never a phantom quad. The `Backdrop` and live-portrait arms
-            // already guard exactly this way.
-            //
-            // `assets` missing ENTIRELY is a data-less run (the headless UI tests), not a bad
-            // path — those keep the old behaviour rather than blanking every textured quad.
-            //
-            // `<TexCoords>`/`SetTexCoord` slices the sampled sub-rect. The 4-edge form
-            // `[left,right,top,bottom]` maps to raw UV corners (`left→u0, right→u1, top→v0,
-            // bottom→v1`) — carried through [`UvRect`] rather than a normalized `Rect` so a
-            // mirrored slice (`left>right`, e.g. PlayerFrameTexture) keeps its flip to the
-            // vertex buffer. The 8-arg affine form is already per-corner in the `push_quad`
-            // winding (the route-line quads). Absent = the full texture. Resolved BEFORE the
-            // handle because the wrap mode follows it:
+            // `SetTexCoord`'s edges map to raw UV corners, so a mirrored slice (`left > right`)
+            // keeps its flip; resolved before the handle because the wrap mode follows it.
             let uv = match tex_coords {
                 Some(TexCoords::Rect(edges)) => UvRect::from_tex_coords(edges),
                 Some(TexCoords::Corners(corners)) => UvRect::from_corners(corners),
                 None => UvRect::FULL,
             };
-            // A slice that runs PAST the texture is the reference's tiling idiom, not a crop:
-            // `SetTexCoord(0, n, 0, 1)` on an n-slots-wide strip repeats the art n times — the
-            // stance shelf's middle carries one slot per extra form exactly that way
-            // (stock `ShapeshiftBar_Update`). Clamp-sampled it smears the last column
-            // across the extra width instead. Clamp/repeat bake into the `Image`, so this picks
-            // a wrapped GPU image + cache entry — wrapped on the tiling axis ALONE
-            // (`tiling_axes`): the other axis spans the whole texture, and a
-            // `Repeat` sampler there is a bleed, not a tile — bilinear at `v = 0` weighs in the
-            // texture's last row, which on `ShapeshiftBarMiddle` is opaque grey, so every
-            // four-form stance bar drew a one-px grey hairline along the top of its middle
-            // strip, over the world. The `Backdrop` arm below keeps both axes on: its bg tiles
-            // both ways and its edge crops never reach the image edge (`inset_atlas_bleed`).
+            // A slice past the texture tiles (`BonusActionBarFrame.lua:173`), on that axis alone.
             let wrap = tiling_axes(&uv);
             let handle = match (path.as_deref(), assets.as_mut()) {
                 (Some(p), Some(a)) => {
-                    // The tabard designer's emblem cells (1977): the reference installs a
-                    // generated 128×64 / 128×32 image — white RGB carrying the emblem BLP's own
-                    // alpha — into the Texture the setter was handed; the region carries that as
-                    // a token path and the resolver builds exactly that image.
                     let resolved = if p == benilla_ui::script::nameplate::BORDER_TEXTURE {
-                        // **Where the plate actually PAINTED**, on the same `vpl` tag the driver's
-                        // own seat line rides (`vplates`'s jitter decomposition). The driver says
-                        // where it put the plate; this says where the frame system drew it, in the
-                        // same window px — so "is the paint this frame's or last frame's?" is a
-                        // diff of two numbers instead of an argument about the schedule. It is the
-                        // measurement decision 2168 was taken on, and the one that proves it
-                        // stays fixed.
+                        // Where the frame system painted the plate, beside the driver's `vpl` line.
                         if benilla_assets::trace::enabled_for("vpl") {
                             benilla_assets::trace::line(
                                 "vpl",
@@ -1707,13 +1317,9 @@ fn convert_entry(
                                 ),
                             );
                         }
-                        // The V-plate's frame art, resampled to the quad's exact PHYSICAL size
-                        // with the sharp kernel instead of GPU-magnified (the director's
-                        // "sharpen the same frame", carried across decision 2148's move of the
-                        // plate into the frame system). Keyed by that size, so it re-rasterises on
-                        // a resize and is a cache hit on every frame in between. An addon that
-                        // blanks the border with `SetTexture("")` never reaches here at all: the
-                        // path is gone, and the arm above draws nothing.
+                        // Deviation: the V-plate border is resampled sharp to the quad's physical
+                        // size rather than GPU-magnified, so its 1 px bevel stays crisp; keyed by
+                        // that size, so only a resize re-rasterises it.
                         let px = |v: f32| (v * dpi).round().max(1.0) as u32;
                         a.resampled_sprite(
                             p,
@@ -1722,8 +1328,11 @@ fn convert_entry(
                             crate::vplates::border::resample_sharp,
                         )
                     } else if let Some(blp) = benilla_ui::script::emblem_mask_path(p) {
+                        // A tabard emblem cell: the reference installs a generated 128×64 or
+                        // 128×32 image, white carrying the emblem BLP's alpha.
                         a.emblem_mask_texture(blp, images)
                     } else if circular {
+                        // The circle-masked variant (`SetPortraitToTexture`).
                         a.portrait_texture(p, images)
                     } else if wrap != (false, false) {
                         a.sprite_texture_wrapped(p, wrap, images)
@@ -1737,11 +1346,7 @@ fn convert_entry(
                 }
                 _ => None,
             };
-            // The atlas-cell guard: a `SetTexCoord` crop is a cell of a sheet,
-            // and bilinear magnification reaches past it into the neighbour unless the fragment
-            // is told where the cell ends. The world map's zone POIs are the case that forced it
-            // — `POIIcons` cell 15 is fully transparent and the cell above it is a coffin whose
-            // bottom row is opaque black, so every zone landmark wore a black hairline.
+            // A crop's magnified edge would filter in the neighbouring atlas cell.
             let uv_clamp = handle
                 .as_ref()
                 .and_then(|h| images.get(h))
@@ -1759,16 +1364,13 @@ fn convert_entry(
                 color,
                 additive,
                 clip,
-                // The engine's SetRotation is counterclockwise-positive; the quad pass spins
-                // clockwise-on-screen (`UiQuad::rotation`) — negate to convert.
+                // `SetRotation` is counter-clockwise-positive, `UiQuad::rotation` clockwise.
                 rotation: -rotation,
                 desaturated,
                 ..default()
             });
         }
-        // The colour picker's hue disc: a generated image (there is no BLP that is a colour
-        // wheel), tinted by the widget's value. See [`colorselect`] for why one static image
-        // covers every colour.
+        // The colour picker's hue disc, a generated image drawn at full value ([`colorselect`]).
         QuadContent::ColorWheel => {
             let Some(assets) = assets.as_mut() else {
                 return;
@@ -1785,8 +1387,7 @@ fn convert_entry(
                 ..default()
             });
         }
-        // Its brightness strip: one greyscale ramp tinted to the live hue at full value, which is
-        // exactly `rgb(h, s, v)` at every row.
+        // Its brightness strip: the grey ramp tinted `rgb(h, s, 1)`.
         QuadContent::ColorValue { hue, sat } => {
             let Some(assets) = assets.as_mut() else {
                 return;
@@ -1809,10 +1410,8 @@ fn convert_entry(
             uvs,
             tile,
         } => {
-            // A frame Backdrop piece (bg or one of the 8 border pieces). Repeat-sampled when
-            // `tile` (edges tile past UV 1; a tiled bg wraps) — its own GPU image + cache
-            // (`sprite_texture_tiled`) since clamp/repeat bake into the `Image`. The four UVs are
-            // explicit per-corner (the rotated TOP/BOTTOM edges), so they go straight to `UvRect`.
+            // A backdrop piece, the bg or one of the 8 border pieces, sampled `Repeat` when `tile`;
+            // its UVs are per-corner, as the TOP and BOTTOM edges are rotated.
             let handle = assets.as_mut().and_then(|a| {
                 if tile {
                     a.sprite_texture_tiled(&path, images)
@@ -1820,13 +1419,10 @@ fn convert_entry(
                     a.sprite_texture(&path, images)
                 }
             });
-            // No texture (missing BLP) ⇒ draw nothing rather than a phantom solid quad.
+            // A missing BLP draws nothing.
             let Some(handle) = handle else { return };
-            // The 8 border pieces share one atlas, so bilinear at a piece's own edge blends in the
-            // NEIGHBOURING piece's first column unless the UVs are pulled half a texel inward
-            // (1402). `tile` is exactly the border-piece predicate here — every one of the 8 sets
-            // it, and a stretched bg (the only `tile: false` piece) is a whole texture, not a
-            // slice of one, so it is left alone.
+            // The 8 border pieces share one atlas, so a `tile` piece is pulled half a texel in on
+            // its bounded axes; a stretched bg is a whole texture.
             let uvs = match images.get(&handle) {
                 Some(img) if tile => {
                     let sz = img.texture_descriptor.size;
@@ -1859,10 +1455,7 @@ fn convert_entry(
             alpha_gradient,
             world_seat,
         } => {
-            // No atlas (no client data / Friz Quadrata unreadable — see `ui_text`'s startup
-            // system) means text simply doesn't render, same graceful-absence posture as a
-            // missing `WorldAssets`. The rasterization itself (editbox window, ellipsis,
-            // shadow, links, caret) lives in `text::emit`.
+            // No atlas (no client data, or an unreadable font) draws no text.
             let (Some(atlas), Some(text)) = (font_atlas.as_deref_mut(), text) else {
                 return;
             };
@@ -1900,22 +1493,17 @@ fn convert_entry(
     }
 }
 
-/// One pass of the FontString measure round-trip: hand every unmeasured FontString to the font
-/// engine and push the answers back. Returns whether anything was measured — the caller's gate for
-/// its backstop pass (see the call site for why the order matters).
+/// One pass of the FontString measure round-trip; true when anything was measured.
 fn measure_fontstrings(
     script: &mut UiScript,
     atlas: &mut UiFontAtlas,
     s: f32,
     ui_cost: &mut super::UiFrameCost,
-    // The churn column is the recorder's alone ([`super::UiCostWanted`]) — the `[ui-cost]` line
-    // reports counts, not the strings behind them, and collecting them is not free.
+    // The hover recorder's churn column; the `[ui-cost]` line reports only counts.
     record_texts: bool,
 ) -> bool {
     let requests = script.fontstrings_needing_measure();
-    // The recorder's churn column: WHICH strings a frame had to re-shape. A steady hover that
-    // keeps asking is the whole question (`hover_log`), and the answer is a string, not a count —
-    // so the first few come along by name.
+    // The first few strings a frame re-shaped, by name.
     if record_texts {
         ui_cost.measured += requests.len();
         ui_cost.measured_texts.extend(
@@ -1928,9 +1516,7 @@ fn measure_fontstrings(
     if requests.is_empty() {
         return false;
     }
-    // Every answer goes through the ONE measure body ([`crate::ui_text::measure_request`]) the VM's
-    // own synchronous measurer calls, against the same shared engine — so a string measured here
-    // and the same string measured mid-tick are not two computations that agree, they are one.
+    // The VM's synchronous measurer's own body and engine ([`crate::ui_text::measure_request`]).
     let measures: Vec<(u32, f32, f32, f32, u64)> = requests
         .iter()
         .map(|r| {
@@ -1942,13 +1528,8 @@ fn measure_fontstrings(
     true
 }
 
-/// The held-cursor icon quad (CAPTURE-ONLY — see the module doc): a 32×32 icon TOP-LEFT anchored
-/// at the mouse (`pos`, y-down logical px — the same space as the extracted quad rects and the
-/// hardware cursor's own coordinate origin), `[pos, pos + 32]` — matching the hardware cursor's
-/// `(0, 0)` hotspot: the pointer sits at the icon's top-left corner and the
-/// icon hangs down-right, the reference look, rather than centering on the mouse. Seated above the
-/// whole UI (`z_key = u64::MAX` sorts last → drawn on top). Pure geometry so it's
-/// machine-checkable without a live mouse.
+/// The held-cursor icon for captures: 32×32 hanging down-right from the mouse, the reference's
+/// look with the hardware cursor's `(0, 0)` hotspot, above the whole UI.
 fn cursor_icon_quad(pos: Vec2, texture: Handle<Image>) -> UiQuad {
     const SIZE: f32 = 32.0;
     UiQuad {
@@ -1959,16 +1540,12 @@ fn cursor_icon_quad(pos: Vec2, texture: Handle<Image>) -> UiQuad {
     }
 }
 
-/// The atlas-cell guard's law — see [`uv_clamp_window`]. Each case is a shape the
-/// shipped UI actually draws, and the three that return `None` are the three ways a crop is not a
-/// cell.
+/// [`uv_clamp_window`] and [`tiling_axes`] on shapes the stock UI draws.
 #[cfg(test)]
 mod uv_clamp_tests {
     use super::{tiling_axes, uv_clamp_window, UvRect};
 
-    /// The bug's own numbers: `POIIcons` is 128², a world-map POI samples cell (7,1), and the
-    /// window has to stop half a texel (`0.5/128`) inside it — a hair below texel row 16's centre
-    /// is where the coffin above stopped leaking in.
+    /// `POIIcons` is 128², and a world-map POI samples its cell (7, 1).
     #[test]
     fn a_poi_icons_cell_stops_half_a_texel_inside_itself() {
         let uv = UvRect::from_tex_coords([0.875, 1.0, 0.125, 0.25]);
@@ -1980,16 +1557,12 @@ mod uv_clamp_tests {
         assert!((w[3] - (0.25 - half)).abs() < 1e-6, "v_max {}", w[3]);
     }
 
-    /// The whole texture is already clamped by the sampler — a window here would only cost a
-    /// batch split.
     #[test]
     fn the_whole_texture_asks_for_no_window() {
         assert!(uv_clamp_window(&UvRect::FULL, (128, 128)).is_none());
     }
 
-    /// The stance shelf's middle strip past two forms: `SetTexCoord(0, n-2, 0, 1)` tiles along u
-    /// and spans the whole texture in v — only u wraps. Both axes `Repeat` was the four-form
-    /// bar's hairline.
+    /// The stance bar's middle strip, `SetTexCoord(0, n-2, 0, 1)` (`BonusActionBarFrame.lua:173`).
     #[test]
     fn a_one_axis_strip_wraps_that_axis_only() {
         assert_eq!(
@@ -2002,8 +1575,6 @@ mod uv_clamp_tests {
         );
     }
 
-    /// Three forms: `SetTexCoord(0, 1, 0, 1)` is the whole texture — nothing tiles, the plain
-    /// clamped sprite serves it. And a crop inside the texture is a cell, never a tile.
     #[test]
     fn a_bounded_mapping_tiles_nothing() {
         assert_eq!(
@@ -2017,8 +1588,6 @@ mod uv_clamp_tests {
         );
     }
 
-    /// A mapping past the texture on both axes (a tiled backdrop bg) wraps both — the tiled
-    /// image's case, unchanged.
     #[test]
     fn a_two_axis_tile_wraps_both() {
         assert_eq!(
@@ -2027,8 +1596,6 @@ mod uv_clamp_tests {
         );
     }
 
-    /// `SetTexCoord(0, n, 0, 1)` on an n-slot strip is the reference's TILING idiom (the stance
-    /// shelf): the repeating axis keeps its exact period, the bounded one still gets its window.
     #[test]
     fn a_tiling_axis_is_left_alone_while_its_bounded_partner_is_not() {
         let uv = UvRect::from_tex_coords([0.0, 3.0, 0.0, 0.5]);
@@ -2038,8 +1605,6 @@ mod uv_clamp_tests {
         assert!((w[3] - (0.5 - 0.5 / 64.0)).abs() < 1e-6);
     }
 
-    /// A mirrored slice (`left > right` — the PlayerFrame ring) is still one cell: the window is
-    /// built from the corner EXTENTS, so the flip survives it untouched.
     #[test]
     fn a_mirrored_slice_is_clamped_by_its_extents() {
         let uv = UvRect::from_tex_coords([0.5, 0.25, 0.0, 1.0]);
@@ -2052,8 +1617,6 @@ mod uv_clamp_tests {
         );
     }
 
-    /// A crop thinner than one texel has no interior to inset toward — both bounds pin to its
-    /// centre, which is the single texel it means (and stays a VALID, enabled range).
     #[test]
     fn a_sub_texel_crop_pins_to_the_texel_it_names() {
         let uv = UvRect::from_tex_coords([0.5, 0.505, 0.0, 1.0]);
@@ -2072,26 +1635,19 @@ mod cursor_quad_tests {
     #[test]
     fn cursor_icon_quad_is_32px_top_left_anchored_at_the_hotspot() {
         let q = cursor_icon_quad(Vec2::new(100.0, 200.0), Handle::default());
-        // 32×32, top-left anchored on the mouse (the hardware cursor's (0,0) hotspot) — hangs
-        // down-right: [100..132, 200..232].
         assert_eq!(
             (q.rect.min.x, q.rect.min.y, q.rect.max.x, q.rect.max.y),
             (100.0, 200.0, 132.0, 232.0)
         );
         assert_eq!(q.rect.width(), 32.0);
         assert_eq!(q.rect.height(), 32.0);
-        // Above every frame, and textured (straight-alpha, not additive).
         assert_eq!(q.z_key, u64::MAX);
         assert!(q.texture.is_some());
         assert!(!q.additive);
     }
 }
 
-/// The app-side half of the ScrollFrame clip plumb: does a [`UiQuad`] built from a
-/// clipped [`QuadContent::Texture`] actually carry `clip` through the UI pass? Drives the real
-/// systems in a minimal headless `App` (no `DefaultPlugins` — just the resources the pass
-/// reads), rather than re-deriving the y-up→y-down flip by hand: that flip is exactly the seam this
-/// test exists to catch a regression in.
+/// A ScrollFrame clip through the real UI pass systems in a headless `App`, y flip included.
 #[cfg(test)]
 mod clip_plumb_tests {
     use bevy::math::Rect;
@@ -2103,12 +1659,7 @@ mod clip_plumb_tests {
     use super::{paint_script, tick_script, UiQuad, UiQuads};
     use crate::portrait::PortraitImages;
 
-    /// A headless app with exactly the resources/entities the UI pass reads: a `NonSend` VM
-    /// carrying a ScrollFrame + scrolled-out child + a colored (pathless) Texture region marker, a
-    /// 1024×768 primary window (the 768-virtual design height — s = 1, so the WoW-space rects are
-    /// known by hand), and every other resource
-    /// left at its default (`WorldAssets`/`UiFontAtlas` absent — no BLP/font pipeline needed to prove
-    /// the clip carries through a plain colored quad).
+    /// A ScrollFrame with a coloured marker in its scroll child, on a 1024×768 window (`s = 1`).
     fn app_with_scrolled_marker() -> App {
         let script = UiScript::new().unwrap();
         script
@@ -2130,7 +1681,6 @@ mod clip_plumb_tests {
         let mut app = App::new();
         app.insert_non_send_resource(script);
         app.init_resource::<UiQuads>();
-        // The pass's own handover (2168) — the tick half writes it, the paint half reads it.
         app.init_resource::<crate::ui_script::UiPassState>();
         app.init_resource::<Assets<Image>>();
         app.init_resource::<PortraitImages>();
@@ -2142,8 +1692,7 @@ mod clip_plumb_tests {
         app.init_resource::<Time>();
         app.init_resource::<Time<Real>>();
         app.init_resource::<crate::ui_script::UiClock>();
-        // The uiScale dial at its identity Default (1.0) — tests pin the byte-identity base;
-        // the shipped app inserts the taste default instead.
+        // The uiScale dial at 1.0, the identity.
         app.init_resource::<crate::ui_script::UiScaleCvar>();
         app.world_mut().spawn((
             Window {
@@ -2152,8 +1701,7 @@ mod clip_plumb_tests {
             },
             PrimaryWindow,
         ));
-        // The pass is two systems since 2168, and a test that drives it drives BOTH — the quads are
-        // the second half's.
+        // Both halves of the pass: the quads are the paint half's.
         app.add_systems(Update, (tick_script, paint_script).chain());
         app
     }
@@ -2169,8 +1717,8 @@ mod clip_plumb_tests {
             .find(|q| q.color[0] == 1.0 && q.color[1] == 0.0 && q.color[2] == 0.0)
             .expect("the colored marker quad extracted");
 
-        // WoW space: frame rect [bottom 468, left 0, top 668, right 300]; the quad pass is y-down
-        // from the top-left, so `y_down = window_height - y_up`: bottom(468)->300, top(668)->100.
+        // WoW space: bottom 468, left 0, top 668, right 300; y-down through the 768 window, the
+        // top is 100 and the bottom 300.
         assert_eq!(
             marker.clip,
             Some(Rect::new(0.0, 100.0, 300.0, 300.0)),
@@ -2178,9 +1726,7 @@ mod clip_plumb_tests {
         );
     }
 
-    /// The uiScale dial through the same plumb, by hand: at dial 0.5 on the same
-    /// 1024×768 window, s = 0.5 and the VM sees a 2048×1536 virtual screen — the TOPLEFT-anchored
-    /// frame hangs from virtual top 1536, and every window-px rect halves.
+    /// At dial 0.5 the VM sees a 2048×1536 screen, and every window-px rect halves.
     #[test]
     fn the_uiscale_dial_scales_the_extracted_rects() {
         let mut app = app_with_scrolled_marker();
@@ -2193,8 +1739,8 @@ mod clip_plumb_tests {
             .find(|q| q.color[0] == 1.0 && q.color[1] == 0.0 && q.color[2] == 0.0)
             .expect("the colored marker quad extracted");
 
-        // WoW space: frame top = 1536 − 100 = 1436, bottom 1236, right 300. ×0.5 → px y-up
-        // [618..718, 0..150]; y-down through the 768 window: top 768−718 = 50, bottom 768−618 = 150.
+        // WoW space: top 1536 − 100 = 1436, bottom 1236, right 300; ×0.5 is y-up px 618..718,
+        // and y-down through the 768 window the top is 50 and the bottom 150.
         assert_eq!(
             marker.clip,
             Some(Rect::new(0.0, 50.0, 150.0, 150.0)),
@@ -2221,7 +1767,6 @@ mod clip_plumb_tests {
         let mut app = App::new();
         app.insert_non_send_resource(script);
         app.init_resource::<UiQuads>();
-        // The pass's own handover (2168) — the tick half writes it, the paint half reads it.
         app.init_resource::<crate::ui_script::UiPassState>();
         app.init_resource::<Assets<Image>>();
         app.init_resource::<PortraitImages>();
@@ -2241,8 +1786,7 @@ mod clip_plumb_tests {
             },
             PrimaryWindow,
         ));
-        // The pass is two systems since 2168, and a test that drives it drives BOTH — the quads are
-        // the second half's.
+        // Both halves of the pass: the quads are the paint half's.
         app.add_systems(Update, (tick_script, paint_script).chain());
         app.update();
 
@@ -2255,21 +1799,15 @@ mod clip_plumb_tests {
     }
 }
 
-/// The extract gate: a settled frame skips the whole conversion loop, and — the
-/// dangerous direction — any extract-visible change must reopen it, INCLUDING paint-only writes
-/// that never dirty the layout gate. Uses the same minimal headless app as `clip_plumb_tests`.
-/// The alignment merge ([`align_entries`]) — the half of the splice that sees through a shift.
-///
-/// The cases are built from a REAL extract list, because `FrameHandle` keeps its fields private
-/// on purpose: an entry's `z` is a packed [`benilla_ui::order::ZKey`] and hand-forging one would
-/// test a fiction rather than the traversal's own keys.
+/// [`align_entries`] on a real extract list: `FrameHandle`'s fields are private, and a forged
+/// [`benilla_ui::order::ZKey`] would test a fiction.
 #[cfg(test)]
 mod align_tests {
     use benilla_ui::script::{ExtractedQuad, QuadContent, UiScript};
 
     use super::align_entries;
 
-    /// Four regions across two frames — a z-sorted list with genuine keys to permute.
+    /// Four regions across two frames: a z-sorted list with genuine keys.
     fn entries() -> Vec<ExtractedQuad> {
         let mut script = UiScript::new().unwrap();
         script
@@ -2298,8 +1836,6 @@ mod align_tests {
         list
     }
 
-    /// A repaint of one entry: it converts, its old self is dropped, and every other entry keeps
-    /// its own quads — the shape the splice has always handled, restated on the new machinery.
     #[test]
     fn a_changed_entry_is_the_only_one_that_converts() {
         let was = entries();
@@ -2324,15 +1860,11 @@ mod align_tests {
         }
     }
 
-    /// **The case a positional compare cannot see**: one entry appears in the
-    /// middle and every entry behind it shifts by one. All of them must keep their quads —
-    /// before this, index `j` was compared against a stranger and the whole list re-converted.
     #[test]
     fn an_insertion_shifts_the_tail_and_costs_one_conversion() {
         let was = entries();
-        // The insertion needs a `z` strictly between its neighbours' — the merge reads a sorted
-        // list — so seat it at the first pair with room. Sibling regions differ by 1 in the key's
-        // declaration-order field; a frame boundary leaves a wide gap.
+        // The new `z` goes strictly between its neighbours', at the first pair with room:
+        // sibling regions differ by 1, a frame boundary leaves a wide gap.
         let at = (1..was.len())
             .find(|&i| was[i].z - was[i - 1].z > 1)
             .expect("some adjacent pair has room between its keys");
@@ -2357,8 +1889,6 @@ mod align_tests {
         }
     }
 
-    /// The mirror: an entry vanishes, nothing converts at all, and the tail keeps its quads from
-    /// one place forward. The splice must still run — the quads have to leave the list.
     #[test]
     fn a_deletion_converts_nothing_and_still_has_work() {
         let was = entries();
@@ -2381,8 +1911,6 @@ mod align_tests {
         }
     }
 
-    /// Two lists with nothing in common align to nothing kept — the bound above this call is
-    /// what then sends the frame to the full conversion.
     #[test]
     fn a_wholly_new_list_keeps_nothing() {
         let was = entries();
@@ -2400,6 +1928,8 @@ mod align_tests {
     }
 }
 
+/// A settled frame skips the conversion, and any extract-visible change reopens it, paint-only
+/// writes included.
 #[cfg(test)]
 mod extract_gate_tests {
     use bevy::prelude::*;
@@ -2423,16 +1953,14 @@ mod extract_gate_tests {
         )
     }
 
-    /// The same headless app around an arbitrary boot script. The splice tests boot a SECOND
-    /// app straight into a mutated app's final state: its first frame is by construction the
-    /// full conversion the spliced output must equal.
+    /// The headless app around a boot script; one booted into another's end state converts in
+    /// full on its first frame, the result a splice must equal.
     fn app_from_script(lua: &str) -> App {
         let script = UiScript::new().unwrap();
         script.run(lua).unwrap();
         let mut app = App::new();
         app.insert_non_send_resource(script);
         app.init_resource::<UiQuads>();
-        // The pass's own handover (2168) — the tick half writes it, the paint half reads it.
         app.init_resource::<crate::ui_script::UiPassState>();
         app.init_resource::<Assets<Image>>();
         app.init_resource::<PortraitImages>();
@@ -2452,8 +1980,7 @@ mod extract_gate_tests {
             },
             PrimaryWindow,
         ));
-        // The pass is two systems since 2168, and a test that drives it drives BOTH — the quads are
-        // the second half's.
+        // Both halves of the pass: the quads are the paint half's.
         app.add_systems(Update, (tick_script, paint_script).chain());
         app
     }
@@ -2465,15 +1992,14 @@ mod extract_gate_tests {
         assert!(app.world().resource::<UiQuads>().dirty, "first frame draws");
         app.world_mut().resource_mut::<UiQuads>().dirty = false;
 
-        app.update(); // frame 2: identical inputs — the gate must leave the resource alone
+        app.update(); // frame 2: identical inputs
         assert!(
             !app.world().resource::<UiQuads>().dirty,
             "a settled frame must not re-mark the quads dirty"
         );
 
-        // A PAINT-ONLY write: invisible to the layout gate (no anchors/size moved), so only the
-        // extracted-list compare can reopen extraction. If the gate wrongly ate it, the marker
-        // would stay red on screen.
+        // A paint-only write, invisible to the layout gate: only the extracted-list compare can
+        // reopen extraction.
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
             .run("marker:SetTexture(0, 0, 1)")
@@ -2508,18 +2034,8 @@ mod extract_gate_tests {
         );
     }
 
-    /// **A `<PlayerModel>` pane draws its window's booth, and an unclaimed one draws nothing**.
-    ///
-    /// The engine verb the stock character sheet needed. `PaperDollFrame.xml` declares a bare
-    /// `<PlayerModel name="CharacterModelFrame">` with no texture in it at all — our own deleted
-    /// file put a `<Texture>` there and named the booth with `BenillaSetBoothTexture` — so without
-    /// this the migrated window's paper doll is an empty rectangle, which no loader error and no
-    /// missing global would have said a word about.
-    ///
-    /// Both halves are asserted because the second is what keeps the first honest: the join is a
-    /// table of frame names ([`crate::portrait::model_pane_booth`]), and a pane no window claims —
-    /// pfUI's anonymous `CreateFrame("Model")` autocast shine is the corpus case — must draw
-    /// nothing rather than borrow somebody's bake.
+    /// `PaperDollFrame.xml:204` declares a bare `<PlayerModel name="CharacterModelFrame">`; a pane
+    /// no window claims ([`crate::portrait::model_pane_booth`]) must not borrow a bake.
     #[test]
     fn a_named_model_pane_samples_its_booth_and_an_unclaimed_one_draws_nothing() {
         let mut app = app_from_script(
@@ -2558,8 +2074,6 @@ mod extract_gate_tests {
             panes[0].premultiplied,
             "a render-target bake carries premultiplied colour"
         );
-        // …and the pane published its aspect, which is what lets the booth render at the shape it
-        // will be stretched into and what tells it it is on screen at all.
         let aspect = app
             .world()
             .resource::<crate::portrait::BoothPanes>()
@@ -2573,16 +2087,11 @@ mod extract_gate_tests {
         );
     }
 
-    /// **A booth bake reaches the quad pass flagged PREMULTIPLIED, an ordinary region does not**.
-    /// This is the wiring half of the paper-doll/dressing-room fix, and it is the
-    /// half that can silently rot: the shader's `select(a, k, premultiplied)` is only correct if
-    /// exactly the render-target quads carry the flag. Drop it and every additive effect the pane
-    /// draws over EMPTY space is multiplied by its own zero alpha again — the R14 pauldrons' fire
-    /// gone, a weapon glow chopped at the model's silhouette.
+    /// The shader's `select(a, k, premultiplied)` is right only if exactly the render-target quads
+    /// carry the flag; unflagged, an additive effect over empty space is lost.
     #[test]
     fn a_booth_bake_quad_is_flagged_premultiplied_and_a_plain_one_is_not() {
         let mut app = app_with_marker();
-        // The paper doll's own binding — the square booth pane (`BenillaSetBoothTexture`).
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
             .run("BenillaSetBoothTexture(marker, 'paperdoll')")
@@ -2616,10 +2125,7 @@ mod extract_gate_tests {
         );
     }
 
-    /// The per-entry splice, in-place half: a one-entry paint write must ride the splice
-    /// (`UiFrameCost::spliced == 1` — nonzero is the proof the path FIRED, without which this
-    /// test is vacuous) and produce byte-identically what the full conversion produces —
-    /// checked against a fresh app booted straight into the final state.
+    /// `spliced == 1` proves the splice fired; the result must equal a fresh app's full conversion.
     #[test]
     fn a_one_entry_paint_write_splices_and_matches_the_full_conversion() {
         let mut app = app_with_marker();
@@ -2721,15 +2227,10 @@ mod extract_gate_tests {
         );
     }
 
-    /// **A frame appearing shifts every entry behind it, and the splice sees through that**.
-    /// Showing a hidden sibling inserts its entries into the MIDDLE of the
-    /// render list, so every entry after them lands at a new index. Compared index-wise they all
-    /// looked changed and the frame took the full conversion — which is what 86 % of hover frames
-    /// were doing. Both directions, and both must equal the full conversion of the same model.
+    /// Showing a hidden sibling inserts entries mid-list, and hiding it removes them.
     #[test]
     fn a_shown_sibling_splices_through_the_shift_and_matches_the_full_conversion() {
-        // A, B, C in declaration order, so B's entries sort between A's and C's: C is the tail
-        // that shifts. B starts hidden and contributes nothing.
+        // A, B, C in declaration order, so B's entries sort between A's and C's; B starts hidden.
         const BUILD: &str = r#"
             local function box(name, x, r, g, b)
               local f = CreateFrame("Frame", name)
@@ -2774,11 +2275,8 @@ mod extract_gate_tests {
             without,
             quads.quads.len()
         );
-        // The reference must share the app's HISTORY, not just its end state: `Show()` on a
-        // hidden frame re-stacks it to the tail of its draw bucket — the client's own
-        // effective-visibility show `0x76ae10` re-adding it to the level's intrusive list — so B
-        // draws above C afterwards. (The splice got that right on its own; this reference did
-        // not, which is how the difference surfaced.)
+        // The comparison app replays the history: `Show()` re-stacks a hidden frame to the tail of
+        // its draw bucket (the client's show, `0x76ae10`), so B draws above C.
         let mut reference = app_from_script(&format!("{BUILD}\nhidden:Hide()\nhidden:Show()"));
         reference.update();
         assert!(
@@ -2788,8 +2286,7 @@ mod extract_gate_tests {
         );
 
         // ── Deletion ─────────────────────────────────────────────────────────────────────────
-        // The mirror, and the reason `dropped` exists: nothing converts at all, so `spliced` is
-        // zero on a frame that most certainly did splice.
+        // Nothing converts, so `dropped` is what shows the splice ran.
         app.world_mut().resource_mut::<UiQuads>().dirty = false;
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
@@ -2820,9 +2317,7 @@ mod extract_gate_tests {
         );
     }
 
-    /// A raster-environment change (window resize) must pin the conversion to the FULL path —
-    /// the splice's held quads were rasterized under the old seam and every one of them is
-    /// wrong-sized (decision 1342's edge, applied to the splice).
+    /// The held quads were rasterized under the old seam, so a resize takes the full path.
     #[test]
     fn a_resize_takes_the_full_path_not_the_splice() {
         let mut app = app_with_marker();

@@ -4,34 +4,22 @@ use benilla_ui::script::{
 
 use super::test_ui::{hover, load_ui as load_xml, unhover};
 
-/// The unit frames' production load prefix (ui_script/mod.rs order): fonts + UIParent +
-/// tooltip, then the dropdown kit + unit popups the frames' DropDown children initialize into.
+/// The unit frames' load prefix, in the manifest's order.
 fn load_unit_frames(s: &UiScript) {
-    // The app runs the real `Interface\FrameXML\GlobalStrings.lua` off the player's chain BEFORE
-    // any XML (`load_global_strings`), so the fixture names it too. This used to be a single
-    // hand-set `DEAD = "Dead"`, which was enough while the frames were OUR transcription: ours
-    // carried `X = X or "…"` fallbacks and hard literals for everything else. The reference's own
-    // files carry none, and they resolve GlobalStrings at LOAD in three separate places —
-    // `CombatFeedback.lua` l.7-17 builds the whole `CombatFeedbackText` table out of them
-    // (`TEXT(ABSORB)`, `TEXT(MISS)`, …), `UnitFrame.lua` l.1-6 builds `ManaBarColor`'s prefixes
-    // the same way, and `UnitFrame_OnEnter` l.60/63 passes `PARTY_OPTIONS_LABEL` /
-    // `PLAYER_OPTIONS_LABEL` straight into `GameTooltip:SetText`, which raises on nil rather than
-    // drawing an empty plate. Hand-setting the union of those is a second copy of the reference's
-    // own file; naming the file is the only version that cannot drift. (`DEAD` is l.898 of it.)
+    // Stock `GlobalStrings.lua` first, as the app runs it: the unit-frame files read it at load
+    // (`CombatFeedback.lua:6-17`, `UnitFrame.lua:2-7`).
     load_xml(s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(s, "Interface\\FrameXML\\Fonts.xml");
     load_xml(s, r"Interface\FrameXML\UIParent.xml");
-    // The bars' numerals machinery, which the manifest loads immediately ahead of
-    // UnitFrames.xml and which every bar's OnLoad wires into since 1143.
     load_xml(s, "Interface\\FrameXML\\TextStatusBar.lua");
     load_xml(s, "Interface\\FrameXML\\TextStatusBar.xml");
     load_xml(s, r"Interface\FrameXML\MoneyFrame.lua");
     load_xml(s, r"Interface\FrameXML\MoneyFrame.xml");
     load_xml(s, "Interface\\FrameXML\\GameTooltip.xml");
-    // `FACTION_BAR_COLORS` for the stock `GameTooltip_UnitColor` — ReputationFrame.lua's (1968).
+    // `FACTION_BAR_COLORS` (`ReputationFrame.lua:3`) for stock `GameTooltip_UnitColor`.
     load_xml(s, r"Interface\FrameXML\ReputationFrame.lua");
     load_xml(s, "Interface\\FrameXML\\UIDropDownMenu.xml");
-    load_xml(s, "Interface\\FrameXML\\BasicControls.xml"); // `TEXT`, which UnitPopup.lua reads at file scope
+    load_xml(s, "Interface\\FrameXML\\BasicControls.xml"); // `TEXT`, read by UnitPopup.lua at load
     load_xml(s, "Interface\\FrameXML\\UnitPopup.xml");
     load_xml(s, "Interface\\FrameXML\\BuffFrame.xml");
     load_xml(s, "Interface\\FrameXML\\UnitFrame.xml");
@@ -42,10 +30,7 @@ fn load_unit_frames(s: &UiScript) {
     load_xml(s, "Interface\\FrameXML\\PetFrame.xml");
 }
 
-/// Load the real `assets/ui/UnitFrames.xml` (the shipped default UI) into a bare engine and
-/// drive it with synthetic snapshots — the whole slice-1 chain minus Bevy: template expansion,
-/// StatusBar fill, the Era event set, the target frame's hide/show lifecycle, and the async
-/// name arriving via UNIT_NAME_UPDATE.
+/// The stock unit frames driven by snapshots: bar fill, the target's hide and show, a late name.
 #[test]
 fn shipped_unit_frames_drive_end_to_end() {
     benilla_formats::wow_data_or_skip!();
@@ -54,13 +39,8 @@ fn shipped_unit_frames_drive_end_to_end() {
     load_unit_frames(&s);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 
-    // **Only the TARGET frame hides.** Our deleted transcription hid both; the reference hides
-    // exactly one. `PlayerFrame` is a plain top-level `<Button>` with no `hidden=` attribute
-    // (ref PlayerFrame.xml l.4) and `PlayerFrame_Update` (ref PlayerFrame.lua l.29-37) wraps its
-    // whole body in `if UnitExists("player")` without an else — nothing in the file ever calls
-    // `PlayerFrame:Hide()`. That is the real client's behaviour: the player plate is up from the
-    // moment the UI loads, empty until the player object arrives. `TargetFrame_Update`
-    // (ref TargetFrame.lua l.38-55) is the one with the `else this:Hide()`.
+    // Only the target frame hides: `PlayerFrame_Update` has no else arm (`PlayerFrame.lua:29-37`),
+    // `TargetFrame_Update` does (`TargetFrame.lua:37-56`).
     let shape: bool = s
         .eval("return PlayerFrame:IsVisible() and not TargetFrame:IsVisible()")
         .unwrap();
@@ -69,16 +49,8 @@ fn shipped_unit_frames_drive_end_to_end() {
         "the player plate is always up; only the target frame hides while its unit is absent"
     );
 
-    // The player appears (name still unresolved), at 72/100 health, 45/80 mana.
-    //
-    // `PLAYER_ENTERING_WORLD` is the event, not `UNIT_HEALTH`, and the reference is why: the
-    // stock bars each register their OWN events and repaint only themselves
-    // (`UnitFrameHealthBar_Initialize` takes UNIT_HEALTH/UNIT_MAXHEALTH, ref UnitFrame.lua
-    // l.150-151; `UnitFrameManaBar_Initialize` takes the ten UNIT_MANA/RAGE/… ones, l.189-199),
-    // so UNIT_HEALTH alone would leave the mana bar at its load-time 0/0. The one handler that
-    // repaints name + portrait + both bars together is `PlayerFrame_OnEvent`'s
-    // PLAYER_ENTERING_WORLD arm → `UnitFrame_Update()` (ref PlayerFrame.lua l.96-100), which is
-    // also what really fires when the player object arrives.
+    // `PLAYER_ENTERING_WORLD` repaints the whole frame (`PlayerFrame.lua:96-100`); a bar's own
+    // events repaint only that bar (`UnitFrame.lua:150-151`, `:190-199`).
     s.set_unit(
         "player",
         Some(UnitState {
@@ -92,9 +64,7 @@ fn shipped_unit_frames_drive_end_to_end() {
             max_power: 80,
             dead: false,
             reaction: 0,
-            // Not decoration: `UnitFrameManaBar_Update`'s disconnect leg (ref UnitFrame.lua
-            // l.209-212) pins a disconnected unit's power bar to MAX and greys it, and
-            // `UnitState::default()` leaves this `false`.
+            // Else the disconnect leg pins the power bar full and grey (`UnitFrame.lua:214-216`).
             is_connected: true,
             ..UnitState::default()
         }),
@@ -116,12 +86,7 @@ fn shipped_unit_frames_drive_end_to_end() {
         .unwrap();
     assert!(ok, "player frame painted from the snapshot");
 
-    // …and the name plate is BLANK while the name is unresolved, not the word "Unknown". That
-    // word was our transcription's, twice over — a `text="Unknown"` literal on the FontString
-    // (deleted UnitFrames.xml l.1364) and a `UnitName(unit) or "Unknown"` fallback (l.803). The
-    // reference's `PlayerName` carries no `text=` at all (ref PlayerFrame.xml l.58) and
-    // `GetUnitName` returns `UnitName`'s result unchanged (ref UnitFrame.lua l.226-236), so what
-    // shows is whatever the engine's `UnitName` returns for a nameless unit — nil here.
+    // Blank while unresolved: `PlayerName` has no `text=` (`PlayerFrame.xml:58`).
     assert_eq!(
         s.eval::<Option<String>>("return PlayerName:GetText()")
             .unwrap(),
@@ -129,7 +94,6 @@ fn shipped_unit_frames_drive_end_to_end() {
         "no name yet: the stock file has no \"Unknown\" literal to fall back on"
     );
 
-    // The name-query answer lands: UNIT_NAME_UPDATE repaints the name.
     s.set_unit(
         "player",
         Some(UnitState {
@@ -153,21 +117,8 @@ fn shipped_unit_frames_drive_end_to_end() {
         "Benilla"
     );
 
-    // A powerless wolf gets targeted: frame shows, power bar runs EMPTY, health fills 30/50.
-    //
-    // "Empty", not hidden — and the reason is a reference quirk worth knowing. The only thing in
-    // 1.12 that hides a StatusBar for having no track is `TextStatusBar_UpdateTextString`'s
-    // `else textStatusBar:Hide()` (ref TextStatusBar.lua l.55-57), and that whole body sits
-    // inside `if(string)` — `string` being `bar.TextString`. The reference **never declares**
-    // `TargetFrameHealthBarText` / `TargetFrameManaBarText`: TargetFrame.xml l.486-487 passes
-    // both names into `UnitFrame_Initialize` and neither exists anywhere in FrameXML (only the
-    // player's and the pet's do — PlayerFrame.xml l.79/88, PetFrame.xml l.87/96). So
-    // `SetTextStatusBarText` early-returns on the nil (ref TextStatusBar.lua l.7-10), the
-    // target's bars carry no `TextString`, and the hide can never fire. It doesn't show: these
-    // bars have a `<BarTexture>` and no background, so a 0/0 bar draws nothing either way.
-    //
-    // Our transcription hid it, because 1146 §3 *declared* the two text regions the reference
-    // leaves dangling. Those are gone with the file.
+    // A powerless target's bar runs empty, not hidden: only a bar with a `TextString` hides when
+    // trackless (`TextStatusBar.lua:55-56`), and `TargetFrame.xml:486-487` names undeclared ones.
     s.set_unit(
         "target",
         Some(UnitState {
@@ -204,17 +155,14 @@ fn shipped_unit_frames_drive_end_to_end() {
         ok,
         "target frame painted; a powerless unit's power bar runs empty over an empty track"
     );
-    // The select sound rides the frame's OnShow (ref TargetFrame_OnShow): a neutral (4) wolf is
-    // neither UnitIsEnemy (≤2) nor UnitIsFriend (≥5) → the neutral kit.
+    // `TargetFrame_OnShow` picks the kit (`TargetFrame.lua:104-112`); reaction 4 is neutral.
     assert_eq!(
         s.take_sounds(),
         vec![SoundRequest::KitName("igCreatureNeutralSelect".into())],
         "neutral target select kit"
     );
 
-    // Neutral reaction (4) tints the name plate yellow — UnitReactionColor[4] = (1,1,0), the
-    // faithful TargetFrame_CheckFaction path (the plate was untinted before). Assert on the extracted
-    // quad's vertex color (same style as the bar-fill check below).
+    // Reaction 4 tints the plate yellow: `UnitReactionColor[4]` is (1,1,0) (`TargetFrame.lua:10`).
     s.resolve();
     let plate = s
         .extract()
@@ -233,8 +181,7 @@ fn shipped_unit_frames_drive_end_to_end() {
         "neutral name plate is yellow, got {plate:?}"
     );
 
-    // The target's health-bar fill quad is 60% of the bar width (30/50 of the real 119px bar,
-    // ref-TargetFrame.xml l.253-255).
+    // The health fill is 30/50 of the 119px bar (`TargetFrame.xml:253-255`).
     s.resolve();
     let quads = s.extract();
     let bar_rect = quads
@@ -248,7 +195,6 @@ fn shipped_unit_frames_drive_end_to_end() {
         .expect("target health fill at 60% of 119px");
     assert!((bar_rect.width() - 71.4).abs() < 0.01);
 
-    // Deselect: the target frame hides again, playing the lost-target kit (ref TargetFrame_OnHide).
     s.set_unit("target", None);
     s.fire_event("PLAYER_TARGET_CHANGED", vec![]);
     assert!(!s.eval::<bool>("return TargetFrame:IsVisible()").unwrap());
@@ -260,7 +206,6 @@ fn shipped_unit_frames_drive_end_to_end() {
         "deselect plays the lost-target kit"
     );
 
-    // A hostile (reaction 2) target takes the UnitIsEnemy branch — the aggro kit.
     s.set_unit(
         "target",
         Some(UnitState {
@@ -285,9 +230,8 @@ fn shipped_unit_frames_drive_end_to_end() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The hit indicator's drawn height via the engine extract: the `SetTextHeight` override on the
-/// Text quad whose text matches (the two-regime split, decision 0582 — GetFont keeps reporting
-/// the font object's own 30, like the real API).
+/// The drawn height of the text quad reading `text`: the `SetTextHeight` override, while `GetFont`
+/// keeps the font object's own 30, as in the reference.
 fn extracted_text_height(s: &mut UiScript, text: &str) -> Option<f32> {
     s.resolve();
     s.extract().into_iter().find_map(|q| match q.content {
@@ -300,11 +244,9 @@ fn extracted_text_height(s: &mut UiScript, text: &str) -> Option<f32> {
     })?
 }
 
-/// The portrait hit indicator: `UNIT_COMBAT` over `"player"` drives the
-/// transcribed CombatFeedback — a physical wound paints the amount white at the base height 30,
-/// a spell crit paints yellow at ×1.5, a full absorb paints the word at ×0.75 — and the fade
-/// envelope (0.2 s in, 0.7 s hold, 0.3 s out) ends in a Hide. A `"target"`-token event never
-/// touches it (only the player frame registers UNIT_COMBAT in 1.12).
+/// `UNIT_COMBAT` drives stock `CombatFeedback` on the player frame: a wound white at height 30, a
+/// spell crit yellow at ×1.5, an absorb's word at ×0.75, faded 0.2 s in, held 0.7 s, 0.3 s out
+/// (`CombatFeedback.lua:2-4`). The frame takes only `arg1 == "player"` (`PlayerFrame.lua:88-91`).
 #[test]
 fn unit_combat_drives_the_player_hit_indicator() {
     benilla_formats::wow_data_or_skip!();
@@ -332,7 +274,6 @@ fn unit_combat_drives_the_player_hit_indicator() {
         ]
     };
 
-    // A physical wound: the amount, white, base height.
     s.fire_event("UNIT_COMBAT", ev("player", "WOUND", "", 17, 0));
     let ok: bool = s
         .eval(
@@ -349,7 +290,6 @@ fn unit_combat_drives_the_player_hit_indicator() {
         "base height 30 (the SetTextHeight regime)"
     );
 
-    // A spell crit: ×1.5 height (the CRITICAL arm), and the type>0 yellow.
     s.fire_event("UNIT_COMBAT", ev("player", "WOUND", "CRITICAL", 64, 4));
     let ok: bool = s
         .eval("return tostring(PlayerHitIndicator:GetText()) == \"64\"")
@@ -361,7 +301,6 @@ fn unit_combat_drives_the_player_hit_indicator() {
         "×1.5 crit height, UNCAPPED past 32 (decision 0582's regime split)"
     );
 
-    // A full absorb: the word at ×0.75.
     s.fire_event("UNIT_COMBAT", ev("player", "WOUND", "ABSORB", 0, 0));
     let ok: bool = s
         .eval("return PlayerHitIndicator:GetText() == \"Absorb\"")
@@ -373,7 +312,6 @@ fn unit_combat_drives_the_player_hit_indicator() {
         "the word at ×0.75"
     );
 
-    // The envelope: mid-hold the text is fully opaque; past 1.2 s it hides.
     s.tick(0.5); // 0.2 fade-in + into the hold
     let ok: bool = s
         .eval(
@@ -392,7 +330,6 @@ fn unit_combat_drives_the_player_hit_indicator() {
         s.errors()
     );
 
-    // A target-token event leaves the (hidden) indicator alone.
     s.fire_event("UNIT_COMBAT", ev("target", "WOUND", "", 99, 0));
     assert!(
         s.eval::<bool>("return PlayerHitIndicator:IsShown() == nil")
@@ -402,23 +339,15 @@ fn unit_combat_drives_the_player_hit_indicator() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// Left-clicking the player unit frame targets yourself — the faithful self-target path (ref
-/// `PlayerFrame_OnClick` → `TargetUnit("player")`). Drives the real hit-test path (a press + release
-/// on the frame's centre fires its `OnClick`) against the shipped `UnitFrames.xml`, and asserts the
-/// `TargetUnit` request the app drains and commits. A right-click opens the SELF unit popup
-/// (decision 0434 phase 5) — nothing solo (only CANCEL survives the gates, the ref shows no
-/// menu), the full leader set once a party is pushed.
+/// Stock `PlayerFrame_OnClick` (`PlayerFrame.lua:156-172`) targets the player on a left click and
+/// opens the SELF popup on a right click: no menu solo, the leader's rows in a party.
 #[test]
 fn left_clicking_the_player_frame_targets_self() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    // The SELF-menu strings the popup rows bake at UnitPopup.xml load arrive with
-    // `load_unit_frames`' `GlobalStrings.lua`; they used to be hand-set here, and one of the
-    // hand-set values was wrong (see the row assertion below).
     load_unit_frames(&s);
 
-    // The player must exist for the frame to be shown and mouse-hittable.
     s.set_unit(
         "player",
         Some(UnitState {
@@ -435,7 +364,6 @@ fn left_clicking_the_player_frame_targets_self() {
         "no request before any click"
     );
 
-    // Click the frame's centre through the real hit-test path (press + release on the same frame).
     let (cx, cy) = s
         .eval::<(f64, f64)>("return PlayerFrame:GetCenter()")
         .unwrap();
@@ -445,8 +373,7 @@ fn left_clicking_the_player_frame_targets_self() {
         s.take_selection_requests().is_empty(),
         "right-click queues no target"
     );
-    // Solo, every SELF row is gated off (only CANCEL survives) — the ref opens no menu. 1.12 has
-    // no PvP row here and neither do we (decision 0652 took 0646's added row back out).
+    // Solo, every SELF row but Cancel is gated off (`UnitPopup.lua:69`, no PvP row): no menu.
     assert!(
         s.eval::<bool>("return not DropDownList1:IsVisible()")
             .unwrap(),
@@ -461,16 +388,13 @@ fn left_clicking_the_player_frame_targets_self() {
         "left-click queues a self-target"
     );
 
-    // Grouped and leading: the same right-click opens the SELF popup — title (our name),
-    // Loot Method + Loot Threshold (nested), Leave Party, Raid Target Icon (nested), Cancel.
     s.set_party(benilla_ui::script::PartyState {
         members: vec![benilla_ui::script::PartyMemberInfo {
             name: "Alice".into(),
             guid: 0xA11CE,
         }],
         leader_index: 0, // we lead
-        // The player's own guid, which this fixture leaves unset — spelled out because a bare 0
-        // is also the reference's "ungrouped" sentinel and this party has a member.
+        // The player's own guid, unset; 0 is also the ungrouped sentinel, but there is a member.
         leader_guid: 0,
         own_guid: 0,
         raid: Vec::new(),
@@ -489,23 +413,17 @@ fn left_clicking_the_player_frame_targets_self() {
         6,
         "title + Loot Method + Loot Threshold + Leave Party + Raid Target Icon + Cancel"
     );
-    // `PARTY_LEAVE`, verbatim. The reference's own GlobalStrings.lua l.2991 is
-    // `PARTY_LEAVE = "Leave party"` — lower-case "party". The hand-set fixture this test used to
-    // open with title-cased it, so the row read back the fixture's own typo rather than the
-    // client's string; naming the real file is what exposed it.
+    // `PARTY_LEAVE` is "Leave party", lower-case (`GlobalStrings.lua:2991`).
     assert_eq!(
         s.eval::<String>("return DropDownList1Button4:GetText()")
             .unwrap(),
         "Leave party"
     );
-    // The nested rows carry the expand arrow (the level-2 gate for a leader).
     assert!(
         s.eval::<bool>("return DropDownList1Button2ExpandArrow:IsVisible()")
             .unwrap(),
         "Loot Method is nested for the leader"
     );
-    // Clicking Leave Party through the real hit path fires UnitPopup_OnClick → LeaveParty()
-    // and closes the list (not keepShownOnClick).
     s.resolve();
     let (rx, ry) = s
         .eval::<(f64, f64)>("return DropDownList1Button4:GetCenter()")
@@ -525,18 +443,13 @@ fn left_clicking_the_player_frame_targets_self() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The nested level-2 list end-to-end (the 6a suspect path): a leader right-clicks the player
-/// frame, hovers Raid Target Icon — a `hasArrow` row's OnEnter is what opens `DropDownList2` —
-/// and clicks Skull through the real hit path. The mark intent must queue against the menu's
-/// unit. The level-1 click was pinned above; this pins the level the marks actually live on.
+/// A leader opens the SELF popup, hovers Raid Target Icon (a `hasArrow` row's OnEnter opens
+/// `DropDownList2`) and clicks Skull; the mark queues against the menu's unit.
 #[test]
 fn raid_mark_clicks_through_the_nested_level() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    // The menu strings arrive with `load_unit_frames`' own `GlobalStrings.lua`
-    // (`RAID_TARGET_ICON` l.3288, `RAID_TARGET_1..8` l.3280-3287, `NONE` l.2795), which is where
-    // production reads them; they used to be hand-set here.
     load_unit_frames(&s);
 
     s.set_unit(
@@ -554,7 +467,7 @@ fn raid_mark_clicks_through_the_nested_level() {
             name: "Alice".into(),
             guid: 0xA11CE,
         }],
-        leader_index: 0, // we lead — the mark rows are leader-gated
+        leader_index: 0, // we lead: the mark rows are leader-gated
         leader_guid: 0,  // the player's own guid; this fixture leaves it unset
         own_guid: 0,
         raid: Vec::new(),
@@ -575,7 +488,6 @@ fn raid_mark_clicks_through_the_nested_level() {
     );
     s.resolve();
 
-    // Hover the nested row through the real pointer path.
     assert_eq!(
         s.eval::<String>("return DropDownList1Button5:GetText()")
             .unwrap(),
@@ -596,7 +508,6 @@ fn raid_mark_clicks_through_the_nested_level() {
     );
     s.resolve();
 
-    // Click Skull (row 8) through the real hit path.
     assert_eq!(
         s.eval::<String>("return DropDownList2Button8:GetText()")
             .unwrap(),
@@ -607,11 +518,8 @@ fn raid_mark_clicks_through_the_nested_level() {
         .unwrap();
     s.mouse_button(sx as f32, sy as f32, "LeftButton", true);
     s.mouse_button(sx as f32, sy as f32, "LeftButton", false);
-    // `UnitPopup.xml`'s row calls `SetRaidTargetIcon(menu.unit, mark)`; the definition of that
-    // used to be ours, and since the migration it is the reference's own — `TargetFrame.lua`
-    // l.486-492 — whose whole body is `SetRaidTarget(unit, 0 or index)`. That is the ENGINE
-    // verb, built by 1820 (`benilla-ui` `script/party.rs`), never the wrapper's name on our
-    // body: this asserts the intent it queues, and `:638` asserts nothing raised.
+    // The row calls stock `SetRaidTargetIcon` (`TargetFrame.lua:486-492`), whose body is the
+    // engine verb `SetRaidTarget(unit, 0 or index)`.
     assert_eq!(
         s.take_party_requests(),
         vec![benilla_ui::script::PartyRequest::SetRaidTarget {
@@ -620,15 +528,14 @@ fn raid_mark_clicks_through_the_nested_level() {
         }],
         "Skull queues the mark intent for the menu's unit"
     );
-    // Ref law: the click hides only the row's OWN list (UIDropDownMenuButton_OnClick's
-    // `this:GetParent():Hide()`; DropDownList1's OnHide closes level 2, never the reverse).
-    // Level 1 lingers and dies by the 2s show-timer once the pointer leaves the chain.
+    // The click hides only its own list (`UIDropDownMenu.lua:495`), and a list's OnHide closes
+    // only deeper levels (`UIDropDownMenu.xml:14-28`), so level 1 lingers until its 2 s timer.
     assert!(
         s.eval::<bool>("return not DropDownList2:IsVisible() and DropDownList1:IsVisible()")
             .unwrap(),
         "the click closes its own level; level 1 lingers (ref)"
     );
-    // Two ticks: the ref's OnUpdate hides only on the frame AFTER the timer crosses zero.
+    // Two ticks: the list hides on the tick after its timer passes zero (`UIDropDownMenu.lua:75`).
     s.mouse_move(5.0, 5.0);
     s.tick(2.1);
     s.tick(0.1);
@@ -640,12 +547,9 @@ fn raid_mark_clicks_through_the_nested_level() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The level slot's transcribed CheckLevel law (ref-TargetFrame.lua l.119-142) end to end over
-/// the REAL `GetDifficultyColor` (ref-QuestLogFrame.lua l.14-20 + l.584-599, loaded from the
-/// shipped QuestLogFrame.xml — its ref home) and `UnitLevel`'s −1 return: an attackable target
-/// difficulty-colors its number; a hostile 10+ levels up (UnitLevel −1) or a corpse swaps the
-/// number for the HighLevelTexture skull; the green→grey boundary rides the real
-/// GetQuestGreenRange binding.
+/// Stock `TargetFrame_CheckLevel` (`TargetFrame.lua:119-142`) over stock `GetDifficultyColor`
+/// (`QuestLogFrame.lua:14-20`, `:585-599`): an attackable target's number takes its difficulty
+/// colour, and a corpse or `UnitLevel` −1 (hostile, 10+ up) shows the skull instead.
 #[test]
 fn shipped_target_frame_runs_the_level_law() {
     benilla_formats::wow_data_or_skip!();
@@ -653,13 +557,13 @@ fn shipped_target_frame_runs_the_level_law() {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     load_unit_frames(&s);
-    // GetDifficultyColor's own load chain (the quest log window, its ref home).
+    // `GetDifficultyColor`'s load chain: the stock quest log window.
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit + the placeholder icon
+    load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
     load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
     load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\CharacterFrameTemplates.xml"); // the window tab (1993)
+    load_xml(&s, r"Interface\FrameXML\CharacterFrameTemplates.xml"); // the window tab
     load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
     load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
@@ -671,8 +575,8 @@ fn shipped_target_frame_runs_the_level_law() {
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
     load_xml(&s, r"Interface\FrameXML\MainMenuBarMicroButtons.xml");
     load_xml(&s, "Interface\\FrameXML\\QuestLogFrame.xml");
-    // The player at level 3, both feeds (the snapshot UnitLevel("player") reads; the req state
-    // the −1 gate and GetQuestGreenRange read) — the app keeps the two in step.
+    // Level 3 on both feeds, which the app keeps in step: the snapshot `UnitLevel("player")` reads
+    // and the requirement state the −1 gate and `GetQuestGreenRange` read.
     s.set_player_req_state(PlayerReqState {
         level: 3,
         ..Default::default()
@@ -690,8 +594,6 @@ fn shipped_target_frame_runs_the_level_law() {
         }),
     );
 
-    // An attackable boar 5 up (the screenshot's case at the director's level): the number shows,
-    // impossible-red via the real table; no skull.
     s.set_unit(
         "target",
         Some(UnitState {
@@ -720,7 +622,6 @@ fn shipped_target_frame_runs_the_level_law() {
         .unwrap();
     assert!(ok, "attackable +5: red number, no skull ({:?})", s.errors());
 
-    // A hostile 10+ levels up: UnitLevel reads −1 → the skull replaces the number.
     s.set_unit(
         "target",
         Some(UnitState {
@@ -747,9 +648,8 @@ fn shipped_target_frame_runs_the_level_law() {
         .unwrap();
     assert!(ok, "hostile +10: the skull shows ({:?})", s.errors());
 
-    // A DEAD mob is NOT a corpse (UnitIsCorpse `0x5161c0` is a pure TYPEID_CORPSE object check,
-    // and UnitLevel `0x517fc0` has no health test) — the ref shows a dead mob's NUMBER, not the
-    // skull.
+    // A dead mob is not a corpse: `UnitIsCorpse` (`0x5161c0`) checks for a corpse object and
+    // `UnitLevel` (`0x517fc0`) ignores health, so its number shows.
     s.set_unit(
         "target",
         Some(UnitState {
@@ -781,7 +681,6 @@ fn shipped_target_frame_runs_the_level_law() {
         s.errors()
     );
 
-    // A resolved CORPSE world object: the ref's first branch — the skull, whatever the level.
     s.set_unit(
         "target",
         Some(UnitState {
@@ -803,8 +702,7 @@ fn shipped_target_frame_runs_the_level_law() {
         .unwrap();
     assert!(ok, "corpse object: the skull shows ({:?})", s.errors());
 
-    // The green→grey boundary rides GetQuestGreenRange: at player 30 the band is 7 —
-    // 7 below (23) still standard-green, 8 below (22) trivial-grey.
+    // At level 30 `GetQuestGreenRange` is 7: 23 is still green, 22 grey.
     s.set_player_req_state(PlayerReqState {
         level: 30,
         ..Default::default()
@@ -835,10 +733,8 @@ fn shipped_target_frame_runs_the_level_law() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The PvP flag icon on the player and target frames: the reference's
-/// three-branch law, driven through the real shipped XML. FFA outranks the faction flag; the
-/// faction leg needs BOTH a side and the flag; and the player's `igPVPUpdate` sounds on the
-/// UNIT_FACTION edge, not on every repaint.
+/// The PvP icon's three branches (`PlayerFrame.lua:55-79`): FFA outranks the faction flag, which
+/// needs a side, and `igPVPUpdate` sounds on `UNIT_FACTION`, not on every repaint.
 #[test]
 fn pvp_icon_follows_the_three_branch_law() {
     benilla_formats::wow_data_or_skip!();
@@ -853,7 +749,6 @@ fn pvp_icon_follows_the_three_branch_law() {
         ))
         .unwrap()
     };
-    // The extracted quad path for a shown icon (nil while hidden).
     let icon_path = |s: &mut UiScript, needle: &str| -> bool {
         s.resolve();
         s.extract().into_iter().any(
@@ -875,13 +770,11 @@ fn pvp_icon_follows_the_three_branch_law() {
         ..UnitState::default()
     };
 
-    // Unflagged: no icon, no sound.
     s.set_unit("player", Some(alliance_player(false, false)));
     s.fire_event("UNIT_FACTION", vec![ScriptValue::Str("player".into())]);
     assert!(!icon_shown(&s, "Player"), "unflagged shows none");
     assert!(s.take_sounds().is_empty(), "no sound while unflagged");
 
-    // Flagged: the Alliance icon, and one igPVPUpdate for the flag change.
     s.set_unit("player", Some(alliance_player(true, false)));
     s.fire_event("UNIT_FACTION", vec![ScriptValue::Str("player".into())]);
     assert!(icon_shown(&s, "Player"));
@@ -892,19 +785,15 @@ fn pvp_icon_follows_the_three_branch_law() {
         "the flag change sounds once"
     );
 
-    // A repaint that is NOT a flag change (a health tick) must not re-sound.
     s.fire_event("UNIT_HEALTH", vec![ScriptValue::Str("player".into())]);
     assert!(s.take_sounds().is_empty(), "repaints don't re-sound");
 
-    // FFA outranks the faction flag even when both are set — the reference's branch order.
     s.set_unit("player", Some(alliance_player(true, true)));
     s.fire_event("UNIT_FACTION", vec![ScriptValue::Str("player".into())]);
     assert!(icon_path(&mut s, "UI-PVP-FFA"), "FFA wins the branch");
     let _ = s.take_sounds();
 
-    // No resolvable side (a Monster/neutral template) hides the icon however flagged it is —
-    // the `factionGroup and UnitIsPVP` gate. A guard the app can't name a side for draws nothing
-    // rather than reaching for a texture that doesn't ship.
+    // No side, no icon however flagged: the `factionGroup and UnitIsPVP` gate.
     s.set_unit(
         "target",
         Some(UnitState {
@@ -925,7 +814,6 @@ fn pvp_icon_follows_the_three_branch_law() {
         "flagged but sideless draws no icon"
     );
 
-    // A Horde target that IS flagged takes its own faction's art on the target frame.
     s.set_unit(
         "target",
         Some(UnitState {
@@ -946,9 +834,7 @@ fn pvp_icon_follows_the_three_branch_law() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The target name plate's two middle legs, unblocked by the PvP wire: a
-/// friendly player who is PvP-flagged reads GREEN, an unflagged one stays blue. Before the wire
-/// both collapsed into blue.
+/// A friendly player's plate is green when PvP-flagged, else blue (`TargetFrame.lua:163-172`).
 #[test]
 fn flagged_friendly_player_plate_is_green() {
     benilla_formats::wow_data_or_skip!();
@@ -1003,14 +889,9 @@ fn flagged_friendly_player_plate_is_green() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The classification border law (ref-TargetFrame.lua l.205-218) end to end: the
-/// gated rank on the snapshot → `UnitClassification` → which of the three shipped border textures
-/// actually reaches the draw list. Asserting the *extracted quad* rather than a Lua getter is the
-/// point — it is the pixels, and it catches a swap that sets the path on the wrong region.
-///
-/// The two facts worth a test rather than a comment: three of the five classifications share the
-/// Elite art (1.12 ships no rare-elite border at all), and the border must repaint on
-/// UNIT_CLASSIFICATION_CHANGED alone, with no re-target.
+/// Stock `TargetFrame_CheckClassification` (`TargetFrame.lua:205-218`), asserted on the drawn
+/// quads: elite, rare-elite and world boss share the Elite art (1.12 ships no rare-elite border),
+/// and `UNIT_CLASSIFICATION_CHANGED` alone repaints it.
 #[test]
 fn target_frame_border_follows_the_classification_law() {
     benilla_formats::wow_data_or_skip!();
@@ -1018,8 +899,7 @@ fn target_frame_border_follows_the_classification_law() {
     s.set_screen_size(1024.0, 768.0);
     load_unit_frames(&s);
 
-    // Every TargetingFrame border path in the draw list. The player frame contributes the plain
-    // art on every frame, so the assertions below are about which *extra* border appears.
+    // Every TargetingFrame border in the draw list; the player frame always adds the plain one.
     let borders = |s: &mut UiScript| -> Vec<String> {
         s.resolve();
         let mut v: Vec<String> = s
@@ -1052,7 +932,6 @@ fn target_frame_border_follows_the_classification_law() {
         ..UnitState::default()
     };
 
-    // rank 0 — a plain mob: no elite and no rare art anywhere.
     s.set_unit("target", Some(mob(0)));
     s.fire_event("PLAYER_TARGET_CHANGED", vec![]);
     let v = borders(&mut s);
@@ -1066,8 +945,6 @@ fn target_frame_border_follows_the_classification_law() {
         "rank 0 wears the plain border, got {v:?}"
     );
 
-    // ranks 1/2/3 — elite, rare-elite and world boss ALL take the one Elite texture. 1.12 ships no
-    // UI-TargetingFrame-Rare-Elite (absent from the patch chain), which is why 2 lands here.
     for (rank, word) in [(1, "elite"), (2, "rareelite"), (3, "worldboss")] {
         s.set_unit("target", Some(mob(rank)));
         s.fire_event("PLAYER_TARGET_CHANGED", vec![]);
@@ -1083,7 +960,6 @@ fn target_frame_border_follows_the_classification_law() {
         );
     }
 
-    // rank 4 — rare (the silver dragon), the only classification with art of its own.
     s.set_unit("target", Some(mob(4)));
     s.fire_event("PLAYER_TARGET_CHANGED", vec![]);
     let v = borders(&mut s);
@@ -1097,8 +973,7 @@ fn target_frame_border_follows_the_classification_law() {
         "rank 4 takes the Rare border, got {v:?}"
     );
 
-    // The repaint wire: the creature query landing on an already-targeted mob raises its rank, and
-    // UNIT_CLASSIFICATION_CHANGED alone must swap the border — no PLAYER_TARGET_CHANGED.
+    // A creature query landing on the current target raises its rank; the event alone repaints.
     s.set_unit("target", Some(mob(0)));
     s.fire_event("PLAYER_TARGET_CHANGED", vec![]);
     assert!(
@@ -1115,7 +990,6 @@ fn target_frame_border_follows_the_classification_law() {
         "the event alone repaints the border"
     );
 
-    // The player frame never reclassifies: its own art stays plain with an elite target up.
     let plain_on_player: bool = s
         .eval(
             r#"
@@ -1132,16 +1006,9 @@ fn target_frame_border_follows_the_classification_law() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The recessed-bar look, asserted in the draw list: the ring art's metal well-edges must paint
-/// **over** the health/power fills, and the name/level text over both.
-///
-/// This is the shape decision 0884 broke. Our transcription used to get the ring over the bars by
-/// *declaring* `$parentTextureFrame` after the StatusBars, leaning on the old draw key's
-/// insertion-order tie-break between siblings at one `(strata, level)`. 0884 pinned the real law —
-/// the draw **layer** is bucket-wide and outranks the frame — so the bars' ARTWORK fills started
-/// painting over the TextureFrame's BACKGROUND ring art and the frames read as pasted-on slabs.
-/// The fix is the reference's own mechanism (`TargetFrame.lua` l.32-34): push the bars one frame
-/// level *below* the texture frame, where no layer can lift them back over it.
+/// The ring art paints over the bar fills. Within a frame level the draw layer outranks the frame,
+/// so BACKGROUND art clears ARTWORK fills only from a higher level: the player's art hangs two
+/// frames down (`PlayerFrame.xml:50-55`), the target's bars drop one (`TargetFrame.lua:32-34`).
 #[test]
 fn the_ring_art_paints_over_the_bars() {
     benilla_formats::wow_data_or_skip!();
@@ -1163,16 +1030,12 @@ fn the_ring_art_paints_over_the_bars() {
             ..UnitState::default()
         }),
     );
-    // PLAYER_ENTERING_WORLD, not UNIT_HEALTH: the reference repaints the NAME only from
-    // `UnitFrame_Update` (ref UnitFrame.lua l.23-28) and on UNIT_NAME_UPDATE (l.31-34) — the
-    // health bar's own event touches its bar and nothing else. `PlayerFrame_OnEvent`'s
-    // PLAYER_ENTERING_WORLD arm (ref PlayerFrame.lua l.96-100) is the one that runs the full
-    // repaint, and the name quad is half of what this test measures.
+    // The name repaints on `PLAYER_ENTERING_WORLD` (`PlayerFrame.lua:96-100`), not `UNIT_HEALTH`.
     s.fire_event("PLAYER_ENTERING_WORLD", vec![]);
     s.resolve();
     let quads = s.extract();
 
-    // The ring art: `UI-TargetingFrame` exactly — not the `-LevelBackground` / `-Elite` siblings.
+    // The ring art is `UI-TargetingFrame` exactly, not its `-LevelBackground` or `-Elite` siblings.
     let ring = quads
         .iter()
         .find(|q| {
@@ -1180,7 +1043,6 @@ fn the_ring_art_paints_over_the_bars() {
                     if p.ends_with("UI-TargetingFrame"))
         })
         .expect("the player frame's ring art");
-    // The bar fills (both bars share the texture; take the highest z of the two).
     let fill = quads
         .iter()
         .filter(|q| {
@@ -1208,22 +1070,12 @@ fn the_ring_art_paints_over_the_bars() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The same recessed-bar law for the PARTY member frames, which carry an independent copy of the
-/// idiom (`PartyFrame.xml`'s `$parentTextureFrame` over `$parentHealthBar`/`$parentManaBar`).
-///
-/// Split from the player/target test on purpose: the two files reach the same look through separate
-/// OnLoads, so one green assertion says nothing about the other. This is the copy 0884 broke in
-/// silence — nobody was in a party when the director reported the player frame.
+/// The same on the party member frames, which reach it through their own template.
 #[test]
 fn the_party_art_paints_over_the_bars() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    // The loot test's prefix (`loot_tests.rs`): PartyFrame's inline <Script> reads
-    // StaticPopupDialogs, which the chain's `StaticPopup.xml` defines, and its per-member dropdown
-    // OnLoad walks the whole popup kit.
-    // GlobalStrings first, for the same reason `load_unit_frames` names it — the stock unit-frame
-    // files resolve it at LOAD (`CombatFeedback.lua` l.7-17, `UnitFrame.lua` l.1-6).
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");
@@ -1235,15 +1087,13 @@ fn the_party_art_paints_over_the_bars() {
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
     load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
     load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml");
-    load_xml(&s, r"Interface\FrameXML\ReputationFrame.lua"); // FACTION_BAR_COLORS (1968)
+    load_xml(&s, r"Interface\FrameXML\ReputationFrame.lua"); // FACTION_BAR_COLORS
     load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml");
-    // Before UnitPopup: that file reads ITEM_QUALITY_COLORS at FILE SCOPE and its
-    // declarer is UIParent (ref UIParent.lua:65) since 1888.
+    // Before UnitPopup, which reads `TEXT` and `ITEM_QUALITY_COLORS` (`UIParent.lua:65`) at load.
     load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");
     load_xml(&s, "Interface\\FrameXML\\UnitPopup.xml");
-    // The reference's own kit, in the manifest's order. `UIParent.xml` is not decoration here:
-    // `RaiseFrameLevel`/`LowerFrameLevel` live in it (ref UIParent.lua l.1890-1896) and stock
-    // `TargetofTargetTextureFrame`'s OnLoad calls one of them.
+    // The stock kit in the manifest's order. `TargetofTargetTextureFrame`'s OnLoad calls
+    // `RaiseFrameLevel` (`UIParent.lua:1894-1896`), loaded above.
     load_xml(&s, "Interface\\FrameXML\\TextStatusBar.lua");
     load_xml(&s, "Interface\\FrameXML\\TextStatusBar.xml");
     load_xml(&s, "Interface\\FrameXML\\BuffFrame.xml");
@@ -1269,11 +1119,8 @@ fn the_party_art_paints_over_the_bars() {
             ..UnitState::default()
         }),
     );
-    // **The ROSTER, not the unit snapshot, is what shows a party row.** Stock
-    // `PartyMemberFrame_UpdateMember` gates on `GetPartyMember(id)` (ref PartyMemberFrame.lua
-    // l.41-57) — `UnitExists("party1")` is never consulted — and its else arm is `this:Hide()`.
-    // Our deleted `PartyFrame.xml` keyed the row off the unit token, so setting `party1` alone
-    // used to be enough; against the reference's file it paints nothing at all.
+    // The roster shows a party row, not the unit: `PartyMemberFrame_UpdateMember` gates on
+    // `GetPartyMember(id)` and hides the row otherwise (`PartyMemberFrame.lua:42-57`).
     s.set_party(benilla_ui::script::PartyState {
         members: vec![benilla_ui::script::PartyMemberInfo {
             name: "Onepriest".into(),
@@ -1291,21 +1138,13 @@ fn the_party_art_paints_over_the_bars() {
     s.resolve();
     let quads = s.extract();
 
-    // Scoped to member frame 1 by owner name, so a stray UI-StatusBar from any other frame in the
-    // manifest can never stand in for the bar under test.
+    // Scoped to member frame 1 by owner, so no other frame's `UI-StatusBar` stands in.
     let mine = |q: &benilla_ui::script::ExtractedQuad| {
         s.quad_owner_name(q.target)
             .is_some_and(|n| n.starts_with("PartyMemberFrame1"))
     };
-    // The ART cannot be scoped that way, and the reason is the reference's own declaration:
-    // `PartyMemberFrameTemplate` hangs `$parentTexture` two levels down inside a pair of
-    // **anonymous** `<Frame setAllPoints="true">` wrappers (ref PartyFrameTemplates.xml
-    // l.230-240). The region itself still resolves to `PartyMemberFrame1Texture` — `$parent`
-    // walks to the nearest named ancestor — but the frame that OWNS the quad has no name at all,
-    // so an owner-name filter can never see it. (Our deleted PartyFrame.xml gave that wrapper a
-    // name, `$parentTextureFrame`, which is why this used to work.) Scoped by geometry instead:
-    // rows 2-4 are hidden with no member, so exactly one UI-PartyFrame quad is drawn, and it is
-    // asserted to sit on member 1's rect.
+    // The art's owner has no name, two anonymous frames down (`PartyFrameTemplates.xml:235-240`):
+    // rows 2-4 are hidden, so the one `UI-PartyFrame` quad is checked against member 1's rect.
     let art_quads: Vec<_> = quads
         .iter()
         .filter(|q| {
@@ -1348,11 +1187,9 @@ fn the_party_art_paints_over_the_bars() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **What a feigning hunter looks like on the frames** — the end of the chain the
-/// snapshot starts: `UNIT_DYNFLAG_DEAD` zeroes `UnitHealth`/`UnitMana` while the maxima stay real
-/// (`UnitHealth 0x5174d0` gates, `UnitHealthMax 0x5175b0` does not), so both bars run **empty over
-/// a full-size track** rather than collapsing to a 0/0 nothing, and the target frame's DEAD text
-/// lights on the same `UnitHealth(unit) <= 0` test a corpse trips.
+/// A feigning target: `UNIT_DYNFLAG_DEAD` zeroes `UnitHealth` (`0x5174d0`) and `UnitMana` but not
+/// the maxima (`UnitHealthMax`, `0x5175b0`), so both bars run empty over a full track and the dead
+/// text lights on `UnitHealth("target") <= 0` (`TargetFrame.lua:221`).
 #[test]
 fn a_feigning_target_paints_empty_bars_and_the_dead_text() {
     benilla_formats::wow_data_or_skip!();
@@ -1363,7 +1200,7 @@ fn a_feigning_target_paints_empty_bars_and_the_dead_text() {
     let hunter = |health: u32, power: u32, dead: bool| {
         Some(UnitState {
             exists: true,
-            is_connected: true, // CheckDead's second term — a feign is not a link-drop
+            is_connected: true, // CheckDead's second term: a feign is not a disconnect
             name: Some("Corvane".into()),
             health,
             max_health: 1500,
@@ -1372,7 +1209,7 @@ fn a_feigning_target_paints_empty_bars_and_the_dead_text() {
             power,
             max_power: 900,
             dead,
-            reaction: 2, // hostile — the frame we would be watching him through
+            reaction: 2, // hostile
             ..UnitState::default()
         })
     };
@@ -1390,14 +1227,8 @@ fn a_feigning_target_paints_empty_bars_and_the_dead_text() {
         .unwrap();
     assert!(alive, "the control: a live hunter reads live");
 
-    // He feigns. Only the flag moved on the wire — the snapshot turns it into these three.
-    //
-    // BOTH events, because the reference's bars are independent listeners: the health bar takes
-    // UNIT_HEALTH/UNIT_MAXHEALTH (ref UnitFrame.lua l.150-151) and the mana bar takes the ten
-    // UNIT_MANA/RAGE/FOCUS/… ones (l.189-199) — there is no shared "repaint the frame" event, so
-    // UNIT_HEALTH alone leaves the power bar showing the pre-feign number. Our deleted
-    // transcription drove both bars off one update, which is why this test used to fire one event.
-    // The server sends both when the dynflag lands.
+    // He feigns. The reference fires both events on the flag's edge (`0x6004c5`, `0x6004f0`);
+    // each stock bar listens only for its own (`UnitFrame.lua:150-151`, `:190-199`).
     s.set_unit("target", hunter(0, 0, true));
     s.fire_event("UNIT_HEALTH", vec![ScriptValue::Str("target".into())]);
     s.fire_event("UNIT_MANA", vec![ScriptValue::Str("target".into())]);
@@ -1433,7 +1264,6 @@ fn a_feigning_target_paints_empty_bars_and_the_dead_text() {
         "UnitIsDead 0x517ac0's dynflag leg reaches the API too — as the number 1 (2043)"
     );
 
-    // He stands back up: the flag clears, and nothing about the body needed restoring.
     s.set_unit("target", hunter(1200, 300, false));
     s.fire_event("UNIT_HEALTH", vec![ScriptValue::Str("target".into())]);
     s.fire_event("UNIT_MANA", vec![ScriptValue::Str("target".into())]);
@@ -1450,10 +1280,9 @@ fn a_feigning_target_paints_empty_bars_and_the_dead_text() {
     assert!(up, "the feign ends and the frame reads live again");
 }
 
-/// The resting status flash (ref `PlayerFrame_UpdateStatus` + `_OnUpdate`): while
-/// resting the player frame wears the gold status ring, the zzz state icon and its glow, all
-/// pulsing on a 0.5 s alpha wave; auto-attack (PLAYER_ENTER_COMBAT) swaps them for the red
-/// ring/swords/disc — resting still wins when both hold — and leaving both states clears the lot.
+/// Stock `PlayerFrame_UpdateStatus` (`PlayerFrame.lua:181-212`): resting shows the gold ring, the
+/// zzz and its glow, pulsed on a 0.5 s wave by `PlayerFrame_OnUpdate`; auto-attack shows the red
+/// ring, swords and disc; resting wins when both hold, and neither clears them all.
 #[test]
 fn the_player_frame_flashes_zzz_while_resting() {
     benilla_formats::wow_data_or_skip!();
@@ -1477,7 +1306,7 @@ fn the_player_frame_flashes_zzz_while_resting() {
         }),
     );
 
-    // Into the inn: the resting flag lands and PLAYER_UPDATE_RESTING repaints.
+    // Into the inn.
     s.set_rest_state(1, 500, true);
     s.fire_event("PLAYER_UPDATE_RESTING", vec![]);
     let resting: bool = s
@@ -1499,7 +1328,6 @@ fn the_player_frame_flashes_zzz_while_resting() {
         "resting shows the gold ring + zzz + glow, nothing red"
     );
 
-    // The pulse: two OnUpdate ticks move the ring's alpha (the 0.5 s triangle wave).
     let a0: f64 = s.eval("return PlayerStatusTexture:GetAlpha()").unwrap();
     s.run("this = PlayerFrame; PlayerFrame_OnUpdate(0.25)")
         .unwrap();
@@ -1509,14 +1337,13 @@ fn the_player_frame_flashes_zzz_while_resting() {
         "the flash moves the status alpha ({a0} → {a1})"
     );
 
-    // Swinging while resting: resting still wins (the ref's branch order).
     s.fire_event("PLAYER_ENTER_COMBAT", vec![]);
     assert!(
         s.eval::<bool>("return PlayerRestIcon:IsShown()").unwrap(),
         "resting outranks auto-attack"
     );
 
-    // Out of the inn mid-swing: the red attack set takes over.
+    // Out of the inn, still swinging.
     s.set_rest_state(2, 0, false);
     s.fire_event("PLAYER_UPDATE_RESTING", vec![]);
     let attacking: bool = s
@@ -1533,7 +1360,6 @@ fn the_player_frame_flashes_zzz_while_resting() {
         .unwrap();
     assert!(attacking, "auto-attack shows the red ring + swords + disc");
 
-    // Swords down: everything clears.
     s.fire_event("PLAYER_LEAVE_COMBAT", vec![]);
     let clear: bool = s
         .eval(
@@ -1551,12 +1377,9 @@ fn the_player_frame_flashes_zzz_while_resting() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// The zzz badge paints OVER the level number: the ref keeps the number in the
-/// texture frame's BACKGROUND layer and the state icons up in OVERLAY, so the opaque badge covers
-/// it while resting. The layer split is the only mechanism that CAN hide it — a fontstring never
-/// ducks under a texture of its own layer (0884's bucket-wide quads-then-text law) — which is
-/// exactly how 1082's transcription slipped: it put the number in OVERLAY beside the icons, and
-/// the number rode on the badge (director report, 2026-08-07).
+/// The zzz badge covers the level number: the number is in the BACKGROUND layer
+/// (`PlayerFrame.xml:70`) and the badge in OVERLAY (`:171`), and text never ducks under a texture
+/// of its own layer.
 #[test]
 fn the_rest_badge_covers_the_level_number() {
     benilla_formats::wow_data_or_skip!();
@@ -1585,8 +1408,7 @@ fn the_rest_badge_covers_the_level_number() {
     s.resolve();
     let quads = s.extract();
 
-    // Every UI-StateIcon quad (the badge AND its ADD glow — the glow rides a later frame and
-    // sits higher still): even the LOWEST must clear the number.
+    // Every `UI-StateIcon` quad, badge and glow: even the lowest must clear the number.
     let badge = quads
         .iter()
         .filter(|q| {
@@ -1608,26 +1430,9 @@ fn the_rest_badge_covers_the_level_number() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **The on-bar numerals** — the half 1140 promised and did not deliver. The Status
-/// Bar Text switch landed with only the XP bar wired to it, so turning it on changed nothing on the
-/// frames people actually watch (director report). Now the player's health and power bars carry
-/// "value / max", and the switch pins them.
-///
-/// Which bars it reaches is the REFERENCE's own split, and running the reference's own files made
-/// it narrower than 1146 believed. `textLockable` is set on the player's two bars, the pet's two
-/// and the XP bar and nothing else — but the TARGET frame goes further than "not lockable": it has
-/// **no text regions at all**. `TargetFrame.xml` l.486-487 hands `TargetFrameHealthBarText` /
-/// `TargetFrameManaBarText` to `UnitFrame_Initialize` and neither name is declared anywhere in
-/// FrameXML (only `PlayerFrame.xml` l.79/88 and `PetFrame.xml` l.87/96 declare theirs), so
-/// `SetTextStatusBarText` early-returns on the nil (ref TextStatusBar.lua l.7-10) and those bars
-/// never get a `TextString`. 1146 §3 *added* the two regions to our transcription so a hover could
-/// reveal them; they went with the file. What 1.12 actually gives you when you hover a target bar
-/// is the unit TOOLTIP (ref TextStatusBar.xml l.16-26), asserted below.
-///
-/// The power bar's numerals also carry the resource's LABEL again — "Rage 45 / 80" — because
-/// `UnitFrame_UpdateManaType` sets the prefix on every update (ref UnitFrame.lua l.129) and that
-/// call is inside the stock file. 1147 §1 cut ours on the director's look call; the stock file has
-/// no such cut.
+/// The Status Bar Text switch pins numerals on the `textLockable` bars: the player's two
+/// (`PlayerFrame.xml:302`, `:330`), the pet's two and the XP bar. The target's bars have no text
+/// region (`TargetFrame.xml:486-487` names undeclared ones); a hover there shows the unit tooltip.
 #[test]
 fn status_bar_text_paints_the_player_numerals_but_not_the_targets() {
     benilla_formats::wow_data_or_skip!();
@@ -1646,9 +1451,7 @@ fn status_bar_text_paints_the_player_numerals_but_not_the_targets() {
         max_power: 80,
         dead: false,
         reaction: 4,
-        // Without this `UnitFrameManaBar_Update` takes its disconnect leg (ref UnitFrame.lua
-        // l.209-212) — the power bar pins to MAX and never reaches `UnitFrame_UpdateManaType`,
-        // so it would read "80 / 80" with no prefix.
+        // Else the disconnect leg pins the bar full, with no prefix (`UnitFrame.lua:214-220`).
         is_connected: true,
         ..UnitState::default()
     };
@@ -1665,11 +1468,10 @@ fn status_bar_text_paints_the_player_numerals_but_not_the_targets() {
         s.eval::<bool>(&format!("return {name}:IsShown()")).unwrap()
     };
 
-    // Off (the shipped default): the strings carry the numbers, and nothing paints.
     assert!(!shown(&s, "PlayerFrameHealthBarText"));
     assert!(!shown(&s, "PlayerFrameManaBarText"));
 
-    // On, through the switch's own event — no repaint, no damage taken.
+    // On, through the switch's own event, with no repaint.
     s.register_cvars([("statusBarText", "0")]);
     s.run("SetCVar(\"statusBarText\", \"1\", \"STATUS_BAR_TEXT\")")
         .unwrap();
@@ -1678,43 +1480,29 @@ fn status_bar_text_paints_the_player_numerals_but_not_the_targets() {
         shown(&s, "PlayerFrameHealthBarText"),
         "your own health numerals pin on"
     );
-    // Bare here, and only because this fixture stops short of the character window: the
-    // reference's "Health" prefix is set by `CharacterFrame_OnLoad` (ref CharacterFrame.lua l.55),
-    // not by the unit frames, and the manifest loads `Interface\FrameXML\CharacterFrame.xml` far
-    // below these. In a full run the player's health bar reads "Health 72 / 100".
+    // No prefix: `CharacterFrame_OnLoad` sets "Health" (`CharacterFrame.lua:55`) and this fixture
+    // has no character window; a full run reads "Health 72 / 100".
     assert_eq!(
         text(&s, "PlayerFrameHealthBarText"),
         "72 / 100",
         "no prefix without the character window, which is what sets HEALTH"
     );
-    // The power bar's LABEL is back, and it is the unit frames' own:
-    // `UnitFrame_UpdateManaType` re-sets the prefix from `ManaBarColor[UnitPowerType(unit)].prefix`
-    // on every mana-bar update (ref UnitFrame.lua l.122-129), and
-    // `TextStatusBar_UpdateTextString` renders `prefix .. " " .. value .. " / " .. max`
-    // (ref TextStatusBar.lua l.42-46). 1147 §1 cut the three prefix calls out of OUR files on the
-    // director's look call; this one lives inside the stock file, so it came back with it.
+    // `UnitFrame_UpdateManaType` sets the power bar's prefix on every update (`UnitFrame.lua:129`).
     assert_eq!(
         s.eval::<String>("return PlayerFrameManaBar.prefix")
             .unwrap(),
         "Rage",
         "the prefix follows the resource — this player runs on rage"
     );
-    // The STRING, though, is still the one rendered before the switch existed. That is the
-    // reference's own ordering, not a gap: `TextStatusBar_OnEvent`'s CVAR_UPDATE arm only calls
-    // `TextString:Show()` (ref TextStatusBar.lua l.14-24) — it never re-renders — and the last
-    // render ran from `SetValue`'s OnValueChanged during PLAYER_ENTERING_WORLD, before
-    // `UnitFrame_UpdateManaType` had set the prefix (ref UnitFrame.lua l.208-215 sets the value
-    // first). Its own re-render is gated on `GetCVar("statusBarText") == "1"` (l.130-132), which
-    // was not yet true. So the label lands on the next repaint — asserted at the end of this test.
+    // The string still lacks it, as in the reference: `CVAR_UPDATE` only shows the string
+    // (`TextStatusBar.lua:14-24`), and its last render ran before the prefix was set
+    // (`UnitFrame.lua:219-220`) with the switch off (`:130-132`). The next repaint labels it.
     assert_eq!(
         text(&s, "PlayerFrameManaBarText"),
         "45 / 80",
         "flipping the switch shows the string, it does not re-render it"
     );
 
-    // The target's bars carry NO text region, so there is nothing for the switch to pin and
-    // nothing for a hover to reveal. Asserted on the globals themselves: the reference leaves both
-    // names undeclared (ref TargetFrame.xml l.486-487 passes them anyway).
     assert!(
         s.eval::<bool>(
             "return TargetFrameHealthBarText == nil and TargetFrameManaBarText == nil \
@@ -1724,9 +1512,7 @@ fn status_bar_text_paints_the_player_numerals_but_not_the_targets() {
         "the reference declares no numerals on the target frame, at any switch setting"
     );
 
-    // Hovering a target bar pops the unit TOOLTIP instead — the `elseif this:GetParent() ==
-    // TargetFrame` arm of the template's own OnEnter (ref TextStatusBar.xml l.16-26). Driven
-    // through the real pointer path, because that arm reads `this`.
+    // Through the real pointer path: the tooltip arm reads `this` (`TextStatusBar.xml:16-26`).
     hover(&mut s, "TargetFrameHealthBar");
     assert!(
         s.eval::<bool>(
@@ -1748,10 +1534,7 @@ fn status_bar_text_paints_the_player_numerals_but_not_the_targets() {
         "the template's OnLeave hides it (ref TextStatusBar.xml l.28-31)"
     );
 
-    // The hover on YOUR bar with the switch OFF is the reveal that still exists: the numbers are
-    // there when you go looking, without living on the bar. `ShowTextStatusBarText` /
-    // `HideTextStatusBarText` and their `lockShow` refcount (ref TextStatusBar.lua l.77-102) are
-    // the mechanism, reached through the template's OnEnter/OnLeave.
+    // Switched off, a hover still reveals the player's numerals (`TextStatusBar.lua:77-102`).
     s.run("SetCVar(\"statusBarText\", \"0\", \"STATUS_BAR_TEXT\")")
         .unwrap();
     s.tick(0.0);
@@ -1771,33 +1554,20 @@ fn status_bar_text_paints_the_player_numerals_but_not_the_targets() {
         .unwrap();
     s.tick(0.0);
 
-    // A health change repaints through the bar's own OnValueChanged, like the reference's.
     s.set_unit("player", Some(alive(31, 45, 1)));
     s.fire_event("UNIT_HEALTH", vec![ScriptValue::Str("player".into())]);
     assert_eq!(text(&s, "PlayerFrameHealthBarText"), "31 / 100");
 
-    // A power-type change repaints AND re-labels — `UnitFrame_UpdateManaType` runs off
-    // UNIT_DISPLAYPOWER (ref UnitFrame.lua l.36-40) and the prefix follows the new resource.
+    // `UNIT_DISPLAYPOWER` re-labels through `UnitFrame_UpdateManaType` (`UnitFrame.lua:40-43`).
     s.set_unit("player", Some(alive(31, 60, 3)));
     s.fire_event("UNIT_DISPLAYPOWER", vec![ScriptValue::Str("player".into())]);
     assert_eq!(text(&s, "PlayerFrameManaBarText"), "Energy 60 / 80");
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **The numerals do not collide** — the pin for a bug the director caught on
-/// screen: the pet frame's two numeral strings overlapped each other and its name.
-///
-/// The cause was a bad transcription, not a bad seat. 1.12's pet bars are 70×8 at `(47,-22)` and
-/// `(47,-29)` — a **7 px pitch** for strings taller than that — so the reference does not centre the
-/// second one: it drops it clear, to `(82,-38)`, just under a bar that ends at −37. 1143 replaced
-/// those literals with "anchor each string to its own bar's centre", on a comparison that read the
-/// reference's TEXT offsets against our BAR offsets and concluded the geometry differed. It does
-/// not: our bars are byte-identical to the reference's, so its literals apply unchanged.
-///
-/// This asserts the PROPERTY, not the numbers, so it survives a future nudge (1145 moved the
-/// player's pair the day before this). Text metrics come from the harness's own measurer — a
-/// FontString with a single CENTER anchor and no measured size cannot pin either edge, so it falls
-/// back to its owner's rect and every string would appear to sit in the same box.
+/// The numeral strings sit the reference's distance apart: the pet's bars are 70×8 at (47,-22) and
+/// (47,-29), a 7px pitch, so its mana text drops clear to (82,-38) under a bar that ends at -37
+/// (`PetFrame.xml:87-104`).
 #[test]
 fn no_two_numeral_strings_overlap_on_any_frame() {
     benilla_formats::wow_data_or_skip!();
@@ -1829,8 +1599,8 @@ fn no_two_numeral_strings_overlap_on_any_frame() {
         .unwrap();
     s.tick(0.0);
 
-    // The host's half of the measure round-trip, at the numerals' real font size: NumberFontNormal
-    // is ~14 px tall, and a digit runs ~7 px wide. The round-trip answers a frame late, so settle.
+    // Measure at NumberFontNormal's size (14px tall, about 7px a digit): unmeasured, a
+    // CENTER-anchored string takes its owner's rect. Answers land a frame late, so settle.
     for _ in 0..4 {
         let answers: Vec<(u32, f32, f32, u64)> = s
             .fontstrings_needing_measure()
@@ -1842,11 +1612,8 @@ fn no_two_numeral_strings_overlap_on_any_frame() {
         s.resolve();
     }
 
-    // The pin is the SEPARATION between the two numeral seats, which is the thing that broke and
-    // the thing the reference authored deliberately. Not "the line boxes must not overlap": at a
-    // 14 px NumberFontNormal the reference's own player seats are 12 px apart, so the boxes DO
-    // overlap there while the ink (a digit's ~10 px cap height, centred) does not. Only a seat
-    // pitch well under the font is a real collision — the pet's was 7 px.
+    // The check is the seats' separation, not box overlap: the player's seats are 12px apart
+    // (`PlayerFrame.xml:79-96`) at a 14px font, so their boxes overlap while the ink does not.
     for (frame, upper, lower, want) in [
         (
             "player",
@@ -1869,22 +1636,8 @@ fn no_two_numeral_strings_overlap_on_any_frame() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **`UnitFrame_OnEnter`/`OnLeave` exist under the REFERENCE's names, `this`-shaped, so an addon
-/// that hooks them is reached.**
-///
-/// `TipBuddy.lua:2770-2773` is the exact idiom, and it is the 1.12 customisation model in general:
-///
-/// ```lua
-/// originalUnitFrame_OnEnter = UnitFrame_OnEnter
-/// function UnitFrame_OnEnter() originalUnitFrame_OnEnter() … end
-/// ```
-///
-/// Against a missing global that captured nil and raised on the first hover. Our own adapter
-/// (`BenillaUnitFrame_OnEnter(frame)`, which took the frame explicitly) went with the file 1751's
-/// twenty-second window deleted: what runs here is the reference's own `this`-shaped body.
-///
-/// The same class as the Bagnon bag bug, and equally invisible to the corpus survey: it loads
-/// addons and fires events, but never hovers anything.
+/// Addons hook `UnitFrame_OnEnter` by capturing and replacing the global
+/// (`TipBuddy.lua:2770-2773`), so the stock `this`-shaped names must exist.
 #[test]
 fn the_unit_frame_hover_hooks_carry_the_references_names() {
     benilla_formats::wow_data_or_skip!();
@@ -1900,7 +1653,6 @@ fn the_unit_frame_hover_hooks_carry_the_references_names() {
         "the reference's names must exist for an addon to capture"
     );
 
-    // TipBuddy's idiom, run for real against a live unit frame.
     s.run(
         r#"
         HOVERS = 0
@@ -1927,16 +1679,8 @@ fn the_unit_frame_hover_hooks_carry_the_references_names() {
     );
 }
 
-/// **`SetRaidTargetIconTexture` lands each mark on its own cell of the 4×4 sheet.**
-///
-/// The helper an addon uses to draw a raid mark it got from `GetRaidTargetIndex` — three corpus
-/// addons in two codebases (CustomNameplates; Optional/oRA2's shared `MainTank.lua:1216` and
-/// `PlayerTarget.lua:1472`). It owns no frame and reads no unit: the texture is the caller's.
-///
-/// The coordinates are the point, so all eight are checked rather than one. Star is the top-left
-/// cell and skull the bottom-right of the first two rows — which is also what pins the reference's
-/// own `/ ROWS` row derivation as harmless here: with 4 rows and 4 columns the wrap lands where the
-/// sheet's mark order says it should.
+/// Stock `SetRaidTargetIconTexture` (`TargetFrame.lua:475-484`) puts each mark on its cell of the
+/// 4×4 sheet; its row divides by `ROWS`, not `COLUMNS`, which is harmless at 4×4.
 #[test]
 fn the_raid_mark_helper_maps_each_index_to_its_cell() {
     benilla_formats::wow_data_or_skip!();
@@ -1945,13 +1689,13 @@ fn the_raid_mark_helper_maps_each_index_to_its_cell() {
     s.run(r#"RTMark = UIParent:CreateTexture("RTMark", "OVERLAY")"#)
         .unwrap();
 
-    // (index, left, right, top, bottom) — 0.25 per cell, four across then down a row.
+    // (index, left, right, top, bottom): 0.25 per cell, four across, then the next row.
     let cells = [
         (1, 0.00, 0.25, 0.00, 0.25), // star
         (2, 0.25, 0.50, 0.00, 0.25), // circle
         (3, 0.50, 0.75, 0.00, 0.25), // diamond
         (4, 0.75, 1.00, 0.00, 0.25), // triangle
-        (5, 0.00, 0.25, 0.25, 0.50), // moon — the wrap onto row 2
+        (5, 0.00, 0.25, 0.25, 0.50), // moon: the wrap onto row 2
         (6, 0.25, 0.50, 0.25, 0.50), // square
         (7, 0.50, 0.75, 0.25, 0.50), // cross
         (8, 0.75, 1.00, 0.25, 0.50), // skull
@@ -1959,8 +1703,8 @@ fn the_raid_mark_helper_maps_each_index_to_its_cell() {
     for (i, l, r, t, b) in cells {
         s.run(&format!("SetRaidTargetIconTexture(RTMark, {i})"))
             .unwrap();
-        // `GetTexCoord` answers EIGHT (UL, LL, UR, LR as x,y pairs) since 1840; the old
-        // `(l, r, t, b)` rect is `ULx, URx, ULy, LLy` — positions 1, 5, 2, 4.
+        // `GetTexCoord` answers eight values (UL, LL, UR, LR as x,y pairs); the `(l, r, t, b)`
+        // rect is `ULx, URx, ULy, LLy`, positions 1, 5, 2, 4.
         let (gl, gt, _, gb, gr, ..): (f64, f64, f64, f64, f64, f64, f64, f64) =
             s.eval("return RTMark:GetTexCoord()").unwrap();
         assert_eq!(
@@ -1972,13 +1716,9 @@ fn the_raid_mark_helper_maps_each_index_to_its_cell() {
     assert!(s.errors().is_empty(), "no errors: {:?}", s.errors());
 }
 
-/// B317 — the player's OWN frame wears the leader and master-looter icons. Every other frame that
-/// can wear them has since 0434 phase 2; the player frame predated the party wire and listed them
-/// OUT, so the one person who could not see who was leading was the leader.
-///
-/// The two predicates differ, and the asymmetry is the reference's (`PlayerFrame_UpdatePartyLeader`):
-/// the leader icon asks `IsPartyLeader()`, the master icon asks whether `GetLootMethod`'s party
-/// index is `0` — the player's own seat on that scale — *and* that we are grouped at all.
+/// Stock `PlayerFrame_UpdatePartyLeader` (`PlayerFrame.lua:39-53`): the leader icon asks
+/// `IsPartyLeader()`, the master icon asks that `GetLootMethod`'s party index is 0, the player's
+/// own seat, and that we are grouped.
 #[test]
 fn the_player_frame_wears_the_leader_and_master_looter_icons() {
     benilla_formats::wow_data_or_skip!();
@@ -2007,7 +1747,6 @@ fn the_player_frame_wears_the_leader_and_master_looter_icons() {
     let leader = "PlayerLeaderIcon";
     let master = "PlayerMasterIcon";
 
-    // Solo: neither. A solo player "leads" nothing — `IsPartyLeader()` is nil without a group.
     assert!(!shown(&s, leader), "solo: no leader icon");
     assert!(!shown(&s, master), "solo: no master-looter icon");
 
@@ -2026,29 +1765,24 @@ fn the_player_frame_wears_the_leader_and_master_looter_icons() {
         loot_threshold: 2,
     };
 
-    // Grouped, we lead, group loot: leader icon only.
     s.set_party(party(0, None, "group"));
     s.fire_event("PARTY_LEADER_CHANGED", vec![]);
     assert!(shown(&s, leader), "we lead: the leader icon shows");
     assert!(!shown(&s, master), "group loot: no master-looter icon");
 
-    // Master loot, and we are the master (index 0 — the player's own seat).
     s.set_party(party(0, Some(0), "master"));
     s.fire_event("PARTY_LOOT_METHOD_CHANGED", vec![]);
     assert!(shown(&s, master), "we are master looter: the icon shows");
 
-    // The master looter is party1 instead: the icon is theirs, not ours.
     s.set_party(party(0, Some(1), "master"));
     s.fire_event("PARTY_LOOT_METHOD_CHANGED", vec![]);
     assert!(!shown(&s, master), "somebody else masters: our icon hides");
     assert!(shown(&s, leader), "…and we still lead");
 
-    // Leadership passes to party1: the crown goes with it.
     s.set_party(party(1, Some(1), "master"));
     s.fire_event("PARTY_LEADER_CHANGED", vec![]);
     assert!(!shown(&s, leader), "we no longer lead: the crown hides");
 
-    // Leaving the group clears both, through PARTY_MEMBERS_CHANGED alone.
     s.set_party(PartyState::default());
     s.fire_event("PARTY_MEMBERS_CHANGED", vec![]);
     assert!(
@@ -2059,39 +1793,17 @@ fn the_player_frame_wears_the_leader_and_master_looter_icons() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// **Every unit-frame global the reference declares** — the whole block, per.
-///
-/// benilla named the player's and target's power bar `…PowerBar`, which is the LATER client's
-/// vocabulary: 1.12 has no `*PowerBar` anywhere. Every one is `ManaBar` — `PlayerFrameManaBar`,
-/// `TargetFrameManaBar`, `PetFrameManaBar`, plus the `ManaBarColor` table and the `frame.manabar`
-/// field `UnitFrame_Initialize` sets (`UnitFrame.lua:14`). So we published four names the
-/// reference lacks and were missing four it has, which is decision 1189's error in both
-/// directions at once. ShaguTweaks reads `TargetFrameManaBar` unguarded (`health-numbers.lua:22`)
-/// and died on it; our own party frames already used the right name, so the tree disagreed with
-/// itself as well.
-///
-/// The guard is the reference's own list, not the names that turned up missing — 1718's rule,
-/// which exists because the two previous guards of this class each enumerated the instances that
-/// had already broken and so could not fire on the next one. Deliberate ADDITIONS are fine and are
-/// not asserted against; what is asserted is that nothing the reference declares is absent.
+/// The globals the stock unit-frame files declare exist, 1.12's `ManaBar` names and never the later
+/// `PowerBar`: addons read them unguarded (ShaguTweaks' `health-numbers.lua:22`). The list is the
+/// reference's own, so additions pass and only an absence fails.
 #[test]
 fn the_unit_frames_publish_every_name_the_reference_declares() {
     benilla_formats::wow_data_or_skip!();
     let s = UiScript::new().unwrap();
     load_unit_frames(&s);
 
-    // ref PlayerFrame.xml / TargetFrame.xml / PetFrame.xml — every `name=` those three files
-    // declare, minus the `virtual="true"` templates (which are not globals) and the buff/debuff
-    // button instances (a separate arc: TargetFrameBuff1..5, TargetFrameDebuff1..16).
-    //
-    // The list is taken from the reference files, not written from what turned up missing — and
-    // the first draft of THIS test still got that wrong, by filtering the reference's own list to
-    // the names starting `PlayerFrame`/`TargetFrame`/`PetFrame` and so dropping `PlayerName`,
-    // `PetPortrait`, `PetAttackModeTexture` and two dozen more. 1718's rule is easy to state and
-    // easy to re-break one level down.
-    //
-    // Collected rather than asserted one at a time: the point of a whole-block guard is to report
-    // the whole gap, and a first-failure assert would have hidden everything after it.
+    // Names from `PlayerFrame.xml`, `TargetFrame.xml` and `PetFrame.xml`, less virtual templates
+    // and the buff and debuff buttons; collected so a failure reports the whole gap.
     let mut missing = Vec::new();
     for name in [
         // PlayerFrame.xml
@@ -2155,12 +1867,8 @@ fn the_unit_frames_publish_every_name_the_reference_declares() {
             missing.push(name);
         }
     }
-    // The one genuine GAP, stated rather than quietly dropped from the list (1718's whole point
-    // is that the block stays visible): `PlayerFrameGroupIndicator` and its four children are the
-    // raid "Group N" tab above the player frame, driven by `PlayerFrame_UpdateGroupIndicator`
-    // (ref PlayerFrame.lua:214-229). We build no region, no texture and no handler for it — this
-    // is a feature we have not written, not a name we got wrong, and inventing five regions to
-    // satisfy a list would be the worse error. Zero corpus readers.
+    // The raid "Group N" tab (`PlayerFrame_UpdateGroupIndicator`, `PlayerFrame.lua:214-232`),
+    // exempt from the check, though stock `PlayerFrame.xml:359-416` declares all five.
     let unbuilt = [
         "PlayerFrameGroupIndicator",
         "PlayerFrameGroupIndicatorLeft",
@@ -2175,16 +1883,14 @@ fn the_unit_frames_publish_every_name_the_reference_declares() {
          by name finds nil: {missing:?}"
     );
 
-    // The colour table is `ManaBarColor` (ref UnitFrame.lua:2), not the later `PowerBarColor`,
-    // and addons index it directly for the power-type prefix and tint.
+    // The colour table is `ManaBarColor` (`UnitFrame.lua:2`); 1.12 has no `PowerBarColor`.
     assert!(s.eval::<bool>("return ManaBarColor ~= nil").unwrap());
     assert!(
         s.eval::<bool>("return PowerBarColor == nil").unwrap(),
         "PowerBarColor is the later client's name — 1.12 has no such global"
     );
 
-    // And the frame FIELD `UnitFrame_Initialize` sets (ref UnitFrame.lua:13-14), which unit-frame
-    // addons read off the frame rather than by global name.
+    // The frame fields `UnitFrame_Initialize` sets (`UnitFrame.lua:13-14`), read off the frame.
     assert!(
         s.eval::<bool>("return PlayerFrame.manabar ~= nil and PlayerFrame.healthbar ~= nil")
             .unwrap(),
@@ -2197,16 +1903,9 @@ fn the_unit_frames_publish_every_name_the_reference_declares() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// **The reported symptom, on the stock file that has it: the target's leader crown went stale.**
-///
-/// `PLAYER_FLAGS_CHANGED` was one of the events a migrated window registered and nothing here
-/// produced. `TargetFrame.lua:88-95` is its only 1.12 consumer and it re-runs the
-/// **party-leader icon** — *not* an AFK/DND badge, which 1.12 has nowhere on a unit frame and has
-/// no `UnitIsAFK`/`UnitIsDND` binding to draw from. With no producer, `TargetFrame_Update` was the
-/// crown's only writer, so it moved on a re-target and at no other moment: leadership passing to
-/// the player you were already holding did nothing on screen.
-///
-/// This drives the real stock file, so it is the symptom itself and not a proxy for it.
+/// `PLAYER_FLAGS_CHANGED`'s only 1.12 consumer, `TargetFrame.lua:88-95`, refreshes the target's
+/// leader crown (1.12 has no AFK or DND badge on a unit frame), so leadership passing to the held
+/// target shows without a re-target.
 #[test]
 fn the_target_leader_crown_follows_player_flags_changed() {
     benilla_formats::wow_data_or_skip!();
@@ -2225,17 +1924,11 @@ fn the_target_leader_crown_follows_player_flags_changed() {
             power_type: 0,
             power: 50,
             max_power: 50,
-            // `UnitIsPartyLeader`'s descriptor leg — PLAYER_FLAGS bit 0x1 — and the raw dword the
-            // event fires on, moved together the way the wire moves them.
+            // The descriptor's leader bit (PLAYER_FLAGS 0x1) and its dword, moved together.
             group_leader: leader,
             player_flags: u32::from(leader),
-            // **A NON-ZERO guid, or this test cannot fail.** `UnitIsPartyLeader` is two legs ORed
-            // and the second is a raw compare against the group's leader guid, with no zero guard
-            // — verified 1.12 behaviour, which is why `UnitIsPartyLeader(nil)` answers 1 while
-            // solo (`unit::bindings`). A default `UnitState` carries `guid: 0`, which equals the
-            // zeroed leader of an empty group, so the crown is up from the first frame and every
-            // assertion below passes for the wrong reason. Naming a guid puts the descriptor leg
-            // in sole charge, which is the leg this event exists to refresh.
+            // A non-zero guid, or this cannot fail: `UnitIsPartyLeader` also compares the guid with
+            // the group's leader guid, unguarded, and an empty group's leader guid is 0.
             guid: 0x4000_0000_0000_0009,
             ..UnitState::default()
         })
@@ -2243,16 +1936,12 @@ fn the_target_leader_crown_follows_player_flags_changed() {
     let crown =
         |s: &UiScript| -> bool { s.eval::<bool>("return TargetLeaderIcon:IsShown()").unwrap() };
 
-    // Target an ordinary group member: no crown.
     s.set_unit("target", mate(false));
     s.fire_event("PLAYER_TARGET_CHANGED", vec![]);
     assert!(!crown(&s), "not the leader: no crown");
 
-    // **Leadership passes to them while you hold the target.** This is the whole report.
     s.set_unit("target", mate(true));
-    // The control FIRST: the same event for a different token must change nothing, because the
-    // stock handler is gated on `arg1 == "target"`. A producer that fired argless — or that fired
-    // the wrong token — would light the crown here and the assertion below would prove nothing.
+    // The control first: the handler is gated on `arg1 == "target"`, so another token does nothing.
     s.fire_event(
         "PLAYER_FLAGS_CHANGED",
         vec![ScriptValue::Str("player".into())],
@@ -2268,7 +1957,7 @@ fn the_target_leader_crown_follows_player_flags_changed() {
     );
     assert!(crown(&s), "the crown appears without a re-target");
 
-    // And back down — the reference fires on the XOR-diff, so the clear edge is the same event.
+    // And back down: the event fires on the flags' XOR-diff, so the clear edge fires it too.
     s.set_unit("target", mate(false));
     s.fire_event(
         "PLAYER_FLAGS_CHANGED",
