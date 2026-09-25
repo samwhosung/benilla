@@ -55,6 +55,9 @@ def declared_names() -> set[str]:
 
 
 def main() -> int:
+    if any(a in ("-h", "--help") for a in sys.argv[1:]):
+        print(__doc__.strip())
+        return 0
     report = "--report" in sys.argv
     text = run_rustdoc()
     found = re.findall(r"warning: unresolved link to `([^`]+)`\n\s*--> ([^\s:]+):(\d+)", text)
