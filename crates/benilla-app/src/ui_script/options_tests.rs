@@ -3783,7 +3783,7 @@ fn the_camera_following_style_dropdown_carries_the_engine_enum_and_plate() {
         vec![("cameraSmoothStyle".to_string(), "2".to_string())]
     );
 
-    // A 1.12 client's config says "3" for Never; the nearest stop by number would be Always.
+    // A stored "3" is in range but no entry's value: it shows as Never, not the nearest, Always.
     s.set_cvar_host("cameraSmoothStyle", "3");
     s.run("BenillaOptionsFrameCategoryListRowAudio:Click(); BenillaOptionsFrameCategoryListRowControls:Click()")
         .unwrap();

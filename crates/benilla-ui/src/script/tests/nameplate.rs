@@ -655,7 +655,7 @@ fn a_middle_click_on_a_plate_fires_nothing() {
     );
 }
 
-/// pfUI's click-through (`nameplates.lua:1274`) calls `plate:Click`; in the reference a scripted
+/// pfUI's click-through (`nameplates.lua:1228`) calls `plate:Click`; in the reference a scripted
 /// and a physical click go through the button's one click slot.
 #[test]
 fn a_scripted_click_selects_too() {

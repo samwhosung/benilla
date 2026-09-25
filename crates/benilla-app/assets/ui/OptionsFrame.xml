@@ -701,8 +701,8 @@
             local v = OptionsRow_Get(row)
             local match
             for _, e in ipairs(row.entries) do
-                -- `alt`: 1.12's camera dropdown writes "3" for Never, which the nearest-value
-                -- fallback would show as Always. `e.alt ~= nil` keeps a nil value matching none.
+                -- `alt`: a stored "3" (in range, no entry's value) shows as Never, where the
+                -- nearest-value fallback would show Always. `e.alt ~= nil` keeps nil matching none.
                 if e.value == v or (e.alt ~= nil and e.alt == v) then match = e end
             end
             if not match and tonumber(v) then
