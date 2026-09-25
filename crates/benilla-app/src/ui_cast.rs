@@ -6,7 +6,7 @@
 //! — `SPELLCAST_START` and family, the exact contract stock
 //! `Interface\FrameXML\CastingBarFrame.xml` registers for — and pushes the VM's casting flag.
 //! The spell name rides the event (resolved here from the `Spell.dbc` catalog — the script VM
-//! has no spell-catalog binding, deliberately: one lookup face, decision 0107).
+//! has no spell-catalog binding, deliberately: one lookup face).
 //!
 //! This is a feed and nothing else. The lifecycle it reads — the pending cast, the queued
 //! strike, the running channel, the auto-repeat key — is the spell's (`crate::spell`, decision
@@ -63,7 +63,7 @@ pub(crate) struct CastBarFeed(pub(crate) Vec<CastBarEdge>);
 ///   spell with no player-facing name never puts one on the bar. Three shipped rows carry it, and
 ///   one is *named after the bit*: **22810 "Opening - No Text"**, the opener the client casts at
 ///   `LockType 13` ground containers. Printing the name regardless is what put that placeholder
-///   over a gathered Hyacinth Mushroom (B247, decision 1312).
+///   over a gathered Hyacinth Mushroom.
 /// - **no catalog row** (an unknown id, or no client data) — the empty string this always
 ///   returned in that case.
 ///
@@ -105,7 +105,7 @@ fn cast_bar_label(spells: Option<&crate::ui_action::Spells>, id: u32) -> String 
 /// Blood Siphons that gate (3) hides anyway) — so on a real server this reads "Channeling" for
 /// Blizzard, Arcane Missiles, Mind Flay, Drain Life/Soul/Mana, Rain of Fire, Hurricane,
 /// Tranquility, Evocation and First Aid alike. Ours passed the plain `Spell.dbc` name to every
-/// one of them until decision 2284.
+/// one of them until.
 ///
 /// The word itself is read the way the reference reads it — `FrameScript_GetText` on the
 /// GlobalStrings key, i.e. the Lua global `CHANNELING`, off the player's own chain — not from a
@@ -268,7 +268,7 @@ pub(crate) fn feed_cast_bar(
 /// OnUpdate land the same frame), and the local self-cancel resolved just ahead of the drain —
 /// a controller move edge or an ESC `SpellStopCasting()` from the previous frame kills the bar
 /// on this frame's VM tick (one engine frame from input to bar-death).
-/// The feed only — the state it reads is `crate::spell`'s (decision 2328).
+/// The feed only — the state it reads is `crate::spell`'s.
 pub(crate) struct UiCastPlugin;
 
 impl Plugin for UiCastPlugin {
@@ -288,7 +288,7 @@ impl Plugin for UiCastPlugin {
 mod tests {
     use super::*;
 
-    /// **B247** (decision 1312): the bar's label honours `SPELL_ATTR_EX3_NO_CASTING_BAR_TEXT`.
+    /// **B247**: the bar's label honours `SPELL_ATTR_EX3_NO_CASTING_BAR_TEXT`.
     /// Spell 22810's Spell.dbc name — "Opening - No Text" — is Blizzard's own annotation of the
     /// attribute, and it reached a player's screen because we printed the name regardless.
     #[test]

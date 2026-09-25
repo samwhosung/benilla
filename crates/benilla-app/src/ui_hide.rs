@@ -43,10 +43,10 @@ impl Plugin for UiHidePlugin {
     }
 }
 
-/// TOGGLEUI through the binding table (0997; default `ALT-Z` — 0870's finding stands: the
+/// TOGGLEUI through the binding table (default `ALT-Z` — 0870's finding stands: the
 /// install's `bindings-cache.wtf` says `CTRL-Z` on all three accounts, but they descend from one
 /// rebound profile, and a saved-state file is evidence about a *player*, never about the client).
-/// The exact-modifier law (0585) and the typing gate this site used to enforce by hand — the
+/// The exact-modifier law and the typing gate this site used to enforce by hand — the
 /// `toggle_chord` alt-and-nothing-else check, the AppKit `keyUp` repeat hazard — now live once,
 /// in the dispatch.
 fn toggle_ui_hidden(binds: Res<crate::bindings::BindingsState>, mut hidden: ResMut<UiHidden>) {

@@ -224,7 +224,7 @@ fn the_reported_sentences_read_correctly() {
     assert_eq!(
         line(PERIODICAURADAMAGE, Variant::SelfOther),
         // **Capitalized** — the reference words this cell out of `Resistances.dbc`, not out of
-        // `SPELL_SCHOOL<n>_NAME` (decision 2127). Lowercase is what MikScrollingBattleText's
+        // `SPELL_SCHOOL<n>_NAME`. Lowercase is what MikScrollingBattleText's
         // school compare misses.
         "Victim suffers 120 Fire damage from your Fireball."
     );

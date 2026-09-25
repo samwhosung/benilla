@@ -24,7 +24,7 @@
 //!   facing. (The client matches its zone-level area global directly; our MCNK `CurrentArea` is
 //!   the leaf sub-area, so the parent walk lands on the same zone.) It also runs the **landmark
 //!   pass** — the reference's `0x4a67a0` builder
-//!   ([`landmark_gates_pass`], decision 1586): the `AreaPOI.dbc` rows the displayed level admits,
+//!   ([`landmark_gates_pass`]): the `AreaPOI.dbc` rows the displayed level admits,
 //!   then the guard-directions marker. That pass is keyed rather than per-frame ([`LandmarkKey`]),
 //!   because the reference rebuilds it on events, not on a clock.
 //!
@@ -52,7 +52,7 @@ use benilla_world::world_map::CurrentMap;
 
 /// The app-side mirror of the pushed catalog — the projection data (rects + world-sheet
 /// constants) per continent/zone, in the SAME order as the engine's copy (indices must agree).
-/// The AreaTable itself is the shared [`crate::area::AreaTableRes`] (decision 0287).
+/// The AreaTable itself is the shared [`crate::area::AreaTableRes`].
 #[derive(Resource)]
 pub(crate) struct WorldMapUiData {
     continents: Vec<ContinentEntry>,
@@ -331,7 +331,7 @@ pub(crate) fn build_catalog(
 #[derive(Resource)]
 pub(crate) struct WorldMapCatalog(pub(crate) Vec<WorldMapContinentView>);
 
-/// **The map catalog goes into the VM before a single interface file runs** (decision 2240).
+/// **The map catalog goes into the VM before a single interface file runs**.
 ///
 /// Called from [`crate::ui_script::load_ingame_ui_on_world_entry`], beside the CVar table, the
 /// realm name and the addon-info array, and for exactly their reason: that edge mints a fresh VM
@@ -382,7 +382,7 @@ pub(crate) fn seed_world_map_catalog(world: &mut World, script: &mut UiScript) {
 
 /// [`build_catalog`] over the resources the app holds — `None` when the patch chain or either DBC
 /// catalog is missing, which in a real run cannot happen at this edge: all three are `Startup`
-/// systems and the initial state transition is after `PostStartup` (decision 1038). A bare test
+/// systems and the initial state transition is after `PostStartup`. A bare test
 /// world takes the `None`.
 fn build_catalog_from_world(world: &World) -> Option<(Vec<WorldMapContinentView>, WorldMapUiData)> {
     let assets = world.get_resource::<WorldAssets>()?;
@@ -693,8 +693,7 @@ pub(crate) fn project_on_displayed(
 /// [`feed_world_map`]'s memos, bundled behind ONE [`crate::ui_script::VmMemo`] because the feed
 /// sits at Bevy's system-parameter ceiling. Keeping the memo on the outside rather than on each
 /// field is the point: a login is a new VM, and the whole bundle resets with it in one place —
-/// there is no field that can be added later and quietly outlive the session it is memory about
-/// (decision 1290).
+/// there is no field that can be added later and quietly outlive the session it is memory about.
 #[derive(Default)]
 struct FeedMemos {
     /// The last pushed `PLAYER_EXPLORED_ZONES` bitset.
@@ -715,7 +714,7 @@ fn feed_world_map(
     areas: Option<Res<crate::area::AreaTableRes>>,
     death_net: Res<crate::death::DeathNet>,
     poi_marker: Res<crate::poi_marker::PoiMarker>,
-    // The party blips' two position sources (B320): the roster + the wire's per-member stats, and
+    // The party blips' two position sources: the roster + the wire's per-member stats, and
     // the streamed-entity index that beats them when a member is actually in the world with us.
     group: Res<crate::ui_party::GroupState>,
     guids: Res<crate::net::GuidIndex>,
@@ -818,7 +817,7 @@ fn feed_world_map(
     let project =
         |pos_map: u32, px: f32, py: f32| project_on_displayed(&data, selection, pos_map, px, py);
     let uv = project(map.0, wx, wy);
-    // The corpse marker (decision 0308 §5): the query answer's DISPLAY position/map (a dungeon
+    // The corpse marker: the query answer's DISPLAY position/map (a dungeon
     // corpse projects at its entrance — the server rewrote it). `zone_uv`'s outside-the-rect
     // (0,0) and the None here both land on the reference's hide sentinel.
     let corpse_uv = death_net.corpse.and_then(|cp| {
@@ -978,7 +977,7 @@ fn dev_map_jump(
     net: Res<crate::net::NetCommands>,
 ) {
     // A dev affordance living in a gameplay module — it names no dev root, so nothing about it
-    // fails to compile in a player build, and it shipped in 1174's (decision 1179). Alt-click is
+    // fails to compile in a player build, and it shipped in 1174's. Alt-click is
     // free-fly's closest sibling: it moves the player's body across the continent.
     if !crate::run_mode::dev_affordances() {
         return;

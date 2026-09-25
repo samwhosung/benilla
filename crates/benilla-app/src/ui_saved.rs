@@ -1,4 +1,4 @@
-//! The **saved-variables** host side (decision 1128) — the file, the load seam, the write
+//! The **saved-variables** host side — the file, the load seam, the write
 //! triggers. The engine half (the `RegisterForSave` declaration set and the serializer) is
 //! [`benilla_ui::script`]'s `saved` module; this is the part that touches the disk and the clock.
 //!
@@ -49,7 +49,7 @@ impl Plugin for UiSavedPlugin {
 /// edit that fails to parse costs this session's settings and not the file. Read as **bytes**
 /// (1193): the writer keeps a Lua byte string's bytes, so the file need not be UTF-8.
 ///
-/// **`host_settings` is the third store's turn** (decision 2132). A handful of the reference's
+/// **`host_settings` is the third store's turn**. A handful of the reference's
 /// `RegisterForSave` globals are settings benilla persists in `config.toml` instead — the
 /// nameplate pair is the first — and those have to land in the VM too, or the stock file reads
 /// nil and acts on it. The seat is exact and both edges are load-bearing: **after** the chunk, so

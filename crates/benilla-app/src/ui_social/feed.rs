@@ -47,7 +47,7 @@ const WHO_KEYS: [&str; 4] = [
 /// **`ecx` is the RAW wire display count** (`[ebp-0x14]`), not the 50-capped global the cap at
 /// `0x5adf92` writes — a re-implementation must not test its own clamped count and call it the
 /// same rule. Ours is [`SocialState::who`]'s length, which is the wire's count uncapped (vmangos
-/// sends at most 49), so the two agree. Decision 2030.
+/// sends at most 49), so the two agree.
 const WHO_CHAT_MAX: usize = 3;
 
 /// What the feed last announced, so the Era events fire on edges rather than every frame.
@@ -135,7 +135,7 @@ pub(super) fn feed_social(
     }
     // `SMSG_WHO`'s two exits ([`WHO_CHAT_MAX`]). Note the event is the answer's *only* announcement
     // — `SortWho` fires its own, synchronously, from inside the binding — so a sort no longer
-    // re-announces the list a tick later (decision 2030).
+    // re-announces the list a tick later.
     if social.who_dirty {
         social.who_dirty = false;
         if answer_goes_to_the_frame(social.who_to_ui, social.who.len()) {
@@ -457,7 +457,7 @@ pub(super) fn drain_social(
             // The click the binding already applied to the VM's copy of the chain, applied to
             // ours — so the next push agrees. No `who_dirty`: `SortWho` fired `WHO_LIST_UPDATE`
             // synchronously, inside the binding, and the reference fires it exactly once per
-            // click (decision 2030).
+            // click.
             SocialRequest::SortWho(sort_type) => social.who_sort.promote(&sort_type),
             SocialRequest::SetWhoToUi(on) => social.who_to_ui = on,
         }

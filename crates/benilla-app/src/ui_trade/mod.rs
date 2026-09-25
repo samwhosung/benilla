@@ -14,7 +14,7 @@
 //! intents (`InitiateTrade`/`AcceptTrade`/`CancelTradeAccept`/`CloseTrade`) back out into the trade
 //! `CMSG`s.
 //!
-//! **An incoming request is answered here, not on the wire** (decision 1764).
+//! **An incoming request is answered here, not on the wire**.
 //! `SMSG_TRADE_STATUS(BEGIN_TRADE)` only *records* the request; [`answer_trade_request`] walks the
 //! reference's own eight-leg ladder (`0x4bf736`) and either refuses it — on one of three different
 //! opcodes, or with no packet at all — or accepts it, which is what the client did unconditionally
@@ -29,7 +29,7 @@
 //! **There is no consent prompt, and that is faithful rather than missing.** 1.12.1 registers a
 //! `TRADE_REQUEST` event (slot `0xbe160c`) and signals it from nowhere, so the `TRADE` StaticPopup
 //! that would have asked is dead code in the real client. benilla wired that dialog up and took it
-//! back out (decision 1764): the reference's answer to an unwanted trade is the ignore list and the
+//! back out: the reference's answer to an unwanted trade is the ignore list and the
 //! *Block Trades* checkbox, both of which are legs of the ladder below.
 //!
 //! **The partner's portrait** rides the shared `"npc"` booth token: [`TradeSession`] implements
@@ -85,7 +85,7 @@ struct TradeOffer {
 pub(crate) struct TradeSession {
     /// The trade partner's guid; `Some` from the initiate/accept onward, `None` = no trade.
     partner: Option<u64>,
-    /// An incoming `BEGIN_TRADE` **this client has not answered yet** (decision 1764) — the
+    /// An incoming `BEGIN_TRADE` **this client has not answered yet** — the
     /// initiator's guid. Set by [`Self::request`] and cleared the moment
     /// [`answer_trade_request`] resolves it, either by promoting it to `partner`
     /// ([`Self::begin`]) or by refusing ([`Self::refuse_request`]). Mutually exclusive with
@@ -192,7 +192,7 @@ impl TradeSession {
     }
 
     /// `BEGIN_TRADE(initiator guid)` — record the incoming request, **unanswered**. Nothing goes
-    /// on the wire here (decision 1764): [`answer_trade_request`] owns the reply.
+    /// on the wire here: [`answer_trade_request`] owns the reply.
     ///
     /// Records it *beside* whatever session already exists rather than resetting — a request is
     /// not a trade, and a request arriving over a live one must not destroy it. That reset is
@@ -577,8 +577,8 @@ pub(crate) struct BlockTrades(pub(crate) bool);
 /// client registers a `TRADE_REQUEST` event (id `0x11d`) and signals it from nowhere — a
 /// whole-image census — so `StaticPopupDialogs["TRADE"]`, its `TRADE_WITH_QUESTION` text and its
 /// `BeginTrade`/`CancelTrade` verbs are dead code there, and an incoming trade that survives the
-/// ladder opens the window unasked. benilla briefly wired that dialog up and then took it back out
-/// (decision 1764): a popup the real client never shows is a divergence every addon and every
+/// ladder opens the window unasked. benilla briefly wired that dialog up and then took it back out:
+/// a popup the real client never shows is a divergence every addon and every
 /// player would feel, and the reference's own answer to an unwanted trade is leg 2 and leg 8 —
 /// ignore them, or tick *Block Trades*.
 ///
@@ -644,7 +644,7 @@ fn answer_trade_request(
     //
     // The server has no ignore check for trade at all (vmangos `HandleInitiateTradeOpcode` reads
     // no social list), so this refusal is entirely the client's — the same shape as the duel
-    // challenge's (decision 0668). `CMSG_IGNORE_TRADE` rather than busy is what makes the
+    // challenge's. `CMSG_IGNORE_TRADE` rather than busy is what makes the
     // initiator read "… is ignoring you" instead of "… is busy", and it is a single call site
     // image-wide (`0x4bf759` → `0x5d41c0`). Both sides key on the guid, and both cap at 25.
     if social.is_ignored(initiator) {
@@ -870,7 +870,7 @@ fn feed_trade(
     }
     // The per-slot events the stock TradeFrame.lua repaints one slot on (`0x4bf414`/`0x4bf452`
     // TRADE_TARGET_ITEM_CHANGED, `0x4bf487`/`0x4bfaef` TRADE_PLAYER_ITEM_CHANGED, arg1 the 1-based
-    // slot; decision 1966). The full TRADE_UPDATE below is kept:
+    // slot). The full TRADE_UPDATE below is kept:
     // the reference fires it too, from `0x4c034f`.
     if changed && trade.is_open() && !opened {
         let empty = TradeState::default();
@@ -926,7 +926,7 @@ fn feed_trade(
         script.fire_event("TRADE_REQUEST_CANCEL", vec![]);
     }
     if opened {
-        // `SetTradePartner 0x4bf4e0`'s open leg (decision 1965): coins held on the cursor fold
+        // `SetTradePartner 0x4bf4e0`'s open leg: coins held on the cursor fold
         // into the offer before anything else — the one leg that fires the two money events
         // locally, the send following through the money drain below.
         if let Some(offer) = script.fold_cursor_money_into_trade() {
@@ -1078,7 +1078,7 @@ fn drain_trade(
         }
         trade.close_window();
     }
-    // The TRADE dialog's pair (decision 1963): `BeginTrade` is the empty `0x117`, `CancelTrade`
+    // The TRADE dialog's pair: `BeginTrade` is the empty `0x117`, `CancelTrade`
     // the bare `0x11C` — no teardown of ours, the server's status reply drives the window.
     if script.take_trade_begin() {
         let _ = commands.0.send(ClientCommand::BeginTrade);
@@ -1127,7 +1127,7 @@ fn trim_offer_to_purse(
 /// Resolve a UnitPopup unit token to the player guid to trade with (decision 0592 P1). The
 /// resolution is not trade-specific — every UnitPopup verb against another player needs the same
 /// token → player-guid step — so it lives in [`crate::ui_unit::player_token_guid`] and inspect
-/// (decision 0631) shares it. Kept as a named local for this module's own tests.
+/// shares it. Kept as a named local for this module's own tests.
 fn resolve_trade_target(token: &str, selection: &Selection, group: &GroupState) -> Option<u64> {
     crate::ui_unit::player_token_guid(token, selection, group)
 }
@@ -1181,7 +1181,7 @@ mod tests {
 
     /// An incoming `BEGIN_TRADE` is a *request*, not a trade: nothing is a partner until it is
     /// answered, so the "npc" portrait, the snapshot and the already-in-a-trade refusal leg all
-    /// read the same "no trade here" they read before it arrived (decision 1764).
+    /// read the same "no trade here" they read before it arrived.
     #[test]
     fn an_incoming_request_is_not_yet_a_trade() {
         let mut s = TradeSession::default();
@@ -1588,7 +1588,7 @@ mod tests {
 
     /// A request that survives every leg is **accepted unasked** — the bottom of the reference's
     /// own ladder, and the behaviour benilla briefly replaced with a consent dialog before taking
-    /// it back out (decision 1764). The 5875 client never asks: it registers `TRADE_REQUEST` and
+    /// it back out. The 5875 client never asks: it registers `TRADE_REQUEST` and
     /// signals it from nowhere.
     #[test]
     fn a_request_that_survives_the_ladder_is_accepted() {

@@ -34,7 +34,7 @@
 //! `UPDATE_PENDING_MAIL` in all of 1.12 FrameXML and its handler is a bare idempotent
 //! `if HasNewMail() then Show() else Hide()` (`Minimap.xml` l.278-289) — it never listens for
 //! `MAIL_INBOX_UPDATE`/`MAIL_CLOSED` despite the icon logically depending on the inbox state. So
-//! **checking your mail clears the icon by a route that never touches the inbox** (decision 0913):
+//! **checking your mail clears the icon by a route that never touches the inbox**:
 //! opening a letter arms the deferred-refresh flag ([`MailPending::arm_refresh`], the reference's
 //! `[0xb6efcc]`), and the mailbox *close* re-asks the server — the sender stamping the countdown to
 //! [`MAIL_TIME_NO_MAIL`] and the reply settling it. The same stamp-then-ask runs at every
@@ -65,7 +65,7 @@ mod pending;
 
 pub(crate) use pending::MailPending;
 
-/// `checked` mask bits (VERIFIED vmangos `Mail.h`, decision 0544): READ, RETURNED, COPIED.
+/// `checked` mask bits (VERIFIED vmangos `Mail.h`): READ, RETURNED, COPIED.
 const CHECKED_READ: u32 = 0x1;
 const CHECKED_RETURNED: u32 = 0x2;
 const CHECKED_COPIED: u32 = 0x4;
@@ -140,7 +140,7 @@ impl crate::query_cache::AskOnce for MailOpen {
 }
 
 impl MailOpen {
-    /// A mailbox right-click (decision 0544): open (or re-show) the window's session and request its
+    /// A mailbox right-click: open (or re-show) the window's session and request its
     /// `MAIL_SHOW`. A *different* mailbox resets the session (rows + throttle); the same one keeps
     /// them and just re-shows (the reference re-fires `MAIL_SHOW` on every use — `CheckInbox`'s own
     /// throttle stops the refresh from spamming the wire).
@@ -224,7 +224,7 @@ impl Plugin for UiMailPlugin {
                     close_npc_session_out_of_range::<MailOpen>.before(feed_mail),
                     feed_mail.after(crate::ui_unit::UnitFeed).in_set(UiFeed),
                     drain_mail.after(UiInput),
-                    // The world-enter one-shot (decision 0548 §7: "once at UI/login load") — its
+                    // The world-enter one-shot ("once at UI/login load") — its
                     // own system, ordering-independent of the feed/drain pair above.
                     send_query_next_mail_time_on_enter,
                 ),
@@ -232,7 +232,7 @@ impl Plugin for UiMailPlugin {
     }
 }
 
-/// `MSG_QUERY_NEXT_MAIL_TIME`, sent once per **world-enter** — VERIFIED faithful (decision 0913):
+/// `MSG_QUERY_NEXT_MAIL_TIME`, sent once per **world-enter** — VERIFIED faithful:
 /// the query's two callers are the mail module's init tail and the close-with-pending path, and
 /// that init hangs off the world-enter cascade `0x4908c0` (`PLAYER_ENTERING_WORLD` + 37 subsystem
 /// inits), whose guard is re-armed by the paired teardown — so it runs per world-enter (login,
@@ -310,7 +310,7 @@ fn resolve_row(
     let returned = entry.checked & CHECKED_RETURNED != 0;
     // Reply is allowed only to a not-yet-returned mail from a player (MailFrame.lua l.281).
     let can_reply = entry.sender_guid.is_some() && !returned;
-    // Delete-vs-return (INTERIM, decision 0548): a mail RETURNS on delete/expiry only when it still
+    // Delete-vs-return (INTERIM): a mail RETURNS on delete/expiry only when it still
     // carries attachments (item or money) from a not-yet-returned player sender — that is the
     // server's own expiry behavior (vmangos `ReturnOrDeleteOldMails`). Everything else — plain
     // letters, system mail, already-returned mail — deletes. The exact client predicate behind
@@ -421,13 +421,13 @@ fn resolve_row(
         can_reply,
         is_gm,
         // The letter body is server-authored text, so it runs the `$`-macro expander — the
-        // reference does it from two sites in `GetInboxText` (decision 0754). Subject is the
+        // reference does it from two sites in `GetInboxText`. Subject is the
         // local player, as it is for every panel seam.
         body: raw_body.map(|b| crate::npc_text::substitute(b, macros)),
         stationery_texture,
         // NOT "is an auction mail": the reference's `isInvoice` reads the fields its subject
         // parser persisted, and it persists them only for won(1)/sold(2) — so an outbid or expiry
-        // notice answers false here (decision 1527). This is also what nils the body: the two
+        // notice answers false here. This is also what nils the body: the two
         // answers come off the same record state, which is exactly why MailFrame can lay the
         // invoice pane over the letter page.
         is_invoice: auction
@@ -584,7 +584,7 @@ fn feed_mail(
     // SEND acks: MAIL_FAILED on EVERY send result (unblocks the button — `0x4ad15f`), plus
     // MAIL_SEND_SUCCESS on OK (resets the form) or the refusal's own line on a failure. The
     // success also SAYS so — `ERR_MAIL_SENT`, the yellow info line `0x4ad0b1` shows before it
-    // resets the form (decision 1821).
+    // resets the form.
     // A take emptied and purged a row: `CLOSE_INBOX_ITEM(index)` — the stock handler hides the
     // open letter when it is that row — ahead of the `MAIL_INBOX_UPDATE` the changed list fires
     // below, the client's own order (`0x4ad772` before `0x4ad7a3`, 1970).
@@ -685,7 +685,7 @@ fn feed_mail(
     } else if closed {
         script.clear_stationery();
         script.fire_event("MAIL_CLOSED", vec![]);
-        // The close core's tail (`0x4acdad`/`0x4acdb1`, decision 0913): a session where a
+        // The close core's tail (`0x4acdad`/`0x4acdb1`): a session where a
         // mail was read — or one arrived while the window was open — re-asks the server, and the
         // sender stamps the countdown to "no mail" on the way out. This is the whole mechanism by
         // which checking your mail clears the minimap icon; nothing on the inbox path touches it.
@@ -727,7 +727,7 @@ fn feed_mail(
     }
 }
 
-/// Drain the Lua intents into the mail `CMSG`s (decision 0544): `CheckInbox` → a throttled
+/// Drain the Lua intents into the mail `CMSG`s: `CheckInbox` → a throttled
 /// `CMSG_GET_MAIL_LIST`; an opened mail → `CMSG_MAIL_MARK_AS_READ` (once, unread) + the ask-once
 /// `CMSG_ITEM_TEXT_QUERY` for its body; take/return/delete → their per-mail `CMSG`s; `SendMail` →
 /// `CMSG_SEND_MAIL` (the attachment's `(bag, slot)` resolved to its item guid here); `CloseMail` →
@@ -779,7 +779,7 @@ fn drain_mail(
         // Arm the deferred refresh on **every** open, read or not: the reference's `GetInboxText`
         // calls the mark-as-read sender unconditionally, and the `[0xb6efcc] = 1` inside it is
         // unconditional too (`0x4adda6`) — so opening any letter is what makes the close re-ask the
-        // server, and that is what clears the minimap icon (decision 0913). Arming it on an
+        // server, and that is what clears the minimap icon. Arming it on an
         // already-read mail costs at most one redundant query on close; failing to arm it would
         // strand the icon lit, so the eager side is the safe side.
         pending.arm_refresh();
@@ -836,7 +836,7 @@ fn drain_mail(
     }
 
     // SendMail: resolve the attachment's (bag, slot) to the wire item guid at send time (the
-    // reference re-reads the slot when the send fires — a lazy resolve, decision 0216/0544).
+    // reference re-reads the slot when the send fires — a lazy resolve).
     if let Some(req) = script.take_mail_send() {
         let item_guid = req.item.and_then(|(bag, slot)| {
             self_q.iter().next().and_then(|s| {
@@ -872,7 +872,7 @@ mod tests {
     use super::*;
     use benilla_protocol::messages::MailAttachment;
 
-    /// **The mail-result table, welded to the message ids it was read from** (decision 1821) —
+    /// **The mail-result table, welded to the message ids it was read from** —
     /// the reference's jump table at `0x4ad17c`, reached through the byte index at `0x4ad1a0`.
     /// The id, not the key, is what was disassembled, so the id is what this asserts.
     #[test]

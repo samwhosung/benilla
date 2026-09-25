@@ -32,7 +32,7 @@ pub(super) struct FedParty {
     invite: Option<String>,
     units: [Option<UnitState>; 4],
     /// Each `party1..party4` slot's `(member guid, is their object streamed)` — the edge
-    /// `PARTY_MEMBER_ENABLE`/`DISABLE` fire on (decision 1640). The **guid rides along** because
+    /// `PARTY_MEMBER_ENABLE`/`DISABLE` fire on. The **guid rides along** because
     /// the events are an *object's* activation, not a slot's: a slot whose occupant changed is a
     /// roster edge, and firing ENABLE there would announce an arrival nobody made. Guid `0` is an
     /// empty slot.
@@ -45,7 +45,7 @@ pub(super) struct FedParty {
     /// own raid row's zone — a plain value watched as a counter).
     names_generation: gate::Watch,
     area: gate::Watch,
-    /// The `raid1..raid40` snapshots, same per-token diff as [`Self::units`] (decision 1549).
+    /// The `raid1..raid40` snapshots, same per-token diff as [`Self::units`].
     /// A `Vec` rather than a `[_; 40]`: `UnitState` is not `Copy`, and forty of them in a `Local`
     /// that a solo player never fills is worth the one allocation a raid pays.
     raid_units: Vec<Option<UnitState>>,
@@ -59,7 +59,7 @@ pub(super) struct FedParty {
     /// The ready-check ticket last seen ([`GroupState::ready_check`]).
     ready_check: u32,
     /// The request generation last seen ([`GroupState::ready_check_requests`]) and how far into
-    /// that request's answer log the engine has been fed (decision 1989).
+    /// that request's answer log the engine has been fed.
     ready_check_requests: u32,
     answers_forwarded: usize,
     /// The raid-target icon board last pushed — what `RAID_TARGET_UPDATE` fires on. Eight guids,
@@ -83,7 +83,7 @@ fn saved_instances_moved(saved: &[SavedInstanceInfo], answers: u32, fed: &FedPar
 /// `raid1`..`raid40` — the unit tokens the RaidFrame's rows target, tooltip and re-read levels
 /// through. Spelled out rather than `format!`ed per push: [`UiScript::set_unit`] wants a `&str`,
 /// and a table of forty `&'static str` costs nothing where forty `String`s per roster change
-/// would (decision 1549). `MAX_RAID_MEMBERS` is the reference's own 40.
+/// would. `MAX_RAID_MEMBERS` is the reference's own 40.
 #[rustfmt::skip]
 pub(crate) const RAID_TOKENS: [&str; 40] = [
     "raid1", "raid2", "raid3", "raid4", "raid5", "raid6", "raid7", "raid8", "raid9", "raid10",
@@ -115,7 +115,7 @@ pub(super) fn feed_party(
     stores: Query<&ObjectStore>,
     changed_stores: Query<(), Changed<ObjectStore>>,
     mut removed_stores: RemovedComponents<ObjectStore>,
-    // The per-field edges (decision 2297), for `fire_transitions`' watch-bridge arms.
+    // The per-field edges, for `fire_transitions`' watch-bridge arms.
     mut edges: MessageReader<FieldChanged>,
     self_q: Query<(Entity, &Guid, &ObjectStore), With<SelfPlayer>>,
     factions: Option<Res<crate::target::Factions>>,
@@ -124,10 +124,10 @@ pub(super) fn feed_party(
     // The leaf area under us, through the SAME accessor `crate::area`'s zone-text resolver uses.
     // Deliberately not `terrain_stream::CurrentArea` directly: that item is named today only by
     // the instruments, and naming it from a game module would push it across the world-API wall
-    // (`tests/world_api_wall.rs`, decision 1164) for a value this already answers.
+    // (`tests/world_api_wall.rs`) for a value this already answers.
     here: benilla_world::world_point::WorldPoint,
     // `Map.dbc`'s display names — `SMSG_RAID_INSTANCE_INFO` carries a map id and the Raid Info
-    // panel shows a name (decision 1549). `Option` like every other catalog here: an engine-less
+    // panel shows a name. `Option` like every other catalog here: an engine-less
     // harness has none, and a lockout then shows its map id, never a blank row.
     map_catalog: Option<Res<benilla_assets::MapCatalogRes>>,
     mut fed: Local<crate::ui_script::VmMemo<FedParty>>,
@@ -138,7 +138,7 @@ pub(super) fn feed_party(
     };
     let (fed, vm_reset) = fed.get_reset(&script);
     let edges = FieldEdges::collect(&mut edges);
-    // The ready-check summary the timeout tick composed (decision 1989) — a client-composed
+    // The ready-check summary the timeout tick composed — a client-composed
     // `CHAT_MSG_SYSTEM` line, pushed the way every other one is. Ahead of the gate: the tick
     // runs on the frame clock, not on anything the gate watches.
     for line in script.take_ready_check_lines() {
@@ -207,7 +207,7 @@ pub(super) fn feed_party(
     }
     let self_pair = self_q.iter().next();
     let self_guid = self_pair.map(|(_, g, _)| g.0);
-    // The party's PvP faction group (decision 0646 §1): our own. A 1.12 party is always one
+    // The party's PvP faction group: our own. A 1.12 party is always one
     // faction, and a member out of streaming range has no descriptor to resolve one from — so
     // reading it off ourselves is exact for every member, present or not.
     let own_group = self_pair
@@ -348,7 +348,7 @@ pub(super) fn feed_party(
             }
             fed.units[i] = snap;
         }
-        // ── PARTY_MEMBER_ENABLE / PARTY_MEMBER_DISABLE (decision 1640) ──────────────────────
+        // ── PARTY_MEMBER_ENABLE / PARTY_MEMBER_DISABLE ──────────────────────
         //
         // The pair the reference fires from the very hooks decision 1640 built the rest of this
         // arc on: `PARTY_MEMBER_DISABLE` (`0xdd`) at the end of the deactivate virtual
@@ -380,7 +380,7 @@ pub(super) fn feed_party(
         }
     }
 
-    // ── raid1..raid40 (decision 1549) ──────────────────────────────────────────────────────
+    // ── raid1..raid40 ──────────────────────────────────────────────────────
     //
     // The RaidFrame's rows carry a `raid<N>` token and use it for everything a party row uses a
     // `party<N>` token for: left-click targets it, the tooltip reads it, and the reference's own
@@ -452,7 +452,7 @@ pub(super) fn feed_party(
         script.fire_event("PARTY_LOOT_METHOD_CHANGED", vec![]);
         fed.loot = group.loot;
     }
-    // ── RAID_ROSTER_UPDATE (decision 1549) ──────────────────────────────────────────────────
+    // ── RAID_ROSTER_UPDATE ──────────────────────────────────────────────────
     //
     // Fired on the roster's IDENTITY moving — who is in it, in what order, at what rank, in which
     // subgroup, online or not — and NOT on the whole row. That split is the reference's own, read
@@ -491,7 +491,7 @@ pub(super) fn feed_party(
         script.fire_event("RAID_TARGET_UPDATE", vec![]);
     }
 
-    // ── READY_CHECK (decision 1549) ─────────────────────────────────────────────────────────
+    // ── READY_CHECK ─────────────────────────────────────────────────────────
     //
     // The reference's event `0x218`, fired by the `MSG_RAID_READY_CHECK` open handler
     // (`0x4ba360`), which is also where its 30 s deadline is armed (`0xb713f4 = clock + 0x7530`).
@@ -506,7 +506,7 @@ pub(super) fn feed_party(
             script.fire_event("READY_CHECK", vec![]);
         }
     }
-    // The request generation — both arms — is the engine's state half (decision 1989): the leader
+    // The request generation — both arms — is the engine's state half: the leader
     // arm's close-if-nobody-pending, the member arm's 30 s deadline. Then the answer log, replayed
     // from where this memo left off; a new request restarts the cursor with the log.
     if group.ready_check_requests != fed.ready_check_requests {
@@ -521,7 +521,7 @@ pub(super) fn feed_party(
     }
     fed.answers_forwarded = group.ready_check_answers.len();
 
-    // ── UPDATE_INSTANCE_INFO (decision 1549) ────────────────────────────────────────────────
+    // ── UPDATE_INSTANCE_INFO ────────────────────────────────────────────────
     //
     // The saved-lockout list, pushed with its map names already resolved (the wire carries
     // `Map.dbc` ids; a missing catalog degrades to the id rather than to a blank row).
@@ -587,7 +587,7 @@ pub(super) struct RaidSelf {
     /// take the arm a health test would not.
     pub(super) dead: bool,
     /// **Our own `UNIT_FIELD_BYTES_0` class byte**, and it has to come from the descriptor rather
-    /// than from the name cache the way everyone else's does (decision 1549).
+    /// than from the name cache the way everyone else's does.
     ///
     /// `NameCache::player_traits` is filled by `SMSG_NAME_QUERY_RESPONSE`, and **we never query
     /// ourselves**: the login seeds our own name with `traits: None` precisely so `"player"` needs
@@ -806,7 +806,7 @@ fn member_unit_state(
         // In visibility range: the live descriptor is the truth (the server keeps it current).
         Some(store) => crate::ui_unit::snapshot(store, Some(m.name.clone()), 0, classes),
         // Out of range: **the roster record** — which is not only the `PARTY_MEMBER_STATS` wire
-        // any more (decision 1640). It is seeded from the member's own live descriptor at the
+        // any more. It is seeded from the member's own live descriptor at the
         // instant their object leaves the manager (`0x5f0880`, `ui_party::net::
         // member_deactivated`), seated with the `1/1` placeholder when they join the roster
         // unseen (`0x4e82d0`), and patched by the wire afterwards — so this leg never reads the
@@ -854,7 +854,7 @@ fn member_unit_state(
     s.guid = m.guid;
     s.raid_target = group.raid_target_index(m.guid);
     s.reaction = 5;
-    // The group PvP icon's faction (decision 0646 §1 — closes 0434's named party-icon deferral).
+    // The group PvP icon's faction (closes 0434's named party-icon deferral).
     s.faction_group = own_group;
     // The roster status byte overlays BOTH paths (GetGroupMemberStatus's Lua-predicate bits).
     s.is_connected = m.status & member_status::ONLINE != 0;
@@ -979,7 +979,7 @@ pub(super) fn drain_party(
                 // The caller's own threshold wins when it passed one. Absent, we keep the
                 // group's current floor.
                 //
-                // **Stated divergence** (decision 1675): the real binding defaults the absent
+                // **Stated divergence**: the real binding defaults the absent
                 // argument to a literal 2, so on the reference client changing the loot method
                 // with no third argument silently RESETS the threshold to Uncommon. Ours is
                 // sticky. The reference behaviour is one line (`.unwrap_or(2)` on `asked` alone);
@@ -1036,7 +1036,7 @@ pub(super) fn drain_party(
                     threshold,
                 });
             }
-            // ── The raid-management verbs (decision 1549) ────────────────────────────────────
+            // ── The raid-management verbs ────────────────────────────────────
             //
             // Three address forms meet one wire here (see `script::party`'s module doc): the
             // RaidFrame hands us raid ROW INDICES, UnitPopup hands us NAMES, and the wire wants
@@ -1210,7 +1210,7 @@ fn test_apply_local(
             }
             true
         }
-        // ── The raid verbs, sandboxed (decision 1549) ─────────────────────────────────────────
+        // ── The raid verbs, sandboxed ─────────────────────────────────────────
         //
         // These are the whole reason `/raidtest` can be a look-pass instrument rather than a
         // still photograph: the drag really moves someone, Ready Check really opens the popup,
@@ -1273,7 +1273,7 @@ fn test_apply_local(
             // The echo a real server sends back to the whole raid, us included. The presser is the
             // leader (the stock Raid tab offers the button to no one else), and the leader's own
             // echo takes the response-collection arm: no popup for the person who pressed it,
-            // which is the reference's behaviour (decision 1989) — the summary line is theirs.
+            // which is the reference's behaviour — the summary line is theirs.
             group.apply_ready_check_request(true);
             true
         }
@@ -1333,7 +1333,7 @@ fn loot_method_id(method: &str) -> Option<u32> {
     })
 }
 
-/// The `/partytest` instrument (decision 0434, the 0288 `/chattest` pattern): a synthetic
+/// The `/partytest` instrument (the 0288 `/chattest` pattern): a synthetic
 /// 4-member roster with mixed statuses + out-of-range stats, pumped through the REAL apply path
 /// (so the composer's lines print too) — the whole frame surface eyeballable with no server.
 /// The guids are unstreamed player-range fakes, so every member exercises the stats-snapshot leg
@@ -1412,7 +1412,7 @@ pub(crate) fn synthetic_roster(
     lines
 }
 
-/// The `/partytest raid` instrument (decision 1549) — [`synthetic_roster`]'s raid twin, and the
+/// The `/partytest raid` instrument — [`synthetic_roster`]'s raid twin, and the
 /// only way the Raid tab's grid is eyeballable without forty accounts.
 ///
 /// 24 synthetic members across subgroups 1-5 plus us in group 1 = a 25-row raid: every colour the
@@ -1558,7 +1558,7 @@ pub(crate) fn synthetic_raid(
 mod tests {
     use super::*;
 
-    /// **The out-of-range party frame reads the roster record** (decision 1640, report B334) —
+    /// **The out-of-range party frame reads the roster record** (report B334) —
     /// the reference's `UnitHealth`/`UnitMana`/`UnitLevel` no-object leg, `0x496400` into
     /// `0xbc70b0 + slot·0x148`.
     ///
@@ -1767,7 +1767,7 @@ mod tests {
     fn the_raid_roster_maps_the_wire_to_get_raid_roster_info() {
         let mut names = NameCache::default();
         // **Our own row has NO traits in the cache, and that is the live shape, not a gap in the
-        // fixture** (decision 1549): the login seeds our name with `traits: None` so `"player"`
+        // fixture**: the login seeds our name with `traits: None` so `"player"`
         // never needs a name query, so `player_traits(self)` is None forever. This used to be
         // `Some((4, 11, 0))` here, which is why the local player's raid row shipped colourless —
         // the fixture was seeding a packet the client never sends itself.
@@ -1851,7 +1851,7 @@ mod tests {
         assert!(raid_roster(&group, Some(&me), &names, &zone).is_empty());
     }
 
-    /// The row ORDER, and the two resolutions every raid verb goes through (decision 1549).
+    /// The row ORDER, and the two resolutions every raid verb goes through.
     ///
     /// This is the off-by-one that kicks the wrong person, so it is asserted against the same
     /// helper `raid_roster` fills its array from — the whole reason that helper exists rather than
@@ -1965,7 +1965,7 @@ mod tests {
         );
 
         // Ready Check echoes back to us as the leader: the response-collection arm, which bumps
-        // the request generation and never the popup ticket (decision 1989).
+        // the request generation and never the popup ticket.
         let (ticket, requests) = (group.ready_check, group.ready_check_requests);
         assert!(test_apply_local(
             &mut group,

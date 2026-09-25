@@ -1,4 +1,4 @@
-//! **The trainer's state re-evaluator** — the reference's `0x4d7d40`, transcribed (decision 2333).
+//! **The trainer's state re-evaluator** — the reference's `0x4d7d40`, transcribed.
 //!
 //! The service `state` byte a trainer window shows is a wire value only on the **first** frame.
 //! The real client keeps twelve triggers on the open window — money, level, a skill change, a
@@ -22,7 +22,7 @@
 //! reason a fresh Blacksmithing recipe list can flip from red to green under a level-up without
 //! the player touching anything.
 //!
-//! **The whole law** (decision 2336):
+//! **The whole law**:
 //! the admission gate, the two `trainerType == 1` writes of state 3, the pet-spell legs as early
 //! exits, the required-ability leg's pet variant, and the twelve triggers named to their
 //! handlers. What is not built is the one thing no vmangos server reaches: a type-1 (mount)

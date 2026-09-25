@@ -1,5 +1,5 @@
 //! Group/party session state — the `SMSG_GROUP_LIST` wire mirror and the client-composed party
-//! system lines (decision 0434 §D2).
+//! system lines.
 //!
 //! The 1.12 server sends **no text** for party events (vmangos, exhaustively grepped): joins and
 //! leaves appear only as roster diffs on `SMSG_GROUP_LIST`, a kick additionally announces itself
@@ -9,10 +9,10 @@
 //! the `ERR_*` group strings; the mechanism is the reference's errorId→GlobalStrings display,
 //! `CGGameUI::DisplayError` 0x496720). benilla does the same here: [`GroupState`] mirrors the
 //! wire, and its `apply_*` methods return the finished lines for the net drain to push as
-//! CHAT_MSG_SYSTEM. In the mapping (decision 0440), each opcode prints its own line and the
+//! CHAT_MSG_SYSTEM. In the mapping, each opcode prints its own line and the
 //! GROUP_LIST diff prints the rest — there is NO empty-list state machine.
 //!
-//! The line law (0440):
+//! The line law:
 //! - GROUP_LIST runs an **ungated** two-way roster diff: new guid → "%s joins the party."
 //!   (`0x5e6c19` — including everyone already there on a first roster), vanished guid →
 //!   "%s leaves the party." (`0x5e6d37` — including the whole roster on our own empty list).
@@ -57,7 +57,7 @@ impl Plugin for UiPartyPlugin {
 
 /// The party/raid session mirror — `SMSG_GROUP_LIST` verbatim plus the invite/stats side-state.
 /// Filled by the net drain's group arms, cleared on disconnect beside the other per-login
-/// resources (decision 0434 §D2). The party *frames* (phase 2) read this through the merged view:
+/// resources. The party *frames* (phase 2) read this through the merged view:
 /// a streamed member's live `ObjectStore` wins; the [`Self::stats`] snapshot covers the rest.
 #[derive(Resource, Default)]
 pub struct GroupState {
@@ -88,8 +88,8 @@ pub struct GroupState {
     /// instead of dispatching CMSGs into a void. Any real `SMSG_GROUP_LIST` switches it off —
     /// the wire always wins.
     pub test: bool,
-    /// Our saved raid lockouts (`SMSG_RAID_INSTANCE_INFO`) — the Raid tab's Raid Info panel
-    /// (decision 1549). The answer replaces the list wholesale, empty included.
+    /// Our saved raid lockouts (`SMSG_RAID_INSTANCE_INFO`) — the Raid tab's Raid Info panel.
+    /// The answer replaces the list wholesale, empty included.
     ///
     /// A lockout is per-CHARACTER, not per-group, so this is the one field here that is not a
     /// group fact. It lives here anyway for the reason that matters: it is per-SESSION state that
@@ -115,7 +115,7 @@ pub struct GroupState {
     /// fires `READY_CHECK` on a counter edge and a second check while the first popup is still up
     /// re-arms it. A boolean could not tell the two apart.
     pub ready_check: u32,
-    /// The request GENERATION — bumped by BOTH arms of the open form (decision 1989), unlike the
+    /// The request GENERATION — bumped by BOTH arms of the open form, unlike the
     /// ticket above, which only the non-leader arm bumps: the leader never gets the popup, because
     /// `0x4ba360`'s leader arm never reaches the `READY_CHECK` fire. The feed turns an edge here
     /// into the engine's `ready_check_request` and resets its answer cursor.
@@ -145,7 +145,7 @@ impl GroupState {
         // `Group.h:257`); `leader == 0` is its reliable discriminator (a live group always names
         // one, and a solo-leader group has an empty member list *with* a leader guid).
         let leaving = leader == 0;
-        // Raid wording keys off whichever side of the transition was a raid. INTERIM (0440):
+        // Raid wording keys off whichever side of the transition was a raid. INTERIM:
         // the party line's `groupType==0` gate is pinned; the raid twin's exact trigger is not
         // known.
         let (added, removed) = if group_type == 1 || (leaving && self.group_type == 1) {
@@ -174,7 +174,7 @@ impl GroupState {
         }
         // The OTHER direction clears the raid-target board. `0x4ba550` — sole caller `0x5e6ebb`,
         // inside `SMSG_GROUP_LIST 0x7d`'s raid-flag-CLEAR leg — `rep stosd`-zeroes all eight slots
-        // and refreshes every formerly-marked unit (decision 1820). Without it a raid→party
+        // and refreshes every formerly-marked unit. Without it a raid→party
         // conversion leaves stale marks on screen: the icons are drawn from this board, and
         // nothing else clears it short of a `0x321` for each slot, which the server does not send.
         //
@@ -201,7 +201,7 @@ impl GroupState {
         lines
     }
 
-    /// The `party1..party4` slot view (byte law `0x5e6baa`, 0440): members of our OWN subgroup
+    /// The `party1..party4` slot view (byte law `0x5e6baa`): members of our OWN subgroup
     /// only, packet order, at most four. In a plain party every flags byte is 0, so the filter
     /// is a no-op; in a raid it keeps the compact frames on your own subgroup. Slot↔member
     /// association is rebuilt per packet — never assume it's stable across resyncs.
@@ -227,14 +227,14 @@ impl GroupState {
     }
 
     /// `SMSG_GROUP_UNINVITE` (empty body) — we were kicked. Prints ERR_UNINVITE_YOU
-    /// **unconditionally**, at the opcode (0440: handler `0x5e6850`); the empty roster echo
+    /// **unconditionally**, at the opcode (handler `0x5e6850`); the empty roster echo
     /// that follows adds its own leave-diff lines, exactly like the reference.
     pub fn apply_uninvited(&mut self) -> Vec<UiError> {
         vec![UiError::key("ERR_UNINVITE_YOU")]
     }
 
     /// `SMSG_GROUP_DESTROYED` — the group is gone outright. Gated on believing we're grouped
-    /// (0440: `0x5e6880` tests `0x4e86d0() != 0`); the echo list's own lines still follow.
+    /// (`0x5e6880` tests `0x4e86d0() != 0`); the echo list's own lines still follow.
     pub fn apply_destroyed(&mut self) -> Vec<UiError> {
         if self.in_group {
             vec![UiError::key("ERR_GROUP_DISBANDED")]
@@ -258,7 +258,7 @@ impl GroupState {
     /// The handler `0x5e68b0` dispatches `dec eax; cmp eax,7; ja <silent>; jmp [4*eax+0x5e6a14]`,
     /// and each arm is one `CGGameUI::DisplayError(msgId)`. Returning the **message** rather than
     /// a sentence is what gets the text, the surface and the sound right at once, since all three
-    /// are fields of the catalog row the id names (decisions 1770, 1815, 2035).
+    /// are fields of the catalog row the id names.
     ///
     /// | `result` | msgId | key | `%s` |
     /// |---|---|---|---|
@@ -401,7 +401,7 @@ impl GroupState {
     /// tickets, so every leave, kick or disband fired a `READY_CHECK` (a popup naming no leader,
     /// and a 30 s request armed for a check nobody started) and an `UPDATE_INSTANCE_INFO` over an
     /// emptied lockout list. In the reference `READY_CHECK` has one fire site, the
-    /// `MSG_RAID_READY_CHECK` open handler (decision 1989), and a lockout belongs to the character.
+    /// `MSG_RAID_READY_CHECK` open handler, and a lockout belongs to the character.
     ///
     /// **The destructure is exhaustive on purpose** — no `..`: a field added to [`GroupState`]
     /// does not compile until someone decides here which side of that line it is on. The defaulted
@@ -460,7 +460,7 @@ impl GroupState {
 
     /// `MSG_RAID_READY_CHECK` (open form) — the leader started one, and the server echoes the
     /// request to every member including the leader. The handler `0x4ba360` splits on the leader
-    /// guid (decision 1989): the **leader** takes the response-collection arm and neither prints
+    /// guid: the **leader** takes the response-collection arm and neither prints
     /// nor pops; everyone **else** prints `ERR_RAID_LEADER_READY_CHECK_START_S` with the leader's
     /// name and gets the popup — the ticket the feed turns into a `READY_CHECK` event edge. Both
     /// arms bump the request generation and start a fresh answer log.
@@ -483,7 +483,7 @@ impl GroupState {
     }
 
     /// `MSG_RAID_READY_CHECK` (answer form) — one member's answer, which the server forwards to
-    /// the leader alone. Logged for the feed to replay into the engine's flags (decision 1989).
+    /// the leader alone. Logged for the feed to replay into the engine's flags.
     pub fn apply_ready_check_answer(&mut self, guid: u64, ready: bool) {
         self.ready_check_answers.push((guid, ready));
     }
@@ -543,7 +543,7 @@ mod tests {
     /// disband look like a new `READY_CHECK` (a popup with no leader, and a stale 30 s request
     /// armed) and a fresh `UPDATE_INSTANCE_INFO` carrying an emptied lockout list — a blank Raid
     /// Info panel. In the reference `READY_CHECK` has one fire site, the `MSG_RAID_READY_CHECK`
-    /// open handler (decision 1989); a lockout is the character's, not the group's.
+    /// open handler; a lockout is the character's, not the group's.
     #[test]
     fn leaving_the_group_keeps_the_session_tickets() {
         let lockout = benilla_protocol::messages::RaidInstanceEntry {
@@ -592,7 +592,7 @@ mod tests {
 
     /// The ungated diff (0440 byte law): a FIRST roster prints joins for everyone already
     /// there; later rosters diff both ways.
-    /// The open form's two arms (decision 1989): the leader's own echo neither prints nor pops;
+    /// The open form's two arms: the leader's own echo neither prints nor pops;
     /// a member prints the leader's line and takes the popup ticket. Both bump the request
     /// generation and restart the answer log.
     #[test]
@@ -654,7 +654,7 @@ mod tests {
             .is_empty());
     }
 
-    /// Per-opcode lines stack over the diff (0440) — no empty-list state machine.
+    /// Per-opcode lines stack over the diff — no empty-list state machine.
     #[test]
     fn leave_kick_disband_lines_stack_per_opcode() {
         // Voluntary: the LEAVE ack prints; the empty list adds the leave-diff.
@@ -734,7 +734,7 @@ mod tests {
         );
     }
 
-    /// The party1..4 slot view filters to our own subgroup (0440: `(flags^own)&0x7f`).
+    /// The party1..4 slot view filters to our own subgroup (`(flags^own)&0x7f`).
     #[test]
     fn party_slots_filter_to_own_subgroup() {
         let mut g = GroupState::default();
@@ -852,7 +852,7 @@ mod tests {
 
     /// A raid→party conversion CLEARS the board; a disband does too (by replacing the state), and
     /// an ordinary roster change inside a raid does not. The reference zeroes all eight slots on
-    /// `SMSG_GROUP_LIST`'s raid-flag-clear leg (`0x4ba550`, decision 1820) — without it the marks
+    /// `SMSG_GROUP_LIST`'s raid-flag-clear leg (`0x4ba550`) — without it the marks
     /// are drawn from a board nothing else empties, so they linger on screen.
     #[test]
     fn a_raid_to_party_conversion_clears_the_raid_target_board() {
@@ -1040,8 +1040,8 @@ mod tests {
     }
 
     /// **The twelve roster/invite/leader lines, by key** — the family that used to be twelve
-    /// re-typed sentences beside twelve key names in comments, where nothing joined the two
-    /// (decision 2045). The same three checks the command-result family gets: the key resolves in
+    /// re-typed sentences beside twelve key names in comments, where nothing joined the two.
+    /// The same three checks the command-result family gets: the key resolves in
     /// the shipped file, it is a catalog row (so its surface and sound are read rather than
     /// guessed), and an `_S` row's hole matches the fill that reaches it.
     ///

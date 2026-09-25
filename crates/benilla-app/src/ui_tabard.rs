@@ -1,4 +1,4 @@
-//! The guild tabard designer (decision 1977):
+//! The guild tabard designer:
 //! the app half of the stock `TabardFrame.xml` — the vendor session, the body preview, the save's
 //! pre-flight checks and wire, the reply, and the four events.
 //!

@@ -4,11 +4,11 @@
 //!   through the one cast-send path ([`crate::spell::CastLadder::send`]); the auto-attack action
 //!   (6603) sends `CMSG_ATTACKSWING` at the selection, or acquires the nearest enemy when there is
 //!   none; an ITEM action names an *entry*, not a position, so it must first find a copy and then
-//!   decide equip-vs-use — [`item_action_route`], the byte-verified two-stage law of decision 0666.
+//!   decide equip-vs-use — [`item_action_route`], the byte-verified two-stage law of.
 //!   A MACRO action runs its body's lines through the chat-input door (`crate::ui_macro::run`,
 //!   decision 0983) — the `0x4f1460` fork of the reference's own `UseAction`.
 //! - **Set** ([`drain_action_sets`]): a queued `PickupAction`/`PlaceAction` mutation becomes one
-//!   `CMSG_SET_ACTION_BUTTON` per entry (0218 §4: the bar is client-authoritative, there is no
+//!   `CMSG_SET_ACTION_BUTTON` per entry (the bar is client-authoritative, there is no
 //!   answer packet to lock against, and a drag-swap is two independent sends — never atomic).
 //!
 //! Both run `.after(UiInput)` so a click's intent goes out the same frame it was made. The two
@@ -31,7 +31,7 @@ use super::{attack_actor_refusal, PlayerActions, UiErrorKeys, SPELL_ATTACK};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ItemRoute {
     /// Use this copy — the wire `(bag_index, slot)` plus the instance guid the shared use fork
-    /// needs (`ui_items::item_use_command`, decision 0664).
+    /// needs (`ui_items::item_use_command`).
     Use((u8, u8, u64)),
     /// Equip this copy — the same triple.
     Equip((u8, u8, u64)),
@@ -84,7 +84,7 @@ pub(super) fn item_action_route(
     }
 }
 
-/// ATTACKTARGET through the binding table (0997; default T — 1.12's `AttackTarget()`): exactly
+/// ATTACKTARGET through the binding table (default T — 1.12's `AttackTarget()`): exactly
 /// the action-bar attack arm below, without the action slot — the Phase A actor refusal first
 /// ([`attack_actor_refusal`], the full `0x612df0` gate set), then the with-target attack-start
 /// (auto-draw + swing) or the no-target nearest-acquire. One law, two doors, the reference's
@@ -135,7 +135,7 @@ pub(super) fn attack_target_binding(
     }
 }
 
-/// **The world right-click's GameObject opener**, run through the one cast path (decision 2199) —
+/// **The world right-click's GameObject opener**, run through the one cast path —
 /// the seam [`crate::ui_action::GoOpenerCasts`] exists for.
 ///
 /// The reference reaches TryCast from the GameObject strategy's use-sender exactly as it does from
@@ -152,7 +152,7 @@ pub(super) fn drain_go_openers(
     targeting: cast_target::CastTargeting,
     mut ladder: CastLadder,
     // The by-key local-refusal sink, passed explicitly for the same reason `drain_action_uses`
-    // does: a resource reachable twice from one system is a `B0002` panic (decision 1903).
+    // does: a resource reachable twice from one system is a `B0002` panic.
     mut ui_errors: ResMut<UiErrorKeys>,
     mut gate: crate::ui_bind_confirm::BindGate,
 ) {
@@ -226,8 +226,7 @@ pub(super) fn drain_action_uses(
     // The by-key local error line — the only sink here that is not the ladder's own
     // (`ladder.cast_errors` is the reason-coded one, `ladder.ground` the targeting mode). It is
     // deliberately NOT a `CastLadder` field: a resource reachable twice from one system is a
-    // `B0002` panic on the first live frame, which compiles and passes every unit test
-    // (decision 1903).
+    // `B0002` panic on the first live frame, which compiles and passes every unit test.
     mut ui_errors: ResMut<UiErrorKeys>,
     mut ladder: CastLadder,
     mut gate: crate::ui_bind_confirm::BindGate,
@@ -298,7 +297,7 @@ pub(super) fn drain_action_uses(
             }
             Some(b) if b.kind == ACTION_KIND_SPELL => {
                 // UseAction's toggle-cancel (`0x4e5ee0`: `GetTargetingSpellId 0x6e48e0` +
-                // `StopTargeting 0x6e4900`, decision 0792): re-pressing the spell whose
+                // `StopTargeting 0x6e4900`): re-pressing the spell whose
                 // targeting cursor is up cancels the targeting instead of re-arming it —
                 // press-again-to-cancel, before TryCast ever runs. (A spellbook re-press stays
                 // the ref's abort-and-re-enter — it never passes through UseAction.)
@@ -379,10 +378,9 @@ pub(super) fn drain_action_uses(
                     // Deliberately WITHOUT the bag click's quest guard: the bar's own engine tests
                     // only `[rec+0x2c]` (inventoryType) before the equip route (`0x4e5fdd`), where
                     // `Script::UseContainerItem` also tests `StartQuest` (`0x4fa3c4`) — so an
-                    // equippable quest-starter on the bar equips, exactly as the reference does
-                    // (decision 0664).
+                    // equippable quest-starter on the bar equips, exactly as the reference does.
                     debug!("ui_action: item action {action} auto-equip (wire {bag_index}/{slot0})");
-                    // Through the one auto-equip sender (decision 1750), which carries the ammo
+                    // Through the one auto-equip sender, which carries the ammo
                     // fork and the soulbind deferral: a BoE dragged to the bar and pressed asks
                     // before it binds, exactly as the same item right-clicked in the bag does.
                     crate::ui_items::send_auto_equip(
@@ -399,10 +397,10 @@ pub(super) fn drain_action_uses(
                 } else {
                     // …then the shared use fork (`CGItem::Use` — the bar's engine calls the very
                     // same function at `0x4e607b`), so a quest-starter on the bar offers its quest
-                    // instead of a `CMSG_USE_ITEM` the server can only refuse (decision 0664). The
-                    // wire's third byte is the spell BLOCK ordinal, not a flag (decision 0666).
+                    // instead of a `CMSG_USE_ITEM` the server can only refuse. The
+                    // wire's third byte is the spell BLOCK ordinal, not a flag.
                     // The fork runs the WHOLE cast ladder — an item use IS a cast through the same
-                    // `TryCast` (decisions 0908/0914; [`crate::ui_items::send_item_use`] is the
+                    // `TryCast` ([`crate::ui_items::send_item_use`] is the
                     // law), so the cooldown/GCD/in-flight/mounted/moving/form rungs and the local
                     // "Item is not ready yet." live there now, for the bag and doll clicks too.
                     let spell_index = template.use_spell_index().unwrap_or(0);
@@ -456,12 +454,12 @@ pub(super) fn drain_action_uses(
 }
 
 /// Drain the `(lua action id, packed)` pairs the cursor seam's `PickupAction`/`PlaceAction`
-/// queued (decision 0216 §7) — the engine's own local mutation already agrees with what lands
+/// queued — the engine's own local mutation already agrees with what lands
 /// here (it wrote the same value into its optimistic `model.actions` mirror before queuing this).
 /// Each entry: write `PlayerActions.buttons` (`packed == 0` removes the slot, else inserts),
 /// mark `dirty` so [`super::feed::feed_actions`] re-resolves + re-pushes + fires
 /// `ACTIONBAR_SLOT_CHANGED` (the existing diff machinery — no bespoke event here), and send ONE
-/// `CMSG_SET_ACTION_BUTTON` (0218 §4: client-authoritative, no answer packet, a drag-swap is two
+/// `CMSG_SET_ACTION_BUTTON` (client-authoritative, no answer packet, a drag-swap is two
 /// independent sends).
 pub(super) fn drain_action_sets(
     script: Option<NonSendMut<UiScript>>,

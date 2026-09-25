@@ -1,5 +1,4 @@
-//! The mirror-timer feed: breath / fatigue / feign-death off the wire → FrameXML events
-//! (decision 0874).
+//! The mirror-timer feed: breath / fatigue / feign-death off the wire → FrameXML events.
 //!
 //! The net bridge queues [`MirrorTimerEdge`]s and the drain fires the reference client's
 //! FrameScript events into the script VM — `MIRROR_TIMER_START` / `_PAUSE` / `_STOP`, the exact
@@ -90,7 +89,7 @@ fn global_string_label(kind: MirrorTimerKind) -> &'static str {
 /// so only the word changes.
 ///
 /// `spell_name` is the already-resolved catalog lookup (the `ui_cast` idiom: the script VM has no
-/// spell-catalog binding, so the drain resolves it — one lookup face, decision 0107). `None`
+/// spell-catalog binding, so the drain resolves it — one lookup face). `None`
 /// covers both "no owning spell" and "spell not in the catalog"; the reference's fallback chain
 /// ends at the global string either way.
 fn caption(kind: MirrorTimerKind, spell_name: Option<&str>) -> String {
@@ -120,7 +119,7 @@ fn feed_mirror_timers(
         return;
     };
     // The owning spell's name, resolved here because the script VM has no spell-catalog binding
-    // (the `ui_cast` idiom, decision 0107). `0` = no spell, which is the common case.
+    // (the `ui_cast` idiom). `0` = no spell, which is the common case.
     let spell_name = |id: u32| -> Option<String> {
         (id != 0)
             .then(|| spells.as_ref()?.catalog.get(id).map(|d| d.name.clone()))
@@ -190,7 +189,7 @@ fn feed_mirror_timers(
 
 /// The mirror-timer UI seam: the queue + its drain, ordered like the cast bar's — before the VM
 /// ticks, so an edge and its first OnUpdate land on the same frame.
-/// The mirror timers' packet handlers (decision 0874; in the net handler table since 2313):
+/// The mirror timers' packet handlers (in the net handler table since 2313):
 /// breath / fatigue / feign-death. Pure queue handlers — every meaning (which bar, what colour,
 /// what caption, how fast it drains) is resolved at the UI seam in this module, and the
 /// countdown itself is the FrameXML's own OnUpdate integration.

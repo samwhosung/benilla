@@ -10,7 +10,7 @@
 //!   (`ex2 0x2`) is the shipped carrier of the exclusion** — a shaman faithfully gets NO stance
 //!   bar, and cancels the form at the buff frame instead (verified in the data, 2026-07-31). The
 //!   force-admit bit is what builds the **paladin's aura bar**: 465/7294/19746/19876/19888/19891
-//!   carry `ex2 0x10` with no MOD_SHAPESHIFT effect at all (decision 1302 — correcting 0270's
+//!   carry `ex2 0x10` with no MOD_SHAPESHIFT effect at all (correcting 0270's
 //!   "no 5875 spell uses it", which is what left the aura-scan `isActive` leg unbuilt here).
 //! - **Order** (comparator `0x4b2bb0`): ascending `Spell.dbc` `StanceBarOrder`, negative last,
 //!   spell id tiebreak. (Battle 0 / Def 1 / Berserker 2; Bear 0 … Moonkin 4; Stealth −1 → last.)
@@ -28,7 +28,7 @@
 //!   `SpellShapeshiftForm.dbc` flags bit `0x2` blocks it (warrior stances: silent no-op, the
 //!   `0x4b4963` guard); any other form casts through the shared [`send_spell_cast`] path.
 //!
-//! **The refresh model keeps the reference's two edges apart** (decision 2009). The feed rebuilds
+//! **The refresh model keeps the reference's two edges apart**. The feed rebuilds
 //! the pushed list each frame and diffs it, and what it announces depends on WHAT moved:
 //!
 //! - **The list** — which spells sit on the bar, in what order — fires `UPDATE_SHAPESHIFT_FORMS`,
@@ -339,7 +339,7 @@ fn feed_shapeshift_bar(
 /// - **`formId == 0`, `ActiveIconID != 0`** — the force-admit/aura arm: a live own aura cancels,
 ///   otherwise cast. There is **no DBC guard on this arm** and there cannot be — a force-admitted
 ///   spell has no form id to look one up with. Without it a paladin clicking their active aura
-///   re-cast it instead of dropping it (decision 1302).
+///   re-cast it instead of dropping it.
 fn drain_shapeshift_casts(
     script: Option<NonSendMut<UiScript>>,
     targeting: cast_target::CastTargeting,

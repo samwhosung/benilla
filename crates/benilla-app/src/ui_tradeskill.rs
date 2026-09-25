@@ -4,10 +4,10 @@
 //!
 //! There is no wire here at all, by the byte law: casting a profession opener (`Effect[0] ==
 //! SPELL_EFFECT_TRADE_SKILL`) never reaches the send — `Spell_C::TryCast 0x6e4b60` branches
-//! client-side and opens the window (0437). benilla mirrors that
+//! client-side and opens the window. benilla mirrors that
 //! as the [`TradeSkillOpens`] intercept inside `ui_action::send_spell_cast`. The book itself is
 //! **client-built**: every known spell ([`PlayerActions::spells`]) carrying
-//! `SPELL_ATTR_IS_TRADESKILL` (`0x20` — the same bit that hides recipes from the spellbook, 0227)
+//! `SPELL_ATTR_IS_TRADESKILL` (`0x20` — the same bit that hides recipes from the spellbook)
 //! whose `SkillLineAbility` row joins it to the open line becomes a row; reagents/tools off the
 //! `Spell.dbc` columns, have-counts off the bags ([`count_of`]), the product off
 //! `EffectItemType`, names/icons through the ask-once item-template cache.
@@ -18,7 +18,7 @@
 //! our own `SMSG_SPELL_GO`, canceled by fail/ESC/close), and the `EffectMiscValue[0] != 0`
 //! Craft-vs-TradeSkill routing are all byte-confirmed. **The header law landed too:** rows group
 //! by the created item's `(ItemClass, ItemSubClass)`, named from `ItemSubClass.dbc`, two-level
-//! sort (0446; the filter family on top of it, 0452) — this feed resolves each recipe's `group`
+//! sort (the filter family on top of it) — this feed resolves each recipe's `group`
 //! ([`resolve_recipe`]), so the book is no longer flat. The spell-focus tool never renders red, and
 //! that is **faithful, not a gap** (`0x4ffa8b`): the
 //! reference's own `hasTool` for a focus is the literal `1.0` with no predicate anywhere, and the
@@ -55,7 +55,7 @@ use benilla_assets::{AssetSet, LockRecover, WorldAssets};
 pub(crate) struct TradeSkillOpens(pub(crate) Vec<u32>);
 
 /// The open crafting book: the skill line whose recipes the window shows. `None` = closed.
-/// Client-local state — no wire owns it (0437). Cleared by the Lua close and by the session end
+/// Client-local state — no wire owns it. Cleared by the Lua close and by the session end
 /// ([`on_session_end`]): a logout installs a fresh VM without running the old one's `OnHide`, so
 /// the close alone never comes, and the next login's feed would fire `TRADE_SKILL_SHOW` into the
 /// new character's UI.
@@ -64,7 +64,7 @@ pub(crate) struct TradeSkillOpen {
     pub(crate) line: Option<u32>,
 }
 
-/// The Create/Create All repeat machine (`DoTradeSkill 0x500280`, decision 0446):
+/// The Create/Create All repeat machine (`DoTradeSkill 0x500280`):
 /// `DoTradeSkill(spell, n)` latches `n`, casts once, and each of our own `SMSG_SPELL_GO`s for
 /// that spell decrements and re-casts until dry; any cast failure, a window close or the session
 /// end ([`on_session_end`]) stops it cold.
@@ -168,7 +168,7 @@ fn open_trade_skill(
         // zero routes to the TradeSkillFrame. NOT a skill-line test — 0437's line-333 INTERIM
         // is corrected here. The nonzero value is not merely a flag: it IS the craft
         // type the client keeps at `ds:0xbdcfb8`, and the Craft window keys both its admission
-        // filter and its row comparator on it (decision 1124), so it rides along.
+        // filter and its row comparator on it, so it rides along.
         let craft_type = spells
             .as_deref()
             .and_then(|s| s.catalog.get(spell_id))
@@ -224,8 +224,8 @@ pub(crate) fn difficulty(rank: u32, low: u32, high: u32) -> TradeSkillDifficulty
     }
 }
 
-/// **Law C** — the TradeSkill window's row icon, transcribing `GetTradeSkillIcon 0x4fdae0`
-/// (decision 1107). Read `EffectItemType[0]` **unconditionally** as an item id and paint that
+/// **Law C** — the TradeSkill window's row icon, transcribing `GetTradeSkillIcon 0x4fdae0`.
+/// Read `EffectItemType[0]` **unconditionally** as an item id and paint that
 /// item's icon; on any miss — a zero id, a template not yet landed — return **`None`**.
 ///
 /// Two things the binding pointedly does *not* do, both of which this used to:
@@ -383,7 +383,7 @@ fn resolve_recipe(
 
 /// Build the book: the known attr-`0x20` recipes of the open line, difficulty-banded against the
 /// current rank. No sort applied here — the engine owns ALL ordering (group + tier + name, the
-/// two-level law `0x4fd180`, decision 0446).
+/// two-level law `0x4fd180`).
 fn feed_trade_skill(
     script: Option<NonSendMut<UiScript>>,
     open: Res<TradeSkillOpen>,
@@ -495,7 +495,7 @@ fn feed_trade_skill(
 }
 
 /// Drain the Lua intents and run the repeat machine: `DoTradeSkill` latches the count and casts
-/// through the ONE cast-send path (0216 §8); our own GO for the latched spell re-casts until dry;
+/// through the ONE cast-send path; our own GO for the latched spell re-casts until dry;
 /// a fail or `CloseTradeSkill` stops everything.
 fn drain_trade_skill(
     script: Option<NonSendMut<UiScript>>,

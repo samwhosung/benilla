@@ -1,5 +1,5 @@
 //! The hunter pet's **paper-doll stat block** — `GetPetHappiness`, `GetPetLoyalty`,
-//! `GetPetTrainingPoints`, `GetPetExperience` and `HasPetUI` (decision 1005).
+//! `GetPetTrainingPoints`, `GetPetExperience` and `HasPetUI`.
 //!
 //! Its own module rather than more of [`crate::ui_pet`] because it is a different concern on a
 //! different clock: the action bar's contents arrive whole in `SMSG_PET_SPELLS` and change when
@@ -15,7 +15,7 @@
 //! resolves perfectly and still answers nothing — happiness, loyalty and training points are
 //! hunter machinery — and each binding says "nothing" in its own way ([`benilla_ui::script::PetStats`]).
 //!
-//! **Two more bindings ride here off the pet's `CreatureFamily.dbc` row** (decision 1062), and they
+//! **Two more bindings ride here off the pet's `CreatureFamily.dbc` row**, and they
 //! sit on **opposite sides of that gate** — which is the whole reason they are worth naming
 //! together. `UnitCreatureFamily("pet")` (`0x51a310`) has no class test whatsoever, so a warlock's
 //! imp shows "Imp" on the page's level line; `GetPetFoodTypes()` (`0x4bea10`) shares the very same
@@ -54,7 +54,7 @@ pub(crate) struct PetStatTables {
 }
 
 /// The **family** pair — `CreatureFamily.dbc` (the word) and `ItemPetFood.dbc` (the diet the row's
-/// mask names), decision 1062.
+/// mask names).
 ///
 /// A separate resource from [`PetStatTables`] rather than four fields on it, so the two halves
 /// degrade independently: a missing `ItemPetFood.dbc` must not take happiness down with it, and a
@@ -65,8 +65,8 @@ pub(crate) struct PetFamilyTables {
     pub(crate) foods: benilla_formats::PetFoodNames,
 }
 
-/// **The pet snapshot must be pushed before anything fires an event whose handlers read it**
-/// (decision 1073). `fire_event` dispatches the Lua handlers *synchronously*, so a system that
+/// **The pet snapshot must be pushed before anything fires an event whose handlers read it**.
+/// `fire_event` dispatches the Lua handlers *synchronously*, so a system that
 /// fires while this frame's `set_pet_stats` is still pending hands the VM last frame's answer —
 /// the codebase's own "push before firing" rule (`crate::ui_unit`), which held *inside* every
 /// feed but not *between* them.
@@ -95,7 +95,7 @@ impl Plugin for UiPetStatsPlugin {
     }
 }
 
-/// The pet's family word and diet, resolved from its cached creature template (decision 1062).
+/// The pet's family word and diet, resolved from its cached creature template.
 ///
 /// **A pet's creature template entry is its descriptor's `OBJECT_FIELD_ENTRY`, never its guid.**
 /// A `HIGHGUID_PET` guid carries a *pet number* in the entry-shaped slot (`crate::guid::pet_number`
@@ -113,8 +113,7 @@ impl Plugin for UiPetStatsPlugin {
 ///
 /// The **icon** rides here rather than in a lookup of its own because it comes off the very same
 /// family row as the word — `CreatureFamily.dbc`'s own icon column, which is a pet's only icon
-/// (there is no item behind it). `GetPetIcon`'s answer, and the stable window's slot art
-/// (decision 1676).
+/// (there is no item behind it). `GetPetIcon`'s answer, and the stable window's slot art.
 fn family_for(
     pet: Option<&ObjectStore>,
     names: &NameCache,
@@ -192,7 +191,7 @@ fn stats_for(
             PetStats {
                 family,
                 // The icon rides past the gate with the WORD, not with the diet — same family
-                // row, same reasoning (decision 1676; the placement is INFERRED, see `PetStats`).
+                // row, same reasoning (the placement is INFERRED, see `PetStats`).
                 icon,
                 ..PetStats::default()
             },
@@ -309,7 +308,7 @@ fn feed_pet_stats(
     script.set_pet_stats(fresh.0, fresh.1);
     // Push before firing — dispatch runs the Lua handlers synchronously (the `ui_unit` rule).
     if happiness_moved {
-        // `%s` — the unit token, per the reference's own fire site (SignalEvent2, decision 1884).
+        // `%s` — the unit token, per the reference's own fire site (SignalEvent2).
         // Every 1.12 `UNIT_*` event carries it, and its consumers gate on it: a handler's first
         // line is `if ( arg1 == this.unit )`, so an argless fire reaches nobody.
         script.fire_event("UNIT_HAPPINESS", vec![ScriptValue::Str("pet".into())]);
@@ -572,7 +571,7 @@ mod tests {
         assert_eq!(s, PetStats::default());
     }
 
-    /// **The family lookup end to end on the real DBC data** (decision 1062), including all three
+    /// **The family lookup end to end on the real DBC data**, including all three
     /// nil sources the binding has to reproduce.
     ///
     /// The load-bearing fact under test is the KEY: the pet's template entry is read from
@@ -620,7 +619,7 @@ mod tests {
             family_for(Some(&pet), &names, &cmds, Some(&t)),
             (
                 Some("Imp".into()),
-                // The family row's own icon column (decision 1676) — and the shipped value for a
+                // The family row's own icon column — and the shipped value for a
                 // warlock minion is **`Ability_Druid_CatForm`**, not any imp art. That is not a
                 // misread: rows 15 (Felhunter) and 23 (Imp) both carry it in the real 5875 file,
                 // where every one of the 22 hunter families carries its correct
@@ -704,7 +703,7 @@ mod tests {
         assert!(s.food_types.is_empty());
     }
 
-    /// **The schedule invariant, not the function's** (decision 1073): by the time `UNIT_PET`
+    /// **The schedule invariant, not the function's**: by the time `UNIT_PET`
     /// reaches a Lua handler, `HasPetUI()` must already answer for the pet that event announces.
     ///
     /// This is the Pet-tab bug in its smallest reproducible form, and it is only visible from a

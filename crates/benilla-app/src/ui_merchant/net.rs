@@ -85,7 +85,7 @@ fn vendor_buy_result(vendor: u64, slot: u32, new_count: u32, merchant: &mut Merc
 /// A purchase was refused (`SMSG_BUY_FAILED`) — the merchant window's error line, and for the
 /// out-of-stock code the refusing row's own count.
 ///
-/// **`ITEM_ALREADY_SOLD` zeroes the row** (`0x5dcda7`..`0x5dcdd6`, decision 1821): the reference
+/// **`ITEM_ALREADY_SOLD` zeroes the row** (`0x5dcda7`..`0x5dcdd6`): the reference
 /// walks its 128-row vendor cache, writes 0 into the matching row's count word and repaints —
 /// gated, as every other stale-answer path here is, on the packet naming the vendor still open.
 ///

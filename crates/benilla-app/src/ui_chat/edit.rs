@@ -1,6 +1,6 @@
 //! The chat SEND types and the joined-channel roster — what the app keeps beside the reference's
 //! own `ChatEdit_*` machine (ChatFrame.lua l.1782-2242), which owns the edit box since the chat
-//! window became the reference's (decision 1948): the sticky type, the live parse, the header,
+//! window became the reference's: the sticky type, the live parse, the header,
 //! the tell ring, the Tab cycle and the R/`/` bindings are all its Lua now.
 //!
 //! [`SendType`] names the wire kind an addon's `SendChatMessage` token maps to
@@ -33,7 +33,7 @@ pub(crate) enum SendType {
 }
 
 impl SendType {
-    /// The chat-type TOKEN an addon passes to `SendChatMessage` (decision 1199) — the reference's
+    /// The chat-type TOKEN an addon passes to `SendChatMessage` — the reference's
     /// own `ChatTypeInfo` keys, uppercase.
     ///
     /// `None` for a token we do not send — anything an addon simply made up. The caller reports
@@ -55,7 +55,7 @@ impl SendType {
     /// `SlashCmdList["CHAT_AFK"](msg)` → `SendChatMessage(msg, "AFK")` → here → `None`, and the
     /// player got `Unknown chat type "AFK".` Migrating a window means building whatever engine
     /// verb the stock file turns out to call; the verb existed, and a wrong sentence in this doc
-    /// comment is what kept it unreachable. Decision 2079.
+    /// comment is what kept it unreachable.
     pub(crate) fn from_token(token: &str) -> Option<SendType> {
         Some(match token {
             "SAY" => SendType::Say,
@@ -122,7 +122,7 @@ pub(crate) const MAX_CHANNELS: usize = 10;
 /// it, so walking out of a zone renamed *other* channels — the director saw General and
 /// LocalDefense trade numbers on one zone change, and a `/2` typed after that went somewhere else.
 ///
-/// **And each slot carries a state, because the reference's does** (`+0x9c`, decision 2130). We
+/// **And each slot carries a state, because the reference's does** (`+0x9c`). We
 /// model the one value of it that changes what the player sees: **3, locally suspended**. States
 /// 0 (server-confirmed), 1 (join not yet acknowledged) and 2 (renamed, re-join pending) collapse
 /// here, and that is sound rather than lazy — the reference reads 0 to decide whether a LEAVE goes
@@ -142,7 +142,7 @@ pub(crate) struct ChannelState {
     /// "no zone channels, arg7 always 0" rather than to an error.
     pub channels: benilla_formats::ChatChannelsCatalog,
     /// **The `ZONECHANNELS` mask** — the reference's `DWORD ds:0xb6e5e0`, bit `1 << (ChannelID-1)`
-    /// (decision 2120; the global's complete census is eight sites).
+    /// (the global's complete census is eight sites).
     ///
     /// **It is durable state, not a view of [`Self::joined`].** The reference seeds it once — from
     /// the chat cache's header line (`0x498d83`, an overwrite) or, with no usable file, from every
@@ -169,7 +169,7 @@ pub(crate) struct ChannelState {
     /// **`None` until that login has read the file** — the reference's "chat system ready" flag
     /// `ds:0xb6e5c8`, set at the tail of the cache loader (`0x499a18`) and the first thing
     /// `ZoneChannelRefresh` tests (`0x49a219`, a full bail). The walk is the mask's consumer
-    /// (decision 2144: **the mask is the join predicate**, `0x49a494`), so a walk before the seat
+    /// (**the mask is the join predicate**, `0x49a494`), so a walk before the seat
     /// would read an empty word and join nothing — and nothing re-triggers it when the word
     /// lands. An `Option` says "not seated" in the type rather than in a second flag that could
     /// drift from it; the saver refuses to compose a file from `None` for the same reason
@@ -312,7 +312,7 @@ impl ChannelState {
     }
 
     /// Does the mask carry `id`'s bit — is this `ChatChannels.dbc` row one the walk joins? The
-    /// reference's live predicate `0x49a494` (decision 2144). `None` (not seated) answers false.
+    /// reference's live predicate `0x49a494`. `None` (not seated) answers false.
     pub(crate) fn zone_row_wanted(&self, id: u32) -> bool {
         self.zone_mask.is_some_and(|mask| mask & zone_bit(id) != 0)
     }
@@ -348,7 +348,7 @@ impl ChannelState {
             .map(|slot| slot.name.clone())
     }
 
-    /// **Rename a slot in place — the zone walk crossing a border** (decision 2130).
+    /// **Rename a slot in place — the zone walk crossing a border**.
     ///
     /// The reference's `0x49bc50(oldName, newName)`, called from `ZoneChannelRefresh`'s pass 1 at
     /// `0x49a3dc`: it copies the new name into the slot and moves its state to "re-join pending" —

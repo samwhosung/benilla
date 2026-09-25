@@ -29,7 +29,7 @@
 //! This module used to also answer the questgiver greeting's active/available split, via a
 //! `contains` membership test over the live descriptor slots. **It doesn't any more, and must not
 //! again** — the reference splits that list on the wire icon alone and never consults its quest log
-//! there ([`crate::ui_quest::row_is_active`], decision 0758). Membership was wrong for exactly the
+//! there ([`crate::ui_quest::row_is_active`]). Membership was wrong for exactly the
 //! quests that are never in the log: auto-complete turn-ins. The state that backed it is gone
 //! rather than left dead, so the retired law can't be reached for by accident.
 
@@ -213,7 +213,7 @@ const NAME_PLACEHOLDER: &str = "...";
 /// reference's `FrameScript_GetText` hands back its pre-seeded empty string and the leaderboard
 /// entry still exists, which is what `GetNumQuestLeaderBoards` counts.
 fn leaderboard_text(
-    // The VM's own `GlobalStrings.lua` (decision 2045).
+    // The VM's own `GlobalStrings.lua`.
     get: &dyn Fn(&str) -> Option<String>,
     key: &str,
     name: &str,
@@ -340,7 +340,7 @@ fn resolve_template_item(
             .and_then(|i| i.catalog.get(t.display_info_id))
             .and_then(|d| d.icon.clone())
     });
-    // `GetQuestLogItemLink`'s payload (decisions 1059/1060) — the same shared link builder, and the
+    // `GetQuestLogItemLink`'s payload — the same shared link builder, and the
     // same in-flight `None`, as the questgiver panels' [`crate::ui_quest::resolve_item`].
     let link = name
         .as_ref()
@@ -492,7 +492,7 @@ fn remap_selection(old: &[QuestLogEntryView], new: &[QuestLogEntryView], sel: u3
         .unwrap_or(0)
 }
 
-/// Push the server's wall clock into the VM every frame (decision 1150) — the number every
+/// Push the server's wall clock into the VM every frame — the number every
 /// countdown binding subtracts against.
 ///
 /// Every frame, not on change: it is a *clock*, so "changed" is always, and the whole point is that
@@ -663,7 +663,7 @@ fn feed_quest_log(
     // trip every time a quest whose template we had never seen entered the log. That took the
     // engine selection with it (`remap_selection` reads an empty list as "your quest is gone"), so
     // the detail pane jumped to row 1 on every single pickup, and addons reading the log across
-    // the blank saw a log that briefly held nothing (decision 2256).
+    // the blank saw a log that briefly held nothing.
     //
     // `template()` is called for EVERY row before any filtering, because the miss is what SENDS
     // the query (our `pending` set is the reference's once-per-id dedupe) — short-circuiting would
@@ -777,7 +777,7 @@ fn feed_quest_log(
                         // `HandlePushQuestToParty` never checks the bit, it only re-tests it on the
                         // receiver's accept (`Player::CanShareQuest`). So an unshareable quest whose
                         // button we wrongly enabled would push, and the party would get a detail panel
-                        // for a quest the server then refuses (decision 1733).
+                        // for a quest the server then refuses.
                         t.flags & quest_flags::SHARABLE != 0,
                         build_objectives(
                             t,
@@ -789,7 +789,7 @@ fn feed_quest_log(
                             &commands,
                             &get,
                         ),
-                        // Every row, not just the selection (decision 2247) — the detail bindings
+                        // Every row, not just the selection — the detail bindings
                         // resolve the live selection against these at call time, the way the
                         // reference peeks its quest cache inside the call.
                         Some(build_detail(
@@ -824,8 +824,7 @@ fn feed_quest_log(
                 pushable,
                 // The slot's raw deadline (absolute unix seconds; 0 = untimed) — carried, never
                 // converted here. The countdown is subtracted per Lua call against the server
-                // clock, so this snapshot stays stable while the number on screen ticks
-                // (decision 1150).
+                // clock, so this snapshot stays stable while the number on screen ticks.
                 timer: r.log_slot.timer,
                 objectives,
                 detail,
@@ -867,7 +866,7 @@ fn feed_quest_log(
     //    whose name is uncached (peek-only lookups); ours rides the log diff that feeds the
     //    lines, so the toast always agrees with the log (an in-flight name shows the log's own
     //    placeholder). The diff announces an objective only when it ADVANCED — never on a
-    //    regression or a re-render ([`advanced`]; decision 1152 / B237).
+    //    regression or a re-render ([`advanced`]).
     //  - QUEST_WATCH_UPDATE with the byte law's arg: the quest's **1-based WATCH-LIST position,
     //    0 when unwatched** (`0x703f50(0x221)` ← `0x4df880` — NOT the quest-log index the ref
     //    FrameXML's `AutoQuestWatch_Update(arg1)` treats it as; the shipped 1.12 auto-watch
@@ -891,7 +890,7 @@ fn feed_quest_log(
                 // does not (`0x5e5d12`; never `ERR_QUEST_COMPLETE_S`, which is the turn-in's own
                 // call site).
                 // Both are catalog rows, so the surface and the sound come from there rather than
-                // from a hand-picked `fire_event` here (decisions 1770/1815).
+                // from a hand-picked `fire_event` here.
                 let line = if quest.title.is_empty() {
                     crate::ui_action::keyed_line(&script, "ERR_QUEST_UNKNOWN_COMPLETE")
                 } else {
@@ -932,7 +931,7 @@ fn feed_quest_log(
 /// `SMSG_UPDATE_OBJECT` (vmangos `Player::RewardQuest` — `DestroyItemCount` at the top, the
 /// `SetQuestSlot(log_slot, 0)` ~40 lines later), so for a frame or two the quest is still in the
 /// log with an empty bag and the line dips to `0/req`. The old predicate read that dip as progress
-/// and popped "Rumbleshot's Ammo: 0/1" in the middle of the screen (B237).
+/// and popped "Rumbleshot's Ammo: 0/1" in the middle of the screen.
 ///
 /// Comparing the numbers rather than the string also drops the re-announce 0340 named as INTERIM
 /// (an item/creature **name** landing late rewrote `text` with `cur` unmoved, toasting the same
@@ -1074,7 +1073,7 @@ fn drain_quest_log_collapses(
     }
 }
 
-/// `QuestLogPushQuest()` — the *Share Quest* button (decision 1733). The engine already resolved
+/// `QuestLogPushQuest()` — the *Share Quest* button. The engine already resolved
 /// the selection to a quest id at click time, so this is a straight relay; the server addresses the
 /// party itself.
 fn drain_quest_log_pushes(script: Option<NonSendMut<UiScript>>, commands: Res<NetCommands>) {

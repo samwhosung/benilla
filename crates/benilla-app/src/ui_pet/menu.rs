@@ -1,4 +1,4 @@
-//! The pet **right-click menu** — its two predicates and its three verbs (decision 1066).
+//! The pet **right-click menu** — its two predicates and its three verbs.
 //!
 //! `PetFrame_OnClick`'s else arm opens `PetFrameDropDown` on `UnitPopupMenus["PET"]`, whose four
 //! rows are decided by `PetCanBeAbandoned()` alone (`UnitPopup.lua:402-416`): paperdoll and abandon

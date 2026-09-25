@@ -51,7 +51,7 @@ pub(in crate::ui_chat) enum ParsedChat {
     Random { min: u32, max: u32 },
     /// `/played` — CMSG_PLAYED_TIME.
     Played,
-    /// `/shot` — the director's framing instrument (decision 0600): dump the CURRENT world-camera
+    /// `/shot` — the director's framing instrument: dump the CURRENT world-camera
     /// pose as a ready-to-paste capture `Scenario` (raw WoW eye/look + the rendered game minute)
     /// into chat and `benilla-config/shots.txt`. Client-local, no wire traffic — how a chosen spot
     /// travels from the director's eye to the golden set as exact numbers.
@@ -102,7 +102,7 @@ pub(in crate::ui_chat) enum ParsedChat {
     /// `/quit` `/exit` — the reference's `Quit()`: leave the game entirely, through the same
     /// session queue (and the same confirmation/countdown) the game menu's Exit button uses.
     Quit,
-    /// `/logout` — leave the world back to character select (`CMSG_LOGOUT_REQUEST`, decision 0193);
+    /// `/logout` — leave the world back to character select (`CMSG_LOGOUT_REQUEST`);
     /// the vanilla client's own command. The confirmed round-trip (`SMSG_LOGOUT_COMPLETE`) flips
     /// [`crate::char_select::ClientState`] back to the roster screen.
     Logout,
@@ -129,24 +129,24 @@ pub(in crate::ui_chat) enum ParsedChat {
     /// `/forfeit` `/concede` `/yield` — `CancelDuel()`. Takes no argument and needs no state
     /// check: one opcode covers decline/cancel/forfeit and the server reads the intent.
     Forfeit,
-    /// `/pvp` — `TogglePVP()` (decision 0646 §3). Takes no argument: the binding has no state
+    /// `/pvp` — `TogglePVP()`. Takes no argument: the binding has no state
     /// form, and the server reads the toggle from our current preference.
     Pvp,
-    /// `/partytest [lead|raid|invite|mark|ping|off]` — the party-frame dev instrument (decision 0434, the
+    /// `/partytest [lead|raid|invite|mark|ping|off]` — the party-frame dev instrument (the
     /// `/chattest` pattern): a synthetic roster through the real apply path (`lead` = the same
     /// roster with US leading, for the leader-only popup rows), a fake pending invite for the
     /// popup, a local skull on the current target (the mark renders without a server echo), or
     /// clear. While the roster is synthetic the drain runs in SANDBOX mode
     /// ([`crate::ui_party::GroupState::test`]): the popup's group-mutating rows — promote,
     /// kick, leave, loot settings, raid marks — apply to the local mirror, so the whole menu
-    /// surface is exercisable serverless. `raid` is the same idea one level out (decision 1549):
+    /// surface is exercisable serverless. `raid` is the same idea one level out:
     /// a synthetic 25-member RAID with us leading, which is the only way the Raid tab's 8×5 grid
     /// is eyeballable without forty accounts — the drag, Ready Check and the kick all apply to
-    /// the local mirror there too. `ping` (decision 1596) seats a synthetic *group member's*
+    /// the local mirror there too. `ping` seats a synthetic *group member's*
     /// minimap ping 35 yd north-east — the one leg of the ping that otherwise needs a second
     /// client.
     PartyTest { arg: String },
-    /// `/target [name]` — select by name (`TargetByName`, decision 0886). Resolves creatures AND
+    /// `/target [name]` — select by name (`TargetByName`). Resolves creatures AND
     /// players, case-insensitively, by whole name or longest common prefix, with no range, cone,
     /// liveness or hostility gate at all. `None` = bare, which the ref's `GetSlashCmdTarget` turns
     /// into your current target's name when that target is a player (a no-op re-select), and into
@@ -155,16 +155,16 @@ pub(in crate::ui_chat) enum ParsedChat {
     /// `/assist [name]` — select whatever the basis unit is targeting. A named basis resolves
     /// **players only** (typemask 0x10); bare assists your current target, creature or player.
     Assist { name: Option<String> },
-    /// `/follow [name]` — auto-follow (decision 0890). A named subject resolves players only, and
+    /// `/follow [name]` — auto-follow. A named subject resolves players only, and
     /// only living assistable ones (the ref's filter mode 2); bare follows the current selection,
     /// creature or player. Client-side movement — nothing goes on the wire.
     Follow { name: Option<String> },
     /// `/macrohelp` — the reference's `ChatFrame_DisplayMacroHelpText`: `MACRO_HELP_TEXT_LINE1..5`
-    /// straight out of the shipped `GlobalStrings.lua` (decision 0983). Resolved in the drain,
+    /// straight out of the shipped `GlobalStrings.lua`. Resolved in the drain,
     /// which holds the VM, so the text can never go stale against the install.
     MacroHelp,
     /// `/reload`, or `ReloadUI()` typed through `/script` — tear the UI session down and build a
-    /// new one without leaving the world (decision 1291). Queued on the session seam like
+    /// new one without leaving the world. Queued on the session seam like
     /// [`ParsedChat::Logout`]; [`crate::ui_script::run_pending_reload`] runs it at the top of
     /// the next frame. (`/console reloadUI` reaches the same request through the command
     /// registry's `reloadUI`.)
@@ -200,7 +200,7 @@ fn slash_target_name(args: &str) -> Option<String> {
 }
 
 /// Parse a trimmed slash line into an ACTION (`/join`, `/afk`, `/random`, `/wave`, the dev
-/// commands…) through the boot-built command table ([`super::commands`], decision 0881). The
+/// commands…) through the boot-built command table ([`super::commands`]). The
 /// chat-TYPE commands (`/say`-family, `/w`, `/r`) never reach here on the send path —
 /// [`parse_enter_type_switch`] and the reply arm consume them first; a plain no-slash line sends as
 /// the box's current type ([`drain_chat_input`]). A non-slash line reaching this fn (unit tests
@@ -229,7 +229,7 @@ pub(in crate::ui_chat) fn parse_line(table: &SlashCommands, line: &str) -> Parse
 }
 
 /// `s` as a Lua **short** string literal, escaped — the only quoting 1.12's lexer can read for
-/// arbitrary text (decision 2136).
+/// arbitrary text.
 ///
 /// This used to build a long-bracket literal and step its `=` level past anything the payload
 /// could close early: `[=[a]]b]=]`. That works on a Lua 5.1-family lexer and **is a syntax error
@@ -330,7 +330,7 @@ fn slash_command(index: SlashIndex, args: &str) -> ParsedChat {
         S::Help => ParsedChat::Help,
         S::Logout => ParsedChat::Logout,
         S::Quit => ParsedChat::Quit,
-        // The party membership commands (decision 0434) and the duel verbs (0633): a bare command
+        // The party membership commands and the duel verbs: a bare command
         // falls back to the selected PLAYER (`GetSlashCmdTarget`).
         S::Invite => ParsedChat::Invite {
             name: slash_target_name(args),
@@ -344,7 +344,7 @@ fn slash_command(index: SlashIndex, args: &str) -> ParsedChat {
         S::Duel => ParsedChat::Duel {
             name: slash_target_name(args),
         },
-        // The by-name selection pair (decision 0886). Both take the whole trimmed argument —
+        // The by-name selection pair. Both take the whole trimmed argument —
         // `/target Kobold Vermin` is one name, not a name plus junk.
         S::Target => ParsedChat::Target {
             name: slash_target_name(args),
@@ -357,7 +357,7 @@ fn slash_command(index: SlashIndex, args: &str) -> ParsedChat {
         },
         S::DuelCancel => ParsedChat::Forfeit,
         S::Pvp => ParsedChat::Pvp,
-        // The social verbs (decision 0668): the reference's own `SlashCmdList` bodies, which the
+        // The social verbs: the reference's own `SlashCmdList` bodies, which the
         // stock ChatFrame.lua carries since 1948 — and whose parser claims these lines before
         // they ever reach here, so these rows are the shape kept for the day the arm is pruned
         // (1948's follow-on). The argument is passed WHOLE: `/who`'s is a filter expression.
@@ -366,7 +366,7 @@ fn slash_command(index: SlashIndex, args: &str) -> ParsedChat {
         S::RemoveFriend => social_body("REMOVEFRIEND", args),
         S::Ignore => social_body("IGNORE", args),
         S::Unignore => social_body("UNIGNORE", args),
-        // The one-line reference bodies over globals benilla already implements (decision 0881,
+        // The one-line reference bodies over globals benilla already implements (
         // the 0668 posture): `InitiateTrade("target")`, `InspectUnit("target")`,
         // `SetLootMethod(...)`, `RunScript(msg)`. Running the reference's own call keeps the
         // panel-opening/permission behaviour in the FrameXML that owns it.
@@ -395,7 +395,7 @@ fn slash_command(index: SlashIndex, args: &str) -> ParsedChat {
         // `/cast <name>` = the ref's `SlashCmdList["CAST"]` verbatim: `if msg ~= "" then
         // CastSpellByName(msg) end` (ChatFrame.lua:1120). The binding does the book lookup
         // (`benilla_ui::script::spellbook::resolve_spell_by_name`) and queues onto the ONE cast
-        // path, so a typed `/cast` and a macro's `/cast` line are the same code — decision 0983.
+        // path, so a typed `/cast` and a macro's `/cast` line are the same code.
         S::Cast => {
             if args.is_empty() {
                 ParsedChat::Unknown

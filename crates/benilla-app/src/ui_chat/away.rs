@@ -1,4 +1,4 @@
-//! **`/afk` and `/dnd` — the client-side command law** (decision 2088).
+//! **`/afk` and `/dnd` — the client-side command law**.
 //!
 //! The two commands look like a pair and are not one. `SendChatMessage 0x49f1e0` handles them
 //! **asymmetrically**, and the reference's own string pool shows why: the DND keys live in the chat

@@ -1,5 +1,5 @@
 //! **`DropItemOnUnit 0x48d960`** — the cursor's held item dropped onto a unit, which in 1.12 is
-//! how you feed your pet (decision 1055).
+//! how you feed your pet.
 //!
 //! The reference's binding forks on which unit it was given:
 //!
@@ -98,7 +98,7 @@ pub(crate) fn drop_item_on_unit(
     };
     for token in tokens {
         // The reference compares the resolved unit's guid against the pet global; our `"pet"` token
-        // resolves off the same cached guid the pet frame and `UNIT_PET` read (decision 0990), so
+        // resolves off the same cached guid the pet frame and `UNIT_PET` read, so
         // any other token simply is not the pet and takes the unmodelled trade leg.
         if token != "pet" {
             debug!("DropItemOnUnit({token}) — only the pet leg is modelled; refused, payload kept");
@@ -141,7 +141,7 @@ pub(crate) fn drop_item_on_unit(
 mod tests {
     use super::*;
 
-    /// `0x6ea1e0`'s three gates, each failed alone (decision 1055). The warlock's-imp row is the
+    /// `0x6ea1e0`'s three gates, each failed alone. The warlock's-imp row is the
     /// one that earns gate 3: it passes both field gates and must still be refused.
     #[test]
     fn the_feed_gates_are_ownership_and_provenance() {

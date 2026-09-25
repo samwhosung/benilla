@@ -1,4 +1,4 @@
-//! The group/party packet handlers (decision 0434 §D2, superseded by 0440; in the net handler
+//! The group/party packet handlers (superseded by 0440; in the net handler
 //! table since 2321, moved out of the drain's group arm file). [`GroupState`] mirrors the wire and
 //! names the **messages** its roster diff implies; these are the shims that put them on the
 //! shared by-key queue. Two bodies here are not packet handlers but the object layer's hook on a
@@ -6,7 +6,7 @@
 //! object arms still call them, and they become listeners on the object kinds once those are
 //! peeled.
 //!
-//! **They are message ids, not sentences** (decisions 2045/2054). The reference reaches all twelve
+//! **They are message ids, not sentences**. The reference reaches all twelve
 //! through one `CGGameUI::DisplayError(msgId)`, and the catalog row that id names answers three
 //! questions at once — the text, the surface, and the sound. Composing the English here answered
 //! only the first, and got the third wrong for free: `ERR_DECLINE_GROUP_S` carries the
@@ -198,12 +198,12 @@ fn on_session_end(In(_): In<SessionEvent>, mut group: ResMut<GroupState>) {
 
 /// Queue the messages a `GroupState::apply_*` named. `ui_action::feed_actions` resolves each key
 /// against the VM's own `GlobalStrings.lua` and puts the line on the surface its catalog row
-/// names — `ui_guild`'s `push_lines` (decision 2054), one window over.
+/// names — `ui_guild`'s `push_lines`, one window over.
 fn push_group_lines(errors: &mut UiErrorKeys, lines: Vec<UiError>) {
     errors.0.extend(lines);
 }
 
-/// `MSG_RAID_READY_CHECK`, the open form (decision 1989): our own echo as leader takes the
+/// `MSG_RAID_READY_CHECK`, the open form: our own echo as leader takes the
 /// response-collection arm and prints nothing; as anyone else we print the leader's line and take
 /// the popup ticket. The leader test is the reference's guid compare (`0x4ba3a0`).
 fn ready_check_request(group: &mut GroupState, errors: &mut UiErrorKeys, self_guid: &SelfGuid) {
@@ -248,9 +248,9 @@ fn leader_changed(
 }
 
 /// `SMSG_GROUP_LIST` — the roster echo (and the join/leave diff's line source). Roster changes move
-/// shared-quest availability, so the questgiver sweep re-asks from here (0654).
+/// shared-quest availability, so the questgiver sweep re-asks from here.
 ///
-/// **A roster entry is a sighting** (decision 1564): every member guid is warmed into the
+/// **A roster entry is a sighting**: every member guid is warmed into the
 /// [`NameCache`] here, the same ask-once discipline `net::objects` applies the moment a unit
 /// streams in. The roster wire carries a member's *name*, so this is not asked for the name — it is
 /// asked for the `(race, class, gender)` triple that rides the same answer, and which is the ONLY
@@ -332,7 +332,7 @@ fn seat_new_records(
 /// The pair is why the reference's party frame does not blank when somebody walks over the hill
 /// (report B334): the snapshot means the bars keep the numbers they were showing at the edge, and
 /// the request means the server answers `_FULL` rather than leaving us on whatever delta its
-/// accumulated mask happens to carry next. Neither existed here before decision 1640.
+/// accumulated mask happens to carry next. Neither existed here before.
 ///
 /// **Two gates, and both are the reference's.** This runs on every despawn, so a guid that is not
 /// on the roster falls straight through; and a guid we hold **no object for** falls through too —
@@ -416,7 +416,7 @@ mod tests {
     /// The roster edge is where a member we may never SEE becomes askable. Their descriptor is the
     /// only other source of race/class/gender, and it never arrives while they are out of the local
     /// area — so without this ask the raid grid's class column and the party frame's portrait
-    /// stand-in are both permanently blank for exactly the members that need them (B315).
+    /// stand-in are both permanently blank for exactly the members that need them.
     ///
     /// Ask-ONCE: a re-sent roster (every join, leave, loot-method change re-sends the whole list)
     /// must not re-ask, or a busy group would spam a query per member per packet.
@@ -484,7 +484,7 @@ mod tests {
         assert_eq!(names.player_traits(leader), Some((1, 4, 1)));
     }
 
-    // ── The out-of-range record (decision 1640, report B334) ────────────────────────────────
+    // ── The out-of-range record (report B334) ────────────────────────────────
 
     /// Descriptor field indices, spelled locally the way the other app-side descriptor tests do
     /// (`ui_unit`'s vitals block) — the private `FIELD_UNIT_*` values, build 5875.

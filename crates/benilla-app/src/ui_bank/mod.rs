@@ -4,7 +4,7 @@
 //! The net bridge fills [`BankOpen`] from the wire (`SMSG_SHOW_BANK` → the banker guid — sent for
 //! our own `CMSG_BANKER_ACTIVATE` *and* volunteered for the gossip menu's bank option, so the arm
 //! never assumes we asked). The vault's contents never pass through here: the 24 bank slots and
-//! the 6 bank bags are player-array descriptor fields streamed at login (decision 0604 — the
+//! the 6 bank bags are player-array descriptor fields streamed at login (the
 //! window only reveals them), fed by [`crate::ui_items`] as containers `-1`/`5..=10` beside the
 //! backpack. Each frame [`feed_bank`] pushes the purchase-row snapshot
 //! ([`benilla_ui::script::BankState`]: the `PLAYER_BYTES_2` byte-2 purchased count + the next
@@ -13,7 +13,7 @@
 //! packet** — that descriptor delta is the confirmation), and resolves the banker's name for the
 //! title (the merchant feed's ask-once pattern). [`drain_bank`] pulls the Lua intents back out:
 //! `PurchaseSlot()` → [`ClientCommand::BuyBankSlot`], `CloseBankFrame()` → a local clear (no
-//! close opcode exists — decision 0604). The standardized NPC-session range guard
+//! close opcode exists). The standardized NPC-session range guard
 //! ([`crate::ui_session`]) applies the same client-side close out of service range.
 //!
 //! The right-click auto-move (deposit/withdraw while the bank is open) lives one module over in
@@ -28,7 +28,7 @@ use crate::net::{ClientCommand, NetCommands, ObjectStore, SelfPlayer};
 use crate::ui_script::{UiFeed, UiInput};
 use crate::ui_session::{close_npc_session_out_of_range, npc_switched, NpcSession};
 
-/// The client-side `BankBagSlotPrices.dbc` table (decision 0604: the purchase ladder is client
+/// The client-side `BankBagSlotPrices.dbc` table (the purchase ladder is client
 /// data — 10s/1g/10g/25g/50g/100g, then the 999999999 sentinel). Optional resource — absent, the
 /// purchase row shows cost 0 and the popup still works (the server re-prices authoritatively).
 #[derive(Resource)]
@@ -54,7 +54,7 @@ impl BankOpen {
         self.banker.is_some()
     }
 
-    /// Close the open window (a client-side close — no packet exists, decision 0604).
+    /// Close the open window (a client-side close — no packet exists).
     pub(crate) fn clear(&mut self) {
         self.banker = None;
     }
@@ -106,10 +106,10 @@ impl Plugin for UiBankPlugin {
 }
 
 /// The red error line for a `SMSG_BUY_BANK_SLOT_RESULT` code — the reference GlobalStrings'
-/// `ERR_BANKSLOT_*` texts verbatim (decision 0604: the codes map 1:1 onto them).
+/// `ERR_BANKSLOT_*` texts verbatim (the codes map 1:1 onto them).
 ///
-/// **The three ids are the reference's own table, and `None` is the reference's own silence**
-/// (decision 1821): its handler at `0x5e3f8d` reads the `u32`, refuses `>= 3` outright
+/// **The three ids are the reference's own table, and `None` is the reference's own silence**:
+/// its handler at `0x5e3f8d` reads the `u32`, refuses `>= 3` outright
 /// (`0x5e3f9c cmp eax,0x3; jae`) and otherwise indexes a 3-entry table at `0x80af14` holding
 /// exactly `{0x100, 0x101, 0x102}`. So `OK` (3) is silent by the same bound as an unknown code —
 /// there is no per-code fallback line to print, and printing one would be our invention.
@@ -146,7 +146,7 @@ fn feed_bank(
     let last = last.get(&script);
     let last_banker = last_banker.get(&script);
     // Purchase refusals go to the surface — and the voice — their message record names: the
-    // insufficient-funds row carries error-speech line `0x16` (decision 1815). A code outside the
+    // insufficient-funds row carries error-speech line `0x16`. A code outside the
     // reference's three is silent, exactly as its `jae` makes it ([`bank_slot_error_key`]).
     let lines: Vec<_> = errors
         .0

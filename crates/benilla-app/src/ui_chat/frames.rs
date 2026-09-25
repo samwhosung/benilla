@@ -1,4 +1,4 @@
-//! The window model + router + composer (decision 0288 §1): [`ChatWindows`] holds each docked
+//! The window model + router + composer: [`ChatWindows`] holds each docked
 //! window's message-group registration (the ref client's own chat-cache defaults, quoted from the
 //! pin's `WTF/.../chat-cache.txt`); [`route`] fans one [`ChatEvent`] across every subscribed
 //! window; [`compose`] is the `ChatFrame_OnEvent` composition law transcribed — the `CHAT_*_GET`
@@ -6,7 +6,7 @@
 //! or monster lines), the `[Language]` header, the `[N. Name]` channel prefix with its " - Zone"
 //! tail stripped (the SPEECH branch only — a notice prints arg4 whole, 1275), and the
 //! `CHAT_<X>_NOTICE` channel-notice strings. **Every one of those formats is a KEY, resolved from
-//! the player's own `GlobalStrings.lua` at render time** (decision 2045) — and resolved the way
+//! the player's own `GlobalStrings.lua` at render time** — and resolved the way
 //! `ChatFrame_OnEvent` itself does it, by splicing the type into `CHAT_<TYPE>_GET` and the notice
 //! token into `CHAT_<TOKEN>_NOTICE` rather than by carrying a table of English. Colors come from
 //! the stock window's `ChatTypeInfo` table (1948), whose shipped defaults are transcribed in
@@ -20,8 +20,8 @@ use super::event::{event_name, notice_token, ChatEvent, ChatEventKind};
 
 /// What the app keeps beside the reference's chat frames: the default language its composer
 /// needs for the log-file line, and the log files themselves. The per-window registration that
-/// lived here (0288 §1) is the record's MESSAGES set now, read by the reference's own
-/// `ChatFrame_RegisterForMessages` (decision 1948).
+/// lived here is the record's MESSAGES set now, read by the reference's own
+/// `ChatFrame_RegisterForMessages`.
 #[derive(Resource, Default)]
 pub(crate) struct ChatWindows {
     /// The frame's own `this.defaultLanguage` — the name `GetDefaultLanguage()` answers, which is
@@ -40,7 +40,7 @@ pub(crate) struct ChatWindows {
 
 /// Route one event: fire the real `CHAT_MSG_*` at the VM — the reference's own `ChatFrame_OnEvent`
 /// composes and prints it, in every window whose MESSAGES set carries the type, with
-/// `ChatTypeInfo`'s colour, the whisper chime and the tab flash (decision 1948) — and tee the
+/// `ChatTypeInfo`'s colour, the whisper chime and the tab flash — and tee the
 /// rendered line to the log files. A kind-less event (an unmodeled wire type) drops with a warn,
 /// never silently.
 ///
@@ -62,8 +62,7 @@ pub(crate) fn route(
     // which want the rendered line the window will show.
     let default_language = windows.default_language.clone();
     // The composer's strings are the VM's own — `getglobal` against the `GlobalStrings.lua` the
-    // reference's Lua reads, so the log line and the window line cannot say different things
-    // (decision 2045).
+    // reference's Lua reads, so the log line and the window line cannot say different things.
     if let Some(line) = compose(event, kind, &default_language, &|key| {
         script.lua().globals().get::<String>(key).ok()
     }) {
@@ -241,7 +240,7 @@ fn strip_zone(channel: &str) -> &str {
 /// `CHAT_INVITE_NOTICE = "%2$s has invited you to join the channel '%1$s'."` — and it gets there
 /// with **positional specifiers in the string**, not with a special case at the call site. That is
 /// the whole argument for resolving these by key: hand-typing the English silently hardcodes one
-/// locale's word order (decision 2045).
+/// locale's word order.
 ///
 /// `chan` is arg4 **whole**, zone tail and all — see [`strip_zone`] for why the notice arms are
 /// not the gsub's callers.

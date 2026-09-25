@@ -1,4 +1,4 @@
-//! Cast-failure display strings — the reference's **two-layer** pipeline (decision 0427):
+//! Cast-failure display strings — the reference's **two-layer** pipeline:
 //!
 //! 1. `HandleCastFailed 0x6e1a00` resolves the wire reason through the name-identity table
 //!    `0x6e23e0` (wire order = the vmangos `SpellCastResult` enum) into
@@ -9,7 +9,7 @@
 //!    screen shows "Spell is not ready yet." while `SPELL_FAILED_NOT_READY` reads
 //!    "Not yet recovered", and "Not enough rage" for a rage spell's NO_POWER.
 //!
-//!    **This layer — and only this layer — is per-CASTER** (decision 2033). `SMSG_PET_CAST_FAILED`
+//!    **This layer — and only this layer — is per-CASTER**. `SMSG_PET_CAST_FAILED`
 //!    is not the same handler with a flag: it is `Spell_C::HandlePetCastFailed 0x6e8eb0`, a
 //!    separate switch over a separate 142-byte index table, and it overrides a different ten
 //!    reasons. Six of them are the `ERR_PET_SPELL_*` catalog rows, which have no other raise site
@@ -29,13 +29,13 @@
 //! NO_POWER).
 //!
 //! **The argument arms, and what is still approximate.** Filled: `0x5e` REQUIRES_SPELL_FOCUS and
-//! `0x5d` REQUIRES_AREA here (decision 1313 — `0x6e1f62`/`0x6e1fad`), `0x8d`
-//! PREVENTED_BY_MECHANIC (decision 1948 — `0x6e2190`, and the one arm whose word is produced
-//! locally rather than read off the wire), `0x56` ONLY_SHAPESHIFT (decision 2280 — `0x6e1ff8`,
+//! `0x5d` REQUIRES_AREA here (`0x6e1f62`/`0x6e1fad`), `0x8d`
+//! PREVENTED_BY_MECHANIC (`0x6e2190`, and the one arm whose word is produced
+//! locally rather than read off the wire), `0x56` ONLY_SHAPESHIFT (`0x6e1ff8`,
 //! the one arm that reads a **mask** and joins several names), and `0x78` TOTEMS / `0x5c`
 //! REAGENTS / `0x19`–`0x1b` EQUIPPED_ITEM_CLASS\* / `0x31` NEED_EXOTIC_AMMO in the drain, which
 //! owns the totem/reagent pair because their fills need the item caches and the
-//! query-then-redisplay cache-miss behavior ("Requires Mining Pick", decisions 0545 + 0552), and
+//! query-then-redisplay cache-miss behavior ("Requires Mining Pick"), and
 //! the other two because they share `0x6e2380`'s subclass catalog.
 //!
 //! **That is every arm in the `0x6e1d8e` table, and the reasons that still read bare read bare
@@ -67,7 +67,7 @@
 //! item-ness.
 //!
 //! 4. **A fourth thing leaves this function, and it is not the displayed text**
-//!    ([`CastFailLine::arg_text`], decision 2285). `0x6e1a00` also calls the combat-log formatter
+//!    ([`CastFailLine::arg_text`]). `0x6e1a00` also calls the combat-log formatter
 //!    `0x62c360`, and hands it `edi` — the **argText** buffer, which layer 2 never touches. So
 //!    the eighteen re-worded reasons say one thing on screen and another in the log: "Spell is
 //!    not ready yet." against "Not yet recovered". Modelling the log as "whatever the red line
@@ -264,10 +264,10 @@ pub(super) struct FailArgs<'a> {
     pub(super) focus: Option<&'a SpellFocusCatalog>,
     /// `AreaTable.dbc` (`0xc0e048`) — the `0x5d` arm's `AreaName`.
     pub(super) areas: Option<&'a AreaTableCatalog>,
-    /// `SpellMechanic.dbc` (`0xc0d7c4`) — the `0x8d` arm's mechanic name (decision 1948).
+    /// `SpellMechanic.dbc` (`0xc0d7c4`) — the `0x8d` arm's mechanic name.
     pub(super) mechanics: Option<&'a SpellMechanicCatalog>,
     /// `SpellShapeshiftForm.dbc` (`0xc0d76c`) — the `0x56` arm's form names, keyed by form id
-    /// exactly as [`crate::ui_action::Spells::forms`] holds them (decision 2280).
+    /// exactly as [`crate::ui_action::Spells::forms`] holds them.
     pub(super) forms: Option<&'a HashMap<u32, ShapeshiftForm>>,
 }
 
@@ -323,7 +323,7 @@ impl FailArgs<'_> {
             // **`0x8d` PREVENTED_BY_MECHANIC** (`0x6e2190`) → `SpellMechanic.dbc` (`0xc0d7c4`),
             // so "Can't do that while %s" reads "Can't do that while stunned". Unlike its two
             // neighbours the word is not the wire's: this refusal is raised locally and the id
-            // comes from the crowd-control ladder's own exemption scan (decisions 1941/1948).
+            // comes from the crowd-control ladder's own exemption scan.
             // A `0` or unknown id leaves the template to the strip fallback, which is also what
             // the arm does when the scan named no mechanic at all.
             0x8D => named(self.arg.and_then(|id| self.mechanics?.name(id))),
@@ -360,7 +360,7 @@ impl FailArgs<'_> {
     /// not a guard against nothing.
     ///
     /// Two earned negatives. The arm never tests `AttributesEx2` bit `0x80000` — the *permissive*
-    /// mask attribute the tooltip's required-form line does honour (`0x52f115`, decision 1483) —
+    /// mask attribute the tooltip's required-form line does honour (`0x52f115`) —
     /// so a permissive spell that somehow reached this reason would still name its forms; the
     /// form gate, not this arm, is what keeps that unreachable. And `StancesNot` (`+0x30`) is
     /// never read here either.
@@ -378,7 +378,7 @@ impl FailArgs<'_> {
             .map(|f| f.name.as_str())
             .filter(|n| !n.is_empty());
         match caster {
-            // **The pet's arm does not join** (decision 2285). `0x6e921a` reads the same store
+            // **The pet's arm does not join**. `0x6e921a` reads the same store
             // the same way — `[0xc0d76c]` at `0x6e924f`, stride `0x38` at `0x6e9285`,
             // `row+0x8+locale*4` at `0x6e9277`, the mask at `0x6e924c` — and then
             // `0x6e9282: jne 0x6e929a` leaves the loop at the FIRST non-empty name. It is a
@@ -409,14 +409,14 @@ pub(super) const PASSTHROUGH: &str = "ERR_SPELL_FAILED_S";
 /// `CGGameUI::DisplayError`, and that function reads the record's kind — so the surface is a
 /// property of the id this dispatch picked, not of "cast failures" as a category. Seventeen of
 /// the overrides are red and `ERR_SPELL_FAILED_NOTUNSHEATHED` is **yellow**; before the catalog
-/// (decision 1770) benilla painted all eighteen red, because nothing here knew which id it had
+/// benilla painted all eighteen red, because nothing here knew which id it had
 /// chosen by the time the line reached the frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CastFailLine {
     pub key: &'static str,
     pub text: String,
     /// **The reference's OTHER buffer** — `edi` at `0x6e21e2`, which is what the combat-log
-    /// formatter `0x62c360` receives, not the displayed text (decision 2285).
+    /// formatter `0x62c360` receives, not the displayed text.
     ///
     /// `0x6e1d9a: lea edi,[ebp-0x488]` runs **once, before the argument dispatch**, on the buffer
     /// `0x6e1d77` has just filled with `GetText("SPELL_FAILED_<name>")` — and the errorId-override
@@ -489,7 +489,7 @@ pub(super) fn cast_fail_text(
     // at `0x6e1d9a`, both of which run before the argument dispatch and neither of which any
     // errorId override touches. It is therefore what the combat log reads for every reason no
     // argument arm claims, *including* the eighteen the second layer re-words on screen
-    // ([`CastFailLine::arg_text`], decision 2285). Empty when 5875 ships no such key.
+    // ([`CastFailLine::arg_text`]). Empty when 5875 ships no such key.
     let first_layer = CAST_FAIL_KEYS
         .get(usize::from(reason))
         .and_then(|k| get_text(k))
@@ -503,7 +503,7 @@ pub(super) fn cast_fail_text(
         })
     };
     // The errorId overrides — the replaced-message reasons. **Which table is asked is the
-    // caster's** (decision 2033): the reference does not flag one handler, it ships two, and they
+    // caster's**: the reference does not flag one handler, it ships two, and they
     // disagree on ten reasons. Everything past this match — the `SPELL_FAILED_*` vocabulary, the
     // argument arms, the strip fallback — is shared, exactly as it is in the binary.
     match caster {
@@ -875,7 +875,7 @@ mod tests {
         assert_eq!(kind_of(through.key), MsgKind::Error);
     }
 
-    /// **`0x56` ONLY_SHAPESHIFT, the arm's three shapes** (decision 2280): one form, several
+    /// **`0x56` ONLY_SHAPESHIFT, the arm's three shapes**: one form, several
     /// joined with the reference's `", "`, and a row whose `Name` the DBC leaves empty.
     ///
     /// The bit→id law is the reference's record walk read as a lookup — row index `b` is form id
@@ -1273,7 +1273,7 @@ mod tests {
                 .text,
             "Not enough rage"
         );
-        // The environment gate's pair (decision 1056) — both are plain passthroughs, so what the
+        // The environment gate's pair — both are plain passthroughs, so what the
         // player reads IS the GlobalStrings value. A typo'd key here would degrade a real refusal
         // to a dead-looking button, which is what this test exists to catch.
         assert_eq!(
@@ -1298,7 +1298,7 @@ mod tests {
             None
         );
 
-        // The pet's table against the player's own shipped file (decision 2033). Both halves
+        // The pet's table against the player's own shipped file. Both halves
         // matter: the six rows resolve to the pet wording, and `ERR_PET_SPELL_NOPATH` resolves to
         // NOTHING — the claim the `SILENT_IN_5875` entry rests on, checked here against the real
         // `GlobalStrings.lua` rather than against a fixture that could simply have omitted it.
@@ -1361,7 +1361,7 @@ mod tests {
             mechanics: Some(&mechanics),
             forms: Some(&forms),
         };
-        // **0x8d PREVENTED_BY_MECHANIC** (decision 1948) — the crowd-control ladder's renamed
+        // **0x8d PREVENTED_BY_MECHANIC** — the crowd-control ladder's renamed
         // refusal, and the one argument arm whose word is produced locally rather than read off
         // the wire. The names are lower-case adjectives in the shipped data, which is what makes
         // them read as the tail of the sentence.
@@ -1418,7 +1418,7 @@ mod tests {
                 .text,
             "You need to be in"
         );
-        // **0x56 ONLY_SHAPESHIFT on the real chain — the reported defect** (decision 2280): the
+        // **0x56 ONLY_SHAPESHIFT on the real chain — the reported defect**: the
         // real `Spell.dbc` `Stances` column, the real `SpellShapeshiftForm.dbc` names and the
         // real `"Must be in %s"`. Prowl in bear form is the report; Maul is the multi-form join,
         // which a single-bit test could not tell apart from "name the lowest bit".

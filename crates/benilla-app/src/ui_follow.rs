@@ -1,13 +1,12 @@
 //! The app-side **follow bridge** — the seam between the auto-follow movement mode
-//! ([`crate::player::follow`], decision 0890) and the UI that has to say so.
+//! ([`crate::player::follow`]) and the UI that has to say so.
 //!
 //! Two directions, one small module:
 //!
 //! - **In.** Drain the Era API's follow intents ([`benilla_ui::script::FollowRequest`], queued by
 //!   `FollowUnit`/`FollowByName`) into the app's own [`crate::player::FollowRequest`] funnel, which
 //!   [`crate::target::by_name`] resolves. The unit popup's **Follow** row is the shipped caller;
-//!   the slash command reaches the same funnel directly, because benilla parses slash lines in Rust
-//!   (decision 0881).
+//!   the slash command reaches the same funnel directly, because benilla parses slash lines in Rust.
 //! - **Out.** Fire `AUTOFOLLOW_BEGIN` / `AUTOFOLLOW_END` on the follow state's transitions. That
 //!   pair is the *entire* interface the reference gives the UI for follow — there is no
 //!   `IsFollowing()` and no unit token for the followee, so a status display is only possible at

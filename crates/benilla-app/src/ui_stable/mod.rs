@@ -1,4 +1,4 @@
-//! The app-side **stable feed** (decision 1676) — `PetStableFrame`'s data, the inward half of the
+//! The app-side **stable feed** — `PetStableFrame`'s data, the inward half of the
 //! stable seam around [`benilla_ui::script`]'s `stable` module, and the twin of
 //! [`crate::ui_trainer`]'s trainer feed.
 //!
@@ -13,7 +13,7 @@
 //!
 //! The wire names a `creature_template` **entry** and a loyalty **level**; the window wants an
 //! icon, a family word, a loyalty name and a diet. Three of those come from tables already loaded
-//! for the live pet ([`PetFamilyTables`], [`PetStatTables`] — decisions 1062/1005); the fourth,
+//! for the live pet ([`PetFamilyTables`], [`PetStatTables`]); the fourth,
 //! the family *id*, is not on the wire at all and must come from the creature query
 //! ([`NameCache::resolve_creature`], ask-once).
 //!
@@ -163,7 +163,7 @@ fn resolve_pet(
         pet_number: wire.pet_number,
         // The family's own `CreatureFamily.dbc` icon column — a pet has no item behind it, so this
         // is the only icon there is. `None` until the query lands; the reference's
-        // `SetItemButtonTexture` renders the empty-slot art for it, which is right (decision 1046:
+        // `SetItemButtonTexture` renders the empty-slot art for it, which is right (
         // a path resolving to nothing would draw WHITE).
         icon: families
             .and_then(|t| t.families.icon(family_id))
@@ -173,12 +173,12 @@ fn resolve_pet(
         level: wire.level,
         family: family_row.map(|f| f.name.clone()),
         // The wire carries a loyalty LEVEL; the window shows the `PetLoyalty.dbc` name for it, the
-        // same table `GetPetLoyalty` reads for the live pet (decision 1005).
+        // same table `GetPetLoyalty` reads for the live pet.
         loyalty: stats
             .and_then(|t| t.loyalty.name(wire.loyalty))
             .map(str::to_string),
-        // The family row's food mask expanded to localized diet names — `GetPetFoodTypes`'s law
-        // (decision 1062). Legitimately empty for a zero mask; the reference guards on that.
+        // The family row's food mask expanded to localized diet names — `GetPetFoodTypes`'s law.
+        // Legitimately empty for a zero mask; the reference guards on that.
         diet: family_row
             .map(|f| {
                 families
@@ -291,8 +291,8 @@ fn feed_stable(
     script.set_stable(fresh.clone());
     if switched {
         // A different stable master while the window is open is a real close+open — the reference's
-        // ShowUIPanel early-returns when visible, so the open sound only re-plays after a hide
-        // (decision 0096). Consume the close intent the CLOSED→OnHide→ClosePetStables round queues,
+        // ShowUIPanel early-returns when visible, so the open sound only re-plays after a hide.
+        // Consume the close intent the CLOSED→OnHide→ClosePetStables round queues,
         // so the drain does not clear the stable we just re-opened to.
         script.fire_event("PET_STABLE_CLOSED", vec![]);
         script.fire_event("PET_STABLE_SHOW", vec![]);
@@ -365,7 +365,7 @@ fn drain_stable(
 /// So the pane has two sources and one of them is not a unit at all:
 ///
 /// - A **live** pet gets [`StableBooth::unit`], and the pane is the pet paper doll's case exactly
-///   (decision 1057) — the booth mirrors the world body.
+/// — the booth mirrors the world body.
 /// - Everything else gets [`StableBooth::display_id`], off the creature query's
 ///   [`crate::names::CreatureRecord::display_id`]. That covers every stabled pet *and* slot 0 while
 ///   the pet is dismissed or too far to summon: the server still sends its row, and the reference
@@ -433,10 +433,10 @@ fn stable_subject(
 }
 
 /// Stable refusals staged for the feed, as **message-catalog keys** — only ever
-/// `ERR_NOT_ENOUGH_MONEY`, the single code the client speaks for (decision 1677), reached through
+/// `ERR_NOT_ENOUGH_MONEY`, the single code the client speaks for, reached through
 /// `DisplayError(0x25)` (the `SMSG_STABLE_RESULT` handler `0x4cacb0`). A key rather than the
 /// resolved text because that row carries error-speech line `0x28` too — the character says it
-/// aloud (decision 1815).
+/// aloud.
 #[derive(Resource, Default)]
 pub(crate) struct StableErrors(pub(crate) Vec<&'static str>);
 

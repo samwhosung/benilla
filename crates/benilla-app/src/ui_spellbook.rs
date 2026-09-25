@@ -1,16 +1,16 @@
-//! The spellbook window feed (decision 0216 §8, slice 5) — the spell **source** for the cursor
+//! The spellbook window feed (slice 5) — the spell **source** for the cursor
 //! payload system: builds a book model from `PlayerActions.spells` (`SMSG_INITIAL_SPELLS`, the
 //! known-spell set `ui_action.rs` already streams) through the `SpellCatalog`/`SkillLineCatalog`
 //! join, and drives `benilla_ui::script::spellbook`'s snapshot + cast-drain seam behind
 //! `SpellBookFrame.xml` (the P key, `ui_script/input.rs`).
 //!
-//! The **add-gate** (decision 0227; `0x4b25b0`): a known spell reaches the book only when
+//! The **add-gate** (`0x4b25b0`): a known spell reaches the book only when
 //! [`SpellDisplay::in_spellbook`](benilla_formats::SpellDisplay::in_spellbook) — `Attributes` not
 //! `DO_NOT_DISPLAY`/`IS_TRADESKILL`, `castUI == 0`. Languages, armor/weapon proficiencies, and
 //! hidden racial passives are excluded exactly as the real client excludes them, so a live
 //! character's book no longer grows the junk tabs the pre-0227 build showed.
 //!
-//! Tab classification (decision 0228; `0x4b24f0`): a spell's `SkillLineAbility` line is routed
+//! Tab classification (`0x4b24f0`): a spell's `SkillLineAbility` line is routed
 //! through the per-race/class table (`0x6ddf90` → `SkillRaceClassInfo.dbc`) — if no row admits the
 //! player's race+class, or the matching row carries `SKILL_FLAG_DISPLAY_SORTED` (`flags & 0x80`),
 //! the spell lands in the **General** tab (key 0) instead of its line's own. That collapses
@@ -65,7 +65,7 @@ const NO_LINE: u32 = 0;
 const GENERAL_TAB_ICON: &str = "Interface\\Icons\\Ability_Kick";
 
 /// **Spells learned mid-session, awaiting their tab flash** — the queue behind
-/// `LEARNED_SPELL_IN_TAB` (event 510; decision 2252).
+/// `LEARNED_SPELL_IN_TAB` (event 510).
 ///
 /// Filled by the two net arms the reference reaches its announce block from
 /// (`crate::spell::net`'s learn and rank-up), never by the `SMSG_INITIAL_SPELLS` bulk load:
@@ -233,7 +233,7 @@ fn feed_spellbook(
         .map(|s| (s.0.unit_race().unwrap_or(0), s.0.unit_class().unwrap_or(0)))
         .unwrap_or((0, 0));
     // The melee auto-attack's icon is the equipped main-hand weapon (or Spell-Reset when unarmed),
-    // not spell 6603's `Temp` placeholder (decision 0230) — resolved here where the self player +
+    // not spell 6603's `Temp` placeholder — resolved here where the self player +
     // item stores are in hand, once for the whole page (it's the same for any auto-attack spell).
     let attack_icon = store.map(|s| {
         melee_auto_attack_icon(
@@ -320,7 +320,7 @@ fn feed_spellbook(
         }
     }
     // …and then the tab flash, in the reference's own order — `0x4b2b5a`'s re-sort +
-    // `SPELLS_CHANGED` precedes `0x4b2b92`'s `LEARNED_SPELL_IN_TAB` (decision 2252). Outside the
+    // `SPELLS_CHANGED` precedes `0x4b2b92`'s `LEARNED_SPELL_IN_TAB`. Outside the
     // diff block on purpose: a re-learn of a spell already in the book changes no snapshot, and
     // the reference fires on the packet, not on a diff.
     fire_tab_flashes(
@@ -336,7 +336,7 @@ fn feed_spellbook(
 
 /// Fire `LEARNED_SPELL_IN_TAB` for each spell that just landed in the book — the tail of the
 /// reference's registrar (`0x4b2b86 inc edi; push edi; push "%d"; push 0x1fe`), whose argument is
-/// the **1-based** index of the spell's tab in the sorted tab list (decision 2252).
+/// the **1-based** index of the spell's tab in the sorted tab list.
 ///
 /// The stock handler is `SpellBookFrame.lua:81` — `getglobal("SpellBookSkillLineTab"..arg1.."Flash")
 /// :Show()` — so the index is an index into exactly the tab strip `GetNumSpellTabs`/
@@ -346,7 +346,7 @@ fn feed_spellbook(
 /// **The gate is `in_spellbook`, and that is not an approximation.** The reference reaches this
 /// tail only past three returns — `Attributes & 0x80` (`0x4b2911`), `Attributes & 0x20`
 /// (`0x4b2944`, the recipe arm returns outright) and `castUI > 0` (`0x4b29c4 jg`) — which is
-/// bit-for-bit the book add-gate `SpellDisplay::in_spellbook` already models (decision 0227). A
+/// bit-for-bit the book add-gate `SpellDisplay::in_spellbook` already models. A
 /// spell that is not booked flashes nothing, and cannot: it has no tab.
 fn fire_tab_flashes(
     script: &mut UiScript,
@@ -398,7 +398,7 @@ fn tab_flash_index(
 /// knowledge, only what's pushed here.
 /// Returns the book **and the skill-line id behind each published tab, in the same order** —
 /// the second half exists only for [`LearnedInTab`]'s index, and it is returned rather than
-/// recomputed so there is exactly one tab ordering in the client (decision 2252).
+/// recomputed so there is exactly one tab ordering in the client.
 fn build_book(
     known: &BTreeSet<u32>,
     catalog: &SpellCatalog,
@@ -457,7 +457,7 @@ fn build_book(
         for spell_id in spell_ids {
             let d = catalog.get(spell_id);
             // The melee auto-attack shows the equipped weapon / Spell-Reset, not spell 6603's
-            // `Temp` placeholder (decision 0231) — keyed on the effect type, the same substitution
+            // `Temp` placeholder — keyed on the effect type, the same substitution
             // the action bar makes; `attack_icon` is `None` only with no character to read.
             let texture = if d.is_some_and(|d| d.is_melee_auto_attack()) {
                 attack_icon
@@ -535,7 +535,7 @@ fn leading_number(s: &str) -> u32 {
 }
 
 /// Drain `take_spell_casts` through the SAME cast tail `drain_action_uses` uses for a SPELL-kind
-/// action (decision 0216 §8: "root-cause rule: one cast-send path") — `ui_action::send_spell_cast`.
+/// action ("root-cause rule: one cast-send path") — `ui_action::send_spell_cast`.
 fn drain_spell_casts(
     script: Option<NonSendMut<UiScript>>,
     targeting: cast_target::CastTargeting,
@@ -617,7 +617,7 @@ mod tests {
     }
 
     /// The flash argument: the 1-based index of the spell's tab in the strip `build_book` just
-    /// published — the reference's `0x4b2b86 inc edi` (decision 2252). With no skill-line catalog
+    /// published — the reference's `0x4b2b86 inc edi`. With no skill-line catalog
     /// every booked spell is in the pinned General tab, which is index 1.
     #[test]
     fn the_flash_index_is_one_based_into_the_published_tab_strip() {
@@ -709,8 +709,8 @@ mod tests {
     }
 
     /// The melee auto-attack (keyed on `Effect[0] == SPELL_EFFECT_ATTACK`, not the id) shows the
-    /// pre-resolved character icon `build_book` is handed, never spell 6603's `Temp` placeholder
-    /// (decision 0231). `attack_icon` carries the weapon-or-Spell-Reset resolution done in the feed;
+    /// pre-resolved character icon `build_book` is handed, never spell 6603's `Temp` placeholder.
+    /// `attack_icon` carries the weapon-or-Spell-Reset resolution done in the feed;
     /// `None` (no character to read) falls back to the spell's own icon.
     #[test]
     fn build_book_attack_shows_the_resolved_icon_by_effect() {

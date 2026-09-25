@@ -130,7 +130,7 @@ fn on_session_end(In(_): In<SessionEvent>, mut chat_log: ResMut<ChatLog>) {
     chat_log.clear_session();
 }
 
-/// A spoken line (`SMSG_MESSAGECHAT`) — the chat window's own feed (decision 0084):
+/// A spoken line (`SMSG_MESSAGECHAT`) — the chat window's own feed:
 /// [`super`] formats + colors per type, resolves the sender name ask-once, and
 /// AddMessages it into ChatFrame1.
 ///
@@ -139,7 +139,7 @@ fn on_session_end(In(_): In<SessionEvent>, mut chat_log: ResMut<ChatLog>) {
 /// "There is no such command". For a headless probe that is the only channel the server has to say
 /// *why* something did not happen, so it rides at `info!`: at `debug!` it was in the log but
 /// invisible at the default level, and a refused command read exactly like an applied one
-/// (decision 0651 — the rig's whole batch silently no-op'd on a too-low GM level and nothing said
+/// (the rig's whole batch silently no-op'd on a too-low GM level and nothing said
 /// so). Ordinary chat stays at `debug!`: conversation, not diagnosis, and high volume.
 fn chat(
     m: ChatMessage,
@@ -148,7 +148,7 @@ fn chat(
     net_commands: &NetCommands,
     server_said: &mut MessageWriter<ServerSaidMessage>,
 ) {
-    // The ADDON gate (decision 1029, B215): a line whose `language` is `LANG_ADDON` is not speech
+    // The ADDON gate: a line whose `language` is `LANG_ADDON` is not speech
     // at all — it is one addon talking to another over the party/raid/guild/channel lane, because
     // 1.12.1 has no addon opcode and no addon `ChatMsg` type. The real client never renders it; it
     // fires `CHAT_MSG_ADDON` instead. Rendering it printed a partied real-client player's
@@ -234,7 +234,7 @@ fn chat(
     } else {
         debug!("net: chat [{:#04x}] {}", m.chat_type, m.text);
     }
-    // …and on the trace clock too (decision 0624). A GM dot-command is the only way to ask the
+    // …and on the trace clock too. A GM dot-command is the only way to ask the
     // SERVER what it believes — `.gps` reads back the server-side position of a mover whose packets
     // may or may not be reaching it — and its answer is only usable if it lands on the same
     // timeline as the `snd`/`rly`/`run` lines it must be read against. `debug!` timestamps are
@@ -245,7 +245,7 @@ fn chat(
             &format!("[{:#04x}] {}", m.chat_type, m.text.replace('\n', " ⏎ ")),
         );
     }
-    // The ignore gate (decision 0668): an ignored speaker is dropped SILENTLY — no line at all —
+    // The ignore gate: an ignored speaker is dropped SILENTLY — no line at all —
     // which is the client's own `FriendList::IsIgnored 0x5ae5a0` check, read on the sibling
     // text-emote path (`0x49dbe0`). A dropped WHISPER
     // additionally tells the server, so the sender gets the "is ignoring you" answer: that is what
@@ -276,7 +276,7 @@ fn channel_list(channel: String, members: &[(u64, u8)], chat_log: &mut ChatLog) 
 /// A whisper target wasn't online — `ERR_CHAT_PLAYER_NOT_FOUND_S`, catalog row 241, whose `%s`
 /// the server's own name fills.
 ///
-/// The KEY travels rather than a composed sentence (decision 2045): this is the net-apply pass and
+/// The KEY travels rather than a composed sentence: this is the net-apply pass and
 /// there is no VM here, so `ui_action`'s drain is what resolves it against the player's own
 /// `GlobalStrings.lua` — and the row, not this call site, is what says the line goes to chat
 /// (`kind 0`) and makes no sound.

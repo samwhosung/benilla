@@ -52,7 +52,7 @@ pub(super) struct StateMemory {
 }
 
 /// What a slot *is* once the MACRO indirection is applied — the reference's slot→spell resolver
-/// `0x4e5a50` plus the leg of the usable compute `0x4e5050` that reads its zero (decision 1636).
+/// `0x4e5a50` plus the leg of the usable compute `0x4e5050` that reads its zero.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlotResolve {
     /// The slot IS this `(kind, id)` from here down: a SPELL or ITEM slot, or a macro whose
@@ -110,7 +110,7 @@ pub(super) fn feed_action_state(
     // One tuple param (Bevy's 16-SystemParam ceiling): our own cast tracking — the in-flight
     // guard, the queued on-next-swing strike, the running channel, and the awaiting-click
     // ground targeting — plus the macro→spell binding the MACRO arm resolves through
-    // (decision 0983) and the talent spell-modifier tables that leg 12's cost reads through,
+    // and the talent spell-modifier tables that leg 12's cost reads through,
     // both of which ride here for the same ceiling reason.
     cast_state: (
         Res<crate::spell::PendingCast>,
@@ -299,7 +299,7 @@ pub(super) fn feed_action_state(
                     .and_then(|t| t.use_spell);
                 // `IsConsumableAction` is NOT fed from here. It reads nothing but this template
                 // (`0x4e5250`), so it is slot IDENTITY, and it rides the identity feed's push
-                // beside the count it gates — `super::feed`'s ITEM arm, decision 1301.
+                // beside the count it gates — `super::feed`'s ITEM arm.
                 let count = carried.get(&button.action).copied().unwrap_or(0);
                 // Worn on any equipment slot (0..18) — the green border's IsEquippedAction.
                 st.equipped = me.is_some_and(|(s, _, _, _)| {
@@ -434,9 +434,9 @@ mod tests {
     use super::*;
     use benilla_formats::SpellDisplay;
 
-    /// A MACRO slot resolves through its bound spell for EVERY dynamic read (decision 0983) —
+    /// A MACRO slot resolves through its bound spell for EVERY dynamic read —
     /// the `0x4e5a50` law — and the three values of `[rec+0x564]` split three ways at the usable
-    /// compute (decision 1636): a live spell IS that spell; a macro that casts nothing is a bare,
+    /// compute: a live spell IS that spell; a macro that casts nothing is a bare,
     /// usable button (B340's `.spawn` macro); an unresolved `/cast` — or a slot whose macro is
     /// gone — is grey.
     #[test]
@@ -480,7 +480,7 @@ mod tests {
         );
     }
 
-    /// The feed end to end, at the symptom (B340): a MACRO slot whose macro casts nothing is
+    /// The feed end to end, at the symptom: a MACRO slot whose macro casts nothing is
     /// pushed **usable** — `IsUsableAction` answers true in the VM, the full-colour icon — while
     /// a `/cast` of an unknown spell, and a slot whose macro is gone, are pushed grey. The
     /// pre-1636 feed pushed `ActionState::default()` for all three, whose `usable` is false: every

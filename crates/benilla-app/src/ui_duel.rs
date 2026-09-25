@@ -1,4 +1,4 @@
-//! Duels — the challenge, the countdown, the bounds timer, and the outcome line (decision 0633).
+//! Duels — the challenge, the countdown, the bounds timer, and the outcome line.
 //!
 //! The smallest complete multiplayer verb: no window of its own, two StaticPopups, four events,
 //! four Era globals, and one descriptor-driven consequence — a duel opponent reads *hostile*, so
@@ -60,7 +60,7 @@ use crate::ui_script::{UiFeed, UiInput};
 const SPELL_EFFECT_DUEL: u32 = 83;
 
 /// A line this window owes but cannot yet write: the VM that holds the string table is
-/// [`feed_duel`]'s, not the net drain's (decision 2045 — the text is the player's `GlobalStrings`,
+/// [`feed_duel`]'s, not the net drain's (the text is the player's `GlobalStrings`,
 /// so it is resolved where the VM is, and named by key everywhere else).
 ///
 /// **These three keys are not message-catalog rows** — `DUEL_COUNTDOWN` and the two
@@ -91,7 +91,7 @@ enum OwedLine {
 #[derive(Resource, Default)]
 pub(crate) struct DuelState {
     /// Lines composed here but resolvable only where the VM is — [`feed_duel`] drains them
-    /// (see [`OwedLine`]). The `ui_guild`/`ui_petition` shape (decisions 2054/2045).
+    /// (see [`OwedLine`]). The `ui_guild`/`ui_petition` shape.
     owed: Vec<OwedLine>,
     /// The duel-flag GameObject guid identifying the pending or running duel; `0` = none. This is
     /// the client's `[0xb73240]`: set by the request, echoed on accept/cancel, cleared only by
@@ -127,7 +127,7 @@ impl DuelState {
     }
 
     /// Take the challenger owed a response, if any — the partner probe's accept hook
-    /// (`WOW_PROBE=partner`, decision 0637). Taking it discharges the popup
+    /// (`WOW_PROBE=partner`). Taking it discharges the popup
     /// debt exactly as the feed's `DUEL_REQUESTED` edge does, so the probe never leaves a dialog
     /// owed to a UI it isn't driving.
     pub(crate) fn take_challenger(&mut self) -> Option<u64> {
@@ -184,7 +184,7 @@ fn owed_text(line: &OwedLine, get: &dyn Fn(&str) -> Option<String>) -> Option<St
     (!text.is_empty()).then_some(text)
 }
 
-/// The duel's packet handlers (decision 0633; in the net handler table since 2312), beside the
+/// The duel's packet handlers (in the net handler table since 2312), beside the
 /// state they drive: the session mirror + the two `DisplayError` lines the handlers emit inline;
 /// the Era events fire off the mirror's edges in [`feed_duel`], and the countdown ticks in its own
 /// system. `own` is our own guid.
@@ -638,7 +638,7 @@ mod tests {
     /// them back to front.** That is the whole reason they are positional, and the reason this is
     /// resolved from the player's own `GlobalStrings.lua` rather than typed here: the swap lives
     /// in the *string*, so a locale that orders the clause differently gets it right for free and
-    /// a re-typed English sentence never could (decision 2045).
+    /// a re-typed English sentence never could.
     ///
     /// Resolved against the real shipped file, because a stub would be asserting our own idea of
     /// the templates back at us.

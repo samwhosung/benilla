@@ -1,8 +1,8 @@
-//! The app-side **inspect feed** (decision 0631) — the bridge that turns another player's PUBLIC
+//! The app-side **inspect feed** — the bridge that turns another player's PUBLIC
 //! descriptor into the slot views the inspect window's Lua reads.
 //!
 //! The `CanInspect`/`CheckInteractDistance` distance map used to be fed from here too, back when it
-//! held popup tokens only and only for players. It is unit-general now (B304) and lives with the
+//! held popup tokens only and only for players. It is unit-general now and lives with the
 //! other unit-token feeds — `crate::ui_unit::feed_unit_reach`.
 //!
 //! This is [`crate::ui_char`]'s pattern turned onto a *foreign* unit, and the difference between
@@ -32,7 +32,7 @@
 //!   is still in flight carries its `item_id` with `icon: None` and fills on a later frame, the
 //!   `ui_char` rule.
 //! - **Point the booth.** The `"inspect"` body booth ([`InspectBooth`]) gets the resolved entity
-//!   and the pane's yaw, so it bakes the inspected player's dressed look (decision 0631 §4).
+//!   and the pane's yaw, so it bakes the inspected player's dressed look.
 //!
 //! Events, fired on transitions for the **inspected token** (the ref's own registration set,
 //! `InspectPaperDollFrame.lua:2-5` + `l.82`): `UNIT_INVENTORY_CHANGED` when any slot view changes,
@@ -92,7 +92,7 @@ impl Plugin for InspectUiPlugin {
 /// count is the ref's own always-1 and durability/flags/locks/creator/equip-fit stay at their inert
 /// defaults — an inspected item is not draggable, lockable, or repairable.
 ///
-/// The **enchant lines are the one exception** (decision 0915): a unit's descriptor broadcasts the
+/// The **enchant lines are the one exception**: a unit's descriptor broadcasts the
 /// enchants of what it wears — `PLAYER_VISIBLE_ITEM_<slot>_0 + 1 + j` — so an inspected weapon's
 /// enchant is readable without any object. 1.12 fills exactly two of those seven slots (PERM,
 /// TEMP: vmangos `SetVisibleItemSlot`'s `MAX_INSPECTED_ENCHANTMENT_SLOT`), and that is the same
@@ -162,7 +162,7 @@ fn feed_inspect(
     mut booth: ResMut<InspectBooth>,
     items: Res<Items>,
     icons: Option<Res<ItemDisplays>>,
-    // `SpellItemEnchantment`'s name column — the inspected item's enchant line (decision 0915) —
+    // `SpellItemEnchantment`'s name column — the inspected item's enchant line —
     // and `ItemRandomProperties`, the roll behind its "of the Monkey" name (1547).
     catalogs: (
         Option<Res<crate::items::Enchants>>,
@@ -223,7 +223,7 @@ fn feed_inspect(
     booth.unit = Some(entity);
     // The stock `InspectPaperDollFrame.lua` turns the doll by writing the PANE
     // (`InspectModelFrame:SetRotation`), the same way the character sheet, the pet doll and the
-    // stable booth already read theirs (decision 1832).
+    // stable booth already read theirs.
     booth.yaw = script.model_pane_facing("InspectModelFrame");
 
     let Ok(store) = stores.get(entity) else {

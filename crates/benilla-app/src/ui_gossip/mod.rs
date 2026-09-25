@@ -8,14 +8,14 @@
 //! content change while open — the NPC's name resolving) / `GOSSIP_CLOSED` on clear.
 //! [`drain_gossip`] pulls the Lua intents back out: `SelectGossipOption` →
 //! [`ClientCommand::GossipSelectOption`] (mapped through the wire option `index`; coded options are
-//! guarded, never sent — decision 0081), and `CloseGossip` → a local clear (vanilla's client-side
+//! guarded, never sent), and `CloseGossip` → a local clear (vanilla's client-side
 //! close sends no packet; verified against the 1.12 opcode set — there is no `CMSG_GOSSIP_CLOSE`).
 //!
 //! **The menu opens only with its greeting resolved, and the hold fires nothing** — a first visit
 //! to a text id keeps the frame exactly as it was for the query round trip: hidden if it was
-//! hidden (never options over an empty page — B292, decision 1508), and **still painted with the
+//! hidden (never options over an empty page), and **still painted with the
 //! previous menu if it was open** (a sub-menu's first visit repaints in place when its text lands,
-//! never hides and re-shows the window — decision 1994). Both are the reference's own law: on a
+//! never hides and re-shows the window). Both are the reference's own law: on a
 //! cache miss `0x4e2010` sets its select latch and returns — no greeting write, no event — and its
 //! greeting write and `GOSSIP_SHOW` are adjacent and unconditional on the one success path, so
 //! "gossip frame open with a blank greeting" is not a reachable state, and neither is "gossip frame
@@ -54,7 +54,7 @@ pub(crate) struct GossipState {
     pub(crate) text_id: u32,
     /// The greeting drawn for THIS menu-open, or `None` while its query is in flight — the state
     /// [`GossipState::text_pending`] reads, on which the feed fires nothing and the drains refuse
-    /// selects (B292; module doc). A record that names no line ("Missing gossip text!") never
+    /// selects (module doc). A record that names no line ("Missing gossip text!") never
     /// parks here: [`GossipState::resolve_greeting`] ends the interaction instead, as the
     /// reference does.
     pub(crate) greeting: Option<String>,
@@ -67,7 +67,7 @@ pub(crate) struct GossipState {
     /// `GossipFrame.lua` strides its walk by 2 over them, so a dropped level is a broken stride
     /// rather than a missing number. It was on the wire all along. The gossip
     /// window lists them above the options; a click sends `CMSG_QUESTGIVER_QUERY_QUEST` /
-    /// `_COMPLETE_QUEST` (decision 0088).
+    /// `_COMPLETE_QUEST`.
     pub(crate) quests: Vec<(u32, u32, u32, String)>,
     /// Ask-once NPC-text record cache keyed by `text_id` — the 8 undrawn blocks.
     records: HashMap<u32, Vec<NpcTextBlock>>,
@@ -94,7 +94,7 @@ impl GossipState {
     /// The reference's text-pending latch (`[0xbbb670]`): a
     /// session is latched but its greeting has not resolved — its `CMSG_NPC_TEXT_QUERY` is in
     /// flight, or (`text_id == 0`) was never sent. While it holds, [`feed_gossip`] fires nothing
-    /// and both drains refuse every select (decisions 1508, 1994).
+    /// and both drains refuse every select.
     pub(crate) fn text_pending(&self) -> bool {
         self.npc.is_some() && self.greeting.is_none()
     }
@@ -191,7 +191,7 @@ impl GossipState {
 mod net;
 pub(crate) use net::gossip_complete as end_interaction;
 
-/// The gossip window's feed + drain (decision 0081), cloned from [`crate::ui_items::UiItemsPlugin`].
+/// The gossip window's feed + drain, cloned from [`crate::ui_items::UiItemsPlugin`].
 pub(crate) struct UiGossipPlugin;
 
 impl Plugin for UiGossipPlugin {
@@ -228,13 +228,13 @@ impl NpcSession for GossipState {
 /// the XML resolves to a `Interface\GossipFrame\<Type>GossipIcon` texture.
 ///
 /// **The byte is a bare index into [`GOSSIP_ICON_TYPES`], with no bounds check anywhere on the
-/// client's path** (decision 1335): `GetGossipOptions 0x4e28d0` reads the stored byte and does
+/// client's path**: `GetGossipOptions 0x4e28d0` reads the stored byte and does
 /// `mov edx,[eax*4 + 0x84b7ac]` straight into a 14-entry pointer table, then `lua_pushstring`s it.
 ///
 /// The old map read the byte through **vmangos's `GossipDef.h` enum *names*** (`INTERACT_1`,
 /// `MONEY_BAG`, `TALK`, …), which name a **later** client's icon art. It was wrong for six of the
 /// eleven values; 5 — the icon every `GOSSIP_OPTION_INNKEEPER` row in the world DB sends — had no
-/// entry at all and fell through to the chat bubble, which is the icon half of B249 (decision 1331).
+/// entry at all and fell through to the chat bubble, which is the icon half of B249.
 ///
 /// Two of the reference's out-of-range behaviours we deliberately do **not** reproduce, because
 /// both are its missing guard rather than its design:
@@ -283,10 +283,10 @@ fn snapshot(state: &GossipState) -> Option<GossipMenu> {
     state.npc?;
     Some(GossipMenu {
         greeting: state.greeting.clone()?,
-        // Quest rows riding the gossip packet (decision 0088): split active-vs-available by the same
+        // Quest rows riding the gossip packet: split active-vs-available by the same
         // predicate the quest window's greeting panel uses — the WIRE ICON. The reference runs the
         // identical `{3,4}` test here, just lazily (`0x4e2430`/`0x4e2580`, behind
-        // `GetGossipAvailableQuests`/`GetGossipActiveQuests`) rather than at parse time. Decision 0758.
+        // `GetGossipAvailableQuests`/`GetGossipActiveQuests`) rather than at parse time.
         quests: state
             .quests
             .iter()
@@ -337,7 +337,7 @@ fn feed_gossip(
     let npc_name = state
         .npc
         .and_then(|g| names.resolve(g, &commands).map(str::to_string));
-    // **The hold fires nothing** (decision 1994). While the greeting query is in flight the
+    // **The hold fires nothing**. While the greeting query is in flight the
     // reference's handler has set its select latch and RETURNED — no greeting write, no event
     // (`0x4e2010`, exit `0x4e2068`) — so its frame keeps whatever it last painted:
     // hidden if it was hidden, the previous menu if it was open, clicks refused (`drain_gossip`).
@@ -364,7 +364,7 @@ fn feed_gossip(
     let name_changed = *last_name != npc_name;
     // A different NPC while the menu is already open is a real close+open (decision 0096 /
     // [`crate::ui_session::npc_switched`]); a cross-window switch is handled by OnHide → CloseX on
-    // panel displacement (decision 0095). Past the hold, `fresh` is `Some` exactly when a session
+    // panel displacement. Past the hold, `fresh` is `Some` exactly when a session
     // is latched, so the shown menu's NPC is the session's — and a switch INTO a first-visit hold
     // (open A → pending B) is judged here when B's text answers, as one close+open pair; nothing
     // fires at the pending edge.
@@ -376,7 +376,7 @@ fn feed_gossip(
     let name_arg = || vec![ScriptValue::Str(npc_name.clone().unwrap_or_default())];
     if switched {
         // Close the old NPC's menu, open the new: the frame hides then shows, playing both kits.
-        // GOSSIP_CLOSED routes through OnHide → CloseGossip (decision 0095), which queues a close
+        // GOSSIP_CLOSED routes through OnHide → CloseGossip, which queues a close
         // intent — consume it so the drain does not clear the menu we just re-opened.
         script.fire_event("GOSSIP_CLOSED", vec![]);
         script.fire_event("GOSSIP_SHOW", name_arg());
@@ -397,7 +397,7 @@ fn feed_gossip(
 }
 
 /// Drain the Lua intents: a selected option → `CMSG_GOSSIP_SELECT_OPTION` (mapped to the wire option
-/// `index`; a coded option is guarded and never sent — decision 0081); a close → a local clear (no
+/// `index`; a coded option is guarded and never sent); a close → a local clear (no
 /// packet, vanilla).
 fn drain_gossip(
     script: Option<NonSendMut<UiScript>>,
@@ -434,7 +434,7 @@ fn drain_gossip(
             None => debug!("ui_gossip: SelectGossipOption({pos}) out of range — ignored"),
         }
     }
-    // Quest-row clicks (decision 0088): map the 1-based row to its quest id and send
+    // Quest-row clicks: map the 1-based row to its quest id and send
     // QUERY_QUEST (available → look at/accept) or COMPLETE_QUEST (active → turn-in progress).
     for pos in script.take_gossip_quest_selects() {
         let Some(npc) = state.npc else { continue };
@@ -533,7 +533,7 @@ mod tests {
         assert_eq!(menu.options.len(), 1, "options open WITH the greeting");
     }
 
-    // ── The hold fires nothing (decision 1994): the real feed, driven ─────────────────────────
+    // ── The hold fires nothing: the real feed, driven ─────────────────────────
 
     /// A Lua event recorder for the two gossip events — what the VM saw, in order.
     const RECORDER: &str = r#"
@@ -607,7 +607,7 @@ mod tests {
 
     const GUARD: u64 = 0xF130_0000_0000_0007; // HIGHGUID_UNIT
 
-    /// **The hold fires nothing** (decision 1994) — the director's *"the whole window flashes
+    /// **The hold fires nothing** — the director's *"the whole window flashes
     /// before it shows the content"* on a Stormwind guard's *"Where is …"* option, first click
     /// only. The real feed is driven through the sequence the wire produces: the greeting menu
     /// open from the cache, then the select's answer — a NEW `SMSG_GOSSIP_MESSAGE` on the SAME NPC
@@ -685,7 +685,7 @@ mod tests {
             tick(&mut app),
             (vec!["GOSSIP_CLOSED".to_string()], String::new())
         );
-        // … and a first-ever visit from a closed frame still holds shut (B292) and opens once,
+        // … and a first-ever visit from a closed frame still holds shut and opens once,
         // complete, when its text answers.
         assert!(state(&mut app).open_menu(GUARD, 52, option("Goodbye"), Vec::new(), 0));
         assert_eq!(

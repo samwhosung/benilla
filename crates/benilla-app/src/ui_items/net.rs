@@ -1,7 +1,7 @@
 //! The item feed's packet handlers (in the net handler table since 2319; the refusal moved out of
 //! the drain's loot arm file) — `SMSG_INVENTORY_CHANGE_FAILURE` onto the equip-error line, the
 //! pending item locks, and the loot latch's sixth clear; and `SMSG_OPEN_CONTAINER` onto the
-//! `BAG_OPEN` queue (decision 2339).
+//! `BAG_OPEN` queue.
 
 use benilla_protocol::{ObjectFields, SessionEvent, SessionEventKind};
 use bevy::prelude::*;
@@ -32,7 +32,7 @@ fn on_session_end(
 
 /// The containers the server told us to open (`SMSG_OPEN_CONTAINER`), by container id, waiting
 /// for the feed ([`super::feed::feed_containers`]) to fire `BAG_OPEN(id)` through the VM — this
-/// handler has no `UiScript`, the [`LockTransitions`] shape (decision 2339).
+/// handler has no `UiScript`, the [`LockTransitions`] shape.
 #[derive(Resource, Default)]
 pub(crate) struct BagOpens(pub(crate) Vec<i64>);
 
@@ -129,7 +129,7 @@ fn inventory_failure(
         bag_slot,
     });
     lock_cleared.0.extend(pending.clear_by_failure(item_guid));
-    // The sixth loot-latch clear (`0x5e3a84`, decision 1477): when
+    // The sixth loot-latch clear (`0x5e3a84`): when
     // the packet's **first item guid** is the object we are looting, the session ends here. It is
     // how an item-container loot (a lockbox) closes when the move out of it fails — the one clear
     // the 1471 census was missing. Guid-matched, as the bytes are.

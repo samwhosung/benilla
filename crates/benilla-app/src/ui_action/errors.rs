@@ -7,8 +7,8 @@
 //!   [`mount_result_key`] (decision 0441 P2).
 //! - [`UiErrorKeys`] — client-LOCAL refusals straight by GlobalStrings key, the
 //!   `CGGameUI::DisplayError` route for errors with no wire code and no spell record:
-//!   `ERR_ATTACK_MOUNTED` (decision 0481) and the GameObject lock-refusal toasts
-//!   ("Requires Herbalism", decision 0545) and the guild lines (decision 2054) — the latter
+//!   `ERR_ATTACK_MOUNTED` and the GameObject lock-refusal toasts
+//!   ("Requires Herbalism") and the guild lines — the latter
 //!   carry [`UiError`]'s ordered argText list, resolved by [`ui_error_text`].
 //!
 //! - [`UiErrorTexts`] — the same route for lines that arrive already resolved (the server's own
@@ -17,7 +17,7 @@
 //!
 //! All four drain in `super::feed_actions` into the one sink [`show_messages`], which puts each
 //! resolved line on the surface its message record names — read from the catalog
-//! ([`benilla_ui::messages`], decision 1770) rather than carried to the call site by hand.
+//! ([`benilla_ui::messages`]) rather than carried to the call site by hand.
 //! Every string comes from the VM's own loaded `GlobalStrings.lua`, never hardcoded, so
 //! localization rides for free. An absent key shows **nothing**, which is a deliberate
 //! divergence and not the reference's behaviour — see [`ui_error_text`].
@@ -47,7 +47,7 @@ pub(crate) struct CastErrors(pub Vec<CastFail>);
 /// and the two client-generated argument messages it *does* build (the lock toasts, MIN_SKILL) are
 /// [`UiError`]'s tenants, not this queue's.
 ///
-/// The **one** exception is the crowd-control ladder's `0x8d` (decision 1948). That refusal is
+/// The **one** exception is the crowd-control ladder's `0x8d`. That refusal is
 /// local — `0x6094f0` bails before any packet — yet it carries an argument all the same, because
 /// its own exemption scan produced one: the blocking aura's `SpellMechanic.dbc` id. It is the
 /// only place a locally-generated word reaches this queue, which is why `push_local` still cannot
@@ -62,7 +62,7 @@ pub(crate) struct CastFail {
     pub caster: Caster,
     /// **This entry is a REDISPLAY** — it was queued once already, declined for want of an item
     /// template, and is being resolved now that the template landed (the `0x78`/`0x5c`/`0x84`
-    /// cache-miss path, decisions 0545 + 0552).
+    /// cache-miss path).
     ///
     /// It exists because the reference's two attempts do not raise the same things (decision
     /// 2285). The first pass bails at `0x6e1eab`/`0x6e1efc` to the epilogue `0x6e224f`, which is
@@ -74,7 +74,7 @@ pub(crate) struct CastFail {
 }
 
 /// Who failed to cast — the one input that picks between the reference's **two** cast-failure
-/// message tables (decision 2033).
+/// message tables.
 ///
 /// It is not a flag on one handler: `SMSG_CAST_FAILED` and `SMSG_PET_CAST_FAILED` land in two
 /// separate functions, `0x6e1a00` and `0x6e8eb0`, each with its own reason -> errorId map. Ten of
@@ -160,7 +160,7 @@ impl CastErrors {
 pub(crate) struct MountErrors(pub Vec<(bool, u32)>);
 
 /// Taming refusals queued for the UI error line, as the raw `SMSG_PET_TAME_FAILURE` reason byte
-/// (decision 2039) — [`MountErrors`]' shape, and here for the same reason: it is a **wire code
+/// — [`MountErrors`]' shape, and here for the same reason: it is a **wire code
 /// family**, resolved by a code table, not a client-local key.
 ///
 /// It cannot ride [`UiErrorKeys`] because its message is a *nested* lookup, which is exactly what
@@ -173,11 +173,11 @@ pub(crate) struct PetTameFailures(pub Vec<u8>);
 
 /// Where a client message is SHOWN is **not a decision this crate makes** — it is the `kind` field
 /// (`+0x04`) of the reference's message record, and it now arrives from the catalog
-/// ([`benilla_ui::messages`], decision 1770) instead of being hand-carried to every call site
+/// ([`benilla_ui::messages`]) instead of being hand-carried to every call site
 /// beside the key. [`MsgKind`] is that field; [`UiError::kind`] is the whole lookup.
 ///
 /// It reads as a property of the MESSAGE rather than of the window that raised it because that is
-/// exactly what it is: the quest refusals (0669), the auction house (1523) and the party
+/// exactly what it is: the quest refusals, the auction house (1523) and the party
 /// quest-share (1733) all ask the same table the same question.
 pub(crate) use benilla_ui::messages::MsgKind;
 
@@ -195,7 +195,7 @@ pub(crate) enum FillArg {
 /// One `DisplayError` message: a GlobalStrings key plus the **ordered argText list** the
 /// reference pushes with it. Not red-line-only: this is the payload of the reference's ONE
 /// `CGGameUI::DisplayError` (`0x496720`) whatever surface the message's record names — the quest
-/// refusals carry their chat lines in it too (decision 0669).
+/// refusals carry their chat lines in it too.
 ///
 /// **`0x496720` is variadic** — cdecl, the catalog id first and the argText after it, `add esp,4`
 /// at a bare call site and `add esp,8` at a one-string one (22 of 22 in the guild command-result
@@ -367,8 +367,8 @@ impl Shown {
     /// **could not**: all 465 catalog keys begin `ERR_`, so that walk collects `"ERR_…"` literals
     /// — which makes it blind to exactly the mistake it is guarding against, a raise site that
     /// named something else. `PET_SPELL_NOPATH` and `SPELL_FAILED_OUT_OF_RANGE` sat on the pet's
-    /// feedback line for months, took this fallback every time, and no gate could see them
-    /// (decision 2033). Widening the walk is not possible from the text — `SPELL_FAILED_*` keys
+    /// feedback line for months, took this fallback every time, and no gate could see them.
+    /// Widening the walk is not possible from the text — `SPELL_FAILED_*` keys
     /// are legitimate GlobalStrings lookups elsewhere in this very module — so the tripwire moves
     /// to the funnel: this is where a non-row key becomes observable, so it says so.
     pub(crate) fn keyed(key: &str, text: String) -> Self {
@@ -401,7 +401,7 @@ impl Shown {
 /// not the `0x4967bd`/`0x4967c5` guard this line used to cite.
 ///
 /// Lives here rather than in each window because every keyed raise site needs exactly this and
-/// four of them had grown their own copy (decision 1821).
+/// four of them had grown their own copy.
 pub(crate) fn keyed_line(script: &UiScript, key: &'static str) -> Option<Shown> {
     let text = script.lua().globals().get::<String>(key).ok()?;
     (!text.is_empty()).then(|| Shown::keyed(key, text))
@@ -432,7 +432,7 @@ pub(crate) fn keyed_line_s(script: &UiScript, key: &'static str, args: &[&str]) 
 ///
 /// The sound is **queued, not played** — this runs deep inside the UI feeds, which have no audio
 /// resources and should not grow them; `crate::sound::message` drains the queue after the input
-/// pass, on the same frame (decision 1815).
+/// pass, on the same frame.
 ///
 /// `who` is the caller's module tag for the debug line — which exists because the chat path keeps
 /// no log of its own, so without it a live probe can count lines but never read one (0669's
@@ -574,8 +574,8 @@ pub(crate) fn attack_actor_blocked(
     Some(key)
 }
 
-/// The ref's pre-send totem/reagent possession check — `CheckReagentsAndTotems 0x6e4000`
-/// (decision 0552): TryCast runs it
+/// The ref's pre-send totem/reagent possession check — `CheckReagentsAndTotems 0x6e4000`:
+/// TryCast runs it
 /// for EVERY cast path (action bar, Lua, the GameObject-use opener) **before any packet is
 /// built**. Totems first (2 slots, a bag **presence** test — the Mining Pick / Skinning Knife /
 /// Thieves' Tools tools), then reagents (8 slots, a bag **count** test). The first failing slot
@@ -673,7 +673,7 @@ mod shown_tests {
     use benilla_ui::script::UiScript;
     use bevy::prelude::*;
 
-    /// The producer half of the message-sound path (decision 1815), driven through the real
+    /// The producer half of the message-sound path, driven through the real
     /// [`super::show_messages`] rather than around it: a **keyed** line queues its catalog row for
     /// `crate::sound::message` to sound, an **unkeyed** one queues nothing (the wire's own text has
     /// no record), and a key the client does not have queues nothing either — the same fallback
@@ -815,7 +815,7 @@ mod ui_error_tests {
     }
 
     /// The RUNTIME leg on the real data (the `cast_fail`/mount pattern): every GlobalStrings
-    /// key the lock-refusal toasts (decision 0545, the USE sender `0x5f33e0`) and the totem
+    /// key the lock-refusal toasts (the USE sender `0x5f33e0`) and the totem
     /// fill can emit resolves in the shipped 1.12 `GlobalStrings.lua`, with the exact ref-quoted
     /// formats — the guard against a typo'd key silently swallowing the red line. Skips without
     /// client data.
@@ -1022,7 +1022,7 @@ mod totem_reagent_tests {
         }
     }
 
-    /// The pre-send check's routing (`0x6e4000`, decision 0552) against empty bags: a totem
+    /// The pre-send check's routing (`0x6e4000`) against empty bags: a totem
     /// spell refuses 0x78, a reagent spell 0x5c, totems win when both lack (the ref's loop
     /// order), a materials-free spell passes, and absent def/store skip the check (the ref's
     /// `IsActivePlayer` gate) — the cast then goes out for the server to judge.

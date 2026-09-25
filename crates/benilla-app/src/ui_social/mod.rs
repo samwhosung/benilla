@@ -1,5 +1,5 @@
 //! The social session — the friend list, the ignore list, `/who`, and the system lines they
-//! print (decision 0668).
+//! print.
 //!
 //! [`SocialState`] mirrors the wire the way [`crate::ui_party`]'s `GroupState` does: the three
 //! server packets replace it wholesale or patch one row, and the feed turns it into the VM
@@ -222,14 +222,14 @@ impl SocialState {
 }
 
 /// The **message key** one friend/ignore result prints — resolved at the feed against the player's
-/// own `GlobalStrings.lua` (decision 2045), never composed here.
+/// own `GlobalStrings.lua`, never composed here.
 ///
 /// The keys are what makes this table readable at all: two of its rows,
 /// `ERR_FRIEND_NOT_FOUND` and `ERR_IGNORE_NOT_FOUND`, are the *same sentence* in enUS ("Player not
 /// found.") and different strings everywhere else. A table of English cannot tell them apart, and
 /// nothing that compared displayed text — a test of ours included — ever could.
 ///
-/// Composed engine-side in the reference too (decision 0434 §D2): the FrameXML never names these
+/// Composed engine-side in the reference too: the FrameXML never names these
 /// keys, so there is no Lua path that would resolve them for us.
 fn result_key(result: u8) -> Option<&'static str> {
     Some(match result {
@@ -287,7 +287,7 @@ fn status_flag_key(status: u8) -> Option<&'static str> {
     })
 }
 
-/// The social family's packet handlers (decision 0668; in the net handler table since 2312),
+/// The social family's packet handlers (in the net handler table since 2312),
 /// beside the state they drive ([`crate::ui_duel::net`]'s shape): the friend/ignore lists, the
 /// `/who` answer, and the result codes that print their own chat lines. The lines and the Era
 /// events fire off the mirror in [`feed_social`] — every one of them needs a NAME, which the
@@ -333,11 +333,11 @@ pub(crate) mod net {
         }
     }
 
-    /// The friend/ignore lists and the last `/who` are session state (decision 0668): the
+    /// The friend/ignore lists and the last `/who` are session state: the
     /// server re-pushes both lists at the next login, and a stale ignore list would silence the
     /// wrong guids after a reconnect renumbers nothing but re-streams everything. The `/who`
     /// sort chain is the one thing that survives — it is per-PROCESS in the reference, not
-    /// per-login (decision 2030), which is why this is a `clear_session` and not a `default()`.
+    /// per-login, which is why this is a `clear_session` and not a `default()`.
     /// A listener on the session end (a second handler on the kind, after the bridge's own teardown).
     fn on_session_end(In(_): In<SessionEvent>, mut social: ResMut<SocialState>) {
         social.clear_session();
@@ -506,7 +506,7 @@ mod tests {
         assert_eq!(result_key(0x77), None, "an unknown code shows nothing");
         // **The two "Player not found." rows are different keys.** They read identically in enUS
         // and differently in other locales, so this pair is the reason the table names keys at
-        // all — no assertion on displayed text could tell them apart (decision 2045).
+        // all — no assertion on displayed text could tell them apart.
         assert_eq!(
             result_key(friend_result::NOT_FOUND),
             Some("ERR_FRIEND_NOT_FOUND")

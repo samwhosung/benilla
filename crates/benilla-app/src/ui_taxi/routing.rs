@@ -22,13 +22,13 @@ use super::TaxiOpen;
 /// The static DBC catalogs phase 2's node list/route computation reads: `TaxiNodes.dbc` (name +
 /// world position + map, decision 0484 phase 1), `TaxiPath.dbc` (the direct-hop fare graph, phase
 /// 1), and `WorldMapContinent.dbc` (the taxi-map projection rect per continent — decision 0203,
-/// its `taxi_min`/`taxi_max` fields, byte-verified as the projection rect — 0496). Loaded once, the
+/// its `taxi_min`/`taxi_max` fields, byte-verified as the projection rect). Loaded once, the
 /// [`crate::ui_world_map`] "gated on `WorldAssets`" idiom rather than Startup-ordered (the patch
 /// chain opens asynchronously).
 #[derive(Resource)]
 pub(crate) struct TaxiCatalogs {
     nodes: TaxiNodes,
-    /// `pub(super)`: the drain's direct-edge discriminator reads it (0496 §TU-3).
+    /// `pub(super)`: the drain's direct-edge discriminator reads it.
     pub(super) paths: TaxiPaths,
     continents: WorldMapContinentCatalog,
 }
@@ -74,7 +74,7 @@ pub(super) fn load_taxi_catalogs(
     }
 }
 
-/// Project a node's world `(x, y)` onto the taxi map's normalized 0..1 space (decision 0496; the
+/// Project a node's world `(x, y)` onto the taxi map's normalized 0..1 space (the
 /// FPU trace at `0x4db958`): rect = `WorldMapContinent.dbc` fields 9–12
 /// (Xmin/Ymin/Xmax/Ymax), matched by continentId, and
 ///
@@ -285,8 +285,7 @@ pub(super) fn build_nodes(
 /// `1..=12` toast, `code >= 13` does nothing at all. So this returns a key rather than a string,
 /// and the catalog row behind it decides the text, the **surface** and the sound — which matters
 /// here more than anywhere: **seven of the twelve are `kind = 1`, the YELLOW info line**, not the
-/// red one they all used to take, and `ERR_TAXINOTENOUGHMONEY` carries error-speech line `0x36`
-/// (decision 1815).
+/// red one they all used to take, and `ERR_TAXINOTENOUGHMONEY` carries error-speech line `0x36`.
 ///
 /// `OK` and anything past the table return `None` — the reference's own `code >= 13` no-op, in
 /// place of the "Taxi activation failed (n)." literal that used to stand here and that the
@@ -324,7 +323,7 @@ mod tests {
         mask
     }
 
-    /// The byte-verified route metric (0496 §TU-3) on a synthetic graph: the search minimizes
+    /// The byte-verified route metric on a synthetic graph: the search minimizes
     /// summed GEOGRAPHIC distance — a geographically shorter 2-hop detour beats a longer direct
     /// hop even though its FARE is higher — and the fare is carried along the chosen chain, not
     /// optimized. An exact-tie breaks toward fewer hops (the determinism guard), and a node with
@@ -407,7 +406,7 @@ mod tests {
         );
     }
 
-    /// The projection's cross-axis denominators (0496 §TU-2 — `u ÷ X-span, v ÷ Y-span`) on a
+    /// The projection's cross-axis denominators (`u ÷ X-span, v ÷ Y-span`) on a
     /// deliberately NON-square rect, where the byte formula and the naive own-extent form
     /// diverge: X-span 100, Y-span 50, point at the rect's Y-max/X-mid.
     #[test]
@@ -487,9 +486,9 @@ mod tests {
 
     /// [`build_nodes`] end-to-end on the real, byte-verified Stormwind(2)->Sentinel Hill(4) hop
     /// (`TaxiPath` id 6, cost 110 copper — pinned by `taxi_path.rs`'s own test): the continent
-    /// comes from the NEAREST node's own row (0496 — the packet-cached continentId, map 0 here),
+    /// comes from the NEAREST node's own row (the packet-cached continentId, map 0 here),
     /// Stormwind classifies `Current`, Sentinel Hill `Reachable` with the exact fare and a
-    /// one-hop route segment. And the dead-DISTANT law (0496 §TU-3): with every node marked
+    /// one-hop route segment. And the dead-DISTANT law: with every node marked
     /// known, the cross-faction EK nodes (no `TaxiPath` route from Stormwind exists at all) are
     /// simply ABSENT from the list — known-but-unroutable never renders. Skips without client
     /// data.

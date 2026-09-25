@@ -48,7 +48,7 @@ use crate::ui_unit::UnitFeed;
 /// type** that opened it. Routed here by the opener's `EffectMiscValue[0] != 0`
 /// (`Spell_C::TryCast 0x6e4b60`); that same misc value *is* the craft type (1 Beast Training ·
 /// 3 Enchanting), which the client keeps at `ds:0xbdcfb8` and reads for both the window's admission
-/// filter and its row comparator (decision 1124). Client-local state, no wire. Cleared by the Lua
+/// filter and its row comparator. Client-local state, no wire. Cleared by the Lua
 /// close and by the session end ([`on_session_end`]) — a logout's fresh VM never runs the old one's
 /// `OnHide`, so the close alone would carry the window into the next login.
 #[derive(Resource, Default)]
@@ -93,7 +93,7 @@ fn skill_rank(store: &ObjectStore, skill_id: u32) -> (u32, u32, i32) {
     (0, 0, 0)
 }
 
-/// **Law D** — the Craft window's row icon, transcribing `GetCraftIcon 0x4f7160` (decision 1107):
+/// **Law D** — the Craft window's row icon, transcribing `GetCraftIcon 0x4f7160`:
 /// **always** this recipe's own `SpellIconID`, straight off `Spell.dbc`.
 ///
 /// The one-liner is the point, and it is not an oversight to be "improved". The Craft window and
@@ -123,7 +123,7 @@ fn craft_icon(d: &benilla_formats::SpellDisplay) -> Option<String> {
 /// `Attributes & 0x20`; it never tests `57 LEARN_PET_SPELL` and so never sets `altCaster`; and it
 /// hops `EffectTriggerSpell[i]` **without** checking that it resolves, where the trainer's scan
 /// falls through to the next slot on an unresolvable trigger. Same shape, different law — the
-/// icon side's lesson (decision 1107) applies to the content side too.
+/// icon side's lesson applies to the content side too.
 fn craft_tooltip(spell_id: u32, d: &benilla_formats::SpellDisplay) -> CraftTooltip {
     for i in 0..3 {
         if d.effects[i] == SPELL_EFFECT_LEARN_SPELL {
@@ -176,7 +176,7 @@ fn feed_craft(
             home_area: None,
             text: &text,
         };
-        // The **admission law** — `0x5e9c20`, byte-verified (decision 1124): the player knows the
+        // The **admission law** — `0x5e9c20`, byte-verified: the player knows the
         // spell, it is not hidden (`Attributes & 0x20`), and its `castUI` **equals this window's
         // craft type**. It is not a skill-line join: the client walks its own per-type list at
         // `CGPlayer_C + 0x1cd0 + 0x10*type` and never consults `SkillLineAbility` for membership. On
@@ -275,7 +275,7 @@ fn feed_craft(
             })
             .collect();
         // No app-side sort: the ROW ORDER is the engine's, transcribing this craft type's own
-        // comparator (`benilla_ui::script::craft::recipe_order`, decision 1124) — the same seam the
+        // comparator (`benilla_ui::script::craft::recipe_order`) — the same seam the
         // trainer tree and the TradeSkill list already sit behind. What used to be here was a
         // `req_skill_value`-descending sort keyed on a DBC column the client never reads, over rows
         // whose iteration order was a `HashSet`'s.
@@ -318,7 +318,7 @@ fn feed_craft(
 
 /// Drain the Lua intents: every `DoCraft` goes down the ONE cast ladder, and the resolver decides
 /// what happens next — an enchant's `Targets = 0x10` word arms the targeting cursor's item half
-/// (decision 0923; the bag / paper-doll click completes it, in `spell::targeting`), a rod
+/// (the bag / paper-doll click completes it, in `spell::targeting`), a rod
 /// craft's zero word commits immediately. `CloseCraft` closes the window; a pick armed by it is
 /// the one targeting word, cancelled the ordinary ways (ESC, right-click, a new cast).
 ///

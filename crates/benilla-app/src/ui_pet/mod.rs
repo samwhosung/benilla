@@ -1,4 +1,4 @@
-//! The pet system — the app side of `benilla_ui::script::pet`'s seam (decision 0982), and the
+//! The pet system — the app side of `benilla_ui::script::pet`'s seam, and the
 //! home of [`PetBar`], the server-authoritative state `net/apply/pet.rs` writes.
 //!
 //! **One concern per file** (the split owed by decision 1003, restated by 1005, done in 1066). What
@@ -153,7 +153,7 @@ impl Plugin for UiPetPlugin {
                 pet_stop_on_old_target_clear
                     .in_set(UnitFeed)
                     .before(feed_pet_bar),
-                // …and both event-firing feeds run AFTER the pet snapshot (decision 1073). Their
+                // …and both event-firing feeds run AFTER the pet snapshot. Their
                 // events reach Lua synchronously, and the handlers read `HasPetUI()` — which is
                 // `crate::ui_pet_stats`'s push, not ours. Unordered, a cold summon fired both
                 // edges against last frame's answer and the Pet tab never came up.
@@ -184,7 +184,7 @@ pub(crate) struct PetUnit<'w, 's> {
     index: Res<'w, GuidIndex>,
     stores: Query<'w, 's, &'static ObjectStore>,
     self_guid: Res<'w, crate::net::SelfGuid>,
-    /// The per-field edges (decision 2297), for `fire_transitions`' watch-bridge arms.
+    /// The per-field edges, for `fire_transitions`' watch-bridge arms.
     pub(super) edges: MessageReader<'w, 's, crate::net::FieldChanged>,
 }
 
@@ -198,7 +198,7 @@ impl PetUnit<'_, '_> {
 
     /// The pet's ECS **entity**, under [`Self::store`]'s exact contract — `None` while the named
     /// guid's object has not arrived (or has left). The pet paper doll's body booth needs the
-    /// entity itself, not its fields (decision 1057, `crate::ui_pet_doll`); gating it on the same
+    /// entity itself, not its fields (`crate::ui_pet_doll`); gating it on the same
     /// store presence keeps "there is a pet" one answer rather than two that can disagree.
     pub(crate) fn entity(&self, pet_guid: u64) -> Option<Entity> {
         let e = *self.index.0.get(&pet_guid)?;

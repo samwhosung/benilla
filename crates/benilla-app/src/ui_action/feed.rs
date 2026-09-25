@@ -67,17 +67,17 @@ pub(super) struct FeedMemory {
     /// re-resolve; it is the statement that a resolve is only valid for the VM it ran against.
     resolved: bool,
     /// The [`Items::template_epoch`] the last identity resolve ran at — the feed's half of the
-    /// landed-template redisplay (decision 0660). An advance re-resolves, exactly like a bar edit.
+    /// landed-template redisplay. An advance re-resolves, exactly like a bar edit.
     template_epoch: u64,
-    /// The macro-table generation the last identity resolve ran at (decision 0983) — the THIRD
+    /// The macro-table generation the last identity resolve ran at — the THIRD
     /// input, exactly like `template_epoch` above: editing a macro changes its bar icon while
     /// touching neither the action table nor any item template.
     macro_generation: u64,
 }
 
 /// The DBC name tables the cast-fail **argument arms** read (`FailArgs`), as one parameter — three
-/// `Option<Res<…>>` that are one concept and were pushing this system past Bevy's parameter arity
-/// (decision 1948). Each is `Option` for the same reason `FailArgs`' fields are: a client with no
+/// `Option<Res<…>>` that are one concept and were pushing this system past Bevy's parameter arity.
+/// Each is `Option` for the same reason `FailArgs`' fields are: a client with no
 /// game data has none, and the arm then declines and the template strips.
 ///
 /// The fourth table, `SpellShapeshiftForm.dbc` (`0x56`), is not here: it already rides
@@ -139,7 +139,7 @@ pub(super) fn feed_actions(
     // frame), resolved through the byte-verified two-layer display ([`cast_fail`]) against the
     // VM's own GlobalStrings — resolve first (immutable script), then fire (mutable).
     // 0x78 TOTEMS / 0x5c REAGENTS are the argument-formatted reasons whose `%s` fill benilla
-    // models (decisions 0545 + 0552, the ref's shared fill arm `0x6e1e7f`): "Requires %s" /
+    // models (the ref's shared fill arm `0x6e1e7f`): "Requires %s" /
     // "Missing reagent: %s" + the FAILING slot's item name — re-derived here exactly as the
     // check derived it (first missing totem / first short reagent against our bags). On an
     // item-cache miss the ref queries and shows nothing that frame, then its DBCACHECALLBACK
@@ -213,7 +213,7 @@ pub(super) fn feed_actions(
                 // NOT_READY, REQUIRES_SPELL_FOCUS, REQUIRES_AREA and the EQUIPPED_ITEM_CLASS
                 // family and for nothing else, so `0x31` arrives with no word and the line reads
                 // "Requires exotic ammo:". Modeled anyway because the arm is the mechanism and the
-                // word is the server's to supply (decision 2292).
+                // word is the server's to supply.
                 if let (false, 0x31, Some(arg), Some(subs)) =
                     (pet, reason, fail.arg, sub_classes.as_deref())
                 {
@@ -279,7 +279,7 @@ pub(super) fn feed_actions(
                     &get,
                 )
             })();
-            // The retest instrument for this whole bug class (decision 1313). A red-line defect is
+            // The retest instrument for this whole bug class. A red-line defect is
             // reported as *seen* — B255 arrived as a screenshot of the word "Requires" — and until
             // this line the only way to read what the client resolved was to look at the screen.
             // Logging the reason, its wire argument and the resolved line makes an argument arm
@@ -293,7 +293,7 @@ pub(super) fn feed_actions(
                 fail.arg, line
             );
             // **The combat-log twin — the reference's OTHER buffer, not the displayed text**
-            // (decision 2285, correcting 2280). It runs after the resolution because the
+            // (correcting 2280). It runs after the resolution because the
             // reference's does: `0x6e1a00` calls `DisplayError 0x496720` at `0x6e21dd` and the
             // log formatter `0x62c360` at `0x6e21fc`. But what it hands the formatter is `edi`
             // (`0x6e21e2`), the **argText** buffer — which is the first-layer
@@ -405,7 +405,7 @@ pub(super) fn feed_actions(
     // Client-local by-key refusals (the `DisplayError` route — [`UiErrorKeys`]); the key IS the
     // GlobalStrings lookup, no code table between, and the key is also what names the surface:
     // [`UiError::kind`] reads the message record straight out of the catalog instead of the queue
-    // carrying a hand-set flag alongside every push (decision 1770).
+    // carrying a hand-set flag alongside every push.
     let key_lines: Vec<Shown> = ui_error_keys
         .0
         .drain(..)
@@ -465,7 +465,7 @@ pub(super) fn feed_actions(
     // entry is the call that ISSUES the query and it necessarily reads back `None`. Gating on
     // `dirty` alone left that slot on the fallback question mark until some unrelated bar edit
     // happened to re-dirty it — the login race that put a question mark on every fresh
-    // character's food/water button (decision 0660; verified live 2026-07-26: the Tough Jerky
+    // character's food/water button (verified live 2026-07-26: the Tough Jerky
     // ask and the one and only feed landed 0.5 ms apart, in that order, and nothing re-fed).
     // The epoch is the second input, so a landed answer redisplays like the ref's DBCACHECALLBACK.
     let template_epoch = items.template_epoch();
@@ -505,7 +505,7 @@ pub(super) fn feed_actions(
                     (icon, 0, false)
                 }
                 ACTION_KIND_ITEM => {
-                    // The question mark belongs HERE, not in the Lua (decision 0666, correcting
+                    // The question mark belongs HERE, not in the Lua (correcting
                     // 0660's modeling note): the reference's resolver never returns nil for a
                     // populated ITEM slot — an un-cached template (displayId 0) or a displayId
                     // with no row both fall into `0x5d88b0`'s failure block `0x5d8927`, which
@@ -523,11 +523,11 @@ pub(super) fn feed_actions(
                         .unwrap_or(0);
                     // The Count fontstring's gate — `IsConsumableAction 0x4e5250`: ammo/thrown by
                     // InventoryType, or an ON_USE block with NEGATIVE charges
-                    // ([`ItemInfo::is_consumable`], byte-cited there; decision 0926 §3). It comes
+                    // ([`ItemInfo::is_consumable`], byte-cited there). It comes
                     // from the SAME ask-once template the icon does, so it belongs on the same
                     // push: fed from the per-frame state map instead, it answered the Lua one
                     // frame late for ever and left a fresh character's food with no stack number
-                    // (decision 1301 — the count's half of 0660's login race).
+                    // (the count's half of 0660's login race).
                     let consumable = template.as_ref().is_some_and(|t| t.is_consumable());
                     (Some(texture), count, consumable)
                 }
@@ -536,7 +536,7 @@ pub(super) fn feed_actions(
                 // slot and calls `0x4f0fd0(idx, buf, 0x104)`, the macro record's own icon-path
                 // builder, without ever touching `[rec+0x564]`. Its dynamic state DOES go
                 // through the bound spell — that split is the whole design (`state`'s macro
-                // arm, decision 0983).
+                // arm).
                 ACTION_KIND_MACRO => (
                     macros
                         .get(button.action as usize)
@@ -558,7 +558,7 @@ pub(super) fn feed_actions(
             );
         }
         // A MACRO slot's observable is wider than its `ActionSlot`: the name line under the icon
-        // reads the macro table through `GetActionText` at repaint (decision 1636), so a rename —
+        // reads the macro table through `GetActionText` at repaint, so a rename —
         // which moves the table and nothing in the slot value — must re-fire the slot exactly as
         // a re-icon does, or the bar keeps the old name until an unrelated edit repaints it.
         let changed: Vec<u32> = fresh

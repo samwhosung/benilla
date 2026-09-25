@@ -1,4 +1,4 @@
-//! The app-side **group-loot-roll feed** (decision 0591) — the inward half of the roll seam around
+//! The app-side **group-loot-roll feed** — the inward half of the roll seam around
 //! [`benilla_ui::script`]'s `loot_roll` module, the sibling of [`crate::ui_loot`]'s window seam.
 //!
 //! When the group's loot method is group/need-before-greed and a drop is at or above the quality
@@ -75,12 +75,12 @@
 //!   waiting for the server's resolution, the same shape as the 0515 loot-kneel latch. The server
 //!   echoes our vote as an ordinary `SMSG_LOOT_ROLL` announcement and only resolves the roll once
 //!   *everyone* has voted or the minute expires, so a server-driven close would leave our frame up
-//!   for up to a minute after we clicked. **VERIFIED** in the 5875 binary (decision 0594, resolving
+//!   for up to a minute after we clicked. **VERIFIED** in the 5875 binary (resolving
 //!   0591's deferral): `RollOnLoot` at `0x61bdf0` sends the CMSG and fires `CANCEL_LOOT_ROLL`
 //!   itself, in the same call — the client-side close is the real behaviour, not an approximation.
 //! - **…except on a bind-on-pickup roll**, where a Need or Greed sends *nothing* and leaves the
 //!   frame up: the seam raises `CONFIRM_LOOT_ROLL` instead, and only the popup's `ConfirmLootRoll`
-//!   re-enters past the gate (decision 0594; the gate is in the real client's C `RollOnLoot`, so it
+//!   re-enters past the gate (the gate is in the real client's C `RollOnLoot`, so it
 //!   lives in our seam too — see [`benilla_ui::script`]'s `loot_roll`). Pass is never gated.
 
 use benilla_protocol::messages::{roll_vote, LootAllPassed, LootRoll, LootRollWon, LootStartRoll};
@@ -100,7 +100,7 @@ use crate::ui_script::{UiFeed, UiInput};
 const LINE_MAX_TRIES: u16 = 120;
 
 /// How long a fresh roll may wait for its item-template answer before `START_LOOT_ROLL` fires
-/// anyway, with the frame unresolved (decision 2010 — see the module docs' hold).
+/// anyway, with the frame unresolved (see the module docs' hold).
 ///
 /// This is [`LINE_MAX_TRIES`]' budget in the unit that actually matters here. That one counts
 /// *frames*, because a pending chat line costs nothing but frames; a held roll is paid out of the
@@ -288,7 +288,7 @@ impl LootRolls {
     }
 }
 
-/// The group rolls' packet handlers (decision 0591; in the net handler table since 2319, moved out
+/// The group rolls' packet handlers (in the net handler table since 2319, moved out
 /// of the drain's loot arm file).
 mod net {
     use benilla_protocol::messages::{LootAllPassed, LootRoll, LootRollWon, LootStartRoll};
@@ -319,14 +319,14 @@ mod net {
         }
     }
 
-    /// Open group rolls die with the socket (decision 0591). A listener on the session end
+    /// Open group rolls die with the socket. A listener on the session end
     /// (a second handler on the kind, after the bridge's own teardown).
     fn on_session_end(In(_): In<SessionEvent>, mut rolls: ResMut<LootRolls>) {
         rolls.clear();
     }
 
     /// A group roll opened on one drop (`SMSG_LOOT_START_ROLL`) — a `GroupLootFrame` goes up with
-    /// Need/Greed/Pass and the countdown bar (decision 0591).
+    /// Need/Greed/Pass and the countdown bar.
     fn loot_start_roll(p: LootStartRoll, rolls: &mut LootRolls) {
         debug!(
             "net: loot roll opened on item {} ({:#x} slot {}), {} ms",
@@ -389,7 +389,7 @@ impl Plugin for UiLootRollPlugin {
 /// see [`LootRoll`]'s table — and **must branch on `roll_number` first**: a Greed *vote* is
 /// `(128, 2)` and a Greed *dice roll* is `(1..=100, 2)`, identical in `roll_type`.
 ///
-/// **The dice line has NO `_SELF` split** (decision 0594, correcting 0591). `GlobalStrings.lua`
+/// **The dice line has NO `_SELF` split** (correcting 0591). `GlobalStrings.lua`
 /// *does* define `LOOT_ROLL_ROLLED_NEED_SELF`/`_GREED_SELF` — but that file is MPQ **data**, and the
 /// 5875 **binary** never references them: the shared formatter tail (`0x61c320`) picks
 /// `ROLLED_GREED` when `rollType == 2` else `ROLLED_NEED`, with no self test anywhere. Of the 20
@@ -534,7 +534,7 @@ fn render(
 
     let is_self = roller.is_some() && roller == self_guid;
 
-    // Which strings actually need a name (decision 0594): every third-person one, PLUS our own
+    // Which strings actually need a name: every third-person one, PLUS our own
     // *dice* line — the binary's ROLLED_* tail has no self variant, so a roll of ours still prints
     // "Need Roll - 57 for [Item] by <us>" and must resolve our OWN name. The self *vote* and
     // *YOU_WON* lines do have _SELF forms and need no lookup; `AllPassed` names nobody.
@@ -753,7 +753,7 @@ fn drain_loot_rolls(
         return;
     };
     // A Need/Greed on a bind-on-pickup roll sends nothing yet: the seam diverted it here, and the
-    // frame STAYS UP while the popup asks (decision 0594). `CONFIRM_LOOT_ROLL(rollID, rollType)`
+    // frame STAYS UP while the popup asks. `CONFIRM_LOOT_ROLL(rollID, rollType)`
     // is what `UIParent_OnEvent` turns into `StaticPopup_Show("CONFIRM_LOOT_ROLL")`.
     for (roll_id, roll_type) in script.take_loot_roll_confirms() {
         debug!("ui_loot_roll: BoP confirm for {roll_type} on roll {roll_id}");
@@ -845,7 +845,7 @@ mod tests {
             (announce(1, 128, 128), other, false, "Bob passed on: {L}"),
             (announce(1, 128, 128), None, true, "You passed on: {L}"),
             // ── The dice results (Group.cpp:1163 / :1214) ─────────────────────────────────────
-            // NO _SELF split (0594): the self rows below are third-person WITH OUR OWN NAME, not
+            // NO _SELF split: the self rows below are third-person WITH OUR OWN NAME, not
             // "You roll a 57 …". The binary's ROLLED_* tail never tests for self.
             (
                 announce(1, 57, roll_vote::NEED),
@@ -1167,7 +1167,7 @@ mod tests {
         assert_eq!(r.active[0].roll_id, 2);
     }
 
-    // ── The template hold (decision 2010, bug B371) ──────────────────────────────────────────
+    // ── The template hold (bug B371) ──────────────────────────────────────────
     //
     // Driven through the real system in a real schedule, because the whole question is what
     // happens ACROSS frames and `feed_loot_rolls`' snapshot memo is a `Local`: `run_system_once`

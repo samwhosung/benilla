@@ -5,7 +5,7 @@
 //!
 //! - **Inward — identity** ([`feed`]): the net bridge fills [`PlayerActions`] from
 //!   `SMSG_INITIAL_SPELLS` + `SMSG_ACTION_BUTTONS` (and [`drain::drain_action_sets`] writes it
-//!   directly, client-side — the bar is client-authoritative, decision 0218 §4); the feed resolves
+//!   directly, client-side — the bar is client-authoritative); the feed resolves
 //!   each occupied slot's icon and count, pushes the 120-slot snapshot into the VM, and fires
 //!   `ACTIONBAR_SLOT_CHANGED` per changed slot. What is gated on what is the design there.
 //! - **Inward — dynamic state** ([`state`]): cooldown swirl, usability tint, range colour,
@@ -21,7 +21,7 @@
 //! The supporting law sits alongside: [`cast_fail`] + [`errors`] (the red error line's two
 //! layers) and [`weapon_icon`] (the auto-attack's borrowed weapon icon). The cast ladder itself —
 //! the target bind, the validator's rungs, the usable walk, the targeting cursor — is the spell's
-//! ([`crate::spell`], decision 2330); this module is one of its callers.
+//! ([`crate::spell`]); this module is one of its callers.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -53,7 +53,7 @@ mod weapon_icon;
 /// (`ACTIONBAR_UPDATE_COOLDOWN`/`SPELL_UPDATE_COOLDOWN`/`BAG_UPDATE_COOLDOWN`) **synchronously**
 /// (`UiScript::fire_event` walks the handlers inline), so every feed that pushes cooldown
 /// triples the handlers re-read (the container feed's slot cooldowns, the spellbook feed's, the
-/// stance feed's — decision 2009) must run `.before(CooldownEvents)` — or a handler reads last
+/// stance feed's) must run `.before(CooldownEvents)` — or a handler reads last
 /// frame's triples and the pie stays missing until the next store change. The action states
 /// themselves are safe by construction (pushed by the same system, before it fires).
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -65,7 +65,7 @@ pub(crate) use errors::{
     PetTameFailures, Shown, UiError, UiErrorKeys, UiErrorTexts,
 };
 // `pub(crate)`: the spellbook shows the same borrowed weapon icon its bar buttons do, pre-resolved
-// once per page (decisions 0230/0231).
+// once per page.
 pub(crate) use weapon_icon::{melee_auto_attack_icon, ranged_weapon_icon};
 
 /// The auto-attack pseudo-spell (`Attack`, every character's slot-1 default): not a cast — it
@@ -85,18 +85,18 @@ pub(crate) struct PlayerActions {
     pub buttons: HashMap<u8, ActionButton>,
     /// The spell book (`SMSG_INITIAL_SPELLS`).
     ///
-    /// **Ordered, and that is load-bearing** (decision 1312). The reference keeps its known spells
+    /// **Ordered, and that is load-bearing**. The reference keeps its known spells
     /// in an ARRAY and the scans that hunt it — the GameObject lock resolver `0x5f83d0` above all —
     /// stop at the first hit, so the visit order picks *which* of several equally-qualified spells
     /// wins. A `HashSet` made that pick nondeterministic: every character knows both 6478
     /// "Opening" and 22810 "Opening - No Text" (both `LockType 13`, both trivially sufficient), and
-    /// whichever the hash happened to reach first went on the cast bar (B247). Ascending spell id
+    /// whichever the hash happened to reach first went on the cast bar. Ascending spell id
     /// is the array's own order after login — the server sends the initial batch out of a
     /// `std::map`, so the wire arrives sorted.
     pub spells: BTreeSet<u32>,
     /// Set on every book/bar arrival AND every local `action_sets` drain; cleared by the feed
     /// after re-resolving each slot's identity (icon/kind/action) and pushing. It is only ONE of
-    /// the identity resolve's two triggers — a landed item template is the other (decision 0660,
+    /// the identity resolve's two triggers — a landed item template is the other (
     /// [`Items::template_epoch`]) — and it gates ONLY that resolve: an ITEM slot's bag COUNT is
     /// refreshed unconditionally every frame instead (see [`feed`]'s module doc), since it drifts
     /// independently of both.
@@ -106,7 +106,7 @@ pub(crate) struct PlayerActions {
 }
 
 /// **The world right-click's GameObject-opener queue** — the lock chain's resolved action, carried
-/// one frame to the one cast path (decision 2199).
+/// one frame to the one cast path.
 ///
 /// It exists because the right-click system ([`crate::target::click::act_on_right_click`]) and
 /// [`crate::spell::CastLadder`] want the same half-dozen
@@ -130,10 +130,10 @@ pub(crate) struct GoOpenerCasts(pub(crate) Vec<GoOpener>);
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum GoOpener {
     /// A known `OPEN_LOCK` spell the player satisfies, cast **at the object** — `CMSG_CAST_SPELL`
-    /// carrying the GameObject target block (decision 0239).
+    /// carrying the GameObject target block.
     Spell { spell_id: u32, go_guid: u64 },
     /// A key slot we carry: `CGItem::Use` with the lock's guid, which the commit turns into
-    /// `CMSG_USE_ITEM` + `TARGET_FLAG_GAMEOBJECT` (decision 0769). The item carries the bound guid
+    /// `CMSG_USE_ITEM` + `TARGET_FLAG_GAMEOBJECT`. The item carries the bound guid
     /// on its own [`crate::ui_items::ItemUse::on_object`].
     Key(crate::ui_items::ItemUse),
 }
@@ -141,7 +141,7 @@ pub(crate) enum GoOpener {
 /// The spell display catalog + the shapeshift bonus-bar map (absent when the client data isn't —
 /// every consumer tolerates that). `pub(crate)`: the cast-visual router
 /// (`crate::creature_anim::spell_visual`) resolves spell → visual through the same catalog — one
-/// `Spell.dbc` load serves both faces (decision 0107).
+/// `Spell.dbc` load serves both faces.
 #[derive(Resource)]
 pub(crate) struct Spells {
     pub(crate) catalog: SpellCatalog,
@@ -280,7 +280,7 @@ fn track_learned_abilities(
 }
 
 /// `SpellMechanic.dbc` — the vocabulary that fills `SPELL_FAILED_PREVENTED_BY_MECHANIC`'s `%s`
-/// ([`benilla_formats::SpellMechanicCatalog`], decision 1948). Its one reader is the cast-failure
+/// ([`benilla_formats::SpellMechanicCatalog`]). Its one reader is the cast-failure
 /// resolver's `0x8d` arm.
 #[derive(Resource)]
 pub(crate) struct SpellMechanics {
@@ -333,8 +333,7 @@ impl Plugin for UiActionPlugin {
                     // feed so a fresh slot's first state push lands the same frame.
                     // The rank pass runs on the same `dirty` flag the identity feed consumes,
                     // and strictly before it: a slot corrected here is resolved and pushed with
-                    // its right rank the same frame, so a stale rank never reaches a pixel
-                    // (decision 0883).
+                    // its right rank the same frame, so a stale rank never reaches a pixel.
                     ranks::normalize_action_ranks
                         .in_set(UnitFeed)
                         .before(feed::feed_actions),
@@ -345,7 +344,7 @@ impl Plugin for UiActionPlugin {
                         .after(feed::feed_actions),
                     drain::drain_action_sets.after(UiInput),
                     drain::drain_action_uses.after(UiInput),
-                    // The T binding (0997): the attack arm's twin door, after the dispatch wrote
+                    // The T binding: the attack arm's twin door, after the dispatch wrote
                     // this frame's fires.
                     drain::attack_target_binding.after(UiInput),
                     // The world right-click's opener (2199), beside the chain cast and for the

@@ -2,7 +2,7 @@
 //! a bag letter, a book in your bags, and a book/plaque lying in the world.
 //!
 //! **One reader, keyed on an object guid, opened locally with no permission packet.** That is the
-//! reference's own shape, byte-verified (decision 1105): every route ends at `0x4e32e0(guid, flag)`,
+//! reference's own shape, byte-verified: every route ends at `0x4e32e0(guid, flag)`,
 //! which looks the guid up with typemask `1` (*any* object — item or GameObject), asks the object
 //! for its page id through the shared `vtbl+0x74` getter, and pulls the text out of a cache. Which
 //! of the two text sources applies is the object's own answer, not the caller's:
@@ -47,7 +47,7 @@ pub(crate) struct PageText {
     pub(crate) next: u32,
 }
 
-/// The ask-once page cache (decision 1105) — the client's `PageText` dbcache (`0xc0e174`). Keyed by
+/// The ask-once page cache — the client's `PageText` dbcache (`0xc0e174`). Keyed by
 /// page id, filled by [`crate::net::apply`]'s `SessionEvent::PageText` arm.
 ///
 /// vmangos answers a single `CMSG_PAGE_TEXT_QUERY` with the **whole chain** (one response per page),
@@ -178,7 +178,7 @@ impl ItemTextOpen {
     }
 }
 
-/// The book reader's packet handler (decision 1105; in the net handler table since 2313).
+/// The book reader's packet handler (in the net handler table since 2313).
 mod net {
     use benilla_protocol::{SessionEvent, SessionEventKind};
     use bevy::prelude::*;
@@ -413,7 +413,7 @@ fn feed_item_text(
     };
 
     // Page/book text is server-authored, so it runs the `$`-macro expander — the reference does it
-    // from two sites in `ItemTextFrame.cpp` (decision 0754), subject = the local player.
+    // from two sites in `ItemTextFrame.cpp`, subject = the local player.
     let subject = crate::npc_text::player_identity(&self_q, &names, &commands);
     let text = crate::npc_text::substitute(
         &text,
@@ -434,7 +434,7 @@ fn feed_item_text(
     sess.told.get(&script).ready = true;
 }
 
-/// `PageTextMaterial.dbc` as a resource (decision 1105) — the reader frame's material basename,
+/// `PageTextMaterial.dbc` as a resource — the reader frame's material basename,
 /// loaded once at startup ([`crate::entities`]); absent when the client data is, in which case every
 /// readable falls to the Lua's Parchment default.
 #[derive(Resource)]

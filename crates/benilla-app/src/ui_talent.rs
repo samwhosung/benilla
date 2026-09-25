@@ -1,4 +1,4 @@
-//! The talent window feed (decision 0304) — the app half of the `benilla_ui::script::talent`
+//! The talent window feed — the app half of the `benilla_ui::script::talent`
 //! seam, the `ui_spellbook` shape: build the class's talent pages from the `Talent.dbc` ×
 //! `TalentTab.dbc` catalog joined with the known-spell set (`PlayerActions.spells`) and the
 //! self descriptor's `PLAYER_CHARACTER_POINTS1/2`, push the snapshot, fire the refresh events,
@@ -18,7 +18,7 @@
 //!   for a short tab total, `TOOLTIP_TALENT_PREREQ[_P1]` (`0x854a5c`) per unmet prereq slot, and
 //!   `ITEM_REQ_SKILL` (`0x84e338`, reused from the item tooltip) for an unmet `required_spell` —
 //!   the three keys `0x52b390` emits, in the reference's own order. **Keys, resolved off
-//!   the player's own `GlobalStrings.lua` at the feed** (decision 2045), never sentences written
+//!   the player's own `GlobalStrings.lua` at the feed**, never sentences written
 //!   here; a key the install does not carry renders no line, which is the reference's own
 //!   data-suppression face (the desaturation still communicates the lock).
 //! - The tooltip's spell parts (display + next rank) ride `ui_tooltip`'s spell channel, which
@@ -176,7 +176,7 @@ fn feed_talents(
         script.set_talents(fresh.clone());
         memory.pushed = fresh;
         // `%d%d` — the talent-point and profession-point DELTAS, per the reference's own fire
-        // site (SignalEvent2, decision 1884). `ChatFrame.lua:1326` opens its branch with
+        // site (SignalEvent2). `ChatFrame.lua:1326` opens its branch with
         // `if ( arg2 > 0 )`, unguarded, so an argless fire is not merely ignored there: it
         // compares nil with a number and raises. `memory.points` still holds the previous pair
         // here — it is updated at the end of this function — and a first observation seeds at
@@ -232,7 +232,7 @@ pub(crate) fn build_pages(
     class: u8,
     points: (u32, u32),
     // The VM's own `GlobalStrings.lua`, for the three red requirement lines — `None` for a key
-    // the install does not carry, which renders no line (decision 2045).
+    // the install does not carry, which renders no line.
     get: &dyn Fn(&str) -> Option<String>,
 ) -> TalentUiState {
     let mut tabs = Vec::new();
@@ -412,7 +412,7 @@ mod tests {
         assert_eq!(rank_of(&t, &holey), 3);
     }
 
-    /// **The respec, at the seam that made it look like it hadn't happened** (decision 1584). The
+    /// **The respec, at the seam that made it look like it hadn't happened**. The
     /// window's rank is a read of the known-spell set and nothing else, so a wipe only shows here
     /// once the server's `SMSG_REMOVED_SPELL` burst has emptied it — one packet per rank, all of
     /// them dropped before 1584. That is why the director's screenshot could show a 20-point

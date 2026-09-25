@@ -1,4 +1,4 @@
-//! The trainer window's packet handlers (decision 0237; in the net handler table since 2318,
+//! The trainer window's packet handlers (in the net handler table since 2318,
 //! moved out of the drain's npc arm file) — the [`TrainerOpen`] session and the
 //! [`TrainerErrors`] line queue the trainer feed ([`super`]) reads.
 
@@ -113,11 +113,11 @@ fn trainer_list(
 /// A trainer taught a service — confirmation only, and the reference **registers no handler for
 /// this opcode** (0x1B3 is absent from the 387 opcodes registered via `0x5ab650`/`0x537a60`).
 /// The spell itself lands via `SMSG_LEARNED_SPELL`, and that packet is one of the twelve triggers
-/// of the state re-evaluator ([`super::reeval`], decision 2333), which repaints the bought row
+/// of the state re-evaluator ([`super::reeval`]), which repaints the bought row
 /// green→gray and unlocks the next rank from the player's own book. Until 2333 benilla answered
 /// this packet by re-requesting the whole list — a round trip the reference never makes
 /// (VERIFIED vmangos `HandleTrainerBuySpellOpcode`: the server never resends on its own either),
-/// and the reason the player's filter kept dying on a purchase (B256). Logged, nothing more.
+/// and the reason the player's filter kept dying on a purchase. Logged, nothing more.
 fn trainer_buy_succeeded(trainer: u64, spell_id: u32) {
     debug!("net: trainer {trainer:#x} taught spell {spell_id}");
 }

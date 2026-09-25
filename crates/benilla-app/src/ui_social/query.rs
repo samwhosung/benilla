@@ -1,5 +1,5 @@
 //! The `/who` **filter parser** — the string the player types into the wire fields the server
-//! reads (decision 0668).
+//! reads.
 //!
 //! This is engine work in the real client too: the FrameXML hands `SendWho` a raw string
 //! (`WhoFrame_GetDefaultWhoCommand` builds `z-"Elwynn Forest" 55-63`), and nothing in Lua turns
@@ -26,7 +26,7 @@
 //! Everything is case-insensitive; unmatched class/race words fall through to search terms rather
 //! than narrowing the mask to nothing, so a typo returns too much rather than nothing.
 //!
-//! **INTERIM** (decision 0668): the tag set and the fall-through are transcribed from the
+//! **INTERIM**: the tag set and the fall-through are transcribed from the
 //! reference's strings and its own emitted filters, not from that TU's disassembly — the one
 //! place in this slice where the *client* end is inferred rather than byte-read. The dispatch
 //! item is named in the record.

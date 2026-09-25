@@ -9,7 +9,7 @@
 //! closes exactly where the cursor says its NPC is out of service — one law for "out of service".
 //!
 //! **That last sentence used to end "…is INFERRED (its close mechanism isn't RE'd)". It is now a
-//! fact** (decision 1741): the close mechanism is `0x493230`, called per frame from
+//! fact**: the close mechanism is `0x493230`, called per frame from
 //! `CGWorldFrame`'s layer update, and a census of all fourteen of the client's arming sites found
 //! thirteen pushing this very constant. The one thing the guess missed is that the leash is not
 //! the window's at all — it belongs to the latched OBJECT, and swaps to 14.0 yd for a player
@@ -24,8 +24,8 @@ use benilla_world::schedule::WorldStage;
 /// Owns the cross-window session state: [`InteractNpc`] and the one system that feeds it.
 ///
 /// It has a plugin of its own because [`InteractNpc`] has **two** consumers that must not depend on
-/// each other — the portrait booth's `"npc"` token (decision 0081) and the interaction face-me
-/// (`crate::net::motion`'s display-facing chain, decision 1467). It used to be initialised and fed
+/// each other — the portrait booth's `"npc"` token and the interaction face-me
+/// (`crate::net::motion`'s display-facing chain). It used to be initialised and fed
 /// from inside the portrait plugin, which silently made a *facing* law contingent on the portrait
 /// plugin being mounted; a shared resource belongs to the thing it describes.
 pub(crate) struct UiSessionPlugin;
@@ -41,7 +41,7 @@ impl Plugin for UiSessionPlugin {
         // `SMSG_LIST_INVENTORY` opened or swapped the merchant window was the frame its own
         // `MERCHANT_SHOW` handler read `UnitName("NPC")` — and this had not yet been told. The
         // title read the PREVIOUS NPC's name over the new vendor's stock, and a second vendor
-        // opened over an open window never swapped the name at all (decision 2022).
+        // opened over an open window never swapped the name at all.
         app.init_resource::<InteractNpc>().add_systems(
             Update,
             feed_interact_npc
@@ -63,11 +63,11 @@ impl Plugin for UiSessionPlugin {
 /// against a latched guid, so "walked away" retracting the dialog is its law, not our tidiness).
 /// Each *NPC* window registers
 /// [`close_npc_session_out_of_range::<T>`] ahead of its feed so the clear turns into the window's
-/// `*_CLOSED` event the same frame — trade does **not** (its cancel is server-driven, decision 0592).
+/// `*_CLOSED` event the same frame — trade does **not** (its cancel is server-driven).
 /// [`feed_interact_npc`] collapses the portrait-bound sessions into the [`InteractNpc`] the
 /// portrait booth reads for its `"npc"` slot; the mailbox is deliberately excluded from that
-/// collapse (its window icon is art, not a unit-model bake — decision 0544). Trade's "npc" is a
-/// live *player* (the partner), baked exactly like a vendor (decision 0592).
+/// collapse (its window icon is art, not a unit-model bake). Trade's "npc" is a
+/// live *player* (the partner), baked exactly like a vendor.
 pub(crate) trait NpcSession: Resource {
     /// The NPC this session is bound to; `None` = no window open.
     fn npc(&self) -> Option<u64>;
@@ -80,8 +80,8 @@ pub(crate) trait NpcSession: Resource {
     /// verb: `0x4933da` calls the quest session's end (`0x501130`) **directly**, skipping
     /// `DeclineQuest`'s core — so walking away from an NPC's quest panel is network-silent (no
     /// giver re-open, and the DETAILS suppression flag is not consulted) while walking away from a
-    /// party member's SHARED quest still owes them `MSG_QUEST_PUSH_RESULT{DECLINE_QUEST}`
-    /// (decision 1741). A hook rather than a call to [`Self::close`] because that difference —
+    /// party member's SHARED quest still owes them `MSG_QUEST_PUSH_RESULT{DECLINE_QUEST}`.
+    /// A hook rather than a call to [`Self::close`] because that difference —
     /// send *less* on the walk-away than on the button — is exactly what the binary does.
     fn walk_away_send(&self, _npc: u64) -> Option<ClientCommand> {
         None
@@ -99,7 +99,7 @@ pub(crate) trait NpcSession: Resource {
 /// a **player** is leashed at `10.0 + 4.0 = 14.0` yd instead (`[0x8044b0] + [0x80306c]`, squared
 /// into the cell at `0x49316d`). The only such session that registers this guard is a shared
 /// quest — and 1733 read that case as "not range-guarded at all", which is wrong in the same
-/// direction a plain revert to 5.56 yd would have been wrong (decision 1741).
+/// direction a plain revert to 5.56 yd would have been wrong.
 ///
 /// The 14.0 coinciding with vmangos's `QUEST_SHARE_DISTANCE` is corroboration, not the derivation:
 /// the client's number is two `.rdata` floats summed.
@@ -120,7 +120,7 @@ const PLAYER_LEASH_SQ: f32 = 196.0;
 /// sound is if the frame is HIDDEN first. So the client fires `*_CLOSED` then `*_SHOW` on a
 /// vendor→vendor (or gossip→gossip, quest→quest) change — a real close+open, both sounds. Each feed
 /// reproduces that, then **consumes the close intent** its own `*_CLOSED`→OnHide→`CloseX` queued, so
-/// the session it just re-opened to `b` is not wiped by the drain (decision 0096).
+/// the session it just re-opened to `b` is not wiped by the drain.
 pub(crate) fn npc_switched(prev: Option<u64>, now: Option<u64>) -> bool {
     matches!((prev, now), (Some(a), Some(b)) if a != b)
 }
@@ -158,7 +158,7 @@ pub(crate) fn close_npc_session_out_of_range<T: NpcSession>(
 /// ever open in play),
 /// resolved through the [`GuidIndex`] to its live world entity. The portrait booth reads this for
 /// the `"npc"` token exactly as it reads [`crate::target::Selection`] for `"target"` — the
-/// decision-0105 face bake, wired to the interaction arc's NPC (decision 0081). `None` = no NPC
+/// decision-0105 face bake, wired to the interaction arc's NPC. `None` = no NPC
 /// window open, so the booth empties; the ring is hidden with its window then, so the dark disc
 /// never shows.
 #[derive(Resource, Default, PartialEq, Eq)]
@@ -178,26 +178,26 @@ pub(crate) fn feed_interact_npc(
     // Trade points the "npc" portrait at the partner (a live player) while its window is open — the
     // same booth path, one more mutually-exclusive session in the chain (decision 0592 P1).
     trade: Option<Res<crate::ui_trade::TradeSession>>,
-    // The banker's portrait while the vault is open (decision 0604) — same booth path.
+    // The banker's portrait while the vault is open — same booth path.
     bank: Option<Res<crate::ui_bank::BankOpen>>,
     // The auctioneer's, while the auction house is open — the same booth path again. Its absence
     // here is what left `AuctionPortraitTexture` a black disc: the window asks for `"npc"` in its
     // OnShow like every other NPC window, and nothing was answering.
     auction: Option<Res<crate::ui_auction::AuctionOpen>>,
-    // The guild registrar's, while the charter window is open (decision 1672) — same booth path,
+    // The guild registrar's, while the charter window is open — same booth path,
     // and it is NOT covered by the gossip arm above: the server closes the gossip menu before it
     // sends `SMSG_PETITION_SHOWLIST` (`Player.cpp:12428-12431` — `CloseGossip()` then
     // `SendPetitionShowList`), so by the time `GuildRegistrar_OnShow` asks for `"npc"` the gossip
     // session is already gone. Without this arm the window's portrait is the auctioneer's black
     // disc all over again and its name banner is blank.
     registrar: Option<Res<crate::ui_petition::GuildRegistrarState>>,
-    // The stable master's, while the pet stable is open (decision 1684) — the black disc a THIRD
+    // The stable master's, while the pet stable is open — the black disc a THIRD
     // time, and this one could not have leaned on the gossip arm even by accident: benilla asks a
-    // menuless stable master for its pet list DIRECTLY on the interact leg (decision 1680, the
+    // menuless stable master for its pet list DIRECTLY on the interact leg (the
     // client's own `0x5f05bc` path), so there is no gossip session behind it at all. The registrar
     // arm above is the same shape for the same reason.
     stable: Option<Res<crate::ui_stable::StableOpen>>,
-    // The tabard designer's vendor (decision 1977) — its portrait and name banner, the same way.
+    // The tabard designer's vendor — its portrait and name banner, the same way.
     tabard: Option<Res<crate::ui_tabard::TabardOpen>>,
     index: Option<Res<GuidIndex>>,
     mut out: ResMut<InteractNpc>,
@@ -221,7 +221,7 @@ pub(crate) fn feed_interact_npc(
     // streamed still names the unit, which is why they are two fields rather than one lookup.
     //
     // Written only on a change, so `is_changed()` means it: the unit feed's dirty gate lists
-    // this resource among its inputs (decision 2022), and an unconditional write every frame
+    // this resource among its inputs, and an unconditional write every frame
     // would hold that gate open for the whole session.
     let next = InteractNpc(
         guid.and_then(|g| index.and_then(|i| i.0.get(&g).copied())),
@@ -247,7 +247,7 @@ mod tests {
     /// The vendor guid is a real `HIGHGUID_UNIT` one. It used to be a bare `0x42`, which is a
     /// **player** guid (the high word is what decides — `guid::is_player`), and that went unnoticed
     /// until the leash started depending on the type: a "vendor" with a player guid is leashed at
-    /// 14 yd and this test's 6 yd step stopped closing it (decision 1741).
+    /// 14 yd and this test's 6 yd step stopped closing it.
     #[test]
     fn out_of_range_or_despawned_npc_closes_the_session() {
         let mut app = App::new();
@@ -296,7 +296,7 @@ mod tests {
         assert!(!app.world().resource::<MerchantOpen>().is_open());
     }
 
-    /// **The leash belongs to the OBJECT, not the window** (decision 1741, correcting 1733): a
+    /// **The leash belongs to the OBJECT, not the window** (correcting 1733): a
     /// session latched onto a player is guarded at 14.0 yd, one latched onto an NPC at 5.56 yd.
     /// 1733 read the share case as "not range-guarded at all" — wrong in the same direction that
     /// reverting it to the NPC range would have been wrong, which is why both bounds are moved
@@ -453,13 +453,13 @@ mod tests {
             .resource_mut::<crate::ui_auction::AuctionOpen>()
             .clear();
 
-        // The stable master's (decision 1684) — the same black disc, reported by the director on
+        // The stable master's — the same black disc, reported by the director on
         // 2026-08-28. Note WHERE it shipped from: this very test already existed, with the
         // paragraph above it saying every portrait window must be in the chain — and the stable
         // still went out black, because the guard is **opt-in per session**. A window nobody
         // remembers to add here is a window nobody's test covers. Worse for this one than for the
         // auction house: benilla asks a menuless stable master for its list directly on the
-        // interact leg (decision 1680), so there is no gossip session to accidentally carry it.
+        // interact leg, so there is no gossip session to accidentally carry it.
         app.init_resource::<crate::ui_stable::StableOpen>();
         app.world_mut()
             .resource_mut::<crate::ui_stable::StableOpen>()
@@ -481,7 +481,7 @@ mod tests {
         assert_eq!(app.world().resource::<InteractNpc>().0, None);
     }
 
-    /// **The structural tripwire the three black discs earned** (decision 1684).
+    /// **The structural tripwire the three black discs earned**.
     ///
     /// The assertions above are opt-in: each names one session, and a window nobody remembers to
     /// add is a window nobody covers. That is not hypothetical — the auction house shipped a black

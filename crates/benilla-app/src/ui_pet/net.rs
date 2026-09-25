@@ -1,4 +1,4 @@
-//! The pet's packet handlers (decisions 0982, 0988, 2039; in the net handler table since 2321,
+//! The pet's packet handlers (in the net handler table since 2321,
 //! moved out of the drain's pet arm file) — `SMSG_PET_SPELLS`, `SMSG_PET_MODE`,
 //! `SMSG_PET_ACTION_FEEDBACK`, `SMSG_PET_CAST_FAILED` folded into [`PetBar`], the three
 //! pet-feedback packets and the pet's voice.
@@ -55,7 +55,7 @@ fn on_session_end(In(_): In<SessionEvent>, mut bar: ResMut<PetBar>) {
     *bar = PetBar::default();
 }
 
-/// The pet action bar (decision 0982) — server-authoritative, so PET_SPELLS is a wholesale
+/// The pet action bar — server-authoritative, so PET_SPELLS is a wholesale
 /// replace and its zero-guid form is the teardown.
 fn on_spells(In(ev): In<SessionEvent>, catalog: Option<Res<Spells>>, mut bar: ResMut<PetBar>) {
     if let SessionEvent::PetSpells(spells) = ev {
@@ -171,7 +171,7 @@ fn pet_spells(spells: PetSpells, catalog: Option<&Spells>, bar: &mut PetBar) {
             .collect::<Vec<_>>()
             .join(" ")
     );
-    // The spell LIST, spelled out the same way and for the same reason (decision 1032). It is a
+    // The spell LIST, spelled out the same way and for the same reason. It is a
     // different question from the bar's — "why is the pet book shorter than the packet said" — and
     // the answer is always one of three things this line names: the id resolves to no `Spell.dbc`
     // record, it carries `DO_NOT_DISPLAY` (the book's whole add-gate, `0x4b2f90`), or it is in.
@@ -226,7 +226,7 @@ fn pet_action_feedback(reason: u8, errors: &mut UiErrorKeys) {
 
 /// The `SMSG_PET_ACTION_FEEDBACK` reason → the message-catalog row the reference raises for it.
 ///
-/// **The whole map, read off the handler** (`0x4bdb70`, decision 2033). The byte is decremented
+/// **The whole map, read off the handler** (`0x4bdb70`). The byte is decremented
 /// and bounded — `dec eax; cmp eax,0x3; ja` — then indexes the four-entry jump table at
 /// `0x4bdbe8`, so `0` and anything from `5` up fall past every arm and display nothing. Each arm
 /// is a bare `push <errorId>; call CGGameUI::DisplayError 0x496720`, with no argument and no
@@ -260,7 +260,7 @@ fn pet_feedback_key(reason: u8) -> Option<&'static str> {
 }
 
 /// `SMSG_PET_TAME_FAILURE` — the reason byte, straight onto [`PetTameFailures`] for the drain to
-/// resolve (decision 2039).
+/// resolve.
 ///
 /// **Not only taming, despite the name**: vmangos raises it for Call Pet with no pet available
 /// (`SpellEffects.cpp:3167`), Revive Pet on a live pet (`Spell.cpp:6136`), and any summon while a
@@ -307,7 +307,7 @@ fn pet_broken(errors: &mut UiErrorKeys) {
 }
 
 /// `SMSG_PET_ACTION_SOUND` — the pet's voice: resolve the guid, hand the selector to the sound
-/// layer (decision 2039).
+/// layer.
 ///
 /// The reference resolves the packet's guid through the object manager and **drops the packet on
 /// a miss** (`0x604101 je`), which is what the index lookup below is: a bark for a unit that has
@@ -328,7 +328,7 @@ fn pet_action_sound(
 }
 
 /// `SMSG_PET_DISMISS_SOUND` — the parting sound's model id and point, converted into Bevy space
-/// for the sound layer (decision 2039).
+/// for the sound layer.
 ///
 /// The `+1.0` on `z` is the reference's own (`0x6041d0 fadd [0x7ff9d8]`), applied **before** the
 /// basis change because it is a WoW-space offset: the point on the wire is where the pet stood,
@@ -347,7 +347,7 @@ fn pet_dismiss_sound(
 
 /// `SMSG_PET_CAST_FAILED` — the pet's cast refusal, queued onto the SAME red line as our own
 /// through [`CastErrors`], but **marked as the pet's** so the display picks the reference's pet
-/// message table rather than the player's (`push_pet`, decision 2033).
+/// message table rather than the player's (`push_pet`).
 ///
 /// The reference handles this opcode in its own function, `Spell_C::HandlePetCastFailed`
 /// (`0x6e8eb0`), which is not the player's `0x6e1a00` with a flag — it is a separate switch over

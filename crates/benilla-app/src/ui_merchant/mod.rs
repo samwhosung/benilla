@@ -185,7 +185,7 @@ fn buy_error_key(reason: u8) -> Option<&'static str> {
 }
 
 /// The GlobalStrings key a `SellResult` refusal (`SMSG_SELL_ITEM`'s error path) shows — the
-/// reference's switch at `0x5dd22c` (decision 1821).
+/// reference's switch at `0x5dd22c`.
 ///
 /// **Silence is the default here**, the opposite of [`buy_error_key`]: code 0 returns before the
 /// switch (`0x5dd21e`), and 5 and everything from 7 up jump past the `DisplayError` to the
@@ -237,7 +237,7 @@ fn resolve_item(
     } else {
         item.current_count as i32
     };
-    // The row's link (`GetMerchantItemLink`, decision 1059) — what the row click's ctrl/shift arms
+    // The row's link (`GetMerchantItemLink`) — what the row click's ctrl/shift arms
     // hand on. Off the SAME one template answer as `name`/`stats`, through the one shared builder
     // ([`crate::ui_items::item_link`], our transcription of the client's own `0x52adb0`): a vendor
     // row carries no enchant and no random property on the wire, so the no-ids form is the right
@@ -316,7 +316,7 @@ fn resolve_buyback(
         stats,
         // No link on a buyback row: 1.12 has no `GetBuybackItemLink`, and the reference's buyback
         // click carries no ctrl/shift branch at all — it is a bare `BuybackItem(this:GetID())`
-        // (`MerchantFrame.lua:358-361`). Nothing reads it, so nothing builds it (decision 1059).
+        // (`MerchantFrame.lua:358-361`). Nothing reads it, so nothing builds it.
         link: None,
         // …and no max stack, for the same shape of reason: `GetMerchantItemMaxStack` indexes the
         // MERCHANT list, and a buyback row is bought whole rather than by the stackful. Nothing
@@ -462,7 +462,7 @@ fn feed_merchant(
     let last_money = last_money.get(&script);
     let last_name = last_name.get(&script);
     let last_vendor = last_vendor.get(&script);
-    // Refusals go to the surface — and the voice — their message record names (decision 1815):
+    // Refusals go to the surface — and the voice — their message record names:
     // the vendor's "not enough money" carries error-speech line 0x28, "you can't carry any more"
     // line 0x1e. A code the reference says nothing for resolves to no key and reaches nothing.
     let refusals: Vec<_> = errors
@@ -530,7 +530,7 @@ fn feed_merchant(
     if switched {
         // Close the old vendor, open the new: the frame hides then shows, playing the close then
         // open kits (and closing/reopening the bag). The MERCHANT_CLOSED routes through the window's
-        // OnHide → CloseMerchant (decision 0095), which queues a close intent — consume it here so
+        // OnHide → CloseMerchant, which queues a close intent — consume it here so
         // the drain does NOT clear the vendor we just re-opened to.
         script.fire_event("MERCHANT_CLOSED", vec![]);
         script.fire_event("MERCHANT_SHOW", name_arg());
@@ -563,7 +563,7 @@ impl NpcSession for MerchantOpen {
 }
 
 /// Drain the Lua intents: a bought row → `CMSG_BUY_ITEM` (mapped to the row's item entry; buy is by
-/// entry, not the vendor `muid` — decision 0081); a buyback → `CMSG_BUYBACK_ITEM` (the clicked
+/// entry, not the vendor `muid`); a buyback → `CMSG_BUYBACK_ITEM` (the clicked
 /// 1-based, timestamp-sorted list index mapped to its ABSOLUTE slot 69–80); a repair-all →
 /// `CMSG_REPAIR_ITEM` with guid 0; a close → a local clear (no packet, vanilla).
 fn drain_merchant(
@@ -700,7 +700,7 @@ mod tests {
         }
     }
 
-    /// **The two refusal tables, welded to the message ids they were read from** (decision 1821).
+    /// **The two refusal tables, welded to the message ids they were read from**.
     /// Asserting the key alone would let a plausible-looking rename through; asserting the id it
     /// resolves to is asserting the `push <id>; call 0x496720` that was actually disassembled.
     #[test]

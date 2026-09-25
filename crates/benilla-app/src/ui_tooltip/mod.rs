@@ -1,5 +1,5 @@
 //! The world-mouseover tooltip system (decision 0274 P3) — the app half of the byte-verified
-//! mouseover flow (0276): the engine rebuilds the tooltip **once per hover-target change**
+//! mouseover flow: the engine rebuilds the tooltip **once per hover-target change**
 //! (`world_tooltip_unit` / `world_tooltip_gameobject`: default anchor via
 //! `OnTooltipSetDefaultAnchor`, the verified line laws, `UPDATE_MOUSEOVER_UNIT` for the unit
 //! recolor), the health bar tracks the per-frame `set_unit` pushes in between (the HEALTH
@@ -65,7 +65,7 @@ struct ViewCtx<'a, 'w, 's> {
     /// The talent spell-modifier tables — the cost cell shows the RESOLVED cost, which since
     /// `SPELLMOD_COST` landed means the modified one (`crate::spell::usable::power_cost`).
     spell_mods: &'a crate::spell::SpellModifiers,
-    /// The VM's own `GlobalStrings.lua` (decision 2045) — every cell this builder composes is a
+    /// The VM's own `GlobalStrings.lua` — every cell this builder composes is a
     /// key, and this is where they resolve. `text` is the `%d`-filling twin the `$`-engine's
     /// keyed tokens take (`benilla_formats::TokenContext::text`).
     get: &'a dyn Fn(&str) -> Option<String>,
@@ -74,7 +74,7 @@ struct ViewCtx<'a, 'w, 's> {
 
 /// Fill a key's template out of the VM's own `GlobalStrings.lua`, or nothing at all when the
 /// chain has no string for it — the reference's data-suppression face, and the reason no cell
-/// here carries a fallback sentence (decision 2045).
+/// here carries a fallback sentence.
 fn keyed(get: &dyn Fn(&str) -> Option<String>, key: &str, args: &[Arg<'_>]) -> Option<String> {
     let text = benilla_ui::strings::fill(&get(key)?, args);
     (!text.is_empty()).then_some(text)
@@ -113,7 +113,7 @@ fn spell_tooltip_view(
         text: vctx.text,
     };
     // The cost cell (the `0x52e8ad` caller): the RESOLVED cost — `GetPowerCost`'s
-    // number, the same `power_cost` the usable walk compares (0948) — through the power-type key
+    // number, the same `power_cost` the usable walk compares — through the power-type key
     // array (`0x85416c`: Mana/Rage/Focus/Energy/Happiness) with HEALTH as the out-of-range
     // fallback (the `jl`/`cmp 5` fork at `0x52e8fc` — Life Tap's and Bloodrage's −2 → "N Health";
     // B192, 1074). Rage displays wire÷10 (the `0x6e7130` per-type divisor), applied to the flat
@@ -121,7 +121,7 @@ fn spell_tooltip_view(
     // ("11 Health, plus 5 per sec" — Health Funnel), including the cost-0 case. Zero cost with
     // zero per-second leaves the cell EMPTY. The ref never prints a percentage — a pct-only cost
     // resolves to its flat number like any other, which is why the "% of base mana" line this
-    // replaces was unfaithful (B152). No store (a DBC-only view) degrades to the flat cost.
+    // replaces was unfaithful. No store (a DBC-only view) degrades to the flat cost.
     // HAPPINESS_COST has no GlobalStrings entry and no 5875 player spell reaches powerType 4;
     // the unit word is a dead arm kept for the array's shape.
     let resolved_cost = vctx.store.map_or(d.mana_cost, |s| {
@@ -208,7 +208,7 @@ fn spell_tooltip_view(
             .unwrap_or(0);
         // Each arm is a key. The two timed ones are `%.3g` templates — significant digits, not
         // decimals — so the seconds are handed over as a real and the shipped string decides how
-        // it reads (decision 2080); this used to round to one decimal on our side.
+        // it reads; this used to round to one decimal on our side.
         if base > 0 {
             let (key, v) = if base >= 60_000 {
                 ("SPELL_CAST_TIME_MIN", f64::from(base) / 60_000.0)
@@ -695,7 +695,7 @@ fn lines_view(s: &UnitState) -> UnitState {
     }
 }
 
-/// The **"Locked" line's colour** (`0x52ab03`-`0x52ab43`, decision 0770).
+/// The **"Locked" line's colour** (`0x52ab03`-`0x52ab43`).
 ///
 /// The builder seats red `0xc0d3a8` as the default *before* it calls the resolver, then re-colours
 /// on the answer. Every non-`Unmet` answer lands on the same green `0xc0d420`, by two separate
@@ -723,10 +723,10 @@ fn drive_mouseover_tooltip(
     script: Option<NonSendMut<UiScript>>,
     hovered: Res<Hovered>,
     hovered_go: Res<HoveredObject>,
-    // The cursor-arm seat of the GO anchor fork (decision 0766).
+    // The cursor-arm seat of the GO anchor fork.
     window: Query<&Window, With<PrimaryWindow>>,
     stores: Query<&ObjectStore>,
-    // The stored GAMEOBJECT_STATE the lock lines' Action gate reads (decision 0752).
+    // The stored GAMEOBJECT_STATE the lock lines' Action gate reads.
     anims: Query<&crate::go_anim::GoAnim>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     names: Res<NameCache>,
@@ -736,12 +736,12 @@ fn drive_mouseover_tooltip(
     rx: crate::target::ReactionInputs,
     // The lock chain's own data set, shared verbatim with the click router (`target::lock`) so the
     // hover and the click can never disagree about whether a lock is satisfiable — the same reason
-    // `usable` and the click share one resolver (0752). Carries the go-template, Lock.dbc and
+    // `usable` and the click share one resolver. Carries the go-template, Lock.dbc and
     // item caches this system used to take as three separate params.
     go_inputs: crate::target::lock::GoLockInputs,
     // The known-spell set the resolver's SKILL arm scans.
     player_actions: Res<crate::ui_action::PlayerActions>,
-    // The cursor seat crosses the VM seam (0582/0584): the anchor below is UI units, not px.
+    // The cursor seat crosses the VM seam: the anchor below is UI units, not px.
     ui_scale: Res<crate::ui_script::UiScaleCvar>,
     mut memo: HoverMemo,
     // `ChrClasses.dbc` field 16 — `UnitHasRelicSlot`'s only input. Absent when the client data
@@ -781,7 +781,7 @@ fn drive_mouseover_tooltip(
         Some((guid, s))
     });
     // The hovered GAMEOBJECT, when it is the nearer pick (the click router's own arbitration).
-    // Deliberately NOT gated on the highlightable predicate (0558/0559): the mouseover publisher
+    // Deliberately NOT gated on the highlightable predicate: the mouseover publisher
     // `0x492890` dispatches the GO tooltip builder `0x52aa20`
     // by object KIND on both branches; highlightable is never read on the tooltip path (it gates
     // the cursor and the click only). So a GENERIC(5) signpost, a pre-quest INTERACT_COND chest,
@@ -789,7 +789,7 @@ fn drive_mouseover_tooltip(
     // "no cursor AND no tooltip" coupling was the regression. Transports never reach here — they
     // are excluded from the pick set itself (0466's correct half).
     // "Nothing else was picked, or the GameObject is the nearer pick." **A hovered corpse counts
-    // as something else picked** (decision 1723) — it has no tooltip of its own yet, and the
+    // as something else picked** — it has no tooltip of its own yet, and the
     // `unit.is_none()` short-circuit would otherwise hand a farther GameObject the gold plate the
     // moment the ray landed on a body instead of a unit.
     let go = hovered_go.target.zip(hovered_go.guid).filter(|_| {
@@ -862,14 +862,14 @@ fn drive_mouseover_tooltip(
         return;
     }
     if let Some((entity, guid)) = go {
-        // Which arm of the anchor fork this object takes (decision 0766). The reference asks the
+        // Which arm of the anchor fork this object takes. The reference asks the
         // object's own `[obj->vtbl+0x5c]`; what selects it is not pinned, so we key on the one
         // distinction the director's two reference observations agree on — a **GENERIC(5)**
         // signpost follows the cursor, an interactable GameObject sits in the corner.
         //
         // 0766 keyed this on "is it GENERIC(5)" and said plainly that it was a proxy: the real
         // client asks the object's own `[vtbl+0x5c]`, and what selects it was not then pinned.
-        // **It is pinned now, and it is narrower** (decision 2259): `[vtbl+0x5c]` is `0x5f8630`,
+        // **It is pinned now, and it is narrower**: `[vtbl+0x5c]` is `0x5f8630`,
         // whose body is `template.data[0x621b00(type, semantic 0x13)] != 0`, and key `0x13`
         // resolves for exactly ONE of the 31 GO types — GENERIC(5), at `data[0]`. Every other type
         // gets `-1` back and `0x5f8150`'s unsigned bound turns that into FALSE.
@@ -881,7 +881,7 @@ fn drive_mouseover_tooltip(
         // interactable" one.
         //
         // **`data[0]` is not `data[1]`.** The neighbouring slot is the mouseover-ELIGIBILITY column
-        // (0762, semantic `0x12`, `0x5f4830`), and the two answer different questions: `data[1]`
+        // (semantic `0x12`, `0x5f4830`), and the two answer different questions: `data[1]`
         // says whether the object is hoverable at all, `data[0]` only says *where its plate sits*.
         // 342 of the 447 type-5 entries in the reference's own `gameobjectcache.wdb` carry both;
         // the objects that differ are hoverable and corner-seated, not silent.
@@ -940,14 +940,14 @@ fn drive_mouseover_tooltip(
             go_inputs.templates.request(guid, &commands);
             return;
         };
-        // The lock lines, transcribed from the builder `0x52aa20` (decision 0756). Two blocks, in
+        // The lock lines, transcribed from the builder `0x52aa20`. Two blocks, in
         // the binary's order, and both are narrower than the sweep we used to print:
         //
         //  A) **"Locked"** — emitted iff `GAMEOBJECT_FLAGS & GO_FLAG_LOCKED` (`0x52aae5`:
         //     `shr 1; test dl,1`). That flag gates this line and nothing else.
         //  B) **ONE requirement line, from Lock.dbc SLOT 0 ONLY** (`[lockRow+4]` / `[lockRow+0x24]`
         //     — the builder never walks the other seven), and only when slot 0 passes the same
-        //     per-slot Action gate the resolver uses (`0x52ab7e` → `0x5f81d0`, decision 0752):
+        //     per-slot Action gate the resolver uses (`0x52ab7e` → `0x5f81d0`):
         //       · KEY → **white** `LOCKED_WITH_ITEM` "Requires <item>" (`0x854988`; `0x52acd9`
         //         pushes `0xc0cf60` = white)
         //       · SKILL, opener unknown **and** the object is flag-locked → **nothing at all**
@@ -983,7 +983,7 @@ fn drive_mouseover_tooltip(
             //     out-param set: `0x52ab29 jne` takes the green arm)
             //   · no lock requirement at all-> the same green (`0x52ab22 je`)
             //   · a SKILL opener satisfied it -> the difficulty ramp `0x529fa0` — NOT modelled;
-            //     see this line's follow-up note in decision 0770. Green is its second rung, so a
+            //     see this line's follow-up note in. Green is its second rung, so a
             //     comfortably-skilled opener already reads correctly; a marginal one reads too
             //     green rather than yellow/orange.
             let facts = crate::target::lock::go_facts(go_store.map(|s| (s, state)));
@@ -1020,7 +1020,7 @@ fn drive_mouseover_tooltip(
                     }
                 }
                 // The opener-*known* arm additionally wants the reference's skill-margin colour
-                // ramp (`0x529fa0`) — now pinned (decision 0770) but not modelled here; what we
+                // ramp (`0x529fa0`) — now pinned but not modelled here; what we
                 // model is the unknown arm, which is what a hovering player almost always is. A
                 // flagged object stays silent there, exactly as the binary does.
                 benilla_formats::LOCK_KEY_SKILL if !flag_locked => {

@@ -1,4 +1,4 @@
-//! The app-side **loot feed** (decision 0084) — the inward half of the loot seam around
+//! The app-side **loot feed** — the inward half of the loot seam around
 //! [`benilla_ui::script`]'s `loot` module, the twin of [`crate::ui_merchant`]'s merchant seam.
 //!
 //! The net bridge ([`crate::net::apply`]) fills [`LootState`] from the wire: `SMSG_LOOT_RESPONSE` →
@@ -110,7 +110,7 @@ struct PendingReceive {
     /// The wire's `showInChat` — whether the chat LINE is spoken. It gates the line ONLY: the
     /// reference fires `ITEM_PUSH` at `0x491be8`, before the `[ebx+0x24]` test at `0x491bf3` that
     /// guards the whole chat block, so a silent push still animates. Which is why this rides in the
-    /// record instead of short-circuiting at the net bridge (decision 0887).
+    /// record instead of short-circuiting at the net bridge.
     in_chat: bool,
     /// Which bag-bar button the drop animation plays on — see [`push_container`].
     container: i64,
@@ -202,14 +202,14 @@ pub(crate) struct LootState {
     /// Whether the open loot came from fishing (the wire `loot_type == 3` — vmangos folds
     /// `FISHINGHOLE`/`FISHING_FAIL` into `LOOT_FISHING` before sending). Carried into the Lua
     /// snapshot as `IsFishingLoot()`, which `LootFrame_OnShow` keys the "FISHING REEL IN" sound
-    /// and the FishingLoot portrait overlay on (decision 1086).
+    /// and the FishingLoot portrait overlay on.
     fishing: bool,
     /// The master-loot candidates for the OPEN window (`SMSG_LOOT_MASTER_LIST`), in wire order —
-    /// the guids `GiveMasterLoot`'s 1-based candidate index resolves against (decision 1675).
+    /// the guids `GiveMasterLoot`'s 1-based candidate index resolves against.
     /// Empty under every other loot method.
     master_candidates: Vec<u64>,
     /// The row a `LOOT_BIND_CONFIRM` is currently open for — 1-based, display-side, the number the
-    /// event carried out and the number `LootSlot` must carry back (decision 1744). This is the
+    /// event carried out and the number `LootSlot` must carry back. This is the
     /// reference's `[0x847cec]`, whose `-1` is our `None`: `0x4c2790`'s click arm writes it instead
     /// of sending, and its continuation arm sends only for a slot that equals it, then clears it
     /// (`0x4c281a mov [0x847cec], 0xffffffff`). Reset with the window (`0x4c1df5`, in the
@@ -223,7 +223,7 @@ pub(crate) struct LootState {
     pending_master_candidates: Vec<u64>,
     /// The wire `loot_type` the window opened with (`SMSG_LOOT_RESPONSE`'s byte, the reference's
     /// `0x4c2740` read). The move-start close reads it: a **non-empty DISENCHANT window** (type 4)
-    /// survives movement (`0x48f24a`–`0x48f25a`, decision 2097).
+    /// survives movement (`0x48f24a`–`0x48f25a`).
     loot_type: u8,
 }
 
@@ -242,10 +242,10 @@ enum LootAction {
         wire_slot: u8,
         display_id: u32,
         /// The template entry — the key the bind-on-pickup deferral reads `bonding` and `quality`
-        /// off (decision 1744).
+        /// off.
         item_id: u32,
         /// The wire's per-row [`slot_type`]. `MASTER` diverts the click to the master-loot
-        /// dropdown instead of a take (decision 1675).
+        /// dropdown instead of a take.
         slot_type: u8,
     },
 }
@@ -370,7 +370,7 @@ impl LootState {
 
     /// The guid of the loot source whose window is open (`None` = closed). Read by the GameObject
     /// lid-close watcher ([`crate::go_anim`]) to close a chest's lid when its loot window closes
-    /// (decision 2271) — the faithful client-authoritative close, any path (player close or the
+    /// — the faithful client-authoritative close, any path (player close or the
     /// server's release on the last item).
     pub(crate) fn source(&self) -> Option<u64> {
         self.source
@@ -457,16 +457,16 @@ impl LootState {
     }
 }
 
-/// The loot player knob (decision 0961): `autoLootDefault` — era's Controls-page checkbox (no
+/// The loot player knob: `autoLootDefault` — era's Controls-page checkbox (no
 /// 1.12 CVar exists; vanilla only had the shift-click), settable from the Options window
-/// through the CVar store (0954). The reference implements auto-loot ENGINE-side (era's own
+/// through the CVar store. The reference implements auto-loot ENGINE-side (era's own
 /// Lua never reads this CVar outside its settings page), and so do we: [`feed_loot`] picks
 /// every row itself at the open edge. A held SHIFT inverts the setting — era's
 /// `AUTOLOOTTOGGLE` modified click, default SHIFT (Bindings_Vanilla.xml l.1467), the same
 /// gesture that WAS vanilla's whole auto-loot.
 ///
 /// `show_loot_spam` is 1.12's own `showLootSpam` — the *Detailed Loot Information* checkbox, whose
-/// subject is **group loot rolls**, not loot messages generally (decision 1589, the Chat page).
+/// subject is **group loot rolls**, not loot messages generally (the Chat page).
 /// It rides here rather than on [`crate::ui_loot_roll`] because it is one loot knob among the
 /// loot knobs and [`on_cvar`] writes both. The CVar is `0xb4e2bc`, registered at `0x48fd1c` with
 /// default `"1"` and flags 5, and a byte census over the whole binary finds exactly four
@@ -521,7 +521,7 @@ impl Default for LootConfig {
 pub(crate) struct LootLatch(pub(crate) Option<u64>);
 
 /// **Predicate B `0x612710`, the local-player branch** — whether the object the [`LootLatch`]
-/// currently names is one the character *kneels at* (decision 1477). The loot leg `0x5fd260` needs
+/// currently names is one the character *kneels at*. The loot leg `0x5fd260` needs
 /// predicate A (a session is open) **and** this one, and the split is the whole reason a fishing
 /// bobber does not kneel while a chest does — the latch is armed identically for both.
 ///
@@ -602,19 +602,19 @@ impl LootLatch {
 /// different mask — the cast's `0x10f0` excludes TURN, this one includes it), consumed and cleared
 /// by [`drain_loot`] the next frame, which runs `CloseInteraction 0x48f200(cl=1, dl=1, 0)`: the
 /// kneel latch clears, `CMSG_LOOT_RELEASE` goes out, the frame closes, and a dead corpse that is
-/// also the selection is deselected — at distance zero, on the first step. Decision 2097.
+/// also the selection is deselected — at distance zero, on the first step.
 ///
 /// **The loot window has no distance leash at all** (no loot target reaches the per-frame range
 /// gate `0x493230`, which refutes 2094 and the 1741 census row it rested on: that row is a dead
 /// lottery kiosk, `0x4c3eb0`). vmangos happens to release on every movement opcode too
 /// (`MovementHandler.cpp:1108`), which is why the missing client-side close was invisible on the
-/// local server and plain on cmangos (B381).
+/// local server and plain on cmangos.
 #[derive(Resource, Default)]
 pub(crate) struct LootMoveStart(pub(crate) bool);
 
 pub(crate) struct UiLootPlugin;
 
-/// The loot rows' change callback (decision 2303): two flags.
+/// The loot rows' change callback: two flags.
 pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut loot: ResMut<LootConfig>) {
     match ev.key().as_str() {
         "autolootdefault" => loot.auto_loot = ev.flag(),
@@ -684,7 +684,7 @@ fn coin_icon(copper: u32) -> &'static str {
 /// wire `display_info_id` (no template wait), name + quality from the ask-once template cache (`None`
 /// while in flight — the row shows a placeholder and fills in when the answer lands).
 ///
-/// The row's **link** (`GetLootSlotLink`, decision 1059) comes off that same one template answer, out
+/// The row's **link** (`GetLootSlotLink`) comes off that same one template answer, out
 /// of the one shared builder [`receive_line`] uses ([`crate::ui_items::item_link_full`], our
 /// transcription of `0x52adb0`) and with the same arguments: enchant `0`, the wire's own
 /// `randomPropertyId`, and suffix factor `0` — `SMSG_LOOT_RESPONSE`'s `randomSuffix` is a literal `0`
@@ -731,13 +731,13 @@ fn resolve_item(
         item_id: item.item_id,
         link,
         // The roll rides as the raw id, exactly as the client's own loot record keeps it: the
-        // tooltip resolves it against the pushed roll table (`0x52b7bf`). Decision 1547.
+        // tooltip resolves it against the pushed roll table (`0x52b7bf`).
         random_property_id: item.random_property_id,
     }
 }
 
 /// Whether any row of this open loot is still waiting on its item-template answer — the reference's
-/// outstanding-query counter `[0xb71b44]`, in predicate form (decision 1805).
+/// outstanding-query counter `[0xb71b44]`, in predicate form.
 ///
 /// A row counts as waiting while its name is absent AND the server has not yet answered at all. A
 /// **negative** answer ("no such entry") releases it: the reference's counter is decremented by the
@@ -783,7 +783,7 @@ fn snapshot(
             is_coin: true,
             item_id: 0,
             // No link: the coin pile is a synthesized row with no item behind it, so a modified
-            // click on it finds nil and does nothing (decision 1059).
+            // click on it finds nil and does nothing.
             link: None,
             random_property_id: 0,
         }));
@@ -801,7 +801,7 @@ fn snapshot(
     })
 }
 
-/// The two name sources a master-loot candidate guid can resolve through (decision 1675). The
+/// The two name sources a master-loot candidate guid can resolve through. The
 /// roster is the primary one — `SMSG_GROUP_LIST` carries every other member's name outright, so no
 /// query is needed — and the name cache covers the one guid the roster never lists: **our own**,
 /// which vmangos includes in the candidate list (`Group::MasterLoot` walks the whole group,
@@ -886,9 +886,9 @@ fn receive_line(r: &PendingReceive, name: &str, quality: u32) -> String {
 
 /// Emit any pending pushes (`SMSG_ITEM_PUSH_RESULT`) once their item template resolves — the whole
 /// `CGGameUI::OnItemPush` tail, in the reference's own order: the bag-bar drop animation first
-/// (`ITEM_PUSH(container, icon)`, fired at `0x491be8` *before* the chat block, decision 0887), then —
+/// (`ITEM_PUSH(container, icon)`, fired at `0x491be8` *before* the chat block), then —
 /// if the wire asked for it — the "You receive …" line in the chat window (decision 0084's chat arc),
-/// a `LOOT`-green line carrying a quality-coloured item link ([`receive_line`], decision 0888).
+/// a `LOOT`-green line carrying a quality-coloured item link ([`receive_line`]).
 /// Unresolved pushes retry up to [`RECEIVE_MAX_TRIES`] frames, then drop (the reference instead
 /// sleeps on the item-cache callback, so it never gives up — a stated divergence that only shows on
 /// an entry the server never answers for).
@@ -962,12 +962,12 @@ fn feed_loot(
     cfg: Res<LootConfig>,
     keys: Res<ButtonInput<KeyCode>>,
     mut pickup: MessageWriter<crate::sound::LootPickupSound>,
-    // The random-suffix roll's two catalogs (decision 1547) — the drop's "of the Monkey" name and
+    // The random-suffix roll's two catalogs — the drop's "of the Monkey" name and
     // the enchant slots 2..6 its tooltip shows. A loot slot carries no item object, so this is the
     // only source either can come from.
     props: Option<Res<crate::items::RandomProperties>>,
     enchants: Option<Res<crate::items::Enchants>>,
-    // The two master-loot candidate name sources (decision 1675) — see [`Candidates`].
+    // The two master-loot candidate name sources — see [`Candidates`].
     group: Res<GroupState>,
     names: Res<NameCache>,
 ) {
@@ -1043,7 +1043,7 @@ fn feed_loot(
                         }) if slot_type == slot_type::ALLOW_LOOT => {
                             // The sweep carries the same bind gate as a hand click, plus a
                             // ONE-SHOT latch (`0x4c21c2 test ebx,ebx; jne` → the loop's continue,
-                            // `0x4c21e2 mov ebx,1`; decision 1744): the first bind-on-pickup row
+                            // `0x4c21e2 mov ebx,1`): the first bind-on-pickup row
                             // raises the confirm, and every later one in the same sweep is left
                             // in the window untouched — not taken, not asked about. Otherwise a
                             // three-blue corpse would stack three dialogs over one pending slot.
@@ -1107,7 +1107,7 @@ fn feed_loot(
 }
 
 /// Whether taking this row must first raise `LOOT_BIND_CONFIRM` — the reference's two-conjunct
-/// gate at `0x4c28f2`/`0x4c28fb` (decision 1744). An unresolved template answers **false**: the
+/// gate at `0x4c28f2`/`0x4c28fb`. An unresolved template answers **false**: the
 /// reference peeks its own item cache here and cannot ask, and a row whose template has not landed
 /// has no name on it either, so it is not a row anyone has clicked. Asking (rather than peeking)
 /// costs nothing — the entry is already in flight from the snapshot — and keeps the answer right
@@ -1118,7 +1118,7 @@ fn bind_confirm_required(items: &Items, commands: &NetCommands, item_id: u32) ->
         .is_some_and(|t| t.bonding == BIND_WHEN_PICKED_UP && t.quality >= BIND_CONFIRM_MIN_QUALITY)
 }
 
-/// `CloseInteraction 0x48f200(cl=1, dl=1, 0)` off the movement-START guard (decision 2097),
+/// `CloseInteraction 0x48f200(cl=1, dl=1, 0)` off the movement-START guard,
 /// transcribed per loot-target type:
 ///
 /// | open loot | on the first movement start |
@@ -1165,7 +1165,7 @@ fn close_on_move_start(
 /// ([`LootState::auto_release`]): the client, not the server, releases when a removal empties the
 /// window — vmangos only ever releases in answer to our `CMSG_LOOT_RELEASE`.
 ///
-/// **This function is the reference's take dispatcher `0x4c2790(slot, flag)`** (decision 1744), and
+/// **This function is the reference's take dispatcher `0x4c2790(slot, flag)`**, and
 /// the two Lua verbs are its two flags: `BenillaTakeLootSlot` is the row click (`flag == 0`, the C
 /// `CLootButton`'s arm) and `LootSlot` is the LOOT_BIND confirmation continuation (`flag == 1`,
 /// which sends only for the pending slot). Keeping them apart is what makes a second click on a
@@ -1182,7 +1182,7 @@ fn drain_loot(
     // by then in every reachable case — the snapshot asks for it to put a NAME on the row, and a
     // row with no name is a row nobody has clicked.
     items: Res<Items>,
-    // The controller's move-start report (decision 2097) and the selection teardown the close
+    // The controller's move-start report and the selection teardown the close
     // asks for — ahead of the VM check below, because neither depends on Lua.
     mut move_start: ResMut<LootMoveStart>,
     mut deselect: MessageWriter<crate::target::DeselectGuid>,
@@ -1219,7 +1219,7 @@ fn drain_loot(
                 item_id,
                 ..
             }) => {
-                // The bind-on-pickup deferral (`0x4c28f2`-`0x4c2920`, decision 1744). Two
+                // The bind-on-pickup deferral (`0x4c28f2`-`0x4c2920`). Two
                 // conjuncts and no others: the template's `bonding == BIND_WHEN_PICKED_UP` AND its
                 // `quality >= 2` (uncommon or better) — a grey or white BoP row is taken with no
                 // confirm at all, which is why picking up a quest trinket never asks. The event
@@ -1389,7 +1389,7 @@ mod tests {
         app.world().resource::<LootKneel>().0
     }
 
-    /// **Predicate B `0x612710`, the local branch** (decision 1477).
+    /// **Predicate B `0x612710`, the local branch**.
     /// The whole row set, because the *point* of this predicate is that arming the latch is not
     /// the same question as kneeling: a fishing bobber and a chest arm it identically, and only
     /// one of them is knelt at. Without this filter, 1471's response-arm gave benilla a kneel at
@@ -1430,7 +1430,7 @@ mod tests {
         assert!(!app.world().resource::<LootKneel>().0);
     }
 
-    // ── The soulbind confirm (decision 1744) ──────────────────────────────────────────────────
+    // ── The soulbind confirm ──────────────────────────────────────────────────
     //
     // Real 1.12 `item_template` rows, read from the running vmangos rather than invented, so the
     // two conjuncts are exercised against numbers the server actually ships:
@@ -1782,7 +1782,7 @@ mod tests {
     }
 
     /// **The auto-loot sweep's one-shot latch** (`0x4c21c2 test ebx,ebx; jne` → the loop's
-    /// continue, `0x4c21e2 mov ebx,1`; decision 1744). A corpse with two bind-on-pickup blues and
+    /// continue, `0x4c21e2 mov ebx,1`). A corpse with two bind-on-pickup blues and
     /// a white: the sweep takes the white, raises ONE dialog for the first blue, and leaves the
     /// second blue in the window untouched — not taken, not asked about. Without the latch it
     /// would stack two dialogs over a single pending slot, and the second would name a row the
@@ -2182,7 +2182,7 @@ mod tests {
 
     #[test]
     fn latch_clears_guid_matched_only() {
-        // The corpse-switch race (decision 0515): loot B was requested while A's window was open;
+        // The corpse-switch race: loot B was requested while A's window was open;
         // A's release response must not drop the latch B's request just armed.
         let mut latch = LootLatch(Some(0xB));
         latch.clear_for(0xA);
@@ -2191,7 +2191,7 @@ mod tests {
         assert_eq!(latch.0, None, "the matching release drops it");
     }
 
-    /// The `IsFishingLoot()` source (decision 1086): wire `loot_type` 3 flags the open, any other
+    /// The `IsFishingLoot()` source: wire `loot_type` 3 flags the open, any other
     /// type doesn't, and every close path drops the flag (a stale `true` would reel-in-sound the
     /// next corpse loot).
     #[test]
@@ -2270,7 +2270,7 @@ mod tests {
     /// `0x5d8b00(entry, randomPropertyId)`, which joins `ItemRandomProperties`' suffix with
     /// `ITEM_SUFFIX_TEMPLATE` ("%s %s"). That holds for the loot row itself (`GetLootSlotInfo`'s
     /// `item` producer `0x4c2550` ends in that call), and the tooltip's own title line makes the
-    /// same call — so row text, tooltip plate and link agree by construction. Decision 1547.
+    /// same call — so row text, tooltip plate and link agree by construction.
     #[test]
     fn a_rolled_drop_reads_its_suffix_in_the_row_the_link_and_the_lines() {
         use benilla_formats::{RandomProperty, RandomPropertyCatalog};

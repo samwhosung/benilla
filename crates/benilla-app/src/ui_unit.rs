@@ -1,15 +1,15 @@
-//! The app-side **unit snapshot + event feed** (decision 0068 §3): the bridge that turns live ECS
+//! The app-side **unit snapshot + event feed**: the bridge that turns live ECS
 //! game state into the plain data the engine-free `Unit*` Lua bindings read, and into the WoW events
 //! that drive a frame's `OnEvent`.
 //!
-//! The architecture is deliberate (decisions 0006/0061): the Lua game-state API must **not** reach
+//! The architecture is deliberate: the Lua game-state API must **not** reach
 //! into the ECS. Instead this runs each frame, *before* the VM's tick/event dispatch
 //! ([`crate::ui_script::UiInput`]), and pushes a [`UnitState`] snapshot for each unit token into the
 //! VM via [`UiScript::set_unit`]. The `"player"` token reads our own avatar's [`ObjectStore`] (tagged
 //! [`SelfPlayer`]); `"target"` reads the [`Selection`]'s entity. Both are found by their ECS entity,
 //! not by re-deriving a guid — the ECS already owns the guid↔entity map. `"targettarget"` is the one
 //! token here that IS reached by a guid: the target's own `UNIT_FIELD_TARGET`, looked up in the same
-//! index (decision 1576).
+//! index.
 //!
 //! Names come from the [`crate::names::NameCache`] (the 1.12 wire has no descriptor names — the
 //! query-cache seam): the feed resolves each token's guid, which asks the server once on a miss and
@@ -54,7 +54,7 @@ use crate::ui_script::{gate, UiInput};
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct UnitFeed;
 
-/// One combat occurrence over a unit — the `UNIT_COMBAT` event feed (decision 0576: the portrait
+/// One combat occurrence over a unit — the `UNIT_COMBAT` event feed (the portrait
 /// hit indicator's wire; the shipped `CombatFeedback.lua` is the consumer). The one emitter
 /// `0x494600` fires
 /// `(token, action, descriptor, amount, type)` once per live token the unit maps to, with **no
@@ -79,7 +79,7 @@ pub(crate) struct UnitCombatFeedback {
     pub(crate) school: u32,
 }
 
-/// One center-combat-text message — the `COMBAT_TEXT_UPDATE` event feed (decision 0578; the
+/// One center-combat-text message — the `COMBAT_TEXT_UPDATE` event feed (the
 /// Blizzard_CombatText transcription is the consumer). Event id 0x21E, fired via the
 /// formatted SignalEvent `0x703f50` from the UnitCombatLog_C.cpp emit helpers — every producer
 /// fires **at packet parse** (the melee one too: `0x6255b0 → 0x629d30`, one call stack — NOT the
@@ -88,7 +88,7 @@ pub(crate) struct UnitCombatFeedback {
 /// `data`/`extra` mirror `arg2`/`arg3` (all strings on the real wire — the fmt is `"%s..%d.."`).
 /// Producers gate on the SELF recipient — the ref's emit is co-gated with the chat combat-log
 /// category scope (participants beyond self CAN fire it there); the exact participant rule is an
-/// open residual (decision 0580), and self-only is the display-equivalent conservative cut.
+/// open residual, and self-only is the display-equivalent conservative cut.
 #[derive(Message, Clone)]
 pub(crate) struct CombatTextEvent {
     pub(crate) message_type: &'static str,
@@ -98,7 +98,7 @@ pub(crate) struct CombatTextEvent {
 
 /// The feed's change-tracking memory: what we last told the VM, plus one server-side log-once.
 ///
-/// **`PLAYER_LEAVING_WORLD` on a cross-map worldport** (decision 2235, corrected by 2238).
+/// **`PLAYER_LEAVING_WORLD` on a cross-map worldport** (corrected by 2238).
 ///
 /// The reference fires event `0x111` at `0x490b48`, inside `0x490a80`. A census of both
 /// signal helpers puts the id at exactly one site image-wide — 336/336 ids resolved through
@@ -188,7 +188,7 @@ fn fire_leaving_world_on_worldport(
 struct UnitFeedState {
     /// What we last told the VM — dies with the VM it was told to.
     vm: crate::ui_script::VmMemo<UnitFeedMemo>,
-    /// Whether we have already warned that our own faction template names no side (decision 0657).
+    /// Whether we have already warned that our own faction template names no side.
     /// Re-arms when a side resolves again, so a `.gm on` / `.gm off` cycle logs once each way.
     /// **Server memory, not VM memory** — deliberately outside the memo: a `/reload` must not
     /// re-log the GM-mode warning.
@@ -212,8 +212,8 @@ struct UnitFeedMemo {
     /// the XP bar's feed is a player-global (like coinage), not a per-unit-token field.
     last_xp: Option<(u32, u32)>,
     /// The last `(restState, restPool, PLAYER_FLAGS)` triple pushed, for the `UPDATE_EXHAUSTION`,
-    /// `PLAYER_UPDATE_RESTING` and `PLAYTIME_CHANGED` triggers — player-globals like the XP pair
-    /// (decisions 1082/1087/2078). Pushed as one snapshot so
+    /// `PLAYER_UPDATE_RESTING` and `PLAYTIME_CHANGED` triggers — player-globals like the XP pair.
+    /// Pushed as one snapshot so
     /// `GetRestState`/`GetXPExhaustion`/`IsResting` never read it half-updated.
     ///
     /// The whole flags dword is kept because the two flag events read **different bits of it**
@@ -225,14 +225,14 @@ struct UnitFeedMemo {
     last_level: Option<u32>,
     /// The last `(count, banked-target guid)` pair pushed, for the `PLAYER_COMBO_POINTS` trigger —
     /// player-globals (`PLAYER_FIELD_BYTES` byte 1 + `PLAYER_FIELD_COMBO_TARGET`), not per-unit-
-    /// token fields. Diffed as a pair because the server writes them as one (decision 0875).
+    /// token fields. Diffed as a pair because the server writes them as one.
     last_combo: Option<(u8, u64)>,
     /// The self unit's last in-combat flag, for the `PLAYER_REGEN_DISABLED`/`ENABLED` triggers
     /// (`None` until first seen — first sight fires only when already IN combat, so logging in
     /// at peace never announces "Leaving Combat").
     in_combat: Option<bool>,
-    /// The self unit's last `PLAYER_FLAGS_PVP_DESIRED` bit, for the toggle announcement
-    /// (decision 0652). `None` until first seen: the reference reacts to a *changed*-bits mask, so
+    /// The self unit's last `PLAYER_FLAGS_PVP_DESIRED` bit, for the toggle announcement.
+    /// `None` until first seen: the reference reacts to a *changed*-bits mask, so
     /// the descriptor that first carries the flag at login announces nothing.
     pvp_desired: Option<bool>,
     /// The self unit's last `(HIDE_HELM, HIDE_CLOAK)` pair, for the worn-display push (decision
@@ -460,7 +460,7 @@ fn load_default_languages(
     }
 }
 
-/// **The player's default language goes into the VM at its birth** (decision 2241, through the
+/// **The player's default language goes into the VM at its birth** (through the
 /// seam 2240 established) — because `GetDefaultLanguage()` is read *inside* the load burst, and
 /// until now the answer during that burst was `nil` and then a race.
 ///
@@ -601,7 +601,7 @@ fn melee_feedback(hit_info: u32, victim_state: u32, damage: u32) -> (&'static st
 /// channel for. Every victim qualifies (no Gate A, no source class on the portrait path); token
 /// resolution happens in [`fire_unit_combat`], so a swing on an un-tokened bystander simply
 /// fires nothing. The center combat text does NOT ride here — the client fires it synchronously
-/// at packet parse (decision 0580; the producer lives in `net/apply/combat.rs`).
+/// at packet parse (the producer lives in `net/apply/combat.rs`).
 fn melee_unit_combat(
     mut impacts: MessageReader<crate::creature_anim::SwingImpact>,
     mut out: MessageWriter<UnitCombatFeedback>,
@@ -753,8 +753,8 @@ pub(crate) fn race_faction_group(race: u8) -> Option<&'static str> {
 ///   A GM's race does not change, so the reference names his rank exactly as it always did.
 ///
 /// We had the second wired to the first, which is why a Grand Marshal's Honor tab read `NONE` on
-/// a GM-flagged account while the 1.12 client on the same server read "Grand Marshal"
-/// (decision 2227). Every `0x5efe00` caller is race-derived: `GetPVPRankInfo`'s team
+/// a GM-flagged account while the 1.12 client on the same server read "Grand Marshal".
+/// Every `0x5efe00` caller is race-derived: `GetPVPRankInfo`'s team
 /// (`0x51a9af`/`0x51a9c8`), `UnitPVPName`'s rank decoration (`0x5efe60`), the battlefield
 /// scoreboard's per-row side (`0x4aa200`, which inlines the same walk off the name-cache record).
 ///
@@ -780,7 +780,7 @@ pub(crate) fn race_pvp_team(race: u8) -> i8 {
 /// `None`.
 ///
 /// Shared by every popup verb that acts on another player: trade's `InitiateTrade` (decision 0592
-/// P1) and inspect's `NotifyInspect` (decision 0631) both need exactly this step, so it lives here
+/// P1) and inspect's `NotifyInspect` both need exactly this step, so it lives here
 /// rather than once per window.
 pub(crate) fn player_token_guid(
     token: &str,
@@ -856,7 +856,7 @@ impl UnitTokens<'_, '_> {
             "player" => self.me(),
             "target" => selection.target.zip(selection.guid),
             // The target's own target, one hop off `UNIT_FIELD_TARGET` — the read `/assist` and
-            // the `"targettarget"` snapshot both run (decision 1576).
+            // the `"targettarget"` snapshot both run.
             "targettarget" => selection
                 .target
                 .and_then(|e| self.stores.get(e).ok())
@@ -978,7 +978,7 @@ fn feed_farsight_focus(
 ///
 /// - *attackable* — vmangos's inspect refusal (`IsValidAttackTarget`, `MiscHandler.cpp:945-956`).
 ///   Keeping the token out of the map instead would make `CheckInteractDistance` — a pure distance
-///   test in the binary — gray Follow and Duel on an enemy player the reference leaves live (B316).
+///   test in the binary — gray Follow and Duel on an enemy player the reference leaves live.
 /// - *is a player* — vmangos's other one (`sObjectMgr.GetPlayer`). This is the leg that was applied
 ///   at the token and was report **B304**: a creature `"target"` never entered the map, so the
 ///   30-yard rung Quiver's Dead Zone band reads answered a constant for every mob — "in range" at
@@ -1053,7 +1053,7 @@ pub(crate) struct UnitStores<'w, 's> {
     /// fading model keeps the store another two seconds ([`crate::net::tear_down`]), and a
     /// despawn removes both.
     removed: RemovedComponents<'w, 's, Guid>,
-    /// The per-field edges this run (decision 2297) — [`fire_transitions`]' three mirror-diff
+    /// The per-field edges this run — [`fire_transitions`]' three mirror-diff
     /// arms fire off these, per token naming the moved unit.
     edges: MessageReader<'w, 's, FieldChanged>,
 }
@@ -1084,14 +1084,14 @@ pub(crate) fn snapshot(
         // literally and get `false` from `Default`, which is the correct out-of-range answer.
         has_object: true,
         name,
-        // The UI-facing health/power getters, not the raw fields (decision 1022): a unit carrying
+        // The UI-facing health/power getters, not the raw fields: a unit carrying
         // `UNIT_DYNFLAG_DEAD` — a feigning hunter — answers 0 to `UnitHealth 0x5174d0` and
         // `UnitMana 0x517670`, while the *max* getters stay ungated, so its bars read 0/max (empty)
         // for itself and for everyone watching. The zeroes ride the ordinary per-field diff in
         // [`fire_transitions`], which fires `UNIT_HEALTH` + the power event on the flag's edge —
         // exactly the pair the reference's `UNIT_DYNAMIC_FLAGS` watcher fires there
         // (`0x6004c5`/`0x6004f0`, event `0x10` and `0x11 + powerType`). The power pair also carries
-        // the raw→display divide the same two getters do (decision 1034) — rage rides the wire ×10
+        // the raw→display divide the same two getters do — rage rides the wire ×10
         // and pet happiness ×1000, so these are the numbers the reference shows, not the wire's.
         health: store.0.unit_shown_health().unwrap_or(0),
         max_health: store.0.unit_max_health().unwrap_or(0),
@@ -1102,7 +1102,7 @@ pub(crate) fn snapshot(
         // `UnitIsDead 0x517ac0` — health ≤ 0 **or** the dead-looking flag, so a feigning unit is
         // dead to the API, to the target frame's DEAD text and to the greyed portrait alike.
         dead: store.0.unit_reads_dead(),
-        // The released-ghost predicate (decision 0308 §1): PLAYER_FLAGS bit 0x10 — a ghost's
+        // The released-ghost predicate: PLAYER_FLAGS bit 0x10 — a ghost's
         // health is 1, so `dead` above is false for it. Zero/absent on creatures.
         ghost: store.0.player_is_ghost(),
         // `UnitIsCharmed 0x516cf0` — `UNIT_FIELD_CHARMEDBY != 0`, the same field `ui_aura`'s
@@ -1117,7 +1117,7 @@ pub(crate) fn snapshot(
         // TYPEMASK_PLAYER restriction achieves there: a non-player has no PLAYER block at all, so
         // the field simply reads absent.
         group_leader: store.0.player_is_group_leader(),
-        // The raw `PLAYER_FLAGS` dword `PLAYER_FLAGS_CHANGED` fires on (decision 2078) — the
+        // The raw `PLAYER_FLAGS` dword `PLAYER_FLAGS_CHANGED` fires on — the
         // `flags`/`UNIT_FLAGS` pattern one field over. Absent on a creature, which reads 0 and so
         // can never produce a delta, exactly as the reference's TYPEID_PLAYER-scoped watcher
         // cannot be registered against one.
@@ -1167,12 +1167,12 @@ pub(crate) fn snapshot(
         // that idiom finds the local-player readers reading this identical bit, so there is no
         // player-specific combat latch to model beside it.
         in_combat: store.0.unit_flags() & crate::player::UNIT_FLAG_IN_COMBAT != 0,
-        // Free-for-all PvP (decision 0646 §1): `PLAYER_FLAGS` bit 7, the same field the ghost
+        // Free-for-all PvP: `PLAYER_FLAGS` bit 7, the same field the ghost
         // predicate above reads (vmangos `Player.h:322` `PLAYER_FLAGS_FFA_PVP`, cross-read against
         // 0633's byte-level `[+0xe68]+8` bit-7). Zero on creatures, which have no PLAYER_FLAGS —
         // and `UnitIsPVPFreeForAll` is false for them in the reference too.
         is_pvp_ffa: store.0.player_flags() & 0x80 != 0,
-        // The unit's CURRENT honor rank (decision 1512): `PLAYER_BYTES_3` byte 3, on the internal
+        // The unit's CURRENT honor rank: `PLAYER_BYTES_3` byte 3, on the internal
         // 0..=18 scale. It sits in `snapshot` — not in the caller's guid-keyed enrichment like
         // `faction_group` — because it needs nothing but the descriptor, and because it is PUBLIC:
         // the server streams it for every player in view, which is the only reason the inspect
@@ -1220,13 +1220,13 @@ pub(crate) fn enrich_unit(
     };
     // The ask-once creature record — `CGUnit+0xb30`, filled from `SMSG_CREATURE_QUERY_RESPONSE`.
     // `None` is the round trip before the answer lands, and it is a REAL state the plate is drawn
-    // in, not a "nothing is known yet" to render blank: the name reads `UNKNOWNOBJECT` there
-    // (decision 2040), and the lines below split on exactly what the record does or does not gate.
+    // in, not a "nothing is known yet" to render blank: the name reads `UNKNOWNOBJECT` there,
+    // and the lines below split on exactly what the record does or does not gate.
     let rec = names.creature_record(entry);
     if let Some(rec) = rec {
         state.subtitle = rec.subname.clone();
         state.creature_type_name = creature_type_word(rec.creature_type).map(str::to_string);
-        // The client's one rank getter, both gates (`gated_rank`, decision 0782) — never `rec.rank`
+        // The client's one rank getter, both gates (`gated_rank`) — never `rec.rank`
         // directly: an enslaved elite reads rank 0, so it loses its border dragon, its ELITE
         // tooltip word and its world-boss skull together, exactly as in the reference.
         state.rank = crate::names::gated_rank(Some(rec), Some(store));
@@ -1260,7 +1260,7 @@ pub(crate) fn enrich_unit(
     }
 }
 
-/// Drain the `TogglePVP` intents into `CMSG_TOGGLE_PVP` (decision 0646 §3) — `/pvp` is the only
+/// Drain the `TogglePVP` intents into `CMSG_TOGGLE_PVP` — `/pvp` is the only
 /// caller the reference has (`SlashCmdList["PVP"]`), and the only one we have.
 ///
 /// This rides the unit feed's plugin rather than a `ui_pvp` of its own: the family's whole client
@@ -1329,19 +1329,19 @@ const PLAYER_FLAGS_RESTING: u32 = 0x20;
 const PLAYER_FLAGS_PARTIAL_PLAY_TIME: u32 = 0x1000;
 const PLAYER_FLAGS_NO_PLAY_TIME: u32 = 0x2000;
 
-/// The PvP-preference announcement rule (decision 0652): the `(toast, verbose)` **GlobalStrings
+/// The PvP-preference announcement rule: the `(toast, verbose)` **GlobalStrings
 /// keys** on a real change of the bit, `None` otherwise.
 ///
 /// `was: None` is first sight and stays silent — the reference's handler is driven by a
 /// *changed-bits* mask (`new ^ old`), so the descriptor that first carries the flag at login says
 /// nothing.
 ///
-/// **Keys, not sentences** (decision 2045), and the pair rides two different routes because the
+/// **Keys, not sentences**, and the pair rides two different routes because the
 /// reference gives them two different natures. `ERR_PVP_TOGGLE_ON`/`_OFF` are message-catalog rows
 /// (437/438, `kind 1` — the yellow `UI_INFO_MESSAGE`), so the catalog names their surface;
 /// `PVP_TOGGLE_ON_VERBOSE`/`_OFF_VERBOSE` are **not** catalog rows at all, so there is no record to
 /// read a kind or a sound off and the chat surface is the handler's own — the `/ginfo` shape
-/// (`ui_guild::feed::ginfo_lines`, decision 2054). Both are argument-free, so there is no fill step.
+/// (`ui_guild::feed::ginfo_lines`). Both are argument-free, so there is no fill step.
 fn pvp_announcement(was: Option<bool>, now: bool) -> Option<(&'static str, &'static str)> {
     if was? == now {
         return None;
@@ -1353,7 +1353,7 @@ fn pvp_announcement(was: Option<bool>, now: bool) -> Option<(&'static str, &'sta
     })
 }
 
-/// The rest-state chat line (decision 1098): the rest-state BYTE watcher `0x5de4e0` messages
+/// The rest-state chat line: the rest-state BYTE watcher `0x5de4e0` messages
 /// only on a real old≠new transition (the
 /// dispatcher's `rep cmpsb` mirror diff at `0x4655bb`), through the hard-coded 3×2 pair table
 /// `0x80af50` — state 1 → `ERR_EXHAUSTION_RESTED`, state 2 → `ERR_EXHAUSTION_NORMAL`, state 0 →
@@ -1361,7 +1361,7 @@ fn pvp_announcement(was: Option<bool>, now: bool) -> Option<(&'static str, &'sta
 /// (`cmp esi,3; jae`), so the beta tiers never speak even though their strings ship.
 ///
 /// The table holds **message ids**, so the answer here is the row's key and the catalog decides the
-/// rest (decision 2045): rows 346/347 are `kind 0` — a plain SYSTEM chat line, never UIErrorsFrame
+/// rest: rows 346/347 are `kind 0` — a plain SYSTEM chat line, never UIErrorsFrame
 /// — with no cue and `type_tag 0x44`, so no voice either. Entering rested also arms a one-shot
 /// tutorial popup (id 0x19) — the tutorial system isn't built, a named cut.
 fn rest_state_message(prev: u8, new: u8) -> Option<&'static str> {
@@ -1435,7 +1435,7 @@ fn creature_type_word(t: u32) -> Option<&'static str> {
 /// Diff a token's fresh snapshot against the last one pushed and fire the per-field Era events.
 /// `prev = None` (the token just appeared) treats every present field as a transition — except
 /// the three arms that are the reference's per-field watch bridge, which fire off `edges`, the
-/// descriptor edges this run (decision 2297): those fire per token naming a unit whose dword
+/// descriptor edges this run: those fire per token naming a unit whose dword
 /// moved, and a unit's create moves nothing.
 pub(crate) fn fire_transitions(
     script: &mut UiScript,
@@ -1501,8 +1501,7 @@ pub(crate) fn fire_transitions(
     // token count, so a remote player who is nobody's target, mouseover, party or raid member
     // announces **nothing** to the VM — the handler still runs, and its helm/cloak arms above the
     // gate still repaint them, but no event is signalled. This feed gets that for nothing by
-    // construction: it is only ever called *per token*, so a tokenless player is never reached
-    // (decision 2078).
+    // construction: it is only ever called *per token*, so a tokenless player is never reached.
     //
     // Off the field edge for the same reason `UNIT_FLAGS` is: this is a mirror-diff watcher,
     // and a unit's first snapshot is its CREATE, which runs no notify pass (1098 §4).
@@ -1562,7 +1561,7 @@ pub(crate) fn fire_transitions(
     if prev.is_none_or(|p| p.name != cur.name) {
         script.fire_event("UNIT_NAME_UPDATE", vec![tok()]);
     }
-    // UNIT_CLASSIFICATION_CHANGED (decision 0782) — the target frame's border-art repaint wire, and
+    // UNIT_CLASSIFICATION_CHANGED — the target frame's border-art repaint wire, and
     // the only frame that registers it in the reference. Edge-fired on the gated rank, which IS the
     // classification (`classification_word` is a pure table index), so this fires exactly when the
     // border would change: the creature query landing on a freshly-seen elite, and a mob being
@@ -1571,7 +1570,7 @@ pub(crate) fn fire_transitions(
     if prev.is_none_or(|p| p.rank != cur.rank) {
         script.fire_event("UNIT_CLASSIFICATION_CHANGED", vec![tok()]);
     }
-    // UNIT_FACTION (decision 0646 §2) — the PvP-icon repaint wire, fired on the three fields the
+    // UNIT_FACTION — the PvP-icon repaint wire, fired on the three fields the
     // icon law reads. Exactly the three frames that draw the icon register it in the reference
     // (player, target, party member) and nothing else does. Edge-fired, so the player frame's
     // `igPVPUpdate` sounds once per flag change rather than once per repaint.
@@ -1624,15 +1623,15 @@ fn feed_units(
     // The chat window AND the message-sound queue, because this feed shows catalog messages (the
     // rest-state pair, the PvP toggle) and `show_messages` writes both on every line.
     mut sink: crate::ui_action::MessageSink,
-    // The guild-identity cache `GetGuildInfo(unit)` reads — `ResMut` because it is a LAZY cache
-    // (decision 1257): a lookup that misses is what sends the `CMSG_GUILD_QUERY`, exactly as a
+    // The guild-identity cache `GetGuildInfo(unit)` reads — `ResMut` because it is a LAZY cache:
+    // a lookup that misses is what sends the `CMSG_GUILD_QUERY`, exactly as a
     // `NameCache::resolve` miss sends the name query above.
     mut guild: ResMut<crate::ui_guild::GuildState>,
     // The NPC the player is interacting with, for the `"npc"` token below. `Option` for the same
     // reason `index` and `factions` are: a UI-only harness runs this feed with no session plugin.
     interact: Option<Res<crate::ui_session::InteractNpc>>,
     // The account's rested billing minutes ride the world-enter message, which is the only moment
-    // they ever arrive (decision 1820): the value comes off `SMSG_AUTH_RESPONSE` and the reference
+    // they ever arrive: the value comes off `SMSG_AUTH_RESPONSE` and the reference
     // parks it in a process-lifetime global. `MessageReader` rather than a resource because it is
     // an EDGE, and it is read here rather than in a system of its own because this feed already
     // holds the script.
@@ -1672,7 +1671,7 @@ fn feed_units(
     // The interaction NPC is an input of the `"npc"` snapshot below, and it moves on frames
     // nothing else does: a vendor window opening or swapping to a second vendor changes no
     // descriptor, no selection, no group. Without this term such a frame skipped the whole
-    // feed and the window's own `MERCHANT_SHOW` handler read the previous NPC (decision 2022).
+    // feed and the window's own `MERCHANT_SHOW` handler read the previous NPC.
     let interact_changed = interact.as_ref().is_some_and(|r| r.is_changed());
     gate::trace(
         "feed_units",
@@ -1731,13 +1730,13 @@ fn feed_units(
         s.faction_group = faction_group(store, factions.as_deref());
         s.faction_group_localized = faction_group_localized(store, factions.as_deref());
         // `GetGuildInfo("player")` — the unit's own PUBLIC descriptor fields (191/192) joined
-        // against the app's guild-identity cache, which the miss also asks for (decision 1257).
+        // against the app's guild-identity cache, which the miss also asks for.
         // Filled here rather than in `snapshot` for the reason `faction_group` and `can_attack`
         // are: it needs a resource, and `snapshot`'s other six call sites hold none.
         s.guild = crate::ui_guild::unit_guild(&store.0, &mut guild, &commands);
         s
     });
-    // The GM-mode confound, made audible (decision 0657). A self player whose faction template
+    // The GM-mode confound, made audible. A self player whose faction template
     // names no side is almost always GM mode: vmangos swaps a GM to faction template 35, whose
     // `FactionTemplate.dbc` group mask is 0, and every faction-derived surface then has no side to
     // draw — the PvP flag icon most visibly, which simply hides. That is faithful (the only side
@@ -1788,7 +1787,7 @@ fn feed_units(
         s.raid_target = group.raid_target_index(guid);
         s.faction_group = faction_group(store, factions.as_deref());
         s.faction_group_localized = faction_group_localized(store, factions.as_deref());
-        // The byte-confirmed CanAttack 0x606980 (decision 0172) — the same predicate TAB and the
+        // The byte-confirmed CanAttack 0x606980 — the same predicate TAB and the
         // combat flash run; `UnitCanAttack("player","target")` gates the target frame's
         // difficulty-colored level (ref TargetFrame_CheckLevel).
         s.can_attack = crate::target::can_attack(
@@ -1954,8 +1953,8 @@ fn feed_units(
     // first frame paints the last NPC's name. **The memo is written here, not only read**: for
     // its first eight days this diff compared against a row nothing ever inserted, so a `Some`
     // re-pushed every frame and a `None` never cleared — `UnitExists("npc")` stayed true after
-    // the window closed, and the stale name was what the next window's first frame painted
-    // (decision 2022). No `fire_transitions` leg: the reference's watch bridge fires `UNIT_*`
+    // the window closed, and the stale name was what the next window's first frame painted.
+    // No `fire_transitions` leg: the reference's watch bridge fires `UNIT_*`
     // for the frames that draw a unit, and nothing draws `"npc"` as a unit frame.
     let npc_dirty = match (&npc, memo.last.get("npc")) {
         (Some(cur), Some(prev)) => cur != prev,
@@ -1991,7 +1990,7 @@ fn feed_units(
         }
     }
 
-    // The rest feed (decisions 1082/1087/2078): the `PLAYER_BYTES_2` rest-state byte, the
+    // The rest feed: the `PLAYER_BYTES_2` rest-state byte, the
     // `PLAYER_REST_STATE_EXPERIENCE` pool and PLAYER_FLAGS, pushed as one snapshot. Runs before
     // the PLAYER_ENTERING_WORLD fire below, like the XP push: in the real client the descriptor
     // always lands before that event, so the first paint reads real state — the model's byte-2
@@ -2008,7 +2007,7 @@ fn feed_units(
     // 5eead6..5eeaed              tutorial popup 0x4b5390(0x1d), only if the bit is now SET
     // 5eeaf2  b9 95 01 00 00 / e8 …  mov ecx,0x195 ; call 0x703e50   <- PLAYER_UPDATE_RESTING
     // 5eeafc  ...
-    // 5eeaff  f6 c4 02      test ah,0x2              ; bit 0x200, the PvP-desired arm (0652)
+    // 5eeaff  f6 c4 02      test ah,0x2              ; bit 0x200, the PvP-desired arm
     // 5eeb65  f6 c4 30      test ah,0x30             ; bits 0x1000|0x2000, the play-time regimes
     // 5eeb6f  e8 …          call 0x703e50 (ecx=0x212) <- PLAYTIME_CHANGED
     // ```
@@ -2045,7 +2044,7 @@ fn feed_units(
             if prev.map(|p| (p.0, p.1)) != Some((rest.0, rest.1)) {
                 script.fire_event("UPDATE_EXHAUSTION", vec![]);
             }
-            // "You feel rested." / "You feel normal." (decision 1098): the BYTE watcher alone
+            // "You feel rested." / "You feel normal.": the BYTE watcher alone
             // messages, and only on a real transition — `prev` None is the login descriptor,
             // which the real client's fresh-CREATE path never runs through the notify pass
             // (byte-verified: login is structurally silent). The pool watcher never messages.
@@ -2066,7 +2065,7 @@ fn feed_units(
                 // PLAYTIME_CHANGED (id 530) — `0x5eeb65 test ah,0x30`, argless, self-only. Stock
                 // `PlayerFrame.lua:23` registers it and `PlayerFrame_UpdatePlaytime` reads
                 // `PartialPlayTime()`/`NoPlayTime()`, both of which we already feed off this very
-                // snapshot; the event was the one missing half. Decision 2078.
+                // snapshot; the event was the one missing half.
                 if moved & (PLAYER_FLAGS_PARTIAL_PLAY_TIME | PLAYER_FLAGS_NO_PLAY_TIME) != 0 {
                     script.fire_event("PLAYTIME_CHANGED", vec![]);
                 }
@@ -2196,7 +2195,7 @@ fn feed_units(
         // The worn-display pair is a player-global like the rest, and forgetting it is what makes
         // the next character's preference reach the VM at all: the push is an EDGE, so a memo
         // carrying the last body's bits would silently skip a new body that happens to disagree
-        // with the VM's fresh "both shown" default (decision 1472).
+        // with the VM's fresh "both shown" default.
         memo.worn_hidden = None;
         // Same reason as the worn-display pair: the push is an EDGE, so a memo carrying the last
         // body's byte would skip a new character whose own toggles happen to match it — and this
@@ -2237,7 +2236,7 @@ fn feed_units(
 
     // PLAYER_REGEN_DISABLED/ENABLED: the self in-combat flag transition (`UNIT_FIELD_FLAGS`
     // bit `UNIT_FLAG_IN_COMBAT 0x00080000`, vmangos `UnitDefines.h:564`) — the center combat
-    // text's ENTERING/LEAVING_COMBAT feed (decision 0578; the trigger is PROVISIONAL pending
+    // text's ENTERING/LEAVING_COMBAT feed (the trigger is PROVISIONAL pending
     // the COMBAT_TEXT_UPDATE emission pin).
     if let Some((store, _)) = self_pair {
         let in_combat = store.0.unit_flags() & 0x0008_0000 != 0;
@@ -2258,7 +2257,7 @@ fn feed_units(
         }
     }
 
-    // The PvP toggle's own feedback (decision 0652). The reference's local-player PLAYER_FLAGS
+    // The PvP toggle's own feedback. The reference's local-player PLAYER_FLAGS
     // change handler reacts to the PVP_DESIRED bit — and to nothing else about PvP — with two
     // lines: a yellow UI_INFO_MESSAGE toast, then the verbose sentence as a system chat line. It is
     // keyed on the *preference*, not on the flag the icon draws, which is exactly why it matters:
@@ -2294,7 +2293,7 @@ fn feed_units(
         memo.pvp_desired = Some(desired);
     }
 
-    // The worn-display pair (decision 1472): `PLAYER_FLAGS`' two hide bits, mirrored into the VM
+    // The worn-display pair: `PLAYER_FLAGS`' two hide bits, mirrored into the VM
     // so `ShowingHelm()`/`ShowingCloak()` — the Options rows' getters — read the server's truth.
     // On the EDGE, not per frame: the setter flips the VM's belief the instant the box is clicked,
     // and the descriptor only catches up a round trip later. Re-pushing the stale pair in between
@@ -2309,13 +2308,13 @@ fn feed_units(
     }
 
     // The combo-point feed: `PLAYER_FIELD_BYTES` byte 1 and the `PLAYER_FIELD_COMBO_TARGET` GUID
-    // it is banked against, both PRIVATE, pushed as the pair the server writes (0869, 0875).
+    // it is banked against, both PRIVATE, pushed as the pair the server writes.
     //
     // Both halves are PUSHED whenever either moves — `GetComboPoints` reads both, so a stale
     // target would make it lie on the next call. Only the COUNT fires the event: the client's
     // `PLAYER_COMBO_POINTS` (event 202, `0x5ddff0`) is registered at `0x5dd9d9` as a **one-byte
     // field-change watch on `+0x1029`** and nothing else — the combo-target field has no watch of
-    // its own (0879). The watch carries no value test, so it fires on the drop back to zero too,
+    // its own. The watch carries no value test, so it fires on the drop back to zero too,
     // which is the edge `ComboFrame` needs to hide itself when the server's 4 s
     // `REACTIVE_OVERPOWER` timer clears the point.
     //
@@ -2343,7 +2342,7 @@ fn feed_units(
 ///
 /// The two halves diverge because the client's watches do. Event 202 is registered at `0x5dd9d9`
 /// as a **one-byte field-change watch on `+0x1029`** — the count — and `PLAYER_FIELD_COMBO_TARGET`
-/// carries no watch of its own (decision 0879). So a re-bank onto a different unit at
+/// carries no watch of its own. So a re-bank onto a different unit at
 /// an unchanged count moves the *value* `GetComboPoints` reads without announcing itself, and the
 /// UI hears about it through `PLAYER_TARGET_CHANGED` instead. The watch has no value test, so the
 /// drop back to zero fires like any other change — the edge that takes the dots down.
@@ -2664,7 +2663,7 @@ mod tests {
     }
 
     /// **`PLAYER_FLAGS_CHANGED` — the event a migrated stock window listened for and nothing
-    /// fired** (decision 2078), pinned on the three properties that make it what it is.
+    /// fired**, pinned on the three properties that make it what it is.
     ///
     /// The gap was invisible from both ends, which is 1819's shape exactly: `TargetFrame.lua`
     /// registered the name and this feed never spoke it, so the target frame's party-leader icon
@@ -2738,7 +2737,7 @@ mod tests {
         assert!(fired(Some(with(0x1)), with(0x1), &still).is_empty());
     }
 
-    /// **`UNIT_DYNAMIC_FLAGS` — an event benilla had never fired at all** (decision 2140).
+    /// **`UNIT_DYNAMIC_FLAGS` — an event benilla had never fired at all**.
     ///
     /// Same bridge, same shape, the third of the three raw-dword arms: id 137 is the unit-window
     /// index of descriptor field 143, the name-table slot for 137 has exactly one writer in the
@@ -2797,7 +2796,7 @@ mod tests {
     }
 
     /// **The two SELF-ONLY arms of the same handler, each on its own bits** — the half that was
-    /// over-firing, and the half that was missing (decision 2078).
+    /// over-firing, and the half that was missing.
     ///
     /// `0x5ee990`'s local-GUID gate at `0x5eea93` divides it: `PLAYER_FLAGS_CHANGED` above (any
     /// player), and below it three arms that each carry their own `test` against the XOR-diff.
@@ -2818,7 +2817,7 @@ mod tests {
             .init_resource::<crate::ui_party::GroupState>()
             .init_resource::<crate::ui_chat::ChatLog>()
             // The feed's `MessageSink` is chat + sounds since the PvP/rest lines became message
-            // KEYS (decision 2080): the row a key names carries the cue, so the sink reads both.
+            // KEYS: the row a key names carries the cue, so the sink reads both.
             .init_resource::<crate::sound::MessageSounds>()
             .init_resource::<crate::ui_guild::GuildState>();
         let (tx, _rx) = crossbeam_channel::unbounded();
@@ -3049,7 +3048,7 @@ mod tests {
     }
 
     /// The combo feed pushes on either half moving but speaks only for the count — the client's
-    /// watch is on that byte alone (decision 0879).
+    /// watch is on that byte alone.
     #[test]
     fn only_the_count_fires_the_combo_event() {
         const A: u64 = 0xF130_0000_0000_0001;
@@ -3078,7 +3077,7 @@ mod tests {
         );
     }
 
-    /// **A feigning hunter's frame reads as a corpse's** (decision 1022) — the symptom the whole
+    /// **A feigning hunter's frame reads as a corpse's** — the symptom the whole
     /// change exists for: the wire says nothing but `UNIT_DYNFLAG_DEAD`, and the snapshot has to
     /// turn that into empty bars against a real maximum plus `UnitIsDead`. Asserted through
     /// `snapshot` rather than the field getters (which have their own byte-law test) because what
@@ -3146,7 +3145,7 @@ mod tests {
         );
     }
 
-    /// The rank getter's two gates (`0x605620`, decision 0782) as they reach a snapshot. The pet
+    /// The rank getter's two gates (`0x605620`) as they reach a snapshot. The pet
     /// gate is the interesting half: a charmed or enslaved elite reports rank 0, so it loses its
     /// dragon border AND its ELITE tooltip word AND (at rank 3) its world-boss skull together.
     /// Asserted through `enrich_unit` rather than `gated_rank` directly, because the thing that
@@ -3203,7 +3202,7 @@ mod tests {
         assert_eq!(s.rank, 0, "an un-queried creature has no classification");
     }
 
-    /// **The faction-name line does not wait for the creature query** (decision 2040).
+    /// **The faction-name line does not wait for the creature query**.
     ///
     /// Its entry gate `0x612610` reads `[unit+0xb30]` and **returns 1 when there is none** — the
     /// leg a PLAYER takes through a gate whose only field lives in CreatureInfo, and the leg a
@@ -3296,10 +3295,10 @@ mod tests {
         );
     }
 
-    /// The PvP-preference announcement law (decision 0652), as the reference's changed-bits handler
+    /// The PvP-preference announcement law, as the reference's changed-bits handler
     /// runs it: silent on first sight, one pair of KEYS per real edge.
     ///
-    /// The assertion is on the identifiers, never the sentences (decision 2045) — an English
+    /// The assertion is on the identifiers, never the sentences — an English
     /// comparison passes exactly where two keys agree in enUS and diverge everywhere else. The
     /// wording lives in the player's own `GlobalStrings.lua` and is checked against it by
     /// [`the_pvp_and_rest_keys_resolve_in_the_real_global_strings`].
@@ -3355,7 +3354,7 @@ mod tests {
         }
     }
 
-    /// The rest-state chat law (decision 1098; the watcher `0x5de4e0`): a message needs a real byte
+    /// The rest-state chat law (the watcher `0x5de4e0`): a message needs a real byte
     /// TRANSITION, and only states 1/2 speak — state 0 is the pair table's no-message sentinel,
     /// the beta tiers (≥3) are gated off before the table, and a re-send of the same byte is
     /// swallowed by the dispatcher's mirror diff.
@@ -3388,7 +3387,7 @@ mod tests {
     }
 
     /// The `"npc"` token follows the interaction NPC on the frame it moves — including a frame
-    /// on which NOTHING else moves — and is cleared when the window closes (decision 2022). The
+    /// on which NOTHING else moves — and is cleared when the window closes. The
     /// legs are the vendor-swap probe's first run, in order: a second vendor opened over an
     /// open window kept the first vendor's snapshot (the dirty gate had no interact input), and
     /// a closed window left `UnitExists("npc")` true (the memo row was never written). The
@@ -3473,7 +3472,7 @@ mod tests {
         );
     }
 
-    /// **`PLAYER_LEAVING_WORLD` fires on a cross-map worldport, and only on one** (decision 2235).
+    /// **`PLAYER_LEAVING_WORLD` fires on a cross-map worldport, and only on one**.
     ///
     /// Measured live before this existed: an addon counting all three world events across a real
     /// mapId 0 → 1 port read `enter=2 leave=0 login=1`. Two of those already matched the

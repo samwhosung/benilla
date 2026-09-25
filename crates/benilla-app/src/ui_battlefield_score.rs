@@ -1,4 +1,4 @@
-//! The battleground **scoreboard** feed (decision 1972):
+//! The battleground **scoreboard** feed:
 //! the app's half of the stock `WorldStateFrame.lua` score frame — the name-resolution barrier,
 //! the team derivation, the column headers, the request throttle and the leave.
 //!

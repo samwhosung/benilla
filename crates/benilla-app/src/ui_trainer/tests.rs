@@ -21,7 +21,7 @@ fn empty_catalog() -> SpellCatalog {
 use crate::items::TestDeps as Deps;
 
 /// The three group-header labels [`super::law::service_group`] reads, spelled **unlike** the
-/// shipped ones on purpose (decision 2045): `TRADESKILL_SERVICE_STEP`/`_LEARN` and
+/// shipped ones on purpose: `TRADESKILL_SERVICE_STEP`/`_LEARN` and
 /// `KNOWN_TALENTS_HEADER` are single-value keys, so an assertion on their enUS wording would pass
 /// for any lookup at all. Naming the key in the value makes each assertion say *which* lookup the
 /// arm made. The real table is checked by
@@ -306,7 +306,7 @@ fn trainer_icon_on_real_data_reaches_for_the_crafted_item() {
     );
 }
 
-/// The learn-spell hop end-to-end on real 5875 data (decision 0247): a warrior trainer sends the
+/// The learn-spell hop end-to-end on real 5875 data: a warrior trainer sends the
 /// LEARN wrapper 1605 ("learn Heroic Strike"), which is not in SkillLineAbility — resolve_service
 /// must hop through the taught spell (78) to group it under Arms (26) and show its name, while the
 /// BUY id stays the wrapper (1605) the server expects. This is the exact failure that emptied the
@@ -338,7 +338,7 @@ fn resolve_hops_the_learn_wrapper_to_the_taught_ability() {
     );
 }
 
-/// The **display name is the WIRE spell's**, not the taught spell's (decision 1124, refuting 0247's
+/// The **display name is the WIRE spell's**, not the taught spell's (refuting 0247's
 /// display half). 1605/78 above cannot tell the two laws apart — both are "Heroic Strike", as are
 /// 65.9 % of the shipped learn wrappers, which is how the wrong hop survived. The profession-learn
 /// wrappers are the visible 34.1 %: on real 5875 data spell **2020 is "Apprentice Blacksmith" with
@@ -696,10 +696,10 @@ fn tooltip_falls_back_to_the_wire_spell() {
 }
 
 /// **Every list packet begins a window session.** The reset the reference's list builder does
-/// per packet (`0x4d75d9`, decision 1128) is only ever observable at a window *opening*, because
+/// per packet (`0x4d75d9`) is only ever observable at a window *opening*, because
 /// the reference never receives a list packet with the window already up: a purchase, a level, a
 /// skill point repaint the open window through the state re-evaluator (`0x4d7d40`,
-/// [`super::reeval`], decision 2333), never through a second list. Since 2333 benilla is the
+/// [`super::reeval`]), never through a second list. Since 2333 benilla is the
 /// same — the post-buy re-request that B256's "refresh" mark existed to tell apart is gone — so
 /// the law is one line: a list packet opens, and opening resets.
 #[test]

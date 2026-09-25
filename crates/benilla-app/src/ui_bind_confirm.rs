@@ -1,5 +1,5 @@
 //! The **equip / auto-equip / use soulbind confirmations** — `EQUIP_BIND`, `AUTOEQUIP_BIND` and
-//! `USE_BIND` (decision 1750). The loot arm's siblings, and NOT built the same way, because the
+//! `USE_BIND`. The loot arm's siblings, and NOT built the same way, because the
 //! reference does not build them the same way either.
 //!
 //! ## The three predicates are three different predicates
@@ -9,7 +9,7 @@
 //!
 //! | arm | event | fires from | predicate | site |
 //! |---|---|---|---|---|
-//! | loot (decision 1744) | `LOOT_BIND_CONFIRM` 287 | `0x4c2790` | `bonding == 1` **and** `quality >= 2` | `4c28f2`/`4c28fb` |
+//! | loot | `LOOT_BIND_CONFIRM` 287 | `0x4c2790` | `bonding == 1` **and** `quality >= 2` | `4c28f2`/`4c28fb` |
 //! | equip | `EQUIP_BIND_CONFIRM` 288 | `0x5e0c40` `SwapItem` | `bonding == 2` | `5e0e54` |
 //! | auto-equip | `AUTOEQUIP_BIND_CONFIRM` 289 | `0x5e1480` `AutoEquipCursorItem` | `bonding == 2` | `5e163b` |
 //! | use | `USE_BIND_CONFIRM` 290 | `0x5d8d00` `CGItem::Use` | `bonding == 3` | `5d91d6` |
@@ -27,10 +27,10 @@
 //! derived for other reasons and reused here rather than re-written:
 //!
 //! - *not already soulbound* is [`crate::items::already_bound`] — literally `0x5da2c0`, built for
-//!   the enchant cursor's own bind question (decision 0928) and the tooltip's Soulbound override
+//!   the enchant cursor's own bind question and the tooltip's Soulbound override
 //!   (B310/1562). The reference calls the same function from all three places.
 //! - *can equip it* is `0x5ea930`, [`benilla_ui::script::UiScript::item_usable`] — built for the
-//!   merchant's red rows (decision 0299).
+//!   merchant's red rows.
 //!
 //! ## Accept is a re-issue, not a confirm packet
 //!

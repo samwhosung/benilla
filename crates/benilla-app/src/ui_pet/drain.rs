@@ -26,7 +26,7 @@ use super::{PetBar, PetUnit};
 
 /// `UNIT_FIELD_FLAGS` bit 24 — `UNIT_FLAG_POSSESSED` (vmangos `UnitDefines.h:515`), read by the
 /// reference as the descriptor byte `[[pet+0x110]+0xA3] & 1`. Gates the pet bar's **drag** and
-/// nothing else (decision 1010): a possessed unit's buttons still work, its layout is just not
+/// nothing else: a possessed unit's buttons still work, its layout is just not
 /// yours to rearrange.
 pub(super) const UNIT_FLAG_POSSESSED: u32 = 0x0100_0000;
 
@@ -193,7 +193,7 @@ pub(super) fn drain_pet_actions(
             debug!("ui_pet: stop attack");
         }
     }
-    // The drag's writes (decision 1010). The engine ran the assign core against its own mirror and
+    // The drag's writes. The engine ran the assign core against its own mirror and
     // handed back the `(0-based position, word)` pairs; the authoritative ten words live *here*, so
     // the app's whole job is to mirror each pair and put the batch on the wire **whole** — the
     // server tells the one-pair form from the two-pair form by body size, so a relocation and its
@@ -223,7 +223,7 @@ pub(super) fn drain_pet_actions(
 /// spell-type slot (type 1), scan the raw pet-spell array **backwards** for the entry equal to the
 /// slot under `& 0x3FFFFFFF` and copy the slot's FULL word into it. The pet book renders from that
 /// array, so without the copy a bar toggle left the Pet tab's ring stale until the next
-/// `SMSG_PET_SPELLS`. The book→bar direction is `ui_pet_book::flip_autocast` (decision 1032).
+/// `SMSG_PET_SPELLS`. The book→bar direction is `ui_pet_book::flip_autocast`.
 pub(super) fn toggle_slot_autocast(bar: &mut PetBar, slot: u32) -> Option<PetActionEntry> {
     let entry = slot_entry(bar, slot).filter(|e| e.autocast_allowed())?;
     let flipped = entry.with_autocast(!entry.autocast_on());

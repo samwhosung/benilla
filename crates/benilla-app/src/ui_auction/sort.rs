@@ -1,4 +1,4 @@
-//! The auction list sort (decision 1511 §6) — client-side, because the wire carries no sort field
+//! The auction list sort — client-side, because the wire carries no sort field
 //! at all: `CMSG_AUCTION_LIST_ITEMS` is ten fields and none of them is a column.
 //!
 //! **It is not an asc → desc → none cycle**, which is the thing everyone assumes and gets wrong.

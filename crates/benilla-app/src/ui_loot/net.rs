@@ -1,4 +1,4 @@
-//! The loot window's packet handlers (decision 0084; in the net handler table since 2319, moved
+//! The loot window's packet handlers (in the net handler table since 2319, moved
 //! out of the drain's loot arm file) — the [`LootState`] session and the [`LootLatch`] the loot
 //! feed ([`super`]) reads, the fishing verdicts, and the item push that prints "You receive …".
 //! The group rolls are [`crate::ui_loot_roll`]'s and the inventory refusal is
@@ -101,7 +101,7 @@ fn on_release_response(
 
 /// **`UnlockItem 0x495420`** as the loot closes call it — on the loot guid, which unlocks
 /// something only when that guid is an item we locked (a lockbox, clam or loot bag, locked at its
-/// `CMSG_OPEN_ITEM` send — decision 0916). The unlocked slots queue in [`LockTransitions`] for the
+/// `CMSG_OPEN_ITEM` send). The unlocked slots queue in [`LockTransitions`] for the
 /// container feed to fire `ITEM_LOCK_CHANGED`, like the inventory failure's clear.
 struct ItemUnlock<'a> {
     pending: &'a mut PendingItemOps,
@@ -206,9 +206,9 @@ fn loot_response(
         latch.0 = None; // NOT guid-matched — `0x5eb9d2` clears whatever was there
         return;
     }
-    // The loot window opens (decision 0084): fill LootState from the wire; the feed
+    // The loot window opens: fill LootState from the wire; the feed
     // ([`super`]) resolves rows + fires LOOT_OPENED next frame. `loot_type` rides along
-    // for `IsFishingLoot()` (decision 1086).
+    // for `IsFishingLoot()`.
     debug!(
         "net: loot response {guid:#x} type {loot_type} gold {gold} {} item(s)",
         items.len()
@@ -222,7 +222,7 @@ fn loot_response(
 }
 
 /// A fishing verdict with no loot window (`SMSG_FISH_ESCAPED` / `SMSG_FISH_NOT_HOOKED`, both
-/// empty-bodied; decision 1086): the **yellow** toast by GlobalStrings key — `ERR_FISH_ESCAPED`
+/// empty-bodied): the **yellow** toast by GlobalStrings key — `ERR_FISH_ESCAPED`
 /// ("Your fish got away!") when the skill roll failed on the click, `ERR_FISH_NOT_HOOKED`
 /// ("No fish are hooked.") when the bobber expired or was clicked before the splash. Yellow, not
 /// red: the reference handlers (`0x5e3fc5`/`0x5e3fe2` → `DisplayError` ids `0x13e`/`0x13f`) are
@@ -292,7 +292,7 @@ struct LootRefusal {
 /// | 14 `MASTER_OTHER` | `0x1cf` (463) | `ERR_LOOT_MASTER_OTHER` | **no** |
 ///
 /// **The four that do not release are the four that arrive at an already-open window** — the
-/// master looter's three `CMSG_LOOT_MASTER_GIVE` refusals (decision 1675) and the dead/absent
+/// master looter's three `CMSG_LOOT_MASTER_GIVE` refusals and the dead/absent
 /// recipient. The corpse stays open and the character stays kneeling, which is why the reference
 /// jumps past the tail for exactly these.
 ///
@@ -359,7 +359,7 @@ fn loot_error(
     errors.0.push(UiError::key(key));
     if releases {
         // The latch armed at the `CMSG_LOOT` send drops (guid-matched — see [`LootLatch`]), or the
-        // character would kneel forever at a corpse whose window never opened (decision 0515).
+        // character would kneel forever at a corpse whose window never opened.
         latch.clear_for(guid);
         unlock.unlock(guid);
     }
@@ -389,7 +389,7 @@ fn loot_clear_money(loot: &mut LootState) {
 /// The loot window closes (`SMSG_LOOT_RELEASE_RESPONSE`), answering our `CMSG_LOOT_RELEASE`.
 /// Idempotent — a client-side close already cleared. The latch clear is **guid-matched**: under
 /// the corpse-switch race (loot B requested while A was open) the old window's release response
-/// must not drop the latch the new request just armed (decision 0515).
+/// must not drop the latch the new request just armed.
 ///
 /// **An item loot unlocks here.** The handler (`0x5ec090`) ends in `0x48f200(cl=0, dl=0)`, whose
 /// `48f299` leg calls `UnlockItem 0x495420` when the loot object is an ITEM (`0x48f200` gates
@@ -408,7 +408,7 @@ fn loot_release_response(
     unlock.unlock(guid);
 }
 
-/// The master-loot candidate list (`SMSG_LOOT_MASTER_LIST`, decision 1675) — who the master looter
+/// The master-loot candidate list (`SMSG_LOOT_MASTER_LIST`) — who the master looter
 /// may hand a row to. It arrives from inside the server's `SendLoot`, so it lands just AHEAD of the
 /// `SMSG_LOOT_RESPONSE` it belongs to; `LootState` stages it and the open claims it.
 fn loot_master_list(candidates: Vec<u64>, loot: &mut LootState) {
@@ -427,7 +427,7 @@ fn loot_master_list(candidates: Vec<u64>, loot: &mut LootState) {
 /// was this packet's only output. It is a *later*, narrower gate — `0x491bf3` (self) / `0x491db1`
 /// (other) skip the chat formatter alone, after the `ITEM_PUSH` fire at `0x491be8` — so it now
 /// rides into [`LootState::push_receive`] as `PendingReceive::in_chat` and silences the line
-/// without touching the animation (decision 0887). vmangos always sends 1, so it is inert against
+/// without touching the animation. vmangos always sends 1, so it is inert against
 /// our server either way; it is the client's own gate, kept where the client keeps it.
 fn is_our_push(p: &ItemPushResult, self_guid: &SelfGuid) -> bool {
     self_guid.0 == Some(p.player_guid)
@@ -435,7 +435,7 @@ fn is_our_push(p: &ItemPushResult, self_guid: &SelfGuid) -> bool {
 
 /// An item landed in our bags — looted or received from an NPC (`SMSG_ITEM_PUSH_RESULT`); drives
 /// the "You receive loot: …" chat line (gated by [`prints_receive_line`]) **and** the bag-bar drop
-/// animation (decision 0887), which is NOT so gated — hence the whole packet going through, and the
+/// animation, which is NOT so gated — hence the whole packet going through, and the
 /// self check being the only thing that can stop a push here. The reference's
 /// `CGGameUI::OnItemPush 0x491a60` emits both from this one packet: it returns early only on a guid
 /// mismatch, and tests `showInChat` further down, after the `ITEM_PUSH` fire.
@@ -677,7 +677,7 @@ mod tests {
     }
 
     /// **B84 / decisions 1471 + 1477.** A chest never sends `CMSG_LOOT`, so the corpse branch's
-    /// arm-at-the-send (0515) never fires for it. `SMSG_SPELL_GO` is its real arm; the response's
+    /// arm-at-the-send never fires for it. `SMSG_SPELL_GO` is its real arm; the response's
     /// own arm is the second half, and on a **cold** latch it admits only the server-started
     /// types 2/3/4 (`0x5eb94b`–`0x5eb95b`). A chest's answer is wire type 2, so it opens and arms.
     #[test]
@@ -713,7 +713,7 @@ mod tests {
         assert_eq!(loot.source(), Some(CORPSE));
     }
 
-    /// **The refusal arm (`0x5eb963`, decision 1477).** `loot_type == 1` means "you asked for
+    /// **The refusal arm (`0x5eb963`).** `loot_type == 1` means "you asked for
     /// this" — and a cold latch says we did not. The real client opens no window, bounces a
     /// `CMSG_LOOT_RELEASE` for the *packet's* guid, and clears. 1471 shipped an unconditional
     /// arm, which is exactly this case's divergence.
@@ -756,7 +756,7 @@ mod tests {
     const LOCKBOX: u64 = 0x4000_0000_0000_0007;
 
     /// A World with what the release / error handlers write, and the lockbox's open-item lock
-    /// already armed at bag 0 slot 3 — `ui_items::drain`'s `CMSG_OPEN_ITEM` arm (0916).
+    /// already armed at bag 0 slot 3 — `ui_items::drain`'s `CMSG_OPEN_ITEM` arm.
     fn opened_lockbox_world() -> World {
         let mut world = World::new();
         world.init_resource::<LootState>();
@@ -867,7 +867,7 @@ mod tests {
         assert!(!is_our_push(&push(THEM, true), &me));
         // Before login lands a guid there is no active player to match against.
         assert!(!is_our_push(&push(ME, true), &SelfGuid(None)));
-        // `showInChat` is NOT this gate (decision 0887): a silent push still queues, and still
+        // `showInChat` is NOT this gate: a silent push still queues, and still
         // animates — it only loses its chat line, downstream in `drain_receives`.
         assert!(is_our_push(&push(ME, false), &me));
         let mut loot = LootState::default();

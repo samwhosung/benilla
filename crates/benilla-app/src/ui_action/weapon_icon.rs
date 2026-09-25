@@ -1,5 +1,5 @@
 //! **Weapon-icon substitution** — the handful of spells that show an *equipped weapon's* icon
-//! instead of their own (decisions 0230 + 0231; `0x4e6870` melee, `0x4e6990` ranged).
+//! instead of their own (`0x4e6870` melee, `0x4e6990` ranged).
 //!
 //! Two spells' worth of law, but it is character-level rather than spell-level: the melee
 //! auto-attack borrows the main hand's icon (or `Spell-Reset` when unarmed), a ranged auto-repeat
@@ -28,7 +28,7 @@ const ITEM_SUBCLASS_THROWN: u32 = 16;
 
 /// The client's unarmed/disarmed auto-attack icon (the hardcoded string at `0x84bf58`) — what the
 /// melee auto-attack shows when there is no main-hand weapon to borrow from, instead of spell
-/// 6603's `Temp` placeholder (decision 0231).
+/// 6603's `Temp` placeholder.
 const SPELL_RESET_ICON: &str = "Interface\\Buttons\\Spell-Reset";
 
 /// `ItemClass` 2 — **WEAPON**: what the disarmed guard tests on the hand it just fetched
@@ -58,14 +58,14 @@ fn main_hand_item(
     Some((class, icon))
 }
 
-/// The character's melee auto-attack icon (decision 0231; the client's melee helper `0x4e6870`).
+/// The character's melee auto-attack icon (the client's melee helper `0x4e6870`).
 /// The helper's four steps, in order:
 ///
 /// 1. the **current shapeshift form's own attack face** when its `SpellShapeshiftForm` row carries
 ///    one (the `+0x34` AttackIconID read, `0x4e68af`–`0x4e68da` — a cat's paw, a bear's swipe;
 ///    closing decision 0231's deferred form case);
 /// 2. the **disarmed guard** (`0x4e68df`) → [`SPELL_RESET_ICON`], weapon equipped or not
-///    (decision 1863, closing 0231's other deferred case);
+///    (closing 0231's other deferred case);
 /// 3. the equipped main-hand weapon's icon;
 /// 4. no main-hand item → [`SPELL_RESET_ICON`].
 ///
@@ -93,7 +93,7 @@ pub(crate) fn melee_auto_attack_icon(
     // 0x200000`, then `GetWeapon(0, 1)` and a `== 2` on the returned class byte): while the
     // character is disarmed, a weapon in the main hand shows `Spell-Reset` exactly as an empty
     // hand does — the weapon is equipped and on screen, but the button reads unarmed, because
-    // the swing it fires is (decision 1863, closing 0231's deferred case).
+    // the swing it fires is (closing 0231's deferred case).
     if store.0.unit_flags() & UNIT_FLAG_DISARMED != 0
         && main
             .as_ref()

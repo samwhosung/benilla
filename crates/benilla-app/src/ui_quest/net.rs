@@ -1,4 +1,4 @@
-//! The questgiver panels' packet handlers (decision 0088; in the net handler table since 2320,
+//! The questgiver panels' packet handlers (in the net handler table since 2320,
 //! moved out of the drain's quests arm file) — each fills the [`QuestGiver`] the quest feed
 //! ([`super`]) reads; each panel packet replaces the open view, and the greeting/gossip quest-row
 //! clicks and the panel buttons flow back out through the quest/gossip drains. The quest log's
@@ -180,7 +180,7 @@ fn on_session_end(In(_): In<SessionEvent>, mut quest: ResMut<QuestGiver>) {
 /// drain's match, where a status arriving in the same drain as its object's create block would
 /// have read a not-yet-seeded store (descriptors were flushed at the end of the drain) and
 /// dropped a *unit's* answer that would then never be re-asked for. As a packet handler it runs
-/// after the create has landed (decision 2306), so that reason is gone; the shape test stays
+/// after the create has landed, so that reason is gone; the shape test stays
 /// because it is the same partition. The reference's second conjunct — `UNIT_NPC_FLAGS & 0x2` on
 /// the resolved unit — was left unmodelled for the same ordering reason and is buildable now;
 /// until it is, [`crate::quest_markers::query`]'s teardown leg covers the flag-clearing case from
@@ -268,7 +268,7 @@ fn quest_complete(c: QuestComplete, quest: &mut QuestGiver) {
         c.items.len()
     );
     quest.clear();
-    // The turn-in result is one of the `SMSG_QUESTGIVER_*` the reference sweeps from (0654): every
+    // The turn-in result is one of the `SMSG_QUESTGIVER_*` the reference sweeps from: every
     // other giver's `!`/`?` can move the moment a quest is handed in.
     quest.bump_reask();
 }
@@ -301,7 +301,7 @@ fn quest_objective_item(item_id: u32, count: u32, quest: &mut QuestGiver) {
 fn quest_objectives_complete(quest_id: u32, quest: &mut QuestGiver) {
     debug!("net: quest {quest_id} objectives complete");
     // The turn-in `?` can go gold with no quest-log field change of its own, so the reference
-    // sweeps from these `SMSG_QUESTUPDATE_*` handlers (0654).
+    // sweeps from these `SMSG_QUESTUPDATE_*` handlers.
     quest.bump_reask();
 }
 
@@ -334,13 +334,13 @@ fn quest_failed(
         debug!("net: quest {quest_id} has no cached template — the reference shows nothing");
     }
     // A failure moves what the givers offer — the reference sweeps from these `SMSG_QUESTUPDATE_*`
-    // handlers too (0654).
+    // handlers too.
     quest.bump_reask();
 }
 
 /// The log refused a new quest — no free slot (`SMSG_QUESTLOG_FULL`). The ref's `0x195` arm is a
 /// bare `DisplayError(153)` and nothing else (no panel close): `ERR_QUEST_LOG_FULL` is a kind-2
-/// record, so it is the RED line, not a chat line (decision 0669 — it used to be a hardcoded
+/// record, so it is the RED line, not a chat line (it used to be a hardcoded
 /// English chat push here).
 fn quest_log_full(quest: &mut QuestGiver) {
     debug!("net: quest log full");
@@ -355,7 +355,7 @@ fn quest_log_full(quest: &mut QuestGiver) {
 /// Then the ref **closes the window**: both refusal handlers end in `0x501130(0,0)`, which zeroes
 /// the current questgiver guid (`0xbe0810`) and signals Lua event `0x130` = `QUEST_FINISHED` —
 /// our [`QuestGiver::clear`] plus the feed's own `QUEST_FINISHED` on the cleared view. Without
-/// this the panel sat open on a refused accept (decision 0669).
+/// this the panel sat open on a refused accept.
 fn quest_giver_invalid(reason: u32, quest: &mut QuestGiver) {
     debug!("net: questgiver refused to offer the quest (reason {reason})");
     quest.push_message(UiError::key(crate::ui_quest::questgiver_invalid_key(
@@ -400,7 +400,7 @@ fn quest_giver_failed(
 mod tests {
     use super::*;
 
-    /// **The typemask-8 refusal** (decision 1872). benilla now sends
+    /// **The typemask-8 refusal**. benilla now sends
     /// `CMSG_QUESTGIVER_STATUS_QUERY` for quest-flagged GameObjects because the reference
     /// does — and vmangos, unlike the real 1.12 service, *answers*. The reference's handler drops
     /// that answer at the lookup (`0x5dca22 mov ecx,8`), so we must too: otherwise a wanted poster
@@ -470,7 +470,7 @@ mod tests {
     /// The director's repro: the quest is already in the log, so the accept comes back
     /// `QUEST_INVALID` reason 13. The line must be the ref's string key — never the bare
     /// `Quest failed (0x0d).` — and the panel must CLOSE (`0x501130(0,0)` → `QUEST_FINISHED`),
-    /// which is what left it sitting open before decision 0669.
+    /// which is what left it sitting open before.
     #[test]
     fn an_already_on_refusal_speaks_and_closes_the_panel() {
         let mut giver = open_detail(373);
@@ -545,7 +545,7 @@ mod tests {
         assert_eq!(msgs[0].arg_s(), Some(""));
     }
 
-    // ── The share's BUSY refusal (decision 1738) ─────────────────────────────────────────────────
+    // ── The share's BUSY refusal ─────────────────────────────────────────────────
 
     fn detail(npc: u64, quest_id: u32) -> QuestDetails {
         QuestDetails {

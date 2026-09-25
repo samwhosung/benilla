@@ -1,5 +1,4 @@
-//! The GM trouble-ticket flow — the Help window's wire, its events, and its answers
-//! (decision 1673).
+//! The GM trouble-ticket flow — the Help window's wire, its events, and its answers.
 //!
 //! **The law worth stating first: the client holds no ticket state.** There is no local "I have a
 //! ticket" bit that survives anything; every question is a round trip, and `SMSG_GMTICKET_GETTICKET`
@@ -296,7 +295,7 @@ fn drain_gm_ticket(
 
 /// The category a `NewGMTicket`/`UpdateGMTicket` argument may put on the wire, or `None`.
 ///
-/// **0 is legal and means "uncategorised"** (decision 1687). Our Help window has no category picker
+/// **0 is legal and means "uncategorised"**. Our Help window has no category picker
 /// — one click goes from Home to the text box — so it sends 0 deliberately. vmangos accepts it: its
 /// whole validation is `if (packet.ticketType >= GMTICKET_MAX) return;` with `GMTICKET_MAX == 11`
 /// (`GMTicketHandler.cpp:112`; the enum starts at `GMTICKET_STUCK = 1`, `SharedDefines.h:1776`),
@@ -377,7 +376,7 @@ fn load_gm_ticket_dbc(
     }
 }
 
-/// The GM ticket's packet handlers (decision 1673; in the net handler table since 2312), beside
+/// The GM ticket's packet handlers (in the net handler table since 2312), beside
 /// the state they drive.
 pub(crate) mod net {
     use benilla_protocol::{SessionEvent, SessionEventKind};
@@ -450,7 +449,7 @@ pub(crate) mod net {
         }
     }
 
-    /// The GM ticket is login-scoped (decision 1673), and for a sharper reason than most: the
+    /// The GM ticket is login-scoped, and for a sharper reason than most: the
     /// ticket belongs to the CHARACTER, and the next login may be a different one. Its answer
     /// counters go with it, so the first `SMSG_GMTICKET_GETTICKET` of the new session re-fires
     /// `UPDATE_TICKET` rather than being diffed away against the old character's answer count.
@@ -671,7 +670,7 @@ mod tests {
         ));
     }
 
-    /// **0 rides the wire; anything above 10 does not** (decision 1687).
+    /// **0 rides the wire; anything above 10 does not**.
     ///
     /// 0 is what our own window sends, because it has no category picker — vmangos renders it
     /// "Unknown" rather than refusing it. Above 10 the server drops the packet *silently*, so

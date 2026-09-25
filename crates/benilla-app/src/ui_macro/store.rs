@@ -1,4 +1,4 @@
-//! The macro **file format** — the reference client's own, byte-for-byte (decision 0983).
+//! The macro **file format** — the reference client's own, byte-for-byte.
 //!
 //! The 1.12 client writes each macro with the format string **`MACRO %d "%s" %s`** (byte-read at
 //! `0x44cb60`, inside the `UIMacros.cpp` string block) followed by the body's lines and a bare

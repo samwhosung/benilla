@@ -259,7 +259,7 @@ fn both_kinds_of_empty_slot_draw_nothing() {
     assert_eq!(
         view(filler, &bar, None, None, false),
         PetActionView {
-            // Draws nothing and still CARRIES its word (decision 1010) — this is the exact
+            // Draws nothing and still CARRIES its word — this is the exact
             // slot the drop core hunts for as a relocation candidate (type 1, low 16 zero),
             // so zeroing it here would both send the wrong word and lose the candidate.
             packed: filler.packed,
@@ -822,7 +822,7 @@ fn an_unresolvable_active_icon_hides_rather_than_falling_back() {
         .is_none());
 }
 
-/// **The menu's fork, and the direction of each mask** (decision 1066).
+/// **The menu's fork, and the direction of each mask**.
 ///
 /// This is the test that exists because the two bits are one nibble apart and the failure is
 /// silent both ways: a hunter offered *Dismiss* loses the taming chain's only exit, and a warlock
@@ -965,7 +965,7 @@ fn a_cooldown_alone_fires_the_cooldown_event_and_not_the_bar_update() {
 /// array backwards for the entry equal to the slot under `& 0x3FFFFFFF` and copies the slot's
 /// FULL word into it. The book renders from that array, so without the copy the Pet tab kept
 /// the old autocast ring until the next `SMSG_PET_SPELLS`. The book→bar direction is
-/// `ui_pet_book::flip_autocast` (decision 1032); this is its twin.
+/// `ui_pet_book::flip_autocast`; this is its twin.
 #[test]
 fn a_bar_autocast_toggle_reaches_the_pet_spellbook() {
     const CLAW: u32 = 16827;

@@ -117,7 +117,7 @@ const DESTROYED_EFFECTS: [u32; 10] = [50, 74, 87, 88, 89, 90, 104, 105, 106, 107
 /// **The edge is the event.** The wire never says "this unit died"; it says the unit's health is
 /// zero in an ordinary descriptor update — so the line comes off the `UNIT_FIELD_HEALTH` field
 /// edge, the reference's own watcher `0x6046f0` whose alive→dead arm (`OLD > 0 && NEW ≤ 0` at
-/// `0x6047a3`) reaches the reflex (decision 2297), and a unit that streams in *already* dead
+/// `0x6047a3`) reaches the reflex, and a unit that streams in *already* dead
 /// produces none (the edge stream is create-suppressed: the reflex fires on the transition, not
 /// on the state).
 ///

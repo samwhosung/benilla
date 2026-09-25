@@ -99,7 +99,7 @@ fn on_session_end(
 /// (`0x4ad1b0`).
 ///
 /// **It does not touch [`MailPending`]** — and that is a positive fact, not an
-/// omission (decision 0913). This arm used to clear the countdown when the surviving list had
+/// omission. This arm used to clear the countdown when the surviving list had
 /// nothing unread, on the inferred grounds that "checking your mail clears the icon" had to be the
 /// list's doing. A full write-xref of the countdown float `0x845eac` says otherwise: nothing on the
 /// inbox path writes it. The icon clears because **opening a letter arms the deferred-refresh flag
@@ -235,7 +235,7 @@ fn mail_item_text(text_id: u32, text: String, mail: &mut MailOpen) {
 /// `SessionEvent::ReceivedMail` (`SMSG_RECEIVED_MAIL`) — mail just arrived. `seconds` is the wire's
 /// delay float (vmangos always sends `0.0` = "now"); it runs the countdown's set-value ladder,
 /// which takes the **busy** branch when a mailbox window is open — arming the deferred refresh
-/// instead of moving the icon under the player's nose (`0x4ad620`, decision 0913).
+/// instead of moving the icon under the player's nose (`0x4ad620`).
 ///
 /// The list re-sync is ours, not the reference's, and stays: a server push bypasses `CheckInbox`'s
 /// 60 s client-side throttle (decision 0544 P3), so a mail arriving while you stand at the mailbox
@@ -250,7 +250,7 @@ fn received_mail(seconds: f32, pending: &mut MailPending, mail: &MailOpen, comma
 
 /// `SessionEvent::NextMailTime` (`MSG_QUERY_NEXT_MAIL_TIME`'s reply, one `f32`) — store the
 /// server's float verbatim and signal `UPDATE_PENDING_MAIL` **unconditionally** (`0x4ad5f0`,
-/// signal site `0x4ad605`; decision 0913). `0.0` = mail waiting now, negative (vmangos always sends
+/// signal site `0x4ad605`). `0.0` = mail waiting now, negative (vmangos always sends
 /// `-86400.0`) = none, a positive value counts down per frame in `crate::ui_mail`'s `feed_mail` and
 /// flips `HasNewMail()` true as it lands inside ε.
 fn next_mail_time(seconds: f32, pending: &mut MailPending) {

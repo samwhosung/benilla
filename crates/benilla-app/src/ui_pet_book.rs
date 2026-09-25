@@ -1,4 +1,4 @@
-//! The **pet spellbook** — the spellbook window's second tab (decision 1032).
+//! The **pet spellbook** — the spellbook window's second tab.
 //!
 //! Its source has been on the wire and parsed since 0988 and nothing read it:
 //! [`benilla_protocol::messages::PetSpells::spells`], the packed-word list `SMSG_PET_SPELLS`

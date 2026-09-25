@@ -1,4 +1,4 @@
-//! The dialog engine's verbs, app half (decision 1963): the feeds behind the stock
+//! The dialog engine's verbs, app half: the feeds behind the stock
 //! `StaticPopup.lua` dialogs benilla never raised and the drains behind their buttons, each to
 //! the reference's bytes unless a line says INFERRED.
 //!
@@ -35,7 +35,7 @@
 //!   `CancelMeetingStoneRequest()` sends `0x293` unless in a party led by someone else
 //!   (`ERR_MEETING_STONE_NOT_LEADER`). The four display-only replies (`0x297/0x298/0x299/0x2BB`)
 //!   are chat lines with no state; the status-1 arm also triggers the Meeting Stones tutorial
-//!   (`crate::tutorial`, 1976). **JOINING** is the click's own leg (decision 2283): type 23's
+//!   (`crate::tutorial`, 1976). **JOINING** is the click's own leg: type 23's
 //!   use slot is its own validator, not the shared `CMSG_GAMEOBJ_USE` sender — four client-side
 //!   refusals ([`meeting_stone_join_refusal`]), then `CMSG 0x292 {u64 goGuid}`.
 
@@ -636,7 +636,7 @@ fn meeting_stone_enter_world(
 }
 
 /// A right-click on a `GAMEOBJECT_TYPE_MEETINGSTONE` (23) that got past the shared gates — the
-/// GO click ladder's hand-off to this module (decision 2283).
+/// GO click ladder's hand-off to this module.
 ///
 /// It travels as a message for the same reason the GameObject opener's cast does (2199): the
 /// click system sits at Bevy's 16-`SystemParam` ceiling and cannot also hold the roster, the
@@ -649,7 +649,7 @@ pub(crate) struct MeetingStoneUse {
 }
 
 /// What MEETINGSTONE(23)'s own use slot `0x5f69d0` does with one click — its three outcomes, as
-/// the binary has them (decision 2283).
+/// the binary has them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StoneJoin {
     /// `0x5f69f8` — no local player object: `false` with **no message and no packet**. Not a
@@ -729,7 +729,7 @@ pub(crate) fn meeting_stone_join_refusal(
 /// the player, and vmangos refuses on exactly that: `Group::IsFull()` is
 /// `m_memberSlots.size() >= MAX_GROUP_SIZE (5)`, counting the leader
 /// (`Group/Group.h:49,232`) → `MEETINGSTONE_FAIL_FULL_GROUP`. But `SMSG_GROUP_LIST` never lists
-/// the recipient (0440), so [`GroupState::members`] is the other four and the comparison is
+/// the recipient, so [`GroupState::members`] is the other four and the comparison is
 /// against **4** with no `+ 1`. Adding one — the first cut of this did — refuses a legal
 /// four-person party the server would have queued, and the string says which reading is right:
 /// `ERR_MEETING_STONE_GROUP_FULL` is *"You are already in a full group"*, and a group of four is
@@ -1107,7 +1107,7 @@ mod net {
         *queue = BattlefieldQueue::default();
     }
 
-    /// The pet trainer's question (decision 1963) — the talent wipe's twin
+    /// The pet trainer's question — the talent wipe's twin
     /// ([`crate::ui_talent_wipe`]); a zero guid is the reference's own `ERR_TALENT_WIPE_ERROR`
     /// leg, carried over as observed.
     fn on_pet_unlearn_confirm(
@@ -1170,7 +1170,7 @@ impl Plugin for UiDialogVerbsPlugin {
                 Update,
                 (
                     close_npc_session_out_of_range::<PetUnlearnState>.before(feed_dialog_verbs),
-                    // Gated on the interface being up (decision 2279): `InstanceBoot::events`
+                    // Gated on the interface being up: `InstanceBoot::events`
                     // is server-driven — vmangos sends `SMSG_RAID_GROUP_ONLY` from
                     // `Player::UpdateHomebindTime` on the first map tick after a login inside a
                     // raid instance with no raid group, i.e. inside the login burst's own
@@ -1587,7 +1587,7 @@ mod tests {
         );
     }
 
-    /// The four client-side refusals of MEETINGSTONE(23)'s use slot (`0x5f69d0`, decision 2283),
+    /// The four client-side refusals of MEETINGSTONE(23)'s use slot (`0x5f69d0`),
     /// in the reference's own order — and the pass that reaches `CMSG 0x292`.
     #[test]
     fn the_meeting_stone_join_refuses_in_the_references_order() {

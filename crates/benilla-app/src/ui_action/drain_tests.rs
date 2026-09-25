@@ -1,5 +1,5 @@
 //! [`super::drain::item_action_route`] — the reference's two-stage equip-vs-use law for an ITEM
-//! action (decision 0666). The inventory walk is stubbed, so these pin the *decision*, not the
+//! action. The inventory walk is stubbed, so these pin the *decision*, not the
 //! search (`ui_items::find_item` has its own tests for the walk order).
 
 use super::drain::{item_action_route, ItemRoute};
@@ -7,7 +7,7 @@ use crate::items::test_template;
 use crate::ui_items::ItemSearch;
 
 // `(bag_index, slot, instance guid)` — the triple the walk returns (the guid feeds the
-// shared use fork, decision 0664).
+// shared use fork).
 const WORN_AT: (u8, u8, u64) = (255, 13, 0xE1); // the trinket-1 doll slot
 const IN_BAG: (u8, u8, u64) = (255, 23, 0xB1); // the first backpack slot
 

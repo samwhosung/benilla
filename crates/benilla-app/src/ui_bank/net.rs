@@ -1,4 +1,4 @@
-//! The bank's packet handlers (decision 0604; in the net handler table since 2318, moved out of
+//! The bank's packet handlers (in the net handler table since 2318, moved out of
 //! the drain's npc arm file) — the [`BankOpen`] session and the [`BankErrors`] line queue the bank
 //! feed ([`super`]) reads.
 
@@ -36,7 +36,7 @@ fn on_buy_slot_result(In(ev): In<SessionEvent>, mut errors: ResMut<BankErrors>) 
     }
 }
 
-/// The bank window dies with the socket (decision 0604) — a reconnect re-opens via the banker.
+/// The bank window dies with the socket — a reconnect re-opens via the banker.
 /// A listener on the session end (a second handler on the kind, after the bridge's own teardown).
 fn on_session_end(In(_): In<SessionEvent>, mut bank: ResMut<BankOpen>) {
     bank.clear_session();
@@ -45,7 +45,7 @@ fn on_session_end(In(_): In<SessionEvent>, mut bank: ResMut<BankOpen>) {
 /// The bank opened (`SMSG_SHOW_BANK`): point the [`BankOpen`] session the bank feed
 /// ([`super`]) reads at the banker. Sent for our own `CMSG_BANKER_ACTIVATE` *and*
 /// volunteered by the server for the gossip menu's bank option (`GOSSIP_OPTION_BANKER` →
-/// `SendShowBank`, decision 0604) — so this never assumes we asked. The vault's contents are
+/// `SendShowBank`) — so this never assumes we asked. The vault's contents are
 /// descriptor fields already streamed; the window renders from local state.
 ///
 /// Opening the bank ends any open gossip interaction (the `SMSG_GOSSIP_COMPLETE` clear): vmangos

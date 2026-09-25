@@ -138,7 +138,7 @@ fn npc_greeting(
 }
 
 /// `SMSG_GOSSIP_COMPLETE` ends the whole interaction (e.g. right after a quest accept), so the
-/// quest window closes with the gossip menu (decision 0088).
+/// quest window closes with the gossip menu.
 pub(crate) fn gossip_complete(gossip: &mut GossipState, quest: &mut QuestGiver) {
     debug!("net: gossip complete — closing the menu");
     gossip.clear();

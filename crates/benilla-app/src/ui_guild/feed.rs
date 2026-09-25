@@ -192,7 +192,7 @@ pub(super) fn feed_guild(
 /// token through the script VM (`0x703bf0`) and formats it into a chat line itself, with no `kind`
 /// and no sound to read. `MsgKind::Chat` here is therefore the handler's own surface rather than a
 /// catalog lookup, and the absent key is silent — the same GlobalStrings data-suppression the keyed
-/// route wears (decision 2054).
+/// route wears.
 ///
 /// **The date is month-day-year and the wire is day-month-year.** The handler's cdecl pushes
 /// (`0x5e704d`–`0x5e7061`) place the arguments **wire#2, wire#1, wire#3, wire#4, wire#5** — the
@@ -339,7 +339,7 @@ pub(super) fn drain_guild(
                 // The reference throttles this binding itself, to one request per 10 s against
                 // `0xb73130` (`0x4d10d0`), and gives no signal when it swallows one. Real time,
                 // not virtual: this is a span measured against the server, and the virtual clock's
-                // 250 ms `max_delta` falls behind under a hitch (decision 0846).
+                // 250 ms `max_delta` falls behind under a hitch.
                 let now = time.elapsed_secs_f64();
                 if now >= guild.roster_allowed_at {
                     guild.roster_allowed_at = now + ROSTER_REQUEST_THROTTLE_SECS;

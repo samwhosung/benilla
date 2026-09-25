@@ -23,10 +23,10 @@ use super::{slot_guid, slot_guid_count, wire_pos, INVTYPE_AMMO};
 /// forks it owns:
 ///
 /// - **ammo**: an ammo-class item loads by entry with `CMSG_SET_AMMO`
-///   rather than the equip wire — the stack stays in the bag and `PLAYER_AMMO_ID` references it
-///   (decision 0526). A missing template falls back to `CMSG_AUTOEQUIP_ITEM`, whose refusal is at
+///   rather than the equip wire — the stack stays in the bag and `PLAYER_AMMO_ID` references it.
+/// A missing template falls back to `CMSG_AUTOEQUIP_ITEM`, whose refusal is at
 ///   least visible.
-/// - **the soulbind deferral** (decision 1750, `0x5e163b`): a not-yet-bound, equippable
+/// - **the soulbind deferral** (`0x5e163b`): a not-yet-bound, equippable
 ///   `bonding == 2` item raises `AUTOEQUIP_BIND_CONFIRM` and sends NOTHING. `suppress` is the
 ///   reference's own parameter, set on the re-issue `EquipPendingItem` drives — which is what stops
 ///   the accept from asking the same question again forever.
@@ -81,7 +81,7 @@ pub(crate) fn send_auto_equip(
 /// The same ammo sub-fork as [`drain_container_uses`] (the one auto-equip sender `0x5e1480`
 /// forks ammo-class → `CMSG_SET_AMMO`): a dropped ammo-class item loads by entry
 /// instead, which is also the wire for the ammo slot's own drop (the XML routes it here via
-/// `AutoEquipCursorItem` — decision 0526).
+/// `AutoEquipCursorItem`).
 ///
 /// No pending-lock recording here (unlike the move/split/destroy drains) — matching this
 /// codebase's own existing precedent for the SAME wire send: `drain_container_uses`'s
@@ -223,7 +223,7 @@ pub(super) fn drain_inventory_uses(
             .and_then(|guid| {
                 let entry = ladder.objects.object(guid)?.object_entry()?;
                 let t = ladder.items.template(entry, guid, &ladder.commands)?;
-                // The wire's spell byte is a template BLOCK ordinal (decision 0666) — the
+                // The wire's spell byte is a template BLOCK ordinal — the
                 // template is already in hand here for `start_quest`, so name the real one.
                 Some((
                     Some(guid),
@@ -266,10 +266,10 @@ pub(super) fn drain_container_uses(
     mut equip_sound: MessageWriter<crate::sound::AutoEquipSound>,
     mut item_text: ResMut<crate::ui_item_text::ItemTextOpen>,
     targeting: crate::spell::cast_target::CastTargeting,
-    // The client-side pending ("gray") lock — the right-click-open arm arms it (decision 0916).
+    // The client-side pending ("gray") lock — the right-click-open arm arms it.
     mut pending_items: ResMut<PendingItemOps>,
     // The loot-target latch — the right-click-open arm is one of its five arm sites, and the one
-    // that lets `SMSG_LOOT_RESPONSE`'s admission gate recognise an item loot (decision 1531).
+    // that lets `SMSG_LOOT_RESPONSE`'s admission gate recognise an item loot.
     mut loot_latch: ResMut<crate::ui_loot::LootLatch>,
     mut ladder: crate::spell::CastLadder,
     mut ui_errors: ResMut<crate::ui_action::UiErrorKeys>,
@@ -302,7 +302,7 @@ pub(super) fn drain_container_uses(
         }
     }
     for (bag, slot) in script.take_container_uses() {
-        // **A right-click cancels an armed gift wrap, whatever it then does** (decision 1934):
+        // **A right-click cancels an armed gift wrap, whatever it then does**:
         // only a LEFT-click on a container slot spends the paper, and the reference's use path
         // clears the cursor on its way. Above every affordance below, because a sell or a
         // deposit is still a right-click. Re-arming is not a special case: a right-click on a
@@ -341,11 +341,11 @@ pub(super) fn drain_container_uses(
             debug!("ui_items: UseContainerItem({bag}, {slot}) out of range — ignored");
             continue;
         };
-        // The deposit/withdraw affordance (decision 0604): while the bank is open, a container
+        // The deposit/withdraw affordance: while the bank is open, a container
         // click routes as the reference's at-bank auto-move instead of using/equipping — a bank
         // position (the vault or a bank bag) withdraws (`CMSG_AUTOSTORE_BANK_ITEM`), a carried
         // bag's item deposits (`CMSG_AUTOBANK_ITEM`). Which of the two opcodes the reference
-        // fires per direction is INFERRED (0604) — vmangos routes AUTOSTORE by source position,
+        // fires per direction is INFERRED — vmangos routes AUTOSTORE by source position,
         // so either choice lands correctly. An empty slot refuses server-side, harmlessly.
         // Doll clicks never reach this drain (they flow through `drain_inventory_uses`), so
         // equipped gear keeps its plain use at the bank, like the reference.
@@ -387,7 +387,7 @@ pub(super) fn drain_container_uses(
                     inventory_type: t.inventory_type,
                     display_info_id: t.display_info_id,
                     start_quest: t.start_quest,
-                    // The wire's spell byte is a template BLOCK ordinal (decision 0666) — the
+                    // The wire's spell byte is a template BLOCK ordinal — the
                     // template is right here, so send the real one rather than assuming 0.
                     spell_index: t.use_spell_index().unwrap_or(0),
                     use_spell: t.use_spell.map(|u| u.spell_id),
@@ -414,7 +414,7 @@ pub(super) fn drain_container_uses(
         // **Everything below this fork is `0x5d8d00`, the USE dispatcher, in ITS OWN order** — an
         // equippable item never reaches any of it.
         if let Some(c) = clicked.filter(|c| c.start_quest == 0 && c.inventory_type != 0) {
-            // Through the one sender (decision 1750): it owns the ammo fork AND the soulbind
+            // Through the one sender: it owns the ammo fork AND the soulbind
             // deferral. A deferred equip plays no sound — the reference's own equip kit rides the
             // arm that sends, and a question is not an equip.
             if send_auto_equip(
@@ -453,7 +453,7 @@ pub(super) fn drain_container_uses(
         // `0x5edea0`). **Purely local — nothing is sent.** The paper's slot locks, the displayed
         // cursor becomes mode 2, and the next LEFT-click on a container slot is what sends
         // `CMSG_WRAP_ITEM` (`ui_items::feed`'s wrap drain, through the engine's
-        // `pickup_container_item`). Decision 1934.
+        // `pickup_container_item`).
         if let Some(c) = clicked.filter(|c| c.begins_gift_wrap) {
             debug!(
                 "ui_items: arm gift wrap with {:#x} (lua bag {bag} slot {slot})",
@@ -464,7 +464,7 @@ pub(super) fn drain_container_uses(
             script.arm_gift_wrap(bag, slot);
             continue;
         }
-        // #3 — the quest-starter (`0x5d8dd2`, decision 0664): the item's own guid is the
+        // #3 — the quest-starter (`0x5d8dd2`): the item's own guid is the
         // questgiver. Placed at the reference's position rather than at the tail, so a starter
         // that is *also* readable or lootable offers its quest instead of reading/opening. Routed
         // through the one shared use fork, which is what turns a non-zero StartQuest into the
@@ -540,7 +540,7 @@ pub(super) fn drain_container_uses(
         // send consults **neither** LockID nor the instance UNLOCKED bit (VERIFIED both ways — no
         // `[rec+0x1ac]` operand exists anywhere on the send path). So a still-locked junkbox DOES
         // send, and the server's `EQUIP_ERR_ITEM_LOCKED` is where the player's "Item is locked"
-        // line comes from. Gating locally would eat the click in silence (decision 0896).
+        // line comes from. Gating locally would eat the click in silence.
         if let Some(c) = clicked.filter(|c| c.opens_loot) {
             debug!(
                 "ui_items: open item {:#x} (lua bag {bag} → wire {bag_index}/{wire_slot})",
@@ -553,15 +553,15 @@ pub(super) fn drain_container_uses(
             // vmangos' `HandleOpenItemOpcode` ends in `SendLoot(pItem->GetObjectGuid(),
             // LOOT_CORPSE)`, so `SMSG_LOOT_RESPONSE` comes back on the item guid with wire type
             // **1** — and 1477's admission gate refuses a type-1 answer against a *cold* latch.
-            // Without this arm the window never opens (decision 1531).
+            // Without this arm the window never opens.
             //
             // It arms no pose: predicate B `0x612710` answers false for an ITEM, and
             // [`crate::ui_loot::resolve_loot_kneel`] reaches the same false through a guid the
             // object manager cannot resolve — we stream no item entities.
             loot_latch.0 = Some(c.guid);
             // **The gray lock, armed before the send** — the reference's emitter `0x5edc80` calls
-            // the lock setter `0x4953e0` at `0x5edcd9` and only then ships `CMSG_OPEN_ITEM`
-            // (decision 0916). So a clam,
+            // the lock setter `0x4953e0` at `0x5edcd9` and only then ships `CMSG_OPEN_ITEM`.
+            // So a clam,
             // lockbox or loot bag greys the instant you right-click it and stays grey until the
             // open resolves — the emptied item vanishing (a resolving field update), a refusal
             // (`EQUIP_ERR_ITEM_LOCKED` on a still-locked junkbox), or the window closed with loot
@@ -616,7 +616,7 @@ pub(super) fn drain_container_uses(
 #[derive(Clone, Copy)]
 struct Clicked {
     guid: u64,
-    /// `OBJECT_FIELD_ENTRY` — the ammo arm addresses by entry, not by slot (decision 0526).
+    /// `OBJECT_FIELD_ENTRY` — the ammo arm addresses by entry, not by slot.
     entry: u32,
     /// Instance `ITEM_FIELD_ITEM_TEXT_ID` (a mail-made permanent letter); 0 = not a letter.
     item_text_id: u32,
@@ -624,26 +624,26 @@ struct Clicked {
     display_info_id: u32,
     start_quest: u32,
     spell_index: u8,
-    /// The template's on-use SPELL id — what the cast tail's in-flight guard is keyed on
-    /// (decision 0908); `None` = this item casts nothing.
+    /// The template's on-use SPELL id — what the cast tail's in-flight guard is keyed on;
+    /// `None` = this item casts nothing.
     use_spell: Option<u32>,
     /// `ItemInfo::unwraps_gift` for this instance — dispatcher arm #2.
     unwraps_gift: bool,
     /// `ItemInfo::begins_gift_wrap` — arm #2's OTHER side: a piece of wrapping paper. Arms the
-    /// local wrap cursor and sends nothing (decision 1934).
+    /// local wrap cursor and sends nothing.
     begins_gift_wrap: bool,
     /// `ItemInfo::opens_loot` for this template — dispatcher arm #8.
     opens_loot: bool,
-    /// The template's `PageText` — dispatcher arm #5's book gate (decision 1105); `0` = not a
+    /// The template's `PageText` — dispatcher arm #5's book gate; `0` = not a
     /// book. The reader re-reads the head (and the material) off the template itself as it paints,
     /// like the reference, so only the fork's predicate is carried here.
     page_text: u32,
-    /// The template's `ITEM_FLAG_CHARTER` — a guild petition (decision 1672).
+    /// The template's `ITEM_FLAG_CHARTER` — a guild petition.
     is_charter: bool,
 }
 
 /// Drain the pick/place/swap/split moves `PickupContainerItem`/`SplitContainerItem` queued and
-/// send them on the wire (decision 0216 §6, whole-space since slice 2).
+/// send them on the wire (whole-space since slice 2).
 ///
 /// `count: None` (a whole-stack move/swap): both ends map through [`wire_pos`]. Both landing on
 /// [`BAG_PLAYER_INVENTORY`] (the player's own grid — equipment, bag buttons, and the backpack) is
@@ -657,7 +657,7 @@ struct Clicked {
 /// since `SplitContainerItem`'s pickup already resolved a real slot) → `CMSG_SPLIT_ITEM`, `count`
 /// clamped to the wire's `u8`.
 ///
-/// Every send locks the Lua-space slots it touches — both ends (decision 0218 §3: "a send locks
+/// Every send locks the Lua-space slots it touches — both ends ("a send locks
 /// both ends") — recording each slot's CURRENT item guid as the resolving clear's baseline
 /// ([`PendingItemOps::add`]) and firing `ITEM_LOCK_CHANGED` immediately, so a bag window's own
 /// synchronous post-click repaint and every later frame agree (only the SOURCE slot's repaint at
@@ -676,7 +676,7 @@ pub(super) fn drain_container_moves(
         return;
     };
     let store = self_q.iter().next();
-    // **The completed gift wraps** (decision 1934): a left-click that spent an armed paper. Both
+    // **The completed gift wraps**: a left-click that spent an armed paper. Both
     // pairs go out in the wire's own order — the paper first — and the whole eligibility question
     // is the server's: it answers an ineligible target with one of the six `ERR_CANT_WRAP_*`
     // reasons through the ordinary `SMSG_INVENTORY_CHANGE_FAILURE` line.
@@ -716,7 +716,7 @@ pub(super) fn drain_container_moves(
     }
 }
 
-/// **The player-direct slot ranges** the equip deferral elects on (`0x5e0c40`, decision 1750):
+/// **The player-direct slot ranges** the equip deferral elects on (`0x5e0c40`):
 /// `[0, 22]` — the 19 equipment slots plus the four equipped-bag slots — and `[63, 68]`, the bank
 /// bag slots. A wire position is player-direct when its bag byte is the player's own array AND its
 /// slot falls in one of these; the backpack (`23..38`), the keyring and a bag's inner slots are all
@@ -726,7 +726,7 @@ fn is_equip_position(bag_index: u8, slot: u8) -> bool {
     bag_index == BAG_PLAYER_INVENTORY && (slot <= 22 || (63..=68).contains(&slot))
 }
 
-/// One container move — the whole-stack swap, the split, the pending lock, and (decision 1750) the
+/// One container move — the whole-stack swap, the split, the pending lock, and the
 /// equip soulbind deferral. Split out of the drain so `EquipPendingItem`'s re-issue runs the very
 /// same body with `suppress` set, rather than a second copy of it that has to be kept agreeing.
 ///
@@ -843,7 +843,7 @@ pub(crate) fn send_container_move(
 }
 
 /// Drain the `(bag, slot, count)` destroys `DeleteCursorItem` queued (the delete-confirm popup's
-/// accept, decision 0216 §3) and send `CMSG_DESTROYITEM`. `count == 0` is the engine's "whole
+/// accept) and send `CMSG_DESTROYITEM`. `count == 0` is the engine's "whole
 /// stack" convention — it rides straight onto the wire, which shares the same convention.
 ///
 /// Locks the one slot touched — baselined on its CURRENT `(guid, count)`, same as
@@ -958,7 +958,7 @@ mod tests {
         (app, rx)
     }
 
-    /// **The clam regression (decision 1531).** Arm site four of five: the `CMSG_OPEN_ITEM` send
+    /// **The clam regression.** Arm site four of five: the `CMSG_OPEN_ITEM` send
     /// latches the ITEM's own guid (`0x5edcc0`). It is not cosmetic
     /// and it is not about the pose — vmangos answers this opcode with `SendLoot(item guid,
     /// LOOT_CORPSE)`, i.e. `SMSG_LOOT_RESPONSE` type **1** on that same guid (live-verified by
@@ -983,14 +983,14 @@ mod tests {
             Some(CLAM),
             "…having first latched the item's own guid, or the type-1 answer is refused"
         );
-        // The grey lock is the reference's other pre-send write, and still there (decision 0916).
+        // The grey lock is the reference's other pre-send write, and still there.
         assert!(
             app.world().resource::<PendingItemOps>().contains(0, 1),
             "the slot greys at the click"
         );
     }
 
-    /// **Right-clicking wrapping paper arms the wrap and sends NOTHING** (decision 1934) — the
+    /// **Right-clicking wrapping paper arms the wrap and sends NOTHING** — the
     /// same dispatcher arm the wrapped-gift unwrap takes, on its other side. This is the bug:
     /// benilla fell through to `CMSG_USE_ITEM`, which casts a spell the paper does
     /// not have.
@@ -1031,7 +1031,7 @@ mod tests {
     }
 }
 
-/// **The bind confirmations' answers** (decision 1750) — `EquipPendingItem`/`CancelPendingEquip`
+/// **The bind confirmations' answers** — `EquipPendingItem`/`CancelPendingEquip`
 /// and `ConfirmBindOnUse`, drained where the senders they re-issue live.
 ///
 /// Accept is a **re-issue with `suppress` set**, not a confirm packet: 1.12 has no such opcode, and
@@ -1122,7 +1122,7 @@ pub(super) fn drain_bind_confirm_answers(
 }
 
 /// `ConfirmBindOnUse()` — arm 290's accept, its own system because it is the only one of the three
-/// that re-issues through the **cast ladder** (an item use IS a cast, decisions 0908/0914). No
+/// that re-issues through the **cast ladder** (an item use IS a cast). No
 /// index and no argument: that arm's pending state is one cell, not an array element. A count
 /// rather than a bool for the same reason [`UiScript::take_binder_confirms`] is one; the record is
 /// taken on the first, so a doubled accept re-uses nothing.
@@ -1497,7 +1497,7 @@ mod bind_confirm_tests {
     }
 
     /// An item that is ALREADY soulbound never asks — `0x5da2c0`, the same predicate the enchant
-    /// cursor and the tooltip's Soulbound override use (decisions 0928, 1562).
+    /// cursor and the tooltip's Soulbound override use.
     #[test]
     fn an_already_bound_item_places_without_asking() {
         benilla_formats::wow_data_or_skip!();

@@ -1,5 +1,4 @@
-//! The guild session — the identity cache, the roster, the ranks, and the outbound verbs
-//! (decision 1257).
+//! The guild session — the identity cache, the roster, the ranks, and the outbound verbs.
 //!
 //! [`GuildState`] mirrors the wire the way [`crate::ui_social`]'s `SocialState` does: the seven
 //! server packets replace it or patch it, and the feed ([`feed`]) turns it into the display-ready
@@ -68,7 +67,7 @@ struct Identity {
     /// The ten rank names, index 0 = guild master; empty past the guild's real rank count.
     rank_names: [String; GUILD_RANKS_MAX_COUNT],
     /// The guild's tabard — the five emblem indices, which are what the **body composite** paints
-    /// onto a member's guild tabard (decision 1704). This is the second consumer of the identity
+    /// onto a member's guild tabard. This is the second consumer of the identity
     /// cache and the reason it is not a UI-only structure: the reference reads the same cached
     /// record from the character compositor (`0x6d6d20` → `0x47a610`) and from `GetGuildInfo`.
     emblem: GuildEmblem,
@@ -156,11 +155,11 @@ pub(crate) struct GuildState {
     guild_id: u32,
     /// Our own `PLAYER_GUILDRANK` (field 192), **0-based**, `0` = guild master.
     rank_index: u32,
-    /// Guild id → identity, from `SMSG_GUILD_QUERY_RESPONSE`, ask-once through [`QueryCache`]
-    /// (decision 2288). Holds negatives (module doc).
+    /// Guild id → identity, from `SMSG_GUILD_QUERY_RESPONSE`, ask-once through [`QueryCache`].
+    /// Holds negatives (module doc).
     identities: QueryCache<u32, Identity>,
     /// Bumped by every landed identity ([`Self::apply_query_response`]) — never by an ask. The
-    /// gated unit feeds' watch counter (decision 1439): `unit_guild`'s miss resolves later, and
+    /// gated unit feeds' watch counter: `unit_guild`'s miss resolves later, and
     /// `is_changed` could not flag the landing while the miss itself took `&mut self` per frame
     /// (2288 made it `&self`; the counter stays as the finer signal).
     identity_generation: u64,
@@ -203,7 +202,7 @@ pub(crate) struct GuildState {
     /// through the script VM and emits chat directly, passing no message record — so unlike every
     /// other line in this module they cannot ride [`crate::ui_action::UiErrorKeys`], whose whole
     /// contract is that the catalog names the surface. They wait here for [`feed`] instead, which
-    /// is where the VM is (decision 2054).
+    /// is where the VM is.
     pending_info: Vec<GuildInfo>,
 }
 
@@ -228,7 +227,7 @@ impl GuildState {
         if (self.guild_id, self.rank_index) == (guild_id, rank_index) {
             return false;
         }
-        // **`0` here is "the descriptor has not told us yet", not "a guild we were in"** (B376).
+        // **`0` here is "the descriptor has not told us yet", not "a guild we were in"**.
         // The mirror's id starts at 0 and only moves when our own avatar streams, which at a
         // login is a whole packet burst AFTER the server has already sent the guild's MOTD
         // (`SMSG_GUILD_EVENT 0x02`, vmangos `CharacterHandler.cpp` at the top of the login
@@ -300,7 +299,7 @@ impl GuildState {
         self.identity_generation
     }
 
-    /// The tabard designer's view of our guild record (decision 1977): `Some(five)` once the
+    /// The tabard designer's view of our guild record: `Some(five)` once the
     /// record is cached — `-1`s for an undesigned tabard, as the wire carries them — and `None`
     /// while it has not arrived or the player has no guild. A miss sends the query, the lazy-cache
     /// idiom every other read of this cache uses.
@@ -319,7 +318,7 @@ impl GuildState {
         ])
     }
 
-    /// A saved emblem's eviction (`0x5e715f`, decision 1977): our guild's cached record is
+    /// A saved emblem's eviction (`0x5e715f`): our guild's cached record is
     /// dropped so the next query anywhere re-fetches it — the tabards of every member in sight
     /// re-dress off the arrival, as the reference's guild-appearance refresh does.
     pub(crate) fn evict_own_identity(&mut self) {
@@ -646,12 +645,12 @@ fn guild_emblem(
     emblem.is_designed().then_some(emblem)
 }
 
-/// The guild family's packet handlers (decision 1257; in the net handler table since 2312),
+/// The guild family's packet handlers (in the net handler table since 2312),
 /// beside the state they drive ([`crate::ui_social::net`]'s shape): the identity cache, the
 /// roster, and the `ERR_GUILD_*` lines the engine composes; the guild EVENTS fire off the mirror
 /// in [`feed_guild`], on their edges. The ones that owe a line queue the **message id** [`lines`]
 /// named, the way `crate::net::apply`'s group shims do — the surface and the sound come off the
-/// catalog at the error frame's drain, not from here (decision 2054).
+/// catalog at the error frame's drain, not from here.
 pub(crate) mod net {
     use super::*;
     use crate::ui_action::{UiError, UiErrorKeys};
@@ -688,7 +687,7 @@ pub(crate) mod net {
 
     /// The sign-on/sign-off pair's trailing guid exists for exactly one purpose — the
     /// four-conjunct display condition on their line — which is why this handler reads the
-    /// social lists, the notify knob and our own guid (decision 1589; the condition and its byte
+    /// social lists, the notify knob and our own guid (the condition and its byte
     /// addresses are on [`event`]).
     fn on_event(
         In(ev): In<SessionEvent>,
@@ -742,7 +741,7 @@ pub(crate) mod net {
         }
     }
 
-    /// The guild session is login-scoped (decision 1257) — and strictly, because the next login
+    /// The guild session is login-scoped — and strictly, because the next login
     /// may be a *different character*, whose guild id, rank, rights and roster share nothing
     /// with this one's. The identity cache goes too: it is keyed by guild id, so it would
     /// survive correctly, but the reference's own is backed by `guildcache.wdb` and re-primed
@@ -774,7 +773,7 @@ pub(crate) mod net {
     /// `SMSG_GUILD_EVENT`. The trailing guid rides only on the sign-on/sign-off pair, and it is
     /// there to answer that pair's **display condition** — which the reference builds out of
     /// **four conjuncts**, all of them in the handler's `0x0c`/`0x0d` arms, each branching to the
-    /// same silent exit `0x5e74c9` (decision 1589):
+    /// same silent exit `0x5e74c9`:
     ///
     /// 1. **there is a local player object.** Ours is "we know our own guid" — the same fact, and
     ///    it is what conjunct 3 needs anyway.
@@ -941,7 +940,7 @@ mod tests {
         }
     }
 
-    /// The sign-on/sign-off line's **four-conjunct** display condition (decision 1589). Every
+    /// The sign-on/sign-off line's **four-conjunct** display condition. Every
     /// conjunct gets its own case, because the two that were
     /// wrong were wrong in *opposite* directions and a single happy-path assertion would have
     /// caught neither.

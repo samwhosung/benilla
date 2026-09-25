@@ -1,7 +1,7 @@
-//! **A bar slot never holds a rank the character has outgrown** (decision 0883) — the one place
+//! **A bar slot never holds a rank the character has outgrown** — the one place
 //! that keeps the action bar's spell ids in step with the spell book's ranks.
 //!
-//! The bar is client-authoritative (decision 0218 §4): the server stores 120 packed words and
+//! The bar is client-authoritative: the server stores 120 packed words and
 //! hands them back at login, and nothing on the server side ever rewrites them when a rank is
 //! learned (VERIFIED vmangos — `Player::AddSpell`'s supersede path touches only the spell store;
 //! the only `ConvertSpell` that walks `character_action` is the race-change tool). So the stored
@@ -38,7 +38,7 @@ use crate::net::{ClientCommand, NetCommands};
 use crate::ui_spellbook::SkillLines;
 
 /// Re-point every spell button at the highest rank of its ability the book actually holds, and
-/// persist each move (decision 0216 §7: a local slot mutation IS a `CMSG_SET_ACTION_BUTTON` — the
+/// persist each move (a local slot mutation IS a `CMSG_SET_ACTION_BUTTON` — the
 /// bar has no other writer, so a fix we keep to ourselves would be re-applied every single login
 /// while the server's copy stayed wrong).
 ///

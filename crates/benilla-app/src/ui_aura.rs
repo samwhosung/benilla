@@ -1,4 +1,4 @@
-//! The app-side **aura feed** (decisions 0255/0257): turns the live `UNIT_FIELD_AURA` blocks of
+//! The app-side **aura feed**: turns the live `UNIT_FIELD_AURA` blocks of
 //! our own avatar and of the current target into the ordered [`AuraState`] lists the `UnitAura`
 //! bindings read, maintains the reference client's insertion-ordered display cache for the player,
 //! joins in the self-only durations, and drains the right-click cancels back to the wire.
@@ -6,19 +6,19 @@
 //! Two things make this more than a snapshot projection:
 //!
 //! - **Order is state.** The player's buff bar draws a densely packed cache in *insertion* order that
-//!   repacks on removal (`PlayerAuras_Update`, byte-verified — decision 0257). Ascending slot order,
+//!   repacks on removal (`PlayerAuras_Update`, byte-verified). Ascending slot order,
 //!   which a fresh descriptor read would give, is a *different* order and would shuffle icons into
 //!   recycled slots. So [`PlayerAuraCache`] is carried across frames: survivors keep their position,
 //!   a dropped aura closes its gap, a new aura appends at the end.
 //! - **Durations arrive out of band, and before the slot is named.** `SMSG_UPDATE_AURA_DURATION`
 //!   ([`AuraDurations`], filled by the net apply path) is keyed by raw slot and lands *before* the
 //!   `UNIT_FIELD_AURA` delta that says which spell sits there (verified, decision 0257 B6; measured
-//!   at one frame, ~50 ms, on a fresh apply — decision 0846). So a stamp's slot is **empty at the
+//!   at one frame, ~50 ms, on a fresh apply). So a stamp's slot is **empty at the
 //!   moment it arrives**, and the only thing that may invalidate it is the aura it would be joined
 //!   to, never the slot's momentary occupancy: the feed keeps every stamp and gates the *join* on
 //!   the aura having appeared no earlier than the packet. That gate is what stops a timer left by a
 //!   since-expired occupant showing on the permanent aura that recycled its slot (the reference
-//!   avoids this via a DBC "until cancelled" flag we don't parse — decision 0257 §3).
+//!   avoids this via a DBC "until cancelled" flag we don't parse).
 //!
 //! And one thing the bar does **not** get from here: the running countdown. Rust recomputes each
 //! aura's `expirationTime` every frame, but the event this feed fires is the reference's
@@ -27,9 +27,9 @@
 //! **every frame** and caches only the buff *index* on the event — and so does `BuffFrame.xml`.
 //! A bar that cached the expiry on the event instead is decision 0846's second defect.
 //!
-//! Scope: the **local player** (decisions 0255/0257) and the **target** (the target frame's aura
-//! rows — 0255's deferred slice). The target's list is the byte-verified *other-unit* law
-//! (decision 0257): `UnitBuff`/`UnitDebuff` on another unit read that unit's own `UNIT_FIELD_AURA`
+//! Scope: the **local player** and the **target** (the target frame's aura
+//! rows — 0255's deferred slice). The target's list is the byte-verified *other-unit* law:
+//! `UnitBuff`/`UnitDebuff` on another unit read that unit's own `UNIT_FIELD_AURA`
 //! straight, **ascending raw slot within the half** — no insertion cache, no durations (the 1.12
 //! wire carries none for anyone but yourself). It **does** carry the display filter, though: an aura
 //! whose spell is flagged never-display (`NO_AURA_ICON`/`DO_NOT_DISPLAY` — a warrior stance) is
@@ -62,8 +62,8 @@ use crate::ui_unit::UnitFeed;
 /// apply path (which owns the event stream), read by [`feed_auras`]. A slot's entry is overwritten
 /// by each fresh packet (apply/refresh) and dropped only when the *session* ends (leaving
 /// `InWorld`) — never per-frame on slot occupancy, which would delete every stamp in the frame
-/// before its own aura arrives (decision 0846), and never on the avatar entity's absence, which a
-/// cross-map worldport produces mid-session while the auras themselves live on (decision 0900).
+/// before its own aura arrives, and never on the avatar entity's absence, which a
+/// cross-map worldport produces mid-session while the auras themselves live on.
 /// This is the reference's `0xbc5f68` expiry array: raw-slot-keyed, written only by the duration
 /// packet, and a process global that no world change touches. Bounded by construction: one entry
 /// per raw slot, ≤ 48.
@@ -89,7 +89,7 @@ struct DurationStamp {
 }
 
 impl AuraDurations {
-    /// Record a `SMSG_UPDATE_AURA_DURATION`. Called from the net apply drain (decision 0257).
+    /// Record a `SMSG_UPDATE_AURA_DURATION`. Called from the net apply drain.
     pub(crate) fn set(&mut self, slot: u8, remaining_ms: u32, now: f64) {
         let total = f64::from(remaining_ms) / 1000.0;
         if trace_period().is_some() {
@@ -108,7 +108,7 @@ impl AuraDurations {
     }
 }
 
-/// One aura in the player's display cache — a benilla mirror of a `0xbc6040` record (decision 0257).
+/// One aura in the player's display cache — a benilla mirror of a `0xbc6040` record.
 /// Kept across frames so the insertion order survives; the display fields refresh from the
 /// descriptor each frame, the position does not.
 struct CachedAura {
@@ -121,7 +121,7 @@ struct CachedAura {
     stacks: u8,
 }
 
-/// The player's insertion-ordered aura cache (decision 0257): buffs and debuffs interleaved in the
+/// The player's insertion-ordered aura cache: buffs and debuffs interleaved in the
 /// order the reference client's `PlayerAuras_Update` would hold them. Split into the two filtered
 /// lists only at the push, since the bindings filter by sign themselves.
 #[derive(Resource, Default)]
@@ -141,7 +141,7 @@ impl PlayerAuraCache {
 /// The aura-event cut: [`feed_auras`] fires `PLAYER_AURAS_CHANGED` / `UNIT_AURA("player")`
 /// **synchronously** (`UiScript::fire_event` walks the handlers inline), so a feed whose pushed
 /// state a handler re-reads on them runs `.before(AuraEvents)` — the stance feed, whose
-/// `isActive` is the form aura's own slot and is pushed silently on that edge (decision 2009) —
+/// `isActive` is the form aura's own slot and is pushed silently on that edge —
 /// or the handler reads last frame's state and the repaint waits for the next unrelated event.
 /// The twin of [`crate::ui_action::CooldownEvents`].
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -161,7 +161,7 @@ impl Plugin for UiAuraPlugin {
             .add_systems(Update, feed_auras.in_set(UnitFeed).in_set(AuraEvents))
             .add_systems(Update, drain_aura_cancels.after(UiInput))
             // The ONLY teardown of the aura state, and it hangs off the session edge — never off
-            // the avatar entity's existence, which a worldport interrupts mid-session (0900).
+            // the avatar entity's existence, which a worldport interrupts mid-session.
             .add_systems(OnExit(ClientState::InWorld), end_session_aura_state);
     }
 }
@@ -169,7 +169,7 @@ impl Plugin for UiAuraPlugin {
 /// Reconcile the insertion-ordered cache against the live descriptor: drop entries whose slot no
 /// longer holds their spell (expired, or the slot was recycled), then append newly occupied slots in
 /// ascending order (so a same-tick multi-apply is deterministic). Survivors keep their position and
-/// refresh their mutable fields. Mirrors `PlayerAuras_Update`'s shift-down + append (decision 0257).
+/// refresh their mutable fields. Mirrors `PlayerAuras_Update`'s shift-down + append.
 fn reconcile(cache: &mut Vec<CachedAura>, live: &[UnitAuraSlot], now: f64) {
     cache.retain(|c| {
         live.iter()
@@ -235,10 +235,10 @@ struct AuraFeedMemo {
     /// token is cleared). The guid joins the key so a target *switch* re-fires `UNIT_AURA` even
     /// between two units whose lists happen to project identically.
     target_last: Option<(u64, Vec<AuraProjection>)>,
-    /// The pet half, same shape and same reason (decision 0990): a stable swap between two pets
+    /// The pet half, same shape and same reason: a stable swap between two pets
     /// carrying identical auras must still re-fire, so the guid joins the key.
     pet_last: Option<(u64, Vec<AuraProjection>)>,
-    /// The target-of-target half (decision 1576) — the ToT frame's four debuff buttons. Same shape
+    /// The target-of-target half — the ToT frame's four debuff buttons. Same shape
     /// and same reason as the two above: the guid joins the key, because your target swinging from
     /// one identically-debuffed add to another is still a change the row has to hear.
     tot_last: Option<(u64, Vec<AuraProjection>)>,
@@ -317,8 +317,8 @@ fn projection_of(list: &[AuraState]) -> Vec<AuraProjection> {
         .collect()
 }
 
-/// **Any unit but yourself**, read straight off its descriptor — the verified other-unit aura law
-/// (decisions 0257/0268): ascending raw slot within the half, durationless, through the same
+/// **Any unit but yourself**, read straight off its descriptor — the verified other-unit aura law:
+/// ascending raw slot within the half, durationless, through the same
 /// display filter the player bar uses.
 ///
 /// One function for every non-self token (`"target"` since 0255, `"pet"` since 0990) because it is
@@ -327,7 +327,7 @@ fn projection_of(list: &[AuraState]) -> Vec<AuraProjection> {
 /// the Lua binding keeps `UnitBuff(token, i)` returning the i-th *shown* aura, matching the
 /// reference's own indices.
 ///
-/// `buffs_visible` is the **unit-level** gate (decision 1035): `UnitBuff 0x519500` decides, once
+/// `buffs_visible` is the **unit-level** gate: `UnitBuff 0x519500` decides, once
 /// per unit and *before* it walks a single slot, whether this unit's positive half is enumerable at
 /// all — see [`buffs_visible_on`]. False drops the helpful half entirely, which is exactly what the
 /// reference does (a single nil for every index), so `UnitBuff(token, i)` goes nil while
@@ -362,7 +362,7 @@ fn other_unit_auras(
                 // `untilCancelled` is a field of the PLAYER cache record (`0xbc6040`+0xc) and
                 // `GetPlayerBuff` is the only reader; no other unit has a cache, and no binding can
                 // reach this flag through a non-player token. A self-target does not come through
-                // here at all — it mirrors the player list (decision 0257 §2).
+                // here at all — it mirrors the player list.
                 until_cancelled: false,
                 channeled: display
                     .is_some_and(|d| d.attributes_ex & SPELL_ATTR_EX_IS_CHANNELED != 0),
@@ -468,7 +468,7 @@ fn until_cancelled(
                 .any(|e| matches!(e, 0x23 | 0x77 | 0x80 | 0x81)))
 }
 
-/// The reference's aura display filter (decisions 0268 + 0417): an aura is shown iff its spell is
+/// The reference's aura display filter: an aura is shown iff its spell is
 /// *not* flagged never-display (`SPELL_ATTR_DO_NOT_DISPLAY` / `SPELL_ATTR_EX_NO_AURA_ICON`, via
 /// `SpellDisplay::hidden_from_aura_bar`) **and** is not a tracking spell
 /// (`SpellDisplay::tracking_aura` — the `{0x2c,0x2d,0x97}` effect exclusion both filters carry:
@@ -482,7 +482,7 @@ fn until_cancelled(
 /// **That fail-open is ours, not the reference's, on this path** — the parenthetical that used to
 /// justify it here ("like the reference's own no-SpellRec path, which inserts") was true of the
 /// *player cache* and is FALSE of the non-player walk: `UnitBuff`/`UnitDebuff` **skip** a slot
-/// whose id has no `Spell.dbc` row (`id > [0xc0d78c]` or a null row; decision 1035).
+/// whose id has no `Spell.dbc` row (`id > [0xc0d78c]` or a null row).
 /// Kept as fail-open deliberately: every id on the wire is a real spell, so the two behaviours are
 /// indistinguishable in practice, and failing *closed* would let a catalog load hiccup silently
 /// blank every aura on every frame. A knowing divergence, recorded — not a comment asserting
@@ -521,7 +521,7 @@ fn feed_auras(
     selection: Res<Selection>,
     stores: Query<&ObjectStore>,
     spells: Option<Res<Spells>>,
-    // The pet half (decision 0990): the bar owns the pet's identity, the index resolves it.
+    // The pet half: the bar owns the pet's identity, the index resolves it.
     pet: Res<crate::ui_pet::PetBar>,
     index: Res<GuidIndex>,
     // The `UnitBuff` unit-level gate's inputs ([`buffs_visible_on`]) — the same reaction resolve
@@ -530,7 +530,7 @@ fn feed_auras(
     factions: Option<Res<Factions>>,
     reputations: Res<Reputations>,
     // Read-only over the stamps: the feed joins them, the net apply path writes them, and only the
-    // session end drops them (decision 0900). Nothing the feed sees may invalidate one.
+    // session end drops them. Nothing the feed sees may invalidate one.
     durations: Res<AuraDurations>,
     mut cache: ResMut<PlayerAuraCache>,
     time: Res<Time<Real>>,
@@ -556,7 +556,7 @@ fn feed_auras(
         // `GetPlayerBuffTimeLeft`'s reader `0x4e4467`. That is the whole xref set: `0xbc5f68`
         // appears three times in `WoW.exe`. Nothing clears them on a world change, so a debuff's
         // countdown simply carries across the loading screen. Clearing here was the "after a tele
-        // my disease has no timer" defect (decision 0900): the stamps were dropped, and even
+        // my disease has no timer" defect: the stamps were dropped, and even
         // without that every survivor's `appeared_at` restarted at the re-stream, so the freshness
         // gate below would have rejected whatever stamps remained.
         return;
@@ -664,8 +664,8 @@ fn feed_auras(
     // Debug affordance (`BENILLA_AURA_DUMP=1`): when the visible set changes, log every slot the
     // player's bar will draw — raw slot, spell id, resolved name, class, and the flags nibble. The
     // fastest answer to "what is actually on my bar, and should any of it be there?" — the husk that
-    // `unit_aura`'s `& 0x0E` gate now hides never reaches here, so anything listed is a live aura
-    // (decisions 0255/0257). Cheap: the env is only consulted on a change.
+    // `unit_aura`'s `& 0x0E` gate now hides never reaches here, so anything listed is a live aura.
+    // Cheap: the env is only consulted on a change.
     if changed && std::env::var_os("BENILLA_AURA_DUMP").is_some() {
         info!("aura dump: {} aura(s) on the player bar", cache.auras.len());
         for c in &cache.auras {
@@ -689,11 +689,11 @@ fn feed_auras(
     }
 
     // The target's list (the target frame's aura rows — 0255's deferred slice). A self-target
-    // mirrors the player list (decision 0257 §2: the player-bar law under every token); any other
+    // mirrors the player list (the player-bar law under every token); any other
     // unit is its descriptor read straight — ascending raw slot, durationless (the verified
-    // other-unit law, 0257/0268) — but through the SAME display filter (`shown_in_aura_ui`): a
+    // other-unit law) — but through the SAME display filter (`shown_in_aura_ui`): a
     // never-display aura (a warrior stance) is hidden here too, exactly as the reference hides it
-    // (decision 0417 — the director's Battle-Stance-on-the-target report; corrects 0268's player-only
+    // (the director's Battle-Stance-on-the-target report; corrects 0268's player-only
     // scope note). Filtering here rather than in the Lua binding keeps `UnitBuff("target", i)`
     // returning the i-th *shown* aura, matching the reference's own indices.
     let target_list: Option<Vec<AuraState>> =
@@ -705,7 +705,7 @@ fn feed_auras(
             // gate's second argument.
             let target_store = stores.get(e).ok()?;
             // The gate is resolved per unit, once, exactly where the reference resolves it —
-            // before any slot is read (decision 1035).
+            // before any slot is read.
             let buffs = buffs_visible_on(
                 target_store,
                 Some(store),
@@ -722,7 +722,7 @@ fn feed_auras(
             Some(other_unit_auras(target_store, catalog, buffs))
         });
 
-    // The pet's list — the pet frame's four debuff buttons (decision 0990). Same other-unit law as
+    // The pet's list — the pet frame's four debuff buttons. Same other-unit law as
     // the target above, and deliberately the same function: a pet is not a special case of it.
     // The token is the bar's cached pet guid ([`crate::ui_pet::feed_pet_unit`]'s own note on why
     // that word and not `UNIT_FIELD_SUMMON`). A self-mirror leg would be dead code here — no unit
@@ -732,15 +732,15 @@ fn feed_auras(
         .then(|| index.0.get(&pet_guid))
         .flatten()
         .and_then(|&e| stores.get(e).ok())
-        // **The pet keeps the ungated read, deliberately** (decision 1035). A pet is
+        // **The pet keeps the ungated read, deliberately**. A pet is
         // PLAYER_CONTROLLED, which sends `CanAssist` down an arm (`0x60673e`-`0x60679f`, keyed on
         // an `[obj+0xe68]` record) not yet named — so the gate is not known here, and
         // guessing it is the one mistake that could blank a working pet frame. `true` is the
-        // status quo; the pet frame draws only debuffs today anyway (0990), so nothing observable
+        // status quo; the pet frame draws only debuffs today anyway, so nothing observable
         // rides on it until that arm is derived.
         .map(|store| other_unit_auras(store, catalog, true));
 
-    // The target's target's list — the ToT frame's four debuff buttons (decision 1576). Same
+    // The target's target's list — the ToT frame's four debuff buttons. Same
     // other-unit law as the target and the pet above, resolved through the same one-hop
     // `UNIT_FIELD_TARGET` read the unit feed's `"targettarget"` snapshot uses. The self-mirror leg
     // is NOT dead code here the way it would be for a pet: while you tank, your target's target is
@@ -839,7 +839,7 @@ fn feed_auras(
 
 /// The apply/refresh-to-descriptor slack: a duration packet is accepted for an aura if it arrived no
 /// more than this long before the aura appeared. Generous versus the **measured** lead — one client
-/// frame, ~50 ms, on a fresh apply against the live server (decision 0846) — and tight versus the
+/// frame, ~50 ms, on a fresh apply against the live server — and tight versus the
 /// seconds a stale recycled-slot stamp would be off by.
 const DURATION_SLACK: f64 = 1.0;
 
@@ -852,7 +852,7 @@ const DURATION_SLACK: f64 = 1.0;
 /// packet that matters, which is decision 0846's first defect.
 ///
 /// A stamp that predates the aura by more than [`DURATION_SLACK`] belonged to a since-expired
-/// occupant of a recycled slot, and is dropped (decision 0257 §3 — our stand-in for the reference's
+/// occupant of a recycled slot, and is dropped (our stand-in for the reference's
 /// unparsed `SpellDuration.dbc` "until cancelled" flag).
 fn join_duration(
     stamp: Option<&DurationStamp>,
@@ -872,7 +872,7 @@ fn join_duration(
 ///
 /// This is the *only* place the state is dropped, and the edge it hangs off is the point. The
 /// reference drops nothing, ever — `0xbc5f68` is zeroed once at client startup and written only by
-/// the duration packet (decision 0900) — because at this boundary it was protected by a server that
+/// the duration packet — because at this boundary it was protected by a server that
 /// re-sent every aura's duration in its login preamble; mangos still carries the bare
 /// `// SMSG_UPDATE_AURA_DURATION` placeholder where that packet went in
 /// `Player::SendInitialPacketsBeforeAddToMap`, and vmangos never fills it in. So a stamp we kept
@@ -924,11 +924,11 @@ mod tests {
         app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
             .insert_state(ClientState::InWorld)
             .init_resource::<Selection>()
-            // The pet half's two inputs (decision 0990). Left empty here — this app has no pet, so
+            // The pet half's two inputs. Left empty here — this app has no pet, so
             // the `"pet"` token stays cleared and the feed's pet leg is inert.
             .init_resource::<crate::ui_pet::PetBar>()
             .init_resource::<GuidIndex>()
-            // The `UnitBuff` gate's reaction inputs (decision 1035). `Factions` is an
+            // The `UnitBuff` gate's reaction inputs. `Factions` is an
             // `Option<Res<..>>` (it needs the DBC catalog), but `Reputations` is not — the feed
             // reads it unconditionally, so a bare app must carry it or the system fails validation.
             .init_resource::<Reputations>()
@@ -1020,7 +1020,7 @@ mod tests {
 
     /// The display filter both the player bar and the target rows run through (`shown_in_aura_ui`),
     /// exercised against the REAL 5875 `Spell.dbc`: a warrior's Battle Stance carries `NO_AURA_ICON`
-    /// and is hidden on every frame (decision 0417 — the director's "battle stance on the target
+    /// and is hidden on every frame (the director's "battle stance on the target
     /// frame" report), while Battle Shout is a real buff that stays. Skips without client data.
     #[test]
     fn the_aura_display_filter_hides_a_real_battle_stance_but_keeps_battle_shout() {
@@ -1143,7 +1143,7 @@ mod tests {
         assert_eq!(cache[0].appeared_at, 1.0, "appeared_at is not disturbed");
     }
 
-    /// The duration freshness gate (decision 0257 §3): a stamp older than the aura is ignored — the
+    /// The duration freshness gate: a stamp older than the aura is ignored — the
     /// stale-recycled-slot defence — while a stamp from around the apply is accepted.
     #[test]
     fn a_duration_is_joined_only_when_it_is_no_older_than_the_aura() {
@@ -1170,7 +1170,7 @@ mod tests {
             join_duration(Some(&fresh), 200.0, 200.0, 5000.0),
             (30.0, 5030.0)
         );
-        // No stamp at all is a permanent aura: the wire sends no packet for one (decision 0257).
+        // No stamp at all is a permanent aura: the wire sends no packet for one.
         assert_eq!(join_duration(None, 200.0, 200.0, 5000.0), (0.0, 0.0));
     }
 

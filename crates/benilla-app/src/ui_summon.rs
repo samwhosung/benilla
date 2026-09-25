@@ -1,4 +1,4 @@
-//! Being summoned — the server's question, its dialog, and the one word back (decision 1747).
+//! Being summoned — the server's question, its dialog, and the one word back.
 //!
 //! **The law this module exists for: the client's whole part in a summon is a dialog and an echo.**
 //! A warlock's Ritual of Summoning, a meeting stone and a GM's `.summon` all converge on the same
@@ -48,7 +48,7 @@
 //!    only because the popup engine re-reads all three getters every OnUpdate frame — *a client
 //!    that formats the text once shows an empty summoner forever.* That is what makes
 //!    `UIParent.lua`'s `CONFIRM_SUMMON` countdown arm the mechanism rather than a transcription,
-//!    and it is why the event is not held back for the name the way `DUEL_REQUESTED` (0633) is:
+//!    and it is why the event is not held back for the name the way `DUEL_REQUESTED` is:
 //!    that event carries its name as `arg1`, and this one has no argument to hold.
 //!
 //!    [`crate::names::NameCache::resolve`] is the same shape — answer or ask, once — so the feed
@@ -134,7 +134,7 @@ fn feed_summon(
     commands: Res<NetCommands>,
     areas: Option<Res<AreaTableRes>>,
     // Real, not virtual: the deadline was stamped on this clock by the net drain, and the server's
-    // window runs in real seconds ([`crate::death`]'s reasoning, decision 0846).
+    // window runs in real seconds ([`crate::death`]'s reasoning).
     time: Res<Time<Real>>,
 ) {
     let Some(mut script) = script else {
@@ -246,7 +246,7 @@ fn end_session_summon(
     }
 }
 
-/// The summon's packet handler (decision 1747; in the net handler table since 2312), beside the
+/// The summon's packet handler (in the net handler table since 2312), beside the
 /// state it drives.
 pub(crate) mod net {
     use bevy::prelude::*;

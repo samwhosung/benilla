@@ -1,4 +1,4 @@
-//! The chat sources → [`ChatEvent`] bridge (decision 0288 §1): every inbound line — a decoded
+//! The chat sources → [`ChatEvent`] bridge: every inbound line — a decoded
 //! `SMSG_MESSAGECHAT`, a channel notice, a `/random` roll, a client-composed loot/system line —
 //! becomes one typed event here, names resolved ask-once through [`crate::names::NameCache`]
 //! (a line whose sender name is still in flight re-checks each frame, bounded), then routes
@@ -25,7 +25,7 @@ use super::frames::{route, ChatWindows};
 /// round-trip). The line renders with a placeholder rather than being lost.
 const NAME_MAX_TRIES: u16 = 120;
 
-/// The text-emote sentence tables (decision 1274), read once off the patch chain.
+/// The text-emote sentence tables, read once off the patch chain.
 #[derive(Resource)]
 pub(crate) struct EmoteTexts(pub(crate) EmoteTextCatalog);
 
@@ -84,14 +84,14 @@ enum Pending {
         tries: u16,
     },
     /// A kill-XP award awaiting the victim's name ("%s dies, you gain %d experience." —
-    /// COMBATLOG_XPGAIN_FIRSTPERSON; decision 0304). `bonus` = rested (total − base).
+    /// COMBATLOG_XPGAIN_FIRSTPERSON). `bonus` = rested (total − base).
     XpGain {
         victim: u64,
         total: u32,
         bonus: u32,
         tries: u16,
     },
-    /// An honor award awaiting the victim's name (`SMSG_PVP_CREDIT`; decision 1512) — the XP
+    /// An honor award awaiting the victim's name (`SMSG_PVP_CREDIT`) — the XP
     /// node's twin, parked for the identical reason: the sentence's first `%s` is a NAME and the
     /// packet carries a guid.
     ///
@@ -107,7 +107,7 @@ enum Pending {
         rank: u8,
         tries: u16,
     },
-    /// A text emote (`SMSG_TEXT_EMOTE`) awaiting the PERFORMER's name — decision 1274.
+    /// A text emote (`SMSG_TEXT_EMOTE`) awaiting the PERFORMER's name.
     ///
     /// Parked here for the reference's own reason, not merely for convenience: `0x49dbe0` composes
     /// the sentence immediately when the `NameCache` already holds the performer, and otherwise
@@ -127,7 +127,7 @@ enum Pending {
     /// (the drain fires them — the toast needs the script, which only [`feed_chat`] holds).
     Discovery { area: String, xp: u32 },
     /// One combat-log line, classified and family-picked at the packet, waiting only on the two
-    /// endpoint names (B297). The reference's deferred-message queue `DAT_00c4e208`, whose records
+    /// endpoint names. The reference's deferred-message queue `DAT_00c4e208`, whose records
     /// carry a type tag and two guids for exactly this reason and are replayed by the name-ready
     /// callback `0x6294b0`.
     Combat(Box<super::combat::PendingCombat>),
@@ -200,7 +200,7 @@ pub(super) fn text_emote_event(
 pub(crate) struct ChatLog {
     pending: Vec<Pending>,
     broadcasts: Vec<super::broadcast::Broadcast>,
-    /// The ding's gain tuple, parked for `ui_unit`'s `PLAYER_LEVEL_UP` fire (decision 1884).
+    /// The ding's gain tuple, parked for `ui_unit`'s `PLAYER_LEVEL_UP` fire.
     ///
     /// The net layer has no `UiScript` — deliberately — so the gains arrive here, on the same
     /// net-to-UI channel `broadcasts` uses, and the feed that owns the level edge picks them up.
@@ -355,8 +355,8 @@ impl ChatLog {
     /// (COMBATLOG_XPGAIN_FIRSTPERSON_UNNAMED "You gain %d experience.").
     pub(crate) fn push_xp_gain(&mut self, x: &XpGain) {
         // Both forks park. The unnamed one has no name to wait for — `victim: 0` is what says so
-        // at the drain — but it still has a template to resolve, and the string table is the VM's
-        // (decision 2045). One node, one composer, one place the wording can be wrong.
+        // at the drain — but it still has a template to resolve, and the string table is the VM's.
+        // One node, one composer, one place the wording can be wrong.
         let named = x.kill && x.victim != 0;
         self.pending.push(Pending::XpGain {
             victim: if named { x.victim } else { 0 },
@@ -384,7 +384,7 @@ impl ChatLog {
         });
     }
 
-    /// Queue a text emote's chat line (`SMSG_TEXT_EMOTE` → CHAT_MSG_TEXT_EMOTE; decision 1274) for
+    /// Queue a text emote's chat line (`SMSG_TEXT_EMOTE` → CHAT_MSG_TEXT_EMOTE) for
     /// the performer-name resolve, then the `EmotesText`/`EmotesTextData` composition.
     pub(crate) fn push_text_emote(&mut self, performer: u64, text_id: u32, target: String) {
         self.pending.push(Pending::TextEmote {
@@ -461,7 +461,7 @@ impl ChatLog {
 }
 
 /// The VM's own string table as a lookup — `getglobal(key)`, which is where every sentence this
-/// feed shows comes from (decision 2045). Taken for exactly as long as one composition needs it,
+/// feed shows comes from. Taken for exactly as long as one composition needs it,
 /// so the `route` that follows can take the VM mutably.
 fn globals(script: &benilla_ui::script::UiScript) -> impl Fn(&str) -> Option<String> + '_ {
     |key: &str| script.lua().globals().get::<String>(key).ok()
@@ -524,7 +524,7 @@ pub(super) fn xp_gain_line(
 const RESTED_STATE: &str = "Rested";
 
 /// The honor line an `SMSG_PVP_CREDIT` becomes — the three GlobalStrings forms (COMBATLOG_HONORAWARD
-/// :786, COMBATLOG_HONORGAIN :787, COMBATLOG_DISHONORGAIN :785), decision 1512.
+/// :786, COMBATLOG_HONORGAIN :787, COMBATLOG_DISHONORGAIN :785).
 ///
 /// **The fork** (formatter `0x625270`) is three-way, not two: no victim guid → AWARD; victim and
 /// `honor > 0` → GAIN; victim and **`honor <= 0`** → DISHONOR. The boundary is `<=`, not `<` — a
@@ -558,7 +558,7 @@ pub(super) fn honor_gain_line(
 
 /// The discovery toast — `ERR_ZONE_EXPLORED` ("Discovered: %s"), fired on every exploration packet
 /// to the UIErrorsFrame (byte-verified: error-table route 1 → `AddErrorMessage 0x4945b0` →
-/// UI_INFO_MESSAGE; decisions 0828/0829).
+/// UI_INFO_MESSAGE).
 pub(super) fn exploration_toast(
     area_name: &str,
     get: &dyn Fn(&str) -> Option<String>,
@@ -572,7 +572,7 @@ pub(super) fn exploration_toast(
 
 /// The discovery chat line — `ERR_ZONE_EXPLORED_XP` ("Discovered %s: %d experience gained"), fired
 /// **in addition to** the toast iff the packet carried XP (byte-verified: the signed `jle` skip at
-/// `0x5e422f`; route 0 → CHAT_MSG_SYSTEM; decisions 0828/0829).
+/// `0x5e422f`; route 0 → CHAT_MSG_SYSTEM).
 pub(super) fn exploration_line(
     area_name: &str,
     xp: u32,
@@ -685,7 +685,7 @@ pub(super) fn deliver(
     // **First, before anything below moves it.** The reference's notice arms read `slot+0x9c` to
     // choose the token and only then write it (`0x49c0c2` reads, `0x49bb20` writes), and the two
     // alternates are what keep a renamed or suspended channel registered with the window
-    // ([`super::event::notice_token`], decision 2130).
+    // ([`super::event::notice_token`]).
     event.slot_state = channels.slot_state(&event.channel);
     if let Some(byte) = notice {
         // The one trace of the server's half of every join and leave — a probe log's only way to
@@ -699,8 +699,8 @@ pub(super) fn deliver(
     }
     if notice == Some(channel_notice::YOU_JOINED) {
         // The reference's `0x49bbaf`: the confirmed join is what sets the channel's
-        // `ZONECHANNELS` bit, and it is the ONLY thing that grows that mask at runtime
-        // (decision 2120). Outside the slot claim below because it is not about slots — a
+        // `ZONECHANNELS` bit, and it is the ONLY thing that grows that mask at runtime.
+        // Outside the slot claim below because it is not about slots — a
         // re-confirmation of a channel we already number still owns the bit.
         channels.note_zone_channel_joined(&event.channel);
         // …and a custom channel's confirmed join is what enters the durable re-join list the
@@ -736,7 +736,7 @@ pub(super) fn deliver(
     channels.stamp_channel(event);
     route(script, windows, event);
     if let Some(name) = leaving {
-        // **A suspended slot survives its own leave** (`0x49c0e0`, decision 2130). The reference's
+        // **A suspended slot survives its own leave** (`0x49c0e0`). The reference's
         // `0x03` arm jumps past the teardown (`0x49c115`) when the record is in state 3, so walking
         // out of a capital keeps `Trade`'s record AND its number — which is what lets walking back
         // in re-join through the state-3 bypass, and what stops the stock handler deregistering it.
@@ -757,7 +757,7 @@ pub(super) fn deliver(
 /// because a Bevy system takes at most sixteen parameters, which [`feed_chat`] had already reached.
 ///
 /// They stay separate mechanisms inside the bundle: the bubble has a 20 yd range test and two CVars
-/// ([`crate::chat_bubble`]), the gesture has neither (decision 1469).
+/// ([`crate::chat_bubble`]), the gesture has neither.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct SpeakerEffects<'w> {
     bubbles: ResMut<'w, crate::chat_bubble::BubbleQueue>,
@@ -775,7 +775,7 @@ pub(super) fn feed_chat(
     names: Res<NameCache>,
     mut speaker: SpeakerEffects,
     commands: Res<NetCommands>,
-    // The text-emote sentence seam (decision 1274): the tables, plus the guid the composer's
+    // The text-emote sentence seam: the tables, plus the guid the composer's
     // "are you the performer?" test compares against.
     emote_texts: Option<Res<EmoteTexts>>,
     self_guid: Res<SelfGuid>,
@@ -784,13 +784,13 @@ pub(super) fn feed_chat(
     guids: Res<GuidIndex>,
     stores: Query<&ObjectStore>,
     states: Res<crate::world_state::WorldStates>,
-    // The language gate (B262): the word pool + this character's fluency + the GM bit.
+    // The language gate: the word pool + this character's fluency + the GM bit.
     langs: Res<super::language::ChatLanguages>,
     // The combat log's item-name seam (1703): the four families whose sentence names an ITEM
     // (`TRADESKILL_LOG`, `FEEDPET_LOG`, `ITEMENCHANTMENT*`, `SPELLDURABILITYDAMAGE`) resolve it
     // here, through the same ask-once cache the reference's own deferred queue re-runs against.
     items: Res<crate::items::Items>,
-    // The two 1.12 text filters (decision 2077), bundled for the same reason `SpeakerEffects` is:
+    // The two 1.12 text filters, bundled for the same reason `SpeakerEffects` is:
     // this list is at the sixteen-parameter ceiling. This IS the reference's `0x49a870`, so both
     // arms belong here and nowhere else.
     mut text_filter: crate::text_filter::ChatTextFilter,
@@ -839,7 +839,7 @@ pub(super) fn feed_chat(
                 // The channel's base name; the numbered display form, its slot number and its
                 // zone id are stamped on below ([`ChannelState::stamp_channel`]) — arg4/arg7-arg9.
                 let channel_base = msg.channel.clone().unwrap_or_default();
-                // `$`-macro expansion (decision 0754, corrected by 0759): the reference runs its one
+                // `$`-macro expansion (corrected by 0759): the reference runs its one
                 // server-text expander over the monster/boss + BG-system types and nothing else,
                 // against the guid the line is ADDRESSED to. Every other type reaches the frame
                 // verbatim.
@@ -897,7 +897,7 @@ pub(super) fn feed_chat(
                     None
                 };
                 let plain = expanded.unwrap_or_else(|| msg.text.clone());
-                // **The language gate** (B262). The wire always
+                // **The language gate**. The wire always
                 // carries plaintext; whether this character can read it is entirely ours to decide,
                 // and the answer is one rewritten buffer that EVERY consumer below shares — the
                 // chat line, the Lua `arg1`, the bubble, the gesture. That is the reference's own
@@ -908,7 +908,7 @@ pub(super) fn feed_chat(
                 let language = langs.effective_language(msg.chat_type, msg.language);
                 let mut text = langs.garble(language, &plain);
 
-                // ── The two text filters, in the reference's own order (decision 2077) ─────────
+                // ── The two text filters, in the reference's own order ─────────
                 //
                 // They run HERE, on the one buffer the garble just filled, because that is where
                 // `0x49a870` runs them: it fills `[ebp-0xd0c]` once (plain copy or garble) and
@@ -973,7 +973,7 @@ pub(super) fn feed_chat(
                 // (different function, different gates: the bubble has a 20 yd range test and two
                 // CVars, the gesture has neither). The selector reads the RAW wire type and the
                 // expanded text, and takes its laugh words off the player's own FrameXML globals —
-                // the enumeration is the mechanism, the words are content (decision 1469).
+                // the enumeration is the mechanism, the words are content.
                 //
                 // **It reads `plain`, NOT the garbled text.** The selector is not on
                 // this display path at all: it lives in the *parser* `0x49d560` at
@@ -1313,7 +1313,7 @@ pub(super) fn feed_chat(
                 }
             }
             Pending::Discovery { area, xp } => {
-                // The toast fires every time; the chat line only rides XP (decisions 0828/0829).
+                // The toast fires every time; the chat line only rides XP.
                 let (toast, line) = {
                     let get = globals(&script);
                     (

@@ -73,7 +73,7 @@ fn taxi_nodes_shown(
 /// paired `known = true` here is what clears the icon live on a learn). Upserts
 /// [`super::FlightMasterStatus`] on the flight master: `known = false` shows the green
 /// `TalkToMeGreen` overhead icon — the client's `0x5ecdd0` handler → `0x607480` marker swap
-/// (resource table `0xc4d9d8` index 4; decision 0497). The client also gates the reply on the
+/// (resource table `0xc4d9d8` index 4). The client also gates the reply on the
 /// unit's NPC_FLAGS bit 3 — moot here: only flight masters are ever queried or answered.
 fn taxi_node_status(guid: u64, known: bool, commands: &mut Commands, index: &GuidIndex) {
     debug!("net: taxi node status — {guid:#x} known={known}");

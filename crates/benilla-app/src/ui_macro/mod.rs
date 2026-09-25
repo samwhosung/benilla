@@ -1,4 +1,4 @@
-//! The **macros** feed (decision 0983) — the app half of `benilla_ui::script::macros`: the icon
+//! The **macros** feed — the app half of `benilla_ui::script::macros`: the icon
 //! chooser's catalog, persistence under `benilla-config/macros/`, and `UPDATE_MACROS`.
 //!
 //! Unlike every other window feed in this tree there is **no wire traffic here at all**. 1.12
@@ -50,7 +50,7 @@ pub(crate) struct MacroFiles {
 ///
 /// **One entry per macro that exists**, whatever it binds — absence means the index names no
 /// macro, which is the usable compute's `0x4e5030` verdict and reads differently from a macro
-/// that merely casts nothing (decision 1636: the former is grey, the latter is not).
+/// that merely casts nothing (the former is grey, the latter is not).
 #[derive(Resource, Default)]
 pub(crate) struct MacroBoundSpells(pub(crate) std::collections::HashMap<u32, BoundSpell>);
 
@@ -65,7 +65,7 @@ impl Plugin for UiMacroPlugin {
             .add_systems(
                 Update,
                 (
-                    // Once per **VM** (decision 1290), and in `Update` rather than `PostStartup`:
+                    // Once per **VM**, and in `Update` rather than `PostStartup`:
                     // this needs BOTH the patch chain and the VM, and a login builds a fresh VM
                     // whose icon chooser stays empty until it runs again. `PostStartup` was the
                     // old answer to the ordering half alone — after `AssetSet::Open` this ran
@@ -124,7 +124,7 @@ fn load_icon_catalog(
 
 /// Who we are, for the per-character file: `(realm, character)` off the roster's own login pick.
 /// `None` until the roster and the pick agree — the load simply waits a frame. Shared with the
-/// bindings load ([`crate::bindings`]), whose per-character file is keyed the same way (0997).
+/// bindings load ([`crate::bindings`]), whose per-character file is keyed the same way.
 pub(crate) fn identity(roster: &crate::char_select::Roster) -> Option<(String, String)> {
     let guid = roster.pending_pick?;
     let name = roster.chars.iter().find(|c| c.guid == guid)?.name.clone();
@@ -258,7 +258,7 @@ const EXECUTE_CHAT_LINE: &str = "EXECUTE_CHAT_LINE";
 /// nothing else today, which is also the reference's shape (`0x4f14e0`'s only caller is
 /// `UseAction`'s core at `0x4e6098`). Returns whether anything ran.
 ///
-/// **Each body line is FIRED AS AN EVENT, not handed to the drain directly** (0996). The reference's
+/// **Each body line is FIRED AS AN EVENT, not handed to the drain directly**. The reference's
 /// runner names no Lua function and walks no command table — per non-empty line it fires
 /// `FrameScript_SignalEvent(EXECUTE_CHAT_LINE, "%s", line)` and the Lua side does everything else,
 /// which is exactly why a scan of `WoW.exe` finds no FrameXML function name and no chat-frame name.

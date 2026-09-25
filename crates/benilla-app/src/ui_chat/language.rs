@@ -82,12 +82,12 @@ impl ChatLanguages {
     /// which is one decision in the reference, not two, because the header reads the same field.
     ///
     /// The addon sentinel is *not* handled here: `language == -1` never reaches this path at all
-    /// (it is dropped upstream as addon traffic, decision 1029), and it is a `u32` by the time we
+    /// (it is dropped upstream as addon traffic), and it is a `u32` by the time we
     /// see it.
     /// **Is the viewer a GM?** — `PLAYER_FLAGS & 0x8`, read at the same `0x49a9cc` site the garble
     /// gate reads it at. The chat chokepoint's spam arm needs the identical bit (`0x49ab03`), and
     /// it is already here, so it is answered from here rather than re-derived from a second
-    /// descriptor query (decision 2077).
+    /// descriptor query.
     pub(crate) fn is_gm(&self) -> bool {
         self.gm
     }
@@ -192,7 +192,7 @@ pub(super) fn feed_language_skills(
         // bug B262 reported. On change only, so it is one line per login, not per frame.
         //
         // **`gm=true` means nothing will EVER garble**, and GM mode is on by default on `probeN`
-        // accounts (0679), so a probe hunting this surface reads its own answer here rather than
+        // accounts, so a probe hunting this surface reads its own answer here rather than
         // concluding the fix did not land.
         let mut named: Vec<String> = skill.iter().map(|(l, v)| format!("{l}:{v}")).collect();
         named.sort();

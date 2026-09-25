@@ -77,7 +77,7 @@ pub(super) fn feed_petition(
     // surface its message record names. Drained before the snapshot so a refusal shows in the
     // same frame as the state change that caused it. A key the string table has no entry for
     // shows nothing — the reference's data-suppression face, and the reason every line upstream
-    // carries a key rather than a sentence (decision 2045).
+    // carries a key rather than a sentence.
     let composed = std::mem::take(&mut petition.lines);
     let resolved: Vec<crate::ui_action::Shown> = composed
         .iter()
@@ -164,7 +164,7 @@ pub(super) fn feed_petition(
         script.fire_event("GUILD_REGISTRAR_CLOSED", vec![]);
         script.fire_event("GUILD_REGISTRAR_SHOW", vec![]);
         // …then consume the close `OnHide` just queued, or the drain would apply it to the
-        // registrar we have this instant re-opened (decision 0096).
+        // registrar we have this instant re-opened.
         let _ = script.drop_petition_close_intents();
     } else {
         match (fed.registrar, now_registrar) {

@@ -44,7 +44,7 @@ pub(crate) struct FeedMemory {
     petition_records: gate::Watch,
     /// `ItemChanges::countdown_steps` — one step per displayable countdown change (the slot
     /// views read second-floored countdowns), including the last elapse's collapsing push; a
-    /// landing is the item's own change tick (decision 2340).
+    /// landing is the item's own change tick.
     enchant_deadlines: gate::Watch,
     /// The item guid **of the bag itself** in each of the ten bag slots — container ids 1..=10
     /// (the four equipped, then the six bank bags), indexed `id − 1`. Diffed frame to frame for
@@ -71,7 +71,7 @@ pub(crate) struct FeedMemory {
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub(crate) struct SlotGuids {
     /// Container ids 1..=10 — the four equipped bag slots, then the six bank bag slots — indexed
-    /// `id − 1`. `BAG_CLOSED`'s diff (decision 1777).
+    /// `id − 1`. `BAG_CLOSED`'s diff.
     pub bags: [u64; 10],
     /// The 24 vault slots, indexed `slot − 1`. `PLAYERBANKSLOTS_CHANGED`'s producer discriminator.
     pub vault: [u64; BANK_SLOTS as usize],
@@ -95,7 +95,7 @@ fn spell_desc_text(
     id: u32,
     home_area: Option<&str>,
     // The `$d`/`$s` tokens resolve `INT_SPELL_DURATION_*` / `INT_SPELL_POINTS_SPREAD_TEMPLATE`
-    // out of the VM (decision 2045); `benilla-formats` names the key, this side renders it.
+    // out of the VM; `benilla-formats` names the key, this side renders it.
     text: &dyn Fn(&str, &[i64]) -> Option<String>,
 ) -> Option<String> {
     let sp = spells?;
@@ -137,7 +137,7 @@ fn charges_count(spells: &[benilla_protocol::messages::ItemSpellEntry]) -> i32 {
 /// A reputation rank (0..=7) → its standing label, `FACTION_STANDING_LABEL{rank+1}` off the
 /// player's own `GlobalStrings.lua` — the tail of the `ITEM_REQ_REPUTATION` line.
 ///
-/// Keys rather than an eight-string table (decision 2045): the bare tokens, not the `_FEMALE`
+/// Keys rather than an eight-string table: the bare tokens, not the `_FEMALE`
 /// twins, which is the spelling the reference itself uses wherever it builds a standing label
 /// (`FACTION_STANDING_LABEL%d` `0x84b5dc`).
 /// `None` for an install that does not carry the row — the line then names no standing.
@@ -160,7 +160,7 @@ fn template_view(
     sub_classes: Option<&benilla_formats::ItemSubClassCatalog>,
     classes: Option<&benilla_formats::ItemClassCatalog>,
     icons: Option<&ItemDisplays>,
-    // The VM's own `GlobalStrings.lua`, for the reputation-requirement line (decision 2045).
+    // The VM's own `GlobalStrings.lua`, for the reputation-requirement line.
     get: &dyn Fn(&str) -> Option<String>,
     // The same table, for the `$`-engine's own keyed tokens — see [`spell_desc_text`].
     text: &dyn Fn(&str, &[i64]) -> Option<String>,
@@ -355,7 +355,7 @@ pub(super) fn feed_item_sets(
 /// the "hover twice" flake this replaces). **Ask**: a renderer read of an id the app never
 /// resolved still records a miss, which triggers the `CMSG_ITEM_QUERY` here and lands via the
 /// same push when the answer arrives.
-/// Push the **whole** random-suffix table into the engine, once per VM (decision 1547).
+/// Push the **whole** random-suffix table into the engine, once per VM.
 ///
 /// Not an ask-once feed like the templates beside it: the roll table is a static DBC the app holds
 /// from load, and its consumers are click-driven — a chat-link tooltip has no hover re-enter loop
@@ -628,8 +628,8 @@ fn resolve_slot(
     if guid == 0 {
         return None;
     }
-    // The item's own countdown cells (decision 2340): one `Option<ms>` per temporary-enchant
-    // slot, and its lifetime — `SMSG_ITEM_TIME_UPDATE`'s only surface (decision 1933) — both
+    // The item's own countdown cells: one `Option<ms>` per temporary-enchant
+    // slot, and its lifetime — `SMSG_ITEM_TIME_UPDATE`'s only surface — both
     // second-floored for the snapshot.
     let countdowns = objects.countdowns(guid);
     let enchant_ms: [Option<u64>; crate::items::ENCHANT_SLOTS] =
@@ -648,7 +648,7 @@ fn resolve_slot(
                     .filter(|&(_, max)| max > 0),
                 // The instance carries letter text (a mail permanent copy) — the same gate the
                 // right-click reader fork uses (`ui_items::drain`); the hover magnifier keys off it.
-                // Template-`PageText` books join when the books read path lands (decision 0572).
+                // Template-`PageText` books join when the books read path lands.
                 fields.item_text_id().is_some_and(|id| id != 0),
                 // `ITEM_FIELD_CREATOR` → the ask-once name cache: the tooltip's "Written by %s" /
                 // "<Made by %s>" line. `None` while the query is in flight — the changed re-push
@@ -660,13 +660,13 @@ fn resolve_slot(
                 // `ITEM_FIELD_FLAGS` — the tooltip's UNLOCKED (0x4) / WRAPPED (0x8) sub-gates.
                 fields.item_flags().unwrap_or(0),
                 // `0x5da2c0` — soulbound, or carrying a binding enchant: the Soulbound
-                // override (B310). Read off the raw descriptor, not off the enchant LINES below.
+                // override. Read off the raw descriptor, not off the enchant LINES below.
                 crate::items::already_bound(fields, rolls.enchants),
-                // `ITEM_FIELD_RANDOM_PROPERTIES_ID` — the roll behind the NAME's "of the Bear"
-                // (decision 1547). Only the name: the roll's own enchants are already in the
+                // `ITEM_FIELD_RANDOM_PROPERTIES_ID` — the roll behind the NAME's "of the Bear".
+                // Only the name: the roll's own enchants are already in the
                 // instance's slots 2..6 below, written there by the server.
                 fields.item_random_properties_id(),
-                // The instance's own 7 enchant slots — the tooltip's enchant lines (0915/0920). An
+                // The instance's own 7 enchant slots — the tooltip's enchant lines. An
                 // item we hold streams as an OBJECT, so all seven are here, with their charges and
                 // their `SMSG_ITEM_ENCHANT_TIME_UPDATE` countdowns; the wire's 2-slot broadcast is
                 // what everyone ELSE's items are limited to.
@@ -847,8 +847,8 @@ pub(crate) fn feed_containers(
     items: Res<Items>,
     icons: Option<Res<ItemDisplays>>,
     // The two item-DBC catalogs, as one param (the 16-SystemParam ceiling): `SpellItemEnchantment`'s
-    // name column — the tooltip's enchant lines (decision 0915) — and `ItemRandomProperties`, the
-    // roll behind a slot's "of the Monkey" name (decision 1547).
+    // name column — the tooltip's enchant lines — and `ItemRandomProperties`, the
+    // roll behind a slot's "of the Monkey" name.
     catalogs: (
         Option<Res<crate::items::Enchants>>,
         Option<Res<crate::items::RandomProperties>>,
@@ -863,7 +863,7 @@ pub(crate) fn feed_containers(
     // The refusals and where they land, as one param (the 16-SystemParam ceiling this signature
     // already sits at): the queue, and `show_messages`' chat + sound sinks (1815).
     equip: (ResMut<EquipErrors>, crate::ui_action::MessageSink),
-    // Reason 16's `%s` source (decision 0916); absent = every 16 keeps the generic line.
+    // Reason 16's `%s` source; absent = every 16 keeps the generic line.
     bag_families: Option<Res<crate::ui_items::ItemBagFamilies>>,
     pending: Res<PendingItemOps>,
     // The two handler-fed queues this feed fires for (the 16-SystemParam ceiling): the lock
@@ -986,7 +986,7 @@ pub(crate) fn feed_containers(
     // not a fallback: `CGGameUI::DisplayError` is called unconditionally and the sink's
     // `cmp byte [ecx],0` guard (`0x4945b4`) drops an empty string before it renders or sounds.
     // It is what silences reason 59, the lock-clear sentinel that rides alongside a real refusal
-    // and used to print a second, hex-debug line over it (B198) — and it is the same law
+    // and used to print a second, hex-debug line over it — and it is the same law
     // `ui_action::cast_fail` already runs. No hex debug line on the player's screen: a code we
     // failed to map can't reach here (the table is total), and a key we typo'd is caught by
     // `equip_error`'s resolution test against the real `GlobalStrings.lua`, not at runtime.
@@ -994,7 +994,7 @@ pub(crate) fn feed_containers(
     let mut refusals = Vec::new();
     for e in equip_errors.0.drain(..) {
         // Reason 16's substitution — the ONE reason whose text is chosen by the app rather than
-        // by the table, because the choice needs the named bag (decision 0916). The reference's
+        // by the table, because the choice needs the named bag. The reference's
         // helper `0x5ede00(player, bagSlot)` resolves the bag and calls
         // `DisplayError(ERR_WRONG_BAG_TYPE_SUBCLASS, familyName)` *itself*, returning 1 so the
         // caller skips the generic line; a bag that doesn't resolve leaves the generic
@@ -1037,20 +1037,20 @@ pub(crate) fn feed_containers(
     }
     // Through the one sink, so the row that named the text also names the surface and the SOUND —
     // 18 of these keys carry an error-speech line (`ERR_INV_FULL`, `ERR_BAG_FULL`,
-    // `ERR_NOT_ENOUGH_MONEY`, …), which is the largest single source of it in the client
-    // (decision 1815). Every key this table can emit is `kind = 2`, so nothing moved off the red
+    // `ERR_NOT_ENOUGH_MONEY`, …), which is the largest single source of it in the client.
+    // Every key this table can emit is `kind = 2`, so nothing moved off the red
     // line when the surface stopped being hardcoded here.
     crate::ui_action::show_messages(&mut script, &mut sink, "ui_items", refusals);
     // Both lock clears of the frame — the resolving field-update watch ([`resolve_item_locks`],
     // which runs ahead of EVERY feed) and the failure-driven clears
     // `net/apply/loot.rs::inventory_failure` queued (it has no `UiScript` to fire through). Both
-    // fire `ITEM_LOCK_CHANGED` here, the bag windows' own repaint trigger (0218: the popup's
+    // fire `ITEM_LOCK_CHANGED` here, the bag windows' own repaint trigger (the popup's
     // No/ESC clear paths the bag never clicked through, so only the event reaches it). Fired
     // AFTER the slot loop below pushes the corrected `.locked` state, so the repaint they trigger
     // sees the unlocked slot, not stale data — and after `feed_char`'s own push, for the same
     // reason on the doll and bank-bag bands (1771).
     let transitioned: Vec<(i64, u32)> = std::mem::take(&mut lock_cleared.0);
-    // The containers the server opened this frame (`SMSG_OPEN_CONTAINER`, decision 2339) — the
+    // The containers the server opened this frame (`SMSG_OPEN_CONTAINER`) — the
     // packet handler queued them; they fire as `BAG_OPEN(id)` after the push below, like the locks.
     let opened: Vec<i64> = std::mem::take(&mut opens.0);
 
@@ -1155,7 +1155,7 @@ pub(crate) fn feed_containers(
             );
         }
 
-        // The bank (decision 0604): container −1 = the 24 generic vault slots straight off the
+        // The bank: container −1 = the 24 generic vault slots straight off the
         // player descriptor, containers 5..=10 = the bank bags — each a container object exactly
         // like an equipped bag. Fed unconditionally like the backpack: the descriptor streams at
         // login, the window (BANKFRAME_OPENED) is a UI concern, not a data one.
@@ -1243,7 +1243,7 @@ pub(crate) fn feed_containers(
             );
         }
 
-        // The keyring (decision 0765): container −2, the player array's slots 81.., no container
+        // The keyring: container −2, the player array's slots 81.., no container
         // object of its own — structurally the bank's twin. Its capacity is NOT a wire field: both
         // the reference (`GetKeyRingSize`) and the server (`GetMaxKeyringSize`) derive it from the
         // player's level with the same ladder, so [`keyring_size`] computes it here and Lua's
@@ -1369,10 +1369,10 @@ pub(crate) fn apply_container_source(
     if let Some(fresh) = source {
         pushed |= diff_and_push(script, memory, fresh, guids);
     }
-    // The lock-transition event (decision 0218: the bag windows' own repaint trigger) — after the
+    // The lock-transition event (the bag windows' own repaint trigger) — after the
     // container push above, so a listener's repaint reads the corrected `.locked` state.
     pushed |= !transitioned.is_empty();
-    // **`ITEM_LOCK_CHANGED` carries NO arguments** (decision 2140, found by the argument gate).
+    // **`ITEM_LOCK_CHANGED` carries NO arguments** (found by the argument gate).
     // All five fire sites in the image — `0x495415`, `0x495455`, `0x49557d` (the local lock/unlock
     // paths), `0x5d859a` and `0x5d94b9` (the item field watchers) — are
     // `FrameScript_SignalEvent 0x703e50`, an `__fastcall(ecx = id)` with a plain `ret` and no vararg
@@ -1382,7 +1382,7 @@ pub(crate) fn apply_container_source(
     for _ in transitioned {
         script.fire_event("ITEM_LOCK_CHANGED", Vec::new());
     }
-    // `SMSG_OPEN_CONTAINER` → `BAG_OPEN(containerId)` (decision 2339). The reference's arm
+    // `SMSG_OPEN_CONTAINER` → `BAG_OPEN(containerId)`. The reference's arm
     // `0x5e3b35` fires it from the packet handler; ours reaches the VM here — after this frame's
     // `BAG_UPDATE`s, so the frame the stock `ContainerFrame_OnEvent` shows paints the bag as it now
     // is. The id is the reference's own: 0 backpack, 1..4 equipped, 5..10 bank.
@@ -1454,7 +1454,7 @@ fn diff_and_push(
         script.fire_event("BAG_CLOSED", vec![ScriptValue::Int(*id)]);
     }
     // **`PLAYERBANKSLOTS_CHANGED` has TWO producers in the reference, and they carry different
-    // arguments** (decision 2140). benilla had one fire for both, so half of them were argless
+    // arguments**. benilla had one fire for both, so half of them were argless
     // where the reference pushes a string:
     //
     // * **P1, the player-descriptor path** — `0x5ddcf0`'s watcher sees the slot's own GUID field
@@ -1504,7 +1504,7 @@ fn diff_and_push(
         .filter(|b| fresh.get(b) != memory.pushed.get(b))
         .collect();
     if !changed.is_empty() {
-        // **The spent-ammo signal** (decision 1509). The reference registers a field mirror on
+        // **The spent-ammo signal**. The reference registers a field mirror on
         // `ITEM_FIELD_STACK_COUNT` for TYPEID ITEM (`ClntObjMgrSetTypeMirrorHandler 0x468070` at
         // `0x5d9360`, handler `0x5d9400`); for any item the active player owns, a stack-count
         // write fires **ITEM_LOCK_CHANGED first**, ahead of the `BAG_UPDATE` the same handler
@@ -1604,8 +1604,7 @@ mod tests {
         vault: [0; BANK_SLOTS as usize],
     };
 
-    /// **`PLAYERBANKSLOTS_CHANGED` has two producers and they carry different arguments**
-    /// (decision 2140).
+    /// **`PLAYERBANKSLOTS_CHANGED` has two producers and they carry different arguments**.
     ///
     /// benilla fired the argless one for every transition, which is right for half of them and
     /// wrong for the other half — and the half it got wrong is the one a view diff cannot even
@@ -1615,7 +1614,7 @@ mod tests {
     ///  · the same item's own fields change (a restack) → `0x4c728d`, **`arg1 = "player"`**;
     ///  · two IDENTICAL items exchanged between two slots → the pushed views are equal, so the
     ///    container diff sees nothing at all, and the reference fires the argless one **twice**.
-    /// `SMSG_OPEN_CONTAINER` → `BAG_OPEN(containerId)` (decision 2339): the ids the handler
+    /// `SMSG_OPEN_CONTAINER` → `BAG_OPEN(containerId)`: the ids the handler
     /// resolved reach the VM in order, after the frame's container push, and the stock
     /// `ContainerFrame_OnEvent` sees the id as `arg1` — the reference's own event shape.
     #[test]
@@ -2003,7 +2002,7 @@ mod tests {
         assert_eq!(s.eval::<i64>("return BAG_EVENTS").unwrap(), 2);
     }
 
-    /// **The spent-ammo signal** (decision 1509, B267's second half). A stack ticking down must
+    /// **The spent-ammo signal** (B267's second half). A stack ticking down must
     /// fire `ITEM_LOCK_CHANGED`, **before** the `BAG_UPDATE` for its bag — the reference's
     /// `ITEM_FIELD_STACK_COUNT` mirror handler's own order. The event carries no arguments
     /// (2140): `0x5d94b9` is a `SignalEvent` site, which has no vararg mechanism at all.

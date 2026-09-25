@@ -5,8 +5,8 @@
 //!
 //! The flags live in the VM (`chat_misc`); this is the file end. The reference writes
 //! `Logs\WoWChatLog.txt` and `Logs\WoWCombatLog.txt` beside `WTF`; ours are the same two names
-//! under `benilla-config/Logs/` ([`crate::local_state::logs_dir`]) — the install is read-only
-//! (decision 1486), so the folder is ours, not the game's. Lines are appended as the chat window
+//! under `benilla-config/Logs/` ([`crate::local_state::logs_dir`]) — the install is read-only,
+//! so the folder is ours, not the game's. Lines are appended as the chat window
 //! shows them, each stamped `M/D HH:MM:SS.mmm` the way the reference's log reads, in UTC (this
 //! process has no local-zone source and would rather be honest than guess an offset).
 //!

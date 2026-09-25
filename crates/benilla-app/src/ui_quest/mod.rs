@@ -1,11 +1,11 @@
-//! The app-side **questgiver feed** (decision 0088) — the inward half of the quest seam around
+//! The app-side **questgiver feed** — the inward half of the quest seam around
 //! [`benilla_ui::script`]'s `quest` module, the twin of [`crate::ui_gossip`]/[`crate::ui_merchant`].
 //!
 //! The net bridge fills [`QuestGiver`] from the wire: `SMSG_QUESTGIVER_QUEST_LIST` → the greeting
 //! panel, `_QUEST_DETAILS` → the accept panel, `_REQUEST_ITEMS` → the progress panel,
 //! `_OFFER_REWARD` → the reward panel, `_QUEST_COMPLETE` → the turn-in result (closes the window),
 //! and `SMSG_QUESTGIVER_STATUS` → the per-guid dialog-status store (world markers are a later
-//! slice — decision 0088). Each frame [`feed_quest`] resolves the open view into a
+//! slice). Each frame [`feed_quest`] resolves the open view into a
 //! [`QuestState`] snapshot (item names via the ask-once template cache, icons straight from the
 //! wire display id — the merchant's pattern), pushes it ([`UiScript::set_quest`]), and fires the
 //! matching FrameXML event (`QUEST_GREETING`/`QUEST_DETAIL`/`QUEST_PROGRESS`/`QUEST_COMPLETE` on a
@@ -44,7 +44,7 @@ pub(crate) enum QuestView {
 
 /// The open questgiver window, filled by the net bridge ([`crate::net`]) and read by [`feed_quest`].
 /// Cleared on the turn-in result, a client-side close, and disconnect. The `statuses` map is the
-/// DIALOG_STATUS store-now/render-later surface (decision 0088) — it survives the window closing
+/// DIALOG_STATUS store-now/render-later surface — it survives the window closing
 /// (a per-guid fact, like the gossip greeting cache).
 #[derive(Resource, Default)]
 pub(crate) struct QuestGiver {
@@ -77,8 +77,7 @@ pub(crate) struct QuestGiver {
     statuses: HashMap<u64, u32>,
     /// Client messages the net apply queued for [`feed_quest`] to resolve and show — the
     /// reference's `DisplayError(msgId)` split into (surface, GlobalStrings key + fills), so the
-    /// line comes from the VM's own strings and never from a hardcoded English literal
-    /// (decision 0669).
+    /// line comes from the VM's own strings and never from a hardcoded English literal.
     messages: Vec<UiError>,
     /// The re-ask epoch — see [`Self::bump_reask`].
     reask: u32,
@@ -88,7 +87,7 @@ pub(crate) struct QuestGiver {
     /// The only trace of a packet class benilla deliberately throws on the floor. benilla asks the
     /// server about quest-flagged GameObjects because the reference does, and vmangos — unlike the
     /// real 1.12 service, which never answered one — replies; the reference's own handler drops
-    /// that reply at the typemask-8 lookup and so does ours (decision 1872,
+    /// that reply at the typemask-8 lookup and so does ours (
     /// [`crate::net::apply`]'s `quest_giver_status`). Without this, the *whole* GameObject half of
     /// the feature is invisible from inside the client: a correct drop and a query that was never
     /// sent both read as "no status", which is exactly the pair a live probe has to tell apart.
@@ -142,7 +141,7 @@ impl QuestGiver {
     /// Drop the cached status of every guid `live` rejects. The reference caches its answer on the
     /// unit object itself (`unit+0xcb8`), so the cache dies with the object; ours is a map keyed by
     /// guid and needs the explicit prune, or a unit re-entering view renders its stale marker until
-    /// the fresh answer lands (decision 0647).
+    /// the fresh answer lands.
     pub(crate) fn retain_statuses(&mut self, live: impl Fn(u64) -> bool) {
         self.statuses.retain(|&npc, _| live(npc));
         // The refusal readout follows the same lifetime, for the same reason and to stay bounded.
@@ -150,7 +149,7 @@ impl QuestGiver {
     }
 
     /// Drop one guid's cached status — the NPC stopped being a questgiver, so its marker goes with
-    /// it (the reference's own teardown branch; decision 0647).
+    /// it (the reference's own teardown branch).
     pub(crate) fn clear_status(&mut self, npc: u64) {
         self.statuses.remove(&npc);
     }
@@ -159,7 +158,7 @@ impl QuestGiver {
     /// answer for everyone. The reference sweeps from four such handlers — reputation
     /// (`SMSG_SET_FACTION_STANDING`), the party/raid roster (`SMSG_GROUP_LIST`), the
     /// `SMSG_QUESTGIVER_*` demux (turn-ins) and `SMSG_QUESTUPDATE_*` — the packet half of the
-    /// refresh law whose descriptor half is `quest_markers::self_generation` (decision 0654).
+    /// refresh law whose descriptor half is `quest_markers::self_generation`.
     ///
     /// A counter, not a flag: `quest_markers::query_statuses` folds it into its generation, so a
     /// bump can't be lost to system ordering or to a frame that coalesced two packets.
@@ -188,8 +187,8 @@ impl QuestGiver {
         self.refused_count
     }
 
-    /// The stored dialog status for `npc`, if any. The store-now half of DIALOG_STATUS
-    /// (decision 0088): no consumer yet — the `!`/`?` world marker is a later nameplate slice — so
+    /// The stored dialog status for `npc`, if any. The store-now half of DIALOG_STATUS:
+    /// no consumer yet — the `!`/`?` world marker is a later nameplate slice — so
     /// this accessor is deliberately unused for now.
     #[allow(dead_code)]
     pub(crate) fn status(&self, npc: u64) -> Option<u32> {
@@ -197,7 +196,7 @@ impl QuestGiver {
     }
 
     /// The open panel's title when the panel IS `quest_id`'s — the `%s` fill for a refusal that
-    /// names the quest (decision 0669). The reference reads that title off the quest record it
+    /// names the quest. The reference reads that title off the quest record it
     /// looked the refusal up in; the panel being refused is the same quest, already in hand.
     pub(crate) fn view_title(&self, quest_id: u32) -> Option<String> {
         match self.view.as_ref()? {
@@ -209,8 +208,8 @@ impl QuestGiver {
     }
 
     /// Queue one client message for [`feed_quest`] to resolve and show — the net apply's half of
-    /// the reference's `DisplayError(msgId)` (decision 0669). The message carries its own surface
-    /// in its key; the caller does not choose one (decision 1770).
+    /// the reference's `DisplayError(msgId)`. The message carries its own surface
+    /// in its key; the caller does not choose one.
     pub(crate) fn push_message(&mut self, msg: UiError) {
         self.messages.push(msg);
     }
@@ -236,8 +235,7 @@ impl QuestGiver {
 /// `cmp eax,0x15` / `movzx edx,[eax+0x5dbd30]` / `jmp [edx*4+0x5dbd14]` — a 22-byte case index into
 /// a 7-way jump table, every arm a `DisplayError(msgId)`. **Everything unlisted — including
 /// reason 0 and anything past 22 — falls to `ERR_QUEST_NEED_PREREQS`**, which is the ref's own
-/// `ja` default, not a guess. Cross-checks against vmangos `QuestDef.h`'s own per-value comments
-/// (decision 0669).
+/// `ja` default, not a guess. Cross-checks against vmangos `QuestDef.h`'s own per-value comments.
 pub(crate) fn questgiver_invalid_key(reason: u32) -> &'static str {
     match reason {
         1 => "ERR_QUEST_FAILED_LOW_LEVEL",         // msgId 142
@@ -254,9 +252,9 @@ pub(crate) fn questgiver_invalid_key(reason: u32) -> &'static str {
 /// handler `0x5dc840` (the `0x192` arm of the same demux): a three-way `cmp` chain on the reason —
 /// `4`/`0x32` → BAG_FULL, `0x11` → MAX_COUNT, everything else → the plain FAILED line. All three
 /// strings carry a `%s` the caller fills with the quest title (the ref pushes `questRecord+0x9c`
-/// alongside the msgId). Decision 0669.
+/// alongside the msgId).
 ///
-/// The wording is the player's own and is never restated here (decision 2045) — the msgId is what
+/// The wording is the player's own and is never restated here — the msgId is what
 /// identifies each arm, and `every_quest_refusal_key_resolves_in_the_real_global_strings` is what
 /// checks the three against the shipped table.
 pub(crate) fn questgiver_failed_key(reason: u32) -> &'static str {
@@ -294,7 +292,7 @@ impl Plugin for UiQuestPlugin {
 /// of the giver's service range or the giver despawns. The per-guid `statuses` store survives, like
 /// every other close.
 impl NpcSession for QuestGiver {
-    /// `None` when the open panel's giver is an **item** (decision 0664): a quest-starter item
+    /// `None` when the open panel's giver is an **item**: a quest-starter item
     /// opens its detail panel with the ITEM's own guid as the giver, and an item is not a world
     /// unit — there is no range to walk out of and no portrait to bake. Reporting the item guid
     /// here would close the panel the frame it opened, since the range guard reads a guid it can't
@@ -307,8 +305,8 @@ impl NpcSession for QuestGiver {
         self.npc.filter(|g| !benilla_protocol::guid::is_item(*g))
     }
 
-    /// Walking away from a party member's SHARED quest still owes them the decline
-    /// (decision 1741). The distance that triggers it is not this method's business — the guard
+    /// Walking away from a party member's SHARED quest still owes them the decline.
+    /// The distance that triggers it is not this method's business — the guard
     /// takes the leash from the giver's own type (`crate::ui_session::leash_sq`: 14.0 yd for a
     /// player, the 5.56 yd service range for an NPC), which is what 1733 got wrong by exempting
     /// the share panel outright.
@@ -346,7 +344,7 @@ impl NpcSession for QuestGiver {
 /// means — and `Player::PrepareQuestMenu` (vmangos `Objects/Player.cpp:12501`) marks it REWARD_REP
 /// deliberately, so the client sends COMPLETE_QUEST and gets the request-items panel. Deriving the
 /// pool from the log instead made every such quest permanently un-turn-in-able and rendered its
-/// (empty) detail text as a blank window — ledger B95, decision 0758.
+/// (empty) detail text as a blank window — ledger B95.
 pub(crate) fn row_is_active(icon: u32) -> bool {
     matches!(icon, 3 | 4)
 }
@@ -387,7 +385,7 @@ fn resolve_item(
     let texture = icons
         .and_then(|i| i.catalog.get(it.display_id))
         .and_then(|d| d.icon.clone());
-    // The ctrl/shift click arms' payload (`GetQuestItemLink`, decisions 1059/1060) — built through
+    // The ctrl/shift click arms' payload (`GetQuestItemLink`) — built through
     // THE link builder, never a hand-rolled format (`ui_items::item_link`'s own doc). `None` until
     // the template lands: the link needs both the name and the quality.
     let link = name
@@ -591,7 +589,7 @@ fn feed_quest(
     let name_changed = *last_name != npc_name;
     // A different giver while a panel is already open is a real close+open (decision 0096 /
     // [`crate::ui_session::npc_switched`]); a cross-window switch is handled by OnHide → CloseX on
-    // panel displacement (decision 0095).
+    // panel displacement.
     let switched = npc_switched(*last_npc, giver.npc);
     if fresh == *last && !name_changed && !switched {
         return;
@@ -603,7 +601,7 @@ fn feed_quest(
     match (&*last, &fresh) {
         (_, Some(f)) if switched => {
             // A different giver → close the old panel, open the new (both kits play). QUEST_FINISHED
-            // routes through OnHide → CloseQuest (decision 0095), which queues a `Close` action —
+            // routes through OnHide → CloseQuest, which queues a `Close` action —
             // drain the pending actions so it does NOT clear the giver we just re-opened. Safe: a
             // switch is net-driven, so no user action is queued this frame to lose.
             script.fire_event("QUEST_FINISHED", vec![]);
@@ -681,7 +679,7 @@ enum DeclineLeg {
 /// unknown; a silent close is the one outcome that cannot leave a dead window up.
 ///
 /// `npc_flags` is the giver's live `UNIT_NPC_FLAGS`, `None` when it does not resolve to a streamed
-/// object. An item giver (0664) is taken by its guid's shape: it lives in our bags, where the
+/// object. An item giver is taken by its guid's shape: it lives in our bags, where the
 /// reference always resolves it. A player is taken by shape too, as in [`close_quest`].
 fn decline_leg(npc: u64, acted: bool, close_on_cancel: u32, npc_flags: Option<u32>) -> DeclineLeg {
     use benilla_protocol::guid;
@@ -814,7 +812,7 @@ fn drain_quest(
                     // `Script::AcceptQuest` (`0x501380`) closes the window on the CLICK, not on any
                     // answer: send `0x189` (`0x5eac10`), then `0x501130(0,0)` — the same clear the
                     // refusal handlers call, firing `QUEST_FINISHED`. Ours used to leave the panel
-                    // up waiting for a packet that never comes on a refused accept (decision 0669).
+                    // up waiting for a packet that never comes on a refused accept.
                     giver.clear();
                 }
             }
@@ -852,7 +850,7 @@ mod tests {
     }
 
     /// The greeting split is the reference's flat two-way test on the WIRE ICON — `{3,4}` ACTIVE,
-    /// everything else AVAILABLE (`0x5dbbfe-0x5dbc08`, decision 0758). Pinned because this reverses
+    /// everything else AVAILABLE (`0x5dbbfe-0x5dbc08`). Pinned because this reverses
     /// an earlier call that read the same icon and concluded the opposite.
     #[test]
     fn greeting_split_reads_the_wire_icon() {
@@ -895,7 +893,7 @@ mod tests {
         }
     }
 
-    /// An item-sourced quest window (decision 0664) reports **no** NPC to the session face, so the
+    /// An item-sourced quest window reports **no** NPC to the session face, so the
     /// range guard can't close it the frame it opens — while the drain's own `self.npc` keeps the
     /// item guid the `CMSG_QUESTGIVER_*` sends must carry.
     #[test]
@@ -1142,7 +1140,7 @@ mod tests {
         );
     }
 
-    // ── The party share's one client-originated verdict (decision 1733) ──────────────────────────
+    // ── The party share's one client-originated verdict ──────────────────────────
 
     /// Run `lua` against a quest window open on `giver` with the `0xbe0824` latch at
     /// `close_on_cancel`, and return what the drain sent.
@@ -1277,7 +1275,7 @@ mod tests {
         assert!(app.world().resource::<QuestGiver>().is_open());
     }
 
-    /// An item giver (0664) takes the teardown leg: silent, and the window closes.
+    /// An item giver takes the teardown leg: silent, and the window closes.
     #[test]
     fn declining_an_item_quest_closes_silently() {
         const ITEM: u64 = 0x4000_0000_0000_0099; // HIGHGUID_ITEM

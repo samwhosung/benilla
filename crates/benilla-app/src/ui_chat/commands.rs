@@ -1,4 +1,4 @@
-//! The slash-command **table** (decision 0881): every `/command` the client answers, built at boot
+//! The slash-command **table**: every `/command` the client answers, built at boot
 //! from the reference's OWN alias strings rather than hand-typed here.
 //!
 //! ## Why a table
@@ -75,7 +75,7 @@ pub(crate) enum SlashIndex {
     Assist,
     Follow,
     /// `/cast <name>` — the reference's `SlashCmdList["CAST"]` is one line, `CastSpellByName(msg)`,
-    /// and that binding is the engine seam benilla implements over the spell book (decision 0983).
+    /// and that binding is the engine seam benilla implements over the spell book.
     /// The command the whole macro system exists to run.
     Cast,
     /// `/macro` `/m` — opens the macro window (the ref's `ShowMacroFrame()`).
@@ -88,12 +88,12 @@ pub(crate) enum SlashIndex {
     /// `0x491380`, the same flag `ReloadUI()` sets). Anything else answers a plain system line
     /// rather than silently doing nothing.
     Console,
-    /// `/reload` — **benilla's own addition** (decision 1291): 1.12 ships `ReloadUI()` and
+    /// `/reload` — **benilla's own addition**: 1.12 ships `ReloadUI()` and
     /// `/console reloadUI` but no slash alias for it (that arrived in later clients — the shipped
     /// `GlobalStrings.lua` has no `SLASH_RELOADUI`), so this alias is a literal in [`Self::build`]
     /// rather than data read off the chain, exactly like the ESC-menu AddOns window is ours (1197).
     ReloadUi,
-    /// `/errors` `/err` — **benilla's own addition** (decision 1495): opens the script error log,
+    /// `/errors` `/err` — **benilla's own addition**: opens the script error log,
     /// which is ours because 1.12 has no such window to alias. The reference's whole answer to a
     /// Lua fault is the `ScriptErrors` modal, which shows a burst's first message and remembers
     /// nothing; B293 is two reporters asking for the list that modal cannot be. **Player-facing,
@@ -334,7 +334,7 @@ impl SlashCommands {
         // 4 · benilla's instruments, last so they can never shadow a shipped command.
         // benilla's own instruments — `/castvis`, `/partytest`, `/chattest`, `/shot`, `/liquid`,
         // `/reaction`. A player build claims none of the aliases, so typing one falls through to
-        // the reference's "unknown command" exactly as it should (decision 1179). They are gated
+        // the reference's "unknown command" exactly as it should. They are gated
         // HERE, at the table, rather than at each dispatch arm: one door, like the dev chord's.
         let before_dev = by_alias.len();
         if crate::run_mode::dev_affordances() {
@@ -356,7 +356,7 @@ impl SlashCommands {
     /// commands each source made reachable (the shipped strings repeat: `EMOTE87_CMD1` and `_CMD2`
     /// are both `"/sit"`). The boot report.
     ///
-    /// The last number is the seam, **made observable** (decision 1179): benilla's own instrument
+    /// The last number is the seam, **made observable**: benilla's own instrument
     /// commands are gated on `run_mode::dev_affordances()`, and a gate nobody can see the effect of
     /// is a gate nobody checks. A player build must print `0`, and one line of its own log says so.
     /// The third — the player-facing additions (`/reload`, 1291) — is deliberately separate from

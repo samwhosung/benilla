@@ -1,4 +1,4 @@
-//! The chat arc's internal currency (decision 0288 §1): [`ChatEvent`] mirrors the reference
+//! The chat arc's internal currency: [`ChatEvent`] mirrors the reference
 //! client's `CHAT_MSG_*` event + `arg1..argN` shape as typed fields, so every source — the wire
 //! (`SMSG_MESSAGECHAT`, `SMSG_CHANNEL_NOTIFY`, whisper-fail errors, `SMSG_TEXT_EMOTE`) and the
 //! client-composed feeds (loot receive lines, played time, rolls) — speaks one vocabulary, and
@@ -52,10 +52,10 @@ pub(crate) enum ChatEventKind {
     Skill,
     Loot,
     Money,
-    /// The client-composed XP line (`SMSG_LOG_XPGAIN`, decision 0304) — the one `COMBAT_*`
+    /// The client-composed XP line (`SMSG_LOG_XPGAIN`) — the one `COMBAT_*`
     /// family member modeled (0288 §3 keeps the rest for the combat-log content arc).
     CombatXpGain,
-    /// The client-composed honor line (`SMSG_PVP_CREDIT`, decision 1512) — the XP line's twin,
+    /// The client-composed honor line (`SMSG_PVP_CREDIT`) — the XP line's twin,
     /// and the second `COMBAT_*` family member modeled. Composed here rather than fired from the
     /// wire because the packet carries a guid and a rank *number*: the sentence needs the
     /// victim's NAME and their rank TITLE, so it is built after the name resolve exactly as
@@ -72,7 +72,7 @@ pub(crate) enum ChatEventKind {
     BgSystemNeutral,
     BgSystemAlliance,
     BgSystemHorde,
-    // ── the combat log (B297; completed by 1703) ───────────────────────────────────────────
+    // ── the combat log (completed by 1703) ───────────────────────────────────────────
     // The `COMBAT_*`/`SPELL_*` block 0288 §3 held back as "the combat-log content arc". 1571 shipped
     // the damage/heal/power 44; 1703 added the eleven leaves it named as "deliberately out because
     // their wire sources are undecoded" — the death pair, the three AURA_GONE rows, MISC_INFO,
@@ -373,7 +373,7 @@ impl ChatEventKind {
 /// in the local list — see [`super::edit::ChannelState::stamp_channel`], which is the only place
 /// they are written.
 ///
-/// **arg1 IS the garbled text** (B262, decision 1485). The reference fills `0x49a870`'s one buffer
+/// **arg1 IS the garbled text**. The reference fills `0x49a870`'s one buffer
 /// exactly once — a plain `SStrCopy` at `0x49a9f0` or the garble `0x49b560` at `0x49aa7c` — and
 /// never reads the raw wire pointer again, so every consumer downstream shares it: the chat line,
 /// this event's arg1, and the bubble. **An addon receiving a foreign-language line cannot recover
@@ -581,7 +581,7 @@ pub(crate) fn event_name(kind: ChatEventKind) -> &'static str {
 /// [`super::feed::ChatLog::push_channel_notice`] drops it before it becomes an event), and anything
 /// past `0x1F` is outside vmangos's range.
 ///
-/// **Two of the arms are state-dependent** (decision 2130): the client answers `"YOU_CHANGED"` for
+/// **Two of the arms are state-dependent**: the client answers `"YOU_CHANGED"` for
 /// `0x02` and `"SUSPENDED"` for `0x03` when its own channel record is in the matching state
 /// (`rec+0x9c == 2` at `0x49c087` / `== 3` at `0x49c0e0`), and both alternates are real
 /// `CHAT_<X>_NOTICE` strings —

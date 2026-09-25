@@ -1,5 +1,5 @@
 //! The guild-charter session — the registrar window, the petition window, and the verbs that found
-//! a guild (decision 1672).
+//! a guild.
 //!
 //! [`crate::ui_guild`] is *being* in a guild; this is *making* one, the slice 1257 §2 deliberately
 //! left out and named as the next. It mirrors the wire the way that module does: the seven server
@@ -23,8 +23,8 @@
 //! They meet at exactly one place: `TurnInGuildCharter()` is a *registrar* button that acts on a
 //! charter in the *bags*, found by [`crate::ui_items::find_item`].
 //!
-//! **The gossip handoff needs no special case, and that is worth saying because the banker's did**
-//! (decision 0607). vmangos's `GOSSIP_OPTION_PETITIONER` arm calls `PlayerTalkClass->CloseGossip()`
+//! **The gossip handoff needs no special case, and that is worth saying because the banker's did**.
+//! vmangos's `GOSSIP_OPTION_PETITIONER` arm calls `PlayerTalkClass->CloseGossip()`
 //! *before* `SendPetitionShowList` (`Player.cpp:12428-12431`), and `CloseGossip` really does send
 //! `SMSG_GOSSIP_COMPLETE` (`GossipDef.cpp:231-236`) — so the menu closes itself, and the registrar
 //! takes the left panel slot the gossip window has already released. The bank needed
@@ -190,7 +190,7 @@ impl NpcSession for GuildRegistrarState {
 pub(crate) struct PetitionState {
     open: Option<OpenCharter>,
     /// The lazy record cache, keyed by petition id — the guild-identity cache's twin, ask-once
-    /// through [`QueryCache`] (decision 2288). Session state: a petition id means nothing across
+    /// through [`QueryCache`]. Session state: a petition id means nothing across
     /// a reconnect.
     records: QueryCache<u32, Record>,
     /// `[0xbdce1c]` — set while a sign we sent is outstanding, cleared when its result lands.
@@ -204,7 +204,7 @@ pub(crate) struct PetitionState {
     ///
     /// The record cache is lazy: the hover is what issues the query, so the answer arriving sets
     /// nothing any consumer already watches. `ui_items`' bag feed gates its whole snapshot rebuild
-    /// on a list of epochs (decision 1439), and without this counter in that list a charter's guild
+    /// on a list of epochs, and without this counter in that list a charter's guild
     /// lines are resolved once — to `None`, before the record exists — and never again. The live
     /// probe is what caught it; every unit test passed, because they push the record and the view
     /// in the same breath.

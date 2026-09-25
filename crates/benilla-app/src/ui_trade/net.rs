@@ -38,7 +38,7 @@ fn on_trade_status_extended(In(ev): In<SessionEvent>, mut trade: ResMut<TradeSes
     }
 }
 
-/// An open trade dies with the socket (decision 0592) — the reconnect starts with no trade. A
+/// An open trade dies with the socket — the reconnect starts with no trade. A
 /// listener on the session end (a second handler on `Disconnected`, after the bridge's own
 /// teardown, `net::session::on_disconnected`).
 fn on_session_end(In(_): In<SessionEvent>, mut trade: ResMut<TradeSession>) {
@@ -69,7 +69,7 @@ fn on_session_end(In(_): In<SessionEvent>, mut trade: ResMut<TradeSession>) {
 /// got `REJECTED` and `UNKNOWN_13` wrong in opposite directions (decision 1764 wrote both down as
 /// unsettled; their arms, `0x4bf821` and `0x4bfa02`, settle them).
 ///
-/// `BEGIN_TRADE` records the incoming request **without answering it** (decision 1764 — the reply
+/// `BEGIN_TRADE` records the incoming request **without answering it** (the reply
 /// is a ladder of eight gates, so [`super::answer_trade_request`] owns it, and it is the
 /// only arm of the reference's dispatcher that speaks to the wire).
 fn trade_status(

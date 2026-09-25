@@ -1,4 +1,4 @@
-//! **Party quest sharing** — the *Share Quest* button's two answer paths (decision 1733).
+//! **Party quest sharing** — the *Share Quest* button's two answer paths.
 //!
 //! Everything about a share that is not already the questgiver panel's job lives here, and that
 //! turns out to be exactly the two things the sharer's own client cannot see: what each party
@@ -33,7 +33,7 @@
 //! address a party member by guid and display a *name*, so both go through the [`NameCache`]'s
 //! ask-once resolve. The reference does not: it reads the object-name cache `0xc0e228` through
 //! `0x55f080` with a **null callback**, so a miss returns 0 and the message is **silently dropped**
-//! — no query, no defer, no line (decision 1738). That is a quirk of a synchronous object
+//! — no query, no defer, no line. That is a quirk of a synchronous object
 //! manager that always has its party members to hand, not a behaviour worth reproducing: benilla's
 //! cache may genuinely not hold a member yet, and losing "Thrall has declined your quest" because a
 //! name query was in flight is strictly worse than showing it a frame later. So a verdict whose
@@ -131,7 +131,7 @@ fn verdict_message(msg: QuestShareMsg) -> Option<&'static str> {
     Some(key)
 }
 
-/// The party quest-share's packet handlers (decision 1733; in the net handler table since 2320,
+/// The party quest-share's packet handlers (in the net handler table since 2320,
 /// moved out of the drain's quests arm file): one member's verdict on a quest we pushed, and the
 /// escort-quest confirm. Both park in [`QuestShare`] for this module to name and raise — the guid
 /// needs a name query a packet handler cannot await.
@@ -165,13 +165,13 @@ mod net {
     }
 
     /// A verdict on a share nobody is listening for any more, and a confirm whose server-side
-    /// latch died with the socket (decision 1733). A listener on the session end
+    /// latch died with the socket. A listener on the session end
     /// (a second handler on the kind, after the bridge's own teardown).
     fn on_session_end(In(_): In<SessionEvent>, mut share: ResMut<QuestShare>) {
         share.clear_session();
     }
 
-    /// One party member's verdict on a quest we shared (`MSG_QUEST_PUSH_RESULT`, decision 1733).
+    /// One party member's verdict on a quest we shared (`MSG_QUEST_PUSH_RESULT`).
     ///
     /// Parked rather than shown: the line's `%s` is the member's NAME, which may still need a
     /// `CMSG_NAME_QUERY` round trip, and this pass has no VM to resolve GlobalStrings through either.

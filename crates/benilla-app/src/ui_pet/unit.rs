@@ -1,4 +1,4 @@
-//! The **`"pet"` unit token** and the pet frame's events ([`feed_pet_unit`], decision 0990).
+//! The **`"pet"` unit token** and the pet frame's events ([`feed_pet_unit`]).
 //!
 //! This lives with the pet bar rather than beside the `"player"`/`"target"` feed for one reason:
 //! the token's identity is [`PetBar`]'s cached pet guid — the client's `[0xb714a0]`, which is also
@@ -16,7 +16,7 @@ use crate::ui_unit::{fire_transitions, snapshot};
 
 use super::{PetBar, PetUnit};
 
-/// What the `"pet"` token feed last pushed — the three edges it fires on (decision 0990).
+/// What the `"pet"` token feed last pushed — the three edges it fires on.
 #[derive(Default)]
 pub(super) struct PetUnitMemory {
     /// The last snapshot pushed under `"pet"`, for [`fire_transitions`]' per-field diff.
@@ -28,8 +28,8 @@ pub(super) struct PetUnitMemory {
     /// trigger. `None` until the first resolved pet, so a login with a pet already fighting
     /// announces it once instead of reading as a transition from "calm".
     in_combat: Option<bool>,
-    /// The last `(pet guid, UNIT_FIELD_PET_NAME_TIMESTAMP)` seen — the rename's only signal
-    /// (decision 1066). The guid rides along because the timestamp alone would read a *different*
+    /// The last `(pet guid, UNIT_FIELD_PET_NAME_TIMESTAMP)` seen — the rename's only signal.
+    /// The guid rides along because the timestamp alone would read a *different*
     /// pet's stamp as a rename of this one.
     name_stamp: Option<(u64, Option<u32>)>,
     /// The gate's counter memory (1439): the name cache by its landed counter — the token's own
@@ -44,7 +44,7 @@ pub(super) struct PetUnitMemory {
 /// the local click latch — is what the reference watches.
 pub(super) const UNIT_FLAG_PET_IN_COMBAT: u32 = 0x0000_0800;
 
-/// Feed the **`"pet"` unit token** and the pet frame's three events (decision 0990).
+/// Feed the **`"pet"` unit token** and the pet frame's three events.
 ///
 /// **The token resolves off the bar's cached pet guid, not off our own `UNIT_FIELD_SUMMON`**, and
 /// that is the client's own choice rather than a convenience. `UNIT_PET` fires
@@ -206,8 +206,7 @@ pub(super) fn feed_pet_unit(
     }
 }
 
-/// **Watch the pet's name timestamp, drop the cached name when it moves, and announce it**
-/// (decision 1066).
+/// **Watch the pet's name timestamp, drop the cached name when it moves, and announce it**.
 ///
 /// A pet's name is the one name in the client that can change under us. It does not ride the
 /// descriptor — it is answered once by `CMSG_PET_NAME_QUERY` into `petnamecache.wdb` and keyed by

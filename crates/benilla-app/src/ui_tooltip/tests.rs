@@ -13,7 +13,7 @@ struct TestCtx {
     /// The two lookups the builder resolves through, over the **shipped** `GlobalStrings.lua` in
     /// a VM this harness owns.
     ///
-    /// Every cell this builder composes is a key resolved at runtime (decision 2045), so a test
+    /// Every cell this builder composes is a key resolved at runtime, so a test
     /// that asserts a rendered cell has to grade it against the player's own table — a stub would
     /// pass on wording the client never shows, which is the trap 2052 named when it moved the
     /// glue tests onto the loader's own assembly.
@@ -102,7 +102,7 @@ impl TestCtx {
 
 /// The object index the possession cells resolve through — nothing streamed, which is what
 /// every case here is graded against: the worn-item search finds no instance and each reagent's
-/// carried count reads 0 (decision 2334). Held beside the [`TestCtx`] because the lookup borrows
+/// carried count reads 0. Held beside the [`TestCtx`] because the lookup borrows
 /// the world it reads.
 fn no_objects() -> crate::ui_items::TestObjects {
     crate::ui_items::TestObjects::new()
@@ -202,7 +202,7 @@ fn fireball_view_on_real_data() {
     }
 }
 
-/// The cost and cast cells' full law on the REAL 5875 data (decision 1074, B192): the health
+/// The cost and cast cells' full law on the REAL 5875 data: the health
 /// fallback and pct resolution (Bloodrage), the empty Life Tap cell (1.12 carries no cost
 /// columns for it — the trade lives in the description), the `_PER_TIME` composite (Health
 /// Funnel), the resolved pct-of-base-mana with no percentage line (Judgement — the B152
@@ -411,7 +411,7 @@ fn range_cell_on_real_data() {
     assert_eq!(v.range, None, "the self row resolves max 0");
 }
 
-/// The three lines the 2026-07-25 reference captures pinned (decision 0620), each against the
+/// The three lines the 2026-07-25 reference captures pinned, each against the
 /// REAL 5875 data. Skips without client data.
 #[test]
 fn the_pinned_c6_lines_on_real_data() {
@@ -525,7 +525,7 @@ fn the_pinned_c6_lines_on_real_data() {
     );
 }
 
-/// The "Locked" line's colour law (decision 0770) — the director's report: a door they held
+/// The "Locked" line's colour law — the director's report: a door they held
 /// the key for read RED, where the reference reads green.
 ///
 /// The builder's own shape is "red unless the resolver found an opener", and *every* kind of

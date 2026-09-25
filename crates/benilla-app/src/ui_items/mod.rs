@@ -21,8 +21,8 @@
 //! the real client's **equip-vs-use fork**: an *equippable* item (template `inventoryType != 0`,
 //! and not a quest-starter) goes out as `CMSG_AUTOEQUIP_ITEM` — a helm click puts the helm on —
 //! everything else through the one use fork ([`item_use_command`], our `CGItem::Use`), which sends
-//! `CMSG_QUESTGIVER_QUERY_QUEST` for a quest-starter and `CMSG_USE_ITEM` for everything else
-//! (decision 0664). Server refusals (`SMSG_INVENTORY_CHANGE_FAILURE` → [`EquipErrors`]) surface on
+//! `CMSG_QUESTGIVER_QUERY_QUEST` for a quest-starter and `CMSG_USE_ITEM` for everything else.
+//! Server refusals (`SMSG_INVENTORY_CHANGE_FAILURE` → [`EquipErrors`]) surface on
 //! the red UI error line with the client's message strings. The cursor-payload drains (decision
 //! 0216, whole-space since slice 2) ride the same wire map: a queued pick/place/swap move →
 //! `CMSG_SWAP_INV_ITEM` (backpack-internal) or `CMSG_SWAP_ITEM` (either end an equipped bag) /
@@ -87,7 +87,7 @@ pub(crate) const BANK_CONTAINER: i64 = -1;
 /// space: `NUM_BAG_SLOTS + 1 ..`).
 pub(crate) const BANK_BAG_ID_FIRST: i64 = 5;
 /// The keyring's live-API container id (`KEYRING_CONTAINER`, the reference
-/// `MainMenuBarBagButtons.lua:1`; decision 0765).
+/// `MainMenuBarBagButtons.lua:1`).
 pub(crate) const KEYRING_CONTAINER: i64 = -2;
 /// The first keyring slot in the player array (vmangos `KEYRING_SLOT_START`).
 pub(super) const KEYRING_SLOT_FIRST: u8 = 81;
@@ -133,12 +133,12 @@ pub(crate) fn keyring_size(level: u32) -> u32 {
 /// … Bag3Slot 23 → wire 22). Both backpack AND doll positions land on [`BAG_PLAYER_INVENTORY`], so
 /// the existing move drain's "both ends 255 ⇒ `CMSG_SWAP_INV_ITEM`" branch already routes
 /// doll↔backpack, doll↔doll, and a bag dragged from the backpack onto a bag slot (the equip) with
-/// no change of its own. The bank (decision 0604) rides the same player-array convention:
+/// no change of its own. The bank rides the same player-array convention:
 /// [`BANK_CONTAINER`] (the 24 generic slots) → `(255, 39..62)`; bank bags 5..=10 → the bag's own
 /// player-array slot 63..68 as the wire bag byte (exactly the equipped-bag rule); and the doll
 /// space grows the bank-bag *buttons* as live ids 64..69 (the same "live id − 1 = wire slot" law,
 /// so dragging a bag onto a bank bag slot routes through the existing swap drain unchanged). The
-/// **keyring** ([`KEYRING_CONTAINER`], decision 0765) is the plainest case of all: its slots ARE
+/// **keyring** ([`KEYRING_CONTAINER`]) is the plainest case of all: its slots ARE
 /// player-array slots ([`KEYRING_SLOT_FIRST`] + the 0-based slot), so every keyring move lands on
 /// [`BAG_PLAYER_INVENTORY`] and rides the existing `CMSG_SWAP_INV_ITEM` branch to/from the
 /// backpack and the doll, or `CMSG_SWAP_ITEM` when the other end is an equipped bag — no drain
@@ -169,7 +169,7 @@ pub(crate) fn wire_pos(bag: i64, slot1: u32) -> Option<(u8, u8)> {
 
 /// One inventory refusal off the wire — everything the error line's two argument-taking reasons
 /// need. Both fills are per-reason and neither is ever set for the other's code, so they ride as
-/// plain fields rather than an enum (decision 0916: exactly two of the 67 reasons format an
+/// plain fields rather than an enum (exactly two of the 67 reasons format an
 /// argument, and the reference sources them from different places).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct EquipError {
@@ -221,7 +221,7 @@ pub(crate) fn slot_guid(
                 .filter(|g| *g != 0)
         }
         // The doll: equipment/bag icons read the INV array (its accessor caps at 23); the
-        // bank-bag *buttons* (wire 63..68) read their own descriptor array (decision 0604).
+        // bank-bag *buttons* (wire 63..68) read their own descriptor array.
         EQUIPMENT_BAG
             if (BANK_BAG_SLOT_FIRST..BANK_BAG_SLOT_FIRST + BANK_BAGS).contains(&slot0) =>
         {
@@ -514,7 +514,7 @@ pub(crate) struct ItemSearch {
 /// output shape) plus the **instance guid** that occupies it, since the use fork needs it
 /// ([`item_use_command`]). This is the reference's inventory search (the walker `0x622420` over
 /// `PLAYER_FIELD_INV_SLOT_HEAD`, predicate `OBJECT_FIELD_ENTRY` equality) — the first hit of
-/// [`walk_inventory`], whose doc carries the order and why it is load-bearing (decision 0666; bank
+/// [`walk_inventory`], whose doc carries the order and why it is load-bearing (bank
 /// and buyback are not in this scope).
 pub(crate) fn find_item(
     store: &ObjectFields,
@@ -550,7 +550,7 @@ pub(crate) fn find_item(
 /// It exists because some predicates need the item's TEMPLATE, and the template lookup wants
 /// [`Items`] mutably (it is ask-once: a miss fires the query) while the walk holds it immutably.
 /// `has_key` solved that by hand-listing the slots it wanted; this keeps the one real walker and
-/// its load-bearing order (decisions 0666/1158) and just defers the judging by one step.
+/// its load-bearing order and just defers the judging by one step.
 pub(crate) fn collect_inventory(
     store: &ObjectFields,
     objects: &Objects,
@@ -566,7 +566,7 @@ pub(crate) fn collect_inventory(
 }
 
 /// The reference's **`HasKey()`** (`0x48ae90`) — "does this player own a key at all?", the one
-/// gate that decides whether the keyring exists in the UI (decision 0765). Byte-read: it fetches
+/// gate that decides whether the keyring exists in the UI. Byte-read: it fetches
 /// the active player, then runs the same inventory walker `find_item` transcribes
 /// (`0x6223a0` → `0x622420`) with predicate `0x6223d0` — `ItemTemplate.BagFamily == 9`
 /// ([`BAG_FAMILY_KEYS`]; `template+0x1d0` is the record's last int32, and `BagFamily` is the last
@@ -630,7 +630,7 @@ pub(crate) fn has_key(
             .is_some_and(|t| t.bag_family == BAG_FAMILY_KEYS)
     })
 }
-/// **The object index a test resolves item guids through** (decision 2334) — the half of the
+/// **The object index a test resolves item guids through** — the half of the
 /// seam [`crate::items::TestDeps`] does not cover, for a test that holds no `TestDeps`: a world to
 /// seed with item entities, and the [`Objects`] lookup over it. The two live together because the
 /// lookup borrows the world it reads, so a test cannot hold one without the other.
@@ -686,19 +686,19 @@ pub(crate) struct ItemUse {
     pub(crate) slot: u8,
     /// The item's template ENTRY — the cooldown store keys item records on `(use_spell, entry)`
     /// (the client's `[eax+8]==spellId && [eax+0xc]==itemID` match), and the ladder's not-ready
-    /// rung queries exactly that pair for the item leg's 0x28 (decision 0948; closes the
+    /// rung queries exactly that pair for the item leg's 0x28 (closes the
     /// item-entry gap 0914 named).
     pub(crate) entry: u32,
-    /// The template spell BLOCK ordinal the server should cast (decision 0666).
+    /// The template spell BLOCK ordinal the server should cast.
     pub(crate) spell_index: u8,
     /// The template's ON_USE spell id — `0x5d8c80`'s answer: the first template block whose
     /// `SpellId != 0` **and** `SpellTrigger == 0`. `None` = there is no such block.
     pub(crate) use_spell: Option<u32>,
-    /// The GameObject this use is aimed at — the key-in-a-lock arm (decision 0769), which is
+    /// The GameObject this use is aimed at — the key-in-a-lock arm, which is
     /// `CGItem::Use`'s own target argument. `None` for every ordinary click.
     pub(crate) on_object: Option<u64>,
-    /// The template's `ITEM_FLAG_CHARTER` (`0x2000`) — a signable guild petition
-    /// (decision 1672). Diverts to [`ItemUseRoute::ShowPetition`].
+    /// The template's `ITEM_FLAG_CHARTER` (`0x2000`) — a signable guild petition.
+    /// Diverts to [`ItemUseRoute::ShowPetition`].
     pub(crate) is_charter: bool,
 }
 
@@ -706,7 +706,7 @@ pub(crate) struct ItemUse {
 /// an item actually sends. The reference has exactly one such function and every use surface calls
 /// it — the bag click (`Script::UseContainerItem` @ `0x4fa430`), the doll click
 /// (`Script::UseInventoryItem` → `0x4c7af0`) and the action bar (`UseAction`'s engine @ `0x4e607b`)
-/// — so the fork lives here rather than in any one drain (decision 0664: three call sites each
+/// — so the fork lives here rather than in any one drain (three call sites each
 /// re-deriving it is exactly how the quest fork came to be missing from all three).
 ///
 /// A template whose **`StartQuest`** is non-zero never goes out as `CMSG_USE_ITEM`: the client
@@ -742,7 +742,7 @@ pub(crate) enum ItemUseRoute {
     /// with **nothing sent**. (Before decision 0914 we sent anyway, and vmangos answered
     /// `EQUIP_ERR_ITEM_NOT_FOUND` — a red "Item not found." the reference never shows.)
     Nothing,
-    /// **The charter arm** (decision 1672): using an item whose template flags carry
+    /// **The charter arm**: using an item whose template flags carry
     /// `ITEM_FLAG_CHARTER` (`0x2000`) opens the petition window — it sends
     /// `CMSG_PETITION_SHOW_SIGNATURES` for the instance, not `CMSG_USE_ITEM`.
     ///
@@ -766,7 +766,7 @@ pub(crate) enum ItemUseRoute {
     /// what changes is that this is now read rather than reasoned, and a reader is not sent
     /// looking for a byte read that already exists.
     ShowPetition { item: u64 },
-    /// **The disarmed refusal** — `CGItem::Use`'s rung **15 of 20** (decision 1903): using the very
+    /// **The disarmed refusal** — `CGItem::Use`'s rung **15 of 20**: using the very
     /// weapon a disarm has taken raises `ERR_CANT_USE_DISARMED` (`0x16b` = 363) at
     /// `0x5d926d call 0x496720` and sends **nothing**. This is the client refusing on its own —
     /// unlike `ERR_NOT_WHILE_DISARMED` (61), which is a server `SMSG_INVENTORY_CHANGE_FAILURE`
@@ -803,7 +803,7 @@ pub(crate) fn item_use_route(
             quest: it.start_quest,
         };
     }
-    // The charter arm (decision 1672, its evidence upgraded to VERIFIED — see
+    // The charter arm (its evidence upgraded to VERIFIED — see
     // `ItemUseRoute::ShowPetition`): the reference's rung #9, after quest and before the cast
     // tail, which is the ordering this fork needs. A charter with no resolved instance cannot be
     // addressed, so it falls through to the ordinary path exactly as the quest fork does — and
@@ -811,7 +811,7 @@ pub(crate) fn item_use_route(
     if let Some(item) = it.guid.filter(|_| it.is_charter) {
         return ItemUseRoute::ShowPetition { item };
     }
-    // Rung 15 (decision 1903): the clicked item IS the weapon this disarm took. `bag_index == 255`
+    // Rung 15: the clicked item IS the weapon this disarm took. `bag_index == 255`
     // is the player array, so `slot` is the equipment index — the reference gets there by scanning
     // the equipment guids for the item and asking whether the index it lands on is the hidden one.
     if disarmed_hand.is_some() && it.bag_index == PLAYER_ARRAY && Some(it.slot) == disarmed_hand {
@@ -874,7 +874,7 @@ pub(crate) fn send_item_use(
     gate: &mut crate::ui_bind_confirm::BindGate,
     suppress: bool,
     // The by-key local-refusal sink — passed explicitly rather than carried on `CastLadder`, so
-    // no system can reach it twice (decision 1903).
+    // no system can reach it twice.
     ui_errors: &mut crate::ui_action::UiErrorKeys,
 ) -> bool {
     // The toggle predicate, resolved once against the caster's live aura slots. Both inputs are
@@ -887,7 +887,7 @@ pub(crate) fn send_item_use(
             .self_store
             .is_some_and(|store| crate::ui_action::toggle::active_action_toggle(spell, d, store))
     };
-    // The disarm ladder, asked of the caster's own inventory (decision 1903).
+    // The disarm ladder, asked of the caster's own inventory.
     let disarmed_hand = ctx.rel.self_store.and_then(|store| {
         crate::items::disarmed_equipment_slot(
             store,
@@ -929,7 +929,7 @@ pub(crate) fn send_item_use(
                 .send(crate::net::ClientCommand::PetitionShowSignatures { item });
             true
         }
-        // **The bind-on-use deferral** (`0x5d91d3`-`0x5d91f2`, decision 1750), and its POSITION is
+        // **The bind-on-use deferral** (`0x5d91d3`-`0x5d91f2`), and its POSITION is
         // half the law. The reference's bind arm is the last rung of `0x5d8d00`: every arm above —
         // the gift, the quest offer, the petition, the readable, the charge/slot rungs and the aura
         // toggle — has already claimed the click and exited before a bind question can be asked, so
@@ -1027,7 +1027,7 @@ pub(super) fn item_link(item_id: u32, name: &str, quality: u32) -> String {
 }
 
 /// `INVTYPE_AMMO` — the projectile/ammo inventory type (arrows, bullets). Loaded via
-/// `CMSG_SET_AMMO`, not the equip-swap wire (decision 0526); the equip drains fork on it.
+/// `CMSG_SET_AMMO`, not the equip-swap wire; the equip drains fork on it.
 pub(super) const INVTYPE_AMMO: u32 = 24;
 
 /// The INVTYPE → live-API equip-slot(s) map decision 0208 phase 1b's "the fit rule" needs
@@ -1047,7 +1047,7 @@ pub(super) const INVTYPE_AMMO: u32 = 24;
 ///   actual equip still round-trips through `SMSG_INVENTORY_CHANGE_FAILURE`
 ///   (`EQUIP_ERR_CANT_DUAL_WIELD`) if the class can't. Simpler than threading class into every
 ///   caller for a highlight-only consequence.
-/// - **`INVTYPE_RELIC` is CLOSED** (decision 1803, over the gap 1796 named). `has_relic_slot` is
+/// - **`INVTYPE_RELIC` is CLOSED** (over the gap 1796 named). `has_relic_slot` is
 ///   the player's own, read off `ChrClasses.dbc` field 16, and `IsValidForSlot 0x5da1d0`'s
 ///   `slot == 0x11` leg is an EQUALITY — it takes the slot iff
 ///   `(InventoryType == 28 RELIC) == hasRelicSlot`. So RELIC and the three ranged types are exact
@@ -1060,7 +1060,7 @@ pub(super) const INVTYPE_AMMO: u32 = 24;
 pub(super) fn find_equip_slot(inventory_type: u32, has_relic_slot: bool) -> Vec<u8> {
     // Live-API ids (`char_stats::SLOT_INFO`'s own numbering): wire `EQUIPMENT_SLOT_*` + 1. The
     // ammo slot is the client's own `GetInventorySlotInfo("AmmoSlot")` == 0 (not a real equip slot;
-    // ammo loads by entry via `CMSG_SET_AMMO`, decision 0526) — it just names the fit-rule target.
+    // ammo loads by entry via `CMSG_SET_AMMO`) — it just names the fit-rule target.
     const AMMO: u8 = 0;
     const HEAD: u8 = 1;
     const NECK: u8 = 2;
@@ -1105,7 +1105,7 @@ pub(super) fn find_equip_slot(inventory_type: u32, has_relic_slot: bool) -> Vec<
         // 0x5da1d0`'s `slot == 0x11` leg is an EQUALITY: it takes the slot iff
         // `(InventoryType == 28 RELIC) == hasRelicSlot`. So the three ranged types and RELIC are
         // exact complements here, not a union — a druid dragging a bow is offered nothing, and a
-        // warrior dragging an idol likewise (decisions 1796, 1803).
+        // warrior dragging an idol likewise.
         15 if !has_relic_slot => vec![RANGED], // INVTYPE_RANGED
         16 => vec![BACK],                      // INVTYPE_CLOAK
         17 => vec![MAINHAND],                  // INVTYPE_2HWEAPON
@@ -1133,7 +1133,7 @@ pub(crate) struct ItemSets(pub(crate) benilla_formats::ItemSetCatalog);
 pub(crate) struct ItemSubClasses(pub(crate) benilla_formats::ItemSubClassCatalog);
 
 /// The ItemBagFamily.dbc catalog — reason 16's `%s`, i.e. what a specialised bag accepts
-/// ("Only Arrows can be placed in that."). See [`feed`]'s `bag_family_name`, decision 0916.
+/// ("Only Arrows can be placed in that."). See [`feed`]'s `bag_family_name`.
 #[derive(Resource)]
 pub(crate) struct ItemBagFamilies(pub(crate) benilla_formats::ItemBagFamilyCatalog);
 
@@ -1199,7 +1199,7 @@ impl Plugin for UiItemsPlugin {
         // renderer already loads (one parse serves the world and the bags).
         app.init_resource::<EquipErrors>()
             .init_resource::<PendingItemOps>()
-            // The soulbind confirmations' pending records (decision 1750) — the client's own
+            // The soulbind confirmations' pending records — the client's own
             // pending-equip array and its one bind-on-use cell.
             .init_resource::<crate::ui_bind_confirm::PendingEquips>()
             .init_resource::<crate::ui_bind_confirm::PendingBindOnUse>()
@@ -1251,7 +1251,7 @@ impl Plugin for UiItemsPlugin {
                     // the equipped position.
                     drain_inventory_uses.after(UiInput),
                     // EquipPendingItem/CancelPendingEquip/ConfirmBindOnUse — the soulbind
-                    // confirmations' answers (decision 1750). After the input pass like every
+                    // confirmations' answers. After the input pass like every
                     // other drain, and after the drains whose deferrals it answers: a dialog
                     // raised this frame is answered in a LATER one, so the order between them is
                     // not load-bearing, but keeping it last matches the flow.
@@ -1285,7 +1285,7 @@ mod tests {
         assert_eq!(keyring_size(61), 16, "> 60, unreachable in 1.12");
     }
 
-    /// The keyring's wire mapping (decision 0765): its Lua slots are player-array slots 81.., so
+    /// The keyring's wire mapping: its Lua slots are player-array slots 81.., so
     /// every one lands on the player's own grid — which is what makes keyring↔backpack moves ride
     /// the existing `CMSG_SWAP_INV_ITEM` branch with no drain change. Ranged at the wire's 16
     /// addressable positions (vmangos `KEYRING_SLOT_END` 97), not the level-gated count.
@@ -1301,7 +1301,7 @@ mod tests {
         assert_eq!(wire_pos(KEYRING_CONTAINER, 0), None);
     }
 
-    /// **The disarmed refusal, rung 15** (decision 1903). The condition is about the item's WORN
+    /// **The disarmed refusal, rung 15**. The condition is about the item's WORN
     /// POSITION, not its class or its spell: only the weapon in the hand the ladder hides is
     /// refused, and the refusal beats the cast tail below it.
     #[test]
@@ -1356,7 +1356,7 @@ mod tests {
         );
     }
 
-    /// The pure fork ([`item_use_route`], decisions 0664/0914), all four arms: a non-zero
+    /// The pure fork ([`item_use_route`]), all four arms: a non-zero
     /// `StartQuest` diverts to `CMSG_QUESTGIVER_QUERY_QUEST` addressed to the ITEM's guid (arm #3,
     /// `0x5d8dd2` — it returns before the cast tail); an ON_USE spell whose aura is live on the
     /// caster **cancels** (`0x5d9234`) instead of casting; an ON_USE spell otherwise runs the
@@ -1407,7 +1407,7 @@ mod tests {
         );
     }
 
-    /// **The charter arm** (decision 1672): an item whose template carries `ITEM_FLAG_CHARTER`
+    /// **The charter arm**: an item whose template carries `ITEM_FLAG_CHARTER`
     /// opens the petition window instead of taking the cast tail.
     ///
     /// This is the arm's whole justification as a test: the live charter template (entry 5863) has
@@ -1551,8 +1551,8 @@ mod tests {
     }
 
     /// **INVSLOT 17 is one slot with two meanings, and the flag decides it BOTH ways** —
-    /// `IsValidForSlot 0x5da1d0`'s `slot == 0x11` leg is an equality, not a union
-    /// (decisions 1796/1803). A relic class is offered the slot for a libram and refused it for a
+    /// `IsValidForSlot 0x5da1d0`'s `slot == 0x11` leg is an equality, not a union.
+    /// A relic class is offered the slot for a libram and refused it for a
     /// bow; everyone else the reverse. Getting this half-right — offering relics without
     /// withdrawing bows — would light the highlight for a druid dragging a bow, which is the one
     /// case the reference is unambiguous about.
@@ -1601,7 +1601,7 @@ mod tests {
         );
     }
 
-    /// [`wire_pos`]'s bank arms (decision 0604): the 24 generic slots land on the player grid at
+    /// [`wire_pos`]'s bank arms: the 24 generic slots land on the player grid at
     /// wire 39..62; bank bags 5..=10 use their own player-array slot 63..68 as the wire bag byte
     /// (the equipped-bag rule); and the doll space carries the bank-bag *buttons* as live 64..69
     /// (live id − 1 = wire slot, so bag-into-bank-slot drags ride the existing swap drain).
@@ -1625,7 +1625,7 @@ mod tests {
     }
 }
 
-/// [`find_item`] — the reference's inventory walk (decision 0666). Everything here is about
+/// [`find_item`] — the reference's inventory walk. Everything here is about
 /// **order**, because order is the whole finding: the walk it replaced never looked at equipment
 /// at all (an equipped trinket's action button was inert) and put the backpack ahead of the bags.
 #[cfg(test)]
@@ -1798,7 +1798,7 @@ mod find_item_tests {
         );
     }
 
-    /// `HasKey()` — the gate the whole keyring UI hangs off (decision 0765), and the one place the
+    /// `HasKey()` — the gate the whole keyring UI hangs off, and the one place the
     /// **bank** is searched. Byte-read from the reference's `0x48ae90`: predicate `BagFamily == 9`,
     /// mode `0x4f` = equipment | bag slots | backpack | BANK | keyring. So: an ordinary item is not
     /// a key wherever it sits; a key is a key wherever it sits, the bank included; and buyback —
@@ -1877,7 +1877,7 @@ mod find_item_tests {
     }
 }
 
-/// [`count_of`]'s **scope** — decision 1158. The reference has one walker parameterised by a
+/// [`count_of`]'s **scope**. The reference has one walker parameterised by a
 /// section mask, and the mask a caller passes is not cosmetic: the quest surfaces pass `8` (which
 /// the walker rewrites to `0x4F`) and so count **banked** copies; everything else passes `0` (→
 /// `0x47`) and does not. Every case here is a slot band that separates the two scopes.

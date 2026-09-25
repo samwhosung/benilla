@@ -49,7 +49,7 @@ pub(crate) struct TaxiOpen {
     /// The node nearest the flight master — the map's "you are here" marker, typed `Current`.
     pub(crate) nearest_node: u32,
     /// The full known-node bitmask — the node list's visibility gate and the route search's
-    /// traversal restriction (the byte-verified route law — decision 0496 §TU-3).
+    /// traversal restriction (the byte-verified route law).
     pub(crate) known: TaxiMask,
 }
 
@@ -67,7 +67,7 @@ pub(crate) struct TaxiState {
     pub(crate) reply: Option<u32>,
     /// Whether a first-visit "learn" landed (`SMSG_NEW_TAXI_PATH` + `SMSG_TAXINODE_STATUS(known
     /// = true)`) since the last feed frame — [`feed_taxi`] presents it (the byte-verified yellow
-    /// ERR_NEWTAXIPATH info line + the "TaxiNodeDiscovered" sound kit, decision 0516) and
+    /// ERR_NEWTAXIPATH info line + the "TaxiNodeDiscovered" sound kit) and
     /// clears it.
     pub(crate) discovered: bool,
 }
@@ -101,8 +101,8 @@ impl TaxiState {
 /// the client's `0x5ecdd0` handler → `0x607480` marker swap (resource table `0xc4d9d8` index 4,
 /// decision 0497).
 ///
-/// **The query and the teardown are [`crate::quest_markers::query`]'s, not this module's**
-/// (decision 1918). `0x5eb170` — the only `CMSG_TAXINODE_STATUS_QUERY` sender in the image — has
+/// **The query and the teardown are [`crate::quest_markers::query`]'s, not this module's**.
+/// `0x5eb170` — the only `CMSG_TAXINODE_STATUS_QUERY` sender in the image — has
 /// exactly one live caller, `0x607380` @`0x6073e8`, which is the same per-unit function that issues
 /// the questgiver query and which tears the shared marker slot down before either. The green `!`
 /// and the gold `!` are the *same* `unit+0xb2c`, so they cannot have separate lifetimes; this
@@ -184,7 +184,7 @@ fn feed_taxi(
     // that name — 0496 §TU-5's "named-event hashtable" was a mislabel of the sound-kit table
     // (the 0516 correction).
     //
-    // **All three of those facts now come from the row itself** (decision 1815) — the surface from
+    // **All three of those facts now come from the row itself** — the surface from
     // `+0x04`, the text from the key, the cue from `+0x08` — where the surface and the cue used to
     // be hand-carried here, which is exactly the drift the catalog exists to stop.
     if std::mem::take(&mut state.discovered) {
@@ -208,7 +208,7 @@ fn feed_taxi(
     };
 
     // The continent (art + rect + node filter) is the CURRENT NODE's own continentId,
-    // packet-cached — never a live player-map lookup (0496 §TU-2; `build_nodes` resolves it).
+    // packet-cached — never a live player-map lookup (`build_nodes` resolves it).
     let fresh = state.open.as_ref().and_then(|open| {
         let (map_id, nodes, resolved) = build_nodes(open, &catalogs)?;
         cache.0 = resolved;
@@ -238,7 +238,7 @@ fn feed_taxi(
             // `FrameScript_SignalEvent 0x703e50`, `__fastcall(ecx = id)` with a plain `ret` and
             // no vararg push at all. The flight master's name we used to pass was an invention:
             // `TaxiFrame_OnEvent` reads `UnitName("npc")` for it and never looks at `arg1`
-            // (decision 2140, found by the argument gate).
+            // (found by the argument gate).
             (None, Some(_)) | (Some(_), Some(_)) => {
                 script.fire_event("TAXIMAP_OPENED", Vec::new());
             }
@@ -284,7 +284,7 @@ fn feed_on_taxi(
 
 /// Drain the Lua intents: `TakeTaxiNode(i)` maps `i` back to its resolved route
 /// ([`TaxiRouteCache`]) and sends the activate — the discriminator is the byte-verified one
-/// (decision 0496 §TU-3, `0x4dbad0`): **a direct `TaxiPath` edge current→target sends
+/// (`0x4dbad0`): **a direct `TaxiPath` edge current→target sends
 /// `CMSG_ACTIVATETAXI`** — even when the drawn route detours multi-hop — and only an edge-less
 /// target sends `CMSG_ACTIVATETAXIEXPRESS` with the full node chain and its shown fare. A
 /// routeless click (`Current`) is a client-side no-op. `CloseTaxiMap()` → a local clear (no

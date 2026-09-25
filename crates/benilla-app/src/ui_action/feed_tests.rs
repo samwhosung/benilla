@@ -1,7 +1,7 @@
 //! [`super::feed::feed_actions`] as a real Bevy system through a real Lua VM — the seam where the
 //! action bar's slot identity is resolved and pushed.
 //!
-//! What these pin is the **landed-template redisplay** (decision 0660): an ITEM slot's icon needs
+//! What these pin is the **landed-template redisplay**: an ITEM slot's icon needs
 //! an item template that arrives asynchronously, so the resolve that first touches a cold entry is
 //! the one that ISSUES the ask-once query and necessarily reads back nothing. The regression these
 //! guard is a question mark that never goes away — the fresh character's food button.
@@ -129,7 +129,7 @@ fn a_landed_item_template_redisplays_the_action_slot() {
     );
 }
 
-/// The Count fontstring's **gate** rides the same landed template as the icon (decision 1301).
+/// The Count fontstring's **gate** rides the same landed template as the icon.
 ///
 /// `IsConsumableAction 0x4e5250` reads nothing but the slot's item template, so it moves exactly
 /// when the icon does. Fed from the per-frame *state* map it could not: that feed runs `.after`
@@ -182,7 +182,7 @@ fn a_landed_item_template_also_lands_the_consumable_gate() {
 /// `IsConsumableAction 0x4e5250` — the gate's own law
 /// ([`benilla_protocol::ItemInfo::is_consumable`], fed into [`benilla_ui::script::ActionSlot`]).
 /// The director's B201 is the mount row: an on-use item with no charges wore a stack number under
-/// it because we tested `Class == 0` instead of the reference's two clauses (decision 0926 §3).
+/// it because we tested `Class == 0` instead of the reference's two clauses.
 #[test]
 fn is_consumable_is_ammo_thrown_or_a_negative_charge_use_block() {
     let block = |trigger: u32, charges: i32| ItemSpellEntry {
@@ -282,7 +282,7 @@ fn an_unknown_entry_answers_once_and_settles() {
 }
 
 /// A MACRO slot serves **the macro's own icon**, and follows an EDIT of that macro without any
-/// bar-table change at all (decision 0983).
+/// bar-table change at all.
 ///
 /// Two things are pinned. The icon rule: `GetActionTexture`'s macro arm (`0x4e6bf9`) builds the
 /// macro record's own icon path and never touches the bound spell. And the *trigger* is the
@@ -365,7 +365,7 @@ fn a_macro_slot_shows_the_macros_own_icon_and_follows_an_edit() {
         "the generation gate re-resolved the slot"
     );
 
-    // RENAME the macro (decision 1636). The slot's value — texture, kind, id — is byte-identical
+    // RENAME the macro. The slot's value — texture, kind, id — is byte-identical
     // after this, so a value diff alone would fire nothing and the bar would keep drawing the old
     // name line until some unrelated edit repainted it. The feed must re-fire the slot anyway.
     let events = |app: &mut App| {
@@ -481,7 +481,7 @@ fn pre_resolved_lines_land_on_the_errors_frame_in_the_arms_colour() {
     );
 }
 
-/// **A pet's refused cast is not written to the combat log** (decision 2033).
+/// **A pet's refused cast is not written to the combat log**.
 ///
 /// `HandleCastFailed 0x6e1a00` calls the log formatter `0x62c360` beside its `DisplayError`;
 /// `HandlePetCastFailed 0x6e8eb0` calls neither it nor the error sound — its whole call set is the
@@ -553,7 +553,7 @@ fn a_pets_refused_cast_writes_no_combat_log_line() {
     );
 }
 
-/// **The taming refusal is TWO GlobalStrings lookups, in order** (decision 2039) — the one
+/// **The taming refusal is TWO GlobalStrings lookups, in order** — the one
 /// message benilla shows whose argText is itself a key.
 ///
 /// The reference's `0x6e6a20` resolves `PETTAME_<reason>` through the script VM first and hands

@@ -150,8 +150,8 @@ pub(super) fn service_tooltip(wire_spell: u32, spells: &SpellCatalog) -> Trainer
     wire_only
 }
 
-/// The **group-key law** — the builder `0x4d7560`'s per-trainer-type branch at `0x4d7786`
-/// (decision 1124). It is the third law on this page that forks on the same dword the other two
+/// The **group-key law** — the builder `0x4d7560`'s per-trainer-type branch at `0x4d7786`.
+/// It is the third law on this page that forks on the same dword the other two
 /// do, and the one that decides what the director actually sees at the top of a profession
 /// trainer's list.
 ///
@@ -162,7 +162,7 @@ pub(super) fn service_tooltip(wire_spell: u32, spells: &SpellCatalog) -> Trainer
 /// is ever dropped at a tradeskill trainer; and the header vocabulary is the client's own label table
 /// (`0x807520 + key * 0x40`), whose two entries are the global strings `TRADESKILL_SERVICE_STEP`
 /// and `TRADESKILL_SERVICE_LEARN` — **keys**, read off the player's own table at the feed rather
-/// than re-typed here (decision 2045); a header the install cannot name comes back empty, which is
+/// than re-typed here; a header the install cannot name comes back empty, which is
 /// the reference's own data-suppression face.
 ///
 /// **Type 1** (mount — the client's "talent") is a *hybrid*, not a third predicate: an
@@ -212,7 +212,7 @@ pub(super) fn service_group(
     (line, name)
 }
 
-/// The green/red/gray colour a wire `state` byte maps to (decision 0237): GRAY → known, GREEN →
+/// The green/red/gray colour a wire `state` byte maps to: GRAY → known, GREEN →
 /// learnable, everything else (RED + any unexpected value) → gated.
 pub(super) fn category(state: u8) -> TrainerServiceCategory {
     match state {

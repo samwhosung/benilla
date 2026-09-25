@@ -1,5 +1,5 @@
-//! The player-UI **gamma composite lane**'s single decode (decision 0254) — the UI-arc twin of
-//! [`benilla_world::ffx_glow`], which owns the world lane's one decode (0161).
+//! The player-UI **gamma composite lane**'s single decode — the UI-arc twin of
+//! [`benilla_world::ffx_glow`], which owns the world lane's one decode.
 //!
 //! [`ui_quad.wgsl`](shaders/ui_quad.wgsl) composites the UI in gamma bytes, the way the
 //! reference's fixed-function device composites into its 8-bit backbuffer: every tint is a gamma
@@ -7,14 +7,14 @@
 //! byte add `dst + texel·α` (EGxBlend 3 = `glBlendFunc(GL_SRC_ALPHA, GL_ONE)`;
 //! factor tables `0x85c1f8`/`0x85c224`). This node converts that finished gamma
 //! image to linear ONCE, rendering straight into the swapchain — the camera's output mode is
-//! `Skip`, so there is no output blit (decision 2206, [`benilla_world::final_pass`]) — whose sRGB
+//! `Skip`, so there is no output blit ([`benilla_world::final_pass`]) — whose sRGB
 //! write re-encodes it to the exact client byte.
 //!
 //! The node is **mandatory** on the player-UI camera: without it the whole UI presents ~2.2× bright
 //! (the same failure mode `$WOW_NO_FFX` produces for the world). It is gated on [`UiGammaLane`], so
 //! it runs on that camera and no other `Camera2d` sharing the `Core2d` graph (the egui dev overlay).
 //!
-//! The module also carries the lane's **Bevy-UI half** (decision 0541): the glue + loading screens
+//! The module also carries the lane's **Bevy-UI half**: the glue + loading screens
 //! are Bevy UI trees rather than quads, so they need the same gamma conversion in their own shaders
 //! before this decode is correct for them — see [`use_gamma_ui_shaders`]. That is why
 //! [`crate::ui_pass`] marks the player-UI camera `IsDefaultUiCamera`: Bevy UI has to land on the one
@@ -59,7 +59,7 @@ impl Default for UiGammaLane {
     }
 }
 
-/// **The display-brightness correction** (decision 2182) — the `gamma` CVar, as the reference
+/// **The display-brightness correction** — the `gamma` CVar, as the reference
 /// registers it (`0x402d70`, name `0x82e924`, default string `0x82e92c` = `"1.0"`, flags 0).
 ///
 /// The reference applies it as an OS **hardware gamma ramp**: its change callback `0x4034d0`
@@ -284,7 +284,7 @@ impl ViewNode for UiGammaNode {
     }
 }
 
-/// Put **Bevy UI** on the gamma lane too (decision 0541): swap the two stock pipelines' shaders for
+/// Put **Bevy UI** on the gamma lane too: swap the two stock pipelines' shaders for
 /// our gamma-emitting copies.
 ///
 /// The glue screens (login / character select / character create) and the loading screen are Bevy UI

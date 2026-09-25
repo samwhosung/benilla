@@ -1,7 +1,7 @@
 //! **Running** a macro, and the one derivation the action bar needs from a macro body: its
-//! **bound spell** (decision 0983).
+//! **bound spell**.
 //!
-//! ## Running: each line is fired as `EXECUTE_CHAT_LINE` (VERIFIED, 0996)
+//! ## Running: each line is fired as `EXECUTE_CHAT_LINE` (VERIFIED)
 //!
 //! 0983 shipped this as "push the line onto the chat-input queue", with the engine's route to Lua
 //! recorded as an open question. The reference settles it, and the answer is better than the guess:
@@ -52,7 +52,7 @@
 //! So [`bound_spell`] and the press going through one [`resolve_spell_by_name`] is the reference's
 //! shape, not a convenience.
 //!
-//! **The field is three-valued, and the third value shows on the bar** (decision 1636): a `/cast`
+//! **The field is three-valued, and the third value shows on the bar**: a `/cast`
 //! line whose name did not resolve stores **-1**; a `CastSpellByName(` line whose name did not
 //! resolve stores **0** — the same 0 a body with no cast line at all stores. The usable compute
 //! `0x4e5050` reads the difference: a 0 takes its spell-less leg, which answers usable=1 for any

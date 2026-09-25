@@ -1,4 +1,4 @@
-//! The app-side **honor feed** (decision 1512) — the local player's PRIVATE honor descriptor
+//! The app-side **honor feed** — the local player's PRIVATE honor descriptor
 //! fields turned into the snapshot both Honor tabs read, the inspect-honor request/reply round
 //! trip, and the `SMSG_PVP_CREDIT` award turned into its chat line and floating number.
 //!
@@ -84,7 +84,7 @@ struct HonorFeedMemo {
     last_inspect: Option<u64>,
 }
 
-/// The honor pane's packet handler (decision 1512; in the net handler table since 2313). The
+/// The honor pane's packet handler (in the net handler table since 2313). The
 /// honor arc's other inbound message, the award (`PvpCredit`), is a chat line and a floating
 /// number and stays with the chat family.
 mod net {
@@ -134,7 +134,7 @@ impl Plugin for UiHonorPlugin {
 ///
 /// That is worth stating because this gate was the other candidate cause of report B378, and it
 /// is ruled out by exactly this: a missing snapshot and a zeroed one paint the same pane. The
-/// cause was the rank title's team digit (decision 2227).
+/// cause was the rank title's team digit.
 fn honor_snapshot(store: &ObjectStore) -> Option<HonorState> {
     let f = &store.0;
     let session = f.player_session_kills();
@@ -162,7 +162,7 @@ fn honor_snapshot(store: &ObjectStore) -> Option<HonorState> {
         highest_rank: f.player_honor_rank().unwrap_or(0),
         // … and the CURRENT one (PUBLIC, `PLAYER_BYTES_3` byte 3). Two bytes, two fields, and
         // they are equal for anyone who has never ranked down — which is exactly why reading one
-        // for the other would have shipped green (decision 1512).
+        // for the other would have shipped green.
         rank: f.player_pvp_rank().unwrap_or(0),
         rank_bar: f.player_honor_rank_bar().unwrap_or(0),
     })
@@ -236,7 +236,7 @@ fn feed_honor(
     // and `ClearInspectPlayer` (the stock `InspectFrame_OnHide`) clears it outright.
     //
     // **We invalidate on the inspected TOKEN's guid moving instead, deliberately.** Our inspect
-    // window re-resolves its token every frame so the paper doll follows a re-target (0631), and
+    // window re-resolves its token every frame so the paper doll follows a re-target, and
     // the honor page reads that same token rather than the reference's hardcoded `"target"` — so
     // matching the reference's latch exactly would let one window show two different players'
     // data at once, on its two tabs. The reference cannot notice because its two pages disagree

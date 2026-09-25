@@ -1,6 +1,6 @@
 //! The `AUTO_JOIN_GUILD_CHANNEL` cascade — the reference's `0x49ea90`, the thing
 //! `SetGuildRecruitmentMode(1)` tail-jumps into and the one place the client joins or leaves
-//! `GuildRecruitment - City` on its own (decision 2144).
+//! `GuildRecruitment - City` on its own.
 //!
 //! **What it is for.** `GuildRecruitment` is the channel *unguilded* players sit in to be found.
 //! Its `ChatChannels.dbc` row carries no `INITIAL` bit, so the zone walk never seeds it; instead

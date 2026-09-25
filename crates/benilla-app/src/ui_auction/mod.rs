@@ -18,7 +18,7 @@
 //! `AUCTION_*_LIST_UPDATE` fired by whatever just touched *its* array).
 //! So a list-update event here is a statement about **one** list; firing the other two runs the
 //! stock addon's other tabs over state they were never given, and the Auctions tab answers that
-//! by crashing (decision 2308).
+//! by crashing.
 //!
 //! **Sorting is ours and paging is the server's**, which is the split that shapes this module: a
 //! header click re-orders rows we already hold and sends nothing ([`sort`]), while a page turn
@@ -30,7 +30,7 @@
 //! refusal. The window opening clears the gate, so the first search is always allowed. (INTERIM,
 //! decision 1511.)
 //!
-//! The packet handlers ([`net`], in the net handler table — decision 2305) fill [`AuctionOpen`]
+//! The packet handlers ([`net`], in the net handler table) fill [`AuctionOpen`]
 //! from the wire. Each frame
 //! [`feed_auction`] resolves each [`AuctionListEntry`] to a Lua-facing row (name/quality/icon via
 //! the ask-once item-template cache + `ItemDisplayInfo.dbc`, seller via the ask-once name cache,
@@ -139,7 +139,7 @@ pub(crate) struct AuctionRow {
     pub(crate) auction_id: u32,
     pub(crate) item_entry: u32,
     /// The listed item's random-suffix roll — the suffix in [`Self::name`], the enchant lines the
-    /// row hover shows, and the link's third field (decision 1547).
+    /// row hover shows, and the link's third field.
     pub(crate) random_property_id: u32,
     pub(crate) count: u32,
     pub(crate) name: Option<String>,
@@ -181,7 +181,7 @@ pub(crate) struct AuctionListSlot {
     /// A result for **this** list has landed since the window opened — the interface asked for it
     /// and the server answered. `false` is "we hold no such list", which is *not* "the list is
     /// empty": an empty page still arrives, and still counts. It is what the server-driven
-    /// refreshes gate on (decision 2308).
+    /// refreshes gate on.
     received: bool,
     sort: SortStack,
 }
@@ -236,7 +236,7 @@ pub(crate) struct AuctionOpen {
     /// The window's Browse pane clears its "Searching…" state only on `AUCTION_ITEM_LIST_UPDATE`,
     /// so on an empty server a search animated its dots forever and never reported a result.
     ///
-    /// **Per list — that is the whole point** (decision 2308). This was one flag driving all three
+    /// **Per list — that is the whole point**. This was one flag driving all three
     /// fires, on 1511's reading that "one routine invalidates all three lists". The reference has
     /// no such routine: three arrays, three counts, three sort stacks, **three separate events**,
     /// each fired by whatever just touched *its* array. Firing the other two crashed the stock
@@ -278,7 +278,7 @@ pub(crate) struct AuctionOpen {
 /// One queued auction message: which of the reference's twenty catalog rows, and the item name that
 /// fills its `%s` when it has one.
 ///
-/// The surface is the row's own (decision 1523): the twelve **precondition failures** (`0x16c`-`0x177`
+/// The surface is the row's own: the twelve **precondition failures** (`0x16c`-`0x177`
 /// — "you cannot auction a soulbound item", "your bid is too low") are kind 2 and land on the red
 /// `UIErrorsFrame`; the eight **outcomes** (`0x178`-`0x17f` — created, cancelled, outbid, won, sold,
 /// expired, removed, bid accepted) are kind 0 and land in the **chat window** as `CHAT_MSG_SYSTEM`.
@@ -358,7 +358,7 @@ impl AuctionOpen {
 
     /// Mark our own listings stale — the drain re-queries next frame.
     ///
-    /// **Only a list we hold can be stale** (decision 2308). A notification says "the page you are
+    /// **Only a list we hold can be stale**. A notification says "the page you are
     /// showing is now wrong"; if the interface has never asked for the owned list, there is no
     /// such page, and re-asking would *introduce* one — landing an `AUCTION_OWNED_LIST_UPDATE` on
     /// a tab whose `page` field the stock addon has not initialised yet. The reference cannot
@@ -419,7 +419,7 @@ impl Plugin for UiAuctionPlugin {
                 // out the same frame. After the UnitFeed set so a row's tooltip reads a landed
                 // item-template store.
                 close_npc_session_out_of_range::<AuctionOpen>.before(feed_auction),
-                // Gated on the interface being up (decision 2279): `AuctionOpen::messages` is
+                // Gated on the interface being up: `AuctionOpen::messages` is
                 // filled by the server's unprompted sold/outbid/expired notices, and one landing
                 // in the same drain as the login burst would be resolved and shown on the boot
                 // VM — lost — if this ran in 2214's one-frame window. The queue is bounded by
@@ -510,7 +510,7 @@ fn resolve_row(
     }
 }
 
-/// Build the Browse tab's category tree from the player's own DBCs (decision 1511 §5).
+/// Build the Browse tab's category tree from the player's own DBCs.
 /// `pub(crate)`: the addon-corpus survey seats the same tree off the player's chain (2167), and a
 /// second copy of the class set would be a second thing to keep right.
 pub(crate) fn categories(
@@ -595,7 +595,7 @@ fn to_script_row(r: &AuctionRow) -> AuctionItemRow {
 /// The DBC catalogs a row reads, as ONE system param — [`feed_auction`] is at the
 /// 16-SystemParam ceiling, and these four belong together anyway: the two class tables the
 /// category tree is built from, and the random-suffix pair a rolled listing needs
-/// (`ItemRandomProperties` for the name, `SpellItemEnchantment` for its lines — decision 1547).
+/// (`ItemRandomProperties` for the name, `SpellItemEnchantment` for its lines).
 type AuctionCatalogs<'w> = (
     Option<Res<'w, crate::ui_items::ItemClasses>>,
     Option<Res<'w, crate::ui_items::ItemSubClasses>>,
@@ -642,8 +642,8 @@ fn feed_auction(
         script.set_auction_item_classes(classes_now);
     }
 
-    // The queued client messages (decision 1523). Resolved against the VM's own GlobalStrings and
-    // shown on the surface the message's catalog row names — the `ui_quest` shape (0669).
+    // The queued client messages. Resolved against the VM's own GlobalStrings and
+    // shown on the surface the message's catalog row names — the `ui_quest` shape.
     //
     // A `_S` line whose item template has not landed is **kept queued, not dropped**: the reference
     // defers exactly this case through `0x4cd190` and prints the line when the item arrives. Ours
@@ -1040,7 +1040,7 @@ mod tests {
         );
     }
 
-    /// **A result owes its OWN list's event and no other** (decision 2308).
+    /// **A result owes its OWN list's event and no other**.
     ///
     /// The regression this guards is a crash, not a repaint: the stock `Blizzard_AuctionUI`'s
     /// `AuctionFrameAuctions_Update` multiplies by `AuctionFrameAuctions.page`, and that field is
@@ -1069,7 +1069,7 @@ mod tests {
         assert_eq!(open.list_result_landed, [false, true, false]);
     }
 
-    /// **A refresh can only re-ask for a list we hold** (decision 2308) — the other half of the
+    /// **A refresh can only re-ask for a list we hold** — the other half of the
     /// same crash.
     ///
     /// "Your auction sold" arrives whenever the server feels like it, including while the player

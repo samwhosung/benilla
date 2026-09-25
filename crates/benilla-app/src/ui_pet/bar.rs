@@ -196,7 +196,7 @@ pub(super) fn slot_paint(
     PetActionView {
         name: Some(spell.name.clone()),
         subtext: spell.rank.clone(),
-        // THE ICON SWAP (decision 1007, `0x4bdd2f`/`0x4bdd38`/`0x4bdd77`): a spell the
+        // THE ICON SWAP (`0x4bdd2f`/`0x4bdd38`/`0x4bdd77`): a spell the
         // pet is currently running draws its record's `ActiveIconID` instead of its `SpellIconID`.
         // Falling back to `icon` here would be wrong — the reference looks up whichever id the
         // predicate chose and pushes **nil** if that lookup fails (`0x4bdd50`), so an unresolvable
@@ -229,7 +229,7 @@ pub(super) fn slot_paint(
 }
 
 /// The pet spell slot that is **showing active** — the reference's `0x4bcea0`, returning the spell
-/// id when it holds so the one answer can drive both of its consumers. Decision 1007.
+/// id when it holds so the one answer can drive both of its consumers.
 ///
 /// It is not a new predicate: `0x4bcea0` is the *pet-side compiled twin* of the player's
 /// `0x4e55f0`, which we already carry as [`crate::ui_action::toggle::active_action_toggle`] — same

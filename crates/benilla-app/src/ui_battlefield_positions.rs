@@ -1,4 +1,4 @@
-//! The battleground **teammate and flag positions** on the world map (decision 1980):
+//! The battleground **teammate and flag positions** on the world map:
 //! `MSG_BATTLEGROUND_PLAYER_POSITIONS` both ways, resolved
 //! into the engine's `GetBattlefieldPosition` / `GetBattlefieldFlagPosition` /
 //! `GetBattlefieldMapIconScale` backing the stock `WorldMapFrame.lua` and

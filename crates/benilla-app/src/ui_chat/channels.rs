@@ -10,7 +10,7 @@
 //! The walk is every [`ChatChannels.dbc`](benilla_formats::ChatChannelsCatalog) row whose bit is
 //! set in the character's **`ZONECHANNELS` mask** ([`ChannelState::zone_mask`] — seeded from the
 //! DBC's `INITIAL` rows on a fresh character, then moved only by confirmed joins and explicit
-//! leaves; decisions 2120 and 2144), composed against the player's current **zone** and sent as
+//! leaves), composed against the player's current **zone** and sent as
 //! ordinary joins. It re-runs whenever the zone changes: the zone-dependent rows carry the zone
 //! name *inside* the channel name, so crossing a border is genuinely leaving one channel and
 //! joining another — LEAVE(old) then JOIN(new), interleaved per slot.
@@ -74,7 +74,7 @@ pub(crate) fn city_word(areas: &benilla_formats::AreaTableCatalog) -> Option<&st
 ///
 /// Deliberately **not** a second copy of the joined list. The reference's pass 1 walks the slot
 /// array itself (`0x49a284`, stride `0xa0`) and decides leave-vs-join from each slot's own state
-/// (`+0x9c`); this walk does the same over [`ChannelState::joined`] (decision 2144). The request
+/// (`+0x9c`); this walk does the same over [`ChannelState::joined`]. The request
 /// side that once lived here (`held`) fell out the moment 2137 made the walk register its slots
 /// at send time — from then on the slot array *was* the request side, and a channel joined
 /// outside the walk (`/join General`, the guild-recruitment cascade) took a slot the walk did not
@@ -148,7 +148,7 @@ fn end_channel_session(
     }
 }
 
-/// Seed a fresh VM's joined-channel mirror (decision 1291). The mirror is otherwise pushed only
+/// Seed a fresh VM's joined-channel mirror. The mirror is otherwise pushed only
 /// on the join/leave edges ([`super::feed`]'s YOU_JOINED / YOU_LEFT arms), and a `/reload`
 /// replaces the VM *between* edges — `ChannelState` (server truth) survives, but the new VM's
 /// mirror would stay empty: `GetChannelName`/`GetChannelList` answer nothing, `/1`-`/9` routing
@@ -252,7 +252,7 @@ fn compose(
 
 /// The names the walk registers on a character with **no slots yet** — every `ChatChannels.dbc`
 /// row whose bit is set in `zone_mask` and that composes here, in table order. The city gate is
-/// deliberately not applied: this is the set that takes *slots* (decision 2137), and
+/// deliberately not applied: this is the set that takes *slots*, and
 /// [`wanted_channels`] is the subset the gate then lets the walk join. A test lens over
 /// [`plan_walk`]'s pass 2 — the walk itself plans over the slot array.
 ///
@@ -298,7 +298,7 @@ pub(crate) fn wanted_channels(
 
 /// One step of a walk, in **wire order** — the walk is a plan over the slot array, computed pure
 /// and applied in sequence, so that the exact packet-and-state sequence a border produces is a
-/// unit-testable value (decision 2144; the harness this module's own tests used to say was
+/// unit-testable value (the harness this module's own tests used to say was
 /// missing).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum WalkStep {
@@ -342,7 +342,7 @@ pub(crate) enum WalkStep {
 ///   instead ([`compose`]).
 ///
 /// **Pass 2 — rows with no slot** (`0x49a468`), in DBC order, **only those whose mask bit is set**
-/// (`0x49a494`, the live predicate — decision 2144). Each composes, takes a slot (`Register`,
+/// (`0x49a494`, the live predicate). Each composes, takes a slot (`Register`,
 /// before the gate), and then `Join`s or is `Suspend`ed. This is the one place the mask decides:
 /// a `/leave General` clears bit 0 and frees the slot, and from then on — this session and every
 /// later one, because the mask is the character's file — General is never registered again until
@@ -508,13 +508,13 @@ fn zone_is_settled(player: Option<&crate::player::Player>) -> bool {
 /// after the outdoor MCNK area (Tanaris → Caverns of Time, reproduced live). Each transient cost a
 /// real JOIN and a real LEAVE on the wire, for zones the player was never in — chat lines and all.
 /// `settling` is exactly the loading screen's own gate (released by the terrain streamer once the
-/// destination is resident, decision 0737), which makes this the reference's timing rather than an
+/// destination is resident), which makes this the reference's timing rather than an
 /// arbitrary debounce.
 ///
 /// **…and NOT before the chat cache has seated the mask** ([`ChannelState::zone_mask`] is `None`
 /// until then). The reference's walk bails on its "chat system ready" flag (`0x49a219`), which the
 /// cache loader sets as its last act before calling the walk itself (`0x499a18`/`0x499a22`). The
-/// mask is the walk's row set (decision 2144), so a walk before the seat would join nothing and
+/// mask is the walk's row set, so a walk before the seat would join nothing and
 /// nothing would call it again.
 ///
 /// **Selection is the `ZONECHANNELS` mask** — the reference's live predicate `0x49a494`, never
@@ -592,7 +592,7 @@ pub(super) fn auto_join_zone_channels(
     // Fed zone-less, every zone-dependent row carries `resolved: None`, which is the reference's
     // own "matched a row but there is no zone text yet" leg: `AddChatWindowChannel` stores nothing
     // and answers nil (`0x4a10d9`), `JoinChannelByName` returns nil and sends nothing
-    // (`0x49ece5`, decision 1908). Right answer instead of a wrong one, and the walk re-feeds the
+    // (`0x49ece5`). Right answer instead of a wrong one, and the walk re-feeds the
     // moment a zone lands.
     let mut script = script;
     if !channels.channels.is_empty() {
@@ -665,7 +665,7 @@ pub(crate) fn seed_zone_channel_catalog(
     script.set_zone_channel_catalog(zone_channel_catalog(&channels.channels, "", false, city));
 }
 
-/// Every `ChatChannels.dbc` row as the VM needs it (decision 1908): the id, the Shortcut the verbs
+/// Every `ChatChannels.dbc` row as the VM needs it: the id, the Shortcut the verbs
 /// compare a typed name against (`0x4a10b2`), the name composed for `zone_name` — `None` when the
 /// composition has nothing to substitute (a zone-dependent row with no zone, a city row with no
 /// city word), which is the verbs' nil leg — and whether `EnumerateServerChannels 0x4a1790` lists
@@ -886,8 +886,8 @@ mod tests {
     }
 
     /// **A fresh character's first walk, out in the world** — pass 2 over the mask, in DBC order:
-    /// every composable mask row takes a slot *before* the gate decides join-versus-suspend
-    /// (decision 2137), which is what gives `Trade - City` number 2 on a character nowhere near a
+    /// every composable mask row takes a slot *before* the gate decides join-versus-suspend,
+    /// which is what gives `Trade - City` number 2 on a character nowhere near a
     /// city. `/2` therefore reaches Trade here, as it does in the reference.
     #[test]
     fn a_first_walk_registers_every_mask_row_before_the_gate() {
@@ -989,7 +989,7 @@ mod tests {
         assert_eq!(c.number_of("LocalDefense - Winterspring"), Some(3));
     }
 
-    /// **The slot number never moves across the whole city round trip** (decision 2137), and the
+    /// **The slot number never moves across the whole city round trip**, and the
     /// walk drives exactly the reference's state sequence for `Trade - City`: joined on the way
     /// in, LEAVE-then-suspend on the way out (`0x49bcf0`, record kept), and back to *joined at
     /// send time* on the way back in — the state-3 bypass, where the reference's rename writes
@@ -1063,7 +1063,7 @@ mod tests {
         assert_eq!(c.number_of("Trade - City"), Some(2), "still slot 2");
     }
 
-    /// **`/leave General` stays left — this session and the next** (decision 2144, the director's
+    /// **`/leave General` stays left — this session and the next** (the director's
     /// report: *"/leave General does not survive a relog"*).
     ///
     /// The explicit leave clears the row's bit (`0x49f10a`) and the server's `YOU_LEFT` frees the
@@ -1148,7 +1148,7 @@ mod tests {
 
     /// **`GuildRecruitment` rides the walk like Trade once its bit is set** — which is the whole
     /// of how the reference keeps an unguilded player in `GuildRecruitment - City` after the
-    /// cascade's first join (decision 2144): the confirmed join ORs bit 24, and from then on the
+    /// cascade's first join: the confirmed join ORs bit 24, and from then on the
     /// walk registers, suspends and re-joins it through the same city gate (`flags & 0x10`) and
     /// the same city name (`flags & 0x20`). The DBC row order puts it last.
     #[test]
@@ -1300,7 +1300,7 @@ mod tests {
         );
     }
 
-    /// **A catalog fed with no zone is not the same thing as no catalog** (decision 2130).
+    /// **A catalog fed with no zone is not the same thing as no catalog**.
     ///
     /// The VM's three readers all treat an *empty* catalog as "no such built-in channel":
     /// `AddChatWindowChannel` stores the name as a custom channel with id 0, and

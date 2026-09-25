@@ -19,7 +19,7 @@ const MAIL_TIME_EPSILON: f32 = f32::from_bits(0x3480_0000); // 2^-22, the refere
 
 /// The "no mail waiting" stamp: the literal **`-1.0f`** the mail module's init (`0x4acb87`) and the
 /// `MSG_QUERY_NEXT_MAIL_TIME` **sender** (`0x4ade25`) both write into the countdown,
-/// unconditionally (decision 0913). Any value outside ε of zero reads "no mail";
+/// unconditionally. Any value outside ε of zero reads "no mail";
 /// `-1.0` is simply the one the reference picks, and it is what the countdown holds between asking
 /// the server and hearing back.
 const MAIL_TIME_NO_MAIL: f32 = -1.0;
@@ -32,7 +32,7 @@ const MAIL_TIME_NO_MAIL: f32 = -1.0;
 /// and stamped back to [`MAIL_TIME_NO_MAIL`] whenever the client (re-)asks the server. Independent
 /// of [`MailOpen`] (that is session-scoped to one open window; this survives it closing).
 ///
-/// **The five writers** (decision 0913): the module init and the query sender stamp `-1.0`
+/// **The five writers**: the module init and the query sender stamp `-1.0`
 /// ([`Self::on_query_sent`]), the query reply stores the server's float
 /// ([`Self::apply_query_reply`]), `SMSG_RECEIVED_MAIL` runs the set-value ladder
 /// ([`Self::apply_received_mail`]), and the per-frame step counts down ([`Self::step`]).
@@ -72,7 +72,7 @@ impl MailPending {
     /// Near-zero, *not* `<= 0`: the sign carries meaning. vmangos answers
     /// `MSG_QUERY_NEXT_MAIL_TIME` with `-86400.0` when nothing is unread (`MailHandler.cpp`
     /// `HandleQueryNextMailTime`: `HasUnreadMail() ? 0.0f : -float(DAY)`), so a `<= 0` predicate
-    /// lights the minimap icon on every login for a character with no mail (decision 0904).
+    /// lights the minimap icon on every login for a character with no mail.
     pub(super) fn has_new_mail(&self) -> bool {
         self.countdown.abs() < MAIL_TIME_EPSILON
     }
@@ -130,7 +130,7 @@ impl MailPending {
 
     /// Arm the deferred refresh `[0xb6efcc]` — the mark-as-read sender does this unconditionally
     /// (`0x4adda6`), which is *the* mechanism by which checking your mail clears the icon: the
-    /// close core sees the flag and re-asks the server (decision 0913).
+    /// close core sees the flag and re-asks the server.
     pub(crate) fn arm_refresh(&mut self) {
         self.refresh_pending = true;
     }
@@ -158,7 +158,7 @@ mod tests {
         }
     }
 
-    /// `HasNewMail()` is `|countdown| < ε`, not `countdown <= 0` (decision 0904). The regression
+    /// `HasNewMail()` is `|countdown| < ε`, not `countdown <= 0`. The regression
     /// this pins: vmangos's "no unread mail" answer is `-86400.0`, and the old `<= 0` predicate
     /// read it as "you have mail" — the phantom minimap icon on every login.
     #[test]
@@ -287,7 +287,7 @@ mod tests {
         assert!(!tighten.take_notify());
     }
 
-    /// The mechanism that actually clears the icon (decision 0913): opening a letter arms the
+    /// The mechanism that actually clears the icon: opening a letter arms the
     /// deferred refresh, and the close consumes it into a re-query whose stamp darkens the icon.
     #[test]
     fn reading_mail_arms_the_refresh_that_the_close_consumes() {

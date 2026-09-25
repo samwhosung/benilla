@@ -1,4 +1,4 @@
-//! The stable master's packet handlers (decisions 1677, 1688; in the net handler table since
+//! The stable master's packet handlers (in the net handler table since
 //! 2318, moved out of the drain's npc arm file) — the [`StableOpen`] session and the
 //! [`StableErrors`] line queue the stable feed ([`super`]) reads.
 
@@ -65,7 +65,7 @@ fn list_stabled_pets(
         "net: stable master {npc:#x} listed {} pets ({num_stable_slots} slots bought)",
         pets.len()
     );
-    // **Seed the pet-name cache from the list** (decision 1688). Every row carries the pet's own
+    // **Seed the pet-name cache from the list**. Every row carries the pet's own
     // number and the name its owner gave it — the exact `(pet_number, name)` pair
     // `SMSG_PET_NAME_QUERY_RESPONSE` would answer with — so the pet a player unstables has a
     // resolvable `UnitName("pet")` the moment it is summoned, instead of after a round trip.

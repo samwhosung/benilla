@@ -6,8 +6,8 @@ thread_local! {
     /// the chunk it is, so `\32` and every other escape is Lua's own doing rather than a parser
     /// of ours.
     ///
-    /// The composer resolves `CHAT_<TYPE>_GET` / `CHAT_<X>_NOTICE` off the player's chain now
-    /// (decision 2045), so an assertion below is only worth making against the real table: a test
+    /// The composer resolves `CHAT_<TYPE>_GET` / `CHAT_<X>_NOTICE` off the player's chain now,
+    /// so an assertion below is only worth making against the real table: a test
     /// that graded a rendered line against a stub would pass on sentences the running client
     /// never shows, which is the trap decision 2052 named when it moved the glue tests onto the
     /// loader's own assembly.
@@ -21,7 +21,7 @@ thread_local! {
 }
 
 /// Run something that needs the shipped string table — the feed's line producers resolve their
-/// keys through one of these now (decision 2045), and every assertion below wants the REAL table
+/// keys through one of these now, and every assertion below wants the REAL table
 /// under it rather than a stub with our own idea of the wording in it.
 fn with_strings<T>(f: impl FnOnce(&dyn Fn(&str) -> Option<String>) -> T) -> T {
     GLOBAL_STRINGS.with(|s| f(&|key: &str| s.lua().globals().get::<String>(key).ok()))
@@ -170,7 +170,7 @@ fn text_emote_lines_are_verbatim_and_never_wear_the_senders_name() {
 }
 
 /// **A self-target goes out as guid 0** — `DoEmote`'s last act before it builds the packet
-/// (`0x5ef611`), and the reason vanilla has no self-emote sentence (decision 1282, correcting
+/// (`0x5ef611`), and the reason vanilla has no self-emote sentence (correcting
 /// 1274's claim that you would read "You wave at ⟨YourName⟩.").
 ///
 /// Without this the server echoes your own name back as the emote's target and the *whole zone*
@@ -209,7 +209,7 @@ fn emoting_at_your_own_selection_sends_an_untargeted_emote() {
     assert_eq!(emote_target(&sel, None), 0xdead_beef);
 }
 
-/// The receive half of B156 on the real tables (decision 1274): the five reachable sentence forms,
+/// The receive half of B156 on the real tables: the five reachable sentence forms,
 /// the performer in arg2, and the three silent rows. The composition law itself is pinned in
 /// `benilla_formats::emote_text`; what this covers is the seam — that the app hands the composer
 /// the right facts and puts the result in the right slots. Skips without client data.
@@ -264,7 +264,7 @@ fn a_received_text_emote_composes_its_sentence_and_names_the_performer() {
 }
 
 /// The three honor forms (COMBATLOG_HONORAWARD / COMBATLOG_HONORGAIN / COMBATLOG_DISHONORGAIN,
-/// GlobalStrings :786/:787/:785) and the fork between them, decision 1512.
+/// GlobalStrings :786/:787/:785) and the fork between them.
 ///
 /// The empty-rank case is asserted deliberately: it is what the server's floor-at-5 exists to
 /// prevent, so a change that silently starts hiding the clause instead would pass unnoticed here
@@ -329,7 +329,7 @@ fn exploration_lines_pick_the_reference_form() {
     let _data = benilla_formats::wow_data_or_skip!();
     // ERR_ZONE_EXPLORED (GlobalStrings :1925) — the toast, fired on EVERY exploration packet
     // (UIErrorsFrame); ERR_ZONE_EXPLORED_XP (:1926) — the chat system line that rides
-    // additionally iff xp > 0 (byte-verified branch `0x5e422f`; decisions 0828/0829).
+    // additionally iff xp > 0 (byte-verified branch `0x5e422f`).
     assert_eq!(
         with_strings(|g| super::feed::exploration_toast("Westfall", g)).as_deref(),
         Some("Discovered: Westfall")
@@ -485,7 +485,7 @@ fn lines_in_window(s: &benilla_ui::script::UiScript) -> i64 {
 /// **The double-print answer, proved rather than argued.**
 ///
 /// In the reference, `CHAT_MSG_SAY` is what MAKES the line: C fires it, `ChatFrame_OnEvent` calls
-/// `AddMessage`. benilla composes and adds in Rust instead (0288 §1) and now fires the event as
+/// `AddMessage`. benilla composes and adds in Rust instead and now fires the event as
 /// well — so the honest worry is that an addon registering the event on *our own* ChatFrame1 makes
 /// the line land twice. It does not, and the mechanism is that our shipped `ChatFrame.xml`
 /// `<OnEvent>` handles exactly one event (`EXECUTE_CHAT_LINE`) and ignores everything else.
@@ -778,7 +778,7 @@ fn a_channel_notice_renders_in_the_channels_color_not_the_notice_row() {
     );
 }
 
-/// **Crossing a zone border must not deregister the channel it renames** (decision 2130).
+/// **Crossing a zone border must not deregister the channel it renames**.
 ///
 /// The walk sends `LEAVE(General - Elwynn Forest)` then `JOIN(General - Westfall)` — one DBC row,
 /// renamed, and the retail 1.8.1 Winterspring sniff shows exactly that
@@ -907,7 +907,7 @@ fn a_zone_change_must_not_deregister_the_channel_it_renames() {
     );
 }
 
-/// **Walking out of a capital SUSPENDS Trade — it does not free it** (decision 2130).
+/// **Walking out of a capital SUSPENDS Trade — it does not free it**.
 ///
 /// The zone walk's other leave: a row that stops applying entirely, which in the 1.12 data means
 /// exactly `Trade` when you step out of a city (the city gate `0x49a3b8`). The
@@ -1005,8 +1005,7 @@ fn leaving_a_capital_suspends_trade_rather_than_deregistering_it() {
     );
 }
 
-/// **A renamed row's confirming notice is `YOU_CHANGED`, and it renders "Changed Channel:"**
-/// (decision 2130).
+/// **A renamed row's confirming notice is `YOU_CHANGED`, and it renders "Changed Channel:"**.
 ///
 /// `CHAT_YOU_CHANGED_NOTICE = "Changed Channel: [%s]"` is a string 1.12 ships and we had never
 /// printed, because we modelled no per-slot state to select it with (`0x02`'s arm splits on
@@ -1363,7 +1362,7 @@ fn action_commands_parse() {
     );
     assert_eq!(parse_line("/played"), ParsedChat::Played);
     assert_eq!(parse_line("/help"), ParsedChat::Help);
-    // /pvp takes no argument (decision 0646 §3): the binding has no state form, so a trailing
+    // /pvp takes no argument: the binding has no state form, so a trailing
     // word is ignored rather than read as a target.
     assert_eq!(parse_line("/pvp"), ParsedChat::Pvp);
     assert_eq!(parse_line("/pvp on"), ParsedChat::Pvp);
@@ -1591,7 +1590,7 @@ fn real_alias_table_resolves_the_shipped_commands() {
     );
     // A command whose handler benilla does not register answers like any unknown command.
     assert_eq!(parse_line("/ginvite"), ParsedChat::Unknown);
-    // The by-name selection pair (decision 0886) — every shipped alias, and the whole-argument
+    // The by-name selection pair — every shipped alias, and the whole-argument
     // grammar that makes a multi-word creature name ONE name. `/tar` and `/a` are the short forms
     // the shipped strings carry (SLASH_TARGET2/4, SLASH_ASSIST1/3).
     assert_eq!(
@@ -1615,7 +1614,7 @@ fn real_alias_table_resolves_the_shipped_commands() {
         }
     );
     assert_eq!(parse_line("/assist"), ParsedChat::Assist { name: None });
-    // The macro family (decision 0983): `/cast` (with its `/spell` alias — SLASH_CAST1-4 spell two
+    // The macro family: `/cast` (with its `/spell` alias — SLASH_CAST1-4 spell two
     // distinct strings across four slots) runs the ref's own one-line body `CastSpellByName(msg)`;
     // `/macro`/`/m` open the window; `/macrohelp` prints the shipped five lines.
     assert_eq!(
@@ -1705,7 +1704,7 @@ fn real_alias_table_resolves_the_shipped_commands() {
     // The error log is player-facing on purpose and NOT an instrument: gating it on
     // `dev_affordances()` would leave exactly the reporters who asked for it unable to type it.
     //
-    // The fourth is the instrument **seam** (decision 1179): benilla's own instrument commands
+    // The fourth is the instrument **seam**: benilla's own instrument commands
     // (`/castvis` `/chattest` `/partytest` `/shot` `/liquid` `/reaction` `/react` — 7 aliases over 6
     // commands) are registered only when `run_mode::dev_affordances()`, so a player build claims
     // none of them and `/partytest` falls through to the reference's "unknown command". Asserted
@@ -1722,7 +1721,7 @@ fn real_alias_table_resolves_the_shipped_commands() {
     );
 }
 
-/// **The `0x4000` "requires standing still" arm** (decision 1904) — the one gate arm that does not
+/// **The `0x4000` "requires standing still" arm** — the one gate arm that does not
 /// suppress silently. It reports [`EmoteGate::Moving`] and the CALLER turns that into a red
 /// `ERR_NOEMOTEWHILERUNNING`, but only while the caster is self-controlled.
 ///
@@ -1777,7 +1776,7 @@ fn the_standing_still_arm_reports_moving_and_ignores_swimming() {
     );
 }
 
-/// **`IsSelfControlled`'s polarity** (`0x5fa550`, decision 1904) — the half that decides whether
+/// **`IsSelfControlled`'s polarity** (`0x5fa550`) — the half that decides whether
 /// the moving refusal is heard. It is `true` for an ordinary player and `false` while confused,
 /// fleeing or move-disabled, so the red line fires in the NORMAL case and a feared player emotes
 /// away. STUNNED is deliberately absent from the mask.
@@ -2015,7 +2014,7 @@ fn an_addon_message_survives_its_own_send_and_receive() {
     );
 }
 
-/// **The `[Language]` header keys off the frame's DEFAULT tongue, not off "Common"** (B262).
+/// **The `[Language]` header keys off the frame's DEFAULT tongue, not off "Common"**.
 ///
 /// `ChatFrame.lua`'s test is `strlen(arg3) > 0 and arg3 ~= "Universal" and arg3 ~= this.defaultLanguage`,
 /// and `GetDefaultLanguage()` answers the **faction** language — Common for every Alliance race,
@@ -2413,7 +2412,7 @@ fn both_dock_windows_carry_the_same_chrome() {
 
 /// **A docked chat window survives the managed-position pass.**
 ///
-/// The pass owns a frame's whole seat — it `ClearAllPoints()` first, by design (decision 1499) —
+/// The pass owns a frame's whole seat — it `ClearAllPoints()` first, by design —
 /// and the reference's own table carries a `ChatFrame2` row. That row cost B297 a visible fix
 /// while the pass was ours, and our answer then was to drop the row from our copy. The stock pass
 /// is the one that runs now (1988), row and all, and it ends by calling `FCF_DockUpdate()` —
@@ -2507,7 +2506,7 @@ fn the_posture_emotes_carry_no_swim_suppression_flag() {
 /// **The ding's gains reach `PLAYER_LEVEL_UP` matched BY LEVEL, and a miss is zeros, not absence.**
 ///
 /// The net layer has no `UiScript`, so `SMSG_LEVELUP_INFO`'s tuple is parked on `ChatLog` and the
-/// feed that owns the level edge picks it up (decision 1884). Matching on the level is what keeps
+/// feed that owns the level edge picks it up. Matching on the level is what keeps
 /// a stale entry from attaching to a later ding — the trigger is a descriptor diff and the gains
 /// are packet-borne, so the two are only coincidentally in step.
 ///
@@ -2544,8 +2543,8 @@ fn level_up_gains_are_matched_by_level_and_a_miss_is_not_an_absence() {
 /// `benilla.toc` sources `Interface\FrameXML\ChatFrame.xml` off the player's chain, and stock
 /// `ChatFrame_OnEvent` composes the whole five-line level-up block itself from `PLAYER_LEVEL_UP`
 /// (`ChatFrame.lua` l.1283-1324) — `LEVEL_UP`, the health/mana pair, `LEVEL_UP_CHAR_POINTS`, and a
-/// `LEVEL_UP_STAT` per positive gain. benilla fires that event with the reference's nine arguments
-/// (decision 1884), and for a while it *also* routed its own Rust copy of the same five lines,
+/// `LEVEL_UP_STAT` per positive gain. benilla fires that event with the reference's nine arguments,
+/// and for a while it *also* routed its own Rust copy of the same five lines,
 /// under a comment saying they would stay "until that window migrates". The window migrated; the
 /// copy did not go. Every ding printed twice, and nothing could see it: both halves were correct
 /// on their own, and the composer's own tests only ever checked the text it produced.
@@ -2665,7 +2664,7 @@ fn the_free_professions_line_is_printed_once() {
     );
 }
 
-// ───────────── The chat cache restores INSIDE the login, not after it (decision 2119) ─────────
+// ───────────── The chat cache restores INSIDE the login, not after it ─────────
 
 /// **The login order, asserted at the two places that broke.**
 ///
@@ -2797,7 +2796,7 @@ fn the_chat_cache_restore_is_finished_before_player_login() {
         "ChatFrame1 must carry the SYSTEM message group at PLAYER_LOGIN, not {:?}",
         read("ChatOrderProbe.loginRegistered")
     );
-    // The reference's own login order (decision 2125): addons and their `ADDON_LOADED`
+    // The reference's own login order: addons and their `ADDON_LOADED`
     // (`0x4900a3`), then `VARIABLES_LOADED`
     // (`0x4900b2`), then the chat-cache reader's burst (`0x4900d6`), then `PLAYER_LOGIN`
     // (`0x490959`). 2119 put the burst ahead of `VARIABLES_LOADED`, one step too early.

@@ -1,6 +1,5 @@
 //! Instance/raid **lockout messages** — the six server packets that tell you about a saved
-//! instance, the bookkeeping two of them feed, and the one thing you can do about it
-//! (decision 1748).
+//! instance, the bookkeeping two of them feed, and the one thing you can do about it.
 //!
 //! Four of the six become a `CHAT_MSG_SYSTEM` line, and **the client composes every one of them
 //! itself**: no Lua handler in 1.12 touches this family (`RAID_INSTANCE_WELCOME`,
@@ -10,7 +9,7 @@
 //! to the chat chokepoint `0x49a870` with `edx = 0xa` = `CHAT_MSG_SYSTEM`. That whole shape is
 //! reproduced here; the only piece the app cannot do alone is the GlobalStrings read, which is why
 //! the lines are QUEUED by the net drain and RESOLVED in [`feed_instance`] where the VM is — the
-//! questgiver-refusal split of decision 0669.
+//! questgiver-refusal split of.
 //!
 //! ## What each packet does (VERIFIED at the bytes, WoW.exe build 5875)
 //!
@@ -58,7 +57,7 @@
 //! 25-hour window (`0x15f90` seconds against `time(0)`, `0x495ce6`) is measured from when the
 //! dungeon was left.
 //!
-//! ## Term 1 is the server's job, and vmangos gets it wrong (decision 1754)
+//! ## Term 1 is the server's job, and vmangos gets it wrong
 //!
 //! `0xb4e37c` is written by exactly one function (`0x495d50`) with exactly one caller
 //! (`0x49e6d2`, the `SMSG_UPDATE_INSTANCE_OWNERSHIP` handler) — grepped over the whole `.text`,
@@ -130,10 +129,10 @@ pub(crate) struct InstanceState {
     /// `0xb4e37c` — the server's answer to "do you hold any instance bind at all"
     /// (`SMSG_UPDATE_INSTANCE_OWNERSHIP`, sent on every successful map change). **vmangos only
     /// ever says yes to a raid save**, which is the wrong answer for every player this row exists
-    /// for — module doc, decision 1754.
+    /// for — module doc.
     owns_saved: bool,
     /// benilla's own half of the same term: we watched the player walk out of a party dungeon, so
-    /// we know they are bound to one without being told (decision 1754).
+    /// we know they are bound to one without being told.
     ///
     /// Raised by [`LatchWriter::WorldEntry`], cleared by `SMSG_INSTANCE_RESET` and by a **logout**
     /// ([`clear_witness_on_logout`]), and deliberately **not** cleared by an `owns_saved = false`
@@ -219,7 +218,7 @@ impl InstanceState {
             self.last_dungeon = Some(map);
             self.last_dungeon_at = now_secs;
             // Walking out of a 5-man is first-hand evidence of the bind the server took when we
-            // walked in — the half of term 1 vmangos will not give us (module doc, decision 1754).
+            // walked in — the half of term 1 vmangos will not give us (module doc).
             if writer == LatchWriter::WorldEntry {
                 self.saw_own_dungeon = true;
             }
@@ -246,7 +245,7 @@ impl InstanceState {
     ///
     /// 1. we hold an instance bind — `0xb4e37c`, **or** benilla's own
     ///    [`InstanceState::saw_own_dungeon`], because vmangos never sets the first one for a
-    ///    5-man (module doc, decision 1754);
+    ///    5-man (module doc);
     /// 2. we are **not** standing in a party dungeon;
     /// 3. the last dungeon we left is a party dungeon that `Map.dbc` knows;
     /// 4. we left it no more than [`RESET_OFFER_WINDOW_SECS`] ago.
@@ -334,7 +333,7 @@ const DEBUG_LOCK_NOTICE_PREFIX: &str = "(Debug-Only Lock Notice) ";
 ///
 /// The fallback is the reference's own: `0x49e228` and its three twins print the id through
 /// `"%d"` (`0x835154`) when `[0xc0daa8][id]` is null or out of range. It is also what the Raid
-/// Info panel already does with the same ids (decision 1549).
+/// Info panel already does with the same ids.
 fn map_name(map: u32, catalog: Option<&benilla_assets::MapCatalogRes>) -> String {
     catalog
         .and_then(|c| c.0.name(map))
@@ -382,7 +381,7 @@ fn raid_instance_line(message: &RaidInstanceMessage) -> Option<LockoutLine> {
     })
 }
 
-/// The instance/raid lockout family's six packet handlers (decision 1748; in the net handler
+/// The instance/raid lockout family's six packet handlers (in the net handler
 /// table since 2312), beside the state they drive: four lines the client composes itself out of
 /// GlobalStrings, and the two-packet latch behind the SELF menu's reset row. The lines are
 /// QUEUED — resolving them needs the VM, which a packet handler leaves to the feed (decision
@@ -605,8 +604,7 @@ fn drain_instance(script: Option<NonSendMut<UiScript>>, commands: Res<NetCommand
 /// reference does not clear those either (`0x495d00`'s only caller is the `SMSG_INSTANCE_RESET`
 /// handler), and it does not need to — its term 1 is the server's, re-advertised on the next
 /// character's world entry, so a stale latch cannot offer that character a reset on its own. Ours
-/// is the half no server will correct, so it gets the lifetime the packet would have given it
-/// (decision 1754).
+/// is the half no server will correct, so it gets the lifetime the packet would have given it.
 fn clear_witness_on_logout(
     mut state: ResMut<InstanceState>,
     mut logged_out: MessageReader<crate::net::LoggedOutMessage>,
@@ -850,7 +848,7 @@ mod tests {
     fn a_missing_plural_twin_falls_back_to_the_bare_token() {
         // Marked stand-ins rather than the shipped wording: the primitive returns a *template*,
         // so the assertion has to be readable as "which key did it reach", which is the thing
-        // worth asserting (decision 2045).
+        // worth asserting.
         let sparse = |key: &str| match key {
             "RAID_INSTANCE_WARNING_HOURS" => Some("<bare>".to_string()),
             _ => None,

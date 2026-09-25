@@ -1,5 +1,4 @@
-//! Unlearning your talents — the class trainer's respec question, its dialog, and its answer
-//! (decision 1580).
+//! Unlearning your talents — the class trainer's respec question, its dialog, and its answer.
 //!
 //! **The law this module exists for: selecting the trainer's "I wish to unlearn my talents" line
 //! unlearns nothing.** It makes the server close the gossip menu and ask
@@ -165,7 +164,7 @@ fn drain_talent_wipe(
             wipe.cost
         );
         // The reference's `DisplayError(0x25)` = `ERR_NOT_ENOUGH_MONEY`: the red line AND, since
-        // that row's `+0x0c` is `0x28`, the spoken one (decision 1815).
+        // that row's `+0x0c` is `0x28`, the spoken one.
         let text = script
             .lua()
             .globals()
@@ -194,7 +193,7 @@ fn drain_talent_wipe(
 }
 
 /// The respec flow: the range guard, the dialog's feed, and its answer.
-/// The talent-wipe question's packet handler (decision 1580; in the net handler table since 2313).
+/// The talent-wipe question's packet handler (in the net handler table since 2313).
 mod net {
     use benilla_protocol::{SessionEvent, SessionEventKind};
     use bevy::prelude::*;

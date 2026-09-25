@@ -7,15 +7,14 @@
 //! appears anywhere in the reference FrameXML, which is what identifies them as engine-composed —
 //! [`crate::ui_social`]'s own test, applied again.
 //!
-//! **These are message ids, not sentences** (decision 2054). Each arm names a catalog key and the
+//! **These are message ids, not sentences**. Each arm names a catalog key and the
 //! arguments the reference pushes beside it; the drain resolves the key against the player's own
 //! `GlobalStrings.lua` and the catalog row decides the surface and the sound. That is not a
 //! restatement of what was here before: this module used to carry 34 re-typed English constants and
 //! its own two `fill` helpers, which threw away three things the catalog knows —
 //! `ERR_GUILD_NAME_INVALID` and `ERR_GUILD_NAME_EXISTS_S` are `kind 2`, the **red** error line and
 //! not chat at all; `ERR_GUILD_CREATE_S` and `ERR_INVITED_TO_GUILD_SS` carry the `LEVELUP` cue; and
-//! `ERR_GUILD_PERMISSIONS` has `type_tag 0x3e`, under `VOCAL_UI_LINES`, so the reference *speaks* it
-//! (decision 1815).
+//! `ERR_GUILD_PERMISSIONS` has `type_tag 0x3e`, under `VOCAL_UI_LINES`, so the reference *speaks* it.
 //!
 //! **The `GUILD_MOTD` line is deliberately not here.** The reference's `ChatFrame_OnEvent` composes
 //! `GUILD_MOTD_TEMPLATE` itself off the `GUILD_MOTD` event (`ChatFrame.lua:1335-1340`), so firing

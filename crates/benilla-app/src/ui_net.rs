@@ -35,7 +35,7 @@ impl Plugin for UiNetPlugin {
 fn feed_net_stats(script: Option<NonSendMut<UiScript>>, ping: Res<PingShared>) {
     let Some(mut script) = script else { return };
     // Recovered, not unwrapped: the net threads hold this lock too, and a panic there must end
-    // the connection, not the app (decision 2265 §B1).
+    // the connection, not the app.
     let latency = ping.0.lock_recover().avg_latency_ms();
     script.set_latency_ms(latency);
 }

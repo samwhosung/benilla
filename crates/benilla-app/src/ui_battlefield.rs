@@ -1,4 +1,4 @@
-//! The battleground **list window**'s app half (decision 1974): what
+//! The battleground **list window**'s app half: what
 //! the stock `BattlefieldFrame.lua` and the minimap's queue icon need from the wire, the clock and
 //! the Map.dbc rows. The verbs themselves are `benilla_ui::script::battlefield_queue`'s; the
 //! queue slots live in [`BattlefieldQueue`]; the scoreboard is [`crate::ui_battlefield_score`]'s.

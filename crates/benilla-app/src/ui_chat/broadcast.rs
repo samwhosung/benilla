@@ -297,7 +297,7 @@ fn push_channel_lines(
 mod tests {
     /// `ERR_CHAT_RESTRICTED` (id 451) carries kind 0, so the arm above is right to write a chat
     /// system line and not a red toast — the one hand-set surface left in this feed, checked
-    /// rather than trusted (decision 1770).
+    /// rather than trusted.
     #[test]
     fn chat_restricted_is_a_chat_row() {
         use benilla_ui::messages::{by_key, kind_of, MsgKind};

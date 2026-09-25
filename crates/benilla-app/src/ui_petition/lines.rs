@@ -37,7 +37,7 @@ use benilla_protocol::messages::petition_result;
 use crate::ui_action::UiError;
 
 /// One composed line: a **catalog key** and the arguments the reference pushes with it, resolved
-/// at the sink against the player's own `GlobalStrings.lua` (decision 2045).
+/// at the sink against the player's own `GlobalStrings.lua`.
 ///
 /// This file used to carry the key *and* a hand-typed copy of each sentence, and the copy was the
 /// part that could rot: three of the five validator lines shipped as **paraphrases** — "Names may
@@ -50,7 +50,7 @@ use crate::ui_action::UiError;
 /// The key rides rather than a resolved [`benilla_ui::messages::MsgKind`] because the record
 /// answers more than where the line goes — `ERR_PETITION_SIGNED` and its neighbours name a sound
 /// cue too (`igPlayerInviteAccept`/`Decline`), and `crate::ui_action::Shown` reads all of it from
-/// the one row at the sink (decision 1815).
+/// the one row at the sink.
 pub(super) type Line = UiError;
 
 /// The line one `SMSG_PETITION_SIGN_RESULTS` prints **when the signer is us** — the switch at
@@ -120,7 +120,7 @@ pub(super) fn no_charter_line() -> Line {
 ///
 /// **These five rows were recorded here as INFERRED** — the sweep that settled the nine petition
 /// ids and `0x7c` never covered the `0x75`-`0x7b` band, so the kind was reasoned from the fact
-/// that every refusal in the swept set is kind 2. The full catalog (decision 1770) confirms all
+/// that every refusal in the swept set is kind 2. The full catalog confirms all
 /// five: the inference was right, and it is a lookup now rather than a reason.
 ///
 /// An unknown key falls back to the generic invalid-name text rather than showing a raw key.

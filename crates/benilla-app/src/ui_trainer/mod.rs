@@ -58,7 +58,7 @@ use crate::ui_spellbook::SkillLines;
 const TRAINER_TYPE_TRADESKILL: u32 = 2;
 /// `SMSG_TRAINER_LIST`'s `trainer_type` for a mount trainer — the type the client's own vocabulary
 /// calls "talent" (`IsTalentTrainer 0x4d8ed0`), and the one whose grouping folds already-known
-/// services into a "My Talents" bucket ([`service_group`], decision 1124).
+/// services into a "My Talents" bucket ([`service_group`]).
 const TRAINER_TYPE_MOUNT: u32 = 1;
 
 /// The open trainer, filled by the net bridge ([`crate::net`]) and read by [`feed_trainer`]. Holds
@@ -76,7 +76,7 @@ pub(crate) struct TrainerOpen {
     pub(crate) greeting: String,
     /// A `SMSG_TRAINER_LIST` has landed and the feed has not yet handed it to the engine. Drives
     /// the engine's filter/collapse/**selection** reset ([`UiScript::reset_trainer_list_state`]) —
-    /// the reference's builder rewrites all three on every list packet (decision 1128; 2231 for
+    /// the reference's builder rewrites all three on every list packet (2231 for
     /// the selection, `0x4d7b42`). It is not the same edge as a snapshot change: those re-push
     /// the same list.
     ///
@@ -190,7 +190,7 @@ impl Plugin for UiTrainerPlugin {
 ///   before sending, so there is no second path that would speak.
 ///
 /// benilla showed a red `UI_ERROR_MESSAGE` here, one of whose three sentences was a re-typed
-/// `ERR_NOT_ENOUGH_MONEY` and two of which were invented (decision 2045). Both problems have the
+/// `ERR_NOT_ENOUGH_MONEY` and two of which were invented. Both problems have the
 /// same answer, and it is the reference's: say it to the log and nothing to the player. Rarely
 /// reached either way — the Train button is disabled unless the service is available and
 /// affordable.
@@ -221,7 +221,7 @@ fn resolve_service(
     // The VM's own `GlobalStrings.lua`, for [`service_group`]'s three header labels.
     get: &dyn Fn(&str) -> Option<String>,
 ) -> TrainerService {
-    // The trainer offers a LEARN wrapper (decision 0247); the ability it teaches is the taught
+    // The trainer offers a LEARN wrapper; the ability it teaches is the taught
     // spell, and the tree GROUPS by that hop (`0x4d7c60` → `[skillrec+4]`). It is the only thing
     // that hops: the row's **displayed name and subtext are the WIRE spell's own** `Spell.dbc`
     // columns — `GetTrainerServiceInfo` reads `row[+0]` for both returns (`0x4d8aa0` → `[+0x1e0]`,
@@ -241,7 +241,7 @@ fn resolve_service(
     // skill gate locally too — player skill value ≥ required, like the level gate the XML already
     // checks with `UnitLevel` — so a faithful per-gate skill check waits only on threading the
     // player's skill values here; the ability gate below already does its own per-gate check, so a
-    // skill-gated service is the one remaining coarse case (decision 0253).
+    // skill-gated service is the one remaining coarse case.
     let skill_met = cat != TrainerServiceCategory::Unavailable;
     let skill_req = (wire.req_skill != 0).then(|| TrainerSkillReq {
         name: skill_lines
@@ -258,7 +258,7 @@ fn resolve_service(
     // its already-learned prev-rank prerequisite WHITE, not red. The req id is a real ability id (not
     // a learn wrapper), so there's no hop: look it up directly. The name carries
     // its rank exactly as the client does — `SpellDisplay::ranked_name`, the shared composer for the
-    // client's `"%s (%s)"` literal (decision 2243). The client also ORs `KnownHigherRank`; benilla
+    // client's `"%s (%s)"` literal. The client also ORs `KnownHigherRank`; benilla
     // has no rank chain, and sequential trainer ranks never reach that clause, so the direct
     // known-check covers every real case.
     let ability_reqs = wire
@@ -379,7 +379,7 @@ struct ReEvalInputs<'w, 's> {
 /// Push the current trainer into the VM and fire the show/update/close events on a transition (or a
 /// content change). Diffed against a `Local` memory, exactly like the gossip/merchant feeds. A
 /// different trainer while the window is already open is a real close+open (the client's `ShowUIPanel`
-/// early-returns when visible, so the open sound only re-plays after a hide — decision 0096).
+/// early-returns when visible, so the open sound only re-plays after a hide).
 #[allow(clippy::too_many_arguments)] // one Bevy system's full input set
 fn feed_trainer(
     script: Option<NonSendMut<UiScript>>,
@@ -419,7 +419,7 @@ fn feed_trainer(
     let Some(spells) = spells.as_deref() else {
         return;
     };
-    // The tree groups by skill line (decision 0247), so the skill-line catalog is required, not
+    // The tree groups by skill line, so the skill-line catalog is required, not
     // optional: without it every service resolves to skill_line 0 and drops. A trainer only opens
     // well after world-entry, by when both DBCs have loaded, so this gate never actually delays a
     // real window — it just refuses to render an all-dropped empty tree.
@@ -427,7 +427,7 @@ fn feed_trainer(
         return;
     };
     // A new list packet resets the state filter and the collapse set in the engine, exactly as the
-    // reference's builder does (decision 1128) — before the snapshot goes in, so `TRAINER_SHOW`
+    // reference's builder does — before the snapshot goes in, so `TRAINER_SHOW`
     // finds the reset mask and the window's own show handler pushes the SAVED filter back over it.
     if open.fresh_list {
         script.reset_trainer_list_state(open.trainer_type);

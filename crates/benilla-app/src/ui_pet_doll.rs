@@ -1,4 +1,4 @@
-//! The app-side **pet paper-doll feed** (decision 1057) — `PetPaperDollFrame`'s data, the
+//! The app-side **pet paper-doll feed** — `PetPaperDollFrame`'s data, the
 //! [`crate::ui_char`] pattern pointed at the pet.
 //!
 //! Two jobs, each frame, in the feed phase before the VM ticks ([`crate::ui_script::UiFeed`]):
@@ -11,7 +11,7 @@
 //!   `UnitStat("pet", i)` / `UnitResistance("pet", id)`. Nothing here is a parallel API.
 //! - **Pointing the body booth**: [`PetDollBooth`]'s `unit` gets the resolved pet entity, and its
 //!   `yaw` the facing the stock pane's rotate buttons wrote onto `PetModelFrame` itself
-//!   (`UiScript::model_pane_facing` — decision 1751).
+//!   (`UiScript::model_pane_facing`).
 //!
 //! **Why a module of its own rather than more of [`crate::ui_pet_stats`]**, which already resolves
 //! the same pet: these are the *shared* paper-doll surface (every value passes through a binding
@@ -115,7 +115,7 @@ mod tests {
     /// A boar's descriptor: the UNIT half a creature really streams, and nothing else — no PLAYER
     /// block at all, which is the whole point of the fixture.
     ///
-    /// **CREATED, and that is the load-bearing half** (decision 1081). A live pet arrives as a
+    /// **CREATED, and that is the load-bearing half**. A live pet arrives as a
     /// create block, and a create is a *complete* snapshot — absent means 0, not unknown. Built
     /// bare (the fixture default), this boar answered `None` for every PLAYER field and the
     /// defaults below looked right while the live client's read `0`; the pet sheet's damage

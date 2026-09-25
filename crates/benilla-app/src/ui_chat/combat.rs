@@ -206,7 +206,7 @@ impl CombatLogRanges {
     }
 }
 
-/// The combat log rows' change callback (decision 2303): the eight display ranges (yards, the
+/// The combat log rows' change callback: the eight display ranges (yards, the
 /// CVar's float field) and the periodic-effects switch.
 pub(crate) fn on_cvar(
     ev: On<crate::cvars::CvarChanged>,
@@ -538,7 +538,7 @@ pub(crate) fn spell_kind(
 /// Ten rows, not sixteen: there is no PET bucket and no `CREATURE_VS_*` split, so a pet folds into
 /// its owner's row and every creature source lands on one `SPELL_PERIODIC_CREATURE_*` row.
 ///
-/// **Both selectors take ONE class, and WHICH one is the caller's to know** (decision 2127). This
+/// **Both selectors take ONE class, and WHICH one is the caller's to know**. This
 /// doc used to say the endpoint was "the *source* alone", and it is not: `0x626630` fills classA
 /// (the sentence's subject, the caster) and classB (the target), and the four periodic formatters
 /// disagree about which one they hand this selector.
@@ -1003,7 +1003,7 @@ pub(crate) fn global_string(script: &benilla_ui::script::UiScript, key: &str) ->
         .filter(|s| !s.is_empty())
 }
 
-/// The school word a `…SCHOOL…` template's `%s` takes — **capitalized** (decision 2127).
+/// The school word a `…SCHOOL…` template's `%s` takes — **capitalized**.
 ///
 /// The reference does not read a GlobalString here at all: `0x6264b0(schoolIndex)` indexes
 /// `Resistances.dbc` (row array `[0xc0d9a4]`, 7 rows of 0x30 bytes, localized name at

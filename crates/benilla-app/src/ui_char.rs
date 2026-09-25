@@ -13,7 +13,7 @@
 //!   bindings just serve the pairs.
 //!
 //!   The descriptor half is [`unit_combat_stats`], which any unit's store goes through — the pet
-//!   paper doll's feed ([`crate::ui_pet_doll`], decision 1057) is the second caller. What
+//!   paper doll's feed ([`crate::ui_pet_doll`]) is the second caller. What
 //!   [`combat_stats`] adds on top is exactly the player-only half: the four values derived from the
 //!   equipped items, and the skill pairs, neither of which a creature has.
 //! - **`InventorySlots`** from the inv-slot guids → [`Items`] objects → templates → the
@@ -26,11 +26,11 @@
 //!   slot (1..=23) also carries an `|Hitem:…|h[Name]|h` `link`, its `PendingItemOps`-derived
 //!   `locked` (decision 0208 phase 1b — the doll twin of `ui_items::feed_containers`'s bag-slot
 //!   `.locked`), and its resolved `equip_slots` (`ui_items::find_equip_slot` over the item
-//!   template's `inventoryType` — the cursor arc's "fit rule", decision 0216/0218).
+//!   template's `inventoryType` — the cursor arc's "fit rule").
 //! - **The paper-doll booth yaw**: the stock pane's rotate buttons call the reference's own
 //!   `Model_RotateLeft`/`_RotateRight`, which write `CharacterModelFrame:SetRotation`; the feed
 //!   mirrors that pane's facing onto [`PaperDollBooth`] so the booth re-bakes at the new angle
-//!   (decision 0208 §5, off the pane itself since 1751).
+//!   (off the pane itself since 1751).
 //!
 //! Events, fired on snapshot transitions (grouped by the ref's own registration set,
 //! `PaperDollFrame.lua:14-28` — arg1 `"player"`): `UNIT_STATS`, `UNIT_RESISTANCES`, `UNIT_DAMAGE`,
@@ -95,8 +95,7 @@ struct CharFeedMemo {
     /// slots 63..68). `PLAYERBANKSLOTS_CHANGED`'s producer discriminator for this band — the same
     /// question `ui_items::feed`'s `SlotGuids::vault` answers for the vault, and for the same
     /// reason: the pushed view cannot tell two instances of one bag model apart, so a swap of two
-    /// identical bags between two slots reads as no change and the reference fires twice
-    /// (decision 2140).
+    /// identical bags between two slots reads as no change and the reference fires twice.
     last_bank_bag_guids: [u64; BANK_BAG_SLOT_COUNT],
     /// The gate's counter memories (1439) — the stores whose lazy resolves poison `is_changed`
     /// for this feed (the equipment templates' ask-once, the enchant-name creator lookups). The
@@ -106,7 +105,7 @@ struct CharFeedMemo {
     names_generation: gate::Watch,
     /// `ItemChanges::countdown_steps` — one step per displayable countdown change (the slot
     /// views read second-floored countdowns), including the last elapse's collapsing push; a
-    /// landing is the item's own change tick (decision 2340).
+    /// landing is the item's own change tick.
     enchant_deadlines: gate::Watch,
     /// `PendingItemOps::epoch` — one step per change to the in-flight lock set. Watched BESIDE
     /// `!is_empty()` and not instead of it: `is_empty()` holds the gate open *while* an op is in
@@ -148,7 +147,7 @@ impl Plugin for UiCharPlugin {
 /// `None` = nothing announced yet.
 type SkillBlock = Option<(u64, std::collections::HashMap<u16, u16>)>;
 
-/// The client-generated skill-up feedback (decision 0437, landed with phase 2; gate corrected by
+/// The client-generated skill-up feedback (landed with phase 2; gate corrected by
 /// 1309): the server sends NO skill-up message at all — skills mutate only as
 /// `PLAYER_SKILL_INFO` descriptor deltas (verified at the vmangos source: no chat send anywhere
 /// in `UpdateSkill*`/`SetSkill`) — so the client diff-watches its own skill block exactly as the
@@ -157,7 +156,7 @@ type SkillBlock = Option<(u64, std::collections::HashMap<u16, u16>)>;
 /// guess), prints the GlobalStrings lines on the Skill chat channel, and fires
 /// `SKILL_LINES_CHANGED` on ANY block change (the skills pane's repaint event; the real client
 /// fires it from a separate skill-manager TU (`0x4d2fec`) on add/remove only — ours riding the
-/// same watcher is a benign coarsening, the pane just repaints). **The message gate** (B19/B245,
+/// same watcher is a benign coarsening, the pane just repaints). **The message gate** (
 /// decisions 1309/1314): both lines are skipped when the line's `SkillRaceClassInfo.flags`
 /// carries `0x402` (`SkillRaceClass::skill_up_silent`) — the class spec lines, racials,
 /// `GENERIC (DND)`, `Dual Wield` and the mount lines — **or when no row admits this race/class
@@ -208,7 +207,7 @@ fn watch_skill_ups(
         return;
     };
     // The memo is about the VM — it gates `SKILL_LINES_CHANGED`, the pane's only repaint wire — so
-    // it re-seeds with the VM (decision 1290). With no VM there is nothing to announce to and
+    // it re-seeds with the VM. With no VM there is nothing to announce to and
     // nothing worth remembering: the diff would only queue chat lines for a VM that does not exist
     // yet, which is a stale skill-up replayed at the next login. The next VM re-seeds silently.
     let Some(mut script) = script else {
@@ -264,7 +263,7 @@ fn watch_skill_ups(
                 };
                 match prev_map.get(&id) {
                     // A rank-up: `ERR_SKILL_UP_SI`, catalog row 54 — **not** `SKILL_RANK_UP`,
-                    // which is the same enUS sentence and no catalog row at all (decision 2045).
+                    // which is the same enUS sentence and no catalog row at all.
                     Some(&old) if value > old => {
                         if let Some(name) = name() {
                             // Both verdicts are logged — the retest's instrument: a moved line
@@ -323,7 +322,7 @@ fn watch_skill_ups(
 /// it at this player's level. Note what is NOT a filter: the `Not Displayed` category (12). We used
 /// to hide on it, which happened to hide `GENERIC (DND)` for the right-looking reason — the client
 /// drops that line by its `0x2` bit like `Dual Wield` and the racials, and lists a category-12 line
-/// without `0x2` under its own header (decision 1091).
+/// without `0x2` under its own header.
 fn feed_skills(
     script: Option<NonSendMut<UiScript>>,
     self_store: Query<Ref<ObjectStore>, With<SelfPlayer>>,
@@ -501,7 +500,7 @@ fn skill_pair(store: &ObjectStore, skill_id: u32) -> (i32, i32) {
 /// in decision 0208; the absent shapes are the descriptor's zero defaults, `percent` 1.0).
 ///
 /// Nothing here reads inventory, templates or skill lines — so it is exactly the part a pet can go
-/// through ([`crate::ui_pet_doll`], decision 1057). The `player_*` reads are deliberately left in:
+/// through ([`crate::ui_pet_doll`]). The `player_*` reads are deliberately left in:
 /// a creature has no PLAYER block, so they read absent and fall to their defaults, which is the
 /// right pet answer (no buff decomposition, `damage_percent` the divide-safe 1.0) rather than a
 /// second unit-only copy of the same twenty lines.
@@ -525,7 +524,7 @@ pub(crate) fn unit_combat_stats(store: &ObjectStore) -> UnitCombatStats {
     let mut stat_neg = [0i32; 5];
     for i in 0..5u8 {
         stats[usize::from(i)] = f.unit_stat(i).unwrap_or(0) as i32;
-        // The four buff-split arrays are INT on the wire (decision 1397) — they used to be read as
+        // The four buff-split arrays are INT on the wire — they used to be read as
         // f32 and rounded, which turned every real value into `0` and is why B165/B251's stats
         // never went green.
         stat_pos[usize::from(i)] = f.player_posstat(i).unwrap_or(0);
@@ -617,7 +616,7 @@ fn combat_stats(
         has_offhand,
         has_wand,
         main_weapon_skill: skill_pair(store, main_skill),
-        // `UnitAttackBothHands`'s SECOND pair (decision 1810) — the binding pushes one per hand,
+        // `UnitAttackBothHands`'s SECOND pair — the binding pushes one per hand,
         // and `weapon_skill_id` already answers Unarmed for an empty or non-weapon off hand, which
         // is what a shield or an empty hand reads as.
         offhand_weapon_skill: skill_pair(store, offhand_skill),
@@ -665,7 +664,7 @@ fn slot_view(
     guid: u64,
     live_id: u32,
 ) -> Option<InvSlotView> {
-    // The item's own countdown cells — the bag feed's twin (decisions 1933, 2340).
+    // The item's own countdown cells — the bag feed's twin.
     let countdowns = objects.countdowns(guid);
     let enchant_ms: [Option<u64>; crate::items::ENCHANT_SLOTS] =
         std::array::from_fn(|s| countdowns.and_then(|c| c.enchant_remaining_display_ms(s as u32)));
@@ -691,7 +690,7 @@ fn slot_view(
     // ITEM_FIELD_FLAGS — the broken/alert laws' wrapped (0x08) and force-red (0x10) bits.
     let flags = obj.item_flags().unwrap_or(0);
     // `0x5da2c0` — soulbound, or carrying a binding enchant: the equipped tooltip's Soulbound
-    // override (B310 — the doll is exactly where it was reported). Read off the raw descriptor,
+    // override (the doll is exactly where it was reported). Read off the raw descriptor,
     // never off the enchant LINES below.
     let already_bound = crate::items::already_bound(obj, rolls.enchants);
     // ITEM_FIELD_CREATOR → the ask-once name cache — the equipped tooltip's "<Made by %s>"
@@ -700,7 +699,7 @@ fn slot_view(
         .item_creator()
         .filter(|&g| g != 0)
         .and_then(|g| names.resolve(g, commands).map(str::to_string));
-    // The item's own 7 enchant slots — the equipped tooltip's enchant lines (decision 0915). OUR
+    // The item's own 7 enchant slots — the equipped tooltip's enchant lines. OUR
     // gear streams as item objects, so this is the full array; an INSPECTED player's tooltip sees
     // only the 2 slots their descriptor broadcasts (`ui_inspect`), as the reference does.
     let enchants = crate::items::enchant_lines(
@@ -959,7 +958,7 @@ const BANK_BAG_LIVE_FIRST: u32 = 64;
 /// when a value some handler of it reads has moved; `prev == None` (a first snapshot) counts as a
 /// transition of every group, the `ui_unit` rule.
 ///
-/// Shared by both feeds rather than transcribed twice (decision 1057): the pet page calls the same
+/// Shared by both feeds rather than transcribed twice: the pet page calls the same
 /// `PaperDollFrame_Set*` helpers off the same events, so two copies of this grouping could only
 /// ever drift into one page repainting on an edge the other misses.
 pub(crate) fn fire_stat_transitions(
@@ -1064,7 +1063,7 @@ pub(crate) fn feed_char(
     mut inv: crate::items::Inventory,
     items: Res<Items>,
     icons: Option<Res<ItemDisplays>>,
-    // `SpellItemEnchantment`'s name column — the equipped tooltip's enchant lines (decision 0915).
+    // `SpellItemEnchantment`'s name column — the equipped tooltip's enchant lines.
     enchants: Option<Res<crate::items::Enchants>>,
     // `ItemRandomProperties` — the roll behind an equipped item's "of the Monkey" name (1547).
     props: Option<Res<crate::items::RandomProperties>>,
@@ -1079,7 +1078,7 @@ pub(crate) fn feed_char(
     let Some(mut script) = script else {
         return;
     };
-    // The pane owns the yaw and the booth mirrors it (0208 §5). Read off the widget's own
+    // The pane owns the yaw and the booth mirrors it. Read off the widget's own
     // `SetRotation` state since decision 1751 put the reference's `PaperDollFrame.xml` on the
     // chain: the stock file declares a real `<PlayerModel name="CharacterModelFrame">` and drives
     // it with `Model_OnLoad`/`Model_Rotate*`/`Model_OnUpdate`, where ours used to call a
@@ -1223,7 +1222,7 @@ pub(crate) fn feed_char(
     // replaces it. `false` = P1, the player-descriptor path (`0x5ddd6e`, no arguments — a bag
     // arriving, leaving or exchanged); `true` = P2, the item-object path (`0x4c728d`,
     // `arg1 = "player"` — the same bag, its own fields changed). The full account and why the guid
-    // is the only sound discriminator are at `ui_items::feed`'s vault twin; decision 2140.
+    // is the only sound discriminator are at `ui_items::feed`'s vault twin.
     let bank_bag_guids: [u64; BANK_BAG_SLOT_COUNT] =
         std::array::from_fn(|i| store.0.player_bank_bag_slot(i as u8).unwrap_or(0));
     let repainted: Vec<bool> = (0..BANK_BAG_SLOT_COUNT)
@@ -1313,7 +1312,7 @@ const TEMP_ENCHANTMENT_SLOT: u8 = 1;
 ///
 /// **The RAW enchantment triple, not [`InvSlotView::enchants`]**: that view is tooltip-shaped and
 /// drops both an id the `SpellItemEnchantment` catalog cannot name and the whole `Flags & 0x2`
-/// print-no-line family (decision 0928 — the totem weapon imbues), which is exactly the set the
+/// print-no-line family (the totem weapon imbues), which is exactly the set the
 /// enchant row exists to show. The binary's gate is `[descriptor+0x4c] != 0`, the id and nothing
 /// else, and `item_enchant` already answers `None` for a zero id.
 fn weapon_enchant(
@@ -1494,7 +1493,7 @@ mod tests {
         );
     }
 
-    /// **The second producer** (decision 2140). The same bag, its own `ITEM_FIELD_STACK_COUNT`
+    /// **The second producer**. The same bag, its own `ITEM_FIELD_STACK_COUNT`
     /// moving, is not the descriptor path — it is `0x4c7180`'s item-object path, which goes
     /// through `SignalEvent2` and pushes the unit token `"player"`. benilla fired the argless
     /// descriptor shape for both.

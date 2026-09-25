@@ -1,4 +1,4 @@
-//! The app half of the macro system (decision 0983): persistence under `benilla-config/macros/`, the
+//! The app half of the macro system: persistence under `benilla-config/macros/`, the
 //! runner's route into the chat drain, and the seed/dirty contract the plugin's systems rely on.
 //!
 //! The file FORMAT has its own tests in [`super::store`] (including the director's real 1.12
@@ -55,7 +55,7 @@ fn a_saved_macro_table_round_trips_through_benilla_macros() {
     std::fs::remove_dir_all(&tmp).ok();
 }
 
-/// A capture run is hermetic (decision 0954): both paths resolve to `None`, so a macro edit during
+/// A capture run is hermetic: both paths resolve to `None`, so a macro edit during
 /// a capture is session-only and nothing is written under anyone's install.
 #[test]
 fn a_capture_run_persists_nothing() {
@@ -78,7 +78,7 @@ fn ui() -> UiScript {
     // The in-game UI materializes on world entry (1051), so a player always exists by the time the
     // manifest loads — and the stock macro window's character tab formats `UnitName("player")`
     // into its label inside its own OnLoad. A manifest load with no player is a state the client
-    // never reaches (decision 1848).
+    // never reaches.
     s.set_unit(
         "player",
         Some(benilla_ui::script::UnitState {
@@ -94,7 +94,7 @@ fn ui() -> UiScript {
 }
 
 /// The runner delivers every body line through the reference's own door — one
-/// `EXECUTE_CHAT_LINE` event per non-empty line, in order (0996, `0x4f14e0`) — and the
+/// `EXECUTE_CHAT_LINE` event per non-empty line, in order (`0x4f14e0`) — and the
 /// reference's own `ChatFrame_OnEvent` arm does the rest: `SetText(arg1)`,
 /// `ChatEdit_SendText`, `ChatEdit_OnEscapePressed` (ChatFrame.lua l.1343-1347). So a macro line
 /// lands wherever a typed line lands — a chat type in the send queue, an emote in the emote
@@ -199,7 +199,7 @@ fn the_generation_moves_on_every_write_and_is_not_drained() {
 }
 
 /// **An addon that registers `EXECUTE_CHAT_LINE` sees macro lines** — the behaviour benilla gained
-/// by firing the reference's event instead of calling its own drain (0996). In 1.12 this is not a
+/// by firing the reference's event instead of calling its own drain. In 1.12 this is not a
 /// courtesy: the event is the entire mechanism, and ChatFrame1's registration is just the default
 /// UI's use of it.
 #[test]

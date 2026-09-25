@@ -99,7 +99,7 @@ fn on_removed_notification(In(ev): In<SessionEvent>, mut auction: ResMut<Auction
     }
 }
 
-/// An open auction house dies with the socket (decision 1511): every auction command
+/// An open auction house dies with the socket: every auction command
 /// re-validates the auctioneer server-side, so a session that survived a reconnect would be a
 /// window whose every button silently failed. A listener on the session end (a second handler
 /// on `Disconnected`, after the bridge's own teardown, `net::session::on_disconnected`).
@@ -188,7 +188,7 @@ fn auction_command_result(
         // auction id, not a row.
         //
         // **The reference re-asks on two of these three, and neither ask is page 0** (both list
-        // senders have exactly two callers each and zero address-takes; decision 2308):
+        // senders have exactly two callers each and zero address-takes):
         //
         // - `STARTED` — `[0xb7263c] = 1`, then `0x4cc4e0 call 0x4cd680` = `CMSG 0x259` at the
         //   **saved page offset** `[0xb72650]`. No row patch, no event of its own.
@@ -248,7 +248,7 @@ fn auction_command_result(
 }
 
 /// The failed command's GlobalStrings key — resolved to text in the feed against the player's own
-/// table, never carried as English here (decisions 0669 / 1190).
+/// table, never carried as English here.
 ///
 /// **INTERIM on three arms.** In the reference's dispatch (`0x4cc460`), code 1 computes its id from
 /// the packet's own second field through the *inventory*-result formatter (`0x622630`) — a

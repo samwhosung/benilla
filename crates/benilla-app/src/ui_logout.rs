@@ -1,4 +1,4 @@
-//! **Leaving** — the app half of the game menu's Logout and Exit Game buttons (decision 0674):
+//! **Leaving** — the app half of the game menu's Logout and Exit Game buttons:
 //! the outbound request, the server's answer, the countdown dialog that narrates it, and the
 //! process exit.
 //!
@@ -20,7 +20,7 @@
 //! name (QUIT_TIMER "%d %s until exit"), which is why the reference gives QUIT an "Exit now" button
 //! and CAMP none — a force-quit needs no server round trip, a force-logout does.
 //!
-//! **All of it is now pinned** (decision 1821 — this module's three arms were the last INFERRED
+//! **All of it is now pinned** (this module's three arms were the last INFERRED
 //! join left in the leaving path). The wire shape is verified twice over: vmangos's packet
 //! (`WorldPackets::Misc::LogoutResponse` — `u32 reason, u8 instant`) and the reference's own
 //! handler (`0x5b4630`: `GetInt32` then `GetUInt8`, then a virtual `[vtable+0x54](reason,
@@ -48,7 +48,7 @@ use crate::net::{ClientCommand, LoggedOutMessage, NetCommands, SelfGuid};
 use crate::ui_script::{UiFeed, UiInput};
 
 /// The reference's refusal line, as a **catalog key** rather than a literal — message id `0x180`,
-/// the sole argument of the `DisplayError` at `0x5aaf26` (decision 1821). VERIFIED, superseding
+/// the sole argument of the `DisplayError` at `0x5aaf26`. VERIFIED, superseding
 /// this module's old inference: the reference picks this one string for every non-zero reason,
 /// and `PLAYER_LOGOUT_FAILED_ERROR` — the other candidate the guess weighed — is never reached
 /// from here. The text comes from the VM's own `GlobalStrings.lua`, so a locale rides for free.
@@ -77,7 +77,7 @@ enum LogoutSignal {
 /// cancel, or the exit itself — so a cancelled quit can never leave a client that dies on the next
 /// unrelated logout.
 ///
-/// `pending` is the reference's own **`[session+0x1b1d]`** (decision 2092), which this module knew
+/// `pending` is the reference's own **`[session+0x1b1d]`**, which this module knew
 /// about in prose — `apply_cancelled`'s doc has always called it "the same pending byte the
 /// refusal arm clears" — and never modelled. `0x5ab000` bails on it *silently* when `force == 0`,
 /// so a second request while one is in flight is not a second packet. That gate was invisible
@@ -88,7 +88,7 @@ enum LogoutSignal {
 pub(crate) struct LogoutState {
     quitting: bool,
     /// `[session+0x1b1d]` — a logout request is out and unanswered. Set by the non-forced path,
-    /// bypassed *and not set* by `ForceLogout` (`0x5aaff0`, decision 1963), cleared by every
+    /// bypassed *and not set* by `ForceLogout` (`0x5aaff0`), cleared by every
     /// terminal edge.
     pending: bool,
     signals: Vec<LogoutSignal>,
@@ -122,7 +122,7 @@ impl LogoutState {
 
     /// `SMSG_LOGOUT_CANCEL_ACK` — the countdown is off. Its handler is the vtable slot next door
     /// (`0x5b4680 call [eax+0x58]` → `0x5aaf60`), and all it does is fire event 278
-    /// `LOGOUT_CANCEL` off the same pending byte the refusal arm clears (decision 1821).
+    /// `LOGOUT_CANCEL` off the same pending byte the refusal arm clears.
     pub(crate) fn apply_cancelled(&mut self) {
         self.quitting = false;
         self.pending = false;
@@ -214,7 +214,7 @@ fn drain_logout(
                 exit.write(AppExit::Success);
             }
             // `CMSG_PLAYER_LOGOUT`, the forced flavour: the dispatcher's own gate is a live
-            // in-world session, and nothing happens without one (decision 1963).
+            // in-world session, and nothing happens without one.
             // `0x5aaff0` calls the dispatcher `0x5ab000` with `force = 1`, which BYPASSES the
             // pending bail and does NOT set the latch — so a forced logout is exactly the escape
             // hatch from a stuck pending one.
@@ -273,7 +273,7 @@ impl Plugin for UiLogoutPlugin {
     }
 }
 
-/// The logout arc's two narration packets (decision 0674; in the net handler table since 2326)
+/// The logout arc's two narration packets (in the net handler table since 2326)
 /// — this module owns the decision table; the handler is only the hand-off.
 mod net {
     use benilla_protocol::{SessionEvent, SessionEventKind};
@@ -342,7 +342,7 @@ mod tests {
         );
     }
 
-    /// **The pending latch, both directions** (decision 2092) — `0x5ab000` bails silently on
+    /// **The pending latch, both directions** — `0x5ab000` bails silently on
     /// `[session+0x1b1d]`, and every terminal edge clears it. Driven through the real
     /// [`drain_logout`] rather than the state alone, because the bail lives in the drain and the
     /// thing under test is that the second ask puts nothing on the wire.

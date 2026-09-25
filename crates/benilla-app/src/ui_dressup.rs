@@ -1,4 +1,4 @@
-//! The app-side **dressing-room feed** (decisions 1060, 1969): the bridge between the stock
+//! The app-side **dressing-room feed**: the bridge between the stock
 //! window's `DressUpModel` widget verbs ([`DressUpIntent`], queued engine-side) and the booth's
 //! look ([`DressUpPreview`]).
 //!
@@ -20,7 +20,7 @@
 //!   (the shared [`equip_slot`] table — the same one the glue/select preview dresses by, so a robe
 //!   lands on the chest here exactly as it does there). The **held** triple then goes through
 //!   [`held_lanes`], which is where the two previews stop agreeing: the character-select mannequin
-//!   drops the ranged slot and this window puts it in a hand (decision 1076). 1060's own record
+//!   drops the ranged slot and this window puts it in a hand. 1060's own record
 //!   claimed "a wand in the ranged hand here exactly as it does there" — that was wrong in the
 //!   second half, and the ranged slot was silently discarded until 1076.
 //!
@@ -105,7 +105,7 @@ fn held_lanes(equipment: &mut [CharEnumItem; 19], room: &DressUpRoom) {
     // lane it won.
     //
     // Routing this through [`equip_slot`] instead is what collapsed a dual-wielded pair into one
-    // weapon (decision 1079): an off-hand one-hander is `INVTYPE_WEAPON` 13 just like a main-hand
+    // weapon: an off-hand one-hander is `INVTYPE_WEAPON` 13 just like a main-hand
     // one, and that table — which answers "where is this item WORN", the right question everywhere
     // else — maps 13 to the main hand, so the off hand overwrote the main.
     for slot in HELD_SLOTS {
@@ -152,7 +152,7 @@ pub(crate) struct DressUpRoom {
     ///
     /// The widget installs each try-on on top of the model it is already showing, and a held item
     /// can *evict* the opposite lane, so which one arrived last decides what survives — a fact the
-    /// per-slot array above cannot express on its own. See [`held_lanes`] (decision 1076).
+    /// per-slot array above cannot express on its own. See [`held_lanes`].
     held_order: Vec<usize>,
     /// Item ids whose template has not answered yet, oldest first. Retried every frame; a
     /// substitution only becomes visible once its display id is known.
@@ -313,7 +313,7 @@ fn player_look(
         }
         // …and past that point we are dressing the player's OWN gear, which is where the two
         // equipment-display preferences apply — and where the reference applies them too, by
-        // construction rather than by a test (decision 1472). `DressUpModel::SetUnit 0x476cb0`
+        // construction rather than by a test. `DressUpModel::SetUnit 0x476cb0`
         // `rep movsd`s all twelve per-bodyslot `ItemDisplayInfo` pointers verbatim off the live
         // player (head `+0x4a8`, cloak `+0x4d0`) and deep-copies its attach tree, so a piece the
         // world already suppressed is simply not in what gets cloned: **hidden in the world ⇒
@@ -336,7 +336,7 @@ fn player_look(
             };
         }
     }
-    // …and then the widget's own two-lane law over the held triple (decision 1076).
+    // …and then the widget's own two-lane law over the held triple.
     held_lanes(&mut equipment, room);
     Some(DressUpLook {
         display_id: net.display_id?,
@@ -726,7 +726,7 @@ mod tests {
     }
 
     /// **The dressing room inherits the equipment-display preferences, and a try-on overrides
-    /// them** (decision 1472; `DressUpModel::SetUnit 0x476cb0`'s verbatim clone of the live
+    /// them** (`DressUpModel::SetUnit 0x476cb0`'s verbatim clone of the live
     /// player's display pointers). Hidden helm + hidden cloak, so the player's own two pieces are
     /// absent from the look — and then a tried-on helm shows anyway, because previewing it is the
     /// whole feature.

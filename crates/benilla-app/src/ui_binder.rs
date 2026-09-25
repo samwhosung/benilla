@@ -1,5 +1,4 @@
-//! Setting your hearthstone — the innkeeper's bind question, its dialog, and its answer
-//! (decision 1331).
+//! Setting your hearthstone — the innkeeper's bind question, its dialog, and its answer.
 //!
 //! **The law this module exists for: selecting the innkeeper's gossip line binds nothing.** It
 //! makes the server close the gossip menu and ask (`SMSG_BINDER_CONFIRM`, vmangos
@@ -148,8 +147,8 @@ fn area_name(
 /// real `AreaTable` without standing up a world.
 ///
 /// The tail is the `HOME_INN` GlobalString (`GetBindLocation 0x48dae0` uses the identical
-/// fallback), read off the player's own table rather than re-typed
-/// (decision 2045); an install that does not carry it yields the empty string, which is the
+/// fallback), read off the player's own table rather than re-typed;
+/// an install that does not carry it yields the empty string, which is the
 /// reference's data-suppression face and still fires the question.
 fn area_name_of(
     leaf: Option<u32>,
@@ -255,7 +254,7 @@ pub(crate) mod net {
     /// chat line) with the packet's own area id resolved through `AreaTable` — the handler's own
     /// order at `0x5e3d3f`: the sound first, then the message.
     ///
-    /// The line rides the by-key queue rather than being composed here (decision 2045): this is
+    /// The line rides the by-key queue rather than being composed here: this is
     /// the net-apply pass and there is no VM in hand, so the KEY travels to `ui_action`'s drain,
     /// which resolves it against the player's own `GlobalStrings.lua` and puts it on the surface
     /// the catalog names. The `SoundEntries` cue below is the *handler's* own, separate from the
@@ -335,7 +334,7 @@ mod tests {
     /// the bug's own innkeeper stands in.
     ///
     /// The tail resolves off the player's own table rather than a stub, so a `HOME_INN` that the
-    /// install words differently is what this reads (decision 2045). Skips without client data.
+    /// install words differently is what this reads. Skips without client data.
     #[test]
     fn the_dialogs_name_falls_back_sub_area_then_zone_then_home_inn() {
         let data = benilla_formats::wow_data_or_skip!();
