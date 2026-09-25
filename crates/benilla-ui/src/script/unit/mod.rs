@@ -224,8 +224,8 @@ pub fn grey_band(player_level: u32) -> u32 {
 }
 
 /// The reference's grey level test (`0x5f0700`): the unit is more than the band below the player,
-/// strictly, so a gap equal to the band is still green. The reference also requires the unit not
-/// be player-controlled; every caller here passes creatures.
+/// strictly, so a gap equal to the band is still green. The reference also returns false for a
+/// player (object type bit `0x10`, `0x5f0726`-`0x5f0732`); a pet takes the level test.
 pub fn unit_is_grey(player_level: u32, unit_level: u32) -> bool {
     player_level > unit_level && player_level - unit_level > grey_band(player_level)
 }
