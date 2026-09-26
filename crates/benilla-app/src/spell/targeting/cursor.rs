@@ -297,6 +297,7 @@ mod tests {
             world.init_resource::<crate::go_templates::GameObjectTemplates>();
             world.init_resource::<crate::items::Items>();
             world.init_resource::<crate::net::GuidIndex>();
+            world.insert_resource(crate::net::Reputations(Vec::new()));
             world.insert_resource(PickOcclusion {
                 distance: 10.0,
                 point,
