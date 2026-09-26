@@ -1,6 +1,6 @@
 //! The merchant window's app side: [`MerchantOpen`] holds the `SMSG_LIST_INVENTORY` rows,
-//! [`feed_merchant`] pushes them with the buyback and repair rows, the purse and the refusals, and
-//! [`drain_merchant`] sends the Lua intents. A bag click sells through [`crate::ui_items`].
+//! [`feed_merchant`] pushes them with the buyback and repair rows, the purse and the refusals,
+//! [`feed_repair_all_cost`] the repair-all total, and [`drain_merchant`] sends the Lua intents. A bag click sells through [`crate::ui_items`].
 
 use benilla_protocol::messages::{buy_result, sell_result, VendorItem};
 use bevy::prelude::*;
@@ -111,6 +111,11 @@ impl Plugin for UiMerchantPlugin {
                     // player-requirement stores for `GetMerchantItemInfo`'s `isUsable`.
                     close_npc_session_out_of_range::<MerchantOpen>.before(feed_merchant),
                     feed_merchant.after(crate::ui_unit::UnitFeed).in_set(UiFeed),
+                    // Before `feed_char`: the `UNIT_INVENTORY_CHANGED` a repair fires refreshes the
+                    // Repair All button from this total (`PaperDollFrame.lua:717-724`).
+                    feed_repair_all_cost
+                        .in_set(UiFeed)
+                        .before(crate::ui_char::feed_char),
                     drain_merchant.after(UiInput),
                 ),
             );
@@ -332,6 +337,45 @@ fn repair_all_cost(
     total.min(u64::from(u32::MAX)) as u32
 }
 
+/// The open vendor's `UNIT_NPC_FLAGS`, 0 with none open or its unit not streamed.
+fn vendor_npc_flags(
+    open: &MerchantOpen,
+    units: &Query<(&Guid, &ObjectStore), Without<SelfPlayer>>,
+) -> u32 {
+    open.vendor
+        .and_then(|g| units.iter().find(|(guid, _)| guid.0 == g))
+        .map(|(_, store)| store.0.unit_npc_flags())
+        .unwrap_or(0)
+}
+
+/// Push `GetRepairAllCost`'s total, which the reference sweeps at the call (`0x4fbd60`): every
+/// frame a repairing vendor is open, 0 otherwise.
+fn feed_repair_all_cost(
+    script: Option<NonSendMut<UiScript>>,
+    open: Res<MerchantOpen>,
+    objects: Objects,
+    items: Res<Items>,
+    commands: Res<NetCommands>,
+    self_q: Query<&ObjectStore, With<SelfPlayer>>,
+    units: Query<(&Guid, &ObjectStore), Without<SelfPlayer>>,
+    tables: Option<Res<RepairTables>>,
+    mut last: Local<crate::ui_script::VmMemo<Option<u32>>>,
+) {
+    let Some(mut script) = script else {
+        return;
+    };
+    let last = last.get(&script);
+    let can_repair = vendor_npc_flags(&open, &units) & NPC_FLAG_REPAIR != 0;
+    let total = match (can_repair, self_q.iter().next(), tables.as_deref()) {
+        (true, Some(store), Some(t)) => repair_all_cost(&store.0, &objects, &items, t, &commands),
+        _ => 0,
+    };
+    if *last != Some(total) {
+        script.set_repair_all_cost(total);
+        *last = Some(total);
+    }
+}
+
 fn snapshot(
     open: &MerchantOpen,
     objects: &Objects,
@@ -340,7 +384,6 @@ fn snapshot(
     commands: &NetCommands,
     player: Option<&benilla_protocol::ObjectFields>,
     vendor_npc_flags: u32,
-    tables: Option<&RepairTables>,
 ) -> Option<MerchantState> {
     open.vendor?;
     let buyback = player
@@ -351,11 +394,6 @@ fn snapshot(
                 .collect()
         })
         .unwrap_or_default();
-    let can_repair = vendor_npc_flags & NPC_FLAG_REPAIR != 0;
-    let repair_cost = match (can_repair, player, tables) {
-        (true, Some(store), Some(t)) => repair_all_cost(store, objects, items, t, commands),
-        _ => 0,
-    };
     Some(MerchantState {
         items: open
             .items
@@ -363,8 +401,7 @@ fn snapshot(
             .map(|it| resolve_item(it, items, icons, commands))
             .collect(),
         buyback,
-        can_repair,
-        repair_all_cost: repair_cost,
+        can_repair: vendor_npc_flags & NPC_FLAG_REPAIR != 0,
     })
 }
 
@@ -378,8 +415,7 @@ fn feed_merchant(
     icons: Option<Res<ItemDisplays>>,
     commands: Res<NetCommands>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    units: Query<(&crate::net::Guid, &ObjectStore), Without<SelfPlayer>>,
-    tables: Option<Res<RepairTables>>,
+    units: Query<(&Guid, &ObjectStore), Without<SelfPlayer>>,
     names: Res<NameCache>,
     mut errors: ResMut<MerchantErrors>,
     mut last: Local<crate::ui_script::VmMemo<Option<MerchantState>>>,
@@ -422,11 +458,6 @@ fn feed_merchant(
     }
 
     // The vendor's service bits gate the repair pair; the player's descriptor carries buyback.
-    let vendor_npc_flags = open
-        .vendor
-        .and_then(|g| units.iter().find(|(guid, _)| guid.0 == g))
-        .map(|(_, store)| store.0.unit_npc_flags())
-        .unwrap_or(0);
     let player = self_q.iter().next().map(|s| &s.0);
     let fresh = snapshot(
         &open,
@@ -435,8 +466,7 @@ fn feed_merchant(
         icons.as_deref(),
         &commands,
         player,
-        vendor_npc_flags,
-        tables.as_deref(),
+        vendor_npc_flags(&open, &units),
     );
     // The vendor's name rides `MERCHANT_SHOW` and `MERCHANT_UPDATE` as arg1, and its landing alone
     // re-fires `MERCHANT_UPDATE`; the reference fires both bare (`0x4fad92`, `0x4facaa`), and
@@ -603,6 +633,18 @@ fn drain_merchant(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A repair's `UNIT_INVENTORY_CHANGED` reads this frame's total: the stock handler refreshes
+    /// the Repair All button from `GetRepairAllCost` (`PaperDollFrame.lua:717-724`).
+    #[test]
+    fn the_repair_all_total_is_swept_before_the_inventory_event() {
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        assert!(crate::test_support::runs_before(
+            &mut app,
+            feed_repair_all_cost,
+            crate::ui_char::feed_char
+        ));
+    }
 
     fn row(entry: u32, slot: u32, count: u32) -> VendorItem {
         VendorItem {

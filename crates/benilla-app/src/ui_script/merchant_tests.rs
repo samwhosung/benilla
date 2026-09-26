@@ -732,8 +732,8 @@ fn merchant_tabs_drive_buyback_page_and_repair_pair() {
             buyback_item("Cracked Sword", 20), // the latest sale: the merchant page's slot
         ],
         can_repair: true,
-        repair_all_cost: 76,
     }));
+    s.set_repair_all_cost(76);
     s.fire_event(
         "MERCHANT_SHOW",
         vec![ScriptValue::Str("Kurdram Stonehammer".into())],

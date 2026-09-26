@@ -76,8 +76,6 @@ pub struct MerchantState {
     pub buyback: Vec<MerchantItem>,
     /// Whether this vendor repairs (the `UNIT_NPC_FLAGS` repair bit).
     pub can_repair: bool,
-    /// The repair-all cost in copper; 0 disables the button (`MerchantFrame_OnShow`).
-    pub repair_all_cost: u32,
 }
 
 impl super::UiScript {
@@ -89,6 +87,11 @@ impl super::UiScript {
         if closing {
             self.model_mut().repair_mode = false;
         }
+    }
+
+    /// Push `GetRepairAllCost`'s total in copper, swept by the app ahead of the events that read it.
+    pub fn set_repair_all_cost(&mut self, copper: u32) {
+        self.model_mut().repair_all_cost = copper;
     }
 
     /// Drain the `(row, quantity)` buys `BuyMerchantItem` queued, the row 1-based.
@@ -446,13 +449,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // GetRepairAllCost() → cost, canRepair: whether there is damage to pay for, which enables the
-    // repair-all button (`MerchantFrame.lua:38`).
+    // repair-all button (`MerchantFrame.lua:38`); 0 away from a vendor that repairs (`0x4fbd60`).
     g.set(
         "GetRepairAllCost",
         lua.create_function(|lua, ()| {
             let cost = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                model.merchant.as_ref().map_or(0, |m| m.repair_all_cost)
+                if model.merchant.as_ref().is_some_and(|m| m.can_repair) {
+                    model.repair_all_cost
+                } else {
+                    0
+                }
             };
             Ok(MultiValue::from_vec(vec![
                 Value::Integer(i64::from(cost)),
@@ -801,6 +808,22 @@ mod tests {
         assert!(s.take_merchant_buybacks().is_empty(), "drained");
     }
 
+    /// Away from a vendor that repairs, the total reads 0, as `0x4fbd60` pushes there.
+    #[test]
+    fn the_repair_all_total_reads_zero_away_from_a_repairer() {
+        let mut s = UiScript::new().unwrap();
+        s.set_repair_all_cost(1234);
+        assert!(
+            s.eval::<bool>("return GetRepairAllCost() == 0").unwrap(),
+            "no vendor"
+        );
+        s.set_merchant(Some(stock()));
+        assert!(
+            s.eval::<bool>("return GetRepairAllCost() == 0").unwrap(),
+            "a vendor that does not repair"
+        );
+    }
+
     #[test]
     fn repair_reads_intents_and_mode_latch() {
         let mut s = UiScript::new().unwrap();
@@ -808,8 +831,8 @@ mod tests {
 
         let mut state = stock();
         state.can_repair = true;
-        state.repair_all_cost = 1234;
         s.set_merchant(Some(state));
+        s.set_repair_all_cost(1234);
         assert!(s.eval::<bool>("return CanMerchantRepair() == 1").unwrap());
         assert!(s
             .eval::<bool>("local c, can = GetRepairAllCost()\nreturn c == 1234 and can == true",)
