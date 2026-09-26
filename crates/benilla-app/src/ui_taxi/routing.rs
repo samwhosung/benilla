@@ -41,27 +41,30 @@ pub(super) fn load_taxi_catalogs(
     };
     *done = true;
     let mut chain = assets.chain.lock_recover();
-    let loaded = load_taxi_nodes(&mut chain).and_then(|nodes| {
-        let paths = load_taxi_paths(&mut chain)?;
-        let continents = load_world_map_continent_catalog(&mut chain)?;
-        Ok((nodes, paths, continents))
-    });
+    let loaded = TaxiCatalogs::load(&mut chain);
     drop(chain);
     match loaded {
-        Ok((nodes, paths, continents)) => {
+        Ok(cat) => {
             info!(
                 "ui_taxi: catalogs loaded — {} nodes, {} paths, {} continents",
-                nodes.len(),
-                paths.len(),
-                continents.len()
+                cat.nodes.len(),
+                cat.paths.len(),
+                cat.continents.len()
             );
-            commands.insert_resource(TaxiCatalogs {
-                nodes,
-                paths,
-                continents,
-            });
+            commands.insert_resource(cat);
         }
         Err(e) => error!("ui_taxi: DBC catalogs failed to load, taxi map disabled: {e:#}"),
+    }
+}
+
+impl TaxiCatalogs {
+    /// The three tables off the patch chain.
+    pub(super) fn load(chain: &mut benilla_formats::Chain) -> anyhow::Result<Self> {
+        Ok(Self {
+            nodes: load_taxi_nodes(chain)?,
+            paths: load_taxi_paths(chain)?,
+            continents: load_world_map_continent_catalog(chain)?,
+        })
     }
 }
 
@@ -145,6 +148,14 @@ fn shortest_route(
     Some((chain, total_fare))
 }
 
+/// `TaxiNodeCost`'s fare (`0x4dc3d0`): the price times `1 - discount`, both in f64 with nothing
+/// stored (`fsubr`, `fmul st,st(1)`), the product stored as an f32 and rounded half to even
+/// (`fstp dword`, `fistp dword`).
+fn shown_fare(price: u32, discount: f64) -> u32 {
+    let product = (f64::from(price) * (1.0 - discount)) as f32;
+    f64::from(product).round_ties_even() as u32
+}
+
 /// A listed node's chain from the nearest node (the node alone for `Current`) and its fare, for
 /// `drain_taxi`.
 pub(super) struct ResolvedTaxiNode {
@@ -161,9 +172,14 @@ pub(super) struct TaxiRouteCache(pub(super) Vec<ResolvedTaxiNode>);
 /// `Reachable` with its fare and route segments, and an unroutable one is left out, where the
 /// reference keeps it typed `NONE`, which stock `TaxiFrame.lua` hides; its `DISTANT` type is
 /// never produced. Returns the continent's map id, the Lua nodes and their routes, in one order.
+///
+/// A Lua node's fare takes the flight master's price `discount` ([`shown_fare`]), and is 0 with
+/// none, when the flight master or the player does not resolve (`0x4dc3fa`, `0x4dc423`); the
+/// route's fare stays the raw sum, which `CMSG_ACTIVATETAXIEXPRESS` carries (`0x4dc96f`).
 pub(super) fn build_nodes(
     open: &TaxiOpen,
     cat: &TaxiCatalogs,
+    discount: Option<f64>,
 ) -> Option<(u32, Vec<TaxiUiNode>, Vec<ResolvedTaxiNode>)> {
     let map_id = cat.nodes.get(open.nearest_node)?.map_id;
     let cont = cat.continents.get(map_id)?;
@@ -230,7 +246,7 @@ pub(super) fn build_nodes(
             name: n.name.clone(),
             node_type: TaxiNodeType::Reachable,
             pos,
-            cost,
+            cost: discount.map_or(0, |d| shown_fare(cost, d)),
             routes,
         });
         resolved.push(ResolvedTaxiNode { chain, cost });
@@ -351,6 +367,29 @@ mod tests {
         );
     }
 
+    /// `0x4dc3d0`'s rounding: `1 - discount` stays f64 and only the product is stored as f32, so a
+    /// near-tie becomes an exact `.5` and rounds to even where the f64 shortcut rounds down.
+    #[test]
+    fn the_shown_fare_stores_only_the_product_as_f32() {
+        let (d05, d10) = (f64::from(0.05f32), f64::from(0.1f32));
+        let d15 = d10 + d05;
+        // 0.1: 15 × 0.89999999850988388 = 13.4999999776, stored 13.5, to even 14; the f64
+        // shortcut gives 13.
+        assert_eq!(shown_fare(15, d10), 14);
+        // 0.15: 30 × 0.84999999776482582 = 25.4999999329, stored 25.5, to even 26; and 110
+        // (Stormwind to Sentinel Hill) = 93.4999997541, stored 93.5, to even 94.
+        assert_eq!(shown_fare(30, d15), 26);
+        assert_eq!(shown_fare(110, d15), 94);
+        // 0.15 at 786437 stores 668471.4375, so 668471; repair's f32 multiplier gives 668472.
+        assert_eq!(shown_fare(786_437, d15), 668_471);
+        // 0.15 at 2097157 stores 1782583.5, to even 1782584; the discount narrowed to f32 first
+        // (0.15000000596) would store 1782583.375, so 1782583.
+        assert_eq!(shown_fare(2_097_157, d15), 1_782_584);
+        // A plain case: 0.2 at 110 is 88, and no discount is the price.
+        assert_eq!(shown_fare(110, d15 + d05), 88);
+        assert_eq!(shown_fare(110, 0.0), 110);
+    }
+
     /// A non-square rect, where cross-axis and same-axis denominators differ.
     #[test]
     fn projection_uses_cross_axis_denominators() {
@@ -439,7 +478,7 @@ mod tests {
             nearest_node: 2,
             known: mask_of(&[2, 4]),
         };
-        let (map_id, ui, resolved) = build_nodes(&open, &cat).expect("map builds");
+        let (map_id, ui, resolved) = build_nodes(&open, &cat, Some(0.0)).expect("map builds");
         assert_eq!(map_id, 0, "the continent is the nearest node's own map");
         assert_eq!(ui.len(), 2, "only the two known EK nodes are visible");
 
@@ -467,7 +506,7 @@ mod tests {
             nearest_node: 2,
             known: all_known,
         };
-        let (_, ui, _) = build_nodes(&open, &cat).expect("map builds");
+        let (_, ui, _) = build_nodes(&open, &cat, Some(0.0)).expect("map builds");
         let ek_known_total = cat.nodes.rows().filter(|n| n.map_id == 0).count();
         assert!(
             ui.len() < ek_known_total,
