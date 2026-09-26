@@ -108,7 +108,7 @@ sup="$(printf '%s\n' "$plain" | sed -n 's/.*logout-smoke: re-entered.*suppressor
 printf '  %-24s %s\n' "re-entry suppressors" "${sup:-<unreported>}"
 [ "$sup" = "none" ] ||
     fail "the re-entered character could not be driven — suppressors: ${sup:-<unreported>} \
-(1542: everything the ended session granted its mover dies with it)"
+(everything the ended session granted its mover dies with it)"
 
 # vmangos skips the logout root when resting, on a taxi or at account security >= `InstantLogout`
 # (`MiscHandler.cpp`, `CMSG_LOGOUT_REQUEST`); probe accounts are GM, so report whether the check
@@ -152,7 +152,7 @@ writes="$(printf '%s\n' "$plain" | grep -cF "saved variables: wrote")"
 printf '  %-24s %s\n' "shutdown writes" "$writes"
 [ "$writes" -eq "$sessions" ] ||
     fail "the shutdown tail wrote $writes time(s), expected $sessions — a session ended without \
-saving (1528: the quit root must be observed in \`Last\`, after PostUpdate's exit_on_all_closed)"
+saving (the quit root must be observed in \`Last\`, after PostUpdate's exit_on_all_closed)"
 
 # The read-only verdict names each changed file, the whole lead to whatever wrote it.
 if [ -n "$install_root" ]; then

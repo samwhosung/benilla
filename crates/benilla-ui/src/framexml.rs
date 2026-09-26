@@ -311,11 +311,12 @@ fn element_from_node(node: roxmltree::Node) -> Element {
 }
 
 /// Resolve `inherits` into a materialized [`Element`]: the named template, itself expanded first,
-/// then the element on top, as the reference splices a template's nodes before the instance's
-/// own (`LoadChildFrames 0x76a060` keeps that order for `<Frames>`). Children are the template's
-/// then the element's; the element's attributes override or extend the template's
-/// (case-insensitively). `name` and `virtual` splice like any attribute; whether the reference
-/// exempts them is untraced. A cycle is skipped with a warning.
+/// then the element on top. Children are the template's then the element's; the element's
+/// attributes override or extend the template's (case-insensitively). The reference merges
+/// nothing: `LoadXML` re-enters itself on the one object against each template, the most distant
+/// first, then the instance (`0x76985c`; `<Frames>` repeat the walk, `0x76a060`), and reads `name`
+/// and `id` from the instance alone (`PreLoadXML 0x769770`). Here `name` and `virtual` merge like
+/// any attribute. A cycle is skipped with a warning.
 pub fn expand(
     element: &Element,
     templates: &HashMap<&str, &Element>,

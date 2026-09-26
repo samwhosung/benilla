@@ -1513,7 +1513,7 @@ pub fn fxuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     for c in [FxClass::Invisible, FxClass::Never, FxClass::Unknown] {
         listing(
             c.label(),
-            "  (frozen@identity — what the effect lane renders today)",
+            "  (frozen@identity — what the effect lane renders)",
             |h| h.class,
             c,
         );
@@ -2442,7 +2442,7 @@ pub fn entityuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     ] {
         listing(
             c.label(),
-            "  (frozen@identity — what the entity lane renders today)",
+            "  (frozen@identity — what the entity lane renders)",
             |h| h.class,
             c,
         );
@@ -2521,12 +2521,11 @@ pub fn entityuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     println!();
     println!(
         "============================== M2COLOR TINT ==============================\n\
-         The same corpus asked about the OTHER channel `entity_variants` leaves unserved.\n\
-         `build` passes `sub.rgb_anim.as_ref()` unconditionally, so a tint-animating entity\n\
-         batch is SEEDED at the loop's first key (`model_material`'s `tint.xyz`) — and then\n\
-         nothing re-samples it, because `doodad_anim::register_tint`'s only call sites are in\n\
-         `terrain_stream/spawn/assemble.rs`. There is no `play_rgb` flag to flip: the hole is\n\
-         the missing registration, not a missing argument."
+         The same corpus asked about the OTHER channel, the keyed M2Color tint. A batch is\n\
+         seeded at the loop's first key (`model_material`'s `tint.xyz`) and re-sampled only\n\
+         where `doodad_anim::register_tint` registers it: placed doodads\n\
+         (`terrain_stream/spawn/assemble.rs`), dressed entity parts (`entities/attach/dress.rs`)\n\
+         and the glue booth (`portrait/glue_booth.rs`)."
     );
     for (path, block) in &tint_blocks {
         println!(
@@ -2554,7 +2553,7 @@ pub fn entityuvscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
         );
     }
     println!();
-    println!("  --- the CLOCK the tint fix has to serve ---");
+    println!("  --- the CLOCK each tint rides ---");
     for c in UvClock::ALL {
         println!(
             "    {:<6} {:>5} batch(es)  — {}",

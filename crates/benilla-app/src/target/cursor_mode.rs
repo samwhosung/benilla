@@ -1190,7 +1190,7 @@ mod tests {
         assert_eq!(go_interact_range_sq(GO_TYPE_CHAIR), 9.0);
         assert!(
             go_interact_range_sq(GO_TYPE_CHAIR) < GO_INTERACT_RANGE_SQ,
-            "the chair reaches SHORTER than the interim — a longer one would restore the bug"
+            "a chair's reach is shorter than the default GameObject reach"
         );
         assert!(!fishing_channel_owned(None, Some(7)));
         assert!(!fishing_channel_owned(None, None));

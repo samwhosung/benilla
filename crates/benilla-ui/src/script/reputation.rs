@@ -789,7 +789,7 @@ mod tests {
             s.eval::<Value>("return GetWatchedFactionInfo()")
                 .unwrap()
                 .is_nil(),
-            "nothing watched → one nil, which is the ref's own `if ( name )` gate"
+            "nothing watched → a nil name, which stock `if ( name )` gates on"
         );
 
         s.run("SetWatchedFactionIndex(3)").unwrap(); // Stormwind

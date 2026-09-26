@@ -795,8 +795,9 @@ pub(crate) fn power_word(script: &benilla_ui::script::UiScript, power: u32) -> O
 }
 
 /// One endpoint's display name, the reference's `GetObjectName` (`0x6264e0`); `None` until the
-/// name cache answers, and the caller retries as the deferred queue at `0xc4e208` does. A streamed
-/// unit names through its descriptor (`GetUnitName`, `0x609210`), which is how a pet is named.
+/// name cache answers, and the caller retries, where the reference never waits and prints
+/// `UNKNOWNOBJECT`. A streamed unit names through its descriptor (`GetUnitName`, `0x609210`), which
+/// is how a pet is named.
 pub(crate) fn object_name(
     guid: u64,
     unit: Option<&ObjectStore>,
@@ -1552,9 +1553,9 @@ pub(crate) fn melee_family(
 
 // ────────────────────────── the queued line, awaiting its names ───────────────────────
 
-/// A combat-log line classified at the packet, with only its names outstanding: the reference's
-/// `0x629b60` decides while both units are streamed and parks the message on the deferred queue
-/// at `0xc4e208` until the name-ready callback `0x6294b0`, so a despawned creature still logs.
+/// A combat-log line classified at the packet while both units are streamed, so a despawned
+/// creature still logs, with only its names outstanding. The reference's deferred queue
+/// (`0xc4e208`, replayed by `0x6294b0`) holds only a line waiting on an item name (`0x55ba30`).
 #[derive(Clone, Debug)]
 pub(crate) struct PendingCombat {
     pub kind: ChatEventKind,

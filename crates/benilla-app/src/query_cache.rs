@@ -5,7 +5,8 @@
 //! The read that asks takes `&self` (the in-flight set is behind a lock), so read-only systems
 //! share the owning resource and its change detection means an answer landed.
 //!
-//! A negative answer (the server's high-bit miss) is cached as `None` and never re-asked.
+//! A negative answer is cached as `None` and never re-asked: an integer-keyed store's high-bit miss
+//! (`0x556e67`), or a player's empty name.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
@@ -86,7 +87,7 @@ impl<K: Copy + Eq + Hash, V> QueryCache<K, V> {
         self.generation = self.generation.wrapping_add(1);
     }
 
-    /// The reference's explicit eviction (a high-bit key, `SMSG_INVALIDATE_PLAYER`): the next
+    /// The reference's explicit eviction (`SMSG_INVALIDATE_PLAYER` for a player's name): the next
     /// read re-asks. Returns whether there was anything to evict.
     pub(crate) fn evict(&mut self, key: K) -> bool {
         self.pending

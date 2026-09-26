@@ -419,7 +419,8 @@ fn drive(
         if home || left <= 0.0 {
             if !home {
                 warn!(
-                    "cinematic: the world did not come back inside the settle budget —                      revealing anyway"
+                    "cinematic: the world did not come back inside the settle budget — \
+                     revealing anyway"
                 );
             }
             cine.settling = None;

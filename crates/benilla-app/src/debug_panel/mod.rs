@@ -360,7 +360,8 @@ fn debug_panel_ui(
                                 }
                             }
                             ui.label(format!(
-                                "animated doodads  ·  {} ({} ticking)  ·  {} material                                  ({hidden} culled, {dim} dimmed)  ·  {} uv",
+                                "animated doodads  ·  {} ({} ticking)  ·  {} material \
+                                 ({hidden} culled, {dim} dimmed)  ·  {} uv",
                                 anim_hosts.iter().count(),
                                 ticking,
                                 mat_anims.iter().count(),
@@ -595,9 +596,7 @@ fn debug_panel_ui(
                                 .id_salt("stepup_report")
                                 .show(ui, |ui| {
                                     for line in report {
-                                        ui.label(
-                                            egui::RichText::new(line).small().monospace(),
-                                        );
+                                        ui.label(egui::RichText::new(line).small().monospace());
                                     }
                                 });
                         });
@@ -609,8 +608,8 @@ fn debug_panel_ui(
                 egui::RichText::new(format!(
                     "{DEV_CHORD}:  D panel · P perf · I inspect · M mute · F free-fly"
                 ))
-                    .small()
-                    .color(OVERLAY_TEXT_DIM),
+                .small()
+                .color(OVERLAY_TEXT_DIM),
             );
             // The build; a click copies the full sha.
             let build = ui.add(

@@ -1,13 +1,14 @@
-//! WMO interior audio: the `WMOAreaTable` row for the group the camera eye is in (exact group
-//! row, then whole-WMO default, then name-set 0), published as an override layer. Zone music,
-//! ambience, intro and reverb take its nonzero fields over the terrain `AreaTable` chain; zero
-//! fields fall through to it (the reference's rule for a zero interior field is untraced).
+//! WMO interior audio: the `WMOAreaTable` row for the group the character is in, where the
+//! listener sits (the camera before login), by exact group row, then whole-WMO default, then
+//! name-set 0, published as an override layer. Zone music, ambience, intro and reverb take its
+//! nonzero fields over the terrain `AreaTable` chain; zero fields fall through to it (the
+//! reference's rule for a zero interior field is untraced).
 
 use bevy::prelude::*;
 
 use benilla_world::schedule::WorldStage;
 
-/// The audio FKs of the interior the eye is in; `None` is the open world.
+/// The audio FKs of the interior the listener is in; `None` is the open world.
 #[derive(Resource, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CurrentInterior(pub(crate) Option<InteriorAudio>);
 
@@ -23,7 +24,7 @@ pub(crate) struct InteriorAudio {
     pub(crate) intro_sound: u32,
 }
 
-/// Resolve the eye's interior keys to the audio row; log transitions by interior name.
+/// Resolve the listener's interior keys to the audio row; log transitions by interior name.
 fn resolve_interior(
     world: benilla_world::world_point::WorldPoint,
     mut current: ResMut<CurrentInterior>,

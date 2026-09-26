@@ -68,8 +68,10 @@ impl Spline {
     }
 
     /// Raw-WoW position, facing (`None` when vertical) and pitch `asin(dz/len)` at `now`, at
-    /// constant speed. Segments are located by chord length (`0x4532e0`); the evaluator `0x4541b0`
-    /// lerps a ground path and runs a uniform Catmull-Rom (`0x453580`) on a flying one.
+    /// constant speed. Segments are located by chord length here in both modes; the reference
+    /// uses the chord on a ground path only and a flying segment's Catmull-Rom length in 20 steps
+    /// (`0x454320`, `0x453760`). The evaluator `0x4541b0` lerps a ground path and runs a uniform
+    /// Catmull-Rom (`0x453580`) on a flying one.
     pub(crate) fn sample(&self, now: Instant) -> ([f32; 3], Option<f32>, f32) {
         let pts = self.points.as_slice();
         if pts.len() < 2 {

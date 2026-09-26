@@ -183,7 +183,7 @@ pub struct VisualStages {
     pub missile_model: u32,
     /// Field 9: the index into [`MISSILE_ATTACH_TABLE`].
     pub missile_attach: u32,
-    /// Field 10: the `SoundEntries.dbc` loop the missile plays in flight (`CMissile+0x44`, its
+    /// Field 10: the `SoundEntries.dbc` loop the missile plays in flight (`CMissile+0x40`, its
     /// volume shaped by distance at `0x61d790`), stopped when it arrives.
     pub missile_sound: Option<u32>,
     /// Field 14: the `SoundEntries.dbc` id the `$TRD` anim event plays at a craft's strike frame

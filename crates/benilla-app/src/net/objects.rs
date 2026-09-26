@@ -935,8 +935,9 @@ fn monster_move(
                 }
             }
         }
-        // Every spline move un-nocks and drops the weapon hold: the handler `0x6018f0` (opcodes
-        // 0xDD, 0x2AE) always ends through `0x60d040` (clear `0x400`) and `0x60f530` (un-nock).
+        // Every spline move un-nocks and drops the weapon hold here. The handler `0x6018f0`
+        // (opcodes 0xDD, 0x2AE) ends through `0x60d040` (clear `0x400`) and `0x60f530` (un-nock) on
+        // every path but one: a stop within 3 yd of the stop point jumps past both (`0x6019e4`).
         commands.entity(e).remove::<(
             crate::creature_anim::NockLatch,
             crate::creature_anim::RangedHold,

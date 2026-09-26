@@ -942,7 +942,9 @@ mod tests {
         );
         assert!(
             shut_asked > 0.9,
-            "gate shut: the METER plane must still read the mix the game produced — asked              {shut_asked:.3}. A tap that goes silent with the speakers is the false negative              this ordering exists to prevent"
+            "gate shut: the METER plane must still read the mix the game produced — asked \
+             {shut_asked:.3}. A tap that goes silent with the speakers is the false negative \
+             this ordering exists to prevent"
         );
     }
 

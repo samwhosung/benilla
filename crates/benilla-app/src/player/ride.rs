@@ -115,7 +115,8 @@ pub(super) fn update_attachment(
             benilla_assets::trace::line(
                 "ride",
                 &format!(
-                    "on {:#x} deck({:8.2},{:7.2},{:8.2}) yaw{:+.3} | feet({:8.2},{:7.2},{:8.2})                          local({:7.2},{:6.2},{:7.2}) | grounded={} support={} vy={:+6.2}{}",
+                    "on {:#x} deck({:8.2},{:7.2},{:8.2}) yaw{:+.3} | feet({:8.2},{:7.2},{:8.2}) \
+                     local({:7.2},{:6.2},{:7.2}) | grounded={} support={} vy={:+6.2}{}",
                     ride.guid,
                     bpos.x,
                     bpos.y,

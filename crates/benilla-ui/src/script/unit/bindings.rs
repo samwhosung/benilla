@@ -994,8 +994,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // AssistUnit(unit) (`0x489b80`): select the unit's `UNIT_FIELD_TARGET`. The shared tail
     // (`0x489bb2`-`0x489c07`) returns silently on 0 and selects through `0x489a40`, which leaves
     // the selection alone when nothing resolves; no `CanAssist` gate (`0x6066f0`), any unit, and a
-    // swing only with `assistAttack` set (default "0", `0x48fc50`). Deviation: a nil token is
-    // silent, because the reference's game message `0xb8` for it has no recoverable text.
+    // swing only with `assistAttack` set (default "0", `0x48fc50`). A token that resolves nothing
+    // is silent here, where the reference shows `0xb8` ERR_GENERIC_NO_TARGET (`0x489c0e`).
     g.set(
         "AssistUnit",
         lua.create_function(|lua, token: Option<String>| {
@@ -1046,7 +1046,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // number is taken as its string. Deviation: among whole-name matches ours picks the nearest,
     // because the reference's first-walked pick is order-dependent and reads as a bug. A miss is
     // silent here, where the reference shows `0x127` ERR_UNIT_NOT_FOUND, or `0xb8`
-    // ERR_GENERIC_NO_TARGET for an empty name (#52).
+    // ERR_GENERIC_NO_TARGET for an empty name.
     g.set(
         "TargetByName",
         lua.create_function(|lua, (name, exact): (Value, Option<Value>)| {

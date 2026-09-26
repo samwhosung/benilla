@@ -327,8 +327,8 @@ pub(in crate::entities) fn build_dressup_preview(
         equipment: look.equipment,
         emblem: look.emblem,
         // No hide flags: `crate::ui_dressup` already left out a hidden worn helm or cloak, as
-        // `SetUnit` (`0x476cb0`) clones the live display pointers, and a mask here would hide a
-        // tried-on one.
+        // `SetUnit` (`0x505d70`) clones the live display pointers (`0x476cb0`), and a mask here
+        // would hide a tried-on one.
         flags: 0,
         // The ranged slot here only holds a try-on: `SetUnit` clones the live model, which shows
         // a ranged weapon only while ranged-drawn, so `crate::ui_dressup` leaves a worn one out.

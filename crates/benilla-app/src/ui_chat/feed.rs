@@ -98,8 +98,8 @@ enum Pending {
     },
     /// An area discovery (`SMSG_EXPLORATION_EXPERIENCE`), fired at the drain, which holds the VM.
     Discovery { area: String, xp: u32 },
-    /// One combat-log line, classified at the packet, waiting on its two endpoint names: the
-    /// reference's deferred queue (`0xc4e208`), replayed by the name-ready callback `0x6294b0`.
+    /// One combat-log line, classified at the packet, waiting on its two endpoint names; the
+    /// reference's deferred queue (`0xc4e208`) waits only on an item name.
     Combat(Box<super::combat::PendingCombat>),
     /// A ready event (client-composed lines; name-carrying notices).
     Event(ChatEvent),

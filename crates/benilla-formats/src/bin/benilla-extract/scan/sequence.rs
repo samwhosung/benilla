@@ -514,9 +514,8 @@ pub fn seqclockscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     eprintln!(
         "{scanned} models scanned, {with_seqs} with sequences: {frozen} CLOCKLESS \
          ({frozen_emitters} emitters) — sequences + per-sequence consumers, not one keyed bone; \
-         {frozen_go} of them GameObject display models (the hosted lane, frozen at slot 0 t=0). \
-         {partial} PARTIAL models have unkeyed sequences a clip lookup can never reach; \
-         {inert} more are boneless with nothing to sample (a clock there is inert)."
+         {frozen_go} of them GameObject display models. {partial} PARTIAL models key a bone in \
+         some sequences only; {inert} more key no bone and have nothing to sample."
     );
     Ok(())
 }
@@ -643,9 +642,9 @@ pub fn soundeventscan(chain: &mut Chain, prefix: Option<&str>) -> Result<()> {
     }
     eprintln!(
         "{scanned} models with sequences scanned; {carriers} carry a $DSL/$DSO/$SND marker, \
-         {hostless} of them on the Static tier (no anim-root entity exists to hang an emitter \
-         on today); {rest_gated} carry the marker on a REST-posed sequence — the class \
-         benilla's rig gate never arms, so the marker is unreachable through an AnimationPlayer."
+         {hostless} of them on the Static tier (the marker alone arms their clock); \
+         {rest_gated} carry the marker on a REST-posed sequence, which gets no rig, so only the \
+         rig-free sequence clock reaches it."
     );
     Ok(())
 }

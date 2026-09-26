@@ -299,7 +299,7 @@ fn player_money_input_reflects_then_offers() {
         )
         .unwrap(),
         ("1".into(), "23".into(), "45".into()),
-        "the echo reflects 1g 23s 45c into the boxes"
+        "the event fills 1g 23s 45c into the boxes"
     );
     assert_eq!(
         s.take_trade_money(),

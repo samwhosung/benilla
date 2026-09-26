@@ -2,7 +2,8 @@
 //! guid), a creature's `CMSG_CREATURE_QUERY` (by template entry), a pet's or charm's
 //! `CMSG_PET_NAME_QUERY` (by pet number), and which one applies is read off the descriptor as the
 //! reference's `GetUnitName` (`0x609210`) reads it. Each key is asked once while in flight, and a
-//! negative answer is cached so a bad id never loops.
+//! negative answer is cached so a bad id never loops; for a player that is an empty name, which the
+//! reference evicts instead (`0x55f6f0`), so its next read asks again.
 //!
 //! Creature templates persist, as the reference's `creaturecache.wdb` does; player and pet names
 //! are never written to disk and are cleared at world-session start, as the reference does.
@@ -509,7 +510,8 @@ pub(crate) mod net {
     }
 
     /// `SMSG_INVALIDATE_PLAYER`, which vmangos sends after a rename (`CharacterHandler.cpp:839`):
-    /// the only per-player eviction, as in the reference, whose name cache has no TTL (`0x555600`).
+    /// the reference's eviction (`0x555600`) in a name cache with no TTL; its other, an empty-name
+    /// answer (`0x55f6f0`), is a cached negative here.
     fn invalidate_player(guid: u64, names: &mut NameCache) {
         debug!("net: invalidating cached name for player {guid:#x}");
         names.invalidate_player(guid);

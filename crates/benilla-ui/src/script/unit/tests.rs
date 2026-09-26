@@ -469,7 +469,7 @@ fn power_bindings_read_the_active_type() {
     assert!(
         s.eval::<bool>("return UnitPower == nil and UnitPowerMax == nil")
             .unwrap(),
-        "the Era spellings must not linger beside the 1.12 ones"
+        "UnitPower and UnitPowerMax are not 1.12 globals"
     );
     // An absent unit is the number 0, never nil: `UnitFrame.lua:122` indexes `ManaBarColor` by it.
     assert_eq!(

@@ -301,7 +301,9 @@ fn apply_region_inherits(lua: &Lua, wrapper: &Table, from: &str) -> mlua::Result
     if is_template {
         let mut model = lua.app_data_mut::<Model>().expect("model");
         model.record_warning(format!(
-            "CreateTexture/CreateFontString: '{from}' is a registered TEMPLATE, not a font object;              the region is created but the template's content is not applied (no corpus caller              does this)"
+            "CreateTexture/CreateFontString: '{from}' is a registered TEMPLATE, not a font object; \
+             the region is created but the template's content is not applied (no corpus caller \
+             does this)"
         ));
         return Ok(());
     }

@@ -384,6 +384,31 @@ mod loader_tests {
         );
     }
 
+    /// A region's `inherits=` is one name matched case-insensitively (`0x6ee747`), as a frame's
+    /// is, so a mis-cased template name still reaches the template.
+    #[test]
+    fn a_region_takes_a_mis_cased_template() {
+        let s = UiScript::new().unwrap();
+        let doc = parse(
+            r#"<Ui>
+                <Texture name="MarkTemplate" virtual="true">
+                    <Size><AbsDimension x="32" y="16"/></Size>
+                </Texture>
+                <Frame name="MarkHost">
+                    <Layers><Layer level="ARTWORK">
+                        <Texture name="$parentMark" inherits="marktemplate"/>
+                    </Layer></Layers>
+                </Frame>
+            </Ui>"#,
+        );
+        let report = load(&s, &doc, &no_files);
+        assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+        assert_eq!(
+            s.eval::<f32>("return MarkHostMark:GetWidth()").unwrap(),
+            32.0
+        );
+    }
+
     #[test]
     fn frame_set_all_points_pins_to_parent() {
         let mut s = UiScript::new().unwrap();

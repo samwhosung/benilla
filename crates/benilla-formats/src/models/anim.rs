@@ -922,16 +922,17 @@ mod tests {
                 {
                     let first = rot.keys[0].1;
                     assert!(
-                        rot.keys.iter().all(|(_, q)| q
+                        rot.keys
                             .iter()
-                            .zip(first)
-                            .all(|(a, b)| (a - b).abs() < 1e-6)),
-                        "UI_{token}'s stage rotation is a PARKED key, not an animation — a moving                          stage would have to be read off the live joint instead"
+                            .all(|(_, q)| q.iter().zip(first).all(|(a, b)| (a - b).abs() < 1e-6)),
+                        "UI_{token}'s stage rotation is a PARKED key, not an animation — a \
+                         moving stage would have to be read off the live joint instead"
                     );
                     let [x, y, z, w] = first;
                     assert!(
                         x.abs() < 1e-3 && y.abs() < 1e-3,
-                        "UI_{token}'s stage rotation is a pure YAW about +Z — a stage tipped in                          pitch or roll would need composing, not summing (got {first:?})"
+                        "UI_{token}'s stage rotation is a pure YAW about +Z — a stage tipped in \
+                         pitch or roll would need composing, not summing (got {first:?})"
                     );
                     yaw += 2.0 * f32::atan2(z, w).to_degrees();
                 }

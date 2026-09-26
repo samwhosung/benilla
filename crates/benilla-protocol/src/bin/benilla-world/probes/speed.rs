@@ -39,7 +39,8 @@ impl Probe for Speed {
         let speed_changes_seen = &cx.world.speed_changes_seen;
         ensure!(
             speed_changes_seen.len() >= 2,
-            "--speed: expected 2 force-speed changes (got {}) — did the first ack drop the session,              or is the account not GM?",
+            "--speed: expected 2 force-speed changes (got {}) — did the first ack drop the \
+             session, or is the account not GM?",
             speed_changes_seen.len()
         );
         let (k1, c1, s1) = speed_changes_seen[0];
@@ -57,7 +58,8 @@ impl Probe for Speed {
             "--speed: movement counter must increment across changes (got {c1} then {c2})"
         );
         println!(
-            "\n--speed PASS: {k1:?} 7.0->10.5->7.0 yd/s, counters {c1}->{c2}, both acks accepted              (stream survived)"
+            "\n--speed PASS: {k1:?} 7.0->10.5->7.0 yd/s, counters {c1}->{c2}, both acks accepted \
+             (stream survived)"
         );
         Ok(())
     }

@@ -940,7 +940,8 @@ mod tests {
             let swim_delta = 0.75 * (ours_before - reference);
             assert!(
                 swim_delta.abs() > 0.05,
-                "{label}: the two readings must actually differ, else this test asserts nothing                  (reference {reference}, form-derived {ours_before})"
+                "{label}: the two readings must actually differ, else this test asserts nothing \
+                 (reference {reference}, form-derived {ours_before})"
             );
             worst = worst.max(swim_delta.abs());
         }

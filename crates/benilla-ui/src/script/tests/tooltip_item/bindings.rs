@@ -348,7 +348,8 @@ fn set_inventory_item_renders_full_outside_compare() {
         assert(count(tt:SetInventoryItem("player", 16)) == 3,
             "occupied: three returns, got " .. count(tt:SetInventoryItem("player", 16)))
         local _, _, repairCost = tt:SetInventoryItem("player", 16)
-        assert(repairCost == 0, "repairCost is a NUMBER — the reference always pushes one; 0 INTERIM")
+        assert(repairCost == 0,
+            "repairCost is a NUMBER — the reference always pushes one; 0 as the cost is not fed")
         assert(count(tt:SetInventoryItem("player", 5)) == 3,
             "empty: three returns too, got " .. count(tt:SetInventoryItem("player", 5)))
         local hasItem, _, emptyCost = tt:SetInventoryItem("player", 5)

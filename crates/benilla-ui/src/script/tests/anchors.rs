@@ -216,7 +216,7 @@ fn a_region_resolves_even_when_its_owner_frame_has_no_rect() {
         host:SetWidth(400) host:SetHeight(200)
         host:SetPoint("BOTTOMLEFT", 100, 50)
 
-        -- the shape that was invisible: owner with NO size and NO SetPoint
+        -- an owner with NO size and NO SetPoint
         bare = CreateFrame("Frame", "BareOwner")
         mark = bare:CreateTexture("BareMark", "ARTWORK")
         mark:SetWidth(20) mark:SetHeight(10)
@@ -236,7 +236,7 @@ fn a_region_resolves_even_when_its_owner_frame_has_no_rect() {
     assert_eq!(
         s.eval::<Option<f32>>("return BareOwner:GetLeft()").unwrap(),
         None,
-        "an unpositioned frame has no rect; the fix must not invent one for it"
+        "an unpositioned frame has no rect"
     );
 
     // Host's BOTTOMLEFT (100,50) plus the (5,7) offset.
@@ -253,7 +253,7 @@ fn a_region_resolves_even_when_its_owner_frame_has_no_rect() {
     assert_eq!(
         s.eval::<Option<f32>>("return SizedMark:GetLeft()").unwrap(),
         Some(105.0),
-        "a sized owner's region must be unaffected by the fix"
+        "a sized owner's region resolves the same"
     );
 }
 

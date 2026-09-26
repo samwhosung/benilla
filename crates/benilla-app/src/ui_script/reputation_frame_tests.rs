@@ -530,7 +530,7 @@ fn the_watch_bar_shows_the_watched_factions_progress_and_swaps_at_max_level() {
     s.set_unit("player", Some(player(40)));
     assert!(
         !shown(&mut s, "ReputationWatchBar"),
-        "nothing watched: the bar stays down, as it has since it was a stub"
+        "nothing watched: the bar stays down"
     );
 
     // Ironforge is rep slot 20; watching it is a server field, so it rides the push.

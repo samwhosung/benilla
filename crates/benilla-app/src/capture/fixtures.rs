@@ -69,7 +69,9 @@ pub(super) fn seed_ui_fixture(
     // exits non-zero, as the window-size refusal does.
     if script.is_none() {
         error!(
-            "capture: REFUSING this capture — scenario {:?} declares a UI fixture but no script              VM exists, so its window cannot be opened and the shot would be a UI-less world              wearing the scenario's name.",
+            "capture: REFUSING this capture — scenario {:?} declares a UI fixture but no script \
+             VM exists, so its window cannot be opened and the shot would be a UI-less world \
+             wearing the scenario's name.",
             scenario.name
         );
         exit.write(AppExit::error());

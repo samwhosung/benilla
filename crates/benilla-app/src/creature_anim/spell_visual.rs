@@ -191,7 +191,7 @@ pub(crate) struct MissileSpawn {
     pub(crate) ground_aim: Option<Vec3>,
     /// The caster's ranged fallback visual, carried to arrival when the caster may be gone.
     pub(crate) weapon_visual: Option<u32>,
-    /// `SpellVisual` field 10: the sound the projectile loops in flight (`CMissile+0x44`).
+    /// `SpellVisual` field 10: the sound the projectile loops in flight (`CMissile+0x40`).
     pub(crate) missile_sound: Option<u32>,
     /// Launch at the cast animation's release event (`0x5ffbd0` → `0x60c940`), not at GO; the
     /// reference launches at GO only when the cast kit plays no body animation (`0x6e7a70`).

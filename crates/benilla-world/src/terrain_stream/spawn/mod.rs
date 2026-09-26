@@ -565,7 +565,8 @@ pub(super) fn spawn_loaded_placements(
                         // Once per burst, not per prop: a city WMO can flood thousands in a frame.
                         let (live, peak) = probes.occupancy();
                         warn_once!(
-                            "interior-prop probe table full (live {live}, peak {peak});                              overflowing props fall back to exterior light"
+                            "interior-prop probe table full (live {live}, peak {peak}); \
+                             overflowing props fall back to exterior light"
                         );
                     }
                     slot
