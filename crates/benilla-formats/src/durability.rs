@@ -25,6 +25,18 @@ pub struct DurabilityTables {
 }
 
 impl DurabilityTables {
+    /// Tables from explicit rows, for tests and tools: item level → the 29 cost columns, and
+    /// quality row id → multiplier.
+    pub fn from_rows(
+        costs: impl IntoIterator<Item = (u32, Vec<u32>)>,
+        qualities: impl IntoIterator<Item = (u32, f32)>,
+    ) -> Self {
+        Self {
+            costs: costs.into_iter().collect(),
+            qualities: qualities.into_iter().collect(),
+        }
+    }
+
     /// The per-point cost for a class and subclass at `item_level`, `None` when unrepairable.
     fn column(&self, item_level: u32, class: u32, subclass: u32) -> Option<u32> {
         let row = self.costs.get(&item_level)?;

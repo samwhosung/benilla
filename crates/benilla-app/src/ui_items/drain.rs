@@ -219,25 +219,24 @@ pub(super) fn drain_container_uses(
     mut ladder: crate::spell::CastLadder,
     mut ui_errors: ResMut<crate::ui_action::UiErrorKeys>,
     mut gate: crate::ui_bind_confirm::BindGate,
+    mut purse: crate::ui_merchant::RepairPurse,
 ) {
     let Some(mut script) = script else {
         return;
     };
-    // Repair-mode clicks (the reference's `0x4f9c7b` route) repair the one item, sounding
-    // `ITEM_REPAIR` as it goes out (`0x4f9ce4`). The reference's affordability check before that
-    // (error 0x25, silent) is not built: our costs lack its reputation discount, so the server
-    // refuses instead.
+    let me = self_q.iter().next();
+    // Repair-mode clicks (the reference's `0x4f9c7b` route) repair the one item: the purse test
+    // first (`0x4f9cc8`), then `ITEM_REPAIR` as it goes out (`0x4f9ce4`).
     for (bag, slot) in script.take_container_repairs() {
-        let Some(vendor) = merchant.vendor else {
+        let (Some(vendor), Some(me)) = (merchant.vendor, me) else {
             continue;
         };
         let slot0 = u8::try_from(slot.saturating_sub(1)).unwrap_or(0);
-        let item_guid = self_q
-            .iter()
-            .next()
-            .and_then(|store| slot_guid(&store.0, bag, slot0, &ladder.objects));
-        match item_guid {
+        match slot_guid(&me.0, bag, slot0, &ladder.objects) {
             Some(guid) => {
+                if purse.refuses(&mut script, &merchant, me, [guid]) {
+                    continue;
+                }
                 debug!("ui_items: repair lua bag {bag} slot {slot} (item {guid:#x})");
                 script.queue_sound_kit("ITEM_REPAIR");
                 let _ = ladder.commands.0.send(ClientCommand::RepairItem {
@@ -250,17 +249,17 @@ pub(super) fn drain_container_uses(
     }
     // The paper doll's repair clicks (`0x4c7714`, `0x4c79c4`), the same arm on a worn item.
     for id in script.take_inventory_repairs() {
-        let Some(vendor) = merchant.vendor else {
+        let (Some(vendor), Some(me)) = (merchant.vendor, me) else {
             continue;
         };
-        let item_guid = u8::try_from(id.wrapping_sub(1)).ok().and_then(|slot0| {
-            self_q
-                .iter()
-                .next()
-                .and_then(|store| slot_guid(&store.0, EQUIPMENT_BAG, slot0, &ladder.objects))
-        });
+        let item_guid = u8::try_from(id.wrapping_sub(1))
+            .ok()
+            .and_then(|slot0| slot_guid(&me.0, EQUIPMENT_BAG, slot0, &ladder.objects));
         match item_guid {
             Some(guid) if (1..=19).contains(&id) => {
+                if purse.refuses(&mut script, &merchant, me, [guid]) {
+                    continue;
+                }
                 debug!("ui_items: repair worn lua slot {id} (item {guid:#x})");
                 script.queue_sound_kit("ITEM_REPAIR");
                 let _ = ladder.commands.0.send(ClientCommand::RepairItem {
@@ -756,6 +755,8 @@ mod tests {
             .init_resource::<crate::spell::SpellModifiers>()
             .init_resource::<crate::ui_action::CastErrors>()
             .init_resource::<crate::ui_action::UiErrorKeys>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
             .init_resource::<crate::spell::AutoRepeatActive>()
             .init_resource::<crate::ui_tradeskill::TradeSkillOpens>()
             .init_resource::<crate::spell::targeting::SpellTargeting>()
@@ -935,6 +936,136 @@ mod tests {
                 "ITEM_REPAIR".into()
             )]
         );
+    }
+
+    /// What one repair click did: the packets, the VM's sounds, the `UI_ERROR_MESSAGE` lines and
+    /// the message rows queued for their sound.
+    struct RepairClick {
+        sent: Vec<ClientCommand>,
+        sounds: Vec<benilla_ui::script::SoundRequest>,
+        shown: Vec<String>,
+        sounded: Vec<&'static str>,
+    }
+
+    /// A repair-mode click on [`crate::ui_merchant::purse_fixture`]'s sword with `money` in the
+    /// purse: in backpack slot 1 through `UseContainerItem`, or `worn` in the main hand (slot 15)
+    /// through `PickupInventoryItem`.
+    fn click_to_repair_the_sword(money: u32, worn: bool) -> RepairClick {
+        use crate::ui_merchant::purse_fixture::{player, record_errors, seat, SWORD_ENTRY};
+        use benilla_protocol::field::FIELD_PLAYER_INV_SLOT_HEAD;
+        let (mut app, rx) = open_the_clam();
+        while rx.try_recv().is_ok() {} // drain the clam's own send
+        seat(app.world_mut());
+        let slot_field = if worn {
+            FIELD_PLAYER_INV_SLOT_HEAD + 2 * 15
+        } else {
+            F_PACK_SLOT_1
+        };
+        let me = app
+            .world_mut()
+            .query_filtered::<Entity, With<SelfPlayer>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut()
+            .entity_mut(me)
+            .insert(player(slot_field, money));
+        {
+            let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+            script.take_sounds();
+            record_errors(&script);
+            script.set_merchant(Some(benilla_ui::script::MerchantState {
+                can_repair: true,
+                ..Default::default()
+            }));
+            let click = if worn {
+                let mut slots: benilla_ui::script::InventorySlots = Default::default();
+                slots[16] = Some(benilla_ui::script::InvSlotView {
+                    item_id: SWORD_ENTRY,
+                    ..Default::default()
+                });
+                script.set_inventory_slots(slots);
+                "ShowRepairCursor() PickupInventoryItem(16)"
+            } else {
+                let mut bag = benilla_ui::script::ContainerState {
+                    num_slots: 16,
+                    ..Default::default()
+                };
+                bag.slots.insert(
+                    1,
+                    benilla_ui::script::ContainerSlot {
+                        item_id: SWORD_ENTRY,
+                        count: 1,
+                        ..Default::default()
+                    },
+                );
+                script.set_container(0, Some(bag));
+                "ShowRepairCursor() UseContainerItem(0, 1)"
+            };
+            script.run(click).unwrap();
+        }
+        app.world_mut()
+            .run_system_once(drain_container_uses)
+            .unwrap();
+        let sounded = crate::ui_merchant::purse_fixture::sounded(app.world());
+        let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+        RepairClick {
+            sent: rx.try_iter().collect(),
+            sounds: script.take_sounds(),
+            shown: crate::ui_merchant::purse_fixture::shown(&script),
+            sounded,
+        }
+    }
+
+    /// The repair arm's purse test, unsigned `cost > money` on the discounted cost: one copper
+    /// short shows `ERR_NOT_ENOUGH_MONEY` with its speech row, plays no `ITEM_REPAIR` and sends
+    /// nothing; exactly the cost, under the full price, sounds and sends.
+    fn the_purse_test_refuses_one_copper_short_and_pays_the_exact_cost(worn: bool) {
+        use crate::ui_merchant::purse_fixture::{sword_prices, NOT_ENOUGH_MONEY, SWORD, VENDOR};
+        let (full, discounted) = sword_prices();
+
+        let short = click_to_repair_the_sword(discounted - 1, worn);
+        assert!(
+            short.sent.is_empty(),
+            "short of {discounted}: nothing goes out"
+        );
+        assert!(short.sounds.is_empty(), "…no ITEM_REPAIR");
+        assert_eq!(short.shown, [NOT_ENOUGH_MONEY], "…the red line");
+        assert_eq!(
+            short.sounded,
+            ["ERR_NOT_ENOUGH_MONEY"],
+            "…and its row, which speaks line 0x28"
+        );
+
+        let exact = click_to_repair_the_sword(discounted, worn);
+        assert!(
+            matches!(
+                exact.sent.as_slice(),
+                [ClientCommand::RepairItem {
+                    vendor: VENDOR,
+                    item_guid: SWORD
+                }]
+            ),
+            "{discounted} in the purse pays the discounted {discounted}, short of the full {full}"
+        );
+        assert_eq!(
+            exact.sounds,
+            vec![benilla_ui::script::SoundRequest::KitName(
+                "ITEM_REPAIR".into()
+            )]
+        );
+        assert!(exact.shown.is_empty() && exact.sounded.is_empty());
+    }
+
+    /// `UseContainerItem`'s repair arm (`0x4fa22e`–`0x4fa236`, error `0x4fa23a`).
+    #[test]
+    fn a_bag_repair_the_purse_cannot_cover_is_refused_and_one_it_covers_is_sent() {
+        the_purse_test_refuses_one_copper_short_and_pays_the_exact_cost(false);
+    }
+
+    /// `PickupInventoryItem`'s repair arm (`0x4c775f`–`0x4c7766`, error `0x4c776a`).
+    #[test]
+    fn a_worn_repair_the_purse_cannot_cover_is_refused_and_one_it_covers_is_sent() {
+        the_purse_test_refuses_one_copper_short_and_pays_the_exact_cost(true);
     }
 
     /// The unwrap arm's other side: wrapping paper arms the wrap cursor and sends nothing.
@@ -1578,6 +1709,8 @@ mod bind_confirm_tests {
             .init_resource::<crate::spell::SpellModifiers>()
             .init_resource::<crate::ui_action::CastErrors>()
             .init_resource::<crate::ui_action::UiErrorKeys>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
             .init_resource::<crate::spell::AutoRepeatActive>()
             .init_resource::<crate::ui_tradeskill::TradeSkillOpens>()
             .init_resource::<crate::spell::targeting::SpellTargeting>()
