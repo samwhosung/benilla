@@ -19,7 +19,7 @@ const SECTION_UNDERWEAR: u8 = 4;
 /// The hair variation the type-6 binder falls back to: a literal 1 at `0x478445` and `0x4786f2`.
 const HAIR_SUBSTITUTE_VARIATION: u8 = 1;
 
-/// An atlas rect `(x, y, w, h)` in pixels.
+/// An atlas rect `(x, y, w, h)` in the reference 256² layout.
 type Tile = (u32, u32, u32, u32);
 
 /// The head strip of the 256² partition `0x475c50` writes: g8 the upper band, g9 the lower.
@@ -142,9 +142,10 @@ impl CharSections {
             .filter(|s| !s.is_empty())
     }
 
-    /// The body-skin atlas as one mip pyramid: the 256² base skin, the head overlays, the
+    /// The body-skin atlas as one mip pyramid: the base skin at its authored size, the head overlays, the
     /// underwear, the equipment by bodyslot − 2 and the guild emblem ([`equip_blits`]), each at its
-    /// tile per authored mip level (`0x475c50`, `0x4770f0`); `Ok(None)` without a base skin row.
+    /// tile scaled from the 256² layout per authored mip level (`0x475c50`, `0x4770f0`);
+    /// `Ok(None)` without a base skin row.
     ///
     /// Deviation: blends in 8-bit RGBA, not the client's RGB565 with 2-bit coverage, because that
     /// format only saves texture memory and loses precision.
@@ -487,32 +488,74 @@ pub fn equip_region_candidates(layer: usize, name: &str, sex: u8) -> [String; 2]
     ['U', letter].map(|c| format!("Item\\TextureComponents\\{dir}\\{name}_{c}.blp"))
 }
 
-/// Source-over blit of an overlay's mip pyramid at `tile`, level by level, from the overlay's own
-/// origin (`0x4770f0`: src `(0,0)`, extent the tile); an opaque texel copies, the client's REPLACE.
+/// Scale a rect from the reference 256² body layout to an authored skin atlas.
+/// HD patches keep the UV layout but replace the skin and region BLPs with larger images.
+/// Scaling both the origin and extent keeps clothing, head details and underwear on their regions.
+pub fn scale_body_tile((x, y, w, h): Tile, width: u32, height: u32) -> Tile {
+    let scale = |v: u32, size: u32| (u64::from(v) * u64::from(size) / 256) as u32;
+    (
+        scale(x, width),
+        scale(y, height),
+        scale(w, width),
+        scale(h, height),
+    )
+}
+
+/// Source-over composite of a region into its normalized body-atlas tile. Equal-sized regions
+/// keep the original per-level copy and authored mip limit, so stock textures are unchanged.
+/// For different resolutions, choose the closest authored source mip no smaller than the tile,
+/// then nearest-sample the entire region. This preserves authored colours/alpha without generating
+/// mips in gamma space, and reuses the last available source level if its pyramid is shorter.
 fn blit_over(dst: &mut BlpMipChain, src: &BlpMipChain, tile: Tile) {
     // Both chains must be decoded RGBA: DXT blocks would blend into garbage without failing.
     debug_assert!(
         dst.is_rgba8() && src.is_rgba8(),
         "character-skin compositing needs decoded chains on both sides"
     );
-    let (tx, ty, tw, th) = tile;
-    let levels = dst.mips.len().min(src.mips.len());
+    if src.mips.is_empty() {
+        return;
+    }
+    let (tx, ty, tw, th) = scale_body_tile(tile, dst.width, dst.height);
+    let same_size = (src.width, src.height) == (tw, th);
+    let levels = if same_size {
+        dst.mips.len().min(src.mips.len())
+    } else {
+        dst.mips.len()
+    };
     for i in 0..levels {
         let dw = (dst.width >> i).max(1) as usize;
         let dh = (dst.height >> i).max(1) as usize;
-        let sw = (src.width >> i).max(1) as usize;
-        let sh = (src.height >> i).max(1) as usize;
         let (ox, oy) = ((tx >> i) as usize, (ty >> i) as usize);
-        let cw = ((tw >> i).max(1) as usize)
-            .min(sw)
-            .min(dw.saturating_sub(ox));
-        let ch = ((th >> i).max(1) as usize)
-            .min(sh)
-            .min(dh.saturating_sub(oy));
-        let (d, s) = (&mut dst.mips[i], &src.mips[i]);
+        let (w, h) = ((tw >> i).max(1) as usize, (th >> i).max(1) as usize);
+        let source_level = if same_size {
+            i
+        } else {
+            (0..src.mips.len())
+                .take_while(|&level| {
+                    let (sw, sh) = src.mip_size(level as u32);
+                    sw as usize >= w && sh as usize >= h
+                })
+                .last()
+                .unwrap_or(0)
+        };
+        let (sw, sh) = src.mip_size(source_level as u32);
+        let (sw, sh) = (sw as usize, sh as usize);
+        let cw = w.min(dw.saturating_sub(ox));
+        let ch = h.min(dh.saturating_sub(oy));
+        let (d, s) = (&mut dst.mips[i], &src.mips[source_level]);
         for row in 0..ch {
+            let sy = if same_size {
+                row
+            } else {
+                ((2 * row + 1) * sh / (2 * h)).min(sh - 1)
+            };
             for col in 0..cw {
-                let si = (row * sw + col) * 4;
+                let sx = if same_size {
+                    col
+                } else {
+                    ((2 * col + 1) * sw / (2 * w)).min(sw - 1)
+                };
+                let si = (sy * sw + sx) * 4;
                 let di = ((oy + row) * dw + (ox + col)) * 4;
                 if si + 4 > s.len() || di + 4 > d.len() {
                     continue;
@@ -1162,7 +1205,12 @@ mod tests {
     fn blit_over_replaces_blends_and_clamps() {
         let mut dst = chain(2, 2, [128, 128, 128, 255].repeat(4));
 
-        blit_over(&mut dst, &chain(1, 1, vec![255, 0, 0, 255]), (0, 0, 1, 1));
+        // 1×1 opaque red at tile (0,0,1,1) → replaces pixel 0, leaves the rest.
+        blit_over(
+            &mut dst,
+            &chain(1, 1, vec![255, 0, 0, 255]),
+            (0, 0, 128, 128),
+        );
         assert_eq!(
             &dst.mips[0][0..4],
             &[255, 0, 0, 255],
@@ -1174,8 +1222,12 @@ mod tests {
             "neighbour untouched"
         );
 
-        // Half-alpha blue over grey: R≈64, B≈191.
-        blit_over(&mut dst, &chain(1, 1, vec![0, 0, 255, 128]), (1, 1, 1, 1));
+        // 1×1 half-alpha blue at (1,1) → blends 50/50 with grey: R≈64, B≈191, stays opaque.
+        blit_over(
+            &mut dst,
+            &chain(1, 1, vec![0, 0, 255, 128]),
+            (128, 128, 128, 128),
+        );
         let px = &dst.mips[0][12..16];
         assert!((px[0] as i32 - 64).abs() <= 1, "blended R ≈ 128·(1−a)");
         assert!(
@@ -1185,11 +1237,122 @@ mod tests {
         assert_eq!(px[3], 255, "over an opaque base the result stays opaque");
 
         let before = dst.mips[0].clone();
-        blit_over(&mut dst, &chain(1, 1, vec![1, 2, 3, 0]), (0, 0, 1, 1));
+        blit_over(&mut dst, &chain(1, 1, vec![1, 2, 3, 0]), (0, 0, 128, 128));
         assert_eq!(dst.mips[0], before, "transparent texel is a no-op");
     }
 
-    /// On the shipped files a Human male's head and pelvis tiles change, and the torso does not.
+    /// Give each authored level a different colour so mip selection is observable.
+    fn coloured_mips(width: u32, height: u32, levels: usize) -> BlpMipChain {
+        BlpMipChain {
+            width,
+            height,
+            texels: crate::BlpTexels::Rgba8Unorm,
+            mips: (0..levels)
+                .map(|i| {
+                    [100 + i as u8, 20, 30, 255]
+                        .repeat(((width >> i).max(1) * (height >> i).max(1)) as usize)
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn blit_over_scales_hd_regions_at_every_mip() {
+        // Reforged's 1024² skin and 512×256 torso. Painting at x=128 used to put
+        // this garment on the arm; the torso actually starts at x=512.
+        let mut dst = coloured_mips(1024, 1024, 10);
+        for mip in &mut dst.mips {
+            mip.fill(0);
+        }
+        let src = coloured_mips(512, 256, 10);
+        blit_over(&mut dst, &src, TILE_G3);
+        for (i, mip) in dst.mips.iter().enumerate() {
+            let width = (1024 >> i).max(1);
+            let left = 512 >> i;
+            let right = left + (512 >> i).max(1);
+            let bottom = (256 >> i).max(1);
+            for (n, pixel) in mip.as_chunks::<4>().0.iter().enumerate() {
+                let (x, y) = (n % width, n / width);
+                let expected = if (left..right).contains(&x) && y < bottom {
+                    [100 + i as u8, 20, 30, 255]
+                } else {
+                    [0; 4]
+                };
+                assert_eq!(*pixel, expected, "mip {i}, pixel ({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn blit_over_preserves_stock_texels_and_authored_mip_limit() {
+        let mut dst = coloured_mips(256, 256, 8);
+        for mip in &mut dst.mips {
+            mip.fill(0);
+        }
+        let src = coloured_mips(128, 64, 7);
+        blit_over(&mut dst, &src, TILE_G3);
+        for (i, source) in src.mips.iter().enumerate() {
+            let width = 256 >> i;
+            let left = 128 >> i;
+            for (row, pixels) in source.chunks_exact(left * 4).enumerate() {
+                let start = (row * width + left) * 4;
+                assert_eq!(
+                    &dst.mips[i][start..start + pixels.len()],
+                    pixels,
+                    "stock mip {i}, row {row} must copy authored texels verbatim"
+                );
+                assert!(dst.mips[i][row * width * 4..start].iter().all(|b| *b == 0));
+            }
+        }
+        // The original compositor stopped at the end of the overlay's pyramid.
+        assert_eq!(dst.mips[7], vec![0; 2 * 2 * 4]);
+    }
+
+    #[test]
+    fn blit_over_aligns_authored_mips_for_mixed_resolutions() {
+        // Stock overlays on an HD skin, and art larger than the skin.
+        // The latter also checks reuse of a short mip chain.
+        for (sw, sh, levels, offset) in [(128, 64, 8, -2), (1024, 512, 3, 1)] {
+            let mut dst = coloured_mips(1024, 1024, 10);
+            let src = coloured_mips(sw, sh, levels);
+            blit_over(&mut dst, &src, TILE_G5);
+            for (i, mip) in dst.mips.iter().enumerate() {
+                let width = (1024 >> i).max(1);
+                // Bottom-right of the pelvis tile, well beyond the old 256² corner.
+                let x = (512 >> i) + (512 >> i).max(1) - 1;
+                let y = (384 >> i) + (256 >> i).max(1) - 1;
+                let at = (y * width + x) * 4;
+                let source_level = (i as i32 + offset).max(0).min(levels as i32 - 1) as u8;
+                assert_eq!(
+                    &mip[at..at + 4],
+                    &[100 + source_level, 20, 30, 255],
+                    "source {sw}×{sh}, destination mip {i}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn blit_over_resamples_the_whole_overlay() {
+        let mut dst = chain(1024, 1024, vec![0; 1024 * 1024 * 4]);
+        let src = chain(2, 1, vec![255, 0, 0, 255, 0, 0, 255, 255]);
+        blit_over(&mut dst, &src, TILE_G3);
+        for (x, expected) in [
+            (512, [255, 0, 0, 255]),
+            (767, [255, 0, 0, 255]),
+            (768, [0, 0, 255, 255]),
+            (1023, [0, 0, 255, 255]),
+        ] {
+            let at = (255 * 1024 + x) * 4;
+            assert_eq!(&dst.mips[0][at..at + 4], &expected, "torso column {x}");
+        }
+    }
+
+    /// End-to-end regression on the **real** build-5875 files: compositing a Human-male body must yield
+    /// a 256² mip pyramid whose head (g8/g9) + pelvis (g5) tiles are overlaid from the base, while a
+    /// control tile that carries no naked-body overlay (g3) is untouched. Guards the section→tile map +
+    /// the CharSections schema against a silent break (a wrong tile or a shifted column would move/lose
+    /// these diffs). Skips when the client data isn't present.
     #[test]
     fn composite_body_overlays_land_on_real_human_male() {
         let data = crate::wow_data_or_skip!();
@@ -1329,11 +1492,6 @@ mod tests {
             "Character\\NightElf\\Female\\NightElfFemaleNakedTorsoSkin00_00.blp",
         )
         .expect("read naked torso");
-        assert_eq!(
-            (torso.width, torso.height),
-            (128, 64),
-            "the sheet is authored exactly tile-sized"
-        );
         let comp = cs
             .composite_body(
                 &mut chain, race, sex, skin, 0, 0, 0, 0, [None; 8], None, false,
@@ -1341,9 +1499,14 @@ mod tests {
             .expect("composite ok")
             .expect("base skin row present");
 
-        let (tx, ty, tw, th) = TILE_G3;
+        let (tx, ty, tw, th) = scale_body_tile(TILE_G3, comp.width, comp.height);
+        assert_eq!(
+            (torso.width, torso.height),
+            (tw, th),
+            "the sheet fits the skin's torso tile"
+        );
         for row in 0..th {
-            let d = ((ty + row) * 256 + tx) as usize * 4;
+            let d = ((ty + row) * comp.width + tx) as usize * 4;
             let s = (row * tw) as usize * 4;
             assert_eq!(
                 &comp.mips[0][d..d + tw as usize * 4],
@@ -1591,6 +1754,16 @@ mod tests {
     /// tiles, leave Hand alone, and the boots cover the pants on LegLower.
     #[test]
     fn composite_body_equipment_layers_land_on_real_human_male() {
+        check_equipment_layers(1, 0);
+    }
+
+    #[test]
+    fn composite_body_equipment_layers_land_on_real_night_elf_female() {
+        check_equipment_layers(4, 1);
+    }
+
+    /// The same normalized regions must be dressed on stock and Reforged skins.
+    fn check_equipment_layers(race: u8, sex: u8) {
         let data = crate::wow_data_or_skip!();
         let mut chain = crate::open_chain(&data).expect("open chain");
         let cs = CharSections::load(&mut chain).expect("load CharSections");
@@ -1601,7 +1774,7 @@ mod tests {
             items.get(10141).expect("boots display"),
         );
         let mut compose = |equipment: [Option<&ItemDisplay>; 8]| {
-            cs.composite_body(&mut chain, 1, 0, 3, 0, 1, 0, 0, equipment, None, false)
+            cs.composite_body(&mut chain, race, sex, 3, 0, 1, 0, 0, equipment, None, false)
                 .expect("composite ok")
                 .expect("base skin row present")
         };
@@ -1615,25 +1788,28 @@ mod tests {
         let dressed = compose(equipment);
 
         let changed = |a: &BlpMipChain, b: &BlpMipChain, t: Tile| {
-            let (x, y, w, h) = t;
+            let (x, y, w, h) = scale_body_tile(t, a.width, a.height);
             (y..y + h)
                 .flat_map(|row| (x..x + w).map(move |col| (row, col)))
                 .filter(|&(row, col)| {
-                    let i = ((row * 256 + col) * 4) as usize;
+                    let i = ((row * a.width + col) * 4) as usize;
                     a.mips[0][i..i + 4] != b.mips[0][i..i + 4]
                 })
                 .count()
         };
         assert!(
-            changed(&naked, &dressed, EQUIP_TILES[3]) > 2000,
+            changed(&naked, &dressed, EQUIP_TILES[3])
+                > (dressed.width * dressed.height / 32) as usize,
             "shirt repaints TorsoUpper (g3)"
         );
         assert!(
-            changed(&naked, &dressed, EQUIP_TILES[5]) > 2000,
+            changed(&naked, &dressed, EQUIP_TILES[5])
+                > (dressed.width * dressed.height / 32) as usize,
             "pants repaint LegUpper (g5)"
         );
         assert!(
-            changed(&naked, &dressed, EQUIP_TILES[7]) > 1000,
+            changed(&naked, &dressed, EQUIP_TILES[7])
+                > (dressed.width * dressed.height / 64) as usize,
             "boots repaint Foot (g7)"
         );
         assert_eq!(
@@ -1642,7 +1818,8 @@ mod tests {
             "nothing touches Hand (g2)"
         );
         assert!(
-            changed(&pants_only, &dressed, EQUIP_TILES[6]) > 1000,
+            changed(&pants_only, &dressed, EQUIP_TILES[6])
+                > (dressed.width * dressed.height / 64) as usize,
             "boots stack over the pants' LegLower (g6)"
         );
     }

@@ -536,7 +536,7 @@ pub(super) fn attach_entity_visuals(
                 worn.helm,
                 worn.tabard_preview,
             );
-            let visible_geosets: Option<Vec<u16>> = look.as_ref().and_then(|l| {
+            let visible_geosets = look.as_ref().and_then(|l| {
                 let cg = characters.as_deref()?;
                 Some(cg.0.visible_geosets(
                     l.race,
