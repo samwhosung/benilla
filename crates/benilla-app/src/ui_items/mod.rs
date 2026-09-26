@@ -28,7 +28,7 @@ mod net;
 pub(crate) use drain::send_auto_equip;
 use drain::{
     drain_bag_autostores, drain_container_autoequips, drain_container_destroys,
-    drain_container_moves, drain_container_uses, drain_inventory_repairs, drain_inventory_uses,
+    drain_container_moves, drain_container_uses, drain_inventory_uses,
 };
 use feed::{
     feed_containers, feed_item_sets, feed_item_stats, feed_player_req, feed_random_properties,
@@ -959,8 +959,6 @@ impl Plugin for UiItemsPlugin {
                     drain_bag_autostores.after(UiInput),
                     // `UseInventoryItem`: `CMSG_USE_ITEM` at the equipped position.
                     drain_inventory_uses.after(UiInput),
-                    // `PickupInventoryItem` under `ShowRepairCursor`: `CMSG_REPAIR_ITEM`.
-                    drain_inventory_repairs.after(UiInput),
                     // The soulbind confirmations' answers (`EquipPendingItem`,
                     // `CancelPendingEquip`, `ConfirmBindOnUse`). A dialog is answered in a later
                     // frame than it was raised, so no order against the other drains is needed.

@@ -205,44 +205,6 @@ pub(super) fn drain_inventory_uses(
     }
 }
 
-/// Paper-doll repair-mode clicks (`0x4c7714`): `ITEM_REPAIR` and `CMSG_REPAIR_ITEM` with the worn
-/// item's guid, as the bag route above.
-pub(super) fn drain_inventory_repairs(
-    script: Option<NonSendMut<UiScript>>,
-    self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    merchant: Res<crate::ui_merchant::MerchantOpen>,
-    objects: Objects,
-    commands: Res<NetCommands>,
-) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let Some(vendor) = merchant.vendor else {
-        return;
-    };
-    for id in script.take_inventory_repairs() {
-        if !(1..=19).contains(&id) {
-            debug!("ui_items: repair equipped lua slot {id} out of range — ignored");
-            continue;
-        }
-        let slot = (id - 1) as u8;
-        match self_q
-            .iter()
-            .next()
-            .and_then(|store| slot_guid(&store.0, EQUIPMENT_BAG, slot, &objects))
-        {
-            Some(item_guid) => {
-                debug!("ui_items: repair equipped lua slot {id} (item {item_guid:#x})");
-                script.queue_sound_kit("ITEM_REPAIR");
-                let _ = commands
-                    .0
-                    .send(ClientCommand::RepairItem { vendor, item_guid });
-            }
-            None => debug!("ui_items: repair equipped empty lua slot {id} — ignored"),
-        }
-    }
-}
-
 pub(super) fn drain_container_uses(
     script: Option<NonSendMut<UiScript>>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
@@ -284,6 +246,29 @@ pub(super) fn drain_container_uses(
                 });
             }
             None => debug!("ui_items: repair on empty slot (bag {bag} slot {slot}) — ignored"),
+        }
+    }
+    // The paper doll's repair clicks (`0x4c7714`, `0x4c79c4`), the same arm on a worn item.
+    for id in script.take_inventory_repairs() {
+        let Some(vendor) = merchant.vendor else {
+            continue;
+        };
+        let item_guid = u8::try_from(id.wrapping_sub(1)).ok().and_then(|slot0| {
+            self_q
+                .iter()
+                .next()
+                .and_then(|store| slot_guid(&store.0, EQUIPMENT_BAG, slot0, &ladder.objects))
+        });
+        match item_guid {
+            Some(guid) if (1..=19).contains(&id) => {
+                debug!("ui_items: repair worn lua slot {id} (item {guid:#x})");
+                script.queue_sound_kit("ITEM_REPAIR");
+                let _ = ladder.commands.0.send(ClientCommand::RepairItem {
+                    vendor,
+                    item_guid: guid,
+                });
+            }
+            _ => debug!("ui_items: repair on worn lua slot {id}, empty or out of range — ignored"),
         }
     }
     for (bag, slot) in script.take_container_uses() {
@@ -907,39 +892,41 @@ mod tests {
         const VENDOR: u64 = 0xF130_0000_0000_0042;
         const HELM: u64 = 0x4000_0000_0000_0777;
         let head = benilla_protocol::field::FIELD_PLAYER_INV_SLOT_HEAD;
-        let (tx, rx) = crossbeam_channel::unbounded();
-        let mut app = App::new();
-        app.init_resource::<crate::net::GuidIndex>()
-            .insert_resource(crate::ui_merchant::MerchantOpen {
-                vendor: Some(VENDOR),
-                items: Vec::new(),
-            })
-            .insert_resource(NetCommands(tx));
-        app.world_mut().spawn((
-            SelfPlayer,
-            ObjectStore(ObjectFields::from_pairs(&[
+        let (mut app, rx) = open_the_clam();
+        while rx.try_recv().is_ok() {} // drain the clam's own send
+        app.world_mut()
+            .resource_mut::<crate::ui_merchant::MerchantOpen>()
+            .vendor = Some(VENDOR);
+        let me = app
+            .world_mut()
+            .query_filtered::<Entity, With<SelfPlayer>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut()
+            .entity_mut(me)
+            .insert(ObjectStore(ObjectFields::from_pairs(&[
                 (head, HELM as u32),
                 (head + 1, (HELM >> 32) as u32),
-            ])),
-        ));
-        let mut script = UiScript::new().unwrap();
-        let mut slots: benilla_ui::script::InventorySlots = Default::default();
-        slots[1] = Some(benilla_ui::script::InvSlotView {
-            item_id: 7,
-            ..Default::default()
-        });
-        script.set_inventory_slots(slots);
-        script.set_merchant(Some(benilla_ui::script::MerchantState {
-            can_repair: true,
-            ..Default::default()
-        }));
-        script.take_sounds();
-        script
-            .run("ShowRepairCursor() PickupInventoryItem(1)")
-            .unwrap();
-        app.insert_non_send_resource(script);
+            ])));
+        {
+            let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+            script.take_sounds();
+            let mut slots: benilla_ui::script::InventorySlots = Default::default();
+            slots[1] = Some(benilla_ui::script::InvSlotView {
+                item_id: 7,
+                ..Default::default()
+            });
+            script.set_inventory_slots(slots);
+            script.set_merchant(Some(benilla_ui::script::MerchantState {
+                can_repair: true,
+                ..Default::default()
+            }));
+            script
+                .run("ShowRepairCursor() PickupInventoryItem(1)")
+                .unwrap();
+        }
         app.world_mut()
-            .run_system_once(drain_inventory_repairs)
+            .run_system_once(drain_container_uses)
             .unwrap();
 
         assert!(matches!(
