@@ -1,8 +1,9 @@
 //! `DurabilityCosts.dbc` and `DurabilityQuality.dbc`, behind the repair price the reference
 //! computes itself (`0x5da330`, wrapped by `0x4faf30`): points lost × the quality row
 //! `2·Quality + 1` × the item level's weapon or armor column by subclass, rounded half away from
-//! zero to at least 1, then × `(1 - discount)` rounded half to even. vmangos keys the quality row
-//! `(Quality + 1)·2` (`Player.cpp:4996`), so its charge may differ from the price shown.
+//! zero to at least 1, then × `f32(1 - discount)`, stored as f32 and rounded half to even. vmangos
+//! keys the quality row `(Quality + 1)·2` (`Player.cpp:4996`), so its charge may differ from the
+//! price shown.
 
 use std::collections::HashMap;
 
@@ -35,7 +36,8 @@ impl DurabilityTables {
         row.get(idx).copied()
     }
 
-    /// The displayed repair cost of one item in copper, after the vendor's reputation `discount`.
+    /// The displayed repair cost of one item in copper, `0x4faf30`, after `discount`, the price
+    /// discount `0x612b80` returns (0 with no merchant open), kept in f64 as the reference's `st0`.
     pub fn repair_cost(
         &self,
         points_lost: u32,
@@ -43,7 +45,7 @@ impl DurabilityTables {
         quality: u32,
         class: u32,
         subclass: u32,
-        discount: f32,
+        discount: f64,
     ) -> u32 {
         if points_lost == 0 {
             return 0;
@@ -57,13 +59,11 @@ impl DurabilityTables {
         let base = f64::from(points_lost) * f64::from(mult) * f64::from(col);
         // Half away from zero, as the reference's ±0.5 then `_ftol`, then at least 1.
         let per = ((base + 0.5).floor() as i64).max(1);
-        // The discount multiply rounds half to even.
-        let discounted = per as f64 * f64::from(1.0 - discount);
-        let f = discounted.floor();
-        let frac = discounted - f;
-        let up = frac > 0.5 || (frac == 0.5 && (f as i64) % 2 != 0);
-        let rounded = if up { f + 1.0 } else { f };
-        rounded.max(0.0) as u32
+        // `1 - discount` stored as an f32 (`0x4faf8f fsubr`, `0x4faf95 fstp dword`).
+        let factor = (1.0 - discount) as f32;
+        // The product stored as an f32 (`0x4fafaf`), then `fistp` rounds half to even (`0x4fafb5`).
+        let product = (per as f64 * f64::from(factor)) as f32;
+        f64::from(product).round_ties_even() as u32
     }
 }
 
@@ -154,5 +154,32 @@ mod tests {
         assert_eq!(t.repair_cost(41, 23, 1, 2, 7, 0.5), 20);
         assert_eq!(t.repair_cost(43, 23, 1, 2, 7, 0.5), 22);
         assert_eq!(t.repair_cost(42, 23, 1, 2, 7, 0.5), 21);
+    }
+
+    /// `0x4faf30` at the discounts `0x612b80` returns: the f32 multiplier and the f32 product make
+    /// a near-tie an exact `.5`, which then rounds to even where the f64 shortcut rounds down.
+    #[test]
+    fn the_discounted_cost_stores_the_multiplier_and_the_product_as_f32() {
+        let mut t = tables();
+        t.qualities.insert(3, 1.0);
+        let mut row = vec![0u32; 29];
+        row[7] = 1; // 1 copper/point so points == the base price
+        t.costs.insert(23, row);
+        let cost = |base: u32, disc: f64| t.repair_cost(base, 23, 1, 2, 7, disc);
+        let (d05, d10) = (f64::from(0.05f32), f64::from(0.1f32));
+        // 0.1: f32(0.9) = 0.89999997615814208984375; × 15 = 13.49999964237213134765625, stored
+        // 13.5, to even 14. The f64 shortcut `rint(15 × 0.8999999985)` gives 13.
+        assert_eq!(cost(15, d10), 14);
+        // 0.05: f32(0.95) = 0.949999988079071044921875; × 10 = 9.49999988079071044921875, stored
+        // 9.5, to even 10. The f64 shortcut gives 9.
+        assert_eq!(cost(10, d05), 10);
+        // 0.15, the f64 sum: f32(0.85) = 0.85000002384185791015625; × 30 =
+        // 25.5000007152557373046875, stored 25.5, to even 26. The f64 shortcut gives 25.
+        assert_eq!(cost(30, d10 + d05), 26);
+        // 0.15 at 786437: × f32(0.85) = 668471.46875012, stored 668471.5, to even 668472; the
+        // taxi's f64 multiplier stores 668471.4375 there, so 668471.
+        assert_eq!(cost(786_437, d10 + d05), 668_472);
+        // No discount: the base itself.
+        assert_eq!(cost(15, 0.0), 15);
     }
 }

@@ -34,6 +34,7 @@ pub(crate) fn hover_probe_armed() -> bool {
     hover_probe::armed()
 }
 pub(crate) mod lock;
+mod price_discount;
 mod relations;
 mod reticle;
 // `pub(crate)` for the hover inspector too: its faction catalog feeds `go_highlightable`.
@@ -55,6 +56,10 @@ pub(crate) use cursor_mode::{
 pub(crate) use lock::GO_FLAG_LOCKED;
 // This frame's combat-flash verdict, for the ring's material and the nameplate colour gate.
 pub(crate) use flash::CombatFlash;
+// The discount `0x612b80` the repair cost and the taxi fare take off their DBC prices.
+pub(crate) use price_discount::vendor_price_discount;
+#[cfg(test)]
+pub(crate) use price_discount::{stormwind_fixture, HUMAN_WARRIOR};
 // The attack-with-no-target request, and the same nearest-enemy core called synchronously for the
 // pet bar's Attack, whose order must leave in the frame it was pressed.
 pub(crate) use relations::{can_assist, can_attack, can_interact};
