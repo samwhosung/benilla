@@ -155,16 +155,16 @@ pub(super) fn auto_equip_cursor_item(model: &mut Model) -> bool {
     }
 }
 
-/// `UseInventoryItem(id)`, the doll slot's right-click (`PaperDollFrame.lua:658-659`): the app
-/// sends `CMSG_USE_ITEM` with bag 255 and the 0-based slot, dropping an empty slot unsent. In
-/// repair mode the cursor clears first (`0x4c79a9`) and a worn item is repaired, locked or not
-/// (`0x4c79c4`): a held payload goes back, never placed.
+/// `UseInventoryItem(id)`, the doll slot's right-click (`PaperDollFrame.lua:658-659`): the cursor
+/// clears before the slot is read (`0x4c79a9`), so a held payload goes back, never placed; then
+/// the app sends `CMSG_USE_ITEM` with bag 255 and the 0-based slot, dropping an empty slot unsent,
+/// or in repair mode a worn item is repaired, locked or not (`0x4c79c4`).
 pub(super) fn use_inventory_item(model: &mut Model, id: u32) {
+    super::clear_cursor(model);
     if !model.repair_mode {
         model.inventory_uses.push(id);
         return;
     }
-    super::clear_cursor(model);
     if (1..=19).contains(&id)
         && model
             .inv_slot("player", id as usize)
@@ -600,6 +600,25 @@ mod tests {
         s.run("UseInventoryItem(19)").unwrap();
         assert_eq!(s.take_inventory_uses(), vec![1, 19]);
         assert!(s.take_inventory_uses().is_empty(), "drained");
+    }
+
+    /// A right-click clears the cursor before it reads the slot (`0x4c79a9`): a held item goes
+    /// back, and the worn item is still used.
+    #[test]
+    fn right_click_puts_a_held_item_back_then_uses_the_worn_one() {
+        let mut s = UiScript::new().unwrap();
+        s.set_inventory_slots(doll_slots());
+        s.run("PickupInventoryItem(11)").unwrap();
+        assert!(s.cursor_item().is_some());
+
+        s.run("UseInventoryItem(19)").unwrap();
+        assert!(s.cursor_payload().is_none(), "the ring went back");
+        assert!(
+            !s.eval::<bool>("return IsInventoryItemLocked(11)").unwrap(),
+            "its slot unlocks"
+        );
+        assert!(s.take_container_moves().is_empty(), "never placed");
+        assert_eq!(s.take_inventory_uses(), vec![19]);
     }
 
     #[test]

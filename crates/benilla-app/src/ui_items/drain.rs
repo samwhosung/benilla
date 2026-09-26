@@ -272,14 +272,6 @@ pub(super) fn drain_container_uses(
         }
     }
     for (bag, slot) in script.take_container_uses() {
-        // Any right-click, a sell or a deposit included, cancels an armed gift wrap: the
-        // reference's use path clears the cursor first (`0x4fa198`).
-        if let Some(w) = script.cancel_gift_wrap() {
-            debug!(
-                "ui_items: right-click cancels the armed gift wrap on bag {} slot {}",
-                w.bag, w.slot
-            );
-        }
         let slot0 = u8::try_from(slot.saturating_sub(1)).ok();
         // With a merchant open, the click sells the whole stack (`CMSG_SELL_ITEM`, count 0).
         if let (true, Some(vendor)) = (merchant.is_open(), merchant.vendor) {

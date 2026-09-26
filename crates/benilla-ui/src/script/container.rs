@@ -199,18 +199,6 @@ impl super::UiScript {
         cursor::queue_lock_changed(&mut model, bag, slot);
     }
 
-    /// Disarm a gift wrap, unlocking the paper and resetting the cursor, but keeping any held
-    /// payload, which `ClearCursor` would drop. How the reference's right-click cancels a wrap is
-    /// untraced.
-    pub fn cancel_gift_wrap(&mut self) -> Option<PendingWrap> {
-        let mut model = self.model_mut();
-        let wrap = model.pending_wrap.take()?;
-        cursor::queue_lock_changed(&mut model, wrap.bag, wrap.slot);
-        model.ui_cursor = None;
-        model.ui_cursor_dirty = true;
-        Some(wrap)
-    }
-
     /// The armed gift wrap, if any; the app reads it to tell whether a right-click cancels one.
     pub fn gift_wrap_armed(&self) -> Option<PendingWrap> {
         self.model_ref().pending_wrap
@@ -623,10 +611,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "UseContainerItem",
         lua.create_function(|lua, (bag, slot, _rest): (i64, u32, mlua::MultiValue)| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            // Every right-click clears the cursor before it reads the slot (`0x4fa198`): a held
+            // payload goes back, never placed, and an armed gift wrap is cancelled.
+            cursor::clear_cursor(&mut model);
             if model.repair_mode {
-                // The right-click clears the cursor first (`0x4fa198`), then repairs the item in
-                // the slot (`0x4fa1a6`, `0x4fa1da`): a held payload goes back, never placed.
-                cursor::clear_cursor(&mut model);
+                // Then the item in the slot is repaired (`0x4fa1a6`, `0x4fa1da`).
                 let occupied = model
                     .containers
                     .get(&bag)
@@ -897,6 +886,39 @@ mod tests {
         s.run("UseContainerItem(0, 3, 'target')").unwrap();
         assert_eq!(s.take_container_uses(), vec![(0, 1), (0, 3)]);
         assert!(s.take_container_uses().is_empty(), "drained");
+    }
+
+    /// A right-click clears the cursor before it reads the slot (`0x4fa198`): a held item goes
+    /// back to its slot, unlocked, and the clicked item is still used.
+    #[test]
+    fn right_click_puts_a_held_item_back_then_uses_the_clicked_one() {
+        let mut s = UiScript::new().unwrap();
+        s.set_container(0, Some(backpack()));
+        s.run("PickupContainerItem(0, 1)").unwrap();
+        assert!(s.cursor_item().is_some());
+
+        s.run("UseContainerItem(0, 4)").unwrap();
+        assert!(s.cursor_payload().is_none(), "the held item went back");
+        assert!(
+            !s.eval::<bool>("local _, _, locked = GetContainerItemInfo(0, 1) return locked")
+                .unwrap(),
+            "its slot unlocks"
+        );
+        assert!(s.take_container_moves().is_empty(), "never placed");
+        assert_eq!(s.take_container_uses(), vec![(0, 4)]);
+    }
+
+    /// The same clear cancels an armed gift wrap (`0x495190` opens with `0x5edf10`), and the
+    /// clicked item is used, not wrapped.
+    #[test]
+    fn right_click_cancels_an_armed_gift_wrap_then_uses_the_clicked_one() {
+        let mut s = UiScript::new().unwrap();
+        s.set_container(0, Some(backpack()));
+        s.arm_gift_wrap(0, 1);
+        s.run("UseContainerItem(0, 4)").unwrap();
+        assert_eq!(s.gift_wrap_armed(), None);
+        assert!(s.take_container_wraps().is_empty(), "nothing wrapped");
+        assert_eq!(s.take_container_uses(), vec![(0, 4)]);
     }
 
     #[test]
