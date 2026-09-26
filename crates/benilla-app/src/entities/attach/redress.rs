@@ -132,7 +132,7 @@ pub(in crate::entities) fn redress_player_looks(
             worn.helm,
             worn.tabard_preview,
         );
-        let visible: Option<Vec<u16>> = look.as_ref().and_then(|l| {
+        let visible = look.as_ref().and_then(|l| {
             let cg = characters.as_deref()?;
             Some(cg.0.visible_geosets(l.race, l.sex, l.hair_style, l.facial_hair, &eg))
         });
