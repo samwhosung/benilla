@@ -2392,6 +2392,67 @@ fn the_chat_cache_restore_is_finished_before_player_login() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// `/afk` then `/dnd` through the real drain: every type but AFK clears a standing AFK first
+/// (`0x49f4f6 jne 0x49f3c7`), so `/dnd` (`0x15`) prints the clear and sends the empty `0x14` ahead
+/// of its own line and packet, three lines in all.
+#[test]
+fn afk_then_dnd_clears_the_afk_first() {
+    use crate::net::{ChatKind, ClientCommand, NetCommands};
+    use bevy::ecs::system::RunSystemOnce;
+
+    let mut world = bevy::prelude::World::new();
+    world.insert_non_send_resource(benilla_ui::script::UiScript::new().expect("VM"));
+    let (tx, rx) = crossbeam_channel::unbounded();
+    world.insert_resource(NetCommands(tx));
+    world.init_resource::<super::feed::ChatLog>();
+    world.init_resource::<super::away::AfkMirror>();
+    world.init_resource::<crate::cvars::Cvars>();
+    world.init_resource::<super::edit::ChannelState>();
+    // The five `GlobalStrings.lua` keys the away lines read, at their enUS values.
+    world
+        .non_send_resource::<benilla_ui::script::UiScript>()
+        .run(
+            r#"
+            MARKED_AFK_MESSAGE = "You are now AFK: %s"
+            CLEARED_AFK = "You are no longer AFK."
+            MARKED_DND = "You are now DND: %s."
+            DEFAULT_AFK_MESSAGE = "Away from Keyboard"
+            DEFAULT_DND_MESSAGE = "Do not Disturb"
+            SendChatMessage("", "AFK")
+            SendChatMessage("", "DND")
+            "#,
+        )
+        .expect("lua");
+    world
+        .run_system_once(super::input::drain_addon_chat_sends)
+        .expect("drain");
+
+    assert_eq!(
+        world.resource::<super::feed::ChatLog>().pending_lines(),
+        vec![
+            "You are now AFK: Away from Keyboard",
+            "You are no longer AFK.",
+            "You are now DND: Do not Disturb.",
+        ]
+    );
+    let sent: Vec<(ChatKind, String)> = rx
+        .try_iter()
+        .map(|c| match c {
+            ClientCommand::Chat { kind, text, .. } => (kind, text),
+            other => panic!("unexpected command {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        sent,
+        vec![
+            (ChatKind::Afk, "Away from Keyboard".into()),
+            (ChatKind::Afk, String::new()),
+            (ChatKind::Dnd, "Do not Disturb".into()),
+        ]
+    );
+    assert!(!world.resource::<super::away::AfkMirror>().is_afk());
+}
+
 /// `SendChatMessage`'s `CHANNEL` target through the real drain: `SStrToInt` into `0x49be50`
 /// (`0x49f4d9`-`0x49f4ea`), so the packet carries the numbered slot's name, and a number naming
 /// no confirmed slot, or a name, sends nothing at all.

@@ -1398,11 +1398,25 @@ pub(super) fn drain_addon_chat_sends(
         }
         // ── The away commands, and the AFK clear the other sends carry ───────────────────────
         //
-        // `SendChatMessage` (`0x49f1e0`): AFK and DND each have an arm ahead of the generic send,
-        // and every type but AFK (`0x14`) first clears a standing AFK. The system lines, the
-        // default text and the mirror are `super::away`'s.
+        // `SendChatMessage` (`0x49f1e0`): every type but AFK (`0x14`) first clears a standing AFK
+        // (`0x49f4f6 jne 0x49f3c7`), `/dnd` included; then AFK and DND each have an arm ahead of
+        // the generic send. The system lines, the default text and the mirror are `super::away`'s.
         let strings = |key: &str| crate::ui_chat::combat::global_string(&script, key);
         let wire = kind.wire();
+        if !matches!(wire, crate::net::ChatKind::Afk) {
+            if let Some(line) =
+                super::away::auto_clear_line(*mirror, auto_clear_afk(&cvars), &strings)
+            {
+                super::away::push_system(&mut chat_log, line);
+                mirror.0 = 0;
+                // The empty `0x14` that tells the server, ahead of the message's own packet.
+                let _ = commands.0.send(ClientCommand::Chat {
+                    kind: crate::net::ChatKind::Afk,
+                    target: None,
+                    text: String::new(),
+                });
+            }
+        }
         let text = match wire {
             crate::net::ChatKind::Afk => {
                 let out = super::away::afk_line(&send.text, *mirror, &strings);
@@ -1415,20 +1429,6 @@ pub(super) fn drain_addon_chat_sends(
                 out.body
             }
             crate::net::ChatKind::Dnd => {
-                // `/dnd` is type `0x15`, so the reference clears a standing AFK before it marks DND
-                // (`0x49f3d6` skips only type `0x14`). This arm matches before `_`, so the clear has
-                // to happen here or a typed `/afk` then `/dnd` never sends the empty AFK packet.
-                if let Some(line) =
-                    super::away::auto_clear_line(*mirror, auto_clear_afk(&cvars), &strings)
-                {
-                    super::away::push_system(&mut chat_log, line);
-                    mirror.0 = 0;
-                    let _ = commands.0.send(ClientCommand::Chat {
-                        kind: crate::net::ChatKind::Afk,
-                        target: None,
-                        text: String::new(),
-                    });
-                }
                 // DND has no mirror (`0x49f3f0`): the live descriptor bit.
                 let out = super::away::dnd_line(&send.text, is_dnd(&self_q), &strings);
                 if let Some(line) = out.line {
@@ -1436,24 +1436,7 @@ pub(super) fn drain_addon_chat_sends(
                 }
                 out.body
             }
-            // Any other type: clear a standing AFK first (`0x49f3d6` skips only type `0x14`), then
-            // send the line's own packet. `/dnd` is type `0x15` and is handled above, where the
-            // same clear runs before the DND line.
-            _ => {
-                if let Some(line) =
-                    super::away::auto_clear_line(*mirror, auto_clear_afk(&cvars), &strings)
-                {
-                    super::away::push_system(&mut chat_log, line);
-                    mirror.0 = 0;
-                    // The empty `0x14` that tells the server, alongside the message's own packet.
-                    let _ = commands.0.send(ClientCommand::Chat {
-                        kind: crate::net::ChatKind::Afk,
-                        target: None,
-                        text: String::new(),
-                    });
-                }
-                send.text
-            }
+            _ => send.text,
         };
         let cmd = ClientCommand::Chat {
             kind: wire,

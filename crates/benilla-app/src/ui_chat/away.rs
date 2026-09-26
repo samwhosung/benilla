@@ -314,36 +314,6 @@ mod tests {
         );
     }
 
-    /// `/afk` then `/dnd` prints three lines: the auto-clear skips only type `0x14` (`0x49f4f6`),
-    /// so `/dnd` (`0x15`) clears AFK first.
-    #[test]
-    fn afk_then_dnd_prints_three_lines() {
-        let mut mirror = AfkMirror::default();
-        let mut out = Vec::new();
-
-        let first = afk_line("", mirror, &strings);
-        out.push(first.line.clone().unwrap());
-        mirror.0 = first.mirror.unwrap();
-
-        // `/dnd` takes the generic path first: the clear fires because the mirror is set.
-        let cleared = auto_clear_line(mirror, true, &strings).expect("the implicit clear fires");
-        out.push(cleared);
-        mirror.0 = 0;
-        // Then the DND arm: `0x49f3c7` sits above the type dispatch.
-        assert!(!mirror.is_afk(), "the clear really cleared it");
-        out.push(dnd_line("", false, &strings).line.unwrap());
-
-        assert_eq!(
-            out,
-            vec![
-                "You are now AFK: Away from Keyboard",
-                "You are no longer AFK.",
-                "You are now DND: Do not Disturb.",
-            ],
-            "the reference capture, line for line"
-        );
-    }
-
     #[test]
     fn the_auto_clear_is_gated_both_ways() {
         assert!(
