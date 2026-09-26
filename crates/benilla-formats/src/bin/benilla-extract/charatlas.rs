@@ -1,13 +1,15 @@
 //! `charatlas`: composite one character's body atlas off the chain and report what painted what:
 //! the equipment blits in [`benilla_formats::equip_blits`] order with the file each resolved to
 //! (`MISSING` leaves base skin), the rows each tile repaints against the naked body, and the
-//! geosets the equipment selects. Geoset 1302, the robe skirt, samples atlas rows 112-223 across
-//! the LegUpper and LegLower tiles, so a boot's LegLower blit shows on a robe's hem.
+//! geosets the equipment selects. Tiles scale with the skin atlas resolution. Geoset 1302, the
+//! robe skirt, samples normalized atlas rows 112-223 across the LegUpper and LegLower tiles, so a
+//! boot's LegLower blit shows on a robe's hem.
 
 use anyhow::{Context, Result};
 use benilla_formats::{
-    equip_blits, equip_tile, forearm_dressed, load_item_display_catalog, BlitSource, Chain,
-    CharSections, CharacterGeosets, EmblemLayer, EquipGeosets, GuildEmblem, ItemDisplay,
+    equip_blits, equip_tile, forearm_dressed, load_item_display_catalog, scale_body_tile,
+    BlitSource, Chain, CharSections, CharacterGeosets, EmblemLayer, EquipGeosets, GuildEmblem,
+    ItemDisplay,
 };
 
 /// The body's ten fixed tiles in its 256² atlas (the reference's bbox table `0xb42450`).
@@ -88,10 +90,20 @@ pub fn charatlas(chain: &mut Chain, look: &Look, out: Option<&std::path::Path>) 
         }
     }
 
+    let base_path = sections
+        .skin_texture(look.race, look.sex, look.skin)
+        .context("no base skin row for this appearance")?;
+    let (atlas_width, atlas_height, _) =
+        blp_shape(chain, base_path).context("reading base skin dimensions")?;
+
     // (1) The plan, in the composite's order; worn garments and the three emblem layers share it.
     println!("\nequipment blits (by ascending cell; later covers earlier within a tile):");
     for step in equip_blits(&equipment, look.emblem, false) {
-        let (_x, y, w, h) = equip_tile(step.layer).expect("layer < 8");
+        let (_x, y, w, h) = scale_body_tile(
+            equip_tile(step.layer).expect("layer < 8"),
+            atlas_width,
+            atlas_height,
+        );
         let candidates = step.candidates(look.sex);
         let basename = |p: &str| p.rsplit('\\').next().unwrap_or(p).to_string();
         let (who, name) = match step.source {
@@ -118,7 +130,7 @@ pub fn charatlas(chain: &mut Chain, look: &Look, out: Option<&std::path::Path>) 
                 let fits = if (bw, bh) == (w, h) {
                     ""
                 } else {
-                    "  SIZE≠TILE"
+                    "  RESAMPLED"
                 };
                 println!(
                     "  g{} y{:>3}..{:<3} cell {} {:6} {:34} → {} ({}x{}, alpha {alpha} {cover}){fits}",
@@ -185,6 +197,7 @@ pub fn charatlas(chain: &mut Chain, look: &Look, out: Option<&std::path::Path>) 
         dressed.mips.len()
     );
     for (name, x, y, tw, th) in TILES {
+        let (x, y, tw, th) = scale_body_tile((x, y, tw, th), dressed.width, dressed.height);
         let painted: Vec<u32> = (0..th)
             .map(|r| {
                 (0..tw)
