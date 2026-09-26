@@ -12,7 +12,6 @@ use mlua::{Lua, MultiValue, Value};
 use super::container::UiCursorMode;
 use super::cursor::CursorPayload;
 use super::Model;
-use crate::widget::RegionKind;
 
 /// One vendor row, resolved by the app; its 1-based index is its place in [`MerchantState::items`].
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -82,46 +81,13 @@ pub struct MerchantState {
 }
 
 impl super::UiScript {
-    /// Push (or clear, with `None`) the open vendor. Closing a merchant also hides its repair
-    /// cursor; the reference's `MerchantFrame_OnHide` leaves no repair mode armed.
+    /// Push (or clear, with `None`) the open vendor. Clearing it leaves repair mode, as the
+    /// merchant-close handler restores the Point base mode (`0x4fadf0`).
     pub fn set_merchant(&mut self, state: Option<MerchantState>) {
         let closing = state.is_none();
         self.model_mut().merchant = state;
         if closing {
             self.model_mut().repair_mode = false;
-        }
-    }
-
-    /// Reapply `MerchantFrame_OnShow`'s repair-all button state after durability changes while
-    /// the merchant remains open. Stock 1.12 `MERCHANT_UPDATE` repaints rows but not this icon.
-    pub fn refresh_merchant_repair_all(&mut self) {
-        let mut model = self.model_mut();
-        let can_repair = model
-            .merchant
-            .as_ref()
-            .is_some_and(|m| m.repair_all_cost > 0);
-        let Some(button) = model.arena.lookup("MerchantRepairAllButton") else {
-            return;
-        };
-        let Some(icon) = model
-            .region_names
-            .get("MerchantRepairAllIcon")
-            .and_then(|id| model.id_to_region.get(id))
-            .copied()
-        else {
-            return;
-        };
-        if !matches!(
-            model.arena.region(icon).map(|r| r.kind),
-            Some(RegionKind::Texture)
-        ) {
-            return;
-        }
-        let Some(frame) = model.arena.frame_mut(button) else {
-            return;
-        };
-        if super::button::set_enabled_frame(frame, can_repair) {
-            model.region_data.entry(icon).or_default().desaturated = !can_repair;
         }
     }
 
@@ -500,10 +466,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.repair_all = true;
-            // The UI verb plays its repair feedback at the click, before the packet is drained.
-            model
-                .sound_queue
-                .push(super::SoundRequest::KitNameRestart("ITEM_REPAIR".into()));
             Ok(())
         })?,
     )?;
@@ -592,7 +554,7 @@ fn arm_vendor_cursor(lua: &Lua, price_of: impl FnOnce(&MerchantState) -> Option<
 #[cfg(test)]
 mod tests {
     use super::{ItemStatsHead, MerchantItem, MerchantState};
-    use crate::script::{ContainerSlot, ContainerState, SoundRequest, UiScript};
+    use crate::script::{ContainerSlot, ContainerState, UiScript};
 
     fn stock() -> MerchantState {
         MerchantState {
@@ -856,9 +818,9 @@ mod tests {
         s.run("RepairAllItems()").unwrap();
         assert!(s.take_repair_all());
         assert!(!s.take_repair_all(), "drained");
-        assert_eq!(
-            s.take_sounds(),
-            vec![SoundRequest::KitNameRestart("ITEM_REPAIR".into())]
+        assert!(
+            s.take_sounds().is_empty(),
+            "the stock button's OnClick plays ITEM_REPAIR"
         );
 
         assert!(s.eval::<bool>("return InRepairMode() == nil").unwrap());
@@ -924,39 +886,6 @@ mod tests {
             .eval::<bool>("local _, _, locked = GetContainerItemInfo(0, 1) return not locked")
             .unwrap());
         assert!(s.take_container_moves().is_empty());
-    }
-
-    #[test]
-    fn repair_all_button_refreshes_when_cost_changes() {
-        let mut s = UiScript::new().unwrap();
-        s.run(
-            r#"MerchantRepairAllButton = CreateFrame("Button", "MerchantRepairAllButton")
-               MerchantRepairAllIcon = MerchantRepairAllButton:CreateTexture("MerchantRepairAllIcon", "ARTWORK")"#,
-        )
-        .unwrap();
-        let icon_is_gray = |s: &UiScript| {
-            let model = s.lua().app_data_ref::<crate::script::Model>().unwrap();
-            let id = model.region_names["MerchantRepairAllIcon"];
-            let icon = *model.id_to_region.get(&id).unwrap();
-            model.region_data.get(&icon).is_some_and(|r| r.desaturated)
-        };
-        let mut state = stock();
-        state.can_repair = true;
-        state.repair_all_cost = 100;
-        s.set_merchant(Some(state.clone()));
-        s.refresh_merchant_repair_all();
-        assert!(s
-            .eval::<bool>("return MerchantRepairAllButton:IsEnabled() ~= 0")
-            .unwrap());
-        assert!(!icon_is_gray(&s));
-
-        state.repair_all_cost = 0;
-        s.set_merchant(Some(state));
-        s.refresh_merchant_repair_all();
-        assert!(s
-            .eval::<bool>("return MerchantRepairAllButton:IsEnabled() == 0")
-            .unwrap());
-        assert!(icon_is_gray(&s));
     }
 
     #[test]

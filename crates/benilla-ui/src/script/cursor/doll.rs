@@ -5,7 +5,7 @@ use mlua::Lua;
 
 use crate::script::binding_abi::flag;
 use crate::script::container::ContainerMove;
-use crate::script::{Model, SoundRequest};
+use crate::script::Model;
 
 use super::{queue_cursor_update, queue_lock_changed, CursorItem, CursorPayload, EQUIPMENT_BAG};
 
@@ -29,15 +29,6 @@ pub(super) fn pickup_inventory_item(model: &mut Model, id: u32) -> bool {
     // worn-slot click queues `CMSG_REPAIR_ITEM` instead of lifting the item.
     if model.repair_mode && model.cursor.is_none() && (1..=19).contains(&id) {
         model.inventory_repairs.push(id);
-        if model
-            .inv_slot("player", id as usize)
-            .is_some_and(|s| s.item_id != 0)
-        {
-            // The paper-doll repair click plays locally, before its `CMSG_REPAIR_ITEM` drain.
-            model
-                .sound_queue
-                .push(SoundRequest::KitNameRestart("ITEM_REPAIR".into()));
-        }
         return false;
     }
     match model.cursor.take() {
@@ -234,9 +225,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 #[cfg(test)]
 mod tests {
     use crate::script::cursor::{CursorAction, CursorPayload, CursorSpell, EQUIPMENT_BAG};
-    use crate::script::{
-        ContainerMove, ContainerSlot, ContainerState, InvSlotView, SoundRequest, UiScript,
-    };
+    use crate::script::{ContainerMove, ContainerSlot, ContainerState, InvSlotView, UiScript};
 
     /// Head (1), a ring in finger slot 11 that also fits 12, and Tabard (19).
     fn doll_slots() -> crate::script::InventorySlots {
@@ -614,14 +603,6 @@ mod tests {
         assert!(s.cursor_item().is_none());
         assert_eq!(s.take_inventory_repairs(), vec![1, 1, 1]);
         assert!(s.take_inventory_uses().is_empty(), "no item-use intent");
-        assert_eq!(
-            s.take_sounds(),
-            vec![
-                SoundRequest::KitNameRestart("ITEM_REPAIR".into()),
-                SoundRequest::KitNameRestart("ITEM_REPAIR".into()),
-                SoundRequest::KitNameRestart("ITEM_REPAIR".into()),
-            ]
-        );
         assert!(s.take_inventory_repairs().is_empty(), "drained");
     }
 

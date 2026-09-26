@@ -23,8 +23,6 @@ pub enum SoundRequest {
     KitId(u32),
     /// `PlaySound("name")`: a kit name, the 1.12 form.
     KitName(String),
-    /// A click-triggered kit that replaces its previous play, even with `NO_DUPLICATES` set.
-    KitNameRestart(String),
     /// `PlaySoundFile("path")`: a file path, no kit.
     File(String),
 }

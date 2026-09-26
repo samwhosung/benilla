@@ -6,7 +6,7 @@
 use mlua::{Lua, Table, Value};
 
 use super::cursor::{self, CursorItem, CursorPayload};
-use super::{Model, SoundRequest};
+use super::Model;
 
 /// The petition lines an item tooltip prints under the name (`0x854d7c..0x854dd0`): the title and
 /// the creator, keyed `GUILD_CHARTER_*` for a charter, else `PETITION_*`. The signature-count line
@@ -310,24 +310,15 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> bool 
     }
     match model.cursor.take() {
         None => {
-            // `PickupContainerItem` checks held items and vendor rows before these two rungs.
-            // Only an empty payload may target or repair the clicked item (`0x4f9c54/7b`).
+            // A held item (`0x4f9c38`) or vendor row (`0x4f9c43`) is placed first; only an empty
+            // cursor reaches the item-targeting rung (`0x4f9c54`) and then repair (`0x4f9c7b`),
+            // whose affordability check and `ITEM_REPAIR` the app's repair drain runs.
             if model.item_pick_armed {
                 model.item_picks.push((bag, slot));
                 return false;
             }
             if model.repair_mode {
                 model.container_repairs.push((bag, slot));
-                if model
-                    .containers
-                    .get(&bag)
-                    .and_then(|c| c.slots.get(&slot))
-                    .is_some()
-                {
-                    model
-                        .sound_queue
-                        .push(SoundRequest::KitNameRestart("ITEM_REPAIR".into()));
-                }
                 return false;
             }
             let picked = model
@@ -623,9 +614,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, (bag, slot, _rest): (i64, u32, mlua::MultiValue)| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             if model.repair_mode {
-                // Stock FrameXML calls `UseContainerItem` on right-click. In repair mode the
-                // reference routes either button through the same cursor-first item click.
-                pickup_container_item(&mut model, bag, slot);
+                // The right-click clears the cursor first (`0x4fa198`), then repairs the item in
+                // the slot (`0x4fa1a6`, `0x4fa1da`): a held payload goes back, never placed.
+                cursor::clear_cursor(&mut model);
+                let occupied = model
+                    .containers
+                    .get(&bag)
+                    .and_then(|c| c.slots.get(&slot))
+                    .is_some_and(|s| s.item_id != 0);
+                if occupied {
+                    model.container_repairs.push((bag, slot));
+                }
             } else {
                 model.container_uses.push((bag, slot));
             }
@@ -725,7 +724,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{ContainerMove, ContainerSlot, ContainerState, PendingWrap, UiCursorMode};
-    use crate::script::{MerchantItem, MerchantState, SoundRequest, UiScript};
+    use crate::script::{MerchantItem, MerchantState, UiScript};
 
     fn backpack() -> ContainerState {
         let mut slots = std::collections::HashMap::new();
@@ -1172,11 +1171,9 @@ mod tests {
         s.run("PickupContainerItem(0, 1)").unwrap();
         s.run("PickupContainerItem(0, 1)").unwrap();
         assert_eq!(
-            s.take_sounds(),
-            vec![
-                SoundRequest::KitNameRestart("ITEM_REPAIR".into()),
-                SoundRequest::KitNameRestart("ITEM_REPAIR".into()),
-            ]
+            s.take_container_repairs(),
+            vec![(0, 1), (0, 1)],
+            "repair mode sticks across clicks"
         );
     }
 
@@ -1193,12 +1190,40 @@ mod tests {
 
         assert_eq!(s.take_container_repairs(), vec![(0, 1), (0, 1)]);
         assert!(s.take_container_uses().is_empty(), "no sell/use intent");
-        assert_eq!(
-            s.take_sounds(),
-            vec![
-                SoundRequest::KitNameRestart("ITEM_REPAIR".into()),
-                SoundRequest::KitNameRestart("ITEM_REPAIR".into()),
-            ]
+    }
+
+    #[test]
+    fn right_click_in_repair_mode_puts_a_held_item_back_then_repairs() {
+        let mut s = UiScript::new().unwrap();
+        s.set_container(0, Some(backpack()));
+        s.set_merchant(Some(MerchantState {
+            can_repair: true,
+            ..Default::default()
+        }));
+        s.run("PickupContainerItem(0, 1)").unwrap();
+        assert!(s.cursor_item().is_some());
+        // A held item and repair mode together, as after a cursor-mode change.
+        s.model_mut().repair_mode = true;
+
+        s.run("UseContainerItem(0, 4)").unwrap();
+        assert!(
+            s.cursor_payload().is_none(),
+            "the held item went back (`0x4fa198`)"
+        );
+        assert!(s.take_container_moves().is_empty(), "never placed");
+        assert_eq!(s.take_container_repairs(), vec![(0, 4)]);
+
+        s.model_mut().repair_mode = false;
+        s.run("PickupContainerItem(0, 1)").unwrap();
+        s.model_mut().repair_mode = true;
+        s.run("UseContainerItem(0, 2)").unwrap();
+        assert!(
+            s.cursor_payload().is_none(),
+            "an empty slot still clears the cursor"
+        );
+        assert!(
+            s.take_container_repairs().is_empty(),
+            "and repairs nothing (`0x4fa1a6`)"
         );
     }
 
@@ -1227,9 +1252,12 @@ mod tests {
         assert!(s.take_container_repairs().is_empty());
         assert!(s.take_sounds().is_empty());
 
+        // The right-click clears the vendor row with no packet and repairs instead.
         s.run("PickupMerchantItem(1) UseContainerItem(0, 1)")
             .unwrap();
-        assert_eq!(s.take_merchant_slot_buys(), vec![(0, 1, 159)]);
+        assert!(s.take_merchant_slot_buys().is_empty());
+        assert!(s.cursor_payload().is_none());
+        assert_eq!(s.take_container_repairs(), vec![(0, 1)]);
         assert!(s.take_container_uses().is_empty());
     }
 
