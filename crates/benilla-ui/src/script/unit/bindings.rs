@@ -435,7 +435,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // HasFullControl(): the flag `SMSG_CLIENT_CONTROL_UPDATE` writes for the local player
-    // (`0xb4b3e4`, read at `0x51a158`), which the stock unit menu greys its follow and trade on.
+    // (`0xb4b3e4`, read at `0x51a158`), which the stock unit menu greys Trade and Duel on
+    // (`UnitPopup.lua:474-477`, `:502-505`).
     g.set(
         "HasFullControl",
         lua.create_function(|lua, ()| {
