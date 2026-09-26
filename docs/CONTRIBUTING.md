@@ -5,6 +5,13 @@ creative: a change is accepted when it makes benilla more like 1.12.1 or fixes a
 evidence from the reference, in one small piece, with the gates green. Everything else is a
 fork, and forks are welcome.
 
+## Where to start
+
+The [issues](https://github.com/samwhosung/benilla/issues) the maintainers file are checked
+against 1.12.1 first: each says what 1.12.1 does, what benilla does instead, and where in the
+code, and any of them is a place to start. Before you start one, look for an open pull request
+that already covers it, and say `Fixes #N` in yours.
+
 ## What gets in
 
 - A fix for a bug, with how to see it before and after.
@@ -37,12 +44,12 @@ fork, and forks are welcome.
 
 ## After you open it
 
-A maintainer reads it, checks it against the reference and runs it. Most pull requests are
-finished here rather than sent back: a rebase onto main, a fix, a test or a comment, pushed to
-your branch as commits on top of yours, so leave "Allow edits by maintainers" ticked. It lands as
-one squash-merged commit with you as its author. When what would land is mostly ours, we land our
-own version with you as a co-author and close yours with a note. One that is out of scope is
-closed with the reason.
+A maintainer reads it, checks it against the reference, runs it and finishes it here: a rebase
+onto main, a fix, a test or a comment, added as commits on top of yours on your branch, so leave
+"Allow edits by maintainers" ticked. It lands as one squash-merged commit with you as its author.
+When what would land is mostly ours, we land our own version with you as a co-author and close
+yours with a note, and when main already has the fix, we close yours and say where. One that is
+out of scope is closed with the reason.
 
 ## Setting up
 
@@ -54,12 +61,12 @@ closed with the reason.
   root, which only a dev build sees: the player build looks for `Data/` or `WoW/Data/` beside
   the binary. benilla reads the install and never writes into it. `WOW_DATA=` (set, empty)
   means "no install", which is how the no-install boot is tested on a machine that has one.
-- **Without the install, green is hollow.** About a thousand tests read the install and skip
-  when it is absent; six more read a corpus of vanilla addons (`BENILLA_ADDON_CORPUS=<a folder
-  of addons>`, or a `wow-addons-vanilla` link at the root), third-party content that is not in
-  this repo. `scripts/gates.sh` and `scripts/check.sh` print how many tests skipped and why.
-  Where the data is, `BENILLA_REQUIRE_DATA=1` turns a skip into a failure, and the gates set it
-  themselves when the install and the corpus both resolve.
+- **Without the install, green is hollow.** Well over a thousand tests read the install and skip
+  when it is absent, and a few dozen more read a corpus of vanilla addons
+  (`BENILLA_ADDON_CORPUS=<a folder of addons>`, or a `wow-addons-vanilla` link at the root),
+  third-party content that is not in this repo. `scripts/gates.sh` and `scripts/check.sh` print
+  how many tests skipped and why. Where the data is, `BENILLA_REQUIRE_DATA=1` turns a skip into a
+  failure, and the gates set it themselves when the install and the corpus both resolve.
 - **A server to test against.** Any 1.12.1 server; `WOW_HOST` names it (default
   `localhost:3724`). A scripted run has no default account: `WOW_USER`, `WOW_PASS` and
   `WOW_CHAR` name a test account on your server whose login kicks nobody, all three, either in
@@ -88,8 +95,8 @@ closed with the reason.
 
 ## Reporting a bug
 
-Open an issue: what you did, what you saw and what 1.12.1 does instead, with the server and the
-platform you ran on. Questions and ideas are welcome there or on the Discord linked from the
-README.
+Open an issue: what you did, what you saw and what 1.12.1 does instead, with the `benilla build`
+line from the start of the terminal output, your platform and the server you ran on. Questions
+and ideas are welcome there or on the Discord linked from the README.
 
 Working with an AI agent is expected. The agent reads `AGENTS.md`, and the same rules bind it.

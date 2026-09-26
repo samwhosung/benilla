@@ -41,9 +41,9 @@ comment naming the reference fact and why we differ. Anything else is a fork.
   counterparts under `assets/ui` stay until they retire.
 - **The install is read-only.** benilla never writes into the WoW folder: no screenshot, log,
   cache or scratch file. `scripts/smoke.sh` fails a run that leaves the install changed.
-- **Local state lives in one folder**, `benilla-config/` beside the binary, and every path to
-  it resolves through `crate::local_state`. Player settings are CVars persisted as a diff in
-  `benilla-config/config.toml`.
+- **Local state lives in one folder**, `benilla-config/`, at the repo root in a dev build and
+  beside the binary in the player build; every path to it resolves through `crate::local_state`.
+  Player settings are CVars persisted as a diff in `benilla-config/config.toml`.
 - **UI is stock-first: a window is migrated, not authored.** The end state is the stock 1.12
   FrameXML executed off the player's own chain. `assets/ui` does not grow: a test names its
   files and fails on a new one. A window is built by pointing `benilla.toc` at the stock file,

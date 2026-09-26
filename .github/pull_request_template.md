@@ -1,5 +1,7 @@
 <!-- One change per pull request. docs/CONTRIBUTING.md says what gets in. -->
 
+**The issue it fixes** (`Fixes #N`, if there is one)
+
 **What this changes**
 
 **What 1.12.1 does, and how you know** (the client's behaviour, a DBC field, a FrameXML line, a capture)
