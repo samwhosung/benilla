@@ -132,7 +132,7 @@ mod tests {
         assert_eq!(
             s.defense_skill,
             (0, 0),
-            "no pet defense here; the reference answers UnitLevel × 5 and 0 (`0x613680`)"
+            "a pet's snapshot has no defense pair; `UnitDefense(\"pet\")` answers level × 5 itself"
         );
     }
 
