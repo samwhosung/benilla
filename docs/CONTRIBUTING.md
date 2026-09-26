@@ -35,6 +35,15 @@ fork, and forks are welcome.
    No history.
 4. The commit message says what changed, for a player or a developer, in one line.
 
+## After you open it
+
+A maintainer reads it, checks it against the reference and runs it. Most pull requests are
+finished here rather than sent back: a rebase onto main, a fix, a test or a comment, pushed to
+your branch as commits on top of yours, so leave "Allow edits by maintainers" ticked. It lands as
+one squash-merged commit with you as its author. When what would land is mostly ours, we land our
+own version with you as a co-author and close yours with a note. One that is out of scope is
+closed with the reason.
+
 ## Setting up
 
 - **The toolchain.** Stable Rust (`rust-toolchain.toml` adds clippy and rustfmt) and a C
