@@ -1,6 +1,7 @@
 //! The merchant window's app side: [`MerchantOpen`] holds the `SMSG_LIST_INVENTORY` rows,
 //! [`feed_merchant`] pushes them with the buyback and repair rows, the purse and the refusals,
-//! [`feed_repair_all_cost`] the repair-all total, and [`drain_merchant`] sends the Lua intents. A bag click sells through [`crate::ui_items`].
+//! [`feed_repair_all_cost`] the repair-all total, and [`drain_merchant`] sends the Lua intents. A
+//! bag click sells through [`crate::ui_items`].
 
 use benilla_protocol::messages::{buy_result, sell_result, VendorItem};
 use benilla_world::interact::WorldRightPress;

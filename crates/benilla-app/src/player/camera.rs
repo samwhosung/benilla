@@ -1918,7 +1918,7 @@ mod tests {
         );
         assert!(
             press(false, true),
-            "a press that drops a held payload is consumed before the hook"
+            "a press while a payload is held skips the repair reset"
         );
     }
 
