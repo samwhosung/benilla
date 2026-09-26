@@ -67,6 +67,7 @@ impl Plugin for SpellPlugin {
                     // after it, so an Esc cancel lands before next frame's cursor reads the mode.
                     targeting::feed_targeting_to_vm.in_set(UnitFeed),
                     targeting::drain_stop_targeting.after(UiInput),
+                    targeting::drain_spell_target_unit.after(UiInput),
                     // The item-target commit (`0x495d60`): after the input pass so a bag click
                     // binds the same frame; outside the target chain, as its clicks never reach
                     // the world.

@@ -234,14 +234,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // `autoSelfCast` (register site `0x6e731d`, record `[0xceac34]`, read at `0x6e53d7`; `0x870dc0`
     // is its name string): a friendly cast that binds nothing falls back to the caster.
     // `TOGGLEAUTOSELFCAST` toggles it.
-    deviates(
-        "autoSelfCast",
-        "1",
-        "0",
-        "with it off, an unbindable friendly cast falls into the reference's \
-         targeting-cursor machine, which is unmodeled — leaving no path at all. Flip when that \
-         machine lands",
-    ),
+    same("autoSelfCast", "0"),
     // The five saved camera views and the live index, at the reference's names and default strings;
     // owned by [`crate::player::camera_view`]. Registered so a `SaveView` persists.
     same(
@@ -1524,7 +1517,6 @@ mod tests {
             names,
             vec![
                 "SoundReverb",
-                "autoSelfCast",
                 "frillDensity",
                 "gxApi",
                 "gxColorBits",

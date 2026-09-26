@@ -403,9 +403,10 @@ impl super::UiScript {
         self.model_mut().item_pick_armed = armed;
     }
 
-    /// Push what `SpellCanTargetUnit` answers: whether the armed targeting cast can take a unit.
-    pub fn set_spell_can_target_unit(&mut self, can: bool) {
-        self.model_mut().spell_can_target_unit = can;
+    /// Push the unit tokens for which the armed word's unit checks all pass.
+    pub fn set_spell_targetable_units<'a>(&mut self, tokens: impl IntoIterator<Item = &'a str>) {
+        self.model_mut().spell_targetable_units =
+            tokens.into_iter().map(str::to_ascii_lowercase).collect();
     }
 
     /// Drain the `(bag, slot)` picks since the last call; a paper-doll pick reports as

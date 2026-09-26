@@ -83,6 +83,14 @@ pub(super) struct PickPose<'w, 's> {
     rigs: Query<'w, 's, &'static benilla_world::rig_palette::RigSkin>,
 }
 
+/// The local identity and armed spell word, bundled to keep the picker below Bevy's system-param
+/// limit while letting an armed unit cursor include the player model.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct TargetHoverState<'w> {
+    self_guid: Res<'w, crate::net::SelfGuid>,
+    targeting: Res<'w, crate::spell::SpellTargeting>,
+}
+
 /// The unit under the cursor, as the reference's pick (`0x7089c0`) finds it. Broad phase: the ray
 /// against the playing sequence's bounds sphere. Pass 1: the ray against the posed render mesh,
 /// nearest wins. Pass 2, the mouse pick's retry when pass 1 hit nothing anywhere: every vertex
@@ -102,8 +110,9 @@ pub(super) fn update_hover(
     mut hovered: ResMut<Hovered>,
     mesh_assets: Res<Assets<Mesh>>,
     pose: PickPose,
-    // For `IsSelectable`'s `UNIT_FIELD_CREATEDBY` clause.
-    self_guid: Res<crate::net::SelfGuid>,
+    // The ordinary mouseover deliberately excludes the local player, but a residual unit-target
+    // word must be able to bind the player's visible model.
+    target_state: TargetHoverState,
     // Last frame's pick, which outranks everything in pass 2 (the reference's anti-flicker cache).
     mut last_pick: Local<Option<Entity>>,
     // Unit roots. An undrawn body is not in the reference's draw list, so it takes no mouseover,
@@ -111,6 +120,7 @@ pub(super) fn update_hover(
     roots: Query<
         (
             Entity,
+            Has<SelfPlayer>,
             &GlobalTransform,
             &NetEntity,
             Option<&ModelAnimations>,
@@ -121,7 +131,7 @@ pub(super) fn update_hover(
             Option<&InheritedVisibility>,
             Option<&HeldAttached>,
         ),
-        (With<Guid>, Without<SelfPlayer>),
+        With<Guid>,
     >,
     // The part children of every pick model root: body, worn items and mount.
     child_sets: Query<&Children>,
@@ -137,7 +147,7 @@ pub(super) fn update_hover(
         With<CreaturePickPart>,
     >,
     // The pick's guid and kind; the kind decides which slot of `Hovered` a hit lands in.
-    units: Query<(&Guid, &NetEntity), Without<SelfPlayer>>,
+    units: Query<(&Guid, &NetEntity)>,
 ) {
     hovered.target = None;
     hovered.guid = None;
@@ -178,7 +188,15 @@ pub(super) fn update_hover(
     let mut candidates: Vec<(Entity, u8, Vec<AssetId<Mesh>>, Vec<Mat4>)> = Vec::new();
     // Units with skinned parts: out of the box fallback even when the broad phase rejects them.
     let mut faithful: HashSet<Entity> = HashSet::new();
-    for (entity, gt, net, anims, drv, store, children, mount_child, drawn, held) in &roots {
+    for (entity, is_self, gt, net, anims, drv, store, children, mount_child, drawn, held) in &roots
+    {
+        if is_self
+            && !target_state
+                .targeting
+                .wants(crate::spell::TargetingWants::Unit)
+        {
+            continue;
+        }
         // Units, players and corpses: the reference picks every CGObject in one trace and
         // switches on type at the end, below.
         if !matches!(
@@ -280,6 +298,13 @@ pub(super) fn update_hover(
         if faithful.contains(&parent) {
             continue; // posed-mesh-tested above
         }
+        if roots.get(parent).is_ok_and(|root| root.1)
+            && !target_state
+                .targeting
+                .wants(crate::spell::TargetingWants::Unit)
+        {
+            continue;
+        }
         // The same kinds as the posed pick. A bone pile lands here: its corpse model has no
         // skeleton, so only this box test can pick it.
         let Ok((_, parent_net)) = units.get(parent) else {
@@ -331,13 +356,13 @@ pub(super) fn update_hover(
             if net.kind == EntityKind::Corpse {
                 hovered.corpse = Some(entity);
                 hovered.corpse_guid = Some(guid.0);
-            } else if selectable_pick(entity, &roots, self_guid.0) {
+            } else if selectable_pick(entity, &roots, target_state.self_guid.0) {
                 hovered.target = Some(entity);
                 hovered.guid = Some(guid.0);
             } else {
                 hovered.refused = true;
             }
-        } else if selectable_pick(entity, &roots, self_guid.0) {
+        } else if selectable_pick(entity, &roots, target_state.self_guid.0) {
             hovered.target = Some(entity);
         } else {
             hovered.refused = true;
@@ -364,6 +389,7 @@ fn selectable_pick(
     roots: &Query<
         (
             Entity,
+            Has<SelfPlayer>,
             &GlobalTransform,
             &NetEntity,
             Option<&ModelAnimations>,
@@ -374,11 +400,11 @@ fn selectable_pick(
             Option<&InheritedVisibility>,
             Option<&HeldAttached>,
         ),
-        (With<Guid>, Without<SelfPlayer>),
+        With<Guid>,
     >,
     self_guid: Option<u64>,
 ) -> bool {
-    let store = roots.get(entity).ok().and_then(|r| r.5);
+    let store = roots.get(entity).ok().and_then(|r| r.6);
     super::relations::is_selectable(store, self_guid)
 }
 

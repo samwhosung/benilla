@@ -28,17 +28,55 @@ mod world;
 
 pub(crate) use cursor::{drive_targeting_cursor, ground_cast_radius};
 pub(crate) use item::{commit_item_cast_on_pick, EnchantConfirmItem};
-pub(crate) use world::{commit_ground_cast_on_click, commit_object_cast_on_click};
+pub(crate) use world::{
+    commit_ground_cast_on_click, commit_object_cast_on_click, commit_unit_cast_on_click,
+};
 
 use bevy::prelude::*;
 
 use benilla_world::interact::WorldRightPress;
+
+/// The relation inputs shared by the targeting cursor, its world click and `SpellTargetUnit`.
+/// Each asks the same `BindTarget` unit predicate that the initial selected-target arm uses.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct UnitBindChecks<'w, 's> {
+    stores: Query<'w, 's, &'static crate::net::ObjectStore>,
+    index: Option<Res<'w, crate::net::GuidIndex>>,
+    self_q: Query<'w, 's, (Entity, &'static crate::net::ObjectStore), With<crate::net::SelfPlayer>>,
+    factions: Option<Res<'w, crate::target::Factions>>,
+    reputations: Res<'w, crate::net::Reputations>,
+}
+
+impl UnitBindChecks<'_, '_> {
+    fn word_binds(&self, word: u16, entity: Entity) -> bool {
+        let target_store = self.stores.get(entity).ok();
+        let target_owner_store = target_store
+            .and_then(|store| {
+                store
+                    .0
+                    .unit_owner(benilla_protocol::messages::OwnerFallback::CreatedBy)
+            })
+            .and_then(|guid| self.index.as_ref()?.0.get(&guid).copied())
+            .and_then(|owner| self.stores.get(owner).ok());
+        let self_row = self.self_q.iter().next();
+        let is_self = self_row.is_some_and(|(self_entity, _)| self_entity == entity);
+        let rel = super::cast_target::TargetRelations {
+            target_store,
+            target_owner_store,
+            self_store: self_row.map(|(_, store)| store),
+            factions: self.factions.as_deref(),
+            reputations: &self.reputations,
+        };
+        super::cast_target::unit_word_binds(word, is_self, &rel)
+    }
+}
 
 /// A click seam's mask test on the flag_word `0xcecac0`, one per reference predicate:
 ///
 /// - `Location`: `TargetingWantsLocation 0x6e6320`, `word & 0x60`, the terrain click.
 /// - `Item`: `TargetingWantsItem 0x6e6330`, `word & 0x4010`, the bag and paper-doll clicks.
 /// - `GameObject`: `TargetingWantsGameObject 0x6e62d0`, `word & 0x4800`, the world object click.
+/// - `Unit`: `SpellCanTargetUnit 0x6e6460`, the unit arm of the world click.
 ///
 /// The masks overlap on `TARGET_FLAG_LOCKED`, so a lock spell answers both the item and the
 /// GameObject seam; the reference settles it only at the click, where `BindTarget 0x6e5b40` picks
@@ -48,10 +86,11 @@ pub(crate) enum TargetingWants {
     Location,
     Item,
     GameObject,
+    Unit,
 }
 
-/// The unit-shaped bits of the flag_word, what `SpellCanTargetUnit` tests. The resolver binds or
-/// refuses a unit word before it reaches the cursor, so none is set today.
+/// The unit-shaped bits of the flag_word, the first gate `SpellCanTargetUnit` tests before it runs
+/// the candidate through the unit arm's relation and liveness checks.
 const UNIT_WORD_BITS: u16 = 0x0002 | 0x0004 | 0x0008 | 0x0080 | 0x0100 | 0x0200 | 0x0400 | 0x8000;
 
 impl TargetingWants {
@@ -60,6 +99,7 @@ impl TargetingWants {
             Self::Location => 0x0060,
             Self::Item => 0x4010,
             Self::GameObject => 0x4800,
+            Self::Unit => UNIT_WORD_BITS,
         };
         word & mask != 0
     }
@@ -94,6 +134,13 @@ impl SpellTargeting {
     /// Whether the standing word answers `wants`' mask test.
     pub(crate) fn wants(&self, wants: TargetingWants) -> bool {
         self.0.as_ref().is_some_and(|t| wants.matches(t.word))
+    }
+
+    /// `0x6e6460`'s unit leg: the word must have a unit arm and that unit must clear it fully.
+    fn can_bind_unit(&self, entity: Entity, checks: &UnitBindChecks) -> bool {
+        self.0
+            .as_ref()
+            .is_some_and(|t| checks.word_binds(t.word, entity))
     }
 
     /// The pending spell when the standing word answers `wants`. A surface that draws or binds for
@@ -171,6 +218,9 @@ pub(crate) fn cancel_targeting_on_right_press(
 /// and re-arm in one frame still counts.
 pub(crate) fn feed_targeting_to_vm(
     targeting: Res<SpellTargeting>,
+    checks: UnitBindChecks,
+    tokens: crate::ui_unit::UnitTokens,
+    selection: Res<crate::target::Selection>,
     mut last: Local<crate::ui_script::VmMemo<Option<u32>>>,
     script: Option<NonSendMut<benilla_ui::script::UiScript>>,
 ) {
@@ -178,13 +228,12 @@ pub(crate) fn feed_targeting_to_vm(
         let last = last.get(&script);
         script.set_spell_targeting(targeting.active());
         script.set_item_pick_armed(targeting.wants(TargetingWants::Item));
-        // `SpellCanTargetUnit`, `0x6e6460`'s unit leg, read off the word.
-        script.set_spell_can_target_unit(
-            targeting
-                .0
-                .as_ref()
-                .is_some_and(|t| t.word & UNIT_WORD_BITS != 0),
-        );
+        // `SpellCanTargetUnit(unit)`: resolve each token and run the standing word's unit arm.
+        script.set_spell_targetable_units(crate::ui_unit::reach_tokens().filter(|token| {
+            tokens
+                .resolve(token, &selection)
+                .is_some_and(|(entity, _)| targeting.can_bind_unit(entity, &checks))
+        }));
         if *last != targeting.spell() {
             *last = targeting.spell();
             script.fire_event("CURRENT_SPELL_CAST_CHANGED", vec![]);
@@ -204,6 +253,37 @@ pub(crate) fn drain_stop_targeting(
     if script.take_stop_targeting() {
         debug!("ui_action: targeting cancelled (ESC chain)");
         targeting.clear();
+    }
+}
+
+/// Drain `SpellTargetUnit(unit)` after the UI click: stock unit frames call this before their
+/// ordinary selection arm, and `BindTarget 0x6e5b40` commits the pending spell at that token.
+pub(crate) fn drain_spell_target_unit(
+    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+    tokens: crate::ui_unit::UnitTokens,
+    selection: Res<crate::target::Selection>,
+    checks: UnitBindChecks,
+    mut ladder: crate::spell::CastLadder,
+) {
+    let Some(mut script) = script else {
+        return;
+    };
+    let requests = script.take_spell_target_unit();
+    if requests.is_empty() {
+        return;
+    }
+    for token in requests {
+        let Some((spell_id, commit)) = ladder.ground.pending_for(TargetingWants::Unit) else {
+            continue;
+        };
+        let Some((entity, guid)) = tokens.resolve(&token, &selection) else {
+            continue;
+        };
+        if !ladder.ground.can_bind_unit(entity, &checks) {
+            continue;
+        }
+        debug!("ui_action: cast {spell_id} committed at unit token {token} ({guid:#x})");
+        ladder.commit_targeted(spell_id, commit, super::cast_send::TargetedBind::Unit(guid));
     }
 }
 

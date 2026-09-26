@@ -1079,12 +1079,18 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SpellTargetUnit(unit): a no-op. A unit-target spell never enters targeting mode here, and for
-    // the location, item and gameobject modes this client arms, the reference's `BindTarget`
-    // (`0x6e5b40`) rejects a unit too. Stock `PetFrame_OnClick` calls it, so it must exist.
+    // SpellTargetUnit(unit) (`0x6e6d90`): queue the unit token for the host's `BindTarget`
+    // (`0x6e5b40`) unit arm. A word without unit bits rejects it when the host drains the queue.
     g.set(
         "SpellTargetUnit",
-        lua.create_function(|_, _token: Option<String>| Ok(()))?,
+        lua.create_function(|lua, token: Option<String>| {
+            check_unit_token(&token)?;
+            if let Some(token) = token {
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                model.spell_target_unit.push(token);
+            }
+            Ok(())
+        })?,
     )?;
 
     // ClearTarget(): 1 when it cleared a target, nil when there was none, which `ToggleGameMenu`'s
