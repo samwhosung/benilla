@@ -26,7 +26,8 @@ fork, and forks are welcome.
 1. `scripts/gates.sh` is green: fmt, clippy with warnings denied, the workspace tests (once
    with the client data, once without, so a test that reads the install has to declare it), the
    doc-link and render-pass lints, the player build with its own tests, and the engine boot
-   checks.
+   checks. A pull request from a fork runs the ones that need neither the install nor a display
+   in CI, on Linux; the rest run on the maintainer's machine before it lands.
 2. The reference fact is stated: what 1.12.1 does, and where that is known from (the client's
    behaviour you observed, a DBC field, a FrameXML line, a packet capture). The names and shapes
    under `reference/` are the surface benilla tracks.

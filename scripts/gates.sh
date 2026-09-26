@@ -6,6 +6,8 @@
 # run stamps the tree, which then re-greens without running. GATES_FORCE=1 runs the chain anyway,
 # WOW_DATA picks the install (set and empty: none) and TMPDIR holds the scratch files; the script
 # sets BENILLA_REQUIRE_DATA, BENILLA_SKIP_LOG and WOW_WORLDVIEW_CHECK for its gates.
+# `.github/workflows/ci.yml` runs the gates that need neither the install nor a display on a fork's
+# pull request: a gate added here goes there too, if it can run on a bare Linux runner.
 #
 #   scripts/gates.sh
 set -uo pipefail

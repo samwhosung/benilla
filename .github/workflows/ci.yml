@@ -1,0 +1,54 @@
+# The gates of scripts/gates.sh that need neither a WoW install nor a display, on Linux, for a pull
+# request from a fork: a red one is seen before anyone builds it. The data-gated tests, the engine
+# boot checks and a live run happen on the maintainer's machine before it lands.
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    # A branch of this repository runs the full chain before it lands; a fork's pull request runs here.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      # No debuginfo: it is most of target/, and a runner's disk is small.
+      CARGO_PROFILE_DEV_DEBUG: 0
+      # Set and empty: no install, as the gates' test-no-install runs.
+      WOW_DATA: ""
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: System libraries
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq pkg-config libasound2-dev libudev-dev
+      - name: Toolchain
+        run: rustup toolchain install && rustc -V
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: fmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: test
+        run: cargo test --workspace
+      - name: doc-links
+        run: scripts/doc-links.py
+      - name: pass-span-lint
+        run: scripts/pass-span-lint.py
+      - name: player-build
+        run: cargo build -p benilla --no-default-features
+      - name: player-tests
+        run: cargo test -p benilla-formats -p benilla-app --no-default-features --lib
