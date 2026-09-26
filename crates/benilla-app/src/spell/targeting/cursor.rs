@@ -75,12 +75,14 @@ pub(crate) fn ground_cast_radius(spells: Option<&Spells>, spell_id: u32, level: 
 /// its ray (`0x4812c8`) and the world cursor stays grey.
 ///
 /// The object arm is `0x6e6460`'s GameObject leg: `word & 0x4800`, the lock predicate `0x5f8260`,
-/// then the same min/max range test through `GetMinMaxRange 0x6e3480`. Its unit, world-item and
-/// corpse legs are unreachable here: a unit-target spell never enters targeting mode.
+/// then the same min/max range test through `GetMinMaxRange 0x6e3480`. The unit leg runs the
+/// standing word through the cast arm's shared unit binder. World-item and Corpse legs remain
+/// unmodeled.
 ///
 /// Every seam shows the `Cast` kind, so this reads the whole-word [`SpellTargeting::spell`].
 pub(crate) fn drive_targeting_cursor(
     targeting: Res<SpellTargeting>,
+    unit_checks: super::UnitBindChecks,
     occlusion: Res<PickOcclusion>,
     hovered: Res<crate::target::Hovered>,
     hovered_object: Res<crate::target::HoveredObject>,
@@ -104,7 +106,13 @@ pub(crate) fn drive_targeting_cursor(
     let me = self_tf.single().ok().map(|tf| tf.translation);
     // "A GameObject is the nearest pick" is the same test the click uses
     // ([`super::world::commit_object_cast_on_click`]).
-    let able = if targeting.wants(TargetingWants::GameObject)
+    let able = if targeting.wants(TargetingWants::Unit)
+        && hovered
+            .target
+            .is_some_and(|entity| targeting.can_bind_unit(entity, &unit_checks))
+    {
+        true
+    } else if targeting.wants(TargetingWants::GameObject)
         && crate::target::go_is_nearest(&hovered, &hovered_object)
     {
         object_arm(

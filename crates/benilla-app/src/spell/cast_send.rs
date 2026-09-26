@@ -101,6 +101,8 @@ pub(crate) enum TargetedBind {
     Item(u64),
     /// The world click's GameObject guid: a chest, door, vein or herb.
     Object(u64),
+    /// The world click's unit guid.
+    Unit(u64),
 }
 
 impl CastLadder<'_, '_> {
@@ -126,6 +128,10 @@ impl CastLadder<'_, '_> {
                 TargetedBind::Object(go_guid) => {
                     ClientCommand::CastSpellGameObject { spell_id, go_guid }
                 }
+                TargetedBind::Unit(unit_guid) => ClientCommand::CastSpell {
+                    spell_id,
+                    target: Some(unit_guid),
+                },
             },
             CastCommit::Item {
                 bag_index,
@@ -141,6 +147,7 @@ impl CastLadder<'_, '_> {
                     TargetedBind::Source(src) => UseItemTarget::Source(src),
                     TargetedBind::Item(guid) => UseItemTarget::Item(guid),
                     TargetedBind::Object(guid) => UseItemTarget::Object(guid),
+                    TargetedBind::Unit(guid) => UseItemTarget::Unit(guid),
                 },
             },
         };
@@ -723,6 +730,7 @@ mod tests {
             auto_self_cast: false,
             rel: cast_target::TargetRelations {
                 target_store: None,
+                target_owner_store: None,
                 self_store: None,
                 factions: None,
                 reputations: &EMPTY_REPUTATIONS,

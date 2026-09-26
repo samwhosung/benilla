@@ -284,9 +284,12 @@ impl Plugin for TargetPlugin {
                 (
                     // The latch first, before any pick refresh clears what the press was over.
                     (latch_press_pick, hover::update_pick_occlusion).chain(),
-                    hover::update_hover,
-                    hover::update_hovered_object,
-                    cursor_mode::classify_cursor,
+                    (
+                        hover::update_hover,
+                        hover::update_hovered_object,
+                        cursor_mode::classify_cursor,
+                    )
+                        .chain(),
                     // The right press's two legs of the reference's OnMouseDown hook (`0x492c20`),
                     // the targeting cancel and the repair-mode reset, before the cursor drive, so
                     // the press frame already reads both modes cleared.
@@ -304,10 +307,14 @@ impl Plugin for TargetPlugin {
                     // A plate click replayed as a click, then the select that reads it.
                     (click::select_on_plate_click, click::select_on_click).chain(),
                     // After the gated select, which must read the targeting mode before a commit
-                    // clears it. The pending spell feeds only one of the two legs, so their mutual
-                    // order is free.
-                    crate::spell::targeting::commit_ground_cast_on_click,
-                    crate::spell::targeting::commit_object_cast_on_click,
+                    // clears it. Nest the mutually exclusive target seams to remain under
+                    // Bevy's 20-system tuple limit.
+                    (
+                        crate::spell::targeting::commit_ground_cast_on_click,
+                        crate::spell::targeting::commit_object_cast_on_click,
+                        crate::spell::targeting::commit_unit_cast_on_click,
+                    )
+                        .chain(),
                     click::act_on_right_click,
                     click::clear_target_requests,
                     // The unit-token asks (`TargetUnit`, `AssistUnit`, `TargetLastEnemy`: one

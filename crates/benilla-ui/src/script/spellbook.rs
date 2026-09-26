@@ -596,14 +596,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SpellCanTargetUnit("unit") (`0x6e6d00`) asks `0x6e6460`'s unit leg whether the targeting
-    // word can take the unit. The token is not read: no word benilla can arm (location, item,
-    // gameobject) takes a unit, and unit words are not built.
+    // SpellCanTargetUnit("unit") (`0x6e6d00`) asks `0x6e6460`'s unit leg whether the standing
+    // word clears against that resolved unit.
     g.set(
         "SpellCanTargetUnit",
-        lua.create_function(|lua, _unit: Option<String>| {
+        lua.create_function(|lua, unit: Option<String>| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            if model.spell_can_target_unit {
+            let can = unit.is_some_and(|unit| {
+                model
+                    .spell_targetable_units
+                    .contains(&unit.to_ascii_lowercase())
+            });
+            if can {
                 Ok(Value::Boolean(true))
             } else {
                 Ok(Value::Nil)

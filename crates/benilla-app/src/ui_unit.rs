@@ -624,7 +624,7 @@ impl UnitTokens<'_, '_> {
 }
 
 /// Every token [`UnitTokens`] resolves, `"player"` included (the reference answers d² = 0).
-fn reach_tokens() -> impl Iterator<Item = &'static str> {
+pub(crate) fn reach_tokens() -> impl Iterator<Item = &'static str> {
     ["player", "target", "targettarget", "mouseover", "pet"]
         .into_iter()
         .chain(crate::ui_party::PARTY_TOKENS)

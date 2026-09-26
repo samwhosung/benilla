@@ -411,6 +411,11 @@ impl super::UiScript {
     pub fn take_drop_item_on_unit(&mut self) -> Vec<String> {
         std::mem::take(&mut self.model_mut().drop_item_on_unit)
     }
+
+    /// Drain `SpellTargetUnit` calls for the host's pending unit-target spell binder.
+    pub fn take_spell_target_unit(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.model_mut().spell_target_unit)
+    }
 }
 
 /// The non-`"player"` token of a two-unit call such as `UnitIsEnemy(a, b)`, which the snapshot
