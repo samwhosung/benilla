@@ -231,7 +231,7 @@ pub fn charatlas(chain: &mut Chain, look: &Look, out: Option<&std::path::Path>) 
     // The shirt-cuff geoset's gate is the ArmLower tile's occupancy, read off the same plan.
     eq.forearm_dressed = forearm_dressed(&equipment);
     let ids = geosets.visible_geosets(look.race, look.sex, look.hair_style, look.facial_hair, &eq);
-    println!("\nvisible geosets: {ids:?}");
+    println!("\nvisible geosets: {ids:?} + all IDs above 1700");
 
     if let Some(path) = out {
         let img =
