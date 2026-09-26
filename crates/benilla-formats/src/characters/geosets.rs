@@ -17,12 +17,9 @@ const REGION_BASES: [u16; 16] = [
     1, 101, 201, 301, 401, 501, 601, 702, 801, 901, 1001, 1101, 1201, 1301, 1401, 1501,
 ];
 
-/// Character geoset visibility: the selected variants plus the model's unmanaged geosets.
-///
-/// The 1.12.1 selector (`0x477520`) first disables only **0..=1700** (`0x6a4`), then enables
-/// the body, customization and equipment variants. Model submeshes start enabled, so IDs above
-/// that inclusive bound stay visible. Reforged uses 1702 for Night Elf eye-glow cards; treating
-/// the explicit selections as a closed set hid those cards in both previews and the world.
+/// The geosets a character shows: the selector's picks, plus every ID above 1700. `0x477520` first
+/// disables only 0..=1700 (`0x6a4`, through `0x7110d0`) and then enables its picks, and a model's
+/// submeshes start visible (`0x70ebd0` fills their flags with 1), so a higher ID stays shown.
 #[derive(Debug)]
 pub struct VisibleGeosets {
     selected: Vec<u16>,
@@ -75,9 +72,9 @@ impl CharacterGeosets {
         facial_hair: u8,
         equip: &EquipGeosets,
     ) -> VisibleGeosets {
+        // The naked set: the region bases and geoset 0, the body.
         let mut set = REGION_BASES.to_vec();
         set.push(0);
-        // The naked set: the region bases and geoset 0, the body.
         // Hair: `0x478540` returns `max(1, geosetId)`, so a bald style shows geoset 1, the scalp.
         if let Some(&g) = self.hair.get(&(race, sex, hair_style)) {
             set[0] = g.max(1) as u16;
@@ -336,7 +333,8 @@ mod tests {
         );
     }
 
-    /// Stock eye glow uses geoset 0; Reforged eye glow uses unmanaged geoset 1702.
+    /// Both Night Elf sexes carry two eye-glow cards (on geoset 0 in the stock data; an asset pack
+    /// may put them above 1700), and both survive the selection, bare and robed.
     #[test]
     fn geoset_visibility_keeps_night_elf_eye_glow() {
         let data = crate::wow_data_or_skip!();
