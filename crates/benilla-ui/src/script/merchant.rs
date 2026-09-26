@@ -1114,8 +1114,9 @@ mod tests {
         (n("updates"), n("shows"), n("hides"))
     }
 
-    /// The grab goes through the cursor setter (`0x4950f0`): `CURSOR_UPDATE` at `0x495159`, and
-    /// no `ACTIONBAR_SHOWGRID` since mode 5 is not mode 7.
+    /// The grab goes through the cursor setter (`0x4950f0`): its `ClearCursor(1,1)` (`0x495112`)
+    /// signals `CURSOR_UPDATE` from the clear's tail, the set signals it again (`0x495159`), and no
+    /// `ACTIONBAR_SHOWGRID` since mode 5 is not mode 7.
     #[test]
     fn a_vendor_grab_fires_cursor_update_but_not_the_bar_grid() {
         let mut s = UiScript::new().unwrap();
@@ -1124,12 +1125,12 @@ mod tests {
         s.run("PickupMerchantItem(1)").unwrap();
         assert_eq!(
             cursor_event_counts(&mut s),
-            (1, 0, 0),
+            (2, 0, 0),
             "(CURSOR_UPDATE, ACTIONBAR_SHOWGRID, ACTIONBAR_HIDEGRID) after a vendor grab"
         );
         // The toggle-off is a plain clear: one more CURSOR_UPDATE, no HIDEGRID.
         s.run("PickupMerchantItem(1)").unwrap();
-        assert_eq!(cursor_event_counts(&mut s), (2, 0, 0));
+        assert_eq!(cursor_event_counts(&mut s), (3, 0, 0));
     }
 
     #[test]

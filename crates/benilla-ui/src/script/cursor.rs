@@ -223,8 +223,8 @@ pub(super) fn item_link_name(link: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
-/// `ClearCursor()`: drops any payload and frees an item's source slot; an empty cursor fires
-/// nothing.
+/// `ClearCursor()` (`0x495190`): drops any payload and frees an item's source slot, then signals
+/// `CURSOR_UPDATE` from its shared tail (`0x49529b`) on every call, an empty cursor included.
 pub(crate) fn clear_cursor(model: &mut Model) {
     // Any clear first cancels an armed gift wrap, whatever its parameters (`0x495190` opens with
     // `0x5edf10`): the wrapping paper unlocks and the cursor mode returns to the base.
@@ -233,25 +233,12 @@ pub(crate) fn clear_cursor(model: &mut Model) {
         model.ui_cursor = None;
         model.ui_cursor_dirty = true;
     }
-    match model.cursor.take() {
-        Some(CursorPayload::Item(item)) => {
-            queue_cursor_update(model);
-            queue_lock_changed(model, item.bag, item.slot);
-        }
-        Some(
-            CursorPayload::Spell(_)
-            | CursorPayload::Action(_)
-            | CursorPayload::Macro(_)
-            | CursorPayload::PetAction(_)
-            | CursorPayload::StablePet(_)
-            // Coins: the purse was never debited, so nothing goes back.
-            | CursorPayload::Money(_)
-            // A vendor row clears with no packet (`0x49525f`).
-            | CursorPayload::Merchant(_),
-        ) => {
-            queue_cursor_update(model);
-        }
-        None => {}
+    // Coins go back to nothing, as the purse was never debited; a vendor row clears with no
+    // packet (`0x49525f`).
+    let taken = model.cursor.take();
+    queue_cursor_update(model);
+    if let Some(CursorPayload::Item(item)) = taken {
+        queue_lock_changed(model, item.bag, item.slot);
     }
 }
 
@@ -740,6 +727,20 @@ mod tests {
         assert!(s.cursor_payload().is_some());
         s.run("ClearCursor()").unwrap();
         assert!(s.cursor_payload().is_none());
+    }
+
+    /// The clear's shared tail (`0x49529b`) signals on every call: with nothing held, one
+    /// `CURSOR_UPDATE` and no grid event.
+    #[test]
+    fn clear_cursor_with_nothing_held_still_signals() {
+        let s = UiScript::new().unwrap();
+        let before = s.model_ref().pending_events.len();
+        s.run("ClearCursor()").unwrap();
+        let fired: Vec<String> = s.model_ref().pending_events[before..]
+            .iter()
+            .map(|(e, _)| e.clone())
+            .collect();
+        assert_eq!(fired, vec!["CURSOR_UPDATE"]);
     }
 
     /// Clearing a spell on terrain is the deviation documented on `world_drop_click`.

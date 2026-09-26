@@ -142,15 +142,18 @@ pub(super) fn put_item_in_backpack(model: &mut Model) -> bool {
     true
 }
 
-/// `PickupBagFromSlot(inventorySlot)` (`0x4c7b00`): clears the cursor before it looks at the slot,
-/// where the reference clears only a held item (`0x4c7b70`, `0x4c7b79`); takes only a container
+/// `PickupBagFromSlot(inventorySlot)` (`0x4c7b00`): clears a held payload before it looks at the
+/// slot, where the reference clears only a held item (`0x4c7b70`, `0x4c7b79`); with nothing held it
+/// skips the clear and its `CURSOR_UPDATE`, as the reference does. Takes only a container
 /// (`0x4c7bb3`), and never places or swaps. The client has no empty-bag rule: the server refuses
 /// with `EQUIP_ERR_CAN_ONLY_DO_WITH_EMPTY_BAGS`.
 pub(super) fn pickup_bag_from_slot(model: &mut Model, live: u32) {
     if !accepts(live) {
         return;
     }
-    clear_cursor(model);
+    if model.cursor.is_some() {
+        clear_cursor(model);
+    }
     let picked = usize::try_from(live)
         .ok()
         .and_then(|slot| model.inv_slot("player", slot))
@@ -226,6 +229,17 @@ mod tests {
         BagAutoStore, BankBagSlots, ContainerMove, ContainerSlot, ContainerState, InvSlotView,
         InventorySlots, UiScript,
     };
+
+    /// With nothing held the reference skips the clear (`0x4c7b6a`-`0x4c7b70`), so a drag from an
+    /// empty bag slot signals nothing.
+    #[test]
+    fn an_empty_cursor_skips_the_clear_and_its_signal() {
+        let s = UiScript::new().unwrap();
+        let before = s.model_ref().pending_events.len();
+        s.run("PickupBagFromSlot(20)").unwrap();
+        assert!(s.cursor_payload().is_none());
+        assert_eq!(s.model_ref().pending_events.len(), before);
+    }
 
     /// An item that is a bag: `equip_slots` is `find_equip_slot(INVTYPE_BAG)`.
     fn bag_slot_view(item_id: u32) -> InvSlotView {
