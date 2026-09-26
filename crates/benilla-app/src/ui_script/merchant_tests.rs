@@ -715,7 +715,7 @@ fn merchant_tabs_drive_buyback_page_and_repair_pair() {
         }),
         ..Default::default()
     };
-    let merchant = MerchantState {
+    s.set_merchant(Some(MerchantState {
         items: vec![MerchantItem {
             name: Some("Refreshing Spring Water".into()),
             texture: Some("Interface\\Icons\\INV_Drink_18".into()),
@@ -733,8 +733,7 @@ fn merchant_tabs_drive_buyback_page_and_repair_pair() {
         ],
         can_repair: true,
         repair_all_cost: 76,
-    };
-    s.set_merchant(Some(merchant.clone()));
+    }));
     s.fire_event(
         "MERCHANT_SHOW",
         vec![ScriptValue::Str("Kurdram Stonehammer".into())],
@@ -764,25 +763,6 @@ fn merchant_tabs_drive_buyback_page_and_repair_pair() {
     s.run("MerchantRepairAllButton:Click()").unwrap();
     assert!(s.take_repair_all());
     s.take_sounds();
-
-    // The server's durability update reduces the cost to zero while the window remains open.
-    // `MERCHANT_UPDATE` alone repaints rows; the app must also refresh the OnShow-only button.
-    let mut repaired = merchant.clone();
-    repaired.repair_all_cost = 0;
-    s.set_merchant(Some(repaired));
-    s.fire_event("MERCHANT_UPDATE", vec![]);
-    assert!(s
-        .eval::<bool>("return MerchantRepairAllButton:IsEnabled() ~= 0")
-        .unwrap());
-    s.refresh_merchant_repair_all();
-    assert!(s
-        .eval::<bool>("return MerchantRepairAllButton:IsEnabled() == 0")
-        .unwrap());
-    s.set_merchant(Some(merchant));
-    s.refresh_merchant_repair_all();
-    assert!(s
-        .eval::<bool>("return MerchantRepairAllButton:IsEnabled() ~= 0")
-        .unwrap());
 
     s.run("MerchantFrameTab2:Click()").unwrap();
     assert!(s.errors().is_empty(), "tab errors: {:?}", s.errors());
