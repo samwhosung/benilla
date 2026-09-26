@@ -308,19 +308,29 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> bool 
         model.ui_cursor_dirty = true;
         return true;
     }
+    // Only a held item (`0x4f9c38`) or vendor row (`0x4f9c43`) takes the click first. Past them
+    // an empty slot does nothing (`0x4f9c4e`), an armed item-targeting spell binds the item
+    // (`0x4f9c54`) and repair mode repairs it (`0x4f9c7b`), any other payload staying held; the
+    // app's repair drain runs the arm's `ITEM_REPAIR` and send.
+    let placing = matches!(
+        model.cursor,
+        Some(CursorPayload::Item(_) | CursorPayload::Merchant(_))
+    );
+    if !placing && (model.item_pick_armed || model.repair_mode) {
+        let occupied = model
+            .containers
+            .get(&bag)
+            .and_then(|c| c.slots.get(&slot))
+            .is_some_and(|s| s.item_id != 0);
+        if occupied && model.item_pick_armed {
+            model.item_picks.push((bag, slot));
+        } else if occupied {
+            model.container_repairs.push((bag, slot));
+        }
+        return false;
+    }
     match model.cursor.take() {
         None => {
-            // A held item (`0x4f9c38`) or vendor row (`0x4f9c43`) is placed first; only an empty
-            // cursor reaches the item-targeting rung (`0x4f9c54`) and then repair (`0x4f9c7b`),
-            // whose affordability check and `ITEM_REPAIR` the app's repair drain runs.
-            if model.item_pick_armed {
-                model.item_picks.push((bag, slot));
-                return false;
-            }
-            if model.repair_mode {
-                model.container_repairs.push((bag, slot));
-                return false;
-            }
             let picked = model
                 .containers
                 .get(&bag)
@@ -1284,6 +1294,29 @@ mod tests {
         assert!(s.cursor_payload().is_none());
         assert!(s.take_container_repairs().is_empty());
         assert!(s.take_sounds().is_empty());
+    }
+
+    #[test]
+    fn repair_mode_repairs_under_held_coins_and_keeps_them() {
+        use crate::script::cursor::{CursorMoney, CursorPayload};
+        let mut s = UiScript::new().unwrap();
+        s.set_container(0, Some(backpack()));
+        s.model_mut().repair_mode = true;
+        let coins = CursorPayload::Money(CursorMoney { copper: 50 });
+        s.model_mut().cursor = Some(coins.clone());
+
+        s.run("PickupContainerItem(0, 1)").unwrap();
+        assert_eq!(
+            s.take_container_repairs(),
+            vec![(0, 1)],
+            "coins pass both payload tests (`0x4f9c38`, `0x4f9c43`)"
+        );
+        assert_eq!(s.cursor_payload(), Some(coins), "and stay held");
+        s.run("PickupContainerItem(0, 2)").unwrap();
+        assert!(
+            s.take_container_repairs().is_empty(),
+            "an empty slot does nothing (`0x4f9c4e`)"
+        );
     }
 
     #[test]
