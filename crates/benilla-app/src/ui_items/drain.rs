@@ -205,8 +205,8 @@ pub(super) fn drain_inventory_uses(
     }
 }
 
-/// Sends paper-doll repair-mode clicks as `CMSG_REPAIR_ITEM`; the cursor route supplies the
-/// equipped item's guid, as the 1.12 client does rather than an inventory position.
+/// Paper-doll repair-mode clicks (`0x4c7714`): `ITEM_REPAIR` and `CMSG_REPAIR_ITEM` with the worn
+/// item's guid, as the bag route above.
 pub(super) fn drain_inventory_repairs(
     script: Option<NonSendMut<UiScript>>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
@@ -233,6 +233,7 @@ pub(super) fn drain_inventory_repairs(
         {
             Some(item_guid) => {
                 debug!("ui_items: repair equipped lua slot {id} (item {item_guid:#x})");
+                script.queue_sound_kit("ITEM_REPAIR");
                 let _ = commands
                     .0
                     .send(ClientCommand::RepairItem { vendor, item_guid });
@@ -260,8 +261,10 @@ pub(super) fn drain_container_uses(
     let Some(mut script) = script else {
         return;
     };
-    // Repair-mode clicks (the reference's `0x4f9c7b` route) repair the one item. The reference's
-    // affordability check (error 0x25) is not built; the server refuses instead.
+    // Repair-mode clicks (the reference's `0x4f9c7b` route) repair the one item, sounding
+    // `ITEM_REPAIR` as it goes out (`0x4f9ce4`). The reference's affordability check before that
+    // (error 0x25, silent) is not built: our costs lack its reputation discount, so the server
+    // refuses instead.
     for (bag, slot) in script.take_container_repairs() {
         let Some(vendor) = merchant.vendor else {
             continue;
@@ -274,6 +277,7 @@ pub(super) fn drain_container_uses(
         match item_guid {
             Some(guid) => {
                 debug!("ui_items: repair lua bag {bag} slot {slot} (item {guid:#x})");
+                script.queue_sound_kit("ITEM_REPAIR");
                 let _ = ladder.commands.0.send(ClientCommand::RepairItem {
                     vendor,
                     item_guid: guid,
@@ -838,6 +842,119 @@ mod tests {
         assert!(
             app.world().resource::<PendingItemOps>().contains(0, 1),
             "the slot greys at the click"
+        );
+    }
+
+    /// A repair-mode right-click on a bag item: `ITEM_REPAIR` as it goes out (`0x4f9ce4`), then
+    /// `CMSG_REPAIR_ITEM` with the vendor's and the item's guid, and no use or sale.
+    #[test]
+    fn a_repair_click_sounds_and_ships_the_items_guid() {
+        const VENDOR: u64 = 0xF130_0000_0000_0042;
+        let (mut app, rx) = open_the_clam();
+        while rx.try_recv().is_ok() {} // drain the clam's own send
+        app.world_mut()
+            .resource_mut::<crate::ui_merchant::MerchantOpen>()
+            .vendor = Some(VENDOR);
+        {
+            let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+            script.take_sounds();
+            let mut bag = benilla_ui::script::ContainerState {
+                num_slots: 16,
+                ..Default::default()
+            };
+            bag.slots.insert(
+                1,
+                benilla_ui::script::ContainerSlot {
+                    item_id: CLAM_ENTRY,
+                    count: 1,
+                    ..Default::default()
+                },
+            );
+            script.set_container(0, Some(bag));
+            script.set_merchant(Some(benilla_ui::script::MerchantState {
+                can_repair: true,
+                ..Default::default()
+            }));
+            script
+                .run("ShowRepairCursor() UseContainerItem(0, 1)")
+                .unwrap();
+        }
+        app.world_mut()
+            .run_system_once(drain_container_uses)
+            .unwrap();
+
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::RepairItem {
+                vendor: VENDOR,
+                item_guid: CLAM
+            })
+        ));
+        assert!(rx.try_recv().is_err(), "the repair alone: no use or sale");
+        let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+        assert_eq!(
+            script.take_sounds(),
+            vec![benilla_ui::script::SoundRequest::KitName(
+                "ITEM_REPAIR".into()
+            )]
+        );
+    }
+
+    /// A repair-mode click on a worn item (`0x4c7714`): `ITEM_REPAIR` as it goes out (`0x4c7780`),
+    /// then `CMSG_REPAIR_ITEM` with the vendor's and the worn item's guid.
+    #[test]
+    fn a_worn_repair_click_sounds_and_ships_the_items_guid() {
+        const VENDOR: u64 = 0xF130_0000_0000_0042;
+        const HELM: u64 = 0x4000_0000_0000_0777;
+        let head = benilla_protocol::field::FIELD_PLAYER_INV_SLOT_HEAD;
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.init_resource::<crate::net::GuidIndex>()
+            .insert_resource(crate::ui_merchant::MerchantOpen {
+                vendor: Some(VENDOR),
+                items: Vec::new(),
+            })
+            .insert_resource(NetCommands(tx));
+        app.world_mut().spawn((
+            SelfPlayer,
+            ObjectStore(ObjectFields::from_pairs(&[
+                (head, HELM as u32),
+                (head + 1, (HELM >> 32) as u32),
+            ])),
+        ));
+        let mut script = UiScript::new().unwrap();
+        let mut slots: benilla_ui::script::InventorySlots = Default::default();
+        slots[1] = Some(benilla_ui::script::InvSlotView {
+            item_id: 7,
+            ..Default::default()
+        });
+        script.set_inventory_slots(slots);
+        script.set_merchant(Some(benilla_ui::script::MerchantState {
+            can_repair: true,
+            ..Default::default()
+        }));
+        script.take_sounds();
+        script
+            .run("ShowRepairCursor() PickupInventoryItem(1)")
+            .unwrap();
+        app.insert_non_send_resource(script);
+        app.world_mut()
+            .run_system_once(drain_inventory_repairs)
+            .unwrap();
+
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::RepairItem {
+                vendor: VENDOR,
+                item_guid: HELM
+            })
+        ));
+        let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+        assert_eq!(
+            script.take_sounds(),
+            vec![benilla_ui::script::SoundRequest::KitName(
+                "ITEM_REPAIR".into()
+            )]
         );
     }
 

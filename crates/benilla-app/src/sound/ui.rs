@@ -50,14 +50,6 @@ fn drain_ui_sounds(
         let kit_ref = match &req {
             SoundRequest::KitId(id) => KitRef::Id(*id),
             SoundRequest::KitName(name) => KitRef::Name(name),
-            SoundRequest::KitNameRestart(name) => {
-                if !config.world_hold {
-                    if let Some(id) = kits.id_by_name(name) {
-                        kit::stop_kit(&mut out, id);
-                    }
-                }
-                KitRef::Name(name)
-            }
             SoundRequest::File(path) => {
                 // `PlaySoundFile`: by path, with no kit gates or variation.
                 if let Err(e) = kit::play_file(
