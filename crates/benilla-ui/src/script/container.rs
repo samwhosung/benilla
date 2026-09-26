@@ -199,7 +199,7 @@ impl super::UiScript {
         cursor::queue_lock_changed(&mut model, bag, slot);
     }
 
-    /// The armed gift wrap, if any; the app reads it to tell whether a right-click cancels one.
+    /// The armed gift wrap, if any; the app reads it to hold the cursor's base at Cast.
     pub fn gift_wrap_armed(&self) -> Option<PendingWrap> {
         self.model_ref().pending_wrap
     }
