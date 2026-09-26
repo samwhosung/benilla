@@ -131,9 +131,15 @@ impl super::UiScript {
     }
 
     /// Whether the spell-targeting cursor is up, for `SpellIsTargeting()` and
-    /// `SpellStopTargeting()`; pushed each frame before the input pass runs the ESC chain.
+    /// `SpellStopTargeting()`; pushed each frame before the input pass runs the ESC chain. Arming
+    /// ends repair mode, as `HideRepairCursor` does: the targeting arm writes the Cast base mode
+    /// over Repair (`0x6e50b0`), and its end restores Point (`0x6e49f5`, `0x6e554c`), never Repair.
     pub fn set_spell_targeting(&mut self, targeting: bool) {
-        self.model_mut().spell_targeting = targeting;
+        let mut model = self.model_mut();
+        model.spell_targeting = targeting;
+        if targeting {
+            model.repair_mode = false;
+        }
     }
 
     /// Drain the `SpellStopTargeting()` trigger, the ESC chain's rung (`UIParent.lua:1490`); the

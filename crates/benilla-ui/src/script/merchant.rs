@@ -911,6 +911,31 @@ mod tests {
         assert!(s.take_container_moves().is_empty());
     }
 
+    /// The targeting arm writes the Cast base mode over Repair (`0x6e50b0`) and its end restores
+    /// Point (`0x6e49f5`, `0x6e554c`), so arming ends repair mode for good. The idle feed pushes
+    /// false every frame, which must leave repair mode standing.
+    #[test]
+    fn arming_spell_targeting_ends_repair_mode_and_disarming_does_not_restore_it() {
+        let mut s = UiScript::new().unwrap();
+        let mut vendor = stock();
+        vendor.can_repair = true;
+        s.set_merchant(Some(vendor));
+        s.run("ShowRepairCursor()").unwrap();
+        s.set_spell_targeting(false);
+        assert!(s.repair_mode(), "the idle feed keeps repair mode");
+
+        s.set_spell_targeting(true);
+        assert!(!s.repair_mode(), "the targeting arm ends repair mode");
+        assert!(s.eval::<bool>("return InRepairMode() == nil").unwrap());
+
+        s.set_spell_targeting(false);
+        assert!(
+            !s.repair_mode(),
+            "ending the targeting restores Point, not Repair"
+        );
+        assert!(s.eval::<bool>("return InRepairMode() == nil").unwrap());
+    }
+
     #[test]
     fn clearing_the_merchant_empties_it() {
         let mut s = UiScript::new().unwrap();
