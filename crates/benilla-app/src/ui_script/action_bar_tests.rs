@@ -1143,20 +1143,19 @@ fn shipped_bag_frame_drives_end_to_end() {
         "a pickup alone queues no move"
     );
 
-    // Right-click while holding: the right arm has no cursor test (ContainerFrame.lua:583-599).
-    // What the reference client does with a use while the cursor holds an item is untraced.
+    // Right-click while holding: the right arm has no cursor test (ContainerFrame.lua:583-599),
+    // and `UseContainerItem` clears the cursor before it reads the slot (`0x4fa198`).
     s.mouse_button(bx, by, "RightButton", true);
     s.mouse_button(bx, by, "RightButton", false);
     assert_eq!(
         s.take_container_uses(),
         vec![(0, 1)],
-        "the reference's right arm uses the slot even with a full cursor"
+        "the right arm uses the slot even with a full cursor"
     );
     assert!(
-        s.cursor_item().is_some(),
-        "…and leaves the held item where it was"
+        s.cursor_item().is_none(),
+        "…after putting the held item back"
     );
-    s.run("ClearCursor()").unwrap();
 
     s.mouse_button(bx, by, "RightButton", true);
     s.mouse_button(bx, by, "RightButton", false);
