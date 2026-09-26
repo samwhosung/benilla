@@ -3,6 +3,7 @@
 //! [`feed_repair_all_cost`] the repair-all total, and [`drain_merchant`] sends the Lua intents. A bag click sells through [`crate::ui_items`].
 
 use benilla_protocol::messages::{buy_result, sell_result, VendorItem};
+use benilla_world::interact::WorldRightPress;
 use bevy::prelude::*;
 
 use benilla_ui::script::{ItemStatsHead, MerchantItem, MerchantState, ScriptValue, UiScript};
@@ -627,6 +628,22 @@ fn drain_merchant(
     if script.take_merchant_close() {
         debug!("ui_merchant: client-side close (no packet)");
         open.clear();
+    }
+}
+
+/// A right mouse-down in the world ends repair mode: the WorldFrame hook `0x492c20` resets the
+/// Repair base mode to Point (`0x492c68`) and consumes nothing. A held payload pre-empts the hook
+/// (`0x492b50`), and a press over a UI frame never reaches it.
+pub(crate) fn end_repair_mode_on_right_press(
+    mut presses: MessageReader<WorldRightPress>,
+    payload_held: Res<crate::ui_script::CursorPayloadHeld>,
+    script: Option<NonSendMut<UiScript>>,
+) {
+    if presses.read().last().is_none() || payload_held.0 {
+        return;
+    }
+    if let Some(mut script) = script {
+        script.end_repair_mode();
     }
 }
 

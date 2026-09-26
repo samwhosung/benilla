@@ -282,9 +282,13 @@ impl Plugin for TargetPlugin {
                     hover::update_hover,
                     hover::update_hovered_object,
                     cursor_mode::classify_cursor,
-                    // The right-press cancel (the reference's OnMouseDown hook) before the cursor
-                    // drive, so the press frame already reads the mode cleared.
-                    crate::spell::targeting::cancel_targeting_on_right_press,
+                    // The right press's two legs of the reference's OnMouseDown hook (`0x492c20`),
+                    // the targeting cancel and the repair-mode reset, before the cursor drive, so
+                    // the press frame already reads both modes cleared.
+                    (
+                        crate::spell::targeting::cancel_targeting_on_right_press,
+                        crate::ui_merchant::end_repair_mode_on_right_press,
+                    ),
                     // Overwrites the classifier's verdict while the targeting cursor is up, as the
                     // reference's dispatcher runs this branch before the object classifier.
                     crate::spell::targeting::drive_targeting_cursor,

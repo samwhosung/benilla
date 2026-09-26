@@ -700,6 +700,18 @@ pub(super) fn latch_world_mouse(
     rig.world_mouse.update(&buttons, world_press);
 }
 
+/// The right button's down edge in the world, before the press is judged a click or a drag:
+/// `CGWorldFrame::OnMouseDown` (`0x483c40`) runs its hook `0x492c20` ahead of the button's binding,
+/// so ground targeting's cancel and the repair-mode reset read it before the look session.
+pub(super) fn send_world_right_press(
+    rig: Res<CameraControl>,
+    mut world_right_press: MessageWriter<WorldRightPress>,
+) {
+    if rig.world_mouse.down(LookButton::Right) {
+        world_right_press.write(WorldRightPress);
+    }
+}
+
 #[derive(Component)]
 // `pub(crate)` for the scripted camera park's query; `FlyCam::park` is its one lever.
 pub(crate) struct FlyCam {
@@ -747,7 +759,6 @@ pub(super) fn run_look_session(
     click_consumed: bool,
     world_click: &mut MessageWriter<WorldClick>,
     world_right_click: &mut MessageWriter<WorldRightClick>,
-    world_right_press: &mut MessageWriter<WorldRightPress>,
     left_click: &mut Option<PressGesture>,
     right_click: &mut Option<PressGesture>,
     look_cfg: LookConfig,
@@ -757,11 +768,6 @@ pub(super) fn run_look_session(
     // Seconds on the app clock, for the press predicate's two time gates.
     now: f32,
 ) {
-    // The right button's down edge, before the press is judged a click or a drag: the reference's
-    // WorldFrame OnMouseDown fires at the press either way. Ground targeting's cancel reads it.
-    if rig.world_mouse.down(LookButton::Right) {
-        world_right_press.write(WorldRightPress);
-    }
     // A chord is a both-button run, never a select: the reference kills the pending click and arms
     // none while another primary's binding is held (`0x514ac1`, `0x51481a`).
     if rig.world_mouse.both() {
@@ -1853,6 +1859,67 @@ mod tests {
         assert!(!rig.world_mouse.both());
         assert!(!rig.world_mouse.held(LookButton::Right));
         assert!(!rig.world_mouse.held(LookButton::Left));
+    }
+
+    /// A right mouse-down in the world ends repair mode (`0x492c68`), from the latch through the
+    /// press edge to the reset; the same press on a UI frame, or one that drops a held payload
+    /// (`0x492b50`), leaves it standing.
+    #[test]
+    fn a_right_press_in_the_world_ends_repair_mode_and_one_on_the_ui_does_not() {
+        use benilla_ui::script::{MerchantState, UiScript};
+        use bevy::ecs::system::RunSystemOnce;
+        use bevy::math::DVec2;
+
+        // One right press with repair mode armed; returns whether repair mode survived it.
+        let press = |over_ui: bool, payload_held: bool| {
+            let mut world = World::new();
+            let mut buttons = ButtonInput::<MouseButton>::default();
+            buttons.press(MouseButton::Right);
+            world.insert_resource(buttons);
+            world.insert_resource(crate::ui_script::PointerOverUi(over_ui));
+            world.insert_resource(crate::ui_script::CursorPayloadHeld(payload_held));
+            world.init_resource::<CameraControl>();
+            world.init_resource::<Messages<WorldRightPress>>();
+            world.spawn((
+                Camera::default(),
+                FlyCam {
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    speed: 0.0,
+                },
+            ));
+            let mut window = Window::default();
+            window.set_physical_cursor_position(Some(DVec2::new(100.0, 100.0)));
+            world.spawn((window, PrimaryWindow));
+            let mut script = UiScript::new().unwrap();
+            script.set_merchant(Some(MerchantState {
+                can_repair: true,
+                ..MerchantState::default()
+            }));
+            script.run("ShowRepairCursor()").unwrap();
+            assert!(script.repair_mode(), "the repair vendor arms repair mode");
+            world.insert_non_send_resource(script);
+
+            world.run_system_once(latch_world_mouse).unwrap();
+            world.run_system_once(send_world_right_press).unwrap();
+            world
+                .run_system_once(crate::ui_merchant::end_repair_mode_on_right_press)
+                .unwrap();
+            world.non_send_resource::<UiScript>().repair_mode()
+        };
+
+        assert!(
+            !press(false, false),
+            "a right press in the world ends repair mode"
+        );
+        assert!(
+            press(true, false),
+            "a right press on a UI frame never reaches the world's hook"
+        );
+        assert!(
+            press(false, true),
+            "a press that drops a held payload is consumed before the hook"
+        );
     }
 
     /// The classifier (`0x510960`) reads the camera's command word, not the character's velocity,

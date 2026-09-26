@@ -128,6 +128,12 @@ impl super::UiScript {
     pub fn repair_mode(&self) -> bool {
         self.model_ref().repair_mode
     }
+
+    /// Leave repair mode, as `HideRepairCursor` does, for the world's right mouse-down, which
+    /// resets the Repair base mode to Point (`0x492c68`).
+    pub fn end_repair_mode(&mut self) {
+        self.model_mut().repair_mode = false;
+    }
 }
 
 /// 1 or nil, as the client pushes a usable flag (`pushnumber(1.0)` / `pushnil`).

@@ -20,7 +20,7 @@ use crate::net::{ClientCommand, Embodied, NetCommands, TeleportMessage, Worldpor
 use crate::ui_script::InspectMode;
 use benilla_assets::coords::wow_to_bevy;
 use benilla_assets::AssetSet;
-use benilla_world::interact::{WorldClick, WorldRightClick, WorldRightPress};
+use benilla_world::interact::{WorldClick, WorldRightClick};
 use benilla_world::schedule::WorldStage;
 
 mod arc;
@@ -325,6 +325,18 @@ impl Plugin for PlayerPlugin {
                 .in_set(WorldStage::Input)
                 .before(control)
                 .before(follow::steer_follow)
+                .in_set(crate::char_select::InWorldGated),
+        )
+        // The world's right mouse-down, off that latch and ahead of `control`, the button's
+        // binding, as `0x483c40` runs its hook before `ExecuteBinding`; off in capture mode, like
+        // `control`.
+        .add_systems(
+            Update,
+            camera::send_world_right_press
+                .in_set(WorldStage::Input)
+                .after(camera::latch_world_mouse)
+                .before(control)
+                .run_if(not(resource_exists::<crate::run_mode::CaptureMode>))
                 .in_set(crate::char_select::InWorldGated),
         )
         // `/follow` steers before `control`, so the player's own turn input lands after it and

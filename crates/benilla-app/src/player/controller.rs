@@ -74,11 +74,7 @@ pub(super) fn control(
     mut body: BodyQuery,
     window: Single<(&mut Window, &mut CursorOptions), With<PrimaryWindow>>,
     // A press starts a look and arms a click test, which the release settles on time and travel.
-    mut world_clicks: (
-        MessageWriter<WorldClick>,
-        MessageWriter<WorldRightClick>,
-        MessageWriter<WorldRightPress>,
-    ),
+    mut world_clicks: (MessageWriter<WorldClick>, MessageWriter<WorldRightClick>),
     mut click_test: (
         Local<Option<camera::PressGesture>>,
         Local<Option<camera::PressGesture>>,
@@ -244,7 +240,6 @@ pub(super) fn control(
         click_consumed.0,
         &mut world_clicks.0,
         &mut world_clicks.1,
-        &mut world_clicks.2,
         left_click,
         right_click,
         look_cfg,
