@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use benilla_ui::script::{TaxiUiState, UiScript};
 
 use crate::names::NameCache;
-use crate::net::{ClientCommand, NetCommands, ObjectStore, SelfPlayer};
+use crate::net::{ClientCommand, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
 use crate::player::UNIT_FLAG_TAXI_FLIGHT;
 use crate::ui_script::{UiFeed, UiInput};
 use crate::ui_session::{close_npc_session_out_of_range, NpcSession};
@@ -89,6 +89,10 @@ fn feed_taxi(
     names: Res<NameCache>,
     commands: Res<NetCommands>,
     mut cache: ResMut<TaxiRouteCache>,
+    index: Res<GuidIndex>,
+    stores: Query<&ObjectStore>,
+    self_q: Query<&ObjectStore, With<SelfPlayer>>,
+    reactions: crate::target::ReactionInputs,
     mut last: Local<crate::ui_script::VmMemo<Option<TaxiUiState>>>,
     mut last_name: Local<crate::ui_script::VmMemo<Option<String>>>,
     mut sink: crate::ui_action::MessageSink,
@@ -145,9 +149,22 @@ fn feed_taxi(
         return;
     };
 
-    // The continent is the current node's own, as the packet left it (`build_nodes`).
+    // The continent is the current node's own, as the packet left it (`build_nodes`). The fares
+    // take the flight master's price discount for the player (`0x4dc45d`, `0x4dc4a2`).
     let fresh = state.open.as_ref().and_then(|open| {
-        let (map_id, nodes, resolved) = build_nodes(open, &catalogs)?;
+        let flightmaster = index
+            .0
+            .get(&open.flightmaster)
+            .and_then(|&e| stores.get(e).ok());
+        let discount = flightmaster.zip(self_q.iter().next()).map(|(master, me)| {
+            crate::target::vendor_price_discount(
+                reactions.factions.as_deref(),
+                &reactions.reputations,
+                master,
+                me,
+            )
+        });
+        let (map_id, nodes, resolved) = build_nodes(open, &catalogs, discount)?;
         cache.0 = resolved;
         Some(TaxiUiState {
             art: format!("Interface\\TaxiFrame\\TAXIMAP{map_id}"),
@@ -332,6 +349,115 @@ mod tests {
                 0,
             )])));
         assert!(!on_taxi(&mut app), "landed: nil again");
+    }
+
+    /// The map's fares take the flight master's discount and the express leg sends the raw route
+    /// sum (`0x4dc3d0` against `0x4dc96f`). Honored, a PvP-flagged flight master and honor rank
+    /// byte 6 make 0.15: Sentinel Hill's direct 110 shows 94, and Thelsamar's route through
+    /// Ironforge, 50 + 110, shows 136 and sends 160. With the flight master unresolved the fares
+    /// show 0 (`0x4dc423`).
+    #[test]
+    fn the_map_shows_discounted_fares_and_the_express_sends_the_raw_sum() {
+        use benilla_protocol::field::FIELD_UNIT_FACTIONTEMPLATE;
+        use bevy::ecs::system::RunSystemOnce;
+
+        /// `UNIT_FIELD_BYTES_0`, `PLAYER_BYTES_3`: absolute descriptor indices.
+        const BYTES_0: u16 = 36;
+        const PLAYER_BYTES_3: u16 = 195;
+        const MASTER: u64 = 0xF130_0000_0000_0099;
+
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let catalogs = TaxiCatalogs::load(&mut chain).expect("taxi DBCs");
+        let (factions, template, reps) = crate::target::stormwind_fixture(&mut chain, 9000);
+
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.init_resource::<TaxiState>()
+            .init_resource::<TaxiRouteCache>()
+            .init_resource::<GuidIndex>()
+            .init_resource::<NameCache>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .insert_resource(NetCommands(tx))
+            .insert_resource(catalogs)
+            .insert_resource(factions)
+            .insert_resource(reps)
+            .insert_non_send_resource(UiScript::new().unwrap());
+        app.world_mut().spawn((
+            SelfPlayer,
+            ObjectStore(ObjectFields::from_pairs(&[
+                (BYTES_0, crate::target::HUMAN_WARRIOR),
+                (PLAYER_BYTES_3, 6 << 24),
+            ])),
+        ));
+        let master = app
+            .world_mut()
+            .spawn((
+                crate::net::Guid(MASTER),
+                ObjectStore(ObjectFields::from_pairs(&[
+                    (FIELD_UNIT_FACTIONTEMPLATE, template),
+                    (FIELD_UNIT_FLAGS, 0x1000),
+                ])),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<GuidIndex>()
+            .0
+            .insert(MASTER, master);
+        // At Stormwind (2), knowing Sentinel Hill (4), Ironforge (6) and Thelsamar (8).
+        app.world_mut().resource_mut::<TaxiState>().open(
+            MASTER,
+            2,
+            TaxiMask([0b1010_1010, 0, 0, 0, 0, 0, 0, 0]),
+        );
+
+        let node = |app: &mut App, name: &str| -> (i64, i64) {
+            app.world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .eval(&format!(
+                    "for i = 1, NumTaxiNodes() do \
+                       if TaxiNodeName(i) == {name:?} then return i, TaxiNodeCost(i) end \
+                     end"
+                ))
+                .unwrap()
+        };
+        app.world_mut().run_system_once(feed_taxi).unwrap();
+        assert_eq!(node(&mut app, "Sentinel Hill, Westfall").1, 94);
+        assert_eq!(node(&mut app, "Ironforge, Dun Morogh").1, 42);
+        let (thelsamar, shown) = node(&mut app, "Thelsamar, Loch Modan");
+        assert_eq!(shown, 136);
+
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run(&format!("TakeTaxiNode({thelsamar})"))
+            .unwrap();
+        app.world_mut().run_system_once(drain_taxi).unwrap();
+        // The feed's name lookup queries the flight master; only the activates matter here.
+        let sent: Vec<_> = rx
+            .try_iter()
+            .filter(|c| {
+                matches!(
+                    c,
+                    ClientCommand::ActivateTaxi { .. } | ClientCommand::ActivateTaxiExpress { .. }
+                )
+            })
+            .collect();
+        assert!(
+            matches!(
+                sent.as_slice(),
+                [ClientCommand::ActivateTaxiExpress { total_cost: 160, nodes, .. }]
+                    if nodes == &[2, 6, 8]
+            ),
+            "the express carries the undiscounted sum, got {sent:?}"
+        );
+
+        app.world_mut()
+            .resource_mut::<GuidIndex>()
+            .0
+            .remove(&MASTER);
+        app.world_mut().run_system_once(feed_taxi).unwrap();
+        assert_eq!(node(&mut app, "Sentinel Hill, Westfall").1, 0);
     }
 
     #[test]

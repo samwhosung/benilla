@@ -271,13 +271,14 @@ fn resolve_buyback(
 }
 
 /// One item's repair cost, by the reference's `0x4faf30` arithmetic
-/// ([`benilla_formats::DurabilityTables`]); its reputation discount is not applied (passed as 0).
+/// ([`benilla_formats::DurabilityTables`]), after the price `discount` (`0x4faf8a`).
 fn item_repair_cost(
     guid: u64,
     objects: &Objects,
     items: &Items,
     tables: &RepairTables,
     commands: &NetCommands,
+    discount: f64,
 ) -> u32 {
     let Some(obj) = objects.object(guid) else {
         return 0;
@@ -295,22 +296,26 @@ fn item_repair_cost(
     let (level, quality, class, subclass) = (t.item_level, t.quality, t.class, t.subclass);
     tables
         .0
-        .repair_cost(points, level, quality, class, subclass, 0.0)
+        .repair_cost(points, level, quality, class, subclass, discount)
 }
 
 /// The repair-all total over the reference's three sweeps (`0x4fbd60`): equipped slots 0-18, the
-/// backpack and the four bags' contents; never the bank, keyring or buyback.
+/// backpack and the four bags' contents; never the bank, keyring or buyback. It sums the
+/// discounted, rounded per-item costs (`0x4fbe0b`); the total itself is never discounted.
 fn repair_all_cost(
     store: &benilla_protocol::ObjectFields,
     objects: &Objects,
     items: &Items,
     tables: &RepairTables,
     commands: &NetCommands,
+    discount: f64,
 ) -> u32 {
     let mut total: u64 = 0;
     let mut add = |guid: u64, items: &Items| {
         if guid != 0 {
-            total += u64::from(item_repair_cost(guid, objects, items, tables, commands));
+            total += u64::from(item_repair_cost(
+                guid, objects, items, tables, commands, discount,
+            ));
         }
     };
     for i in 0..19u8 {
@@ -338,15 +343,22 @@ fn repair_all_cost(
     total.min(u64::from(u32::MAX)) as u32
 }
 
+/// The open vendor's unit, `None` with none open or its unit not streamed.
+fn vendor_store<'a>(
+    open: &MerchantOpen,
+    units: &'a Query<(&Guid, &ObjectStore), Without<SelfPlayer>>,
+) -> Option<&'a ObjectStore> {
+    open.vendor
+        .and_then(|g| units.iter().find(|(guid, _)| guid.0 == g))
+        .map(|(_, store)| store)
+}
+
 /// The open vendor's `UNIT_NPC_FLAGS`, 0 with none open or its unit not streamed.
 fn vendor_npc_flags(
     open: &MerchantOpen,
     units: &Query<(&Guid, &ObjectStore), Without<SelfPlayer>>,
 ) -> u32 {
-    open.vendor
-        .and_then(|g| units.iter().find(|(guid, _)| guid.0 == g))
-        .map(|(_, store)| store.0.unit_npc_flags())
-        .unwrap_or(0)
+    vendor_store(open, units).map_or(0, |store| store.0.unit_npc_flags())
 }
 
 /// Push `GetRepairAllCost`'s total, which the reference sweeps at the call (`0x4fbd60`): every
@@ -359,6 +371,7 @@ fn feed_repair_all_cost(
     commands: Res<NetCommands>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     units: Query<(&Guid, &ObjectStore), Without<SelfPlayer>>,
+    reactions: crate::target::ReactionInputs,
     tables: Option<Res<RepairTables>>,
     mut last: Local<crate::ui_script::VmMemo<Option<u32>>>,
 ) {
@@ -366,9 +379,19 @@ fn feed_repair_all_cost(
         return;
     };
     let last = last.get(&script);
-    let can_repair = vendor_npc_flags(&open, &units) & NPC_FLAG_REPAIR != 0;
-    let total = match (can_repair, self_q.iter().next(), tables.as_deref()) {
-        (true, Some(store), Some(t)) => repair_all_cost(&store.0, &objects, &items, t, &commands),
+    let vendor =
+        vendor_store(&open, &units).filter(|store| store.0.unit_npc_flags() & NPC_FLAG_REPAIR != 0);
+    let total = match (vendor, self_q.iter().next(), tables.as_deref()) {
+        (Some(vendor), Some(store), Some(t)) => {
+            // The open merchant's discount for the player (`0x4faf8a`).
+            let discount = crate::target::vendor_price_discount(
+                reactions.factions.as_deref(),
+                &reactions.reputations,
+                vendor,
+                store,
+            );
+            repair_all_cost(&store.0, &objects, &items, t, &commands, discount)
+        }
         _ => 0,
     };
     if *last != Some(total) {
@@ -661,6 +684,101 @@ mod tests {
             feed_repair_all_cost,
             crate::ui_char::feed_char
         ));
+    }
+
+    /// `GetRepairAllCost` sums each item's cost after the open merchant's discount (`0x4faf8a`):
+    /// at Honored with a PvP-flagged vendor and honor rank byte 8, 0.2 comes off each item before
+    /// its rounding, and the undiscounted total is not what the VM reads.
+    #[test]
+    fn the_repair_all_total_takes_the_merchants_discount() {
+        use benilla_protocol::field::{
+            FIELD_PLAYER_INV_SLOT_HEAD, FIELD_UNIT_FACTIONTEMPLATE, FIELD_UNIT_FLAGS,
+            FIELD_UNIT_NPC_FLAGS,
+        };
+        use benilla_protocol::ObjectFields;
+        use bevy::ecs::system::RunSystemOnce;
+
+        /// Absolute descriptor indices.
+        const OBJECT_ENTRY: u16 = 3;
+        const ITEM_DURABILITY: u16 = 46;
+        const ITEM_MAXDURABILITY: u16 = 47;
+        const BYTES_0: u16 = 36;
+        const PLAYER_BYTES_3: u16 = 195;
+        const VENDOR: u64 = 0xF130_0000_0000_0042;
+        const SWORD: u64 = 0x4000_0000_0000_0007;
+        const SWORD_ENTRY: u32 = 2488;
+
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let tables = benilla_formats::load_durability_tables(&mut chain).expect("durability");
+        let (factions, template, reps) = crate::target::stormwind_fixture(&mut chain, 9000);
+        // A level 20 green sword (class 2, subclass 7) 40 points down.
+        let disc = f64::from(0.1f32) + f64::from(0.05f32) + f64::from(0.05f32);
+        let want = tables.repair_cost(40, 20, 2, 2, 7, disc);
+        let full = tables.repair_cost(40, 20, 2, 2, 7, 0.0);
+        assert!(
+            want > 0 && want < full,
+            "the case discriminates: {want} of {full}"
+        );
+
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.init_resource::<Items>()
+            .init_resource::<crate::net::GuidIndex>()
+            .insert_resource(NetCommands(tx))
+            .insert_resource(RepairTables(tables))
+            .insert_resource(factions)
+            .insert_resource(reps);
+        let mut open = MerchantOpen::default();
+        open.open(VENDOR, Vec::new());
+        app.insert_resource(open);
+        let mut sword = crate::items::test_template("Sword");
+        (sword.class, sword.subclass, sword.quality, sword.item_level) = (2, 7, 2, 20);
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(SWORD_ENTRY, Some(sword));
+        crate::items::test_spawn_item(
+            app.world_mut(),
+            SWORD,
+            ObjectFields::from_pairs(&[
+                (OBJECT_ENTRY, SWORD_ENTRY),
+                (ITEM_DURABILITY, 35),
+                (ITEM_MAXDURABILITY, 75),
+            ]),
+            false,
+        );
+        // The sword in the main hand (slot 15); the current honor rank byte 8.
+        let main_hand = FIELD_PLAYER_INV_SLOT_HEAD + 2 * 15;
+        app.world_mut().spawn((
+            SelfPlayer,
+            ObjectStore(ObjectFields::from_pairs(&[
+                (BYTES_0, crate::target::HUMAN_WARRIOR),
+                (PLAYER_BYTES_3, 8 << 24),
+                (main_hand, SWORD as u32),
+                (main_hand + 1, (SWORD >> 32) as u32),
+            ])),
+        ));
+        app.world_mut().spawn((
+            Guid(VENDOR),
+            ObjectStore(ObjectFields::from_pairs(&[
+                (FIELD_UNIT_NPC_FLAGS, NPC_FLAG_REPAIR),
+                (FIELD_UNIT_FACTIONTEMPLATE, template),
+                (FIELD_UNIT_FLAGS, 0x1000),
+            ])),
+        ));
+        let mut script = UiScript::new().unwrap();
+        script.set_merchant(Some(MerchantState {
+            can_repair: true,
+            ..Default::default()
+        }));
+        app.insert_non_send_resource(script);
+
+        app.world_mut()
+            .run_system_once(feed_repair_all_cost)
+            .unwrap();
+        let script = app.world_mut().non_send_resource_mut::<UiScript>();
+        let got = script.eval::<i64>("return (GetRepairAllCost())").unwrap();
+        assert_eq!(got, i64::from(want), "the undiscounted total is {full}");
     }
 
     fn row(entry: u32, slot: u32, count: u32) -> VendorItem {
