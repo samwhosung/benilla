@@ -182,7 +182,7 @@
 - `WOW_CAPTURE_STABLE` — benilla-app/src/capture/mod.rs
 - `WOW_CAPTURE_UI` — benilla-app/src/capture/scenarios.rs, benilla-app/src/ui_script/mod.rs, benilla-app/src/video.rs
 - `WOW_CAST_TRACE` — benilla-app/src/net.rs
-- `WOW_CHAR` — benilla-app/src/capture/probe_mail.rs, benilla-app/src/char_select/mod.rs, benilla-app/src/cvars.rs, benilla-app/src/login/mod.rs, benilla-app/src/net.rs, benilla-app/src/net/io.rs, benilla-app/src/realm_select/smoke.rs, benilla-app/src/run_mode.rs
+- `WOW_CHAR` — benilla-app/src/capture/probe_mail.rs, benilla-app/src/char_select/mod.rs, benilla-app/src/cvars.rs, benilla-app/src/login/mod.rs, benilla-app/src/net.rs, benilla-app/src/realm_select/smoke.rs, benilla-app/src/run_mode.rs
 - `WOW_CHARCREATE_DIALS` — benilla-app/src/char_create/mod.rs
 - `WOW_CHARCREATE_NAME` — benilla-app/src/char_create/mod.rs
 - `WOW_CHARCREATE_PICK` — benilla-app/src/capture/mod.rs, benilla-app/src/char_create/mod.rs
