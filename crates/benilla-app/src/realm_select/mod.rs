@@ -19,6 +19,7 @@
 //! names no screen; only `ConnectToRealm` (`0x46b210`) drops the world connection, once a realm is
 //! chosen. So the character park serves the list in place and Cancel there does nothing.
 
+mod category;
 mod input;
 mod load;
 mod screen;
@@ -29,6 +30,7 @@ pub(crate) use load::pvp_rp;
 use bevy::prelude::*;
 
 use crate::net::{RealmChoice, RealmListMessage, RealmRequest};
+use benilla_formats::RealmCategory;
 use benilla_protocol::RealmInfo;
 
 /// The persisted 1.12 CVar naming the last realm connected to (`0x83f2d0`); the SavedVariables
@@ -46,8 +48,15 @@ pub(crate) struct Realms {
     pub(super) realms: Vec<RealmInfo>,
     /// The highlighted row by realm name, so a refresh that adds or drops a realm cannot move it.
     selected: Option<String>,
-    /// The category tab in front (`RealmList.selectedCategory`), by the wire's category byte.
-    pub(super) category: Option<u8>,
+    /// The client Region's categories ([`category`]), read once at startup; `None` until then,
+    /// and every realm lists untabbed.
+    pub(super) categories: Option<Vec<RealmCategory>>,
+    /// The tab in front, `RealmList.selectedCategory`: a 1-based ordinal over the categories
+    /// holding a realm.
+    pub(super) category: Option<usize>,
+    /// `[0x837e98]`, the stored category `GetSelectedCategory` opens the list on, by index into
+    /// [`Self::categories`]; `None` is its `-1` load value.
+    chosen_category: Option<usize>,
     /// First visible row within the selected category (`RealmList.offset`).
     pub(super) offset: usize,
     /// Which column the list is sorted on, and which way.
@@ -117,17 +126,11 @@ impl Sort {
 }
 
 impl Realms {
-    /// The rows the screen draws: indices into [`Self::realms`] for the selected category, sorted.
+    /// The rows the screen draws: indices into [`Self::realms`] for the tab in front, sorted per
+    /// category (`0x46e750`).
     pub(super) fn rows(&self) -> Vec<usize> {
-        let category = self.category;
         let (mean, stddev) = self.stats();
-        let mut rows: Vec<usize> = self
-            .realms
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| category.is_none_or(|c| r.category == c))
-            .map(|(i, _)| i)
-            .collect();
+        let mut rows = self.category_realms();
         rows.sort_by(|&a, &b| {
             let (ra, rb) = (&self.realms[a], &self.realms[b]);
             for (key, descending) in self.sort.0 {
@@ -151,15 +154,6 @@ impl Realms {
             std::cmp::Ordering::Equal
         });
         rows
-    }
-
-    /// The category bytes present, ascending, one tab each; `RealmList_UpdateTabs` hides the strip
-    /// when there is only one.
-    pub(super) fn categories(&self) -> Vec<u8> {
-        let mut cats: Vec<u8> = self.realms.iter().map(|r| r.category).collect();
-        cats.sort_unstable();
-        cats.dedup();
-        cats
     }
 
     /// The load distribution, over every realm, not the selected category: `0x46e510` walks the
@@ -186,20 +180,33 @@ impl Realms {
         self.selected().is_some_and(|r| !is_down(r))
     }
 
-    /// `RealmList:Show()`: reset the scroll, highlight [`Self::current`], start the refresh timer.
+    /// `RealmList:Show()`: front the stored category's tab, reset the scroll, highlight
+    /// [`Self::current`], start the refresh timer.
     fn open(&mut self) {
         self.shown = true;
+        self.front_selected_category();
         self.offset = 0;
-        self.selected = self
-            .current
-            .as_deref()
-            .and_then(|want| {
-                self.realms
-                    .iter()
-                    .find(|r| r.name.eq_ignore_ascii_case(want))
-            })
-            .map(|r| r.name.clone());
+        self.highlight_current();
         self.refresh_in = REFRESH_SECS;
+    }
+
+    /// `RealmListUpdate` with no clicked name: the highlight is the row `GetRealmInfo` flags
+    /// `currentRealm`, [`Self::current`] case-folded, on the tab in front, or none.
+    fn highlight_current(&mut self) {
+        self.selected = self.current.as_deref().and_then(|want| {
+            self.rows()
+                .into_iter()
+                .map(|i| &self.realms[i])
+                .find(|r| r.name.eq_ignore_ascii_case(want))
+                .map(|r| r.name.clone())
+        });
+    }
+
+    /// `GlueScrollFrame_Update` clamps the scroll bar to the tab's row count, and the bar's
+    /// change handler writes `RealmList.offset` back.
+    fn clamp_offset(&mut self) {
+        let max = self.rows().len().saturating_sub(screen::MAX_ROWS);
+        self.offset = self.offset.min(max);
     }
 
     /// Answer a park with a realm and remember it as [`Self::current`].
@@ -230,27 +237,32 @@ pub(crate) struct RealmSelectPlugin;
 
 impl Plugin for RealmSelectPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Realms>().add_systems(
-            Update,
-            (
-                apply_realm_policy,
-                // Ungated by state: the dialog stands over login and character select alike.
-                screen::drive_screen,
-                // Input before the row refresh, so a click shows on the frame it landed.
-                smoke::debug_realm_smoke,
+        app.init_resource::<Realms>()
+            .add_systems(
+                Startup,
+                category::load_categories.after(benilla_assets::AssetSet::Open),
+            )
+            .add_systems(
+                Update,
                 (
-                    input::clicks,
-                    input::keys,
-                    tick_refresh,
-                    screen::refresh_rows,
+                    apply_realm_policy,
+                    // Ungated by state: the dialog stands over login and character select alike.
+                    screen::drive_screen,
+                    // Input before the row refresh, so a click shows on the frame it landed.
+                    smoke::debug_realm_smoke,
+                    (
+                        input::clicks,
+                        input::keys,
+                        tick_refresh,
+                        screen::refresh_list,
+                    )
+                        .chain()
+                        .run_if(|realms: Res<Realms>| realms.shown),
                 )
                     .chain()
-                    .run_if(|realms: Res<Realms>| realms.shown),
-            )
-                .chain()
-                .after(benilla_world::schedule::WorldStage::Net)
-                .before(crate::glue::GlueVisuals),
-        );
+                    .after(benilla_world::schedule::WorldStage::Net)
+                    .before(crate::glue::GlueVisuals),
+            );
     }
 }
 
@@ -268,16 +280,6 @@ fn apply_realm_policy(
     for msg in msgs.read() {
         realms.realms = msg.realms.clone();
         realms.refresh_in = REFRESH_SECS;
-        // Keep the tab across a refresh while it still exists, else the first.
-        let cats = realms.categories();
-        if !realms.category.is_some_and(|c| cats.contains(&c)) {
-            realms.category = cats.first().copied();
-        }
-
-        // A list published while the dialog is up is a refresh, never a question.
-        if realms.shown {
-            continue;
-        }
         // The registered default is empty: a client that has never connected.
         let remembered = cvars
             .get(CVAR_REALM_NAME)
@@ -285,6 +287,14 @@ fn apply_realm_policy(
             .map(str::to_string);
         if realms.current.is_none() {
             realms.current = remembered.clone();
+        }
+        // The rebuild (`0x46e510`): the tab in front is kept as its ordinal, as the Lua keeps it.
+        realms.store_current_category();
+        realms.clamp_offset();
+
+        // A list published while the dialog is up is a refresh, never a question.
+        if realms.shown {
+            continue;
         }
         match auto_answer(
             &realms,
@@ -383,11 +393,11 @@ mod tests {
         r.rows().iter().map(|&i| r.realms[i].name.clone()).collect()
     }
 
+    /// A list under the US client's categories.
     fn list(realms: Vec<RealmInfo>) -> Realms {
-        let category = realms.first().map(|r| r.category);
         Realms {
             realms,
-            category,
+            categories: Some(category::tests::us()),
             ..Realms::default()
         }
     }
@@ -407,13 +417,15 @@ mod tests {
         assert!(!is_down(&sentinel) && !is_invalid(&sentinel));
     }
 
-    /// The load distribution spans every realm, so switching tabs relabels no band.
+    /// The load distribution spans every realm, a realm on no tab included, so switching tabs
+    /// relabels no band.
     #[test]
     fn a_category_tab_scopes_the_rows_but_not_the_load_distribution() {
         let mut r = list(vec![
             realm("Alpha", 1, 0, 0, 0, 1.0),
             realm("Beta", 1, 0, 0, 0, 1.0),
-            realm("Gamma", 2, 0, 0, 0, 400.0),
+            realm("Gamma", 5, 0, 0, 0, 400.0),
+            realm("Berlin", 2, 0, 0, 0, 7.0),
         ]);
         r.category = Some(1);
         assert_eq!(r.rows().len(), 2, "the tab scopes the rows");
@@ -426,8 +438,8 @@ mod tests {
             mean_on_tab_one, mean_on_tab_two,
             "the distribution is global — the tab must not move it"
         );
-        // (1 + 1 + 400) / 3.
-        assert!((mean_on_tab_one - 134.0).abs() < 1e-3, "{mean_on_tab_one}");
+        // (1 + 1 + 400 + 7) / 4: the category-2 realm is on no US tab and still counts.
+        assert!((mean_on_tab_one - 102.25).abs() < 1e-3, "{mean_on_tab_one}");
     }
 
     /// The reference hides the tab strip for a single category.
@@ -437,7 +449,7 @@ mod tests {
             realm("Alpha", 1, 0, 0, 0, 1.0),
             realm("Beta", 1, 0, 0, 0, 1.0),
         ]);
-        assert_eq!(r.categories(), vec![1]);
+        assert_eq!(r.tabs(), ["United States"]);
     }
 
     /// The default order is characters, load, name, mode, all ascending; more characters first.

@@ -1,21 +1,24 @@
 //! The realm list's layout: `GlueXML/RealmList.xml` in Bevy UI, on the 1024×768 glue scale.
 //!
 //! A full-screen dim, then the 640×512 `HelpFrame` plate (the AddOns list's) with the title plate,
-//! four sort headers, eighteen rows, the selection band, the close X, and Okay and Cancel. Rows are
-//! spawned empty and [`refresh_rows`] writes them every frame from [`super::Realms`].
+//! four sort headers, the eight category tabs under the plate, eighteen rows, the selection band,
+//! the close X, and Okay and Cancel. Rows and tabs are spawned empty and [`refresh_list`] writes
+//! them every frame from [`super::Realms`].
 //!
-//! The category tab strip is not built: `RealmList_UpdateTabs` hides it for a single category, and
-//! with several, only the first category's realms show.
+//! The tab strip shows only with two or more categories holding a realm (`RealmList_UpdateTabs`),
+//! one tab per category, and the rows are the front tab's.
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-use crate::glue::art::{tc_rect, GlueArt, COLUMN_TAB_TC, GOLD, SORT_ARROW_TC};
+use crate::glue::art::{tc_rect, GlueArt, COLUMN_TAB_TC, GOLD, REALM_TAB_TC, SORT_ARROW_TC};
 use crate::glue::widgets::{
-    abs, glue_button, outlined_text, overlay, ArtSwap, GlueBtnKind, GlueText, Hilight,
+    abs, glue_button, outlined_text, overlay, ArtSwap, GlueBtnKind, GlueDisabled, GlueText, Hilight,
 };
 use crate::glue_strings::GlueStrings;
 
+use super::category::MAX_TABS;
 use super::load;
 use super::{Realms, SortKey};
 
@@ -67,6 +70,23 @@ const COL_TYPE: (f32, f32) = (235.0, 50.0);
 const COL_PLAYERS: (f32, f32) = (336.0, 32.0);
 const COL_LOAD: (f32, f32) = (418.0, 115.0);
 
+/// `RealmListTab1`'s BOTTOMLEFT sits at the plate's BOTTOMLEFT (11, −15), so the 32-tall tabs hang
+/// below the plate's lower edge.
+const TAB_LEFT: f32 = 11.0;
+const TAB_H: f32 = 32.0;
+const TAB_TOP: f32 = BG_H + 15.0 - TAB_H;
+/// Each next tab's LEFT at the one before's RIGHT −15.
+const TAB_OVERLAP: f32 = 15.0;
+/// `$parentLeft` and `$parentRight`, 20 wide; `GlueTemplates_TabResize(0)` makes the middle the
+/// label's own width.
+const TAB_END: f32 = 20.0;
+/// `$parentLeftDisabled` at TOPLEFT (0, 3): the front tab's art stands 3 higher.
+const TAB_FRONT_RISE: f32 = 3.0;
+/// `$parentText` at CENTER (0, 2), and the highlight's two anchors at y 2.
+const TAB_TEXT_RISE: f32 = 2.0;
+/// `$parentHighlightTexture`, anchored 10 in from each side; its height is its art's, 32.
+const TAB_HILIGHT_INSET: f32 = 10.0;
+
 /// Root of the realm list; `with_art` and `s` trigger a rebuild when the art lands or the scale
 /// changes.
 #[derive(Component)]
@@ -87,6 +107,8 @@ pub(super) enum RealmAction {
     /// declares no sound) where Cancel plays `gsLoginChangeRealmCancel`.
     Close,
     Sort(SortKey),
+    /// `RealmListTab<n>`: the category tab with that 1-based ordinal.
+    Tab(usize),
 }
 
 /// The screen row of a row button and of each of its four texts.
@@ -107,6 +129,14 @@ pub(super) struct RowHighlight;
 /// The Okay button, so the refresh can grey it out.
 #[derive(Component)]
 pub(super) struct OkButton;
+/// A category tab's button, label and art pieces, by the tab's 1-based ordinal.
+#[derive(Component, Clone, Copy)]
+pub(super) struct TabOf(pub(super) usize);
+/// One of a tab's six art pieces: the front tab's `ActiveTab` set, or the others' `InActiveTab`.
+#[derive(Component, Clone, Copy)]
+pub(super) struct TabArt {
+    front: bool,
+}
 
 /// Spawn, rebuild and despawn the dialog as `shown` says, over whatever glue screen is current.
 pub(super) fn drive_screen(
@@ -205,6 +235,7 @@ fn spawn_screen(
                 spawn_header(b, art, &font, &text("SERVER_SELECTION"), s);
                 spawn_close(b, art, &font, s);
                 spawn_sort_headers(b, art, &font, strings, s);
+                spawn_tabs(b, art, &font, s);
                 spawn_highlight(b, art, s);
                 for row in 0..MAX_ROWS {
                     spawn_row(b, &font, row, s);
@@ -442,6 +473,108 @@ fn spawn_sort_headers(
     }
 }
 
+/// `RealmListTab1`..`8` (`RealmListTabButtonTemplate`), spawned hidden in a row that chains each
+/// tab 15 into the one before. A tab is its two 20-wide ends round a middle as wide as the label,
+/// in both art sets; [`paint_tabs`] labels them and picks the set.
+fn spawn_tabs(b: &mut ChildSpawnerCommands, art: &GlueArt, font: &Handle<Font>, s: f32) {
+    let px = |v: f32| Val::Px(v * s);
+    let mut strip = b.spawn(Node {
+        position_type: PositionType::Absolute,
+        left: px(TAB_LEFT),
+        top: px(TAB_TOP),
+        height: px(TAB_H),
+        flex_direction: FlexDirection::Row,
+        ..default()
+    });
+    strip.with_children(|strip| {
+        for ordinal in 1..=MAX_TABS {
+            let overlap = if ordinal == 1 { 0.0 } else { -TAB_OVERLAP };
+            let mut tab = strip.spawn((
+                RealmAction::Tab(ordinal),
+                TabOf(ordinal),
+                Button,
+                GlueDisabled(false),
+                Visibility::Hidden,
+                Node {
+                    height: px(TAB_H),
+                    flex_shrink: 0.0,
+                    margin: UiRect::left(px(overlap)),
+                    padding: UiRect::horizontal(px(TAB_END)),
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+            ));
+            tab.with_children(|t| {
+                for (front, sheet) in [(false, &art.tab_inactive), (true, &art.tab_active)] {
+                    let Some((tex, size)) = sheet else {
+                        continue;
+                    };
+                    let top = if front { -TAB_FRONT_RISE } else { 0.0 };
+                    for (piece, tc) in REALM_TAB_TC.iter().enumerate() {
+                        let (left, right, width) = match piece {
+                            0 => (px(0.0), Val::Auto, px(TAB_END)),
+                            1 => (px(TAB_END), px(TAB_END), Val::Auto),
+                            _ => (Val::Auto, px(0.0), px(TAB_END)),
+                        };
+                        t.spawn((
+                            TabOf(ordinal),
+                            TabArt { front },
+                            Visibility::Hidden,
+                            ImageNode {
+                                image: tex.clone(),
+                                rect: Some(tc_rect(*size, *tc)),
+                                ..default()
+                            },
+                            Node {
+                                position_type: PositionType::Absolute,
+                                left,
+                                right,
+                                width,
+                                top: px(top),
+                                height: px(TAB_H),
+                                ..default()
+                            },
+                        ));
+                    }
+                }
+                if let Some(hi) = &art.tab_highlight {
+                    t.spawn((
+                        Hilight,
+                        Visibility::Hidden,
+                        MaterialNode(hi.clone()),
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: px(TAB_HILIGHT_INSET),
+                            right: px(TAB_HILIGHT_INSET),
+                            top: px(-TAB_TEXT_RISE),
+                            height: px(TAB_H),
+                            ..default()
+                        },
+                    ));
+                }
+                let label = outlined_text(
+                    t,
+                    Node {
+                        top: px(-TAB_TEXT_RISE),
+                        ..default()
+                    },
+                    (),
+                    (),
+                    GlueText {
+                        text: "",
+                        size: 12.0, // GlueFontNormalSmall
+                        color: GOLD,
+                        wrap: false,
+                    },
+                    font,
+                    s,
+                );
+                t.commands().entity(label).insert(TabOf(ordinal));
+            });
+        }
+    });
+}
+
 /// `RealmListHighlight`: one band, moved to the selected row and vertex-coloured to match it.
 fn spawn_highlight(b: &mut ChildSpawnerCommands, art: &GlueArt, s: f32) {
     let mut band = b.spawn((
@@ -503,10 +636,40 @@ fn spawn_row(b: &mut ChildSpawnerCommands, font: &Handle<Font>, row: usize, s: f
     });
 }
 
-/// `RealmListUpdate`: write every visible row, each frame, since any realm's population moves
-/// every band.
+/// The tab strip's buttons, art pieces and labels, kept apart from the rows' by their markers.
+#[derive(SystemParam)]
 #[allow(clippy::type_complexity)]
-pub(super) fn refresh_rows(
+pub(super) struct TabNodes<'w, 's> {
+    tabs: Query<
+        'w,
+        's,
+        (
+            &'static TabOf,
+            &'static Interaction,
+            &'static mut Visibility,
+            &'static mut GlueDisabled,
+        ),
+        (
+            With<RealmAction>,
+            Without<RowOf>,
+            Without<OkButton>,
+            Without<TabArt>,
+        ),
+    >,
+    arts: Query<
+        'w,
+        's,
+        (&'static TabOf, &'static TabArt, &'static mut Visibility),
+        (Without<RealmAction>, Without<RowHighlight>),
+    >,
+    labels:
+        Query<'w, 's, (&'static TabOf, &'static mut Text, &'static mut TextColor), Without<RowOf>>,
+}
+
+/// `RealmListUpdate`: the tab strip (`RealmList_UpdateTabs`), then every visible row, each frame,
+/// since any realm's population moves every band.
+#[allow(clippy::type_complexity)]
+pub(super) fn refresh_list(
     realms: Res<Realms>,
     strings: Option<Res<GlueStrings>>,
     mut rows: Query<
@@ -518,9 +681,11 @@ pub(super) fn refresh_rows(
         (&mut Node, &mut Visibility, Option<&mut ImageNode>),
         (With<RowHighlight>, Without<RealmAction>),
     >,
-    mut ok: Query<&mut crate::glue::widgets::GlueDisabled, With<OkButton>>,
+    mut ok: Query<&mut GlueDisabled, With<OkButton>>,
+    mut tab_nodes: TabNodes,
     window: Query<&Window, With<PrimaryWindow>>,
 ) {
+    paint_tabs(&realms, &mut tab_nodes);
     let s = crate::glue::screen_scale(window.single().ok());
     let visible = realms.rows();
     let (mean, stddev) = realms.stats();
@@ -600,5 +765,204 @@ pub(super) fn refresh_rows(
         if disabled.0 != now {
             disabled.0 = now;
         }
+    }
+}
+
+/// `RealmList_UpdateTabs` and `GlueTemplates_UpdateTabs`: one category hides the strip; two to
+/// eight show that many tabs, each labelled with its category's name. The front tab is
+/// `Disable()`d on the `ActiveTab` art in its `DisabledFont` (`GlueFontHighlightSmall`, white);
+/// the others stand on `InActiveTab` in gold, white with the highlight under the cursor.
+fn paint_tabs(realms: &Realms, nodes: &mut TabNodes) {
+    let TabNodes { tabs, arts, labels } = nodes;
+    let names = realms.tabs();
+    let shown = if names.len() >= 2 { names.len() } else { 0 };
+    let front = realms.category();
+    let mut hovered = None;
+    for (TabOf(ordinal), interaction, mut vis, mut disabled) in tabs.iter_mut() {
+        let want = if *ordinal <= shown {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if *vis != want {
+            *vis = want;
+        }
+        let is_front = *ordinal == front;
+        if disabled.0 != is_front {
+            disabled.0 = is_front;
+        }
+        if !is_front && *interaction != Interaction::None {
+            hovered = Some(*ordinal);
+        }
+    }
+    for (TabOf(ordinal), art, mut vis) in arts.iter_mut() {
+        let want = if art.front == (*ordinal == front) {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if *vis != want {
+            *vis = want;
+        }
+    }
+    for (TabOf(ordinal), mut text, mut color) in labels.iter_mut() {
+        let Some(name) = names.get(*ordinal - 1) else {
+            continue;
+        };
+        if text.0 != *name {
+            text.0 = name.to_string();
+        }
+        let c = if *ordinal == front || hovered == Some(*ordinal) {
+            load::HIGHLIGHT
+        } else {
+            GOLD
+        };
+        if color.0 != c {
+            color.0 = c;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::glue::{glue_clicks, GlueClicks};
+    use benilla_protocol::RealmInfo;
+
+    fn realm(name: &str, category: u8) -> RealmInfo {
+        RealmInfo {
+            name: name.into(),
+            address: "127.0.0.1:8085".into(),
+            population: 1.0,
+            characters: 0,
+            realm_type: 0,
+            flags: 0,
+            category,
+            id: 0,
+        }
+    }
+
+    /// The tab strip as [`spawn_tabs`] builds it, both art sets stood in, under the US client's
+    /// categories, with the click and refresh passes the plugin runs.
+    fn tab_app(list: &[(&str, u8)]) -> App {
+        let mut app = App::new();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        app.init_resource::<Time>()
+            .init_resource::<GlueClicks>()
+            .insert_resource(crate::net::RealmChoice(tx))
+            .add_message::<crate::sound::GlueSound>()
+            .insert_resource(Realms {
+                realms: list.iter().map(|&(n, c)| realm(n, c)).collect(),
+                categories: Some(super::super::category::tests::us()),
+                shown: true,
+                ..Realms::default()
+            })
+            .add_systems(
+                Update,
+                (glue_clicks, super::super::input::clicks, refresh_list).chain(),
+            );
+        let mut art = GlueArt::default();
+        art.tab_active = Some((Handle::default(), Vec2::new(128.0, 32.0)));
+        art.tab_inactive = Some((Handle::default(), Vec2::new(128.0, 32.0)));
+        app.world_mut()
+            .commands()
+            .spawn(Node::default())
+            .with_children(|b| spawn_tabs(b, &art, &Handle::default(), 1.0));
+        app.world_mut().flush();
+        app.update();
+        app
+    }
+
+    /// Each shown tab's `(ordinal, label, front)`, in ordinal order.
+    fn shown_tabs(app: &mut App) -> Vec<(usize, String, bool)> {
+        let mut labels = app.world_mut().query::<(&TabOf, &Text)>();
+        let labels: Vec<(usize, String)> = labels
+            .iter(app.world())
+            .map(|(t, text)| (t.0, text.0.clone()))
+            .collect();
+        let mut tabs = app
+            .world_mut()
+            .query::<(&TabOf, &Visibility, &GlueDisabled, &RealmAction)>();
+        let mut out: Vec<(usize, String, bool)> = tabs
+            .iter(app.world())
+            .filter(|(_, vis, _, _)| **vis != Visibility::Hidden)
+            .map(|(t, _, disabled, _)| {
+                let label = labels.iter().find(|(o, _)| *o == t.0).unwrap().1.clone();
+                (t.0, label, disabled.0)
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// The front tab stands on the `ActiveTab` art alone, every other on `InActiveTab`.
+    fn art_matches_front(app: &mut App, front: usize) -> bool {
+        let mut arts = app.world_mut().query::<(&TabOf, &TabArt, &Visibility)>();
+        arts.iter(app.world())
+            .all(|(t, art, vis)| (*vis != Visibility::Hidden) == (art.front == (t.0 == front)))
+    }
+
+    fn click(app: &mut App, ordinal: usize) {
+        let mut tabs = app.world_mut().query::<(Entity, &TabOf, &RealmAction)>();
+        let tab = tabs
+            .iter(app.world())
+            .find(|(_, t, _)| t.0 == ordinal)
+            .unwrap()
+            .0;
+        for interaction in [Interaction::Pressed, Interaction::Hovered] {
+            *app.world_mut().get_mut::<Interaction>(tab).unwrap() = interaction;
+            app.update();
+        }
+    }
+
+    fn rows(app: &App) -> Vec<String> {
+        let realms = app.world().resource::<Realms>();
+        realms
+            .rows()
+            .iter()
+            .map(|&i| realms.realms[i].name.clone())
+            .collect()
+    }
+
+    /// One category holding a realm, a byte-0 realm folded in: `RealmList_UpdateTabs` hides all.
+    #[test]
+    fn one_category_hides_the_whole_strip() {
+        let mut app = tab_app(&[("Alpha", 1), ("Dev", 0)]);
+        assert!(shown_tabs(&mut app).is_empty());
+        assert_eq!(rows(&app), ["Alpha", "Dev"]);
+    }
+
+    /// Two categories: two tabs named from `Cfg_Categories.dbc`, the first in front.
+    #[test]
+    fn two_categories_show_two_named_tabs_the_first_in_front() {
+        let mut app = tab_app(&[("Alpha", 1), ("Down Under", 5)]);
+        assert_eq!(
+            shown_tabs(&mut app),
+            [
+                (1, "United States".to_string(), true),
+                (2, "Oceanic".to_string(), false)
+            ]
+        );
+        assert!(art_matches_front(&mut app, 1));
+        assert_eq!(rows(&app), ["Alpha"]);
+    }
+
+    /// A click on the second tab fronts it and lists its realms; the front tab takes no click.
+    #[test]
+    fn a_tab_click_fronts_the_tab_and_relists() {
+        let mut app = tab_app(&[("Alpha", 1), ("Down Under", 5)]);
+        click(&mut app, 2);
+        assert_eq!(rows(&app), ["Down Under"]);
+        assert_eq!(
+            shown_tabs(&mut app),
+            [
+                (1, "United States".to_string(), false),
+                (2, "Oceanic".to_string(), true)
+            ]
+        );
+        assert!(art_matches_front(&mut app, 2));
+
+        click(&mut app, 1);
+        assert_eq!(rows(&app), ["Alpha"]);
     }
 }

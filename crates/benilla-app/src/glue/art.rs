@@ -144,6 +144,10 @@ pub(crate) struct GlueArt {
     pub(crate) column_tabs: Option<(Handle<Image>, Vec2)>,
     pub(crate) tab_highlight: Option<Handle<AddUiMaterial>>,
     pub(crate) sort_arrow: Option<(Handle<Image>, Vec2)>,
+    /// The realm list's category tabs (`RealmListTabButtonTemplate`): the front tab's
+    /// `UI-Character-ActiveTab` and the others' `UI-Character-InActiveTab`.
+    pub(crate) tab_active: Option<(Handle<Image>, Vec2)>,
+    pub(crate) tab_inactive: Option<(Handle<Image>, Vec2)>,
 }
 
 /// `RealmSortButtonTemplate`'s `WhoFrame-ColumnTabs` slices, `[left, right, top, bottom]` each:
@@ -155,6 +159,13 @@ pub(crate) const COLUMN_TAB_TC: [[f32; 4]; 3] = [
 ];
 /// `$parentArrow`'s texcoords into `UI-SortArrow`, the down-pointing half.
 pub(crate) const SORT_ARROW_TC: [f32; 4] = [0.0, 0.5625, 0.0, 1.0];
+/// `RealmListTabButtonTemplate`'s `UI-Character-(In)ActiveTab` slices, `[left, right, top,
+/// bottom]` each: the left end (20 wide), the middle stretched to the label, the right end.
+pub(crate) const REALM_TAB_TC: [[f32; 4]; 3] = [
+    [0.0, 0.156_25, 0.0, 1.0],
+    [0.156_25, 0.843_75, 0.0, 1.0],
+    [0.843_75, 1.0, 0.0, 1.0],
+];
 
 /// The `HelpFrame-*` plate: six pieces tiling a 640×512 panel (TopLeft/Top 256², TopRight
 /// 128×256 on top; BotLeft/Bottom/BotRight below).
@@ -427,10 +438,20 @@ impl GlueArt {
             add_mats,
         );
         self.sort_arrow = sized(assets, "Interface\\Buttons\\UI-SortArrow", images);
+        self.tab_active = sized(
+            assets,
+            "Interface\\PaperDollInfoFrame\\UI-Character-ActiveTab",
+            images,
+        );
+        self.tab_inactive = sized(
+            assets,
+            "Interface\\PaperDollInfoFrame\\UI-Character-InActiveTab",
+            images,
+        );
         debug!(
             "glue art: addonlist set — helpframe {} header {} close {} droparrow {}/{} \
              questhl {} titlehl {} greycheck {} tipborder {} scrolltrack {} \
-             coltabs {} tabhl {} sortarrow {}",
+             coltabs {} tabhl {} sortarrow {} realmtabs {}/{}",
             self.help_frame.is_some(),
             self.dialog_header.is_some(),
             self.close_btn.is_some(),
@@ -444,6 +465,8 @@ impl GlueArt {
             self.column_tabs.is_some(),
             self.tab_highlight.is_some(),
             self.sort_arrow.is_some(),
+            self.tab_active.is_some(),
+            self.tab_inactive.is_some(),
         );
         debug!(
             "glue art: races {} classes {} gender {} factions {} banners {} hilight {} logo {} \
