@@ -23,18 +23,38 @@ fn player() -> UnitState {
     }
 }
 
+/// `0x6e6d90`'s order: the `Usage:` check, the not-targeting no-op, the token check, the queue.
 #[test]
-fn spell_target_unit_queues_the_clicked_unit_token() {
+fn spell_target_unit_checks_in_the_references_order() {
     let mut s = UiScript::new().unwrap();
+    let usage = |s: &mut UiScript, call: &str| {
+        let err = s.run(call).expect_err(call).to_string();
+        assert!(
+            err.contains(r#"Usage: SpellTargetUnit("unit")"#),
+            "{call}: {err}"
+        );
+    };
+
+    // Not targeting: the argument is still type-checked, then nothing, not even the token check.
+    usage(&mut s, "SpellTargetUnit({})");
+    usage(&mut s, "SpellTargetUnit()");
+    s.run(r#"SpellTargetUnit("not-a-unit") SpellTargetUnit("player")"#)
+        .expect("a bad token is no error while not targeting");
+    assert!(s.take_spell_target_unit().is_empty(), "and nothing queues");
+
+    // Targeting: an unknown token raises, a known one queues, resolved or not.
+    s.set_spell_targeting(true);
+    usage(&mut s, "SpellTargetUnit(nil)");
+    let err = s
+        .run(r#"SpellTargetUnit("not-a-unit")"#)
+        .expect_err("an unknown token while targeting")
+        .to_string();
+    assert!(err.contains("Unknown unit name: not-a-unit"), "{err}");
     s.run(r#"SpellTargetUnit("player") SpellTargetUnit("party1")"#)
         .unwrap();
     assert_eq!(
         s.take_spell_target_unit(),
         vec!["player".to_string(), "party1".to_string()]
-    );
-    assert!(
-        s.run(r#"SpellTargetUnit("not-a-unit")"#).is_err(),
-        "the binding keeps the engine's unit-token validation"
     );
 }
 

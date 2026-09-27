@@ -386,8 +386,10 @@ fn bind_target_unit(
     ladder.commit_targeted(spell_id, commit, super::cast_send::TargetedBind::Unit(guid));
 }
 
-/// Drain `SpellTargetUnit(unit)` after the UI click: stock unit frames call this before their
-/// ordinary selection arm, and a resolved unit goes to [`bind_target_unit`].
+/// Drain `SpellTargetUnit(unit)` (`0x6e6d90`) after the UI pass. The binding already raised the
+/// usage and unknown-token errors and dropped a call made while not targeting. Here a token that
+/// names no unit raises "Out of range." (0x59) and ends targeting, as the reference's abort
+/// clears the word, and a unit goes to [`bind_target_unit`].
 pub(crate) fn drain_spell_target_unit(
     script: Option<NonSendMut<benilla_ui::script::UiScript>>,
     tokens: crate::ui_unit::UnitTokens,
@@ -399,10 +401,20 @@ pub(crate) fn drain_spell_target_unit(
         return;
     };
     for token in script.take_spell_target_unit() {
-        let Some((entity, guid)) = tokens.resolve(&token, &selection) else {
+        // An earlier token this frame may have bound or ended the cast: not targeting, no-op.
+        let Some(spell_id) = ladder.ground.spell() else {
             continue;
         };
-        bind_target_unit(&mut ladder, &checks, entity, guid);
+        match tokens.resolve(&token, &selection) {
+            Some((entity, guid)) => bind_target_unit(&mut ladder, &checks, entity, guid),
+            None => {
+                debug!("ui_action: SpellTargetUnit({token}) names no unit — cast {spell_id} ends");
+                ladder
+                    .cast_errors
+                    .push_local(spell_id, super::validator::ERR_OUT_OF_RANGE);
+                ladder.ground.clear();
+            }
+        }
     }
 }
 
@@ -490,6 +502,79 @@ mod tests {
             super::super::cast_send::CastCommit::Spell,
             word,
         );
+    }
+
+    /// Queue `SpellTargetUnit(token)` in the VM, then run the host's drain.
+    fn spell_target_unit(world: &mut World, token: &str) {
+        world
+            .non_send_resource_mut::<UiScript>()
+            .run(&format!("SpellTargetUnit({token:?})"))
+            .expect("a known token");
+        world
+            .run_system_cached(drain_spell_target_unit)
+            .expect("the drain runs");
+    }
+
+    fn errors(world: &mut World) -> Vec<crate::ui_action::CastFail> {
+        std::mem::take(&mut world.resource_mut::<crate::ui_action::CastErrors>().0)
+    }
+
+    /// `0x6e6d90` past the binding's checks: a token naming no unit ends the cast with "Out of
+    /// range."; a unit goes to `BindTarget`, which waits on a relation failure, raises "Out of
+    /// range." for a unit out of range with the cursor still up, and commits otherwise. The
+    /// selection never moves.
+    #[test]
+    fn spell_target_unit_ends_waits_or_binds_as_the_reference() {
+        let fail = |reason| vec![crate::ui_action::CastFail::local(HEAL, reason)];
+
+        // The VM queued a token, but the host is no longer targeting: nothing.
+        let (mut world, rx, _) = unit_world(10.0);
+        spell_target_unit(&mut world, "target");
+        assert!(rx.try_recv().is_err());
+        assert!(errors(&mut world).is_empty());
+
+        // A known token naming no unit: "Out of range." and targeting ends.
+        let (mut world, rx, _) = unit_world(10.0);
+        arm(&mut world, HEAL, 0x0002);
+        spell_target_unit(&mut world, "party1");
+        assert!(rx.try_recv().is_err(), "no send");
+        assert_eq!(errors(&mut world), fail(0x59));
+        assert!(
+            !world.resource::<SpellTargeting>().active(),
+            "the cast ends"
+        );
+
+        // A unit the relation refuses (assist, neutral with no catalog): silent, still armed.
+        let (mut world, rx, _) = unit_world(10.0);
+        arm(&mut world, HEAL, 0x0100);
+        spell_target_unit(&mut world, "target");
+        assert!(rx.try_recv().is_err());
+        assert!(errors(&mut world).is_empty(), "no error");
+        assert!(world.resource::<SpellTargeting>().active(), "still armed");
+
+        // In relation but out of range: "Out of range." and still armed.
+        let (mut world, rx, _) = unit_world(40.0);
+        arm(&mut world, HEAL, 0x0002);
+        spell_target_unit(&mut world, "target");
+        assert!(rx.try_recv().is_err());
+        assert_eq!(errors(&mut world), fail(0x59));
+        assert!(world.resource::<SpellTargeting>().active(), "still armed");
+
+        // In range: the cast goes to the unit and the cursor comes down.
+        let (mut world, rx, ally) = unit_world(10.0);
+        arm(&mut world, HEAL, 0x0002);
+        spell_target_unit(&mut world, "target");
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::CastSpell {
+                spell_id: HEAL,
+                target: Some(ALLY),
+            })
+        ));
+        assert!(errors(&mut world).is_empty());
+        assert!(!world.resource::<SpellTargeting>().active());
+        let selection = world.resource::<crate::target::Selection>();
+        assert_eq!((selection.target, selection.guid), (Some(ally), Some(ALLY)));
     }
 
     /// `SpellCanTargetUnit` asks `0x6e6460`'s unit leg per token: nil out of range, inside the
