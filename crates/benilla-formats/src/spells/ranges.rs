@@ -92,6 +92,11 @@ impl SpellRangeCatalog {
         self.ranges.get(&index)
     }
 
+    /// Fixture constructor for tests; the live path is [`load_spell_ranges`].
+    pub fn from_rows(ranges: HashMap<u32, SpellRange>) -> Self {
+        Self { ranges }
+    }
+
     pub fn len(&self) -> usize {
         self.ranges.len()
     }

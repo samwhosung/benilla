@@ -2,12 +2,13 @@
 //! the pick flags (`0x481050`) come only from the word `0xcecac0`, so the word picks the leg:
 //!
 //! - terrain (`0x492c90` → `0x492580` → `BindLocation 0x6e60f0`): [`commit_ground_cast_on_click`]
-//! - object (`0x4925d0` → `SetSelection 0x493540` → `BindTarget 0x6e5b40`):
-//!   [`commit_object_cast_on_click`]
+//! - object (`0x4925d0` → `SetSelection 0x493540` → `BindTarget 0x6e5b40`), whose GameObject or
+//!   unit arm the picked object's type chooses: [`commit_object_cast_on_click`]
 //!
 //! A location-only word yields pick flags 3, whose `& 0x7c == 0` disables the object pick, so an
-//! AoE reticle clicks through a chest. Neither leg gates on range, validity or the lock: the
-//! server judges and its `SMSG_CAST_RESULT` is the refusal.
+//! AoE reticle clicks through a chest. The terrain and GameObject arms gate on nothing, not range,
+//! validity or the lock: the server judges and its `SMSG_CAST_RESULT` is the refusal. The unit arm
+//! runs `BindTarget`'s relation and range checks ([`super::bind_target_unit`]).
 
 use bevy::prelude::*;
 
@@ -20,34 +21,6 @@ use crate::target::{Hovered, HoveredObject};
 use benilla_world::interact::WorldClick;
 
 use super::TargetingWants;
-
-/// The unit arm of `BindTarget 0x6e5b40`: a residual unit word belongs to the hand cursor, so a
-/// left click binds the press pick directly and does not change the player's ordinary selection.
-pub(crate) fn commit_unit_cast_on_click(
-    mut clicks: MessageReader<WorldClick>,
-    press: Res<crate::target::PressPick>,
-    checks: super::UnitBindChecks,
-    mut ladder: crate::spell::CastLadder,
-) {
-    if !ladder.ground.active() {
-        clicks.clear();
-        return;
-    }
-    if clicks.read().last().is_none() {
-        return;
-    }
-    let Some((spell_id, commit)) = ladder.ground.pending_for(TargetingWants::Unit) else {
-        return;
-    };
-    let Some((entity, guid)) = press.hovered.target.zip(press.hovered.guid) else {
-        return;
-    };
-    if !ladder.ground.can_bind_unit(entity, &checks) {
-        return;
-    }
-    debug!("ui_action: cast {spell_id} committed at unit {guid:#x}");
-    ladder.commit_targeted(spell_id, commit, TargetedBind::Unit(guid));
-}
 
 /// The terrain leg (`0x492580`): bind the press's ground point and send, with no range check and
 /// no error path, then arm the pending cast and GCD and end the mode. No ground hit (sky) commits
@@ -96,21 +69,21 @@ pub(crate) fn commit_ground_cast_on_click(
 /// 0x493540`, whose first act while targeting is `BindTarget 0x6e5b40` and return, so the click
 /// never changes the player's target and never reaches the GameObject's unselectable check.
 ///
-/// `BindTarget` picks its arm by the clicked object's typemask; the GameObject arm tests the word's
-/// `0x4800`, writes wire bit `TARGET_FLAG_GAMEOBJECT` (`0x800`), clears those `0x4800` word bits,
-/// parks the guid (`0xceac60`), and the zero word lets it call `SendCast 0x6e54f0`. A unit click
-/// under a lock word binds nothing, since every unit arm tests a bit the word lacks; this is
-/// [`go_is_nearest`] here.
-///
-/// There is no gate before the send, not range nor the lock: the refusal is the server's
-/// `SMSG_CAST_RESULT`. The right-click path ([`crate::target::click`], `0x5f33e0`) does resolve the
-/// lock and can refuse locally.
+/// `BindTarget` picks its arm by the clicked object's typemask. The GameObject arm, when a word in
+/// `0x4800` puts GameObjects in the pick and one is the nearest hit ([`go_is_nearest`]), writes
+/// wire bit `TARGET_FLAG_GAMEOBJECT` (`0x800`), clears those `0x4800` word bits, parks the guid
+/// (`0xceac60`), and the zero word lets it call `SendCast 0x6e54f0`, with no gate before the send,
+/// not range nor the lock: the refusal is the server's `SMSG_CAST_RESULT`. The right-click path
+/// ([`crate::target::click`], `0x5f33e0`) does resolve the lock and can refuse locally. Otherwise
+/// the picked unit goes to the unit arm ([`super::bind_target_unit`]); a unit click under a lock
+/// word binds nothing there, since every unit arm tests a bit the word lacks.
 ///
 /// Runs after `select_on_click`, as the terrain commit does.
 pub(crate) fn commit_object_cast_on_click(
     mut clicks: MessageReader<WorldClick>,
     // The press's pick: the object the gesture started on.
     press: Res<crate::target::PressPick>,
+    checks: super::UnitBindChecks,
     mut ladder: crate::spell::CastLadder,
 ) {
     let (hovered, hovered_object) = (press.hovered, press.object);
@@ -122,14 +95,18 @@ pub(crate) fn commit_object_cast_on_click(
     if clicks.read().last().is_none() {
         return;
     }
-    // `TargetingWantsGameObject 0x6e62d0`: a poison's bare `0x10` word binds nothing here.
+    // `TargetingWantsGameObject 0x6e62d0`: without it the pick holds no GameObject.
+    if !(ladder.ground.wants(TargetingWants::GameObject)
+        && go_is_nearest(&hovered, &hovered_object))
+    {
+        if let Some((entity, guid)) = hovered.target.zip(hovered.guid) {
+            super::bind_target_unit(&mut ladder, &checks, entity, guid);
+        }
+        return;
+    }
     let Some((spell_id, commit)) = ladder.ground.pending_for(TargetingWants::GameObject) else {
         return;
     };
-    // The object leg only wins when a GameObject is the nearest hit.
-    if !go_is_nearest(&hovered, &hovered_object) {
-        return;
-    }
     let Some(guid) = hovered_object.guid else {
         return;
     };
@@ -301,8 +278,7 @@ mod tests {
     fn a_click_on_a_hovered_unit_commits_the_hand_cursor_cast() {
         const HEAL: u32 = 2050;
         const ALLY: u64 = 0xF130_0000_0000_0001;
-        let (mut world, rx, _) = fixture();
-        let id = world.register_system(commit_unit_cast_on_click);
+        let (mut world, rx, id) = fixture();
         world.resource_mut::<super::super::SpellTargeting>().enter(
             HEAL,
             crate::spell::cast_send::CastCommit::Spell,
@@ -329,8 +305,7 @@ mod tests {
 
         // With no faction catalog the target's reaction is neutral (3): an ASSIST word must stay
         // armed and send nothing, exactly as when that unit was selected before the cast.
-        let (mut world, rx, _) = fixture();
-        let id = world.register_system(commit_unit_cast_on_click);
+        let (mut world, rx, id) = fixture();
         world.resource_mut::<super::super::SpellTargeting>().enter(
             HEAL,
             crate::spell::cast_send::CastCommit::Spell,
@@ -351,6 +326,102 @@ mod tests {
             world.resource::<super::super::SpellTargeting>().active(),
             "an invalid unit click leaves the targeting word standing"
         );
+
+        // A unit word puts no GameObject in the pick, so a chest nearer than the unit is no
+        // obstacle: the unit arm still binds.
+        let (mut world, rx, id) = fixture();
+        world.resource_mut::<super::super::SpellTargeting>().enter(
+            HEAL,
+            crate::spell::cast_send::CastCommit::Spell,
+            0x0002,
+        );
+        hover_go(&mut world, 2.0);
+        world.resource_mut::<crate::target::PressPick>().hovered = Hovered {
+            target: Some(Entity::from_raw_u32(1).unwrap()),
+            guid: Some(ALLY),
+            distance: 5.0,
+            ..Hovered::default()
+        };
+        click(&mut world, id);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::CastSpell {
+                spell_id: HEAL,
+                target: Some(ALLY),
+            })
+        ));
+    }
+
+    /// `BindTarget`'s range leg (`6e6063`): a unit the relation checks accept but out of the
+    /// spell's range raises "Out of range." and the cursor stays armed; a click in range commits.
+    /// Row 5 is 0 to 30 yd, padded by both 1.5 combat reaches to 33.
+    #[test]
+    fn an_out_of_range_unit_click_raises_and_keeps_the_cursor() {
+        use std::collections::HashMap;
+        const HEAL: u32 = 2050;
+        const ALLY: u64 = 0xF130_0000_0000_0001;
+        let (mut world, rx, id) = fixture();
+        let mut spells = crate::ui_action::Spells::empty_for_tests();
+        spells.catalog = benilla_formats::SpellCatalog::from_displays(HashMap::from([(
+            HEAL,
+            benilla_formats::SpellDisplay {
+                range_index: 5,
+                ..Default::default()
+            },
+        )]));
+        spells.ranges = benilla_formats::SpellRangeCatalog::from_rows(HashMap::from([(
+            5,
+            benilla_formats::SpellRange {
+                min: 0.0,
+                max: 30.0,
+                flags: 0,
+            },
+        )]));
+        world.insert_resource(spells);
+        world.spawn((crate::net::SelfPlayer, GlobalTransform::default()));
+        let ally = world
+            .spawn(GlobalTransform::from_translation(Vec3::new(40.0, 0.0, 0.0)))
+            .id();
+        world.resource_mut::<super::super::SpellTargeting>().enter(
+            HEAL,
+            crate::spell::cast_send::CastCommit::Spell,
+            0x0002,
+        );
+        world.resource_mut::<crate::target::PressPick>().hovered = Hovered {
+            target: Some(ally),
+            guid: Some(ALLY),
+            distance: 5.0,
+            ..Hovered::default()
+        };
+
+        click(&mut world, id);
+        assert!(rx.try_recv().is_err(), "out of range sends nothing");
+        assert_eq!(
+            std::mem::take(&mut world.resource_mut::<crate::ui_action::CastErrors>().0),
+            vec![crate::ui_action::CastFail::local(HEAL, 0x59)],
+            "\"Out of range.\""
+        );
+        assert!(
+            world.resource::<super::super::SpellTargeting>().active(),
+            "the cursor stays armed"
+        );
+
+        world
+            .entity_mut(ally)
+            .insert(GlobalTransform::from_translation(Vec3::new(10.0, 0.0, 0.0)));
+        click(&mut world, id);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::CastSpell {
+                spell_id: HEAL,
+                target: Some(ALLY),
+            })
+        ));
+        assert!(world
+            .resource::<crate::ui_action::CastErrors>()
+            .0
+            .is_empty());
+        assert!(!world.resource::<super::super::SpellTargeting>().active());
     }
 
     /// Every way the object click must not commit.

@@ -366,6 +366,12 @@ impl SpellDisplay {
         self.attributes_ex3 & ATTR_EX3_NO_CHANNEL_BAR != 0
     }
 
+    /// `AttributesEx & 0x80000`: the targeting cursor never takes the caster, neither the world
+    /// pick (`0x6e61a0` at `6e61cf`) nor `SpellCanTargetUnit`'s unit leg (`0x6e6460` at `6e6507`).
+    pub fn excludes_caster(&self) -> bool {
+        self.attributes_ex & ATTR_EX_EXCLUDE_CASTER != 0
+    }
+
     /// `AttributesEx & 0x2000_0000` (`0x6e759a`): the channel bar shows the spell's own name
     /// (`0x6e75a9`), else `CHANNELING` (`0x6e75bc`); nine channels set it, Fishing among them.
     pub fn channel_bar_own_name(&self) -> bool {

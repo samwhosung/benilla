@@ -75,9 +75,8 @@ pub(crate) fn ground_cast_radius(spells: Option<&Spells>, spell_id: u32, level: 
 /// its ray (`0x4812c8`) and the world cursor stays grey.
 ///
 /// The object arm is `0x6e6460`'s GameObject leg: `word & 0x4800`, the lock predicate `0x5f8260`,
-/// then the same min/max range test through `GetMinMaxRange 0x6e3480`. The unit leg runs the
-/// standing word through the cast arm's shared unit binder. World-item and Corpse legs remain
-/// unmodeled.
+/// then the same min/max range test through `GetMinMaxRange 0x6e3480`. Its unit leg is
+/// [`SpellTargeting::can_target_unit`]. The world-item and corpse legs are not built.
 ///
 /// Every seam shows the `Cast` kind, so this reads the whole-word [`SpellTargeting::spell`].
 pub(crate) fn drive_targeting_cursor(
@@ -104,15 +103,9 @@ pub(crate) fn drive_targeting_cursor(
     };
     let row = range_row(spells.as_deref(), spell_id);
     let me = self_tf.single().ok().map(|tf| tf.translation);
-    // "A GameObject is the nearest pick" is the same test the click uses
-    // ([`super::world::commit_object_cast_on_click`]).
-    let able = if targeting.wants(TargetingWants::Unit)
-        && hovered
-            .target
-            .is_some_and(|entity| targeting.can_bind_unit(entity, &unit_checks))
-    {
-        true
-    } else if targeting.wants(TargetingWants::GameObject)
+    // The arm the click would take ([`super::world::commit_object_cast_on_click`]): a GameObject
+    // word's nearest GameObject, else the picked unit, else the terrain.
+    let able = if targeting.wants(TargetingWants::GameObject)
         && crate::target::go_is_nearest(&hovered, &hovered_object)
     {
         object_arm(
@@ -124,6 +117,11 @@ pub(crate) fn drive_targeting_cursor(
             row,
             me,
         )
+    } else if let Some(unit) = hovered
+        .target
+        .filter(|_| targeting.wants(TargetingWants::Unit))
+    {
+        targeting.can_target_unit(unit, &unit_checks)
     } else if targeting.wants(TargetingWants::Location) {
         // `0x4820f0`. No ground hit (sky, mouselook) is state 0, UnableCast.
         match (occlusion.point, me) {
@@ -349,5 +347,90 @@ mod tests {
 
         // A lock word that also carries DEST (`0x4840`) keeps its terrain handler off a GameObject.
         assert!(verdict(0x4840, Some(Vec3::ZERO), None));
+    }
+
+    /// `0x6e6460`'s unit leg over a hovered unit: the relation checks, then min² ≤ d² ≤ max²
+    /// (`6e677c`–`6e6802`). Row 5 is 0 to 30 yd and row 114 is 8 to 35 yd, both padded by the two
+    /// 1.5 combat reaches: 0 to 33 and 11 to 38.
+    #[test]
+    fn the_unit_leg_is_grey_out_of_range_or_off_relation() {
+        use bevy::ecs::system::RunSystemOnce;
+        use std::collections::HashMap;
+
+        const HEAL: u32 = 2050;
+        const SHOT: u32 = 75;
+        let verdict_for = |spell: u32, word: u16, distance: f32| {
+            let mut world = World::new();
+            world.init_resource::<WorldCursor>();
+            world.init_resource::<SpellTargeting>();
+            world.init_resource::<crate::target::HoveredObject>();
+            world.init_resource::<crate::go_templates::GameObjectTemplates>();
+            world.init_resource::<crate::items::Items>();
+            world.init_resource::<crate::net::GuidIndex>();
+            world.insert_resource(crate::net::Reputations(Vec::new()));
+            world.init_resource::<PickOcclusion>();
+            let display = |range_index| benilla_formats::SpellDisplay {
+                range_index,
+                ..Default::default()
+            };
+            let row = |min, max| SpellRange { min, max, flags: 0 };
+            let mut spells = Spells::empty_for_tests();
+            spells.catalog = benilla_formats::SpellCatalog::from_displays(HashMap::from([
+                (HEAL, display(5)),
+                (SHOT, display(114)),
+            ]));
+            spells.ranges = benilla_formats::SpellRangeCatalog::from_rows(HashMap::from([
+                (5, row(0.0, 30.0)),
+                (114, row(8.0, 35.0)),
+            ]));
+            world.insert_resource(spells);
+            let empty = || crate::net::ObjectStore(benilla_protocol::ObjectFields::default());
+            world.spawn((
+                SelfPlayer,
+                Transform::default(),
+                GlobalTransform::default(),
+                empty(),
+            ));
+            let unit = world
+                .spawn((
+                    GlobalTransform::from_translation(Vec3::new(distance, 0.0, 0.0)),
+                    empty(),
+                ))
+                .id();
+            world.insert_resource(crate::target::Hovered {
+                target: Some(unit),
+                guid: Some(0xF130_0000_0000_0001),
+                distance: 5.0,
+                ..Default::default()
+            });
+            world.resource_mut::<SpellTargeting>().enter(
+                spell,
+                crate::spell::CastCommit::Spell,
+                word,
+            );
+            world
+                .run_system_once(drive_targeting_cursor)
+                .expect("the targeting cursor drives");
+            !world.resource::<WorldCursor>().unable
+        };
+        let verdict = |word, distance| verdict_for(HEAL, word, distance);
+
+        // `TARGET_FLAG_UNIT` (0x2) binds any unit, so only range decides.
+        assert!(verdict(0x0002, 10.0), "a valid unit in range → Cast");
+        assert!(
+            !verdict(0x0002, 40.0),
+            "the same unit out of range → UnableCast"
+        );
+        // An assist word over a unit with no faction catalog: neutral, not assistable.
+        assert!(
+            !verdict(0x0100, 10.0),
+            "a unit that fails the relation → UnableCast"
+        );
+        // Inside the minimum is out of range too.
+        assert!(verdict_for(SHOT, 0x0002, 20.0), "inside the band → Cast");
+        assert!(
+            !verdict_for(SHOT, 0x0002, 5.0),
+            "inside the minimum → UnableCast"
+        );
     }
 }

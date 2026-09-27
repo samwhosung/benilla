@@ -197,6 +197,9 @@ const ATTR_DO_NOT_DISPLAY: u32 = 0x80;
 pub const SPELL_ATTR_IS_TRADESKILL: u32 = 0x20;
 /// `SPELL_ATTR_EX_NO_AURA_ICON`: hidden from the aura bar, as all three warrior stances are.
 const ATTR_EX_NO_AURA_ICON: u32 = 0x1000_0000;
+/// `SPELL_ATTR_EX_EXCLUDE_CASTER` (vmangos `SpellDefines.h:851`): the targeting cursor never takes
+/// the caster (`0x6e61cf`, `0x6e6507`).
+const ATTR_EX_EXCLUDE_CASTER: u32 = 0x0008_0000;
 
 /// `SPELL_EFFECT_ATTACK`: only 6603 "Attack" has it, but the client tests the effect, not the id.
 const SPELL_EFFECT_ATTACK: u32 = 78;
