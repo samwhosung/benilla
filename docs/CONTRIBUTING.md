@@ -73,8 +73,10 @@ out of scope is closed with the reason.
   `localhost:3724`). A scripted run has no default account: `WOW_USER`, `WOW_PASS` and
   `WOW_CHAR` name a test account on your server whose login kicks nobody, all three, either in
   the environment or in a `.probe-identity` file at the repo root (one per line, never
-  committed), and `scripts/smoke.sh` (the live login gate) refuses without them. The probes
-  drive the body with GM commands, so give that account the top GM level.
+  committed), and `scripts/smoke.sh` (the live login gate) refuses without them. `WOW_CHAR`
+  must already be on the account, since the client creates a character only when asked:
+  `WOW_PROBE_CHARCREATE=<name> WOW_PROBE_CHARCREATE_KEEP=1`, run without `WOW_CHAR`, makes it.
+  The probes drive the body with GM commands, so give that account the top GM level.
 - **Running it unattended.** The rules are `docs/METHOD.md`, "The local server"; these are the
   switches.
   - `WOW_UNATTENDED=1` reconnects instead of waiting at a dialog, and exits non-zero on a login

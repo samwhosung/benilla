@@ -96,3 +96,9 @@ cpal = "0.17"
 # Windows CPU clocks for `perf::clock`.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
+# The login cycle's fake realmd runs the server half of SRP6 (`net::io::cycle_tests`).
+[dev-dependencies]
+benilla-srp = { path = "../benilla-srp" }
+num-bigint = "0.4.6"
+sha1.workspace = true

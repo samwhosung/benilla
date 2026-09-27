@@ -66,7 +66,7 @@ impl Plugin for NetPlugin {
         crate::query_cache::register::<crate::names::NameCache>(app);
         crate::query_cache::register::<crate::go_templates::GameObjectTemplates>(app);
         crate::query_cache::register::<crate::items::Items>(app);
-        let handles = io::spawn_net(io::NetConfig::from_env(), self.connect);
+        let handles = io::spawn_net(self.connect);
         if !self.connect {
             app.insert_resource(NetOffline);
         }
