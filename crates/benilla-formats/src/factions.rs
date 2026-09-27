@@ -36,7 +36,7 @@ pub struct FactionTemplate {
 }
 
 /// A unit's base reaction toward another on the reference's scale: `0x606640` returns these three,
-/// and the reputation path widens the scale to 0..7, hence the gaps.
+/// and the reputation path widens the scale to 0..=6, hence the gaps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Reaction {
     Hostile = 1,
@@ -154,9 +154,9 @@ impl FactionInfo {
     }
 }
 
-/// Total standing (base + wire) to rank 0..=7, hated to exalted, which is also the reference's
-/// extended reaction scale. Widths from −42000: 36000, 3000, 3000, 3000, 6000, 12000, 21000, 1000
-/// (vmangos `PointsInRank`).
+/// Total standing (base + wire) to rank 0..=7, hated to exalted, the reference's ladder
+/// (`0x4d63a0`); the unit reaction takes it capped at 6, Revered (`0x606439`). Widths from −42000:
+/// 36000, 3000, 3000, 3000, 6000, 12000, 21000, 1000 (vmangos `PointsInRank`).
 pub fn reputation_rank(total_standing: i32) -> u8 {
     match total_standing {
         i32::MIN..=-6001 => 0, // hated

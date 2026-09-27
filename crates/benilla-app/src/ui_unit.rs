@@ -743,8 +743,20 @@ pub(crate) struct UnitStores<'w, 's> {
     edges: MessageReader<'w, 's, FieldChanged>,
 }
 
+/// `UnitReaction(unit, "player")` (`0x5167e0`): [`ring_reaction`] plus one (`0x51683e`), so
+/// `1..=7`, Hated to Revered, and Exalted reads 7 too (`0x606439`). Stock `UnitReactionColor`
+/// has seven entries (`TargetFrame.lua:6-14`), one per value.
+pub(crate) fn unit_reaction(
+    factions: Option<&Factions>,
+    reputations: &Reputations,
+    store: &ObjectStore,
+    self_store: Option<&ObjectStore>,
+) -> u8 {
+    ring_reaction(factions, reputations, Some(store), self_store) + 1
+}
+
 /// Build a unit snapshot from a streamed descriptor, its cached name and its `UnitReaction`
-/// (`1..8`, or `0` where none is resolved, as for `"player"`); `classes` feeds the relic column.
+/// (`1..=7`, or `0` where none is resolved, as for `"player"`); `classes` feeds the relic column.
 pub(crate) fn snapshot(
     store: &ObjectStore,
     name: Option<String>,
@@ -1193,13 +1205,12 @@ fn feed_units(
         let name = names
             .resolve_unit(guid, Some(store), &commands)
             .map(str::to_string);
-        // `UnitReaction` (1..8) is the selection ring's 0..7 rank plus one.
-        let reaction = ring_reaction(
+        let reaction = unit_reaction(
             factions.as_deref(),
             &reputations,
-            Some(store),
+            store,
             self_pair.map(|(s, _)| s),
-        ) + 1;
+        );
         let mut s = snapshot(store, name, reaction, chr);
         s.guid = guid;
         s.is_connected = true;
@@ -1238,12 +1249,12 @@ fn feed_units(
             let name = names
                 .resolve_unit(guid, Some(store), &commands)
                 .map(str::to_string);
-            let reaction = ring_reaction(
+            let reaction = unit_reaction(
                 factions.as_deref(),
                 &reputations,
-                Some(store),
+                store,
                 self_pair.map(|(s, _)| s),
-            ) + 1;
+            );
             let mut s = snapshot(store, name, reaction, chr);
             s.guid = guid;
             s.is_connected = true;
@@ -1306,12 +1317,12 @@ fn feed_units(
             let name = names
                 .resolve_unit(guid, Some(store), &commands)
                 .map(str::to_string);
-            let reaction = ring_reaction(
+            let reaction = unit_reaction(
                 factions.as_deref(),
                 &reputations,
-                Some(store),
+                store,
                 self_pair.map(|(s, _)| s),
-            ) + 1;
+            );
             let mut s = snapshot(store, name, reaction, chr);
             s.guid = guid;
             s.is_connected = true;

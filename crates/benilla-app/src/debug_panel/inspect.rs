@@ -443,8 +443,8 @@ pub(super) fn inspect_ui(
             3 => "neutral",
             4 => "friendly",
             5 => "honored",
-            6 => "revered",
-            _ => "exalted",
+            // `0x606439` caps the rank at 6: Exalted reads here too.
+            _ => "revered+",
         };
         // A faction with a reputation slot reacts by our standing (`0x605fc0` -> `0x4d63a0`),
         // before any template comparison; everything else by the template comparator.

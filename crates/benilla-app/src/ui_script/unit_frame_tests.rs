@@ -834,6 +834,22 @@ fn pvp_icon_follows_the_three_branch_law() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
+/// The target frame's name plate tint, `TargetFrameNameBackground`'s vertex colour as drawn.
+fn plate_color(s: &mut UiScript) -> [f32; 4] {
+    s.resolve();
+    s.extract()
+        .into_iter()
+        .find_map(|q| match q.content {
+            QuadContent::Texture {
+                path: Some(p),
+                color: Some(c),
+                ..
+            } if p.contains("LevelBackground") => Some(c),
+            _ => None,
+        })
+        .expect("target name-plate quad present")
+}
+
 /// A friendly player's plate is green when PvP-flagged, else blue (`TargetFrame.lua:163-172`).
 #[test]
 fn flagged_friendly_player_plate_is_green() {
@@ -842,20 +858,6 @@ fn flagged_friendly_player_plate_is_green() {
     s.set_screen_size(1024.0, 768.0);
     load_unit_frames(&s);
 
-    let plate_color = |s: &mut UiScript| -> [f32; 4] {
-        s.resolve();
-        s.extract()
-            .into_iter()
-            .find_map(|q| match q.content {
-                QuadContent::Texture {
-                    path: Some(p),
-                    color: Some(c),
-                    ..
-                } if p.contains("LevelBackground") => Some(c),
-                _ => None,
-            })
-            .expect("target name-plate quad present")
-    };
     let friendly_player = |pvp: bool| UnitState {
         exists: true,
         name: Some("Guildmate".into()),
@@ -887,6 +889,65 @@ fn flagged_friendly_player_plate_is_green() {
         "a PvP-flagged friendly player is green (UnitReactionColor[6]), got {green:?}"
     );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
+/// An NPC of a faction we are Exalted with reads as Revered: `0x606439` caps the rank at 6 and the
+/// binding adds one (`0x51683e`), so `UnitReaction` answers 7 and stock `TargetFrame_CheckFaction`
+/// finds the last of `UnitReactionColor`'s seven entries (`TargetFrame.lua:6-14`, `:183`).
+#[test]
+fn an_exalted_npc_target_reads_revered_and_its_plate_is_green() {
+    use crate::net::ObjectStore;
+    use crate::target::{stormwind_fixture, HUMAN_WARRIOR};
+    use benilla_protocol::field::FIELD_UNIT_FACTIONTEMPLATE;
+    use benilla_protocol::ObjectFields;
+
+    /// `UNIT_FIELD_BYTES_0`, absolute descriptor index.
+    const BYTES_0: u16 = 36;
+    let data = benilla_formats::wow_data_or_skip!();
+    let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+    let mut s = UiScript::new().unwrap();
+    s.set_screen_size(1024.0, 768.0);
+    load_unit_frames(&s);
+    let me = ObjectStore(ObjectFields::from_pairs(&[(BYTES_0, HUMAN_WARRIOR)]));
+
+    for total in [21_000, 42_000] {
+        let (factions, template, reps) = stormwind_fixture(&mut chain, total);
+        let guard = ObjectStore(ObjectFields::from_pairs(&[(
+            FIELD_UNIT_FACTIONTEMPLATE,
+            template,
+        )]));
+        let reaction = crate::ui_unit::unit_reaction(Some(&factions), &reps, &guard, Some(&me));
+        s.set_unit(
+            "target",
+            Some(UnitState {
+                exists: true,
+                name: Some("Stormwind Guard".into()),
+                health: 100,
+                max_health: 100,
+                level: 55,
+                reaction,
+                is_connected: true,
+                ..UnitState::default()
+            }),
+        );
+        s.fire_event("PLAYER_TARGET_CHANGED", vec![]);
+        assert!(
+            s.errors().is_empty(),
+            "standing {total}: script errors: {:?}",
+            s.errors()
+        );
+        assert_eq!(
+            s.eval::<i64>(r#"return UnitReaction("target", "player")"#)
+                .unwrap(),
+            7,
+            "standing {total}"
+        );
+        let green = plate_color(&mut s);
+        assert!(
+            green[0].abs() < 1e-6 && (green[1] - 1.0).abs() < 1e-6 && green[2].abs() < 1e-6,
+            "standing {total}: the plate is UnitReactionColor[7], green, got {green:?}"
+        );
+    }
 }
 
 /// Stock `TargetFrame_CheckClassification` (`TargetFrame.lua:205-218`), asserted on the drawn

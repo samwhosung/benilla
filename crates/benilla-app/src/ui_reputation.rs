@@ -10,7 +10,7 @@
 //! The wire standing excludes the race/class base, so the pane's total is base plus wire: vmangos
 //! stores `standing - BaseRep` (`ReputationMgr.cpp:261`) and reports the sum
 //! (`ReputationMgr.cpp:82`). The rank is [`benilla_formats::reputation_rank`], shared with the
-//! unit-reaction decode so the pane and the nameplate agree.
+//! unit-reaction decode, which caps it at 6, Revered (`0x606439`); the pane shows it uncapped.
 
 use bevy::prelude::*;
 

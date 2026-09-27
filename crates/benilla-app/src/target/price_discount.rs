@@ -119,8 +119,9 @@ mod tests {
             (5, UNIT_FLAG_PVP, 7, D15),
             (5, UNIT_FLAG_PVP, 8, D20),
             (5, UNIT_FLAG_PVP, 19, D20),
-            // Revered and up pass the same signed `cmp eax,5`; Neutral does not.
-            (7, UNIT_FLAG_PVP, 19, D20),
+            // Revered, which Exalted reads too (`0x606439`), passes the same signed `cmp eax,5`;
+            // Neutral does not.
+            (6, UNIT_FLAG_PVP, 19, D20),
             (3, UNIT_FLAG_PVP, 19, D10),
             // Every other flag bit set but the PvP one: no honor step.
             (5, !UNIT_FLAG_PVP, 19, D10),

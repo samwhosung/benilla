@@ -12,13 +12,11 @@ use benilla_ui::strings::Arg;
 use crate::items::Items;
 use crate::names::NameCache;
 use crate::net::{NetCommands, ObjectStore, Objects, SelfPlayer};
-use crate::target::{
-    go_is_nearest, ring_reaction, Hovered, HoveredObject, GO_FLAG_LOCKED, GO_TYPE_GENERIC,
-};
+use crate::target::{go_is_nearest, Hovered, HoveredObject, GO_FLAG_LOCKED, GO_TYPE_GENERIC};
 use crate::ui_action::{PlayerActions, Spells};
 use crate::ui_script::UiFeed;
 use crate::ui_trainer::{TrainerFeed, TrainerTooltipSubjects};
-use crate::ui_unit::{enrich_unit, snapshot, UnitFeed};
+use crate::ui_unit::{enrich_unit, snapshot, unit_reaction, UnitFeed};
 
 pub struct UiTooltipPlugin;
 
@@ -629,12 +627,7 @@ fn drive_mouseover_tooltip(
         let name = names
             .resolve_unit(guid, Some(store), &commands)
             .map(str::to_string);
-        let reaction = ring_reaction(
-            rx.factions.as_deref(),
-            &rx.reputations,
-            Some(store),
-            self_store,
-        ) + 1;
+        let reaction = unit_reaction(rx.factions.as_deref(), &rx.reputations, store, self_store);
         let mut s = snapshot(store, name, reaction, chr);
         enrich_unit(
             &mut s,
