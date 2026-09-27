@@ -142,6 +142,24 @@ pub(crate) struct RangeInputs {
     pub(crate) target_reach: Option<f32>,
 }
 
+impl RangeInputs {
+    /// The one range compare: the squared 3D distance against `GetMinMaxRange 0x6e3480`'s bounds,
+    /// "Out of range." (0x59) past max², "Target too close" (0x76) inside a nonzero min². The
+    /// pre-send gate (`IsTargetInRange 0x6e47b0`) and the targeting cursor's unit leg (`0x6e6460`,
+    /// `6e677c`–`6e6802`) both ask it. No row or no position passes; the server judges.
+    pub(crate) fn refusal(
+        &self,
+        def: &SpellDisplay,
+        row: Option<&benilla_formats::SpellRange>,
+    ) -> Option<u8> {
+        let dist_sq = self
+            .self_pos
+            .zip(self.target_pos)
+            .map(|(a, b)| a.distance_squared(b));
+        super::validator::cast_range_refusal(def, row, self.self_reach, self.target_reach, dist_sq)
+    }
+}
+
 impl Default for RangeInputs {
     fn default() -> Self {
         Self {

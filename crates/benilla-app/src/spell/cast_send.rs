@@ -411,18 +411,7 @@ fn send_spell_cast(
     if let Some(d) = def {
         if target.is_some() && target == ctx.selection_guid && target != ctx.self_guid {
             let row = spells.and_then(|s| s.ranges.get(d.range_index));
-            let dist_sq = ctx
-                .range
-                .self_pos
-                .zip(ctx.range.target_pos)
-                .map(|(a, b)| a.distance_squared(b));
-            if let Some(reason) = validator::cast_range_refusal(
-                d,
-                row,
-                ctx.range.self_reach,
-                ctx.range.target_reach,
-                dist_sq,
-            ) {
+            if let Some(reason) = ctx.range.refusal(d, row) {
                 debug!("ui_action: cast {spell_id} refused locally — range ({reason:#x})");
                 cast_errors.push_local(spell_id, reason);
                 return;
