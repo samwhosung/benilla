@@ -304,6 +304,38 @@ pub fn cast_spell_gameobject(spell_id: u32, go_guid: u64) -> Vec<u8> {
     body
 }
 
+/// The corpse bit a corpse cast carries: `BindTarget 0x6e5b40`'s corpse arm writes `0x8000` for a
+/// corpse its caster's reaction toward is friendly (`0x6e5fc7`), `0x200` for one it is not
+/// (`0x6e600c`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CorpseTarget {
+    /// `TARGET_FLAG_CORPSE_ALLY`, a resurrection's.
+    Ally,
+    /// `TARGET_FLAG_CORPSE_ENEMY`.
+    Enemy,
+}
+
+impl CorpseTarget {
+    /// The wire mask bit, which is also the flag-word bit the bind clears.
+    pub const fn target_flag(self) -> u16 {
+        match self {
+            Self::Ally => TARGET_FLAG_CORPSE_ALLY,
+            Self::Enemy => TARGET_FLAG_CORPSE_ENEMY,
+        }
+    }
+}
+
+/// Body of `CMSG_CAST_SPELL` at a corpse: the corpse bit and the corpse's packed guid. The client's
+/// targets writer `0x7e4e10` puts the guid for any mask bit in `0x8a02`; vmangos reads it for
+/// either corpse bit (`SpellCastTargetsInfo.cpp:156-157`).
+pub fn cast_spell_corpse(spell_id: u32, target: CorpseTarget, corpse_guid: u64) -> Vec<u8> {
+    let mut body = Vec::with_capacity(16);
+    body.extend_from_slice(&spell_id.to_le_bytes());
+    body.extend_from_slice(&target.target_flag().to_le_bytes());
+    crate::wire::write_packed_guid(corpse_guid, &mut body).expect("vec write");
+    body
+}
+
 /// Body of `CMSG_CAST_SPELL` at an item, such as an enchant or poison: `TARGET_FLAG_ITEM` and the
 /// item's packed guid (`SpellCastTargetsInfo.cpp:159-160`).
 pub fn cast_spell_item(spell_id: u32, item_guid: u64) -> Vec<u8> {
@@ -361,6 +393,28 @@ mod tests {
         );
         // The self-cast shape stays distinct: mask 0, no guid.
         assert_eq!(cast_spell(1, None), [0x01, 0x00, 0x00, 0x00, 0x00, 0x00]);
+    }
+
+    /// Resurrection (2006) at a released player's corpse, `HIGHGUID_CORPSE` 0xF101
+    /// (vmangos `ObjectGuid.h:76`), counter 0x2A.
+    #[test]
+    fn cast_spell_corpse_body_golden() {
+        const CORPSE: u64 = 0xF101_0000_0000_002A;
+        assert_eq!(
+            cast_spell_corpse(2006, CorpseTarget::Ally, CORPSE),
+            [
+                0xD6, 0x07, 0x00, 0x00, // spell id 2006
+                0x00, 0x80, // TARGET_FLAG_CORPSE_ALLY
+                0xC1, 0x2A, 0x01, 0xF1, // packed guid: bytes 0, 6 and 7
+            ],
+            "CMSG_CAST_SPELL (ally corpse) body"
+        );
+        // The enemy arm differs only in the mask.
+        assert_eq!(
+            cast_spell_corpse(2006, CorpseTarget::Enemy, CORPSE),
+            [0xD6, 0x07, 0x00, 0x00, 0x00, 0x02, 0xC1, 0x2A, 0x01, 0xF1],
+            "CMSG_CAST_SPELL (enemy corpse) body"
+        );
     }
 
     #[test]

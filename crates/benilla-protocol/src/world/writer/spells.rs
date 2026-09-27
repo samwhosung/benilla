@@ -32,6 +32,20 @@ impl WorldWriter {
         )
     }
 
+    /// `CMSG_CAST_SPELL` at a corpse: a corpse bit and the corpse's packed guid, a resurrection on
+    /// a released player. The server resurrects the corpse's owner (`Spell.cpp:3055-3064`).
+    pub fn cast_spell_corpse(
+        &mut self,
+        spell_id: u32,
+        target: messages::CorpseTarget,
+        corpse_guid: u64,
+    ) -> Result<()> {
+        self.send(
+            opcode::CMSG_CAST_SPELL,
+            &messages::cast_spell_corpse(spell_id, target, corpse_guid),
+        )
+    }
+
     /// `CMSG_CAST_SPELL` with `TARGET_FLAG_ITEM` and the item's packed guid: an enchant on the item
     /// picked in the craft frame.
     pub fn cast_spell_item(&mut self, spell_id: u32, item_guid: u64) -> Result<()> {

@@ -437,6 +437,11 @@ impl ObjectFields {
     fn corpse_bytes_2(&self) -> Option<u32> {
         self.get_u32(33)
     }
+    /// The dead player's race, `CORPSE_FIELD_BYTES_1` byte 1, the one corpse field the reaction
+    /// gate reads (`0x5d7120`); 0, which no `ChrRaces` row names, when absent.
+    pub fn corpse_race(&self) -> u8 {
+        self.corpse_bytes_1().map_or(0, |b1| (b1 >> 8) as u8)
+    }
     /// The corpse's appearance, `None` in a delta that lacks either BYTES word.
     pub fn corpse_look(&self) -> Option<CorpseLook> {
         let (b1, b2) = (self.corpse_bytes_1()?, self.corpse_bytes_2()?);

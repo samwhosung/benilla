@@ -78,6 +78,19 @@ fn item_query_wire() {
         hx("ff18001000c3cdab50f1")
     );
 
+    // A corpse target (Goblin Jumper Cables' Defibrillate, `Targets 0x8000`): the corpse bit and
+    // the packed guid, the block `cast_spell_corpse` writes; vmangos reads the guid for either
+    // corpse bit (`SpellCastTargetsInfo.cpp:156-157`). 0xF101_0000_0000_002A packs to mask 0xC1.
+    assert_eq!(
+        messages::use_item(
+            255,
+            24,
+            0,
+            messages::UseItemTarget::Corpse(messages::CorpseTarget::Ally, 0xF101_0000_0000_002A)
+        ),
+        hx("ff18000080c12a01f1")
+    );
+
     // CMSG_AUTOEQUIP_ITEM (vmangos AutoEquipItem::ReadFromWorldPacket): bagIndex, slot.
     assert_eq!(messages::auto_equip_item(255, 25), hx("ff19"));
 

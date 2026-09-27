@@ -461,6 +461,9 @@ pub enum UseItemTarget {
     /// `TARGET_FLAG_SOURCE_LOCATION` and three `f32` coords (`BindLocation`, `0x6e60f0`); only
     /// items carrying spell 265, such as Martin Fury, use it. vmangos reads it before the dest.
     Source([f32; 3]),
+    /// A corpse bit and the corpse's packed guid: Goblin Jumper Cables' Defibrillate
+    /// (`Targets 0x8000`) on a released player's corpse.
+    Corpse(super::spells::CorpseTarget, u64),
 }
 
 /// Body of `CMSG_USE_ITEM` (opcode 171): bag index (a bag's player-array slot 19-22, or
@@ -485,6 +488,10 @@ pub fn use_item(bag_index: u8, slot: u8, spell_slot: u8, target: UseItemTarget) 
         }
         UseItemTarget::Item(guid) => {
             body.extend_from_slice(&TARGET_FLAG_ITEM.to_le_bytes());
+            guid
+        }
+        UseItemTarget::Corpse(corpse, guid) => {
+            body.extend_from_slice(&corpse.target_flag().to_le_bytes());
             guid
         }
         UseItemTarget::Dest(dest) => {
