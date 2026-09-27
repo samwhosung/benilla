@@ -162,7 +162,9 @@ pub(super) fn auto_equip_cursor_item(model: &mut Model) -> bool {
 pub(super) fn use_inventory_item(model: &mut Model, id: u32) {
     super::clear_cursor(model);
     if !model.repair_mode {
-        model.inventory_uses.push(id);
+        model
+            .script_calls
+            .push(crate::script::ScriptCall::UseInventoryItem(id));
         return;
     }
     if (1..=19).contains(&id)

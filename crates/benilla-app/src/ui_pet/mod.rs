@@ -20,7 +20,9 @@ mod unit;
 
 use bar::feed_pet_bar;
 use drain::drain_pet_actions;
+// A pet bar press, applied in call order by `crate::script_calls`.
 pub(crate) use drain::pet_stop_on_old_target_clear;
+pub(crate) use drain::PetPress;
 use menu::{drain_pet_menu, feed_pet_menu};
 use unit::feed_pet_unit;
 
@@ -63,7 +65,8 @@ impl Plugin for UiPetPlugin {
             Update,
             (
                 // Feeds ride the unit feed, before the VM ticks; drains run after the input pass so
-                // a click is sent that frame. The old-target clear precedes the bar feed so Attack
+                // a click is sent that frame (a press is a script call, `PetPress`). The old-target
+                // clear precedes the bar feed so Attack
                 // goes dark the frame the selection moves.
                 pet_stop_on_old_target_clear
                     .in_set(UnitFeed)
@@ -77,7 +80,11 @@ impl Plugin for UiPetPlugin {
                     .in_set(UnitFeed)
                     .after(crate::ui_pet_stats::PetSnapshot),
                 feed_pet_menu.in_set(UnitFeed),
-                drain_pet_actions.after(UiInput),
+                // After this frame's presses, as the one drain before it ran them ahead of the
+                // toggles, stops and writes.
+                drain_pet_actions
+                    .after(UiInput)
+                    .after(crate::script_calls::apply_script_calls),
                 drain_pet_menu.after(UiInput),
             ),
         );

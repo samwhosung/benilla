@@ -40,6 +40,8 @@ mod reticle;
 // `pub(crate)` for the hover inspector too: its faction catalog feeds `go_highlightable`.
 pub(crate) mod ring;
 mod scan;
+mod script;
+pub(crate) use script::ScriptSelect;
 
 /// `Faction.dbc` and our reputation table as one [`SystemParam`], since every reaction function
 /// takes both; `factions` is `Option` so a UI-only harness runs without client data.
@@ -309,32 +311,28 @@ impl Plugin for TargetPlugin {
                     crate::spell::targeting::commit_ground_cast_on_click,
                     crate::spell::targeting::commit_object_cast_on_click,
                     click::act_on_right_click,
+                    // The loot close's guid-scoped deselect.
                     click::clear_target_requests,
-                    // The UI's unit-token drains. `SpellTargetUnit` first: it binds the cursor's
-                    // cast and never moves the selection. Then the selection asks (`TargetUnit`,
-                    // `AssistUnit`, `TargetLastEnemy`: one drain, as the reference has one
-                    // `0x489a40`) and `DropItemOnUnit`'s pet leg, independent of each other.
+                    // The script calls that touch the selection, the cast or the targeting cursor
+                    // (`TargetUnit`, `/target`, `ClearTarget`, `/cast`, `UseAction`, …), applied
+                    // in the order the script made them; then `DropItemOnUnit`'s pet leg.
                     (
-                        crate::spell::targeting::drain_spell_target_unit,
-                        (
-                            click::selection_requests,
-                            crate::ui_action::drop_item::drop_item_on_unit,
-                        ),
+                        crate::script_calls::apply_script_calls,
+                        crate::ui_action::drop_item::drop_item_on_unit,
                     )
                         .chain(),
-                    // The by-name asks: `/target`, the Lua `TargetByName` and `/assist` commit
-                    // through `scan::commit`; `/follow` hands its subject to `crate::player`.
+                    // The chat layer's by-name asks: `/target` and `/assist` commit through
+                    // `scan::commit`; `/follow` hands its subject to `crate::player`.
                     (
                         by_name::target_by_name_requests,
-                        by_name::script_target_by_name_requests,
                         by_name::assist_requests,
                         by_name::follow_requests,
                     )
                         .chain(),
                     scan::auto_acquire_attacker,
-                    // The one cycler's two sides (`0x493f60`, modes 1 and 2), chained: they share
-                    // `TabHistory`, which a side switch clears.
-                    (scan::tab_target, scan::target_nearest_friend_requests).chain(),
+                    // The TAB cycler (`0x493f60`, mode 1); `TargetNearestFriend`, mode 2, is a
+                    // script call.
+                    scan::tab_target,
                     scan::acquire_and_attack,
                     flash::drive_flash,
                     // The last-enemy stamp before the ring's death-clear, so a hostile that dies

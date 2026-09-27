@@ -7,8 +7,6 @@ use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
 
-use benilla_ui::script::UiScript;
-
 use crate::creature_anim::{CastEvent, CastEventKind, Casting, PlaySeq};
 use crate::net::{ClientCommand, GuidIndex, NetCommands, SelfGuid};
 use crate::ui_action::Spells;
@@ -257,112 +255,135 @@ pub(crate) struct LocalMoveStart(pub(crate) bool);
 /// into 0x154 `SPELLCAST_INTERRUPTED` (`0x6e1a00`). Our bar edges key on the self `Casting` this
 /// reap removes, so the pair is pushed here. The stock `CastingBarFrame.lua:132-139` then steps
 /// the flash once per OnUpdate after the 1 s hold, followed by the fade.
-pub(super) fn local_self_cancel(
-    script: Option<NonSendMut<UiScript>>,
-    mut moved: ResMut<LocalMoveStart>,
-    mut pending: ResMut<PendingCast>,
-    mut queued_melee: ResMut<QueuedMeleeSpell>,
-    channel: Res<ActiveChannel>,
-    mut auto_repeat: ResMut<AutoRepeatActive>,
-    mut feed: ResMut<CastBarFeed>,
-    spells: Option<Res<Spells>>,
-    net: Res<NetCommands>,
-    self_guid: Res<SelfGuid>,
-    index: Res<GuidIndex>,
-    casting: Query<&Casting>,
-    mut cast_events: MessageWriter<CastEvent>,
-    mut play_seq: ResMut<PlaySeq>,
-    mut ecs: Commands,
-) {
-    let esc = match script {
-        Some(mut s) => s.take_spell_stop(),
-        None => false,
-    };
-    let moved = std::mem::take(&mut moved.0);
-    if !esc && !moved {
-        return;
+pub(super) fn local_self_cancel(mut moved: ResMut<LocalMoveStart>, mut cancel: SelfCancel) {
+    if std::mem::take(&mut moved.0) {
+        cancel.cancel(false, true);
     }
-    let now = Instant::now();
-    let self_e = self_guid.0.as_ref().and_then(|g| index.0.get(g)).copied();
-    // Esc stops one thing, auto-repeat first (`0x6e6e80`).
-    let esc = if esc && auto_repeat.0.is_some() {
-        if *crate::net::CAST_TRACE {
-            info!("cast-trace: LOCAL auto-repeat self-cancel (esc), CMSG_CANCEL_AUTO_REPEAT_SPELL");
-        }
-        crate::creature_anim::cancel_auto_repeat_local(self_e, &mut auto_repeat, &mut ecs, &net);
-        false // the press is spent
-    } else {
-        esc
-    };
-    if !esc && !moved {
-        return;
+}
+
+/// What [`local_self_cancel`] reads and writes, shared with the Esc cancel, which is a script call
+/// (`SpellStopCasting`) and lands in call order ([`crate::script_calls`]).
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct SelfCancel<'w, 's> {
+    pending: ResMut<'w, PendingCast>,
+    queued_melee: ResMut<'w, QueuedMeleeSpell>,
+    channel: Res<'w, ActiveChannel>,
+    auto_repeat: ResMut<'w, AutoRepeatActive>,
+    feed: ResMut<'w, CastBarFeed>,
+    spells: Option<Res<'w, Spells>>,
+    net: Res<'w, NetCommands>,
+    self_guid: Res<'w, SelfGuid>,
+    index: Res<'w, GuidIndex>,
+    casting: Query<'w, 's, &'static Casting>,
+    cast_events: MessageWriter<'w, CastEvent>,
+    play_seq: ResMut<'w, PlaySeq>,
+    ecs: Commands<'w, 's>,
+}
+
+impl SelfCancel<'_, '_> {
+    /// `SpellStopCasting()` (`0x6e6e80`), the ESC chain's cast rung.
+    pub(crate) fn stop_casting(&mut self) {
+        self.cancel(true, false);
     }
-    let flags_open = |pick: fn(&benilla_formats::SpellDisplay) -> bool, spell_id: u32| {
-        // An uncataloged spell cancels, as the server interrupts any ordinary cast.
-        spells
-            .as_ref()
-            .and_then(|s| s.catalog.get(spell_id))
-            .is_none_or(pick)
-    };
-    // `AbortCast` treats a cast and a queued strike alike; only the local teardown differs.
-    let started = self_e.and_then(|e| casting.get(e).ok()).map(|c| c.spell_id);
-    if let Some(slot) = inflight(&pending, &queued_melee, started, now) {
-        let spell_id = slot.spell_id();
-        // Movement tests `InterruptFlags`, which spares a queued strike: Heroic Strike 78,
-        // Cleave 845 and Raptor Strike 2973 ship 0 (Fireball `0xf`).
-        if esc
-            || flags_open(
-                |d| d.interrupt_flags & SPELL_INTERRUPT_MOVEMENT != 0,
-                spell_id,
-            )
-        {
+
+    fn cancel(&mut self, esc: bool, moved: bool) {
+        let Self {
+            pending,
+            queued_melee,
+            channel,
+            auto_repeat,
+            feed,
+            spells,
+            net,
+            self_guid,
+            index,
+            casting,
+            cast_events,
+            play_seq,
+            ecs,
+        } = self;
+        let now = Instant::now();
+        let self_e = self_guid.0.as_ref().and_then(|g| index.0.get(g)).copied();
+        // Esc stops one thing, auto-repeat first (`0x6e6e80`).
+        let esc = if esc && auto_repeat.0.is_some() {
             if *crate::net::CAST_TRACE {
-                info!(
-                    "cast-trace: LOCAL self-cancel — {slot:?} ({}), CMSG_CANCEL_CAST",
-                    if esc { "esc" } else { "moved" }
-                );
+                info!("cast-trace: LOCAL auto-repeat self-cancel (esc), CMSG_CANCEL_AUTO_REPEAT_SPELL");
             }
-            let _ = net.0.send(ClientCommand::CancelCast { spell_id });
-            match slot {
-                Inflight::Cast(_) => {
-                    pending.clear_if(spell_id);
-                    // STOP arms the flash, INTERRUPTED paints red and holds, so the flash bursts
-                    // after the hold; an interrupt by an enemy has no STOP and no burst.
-                    feed.0.push(CastBarEdge::Stop);
-                    feed.0.push(CastBarEdge::Interrupted);
-                    // `spell_failed_other`'s self reap, run early so the echo finds it done.
-                    if let Some(e) = self_e {
-                        if casting.get(e).is_ok_and(|c| c.spell_id == spell_id) {
-                            ecs.entity(e).remove::<Casting>();
+            crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, ecs, net);
+            false // the press is spent
+        } else {
+            esc
+        };
+        if !esc && !moved {
+            return;
+        }
+        let flags_open = |pick: fn(&benilla_formats::SpellDisplay) -> bool, spell_id: u32| {
+            // An uncataloged spell cancels, as the server interrupts any ordinary cast.
+            spells
+                .as_ref()
+                .and_then(|s| s.catalog.get(spell_id))
+                .is_none_or(pick)
+        };
+        // `AbortCast` treats a cast and a queued strike alike; only the local teardown differs.
+        let started = self_e.and_then(|e| casting.get(e).ok()).map(|c| c.spell_id);
+        if let Some(slot) = inflight(pending, queued_melee, started, now) {
+            let spell_id = slot.spell_id();
+            // Movement tests `InterruptFlags`, which spares a queued strike: Heroic Strike 78,
+            // Cleave 845 and Raptor Strike 2973 ship 0 (Fireball `0xf`).
+            if esc
+                || flags_open(
+                    |d| d.interrupt_flags & SPELL_INTERRUPT_MOVEMENT != 0,
+                    spell_id,
+                )
+            {
+                if *crate::net::CAST_TRACE {
+                    info!(
+                        "cast-trace: LOCAL self-cancel — {slot:?} ({}), CMSG_CANCEL_CAST",
+                        if esc { "esc" } else { "moved" }
+                    );
+                }
+                let _ = net.0.send(ClientCommand::CancelCast { spell_id });
+                match slot {
+                    Inflight::Cast(_) => {
+                        pending.clear_if(spell_id);
+                        // STOP arms the flash, INTERRUPTED paints red and holds, so the flash bursts
+                        // after the hold; an interrupt by an enemy has no STOP and no burst.
+                        feed.0.push(CastBarEdge::Stop);
+                        feed.0.push(CastBarEdge::Interrupted);
+                        // `spell_failed_other`'s self reap, run early so the echo finds it done.
+                        if let Some(e) = self_e {
+                            if casting.get(e).is_ok_and(|c| c.spell_id == spell_id) {
+                                ecs.entity(e).remove::<Casting>();
+                            }
+                            cast_events.write(CastEvent {
+                                entity: e,
+                                spell_id,
+                                kind: CastEventKind::Fail,
+                                seq: play_seq.next(),
+                            });
                         }
-                        cast_events.write(CastEvent {
-                            entity: e,
-                            spell_id,
-                            kind: CastEventKind::Fail,
-                            seq: play_seq.next(),
-                        });
+                    }
+                    Inflight::Strike(_) => {
+                        // Clearing the slot darkens the checked ring now. `AbortCast` fires 0x152
+                        // here too, inert on a hidden bar; there is no INTERRUPTED.
+                        queued_melee.clear_if(spell_id);
+                        feed.0.push(CastBarEdge::Stop);
                     }
                 }
-                Inflight::Strike(_) => {
-                    // Clearing the slot darkens the checked ring now. `AbortCast` fires 0x152
-                    // here too, inert on a hidden bar; there is no INTERRUPTED.
-                    queued_melee.clear_if(spell_id);
-                    feed.0.push(CastBarEdge::Stop);
-                }
             }
         }
-    }
-    // The channel: movement only, and the send only (`0x6e9b70`).
-    if moved {
-        if let Some(spell_id) = channel.current(now) {
-            if flags_open(
-                |d| d.channel_interrupt_flags & CHANNEL_INTERRUPT_MOVING != 0,
-                spell_id,
-            ) {
-                if *crate::net::CAST_TRACE {
-                    info!("cast-trace: LOCAL channel self-cancel — spell {spell_id}, CMSG_CANCEL_CHANNELLING");
+        // The channel: movement only, and the send only (`0x6e9b70`).
+        if moved {
+            if let Some(spell_id) = channel.current(now) {
+                if flags_open(
+                    |d| d.channel_interrupt_flags & CHANNEL_INTERRUPT_MOVING != 0,
+                    spell_id,
+                ) {
+                    if *crate::net::CAST_TRACE {
+                        info!("cast-trace: LOCAL channel self-cancel — spell {spell_id}, CMSG_CANCEL_CHANNELLING");
+                    }
+                    let _ = net.0.send(ClientCommand::CancelChannelling { spell_id });
                 }
-                let _ = net.0.send(ClientCommand::CancelChannelling { spell_id });
             }
         }
     }
@@ -484,14 +505,15 @@ mod tests {
         assert_eq!(q.current(), None, "the wire resolution opened the queue");
     }
 
-    /// [`local_self_cancel`] in a small App. With no `UiScript` Esc reads false; the Esc tests
-    /// insert a VM and call the real `SpellStopCasting()`.
+    /// [`local_self_cancel`] in a small App, and the Esc cancel: the Esc tests insert a VM, call
+    /// the real `SpellStopCasting()` and apply what it queued.
     mod local_cancel {
         use super::*;
         use crate::creature_anim::PlaySeq;
         use crate::net::{Guid, GuidIndex, NetCommands, SelfGuid, SelfPlayer};
         use crate::ui_cast::feed_cast_bar;
         use benilla_formats::{SpellCatalog, SpellDisplay};
+        use benilla_ui::script::{ScriptCall, UiScript};
         use bevy::ecs::system::RunSystemOnce;
         use std::collections::HashMap;
 
@@ -539,6 +561,19 @@ mod tests {
         fn run(app: &mut App, moved: bool) {
             app.world_mut().resource_mut::<LocalMoveStart>().0 = moved;
             app.world_mut().run_system_once(local_self_cancel).unwrap();
+        }
+
+        /// Apply the `SpellStopCasting()` calls the VM queued, as `crate::script_calls` does.
+        fn apply_stops(app: &mut App) {
+            app.world_mut()
+                .run_system_once(|mut script: NonSendMut<UiScript>, mut cancel: SelfCancel| {
+                    crate::script_calls::in_call_order(&mut script, |_, call| {
+                        if call == ScriptCall::SpellStopCasting {
+                            cancel.stop_casting();
+                        }
+                    });
+                })
+                .unwrap();
         }
 
         #[test]
@@ -704,7 +739,7 @@ mod tests {
                 None,
                 "mid-channel the binding answers nil — the vanilla /stopcasting quirk"
             );
-            app.world_mut().run_system_once(local_self_cancel).unwrap();
+            apply_stops(&mut app);
             assert!(
                 rx.try_recv().is_err(),
                 "no wire cancel — channels break only on the movement path"
@@ -736,7 +771,7 @@ mod tests {
                     .unwrap(),
                 Some(1)
             );
-            app.world_mut().run_system_once(local_self_cancel).unwrap();
+            apply_stops(&mut app);
             assert!(
                 matches!(
                     rx.try_recv(),
@@ -766,7 +801,7 @@ mod tests {
                     .unwrap(),
                 Some(1)
             );
-            app.world_mut().run_system_once(local_self_cancel).unwrap();
+            apply_stops(&mut app);
             assert!(
                 matches!(
                     rx.try_recv(),
@@ -803,7 +838,7 @@ mod tests {
                 "the queued strike makes IsCasting true, so the binding EATS the press — which \
                  is what spares the target three rungs further down the ladder"
             );
-            app.world_mut().run_system_once(local_self_cancel).unwrap();
+            apply_stops(&mut app);
             assert!(
                 matches!(
                     rx.try_recv(),
@@ -873,7 +908,7 @@ mod tests {
                     .unwrap(),
                 Some(1)
             );
-            app.world_mut().run_system_once(local_self_cancel).unwrap();
+            apply_stops(&mut app);
             assert!(
                 matches!(
                     rx.try_recv(),
@@ -898,7 +933,7 @@ mod tests {
                 Some(1),
                 "still stoppable — so this press is eaten too, and the target still survives"
             );
-            app.world_mut().run_system_once(local_self_cancel).unwrap();
+            apply_stops(&mut app);
             assert!(matches!(
                 rx.try_recv(),
                 Ok(crate::net::ClientCommand::CancelCast {

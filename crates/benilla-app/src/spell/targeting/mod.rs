@@ -9,7 +9,7 @@
 //! - [`world`]: the world-click dispatcher `0x492ce0`, its terrain leg (`0x492580` → `BindLocation
 //!   0x6e60f0`) and its object leg (`0x4925d0` → `SetSelection 0x493540` → `BindTarget 0x6e5b40`),
 //!   whose unit arm [`bind_target_unit`] shares with `SpellTargetUnit`
-//!   ([`drain_spell_target_unit`]), and whose corpse arm is [`corpse`]'s.
+//!   ([`ScriptCursor::spell_target_unit`]), and whose corpse arm is [`corpse`]'s.
 //! - [`item`]: the bag click (`PickupContainerItem 0x4f9b30`) and the paper-doll click
 //!   (`0x4c7300`), both `IsTargeting`, `TargetingWantsItem 0x6e6330`, then `0x495d60`, whose
 //!   confirm popups park the clicked guid (`0xb4e3c0`) with the word still standing.
@@ -20,7 +20,7 @@
 //! targeting, the pick flags come from the word alone, so a click over a unit with a dest-only
 //! word commits on the ground behind it.
 //!
-//! Cancels: ESC through `UIParent.lua:1490` ([`feed_targeting_to_vm`], [`drain_stop_targeting`]),
+//! Cancels: ESC through `UIParent.lua:1490` ([`feed_targeting_to_vm`], [`ScriptCursor::stop_targeting`]),
 //! the right-button down edge ([`cancel_targeting_on_right_press`]), a new spell's press, which
 //! aborts and proceeds (`TryCast 0x6e4b60` at `0x6e4d62`), and the bar's re-press of the same
 //! spell (`UseAction 0x4e5ee0`). A cancel clears the word and sends nothing; movement never
@@ -384,21 +384,6 @@ pub(crate) fn feed_targeting_to_vm(
     }
 }
 
-/// Drain the ESC chain's `SpellStopTargeting()` after the input pass: `StopTargeting 0x6e4900`,
-/// word cleared, no packet.
-pub(crate) fn drain_stop_targeting(
-    mut targeting: ResMut<SpellTargeting>,
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
-) {
-    let Some(mut script) = script else {
-        return;
-    };
-    if script.take_stop_targeting() {
-        debug!("ui_action: targeting cancelled (ESC chain)");
-        targeting.clear();
-    }
-}
-
 /// `BindTarget 0x6e5b40`'s unit arm, for the world click (`0x493540` at `4935d5`) and
 /// `SpellTargetUnit` (`0x6e5b10`): the caster under `AttributesEx & 0x80000` (`6e5bf7`) or a unit
 /// failing the relation checks binds nothing and the cursor stays up; otherwise the merge. The
@@ -447,35 +432,42 @@ fn merge(
     ladder.commit_targeted(spell_id, commit, bound);
 }
 
-/// Drain `SpellTargetUnit(unit)` (`0x6e6d90`) after the UI pass. The binding already raised the
-/// usage and unknown-token errors and dropped a call made while not targeting. Here a token that
-/// names no unit raises "Out of range." (0x59) and ends targeting, as the reference's abort
-/// clears the word, and a unit goes to [`bind_target_unit`].
-pub(crate) fn drain_spell_target_unit(
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
-    tokens: crate::ui_unit::UnitTokens,
-    selection: Res<crate::target::Selection>,
-    checks: BindChecks,
-    mut ladder: crate::spell::CastLadder,
-) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for token in script.take_spell_target_unit() {
-        // An earlier token this frame may have bound or ended the cast: not targeting, no-op.
-        let Some(spell_id) = ladder.ground.spell() else {
-            continue;
+/// The targeting cursor's script calls, applied in call order by [`crate::script_calls`].
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct ScriptCursor<'w, 's> {
+    tokens: crate::ui_unit::UnitTokens<'w, 's>,
+    selection: Res<'w, crate::target::Selection>,
+    checks: BindChecks<'w, 's>,
+    ladder: crate::spell::CastLadder<'w, 's>,
+}
+
+impl ScriptCursor<'_, '_> {
+    /// `SpellTargetUnit(unit)` (`0x6e6d90`). The binding already raised the usage and
+    /// unknown-token errors and dropped a call made while not targeting. Here a token that names
+    /// no unit raises "Out of range." (0x59) and ends targeting, as the reference's abort clears
+    /// the word, and a unit goes to [`bind_target_unit`].
+    pub(crate) fn spell_target_unit(&mut self, token: &str) {
+        // An earlier call may have bound or ended the cast: not targeting, no-op.
+        let Some(spell_id) = self.ladder.ground.spell() else {
+            return;
         };
-        match tokens.resolve(&token, &selection) {
-            Some((entity, guid)) => bind_target_unit(&mut ladder, &checks, entity, guid),
+        match self.tokens.resolve(token, &self.selection) {
+            Some((entity, guid)) => bind_target_unit(&mut self.ladder, &self.checks, entity, guid),
             None => {
                 debug!("ui_action: SpellTargetUnit({token}) names no unit — cast {spell_id} ends");
-                ladder
+                self.ladder
                     .cast_errors
                     .push_local(spell_id, super::validator::ERR_OUT_OF_RANGE);
-                ladder.ground.clear();
+                self.ladder.ground.clear();
             }
         }
+    }
+
+    /// The ESC chain's `SpellStopTargeting()` (`0x6e6e30`): `StopTargeting 0x6e4900`, word
+    /// cleared, no packet.
+    pub(crate) fn stop_targeting(&mut self) {
+        debug!("ui_action: targeting cancelled (ESC chain)");
+        self.ladder.ground.clear();
     }
 }
 
@@ -565,15 +557,21 @@ mod tests {
         );
     }
 
-    /// Queue `SpellTargetUnit(token)` in the VM, then run the host's drain.
+    /// Queue `SpellTargetUnit(token)` in the VM, then apply it.
     fn spell_target_unit(world: &mut World, token: &str) {
         world
             .non_send_resource_mut::<UiScript>()
             .run(&format!("SpellTargetUnit({token:?})"))
             .expect("a known token");
         world
-            .run_system_cached(drain_spell_target_unit)
-            .expect("the drain runs");
+            .run_system_cached(
+                |mut script: NonSendMut<UiScript>, mut cursor: ScriptCursor| {
+                    for token in script.take_spell_target_unit() {
+                        cursor.spell_target_unit(&token);
+                    }
+                },
+            )
+            .expect("the applier runs");
     }
 
     fn errors(world: &mut World) -> Vec<crate::ui_action::CastFail> {

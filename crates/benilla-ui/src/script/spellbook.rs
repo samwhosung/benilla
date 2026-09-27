@@ -13,7 +13,7 @@ use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::flag;
 use super::cursor::{queue_cursor_update, CursorPayload, CursorSpell};
-use super::Model;
+use super::{Model, ScriptCall};
 
 const BOOKTYPE_SPELL: &str = "spell";
 const BOOKTYPE_PET: &str = "pet";
@@ -94,10 +94,13 @@ impl super::UiScript {
         self.model_mut().pet_book = state;
     }
 
-    /// Drain the pet spell ids `CastSpell(id, "pet")` queued: each is a `CMSG_PET_ACTION` with a
-    /// type-1 word (`0x4b34ce`), not a player cast.
+    /// Take the `CastSpell(id, "pet")` calls out of the call stream: each is a `CMSG_PET_ACTION`
+    /// with a type-1 word (`0x4b34ce`), not a player cast.
     pub fn take_pet_spell_casts(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.model_mut().pet_spell_casts)
+        self.take_calls_where(|c| match c {
+            ScriptCall::CastPetSpell(id) => Some(*id),
+            _ => None,
+        })
     }
 
     /// Drain the spell ids `ToggleSpellAutocast` queued: `CMSG_PET_SPELL_AUTOCAST` (0x2F3, sent by
@@ -112,9 +115,12 @@ impl super::UiScript {
         self.model_mut().spellbook.clone()
     }
 
-    /// Drain the spell ids `CastSpell` and `CastSpellByName` queued.
+    /// Take the `CastSpell` and `CastSpellByName` calls out of the call stream.
     pub fn take_spell_casts(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.model_mut().spell_casts)
+        self.take_calls_where(|c| match c {
+            ScriptCall::CastSpell(id) => Some(*id),
+            _ => None,
+        })
     }
 
     /// Whether `SpellStopCasting()` has something to stop: an auto-repeat or an in-flight cast,
@@ -124,10 +130,12 @@ impl super::UiScript {
         self.model_mut().casting = casting;
     }
 
-    /// Drain the `SpellStopCasting()` trigger; the app stops the auto-repeat first, else the
-    /// in-flight cast, the reference's order.
+    /// Take the `SpellStopCasting()` calls out of the call stream: whether there was one. The app
+    /// stops the auto-repeat first, else the in-flight cast, the reference's order.
     pub fn take_spell_stop(&mut self) -> bool {
-        std::mem::take(&mut self.model_mut().spell_stop)
+        !self
+            .take_calls_where(|c| matches!(c, ScriptCall::SpellStopCasting).then_some(()))
+            .is_empty()
     }
 
     /// Whether the spell-targeting cursor is up, for `SpellIsTargeting()` and
@@ -142,10 +150,12 @@ impl super::UiScript {
         }
     }
 
-    /// Drain the `SpellStopTargeting()` trigger, the ESC chain's rung (`UIParent.lua:1490`); the
-    /// app clears its targeting mode.
+    /// Take the `SpellStopTargeting()` calls, the ESC chain's rung (`UIParent.lua:1490`), out of
+    /// the call stream: whether there was one. The app clears its targeting mode.
     pub fn take_stop_targeting(&mut self) -> bool {
-        std::mem::take(&mut self.model_mut().spell_stop_targeting)
+        !self
+            .take_calls_where(|c| matches!(c, ScriptCall::SpellStopTargeting).then_some(()))
+            .is_empty()
     }
 }
 
@@ -477,11 +487,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             if let Some(slot) = book_slot(&model, id, &book_type) {
                 if !slot.passive {
                     let spell_id = slot.spell_id;
-                    if is_pet_book(&book_type) {
-                        model.pet_spell_casts.push(spell_id);
+                    model.script_calls.push(if is_pet_book(&book_type) {
+                        ScriptCall::CastPetSpell(spell_id)
                     } else {
-                        model.spell_casts.push(spell_id);
-                    }
+                        ScriptCall::CastSpell(spell_id)
+                    });
                 }
             }
             Ok(())
@@ -542,7 +552,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // CastSpellByName(name [, onSelf]) (`0x4b4ab0`) shares the dispatcher `0x4b3300` with
-    // `CastSpell`, so it queues on the same list; `SlashCmdList["CAST"]` calls it. `onSelf` is
+    // `CastSpell`, so it queues the same call; `SlashCmdList["CAST"]` calls it. `onSelf` is
     // accepted and ignored: self-cast is not built.
     g.set(
         "CastSpellByName",
@@ -550,7 +560,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             if let Some(slot) = resolve_spell_by_name(&model.spellbook, &name) {
                 let spell_id = slot.spell_id;
-                model.spell_casts.push(spell_id);
+                model.script_calls.push(ScriptCall::CastSpell(spell_id));
             }
             Ok(())
         })?,
@@ -575,7 +585,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             if model.casting {
-                model.spell_stop = true;
+                model.script_calls.push(ScriptCall::SpellStopCasting);
                 Ok(Value::Integer(1))
             } else {
                 Ok(Value::Nil)
@@ -623,7 +633,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             if model.spell_targeting {
-                model.spell_stop_targeting = true;
+                model.script_calls.push(ScriptCall::SpellStopTargeting);
                 Ok(Value::Integer(1))
             } else {
                 Ok(Value::Nil)

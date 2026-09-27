@@ -482,7 +482,7 @@ pub(super) fn commit(
 
 /// One press on either side, as every `TargetNearest*` shim shares `0x493f60`: score the live
 /// world, pool by tier, walk the history forward or back, and [`commit`].
-fn cycle(
+pub(super) fn cycle(
     side: ScanSide,
     reverse: bool,
     now: f64,
@@ -599,40 +599,6 @@ pub(super) fn tab_target(
         &mut seam,
         !engaged.is_empty(),
     );
-}
-
-/// Drain `TargetNearestFriend([reverse])` (`0x489aa0` → `0x493f60(reverse, 2)`), one cycle per
-/// call in call order; the stock bindings reach it through their `Bindings.xml` bodies.
-pub(super) fn target_nearest_friend_requests(
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
-    time: Res<Time>,
-    scan: TargetScan,
-    mut history: ResMut<TabHistory>,
-    mut selection: ResMut<Selection>,
-    mut seam: crate::creature_anim::AttackSeam,
-    engaged: Query<(), (With<Engaged>, With<SelfPlayer>)>,
-) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let presses = script.take_target_nearest_friend_requests();
-    if presses.is_empty() {
-        return;
-    }
-    let now = time.elapsed_secs_f64();
-    let engaged = !engaged.is_empty();
-    for reverse in presses {
-        cycle(
-            ScanSide::Friend,
-            reverse,
-            now,
-            &scan,
-            &mut history,
-            &mut selection,
-            &mut seam,
-            engaged,
-        );
-    }
 }
 
 /// The attack acquire (`0x6130b5`) is `TargetNearestEnemy()` itself, `0x493f60(0, 1)`, so it moves

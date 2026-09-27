@@ -1,7 +1,5 @@
 //! The click router: a clean left-click selects, a clean right-click takes the context action,
-//! and the UI's selection asks and Esc commit into the same [`super::Selection`].
-
-use benilla_ui::script::SelectionRequest;
+//! and a loot close's deselect clears the same [`super::Selection`].
 
 use super::lock::GoLockInputs;
 use super::*;
@@ -991,26 +989,16 @@ pub(crate) fn service_action(
     }
 }
 
-/// Drain `ClearTarget()`, the last leg of the Esc chain (`UIParent.lua:1492`), so the target drops
-/// only when no cast, window or focused edit box took the press first.
+/// Drain the guid-scoped deselects ([`DeselectGuid`]). `ClearTarget()`, the last leg of the Esc
+/// chain (`UIParent.lua:1492`), is a script call and lands in call order
+/// ([`crate::script_calls`]).
 pub(super) fn clear_target_requests(
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
     mut selection: ResMut<Selection>,
     mut seam: crate::creature_anim::AttackSeam,
     engaged: Query<(), (With<Engaged>, With<SelfPlayer>)>,
     mut guid_asks: MessageReader<DeselectGuid>,
 ) {
-    let asked = guid_asks.read().any(|ask| selection.guid == Some(ask.0));
-    let Some(mut script) = script else {
-        if asked {
-            clear(&mut selection, &mut seam, !engaged.is_empty());
-        }
-        return;
-    };
-    // Both drained every frame: a `||` short-circuiting on `asked` would leave the VM's
-    // ClearTarget flag armed and clear the next frame's target.
-    let vm_clear = script.take_target_clear();
-    if asked || vm_clear {
+    if guid_asks.read().any(|ask| selection.guid == Some(ask.0)) {
         clear(&mut selection, &mut seam, !engaged.is_empty());
     }
 }
@@ -1019,65 +1007,6 @@ pub(super) fn clear_target_requests(
 /// every loot close for a dead unit (`0x48f369`) and drained by [`clear_target_requests`].
 #[derive(bevy::ecs::message::Message, Clone, Copy, Debug)]
 pub(crate) struct DeselectGuid(pub(crate) u64);
-
-/// Drain the UI's selection asks in order through the shared SetSelection path. `TargetUnit`
-/// (`0x4899d0`), `AssistUnit` (`0x489b80`) and `TargetLastEnemy` share the reference's helper
-/// `0x489a40`: a resolved unit or a roster member is committed, anything else is a no-op, never a
-/// deselect. Here a token must name a streamed unit, so an out-of-range roster member is a no-op
-/// (the guid-only selection is not built).
-pub(super) fn selection_requests(
-    script: Option<NonSendMut<UiScript>>,
-    // The one unit-token resolver, shared with the reach feed so `TargetUnit("target")` and
-    // `CheckInteractDistance("target", …)` name the same unit.
-    tokens: crate::ui_unit::UnitTokens,
-    // `TargetLastEnemy`'s memory (`[0xb4e2e8]`), stamped by `scan::remember_last_enemy`.
-    last_enemy: Res<scan::LastEnemy>,
-    // The SetSelection tail shared with `/target` and `/assist`, classification included.
-    mut commit: super::by_name::SelectCommit,
-    mut assist_by_name: MessageWriter<super::by_name::AssistRequest>,
-) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let requests = script.take_selection_requests();
-    if requests.is_empty() {
-        return;
-    }
-    for request in requests {
-        match request {
-            SelectionRequest::Unit(token) => {
-                if let Some((entity, guid)) = tokens.resolve(&token, &commit.selection) {
-                    commit.commit(entity, guid);
-                }
-            }
-            // `0x489ba9 call 0x515940(token)`, then the shared tail. An unresolvable token is
-            // silent here; the reference shows message `0xb8` `ERR_GENERIC_NO_TARGET` (`0x489c0e`).
-            SelectionRequest::Assist(token) => match tokens.resolve(&token, &commit.selection) {
-                Some((basis, _)) => commit.assist(basis, "AssistUnit"),
-                None => info!("assist (AssistUnit): \"{token}\" names nothing; silent no-op"),
-            },
-            // `0x489c40`, `/assist <name>`: a player name, prefix-matched by the app's name scan.
-            SelectionRequest::AssistByName(name) => {
-                assist_by_name.write(super::by_name::AssistRequest { name: Some(name) });
-            }
-            // `0x489b45` → `0x489a40`. Empty memory is a no-op (the shim `0x489b40` tests nothing),
-            // unlike `TargetLastTarget 0x489b00`, which reaches `0x493540(0,0)` and deselects.
-            SelectionRequest::LastEnemy => {
-                let Some(guid) = last_enemy.0 else {
-                    info!("TargetLastEnemy: nothing hostile has been targeted yet; no-op");
-                    continue;
-                };
-                match tokens.held(guid) {
-                    Some((entity, guid)) => commit.commit(entity, guid),
-                    // Stale: a no-op, and the memory stays, as the reference never clears it.
-                    None => info!(
-                        "TargetLastEnemy: {guid:#x} is no longer streamed; target left untouched"
-                    ),
-                }
-            }
-        }
-    }
-}
 
 /// Drop the target and send `CMSG_SET_SELECTION` 0 (a no-op with none); when `engaged`, melee
 /// stops too, as on the reference's Esc, click-off or target death. Weapons stay drawn.
@@ -1624,94 +1553,6 @@ mod tests {
         );
     }
 
-    /// The selection queue from Lua, through the binding bodies of ASSISTTARGET (`AssistUnit`) and
-    /// TARGETLASTHOSTILE (`TargetLastEnemy`): an empty basis, a garbage token and a stale memory
-    /// are each a no-op (`0x489a40`'s bare `ret`), never a deselect or a panic.
-    #[test]
-    fn the_selection_queue_runs_assist_and_last_enemy_without_ever_deselecting() {
-        use crate::net::NetCommands;
-        use benilla_ui::script::UiScript;
-        use bevy::ecs::system::RunSystemOnce;
-
-        const ME: u64 = 1;
-        const BASIS: u64 = 0xB0A2;
-        const VICTIM: u64 = 0xC0DE;
-        const GONE: u64 = 0x6017;
-        // `UNIT_FIELD_TARGET` is a 2-field guid at index 16; HEALTH/MAXHEALTH keep the units live.
-        let store =
-            |pairs: &[(u16, u32)]| ObjectStore(benilla_protocol::ObjectFields::from_pairs(pairs));
-
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let mut world = World::new();
-        world.insert_resource(NetCommands(tx));
-        world.init_resource::<crate::spell::QueuedMeleeSpell>();
-        world.init_resource::<crate::spell::AutoRepeatActive>();
-        world.init_resource::<crate::ui_loot::LootState>();
-        world.init_resource::<crate::ui_loot::LootLatch>();
-        world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
-        world.init_resource::<crate::ui_party::GroupState>();
-        world.init_resource::<crate::net::GuidIndex>();
-        world.init_resource::<crate::net::Reputations>();
-        world.init_resource::<super::AssistAttack>();
-        world.init_resource::<Selection>();
-        world.init_resource::<scan::LastEnemy>();
-        world.init_resource::<Messages<super::by_name::AssistRequest>>();
-        world.insert_non_send_resource(UiScript::new().expect("a bare VM"));
-
-        world.spawn((SelfPlayer, Guid(ME), store(&[(22, 100), (28, 100)])));
-        // The basis is pointing at the victim; the victim points at nobody.
-        let basis = world
-            .spawn((
-                Guid(BASIS),
-                store(&[(22, 100), (28, 100), (16, VICTIM as u32)]),
-            ))
-            .id();
-        let victim = world
-            .spawn((Guid(VICTIM), store(&[(22, 100), (28, 100)])))
-            .id();
-        let index = &mut world.resource_mut::<crate::net::GuidIndex>().0;
-        index.insert(BASIS, basis);
-        index.insert(VICTIM, victim);
-
-        let run = |world: &mut World, lua: &str| {
-            world
-                .non_send_resource_mut::<UiScript>()
-                .eval::<()>(lua)
-                .expect("the binding runs");
-            world
-                .run_system_once(selection_requests)
-                .expect("the drain runs as a one-shot system");
-            world.resource::<Selection>().guid
-        };
-        let set = |world: &mut World, target: Option<(Entity, u64)>| {
-            let mut sel = world.resource_mut::<Selection>();
-            sel.target = target.map(|(e, _)| e);
-            sel.guid = target.map(|(_, g)| g);
-        };
-
-        // Assist the current target: one hop onto its target.
-        set(&mut world, Some((basis, BASIS)));
-        assert_eq!(run(&mut world, r#"AssistUnit("target")"#), Some(VICTIM));
-
-        // The victim targets nobody: assisting it is a no-op, not a deselect.
-        assert_eq!(run(&mut world, r#"AssistUnit("target")"#), Some(VICTIM));
-
-        assert_eq!(run(&mut world, r#"AssistUnit("nosuchunit")"#), Some(VICTIM));
-        assert_eq!(run(&mut world, r#"TargetUnit("nosuchunit")"#), Some(VICTIM));
-
-        // TargetLastEnemy with nothing remembered: also a no-op.
-        assert_eq!(run(&mut world, "TargetLastEnemy()"), Some(VICTIM));
-
-        world.resource_mut::<scan::LastEnemy>().0 = Some(VICTIM);
-        set(&mut world, None);
-        assert_eq!(run(&mut world, "TargetLastEnemy()"), Some(VICTIM));
-
-        // A stale memory (the unit despawned, so its guid is in no index) leaves the target alone.
-        world.resource_mut::<scan::LastEnemy>().0 = Some(GONE);
-        assert_eq!(run(&mut world, "TargetLastEnemy()"), Some(VICTIM));
-        set(&mut world, None);
-        assert_eq!(run(&mut world, "TargetLastEnemy()"), None);
-    }
     use crate::net::{ClientCommand, NetCommands, ObjectStore};
     use bevy::ecs::system::RunSystemOnce;
 

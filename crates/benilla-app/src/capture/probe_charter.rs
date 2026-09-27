@@ -710,7 +710,7 @@ fn charter_probe(
             }
         }
         // ── Step 6: the item-use fork ───────────────────────────────────────────────────────
-        // A real bag right-click through `UseContainerItem`, so `drain_container_uses` reaches
+        // A real bag right-click through `UseContainerItem`, so `use_container_item` reaches
         // `ItemUseRoute::ShowPetition`. A FAIL is either the fork missing the charter arm or
         // `SMSG_PETITION_SHOW_SIGNATURES` never becoming `PETITION_SHOW`. No getter exposes the
         // open charter's item guid, so its identity rests on no window being up before the click.

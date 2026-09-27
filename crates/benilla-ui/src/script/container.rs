@@ -162,9 +162,12 @@ impl super::UiScript {
         self.model_mut().has_key = has_key;
     }
 
-    /// Drain the `(bag, slot)` pairs queued by `UseContainerItem` since the last call.
+    /// Take the `UseContainerItem` calls out of the call stream, as `(bag, slot)`.
     pub fn take_container_uses(&mut self) -> Vec<(i64, u32)> {
-        std::mem::take(&mut self.model_mut().container_uses)
+        self.take_calls_where(|c| match c {
+            super::ScriptCall::UseContainerItem { bag, slot } => Some((*bag, *slot)),
+            _ => None,
+        })
     }
 
     /// Drain the pick/place/swap moves queued by `PickupContainerItem` since the last call.
@@ -625,7 +628,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     model.container_repairs.push((bag, slot));
                 }
             } else {
-                model.container_uses.push((bag, slot));
+                model
+                    .script_calls
+                    .push(super::ScriptCall::UseContainerItem { bag, slot });
             }
             Ok(())
         })?,

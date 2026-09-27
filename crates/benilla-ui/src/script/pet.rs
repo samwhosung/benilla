@@ -167,9 +167,13 @@ impl super::UiScript {
         bar.can_be_renamed = can_be_renamed;
     }
 
-    /// Drain the 1-based slots `CastPetAction` queued; the app decides what each one sends.
+    /// Take the `CastPetAction` calls out of the call stream, as 1-based slots; the app decides
+    /// what each one sends.
     pub fn take_pet_actions(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.model_mut().pet_actions_pressed)
+        self.take_calls_where(|c| match c {
+            super::ScriptCall::PetAction(slot) => Some(*slot),
+            _ => None,
+        })
     }
 
     /// Drain the 1-based slot indices `TogglePetAutocast` queued.
@@ -182,9 +186,13 @@ impl super::UiScript {
         std::mem::replace(&mut self.model_mut().pet_stop_attacks, 0)
     }
 
-    /// Drain the one-shot orders (`PetAttack` and the rest), each a packed slot word.
+    /// Take the one-shot orders (`PetAttack` and the rest) out of the call stream, each a packed
+    /// slot word.
     pub fn take_pet_orders(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.model_mut().pet_orders)
+        self.take_calls_where(|c| match c {
+            super::ScriptCall::PetOrder(packed) => Some(*packed),
+            _ => None,
+        })
     }
 
     /// Set the flag `HasFullControl` answers.
@@ -300,7 +308,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, i: u32| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             if slot_at(&model, i).is_some_and(|s| s.view.name.is_some()) {
-                model.pet_actions_pressed.push(i);
+                model.script_calls.push(super::ScriptCall::PetAction(i));
             }
             Ok(())
         })?,
@@ -461,7 +469,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             lua.create_function(move |lua, ()| {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 if model.pet_bar.has_bar {
-                    model.pet_orders.push(packed);
+                    model.script_calls.push(super::ScriptCall::PetOrder(packed));
                 }
                 Ok(())
             })?,

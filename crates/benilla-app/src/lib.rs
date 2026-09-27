@@ -90,6 +90,7 @@ mod realmlist;
 mod run_mode;
 mod screen_fade;
 mod screenshot;
+mod script_calls;
 mod shaders;
 
 mod game_tip;

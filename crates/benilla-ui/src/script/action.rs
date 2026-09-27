@@ -116,9 +116,12 @@ impl super::UiScript {
         self.model_mut().bonus_bar_offset = offset;
     }
 
-    /// Drain the presses queued by `UseAction` since the last call.
+    /// Take the `UseAction` presses out of the call stream.
     pub fn take_action_uses(&mut self) -> Vec<ActionUse> {
-        std::mem::take(&mut self.model_mut().action_uses)
+        self.take_calls_where(|c| match c {
+            super::ScriptCall::UseAction(press) => Some(*press),
+            _ => None,
+        })
     }
 
     /// Drain the `(lua action id, packed)` pairs `PickupAction`/`PlaceAction` queued; the app
@@ -214,7 +217,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             if check_cursor && model.cursor.is_some() {
                 super::cursor::place_action(&mut model, action);
             } else {
-                model.action_uses.push(ActionUse { action, on_self });
+                model
+                    .script_calls
+                    .push(super::ScriptCall::UseAction(ActionUse { action, on_self }));
             }
             Ok(())
         })?,

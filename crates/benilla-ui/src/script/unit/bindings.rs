@@ -6,6 +6,7 @@
 use mlua::{Lua, Value};
 
 use super::super::binding_abi::flag;
+use super::super::calls::ScriptCall;
 use super::super::Model;
 use super::{
     check_unit_token, classification_word, grey_band, level_reads_unknown, pick_unit_token,
@@ -986,7 +987,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, token: Option<String>| {
             if let Some(token) = token {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                model.selection_requests.push(SelectionRequest::Unit(token));
+                model
+                    .script_calls
+                    .push(ScriptCall::Select(SelectionRequest::Unit(token)));
             }
             Ok(())
         })?,
@@ -1003,8 +1006,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             if let Some(token) = token {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 model
-                    .selection_requests
-                    .push(SelectionRequest::Assist(token));
+                    .script_calls
+                    .push(ScriptCall::Select(SelectionRequest::Assist(token)));
             }
             Ok(())
         })?,
@@ -1016,7 +1019,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         "TargetLastEnemy",
         lua.create_function(|lua, ()| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.selection_requests.push(SelectionRequest::LastEnemy);
+            model
+                .script_calls
+                .push(ScriptCall::Select(SelectionRequest::LastEnemy));
             Ok(())
         })?,
     )?;
@@ -1035,7 +1040,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 Some(_) => true,
             };
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.target_nearest_friend_requests.push(reverse);
+            model
+                .script_calls
+                .push(ScriptCall::TargetNearestFriend { reverse });
             Ok(())
         })?,
     )?;
@@ -1061,7 +1068,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 Some(_) => true,
             };
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.target_by_name_requests.push((name, exact));
+            model
+                .script_calls
+                .push(ScriptCall::TargetByName { name, exact });
             Ok(())
         })?,
     )?;
@@ -1101,21 +1110,21 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             }
             check_unit_token(&Some(token.clone()))?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.spell_target_unit.push(token);
+            model.script_calls.push(ScriptCall::SpellTargetUnit(token));
             Ok(())
         })?,
     )?;
 
-    // ClearTarget(): 1 when it cleared a target, nil when there was none, which `ToggleGameMenu`'s
-    // Escape chain needs to fall through to the menu. The app commits the deselect.
+    // ClearTarget() (`0x489ff0`): 1 when it cleared a target, nil when there was none, which
+    // `ToggleGameMenu`'s Escape chain needs to fall through to the menu. The deselect is queued
+    // either way: it reads the selection as the calls before it leave it (`0x489ff0`-`0x489fff`),
+    // so `TargetUnit("player") ClearTarget()` ends with nothing selected.
     g.set(
         "ClearTarget",
         lua.create_function(|lua, ()| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let had = model.unit("target").is_some_and(|u| u.exists);
-            if had {
-                model.target_clear = true;
-            }
+            model.script_calls.push(ScriptCall::ClearTarget);
             Ok(flag(had))
         })?,
     )?;

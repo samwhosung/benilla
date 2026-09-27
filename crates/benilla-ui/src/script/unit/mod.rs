@@ -4,7 +4,7 @@
 
 use mlua::Lua;
 
-use super::Model;
+use super::{Model, ScriptCall};
 
 /// A selection ask from Lua, queued in call order for the app to resolve and commit. The reference
 /// routes `TargetUnit`, `AssistUnit` and `TargetLastEnemy` through one helper (`0x489a40`: commit,
@@ -386,25 +386,37 @@ impl super::UiScript {
         model.combo_target = target;
     }
 
-    /// Drain the queued [`SelectionRequest`]s, in call order.
+    /// Take the queued [`SelectionRequest`]s out of the call stream, in call order.
     pub fn take_selection_requests(&mut self) -> Vec<SelectionRequest> {
-        std::mem::take(&mut self.model_mut().selection_requests)
+        self.take_calls_where(|c| match c {
+            ScriptCall::Select(r) => Some(r.clone()),
+            _ => None,
+        })
     }
 
-    /// Drain the `TargetNearestFriend([reverse])` calls, `true` for reverse. It names no unit: the
-    /// reference runs the TAB cycler (`0x493f60`, mode 2) straight into `SetSelection`.
+    /// Take the `TargetNearestFriend([reverse])` calls out of the call stream, `true` for reverse.
+    /// It names no unit: the reference runs the TAB cycler (`0x493f60`, mode 2) straight into
+    /// `SetSelection`.
     pub fn take_target_nearest_friend_requests(&mut self) -> Vec<bool> {
-        std::mem::take(&mut self.model_mut().target_nearest_friend_requests)
+        self.take_calls_where(|c| match c {
+            ScriptCall::TargetNearestFriend { reverse } => Some(*reverse),
+            _ => None,
+        })
     }
 
-    /// Drain the `TargetByName(name, exactMatch)` calls for the app's by-name resolver.
+    /// Take the `TargetByName(name, exactMatch)` calls out of the call stream.
     pub fn take_target_by_name_requests(&mut self) -> Vec<(String, bool)> {
-        std::mem::take(&mut self.model_mut().target_by_name_requests)
+        self.take_calls_where(|c| match c {
+            ScriptCall::TargetByName { name, exact } => Some((name.clone(), *exact)),
+            _ => None,
+        })
     }
 
-    /// Drain `ClearTarget()`: true if it fired with a live target; the app deselects (guid 0).
+    /// Take the `ClearTarget()` calls out of the call stream: whether there was one.
     pub fn take_target_clear(&mut self) -> bool {
-        std::mem::take(&mut self.model_mut().target_clear)
+        !self
+            .take_calls_where(|c| matches!(c, ScriptCall::ClearTarget).then_some(()))
+            .is_empty()
     }
 
     /// Drain `DropItemOnUnit`'s tokens; on the pet the app casts the learned Feed Pet spell at
@@ -413,9 +425,12 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().drop_item_on_unit)
     }
 
-    /// Drain `SpellTargetUnit` calls for the host's pending unit-target spell binder.
+    /// Take the `SpellTargetUnit` calls out of the call stream.
     pub fn take_spell_target_unit(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.model_mut().spell_target_unit)
+        self.take_calls_where(|c| match c {
+            ScriptCall::SpellTargetUnit(token) => Some(token.clone()),
+            _ => None,
+        })
     }
 }
 

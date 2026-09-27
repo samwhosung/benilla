@@ -28,8 +28,10 @@ mod net;
 pub(crate) use drain::send_auto_equip;
 use drain::{
     drain_bag_autostores, drain_container_autoequips, drain_container_destroys,
-    drain_container_moves, drain_container_uses, drain_inventory_uses,
+    drain_container_moves, drain_container_repairs,
 };
+// `UseContainerItem` and `UseInventoryItem`, applied in call order by `crate::script_calls`.
+pub(crate) use drain::ScriptItemUse;
 use feed::{
     feed_containers, feed_item_sets, feed_item_stats, feed_player_req, feed_random_properties,
 };
@@ -947,8 +949,9 @@ impl Plugin for UiItemsPlugin {
                     // The roll table, pushed whole once per VM, before the first hover.
                     feed_random_properties.in_set(UnitFeed),
                     feed_player_req.in_set(UnitFeed),
-                    // After the input pass, so a click's UseContainerItem goes out the same frame.
-                    drain_container_uses.after(UiInput),
+                    // After the input pass, so a repair-mode click goes out the same frame; a
+                    // plain `UseContainerItem` is a script call.
+                    drain_container_repairs.after(UiInput),
                     // Pick, place and split: `CMSG_SWAP_INV_ITEM`, `CMSG_SWAP_ITEM` or
                     // `CMSG_SPLIT_ITEM`.
                     drain_container_moves.after(UiInput),
@@ -957,8 +960,6 @@ impl Plugin for UiItemsPlugin {
                     // `AutoEquipCursorItem`: `CMSG_AUTOEQUIP_ITEM`.
                     drain_container_autoequips.after(UiInput),
                     drain_bag_autostores.after(UiInput),
-                    // `UseInventoryItem`: `CMSG_USE_ITEM` at the equipped position.
-                    drain_inventory_uses.after(UiInput),
                     // The soulbind confirmations' answers (`EquipPendingItem`,
                     // `CancelPendingEquip`, `ConfirmBindOnUse`). A dialog is answered in a later
                     // frame than it was raised, so no order against the other drains is needed.

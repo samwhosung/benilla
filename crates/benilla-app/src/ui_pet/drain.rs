@@ -21,57 +21,57 @@ use super::{PetBar, PetUnit};
 /// reference reads as `[[pet+0x110]+0xA3] & 1`.
 pub(super) const UNIT_FLAG_POSSESSED: u32 = 0x0100_0000;
 
-/// Send the bar's intents under [`PetBar`]'s pet guid, never one from the VM, so an intent queued
-/// as the pet leaves dies here. `CMSG_PET_ACTION` echoes the slot's word, which the server
-/// dispatches on its type, with our selection as the target; `HandlePetAction` drops a target
-/// the spell does not want.
-pub(super) fn drain_pet_actions(
-    script: Option<NonSendMut<UiScript>>,
-    mut bar: ResMut<PetBar>,
-    mut selection: ResMut<Selection>,
-    commands: Res<NetCommands>,
-    pet: PetUnit,
-    spells: Option<Res<Spells>>,
-    mut ui_errors: ResMut<crate::ui_action::UiErrorKeys>,
-    scan: crate::target::TargetScan,
-    mut seam: crate::creature_anim::AttackSeam,
-) {
-    let Some(mut script) = script else {
-        return;
-    };
-    let pressed = script.take_pet_actions();
-    let orders = script.take_pet_orders();
-    let toggles = script.take_pet_autocast_toggles();
-    let stops = script.take_pet_stop_attacks();
-    let writes = script.take_pet_set_actions();
-    if pressed.is_empty()
-        && orders.is_empty()
-        && toggles.is_empty()
-        && stops == 0
-        && writes.is_empty()
-    {
-        return;
-    }
-    let pet_guid = bar.spells.pet_guid;
-    if pet_guid == 0 {
-        debug!("ui_pet: dropping queued pet intents — the bar is gone");
-        return;
-    }
-    let pet_store = pet.store(pet_guid);
-    let possessing = possessing(pet_store, pet.self_guid.0);
+/// What a pet bar press reads and writes: `CastPetAction`, `PetAttack` and the other orders, and
+/// the pet book's `CastSpell(id, "pet")`.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct PetPress<'w, 's> {
+    pub(crate) bar: ResMut<'w, PetBar>,
+    pub(crate) selection: ResMut<'w, Selection>,
+    pub(crate) commands: Res<'w, NetCommands>,
+    pub(crate) pet: PetUnit<'w, 's>,
+    pub(crate) spells: Option<Res<'w, Spells>>,
+    ui_errors: ResMut<'w, crate::ui_action::UiErrorKeys>,
+    scan: crate::target::TargetScan<'w, 's>,
+    seam: crate::creature_anim::AttackSeam<'w, 's>,
+}
 
-    // A slot press and a scripted order (`PetAttack` and the like) are one press: both reach the
-    // reference's one dispatcher (`0x4bd1d0`). The slot number only labels logs.
-    let presses: Vec<(u32, PetActionEntry)> = pressed
-        .into_iter()
-        .filter_map(|slot| slot_entry(&bar, slot).map(|e| (slot, e)))
-        .chain(
-            orders
-                .into_iter()
-                .map(|packed| (0, PetActionEntry::from(packed))),
-        )
-        .collect();
-    for (slot, entry) in presses {
+impl PetPress<'_, '_> {
+    /// `CastPetAction(slot)`, a 1-based bar slot.
+    pub(crate) fn press_slot(&mut self, slot: u32) {
+        if let Some(entry) = slot_entry(&self.bar, slot) {
+            self.press(slot, entry);
+        }
+    }
+
+    /// `PetAttack` and the other one-shot orders, as their slot's packed word. A slot press and
+    /// an order are one press: both reach the reference's one dispatcher (`0x4bd1d0`). The slot
+    /// number only labels logs.
+    pub(crate) fn order(&mut self, packed: u32) {
+        self.press(0, PetActionEntry::from(packed));
+    }
+
+    /// Send under [`PetBar`]'s pet guid, never one from the VM, so a press queued as the pet
+    /// leaves dies here. `CMSG_PET_ACTION` echoes the slot's word, which the server dispatches on
+    /// its type, with our selection as the target; `HandlePetAction` drops a target the spell
+    /// does not want.
+    fn press(&mut self, slot: u32, entry: PetActionEntry) {
+        let Self {
+            bar,
+            selection,
+            commands,
+            pet,
+            spells,
+            ui_errors,
+            scan,
+            seam,
+        } = self;
+        let pet_guid = bar.spells.pet_guid;
+        if pet_guid == 0 {
+            debug!("ui_pet: dropping a queued pet press — the bar is gone");
+            return;
+        }
+        let pet_store = pet.store(pet_guid);
+        let possessing = possessing(pet_store, pet.self_guid.0);
         // A press on a spell the pet is running cancels its aura and sends no `CMSG_PET_ACTION`
         // (`0x4bd240`-`0x4bd2ad`); nothing latches, the icon follows the pet's aura field.
         let display = entry
@@ -83,19 +83,14 @@ pub(super) fn drain_pet_actions(
             let _ = commands
                 .0
                 .send(ClientCommand::PetCancelAura { pet_guid, spell_id });
-            continue;
+            return;
         }
         // Only Attack runs `0x612df0`, the attack validator with the pet as actor, whose target
         // pick can move the selection; every other press sends the selection as is (`0x4bd212`).
         let mut target_guid = selection.guid.unwrap_or(0);
         let refused = if is_attack_order(entry) {
-            crate::ui_action::attack_actor_refusal(pet_store, pet.self_guid.0, &mut ui_errors)
-                || match crate::target::attack_order_target(
-                    &scan,
-                    &mut selection,
-                    &mut seam,
-                    &mut ui_errors,
-                ) {
+            crate::ui_action::attack_actor_refusal(pet_store, pet.self_guid.0, ui_errors)
+                || match crate::target::attack_order_target(scan, selection, seam, ui_errors) {
                     Some(guid) => {
                         target_guid = guid;
                         false
@@ -105,9 +100,9 @@ pub(super) fn drain_pet_actions(
         } else {
             false
         };
-        if !commit_press(&mut bar, entry, refused, possessing) {
+        if !commit_press(bar, entry, refused, possessing) {
             debug!("ui_pet: slot {slot} refused by the attack validator — no packet");
-            continue;
+            return;
         }
         debug!(
             "ui_pet: press slot {slot} (action {} kind {:#04x}) at {target_guid:#x}",
@@ -119,6 +114,29 @@ pub(super) fn drain_pet_actions(
             packed: entry.packed,
             target_guid,
         });
+    }
+}
+
+/// Send the bar's other intents under [`PetBar`]'s pet guid: the autocast toggles, the stops and
+/// the drag writes.
+pub(super) fn drain_pet_actions(
+    script: Option<NonSendMut<UiScript>>,
+    mut bar: ResMut<PetBar>,
+    commands: Res<NetCommands>,
+) {
+    let Some(mut script) = script else {
+        return;
+    };
+    let toggles = script.take_pet_autocast_toggles();
+    let stops = script.take_pet_stop_attacks();
+    let writes = script.take_pet_set_actions();
+    if toggles.is_empty() && stops == 0 && writes.is_empty() {
+        return;
+    }
+    let pet_guid = bar.spells.pet_guid;
+    if pet_guid == 0 {
+        debug!("ui_pet: dropping queued pet intents — the bar is gone");
+        return;
     }
     // The repaint is `latch_press`'s alone, not every click's: a refused `TogglePetAutocast`
     // (`0x4bcbf7`: any right-click on a token) signals nothing, so after `OnClick`'s

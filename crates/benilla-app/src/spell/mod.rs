@@ -28,16 +28,24 @@ pub(crate) use cast_target::AutoSelfCast;
 pub(crate) use cooldowns::Cooldowns;
 pub(crate) use inflight::{
     inflight, ActiveChannel, AutoRepeatActive, LocalMoveStart, PendingCast, QueuedMeleeSpell,
-    SPELL_INTERRUPT_MOVEMENT,
+    SelfCancel, SPELL_INTERRUPT_MOVEMENT,
 };
 pub(crate) use mods::{SpellModifiers, OP_COST};
 // `TargetingWants` is exported for the ground reticle, which draws for the location word alone.
 pub(crate) use targeting::{
-    ground_cast_radius, CorpsePick, PicksSelf, SpellTargeting, TargetingWants,
+    ground_cast_radius, CorpsePick, PicksSelf, ScriptCursor, SpellTargeting, TargetingWants,
 };
 
+/// A script cast's inputs, the cast tail the action bar uses, for the spellbook's and the stance
+/// bar's calls ([`crate::script_calls`]).
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct ScriptCast<'w, 's> {
+    pub(crate) targeting: cast_target::CastTargeting<'w, 's>,
+    pub(crate) ladder: CastLadder<'w, 's>,
+}
+
 /// The local self-cancel's set: a reader of the in-flight state orders `.after(LocalCancel)` so a
-/// cast ended by a move, jump or Esc drops its cast bar the same frame.
+/// cast ended by a move or jump drops its cast bar the same frame.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct LocalCancel;
 
@@ -67,10 +75,10 @@ impl Plugin for SpellPlugin {
                     mods::track_class_family
                         .after(WorldStage::Net)
                         .before(UnitFeed),
-                    // The state push runs before the input pass's `ToggleGameMenu` and the drain
-                    // after it, so an Esc cancel lands before next frame's cursor reads the mode.
-                    // After the old-target clear, the pet bar's writer in the feed: `"pet"`
-                    // resolves off the bar.
+                    // The state push runs before the input pass's `ToggleGameMenu`, whose
+                    // `SpellStopTargeting` lands with the script calls after it. After the
+                    // old-target clear, the pet bar's writer in the feed: `"pet"` resolves off
+                    // the bar.
                     targeting::feed_targeting_to_vm
                         .in_set(UnitFeed)
                         .after(crate::ui_pet::pet_stop_on_old_target_clear),
@@ -79,7 +87,6 @@ impl Plugin for SpellPlugin {
                         targeting::publish_corpse_pick,
                     )
                         .in_set(UiFeed),
-                    targeting::drain_stop_targeting.after(UiInput),
                     // The item-target commit (`0x495d60`): after the input pass so a bag click
                     // binds the same frame; outside the target chain, as its clicks never reach
                     // the world.

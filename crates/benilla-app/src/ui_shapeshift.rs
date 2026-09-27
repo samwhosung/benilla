@@ -21,10 +21,9 @@ use benilla_ui::script::{ShapeshiftFormView, UiScript};
 use crate::items::Items;
 use crate::net::{ClientCommand, NetCommands, ObjectStore, Objects, Reputations, SelfPlayer};
 use crate::spell::Cooldowns;
-use crate::spell::{cast_target, usable, CastCommit, CastLadder};
+use crate::spell::{usable, CastCommit};
 use crate::target::Selection;
 use crate::ui_action::{PlayerActions, Spells};
-use crate::ui_script::UiInput;
 use crate::ui_unit::UnitFeed;
 
 /// Keeps a spell off the stance bar; Ghost Wolf 2645 carries it, so a shaman has no bar.
@@ -125,15 +124,12 @@ impl Plugin for UiShapeshiftPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (
-                // The feed precedes the two event sets whose handlers re-read this list; the
-                // drain follows the input pass, so a click goes out the same frame.
-                feed_shapeshift_bar
-                    .in_set(UnitFeed)
-                    .before(crate::ui_action::CooldownEvents)
-                    .before(crate::ui_aura::AuraEvents),
-                drain_shapeshift_casts.after(UiInput),
-            ),
+            // The feed precedes the two event sets whose handlers re-read this list. A click's
+            // cast is a script call (`cast_form`).
+            feed_shapeshift_bar
+                .in_set(UnitFeed)
+                .before(crate::ui_action::CooldownEvents)
+                .before(crate::ui_aura::AuraEvents),
         );
     }
 }
@@ -242,52 +238,43 @@ fn feed_shapeshift_bar(
     }
 }
 
-/// Drain `CastShapeshiftForm` (`0x4b4810`), forked on the form id like the info call: the active
-/// form cancels unless `SpellShapeshiftForm.dbc` `flags1 & 0x2` makes it a silent no-op
-/// (`0x4b4963`, warrior stances); a force-admitted spell whose aura is up cancels, with no DBC
-/// guard since it has no form id. Anything else casts.
-fn drain_shapeshift_casts(
-    script: Option<NonSendMut<UiScript>>,
-    targeting: cast_target::CastTargeting,
-    self_store: Query<&ObjectStore, With<SelfPlayer>>,
-    mut ladder: CastLadder,
-) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for spell_id in script.take_shapeshift_casts() {
-        let store = self_store.iter().next();
-        let form_byte = store.map(|s| s.0.unit_shapeshift_form()).unwrap_or(0);
-        let d = ladder.spells.as_ref().and_then(|s| s.catalog.get(spell_id));
-        // The active form's row, for the `0x4b4963` guard (shared with `crate::ui_action::toggle`).
-        let row = ladder
-            .spells
-            .as_ref()
-            .and_then(|s| s.forms.get(&u32::from(form_byte)));
-        // The force-admit arm uses `form_active`'s predicate, so a lit button always cancels.
-        let disposition = d.and_then(|d| {
-            if d.shapeshift_form.unwrap_or(0) == 0 {
-                store
-                    .filter(|s| crate::ui_action::toggle::active_action_toggle(spell_id, d, s))
-                    .map(|_| true)
-            } else {
-                crate::ui_action::toggle::form_recast_disposition(d, form_byte, row)
-            }
-        });
-        match disposition {
-            Some(true) => {
-                debug!("ui_shapeshift: cancel form aura {spell_id}");
-                let _ = ladder
-                    .commands
-                    .0
-                    .send(ClientCommand::CancelAura { spell_id });
-                continue;
-            }
-            Some(false) => continue,
-            None => {}
+/// `CastShapeshiftForm` (`0x4b4810`), forked on the form id like the info call: the active form
+/// cancels unless `SpellShapeshiftForm.dbc` `flags1 & 0x2` makes it a silent no-op (`0x4b4963`,
+/// warrior stances); a force-admitted spell whose aura is up cancels, with no DBC guard since it
+/// has no form id. Anything else casts.
+pub(crate) fn cast_form(cast: &mut crate::spell::ScriptCast, spell_id: u32) {
+    let crate::spell::ScriptCast { targeting, ladder } = cast;
+    let store = targeting.self_store.iter().next();
+    let form_byte = store.map(|s| s.0.unit_shapeshift_form()).unwrap_or(0);
+    let d = ladder.spells.as_ref().and_then(|s| s.catalog.get(spell_id));
+    // The active form's row, for the `0x4b4963` guard (shared with `crate::ui_action::toggle`).
+    let row = ladder
+        .spells
+        .as_ref()
+        .and_then(|s| s.forms.get(&u32::from(form_byte)));
+    // The force-admit arm uses `form_active`'s predicate, so a lit button always cancels.
+    let disposition = d.and_then(|d| {
+        if d.shapeshift_form.unwrap_or(0) == 0 {
+            store
+                .filter(|s| crate::ui_action::toggle::active_action_toggle(spell_id, d, s))
+                .map(|_| true)
+        } else {
+            crate::ui_action::toggle::form_recast_disposition(d, form_byte, row)
         }
-        debug!("ui_shapeshift: cast form {spell_id}");
-        ladder.send(spell_id, &targeting.context(), CastCommit::Spell);
+    });
+    match disposition {
+        Some(true) => {
+            debug!("ui_shapeshift: cancel form aura {spell_id}");
+            let _ = ladder
+                .commands
+                .0
+                .send(ClientCommand::CancelAura { spell_id });
+        }
+        Some(false) => {}
+        None => {
+            debug!("ui_shapeshift: cast form {spell_id}");
+            ladder.send(spell_id, &targeting.context(), CastCommit::Spell);
+        }
     }
 }
 

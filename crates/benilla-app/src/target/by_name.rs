@@ -312,82 +312,85 @@ impl ByNameScan<'_, '_> {
     }
 }
 
-/// Drain `/target <name>` through [`scan::commit`], the stop, select, re-swing path a click takes.
-/// A miss leaves the target alone, as neither failure edge in `0x489db4` calls `SetSelection`, and
-/// prints nothing; the reference prints message `0x127` `ERR_UNIT_NOT_FOUND` there, or `0xb8`
+/// `/target <name>` and the Lua `TargetByName(name, exactMatch)` through [`scan::commit`], the
+/// stop, select, re-swing path a click takes. `exact` is the Lua second argument, which `0x489d8e`
+/// reads with default 0 as the resolver's exact-only flag (consumed at `0x493cab`). A miss leaves
+/// the target alone, as neither failure edge in `0x489db4` calls `SetSelection`, and prints
+/// nothing; the reference prints message `0x127` `ERR_UNIT_NOT_FOUND` there, or `0xb8`
 /// `ERR_GENERIC_NO_TARGET` for an empty name.
+pub(super) fn target_named(
+    scan_params: &ByNameScan,
+    commit: &mut SelectCommit,
+    name: &str,
+    exact: bool,
+) {
+    let Some((entity, guid, _)) = scan_params.resolve(
+        name,
+        NameSearch::AnyUnit,
+        Filter::AcceptAll,
+        if exact {
+            Match::ExactOnly
+        } else {
+            Match::PrefixOk
+        },
+    ) else {
+        return;
+    };
+    commit.commit(entity, guid);
+}
+
+/// `/assist [name]` and the Lua `AssistByName`: the basis is a named player, or bare the current
+/// selection (`AssistUnit("target")`, `ChatFrame.lua:744`), and [`SelectCommit::assist`] selects
+/// its target.
+pub(super) fn assist_named(
+    scan_params: &ByNameScan,
+    commit: &mut SelectCommit,
+    name: Option<&str>,
+    how: &str,
+) {
+    let basis = match name {
+        Some(name) => scan_params
+            .resolve(
+                name,
+                NameSearch::PlayerOnly,
+                Filter::AcceptAll,
+                Match::PrefixOk,
+            )
+            .map(|(e, _, _)| e),
+        None => commit.selection.target,
+    };
+    let Some(basis) = basis else {
+        info!("assist ({how}): no basis unit; nothing to assist");
+        return;
+    };
+    // From here on this is `AssistUnit`'s tail too, one function as in the reference.
+    commit.assist(basis, how);
+}
+
+/// Drain the chat layer's `/target <name>` asks.
 pub(super) fn target_by_name_requests(
     mut requests: MessageReader<TargetByNameRequest>,
     scan_params: ByNameScan,
     mut commit: SelectCommit,
 ) {
     for request in requests.read() {
-        let Some((entity, guid, _)) = scan_params.resolve(
-            &request.name,
-            NameSearch::AnyUnit,
-            Filter::AcceptAll,
-            Match::PrefixOk,
-        ) else {
-            continue;
-        };
-        commit.commit(entity, guid);
+        target_named(&scan_params, &mut commit, &request.name, false);
     }
 }
 
-/// Drain the Lua `TargetByName(name, exactMatch)` asks, the `/target` path plus the second
-/// argument, which `0x489d8e` reads with default 0 as the resolver's exact-only flag (consumed at
-/// `0x493cab`).
-pub(super) fn script_target_by_name_requests(
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
-    scan_params: ByNameScan,
-    mut commit: SelectCommit,
-) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for (name, exact) in script.take_target_by_name_requests() {
-        let Some((entity, guid, _)) = scan_params.resolve(
-            &name,
-            NameSearch::AnyUnit,
-            Filter::AcceptAll,
-            if exact {
-                Match::ExactOnly
-            } else {
-                Match::PrefixOk
-            },
-        ) else {
-            continue;
-        };
-        commit.commit(entity, guid);
-    }
-}
-
-/// Drain `/assist [name]`: the basis is a named player, or bare the current selection
-/// (`AssistUnit("target")`, `ChatFrame.lua:744`), and [`SelectCommit::assist`] selects its target.
+/// Drain the chat layer's `/assist [name]` asks.
 pub(super) fn assist_requests(
     mut requests: MessageReader<AssistRequest>,
     scan_params: ByNameScan,
     mut commit: SelectCommit,
 ) {
     for request in requests.read() {
-        // The basis: a named player, or bare, whatever is selected.
-        let basis = match &request.name {
-            Some(name) => scan_params
-                .resolve(
-                    name,
-                    NameSearch::PlayerOnly,
-                    Filter::AcceptAll,
-                    Match::PrefixOk,
-                )
-                .map(|(e, _, _)| e),
-            None => commit.selection.target,
-        };
-        let Some(basis) = basis else {
-            info!("assist (/assist): no basis unit; nothing to assist");
-            continue;
-        };
-        // From here on this is `AssistUnit`'s tail too, one function as in the reference.
-        commit.assist(basis, "/assist");
+        assist_named(
+            &scan_params,
+            &mut commit,
+            request.name.as_deref(),
+            "/assist",
+        );
     }
 }
 
@@ -460,7 +463,7 @@ pub(super) fn follow_requests(
 #[allow(clippy::type_complexity)] // one bundled param, the app's convention for big query sets
 pub(crate) struct SelectCommit<'w, 's> {
     pub(super) selection: ResMut<'w, Selection>,
-    seam: crate::creature_anim::AttackSeam<'w, 's>,
+    pub(super) seam: crate::creature_anim::AttackSeam<'w, 's>,
     // Our own body: the guid, the store `can_attack` reads, and whether we are mid-swing.
     me: Query<
         'w,
@@ -523,6 +526,17 @@ impl SelectCommit<'_, '_> {
             info!("assist ({how}): assistAttack is on -> opening the swing");
             self.seam.start(guid, engaged, false);
         }
+    }
+
+    /// Whether we are mid-swing, which a deselect stops.
+    pub(super) fn engaged(&self) -> bool {
+        self.me.single().is_ok_and(|(_, _, engaged)| engaged)
+    }
+
+    /// Deselect (`0x493540(0,0)`), a no-op with nothing selected; see [`super::click::clear`].
+    pub(super) fn clear(&mut self) {
+        let engaged = self.engaged();
+        super::click::clear(&mut self.selection, &mut self.seam, engaged);
     }
 
     /// Select a resolved guid, `0x489a40`'s arm 1, through [`scan::commit`].

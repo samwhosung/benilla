@@ -22,7 +22,6 @@ use benilla_protocol::messages::PetActionEntry;
 use benilla_ui::script::{PetBookState, SpellSlotView, UiScript};
 
 use crate::net::{ClientCommand, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
-use crate::target::Selection;
 use crate::ui_action::Spells;
 use crate::ui_pet::PetBar;
 use crate::ui_script::UiInput;
@@ -39,9 +38,11 @@ impl Plugin for UiPetBookPlugin {
                 feed_pet_book
                     .in_set(UnitFeed)
                     .before(crate::ui_action::CooldownEvents),
-                // After the input pass; it writes back into `PetBar`, whose next feed carries the
-                // mirrored autocast bit.
-                drain_pet_book.after(UiInput),
+                // After the input pass and this frame's pet book casts; it writes back into
+                // `PetBar`, whose next feed carries the mirrored autocast bit.
+                drain_pet_book
+                    .after(UiInput)
+                    .after(crate::script_calls::apply_script_calls),
             ),
         );
     }
@@ -167,21 +168,49 @@ fn slot_view(
     }
 }
 
-/// Drains the pet book's two intents.
+/// `CastSpell(id, "pet")`: cancel first, as on the bar (`0x4b33af`-`0x4b3461`), a spell whose
+/// aura is on the pet sending `CMSG_PET_CANCEL_AURA` (0x26B) instead of the order; else
+/// `CMSG_PET_ACTION` at the selection as the calls before it left it.
+pub(crate) fn cast_pet_spell(p: &mut crate::ui_pet::PetPress, spell_id: u32) {
+    let pet_guid = p.bar.spells.pet_guid;
+    if pet_guid == 0 {
+        debug!("ui_pet_book: dropping a queued pet book cast — the bar is gone");
+        return;
+    }
+    let target_guid = p.selection.guid.unwrap_or(0);
+    let display = p.spells.as_ref().and_then(|s| s.catalog.get(spell_id));
+    if let (Some(d), Some(store)) = (display, p.pet.store(pet_guid)) {
+        if crate::ui_action::toggle::active_action_toggle(spell_id, d, store) {
+            debug!("ui_pet_book: cast {spell_id} cancels the pet's own aura");
+            let _ = p
+                .commands
+                .0
+                .send(ClientCommand::PetCancelAura { pet_guid, spell_id });
+            return;
+        }
+    }
+    // The word built for the send (`0x4b350a`-`0x4b3516`): type 1, the spell branch, autocast
+    // bits clear; with no target passed it aims at the selection (`0x4b34af`).
+    let packed = 0x0100_0000 | (spell_id & 0xFFFF);
+    debug!("ui_pet_book: cast {spell_id} (target {target_guid:#x})");
+    let _ = p.commands.0.send(ClientCommand::PetAction {
+        pet_guid,
+        packed,
+        target_guid,
+    });
+}
+
+/// Drains the pet book's `ToggleSpellAutocast` intents.
 fn drain_pet_book(
     script: Option<NonSendMut<UiScript>>,
     mut bar: ResMut<PetBar>,
-    selection: Res<Selection>,
     commands: Res<NetCommands>,
-    spells: Option<Res<Spells>>,
-    pet: crate::ui_pet::PetUnit,
 ) {
     let Some(mut script) = script else {
         return;
     };
-    let casts = script.take_pet_spell_casts();
     let autocasts = script.take_pet_spell_autocasts();
-    if casts.is_empty() && autocasts.is_empty() {
+    if autocasts.is_empty() {
         return;
     }
     let pet_guid = bar.spells.pet_guid;
@@ -189,33 +218,6 @@ fn drain_pet_book(
         debug!("ui_pet_book: dropping queued pet book intents — the bar is gone");
         return;
     }
-    let target_guid = selection.guid.unwrap_or(0);
-    let pet_store = pet.store(pet_guid);
-
-    for spell_id in casts {
-        // Cancel first, as on the bar (`0x4b33af`-`0x4b3461`): a spell whose aura is on the pet
-        // sends `CMSG_PET_CANCEL_AURA` (0x26B) instead of the order.
-        let display = spells.as_ref().and_then(|s| s.catalog.get(spell_id));
-        if let (Some(d), Some(store)) = (display, pet_store) {
-            if crate::ui_action::toggle::active_action_toggle(spell_id, d, store) {
-                debug!("ui_pet_book: cast {spell_id} cancels the pet's own aura");
-                let _ = commands
-                    .0
-                    .send(ClientCommand::PetCancelAura { pet_guid, spell_id });
-                continue;
-            }
-        }
-        // The word built for the send (`0x4b350a`-`0x4b3516`): type 1, the spell branch, autocast
-        // bits clear; with no target passed it aims at the selection (`0x4b34af`).
-        let packed = 0x0100_0000 | (spell_id & 0xFFFF);
-        debug!("ui_pet_book: cast {spell_id} (target {target_guid:#x})");
-        let _ = commands.0.send(ClientCommand::PetAction {
-            pet_guid,
-            packed,
-            target_guid,
-        });
-    }
-
     for spell_id in autocasts {
         let Some(on) = flip_autocast(&mut bar.spells, spell_id) else {
             continue;

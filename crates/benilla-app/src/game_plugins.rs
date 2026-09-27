@@ -663,16 +663,18 @@ pub(crate) mod schedule_tests {
     /// - `ui_quest::lines::feed_quest_lines` against `ui_items::feed_item_stats` and
     ///   `ui_tooltip::feed_spell_tooltips` over `Items` and the VM: it only reads templates, which
     ///   those two do not write, and a chat line commutes with their pushes;
-    /// - `spell::targeting::drain_spell_target_unit` against the lone `.after(UiInput)` cast
-    ///   drains over the `CastLadder`, and the party, pet-book and chat drains over the unit-token
-    ///   resolver: the class `drop_item_on_unit` and the world click's legs already carry, as none
-    ///   of those drains orders against the target chain. A cast press and a unit-frame bind in one
-    ///   frame take either order until the cast drains share a set that does.
+    /// - `script_calls::apply_script_calls`, in the target chain, against the `.after(UiInput)`
+    ///   drains of gestures that are not such script calls (the ATTACKTARGET binding, the
+    ///   item-pick commit, the GameObject openers, the chat, party, duel, trade and death drains)
+    ///   over the `CastLadder`, the selection and the unit-token resolver: the class
+    ///   `drop_item_on_unit` and the world click's legs already carry, as none of those drains
+    ///   orders against the target chain. Such a gesture and a script call in one frame take
+    ///   either order.
     ///
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 5_481;
+    const UPDATE_ACTIONABLE_CEILING: usize = 4_956;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {
@@ -1126,8 +1128,6 @@ pub(crate) mod schedule_tests {
          "`told` is a `VmMemo` inside the session (a fresh VM re-begins), and the open is a player click"),
         ("ui_items/drain.rs", "drain_container_destroys", Because::FilledByVm,
          "`take_container_destroys` is a VM-owned queue filled by Lua's `DeleteCursorItem`"),
-        ("ui_items/drain.rs", "drain_container_uses", Because::FilledByVm,
-         "`take_container_uses` and `take_container_repairs` are Lua intents held by the VM"),
         ("ui_logout.rs", "feed_logout", Because::PlayerRoundTrip,
          "both packets answer the `CMSG_LOGOUT_REQUEST`/cancel the game menu sent"),
         ("ui_loot/mod.rs", "drain_loot", Because::Deliberate,

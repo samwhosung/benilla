@@ -21,9 +21,9 @@ use benilla_ui::script::{ScriptValue, SpellBookState, SpellSlotView, SpellTabVie
 use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::net::NetCommands;
-use crate::spell::{cast_target, CastCommit, CastLadder};
+use crate::spell::CastCommit;
 use crate::ui_action::{melee_auto_attack_icon, ranged_weapon_icon, PlayerActions, Spells};
-use crate::ui_script::{gate, UiInput};
+use crate::ui_script::gate;
 use crate::ui_unit::UnitFeed;
 use benilla_assets::{AssetSet, LockRecover, WorldAssets};
 
@@ -55,15 +55,11 @@ impl Plugin for UiSpellbookPlugin {
             .add_systems(Startup, load_skill_lines.after(AssetSet::Open))
             .add_systems(
                 Update,
-                (
-                    // The feed precedes `CooldownEvents`, whose `SPELL_UPDATE_COOLDOWN` makes the
-                    // book re-read its cooldowns; the drain follows the input pass, so a click
-                    // casts the same frame.
-                    feed_spellbook
-                        .in_set(UnitFeed)
-                        .before(crate::ui_action::CooldownEvents),
-                    drain_spell_casts.after(UiInput),
-                ),
+                // The feed precedes `CooldownEvents`, whose `SPELL_UPDATE_COOLDOWN` makes the book
+                // re-read its cooldowns. A click's cast is a script call (`cast_spell`).
+                feed_spellbook
+                    .in_set(UnitFeed)
+                    .before(crate::ui_action::CooldownEvents),
             );
     }
 }
@@ -425,56 +421,47 @@ fn leading_number(s: &str) -> u32 {
         .unwrap_or(0)
 }
 
-/// Drain `take_spell_casts` through the cast tail the action bar uses.
-fn drain_spell_casts(
-    script: Option<NonSendMut<UiScript>>,
-    targeting: cast_target::CastTargeting,
-    mut ladder: CastLadder,
-) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for spell_id in script.take_spell_casts() {
-        // `CastSpell`'s two cancel forks (`0x4b3300`), in order: the active-action toggle
-        // (`0x4b36f0`), then the form match (`0x4b348b`), which `UseAction` lacks, with its silent
-        // no-op (`0x4b35cf`).
-        if let (Some(sp), Some(store)) =
-            (ladder.spells.as_ref(), targeting.self_store.iter().next())
-        {
-            if let Some(d) = sp.catalog.get(spell_id) {
-                if crate::ui_action::toggle::active_action_toggle(spell_id, d, store) {
-                    debug!("ui_spellbook: cast {spell_id} re-pressed — aura cancels");
+/// `CastSpell(id, "spell")` and `CastSpellByName` (`0x4b3300`'s player leg), through the cast
+/// tail the action bar uses, at the selection as the calls before it left it.
+pub(crate) fn cast_spell(cast: &mut crate::spell::ScriptCast, spell_id: u32) {
+    let crate::spell::ScriptCast { targeting, ladder } = cast;
+    // `CastSpell`'s two cancel forks (`0x4b3300`), in order: the active-action toggle
+    // (`0x4b36f0`), then the form match (`0x4b348b`), which `UseAction` lacks, with its silent
+    // no-op (`0x4b35cf`).
+    if let (Some(sp), Some(store)) = (ladder.spells.as_ref(), targeting.self_store.iter().next()) {
+        if let Some(d) = sp.catalog.get(spell_id) {
+            if crate::ui_action::toggle::active_action_toggle(spell_id, d, store) {
+                debug!("ui_spellbook: cast {spell_id} re-pressed — aura cancels");
+                let _ = ladder
+                    .commands
+                    .0
+                    .send(crate::net::ClientCommand::CancelAura { spell_id });
+                return;
+            }
+            let form = store.0.unit_shapeshift_form();
+            let row = sp.forms.get(&u32::from(form));
+            match crate::ui_action::toggle::form_recast_disposition(d, form, row) {
+                Some(true) => {
+                    debug!("ui_spellbook: cast {spell_id} — the active form cancels");
                     let _ = ladder
                         .commands
                         .0
                         .send(crate::net::ClientCommand::CancelAura { spell_id });
-                    continue;
+                    return;
                 }
-                let form = store.0.unit_shapeshift_form();
-                let row = sp.forms.get(&u32::from(form));
-                match crate::ui_action::toggle::form_recast_disposition(d, form, row) {
-                    Some(true) => {
-                        debug!("ui_spellbook: cast {spell_id} — the active form cancels");
-                        let _ = ladder
-                            .commands
-                            .0
-                            .send(crate::net::ClientCommand::CancelAura { spell_id });
-                        continue;
-                    }
-                    Some(false) => {
-                        debug!("ui_spellbook: cast {spell_id} — non-cancelable form, silent no-op");
-                        continue;
-                    }
-                    None => {}
+                Some(false) => {
+                    debug!("ui_spellbook: cast {spell_id} — non-cancelable form, silent no-op");
+                    return;
                 }
+                None => {}
             }
         }
-        debug!(
-            "ui_spellbook: cast {spell_id} (target {:?})",
-            targeting.selection.guid
-        );
-        ladder.send(spell_id, &targeting.context(), CastCommit::Spell);
     }
+    debug!(
+        "ui_spellbook: cast {spell_id} (target {:?})",
+        targeting.selection.guid
+    );
+    ladder.send(spell_id, &targeting.context(), CastCommit::Spell);
 }
 
 #[cfg(test)]

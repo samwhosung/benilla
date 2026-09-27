@@ -232,19 +232,10 @@ pub(crate) struct Model {
     pub(crate) cancel_aura_requests: Vec<u32>,
     /// The player's active tracking aura, behind `GetTrackingTexture`.
     pub(crate) tracking: Option<super::aura::TrackingState>,
-    /// `TargetUnit`, `AssistUnit` and `TargetLastEnemy` calls in call order, one queue as the
-    /// reference routes all three through one helper; an unresolvable one is a no-op, as there.
-    pub(crate) selection_requests: Vec<super::SelectionRequest>,
-    /// `TargetNearestFriend` calls, `true` for the reverse cycle.
-    pub(crate) target_nearest_friend_requests: Vec<bool>,
-    /// `TargetByName(name, exactMatch)` calls, for the app's by-name resolver.
-    pub(crate) target_by_name_requests: Vec<(String, bool)>,
-    /// `ClearTarget()` fired with a live target, the last step of `ToggleGameMenu`'s ESC chain.
-    pub(crate) target_clear: bool,
+    /// The calls that touch the selection, the cast or the targeting cursor, in call order.
+    pub(crate) script_calls: Vec<super::calls::ScriptCall>,
     /// `DropItemOnUnit` tokens (`0x48d960`), gated by the app; a refusal silently keeps the item.
     pub(crate) drop_item_on_unit: Vec<String>,
-    /// `SpellTargetUnit` tokens: a unit frame binds the spell currently waiting on the cursor.
-    pub(crate) spell_target_unit: Vec<String>,
 
     /// Channels the server confirmed, in join order: the numbers `GetChannelName` answers.
     pub(crate) joined_channels: Vec<Option<String>>,
@@ -401,7 +392,6 @@ pub(crate) struct Model {
     /// Per action, its usable, range, current and cooldown state; an absent one reads cold.
     pub(crate) action_states: HashMap<u32, super::action::StoredActionState>,
     pub(crate) bonus_bar_offset: u8,
-    pub(crate) action_uses: Vec<super::action::ActionUse>,
     /// `(action id, packed)` per slot `PickupAction`/`PlaceAction` changed, 0 clearing it: one
     /// `CMSG_SET_ACTION_BUTTON` each, so a drag swap is two sends.
     pub(crate) action_sets: Vec<(u32, u32)>,
@@ -420,25 +410,17 @@ pub(crate) struct Model {
     pub(crate) macros_generation: u64,
     /// The macro icon paths from `SpellIcon.dbc`, behind `GetMacroIconInfo`.
     pub(crate) macro_icons: Vec<String>,
-    /// Spell ids `CastSpell` queued.
-    pub(crate) spell_casts: Vec<u32>,
-    /// `CastSpell(id, "pet")` ids, sent as `CMSG_PET_ACTION` with a type-1 word (`0x4b34ce`).
-    pub(crate) pet_spell_casts: Vec<u32>,
     /// `ToggleSpellAutocast` ids for `CMSG_PET_SPELL_AUTOCAST` (`0x2F3`), which names a spell.
     pub(crate) pet_spell_autocasts: Vec<u32>,
     /// An auto-repeat or cast that `SpellStopCasting()` can stop, not a channel (`0x6e6e80`). Its
     /// 1 or nil matters: the ESC chain (`UIParent.lua:1489`) reaches `CloseAllWindows()` on nil.
     pub(crate) casting: bool,
-    /// `SpellStopCasting()` fired while casting: the ESC cancel.
-    pub(crate) spell_stop: bool,
     /// Spell targeting is on (`SpellIsTargeting`, `0x6e6cd0`); it gates `SpellStopTargeting()`,
     /// whose nil the ESC chain falls through on (`UIParent.lua:1490`).
     pub(crate) spell_targeting: bool,
     /// Tokens for which `SpellCanTargetUnit`'s armed unit word clears fully, used by stock unit
     /// frames before they call `SpellTargetUnit`.
     pub(crate) spell_targetable_units: HashSet<String>,
-    /// `SpellStopTargeting()` fired while targeting: the ESC targeting cancel.
-    pub(crate) spell_stop_targeting: bool,
 
     pub(crate) talents: super::talent::TalentUiState,
     /// `LearnTalent(tab, index)` calls queued.
@@ -500,19 +482,13 @@ pub(crate) struct Model {
 
     /// The stance bar's forms, in bar order.
     pub(crate) shapeshift_forms: Vec<super::shapeshift::StoredShapeshiftForm>,
-    /// Form spell ids `CastShapeshiftForm` queued.
-    pub(crate) shapeshift_casts: Vec<u32>,
 
     /// The pet bar's ten slots and two bar-wide bits, replaced whole by every `SMSG_PET_SPELLS`.
     pub(crate) pet_bar: super::pet::PetBarState,
-    /// 1-based slots `CastPetAction` queued.
-    pub(crate) pet_actions_pressed: Vec<u32>,
     /// 1-based slot indices `TogglePetAutocast` queued.
     pub(crate) pet_autocast_toggles: Vec<u32>,
     /// `PetStopAttack()` calls.
     pub(crate) pet_stop_attacks: u32,
-    /// `PetAttack`, `PetFollow`, `PetWait` and mode orders, as the packed word of their bar slot.
-    pub(crate) pet_orders: Vec<u32>,
     /// `HasFullControl`, the reference's `[0xb4b3e4]`: set by `SMSG_CLIENT_CONTROL_UPDATE` for the
     /// player, boots 1, and every cast, item and cursor gate refuses at 0.
     pub(crate) player_control: bool,
@@ -525,9 +501,8 @@ pub(crate) struct Model {
     /// Names `PetRename` queued, from the `PETRENAMECONFIRM` popup.
     pub(crate) pet_renames: Vec<String>,
 
-    /// Bag contents by API bag id (0 is the backpack), and the queued `UseContainerItem` calls.
+    /// Bag contents by API bag id (0 is the backpack).
     pub(crate) containers: HashMap<i64, container::ContainerState>,
-    pub(crate) container_uses: Vec<(i64, u32)>,
     /// Per `(bag, slot)`, `(start, duration, enabled)` in `GetTime` seconds, stamped at push.
     pub(crate) container_cooldowns: HashMap<(i64, u32), (f64, f64, bool)>,
     /// `HasKey()`: a keys-family item in equipment, bags, bank or keyring; gates the keyring UI.
@@ -832,8 +807,6 @@ pub(crate) struct Model {
     pub(crate) bank_bag_slots: char_stats::BankBagSlots,
     /// `GetInventoryAlertStatus` in `0x806eb8` order; every push fires `UPDATE_INVENTORY_ALERTS`.
     pub(crate) inventory_alerts: [u8; 12],
-    /// `UseInventoryItem` slot ids, sent as `CMSG_USE_ITEM` on the equipped item.
-    pub(crate) inventory_uses: Vec<u32>,
     /// Equipped slot ids clicked while the merchant repair cursor is armed.
     pub(crate) inventory_repairs: Vec<u32>,
     /// Main- and off-hand temporary enchants in `GetWeaponEnchantInfo`'s order, pushed each frame.
@@ -1059,12 +1032,8 @@ impl Model {
             auras: HashMap::new(),
             cancel_aura_requests: Vec::new(),
             tracking: None,
-            selection_requests: Vec::new(),
-            target_nearest_friend_requests: Vec::new(),
-            target_by_name_requests: Vec::new(),
+            script_calls: Vec::new(),
             drop_item_on_unit: Vec::new(),
-            spell_target_unit: Vec::new(),
-            target_clear: false,
             joined_channels: Vec::new(),
             party: party::PartyState::default(),
             party_requests: Vec::new(),
@@ -1136,7 +1105,6 @@ impl Model {
             actions: HashMap::new(),
             action_states: HashMap::new(),
             bonus_bar_offset: 0,
-            action_uses: Vec::new(),
             action_sets: Vec::new(),
             ui_errors: Vec::new(),
             spellbook: spellbook::SpellBookState::default(),
@@ -1145,14 +1113,10 @@ impl Model {
             macros_dirty: false,
             macros_generation: 0,
             macro_icons: Vec::new(),
-            spell_casts: Vec::new(),
-            pet_spell_casts: Vec::new(),
             pet_spell_autocasts: Vec::new(),
             casting: false,
-            spell_stop: false,
             spell_targeting: false,
             spell_targetable_units: HashSet::new(),
-            spell_stop_targeting: false,
             talents: super::talent::TalentUiState::default(),
             talent_learns: Vec::new(),
             talent_wipe_confirms: 0,
@@ -1186,19 +1150,15 @@ impl Model {
             tutorial_clears: 0,
             tutorial_resets: 0,
             shapeshift_forms: Vec::new(),
-            shapeshift_casts: Vec::new(),
             pet_bar: super::pet::PetBarState::default(),
-            pet_actions_pressed: Vec::new(),
             pet_autocast_toggles: Vec::new(),
             pet_stop_attacks: 0,
-            pet_orders: Vec::new(),
             player_control: true,
             pet_set_actions: Vec::new(),
             pet_abandons: 0,
             pet_dismisses: 0,
             pet_renames: Vec::new(),
             containers: HashMap::new(),
-            container_uses: Vec::new(),
             container_cooldowns: HashMap::new(),
             has_key: false,
             cursor: None,
@@ -1388,7 +1348,6 @@ impl Model {
             inventory_slots: Default::default(),
             bank_bag_slots: Default::default(),
             inventory_alerts: [0; 12],
-            inventory_uses: Vec::new(),
             inventory_repairs: Vec::new(),
             weapon_enchants: [None; 2],
             inspect: None,

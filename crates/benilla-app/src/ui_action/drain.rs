@@ -163,209 +163,221 @@ fn self_bound<'a>(
     ctx
 }
 
-pub(super) fn drain_action_uses(
-    script: Option<NonSendMut<UiScript>>,
-    actions: Res<PlayerActions>,
-    targeting: cast_target::CastTargeting,
-    mut acquire: MessageWriter<crate::target::AttackNearestRequest>,
+/// What a `UseAction` press reads and writes.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct ActionPress<'w, 's> {
+    actions: Res<'w, PlayerActions>,
+    targeting: cast_target::CastTargeting<'w, 's>,
+    acquire: MessageWriter<'w, crate::target::AttackNearestRequest>,
     // The by-key error line. Not a `CastLadder` field: Bevy panics, at runtime and not in unit
     // tests, on a resource reachable twice from one system.
-    mut ui_errors: ResMut<UiErrorKeys>,
-    mut ladder: CastLadder,
-    mut gate: crate::ui_bind_confirm::BindGate,
+    ui_errors: ResMut<'w, UiErrorKeys>,
+    ladder: CastLadder<'w, 's>,
+    gate: crate::ui_bind_confirm::BindGate<'w>,
+}
+
+/// `UseAction` (`0x4e5ee0`) on the pressed slot: a cast, a swing, an item use or a macro run, at
+/// the selection as the calls before it left it. A macro's lines run inside it (`0x4e6098 call
+/// 0x4f1460`), so the calls they make queue for [`crate::script_calls`] to apply next.
+pub(crate) fn use_action(
+    p: &mut ActionPress,
+    script: &mut UiScript,
+    press: benilla_ui::script::ActionUse,
 ) {
+    let ActionPress {
+        actions,
+        targeting,
+        acquire,
+        ui_errors,
+        ladder,
+        gate,
+    } = p;
     let selection = &targeting.selection;
-    let Some(mut script) = script else {
-        return;
+    let action = press.action;
+    let slot = match u8::try_from(action.saturating_sub(1)) {
+        Ok(s) => s,
+        Err(_) => return,
     };
-    for press in script.take_action_uses() {
-        let action = press.action;
-        let slot = match u8::try_from(action.saturating_sub(1)) {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-        match actions.buttons.get(&slot) {
-            Some(b) if b.kind == ACTION_KIND_SPELL && b.action == SPELL_ATTACK => {
-                // `UseAction` casts Attack through TryCast, so its dead rung comes first: "You are
-                // dead", where the binding, which skips TryCast, reads "Can't attack while dead."
-                if ladder.dead_refusal(SPELL_ATTACK, targeting.self_store.iter().next()) {
-                    continue;
-                }
-                // The attack validator's actor gates (`0x612df0`) precede both the swing and the
-                // nearest-enemy scan (`0x6130b5`), so both arms gate here.
-                if attack_actor_refusal(
-                    targeting.self_store.iter().next(),
-                    targeting.context().self_guid,
-                    &mut ui_errors,
-                ) {
-                    continue;
-                }
-                match selection.guid {
-                    Some(guid) => {
-                        // A toggle (`0x6131a0`, via `TryCast`'s effect-0x4e short-circuit
-                        // `0x6e4c7a`): attacking (`0x60ecb0`) stops (`0x5ecac0`), else starts
-                        // (`0x5ecb70`). Only the start cancels auto-repeat (`0x5ecd8c`), so
-                        // stopping melee leaves Auto Shot running.
-                        let Ok((e, engaged)) = ladder.self_player.single() else {
-                            continue;
-                        };
-                        debug!(
-                            "ui_action: attack {} at {guid:#x}",
-                            if engaged { "toggled off" } else { "swing" }
-                        );
-                        crate::creature_anim::toggle_attack_local(
-                            e,
-                            guid,
-                            engaged,
-                            &mut ladder.queued_melee,
-                            &mut ladder.auto_repeat,
-                            &mut ladder.sheath,
-                            &mut ladder.ecs,
-                            &ladder.commands,
-                        );
-                    }
-                    // No target: the reference swings at the nearest enemy (`0x6130b5`).
-                    None => {
-                        debug!("ui_action: attack with no target — acquiring nearest");
-                        acquire.write(crate::target::AttackNearestRequest);
-                    }
-                }
+    match actions.buttons.get(&slot) {
+        Some(b) if b.kind == ACTION_KIND_SPELL && b.action == SPELL_ATTACK => {
+            // `UseAction` casts Attack through TryCast, so its dead rung comes first: "You are
+            // dead", where the binding, which skips TryCast, reads "Can't attack while dead."
+            if ladder.dead_refusal(SPELL_ATTACK, targeting.self_store.iter().next()) {
+                return;
             }
-            Some(b) if b.kind == ACTION_KIND_SPELL => {
-                // In `UseAction 0x4e5ee0` only: re-pressing the spell whose targeting cursor is
-                // up cancels it before `TryCast` (`GetTargetingSpellId 0x6e48e0`,
-                // `StopTargeting 0x6e4900`). A spellbook re-press aborts and re-enters.
-                if ladder.ground.spell() == Some(b.action) {
-                    debug!(
-                        "ui_action: cast {} re-pressed — targeting toggles off",
-                        b.action
-                    );
-                    ladder.ground.clear();
-                    continue;
-                }
-                // A live `ActiveIconID` spell re-pressed cancels its aura (`0x4e55f0`, cancel
-                // `0x4e60c1`). The form-match toggle is `CastSpell`'s alone, not `UseAction`'s.
-                if let Some(d) = ladder.spells.as_ref().and_then(|s| s.catalog.get(b.action)) {
-                    if let Some(store) = targeting.self_store.iter().next() {
-                        if super::toggle::active_action_toggle(b.action, d, store) {
-                            debug!("ui_action: cast {} re-pressed — aura cancels", b.action);
-                            let _ = ladder
-                                .commands
-                                .0
-                                .send(crate::net::ClientCommand::CancelAura { spell_id: b.action });
-                            continue;
-                        }
-                    }
-                }
-                debug!(
-                    "ui_action: cast {} (target {:?}{})",
-                    b.action,
-                    selection.guid,
-                    if press.on_self { ", on self" } else { "" }
-                );
-                ladder.send(
-                    b.action,
-                    &self_bound(targeting.context(), press),
-                    CastCommit::Spell,
-                );
+            // The attack validator's actor gates (`0x612df0`) precede both the swing and the
+            // nearest-enemy scan (`0x6130b5`), so both arms gate here.
+            if attack_actor_refusal(
+                targeting.self_store.iter().next(),
+                targeting.context().self_guid,
+                ui_errors,
+            ) {
+                return;
             }
-            // An item action names an entry, so the click finds a copy. A miss only logs, with no
-            // red error line: nothing was attempted.
-            Some(b) if b.kind == ACTION_KIND_ITEM => {
-                let Some(store) = targeting.self_store.iter().next() else {
-                    continue;
-                };
-                let template = ladder
-                    .items
-                    .template(b.action, 0, &ladder.commands)
-                    .cloned();
-                // The reference bails on a null template too; the icon resolve usually cached it.
-                let Some(template) = template else {
+            match selection.guid {
+                Some(guid) => {
+                    // A toggle (`0x6131a0`, via `TryCast`'s effect-0x4e short-circuit
+                    // `0x6e4c7a`): attacking (`0x60ecb0`) stops (`0x5ecac0`), else starts
+                    // (`0x5ecb70`). Only the start cancels auto-repeat (`0x5ecd8c`), so
+                    // stopping melee leaves Auto Shot running.
+                    let Ok((e, engaged)) = ladder.self_player.single() else {
+                        return;
+                    };
                     debug!(
-                        "ui_action: item action {action} (entry {}) has no template yet — skipped",
-                        b.action
+                        "ui_action: attack {} at {guid:#x}",
+                        if engaged { "toggled off" } else { "swing" }
                     );
-                    continue;
-                };
-                let route = item_action_route(&template, |s| {
-                    crate::ui_items::find_item(&store.0, &ladder.objects, b.action, s)
-                });
-                let ((bag_index, slot0, guid), equip) = match route {
-                    ItemRoute::Use(pos) => (pos, false),
-                    ItemRoute::Equip(pos) => (pos, true),
-                    ItemRoute::Nowhere => {
-                        debug!(
-                            "ui_action: item action {action} (entry {}) is nowhere in the inventory — skipped",
-                            b.action
-                        );
-                        continue;
-                    }
-                };
-                if equip {
-                    // No quest guard: the bar tests only `InventoryType` (`0x4e5fdd`), unlike
-                    // the bag click (`StartQuest`, `0x4fa3c4`), so a quest-starter equips.
-                    debug!("ui_action: item action {action} auto-equip (wire {bag_index}/{slot0})");
-                    // The shared auto-equip sender, so a BoE asks before binding, as from a bag.
-                    crate::ui_items::send_auto_equip(
-                        &mut script,
-                        &mut gate,
-                        &ladder.objects,
-                        &ladder.items,
+                    crate::creature_anim::toggle_attack_local(
+                        e,
+                        guid,
+                        engaged,
+                        &mut ladder.queued_melee,
+                        &mut ladder.auto_repeat,
+                        &mut ladder.sheath,
+                        &mut ladder.ecs,
                         &ladder.commands,
-                        bag_index,
-                        slot0,
-                        Some(guid),
-                        false,
-                    );
-                } else {
-                    // The shared `CGItem::Use` fork (called at `0x4e607b`): a quest-starter offers
-                    // its quest, and the use runs the whole cast ladder. The wire's third byte is
-                    // the spell block ordinal, not a flag.
-                    let spell_index = template.use_spell_index().unwrap_or(0);
-                    debug!(
-                        "ui_action: item action {action} use (wire {bag_index}/{slot0}, spell #{spell_index})"
-                    );
-                    crate::ui_items::send_item_use(
-                        crate::ui_items::ItemUse {
-                            guid: Some(guid),
-                            start_quest: template.start_quest,
-                            bag_index,
-                            slot: slot0,
-                            entry: b.action,
-                            spell_index,
-                            use_spell: template.use_spell.map(|u| u.spell_id),
-                            on_object: None,
-                            is_charter: template.flags
-                                & benilla_protocol::messages::ITEM_FLAG_CHARTER
-                                != 0,
-                        },
-                        &targeting.context(),
-                        &mut ladder,
-                        &mut script,
-                        &mut gate,
-                        false,
-                        &mut ui_errors,
                     );
                 }
+                // No target: the reference swings at the nearest enemy (`0x6130b5`).
+                None => {
+                    debug!("ui_action: attack with no target — acquiring nearest");
+                    acquire.write(crate::target::AttackNearestRequest);
+                }
             }
-            // The macro arm (`0x4e5ee0` calls `0x4f1460`): each body line goes through the chat
-            // input, as if typed.
-            Some(b) if b.kind == ACTION_KIND_MACRO => {
-                if !crate::ui_macro::run_macro(&mut script, b.action) {
+        }
+        Some(b) if b.kind == ACTION_KIND_SPELL => {
+            // In `UseAction 0x4e5ee0` only: re-pressing the spell whose targeting cursor is
+            // up cancels it before `TryCast` (`GetTargetingSpellId 0x6e48e0`,
+            // `StopTargeting 0x6e4900`). A spellbook re-press aborts and re-enters.
+            if ladder.ground.spell() == Some(b.action) {
+                debug!(
+                    "ui_action: cast {} re-pressed — targeting toggles off",
+                    b.action
+                );
+                ladder.ground.clear();
+                return;
+            }
+            // A live `ActiveIconID` spell re-pressed cancels its aura (`0x4e55f0`, cancel
+            // `0x4e60c1`). The form-match toggle is `CastSpell`'s alone, not `UseAction`'s.
+            if let Some(d) = ladder.spells.as_ref().and_then(|s| s.catalog.get(b.action)) {
+                if let Some(store) = targeting.self_store.iter().next() {
+                    if super::toggle::active_action_toggle(b.action, d, store) {
+                        debug!("ui_action: cast {} re-pressed — aura cancels", b.action);
+                        let _ = ladder
+                            .commands
+                            .0
+                            .send(crate::net::ClientCommand::CancelAura { spell_id: b.action });
+                        return;
+                    }
+                }
+            }
+            debug!(
+                "ui_action: cast {} (target {:?}{})",
+                b.action,
+                selection.guid,
+                if press.on_self { ", on self" } else { "" }
+            );
+            ladder.send(
+                b.action,
+                &self_bound(targeting.context(), press),
+                CastCommit::Spell,
+            );
+        }
+        // An item action names an entry, so the click finds a copy. A miss only logs, with no
+        // red error line: nothing was attempted.
+        Some(b) if b.kind == ACTION_KIND_ITEM => {
+            let Some(store) = targeting.self_store.iter().next() else {
+                return;
+            };
+            let template = ladder
+                .items
+                .template(b.action, 0, &ladder.commands)
+                .cloned();
+            // The reference bails on a null template too; the icon resolve usually cached it.
+            let Some(template) = template else {
+                debug!(
+                    "ui_action: item action {action} (entry {}) has no template yet — skipped",
+                    b.action
+                );
+                return;
+            };
+            let route = item_action_route(&template, |s| {
+                crate::ui_items::find_item(&store.0, &ladder.objects, b.action, s)
+            });
+            let ((bag_index, slot0, guid), equip) = match route {
+                ItemRoute::Use(pos) => (pos, false),
+                ItemRoute::Equip(pos) => (pos, true),
+                ItemRoute::Nowhere => {
                     debug!(
-                        "ui_action: macro action {action} (macro {}) is empty",
+                        "ui_action: item action {action} (entry {}) is nowhere in the inventory — skipped",
                         b.action
                     );
+                    return;
                 }
-            }
-            Some(b) => {
+            };
+            if equip {
+                // No quest guard: the bar tests only `InventoryType` (`0x4e5fdd`), unlike
+                // the bag click (`StartQuest`, `0x4fa3c4`), so a quest-starter equips.
+                debug!("ui_action: item action {action} auto-equip (wire {bag_index}/{slot0})");
+                // The shared auto-equip sender, so a BoE asks before binding, as from a bag.
+                crate::ui_items::send_auto_equip(
+                    script,
+                    gate,
+                    &ladder.objects,
+                    &ladder.items,
+                    &ladder.commands,
+                    bag_index,
+                    slot0,
+                    Some(guid),
+                    false,
+                );
+            } else {
+                // The shared `CGItem::Use` fork (called at `0x4e607b`): a quest-starter offers
+                // its quest, and the use runs the whole cast ladder. The wire's third byte is
+                // the spell block ordinal, not a flag.
+                let spell_index = template.use_spell_index().unwrap_or(0);
                 debug!(
-                    "ui_action: action {action} kind {:#04x} has no use path",
-                    b.kind
+                    "ui_action: item action {action} use (wire {bag_index}/{slot0}, spell #{spell_index})"
+                );
+                crate::ui_items::send_item_use(
+                    crate::ui_items::ItemUse {
+                        guid: Some(guid),
+                        start_quest: template.start_quest,
+                        bag_index,
+                        slot: slot0,
+                        entry: b.action,
+                        spell_index,
+                        use_spell: template.use_spell.map(|u| u.spell_id),
+                        on_object: None,
+                        is_charter: template.flags & benilla_protocol::messages::ITEM_FLAG_CHARTER
+                            != 0,
+                    },
+                    &targeting.context(),
+                    ladder,
+                    script,
+                    gate,
+                    false,
+                    ui_errors,
                 );
             }
-            None => debug!("ui_action: UseAction({action}) on an empty slot"),
         }
+        // The macro arm (`0x4e5ee0` calls `0x4f1460`): each body line goes through the chat
+        // input, as if typed.
+        Some(b) if b.kind == ACTION_KIND_MACRO => {
+            if !crate::ui_macro::run_macro(script, b.action) {
+                debug!(
+                    "ui_action: macro action {action} (macro {}) is empty",
+                    b.action
+                );
+            }
+        }
+        Some(b) => {
+            debug!(
+                "ui_action: action {action} kind {:#04x} has no use path",
+                b.kind
+            );
+        }
+        None => debug!("ui_action: UseAction({action}) on an empty slot"),
     }
 }
 

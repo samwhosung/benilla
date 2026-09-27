@@ -109,9 +109,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 return Ok(());
             };
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model
-                .selection_requests
-                .push(super::SelectionRequest::AssistByName(name));
+            model.script_calls.push(super::ScriptCall::Select(
+                super::SelectionRequest::AssistByName(name),
+            ));
             Ok(())
         })?,
     )?;

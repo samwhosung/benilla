@@ -333,10 +333,13 @@ impl super::UiScript {
         self.model_mut().bank_bag_slots = slots;
     }
 
-    /// Drain the slot ids `UseInventoryItem` queued; the app sends each as `CMSG_USE_ITEM`, bag
-    /// 255 and the 0-based slot.
+    /// Take the `UseInventoryItem` calls out of the call stream; the app sends each as
+    /// `CMSG_USE_ITEM`, bag 255 and the 0-based slot.
     pub fn take_inventory_uses(&mut self) -> Vec<u32> {
-        std::mem::take(&mut self.model_mut().inventory_uses)
+        self.take_calls_where(|c| match c {
+            super::ScriptCall::UseInventoryItem(id) => Some(*id),
+            _ => None,
+        })
     }
 
     /// Drain equipped slots clicked in repair mode, for `CMSG_REPAIR_ITEM`.

@@ -379,12 +379,16 @@ fn escape_ladder_cast_then_windows_then_target_one_eater_per_press() {
     );
 
     // Press 4, no target: `ClearTarget` answers nil; the menu it falls through to is not loaded.
+    // Its deselect queues either way and finds nothing selected when it applies.
     s.set_unit("target", None);
     s.run("ToggleGameMenu()").unwrap();
-    assert!(
-        !s.take_target_clear(),
-        "ClearTarget answers nil with no target — nothing queued"
+    assert!(s.take_target_clear(), "the bare press reaches ClearTarget");
+    assert_eq!(
+        s.eval::<Option<i64>>("return ClearTarget()").unwrap(),
+        None,
+        "ClearTarget answers nil with no target"
     );
+    let _ = s.take_target_clear();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
