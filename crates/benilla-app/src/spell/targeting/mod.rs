@@ -360,9 +360,10 @@ pub(crate) fn drain_stop_targeting(
 }
 
 /// `BindTarget 0x6e5b40`'s unit arm, for the world click (`0x493540` at `4935d5`) and
-/// `SpellTargetUnit` (`0x6e5b10`): a unit failing the relation checks binds nothing and the
-/// cursor stays up; one out of the spell's range raises "Out of range." or "Target too close"
-/// (`6e6063`); otherwise the cast commits at it. The player's selection never moves.
+/// `SpellTargetUnit` (`0x6e5b10`): the caster under `AttributesEx & 0x80000` (`6e5bf7`) or a unit
+/// failing the relation checks binds nothing and the cursor stays up; one out of the spell's range
+/// raises "Out of range." or "Target too close" (`6e6063`); otherwise the cast commits at it. The
+/// player's selection never moves.
 fn bind_target_unit(
     ladder: &mut crate::spell::CastLadder,
     checks: &UnitBindChecks,
@@ -372,7 +373,7 @@ fn bind_target_unit(
     let Some((spell_id, commit, word)) = ladder.ground.pending() else {
         return;
     };
-    if !checks.relations_clear(word, entity) {
+    if checks.excluded_caster(spell_id, entity) || !checks.relations_clear(word, entity) {
         return;
     }
     if let Some(reason) = checks.range_refusal(spell_id, entity) {
@@ -549,6 +550,17 @@ mod tests {
         arm(&mut world, HEAL, 0x0100);
         spell_target_unit(&mut world, "target");
         assert!(rx.try_recv().is_err());
+        assert!(errors(&mut world).is_empty(), "no error");
+        assert!(world.resource::<SpellTargeting>().active(), "still armed");
+
+        // Ourselves under a spell that excludes its caster: silent, still armed.
+        let (mut world, rx, _) = unit_world(10.0);
+        arm(&mut world, NOT_SELF, 0x0002);
+        spell_target_unit(&mut world, "player");
+        assert!(
+            rx.try_recv().is_err(),
+            "never ourselves under AttributesEx 0x80000"
+        );
         assert!(errors(&mut world).is_empty(), "no error");
         assert!(world.resource::<SpellTargeting>().active(), "still armed");
 
