@@ -20,9 +20,10 @@ use super::Realms;
 pub(super) const MAX_TABS: usize = 8;
 
 /// Every category's realms, as indices into the list in wire order. Before the category set is
-/// read there is one category holding every realm.
+/// read, or when the Region has none, there is one category holding every realm.
 fn place(categories: Option<&[RealmCategory]>, realms: &[RealmInfo]) -> Vec<Vec<usize>> {
-    let Some(categories) = categories else {
+    // Deviation: no Region rows faults the reference on a NULL category (`0x46e5b8`); list all.
+    let Some(categories) = categories.filter(|c| !c.is_empty()) else {
         return vec![(0..realms.len()).collect()];
     };
     let mut buckets = vec![Vec::new(); categories.len()];
@@ -179,8 +180,9 @@ pub(super) fn load_categories(
             );
             if categories.is_empty() {
                 warn!(
-                    "realm list: Region {region} names no Cfg_Categories.dbc row, so no realm \
-                     has a tab to list on (the reference's Region is Wow.ini's [WoW Config] Region)"
+                    "realm list: Region {region} names no Cfg_Categories.dbc row, so every realm \
+                     lists on one untabbed page (the reference's Region is Wow.ini's [WoW Config] \
+                     Region)"
                 );
             }
             realms.categories = Some(categories);
@@ -291,6 +293,21 @@ pub(super) mod tests {
         r.categories = None;
         assert!(r.tabs().is_empty());
         assert_eq!(names(&r), ["Alpha", "Berlin", "Dev"]);
+    }
+
+    /// A Region no row names (Region 0, no `Wow.ini` Region) lists every realm untabbed too,
+    /// where the reference faults; the list opens on it and a realm on it can be entered.
+    #[test]
+    fn a_region_with_no_categories_lists_every_realm_untabbed() {
+        let mut r = realms(&[("Alpha", 1), ("Berlin", 2), ("Dev", 0)]);
+        r.categories = Some(Vec::new());
+        assert!(r.tabs().is_empty());
+        assert_eq!(names(&r), ["Alpha", "Berlin", "Dev"]);
+        r.current = Some("Berlin".into());
+        r.store_current_category();
+        r.open();
+        assert_eq!(r.selected().map(|r| r.name.as_str()), Some("Berlin"));
+        assert!(r.can_enter());
     }
 
     /// A tab click fronts its category, and the highlight moves to the session's realm if it is
