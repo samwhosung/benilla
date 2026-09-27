@@ -400,6 +400,7 @@ pub(crate) fn resolve_cast_target(
         if let Some(guid) = cand.caster {
             let self_rel = TargetRelations {
                 target_store: rel.self_store,
+                target_owner_store: None,
                 ..*rel
             };
             if unit_word_binds(word, true, &self_rel) {
