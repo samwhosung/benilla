@@ -6,20 +6,23 @@
 use std::path::Path;
 use std::process::Command;
 
-/// Stamp the commit this binary was built from into the calling package as four `rustc-env`
-/// vars, which its `main.rs` reads back with `env!` into a `BuildId`:
+/// Stamp the commit this binary was built from into the calling package as five `rustc-env`
+/// vars, which its `main.rs` reads back with `env!` into a `BuildId`, beside its own
+/// `CARGO_PKG_VERSION`:
 ///
 /// - `BENILLA_GIT_SHA`: the full sha.
 /// - `BENILLA_GIT_SHORT`: git's own abbreviation of it.
 /// - `BENILLA_GIT_DATE`: the commit date (`%cs`, `YYYY-MM-DD`), not the build date.
+/// - `BENILLA_GIT_DESCRIBE`: `git describe --tags --long` against the nearest release tag
+///   (`v0.2.0-12-gb17be27`), which says how far past its release the commit is.
 /// - `BENILLA_PROFILE`: the profile directory's name, which tells `ship` from `release` where
 ///   cargo's `PROFILE` does not.
 ///
-/// The git vars are empty when git cannot answer (no `.git`, no `git` on `PATH`), which the
-/// runtime reports as an unknown build. The rerun triggers are `HEAD` and the ref it names,
-/// resolved with `git rev-parse --git-path` so a linked worktree resolves too; only paths that
-/// exist are emitted, since cargo reruns a build script whose watched path is missing on every
-/// build.
+/// The git vars are empty when git cannot answer (no `.git`, no `git` on `PATH`, no tag in
+/// reach), which the runtime reports as an unknown commit or the bare version. The rerun
+/// triggers are `HEAD`, the ref it names, `packed-refs` and the tags, resolved with
+/// `git rev-parse --git-path` so a linked worktree resolves too; only paths that exist are
+/// emitted, since cargo reruns a build script whose watched path is missing on every build.
 pub fn emit() {
     let dir = std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR");
     let git = |args: &[&str]| -> Option<String> {
@@ -44,10 +47,12 @@ pub fn emit() {
     };
     watch(git(&["rev-parse", "--git-path", "HEAD"]));
     if let Some(git_ref) = git(&["symbolic-ref", "-q", "HEAD"]) {
-        // The loose ref, plus `packed-refs`: a fresh clone's branch has no loose file.
         watch(git(&["rev-parse", "--git-path", &git_ref]));
-        watch(git(&["rev-parse", "--git-path", "packed-refs"]));
     }
+    // A fresh clone's refs live only in `packed-refs`; a fetched or new tag lands in either, and
+    // moves the describe without moving `HEAD`. Cargo scans a watched directory whole.
+    watch(git(&["rev-parse", "--git-path", "packed-refs"]));
+    watch(git(&["rev-parse", "--git-path", "refs/tags"]));
     // An edit to the rule restamps: cargo reruns a build script when `build.rs` or one of its
     // build-dependencies changes.
     println!("cargo::rerun-if-changed=build.rs");
@@ -56,6 +61,10 @@ pub fn emit() {
         ("BENILLA_GIT_SHA", &["rev-parse", "HEAD"][..]),
         ("BENILLA_GIT_SHORT", &["rev-parse", "--short", "HEAD"]),
         ("BENILLA_GIT_DATE", &["log", "-1", "--format=%cs"]),
+        (
+            "BENILLA_GIT_DESCRIBE",
+            &["describe", "--tags", "--long", "--match", "v[0-9]*"],
+        ),
     ] {
         println!(
             "cargo::rustc-env={var}={}",

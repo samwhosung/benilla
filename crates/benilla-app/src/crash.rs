@@ -133,6 +133,8 @@ mod tests {
     use super::*;
 
     const BUILD: BuildId = BuildId {
+        version: "0.2.0",
+        describe: "v0.2.0-3-g0123456",
         sha: "0123456789abcdef0123456789abcdef01234567",
         short: "0123456",
         date: "2026-09-16",
@@ -154,7 +156,7 @@ mod tests {
         });
         for needle in [
             "sha 0123456789abcdef0123456789abcdef01234567",
-            "0123456 · 2026-09-16 · debug",
+            "0.2.0+3 · 0123456 · 2026-09-16 · debug",
             "12.3 s after launch",
             "thread:    main",
             "at:        crates/benilla-app/src/net/apply.rs:100:5",

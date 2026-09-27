@@ -22,4 +22,4 @@ body:
     attributes:
       label: Build and setup
       description: The `benilla build` line from the start of the terminal output, your OS, and the server you play on.
-      placeholder: "benilla build 64cca13 · 2026-09-24 · release, macOS 15, vmangos"
+      placeholder: "benilla build 0.2.0 · 64cca13 · 2026-09-24 · release, macOS 15, vmangos"
