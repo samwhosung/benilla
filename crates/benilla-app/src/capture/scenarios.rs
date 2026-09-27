@@ -167,10 +167,13 @@ pub(crate) enum GlueScreen {
     /// The login screen, `UI_MainMenu` behind the account form. Its backdrop is the narrowest of
     /// the seven scenes, so a wide window (`WOW_WIN=2560x1440`) reaches its edges first.
     Login,
+    /// The realm list over the login screen, fed a list in two categories
+    /// (`super::realm_list`).
+    RealmList,
 }
 
 /// The glue scenarios: character creation as a human male warrior, the race the reference's own
-/// screenshots use, and the login screen.
+/// screenshots use, the login screen, and the realm list's category tabs over it.
 pub(super) const GLUE_SCENARIOS: &[GlueScenario] = &[
     GlueScenario {
         name: "glue-charcreate",
@@ -180,6 +183,11 @@ pub(super) const GLUE_SCENARIOS: &[GlueScenario] = &[
     GlueScenario {
         name: "glue-login",
         screen: GlueScreen::Login,
+        pick: None,
+    },
+    GlueScenario {
+        name: super::realm_list::NAME,
+        screen: GlueScreen::RealmList,
         pick: None,
     },
 ];

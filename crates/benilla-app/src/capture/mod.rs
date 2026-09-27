@@ -76,6 +76,7 @@ mod probe_stone;
 mod probe_taxi;
 mod probe_vendor_swap;
 mod probes;
+mod realm_list;
 mod scenarios;
 use crate::run_mode::CaptureMode;
 pub(crate) use depth_probe::DepthProbePlugin;
@@ -138,7 +139,7 @@ pub(crate) use probe_pitch::ProbePitchPlugin;
 pub(crate) fn start_state() -> crate::char_select::ClientState {
     match glue_screen() {
         Some(GlueScreen::CharCreate) => crate::char_select::ClientState::CharCreate,
-        Some(GlueScreen::Login) => crate::char_select::ClientState::Login,
+        Some(GlueScreen::Login | GlueScreen::RealmList) => crate::char_select::ClientState::Login,
         None if crate::run_mode::scenario_active() => crate::char_select::ClientState::InWorld,
         None => crate::char_select::ClientState::Login,
     }
@@ -673,6 +674,7 @@ impl Plugin for CapturePlugin {
             // Before `UnitFeed`: the seed stands in for wire data live play delivers on earlier
             // frames, so the same frame's feeds and the one-shot `MERCHANT_SHOW` paint must see it.
             .add_systems(Update, seed_ui_fixture.before(crate::ui_unit::UnitFeed))
+            .add_systems(Update, realm_list::seed_realm_list)
             .add_systems(Last, drive_capture);
     }
 }
