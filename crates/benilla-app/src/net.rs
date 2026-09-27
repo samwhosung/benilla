@@ -884,6 +884,12 @@ pub(crate) enum ClientCommand {
         spell_id: u32,
         target: Option<u64>,
     },
+    /// `CMSG_CAST_SPELL` at a corpse: its bit and packed guid, a resurrection on a released player.
+    CastSpellCorpse {
+        spell_id: u32,
+        target: benilla_protocol::messages::CorpseTarget,
+        corpse_guid: u64,
+    },
     /// `CMSG_CAST_SPELL` with `TARGET_FLAG_DEST_LOCATION`; `dest` in WoW coordinates.
     CastSpellAtDest {
         spell_id: u32,

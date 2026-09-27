@@ -3,21 +3,22 @@
 //! word and each click seam asks it its own mask test ([`TargetingWants`]).
 //!
 //! - [`cursor`]: the hover verdict per seam. Terrain is `0x4820f0`'s `CheckGroundPointInRange
-//!   0x6e6810`, a GameObject or a unit is `0x4828d0`'s `0x6e6460` (the spell-vs-lock predicate
-//!   `0x5f8260` or [`SpellTargeting::can_target_unit`], then range), and a word no seam handles is
-//!   UnableCast.
+//!   0x6e6810`, a GameObject, a unit or a corpse is `0x4828d0`'s `0x6e6460` (the spell-vs-lock
+//!   predicate `0x5f8260`, [`SpellTargeting::can_target_unit`] or
+//!   [`SpellTargeting::can_target_corpse`], then range), and a word no seam handles is UnableCast.
 //! - [`world`]: the world-click dispatcher `0x492ce0`, its terrain leg (`0x492580` → `BindLocation
 //!   0x6e60f0`) and its object leg (`0x4925d0` → `SetSelection 0x493540` → `BindTarget 0x6e5b40`),
-//!   whose unit arm [`bind_target_unit`] shares with `SpellTargetUnit` ([`drain_spell_target_unit`]).
+//!   whose unit arm [`bind_target_unit`] shares with `SpellTargetUnit`
+//!   ([`drain_spell_target_unit`]), and whose corpse arm is [`corpse`]'s.
 //! - [`item`]: the bag click (`PickupContainerItem 0x4f9b30`) and the paper-doll click
 //!   (`0x4c7300`), both `IsTargeting`, `TargetingWantsItem 0x6e6330`, then `0x495d60`, whose
 //!   confirm popups park the clicked guid (`0xb4e3c0`) with the word still standing.
 //!
 //! Every seam commits through [`crate::spell::CastLadder::commit_targeted`] (`SendCast 0x6e54f0`).
-//! Only the unit arm has a range gate: the terrain and GameObject clicks send and the server
-//! judges range, and `CheckGroundPointInRange` only colours the cursor. While targeting, the pick
-//! flags come from the word alone, so a click over a unit with a dest-only word commits on the
-//! ground behind it.
+//! Only the unit and corpse arms have a range gate ([`merge`]): the terrain and GameObject clicks
+//! send and the server judges range, and `CheckGroundPointInRange` only colours the cursor. While
+//! targeting, the pick flags come from the word alone, so a click over a unit with a dest-only
+//! word commits on the ground behind it.
 //!
 //! Cancels: ESC through `UIParent.lua:1490` ([`feed_targeting_to_vm`], [`drain_stop_targeting`]),
 //! the right-button down edge ([`cancel_targeting_on_right_press`]), a new spell's press, which
@@ -25,10 +26,14 @@
 //! spell (`UseAction 0x4e5ee0`). A cancel clears the word and sends nothing; movement never
 //! cancels (`0x515090`).
 
+mod corpse;
 mod cursor;
 mod item;
 mod world;
 
+#[cfg(test)]
+pub(crate) use corpse::fixture as corpse_fixture;
+pub(crate) use corpse::{corpse_pick_admits, publish_corpse_pick, CorpsePick};
 pub(crate) use cursor::{drive_targeting_cursor, ground_cast_radius};
 pub(crate) use item::{commit_item_cast_on_pick, EnchantConfirmItem};
 pub(crate) use world::{commit_ground_cast_on_click, commit_object_cast_on_click};
@@ -37,12 +42,14 @@ use bevy::prelude::*;
 
 use benilla_world::interact::WorldRightPress;
 
-/// The inputs of the cursor's two unit functions, [`SpellTargeting::can_target_unit`] and
-/// [`bind_target_unit`]: the relation checks the cast arm's selection bind runs
-/// ([`super::cast_target::unit_word_binds`]) and the pre-send range gate's inputs
-/// ([`super::cast_target::RangeInputs`]), read as [`super::cast_target::CastTargeting`] reads them.
+/// The inputs of `BindTarget 0x6e5b40`'s unit and corpse arms and of their read-only mirror
+/// `0x6e6460` ([`SpellTargeting::can_target_unit`], [`bind_target_unit`],
+/// [`SpellTargeting::can_target_corpse`], [`corpse::bind_target_corpse`]): the relation checks the
+/// cast arm's selection bind runs ([`super::cast_target::unit_word_binds`]), the corpse's two
+/// facts, and the pre-send range gate's inputs ([`super::cast_target::RangeInputs`]), read as
+/// [`super::cast_target::CastTargeting`] reads them.
 #[derive(bevy::ecs::system::SystemParam)]
-pub(crate) struct UnitBindChecks<'w, 's> {
+pub(crate) struct BindChecks<'w, 's> {
     stores: Query<'w, 's, &'static crate::net::ObjectStore>,
     index: Option<Res<'w, crate::net::GuidIndex>>,
     self_q: Query<
@@ -60,7 +67,7 @@ pub(crate) struct UnitBindChecks<'w, 's> {
     spells: Option<Res<'w, crate::ui_action::Spells>>,
 }
 
-impl UnitBindChecks<'_, '_> {
+impl BindChecks<'_, '_> {
     fn is_self(&self, entity: Entity) -> bool {
         self.self_q
             .iter()
@@ -93,8 +100,27 @@ impl UnitBindChecks<'_, '_> {
     /// asks ([`super::cast_target::RangeInputs::refusal`]); our own body is distance 0. An
     /// unknown spell or a missing row passes.
     fn range_refusal(&self, spell_id: u32, entity: Entity) -> Option<u8> {
-        let spells = self.spells.as_deref()?;
-        let def = spells.catalog.get(spell_id)?;
+        let mut range = self.range_inputs(entity);
+        range.target_reach = self
+            .stores
+            .get(entity)
+            .ok()
+            .map(|s| s.0.unit_combat_reach());
+        self.refusal(spell_id, range)
+    }
+
+    /// The same compare against a corpse. `GetMinMaxRange 0x6e3480` pads a corpse's bounds as a
+    /// unit's (`6e35fe`), but with no unit to read the second reach from it reads the caster's
+    /// again (`6e3605`–`6e361e`).
+    fn corpse_range_refusal(&self, spell_id: u32, entity: Entity) -> Option<u8> {
+        let mut range = self.range_inputs(entity);
+        range.target_reach = Some(range.self_reach);
+        self.refusal(spell_id, range)
+    }
+
+    /// Our position and reach and the candidate's position, each position the pose the hover
+    /// picks against.
+    fn range_inputs(&self, entity: Entity) -> super::cast_target::RangeInputs {
         let me = self.self_q.iter().next();
         let mut range = super::cast_target::RangeInputs {
             self_pos: me
@@ -105,17 +131,28 @@ impl UnitBindChecks<'_, '_> {
                 .get(entity)
                 .ok()
                 .map(GlobalTransform::translation),
-            target_reach: self
-                .stores
-                .get(entity)
-                .ok()
-                .map(|s| s.0.unit_combat_reach()),
             ..Default::default()
         };
         if let Some((_, Some(store))) = me {
             range.self_reach = store.0.unit_combat_reach();
         }
+        range
+    }
+
+    fn refusal(&self, spell_id: u32, range: super::cast_target::RangeInputs) -> Option<u8> {
+        let spells = self.spells.as_deref()?;
+        let def = spells.catalog.get(spell_id)?;
         range.refusal(def, spells.ranges.get(def.range_index))
+    }
+
+    /// What the corpse legs read of this corpse: `CORPSE_FLAG_BONES` and the reaction gate
+    /// `0x6067d0`. A corpse whose store has not streamed binds nothing.
+    fn corpse_facts(&self, entity: Entity) -> Option<corpse::CorpseFacts> {
+        Some(corpse::CorpseFacts::of(
+            self.stores.get(entity).ok()?,
+            self.factions.as_deref(),
+            self.self_q.iter().next().and_then(|(_, s)| s),
+        ))
     }
 
     /// The caster under a spell with `AttributesEx & 0x80000` (`6e6507`).
@@ -135,6 +172,7 @@ impl UnitBindChecks<'_, '_> {
 /// - `Item`: `TargetingWantsItem 0x6e6330`, `word & 0x4010`, the bag and paper-doll clicks.
 /// - `GameObject`: `TargetingWantsGameObject 0x6e62d0`, `word & 0x4800`, the world object click.
 /// - `Unit`: `SpellCanTargetUnit 0x6e6460`, the unit arm of the world click.
+/// - `Corpse`: `0x6e6230`, `word & 0x8600`, the pick's corpse flag `0x40` ([`corpse`]).
 ///
 /// The masks overlap on `TARGET_FLAG_LOCKED`, so a lock spell answers both the item and the
 /// GameObject seam; the reference settles it only at the click, where `BindTarget 0x6e5b40` picks
@@ -145,6 +183,7 @@ pub(crate) enum TargetingWants {
     Item,
     GameObject,
     Unit,
+    Corpse,
 }
 
 /// The unit-shaped bits of the flag_word, the first gate `SpellCanTargetUnit` tests before it runs
@@ -158,6 +197,7 @@ impl TargetingWants {
             Self::Item => 0x4010,
             Self::GameObject => 0x4800,
             Self::Unit => UNIT_WORD_BITS,
+            Self::Corpse => 0x8600,
         };
         word & mask != 0
     }
@@ -203,7 +243,7 @@ impl SpellTargeting {
     /// `BindTarget`'s relation checks, the caster refused under `AttributesEx & 0x80000`
     /// (`6e6507`), then min² ≤ d² ≤ max² (`6e677c`–`6e6802`), so a unit inside the minimum is out
     /// too. There is no line-of-sight test.
-    pub(crate) fn can_target_unit(&self, entity: Entity, checks: &UnitBindChecks) -> bool {
+    pub(crate) fn can_target_unit(&self, entity: Entity, checks: &BindChecks) -> bool {
         self.0.as_ref().is_some_and(|t| {
             checks.relations_clear(t.word, entity)
                 && !checks.excluded_caster(t.spell_id, entity)
@@ -321,7 +361,7 @@ pub(crate) fn publish_picks_self(
 /// and re-arm in one frame still counts.
 pub(crate) fn feed_targeting_to_vm(
     targeting: Res<SpellTargeting>,
-    checks: UnitBindChecks,
+    checks: BindChecks,
     tokens: crate::ui_unit::UnitTokens,
     selection: Res<crate::target::Selection>,
     mut last: Local<crate::ui_script::VmMemo<Option<u32>>>,
@@ -361,12 +401,11 @@ pub(crate) fn drain_stop_targeting(
 
 /// `BindTarget 0x6e5b40`'s unit arm, for the world click (`0x493540` at `4935d5`) and
 /// `SpellTargetUnit` (`0x6e5b10`): the caster under `AttributesEx & 0x80000` (`6e5bf7`) or a unit
-/// failing the relation checks binds nothing and the cursor stays up; one out of the spell's range
-/// raises "Out of range." or "Target too close" (`6e6063`); otherwise the cast commits at it. The
+/// failing the relation checks binds nothing and the cursor stays up; otherwise the merge. The
 /// player's selection never moves.
 fn bind_target_unit(
     ladder: &mut crate::spell::CastLadder,
-    checks: &UnitBindChecks,
+    checks: &BindChecks,
     entity: Entity,
     guid: u64,
 ) {
@@ -376,15 +415,36 @@ fn bind_target_unit(
     if checks.excluded_caster(spell_id, entity) || !checks.relations_clear(word, entity) {
         return;
     }
-    if let Some(reason) = checks.range_refusal(spell_id, entity) {
-        // The reference's abort here (`6e6089`) also sends CMSG_CANCEL_CAST and strands the
-        // cursor (`6e5b93`) until a cancel: a bug, not copied; targeting stays armed and working.
-        debug!("ui_action: cast {spell_id} not bound at {guid:#x} — range ({reason:#x})");
+    let range = checks.range_refusal(spell_id, entity);
+    merge(
+        ladder,
+        spell_id,
+        commit,
+        range,
+        super::cast_send::TargetedBind::Unit(guid),
+    );
+}
+
+/// `BindTarget`'s merge (`6e602c`–`6e60d7`): a bind whose mask is in `0x8202`, a unit or a corpse,
+/// runs the range test `0x6e47b0` (`6e6063`). Out of range raises "Out of range." or "Target too
+/// close" and binds nothing; otherwise the emptied word commits (`SendCast 0x6e54f0`). The
+/// reference's range failure also aborts the cast (`6e6089`), which sends CMSG_CANCEL_CAST and
+/// strands the cursor (`6e5b93`) until a cancel: a bug, not copied; targeting stays armed and
+/// working.
+fn merge(
+    ladder: &mut crate::spell::CastLadder,
+    spell_id: u32,
+    commit: super::cast_send::CastCommit,
+    range: Option<u8>,
+    bound: super::cast_send::TargetedBind,
+) {
+    if let Some(reason) = range {
+        debug!("ui_action: cast {spell_id} not bound at {bound:x?} — range ({reason:#x})");
         ladder.cast_errors.push_local(spell_id, reason);
         return;
     }
-    debug!("ui_action: cast {spell_id} committed at unit {guid:#x}");
-    ladder.commit_targeted(spell_id, commit, super::cast_send::TargetedBind::Unit(guid));
+    debug!("ui_action: cast {spell_id} committed at {bound:x?}");
+    ladder.commit_targeted(spell_id, commit, bound);
 }
 
 /// Drain `SpellTargetUnit(unit)` (`0x6e6d90`) after the UI pass. The binding already raised the
@@ -395,7 +455,7 @@ pub(crate) fn drain_spell_target_unit(
     script: Option<NonSendMut<benilla_ui::script::UiScript>>,
     tokens: crate::ui_unit::UnitTokens,
     selection: Res<crate::target::Selection>,
-    checks: UnitBindChecks,
+    checks: BindChecks,
     mut ladder: crate::spell::CastLadder,
 ) {
     let Some(mut script) = script else {

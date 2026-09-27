@@ -8,6 +8,8 @@
 //! The first two live in [`super::ring`] beside the reaction directions they turn on:
 //! `0x6061e0(this = player)` answers a reputation faction with the at-war bit,
 //! `0x6061e0(this = unit)` with the standing, and the two often disagree.
+//!
+//! A corpse has its own reaction gate, `0x6067d0` ([`corpse_friendly`]).
 
 use benilla_protocol::messages::{ObjectType, OwnerFallback};
 
@@ -84,6 +86,25 @@ pub(crate) fn is_selectable(store: Option<&ObjectStore>, self_guid: Option<u64>)
         || (self_guid.is_some() && store.0.unit_created_by() == self_guid)
 }
 
+/// `0x6067d0(player, corpse)`, the corpse's reaction gate: `0x6064c0` compares the player's
+/// template (`UNIT_FIELD_FACTIONTEMPLATE`) toward the dead player's race's (`0x5d7120`: the race
+/// byte of `CORPSE_FIELD_BYTES_1`, then `ChrRaces.dbc` column 2) with the template comparator
+/// `0x606640` alone, no reputation, and passes at friendly (`setge` 4). A missing row on either
+/// side is neutral (`0x60651b`), so it fails, as does a missing catalog or player.
+pub(crate) fn corpse_friendly(
+    corpse: &ObjectStore,
+    factions: Option<&Factions>,
+    self_store: Option<&ObjectStore>,
+) -> bool {
+    use benilla_formats::Reaction;
+    let reaction = (|| {
+        let catalog = factions?.catalog();
+        let own = catalog.template(self_store?.0.unit_faction_template()?)?;
+        Some(own.reaction_toward(catalog.race_template(corpse.0.corpse_race())?))
+    })();
+    reaction.unwrap_or(Reaction::Neutral) >= Reaction::Friendly
+}
+
 /// `UNIT_FLAG_PVP`, bit 12 (vmangos `UnitDefines.h:557`), what `IsPvP 0x605ff0` tests on the
 /// unit's owner.
 const UNIT_FLAG_PVP: u32 = 0x1000;
@@ -127,4 +148,57 @@ pub(crate) fn can_assist(
         .and_then(owner_store);
     let pvp_flags = owned.as_ref().map_or(flags, |o| o.0.unit_flags());
     pvp_flags & UNIT_FLAG_PVP != 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::spell::targeting::corpse_fixture as fx;
+
+    /// `0x6067d0`: the caster's template toward the corpse's race's, friendly or better; every gap
+    /// is neutral (`0x60651b`) and fails.
+    #[test]
+    fn the_corpse_gate_reads_the_race_template() {
+        let factions = fx::factions();
+        let me = fx::caster(1.5);
+        let gate = |corpse: &ObjectStore| corpse_friendly(corpse, Some(&factions), Some(&me));
+        assert!(
+            gate(&fx::corpse(fx::HUMAN, false)),
+            "a human toward a human"
+        );
+        assert!(!gate(&fx::corpse(fx::ORC, false)), "a human toward an orc");
+        assert!(!gate(&fx::corpse(0, false)), "race 0 has no ChrRaces row");
+        assert!(
+            !gate(&ObjectStore(Default::default())),
+            "no BYTES_1 reads race 0"
+        );
+        let human = fx::corpse(fx::HUMAN, false);
+        assert!(!corpse_friendly(&human, None, Some(&me)), "no catalog");
+        assert!(!corpse_friendly(&human, Some(&factions), None), "no player");
+        let no_template = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(35, 999)]));
+        assert!(
+            !corpse_friendly(&human, Some(&factions), Some(&no_template)),
+            "a template the table lacks"
+        );
+    }
+
+    /// The same gate on the shipped `ChrRaces.dbc` and `FactionTemplate.dbc`: a human (template 1)
+    /// stands friendly toward every Alliance race's corpse and not toward a Horde one's.
+    #[test]
+    fn the_corpse_gate_splits_the_sides_on_the_shipped_tables() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let factions = Factions::from_catalog(
+            benilla_formats::load_faction_catalog(&mut chain).expect("faction tables"),
+        );
+        let me = fx::caster(1.5);
+        let gate = |race| corpse_friendly(&fx::corpse(race, false), Some(&factions), Some(&me));
+        for race in [1, 3, 4, 7] {
+            assert!(gate(race), "Alliance race {race}");
+        }
+        for race in [2, 5, 6, 8] {
+            assert!(!gate(race), "Horde race {race}");
+        }
+        assert!(!gate(0) && !gate(10), "a race with no row");
+    }
 }

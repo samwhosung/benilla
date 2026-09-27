@@ -62,7 +62,7 @@ pub(crate) use price_discount::vendor_price_discount;
 pub(crate) use price_discount::{stormwind_fixture, HUMAN_WARRIOR};
 // The attack-with-no-target request, and the same nearest-enemy core called synchronously for the
 // pet bar's Attack, whose order must leave in the frame it was pressed.
-pub(crate) use relations::{can_assist, can_attack, can_interact};
+pub(crate) use relations::{can_assist, can_attack, can_interact, corpse_friendly};
 pub(crate) use scan::{attack_order_target, AttackNearestRequest, TargetScan};
 // The chat layer's by-name asks (`/target`, `/assist`).
 pub(crate) use by_name::{AssistRequest, TargetByNameRequest};

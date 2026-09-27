@@ -103,6 +103,8 @@ pub(crate) enum TargetedBind {
     Object(u64),
     /// The world click's unit guid.
     Unit(u64),
+    /// The world click's corpse guid and the corpse bit `BindTarget`'s corpse arm bound.
+    Corpse(u64, benilla_protocol::messages::CorpseTarget),
 }
 
 impl CastLadder<'_, '_> {
@@ -132,6 +134,11 @@ impl CastLadder<'_, '_> {
                     spell_id,
                     target: Some(unit_guid),
                 },
+                TargetedBind::Corpse(corpse_guid, target) => ClientCommand::CastSpellCorpse {
+                    spell_id,
+                    target,
+                    corpse_guid,
+                },
             },
             CastCommit::Item {
                 bag_index,
@@ -148,6 +155,7 @@ impl CastLadder<'_, '_> {
                     TargetedBind::Item(guid) => UseItemTarget::Item(guid),
                     TargetedBind::Object(guid) => UseItemTarget::Object(guid),
                     TargetedBind::Unit(guid) => UseItemTarget::Unit(guid),
+                    TargetedBind::Corpse(guid, target) => UseItemTarget::Corpse(target, guid),
                 },
             },
         };

@@ -32,7 +32,9 @@ pub(crate) use inflight::{
 };
 pub(crate) use mods::{SpellModifiers, OP_COST};
 // `TargetingWants` is exported for the ground reticle, which draws for the location word alone.
-pub(crate) use targeting::{ground_cast_radius, PicksSelf, SpellTargeting, TargetingWants};
+pub(crate) use targeting::{
+    ground_cast_radius, CorpsePick, PicksSelf, SpellTargeting, TargetingWants,
+};
 
 /// The local self-cancel's set: a reader of the in-flight state orders `.after(LocalCancel)` so a
 /// cast ended by a move, jump or Esc drops its cast bar the same frame.
@@ -54,6 +56,7 @@ impl Plugin for SpellPlugin {
             .init_resource::<SpellTargeting>()
             .init_resource::<targeting::EnchantConfirmItem>()
             .init_resource::<targeting::PicksSelf>()
+            .init_resource::<targeting::CorpsePick>()
             .add_observer(cast_target::on_cvar)
             .add_systems(
                 Update,
@@ -71,7 +74,11 @@ impl Plugin for SpellPlugin {
                     targeting::feed_targeting_to_vm
                         .in_set(UnitFeed)
                         .after(crate::ui_pet::pet_stop_on_old_target_clear),
-                    targeting::publish_picks_self.in_set(UiFeed),
+                    (
+                        targeting::publish_picks_self,
+                        targeting::publish_corpse_pick,
+                    )
+                        .in_set(UiFeed),
                     targeting::drain_stop_targeting.after(UiInput),
                     // The item-target commit (`0x495d60`): after the input pass so a bag click
                     // binds the same frame; outside the target chain, as its clicks never reach

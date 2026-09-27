@@ -83,14 +83,45 @@ pub(super) struct PickPose<'w, 's> {
     rigs: Query<'w, 's, &'static benilla_world::rig_palette::RigSkin>,
 }
 
-/// The local identity and whether the pick takes it, one [`SystemParam`] under the picker's param
-/// limit.
+/// The local identity and what of it and of the corpses the pick takes, one [`SystemParam`] under
+/// the picker's param limit.
 #[derive(bevy::ecs::system::SystemParam)]
-pub(super) struct TargetHoverState<'w> {
+pub(super) struct TargetHoverState<'w, 's> {
     /// For `IsSelectable`'s `UNIT_FIELD_CREATEDBY` clause.
     self_guid: Res<'w, crate::net::SelfGuid>,
     /// `0x6e61a0`'s pick flag `0x20`, as the frame began.
     picks_self: Res<'w, crate::spell::PicksSelf>,
+    /// The corpse leg's word, as the frame began.
+    corpse_pick: Res<'w, crate::spell::CorpsePick>,
+    /// The corpse reaction gate's inputs (`0x6067d0`).
+    factions: Option<Res<'w, super::Factions>>,
+    self_store: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
+}
+
+impl TargetHoverState<'_, '_> {
+    /// Whether an object of this kind is a candidate of this pick, the posed pass and the box
+    /// fallback alike: every unit and player, and a corpse (`0x480816`) always outside targeting,
+    /// whose pick flags carry `0x40`, and while targeting only one `0x6e6260` passes. A corpse
+    /// whose store has not streamed is refused then.
+    fn is_candidate(&self, kind: EntityKind, store: Option<&ObjectStore>) -> bool {
+        match kind {
+            EntityKind::Unit | EntityKind::Player => true,
+            EntityKind::Corpse => {
+                let Some(word) = self.corpse_pick.0 else {
+                    return true;
+                };
+                store.is_some_and(|store| {
+                    crate::spell::targeting::corpse_pick_admits(
+                        word,
+                        store,
+                        self.factions.as_deref(),
+                        self.self_store.iter().next(),
+                    )
+                })
+            }
+            _ => false,
+        }
+    }
 }
 
 /// The posed pick's geometry under one model root: its skinned parts. Ours are dropped while
@@ -222,10 +253,7 @@ pub(super) fn update_hover(
         }
         // Units, players and corpses: the reference picks every CGObject in one trace and
         // switches on type at the end, below.
-        if !matches!(
-            net.kind,
-            EntityKind::Unit | EntityKind::Player | EntityKind::Corpse
-        ) {
+        if !target_state.is_candidate(net.kind, store) {
             continue;
         }
         // Not drawn, not clickable. Checked before `faithful.insert`, so an undrawn unit is out by
@@ -324,15 +352,13 @@ pub(super) fn update_hover(
         if !picks_self && roots.get(parent).is_ok_and(|root| root.1) {
             continue;
         }
-        // The same kinds as the posed pick. A bone pile lands here: its corpse model has no
+        // The same candidates as the posed pick. A bone pile lands here: its corpse model has no
         // skeleton, so only this box test can pick it.
         let Ok((_, parent_net)) = units.get(parent) else {
             continue;
         };
-        if !matches!(
-            parent_net.kind,
-            EntityKind::Unit | EntityKind::Player | EntityKind::Corpse
-        ) {
+        let store = roots.get(parent).ok().and_then(|root| root.6);
+        if !target_state.is_candidate(parent_net.kind, store) {
             continue;
         }
         if let Some(t) = ray_mesh_bounds(origin, dir, aabb, gt) {
@@ -854,10 +880,9 @@ mod tests {
         );
     }
 
-    /// Our own body joins the unit pick only while [`crate::spell::PicksSelf`] says the word takes
-    /// it (`0x480610` at `480638`), here through the box fallback of a body with no skinned parts.
-    #[test]
-    fn our_body_joins_the_pick_only_while_the_word_takes_it() {
+    /// The picker's inputs with a camera ten yards up the Z axis, looking down it through a
+    /// 100-pixel square with the cursor at its centre, over whatever stands at the origin.
+    fn pick_world() -> World {
         use bevy::camera::RenderTargetInfo;
         use bevy::window::WindowResolution;
 
@@ -874,7 +899,7 @@ mod tests {
         world.init_resource::<benilla_world::rig_palette::RigPalettes>();
         world.insert_resource(crate::net::SelfGuid(Some(1)));
         world.init_resource::<crate::spell::PicksSelf>();
-        // Ten yards up the Z axis, looking down it through a 100-pixel square.
+        world.init_resource::<crate::spell::CorpsePick>();
         let mut camera = Camera::default();
         camera.computed.clip_from_view = Mat4::perspective_infinite_reverse_rh(1.0, 1.0, 0.1);
         camera.computed.target_info = Some(RenderTargetInfo {
@@ -892,6 +917,25 @@ mod tests {
         };
         window.set_cursor_position(Some(Vec2::splat(50.0)));
         world.spawn((window, PrimaryWindow));
+        world
+    }
+
+    /// One drawn pick box around the origin, the box fallback's geometry for a partless body.
+    fn pick_box(world: &mut World, body: Entity) {
+        world.spawn((
+            ChildOf(body),
+            CreaturePickPart,
+            Aabb::from_min_max(Vec3::splat(-1.0), Vec3::splat(1.0)),
+            GlobalTransform::default(),
+            InheritedVisibility::VISIBLE,
+        ));
+    }
+
+    /// Our own body joins the unit pick only while [`crate::spell::PicksSelf`] says the word takes
+    /// it (`0x480610` at `480638`), here through the box fallback of a body with no skinned parts.
+    #[test]
+    fn our_body_joins_the_pick_only_while_the_word_takes_it() {
+        let mut world = pick_world();
         // Us, at the origin under the cursor, with one drawn pick box.
         let me = world
             .spawn((
@@ -906,13 +950,7 @@ mod tests {
                 InheritedVisibility::VISIBLE,
             ))
             .id();
-        world.spawn((
-            ChildOf(me),
-            CreaturePickPart,
-            Aabb::from_min_max(Vec3::splat(-1.0), Vec3::splat(1.0)),
-            GlobalTransform::default(),
-            InheritedVisibility::VISIBLE,
-        ));
+        pick_box(&mut world, me);
         let hover = |world: &mut World, picks: bool| {
             world.resource_mut::<crate::spell::PicksSelf>().0 = picks;
             world
@@ -924,6 +962,76 @@ mod tests {
         assert_eq!(hover(&mut world, false), None, "not ours to pick");
         assert_eq!(hover(&mut world, true), Some(me), "a word that takes us");
         assert_eq!(hover(&mut world, false), None, "and not once it ends");
+    }
+
+    /// A corpse is a candidate outside targeting (`0x5c` carries flag `0x40`); while targeting,
+    /// only under a word in `0x8600` and only one `0x6e6260` passes, as
+    /// [`crate::spell::CorpsePick`] carries the standing word to the picker.
+    #[test]
+    fn a_corpse_joins_the_pick_as_the_word_admits_it() {
+        use crate::spell::targeting::corpse_fixture as fx;
+
+        let hover = |corpse: ObjectStore, word: Option<u16>| {
+            let mut world = pick_world();
+            world.insert_resource(fx::factions());
+            world.init_resource::<crate::spell::SpellTargeting>();
+            // Us, a human, away from the ray: the reaction gate's other side.
+            world.spawn((
+                SelfPlayer,
+                Guid(1),
+                GlobalTransform::from_translation(Vec3::new(50.0, 0.0, 0.0)),
+                fx::caster(1.5),
+            ));
+            let body = world
+                .spawn((
+                    Guid(fx::CORPSE),
+                    NetEntity {
+                        kind: EntityKind::Corpse,
+                        display_id: None,
+                        scale: 1.0,
+                    },
+                    GlobalTransform::default(),
+                    InheritedVisibility::VISIBLE,
+                    corpse,
+                ))
+                .id();
+            pick_box(&mut world, body);
+            if let Some(word) = word {
+                world.resource_mut::<crate::spell::SpellTargeting>().enter(
+                    fx::RESURRECTION,
+                    crate::spell::CastCommit::Spell,
+                    word,
+                );
+            }
+            world
+                .run_system_cached(crate::spell::targeting::publish_corpse_pick)
+                .expect("the word publishes");
+            world
+                .run_system_cached(update_hover)
+                .expect("the pick runs");
+            let hovered = *world.resource::<Hovered>();
+            assert_eq!(hovered.target, None, "a corpse is never the unit slot");
+            hovered.corpse.inspect(|&e| assert_eq!(e, body)).is_some()
+        };
+        let friend = || fx::corpse(fx::HUMAN, false);
+        let foe = || fx::corpse(fx::ORC, false);
+        let bones = || fx::corpse(fx::HUMAN, true);
+
+        // Not targeting: every corpse, bones and foes included.
+        for (corpse, what) in [(friend(), "friend"), (foe(), "foe"), (bones(), "bones")] {
+            assert!(hover(corpse, None), "{what} outside targeting");
+        }
+        // Resurrection's word: a friend's corpse, never a foe's or bones.
+        assert!(hover(friend(), Some(0x8000)));
+        assert!(!hover(foe(), Some(0x8000)), "a hostile corpse");
+        assert!(!hover(bones(), Some(0x8000)), "bones");
+        // The enemy bit takes the other side.
+        assert!(hover(foe(), Some(0x0200)));
+        assert!(!hover(friend(), Some(0x0200)));
+        // A heal word sets no flag `0x40`: the corpse is out of the pick, so a unit behind it
+        // is reachable.
+        assert!(!hover(friend(), Some(0x0002)));
+        assert!(!hover(friend(), Some(0x0040)), "a ground word");
     }
 
     /// Naxxramas's "Unholy Axe" is an `InvisibleStalker` body with no vertices holding a real axe,

@@ -1029,6 +1029,11 @@ fn writer_loop(
                         count,
                     } => w.destroy_item(bag_index, slot, count),
                     ClientCommand::CastSpell { spell_id, target } => w.cast_spell(spell_id, target),
+                    ClientCommand::CastSpellCorpse {
+                        spell_id,
+                        target,
+                        corpse_guid,
+                    } => w.cast_spell_corpse(spell_id, target, corpse_guid),
                     ClientCommand::CastSpellAtDest { spell_id, dest } => {
                         w.cast_spell_at_dest(spell_id, dest)
                     }
