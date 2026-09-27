@@ -83,12 +83,35 @@ pub(super) struct PickPose<'w, 's> {
     rigs: Query<'w, 's, &'static benilla_world::rig_palette::RigSkin>,
 }
 
-/// The local identity and armed spell word, bundled to keep the picker below Bevy's system-param
-/// limit while letting an armed unit cursor include the player model.
+/// The local identity and whether the pick takes it, one [`SystemParam`] under the picker's param
+/// limit.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct TargetHoverState<'w> {
+    /// For `IsSelectable`'s `UNIT_FIELD_CREATEDBY` clause.
     self_guid: Res<'w, crate::net::SelfGuid>,
-    targeting: Res<'w, crate::spell::SpellTargeting>,
+    /// `0x6e61a0`'s pick flag `0x20`, as the frame began.
+    picks_self: Res<'w, crate::spell::PicksSelf>,
+}
+
+/// The posed pick's geometry under one model root: its skinned parts. Ours are dropped while
+/// hidden: first person hides them ([`crate::player::apply_self_model_fade`] at alpha 0), where the
+/// reference's camera fade clears its player-visible flag `[0xc4d74c]` (`0x482c41`) and
+/// `ShouldRender 0x5ec8f0` refuses the active player, so it is never picked.
+#[allow(clippy::type_complexity)] // the picker's own part query, borrowed as-is
+fn posed_parts<'a>(
+    kids: &Children,
+    parts: &'a Query<(
+        &Mesh3d,
+        &benilla_world::rig_palette::RigPart,
+        Option<&InheritedVisibility>,
+    )>,
+    is_self: bool,
+) -> Vec<(&'a Mesh3d, &'a benilla_world::rig_palette::RigPart)> {
+    kids.iter()
+        .filter_map(|c| parts.get(c).ok())
+        .filter(|(_, _, drawn)| !is_self || drawn.is_none_or(|v| v.get()))
+        .map(|(mesh, part, _)| (mesh, part))
+        .collect()
 }
 
 /// The unit under the cursor, as the reference's pick (`0x7089c0`) finds it. Broad phase: the ray
@@ -110,8 +133,7 @@ pub(super) fn update_hover(
     mut hovered: ResMut<Hovered>,
     mesh_assets: Res<Assets<Mesh>>,
     pose: PickPose,
-    // The ordinary mouseover deliberately excludes the local player, but a residual unit-target
-    // word must be able to bind the player's visible model.
+    // Our own body joins the pick only while a targeting word takes it (`0x6e61a0`).
     target_state: TargetHoverState,
     // Last frame's pick, which outranks everything in pass 2 (the reference's anti-flicker cache).
     mut last_pick: Local<Option<Entity>>,
@@ -135,7 +157,11 @@ pub(super) fn update_hover(
     >,
     // The part children of every pick model root: body, worn items and mount.
     child_sets: Query<&Children>,
-    parts: Query<(&Mesh3d, &benilla_world::rig_palette::RigPart)>,
+    parts: Query<(
+        &Mesh3d,
+        &benilla_world::rig_palette::RigPart,
+        Option<&InheritedVisibility>,
+    )>,
     // The box fallback: every `CreaturePickPart`, the fallback cube included.
     meshes: Query<
         (
@@ -188,13 +214,10 @@ pub(super) fn update_hover(
     let mut candidates: Vec<(Entity, u8, Vec<AssetId<Mesh>>, Vec<Mat4>)> = Vec::new();
     // Units with skinned parts: out of the box fallback even when the broad phase rejects them.
     let mut faithful: HashSet<Entity> = HashSet::new();
+    let picks_self = target_state.picks_self.0;
     for (entity, is_self, gt, net, anims, drv, store, children, mount_child, drawn, held) in &roots
     {
-        if is_self
-            && !target_state
-                .targeting
-                .wants(crate::spell::TargetingWants::Unit)
-        {
+        if is_self && !picks_self {
             continue;
         }
         // Units, players and corpses: the reference picks every CGObject in one trace and
@@ -259,7 +282,7 @@ pub(super) fn update_hover(
             let Ok(kids) = child_sets.get(root) else {
                 continue;
             };
-            let sk: Vec<_> = kids.iter().filter_map(|c| parts.get(c).ok()).collect();
+            let sk = posed_parts(kids, &parts, is_self);
             let Some(palette) = palette_of(&sk) else {
                 continue;
             };
@@ -298,11 +321,7 @@ pub(super) fn update_hover(
         if faithful.contains(&parent) {
             continue; // posed-mesh-tested above
         }
-        if roots.get(parent).is_ok_and(|root| root.1)
-            && !target_state
-                .targeting
-                .wants(crate::spell::TargetingWants::Unit)
-        {
+        if !picks_self && roots.get(parent).is_ok_and(|root| root.1) {
             continue;
         }
         // The same kinds as the posed pick. A bone pile lands here: its corpse model has no
@@ -790,6 +809,121 @@ mod tests {
             "a card whose owner is gone resolves to nothing that carries a guid"
         );
         assert_eq!(resolved[4], net, "the net entity resolves to itself");
+    }
+
+    /// First person hides our own parts (`Visibility::Hidden`), and the posed pick drops them, as
+    /// `ShouldRender 0x5ec8f0` refuses the active player then; anyone else's stay the root's call.
+    #[test]
+    fn our_hidden_parts_leave_the_posed_pick() {
+        let mut world = World::new();
+        let root = world.spawn_empty().id();
+        let rig = world.spawn_empty().id();
+        let part = |world: &mut World, drawn| {
+            world
+                .spawn((
+                    ChildOf(root),
+                    Mesh3d(Handle::default()),
+                    benilla_world::rig_palette::RigPart(rig),
+                    drawn,
+                ))
+                .id()
+        };
+        let shown = part(&mut world, InheritedVisibility::VISIBLE);
+        part(&mut world, InheritedVisibility::HIDDEN);
+        let count = move |is_self: bool| {
+            move |kids: Query<&Children>,
+                  parts: Query<(
+                &Mesh3d,
+                &benilla_world::rig_palette::RigPart,
+                Option<&InheritedVisibility>,
+            )>| {
+                posed_parts(kids.get(root).expect("the parts"), &parts, is_self).len()
+            }
+        };
+        assert_eq!(world.run_system_once(count(false)).unwrap(), 2);
+        assert_eq!(
+            world.run_system_once(count(true)).unwrap(),
+            1,
+            "ours: only the drawn part"
+        );
+        world.entity_mut(shown).insert(InheritedVisibility::HIDDEN);
+        assert_eq!(
+            world.run_system_once(count(true)).unwrap(),
+            0,
+            "first person: nothing of ours to pick"
+        );
+    }
+
+    /// Our own body joins the unit pick only while [`crate::spell::PicksSelf`] says the word takes
+    /// it (`0x480610` at `480638`), here through the box fallback of a body with no skinned parts.
+    #[test]
+    fn our_body_joins_the_pick_only_while_the_word_takes_it() {
+        use bevy::camera::RenderTargetInfo;
+        use bevy::window::WindowResolution;
+
+        let mut world = World::new();
+        world.init_resource::<CameraControl>();
+        world.init_resource::<PointerOverUi>();
+        world.insert_resource(PickOcclusion {
+            distance: f32::INFINITY,
+            point: None,
+        });
+        world.init_resource::<crate::vplates::PlateHover>();
+        world.init_resource::<Hovered>();
+        world.init_resource::<Assets<Mesh>>();
+        world.init_resource::<benilla_world::rig_palette::RigPalettes>();
+        world.insert_resource(crate::net::SelfGuid(Some(1)));
+        world.init_resource::<crate::spell::PicksSelf>();
+        // Ten yards up the Z axis, looking down it through a 100-pixel square.
+        let mut camera = Camera::default();
+        camera.computed.clip_from_view = Mat4::perspective_infinite_reverse_rh(1.0, 1.0, 0.1);
+        camera.computed.target_info = Some(RenderTargetInfo {
+            physical_size: UVec2::splat(100),
+            scale_factor: 1.0,
+        });
+        world.spawn((
+            camera,
+            GlobalTransform::from_translation(Vec3::new(0.0, 0.0, 10.0)),
+            WorldCamera,
+        ));
+        let mut window = Window {
+            resolution: WindowResolution::new(100, 100),
+            ..Default::default()
+        };
+        window.set_cursor_position(Some(Vec2::splat(50.0)));
+        world.spawn((window, PrimaryWindow));
+        // Us, at the origin under the cursor, with one drawn pick box.
+        let me = world
+            .spawn((
+                SelfPlayer,
+                Guid(1),
+                NetEntity {
+                    kind: EntityKind::Player,
+                    display_id: None,
+                    scale: 1.0,
+                },
+                GlobalTransform::default(),
+                InheritedVisibility::VISIBLE,
+            ))
+            .id();
+        world.spawn((
+            ChildOf(me),
+            CreaturePickPart,
+            Aabb::from_min_max(Vec3::splat(-1.0), Vec3::splat(1.0)),
+            GlobalTransform::default(),
+            InheritedVisibility::VISIBLE,
+        ));
+        let hover = |world: &mut World, picks: bool| {
+            world.resource_mut::<crate::spell::PicksSelf>().0 = picks;
+            world
+                .run_system_cached(update_hover)
+                .expect("the pick runs");
+            world.resource::<Hovered>().target
+        };
+
+        assert_eq!(hover(&mut world, false), None, "not ours to pick");
+        assert_eq!(hover(&mut world, true), Some(me), "a word that takes us");
+        assert_eq!(hover(&mut world, false), None, "and not once it ends");
     }
 
     /// Naxxramas's "Unholy Axe" is an `InvisibleStalker` body with no vertices holding a real axe,

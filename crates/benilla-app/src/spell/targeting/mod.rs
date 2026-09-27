@@ -163,6 +163,10 @@ impl TargetingWants {
     }
 }
 
+/// The word bits `0x6e61a0` lets the world pick take the local player for: unit, raid, party,
+/// assist, the explicit gate and the ally corpse, never enemy (`0x80`) or enemy corpse (`0x200`).
+const SELF_PICK_BITS: u16 = 0x850e;
+
 /// The targeting mode, `Some` while the flag_word is nonzero. Entered by the cast-send path
 /// ([`super::cast_target::CastWireTarget::Targeting`]), cleared by a commit or a cancel.
 #[derive(Resource, Default)]
@@ -204,6 +208,18 @@ impl SpellTargeting {
             checks.relations_clear(t.word, entity)
                 && !checks.excluded_caster(t.spell_id, entity)
                 && checks.range_refusal(t.spell_id, entity).is_none()
+        })
+    }
+
+    /// `0x6e61a0`: whether the world pick takes the local player, the pick flag `0x20` that
+    /// `0x480610` tests at `48062c`. Never outside targeting (`480638`); while targeting, a word in
+    /// `0x850e` whose spell lacks `AttributesEx & 0x80000` (`6e61cf`). An unknown spell passes.
+    pub(crate) fn picks_self(&self, spells: Option<&crate::ui_action::Spells>) -> bool {
+        self.0.as_ref().is_some_and(|t| {
+            t.word & SELF_PICK_BITS != 0
+                && !spells
+                    .and_then(|s| s.catalog.get(t.spell_id))
+                    .is_some_and(|d| d.excludes_caster())
         })
     }
 
@@ -277,6 +293,24 @@ pub(crate) fn cancel_targeting_on_right_press(
     }
     debug!("ui_action: targeting cancelled (right-click)");
     targeting.clear();
+}
+
+/// [`SpellTargeting::picks_self`] as the frame began, which the world pick reads
+/// ([`crate::target`]'s hover): the word the VM's `SpellIsTargeting` answers from, in a declared
+/// order against every cast drain that arms or ends the cursor after the input pass.
+#[derive(Resource, Default)]
+pub(crate) struct PicksSelf(pub(crate) bool);
+
+/// Publish [`PicksSelf`] before the input pass.
+pub(crate) fn publish_picks_self(
+    targeting: Res<SpellTargeting>,
+    spells: Option<Res<crate::ui_action::Spells>>,
+    mut picks: ResMut<PicksSelf>,
+) {
+    let now = targeting.picks_self(spells.as_deref());
+    if picks.0 != now {
+        picks.0 = now;
+    }
 }
 
 /// Push the targeting state into the VM each frame, before the input pass, so a word armed last
@@ -486,6 +520,33 @@ mod tests {
             !can(5.0, BANDED, "target"),
             "inside the minimum answers nil"
         );
+    }
+
+    /// `0x6e61a0`: the pick takes us only while targeting, for a word in `0x850e` whose spell
+    /// lacks `AttributesEx & 0x80000`; [`PicksSelf`] carries it to the picker.
+    #[test]
+    fn the_pick_takes_us_only_for_a_friendly_word_that_admits_the_caster() {
+        let (mut world, _rx, _) = unit_world(10.0);
+        let picks = |world: &mut World| {
+            world
+                .run_system_cached(publish_picks_self)
+                .expect("the flag publishes");
+            world.resource::<PicksSelf>().0
+        };
+        world.init_resource::<PicksSelf>();
+        assert!(!picks(&mut world), "never outside targeting");
+        for word in [0x0002, 0x0004, 0x0008, 0x0100, 0x0400, 0x8000, 0x0102] {
+            arm(&mut world, HEAL, word);
+            assert!(picks(&mut world), "{word:#06x} takes us");
+        }
+        for word in [0x0080, 0x0200, 0x0040, 0x0010, 0x4800] {
+            arm(&mut world, HEAL, word);
+            assert!(!picks(&mut world), "{word:#06x} never takes us");
+        }
+        arm(&mut world, NOT_SELF, 0x0100);
+        assert!(!picks(&mut world), "a spell that excludes its caster");
+        world.resource_mut::<SpellTargeting>().clear();
+        assert!(!picks(&mut world), "and off again when the cursor ends");
     }
 
     /// A terrain click while a poison is armed must not ship a DEST block for an item spell.
