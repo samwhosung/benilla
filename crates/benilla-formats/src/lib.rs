@@ -47,6 +47,10 @@ mod gm_ticket_category;
 pub use gm_ticket_category::{
     load_gm_ticket_categories, GmTicketCategory, GmTicketCategoryCatalog,
 };
+mod cfg_categories;
+pub use cfg_categories::{load_realm_categories, RealmCategory};
+mod wow_ini;
+pub use wow_ini::client_region;
 mod itembagfamily;
 pub use itembagfamily::{load_item_bag_families, ItemBagFamilyCatalog};
 mod itemclass;
