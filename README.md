@@ -72,11 +72,19 @@ benilla builds and runs on macOS, Linux and Windows. You need:
 WOW_DATA=/path/to/WoW/Data cargo run --release -p benilla
 ```
 
+On Windows, in PowerShell:
+
+```powershell
+$env:WOW_DATA="C:\path\to\WoW\Data"; cargo run --release -p benilla
+```
+
 `WOW_DATA` names the install's `Data` folder; a link to the install named `WoW` at the repo root
-does the same. The server defaults to `localhost:3724`, the stock auth port. Point `WOW_HOST` at
-another (`WOW_HOST=play.example.com`, or `play.example.com:5000` for a remapped port), or set it
-from the Realmlist button on the login screen, which remembers it. Credentials go in at the login
-screen, or set `WOW_USER` and `WOW_PASS` to skip it.
+does the same (`ln -s /path/to/WoW WoW`, or on Windows a junction, which needs no admin rights:
+`New-Item -ItemType Junction -Path WoW -Target C:\path\to\WoW`). The server defaults to
+`localhost:3724`, the stock auth port. Point `WOW_HOST` at another (`WOW_HOST=play.example.com`, or
+`play.example.com:5000` for a remapped port), or set it from the Realmlist button on the login
+screen, which remembers it. Credentials go in at the login screen, or set `WOW_USER` and `WOW_PASS`
+to skip it.
 
 Settings, screenshots and addons live in `benilla-config/` at the repo root: a 1.12 addon goes in
 `benilla-config/AddOns/`. [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) has the rest, from the
