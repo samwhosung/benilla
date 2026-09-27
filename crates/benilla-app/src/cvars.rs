@@ -403,8 +403,12 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // The default matches; Deviation: here the dial multiplies the camera's own rate, because
     // benilla does not change the OS pointer speed, a system-wide setting.
     same("mousespeed", "1"),
-    // MAX_FOLLOW_DIST (`UIOptionsFrame.lua:90`), a factor over `cameraDistanceMax`'s 15 yd
-    // (`0x84fbd0`); registered "1.0" (`0x82e92c`).
+    // The zoom-out limit is `cameraDistanceMax × cameraDistanceMaxFactor`, held to [0, 50]
+    // (`0x5112d6`). `cameraDistanceMax` (`0x50beb2`, default `0x84fbd0`) has no panel row; its
+    // validator `0x50b310` refuses a value outside [0, 50], and `player::camera::on_cvar` does the
+    // same. The factor is MAX_FOLLOW_DIST (`UIOptionsFrame.lua:90`), registered "1.0" (`0x82e92c`)
+    // with no validator: the slider's 1 to 2 is the slider's, not the CVar's.
+    same("cameraDistanceMax", "15.0"),
     same("cameraDistanceMaxFactor", "1"),
     // `cameraSmoothStyle` (`0x50ba92`, default `[0x84f4f4]` "1"), the auto-return behind the
     // character. The engine's enum is 0 Never, 1 Smart, 2 Always, as the stock dropdown writes it
@@ -1438,9 +1442,8 @@ mod tests {
     use crate::chat_bubble::BubbleConfig;
     use crate::minimap::MinimapZoom;
     use crate::nameplates::NameConfig;
-    use crate::player::camera::{
-        FollowConfig, FollowStyle, LookConfig, ZoomLimit, FOLLOW_SPEED_RANGE,
-    };
+    use crate::player::camera::{FollowConfig, FollowStyle, LookConfig, FOLLOW_SPEED_RANGE};
+    use crate::player::camera_zoom::ZoomLimit;
     use crate::portrait::PaneRate;
     use crate::sound::SoundConfig;
     use crate::target::ClickConfig;
@@ -1577,6 +1580,7 @@ mod tests {
             LookConfig::default().invert_pitch
         );
         assert_eq!(d["mousespeed"], LookConfig::default().sensitivity);
+        assert_eq!(d["cameraDistanceMax"], ZoomLimit::default().distance_max());
         assert_eq!(d["cameraDistanceMaxFactor"], ZoomLimit::default().factor());
         let follow = FollowConfig::default();
         assert_eq!(
@@ -1812,11 +1816,25 @@ mod tests {
             res::<FollowConfig>(&app).yaw_speed,
             *FOLLOW_SPEED_RANGE.end()
         );
-        // The max-orbit factor lands as YARDS on the knob (base 15 x factor), clamped to 1..2.
+        // The max orbit lands as yards on the knob: `cameraDistanceMax` x the factor, held to
+        // [0, 50]; the factor is not held to its slider's 1 to 2.
         apply(&mut app, "cameraDistanceMaxFactor", "1");
         assert_eq!(res::<ZoomLimit>(&app).max, 15.0);
-        apply(&mut app, "cameradistancemaxfactor", "5");
-        assert_eq!(res::<ZoomLimit>(&app).max, 30.0);
+        apply(&mut app, "cameradistancemaxfactor", "3");
+        assert_eq!(res::<ZoomLimit>(&app).max, 45.0);
+        apply(&mut app, "cameraDistanceMaxFactor", "1");
+        apply(&mut app, "cameraDistanceMax", "25");
+        assert_eq!(res::<ZoomLimit>(&app).max, 25.0);
+        apply(&mut app, "cameraDistanceMaxFactor", "3");
+        assert_eq!(res::<ZoomLimit>(&app).max, 50.0);
+        apply(&mut app, "cameraDistanceMaxFactor", "-1");
+        assert_eq!(res::<ZoomLimit>(&app).max, 0.0);
+        apply(&mut app, "cameraDistanceMaxFactor", "nan");
+        assert_eq!(res::<ZoomLimit>(&app).max, 50.0);
+        // Out of `cameraDistanceMax`'s validator range: refused at the knob, 25 stands.
+        apply(&mut app, "cameraDistanceMaxFactor", "1");
+        apply(&mut app, "cameraDistanceMax", "60");
+        assert_eq!(res::<ZoomLimit>(&app).max, 25.0);
         apply(&mut app, "autoLootDefault", "1");
         assert!(res::<LootConfig>(&app).auto_loot);
         apply(&mut app, "showLootSpam", "0");

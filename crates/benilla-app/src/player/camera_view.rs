@@ -25,8 +25,9 @@ use benilla_world::view::WorldCamera;
 
 use crate::creature_anim::wrap_pi;
 
-use super::camera::{CameraControl, FlyCam, CAM_DIST_MAX, CAM_DIST_MIN, CAM_PITCH_LIMIT};
+use super::camera::{CameraControl, FlyCam, CAM_PITCH_LIMIT};
 use super::camera_saved::{pitch_from_file, pitch_to_file};
+use super::camera_zoom::{CAM_DIST_MAX, CAM_DIST_MIN};
 use super::Player;
 
 /// The reference's five views, through the UI crate's constant so the Lua range check agrees.

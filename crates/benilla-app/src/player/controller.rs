@@ -16,7 +16,7 @@ pub(super) fn control(
     pointer: (
         Res<AccumulatedMouseMotion>,
         Res<camera::LookConfig>,
-        Res<camera::ZoomLimit>,
+        Res<camera_zoom::ZoomLimit>,
         Res<camera::FollowConfig>,
         Res<camera_dynamics::CameraOptions>,
         // Only `nearclip` is read here, for the self-avatar fade.

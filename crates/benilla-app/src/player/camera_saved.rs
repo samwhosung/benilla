@@ -18,9 +18,8 @@ use bevy::prelude::*;
 
 use crate::char_select::{ClientState, InWorldGated};
 
-use super::camera::{
-    CameraControl, FlyCam, CAM_DIST_DEFAULT, CAM_DIST_MAX, CAM_DIST_MIN, CAM_PITCH_LIMIT,
-};
+use super::camera::{CameraControl, FlyCam, CAM_PITCH_LIMIT};
+use super::camera_zoom::{CAM_DIST_DEFAULT, CAM_DIST_MAX, CAM_DIST_MIN};
 use super::Player;
 use benilla_world::view::WorldCamera;
 

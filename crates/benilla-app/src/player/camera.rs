@@ -1,5 +1,5 @@
-//! The third-person camera rig: the two mouse-look modes, the wheel-zoom glide, the
-//! collision-swept boom on the framing pivot, and the self-avatar fade into first person.
+//! The third-person camera rig: the two mouse-look modes, the collision-swept boom on the
+//! framing pivot, and the self-avatar fade into first person. The zoom is [`super::camera_zoom`].
 
 use bevy::ecs::entity::EntityHashSet;
 use bevy::input::mouse::AccumulatedMouseMotion;
@@ -9,6 +9,7 @@ use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
 use super::camera_channel::{Arm, SmoothChannel};
 use super::camera_dynamics::{DynamicsInput, HeadBob, SmartPivot, TerrainTilt};
+use super::camera_zoom::{ZoomLimit, CAM_DISTANCE_MAX_RANGE};
 use crate::creature_anim::wrap_pi;
 use crate::net::Embodied;
 use benilla_assets::materials::WowModelMaterial;
@@ -57,53 +58,6 @@ impl PressGesture {
     }
 }
 
-/// The zoom floor, yd: at 0 the eye sits at the framing pivot, inside the head, and the avatar
-/// fades out. The reference clamps the orbit to `cameraDistanceMax × cameraDistanceMaxFactor`,
-/// capped at 50 (`0x5112d0`). Deviation: the starting zoom, [`CAM_DIST_DEFAULT`], is 15 yd where
-/// the reference's `cameraDistance` is 5.55 (`0x84f488`), for a wider view.
-pub(super) const CAM_DIST_MIN: f32 = 0.0;
-/// The reference's `cameraDistanceMax` (default 15); 1.12's panel offers only the factor.
-pub(super) const CAM_DIST_BASE_MAX: f32 = 15.0;
-/// `cameraDistanceMaxFactor`'s slider, MAX_FOLLOW_DIST (1 to 2 by 0.1, `UIOptionsFrame.lua:90`).
-pub(crate) const CAM_DIST_FACTOR_RANGE: std::ops::RangeInclusive<f32> = 1.0..=2.0;
-/// The factor slider's top: the clamp for a distance read back off disk ([`ZoomLimit`] is live).
-pub(super) const CAM_DIST_MAX: f32 = CAM_DIST_BASE_MAX * 2.0;
-pub(super) const CAM_DIST_DEFAULT: f32 = 15.0;
-
-/// The max orbit distance: 1.12's `cameraDistanceMaxFactor` over [`CAM_DIST_BASE_MAX`], 15 yd at
-/// the reference's defaults (`cameraDistanceMax` "15.0" at `0x84fbd0`, `cameraDistanceMaxFactor`
-/// "1.0" at `0x82e92c`). Lowering the factor pulls the live target in on the next frame.
-#[derive(Resource)]
-pub(crate) struct ZoomLimit {
-    pub(crate) max: f32,
-}
-
-impl Default for ZoomLimit {
-    fn default() -> Self {
-        // Factor 1.0, the reference's default; `CAM_DIST_MAX` is the slider's top.
-        Self {
-            max: CAM_DIST_BASE_MAX,
-        }
-    }
-}
-
-impl ZoomLimit {
-    pub(crate) fn set_factor(&mut self, factor: f32) {
-        let f = factor.clamp(*CAM_DIST_FACTOR_RANGE.start(), *CAM_DIST_FACTOR_RANGE.end());
-        self.max = CAM_DIST_BASE_MAX * f;
-    }
-
-    /// The live factor, the inverse of [`Self::set_factor`], for tests.
-    #[cfg(test)]
-    pub(crate) fn factor(&self) -> f32 {
-        self.max / CAM_DIST_BASE_MAX
-    }
-}
-/// Yards per wheel notch, the stock bindings' `CameraZoomIn(1.0)` (`Bindings.xml:707`).
-const CAM_ZOOM_STEP: f32 = 1.0;
-/// Zoom speed in yd/s, `cameraDistanceMoveSpeed`'s default: the reference glides the distance to
-/// the wheel target at this constant speed (`0x5112d0`), not an ease.
-const CAM_MOVE_SPEED: f32 = 8.33;
 /// Radians of camera rotation per raw mouse unit at the default move speeds and `mousespeed` 1.0.
 const LOOK_SENSITIVITY: f32 = 0.003;
 /// `mousespeed`'s slider, MOUSE_SENSITIVITY (0.5 to 1.5 by 0.05, `UIOptionsFrame.lua:87`).
@@ -136,6 +90,16 @@ pub(crate) fn on_cvar(
                 look.yaw_speed = v;
             } else {
                 look.pitch_speed = v;
+            }
+        }
+        "cameradistancemax" => {
+            if !zoom.set_distance_max(v) {
+                warn!(
+                    "cvar {}: value out of range ({} - {}) — ignored",
+                    ev.name,
+                    CAM_DISTANCE_MAX_RANGE.start(),
+                    CAM_DISTANCE_MAX_RANGE.end()
+                );
             }
         }
         "cameradistancemaxfactor" => zoom.set_factor(v),
@@ -878,20 +842,6 @@ pub(super) fn run_look_session(
     // Freelook is right-held mouse-look or a both-button run, which steers like it; a left-drag
     // orbit is not. This test and the `face_yaw` sync above must stay alike.
     rig.freelook = rig.look == Some(LookButton::Right) || (rig.look.is_some() && both_buttons);
-}
-
-/// Wheel zoom, run every frame: `CAMERAZOOMIN`/`OUT` move the target, and the distance glides to it
-/// at a constant `cameraDistanceMoveSpeed`, as the reference's does. `scroll` is this frame's net
-/// zoom-in in notches (positive is closer).
-pub(super) fn apply_zoom_scroll(scroll: f32, dt: f32, rig: &mut CameraControl, max: f32) {
-    if scroll != 0.0 {
-        rig.target_distance =
-            (rig.target_distance - scroll * CAM_ZOOM_STEP).clamp(CAM_DIST_MIN, max);
-    }
-    // Re-clamp every frame, so lowering the max-distance slider pulls the camera in.
-    rig.target_distance = rig.target_distance.min(max);
-    let max_step = CAM_MOVE_SPEED * dt;
-    rig.distance += (rig.target_distance - rig.distance).clamp(-max_step, max_step);
 }
 
 /// Seat the camera on whatever it orbits: our own body, or the far-sight subject `PLAYER_FARSIGHT`

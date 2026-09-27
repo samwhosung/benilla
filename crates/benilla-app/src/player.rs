@@ -30,6 +30,7 @@ mod body_pose;
 pub(crate) mod camera;
 mod camera_channel;
 pub(crate) mod camera_dynamics;
+pub(crate) mod camera_zoom;
 mod controller;
 mod world_focus;
 // The remembered camera pose, inside `player/` to read the rig's `pub(super)` fields.
@@ -70,10 +71,9 @@ pub(crate) use camera::apply_self_model_fade;
 use controller::control;
 // The private camera and `state` items are re-imported for the modules beside this one, which
 // name them `super::X`.
-use camera::{
-    apply_zoom_scroll, model_pivot_height, run_look_session, FlyCam, LookButton, CAM_DIST_DEFAULT,
-};
 pub(crate) use camera::{head_height, CameraControl, CameraPivot};
+use camera::{model_pivot_height, run_look_session, FlyCam, LookButton};
+use camera_zoom::{apply_zoom_scroll, CAM_DIST_DEFAULT};
 // `/follow`: chat sends the request, `crate::target` resolves the subject into the state, and
 // `follow` owns the motion.
 pub(crate) use follow::{FollowRequest, FollowState};
@@ -224,7 +224,7 @@ impl Plugin for PlayerPlugin {
         app.add_observer(camera::on_cvar);
         app.add_observer(camera_dynamics::on_cvar);
         app.init_resource::<camera::LookConfig>();
-        app.init_resource::<camera::ZoomLimit>();
+        app.init_resource::<camera_zoom::ZoomLimit>();
         app.init_resource::<camera::FollowConfig>();
         app.init_resource::<camera_dynamics::CameraOptions>();
         // Far sight resolves `PLAYER_FARSIGHT` to a pose before `control` seats the camera: a
