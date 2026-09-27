@@ -19,6 +19,7 @@ use crate::Chain;
 const FACTION_TEMPLATE: &str = "DBFilesClient\\FactionTemplate.dbc";
 const FACTION: &str = "DBFilesClient\\Faction.dbc";
 const FACTION_GROUP: &str = "DBFilesClient\\FactionGroup.dbc";
+const CHR_RACES: &str = "DBFilesClient\\ChrRaces.dbc";
 
 /// One `FactionTemplate.dbc` row: the fields the reaction comparator reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -204,9 +205,13 @@ impl Reaction {
     }
 }
 
-/// `FactionTemplate.dbc`, `Faction.dbc` and `FactionGroup.dbc` as id-to-row maps.
+/// `FactionTemplate.dbc`, `Faction.dbc` and `FactionGroup.dbc` as id-to-row maps, and each
+/// `ChrRaces.dbc` race's template.
 pub struct FactionCatalog {
     templates: HashMap<u32, FactionTemplate>,
+    /// Race id to `ChrRaces.dbc` column 2, `FactionID`, a template id: what a corpse's reaction
+    /// (`0x5d7120`) and a unit's PvP team (`0x5efe00`) read for a race.
+    race_templates: HashMap<u8, u32>,
     factions: HashMap<u32, FactionInfo>,
     /// `1 << MaskID` to the localized group name, `GetZonePVPInfo`'s territory line (`0x48d540`).
     group_names: HashMap<u32, String>,
@@ -220,9 +225,37 @@ pub struct FactionCatalog {
 }
 
 impl FactionCatalog {
+    /// A catalog of these template rows and race templates alone. Fixture constructor for tests;
+    /// the live path is [`load_faction_catalog`].
+    pub fn from_rows(
+        templates: HashMap<u32, FactionTemplate>,
+        race_templates: HashMap<u8, u32>,
+    ) -> Self {
+        Self {
+            templates,
+            race_templates,
+            factions: HashMap::new(),
+            group_names: HashMap::new(),
+            group_internal_names: HashMap::new(),
+            names: HashMap::new(),
+            descriptions: HashMap::new(),
+        }
+    }
+
     /// The template row for a `UNIT_FIELD_FACTIONTEMPLATE` id.
     pub fn template(&self, id: u32) -> Option<&FactionTemplate> {
         self.templates.get(&id)
+    }
+
+    /// Every race with a `ChrRaces.dbc` row, and its template id.
+    pub fn race_templates(&self) -> impl Iterator<Item = (u8, u32)> + '_ {
+        self.race_templates.iter().map(|(&race, &id)| (race, id))
+    }
+
+    /// A race's template row: its `ChrRaces.dbc` `FactionID`, then `FactionTemplate.dbc`. `None`
+    /// for a race with no row or a template that is not in the table, both the reference's null.
+    pub fn race_template(&self, race: u8) -> Option<&FactionTemplate> {
+        self.template(*self.race_templates.get(&race)?)
     }
 
     /// A `Faction.dbc` id's reputation identity, `Some` only with a reputation slot: the
@@ -344,7 +377,21 @@ fn faction_group_schema() -> Schema {
     s
 }
 
-/// Load the three faction tables off the patch chain.
+/// `ChrRaces.dbc`: 29 fields in build 5875. Only the id and `FactionID` (column 2) are read; the
+/// string columns are declared so the field count matches.
+fn chr_races_schema() -> Schema {
+    let mut s = Schema::new("ChrRaces");
+    for i in 0..29 {
+        let ty = match i {
+            15 | 26 | 27 | 28 => FieldType::String,
+            _ => FieldType::UInt32,
+        };
+        s.add_field(SchemaField::new(format!("f{i}"), ty));
+    }
+    s
+}
+
+/// Load the three faction tables and the race templates off the patch chain.
 pub fn load_faction_catalog(chain: &mut Chain) -> Result<FactionCatalog> {
     let bytes = chain
         .read_file(FACTION_TEMPLATE)
@@ -418,8 +465,19 @@ pub fn load_faction_catalog(chain: &mut Chain) -> Result<FactionCatalog> {
         group_names.insert(1u32 << mask_id, name);
     }
 
+    let bytes = chain
+        .read_file(CHR_RACES)
+        .with_context(|| format!("reading {CHR_RACES}"))?;
+    let rs = parse(&bytes, chr_races_schema(), "ChrRaces")?;
+    let race_templates = rs
+        .records()
+        .iter()
+        .filter_map(|r| Some((u8::try_from(u32_at(r, 0)?).ok()?, u32_at(r, 2)?)))
+        .collect();
+
     Ok(FactionCatalog {
         templates,
+        race_templates,
         factions,
         group_names,
         group_internal_names,
