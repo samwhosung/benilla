@@ -4,10 +4,10 @@
 //!
 //! The logout is a camp, not a kick: `0x5ab000` sends the game menu's `CMSG_LOGOUT_REQUEST`, which
 //! the server refuses in combat, grants at once when resting, or counts down for 20 seconds
-//! (vmangos `MiscHandler.cpp:284-339`). The reference skips the whole 30-minute leg, line
-//! included, while the logout-pending byte `[session+0x1b1d]` is set (`0x482eee`); here
-//! [`crate::ui_logout`] holds that byte and drops only the repeated request, so `IDLE_MESSAGE`
-//! prints again every frame.
+//! (vmangos `MiscHandler.cpp:284-339`). The 30-minute leg, line and request together, is skipped
+//! while the logout-pending byte `[session+0x1b1d]` is set (`0x482eee`, `0x482ef5`), the byte the
+//! request itself sets (`0x5ab05b`) and a cancel or a refusal clears: one line and one request per
+//! logout, and the leg arms again once the byte clears. [`crate::ui_logout`] holds that byte.
 
 use std::time::Duration;
 
@@ -75,7 +75,8 @@ pub(crate) struct IdleAction {
     pub(crate) sit: bool,
     /// `0x482fba call 0x5eb740(NULL)`.
     pub(crate) afk: bool,
-    /// `0x482f1a` and `0x5ab000`: `IDLE_MESSAGE` and the logout request.
+    /// `0x482f1a` and `0x5ab000`: `IDLE_MESSAGE` and the logout request. The band only: the leg's
+    /// own gate, the logout-pending byte (`0x482ef5`), is the handler's to read.
     pub(crate) camp: bool,
 }
 
@@ -99,7 +100,8 @@ pub(crate) struct IdleGates {
 }
 
 /// Resolve the timer against the gates. The bands are exclusive (`0x482ee5 jl 0x482f39`): the
-/// thirty-minute leg neither sits nor marks AFK.
+/// thirty-minute leg neither sits nor marks AFK. Its one gate, the logout-pending byte, is not a
+/// descriptor field, so [`idle_handler`] applies it to `camp`.
 pub(crate) fn idle_action(idle: Duration, gates: IdleGates) -> IdleAction {
     if idle < AUTO_AFK_AFTER {
         // `0x482ed8 jl 0x482fbf`: all three legs sit below this.
@@ -129,6 +131,7 @@ pub(crate) fn idle_handler(
     commands: Res<crate::net::NetCommands>,
     mut stand: MessageWriter<crate::player::StandStateRequest>,
     follow: Res<crate::player::FollowState>,
+    logout: Res<crate::ui_logout::LogoutState>,
 ) {
     let idle = time.elapsed().saturating_sub(last.0);
     if idle < AUTO_AFK_AFTER {
@@ -181,7 +184,9 @@ pub(crate) fn idle_handler(
             text: out.body,
         });
     }
-    if action.camp {
+    // `0x482eee call 0x5ab0d0; 0x482ef5 jne`: while a logout is pending the whole leg is skipped,
+    // the line with the request, so it runs once per logout and again after a cancel.
+    if action.camp && !logout.pending() {
         if let Some(line) = strings("IDLE_MESSAGE") {
             push_system(&mut chat, line);
         }
@@ -495,6 +500,7 @@ mod tests {
             .init_resource::<ChatLog>()
             .init_resource::<LastInput>()
             .init_resource::<crate::player::FollowState>()
+            .init_resource::<crate::ui_logout::LogoutState>()
             .add_message::<crate::player::StandStateRequest>()
             .insert_resource(NetCommands(tx));
         // `LastInput` stays at zero and the clock walks forward, so "idle" is just the elapsed.
@@ -593,6 +599,68 @@ mod tests {
             .drain()
             .next()
             .is_none());
+    }
+
+    /// `0x482ef5`: the leg, line and request, is skipped while the logout it asked for is pending,
+    /// and arms again once a cancel clears the byte (`0x5aaf80`). The pending byte is the real
+    /// drain's, run after the handler as the app orders it and before it as well, so the gate
+    /// holds whichever frame the byte is set in.
+    #[test]
+    fn thirty_minutes_idle_prints_and_asks_once_per_logout() {
+        use benilla_ui::script::{SessionRequest, UiScript};
+
+        for idle_first in [true, false] {
+            let (mut app, rx) = world(1_800_000, &[]);
+            app.init_resource::<crate::ui_script::ReloadUiPending>()
+                .init_resource::<crate::cinematic::Cinematic>()
+                .add_message::<AppExit>()
+                .insert_resource(crate::net::SelfGuid(Some(0x4000_0000_0000_0009)));
+            // One schedule for every frame, so any state a system keeps between frames persists.
+            let mut schedule = Schedule::default();
+            if idle_first {
+                schedule.add_systems((idle_handler, crate::ui_logout::drain_logout).chain());
+            } else {
+                schedule.add_systems((crate::ui_logout::drain_logout, idle_handler).chain());
+            }
+            let mut frame = |app: &mut App| schedule.run(app.world_mut());
+            let requests = |rx: &crossbeam_channel::Receiver<ClientCommand>| {
+                rx.try_iter()
+                    .filter(|c| matches!(c, ClientCommand::Logout))
+                    .count()
+            };
+
+            for _ in 0..60 {
+                frame(&mut app);
+            }
+            assert_eq!(
+                lines(&app).len(),
+                1,
+                "one IDLE_MESSAGE for sixty frames while the request is pending (idle first: \
+                 {idle_first})"
+            );
+            assert_eq!(requests(&rx), 1, "and one CMSG_LOGOUT_REQUEST");
+
+            // The CAMP dialog's cancel: `CancelLogout` clears the byte, and idle continues.
+            app.world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .queue_session_request(SessionRequest::CancelLogout);
+            app.world_mut()
+                .run_system_once(crate::ui_logout::drain_logout)
+                .unwrap();
+            assert!(!app
+                .world()
+                .resource::<crate::ui_logout::LogoutState>()
+                .pending());
+            for _ in 0..60 {
+                frame(&mut app);
+            }
+            assert_eq!(
+                lines(&app).len(),
+                2,
+                "the leg arms again after the cancel, and again only once"
+            );
+            assert_eq!(requests(&rx), 1, "one more request");
+        }
     }
 
     /// Through the real system, so the descriptor decode is under test too.

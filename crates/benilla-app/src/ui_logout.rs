@@ -43,13 +43,18 @@ enum LogoutSignal {
 pub(crate) struct LogoutState {
     quitting: bool,
     /// The reference's `[session+0x1b1d]`: a request is out and unanswered. `0x5ab000` drops a
-    /// second request silently while it is set, which the idle logout, asking every frame, relies
-    /// on; `ForceLogout` (`0x5aaff0`) bypasses it and does not set it.
+    /// second request silently while it is set, and the idle handler skips its thirty-minute leg
+    /// on it (`0x482ef5`); `ForceLogout` (`0x5aaff0`) bypasses it and does not set it.
     pending: bool,
     signals: Vec<LogoutSignal>,
 }
 
 impl LogoutState {
+    /// The pending byte, as `0x5ab0d0` returns it.
+    pub(crate) fn pending(&self) -> bool {
+        self.pending
+    }
+
     /// `SMSG_LOGOUT_RESPONSE`, the module doc's table; an instant logout signals nothing.
     pub(crate) fn apply_response(&mut self, reason: u32, instant: bool) {
         // Logged: the server's inputs (combat, resting, account level) are invisible from here.
@@ -105,7 +110,7 @@ fn feed_logout(
 }
 
 /// Turn the Lua intents into packets; a forced quit, or a quit with no world session, exits.
-fn drain_logout(
+pub(crate) fn drain_logout(
     script: Option<NonSendMut<UiScript>>,
     mut logout: ResMut<LogoutState>,
     self_guid: Res<SelfGuid>,
@@ -203,8 +208,11 @@ impl Plugin for UiLogoutPlugin {
             Update,
             (
                 feed_logout.in_set(UiFeed),
-                drain_logout.after(UiInput),
-                exit_on_logout_complete.after(UiInput),
+                // After the idle handler, which reads the pending byte: its request is drained
+                // and the byte set in the frame it was asked, as `0x5ab05b` sets it in the call.
+                (drain_logout, exit_on_logout_complete)
+                    .after(UiInput)
+                    .after(crate::ui_chat::idle::idle_handler),
             ),
         );
     }
@@ -302,7 +310,7 @@ mod tests {
         assert_eq!(sent(&rx), 1, "the first ask goes out");
         assert!(app.world().resource::<LogoutState>().pending);
 
-        // The idle logout's shape: asking every frame while unanswered.
+        // A second ask while the first is unanswered, as a double-clicked Logout makes.
         for _ in 0..60 {
             ask(&mut app, SessionRequest::Logout);
         }
