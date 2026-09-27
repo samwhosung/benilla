@@ -164,10 +164,12 @@ pub struct PartyMemberStatsInfo {
     pub zone: Option<u16>,
     /// Raw WoW x and y, truncated to `i16` by the server (`GroupHandler.cpp:625`).
     pub position: Option<(i16, i16)>,
-    /// Active buff spell ids in slot order; the wire's `u32` slot mask is not kept.
-    pub auras: Option<Vec<u16>>,
-    /// Active debuff spell ids, likewise, from a `u16` slot mask.
-    pub auras_negative: Option<Vec<u16>>,
+    /// Buff slots 0..31 as `(slot, spell id)`, one per set bit of the wire's `u32` slot mask, in
+    /// slot order. A delta's mask names the slots that changed, a 0 id clearing one
+    /// (`Player::GetAuraUpdateMask`), so the record is patched slot by slot ([`patch_auras`]).
+    pub auras: Option<Vec<(u8, u16)>>,
+    /// Debuff slots, likewise, from a `u16` mask; the slot is absolute, 32..47.
+    pub auras_negative: Option<Vec<(u8, u16)>>,
     pub pet_guid: Option<u64>,
     pub pet_name: Option<String>,
     pub pet_model_id: Option<u16>,
@@ -176,8 +178,26 @@ pub struct PartyMemberStatsInfo {
     pub pet_power_type: Option<u8>,
     pub pet_cur_power: Option<u16>,
     pub pet_max_power: Option<u16>,
-    pub pet_auras: Option<Vec<u16>>,
-    pub pet_auras_negative: Option<Vec<u16>>,
+    /// The pet's buff and debuff slots, as [`Self::auras`] and [`Self::auras_negative`].
+    pub pet_auras: Option<Vec<(u8, u16)>>,
+    pub pet_auras_negative: Option<Vec<(u8, u16)>>,
+}
+
+/// Apply one aura-block field to a record's (`0x5e52d0`-`0x5e52f8`): each named slot takes its
+/// id, the other slots keep theirs, and a 0 empties the slot. The record keeps the occupied slots
+/// in ascending order, the order `UnitBuff`'s roster walk reads them in (`0x519780`).
+pub fn patch_auras(record: &mut Option<Vec<(u8, u16)>>, patch: &[(u8, u16)]) {
+    let slots = record.get_or_insert_with(Vec::new);
+    for &(slot, spell) in patch {
+        match slots.binary_search_by_key(&slot, |&(s, _)| s) {
+            Ok(i) if spell == 0 => {
+                slots.remove(i);
+            }
+            Ok(i) => slots[i].1 = spell,
+            Err(i) if spell != 0 => slots.insert(i, (slot, spell)),
+            Err(_) => {}
+        }
+    }
 }
 
 impl PartyMemberStatsInfo {
@@ -197,10 +217,18 @@ impl PartyMemberStatsInfo {
     /// Snapshot a member's live descriptor as the 1.12 client does (`0x5f0880`) when the member's
     /// object leaves view, just before the stats request, so the frame never reads 0/0. Values are
     /// raw; [`Self::shown_power`] divides at the read. AFK and DND are cleared, as in the client.
+    /// `pet` is the object of the member's pet guid ([`ObjectFields::unit_pet_guid`]) when held:
+    /// its block is copied, and without one the pet block is emptied (`0x5f0a1f`-`0x5f0b72`).
     ///
     /// Deviation: zone and position are kept, not set to the viewer's zone and the object's
-    /// position, and the aura and pet blocks are not copied, because nothing in benilla reads them.
-    pub fn snapshot_descriptor(&mut self, fields: &crate::messages::update_object::ObjectFields) {
+    /// position, and the pet's name is not copied, because nothing in benilla reads them.
+    ///
+    /// [`ObjectFields::unit_pet_guid`]: crate::messages::update_object::ObjectFields::unit_pet_guid
+    pub fn snapshot_descriptor(
+        &mut self,
+        fields: &crate::messages::update_object::ObjectFields,
+        pet: Option<&crate::messages::update_object::ObjectFields>,
+    ) {
         let mut status = member_status::ONLINE;
         if fields.player_is_ghost() {
             status |= member_status::GHOST;
@@ -226,6 +254,39 @@ impl PartyMemberStatsInfo {
         self.cur_power = Some(fields.unit_power(power_type).unwrap_or(0) as u16);
         self.max_power = Some(fields.unit_max_power(power_type).unwrap_or(0) as u16);
         self.level = Some(fields.unit_level().unwrap_or(0) as u16);
+        let (buffs, debuffs) = snapshot_aura_block(fields);
+        self.auras = Some(buffs);
+        self.auras_negative = Some(debuffs);
+
+        let pet_guid = fields.unit_pet_guid();
+        match pet_guid.zip(pet) {
+            Some((guid, pet)) => {
+                let power_type = pet.unit_power_type();
+                self.pet_guid = Some(guid);
+                self.pet_model_id = Some(pet.unit_displayid().unwrap_or(0) as u16);
+                self.pet_cur_hp = Some(pet.unit_health().unwrap_or(0) as u16);
+                self.pet_max_hp = Some(pet.unit_max_health().unwrap_or(0) as u16);
+                self.pet_power_type = Some(power_type);
+                self.pet_cur_power = Some(pet.unit_power(power_type).unwrap_or(0) as u16);
+                self.pet_max_power = Some(pet.unit_max_power(power_type).unwrap_or(0) as u16);
+                let (buffs, debuffs) = snapshot_aura_block(pet);
+                self.pet_auras = Some(buffs);
+                self.pet_auras_negative = Some(debuffs);
+            }
+            // No pet object: the block is zero-filled (`0x5f0a0f`), its guid included.
+            None => {
+                self.pet_guid = None;
+                self.pet_name = None;
+                self.pet_model_id = None;
+                self.pet_cur_hp = None;
+                self.pet_max_hp = None;
+                self.pet_power_type = None;
+                self.pet_cur_power = None;
+                self.pet_max_power = None;
+                self.pet_auras = None;
+                self.pet_auras_negative = None;
+            }
+        }
     }
 
     /// `UnitPowerType` from the record, 0 when it has none (the binding's miss value).
@@ -247,15 +308,40 @@ impl PartyMemberStatsInfo {
     }
 }
 
-/// One `u16` spell id per set bit of `mask`, in bit order (`GroupHandler.cpp:627-648`).
-fn read_aura_spells(r: &mut impl Read, mask: u32, bits: u32) -> io::Result<Vec<u16>> {
-    let mut spells = Vec::new();
+/// `(slot, spell id)` pairs of one aura block, as [`PartyMemberStatsInfo::auras`] holds them.
+type AuraSlots = Vec<(u8, u16)>;
+
+/// A live descriptor's aura block as the snapshot copies it (`0x5f098d`-`0x5f09f2`): a slot is
+/// kept when its id is set and its `AURAFLAGS` nibble has an effect bit (`test al,0xe`), the test
+/// [`ObjectFields::unit_auras`] makes; the record holds each id's low word.
+///
+/// [`ObjectFields::unit_auras`]: crate::messages::update_object::ObjectFields::unit_auras
+fn snapshot_aura_block(
+    fields: &crate::messages::update_object::ObjectFields,
+) -> (AuraSlots, AuraSlots) {
+    use crate::messages::update_object::UNIT_AURA_POSITIVE_SLOTS;
+    fields
+        .unit_auras()
+        .map(|a| (a.slot, a.spell_id as u16))
+        .filter(|&(_, id)| id != 0)
+        .partition(|&(slot, _)| slot < UNIT_AURA_POSITIVE_SLOTS)
+}
+
+/// One `(slot, spell id)` per set bit of `mask`, in bit order, the slot counted from `first`
+/// (`GroupHandler.cpp:627-648`; the client's reads, `0x5e52d0`-`0x5e52f8`).
+fn read_aura_slots(
+    r: &mut impl Read,
+    mask: u32,
+    first: u8,
+    bits: u8,
+) -> io::Result<Vec<(u8, u16)>> {
+    let mut slots = Vec::new();
     for bit in 0..bits {
         if mask & (1 << bit) != 0 {
-            spells.push(read_u16_le(r)?);
+            slots.push((first + bit, read_u16_le(r)?));
         }
     }
-    Ok(spells)
+    Ok(slots)
 }
 
 /// Read `SMSG_PARTY_MEMBER_STATS` or `_FULL`; the guid is packed (`GroupHandler.cpp:593`).
@@ -297,11 +383,11 @@ pub(super) fn read_party_member_stats(
     }
     if mask & party_member_mask::AURAS != 0 {
         let pos_mask = read_u32_le(r)?;
-        info.auras = Some(read_aura_spells(r, pos_mask, 32)?);
+        info.auras = Some(read_aura_slots(r, pos_mask, 0, 32)?);
     }
     if mask & party_member_mask::AURAS_NEGATIVE != 0 {
         let neg_mask = u32::from(read_u16_le(r)?);
-        info.auras_negative = Some(read_aura_spells(r, neg_mask, 16)?);
+        info.auras_negative = Some(read_aura_slots(r, neg_mask, 32, 16)?);
     }
     if mask & party_member_mask::PET_GUID != 0 {
         info.pet_guid = Some(read_u64_le(r)?);
@@ -329,11 +415,11 @@ pub(super) fn read_party_member_stats(
     }
     if mask & party_member_mask::PET_AURAS != 0 {
         let pos_mask = read_u32_le(r)?;
-        info.pet_auras = Some(read_aura_spells(r, pos_mask, 32)?);
+        info.pet_auras = Some(read_aura_slots(r, pos_mask, 0, 32)?);
     }
     if mask & party_member_mask::PET_AURAS_NEGATIVE != 0 {
         let neg_mask = u32::from(read_u16_le(r)?);
-        info.pet_auras_negative = Some(read_aura_spells(r, neg_mask, 16)?);
+        info.pet_auras_negative = Some(read_aura_slots(r, neg_mask, 32, 16)?);
     }
     Ok((guid, info))
 }

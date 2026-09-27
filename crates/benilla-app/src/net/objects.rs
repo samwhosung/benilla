@@ -302,8 +302,8 @@ fn on_object_values(In(ev): In<SessionEvent>, mut sc: Scene) {
 fn on_object_destroyed(In(ev): In<SessionEvent>, mut sc: Scene) {
     if let SessionEvent::ObjectDestroyed(guid) = ev {
         crate::death::net::forget_corpse(guid, &mut sc.death_net);
-        let store = sc.index.0.get(&guid).and_then(|e| sc.stores.get(*e).ok());
-        crate::ui_party::net::member_deactivated(guid, &mut sc.group, store, &sc.net);
+        let held = |g: u64| sc.index.0.get(&g).and_then(|e| sc.stores.get(*e).ok());
+        crate::ui_party::net::member_deactivated(guid, &mut sc.group, held(guid), held, &sc.net);
         object_destroyed(guid, &mut sc.commands, &mut sc.index);
     }
 }
@@ -313,8 +313,14 @@ fn on_object_destroyed(In(ev): In<SessionEvent>, mut sc: Scene) {
 fn on_objects_removed(In(ev): In<SessionEvent>, mut sc: Scene) {
     if let SessionEvent::ObjectsRemoved(guids) = ev {
         for guid in &guids {
-            let store = sc.index.0.get(guid).and_then(|e| sc.stores.get(*e).ok());
-            crate::ui_party::net::member_deactivated(*guid, &mut sc.group, store, &sc.net);
+            let held = |g: u64| sc.index.0.get(&g).and_then(|e| sc.stores.get(*e).ok());
+            crate::ui_party::net::member_deactivated(
+                *guid,
+                &mut sc.group,
+                held(*guid),
+                held,
+                &sc.net,
+            );
         }
         objects_removed(guids, &mut sc.commands, &mut sc.index);
     }

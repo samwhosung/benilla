@@ -67,6 +67,15 @@ impl ObjectFields {
     pub fn unit_summon(&self) -> Option<u64> {
         self.get_guid(FIELD_UNIT_SUMMON).filter(|&g| g != 0)
     }
+    /// `UNIT_FIELD_CHARM`: the unit this one charms.
+    pub fn unit_charm(&self) -> Option<u64> {
+        self.get_guid(FIELD_UNIT_CHARM).filter(|&g| g != 0)
+    }
+    /// A player's pet as the client reads it off the descriptor: `CHARM` if set, else `SUMMON`
+    /// (`partypetN`'s `0x4e8204`-`0x4e821a`, the party snapshot's `0x5f0a25`-`0x5f0a39`).
+    pub fn unit_pet_guid(&self) -> Option<u64> {
+        self.unit_charm().or_else(|| self.unit_summon())
+    }
     /// `UNIT_FIELD_SUMMONEDBY`: the summoner of a pet, guardian or totem.
     pub fn unit_summoned_by(&self) -> Option<u64> {
         self.get_guid(FIELD_UNIT_SUMMONEDBY).filter(|&g| g != 0)

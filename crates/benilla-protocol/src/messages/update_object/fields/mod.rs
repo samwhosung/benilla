@@ -33,6 +33,8 @@ pub const FIELD_CORPSE_DYNAMIC_FLAGS: u16 = 36;
 // bytes 0xa0, 0x1f0, 0x224 and 0x234.
 /// The unit's target; the client turns an idle unit to face it, and no packet carries that facing.
 const FIELD_UNIT_TARGET: u16 = 16;
+/// The unit this one charms (`UpdateFields_1_12_1.h:41`), descriptor byte 0.
+const FIELD_UNIT_CHARM: u16 = 6;
 /// The unit this one summoned (`UpdateFields_1_12_1.h:42`); on us, the `"pet"` unit. The pet bar
 /// reads its guid off `SMSG_PET_SPELLS`, so the two can disagree briefly around a summon.
 const FIELD_UNIT_SUMMON: u16 = 8;

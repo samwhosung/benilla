@@ -124,10 +124,10 @@ pub use group::{
     group_accept, group_assistant_leader, group_change_sub_group, group_decline, group_disband,
     group_invite, group_raid_convert, group_set_leader, group_swap_sub_group, group_uninvite,
     group_uninvite_guid, loot_method, member_status, minimap_ping, party_member_mask,
-    party_operation, party_result, raid_target_request, raid_target_set, ready_check_answer,
-    ready_check_start, request_party_member_stats, request_raid_info, GroupLootInfo,
-    GroupMemberEntry, PartyMemberStatsInfo, RaidInstanceEntry, RaidTargetUpdate, ReadyCheck,
-    GROUP_MEMBER_ASSISTANT,
+    party_operation, party_result, patch_auras, raid_target_request, raid_target_set,
+    ready_check_answer, ready_check_start, request_party_member_stats, request_raid_info,
+    GroupLootInfo, GroupMemberEntry, PartyMemberStatsInfo, RaidInstanceEntry, RaidTargetUpdate,
+    ReadyCheck, GROUP_MEMBER_ASSISTANT,
 };
 pub use guild::{
     guild_accept, guild_add_rank, guild_command, guild_command_error, guild_create, guild_decline,

@@ -7,7 +7,8 @@ use std::collections::HashMap;
 
 use crate::ui_action::UiError;
 use benilla_protocol::messages::{
-    party_operation, party_result, GroupLootInfo, GroupMemberEntry, PartyMemberStatsInfo,
+    party_operation, party_result, patch_auras, GroupLootInfo, GroupMemberEntry,
+    PartyMemberStatsInfo,
 };
 use bevy::prelude::*;
 
@@ -15,6 +16,7 @@ use crate::ui_script::{UiFeed, UiInput};
 
 mod feed;
 pub(crate) mod net;
+mod records;
 pub(crate) use feed::{
     raid_row_guid, synthetic_raid, synthetic_roster, GROUPTYPE_RAID, GROUP_MEMBER_SUBGROUP,
     PARTY_TOKENS, RAID_TOKENS,
@@ -280,11 +282,12 @@ impl GroupState {
         }
     }
 
-    /// `SMSG_PARTY_MEMBER_STATS`: a delta merges field by field, `_FULL` replaces the record.
+    /// `SMSG_PARTY_MEMBER_STATS`: a delta patches the record field by field (`0x5e519d`, seeded from
+    /// the stored record), `_FULL` patches an emptied one (`0x5e51b1`). An aura block is patched
+    /// slot by slot ([`patch_auras`]).
     pub fn apply_stats(&mut self, guid: u64, full: bool, info: PartyMemberStatsInfo) {
         if full {
-            self.stats.insert(guid, info);
-            return;
+            self.stats.insert(guid, PartyMemberStatsInfo::default());
         }
         let entry = self.stats.entry(guid).or_default();
         macro_rules! merge {
@@ -310,20 +313,18 @@ impl GroupState {
             pet_cur_power,
             pet_max_power,
         );
-        if info.auras.is_some() {
-            entry.auras = info.auras;
-        }
-        if info.auras_negative.is_some() {
-            entry.auras_negative = info.auras_negative;
-        }
         if info.pet_name.is_some() {
             entry.pet_name = info.pet_name;
         }
-        if info.pet_auras.is_some() {
-            entry.pet_auras = info.pet_auras;
-        }
-        if info.pet_auras_negative.is_some() {
-            entry.pet_auras_negative = info.pet_auras_negative;
+        for (record, patch) in [
+            (&mut entry.auras, info.auras),
+            (&mut entry.auras_negative, info.auras_negative),
+            (&mut entry.pet_auras, info.pet_auras),
+            (&mut entry.pet_auras_negative, info.pet_auras_negative),
+        ] {
+            if let Some(patch) = patch {
+                patch_auras(record, &patch);
+            }
         }
     }
 

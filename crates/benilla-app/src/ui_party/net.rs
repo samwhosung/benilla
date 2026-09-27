@@ -298,13 +298,14 @@ fn seat_new_records(
 }
 
 /// The despawn hook, the reference's deactivate virtual `0x5e9aa0` (object destroyed or out of
-/// range): for a roster member, snapshot the live descriptor into their record (`0x5f0880`), then
-/// request their stats (`0x4e8646`). Nothing happens off the roster or without an object, since
-/// the hook is a virtual on the object.
-pub(crate) fn member_deactivated(
+/// range): for a roster member, snapshot the live descriptor into their record (`0x5f0880`), their
+/// pet's too while `held` finds it, then request their stats (`0x4e8646`). Nothing happens off the
+/// roster or without an object, since the hook is a virtual on the object.
+pub(crate) fn member_deactivated<'a>(
     guid: u64,
     group: &mut GroupState,
-    store: Option<&ObjectStore>,
+    store: Option<&'a ObjectStore>,
+    held: impl Fn(u64) -> Option<&'a ObjectStore>,
     net_commands: &NetCommands,
 ) {
     let Some(store) = store else {
@@ -313,11 +314,12 @@ pub(crate) fn member_deactivated(
     if !group.members.iter().any(|m| m.guid == guid) {
         return;
     }
+    let pet = store.0.unit_pet_guid().and_then(held);
     group
         .stats
         .entry(guid)
         .or_default()
-        .snapshot_descriptor(&store.0);
+        .snapshot_descriptor(&store.0, pet.map(|p| &p.0));
     let _ = net_commands
         .0
         .send(ClientCommand::RequestPartyMemberStats { guid });
@@ -337,9 +339,9 @@ pub(crate) fn roster_deactivated(
         .map(|m| m.guid)
         .filter(|g| index.0.contains_key(g))
         .collect();
+    let held = |g: u64| index.0.get(&g).and_then(|e| stores.get(*e).ok());
     for guid in streamed {
-        let store = index.0.get(&guid).and_then(|e| stores.get(*e).ok());
-        member_deactivated(guid, group, store, net_commands);
+        member_deactivated(guid, group, held(guid), held, net_commands);
     }
 }
 
@@ -528,7 +530,7 @@ mod tests {
             (LEVEL, 41),
             (BYTES_0, 1 << 24), // POWER_RAGE in BYTES_0 byte 3
         ]));
-        member_deactivated(guid, &mut group, Some(&store), &net);
+        member_deactivated(guid, &mut group, Some(&store), |_| None, &net);
 
         let rec = group.stats.get(&guid).expect("the member has a record");
         assert_eq!(
@@ -550,6 +552,55 @@ mod tests {
         assert_eq!(asked(&rx), vec![guid], "and the server is asked, once");
     }
 
+    /// `0x5f098d`-`0x5f09f2`: a slot is copied when its id is set and its `AURAFLAGS` nibble has an
+    /// effect bit; the pet block comes off the pet's own object (`0x5f0a1f`-`0x5f0b72`).
+    #[test]
+    fn a_members_despawn_snapshots_their_auras_and_their_pets() {
+        const AURA: u16 = 47;
+        const AURAFLAGS: u16 = 95;
+        const SUMMON: u16 = 8;
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let net = NetCommands(tx);
+        let guid = 0x1234;
+        let pet_guid = 0xF140_0000_0000_0077;
+        let mut group = grouped(&[member(guid, "Brisca")]);
+
+        let store = ObjectStore(benilla_protocol::messages::ObjectFields::from_pairs(&[
+            (AURA, 1126),     // slot 0, live (nibble 0x8)
+            (AURA + 1, 6673), // slot 1, a stale id: its nibble has no effect bit
+            (AURA + 33, 589), // slot 33, live
+            (AURAFLAGS, 0x0000_0018),
+            (AURAFLAGS + 4, 0x0000_0020),
+            (SUMMON, pet_guid as u32),
+            (SUMMON + 1, (pet_guid >> 32) as u32),
+        ]));
+        let pet = ObjectStore(benilla_protocol::messages::ObjectFields::from_pairs(&[
+            (HEALTH, 900),
+            (AURA + 40, 770),
+            (AURAFLAGS + 5, 0x0000_0002),
+        ]));
+        let held = |g: u64| (g == pet_guid).then_some(&pet);
+        member_deactivated(guid, &mut group, Some(&store), held, &net);
+
+        let rec = group.stats.get(&guid).expect("the member has a record");
+        assert_eq!(
+            rec.auras,
+            Some(vec![(0, 1126)]),
+            "the stale slot 1 is dropped"
+        );
+        assert_eq!(rec.auras_negative, Some(vec![(33, 589)]));
+        assert_eq!(rec.pet_guid, Some(pet_guid));
+        assert_eq!(rec.pet_cur_hp, Some(900));
+        assert_eq!(rec.pet_auras, Some(vec![]));
+        assert_eq!(rec.pet_auras_negative, Some(vec![(40, 770)]));
+
+        // The pet not held: its block is emptied, not left as it was.
+        member_deactivated(guid, &mut group, Some(&store), |_| None, &net);
+        let rec = group.stats.get(&guid).unwrap();
+        assert_eq!((rec.pet_guid, rec.pet_auras_negative.clone()), (None, None));
+        assert_eq!(rec.auras, Some(vec![(0, 1126)]));
+    }
+
     #[test]
     fn a_despawn_that_is_not_a_party_member_asks_nothing() {
         let (tx, rx) = crossbeam_channel::unbounded();
@@ -560,12 +611,12 @@ mod tests {
         let store = ObjectStore(benilla_protocol::messages::ObjectFields::from_pairs(&[(
             HEALTH, 40,
         )]));
-        member_deactivated(0xdead, &mut group, Some(&store), &net);
+        member_deactivated(0xdead, &mut group, Some(&store), |_| None, &net);
         assert!(asked(&rx).is_empty());
         assert!(!group.stats.contains_key(&0xdead));
 
         // The object gate alone: a roster member we hold no object for asks nothing.
-        member_deactivated(0x1234, &mut group, None, &net);
+        member_deactivated(0x1234, &mut group, None, |_| None, &net);
         assert!(asked(&rx).is_empty());
     }
 
