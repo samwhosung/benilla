@@ -9,8 +9,10 @@ fork, and forks are welcome.
 
 The [issues](https://github.com/samwhosung/benilla/issues) the maintainers file are checked
 against 1.12.1 first: each says what 1.12.1 does, what benilla does instead, and where in the
-code, and any of them is a place to start. Before you start one, look for an open pull request
-that already covers it, and say `Fixes #N` in yours.
+code, and any of them is a place to start. One labelled `in progress` is taken: someone is
+working on it or a pull request is open for it, so pick another. Once you start one, open a draft
+pull request that says `Fixes #N` as soon as you have a first commit, so the issue shows it is
+taken.
 
 ## What gets in
 
