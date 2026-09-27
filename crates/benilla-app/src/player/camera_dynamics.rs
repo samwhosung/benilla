@@ -421,7 +421,7 @@ impl TerrainTilt {
                 delay,
                 factor,
                 rate,
-                duration: Some((cfg.tilt_time_min * factor, cfg.tilt_time_max * factor)),
+                bound: Some((cfg.tilt_time_min, cfg.tilt_time_max)),
             });
         }
         self.ground.advance(dt)
@@ -876,6 +876,40 @@ mod tests {
             zeroed = t.advance(|| 0.5, false, &moving, FollowStyle::Smart, &cfg, 1.0 / 60.0);
         }
         assert!(zeroed.abs() < CHANNEL_EPS, "levels off, at {zeroed}");
+    }
+
+    /// `cameraTerrainTiltTimeMin 20` over `cameraTerrainTiltTimeMax 1`, a pair 1.12.1 accepts, onto
+    /// a 20° slope: the first arm takes `20 × Factor`, and every later one bounds that to
+    /// `1 × Factor`, since it is not under lo and is at or above hi (`0x50dd29`).
+    #[test]
+    fn an_inverted_tilt_time_pair_leans_over_the_max_times_the_factor() {
+        use super::super::camera::FollowStyle;
+        let cfg = CameraOptions {
+            terrain_tilt: true,
+            tilt_time_min: 20.0,
+            tilt_time_max: 1.0,
+            ..CameraOptions::default()
+        };
+        let target = TerrainTilt::slope_to_pitch(0.5);
+        // Walking is the Factor 1 row, falling the 0.75 one.
+        for (move_flags, factor) in [(mf::FORWARD, 1.0), (mf::FORWARD | mf::FALLING, 0.75)] {
+            let subject = SubjectState {
+                move_flags,
+                ..SubjectState::default()
+            };
+            let mut t = TerrainTilt::default();
+            let took = (1..=600)
+                .find_map(|frame| {
+                    let p = t.advance(|| 0.5, true, &subject, FollowStyle::Smart, &cfg, 1.0 / 60.0);
+                    (p == target).then_some(frame as f32 / 60.0)
+                })
+                .expect("the lean arrives");
+            let expected = cfg.tilt_time_max * factor;
+            assert!(
+                (took - expected).abs() < 0.05,
+                "Factor {factor}: {expected} s, took {took:.2}s"
+            );
+        }
     }
 
     #[test]

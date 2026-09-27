@@ -19,7 +19,7 @@
 /// four channels and the `0x5107f0`/`0x5106f0` displacement predicates.
 pub(super) const CHANNEL_EPS: f32 = 0.001;
 
-/// One `arm` request: the armer's four arguments plus the ground channel's duration clamp.
+/// One `arm` request: the armer's four arguments plus the ground channel's duration bound.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Arm {
     /// In the live value's units.
@@ -29,9 +29,26 @@ pub(super) struct Arm {
     pub(super) factor: f32,
     /// Live-value units per second: `cvar.to_radians()` for the angular channels, yd/s for height.
     pub(super) rate: f32,
-    /// The ground channel's bound: after the arm, `0x50dd29` clamps `[cam+0x1ac]` between
-    /// `Factor × cameraTerrainTiltTimeMin` and `Factor × cameraTerrainTiltTimeMax`.
-    pub(super) duration: Option<(f32, f32)>,
+    /// The ground channel's `(cameraTerrainTiltTimeMin, cameraTerrainTiltTimeMax)`, seconds, which
+    /// [`tilt_bound`] scales by `factor` to bound the duration.
+    pub(super) bound: Option<(f32, f32)>,
+}
+
+/// The ground channel's duration bound, `0x50dd29`-`0x50dd83`, with `lo = TimeMin × factor` and
+/// `hi = TimeMax × factor`: below `lo` takes `lo`, else at or above `hi`, or NaN, takes `hi`, else
+/// the duration stands. Nothing orders the pair, so an inverted one is an odd duration, not a fault.
+fn tilt_bound(duration: f32, (time_min, time_max): (f32, f32), factor: f32) -> f32 {
+    // `lo` is compared unrounded, live on the x87 stack (`0x50dd4c`); `hi` is stored as an f32
+    // first (`0x50dd40`). Only an inverted pair can see the difference.
+    let lo = f64::from(time_min) * f64::from(factor);
+    let hi = time_max * factor;
+    if f64::from(duration) < lo {
+        lo as f32
+    } else if duration < hi {
+        duration
+    } else {
+        hi
+    }
 }
 
 impl Arm {
@@ -42,7 +59,7 @@ impl Arm {
             delay: 0.0,
             factor: 1.0,
             rate,
-            duration: None,
+            bound: None,
         }
     }
 }
@@ -122,11 +139,16 @@ impl SmoothChannel {
                 self.live += two_pi;
             }
         }
-        if let Some(f) = self.flight {
+        if let Some(f) = self.flight.as_mut() {
             if (self.to - arm.target).abs() < CHANNEL_EPS
                 && (f.memo.0 - arm.delay).abs() < CHANNEL_EPS
                 && (f.memo.1 - arm.factor).abs() < CHANNEL_EPS
             {
+                // The bound runs on this return too (`0x512555` returns 1, `0x50dd21` tests it),
+                // so it bounds the duration in flight again every frame.
+                if let Some(bound) = arm.bound {
+                    f.duration = tilt_bound(f.duration, bound, arm.factor);
+                }
                 return Armed::Already;
             }
         }
@@ -138,15 +160,15 @@ impl SmoothChannel {
             return Armed::AtRest;
         }
         let mut duration = gap / arm.rate.max(f32::EPSILON) * arm.factor;
-        if let Some((lo, hi)) = arm.duration {
-            duration = duration.clamp(lo, hi);
+        if let Some(bound) = arm.bound {
+            duration = tilt_bound(duration, bound, arm.factor);
         }
         self.from = self.live;
         self.to = arm.target;
         self.flight = Some(Flight {
             elapsed: 0.0,
             delay: arm.delay,
-            duration: duration.max(f32::EPSILON),
+            duration,
             memo: (arm.delay, arm.factor),
         });
         Armed::Started
@@ -158,7 +180,10 @@ impl SmoothChannel {
             f.elapsed += dt;
             let t = f.elapsed - f.delay;
             if t >= 0.0 {
-                let s = t / f.duration;
+                // The floor lands a zero or NaN duration on the target. The reference's ground step
+                // divides by it raw (`0x50f45e`) and eases whenever C0 is set (`0x50f46f`), which a
+                // NaN `s` sets, so a NaN duration writes NaN into its live value.
+                let s = t / f.duration.max(f32::EPSILON);
                 if s >= 1.0 {
                     self.live = self.to;
                     self.flight = None;
@@ -230,7 +255,7 @@ mod tests {
                     delay: 0.0,
                     factor,
                     rate,
-                    duration: None
+                    bound: None
                 }),
                 Armed::Started
             );
@@ -302,7 +327,7 @@ mod tests {
             delay: 0.5,
             factor: 1.0,
             rate: 1.0,
-            duration: None,
+            bound: None,
         });
         let frames = run(&mut c, 0.45);
         assert!(frames.iter().all(|v| *v == 0.0), "held for the delay");
@@ -318,7 +343,7 @@ mod tests {
             delay: 0.0,
             factor: 1.0,
             rate: 7.5,
-            duration: Some((0.1, 0.5)),
+            bound: Some((0.1, 0.5)),
         });
         let frames = run(&mut c, 0.6);
         let arrived = frames
@@ -329,5 +354,146 @@ mod tests {
             (arrived as f32 / 60.0 - 0.5).abs() < 0.05,
             "|Δ|/rate would be 13.3 s; the bound caps it at 0.5"
         );
+    }
+
+    // The expectations below are `0x50dd29`-`0x50dd83` read directly: `lo = TimeMin × factor`,
+    // `hi = TimeMax × factor`; below `lo` → `lo`, else at or above `hi` or NaN → `hi`, else as is.
+
+    #[test]
+    fn an_ordered_tilt_bound_keeps_its_clamp() {
+        for (duration, factor, expected) in [
+            (1.0, 1.0, 3.0),
+            (5.0, 1.0, 5.0),
+            (10.0, 1.0, 10.0),
+            (20.0, 1.0, 10.0),
+            (1.0, 2.0, 6.0),
+            (10.0, 2.0, 10.0),
+            (25.0, 2.0, 20.0),
+        ] {
+            assert_eq!(tilt_bound(duration, (3.0, 10.0), factor), expected);
+        }
+    }
+
+    #[test]
+    fn an_inverted_tilt_bound_gives_the_reference_duration() {
+        // `cameraTerrainTiltTimeMin 20` over `cameraTerrainTiltTimeMax 1`: at factor 2, lo 40, hi 2.
+        for (duration, expected) in [
+            (1.0, 40.0),  // below both: under lo
+            (10.0, 40.0), // between hi and lo: still under lo
+            (40.0, 2.0),  // at lo: not under it, and at or above hi
+            (100.0, 2.0), // above both
+        ] {
+            assert_eq!(tilt_bound(duration, (20.0, 1.0), 2.0), expected);
+        }
+        assert_eq!(tilt_bound(0.5, (20.0, 1.0), 1.0), 20.0);
+        assert_eq!(tilt_bound(30.0, (20.0, 1.0), 1.0), 1.0);
+    }
+
+    #[test]
+    fn a_nan_tilt_lo_is_no_floor() {
+        // No duration is under a NaN lo.
+        assert_eq!(tilt_bound(1.0, (f32::NAN, 10.0), 1.0), 1.0);
+        assert_eq!(tilt_bound(20.0, (f32::NAN, 10.0), 1.0), 10.0);
+    }
+
+    #[test]
+    fn a_nan_tilt_hi_is_the_answer_above_lo() {
+        assert_eq!(tilt_bound(1.0, (3.0, f32::NAN), 1.0), 3.0);
+        assert!(tilt_bound(5.0, (3.0, f32::NAN), 1.0).is_nan());
+        // A NaN factor makes both bounds NaN, so hi.
+        assert!(tilt_bound(5.0, (3.0, 10.0), f32::NAN).is_nan());
+    }
+
+    #[test]
+    fn a_nan_tilt_duration_takes_hi() {
+        // Under neither bound, so at or above hi.
+        assert_eq!(tilt_bound(f32::NAN, (3.0, 10.0), 1.0), 10.0);
+    }
+
+    #[test]
+    fn the_tilt_bound_compares_lo_unrounded() {
+        // TimeMin 20 × (1 + 2⁻²³) is 20 + 1.25 ulp, which rounds down to 20 + 1 ulp as an f32.
+        let factor = f32::from_bits(0x3f80_0001);
+        let lo_f32 = f32::from_bits(0x41a0_0001);
+        assert_eq!(20.0 * factor, lo_f32);
+        assert!(f64::from(20.0_f32) * f64::from(factor) > f64::from(lo_f32));
+        // A duration of exactly the rounded lo is under the unrounded one, so it takes lo; an f32
+        // compare would pass it on to the hi of TimeMax 1 below it.
+        assert_eq!(
+            tilt_bound(lo_f32, (20.0, 1.0), factor).to_bits(),
+            lo_f32.to_bits()
+        );
+    }
+
+    /// Arm and step once a frame, as the terrain tilt drives the ground channel, until it lands;
+    /// the seconds it took.
+    fn arrival(c: &mut SmoothChannel, arm: &Arm, limit: f32) -> Option<f32> {
+        let dt = 1.0 / 60.0;
+        (1..=(limit / dt).round() as usize).find_map(|frame| {
+            c.arm(arm);
+            c.advance(dt);
+            (!c.in_flight()).then_some(frame as f32 * dt)
+        })
+    }
+
+    #[test]
+    fn an_inverted_tilt_pair_arms_and_is_bounded_again_in_flight() {
+        let arm = Arm {
+            target: 1.0,
+            delay: 0.0,
+            factor: 1.0,
+            rate: 1.0,
+            bound: Some((20.0, 1.0)),
+        };
+        // The 1 s tween is under lo 20, so the arm takes 20.
+        let mut c = SmoothChannel::default();
+        assert_eq!(c.arm(&arm), Armed::Started);
+        assert_eq!(c.flight.map(|f| f.duration), Some(20.0));
+        // The next frame's arm is already arming this, and the bound runs again: 20 is not under
+        // lo, and is at or above hi 1, so 1.
+        assert_eq!(c.arm(&arm), Armed::Already);
+        assert_eq!(c.flight.map(|f| f.duration), Some(1.0));
+        let took = arrival(&mut SmoothChannel::default(), &arm, 30.0).expect("lands");
+        assert!(
+            (took - 1.0).abs() < 0.05,
+            "lands at hi, 1 s, took {took:.2}s"
+        );
+    }
+
+    #[test]
+    fn a_tilt_bound_changed_in_flight_bounds_the_tween_again() {
+        let mut arm = Arm {
+            target: 100.0,
+            delay: 0.0,
+            factor: 1.0,
+            rate: 1.0,
+            bound: Some((3.0, 10.0)),
+        };
+        let mut c = SmoothChannel::default();
+        assert_eq!(c.arm(&arm), Armed::Started);
+        assert_eq!(c.flight.map(|f| f.duration), Some(10.0));
+        // `cameraTerrainTiltTimeMax 5` mid-tween.
+        arm.bound = Some((3.0, 5.0));
+        assert_eq!(c.arm(&arm), Armed::Already);
+        assert_eq!(c.flight.map(|f| f.duration), Some(5.0));
+    }
+
+    #[test]
+    fn a_nan_tilt_duration_lands_on_the_target() {
+        let arm = Arm {
+            target: 5.0,
+            delay: 0.0,
+            factor: 1.0,
+            rate: 1.0,
+            bound: Some((3.0, f32::NAN)),
+        };
+        let mut c = SmoothChannel::default();
+        assert_eq!(c.arm(&arm), Armed::Started);
+        assert!(
+            c.flight.is_some_and(|f| f.duration.is_nan()),
+            "the bound's answer is the NaN hi"
+        );
+        assert_eq!(c.advance(1.0 / 60.0), 5.0);
+        assert!(!c.in_flight());
     }
 }
