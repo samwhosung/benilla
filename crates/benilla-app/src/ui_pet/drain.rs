@@ -202,7 +202,7 @@ pub(super) fn old_target_cleared(previous: Option<u64>, now: Option<u64>) -> boo
 /// The old-target clear's `PetStopAttack` (`0x493910`, at `0x493a18` when `0x5ee5a0` finds a
 /// possessed unit at `0x493a0f`). It sits before the notify branch, so every selection writer runs
 /// it; a re-select runs no clear (`0x493540`).
-pub(super) fn pet_stop_on_old_target_clear(
+pub(crate) fn pet_stop_on_old_target_clear(
     selection: Res<Selection>,
     mut previous: Local<Option<u64>>,
     mut bar: ResMut<PetBar>,

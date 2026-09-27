@@ -19,7 +19,8 @@ mod net;
 mod unit;
 
 use bar::feed_pet_bar;
-use drain::{drain_pet_actions, pet_stop_on_old_target_clear};
+use drain::drain_pet_actions;
+pub(crate) use drain::pet_stop_on_old_target_clear;
 use menu::{drain_pet_menu, feed_pet_menu};
 use unit::feed_pet_unit;
 

@@ -66,10 +66,13 @@ impl Plugin for SpellPlugin {
                         .before(UnitFeed),
                     // The state push runs before the input pass's `ToggleGameMenu` and the drain
                     // after it, so an Esc cancel lands before next frame's cursor reads the mode.
-                    targeting::feed_targeting_to_vm.in_set(UnitFeed),
+                    // After the old-target clear, the pet bar's writer in the feed: `"pet"`
+                    // resolves off the bar.
+                    targeting::feed_targeting_to_vm
+                        .in_set(UnitFeed)
+                        .after(crate::ui_pet::pet_stop_on_old_target_clear),
                     targeting::publish_picks_self.in_set(UiFeed),
                     targeting::drain_stop_targeting.after(UiInput),
-                    targeting::drain_spell_target_unit.after(UiInput),
                     // The item-target commit (`0x495d60`): after the input pass so a bag click
                     // binds the same frame; outside the target chain, as its clicks never reach
                     // the world.

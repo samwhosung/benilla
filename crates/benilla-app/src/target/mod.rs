@@ -310,13 +310,18 @@ impl Plugin for TargetPlugin {
                     crate::spell::targeting::commit_object_cast_on_click,
                     click::act_on_right_click,
                     click::clear_target_requests,
-                    // The unit-token asks (`TargetUnit`, `AssistUnit`, `TargetLastEnemy`: one
-                    // drain, as the reference has one `0x489a40`) and `DropItemOnUnit`'s pet leg,
-                    // independent of each other.
+                    // The UI's unit-token drains. `SpellTargetUnit` first: it binds the cursor's
+                    // cast and never moves the selection. Then the selection asks (`TargetUnit`,
+                    // `AssistUnit`, `TargetLastEnemy`: one drain, as the reference has one
+                    // `0x489a40`) and `DropItemOnUnit`'s pet leg, independent of each other.
                     (
-                        click::selection_requests,
-                        crate::ui_action::drop_item::drop_item_on_unit,
-                    ),
+                        crate::spell::targeting::drain_spell_target_unit,
+                        (
+                            click::selection_requests,
+                            crate::ui_action::drop_item::drop_item_on_unit,
+                        ),
+                    )
+                        .chain(),
                     // The by-name asks: `/target`, the Lua `TargetByName` and `/assist` commit
                     // through `scan::commit`; `/follow` hands its subject to `crate::player`.
                     (
