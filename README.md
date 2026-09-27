@@ -78,6 +78,9 @@ On Windows, in PowerShell:
 $env:WOW_DATA="C:\path\to\WoW\Data"; cargo run --release -p benilla
 ```
 
+Each release is a tag on the [Releases page](https://github.com/samwhosung/benilla/releases):
+`git checkout <tag>` first runs that release, and `main` is the development tip.
+
 `WOW_DATA` names the install's `Data` folder; a link to the install named `WoW` at the repo root
 does the same (`ln -s /path/to/WoW WoW`, or on Windows a junction, which needs no admin rights:
 `New-Item -ItemType Junction -Path WoW -Target C:\path\to\WoW`). The server defaults to

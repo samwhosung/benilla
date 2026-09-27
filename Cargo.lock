@@ -488,7 +488,7 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "benilla"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "benilla-app",
  "benilla-buildstamp",
@@ -496,14 +496,14 @@ dependencies = [
 
 [[package]]
 name = "benilla-adt"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "benilla-bytes",
 ]
 
 [[package]]
 name = "benilla-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -550,7 +550,7 @@ dependencies = [
 
 [[package]]
 name = "benilla-assets"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "benilla-formats",
@@ -561,7 +561,7 @@ dependencies = [
 
 [[package]]
 name = "benilla-blp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "benilla-bytes",
  "texpresso",
@@ -569,22 +569,22 @@ dependencies = [
 
 [[package]]
 name = "benilla-buildstamp"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "benilla-bytes"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "benilla-dbc"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "benilla-bytes",
 ]
 
 [[package]]
 name = "benilla-formats"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "benilla-adt",
@@ -602,14 +602,14 @@ dependencies = [
 
 [[package]]
 name = "benilla-m2"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "benilla-bytes",
 ]
 
 [[package]]
 name = "benilla-mpq"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "benilla-bytes",
  "flate2",
@@ -617,7 +617,7 @@ dependencies = [
 
 [[package]]
 name = "benilla-protocol"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "benilla-srp",
@@ -631,7 +631,7 @@ dependencies = [
 
 [[package]]
 name = "benilla-srp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "num-bigint",
  "rand 0.8.6",
@@ -640,7 +640,7 @@ dependencies = [
 
 [[package]]
 name = "benilla-ui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "mlua",
  "roxmltree",
@@ -648,7 +648,7 @@ dependencies = [
 
 [[package]]
 name = "benilla-visual"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "image",
@@ -656,18 +656,18 @@ dependencies = [
 
 [[package]]
 name = "benilla-wdt"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "benilla-wmo"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "benilla-bytes",
 ]
 
 [[package]]
 name = "benilla-world"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "avian3d",
  "benilla-assets",
@@ -683,7 +683,7 @@ dependencies = [
 
 [[package]]
 name = "benilla-worldview"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "benilla-buildstamp",
  "benilla-world",
