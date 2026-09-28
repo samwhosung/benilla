@@ -1104,7 +1104,7 @@ mod tests {
         use crossbeam_channel::Receiver;
 
         use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
-        use crate::target::{attack_order_target, Selection, TargetScan};
+        use crate::target::{AttackPick, Selection};
         use benilla_world::model_fade::DespawnFade;
 
         const ME: u64 = 0x0000_0000_0000_0007;
@@ -1123,7 +1123,10 @@ mod tests {
                 transport_progress: None,
                 transport: None,
                 spline: None,
+                // `OBJECT_FIELD_TYPE` (2) 0x9, object and unit, as a creature's create carries it:
+                // `SetSelection`'s `IsSelectable` refuses any other type.
                 fields: ObjectFields::from_pairs(&[
+                    (2, 0x9),
                     (FIELD_UNIT_HEALTH, 100),
                     (FIELD_UNIT_MAXHEALTH, 100),
                     (FIELD_UNIT_LEVEL, 9),
@@ -1223,11 +1226,11 @@ mod tests {
                 *world.resource_mut::<Selection>() = Selection::default();
                 world
                     .run_system_once(
-                        |scan: TargetScan,
+                        |mut pick: AttackPick,
                          mut sel: ResMut<Selection>,
                          mut seam: crate::creature_anim::AttackSeam,
                          mut errors: ResMut<crate::ui_action::UiErrorKeys>| {
-                            attack_order_target(&scan, &mut sel, &mut seam, &mut errors)
+                            pick.target(&mut sel, &mut seam, &mut errors)
                         },
                     )
                     .expect("the scan runs on the built client")

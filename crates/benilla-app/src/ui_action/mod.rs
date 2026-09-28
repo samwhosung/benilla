@@ -17,7 +17,7 @@ use benilla_assets::{AssetSet, LockRecover, WorldAssets};
 mod cast_fail;
 mod drain;
 // A `UseAction` press, applied in call order by `crate::script_calls`.
-pub(crate) use drain::{use_action, ActionPress};
+pub(crate) use drain::{attack_target_binding, use_action, ActionPress, AttackPress, UseOutcome};
 #[cfg(test)]
 mod drain_tests;
 pub(crate) mod drop_item;
@@ -242,8 +242,6 @@ impl Plugin for UiActionPlugin {
                         .in_set(CooldownEvents)
                         .after(feed::feed_actions),
                     drain::drain_action_sets.after(UiInput),
-                    // The ATTACKTARGET binding, after the dispatch wrote this frame's key fires.
-                    drain::attack_target_binding.after(UiInput),
                     // The target chain queues the openers earlier in the frame.
                     drain::drain_go_openers.after(UiInput),
                     // The latches must be current before the target chain's cursor reads them.

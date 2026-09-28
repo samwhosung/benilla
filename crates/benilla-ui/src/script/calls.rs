@@ -24,8 +24,8 @@ pub enum ScriptCall {
     TargetLastTarget,
     /// `ClearTarget()` (`0x489ff0` → `0x493540(0,0)`), a no-op when nothing is selected by then.
     ClearTarget,
-    /// `AttackTarget()` (`0x489b50` → `0x6131a0(0,0)`): the attack toggle at the selection as it
-    /// stands then.
+    /// `AttackTarget()` (`0x489b50` → `0x6131a0(0,0)`): the attack validator's pick from the
+    /// selection as it stands then, which may move it to the nearest enemy, then the toggle.
     AttackTarget,
     /// `SpellTargetUnit(unit)` (`0x6e6d90`), made while the cursor was up.
     SpellTargetUnit(String),

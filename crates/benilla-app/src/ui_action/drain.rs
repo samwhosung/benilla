@@ -55,61 +55,67 @@ pub(super) fn item_action_route(
     }
 }
 
-/// The ATTACKTARGET binding (default T), whose stock body is `AttackTarget()`: the same toggle as
-/// the Lua call ([`ActionPress::attack_target`]).
-pub(super) fn attack_target_binding(
+/// The ATTACKTARGET binding (default T), whose stock body is `AttackTarget()`, and the melee
+/// probe's press with nothing selected: both the player's Attack ([`AttackPress::attack_target`]).
+pub(crate) fn attack_target_binding(
     binds: Res<crate::bindings::BindingsState>,
-    targeting: cast_target::CastTargeting,
-    mut acquire: MessageWriter<crate::target::AttackNearestRequest>,
-    mut ui_errors: ResMut<UiErrorKeys>,
-    mut ladder: CastLadder,
+    mut probe: MessageReader<crate::target::AttackNearestRequest>,
+    mut press: AttackPress,
 ) {
-    if binds.fired(crate::bindings::cmd::ATTACK_TARGET) {
-        attack_target(&targeting, &mut acquire, &mut ui_errors, &mut ladder);
+    let probed = probe.read().last().is_some() && press.selection.guid.is_none();
+    if binds.fired(crate::bindings::cmd::ATTACK_TARGET) || probed {
+        press.attack_target();
     }
 }
 
-/// `AttackTarget` (`0x489b50` → `0x6131a0(0,0)`): the action bar's attack arm without a slot, as
-/// `UseAction`'s Attack also lands in `0x612df0`. A held selection toggles the swing at it; none
-/// acquires the nearest enemy.
-fn attack_target(
-    targeting: &cast_target::CastTargeting,
-    acquire: &mut MessageWriter<crate::target::AttackNearestRequest>,
-    ui_errors: &mut UiErrorKeys,
-    ladder: &mut CastLadder,
-) {
-    if attack_actor_refusal(
-        targeting.self_store.iter().next(),
-        targeting.context().self_guid,
-        ui_errors,
-    ) {
-        return;
-    }
-    match targeting.selection.guid {
-        Some(guid) => {
-            let Ok((e, engaged)) = ladder.self_player.single() else {
-                return;
-            };
-            debug!(
-                "AttackTarget {} at {guid:#x}",
-                if engaged { "toggled off" } else { "swing" }
-            );
-            // The action button's own toggle (`0x6131a0`).
-            crate::creature_anim::toggle_attack_local(
-                e,
-                guid,
-                engaged,
-                &mut ladder.queued_melee,
-                &mut ladder.auto_repeat,
-                &mut ladder.sheath,
-                &mut ladder.ecs,
-                &ladder.commands,
-            );
+/// What the player's Attack reads and writes: `AttackTarget` (`0x489b50`), the ATTACKTARGET
+/// binding and `UseAction`'s Attack slot (through `TryCast`, `0x6e4c90`) all run `0x6131a0`.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct AttackPress<'w, 's> {
+    pick: crate::target::AttackPick<'w, 's>,
+    selection: ResMut<'w, crate::target::Selection>,
+    seam: crate::creature_anim::AttackSeam<'w, 's>,
+    ui_errors: ResMut<'w, UiErrorKeys>,
+}
+
+impl AttackPress<'_, '_> {
+    /// `0x6131a0`: the attack validator `0x612df0` (`0x6131aa`) runs first, its actor checks then
+    /// its target pick, which may move the selection; a refusal ends the press. Then the toggle:
+    /// attacking (`0x60ecb0`) stops (`0x5ecac0`), else it starts at the validator's target
+    /// (`0x5ecb70`). Only the start cancels auto-repeat (`0x5ecd8c`), so stopping melee leaves
+    /// Auto Shot running.
+    pub(crate) fn attack_target(&mut self) {
+        let Self {
+            pick,
+            selection,
+            seam,
+            ui_errors,
+        } = self;
+        let (me, my_guid) = pick.player();
+        if attack_actor_refusal(me, my_guid, ui_errors) {
+            return;
         }
-        None => {
-            debug!("AttackTarget with no target — acquiring nearest");
-            acquire.write(crate::target::AttackNearestRequest);
-        }
+        let Some(guid) = pick.target(selection, seam, ui_errors) else {
+            return;
+        };
+        let Ok(e) = seam.me.single() else {
+            return;
+        };
+        let engaged = pick.engaged();
+        debug!(
+            "attack {} at {guid:#x}",
+            if engaged { "toggled off" } else { "swing" }
+        );
+        crate::creature_anim::toggle_attack_local(
+            e,
+            guid,
+            engaged,
+            &mut seam.queued_melee,
+            &mut seam.auto_repeat,
+            &mut seam.sheath,
+            &mut seam.ecs,
+            &seam.net,
+        );
     }
 }
 
@@ -179,7 +185,6 @@ fn self_bound<'a>(
 pub(crate) struct ActionPress<'w, 's> {
     actions: Res<'w, PlayerActions>,
     targeting: cast_target::CastTargeting<'w, 's>,
-    acquire: MessageWriter<'w, crate::target::AttackNearestRequest>,
     // The by-key error line. Not a `CastLadder` field: Bevy panics, at runtime and not in unit
     // tests, on a resource reachable twice from one system.
     ui_errors: ResMut<'w, UiErrorKeys>,
@@ -187,30 +192,27 @@ pub(crate) struct ActionPress<'w, 's> {
     gate: crate::ui_bind_confirm::BindGate<'w>,
 }
 
-impl ActionPress<'_, '_> {
-    /// `AttackTarget()` from the call queue, at the selection the calls before it left.
-    pub(crate) fn attack_target(&mut self) {
-        attack_target(
-            &self.targeting,
-            &mut self.acquire,
-            &mut self.ui_errors,
-            &mut self.ladder,
-        );
-    }
+/// What a `UseAction` press leaves to another applier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
+pub(crate) enum UseOutcome {
+    Done,
+    /// The Attack slot passed `TryCast`'s dead rung: the player's Attack ([`AttackPress`]) runs.
+    Attack,
 }
 
-/// `UseAction` (`0x4e5ee0`) on the pressed slot: a cast, a swing, an item use or a macro run, at
-/// the selection as the calls before it left it. A macro's lines run inside it (`0x4e6098 call
-/// 0x4f1460`), so the calls they make queue for [`crate::script_calls`] to apply next.
+/// `UseAction` (`0x4e5ee0`) on the pressed slot: a cast, an item use or a macro run, at the
+/// selection as the calls before it left it, or the Attack slot, which it hands back for the
+/// player's Attack to run. A macro's lines run inside it (`0x4e6098 call 0x4f1460`), so the calls
+/// they make queue for [`crate::script_calls`] to apply next.
 pub(crate) fn use_action(
     p: &mut ActionPress,
     script: &mut UiScript,
     press: benilla_ui::script::ActionUse,
-) {
+) -> UseOutcome {
     let ActionPress {
         actions,
         targeting,
-        acquire,
         ui_errors,
         ladder,
         gate,
@@ -219,54 +221,17 @@ pub(crate) fn use_action(
     let action = press.action;
     let slot = match u8::try_from(action.saturating_sub(1)) {
         Ok(s) => s,
-        Err(_) => return,
+        Err(_) => return UseOutcome::Done,
     };
     match actions.buttons.get(&slot) {
         Some(b) if b.kind == ACTION_KIND_SPELL && b.action == SPELL_ATTACK => {
             // `UseAction` casts Attack through TryCast, so its dead rung comes first: "You are
             // dead", where the binding, which skips TryCast, reads "Can't attack while dead."
+            // Then TryCast's effect-0x4e short-circuit runs the Attack toggle (`0x6e4c90`).
             if ladder.dead_refusal(SPELL_ATTACK, targeting.self_store.iter().next()) {
-                return;
+                return UseOutcome::Done;
             }
-            // The attack validator's actor gates (`0x612df0`) precede both the swing and the
-            // nearest-enemy scan (`0x6130b5`), so both arms gate here.
-            if attack_actor_refusal(
-                targeting.self_store.iter().next(),
-                targeting.context().self_guid,
-                ui_errors,
-            ) {
-                return;
-            }
-            match selection.guid {
-                Some(guid) => {
-                    // A toggle (`0x6131a0`, via `TryCast`'s effect-0x4e short-circuit
-                    // `0x6e4c7a`): attacking (`0x60ecb0`) stops (`0x5ecac0`), else starts
-                    // (`0x5ecb70`). Only the start cancels auto-repeat (`0x5ecd8c`), so
-                    // stopping melee leaves Auto Shot running.
-                    let Ok((e, engaged)) = ladder.self_player.single() else {
-                        return;
-                    };
-                    debug!(
-                        "ui_action: attack {} at {guid:#x}",
-                        if engaged { "toggled off" } else { "swing" }
-                    );
-                    crate::creature_anim::toggle_attack_local(
-                        e,
-                        guid,
-                        engaged,
-                        &mut ladder.queued_melee,
-                        &mut ladder.auto_repeat,
-                        &mut ladder.sheath,
-                        &mut ladder.ecs,
-                        &ladder.commands,
-                    );
-                }
-                // No target: the reference swings at the nearest enemy (`0x6130b5`).
-                None => {
-                    debug!("ui_action: attack with no target — acquiring nearest");
-                    acquire.write(crate::target::AttackNearestRequest);
-                }
-            }
+            return UseOutcome::Attack;
         }
         Some(b) if b.kind == ACTION_KIND_SPELL => {
             // In `UseAction 0x4e5ee0` only: re-pressing the spell whose targeting cursor is
@@ -278,7 +243,7 @@ pub(crate) fn use_action(
                     b.action
                 );
                 ladder.ground.clear();
-                return;
+                return UseOutcome::Done;
             }
             // A live `ActiveIconID` spell re-pressed cancels its aura (`0x4e55f0`, cancel
             // `0x4e60c1`). The form-match toggle is `CastSpell`'s alone, not `UseAction`'s.
@@ -290,7 +255,7 @@ pub(crate) fn use_action(
                             .commands
                             .0
                             .send(crate::net::ClientCommand::CancelAura { spell_id: b.action });
-                        return;
+                        return UseOutcome::Done;
                     }
                 }
             }
@@ -310,7 +275,7 @@ pub(crate) fn use_action(
         // red error line: nothing was attempted.
         Some(b) if b.kind == ACTION_KIND_ITEM => {
             let Some(store) = targeting.self_store.iter().next() else {
-                return;
+                return UseOutcome::Done;
             };
             let template = ladder
                 .items
@@ -322,7 +287,7 @@ pub(crate) fn use_action(
                     "ui_action: item action {action} (entry {}) has no template yet — skipped",
                     b.action
                 );
-                return;
+                return UseOutcome::Done;
             };
             let route = item_action_route(&template, |s| {
                 crate::ui_items::find_item(&store.0, &ladder.objects, b.action, s)
@@ -335,7 +300,7 @@ pub(crate) fn use_action(
                         "ui_action: item action {action} (entry {}) is nowhere in the inventory — skipped",
                         b.action
                     );
-                    return;
+                    return UseOutcome::Done;
                 }
             };
             if equip {
@@ -402,6 +367,7 @@ pub(crate) fn use_action(
         }
         None => debug!("ui_action: UseAction({action}) on an empty slot"),
     }
+    UseOutcome::Done
 }
 
 /// Applies the queued `PickupAction`/`PlaceAction` writes (packed 0 clears) to the store, which

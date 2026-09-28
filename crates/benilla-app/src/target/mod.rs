@@ -62,10 +62,10 @@ pub(crate) use flash::CombatFlash;
 pub(crate) use price_discount::vendor_price_discount;
 #[cfg(test)]
 pub(crate) use price_discount::{stormwind_fixture, HUMAN_WARRIOR};
-// The attack-with-no-target request, and the same nearest-enemy core called synchronously for the
-// pet bar's Attack, whose order must leave in the frame it was pressed.
 pub(crate) use relations::{can_assist, can_attack, can_interact, corpse_friendly};
-pub(crate) use scan::{attack_order_target, AttackNearestRequest, TargetScan};
+// The attack validator's target half, run in the call that asks, for the player's Attack and the
+// pet bar's; the melee probe's press with nothing selected.
+pub(crate) use scan::{AttackNearestRequest, AttackPick};
 // The chat layer's by-name asks (`/target`, `/assist`).
 pub(crate) use by_name::{AssistRequest, TargetByNameRequest};
 // The reaction decode and its faction catalog, which also tint the target frame
@@ -337,7 +337,8 @@ impl Plugin for TargetPlugin {
                     // The TAB keys' cycler (`0x493f60`, mode 1); the `TargetNearest*` Lua calls
                     // run the same cycle as script calls.
                     scan::tab_target,
-                    scan::acquire_and_attack,
+                    // The ATTACKTARGET binding and the melee probe's press, the player's Attack.
+                    crate::ui_action::attack_target_binding,
                     flash::drive_flash,
                     // The last-enemy stamp before the ring's death-clear, so a hostile that dies
                     // selected is still remembered (the reference's `TargetLastEnemy` has no

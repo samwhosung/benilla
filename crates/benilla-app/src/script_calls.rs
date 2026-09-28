@@ -30,6 +30,7 @@ pub(crate) fn apply_script_calls(
         crate::ui_action::ActionPress,
         crate::ui_items::ScriptItemUse,
         crate::ui_pet::PetPress,
+        crate::ui_action::AttackPress,
     )>,
 ) {
     let Some(mut script) = script else {
@@ -43,7 +44,7 @@ pub(crate) fn apply_script_calls(
         }
         ScriptCall::TargetLastTarget => appliers.p0().target_last_target(),
         ScriptCall::ClearTarget => appliers.p0().clear_target(),
-        ScriptCall::AttackTarget => appliers.p4().attack_target(),
+        ScriptCall::AttackTarget => appliers.p7().attack_target(),
         ScriptCall::SpellTargetUnit(token) => appliers.p1().spell_target_unit(&token),
         ScriptCall::SpellStopTargeting => appliers.p1().stop_targeting(),
         ScriptCall::SpellStopCasting => appliers.p2().stop_casting(),
@@ -54,7 +55,10 @@ pub(crate) fn apply_script_calls(
             crate::ui_shapeshift::cast_form(&mut appliers.p3(), spell_id);
         }
         ScriptCall::UseAction(press) => {
-            crate::ui_action::use_action(&mut appliers.p4(), script, press);
+            let used = crate::ui_action::use_action(&mut appliers.p4(), script, press);
+            if used == crate::ui_action::UseOutcome::Attack {
+                appliers.p7().attack_target();
+            }
         }
         ScriptCall::UseContainerItem { bag, slot } => {
             appliers.p5().use_container_item(script, bag, slot);
@@ -116,6 +120,17 @@ mod tests {
     const NEW: u64 = 0x22;
     /// Not in the (absent) spell catalog, so the cast's wire target is the selection as it stands.
     const HEAL: u32 = 2050;
+    /// A mob the TAB scan can pick: it alone carries a `NetEntity`.
+    const MOB: u64 = 0x31;
+    /// `UNIT_FIELD_FACTIONTEMPLATE`, `UNIT_FIELD_HEALTH`, `UNIT_FIELD_FLAGS`.
+    const TEMPLATE: u16 = 35;
+    const HEALTH: u16 = 22;
+    const FLAGS: u16 = 46;
+    /// The fixture's templates: ours (group 1, friendly toward group 2, enemy of group 4), a
+    /// friendly NPC's (group 2) and a hostile mob's (group 4).
+    const OURS: u32 = 1;
+    const FRIEND: u32 = 2;
+    const FOE: u32 = 3;
 
     struct Frame {
         app: App,
@@ -141,7 +156,17 @@ mod tests {
                 ])),
             )
         };
+        // We are a player (`OBJECT_FIELD_TYPE` 0x19, `UNIT_FLAG_PVP_ATTACKABLE`), which selects
+        // `CanAttack`'s player arm: with no `FactionTemplate.dbc` a plain unit is attackable.
         let me = world.spawn((SelfPlayer, unit(ME, 0.0))).id();
+        world
+            .entity_mut(me)
+            .insert(ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (2, 0x19),
+                (22, 100),
+                (28, 100),
+                (46, 0x8),
+            ])));
         let old = world.spawn(unit(OLD, 5.0)).id();
         let new = world.spawn(unit(NEW, 6.0)).id();
         let index = &mut world.resource_mut::<GuidIndex>().0;
@@ -220,6 +245,99 @@ mod tests {
         f.app.world().resource::<Selection>().guid
     }
 
+    /// `MOB` at 3 yd, alive, with `fields` over its health.
+    fn spawn_mob(f: &mut Frame, fields: &[(u16, u32)]) {
+        let world = f.app.world_mut();
+        let mut pairs = vec![(HEALTH, 100), (28, 100)];
+        pairs.extend_from_slice(fields);
+        let mob = world
+            .spawn((
+                Guid(MOB),
+                crate::net::NetEntity {
+                    kind: benilla_protocol::EntityKind::Unit,
+                    display_id: None,
+                    scale: 1.0,
+                },
+                Transform::from_xyz(3.0, 0.0, 0.0),
+                GlobalTransform::from_translation(Vec3::new(3.0, 0.0, 0.0)),
+                ObjectStore(benilla_protocol::ObjectFields::from_pairs(&pairs)),
+            ))
+            .id();
+        world.resource_mut::<GuidIndex>().0.insert(MOB, mob);
+    }
+
+    /// Give the world a faction table, us [`OURS`] and `OLD` the `old` template with `fields`
+    /// over it.
+    fn with_factions(f: &mut Frame, old: u32, fields: &[(u16, u32)]) {
+        use benilla_formats::{FactionCatalog, FactionTemplate};
+        use std::collections::HashMap;
+        let tpl = |faction, group_mask, friend_group_mask, enemy_group_mask| FactionTemplate {
+            faction,
+            group_mask,
+            friend_group_mask,
+            enemy_group_mask,
+            enemies: [0; 4],
+            friends: [0; 4],
+        };
+        let world = f.app.world_mut();
+        world.insert_resource(crate::target::Factions::from_catalog(
+            FactionCatalog::from_rows(
+                HashMap::from([
+                    (OURS, tpl(OURS, 1, 2, 4)),
+                    (FRIEND, tpl(FRIEND, 2, 0, 0)),
+                    (FOE, tpl(FOE, 4, 0, 0)),
+                ]),
+                HashMap::new(),
+            ),
+        ));
+        let index = &world.resource::<GuidIndex>().0;
+        let (me, old_unit) = (index[&ME], index[&OLD]);
+        world
+            .entity_mut(me)
+            .insert(ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (2, 0x19),
+                (HEALTH, 100),
+                (28, 100),
+                (FLAGS, 0x8),
+                (TEMPLATE, OURS),
+            ])));
+        let mut pairs = vec![(HEALTH, 100), (28, 100), (TEMPLATE, old)];
+        pairs.extend_from_slice(fields);
+        world
+            .entity_mut(old_unit)
+            .insert(ObjectStore(benilla_protocol::ObjectFields::from_pairs(
+                &pairs,
+            )));
+    }
+
+    /// The `CMSG_ATTACKSWING`s sent, and whether a `CMSG_ATTACKSTOP` went out.
+    fn swings(f: &Frame) -> (Vec<u64>, bool) {
+        let mut stopped = false;
+        let swings =
+            f.rx.try_iter()
+                .filter_map(|c| match c {
+                    ClientCommand::AttackSwing { guid } => Some(guid),
+                    ClientCommand::AttackStop => {
+                        stopped = true;
+                        None
+                    }
+                    _ => None,
+                })
+                .collect();
+        (swings, stopped)
+    }
+
+    /// The keys of the error lines raised.
+    fn errors(f: &Frame) -> Vec<&'static str> {
+        f.app
+            .world()
+            .resource::<crate::ui_action::UiErrorKeys>()
+            .0
+            .iter()
+            .map(|e| e.key)
+            .collect()
+    }
+
     /// `/target` then `/cast`: `TargetUnit` commits through `SetSelection 0x493540` before it
     /// returns, and `CastSpellByName` (`0x4b4ab0`) casts at the selection as it stands then.
     #[test]
@@ -265,39 +383,9 @@ mod tests {
     /// it returns, so the cast after it in the same script goes to the unit the TAB cycle picked.
     #[test]
     fn a_cast_after_target_nearest_enemy_goes_to_the_picked_unit() {
-        const MOB: u64 = 0x31;
         let mut f = frame(true);
-        let world = f.app.world_mut();
-        // With no `FactionTemplate.dbc` a plain unit is attackable; OLD and NEW carry no
-        // `NetEntity`, so the scan's one candidate is the mob.
-        let mob = world
-            .spawn((
-                Guid(MOB),
-                crate::net::NetEntity {
-                    kind: benilla_protocol::EntityKind::Unit,
-                    display_id: None,
-                    scale: 1.0,
-                },
-                Transform::from_xyz(3.0, 0.0, 0.0),
-                GlobalTransform::from_translation(Vec3::new(3.0, 0.0, 0.0)),
-                ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
-                    (22, 100),
-                    (28, 100),
-                ])),
-            ))
-            .id();
-        world.resource_mut::<GuidIndex>().0.insert(MOB, mob);
-        // We are a player (`OBJECT_FIELD_TYPE` 0x19, `UNIT_FLAG_PVP_ATTACKABLE`), which selects
-        // `CanAttack`'s player arm.
-        let me = world.resource::<GuidIndex>().0[&ME];
-        world
-            .entity_mut(me)
-            .insert(ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
-                (2, 0x19),
-                (22, 100),
-                (28, 100),
-                (46, 0x8),
-            ])));
+        // OLD and NEW carry no `NetEntity`, so the scan's one candidate is the mob.
+        spawn_mob(&mut f, &[]);
         run(&mut f, r#"TargetNearestEnemy() CastSpellByName("Heal")"#);
         assert_eq!(casts(&f), vec![(HEAL, Some(MOB))]);
         assert_eq!(selected(&f), Some(MOB));
@@ -331,20 +419,117 @@ mod tests {
     /// left it.
     #[test]
     fn attack_target_swings_at_the_selection_in_call_order() {
-        let swings = |f: &Frame| -> Vec<u64> {
-            f.rx.try_iter()
-                .filter_map(|c| match c {
-                    ClientCommand::AttackSwing { guid } => Some(guid),
-                    _ => None,
-                })
-                .collect()
-        };
         let mut f = frame(true);
         run(&mut f, r#"AttackTarget() TargetUnit("party1")"#);
-        assert_eq!(swings(&f), vec![OLD]);
+        assert_eq!(swings(&f), (vec![OLD], false));
         let mut f = frame(true);
         run(&mut f, r#"TargetUnit("party1") AttackTarget()"#);
-        assert_eq!(swings(&f), vec![NEW]);
+        assert_eq!(swings(&f), (vec![NEW], false));
+    }
+
+    /// `0x6130a3`: a unit we are friendly toward is dropped (`0x6130a8`) and `TargetNearestEnemy`
+    /// runs (`0x6130b5`), moving the selection; the swing goes at what it picked (`0x6130c1`).
+    /// The Attack button reaches the same `0x6131a0` through `TryCast` (`0x6e4c90`).
+    #[test]
+    fn attack_with_a_friend_selected_swings_at_the_nearest_enemy_instead() {
+        for lua in ["AttackTarget()", "UseAction(1)"] {
+            let mut f = frame(true);
+            with_factions(&mut f, FRIEND, &[]);
+            spawn_mob(&mut f, &[(TEMPLATE, FOE)]);
+            f.app
+                .world_mut()
+                .resource_mut::<crate::ui_action::PlayerActions>()
+                .buttons
+                .insert(
+                    0,
+                    ActionButton {
+                        slot: 0,
+                        action: crate::ui_action::SPELL_ATTACK,
+                        kind: benilla_protocol::messages::ACTION_KIND_SPELL,
+                    },
+                );
+            run(&mut f, lua);
+            assert_eq!(selected(&f), Some(MOB), "{lua}");
+            assert_eq!(swings(&f), (vec![MOB], false), "{lua}");
+            assert_eq!(errors(&f), Vec::<&str>::new(), "{lua}");
+        }
+    }
+
+    /// The retarget commits before `AttackTarget` returns, so a cast after it in the same script
+    /// goes to the enemy it picked, from a friend or from nothing selected.
+    #[test]
+    fn a_cast_after_attack_target_goes_to_the_enemy_it_picked() {
+        for selected_before in [true, false] {
+            let mut f = frame(selected_before);
+            with_factions(&mut f, FRIEND, &[]);
+            spawn_mob(&mut f, &[(TEMPLATE, FOE)]);
+            run(&mut f, r#"AttackTarget() CastSpellByName("Heal")"#);
+            assert_eq!(
+                casts(&f),
+                vec![(HEAL, Some(MOB))],
+                "selected before: {selected_before}"
+            );
+        }
+    }
+
+    /// With no enemy in reach the scan moves nothing (`0x493f60`), so the selection re-read at
+    /// `0x6130c1` is the friend, which the final gate's `CanAttack` refuses (`0x613171`); only an
+    /// empty selection is "There is nothing to attack." (`0x6130d9`). Neither swings.
+    #[test]
+    fn attack_with_no_enemy_near_refuses_by_what_is_selected() {
+        let mut f = frame(true);
+        with_factions(&mut f, FRIEND, &[]);
+        run(&mut f, "AttackTarget()");
+        assert_eq!(selected(&f), Some(OLD));
+        assert_eq!(errors(&f), vec!["ERR_INVALID_ATTACK_TARGET"]);
+        assert_eq!(swings(&f), (vec![], false));
+
+        let mut f = frame(false);
+        with_factions(&mut f, FRIEND, &[]);
+        run(&mut f, "AttackTarget()");
+        assert_eq!(selected(&f), None);
+        assert_eq!(errors(&f), vec!["ERR_NO_ATTACK_TARGET"]);
+        assert_eq!(swings(&f), (vec![], false));
+    }
+
+    /// A hostile corpse is kept (`0x6130a3` reads the reaction alone), so no scan runs past it to
+    /// the live mob, and the final gate refuses a unit neither alive nor feigning (`0x613152`–
+    /// `0x613165`): "You cannot attack that target.", and no swing, which vmangos would stop
+    /// (`CombatHandler.cpp:53-58`).
+    #[test]
+    fn attack_at_a_corpse_cannot_attack_it() {
+        let mut f = frame(true);
+        with_factions(&mut f, FOE, &[(HEALTH, 0)]);
+        spawn_mob(&mut f, &[(TEMPLATE, FOE)]);
+        run(&mut f, "AttackTarget()");
+        assert_eq!(selected(&f), Some(OLD));
+        assert_eq!(errors(&f), vec!["ERR_INVALID_ATTACK_TARGET"]);
+        assert_eq!(swings(&f), (vec![], false));
+    }
+
+    /// `0x6131a0` toggles only past the validator: attacking a live foe stops, and a press the
+    /// validator refuses neither stops nor swings.
+    #[test]
+    fn attack_toggles_off_only_past_the_validator() {
+        for (health, stopped, refused) in [
+            (100, true, None),
+            (0, false, Some("ERR_INVALID_ATTACK_TARGET")),
+        ] {
+            let mut f = frame(true);
+            with_factions(&mut f, FOE, &[(HEALTH, health)]);
+            let world = f.app.world_mut();
+            let me = world.resource::<GuidIndex>().0[&ME];
+            world
+                .entity_mut(me)
+                .insert(crate::creature_anim::Engaged(OLD));
+            run(&mut f, "AttackTarget()");
+            assert_eq!(swings(&f), (vec![], stopped), "health {health}");
+            assert_eq!(
+                errors(&f),
+                refused.into_iter().collect::<Vec<_>>(),
+                "health {health}"
+            );
+        }
     }
 
     /// A macro's lines run inside `UseAction` (`0x4e6098 call 0x4f1460`), so what they call lands

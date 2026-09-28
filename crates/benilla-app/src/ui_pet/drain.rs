@@ -31,7 +31,7 @@ pub(crate) struct PetPress<'w, 's> {
     pub(crate) pet: PetUnit<'w, 's>,
     pub(crate) spells: Option<Res<'w, Spells>>,
     ui_errors: ResMut<'w, crate::ui_action::UiErrorKeys>,
-    scan: crate::target::TargetScan<'w, 's>,
+    pick: crate::target::AttackPick<'w, 's>,
     seam: crate::creature_anim::AttackSeam<'w, 's>,
 }
 
@@ -62,7 +62,7 @@ impl PetPress<'_, '_> {
             pet,
             spells,
             ui_errors,
-            scan,
+            pick,
             seam,
         } = self;
         let pet_guid = bar.spells.pet_guid;
@@ -90,7 +90,7 @@ impl PetPress<'_, '_> {
         let mut target_guid = selection.guid.unwrap_or(0);
         let refused = if is_attack_order(entry) {
             crate::ui_action::attack_actor_refusal(pet_store, pet.self_guid.0, ui_errors)
-                || match crate::target::attack_order_target(scan, selection, seam, ui_errors) {
+                || match pick.target(selection, seam, ui_errors) {
                     Some(guid) => {
                         target_guid = guid;
                         false

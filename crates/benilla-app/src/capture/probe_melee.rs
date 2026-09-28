@@ -1,7 +1,7 @@
-//! The melee live probe (`WOW_PROBE=melee`), inert without the env: once in-world it fires the
-//! attack-nearest core ([`AttackNearestRequest`]) every few seconds, so the character fights
-//! whatever is closest while `WOW_MOVE_TRACE=<path>` records the swing, impact and combat-text
-//! timeline.
+//! The melee live probe (`WOW_PROBE=melee`), inert without the env: once in-world it presses the
+//! player's Attack with nothing selected ([`AttackNearestRequest`]) every few seconds, so the
+//! character acquires and fights whatever is nearest while `WOW_MOVE_TRACE=<path>` records the
+//! swing, impact and combat-text timeline.
 //!
 //! Never run it unattended (`docs/METHOD.md`, "The local server"): it fights with no health
 //! awareness and the character dies.
@@ -21,7 +21,7 @@ impl Plugin for ProbeMeleePlugin {
 }
 
 /// Every 3 s: swing at the selection (idempotent while auto-attacking, and it covers an attacker
-/// the acquire core skips), or with none, run the acquire core.
+/// the acquire skips), or with none, press Attack, which acquires.
 fn melee_probe(
     time: ProbeClock,
     mut last: Local<f64>,
