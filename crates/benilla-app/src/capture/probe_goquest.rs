@@ -147,6 +147,7 @@ fn level_to(net: &NetCommands, from: u32, to: u32) {
         kind: ChatKind::Say,
         target: None,
         text: format!(".levelup {delta}"),
+        language: None,
     });
 }
 
@@ -209,6 +210,7 @@ fn goquest_probe(
                 kind: ChatKind::Say,
                 target: None,
                 text: format!(".go xyz {x} {y} {z} {map}"),
+                language: None,
             });
             probe.phase = Phase::Settling { sent_at: now };
         }

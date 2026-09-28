@@ -215,6 +215,7 @@ pub(crate) fn movement_clears_afk(
         kind: crate::net::ChatKind::Afk,
         target: None,
         text: String::new(),
+        language: None,
     });
 }
 

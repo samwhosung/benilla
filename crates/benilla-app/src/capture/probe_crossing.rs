@@ -134,6 +134,7 @@ fn crossing_probe(
                     kind: crate::net::ChatKind::Say,
                     target: None,
                     text: format!(".go xyz {x} {y} {z} {}", m as i32),
+                    language: None,
                 });
                 return;
             }
@@ -167,6 +168,7 @@ fn crossing_probe(
                     kind: crate::net::ChatKind::Say,
                     target: None,
                     text: format!(".go xyz {x} {y} {} ", z + DROP_HEIGHT),
+                    language: None,
                 });
                 probe.phase = Phase::Boarding {
                     boat: guid.0,

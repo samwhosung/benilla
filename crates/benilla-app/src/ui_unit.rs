@@ -310,6 +310,21 @@ pub(crate) fn seed_default_language(world: &mut World, script: &mut UiScript) {
     script.set_default_language(langs.0.name(u32::from(row.race), 0).map(str::to_string));
 }
 
+/// Seed a new VM with `Languages.dbc`, the static table `SendChatMessage` resolves its language
+/// name against (`0x49f8a0`); locale column 0, as [`feed_default_language`] reads.
+pub(crate) fn seed_language_table(world: &World, script: &mut UiScript) {
+    let Some(langs) = world.get_resource::<LanguagesRes>() else {
+        return;
+    };
+    script.set_language_table(
+        langs
+            .0
+            .names(0)
+            .map(|(id, name)| (id, name.to_string()))
+            .collect(),
+    );
+}
+
 /// Push `GetDefaultLanguage()`'s string on a change of race; `None` is the reference's zero value.
 /// Locale column 0 (the client's slot is `[0xc0e080]`): only enUS is populated in the 1.12 data.
 fn feed_default_language(
@@ -1655,6 +1670,42 @@ mod tests {
             -1,
             "and a template is not one"
         );
+    }
+
+    /// A new VM is seeded with the shipped `Languages.dbc`, so each race's own tongue resolves by
+    /// name to the id vmangos keys `KnowsLanguage` on (`SharedDefines.h:253-269`).
+    #[test]
+    fn a_new_vm_resolves_every_racial_language_by_name() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let mut world = World::new();
+        world.insert_resource(LanguagesRes(
+            benilla_formats::load_languages(&mut chain).expect("Languages.dbc"),
+        ));
+        let mut script = UiScript::new().expect("VM");
+        seed_language_table(&world, &mut script);
+        let want = [
+            ("Orcish", 1),
+            ("Darnassian", 2),
+            ("Taurahe", 3),
+            ("Dwarvish", 6),
+            ("Common", 7),
+            ("Gnomish", 13),
+            ("Troll", 14),
+            ("Gutterspeak", 33),
+        ];
+        for (name, _) in want {
+            script
+                .run(&format!(r#"SendChatMessage("hi", "SAY", "{name}")"#))
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+        }
+        let got: Vec<Option<u32>> = script
+            .take_chat_sends()
+            .iter()
+            .map(|c| c.language)
+            .collect();
+        let ids: Vec<Option<u32>> = want.iter().map(|&(_, id)| Some(id)).collect();
+        assert_eq!(got, ids);
     }
 
     /// [`race_pvp_team`] against the shipped DBCs, walked as `0x5efe00` walks them.

@@ -126,6 +126,7 @@ fn finish(net: &NetCommands, entry: u32, now: f64) -> Phase {
         kind: ChatKind::Say,
         target: None,
         text: format!(".additem {entry} -1"),
+        language: None,
     });
     Phase::Cleanup { since: now }
 }
@@ -197,6 +198,7 @@ fn clam_probe(
                 kind: ChatKind::Say,
                 target: None,
                 text: format!(".additem {entry}"),
+                language: None,
             });
             probe.phase = Phase::Stocking { sent_at: now };
         }

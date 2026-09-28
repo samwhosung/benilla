@@ -295,6 +295,8 @@ pub(crate) struct Model {
     pub(crate) chat_colors_changed: bool,
     /// The languages this character knows, in `Languages.dbc` row order.
     pub(crate) known_languages: Vec<String>,
+    /// `Languages.dbc`'s `(ID, Name_lang)` rows in file order, whatever the character knows.
+    pub(crate) language_table: Vec<(u32, String)>,
     pub(crate) zone_channel_catalog: Vec<super::channel::ZoneChannelRow>,
     pub(crate) channel_commands: Vec<super::channel::ChannelCommand>,
     /// The recruitment auto-join latch `[0x843608]`: 0 `STANDARD`, 1 `AUTO` (`0x49ea70` maps any
@@ -1078,6 +1080,7 @@ impl Model {
             chat_colors: super::chat_types::seed(),
             chat_colors_changed: false,
             known_languages: Vec::new(),
+            language_table: Vec::new(),
             zone_channel_catalog: Vec::new(),
             channel_commands: Vec::new(),
             guild_recruitment_mode: 1,

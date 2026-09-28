@@ -173,6 +173,7 @@ fn vendor_swap_probe(
                 kind: ChatKind::Say,
                 target: None,
                 text: format!(".go xyz {x} {y} {z} {MAP}"),
+                language: None,
             });
             probe.phase = Phase::Settle { sent_at: now };
         }

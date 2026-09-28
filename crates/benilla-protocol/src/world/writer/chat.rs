@@ -1,5 +1,6 @@
-//! The chat sends. Chat speaks [`WorldWriter::chat_language`]: vmangos drops `Universal` from
-//! clients and any tongue the character does not know.
+//! The chat sends. A line speaks the language `SendChatMessage` named, else
+//! [`WorldWriter::chat_language`]: vmangos drops `Universal` outside AFK and DND
+//! (`ChatHandler.cpp:105`) and any tongue the character does not know (`:175`).
 
 use anyhow::Result;
 
@@ -16,120 +17,18 @@ impl WorldWriter {
         )
     }
 
-    /// Send a `/yell` line (`CHAT_MSG_YELL`, `SharedDefines.h:1199`).
-    pub fn send_yell(&mut self, message: &str) -> Result<()> {
-        self.send(
-            opcode::CMSG_MESSAGECHAT,
-            &messages::messagechat(messages::CHAT_TYPE_YELL, self.chat_language, message),
-        )
-    }
-
-    /// Send a custom `/emote` line (`CHAT_MSG_EMOTE`), shown verbatim as `"PlayerName <text>"`.
-    pub fn send_emote_chat(&mut self, message: &str) -> Result<()> {
-        self.send(
-            opcode::CMSG_MESSAGECHAT,
-            &messages::messagechat(messages::CHAT_TYPE_EMOTE, self.chat_language, message),
-        )
-    }
-
-    /// Send a `/whisper` line; the body carries the name before the message (`Chat.cpp:3-12`).
-    pub fn send_whisper(&mut self, target: &str, message: &str) -> Result<()> {
-        self.send(
-            opcode::CMSG_MESSAGECHAT,
-            &messages::messagechat_whisper(self.chat_language, target, message),
-        )
-    }
-
-    /// Send a `/p` party line, dropped silently when ungrouped (`ChatHandler.cpp:472-493`).
-    pub fn send_party(&mut self, message: &str) -> Result<()> {
-        self.send(
-            opcode::CMSG_MESSAGECHAT,
-            &messages::messagechat(messages::CHAT_TYPE_PARTY, self.chat_language, message),
-        )
-    }
-
-    /// Send a `/ra` raid line (`CHAT_MSG_RAID`); needs a raid (`ChatHandler.cpp:514-536`).
-    pub fn send_raid(&mut self, message: &str) -> Result<()> {
-        self.send(
-            opcode::CMSG_MESSAGECHAT,
-            &messages::messagechat(messages::CHAT_TYPE_RAID, self.chat_language, message),
-        )
-    }
-
-    /// Send a `/g` guild line (`CHAT_MSG_GUILD`); needs a guild (`ChatHandler.cpp:494-503`).
-    pub fn send_guild(&mut self, message: &str) -> Result<()> {
-        self.send(
-            opcode::CMSG_MESSAGECHAT,
-            &messages::messagechat(messages::CHAT_TYPE_GUILD, self.chat_language, message),
-        )
-    }
-
-    /// Send a `/o` officer line (`CHAT_MSG_OFFICER`); needs a guild (`ChatHandler.cpp:504-513`).
-    pub fn send_officer(&mut self, message: &str) -> Result<()> {
-        self.send(
-            opcode::CMSG_MESSAGECHAT,
-            &messages::messagechat(messages::CHAT_TYPE_OFFICER, self.chat_language, message),
-        )
-    }
-
-    /// Send a `/rl` raid-leader line, leader only (`ChatHandler.cpp:538-559`).
-    pub fn send_raid_leader(&mut self, message: &str) -> Result<()> {
-        self.send(
-            opcode::CMSG_MESSAGECHAT,
-            &messages::messagechat(messages::CHAT_TYPE_RAID_LEADER, self.chat_language, message),
-        )
-    }
-
-    /// Send a `/rw` raid warning, leader or assistant only (`ChatHandler.cpp:561-576`).
-    pub fn send_raid_warning(&mut self, message: &str) -> Result<()> {
-        self.send(
-            opcode::CMSG_MESSAGECHAT,
-            &messages::messagechat(
-                messages::CHAT_TYPE_RAID_WARNING,
-                self.chat_language,
-                message,
-            ),
-        )
-    }
-
-    /// Send a battleground line; needs a battleground group (`ChatHandler.cpp:579-593`).
-    pub fn send_battleground(&mut self, message: &str) -> Result<()> {
-        self.send(
-            opcode::CMSG_MESSAGECHAT,
-            &messages::messagechat(
-                messages::CHAT_TYPE_BATTLEGROUND,
-                self.chat_language,
-                message,
-            ),
-        )
-    }
-
-    /// Send a battleground-leader line, leader only (`ChatHandler.cpp:595-609`).
-    pub fn send_battleground_leader(&mut self, message: &str) -> Result<()> {
-        self.send(
-            opcode::CMSG_MESSAGECHAT,
-            &messages::messagechat(
-                messages::CHAT_TYPE_BATTLEGROUND_LEADER,
-                self.chat_language,
-                message,
-            ),
-        )
-    }
-
-    /// Toggle AFK, `message` the auto-reply if any; it clears DND (`ChatHandler.cpp:611-630`).
-    pub fn send_afk(&mut self, message: &str) -> Result<()> {
-        self.send(
-            opcode::CMSG_MESSAGECHAT,
-            &messages::messagechat(messages::CHAT_TYPE_AFK, self.chat_language, message),
-        )
-    }
-
-    /// Toggle DND (`CHAT_MSG_DND`), which clears AFK (`ChatHandler.cpp:632-648`).
-    pub fn send_dnd(&mut self, message: &str) -> Result<()> {
-        self.send(
-            opcode::CMSG_MESSAGECHAT,
-            &messages::messagechat(messages::CHAT_TYPE_DND, self.chat_language, message),
-        )
+    /// Send a chat line of any `ChatMsg` type, as the reference's generic builder writes it
+    /// (`0x49f6c3`-`0x49f72a`). `language` is the `Languages.dbc` id `SendChatMessage` resolved;
+    /// `None` is the character's own tongue, [`WorldWriter::chat_language`].
+    pub fn send_message_chat(
+        &mut self,
+        chat_type: u32,
+        language: Option<u32>,
+        target: Option<&str>,
+        message: &str,
+    ) -> Result<()> {
+        let body = message_chat_body(self.chat_language, chat_type, language, target, message);
+        self.send(opcode::CMSG_MESSAGECHAT, &body)
     }
 
     /// Send an addon message (`SendAddonMessage`): `text` is the caller's composed `prefix` TAB
@@ -140,14 +39,6 @@ impl WorldWriter {
         self.send(
             opcode::CMSG_MESSAGECHAT,
             &messages::messagechat(chat_type, messages::LANGUAGE_ADDON, text),
-        )
-    }
-
-    /// Send a channel line by name, dropped unless we are on it (`ChatHandler.cpp:255-327`).
-    pub fn send_channel(&mut self, channel: &str, message: &str) -> Result<()> {
-        self.send(
-            opcode::CMSG_MESSAGECHAT,
-            &messages::messagechat_channel(self.chat_language, channel, message),
         )
     }
 
@@ -172,5 +63,60 @@ impl WorldWriter {
             opcode::CMSG_TEXT_EMOTE,
             &messages::text_emote(text_id, target),
         )
+    }
+}
+
+/// The `CMSG_MESSAGECHAT` body: type, language (`0x49f6f9`), the target cstring only for a whisper
+/// or a channel (`0x49f701`-`0x49f712`, types `6` and `0xe`), then the text. `speaker` is the
+/// language a send that names none carries.
+fn message_chat_body(
+    speaker: u32,
+    chat_type: u32,
+    language: Option<u32>,
+    target: Option<&str>,
+    message: &str,
+) -> Vec<u8> {
+    let target = matches!(
+        chat_type,
+        messages::CHAT_TYPE_WHISPER | messages::CHAT_TYPE_CHANNEL
+    )
+    .then(|| target.unwrap_or_default());
+    messages::messagechat_kind(chat_type, language.unwrap_or(speaker), target, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_named_language_lands_in_the_body() {
+        // A Night Elf's `SendChatMessage("hi", "SAY", "Darnassian")`: type 0, language 2.
+        assert_eq!(
+            message_chat_body(7, messages::CHAT_TYPE_SAY, Some(2), None, "hi"),
+            [0, 0, 0, 0, 2, 0, 0, 0, b'h', b'i', 0]
+        );
+        // No language named: the speaker's Common (7).
+        assert_eq!(
+            message_chat_body(7, messages::CHAT_TYPE_YELL, None, None, "hi"),
+            [5, 0, 0, 0, 7, 0, 0, 0, b'h', b'i', 0]
+        );
+        // A Tauren's Taur-ahe (3) whisper: the name before the text.
+        assert_eq!(
+            message_chat_body(1, messages::CHAT_TYPE_WHISPER, Some(3), Some("Bo"), "yo"),
+            [6, 0, 0, 0, 3, 0, 0, 0, b'B', b'o', 0, b'y', b'o', 0]
+        );
+    }
+
+    #[test]
+    fn only_a_whisper_or_a_channel_carries_a_target() {
+        assert_eq!(
+            message_chat_body(1, messages::CHAT_TYPE_PARTY, None, Some("Bo"), "x"),
+            [1, 0, 0, 0, 1, 0, 0, 0, b'x', 0]
+        );
+        assert_eq!(
+            message_chat_body(1, messages::CHAT_TYPE_CHANNEL, Some(14), None, "x"),
+            [0xe, 0, 0, 0, 14, 0, 0, 0, 0, b'x', 0],
+            "a channel with no name still writes the empty cstring"
+        );
     }
 }

@@ -291,6 +291,7 @@ fn gm(net: &NetCommands, text: impl Into<String>) {
         kind: ChatKind::Say,
         target: None,
         text: text.into(),
+        language: None,
     });
 }
 

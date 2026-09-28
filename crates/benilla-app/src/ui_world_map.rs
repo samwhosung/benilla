@@ -778,6 +778,7 @@ fn dev_map_jump(
         kind: crate::net::ChatKind::Say,
         target: None,
         text,
+        language: None,
     });
 }
 

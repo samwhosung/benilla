@@ -232,6 +232,7 @@ fn mail_probe(
                     kind: ChatKind::Say,
                     target: None,
                     text,
+                    language: None,
                 });
             }
             probe.phase = Phase::Settling { sent_at: now };

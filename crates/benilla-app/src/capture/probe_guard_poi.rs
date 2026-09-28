@@ -83,6 +83,7 @@ fn guard_poi_probe(
                 kind: crate::net::ChatKind::Say,
                 target: None,
                 text: format!(".go xyz {x} {y} {z} 0"),
+                language: None,
             });
             probe.phase = Phase::Hopped { sent_at: now };
         }

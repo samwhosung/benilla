@@ -170,6 +170,7 @@ fn taxi_probe(
                     kind: crate::net::ChatKind::Say,
                     target: None,
                     text,
+                    language: None,
                 });
             }
             probe.phase = Phase::Hopped { sent_at: now };

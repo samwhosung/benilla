@@ -431,6 +431,7 @@ fn auction_probe(
                 kind: ChatKind::Say,
                 target: None,
                 text: format!(".go xyz {x} {y} {z} 0"),
+                language: None,
             });
             probe.phase = Phase::Settling { sent_at: now };
         }
@@ -781,6 +782,7 @@ fn auction_probe(
                     kind: ChatKind::Say,
                     target: None,
                     text: format!(".additem {ITEM_ENTRY} {ITEM_COUNT}"),
+                    language: None,
                 });
                 probe.phase = Phase::EnsureItem {
                     since: now,

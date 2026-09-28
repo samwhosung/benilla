@@ -63,8 +63,9 @@ pub struct WorldWriter {
     /// Every packet that reached the socket since the last drain, as `(opcode, body length)`;
     /// `None` until [`Self::watch_sends`]. Pushed only after a successful write.
     pub(super) sent: Option<Vec<(u16, usize)>>,
-    /// The character's faction language, set at login from its race; every chat send carries it.
-    /// vmangos drops the whole message, dot-commands included, when the character does not know it.
+    /// The character's faction language, set at login from its race, which a chat send naming no
+    /// language carries. vmangos drops the whole message, dot-commands included, when the
+    /// character does not know the language.
     pub(super) chat_language: u32,
 }
 

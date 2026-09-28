@@ -182,6 +182,7 @@ pub(crate) fn idle_handler(
             kind: crate::net::ChatKind::Afk,
             target: None,
             text: out.body,
+            language: None,
         });
     }
     // `0x482eee call 0x5ab0d0; 0x482ef5 jne`: while a logout is pending the whole leg is skipped,
@@ -542,7 +543,7 @@ mod tests {
         assert!(
             matches!(
                 sent.as_slice(),
-                [ClientCommand::Chat { kind: crate::net::ChatKind::Afk, target: None, text }]
+                [ClientCommand::Chat { kind: crate::net::ChatKind::Afk, target: None, text, .. }]
                     if text == "Away from Keyboard"
             ),
             "{sent:?}"

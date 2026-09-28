@@ -192,6 +192,7 @@ fn stone_probe(
                 kind: ChatKind::Say,
                 target: None,
                 text: format!(".go xyz {x} {y} {z} {map}"),
+                language: None,
             });
             probe.phase = Phase::Settling { sent_at: now };
         }
@@ -251,6 +252,7 @@ fn stone_probe(
                 kind: ChatKind::Say,
                 target: None,
                 text: format!(".character level {LEVEL_BELOW}"),
+                language: None,
             });
             probe.phase = Phase::WaitLevel {
                 want: LEVEL_BELOW,
@@ -302,6 +304,7 @@ fn stone_probe(
                 kind: ChatKind::Say,
                 target: None,
                 text: format!(".character level {want}"),
+                language: None,
             });
             probe.phase = Phase::WaitLevel {
                 want,

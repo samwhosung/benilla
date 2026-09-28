@@ -183,6 +183,7 @@ pub(super) fn drain_chat_input(
                 kind: super::edit::SendType::Say.wire(),
                 target: None,
                 text: msg.to_string(),
+                language: None,
             };
             if commands.0.send(cmd).is_err() {
                 warn!("chat: not connected; line dropped");
@@ -1414,6 +1415,7 @@ pub(super) fn drain_addon_chat_sends(
                     kind: crate::net::ChatKind::Afk,
                     target: None,
                     text: String::new(),
+                    language: None,
                 });
             }
         }
@@ -1442,6 +1444,12 @@ pub(super) fn drain_addon_chat_sends(
             kind: wire,
             target: send.target,
             text,
+            // Every type but AFK carries the language the binding resolved (`0x49f6f9`); the AFK
+            // arm's own builder, `SetAFK` (`0x5eb740`), never reads the argument.
+            language: match wire {
+                crate::net::ChatKind::Afk => None,
+                _ => send.language,
+            },
         };
         if commands.0.send(cmd).is_err() {
             warn!("chat: not connected; addon line dropped");

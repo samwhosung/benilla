@@ -166,6 +166,37 @@ fn input_editbox_enter_drains_the_typed_line() {
     assert!(s.take_chat_sends().is_empty(), "drained");
 }
 
+/// The chat menu's Language list sets `editBox.language` (`ChatFrame.lua:2403-2405`) and
+/// `ChatEdit_SendText` passes it on every send (`:1950-1954`), so `/s` and `/y` speak the pick.
+#[test]
+fn the_edit_box_speaks_the_language_picked_in_the_chat_menu() {
+    benilla_formats::wow_data_or_skip!();
+    let mut s = chat_frame();
+    s.set_language_table(vec![(2, "Darnassian".into()), (7, "Common".into())]);
+    s.set_known_languages(vec!["Darnassian".into(), "Common".into()]);
+    for line in ["/s before", "/s ishnu", "/y alah"] {
+        if line == "/s ishnu" {
+            s.run("ChatFrameEditBox.language = GetLanguageByIndex(1)")
+                .unwrap();
+        }
+        assert!(s.focus_editbox("ChatFrameEditBox"));
+        s.char_input(line);
+        assert!(s.key_input("ENTER"));
+    }
+    let sends = s.take_chat_sends();
+    assert_eq!(
+        sends
+            .iter()
+            .map(|c| (c.text.as_str(), c.chat_type.as_str(), c.language))
+            .collect::<Vec<_>>(),
+        vec![
+            ("before", "SAY", None),
+            ("ishnu", "SAY", Some(2)),
+            ("alah", "YELL", Some(2)),
+        ]
+    );
+}
+
 #[test]
 fn input_escape_closes_without_submitting() {
     benilla_formats::wow_data_or_skip!();

@@ -239,6 +239,7 @@ fn book_probe(
                 kind: ChatKind::Say,
                 target: None,
                 text: format!(".go xyz {x} {y} {z} 0"),
+                language: None,
             });
             probe.phase = Phase::Settling { sent_at: now };
         }

@@ -371,6 +371,7 @@ fn charter_probe(
                 kind: ChatKind::Say,
                 target: None,
                 text: format!(".modify money {FUND_COPPER}"),
+                language: None,
             });
             info!(
                 "PROBE_CHARTER: 0 (precheck) — funding the body with {FUND_COPPER} copper so the \
@@ -1046,6 +1047,7 @@ fn hop(probe: &mut CharterProbe, net: &NetCommands, now: f64) {
         kind: ChatKind::Say,
         target: None,
         text: format!(".go xyz {x} {y} {z} {REGISTRAR_MAP}"),
+        language: None,
     });
     probe.phase = Phase::Settling { sent_at: now };
 }

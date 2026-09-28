@@ -641,6 +641,7 @@ fn service_probe(
                     kind: ChatKind::Say,
                     target: None,
                     text: format!(".additem {SELL_ITEM_ENTRY} 1"),
+                    language: None,
                 });
                 probe.phase = Phase::VendorArm { since: now, guid };
             } else if now - since > WINDOW_TIMEOUT_SECS {
@@ -813,6 +814,7 @@ fn hop(probe: &mut ServiceProbe, net: &NetCommands, i: usize, h: usize, now: f64
         kind: ChatKind::Say,
         target: None,
         text: format!(".go xyz {x} {y} {z} {}", leg.map),
+        language: None,
     });
     probe.polls = 0;
     probe.phase = Phase::Hop {
@@ -837,6 +839,7 @@ fn next(probe: &mut ServiceProbe, net: &NetCommands, i: usize, now: f64) {
                 kind: ChatKind::Say,
                 target: None,
                 text: format!(".go xyz {x} {y} {z} {VENDOR_MAP}"),
+                language: None,
             });
             probe.phase = Phase::VendorHop { sent_at: now };
         }

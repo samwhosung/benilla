@@ -87,6 +87,7 @@ fn bg_queue_probe(
                 kind: crate::net::ChatKind::Say,
                 target: None,
                 text: ".revive".to_string(),
+                language: None,
             });
             // A body under the bracket floor is refused at the hello, with no list to join from.
             let level = store.0.unit_level().unwrap_or(0);
@@ -96,6 +97,7 @@ fn bg_queue_probe(
                     kind: crate::net::ChatKind::Say,
                     target: None,
                     text: format!(".levelup {}", QUEUE_LEVEL - level),
+                    language: None,
                 });
             }
             let [x, y, z] = BATTLEMASTER_AT;
@@ -104,6 +106,7 @@ fn bg_queue_probe(
                 kind: crate::net::ChatKind::Say,
                 target: None,
                 text: format!(".go xyz {x} {y} {z} 0"),
+                language: None,
             });
             probe.phase = Phase::Hopped { sent_at: now };
         }

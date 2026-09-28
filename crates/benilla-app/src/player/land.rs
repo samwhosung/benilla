@@ -83,6 +83,7 @@ pub(crate) fn land_here(
         kind: ChatKind::Say,
         target: None,
         text,
+        language: None,
     });
     *pending = Some(time.elapsed_secs() + LAND_TIMEOUT);
 }

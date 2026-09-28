@@ -329,11 +329,13 @@ pub(crate) fn load_ingame_ui_on_world_entry(world: &mut World) {
         .is_none_or(crate::cvars::Cvars::addon_version_check);
     // Per-VM `Update` claims the load itself reads, seeded now: the zone-channel catalog (empty,
     // `General` would be filed and joined as a custom channel), the binding table (stock
-    // `ActionButton_OnLoad` paints the hotkeys) and the default language (`ChatFrame_OnEvent`'s
-    // `PLAYER_ENTERING_WORLD` arm stores it, `ChatFrame.lua:1275-1276`).
+    // `ActionButton_OnLoad` paints the hotkeys), the default language (`ChatFrame_OnEvent`'s
+    // `PLAYER_ENTERING_WORLD` arm stores it, `ChatFrame.lua:1275-1276`) and the language table a
+    // file-scope `SendChatMessage` names its tongue from.
     crate::ui_chat::seed_zone_channel_catalog(world, &mut script);
     crate::bindings::seed_bindings_for_vm(world, &mut script);
     crate::ui_unit::seed_default_language(world, &mut script);
+    crate::ui_unit::seed_language_table(world, &mut script);
     // The world map's continent and zone lists: static DBC data in the reference, read at file
     // scope (Astrolabe builds its whole zone table from `GetMapContinents`/`GetMapZones` there).
     crate::ui_world_map::seed_world_map_catalog(world, &mut script);

@@ -6,8 +6,11 @@
 //! grammar: an addon's `SendChatMessage("/dance")` says the characters. The reference splits the
 //! same way, `ChatEdit_SendText` parsing and `SendChatMessage` not.
 //!
-//! `language` is accepted and dropped, so every line goes in the speaker's default tongue: the
-//! app's chat command has no language field. The reference sends the named language.
+//! `language` starts as the speaker's race base language (`0x5ec890`, at `0x49f2aa`). A string or
+//! number third argument is matched by name, case-insensitively, against every `Languages.dbc`
+//! row (`0x49f8a0`), known to the character or not, and a miss raises `Unknown language`
+//! (`0x844afc`, at `0x49f2e1`): a number is its text, so `7` raises. Refusing a tongue the
+//! character never learned is the server's (vmangos `ChatHandler.cpp:175`).
 //!
 //! Deviation: no truncation at 255 characters (`0x49f604`), because vmangos refuses a longer line
 //! itself (`Chat.cpp:2177`): it is dropped where the reference sends its first 255. The server
@@ -37,6 +40,25 @@ pub struct ChatSend {
     /// The fourth argument as `lua_tostring` gives it (`0x49f306`): the whisper target, or the
     /// channel number the app resolves to a joined channel's name.
     pub target: Option<String>,
+    /// The `Languages.dbc` id the third argument named; `None` is the speaker's default.
+    pub language: Option<u32>,
+}
+
+impl super::UiScript {
+    /// Push `Languages.dbc` as `(ID, Name_lang)` rows in file order, the table `SendChatMessage`
+    /// matches its language name against (`[0xc0db40]`, count `[0xc0db44]`).
+    pub fn set_language_table(&mut self, rows: Vec<(u32, String)>) {
+        self.model_mut().language_table = rows;
+    }
+}
+
+/// `0x49f8a0`: the first row, in file order, whose name equals `name` ignoring case (`SStrCmpI`
+/// `0x64a4c0`, unbounded length), checked against every row, not only the known languages.
+fn language_id(table: &[(u32, String)], name: &str) -> Option<u32> {
+    table
+        .iter()
+        .find(|(_, row)| row.eq_ignore_ascii_case(name))
+        .map(|&(id, _)| id)
 }
 
 impl super::UiScript {
@@ -105,10 +127,24 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.globals().set(
         "SendChatMessage",
         lua.create_function(
-            |lua, (text, chat_type, _language, target): (String, Option<String>, Value, Value)| {
+            |lua, (text, chat_type, language, target): (String, Option<String>, Value, Value)| {
                 let chat_type = chat_type
                     .unwrap_or_else(|| "SAY".into())
                     .to_ascii_uppercase();
+                // The language is read only past the empty-line gate (`0x49f28d`-`0x49f2a1`),
+                // which lets an empty line through for AFK and DND alone.
+                let reads_language =
+                    !text.is_empty() || matches!(chat_type.as_str(), "AFK" | "DND");
+                let language = match super::binding_abi::optional_string(lua, &language) {
+                    Some(name) if reads_language => {
+                        let model = lua.app_data_ref::<Model>().expect("model app_data");
+                        let id = language_id(&model.language_table, &name);
+                        Some(
+                            id.ok_or_else(|| mlua::Error::RuntimeError("Unknown language".into()))?,
+                        )
+                    }
+                    _ => None,
+                };
                 // `lua_isstring` then `lua_tostring` (`0x49f2f6`, `0x49f306`): a number is its
                 // text, so `2.7` reaches the channel's `SStrToInt` as "2.7", which reads 2.
                 let target = super::binding_abi::optional_string(lua, &target);
@@ -119,6 +155,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         text,
                         chat_type,
                         target,
+                        language,
                     });
                 Ok(())
             },
@@ -151,11 +188,13 @@ mod tests {
                     text: "hello".into(),
                     chat_type: "SAY".into(),
                     target: None,
+                    language: None,
                 },
                 ChatSend {
                     text: "/dance".into(),
                     chat_type: "SAY".into(),
                     target: None,
+                    language: None,
                 },
             ]
         );
@@ -188,12 +227,67 @@ mod tests {
         assert_eq!(sent[1].chat_type, "CHANNEL");
     }
 
+    /// Three `Languages.dbc` rows, in the shipped file's order.
+    fn with_languages(s: &mut UiScript) {
+        s.set_language_table(vec![
+            (1, "Orcish".into()),
+            (2, "Darnassian".into()),
+            (7, "Common".into()),
+        ]);
+    }
+
     #[test]
-    fn the_language_argument_is_accepted_and_ignored() {
+    fn a_language_name_sends_its_languages_dbc_id() {
         let mut s = UiScript::new().unwrap();
-        s.run(r#"SendChatMessage("hi", "SAY", 7)"#).unwrap();
-        assert_eq!(s.take_chat_sends().len(), 1);
-        assert!(s.errors().is_empty(), "{:?}", s.errors());
+        with_languages(&mut s);
+        s.run(r#"SendChatMessage("hi", "SAY", "Darnassian")"#)
+            .unwrap();
+        s.run(r#"SendChatMessage("hi", "YELL", "dARNASSIAN")"#)
+            .unwrap();
+        s.run(r#"SendChatMessage("hi", "WHISPER", "orcish", "Bob")"#)
+            .unwrap();
+        let sent = s.take_chat_sends();
+        assert_eq!(sent[0].language, Some(2), "Darnassian's row ID");
+        assert_eq!(sent[1].language, Some(2), "SStrCmpI ignores case");
+        assert_eq!(
+            sent[2].language,
+            Some(1),
+            "a language the character may not know is sent: the server refuses it"
+        );
+        assert_eq!(sent[2].target.as_deref(), Some("Bob"));
+    }
+
+    #[test]
+    fn no_language_argument_speaks_the_default() {
+        let mut s = UiScript::new().unwrap();
+        with_languages(&mut s);
+        s.run(r#"SendChatMessage("hi")"#).unwrap();
+        s.run(r#"SendChatMessage("hi", "SAY", nil)"#).unwrap();
+        s.run(r#"SendChatMessage("hi", "SAY", {})"#).unwrap();
+        s.run(r#"SendChatMessage("hi", "SAY", true)"#).unwrap();
+        let sent = s.take_chat_sends();
+        assert_eq!(sent.len(), 4);
+        assert!(
+            sent.iter().all(|c| c.language.is_none()),
+            "not a string, so `lua_isstring` keeps the default: {sent:?}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_language_raises_and_sends_nothing() {
+        let mut s = UiScript::new().unwrap();
+        with_languages(&mut s);
+        for arg in [r#""Klingon""#, r#""""#, "7", r#""Darnassian ""#] {
+            let err = s
+                .run(&format!(r#"SendChatMessage("hi", "SAY", {arg})"#))
+                .expect_err(&format!("{arg} names no row"));
+            assert!(err.to_string().contains("Unknown language"), "{arg}: {err}");
+        }
+        assert!(s.take_chat_sends().is_empty());
+        // AFK and DND pass the empty-line gate, so their language is read.
+        assert!(s.run(r#"SendChatMessage("", "AFK", "Klingon")"#).is_err());
+        // An empty line of any other type ends before the language is read.
+        s.run(r#"SendChatMessage("", "SAY", "Klingon")"#).unwrap();
     }
 
     /// The count matters: an addon passes the result straight to `SendChatMessage` as `language`.
