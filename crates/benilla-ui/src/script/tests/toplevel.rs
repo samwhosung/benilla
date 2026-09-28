@@ -649,13 +649,13 @@ fn a_raise_with_a_hidden_child_keeps_the_windows_own_siblings_level() {
         Close:SetPoint("BOTTOMRIGHT", Win, "BOTTOMRIGHT", -15, 15)
         Close:SetWidth(100); Close:SetHeight(21)
         Close:EnableMouse(true)
-        Close:SetScript("OnEnter", function(self) hovered = self:GetName() end)
-        Close:SetScript("OnClick", function(self) clicked = self:GetName() end)
+        Close:SetScript("OnEnter", function() local self = this hovered = self:GetName() end)
+        Close:SetScript("OnClick", function() local self = this clicked = self:GetName() end)
 
         Body = CreateFrame("Frame", "Body", Win)             -- level 2, covers the whole window
         Body:SetAllPoints(Win)
         Body:EnableMouse(true)
-        Body:SetScript("OnEnter", function(self) hovered = self:GetName() end)
+        Body:SetScript("OnEnter", function() local self = this hovered = self:GetName() end)
         Body:Hide()
 
         Win:Hide()

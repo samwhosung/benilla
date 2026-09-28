@@ -143,8 +143,6 @@ pub(crate) struct Model {
     pub(crate) layout_rounds: u64,
     /// Per frame, rasterized links `(y-up rect, link, full |H…|h markup)` for `OnHyperlinkClick`.
     pub(crate) link_spans: HashMap<FrameHandle, Vec<(Rect, String, String)>>,
-    /// Tab was pressed in the chat edit box (`BenillaChatTabPressed`), for the whisper cycle.
-    pub(crate) chat_tab: bool,
     /// Region visuals (texture, colour, text) and layout (anchors, size, justify).
     pub(crate) region_data: HashMap<RegionHandle, RegionData>,
     /// Each frame's backdrop plate (`<Backdrop>` or `SetBackdrop`, the client's `frame+0x1ac`).
@@ -873,7 +871,7 @@ pub(crate) struct Model {
     /// Reputation calls queued, applied locally first because none of the three sends is acked.
     pub(crate) reputation_sends: Vec<reputation::ReputationSend>,
 
-    /// Lines the chat box submitted (`SubmitChatInput`), for the app's slash-command parser.
+    /// Lines for the app's slash-command parser: a probe's, or a host `SlashCmdList` row's.
     pub(crate) chat_input: Vec<String>,
 
     /// The world map's pushed catalog and feed, and its selection.
@@ -1019,7 +1017,6 @@ impl Model {
             layout_rounds: 0,
             resolved: HashMap::new(),
             link_spans: HashMap::new(),
-            chat_tab: false,
             region_data: HashMap::new(),
             backdrops: HashMap::new(),
             simple_html: simplehtml::SimpleHtmlStates::new(),

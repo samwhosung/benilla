@@ -36,7 +36,7 @@ fn a_runtime_template_brings_size_anchors_regions_and_a_fired_onload() {
                  </Layer>
                </Layers>
                <Scripts>
-                 <OnLoad>ProbeLoadedAs = self:GetName(); ProbeLoadWidth = self:GetWidth()</OnLoad>
+                 <OnLoad>ProbeLoadedAs = this:GetName(); ProbeLoadWidth = this:GetWidth()</OnLoad>
                </Scripts>
              </Frame>
            </Ui>"#,

@@ -13,10 +13,10 @@ fn enable_mouse_gates_hit_testing() {
         -- transparent to hits; the enabled frame behind it (`a`) must capture.
         local a = CreateFrame("Frame", "A")
         a:SetPoint("BOTTOMLEFT", 0, 0); a:SetWidth(800); a:SetHeight(600); a:EnableMouse(true)
-        a:SetScript("OnEnter", function(self) who = self:GetName() end)
+        a:SetScript("OnEnter", function() local self = this who = self:GetName() end)
         local b = CreateFrame("Frame", "B")
         b:SetPoint("BOTTOMLEFT", 0, 0); b:SetWidth(800); b:SetHeight(600); b:EnableMouse(false)
-        b:SetScript("OnEnter", function(self) who = self:GetName() end)
+        b:SetScript("OnEnter", function() local self = this who = self:GetName() end)
         -- 1/nil, not a boolean: this is the exact comparison shape that inverts, so the
         -- test asserts it rather than leaning on truthiness.
         assert(a:IsMouseEnabled() == 1 and b:IsMouseEnabled() == nil)
@@ -49,10 +49,10 @@ fn hit_order_is_strata_then_level_then_the_earlier_linked_frame() {
         who = nil
         local a = CreateFrame("Frame", "A")
         a:SetPoint("BOTTOMLEFT", 0, 0); a:SetWidth(800); a:SetHeight(600); a:EnableMouse(true)
-        a:SetScript("OnEnter", function(self) who = self:GetName() end)
+        a:SetScript("OnEnter", function() local self = this who = self:GetName() end)
         local b = CreateFrame("Frame", "B")
         b:SetPoint("BOTTOMLEFT", 0, 0); b:SetWidth(800); b:SetHeight(600); b:EnableMouse(true)
-        b:SetScript("OnEnter", function(self) who = self:GetName() end)
+        b:SetScript("OnEnter", function() local self = this who = self:GetName() end)
     "#,
     )
     .unwrap();
@@ -91,8 +91,8 @@ fn mouse_move_fires_enter_then_leave_across_a_boundary_with_correct_self() {
         enter_self_ok, leave_self_ok = false, false
         local a = CreateFrame("Frame", "A")   -- left half only
         a:SetPoint("BOTTOMLEFT", 0, 0); a:SetWidth(400); a:SetHeight(600); a:EnableMouse(true)
-        a:SetScript("OnEnter", function(self) enters = enters + 1; enter_self_ok = (self == a) end)
-        a:SetScript("OnLeave", function(self) leaves = leaves + 1; leave_self_ok = (self == a) end)
+        a:SetScript("OnEnter", function() local self = this enters = enters + 1; enter_self_ok = (self == a) end)
+        a:SetScript("OnLeave", function() local self = this leaves = leaves + 1; leave_self_ok = (self == a) end)
     "#,
     )
     .unwrap();
@@ -122,10 +122,10 @@ fn onclick_fires_on_press_release_same_frame_not_when_release_lands_elsewhere() 
         clicks_a, clicks_b, click_btn = 0, 0, nil
         local a = CreateFrame("Frame", "A")   -- left half
         a:SetPoint("BOTTOMLEFT", 0, 0); a:SetWidth(400); a:SetHeight(600); a:EnableMouse(true)
-        a:SetScript("OnClick", function(self, button, down) clicks_a = clicks_a + 1; click_btn = button end)
+        a:SetScript("OnClick", function() local self, button, down = this, arg1, arg2 clicks_a = clicks_a + 1; click_btn = button end)
         local b = CreateFrame("Frame", "B")   -- right half
         b:SetPoint("BOTTOMLEFT", 400, 0); b:SetWidth(400); b:SetHeight(600); b:EnableMouse(true)
-        b:SetScript("OnClick", function(self, button, down) clicks_b = clicks_b + 1 end)
+        b:SetScript("OnClick", function() local self, button, down = this, arg1, arg2 clicks_b = clicks_b + 1 end)
     "#,
     )
     .unwrap();
@@ -200,7 +200,7 @@ fn mouse_wheel_passes_delta_to_the_captured_frame() {
         -- XML-load-time only), so a runtime-created frame needs this explicitly, exactly as it
         -- needs EnableMouse. Mouse-enablement alone puts nothing in the wheel index.
         a:EnableMouseWheel(true)
-        a:SetScript("OnMouseWheel", function(self, delta) wheel = delta end)
+        a:SetScript("OnMouseWheel", function() local self, delta = this, arg1 wheel = delta end)
     "#,
     )
     .unwrap();
@@ -344,8 +344,8 @@ fn a_second_fast_click_fires_on_double_click_instead_of_the_second_on_click() {
         clicks, doubles, dblbtn = 0, 0, nil
         local b = CreateFrame("Button", "DblB")
         b:SetPoint("BOTTOMLEFT", 0, 0); b:SetWidth(200); b:SetHeight(200); b:EnableMouse(true)
-        b:SetScript("OnClick", function(self, button) clicks = clicks + 1 end)
-        b:SetScript("OnDoubleClick", function(self, button) doubles = doubles + 1 dblbtn = button end)
+        b:SetScript("OnClick", function() local self, button = this, arg1 clicks = clicks + 1 end)
+        b:SetScript("OnDoubleClick", function() local self, button = this, arg1 doubles = doubles + 1 dblbtn = button end)
     "#,
     )
     .unwrap();
@@ -483,7 +483,7 @@ fn a_multi_registered_button_pairs_a_left_click_with_a_right_one() {
         local b = CreateFrame("Button", "MixDbl")
         b:SetPoint("BOTTOMLEFT", 0, 0); b:SetWidth(200); b:SetHeight(200); b:EnableMouse(true)
         b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-        b:SetScript("OnDoubleClick", function(self, button) doubles = doubles + 1 dblbtn = button end)
+        b:SetScript("OnDoubleClick", function() local self, button = this, arg1 doubles = doubles + 1 dblbtn = button end)
     "#,
     )
     .unwrap();
@@ -716,8 +716,8 @@ fn two_frames() -> crate::script::UiScript {
         local function mk(name, x)
             local f = CreateFrame("Frame", name)
             f:SetPoint("BOTTOMLEFT", x, 200); f:SetWidth(200); f:SetHeight(200); f:EnableMouse(true)
-            f:SetScript("OnMouseDown", function(self) table.insert(log, self:GetName()..":down") end)
-            f:SetScript("OnMouseUp", function(self) table.insert(log, self:GetName()..":up") end)
+            f:SetScript("OnMouseDown", function() local self = this table.insert(log, self:GetName()..":down") end)
+            f:SetScript("OnMouseUp", function() local self = this table.insert(log, self:GetName()..":up") end)
             return f
         end
         mk("A", 100)
@@ -799,8 +799,8 @@ fn a_disabled_button_takes_the_hover_but_fires_no_enter_or_leave() {
         local function mk(name, x)
             local b = CreateFrame("Button", name)
             b:SetPoint("BOTTOMLEFT", x, 0); b:SetWidth(100); b:SetHeight(100); b:EnableMouse(true)
-            b:SetScript("OnEnter", function(self) table.insert(log, self:GetName()..":enter") end)
-            b:SetScript("OnLeave", function(self) table.insert(log, self:GetName()..":leave") end)
+            b:SetScript("OnEnter", function() local self = this table.insert(log, self:GetName()..":enter") end)
+            b:SetScript("OnLeave", function() local self = this table.insert(log, self:GetName()..":leave") end)
             return b
         end
         Off = mk("Off", 0)

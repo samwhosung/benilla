@@ -247,26 +247,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     lua.set_named_registry_value(REG_SCROLLINGMESSAGEFRAME_METHODS, m)?;
 
-    // BenillaChatTabPressed(): the chat edit box's OnTabPressed sets a flag for the app's whisper
-    // cycle (`UiScript::take_chat_tab`).
-    lua.globals().set(
-        "BenillaChatTabPressed",
-        lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.chat_tab = true;
-            Ok(())
-        })?,
-    )?;
-    // SubmitChatInput(text): the chat edit box's OnEnterPressed queues the line for the app to
-    // parse as a chat command; an empty line is queued too, and the app takes it as a cancel.
-    lua.globals().set(
-        "SubmitChatInput",
-        lua.create_function(|lua, text: Option<String>| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.chat_input.push(text.unwrap_or_default());
-            Ok(())
-        })?,
-    )?;
     Ok(())
 }
 
@@ -699,7 +679,8 @@ mod tests {
              f:SetPoint('BOTTOMLEFT', 0, 0)\n\
              f:SetWidth(430)\n\
              f:SetHeight(120)\n\
-             f:SetScript('OnHyperlinkClick', function(self, link, text, button)\n\
+             f:SetScript('OnHyperlinkClick', function()\n\
+                 local link, text, button = arg1, arg2, arg3\n\
                  CLICKED = link .. '#' .. text .. '#' .. button\n\
              end)",
         )

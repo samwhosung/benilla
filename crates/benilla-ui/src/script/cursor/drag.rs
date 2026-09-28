@@ -108,13 +108,13 @@ mod tests {
             local a = CreateFrame("Frame", "A")
             a:SetPoint("BOTTOMLEFT", 0, 0); a:SetWidth(400); a:SetHeight(600); a:EnableMouse(true)
             a:RegisterForDrag("LeftButton")
-            a:SetScript("OnDragStart", function(self, button) drag_starts = drag_starts + 1; drag_button = button end)
-            a:SetScript("OnDragStop", function(self) drag_stops = drag_stops + 1 end)
-            a:SetScript("OnClick", function(self) click_a = click_a + 1 end)
+            a:SetScript("OnDragStart", function() local self, button = this, arg1 drag_starts = drag_starts + 1; drag_button = button end)
+            a:SetScript("OnDragStop", function() local self = this drag_stops = drag_stops + 1 end)
+            a:SetScript("OnClick", function() local self = this click_a = click_a + 1 end)
             local b = CreateFrame("Frame", "B")
             b:SetPoint("BOTTOMLEFT", 400, 0); b:SetWidth(400); b:SetHeight(600); b:EnableMouse(true)
-            b:SetScript("OnReceiveDrag", function(self) receives = receives + 1 end)
-            b:SetScript("OnClick", function(self) click_b = click_b + 1 end)
+            b:SetScript("OnReceiveDrag", function() local self = this receives = receives + 1 end)
+            b:SetScript("OnClick", function() local self = this click_b = click_b + 1 end)
             "#,
         )
         .unwrap();
@@ -170,7 +170,7 @@ mod tests {
             local a = CreateFrame("Frame", "A")
             a:SetPoint("BOTTOMLEFT", 0, 0); a:SetWidth(400); a:SetHeight(600); a:EnableMouse(true)
             a:RegisterForDrag("LeftButton")
-            a:SetScript("OnClick", function(self) clicks = clicks + 1 end)
+            a:SetScript("OnClick", function() local self = this clicks = clicks + 1 end)
             "#,
         )
         .unwrap();
@@ -192,7 +192,7 @@ mod tests {
             local a = CreateFrame("Frame", "A")
             a:SetPoint("BOTTOMLEFT", 0, 0); a:SetWidth(400); a:SetHeight(600); a:EnableMouse(true)
             a:RegisterForDrag("LeftButton")
-            a:SetScript("OnClick", function(self) clicks = clicks + 1 end)
+            a:SetScript("OnClick", function() local self = this clicks = clicks + 1 end)
             "#,
         )
         .unwrap();
@@ -271,7 +271,7 @@ mod tests {
             heard, name, quality = 0, nil, nil
             local f = CreateFrame("Frame", "Listener")
             f:RegisterEvent("DELETE_ITEM_CONFIRM")
-            f:SetScript("OnEvent", function(self, event, n, q) heard = heard + 1; name = n; quality = q end)
+            f:SetScript("OnEvent", function() local self, event, n, q = this, event, arg1, arg2 heard = heard + 1; name = n; quality = q end)
             "#,
         )
         .unwrap();

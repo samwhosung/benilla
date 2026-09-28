@@ -47,7 +47,7 @@ fn tick_runs_onupdate_only_when_effectively_visible() {
         r#"
         ticks, last = 0, 0
         local f = CreateFrame("Frame", "UF")
-        f:SetScript("OnUpdate", function(self, elapsed) ticks = ticks + 1; last = elapsed end)
+        f:SetScript("OnUpdate", function() local self, elapsed = this, arg1 ticks = ticks + 1; last = elapsed end)
     "#,
     )
     .unwrap();

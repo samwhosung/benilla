@@ -33,15 +33,13 @@ fn allowed_beyond_1_12() -> HashSet<&'static str> {
         // `getfenv(0)`); ours does, as our `getglobal`/`setglobal` are written over it.
         "_G",
         // ── WoW API past 1.12 ──
-        // Only `SubmitChatInput` is called from our UI files (`ScriptLogFrame.xml`'s slash
-        // commands); each of the rest awaits its 1.12 equivalent, removal or a reason.
+        // Each awaits its 1.12 equivalent, removal or a reason; none is called from our UI files.
         "CancelUnitBuff",
         "GetCursorInfo",
         "GetInventoryItemID",
         "GetPlayerFacing",
         "GetTradePartnerName",
         "IsGossipOptionCoded",
-        "SubmitChatInput",
         "UnitAura",
         "UnitIsAFK",
         "UnitIsDND",
@@ -1513,4 +1511,25 @@ fn the_nameplate_verbs_ignore_their_arguments_and_return_nothing() {
         0,
         "zero values — observably different from nil for a caller that counts"
     );
+}
+
+/// The host seams benilla's own interface used are gone, now that it speaks 1.12 alone: the key
+/// capture, the error-log reads, the chat forwarders and the uncalled binding-set probe.
+#[test]
+fn the_layers_host_seams_are_gone() {
+    let s = script();
+    for name in [
+        "BenillaBindCapture",
+        "BenillaCharacterBindingsExist",
+        "BenillaGetNumScriptErrors",
+        "BenillaGetScriptErrorInfo",
+        "BenillaClearScriptErrors",
+        "SubmitChatInput",
+        "BenillaChatTabPressed",
+    ] {
+        assert!(
+            s.eval::<bool>(&format!("return {name} == nil")).unwrap(),
+            "{name} is still a global"
+        );
+    }
 }

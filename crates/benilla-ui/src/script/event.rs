@@ -6,7 +6,7 @@
 
 use std::borrow::Cow;
 
-use mlua::{Function, Lua, MultiValue, Table, Value};
+use mlua::{Function, Lua, Table, Value};
 
 use super::{Model, ScriptValue, REG_SCRIPTS};
 use crate::script::object::frame_wrapper;
@@ -230,8 +230,8 @@ fn arg_name(i: usize) -> Cow<'static, str> {
 }
 
 /// The calling convention, shared by [`fire`] and the loader's `OnLoad`: sets `this`, `event` and
-/// `arg1..argN`, passes `(self[, event], extra...)`, and restores the globals after the call, even
-/// on error, so nested fires are safe.
+/// `arg1..argN` and calls the handler with no arguments, as `0x705199` calls `lua_pcall` with
+/// zero; the globals are restored after the call, even on error, so nested fires are safe.
 pub(crate) fn invoke_with_globals(
     lua: &Lua,
     wrapper: Table,
@@ -257,15 +257,8 @@ pub(crate) fn invoke_with_globals(
         g.set(arg_name(i + 1).as_ref(), v.clone())?;
     }
 
-    let mut modern: Vec<Value> = Vec::with_capacity(2 + n);
-    modern.push(Value::Table(wrapper));
-    if let Some(ev) = event_name {
-        modern.push(Value::String(lua.create_string(ev)?));
-    }
-    modern.extend(extra.iter().cloned());
-
     // A protected call; the globals are restored before its outcome returns.
-    let outcome = func.call::<()>(MultiValue::from_vec(modern));
+    let outcome = func.call::<()>(());
 
     g.set("this", saved_this)?;
     g.set("event", saved_event)?;

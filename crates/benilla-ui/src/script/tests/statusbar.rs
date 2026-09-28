@@ -50,7 +50,7 @@ fn statusbar_setvalue_fires_onvaluechanged() {
         local b = CreateFrame("StatusBar", "SbEvt")
         b:SetMinMaxValues(0, 10)
         seen = {}
-        b:SetScript("OnValueChanged", function(self, value)
+        b:SetScript("OnValueChanged", function() local self, value = this, arg1
             table.insert(seen, value)
             assert(self == b and arg1 == value, "handler-firing conventions carry the value")
         end)

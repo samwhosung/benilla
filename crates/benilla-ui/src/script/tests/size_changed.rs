@@ -16,7 +16,7 @@ fn a_resize_fires_on_size_changed_and_a_move_does_not() {
         Panel = CreateFrame("Frame", "SizedPanel")
         Panel:SetPoint("BOTTOMLEFT", 100, 100)
         Panel:SetWidth(200); Panel:SetHeight(50)
-        Panel:SetScript("OnSizeChanged", function(self, aw, ah)
+        Panel:SetScript("OnSizeChanged", function() local self, aw, ah = this, arg1, arg2
             fires = fires + 1 w = aw h = ah
         end)
     "#,
@@ -62,7 +62,7 @@ fn an_anchor_driven_resize_fires_it_too() {
         Child = CreateFrame("Frame", "SizeChild", Parent)
         Child:SetPoint("BOTTOMLEFT", Parent, "BOTTOMLEFT", 0, 0)
         Child:SetPoint("TOPRIGHT", Parent, "TOPRIGHT", 0, 0)
-        Child:SetScript("OnSizeChanged", function(self, aw, ah) fires = fires + 1 w = aw end)
+        Child:SetScript("OnSizeChanged", function() local self, aw, ah = this, arg1, arg2 fires = fires + 1 w = aw end)
     "#,
     )
     .unwrap();
@@ -94,7 +94,7 @@ fn a_handler_that_resizes_its_own_frame_settles_instead_of_spinning() {
         Sq:SetPoint("BOTTOMLEFT", 0, 0)
         Sq:SetWidth(200); Sq:SetHeight(50)
         -- The idiom: "keep me square". It writes back into the very input that fired it.
-        Sq:SetScript("OnSizeChanged", function(self, aw, ah)
+        Sq:SetScript("OnSizeChanged", function() local self, aw, ah = this, arg1, arg2
             fires = fires + 1
             if ah ~= aw then self:SetHeight(aw) end
         end)

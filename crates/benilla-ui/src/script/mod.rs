@@ -579,7 +579,6 @@ impl UiScript {
         worldmap::install(&lua)?;
         worldstate::install(&lua)?;
         net_stats::install(&lua)?;
-        diagnostics::install(&lua)?;
 
         let s = UiScript {
             lua,
@@ -828,7 +827,8 @@ impl UiScript {
         true
     }
 
-    /// Drain the chat lines `SubmitChatInput` queued since the last call, for the app to parse.
+    /// Drain the chat lines queued since the last call (a probe's, a host `SlashCmdList` row's), for
+    /// the app to parse.
     pub fn take_chat_input(&mut self) -> Vec<String> {
         std::mem::take(&mut self.model_mut().chat_input)
     }
@@ -836,11 +836,6 @@ impl UiScript {
     /// Queue a line as if typed into the chat EditBox and submitted, for probes (`WOW_PROBE_CHAT`).
     pub fn push_chat_input(&mut self, line: String) {
         self.model_mut().chat_input.push(line);
-    }
-
-    /// Whether Tab was pressed in the chat edit box since the last call: the whisper cycle's cue.
-    pub fn take_chat_tab(&mut self) -> bool {
-        std::mem::take(&mut self.model_mut().chat_tab)
     }
 
     /// Replace the hyperlink spans `(frame, y-up rect, link, markup)` the app rasterized this

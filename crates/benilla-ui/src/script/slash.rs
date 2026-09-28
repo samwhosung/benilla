@@ -1,6 +1,6 @@
 //! `SlashCmdList` dispatch from the host, for a line that reaches it without passing the stock
 //! `ChatEdit_ParseText` (`ChatFrame.lua`): the same walk, over the table the stock `ChatFrame.lua`
-//! declares, where the stock commands and benilla's own are entries.
+//! declares, where the stock commands, benilla's layer's and an addon's are entries.
 
 use mlua::{Table, Value};
 
@@ -23,6 +23,33 @@ impl super::UiScript {
     /// Whether a `SlashCmdList` entry claims `cmd`, without running it.
     pub fn has_slash_command(&self, cmd: &str) -> bool {
         self.find_slash_handler(cmd).is_some()
+    }
+
+    /// Register a host command as a `SlashCmdList` row, as an addon registers one: `SLASH_<key><n>`
+    /// for each alias (with its `/`) and a handler that queues `"<first alias> <msg>"` on the chat
+    /// input the host drains ([`Self::take_chat_input`]). A no-op before `ChatFrame.lua` has
+    /// declared `SlashCmdList`.
+    pub fn register_host_slash_command(&self, key: &str, aliases: &[&str]) -> mlua::Result<()> {
+        let globals = self.lua.globals();
+        let Ok(list) = globals.get::<Table>("SlashCmdList") else {
+            return Ok(());
+        };
+        let Some(first) = aliases.first() else {
+            return Ok(());
+        };
+        for (n, alias) in aliases.iter().enumerate() {
+            globals.set(format!("SLASH_{key}{}", n + 1), *alias)?;
+        }
+        let first = first.to_string();
+        let handler = self.lua.create_function(move |lua, msg: Option<String>| {
+            let line = format!("{first} {}", msg.unwrap_or_default());
+            lua.app_data_mut::<super::Model>()
+                .expect("model app_data")
+                .chat_input
+                .push(line);
+            Ok(())
+        })?;
+        list.set(key, handler)
     }
 
     /// The reference's walk: over `SlashCmdList`'s keys, then `SLASH_<key><n>` to the first gap,
@@ -120,6 +147,24 @@ mod tests {
             s.errors().iter().any(|e| e.contains("/boom")),
             "the failure surfaces where every other script error does"
         );
+    }
+
+    /// A host row is an ordinary `SlashCmdList` row that queues its line for the host.
+    #[test]
+    fn a_host_command_queues_its_line() {
+        let mut s = UiScript::new().unwrap();
+        s.register_host_slash_command("HOSTPROBE", &["/hostprobe", "/hp"])
+            .unwrap();
+        assert!(
+            !s.has_slash_command("hostprobe"),
+            "no table yet: nothing registers"
+        );
+        s.run("SlashCmdList = {}").unwrap();
+        s.register_host_slash_command("HOSTPROBE", &["/hostprobe", "/hp"])
+            .unwrap();
+        assert_eq!(s.eval::<String>("return SLASH_HOSTPROBE2").unwrap(), "/hp");
+        assert!(s.run_slash_command("hp", "a b"));
+        assert_eq!(s.take_chat_input(), ["/hostprobe a b"]);
     }
 
     #[test]

@@ -333,7 +333,7 @@ fn disabled_button_swallows_clicks_checkbutton_toggles_before_onclick() {
         clicks, seen_checked = 0, nil
         local cb = CreateFrame("CheckButton", "Toggler")
         cb:SetPoint("BOTTOMLEFT", 0, 0); cb:SetWidth(100); cb:SetHeight(100)
-        cb:SetScript("OnClick", function(self, button, down)
+        cb:SetScript("OnClick", function() local self, button, down = this, arg1, arg2
             clicks = clicks + 1
             seen_checked = self:GetChecked()
         end)
@@ -376,7 +376,7 @@ fn default_registration_is_left_click_only_right_click_reaches_nothing() {
         clicks = 0
         local btn = CreateFrame("Button", "Vendor")
         btn:SetPoint("BOTTOMLEFT", 0, 0); btn:SetWidth(100); btn:SetHeight(100)
-        btn:SetScript("OnClick", function(self, button, down) clicks = clicks + 1 end)
+        btn:SetScript("OnClick", function() local self, button, down = this, arg1, arg2 clicks = clicks + 1 end)
     "#,
     )
     .unwrap();
@@ -399,7 +399,7 @@ fn register_for_clicks_grows_right_click_and_carries_the_button_name() {
         local btn = CreateFrame("Button", "Vendor")
         btn:SetPoint("BOTTOMLEFT", 0, 0); btn:SetWidth(100); btn:SetHeight(100)
         btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-        btn:SetScript("OnClick", function(self, button, down)
+        btn:SetScript("OnClick", function() local self, button, down = this, arg1, arg2
             clicks = clicks + 1
             click_btn = button
             arg1_btn = arg1   -- the 1.12 legacy-global convention, same value
@@ -431,7 +431,7 @@ fn down_registration_fires_on_press_and_toggles_checked_once() {
         local cb = CreateFrame("CheckButton", "QuickSell")
         cb:SetPoint("BOTTOMLEFT", 0, 0); cb:SetWidth(100); cb:SetHeight(100)
         cb:RegisterForClicks("LeftButtonDown")
-        cb:SetScript("OnClick", function(self, button, down)
+        cb:SetScript("OnClick", function() local self, button, down = this, arg1, arg2
             clicks = clicks + 1
             seen_down = down
         end)

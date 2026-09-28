@@ -215,7 +215,7 @@ fn slider_setvalue_fires_onvaluechanged_only_on_change() {
         local sl = CreateFrame("Slider", "SlEvt")
         sl:SetMinMaxValues(0, 10)
         seen = {}
-        sl:SetScript("OnValueChanged", function(self, value)
+        sl:SetScript("OnValueChanged", function() local self, value = this, arg1
             table.insert(seen, value)
             assert(self == sl and arg1 == value, "handler-firing conventions carry the value")
         end)

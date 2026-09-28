@@ -4,20 +4,21 @@
 use super::common::script;
 use crate::script::*;
 
+/// A handler gets no arguments (`0x705199` calls `lua_pcall` with zero); its inputs are the
+/// `this`, `event` and `argN` globals.
 #[test]
-fn fire_event_both_conventions_in_one_handler() {
+fn an_event_handler_gets_no_arguments_and_reads_the_globals() {
     let mut s = script();
     s.run(
         r#"
         local f = CreateFrame("Frame", "EF")
         f:RegisterEvent("UNIT_HEALTH")
-        f:SetScript("OnEvent", function(self, event, ...)
-            r_this_eq_self = (this == self)         -- legacy `this` global == modern `self`
-            r_event_global = event                  -- modern `event` arg
-            r_event_eq     = (event == _G.event)    -- == legacy `event` global
-            r_arg1_eq      = (arg1 == arg[1])        -- legacy `arg1` global == the vararg table
-            r_arg1         = arg1
-            r_arg2         = arg[2]
+        f:SetScript("OnEvent", function(a, b, c)
+            r_args = (a == nil and b == nil and c == nil)
+            r_this = (this == EF)
+            r_event = event
+            r_arg1 = arg1
+            r_arg2 = arg2
         end)
     "#,
     )
@@ -29,13 +30,12 @@ fn fire_event_both_conventions_in_one_handler() {
     );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 
-    assert!(s.eval::<bool>("return r_this_eq_self").unwrap());
-    assert_eq!(
-        s.eval::<String>("return r_event_global").unwrap(),
-        "UNIT_HEALTH"
+    assert!(
+        s.eval::<bool>("return r_args").unwrap(),
+        "a declared parameter is nil: no positional argument is passed"
     );
-    assert!(s.eval::<bool>("return r_event_eq").unwrap());
-    assert!(s.eval::<bool>("return r_arg1_eq").unwrap());
+    assert!(s.eval::<bool>("return r_this").unwrap());
+    assert_eq!(s.eval::<String>("return r_event").unwrap(), "UNIT_HEALTH");
     assert_eq!(s.eval::<String>("return r_arg1").unwrap(), "player");
     assert_eq!(s.eval::<i64>("return r_arg2").unwrap(), 42);
 }

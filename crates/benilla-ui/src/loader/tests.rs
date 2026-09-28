@@ -311,7 +311,7 @@ mod loader_tests {
                     <Frames>
                         <Frame name="$parentChild">
                             <Scripts>
-                                <OnLoad>table.insert(loadorder, "child"); ChildLoaded = self:GetName()</OnLoad>
+                                <OnLoad>table.insert(loadorder, "child"); ChildLoaded = this:GetName()</OnLoad>
                             </Scripts>
                         </Frame>
                     </Frames>
@@ -330,7 +330,7 @@ mod loader_tests {
         assert!(s.eval::<bool>("return MyFrameChild ~= nil").unwrap());
         assert!(s.eval::<bool>("return MyFrameTex ~= nil").unwrap());
 
-        // The child's handler uses `self`, the parent's `this`; both work.
+        // Both handlers read their frame from `this`.
         assert_eq!(
             s.eval::<String>("return ChildLoaded").unwrap(),
             "MyFrameChild"
@@ -2409,16 +2409,17 @@ mod chunk_name_tests {
         );
     }
 
-    /// The 1.12 hook idiom: an addon captures a handler with `GetScript` and calls it with no
-    /// arguments, the frame passed only as `this`; `Loader::compile_handler` falls back to `this`.
+    /// A handler body is the chunk itself (`0x704c70`): it takes no arguments and reads its frame
+    /// from `this`, so `self` in it is an ordinary global, and the 1.12 hook idiom (an addon
+    /// captures a handler with `GetScript` and calls it bare) reaches the same frame.
     #[test]
-    fn a_script_captured_and_called_with_no_arguments_still_sees_its_frame() {
+    fn a_handler_body_is_the_chunk_and_self_is_a_global() {
         let s = UiScript::new().unwrap();
         let doc = parse(
             r#"<Ui>
                 <Frame name="Hooked" hidden="true">
                     <Scripts>
-                        <OnShow>SEEN = self:GetName()</OnShow>
+                        <OnShow>SEEN = this:GetName() SELF_SEEN = self</OnShow>
                     </Scripts>
                 </Frame>
             </Ui>"#,
@@ -2426,11 +2427,15 @@ mod chunk_name_tests {
         let report = load_in(&s, &doc, "Test.xml", &no_files);
         assert!(report.errors.is_empty(), "{:?}", report.errors);
 
-        // The engine's call passes `self` and sets `this`.
-        s.run("SEEN = nil Hooked:Show()").unwrap();
+        s.run("self = 'the global' SEEN = nil Hooked:Show()")
+            .unwrap();
         assert_eq!(s.eval::<String>("return SEEN").unwrap(), "Hooked");
+        assert_eq!(
+            s.eval::<String>("return SELF_SEEN").unwrap(),
+            "the global",
+            "`self` is no parameter of the body"
+        );
 
-        // The addon's: the captured script called bare, with only `this` set.
         s.run(
             "SEEN = nil \
              local original = Hooked:GetScript(\"OnShow\") \
@@ -2439,11 +2444,29 @@ mod chunk_name_tests {
              this = nil",
         )
         .unwrap();
-        assert_eq!(
-            s.eval::<String>("return SEEN").unwrap(),
-            "Hooked",
-            "the reference's own no-argument contract must reach the same frame"
+        assert_eq!(s.eval::<String>("return SEEN").unwrap(), "Hooked");
+    }
+
+    /// The loader reads no `function=` attribute: a handler element with no body clears the
+    /// handler, whatever global the attribute names.
+    #[test]
+    fn a_function_attribute_binds_nothing() {
+        let s = UiScript::new().unwrap();
+        s.run("function NamedHandler() RAN = true end").unwrap();
+        let doc = parse(
+            r#"<Ui>
+                <Frame name="Named" hidden="true">
+                    <Scripts><OnShow function="NamedHandler"/></Scripts>
+                </Frame>
+            </Ui>"#,
         );
+        let report = load_in(&s, &doc, "Test.xml", &no_files);
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        s.run("Named:Show()").unwrap();
+        assert!(s.eval::<bool>("return RAN == nil").unwrap());
+        assert!(s
+            .eval::<bool>("return Named:GetScript(\"OnShow\") == nil")
+            .unwrap());
     }
 }
 

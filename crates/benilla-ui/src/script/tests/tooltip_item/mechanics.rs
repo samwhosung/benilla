@@ -55,7 +55,7 @@ fn bag_item_money_law_and_fallback() {
         money_fired = nil
         local a = CreateFrame("Button", "Slot3"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
         local tt = CreateFrame("GameTooltip", "TT")
-        tt:SetScript("OnTooltipAddMoney", function(self) money_fired = arg1 end)
+        tt:SetScript("OnTooltipAddMoney", function() local self = this money_fired = arg1 end)
         -- No merchant: no money handler fires.
         tt:SetOwner(a, "ANCHOR_RIGHT")
         tt:SetBagItem(0, 1)

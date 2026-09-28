@@ -288,12 +288,12 @@ fn vertical_scroll_fires_as_given_and_update_rect_fires_range_changed() {
         frame:SetScrollChild(child)
 
         seen_v = nil
-        frame:SetScript("OnVerticalScroll", function(self, offset)
+        frame:SetScript("OnVerticalScroll", function() local self, offset = this, arg1
             seen_v = offset
             assert(self == frame and arg1 == offset, "handler-firing conventions carry the value")
         end)
         seen_lo, seen_hi = nil, nil
-        frame:SetScript("OnScrollRangeChanged", function(self, lo, hi)
+        frame:SetScript("OnScrollRangeChanged", function() local self, lo, hi = this, arg1, arg2
             seen_lo, seen_hi = lo, hi
         end)
     "#,
@@ -336,7 +336,7 @@ fn update_scroll_child_rect_sees_a_same_tick_resize_with_no_intervening_resolve(
     s.run(
         r#"
         seen_hi = nil
-        SF:SetScript("OnScrollRangeChanged", function(self, lo, hi) seen_hi = hi end)
+        SF:SetScript("OnScrollRangeChanged", function() local self, lo, hi = this, arg1, arg2 seen_hi = hi end)
         Child:SetWidth(300); Child:SetHeight(600) -- grows well past the frame — all in this ONE tick
         SF:UpdateScrollChildRect()
     "#,

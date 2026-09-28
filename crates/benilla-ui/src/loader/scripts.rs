@@ -1,4 +1,4 @@
-use mlua::{Function, ObjectLike, Table, Value};
+use mlua::{Function, ObjectLike, Table};
 
 use crate::framexml::Element;
 
@@ -28,7 +28,7 @@ impl Loader<'_> {
                 // function: `SetScript` (`0x7025c0`) tests only NULL and the first byte
                 // (`0x7025f8`), and nothing trims the body (`0x6f29d0`). The stock blanks
                 // (`BuffFrame.xml:101`) are whitespace, so their `GetScript` answers a function.
-                let cleared = handler.body.is_empty() && handler.attr("function").is_none();
+                let cleared = handler.body.is_empty();
                 let func = if cleared {
                     None
                 } else {
@@ -77,11 +77,9 @@ impl Loader<'_> {
         onload
     }
 
-    /// Compile a handler body, or resolve its `function=` global: not 1.12, whose loader never
-    /// reads the attribute. A 1.12 body takes no arguments and reads its frame from `this`; the
-    /// `self` parameter is not 1.12 either (our `assets/ui` bodies use it) and falls back to `this`
-    /// for a hook that calls a captured handler bare. The prologue shares the body's first line,
-    /// so line numbers match the reference, which loads the raw body as the chunk (`0x704c70`).
+    /// Compile a handler body as the chunk itself, as the reference loads it (`0x704c70`): it takes
+    /// no arguments and reads its frame from `this`, so a `self` in it is an ordinary global. The
+    /// loader reads no other attribute of the element (no `function=`).
     pub(super) fn compile_handler(
         &mut self,
         handler: &Element,
@@ -91,41 +89,24 @@ impl Loader<'_> {
     ) -> Option<Function> {
         // The raw body, never trimmed: a whitespace body is a real empty chunk (`apply_scripts`).
         let body = handler.body.as_str();
-        if !body.is_empty() {
-            let src = format!(
-                "return function(self, ...) if self == nil then self = this end {body}\nend"
-            );
-            match self
-                .lua()
-                .load(&src)
-                .set_name(format!("{owner}:{name}"))
-                .set_mode(mlua::ChunkMode::Text)
-                .eval::<Function>()
-            {
-                Ok(f) => return Some(f),
-                Err(e) => {
-                    self.report
-                        .errors
-                        .push(format!("{dbg}: compiling <{name}>: {e}"));
-                    return None;
-                }
+        if body.is_empty() {
+            return None;
+        }
+        match self
+            .lua()
+            .load(body)
+            .set_name(format!("{owner}:{name}"))
+            .set_mode(mlua::ChunkMode::Text)
+            .into_function()
+        {
+            Ok(f) => Some(f),
+            Err(e) => {
+                self.report
+                    .errors
+                    .push(format!("{dbg}: compiling <{name}>: {e}"));
+                None
             }
         }
-        if let Some(global) = handler.attr("function") {
-            match self.lua().globals().get::<Value>(global) {
-                Ok(Value::Function(f)) => return Some(f),
-                _ => {
-                    self.warn_once(
-                        &format!("fn:{global}"),
-                        format!(
-                            "{dbg}: <{name} function=\"{global}\">: no such global function (yet)"
-                        ),
-                    );
-                    return None;
-                }
-            }
-        }
-        None
     }
 
     /// Fire a captured `OnLoad` under the event path's convention, `this` set and restored
