@@ -283,6 +283,7 @@ fn on_spell_go(In(ev): In<SessionEvent>, mut l: Lifecycle, mut sc: Scene) {
                 &mut sc.items,
                 &l.net,
                 &mut l.pet_bar,
+                &l.spell_mods,
             ),
             (&mut l.auto_repeat, &mut sc.sheaths, engaged),
             l.play_seq.next(),
@@ -827,6 +828,7 @@ fn spell_go(
         &mut crate::items::Items,
         &crate::net::NetCommands,
         &mut crate::ui_pet::PetBar,
+        &crate::spell::SpellModifiers,
     ),
     // The GO-deferred auto-attack start's writes (`0x6e83c0`) and the attack lock it gates on
     // (`Engaged`, the reference's `[player+0xc48]`).
@@ -863,7 +865,7 @@ fn spell_go(
     if let Some(go_guid) = go_target {
         go_lid.write(crate::go_anim::GoLidOpen { go_guid, spell_id });
     }
-    let (cooldowns, spells, items, net_commands, pet_bar) = cooldown_ctx;
+    let (cooldowns, spells, items, net_commands, pet_bar, spell_mods) = cooldown_ctx;
     let (auto_repeat, sheath, engaged) = attack_ctx;
     let now = Instant::now();
     let display = spells.and_then(|s| s.catalog.get(spell_id));
@@ -958,24 +960,25 @@ fn spell_go(
                     // Template not streamed, or naming another spell: the spell-keyed record.
                     None => {
                         if let Some(d) = display {
-                            cooldowns.start_spell(spell_id, d, ranged_ms, now);
+                            cooldowns.start_spell(spell_id, d, ranged_ms, now, Some(spell_mods));
                         }
                     }
                 }
             }
             None => {
                 if let Some(d) = display {
-                    cooldowns.start_spell(spell_id, d, ranged_ms, now);
+                    cooldowns.start_spell(spell_id, d, ranged_ms, now, Some(spell_mods));
                 }
             }
         }
         if benilla_assets::trace::enabled() {
             if let Some(d) = display {
+                let (recovery_ms, category_ms) = spell_mods.spell_cooldowns(d, ranged_ms);
                 benilla_assets::trace::line(
                     "cd",
                     &format!(
                         "arm spell={spell_id} rec={}ms cat={}:{}ms (GO self-insert)",
-                        d.recovery_ms, d.category, d.category_recovery_ms
+                        recovery_ms, d.category, category_ms
                     ),
                 );
             }
@@ -984,7 +987,7 @@ fn spell_go(
     // The pet leg of the same insert: an independent `if`, not an else.
     if let Some(d) = display.filter(|_| pet_go_cooldown(caster, self_guid, index, stores)) {
         // No ranged pad: `0x6e2b60` is called on the self leg only (`0x6e845d`).
-        pet_bar.cooldowns.start_spell(spell_id, d, 0, now);
+        pet_bar.cooldowns.start_spell(spell_id, d, 0, now, None);
         // `0x6e85fc`/`0x6e8601` fire SPELL_UPDATE_COOLDOWN and PET_BAR_UPDATE_COOLDOWN; the pet
         // bar's one repaint fires off its diff, and the signal bump covers a re-arm to an
         // identical triple.
@@ -1673,6 +1676,7 @@ mod tests {
                                 &mut items,
                                 &net_commands,
                                 &mut pet_bar,
+                                &crate::spell::SpellModifiers::default(),
                             ),
                             (
                                 &mut crate::spell::AutoRepeatActive::default(),
@@ -1928,6 +1932,7 @@ mod tests {
                                 &mut items,
                                 &net_commands,
                                 &mut pet_bar,
+                                &crate::spell::SpellModifiers::default(),
                             ),
                             (
                                 &mut crate::spell::AutoRepeatActive::default(),
@@ -2082,6 +2087,7 @@ mod tests {
                                 &mut items,
                                 &net_commands,
                                 &mut pet_bar,
+                                &crate::spell::SpellModifiers::default(),
                             ),
                             (
                                 &mut crate::spell::AutoRepeatActive::default(),
@@ -2225,6 +2231,7 @@ mod tests {
                             &mut items,
                             &net_commands,
                             &mut pet_bar,
+                            &crate::spell::SpellModifiers::default(),
                         ),
                         (
                             &mut crate::spell::AutoRepeatActive::default(),
@@ -2611,6 +2618,7 @@ mod tests {
                                 &mut items,
                                 &net_commands,
                                 &mut pet_bar,
+                                &crate::spell::SpellModifiers::default(),
                             ),
                             (
                                 &mut crate::spell::AutoRepeatActive::default(),

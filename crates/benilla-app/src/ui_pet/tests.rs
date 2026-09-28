@@ -818,7 +818,7 @@ fn a_cooldown_alone_fires_the_cooldown_event_and_not_the_bar_update() {
     app.world_mut()
         .resource_mut::<PetBar>()
         .cooldowns
-        .start_spell(CLAW, &claw(), 0, std::time::Instant::now());
+        .start_spell(CLAW, &claw(), 0, std::time::Instant::now(), None);
     assert_eq!(
         seen(&mut app),
         vec!["PET_BAR_UPDATE_COOLDOWN".to_string()],

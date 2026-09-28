@@ -151,12 +151,20 @@ impl RangeInputs {
         &self,
         def: &SpellDisplay,
         row: Option<&benilla_formats::SpellRange>,
+        mods: &super::SpellModifiers,
     ) -> Option<u8> {
         let dist_sq = self
             .self_pos
             .zip(self.target_pos)
             .map(|(a, b)| a.distance_squared(b));
-        super::validator::cast_range_refusal(def, row, self.self_reach, self.target_reach, dist_sq)
+        super::validator::cast_range_refusal(
+            def,
+            row,
+            self.self_reach,
+            self.target_reach,
+            dist_sq,
+            mods,
+        )
     }
 }
 

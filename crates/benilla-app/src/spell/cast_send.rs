@@ -190,7 +190,7 @@ impl CastLadder<'_, '_> {
             self.pending.arm(spell_id, now, guards);
         }
         if let Some(d) = self.spells.as_ref().and_then(|s| s.catalog.get(spell_id)) {
-            self.cooldowns.start_gcd(spell_id, d, now);
+            self.cooldowns.start_gcd(spell_id, d, now, &self.spell_mods);
         }
         self.ground.clear();
     }
@@ -494,7 +494,7 @@ fn send_spell_cast(
     if let Some(d) = def {
         if target.is_some() && target == ctx.selection_guid && target != ctx.self_guid {
             let row = spells.and_then(|s| s.ranges.get(d.range_index));
-            if let Some(reason) = ctx.range.refusal(d, row) {
+            if let Some(reason) = ctx.range.refusal(d, row, spell_mods) {
                 debug!("ui_action: cast {spell_id} refused locally — range ({reason:#x})");
                 cast_errors.push_local(spell_id, reason);
                 return;
@@ -621,7 +621,7 @@ fn send_spell_cast(
             .self_store
             .and_then(|s| s.0.unit_level())
             .unwrap_or(0);
-        let cast_time_ms = spells.map_or(0, |s| s.cast_time_ms(d, caster_level));
+        let cast_time_ms = spells.map_or(0, |s| s.cast_time_ms(d, caster_level, spell_mods));
         if validator::cast_moving_refusal(ctx.self_move_flags, cast_time_ms, def) {
             debug!("ui_action: cast {spell_id} refused locally — moving (0x2e)");
             cast_errors.push_local(spell_id, 0x2e);
@@ -769,7 +769,7 @@ fn send_spell_cast(
     // The GCD arms at send (`0x6e2de0` from `0x6e58fb`); a failed cast result clears it
     // (`0x6e1630`).
     if let Some(d) = def {
-        cooldowns.start_gcd(spell_id, d, now);
+        cooldowns.start_gcd(spell_id, d, now, spell_mods);
     }
 }
 

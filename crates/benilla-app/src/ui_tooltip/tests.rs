@@ -12,12 +12,12 @@ struct TestCtx {
     /// wording the client never shows.
     get: Box<Getter>,
     text: Box<Filler>,
-    /// Empty: every cell here is graded as an untalented character.
+    /// Empty by default; modifier tests populate it explicitly.
     spell_mods: crate::spell::SpellModifiers,
 }
 
 type Getter = dyn Fn(&str) -> Option<String>;
-type Filler = dyn Fn(&str, &[i64]) -> Option<String>;
+type Filler = dyn Fn(&str, &[benilla_formats::TokenNumber]) -> Option<String>;
 
 impl TestCtx {
     fn new() -> Self {
@@ -31,11 +31,14 @@ impl TestCtx {
             _rx: rx,
             get: Box::new(move |key| benilla_ui::strings::global(for_get.lua(), key)),
             spell_mods: crate::spell::SpellModifiers::default(),
-            text: Box::new(move |key, args: &[i64]| {
+            text: Box::new(move |key, args: &[benilla_formats::TokenNumber]| {
                 let template = benilla_ui::strings::global(for_text.lua(), key)?;
                 let args: Vec<_> = args
                     .iter()
-                    .map(|n| benilla_ui::strings::Arg::D(*n))
+                    .map(|n| match n {
+                        benilla_formats::TokenNumber::Int(v) => benilla_ui::strings::Arg::D(*v),
+                        benilla_formats::TokenNumber::Float(v) => benilla_ui::strings::Arg::F(*v),
+                    })
                     .collect();
                 Some(benilla_ui::strings::fill(&template, &args))
             }),
@@ -175,6 +178,54 @@ fn fireball_view_on_real_data() {
         let v = spell_tooltip_view(id, &spells, &mut t.ctx(&objects, 0, None)).expect(name);
         assert_eq!(v.requires_form, None, "{name} demands no form");
     }
+}
+
+#[test]
+fn improved_devotion_aura_updates_spell_and_aura_description() {
+    let data = benilla_formats::wow_data_or_skip!();
+    let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+    let mut spells = Spells::empty_for_tests();
+    spells.catalog = benilla_formats::load_spell_catalog(&mut chain).expect("Spell.dbc");
+    spells.ranges = benilla_formats::load_spell_ranges(&mut chain).expect("SpellRange.dbc");
+    spells.durations =
+        benilla_formats::load_spell_durations(&mut chain).expect("SpellDuration.dbc");
+    spells.radii = benilla_formats::load_spell_radii(&mut chain).expect("SpellRadius.dbc");
+    let devotion = spells.catalog.get(465).expect("Devotion Aura rank 1");
+    let bit = devotion.spell_family_flags.trailing_zeros() as u8;
+    let mut t = TestCtx::new();
+    let mut objs = no_objects();
+    let objects = objs.get();
+    let base = spell_tooltip_view(465, &spells, &mut t.ctx(&objects, 0, None)).unwrap();
+    assert!(base.description.contains("55 additional armor"));
+    assert!(base.aura_description.contains("55"));
+
+    t.spell_mods.set_class_family(devotion.spell_family);
+    t.spell_mods.set(false, bit, 8, 25);
+    let improved = spell_tooltip_view(465, &spells, &mut t.ctx(&objects, 0, None)).unwrap();
+    assert!(improved.description.contains("68 additional armor"));
+    assert!(improved.aura_description.contains("68"));
+}
+
+#[test]
+fn improved_fire_blast_shortens_the_cooldown_cell() {
+    let data = benilla_formats::wow_data_or_skip!();
+    let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+    let mut spells = Spells::empty_for_tests();
+    spells.catalog = benilla_formats::load_spell_catalog(&mut chain).expect("Spell.dbc");
+    let fire_blast = spells.catalog.get(2136).expect("Fire Blast rank 1");
+    assert_eq!(fire_blast.recovery_ms, 8_000);
+    let bit = fire_blast.spell_family_flags.trailing_zeros() as u8;
+    let mut t = TestCtx::new();
+    let mut objs = no_objects();
+    let objects = objs.get();
+    let base = spell_tooltip_view(2136, &spells, &mut t.ctx(&objects, 0, None)).unwrap();
+    assert_eq!(base.cooldown.as_deref(), Some("8 sec cooldown"));
+
+    t.spell_mods.set_class_family(fire_blast.spell_family);
+    t.spell_mods
+        .set(true, bit, crate::spell::OP_COOLDOWN, -1_500);
+    let improved = spell_tooltip_view(2136, &spells, &mut t.ctx(&objects, 0, None)).unwrap();
+    assert_eq!(improved.cooldown.as_deref(), Some("6.5 sec cooldown"));
 }
 
 #[test]

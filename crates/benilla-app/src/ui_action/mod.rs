@@ -100,16 +100,19 @@ pub(crate) struct Spells {
 
 impl Spells {
     /// The cast time in ms (`GetCastTime 0x6e3340`), level-scaled from the `CastingTimeIndex`
-    /// row; a missing row reads 0. Spell-mod op `0xa` is not applied, so a talent-shortened cast
-    /// shows its base length.
+    /// row; a missing row reads 0. The reference applies spell-mod op 10 after the row floor.
     pub(crate) fn cast_time_ms(
         &self,
         def: &benilla_formats::SpellDisplay,
         caster_level: u32,
+        mods: &crate::spell::SpellModifiers,
     ) -> u32 {
-        self.cast_times
+        let base = self
+            .cast_times
             .get(def.casting_time_index)
-            .map_or(0, |row| row.resolved_ms(caster_level, def.base_level))
+            .map_or(0, |row| row.resolved_ms(caster_level, def.base_level));
+        mods.apply(def, crate::spell::OP_CAST_TIME, base as i32)
+            .max(0) as u32
     }
 }
 

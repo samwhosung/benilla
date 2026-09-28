@@ -215,7 +215,7 @@ pub(super) fn feed_action_state(
                 }
                 // The range verdict against the target (`0x4e56f0`); nil without one.
                 let row = spells.as_ref().and_then(|s| s.ranges.get(d.range_index));
-                let resolved = benilla_formats::min_max_range(d, row, self_reach, target_reach);
+                let resolved = spell_mods.min_max_range(d, row, self_reach, target_reach);
                 st.has_range = resolved
                     .is_some_and(|(min, max)| min.abs() > f32::EPSILON || max.abs() > f32::EPSILON);
                 st.in_range = match (resolved, dist_sq) {

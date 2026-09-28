@@ -660,15 +660,18 @@ pub(crate) fn fire_chat_login(s: &mut benilla_ui::script::UiScript) {
     }
 }
 
-/// The `benilla_formats::TokenContext::text` seam: a `GlobalStrings` key, its `%d` holes filled.
+/// The `benilla_formats::TokenContext::text` seam: a `GlobalStrings` key and numeric arguments.
 pub(crate) fn token_text(
     script: &benilla_ui::script::UiScript,
-) -> impl Fn(&str, &[i64]) -> Option<String> + '_ {
-    |key: &str, args: &[i64]| {
+) -> impl Fn(&str, &[benilla_formats::TokenNumber]) -> Option<String> + '_ {
+    |key: &str, args: &[benilla_formats::TokenNumber]| {
         let template = benilla_ui::strings::global(script.lua(), key)?;
         let args: Vec<_> = args
             .iter()
-            .map(|n| benilla_ui::strings::Arg::D(*n))
+            .map(|n| match n {
+                benilla_formats::TokenNumber::Int(v) => benilla_ui::strings::Arg::D(*v),
+                benilla_formats::TokenNumber::Float(v) => benilla_ui::strings::Arg::F(*v),
+            })
             .collect();
         Some(benilla_ui::strings::fill(&template, &args))
     }

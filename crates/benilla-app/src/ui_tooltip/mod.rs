@@ -60,7 +60,7 @@ struct ViewCtx<'a, 'w, 's> {
     /// The VM's `GlobalStrings.lua`, where the keyed cells resolve; `text` is the `%d`-filling form
     /// the `$` tokens take.
     get: &'a dyn Fn(&str) -> Option<String>,
-    text: &'a dyn Fn(&str, &[i64]) -> Option<String>,
+    text: &'a dyn Fn(&str, &[benilla_formats::TokenNumber]) -> Option<String>,
 }
 
 /// Fill a key's template from the VM's `GlobalStrings.lua`; no string shows nothing.
@@ -81,10 +81,18 @@ fn spell_tooltip_view(
     let d = spells.catalog.get(spell_id)?;
     let home_area = vctx.home_area;
     let form = vctx.form;
+    let modify_int =
+        |spell: &benilla_formats::SpellDisplay, op, value| vctx.spell_mods.apply(spell, op, value);
+    let modify_float = |spell: &benilla_formats::SpellDisplay, op, value| {
+        vctx.spell_mods.apply_float(spell, op, value)
+    };
     let ctx = benilla_formats::TokenContext {
         durations: &spells.durations,
         radii: &spells.radii,
+        ranges: Some(&spells.ranges),
         lookup: &|id| spells.catalog.get(id),
+        modify_int: Some(&modify_int),
+        modify_float: Some(&modify_float),
         home_area,
         text: vctx.text,
     };
@@ -123,7 +131,7 @@ fn spell_tooltip_view(
     // `max(reach + casterReach + 1.3333334, 5.0)` and prints like any other, usually "5 yd range".
     let range = (!d.tooltip_omits_range_line())
         .then(|| {
-            let (min, max) = benilla_formats::min_max_range(
+            let (min, max) = vctx.spell_mods.min_max_range(
                 d,
                 spells.ranges.get(d.range_index),
                 vctx.combat_reach,
@@ -154,6 +162,10 @@ fn spell_tooltip_view(
             .get(d.casting_time_index)
             .map(|c| c.base_ms as i32)
             .unwrap_or(0);
+        let base = vctx
+            .spell_mods
+            .apply(d, crate::spell::OP_CAST_TIME, base)
+            .max(0);
         // `%.3g` templates: the seconds go over as a real.
         if base > 0 {
             let (key, v) = if base >= 60_000 {
@@ -179,8 +191,16 @@ fn spell_tooltip_view(
             keyed(vctx.get, key, &[])
         }
     };
-    // The larger recovery column (`0x52eada`): Charge's 15 s is its category recovery.
-    let recovery_ms = d.recovery_ms.max(d.category_recovery_ms);
+    // The larger recovery column (`0x52eada`): op 11 follows the ranged-speed category pad.
+    let ranged_ms = if d.ranged_speed_cooldown() {
+        vctx.store
+            .and_then(|s| s.0.unit_ranged_attack_time())
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let (own_recovery, category_recovery) = vctx.spell_mods.spell_cooldowns(d, ranged_ms);
+    let recovery_ms = own_recovery.max(category_recovery);
     let cooldown = (recovery_ms > 0)
         .then(|| {
             let secs = f64::from(recovery_ms) / 1000.0;

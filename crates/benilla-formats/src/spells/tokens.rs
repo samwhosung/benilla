@@ -3,67 +3,131 @@
 //! the reference's per-level terms (`DicePerLevel·max(0, casterLevel − baseLevel)` on the dice,
 //! and `RealPointsPerLevel`) are not applied. Values print unsigned, as the client's do, and an
 //! `EffectAmplitude` of 0 is the reference's 5000 ms period (`$t`, `$o`). `$g` always takes the
-//! first form, as there is no gender input, and `$r`, `$u` and any unknown or unresolved token
+//! first form, as there is no gender input, and `$u` and any unknown or unresolved token
 //! stay raw.
 
-use super::{SpellDisplay, SpellDurationCatalog, SpellRadiusCatalog};
+use super::{SpellDisplay, SpellDurationCatalog, SpellRadiusCatalog, SpellRangeCatalog};
+
+type IntModifier<'a> = &'a dyn Fn(&SpellDisplay, u8, i32) -> i32;
+type FloatModifier<'a> = &'a dyn Fn(&SpellDisplay, u8, f32) -> f32;
+
+/// A value supplied to a spell-description `GlobalStrings` template.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TokenNumber {
+    Int(i64),
+    Float(f64),
+}
 
 /// The inputs one substitution runs over. `lookup` resolves cross-spell references (`$1234s1`).
 pub struct TokenContext<'a> {
     pub durations: &'a SpellDurationCatalog,
     pub radii: &'a SpellRadiusCatalog,
+    pub ranges: Option<&'a SpellRangeCatalog>,
     pub lookup: &'a dyn Fn(u32) -> Option<&'a SpellDisplay>,
+    /// The caller's live spell-modifier tables; absent for contexts without a caster.
+    pub modify_int: Option<IntModifier<'a>>,
+    pub modify_float: Option<FloatModifier<'a>>,
     /// The `$z` token: the home-bind area's name, from `SMSG_BINDPOINTUPDATE`'s area id through
     /// `AreaTable.dbc`; `None` leaves the token raw.
     pub home_area: Option<&'a str>,
-    /// Resolves a `GlobalStrings` key and fills its `%d` holes; the caller owns the string table.
-    /// Integer holes only: the keys that take numbers are `INT_SPELL_*` ones, whose float twins
-    /// would print "14.0 to 22.0" for "14 to 22". `None` leaves the token raw.
-    pub text: &'a dyn Fn(&str, &[i64]) -> Option<String>,
+    /// Resolves a `GlobalStrings` key and fills its numeric holes. `None` leaves the token raw.
+    pub text: &'a dyn Fn(&str, &[TokenNumber]) -> Option<String>,
 }
 
 /// The effect's `(min, max)`, flat term only (`0x6e3800`).
-fn effect_bounds(d: &SpellDisplay, slot: usize) -> (i64, i64) {
+fn effect_bounds(d: &SpellDisplay, slot: usize, ctx: &TokenContext) -> (i64, i64) {
     let base = i64::from(*d.effect_base_points.get(slot).unwrap_or(&0));
     let dice = i64::from(*d.effect_base_dice.get(slot).unwrap_or(&0));
     let sides = i64::from(*d.effect_die_sides.get(slot).unwrap_or(&0));
-    (base + dice, base + sides * dice)
+    let (mut min, mut max) = ((base + dice) as f32, (base + sides * dice) as f32);
+    // `GetEffectPoints 0x6e3800`: all effects (op 8), then its effect/aura-specific ops.
+    for op in [Some(8), damage_op(d, slot), aura_op(d, slot)]
+        .into_iter()
+        .flatten()
+    {
+        min = modify_float(ctx, d, op, min);
+        max = modify_float(ctx, d, op, max);
+    }
+    (min.trunc() as i64, max.trunc() as i64)
 }
 
-/// A spell's duration in ms, flat term only; -1 is permanent.
+fn damage_op(d: &SpellDisplay, slot: usize) -> Option<u8> {
+    let effect = d.effects[slot];
+    let aura = d.effect_apply_aura[slot];
+    let direct = matches!(effect, 2 | 9 | 17 | 31 | 58 | 121);
+    let aura_damage =
+        matches!(effect, 6 | 27 | 35 | 119 | 128 | 129) && matches!(aura, 3 | 15 | 43 | 53 | 89);
+    (direct || aura_damage).then_some(if aura == 3 { 22 } else { 0 })
+}
+
+fn aura_op(d: &SpellDisplay, slot: usize) -> Option<u8> {
+    match d.effect_apply_aura[slot] {
+        10 | 103 | 183 => Some(2),
+        31 | 32 | 33 | 58 | 129 | 130 | 171 | 172 => Some(12),
+        65 => Some(23),
+        99 => Some(24),
+        138 => Some(3),
+        _ => None,
+    }
+}
+
+fn modify_int(ctx: &TokenContext, d: &SpellDisplay, op: u8, value: i32) -> i32 {
+    ctx.modify_int.map_or(value, |f| f(d, op, value))
+}
+
+fn modify_float(ctx: &TokenContext, d: &SpellDisplay, op: u8, value: f32) -> f32 {
+    ctx.modify_float.map_or(value, |f| f(d, op, value))
+}
+
+/// A spell's duration in ms, flat term only. `GetSpellDuration 0x6ea000` applies op 1
+/// after resolving and capping the DBC row; `$d` and `$o` both call it.
 fn duration_ms(d: &SpellDisplay, ctx: &TokenContext) -> Option<i64> {
     let row = ctx.durations.get(d.duration_index)?;
-    Some(i64::from(row.base_ms))
+    Some(i64::from(modify_int(
+        ctx,
+        d,
+        1,
+        row.base_ms.min(row.max_ms),
+    )))
 }
 
-/// The duration in the largest whole `INT_SPELL_DURATION_*` unit, the ladder `0x52fa50` walks,
-/// or `SPELL_DURATION_UNTIL_CANCELLED` when permanent. The plural pick is `GetText`'s, the `_P1`
-/// twin unless exactly one; only HOURS ships one, so the others fall back to the bare key.
+/// The duration formatter at `0x52f980` selects the integer ladder (`0x52fa50`) for whole
+/// units and the floating ladder (`0x52fbd0`) for fractional units. Both use the largest unit.
 fn duration_text(ms: i64, ctx: &TokenContext) -> Option<String> {
     if ms < 0 {
         return (ctx.text)("SPELL_DURATION_UNTIL_CANCELLED", &[]);
     }
-    let secs = ms / 1000;
-    let (unit, n) = if secs < 60 {
-        ("SEC", secs)
-    } else if secs < 3_600 {
-        ("MIN", secs / 60)
-    } else if secs < 86_400 {
-        ("HOURS", secs / 3_600)
+    let (unit, unit_ms) = if ms < 60_000 {
+        ("SEC", 1_000)
+    } else if ms < 3_600_000 {
+        ("MIN", 60_000)
+    } else if ms < 86_400_000 {
+        ("HOURS", 3_600_000)
     } else {
-        ("DAYS", secs / 86_400)
+        ("DAYS", 86_400_000)
     };
+    let amount = ms as f64 / unit_ms as f64;
+    if (amount - amount.trunc()).abs() >= 0.01 {
+        return (ctx.text)(
+            &format!("SPELL_DURATION_{unit}"),
+            &[TokenNumber::Float(amount)],
+        );
+    }
+    let n = ms / unit_ms;
     let key = format!("INT_SPELL_DURATION_{unit}");
     (n != 1)
-        .then(|| (ctx.text)(&format!("{key}_P1"), &[n]))
+        .then(|| (ctx.text)(&format!("{key}_P1"), &[TokenNumber::Int(n)]))
         .flatten()
-        .or_else(|| (ctx.text)(&key, &[n]))
+        .or_else(|| (ctx.text)(&key, &[TokenNumber::Int(n)]))
 }
 
 /// `INT_SPELL_POINTS_SPREAD_TEMPLATE` ("%d to %d"), not the float `SPELL_POINTS_SPREAD_TEMPLATE`,
 /// which would print "14.0 to 22.0" where Fireball rank 1 says "14 to 22".
 fn spread_text(min: i64, max: i64, ctx: &TokenContext) -> Option<String> {
-    (ctx.text)("INT_SPELL_POINTS_SPREAD_TEMPLATE", &[min, max])
+    (ctx.text)(
+        "INT_SPELL_POINTS_SPREAD_TEMPLATE",
+        &[TokenNumber::Int(min), TokenNumber::Int(max)],
+    )
 }
 
 /// Trim a float to the client's terse style (no trailing zeros: 2.5 → "2.5", 3.0 → "3").
@@ -72,6 +136,17 @@ fn trim_float(v: f64) -> String {
         format!("{}", v.round() as i64)
     } else {
         format!("{v:.1}")
+    }
+}
+
+/// Scaled effect points keep their fraction. Spell.dbc's Improved Frostbolt uses
+/// `$/1000;S1` to print 100..500 ms as 0.1..0.5 sec.
+fn scaled_effect_text(value: i64, scale: f64) -> (String, f64) {
+    if scale == 1.0 {
+        (value.to_string(), value as f64)
+    } else {
+        let scaled = value as f64 * scale;
+        (scaled.to_string(), scaled)
     }
 }
 
@@ -92,27 +167,26 @@ fn token_value(
     };
     match letter.to_ascii_lowercase() {
         's' => {
-            let (min, max) = effect_bounds(d, slot);
-            let (min, max) = (scaled(min.abs()), scaled(max.abs()));
+            let (min, max) = effect_bounds(d, slot, ctx);
+            let (min, max) = (min.abs(), max.abs());
             Some(if min == max {
-                (min.to_string(), min as f64)
+                scaled_effect_text(min, scale)
             } else {
+                let (min, max) = (scaled(min), scaled(max));
                 (spread_text(min, max, ctx)?, max as f64)
             })
         }
         'm' if letter == 'm' => {
-            let (min, _) = effect_bounds(d, slot);
-            let v = scaled(min.abs());
-            Some((v.to_string(), v as f64))
+            let (min, _) = effect_bounds(d, slot, ctx);
+            Some(scaled_effect_text(min.abs(), scale))
         }
         'm' => {
             // 'M'
-            let (_, max) = effect_bounds(d, slot);
-            let v = scaled(max.abs());
-            Some((v.to_string(), v as f64))
+            let (_, max) = effect_bounds(d, slot, ctx);
+            Some(scaled_effect_text(max.abs(), scale))
         }
         'o' => {
-            let (min, max) = effect_bounds(d, slot);
+            let (min, max) = effect_bounds(d, slot, ctx);
             let period = i64::from(*d.effect_amplitude.get(slot).unwrap_or(&0)).max(0);
             let period = if period == 0 { 5000 } else { period };
             let dur = duration_ms(d, ctx).unwrap_or(0).max(0);
@@ -131,23 +205,37 @@ fn token_value(
         }
         't' => {
             let period = i64::from(*d.effect_amplitude.get(slot).unwrap_or(&0));
-            let period = if period == 0 { 5000 } else { period };
+            let period = if period == 0 {
+                5000
+            } else {
+                i64::from(modify_int(ctx, d, 19, period as i32))
+            };
             let v = period as f64 / 1000.0;
             Some((trim_float(v), v))
         }
         'a' => {
             let idx = *d.effect_radius_index.get(slot).unwrap_or(&0);
             let r = ctx.radii.get(idx)?;
-            Some((trim_float(f64::from(r.radius)), f64::from(r.radius)))
+            let v = f64::from(modify_int(ctx, d, 6, r.radius as i32));
+            Some((trim_float(v), v))
         }
-        'h' => Some((d.proc_chance.to_string(), f64::from(d.proc_chance))),
+        'h' => {
+            let v = modify_int(ctx, d, 18, d.proc_chance as i32);
+            Some((v.to_string(), f64::from(v)))
+        }
         'x' => {
             let v = *d.effect_chain_targets.get(slot).unwrap_or(&0);
+            let v = modify_int(ctx, d, 17, v as i32);
             Some((v.to_string(), f64::from(v)))
         }
         'e' => {
             let v = f64::from(*d.effect_multiple_value.get(slot).unwrap_or(&0.0));
+            let v = f64::from(modify_float(ctx, d, 27, v as f32));
             Some((trim_float(v), v))
+        }
+        'n' => {
+            let v = modify_int(ctx, d, 4, d.proc_charges as i32);
+            Some((v.to_string(), f64::from(v)))
         }
         'z' => {
             // Player state, not spell data: the home-bind area name.
@@ -155,8 +243,9 @@ fn token_value(
             Some((name.to_string(), 0.0))
         }
         'r' => {
-            // Left raw: the display carries only the range index.
-            None
+            let max = ctx.ranges?.get(d.range_index)?.max;
+            let v = f64::from(modify_float(ctx, d, 5, max));
+            Some((trim_float(v), v))
         }
         _ => None,
     }
@@ -286,8 +375,15 @@ mod tests {
     use crate::spells::SpellDisplay;
 
     /// Deliberately unlike the shipped wording, so a wrong key cannot pass by reading the same.
-    fn text(key: &str, args: &[i64]) -> Option<String> {
-        let n = |i: usize| args.get(i).copied().unwrap_or_default();
+    fn text(key: &str, args: &[TokenNumber]) -> Option<String> {
+        let n = |i: usize| match args.get(i) {
+            Some(TokenNumber::Int(n)) => *n,
+            _ => 0,
+        };
+        let f = |i: usize| match args.get(i) {
+            Some(TokenNumber::Float(n)) => *n,
+            _ => 0.0,
+        };
         Some(match key {
             "SPELL_DURATION_UNTIL_CANCELLED" => "<forever>".into(),
             "INT_SPELL_DURATION_SEC" => format!("<{}sec>", n(0)),
@@ -295,6 +391,7 @@ mod tests {
             "INT_SPELL_DURATION_HOURS" => format!("<{}hour>", n(0)),
             "INT_SPELL_DURATION_HOURS_P1" => format!("<{}hrs>", n(0)),
             "INT_SPELL_DURATION_DAYS" => format!("<{}days>", n(0)),
+            "SPELL_DURATION_MIN" => format!("<{:.2}min>", f(0)),
             "INT_SPELL_POINTS_SPREAD_TEMPLATE" => format!("<{}..{}>", n(0), n(1)),
             _ => return None,
         })
@@ -309,7 +406,10 @@ mod tests {
             home_area: None,
             durations,
             radii,
+            ranges: None,
             lookup,
+            modify_int: None,
+            modify_float: None,
             text: &text,
         }
     }
@@ -347,6 +447,100 @@ mod tests {
         assert_eq!(d(6), "<forever>");
     }
 
+    #[test]
+    fn duration_modifier_updates_description_and_overtime_total() {
+        let mut durations = SpellDurationCatalog::default();
+        durations.insert_for_tests(1, 120_000);
+        let radii = SpellRadiusCatalog::default();
+        let modified = |_: &SpellDisplay, op: u8, value: i32| {
+            if op == 1 {
+                value * 3 / 2
+            } else {
+                value
+            }
+        };
+        let c = TokenContext {
+            durations: &durations,
+            radii: &radii,
+            ranges: None,
+            lookup: &none_lookup,
+            modify_int: Some(&modified),
+            modify_float: None,
+            home_area: None,
+            text: &text,
+        };
+        let d = SpellDisplay {
+            duration_index: 1,
+            effect_base_points: [2, 0, 0],
+            effect_base_dice: [1, 0, 0],
+            effect_die_sides: [1, 0, 0],
+            effect_amplitude: [3_000, 0, 0],
+            ..Default::default()
+        };
+        assert_eq!(
+            substitute("Lasts $d; deals $o1 total.", &d, &c),
+            "Lasts <3min>; deals 180 total."
+        );
+    }
+
+    #[test]
+    fn battle_shout_description_uses_modified_duration_from_real_data() {
+        let data = crate::wow_data_or_skip!();
+        let mut chain = crate::open_chain(&data).expect("open chain");
+        let spells = crate::load_spell_catalog(&mut chain).expect("Spell.dbc");
+        let durations = crate::load_spell_durations(&mut chain).expect("SpellDuration.dbc");
+        let radii = SpellRadiusCatalog::default();
+        let d = spells.get(6673).expect("Battle Shout rank 1");
+        let description = d.description.as_deref().expect("description");
+        let lookup = |id| spells.get(id);
+        let base = ctx(&durations, &radii, &lookup);
+        assert!(substitute(description, d, &base).contains("<2min>"));
+        let extended = |_: &SpellDisplay, op: u8, value: i32| {
+            if op == 1 {
+                value * 3 / 2
+            } else {
+                value
+            }
+        };
+        let modified = TokenContext {
+            modify_int: Some(&extended),
+            ..base
+        };
+        assert!(substitute(description, d, &modified).contains("<3min>"));
+    }
+
+    #[test]
+    fn booming_voice_ranks_preserve_fractional_minutes() {
+        let mut durations = SpellDurationCatalog::default();
+        durations.insert_for_tests(1, 120_000);
+        let radii = SpellRadiusCatalog::default();
+        let spell = SpellDisplay {
+            duration_index: 1,
+            ..Default::default()
+        };
+        for (rank, expected) in [
+            (0, "<2min>"),
+            (1, "<2.20min>"),
+            (2, "<2.40min>"),
+            (3, "<2.60min>"),
+            (4, "<2.80min>"),
+            (5, "<3min>"),
+        ] {
+            let modify = |_: &SpellDisplay, op: u8, ms: i32| {
+                if op == 1 {
+                    ms + ms * rank / 10
+                } else {
+                    ms
+                }
+            };
+            let ctx = TokenContext {
+                modify_int: Some(&modify),
+                ..ctx(&durations, &radii, &none_lookup)
+            };
+            assert_eq!(substitute("$d", &spell, &ctx), expected, "rank {rank}");
+        }
+    }
+
     fn none_lookup<'a>(_: u32) -> Option<&'a SpellDisplay> {
         None
     }
@@ -379,6 +573,55 @@ mod tests {
     }
 
     #[test]
+    fn scaled_effect_points_keep_fractional_seconds() {
+        let durations = SpellDurationCatalog::default();
+        let radii = SpellRadiusCatalog::default();
+        let c = ctx(&durations, &radii, &none_lookup);
+        for (points, expected) in [(100, "0.1"), (200, "0.2"), (500, "0.5")] {
+            let d = SpellDisplay {
+                effect_base_points: [points - 1, 0, 0],
+                effect_base_dice: [1, 0, 0],
+                effect_die_sides: [1, 0, 0],
+                ..Default::default()
+            };
+            assert_eq!(
+                substitute("$/1000;S1 sec.", &d, &c),
+                format!("{expected} sec.")
+            );
+            assert_eq!(
+                substitute("$/1000;m1 sec.", &d, &c),
+                format!("{expected} sec.")
+            );
+        }
+    }
+
+    #[test]
+    fn improved_frostbolt_ranks_display_tenths_from_real_spell_data() {
+        let data = crate::wow_data_or_skip!();
+        let mut chain = crate::open_chain(&data).expect("open chain");
+        let catalog = crate::load_spell_catalog(&mut chain).expect("Spell.dbc");
+        let durations = SpellDurationCatalog::default();
+        let radii = SpellRadiusCatalog::default();
+        let lookup = |id| catalog.get(id);
+        let c = ctx(&durations, &radii, &lookup);
+        for (id, expected) in [
+            (11070, "0.1"),
+            (12473, "0.2"),
+            (16763, "0.3"),
+            (16765, "0.4"),
+            (16766, "0.5"),
+        ] {
+            let d = catalog.get(id).expect("Improved Frostbolt rank");
+            assert!(d.name == "Improved Frostbolt");
+            let description = substitute(d.description.as_deref().unwrap(), d, &c);
+            assert!(
+                description.contains(&format!("by {expected} sec.")),
+                "{description}"
+            );
+        }
+    }
+
+    #[test]
     fn overtime_duration_period_scale_plural() {
         let mut durations = SpellDurationCatalog::default();
         durations.insert_for_tests(1, 18_000);
@@ -398,8 +641,8 @@ mod tests {
         );
         assert_eq!(
             substitute("Restores $/2;s1 health: $l point:points;.", &d, &c),
-            // 3 halved is 1.5, which rounds to 2; the plural picks "points"
-            "Restores 2 health: points.".to_string()
+            // 3 halved keeps its fractional value; the plural picks "points".
+            "Restores 1.5 health: points.".to_string()
         );
     }
 
@@ -419,7 +662,10 @@ mod tests {
             home_area: Some("Goldshire"),
             durations: &durations,
             radii: &radii,
+            ranges: None,
             lookup: &lookup,
+            modify_int: None,
+            modify_float: None,
             text: &text,
         };
         assert_eq!(
@@ -435,12 +681,53 @@ mod tests {
             home_area: None,
             durations: &durations,
             radii: &radii,
+            ranges: None,
             lookup: &lookup,
+            modify_int: None,
+            modify_float: None,
             text: &text,
         };
         assert_eq!(
             substitute("Returns you to $z.", &d, &unbound),
             "Returns you to $z."
+        );
+    }
+
+    #[test]
+    fn effect_value_tokens_take_the_all_effects_modifier_before_integer_display() {
+        // Devotion Aura rank 1: 54 base plus one die is 55. Improved Devotion Aura 5/5
+        // supplies +25% to op 8; the effect-value path truncates 68.75 to 68.
+        let d = SpellDisplay {
+            effects: [35, 0, 0],
+            effect_apply_aura: [22, 0, 0],
+            effect_base_points: [54, 0, 0],
+            effect_base_dice: [1, 0, 0],
+            effect_die_sides: [1, 0, 0],
+            ..Default::default()
+        };
+        let durations = SpellDurationCatalog::default();
+        let radii = SpellRadiusCatalog::default();
+        let modified = |_: &SpellDisplay, op: u8, value: f32| {
+            if op == 8 {
+                value * 1.25
+            } else {
+                value
+            }
+        };
+        let ctx = TokenContext {
+            durations: &durations,
+            radii: &radii,
+            ranges: None,
+            lookup: &none_lookup,
+            modify_int: None,
+            modify_float: Some(&modified),
+            home_area: None,
+            text: &text,
+        };
+        assert_eq!(substitute("Gives $s1 armor.", &d, &ctx), "Gives 68 armor.");
+        assert_eq!(
+            substitute("Increases armor by $M1.", &d, &ctx),
+            "Increases armor by 68."
         );
     }
 

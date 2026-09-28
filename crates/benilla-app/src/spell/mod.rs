@@ -30,7 +30,9 @@ pub(crate) use inflight::{
     inflight, ActiveChannel, AutoRepeatActive, LocalMoveStart, PendingCast, QueuedMeleeSpell,
     SelfCancel, SPELL_INTERRUPT_MOVEMENT,
 };
-pub(crate) use mods::{SpellModifiers, OP_COST};
+#[cfg(test)]
+pub(crate) use mods::OP_COOLDOWN;
+pub(crate) use mods::{SpellModifiers, OP_CAST_TIME, OP_COST, OP_GCD, OP_RADIUS};
 // `TargetingWants` is exported for the ground reticle, which draws for the location word alone.
 pub(crate) use targeting::{
     ground_cast_radius, CorpsePick, PicksSelf, ScriptCursor, SpellTargeting, TargetingWants,

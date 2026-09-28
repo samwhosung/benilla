@@ -65,6 +65,7 @@ pub(crate) struct BindChecks<'w, 's> {
     /// `publish_camera_pose` rewrites mid-frame.
     poses: Query<'w, 's, &'static GlobalTransform, Without<benilla_world::view::WorldCamera>>,
     spells: Option<Res<'w, crate::ui_action::Spells>>,
+    spell_mods: Res<'w, super::SpellModifiers>,
 }
 
 impl BindChecks<'_, '_> {
@@ -142,7 +143,7 @@ impl BindChecks<'_, '_> {
     fn refusal(&self, spell_id: u32, range: super::cast_target::RangeInputs) -> Option<u8> {
         let spells = self.spells.as_deref()?;
         let def = spells.catalog.get(spell_id)?;
-        range.refusal(def, spells.ranges.get(def.range_index))
+        range.refusal(def, spells.ranges.get(def.range_index), &self.spell_mods)
     }
 
     /// What the corpse legs read of this corpse: `CORPSE_FLAG_BONES` and the reaction gate

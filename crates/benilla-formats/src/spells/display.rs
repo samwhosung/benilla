@@ -149,6 +149,8 @@ pub struct SpellDisplay {
     pub casting_time_index: u32,
     /// `ProcChance` (column 25): percent; vmangos reads 101 as always, with no roll.
     pub proc_chance: u32,
+    /// `ProcCharges` (column 26): the description expander's `$n` value before op 4.
+    pub proc_charges: u32,
     /// `EffectBasePoints[3]` (columns 76-78, signed): each roll's floor; -1 on weapon damage.
     pub effect_base_points: [i32; 3],
     /// `EffectDieSides[3]` (columns 64-66, signed): with n dice, the value runs base + n to
@@ -246,6 +248,7 @@ impl Default for SpellDisplay {
             duration_index: 0,
             casting_time_index: 0,
             proc_chance: 0,
+            proc_charges: 0,
             effect_base_points: [0; 3],
             effect_die_sides: [0; 3],
             effect_base_dice: [0; 3],

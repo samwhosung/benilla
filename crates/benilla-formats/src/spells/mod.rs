@@ -34,7 +34,7 @@ pub use ranges::{
     load_spell_ranges, min_max_range, SpellRange, SpellRangeCatalog, COMBAT_REACH_ADD,
     MELEE_RANGE_FLOOR, ON_NEXT_SWING_RANGE,
 };
-pub use tokens::{substitute, TokenContext};
+pub use tokens::{substitute, TokenContext, TokenNumber};
 
 use std::collections::HashMap;
 
@@ -562,6 +562,7 @@ pub fn load_spell_catalog(chain: &mut Chain) -> Result<SpellCatalog> {
                 duration_index: u32_at(r, COL_DURATION_INDEX).unwrap_or(0),
                 casting_time_index: u32_at(r, COL_CASTING_TIME_INDEX).unwrap_or(0),
                 proc_chance: u32_at(r, COL_PROC_CHANCE).unwrap_or(0),
+                proc_charges: u32_at(r, COL_PROC_CHANCE + 1).unwrap_or(0),
                 effect_base_points: std::array::from_fn(|i| {
                     i32_at(r, COL_EFFECT_BASE_POINTS_1 + i).unwrap_or(0)
                 }),

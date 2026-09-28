@@ -58,18 +58,28 @@ fn spell_desc_text(
     spells: Option<&crate::ui_action::Spells>,
     id: u32,
     home_area: Option<&str>,
+    mods: Option<&crate::spell::SpellModifiers>,
     // The VM's strings for the keyed `$d`/`$s` tokens.
-    text: &dyn Fn(&str, &[i64]) -> Option<String>,
+    text: &dyn Fn(&str, &[benilla_formats::TokenNumber]) -> Option<String>,
 ) -> Option<String> {
     let sp = spells?;
     let d = sp.catalog.get(id)?;
     match d.description.as_deref().filter(|t| !t.is_empty()) {
         // The builder tests the expanded text, which can be empty from a non-empty template.
         Some(desc) => {
+            let modify_int = |d: &benilla_formats::SpellDisplay, op, value| {
+                mods.map_or(value, |m| m.apply(d, op, value))
+            };
+            let modify_float = |d: &benilla_formats::SpellDisplay, op, value| {
+                mods.map_or(value, |m| m.apply_float(d, op, value))
+            };
             let ctx = benilla_formats::TokenContext {
                 durations: &sp.durations,
                 radii: &sp.radii,
+                ranges: Some(&sp.ranges),
                 lookup: &|i| sp.catalog.get(i),
+                modify_int: Some(&modify_int),
+                modify_float: Some(&modify_float),
                 home_area,
                 text,
             };
@@ -102,6 +112,7 @@ fn standing_label(rank: u32, get: &dyn Fn(&str) -> Option<String>) -> Option<Str
 fn template_view(
     t: &ItemInfo,
     spells: Option<&crate::ui_action::Spells>,
+    mods: Option<&crate::spell::SpellModifiers>,
     skill_lines: Option<&benilla_formats::SkillLineCatalog>,
     home_area: Option<&str>,
     factions: Option<&benilla_formats::FactionCatalog>,
@@ -111,14 +122,14 @@ fn template_view(
     // The VM's own `GlobalStrings.lua`, for the reputation-requirement line.
     get: &dyn Fn(&str) -> Option<String>,
     // The same table, for the `$`-engine's keyed tokens.
-    text: &dyn Fn(&str, &[i64]) -> Option<String>,
+    text: &dyn Fn(&str, &[benilla_formats::TokenNumber]) -> Option<String>,
 ) -> benilla_ui::script::ItemTemplateView {
     let spell_name = |id: u32| -> Option<String> {
         spells
             .and_then(|s| s.catalog.get(id))
             .map(|sd| sd.name.clone())
     };
-    let spell_text = |id: u32| spell_desc_text(spells, id, home_area, text);
+    let spell_text = |id: u32| spell_desc_text(spells, id, home_area, mods, text);
     benilla_ui::script::ItemTemplateView {
         name: t.name.clone(),
         quality: t.quality,
@@ -215,17 +226,26 @@ pub(super) fn feed_item_sets(
     items: Res<Items>,
     commands: Res<NetCommands>,
     spells: Option<Res<crate::ui_action::Spells>>,
+    spell_mods: Res<crate::spell::SpellModifiers>,
     skill_lines: Option<Res<crate::ui_spellbook::SkillLines>>,
     mut pending: Local<
         crate::ui_script::VmMemo<std::collections::HashMap<u32, benilla_ui::script::ItemSetView>>,
     >,
+    mut watched: Local<crate::ui_script::VmMemo<std::collections::HashSet<u32>>>,
 ) {
     let Some(mut script) = script else {
         return;
     };
     let pending = pending.get(&script);
+    let watched = watched.get(&script);
     for id in script.take_item_set_asks() {
+        watched.insert(id);
         pending.entry(id).or_default();
+    }
+    if spell_mods.is_changed() {
+        for &id in watched.iter() {
+            pending.entry(id).or_default();
+        }
     }
     if pending.is_empty() {
         return;
@@ -255,7 +275,8 @@ pub(super) fn feed_item_sets(
                 .bonuses
                 .iter()
                 .filter_map(|&(n, spell)| {
-                    spell_desc_text(spell_res, spell, None, &token_text).map(|desc| (n, desc))
+                    spell_desc_text(spell_res, spell, None, Some(&spell_mods), &token_text)
+                        .map(|desc| (n, desc))
                 })
                 .collect(),
             required_skill: row.required_skill,
@@ -322,6 +343,7 @@ pub(super) fn feed_item_stats(
     mut items: ResMut<Items>,
     commands: Res<NetCommands>,
     spells: Option<Res<crate::ui_action::Spells>>,
+    spell_mods: Res<crate::spell::SpellModifiers>,
     skill_lines: Option<Res<crate::ui_spellbook::SkillLines>>,
     // The `$z` token: the bind point's area (`SMSG_BINDPOINTUPDATE`), named through `AreaTable`.
     home_bind: Option<Res<crate::net::HomeBind>>,
@@ -355,6 +377,9 @@ pub(super) fn feed_item_stats(
 
     pending.extend(items.take_fresh());
     pending.extend(script.take_item_stat_asks());
+    if spell_mods.is_changed() {
+        pending.extend(items.cached_template_ids());
+    }
     if pending.is_empty() {
         return;
     }
@@ -385,6 +410,7 @@ pub(super) fn feed_item_stats(
                     template_view(
                         &t,
                         spell_res,
+                        Some(&spell_mods),
                         skill_catalog,
                         home_area,
                         factions.as_deref().map(|f| f.catalog()),
@@ -1812,7 +1838,7 @@ mod tests {
         };
 
         // No string table: Fireball's description reaches no keyed token.
-        let no_strings = |_: &str, _: &[i64]| None;
+        let no_strings = |_: &str, _: &[benilla_formats::TokenNumber]| None;
 
         // The lock chain's Opening and Closing spells, none with a description.
         for id in [3365u32, 3366, 6246, 6247, 6477, 21651] {
@@ -1822,7 +1848,7 @@ mod tests {
                 "spell {id} has a name — which is exactly what must NOT leak into the tooltip"
             );
             assert_eq!(
-                super::spell_desc_text(Some(&spells), id, None, &no_strings),
+                super::spell_desc_text(Some(&spells), id, None, None, &no_strings),
                 None,
                 "spell {id} ({:?}) has no description, so the reference prints no trigger line",
                 d.name
@@ -1830,7 +1856,7 @@ mod tests {
         }
 
         // The control: Fireball (133), described, still yields its line.
-        let fireball = super::spell_desc_text(Some(&spells), 133, None, &no_strings)
+        let fireball = super::spell_desc_text(Some(&spells), 133, None, None, &no_strings)
             .expect("a described spell still yields its line");
         assert!(
             fireball.contains("damage"),

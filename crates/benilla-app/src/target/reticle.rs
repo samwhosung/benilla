@@ -10,7 +10,7 @@
 //! object-placement spell (effect `0x51`); that model is not built.
 //!
 //! The radius is `ground_cast_radius` (`GetCurrentCastRadius 0x6e6350`, clamped to 20.0 in
-//! `0x4820f0`), with no spell mod applied. Out of range forces it to 0.0, and 0.0 draws at the
+//! `0x4820f0`), after spell-mod op 6. Out of range forces it to 0.0, and 0.0 draws at the
 //! 1.3888889 default. With no world hit nothing is drawn: the
 //! reference resets its draw state every hover pass. Over a unit the decal lands on the ground
 //! behind it, since a dest-only word's pick skips the object trace (`0x480e7b`).
@@ -82,6 +82,7 @@ pub(super) fn update_reticle(
     occlusion: Res<PickOcclusion>,
     cursor: Res<WorldCursor>,
     spells: Option<Res<Spells>>,
+    spell_mods: Res<crate::spell::SpellModifiers>,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
     decals: WorldDecal,
     mut state: ResMut<ReticleState>,
@@ -103,7 +104,7 @@ pub(super) fn update_reticle(
             .ok()
             .and_then(|s| s.0.unit_level())
             .unwrap_or(1);
-        ground_cast_radius(spells.as_deref(), spell_id, level)
+        ground_cast_radius(spells.as_deref(), spell_id, level, &spell_mods)
     } else {
         0.0
     };
@@ -197,6 +198,7 @@ mod tests {
             world.init_resource::<ReticleState>();
             world.init_resource::<WorldCursor>();
             world.init_resource::<SpellTargeting>();
+            world.init_resource::<crate::spell::SpellModifiers>();
             world.insert_resource(PickOcclusion {
                 distance: 10.0,
                 point: Some(Vec3::ZERO),

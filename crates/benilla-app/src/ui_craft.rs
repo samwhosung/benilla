@@ -97,6 +97,7 @@ fn feed_craft(
     open: Res<CraftOpen>,
     actions: Res<PlayerActions>,
     spells: Option<Res<Spells>>,
+    spell_mods: Res<crate::spell::SpellModifiers>,
     skill_lines: Option<Res<SkillLines>>,
     focus: Option<Res<SpellFocus>>,
     icons: Option<Res<ItemDisplays>>,
@@ -124,10 +125,17 @@ fn feed_craft(
             .map(|l| l.name.clone())
             .unwrap_or_else(|| format!("Skill {line}"));
         let text = crate::ui_script::token_text(&script);
+        let modify_int =
+            |d: &benilla_formats::SpellDisplay, op, value| spell_mods.apply(d, op, value);
+        let modify_float =
+            |d: &benilla_formats::SpellDisplay, op, value| spell_mods.apply_float(d, op, value);
         let ctx = benilla_formats::TokenContext {
             durations: &spells.durations,
             radii: &spells.radii,
+            ranges: Some(&spells.ranges),
             lookup: &|id| spells.catalog.get(id),
+            modify_int: Some(&modify_int),
+            modify_float: Some(&modify_float),
             home_area: None,
             text: &text,
         };

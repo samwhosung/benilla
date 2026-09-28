@@ -4,6 +4,7 @@
 //! called by [`super::cast_send`]'s ladder in its order. Only `TryCast` reaches `0x6094f0`, never
 //! the greying walk `0x6e3d60`.
 
+use super::SpellModifiers;
 use benilla_formats::{SpellDisplay, SpellRange};
 
 /// The range refusals `CanTargetUnit 0x6e4440` emits: "Out of range." and "Target too close".
@@ -20,8 +21,9 @@ pub(super) fn cast_range_refusal(
     self_reach: f32,
     target_reach: Option<f32>,
     dist_sq: Option<f32>,
+    mods: &SpellModifiers,
 ) -> Option<u8> {
-    let (min, max) = benilla_formats::min_max_range(spell, row, self_reach, target_reach)?;
+    let (min, max) = mods.min_max_range(spell, row, self_reach, target_reach)?;
     let d2 = dist_sq?;
     if d2 > max * max {
         return Some(ERR_OUT_OF_RANGE);
@@ -235,6 +237,7 @@ mod tests {
     /// `IsTargetInRange 0x6e47b0`'s two compares, on Auto Shot's {8, 35} row plus the reach pad.
     #[test]
     fn cast_range_refusal_follows_the_two_compares() {
+        let mods = SpellModifiers::default();
         let d = spell_with_range(114, 0);
         let auto_shot = SpellRange {
             min: 8.0,
@@ -243,7 +246,8 @@ mod tests {
         };
         let reach = Some(1.5);
         // Both bounds carry the bare reach pad (self 1.5 + target 1.5): min = 11, max = 38.
-        let refuse = |d2: f32| cast_range_refusal(&d, Some(&auto_shot), 1.5, reach, Some(d2));
+        let refuse =
+            |d2: f32| cast_range_refusal(&d, Some(&auto_shot), 1.5, reach, Some(d2), &mods);
         assert_eq!(refuse(3.0 * 3.0), Some(ERR_TOO_CLOSE));
         assert_eq!(refuse(20.0 * 20.0), None);
         assert_eq!(refuse(60.0 * 60.0), Some(ERR_OUT_OF_RANGE));
@@ -254,7 +258,7 @@ mod tests {
             max: 35.0,
             flags: 0,
         };
-        let refuse = |d2: f32| cast_range_refusal(&d, Some(&fireball), 1.5, reach, Some(d2));
+        let refuse = |d2: f32| cast_range_refusal(&d, Some(&fireball), 1.5, reach, Some(d2), &mods);
         assert_eq!(refuse(0.1), None);
         assert_eq!(refuse(60.0 * 60.0), Some(ERR_OUT_OF_RANGE));
 
@@ -266,18 +270,28 @@ mod tests {
         };
         let melee_spell = spell_with_range(2, 0);
         assert_eq!(
-            cast_range_refusal(&melee_spell, Some(&melee), 1.5, reach, Some(0.1)),
+            cast_range_refusal(&melee_spell, Some(&melee), 1.5, reach, Some(0.1), &mods),
             None
         );
         assert_eq!(
-            cast_range_refusal(&melee_spell, Some(&melee), 1.5, reach, Some(15.0 * 15.0)),
+            cast_range_refusal(
+                &melee_spell,
+                Some(&melee),
+                1.5,
+                reach,
+                Some(15.0 * 15.0),
+                &mods
+            ),
             Some(ERR_OUT_OF_RANGE)
         );
 
         // No row or no distance passes.
-        assert_eq!(cast_range_refusal(&d, None, 1.5, reach, Some(1.0)), None);
         assert_eq!(
-            cast_range_refusal(&d, Some(&auto_shot), 1.5, reach, None),
+            cast_range_refusal(&d, None, 1.5, reach, Some(1.0), &mods),
+            None
+        );
+        assert_eq!(
+            cast_range_refusal(&d, Some(&auto_shot), 1.5, reach, None, &mods),
             None
         );
     }

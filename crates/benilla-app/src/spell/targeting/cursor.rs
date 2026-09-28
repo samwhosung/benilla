@@ -35,9 +35,14 @@ fn range_row(spells: Option<&Spells>, spell_id: u32) -> Option<&SpellRange> {
 /// `GetCurrentCastRadius 0x6e6350`: per effect `radius + casterLevel × perLevel` over
 /// `EffectRadiusIndex[0]` and `[1]` only, the larger with slot 1 winning ties and NaN, clamped to
 /// 20.0 (`0x4820f0`'s `[0x804478]`). 0.0 means no radius rows and the reticle's default size.
-/// The reference then applies spell-mod op 6 (SPELLMOD_RADIUS, `0x6e6bf0`); this does not yet,
-/// though `crate::spell::mods` has it.
-pub(crate) fn ground_cast_radius(spells: Option<&Spells>, spell_id: u32, level: u32) -> f32 {
+/// The reference then applies spell-mod op 6 (SPELLMOD_RADIUS, `0x6e6bf0`) before the reticle's
+/// 20-yard clamp (`0x4820f0`).
+pub(crate) fn ground_cast_radius(
+    spells: Option<&Spells>,
+    spell_id: u32,
+    level: u32,
+    mods: &super::super::SpellModifiers,
+) -> f32 {
     let Some(spells) = spells else { return 0.0 };
     let Some(d) = spells.catalog.get(spell_id) else {
         return 0.0;
@@ -55,7 +60,7 @@ pub(crate) fn ground_cast_radius(spells: Option<&Spells>, spell_id: u32, level: 
     let (c0, c1) = (candidate(0), candidate(1));
     // Strict > for slot 0: a tie or a NaN falls to slot 1, as the reference compares.
     let r = if c0 > c1 { c0 } else { c1 };
-    r.min(20.0)
+    mods.apply_float(d, super::super::OP_RADIUS, r).min(20.0)
 }
 
 /// While targeting, runs after the world classifier and overwrites its verdict (`0x4820f0`'s
@@ -223,6 +228,8 @@ mod tests {
         let mut spells = crate::ui_action::Spells::empty_for_tests();
         let display = |idx: [u32; 3]| SpellDisplay {
             effect_radius_index: idx,
+            spell_family: 3,
+            spell_family_flags: 1 << 5,
             ..SpellDisplay::default()
         };
         spells.catalog = benilla_formats::SpellCatalog::from_displays(HashMap::from([
@@ -275,17 +282,23 @@ mod tests {
             ),
         ]));
         let s = Some(&spells);
-        assert_eq!(ground_cast_radius(s, 10, 60), 8.0);
-        assert_eq!(ground_cast_radius(s, 2120, 60), 5.0);
+        let mods = crate::spell::SpellModifiers::default();
+        assert_eq!(ground_cast_radius(s, 10, 60, &mods), 8.0);
+        assert_eq!(ground_cast_radius(s, 2120, 60, &mods), 5.0);
         // Slot 2 is never read: no rows in slots 0 and 1 reads 0, the default size.
-        assert_eq!(ground_cast_radius(s, 777, 60), 0.0);
+        assert_eq!(ground_cast_radius(s, 777, 60, &mods), 0.0);
         // Per-level: 2.0 + 60 × 0.1 = 8.0 beats slot 1's 5.0.
-        assert_eq!(ground_cast_radius(s, 778, 60), 8.0);
+        assert_eq!(ground_cast_radius(s, 778, 60, &mods), 8.0);
         // The 20.0 clamp (`[0x804478]`).
-        assert_eq!(ground_cast_radius(s, 779, 60), 20.0);
+        assert_eq!(ground_cast_radius(s, 779, 60, &mods), 20.0);
         // Unknown spell or no data: 0, the default size.
-        assert_eq!(ground_cast_radius(s, 9999, 60), 0.0);
-        assert_eq!(ground_cast_radius(None, 10, 60), 0.0);
+        assert_eq!(ground_cast_radius(s, 9999, 60, &mods), 0.0);
+        assert_eq!(ground_cast_radius(None, 10, 60, &mods), 0.0);
+
+        let mut mods = crate::spell::SpellModifiers::default();
+        mods.set_class_family(3);
+        mods.set(false, 5, crate::spell::OP_RADIUS, -50);
+        assert_eq!(ground_cast_radius(s, 779, 60, &mods), 15.0);
     }
 
     /// Only two of the three pick states are handlers; state 0 is UnableCast.
@@ -302,6 +315,7 @@ mod tests {
             world.init_resource::<crate::go_templates::GameObjectTemplates>();
             world.init_resource::<crate::items::Items>();
             world.init_resource::<crate::net::GuidIndex>();
+            world.init_resource::<crate::spell::SpellModifiers>();
             world.insert_resource(crate::net::Reputations(Vec::new()));
             world.insert_resource(PickOcclusion {
                 distance: 10.0,
@@ -374,6 +388,7 @@ mod tests {
             world.init_resource::<crate::go_templates::GameObjectTemplates>();
             world.init_resource::<crate::items::Items>();
             world.init_resource::<crate::net::GuidIndex>();
+            world.init_resource::<crate::spell::SpellModifiers>();
             world.insert_resource(crate::net::Reputations(Vec::new()));
             world.init_resource::<PickOcclusion>();
             let display = |range_index| benilla_formats::SpellDisplay {
@@ -457,6 +472,7 @@ mod tests {
             world.init_resource::<crate::go_templates::GameObjectTemplates>();
             world.init_resource::<crate::items::Items>();
             world.init_resource::<crate::net::GuidIndex>();
+            world.init_resource::<crate::spell::SpellModifiers>();
             world.insert_resource(crate::net::Reputations(Vec::new()));
             world.init_resource::<PickOcclusion>();
             world.insert_resource(fx::spells());
