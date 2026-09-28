@@ -89,7 +89,7 @@ mod merchant;
 mod messageframe;
 mod minimap;
 pub mod nameplate;
-pub use nameplate::{PlateGeometry, PlateState};
+pub use nameplate::{PlateBitWrites, PlateGeometry, PlateState, PLATE_BIT_ENEMY, PLATE_BIT_FRIEND};
 mod model;
 mod modelframe;
 mod net_stats;
@@ -180,8 +180,8 @@ pub use cursor::{
 pub use cvars::{small_cull_text, sstr_to_int};
 pub use cvars::{
     MultisampleFormat, ScreenResolution, SeededCvar, VideoCaps, CVAR_FRILL_DENSITY, CVAR_GAMMA,
-    CVAR_NAMEPLATE_ENEMIES, CVAR_NAMEPLATE_FRIENDS, CVAR_SMALL_CULL, CVAR_WORLD_DETAIL,
-    IN_WORLD_READ_ONLY_CVARS, VIDEO_DEFAULT_CVARS, WORLD_DETAIL_STOPS,
+    CVAR_SMALL_CULL, CVAR_WORLD_DETAIL, IN_WORLD_READ_ONLY_CVARS, VIDEO_DEFAULT_CVARS,
+    WORLD_DETAIL_STOPS,
 };
 pub use death::{DeathAction, DeathUiState};
 pub use dressup::DressUpIntent;
@@ -524,6 +524,7 @@ impl UiScript {
         death::install(&lua)?;
         aura::install(&lua)?;
         cvars::install(&lua)?;
+        nameplate::install_verbs(&lua)?;
         saved::install(&lua)?;
         keybind::install(&lua)?;
         sound::install(&lua)?;

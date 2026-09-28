@@ -4,6 +4,11 @@
 //! and read it positionally: six regions in creation order, then one child, the health bar (1.12
 //! has no cast bar). Addons take plates over, so static properties are written once, anchors
 //! when the window changes and state when it moves.
+//!
+//! Also the four verbs that switch plates on and off, which write two bits of the engine's
+//! runtime dword `[0xc4da34]` and nothing else.
+
+use mlua::Lua;
 
 use crate::layout::{Anchor, Point};
 use crate::order::DrawLayer;
@@ -127,6 +132,9 @@ pub(crate) struct NamePlates {
     /// true, where freelook (`0x60f830`) clears the bit.
     hit_test_vetoed: bool,
     geometry: Option<PlateGeometry>,
+    /// The verbs' writes to the two script bits, drained by
+    /// [`UiScript::take_nameplate_bit_writes`].
+    bit_writes: PlateBitWrites,
 }
 
 impl NamePlates {
@@ -154,7 +162,79 @@ struct SyncEffects {
     values: Vec<(FrameHandle, f32)>,
 }
 
+/// Bit `0x1` of `[0xc4da34]`: plates on every unit that is not friendly, set by `ShowNameplates`
+/// and cleared by `HideNameplates` (setter `0x6054f0`).
+pub const PLATE_BIT_ENEMY: u8 = 0x1;
+/// Bit `0x8` of `[0xc4da34]`: plates on friendly units, set by `ShowFriendNameplates` and cleared
+/// by `HideFriendNameplates` (setter `0x605510`).
+pub const PLATE_BIT_FRIEND: u8 = 0x8;
+
+/// The plate verbs' writes since the last drain. Each setter `or`s or `and`s its bit into the live
+/// dword in call order, so per bit the last write wins; bits `0x2` and `0x4` are the frame loop's
+/// own latches and no verb reaches them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PlateBitWrites {
+    set: u8,
+    clear: u8,
+}
+
+impl PlateBitWrites {
+    fn write(&mut self, bit: u8, on: bool) {
+        if on {
+            self.set |= bit;
+            self.clear &= !bit;
+        } else {
+            self.clear |= bit;
+            self.set &= !bit;
+        }
+    }
+
+    /// `bits` with these writes applied.
+    pub fn apply(self, bits: u8) -> u8 {
+        (bits | self.set) & !self.clear
+    }
+
+    /// No verb ran since the last drain.
+    pub fn is_empty(self) -> bool {
+        self.set | self.clear == 0
+    }
+}
+
+/// The four nameplate verbs: `ShowNameplates 0x489450`, `HideNameplates 0x489460`,
+/// `ShowFriendNameplates 0x489470`, `HideFriendNameplates 0x489480`. Each reads no argument
+/// (`ShowNameplates(false)` still shows), returns zero values and writes its bit of `[0xc4da34]`,
+/// which the engine clears at every world entry (`0x60394b`, `0x603952`). There is no getter and
+/// no nameplate CVar: FrameXML keeps its own `NAMEPLATES_ON`/`FRIENDNAMEPLATES_ON` and replays
+/// them through these verbs.
+pub(super) fn install_verbs(lua: &Lua) -> mlua::Result<()> {
+    let g = lua.globals();
+    for (name, bit, on) in [
+        ("ShowNameplates", PLATE_BIT_ENEMY, true),
+        ("HideNameplates", PLATE_BIT_ENEMY, false),
+        ("ShowFriendNameplates", PLATE_BIT_FRIEND, true),
+        ("HideFriendNameplates", PLATE_BIT_FRIEND, false),
+    ] {
+        g.set(
+            name,
+            // The empty `MultiValue` returns zero values, which is not nil.
+            lua.create_function(move |lua, _: mlua::MultiValue| {
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                model.nameplates.bit_writes.write(bit, on);
+                Ok(mlua::MultiValue::new())
+            })?,
+        )?;
+    }
+    Ok(())
+}
+
 impl UiScript {
+    /// Drain the plate verbs' writes for the engine's `[0xc4da34]`, which the app owns.
+    pub fn take_nameplate_bit_writes(&mut self) -> PlateBitWrites {
+        let lua = self.lua();
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        std::mem::take(&mut model.nameplates.bit_writes)
+    }
+
     /// Drive the pool from the app's per-frame states, one per shown plate; a unit with no state
     /// has its plate retired (hidden, never destroyed). An unchanged `geometry` costs nothing.
     pub fn sync_nameplates(&mut self, geometry: PlateGeometry, states: &[PlateState]) {

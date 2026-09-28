@@ -216,6 +216,8 @@ pub(crate) fn run_pending_entry_load(world: &mut World) {
     world.remove_resource::<PendingEntryUiLoad>();
     let start = std::time::Instant::now();
     load_ingame_ui_on_world_entry(world);
+    // The world entry's own step after the UI load, which a `ReloadUI()` never takes.
+    crate::vplates::clear_at_world_entry(world);
     // Every entry logs the load's cost, whether the cover hid it, and the session every
     // `VmMemo` keys on.
     info!(
@@ -360,10 +362,17 @@ pub(crate) fn load_ingame_ui_on_world_entry(world: &mut World) {
         let z = world.resource::<crate::minimap::MinimapZoom>();
         (z.outdoor, z.inside)
     };
-    let plates = world
-        .get_resource::<crate::vplates::VPlateMode>()
-        .copied()
-        .unwrap_or_default();
+    // A plate setting `config.toml` still holds, carried into FrameXML's saved variables once.
+    // Only by a load with the layer, which registers `FRIENDNAMEPLATES_ON` for save; a stock-UI
+    // load leaves it for the next layered one.
+    let legacy_plates = if super::manifest::layer_enabled() {
+        world
+            .get_resource_mut::<crate::cvars::Cvars>()
+            .map(|mut cvars| crate::vplates::take_legacy_settings(&mut cvars))
+            .unwrap_or_default()
+    } else {
+        Default::default()
+    };
     // No sound during the load edge, as in the reference's `UI_Init` (`0x48fbfa` → `0x49016d`).
     silenced_ui_load(&mut script, |script| {
         let _ = load_ingame_ui(script, identity.as_ref(), &roster, version_check);
@@ -378,9 +387,9 @@ pub(crate) fn load_ingame_ui_on_world_entry(world: &mut World) {
         // events (`ChatFrame.lua:1261-1273`).
         finish_ui_load_with(
             script,
-            // `NAMEPLATES_ON`/`FRIENDNAMEPLATES_ON` before `VARIABLES_LOADED`, whose
-            // `UIParent_OnEvent` arm runs the first `UpdateNameplates()` (`UIParent.lua:231-234`).
-            |script| crate::vplates::push_plate_globals(script, plates),
+            // Before `VARIABLES_LOADED`, whose `UIParent_OnEvent` arm runs the first
+            // `UpdateNameplates()` (`UIParent.lua:231-234`).
+            |script| crate::vplates::seat_legacy_settings(script, &legacy_plates),
             |script| {
                 crate::ui_chat::restore_chat_looks(world, script);
             },
@@ -681,7 +690,8 @@ pub(crate) fn finish_ui_load(script: &mut UiScript) {
 }
 
 /// [`finish_ui_load`] with its two host seams. `host_settings` runs between the saved-variables
-/// chunk and `VARIABLES_LOADED`, pushing the settings benilla keeps in `config.toml`. `between`
+/// chunk and `VARIABLES_LOADED`, carrying over a setting `config.toml` held before it moved into
+/// the saved variables. `between`
 /// is the chat-cache restore's `UPDATE_CHAT_WINDOWS` + `UPDATE_CHAT_COLOR` burst, after
 /// `VARIABLES_LOADED` and before `PLAYER_LOGIN`, where the reference registers its reader
 /// (`0x4900d6` → `0x498a20`). On a fresh login the reference's cache (`0x5afe50`) defers that
@@ -816,6 +826,35 @@ mod tests {
             .expect("the parked VM is back");
         assert_eq!(vm.session(), session, "the same VM, no session moved");
         assert!(world.get_non_send_resource::<ParkedBootVm>().is_none());
+    }
+
+    /// The plate bits clear at the world entry (`0x401639`, in the entry setup `0x401570`) and
+    /// not at a `ReloadUI()`, which never runs that setup. A capture world, so no UI is built.
+    #[test]
+    fn the_world_entry_clears_the_plate_bits_and_a_reload_does_not() {
+        use crate::vplates::VPlateMode;
+        let on = VPlateMode {
+            enemies: true,
+            friends: true,
+        };
+        let world_with = |on: VPlateMode| {
+            let mut world = World::new();
+            world.insert_resource(State::new(crate::char_select::ClientState::InWorld));
+            world.insert_resource(crate::run_mode::CaptureMode);
+            world.insert_resource(on);
+            world
+        };
+
+        let mut world = world_with(on);
+        world.insert_resource(PendingEntryUiLoad);
+        run_pending_entry_load(&mut world);
+        assert_eq!(*world.resource::<VPlateMode>(), VPlateMode::default());
+
+        let mut world = world_with(on);
+        world.insert_resource(ReloadUiPending(true));
+        run_pending_reload(&mut world);
+        assert!(!world.resource::<ReloadUiPending>().0, "the reload ran");
+        assert_eq!(*world.resource::<VPlateMode>(), on, "a reload keeps them");
     }
 
     /// The reference re-makes its Lua state inside `UI_Init` (`0x48fe97`).

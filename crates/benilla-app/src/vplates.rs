@@ -23,7 +23,9 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use benilla_protocol::EntityKind;
-use benilla_ui::script::{unit_is_grey, PlateGeometry, PlateState};
+use benilla_ui::script::{
+    unit_is_grey, PlateGeometry, PlateState, PLATE_BIT_ENEMY, PLATE_BIT_FRIEND,
+};
 
 use crate::entities::{overhead_anchor, BoneAttach, OverheadFallback};
 use crate::names::NameCache;
@@ -34,19 +36,30 @@ use benilla_world::view::WorldCamera;
 /// The plate border, sharp-resampled so its 128x32 art stays crisp when magnified.
 pub(crate) mod border;
 
-/// The `[0xc4da34]` master bitmask: bit 0 enemy plates, bit 3 friendly, both clear at boot as in
-/// the reference (`UIOptionsFrame.lua:180-183` sets the saved globals nil). The gate reads this
-/// resource; [`CVAR_ENEMIES`] and [`CVAR_FRIENDS`] persist it. 1.12 registers no nameplate CVar,
-/// so those names are not 1.12's.
-#[derive(Resource, Default, Clone, Copy)]
+/// The two script bits of `[0xc4da34]`, bit `0x1` enemy plates and bit `0x8` friendly: engine
+/// state, written only by the four plate verbs ([`apply_plate_verbs`]) and cleared at every world
+/// entry ([`clear_at_world_entry`]). Nothing persists it: FrameXML replays its own
+/// `NAMEPLATES_ON`/`FRIENDNAMEPLATES_ON` saved variables through the verbs
+/// (`UIOptionsFrame.lua:768-780`, `UIParent.lua:234`, `:367`).
+#[derive(Resource, Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct VPlateMode {
     pub(crate) enemies: bool,
     pub(crate) friends: bool,
 }
 
-/// The persisted names of the two toggles.
-pub(crate) const CVAR_ENEMIES: &str = benilla_ui::script::CVAR_NAMEPLATE_ENEMIES;
-pub(crate) const CVAR_FRIENDS: &str = benilla_ui::script::CVAR_NAMEPLATE_FRIENDS;
+impl VPlateMode {
+    fn bits(self) -> u8 {
+        let bit = |on: bool, b: u8| if on { b } else { 0 };
+        bit(self.enemies, PLATE_BIT_ENEMY) | bit(self.friends, PLATE_BIT_FRIEND)
+    }
+
+    fn from_bits(bits: u8) -> Self {
+        Self {
+            enemies: bits & PLATE_BIT_ENEMY != 0,
+            friends: bits & PLATE_BIT_FRIEND != 0,
+        }
+    }
+}
 
 /// The units carrying a live plate this frame; the overhead-name driver draws no name for them
 /// (the reference's ShouldShowName).
@@ -176,78 +189,80 @@ pub(crate) fn text_px(h: f32, basis: f32) -> f32 {
     (h * basis).round().min(32.0)
 }
 
-/// Push the mode into FrameXML's `NAMEPLATES_ON`/`FRIENDNAMEPLATES_ON`. `UpdateNameplates`
-/// (`UIOptionsFrame.lua:768`) replays these globals into the engine on `VARIABLES_LOADED` and
-/// every `PLAYER_ENTERING_WORLD` (`UIParent.lua:234`, `:367`), so they must match the mode or
-/// the replay turns plates off and overwrites the persisted CVar.
-pub(crate) fn push_plate_globals(script: &benilla_ui::script::UiScript, mode: VPlateMode) {
-    // The number 1 or nil, never 0: a Lua 0 is truthy.
-    let on = |b: bool| b.then_some(1i64);
-    let g = script.lua().globals();
-    if let Err(e) = g
-        .set("NAMEPLATES_ON", on(mode.enemies))
-        .and_then(|()| g.set("FRIENDNAMEPLATES_ON", on(mode.friends)))
-    {
-        warn!("nameplates: FrameXML globals: {e}");
-    }
-}
-
-/// Keep the globals in step with the mode, memoised per VM; the world-entry load seeds them
-/// before `VARIABLES_LOADED`, which no `Update` system can reach.
-fn feed_plate_globals(
+/// Every frame: fold the plate verbs' writes into the bits, in the order the VM made them.
+pub(crate) fn apply_plate_verbs(
     script: Option<NonSendMut<benilla_ui::script::UiScript>>,
-    mode: Res<VPlateMode>,
-    mut told: Local<crate::ui_script::VmMemo<Option<(bool, bool)>>>,
+    mut mode: ResMut<VPlateMode>,
 ) {
-    let Some(script) = script else {
+    let Some(mut script) = script else {
         return;
     };
-    let now = (mode.enemies, mode.friends);
-    let told = told.get(&script);
-    if *told != Some(now) {
-        *told = Some(now);
-        push_plate_globals(&script, *mode);
+    let writes = script.take_nameplate_bit_writes();
+    if writes.is_empty() {
+        return;
+    }
+    let now = VPlateMode::from_bits(writes.apply(mode.bits()));
+    if *mode != now {
+        info!(
+            "nameplates: enemy {}, friendly {}",
+            if now.enemies { "ON" } else { "OFF" },
+            if now.friends { "ON" } else { "OFF" }
+        );
+        *mode = now;
     }
 }
 
-/// The NAMEPLATES, FRIENDNAMEPLATES and ALLNAMEPLATES bindings; ALLNAMEPLATES is 1.12's body,
-/// both on unless both already on. A press also writes the CVar, which persists it.
-///
-/// Deviation: V and Shift-V toggle their own bit independently, where 1.12's bodies
-/// (`Bindings.xml:516-537`) turn the other kind off.
-fn toggle_vplates(
-    binds: Res<crate::bindings::BindingsState>,
-    mut mode: ResMut<VPlateMode>,
-    mut cvars: ResMut<crate::cvars::Cvars>,
+/// The world-entry clear of both script bits (`0x60394b`, `0x603952`, in `0x6033c0`), which the
+/// entry setup `0x401570` runs at `0x401639`, after the UI load at `0x401602` (`InitializeGame`,
+/// whose `UI_Init` fires `VARIABLES_LOADED` at `0x4900b2`): the load's replay is cleared, and
+/// the one at `PLAYER_ENTERING_WORLD` decides. A `ReloadUI()` never reaches it.
+pub(crate) fn clear_at_world_entry(world: &mut World) {
+    if let Some(mut script) = world.get_non_send_resource_mut::<benilla_ui::script::UiScript>() {
+        let _ = script.take_nameplate_bit_writes();
+    }
+    if let Some(mut mode) = world.get_resource_mut::<VPlateMode>() {
+        *mode = VPlateMode::default();
+    }
+}
+
+/// The `config.toml` names benilla once kept the two bits under, with the FrameXML global each
+/// carries over to. 1.12 has no nameplate CVar; the setting is FrameXML's saved variables.
+const LEGACY_CVARS: [(&str, &str); 2] = [
+    ("nameplateShowEnemies", "NAMEPLATES_ON"),
+    ("nameplateShowFriends", "FRIENDNAMEPLATES_ON"),
+];
+
+/// A plate setting still in `config.toml` from before it moved to FrameXML's saved variables:
+/// each global and whether it was on.
+#[derive(Default)]
+pub(crate) struct LegacyPlateSettings(Vec<(&'static str, bool)>);
+
+/// Take the legacy plate settings out of `config.toml`, once: the next save drops them, and from
+/// then on the saved-variables file carries them.
+pub(crate) fn take_legacy_settings(cvars: &mut crate::cvars::Cvars) -> LegacyPlateSettings {
+    LegacyPlateSettings(
+        LEGACY_CVARS
+            .iter()
+            .filter_map(|&(cvar, global)| {
+                let value = cvars.retire_file_entry(cvar)?;
+                Some((global, value.trim() == "1"))
+            })
+            .collect(),
+    )
+}
+
+/// Seat the legacy settings over the saved-variables chunk's values, before `VARIABLES_LOADED`,
+/// as the number 1 or nil (a Lua 0 is truthy). Until now the setting was the CVar, which
+/// outranked the file.
+pub(crate) fn seat_legacy_settings(
+    script: &benilla_ui::script::UiScript,
+    legacy: &LegacyPlateSettings,
 ) {
-    use crate::bindings::cmd;
-    let (was_enemies, was_friends) = (mode.enemies, mode.friends);
-    if binds.fired(cmd::NAMEPLATES) {
-        mode.enemies = !mode.enemies;
-        info!(
-            "nameplates: enemy {}",
-            if mode.enemies { "ON" } else { "OFF" }
-        );
-    }
-    if binds.fired(cmd::FRIEND_NAMEPLATES) {
-        mode.friends = !mode.friends;
-        info!(
-            "nameplates: friendly {}",
-            if mode.friends { "ON" } else { "OFF" }
-        );
-    }
-    if binds.fired(cmd::ALL_NAMEPLATES) {
-        let both = mode.enemies && mode.friends;
-        mode.enemies = !both;
-        mode.friends = !both;
-        info!("nameplates: all {}", if !both { "ON" } else { "OFF" });
-    }
-    let flag = |b: bool| if b { "1" } else { "0" };
-    if mode.enemies != was_enemies {
-        cvars.set(CVAR_ENEMIES, flag(mode.enemies));
-    }
-    if mode.friends != was_friends {
-        cvars.set(CVAR_FRIENDS, flag(mode.friends));
+    let g = script.lua().globals();
+    for &(global, on) in &legacy.0 {
+        if let Err(e) = g.set(global, on.then_some(1i64)) {
+            warn!("nameplates: carrying {global} over: {e}");
+        }
     }
 }
 
@@ -619,18 +634,8 @@ pub(crate) struct VPlateSet;
 /// V-key nameplates: the toggles and the per-frame gate and draw.
 pub(crate) struct VPlatesPlugin;
 
-/// Apply a change to either toggle CVar to the bitmask.
-pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut mode: ResMut<VPlateMode>) {
-    if ev.is(CVAR_ENEMIES) {
-        mode.enemies = ev.flag();
-    } else if ev.is(CVAR_FRIENDS) {
-        mode.friends = ev.flag();
-    }
-}
-
 impl Plugin for VPlatesPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_cvar);
         app.init_resource::<VPlateMode>()
             .init_resource::<VPlates>()
             .init_resource::<PlateHover>()
@@ -638,7 +643,8 @@ impl Plugin for VPlatesPlugin {
             .add_systems(
                 Update,
                 (
-                    toggle_vplates,
+                    // A drain of the verbs the tick ran (a binding body, `UpdateNameplates`).
+                    apply_plate_verbs.after(crate::ui_script::UiInput),
                     // After the targeting chain, itself after `WorldStage::Input`, so this projects
                     // through this frame's camera; `ui_script::extract::paint_script` runs after
                     // it, so the plates paint the same frame.
@@ -646,11 +652,7 @@ impl Plugin for VPlatesPlugin {
                 )
                     .chain()
                     .in_set(VPlateSet),
-            )
-            // Outside `VPlateSet`, which runs after the targeting chain: it only needs to precede
-            // the script tick, and a frame's lag is harmless since the globals are read only at
-            // world entry.
-            .add_systems(Update, feed_plate_globals.in_set(crate::ui_script::UiFeed));
+            );
     }
 }
 
@@ -711,103 +713,170 @@ mod tests {
         assert_eq!(text_px(NAME_H, 10_000.0), 32.0, "atlas-cell cap, raw law");
     }
 
-    /// Without the CVar write, a key-toggled plate would revert at every launch.
-    #[test]
-    fn the_v_key_mirrors_into_the_cvar_table() {
-        use crate::bindings::{cmd, BindingsState};
-        use crate::cvars::Cvars;
+    /// An app with the drain and a bare VM: the four verbs are all it needs.
+    fn verb_app() -> App {
         let mut app = App::new();
-        app.add_systems(Update, toggle_vplates)
-            .init_resource::<VPlateMode>()
-            .init_resource::<Cvars>()
-            .insert_resource(BindingsState::test_fired(&[cmd::NAMEPLATES]));
-        app.update();
-        assert!(app.world().resource::<VPlateMode>().enemies, "V turns on");
-        let moved = |app: &mut App| {
-            app.world_mut()
-                .resource_mut::<Cvars>()
-                .take_events()
-                .into_iter()
-                .map(|e| (e.name, e.new))
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(
-            moved(&mut app),
-            vec![(CVAR_ENEMIES.to_string(), "1".to_string())],
-            "the write is an accepted move, so the config dirties and the mirror learns it"
-        );
-        assert_eq!(
-            app.world().resource::<Cvars>().get(CVAR_FRIENDS),
-            Some("0"),
-            "untouched"
-        );
-
-        app.world_mut()
-            .insert_resource(BindingsState::test_fired(&[cmd::NAMEPLATES]));
-        app.update();
-        assert!(!app.world().resource::<VPlateMode>().enemies, "V turns off");
-        assert_eq!(
-            moved(&mut app),
-            vec![(CVAR_ENEMIES.to_string(), "0".to_string())]
-        );
-
-        // Shift-V moves only the other bit.
-        app.world_mut()
-            .insert_resource(BindingsState::test_fired(&[cmd::FRIEND_NAMEPLATES]));
-        app.update();
-        assert!(app.world().resource::<VPlateMode>().friends);
-        assert_eq!(
-            moved(&mut app),
-            vec![(CVAR_FRIENDS.to_string(), "1".to_string())]
-        );
-
-        app.world_mut().insert_resource(BindingsState::default());
-        app.update();
-        assert!(moved(&mut app).is_empty());
-    }
-
-    #[test]
-    fn the_plate_globals_follow_the_mode_and_survive_a_rebuilt_vm() {
-        let read = |app: &mut App| {
-            let s = app
-                .world_mut()
-                .non_send_resource_mut::<benilla_ui::script::UiScript>();
-            (
-                s.lua().globals().get::<Option<i64>>("NAMEPLATES_ON").ok(),
-                s.lua()
-                    .globals()
-                    .get::<Option<i64>>("FRIENDNAMEPLATES_ON")
-                    .ok(),
-            )
-        };
-        let mut app = App::new();
-        app.add_systems(Update, feed_plate_globals)
+        app.add_systems(Update, apply_plate_verbs)
             .init_resource::<VPlateMode>()
             .insert_non_send_resource(benilla_ui::script::UiScript::new().unwrap());
+        app
+    }
 
+    fn run(app: &mut App, lua: &str) {
+        app.world()
+            .non_send_resource::<benilla_ui::script::UiScript>()
+            .run(lua)
+            .unwrap();
         app.update();
-        assert_eq!(read(&mut app), (Some(None), Some(None)), "both off ⇒ nil");
+    }
 
-        app.world_mut().resource_mut::<VPlateMode>().enemies = true;
+    fn mode(app: &App) -> (bool, bool) {
+        let m = app.world().resource::<VPlateMode>();
+        (m.enemies, m.friends)
+    }
+
+    fn global(app: &App, name: &str) -> Option<i64> {
+        app.world()
+            .non_send_resource::<benilla_ui::script::UiScript>()
+            .lua()
+            .globals()
+            .get::<Option<i64>>(name)
+            .unwrap()
+    }
+
+    /// Both bits start clear: a fresh 1.12 client draws no plates until something shows them.
+    #[test]
+    fn the_verbs_move_the_bits_in_call_order() {
+        let mut app = verb_app();
         app.update();
+        assert_eq!(mode(&app), (false, false), "boot: both clear");
+        run(&mut app, "ShowNameplates()");
+        assert_eq!(mode(&app), (true, false));
+        run(&mut app, "ShowFriendNameplates() HideNameplates()");
+        assert_eq!(mode(&app), (false, true), "each verb its own bit");
+        run(
+            &mut app,
+            "ShowNameplates() HideNameplates() HideFriendNameplates() ShowFriendNameplates()",
+        );
+        assert_eq!(mode(&app), (false, true), "the last write per bit stands");
+    }
+
+    /// The entry clears the bits after the UI load (`0x401639` after `0x401602`), so the
+    /// `VARIABLES_LOADED` replay does not survive it and `PLAYER_ENTERING_WORLD`'s decides.
+    #[test]
+    fn world_entry_clears_both_bits_and_the_loads_replay_with_them() {
+        let mut app = verb_app();
+        run(&mut app, "ShowNameplates() ShowFriendNameplates()");
+        assert_eq!(mode(&app), (true, true));
+        // The load's replay, not yet drained when the entry clears.
+        app.world()
+            .non_send_resource::<benilla_ui::script::UiScript>()
+            .run("ShowNameplates()")
+            .unwrap();
+        clear_at_world_entry(app.world_mut());
+        app.update();
+        assert_eq!(mode(&app), (false, false), "both clear after the entry");
+        run(&mut app, "ShowFriendNameplates()");
         assert_eq!(
-            read(&mut app),
-            (Some(Some(1)), Some(None)),
-            "the reference's own truthiness: the NUMBER 1, never a truthy `0`"
+            mode(&app),
+            (false, true),
+            "and the next verb moves them again"
+        );
+    }
+
+    /// The V, Shift-V and Ctrl-V bodies: each flips the verb and FrameXML's global together, so
+    /// the saved variable carries what the key did, and none writes a CVar.
+    #[test]
+    fn the_v_keys_move_the_bits_and_the_saved_globals_together() {
+        use crate::bindings::commands::{Kind, SPECS};
+        let body = |name: &str| match SPECS.iter().find(|s| s.name == name).map(|s| &s.kind) {
+            Some(Kind::Edge(lua)) => *lua,
+            _ => panic!("{name} runs a Lua body"),
+        };
+        let mut app = verb_app();
+        let state = |app: &App| {
+            (
+                mode(app),
+                global(app, "NAMEPLATES_ON"),
+                global(app, "FRIENDNAMEPLATES_ON"),
+            )
+        };
+
+        run(&mut app, body("NAMEPLATES"));
+        assert_eq!(state(&app), ((true, false), Some(1), None), "V turns on");
+        run(&mut app, body("FRIENDNAMEPLATES"));
+        assert_eq!(
+            state(&app),
+            ((true, true), Some(1), Some(1)),
+            "Shift-V moves only the other kind"
+        );
+        run(&mut app, body("NAMEPLATES"));
+        assert_eq!(state(&app), ((false, true), None, Some(1)), "V turns off");
+        run(&mut app, body("ALLNAMEPLATES"));
+        assert_eq!(
+            state(&app),
+            ((true, true), Some(1), Some(1)),
+            "Ctrl-V: both on"
+        );
+        run(&mut app, body("ALLNAMEPLATES"));
+        assert_eq!(
+            state(&app),
+            ((false, false), None, None),
+            "...then both off"
+        );
+        assert!(
+            app.world_mut()
+                .non_send_resource_mut::<benilla_ui::script::UiScript>()
+                .take_cvar_changes()
+                .is_empty(),
+            "no CVar: nothing reaches config.toml"
+        );
+    }
+
+    /// A player's plate setting from `config.toml` is carried into the saved-variables globals
+    /// once, over what the file said, and leaves `config.toml`.
+    #[test]
+    fn a_legacy_config_setting_carries_over_once() {
+        use crate::cvars::Cvars;
+        let mut cvars = Cvars::with_value("nameplateShowFriends", "1");
+        let legacy = take_legacy_settings(&mut cvars);
+        assert_eq!(legacy.0, vec![("FRIENDNAMEPLATES_ON", true)]);
+        assert!(
+            take_legacy_settings(&mut cvars).0.is_empty(),
+            "taken once: the file no longer holds it"
+        );
+        assert!(
+            !cvars
+                .orphans()
+                .iter()
+                .any(|(k, _)| k == "nameplateShowFriends"),
+            "and the next save drops it"
         );
 
-        // `ReloadUI()`: a fresh VM with the mode unchanged is told again.
-        app.insert_non_send_resource(benilla_ui::script::UiScript::new().unwrap());
+        let s = benilla_ui::script::UiScript::new().unwrap();
+        // The saved-variables chunk said off; the CVar was the store, so it wins.
+        s.run("FRIENDNAMEPLATES_ON = nil NAMEPLATES_ON = 1")
+            .unwrap();
+        seat_legacy_settings(&s, &legacy);
         assert_eq!(
-            read(&mut app),
-            (Some(None), Some(None)),
-            "a fresh VM knows nothing"
+            s.eval::<Option<i64>>("return FRIENDNAMEPLATES_ON").unwrap(),
+            Some(1),
+            "the number 1, never a truthy `0`"
         );
-        app.update();
         assert_eq!(
-            read(&mut app),
-            (Some(Some(1)), Some(None)),
-            "…and is handed the mode again"
+            s.eval::<Option<i64>>("return NAMEPLATES_ON").unwrap(),
+            Some(1),
+            "a global with no legacy entry is left as the file set it"
+        );
+
+        let mut off = Cvars::with_value("NamePlateShowEnemies", "0");
+        let legacy = take_legacy_settings(&mut off);
+        s.run("NAMEPLATES_ON = 1").unwrap();
+        seat_legacy_settings(&s, &legacy);
+        assert_eq!(
+            s.eval::<Option<i64>>("return NAMEPLATES_ON").unwrap(),
+            None,
+            "an entry of 0 is off, whatever its spelling"
         );
     }
 

@@ -1272,89 +1272,6 @@ fn the_world_detail_slider_writes_the_cvar_and_the_readout_names_its_stop() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// On the real manifest and CVar table: `UIParent_OnEvent` calls `UpdateNameplates()` on
-/// `VARIABLES_LOADED` and `PLAYER_ENTERING_WORLD` (`UIParent.lua:234`, `:367`), and here its verbs
-/// write the CVar pair that is the store. The setting survives only with both the host seeding
-/// `NAMEPLATES_ON`/`FRIENDNAMEPLATES_ON` first and our `UpdateNameplates` without the stock
-/// friendly show-then-hide (`UIOptionsFrame.lua:775-776`).
-#[test]
-fn a_world_entry_leaves_the_saved_nameplate_setting_alone() {
-    let _data = benilla_formats::wow_data_or_skip!();
-    let mut s = UiScript::new().unwrap();
-    s.set_screen_size(1024.0, 768.0);
-    // The client never loads the manifest without a player.
-    s.set_unit(
-        "player",
-        Some(benilla_ui::script::UnitState {
-            exists: true,
-            name: Some("Probefour".into()),
-            level: 60,
-            ..Default::default()
-        }),
-    );
-    let failures = super::load_default_ui(&s);
-    assert!(failures.is_empty(), "loader errors: {failures:?}");
-    let _ = s.errors();
-
-    // Both halves on, restored from `config.toml`: a host write, which queues nothing.
-    let plates = crate::vplates::VPlateMode {
-        enemies: true,
-        friends: true,
-    };
-    let saved = |s: &mut UiScript| {
-        s.set_cvar_host(crate::vplates::CVAR_ENEMIES, "1");
-        s.set_cvar_host(crate::vplates::CVAR_FRIENDS, "1");
-        assert!(s.take_cvar_changes().is_empty(), "the host write is silent");
-    };
-
-    // The control: with the globals nil, the entry writes both halves off.
-    saved(&mut s);
-    s.fire_event("VARIABLES_LOADED", vec![]);
-    s.fire_event("PLAYER_ENTERING_WORLD", vec![]);
-    assert_eq!(
-        (
-            s.cvar(crate::vplates::CVAR_ENEMIES),
-            s.cvar(crate::vplates::CVAR_FRIENDS)
-        ),
-        (Some("0".into()), Some("0".into())),
-        "nil globals ⇒ the replay writes the store off — this is what the report saw"
-    );
-    let _ = s.take_cvar_changes();
-
-    // With the globals seeded by the host, the entry changes nothing.
-    saved(&mut s);
-    crate::vplates::push_plate_globals(&s, plates);
-    assert_eq!(
-        s.eval::<i64>("return NAMEPLATES_ON").unwrap(),
-        1,
-        "the reference's own truthiness — the NUMBER 1, never the truthy `0`"
-    );
-    s.fire_event("VARIABLES_LOADED", vec![]);
-    s.fire_event("PLAYER_ENTERING_WORLD", vec![]);
-    assert_eq!(
-        (
-            s.cvar(crate::vplates::CVAR_ENEMIES),
-            s.cvar(crate::vplates::CVAR_FRIENDS)
-        ),
-        (Some("1".into()), Some("1".into())),
-        "the player's setting survives the entry"
-    );
-    assert!(
-        s.take_cvar_changes().is_empty(),
-        "and queues nothing, so `config.toml` is never dirtied by a world entry"
-    );
-    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
-
-    // An addon that moves a global and calls the verb still writes the CVar.
-    s.run("FRIENDNAMEPLATES_ON = nil UpdateNameplates()")
-        .unwrap();
-    assert_eq!(
-        s.take_cvar_changes(),
-        vec![(crate::vplates::CVAR_FRIENDS.to_string(), "0".to_string())],
-        "UpdateNameplates keeps its contract — it is adapted, not stubbed"
-    );
-}
-
 #[test]
 fn the_nameplates_page_toggles_the_unit_name_cvars() {
     benilla_formats::wow_data_or_skip!();
@@ -1398,19 +1315,46 @@ fn the_nameplates_page_toggles_the_unit_name_cvars() {
     }
     let _ = s.take_sounds();
 
-    // The CVars the V and Shift-V bindings write, so the window and the keys agree.
+    // The plate rows move the verbs and FrameXML's globals together, as the V and Shift-V
+    // bindings do, so the window and the keys agree and the saved variables carry it; no CVar.
+    use benilla_ui::script::{PLATE_BIT_ENEMY, PLATE_BIT_FRIEND};
+    let _ = s.take_nameplate_bit_writes();
+    let globals = |s: &UiScript| {
+        s.eval::<(Option<i64>, Option<i64>)>("return NAMEPLATES_ON, FRIENDNAMEPLATES_ON")
+            .unwrap()
+    };
+    s.run("BenillaOptionsFrameContainerBodyNameplatesRowFriendlyPlatesCheck:Click()")
+        .unwrap();
+    assert_eq!(s.take_nameplate_bit_writes().apply(0), PLATE_BIT_FRIEND);
+    assert_eq!(globals(&s), (None, Some(1)));
+    s.run("BenillaOptionsFrameContainerBodyNameplatesRowEnemyPlatesCheck:Click()")
+        .unwrap();
+    assert_eq!(s.take_nameplate_bit_writes().apply(0), PLATE_BIT_ENEMY);
+    assert_eq!(globals(&s), (Some(1), Some(1)));
     s.run("BenillaOptionsFrameContainerBodyNameplatesRowFriendlyPlatesCheck:Click()")
         .unwrap();
     assert_eq!(
-        s.take_cvar_changes(),
-        vec![(crate::vplates::CVAR_FRIENDS.to_string(), "1".to_string())]
+        s.take_nameplate_bit_writes()
+            .apply(PLATE_BIT_ENEMY | PLATE_BIT_FRIEND),
+        PLATE_BIT_ENEMY,
+        "unticking hides"
     );
-    s.run("BenillaOptionsFrameContainerBodyNameplatesRowEnemyPlatesCheck:Click()")
-        .unwrap();
     assert_eq!(
-        s.take_cvar_changes(),
-        vec![(crate::vplates::CVAR_ENEMIES.to_string(), "1".to_string())]
+        globals(&s),
+        (Some(1), None),
+        "the number 1 or nil, never a truthy \"0\""
     );
+    assert!(s.take_cvar_changes().is_empty(), "no plate CVar");
+    // A key moved the global behind the window's back: the rows read it.
+    s.run("FRIENDNAMEPLATES_ON = 1 BenillaOptionsFrameCategoryListRowNameplates:Click()")
+        .unwrap();
+    assert!(s
+        .eval::<bool>(
+            "return BenillaOptionsFrameContainerBodyNameplatesRowFriendlyPlatesCheck:GetChecked()"
+        )
+        .unwrap());
+    s.run("FRIENDNAMEPLATES_ON = nil").unwrap();
+    let _ = s.take_nameplate_bit_writes();
     let _ = s.take_sounds();
 
     // The interface panel's click kit (`PlayClickSound`, `OptionsFrame.lua:509-515`), not the

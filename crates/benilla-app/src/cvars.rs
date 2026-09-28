@@ -319,11 +319,6 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // `0x609085`. `UnitNamePlayerPVPTitle` (bit `0x20`, "1") has no row: nothing here draws the
     // rank prefix.
     same("UnitNamePlayerGuild", "1"),
-    // 1.12 has no nameplate CVar: the bitmask `[0xc4da34]` (bits 0 and 3) persists through
-    // FrameXML's `NAMEPLATES_ON`/`FRIENDNAMEPLATES_ON`, so these take the later-era names. Both
-    // boot off (`UIOptionsFrame.lua:180-183`, `:769-775`): no plates until V.
-    same(crate::vplates::CVAR_ENEMIES, "0"),
-    same(crate::vplates::CVAR_FRIENDS, "0"),
     // `WorldDetail` is no 1.12 CVar but the `GetWorldDetail`/`SetWorldDetail` verb name
     // (`OptionsFrame.lua:27`); stops 0/1/2 are `frillDensity` 16/32/48. `SetWorldDetail 0x488dd0`
     // also writes `SmallCull` {0.07, 0.04, 0.01}, and `GetWorldDetail` reads only `SmallCull`,
@@ -844,6 +839,22 @@ impl Cvars {
     fn touch(&mut self) {
         self.dirty = true;
         self.last_change = Some(Instant::now());
+    }
+
+    /// Remove a `config.toml` entry no row claims, a setting retired from the table, and return
+    /// its value; the next save writes the file without it.
+    pub(crate) fn retire_file_entry(&mut self, name: &str) -> Option<String> {
+        if self.index.contains_key(&name.to_ascii_lowercase()) {
+            return None;
+        }
+        let key = self
+            .file
+            .keys()
+            .find(|k| k.eq_ignore_ascii_case(name))?
+            .clone();
+        let value = self.file.remove(&key);
+        self.touch();
+        value
     }
 
     /// A write from either side of the VM boundary. A `from_vm` write is not echoed back, but a
@@ -1488,7 +1499,6 @@ mod tests {
     use crate::ui_loot::LootConfig;
     use crate::ui_script::{UiScaleCvar, DEFAULT_UI_SCALE};
     use crate::video::VideoConfig;
-    use crate::vplates::VPlateMode;
     use crate::world_backdrop::{RenderScale, RENDER_SCALE_RANGE};
     use benilla_ui::widget::MINIMAP_ZOOM_LEVELS;
     use benilla_world::clutter::ClutterConfig;
@@ -1697,13 +1707,6 @@ mod tests {
             d["weatherDensity"],
             f32::from(benilla_world::weather::WeatherState::default().weather_density)
         );
-        let plates = VPlateMode::default();
-        assert_eq!(d[crate::vplates::CVAR_ENEMIES] != 0.0, plates.enemies);
-        assert_eq!(d[crate::vplates::CVAR_FRIENDS] != 0.0, plates.friends);
-        assert!(
-            !plates.enemies && !plates.friends,
-            "a fresh 1.12 client draws no plates until V is pressed"
-        );
         // `ClutterConfig::default()` reads `$WOW_CLUTTER_DENSITY`; stop 1 is its env-less ×2.
         assert_eq!(d["WorldDetail"], 1.0);
         assert_eq!(
@@ -1885,10 +1888,6 @@ mod tests {
         assert!(!res::<NameConfig>(&app).npc);
         apply(&mut app, "unitnameown", "1");
         assert!(res::<NameConfig>(&app).own);
-        apply(&mut app, crate::vplates::CVAR_ENEMIES, "0");
-        assert!(!res::<VPlateMode>(&app).enemies);
-        apply(&mut app, "nameplateshowfriends", "1");
-        assert!(res::<VPlateMode>(&app).friends);
         apply(&mut app, "ChatBubbles", "0");
         assert!(!res::<BubbleConfig>(&app).all);
         apply(&mut app, "chatbubblesparty", "0");
@@ -2195,7 +2194,6 @@ mod tests {
             .init_resource::<crate::target::AssistAttack>()
             .init_resource::<LootConfig>()
             .init_resource::<NameConfig>()
-            .init_resource::<VPlateMode>()
             .init_resource::<ClutterConfig>()
             .init_resource::<MinimapZoom>()
             .init_resource::<BubbleConfig>()
@@ -2258,9 +2256,6 @@ mod tests {
         },
         |app| {
             app.add_observer(crate::nameplates::on_cvar);
-        },
-        |app| {
-            app.add_observer(crate::vplates::on_cvar);
         },
         |app| {
             app.add_observer(crate::game_tip::on_cvar);

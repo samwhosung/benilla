@@ -379,13 +379,6 @@ const USAGE_REGISTER_CVAR: &str = "Usage: RegisterCVar(\"cvar\" [, default])";
 /// `InitializeGame` does before `UI_Init`.
 pub const IN_WORLD_READ_ONLY_CVARS: [&str; 3] = ["realmList", "realmName", "scriptMemory"];
 
-/// The enemy-plate toggle's CVar, which the app reads rather than re-spelling. Deviation: 1.12
-/// registers no nameplate CVar; the toggles persist under the later clients' names rather than
-/// invented ones.
-pub const CVAR_NAMEPLATE_ENEMIES: &str = "nameplateShowEnemies";
-/// The friendly-plate half of [`CVAR_NAMEPLATE_ENEMIES`].
-pub const CVAR_NAMEPLATE_FRIENDS: &str = "nameplateShowFriends";
-
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // `RegisterCVar(name, value)` (`0x488b00`) declares a CVar the client does not ship, which is
     // how an addon persists a setting. Re-declaring a live name is a no-op: the reference never
@@ -556,7 +549,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    install_nameplate_verbs(lua)?;
     install_world_detail_verbs(lua)?;
     super::video_pairs::install(lua)
 }
@@ -897,44 +889,6 @@ const USAGE_SET_WORLD_DETAIL: &str = "Usage: SetWorldDetail(value)";
 
 /// `0x8423b8`, verbatim: the lowercase `v` and the odd comma are the reference's.
 const RANGE_SET_WORLD_DETAIL: &str = "value must be in the range 0, 2";
-
-/// The four nameplate verbs: `ShowNameplates 0x489450`, `HideNameplates 0x489460`,
-/// `ShowFriendNameplates 0x489470`, `HideFriendNameplates 0x489480`. Each ignores its arguments
-/// (`ShowNameplates(false)` still shows) and returns zero values, and there is no getter; the
-/// state is bits `0x1` (enemy) and `0x8` (friend) of `[0xc4da34]`.
-///
-/// Deviation: the state lives in two CVars, so a player's plates survive a zone-in; the reference
-/// registers no nameplate CVar (none of `0x63db90`'s sites), clears both bits on every
-/// `EnterWorld`, and FrameXML replays its `NAMEPLATES_ON`/`FRIENDNAMEPLATES_ON` saved variables.
-fn install_nameplate_verbs(lua: &Lua) -> mlua::Result<()> {
-    let g = lua.globals();
-    for (name, cvar, on) in [
-        ("ShowNameplates", CVAR_NAMEPLATE_ENEMIES, true),
-        ("HideNameplates", CVAR_NAMEPLATE_ENEMIES, false),
-        ("ShowFriendNameplates", CVAR_NAMEPLATE_FRIENDS, true),
-        ("HideFriendNameplates", CVAR_NAMEPLATE_FRIENDS, false),
-    ] {
-        g.set(
-            name,
-            // Any arguments are ignored, as the reference reads none; the empty `MultiValue`
-            // returns zero values, which is not nil.
-            lua.create_function(move |lua, _: mlua::MultiValue| {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                let key = cvar.to_ascii_lowercase();
-                if let Some(slot) = model.cvars.get_mut(&key) {
-                    let value = if on { "1" } else { "0" };
-                    if slot.value != value {
-                        slot.value = value.to_string();
-                        let reg_name = slot.name.clone();
-                        model.cvar_changes.push((reg_name, value.to_string()));
-                    }
-                }
-                Ok(mlua::MultiValue::new())
-            })?,
-        )?;
-    }
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {

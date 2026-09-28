@@ -29,5 +29,23 @@
                 UIParent_ManageFramePositions()
             end)
         end
+
+        -- Deviation: friendly plates the player turned on come back at every world entry. The
+        -- stock UpdateNameplates (UIOptionsFrame.lua:768-780) shows them and hides them again at
+        -- once (l.775-776), and FRIENDNAMEPLATES_ON is never saved, since l.182 registers
+        -- NAMEPLATES_ON a second time.
+        function UpdateNameplates()
+            if ( NAMEPLATES_ON ) then
+                ShowNameplates()
+            else
+                HideNameplates()
+            end
+            if ( FRIENDNAMEPLATES_ON ) then
+                ShowFriendNameplates()
+            else
+                HideFriendNameplates()
+            end
+        end
+        RegisterForSave("FRIENDNAMEPLATES_ON")
     ]]></Script>
 </Ui>

@@ -26,8 +26,8 @@ impl Plugin for UiSavedPlugin {
 /// A malformed or unreadable file warns and is held ([`UiScript::hold_saved_file`]), so the
 /// shutdown write leaves it alone. Read as bytes: the writer keeps a Lua string's raw bytes.
 ///
-/// `host_settings` seats the `RegisterForSave` globals kept in `config.toml` (the nameplate pair):
-/// after the chunk, so a stale line here cannot outvote `config.toml`, and before the event, where
+/// `host_settings` seats what the host carries into a `RegisterForSave` global (a plate setting
+/// left in `config.toml`): after the chunk, so it outranks the file, and before the event, where
 /// the consumers run (`UIParent_OnEvent` → `UpdateNameplates`).
 pub(crate) fn load_saved_variables(
     script: &mut UiScript,

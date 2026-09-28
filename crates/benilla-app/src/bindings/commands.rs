@@ -100,9 +100,6 @@ pub(crate) mod cmd {
     pub(crate) const TOGGLE_RUN: Cmd = by_name("TOGGLERUN");
     pub(crate) const TARGET_NEAREST_ENEMY: Cmd = by_name("TARGETNEARESTENEMY");
     pub(crate) const TARGET_PREVIOUS_ENEMY: Cmd = by_name("TARGETPREVIOUSENEMY");
-    pub(crate) const NAMEPLATES: Cmd = by_name("NAMEPLATES");
-    pub(crate) const FRIEND_NAMEPLATES: Cmd = by_name("FRIENDNAMEPLATES");
-    pub(crate) const ALL_NAMEPLATES: Cmd = by_name("ALLNAMEPLATES");
     pub(crate) const ATTACK_TARGET: Cmd = by_name("ATTACKTARGET");
     pub(crate) const TOGGLE_UI: Cmd = by_name("TOGGLEUI");
     pub(crate) const CAMERA_ZOOM_IN: Cmd = by_name("CAMERAZOOMIN");
@@ -793,15 +790,41 @@ const TABLE: &[Spec] = &[
         Some("F"),
         None
     ),
-    spec!("NAMEPLATES", TARGETING, Kind::Host, Some("V"), None),
+    // Deviation: V and Shift-V toggle their own kind alone, where 1.12's bodies
+    // (`Bindings.xml:516-537`) turn the other kind off.
+    spec!(
+        "NAMEPLATES",
+        TARGETING,
+        Kind::Edge(
+            "if ( NAMEPLATES_ON ) then HideNameplates(); NAMEPLATES_ON = nil; \
+             else ShowNameplates(); NAMEPLATES_ON = 1; end"
+        ),
+        Some("V"),
+        None
+    ),
     spec!(
         "FRIENDNAMEPLATES",
         TARGETING,
-        Kind::Host,
+        Kind::Edge(
+            "if ( FRIENDNAMEPLATES_ON ) then HideFriendNameplates(); FRIENDNAMEPLATES_ON = nil; \
+             else ShowFriendNameplates(); FRIENDNAMEPLATES_ON = 1; end"
+        ),
         Some("SHIFT-V"),
         None
     ),
-    spec!("ALLNAMEPLATES", TARGETING, Kind::Host, Some("CTRL-V"), None),
+    // 1.12's body (`Bindings.xml:538-550`).
+    spec!(
+        "ALLNAMEPLATES",
+        TARGETING,
+        Kind::Edge(
+            "if ( not (NAMEPLATES_ON and FRIENDNAMEPLATES_ON) ) then \
+             ShowNameplates(); NAMEPLATES_ON = 1; ShowFriendNameplates(); FRIENDNAMEPLATES_ON = 1; \
+             else HideNameplates(); NAMEPLATES_ON = nil; HideFriendNameplates(); \
+             FRIENDNAMEPLATES_ON = nil; end"
+        ),
+        Some("CTRL-V"),
+        None
+    ),
     spec!("ATTACKTARGET", TARGETING, Kind::Host, Some("T"), None),
     spec!(
         "PETATTACK",

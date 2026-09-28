@@ -41,7 +41,6 @@ pub(super) fn seed_ui_fixture(
     mut names: ResMut<crate::names::NameCache>,
     icons: Option<Res<crate::entities::ItemDisplays>>,
     mut script: Option<NonSendMut<benilla_ui::script::UiScript>>,
-    mut vplates: ResMut<crate::vplates::VPlateMode>,
     mut selection: ResMut<crate::target::Selection>,
     mut player: ResMut<crate::player::Player>,
     // A nested tuple, one param under Bevy's 16-param cap.
@@ -944,7 +943,8 @@ pub(super) fn seed_ui_fixture(
                     Visibility::default(),
                 ))
                 .id();
-            vplates.enemies = true;
+            // As the V binding does, so FrameXML's replay at `PLAYER_ENTERING_WORLD` agrees.
+            set_enemy_plates(script.as_deref(), true);
             // The wolf is the target, so its plate draws lit with the target ring.
             selection.target = Some(wolf);
             selection.guid = Some(WOLF_GUID);
@@ -1295,7 +1295,7 @@ pub(super) fn seed_ui_fixture(
                 Visibility::default(),
             ));
             // A plated unit draws no floating name, so enemy plates go off.
-            vplates.enemies = false;
+            set_enemy_plates(script.as_deref(), false);
         }
         // The lighting matrix: one spawn with a streamed entity's component set, anonymous and
         // with plates off, so no glyph rides over the body.
@@ -1339,7 +1339,7 @@ pub(super) fn seed_ui_fixture(
                     ));
                 }
             }
-            vplates.enemies = false;
+            set_enemy_plates(script.as_deref(), false);
         }
     }
 }
@@ -1603,5 +1603,18 @@ fn seed_equipped_bags(
         if let Err(e) = script.run(&format!("OpenBag({bag_id})")) {
             warn!("capture: equipped bag {bag_id} seed failed: {e}");
         }
+    }
+}
+
+/// Turn enemy plates on or off as the V binding does, the verb and FrameXML's global together,
+/// so FrameXML's own replay agrees.
+fn set_enemy_plates(script: Option<&benilla_ui::script::UiScript>, on: bool) {
+    let lua = if on {
+        "NAMEPLATES_ON = 1; ShowNameplates()"
+    } else {
+        "NAMEPLATES_ON = nil; HideNameplates()"
+    };
+    if let Some(Err(e)) = script.map(|s| s.run(lua)) {
+        warn!("nameplates: {e}");
     }
 }

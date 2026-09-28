@@ -63,22 +63,32 @@
             end
         end
 
-        -- UIOptionsFrame.lua:768-780. Deviation: stock l.776 is dropped. On 1.12 its show-then-hide
-        -- clears volatile bits (`[0xc4da34]`); here the verbs write the CVar pair that is the
-        -- store, so it would erase the saved setting at every world entry.
-        function UpdateNameplates()
-            if ( NAMEPLATES_ON ) then
+        -- The two plate rows' store: FrameXML's own NAMEPLATES_ON/FRIENDNAMEPLATES_ON, the number 1
+        -- or nil (a "0" would be truthy), applied through the verbs as the bindings do.
+        function BenillaOptionsFrame_GetEnemyPlates()
+            return NAMEPLATES_ON
+        end
+        function BenillaOptionsFrame_SetEnemyPlates(value)
+            if ( value == "1" ) then
+                NAMEPLATES_ON = 1
                 ShowNameplates()
             else
+                NAMEPLATES_ON = nil
                 HideNameplates()
             end
-            if ( FRIENDNAMEPLATES_ON ) then
+        end
+        function BenillaOptionsFrame_GetFriendlyPlates()
+            return FRIENDNAMEPLATES_ON
+        end
+        function BenillaOptionsFrame_SetFriendlyPlates(value)
+            if ( value == "1" ) then
+                FRIENDNAMEPLATES_ON = 1
                 ShowFriendNameplates()
             else
+                FRIENDNAMEPLATES_ON = nil
                 HideFriendNameplates()
             end
         end
-
 
         -- The category tree in list order; keys are the row name suffixes.
         BENILLA_OPTIONS_CATEGORY_KEYS = {
@@ -2556,9 +2566,9 @@
                                         </Frame>
                                     </Frames>
                                 </Frame>
-                                <!-- The Nameplates page: the V-key plates (`[0xc4da34]` bits 0 and
-                                     3), then 1.12's UnitName* checkboxes. The plate rows are era
-                                     rows: 1.12 has only the keybinding. -->
+                                <!-- The Nameplates page: the V-key plates, then 1.12's UnitName*
+                                     checkboxes. The plate rows are era rows: 1.12 has only the
+                                     keybindings. -->
                                 <Frame name="$parentNameplates" hidden="true">
                                     <Anchors>
                                         <Anchor point="TOPLEFT"/>
@@ -2570,16 +2580,16 @@
                                                 <Anchor point="TOPLEFT"><Offset><AbsDimension x="10" y="-12"/></Offset></Anchor>
                                                 <Anchor point="TOPRIGHT"><Offset><AbsDimension x="-20" y="-12"/></Offset></Anchor>
                                             </Anchors>
-                                            <Scripts><OnLoad>BenillaOptionsRow_OnLoad(this, "nameplateShowEnemies",
-                                                "Enemy Name Plates")</OnLoad></Scripts>
+                                            <Scripts><OnLoad>BenillaOptionsFuncRow_OnLoad(this, BenillaOptionsFrame_GetEnemyPlates,
+                                                BenillaOptionsFrame_SetEnemyPlates, "0", "Enemy Name Plates")</OnLoad></Scripts>
                                         </Frame>
                                         <Frame name="$parentRowFriendlyPlates" inherits="BenillaOptionsCheckboxRowTemplate">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" relativeTo="$parentRowEnemyPlates" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
                                                 <Anchor point="TOPRIGHT" relativeTo="$parentRowEnemyPlates" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
                                             </Anchors>
-                                            <Scripts><OnLoad>BenillaOptionsRow_OnLoad(this, "nameplateShowFriends",
-                                                "Friendly Name Plates")</OnLoad></Scripts>
+                                            <Scripts><OnLoad>BenillaOptionsFuncRow_OnLoad(this, BenillaOptionsFrame_GetFriendlyPlates,
+                                                BenillaOptionsFrame_SetFriendlyPlates, "0", "Friendly Name Plates")</OnLoad></Scripts>
                                         </Frame>
                                         <Frame name="$parentRowPlayerNames" inherits="BenillaOptionsCheckboxRowTemplate">
                                             <Anchors>

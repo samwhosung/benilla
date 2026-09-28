@@ -493,3 +493,122 @@ fn every_global_the_layer_defines_takes_the_benilla_prefix() {
         "layer globals without the Benilla prefix: {unprefixed:?}"
     );
 }
+
+/// A login as the reference runs one on `s`, over a saved-variables file in `home` holding
+/// `saved`: the chunk and `VARIABLES_LOADED` inside the UI load, then the world entry's clear
+/// (`0x401639`, after the load at `0x401602`), then `PLAYER_ENTERING_WORLD`; a `ReloadUI()`
+/// (`entry` false) skips the clear. The bits start as `before`. Returns the app holding the VM and
+/// the plate bits.
+fn log_in(
+    s: UiScript,
+    home: &std::path::Path,
+    saved: Option<&str>,
+    entry: bool,
+    before: crate::vplates::VPlateMode,
+) -> bevy::app::App {
+    use bevy::prelude::*;
+    std::fs::create_dir_all(home).unwrap();
+    if let Some(saved) = saved {
+        std::fs::write(home.join("saved-variables.lua"), saved).unwrap();
+    }
+    let mut app = App::new();
+    app.add_systems(Update, crate::vplates::apply_plate_verbs)
+        .insert_resource(before)
+        .insert_non_send_resource(s);
+    crate::ui_saved::load_saved_variables(
+        &mut app.world_mut().non_send_resource_mut::<UiScript>(),
+        |_| {},
+    );
+    app.update();
+    if entry {
+        crate::vplates::clear_at_world_entry(app.world_mut());
+    }
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .fire_event("PLAYER_ENTERING_WORLD", vec![]);
+    app.update();
+    app
+}
+
+fn plates(app: &bevy::app::App) -> (bool, bool) {
+    let m = app.world().resource::<crate::vplates::VPlateMode>();
+    (m.enemies, m.friends)
+}
+
+fn plate_globals(app: &bevy::app::App) -> (Option<i64>, Option<i64>) {
+    app.world()
+        .non_send_resource::<UiScript>()
+        .eval("return NAMEPLATES_ON, FRIENDNAMEPLATES_ON")
+        .unwrap()
+}
+
+/// On the stock UI alone benilla is 1.12.1: the stock `UpdateNameplates` shows the friendly
+/// plates and hides them at once (`UIOptionsFrame.lua:775-776`), so they are off after the entry
+/// though the saved variable says on, and the saved variable is left as it was.
+#[test]
+fn on_the_stock_ui_friendly_plates_are_off_after_entry_and_the_saved_value_stands() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (s, failures) = production_load_with("plates-stock", true, "", |_| {});
+    assert!(failures.is_empty(), "load failures: {failures:#?}");
+    let home = std::env::temp_dir().join(format!("benilla-plates-stock-{}", std::process::id()));
+    let _c = EnvGuard::unset("WOW_CAPTURE");
+    let _h = EnvGuard::set("BENILLA_HOME", home.to_str().unwrap());
+
+    let app = log_in(
+        s,
+        &home,
+        Some("NAMEPLATES_ON = 1\nFRIENDNAMEPLATES_ON = 1\n"),
+        true,
+        Default::default(),
+    );
+    assert_eq!(plates(&app), (true, false), "enemy on, friendly off");
+    assert_eq!(
+        plate_globals(&app),
+        (Some(1), Some(1)),
+        "both saved variables untouched"
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// With the layer, plates the player turned on stay on: after the entry, through the logout's
+/// save, and after a `ReloadUI()` on the saved file.
+#[test]
+fn with_the_layer_plates_turned_on_stay_on_after_entry_and_reload() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (s, failures) = production_load_with("plates-layer", false, "", |_| {});
+    assert!(failures.is_empty(), "load failures: {failures:#?}");
+    let home = std::env::temp_dir().join(format!("benilla-plates-layer-{}", std::process::id()));
+    let _c = EnvGuard::unset("WOW_CAPTURE");
+    let _h = EnvGuard::set("BENILLA_HOME", home.to_str().unwrap());
+
+    let mut app = log_in(
+        s,
+        &home,
+        Some("NAMEPLATES_ON = 1\nFRIENDNAMEPLATES_ON = 1\n"),
+        true,
+        Default::default(),
+    );
+    assert_eq!(plates(&app), (true, true), "both on after the entry");
+
+    // The session's end writes the file, the friendly global included.
+    crate::ui_saved::save(&mut app.world_mut().non_send_resource_mut::<UiScript>());
+    let file = std::fs::read_to_string(home.join("saved-variables.lua")).unwrap();
+    for line in ["NAMEPLATES_ON = 1", "FRIENDNAMEPLATES_ON = 1"] {
+        assert!(file.contains(line), "{line} saved: {file}");
+    }
+
+    // `ReloadUI()`: a new VM over the file just written, and no clear.
+    let before = *app.world().resource::<crate::vplates::VPlateMode>();
+    let (s, failures) = production_load_with("plates-reload", false, "", |_| {});
+    assert!(failures.is_empty(), "load failures: {failures:#?}");
+    let app = log_in(s, &home, None, false, before);
+    assert_eq!(plates(&app), (true, true), "both on after the reload");
+    assert_eq!(plate_globals(&app), (Some(1), Some(1)));
+    let _ = std::fs::remove_dir_all(&home);
+}
