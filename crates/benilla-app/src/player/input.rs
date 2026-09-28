@@ -36,10 +36,7 @@ pub(super) fn look_input(
                 w |= b;
             }
         };
-        set(
-            rig.world_mouse.held(LookButton::Right) || steer_held,
-            bit::RIGHT_MOUSE,
-        );
+        set(rig.world_mouse.turn() || steer_held, bit::RIGHT_MOUSE);
         set(
             rig.world_mouse.held(LookButton::Left) || steer_held,
             bit::LEFT_MOUSE,
@@ -143,8 +140,7 @@ pub(super) fn move_axes(
     //   emit; ours is `state::may_translate`. The server-ride term is benilla's own.
     // A jump, a chat EditBox taking focus and a zone change leave it set; mounting is untraced and
     // leaves it set here. A focused chat box releases nothing, so W held through ENTER still runs.
-    let both_buttons_engaged = (both_buttons
-        && (rig.world_mouse.down(LookButton::Left) || rig.world_mouse.down(LookButton::Right)))
+    let both_buttons_engaged = (both_buttons && rig.world_mouse.rose())
         || binds.just_pressed(crate::bindings::cmd::MOVE_AND_STEER);
     if state::autorun_cancelled(
         binds.just_pressed(crate::bindings::cmd::MOVE_FORWARD),

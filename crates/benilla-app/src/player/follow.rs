@@ -212,9 +212,7 @@ pub(super) fn steer_follow(
     // ── The cancel set ──
     // The world's buttons, not the device's: the both-button run is two bindings held, and a
     // press a UI frame captured dispatches neither.
-    let both_engaged = input.rig.world_mouse.both()
-        && (input.rig.world_mouse.down(LookButton::Left)
-            || input.rig.world_mouse.down(LookButton::Right));
+    let both_engaged = input.rig.world_mouse.both() && input.rig.world_mouse.rose();
     if follow_cancelled(
         input.move_start(),
         // The on edge: `control` toggles `autorun` after this, so the flag is the pre-toggle value.

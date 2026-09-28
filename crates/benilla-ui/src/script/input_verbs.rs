@@ -74,8 +74,10 @@ pub(crate) struct InputState {
     /// How many binding bodies are running: the hardware-event gate's `[[0xb71290]+0xd8]`.
     binding_depth: u32,
     /// `[InputControl+4] & 1`, the TurnOrAction channel `IsMouselooking` tests (`0x514278`), as
-    /// the app pushed it.
+    /// the app pushed it or a `MouselookStart`/`Stop` since moved it.
     turn_or_action: bool,
+    /// The `MouselookStart` (`true`) and `MouselookStop` calls since the app last drained them.
+    mouselook: Vec<bool>,
 }
 
 impl UiScript {
@@ -93,9 +95,16 @@ impl UiScript {
         result
     }
 
-    /// Push whether the TurnOrAction channel is held: the world holds the right mouse button.
+    /// Push whether the TurnOrAction channel is held: the world holds the right mouse button, or
+    /// a `MouselookStart` holds it with none.
     pub fn set_turn_or_action_held(&mut self, held: bool) {
         self.model_mut().input.turn_or_action = held;
+    }
+
+    /// Take the `MouselookStart` (`true`) and `MouselookStop` calls made since the last call, in
+    /// call order, for the app's look session.
+    pub fn take_mouselook_calls(&mut self) -> Vec<bool> {
+        std::mem::take(&mut self.model_mut().input.mouselook)
     }
 }
 
@@ -210,13 +219,26 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(flag(model.input.turn_or_action))
         })?,
     )?;
+    // `MouselookStart`/`MouselookStop` (`0x514210`/`0x514240`) pass no gate: each disarms the
+    // pending world click (`0x514810(0)`) and sets or clears the TurnOrAction channel
+    // (`0x515090(1, set, now, 0)`), the bit the held right button drives. The bit moves at the
+    // call, so `IsMouselooking` answers it at once; the app's look session applies the call.
+    for (name, on) in [("MouselookStart", true), ("MouselookStop", false)] {
+        g.set(
+            name,
+            lua.create_function(move |lua, _: MultiValue| {
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                model.input.turn_or_action = on;
+                model.input.mouselook.push(on);
+                Ok(())
+            })?,
+        )?;
+    }
     // Not built, so these answer and do nothing:
     // - the pitch pair (`0x400`/`0x800`): the mover has no keyboard pitch axis (`ABSENT` PITCHUP);
     // - TurnOrAction and CameraOrSelectOrMove (`0x514120`-`0x5141d0`), which arm the world click
-    //   (`0x514810`) and set the mouse bits: the look session is keyed to the physical buttons
-    //   (`ABSENT` TURNORACTION, CAMERAORSELECTORMOVE);
-    // - `MouselookStart`/`Stop` (`0x514210`/`0x514240`, ungated), the same channel with no click
-    //   armed: a session without a held button is not built.
+    //   (`0x514810`) and set the mouse bits: the look session reads the physical buttons for
+    //   these (`ABSENT` TURNORACTION, CAMERAORSELECTORMOVE).
     inert(
         lua,
         &[
@@ -228,8 +250,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             "TurnOrActionStop",
             "CameraOrSelectOrMoveStart",
             "CameraOrSelectOrMoveStop",
-            "MouselookStart",
-            "MouselookStop",
         ],
     )?;
 
@@ -461,6 +481,36 @@ mod tests {
             s.eval::<Option<i64>>("return IsMouselooking()").unwrap(),
             Some(1)
         );
+    }
+
+    /// `MouselookStart`/`Stop` pass no gate (`0x514210`/`0x514240`), queue for the look session in
+    /// call order, and move the channel at the call, so `IsMouselooking` answers them at once.
+    #[test]
+    fn mouselook_start_and_stop_move_the_channel_from_any_caller() {
+        let mut s = UiScript::new().unwrap();
+        assert_eq!(s.arity("MouselookStart()").unwrap(), 0);
+        s.run("MouselookStop()").unwrap();
+        s.take_mouselook_calls();
+        let looking = |s: &UiScript| s.eval::<Option<i64>>("return IsMouselooking()").unwrap();
+        s.run("MouselookStart()").unwrap();
+        assert_eq!(
+            looking(&s),
+            Some(1),
+            "an addon's own call, outside any binding"
+        );
+        s.run("MouselookStop() MouselookStart() MouselookStop()")
+            .unwrap();
+        assert_eq!(looking(&s), None);
+        assert_eq!(s.take_mouselook_calls(), vec![true, false, true, false]);
+        assert!(s.take_mouselook_calls().is_empty(), "drained");
+        assert!(
+            s.take_binding_input().is_empty(),
+            "not a movement-binding call"
+        );
+        // The app's push is the channel's truth from then on: a right release ended it.
+        s.run("MouselookStart()").unwrap();
+        s.set_turn_or_action_held(false);
+        assert_eq!(looking(&s), None);
     }
 
     /// `TargetLastTarget` and `AttackTarget` join the call queue, in call order with the rest.

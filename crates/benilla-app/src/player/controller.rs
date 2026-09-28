@@ -228,7 +228,6 @@ pub(super) fn control(
         *right_click = None;
     }
     run_look_session(
-        &buttons,
         mouse_motion,
         both_buttons,
         &mut rig,
