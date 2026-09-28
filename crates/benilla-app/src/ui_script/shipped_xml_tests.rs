@@ -1453,6 +1453,54 @@ fn the_stock_sound_options_window_loads_hidden_and_the_alias_is_gone() {
     );
 }
 
+/// The stock Sound window's boxes write `this:GetChecked()` as is (`SoundOptionsFrame.lua:82`),
+/// which is nil once unticked, and `SetCVar` stores that as "0" (`0x488c98`); its sliders write
+/// `GetValue()`, a single-precision number stored as Lua's `%.14g` text (`0x6f7c80`).
+#[test]
+fn the_stock_sound_window_turns_a_box_off_and_stores_a_slider_as_lua_text() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut s = benilla_ui::script::UiScript::new().unwrap();
+    s.set_screen_size(1024.0, 768.0);
+    s.set_unit(
+        "player",
+        Some(benilla_ui::script::UnitState {
+            exists: true,
+            name: Some("Probefour".into()),
+            level: 60,
+            ..Default::default()
+        }),
+    );
+    let failures = super::load_default_ui(&s);
+    assert!(failures.is_empty(), "manifest load errors: {failures:#?}");
+    s.set_cvar_host("EnableMusic", "1");
+    s.run("this = SoundOptionsFrameOkay SoundOptionsFrame_Load()")
+        .unwrap();
+    let _ = s.take_cvar_changes();
+    let checked = "return SoundOptionsFrameCheckButton5:GetChecked() and true or false";
+    assert!(s.eval::<bool>(checked).unwrap(), "Enable Music starts on");
+
+    s.run("SoundOptionsFrameCheckButton5:Click()").unwrap();
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+    assert!(!s.eval::<bool>(checked).unwrap());
+    assert_eq!(
+        s.take_cvar_changes(),
+        vec![("EnableMusic".to_string(), "0".to_string())],
+        "the unticked box turns music off"
+    );
+    s.run("SoundOptionsFrameCheckButton5:Click()").unwrap();
+    assert_eq!(
+        s.take_cvar_changes(),
+        vec![("EnableMusic".to_string(), "1".to_string())]
+    );
+
+    s.run("SoundOptionsFrameSlider3:SetValue(0.4)").unwrap();
+    assert_eq!(
+        s.eval::<String>("return GetCVar(\"MusicVolume\")").unwrap(),
+        "0.40000000596046"
+    );
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
 /// The stock Video Options window loads hidden (`OptionsFrame.xml:5`) and owns the `OptionsFrame`
 /// name; ours is `BenillaOptionsFrame`, which the ESC menu opens and the stock "options window
 /// open?" consumers see only through the `GameMenuFrame.xml` wrappers.

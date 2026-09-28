@@ -3567,8 +3567,7 @@ fn the_status_bar_text_row_pins_the_numerals_the_moment_it_is_clicked() {
         s.take_cvar_changes(),
         vec![("statusBarText".to_string(), "1".to_string())]
     );
-    // No repaint and no XP tick: only the queued `CVAR_UPDATE`.
-    s.tick(0.0);
+    // No repaint, no XP tick and no frame: only the `CVAR_UPDATE` the click fired.
     assert!(
         s.eval::<bool>("return MainMenuBarExpText:IsShown()")
             .unwrap(),
@@ -3577,7 +3576,6 @@ fn the_status_bar_text_row_pins_the_numerals_the_moment_it_is_clicked() {
 
     s.run("BenillaOptionsFrameContainerBodyInterfaceRowStatusTextCheck:Click()")
         .unwrap();
-    s.tick(0.0);
     assert!(!s
         .eval::<bool>("return MainMenuBarExpText:IsShown()")
         .unwrap());

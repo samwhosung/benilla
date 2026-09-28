@@ -9,6 +9,7 @@
 
 use mlua::{Lua, Value};
 
+use super::binding_abi::lua_number_text;
 use super::{Model, ScriptValue};
 
 /// One registered CVar.
@@ -202,6 +203,20 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().cvar_registrations)
     }
 
+    /// Flag a CVar read-only to Lua, or clear it: `CVar::SetReadOnly` (`0x63e030`). A flagged name
+    /// makes `SetCVar` raise `"%s" is read-only` (`0x488c67`-`0x488c78`); host and engine writes,
+    /// and `ConsoleExec`, still land, as the reference's `CVar::Set` (`0x63df50`) never tests the
+    /// flag. The name need not be registered yet.
+    pub fn set_cvar_read_only(&mut self, name: &str, read_only: bool) {
+        let key = name.to_ascii_lowercase();
+        let mut model = self.model_mut();
+        if read_only {
+            model.cvars_read_only.insert(key);
+        } else {
+            model.cvars_read_only.remove(&key);
+        }
+    }
+
     /// A native widget's write (the glue AddOns screen's "Load out of date AddOns" checkbox): sets
     /// the value and queues the change like a Lua `SetCVar`, so the config file is dirtied.
     pub fn set_cvar_engine(&mut self, name: &str, value: &str) {
@@ -282,27 +297,15 @@ fn store(model: &mut Model, key: &str, value: String) -> Option<String> {
     Some(registered)
 }
 
-/// The `SetCVar` write, shared with `ConsoleExec`: the change is queued only when the value
-/// moved, and `CVAR_UPDATE` fires only when a token was passed. `false` for an unknown name.
-pub(super) fn write_cvar(
-    model: &mut Model,
-    name: &str,
-    value: String,
-    token: Option<String>,
-) -> bool {
+/// A by-name write from a binding (`SetCVar`, `ConsoleExec`, `SetGamma`, `SetWorldDetail`): the
+/// change is queued only when the value moved. `false`, with a warning, for an unknown name.
+pub(super) fn write_cvar(model: &mut Model, name: &str, value: String) -> bool {
     let key = name.to_ascii_lowercase();
     if !model.cvars.contains_key(&key) {
         warn_unknown(model, name);
         return false;
     }
-    if store(model, &key, value.clone()).is_some() {
-        if let Some(token) = token {
-            model.pending_events.push((
-                "CVAR_UPDATE".to_string(),
-                vec![ScriptValue::Str(token), ScriptValue::Str(value)],
-            ));
-        }
-    }
+    store(model, &key, value);
     true
 }
 
@@ -315,19 +318,35 @@ fn warn_unknown(model: &mut Model, name: &str) {
     }
 }
 
-/// Coerce a Lua argument to the stored string; the client takes a number too
-/// (`SetCVar("MusicVolume", 0.4)` is the common call). A boolean becomes "1" or "0", where the
-/// reference's `SetCVar` and `RegisterCVar` store "0" for anything but a string or a number
-/// (`0x488c98`, `0x488b6f`).
-fn value_to_string(v: &Value) -> Option<String> {
-    match v {
-        Value::String(s) => s.to_str().ok().map(|s| s.to_owned()),
-        Value::Integer(i) => Some(i.to_string()),
-        Value::Number(n) => Some(n.to_string()),
-        Value::Boolean(b) => Some(if *b { "1".into() } else { "0".into() }),
+/// An argument as the CVar bindings read it, `lua_tostring` (`0x6f3690`): a string as it is, a
+/// number as Lua's `%.14g` text (`luaV_tostring` `0x6f7c80`), so the stock Sound slider's
+/// single-precision 0.4 stores `"0.40000000596046"`. `None` for anything `lua_isstring`
+/// (`0x6f3510`) refuses: nil, an absent argument, a boolean, a table or a function.
+fn cvar_arg(v: Option<&Value>) -> Option<String> {
+    match v? {
+        // Lossy: the reference takes bytes, and invalid UTF-8 must not read as absent.
+        Value::String(s) => Some(s.to_string_lossy()),
+        Value::Integer(i) => Some(lua_number_text(*i as f64)),
+        Value::Number(n) => Some(lua_number_text(*n)),
         _ => None,
     }
 }
+
+/// What `SetCVar` and `RegisterCVar` store for a value with no string form (`0x82e570`, loaded
+/// at `0x488c98` and `0x488b6f`).
+const NO_STRING_FORM: &str = "0";
+
+/// `0x84235c`, verbatim, the unbalanced parenthesis included.
+const USAGE_SET_CVAR: &str = "Usage: SetCVar(\"cvar\", value [, \"scriptCvar\")";
+
+/// `0x8422e8`, verbatim.
+const USAGE_REGISTER_CVAR: &str = "Usage: RegisterCVar(\"cvar\" [, default])";
+
+/// The CVars `CGGameUI::InitializeGame` flags read-only for the whole world session, the table
+/// at `0x83de4c` walked by `0x48f566`-`0x48f584`; `ShutdownGame` clears them again
+/// (`0x491240`-`0x49125d`). The host flags them on each in-game VM before its UI loads, as
+/// `InitializeGame` does before `UI_Init`.
+pub const IN_WORLD_READ_ONLY_CVARS: [&str; 3] = ["realmList", "realmName", "scriptMemory"];
 
 /// The enemy-plate toggle's CVar, which the app reads rather than re-spelling. Deviation: 1.12
 /// registers no nameplate CVar; the toggles persist under the later clients' names rather than
@@ -337,13 +356,18 @@ pub const CVAR_NAMEPLATE_ENEMIES: &str = "nameplateShowEnemies";
 pub const CVAR_NAMEPLATE_FRIENDS: &str = "nameplateShowFriends";
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
-    // `RegisterCVar(name, value)` declares a CVar the client does not ship, which is how an addon
-    // persists a setting. Re-declaring a live name is a no-op: the reference never resets a live
-    // value on re-registration.
+    // `RegisterCVar(name, value)` (`0x488b00`) declares a CVar the client does not ship, which is
+    // how an addon persists a setting. Re-declaring a live name is a no-op: the reference never
+    // resets a live value on re-registration (`0x488b7d`).
     lua.globals().set(
         "RegisterCVar",
-        lua.create_function(|lua, (name, value): (String, Option<Value>)| {
-            let value = value.as_ref().and_then(value_to_string).unwrap_or_default();
+        lua.create_function(|lua, args: mlua::MultiValue| {
+            // `lua_isstring(1)` (`0x488b09`): a string or a number names it.
+            let Some(name) = cvar_arg(args.front()) else {
+                return Err(mlua::Error::runtime(USAGE_REGISTER_CVAR));
+            };
+            // The default only when `lua_isstring(2)` passes (`0x488b56`), else "0".
+            let value = cvar_arg(args.get(1)).unwrap_or_else(|| NO_STRING_FORM.to_string());
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let key = name.to_ascii_lowercase();
             // A saved value outranks the declared one, which stays the default for the saver.
@@ -463,24 +487,40 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     install_video_verbs(lua)?;
 
+    // `SetCVar(name, value [, token])` (`0x488c10`).
     lua.globals().set(
         "SetCVar",
         lua.create_function(|lua, args: mlua::MultiValue| {
-            let mut it = args.iter();
-            let (Some(Value::String(name)), Some(v)) = (it.next(), it.next()) else {
-                return Err(mlua::Error::runtime("Usage: SetCVar(\"name\", value)"));
+            // `lua_isstring(1)` (`0x488c1a`): a string or a number names it.
+            let Some(name) = cvar_arg(args.front()) else {
+                return Err(mlua::Error::runtime(USAGE_SET_CVAR));
             };
-            let name = name.to_str()?.to_owned();
-            let Some(value) = value_to_string(v) else {
-                return Err(mlua::Error::runtime("Usage: SetCVar(\"name\", value)"));
-            };
-            // The third argument is the `CVAR_UPDATE` token, passed through as arg1; without one
-            // nothing fires. The 1.12 options panels pass their CheckButtons key, such as
-            // "STATUS_BAR_TEXT" (`UIOptionsFrame.lua` l.335, `OptionsFrame.lua` l.192), which is
-            // how `UIOptionsFrame_OnEvent` finds its row.
-            let token = it.next().and_then(value_to_string);
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            write_cvar(&mut model, &name, value, token);
+            // A value with no string form stores "0" (`0x488c8d`-`0x488c98`): an unchecked
+            // CheckButton's `GetChecked()` is nil, and `SoundOptionsCheckButton_OnClick` writes
+            // it as is.
+            let value = cvar_arg(args.get(1)).unwrap_or_else(|| NO_STRING_FORM.to_string());
+            {
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                // Flag bit2 (`0x488c67`), tested before anything is written.
+                if model.cvars_read_only.contains(&name.to_ascii_lowercase()) {
+                    return Err(mlua::Error::runtime(format!("\"{name}\" is read-only")));
+                }
+                if !write_cvar(&mut model, &name, value.clone()) {
+                    return Ok(());
+                }
+            }
+            // A third argument that passes `lua_isstring` is the `CVAR_UPDATE` token, arg1, with
+            // the value as arg2 (`0x488cad`-`0x488cd5`), fired on every such call, changed or not,
+            // and inside it: `SignalEvent2` (`0x703f50`) walks the listeners in place. The 1.12
+            // options panels pass their CheckButtons key, such as "STATUS_BAR_TEXT"
+            // (`UIOptionsFrame.lua` l.335), which is how `UIOptionsFrame_OnEvent` finds its row.
+            if let Some(token) = cvar_arg(args.get(2)) {
+                super::tick::fire_event_into(
+                    lua,
+                    "CVAR_UPDATE",
+                    vec![ScriptValue::Str(token), ScriptValue::Str(value)],
+                );
+            }
             Ok(())
         })?,
     )?;
@@ -709,7 +749,7 @@ fn install_video_verbs(lua: &Lua) -> mlua::Result<()> {
             let mut written = format!("{:.6}", 1.0 - v);
             written.truncate(15);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            write_cvar(&mut model, CVAR_GAMMA, written, None);
+            write_cvar(&mut model, CVAR_GAMMA, written);
             // Zero return values, not nil (`eax = 0` at every `ret`).
             Ok(mlua::MultiValue::new())
         })?,
@@ -777,9 +817,8 @@ fn install_world_detail_verbs(lua: &Lua) -> mlua::Result<()> {
                 &mut model,
                 CVAR_FRILL_DENSITY,
                 WORLD_DETAIL_STOPS[stop].to_string(),
-                None,
             );
-            write_cvar(&mut model, CVAR_WORLD_DETAIL, stop.to_string(), None);
+            write_cvar(&mut model, CVAR_WORLD_DETAIL, stop.to_string());
             // Zero return values, not nil (`eax = 0` at every `ret`).
             Ok(mlua::MultiValue::new())
         })?,
@@ -976,37 +1015,6 @@ mod tests {
         );
         s.run(r#"ConsoleExec("MusicVolume")"#).unwrap();
         assert_eq!(s.take_console_lines(), vec!["MusicVolume".to_string()]);
-    }
-
-    #[test]
-    fn the_third_argument_is_the_cvar_update_token() {
-        let mut s = script_with_volume();
-        s.run(
-            "SEEN = {} \
-             f = CreateFrame(\"Frame\") \
-             f:RegisterEvent(\"CVAR_UPDATE\") \
-             f:SetScript(\"OnEvent\", function() table.insert(SEEN, arg1 .. \"=\" .. arg2) end)",
-        )
-        .unwrap();
-
-        s.run(r#"SetCVar("MusicVolume", "0.5")"#).unwrap();
-        s.tick(0.0);
-        assert_eq!(s.eval::<f64>("return getn(SEEN)").unwrap(), 0.0);
-
-        // With one: arg1 is the token verbatim, not the CVar's name, and arg2 the new value.
-        s.run(r#"SetCVar("MusicVolume", "0.6", "MUSIC_VOLUME")"#)
-            .unwrap();
-        s.tick(0.0);
-        assert_eq!(
-            s.eval::<String>("return SEEN[1]").unwrap(),
-            "MUSIC_VOLUME=0.6"
-        );
-
-        s.run(r#"SetCVar("MusicVolume", "0.6", "MUSIC_VOLUME")"#)
-            .unwrap();
-        s.tick(0.0);
-        assert_eq!(s.eval::<f64>("return getn(SEEN)").unwrap(), 1.0);
-        assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
     }
 
     #[test]

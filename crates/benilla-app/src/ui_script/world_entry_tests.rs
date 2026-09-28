@@ -270,6 +270,50 @@ fn the_login_arms_the_world_latch_and_the_logout_spends_it() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// `CGGameUI::InitializeGame` flags `realmList`, `realmName` and `scriptMemory` read-only for the
+/// world session (`0x48f566`-`0x48f584`) and `ShutdownGame` clears them (`0x491240`): an
+/// in-game `SetCVar` of one raises, through a reload too, and the character screen's does not.
+#[test]
+fn the_realm_cvars_are_read_only_to_lua_only_in_the_world() {
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (tmp, _c, _h) = hermetic_probe("readonly");
+    let mut world = booted_world();
+    world.init_resource::<super::LeavingWorldArmed>();
+    let set = |world: &World, chunk: &str| {
+        let s = world.non_send_resource::<benilla_ui::script::UiScript>();
+        // A bare test world has no registry to seed the VM from.
+        s.register_cvars(crate::cvars::registered_pairs());
+        s.run(chunk).map_err(|e| e.to_string())
+    };
+
+    assert_eq!(
+        set(&world, "SetCVar(\"realmList\", \"glue.example.org\")"),
+        Ok(()),
+        "the character screen's VM may write it"
+    );
+
+    log_in_as(&mut world, "Onehunter", 1);
+    for name in ["realmList", "realmName"] {
+        let err = set(&world, &format!("SetCVar({name:?}, \"x\")")).expect_err(name);
+        assert!(err.contains(&format!("\"{name}\" is read-only")), "{err}");
+    }
+    assert_eq!(set(&world, "SetCVar(\"MusicVolume\", 0.5)"), Ok(()));
+
+    reload(&mut world, crate::char_select::ClientState::InWorld);
+    assert!(
+        set(&world, "SetCVar(\"realmList\", \"x\")").is_err(),
+        "a reload keeps the flag, as the reference's rows keep theirs"
+    );
+
+    super::end_ui_session(&mut world);
+    assert_eq!(set(&world, "SetCVar(\"realmList\", \"x\")"), Ok(()));
+
+    drop(world);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// The reference's one guard in the shutdown tail: `0x490bd0` tests the active player's GUID pair
 /// (`0x490bee call 0x468550`, `0x490bf3 or eax,edx`) and with none jumps (`0x490bf5 je 0x490c25`)
 /// past only the `PLAYER_LEAVING_WORLD` fire, `0x490c20 call 0x490a80`; in-world roots fire both.

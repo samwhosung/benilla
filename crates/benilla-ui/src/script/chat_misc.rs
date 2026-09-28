@@ -143,7 +143,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let is_cvar = model.cvars.contains_key(&name.to_ascii_lowercase());
             if is_cvar && !value.is_empty() {
-                super::cvars::write_cvar(&mut model, name, value.to_string(), None);
+                super::cvars::write_cvar(&mut model, name, value.to_string());
             } else {
                 model.console_lines.push(line.clone());
             }

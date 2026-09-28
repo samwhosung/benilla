@@ -306,6 +306,13 @@ pub(crate) fn load_ingame_ui_on_world_entry(world: &mut World) {
         .and_then(|r| r.realm.as_ref().map(|r| r.name.clone()))
         .unwrap_or_default();
     script.set_realm_name(&realm);
+    // `CGGameUI::InitializeGame` flags these read-only before `UI_Init` loads anything
+    // (`0x48f566`-`0x48f584`), so an in-game `SetCVar` of one raises, logout handlers included;
+    // `ShutdownGame` clears them (`0x491240`), and here the flags die with this VM. The host's
+    // own realm writes are engine writes, which the flag does not stop.
+    for name in benilla_ui::script::IN_WORLD_READ_ONLY_CVARS {
+        script.set_cvar_read_only(name, true);
+    }
     // The player too, before the addon walk. The record first: the reference's
     // `UnitName`/`UnitRace`/`UnitClass`/`UnitSex` read only a copy of the char-enum row made at the
     // Enter World commit (`0x5abd9e`) and never cleared, and each rebuilt VM is told once. The
