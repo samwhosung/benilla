@@ -49,6 +49,7 @@ mod editbox;
 pub mod instance;
 pub(crate) use editbox::{adopt_text_region, editbox_text_region_wrapper};
 pub(crate) mod addon;
+mod addon_enable;
 pub mod addon_gate;
 mod client;
 mod cvars;
@@ -140,6 +141,7 @@ mod worn_display;
 
 pub use action::{ActionSlot, ActionState, ActionUse};
 pub use addon::AddOnInfo;
+pub use addon_enable::EnableHash;
 pub use addon_message::{AddonDistribution, AddonSend};
 pub use auction::{
     AuctionBid, AuctionCategory, AuctionItemRow, AuctionListState, AuctionQuery,

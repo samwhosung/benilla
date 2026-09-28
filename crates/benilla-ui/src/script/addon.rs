@@ -142,9 +142,12 @@ fn row_of(model: &Model, key: &AddonKey) -> Option<usize> {
 }
 
 /// The enable setter (`0x51ea20`), the one write every enable verb makes, for the current
-/// character's row.
+/// character's row: the registry bit the gate reads, and the character's enable hash, which the
+/// setter dirties only when the row changes or is new.
 fn set_enabled(model: &mut Model, i: usize, on: bool) {
     model.addons[i].enabled = on;
+    let name = model.addons[i].name.clone();
+    model.addon_enable.set(&name, on);
 }
 
 /// The registry as [`super::addon_gate`] rows, the one input every verb's verdict reads.
@@ -353,8 +356,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         )?;
     }
 
-    // `0x48e830` reloads the enable state from `AddOns.txt`, which is unchanged until the shutdown
-    // write, so reverting to the state as registered is the same thing.
+    // `0x48e830` reloads the enable hash from `AddOns.txt`, clean (`0x51ec59`), and the file is
+    // unchanged until the shutdown write, so reverting to the state as registered is the same.
     g.set(
         "ResetDisabledAddOns",
         lua.create_function(|lua, ()| {
@@ -362,6 +365,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             for a in &mut model.addons {
                 a.enabled = a.saved_enabled;
             }
+            model.addon_enable = model.addon_enable_saved.clone();
             Ok(())
         })?,
     )?;
@@ -722,12 +726,17 @@ impl super::UiScript {
         }
     }
 
-    /// `(name, enabled)` per registered addon, in order: what the host writes to `AddOns.txt`.
-    pub fn addon_enable_states(&self) -> Vec<(String, bool)> {
-        self.model_ref()
-            .addons
-            .iter()
-            .map(|a| (a.name.clone(), a.enabled))
-            .collect()
+    /// Seat the current character's enable hash as the loader read it from `AddOns.txt`
+    /// (`0x51ebe0`, re-read at every UI boot, `0x48ff2a`).
+    pub fn set_addon_enable_hash(&mut self, hash: super::EnableHash) {
+        let mut model = self.model_mut();
+        model.addon_enable_saved = hash.clone();
+        model.addon_enable = hash;
+    }
+
+    /// The shutdown writer's rows (`0x490c88` into `0x51ef20`): the current character's whole
+    /// enable hash when a verb changed it this session, else `None`, and nothing is written.
+    pub fn take_addon_enable_rows(&self) -> Option<Vec<(String, bool)>> {
+        self.model_mut().addon_enable.take_dirty()
     }
 }

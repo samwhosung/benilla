@@ -4,12 +4,12 @@
 //! FrameXML it loads outside `AddOn_Load` ([`super::manifest::load_ingame_ui`]) and gets no
 //! `ADDON_LOADED`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{ScriptValue, UiScript};
+use benilla_ui::script::{EnableHash, ScriptValue, UiScript};
 use benilla_ui::toc::Toc;
 
 use super::content;
@@ -527,13 +527,14 @@ pub(crate) fn installed_rows() -> Vec<InstalledAddOn> {
 
 /// The reference's `ADDONSTATELIST` (`0xbe1bd0`): a node per character in `SMSG_CHAR_ENUM` order,
 /// rebuilt whole (`0x51f0b0` clears it, then callback `0x472300` fills a node per record through
-/// `AddOnList_LoadCharacter 0x51ebe0`), each holding that character's explicit `AddOns.txt` rows.
-/// A character with no file is an empty node, whose enable bit is answered from the others.
+/// `AddOnList_LoadCharacter 0x51ebe0`), each holding that character's enable hash. A character
+/// with no file is an empty node, whose enable bit is answered from the others.
 #[derive(Default)]
 pub(crate) struct EnableStore {
-    /// `(character, explicit rows)` in character-list order; names lowercased, as every compare in
-    /// the reference is `SStrCmpI`.
-    nodes: Vec<(String, HashMap<String, bool>)>,
+    /// The realm half of every node's file.
+    realm: String,
+    /// `(character, enable hash)` in character-list order.
+    nodes: Vec<(String, EnableHash)>,
 }
 
 impl EnableStore {
@@ -548,26 +549,36 @@ impl EnableStore {
                     .and_then(|p| std::fs::read(p).ok())
                     .map(|b| parse_enable_state(&benilla_ui::source::decode(&b)))
                     .unwrap_or_default();
-                let hash = rows
-                    .into_iter()
-                    // Last line wins, like the reference's hash insert (`0x51eeef`).
-                    .map(|(name, on)| (name.to_ascii_lowercase(), on))
-                    .collect();
-                (character.clone(), hash)
+                (character.clone(), EnableHash::from_rows(rows))
             })
             .collect();
-        Self { nodes }
+        Self {
+            realm: realm.to_string(),
+            nodes,
+        }
+    }
+
+    /// A node per character, none with a row, as for characters with no file; for tests that
+    /// must not read the state folder.
+    #[cfg(test)]
+    pub(crate) fn blank(realm: &str, characters: &[String]) -> Self {
+        Self {
+            realm: realm.to_string(),
+            nodes: characters
+                .iter()
+                .map(|c| (c.clone(), EnableHash::default()))
+                .collect(),
+        }
     }
 
     /// `0x51e470(addon, NULL, useDefault = 0)`, the explicit-only aggregate over the nodes with a
     /// row (`0x51e5df je 0x51e60a`): `Some(v)` when all say `v` (the reference's 2 or 0), `None`
     /// when they are mixed or there are none.
     fn aggregate(&self, addon: &str) -> Option<bool> {
-        let key = addon.to_ascii_lowercase();
         let mut total = 0usize;
         let mut on = 0usize;
         for (_, hash) in &self.nodes {
-            if let Some(&v) = hash.get(&key) {
+            if let Some(v) = hash.get(addon) {
                 total += 1;
                 on += usize::from(v);
             }
@@ -581,7 +592,7 @@ impl EnableStore {
     }
 
     /// The bit a character gets, `0x51e470(addon, character, useDefault = 1)` (0 or 2 as a bool):
-    /// * an explicit row in their file wins;
+    /// * an explicit row in their hash wins;
     /// * a node with no row takes [`Self::aggregate`] (`0x51e5f0`'s self-recursion), then
     ///   `## DefaultState` where that is undecided;
     /// * no node at all, or no character, takes `## DefaultState`: the walk passes each
@@ -596,13 +607,33 @@ impl EnableStore {
         let Some(node) = character.and_then(|c| self.node(c)) else {
             return default_state;
         };
-        match node.get(&addon.to_ascii_lowercase()) {
-            Some(&explicit) => explicit,
+        match node.get(addon) {
+            Some(explicit) => explicit,
             None => self.aggregate(addon).unwrap_or(default_state),
         }
     }
 
-    fn node(&self, character: &str) -> Option<&HashMap<String, bool>> {
+    /// The setter `0x51ea20`: `None` is every node (the glue's All), a name its one node; a name
+    /// with no node is a no-op, as the setter never creates one.
+    pub(crate) fn set(&mut self, addon: &str, character: Option<&str>, on: bool) {
+        for (name, hash) in &mut self.nodes {
+            if character.is_none_or(|c| name.eq_ignore_ascii_case(c)) {
+                hash.set(addon, on);
+            }
+        }
+    }
+
+    /// The writer `0x51ef20`, glue `SaveAddOns` (`0x46d990`): each dirty node's file, rewritten
+    /// from its hash; a clean node is skipped (`0x51ef59`) and its file left as it is.
+    pub(crate) fn save(&mut self) {
+        for (name, hash) in &mut self.nodes {
+            if let Some(rows) = hash.take_dirty() {
+                write_enable_state(Some(&(self.realm.clone(), name.clone())), &rows);
+            }
+        }
+    }
+
+    pub(crate) fn node(&self, character: &str) -> Option<&EnableHash> {
         self.nodes
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case(character))
@@ -622,40 +653,25 @@ fn store_nodes(identity: Option<&(String, String)>, roster: &[String]) -> Vec<St
     names
 }
 
-/// Write a character's enable state, from the AddOns screen and at logout, merged into the file:
-/// the reference's writer `0x51ef20` emits its enable hash a line per entry (`0x853968`), built by
-/// `0x51ebe0` from the file, so an uninstalled addon's row survives and names keep their spelling.
-pub(crate) fn write_enable_state(identity: Option<&(String, String)>, states: &[(String, bool)]) {
+/// Write one character's enable hash as its whole file, a line per entry (`0x853968`), as the
+/// writer `0x51ef20` creates it afresh (`CREATE_ALWAYS`). The hash holds every row the file had,
+/// so an uninstalled addon's row survives and a name keeps its spelling.
+pub(crate) fn write_enable_state(identity: Option<&(String, String)>, rows: &[(String, bool)]) {
     let Some(path) = enable_state_path(identity) else {
         return; // no character picked, or no state folder
     };
-    let mut merged: Vec<(String, bool)> = std::fs::read(&path)
-        .ok()
-        .map(|b| parse_enable_state(&benilla_ui::source::decode(&b)))
-        .unwrap_or_default();
-    for (name, on) in states {
-        match merged
-            .iter_mut()
-            .find(|(n, _)| n.eq_ignore_ascii_case(name))
-        {
-            Some(row) => row.1 = *on,
-            None => merged.push((name.clone(), *on)),
-        }
-    }
-    match crate::local_state::write_atomic(&path, &render_enable_state(&merged)) {
-        Ok(()) => info!("addons: wrote {} ({} rows)", path.display(), merged.len()),
+    match crate::local_state::write_atomic(&path, &render_enable_state(rows)) {
+        Ok(()) => info!("addons: wrote {} ({} rows)", path.display(), rows.len()),
         Err(e) => warn!("addons: cannot write {}: {e}", path.display()),
     }
 }
 
-/// Write the enable state back at shutdown, the reference's last step (`0x490c88`, after the
-/// saved-variables files), through the AddOns screen's merging writer.
+/// Write the current character's enable hash at shutdown, the reference's last step (`0x490c88`,
+/// after the saved-variables files), only when a verb changed it this session.
 pub(super) fn save_enable_state(script: &UiScript, identity: Option<&(String, String)>) {
-    let states = script.addon_enable_states();
-    if states.is_empty() {
-        return; // nothing registered: a glue-only run or a capture
+    if let Some(rows) = script.take_addon_enable_rows() {
+        write_enable_state(identity, &rows);
     }
-    write_enable_state(identity, &states);
 }
 
 /// Write every loaded addon's declared saved variables at shutdown (`0x490c83`, after the flat
@@ -737,6 +753,13 @@ pub(super) fn load_third_party(
         root(),
         crate::local_state::addon_saved_account_dir(),
         identity.and_then(|(r, c)| crate::local_state::addon_saved_character_dir(r, c)),
+    );
+    // The verbs write through the character's own hash, so logout saves only what they changed.
+    script.set_addon_enable_hash(
+        character
+            .and_then(|c| store.node(c))
+            .cloned()
+            .unwrap_or_default(),
     );
     if addons.is_empty() {
         return Vec::new();
@@ -1843,9 +1866,10 @@ mod tests {
         );
     }
 
-    /// A row for an addon not installed now survives the AddOns screen's write.
+    /// A row for an addon not installed now survives the AddOns screen's write: the loader put it
+    /// in the hash, and the writer writes the hash.
     #[test]
-    fn the_addons_screen_write_merges_with_what_is_already_on_disk() {
+    fn the_addons_screen_write_keeps_the_rows_the_file_had() {
         let _l = crate::local_state::test_env::ENV_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1855,7 +1879,10 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "Gone: disabled\nStays: enabled\n").unwrap();
 
-        write_enable_state(Some(&id), &[("Stays".into(), false), ("New".into(), true)]);
+        let mut store = EnableStore::load("Realm", &["Char".to_string()]);
+        store.set("Stays", Some("char"), false);
+        store.set("New", None, true);
+        store.save();
 
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(
@@ -2365,16 +2392,10 @@ mod tests {
         save_enable_state(&script, Some(&id));
 
         let written = std::fs::read_to_string(home.join("addons/Realm-Char.txt")).unwrap();
-        // Registry order: the chain's Blizzard rows, then the folder's two (`0x51c777` before
-        // `0x51c78f`, tail-inserted), one line per registry row.
-        let mut expected = String::new();
-        for a in chain_addons() {
-            expected.push_str(&format!("{}: enabled\n", a.name));
-        }
-        expected.push_str("Drop: disabled\nKeep: enabled\n");
         assert_eq!(
-            written, expected,
-            "the reference's own one-line-per-addon format"
+            written, "Drop: disabled\n",
+            "one line per hash entry (`0x51f006`), and the hash holds only the toggled addon: no \
+             `Keep`, no `Blizzard_*` row"
         );
 
         let mut next = UiScript::new().unwrap();
@@ -2383,6 +2404,94 @@ mod tests {
             next.eval::<bool>("return DropRan == nil").ok(),
             Some(true),
             "the disable survived the session"
+        );
+        let _ = std::fs::remove_dir_all(home.parent().unwrap());
+    }
+
+    /// A session whose verbs changed nothing leaves the node clean, and the writer skips a clean
+    /// node (`0x51ef59`): no file is created, and one that exists keeps its bytes, even through
+    /// a verb that sets a row to the value it already has and a toggle `ResetDisabledAddOns`
+    /// reverts (`0x48e830` reloads the hash clean, `0x51ec59`).
+    #[test]
+    fn a_session_that_toggles_nothing_writes_nothing() {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _c = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
+        let (home, _h) = hermetic_root("untouched");
+        write_addon(&home, "Keep", "## Interface: 11200\n", &[]);
+        write_addon(&home, "Off", "## Interface: 11200\n", &[]);
+        let fresh = ("Realm".to_string(), "Fresh".to_string());
+        let mut script = UiScript::new().unwrap();
+        let _ = load_third_party(&mut script, Some(&fresh), &[], true);
+        crate::ui_script::shutdown_ui_state(&mut script, Some(&fresh), true);
+        assert!(
+            !enable_state_path(Some(&fresh)).unwrap().exists(),
+            "a login and logout with no toggle creates no AddOns file"
+        );
+
+        let id = ("Realm".to_string(), "Char".to_string());
+        let path = enable_state_path(Some(&id)).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let before = "off: disabled\nstray line\n";
+        std::fs::write(&path, before).unwrap();
+        for (lua, why) in [
+            ("DisableAddOn('Off')", "a row set to the value it has"),
+            (
+                "DisableAddOn('Keep') ResetDisabledAddOns()",
+                "a toggle reverted",
+            ),
+        ] {
+            let mut script = UiScript::new().unwrap();
+            let _ = load_third_party(&mut script, Some(&id), &[], true);
+            script.run(lua).unwrap();
+            crate::ui_script::shutdown_ui_state(&mut script, Some(&id), true);
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                before,
+                "{why} leaves the file as it was"
+            );
+        }
+        let _ = std::fs::remove_dir_all(home.parent().unwrap());
+    }
+
+    /// The issue's example end to end, through the logout writer and the query `0x51e470`: Alice
+    /// and Bob have both played with `Shared` installed, then Bob turns it off. Alice, with no
+    /// row of her own, and a character created afterwards both follow Bob.
+    #[test]
+    fn a_character_that_never_chose_follows_the_realms_other_characters() {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _c = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
+        let (home, _h) = hermetic_root("follow");
+        write_addon(
+            &home,
+            "Shared",
+            "## Interface: 11200\nran.lua\n",
+            &[("ran.lua", "SharedRan = true")],
+        );
+        let roster = ["Alice".to_string(), "Bob".to_string()];
+        let session = |who: &str, roster: &[String], lua: &str| -> bool {
+            let id = ("Realm".to_string(), who.to_string());
+            let mut script = UiScript::new().unwrap();
+            script.set_screen_size(1024.0, 768.0);
+            let _ = load_third_party(&mut script, Some(&id), roster, true);
+            let ran = script.eval::<bool>("return SharedRan == true").unwrap();
+            script.run(lua).unwrap();
+            crate::ui_script::shutdown_ui_state(&mut script, Some(&id), true);
+            ran
+        };
+        assert!(session("Alice", &roster, ""), "enabled by default");
+        assert!(session("Bob", &roster, "DisableAddOn('Shared')"));
+        assert!(
+            !session("Alice", &roster, ""),
+            "Alice's first logout wrote no row, so she follows Bob's disable"
+        );
+        let with_new = ["Alice".to_string(), "Bob".to_string(), "Newbie".to_string()];
+        assert!(
+            !session("Newbie", &with_new, ""),
+            "and so does a character created afterwards"
         );
         let _ = std::fs::remove_dir_all(home.parent().unwrap());
     }

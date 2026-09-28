@@ -62,6 +62,11 @@ pub(crate) struct Model {
     /// Lowercased names `SMSG_ADDON_INFO` marked `status = 2`; `None` until the reply arrives, and
     /// until then `GetNumAddOns()` is 0, as in the reference (`[0xbe1b90]`, reset at `0x51fad1`).
     pub(crate) addon_info_hidden: Option<Vec<String>>,
+    /// The current character's enable hash, which every enable verb writes through and the
+    /// shutdown writer (`0x490c88` into `0x51ef20`) saves only while dirty.
+    pub(crate) addon_enable: super::EnableHash,
+    /// The hash as the host read it from the file, what `ResetDisabledAddOns` reloads (`0x48e830`).
+    pub(crate) addon_enable_saved: super::EnableHash,
     /// The AddOns folder, so `LoadAddOn` can read an addon's files from inside a Lua binding.
     pub(crate) addons_root: Option<std::path::PathBuf>,
     /// The host's reader for chain-sourced addon files; without one such an addon is `MISSING`.
@@ -967,6 +972,8 @@ impl Model {
             addons: Vec::new(),
             addon_index: Vec::new(),
             addon_info_hidden: None,
+            addon_enable: Default::default(),
+            addon_enable_saved: Default::default(),
             addons_root: None,
             addons_chain_reader: None,
             measurer: None,

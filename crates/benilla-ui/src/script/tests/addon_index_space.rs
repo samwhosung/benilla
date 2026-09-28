@@ -205,3 +205,20 @@ fn the_all_verbs_do_nothing_before_the_server_answers() {
     s.run("DisableAllAddOns()").unwrap();
     assert!(enabled(&s, "Alpha") && enabled(&s, "Mike") && enabled(&s, "Zulu"));
 }
+
+/// What a disable-all leaves for the shutdown writer (`0x51ef20`): the setter's one new row per
+/// visible addon, and none for the hidden one, whose row it never set.
+#[test]
+fn disable_all_writes_rows_for_the_visible_addons_only() {
+    let s = with_hidden_blizzard(true);
+    assert_eq!(
+        s.take_addon_enable_rows(),
+        None,
+        "nothing set, nothing to write"
+    );
+    s.run("DisableAllAddOns()").unwrap();
+    assert_eq!(
+        s.take_addon_enable_rows(),
+        Some(vec![("Probe".to_string(), false)])
+    );
+}

@@ -104,21 +104,20 @@ enum Hover {
     Check(usize),
 }
 
-/// The screen's state; edits stage per character and only Okay writes the files.
+/// The screen's state; a click writes the in-memory store and only Okay writes the files.
 #[derive(Resource)]
 pub(super) struct AddonsPanel {
     pub(super) open: bool,
-    /// The installed list read at open, so a row's index is stable; the enable state is `staged`'s.
+    /// The installed list read at open, so a row's index is stable.
     list: Vec<InstalledAddOn>,
-    /// The roster's realm, half of every enable file's `(realm, name)` key.
-    realm: String,
     /// The roster's character names, the dropdown's entries after "All".
     chars: Vec<String>,
-    /// `staged[c][i]` is character `c`'s bit for `list[i]`; with no characters, one anonymous
-    /// column that Okay does not write.
-    staged: Vec<Vec<bool>>,
-    /// What the files said at open; Okay writes only the columns that moved off it.
-    baseline: Vec<Vec<bool>>,
+    /// Every roster character's enable hash, which a click sets and Okay saves where dirty.
+    store: addons::EnableStore,
+    /// `bits[c][i]` is the query's answer for character `c` and `list[i]`, re-read from the store
+    /// after every change, so a character with no row follows the others' edits at once; with no
+    /// characters, one anonymous column of `## DefaultState`s.
+    bits: Vec<Vec<bool>>,
     /// The dropdown's selection: `None` is "All", `Some(c)` is `chars[c]`.
     view: Option<usize>,
     dropdown_open: bool,
@@ -145,10 +144,9 @@ impl Default for AddonsPanel {
         Self {
             open: false,
             list: Vec::new(),
-            realm: String::new(),
             chars: Vec::new(),
-            staged: Vec::new(),
-            baseline: Vec::new(),
+            store: addons::EnableStore::default(),
+            bits: Vec::new(),
             view: None,
             dropdown_open: false,
             // The registered default, "1"; a `false` would paint out-of-date rows loadable for a
@@ -165,29 +163,14 @@ impl Default for AddonsPanel {
 }
 
 impl AddonsPanel {
-    /// Open for this realm's roster: read the folder, and one staged column per character, as
-    /// `AddonList_OnShow` re-reads. The store loads for the whole roster: an addon a character has
-    /// no row for takes what the other characters agree on, else the manifest's `## DefaultState`.
+    /// Open for this realm's roster: read the folder and every character's enable file, as
+    /// `AddonList_OnShow` re-reads. An addon a character has no row for takes what the other
+    /// characters agree on, else the manifest's `## DefaultState`.
     pub(super) fn open_for(&mut self, realm: String, chars: Vec<String>) {
         self.list = addons::installed_rows();
-        self.staged.clear();
-        let store = addons::EnableStore::load(&realm, &chars);
-        let columns: Vec<Option<&str>> = if chars.is_empty() {
-            vec![None]
-        } else {
-            chars.iter().map(|c| Some(c.as_str())).collect()
-        };
-        for character in columns {
-            self.staged.push(
-                self.list
-                    .iter()
-                    .map(|a| store.enabled_for(&a.name, a.default_state, character))
-                    .collect(),
-            );
-        }
-        self.baseline = self.staged.clone();
-        self.realm = realm;
+        self.store = addons::EnableStore::load(&realm, &chars);
         self.chars = chars;
+        self.reread();
         // "All" is the reference's default selection.
         self.view = None;
         self.dropdown_open = false;
@@ -201,29 +184,51 @@ impl AddonsPanel {
         self.open = false;
         self.list.clear();
         self.chars.clear();
-        self.staged.clear();
-        self.baseline.clear();
+        self.store = addons::EnableStore::default();
+        self.bits.clear();
         self.view = None;
         self.dropdown_open = false;
         self.tip = None;
         self.dirty = true;
     }
 
-    /// Okay, `SaveAddOns`: write the enable file of each character whose column changed.
-    fn save_staged(&self) {
-        for (c, name) in self.chars.iter().enumerate() {
-            if self.staged.get(c) == self.baseline.get(c) {
-                continue;
-            }
-            let id = (self.realm.clone(), name.clone());
-            let states: Vec<(String, bool)> = self
-                .list
-                .iter()
-                .zip(self.staged[c].iter())
-                .map(|(a, &on)| (a.name.clone(), on))
-                .collect();
-            addons::write_enable_state(Some(&id), &states);
+    /// Re-read every checkbox through the query `0x51e470`, as `AddonList_Update` does after each
+    /// `EnableAddOn`/`DisableAddOn`.
+    fn reread(&mut self) {
+        let columns: Vec<Option<&str>> = if self.chars.is_empty() {
+            vec![None]
+        } else {
+            self.chars.iter().map(|c| Some(c.as_str())).collect()
+        };
+        self.bits = columns
+            .into_iter()
+            .map(|character| {
+                self.list
+                    .iter()
+                    .map(|a| self.store.enabled_for(&a.name, a.default_state, character))
+                    .collect()
+            })
+            .collect();
+        self.dirty = true;
+    }
+
+    /// The glue `EnableAddOn`/`DisableAddOn` (`0x46d7b0`, `0x46d8a0`) for the current view: the
+    /// setter on the viewed character, or on every character in the All view (`nil`). With no
+    /// characters there is no node to set, so a click changes nothing.
+    fn set(&mut self, i: usize, on: bool) {
+        let character = self
+            .view
+            .and_then(|c| self.chars.get(c))
+            .map(String::as_str);
+        if let Some(a) = self.list.get(i) {
+            self.store.set(&a.name, character, on);
         }
+    }
+
+    /// Okay, `SaveAddOns` (`0x46d990` into the writer `0x51ef20`): each character a click changed
+    /// gets its enable hash written; the rest are left as they are.
+    fn save(&mut self) {
+        self.store.save();
     }
 
     /// Whether any addon is installed (`UpdateAddonButton` hides the button otherwise). Cached for
@@ -269,7 +274,7 @@ impl AddonsPanel {
         match self.view {
             Some(c) => {
                 if self
-                    .staged
+                    .bits
                     .get(c)
                     .is_some_and(|col| col.get(i) == Some(&true))
                 {
@@ -280,13 +285,13 @@ impl AddonsPanel {
             }
             None => {
                 let on = self
-                    .staged
+                    .bits
                     .iter()
                     .filter(|col| col.get(i) == Some(&true))
                     .count();
                 if on == 0 {
                     BoxState::Off
-                } else if on == self.staged.len() {
+                } else if on == self.bits.len() {
                     BoxState::On
                 } else {
                     BoxState::Mixed
@@ -339,40 +344,17 @@ impl AddonsPanel {
     /// A checkbox click. In the All view a mixed box counts as checked, so clicking On or Mixed
     /// disables for every character and only an unchecked box enables for all.
     fn click_row(&mut self, i: usize) {
-        match self.view {
-            Some(c) => {
-                if let Some(slot) = self.staged.get_mut(c).and_then(|col| col.get_mut(i)) {
-                    *slot = !*slot;
-                    self.dirty = true;
-                }
-            }
-            None => {
-                let target = self.box_state(i) == BoxState::Off;
-                for col in &mut self.staged {
-                    if let Some(slot) = col.get_mut(i) {
-                        *slot = target;
-                    }
-                }
-                self.dirty = true;
-            }
-        }
+        let on = self.box_state(i) == BoxState::Off;
+        self.set(i, on);
+        self.reread();
     }
 
-    /// Enable All and Disable All sweep the current view's columns.
+    /// Enable All and Disable All: the setter for every listed addon, on the current view.
     fn set_all(&mut self, on: bool) {
-        match self.view {
-            Some(c) => {
-                if let Some(col) = self.staged.get_mut(c) {
-                    col.iter_mut().for_each(|s| *s = on);
-                }
-            }
-            None => {
-                for col in &mut self.staged {
-                    col.iter_mut().for_each(|s| *s = on);
-                }
-            }
+        for i in 0..self.list.len() {
+            self.set(i, on);
         }
-        self.dirty = true;
+        self.reread();
     }
 
     fn view_name<'a>(&'a self, strings: &'a GlueStrings) -> &'a str {
@@ -564,7 +546,7 @@ pub(super) fn drive_addons_panel(
     if close_and_save {
         // `AddonList_OnOk` and `AddonList_OnCancel` play the realm dialog's pair.
         sounds.write(GlueSound("gsLoginChangeRealmOK"));
-        panel.save_staged();
+        panel.save();
         panel.close();
         return;
     }
@@ -1531,25 +1513,34 @@ mod tests {
         }
     }
 
-    /// A panel over `chars` staged columns, each starting at the manifest defaults, viewing All.
+    /// A panel over `chars` characters with no enable rows, so every bit starts at the manifest
+    /// default, viewing All.
     fn panel_for(chars: usize, list: Vec<InstalledAddOn>) -> AddonsPanel {
-        let staged: Vec<Vec<bool>> = (0..chars.max(1))
-            .map(|_| list.iter().map(|a| a.default_state).collect())
-            .collect();
-        AddonsPanel {
+        let chars: Vec<String> = (0..chars).map(|c| format!("Char{c}")).collect();
+        let mut p = AddonsPanel {
             open: true,
-            realm: "TestRealm".into(),
-            chars: (0..chars).map(|c| format!("Char{c}")).collect(),
-            baseline: staged.clone(),
-            staged,
+            store: addons::EnableStore::blank("TestRealm", &chars),
+            chars,
             list,
             ..Default::default()
-        }
+        };
+        p.reread();
+        p.dirty = false; // the tests spawn no tree
+        p
     }
 
-    /// One column, whose All view is that column, so `p.staged[0][i]` drives everything.
+    /// One character, whose All view is that character.
     fn panel(list: Vec<InstalledAddOn>) -> AddonsPanel {
         panel_for(1, list)
+    }
+
+    /// The glue setter for character `c` (`None`: every character), then the re-read
+    /// `AddonList_Enable` runs.
+    fn set(p: &mut AddonsPanel, c: Option<usize>, i: usize, on: bool) {
+        let view = std::mem::replace(&mut p.view, c);
+        p.set(i, on);
+        p.view = view;
+        p.reread();
     }
 
     /// Every fallback label is its token's shipped value (`GlueStrings.lua:44-56`).
@@ -1611,11 +1602,11 @@ mod tests {
         assert_eq!(p.verdict(5).token(), None);
         p.version_check = true;
 
-        p.staged[0][1] = false;
+        set(&mut p, Some(0), 1, false);
         assert_eq!(p.verdict(1).token().as_deref(), Some("DISABLED"));
         assert_eq!(p.verdict(2).token().as_deref(), Some("DEP_DISABLED"));
 
-        p.staged[0][3] = false;
+        set(&mut p, Some(0), 3, false);
         assert_eq!(p.verdict(3).token().as_deref(), Some("DISABLED"));
     }
 
@@ -1630,7 +1621,7 @@ mod tests {
         assert_eq!(p.title_colour(0), GOLD, "loadable = gold");
         assert_eq!(p.title_colour(2), BROKEN, "enabled + out of date = red");
 
-        p.staged[0][0] = false;
+        set(&mut p, Some(0), 0, false);
         assert_eq!(p.title_colour(0), DIM, "player-disabled = grey");
         assert_eq!(
             p.title_colour(1),
@@ -1646,7 +1637,9 @@ mod tests {
             2,
             vec![addon("Lib", &[], 11200), addon("Needs", &["Lib"], 11200)],
         );
-        p.staged[0][0] = false; // Char0 turned Lib off, Char1 has not
+        // Char0 turned Lib off and Char1 on; with no row Char1 would follow Char0.
+        set(&mut p, Some(0), 0, false);
+        set(&mut p, Some(1), 0, true);
 
         assert_eq!(
             p.verdict(0).token(),
@@ -1668,20 +1661,21 @@ mod tests {
         let mut p = panel_for(3, vec![addon("A", &[], 11200)]);
         assert_eq!(p.box_state(0), BoxState::On, "enabled for all three");
 
-        p.staged[1][0] = false;
+        set(&mut p, None, 0, true); // a row for each, so one can differ
+        set(&mut p, Some(1), 0, false);
         assert_eq!(
             p.box_state(0),
             BoxState::Mixed,
             "enabled for SOME (state 1)"
         );
 
-        p.staged[0][0] = false;
-        p.staged[2][0] = false;
+        set(&mut p, Some(0), 0, false);
+        set(&mut p, Some(2), 0, false);
         assert_eq!(p.box_state(0), BoxState::Off, "disabled for all");
 
         p.view = Some(1);
         assert_eq!(p.box_state(0), BoxState::Off);
-        p.staged[1][0] = true;
+        set(&mut p, Some(1), 0, true);
         assert_eq!(p.box_state(0), BoxState::On);
     }
 
@@ -1689,47 +1683,51 @@ mod tests {
     #[test]
     fn an_all_view_click_follows_the_references_checkbutton() {
         let mut p = panel_for(3, vec![addon("A", &[], 11200)]);
-        p.staged[1][0] = false; // mixed
+        set(&mut p, None, 0, true);
+        set(&mut p, Some(1), 0, false); // mixed
 
         p.click_row(0);
         assert!(
-            p.staged.iter().all(|col| !col[0]),
+            p.bits.iter().all(|col| !col[0]),
             "mixed → disabled for ALL characters"
         );
 
         p.click_row(0);
         assert!(
-            p.staged.iter().all(|col| col[0]),
+            p.bits.iter().all(|col| col[0]),
             "unchecked → enabled for ALL characters"
         );
 
         p.click_row(0);
-        assert!(p.staged.iter().all(|col| !col[0]), "checked → back off");
+        assert!(p.bits.iter().all(|col| !col[0]), "checked → back off");
 
         p.view = Some(2);
         p.click_row(0);
-        assert!(p.staged[2][0] && !p.staged[0][0] && !p.staged[1][0]);
+        assert!(p.bits[2][0] && !p.bits[0][0] && !p.bits[1][0]);
     }
 
     /// No enable file is touched until Okay; Cancel (`ResetAddOns`) is `close`.
     #[test]
     fn edits_are_staged_and_cancel_discards_them() {
         let mut p = panel(vec![addon("A", &[], 11200), addon("B", &[], 11200)]);
-        assert_eq!(p.staged, vec![vec![true, true]]);
-        p.staged[0][0] = false;
+        assert_eq!(p.bits, vec![vec![true, true]]);
+        set(&mut p, Some(0), 0, false);
+        assert_eq!(p.bits, vec![vec![false, true]]);
         assert!(
             p.list[0].default_state,
-            "the read-in list is never mutated — only `staged` is, which is what makes Cancel free"
+            "the read-in list is never mutated — only the store is, which is what makes Cancel free"
         );
         p.close();
         assert!(!p.open);
         assert!(
-            p.staged.is_empty(),
+            p.bits.is_empty() && p.store.node("Char0").is_none(),
             "a cancelled edit leaves nothing behind"
         );
     }
 
-    /// Okay writes each changed character's file and creates none for an untouched one.
+    /// Okay (`SaveAddOns`) writes only the characters whose hash a click changed, and each one's
+    /// own rows only: the issue's Alice and Bob, with Carol never touched. Bob's disable reaches
+    /// Alice and Carol through the query, on screen at once and after the files are read back.
     #[test]
     fn okay_writes_every_changed_characters_file_and_only_those() {
         let _l = crate::local_state::test_env::ENV_LOCK
@@ -1747,6 +1745,13 @@ mod tests {
         let _c = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
         let _h =
             crate::local_state::test_env::EnvGuard::set("BENILLA_HOME", home.to_str().unwrap());
+        let path = |who: &str| {
+            addons::enable_state_path(Some(&("TestRealm".to_string(), who.to_string()))).unwrap()
+        };
+        // Alice's file as some other writer left it: a rewrite would drop the stray line.
+        let alice_file = "Gone: disabled\nstray line\nAlpha: enabled\n";
+        std::fs::create_dir_all(path("Alice").parent().unwrap()).unwrap();
+        std::fs::write(path("Alice"), alice_file).unwrap();
 
         let mut p = AddonsPanel::default();
         p.open_for(
@@ -1755,12 +1760,31 @@ mod tests {
         );
         assert!(p.view.is_none(), "the reference's default selection is All");
         assert_eq!(p.list.len(), 2, "discovery found the two hermetic addons");
-        assert_eq!(p.staged.len(), 3, "one staged column per roster character");
-        assert_eq!(p.staged, p.baseline);
+        assert_eq!(p.bits.len(), 3, "one column per roster character");
 
-        p.staged[0][0] = false;
-        p.staged[1][1] = false;
-        p.save_staged();
+        set(&mut p, Some(0), 0, true); // Alice re-ticks what her row already says
+        set(&mut p, Some(1), 1, false); // Bob unticks Beta
+        assert_eq!(
+            p.bits,
+            vec![vec![true, false]; 3],
+            "Bob is the only one with a Beta row, so Alice and Carol follow him at once"
+        );
+        p.save();
+
+        assert_eq!(
+            std::fs::read_to_string(path("Alice")).unwrap(),
+            alice_file,
+            "a setter call that changed nothing leaves the node clean and the file unwritten"
+        );
+        assert_eq!(
+            std::fs::read_to_string(path("Bob")).unwrap(),
+            "Beta: disabled\n",
+            "Bob's file carries his one toggle, not a row per listed addon"
+        );
+        assert!(
+            !path("Carol").exists(),
+            "an untouched character writes no file"
+        );
 
         // Read back through the store world entry resolves against.
         let roster = ["Alice".to_string(), "Bob".to_string(), "Carol".to_string()];
@@ -1771,20 +1795,9 @@ mod tests {
                 .map(|a| store.enabled_for(&a.name, a.default_state, Some(who)))
                 .collect()
         };
-        assert_eq!(
-            read("Alice"),
-            vec![false, true],
-            "Alice's file carries HER edit"
-        );
-        assert_eq!(read("Bob"), vec![true, false], "Bob's carries HIS");
-        let carol = ("TestRealm".to_string(), "Carol".to_string());
-        assert!(
-            !addons::enable_state_path(Some(&carol)).unwrap().exists(),
-            "an unchanged column writes no file — only the diffs against the open-time baseline"
-        );
-        // Carol, with no file, takes what the others agree on; they split on both, so each falls
-        // to its manifest's `## DefaultState`.
-        assert_eq!(read("Carol"), vec![true, true]);
+        for who in ["Alice", "Bob", "Carol"] {
+            assert_eq!(read(who), vec![true, false], "{who}");
+        }
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -1815,7 +1828,7 @@ mod tests {
             vec!["Onemage".into(), "Onerogue".into()],
         );
         p.set_all(false);
-        p.save_staged();
+        p.save();
         p.close();
 
         // A created character, with no enable file.
@@ -1824,9 +1837,9 @@ mod tests {
             vec!["Onemage".into(), "Onerogue".into(), "Freshling".into()],
         );
         assert!(p.view.is_none(), "reopens on All, the reference's default");
-        assert_eq!(p.staged.len(), 3);
+        assert_eq!(p.bits.len(), 3);
         assert_eq!(
-            p.staged[2],
+            p.bits[2],
             vec![false, false],
             "the new character inherits the unanimous disable, not a blank slate"
         );
@@ -1879,7 +1892,7 @@ mod tests {
         p.set_all(false); // the mage turns both off; the rogue keeps the defaults
         p.view = Some(1);
         p.set_all(true);
-        p.save_staged();
+        p.save();
         p.close();
 
         p.open_for(
@@ -1887,7 +1900,7 @@ mod tests {
             vec!["Onemage".into(), "Onerogue".into(), "Freshling".into()],
         );
         assert_eq!(
-            p.staged[2],
+            p.bits[2],
             vec![true, false],
             "split roster → each row falls to its own `## DefaultState`"
         );
