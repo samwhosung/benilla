@@ -237,6 +237,7 @@ fn the_open_menu_takes_the_screen_and_refuses_every_other_panel() {
     s.set_container(0, Some(backpack()));
     s.run("MainMenuBarBackpackButton:Click()").unwrap();
     s.set_loot(Some(LootState {
+        source_unit: false,
         fishing: false,
         master_candidates: Vec::new(),
         rows: vec![Some(LootRow {

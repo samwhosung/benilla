@@ -523,6 +523,8 @@ fn snapshot(
         rows,
         fishing: loot.fishing,
         master_candidates: who.names_for(loot),
+        // The feed's, which holds the object manager.
+        source_unit: false,
     })
 }
 
@@ -637,6 +639,30 @@ fn drain_receives(
 }
 
 /// Emits the queued pushes, then pushes the loot snapshot and fires the loot events on a change.
+/// The object manager as `SetLootPortrait` asks it (`0x468460`, typemask 8): whether the loot
+/// source is a unit object we hold.
+#[derive(bevy::ecs::system::SystemParam)]
+struct LootSourceObjects<'w, 's> {
+    index: Option<Res<'w, crate::net::GuidIndex>>,
+    stores: Query<'w, 's, &'static crate::net::ObjectStore>,
+}
+
+impl LootSourceObjects<'_, '_> {
+    fn is_unit(&self, guid: u64) -> bool {
+        use benilla_protocol::messages::ObjectType;
+        self.index
+            .as_ref()
+            .and_then(|index| index.0.get(&guid))
+            .and_then(|&e| self.stores.get(e).ok())
+            .is_some_and(|s| {
+                matches!(
+                    s.0.object_type(),
+                    Some(ObjectType::Unit | ObjectType::Player)
+                )
+            })
+    }
+}
+
 fn feed_loot(
     script: Option<NonSendMut<UiScript>>,
     mut loot: ResMut<LootState>,
@@ -653,6 +679,7 @@ fn feed_loot(
     enchants: Option<Res<crate::items::Enchants>>,
     group: Res<GroupState>,
     names: Res<NameCache>,
+    objects: LootSourceObjects,
 ) {
     let Some(mut script) = script else {
         return;
@@ -676,7 +703,10 @@ fn feed_loot(
         group: &group,
         names: &names,
     };
-    let fresh = snapshot(&loot, &items, icons.as_deref(), &commands, rolls, who);
+    let fresh = snapshot(&loot, &items, icons.as_deref(), &commands, rolls, who).map(|mut snap| {
+        snap.source_unit = loot.source().is_some_and(|g| objects.is_unit(g));
+        snap
+    });
     if fresh == *last {
         return;
     }
@@ -1135,6 +1165,59 @@ mod tests {
         app.insert_non_send_resource(script);
         app.world_mut().run_system_once(drain_loot).unwrap();
         (app, rx)
+    }
+
+    /// `SetLootPortrait` answers 1 only while the loot source is a unit object we hold
+    /// (`0x4c2bd1`-`0x4c2be9`): a creature's corpse, never a chest or a source out of view.
+    #[test]
+    fn the_loot_portrait_follows_a_unit_source_only() {
+        use benilla_protocol::ObjectFields;
+        for (unit, expected) in [(true, true), (false, false)] {
+            let (tx, _rx) = crossbeam_channel::unbounded();
+            let mut app = App::new();
+            app.add_message::<crate::sound::LootPickupSound>()
+                .init_resource::<LootState>()
+                .init_resource::<crate::ui_chat::ChatLog>()
+                .init_resource::<GroupState>()
+                .init_resource::<NameCache>()
+                .init_resource::<Items>()
+                .init_resource::<ButtonInput<KeyCode>>()
+                .init_resource::<LootConfig>()
+                .init_resource::<crate::net::GuidIndex>()
+                .insert_resource(NetCommands(tx))
+                .add_systems(bevy::prelude::Update, feed_loot);
+            // OBJECT_FIELD_TYPE (2): TYPEMASK_OBJECT | TYPEMASK_UNIT for a creature, | 0x20 for a
+            // game object.
+            let kind = if unit { 0x9 } else { 0x21 };
+            let e = app
+                .world_mut()
+                .spawn(crate::net::ObjectStore(ObjectFields::from_pairs(&[(
+                    2, kind,
+                )])))
+                .id();
+            app.world_mut()
+                .resource_mut::<crate::net::GuidIndex>()
+                .0
+                .insert(0x42, e);
+            app.world_mut().resource_mut::<LootState>().open(
+                0x42,
+                loot_type::CORPSE,
+                5,
+                Vec::new(),
+            );
+            let script = UiScript::new().unwrap();
+            script
+                .run(r#"CreateFrame("Frame", "LootHost"):CreateTexture("LootTex")"#)
+                .unwrap();
+            app.insert_non_send_resource(script);
+            app.update();
+            let answered = app
+                .world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .eval::<bool>("return SetLootPortrait(LootTex) == 1")
+                .unwrap();
+            assert_eq!(answered, expected, "unit source: {unit}");
+        }
     }
 
     /// `0x4c2ac0` fires `LOOT_OPENED` once, at the last answer; here a negative one opens it too.

@@ -65,6 +65,7 @@ fn escape_closes_bag_and_panel_releases_loot_and_keeps_the_held_item() {
     // Open the bag and the loot window; drain their open sounds.
     s.run("MainMenuBarBackpackButton:Click()").unwrap();
     s.set_loot(Some(LootState {
+        source_unit: false,
         fishing: false,
         master_candidates: Vec::new(),
         rows: vec![Some(LootRow {

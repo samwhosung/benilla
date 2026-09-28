@@ -64,8 +64,9 @@ use light::{model_pane_light, studio_light, BoothLight};
 pub(crate) mod test_bake;
 
 /// The round portrait slots, each with its own layer and camera. `"npc"` is an interaction
-/// window's NPC ([`crate::ui_session::InteractNpc`]); `"targettarget"` resolves only while drawn.
-const SLOTS: [&str; 9] = [
+/// window's NPC ([`crate::ui_session::InteractNpc`]); `"targettarget"` resolves only while drawn,
+/// and so does the loot source `SetLootPortrait` binds ([`benilla_ui::script::LOOT_PORTRAIT_UNIT`]).
+const SLOTS: [&str; 10] = [
     "player",
     "target",
     "targettarget",
@@ -75,6 +76,7 @@ const SLOTS: [&str; 9] = [
     "party2",
     "party3",
     "party4",
+    benilla_ui::script::LOOT_PORTRAIT_UNIT,
 ];
 /// The character window's full-body pane: the dressed player, sampled square.
 const PAPERDOLL_SLOT: &str = "paperdoll";
@@ -658,8 +660,10 @@ pub(crate) struct PartyBooths<'w, 's> {
     palettes: ResMut<'w, benilla_world::rig_palette::RigPalettes>,
     pet_bar: Res<'w, crate::ui_pet::PetBar>,
     names: Res<'w, crate::names::NameCache>,
-    /// What the UI drew last frame, read by `"targettarget"` alone.
+    /// What the UI drew last frame, read by `"targettarget"` and the loot source.
     panes: Res<'w, BoothPanes>,
+    /// The open loot, whose source `SetLootPortrait` bakes (`0x4c2bc5`, `[0xb71b48]`).
+    loot: Option<Res<'w, crate::ui_loot::LootState>>,
     /// The guid-keyed bake cache, and a fresh target plus the camera's [`RenderTarget`] for the
     /// handover.
     bakes: ResMut<'w, PortraitBakes>,
@@ -1326,6 +1330,19 @@ fn sync_portraits(
                 entity
             }
             "npc" => interact_npc.0,
+            // Gated on the UI drawing it, as `"targettarget"`: no stock file binds it.
+            benilla_ui::script::LOOT_PORTRAIT_UNIT => party
+                .panes
+                .0
+                .contains_key(token)
+                .then(|| {
+                    party
+                        .loot
+                        .as_ref()
+                        .and_then(|l| l.source())
+                        .and_then(|g| party.index.0.get(&g).copied())
+                })
+                .flatten(),
             // Out of range, the stand-in's race and sex come from the name cache.
             tok => {
                 let member = tok

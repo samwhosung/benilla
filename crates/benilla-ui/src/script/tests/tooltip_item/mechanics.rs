@@ -608,6 +608,7 @@ fn a_looted_roll_shows_its_lines_and_never_the_placeholder() {
         },
     );
     s.set_loot(Some(LootState {
+        source_unit: false,
         master_candidates: Vec::new(),
         rows: vec![Some(LootRow {
             name: Some("Bloodrazor of the Monkey".into()),
@@ -689,6 +690,7 @@ fn a_looted_item_with_no_roll_shows_neither_line_nor_placeholder() {
         },
     );
     s.set_loot(Some(LootState {
+        source_unit: false,
         master_candidates: Vec::new(),
         rows: vec![Some(LootRow {
             name: Some("Bloodrazor".into()),

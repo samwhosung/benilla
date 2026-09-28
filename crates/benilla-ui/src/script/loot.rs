@@ -72,7 +72,15 @@ pub struct LootState {
     /// dropdown labels "Group N" (`LootFrame.lua:197-213`). A `None` (an empty slot, or a name not
     /// yet resolved) answers nil.
     pub master_candidates: Vec<Option<String>>,
+    /// The loot source (`[0xb71b48]`) resolves as a unit object (`0x468460`, typemask 8): a
+    /// corpse, not a chest, a bobber or an item. `SetLootPortrait` bakes it under the token
+    /// [`LOOT_PORTRAIT_UNIT`].
+    pub source_unit: bool,
 }
+
+/// The portrait key `SetLootPortrait` binds a texture to, which the app bakes from the loot
+/// source. Upper case, so no `SetPortraitTexture` token, which is lowercased, can name it.
+pub const LOOT_PORTRAIT_UNIT: &str = "LOOT";
 
 impl super::UiScript {
     /// Push (or clear, with `None`) the open loot.
@@ -107,6 +115,28 @@ impl super::UiScript {
 /// Register the loot globals.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
+
+    // SetLootPortrait(texture) (`0x4c2b40`): the loot source's 3D portrait, the unit-frame bake
+    // (`0x524f60`), and the number 1; a source that is no unit object, or no loot, clears the
+    // texture (`0x4c2c0d`) and answers nil. A non-Texture raises the member prologue's errors. No
+    // stock caller: `LootFrame.lua` paints its own portrait art.
+    g.set(
+        "SetLootPortrait",
+        lua.create_function(|lua, texture: Value| {
+            let rh = super::region::this_texture(lua, &texture)?;
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            if !model.loot.as_ref().is_some_and(|l| l.source_unit) {
+                super::region::clear_texture(&mut model, rh);
+                return Ok(Value::Nil);
+            }
+            let data = model.region_data.entry(rh).or_default();
+            data.portrait_unit = Some(LOOT_PORTRAIT_UNIT.to_string());
+            data.texture = None;
+            data.fill = None;
+            data.circular = true;
+            Ok(Value::Integer(1))
+        })?,
+    )?;
 
     // GetNumLootItems(): cleared slots included, so it holds still while a window is open.
     g.set(
@@ -306,8 +336,61 @@ mod tests {
     use super::{LootRow, LootState};
     use crate::script::UiScript;
 
+    /// The region data behind a named texture: its portrait key and file.
+    fn portrait_of(s: &UiScript, name: &str) -> (Option<String>, Option<String>) {
+        let model = s.model_ref();
+        let id = model.region_names[name];
+        let rh = *model.id_to_region.get(&id).expect("a region");
+        let data = &model.region_data[&rh];
+        (data.portrait_unit.clone(), data.texture.clone())
+    }
+
+    /// `SetLootPortrait` (`0x4c2b40`): a unit source binds the loot portrait and answers 1;
+    /// anything else clears the texture and answers nil.
+    #[test]
+    fn loot_portrait_binds_a_unit_source_and_clears_otherwise() {
+        let mut s = UiScript::new().unwrap();
+        s.run(
+            r#"local f = CreateFrame("Frame", "LootHost", UIParent)
+               f:CreateTexture("LootTex")
+               LootTex:SetTexture("Interface\TargetingFrame\TargetDead")"#,
+        )
+        .unwrap();
+        assert!(s
+            .eval::<bool>("return SetLootPortrait(LootTex) == nil")
+            .unwrap());
+        assert_eq!(portrait_of(&s, "LootTex"), (None, None), "no loot: cleared");
+
+        s.run(r#"LootTex:SetTexture("Interface\TargetingFrame\TargetDead")"#)
+            .unwrap();
+        s.set_loot(Some(LootState {
+            source_unit: true,
+            ..loot()
+        }));
+        assert_eq!(s.eval::<i64>("return SetLootPortrait(LootTex)").unwrap(), 1);
+        assert_eq!(
+            portrait_of(&s, "LootTex"),
+            (Some(super::LOOT_PORTRAIT_UNIT.to_string()), None)
+        );
+
+        s.set_loot(Some(loot()));
+        assert!(s
+            .eval::<bool>("return SetLootPortrait(LootTex) == nil")
+            .unwrap());
+        assert_eq!(portrait_of(&s, "LootTex"), (None, None), "a chest: cleared");
+
+        let err = s.run("SetLootPortrait(LootHost)").unwrap_err().to_string();
+        assert!(
+            err.contains("Wrong object type for member function"),
+            "{err}"
+        );
+        let err = s.run("SetLootPortrait()").unwrap_err().to_string();
+        assert!(err.contains("non-table object"), "{err}");
+    }
+
     fn loot() -> LootState {
         LootState {
+            source_unit: false,
             master_candidates: Vec::new(),
             rows: vec![
                 Some(LootRow {
