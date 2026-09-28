@@ -153,10 +153,10 @@ pub(super) struct UnitAuras {
     player_version: u64,
     catalog_present: bool,
     frame: u64,
-    /// Kept to save the allocations: the inputs being read, the chain walk, the guids to list.
+    /// Kept to save the allocations: the inputs being read, and the walk over the guids a token
+    /// can name, each with whether its roster record may stand in for it.
     scratch: Vec<AuraInput>,
-    walk: Vec<u64>,
-    named: Vec<u64>,
+    walk: Vec<(u64, bool)>,
 }
 
 impl UnitAuras {
@@ -194,43 +194,35 @@ impl UnitAuras {
             self.player_version = self.versions;
         }
 
-        // The resolver's inputs: the bases, then every held unit their `target` chains reach.
-        let g = &mut self.guids;
+        // The resolver's inputs and the lists, in one walk over every guid a token can name: the
+        // bases, then each held unit their `target` chains reach. A group token's guid lists off
+        // its roster record while out of view; any other lists only while held.
+        let mut g = std::mem::take(&mut self.guids);
+        let mut walk = std::mem::take(&mut self.walk);
         (g.player, g.pet, g.target, g.mouseover, g.npc) = (me, pet, target, mouseover, npc);
-        fill_group(g, group, me, &held);
+        fill_group(&mut g, group, me, &held);
         g.held.clear();
-        self.walk.clear();
-        self.walk.extend([me, pet, target, mouseover, npc]);
-        self.walk.extend(g.party.iter().chain(&g.party_pets));
-        self.walk.extend(g.raid.iter().chain(&g.raid_pets));
-        while let Some(guid) = self.walk.pop() {
+        walk.clear();
+        walk.extend([me, pet, target, mouseover, npc].map(|g| (g, false)));
+        walk.extend(g.party.iter().chain(&g.party_pets).map(|&g| (g, true)));
+        walk.extend(g.raid.iter().chain(&g.raid_pets).map(|&g| (g, true)));
+        while let Some((guid, record_ok)) = walk.pop() {
             if guid == 0 || g.held.contains_key(&guid) {
                 continue;
             }
-            let Some(store) = held(guid).filter(|s| is_unit(s)) else {
-                continue;
-            };
-            let next = store.0.unit_target().unwrap_or(0);
-            g.held.insert(guid, next);
-            self.walk.push(next);
-        }
-        script.set_unit_guids(g);
-
-        // Every guid a token can name: the group's first, whose record stands in for a unit out
-        // of view, then the rest, which list only while held.
-        let mut named = std::mem::take(&mut self.named);
-        named.clear();
-        named.extend(g.party.iter().chain(&g.party_pets));
-        named.extend(g.raid.iter().chain(&g.raid_pets));
-        let group_named = named.len();
-        named.extend([pet, target, mouseover, npc]);
-        named.extend(g.held.keys());
-        for (i, &guid) in named.iter().enumerate() {
-            if guid != 0 && guid != me {
-                self.refresh(guid, i < group_named, group, &held, &buffs_visible, catalog);
+            let store = held(guid);
+            if let Some(unit) = store.filter(|s| is_unit(s)) {
+                let next = unit.0.unit_target().unwrap_or(0);
+                g.held.insert(guid, next);
+                walk.push((next, false));
+            }
+            if guid != me {
+                self.refresh(guid, store, record_ok, group, &buffs_visible, catalog);
             }
         }
-        self.named = named;
+        script.set_unit_guids(&g);
+        self.guids = g;
+        self.walk = walk;
         let frame = self.frame;
         self.by_guid.retain(|_, e| e.frame == frame);
 
@@ -271,14 +263,15 @@ impl UnitAuras {
     }
 
     /// Rebuild `guid`'s list this frame if what it is built from moved: the live unit's gated
-    /// slots, else, for a guid a group token names, the roster record's block. A guid neither held
-    /// nor a group token's gets no list, as `UnitBuff`'s roster walk finds nothing for it.
-    fn refresh<'a>(
+    /// slots (`store`, the object manager's answer), else, for a guid a group token names, the
+    /// roster record's block. A guid neither held nor a group token's gets no list, as
+    /// `UnitBuff`'s roster walk finds nothing for it.
+    fn refresh(
         &mut self,
         guid: u64,
+        store: Option<&ObjectStore>,
         record_ok: bool,
         group: Option<&GroupState>,
-        held: &impl Fn(u64) -> Option<&'a ObjectStore>,
         buffs_visible: &impl Fn(u64, &ObjectStore) -> bool,
         catalog: Option<&SpellCatalog>,
     ) {
@@ -290,7 +283,7 @@ impl UnitAuras {
             return;
         }
         self.scratch.clear();
-        match held(guid) {
+        match store {
             Some(store) => self.scratch.extend(other_unit_inputs(
                 store,
                 catalog,
