@@ -129,6 +129,7 @@ fn feed_craft(
             durations: &spells.durations,
             radii: &spells.radii,
             ranges: Some(&spells.ranges),
+            caster_level: store.0.unit_level(),
             lookup: &|id| spells.catalog.get(id),
             mods: Some(&*spell_mods),
             unmodified_points: false,

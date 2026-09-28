@@ -83,6 +83,7 @@ fn spell_tooltip_view(
         durations: &spells.durations,
         radii: &spells.radii,
         ranges: Some(&spells.ranges),
+        caster_level: vctx.store.and_then(|s| s.0.unit_level()),
         lookup: &|id| spells.catalog.get(id),
         mods: Some(vctx.spell_mods),
         unmodified_points: false,
@@ -327,6 +328,8 @@ struct SpellFeedMemory {
     home: Option<String>,
     /// The form the required-form line's colour follows (`0x52f1e3`).
     form: Option<u8>,
+    /// The description's per-level effect values follow the player level.
+    caster_level: Option<Option<u32>>,
     /// The 19 worn-slot guids the required-item line's colour follows (`0x5f0c50`).
     worn: Option<[u64; 19]>,
     /// The block, dodge, parry and crit percentages as bit patterns (`0x52f5b1`).
@@ -443,6 +446,11 @@ fn feed_spell_tooltips(
         wanted.extend(memory.pushed.drain());
     }
     let self_store = self_q.single().ok();
+    let caster_level = self_store.and_then(|s| s.0.unit_level());
+    if memory.caster_level != Some(caster_level) {
+        memory.caster_level = Some(caster_level);
+        wanted.extend(memory.pushed.drain());
+    }
     // So do the worn set and, below, the reagents on show.
     let worn =
         self_store.map(|s| std::array::from_fn(|i| s.0.player_inv_slot(i as u8).unwrap_or(0)));

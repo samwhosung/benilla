@@ -57,6 +57,7 @@ pub(crate) struct SlotGuids {
 fn spell_desc_text(
     spells: Option<&crate::ui_action::Spells>,
     id: u32,
+    caster_level: Option<u32>,
     home_area: Option<&str>,
     mods: Option<&crate::spell::SpellModifiers>,
     // The VM's strings for the keyed `$d`/`$s` tokens.
@@ -71,6 +72,7 @@ fn spell_desc_text(
                 durations: &sp.durations,
                 radii: &sp.radii,
                 ranges: Some(&sp.ranges),
+                caster_level,
                 lookup: &|i| sp.catalog.get(i),
                 mods: mods.map(|m| m as &dyn benilla_formats::SpellMods),
                 unmodified_points: false,
@@ -131,6 +133,7 @@ fn template_view(
     t: &ItemInfo,
     spells: Option<&crate::ui_action::Spells>,
     mods: Option<&crate::spell::SpellModifiers>,
+    caster_level: Option<u32>,
     skill_lines: Option<&benilla_formats::SkillLineCatalog>,
     home_area: Option<&str>,
     factions: Option<&benilla_formats::FactionCatalog>,
@@ -146,7 +149,7 @@ fn template_view(
             .and_then(|s| s.catalog.get(id))
             .map(|sd| sd.name.clone())
     };
-    let spell_text = |id: u32| spell_desc_text(spells, id, home_area, mods, get);
+    let spell_text = |id: u32| spell_desc_text(spells, id, caster_level, home_area, mods, get);
     benilla_ui::script::ItemTemplateView {
         name: t.name.clone(),
         quality: t.quality,
@@ -245,20 +248,26 @@ pub(super) fn feed_item_sets(
     spells: Option<Res<crate::ui_action::Spells>>,
     spell_mods: Res<crate::spell::SpellModifiers>,
     skill_lines: Option<Res<crate::ui_spellbook::SkillLines>>,
+    self_q: Query<&ObjectStore, With<SelfPlayer>>,
     mut pending: Local<
         crate::ui_script::VmMemo<std::collections::HashMap<u32, benilla_ui::script::ItemSetView>>,
     >,
     mut mod_sensitive: Local<crate::ui_script::VmMemo<HashSet<u32>>>,
+    mut last_level: Local<crate::ui_script::VmMemo<Option<u32>>>,
 ) {
     let Some(mut script) = script else {
         return;
     };
     let pending = pending.get(&script);
     let mod_sensitive = mod_sensitive.get(&script);
+    let caster_level = self_q.single().ok().and_then(|s| s.0.unit_level());
+    let last_level = last_level.get(&script);
     for id in script.take_item_set_asks() {
         pending.entry(id).or_default();
     }
-    if spell_mods.is_changed() {
+    let level_changed = *last_level != caster_level;
+    *last_level = caster_level;
+    if spell_mods.is_changed() || level_changed {
         for &id in mod_sensitive.iter() {
             pending.entry(id).or_default();
         }
@@ -296,8 +305,15 @@ pub(super) fn feed_item_sets(
                 .bonuses
                 .iter()
                 .filter_map(|&(n, spell)| {
-                    spell_desc_text(spell_res, spell, None, Some(&spell_mods), &global)
-                        .map(|desc| (n, desc))
+                    spell_desc_text(
+                        spell_res,
+                        spell,
+                        caster_level,
+                        None,
+                        Some(&spell_mods),
+                        &global,
+                    )
+                    .map(|desc| (n, desc))
                 })
                 .collect(),
             required_skill: row.required_skill,
@@ -363,7 +379,11 @@ pub(super) fn feed_item_stats(
     mut items: ResMut<Items>,
     commands: Res<NetCommands>,
     spells: Option<Res<crate::ui_action::Spells>>,
-    spell_mods: Res<crate::spell::SpellModifiers>,
+    // The caster the `$`-tokens read: its spell modifiers and its level.
+    (spell_mods, self_q): (
+        Res<crate::spell::SpellModifiers>,
+        Query<&ObjectStore, With<SelfPlayer>>,
+    ),
     skill_lines: Option<Res<crate::ui_spellbook::SkillLines>>,
     // The `$z` token: the bind point's area (`SMSG_BINDPOINTUPDATE`), named through `AreaTable`.
     home_bind: Option<Res<crate::net::HomeBind>>,
@@ -376,6 +396,7 @@ pub(super) fn feed_item_stats(
     mut pending: Local<crate::ui_script::VmMemo<std::collections::HashSet<u32>>>,
     mut mod_sensitive: Local<crate::ui_script::VmMemo<HashSet<u32>>>,
     mut last_home: Local<crate::ui_script::VmMemo<Option<String>>>,
+    mut last_level: Local<crate::ui_script::VmMemo<Option<u32>>>,
 ) {
     let Some(mut script) = script else {
         return;
@@ -383,6 +404,10 @@ pub(super) fn feed_item_stats(
     let pending = pending.get(&script);
     let mod_sensitive = mod_sensitive.get(&script);
     let last_home = last_home.get(&script);
+    let last_level = last_level.get(&script);
+    let caster_level = self_q.single().ok().and_then(|s| s.0.unit_level());
+    let level_changed = *last_level != caster_level;
+    *last_level = caster_level;
     // `GetBindLocation()`'s push, here so it and the `$z` token share one name, and ahead of the
     // pending gate below: the bind point can arrive while the feed idles.
     let home_area: Option<&str> = home_bind
@@ -399,7 +424,7 @@ pub(super) fn feed_item_stats(
 
     pending.extend(items.take_fresh());
     pending.extend(script.take_item_stat_asks());
-    if spell_mods.is_changed() {
+    if spell_mods.is_changed() || level_changed {
         pending.extend(mod_sensitive.iter().copied());
     }
     if pending.is_empty() {
@@ -438,6 +463,7 @@ pub(super) fn feed_item_stats(
                         &t,
                         spell_res,
                         Some(&spell_mods),
+                        caster_level,
                         skill_catalog,
                         home_area,
                         factions.as_deref().map(|f| f.catalog()),
@@ -1912,7 +1938,7 @@ mod tests {
                 "spell {id} has a name — which is exactly what must NOT leak into the tooltip"
             );
             assert_eq!(
-                super::spell_desc_text(Some(&spells), id, None, None, &no_strings),
+                super::spell_desc_text(Some(&spells), id, None, None, None, &no_strings),
                 None,
                 "spell {id} ({:?}) has no description, so the reference prints no trigger line",
                 d.name
@@ -1920,7 +1946,7 @@ mod tests {
         }
 
         // The control: Fireball (133), described, still yields its line.
-        let fireball = super::spell_desc_text(Some(&spells), 133, None, None, &no_strings)
+        let fireball = super::spell_desc_text(Some(&spells), 133, None, None, None, &no_strings)
             .expect("a described spell still yields its line");
         assert!(
             fireball.contains("damage"),

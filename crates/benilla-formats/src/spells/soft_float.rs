@@ -124,6 +124,16 @@ pub(crate) fn int_to_float(v: i32) -> f32 {
     f32::from_bits(from_int(v))
 }
 
+/// `0x760e20` over floats.
+pub(crate) fn add_f32(a: f32, b: f32) -> f32 {
+    f32::from_bits(add(a.to_bits(), b.to_bits()))
+}
+
+/// `0x760be0` over floats.
+pub(crate) fn mul_f32(a: f32, b: f32) -> f32 {
+    f32::from_bits(mul(a.to_bits(), b.to_bits()))
+}
+
 /// `GetEffectPoints`' tail (`6e39ee`-`6e3a65`): to the nearest 1/128, as `floor(x·128 + 0.5) /
 /// 128` with the ×128 and ÷128 done on the exponent field and the add and floor in the soft
 /// arithmetic (`0x761160`, its 0.5 at `0xcf0b2c`).

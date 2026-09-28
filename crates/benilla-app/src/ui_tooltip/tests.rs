@@ -85,6 +85,37 @@ fn empty_player() -> ObjectStore {
     )]))
 }
 
+#[test]
+fn battle_shout_description_uses_player_level() {
+    let data = benilla_formats::wow_data_or_skip!();
+    let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+    let spells = Spells {
+        catalog: benilla_formats::load_spell_catalog(&mut chain).expect("Spell.dbc"),
+        forms: benilla_formats::load_shapeshift_forms(&mut chain).expect("forms"),
+        ranges: benilla_formats::load_spell_ranges(&mut chain).expect("ranges"),
+        cast_times: benilla_formats::load_spell_cast_times(&mut chain).expect("cast times"),
+        durations: benilla_formats::load_spell_durations(&mut chain).expect("durations"),
+        radii: benilla_formats::load_spell_radii(&mut chain).expect("radii"),
+    };
+    let mut t = TestCtx::new();
+    let mut objs = no_objects();
+    let objects = objs.get();
+    for (level, ap) in [(1, 15), (11, 20), (60, 20)] {
+        let store = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(34, level)]));
+        let view = spell_tooltip_view(
+            6673,
+            &spells,
+            &mut t.ctx_for(&objects, 0, None, Some(&store)),
+        )
+        .expect("Battle Shout view");
+        assert!(
+            view.description.contains(&format!("by {ap}.")),
+            "level {level}: {}",
+            view.description
+        );
+    }
+}
+
 /// Fireball rank 1 (133) end to end: description 138, cast index 18 (1500 ms), duration 30.
 #[test]
 fn fireball_view_on_real_data() {

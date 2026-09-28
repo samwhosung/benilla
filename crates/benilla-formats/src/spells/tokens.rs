@@ -1,9 +1,7 @@
 //! The spell-description `$`-token engine the 1.12 client runs over `Spell.dbc` description and
-//! aura text (`0x5075f0` → `0x507710`), effect values from `GetEffectPoints 0x6e3800`. Values are
-//! the flat term: the reference's per-level terms (`DicePerLevel·max(0, casterLevel − baseLevel)`
-//! on the dice, and `RealPointsPerLevel`) are not applied. Values print unsigned, as the client's
-//! do. `$g` always takes the first form, as there is no gender input, and `$u` and any unknown or
-//! unresolved token stay raw.
+//! aura text (`0x5075f0` → `0x507710`), effect values from `GetEffectPoints 0x6e3800`. Values
+//! print unsigned, as the client's do. `$g` always takes the first form, as there is no gender
+//! input, and `$u` and any unknown or unresolved token stay raw.
 
 use super::soft_float;
 use super::{SpellDisplay, SpellDurationCatalog, SpellRadiusCatalog, SpellRangeCatalog};
@@ -29,6 +27,8 @@ pub struct TokenContext<'a> {
     pub durations: &'a SpellDurationCatalog,
     pub radii: &'a SpellRadiusCatalog,
     pub ranges: Option<&'a SpellRangeCatalog>,
+    /// The level used by `GetEffectPoints`; absent when no caster is available.
+    pub caster_level: Option<u32>,
     pub lookup: &'a dyn Fn(u32) -> Option<&'a SpellDisplay>,
     /// The caster's live spell-modifier tables; absent for contexts without a caster.
     pub mods: Option<&'a dyn SpellMods>,
@@ -70,18 +70,34 @@ fn classify(effect: u32, aura: u32) -> (bool, bool) {
     }
 }
 
-/// `GetEffectPoints 0x6e3800`: the effect's `(min, max)` as the soft floats it returns. The
-/// bounds start as the flat term, `BasePoints + BaseDice` and `BasePoints + DieSides·BaseDice`
-/// (the per-level terms at `6e3863`-`6e391a` are not applied). Unless the context is the aura
+/// `GetEffectPoints 0x6e3800`: the effect's `(min, max)` as the soft floats it returns. With `n`
+/// the dice, `BaseDice + DicePerLevel·Δ`, the bounds start as `BasePoints + n` and
+/// `BasePoints + DieSides·n`, each plus `RealPointsPerLevel·Δ` (`6e3863`-`6e391a`); `0x507805`
+/// caps the level at `maxLevel` before `baseLevel` is subtracted. Unless the context is the aura
 /// tooltip's, op 8, then a damage effect's op (22 for aura 3, else 0), then the aura's
 /// ([`aura_op`]) apply to each bound through `0x6e6c30`. The tail quantizes both to 1/128, and a
 /// rounding effect floors the minimum and ceils the maximum (`6e3a67`).
 fn effect_points(d: &SpellDisplay, slot: usize, ctx: &TokenContext) -> (f32, f32) {
+    let level = ctx.caster_level.unwrap_or(0);
+    let level = if d.max_level > 0 {
+        level.min(d.max_level)
+    } else {
+        level
+    };
+    let delta = level.saturating_sub(d.base_level) as i32;
     let base = d.effect_base_points[slot];
-    let dice = d.effect_base_dice[slot];
+    let dice =
+        d.effect_base_dice[slot].wrapping_add(d.effect_dice_per_level[slot].wrapping_mul(delta));
     let sides = d.effect_die_sides[slot];
-    let mut min = soft_float::int_to_float(base.wrapping_add(dice));
-    let mut max = soft_float::int_to_float(base.wrapping_add(sides.wrapping_mul(dice)));
+    let real = soft_float::mul_f32(
+        d.effect_real_points_per_level[slot],
+        soft_float::int_to_float(delta),
+    );
+    let mut min = soft_float::add_f32(soft_float::int_to_float(base.wrapping_add(dice)), real);
+    let mut max = soft_float::add_f32(
+        soft_float::int_to_float(base.wrapping_add(sides.wrapping_mul(dice))),
+        real,
+    );
     let aura = d.effect_apply_aura[slot];
     let (rounds, damage) = classify(d.effects[slot], aura);
     if let Some(mods) = ctx.mods.filter(|_| !ctx.unmodified_points) {
@@ -573,6 +589,7 @@ mod tests {
             durations,
             radii,
             ranges: None,
+            caster_level: None,
             lookup,
             mods: None,
             unmodified_points: false,
@@ -971,6 +988,52 @@ mod tests {
                 "{description}"
             );
         }
+    }
+
+    #[test]
+    fn effect_tokens_use_capped_caster_level_from_real_spells() {
+        let data = crate::wow_data_or_skip!();
+        let mut chain = crate::open_chain(&data).expect("open chain");
+        let spells = crate::load_spell_catalog(&mut chain).expect("Spell.dbc");
+        let durations = SpellDurationCatalog::default();
+        let radii = SpellRadiusCatalog::default();
+        let lookup = |id| spells.get(id);
+        for (level, expected) in [(1, "15"), (11, "20"), (60, "20")] {
+            let c = TokenContext {
+                caster_level: Some(level),
+                ..ctx(&durations, &radii, &lookup)
+            };
+            assert_eq!(substitute("$s1", spells.get(6673).unwrap(), &c), expected);
+        }
+        let c = TokenContext {
+            caster_level: Some(60),
+            ..ctx(&durations, &radii, &lookup)
+        };
+        assert_eq!(substitute("$s1", spells.get(17).unwrap(), &c), "48");
+        assert_eq!(substitute("$s1", spells.get(133).unwrap(), &c), "<16..25>");
+    }
+
+    #[test]
+    fn dice_per_level_reaches_spread_and_overtime_tokens() {
+        let mut durations = SpellDurationCatalog::default();
+        durations.insert_for_tests(1, 9_000);
+        let radii = SpellRadiusCatalog::default();
+        let spell = SpellDisplay {
+            base_level: 1,
+            max_level: 3,
+            duration_index: 1,
+            effect_base_points: [10, 0, 0],
+            effect_base_dice: [1, 0, 0],
+            effect_die_sides: [3, 0, 0],
+            effect_dice_per_level: [1, 0, 0],
+            effect_amplitude: [3_000, 0, 0],
+            ..Default::default()
+        };
+        let c = TokenContext {
+            caster_level: Some(3),
+            ..ctx(&durations, &radii, &none_lookup)
+        };
+        assert_eq!(substitute("$s1; $o1", &spell, &c), "<13..19>; <39..57>");
     }
 
     #[test]
