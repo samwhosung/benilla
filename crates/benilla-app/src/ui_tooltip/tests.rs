@@ -517,3 +517,87 @@ fn the_spell_feed_runs_after_the_trainer_feed() {
         feed_spell_tooltips
     ));
 }
+
+/// The hover pushes `"mouseover"` with the hovered guid, the pair `0x492890` writes to
+/// `0xb4e2c8`/`0xb4e2cc`: `UnitIsUnit` (`0x516070`) resolves both tokens through `0x515970` and
+/// compares guids, so hovering the target answers 1 and hovering anyone else nil.
+#[test]
+fn the_mouseover_token_carries_the_hovered_guid() {
+    use benilla_protocol::ObjectFields;
+    use bevy::ecs::system::RunSystemOnce;
+
+    const ME: u64 = 0x77;
+    const WOLF: u64 = 0xF130_0000_4500_0001;
+    const BOAR: u64 = 0xF130_0000_4600_0002;
+
+    let mut app = App::new();
+    let (tx, _rx) = crossbeam_channel::unbounded();
+    app.insert_resource(NetCommands(tx))
+        .insert_resource(crate::ui_script::UiScaleCvar(1.0))
+        .init_resource::<Hovered>()
+        .init_resource::<HoveredObject>()
+        .init_resource::<NameCache>()
+        .init_resource::<crate::net::Reputations>()
+        .init_resource::<crate::net::GuidIndex>()
+        .init_resource::<crate::go_templates::GameObjectTemplates>()
+        .init_resource::<Items>()
+        .init_resource::<PlayerActions>();
+    app.world_mut()
+        .spawn((SelfPlayer, ObjectStore(ObjectFields::default())));
+    let wolf = app
+        .world_mut()
+        .spawn(ObjectStore(ObjectFields::default()))
+        .id();
+    let boar = app
+        .world_mut()
+        .spawn(ObjectStore(ObjectFields::default()))
+        .id();
+
+    // `"player"` and `"target"` as the unit feed pushes them, each with its guid.
+    let mut script = UiScript::new().unwrap();
+    for (token, guid) in [("player", ME), ("target", WOLF)] {
+        script.set_unit(
+            token,
+            Some(UnitState {
+                exists: true,
+                has_object: true,
+                guid,
+                ..Default::default()
+            }),
+        );
+    }
+    app.insert_non_send_resource(script);
+
+    let hover = |app: &mut App, entity: Entity, guid: u64| {
+        *app.world_mut().resource_mut::<Hovered>() = Hovered {
+            target: Some(entity),
+            guid: Some(guid),
+            ..Default::default()
+        };
+        app.world_mut()
+            .run_system_once(drive_mouseover_tooltip)
+            .unwrap();
+    };
+    let is_unit = |app: &mut App, other: &str| -> Option<i64> {
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .eval::<Option<i64>>(&format!(r#"return UnitIsUnit("mouseover", "{other}")"#))
+            .unwrap()
+    };
+
+    hover(&mut app, wolf, WOLF);
+    assert_eq!(is_unit(&mut app, "target"), Some(1), "hovering the target");
+    assert_eq!(is_unit(&mut app, "player"), None, "the target is not us");
+
+    hover(&mut app, boar, BOAR);
+    assert_eq!(
+        is_unit(&mut app, "target"),
+        None,
+        "another unit is not the target"
+    );
+    assert_eq!(
+        is_unit(&mut app, "mouseover"),
+        Some(1),
+        "the token is itself"
+    );
+}

@@ -628,7 +628,9 @@ fn drive_mouseover_tooltip(
             .resolve_unit(guid, Some(store), &commands)
             .map(str::to_string);
         let reaction = unit_reaction(rx.factions.as_deref(), &rx.reputations, store, self_store);
-        let mut s = snapshot(store, name, reaction, chr);
+        // The hovered guid, the pair `0x492890` writes to `0xb4e2c8`/`0xb4e2cc` and the token
+        // resolver `0x515970` reads for `"mouseover"`, so `UnitIsUnit` can match it.
+        let mut s = snapshot(store, guid, name, reaction, chr);
         enrich_unit(
             &mut s,
             guid,

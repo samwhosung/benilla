@@ -770,10 +770,12 @@ pub(crate) fn unit_reaction(
     ring_reaction(factions, reputations, Some(store), self_store) + 1
 }
 
-/// Build a unit snapshot from a streamed descriptor, its cached name and its `UnitReaction`
-/// (`1..=7`, or `0` where none is resolved, as for `"player"`); `classes` feeds the relic column.
+/// Build a unit snapshot from a streamed descriptor, its guid, its cached name and its
+/// `UnitReaction` (`1..=7`, or `0` where none is resolved, as for `"player"`); `classes` feeds the
+/// relic column.
 pub(crate) fn snapshot(
     store: &ObjectStore,
+    guid: u64,
     name: Option<String>,
     reaction: u8,
     classes: Option<&ChrClasses>,
@@ -786,6 +788,8 @@ pub(crate) fn snapshot(
         exists: true,
         // A live descriptor is `0x468460` having succeeded, all of `UnitIsVisible` (`0x516030`).
         has_object: true,
+        // What the token resolver `0x515970` yields, and `UnitIsUnit` (`0x516070`) compares.
+        guid,
         name,
         // The UI getters: `UNIT_DYNFLAG_DEAD` (feign death) zeroes `UnitHealth` (`0x5174d0`) and
         // `UnitMana` (`0x517670`) but not the maxima, so its edge fires the reference's pair
@@ -1187,12 +1191,11 @@ fn feed_units(
         let name = names
             .resolve_unit(guid.0, Some(store), &commands)
             .map(str::to_string);
-        let mut s = snapshot(store, name, 0, chr);
+        let mut s = snapshot(store, guid.0, name, 0, chr);
         s.is_player = true;
         // Every token pushed here is streamed, so connected; real link-death rides only the group
         // roster's status byte, which the party feed reads for its own tokens.
         s.is_connected = true;
-        s.guid = guid.0;
         s.raid_target = group.raid_target_index(guid.0);
         s.faction_group = faction_group(store, factions.as_deref());
         s.faction_group_localized = faction_group_localized(store, factions.as_deref());
@@ -1226,8 +1229,7 @@ fn feed_units(
             store,
             self_pair.map(|(s, _)| s),
         );
-        let mut s = snapshot(store, name, reaction, chr);
-        s.guid = guid;
+        let mut s = snapshot(store, guid, name, reaction, chr);
         s.is_connected = true;
         s.raid_target = group.raid_target_index(guid);
         s.faction_group = faction_group(store, factions.as_deref());
@@ -1270,8 +1272,7 @@ fn feed_units(
                 store,
                 self_pair.map(|(s, _)| s),
             );
-            let mut s = snapshot(store, name, reaction, chr);
-            s.guid = guid;
+            let mut s = snapshot(store, guid, name, reaction, chr);
             s.is_connected = true;
             s.raid_target = group.raid_target_index(guid);
             s.faction_group = faction_group(store, factions.as_deref());
@@ -1338,8 +1339,7 @@ fn feed_units(
                 store,
                 self_pair.map(|(s, _)| s),
             );
-            let mut s = snapshot(store, name, reaction, chr);
-            s.guid = guid;
+            let mut s = snapshot(store, guid, name, reaction, chr);
             s.is_connected = true;
             s.raid_target = group.raid_target_index(guid);
             s.faction_group = faction_group(store, factions.as_deref());
@@ -1642,6 +1642,7 @@ mod tests {
         let team = |fields: &[(u16, u32)]| {
             snapshot(
                 &ObjectStore(ObjectFields::from_pairs(fields)),
+                0,
                 None,
                 0,
                 None,
@@ -2307,6 +2308,7 @@ mod tests {
         ];
         let alive = snapshot(
             &ObjectStore(ObjectFields::from_pairs(&vitals)),
+            0,
             Some("Hunter".into()),
             0,
             None,
@@ -2319,6 +2321,7 @@ mod tests {
             &ObjectStore(ObjectFields::from_pairs(
                 &[vitals.as_slice(), &[(DYNFLAGS, 0x20)]].concat(),
             )),
+            0,
             Some("Hunter".into()),
             0,
             None,

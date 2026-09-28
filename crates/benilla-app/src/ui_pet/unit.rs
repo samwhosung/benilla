@@ -81,9 +81,7 @@ pub(super) fn feed_pet_unit(
                 .resolve_unit(pet_guid, Some(store), &commands)
                 .map(str::to_string);
             // No `ChrClasses.dbc`: the reference reads a class only for TYPEMASK_PLAYER.
-            let mut s = snapshot(store, name, 0, None);
-            s.guid = pet_guid;
-            s
+            snapshot(store, pet_guid, name, 0, None)
         });
 
     let dirty = match (&fresh, &memory.pushed) {
