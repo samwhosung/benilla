@@ -102,39 +102,25 @@ impl UnitGuids {
         }
         let (guid, rest) = if let Some((base, len)) = base_of(bytes) {
             let rest = &bytes[len..];
-            let at = |table: &[u64], rest: &[u8]| {
+            // The indexed bases: the table's row for the parsed number, and what follows it.
+            let at = |table: &[u64]| {
                 let (i, digits) = index_of(rest);
-                let g = usize::try_from(i)
-                    .ok()
-                    .and_then(|i| table.get(i))
-                    .copied()
-                    .unwrap_or(0);
-                (g, digits)
+                let row = usize::try_from(i).ok().and_then(|i| table.get(i));
+                (row.copied().unwrap_or(0), &rest[digits..])
             };
             match base {
                 Base::Player => (self.player, rest),
                 Base::Pet if self.player == 0 => return Ok(None),
                 Base::Pet => (self.pet, rest),
                 Base::Target => (self.target, rest),
-                // `0x4e81d0` has no bound and reads past its four-entry table; past it, nobody.
-                Base::PartyPet => {
-                    let (g, d) = at(&self.party_pets, rest);
-                    (g, &rest[d..])
-                }
+                // Deviation: `0x4e81d0` has no bound and reads past its four-entry table, which
+                // is stale memory, not a mechanism; past it, nobody.
+                Base::PartyPet => at(&self.party_pets),
                 // Capped at 4 (`0x4e81b0`).
-                Base::Party => {
-                    let (g, d) = at(&self.party, rest);
-                    (g, &rest[d..])
-                }
+                Base::Party => at(&self.party),
                 // Capped at the roster count (`0x491940`, `0x491960`).
-                Base::RaidPet => {
-                    let (g, d) = at(&self.raid_pets, rest);
-                    (g, &rest[d..])
-                }
-                Base::Raid => {
-                    let (g, d) = at(&self.raid, rest);
-                    (g, &rest[d..])
-                }
+                Base::RaidPet => at(&self.raid_pets),
+                Base::Raid => at(&self.raid),
                 Base::Mouseover if !self.held.contains_key(&self.mouseover) => return Ok(None),
                 Base::Mouseover => (self.mouseover, rest),
             }
