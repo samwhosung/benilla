@@ -147,13 +147,6 @@ fn clear_compose(model: &mut Model) -> Option<(String, Vec<super::ScriptValue>)>
     lock
 }
 
-/// `0x4acdc0(1)`'s three events, after the clears.
-const COMPOSE_RESET_EVENTS: [&str; 3] = [
-    "SEND_MAIL_MONEY_CHANGED", // 0x4ace14
-    "SEND_MAIL_COD_CHANGED",   // 0x4ace1e
-    "MAIL_SEND_SUCCESS",       // 0x4ace28
-];
-
 impl super::UiScript {
     /// Push (or clear, with `None`) the open mailbox's inbox snapshot.
     pub fn set_mail(&mut self, state: Option<MailState>) {
@@ -230,9 +223,10 @@ impl super::UiScript {
         if let Some((event, args)) = lock {
             self.fire_event(&event, args);
         }
-        for event in COMPOSE_RESET_EVENTS {
-            self.fire_event(event, Vec::new());
-        }
+        // One literal call each, as the event census (`ui_script::reference_ui`) reads them.
+        self.fire_event("SEND_MAIL_MONEY_CHANGED", Vec::new()); // 0x4ace14
+        self.fire_event("SEND_MAIL_COD_CHANGED", Vec::new()); // 0x4ace1e
+        self.fire_event("MAIL_SEND_SUCCESS", Vec::new()); // 0x4ace28
     }
 
     /// The close core's silent reset (`0x4acdc0(0)`, from `0x4acd50`): the same clears, and only
@@ -747,7 +741,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let lock = clear_compose(&mut model);
             model.pending_events.extend(lock);
-            for event in COMPOSE_RESET_EVENTS {
+            for event in [
+                "SEND_MAIL_MONEY_CHANGED",
+                "SEND_MAIL_COD_CHANGED",
+                "MAIL_SEND_SUCCESS",
+            ] {
                 model.pending_events.push((event.to_string(), Vec::new()));
             }
             Ok(MultiValue::new())
