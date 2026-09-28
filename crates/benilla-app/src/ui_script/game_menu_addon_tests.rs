@@ -92,24 +92,19 @@ fn assert_a_clean_ladder(s: &UiScript) -> Vec<String> {
     names
 }
 
-/// ShaguTweaks' `config.lua:313-324`, verbatim, with the two locals it closes over.
+/// ShaguTweaks' insert (`config.lua:313-324`), restated in its own calls: narrow and deepen the
+/// menu, hang a new rung under Interface Options, then hang Key Bindings under the new rung.
 const SHAGU_ADVANCED_OPTIONS: &str = r#"
-local T = setmetatable({}, { __index = function(_, k) return k end })
-local settings = CreateFrame("Frame", nil, UIParent)
-settings:Hide()
-
+local panel = CreateFrame("Frame", nil, UIParent)
+panel:Hide()
 GameMenuFrame:SetWidth(GameMenuFrame:GetWidth() - 10)
 GameMenuFrame:SetHeight(GameMenuFrame:GetHeight() + 10)
-local advanced = CreateFrame("Button", "GameMenuButtonAdvancedOptions", GameMenuFrame, "GameMenuButtonTemplate")
-advanced:SetPoint("TOP", GameMenuButtonUIOptions, "BOTTOM", 0, -1)
-advanced:SetText(T["Advanced Options"] .. "|cffffff00*")
-advanced:SetScript("OnClick", function()
-  HideUIPanel(GameMenuFrame)
-  settings:Show()
-end)
-
+local rung = CreateFrame("Button", "GameMenuButtonAdvancedOptions", GameMenuFrame, "GameMenuButtonTemplate")
+rung:SetPoint("TOP", GameMenuButtonUIOptions, "BOTTOM", 0, -1)
+rung:SetText("Advanced Options")
+rung:SetScript("OnClick", function() HideUIPanel(GameMenuFrame); panel:Show() end)
 GameMenuButtonKeybindings:ClearAllPoints()
-GameMenuButtonKeybindings:SetPoint("TOP", advanced, "BOTTOM", 0, -1)
+GameMenuButtonKeybindings:SetPoint("TOP", rung, "BOTTOM", 0, -1)
 "#;
 
 fn shagu(root: &Path) {
