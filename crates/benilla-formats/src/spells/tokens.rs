@@ -139,14 +139,14 @@ fn trim_float(v: f64) -> String {
     }
 }
 
-/// Scaled effect points keep their fraction. Spell.dbc's Improved Frostbolt uses
-/// `$/1000;S1` to print 100..500 ms as 0.1..0.5 sec.
+/// The 1.12 token formatter (`0x507b7d`) prints fractional points with `%.1f`, while exact
+/// integers take its integer arm. Improved Frostbolt's `$/1000;S1` remains 0.1..0.5 sec.
 fn scaled_effect_text(value: i64, scale: f64) -> (String, f64) {
     if scale == 1.0 {
         (value.to_string(), value as f64)
     } else {
         let scaled = value as f64 * scale;
-        (scaled.to_string(), scaled)
+        (trim_float(scaled), scaled)
     }
 }
 
@@ -592,6 +592,42 @@ mod tests {
                 substitute("$/1000;m1 sec.", &d, &c),
                 format!("{expected} sec.")
             );
+        }
+    }
+
+    #[test]
+    fn scaled_effect_points_round_damage_to_tenths() {
+        let durations = SpellDurationCatalog::default();
+        let radii = SpellRadiusCatalog::default();
+        let c = ctx(&durations, &radii, &none_lookup);
+        let d = SpellDisplay {
+            effect_base_points: [325, 0, 0],
+            effect_base_dice: [1, 0, 0],
+            effect_die_sides: [1, 0, 0],
+            ..Default::default()
+        };
+        assert_eq!(
+            substitute("$/77;m1 to $*0.04;M1 additional Fire damage", &d, &c),
+            "4.2 to 13.0 additional Fire damage"
+        );
+    }
+
+    #[test]
+    fn scaled_damage_tokens_from_real_spell_data() {
+        let data = crate::wow_data_or_skip!();
+        let mut chain = crate::open_chain(&data).expect("open chain");
+        let spells = crate::load_spell_catalog(&mut chain).expect("Spell.dbc");
+        let durations = crate::load_spell_durations(&mut chain).expect("SpellDuration.dbc");
+        let radii = SpellRadiusCatalog::default();
+        let lookup = |id| spells.get(id);
+        let c = ctx(&durations, &radii, &lookup);
+        for (id, expected) in [
+            (8024, "4.2 to 13.0 additional Fire damage"),
+            (20154, "1.2 to 4.3 Holy damage"),
+        ] {
+            let d = spells.get(id).expect("spell");
+            let description = substitute(d.description.as_deref().unwrap(), d, &c);
+            assert!(description.contains(expected), "{id}: {description}");
         }
     }
 
