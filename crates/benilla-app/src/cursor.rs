@@ -483,7 +483,7 @@ mod macos {
         }
         // A cinematic hides the pointer too (`0x58b590`); `CursorOptions.visible` is inert here, so
         // it joins the look's hide/unhide pair, keeping AppKit's hide counter balanced.
-        let looking = rig.is_looking() || cinematic.is_some_and(|c| c.is_playing());
+        let looking = rig.holds_cursor() || cinematic.is_some_and(|c| c.is_playing());
         let stem = mode.0.stem();
         // The key names the chosen cursor, so `NSCursor::set`, a WindowServer round-trip that can
         // stall the main thread for milliseconds, fires only on a change or a drift.

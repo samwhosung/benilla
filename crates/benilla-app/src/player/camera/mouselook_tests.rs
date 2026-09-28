@@ -3,7 +3,6 @@
 
 use benilla_ui::script::UiScript;
 use bevy::ecs::system::RunSystemOnce;
-use bevy::input::keyboard::KeyboardFocusLost;
 use bevy::math::DVec2;
 
 use super::super::camera_dynamics::{CameraOptions, SubjectState};
@@ -27,6 +26,7 @@ fn look_frame(
     mut hand: ResMut<Hand>,
 ) {
     let (mut window, mut opts) = window.into_inner();
+    let focused = window.focused;
     let mut cam = cam.into_inner();
     let hand = &mut *hand;
     let both = rig.world_mouse.both();
@@ -55,6 +55,7 @@ fn look_frame(
         LookConfig::default(),
         &dynamics,
         0.0,
+        focused,
     );
 }
 
@@ -68,7 +69,6 @@ fn world(over_ui: bool) -> World {
     world.init_resource::<Hand>();
     world.init_resource::<Messages<WorldClick>>();
     world.init_resource::<Messages<WorldRightClick>>();
-    world.init_resource::<Messages<KeyboardFocusLost>>();
     world.spawn((
         Camera::default(),
         FlyCam {
@@ -91,7 +91,24 @@ fn frame(world: &mut World, dx: f32) {
     world.run_system_once(latch_world_mouse).unwrap();
     world.run_system_once(look_frame).unwrap();
     world.resource_mut::<ButtonInput<MouseButton>>().clear();
-    world.resource_mut::<Messages<KeyboardFocusLost>>().clear();
+}
+
+/// The OS gives the window focus or takes it.
+fn focus(world: &mut World, focused: bool) {
+    world
+        .query::<&mut Window>()
+        .single_mut(world)
+        .unwrap()
+        .focused = focused;
+}
+
+/// Where the OS pointer is, in logical window pixels.
+fn pointer(world: &mut World) -> Option<Vec2> {
+    world
+        .query::<&Window>()
+        .single(world)
+        .unwrap()
+        .cursor_position()
 }
 
 fn lua(world: &mut World, chunk: &str) {
@@ -208,42 +225,99 @@ fn the_right_release_ends_a_mouselook_its_press_started_on_the_ui() {
     );
 }
 
-/// The loading cover's world enter clears the whole word (`0x5144c0`), and a lost focus ends a
-/// scripted session (a deviation), while a right drag keeps waiting for its release.
+/// The loading cover's world enter clears the whole word (`0x5144c0`).
 #[test]
-fn the_cover_and_a_lost_focus_end_a_scripted_mouselook() {
+fn the_cover_ends_a_scripted_mouselook() {
     let mut w = world(false);
     lua(&mut w, "MouselookStart()");
     frame(&mut w, 0.0);
     w.insert_resource(crate::loading_screen::LoadingScreen::test_covering());
     frame(&mut w, 0.0);
+    assert_eq!(w.resource::<CameraControl>().look, None);
+    assert!(!is_mouselooking(&w));
+}
+
+/// A session across a focus loss: the look state stays as the deactivate leaves it (`0x514490`
+/// keeps the mouse bits), the OS cursor is free and shown meanwhile and the mouse turns nothing,
+/// and the focus takes it back locked and hidden, with no jolt on the frame it returns.
+fn a_session_survives_focus_loss(start: impl Fn(&mut World)) {
+    let mut w = world(false);
+    start(&mut w);
+    frame(&mut w, 40.0);
+    assert_eq!(w.resource::<CameraControl>().look, Some(LookButton::Right));
+    let before = yaw(&mut w);
+
+    focus(&mut w, false);
+    frame(&mut w, 40.0);
     assert_eq!(
         w.resource::<CameraControl>().look,
-        None,
-        "the cover ends it"
+        Some(LookButton::Right),
+        "the session outlives the focus"
     );
-    assert!(!is_mouselooking(&w));
+    assert!(is_mouselooking(&w));
+    let c = cursor(&mut w);
+    assert_eq!(c.grab_mode, CursorGrabMode::None, "the OS pointer is free");
+    assert!(c.visible);
+    assert!(!w.resource::<CameraControl>().holds_cursor());
+    assert_eq!(
+        yaw(&mut w),
+        before,
+        "the pointer in another app turns nothing"
+    );
 
+    focus(&mut w, true);
+    frame(&mut w, 40.0);
+    let c = cursor(&mut w);
+    assert_eq!(c.grab_mode, CursorGrabMode::Locked);
+    assert!(!c.visible);
+    assert!(w.resource::<CameraControl>().holds_cursor());
+    assert_eq!(
+        yaw(&mut w),
+        before,
+        "the returning frame's travel is not a turn"
+    );
+    frame(&mut w, 40.0);
+    assert!(yaw(&mut w) < before, "and the mouse turns the view again");
+    assert!(is_mouselooking(&w));
+}
+
+#[test]
+fn a_scripted_mouselook_survives_focus_loss() {
+    a_session_survives_focus_loss(|w| lua(w, "MouselookStart()"));
+}
+
+#[test]
+fn a_right_drag_survives_focus_loss() {
+    a_session_survives_focus_loss(|w| press(w, MouseButton::Right));
+}
+
+/// `MouselookStop` while unfocused ends the session; the pointer stays where the player left it
+/// in the other app, and the focus coming back takes nothing.
+#[test]
+fn mouselook_stop_while_unfocused_ends_it_and_the_focus_takes_nothing_back() {
     let mut w = world(false);
     lua(&mut w, "MouselookStart()");
     frame(&mut w, 0.0);
-    w.write_message(KeyboardFocusLost);
+    focus(&mut w, false);
     frame(&mut w, 0.0);
-    assert_eq!(
-        w.resource::<CameraControl>().look,
-        None,
-        "focus loss ends it"
-    );
-    assert!(!is_mouselooking(&w));
+    let away = Vec2::new(300.0, 250.0);
+    w.query::<&mut Window>()
+        .single_mut(&mut w)
+        .unwrap()
+        .set_cursor_position(Some(away));
 
-    // The control: the right button's own session is untouched by the focus loss.
-    let mut w = world(false);
-    press(&mut w, MouseButton::Right);
+    lua(&mut w, "MouselookStop()");
     frame(&mut w, 0.0);
-    w.write_message(KeyboardFocusLost);
+    assert_eq!(w.resource::<CameraControl>().look, None);
+    assert!(!is_mouselooking(&w));
+    assert_eq!(pointer(&mut w), Some(away), "no warp back to the stash");
+
+    focus(&mut w, true);
     frame(&mut w, 0.0);
-    assert_eq!(w.resource::<CameraControl>().look, Some(LookButton::Right));
-    assert!(is_mouselooking(&w));
+    let c = cursor(&mut w);
+    assert_eq!(c.grab_mode, CursorGrabMode::None);
+    assert!(c.visible);
+    assert!(!w.resource::<CameraControl>().is_looking());
 }
 
 /// One bit, whoever set it: `MouselookStop` ends a right drag in flight and disarms its click, so

@@ -545,6 +545,8 @@ pub(crate) struct CameraControl {
     pub(super) world_mouse: WorldMouse,
     /// Logical cursor position captured when look began, to restore on release.
     pub(super) cursor_stash: Option<Vec2>,
+    /// A look session is running with the OS cursor handed back: the window is unfocused.
+    pub(super) cursor_released: bool,
     /// The self-avatar's alpha from the camera-to-pivot distance, 1 in third person to 0 in first
     /// (`self_model_fade_alpha`); applied by [`apply_self_model_fade`].
     pub(super) self_fade_alpha: f32,
@@ -573,9 +575,14 @@ impl CameraControl {
         self.target_distance = d;
     }
 
-    /// True while a mouse-look drag is active (right- or left-button). The cursor is hidden then.
+    /// True while a mouse-look drag is active (right- or left-button).
     pub(crate) fn is_looking(&self) -> bool {
         self.look.is_some()
+    }
+
+    /// True while a look session holds the OS cursor, hidden and locked: looking, and focused.
+    pub(crate) fn holds_cursor(&self) -> bool {
+        self.look.is_some() && !self.cursor_released
     }
 
     /// The self-avatar's render alpha this frame. The blob shadow multiplies it in, as the
@@ -703,14 +710,12 @@ pub(super) fn latch_world_mouse(
     cameras: Query<&Camera, With<FlyCam>>,
     window: Single<&Window, With<PrimaryWindow>>,
     mut script: Option<NonSendMut<benilla_ui::script::UiScript>>,
-    mut focus_lost: MessageReader<bevy::input::keyboard::KeyboardFocusLost>,
     cover: Option<Res<crate::loading_screen::LoadingScreen>>,
 ) {
     let calls = script
         .as_mut()
         .map(|s| s.take_mouselook_calls())
         .unwrap_or_default();
-    let focus_lost = focus_lost.read().count() > 0;
     let Ok(camera) = cameras.single() else {
         return;
     };
@@ -729,11 +734,9 @@ pub(super) fn latch_world_mouse(
         wm.scripted = false;
     }
     // The world enter behind the cover clears the whole word (`0x5144c0` → `0x514b70(-1, …)`).
-    // Deviation: a window deactivate ends a scripted channel, where the reference keeps bit `0x1`
-    // (`0x5144a3 and eax,0xfffff00f`), because its session holds the OS pointer locked in the
-    // other app and no release is coming to end it. A button-held channel still waits for its
-    // release, as the reference's does.
-    if focus_lost || cover.is_some_and(|c| c.covering()) {
+    // A window deactivate clears none of it (`0x5144a3 and eax,0xfffff00f` keeps the low bits):
+    // the session outlives the focus, and only the OS cursor goes back ([`sync_look_focus`]).
+    if cover.is_some_and(|c| c.covering()) {
         wm.scripted = false;
     }
     // `IsMouselooking` (`0x514270`) reads `[InputControl+4] & 1`, the TurnOrAction channel.
@@ -809,7 +812,16 @@ pub(super) fn run_look_session(
     dynamics: &DynamicsInput,
     // Seconds on the app clock, for the press predicate's two time gates.
     now: f32,
+    // The primary window has the OS focus.
+    focused: bool,
 ) {
+    // The mouse moves the view only through a held cursor: motion while unfocused, or on the frame
+    // that takes the cursor back, is the pointer travelling in another app.
+    let motion = if sync_look_focus(rig, focused, window, cursor_opts) {
+        mouse_motion.delta
+    } else {
+        Vec2::ZERO
+    };
     // A chord is a both-button run, never a select: the reference kills the pending click and arms
     // none while another primary's binding is held (`0x514ac1`, `0x51481a`). A `MouselookStart` or
     // `Stop` disarms it too, ahead of the channel's move (`0x514810(0)` stores mode 0 unguarded,
@@ -822,8 +834,8 @@ pub(super) fn run_look_session(
     // Both tests accumulate the rotation the press asked for, charged before the pitch clamp: the
     // reference accumulates raw motion, so a drag pinned at the pitch limit still spends budget.
     let (yaw_rate, pitch_rate) = (look_cfg.yaw_rate(), look_cfg.pitch_rate());
-    let dyaw = (mouse_motion.delta.x * yaw_rate).abs();
-    let dpitch = (mouse_motion.delta.y * pitch_rate).abs();
+    let dyaw = (motion.x * yaw_rate).abs();
+    let dpitch = (motion.y * pitch_rate).abs();
     for test in [&mut *left_click, &mut *right_click].into_iter().flatten() {
         test.yaw_travel += dyaw;
         test.pitch_travel += dpitch;
@@ -859,30 +871,24 @@ pub(super) fn run_look_session(
             if rig.world_mouse.channel(other) {
                 rig.look = Some(other);
             } else {
-                rig.look = None;
-                cursor_opts.grab_mode = CursorGrabMode::None;
-                // Show the cursor again; on macOS hiding is the cursor subsystem's job.
-                cursor_opts.visible = true;
-                if let Some(pos) = rig.cursor_stash.take() {
-                    window.set_cursor_position(Some(pos));
-                }
+                disengage_look(rig, window, cursor_opts);
             }
         }
     } else {
         // `WorldMouse` has already dropped a press over the UI, the dev overlay or outside the
         // viewport. Right-drag turns, and arms its click test unless left is held.
         if rig.world_mouse.down(LookButton::Right) {
-            engage_look(rig, LookButton::Right, window, cursor_opts);
+            engage_look(rig, LookButton::Right, focused, window, cursor_opts);
             *right_click = (!rig.world_mouse.held(LookButton::Left) && !disarmed)
                 .then(|| PressGesture::new(now));
         } else if rig.world_mouse.turn() {
             // `MouselookStart` with no button: the channel's rise enters the same freelook
             // (`0x514840` → `0x51491f`), and no click is armed (`0x514810(0)`).
-            engage_look(rig, LookButton::Right, window, cursor_opts);
+            engage_look(rig, LookButton::Right, focused, window, cursor_opts);
         } else if rig.world_mouse.down(LookButton::Left) && !inspect_enabled {
             // Left-drag orbits, engaged on the press like right (`0x51491f`); the select settles
             // at the release. While the inspector is armed, left belongs to it.
-            engage_look(rig, LookButton::Left, window, cursor_opts);
+            engage_look(rig, LookButton::Left, focused, window, cursor_opts);
             // A cursor-payload world drop still orbits (`0x51491f`) but must not also select.
             *right_click = None;
             *left_click = (!click_consumed && !rig.world_mouse.turn() && !disarmed)
@@ -892,7 +898,7 @@ pub(super) fn run_look_session(
 
     // Look rotation; a right-drag also turns the character.
     if let Some(active) = rig.look {
-        let delta = mouse_motion.delta;
+        let delta = motion;
         let d_yaw = -delta.x * yaw_rate;
         cam.yaw += d_yaw;
         // `mouseInvertPitch` flips only the pitch axis.
@@ -923,17 +929,79 @@ pub(super) fn run_look_session(
     rig.freelook = rig.look == Some(LookButton::Right) || (rig.look.is_some() && both_buttons);
 }
 
-/// Start `button`'s look session: stash the cursor, then lock and hide it until the session ends.
+/// Start `button`'s look session: stash the cursor, then lock and hide it until the session ends,
+/// or leave it free while the window is unfocused ([`sync_look_focus`]).
 fn engage_look(
     rig: &mut CameraControl,
     button: LookButton,
+    focused: bool,
     window: &Window,
     cursor_opts: &mut CursorOptions,
 ) {
     rig.look = Some(button);
+    if focused {
+        take_cursor(rig, window, cursor_opts);
+    } else {
+        rig.cursor_released = true;
+    }
+}
+
+/// End the look session: free and show the cursor, and put it back where the look began unless
+/// it was already free, when it is wherever the player left it.
+fn disengage_look(rig: &mut CameraControl, window: &mut Window, cursor_opts: &mut CursorOptions) {
+    rig.look = None;
+    let stash = rig.cursor_stash.take();
+    if !std::mem::take(&mut rig.cursor_released) {
+        release_cursor(cursor_opts);
+        if let Some(pos) = stash {
+            window.set_cursor_position(Some(pos));
+        }
+    }
+}
+
+/// Stash the cursor, then lock and hide it for the session.
+fn take_cursor(rig: &mut CameraControl, window: &Window, cursor_opts: &mut CursorOptions) {
     rig.cursor_stash = window.cursor_position();
     cursor_opts.grab_mode = CursorGrabMode::Locked;
     cursor_opts.visible = false;
+}
+
+/// Unlock and show the cursor; on macOS hiding is the cursor subsystem's job.
+fn release_cursor(cursor_opts: &mut CursorOptions) {
+    cursor_opts.grab_mode = CursorGrabMode::None;
+    cursor_opts.visible = true;
+}
+
+/// Hand the OS cursor back while the window is unfocused and take it again on focus, without
+/// touching the session: the look state outlives a deactivate (`0x514490` keeps the mouse bits).
+/// Platform behaviour, not a reference fact. On macOS winit's `Locked` is the global
+/// `CGAssociateMouseAndMouseCursorPosition(false)`, and losing key status (`windowDidResignKey`)
+/// leaves it, so a lock held while unfocused freezes the pointer in every other app; 1.12.1's
+/// Windows client gives the cursor back to other applications while inactive. Returns whether the
+/// session holds the cursor through this whole frame, so its motion may turn the view.
+fn sync_look_focus(
+    rig: &mut CameraControl,
+    focused: bool,
+    window: &Window,
+    cursor_opts: &mut CursorOptions,
+) -> bool {
+    if rig.look.is_none() {
+        return focused;
+    }
+    match (focused, rig.cursor_released) {
+        (false, false) => {
+            release_cursor(cursor_opts);
+            rig.cursor_released = true;
+            false
+        }
+        (true, true) => {
+            // The pointer is where the player brought it back: the release restores it there.
+            take_cursor(rig, window, cursor_opts);
+            rig.cursor_released = false;
+            false
+        }
+        (focused, _) => focused,
+    }
 }
 
 /// Seat the camera on whatever it orbits: our own body, or the far-sight subject `PLAYER_FARSIGHT`
@@ -1925,7 +1993,6 @@ mod tests {
             world.insert_resource(crate::ui_script::CursorPayloadHeld(payload_held));
             world.init_resource::<CameraControl>();
             world.init_resource::<Messages<WorldRightPress>>();
-            world.init_resource::<Messages<bevy::input::keyboard::KeyboardFocusLost>>();
             world.spawn((
                 Camera::default(),
                 FlyCam {
