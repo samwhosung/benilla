@@ -80,7 +80,7 @@ fn hermetic_addon(
     (tmp, capture, benilla_home)
 }
 
-/// The world after `Startup` ([`super::setup_script`]): a VM with only the font registry.
+/// The world after `Startup` ([`super::setup_script`]): a boot VM, no frames.
 fn booted_world() -> World {
     let mut world = World::new();
     world.init_resource::<super::AddOnIdentity>();
@@ -405,7 +405,7 @@ fn logging_out_leaves_no_in_game_frames_behind() {
         world
             .get_non_send_resource::<benilla_ui::script::UiScript>()
             .is_some(),
-        "a boot VM stays: the character screen's text still bakes off the shared font registry"
+        "a boot VM stays, for the feeds that resolve lines outside the world"
     );
 
     drop(world);

@@ -1232,16 +1232,6 @@ impl UiScript {
         self.model_ref().font_object(name).cloned()
     }
 
-    /// Every registered [`FontObject`]: the glyph atlas bakes outlined cells for the distinct
-    /// `(font, height, outline)` triples here.
-    pub fn font_objects(&self) -> Vec<FontObject> {
-        self.model_ref()
-            .font_objects_by_lower
-            .values()
-            .cloned()
-            .collect()
-    }
-
     // ── internals ────────────────────────────────────────────────────────────────────────────
 
     fn model_ref(&self) -> mlua::AppDataRef<'_, Model> {

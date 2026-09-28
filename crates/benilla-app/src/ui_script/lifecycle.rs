@@ -1,6 +1,6 @@
 //! The UI session's lifecycle, all edges and nothing per-frame: `Startup` installs a boot VM
-//! (strings, emote tokens, fonts); world entry builds a fresh VM and loads the in-game UI and
-//! every addon onto it; leaving the world runs the reference's shutdown tail and installs a boot
+//! (strings and emote tokens); world entry builds a fresh VM and loads the in-game UI and every
+//! addon onto it; leaving the world runs the reference's shutdown tail and installs a boot
 //! VM again; `ReloadUI()` is the two edges back to back without leaving the world.
 
 use bevy::prelude::*;
@@ -9,40 +9,40 @@ use benilla_assets::LockRecover;
 use benilla_ui::script::UiScript;
 
 use super::manifest::silenced_ui_load;
-use super::{
-    load_font_registry, load_ingame_ui, CursorPayloadHeld, PlayerUiHover, UiClock,
-    UiKeyboardCapture,
-};
+use super::{load_ingame_ui, CursorPayloadHeld, PlayerUiHover, UiClock, UiKeyboardCapture};
 use crate::ui_script::addons;
 
 pub(crate) fn setup_script(world: &mut World) {
     install_boot_vm(world);
 }
 
-/// Build and install a boot VM: strings, emote tokens and the font-object registry, no frames.
-/// Installed at `Startup`, at every [`end_ui_session`] and at every world entry, so no login
-/// shares a session id (and so a [`super::VmMemo`]) with the character screen before it. The
-/// registry is here because the glyph atlas bakes from it on the first `Update`; the reference
-/// re-loads `Fonts.xml` per rebuild too, as a font object dies with its session (the native
-/// `CSimpleFont` with the frame-script owner `0x7839c0`, torn down at `0x490c97`).
+/// Build and install a boot VM, the one the world holds outside an in-game UI session: the
+/// strings the feeds resolve lines from and the emote tokens `/`-commands are built from
+/// (`ui_chat::commands`), no frames and no font objects. Installed at `Startup` and at every
+/// [`end_ui_session`].
 fn install_boot_vm(world: &mut World) {
+    let Some(script) = new_vm(world) else {
+        return;
+    };
+    load_global_strings(world, &script);
+    load_emote_tokens(world, &script);
+    world.insert_non_send_resource(script);
+}
+
+/// A fresh VM on the process clock with the addon asset probes wired, or `None` (the world's VM
+/// removed) when the VM cannot start.
+fn new_vm(world: &mut World) -> Option<UiScript> {
     let mut script = match UiScript::new() {
         Ok(s) => s,
         Err(e) => {
             error!("ui_script: VM init failed: {e}");
             world.remove_non_send_resource::<UiScript>();
-            return;
+            return None;
         }
     };
     seed_vm_clock(world, &mut script);
     install_addon_asset_resolvers(world, &mut script);
-    load_global_strings(world, &script);
-    load_emote_tokens(world, &script);
-    if ui_wanted(world) {
-        // Errors are logged per file as they happen; the returned list is for the tests.
-        let _ = load_font_registry(&script);
-    }
-    world.insert_non_send_resource(script);
+    Some(script)
 }
 
 /// Start the new VM's `GetTime()` where the process already is and re-anchor [`UiClock`] to it,
@@ -146,13 +146,17 @@ pub(crate) fn arm_entry_ui_load(world: &mut World) {
 }
 
 /// Retire the glue VM and build the one the entry load runs on: the reference re-makes its Lua
-/// state inside `UI_Init` (`0x48fe97`, in `0x48fbf0`). The glue VM's CVars fold first, since the
-/// character screen can write one (the AddOns panel's out-of-date toggle) and this is the last
+/// state inside `UI_Init` (`0x48fe97`, in `0x48fbf0`), so no login shares a session id (and so a
+/// [`super::VmMemo`]) with the character screen before it. The glue VM's CVars fold first, since
+/// the character screen can write one (the AddOns panel's out-of-date toggle) and this is the last
 /// moment its table exists. Everything else is re-seeded onto the new VM or is a
-/// [`super::VmMemo`], which is meant to reset here.
+/// [`super::VmMemo`], which is meant to reset here. It starts bare: `FrameXML.toc` runs
+/// `GlobalStrings.lua` and `Fonts.xml` as its first rows, and `ChatFrame.lua` the emote tokens.
 fn mint_entry_vm(world: &mut World) {
     crate::cvars::fold_dying_vm_cvars(world);
-    install_boot_vm(world);
+    if let Some(script) = new_vm(world) {
+        world.insert_non_send_resource(script);
+    }
 }
 
 /// Put the parked boot VM back into the world, if one is parked.
@@ -558,8 +562,7 @@ pub(crate) fn shutdown_ui_state(
 /// shutdown tail, then end this session's Lua state, so no frame, global or addon upvalue reaches
 /// the next login. The reference's state outlives `0x490bd0` and is replaced twice through
 /// `0x703b80`, in `ShutdownGame` (at `0x491231`) and then in the glue build (`0x46a7b0`), so the
-/// character screen runs on a state of its own. Ours is a fresh boot VM, which also carries the
-/// font registry the shared glyph atlas needs.
+/// character screen runs on a state of its own. Ours is a fresh boot VM.
 pub(crate) fn end_ui_session(world: &mut World) {
     // A VM still parked (the load never ran) goes back into the world first.
     unpark_boot_vm(world);

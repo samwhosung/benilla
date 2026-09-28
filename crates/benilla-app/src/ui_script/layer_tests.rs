@@ -75,9 +75,9 @@ pub(super) fn production_load_with(
     // A reply that hid nothing, so `GetNumAddOns` counts the registry.
     s.note_addon_info_reply(&[]);
     s.register_cvars(crate::cvars::registered_pairs());
-    let mut failures = super::load_font_registry(&s);
     s.run(before).unwrap();
     // The layer passed in, not set through `WOW_STOCK_UI`: every test in this process reads it.
+    let mut failures = Vec::new();
     failures.extend(super::manifest::load_ingame_ui_with(
         &mut s,
         None,
@@ -127,10 +127,11 @@ fn the_layer_loads_after_every_stock_file_and_before_the_addons() {
     assert!(failures.is_empty(), "load failures: {failures:#?}");
     let log: Vec<String> = s.eval("return DEFINE_LOG").unwrap();
 
-    // The core's last row (TutorialFrame.lua), the layer's first file (ScrollTemplates.xml) and
-    // last (FrameXMLFixes.xml is all redefinitions, so ScriptLogFrame.xml), then the addon.
+    // The core's last row that defines a global (RaidWarning.xml; ClassTrainerFrameTemplates.xml
+    // declares templates alone), the layer's first file (ScrollTemplates.xml) and last
+    // (FrameXMLFixes.xml is all redefinitions, so ScriptLogFrame.xml), then the addon.
     let order = [
-        "TutorialFrame_OnHide",
+        "RaidWarningFrame_OnLoad",
         "BenillaScrollBar_Step",
         "BenillaScriptLog_Toggle",
         "ZZORDER_SAW_LAYER",

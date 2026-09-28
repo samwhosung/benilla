@@ -1,7 +1,7 @@
 //! Where interfaces come from: addon discovery under [`root`] and the load walk ([`Walk::load`]).
 //! An [`Addon`] is a name, a parsed `.toc` and the [`Source`] its files come from. The core
-//! interface and benilla's layer are two more, with the compiled-in tree as their source, but not
-//! for the lifecycle: like FrameXML they load outside `AddOn_Load`
+//! interface (the chain's own FrameXML) and benilla's layer (the compiled-in tree) are two more,
+//! but not for the lifecycle: they load outside `AddOn_Load`
 //! ([`super::manifest::load_ingame_ui`]), get no `ADDON_LOADED` and have no registry row.
 
 use std::collections::HashSet;
@@ -23,8 +23,7 @@ pub(crate) const LOAD_INSTRUCTION_BUDGET: u64 = 200_000_000;
 
 /// Where one interface's files come from.
 pub(super) enum Source {
-    /// The core's and the layer's own files: the compiled-in tree, shadowed by `assets/ui` in a
-    /// dev build.
+    /// The layer's own files: the compiled-in tree, shadowed by `assets/ui` in a dev build.
     Builtin,
     /// The AddOns root on disk, not this addon's own folder: a request under `Interface/AddOns/`
     /// maps onto it, so a dependent can reach a shared library addon beside it.
@@ -35,8 +34,8 @@ pub(super) enum Source {
 
 /// One loadable interface: a name, its parsed manifest, and where its files come from.
 pub(super) struct Addon {
-    /// The folder name (`"benilla"` for the core and the layer, which have no registry row): what
-    /// the AddOn API keys on and what `ADDON_LOADED` carries.
+    /// The folder name (`"FrameXML"` for the core and `"benilla"` for the layer, which have no
+    /// registry row): what the AddOn API keys on and what `ADDON_LOADED` carries.
     pub(super) name: String,
     /// The parsed `.toc`: the ordered file list plus every directive.
     pub(super) toc: Toc,
@@ -49,13 +48,8 @@ impl Addon {
         Addon { name, toc, source }
     }
 
-    /// The core interface, [`super::manifest::MANIFEST`], which is in the binary and so cannot
+    /// benilla's layer, [`super::manifest::LAYER_MANIFEST`], which is in the binary and so cannot
     /// be missing.
-    pub(super) fn core() -> Self {
-        Self::shipped(super::manifest::MANIFEST)
-    }
-
-    /// benilla's layer, [`super::manifest::LAYER_MANIFEST`], in the binary as the core is.
     pub(super) fn layer() -> Self {
         Self::shipped(super::manifest::LAYER_MANIFEST)
     }
@@ -119,9 +113,9 @@ impl Addon {
         self.load_files(script, &self.toc.files)
     }
 
-    /// [`Addon::load`] over an explicit slice, for the core's two-phase boot. A manifest lists
-    /// both kinds of file (the reference's `FrameXML.toc` opens with `GlobalStrings.lua`): a `.lua`
-    /// runs as a chunk in the shared state, anything else is parsed as FrameXML and materialized.
+    /// [`Addon::load`] over an explicit slice. A manifest lists both kinds of file (the
+    /// reference's `FrameXML.toc` opens with `GlobalStrings.lua`): a `.lua` runs as a chunk in the
+    /// shared state, anything else is parsed as FrameXML and materialized.
     pub(super) fn load_files(&self, script: &UiScript, files: &[String]) -> Vec<String> {
         let mut failures = Vec::new();
         // The `<Include>` / `<Script file=>` provider; `read` is the sandbox.
@@ -131,9 +125,10 @@ impl Addon {
             let path = benilla_ui::loader::join_ref(&self.prefix(), file);
             let Some(bytes) = self.read(&path) else {
                 let e = format!("{}/{file}: not found", self.name);
-                // Severity follows whose manifest is wrong. Ours (a shipped file, or a `benilla.toc`
-                // line the player's chain lacks) is an ERROR. A player's addon is the package's
-                // fault, which the reference skips silently, and an ERROR line fails `smoke.sh`.
+                // Severity follows whose manifest is wrong. Ours, or the core's (a shipped file, or
+                // a `FrameXML.toc` row the player's chain lacks), is an ERROR. A player's addon is
+                // the package's fault, which the reference skips silently, and an ERROR line fails
+                // `smoke.sh`.
                 match self.source {
                     Source::Builtin | Source::Chain => error!("ui_script: {e}"),
                     Source::Dir(_) => warn!("ui_script: {e}"),
@@ -184,7 +179,7 @@ impl Addon {
             }
             // A file the document names and the provider lacks is a `.toc` line naming no file:
             // never a script error, as the reference logs `Couldn't open %s` and carries on, but a
-            // `failures` entry, so our boot tests catch one in a `benilla.toc` document.
+            // `failures` entry, so our boot tests catch one in a core or layer document.
             for m in &report.missing_files {
                 let e = format!("{}/{file}: {m}", self.name);
                 match self.source {
@@ -1097,7 +1092,7 @@ mod tests {
     }
 
     /// Every chain row is LoadOnDemand and chain-sourced, the eight windows the interface opens
-    /// through them are rows, and `benilla.toc` lists none, like the reference's `FrameXML.toc`.
+    /// through them are rows, and the core, the chain's `FrameXML.toc`, lists none.
     #[test]
     fn the_chain_carries_blizzards_load_on_demand_addons_as_registry_rows() {
         let _data = benilla_formats::wow_data_or_skip!();
@@ -1136,12 +1131,13 @@ mod tests {
             );
         }
         assert!(
-            !Addon::core()
+            !super::super::reference_ui::core()
+                .expect("the player's FrameXML.toc")
                 .toc
                 .files
                 .iter()
                 .any(|f| f.replace('/', "\\").starts_with("Interface\\AddOns\\")),
-            "benilla.toc lists a Blizzard addon eagerly; the reference loads every one on demand"
+            "the core lists a Blizzard addon eagerly; the reference loads every one on demand"
         );
         // The glue's list is the player's folder alone.
         assert!(installed_rows()
@@ -1650,9 +1646,8 @@ mod tests {
         }];
         let mut w = Walk::default();
         let _ = w.load(&mut script, &all, "EventProbe");
-        // The core, loaded as production loads it: its own manifest, not the walk.
-        let core = Addon::core();
-        let _ = core.load_files(&script, core.toc.files.get(..1).unwrap_or_default());
+        // The core, loaded as production loads it: the chain's own toc, not the walk.
+        let _ = super::super::manifest::load_core(&script);
 
         let log = event_log(&script);
         assert!(

@@ -2058,13 +2058,13 @@ mod tests {
                 "the scan missed `{shipped}`, a host registration or a stock chain global"
             );
         }
-        // Stock ContainerFrame.lua's, sourced off the chain by `benilla.toc`.
+        // Stock ContainerFrame.lua's, a `FrameXML.toc` row off the chain.
         if benilla_formats::wow_data().is_some() {
             for sourced in ["ToggleKeyRing", "ToggleBag", "OpenAllBags"] {
                 assert!(
                     defined.contains(sourced),
                     "the chain scan missed `{sourced}` — it is defined in the reference's own \
-                     ContainerFrame.lua, which benilla.toc sources off the player's install"
+                     ContainerFrame.lua, which the core loads off the player's install"
                 );
             }
         }
@@ -2116,7 +2116,7 @@ mod tests {
 
     /// Every Lua global this client defines, read from source: host registrations
     /// (`g.set("Name", …)`), function definitions in `assets/ui`'s `<Script>` blocks, and the
-    /// stock files `benilla.toc` sources off the chain (none without an install). Deliberately
+    /// stock files the chain's `FrameXML.toc` lists (none without an install). Deliberately
     /// generous, `local function` included: a false "defined" fails loudly, a false "missing"
     /// would hide a landed mechanism.
     fn lua_globals_defined() -> std::collections::HashSet<String> {
@@ -2230,16 +2230,17 @@ mod tests {
         let Ok(mut chain) = benilla_formats::open_chain(&data) else {
             return names;
         };
-        let manifest =
-            std::fs::read_to_string(ui.join("benilla.toc")).expect("the manifest is committed");
-        for entry in manifest
+        let Ok(toc) = chain.read_file("Interface\\FrameXML\\FrameXML.toc") else {
+            return names;
+        };
+        let toc = String::from_utf8_lossy(&toc).into_owned();
+        for row in toc
             .lines()
             .map(str::trim)
             .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            // An entry with a path separator is a stock file
-            // (`ui_script::reference_ui::is_chain_entry`).
-            .filter(|l| l.contains('\\') || l.contains('/'))
         {
+            let entry = format!("Interface\\FrameXML\\{row}");
+            let entry = entry.as_str();
             let Ok(bytes) = chain.read_file(entry) else {
                 continue;
             };
