@@ -312,15 +312,8 @@ impl super::UiScript {
     pub fn set_inventory_slots(&mut self, slots: InventorySlots) {
         {
             let mut model = self.model_mut();
-            let alerts: [u8; 12] = std::array::from_fn(|i| {
-                if i == 11 {
-                    ammo_alert_status(&slots[ALERT_SLOTS[i]])
-                } else {
-                    alert_status(&slots[ALERT_SLOTS[i]])
-                }
-            });
             model.inventory_slots = slots;
-            model.inventory_alerts = alerts;
+            recompute_inventory_alerts(&mut model);
         }
         // Every recompute fires it, never diffed against the last (`0x4c7ee0`); the app pushes
         // only on a real change.
@@ -346,6 +339,19 @@ impl super::UiScript {
     pub fn take_inventory_repairs(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.model_mut().inventory_repairs)
     }
+}
+
+/// The 12 alert statuses off the doll snapshot (`0x4c7ee0`'s recompute), without the event.
+pub(super) fn recompute_inventory_alerts(model: &mut Model) {
+    let slots = &model.inventory_slots;
+    let alerts: [u8; 12] = std::array::from_fn(|i| {
+        if i == 11 {
+            ammo_alert_status(&slots[ALERT_SLOTS[i]])
+        } else {
+            alert_status(&slots[ALERT_SLOTS[i]])
+        }
+    });
+    model.inventory_alerts = alerts;
 }
 
 fn with_unit_stats<T>(
@@ -394,14 +400,28 @@ const BANK_BAG_INV_SLOTS: std::ops::RangeInclusive<usize> = 64..=69;
 /// The vault's container id; must match `ui_items::BANK_CONTAINER` in the app.
 const BANK_CONTAINER: i64 = -1;
 
+/// The keyring's live-API ids: `KeyRingButtonIDToInvSlotID` adds `0x51` to a 1-based button id
+/// (`0x4c818b`), and the slot reader takes 0-based 81..=112 (`0x4c8567`).
+pub(super) const KEYRING_INV_SLOTS: std::ops::RangeInclusive<usize> = 82..=113;
+
+/// The keyring's container id (`KEYRING_CONTAINER`, `MainMenuBarBagButtons.lua:1`); must match
+/// `ui_items::KEYRING_CONTAINER` in the app, which feeds the keys as that container.
+const KEYRING_CONTAINER: i64 = -2;
+
 impl Model {
     /// The item `token` exposes at live-API id `slot`, the one routing the `GetInventoryItem*`
     /// getters and `GameTooltip:SetInventoryItem` share. Stock paints the bank through this API
-    /// (`BankFrame.lua:35`), so the bank band is answered from the container snapshot.
+    /// (`BankFrame.lua:35`) and hovers a key through it (`ContainerFrame.lua:616-619`), so the
+    /// bank and keyring bands are answered from the container snapshots.
     pub(super) fn inv_slot(&self, token: &str, slot: usize) -> Option<InvSlotView> {
         if token.eq_ignore_ascii_case("player") {
             if let Some(view) = self.bank_inv_slot(slot) {
                 return Some(view);
+            }
+            if KEYRING_INV_SLOTS.contains(&slot) {
+                let n = (slot - KEYRING_INV_SLOTS.start() + 1) as u32;
+                let keyring = self.containers.get(&KEYRING_CONTAINER)?;
+                return keyring.slots.get(&n).map(InvSlotView::from_container_slot);
             }
             return self.inventory_slots.get(slot)?.clone();
         }
@@ -413,12 +433,16 @@ impl Model {
             .clone()
     }
 
-    /// The player's repair cost at live id `slot`, the vault band by its container slot.
+    /// The player's repair cost at live id `slot`, the vault and keyring bands by their container
+    /// slots.
     pub(super) fn inv_repair_cost(&self, slot: usize) -> u32 {
         let costs = &self.repair_costs;
         let cost = if BANK_INV_SLOTS.contains(&slot) {
             let n = (slot - BANK_INV_SLOTS.start() + 1) as u32;
             costs.bags.get(&(BANK_CONTAINER, n))
+        } else if KEYRING_INV_SLOTS.contains(&slot) {
+            let n = (slot - KEYRING_INV_SLOTS.start() + 1) as u32;
+            costs.bags.get(&(KEYRING_CONTAINER, n))
         } else {
             u32::try_from(slot)
                 .ok()
@@ -446,7 +470,7 @@ impl Model {
 /// The inventory-slot reader's whitelist (`0x4c8520`) on its 0-based slot (`0x4c8546`); outside
 /// it the binding raises "Invalid inventory slot in …". The backpack's item slots (23..=38) and
 /// buyback (69..=80) are container-API slots, not in it.
-fn inventory_slot_reader_accepts(slot0: i32) -> bool {
+pub(super) fn inventory_slot_reader_accepts(slot0: i32) -> bool {
     slot0 == -1                            // Lua 0      the ammo leg
         || (0x00..=0x16).contains(&slot0)  // Lua 1..=23   the doll + the four equipped bags
         || (0x27..=0x3e).contains(&slot0)  // Lua 40..=63  the bank vault

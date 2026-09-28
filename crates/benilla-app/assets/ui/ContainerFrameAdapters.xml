@@ -1,43 +1,10 @@
 <!--
     Adapters over the stock ContainerFrame.xml and .lua; loaded after them, so these win.
-    Deviation: our keyring is a container (id -2), not inventory slots as in the reference, so its
-    tooltip comes from `SetBagItem`; the stock fork (ContainerFrame.lua:615-620) reads the slots.
     A full keyring prints an empty error line as the reference does: `PutKeyInKeyRing` reads
     `NO_EMPTY_KEYRING_SLOTS`, which 1.12 does not ship.
 -->
 <Ui xmlns="http://www.blizzard.com/wow/ui/">
     <Script><![CDATA[
-        -- The stock body, captured before it is shadowed; nil when no client data was sourced.
-        local refItemButtonOnEnter = ContainerFrameItemButton_OnEnter
-
-        -- The stock name, redefined: the stock item buttons call it, and our keyring slot needs
-        -- the bag-slot tooltip.
-        function ContainerFrameItemButton_OnEnter(button)
-            if not button then
-                button = this
-            end
-            if not button then return end
-
-            -- The stock bag-slot path, not its inventory-slot keyring detour.
-            if button:GetParent():GetID() == KEYRING_CONTAINER then
-                if (button:GetRight() or 0) >= (GetScreenWidth() / 2) then
-                    GameTooltip:SetOwner(button, "ANCHOR_LEFT")
-                else
-                    GameTooltip:SetOwner(button, "ANCHOR_RIGHT")
-                end
-                GameTooltip:SetBagItem(KEYRING_CONTAINER, button:GetID())
-                ResetCursor()
-                return
-            end
-
-            if not refItemButtonOnEnter then
-                message("benilla: Interface\\FrameXML\\ContainerFrame.lua was not sourced from the "
-                    .. "game data, so bag-slot tooltips cannot work. Check the client data path.")
-                return
-            end
-            refItemButtonOnEnter(button)
-        end
-
         -- ══ The two bag verbs benilla answers differently ═════════════════════════════════════
         -- Deviation: `OpenBackpack` opens every equipped bag, not only the backpack, so the vendor
         -- and mailbox windows that call it (MerchantFrame.lua:35, MailFrame.lua:39) bring up every

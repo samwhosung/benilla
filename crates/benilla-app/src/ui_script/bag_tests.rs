@@ -1647,6 +1647,52 @@ fn the_keyring_button_opens_a_keyring_window() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
+/// A hovered key's tooltip comes through the stock keyring arm of `ContainerFrameItemButton_OnEnter`
+/// (`ContainerFrame.lua:616-619`): `SetInventoryItem("player", KeyRingButtonIDToInvSlotID(id))`,
+/// the key's inventory slot 82 and up, answered from the keyring container.
+#[test]
+fn a_hovered_key_shows_its_tooltip_through_its_inventory_slot() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut s = UiScript::new().unwrap();
+    s.set_screen_size(1024.0, 768.0);
+    s.set_text_measurer(Box::new(super::FixedWidthFont(6.0)));
+    keyring_surface(&s);
+    s.set_money(0);
+    s.set_has_key(true);
+    seat_player_at_level(&mut s, 44);
+    s.set_container(-2, Some(keyring(8, true)));
+    s.fire_event("BAG_UPDATE", vec![benilla_ui::script::ScriptValue::Int(-2)]);
+    s.run("KeyRingButton:Click()").unwrap();
+    assert!(open(&s, -2), "fixture: the keyring is open");
+    // Which slot the tooltip is asked for: the frame's own field shadows the method table.
+    s.run(
+        r#"local method = GameTooltip.SetInventoryItem
+           GameTooltip.SetInventoryItem = function(self, unit, slot)
+               ASKED = unit .. ":" .. slot
+               return method(self, unit, slot)
+           end"#,
+    )
+    .unwrap();
+    s.resolve();
+
+    let key = bag_slot_button(&s, -2, 1);
+    hover(&mut s, &key);
+    assert!(s.errors().is_empty(), "hover errors: {:?}", s.errors());
+    assert_eq!(
+        s.eval::<Option<String>>("return ASKED").unwrap().as_deref(),
+        Some("player:82"),
+        "the stock arm asks for key 1's inventory slot"
+    );
+    assert!(s.eval::<bool>("return GameTooltip:IsVisible()").unwrap());
+    assert_eq!(
+        s.eval::<String>("return GameTooltipTextLeft1:GetText()")
+            .unwrap(),
+        "The Scarlet Key"
+    );
+    unhover(&mut s);
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
 /// Dropping a held key on the button files it in the first free keyring slot (stock
 /// `PutKeyInKeyRing`); a full keyring refuses the drop.
 #[test]

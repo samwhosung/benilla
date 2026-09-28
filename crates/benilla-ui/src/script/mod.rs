@@ -74,6 +74,7 @@ mod surface;
 pub use surface::widget_method_census;
 mod input_verbs;
 mod inspect;
+mod inventory_verbs;
 mod item_stats;
 mod item_text;
 pub mod keybind;
@@ -567,6 +568,7 @@ impl UiScript {
         skills::install(&lua)?;
         item_stats::install(&lua)?;
         char_stats::install(&lua)?;
+        inventory_verbs::install(&lua)?;
         weapon_enchant::install(&lua)?;
         loot::install(&lua)?;
         loot_roll::install(&lua)?;

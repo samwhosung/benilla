@@ -13,7 +13,7 @@ KeyBindingsPage.xml
 OptionsFrame.xml
 # The ESC menu's era look on the stock `GameMenuFrame`, whose Options rung opens ours.
 GameMenuAdapters.xml
-# Wraps the stock bag verbs; the keyring is a container (id -2).
+# `OpenBackpack` and `CloseBackpack` over every equipped bag, for the vendor and the mailbox.
 ContainerFrameAdapters.xml
 # The pet page's autocast widgets in the pet action button's proportions.
 SpellBookAdapters.xml

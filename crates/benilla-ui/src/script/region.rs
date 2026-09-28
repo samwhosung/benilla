@@ -26,6 +26,39 @@ pub(super) fn region_handle_of(lua: &Lua, this: &Table) -> mlua::Result<RegionHa
         .ok_or_else(|| mlua::Error::runtime("stale or invalid region handle"))
 }
 
+/// Argument 1 of a global that takes a Texture as its `this` (`SetLootPortrait` `0x4c2b40`,
+/// `SetInventoryPortaitTexture` `0x4c9150`), with the member prologue's three raises: a non-table
+/// (`0x847ef8`), a table with no object at `[0]` (`0x847ec0`), and any object but a Texture, the
+/// `IsA` test against the Texture class token `[0xcf4cdc]` (`0x847e98`).
+pub(super) fn this_texture(lua: &Lua, this: &Value) -> mlua::Result<RegionHandle> {
+    let Value::Table(t) = this else {
+        return Err(mlua::Error::runtime(
+            "Attempt to find 'this' in non-table object (used '.' instead of ':' ?)",
+        ));
+    };
+    if decode_id(t).is_err() {
+        return Err(mlua::Error::runtime(
+            "Attempt to find 'this' in non-framescript object",
+        ));
+    }
+    let wrong = || mlua::Error::runtime("Wrong object type for member function");
+    let rh = region_handle_of(lua, t).map_err(|_| wrong())?;
+    let model = lua.app_data_ref::<Model>().expect("model app_data");
+    if model.arena.region(rh).map(|r| r.kind) != Some(RegionKind::Texture) {
+        return Err(wrong());
+    }
+    Ok(rh)
+}
+
+/// `CSimpleTexture::SetTexture(NULL)` (`0x770300` with 0): the texture slot emptied, a file, a
+/// solid fill and a baked unit portrait alike; the shader slot, and so the desaturation, stays.
+pub(super) fn clear_texture(model: &mut Model, rh: RegionHandle) {
+    let data = model.region_data.entry(rh).or_default();
+    data.texture = None;
+    data.fill = None;
+    data.portrait_unit = None;
+}
+
 /// Apply the font parts an XML element supplies (`font=`, `<FontHeight>`, `outline=`), any of
 /// which may be absent. Not the `SetFont` binding: the reference applies XML fonts in `LoadXML`,
 /// and its `SetFont` requires a path and a height (`0x87c69c`). Each part is an explicit set, so it
