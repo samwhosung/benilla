@@ -134,13 +134,13 @@ pub(crate) fn registered_pairs() -> impl Iterator<Item = (&'static str, &'static
     REGISTERED.iter().map(|r| (r.name, r.default))
 }
 
-/// The host-backed CVars, one row per knob that has a reader.
+/// The host-backed CVars, one row per knob that has a reader: a host knob, or a Lua consumer
+/// such as the stock Video Options window's verbs.
 ///
 /// Not registered for want of a reader, though pfUI's `hdgraphic` writes them: `lodDist`
 /// (`0x688524`, "100.0", read at `0x6afb1d` for the doodad LOD swap), `footstepBias` (`0x6888b4`,
 /// "0.125", read at `0x68fcb6`), `mapObjLightLOD` (`0x6886ec`, "0") and `SkyCloudLOD` (`0x6d1d33`,
-/// "0"). `DistCull` (`0x688570`) and `texLodBias` (`0x6885e2`, whose sink `0x672640` is `ret 4`)
-/// have no reader in the reference either. `maxLOD` is no 1.12 CVar.
+/// "0"). `DistCull` (`0x688570`) has no reader in the reference either. `maxLOD` is no 1.12 CVar.
 pub(crate) const REGISTERED: &[Registered] = &[
     // `realmName` (`0x83f2d0`): registered `""` (`0x882748`), help "Last realm connected to"
     // (`0x85d684`); the client builds its SavedVariables path from it (`0x5ab7d0`). Written from
@@ -329,6 +329,12 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // also writes `SmallCull` {0.07, 0.04, 0.01}, and `GetWorldDetail` reads only `SmallCull`,
     // whose registered 0.04 is stop 1: the reference's slider boots at Medium.
     same("WorldDetail", "1"),
+    // `SmallCull` (`0x68854a`: name `0x8696f8`, default `0x869718` "0.04", flags 1, callback
+    // `0x688b10`, record `[0xc7f330]`). The callback refuses outside [0.001, 2.0] and stores into
+    // `[0x868620]`, which nothing reads: no mechanism here either. Its readers are Lua ones:
+    // `SetWorldDetail` writes it per stop, and `OptionsFrame_SetDefaults` reads its default
+    // (`OptionsFrame.lua:431`). `hwDetect` sets 0.04 on the fallback row a modern GPU reaches.
+    same(benilla_ui::script::CVAR_SMALL_CULL, "0.04"),
     // `frillDensity` (`0x68862e`: name `0x8423d8`, default `0x864644` "16", flags 1, callback
     // `0x688de0`, record `[0xc7f2f4]`): detail-doodad cells visited per chunk, clamped to [1, 256]
     // and handed through `0x6725a0` to `[0xc7b494]`, the bound of the scatter loop at
@@ -576,6 +582,32 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // Not one of `hwDetect`'s sixteen (`[0x639a60, 0x639b80)` never reads `0xc7f2e4`), so the
     // registered "1", off, stands.
     same("anisotropic", "1"),
+    // The four video CVars the stock window's verbs read and write (`benilla_ui` `video_pairs`);
+    // benilla has no mechanism behind any of them. `shadowLevel` (`0x6885bc`, "1", flags 1,
+    // callback `0x688c10`, record `[0xc7f350]`) is behind `Get/SetTerrainMip` as `1 − level`: the
+    // callback refuses above 1 and prints "Shadow mip level changed upon restart.", and the
+    // terrain's shadow-map mip (`0x66f877`) reads it at load. `hwDetect` leaves it at 1.
+    same("shadowLevel", "1"),
+    // `doodadAnim` (`0x6884d8`, "1", flags 1, callback `0x688a10`, record `[0xc7f354]`), behind
+    // `Get/SetDoodadAnim`: the callback toggles bit `0x8000` of `[0xc7b2a4]` and calls `0x6953d0`,
+    // a bare `ret`, so no animation reads it. `hwDetect` sets 0 or 1 by CPU tier.
+    same("doodadAnim", "1"),
+    // `texLodBias` (`0x6885e2`, "0.0" at `0x84fad4`, flags 1, callback `0x688c90`, record
+    // `[0xc7f2f8]`), behind `Get/SetTexLodBias`: the callback refuses outside [-1.0, 1.0] and its
+    // sink `0x672640` is `ret 4`.
+    same("texLodBias", "0.0"),
+    // `baseMip` (`0x6887aa`, "0", flags 1, callback `0x689090`, record `[0xc7f2f0]`), behind
+    // `Get/SetBaseMip` as `1 − level`: the callback refuses outside [0, 1] ("BaseMip must be 0 or
+    // 1") and sets the device's first uploaded mip level (`0x589bf0`, read at `0x59f6ce`). benilla
+    // uploads every level; the write is kept and has no effect. `hwDetect` leaves it at 0.
+    same("baseMip", "0"),
+    // `spellEffectLevel` (`0x688900`: name `0x869324`, default `0x843068` "2", flags 1, callback
+    // `0x689510`, record `[0xc7f2a4]`), the Spell Detail slider (`OptionsFrame.lua:32`). The
+    // callback's two effects here: the particle emission scalar ([`crate::video::on_cvar`]) and
+    // the dynamic-object shard rate, read at each emitter's spawn (`crate::entities`). Its third,
+    // skipping one M2-scene ground decal below level 2 (`0x672b3a`), has no counterpart: benilla
+    // does not draw that projection.
+    same("spellEffectLevel", "2"),
     // Weather Intensity (`OptionsFrame.lua:33`), registered "2" (`0x67b806`, flags 0, callback
     // `0x67b870`, name `0x8685ac`). The reader is `benilla_world::weather::WeatherState`, which
     // scales the precipitation spawn rate by `0x67b870`'s table {0.1, 0.33, 0.66, 1.0}; rendering
@@ -599,6 +631,12 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // moves no pixel. Spelled "1.000000" because `SetGamma 0x4891f0` formats with `"%f"`, and
     // Restore Defaults must compare equal to the default; [`sync_cvars`] seeds it the same way.
     same("gamma", "1.000000"),
+    // `DesktopGamma` (`0x402d4d`: name `0x82e930`, default "0" `0x82e570`, flags 0, callback
+    // `0x403500`, record `[0x8826d4]`), the stock window's Use Desktop Gamma box, which it also
+    // sets whenever Windowed Mode is ticked (`OptionsFrame.lua:399-408`). On 1 the callback puts
+    // the desktop's own ramp back, and `gamma`'s callback (`0x4034d0`) uploads only while this
+    // reads 0. Here nothing reads it: [`crate::ui_gamma::DisplayGamma`] follows `gamma` alone.
+    same("DesktopGamma", "0"),
     // benilla's own: the world renders at `window × this` while the UI stays native. The knob is
     // [`crate::world_backdrop::RenderScale`], clamped to `RENDER_SCALE_RANGE`; at "1" nothing is
     // resampled. `$WOW_RENDER_SCALE` overrides it for the session.
@@ -1949,6 +1987,17 @@ mod tests {
                 "{key}: RestoreVideoDefaults would restore it, and nothing registers it"
             );
         }
+        // The video pairs and `SetWorldDetail`'s `smallCull` write by name; a missing row would
+        // warn and store nothing.
+        for key in benilla_ui::script::VIDEO_PAIR_CVARS
+            .iter()
+            .chain([&benilla_ui::script::CVAR_SMALL_CULL])
+        {
+            assert!(
+                REGISTERED.iter().any(|r| r.name.eq_ignore_ascii_case(key)),
+                "{key}: a video verb writes it, and nothing registers it"
+            );
+        }
         for (n, frill) in benilla_ui::script::WORLD_DETAIL_STOPS.iter().enumerate() {
             assert_eq!(
                 *frill,
@@ -1970,6 +2019,37 @@ mod tests {
         }
         apply(&mut app, "WorldDetail", "1");
         assert_eq!(res::<ClutterConfig>(&app).density, 2.0);
+        // A stop set as a CVar keeps `SmallCull` in step, as `SetWorldDetail` writes it.
+        apply(&mut app, "WorldDetail", "0");
+        assert_eq!(
+            res::<Cvars>(&app).get(benilla_ui::script::CVAR_SMALL_CULL),
+            Some("0.070000")
+        );
+        apply(&mut app, "WorldDetail", "1");
+        assert_eq!(
+            res::<Cvars>(&app).get(benilla_ui::script::CVAR_SMALL_CULL),
+            Some("0.040000")
+        );
+        // Spell Detail: `SStrToInt`, clamp, then the shared emission scalar (`0x689510`).
+        for (level, scale) in [
+            ("0", 0.33),
+            ("1", 0.66),
+            ("2", 1.0),
+            ("-3", 0.33),
+            ("7", 1.0),
+        ] {
+            apply(&mut app, "spellEffectLevel", level);
+            assert_eq!(
+                res::<benilla_world::particles::ParticleTuning>(&app).density(),
+                scale,
+                "spellEffectLevel {level}"
+            );
+            assert_eq!(
+                res::<crate::video::SpellEffectLevel>(&app).0,
+                level.parse::<i32>().unwrap(),
+                "the record's integer, unclamped, for the shard emitter"
+            );
+        }
         apply(&mut app, "minimapZoom", "5");
         assert_eq!(res::<MinimapZoom>(&app).outdoor, 5);
         assert_eq!(
@@ -1984,6 +2064,28 @@ mod tests {
         assert_eq!(apply(&mut app, "uiScale", "banana"), SetOutcome::Refused);
         assert_eq!(res::<UiScaleCvar>(&app).0, 0.9);
         assert_eq!(apply(&mut app, "bogus", "1"), SetOutcome::Unknown);
+    }
+
+    /// `/console spellEffectLevel 0` prints the handler's own line (`0x689537`-`0x689554`, format
+    /// `0x869f94`) with the level it clamped to; a Lua write logs it instead.
+    #[test]
+    fn the_spell_effect_level_handler_echoes_to_the_console() {
+        let mut app = cvar_app();
+        app.init_resource::<crate::console::ConsoleEcho>();
+        assert_eq!(
+            crate::console::execute(app.world_mut(), "spellEffectLevel 0"),
+            ["Spell effect level set to 0."]
+        );
+        assert_eq!(
+            crate::console::execute(app.world_mut(), "spellEffectLevel 9"),
+            ["Spell effect level set to 2."]
+        );
+        assert_eq!(res::<Cvars>(&app).get("spellEffectLevel"), Some("9"));
+        assert_eq!(
+            crate::console::execute(app.world_mut(), "farclip 400"),
+            Vec::<String>::new(),
+            "a callback that prints nothing adds nothing"
+        );
     }
 
     #[test]
@@ -2086,6 +2188,8 @@ mod tests {
             .init_resource::<crate::combat_text::DamageTextGates>()
             .init_resource::<crate::ui_chat::combat::LogPeriodicSpells>()
             .init_resource::<benilla_world::weather::WeatherState>()
+            .init_resource::<benilla_world::particles::ParticleTuning>()
+            .init_resource::<crate::video::SpellEffectLevel>()
             .init_resource::<crate::ui_gamma::DisplayGamma>()
             .init_resource::<ClickConfig>()
             .init_resource::<crate::target::AssistAttack>()
@@ -2630,6 +2734,10 @@ mod tests {
             (
                 "useUiScale",
                 "UIOptionsFrame.lua and OptionsFrame.lua branch on it to gate the uiScale slider",
+            ),
+            (
+                "DesktopGamma",
+                "OptionsFrame.lua's Use Desktop Gamma box, recorded at open and put back on close",
             ),
         ];
         let app_src = crate::test_support::src_dir();

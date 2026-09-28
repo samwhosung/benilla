@@ -953,6 +953,10 @@ mod errors_tests;
 #[cfg(test)]
 mod shipped_xml_tests;
 
+/// The stock Video Options window off the chain: open, Okay, Defaults and Cancel.
+#[cfg(test)]
+mod video_options_tests;
+
 #[cfg(test)]
 mod bottom_hud_tests;
 

@@ -1622,6 +1622,8 @@ pub(crate) enum ClientCommand {
     },
     /// `/played` (`CMSG_PLAYED_TIME`).
     PlayedTime,
+    /// `OpeningCinematic()`: `CMSG_OPENING_CINEMATIC`, empty.
+    OpeningCinematic,
     /// `CMSG_COMPLETE_CINEMATIC`, at the end or skip, or at once for an unresolvable trigger.
     /// Unacked, vmangos keeps visibility on the cinematic camera and nearby NPCs despawn.
     CompleteCinematic,

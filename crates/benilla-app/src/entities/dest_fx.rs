@@ -32,6 +32,13 @@ fn shard_model_index(param0: f32) -> usize {
     idx.min(SHARD_MODELS.len() - 1)
 }
 
+/// The shard emitter's rate factor from the `spellEffectLevel` record's integer, read once at the
+/// emitter's Initialize (`0x6eb95e`-`0x6eb989`), so a change reaches only emitters created after
+/// it: 0.33 at 0, 0.66 at 1, and 1.0 for any other value, unclamped, or with no record.
+fn shard_rate_scale(spell_effect_level: Option<i32>) -> f32 {
+    spell_effect_level.map_or(1.0, crate::video::spell_effect_scale)
+}
+
 /// A dest-anchored effect model: visual A, a shard or a GO burst.
 #[derive(Component)]
 pub(super) struct GroundFx {
@@ -67,8 +74,8 @@ pub(super) struct ShardEmitter {
     path: String,
     /// `DYNAMICOBJECT_RADIUS`: the wire radius is the spread (`0x6ebad0`).
     radius: f32,
-    /// Shards per second: `CharParamOne` times the `spellEffectLevel` factor, 1.0 at its
-    /// default "2".
+    /// Shards per second: `CharParamOne` times the `spellEffectLevel` factor (`0x6eb95e`-
+    /// `0x6eb98f`), 1.0 at its default "2".
     rate: f32,
     /// Fractional emissions carried between frames.
     accum: f32,
@@ -96,10 +103,12 @@ pub(super) fn arm_ground_effects(
     fx: Option<ResMut<SpellFx>>,
     asset_server: Res<AssetServer>,
     mut sounds: MessageWriter<SpellKitSound>,
+    spell_effect_level: Option<Res<crate::video::SpellEffectLevel>>,
 ) {
     let (Some(visuals), Some(spells), Some(mut fx)) = (visuals, spells, fx) else {
         return;
     };
+    let level_scale = shard_rate_scale(spell_effect_level.map(|l| l.0));
     for (anchor, net, store) in &created {
         if net.kind != EntityKind::DynamicObject {
             continue;
@@ -147,7 +156,7 @@ pub(super) fn arm_ground_effects(
                 commands.entity(anchor).insert(ShardEmitter {
                     path,
                     radius: store.0.dynamicobject_radius().unwrap_or(0.0),
-                    rate: proc.params[1],
+                    rate: proc.params[1] * level_scale,
                     accum: 0.0,
                     rng: 0x9e3779b97f4a7c15 ^ anchor.to_bits(),
                 });
@@ -292,6 +301,17 @@ pub(super) fn attach_ground_fx_models(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_shard_rate_follows_the_spell_effect_level_record() {
+        assert_eq!(shard_rate_scale(Some(0)), 0.33);
+        assert_eq!(shard_rate_scale(Some(1)), 0.66);
+        assert_eq!(shard_rate_scale(Some(2)), 1.0);
+        // The record's integer, not the handler's clamped copy: out of range is the ×1.0 arm.
+        assert_eq!(shard_rate_scale(Some(-1)), 1.0);
+        assert_eq!(shard_rate_scale(Some(5)), 1.0);
+        assert_eq!(shard_rate_scale(None), 1.0);
+    }
 
     /// The `0x5d55c0` decode, `bits(f32(param0 + 512.0)) >> 14 & 0xff`; the real rows carry 0.0
     /// (Blizzard) and 1.0 (Rain of Fire).

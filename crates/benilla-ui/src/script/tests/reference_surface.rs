@@ -1325,17 +1325,28 @@ fn set_world_detail_writes_the_stop_table_and_validates_like_the_reference() {
     s.register_cvars([
         (crate::script::CVAR_WORLD_DETAIL, "1"),
         (crate::script::CVAR_FRILL_DENSITY, "32"),
+        (crate::script::CVAR_SMALL_CULL, "0.04"),
     ]);
     let frill = |s: &crate::script::UiScript| s.cvar(crate::script::CVAR_FRILL_DENSITY);
     let stop = |s: &crate::script::UiScript| s.cvar(crate::script::CVAR_WORLD_DETAIL);
 
-    // The preset table at `0x804518`, verbatim: {16, 32, 48}.
-    for (n, want) in [(0, "16"), (1, "32"), (2, "48")] {
+    // The preset tables at `0x804518` and `0x804524`, verbatim: {16, 32, 48} and `smallCull`'s
+    // f32 {0.07, 0.04, 0.01} printed "%f".
+    for (n, want, cull) in [
+        (0, "16", "0.070000"),
+        (1, "32", "0.040000"),
+        (2, "48", "0.010000"),
+    ] {
         s.run(&format!("SetWorldDetail({n})")).unwrap();
         assert_eq!(
             frill(&s).as_deref(),
             Some(want),
             "stop {n} writes frillDensity"
+        );
+        assert_eq!(
+            s.cvar(crate::script::CVAR_SMALL_CULL).as_deref(),
+            Some(cull),
+            "stop {n} writes smallCull"
         );
         assert_eq!(
             s.eval::<i64>("return GetWorldDetail()").unwrap(),

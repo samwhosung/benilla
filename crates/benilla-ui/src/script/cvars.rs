@@ -332,6 +332,37 @@ fn cvar_arg(v: Option<&Value>) -> Option<String> {
     }
 }
 
+/// A value as the video setters print it, `SStrPrintf(buf, 0x10, "%f", v)` (`0x64a7f0` with the
+/// format at `0x835160`): six decimals in a 16-byte buffer, so the stored string is cut at 15
+/// characters.
+pub(super) fn format_f(v: f64) -> String {
+    let mut written = format!("{v:.6}");
+    written.truncate(15);
+    written
+}
+
+/// Storm's `SStrToInt` (`0x64ac60`), how a CVar record's integer (`rec+0x28`) is parsed from its
+/// value and how a change callback reads it: an optional `-`, then decimal digits up to the first
+/// other byte, with no whitespace skip, no `+` and no overflow check (`10·n + d` wraps); no digit
+/// is 0.
+pub fn sstr_to_int(s: &str) -> i32 {
+    let (neg, digits) = match s.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, s),
+    };
+    let n = digits
+        .bytes()
+        .take_while(u8::is_ascii_digit)
+        .fold(0i32, |n, d| {
+            n.wrapping_mul(10).wrapping_add(i32::from(d - b'0'))
+        });
+    if neg {
+        n.wrapping_neg()
+    } else {
+        n
+    }
+}
+
 /// What `SetCVar` and `RegisterCVar` store for a value with no string form (`0x82e570`, loaded
 /// at `0x488c98` and `0x488b6f`).
 const NO_STRING_FORM: &str = "0";
@@ -526,7 +557,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     install_nameplate_verbs(lua)?;
-    install_world_detail_verbs(lua)
+    install_world_detail_verbs(lua)?;
+    super::video_pairs::install(lua)
 }
 
 /// What `RestoreVideoDefaults` puts back: the CVars among the reference verb's writes that benilla
@@ -545,10 +577,15 @@ pub const VIDEO_DEFAULT_CVARS: &[&str] = &[
     "gxColorBits",
     "gxDepthBits",
     "gxMultisample",
-    // Of the sixteen further graphics CVars (`0x639a60`), the three benilla registers.
+    // Of the sixteen further graphics CVars (`0x639a60`), the seven benilla registers, in the
+    // pass's order.
     "farclip",
+    "shadowLevel",
     "frillDensity",
+    "doodadAnim",
     "trilinear",
+    CVAR_SMALL_CULL,
+    "baseMip",
     // Ours, restored with `frillDensity` so the pair keeps describing one detail level.
     "WorldDetail",
 ];
@@ -560,7 +597,8 @@ pub const VIDEO_DEFAULT_CVARS: &[&str] = &[
 /// Ten names must stay nil so their slider rows fall back to `GetCVar`/`SetCVar`
 /// (`OptionsFrame_Load:110` tries `getglobal("Get"..value.func)`): `Getuiscale`, `Getfarclip`,
 /// `Getanisotropic`, `GetspellEffectLevel`, `GetweatherDensity` and their setters.
-/// `GetFarclip`/`SetFarclip` do exist (`0x488f00`/`0x488f30`); `getglobal` is case-sensitive.
+/// `GetFarclip`/`SetFarclip` (`0x488f00`/`0x488f30`, in [`super::video_pairs`]) do exist;
+/// `getglobal` is case-sensitive.
 fn install_video_verbs(lua: &Lua) -> mlua::Result<()> {
     // ── GetScreenResolutions ─────────────────────────────────────────────────────────────────
     // A vararg of `"WxH"` strings, the spelling `ScreenResolution` pins.
@@ -744,12 +782,8 @@ fn install_video_verbs(lua: &Lua) -> mlua::Result<()> {
                 }
                 _ => return Err(mlua::Error::runtime(USAGE_SET_GAMMA)),
             };
-            // `SStrPrintf(buf, 0x10, "%f", 1.0 - v)`: a 16-byte buffer, so the stored string, and
-            // what `GetCVar("gamma")` answers, is cut at 15 characters.
-            let mut written = format!("{:.6}", 1.0 - v);
-            written.truncate(15);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            write_cvar(&mut model, CVAR_GAMMA, written);
+            write_cvar(&mut model, CVAR_GAMMA, format_f(1.0 - v));
             // Zero return values, not nil (`eax = 0` at every `ret`).
             Ok(mlua::MultiValue::new())
         })?,
@@ -771,18 +805,32 @@ pub const CVAR_WORLD_DETAIL: &str = "WorldDetail";
 /// The reference's Environment Detail CVar: cells visited per chunk by the detail-doodad scatter.
 pub const CVAR_FRILL_DENSITY: &str = "frillDensity";
 
+/// The reference's object-size cull (`0x68854a`, name `0x8696f8`), the other half of each
+/// Environment Detail stop. `SetWorldDetail` looks it up as `smallCull` (`0x8423ac`), the same
+/// record under the table's case-folding hash.
+pub const CVAR_SMALL_CULL: &str = "SmallCull";
+
 /// `SetWorldDetail`'s `frillDensity` per stop, the three dwords at `0x804518`.
 pub const WORLD_DETAIL_STOPS: [u32; 3] = [16, 32, 48];
+
+/// `SetWorldDetail`'s `smallCull` per stop, the three f32s at `0x804524`.
+const SMALL_CULL_STOPS: [f32; 3] = [0.07, 0.04, 0.01];
+
+/// The `SmallCull` text `SetWorldDetail` writes for a stop (clamped to 2): the f32 as "%f".
+pub fn small_cull_text(stop: usize) -> String {
+    format_f(f64::from(SMALL_CULL_STOPS[stop.min(2)]))
+}
 
 /// The Environment Detail pair, `SetWorldDetail 0x488dd0` and `GetWorldDetail 0x488d70`, which
 /// `OptionsFrame.lua` row 3 (`func = "WorldDetail"`) drives in place of `SetCVar`/`GetCVar`. The
 /// setter truncates toward zero (`0x40a2b0`), raises outside 0..=2, and writes `frillDensity` from
 /// [`WORLD_DETAIL_STOPS`] and `smallCull` from `{0.07, 0.04, 0.01}` (`0x804524`).
 ///
-/// Deviation: the getter reads [`CVAR_WORLD_DETAIL`] and `smallCull` is not registered, because
-/// the reference's getter is `smallCull`'s only reader (`[0x868620]` is never read). A fresh
-/// reference client reads stop 1 (`frillDensity 16` with `smallCull 0.04`), hence
-/// `WorldDetail`'s `"1"`; only a bare `frillDensity` write moves ours and not the reference's.
+/// Deviation: the getter reads [`CVAR_WORLD_DETAIL`], where the reference's reads only `smallCull`
+/// (`0x488d77`), because benilla's stop follows the knob that draws: a console `frillDensity`
+/// write moves the ground clutter and `WorldDetail` with it, and no renderer reads `smallCull`
+/// (its callback's `[0x868620]` has no reader). A fresh reference client reads stop 1
+/// (`smallCull 0.04`), hence `WorldDetail`'s `"1"`.
 fn install_world_detail_verbs(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
     g.set(
@@ -811,13 +859,15 @@ fn install_world_detail_verbs(lua: &Lua) -> mlua::Result<()> {
             }
             let stop = stop as usize;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            // Two CVars per stop, as `0x488dd0` writes two: `frillDensity` and, here, the stop.
-            // Writing only one would leave `GetWorldDetail` stale until the host drains the queue.
+            // The reference's two writes, `frillDensity` as "%d" (`0x488e26`) and `smallCull` as
+            // "%f" of the f32 (`0x488e63`), then ours, the stop: writing it here keeps
+            // `GetWorldDetail` current before the host drains the queue.
             write_cvar(
                 &mut model,
                 CVAR_FRILL_DENSITY,
                 WORLD_DETAIL_STOPS[stop].to_string(),
             );
+            write_cvar(&mut model, CVAR_SMALL_CULL, small_cull_text(stop));
             write_cvar(&mut model, CVAR_WORLD_DETAIL, stop.to_string());
             // Zero return values, not nil (`eax = 0` at every `ret`).
             Ok(mlua::MultiValue::new())

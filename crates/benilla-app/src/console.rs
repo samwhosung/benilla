@@ -61,12 +61,31 @@ impl ConsoleCommandApp for App {
     }
 }
 
+/// Lines a CVar's change callback prints to the console (`0x63cb50`), such as `spellEffectLevel`'s
+/// "Spell effect level set to %d.". A console command's own write collects them into its output;
+/// any other write (a Lua `SetCVar`, the boot load) sends them to the log, as the reference's go
+/// to a console screen nobody has open.
+#[derive(Resource, Default)]
+pub(crate) struct ConsoleEcho {
+    capture: Option<Vec<String>>,
+}
+
+impl ConsoleEcho {
+    pub(crate) fn print(&mut self, line: String) {
+        match &mut self.capture {
+            Some(lines) => lines.push(line),
+            None => info!("console: {line}"),
+        }
+    }
+}
+
 /// The built-ins: the reference's four `ConsoleVar.cpp` commands and `help`.
 pub(crate) struct ConsolePlugin;
 
 impl Plugin for ConsolePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ConsoleCommands>()
+            .init_resource::<ConsoleEcho>()
             .console_command("set", "Set the value of a CVar.", set)
             .console_command("cvar_reset", "Reset a CVar to its default.", cvar_default)
             .console_command("cvar_default", "Reset a CVar to its default.", cvar_default)
@@ -136,10 +155,18 @@ fn set_cvar(world: &mut World, name: &str, value: &str) -> Vec<String> {
         let outcome = cvars.set(name, value);
         (outcome, cvars.take_events())
     };
+    // The callbacks' own lines come first, as they print inside `CVar::Set`.
+    if let Some(mut echo) = world.get_resource_mut::<ConsoleEcho>() {
+        echo.capture = Some(Vec::new());
+    }
     for event in events {
         world.trigger(event);
     }
-    match outcome {
+    let mut lines = world
+        .get_resource_mut::<ConsoleEcho>()
+        .and_then(|mut echo| echo.capture.take())
+        .unwrap_or_default();
+    lines.extend(match outcome {
         SetOutcome::Unknown => vec![format!("console: no CVar named '{name}'")],
         SetOutcome::Refused => vec![format!(
             "console: '{value}' is not a number, and {name} takes one"
@@ -148,7 +175,8 @@ fn set_cvar(world: &mut World, name: &str, value: &str) -> Vec<String> {
         SetOutcome::Staged => vec![format!(
             "{name} staged as \"{value}\" — applies at the next RestartGx"
         )],
-    }
+    });
+    lines
 }
 
 /// `set <name> <value>` (`0x63d500`). Deviation: the reference registers an unknown name as a new

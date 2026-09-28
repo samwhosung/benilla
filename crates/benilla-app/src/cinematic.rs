@@ -157,6 +157,7 @@ impl Plugin for CinematicPlugin {
                 Update,
                 drive_letterbox.in_set(WorldStage::Input).after(drive),
             )
+            .add_systems(Update, send_opening_cinematic.in_set(WorldStage::Input))
             // Leaving the world drops a cinematic with no ack, as the reference's teardown does
             // (`0x490a80` clears the flag and sends no `CMSG_COMPLETE_CINEMATIC`).
             .add_systems(OnExit(ClientState::InWorld), abandon_on_leaving_world);
@@ -577,6 +578,20 @@ fn feed_ui(
     );
 }
 
+/// Each Lua `OpeningCinematic()` is one empty `CMSG_OPENING_CINEMATIC` (`0x48c8c0`); the server
+/// answers, if at all, with the `SMSG_TRIGGER_CINEMATIC` [`take_trigger`] plays.
+fn send_opening_cinematic(script: Option<NonSendMut<UiScript>>, net: Option<Res<NetCommands>>) {
+    let Some(mut script) = script else {
+        return;
+    };
+    let asks = script.take_opening_cinematic_asks();
+    if let Some(net) = net {
+        for _ in 0..asks {
+            let _ = net.0.send(ClientCommand::OpeningCinematic);
+        }
+    }
+}
+
 fn ack(net: Option<&NetCommands>) {
     if let Some(net) = net {
         let _ = net.0.send(ClientCommand::CompleteCinematic);
@@ -834,6 +849,42 @@ mod settling_under_black {
                 .resource::<crate::screen_fade::ScreenFade>()
                 .is_black(),
             "the screen comes back even though the world did not"
+        );
+    }
+}
+
+/// Lua's `OpeningCinematic()` reaches the wire as one empty `CMSG_OPENING_CINEMATIC` per call.
+#[cfg(test)]
+mod opening_cinematic {
+    use super::*;
+
+    #[test]
+    fn each_call_sends_one_opening_cinematic() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.insert_resource(NetCommands(tx));
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        app.add_systems(Update, send_opening_cinematic);
+        app.world()
+            .non_send_resource::<UiScript>()
+            .run("OpeningCinematic() OpeningCinematic()")
+            .unwrap();
+        app.update();
+        let sent = rx
+            .try_iter()
+            .filter(|c| matches!(c, ClientCommand::OpeningCinematic))
+            .count();
+        assert_eq!(sent, 2);
+        app.update();
+        assert_eq!(rx.try_iter().count(), 0, "drained once");
+        // The opcode the reference puts at `0x48c8c9`.
+        assert_eq!(
+            benilla_protocol::messages::opcode::CMSG_OPENING_CINEMATIC,
+            0xf9
+        );
+        assert_eq!(
+            benilla_protocol::messages::opcode_name(0xf9),
+            Some("CMSG_OPENING_CINEMATIC")
         );
     }
 }

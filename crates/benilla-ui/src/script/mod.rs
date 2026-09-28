@@ -60,6 +60,7 @@ mod extract;
 mod follow;
 pub(crate) mod font;
 mod font_block;
+mod frame_enum;
 mod gm_ticket;
 mod gossip;
 mod guild;
@@ -133,6 +134,7 @@ mod tradeskill;
 mod trainer;
 mod types;
 mod unit;
+mod video_pairs;
 mod weapon_enchant;
 mod who_sort;
 mod worldmap;
@@ -175,10 +177,11 @@ pub use cursor::{
     CursorAction, CursorItem, CursorMacro, CursorMerchantItem, CursorMoney, CursorPayload,
     CursorPetAction, CursorSpell, CursorStablePet, EnchantConfirm, WorldPick, EQUIPMENT_BAG,
 };
+pub use cvars::{small_cull_text, sstr_to_int};
 pub use cvars::{
     MultisampleFormat, ScreenResolution, SeededCvar, VideoCaps, CVAR_FRILL_DENSITY, CVAR_GAMMA,
-    CVAR_NAMEPLATE_ENEMIES, CVAR_NAMEPLATE_FRIENDS, CVAR_WORLD_DETAIL, IN_WORLD_READ_ONLY_CVARS,
-    VIDEO_DEFAULT_CVARS, WORLD_DETAIL_STOPS,
+    CVAR_NAMEPLATE_ENEMIES, CVAR_NAMEPLATE_FRIENDS, CVAR_SMALL_CULL, CVAR_WORLD_DETAIL,
+    IN_WORLD_READ_ONLY_CVARS, VIDEO_DEFAULT_CVARS, WORLD_DETAIL_STOPS,
 };
 pub use death::{DeathAction, DeathUiState};
 pub use dressup::DressUpIntent;
@@ -200,6 +203,7 @@ pub use tabard::{
     emblem_mask_path, TabardHost, TabardIntent, EMBLEM_MASK_TOKEN, TABARD_COUNTS,
     TABARD_CREATION_COST,
 };
+pub use video_pairs::VIDEO_PAIR_CVARS;
 pub use worldmap_arrow::ARROW_MODEL;
 
 pub(crate) use button::{set_label_font_justify_h_lua, LabelFont};
@@ -496,6 +500,7 @@ impl UiScript {
         lua50::install(&lua)?;
         stdlib::install(&lua)?;
         object::install(&lua)?;
+        frame_enum::install(&lua)?;
         // After `object`, whose `publish_global` it reuses, and before any FrameXML loads:
         // `Loader::do_font` publishes into the tables this builds.
         font::install(&lua)?;

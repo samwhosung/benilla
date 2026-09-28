@@ -40,6 +40,8 @@ pub const SMSG_UPDATE_OBJECT: u16 = 0x00A9;
 pub const SMSG_DESTROY_OBJECT: u16 = 0x00AA;
 // Cinematics: a first login's race intro, or a type-13 GameObject camera. Until the COMPLETE ack,
 // vmangos sees from the camera and despawns all around the body (`Player::UpdateCinematic`).
+/// Lua's `OpeningCinematic()` (`0x48c8c0`); empty body. vmangos does not handle it.
+pub const CMSG_OPENING_CINEMATIC: u16 = 0x00F9;
 pub const SMSG_TRIGGER_CINEMATIC: u16 = 0x00FA;
 /// The next camera of a multi-camera `CinematicSequences` row began; empty body (`0x48efe0`).
 pub const CMSG_NEXT_CINEMATIC_CAMERA: u16 = 0x00FB;

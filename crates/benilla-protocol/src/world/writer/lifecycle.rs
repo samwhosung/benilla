@@ -37,6 +37,12 @@ impl WorldWriter {
         self.send(opcode::CMSG_QUERY_TIME, &messages::query_time())
     }
 
+    /// `CMSG_OPENING_CINEMATIC`, empty: Lua's `OpeningCinematic()` (`0x48c8c0`, opcode `0xf9` put
+    /// at `0x48c8c9`, sent through `0x5ab630`).
+    pub fn opening_cinematic(&mut self) -> Result<()> {
+        self.send(opcode::CMSG_OPENING_CINEMATIC, &[])
+    }
+
     /// `CMSG_COMPLETE_CINEMATIC`, empty: sent when a cinematic ends or is escaped, and owed for
     /// every `SMSG_TRIGGER_CINEMATIC`; until then vmangos anchors visibility to the cinematic
     /// camera and the world around the body despawns.

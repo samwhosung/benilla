@@ -163,6 +163,9 @@ pub(crate) fn on_cvar(
     mut tex_filter: ResMut<benilla_assets::TexFilterSetting>,
     mut clutter: ResMut<benilla_world::clutter::ClutterConfig>,
     mut weather: ResMut<benilla_world::weather::WeatherState>,
+    particles: Option<ResMut<benilla_world::particles::ParticleTuning>>,
+    mut spell_effect_level: ResMut<SpellEffectLevel>,
+    mut console: Option<ResMut<crate::console::ConsoleEcho>>,
     mut cvars: ResMut<crate::cvars::Cvars>,
 ) {
     use benilla_world::view::{FARCLIP_RANGE, MSAA_RANGE};
@@ -209,6 +212,12 @@ pub(crate) fn on_cvar(
                 benilla_ui::script::CVAR_FRILL_DENSITY,
                 &clutter.frill_density().to_string(),
             );
+            // The stop's other half, as `SetWorldDetail` writes it, so a stop set as a CVar keeps
+            // `SmallCull` in step too.
+            cvars.mirror(
+                benilla_ui::script::CVAR_SMALL_CULL,
+                &benilla_ui::script::small_cull_text(v.clamp(0.0, 2.0) as usize),
+            );
         }
         // The same knob in the reference's cells per chunk, clamped to `[1, 256]`
         // (`ClutterConfig::set_frill_density`); the loaded tiles re-scatter off the change.
@@ -223,7 +232,45 @@ pub(crate) fn on_cvar(
         // quality cells {0.1, 0.33, 0.66, 1.0} at `[0x8680ec]`. Its off-grid handling is
         // untraced; this clamps.
         "weatherdensity" => weather.weather_density = v.trunc().clamp(0.0, 3.0) as u8,
+        // Spell Detail (`0x689510`): `SStrToInt`, clamped to [0, 2] in the handler's own copy,
+        // echoed, then the emission scalar 0.33, 0.66 or 1.0 through `0x7adfb0`, shared with
+        // `particleDensity`. The reference runs it on every write, an unchanged one included; an
+        // observer fires only on a change.
+        "spelleffectlevel" => {
+            spell_effect_level.0 = benilla_ui::script::sstr_to_int(&ev.new);
+            let level = spell_effect_level.0.clamp(0, 2);
+            if let Some(console) = console.as_mut() {
+                console.print(format!("Spell effect level set to {level}."));
+            }
+            if let Some(mut particles) = particles {
+                particles.set_density(spell_effect_scale(level));
+            }
+        }
         _ => {}
+    }
+}
+
+/// The `spellEffectLevel` record's integer (`rec+0x28`, `SStrToInt` of the value), unclamped: what
+/// the dynamic-object shard emitter reads at spawn (`0x6eb967`), where the handler clamps only its
+/// own copy.
+#[derive(Resource)]
+pub(crate) struct SpellEffectLevel(pub(crate) i32);
+
+impl Default for SpellEffectLevel {
+    /// The registered "2".
+    fn default() -> Self {
+        Self(2)
+    }
+}
+
+/// The `spellEffectLevel` emission factor, 0.33, 0.66 or 1.0: the handler's f32 immediates
+/// (`0x68956a` `0x3ea8f5c3`, `0x689588` `0x3f28f5c3`, `0x689561` `0x3f800000`) and the shard
+/// emitter's `.rdata` pair (`0x808300`, `0x81199c`) are the same three. Any level but 0 or 1 is 1.0.
+pub(crate) fn spell_effect_scale(level: i32) -> f32 {
+    match level {
+        0 => 0.33,
+        1 => 0.66,
+        _ => 1.0,
     }
 }
 
@@ -256,6 +303,7 @@ fn detail_doodad_alpha(world: &mut World, args: &str) -> Vec<String> {
 impl Plugin for VideoPlugin {
     fn build(&self, app: &mut App) {
         use crate::console::ConsoleCommandApp;
+        app.init_resource::<SpellEffectLevel>();
         app.add_observer(on_cvar);
         app.console_command(
             "detailDoodadAlpha",

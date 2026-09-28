@@ -900,6 +900,8 @@ pub(crate) struct Model {
     pub(crate) addon_sends: Vec<super::addon_message::AddonSend>,
     /// `RequestTimePlayed()` calls, one empty `CMSG_PLAYED_TIME` each.
     pub(crate) played_time_asks: u32,
+    /// `OpeningCinematic()` calls, one empty `CMSG_OPENING_CINEMATIC` each.
+    pub(crate) opening_cinematic_asks: u32,
     /// `Screenshot()` calls, one capture each.
     pub(crate) screenshot_asks: u32,
     /// `GetRealmName()`: `""` until pushed, never nil, since addons index tables with it at load.
@@ -1339,6 +1341,7 @@ impl Model {
             chat_sends: Vec::new(),
             addon_sends: Vec::new(),
             played_time_asks: 0,
+            opening_cinematic_asks: 0,
             screenshot_asks: 0,
             realm_name: String::new(),
             player_record: super::PlayerRecord::default(),

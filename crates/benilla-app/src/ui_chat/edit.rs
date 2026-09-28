@@ -3,6 +3,8 @@
 
 use bevy::prelude::*;
 
+use benilla_ui::script::sstr_to_int;
+
 use crate::net::ChatKind;
 
 /// The sendable chat types, as the wire kind an addon's `SendChatMessage` token maps to.
@@ -139,26 +141,6 @@ impl ChannelSlot {
             name: name.to_string(),
             state: SlotState::Joined,
         }
-    }
-}
-
-/// Storm's `SStrToInt` (`0x64ac60`): an optional `-`, then decimal digits up to the first other
-/// byte, with no whitespace skip, no `+` and no overflow check (`10·n + d` wraps); no digit is 0.
-fn sstr_to_int(s: &str) -> i32 {
-    let (neg, digits) = match s.strip_prefix('-') {
-        Some(rest) => (true, rest),
-        None => (false, s),
-    };
-    let n = digits
-        .bytes()
-        .take_while(u8::is_ascii_digit)
-        .fold(0i32, |n, d| {
-            n.wrapping_mul(10).wrapping_add(i32::from(d - b'0'))
-        });
-    if neg {
-        n.wrapping_neg()
-    } else {
-        n
     }
 }
 

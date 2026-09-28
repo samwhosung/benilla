@@ -22,6 +22,53 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| lua.create_string("enUS"))?,
     )?;
     g.set("IsMacClient", lua.create_function(|_, ()| Ok(Value::Nil))?)?;
+    // The PC build's other two platform answers: `IsWindowsClient()` (`0x48c960`) pushes the
+    // number 1 and `IsLinuxClient()` (`0x48c990`) one nil. Arguments are ignored.
+    g.set(
+        "IsWindowsClient",
+        lua.create_function(|_, _: MultiValue| Ok(1.0))?,
+    )?;
+    g.set(
+        "IsLinuxClient",
+        lua.create_function(|_, _: MultiValue| Ok(Value::Nil))?,
+    )?;
+
+    // `GetDebugStats()` (`0x488af0`, `xor eax,eax; ret`): zero values, which `StatsFrame.lua:20`
+    // hands straight to `SetText`.
+    g.set(
+        "GetDebugStats",
+        lua.create_function(|_, _: MultiValue| Ok(MultiValue::new()))?,
+    )?;
+
+    // `OpeningCinematic()` (`0x48c8c0`): sends an empty `CMSG_OPENING_CINEMATIC` (`0xf9`,
+    // `0x48c8c9` into `0x5ab630`) and returns nothing; the server may answer with
+    // `SMSG_TRIGGER_CINEMATIC`. Arguments are ignored.
+    g.set(
+        "OpeningCinematic",
+        lua.create_function(|lua, _: MultiValue| {
+            lua.app_data_mut::<Model>()
+                .expect("model app_data")
+                .opening_cinematic_asks += 1;
+            Ok(())
+        })?,
+    )?;
+
+    // Three setters whose state has no reader here, so each takes its argument as the reference
+    // does, never raising, and stores nothing; all return zero values.
+    // - `SetEuropeanNumbers(flag)` (`0x48dec0`): `GetBoolOrDefault(1, true)` into `[0xcf4d24]`,
+    //   which turns on `FontString:SetText`'s digit-group pass (`0x771daa` into `0x771c50`).
+    //   benilla's `SetText` has no such pass.
+    // - `SetLayoutMode(mode)` (`0x488540`): a number truncates into the UI root's `+0xcf8`, anything
+    //   else stores 1; read by the root's mouse handler (`0x766301`) for a frame-dragging mode
+    //   benilla does not build.
+    // - `SetConsoleKey(key)` (`0x488640`): a one-character or named key becomes the console's
+    //   toggle key (`0x63cb00`), a non-string the default `0x30e`. benilla has no console screen.
+    for name in ["SetEuropeanNumbers", "SetLayoutMode", "SetConsoleKey"] {
+        g.set(
+            name,
+            lua.create_function(|_, _: MultiValue| Ok(MultiValue::new()))?,
+        )?;
+    }
 
     // `FrameXML_Debug([v])` (`0x488440`): get-or-set of the XML loader's trace flag `[0xceea30]`,
     // which gates `crate::loader::LoadReport::traces`. A Lua-truthy argument sets it, truncated
@@ -144,6 +191,11 @@ impl super::UiScript {
     /// body is empty.
     pub fn take_played_time_asks(&mut self) -> u32 {
         std::mem::take(&mut self.model_mut().played_time_asks)
+    }
+
+    /// Drain the `OpeningCinematic()` calls, each an empty `CMSG_OPENING_CINEMATIC`.
+    pub fn take_opening_cinematic_asks(&mut self) -> u32 {
+        std::mem::take(&mut self.model_mut().opening_cinematic_asks)
     }
 
     /// Push the bind location's name, resolved from `SMSG_BINDPOINTUPDATE`'s AreaTable id through
@@ -280,5 +332,46 @@ mod tests {
             s.eval::<bool>("return IsMacClient() == nil").unwrap(),
             "nil is the PC arm, which is the arm this client wants"
         );
+    }
+
+    /// `IsWindowsClient` (`0x48c960`) pushes 1 and `IsLinuxClient` (`0x48c990`) nil, one value
+    /// each; `GetDebugStats` (`0x488af0`) pushes none.
+    #[test]
+    fn the_platform_queries_and_debug_stats_answer_the_pc_build() {
+        let s = UiScript::new().unwrap();
+        assert_eq!(s.arity("IsWindowsClient()").unwrap(), 1);
+        assert_eq!(s.eval::<f64>("return IsWindowsClient(0)").unwrap(), 1.0);
+        assert_eq!(s.arity("IsLinuxClient()").unwrap(), 1);
+        assert!(s.eval::<bool>("return IsLinuxClient() == nil").unwrap());
+        assert_eq!(s.arity("GetDebugStats()").unwrap(), 0);
+    }
+
+    /// Each `OpeningCinematic()` queues one send and returns nothing.
+    #[test]
+    fn opening_cinematic_queues_one_send_per_call() {
+        let mut s = UiScript::new().unwrap();
+        assert_eq!(s.arity("OpeningCinematic()").unwrap(), 0);
+        s.run("OpeningCinematic(1)").unwrap();
+        assert_eq!(s.take_opening_cinematic_asks(), 2);
+        assert_eq!(
+            s.take_opening_cinematic_asks(),
+            0,
+            "the drain empties the queue"
+        );
+    }
+
+    /// The three setters never raise, whatever they are handed, and return zero values.
+    #[test]
+    fn the_stateless_setters_take_any_argument() {
+        let s = UiScript::new().unwrap();
+        for name in ["SetEuropeanNumbers", "SetLayoutMode", "SetConsoleKey"] {
+            for arg in ["", "nil", "1", "\"x\"", "{}", "\"ESCAPE\""] {
+                assert_eq!(
+                    s.arity(&format!("{name}({arg})")).unwrap(),
+                    0,
+                    "{name}({arg})"
+                );
+            }
+        }
     }
 }

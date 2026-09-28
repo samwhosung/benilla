@@ -133,6 +133,7 @@ const PUBLISHED: &[(&str, &str)] = &[
     ("model_render::ModelPart", "record"),
     ("model_render::lazy::realize", "record"),
     ("modkeys::SyntheticHold", "wall"),
+    ("particles::ParticleTuning", "record"),
     ("particles::ViewThrottled", "record"),
     ("particles::render::EFFECT_DRAW_STATS", "record"),
     ("particles::spawn_emitter", "record"),
