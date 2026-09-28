@@ -38,18 +38,13 @@
             refItemButtonOnEnter(button)
         end
 
-        -- ══ The three bag verbs benilla answers differently ═══════════════════════════════════
-        -- Deviation: `OpenBackpack` opens every equipped bag, not only the backpack, so the vendor,
-        -- bank, mail and trade windows that call it bring up every bag to sell or deposit from.
-        -- The was-open memory is keyed by bag id: `ContainerFrame1..12` are recycled across bags.
+        -- ══ The two bag verbs benilla answers differently ═════════════════════════════════════
+        -- Deviation: `OpenBackpack` opens every equipped bag, not only the backpack, so the vendor
+        -- and mailbox windows that call it (MerchantFrame.lua:35, MailFrame.lua:39) bring up every
+        -- bag to sell or mail from. The was-open memory is keyed by bag id: `ContainerFrame1..12`
+        -- are recycled across bags. The stock `CloseAllBags` (ContainerFrame.lua:702-707) runs
+        -- unchanged: it calls this `CloseBackpack`, then closes bags 1 and up.
         BENILLA_BAG_WAS_OPEN = {}
-
-        -- Ignores the was-open memory and covers the bank bags, as ContainerFrame.lua:702-707 does.
-        function BenillaCloseAllBags()
-            for bagId = 0, (NUM_CONTAINER_FRAMES or -1) do
-                CloseBag(bagId)
-            end
-        end
 
         -- The reference's `backpackWasOpen`, one entry per bag: CloseBackpack leaves those open.
         function BenillaOpenBackpack()
@@ -75,9 +70,8 @@
         end
 
         -- The stock names, redefined after the stock ContainerFrame.lua has loaded, so its callers
-        -- (the vendor, bank, mail and trade windows) reach these.
+        -- (the vendor and mailbox windows, the vendor's close and `CloseAllBags`) reach these.
         OpenBackpack = BenillaOpenBackpack
         CloseBackpack = BenillaCloseBackpack
-        CloseAllBags = BenillaCloseAllBags
     ]]></Script>
 </Ui>

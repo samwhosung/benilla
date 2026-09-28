@@ -424,6 +424,66 @@ fn vendor_leaves_an_already_open_backpack_alone() {
     );
 }
 
+/// A centre panel opened over a vendor keeps a backpack the player had open before it: the stock
+/// `ShowUIPanel` calls `CloseAllBags` (`UIParent.lua:699-702`), whose `CloseBackpack()` honours
+/// the was-open memory (`ContainerFrame.lua:702-707`, `:210-218`), and then closes bags 1 and up,
+/// the ones the vendor opened included.
+#[test]
+fn a_centre_panel_over_a_vendor_keeps_the_backpack_the_player_had_open() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut s = UiScript::new().unwrap();
+    s.set_screen_size(1024.0, 768.0);
+    for file in crate::ui_script::test_ui::production_order(&[
+        BAG_UI,
+        &[
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kits
+        ],
+    ]) {
+        load_xml(&s, file);
+    }
+    s.set_money(0);
+    equip_bag(&mut s, 0, "Backpack", 16);
+    equip_bag(&mut s, 1, "Small Pouch", 6);
+    equip_bag(&mut s, 4, "Small Pouch", 6);
+
+    s.run("MainMenuBarBackpackButton:Click()").unwrap();
+    assert!(
+        bag_open(&s, 0),
+        "fixture: the player's own backpack is up first"
+    );
+    s.set_merchant(Some(MerchantState::default()));
+    s.fire_event("MERCHANT_SHOW", vec![]);
+    assert!(
+        bag_open(&s, 1) && bag_open(&s, 4),
+        "fixture: the vendor opens the equipped bags"
+    );
+
+    // A centre-area panel, as the Help micro button's `HelpFrame` is (`UIParent.lua:35`).
+    s.run(
+        r#"local f = CreateFrame("Frame", "CentrePanelProbe", UIParent)
+           f:Hide()
+           UIPanelWindows["CentrePanelProbe"] = { area = "center", pushable = 0 }
+           ShowUIPanel(CentrePanelProbe)"#,
+    )
+    .unwrap();
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+    assert!(
+        s.eval::<bool>("return CentrePanelProbe:IsShown() == 1")
+            .unwrap(),
+        "fixture: the centre panel opened"
+    );
+    assert!(
+        bag_open(&s, 0),
+        "the backpack the player had open before the vendor stays open"
+    );
+    assert!(
+        !bag_open(&s, 1) && !bag_open(&s, 4),
+        "bags 1-4 close, the vendor's included"
+    );
+}
+
 /// Deviation: the vendor opens every equipped bag, not only the backpack as the stock
 /// `OpenBackpack` does, so every bag is up to sell from. `ContainerFrameAdapters.xml` replaces the
 /// verb after the stock file loads; with the stock body live, bag 2 would not open.
