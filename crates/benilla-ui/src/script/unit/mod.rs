@@ -107,6 +107,9 @@ pub struct UnitState {
     /// `UnitHasRelicSlot` (`0x519e50`): INVSLOT 17 is a relic slot, from `ChrClasses.dbc` field
     /// 16. Players only, true for Paladin, Shaman and Druid.
     pub has_relic_slot: bool,
+    /// `ChrClasses.dbc` field 2 for a player's class, 0-based (Strength 0, Agility 1), which
+    /// `GetDamageBonusStat` (`0x48b520`) reads for the active player; `None` with no class row.
+    pub damage_bonus_stat: Option<u32>,
     /// `UnitSex`'s scale, 2 male and 3 female, from `UNIT_FIELD_BYTES_0` byte 2 (0 male, 1
     /// female). The unfilled 0 answers 2, the reference's unresolved answer (`0x517f9f`).
     pub sex: u8,

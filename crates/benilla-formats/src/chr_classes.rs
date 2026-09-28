@@ -1,6 +1,10 @@
 //! `ChrClasses.dbc`, the per-class table, narrowed to the three columns the reference reads off
 //! its class-indexed record table (`0xc0def4`, max id `0xc0def8`, loader `0x542360`).
 //!
+//! Field 2, the damage bonus stat: `GetDamageBonusStat` (`0x48b520`) reads it at `rec + 8` for the
+//! active player's class byte and answers it plus one, a 1-based `UnitStat` index. Strength (0)
+//! for every row but the Hunter's and the Rogue's Agility (1).
+//!
 //! Field 4, the pet name token: the second return of `HasPetSpells` (`0x4b4410`), `"PET"` on every
 //! row but the Warlock's `"DEMON"`. FrameXML resolves it with `getglobal("PET_TYPE_"..token)`
 //! (`SpellBookFrame.lua:173`), so the token is a key, never display text, and is not localized.
@@ -30,6 +34,9 @@ const CHR_CLASSES: &str = "DBFilesClient\\ChrClasses.dbc";
 /// never read one column short.
 const CHR_CLASSES_FIELDS: usize = 17;
 
+/// Field 2, read at `rec + 8` by `GetDamageBonusStat` (`0x48b569`).
+const DAMAGE_BONUS_STAT_FIELD: usize = 0x8 / 4;
+
 /// Field 4, read at `rec + 0x10` by `HasPetSpells` (`0x4b447c`).
 const PET_NAME_TOKEN_FIELD: usize = 0x10 / 4;
 
@@ -45,6 +52,7 @@ pub const PET_NAME_TOKEN_FALLBACK: &str = "PET";
 
 #[derive(Debug, Clone)]
 struct ChrClass {
+    damage_bonus_stat: u32,
     pet_name_token: Option<String>,
     has_relic_slot: bool,
     spell_family: u32,
@@ -62,6 +70,12 @@ impl ChrClasses {
             .get(&class)
             .and_then(|c| c.pet_name_token.as_deref())
             .unwrap_or(PET_NAME_TOKEN_FALLBACK)
+    }
+
+    /// The class's damage bonus stat, 0-based (Strength 0, Agility 1); `None` for a class with
+    /// no row, where `GetDamageBonusStat` answers 0 (`0x48b58a`).
+    pub fn damage_bonus_stat(&self, class: u32) -> Option<u32> {
+        self.0.get(&class).map(|c| c.damage_bonus_stat)
     }
 
     /// Whether the class's INVSLOT 17 is a relic slot, `UnitHasRelicSlot` whole. A class with no
@@ -110,6 +124,7 @@ pub fn load_chr_classes(chain: &mut Chain) -> Result<ChrClasses> {
         by_id.insert(
             id,
             ChrClass {
+                damage_bonus_stat: u32_at(r, DAMAGE_BONUS_STAT_FIELD).unwrap_or(0),
                 pet_name_token: str_at(&rs, r, PET_NAME_TOKEN_FIELD),
                 has_relic_slot: u32_at(r, RELIC_SLOT_FIELD).is_some_and(|v| v != 0),
                 spell_family: u32_at(r, SPELL_FAMILY_FIELD).unwrap_or(0),
@@ -163,6 +178,28 @@ mod tests {
         // No row: the reference's nil leg.
         assert!(!t.has_relic_slot(6));
         assert!(!t.has_relic_slot(0));
+    }
+
+    /// Hunters and Rogues scale their damage off Agility, everyone else off Strength.
+    #[test]
+    fn hunters_and_rogues_take_their_damage_bonus_from_agility() {
+        let Some(mut chain) = chain() else { return };
+        let t = load_chr_classes(&mut chain).expect("load ChrClasses.dbc");
+        for (class, who) in [(3, "Hunter"), (4, "Rogue")] {
+            assert_eq!(t.damage_bonus_stat(class), Some(1), "{who}");
+        }
+        for (class, who) in [
+            (1, "Warrior"),
+            (2, "Paladin"),
+            (5, "Priest"),
+            (7, "Shaman"),
+            (8, "Mage"),
+            (9, "Warlock"),
+            (11, "Druid"),
+        ] {
+            assert_eq!(t.damage_bonus_stat(class), Some(0), "{who}");
+        }
+        assert_eq!(t.damage_bonus_stat(6), None);
     }
 
     /// The whole column pins field 15: nine distinct values matching vmangos `SpellFamilyNames`

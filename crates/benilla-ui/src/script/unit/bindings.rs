@@ -723,6 +723,19 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
+    // GetDamageBonusStat() (`0x48b520`): the active player's `ChrClasses.dbc` field 2 plus one,
+    // the 1-based `UnitStat` index its melee damage scales with; 0 with no player or no class row
+    // (`0x48b58a`). No stock caller.
+    g.set(
+        "GetDamageBonusStat",
+        lua.create_function(|lua, ()| {
+            let stat = with_unit(lua, &Some("player".to_string()), None, |u| {
+                u.damage_bonus_stat
+            })?;
+            Ok(stat.map_or(0, |s| i64::from(s) + 1))
+        })?,
+    )?;
+
     // UnitSex(unit): 2 male, 3 female, or 1 neuter, which no feed sends. A unit that does not
     // resolve answers 2, never nil (`0x517f9f`).
     g.set(

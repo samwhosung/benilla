@@ -823,6 +823,11 @@ pub(crate) fn snapshot(
         // byte against `ChrClasses.dbc` field 16; without the player test a class-2 NPC answers 1.
         has_relic_slot: matches!(store.0.object_type(), Some(ObjectType::Player))
             && class_id.is_some_and(|c| classes.is_some_and(|t| t.has_relic_slot(u32::from(c)))),
+        // `GetDamageBonusStat` (`0x48b520`): the class byte against `ChrClasses.dbc` field 2,
+        // read for the active player only (TYPEMASK_PLAYER, `0x48b538`).
+        damage_bonus_stat: matches!(store.0.object_type(), Some(ObjectType::Player))
+            .then(|| class_id.and_then(|c| classes.and_then(|t| t.damage_bonus_stat(u32::from(c)))))
+            .flatten(),
         // Gender byte 0 male, 1 female, on `UnitSex`'s scale: 2 male, 3 female, 0 unknown (nil).
         sex: match store.0.unit_gender() {
             Some(0) => 2,

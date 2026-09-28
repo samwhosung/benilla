@@ -1379,6 +1379,35 @@ fn unit_is_party_leader_ors_two_legs_and_answers_one_when_solo() {
     assert!(s.run(r#"UnitIsPartyLeader("notatoken")"#).is_err());
 }
 
+/// `GetDamageBonusStat()` (`0x48b520`) is the player's class row's field 2 plus one, 0 with no
+/// player or no row; it takes no unit, so another unit's class never answers.
+#[test]
+fn damage_bonus_stat_is_the_player_class_stat_one_based() {
+    let mut s = UiScript::new().unwrap();
+    assert_eq!(s.eval::<i64>("return GetDamageBonusStat()").unwrap(), 0);
+
+    let mut rogue = player();
+    rogue.damage_bonus_stat = Some(1);
+    s.set_unit("target", Some(rogue.clone()));
+    assert_eq!(
+        s.eval::<i64>("return GetDamageBonusStat()").unwrap(),
+        0,
+        "the target is not the player"
+    );
+    s.set_unit("player", Some(rogue));
+    assert_eq!(s.eval::<i64>("return GetDamageBonusStat()").unwrap(), 2);
+
+    let mut warrior = player();
+    warrior.damage_bonus_stat = Some(0);
+    s.set_unit("player", Some(warrior));
+    assert_eq!(s.eval::<i64>("return GetDamageBonusStat()").unwrap(), 1);
+
+    let mut rowless = player();
+    rowless.damage_bonus_stat = None;
+    s.set_unit("player", Some(rowless));
+    assert_eq!(s.eval::<i64>("return GetDamageBonusStat()").unwrap(), 0);
+}
+
 /// Stock calls it unconditionally (`PaperDollFrame.lua:429`, `PaperDollFrame.lua:580`), so the
 /// global must exist for every class.
 #[test]
