@@ -38,8 +38,9 @@ pub struct MerchantItem {
     pub max_stack: Option<u32>,
 }
 
-/// An item template's tooltip stat head, resolved per row by the app. The reference's
-/// `GameTooltip:SetMerchantItem` reads these in C++; no 1.12 Lua API carries them.
+/// An item template's tooltip stat head, resolved per row by the app, which `SetMerchantItem` and
+/// `SetBuybackItem` draw while the VM's template is in flight. The reference reads the template in
+/// C++ (`0x534080`); no 1.12 Lua API carries these.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ItemStatsHead {
     /// 0 poor to 6 artifact; colours the tooltip's name line.
@@ -256,38 +257,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // BenillaGetMerchantItemStats(index) → quality, invType, class, subclass, dmgMin, dmgMax,
-    // dmgType, delayMs, armor, block, or nil. Not a 1.12 verb: the reference's tooltip reads the
-    // template in C++ (`SetMerchantItem 0x534080`).
-    g.set(
-        "BenillaGetMerchantItemStats",
-        lua.create_function(|lua, index: usize| {
-            let stats = {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                model
-                    .merchant
-                    .as_ref()
-                    .and_then(|m| index.checked_sub(1).and_then(|n| m.items.get(n)))
-                    .and_then(|it| it.stats)
-            };
-            let Some(s) = stats else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
-            };
-            Ok(MultiValue::from_vec(vec![
-                Value::Integer(i64::from(s.quality)),
-                Value::Integer(i64::from(s.inventory_type)),
-                Value::Integer(i64::from(s.class)),
-                Value::Integer(i64::from(s.subclass)),
-                Value::Number(f64::from(s.dmg_min)),
-                Value::Number(f64::from(s.dmg_max)),
-                Value::Integer(i64::from(s.dmg_type)),
-                Value::Integer(i64::from(s.delay_ms)),
-                Value::Integer(i64::from(s.armor)),
-                Value::Integer(i64::from(s.block)),
-            ]))
-        })?,
-    )?;
-
     g.set(
         "BuyMerchantItem",
         lua.create_function(|lua, (index, quantity): (u32, Option<u32>)| {
@@ -414,36 +383,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Value::Integer(i64::from(it.quantity)),
                 Value::Integer(i64::from(it.num_available)),
                 usable_value(usable),
-            ]))
-        })?,
-    )?;
-
-    // BenillaGetBuybackItemStats(index): the buyback hover's stat head, as above.
-    g.set(
-        "BenillaGetBuybackItemStats",
-        lua.create_function(|lua, index: usize| {
-            let stats = {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                model
-                    .merchant
-                    .as_ref()
-                    .and_then(|m| index.checked_sub(1).and_then(|n| m.buyback.get(n)))
-                    .and_then(|it| it.stats)
-            };
-            let Some(s) = stats else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
-            };
-            Ok(MultiValue::from_vec(vec![
-                Value::Integer(i64::from(s.quality)),
-                Value::Integer(i64::from(s.inventory_type)),
-                Value::Integer(i64::from(s.class)),
-                Value::Integer(i64::from(s.subclass)),
-                Value::Number(f64::from(s.dmg_min)),
-                Value::Number(f64::from(s.dmg_max)),
-                Value::Integer(i64::from(s.dmg_type)),
-                Value::Integer(i64::from(s.delay_ms)),
-                Value::Integer(i64::from(s.armor)),
-                Value::Integer(i64::from(s.block)),
             ]))
         })?,
     )?;
@@ -737,41 +676,6 @@ mod tests {
     }
 
     #[test]
-    fn merchant_stats_feed_reads_the_tooltip_head() {
-        let mut s = UiScript::new().unwrap();
-        let mut stock = stock();
-        // A sword, so every stat column is distinct.
-        stock.items[0].stats = Some(ItemStatsHead {
-            quality: 2,
-            inventory_type: 21,
-            class: 2,
-            subclass: 7,
-            dmg_min: 5.0,
-            dmg_max: 9.0,
-            dmg_type: 2,
-            delay_ms: 2600,
-            armor: 0,
-            block: 0,
-            sell_price: 0,
-        });
-        s.set_merchant(Some(stock));
-        let (quality, inv, class, sub, dmin, dmax, dtype, delay, armor, block) = s
-            .eval::<(i64, i64, i64, i64, f64, f64, i64, i64, i64, i64)>(
-                "return BenillaGetMerchantItemStats(1)",
-            )
-            .unwrap();
-        assert_eq!((quality, inv, class, sub), (2, 21, 2, 7));
-        assert_eq!((dmin, dmax, dtype, delay), (5.0, 9.0, 2, 2600));
-        assert_eq!((armor, block), (0, 0));
-        assert!(s
-            .eval::<bool>("return BenillaGetMerchantItemStats(2) == nil")
-            .unwrap());
-        assert!(s
-            .eval::<bool>("return BenillaGetMerchantItemStats(9) == nil")
-            .unwrap());
-    }
-
-    #[test]
     fn buy_merchant_item_queues_intents() {
         let mut s = UiScript::new().unwrap();
         s.set_merchant(Some(stock()));
@@ -819,9 +723,6 @@ mod tests {
         let (name, _tex, price): (String, String, i64) =
             s.eval("return GetBuybackItemInfo(1)").unwrap();
         assert_eq!((name.as_str(), price), ("Worn Dagger", 47));
-        assert!(s
-            .eval::<bool>("return BenillaGetBuybackItemStats(1) ~= nil")
-            .unwrap());
 
         s.run("BuybackItem(1)").unwrap();
         assert_eq!(s.take_merchant_buybacks(), vec![1]);
@@ -1012,10 +913,6 @@ mod tests {
             "CursorHasItem is nil for mode 5"
         );
         assert!(s.eval::<bool>("return not CursorHasSpell()").unwrap());
-        assert!(
-            s.eval::<bool>("return GetCursorInfo() == nil").unwrap(),
-            "GetCursorInfo reports nothing — no binding exposes mode 5"
-        );
 
         // Yet it is held: a second call toggles it off (`0x4fb818`), a third re-grabs.
         s.run("PickupMerchantItem(1)").unwrap();
@@ -1036,17 +933,14 @@ mod tests {
             s.run("PickupMerchantItem(1)").unwrap(); // hold something first
             s.run(bad)
                 .unwrap_or_else(|e| panic!("{bad} must not raise: {e}"));
-            assert!(
-                s.eval::<bool>("return GetCursorInfo() == nil").unwrap(),
-                "{bad} cleared the cursor"
-            );
+            assert!(s.cursor_payload().is_none(), "{bad} cleared the cursor");
         }
         // A missing argument is the same silent clear.
         s.run("PickupMerchantItem(1)").unwrap();
         s.run("PickupMerchantItem()").unwrap();
         // `2^32 + 1` narrows to row 0 on a naive cast.
         s.run("PickupMerchantItem(4294967297)").unwrap();
-        assert!(s.eval::<bool>("return GetCursorInfo() == nil").unwrap());
+        assert!(s.cursor_payload().is_none());
         s.run("PickupContainerItem(0, 3)").unwrap();
         assert!(
             s.take_merchant_slot_buys().is_empty(),
@@ -1055,7 +949,7 @@ mod tests {
         // A numeric string is accepted, and 1.9 truncates to the held row 1, toggling it off.
         s.run(r#"PickupMerchantItem("1")"#).unwrap();
         s.run("PickupMerchantItem(1.9)").unwrap();
-        assert!(s.eval::<bool>("return GetCursorInfo() == nil").unwrap());
+        assert!(s.cursor_payload().is_none());
     }
 
     #[test]
@@ -1097,7 +991,7 @@ mod tests {
             "the row's item entry, aimed at the dropped-on slot"
         );
         assert!(
-            s.eval::<bool>("return GetCursorInfo() == nil").unwrap(),
+            s.cursor_payload().is_none(),
             "the cursor clears on the drop"
         );
     }
@@ -1119,7 +1013,7 @@ mod tests {
             s.take_merchant_slot_buys().is_empty(),
             "no buy goes out for a row that no longer resolves"
         );
-        assert!(s.eval::<bool>("return GetCursorInfo() == nil").unwrap());
+        assert!(s.cursor_payload().is_none());
     }
 
     #[test]

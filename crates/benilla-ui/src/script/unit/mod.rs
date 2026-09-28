@@ -155,10 +155,6 @@ pub struct UnitState {
     /// reads disconnected, which greys a stock mana bar (`UnitFrame.lua:214`), so a synthetic
     /// live unit must set it.
     pub is_connected: bool,
-    /// `UnitIsAFK`, the roster status byte's `0x40`, fed for party tokens.
-    pub is_afk: bool,
-    /// `UnitIsDND`, the roster status byte's `0x80`, fed for party tokens.
-    pub is_dnd: bool,
     /// `UnitIsPVPFreeForAll`: `PLAYER_FLAGS` bit `0x80`, or the roster status byte's `0x10`;
     /// independent of [`Self::pvp`].
     pub is_pvp_ffa: bool,

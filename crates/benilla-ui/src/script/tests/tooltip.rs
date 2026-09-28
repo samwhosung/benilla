@@ -145,7 +145,6 @@ fn owner_clear_and_hide_lifecycle() {
         tt:AddLine("first hover")
         tt:Show()
         assert(tt:IsOwned(a) and not tt:IsOwned(b), "owned by a")
-        assert(tt:BenillaGetTooltipOwner() == a, "the owner wrapper reads back")
         tt:SetOwner(b, "ANCHOR_LEFT")
         assert(cleared >= 1, "SetOwner cleared the old content")
         assert(tt:NumLines() == 0, "content cleared on re-own")
@@ -160,6 +159,36 @@ fn owner_clear_and_hide_lifecycle() {
     )
     .unwrap();
     assert!(s.take_errors().is_empty());
+}
+
+/// The host reads a tooltip's owner by name; Lua has only `IsOwned(frame)`, and no method of ours
+/// answers the owner.
+#[test]
+fn the_host_reads_the_owner_and_lua_cannot() {
+    let s = script();
+    s.run(
+        r#"
+        local a = CreateFrame("Button", "OwnA")
+        local b = CreateFrame("Button", "OwnB")
+        TTO = CreateFrame("GameTooltip", "TTO")
+        TTO:SetOwner(a, "ANCHOR_RIGHT")
+        "#,
+    )
+    .unwrap();
+    assert_eq!(s.tooltip_owner_name("TTO").as_deref(), Some("OwnA"));
+    s.run(r#"TTO:SetOwner(OwnB, "ANCHOR_LEFT")"#).unwrap();
+    assert_eq!(s.tooltip_owner_name("TTO").as_deref(), Some("OwnB"));
+    s.run("TTO:Hide()").unwrap();
+    assert_eq!(s.tooltip_owner_name("TTO"), None, "the hide un-owns");
+    assert_eq!(s.tooltip_owner_name("NoSuchTooltip"), None);
+    assert_eq!(s.tooltip_owner_name("OwnA"), None, "a Button is no tooltip");
+    for method in ["BenillaGetTooltipOwner", "BenillaSetItemById"] {
+        assert!(
+            s.eval::<bool>(&format!("return TTO.{method} == nil"))
+                .unwrap(),
+            "GameTooltip:{method} is reachable"
+        );
+    }
 }
 
 /// `SetText` shows the tooltip and `AddLine` does not. `r, g, b` apply only when the r slot is a

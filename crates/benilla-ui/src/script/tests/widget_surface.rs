@@ -1,4 +1,5 @@
-//! The widget-method surface gate, the widget sibling of [`super::reference_surface`]. The
+//! The widget-method surface gate, the widget sibling of [`super::reference_surface`], with no
+//! prefix that excuses a method: a host seam is a Rust call, never a method an addon reaches. The
 //! reference's 23 widget registrar tables are disjoint, so a class's surface is its own table plus
 //! those it inherits ([`WIDGET_CHAINS`]): `0x87c9b8` is the base `Region` map (the 19
 //! `REGION_MAP_METHODS`), and `LootButton`'s own `0x847ce4` holds only `SetSlot`.
@@ -320,8 +321,6 @@ fn our_widget_methods_stay_inside_the_1_12_surface() {
         let extra: BTreeSet<String> = have
             .iter()
             .filter(|n| !want.contains(*n))
-            // Our host bridge and VM internals are marked by prefix, as `reference_surface` does.
-            .filter(|n| !n.starts_with("Benilla") && !n.starts_with("__benilla_"))
             .filter(|n| !listed.get(*n).is_some_and(|c| c.contains(class)))
             .cloned()
             .collect();

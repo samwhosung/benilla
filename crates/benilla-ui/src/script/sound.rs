@@ -1,11 +1,10 @@
 //! The sound bindings: `PlaySound`, `PlaySoundFile`, `PlayMusic` and `StopMusic` each queue a
 //! plain request for the app to drain, since the engine does not touch the app's mixer.
 //!
-//! `PlaySound` takes a kit name, as the reference's binding does (`0x4586d0` reaches only
-//! `PlaySoundByName`, `0x458030`), and also Era's numeric kit id, which 1.12's binding does not
-//! take (the client plays a kit id internally through `0x458850`). Both verbs answer Era's
-//! `willPlay, soundHandle`, true and nil, not 1.12's shapes: the reference's `PlaySound` answers
-//! nothing and its `PlaySoundFile` one value (`reference/1.12-shapes.tsv`).
+//! `PlaySound` takes a kit name (`0x4586d0` reaches only `PlaySoundByName`, `0x458030`); a number
+//! is `lua_tostring`'s decimal name, which no `SoundEntries` row carries, so it plays nothing (the
+//! client plays a kit id internally, through `0x458850`). It answers nothing; `PlaySoundFile`
+//! answers one value (`0x458780`).
 //!
 //! The music pair drives its own slot: the reference gives Lua a stream of its own (`[0xb06ccc]`,
 //! opened in `0x460450` at `0x4604a7`) beside the zone track's (`[0xb06cc4]`), one of the client's
@@ -19,9 +18,7 @@ use super::Model;
 /// One queued sound for the app's kit player.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SoundRequest {
-    /// `PlaySound(id)`: a `SoundEntries` kit id, Era's form.
-    KitId(u32),
-    /// `PlaySound("name")`: a kit name, the 1.12 form.
+    /// `PlaySound("name")`: a kit name, a number's decimal spelling included.
     KitName(String),
     /// `PlaySoundFile("path")`: a file path, no kit.
     File(String),
@@ -61,42 +58,38 @@ impl super::UiScript {
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.globals().set(
         "PlaySoundFile",
+        // `0x458780`: `lua_isstring`, so a number is a file name, else the literal at `0x835f98`.
+        // It answers 1 when the play started and nil when `0x7a5450` refused it. Deviation: the
+        // app plays the queued file after the call, so the refusals (the bus-3 cap, a muted SFX
+        // channel, a missing file) come too late to answer, and a queued file answers 1.
         lua.create_function(|lua, args: mlua::MultiValue| {
-            let Some(Value::String(s)) = args.front() else {
-                return Err(mlua::Error::runtime("Usage: PlaySoundFile(\"filePath\")"));
-            };
-            let path = s.to_str()?.to_owned();
+            let path = super::binding_abi::string_arg(
+                lua,
+                args.front().cloned().unwrap_or(Value::Nil),
+                "Usage: PlaySoundFile(\"soundfile\")",
+            )?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.sound_queue.push(SoundRequest::File(path));
-            drop(model);
-            Ok((true, Value::Nil))
+            Ok(1)
         })?,
     )?;
     lua.globals().set(
         "PlaySound",
+        // `0x4586d0`: `lua_isstring`, then `lua_tostring`, so a number becomes its decimal name,
+        // else the literal at `0x835f60`; no return value on any path.
         lua.create_function(|lua, args: mlua::MultiValue| {
-            let req = match args.front() {
-                Some(Value::Integer(i)) if *i >= 0 => Some(SoundRequest::KitId(*i as u32)),
-                Some(Value::Number(n)) if *n >= 0.0 => Some(SoundRequest::KitId(*n as u32)),
-                Some(Value::String(s)) => Some(SoundRequest::KitName(s.to_str()?.to_owned())),
-                _ => None,
-            };
-            let Some(req) = req else {
-                // A bad argument raises a usage error, as the reference's does.
-                return Err(mlua::Error::runtime(
-                    "Usage: PlaySound(soundKitID or \"KitName\")",
-                ));
-            };
+            let name = super::binding_abi::string_arg(
+                lua,
+                args.front().cloned().unwrap_or(Value::Nil),
+                "Usage: PlaySound(\"sound\")",
+            )?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             // During the UI load a by-name play is dropped before any other gate (`0x458046`,
-            // `0x45804d`), while the binding still answers; the id entry (`0x457fb0`) has no
-            // such gate.
-            let suppressed = matches!(req, SoundRequest::KitName(_)) && model.sound_suppression > 0;
-            if !suppressed {
-                model.sound_queue.push(req);
+            // `0x45804d`).
+            if model.sound_suppression == 0 {
+                model.sound_queue.push(SoundRequest::KitName(name));
             }
-            drop(model);
-            Ok((true, Value::Nil))
+            Ok(())
         })?,
     )?;
     lua.globals().set(
@@ -135,29 +128,47 @@ mod tests {
     use super::{MusicRequest, SoundRequest};
     use crate::script::UiScript;
 
+    /// `PlaySound` names a kit and answers nothing (`0x4586d0`); a number is its decimal name,
+    /// never a `SoundEntries` id. `PlaySoundFile` answers one value, 1 for a play (`0x458780`).
     #[test]
-    fn playsound_queues_by_id_and_name_and_drains() {
+    fn playsound_queues_by_name_and_answers_nothing() {
         let mut s = UiScript::new().unwrap();
-        let (will_play, handle_is_nil): (bool, bool) = s
-            .eval("local w, h = PlaySound(1234) return w, h == nil")
-            .unwrap();
-        assert!(will_play && handle_is_nil);
-        // Era's extra arguments are ignored.
+        assert_eq!(s.arity("PlaySound(1234)").unwrap(), 0);
+        assert_eq!(s.arity(r#"PlaySound("GAMEOBJECT_DOOROPEN")"#).unwrap(), 0);
+        // Further arguments are never read.
         s.run(r#"PlaySound(841, "SFX", true)"#).unwrap();
-        s.run(r#"PlaySound("GAMEOBJECT_DOOROPEN")"#).unwrap();
-        s.run(r#"PlaySoundFile("Sound\\Doodad\\BellTollHorde.wav")"#)
-            .unwrap();
+        assert_eq!(
+            s.eval::<(i64, bool)>(
+                r#"local n = table.getn({PlaySoundFile("Sound\\Doodad\\BellTollHorde.wav")})
+                   return n, PlaySoundFile(12) == 1"#
+            )
+            .unwrap(),
+            (1, true)
+        );
 
         assert_eq!(
             s.take_sounds(),
             vec![
-                SoundRequest::KitId(1234),
-                SoundRequest::KitId(841),
+                SoundRequest::KitName("1234".into()),
                 SoundRequest::KitName("GAMEOBJECT_DOOROPEN".into()),
+                SoundRequest::KitName("841".into()),
                 SoundRequest::File("Sound\\Doodad\\BellTollHorde.wav".into()),
+                SoundRequest::File("12".into()),
             ]
         );
         assert!(s.take_sounds().is_empty());
+
+        for (call, usage) in [
+            ("PlaySound()", r#"Usage: PlaySound("sound")"#),
+            ("PlaySound({})", r#"Usage: PlaySound("sound")"#),
+            ("PlaySound(true)", r#"Usage: PlaySound("sound")"#),
+            ("PlaySoundFile()", r#"Usage: PlaySoundFile("soundfile")"#),
+            ("PlaySoundFile(nil)", r#"Usage: PlaySoundFile("soundfile")"#),
+        ] {
+            let e = s.run(call).expect_err(call).to_string();
+            assert!(e.contains(usage), "{call}: {e}");
+        }
+        assert!(s.take_sounds().is_empty(), "a raise queues nothing");
     }
 
     #[test]
@@ -203,15 +214,5 @@ mod tests {
             s.take_music(),
             vec![MusicRequest::Play("42".into()), MusicRequest::Stop]
         );
-    }
-
-    #[test]
-    fn playsound_with_a_bad_argument_is_a_usage_error() {
-        let mut s = UiScript::new().unwrap();
-        assert!(s.run("PlaySound(nil)").is_err());
-        assert!(s.run("PlaySound()").is_err());
-        assert!(s.run("PlaySoundFile()").is_err());
-        assert!(s.run("PlaySoundFile(42)").is_err());
-        assert!(s.take_sounds().is_empty());
     }
 }

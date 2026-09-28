@@ -1,5 +1,5 @@
 //! `SpellDispelType.dbc`: the dispel class name the aura tooltip (`0x52f880`) shows and
-//! `UnitAura`/`UnitDebuff` return as `debuffType`, which FrameXML's `DebuffTypeColor` keys the
+//! `UnitDebuff` returns as its `dispelType`, which FrameXML's `DebuffTypeColor` keys the
 //! debuff border on. A row is named only when column 10 (`+0x28`) is nonzero (`0x52f906`): on 5875
 //! that is ids 1-4, so Stealth and Invisibility carry names that never print. Column 11 repeats
 //! the name on those four rows; the tooltip does not read it.

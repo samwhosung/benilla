@@ -164,7 +164,7 @@ impl Default for UnitCombatStats {
 /// [`super::container::ContainerSlot`].
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct InvSlotView {
-    /// The item's template entry (`GetInventoryItemID`).
+    /// The item's template entry, the id inside `GetInventoryItemLink`'s link.
     pub item_id: u32,
     /// Whether the item may go on an action bar, by the same filter as a bag slot's.
     pub bar_placeable: bool,
@@ -742,17 +742,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     .as_ref()
                     .is_some_and(|s| s.has_wand),
             ))
-        })?,
-    )?;
-
-    // GetInventoryItemID(unit, slot) → itemId or nil.
-    g.set(
-        "GetInventoryItemID",
-        lua.create_function(|lua, (token, slot): (Option<String>, i64)| {
-            match player_inv_slot(lua, &token, slot) {
-                Some(v) if v.item_id != 0 => Ok(Value::Integer(i64::from(v.item_id))),
-                _ => Ok(Value::Nil),
-            }
         })?,
     )?;
 
@@ -1558,6 +1547,14 @@ mod tests {
         );
     }
 
+    /// The item id in `GetInventoryItemLink("player", slot)`'s link, 1.12's only road to it.
+    fn link_id(slot: &str) -> String {
+        format!(
+            r#"local _, _, id = string.find(GetInventoryItemLink("player", {slot}), "item:(%d+)")
+               return tonumber(id)"#
+        )
+    }
+
     #[test]
     fn inventory_item_bindings_serve_occupied_empty_and_absent_shapes() {
         let mut s = UiScript::new().unwrap();
@@ -1569,6 +1566,7 @@ mod tests {
             count: 1,
             quality: 2,
             name: Some("Brawler's Harness".into()),
+            link: Some("|cff1eff00|Hitem:2263:0:0:0|h[Brawler's Harness]|h|r".into()),
             ..Default::default()
         });
         slots[0] = Some(InvSlotView {
@@ -1577,15 +1575,12 @@ mod tests {
             count: 200,
             quality: 1,
             name: Some("Rough Arrow".into()),
+            link: Some("|cffffffff|Hitem:2512:0:0:0|h[Rough Arrow]|h|r".into()),
             ..Default::default()
         });
         s.set_inventory_slots(slots);
 
-        assert_eq!(
-            s.eval::<i64>(r#"return GetInventoryItemID("player", 1)"#)
-                .unwrap(),
-            2263
-        );
+        assert_eq!(s.eval::<i64>(&link_id("1")).unwrap(), 2263);
         assert_eq!(
             s.eval::<String>(r#"return GetInventoryItemTexture("player", 1)"#)
                 .unwrap(),
@@ -1602,11 +1597,7 @@ mod tests {
             2
         );
         // The ammo slot (0) reads through the same family.
-        assert_eq!(
-            s.eval::<i64>(r#"return GetInventoryItemID("player", 0)"#)
-                .unwrap(),
-            2512
-        );
+        assert_eq!(s.eval::<i64>(&link_id("0")).unwrap(), 2512);
         assert_eq!(
             s.eval::<i64>(r#"return GetInventoryItemCount("player", 0)"#)
                 .unwrap(),
@@ -1614,7 +1605,7 @@ mod tests {
         );
         // An empty slot: nil id, texture and quality, and count 1 (`0x4c8797`).
         assert!(s
-            .eval::<bool>(r#"return GetInventoryItemID("player", 5) == nil"#)
+            .eval::<bool>(r#"return GetInventoryItemLink("player", 5) == nil"#)
             .unwrap());
         assert!(s
             .eval::<bool>(r#"return GetInventoryItemTexture("player", 5) == nil"#)
@@ -1629,7 +1620,7 @@ mod tests {
             .unwrap());
         // A token with no items behind it: the empty shape.
         assert!(s
-            .eval::<bool>(r#"return GetInventoryItemID("target", 1) == nil"#)
+            .eval::<bool>(r#"return GetInventoryItemLink("target", 1) == nil"#)
             .unwrap());
         assert_eq!(
             s.eval::<i64>(r#"return GetInventoryItemCount("target", 1)"#)
@@ -1639,10 +1630,10 @@ mod tests {
         );
         // Out-of-range slots: the empty shape, no error.
         assert!(s
-            .eval::<bool>(r#"return GetInventoryItemID("player", 25) == nil"#)
+            .eval::<bool>(r#"return GetInventoryItemLink("player", 25) == nil"#)
             .unwrap());
         assert!(s
-            .eval::<bool>(r#"return GetInventoryItemID("player", -1) == nil"#)
+            .eval::<bool>(r#"return GetInventoryItemLink("player", -1) == nil"#)
             .unwrap());
     }
 

@@ -753,6 +753,10 @@ mod panel_template_tests;
 #[cfg(test)]
 mod shape_gate;
 
+/// The surface gate: the production load's globals and widget methods against the 1.12 tables.
+#[cfg(test)]
+mod surface_gate;
+
 /// The event argument-shape gate: every fire site against `reference/1.12-events.tsv`.
 #[cfg(test)]
 mod event_shape_gate;

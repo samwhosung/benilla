@@ -442,10 +442,11 @@ fn clicking_an_occupied_doll_slot_picks_it_up_and_locks_it() {
     assert!(s.errors().is_empty(), "click errors: {:?}", s.errors());
 
     assert!(s.eval::<bool>("return CursorHasItem()").unwrap());
-    let (kind, id) = s
-        .eval::<(String, i64)>("local k, id = GetCursorInfo() return k, id")
-        .unwrap();
-    assert_eq!((kind.as_str(), id), ("item", 1234));
+    assert!(
+        matches!(s.cursor_payload(), Some(benilla_ui::script::CursorPayload::Item(c)) if c.item_id == 1234),
+        "the cursor holds item 1234: {:?}",
+        s.cursor_payload()
+    );
     assert!(
         s.eval::<bool>("return IsInventoryItemLocked(1)").unwrap(),
         "the picked slot locks"

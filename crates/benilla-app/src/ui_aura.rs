@@ -84,7 +84,7 @@ pub(crate) struct PlayerAuraCache {
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct AuraEvents;
 
-/// Adds the aura feed and the `CancelUnitBuff` drain.
+/// Adds the aura feed and the `CancelPlayerBuff`/`CancelTrackingBuff` drain.
 pub(crate) struct UiAuraPlugin;
 
 impl Plugin for UiAuraPlugin {
@@ -629,7 +629,8 @@ fn end_session_aura_state(
     // No `AuraFeedMemory` reset: its edge keys die with the VM.
 }
 
-/// A `CMSG_CANCEL_AURA` per queued `CancelUnitBuff`, naming the spell, not the slot (`0x6e7040`).
+/// A `CMSG_CANCEL_AURA` per queued `CancelPlayerBuff` or `CancelTrackingBuff`, naming the spell,
+/// not the slot (`0x6e7040`).
 fn drain_aura_cancels(script: Option<NonSendMut<UiScript>>, net: Res<NetCommands>) {
     let Some(mut script) = script else {
         return;

@@ -356,8 +356,20 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         "SetFrameStrata",
         lua.create_function(|lua, (this, strata): (Table, String)| {
             let h = frame_handle_of(lua, &this)?;
-            let s = strata_from_str(&strata)
-                .ok_or_else(|| mlua::Error::runtime(format!("unknown frameStrata '{strata}'")))?;
+            // A name off the table raises, naming the frame or `<unnamed>` (`0x774450`), and the
+            // stratum stays.
+            let Some(s) = strata_from_str(&strata) else {
+                let name = lua
+                    .app_data_ref::<Model>()
+                    .expect("model")
+                    .arena
+                    .frame(h)
+                    .and_then(|f| f.name.clone())
+                    .unwrap_or_else(|| "<unnamed>".to_string());
+                return Err(mlua::Error::runtime(format!(
+                    "{name}:SetFrameStrata(): Unknown frame strata: {strata}"
+                )));
+            };
             lua.app_data_mut::<Model>()
                 .expect("model")
                 .arena
@@ -772,7 +784,6 @@ fn strata_name(s: Strata) -> &'static str {
         Strata::Fullscreen => "FULLSCREEN",
         Strata::FullscreenDialog => "FULLSCREEN_DIALOG",
         Strata::Tooltip => "TOOLTIP",
-        Strata::Blizzard => "BLIZZARD",
     }
 }
 

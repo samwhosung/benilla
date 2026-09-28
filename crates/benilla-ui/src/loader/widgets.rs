@@ -83,18 +83,19 @@ impl Loader<'_> {
                 // form (`UIPanelButtonUpTexture`); it expands like a `<Layers>` region.
                 let expanded = this.expand_region(raw);
                 let t = &expanded;
-                if let Some(file) = t.attr("file") {
-                    this.call(wrapper, method, file.to_string(), dbg);
-                } else if let Some(c) = children_named(t, "Color").next().map(color_of) {
-                    this.call(wrapper, method, (c[0], c[1], c[2], c[3]), dbg);
-                } else {
-                    // No art: the element alone creates the region, as the reference sends all four
-                    // state textures through the `<Layers>` texture adder (`0x6f26f0`, from
-                    // `0x778903`); `""` creates the slot without painting it.
-                    this.call(wrapper, method, String::new(), dbg);
+                // The reference sends all four state textures through the `<Layers>` texture adder
+                // (`0x6f26f0`, from `0x778903`), so a `<Color>` is the region's own colour fill; the
+                // Lua setter has no colour form (`0x781970`). `""` creates the slot unpainted.
+                let color = children_named(t, "Color").next().map(color_of);
+                match t.attr("file") {
+                    Some(file) => this.call(wrapper, method, file.to_string(), dbg),
+                    None => this.call(wrapper, method, String::new(), dbg),
                 }
                 let getter = method.replacen("Set", "Get", 1);
                 if let Ok(region) = wrapper.call_method::<Table>(getter.as_str(), ()) {
+                    if let (None, Some(c)) = (t.attr("file"), color) {
+                        this.call_region(&region, "SetTexture", (c[0], c[1], c[2], c[3]), dbg);
+                    }
                     if let Some(mode) = t.attr("alphaMode") {
                         this.call_region(&region, "SetBlendMode", mode.to_string(), dbg);
                     }

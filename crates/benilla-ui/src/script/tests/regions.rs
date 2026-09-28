@@ -281,41 +281,6 @@ fn set_portrait_texture_binds_unit_token_then_settexture_clears_it() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// `BenillaSetBoothTexture`, the paper doll's square booth binding: `SetPortraitTexture`'s
-/// carriage with `circular` false, as the model pane has no ring to mask for.
-#[test]
-fn benilla_set_booth_texture_binds_square() {
-    let mut s = script();
-    s.set_screen_size(800.0, 600.0);
-    s.run(
-        r#"
-        local f = CreateFrame("Frame", "DollFrame")
-        f:SetPoint("TOPLEFT", 0, 0)
-        f:SetWidth(200); f:SetHeight(300)
-        local m = f:CreateTexture("DollFrameModel", "ARTWORK")
-        m:SetAllPoints()
-        BenillaSetBoothTexture(m, "paperdoll")
-    "#,
-    )
-    .unwrap();
-    s.resolve();
-    let bound = s.extract().into_iter().find_map(|q| match q.content {
-        QuadContent::Texture {
-            portrait_unit: Some(u),
-            circular,
-            ..
-        } => Some((u, circular)),
-        _ => None,
-    });
-    let (token, circular) = bound.expect("a booth-bound quad is extracted");
-    assert_eq!(token, "paperdoll");
-    assert!(
-        !circular,
-        "the booth pane draws square — no inscribed-circle mask"
-    );
-    assert!(s.errors().is_empty(), "{:?}", s.errors());
-}
-
 /// The quest log detail pane's shape: a region anchor chain about 15 deep (title, objectives,
 /// description, rewards) with a frame anchored to its tail, which the resolve runs to a fixpoint.
 #[test]

@@ -840,13 +840,10 @@ fn drag_drop_onto_another_button_hops_the_displaced_action() {
         "Interface\\Icons\\Spell_A",
         "slot 2 now shows the placed action"
     );
-    let (kind, src) = s
-        .eval::<(String, i64)>("local k, slot = GetCursorInfo() return k, slot")
-        .unwrap();
-    assert_eq!(
-        (kind.as_str(), src),
-        ("action", 2),
-        "the displaced action hopped on, sourced from slot 2"
+    assert!(
+        matches!(s.cursor_payload(), Some(benilla_ui::script::CursorPayload::Action(c)) if c.src_slot == 2),
+        "the displaced action hopped on, sourced from slot 2: {:?}",
+        s.cursor_payload()
     );
 
     // Two independent sends across the one gesture: the pickup's clear, then the place's write.

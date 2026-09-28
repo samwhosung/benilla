@@ -443,7 +443,7 @@ fn dragging_a_pet_spell_between_slots_moves_it_through_the_shipped_handlers() {
         0,
         "the grid goes down with the payload"
     );
-    assert!(s.eval::<bool>("return GetCursorInfo() == nil").unwrap());
+    assert!(s.cursor_payload().is_none());
 }
 
 /// `LOCK_ACTIONBAR` stops both drag ends (PetActionBarFrame.lua:270,278) but not the shift-click
@@ -466,7 +466,7 @@ fn the_lock_stops_the_pet_bar_drag_but_not_its_shift_click() {
         s.take_pet_set_actions().is_empty(),
         "a locked bar sends nothing — the slot was never picked up"
     );
-    assert!(s.eval::<bool>("return GetCursorInfo() == nil").unwrap());
+    assert!(s.cursor_payload().is_none());
 
     s.set_modifiers(true, false, false);
     s.run("this = PetActionButton4; PetActionButton_OnClick(\"LeftButton\")")

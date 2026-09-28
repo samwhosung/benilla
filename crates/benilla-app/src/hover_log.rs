@@ -99,25 +99,25 @@ impl Plugin for HoverLogPlugin {
     }
 }
 
-/// The tooltip context, asked of the Lua VM, once per frame while recording.
+/// The tooltip context, asked of the Lua VM, once per frame while recording; the owner, which 1.12
+/// does not answer to Lua, from the engine.
 fn tooltip_context(script: &UiScript) -> Option<(String, i64, String)> {
     let chunk = r#"
         if not GameTooltip or not GameTooltip:IsShown() then return "" end
-        local owner = GameTooltip:BenillaGetTooltipOwner()
-        local name = "(no owner)"
-        if owner and owner.GetName and owner:GetName() then name = owner:GetName() end
-        local first = ""
+        local first = "
         if GameTooltipTextLeft1 and GameTooltipTextLeft1:GetText() then
             first = GameTooltipTextLeft1:GetText()
         end
-        return name .. "\t" .. GameTooltip:NumLines() .. "\t" .. first
+        return GameTooltip:NumLines() .. "\t" .. first
     "#;
     let s: String = script.eval(chunk).ok()?;
     if s.is_empty() {
         return None;
     }
     let mut parts = s.split('\t');
-    let owner = parts.next()?.to_string();
+    let owner = script
+        .tooltip_owner_name("GameTooltip")
+        .unwrap_or_else(|| "(no owner)".to_string());
     let lines = parts.next()?.trim().parse::<f64>().ok()? as i64;
     let first = parts.next().unwrap_or("").to_string();
     Some((owner, lines, first))

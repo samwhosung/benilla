@@ -264,9 +264,7 @@ pub enum UiCursorMode {
 ///   displaced item in the source slot, never on the cursor (no `SetCursorItem`, `0x5e0c40`);
 /// - a split carry places onto an empty or same-item slot, and stays held over another item;
 /// - a spell or action payload stays held.
-///
-/// Returns whether the caller should repaint.
-fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> bool {
+fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) {
     // An armed gift wrap completes here, before the cursor is read. `PickupContainerItem` is the
     // only caller of the wrap sender `0x5edfc0`, so an equipped item cannot be wrapped.
     if let Some(wrap) = model.pending_wrap {
@@ -277,7 +275,7 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> bool 
             .and_then(|c| c.slots.get(&slot))
             .is_some_and(|s| s.item_id != 0)
         {
-            return false;
+            return;
         }
         // A vanished paper also bails, the wrap armed and the paper locked (`0x5edfef`).
         if !model
@@ -286,7 +284,7 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> bool 
             .and_then(|c| c.slots.get(&wrap.slot))
             .is_some_and(|s| s.item_id != 0)
         {
-            return false;
+            return;
         }
         // No eligibility test: the server refuses with an `ERR_CANT_WRAP_*` reason
         // (`SMSG_INVENTORY_CHANGE_FAILURE` 43-48), and a local gate would eat that error line.
@@ -297,7 +295,7 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> bool 
         cursor::queue_lock_changed(model, wrap.bag, wrap.slot);
         model.ui_cursor = None;
         model.ui_cursor_dirty = true;
-        return true;
+        return;
     }
     // Only a held item (`0x4f9c38`) or vendor row (`0x4f9c43`) takes the click first. Past them
     // an empty slot does nothing (`0x4f9c4e`), an armed item-targeting spell binds the item
@@ -318,7 +316,7 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> bool 
         } else if occupied {
             model.container_repairs.push((bag, slot));
         }
-        return false;
+        return;
     }
     match model.cursor.take() {
         None => {
@@ -338,20 +336,15 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> bool 
                     bar_placeable: s.bar_placeable,
                     equip_slots: s.equip_slots.clone(),
                 });
-            match picked {
-                Some(item) => {
-                    model.cursor = Some(CursorPayload::Item(item));
-                    cursor::queue_cursor_update(model);
-                    cursor::queue_lock_changed(model, bag, slot);
-                    true
-                }
-                None => false,
+            if let Some(item) = picked {
+                model.cursor = Some(CursorPayload::Item(item));
+                cursor::queue_cursor_update(model);
+                cursor::queue_lock_changed(model, bag, slot);
             }
         }
         Some(CursorPayload::Item(held)) if held.bag == bag && held.slot == slot => {
             cursor::queue_cursor_update(model);
             cursor::queue_lock_changed(model, held.bag, held.slot);
-            true
         }
         Some(CursorPayload::Item(held)) => {
             // Cloned so the moves below can borrow `model`; an unresolved slot reads as empty.
@@ -365,7 +358,6 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> bool 
                 // A split carry cannot swap with a different item: it stays held.
                 (Some(_), Some(d)) if d.item_id != held.item_id => {
                     model.cursor = Some(CursorPayload::Item(held));
-                    false
                 }
                 // Anything else queues the move and clears: a split, a merge the server tops up,
                 // or a swap that lands the displaced item in the source slot.
@@ -373,7 +365,6 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> bool 
                     queue_move(model, &held, bag, slot, count);
                     cursor::queue_cursor_update(model);
                     cursor::queue_lock_changed(model, held.bag, held.slot);
-                    true
                 }
             }
         }
@@ -392,7 +383,6 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> bool 
                 model.merchant_slot_buys.push((bag, slot, entry));
             }
             cursor::queue_cursor_update(model);
-            true
         }
         Some(
             other @ (CursorPayload::Spell(_)
@@ -405,7 +395,6 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> bool 
             | CursorPayload::Money(_)),
         ) => {
             model.cursor = Some(other);
-            false
         }
     }
 }
@@ -593,23 +582,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // BenillaGetContainerItemID(bag, slot): the item id behind a slot. Not a 1.12 verb, where the
-    // id is parsed from `GetContainerItemLink`; the `Benilla` prefix keeps it off the 1.12 surface.
-    lua.globals().set(
-        "BenillaGetContainerItemID",
-        lua.create_function(|lua, (bag, slot): (i64, u32)| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            // nil, not 0, while the template is in flight: a caller would index a table with 0.
-            Ok(model
-                .containers
-                .get(&bag)
-                .and_then(|c| c.slots.get(&slot))
-                .map(|s| s.item_id)
-                .filter(|&id| id != 0)
-                .map(i64::from))
-        })?,
-    )?;
-
     lua.globals().set(
         "UseContainerItem",
         lua.create_function(|lua, (bag, slot, _rest): (i64, u32, mlua::MultiValue)| {
@@ -636,13 +608,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // PickupContainerItem(bag, slot) (`0x4f9b30`): pick up, or place and swap. Its boolean return,
-    // whether to repaint, is not 1.12's, whose binding returns nothing.
+    // PickupContainerItem(bag, slot) (`0x4f9b30`): pick up, or place and swap; no return value on
+    // any path.
     lua.globals().set(
         "PickupContainerItem",
         lua.create_function(|lua, (bag, slot): (i64, u32)| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            Ok(pickup_container_item(&mut model, bag, slot))
+            pickup_container_item(&mut model, bag, slot);
+            Ok(())
         })?,
     )?;
 
@@ -853,13 +826,13 @@ mod tests {
         assert_eq!(icon, "Interface\\Icons\\INV_Misc_Food_16");
         assert_eq!((count, quality), (5, 1));
         assert_eq!(
-            s.eval::<i64>("return BenillaGetContainerItemID(0, 1)")
-                .unwrap(),
+            s.eval::<i64>(
+                "local _, _, id = string.find(GetContainerItemLink(0, 1), 'item:(%d+)') \
+                 return tonumber(id)"
+            )
+            .unwrap(),
             117
         );
-        assert!(s
-            .eval::<bool>("return GetContainerItemLink(0, 1) ~= nil")
-            .unwrap());
         // readable: the letter in 4, not the jerky in 1.
         assert!(!s
             .eval::<bool>("local _, _, _, _, readable = GetContainerItemInfo(0, 1) return readable")
@@ -876,7 +849,7 @@ mod tests {
             )
             .unwrap());
         assert!(s
-            .eval::<bool>("return BenillaGetContainerItemID(0, 3) == nil")
+            .eval::<bool>("return GetContainerItemLink(0, 3) == nil")
             .unwrap());
         assert!(s
             .eval::<bool>("return GetContainerItemInfo(0, 2) == nil")
@@ -933,7 +906,7 @@ mod tests {
         assert!(s.cursor_item().is_none());
         assert!(!s.eval::<bool>("return CursorHasItem()").unwrap());
 
-        assert!(s.eval::<bool>("return PickupContainerItem(0, 1)").unwrap());
+        s.run("PickupContainerItem(0, 1)").unwrap();
         let held = s.cursor_item().expect("cursor holds the picked item");
         assert_eq!((held.bag, held.slot, held.item_id), (0, 1, 117));
         assert_eq!(
@@ -946,12 +919,9 @@ mod tests {
             .unwrap());
         assert!(s.take_container_moves().is_empty());
 
-        let (kind, id) = s
-            .eval::<(String, i64)>("local k, id = GetCursorInfo() return k, id")
-            .unwrap();
-        assert_eq!((kind.as_str(), id), ("item", 117));
+        assert_eq!(s.cursor_item().map(|c| c.item_id), Some(117));
 
-        assert!(s.eval::<bool>("return PickupContainerItem(0, 5)").unwrap());
+        s.run("PickupContainerItem(0, 5)").unwrap();
         assert!(s.cursor_item().is_none());
         assert!(!s.eval::<bool>("return CursorHasItem()").unwrap());
         assert_eq!(
@@ -998,10 +968,10 @@ mod tests {
         );
         s.set_container(0, Some(state));
 
-        assert!(s.eval::<bool>("return PickupContainerItem(0, 1)").unwrap());
+        s.run("PickupContainerItem(0, 1)").unwrap();
         assert_eq!(s.cursor_item().unwrap().item_id, 117);
 
-        assert!(s.eval::<bool>("return PickupContainerItem(0, 5)").unwrap());
+        s.run("PickupContainerItem(0, 5)").unwrap();
         assert!(
             s.cursor_item().is_none(),
             "a swap clears the cursor — the displaced item never hops on"
@@ -1038,7 +1008,7 @@ mod tests {
         s.set_container(0, Some(state));
 
         s.run("PickupContainerItem(0, 1)").unwrap();
-        assert!(s.eval::<bool>("return PickupContainerItem(0, 5)").unwrap());
+        s.run("PickupContainerItem(0, 5)").unwrap();
         assert!(
             s.cursor_item().is_none(),
             "same-item merge clears the cursor"
@@ -1062,7 +1032,7 @@ mod tests {
         state.slots.get_mut(&1).unwrap().locked = true;
         s.set_container(0, Some(state));
 
-        assert!(!s.eval::<bool>("return PickupContainerItem(0, 1)").unwrap());
+        s.run("PickupContainerItem(0, 1)").unwrap();
         assert!(s.cursor_item().is_none());
     }
 
@@ -1099,7 +1069,7 @@ mod tests {
             (0, 1, 117, Some(3))
         );
 
-        assert!(s.eval::<bool>("return PickupContainerItem(0, 2)").unwrap());
+        s.run("PickupContainerItem(0, 2)").unwrap();
         assert!(s.cursor_item().is_none());
         assert_eq!(
             s.take_container_moves(),
@@ -1113,12 +1083,12 @@ mod tests {
         );
 
         s.run("SplitContainerItem(0, 1, 3)").unwrap();
-        assert!(!s.eval::<bool>("return PickupContainerItem(0, 9)").unwrap());
+        s.run("PickupContainerItem(0, 9)").unwrap();
         let held = s.cursor_item().expect("kept — can't swap a partial stack");
         assert_eq!(held.count, Some(3));
         assert!(s.take_container_moves().is_empty());
 
-        assert!(s.eval::<bool>("return PickupContainerItem(0, 7)").unwrap());
+        s.run("PickupContainerItem(0, 7)").unwrap();
         assert!(s.cursor_item().is_none());
         assert_eq!(
             s.take_container_moves(),
@@ -1152,9 +1122,9 @@ mod tests {
     fn pickup_same_slot_cancels_no_move() {
         let mut s = UiScript::new().unwrap();
         s.set_container(0, Some(backpack()));
-        assert!(s.eval::<bool>("return PickupContainerItem(0, 1)").unwrap());
+        s.run("PickupContainerItem(0, 1)").unwrap();
         assert!(s.cursor_item().is_some());
-        assert!(s.eval::<bool>("return PickupContainerItem(0, 1)").unwrap());
+        s.run("PickupContainerItem(0, 1)").unwrap();
         assert!(s.cursor_item().is_none());
         assert!(s.take_container_moves().is_empty());
     }
@@ -1164,9 +1134,9 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         s.set_container(0, Some(backpack()));
         // Slot 2 is empty and slot 3 unresolved: neither can be picked up.
-        assert!(!s.eval::<bool>("return PickupContainerItem(0, 2)").unwrap());
+        s.run("PickupContainerItem(0, 2)").unwrap();
         assert!(s.cursor_item().is_none());
-        assert!(!s.eval::<bool>("return PickupContainerItem(0, 3)").unwrap());
+        s.run("PickupContainerItem(0, 3)").unwrap();
         assert!(s.cursor_item().is_none());
     }
 

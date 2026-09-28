@@ -347,7 +347,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     })?;
 
     // `name, texture, numItems, quality, isUsable`, the giver panels' shape, as one stock routine
-    // lays out both (`QuestFrameItems_Update`, `QuestFrame.lua:311`).
+    // lays out both (`QuestFrameItems_Update`, `QuestFrame.lua:311`): five values, `isUsable` 1 or
+    // nil (`0x4e0b00`, `0x4e0cf0`). No selected quest, an index past the list or a template in
+    // flight answers `nil, nil, 1, 0, nil` (`0x4e0ca8`); a non-number index raises the reward
+    // getter's Usage line from both (`0x84b6ac`).
     fn install_detail_item(
         lua: &Lua,
         name: &str,
@@ -355,32 +358,39 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     ) -> mlua::Result<()> {
         lua.globals().set(
             name,
-            lua.create_function(move |lua, i: usize| {
+            lua.create_function(move |lua, index: Value| {
+                let i = lua
+                    .coerce_number(index)?
+                    .ok_or_else(|| mlua::Error::runtime("Usage: GetQuestLogRewardInfo(index)"))?;
+                let row = i.trunc() as i64 - 1;
                 let item = {
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
-                    model
-                        .selected_quest_detail()
-                        .and_then(|d| i.checked_sub(1).and_then(|n| pick(d).get(n)).cloned())
+                    model.selected_quest_detail().and_then(|d| {
+                        usize::try_from(row)
+                            .ok()
+                            .and_then(|n| pick(d).get(n))
+                            .cloned()
+                    })
                 };
-                let Some(it) = item else {
-                    return Ok(MultiValue::from_vec(vec![Value::Nil]));
-                };
-                let name_v = match &it.name {
-                    Some(n) => Value::String(lua.create_string(n)?),
-                    None => Value::Nil,
+                let Some((it, name)) = item.and_then(|it| it.name.clone().map(|n| (it, n))) else {
+                    return Ok(MultiValue::from_vec(vec![
+                        Value::Nil,
+                        Value::Nil,
+                        Value::Integer(1),
+                        Value::Integer(0),
+                        Value::Nil,
+                    ]));
                 };
                 let texture = match &it.texture {
                     Some(t) => Value::String(lua.create_string(t)?),
                     None => Value::Nil,
                 };
                 Ok(MultiValue::from_vec(vec![
-                    name_v,
+                    Value::String(lua.create_string(&name)?),
                     texture,
                     Value::Integer(i64::from(it.count)),
                     Value::Integer(i64::from(it.quality)),
-                    Value::Boolean(it.usable),
-                    // The item id, a sixth return that is not 1.12's.
-                    Value::Integer(i64::from(it.item_id)),
+                    crate::script::binding_abi::flag(it.usable),
                 ]))
             })?,
         )
@@ -1009,15 +1019,38 @@ mod tests {
             40
         );
         assert_eq!(s.eval::<i64>("return GetNumQuestLogRewards()").unwrap(), 1);
+        // Five values, `isUsable` 1 or nil (`0x4e0b00`).
+        assert_eq!(s.arity("GetQuestLogRewardInfo(1)").unwrap(), 5);
         assert!(s
             .eval::<bool>(
                 "local n, _, c, q, u = GetQuestLogRewardInfo(1)\n\
-                 return n == 'Militia Hammer' and c == 1 and q == 1 and u == true"
+                 return n == 'Militia Hammer' and c == 1 and q == 1 and u == 1"
             )
             .unwrap());
-        assert!(s
-            .eval::<bool>("return GetQuestLogChoiceInfo(1) == nil")
-            .unwrap());
+        // No row answers the miss, `nil, nil, 1, 0, nil` (`0x4e0ca8`), from either getter.
+        for call in [
+            "GetQuestLogChoiceInfo(1)",
+            "GetQuestLogRewardInfo(2)",
+            "GetQuestLogRewardInfo(0)",
+        ] {
+            assert_eq!(s.arity(call).unwrap(), 5, "{call}");
+            assert!(
+                s.eval::<bool>(&format!(
+                    "local n, t, c, q, u = {call}\n\
+                     return n == nil and t == nil and c == 1 and q == 0 and u == nil"
+                ))
+                .unwrap(),
+                "{call}"
+            );
+        }
+        // A non-number index raises the reward getter's line from both (`0x84b6ac`).
+        for call in ["GetQuestLogRewardInfo()", "GetQuestLogChoiceInfo({})"] {
+            let e = s.run(call).expect_err(call).to_string();
+            assert!(
+                e.contains("Usage: GetQuestLogRewardInfo(index)"),
+                "{call}: {e}"
+            );
+        }
 
         assert_eq!(
             s.eval::<String>("return GetQuestLogItemLink(\"reward\", 1)")

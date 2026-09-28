@@ -621,11 +621,6 @@ mod tests {
                 texture: Some("Interface\\Icons\\Ability_Ambush".into()),
             }))
         );
-        assert_eq!(
-            s.eval::<(String, i64)>("local k, i = GetCursorInfo() return k, i")
-                .unwrap(),
-            ("macro".to_string(), 1)
-        );
         assert!(
             !s.eval::<bool>("return PickupMacro(1)").unwrap(),
             "a macro button is a source, never a drop target"

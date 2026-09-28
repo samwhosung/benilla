@@ -48,7 +48,6 @@ fn drain_ui_sounds(
     };
     for req in requests {
         let kit_ref = match &req {
-            SoundRequest::KitId(id) => KitRef::Id(*id),
             SoundRequest::KitName(name) => KitRef::Name(name),
             SoundRequest::File(path) => {
                 // `PlaySoundFile`: by path, with no kit gates or variation.

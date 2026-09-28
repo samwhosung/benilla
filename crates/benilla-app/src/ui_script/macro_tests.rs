@@ -292,11 +292,6 @@ fn dragging_a_macro_button_loads_the_cursor_with_the_macro_payload() {
         matches!(&payload, Some(CursorPayload::Macro(m)) if m.index == 1),
         "the macro payload, carrying its index: {payload:?}"
     );
-    assert_eq!(
-        s.eval::<(String, i64)>("local k, i = GetCursorInfo() return k, i")
-            .unwrap(),
-        ("macro".to_string(), 1)
-    );
 
     // A bar slot packs the MACRO tag (0x40 << 24) with the macro index.
     let mut s = s;

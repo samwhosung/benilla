@@ -349,9 +349,16 @@ fn free_outgoing(lua: &Lua, outgoing: Option<RegionHandle>, incoming: RegionHand
 
 /// `Set<State>Texture(texture | "path" | nil)`, forked on the argument's type (`0x781970`). The
 /// object and nil legs never touch the slot's own region, so they run before [`ensure_slot`]
-/// would create one. The `(r, g, b [, a])` form is not 1.12's, which reads a number as a path
-/// (`0x781b23`).
-fn set_slot_texture(lua: &Lua, this: &Table, slot: Slot, args: &MultiValue) -> mlua::Result<()> {
+/// would create one. There is no colour form: a number takes the path leg through `lua_isstring`
+/// (`0x781b23`) and loads as its own decimal name, so `(1, 1, 1, 0)` is the file `"1"`; anything
+/// else, no argument included, raises `Usage: <name>:<usage>` (`0x87a1b4`).
+fn set_slot_texture(
+    lua: &Lua,
+    this: &Table,
+    slot: Slot,
+    usage: &str,
+    args: &MultiValue,
+) -> mlua::Result<()> {
     match args.front() {
         // A Texture object is itself installed into the slot (`0x781b0b` → `0x778fd0`).
         Some(Value::Table(t)) => {
@@ -386,33 +393,32 @@ fn set_slot_texture(lua: &Lua, this: &Table, slot: Slot, args: &MultiValue) -> m
         _ => {}
     }
 
+    // `lua_tostring` (`0x781b33`): a number converts as `%.14g`, as the stack's coercion does.
+    let path = match args.front() {
+        Some(v @ (Value::String(_) | Value::Number(_) | Value::Integer(_))) => {
+            lua.coerce_string(v.clone())?.map(|s| s.to_string_lossy())
+        }
+        _ => None,
+    };
+    let Some(path) = path else {
+        let who = {
+            let h = frame_handle_of(lua, this)?;
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            model
+                .arena
+                .frame(h)
+                .and_then(|f| f.name.clone())
+                .unwrap_or_else(|| "<unnamed>".to_string())
+        };
+        return Err(mlua::Error::runtime(format!("Usage: {who}:{usage}")));
+    };
     let id = ensure_slot(lua, this, slot)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     let rh = *model.id_to_region.get(&id).expect("slot region id");
     let data = model.region_data.entry(rh).or_default();
-    match args.front() {
-        // `""` clears the texture, which `QuestLogFrame.lua:165` relies on.
-        Some(Value::String(s)) if s.to_str()?.is_empty() => {
-            data.texture = None;
-            data.fill = None;
-        }
-        Some(Value::String(s)) => {
-            data.texture = Some(s.to_str()?.to_string());
-            data.fill = None;
-        }
-        // The colour form is a solid texture, not a tint: it and the path clear each other.
-        Some(v @ (Value::Number(_) | Value::Integer(_))) => {
-            let arg = |i: usize| args.get(i).map(as_f32);
-            data.fill = Some([
-                as_f32(v),
-                arg(1).unwrap_or(0.0),
-                arg(2).unwrap_or(0.0),
-                arg(3).unwrap_or(1.0),
-            ]);
-            data.texture = None;
-        }
-        _ => {}
-    }
+    // `""` clears the texture, which `QuestLogFrame.lua:165` relies on.
+    data.texture = (!path.is_empty()).then_some(path);
+    data.fill = None;
     Ok(())
 }
 
@@ -431,10 +437,18 @@ fn get_slot_texture(lua: &Lua, this: &Table, slot: Slot) -> mlua::Result<Value> 
 
 /// Register one `Set<X>Texture`/`Get<X>Texture` pair on `m`.
 fn texture_pair(lua: &Lua, m: &Table, name: &str, slot: Slot) -> mlua::Result<()> {
+    let method = format!("Set{name}Texture");
+    // The highlight setter's own line names its blend argument (`0x87a240`), unclosed as in the
+    // reference; the others share `0x87a1b4`.
+    let usage = if slot == Slot::Highlight {
+        format!("{method}(texture or \"texture\" or nil [, \"blendmode\")")
+    } else {
+        format!("{method}(texture or \"texture\" or nil)")
+    };
     m.set(
-        format!("Set{name}Texture"),
+        method.as_str(),
         lua.create_function(move |lua, (this, args): (Table, MultiValue)| {
-            set_slot_texture(lua, &this, slot, &args)
+            set_slot_texture(lua, &this, slot, &usage, &args)
         })?,
     )?;
     m.set(
@@ -922,11 +936,11 @@ pub(super) fn wants_press_visual(model: &Model, h: FrameHandle, button: &str) ->
 }
 
 /// The click shared by the input path and `Click()`: a disabled Button fires nothing, a CheckButton
-/// toggles before `OnClick` runs (`0x785550`), then `OnClick` gets the button name and `down`, true
-/// only for a click a `…ButtonDown` registration fired. The second argument is not 1.12's, whose
-/// `OnClick` gets the name alone (`0x779540`). `scripted` marks a Lua `Click()` (`0x7826c0` passes
-/// 1, the mouse `0x779280`/`0x7793a4` pass 0): a LootButton then does nothing at all, not even its
-/// `OnClick` (`0x4c182b`); every other kind ignores it.
+/// toggles before `OnClick` runs (`0x785550`), then `OnClick` gets the button name alone as `arg1`
+/// (`0x779540` fires it with the format `"%s"`); `down`, true only for a click a `…ButtonDown`
+/// registration fired, reaches the nameplate's select alone. `scripted` marks a Lua `Click()`
+/// (`0x7826c0` passes 1, the mouse `0x779280`/`0x7793a4` pass 0): a LootButton then does nothing at
+/// all, not even its `OnClick` (`0x4c182b`); every other kind ignores it.
 pub(super) fn click_button(lua: &Lua, id: u32, button: &str, down: bool, scripted: bool) {
     let mut take_loot = None;
     let fire = {
@@ -981,8 +995,7 @@ pub(super) fn click_button(lua: &Lua, id: u32, button: &str, down: bool, scripte
         Ok(s) => Value::String(s),
         Err(_) => return,
     };
-    if let Err(e) = event::fire_widget_handler(lua, id, "OnClick", vec![btn, Value::Boolean(down)])
-    {
+    if let Err(e) = event::fire_widget_handler(lua, id, "OnClick", vec![btn]) {
         lua.app_data_mut::<Model>()
             .expect("model app_data")
             .record_script_error(e.to_string());

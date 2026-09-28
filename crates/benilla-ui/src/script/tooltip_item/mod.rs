@@ -140,8 +140,10 @@ fn hyperlink_item_fields(link: &str) -> Option<(u32, u32, u32)> {
     (item_id != 0).then_some((item_id, enchant_id, random_property_id))
 }
 
-/// The id-keyed render; on a miss, the ask and a name-only line, as `SetBagItem`'s miss path.
-fn render_by_id(
+/// The id-keyed render; on a miss, the ask and a name-only line, as `SetBagItem`'s miss path. The
+/// engine's own item hovers reach it from Rust (the action bar's, `SetTrainerService`,
+/// `SetCraftSpell`): 1.12's `Set*Item` bindings all name a container, so no Lua method takes an id.
+pub(super) fn render_by_id(
     lua: &Lua,
     this: &Table,
     item_id: u32,
@@ -224,19 +226,6 @@ fn equip_slots_for(inventory_type: u32) -> &'static [u32] {
 
 /// Register the item content channels into the GameTooltip kind method table.
 pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
-    // GameTooltip:BenillaSetItemById(itemId [, fallbackName, fallbackQuality]). Not a 1.12 verb,
-    // whose `Set*Item` bindings all name a container: sibling modules' item hovers (the action
-    // bar's, `SetTrainerService`, `SetCraftSpell`) reach `render_by_id` by this name through the
-    // wrapper table, and the prefix keeps it off the 1.12 surface.
-    m.set(
-        "BenillaSetItemById",
-        lua.create_function(
-            |lua, (this, item_id, fb_name, fb_q): (Table, u32, Option<String>, Option<u32>)| {
-                render_by_id(lua, &this, item_id, fb_name, fb_q)
-            },
-        )?,
-    )?;
-
     // GameTooltip:SetQuestItem(type, index) / SetQuestLogItem(type, index) (`0x533610`,
     // `0x533760`; `QuestFrameTemplates.xml:148`, `QuestLogFrame.xml:113`), no returns. `type` is
     // `GetQuestItemInfo`'s; an unknown type or index leaves the tooltip empty, as in the reference.

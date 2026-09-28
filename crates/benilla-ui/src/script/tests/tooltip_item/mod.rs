@@ -112,10 +112,18 @@ fn seed_item_strings(s: &mut UiScript) {
     .unwrap();
 }
 
-/// The fixture VM, with [`seed_item_strings`] run.
+/// The fixture VM, with [`seed_item_strings`] run and `SetItemByIdForTest(tooltip, itemId)`, the
+/// test VM's door onto the id-keyed render the engine's item hovers call from Rust.
 fn script() -> UiScript {
     let mut s = bare_script();
     seed_item_strings(&mut s);
+    let f = s
+        .lua()
+        .create_function(|lua, (tt, id): (mlua::Table, u32)| {
+            crate::script::tooltip_item::render_by_id(lua, &tt, id, None, None)
+        })
+        .unwrap();
+    s.lua().globals().set("SetItemByIdForTest", f).unwrap();
     s
 }
 

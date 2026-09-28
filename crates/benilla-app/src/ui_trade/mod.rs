@@ -525,7 +525,6 @@ fn snapshot(
     trade: &TradeSession,
     items: &Items,
     icons: Option<&ItemDisplays>,
-    names: &NameCache,
     commands: &NetCommands,
 ) -> Option<TradeState> {
     if !trade.open {
@@ -534,9 +533,6 @@ fn snapshot(
     Some(TradeState {
         player: resolve_side(&trade.our, items, icons, commands),
         target: resolve_side(&trade.their, items, icons, commands),
-        partner_name: trade
-            .partner
-            .and_then(|g| names.resolve(g, commands).map(str::to_string)),
     })
 }
 
@@ -568,7 +564,7 @@ fn feed_trade(
     let last_player_gold = last_player_gold.get(&script);
     let last_their_gold = last_their_gold.get(&script);
 
-    let fresh = snapshot(&trade, &items, icons.as_deref(), &names, &commands);
+    let fresh = snapshot(&trade, &items, icons.as_deref(), &commands);
     let opened = !*last_open && trade.is_open();
     let closed = *last_open && !trade.is_open();
     let changed = fresh != *last;

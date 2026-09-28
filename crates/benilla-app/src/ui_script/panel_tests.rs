@@ -68,12 +68,10 @@ fn shipped_gossip_frame_drives_end_to_end() {
             GossipOptionView {
                 label: "Let me browse your goods.".into(),
                 icon_type: "vendor".into(),
-                coded: false,
             },
             GossipOptionView {
                 label: "I wish to sign the petition.".into(),
                 icon_type: "gossip".into(),
-                coded: true,
             },
         ],
     }));
@@ -86,8 +84,7 @@ fn shipped_gossip_frame_drives_end_to_end() {
             .unwrap(),
         "Greetings, traveler. How may I help you?"
     );
-    // The coded row is enabled too: `GossipFrameOptionsUpdate` has no coded-option handling
-    // (`GossipFrame.lua:111-128`). A coded option is sent without a code; that path is not built.
+    // Every row is enabled: `GossipFrameOptionsUpdate` greys none (`GossipFrame.lua:111-128`).
     let states: (bool, bool, bool, bool) = s
         .eval(
             "return GossipTitleButton1:IsVisible(), GossipTitleButton1:IsEnabled() ~= 0,\n\
@@ -229,7 +226,6 @@ fn shipped_gossip_frame_renders_quest_rows_above_options() {
         options: vec![GossipOptionView {
             label: "Let me browse your goods.".into(),
             icon_type: "vendor".into(),
-            coded: false,
         }],
     }));
     s.fire_event("GOSSIP_SHOW", vec![]);
@@ -338,7 +334,6 @@ fn shipped_gossip_rows_grow_to_their_wrapped_labels() {
     let long = |t: &str| GossipOptionView {
         label: t.into(),
         icon_type: "gossip".into(),
-        coded: false,
     };
     s.set_gossip(Some(GossipMenu {
         greeting: "Make your choice!".into(),
@@ -490,7 +485,6 @@ fn shipped_panel_slot_replaces_gossip_with_merchant() {
         options: vec![GossipOptionView {
             label: "Let me browse your goods.".into(),
             icon_type: "vendor".into(),
-            coded: false,
         }],
     }));
     s.fire_event("GOSSIP_SHOW", vec![]);
@@ -724,7 +718,6 @@ fn gossip_bank_option_hands_the_left_slot_to_the_bank() {
             options: vec![GossipOptionView {
                 label: "I would like to check my deposit box.".into(),
                 icon_type: "money".into(),
-                coded: false,
             }],
         }));
         s.fire_event("GOSSIP_SHOW", vec![]);
@@ -793,7 +786,6 @@ fn an_overflowing_gossip_menu_scrolls_instead_of_spilling() {
              broken the law of the land and it is my sworn duty to enforce it, whatever the cost."
         ),
         icon_type: "gossip".into(),
-        coded: false,
     };
     s.set_gossip(Some(GossipMenu {
         greeting: "Make your choice!".into(),

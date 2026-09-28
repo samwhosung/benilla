@@ -3,7 +3,7 @@
 //! and the spellbook all transition it through [`queue_cursor_update`] and [`queue_lock_changed`],
 //! so sounds, `CURSOR_UPDATE`, grid events and lock display fire from one place.
 
-use mlua::{Lua, Value};
+use mlua::Lua;
 
 use super::{Model, ScriptValue};
 
@@ -455,64 +455,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         )?;
     }
 
-    // `GetCursorInfo()` is not a 1.12 verb. It answers ("item", id, link), ("spell", book slot,
-    // book, spell id), ("action", slot), ("macro", index) or ("petaction", slot), padded with nil
-    // to four values; any other payload, or none, is four nils.
-    g.set(
-        "GetCursorInfo",
-        lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let str_or_nil = |lua: &Lua, s: &Option<String>| -> mlua::Result<Value> {
-                match s {
-                    Some(s) => Ok(Value::String(lua.create_string(s)?)),
-                    None => Ok(Value::Nil),
-                }
-            };
-            match &model.cursor {
-                Some(CursorPayload::Item(c)) => Ok((
-                    Value::String(lua.create_string("item")?),
-                    Value::Integer(i64::from(c.item_id)),
-                    str_or_nil(lua, &c.link)?,
-                    Value::Nil,
-                )),
-                Some(CursorPayload::Spell(s)) => Ok((
-                    Value::String(lua.create_string("spell")?),
-                    Value::Integer(i64::from(s.book_slot)),
-                    Value::String(lua.create_string(&s.book_type)?),
-                    Value::Integer(i64::from(s.spell_id)),
-                )),
-                Some(CursorPayload::Action(a)) => Ok((
-                    Value::String(lua.create_string("action")?),
-                    Value::Integer(i64::from(a.src_slot)),
-                    Value::Nil,
-                    Value::Nil,
-                )),
-                Some(CursorPayload::Macro(m)) => Ok((
-                    Value::String(lua.create_string("macro")?),
-                    Value::Integer(i64::from(m.index)),
-                    Value::Nil,
-                    Value::Nil,
-                )),
-                Some(CursorPayload::PetAction(p)) => Ok((
-                    Value::String(lua.create_string("petaction")?),
-                    Value::Integer(i64::from(p.src_slot)),
-                    Value::Nil,
-                    Value::Nil,
-                )),
-                Some(CursorPayload::StablePet(_)) => {
-                    Ok((Value::Nil, Value::Nil, Value::Nil, Value::Nil))
-                }
-                Some(CursorPayload::Money(_)) => {
-                    Ok((Value::Nil, Value::Nil, Value::Nil, Value::Nil))
-                }
-                Some(CursorPayload::Merchant(_)) => {
-                    Ok((Value::Nil, Value::Nil, Value::Nil, Value::Nil))
-                }
-                None => Ok((Value::Nil, Value::Nil, Value::Nil, Value::Nil)),
-            }
-        })?,
-    )?;
-
     g.set(
         "CursorHasItem",
         lua.create_function(|lua, ()| {
@@ -652,12 +594,9 @@ mod tests {
     }
 
     #[test]
-    fn get_cursor_info_and_has_checks_per_arm() {
+    fn the_has_checks_answer_per_arm() {
         let mut s = UiScript::new().unwrap();
 
-        assert!(s
-            .eval::<bool>("local k = GetCursorInfo() return k == nil")
-            .unwrap());
         assert!(!s.eval::<bool>("return CursorHasItem()").unwrap());
         assert!(!s.eval::<bool>("return CursorHasSpell()").unwrap());
 
@@ -672,13 +611,6 @@ mod tests {
             quality: Some(3),
             equip_slots: Vec::new(),
         }));
-        let (kind, id, link) = s
-            .eval::<(String, i64, String)>("local k, id, link = GetCursorInfo() return k, id, link")
-            .unwrap();
-        assert_eq!(
-            (kind.as_str(), id, link.as_str()),
-            ("item", 117, "|Hitem:117|h[Tough Jerky]|h")
-        );
         assert!(s.eval::<bool>("return CursorHasItem()").unwrap());
         assert!(!s.eval::<bool>("return CursorHasSpell()").unwrap());
 
@@ -689,15 +621,6 @@ mod tests {
             spell_id: 133,
             texture: None,
         }));
-        let (kind, slot, book, spell_id) = s
-            .eval::<(String, i64, String, i64)>(
-                "local k, slot, book, id = GetCursorInfo() return k, slot, book, id",
-            )
-            .unwrap();
-        assert_eq!(
-            (kind.as_str(), slot, book.as_str(), spell_id),
-            ("spell", 3, "spell", 133)
-        );
         assert!(!s.eval::<bool>("return CursorHasItem()").unwrap());
         assert!(s.eval::<bool>("return CursorHasSpell()").unwrap());
 
@@ -707,10 +630,6 @@ mod tests {
             action: 133,
             texture: None,
         }));
-        let (kind, slot) = s
-            .eval::<(String, i64)>("local k, slot = GetCursorInfo() return k, slot")
-            .unwrap();
-        assert_eq!((kind.as_str(), slot), ("action", 12));
         assert!(!s.eval::<bool>("return CursorHasItem()").unwrap());
         assert!(!s.eval::<bool>("return CursorHasSpell()").unwrap());
     }

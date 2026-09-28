@@ -24,7 +24,8 @@ pub enum QuestPanel {
 /// One choice, reward or required item row; its 1-based index is its place in its list.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct QuestItemView {
-    /// `None`, answered as nil, while the item template is in flight.
+    /// `None` while the item template is in flight: `GetQuestItemInfo` answers an empty name, the
+    /// log getters their miss.
     pub name: Option<String>,
     pub texture: Option<String>,
     pub count: u32,
@@ -32,8 +33,8 @@ pub struct QuestItemView {
     pub quality: u32,
     /// The item id the quest tooltips render by; 0 until the wire row resolves.
     pub item_id: u32,
-    /// Whether the player can use the item; stock tints the row red when not
-    /// (`QuestFrame.lua:393`). The app always sends `true`.
+    /// Whether the player can use the item, `isUsable` as 1 or nil; stock tints the row red when
+    /// not (`QuestFrame.lua:393`). The app always sends `true`.
     pub usable: bool,
     /// The escaped item link `GetQuestItemLink` and `GetQuestLogItemLink` serve; `None` until the
     /// template lands, since it embeds the name and the quality.
@@ -176,6 +177,10 @@ pub(super) fn reward_spell_returns(
     Ok(MultiValue::from_vec(vec![texture, name, tradeskill]))
 }
 
+/// The icon an empty offer row answers: display 0 has no `ItemDisplayInfo` row, so the icon
+/// lookup falls back to the question mark (`0x5d88b0`, `0x847fe4`) under the icon folder.
+const EMPTY_ROW_ICON: &str = "Interface\\Icons\\INV_Misc_QuestionMark";
+
 /// The list `GetQuestItemInfo(type, index)` reads for `type`.
 pub(super) fn item_vec<'a>(state: &'a QuestState, kind: &str) -> Option<&'a Vec<QuestItemView>> {
     match kind {
@@ -260,37 +265,63 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     install_title(lua, "GetActiveTitle", true)?;
     install_title(lua, "GetAvailableTitle", false)?;
 
-    // GetQuestItemInfo(type, index) → name, texture, numItems, quality, isUsable.
+    // GetQuestItemInfo(type, index) → name, texture, numItems, quality, isUsable (`0x501f80`): five
+    // values, `isUsable` 1 or nil. A type other than `"reward"`, `"choice"` or `"required"` (any
+    // case, `0x64a4c0`) or an index outside 1..7 (`0x501719`) raises `0x84edd8`, as does a
+    // non-string type or non-number index. An index inside that range with no item answers the
+    // zeroed row the offer publisher leaves (`0x500ef0`): no name, the question-mark icon of
+    // display 0, count 0, quality 0 and usable. A template in flight answers an empty name.
     g.set(
         "GetQuestItemInfo",
-        lua.create_function(|lua, (kind, index): (String, usize)| {
+        lua.create_function(|lua, (kind, index): (Value, Value)| {
+            let invalid =
+                || mlua::Error::runtime(r#"Invalid quest item in GetQuestItemInfo("type", index)"#);
+            let kind = match &kind {
+                Value::String(_) | Value::Integer(_) | Value::Number(_) => lua
+                    .coerce_string(kind.clone())?
+                    .map(|s| s.to_string_lossy().to_ascii_lowercase()),
+                _ => None,
+            }
+            .ok_or_else(invalid)?;
+            let index = lua.coerce_number(index)?.ok_or_else(invalid)?;
+            // `_ftol` then `dec`, compared unsigned against 6.
+            let row = index.trunc() as i64 - 1;
+            if !(0..=6).contains(&row) {
+                return Err(invalid());
+            }
             let item = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                model.quest.as_ref().and_then(|q| {
-                    item_vec(q, &kind)
-                        .and_then(|v| index.checked_sub(1).and_then(|n| v.get(n)))
-                        .cloned()
-                })
+                let empty = Vec::new();
+                let list = match model.quest.as_ref() {
+                    Some(q) => item_vec(q, &kind),
+                    None => ["reward", "choice", "required"]
+                        .contains(&kind.as_str())
+                        .then_some(&empty),
+                };
+                let Some(list) = list else {
+                    return Err(invalid());
+                };
+                list.get(row as usize).cloned()
             };
-            let Some(it) = item else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
-            };
-            let name = match &it.name {
-                Some(n) => Value::String(lua.create_string(n)?),
-                None => Value::Nil,
-            };
-            let texture = match &it.texture {
-                Some(t) => Value::String(lua.create_string(t)?),
-                None => Value::Nil,
+            let (name, texture, count, quality, usable) = match item {
+                Some(it) => (
+                    it.name.unwrap_or_default(),
+                    it.texture,
+                    it.count,
+                    it.quality,
+                    it.usable,
+                ),
+                None => (String::new(), Some(EMPTY_ROW_ICON.to_string()), 0, 0, true),
             };
             Ok(MultiValue::from_vec(vec![
-                name,
-                texture,
-                Value::Integer(i64::from(it.count)),
-                Value::Integer(i64::from(it.quality)),
-                Value::Boolean(it.usable),
-                // Not 1.12's: a sixth return, the item id, after its five; nothing reads it.
-                Value::Integer(i64::from(it.item_id)),
+                Value::String(lua.create_string(&name)?),
+                match texture {
+                    Some(t) => Value::String(lua.create_string(&t)?),
+                    None => Value::Nil,
+                },
+                Value::Integer(i64::from(count)),
+                Value::Integer(i64::from(quality)),
+                super::binding_abi::flag(usable),
             ]))
         })?,
     )?;
@@ -530,27 +561,48 @@ mod tests {
         assert_eq!(s.eval::<i64>("return GetNumQuestRewards()").unwrap(), 1);
         assert_eq!(s.eval::<i64>("return GetRewardMoney()").unwrap(), 1234);
 
+        // Five values, `isUsable` 1 or nil (`0x501f80`), the type matched in any case.
+        assert_eq!(s.arity(r#"GetQuestItemInfo("reward", 1)"#).unwrap(), 5);
         let (name, texture, count, quality, usable) = s
-            .eval::<(String, String, i64, i64, bool)>("return GetQuestItemInfo(\"reward\", 1)")
+            .eval::<(String, String, i64, i64, i64)>(r#"return GetQuestItemInfo("REWARD", 1)"#)
             .unwrap();
         assert_eq!(name, "Brdle Leather Boots");
         assert_eq!(texture, "Interface\\Icons\\INV_Boots_01");
-        assert_eq!((count, quality, usable), (1, 2, true));
+        assert_eq!((count, quality, usable), (1, 2, 1));
 
-        // Choice row 2 is in flight: name and texture nil, the rest present.
+        // Choice row 2 is in flight: an empty name, the rest present.
         assert!(s
             .eval::<bool>(
                 "local n, t, c = GetQuestItemInfo(\"choice\", 2)\n\
-                 return n == nil and t == nil and c == 1"
+                 return n == '' and t == nil and c == 1"
             )
             .unwrap());
-        // Out of range, and an unknown type: nil.
-        assert!(s
-            .eval::<bool>("return GetQuestItemInfo(\"reward\", 9) == nil")
-            .unwrap());
-        assert!(s
-            .eval::<bool>("return GetQuestItemInfo(\"bogus\", 1) == nil")
-            .unwrap());
+        // Inside 1..7 with no item: the zeroed row, display 0's question mark.
+        assert_eq!(
+            s.eval::<(String, String, i64, i64, i64)>(r#"return GetQuestItemInfo("reward", 7)"#)
+                .unwrap(),
+            (
+                String::new(),
+                "Interface\\Icons\\INV_Misc_QuestionMark".to_string(),
+                0,
+                0,
+                1
+            )
+        );
+        // Outside 1..7, an unknown type or a missing argument raises `0x84edd8`.
+        for call in [
+            r#"GetQuestItemInfo("reward", 8)"#,
+            r#"GetQuestItemInfo("reward", 0)"#,
+            r#"GetQuestItemInfo("bogus", 1)"#,
+            r#"GetQuestItemInfo("reward")"#,
+            "GetQuestItemInfo()",
+        ] {
+            let e = s.run(call).expect_err(call).to_string();
+            assert!(
+                e.contains(r#"Invalid quest item in GetQuestItemInfo("type", index)"#),
+                "{call}: {e}"
+            );
+        }
 
         // The link is nil for the in-flight row, out of range, and for an unknown type.
         assert_eq!(

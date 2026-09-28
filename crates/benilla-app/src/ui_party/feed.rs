@@ -663,7 +663,7 @@ fn member_unit_state(
             // `+0x08 & 4`) and `UnitIsGhost` (`0x517c32`, `& 8`) read it: fresher than the roster
             // byte, which only `SMSG_GROUP_LIST` moves. Connected stays the roster's, though the
             // reference reads the record's bit 0 (`0x517dd3`); its no-object PvP and FFA reads are
-            // untraced, and `UnitIsAFK`/`UnitIsDND` are not 1.12 bindings.
+            // untraced, and 1.12 has no AFK or DND predicate to feed.
             dead: stats.is_some_and(|s| s.status.unwrap_or(0) & member_status::DEAD != 0),
             ghost: stats.is_some_and(|s| s.status.unwrap_or(0) & member_status::GHOST != 0),
             ..Default::default()
@@ -677,8 +677,6 @@ fn member_unit_state(
     s.faction_group = own_group;
     // The roster status byte overlays both legs.
     s.is_connected = m.status & member_status::ONLINE != 0;
-    s.is_afk = m.status & member_status::AFK != 0;
-    s.is_dnd = m.status & member_status::DND != 0;
     s.is_pvp_ffa = m.status & member_status::PVP_FFA != 0;
     s.pvp = s.pvp || m.status & member_status::PVP != 0;
     s.ghost = s.ghost || m.status & member_status::GHOST != 0;

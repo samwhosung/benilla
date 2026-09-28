@@ -209,9 +209,9 @@ fn enum_token(s: &str) -> String {
     s.trim().to_ascii_uppercase()
 }
 
-/// A strata name. The reference's table (`0x8119f8`) holds the eight `BACKGROUND`..`TOOLTIP`;
-/// `BLIZZARD` is a later client's, not 1.12's. Stratum 0, `WORLD`, has no name: only the
-/// WorldFrame's constructor sets it (`0x481aff`).
+/// A strata name, from the reference's eight-row table (`0x8119f8`), `BACKGROUND`..`TOOLTIP`, walked
+/// by `0x6f17d0`. Stratum 0, `WORLD`, has no name: only the WorldFrame's constructor sets it
+/// (`0x481aff`).
 pub(crate) fn strata_from_str(s: &str) -> Option<Strata> {
     Some(match enum_token(s).as_str() {
         "BACKGROUND" => Strata::Background,
@@ -222,7 +222,6 @@ pub(crate) fn strata_from_str(s: &str) -> Option<Strata> {
         "FULLSCREEN" => Strata::Fullscreen,
         "FULLSCREEN_DIALOG" => Strata::FullscreenDialog,
         "TOOLTIP" => Strata::Tooltip,
-        "BLIZZARD" => Strata::Blizzard,
         _ => return None,
     })
 }

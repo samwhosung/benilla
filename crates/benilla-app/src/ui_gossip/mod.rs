@@ -214,7 +214,6 @@ fn snapshot(state: &GossipState) -> Option<GossipMenu> {
             .map(|o| GossipOptionView {
                 label: o.message.clone(),
                 icon_type: gossip_icon_type(o.icon).into(),
-                coded: o.coded,
             })
             .collect(),
     })

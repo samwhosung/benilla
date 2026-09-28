@@ -140,22 +140,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // BenillaSetBoothTexture(texture, slotToken): `SetPortraitTexture` without the circular mask;
-    // not a 1.12 global.
-    lua.globals().set(
-        "BenillaSetBoothTexture",
-        lua.create_function(|lua, (region, token): (Table, String)| {
-            let rh = region_handle_of(lua, &region)?;
-            let mut model = lua.app_data_mut::<Model>().expect("model");
-            let data = model.region_data.entry(rh).or_default();
-            data.portrait_unit = Some(token);
-            data.texture = None;
-            data.fill = None;
-            data.circular = false;
-            Ok(())
-        })?,
-    )?;
-
     // `__index` is the method table itself, here and on the leaf metatables, not a function
     // (~9 ns against ~195 ns per method access); sound while nothing replaces these tables.
     let region_meta = lua.create_table()?;

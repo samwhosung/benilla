@@ -37,13 +37,11 @@ pub enum Strata {
     Fullscreen = 6,
     FullscreenDialog = 7,
     Tooltip = 8,
-    /// A later client's stratum above `Tooltip`, not a 1.12 one.
-    Blizzard = 9,
 }
 
 impl Strata {
     /// Every stratum in draw order.
-    pub const ALL: [Strata; 10] = [
+    pub const ALL: [Strata; 9] = [
         Strata::World,
         Strata::Background,
         Strata::Low,
@@ -53,7 +51,6 @@ impl Strata {
         Strata::Fullscreen,
         Strata::FullscreenDialog,
         Strata::Tooltip,
-        Strata::Blizzard,
     ];
 
     /// The client bucket id.
@@ -114,8 +111,9 @@ impl Default for DrawLayer {
 // plus 1 (`SetParent` `0x76ab10`, at `0x76ab65`), `MirrorTimer.xml:62` lowers the bar by 1 to tie
 // its parent, and the tie lets the bar's ARTWORK fill draw under the parent's OVERLAY border.
 //
-// The sub-level is a later client's ordering within a layer, not 1.12's, which has none
-// (`0x76a860` takes only region and layer and inserts at the head); stock content never sets it.
+// The sub-level is the engine's own ordering within a layer, set only for the EditBox caret: 1.12
+// gives Lua and XML none (`0x76a860` takes only region and layer and inserts at the head, and
+// `SetDrawLayer` `0x79a780` reads the layer alone).
 
 const STRATUM_SHIFT: u32 = 60;
 const LEVEL_SHIFT: u32 = 44;
@@ -415,8 +413,6 @@ mod tests {
         let lo = ZKey::frame(Strata::World, u16::MAX, 0);
         let hi = ZKey::frame(Strata::Tooltip, 0, 0);
         assert!(hi > lo);
-        // BLIZZARD is above TOOLTIP.
-        assert!(ZKey::frame(Strata::Blizzard, 0, 0) > ZKey::frame(Strata::Tooltip, u16::MAX, 0));
     }
 
     #[test]

@@ -3,8 +3,8 @@
 //!
 //! `GetGossipOptions()` returns flat `(text, type)` pairs, `type` the lowercase icon name the app
 //! maps from the wire `GOSSIP_ICON`. A coded option is not built: the app drops its select, where
-//! the reference opens a password box (`UIParent.lua:563`). `IsGossipOptionCoded(i)` is benilla's
-//! own, not a 1.12 global, and no stock file calls it.
+//! the reference fires `GOSSIP_ENTER_CODE` and the stock popup (`StaticPopup.lua:1383`) calls
+//! `SelectGossipOption(index, code)`.
 //!
 //! A menu is pushed only once its greeting (`SMSG_NPC_TEXT_UPDATE`) has arrived; until then the
 //! VM keeps its last menu, as the reference's frame keeps its last paint: its handler returns on a
@@ -23,8 +23,6 @@ pub struct GossipOptionView {
     /// The lowercase icon type (`"gossip"`, `"vendor"`, `"taxi"`, …); `GossipFrame.lua:123` draws
     /// `Interface\GossipFrame\<Type>GossipIcon`.
     pub icon_type: String,
-    /// A password-gated option, which the app never selects.
-    pub coded: bool,
 }
 
 /// One quest row of `SMSG_GOSSIP_MESSAGE`; a click sends `CMSG_QUESTGIVER_QUERY_QUEST`. `active`,
@@ -107,18 +105,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 out.push(Value::String(lua.create_string(&icon)?));
             }
             Ok(MultiValue::from_vec(out))
-        })?,
-    )?;
-
-    g.set(
-        "IsGossipOptionCoded",
-        lua.create_function(|lua, i: usize| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(model
-                .gossip
-                .as_ref()
-                .and_then(|m| i.checked_sub(1).and_then(|n| m.options.get(n)))
-                .is_some_and(|o| o.coded))
         })?,
     )?;
 
@@ -226,12 +212,10 @@ mod tests {
                 GossipOptionView {
                     label: "Let me browse your goods.".into(),
                     icon_type: "vendor".into(),
-                    coded: false,
                 },
                 GossipOptionView {
                     label: "I would like to sign the petition.".into(),
                     icon_type: "gossip".into(),
-                    coded: true,
                 },
             ],
         }
@@ -261,9 +245,6 @@ mod tests {
         );
         assert_eq!(l2, "I would like to sign the petition.");
         assert_eq!(t2, "gossip");
-        assert!(!s.eval::<bool>("return IsGossipOptionCoded(1)").unwrap());
-        assert!(s.eval::<bool>("return IsGossipOptionCoded(2)").unwrap());
-        assert!(!s.eval::<bool>("return IsGossipOptionCoded(9)").unwrap()); // out of range
 
         s.run("SelectGossipOption(1)").unwrap();
         s.run("SelectGossipOption(2, 'unused-code')").unwrap(); // extra arg ignored

@@ -331,10 +331,10 @@ mod tests {
     fn picking_up_a_spell_blanks_its_slot_and_sends() {
         let mut s = bar_script();
         assert!(s.eval::<bool>("return PickupPetAction(4)").unwrap());
-        assert_eq!(
-            s.eval::<(String, i64)>("local k, slot = GetCursorInfo() return k, slot")
-                .unwrap(),
-            ("petaction".to_string(), 4)
+        assert!(
+            matches!(s.cursor_payload(), Some(crate::script::CursorPayload::PetAction(c)) if c.src_slot == 4),
+            "{:?}",
+            s.cursor_payload()
         );
         assert_eq!(
             s.take_pet_set_actions(),
@@ -387,11 +387,10 @@ mod tests {
             s.take_pet_set_actions(),
             vec![vec![(3, CLAW & 0xFFFF_0000)], vec![(4, CLAW)]]
         );
-        assert_eq!(
-            s.eval::<(String, i64)>("local k, slot = GetCursorInfo() return k, slot")
-                .unwrap(),
-            ("petaction".to_string(), 5),
-            "Growl was displaced and is now held, addressed as the slot it came from"
+        assert!(
+            matches!(s.cursor_payload(), Some(crate::script::CursorPayload::PetAction(c)) if c.src_slot == 5),
+            "Growl was displaced and is now held, addressed as the slot it came from: {:?}",
+            s.cursor_payload()
         );
     }
 
@@ -409,7 +408,7 @@ mod tests {
             "the relocation pair FIRST, then the write — the binary's own order. And the slot the \
              spell was just picked OUT of is the first candidate, so Attack lands there."
         );
-        assert!(s.eval::<bool>("return GetCursorInfo() == nil").unwrap());
+        assert!(s.cursor_payload().is_none());
     }
 
     /// The reachable refusal is a passive spell, which the pickup does not gate; its blank
@@ -431,7 +430,7 @@ mod tests {
             "the pickup's own blank went through; the drop wrote and sent nothing"
         );
         assert!(
-            s.eval::<bool>("return GetCursorInfo() == nil").unwrap(),
+            s.cursor_payload().is_none(),
             "and the cursor is empty — the reference cleared it before it ever decided"
         );
     }
@@ -442,7 +441,7 @@ mod tests {
         assert!(!s.eval::<bool>("return PickupPetAction(11)").unwrap());
         assert!(!s.eval::<bool>("return PickupPetAction(0)").unwrap());
         assert!(s.take_pet_set_actions().is_empty());
-        assert!(s.eval::<bool>("return GetCursorInfo() == nil").unwrap());
+        assert!(s.cursor_payload().is_none());
     }
 
     /// The third flag, `pickup_allowed`, is false under `UNIT_FLAG_POSSESSED`.
@@ -492,9 +491,10 @@ mod tests {
         );
         // PlaceAction refuses it outright and leaves it held.
         assert!(!s.eval::<bool>("return PlaceAction(1)").unwrap());
-        assert!(s
-            .eval::<bool>("local k = GetCursorInfo() return k == 'petaction'")
-            .unwrap());
+        assert!(matches!(
+            s.cursor_payload(),
+            Some(crate::script::CursorPayload::PetAction(_))
+        ));
         assert!(
             s.take_action_sets().is_empty(),
             "and writes nothing to the action bar"

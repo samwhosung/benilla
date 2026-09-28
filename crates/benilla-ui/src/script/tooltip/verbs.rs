@@ -4,7 +4,7 @@ use mlua::{Lua, Table, Value, Variadic};
 
 use crate::layout::{Anchor, Point};
 use crate::script::binding_abi::optional_string;
-use crate::script::object::{frame_handle_of, frame_wrapper};
+use crate::script::object::frame_handle_of;
 use crate::script::region::region_handle_of;
 use crate::script::Model;
 use crate::widget::{KindState, TooltipAnchor, TOOLTIP_LINE_GAP, TOOLTIP_PAD};
@@ -120,24 +120,6 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 Ok(())
             },
         )?,
-    )?;
-    // GameTooltip:BenillaGetTooltipOwner(): not a 1.12 method (1.12 has only `IsOwned`); the dev
-    // hover recorder (`benilla-app/src/hover_log.rs`) reads the owner's name through it.
-    m.set(
-        "BenillaGetTooltipOwner",
-        lua.create_function(|lua, this: Table| {
-            let owner = with_tip(lua, &this, |t| t.owner)?;
-            let id = {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                owner
-                    .filter(|&h| model.arena.frame(h).is_some())
-                    .map(|h| model.frame_id(h))
-            };
-            match id {
-                Some(id) => Ok(Value::Table(frame_wrapper(lua, id)?)),
-                None => Ok(Value::Nil),
-            }
-        })?,
     )?;
     // GetAnchorType(): the last SetOwner's mode by name (`0x5313e0`, name table `0x531530`), never
     // nil; a never-owned tooltip answers "ANCHOR_NONE". The reference also answers it after any

@@ -839,7 +839,7 @@ fn close_on_move_start(
 }
 
 /// Sends what the Lua asked for, as the take dispatcher `0x4c2790(slot, flag)`: a row click
-/// (`BenillaTakeLootSlot`, flag 0) and the `LOOT_BIND` confirm (`LootSlot`, flag 1) stay apart,
+/// (a `LootButton`'s own, flag 0) and the `LOOT_BIND` confirm (`LootSlot`, flag 1) stay apart,
 /// so a second click on a bind-on-pickup row asks again.
 fn drain_loot(
     script: Option<NonSendMut<UiScript>>,
@@ -896,7 +896,7 @@ fn drain_loot(
                 // At the click, before any answer (`0x4c2926`): the item's ItemGroupSounds kit 0.
                 pickup.write(crate::sound::LootPickupSound { display_id });
             }
-            None => debug!("ui_loot: BenillaTakeLootSlot({index}) out of range — ignored"),
+            None => debug!("ui_loot: row {index} clicked out of range — ignored"),
         }
     }
 
@@ -1069,9 +1069,12 @@ mod tests {
     const SECOND_BOP: u32 = 18832;
 
     /// `rows` open on a corpse with every template landed, then `lua` and one drain.
+    /// A loot window over `rows` whose display rows `clicks` are clicked by the mouse, as a
+    /// `LootButton` takes (`0x4c1820`), then `lua` run, then one drain.
     fn drain_with(
         gold: u32,
         rows: Vec<LootItem>,
+        clicks: &[u32],
         lua: &str,
     ) -> (App, crossbeam_channel::Receiver<ClientCommand>) {
         let (tx, rx) = crossbeam_channel::unbounded();
@@ -1106,7 +1109,7 @@ mod tests {
             .resource_mut::<LootState>()
             .open(0x42, loot_type::CORPSE, gold, rows);
 
-        let script = UiScript::new().unwrap();
+        let mut script = UiScript::new().unwrap();
         script
             .run(
                 "BIND_CONFIRMS = {}\n\
@@ -1115,6 +1118,19 @@ mod tests {
                  f:SetScript(\"OnEvent\", function() tinsert(BIND_CONFIRMS, arg1) end)",
             )
             .unwrap();
+        script.set_screen_size(1024.0, 768.0);
+        for &row in clicks {
+            script
+                .run(&format!(
+                    "local b = CreateFrame(\"LootButton\", \"DrainRow\", UIParent)\n\
+                     b:SetPoint(\"BOTTOMLEFT\", 100, 100) b:SetWidth(50) b:SetHeight(50)\n\
+                     b:EnableMouse(true) b:Show() b:SetSlot({row})"
+                ))
+                .unwrap();
+            script.resolve();
+            script.mouse_button(125.0, 125.0, "LeftButton", true);
+            script.mouse_button(125.0, 125.0, "LeftButton", false);
+        }
         script.run(lua).unwrap();
         app.insert_non_send_resource(script);
         app.world_mut().run_system_once(drain_loot).unwrap();
@@ -1220,7 +1236,7 @@ mod tests {
     /// The click arm's deferral (`0x4c28f2`-`0x4c2920`).
     #[test]
     fn a_bop_row_confirms_instead_of_sending() {
-        let (mut app, rx) = drain_with(0, vec![item(0, FELSTRIKER, 1)], "BenillaTakeLootSlot(1)");
+        let (mut app, rx) = drain_with(0, vec![item(0, FELSTRIKER, 1)], &[1], "");
         assert!(sent(&rx).is_empty(), "the deferred take sends nothing");
         assert_eq!(pending_confirm(&app), Some(1), "and stashes the row");
 
@@ -1234,11 +1250,7 @@ mod tests {
     /// The confirm arm (`0x4c27c0`).
     #[test]
     fn loot_slot_completes_the_pending_confirm_exactly_once() {
-        let (mut app, rx) = drain_with(
-            0,
-            vec![item(7, FELSTRIKER, 1)],
-            "BenillaTakeLootSlot(1) LootSlot(1)",
-        );
+        let (mut app, rx) = drain_with(0, vec![item(7, FELSTRIKER, 1)], &[1], "LootSlot(1)");
         assert!(
             matches!(
                 sent(&rx)[..],
@@ -1263,6 +1275,7 @@ mod tests {
         let (_app, rx) = drain_with(
             0,
             vec![item(0, TOUGH_JERKY, 1), item(1, FLURRY_AXE, 1)],
+            &[],
             "LootSlot(1) LootSlot(2)",
         );
         assert!(
@@ -1278,7 +1291,7 @@ mod tests {
             (WHITE_BOP, "quality 1 is below the floor of 2"),
             (TOUGH_JERKY, "neither"),
         ] {
-            let (app, rx) = drain_with(0, vec![item(3, entry, 1)], "BenillaTakeLootSlot(1)");
+            let (app, rx) = drain_with(0, vec![item(3, entry, 1)], &[1], "");
             assert!(
                 matches!(
                     sent(&rx)[..],
@@ -1300,7 +1313,8 @@ mod tests {
         let (mut app, rx) = drain_with(
             120, // gold, so display row 1 is the coin and the item is row 2
             vec![item(4, FELSTRIKER, 1)],
-            "BenillaTakeLootSlot(2)",
+            &[2],
+            "",
         );
         assert_eq!(
             pending_confirm(&app),
@@ -1325,7 +1339,7 @@ mod tests {
     /// `0x4c27d7`: the continuation returns on an emptied record.
     #[test]
     fn an_accept_for_a_row_that_was_taken_away_sends_nothing() {
-        let (mut app, rx) = drain_with(0, vec![item(2, FELSTRIKER, 1)], "BenillaTakeLootSlot(1)");
+        let (mut app, rx) = drain_with(0, vec![item(2, FELSTRIKER, 1)], &[1], "");
         assert_eq!(pending_confirm(&app), Some(1));
 
         app.world_mut().resource_mut::<LootState>().remove_slot(2);
@@ -1344,7 +1358,7 @@ mod tests {
     /// `0x4c1df5`: the response copier resets the stash.
     #[test]
     fn a_pending_confirm_does_not_survive_the_window() {
-        let (mut app, _rx) = drain_with(0, vec![item(0, FELSTRIKER, 1)], "BenillaTakeLootSlot(1)");
+        let (mut app, _rx) = drain_with(0, vec![item(0, FELSTRIKER, 1)], &[1], "");
         assert_eq!(pending_confirm(&app), Some(1));
 
         app.world_mut().resource_mut::<LootState>().clear();

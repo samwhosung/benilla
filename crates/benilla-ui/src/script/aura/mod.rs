@@ -5,8 +5,8 @@
 //! the list of the unit they name, and a token naming the player reads the player's list in cache
 //! order, where the reference's `UnitBuff("player", i)` reads by slot.
 //!
-//! `UnitAura`, `UnitBuff`, `UnitDebuff` and `CancelUnitBuff` take a token and a 1-based index into
-//! the sign-filtered list; the getters answer nil past the end. The 1.12 `GetPlayerBuff`
+//! `UnitBuff` and `UnitDebuff` take a token and a 1-based index into the sign-filtered list and
+//! answer nothing past the end. The 1.12 `GetPlayerBuff`
 //! ([`player_buff`]) takes a 0-based index and returns a cache position, the same number under
 //! every filter, which its siblings and `GameTooltip:SetPlayerBuff` take in place of the counter.
 //!
@@ -23,7 +23,7 @@ mod player_buff;
 /// [`crate::script::UiScript::set_player_auras`]).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AuraState {
-    /// `Spell.dbc` id, `UnitAura`'s `spellId`.
+    /// `Spell.dbc` id, what `CMSG_CANCEL_AURA` names and the app's icon lookup keys on.
     pub spell_id: u32,
     /// The spell's name; `None` when the catalog lacks the id.
     pub name: Option<String>,
@@ -64,43 +64,16 @@ pub struct TrackingState {
     pub cancelable: bool,
 }
 
-/// `UnitAura`'s `filter`: `|`-separated tokens, the sign defaulting to `HELPFUL` as in the Era API.
-struct Filter {
-    helpful: bool,
-    cancelable: Option<bool>,
-}
-
-impl Filter {
-    fn parse(spec: Option<&str>) -> Self {
-        let spec = spec.unwrap_or("");
-        let has = |t: &str| spec.split('|').any(|s| s.trim().eq_ignore_ascii_case(t));
-        Self {
-            helpful: !has("HARMFUL"),
-            cancelable: match (has("CANCELABLE"), has("NOT_CANCELABLE")) {
-                (true, false) => Some(true),
-                (false, true) => Some(false),
-                // Both or neither: no constraint; the reference never passes both.
-                _ => None,
-            },
-        }
-    }
-
-    fn matches(&self, a: &AuraState) -> bool {
-        a.helpful == self.helpful && self.cancelable.is_none_or(|c| a.cancelable == c)
-    }
-}
-
-/// The cancel gate of `CancelUnitBuff` and `CancelPlayerBuff` (`0x4e49a0`, `0x4e49fb`-`0x4e4a14`):
+/// The cancel gate of `CancelPlayerBuff` (`0x4e49a0`, `0x4e49fb`-`0x4e4a14`):
 /// a helpful aura with `AFLAG_CANCELABLE` (vmangos: unless `SPELL_ATTR_NO_AURA_CANCEL`), or any
 /// aura of a channeled spell, the only negative aura that cancels (breaking a channel on you).
 pub(super) fn cancel_authorized(a: &AuraState) -> bool {
     (a.helpful && a.cancelable) || a.channeled
 }
 
-/// The 1.12 tuple, not a prefix of the Era one: `UnitBuff` returns `(texture, applications)`
-/// (`0x519500`) and `UnitDebuff` adds `dispelType` (`0x5198f0`), as stock `TargetFrame.lua:287-290`
-/// reads them.
-fn returns_1121(lua: &Lua, a: &AuraState, with_dispel_type: bool) -> mlua::Result<MultiValue> {
+/// The 1.12 tuple: `UnitBuff` returns `(texture, applications)` (`0x519500`) and `UnitDebuff` adds
+/// `dispelType` (`0x5198f0`), as stock `TargetFrame.lua:287-290` reads them.
+fn returns(lua: &Lua, a: &AuraState, with_dispel_type: bool) -> mlua::Result<MultiValue> {
     let icon = match &a.icon {
         Some(t) => Value::String(lua.create_string(t)?),
         None => Value::Nil,
@@ -113,38 +86,6 @@ fn returns_1121(lua: &Lua, a: &AuraState, with_dispel_type: bool) -> mlua::Resul
         });
     }
     Ok(MultiValue::from_vec(out))
-}
-
-/// Which return tuple a getter pushes.
-#[derive(Clone, Copy)]
-enum Shape {
-    /// `UnitAura`'s ten values, the Era signature.
-    Era,
-    /// `UnitBuff`'s two.
-    Buff,
-    /// `UnitDebuff`'s three.
-    Debuff,
-}
-
-fn returns(lua: &Lua, a: &AuraState) -> mlua::Result<MultiValue> {
-    let s = |v: &Option<String>| -> mlua::Result<Value> {
-        Ok(match v {
-            Some(t) => Value::String(lua.create_string(t)?),
-            None => Value::Nil,
-        })
-    };
-    Ok(MultiValue::from_vec(vec![
-        s(&a.name)?,
-        s(&a.icon)?,
-        Value::Integer(i64::from(a.count)),
-        s(&a.debuff_type)?,
-        Value::Number(a.duration),
-        Value::Number(a.expiration_time),
-        Value::Nil, // source: the 1.12 wire carries no aura caster
-        Value::Nil, // isStealable: Spellsteal is TBC
-        Value::Nil, // nameplateShowPersonal
-        Value::Integer(i64::from(a.spell_id)),
-    ]))
 }
 
 /// The list of the unit `token` names, through the resolver (`0x515970`, which `UnitBuff` calls at
@@ -161,14 +102,13 @@ pub(crate) fn auras_of<'m>(model: &'m Model, token: &str) -> mlua::Result<Option
     }))
 }
 
-/// The `index`-th (1-based) aura of `token` passing `filter`, in pushed order; out of range is a
-/// bare nil, the loop terminator.
+/// The `index`-th (1-based) buff (`helpful`) or debuff of `token`, in pushed order; out of range
+/// answers nothing, the loop terminator.
 fn nth_aura(
     lua: &Lua,
     token: &Option<String>,
     index: i64,
-    filter: &Filter,
-    shape: Shape,
+    helpful: bool,
 ) -> mlua::Result<MultiValue> {
     // The token resolves before the index is read (`0x519542`, then `0x51957a`), so a bad token
     // raises at any index.
@@ -179,7 +119,7 @@ fn nth_aura(
                 .filter(|_| index >= 1)
                 .and_then(|list| {
                     list.iter()
-                        .filter(|a| filter.matches(a))
+                        .filter(|a| a.helpful == helpful)
                         .nth((index - 1) as usize)
                         .cloned()
                 }),
@@ -187,11 +127,7 @@ fn nth_aura(
         }
     };
     match hit {
-        Some(a) => match shape {
-            Shape::Era => returns(lua, &a),
-            Shape::Buff => returns_1121(lua, &a, false),
-            Shape::Debuff => returns_1121(lua, &a, true),
-        },
+        Some(a) => returns(lua, &a, !helpful),
         None => Ok(MultiValue::new()),
     }
 }
@@ -236,6 +172,23 @@ impl super::UiScript {
         self.model_mut().tracking = tracking;
     }
 
+    /// The spell ids of the buffs (`helpful`) or debuffs of the unit `token` names, in the order
+    /// `UnitBuff`/`UnitDebuff` enumerate them; empty for nobody and for a token the resolver
+    /// refuses. No 1.12 verb answers an aura's spell id, so this is the host's read.
+    pub fn aura_spell_ids(&self, token: &str, helpful: bool) -> Vec<u32> {
+        let model = self.model_ref();
+        auras_of(&model, token)
+            .ok()
+            .flatten()
+            .map(|list| {
+                list.iter()
+                    .filter(|a| a.helpful == helpful)
+                    .map(|a| a.spell_id)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Drain the queued cancels, one `CMSG_CANCEL_AURA` per spell id: the server cancels by spell,
     /// never by slot.
     pub fn take_cancel_aura_requests(&mut self) -> Vec<u32> {
@@ -247,23 +200,6 @@ impl super::UiScript {
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // UnitAura(unit, index [, filter]), filter defaulting to HELPFUL, with the Era tuple: not a
-    // 1.12 verb.
-    g.set(
-        "UnitAura",
-        lua.create_function(
-            |lua, (token, index, filter): (Option<String>, i64, Option<String>)| {
-                nth_aura(
-                    lua,
-                    &token,
-                    index,
-                    &Filter::parse(filter.as_deref()),
-                    Shape::Era,
-                )
-            },
-        )?,
-    )?;
-
     // UnitBuff(unit, index [, raidFilter]) and UnitDebuff: the verb fixes the sign, `0x519500`
     // reading aura slots 0..31 and `0x5198f0` slots 32..47. A non-zero `raidFilter` keeps only
     // buffs the player can cast (`0x4b3870`) or debuffs they can dispel (`0x4b3920`); it is
@@ -273,13 +209,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "UnitBuff",
         lua.create_function(
             |lua, (token, index, _raid_filter): (Option<String>, i64, Option<Value>)| {
-                nth_aura(
-                    lua,
-                    &token,
-                    index,
-                    &Filter::parse(Some("HELPFUL")),
-                    Shape::Buff,
-                )
+                nth_aura(lua, &token, index, true)
             },
         )?,
     )?;
@@ -287,48 +217,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "UnitDebuff",
         lua.create_function(
             |lua, (token, index, _raid_filter): (Option<String>, i64, Option<Value>)| {
-                nth_aura(
-                    lua,
-                    &token,
-                    index,
-                    &Filter::parse(Some("HARMFUL")),
-                    Shape::Debuff,
-                )
-            },
-        )?,
-    )?;
-
-    // CancelUnitBuff(unit, index [, filter]): not a 1.12 verb, the Era name for the reference's
-    // `CancelPlayerBuff`. It queues the aura's spell id, what `CMSG_CANCEL_AURA` carries; an aura
-    // the gate refuses is a silent no-op, as in the reference.
-    g.set(
-        "CancelUnitBuff",
-        lua.create_function(
-            |lua, (token, index, filter): (Option<String>, i64, Option<String>)| {
-                let spec = match filter {
-                    Some(f) => format!("HELPFUL|{f}"),
-                    None => "HELPFUL".to_string(),
-                };
-                let f = Filter::parse(Some(&spec));
-                let hit = {
-                    let model = lua.app_data_ref::<Model>().expect("model app_data");
-                    match token.as_deref() {
-                        Some(t) => auras_of(&model, t)?
-                            .filter(|_| index >= 1)
-                            .and_then(|list| {
-                                list.iter()
-                                    .filter(|a| f.matches(a))
-                                    .nth((index - 1) as usize)
-                                    .cloned()
-                            }),
-                        None => None,
-                    }
-                };
-                if let Some(a) = hit.filter(cancel_authorized) {
-                    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                    model.cancel_aura_requests.push(a.spell_id);
-                }
-                Ok(())
+                nth_aura(lua, &token, index, false)
             },
         )?,
     )?;
@@ -397,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn unit_aura_enumerates_the_pushed_order_not_the_spell_id_order() {
+    fn unit_buff_enumerates_the_pushed_order_not_the_spell_id_order() {
         let mut s = script();
         s.set_player_auras(vec![
             aura(2457, "Battle Stance", true, true),
@@ -405,9 +294,9 @@ mod tests {
             aura(589, "Shadow Word: Pain", false, false),
         ]);
         assert_eq!(
-            s.eval::<String>(r#"return (UnitAura("player", 1))"#)
+            s.eval::<String>(r#"return (UnitBuff("player", 1))"#)
                 .unwrap(),
-            "Battle Stance"
+            "Interface\\Icons\\Spell_2457"
         );
         // `UnitBuff` and `UnitDebuff` return the icon first, the 1.12 shape.
         assert_eq!(
@@ -428,78 +317,17 @@ mod tests {
             .eval::<bool>(r#"return UnitDebuff("player", 2) == nil"#)
             .unwrap());
         assert!(s
-            .eval::<bool>(r#"return UnitAura("target", 1) == nil"#)
+            .eval::<bool>(r#"return UnitBuff("target", 1) == nil"#)
             .unwrap());
-        assert!(s
-            .eval::<bool>(r#"return UnitAura("player", 0) == nil"#)
-            .unwrap());
-    }
-
-    #[test]
-    fn unit_aura_defaults_to_helpful_and_honours_the_cancelable_tokens() {
-        let mut s = script();
-        s.set_player_auras(vec![
-            aura(2457, "Battle Stance", true, true),
-            aura(9999, "Sealed", true, false), // helpful, not cancelable
-            aura(589, "Pain", false, false),
-        ]);
-        // No filter means HELPFUL.
         assert_eq!(
-            s.eval::<i64>(
-                r#"local n = 0 for i=1,10 do if UnitAura("player", i) then n = n + 1 end end return n"#
-            )
-            .unwrap(),
-            2
-        );
-        assert_eq!(
-            s.eval::<String>(r#"return (UnitAura("player", 1, "HARMFUL"))"#)
-                .unwrap(),
-            "Pain"
-        );
-        assert_eq!(
-            s.eval::<String>(r#"return (UnitAura("player", 1, "HELPFUL|CANCELABLE"))"#)
-                .unwrap(),
-            "Battle Stance"
-        );
-        assert_eq!(
-            s.eval::<String>(r#"return (UnitAura("player", 1, "HELPFUL|NOT_CANCELABLE"))"#)
-                .unwrap(),
-            "Sealed"
-        );
-        // A bare CANCELABLE keeps the helpful default.
-        assert_eq!(
-            s.eval::<String>(r#"return (UnitAura("player", 1, "CANCELABLE"))"#)
-                .unwrap(),
-            "Battle Stance"
+            s.arity(r#"UnitBuff("player", 0)"#).unwrap(),
+            0,
+            "a miss answers nothing"
         );
     }
 
     #[test]
-    fn unit_aura_returns_the_era_tuple_with_the_unknowable_fields_nil() {
-        let mut s = script();
-        let mut a = aura(589, "Shadow Word: Pain", false, false);
-        a.count = 3;
-        a.debuff_type = Some("Magic".into());
-        a.duration = 18.0;
-        a.expiration_time = 1042.5;
-        s.set_unit_auras(TARGET, Some(vec![a]));
-
-        let (name, icon, count, dtype, dur, expiry, spell) = s
-            .eval::<(String, String, i64, String, f64, f64, i64)>(
-                r#"local n, i, c, d, du, e, src, st, np, sid = UnitAura("target", 1, "HARMFUL")
-                   assert(src == nil and st == nil and np == nil, "unknowable fields must be nil")
-                   return n, i, c, d, du, e, sid"#,
-            )
-            .unwrap();
-        assert_eq!(name, "Shadow Word: Pain");
-        assert_eq!(icon, "Interface\\Icons\\Spell_589");
-        assert_eq!((count, dtype.as_str()), (3, "Magic"));
-        assert_eq!((dur, expiry), (18.0, 1042.5));
-        assert_eq!(spell, 589);
-    }
-
-    #[test]
-    fn unit_buff_and_unit_debuff_return_the_1121_tuple_not_the_era_one() {
+    fn unit_buff_and_unit_debuff_return_the_1121_tuple() {
         let mut s = script();
         let mut buff = aura(1126, "Mark of the Wild", true, true);
         buff.count = 1;
@@ -546,24 +374,6 @@ mod tests {
     }
 
     #[test]
-    fn cancel_unit_buff_queues_the_spell_id_and_refuses_a_non_cancelable_aura() {
-        let mut s = script();
-        s.set_player_auras(vec![
-            aura(2457, "Battle Stance", true, true),
-            aura(9999, "Sealed", true, false),
-            aura(589, "Pain", false, false),
-        ]);
-        assert!(s.take_cancel_aura_requests().is_empty());
-
-        // Only the cancelable buff queues, by spell id; the others are silent no-ops.
-        s.eval::<()>(r#"CancelUnitBuff("player", 1)"#).unwrap();
-        s.eval::<()>(r#"CancelUnitBuff("player", 2)"#).unwrap();
-        s.eval::<()>(r#"CancelUnitBuff("player", 9)"#).unwrap();
-        assert_eq!(s.take_cancel_aura_requests(), vec![2457]);
-        assert!(s.take_cancel_aura_requests().is_empty());
-    }
-
-    #[test]
     fn tracking_bindings_read_the_pushed_state_and_cancel_by_spell_id() {
         let mut s = script();
         assert!(s
@@ -604,11 +414,11 @@ mod tests {
         let mut s = script();
         s.set_player_auras(vec![aura(2457, "Stance", true, true)]);
         assert!(s
-            .eval::<bool>(r#"return UnitAura("player", 1) ~= nil"#)
+            .eval::<bool>(r#"return UnitBuff("player", 1) ~= nil"#)
             .unwrap());
         s.set_player_auras(Vec::new());
         assert!(s
-            .eval::<bool>(r#"return UnitAura("player", 1) == nil"#)
+            .eval::<bool>(r#"return UnitBuff("player", 1) == nil"#)
             .unwrap());
     }
 
@@ -617,7 +427,8 @@ mod tests {
     const P1_TARGET: u64 = 0xF130_0000_0000_0003;
 
     /// We target `TARGET`, which targets party1, who targets `P1_TARGET`, which targets us; the mouse
-    /// is over `MOB`. Each unit's list holds a buff and a debuff named for it.
+    /// is over `MOB`. Each unit's list holds a buff and a debuff whose spell ids, and so icons, are
+    /// its own: `base + 1` and `base + 2`.
     fn group_script() -> UiScript {
         let mut s = UiScript::new().unwrap();
         s.set_unit_guids(&UnitGuids {
@@ -641,23 +452,26 @@ mod tests {
             aura(1126, "Mark of the Wild", true, true),
             aura(11976, "Strike", false, false),
         ]);
-        for (guid, name) in [
-            (TARGET, "on the target"),
-            (MOB, "on the mouseover"),
-            (P1, "on party1"),
-            (P1_TARGET, "on party1's target"),
+        for (guid, base, name) in [
+            (TARGET, 100, "on the target"),
+            (MOB, 200, "on the mouseover"),
+            (P1, 300, "on party1"),
+            (P1_TARGET, 400, "on party1's target"),
         ] {
             s.set_unit_auras(
                 guid,
-                Some(vec![aura(1, name, true, true), aura(2, name, false, false)]),
+                Some(vec![
+                    aura(base + 1, name, true, true),
+                    aura(base + 2, name, false, false),
+                ]),
             );
         }
         s
     }
 
-    /// `UnitAura`'s name, the list's identity: the bindings' own tuples lead with the icon.
-    fn named(s: &UiScript, call: &str) -> Option<String> {
-        s.eval::<Option<String>>(&format!("local a, b, c = {call} return b and a"))
+    /// The icon a read answers, the list's identity.
+    fn icon_of(s: &UiScript, call: &str) -> Option<String> {
+        s.eval::<Option<String>>(&format!("return ({call})"))
             .unwrap()
     }
 
@@ -666,41 +480,28 @@ mod tests {
     #[test]
     fn a_token_reads_the_list_of_the_unit_it_names() {
         let s = group_script();
-        let icon = |name: &str| {
-            s.eval::<Option<String>>(&format!("return ({name})"))
-                .unwrap()
-        };
-        assert_eq!(
-            icon(r#"UnitDebuff("mouseover", 1)"#).as_deref(),
-            Some("Interface\\Icons\\Spell_2")
-        );
-        for (token, name) in [
-            ("mouseover", "on the mouseover"),
-            ("party1target", "on party1's target"),
-            ("targettarget", "on party1"),
-            ("TargetTarget", "on party1"),
-            ("targettargettarget", "on party1's target"),
-            ("party1", "on party1"),
-            ("PARTY1", "on party1"),
+        for (token, base) in [
+            ("mouseover", 200),
+            ("party1target", 400),
+            ("targettarget", 300),
+            ("TargetTarget", 300),
+            ("targettargettarget", 400),
+            ("party1", 300),
+            ("PARTY1", 300),
         ] {
             assert_eq!(
-                named(&s, &format!(r#"UnitAura("{token}", 1, "HARMFUL")"#)).as_deref(),
-                Some(name),
+                icon_of(&s, &format!(r#"UnitBuff("{token}", 1)"#)),
+                Some(format!("Interface\\Icons\\Spell_{}", base + 1)),
                 "{token}"
             );
             assert_eq!(
-                named(&s, &format!(r#"UnitAura("{token}", 1)"#)).as_deref(),
-                Some(name),
+                icon_of(&s, &format!(r#"UnitDebuff("{token}", 1)"#)),
+                Some(format!("Interface\\Icons\\Spell_{}", base + 2)),
                 "{token}"
             );
         }
-        // `UnitBuff("party1target", 1)` and `UnitDebuff("mouseover", 1)`, by their icons.
         assert!(s
-            .eval::<bool>(
-                r#"return UnitBuff("party1target", 1) == "Interface\\Icons\\Spell_1"
-                   and UnitDebuff("mouseover", 1) == "Interface\\Icons\\Spell_2"
-                   and UnitBuff("party1target", 2) == nil"#
-            )
+            .eval::<bool>(r#"return UnitBuff("party1target", 2) == nil"#)
             .unwrap());
     }
 
@@ -717,8 +518,8 @@ mod tests {
             "party1TARGETtarget",
         ] {
             assert_eq!(
-                named(&s, &format!(r#"UnitAura("{token}", 2)"#)).as_deref(),
-                Some("Mark of the Wild"),
+                icon_of(&s, &format!(r#"UnitBuff("{token}", 2)"#)).as_deref(),
+                Some("Interface\\Icons\\Spell_1126"),
                 "{token}"
             );
         }
@@ -754,9 +555,8 @@ mod tests {
         for call in [
             r#"UnitBuff("bogus", 1)"#,
             r#"UnitDebuff("focus", 1)"#,
-            r#"UnitAura("npctarget", 1)"#,
+            r#"UnitDebuff("npctarget", 1)"#,
             r#"UnitBuff("bogus", 0)"#,
-            r#"CancelUnitBuff("bogus", 1)"#,
         ] {
             let err = s.eval::<()>(call).unwrap_err().to_string();
             assert!(err.contains("Unknown unit name: "), "{call}: {err}");

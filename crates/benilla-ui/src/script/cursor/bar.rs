@@ -149,10 +149,11 @@ mod tests {
             !s.eval::<bool>("return HasAction(1)").unwrap(),
             "removed from the engine's optimistic mirror"
         );
-        let (kind, id) = s
-            .eval::<(String, i64)>("local k, slot = GetCursorInfo() return k, slot")
-            .unwrap();
-        assert_eq!((kind.as_str(), id), ("action", 1));
+        assert!(
+            matches!(s.cursor_payload(), Some(CursorPayload::Action(c)) if c.src_slot == 1),
+            "{:?}",
+            s.cursor_payload()
+        );
         assert_eq!(s.take_action_sets(), vec![(1, 0)]);
     }
 
@@ -199,10 +200,6 @@ mod tests {
             s.eval::<String>("return GetActionTexture(2)").unwrap(),
             "Interface\\Icons\\Spell_A"
         );
-        let (kind, src) = s
-            .eval::<(String, i64)>("local k, slot = GetCursorInfo() return k, slot")
-            .unwrap();
-        assert_eq!((kind.as_str(), src), ("action", 2));
         assert_eq!(
             s.cursor_payload(),
             Some(CursorPayload::Action(CursorAction {

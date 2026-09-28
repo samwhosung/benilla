@@ -663,8 +663,8 @@ pub(crate) struct Model {
     pub(crate) bind_on_use_confirms: u32,
 
     /// The open loot, the row clicks and whether `CloseLoot` ran. A click is the reference's take
-    /// `0x4c2790` with flag 0, raising `LOOT_BIND` for a bind-on-pickup row (the C `CLootButton`,
-    /// here `BenillaTakeLootSlot`); `LootSlot` passes 1 (`0x4c2e70`), taking it after the confirm.
+    /// `0x4c2790` with flag 0, raising `LOOT_BIND` for a bind-on-pickup row (a `LootButton`'s own
+    /// click, `0x4c1820`); `LootSlot` passes 1 (`0x4c2e70`), taking it after the confirm.
     pub(crate) loot: Option<loot::LootState>,
     pub(crate) loot_picks: Vec<u32>,
     /// `LootSlot(slot)` rows, 1-based, apart from clicks for the reference's pending-slot gate.

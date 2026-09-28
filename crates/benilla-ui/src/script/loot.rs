@@ -245,18 +245,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.set_named_registry_value(REG_LOOTBUTTON_METHODS, m)?;
     }
 
-    // BenillaTakeLootSlot(slot): not a 1.12 verb. It queues the row click's take by 1-based row,
-    // which has no Lua binding in the reference: only `CLootButton::OnClick 0x4c1820` reaches the
-    // dispatcher `0x4c2790` with flag 0.
-    g.set(
-        "BenillaTakeLootSlot",
-        lua.create_function(|lua, slot: u32| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.loot_picks.push(slot);
-            Ok(())
-        })?,
-    )?;
-
     // LootSlot(slot): the LOOT_BIND confirmation only (`0x4c2e70`: `luaL_checknumber(1)`,
     // `dec eax`, `0x4c2790(slot, 1)`, whose arm at `0x4c27c0` returns unless the slot is the
     // pending confirm, `cmp edi, [0x847cec]`). On an ordinary row it does nothing.
@@ -525,16 +513,6 @@ mod tests {
         assert_eq!(s.take_loot_master_gives(), vec![(2, 1)]);
         assert!(s.take_loot_master_gives().is_empty(), "drained");
         assert!(s.take_loot_picks().is_empty());
-    }
-
-    #[test]
-    fn take_loot_slot_queues_picks() {
-        let mut s = UiScript::new().unwrap();
-        s.set_loot(Some(loot()));
-        s.run("BenillaTakeLootSlot(1)").unwrap(); // coin
-        s.run("BenillaTakeLootSlot(2)").unwrap(); // item
-        assert_eq!(s.take_loot_picks(), vec![1, 2]);
-        assert!(s.take_loot_picks().is_empty(), "drained");
     }
 
     /// In the pick queue `LootSlot` would loot any row an addon named, which the reference refuses.

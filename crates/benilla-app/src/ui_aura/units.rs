@@ -419,27 +419,29 @@ mod tests {
             .apply_stats(guid, full, info);
     }
 
-    /// The spell ids `UnitBuff` (or `UnitDebuff`) enumerates for `token`, index 1 up to the nil,
-    /// through `UnitAura`'s tenth return, as the icon needs a spell catalog.
+    /// The spell ids of `token`'s pushed debuffs (`harmful`) or buffs, after checking that
+    /// `UnitDebuff` (or `UnitBuff`) enumerates exactly that many, index 1 up to the nil.
     fn listed(app: &mut App, token: &str, harmful: bool) -> Vec<i64> {
-        let (verb, filter) = if harmful {
-            ("UnitDebuff", "HARMFUL")
-        } else {
-            ("UnitBuff", "HELPFUL")
-        };
-        app.world_mut()
-            .non_send_resource::<UiScript>()
-            .eval::<Vec<i64>>(&format!(
-                r#"local out = {{}}
+        let verb = if harmful { "UnitDebuff" } else { "UnitBuff" };
+        let s = app.world_mut().non_send_resource::<UiScript>();
+        let ids = s.aura_spell_ids(token, !harmful);
+        let enumerated = s
+            .eval::<usize>(&format!(
+                r#"local n = 0
                    for i = 1, 48 do
                        local _, count = {verb}("{token}", i)
                        if count == nil then break end
-                       local _, _, _, _, _, _, _, _, _, id = UnitAura("{token}", i, "{filter}")
-                       table.insert(out, id)
+                       n = n + 1
                    end
-                   return out"#
+                   return n"#
             ))
-            .unwrap()
+            .unwrap();
+        assert_eq!(
+            enumerated,
+            ids.len(),
+            "{verb}(\"{token}\", i) enumerates the list"
+        );
+        ids.into_iter().map(i64::from).collect()
     }
 
     fn seen(app: &mut App) -> Vec<String> {

@@ -26,6 +26,21 @@ use crate::widget::{
 /// Registry key of the GameTooltip method table, a named registry root (the MAXCSTACK discipline).
 pub(super) const REG_TOOLTIP_METHODS: &str = "__benilla_tooltip_methods";
 
+impl super::UiScript {
+    /// The name of the frame that owns the GameTooltip named `tooltip`; `None` for no such
+    /// tooltip, no owner or an unnamed one. 1.12 answers only `IsOwned(frame)`, so the host's
+    /// recorders read the owner here.
+    pub fn tooltip_owner_name(&self, tooltip: &str) -> Option<String> {
+        let model = self.model_ref();
+        let h = model.arena.lookup(tooltip)?;
+        let owner = match &model.arena.frame(h)?.kind_state {
+            KindState::Tooltip(t) => t.owner?,
+            _ => return None,
+        };
+        model.arena.frame(owner)?.name.clone()
+    }
+}
+
 /// Runs `f` over a GameTooltip's state under one short write borrow.
 fn with_tip<T>(lua: &Lua, this: &Table, f: impl FnOnce(&mut TooltipState) -> T) -> mlua::Result<T> {
     let h = frame_handle_of(lua, this)?;

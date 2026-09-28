@@ -104,8 +104,7 @@ pub enum QuadContent {
         additive: bool,
         /// `None` is the full texture.
         tex_coords: Option<TexCoords>,
-        /// A portrait, masked to the inscribed circle; false with a `portrait_unit` is the square
-        /// booth pane (`BenillaSetBoothTexture`).
+        /// A portrait, masked to the inscribed circle.
         circular: bool,
         /// A live unit portrait's unit: the renderer samples the app's bake of it instead of
         /// `path` and `color`.
@@ -362,8 +361,7 @@ pub(crate) struct RegionData {
     /// drawn as `texel × colour` per channel, alpha included: a `<Color 1,1,1,0.2>` tinted
     /// `(0, 0, 0.75, 0.5)` draws at alpha 0.1, as `SkillFrame`'s row trough does.
     pub(crate) vertex_color: Option<[f32; 4]>,
-    /// A portrait (`SetPortraitToTexture`, `SetPortraitTexture`), masked to the inscribed circle;
-    /// false with a `portrait_unit` is the square booth pane (`BenillaSetBoothTexture`).
+    /// A portrait (`SetPortraitToTexture`, `SetPortraitTexture`), masked to the inscribed circle.
     pub(crate) circular: bool,
     /// A live unit portrait's unit, drawn from the app's bake instead of the texture or colour;
     /// cleared by `SetTexture` and `SetPortraitToTexture`.

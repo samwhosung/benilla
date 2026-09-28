@@ -63,7 +63,10 @@ fn the_world_frame_is_born_in_stratum_world_with_the_mouse_and_wheel() {
         .run(r#"plain:SetFrameStrata("WORLD")"#)
         .unwrap_err()
         .to_string();
-    assert!(err.contains("unknown frameStrata 'WORLD'"), "{err}");
+    assert!(
+        err.contains("Plain:SetFrameStrata(): Unknown frame strata: WORLD"),
+        "{err}"
+    );
     assert_eq!(
         s.eval::<String>("return plain:GetFrameStrata()").unwrap(),
         "BACKGROUND"

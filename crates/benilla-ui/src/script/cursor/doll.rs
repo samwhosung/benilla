@@ -369,7 +369,7 @@ mod tests {
         s.set_inventory_slots(doll_slots());
         s.set_container(0, Some(one_fitting_bag_item()));
 
-        assert!(s.eval::<bool>("return PickupContainerItem(0, 1)").unwrap());
+        s.run("PickupContainerItem(0, 1)").unwrap();
         assert_eq!(s.cursor_item().unwrap().equip_slots, vec![1]);
 
         assert!(s.eval::<bool>("return PickupInventoryItem(1)").unwrap());
@@ -762,7 +762,7 @@ mod tests {
         s.run("ClearCursor()").unwrap();
         assert!(s.cursor_item().is_none());
         assert!(!s.eval::<bool>("return PickupInventoryItem(1)").unwrap());
-        assert!(!s.eval::<bool>("return PickupContainerItem(0, 1)").unwrap());
+        s.run("PickupContainerItem(0, 1)").unwrap();
         assert_eq!(
             s.take_item_picks(),
             vec![(EQUIPMENT_BAG, 1), (0, 1)],

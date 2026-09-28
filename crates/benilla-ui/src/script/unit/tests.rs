@@ -586,8 +586,6 @@ fn party_frame_predicates_report_1_or_nil() {
         Some(UnitState {
             exists: true,
             is_connected: true,
-            is_afk: true,
-            is_dnd: false,
             pvp: true,
             is_pvp_ffa: false,
             ..Default::default()
@@ -598,10 +596,6 @@ fn party_frame_predicates_report_1_or_nil() {
             .unwrap(),
         1
     );
-    assert_eq!(s.eval::<i64>(r#"return UnitIsAFK("party1")"#).unwrap(), 1);
-    assert!(s
-        .eval::<bool>(r#"return UnitIsDND("party1") == nil"#)
-        .unwrap());
     assert_eq!(s.eval::<i64>(r#"return UnitIsPVP("party1")"#).unwrap(), 1);
     assert!(s
         .eval::<bool>(r#"return UnitIsPVPFreeForAll("party1") == nil"#)
@@ -612,8 +606,6 @@ fn party_frame_predicates_report_1_or_nil() {
         Some(UnitState {
             exists: true,
             is_connected: false,
-            is_afk: false,
-            is_dnd: true,
             pvp: false,
             is_pvp_ffa: true,
             ..Default::default()
@@ -622,10 +614,6 @@ fn party_frame_predicates_report_1_or_nil() {
     assert!(s
         .eval::<bool>(r#"return UnitIsConnected("party1") == nil"#)
         .unwrap());
-    assert!(s
-        .eval::<bool>(r#"return UnitIsAFK("party1") == nil"#)
-        .unwrap());
-    assert_eq!(s.eval::<i64>(r#"return UnitIsDND("party1")"#).unwrap(), 1);
     assert!(s
         .eval::<bool>(r#"return UnitIsPVP("party1") == nil"#)
         .unwrap());
@@ -1615,24 +1603,6 @@ fn every_unit_predicate_is_one_or_nil_and_never_a_boolean() {
             UnitState {
                 exists: true,
                 is_connected: true,
-                ..Default::default()
-            },
-        ),
-        (
-            "UnitIsAFK",
-            r#"UnitIsAFK("target")"#,
-            UnitState {
-                exists: true,
-                is_afk: true,
-                ..Default::default()
-            },
-        ),
-        (
-            "UnitIsDND",
-            r#"UnitIsDND("target")"#,
-            UnitState {
-                exists: true,
-                is_dnd: true,
                 ..Default::default()
             },
         ),

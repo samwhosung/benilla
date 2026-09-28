@@ -218,7 +218,8 @@ pub struct Region {
     pub kind: RegionKind,
     pub owner: FrameHandle,
     pub draw_layer: DrawLayer,
-    /// A later client's `textureSubLevel`; 1.12 has no sub-level (`0x76a860`).
+    /// The engine's own order within a layer, which only the EditBox caret sets, to draw over the
+    /// text; 1.12 gives Lua and XML no sub-level (`0x76a860`, `0x79a780`).
     pub sub_level: i8,
     /// The index within the owner frame, the last within-layer draw tiebreak.
     pub decl_seq: u32,

@@ -203,14 +203,13 @@ fn shipped_spellbook_drives_end_to_end() {
     s.mouse_button(x1, y1, "LeftButton", false);
     s.set_modifiers(false, false, false);
     assert!(s.take_spell_casts().is_empty(), "shift-click never casts");
-    let (kind, _book_id, book_type, spell_id) = s
-        .eval::<(String, i64, String, i64)>(
-            "local k, slot, book, id = GetCursorInfo() return k, slot, book, id",
-        )
-        .unwrap();
-    assert_eq!(
-        (kind.as_str(), book_type.as_str(), spell_id),
-        ("spell", "spell", 133)
+    assert!(
+        matches!(
+            s.cursor_payload(),
+            Some(benilla_ui::script::CursorPayload::Spell(c)) if c.book_type == "spell" && c.spell_id == 133
+        ),
+        "the cursor holds spell 133 from the spell book: {:?}",
+        s.cursor_payload()
     );
 
     // An empty slot is hidden (`ActionButton.lua:214-215`) until a held payload opens the grid;
@@ -784,9 +783,10 @@ fn the_macro_editor_takes_a_shift_click_and_only_a_shift_click() {
     click(&mut s, "SpellButton1", "LeftButton");
     s.set_modifiers(false, false, false);
     assert!(s.errors().is_empty(), "pickup errors: {:?}", s.errors());
-    let (kind, spell_id) = s
-        .eval::<(String, i64)>("local k, _, _, id = GetCursorInfo() return k, id")
-        .unwrap();
-    assert_eq!((kind.as_str(), spell_id), ("spell", 133));
+    assert!(
+        matches!(s.cursor_payload(), Some(benilla_ui::script::CursorPayload::Spell(c)) if c.spell_id == 133),
+        "the cursor holds spell 133: {:?}",
+        s.cursor_payload()
+    );
     assert!(s.take_spell_casts().is_empty());
 }

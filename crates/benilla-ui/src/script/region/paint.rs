@@ -349,25 +349,39 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         })?,
     )?;
 
+    // SetDrawLayer(layer) (`0x79a780`) reads the layer name alone, against the five-row table at
+    // `0x811a80` (`0x6f18b0`); a further argument is never read, as 1.12 has no sub-level within a
+    // layer. A name off the table, or no name, raises the Usage line naming the region
+    // (`0x87c42c`), and the layer stays.
     m.set(
         "SetDrawLayer",
-        lua.create_function(|lua, (this, layer, sub): (Table, String, Option<i64>)| {
+        lua.create_function(|lua, (this, layer): (Table, Value)| {
             let rh = region_handle_of(lua, &this)?;
-            let dl = draw_layer_from_str(&layer)
-                .ok_or_else(|| mlua::Error::runtime(format!("unknown draw layer '{layer}'")))?;
+            let dl = match &layer {
+                Value::String(s) => draw_layer_from_str(&s.to_str()?),
+                _ => None,
+            };
+            let Some(dl) = dl else {
+                let name = {
+                    let model = lua.app_data_ref::<Model>().expect("model");
+                    crate::script::object::decode_id(&this)
+                        .ok()
+                        .and_then(|id| super::region_name_of(&model, id))
+                };
+                return Err(mlua::Error::runtime(format!(
+                    "Usage: {}:SetDrawLayer(\"layer\")",
+                    name.as_deref().unwrap_or("<unnamed>")
+                )));
+            };
             let mut model = lua.app_data_mut::<Model>().expect("model");
             if let Some(region) = model.arena.region_mut(rh) {
                 region.draw_layer = dl;
-                if let Some(s) = sub {
-                    region.sub_level = s.clamp(i64::from(i8::MIN), i64::from(i8::MAX)) as i8;
-                }
             }
             Ok(())
         })?,
     )?;
 
-    // GetDrawLayer (Texture `0x79a6c0`, FontString `0x79c660`): the layer name alone, since
-    // 1.12's pair is layer-only; the sub-level `SetDrawLayer` accepts is not 1.12's.
+    // GetDrawLayer (Texture `0x79a6c0`, FontString `0x79c660`): the layer name alone.
     m.set(
         "GetDrawLayer",
         lua.create_function(|lua, this: Table| {

@@ -55,7 +55,7 @@ fn item_set_block_counts_and_colors() {
         local a = CreateFrame("Button", "Slot10"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
         local tt = CreateFrame("GameTooltip", "TT")
         tt:SetOwner(a, "ANCHOR_RIGHT")
-        tt:BenillaSetItemById(6303)
+        SetItemByIdForTest(tt, 6303)
         -- The spacer is the reference's own literal `0x854b2c` — a space and a newline, which is
         -- ONE row carrying one space, not the empty string (an empty AddLine adds no line at all
         -- in the reference: `0x530270` bails before its `inc [esi+0x31c]`).
@@ -120,7 +120,7 @@ fn item_set_block_counts_and_colors() {
     s.set_item_set(161, gated);
     s.run(
         r#"
-        TT:SetOwner(Slot10, "ANCHOR_RIGHT"); TT:BenillaSetItemById(6303)
+        TT:SetOwner(Slot10, "ANCHOR_RIGHT"); SetItemByIdForTest(TT, 6303)
         assert(TTTextLeft5:GetText() == "[MIN_SKILL Leatherworking 250]",
                "the skill line sits between header and members")
         assert(TTTextLeft6:GetText() == "  Defias Mark")
@@ -141,7 +141,7 @@ fn item_set_block_counts_and_colors() {
     let mut req = PlayerReqState::default();
     req.skills.insert(165, 300);
     s.set_player_req_state(req);
-    s.run(r#"TT:SetOwner(Slot10, "ANCHOR_RIGHT"); TT:BenillaSetItemById(6303)"#)
+    s.run(r#"TT:SetOwner(Slot10, "ANCHOR_RIGHT"); SetItemByIdForTest(TT, 6303)"#)
         .unwrap();
     let lines = lines_of(&mut s);
     assert_eq!(
@@ -161,7 +161,7 @@ fn item_set_block_counts_and_colors() {
             ..Default::default()
         },
     );
-    s.run(r#"TT:SetOwner(Slot10, "ANCHOR_RIGHT"); TT:BenillaSetItemById(9999)"#)
+    s.run(r#"TT:SetOwner(Slot10, "ANCHOR_RIGHT"); SetItemByIdForTest(TT, 9999)"#)
         .unwrap();
     assert_eq!(s.take_item_set_asks(), vec![1], "the set ask recorded");
     assert!(s.take_errors().is_empty());

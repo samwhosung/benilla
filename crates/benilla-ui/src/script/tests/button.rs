@@ -427,13 +427,14 @@ fn down_registration_fires_on_press_and_toggles_checked_once() {
     s.set_screen_size(800.0, 600.0);
     s.run(
         r#"
-        clicks, seen_down = 0, nil
+        clicks, seen_button, seen_arg2 = 0, nil, "untouched"
+        arg2 = "untouched"
         local cb = CreateFrame("CheckButton", "QuickSell")
         cb:SetPoint("BOTTOMLEFT", 0, 0); cb:SetWidth(100); cb:SetHeight(100)
         cb:RegisterForClicks("LeftButtonDown")
-        cb:SetScript("OnClick", function() local self, button, down = this, arg1, arg2
+        cb:SetScript("OnClick", function()
             clicks = clicks + 1
-            seen_down = down
+            seen_button, seen_arg2 = arg1, arg2
         end)
     "#,
     )
@@ -442,7 +443,12 @@ fn down_registration_fires_on_press_and_toggles_checked_once() {
 
     s.mouse_button(50.0, 50.0, "LeftButton", true);
     assert_eq!(s.eval::<i64>("return clicks").unwrap(), 1);
-    assert!(s.eval::<bool>("return seen_down == true").unwrap());
+    // `0x779540` fires `OnClick` with the format `"%s"`: the button name in `arg1` and no `arg2`.
+    assert_eq!(
+        s.eval::<(String, String)>("return seen_button, seen_arg2")
+            .unwrap(),
+        ("LeftButton".to_string(), "untouched".to_string())
+    );
     assert!(s.eval::<bool>("return QuickSell:GetChecked()").unwrap());
 
     // `RegisterForClicks` replaced the set, so "LeftButtonUp" no longer fires.

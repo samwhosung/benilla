@@ -186,8 +186,11 @@ mod tests {
             "Interface\\Icons\\INV_Misc_Bag_08"
         );
         assert_eq!(
-            s.eval::<i64>("return GetInventoryItemID(\"player\", 64)")
-                .unwrap(),
+            s.eval::<i64>(
+                "local _, _, id = string.find(GetInventoryItemLink(\"player\", 64), \"item:(%d+)\") \
+                 return tonumber(id)"
+            )
+            .unwrap(),
             4500
         );
         // Slot 65 is empty and 70 is past the band; neither falls through to the doll.
@@ -255,8 +258,11 @@ mod tests {
             7
         );
         assert_eq!(
-            s.eval::<i64>("return GetInventoryItemID(\"player\", 42)")
-                .unwrap(),
+            s.eval::<i64>(
+                "local _, _, id = string.find(GetInventoryItemLink(\"player\", 42), \"item:(%d+)\") \
+                 return tonumber(id)"
+            )
+            .unwrap(),
             4496
         );
         // An empty vault slot answers nil rather than falling through to `inventory_slots`.

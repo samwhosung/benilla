@@ -57,11 +57,7 @@ fn state() -> TradeState {
         ..Default::default()
     };
     target.slots[0] = Some(item(4306, "Silk Cloth", 1, 2));
-    TradeState {
-        player,
-        target,
-        partner_name: Some("Thrall".into()),
-    }
+    TradeState { player, target }
 }
 
 #[test]

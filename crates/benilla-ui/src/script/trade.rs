@@ -50,8 +50,6 @@ pub struct TradeState {
     pub player: TradeSideState,
     /// The partner's offer, the wire's `their_window` snapshot.
     pub target: TradeSideState,
-    /// The partner's name for `GetTradePartnerName()`, `None` while in flight.
-    pub partner_name: Option<String>,
 }
 
 impl super::UiScript {
@@ -273,21 +271,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `GetTradePartnerName()` is not a 1.12 global; the stock header reads `UnitName("NPC")`
-    // (`TradeFrame.lua:43`).
-    g.set(
-        "GetTradePartnerName",
-        lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(
-                match model.trade.as_ref().and_then(|t| t.partner_name.clone()) {
-                    Some(n) => Value::String(lua.create_string(&n)?),
-                    None => Value::Nil,
-                },
-            )
-        })?,
-    )?;
-
     // InitiateTrade(unit): the unit menu's TRADE row.
     g.set(
         "InitiateTrade",
@@ -423,11 +406,7 @@ mod tests {
         };
         target.slots[0] = Some(item(4306, 1, 2));
         target.slots[6] = Some(item(6217, 1, 1)); // the enchant slot carries an item
-        TradeState {
-            player,
-            target,
-            partner_name: Some("Thrall".into()),
-        }
+        TradeState { player, target }
     }
 
     #[test]
@@ -516,7 +495,7 @@ mod tests {
     }
 
     #[test]
-    fn money_and_partner_name_read_the_pushed_state() {
+    fn money_reads_the_pushed_state() {
         let mut s = UiScript::new().unwrap();
         s.set_trade(Some(state()));
         assert_eq!(
@@ -524,10 +503,6 @@ mod tests {
             12_345
         );
         assert_eq!(s.eval::<i64>("return GetTargetTradeMoney()").unwrap(), 500);
-        assert_eq!(
-            s.eval::<String>("return GetTradePartnerName()").unwrap(),
-            "Thrall"
-        );
     }
 
     #[test]
@@ -539,9 +514,6 @@ mod tests {
             .eval::<bool>("return GetTradePlayerItemInfo(1) == nil")
             .unwrap());
         assert_eq!(s.eval::<i64>("return GetTargetTradeMoney()").unwrap(), 0);
-        assert!(s
-            .eval::<bool>("return GetTradePartnerName() == nil")
-            .unwrap());
     }
 
     #[test]

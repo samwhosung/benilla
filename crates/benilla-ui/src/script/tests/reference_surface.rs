@@ -1,13 +1,38 @@
-//! The 1.12 surface as a gate: every global benilla's VM exposes is one the 1.12.1 client has
-//! (`reference/1.12-globals.tsv`) or a listed exception, since addons branch on a global's
-//! presence; what 1.12 has and benilla lacks is `scripts/api-coverage.sh`'s count.
+//! The 1.12 surface as a gate: every global the engine puts in a bare VM is one the 1.12.1 client
+//! has (`reference/1.12-globals.tsv`) or a commented entry on [`BEYOND_1_12`], since addons branch
+//! on a global's presence; no prefix excuses an engine name, as a host seam belongs in Rust. The
+//! production load, core and layer, is `benilla-app`'s `ui_script::surface_gate`; what 1.12 has
+//! and benilla lacks is `scripts/api-coverage.sh`'s count.
 
 use std::collections::HashSet;
 
 use super::common::script;
 
-/// `reference/1.12-globals.tsv`, as `name -> origin`.
-fn reference() -> Vec<(String, String)> {
+/// Globals the engine exposes that 1.12 does not, each with its reason. The list is exact.
+const BEYOND_1_12: &[&str] = &[
+    // Our Lua runtime is 5.1 where 1.12's is 5.0: 1.12's base library does not export `_G` (an
+    // addon reaches the globals with `getfenv(0)`); ours does, as our `getglobal`/`setglobal` are
+    // written over it.
+    "_G",
+    // The host's pushed state, which the Lua getters over it read (`script::stdlib`): the tick's
+    // clock for `GetTime`, the zone texts and PvP info for the zone family, the game clock for
+    // `GetGameTime`, and the default error handler's sink. Each is a slot the app writes, not an
+    // API; they await a home off `_G`.
+    "__benilla_game_hour",
+    "__benilla_game_minute",
+    "__benilla_now",
+    "__benilla_pvp_arena",
+    "__benilla_pvp_faction",
+    "__benilla_pvp_type",
+    "__benilla_real_zone_name",
+    "__benilla_script_error",
+    "__benilla_subzone_name",
+    "__benilla_zone_name",
+    "__benilla_zone_text",
+];
+
+/// `reference/1.12-globals.tsv`'s names.
+fn reference() -> HashSet<String> {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../reference/1.12-globals.tsv"
@@ -15,117 +40,244 @@ fn reference() -> Vec<(String, String)> {
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| {
         panic!("reading {path}: {e} — regenerate with scripts/gen-reference-globals.py")
     });
-    text.lines()
+    let names: HashSet<String> = text
+        .lines()
         .filter(|l| !l.starts_with('#'))
-        .filter_map(|l| {
-            let mut f = l.split('\t');
-            Some((f.next()?.to_string(), f.nth(1)?.to_string()))
-        })
+        .filter_map(|l| l.split('\t').next().map(str::to_string))
+        .collect();
+    assert!(
+        names.len() > 19_000,
+        "the reference table looks truncated ({} names) — regenerate it",
+        names.len()
+    );
+    names
+}
+
+/// The string keys of a bare VM's `_G`.
+fn engine_globals() -> HashSet<String> {
+    script()
+        .eval::<Vec<String>>(
+            "local out = {} \
+             for k in pairs(getfenv(0)) do if type(k) == 'string' then table.insert(out, k) end end \
+             return out",
+        )
+        .expect("dump _G")
+        .into_iter()
         .collect()
 }
 
-/// Globals benilla exposes that 1.12 does not. `Benilla*` (the host bridge our own UI files call)
-/// and `__benilla_*` (the tick's pushed state) pass by prefix.
-fn allowed_beyond_1_12() -> HashSet<&'static str> {
-    [
-        // ── our Lua runtime is 5.1 where 1.12's is 5.0 ──
-        // 1.12's base library does not export `_G` (an addon reaches the globals with
-        // `getfenv(0)`); ours does, as our `getglobal`/`setglobal` are written over it.
-        "_G",
-        // ── WoW API past 1.12 ──
-        // Each awaits its 1.12 equivalent, removal or a reason; none is called from our UI files.
-        "CancelUnitBuff",
-        "GetCursorInfo",
-        "GetInventoryItemID",
-        "GetPlayerFacing",
-        "GetTradePartnerName",
-        "IsGossipOptionCoded",
-        "UnitAura",
-        "UnitIsAFK",
-        "UnitIsDND",
-    ]
-    .into_iter()
-    .collect()
-}
-
-/// Every global benilla's VM exposes is one 1.12 has, or a listed exception.
+/// Every global the engine exposes is one 1.12 has, or a listed exception.
 #[test]
-fn our_globals_stay_inside_the_1_12_surface() {
-    let reference = reference();
-    let known: HashSet<&str> = reference.iter().map(|(n, _)| n.as_str()).collect();
-    assert!(
-        known.len() > 19_000,
-        "the reference table looks truncated ({} names) — regenerate it",
-        known.len()
-    );
-    let allowed = allowed_beyond_1_12();
-
-    let ours: Vec<String> = script()
-        .eval(
-            "local out = {} \
-             for k in pairs(_G) do if type(k) == 'string' then table.insert(out, k) end end \
-             return out",
-        )
-        .expect("dump _G");
-
-    let mut unlisted: Vec<&str> = ours
-        .iter()
-        .map(String::as_str)
-        .filter(|n| !known.contains(n))
-        .filter(|n| !allowed.contains(n))
-        .filter(|n| !n.starts_with("Benilla") && !n.starts_with("__benilla_"))
+fn the_engine_adds_no_global_past_1_12() {
+    let known = reference();
+    let mut beyond: Vec<String> = engine_globals()
+        .into_iter()
+        .filter(|n| !known.contains(n) && !BEYOND_1_12.contains(&n.as_str()))
         .collect();
-    unlisted.sort_unstable();
-
+    beyond.sort_unstable();
     assert!(
-        unlisted.is_empty(),
-        "benilla exposes {} global(s) the 1.12.1 client does not, and they are not listed as \
-         exceptions:\n    {}\n\n\
-         1.12 is the target. Either give it its 1.12 spelling, or add it to \
-         `allowed_beyond_1_12` in this file WITH the reason it has to stay — an addon that \
+        beyond.is_empty(),
+        "the engine exposes {} global(s) the 1.12.1 client does not:\n    {}\n\n\
+         1.12 is the target. Give it its 1.12 spelling, move a host seam into Rust, or add it to \
+         `BEYOND_1_12` in this file WITH the reason it has to stay — an addon that \
          feature-detects an unexplained superset takes a path we cannot honour.",
-        unlisted.len(),
-        unlisted.join(" ")
+        beyond.len(),
+        beyond.join(" ")
     );
 }
 
 /// The exception list is exact: no entry outlives its global, and none excuses a 1.12 name.
 #[test]
-fn the_exception_list_has_no_dead_entries() {
-    let known: HashSet<String> = reference().into_iter().map(|(n, _)| n).collect();
-    let ours: HashSet<String> = script()
-        .eval::<Vec<String>>(
-            "local out = {} \
-             for k in pairs(_G) do if type(k) == 'string' then table.insert(out, k) end end \
-             return out",
-        )
-        .expect("dump _G")
-        .into_iter()
+fn the_exception_list_is_exact() {
+    let known = reference();
+    let ours = engine_globals();
+    let wrong: Vec<&str> = BEYOND_1_12
+        .iter()
+        .copied()
+        .filter(|n| known.contains(*n) || !ours.contains(*n))
         .collect();
-
-    let mut dead: Vec<&str> = allowed_beyond_1_12()
-        .into_iter()
-        .filter(|n| !ours.contains(*n))
-        .collect();
-    dead.sort_unstable();
-    assert!(
-        dead.is_empty(),
-        "these are excused as beyond-1.12 but benilla no longer exposes them — drop them from \
-         `allowed_beyond_1_12`:\n    {}",
-        dead.join(" ")
-    );
-
-    let mut wrong: Vec<&str> = allowed_beyond_1_12()
-        .into_iter()
-        .filter(|n| known.contains(*n))
-        .collect();
-    wrong.sort_unstable();
     assert!(
         wrong.is_empty(),
-        "these are excused as beyond-1.12 but the 1.12.1 client DOES have them — they need no \
-         excuse:\n    {}",
-        wrong.join(" ")
+        "excused as beyond 1.12, but 1.12 has them or the engine no longer exposes them: {wrong:?}"
     );
+}
+
+/// The globals 1.12.1 does not have, each once benilla's: the Era verbs (the 1.12 way in each
+/// comment) and the host hooks with no caller. An addon that tests for one takes a path 1.12 never
+/// does.
+#[test]
+fn the_era_globals_and_the_uncalled_hooks_are_absent() {
+    let s = script();
+    for (name, instead) in [
+        (
+            "UnitAura",
+            "UnitBuff/UnitDebuff (0x519500, 0x5198f0), GetPlayerBuff (0x4e45d0)",
+        ),
+        ("CancelUnitBuff", "CancelPlayerBuff (0x4e49a0)"),
+        (
+            "GetCursorInfo",
+            "CursorHasItem/CursorHasSpell/CursorHasMoney (0x4895d0..0x489630)",
+        ),
+        (
+            "GetInventoryItemID",
+            "the id inside GetInventoryItemLink (0x4c8c10)",
+        ),
+        ("GetPlayerFacing", "the minimap arrow model's GetFacing"),
+        (
+            "GetTradePartnerName",
+            r#"UnitName("NPC") (TradeFrame.lua:43)"#,
+        ),
+        (
+            "IsGossipOptionCoded",
+            "GOSSIP_ENTER_CODE, then SelectGossipOption(index, code)",
+        ),
+        ("UnitIsAFK", "no unit AFK predicate"),
+        ("UnitIsDND", "no unit DND predicate"),
+        (
+            "BenillaGetContainerItemID",
+            "the id inside GetContainerItemLink",
+        ),
+        ("BenillaGetItemStats", "no caller"),
+        ("BenillaGetMerchantItemStats", "no caller"),
+        ("BenillaGetBuybackItemStats", "no caller"),
+        ("BenillaSetBoothTexture", "no caller; SetPortraitTexture"),
+        ("BenillaTakeLootSlot", "a LootButton's own click (0x4c1820)"),
+    ] {
+        assert!(
+            s.eval::<bool>(&format!("return {name} == nil")).unwrap(),
+            "{name} is a global; 1.12 has {instead}"
+        );
+    }
+}
+
+/// The strata table (`0x8119f8`) has eight rows, `BACKGROUND` to `TOOLTIP`, walked by `0x6f17d0`:
+/// `SetFrameStrata("BLIZZARD")` raises `%s:SetFrameStrata(): Unknown frame strata: %s` naming the
+/// frame or `<unnamed>` (`0x774450`) and leaves the stratum, and the XML attribute warns and skips
+/// (`0x769978`).
+#[test]
+fn blizzard_is_no_frame_strata() {
+    let s = script();
+    s.run(r#"f = CreateFrame("Frame", "StrataProbe") f:SetFrameStrata("HIGH") g = CreateFrame("Frame")"#)
+        .unwrap();
+    for (call, who) in [
+        (r#"f:SetFrameStrata("BLIZZARD")"#, "StrataProbe"),
+        (r#"g:SetFrameStrata("BLIZZARD")"#, "<unnamed>"),
+    ] {
+        let e = s.run(call).expect_err(call).to_string();
+        assert!(
+            e.contains(&format!(
+                "{who}:SetFrameStrata(): Unknown frame strata: BLIZZARD"
+            )),
+            "{call}: {e}"
+        );
+    }
+    assert_eq!(
+        s.eval::<String>("return f:GetFrameStrata()").unwrap(),
+        "HIGH",
+        "the stratum stays"
+    );
+    assert!(crate::script::object::strata_from_str("BLIZZARD").is_none());
+    assert!(crate::script::object::strata_from_str("tooltip").is_some());
+}
+
+/// `SetDrawLayer` (`0x79a780`) reads the layer name alone against the five-row table (`0x811a80`):
+/// a third argument orders nothing, and a name off the table raises the Usage line (`0x87c42c`).
+#[test]
+fn set_draw_layer_reads_the_layer_alone() {
+    let s = script();
+    s.run(
+        r#"
+        f = CreateFrame("Frame", "LayerProbe")
+        a = f:CreateTexture("LayerProbeA", "ARTWORK")
+        b = f:CreateTexture("LayerProbeB", "ARTWORK")
+        a:SetDrawLayer("ARTWORK", 7)
+        b:SetDrawLayer("ARTWORK", -7)
+        "#,
+    )
+    .unwrap();
+    let sub = |name: &str| {
+        let rh = {
+            let t: mlua::Table = s.lua().globals().get(name).unwrap();
+            crate::script::region::region_handle_of(s.lua(), &t).unwrap()
+        };
+        s.model_ref().arena.region(rh).unwrap().sub_level
+    };
+    assert_eq!((sub("LayerProbeA"), sub("LayerProbeB")), (0, 0));
+    assert_eq!(
+        s.eval::<String>("return a:GetDrawLayer()").unwrap(),
+        "ARTWORK"
+    );
+    for (call, who) in [
+        (r#"a:SetDrawLayer("NOPE")"#, "LayerProbeA"),
+        ("a:SetDrawLayer(2)", "LayerProbeA"),
+        ("f:CreateTexture():SetDrawLayer()", "<unnamed>"),
+    ] {
+        let e = s.run(call).expect_err(call).to_string();
+        assert!(
+            e.contains(&format!(r#"Usage: {who}:SetDrawLayer("layer")"#)),
+            "{call}: {e}"
+        );
+    }
+    assert_eq!(
+        s.eval::<String>("return a:GetDrawLayer()").unwrap(),
+        "ARTWORK",
+        "a refused name leaves the layer"
+    );
+}
+
+/// `Set<State>Texture` has no colour form (`0x781970`): a number takes the path leg through
+/// `lua_isstring` (`0x781b23`) and loads as its decimal name, so `SetNormalTexture(1, 1, 1, 0)`
+/// is the file `"1"`; a boolean or no argument raises the Usage line (`0x87a1b4`, the highlight
+/// setter's own at `0x87a240`).
+#[test]
+fn a_state_texture_setter_reads_a_number_as_a_path() {
+    let s = script();
+    s.run(
+        r#"
+        b = CreateFrame("Button", "StateProbe")
+        b:SetNormalTexture(1, 1, 1, 0)
+        c = CreateFrame("CheckButton", "CheckProbe")
+        c:SetCheckedTexture(3)
+        "#,
+    )
+    .unwrap();
+    assert_eq!(
+        s.eval::<String>("return b:GetNormalTexture():GetTexture()")
+            .unwrap(),
+        "1",
+        "the path \"1\", not a solid white fill"
+    );
+    assert_eq!(
+        s.eval::<String>("return c:GetCheckedTexture():GetTexture()")
+            .unwrap(),
+        "3"
+    );
+    for (call, usage) in [
+        (
+            "b:SetPushedTexture(true)",
+            r#"Usage: StateProbe:SetPushedTexture(texture or "texture" or nil)"#,
+        ),
+        (
+            "b:SetDisabledTexture()",
+            r#"Usage: StateProbe:SetDisabledTexture(texture or "texture" or nil)"#,
+        ),
+        (
+            "CreateFrame('Button'):SetHighlightTexture(false)",
+            r#"Usage: <unnamed>:SetHighlightTexture(texture or "texture" or nil [, "blendmode")"#,
+        ),
+    ] {
+        let e = s.run(call).expect_err(call).to_string();
+        assert!(e.contains(usage), "{call}: {e}");
+    }
+}
+
+/// `PickupContainerItem` (`0x4f9b30`) returns nothing on every path.
+#[test]
+fn pickup_container_item_answers_nothing() {
+    let s = script();
+    for call in ["PickupContainerItem(0, 1)", "PickupContainerItem(4, 16)"] {
+        assert_eq!(s.arity(call).unwrap(), 0, "{call}");
+    }
 }
 
 /// `Texture:GetTexture()` (`0x79ba70`/`0x79baf0`/`0x835708`): one value, nil when unset, the path

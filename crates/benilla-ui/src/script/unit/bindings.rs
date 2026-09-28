@@ -580,8 +580,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // The party frame's status predicates. `UnitIsAFK` and `UnitIsDND` do not exist in the 1.12
-    // client, which has no unit AFK or DND predicate; benilla adds them beyond the 1.12 surface.
+    // The party frame's status predicates; 1.12 has no unit AFK or DND predicate.
     g.set(
         "UnitIsConnected",
         lua.create_function(|lua, token: Value| {
@@ -591,18 +590,6 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 r#"Usage: UnitIsConnected("unit")"#,
             )?);
             unit_predicate(lua, &token, |u| u.is_connected)
-        })?,
-    )?;
-    g.set(
-        "UnitIsAFK",
-        lua.create_function(|lua, token: Option<String>| {
-            unit_predicate(lua, &token, |u| u.is_afk)
-        })?,
-    )?;
-    g.set(
-        "UnitIsDND",
-        lua.create_function(|lua, token: Option<String>| {
-            unit_predicate(lua, &token, |u| u.is_dnd)
         })?,
     )?;
     g.set(

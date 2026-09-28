@@ -318,7 +318,7 @@ fn worldmap_navigation_and_map_info() {
 }
 
 /// `SetMapToCurrentZone` lands on the app-fed player zone, and the feed surfaces through
-/// `GetPlayerFacing` and `GetPlayerMapPosition` for the player and `party1..4`. A `raid` token
+/// `GetPlayerMapPosition` for the player and `party1..4`. A `raid` token
 /// answers the off-map sentinel; the reference reads raid positions (`WorldMapFrame.lua:379`).
 #[test]
 fn worldmap_current_zone_and_player_feed() {
@@ -343,7 +343,6 @@ fn worldmap_current_zone_and_player_feed() {
         .eval::<(f64, f64)>(r#"return GetPlayerMapPosition("player")"#)
         .unwrap();
     assert!((x - 0.25).abs() < 1e-6 && (y - 0.75).abs() < 1e-6);
-    assert!((s.eval::<f64>("return GetPlayerFacing()").unwrap() - 1.5).abs() < 1e-6);
     let (px, py) = s
         .eval::<(f64, f64)>(r#"return GetPlayerMapPosition("party1")"#)
         .unwrap();

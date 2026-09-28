@@ -124,7 +124,7 @@ fn wrap_lines_measure_wrapped_in_one_pass_and_survive_the_reenter_loop() {
         local a = CreateFrame("Button", "Slot4"); a:SetPoint("TOPLEFT", 10, -10); a:SetWidth(10); a:SetHeight(10)
         local tt = CreateFrame("GameTooltip", "TT")
         tt:SetOwner(a, "ANCHOR_RIGHT")
-        tt:BenillaSetItemById(7)
+        SetItemByIdForTest(tt, 7)
     "#,
     )
     .unwrap();
@@ -164,7 +164,7 @@ fn wrap_lines_measure_wrapped_in_one_pass_and_survive_the_reenter_loop() {
         s.run(
             r#"
             TT:SetOwner(Slot4, "ANCHOR_RIGHT")
-            TT:BenillaSetItemById(7)
+            SetItemByIdForTest(TT, 7)
         "#,
         )
         .unwrap();
@@ -221,7 +221,7 @@ fn item_render_hides_the_unit_health_bar() {
     s.run(
         r#"
         GameTooltip:SetOwner(Slot6, "ANCHOR_RIGHT")
-        GameTooltip:BenillaSetItemById(9)
+        SetItemByIdForTest(GameTooltip, 9)
         assert(not GameTooltipStatusBar:IsShown(), "item content hides the unit bar")
         assert(GameTooltip:IsShown(), "the item tooltip itself shows")
     "#,
@@ -277,7 +277,7 @@ fn real_instance_hover_renders_live_durability() {
         end
         assert(found == "[DURABILITY 30/40]", "live pair on a bag hover, got " .. tostring(found))
         -- The template/link hover of the SAME item keeps the authored full pair.
-        tt:BenillaSetItemById(2264)
+        SetItemByIdForTest(tt, 2264)
         found = nil
         for i = 1, tt:NumLines() do
             local t = getglobal("TTTextLeft" .. i):GetText()
@@ -421,7 +421,7 @@ fn an_enchanted_instance_renders_its_enchant_line_before_durability() {
         "the enchant line is green"
     );
 
-    s.run(r#"TT:BenillaSetItemById(22816)"#).unwrap();
+    s.run(r#"SetItemByIdForTest(TT, 22816)"#).unwrap();
     let lines = super::lines_of(&mut s);
     assert!(
         !lines.iter().any(|(t, _)| t.starts_with("Agility")),
@@ -796,7 +796,7 @@ fn random_property_template_hover_shows_the_placeholder() {
         local a = CreateFrame("Button", "Slot"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
         local tt = CreateFrame("GameTooltip", "TT")
         tt:SetOwner(Slot, "ANCHOR_RIGHT")
-        tt:BenillaSetItemById(8888)
+        SetItemByIdForTest(tt, 8888)
     "#,
     )
     .unwrap();

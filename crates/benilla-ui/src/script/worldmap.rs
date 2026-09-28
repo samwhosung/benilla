@@ -635,15 +635,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetPlayerFacing() → the facing in radians. Not a 1.12 global.
-    g.set(
-        "GetPlayerFacing",
-        lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(f64::from(model.worldmap.player_facing))
-        })?,
-    )?;
-
     // ProcessMapClick(x, y) (`0x4a7f30`): at world level the first continent whose sheet rect
     // holds the click (`0x4a7100`); otherwise the zone or city under it through the displayed
     // rect (`0x4a6ec0`), which it drills into.

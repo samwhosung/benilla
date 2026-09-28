@@ -37,8 +37,12 @@ the reference client's `_G`, which is not in this repo, so it is a manual regene
 stable: it describes a client that shipped in 2006.
 
 Reading it: `scripts/api-coverage.sh` asks a real `UiScript::new()` what benilla exposes and reports
-`have / missing / beyond-1.12`. `crates/benilla-ui/src/script/tests/reference_surface.rs` is the
-gate: it fails if benilla grows a global that 1.12 does not have and nobody wrote down why.
+`have / missing / beyond-1.12`. Two gates hold the line.
+`crates/benilla-ui/src/script/tests/reference_surface.rs` fails if the engine puts a global 1.12
+does not have in a bare VM and nobody wrote down why, with no prefix excusing an engine name.
+`crates/benilla-app/src/ui_script/surface_gate.rs` fails if the production load, the core and
+benilla's layer, adds any global past 1.12 other than the layer's own `Benilla`-prefixed names, or
+any widget method.
 
 ## `1.12-shapes.tsv` and `1.12-events.tsv`
 

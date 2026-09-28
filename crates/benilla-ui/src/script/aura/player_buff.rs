@@ -6,7 +6,7 @@ use mlua::{Lua, MultiValue, Value};
 
 use super::{cancel_authorized, AuraState, Model};
 
-/// `GetPlayerBuff`'s filter mask, not `UnitAura`'s parser: no filter argument means
+/// `GetPlayerBuff`'s filter mask: no filter argument means
 /// `HELPFUL|HARMFUL` (`0x4e4618`), and a filter string starts the mask at zero (`0x4e4639`), so a
 /// bare `"CANCELABLE"` matches nothing.
 #[derive(Clone, Copy)]
@@ -172,7 +172,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // CancelPlayerBuff(buffIndex) (`0x4e49a0`): no return values on any path. It queues the spell
     // id, the one `u32` of `CMSG_CANCEL_AURA` (0x136, `Spell_C::CancelAura` `0x6e7040`), on the
-    // queue `CancelUnitBuff` uses; a refused or absent aura is a silent no-op.
+    // queue `CancelTrackingBuff` uses; a refused or absent aura is a silent no-op.
     g.set(
         "CancelPlayerBuff",
         lua.create_function(|lua, index: Value| {
@@ -226,11 +226,6 @@ mod tests {
     fn with_player_cache() -> UiScript {
         let mut s = UiScript::new().unwrap();
         s.set_player_auras(player_cache());
-        // `CancelUnitBuff("player", …)` resolves the token to the player's guid.
-        s.set_unit_guids(&crate::script::UnitGuids {
-            player: 1,
-            ..Default::default()
-        });
         s
     }
 
@@ -243,7 +238,7 @@ mod tests {
             s.arity("GetPlayerBuff(0)").unwrap(),
             2,
             "1.12 pushes exactly two values (`mov eax,0x2` at 0x4e471e) — a hit must not be a tuple \
-             of aura fields, which is the modern UnitAura shape"
+             of aura fields, which is a later client's aura shape"
         );
         assert_eq!(
             s.arity("GetPlayerBuff(99)").unwrap(),
@@ -527,7 +522,7 @@ mod tests {
     }
 
     #[test]
-    fn cancel_player_buff_shares_the_gate_and_the_queue_with_cancel_unit_buff() {
+    fn cancel_player_buff_gates_on_the_aura_and_queues_its_spell_id() {
         let mut s = with_player_cache();
         assert!(s.take_cancel_aura_requests().is_empty());
 
@@ -540,11 +535,6 @@ mod tests {
             s.eval::<()>(&format!("CancelPlayerBuff({arg})")).unwrap();
         }
         assert!(s.take_cancel_aura_requests().is_empty());
-
-        // Both names reach one queue: the first helpful aura is cache position 0.
-        s.eval::<()>(r#"CancelUnitBuff("player", 1)"#).unwrap();
-        s.eval::<()>("CancelPlayerBuff(0)").unwrap();
-        assert_eq!(s.take_cancel_aura_requests(), vec![1126, 1126]);
 
         // The channeled arm (`AttributesEx & 0x4`, `0x4e4a10`) cancels a negative aura.
         let mut channeled = aura(689, "Drain Life", false, false);

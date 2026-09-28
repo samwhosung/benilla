@@ -1630,8 +1630,11 @@ fn the_keyring_button_opens_a_keyring_window() {
         .unwrap();
     assert_eq!(shown, 8, "only the level-unlocked keyring slots are drawn");
     assert_eq!(
-        s.eval::<i64>("return BenillaGetContainerItemID(KEYRING_CONTAINER, 1)")
-            .unwrap(),
+        s.eval::<i64>(
+            "local _, _, id = string.find(GetContainerItemLink(KEYRING_CONTAINER, 1), 'item:(%d+)') \
+             return tonumber(id)"
+        )
+        .unwrap(),
         7146
     );
 
