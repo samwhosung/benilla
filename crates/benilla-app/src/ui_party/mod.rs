@@ -18,8 +18,8 @@ mod feed;
 pub(crate) mod net;
 mod records;
 pub(crate) use feed::{
-    raid_row_guid, synthetic_raid, synthetic_roster, GROUPTYPE_RAID, GROUP_MEMBER_SUBGROUP,
-    PARTY_TOKENS, RAID_TOKENS,
+    raid_row_guid, raid_row_guids, synthetic_raid, synthetic_roster, GROUPTYPE_RAID,
+    GROUP_MEMBER_SUBGROUP, PARTY_TOKENS, RAID_TOKENS,
 };
 
 pub(crate) struct UiPartyPlugin;

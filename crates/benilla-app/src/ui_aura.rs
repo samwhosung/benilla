@@ -1,10 +1,10 @@
 //! The aura feed: the `UNIT_FIELD_AURA` blocks of the player, the target, the target's target, the
-//! pet and the party and their pets as the ordered [`AuraState`] lists the aura bindings read, with
-//! the player's durations. The player's list keeps the reference cache's insertion order
+//! pet and the party and raid and their pets as the ordered [`AuraState`] lists the aura bindings
+//! read, with the player's durations. The player's list keeps the reference cache's insertion order
 //! (`0xbc6040`, repacked by `PlayerAuras_Update 0x4e4170`); any other unit's reads its descriptor
 //! by ascending slot, or, for a group member or pet with no live object, its roster record.
 
-mod party;
+mod group;
 
 use std::collections::HashMap;
 
@@ -162,8 +162,8 @@ struct AuraFeedMemo {
     target_last: Option<(u64, Vec<AuraProjection>)>,
     pet_last: Option<(u64, Vec<AuraProjection>)>,
     tot_last: Option<(u64, Vec<AuraProjection>)>,
-    /// Each `partyN` and `partypetN` token's, keyed the same way.
-    party_last: HashMap<&'static str, Option<(u64, Vec<AuraProjection>)>>,
+    /// The `partyN`, `partypetN`, `raidN` and `raidpetN` lists and their pushes.
+    group: group::GroupAuras,
 }
 
 /// The `BENILLA_AURA_TRACE` period in seconds; a set value that is not a positive number means 1 s.
@@ -272,34 +272,56 @@ fn unit_aura_state(
     }
 }
 
+/// What one aura of a unit not the player is listed from: its slot, spell, stack count and
+/// `AURAFLAGS` nibble. A list is a pure function of these and the spell catalog.
+type AuraInput = (u8, u32, u8, u8);
+
+/// The list [`AuraInput`]s make.
+fn aura_list(catalog: Option<&SpellCatalog>, inputs: &[AuraInput]) -> Vec<AuraState> {
+    inputs
+        .iter()
+        .map(|&(slot, spell, count, flags)| unit_aura_state(catalog, slot, spell, count, flags))
+        .collect()
+}
+
 /// Another unit's auras as `UnitBuff 0x519500` and `UnitDebuff 0x5198f0` read them: ascending
 /// slot within each half, no durations, through the display filter. `buffs_visible` false drops
 /// the helpful half, the unit-level gate's nil at every index ([`buffs_visible_on`]).
+fn other_unit_inputs<'a>(
+    store: &'a ObjectStore,
+    catalog: Option<&'a SpellCatalog>,
+    buffs_visible: bool,
+) -> impl Iterator<Item = AuraInput> + 'a {
+    store
+        .0
+        .unit_auras()
+        .filter(move |a| buffs_visible || a.slot >= UNIT_AURA_POSITIVE_SLOTS)
+        .filter(move |a| shown_in_aura_ui(catalog, a.spell_id))
+        .map(|a| (a.slot, a.spell_id, a.stacks, a.flags))
+}
+
+/// [`other_unit_inputs`] as the list.
 fn other_unit_auras(
     store: &ObjectStore,
     catalog: Option<&SpellCatalog>,
     buffs_visible: bool,
 ) -> Vec<AuraState> {
-    store
-        .0
-        .unit_auras()
-        .filter(|a| buffs_visible || a.slot >= UNIT_AURA_POSITIVE_SLOTS)
-        .filter(|a| shown_in_aura_ui(catalog, a.spell_id))
-        .map(|a| unit_aura_state(catalog, a.slot, a.spell_id, a.stacks, a.flags))
-        .collect()
+    let inputs: Vec<AuraInput> = other_unit_inputs(store, catalog, buffs_visible).collect();
+    aura_list(catalog, &inputs)
 }
 
 /// A roster record's aura block as the two bindings' roster walk reads it (`0x519763`-`0x5197d2`,
 /// `0x519b53`-`0x519bc5`): ascending slot, the display filter alone (`0x51979f`, `0x519b8f`), no
 /// unit gate and no `AURAFLAGS`, which the record does not hold. The stack count is always 1
 /// (`0x51980f`, `0x519c2d`), and nothing is cancelable.
-fn record_auras(slots: &[(u8, u16)], catalog: Option<&SpellCatalog>) -> Vec<AuraState> {
+fn record_inputs<'a>(
+    slots: impl Iterator<Item = (u8, u16)> + 'a,
+    catalog: Option<&'a SpellCatalog>,
+) -> impl Iterator<Item = AuraInput> + 'a {
     slots
-        .iter()
-        .map(|&(slot, spell)| (slot, u32::from(spell)))
-        .filter(|&(_, spell)| spell != 0 && shown_in_aura_ui(catalog, spell))
-        .map(|(slot, spell)| unit_aura_state(catalog, slot, spell, 1, 0))
-        .collect()
+        .map(|(slot, spell)| (slot, u32::from(spell)))
+        .filter(move |&(_, spell)| spell != 0 && shown_in_aura_ui(catalog, spell))
+        .map(|(slot, spell)| (slot, spell, 1, 0))
 }
 
 /// `UnitBuff 0x519500`'s unit-level gate, before any slot: a unit's buffs are listed only if it
@@ -515,18 +537,18 @@ fn feed_auras(
     }
 
     let held = |guid: u64| index.0.get(&guid).and_then(|&e| stores.get(e).ok());
-    // A live unit's rows behind `UnitBuff`'s unit gate. `unit` is never `store`, the player's,
-    // which is the gate's second argument.
-    let gated = |unit: &ObjectStore| {
-        let buffs = buffs_visible_on(
+    // `UnitBuff`'s unit gate on a live unit. `unit` is never `store`, the player's, which is the
+    // gate's second argument.
+    let buffs_visible = |unit: &ObjectStore| {
+        buffs_visible_on(
             unit,
             Some(store),
             factions.as_deref(),
             &reputations,
             |owner| held(owner).cloned(),
-        );
-        other_unit_auras(unit, catalog, buffs)
+        )
     };
+    let gated = |unit: &ObjectStore| other_unit_auras(unit, catalog, buffs_visible(unit));
 
     // The target's rows. A self-target mirrors the player list in cache order, where the
     // reference's `UnitBuff` reads by slot.
@@ -567,9 +589,6 @@ fn feed_auras(
                 gated(tot_store)
             });
 
-    // `party1..4` and `partypet1..4`: the live unit's rows, else its roster record's.
-    let party_lists = party::party_aura_lists(group.as_deref(), held, gated, catalog);
-
     let target_changed = aura_edge(
         &mut memo.target_last,
         selection.guid.zip(target_list.as_deref()),
@@ -603,25 +622,25 @@ fn feed_auras(
             .flatten()
             .map(|l| (tot_guid, l)),
     );
-    let party_changed: Vec<&'static str> = party_lists
-        .iter()
-        .filter(|(token, cur)| {
-            aura_edge(
-                memo.party_last.entry(token).or_default(),
-                cur.as_ref().map(|(guid, l)| (*guid, l.as_slice())),
-            )
-        })
-        .map(|(token, _)| *token)
-        .collect();
-
+    // `party1..4`, `partypet1..4`, `raid1..40` and `raidpet1..40`: the live unit's rows, else its
+    // roster record's, each pushed only as it moves.
+    let catalog_moved = spells.as_ref().is_some_and(|s| s.is_changed());
+    let group_changed = memo.group.feed(
+        &mut script,
+        group::Inputs {
+            group: group.as_deref(),
+            me: (self_guid.0, &list, changed),
+            held,
+            buffs_visible,
+            catalog,
+            catalog_moved,
+        },
+    );
     script.set_auras("player", Some(list));
     // Clearing a token fires nothing: the frames react to `PLAYER_TARGET_CHANGED` and `UNIT_PET`.
     script.set_auras("target", target_list);
     script.set_auras("pet", pet_list);
     script.set_auras("targettarget", tot_list);
-    for (token, cur) in party_lists {
-        script.set_auras(token, cur.map(|(_, l)| l));
-    }
     script.set_tracking(tracking);
     if changed {
         script.fire_event("UNIT_AURA", vec![ScriptValue::Str("player".into())]);
@@ -640,7 +659,7 @@ fn feed_auras(
     }
     // The reference fires these from the record's aura bits (`0x5e57d8`, the pet's `0x5e58f1`)
     // and from the live descriptor's aura fields, to every token naming the guid (`0x515e50`).
-    for token in party_changed {
+    for token in group_changed {
         script.fire_event("UNIT_AURA", vec![ScriptValue::Str(token.into())]);
     }
 }
@@ -678,7 +697,7 @@ fn end_session_aura_state(
         script.set_auras("player", None);
         script.set_auras("target", None);
         script.set_auras("targettarget", None);
-        for token in party::PARTY_AURA_TOKENS {
+        for token in group::tokens() {
             script.set_auras(token, None);
         }
         script.set_tracking(None);
