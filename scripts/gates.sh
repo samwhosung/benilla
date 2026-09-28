@@ -5,7 +5,8 @@
 # enforcer, enforcer-no-install. A failure prints the gate's log tail and exits nonzero; a green
 # run stamps the tree, which then re-greens without running. GATES_FORCE=1 runs the chain anyway,
 # WOW_DATA picks the install (set and empty: none) and TMPDIR holds the scratch files; the script
-# sets BENILLA_REQUIRE_DATA, BENILLA_SKIP_LOG and WOW_WORLDVIEW_CHECK for its gates.
+# sets BENILLA_REQUIRE_DATA, BENILLA_ADDON_CORPUS, BENILLA_SKIP_LOG and WOW_WORLDVIEW_CHECK for
+# its gates.
 # `.github/workflows/ci.yml` runs the gates that need neither the install nor a display on a fork's
 # pull request: a gate added here goes there too, if it can run on a bare Linux runner.
 #
@@ -140,9 +141,12 @@ run player-build cargo build -p benilla --no-default-features
 
 # player-tests: the unit tests of the `cfg(not(feature = "dev"))` code (the resolver skips the
 # source tree; the state folder sits beside the binary), which no other gate runs. WOW_DATA, which
-# a player build reads too, goes in for the shipped-UI tests that read FrameXML off the install; no
-# BENILLA_REQUIRE_DATA, since without `dev` only $BENILLA_ADDON_CORPUS finds the addon corpus.
-run player-tests env ${wow_data:+WOW_DATA="$wow_data"} BENILLA_SKIP_LOG="$skips" \
+# a player build reads too, goes in for the shipped-UI tests that read FrameXML off the install.
+# Without `dev` only $BENILLA_ADDON_CORPUS finds the addon corpus, so the link goes in by that name,
+# and BENILLA_REQUIRE_DATA refuses a skip here exactly where it does in `test`.
+run player-tests env ${wow_data:+WOW_DATA="$wow_data"} \
+    ${corpus:+BENILLA_ADDON_CORPUS="$root/wow-addons-vanilla"} \
+    ${require_data:+BENILLA_REQUIRE_DATA=1} BENILLA_SKIP_LOG="$skips" \
     cargo test -p benilla-formats -p benilla-app --no-default-features --lib
 report_skips player-tests
 
