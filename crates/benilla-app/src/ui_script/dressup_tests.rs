@@ -12,49 +12,47 @@ use super::test_ui::{bag_slot_button, click, load_ui as load_xml, BAG_UI, CHARAC
 /// A real 1.12 item link: Tough Jerky (117), quality white.
 const JERKY_LINK: &str = "|cffffffff|Hitem:117|h[Tough Jerky]|h|r";
 
-/// The room's own files, in manifest order; both loaders end with these.
+/// The room's own files, in the production order; both loaders end with these.
 const ROOM_UI: &[&str] = &[
-    "Interface\\FrameXML\\UIDropDownMenu.xml",
     "Interface\\FrameXML\\GlobalStrings.lua",
     "Interface\\FrameXML\\BasicControls.xml", // `TEXT`, which UnitPopup.lua reads at file scope
-    "Interface\\FrameXML\\UnitPopup.xml",
-    "Interface\\FrameXML\\ItemRef.xml",
-    "ScrollTemplates.xml", // our scroll kits
-    "Interface\\FrameXML\\CharacterFrameTemplates.xml",
-    "Interface\\FrameXML\\MerchantFrame.xml",
-    "Interface\\FrameXML\\StackSplitFrame.xml",
+    "Interface\\FrameXML\\LocaleProperties.lua",
+    r"Interface\FrameXML\UIParent.xml",
     "Interface\\FrameXML\\UIMenu.xml", // the kit ChatMenu/EmoteMenu/VoiceMacroMenu build from
-    "Interface\\FrameXML\\GlobalStrings.lua",
-    "Interface\\FrameXML\\BasicControls.xml",
-    "Interface\\FrameXML\\ChatFrame.xml",
+    "Interface\\FrameXML\\UIDropDownMenu.xml",
     "Interface\\FrameXML\\UIPanelTemplates.lua",
     "Interface\\FrameXML\\UIPanelTemplates.xml",
+    "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+    "Interface\\FrameXML\\StackSplitFrame.xml",
+    "Interface\\FrameXML\\UnitPopup.xml",
+    "Interface\\FrameXML\\ChatFrame.xml",
+    "Interface\\FrameXML\\FloatingChatFrame.xml",
+    "Interface\\FrameXML\\MerchantFrame.xml",
+    "Interface\\FrameXML\\ItemRef.xml",
     // After the panel kit: the room's Close and Reset buttons inherit its templates at load.
     "Interface\\FrameXML\\DressUpFrame.xml",
-    r"Interface\FrameXML\UIParent.xml",
-    "Interface\\FrameXML\\LocaleProperties.lua",
-    "Interface\\FrameXML\\FloatingChatFrame.xml",
+    "ScrollTemplates.xml", // our scroll kits
 ];
 
 /// The room with no bag window, for the click sites that never touch a container.
 fn load_room(s: &UiScript) {
-    for file in [
-        "Interface\\FrameXML\\Fonts.xml",
-        r"Interface\FrameXML\MoneyFrame.lua",
-        r"Interface\FrameXML\MoneyFrame.xml",
-        r"Interface\FrameXML\UIParent.xml",
-        r"Interface\FrameXML\UIPanelTemplates.lua",
-        r"Interface\FrameXML\UIPanelTemplates.xml",
-        "Interface\\FrameXML\\LocaleProperties.lua",
-        "Interface\\FrameXML\\GlobalStrings.lua",
-        "Interface\\FrameXML\\BasicControls.xml",
-        "Interface\\FrameXML\\StaticPopup.xml",
-        "Interface\\FrameXML\\GameTooltip.xml",
-        "Interface\\FrameXML\\Cooldown.xml",
-    ] {
-        load_xml(s, file);
-    }
-    for file in ROOM_UI {
+    for file in crate::ui_script::test_ui::production_order(&[
+        &[
+            "Interface\\FrameXML\\GlobalStrings.lua",
+            "Interface\\FrameXML\\Fonts.xml",
+            "Interface\\FrameXML\\BasicControls.xml",
+            "Interface\\FrameXML\\LocaleProperties.lua",
+            r"Interface\FrameXML\UIParent.xml",
+            r"Interface\FrameXML\MoneyFrame.lua",
+            r"Interface\FrameXML\MoneyFrame.xml",
+            "Interface\\FrameXML\\GameTooltip.xml",
+            r"Interface\FrameXML\UIPanelTemplates.lua",
+            r"Interface\FrameXML\UIPanelTemplates.xml",
+            "Interface\\FrameXML\\StaticPopup.xml",
+            "Interface\\FrameXML\\Cooldown.xml",
+        ],
+        ROOM_UI,
+    ]) {
         load_xml(s, file);
     }
 }
@@ -62,11 +60,11 @@ fn load_room(s: &UiScript) {
 /// The room over the stock bag windows; `UIParent.xml` leads because every window parents to it
 /// and `BAG_UI` has no line for it.
 fn load_room_with_bags(s: &UiScript) {
-    load_xml(s, r"Interface\FrameXML\UIParent.xml");
-    for file in BAG_UI {
-        load_xml(s, file);
-    }
-    for file in ROOM_UI {
+    for file in crate::ui_script::test_ui::production_order(&[
+        &[r"Interface\FrameXML\UIParent.xml"],
+        BAG_UI,
+        ROOM_UI,
+    ]) {
         load_xml(s, file);
     }
 }
@@ -77,23 +75,23 @@ fn load_room_with_bags(s: &UiScript) {
 fn shown_paper_doll() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for file in CHARACTER_UI {
-        super::test_ui::load_ui_strict(&s, file);
-    }
-    for file in [
-        "Interface\\FrameXML\\GlobalStrings.lua",
-        "Interface\\FrameXML\\BasicControls.xml",
-        "Interface\\FrameXML\\UIMenu.xml",
-        "Interface\\FrameXML\\ChatFrame.xml",
-        "Interface\\FrameXML\\UIDropDownMenu.xml",
-        "Interface\\FrameXML\\UIPanelTemplates.lua",
-        "Interface\\FrameXML\\UIPanelTemplates.xml",
-        // After the panel kit its buttons inherit from.
-        "Interface\\FrameXML\\DressUpFrame.xml",
-        r"Interface\FrameXML\UIParent.xml",
-        "Interface\\FrameXML\\LocaleProperties.lua",
-        "Interface\\FrameXML\\FloatingChatFrame.xml",
-    ] {
+    for file in crate::ui_script::test_ui::production_order(&[
+        CHARACTER_UI,
+        &[
+            "Interface\\FrameXML\\GlobalStrings.lua",
+            "Interface\\FrameXML\\BasicControls.xml",
+            "Interface\\FrameXML\\LocaleProperties.lua",
+            r"Interface\FrameXML\UIParent.xml",
+            "Interface\\FrameXML\\UIMenu.xml",
+            "Interface\\FrameXML\\UIDropDownMenu.xml",
+            "Interface\\FrameXML\\UIPanelTemplates.lua",
+            "Interface\\FrameXML\\UIPanelTemplates.xml",
+            "Interface\\FrameXML\\ChatFrame.xml",
+            "Interface\\FrameXML\\FloatingChatFrame.xml",
+            // After the panel kit its buttons inherit from.
+            "Interface\\FrameXML\\DressUpFrame.xml",
+        ],
+    ]) {
         super::test_ui::load_ui_strict(&s, file);
     }
     s.set_unit(

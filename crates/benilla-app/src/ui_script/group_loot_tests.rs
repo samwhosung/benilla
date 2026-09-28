@@ -31,43 +31,60 @@ fn text_color(quads: &[ExtractedQuad], t: &str) -> Option<[f32; 4]> {
     })?
 }
 
-/// The four popups, declared in stock `LootFrame.xml`. The caller loads `UIParent.xml`, whose
-/// `UIParent_OnEvent` routes `START_LOOT_ROLL` (`UIParent.lua:513-516`).
-fn load_group_loot(s: &UiScript) {
+/// The four popups, declared in stock `LootFrame.xml`, which a kit loads after `UIParent.xml`,
+/// whose `UIParent_OnEvent` routes `START_LOOT_ROLL` (`UIParent.lua:513-516`).
+const GROUP_LOOT: &[&str] = &[
+    r"Interface\FrameXML\UIDropDownMenu.xml",
     // `GroupLootDropDown`'s OnLoad runs its initializer at once, which reads `MAX_PARTY_MEMBERS`
     // (`LootFrame.lua:217`), a constant of `PartyMemberFrame.lua`.
-    load_xml(s, r"Interface\FrameXML\UIDropDownMenu.xml");
-    load_xml(s, r"Interface\FrameXML\PartyMemberFrame.lua");
-    load_xml(s, r"Interface\FrameXML\LootFrame.xml");
+    r"Interface\FrameXML\PartyMemberFrame.lua",
+    r"Interface\FrameXML\LootFrame.xml",
+];
+
+/// The bars the popups stack over and the kits they reach for.
+const BARS: &[&str] = &[
+    // The loot window's labels (`ITEMS`, `PREV`, `NEXT`) are GlobalStrings keys; a missing one is
+    // a loader warning, which `load_ui_no_warnings` fails.
+    r"Interface\FrameXML\GlobalStrings.lua",
+    "Interface\\FrameXML\\Fonts.xml",
+    r"Interface\FrameXML\BasicControls.xml",
+    r"Interface\FrameXML\LocaleProperties.lua",
+    r"Interface\FrameXML\UIParent.xml",
+    r"Interface\FrameXML\MoneyFrame.lua",
+    r"Interface\FrameXML\MoneyFrame.xml",
+    "Interface\\FrameXML\\GameTooltip.xml", // the vote and item hovers
+    // `UIPanelCloseButton`, which each popup's pass button inherits (`LootFrame.xml:364`).
+    r"Interface\FrameXML\UIPanelTemplates.lua",
+    r"Interface\FrameXML\UIPanelTemplates.xml",
+    r"Interface\FrameXML\StaticPopup.xml",
+    "Interface\\FrameXML\\TextStatusBar.lua",
+    "Interface\\FrameXML\\TextStatusBar.xml",
+    "Interface\\FrameXML\\MainMenuBar.xml",
+    "Interface\\FrameXML\\Cooldown.xml",
+    "Interface\\FrameXML\\ActionButtonTemplate.xml",
+    "Interface\\FrameXML\\ActionBarFrame.xml",
+    r"Interface\FrameXML\ItemButtonTemplate.xml",
+    "Interface\\FrameXML\\BonusActionBarFrame.xml",
+];
+
+/// The bars and the popups, in the production order; returns the frames `LootFrame.xml` built,
+/// with no loader warning of any kind.
+fn setup_counted(extra: &[&str]) -> (UiScript, usize) {
+    let mut s = UiScript::new().unwrap();
+    s.set_screen_size(1024.0, 768.0);
+    let mut built = 0;
+    for file in super::test_ui::production_order(&[BARS, GROUP_LOOT, extra]) {
+        if file.ends_with("LootFrame.xml") {
+            built = load_xml_no_warnings(&s, file);
+        } else {
+            load_xml(&s, file);
+        }
+    }
+    (s, built)
 }
 
 fn setup() -> UiScript {
-    let mut s = UiScript::new().unwrap();
-    s.set_screen_size(1024.0, 768.0);
-    // The loot window's labels (`ITEMS`, `PREV`, `NEXT`) are GlobalStrings keys; a missing one is
-    // a loader warning, which `load_ui_no_warnings` fails.
-    load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
-    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(&s, r"Interface\FrameXML\ItemButtonTemplate.xml");
-    // `UIPanelCloseButton`, which each popup's pass button inherits (`LootFrame.xml:364`).
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");
-    load_xml(&s, r"Interface\FrameXML\MoneyFrame.xml");
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
-    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
-    load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
-    load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml"); // the vote and item hovers
-    load_xml(&s, "Interface\\FrameXML\\Cooldown.xml");
-    load_xml(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
-    load_xml(&s, "Interface\\FrameXML\\TextStatusBar.lua");
-    load_xml(&s, "Interface\\FrameXML\\TextStatusBar.xml");
-    load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
-    load_xml(&s, "Interface\\FrameXML\\MainMenuBar.xml");
-    load_xml(&s, "Interface\\FrameXML\\ActionBarFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\BonusActionBarFrame.xml");
-    s
+    setup_counted(&[]).0
 }
 
 /// The resolved rolls' links as `ui_loot_roll` builds them: quality colour, four-field `|Hitem:`.
@@ -123,15 +140,9 @@ fn rolls() -> LootRollsState {
 #[test]
 fn shipped_group_loot_frame_loads_clean_and_starts_hidden() {
     let _data = benilla_formats::wow_data_or_skip!();
-    let s = setup();
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, r"Interface\FrameXML\UIDropDownMenu.xml");
-    load_xml(&s, r"Interface\FrameXML\PartyMemberFrame.lua");
+    let (s, built) = setup_counted(&[]);
     // The popups come inside the whole loot window, so the frame count is only a floor.
-    assert!(
-        load_xml_no_warnings(&s, r"Interface\FrameXML\LootFrame.xml") > 4,
-        "the loot window brought its frames"
-    );
+    assert!(built > 4, "the loot window brought its frames");
 
     for i in 1..=4 {
         let name = format!("GroupLootFrame{i}");
@@ -149,7 +160,6 @@ fn shipped_group_loot_frame_loads_clean_and_starts_hidden() {
 fn start_loot_roll_claims_frames_in_order_and_paints_the_roll() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = setup();
-    load_group_loot(&s);
     s.set_loot_rolls(rolls());
 
     s.fire_event(
@@ -235,7 +245,6 @@ fn start_loot_roll_claims_frames_in_order_and_paints_the_roll() {
 fn the_bop_confirm_popup_lands_the_withheld_vote() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = setup();
-    load_group_loot(&s);
     s.set_loot_rolls(rolls());
 
     // The app fires this after draining the confirm queue (`ui_loot_roll::drain_loot_rolls`).
@@ -293,7 +302,6 @@ fn the_bop_confirm_popup_lands_the_withheld_vote() {
 fn cancel_loot_roll_hides_only_that_frame() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = setup();
-    load_group_loot(&s);
     s.set_loot_rolls(rolls());
 
     s.fire_event(
@@ -335,7 +343,6 @@ fn cancel_loot_roll_hides_only_that_frame() {
 fn in_flight_roll_opens_without_a_name_or_icon() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = setup();
-    load_group_loot(&s);
     s.set_loot_rolls(rolls());
 
     s.fire_event(
@@ -383,7 +390,6 @@ fn in_flight_roll_opens_without_a_name_or_icon() {
 fn nothing_repaints_a_frame_that_opened_before_its_snapshot() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = setup();
-    load_group_loot(&s);
 
     // The order the app must never produce: the event first, against a model with no such roll.
     s.fire_event(
@@ -440,20 +446,26 @@ fn managed_positions_engage_for_the_bare_frame_name() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");
-    load_xml(&s, r"Interface\FrameXML\MoneyFrame.xml");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
-    load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
-    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
     // `GameTooltip.xml` brings `TOOLTIP_DEFAULT_COLOR`, which the dropdown lists read in their
     // OnLoad (`UIDropDownMenuTemplates.xml:186`).
-    load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
-    load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml");
-    load_group_loot(&s);
+    for file in super::test_ui::production_order(&[
+        &[
+            r"Interface\FrameXML\GlobalStrings.lua",
+            "Interface\\FrameXML\\Fonts.xml",
+            r"Interface\FrameXML\BasicControls.xml",
+            r"Interface\FrameXML\LocaleProperties.lua",
+            r"Interface\FrameXML\UIParent.xml",
+            r"Interface\FrameXML\MoneyFrame.lua",
+            r"Interface\FrameXML\MoneyFrame.xml",
+            "Interface\\FrameXML\\GameTooltip.xml",
+            r"Interface\FrameXML\UIPanelTemplates.lua",
+            r"Interface\FrameXML\UIPanelTemplates.xml",
+            r"Interface\FrameXML\StaticPopup.xml",
+        ],
+        GROUP_LOOT,
+    ]) {
+        load_xml(&s, file);
+    }
 
     let bottom = |s: &UiScript| s.eval::<f64>("return GroupLootFrame1:GetBottom()").unwrap();
 
@@ -494,19 +506,12 @@ fn managed_positions_engage_for_the_bare_frame_name() {
 #[test]
 fn ctrl_and_shift_on_the_roll_icon_preview_and_post_its_link() {
     let _data = benilla_formats::wow_data_or_skip!();
-    let mut s = setup();
-    load_group_loot(&s);
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, "Interface\\FrameXML\\DressUpFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\UIMenu.xml"); // the kit the chat menus build from
-    load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
-    load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");
-    load_xml(&s, "Interface\\FrameXML\\ChatFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml");
-    load_xml(&s, "Interface\\FrameXML\\UIPanelTemplates.lua");
-    load_xml(&s, "Interface\\FrameXML\\UIPanelTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
-    load_xml(&s, "Interface\\FrameXML\\FloatingChatFrame.xml");
+    let (mut s, _) = setup_counted(&[
+        "Interface\\FrameXML\\UIMenu.xml", // the kit the chat menus build from
+        "Interface\\FrameXML\\ChatFrame.xml",
+        "Interface\\FrameXML\\FloatingChatFrame.xml",
+        "Interface\\FrameXML\\DressUpFrame.xml",
+    ]);
     s.set_loot_rolls(rolls());
 
     // Roll 8 is not bind-on-pickup, so the dice below vote without a confirm.
@@ -570,7 +575,6 @@ fn ctrl_and_shift_on_the_roll_icon_preview_and_post_its_link() {
 fn the_roll_template_carries_the_reference_name_and_the_parts_addons_reach_for() {
     let _data = benilla_formats::wow_data_or_skip!();
     let s = setup();
-    load_group_loot(&s);
 
     // `CreateFrame` raises on an unknown template, so this call is the check.
     s.run(r#"Probe = CreateFrame("Frame", "ProbeRoll", nil, "GroupLootFrameTemplate")"#)
@@ -607,10 +611,12 @@ fn the_stock_group_loot_frame_survives_an_in_flight_roll() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for f in super::test_ui::LOOT_UI {
+    for f in crate::ui_script::test_ui::production_order(&[
+        super::test_ui::LOOT_UI,
+        &["Interface\\FrameXML\\LootFrame.xml"],
+    ]) {
         load_xml(&s, f);
     }
-    load_xml(&s, "Interface\\FrameXML\\LootFrame.xml");
     s.set_loot_rolls(rolls());
 
     // Roll 9 is in flight and roll 99 unknown: both answer the reference's miss tail, quality 1

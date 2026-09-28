@@ -1,6 +1,7 @@
 //! The tests' interface loader: a bare filename is a file we ship under `assets/ui`, a path one off
-//! the player's patch chain ([`super::reference_ui::is_chain_entry`], the manifest's rule). It
-//! reads the source tree, not the compiled-in copy.
+//! the player's patch chain ([`super::reference_ui::is_chain_entry`]). It reads the source tree,
+//! not the compiled-in copy. A kit loads in the production order ([`production_rank`]), which
+//! every load checks.
 
 use benilla_ui::script::{QuadContent, UiScript};
 
@@ -83,6 +84,7 @@ pub(super) fn load_ui_no_warnings(s: &UiScript, entry: &str) -> usize {
 }
 
 fn load_entry(s: &UiScript, entry: &str, strict_templates: bool, no_warnings: bool) -> usize {
+    follow_production_order(s, entry);
     // The app registers its CVars before any file loads: stock `UIOptionsFrame.xml` reads two
     // camera CVars at `OnLoad` and raises on a nil. A value a test already set stands.
     s.register_cvars(crate::cvars::registered_pairs());
@@ -164,6 +166,121 @@ fn load_entry(s: &UiScript, entry: &str, strict_templates: bool, no_warnings: bo
         );
     }
     report.frames
+}
+
+/// Where `entry` falls in the production load, for [`follow_production_order`]: a `FrameXML.toc`
+/// row at its row, a file a row pulls in (`<Include>` or `<Script file=>`, at any depth) just
+/// above the first row that does, a layer file after every row in `layer.toc`'s order, and `None`
+/// for anything else (a fixture, an on-demand addon's file). Read off the player's own toc.
+pub(super) fn production_rank(entry: &str) -> Option<usize> {
+    static RANKS: std::sync::OnceLock<std::collections::HashMap<String, usize>> =
+        std::sync::OnceLock::new();
+    let ranks = RANKS.get_or_init(|| {
+        let key = |path: &str| path.replace('/', "\\").to_ascii_lowercase();
+        let mut ranks = std::collections::HashMap::new();
+        let rows = super::reference_ui::core()
+            .map(|core| core.toc.files)
+            .unwrap_or_default();
+        for (i, row) in rows.iter().enumerate() {
+            ranks.insert(key(row), 2 * i + 1);
+        }
+        for (i, row) in rows.iter().enumerate() {
+            let mut queue = vec![row.clone()];
+            while let Some(file) = queue.pop() {
+                let Some(bytes) = super::reference_ui::read(&file) else {
+                    continue;
+                };
+                let text = String::from_utf8_lossy(&bytes);
+                for chunk in text.split('<').skip(1) {
+                    let tag = chunk.split('>').next().unwrap_or("").trim_start();
+                    if !tag.starts_with("Include") && !tag.starts_with("Script") {
+                        continue;
+                    }
+                    let Some(name) = tag
+                        .split("file=\"")
+                        .nth(1)
+                        .and_then(|r| r.split('"').next())
+                    else {
+                        continue;
+                    };
+                    let path = format!(r"Interface\FrameXML\{name}");
+                    if let std::collections::hash_map::Entry::Vacant(slot) = ranks.entry(key(&path))
+                    {
+                        slot.insert(2 * i);
+                        queue.push(path);
+                    }
+                }
+            }
+        }
+        let after = 2 * rows.len() + 2;
+        for (j, file) in super::addons::Addon::layer().toc.files.iter().enumerate() {
+            ranks.insert(key(file), after + j);
+        }
+        ranks
+    });
+    ranks
+        .get(&entry.replace('/', "\\").to_ascii_lowercase())
+        .copied()
+}
+
+/// A kit's files in the production order ([`production_rank`]): the lists merged, each file once,
+/// and a file with no rank (a fixture) kept behind the file listed before it.
+pub(crate) fn production_order<'a>(parts: &[&[&'a str]]) -> Vec<&'a str> {
+    let mut seen = std::collections::HashSet::new();
+    let mut keyed = Vec::new();
+    let mut last = 0;
+    for (i, file) in parts.iter().flat_map(|p| p.iter()).enumerate() {
+        if !seen.insert(file.replace('/', "\\").to_ascii_lowercase()) {
+            continue;
+        }
+        last = production_rank(file).unwrap_or(last);
+        keyed.push((last, i, *file));
+    }
+    keyed.sort_by_key(|&(rank, i, _)| (rank, i));
+    keyed.into_iter().map(|(_, _, file)| file).collect()
+}
+
+/// Loads `parts` in the production order ([`production_order`]) and returns the frames `counted`
+/// built.
+pub(crate) fn load_kit_counting(s: &UiScript, parts: &[&[&str]], counted: &str) -> usize {
+    let mut built = 0;
+    for file in production_order(parts) {
+        let frames = load_ui(s, file);
+        if file == counted {
+            built = frames;
+        }
+    }
+    built
+}
+
+thread_local! {
+    /// Per VM session, the furthest [`production_rank`] a kit has loaded and the file at it.
+    static KIT_AT: std::cell::RefCell<std::collections::HashMap<u64, (usize, String)>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Panics when `entry` loads after a file the production load runs after it: a kit is a
+/// subsequence of the production load, `FrameXML.toc`'s order then `layer.toc`'s, so a test sees
+/// the order effects the player does (event dispatch, child and draw order, which definition
+/// wins).
+fn follow_production_order(s: &UiScript, entry: &str) {
+    let Some(rank) = production_rank(entry) else {
+        return;
+    };
+    KIT_AT.with(|at| {
+        let mut at = at.borrow_mut();
+        if let Some((furthest, file)) = at.get(&s.session()) {
+            assert!(
+                rank >= *furthest,
+                "{entry} loads after {file}, but the production load runs it first: a kit \
+                 follows FrameXML.toc's order, then layer.toc's"
+            );
+            if rank == *furthest {
+                return;
+            }
+        }
+        at.insert(s.session(), (rank, entry.to_string()));
+    });
 }
 
 /// What a kit owes stock `UIParent.xml`: no-op stand-ins, seated when it loads, for what its
@@ -350,34 +467,34 @@ pub(super) const MERCHANT_UI: &[&str] = &[
     "Interface\\FrameXML\\GlobalStrings.lua",
     "Interface\\FrameXML\\Fonts.xml",
     "Interface\\FrameXML\\BasicControls.xml", // TEXT()
-    "Interface\\FrameXML\\ItemButtonTemplate.xml",
+    "Interface\\FrameXML\\LocaleProperties.lua",
+    r"Interface\FrameXML\UIParent.xml",
     r"Interface\FrameXML\MoneyFrame.lua",
     r"Interface\FrameXML\MoneyFrame.xml",
-    r"Interface\FrameXML\UIParent.xml",
+    "Interface\\FrameXML\\GameTooltip.xml", // app load order: tooltip before merchant
     r"Interface\FrameXML\UIPanelTemplates.lua",
     r"Interface\FrameXML\UIPanelTemplates.xml",
     // The stock window tab, whose `<OnShow>` needs the `UIPanelTemplates` pair above it.
     r"Interface\FrameXML\CharacterFrameTemplates.xml",
-    "ScrollTemplates.xml",
-    "Interface\\FrameXML\\LocaleProperties.lua",
     "Interface\\FrameXML\\StaticPopup.xml",
-    "Interface\\FrameXML\\GameTooltip.xml", // app load order: tooltip before merchant
+    "Interface\\FrameXML\\ItemButtonTemplate.xml",
+    "ScrollTemplates.xml",
 ];
 
-/// Stock `GossipFrame.xml`'s dependencies in `benilla.toc` order, shared with `ui_gossip`'s feed
+/// Stock `GossipFrame.xml`'s dependencies in the production order, shared with `ui_gossip`'s feed
 /// tests. The greeting pane inherits `UIPanelScrollFrameTemplate`, and a missing template only
 /// warns, losing the scrollbar silently. Needs client data.
 pub(crate) const GOSSIP_UI: &[&str] = &[
-    r"Interface\FrameXML\MoneyFrame.lua",
-    r"Interface\FrameXML\MoneyFrame.xml",
-    r"Interface\FrameXML\UIParent.xml",
-    "ScrollTemplates.xml",
-    r"Interface\FrameXML\UIPanelTemplates.lua",
-    r"Interface\FrameXML\UIPanelTemplates.xml",
     r"Interface\FrameXML\GlobalStrings.lua",
     r"Interface\FrameXML\BasicControls.xml",
     r"Interface\FrameXML\LocaleProperties.lua",
+    r"Interface\FrameXML\UIParent.xml",
+    r"Interface\FrameXML\MoneyFrame.lua",
+    r"Interface\FrameXML\MoneyFrame.xml",
+    r"Interface\FrameXML\UIPanelTemplates.lua",
+    r"Interface\FrameXML\UIPanelTemplates.xml",
     r"Interface\FrameXML\StaticPopup.xml",
+    "ScrollTemplates.xml",
 ];
 
 /// What stock `LootFrame.xml` needs to load and behave. `GlobalStrings.lua` because a bare VM
@@ -387,30 +504,29 @@ pub(crate) const GOSSIP_UI: &[&str] = &[
 pub(super) const LOOT_UI: &[&str] = &[
     "Interface\\FrameXML\\GlobalStrings.lua",
     "Interface\\FrameXML\\Fonts.xml",
-    "Interface\\FrameXML\\ItemButtonTemplate.xml",
+    "Interface\\FrameXML\\BasicControls.xml", // `TEXT`, which UnitPopup.lua reads at file scope
+    "Interface\\FrameXML\\LocaleProperties.lua",
+    r"Interface\FrameXML\UIParent.xml", // UIParent.lua: the panel slot manager and the fades
     r"Interface\FrameXML\MoneyFrame.lua",
     r"Interface\FrameXML\MoneyFrame.xml",
-    r"Interface\FrameXML\UIParent.xml", // UIParent.lua: the panel slot manager and the fades
-    r"Interface\FrameXML\UIPanelTemplates.lua",
-    r"Interface\FrameXML\UIPanelTemplates.xml",
-    "Interface\\FrameXML\\LocaleProperties.lua",
-    "Interface\\FrameXML\\BasicControls.xml",
-    "Interface\\FrameXML\\StaticPopup.xml",
     "Interface\\FrameXML\\GameTooltip.xml", // TOOLTIP_DEFAULT_COLOR, read by the dropdown backdrop
     "Interface\\FrameXML\\UIDropDownMenu.xml", // GroupLootDropDown's OnLoad calls UIDropDownMenu_Initialize
-    // `UnitPopup.lua` reads `ITEM_QUALITY_COLORS` at file scope (`UnitPopup.lua:47-49`), so its
-    // declarer, `UIParent.lua:65`, precedes it.
-    "Interface\\FrameXML\\BasicControls.xml", // `TEXT`, which UnitPopup.lua reads at file scope
-    "Interface\\FrameXML\\UnitPopup.xml",
+    r"Interface\FrameXML\UIPanelTemplates.lua",
+    r"Interface\FrameXML\UIPanelTemplates.xml",
+    "Interface\\FrameXML\\StaticPopup.xml",
     // Each `PartyMemberFrame<N>` and its pet frame run `UnitFrame_Initialize` (UnitFrame.lua) at
     // OnLoad, which calls `SetTextStatusBarText` (TextStatusBar.lua).
     "Interface\\FrameXML\\TextStatusBar.lua",
     "Interface\\FrameXML\\TextStatusBar.xml",
-    "Interface\\FrameXML\\UnitFrame.xml",
     // `RefreshBuffs`, which each party row's OnLoad reaches (`PartyMemberFrame.lua:60`), is in
     // BuffFrame.lua: the reference's toc has BuffFrame at 40 and PartyFrame at 45.
     "Interface\\FrameXML\\BuffFrame.xml",
+    // `UnitPopup.lua` reads `ITEM_QUALITY_COLORS` at file scope (`UnitPopup.lua:47-49`), so its
+    // declarer, `UIParent.lua:65`, precedes it.
+    "Interface\\FrameXML\\UnitPopup.xml",
+    "Interface\\FrameXML\\UnitFrame.xml",
     "Interface\\FrameXML\\PartyFrame.xml",
+    "Interface\\FrameXML\\ItemButtonTemplate.xml",
 ];
 
 /// What stock `CharacterFrame.xml`, `PaperDollFrame.xml` and `PetPaperDollFrame.xml` need to load
@@ -422,99 +538,97 @@ pub(super) const CHARACTER_UI: &[&str] = &[
     // The stock strings, which `PaperDollFrame_OnLoad` reads at load; there are no fallbacks.
     "Interface\\FrameXML\\GlobalStrings.lua",
     "Interface\\FrameXML\\Fonts.xml",
+    "Interface\\FrameXML\\BasicControls.xml", // TEXT(), which those labels go through
     // `GetText`, the gendered-string helper `ReputationFrame.lua:65` calls for each standing.
     r"Interface\FrameXML\LocaleProperties.lua",
-    "Interface\\FrameXML\\BasicControls.xml", // TEXT(), which those labels go through
-    "Interface\\FrameXML\\ItemButtonTemplate.xml", // PaperDollItemSlotButtonTemplate's base
+    r"Interface\FrameXML\UIParent.xml", // Model_OnLoad/_Rotate*/_OnUpdate: the model turntable
     r"Interface\FrameXML\MoneyFrame.lua",
     r"Interface\FrameXML\MoneyFrame.xml",
-    r"Interface\FrameXML\UIParent.xml", // Model_OnLoad/_Rotate*/_OnUpdate: the model turntable
     "Interface\\FrameXML\\GameTooltip.xml",
-    "Interface\\FrameXML\\Cooldown.xml", // CooldownFrameTemplate + CooldownFrame_SetTimer, per equipment slot
-    r"Interface\FrameXML\UIPanelTemplates.lua",
-    r"Interface\FrameXML\UIPanelTemplates.xml",
-    "Interface\\FrameXML\\StaticPopup.xml",
+    "Interface\\FrameXML\\UIMenu.xml",
     // The unit frames' dropdowns call `UIDropDownMenu_Initialize` at load, so the kit and the menu
     // table precede them.
     "Interface\\FrameXML\\UIDropDownMenu.xml",
-    "Interface\\FrameXML\\UIMenu.xml",
-    "Interface\\FrameXML\\UnitPopup.xml",
+    r"Interface\FrameXML\UIPanelTemplates.lua",
+    r"Interface\FrameXML\UIPanelTemplates.xml",
+    // ReputationFrame's detail check boxes inherit its `OptionsCheckButtonTemplate`.
+    "Interface\\FrameXML\\OptionsFrameTemplates.xml",
+    // The stock window tab, whose `<OnShow>` needs the `UIPanelTemplates` pair above it.
+    r"Interface\FrameXML\CharacterFrameTemplates.xml",
+    "Interface\\FrameXML\\StaticPopup.xml",
     "Interface\\FrameXML\\TextStatusBar.lua",
     "Interface\\FrameXML\\TextStatusBar.xml",
+    "Interface\\FrameXML\\MainMenuBar.xml",
+    r"Interface\FrameXML\MainMenuBarMicroButtons.xml",
+    "Interface\\FrameXML\\Cooldown.xml", // CooldownFrameTemplate + CooldownFrame_SetTimer, per equipment slot
+    "Interface\\FrameXML\\ActionButtonTemplate.xml",
+    "Interface\\FrameXML\\ActionBarFrame.xml",
+    "Interface\\FrameXML\\CombatFeedback.xml",
+    "Interface\\FrameXML\\UnitPopup.xml",
     // `UnitFrame_Initialize` and `CombatFeedback_Initialize`, called by the frames below at load.
     "Interface\\FrameXML\\UnitFrame.xml",
-    "Interface\\FrameXML\\CombatFeedback.xml",
     "Interface\\FrameXML\\PlayerFrame.xml",
     // `PetFrame.xml`'s debuff buttons inherit `PartyBuffButtonTemplate`, declared here; the
     // manifest reaches this file only through `PartyFrame.xml`'s `<Include>`.
     "Interface\\FrameXML\\PartyFrameTemplates.xml",
     "Interface\\FrameXML\\PetFrame.xml",
-    "Interface\\FrameXML\\ActionButtonTemplate.xml",
-    "Interface\\FrameXML\\MainMenuBar.xml",
-    "Interface\\FrameXML\\ActionBarFrame.xml",
-    "Interface\\FrameXML\\BonusActionBarFrame.xml",
-    r"Interface\FrameXML\MainMenuBarMicroButtons.xml",
+    "Interface\\FrameXML\\ItemButtonTemplate.xml", // PaperDollItemSlotButtonTemplate's base
     // Every page must exist before the window opens: `CharacterFrame_ShowSubFrame` hides each
     // `CHARACTERFRAME_SUBFRAMES` page it is not showing, unguarded (`CharacterFrame.lua:25-32`).
-    "ScrollTemplates.xml", // our scroll kit
-    r"Interface\FrameXML\UIPanelTemplates.lua",
-    r"Interface\FrameXML\UIPanelTemplates.xml",
-    // The stock window tab, whose `<OnShow>` needs the `UIPanelTemplates` pair above it.
-    r"Interface\FrameXML\CharacterFrameTemplates.xml",
-    // ReputationFrame's detail check boxes inherit its `OptionsCheckButtonTemplate`.
-    "Interface\\FrameXML\\OptionsFrameTemplates.xml",
     "Interface\\FrameXML\\CharacterFrame.xml",
     "Interface\\FrameXML\\PaperDollFrame.xml",
     "Interface\\FrameXML\\PetPaperDollFrame.xml",
+    "Interface\\FrameXML\\SkillFrame.xml",
+    r"Interface\FrameXML\ReputationFrame.xml",
+    "Interface\\FrameXML\\HonorFrame.xml",
     // `updateContainerFrameAnchors`, which `ReputationWatchBar_Update` calls when the bar moves
     // (`ReputationFrame.lua:248`): in the reference the bar's presence reflows the bag row.
     "Interface\\FrameXML\\ContainerFrame.xml",
-    r"Interface\FrameXML\ReputationFrame.xml",
-    "Interface\\FrameXML\\SkillFrame.xml",
-    "Interface\\FrameXML\\HonorFrame.xml",
+    "Interface\\FrameXML\\BonusActionBarFrame.xml",
+    "ScrollTemplates.xml", // our scroll kit
 ];
 
 /// The manifest slice stock `FriendsFrame.xml` and `RaidFrame.xml` reach at load or on show, in its
 /// order; [`load_social_ui`] adds the raid tab's LoadOnDemand addon.
 pub(super) const SOCIAL_UI: &[&str] = &[
-    "Interface\\FrameXML\\Fonts.xml",
     "Interface\\FrameXML\\GlobalStrings.lua",
-    "Interface\\FrameXML\\LocaleProperties.lua",
+    "Interface\\FrameXML\\Fonts.xml",
     "Interface\\FrameXML\\BasicControls.xml",
+    "Interface\\FrameXML\\LocaleProperties.lua",
     r"Interface\FrameXML\UIParent.xml",
-    "Interface\\FrameXML\\Cooldown.xml",
-    "Interface\\FrameXML\\ActionButtonTemplate.xml",
-    "Interface\\FrameXML\\TextStatusBar.lua",
-    "Interface\\FrameXML\\TextStatusBar.xml",
-    "Interface\\FrameXML\\MainMenuBar.xml",
     r"Interface\FrameXML\MoneyFrame.lua",
     r"Interface\FrameXML\MoneyFrame.xml",
     "Interface\\FrameXML\\GameTooltip.xml",
-    "Interface\\FrameXML\\ActionBarFrame.xml",
-    "Interface\\FrameXML\\BonusActionBarFrame.xml",
-    "ScrollTemplates.xml",
+    "Interface\\FrameXML\\UIMenu.xml",
+    "Interface\\FrameXML\\UIDropDownMenu.xml",
     "Interface\\FrameXML\\UIPanelTemplates.lua",
     "Interface\\FrameXML\\UIPanelTemplates.xml",
+    "Interface\\FrameXML\\OptionsFrameTemplates.xml",
     // The stock window tab, whose `<OnShow>` needs the `UIPanelTemplates` pair above it.
     r"Interface\FrameXML\CharacterFrameTemplates.xml",
-    "Interface\\FrameXML\\OptionsFrameTemplates.xml",
-    "Interface\\FrameXML\\ReputationFrame.xml",
     "Interface\\FrameXML\\StaticPopup.xml",
-    "Interface\\FrameXML\\UIDropDownMenu.xml",
-    "KeyBindingsPage.xml",
-    "OptionsFrame.xml",
-    "Interface\\FrameXML\\MultiActionBars.xml",
+    "Interface\\FrameXML\\TextStatusBar.lua",
+    "Interface\\FrameXML\\TextStatusBar.xml",
+    "Interface\\FrameXML\\MainMenuBar.xml",
     r"Interface\FrameXML\MainMenuBarMicroButtons.xml",
+    "Interface\\FrameXML\\Cooldown.xml",
+    "Interface\\FrameXML\\ActionButtonTemplate.xml",
+    "Interface\\FrameXML\\ActionBarFrame.xml",
+    "Interface\\FrameXML\\MultiActionBars.xml",
+    "Interface\\FrameXML\\BuffFrame.xml",
+    "Interface\\FrameXML\\CombatFeedback.xml",
     "Interface\\FrameXML\\UnitPopup.xml",
-    "Interface\\FrameXML\\UIMenu.xml",
+    "Interface\\FrameXML\\UnitFrame.xml",
+    "Interface\\FrameXML\\PartyFrame.xml",
     "Interface\\FrameXML\\ChatFrame.xml",
     "Interface\\FrameXML\\FloatingChatFrame.xml",
-    "Interface\\FrameXML\\BuffFrame.xml",
-    "Interface\\FrameXML\\UnitFrame.xml",
-    "Interface\\FrameXML\\CombatFeedback.xml",
-    "Interface\\FrameXML\\PartyFrame.xml",
+    "Interface\\FrameXML\\ReputationFrame.xml",
     "Interface\\FrameXML\\FriendsFrame.xml",
     "Interface\\FrameXML\\RaidFrame.xml",
+    "Interface\\FrameXML\\BonusActionBarFrame.xml",
+    "ScrollTemplates.xml",
+    "KeyBindingsPage.xml",
+    "OptionsFrame.xml",
 ];
 
 /// Load [`SOCIAL_UI`], then the raid tab's LoadOnDemand addon as the app reaches it: seated off the
@@ -527,7 +641,7 @@ pub(super) fn load_social_ui(s: &mut UiScript) {
     s.run("RaidFrame_LoadUI()").unwrap();
 }
 
-/// The files a test needs before it can open a bag window, in `benilla.toc` order, trimmed to what
+/// The files a test needs before it can open a bag window, in the production order, trimmed to what
 /// the bags reach for. Needs client data: open with `benilla_formats::wow_data_or_skip!()`.
 pub(super) const BAG_UI: &[&str] = &[
     // The stock strings: the bar's hovers pass them to `GameTooltip:SetText`, which raises on nil.
@@ -535,54 +649,52 @@ pub(super) const BAG_UI: &[&str] = &[
     "Interface\\FrameXML\\Fonts.xml",
     // `TEXT()`, which the backpack button's OnEnter and `BagSlotButton_OnEnter` call.
     "Interface\\FrameXML\\BasicControls.xml",
+    "Interface\\FrameXML\\LocaleProperties.lua",
     // `UIParent`: the twelve `ContainerFrame`s are its children, `updateContainerFrameAnchors`
     // anchors each open bag to its parent, and `OpenAllBags` returns unless `UIParent` is visible.
     r"Interface\FrameXML\UIParent.xml",
-    "ScrollTemplates.xml", // our scroll kit
-    "Interface\\FrameXML\\ItemButtonTemplate.xml",
     r"Interface\FrameXML\MoneyFrame.lua",
     r"Interface\FrameXML\MoneyFrame.xml",
-    "Interface\\FrameXML\\LocaleProperties.lua",
     "Interface\\FrameXML\\GameTooltip.xml",
-    "Interface\\FrameXML\\Cooldown.xml",
-    // `MainMenuBar.xml` and its templates: the bag bar's `parent="MainMenuBarArtFrame"` resolves
-    // at load, and `MainMenuBar_UpdateKeyRing` puts the keyring on the bar.
-    "Interface\\FrameXML\\ActionButtonTemplate.xml",
-    "Interface\\FrameXML\\TextStatusBar.lua",
-    "Interface\\FrameXML\\TextStatusBar.xml",
-    "Interface\\FrameXML\\MainMenuBar.xml",
-    "Interface\\FrameXML\\ActionBarFrame.xml",
-    "Interface\\FrameXML\\BonusActionBarFrame.xml",
-    // `UpdateMicroButtons`, which the keyring's OnHide and OnShow call
-    // (`ContainerFrame.lua:117`, `:137`).
-    r"Interface\FrameXML\MainMenuBarMicroButtons.xml",
+    "Interface\\FrameXML\\UIMenu.xml", // the kit ChatMenu/EmoteMenu/VoiceMacroMenu build from
+    "Interface\\FrameXML\\UIDropDownMenu.xml",
     r"Interface\FrameXML\UIPanelTemplates.lua",
     r"Interface\FrameXML\UIPanelTemplates.xml",
     // The dialog engine, after the `UIPanelCloseButton` it inherits.
     r"Interface\FrameXML\StaticPopup.xml",
-    "Interface\\FrameXML\\ContainerFrame.xml",
+    // `ContainerFrameItemButton_OnClick` hides `StackSplitFrame` on every plain click
+    // (`ContainerFrame.lua:581`) and opens it on the shift fork.
+    "Interface\\FrameXML\\StackSplitFrame.xml",
+    "Interface\\FrameXML\\TextStatusBar.lua",
+    "Interface\\FrameXML\\TextStatusBar.xml",
+    // `MainMenuBar.xml` and its templates: the bag bar's `parent="MainMenuBarArtFrame"` resolves
+    // at load, and `MainMenuBar_UpdateKeyRing` puts the keyring on the bar.
+    "Interface\\FrameXML\\MainMenuBar.xml",
+    // `UpdateMicroButtons`, which the keyring's OnHide and OnShow call
+    // (`ContainerFrame.lua:117`, `:137`).
+    r"Interface\FrameXML\MainMenuBarMicroButtons.xml",
+    "Interface\\FrameXML\\Cooldown.xml",
+    "Interface\\FrameXML\\ActionButtonTemplate.xml",
+    "Interface\\FrameXML\\ActionBarFrame.xml",
+    // The chat edit box: the shift arm tests `ChatFrameEditBox:IsShown()`
+    // (`ContainerFrame.lua:568`) to choose between linking the item and splitting the stack.
+    "Interface\\FrameXML\\ChatFrame.xml",
+    "Interface\\FrameXML\\FloatingChatFrame.xml",
+    "Interface\\FrameXML\\ItemButtonTemplate.xml",
     // `BagSlotButtonTemplate` inherits `PaperDollItemSlotButtonTemplate`, and its OnLoad
     // (`PaperDollItemSlotButton_OnLoad`) gives each bag button its inventory-slot id, 20..23.
     // `CharacterFrame.xml` stays out: a missing `parent=` only warns.
     "Interface\\FrameXML\\PaperDollFrame.xml",
     // The stock bag bar, with `BagSlotButtonTemplate` and `KEYRING_CONTAINER`.
     "Interface\\FrameXML\\MainMenuBarBagButtons.xml",
-    // `ContainerFrameItemButton_OnClick` hides `StackSplitFrame` on every plain click
-    // (`ContainerFrame.lua:581`) and opens it on the shift fork.
-    "Interface\\FrameXML\\StackSplitFrame.xml",
-    // The chat edit box: the shift arm tests `ChatFrameEditBox:IsShown()`
-    // (`ContainerFrame.lua:568`) to choose between linking the item and splitting the stack.
-    "Interface\\FrameXML\\UIMenu.xml", // the kit ChatMenu/EmoteMenu/VoiceMacroMenu build from
-    "Interface\\FrameXML\\ChatFrame.xml",
-    "Interface\\FrameXML\\UIDropDownMenu.xml",
-    "Interface\\FrameXML\\UIPanelTemplates.lua",
-    "Interface\\FrameXML\\UIPanelTemplates.xml",
-    "Interface\\FrameXML\\FloatingChatFrame.xml",
-    // Our adapters over the stock container files, loaded after them and the bar so they win.
-    "ContainerFrameAdapters.xml",
+    "Interface\\FrameXML\\ContainerFrame.xml",
     // `updateContainerFrameAnchors` measures every open bag against `BankFrame:GetRight()`
     // (`ContainerFrame.lua:505`) on every open and close, so the bank window is a hard dependency.
     "Interface\\FrameXML\\BankFrame.xml",
+    "Interface\\FrameXML\\BonusActionBarFrame.xml",
+    "ScrollTemplates.xml", // our scroll kit
+    // Our adapters over the stock container files, loaded after them and the bar so they win.
+    "ContainerFrameAdapters.xml",
 ];
 
 /// The name of the `ContainerFrame` showing bag `id`, asked of `IsBagOpen`: the reference recycles
@@ -645,13 +757,13 @@ pub(super) fn click(s: &mut UiScript, name: &str, button: &str) {
     s.mouse_button(x, y, button, false);
 }
 
-/// Seat stock `WorldFrame.xml` and `MirrorTimer.xml`: `WorldFrame_OnUpdate` loops to
+/// Stock `WorldFrame.xml` and `MirrorTimer.xml`: `WorldFrame_OnUpdate` loops to
 /// `MIRRORTIMER_NUMTIMERS`, which `MirrorTimer.lua` declares, and raises every tick without it.
 /// Its other loop reads `STATICPOPUP_NUMDIALOGS`, which every caller already loads.
-pub(super) fn load_world_frame(s: &UiScript) {
-    load_ui(s, r"Interface\FrameXML\WorldFrame.xml");
-    load_ui(s, r"Interface\FrameXML\MirrorTimer.xml");
-}
+pub(super) const WORLD_FRAME_UI: &[&str] = &[
+    r"Interface\FrameXML\WorldFrame.xml",
+    r"Interface\FrameXML\MirrorTimer.xml",
+];
 
 /// A completed left click on the game world, at a point the loaded `WorldFrame` owns: searched on
 /// a grid, since a harness's windows may cover any fixed point.
@@ -707,4 +819,52 @@ pub(super) fn seat_chain_addon(s: &mut UiScript, name: &str) {
     info.chain = true;
     s.set_addon_chain_reader(Box::new(super::reference_ui::read));
     s.register_addons(vec![info], None, None, None);
+}
+
+#[cfg(test)]
+mod tests {
+    use benilla_ui::script::UiScript;
+
+    /// A kit that loads a file after one the production load runs after it fails at that load.
+    #[test]
+    fn a_kit_out_of_the_production_order_fails_at_the_load() {
+        let _data = benilla_formats::wow_data_or_skip!();
+        let s = UiScript::new().unwrap();
+        super::load_ui(&s, r"Interface\FrameXML\Fonts.xml");
+        let late = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            super::load_ui(&s, r"Interface\FrameXML\GlobalStrings.lua")
+        }));
+        let message = late.expect_err("GlobalStrings.lua after Fonts.xml loaded");
+        let message = message
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            message.contains("the production load runs it first"),
+            "{message}"
+        );
+    }
+
+    /// The merged kit runs toc rows in the toc's order, a file a row includes just above it and a
+    /// layer file after them all, each once.
+    #[test]
+    fn a_merged_kit_takes_the_production_order() {
+        let _data = benilla_formats::wow_data_or_skip!();
+        assert_eq!(
+            super::production_order(&[
+                &["ScrollTemplates.xml", r"Interface\FrameXML\UIParent.xml"],
+                &[
+                    r"Interface\FrameXML\LocaleProperties.lua",
+                    r"Interface\FrameXML\GlobalStrings.lua",
+                    r"Interface\FrameXML\UIParent.xml",
+                ],
+            ]),
+            [
+                r"Interface\FrameXML\GlobalStrings.lua",
+                r"Interface\FrameXML\LocaleProperties.lua",
+                r"Interface\FrameXML\UIParent.xml",
+                "ScrollTemplates.xml",
+            ]
+        );
+    }
 }

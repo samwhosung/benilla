@@ -260,10 +260,12 @@ fn loot_empty_roll_plays_the_empty_open_kit() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for f in super::test_ui::LOOT_UI {
+    for f in crate::ui_script::test_ui::production_order(&[
+        super::test_ui::LOOT_UI,
+        &["Interface\\FrameXML\\LootFrame.xml"],
+    ]) {
         load_xml(&s, f);
     }
-    load_xml(&s, "Interface\\FrameXML\\LootFrame.xml");
 
     s.set_loot(Some(coin_and_two_items()));
     s.fire_event("LOOT_OPENED", vec![]);
@@ -297,10 +299,12 @@ fn fishing_loot_open_plays_the_reel_and_swaps_the_portrait() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for f in super::test_ui::LOOT_UI {
+    for f in crate::ui_script::test_ui::production_order(&[
+        super::test_ui::LOOT_UI,
+        &["Interface\\FrameXML\\LootFrame.xml"],
+    ]) {
         load_xml(&s, f);
     }
-    load_xml(&s, "Interface\\FrameXML\\LootFrame.xml");
     let has_icon = |quads: &[ExtractedQuad], needle: &str| {
         quads.iter().any(|q| {
             matches!(&q.content, QuadContent::Texture { path: Some(p), .. } if p.contains(needle))
@@ -347,10 +351,12 @@ fn shipped_loot_frame_pages_five_items() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for f in super::test_ui::LOOT_UI {
+    for f in crate::ui_script::test_ui::production_order(&[
+        super::test_ui::LOOT_UI,
+        &["Interface\\FrameXML\\LootFrame.xml"],
+    ]) {
         load_xml(&s, f);
     }
-    load_xml(&s, "Interface\\FrameXML\\LootFrame.xml");
 
     let rows: Vec<Option<LootRow>> = (0..5)
         .map(|i| {
@@ -435,13 +441,17 @@ fn shipped_loot_pushed_to_center_by_merchant() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for f in super::test_ui::LOOT_UI {
+    for f in crate::ui_script::test_ui::production_order(&[
+        super::test_ui::LOOT_UI,
+        &[
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "Interface\\FrameXML\\LootFrame.xml",
+            "ScrollTemplates.xml", // our scroll kits
+        ],
+    ]) {
         load_xml(&s, f);
     }
-    load_xml(&s, "Interface\\FrameXML\\LootFrame.xml");
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
-    load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
 
     s.set_loot(Some(coin_and_two_items()));
     s.fire_event("LOOT_OPENED", vec![]);
@@ -498,10 +508,12 @@ fn the_loot_window_draws_over_the_party_frames() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for f in super::test_ui::LOOT_UI {
+    for f in crate::ui_script::test_ui::production_order(&[
+        super::test_ui::LOOT_UI,
+        &["Interface\\FrameXML\\LootFrame.xml"],
+    ]) {
         load_xml(&s, f);
     }
-    load_xml(&s, "Interface\\FrameXML\\LootFrame.xml");
 
     // The party frame first: showing the window later is not what lifts it.
     s.eval::<()>("PartyMemberFrame1:Show()").unwrap();
@@ -544,24 +556,24 @@ fn ctrl_and_shift_on_a_loot_row_preview_and_post_without_looting() {
     const WOOL_LINK: &str = "|cffffffff|Hitem:2589:0:0:0|h[Wool Cloth]|h|r";
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for f in super::test_ui::LOOT_UI {
+    for f in crate::ui_script::test_ui::production_order(&[
+        super::test_ui::LOOT_UI,
+        &[
+            "Interface\\FrameXML\\GlobalStrings.lua",
+            "Interface\\FrameXML\\BasicControls.xml",
+            "Interface\\FrameXML\\LocaleProperties.lua",
+            r"Interface\FrameXML\UIParent.xml", // UIParent and UIParent.lua
+            "Interface\\FrameXML\\UIMenu.xml", // the kit ChatMenu/EmoteMenu/VoiceMacroMenu build from
+            "Interface\\FrameXML\\UIDropDownMenu.xml",
+            "Interface\\FrameXML\\UIPanelTemplates.lua",
+            "Interface\\FrameXML\\UIPanelTemplates.xml",
+            "Interface\\FrameXML\\ChatFrame.xml",
+            "Interface\\FrameXML\\FloatingChatFrame.xml",
+            "Interface\\FrameXML\\LootFrame.xml",
+            "Interface\\FrameXML\\DressUpFrame.xml",
+        ],
+    ]) {
         load_xml(&s, f);
-    }
-    for file in [
-        r"Interface\FrameXML\UIParent.xml", // UIParent and UIParent.lua
-        "Interface\\FrameXML\\LootFrame.xml",
-        "Interface\\FrameXML\\DressUpFrame.xml",
-        "Interface\\FrameXML\\UIMenu.xml", // the kit ChatMenu/EmoteMenu/VoiceMacroMenu build from
-        "Interface\\FrameXML\\GlobalStrings.lua",
-        "Interface\\FrameXML\\BasicControls.xml",
-        "Interface\\FrameXML\\ChatFrame.xml",
-        "Interface\\FrameXML\\UIDropDownMenu.xml",
-        "Interface\\FrameXML\\UIPanelTemplates.lua",
-        "Interface\\FrameXML\\UIPanelTemplates.xml",
-        "Interface\\FrameXML\\LocaleProperties.lua",
-        "Interface\\FrameXML\\FloatingChatFrame.xml",
-    ] {
-        load_xml(&s, file);
     }
 
     s.set_loot(Some(LootState {
@@ -678,10 +690,12 @@ fn shipped_loot_frame_hands_a_master_row_to_a_candidate() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for f in super::test_ui::LOOT_UI {
+    for f in crate::ui_script::test_ui::production_order(&[
+        super::test_ui::LOOT_UI,
+        &["Interface\\FrameXML\\LootFrame.xml"],
+    ]) {
         load_xml(&s, f);
     }
-    load_xml(&s, "Interface\\FrameXML\\LootFrame.xml");
 
     let row = |name: &str, quality: u32| {
         Some(LootRow {
@@ -814,10 +828,12 @@ fn the_master_loot_menu_groups_raid_candidates_by_subgroup() {
 
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for f in super::test_ui::LOOT_UI {
+    for f in crate::ui_script::test_ui::production_order(&[
+        super::test_ui::LOOT_UI,
+        &["Interface\\FrameXML\\LootFrame.xml"],
+    ]) {
         load_xml(&s, f);
     }
-    load_xml(&s, "Interface\\FrameXML\\LootFrame.xml");
 
     // A raid: `GetNumRaidMembers() > 0` is the nested arm's whole gate (LootFrame.lua:189).
     s.set_party(PartyState {
@@ -891,10 +907,12 @@ fn the_loot_bind_confirm_raises_the_dialog_and_okay_calls_loot_slot() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for f in super::test_ui::LOOT_UI {
+    for f in crate::ui_script::test_ui::production_order(&[
+        super::test_ui::LOOT_UI,
+        &["Interface\\FrameXML\\LootFrame.xml"],
+    ]) {
         load_xml(&s, f);
     }
-    load_xml(&s, "Interface\\FrameXML\\LootFrame.xml");
     s.set_loot(Some(coin_and_two_items()));
     s.fire_event("LOOT_OPENED", vec![]);
     let _ = s.take_loot_picks();
@@ -976,10 +994,12 @@ fn a_row_click_takes_rather_than_continues() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for f in super::test_ui::LOOT_UI {
+    for f in crate::ui_script::test_ui::production_order(&[
+        super::test_ui::LOOT_UI,
+        &["Interface\\FrameXML\\LootFrame.xml"],
+    ]) {
         load_xml(&s, f);
     }
-    load_xml(&s, "Interface\\FrameXML\\LootFrame.xml");
     s.set_loot(Some(coin_and_two_items()));
     s.fire_event("LOOT_OPENED", vec![]);
     let quads = s.extract();
@@ -1002,10 +1022,12 @@ fn loot_row_awaiting_its_template_opens_clean() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for f in super::test_ui::LOOT_UI {
+    for f in crate::ui_script::test_ui::production_order(&[
+        super::test_ui::LOOT_UI,
+        &["Interface\\FrameXML\\LootFrame.xml"],
+    ]) {
         load_xml(&s, f);
     }
-    load_xml(&s, "Interface\\FrameXML\\LootFrame.xml");
 
     // One row in flight: the wire gives the icon (by display id) and the count, nothing else.
     s.set_loot(Some(LootState {
@@ -1101,10 +1123,12 @@ fn stock_loot_rows_wear_the_item_button_art_and_light_under_the_cursor() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for f in super::test_ui::LOOT_UI {
+    for f in crate::ui_script::test_ui::production_order(&[
+        super::test_ui::LOOT_UI,
+        &["Interface\\FrameXML\\LootFrame.xml"],
+    ]) {
         load_xml(&s, f);
     }
-    load_xml(&s, "Interface\\FrameXML\\LootFrame.xml");
     s.set_loot(Some(coin_and_two_items()));
     s.fire_event("LOOT_OPENED", vec![]);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());

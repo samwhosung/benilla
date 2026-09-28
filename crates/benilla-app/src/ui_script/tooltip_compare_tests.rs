@@ -10,14 +10,10 @@ use benilla_ui::script::{
 
 use super::test_ui::{bag_slot_button, hover, BAG_UI, CHARACTER_UI};
 
-/// Loads each file once across the overlapping lists, in first-seen order: loading a file twice
+/// Loads the lists merged, each file once, in the production order: loading a file twice
 /// redeclares its frames.
-fn load_once(s: &UiScript, seen: &mut Vec<&'static str>, files: &[&'static str]) {
-    for f in files {
-        if seen.contains(f) {
-            continue;
-        }
-        seen.push(f);
+fn load_once(s: &UiScript, parts: &[&[&str]]) {
+    for f in super::test_ui::production_order(parts) {
         super::test_ui::load_ui_strict(s, f);
     }
 }
@@ -26,9 +22,7 @@ fn load_once(s: &UiScript, seen: &mut Vec<&'static str>, files: &[&'static str])
 fn harness() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    let mut seen = Vec::new();
-    load_once(&s, &mut seen, CHARACTER_UI);
-    load_once(&s, &mut seen, &ROUTER_UI);
+    load_once(&s, &[CHARACTER_UI, &ROUTER_UI]);
     s.set_money(0);
     s.set_unit("player", Some(player()));
     s
@@ -36,10 +30,10 @@ fn harness() -> UiScript {
 
 /// `MerchantFrame.xml`, then `ItemRef.xml` with its `ItemRefTooltip`, in `FrameXML.toc` order.
 const ROUTER_UI: [&str; 4] = [
-    "ScrollTemplates.xml", // our scroll kits
     "Interface\\FrameXML\\CharacterFrameTemplates.xml",
     "Interface\\FrameXML\\MerchantFrame.xml",
     "Interface\\FrameXML\\ItemRef.xml",
+    "ScrollTemplates.xml", // our scroll kits
 ];
 
 /// Race and class carry both halves: stock `PaperDollFrame_SetLevel` formats them unguarded on
@@ -56,15 +50,12 @@ fn player() -> UnitState {
     }
 }
 
-/// [`harness`] with the stock bag windows. `CHARACTER_UI` leads, as in `FrameXML.toc`, because
-/// `BagSlotButtonTemplate` inherits `PaperDollItemSlotButtonTemplate` from `PaperDollFrame.xml`.
+/// [`harness`] with the stock bag windows: `BagSlotButtonTemplate` inherits
+/// `PaperDollItemSlotButtonTemplate` from `PaperDollFrame.xml`, which the toc lists first.
 fn harness_with_bags() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    let mut seen = Vec::new();
-    load_once(&s, &mut seen, CHARACTER_UI);
-    load_once(&s, &mut seen, BAG_UI);
-    load_once(&s, &mut seen, &ROUTER_UI);
+    load_once(&s, &[CHARACTER_UI, BAG_UI, &ROUTER_UI]);
     s.set_money(0);
     s
 }

@@ -5,42 +5,55 @@ use benilla_ui::script::{ActionSlot, QuadContent, ScriptValue, SpellTooltipView,
 
 use super::test_ui::load_ui as load_xml;
 
-/// The main bar's stock files, with UIParent.xml for the manage pass the stance bar's OnShow runs
-/// and GameTooltip.xml for the OnLeave a bar hiding under the cursor fires.
-fn load_action_bar(s: &UiScript) {
-    for file in [
-        "Interface\\FrameXML\\Fonts.xml",
-        r"Interface\FrameXML\UIParent.xml",
-        r"Interface\FrameXML\MoneyFrame.lua",
-        r"Interface\FrameXML\MoneyFrame.xml",
-        "Interface\\FrameXML\\GameTooltip.xml",
-        "Interface\\FrameXML\\Cooldown.xml",
-        "Interface\\FrameXML\\ActionButtonTemplate.xml",
-        "Interface\\FrameXML\\TextStatusBar.lua",
-        "Interface\\FrameXML\\TextStatusBar.xml",
-        "Interface\\FrameXML\\GlobalStrings.lua",
-        "Interface\\FrameXML\\MainMenuBar.xml",
-        "Interface\\FrameXML\\ActionBarFrame.xml",
-        "Interface\\FrameXML\\BonusActionBarFrame.xml",
-        // `ExhaustionTick_Update` reads `ReputationWatchBar`, which ReputationFrame.xml declares.
-        r"Interface\FrameXML\UIPanelTemplates.lua",
-        r"Interface\FrameXML\UIPanelTemplates.xml",
-        r"Interface\FrameXML\OptionsFrameTemplates.xml",
-        r"Interface\FrameXML\ReputationFrame.xml",
-        // `MultiActionBarFrame_OnLoad` writes `UIOptionsFrameCheckButtons`, so UIOptionsFrame.xml
-        // loads first, as in FrameXML.toc (l.21, l.39); it also declares `ALWAYS_SHOW_MULTIBARS`.
-        "Interface\\FrameXML\\UIDropDownMenu.xml",
-        r"Interface\FrameXML\OptionsFrame.lua",
-        r"Interface\FrameXML\UIOptionsFrame.xml",
-        "Interface\\FrameXML\\BasicControls.xml",
-        "Interface\\FrameXML\\LocaleProperties.lua",
-        "Interface\\FrameXML\\StaticPopup.xml",
-        "ScrollTemplates.xml",
-        "KeyBindingsPage.xml",
-        "OptionsFrame.xml",
-    ] {
-        load_xml(s, file);
+/// The main bar's and the four extra bars' stock files, with UIParent.xml for the manage pass the
+/// stance bar's OnShow runs and GameTooltip.xml for the OnLeave a bar hiding under the cursor
+/// fires, and `extra` merged in; returns the frames MultiActionBars.xml built.
+fn load_action_bar(s: &UiScript, extra: &[&str]) -> usize {
+    const MULTIBARS: &str = "Interface\\FrameXML\\MultiActionBars.xml";
+    let mut built = 0;
+    for file in super::test_ui::production_order(&[
+        &[
+            "Interface\\FrameXML\\GlobalStrings.lua",
+            "Interface\\FrameXML\\Fonts.xml",
+            "Interface\\FrameXML\\BasicControls.xml",
+            "Interface\\FrameXML\\LocaleProperties.lua",
+            r"Interface\FrameXML\UIParent.xml",
+            r"Interface\FrameXML\MoneyFrame.lua",
+            r"Interface\FrameXML\MoneyFrame.xml",
+            "Interface\\FrameXML\\GameTooltip.xml",
+            "Interface\\FrameXML\\UIDropDownMenu.xml",
+            r"Interface\FrameXML\UIPanelTemplates.lua",
+            r"Interface\FrameXML\UIPanelTemplates.xml",
+            r"Interface\FrameXML\OptionsFrameTemplates.xml",
+            // `MultiActionBarFrame_OnLoad` writes `UIOptionsFrameCheckButtons`, so
+            // UIOptionsFrame.xml loads first, as in FrameXML.toc (l.21, l.39); it also declares
+            // `ALWAYS_SHOW_MULTIBARS`.
+            r"Interface\FrameXML\OptionsFrame.lua",
+            r"Interface\FrameXML\UIOptionsFrame.xml",
+            "Interface\\FrameXML\\StaticPopup.xml",
+            "Interface\\FrameXML\\TextStatusBar.lua",
+            "Interface\\FrameXML\\TextStatusBar.xml",
+            "Interface\\FrameXML\\MainMenuBar.xml",
+            "Interface\\FrameXML\\Cooldown.xml",
+            "Interface\\FrameXML\\ActionButtonTemplate.xml",
+            "Interface\\FrameXML\\ActionBarFrame.xml",
+            MULTIBARS,
+            // `ExhaustionTick_Update` reads `ReputationWatchBar`, which ReputationFrame.xml
+            // declares.
+            r"Interface\FrameXML\ReputationFrame.xml",
+            "Interface\\FrameXML\\BonusActionBarFrame.xml",
+            "ScrollTemplates.xml",
+            "KeyBindingsPage.xml",
+            "OptionsFrame.xml",
+        ],
+        extra,
+    ]) {
+        let frames = load_xml(s, file);
+        if file == MULTIBARS {
+            built = frames;
+        }
     }
+    built
 }
 
 /// Raise exactly the bars named, through the globals the Options rows write.
@@ -66,8 +79,7 @@ fn shipped_multibars_drive_end_to_end() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    load_action_bar(&s);
-    let frames = super::test_ui::load_ui(&s, "Interface\\FrameXML\\MultiActionBars.xml");
+    let frames = load_action_bar(&s, &[]);
     assert_eq!(
         frames, 100,
         "what stock MultiActionBars.xml declares: the four bar frames and their 48 buttons, \
@@ -241,23 +253,9 @@ fn shipped_stance_bar_drives_end_to_end() {
     s.set_screen_size(1024.0, 768.0);
     // `ShapeshiftBarFrame` is parented to `MainMenuBar` and its update calls
     // `CooldownFrame_SetTimer` (BonusActionBarFrame.lua:201), so both load first.
-    load_action_bar(&s);
+    load_action_bar(&s, &[]);
     // Bar 1 up: the stance bar's OnShow runs the manage pass (BonusActionBarFrame.xml:350-352),
     // whose `ShapeshiftBarFrame` row adds 45 only while bar 1 is up (UIParent.lua:1583, 1605).
-    load_xml(&s, "Interface\\FrameXML\\Cooldown.xml");
-    load_xml(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
-    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml");
-    load_xml(&s, "ScrollTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
-    load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
-    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
-    load_xml(&s, "KeyBindingsPage.xml");
-    load_xml(&s, "OptionsFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\MultiActionBars.xml");
     show_bars(&s, &[1]);
     assert!(
         s.eval::<bool>("return ShapeshiftBarFrame ~= nil and ShapeshiftButton10 ~= nil")
@@ -411,35 +409,32 @@ fn multibar_hover_renders_the_buttons_own_action() {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     for file in [
+        "Interface\\FrameXML\\GlobalStrings.lua",
         "Interface\\FrameXML\\Fonts.xml",
+        "Interface\\FrameXML\\BasicControls.xml",
+        "Interface\\FrameXML\\LocaleProperties.lua",
         r"Interface\FrameXML\UIParent.xml",
         r"Interface\FrameXML\MoneyFrame.lua",
         r"Interface\FrameXML\MoneyFrame.xml",
         "Interface\\FrameXML\\GameTooltip.xml",
-        "Interface\\FrameXML\\Cooldown.xml",
-        "Interface\\FrameXML\\ActionButtonTemplate.xml",
-        "Interface\\FrameXML\\TextStatusBar.lua",
-        "Interface\\FrameXML\\TextStatusBar.xml",
-        "Interface\\FrameXML\\GlobalStrings.lua",
-        "Interface\\FrameXML\\MainMenuBar.xml",
-        "Interface\\FrameXML\\ActionBarFrame.xml",
-        "Interface\\FrameXML\\BonusActionBarFrame.xml",
-        // `ExhaustionTick_Update` reads `ReputationWatchBar`, which ReputationFrame.xml declares.
+        "Interface\\FrameXML\\UIDropDownMenu.xml",
         r"Interface\FrameXML\UIPanelTemplates.lua",
         r"Interface\FrameXML\UIPanelTemplates.xml",
         r"Interface\FrameXML\OptionsFrameTemplates.xml",
-        r"Interface\FrameXML\ReputationFrame.xml",
-        "Interface\\FrameXML\\ActionBarFrame.xml",
-        "Interface\\FrameXML\\UIDropDownMenu.xml",
-        "ScrollTemplates.xml",
-        r"Interface\FrameXML\UIPanelTemplates.lua",
-        r"Interface\FrameXML\UIPanelTemplates.xml",
-        "Interface\\FrameXML\\BasicControls.xml",
-        "Interface\\FrameXML\\LocaleProperties.lua",
         "Interface\\FrameXML\\StaticPopup.xml",
+        "Interface\\FrameXML\\TextStatusBar.lua",
+        "Interface\\FrameXML\\TextStatusBar.xml",
+        "Interface\\FrameXML\\MainMenuBar.xml",
+        "Interface\\FrameXML\\Cooldown.xml",
+        "Interface\\FrameXML\\ActionButtonTemplate.xml",
+        "Interface\\FrameXML\\ActionBarFrame.xml",
+        "Interface\\FrameXML\\MultiActionBars.xml",
+        // `ExhaustionTick_Update` reads `ReputationWatchBar`, which ReputationFrame.xml declares.
+        r"Interface\FrameXML\ReputationFrame.xml",
+        "Interface\\FrameXML\\BonusActionBarFrame.xml",
+        "ScrollTemplates.xml",
         "KeyBindingsPage.xml",
         "OptionsFrame.xml",
-        "Interface\\FrameXML\\MultiActionBars.xml",
     ] {
         load_xml(&s, file);
     }
@@ -518,21 +513,7 @@ fn multibar_hover_renders_the_buttons_own_action() {
 fn the_vertical_multibars_exist_hidden_on_the_reference_pages() {
     benilla_formats::wow_data_or_skip!();
     let s = UiScript::new().unwrap();
-    load_action_bar(&s);
-    load_xml(&s, "Interface\\FrameXML\\Cooldown.xml");
-    load_xml(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
-    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml");
-    load_xml(&s, "ScrollTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
-    load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
-    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
-    load_xml(&s, "KeyBindingsPage.xml");
-    load_xml(&s, "OptionsFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\MultiActionBars.xml");
+    load_action_bar(&s, &[]);
 
     for bar in ["MultiBarRight", "MultiBarLeft"] {
         assert!(
@@ -573,21 +554,7 @@ fn every_extra_bar_stays_down_until_its_own_toggle_is_set() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    load_action_bar(&s);
-    load_xml(&s, "Interface\\FrameXML\\Cooldown.xml");
-    load_xml(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
-    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml");
-    load_xml(&s, "ScrollTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
-    load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
-    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
-    load_xml(&s, "KeyBindingsPage.xml");
-    load_xml(&s, "OptionsFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\MultiActionBars.xml");
+    load_action_bar(&s, &[]);
 
     const BARS: [&str; 4] = [
         "MultiBarBottomLeft",
@@ -650,22 +617,7 @@ fn raising_a_bottom_bar_moves_the_managed_bottom_stack() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    load_action_bar(&s);
-    load_xml(&s, "Interface\\FrameXML\\Cooldown.xml");
-    load_xml(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
-    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml");
-    load_xml(&s, "ScrollTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
-    load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
-    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
-    load_xml(&s, "KeyBindingsPage.xml");
-    load_xml(&s, "OptionsFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\MultiActionBars.xml");
-    load_xml(&s, "Interface\\FrameXML\\CastingBarFrame.xml");
+    load_action_bar(&s, &[r"Interface\FrameXML\CastingBarFrame.xml"]);
 
     // Read the row's y off the anchor, so a hidden cast bar answers too.
     let cast_y = |s: &UiScript| {
@@ -709,21 +661,7 @@ fn viewable_action_bar_pages_follow_the_bar_toggles() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    load_action_bar(&s);
-    load_xml(&s, "Interface\\FrameXML\\Cooldown.xml");
-    load_xml(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
-    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml");
-    load_xml(&s, "ScrollTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
-    load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
-    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
-    load_xml(&s, "KeyBindingsPage.xml");
-    load_xml(&s, "OptionsFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\MultiActionBars.xml");
+    load_action_bar(&s, &[]);
 
     let viewable = |s: &UiScript| {
         s.eval::<String>(
@@ -771,21 +709,7 @@ fn the_grid_option_holds_the_extra_bars_empty_wells_open() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    load_action_bar(&s);
-    load_xml(&s, "Interface\\FrameXML\\Cooldown.xml");
-    load_xml(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
-    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml");
-    load_xml(&s, "ScrollTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
-    load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
-    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
-    load_xml(&s, "KeyBindingsPage.xml");
-    load_xml(&s, "OptionsFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\MultiActionBars.xml");
+    load_action_bar(&s, &[]);
     show_bars(&s, &[1]);
 
     let well = |s: &UiScript| {
@@ -852,21 +776,7 @@ fn a_held_payload_ghosts_the_empty_wells_it_opens() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    load_action_bar(&s);
-    load_xml(&s, "Interface\\FrameXML\\Cooldown.xml");
-    load_xml(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
-    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml");
-    load_xml(&s, "ScrollTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
-    load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
-    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
-    load_xml(&s, "KeyBindingsPage.xml");
-    load_xml(&s, "OptionsFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\MultiActionBars.xml");
+    load_action_bar(&s, &[]);
     s.set_action(
         1,
         Some(ActionSlot {
@@ -975,21 +885,7 @@ fn a_bar_toggle_sends_the_byte_its_globals_pack_to() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    load_action_bar(&s);
-    load_xml(&s, "Interface\\FrameXML\\Cooldown.xml");
-    load_xml(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
-    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml");
-    load_xml(&s, "ScrollTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
-    load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
-    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
-    load_xml(&s, "KeyBindingsPage.xml");
-    load_xml(&s, "OptionsFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\MultiActionBars.xml");
+    load_action_bar(&s, &[]);
     let _ = s.take_action_bar_toggle_sends();
 
     // The Options row's sequence: assign, update the bars, send.
@@ -1052,21 +948,7 @@ fn the_shipped_setter_passes_exactly_four_arguments() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    load_action_bar(&s);
-    load_xml(&s, "Interface\\FrameXML\\Cooldown.xml");
-    load_xml(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
-    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml");
-    load_xml(&s, "ScrollTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
-    load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
-    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
-    load_xml(&s, "KeyBindingsPage.xml");
-    load_xml(&s, "OptionsFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\MultiActionBars.xml");
+    load_action_bar(&s, &[]);
 
     // Lua 5.0's `arg.n`: `...` as a value is not in the 1.12 client's grammar.
     s.run(
@@ -1098,23 +980,7 @@ fn the_stance_bar_sits_where_the_pass_puts_it() {
 
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    load_action_bar(&s);
-    load_xml(&s, "Interface\\FrameXML\\Cooldown.xml");
-    load_xml(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
-    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml");
-    load_xml(&s, "ScrollTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
-    load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
-    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
-    load_xml(&s, "KeyBindingsPage.xml");
-    load_xml(&s, "OptionsFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\MultiActionBars.xml");
-    load_xml(&s, "Interface\\FrameXML\\Cooldown.xml");
-    load_xml(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
+    load_action_bar(&s, &[]);
     s.set_shapeshift_forms(vec![ShapeshiftFormView {
         spell_id: 2457,
         texture: Some("Interface\\Icons\\Stance_A".into()),
@@ -1159,23 +1025,7 @@ fn the_stance_shelf_follows_the_bottom_left_bar() {
 
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    load_action_bar(&s);
-    load_xml(&s, "Interface\\FrameXML\\Cooldown.xml");
-    load_xml(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
-    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml");
-    load_xml(&s, "ScrollTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
-    load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
-    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
-    load_xml(&s, "KeyBindingsPage.xml");
-    load_xml(&s, "OptionsFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\MultiActionBars.xml");
-    load_xml(&s, "Interface\\FrameXML\\Cooldown.xml");
-    load_xml(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
+    load_action_bar(&s, &[]);
 
     let form = |id: u32| ShapeshiftFormView {
         spell_id: id,
@@ -1271,23 +1121,7 @@ fn the_stance_shelf_is_as_long_as_the_form_count() {
 
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    load_action_bar(&s);
-    load_xml(&s, "Interface\\FrameXML\\Cooldown.xml");
-    load_xml(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
-    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml");
-    load_xml(&s, "ScrollTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
-    load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
-    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
-    load_xml(&s, "KeyBindingsPage.xml");
-    load_xml(&s, "OptionsFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\MultiActionBars.xml");
-    load_xml(&s, "Interface\\FrameXML\\Cooldown.xml");
-    load_xml(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
+    load_action_bar(&s, &[]);
     show_bars(&s, &[]); // unraised: the shelf art is the state under test
 
     let form = |id: u32| ShapeshiftFormView {
@@ -1371,21 +1205,7 @@ fn an_extra_bars_empty_well_keeps_its_bound_hotkey_label() {
     s.set_screen_size(1024.0, 768.0);
     // The real command set, so `MULTIACTIONBAR1BUTTONn` is bindable; it ships unbound.
     s.register_bindings(&crate::bindings::registry_commands());
-    load_action_bar(&s);
-    load_xml(&s, "Interface\\FrameXML\\Cooldown.xml");
-    load_xml(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
-    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml");
-    load_xml(&s, "ScrollTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
-    load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
-    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
-    load_xml(&s, "KeyBindingsPage.xml");
-    load_xml(&s, "OptionsFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\MultiActionBars.xml");
+    load_action_bar(&s, &[]);
     show_bars(&s, &[1]);
     s.set_action(
         61,
@@ -1466,8 +1286,7 @@ fn the_middle_strip_tiles_along_its_length_only() {
 
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    load_action_bar(&s);
-    load_xml(&s, "Interface\\FrameXML\\MultiActionBars.xml");
+    load_action_bar(&s, &[]);
     show_bars(&s, &[]); // bars down: the shelf is the state under test
 
     let form = |id: u32| ShapeshiftFormView {
@@ -1533,8 +1352,7 @@ fn a_forms_state_change_leaves_the_shelf_down_over_the_raised_bar() {
 
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    load_action_bar(&s);
-    load_xml(&s, "Interface\\FrameXML\\MultiActionBars.xml");
+    load_action_bar(&s, &[]);
     // A recorder for the two events a push may announce.
     s.run(
         "STANCE_LOG = {} local f = CreateFrame('Frame') \

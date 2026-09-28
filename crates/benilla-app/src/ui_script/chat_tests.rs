@@ -8,28 +8,28 @@ use super::test_ui::load_ui as load_xml;
 /// The chat stack, fonts first so `inherits="ChatFontNormal"` resolves.
 fn chat_frame() -> UiScript {
     let mut s = UiScript::new().unwrap();
+    load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
+    load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");
+    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
+    // UIParent's OnUpdate runs `FCF_OnUpdate`, the dock's driver, as in the reference.
+    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
     // `FCF_Tab_OnClick` uses the dropdown kit, whose backdrop reads GameTooltip.lua's colour.
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml");
-    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml");
     load_xml(&s, "Interface\\FrameXML\\UIMenu.xml"); // the kit the chat menus build from
-    load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
-    load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");
-    // UIParent's OnUpdate runs `FCF_OnUpdate`, the dock's driver, as in the reference.
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
-    load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
-    // `FCF_ValidateChatFramePosition` reads `MainMenuBar:GetHeight()`, so the bar loads first.
-    load_xml(&s, "Interface\\FrameXML\\Cooldown.xml");
-    load_xml(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
-    load_xml(&s, "Interface\\FrameXML\\TextStatusBar.lua");
-    load_xml(&s, "Interface\\FrameXML\\TextStatusBar.xml");
-    load_xml(&s, "Interface\\FrameXML\\MainMenuBar.xml");
-    load_xml(&s, "Interface\\FrameXML\\ChatFrame.xml");
+    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml");
     load_xml(&s, "Interface\\FrameXML\\UIPanelTemplates.lua");
     load_xml(&s, "Interface\\FrameXML\\UIPanelTemplates.xml");
+    load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
+    load_xml(&s, "Interface\\FrameXML\\TextStatusBar.lua");
+    load_xml(&s, "Interface\\FrameXML\\TextStatusBar.xml");
+    // `FCF_ValidateChatFramePosition` reads `MainMenuBar:GetHeight()`, so the bar loads first.
+    load_xml(&s, "Interface\\FrameXML\\MainMenuBar.xml");
+    load_xml(&s, "Interface\\FrameXML\\Cooldown.xml");
+    load_xml(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
+    load_xml(&s, "Interface\\FrameXML\\ChatFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\FloatingChatFrame.xml");
     super::fire_chat_login(&mut s);
     s.set_screen_size(1600.0, 900.0);
@@ -276,14 +276,15 @@ fn chat_click_dismisses_a_stuck_spell_but_not_an_item() {
     use benilla_ui::script::{
         ContainerSlot, ContainerState, SpellBookState, SpellSlotView, SpellTabView,
     };
-    let mut s = super::spellbook_tests::spellbook_ui(1024.0, 768.0);
-    for f in [
-        "Interface\\FrameXML\\UIMenu.xml", // the kit ChatMenu/EmoteMenu/VoiceMacroMenu build from
-        "Interface\\FrameXML\\ChatFrame.xml",
-        "Interface\\FrameXML\\FloatingChatFrame.xml",
-    ] {
-        load_xml(&s, f);
-    }
+    let mut s = super::spellbook_tests::spellbook_ui_with(
+        1024.0,
+        768.0,
+        &[
+            "Interface\\FrameXML\\UIMenu.xml", // the kit ChatMenu/EmoteMenu/VoiceMacroMenu build from
+            "Interface\\FrameXML\\ChatFrame.xml",
+            "Interface\\FrameXML\\FloatingChatFrame.xml",
+        ],
+    );
     s.fire_event("PLAYER_ENTERING_WORLD", vec![]);
     s.set_spellbook(SpellBookState {
         tabs: vec![SpellTabView {
@@ -916,25 +917,20 @@ fn the_chat_menu_builds_its_rows_on_the_references_kit() {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     for f in [
-        "Interface\\FrameXML\\Fonts.xml",
-        r"Interface\FrameXML\MoneyFrame.lua",
-        r"Interface\FrameXML\MoneyFrame.xml",
-        r"Interface\FrameXML\UIParent.xml",
-        r"Interface\FrameXML\UIPanelTemplates.lua",
-        r"Interface\FrameXML\UIPanelTemplates.xml",
         "Interface\\FrameXML\\GlobalStrings.lua",
+        "Interface\\FrameXML\\Fonts.xml",
         "Interface\\FrameXML\\BasicControls.xml",
         "Interface\\FrameXML\\LocaleProperties.lua",
-        "Interface\\FrameXML\\StaticPopup.xml",
+        r"Interface\FrameXML\UIParent.xml",
+        r"Interface\FrameXML\MoneyFrame.lua",
+        r"Interface\FrameXML\MoneyFrame.xml",
         "Interface\\FrameXML\\GameTooltip.xml",
         r"Interface\FrameXML\UIMenu.xml",
-        "Interface\\FrameXML\\GlobalStrings.lua",
-        "Interface\\FrameXML\\BasicControls.xml",
-        "Interface\\FrameXML\\UIMenu.xml",
-        "Interface\\FrameXML\\ChatFrame.xml",
         "Interface\\FrameXML\\UIDropDownMenu.xml",
-        "Interface\\FrameXML\\UIPanelTemplates.lua",
-        "Interface\\FrameXML\\UIPanelTemplates.xml",
+        r"Interface\FrameXML\UIPanelTemplates.lua",
+        r"Interface\FrameXML\UIPanelTemplates.xml",
+        "Interface\\FrameXML\\StaticPopup.xml",
+        "Interface\\FrameXML\\ChatFrame.xml",
         "Interface\\FrameXML\\FloatingChatFrame.xml",
     ] {
         load_xml(&s, f);

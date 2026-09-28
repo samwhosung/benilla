@@ -9,11 +9,11 @@ fn session() -> UiScript {
     s.set_screen_size(1024.0, 768.0);
     s.run("function PlaySound() end").unwrap();
     for f in [
-        "Interface\\FrameXML\\Fonts.xml",
         "Interface\\FrameXML\\GlobalStrings.lua",
+        "Interface\\FrameXML\\Fonts.xml",
         "Interface\\FrameXML\\Localization.xml",
-        "Interface\\FrameXML\\LocaleProperties.lua",
         "Interface\\FrameXML\\BasicControls.xml",
+        "Interface\\FrameXML\\LocaleProperties.lua",
         r"Interface\FrameXML\UIParent.xml",
         r"Interface\FrameXML\MoneyFrame.lua",
         r"Interface\FrameXML\MoneyFrame.xml",

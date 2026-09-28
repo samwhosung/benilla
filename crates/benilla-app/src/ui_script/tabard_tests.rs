@@ -33,19 +33,19 @@ fn harness(rank: u32) -> UiScript {
         );
     }
     for file in [
-        "Interface\\FrameXML\\Fonts.xml",
-        r"Interface\FrameXML\UIParent.xml",
-        "ScrollTemplates.xml", // ours: the scroll kits
-        r"Interface\FrameXML\MoneyFrame.lua",
-        r"Interface\FrameXML\MoneyFrame.xml",
-        r"Interface\FrameXML\UIPanelTemplates.lua",
-        r"Interface\FrameXML\UIPanelTemplates.xml",
         "Interface\\FrameXML\\GlobalStrings.lua",
+        "Interface\\FrameXML\\Fonts.xml",
         "Interface\\FrameXML\\BasicControls.xml",
         "Interface\\FrameXML\\LocaleProperties.lua",
-        "Interface\\FrameXML\\StaticPopup.xml",
+        r"Interface\FrameXML\UIParent.xml",
+        r"Interface\FrameXML\MoneyFrame.lua",
+        r"Interface\FrameXML\MoneyFrame.xml",
         "Interface\\FrameXML\\GameTooltip.xml",
+        r"Interface\FrameXML\UIPanelTemplates.lua",
+        r"Interface\FrameXML\UIPanelTemplates.xml",
+        "Interface\\FrameXML\\StaticPopup.xml",
         r"Interface\FrameXML\TabardFrame.xml",
+        "ScrollTemplates.xml", // ours: the scroll kits
     ] {
         super::test_ui::load_ui(&s, file);
     }

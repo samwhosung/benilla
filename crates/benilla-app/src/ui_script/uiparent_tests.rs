@@ -2,7 +2,7 @@
 
 use benilla_ui::script::UiScript;
 
-/// Fonts (for any `inherits=`), then UIParent, in manifest order.
+/// Fonts (for any `inherits=`), then UIParent, in the production order.
 fn ui_parent() -> UiScript {
     let mut s = UiScript::new().unwrap();
     for file in [

@@ -1269,13 +1269,13 @@ mod bind_confirm_tests {
     fn load_ui(s: &UiScript) {
         // Chain files, so through the chain-aware reader.
         for file in [
-            "Interface\\FrameXML\\Fonts.xml",
-            r"Interface\FrameXML\MoneyFrame.lua",
-            r"Interface\FrameXML\MoneyFrame.xml",
-            r"Interface\FrameXML\UIParent.xml",
             "Interface\\FrameXML\\GlobalStrings.lua",
+            "Interface\\FrameXML\\Fonts.xml",
             "Interface\\FrameXML\\BasicControls.xml",
             "Interface\\FrameXML\\LocaleProperties.lua",
+            r"Interface\FrameXML\UIParent.xml",
+            r"Interface\FrameXML\MoneyFrame.lua",
+            r"Interface\FrameXML\MoneyFrame.xml",
             "Interface\\FrameXML\\StaticPopup.xml",
         ] {
             crate::ui_script::load_ui_for_test(s, file);

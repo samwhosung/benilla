@@ -5,7 +5,7 @@
 use benilla_ui::script::{ContainerSlot, ContainerState, UiScript};
 
 use super::test_ui::{
-    bag_open, bag_slot_button, load_ui as load_xml, load_world_frame, world_click, BAG_UI,
+    bag_open, bag_slot_button, load_ui as load_xml, world_click, BAG_UI, WORLD_FRAME_UI,
 };
 
 /// A backpack holding a 5-stack of `item_id` at `quality`, the parameter the popup forks on.
@@ -44,25 +44,31 @@ fn one_item_backpack(item_id: u32, name: &str, quality: u32) -> ContainerState {
 fn setup() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");
-    load_xml(&s, r"Interface\FrameXML\MoneyFrame.xml");
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
-    load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
-    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
-    // The stock `DELETE_GOOD_ITEM`'s `OnHide` hands focus back to `ChatFrameEditBox`.
-    load_xml(&s, r"Interface\FrameXML\UIMenu.xml");
-    load_xml(&s, r"Interface\FrameXML\ChatFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml"); // TOOLTIP_DEFAULT_COLOR, for dropdowns
-    load_xml(&s, r"Interface\FrameXML\UIDropDownMenu.xml");
-    load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
-    load_xml(&s, r"Interface\FrameXML\FloatingChatFrame.xml"); // declares ChatFrameEditBox
-
     // The drop is a click on the full-screen world frame, so it must be loaded.
-    load_world_frame(&s);
+    for file in super::test_ui::production_order(&[
+        &[
+            r"Interface\FrameXML\GlobalStrings.lua",
+            "Interface\\FrameXML\\Fonts.xml",
+            r"Interface\FrameXML\BasicControls.xml",
+            r"Interface\FrameXML\LocaleProperties.lua",
+            r"Interface\FrameXML\UIParent.xml",
+            r"Interface\FrameXML\MoneyFrame.lua",
+            r"Interface\FrameXML\MoneyFrame.xml",
+            "Interface\\FrameXML\\GameTooltip.xml", // TOOLTIP_DEFAULT_COLOR, for dropdowns
+            r"Interface\FrameXML\UIMenu.xml",
+            r"Interface\FrameXML\UIDropDownMenu.xml",
+            r"Interface\FrameXML\UIPanelTemplates.lua",
+            r"Interface\FrameXML\UIPanelTemplates.xml",
+            r"Interface\FrameXML\StaticPopup.xml",
+            // The stock `DELETE_GOOD_ITEM`'s `OnHide` hands focus back to `ChatFrameEditBox`,
+            // which FloatingChatFrame.xml declares.
+            r"Interface\FrameXML\ChatFrame.xml",
+            r"Interface\FrameXML\FloatingChatFrame.xml",
+        ],
+        WORLD_FRAME_UI,
+    ]) {
+        load_xml(&s, file);
+    }
     s.set_money(0);
     s
 }
@@ -71,14 +77,18 @@ fn setup() -> UiScript {
 fn bag_setup() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for file in BAG_UI {
+    for file in crate::ui_script::test_ui::production_order(&[
+        BAG_UI,
+        &[
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            // `ContainerFrame_Update` reads `MerchantFrame:IsShown()` on any slot the tooltip owns.
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kits
+        ],
+        WORLD_FRAME_UI, // the drop target
+    ]) {
         load_xml(&s, file);
     }
-    // `ContainerFrame_Update` reads `MerchantFrame:IsShown()` on any slot the tooltip owns.
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
-    load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
-    load_world_frame(&s); // the drop target
 
     // `BAG_UI` leaves out `CharacterFrame.xml`, so `PaperDollFrame` has no hidden parent and would
     // cover the world; the real client never shows it here.

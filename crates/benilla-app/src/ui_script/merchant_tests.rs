@@ -40,13 +40,15 @@ fn shipped_merchant_frame_drives_end_to_end() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for f in super::test_ui::MERCHANT_UI {
-        load_xml(&s, f);
-    }
     // The census: every row is a container plus an `ItemButtonTemplate` button, and every price a
     // `SmallMoneyFrameTemplate` (`MerchantFrame.xml:4-115`).
+    const MERCHANT: &str = "Interface\\FrameXML\\MerchantFrame.xml";
     assert_eq!(
-        load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml"),
+        super::test_ui::load_kit_counting(
+            &s,
+            &[super::test_ui::MERCHANT_UI, &[MERCHANT]],
+            MERCHANT
+        ),
         90,
         "the stock file's own shape — see the census note above"
     );
@@ -298,11 +300,15 @@ fn merchant_show_hide_plays_open_and_close_kits() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for f in super::test_ui::MERCHANT_UI {
+    for f in crate::ui_script::test_ui::production_order(&[
+        super::test_ui::MERCHANT_UI,
+        &[
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kits
+        ],
+    ]) {
         load_xml(&s, f);
     }
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
 
     assert!(
         s.take_sounds().is_empty(),
@@ -335,12 +341,16 @@ fn vendor_open_opens_the_backpack_and_layers_the_sound() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for file in BAG_UI {
+    for file in crate::ui_script::test_ui::production_order(&[
+        BAG_UI,
+        &[
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kits
+        ],
+    ]) {
         load_xml(&s, file);
     }
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
-    load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     s.set_money(0);
     equip_bag(&mut s, 0, "Backpack", 16);
     let _ = s.take_sounds(); // ignore anything from load (frames are hidden; nothing should)
@@ -378,12 +388,16 @@ fn vendor_leaves_an_already_open_backpack_alone() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for file in BAG_UI {
+    for file in crate::ui_script::test_ui::production_order(&[
+        BAG_UI,
+        &[
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kits
+        ],
+    ]) {
         load_xml(&s, file);
     }
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
-    load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     s.set_money(0);
     equip_bag(&mut s, 0, "Backpack", 16);
 
@@ -418,12 +432,16 @@ fn vendor_opens_and_closes_all_equipped_bags() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for file in BAG_UI {
+    for file in crate::ui_script::test_ui::production_order(&[
+        BAG_UI,
+        &[
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kits
+        ],
+    ]) {
         load_xml(&s, file);
     }
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
-    load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     s.set_money(0);
     equip_bag(&mut s, 0, "Backpack", 16);
     equip_bag(&mut s, 2, "Small Pouch", 6);
@@ -454,11 +472,15 @@ fn merchant_switch_plays_close_then_open_and_queues_the_consumable_close() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for f in super::test_ui::MERCHANT_UI {
+    for f in crate::ui_script::test_ui::production_order(&[
+        super::test_ui::MERCHANT_UI,
+        &[
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kits
+        ],
+    ]) {
         load_xml(&s, f);
     }
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
 
     s.set_money(0);
     s.set_merchant(Some(MerchantState::default()));
@@ -494,12 +516,16 @@ fn shipped_merchant_hover_scopes_highlight_and_anchors_item_tooltip() {
     s.set_screen_size(1024.0, 768.0);
     // The stock tooltip sizes from its lines, so the harness needs a measurer.
     s.set_text_measurer(Box::new(super::FixedWidthFont(6.0)));
-    for f in super::test_ui::MERCHANT_UI {
+    for f in crate::ui_script::test_ui::production_order(&[
+        super::test_ui::MERCHANT_UI,
+        &[
+            "Interface\\FrameXML\\UIDropDownMenu.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kits
+        ],
+    ]) {
         load_xml(&s, f);
     }
-    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml");
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
 
     s.set_merchant(Some(MerchantState {
         items: vec![
@@ -697,11 +723,15 @@ fn merchant_tabs_drive_buyback_page_and_repair_pair() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for f in super::test_ui::MERCHANT_UI {
+    for f in crate::ui_script::test_ui::production_order(&[
+        super::test_ui::MERCHANT_UI,
+        &[
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kits
+        ],
+    ]) {
         load_xml(&s, f);
     }
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     s.set_money(500);
 
     let buyback_item = |name: &str, price: u32| MerchantItem {
@@ -814,10 +844,12 @@ fn merchant_tabs_fit_their_labels() {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     s.set_text_measurer(Box::new(super::FixedWidthFont(6.0)));
-    for f in super::test_ui::MERCHANT_UI {
+    for f in crate::ui_script::test_ui::production_order(&[
+        super::test_ui::MERCHANT_UI,
+        &["Interface\\FrameXML\\MerchantFrame.xml"],
+    ]) {
         load_xml(&s, f);
     }
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     s.set_money(0);
     s.set_merchant(Some(MerchantState::default()));
     s.fire_event("MERCHANT_SHOW", vec![ScriptValue::Str("Vendor".into())]);
@@ -849,11 +881,15 @@ fn shipped_merchant_frame_arms_the_buy_cursor_on_hover() {
 
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for f in super::test_ui::MERCHANT_UI {
+    for f in crate::ui_script::test_ui::production_order(&[
+        super::test_ui::MERCHANT_UI,
+        &[
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kits
+        ],
+    ]) {
         load_xml(&s, f);
     }
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
 
     // A purse of 50c: row 1 (25c) is affordable, row 2 (100c) is not.
     s.set_money(50);
@@ -936,14 +972,18 @@ fn trade_recipient_money_renders_the_digit_not_ellipsis() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for f in super::test_ui::MERCHANT_UI {
+    for f in crate::ui_script::test_ui::production_order(&[
+        super::test_ui::MERCHANT_UI,
+        &[
+            "Interface\\FrameXML\\MoneyInputFrame.lua", // for TradeFrame.xml's OnLoad
+            "Interface\\FrameXML\\MoneyInputFrame.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml", // read by the stock bag-slot click
+            "Interface\\FrameXML\\TradeFrame.xml",
+            "ScrollTemplates.xml", // our scroll kits
+        ],
+    ]) {
         load_xml(&s, f);
     }
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml"); // read by the stock bag-slot click
-    load_xml(&s, "Interface\\FrameXML\\MoneyInputFrame.lua"); // for TradeFrame.xml's OnLoad
-    load_xml(&s, "Interface\\FrameXML\\MoneyInputFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\TradeFrame.xml");
     s.set_text_measurer(Box::new(super::FixedWidthFont(6.0)));
 
     let target = benilla_ui::script::TradeSideState {
@@ -990,24 +1030,24 @@ fn ctrl_and_shift_on_a_vendor_row_preview_and_post_without_buying() {
     const WATER_LINK: &str = "|cffffffff|Hitem:159:0:0:0|h[Refreshing Spring Water]|h|r";
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for f in super::test_ui::MERCHANT_UI {
+    for f in crate::ui_script::test_ui::production_order(&[
+        super::test_ui::MERCHANT_UI,
+        &[
+            "Interface\\FrameXML\\GlobalStrings.lua",
+            "Interface\\FrameXML\\BasicControls.xml",
+            r"Interface\FrameXML\UIParent.xml", // UIParent and UIParent.lua
+            "Interface\\FrameXML\\UIMenu.xml", // the kit ChatMenu/EmoteMenu/VoiceMacroMenu build from
+            "Interface\\FrameXML\\UIDropDownMenu.xml",
+            "Interface\\FrameXML\\ChatFrame.xml",
+            // Not the panel templates or the dialogs, which MERCHANT_UI has: loading the stock
+            // money kit's frames twice trips its global-named update.
+            "Interface\\FrameXML\\FloatingChatFrame.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "Interface\\FrameXML\\DressUpFrame.xml",
+            "ScrollTemplates.xml", // our scroll kits
+        ],
+    ]) {
         load_xml(&s, f);
-    }
-    for file in [
-        r"Interface\FrameXML\UIParent.xml", // UIParent and UIParent.lua
-        "ScrollTemplates.xml",              // our scroll kits
-        "Interface\\FrameXML\\MerchantFrame.xml",
-        "Interface\\FrameXML\\DressUpFrame.xml",
-        "Interface\\FrameXML\\UIMenu.xml", // the kit ChatMenu/EmoteMenu/VoiceMacroMenu build from
-        "Interface\\FrameXML\\GlobalStrings.lua",
-        "Interface\\FrameXML\\BasicControls.xml",
-        "Interface\\FrameXML\\ChatFrame.xml",
-        "Interface\\FrameXML\\UIDropDownMenu.xml",
-        // Not the panel templates or the dialogs, which MERCHANT_UI has: loading the stock money
-        // kit's frames twice trips its global-named update.
-        "Interface\\FrameXML\\FloatingChatFrame.xml",
-    ] {
-        load_xml(&s, file);
     }
 
     s.set_money(12_345);

@@ -11,20 +11,20 @@ fn chat_menu() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     for f in [
-        r"Interface\FrameXML\Fonts.xml",
-        r"Interface\FrameXML\MoneyFrame.lua",
-        r"Interface\FrameXML\MoneyFrame.xml",
-        r"Interface\FrameXML\UIParent.xml",
-        r"Interface\FrameXML\UIPanelTemplates.lua",
-        r"Interface\FrameXML\UIPanelTemplates.xml",
         r"Interface\FrameXML\GlobalStrings.lua",
+        r"Interface\FrameXML\Fonts.xml",
         r"Interface\FrameXML\BasicControls.xml",
         r"Interface\FrameXML\LocaleProperties.lua",
-        r"Interface\FrameXML\StaticPopup.xml",
+        r"Interface\FrameXML\UIParent.xml",
+        r"Interface\FrameXML\MoneyFrame.lua",
+        r"Interface\FrameXML\MoneyFrame.xml",
         r"Interface\FrameXML\GameTooltip.xml",
         r"Interface\FrameXML\UIMenu.xml",
-        r"Interface\FrameXML\ChatFrame.xml",
         r"Interface\FrameXML\UIDropDownMenu.xml",
+        r"Interface\FrameXML\UIPanelTemplates.lua",
+        r"Interface\FrameXML\UIPanelTemplates.xml",
+        r"Interface\FrameXML\StaticPopup.xml",
+        r"Interface\FrameXML\ChatFrame.xml",
         r"Interface\FrameXML\FloatingChatFrame.xml",
     ] {
         load_xml(&s, f);

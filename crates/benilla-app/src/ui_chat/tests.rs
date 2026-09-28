@@ -376,22 +376,22 @@ fn channel_notices_compose_by_the_notice_law() {
 pub(super) fn chat_vm() -> benilla_ui::script::UiScript {
     let mut s = benilla_ui::script::UiScript::new().unwrap();
     // The chat tabs call the dropdown kit (`CloseDropDownMenus` on a click), which reads
-    // `TOOLTIP_DEFAULT_COLOR`: both load ahead of ChatFrame.xml, as in `benilla.toc`.
+    // `TOOLTIP_DEFAULT_COLOR`: both load ahead of ChatFrame.xml, as in `FrameXML.toc`.
     for file in [
+        "Interface\\FrameXML\\GlobalStrings.lua",
         "Interface\\FrameXML\\Fonts.xml",
+        "Interface\\FrameXML\\BasicControls.xml",
+        "Interface\\FrameXML\\LocaleProperties.lua",
+        r"Interface\FrameXML\UIParent.xml",
         r"Interface\FrameXML\MoneyFrame.lua",
         r"Interface\FrameXML\MoneyFrame.xml",
         "Interface\\FrameXML\\GameTooltip.xml",
-        "Interface\\FrameXML\\UIDropDownMenu.xml",
         "Interface\\FrameXML\\UIMenu.xml",
-        "Interface\\FrameXML\\GlobalStrings.lua",
-        "Interface\\FrameXML\\BasicControls.xml",
-        "Interface\\FrameXML\\ChatFrame.xml",
+        "Interface\\FrameXML\\UIDropDownMenu.xml",
         "Interface\\FrameXML\\UIPanelTemplates.lua",
         "Interface\\FrameXML\\UIPanelTemplates.xml",
-        r"Interface\FrameXML\UIParent.xml",
-        "Interface\\FrameXML\\LocaleProperties.lua",
         "Interface\\FrameXML\\StaticPopup.xml",
+        "Interface\\FrameXML\\ChatFrame.xml",
         "Interface\\FrameXML\\FloatingChatFrame.xml",
     ] {
         crate::ui_script::load_ui_for_test(&s, file);

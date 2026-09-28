@@ -584,10 +584,12 @@ mod tests {
         let (mut app, _rx) = feed_app(|s| {
             s.set_screen_size(1024.0, 768.0);
             s.set_text_measurer(Box::new(crate::ui_script::FixedWidthFont(6.0)));
-            for f in crate::ui_script::test_ui::GOSSIP_UI {
+            for f in crate::ui_script::test_ui::production_order(&[
+                crate::ui_script::test_ui::GOSSIP_UI,
+                &[r"Interface\FrameXML\GossipFrame.xml"],
+            ]) {
                 crate::ui_script::test_ui::load_ui(s, f);
             }
-            crate::ui_script::test_ui::load_ui(s, r"Interface\FrameXML\GossipFrame.xml");
             s.run(RECORDER).unwrap();
         });
         // What the window shows: visible?, the greeting, the first row's label, the kits played.

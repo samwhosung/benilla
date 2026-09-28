@@ -22,9 +22,9 @@ fn harness() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(&s, "ScrollTemplates.xml");
     load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
     load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
+    load_xml(&s, "ScrollTemplates.xml");
     load_inline(
         &s,
         r#"<Ui>
@@ -367,9 +367,9 @@ fn scrolling_edit_helpers_answer_bare_calls_from_a_handler() {
     benilla_formats::wow_data_or_skip!();
     let s = UiScript::new().unwrap();
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(&s, "ScrollTemplates.xml");
     load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
     load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
+    load_xml(&s, "ScrollTemplates.xml");
     load_inline(
         &s,
         r#"<Ui>

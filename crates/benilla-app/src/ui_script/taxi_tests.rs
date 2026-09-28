@@ -10,20 +10,21 @@ use super::test_ui::load_ui as load_xml;
 fn taxi_script() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");
-    load_xml(&s, r"Interface\FrameXML\MoneyFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
+    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
     load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
-    load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
-    load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml"); // TaxiNodeOnButtonEnter's tooltip
-    load_xml(&s, "Interface\\FrameXML\\UIErrorsFrame.xml");
-    // UIErrorsFrame takes `DrawOneHopLines`' refusal; a missing `ERR_TAXINOPATHS` draws blank.
+    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
+    load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");
+    load_xml(&s, r"Interface\FrameXML\MoneyFrame.xml");
+    // TaxiNodeOnButtonEnter's tooltip.
+    load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml");
     // Without UIPanelTemplates, `TaxiCloseButton` loses its `UIPanelCloseButton` handler.
     load_xml(&s, "Interface\\FrameXML\\UIPanelTemplates.lua");
     load_xml(&s, "Interface\\FrameXML\\UIPanelTemplates.xml");
+    // UIErrorsFrame takes `DrawOneHopLines`' refusal; a missing `ERR_TAXINOPATHS` draws blank.
+    load_xml(&s, "Interface\\FrameXML\\UIErrorsFrame.xml");
+    load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
     load_xml(&s, "Interface\\FrameXML\\TaxiFrame.xml");
     s
 }

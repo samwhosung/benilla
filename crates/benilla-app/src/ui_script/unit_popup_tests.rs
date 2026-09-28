@@ -6,42 +6,42 @@ use benilla_ui::script::{FollowRequest, PartyRequest, UiScript, UnitState};
 
 use super::test_ui::load_ui as load_xml;
 
-/// The files the popups need, in `benilla.toc`'s order, ending with `FriendsFrame.xml`, home of
+/// The files the popups need, in the production order, ending with `FriendsFrame.xml`, home of
 /// `FriendsFrame_ShowDropdown` and `FriendsDropDown`.
 fn load_popup_frames(s: &UiScript) {
     for file in [
+        "Interface\\FrameXML\\GlobalStrings.lua",
         "Interface\\FrameXML\\Fonts.xml",
+        "Interface\\FrameXML\\BasicControls.xml", // `TEXT`, read at file scope below
+        "Interface\\FrameXML\\LocaleProperties.lua",
         r"Interface\FrameXML\UIParent.xml",
         // `SmallMoneyFrame_OnLoad`, which the chain's StaticPopup money rows call at load.
         r"Interface\FrameXML\MoneyFrame.lua",
         r"Interface\FrameXML\MoneyFrame.xml",
-        // `StaticPopupDialogs` and `PanelTemplates_*`, which FriendsFrame.xml reaches at load.
-        "Interface\\FrameXML\\GlobalStrings.lua",
-        "Interface\\FrameXML\\BasicControls.xml", // `TEXT`, read at file scope below
-        "Interface\\FrameXML\\LocaleProperties.lua",
-        r"Interface\FrameXML\UIPanelTemplates.lua",
-        r"Interface\FrameXML\UIPanelTemplates.xml",
-        "Interface\\FrameXML\\StaticPopup.xml",
         "Interface\\FrameXML\\GameTooltip.xml",
         "Interface\\FrameXML\\UIMenu.xml",
-        "Interface\\FrameXML\\ChatFrame.xml",
         "Interface\\FrameXML\\UIDropDownMenu.xml",
-        "Interface\\FrameXML\\UnitPopup.xml",
-        "Interface\\FrameXML\\ItemRef.xml",
+        // `StaticPopupDialogs` and `PanelTemplates_*`, which FriendsFrame.xml reaches at load.
+        r"Interface\FrameXML\UIPanelTemplates.lua",
+        r"Interface\FrameXML\UIPanelTemplates.xml",
+        "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+        "Interface\\FrameXML\\StaticPopup.xml",
         "Interface\\FrameXML\\TextStatusBar.lua",
         "Interface\\FrameXML\\TextStatusBar.xml",
         "Interface\\FrameXML\\BuffFrame.xml",
-        "Interface\\FrameXML\\UnitFrame.xml",
         "Interface\\FrameXML\\CombatFeedback.xml",
+        "Interface\\FrameXML\\UnitPopup.xml",
+        "Interface\\FrameXML\\UnitFrame.xml",
         "Interface\\FrameXML\\PlayerFrame.xml",
         "Interface\\FrameXML\\PartyFrame.xml",
         "Interface\\FrameXML\\TargetFrame.xml",
         "Interface\\FrameXML\\PetFrame.xml",
-        "ScrollTemplates.xml",
-        "Interface\\FrameXML\\CharacterFrameTemplates.xml",
-        "Interface\\FrameXML\\FriendsFrame.xml",
+        "Interface\\FrameXML\\ChatFrame.xml",
         // Declares `ChatFrameEditBox`, which the rename dialog's OnHide refocuses.
         "Interface\\FrameXML\\FloatingChatFrame.xml",
+        "Interface\\FrameXML\\FriendsFrame.xml",
+        "Interface\\FrameXML\\ItemRef.xml",
+        "ScrollTemplates.xml",
     ] {
         load_xml(s, file);
     }
@@ -451,37 +451,37 @@ fn solo_target_inspect_click_reaches_inspect_unit() {
 /// The pet menu's files, with `StaticPopup.xml` for the rename and abandon dialogs.
 fn load_pet_menu_frames(s: &UiScript) {
     for file in [
+        "Interface\\FrameXML\\GlobalStrings.lua",
         "Interface\\FrameXML\\Fonts.xml",
+        "Interface\\FrameXML\\BasicControls.xml", // `TEXT`, read at file scope below
+        "Interface\\FrameXML\\LocaleProperties.lua",
         r"Interface\FrameXML\UIParent.xml",
         r"Interface\FrameXML\MoneyFrame.lua",
         r"Interface\FrameXML\MoneyFrame.xml",
-        "Interface\\FrameXML\\GlobalStrings.lua",
-        r"Interface\FrameXML\UIPanelTemplates.lua",
-        r"Interface\FrameXML\UIPanelTemplates.xml",
-        "Interface\\FrameXML\\BasicControls.xml", // `TEXT`, read at file scope below
-        "Interface\\FrameXML\\LocaleProperties.lua",
-        "Interface\\FrameXML\\StaticPopup.xml",
         "Interface\\FrameXML\\GameTooltip.xml",
         "Interface\\FrameXML\\UIMenu.xml",
-        "Interface\\FrameXML\\ChatFrame.xml",
         "Interface\\FrameXML\\UIDropDownMenu.xml",
-        "Interface\\FrameXML\\UnitPopup.xml",
+        r"Interface\FrameXML\UIPanelTemplates.lua",
+        r"Interface\FrameXML\UIPanelTemplates.xml",
+        "Interface\\FrameXML\\StaticPopup.xml",
         "Interface\\FrameXML\\TextStatusBar.lua",
         "Interface\\FrameXML\\TextStatusBar.xml",
+        "Interface\\FrameXML\\MainMenuBar.xml",
+        "Interface\\FrameXML\\Cooldown.xml",
+        "Interface\\FrameXML\\ActionButtonTemplate.xml",
+        "Interface\\FrameXML\\ActionBarFrame.xml",
         "Interface\\FrameXML\\BuffFrame.xml",
-        "Interface\\FrameXML\\UnitFrame.xml",
         "Interface\\FrameXML\\CombatFeedback.xml",
+        "Interface\\FrameXML\\UnitPopup.xml",
+        "Interface\\FrameXML\\UnitFrame.xml",
         "Interface\\FrameXML\\PlayerFrame.xml",
         "Interface\\FrameXML\\PartyFrame.xml",
         "Interface\\FrameXML\\TargetFrame.xml",
         "Interface\\FrameXML\\PetFrame.xml",
-        "Interface\\FrameXML\\Cooldown.xml",
-        "Interface\\FrameXML\\ActionButtonTemplate.xml",
-        "Interface\\FrameXML\\MainMenuBar.xml",
-        "Interface\\FrameXML\\ActionBarFrame.xml",
-        "Interface\\FrameXML\\BonusActionBarFrame.xml",
+        "Interface\\FrameXML\\ChatFrame.xml",
         // Declares `ChatFrameEditBox`, which the rename dialog's OnHide refocuses.
         "Interface\\FrameXML\\FloatingChatFrame.xml",
+        "Interface\\FrameXML\\BonusActionBarFrame.xml",
     ] {
         load_xml(s, file);
     }

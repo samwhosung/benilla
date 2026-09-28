@@ -75,24 +75,24 @@ fn the_self_menu_row_gates_on_the_binding_and_confirms_before_sending() {
     )
     .unwrap();
     for file in [
+        "Interface\\FrameXML\\GlobalStrings.lua",
         "Interface\\FrameXML\\Fonts.xml",
+        "Interface\\FrameXML\\BasicControls.xml",
+        "Interface\\FrameXML\\LocaleProperties.lua", // `GetText`, the gender and plural lookup
         r"Interface\FrameXML\UIParent.xml",
         r"Interface\FrameXML\MoneyFrame.lua",
         r"Interface\FrameXML\MoneyFrame.xml",
-        r"Interface\FrameXML\UIPanelTemplates.lua",
-        r"Interface\FrameXML\UIPanelTemplates.xml",
-        "Interface\\FrameXML\\GlobalStrings.lua",
-        "Interface\\FrameXML\\BasicControls.xml",
-        "Interface\\FrameXML\\LocaleProperties.lua", // `GetText`, the gender and plural lookup
-        "Interface\\FrameXML\\StaticPopup.xml",
         "Interface\\FrameXML\\GameTooltip.xml",
         "Interface\\FrameXML\\UIDropDownMenu.xml",
-        "Interface\\FrameXML\\UnitPopup.xml",
+        r"Interface\FrameXML\UIPanelTemplates.lua",
+        r"Interface\FrameXML\UIPanelTemplates.xml",
+        "Interface\\FrameXML\\StaticPopup.xml",
         "Interface\\FrameXML\\TextStatusBar.lua",
         "Interface\\FrameXML\\TextStatusBar.xml",
         "Interface\\FrameXML\\BuffFrame.xml",
-        "Interface\\FrameXML\\UnitFrame.xml",
         "Interface\\FrameXML\\CombatFeedback.xml",
+        "Interface\\FrameXML\\UnitPopup.xml",
+        "Interface\\FrameXML\\UnitFrame.xml",
         "Interface\\FrameXML\\PlayerFrame.xml",
         "Interface\\FrameXML\\PartyFrame.xml",
         "Interface\\FrameXML\\TargetFrame.xml",

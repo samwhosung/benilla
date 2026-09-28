@@ -8,33 +8,33 @@ use benilla_ui::script::{
 
 mod common;
 
-/// The auction window's load prefix, in the app's order (`assets/ui/benilla.toc`): UIParent for
+/// The auction window's load prefix, in the production order: UIParent for
 /// `ShowUIPanel`, UIPanelTemplates for the tab kit and widget templates, StaticPopup for the
 /// dialogs, MoneyFrame for `SmallMoneyFrameTemplate` and `MoneyTypeInfo`, MoneyInputFrame for
 /// the price entry, UIDropDownMenu for the rarity menu, ScrollTemplates for the faux lists.
 const FILES: &[&str] = &[
+    "Interface\\FrameXML\\GlobalStrings.lua",
     "Interface\\FrameXML\\Fonts.xml",
+    "Interface\\FrameXML\\BasicControls.xml",
+    "Interface\\FrameXML\\LocaleProperties.lua",
+    r"Interface\FrameXML\UIParent.xml",
     r"Interface\FrameXML\MoneyFrame.lua",
     r"Interface\FrameXML\MoneyFrame.xml",
     // `MoneyInputFrameTemplate` and the `MoneyInputFrame_*` verbs.
     r"Interface\FrameXML\MoneyInputFrame.lua",
     r"Interface\FrameXML\MoneyInputFrame.xml",
-    r"Interface\FrameXML\UIParent.xml",
     // UIParent declares `ITEM_QUALITY_COLORS` (`UIParent.lua:65`), which colours each row name.
     "Interface\\FrameXML\\GameTooltip.xml",
     "Interface\\FrameXML\\UIDropDownMenu.xml",
-    "ScrollTemplates.xml",
     r"Interface\FrameXML\UIPanelTemplates.lua",
     r"Interface\FrameXML\UIPanelTemplates.xml",
     // `AuctionTabTemplate` inherits `CharacterFrameTabButtonTemplate`; `inherits=` resolves at
     // load, so it comes first.
     r"Interface\FrameXML\CharacterFrameTemplates.xml",
-    "Interface\\FrameXML\\GlobalStrings.lua",
-    "Interface\\FrameXML\\BasicControls.xml",
-    "Interface\\FrameXML\\LocaleProperties.lua",
     "Interface\\FrameXML\\StaticPopup.xml", // the dialog engine
     // The dress-up pane's OnLoad calls `DressUpTexturePath` (`DressUpFrame.lua`).
     "Interface\\FrameXML\\DressUpFrame.xml",
+    "ScrollTemplates.xml",
     // The addon in its toc order, loaded as chain files: a test has no addon registry.
     "Interface\\AddOns\\Blizzard_AuctionUI\\Blizzard_AuctionUI.xml",
     "Interface\\AddOns\\Blizzard_AuctionUI\\Blizzard_AuctionDressUp.xml",

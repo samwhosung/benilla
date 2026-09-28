@@ -54,7 +54,7 @@ function BuyGuildCharter(name) record("BuyGuildCharter:" .. name) end
 function RenamePetition(name) record("RenamePetition:" .. name) end
 "#;
 
-/// The windows' manifest slice in `benilla.toc` order, the fixture first; `MoneyFrame.xml` comes
+/// The windows' slice of the production load, the fixture first; `MoneyFrame.xml` comes
 /// before the registrar, whose price row inherits `MoneyFrameTemplate` at load.
 fn setup() -> UiScript {
     let mut s = UiScript::new().unwrap();
@@ -64,29 +64,27 @@ fn setup() -> UiScript {
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
     load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");
+    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
+    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.xml");
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
-    load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
-    // `QuestFrame.xml` includes `QuestTitleButtonTemplate`, which the registrar's rows inherit.
-    load_xml(&s, "ScrollTemplates.xml");
-    load_xml(&s, "Interface\\FrameXML\\ItemButtonTemplate.xml");
-    load_xml(&s, "Interface\\FrameXML\\QuestFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\QuestLogFrame.xml");
     // `ChatFrameEditBox`, which the stock purchase button focuses unguarded
     // (`GuildRegistrarFrame.xml:271`).
     load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml"); // TOOLTIP_DEFAULT_COLOR, for dropdowns
-    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml"); // ChatFrame's dropdowns inherit it
     load_xml(&s, "Interface\\FrameXML\\UIMenu.xml"); // the kit the chat menus build from
+    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml"); // ChatFrame's dropdowns inherit it
+    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
+    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
+    load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
     load_xml(&s, "Interface\\FrameXML\\ChatFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\UIPanelTemplates.lua");
-    load_xml(&s, "Interface\\FrameXML\\UIPanelTemplates.xml");
     load_xml(&s, "Interface\\FrameXML\\FloatingChatFrame.xml");
+    load_xml(&s, "Interface\\FrameXML\\ItemButtonTemplate.xml");
+    // `QuestFrame.xml` includes `QuestTitleButtonTemplate`, which the registrar's rows inherit.
+    load_xml(&s, "Interface\\FrameXML\\QuestFrame.xml");
+    load_xml(&s, "Interface\\FrameXML\\QuestLogFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\GuildRegistrarFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\PetitionFrame.xml");
+    load_xml(&s, "ScrollTemplates.xml");
     s
 }
 

@@ -2,13 +2,15 @@
 //! `ui_script::test_ui::load_ui`, which is `#[cfg(test)]`. A bare filename is a file we ship
 //! under `assets/ui`, a path is the reference's own off the installed chain, and `<Script file>`
 //! includes resolve through the same provider. A test that names a chain entry opens with
-//! `benilla_formats::wow_data_or_skip!()`.
+//! `benilla_formats::wow_data_or_skip!()`. A kit loads in the production order, `FrameXML.toc`'s
+//! then `layer.toc`'s, which every load checks ([`follow_production_order`]).
 
 use benilla_ui::script::UiScript;
 
 /// Load one manifest entry into `script`, panicking on any loader error. A `.lua` entry runs as a
 /// chunk of raw bytes, as `GlobalStrings.lua` does in the real manifest; only XML is decoded.
 pub fn load_ui(script: &UiScript, entry: &str) {
+    follow_production_order(script, entry);
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui");
     let chain = |req: &str| -> Option<Vec<u8>> {
         let data = benilla_formats::wow_data()?;
@@ -50,6 +52,97 @@ pub fn load_ui(script: &UiScript, entry: &str) {
             .run(UIPARENT_STAND_INS)
             .expect("the UIParent stand-ins");
     }
+}
+
+/// Where `entry` falls in the production load: a `FrameXML.toc` row at its row, a file a row pulls
+/// in (`<Include>` or `<Script file=>`, at any depth) just above the first row that does, a layer
+/// file after every row, and `None` for anything else; the copy of
+/// `ui_script::test_ui::production_rank`.
+fn production_rank(entry: &str) -> Option<usize> {
+    static RANKS: std::sync::OnceLock<std::collections::HashMap<String, usize>> =
+        std::sync::OnceLock::new();
+    let ranks = RANKS.get_or_init(|| {
+        let key = |path: &str| path.replace('/', "\\").to_ascii_lowercase();
+        let mut ranks = std::collections::HashMap::new();
+        let Some(chain) =
+            benilla_formats::wow_data().and_then(|data| benilla_formats::open_chain(&data).ok())
+        else {
+            return ranks;
+        };
+        let read = |path: &str| chain.read(path).ok();
+        let toc = read(r"Interface\FrameXML\FrameXML.toc").unwrap_or_default();
+        let rows: Vec<String> = benilla_ui::toc::Toc::parse(&benilla_ui::source::decode(&toc))
+            .files
+            .iter()
+            .map(|f| format!(r"Interface\FrameXML\{f}"))
+            .collect();
+        for (i, row) in rows.iter().enumerate() {
+            ranks.insert(key(row), 2 * i + 1);
+        }
+        for (i, row) in rows.iter().enumerate() {
+            let mut queue = vec![row.clone()];
+            while let Some(file) = queue.pop() {
+                let Some(bytes) = read(&file) else { continue };
+                let text = String::from_utf8_lossy(&bytes);
+                for chunk in text.split('<').skip(1) {
+                    let tag = chunk.split('>').next().unwrap_or("").trim_start();
+                    if !tag.starts_with("Include") && !tag.starts_with("Script") {
+                        continue;
+                    }
+                    let Some(name) = tag
+                        .split("file=\"")
+                        .nth(1)
+                        .and_then(|r| r.split('"').next())
+                    else {
+                        continue;
+                    };
+                    let path = format!(r"Interface\FrameXML\{name}");
+                    if let std::collections::hash_map::Entry::Vacant(slot) = ranks.entry(key(&path))
+                    {
+                        slot.insert(2 * i);
+                        queue.push(path);
+                    }
+                }
+            }
+        }
+        let layer = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui/layer.toc");
+        let layer = std::fs::read_to_string(layer).unwrap_or_default();
+        let after = 2 * rows.len() + 2;
+        for (j, file) in benilla_ui::toc::Toc::parse(&layer).files.iter().enumerate() {
+            ranks.insert(key(file), after + j);
+        }
+        ranks
+    });
+    ranks
+        .get(&entry.replace('/', "\\").to_ascii_lowercase())
+        .copied()
+}
+
+thread_local! {
+    /// Per VM session, the furthest [`production_rank`] a kit has loaded and the file at it.
+    static KIT_AT: std::cell::RefCell<std::collections::HashMap<u64, (usize, String)>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Panics when `entry` loads after a file the production load runs after it.
+fn follow_production_order(script: &UiScript, entry: &str) {
+    let Some(rank) = production_rank(entry) else {
+        return;
+    };
+    KIT_AT.with(|at| {
+        let mut at = at.borrow_mut();
+        if let Some((furthest, file)) = at.get(&script.session()) {
+            assert!(
+                rank >= *furthest,
+                "{entry} loads after {file}, but the production load runs it first: a kit \
+                 follows FrameXML.toc's order, then layer.toc's"
+            );
+            if rank == *furthest {
+                return;
+            }
+        }
+        at.insert(script.session(), (rank, entry.to_string()));
+    });
 }
 
 /// The stock `UIParent.xml`'s unguarded callees, stood in for at load; the copy of

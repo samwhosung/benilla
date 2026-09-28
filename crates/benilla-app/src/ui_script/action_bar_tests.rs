@@ -11,19 +11,38 @@ fn shipped_action_bar_drives_end_to_end() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\Cooldown.xml");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\TextStatusBar.lua");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\TextStatusBar.xml");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\Fonts.xml");
-    super::test_ui::load_ui(&s, r"Interface\FrameXML\UIParent.xml");
-    super::test_ui::load_ui(&s, r"Interface\FrameXML\MoneyFrame.lua");
-    super::test_ui::load_ui(&s, r"Interface\FrameXML\MoneyFrame.xml");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\GameTooltip.xml");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\GlobalStrings.lua");
-    let frames = super::test_ui::load_ui(&s, "Interface\\FrameXML\\MainMenuBar.xml")
-        + super::test_ui::load_ui(&s, "Interface\\FrameXML\\ActionBarFrame.xml")
-        + super::test_ui::load_ui(&s, "Interface\\FrameXML\\BonusActionBarFrame.xml");
+    // The three stock bar files, counted as they load; `ExhaustionTick_Update` reads
+    // `ReputationWatchBar`, which ReputationFrame.xml declares.
+    const BAR: [&str; 3] = [
+        "Interface\\FrameXML\\MainMenuBar.xml",
+        "Interface\\FrameXML\\ActionBarFrame.xml",
+        "Interface\\FrameXML\\BonusActionBarFrame.xml",
+    ];
+    let mut frames = 0;
+    for file in [
+        "Interface\\FrameXML\\GlobalStrings.lua",
+        "Interface\\FrameXML\\Fonts.xml",
+        r"Interface\FrameXML\UIParent.xml",
+        r"Interface\FrameXML\MoneyFrame.lua",
+        r"Interface\FrameXML\MoneyFrame.xml",
+        "Interface\\FrameXML\\GameTooltip.xml",
+        r"Interface\FrameXML\UIPanelTemplates.lua",
+        r"Interface\FrameXML\UIPanelTemplates.xml",
+        r"Interface\FrameXML\OptionsFrameTemplates.xml",
+        "Interface\\FrameXML\\TextStatusBar.lua",
+        "Interface\\FrameXML\\TextStatusBar.xml",
+        BAR[0],
+        "Interface\\FrameXML\\Cooldown.xml",
+        "Interface\\FrameXML\\ActionButtonTemplate.xml",
+        BAR[1],
+        r"Interface\FrameXML\ReputationFrame.xml",
+        BAR[2],
+    ] {
+        let built = super::test_ui::load_ui(&s, file);
+        if BAR.contains(&file) {
+            frames += built;
+        }
+    }
     assert_eq!(
         frames, 80,
         "what the three stock files declare: MainMenuBar.xml's 8 — the bar, the XP StatusBar, \
@@ -34,13 +53,6 @@ fn shipped_action_bar_drives_end_to_end() {
          Ours built 59 for the same seats: no shapeshift bar in the file (StanceBar.xml's), no \
          overlay frame, no performance-bar button"
     );
-
-    // `ExhaustionTick_Update` reads `ReputationWatchBar`, which ReputationFrame.xml declares.
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\Fonts.xml");
-    super::test_ui::load_ui(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
-    super::test_ui::load_ui(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
-    super::test_ui::load_ui(&s, r"Interface\FrameXML\OptionsFrameTemplates.xml");
-    super::test_ui::load_ui(&s, r"Interface\FrameXML\ReputationFrame.xml");
 
     // A warrior in Battle Stance: bonus offset 1, actions 73..84.
     s.set_bonus_bar_offset(1);
@@ -157,35 +169,33 @@ fn shipped_action_bar_drives_end_to_end() {
 }
 
 fn load_action_bar(s: &UiScript) {
-    super::test_ui::load_ui(s, "Interface\\FrameXML\\Cooldown.xml");
-    super::test_ui::load_ui(s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
-    super::test_ui::load_ui(s, "Interface\\FrameXML\\TextStatusBar.lua");
-    super::test_ui::load_ui(s, "Interface\\FrameXML\\TextStatusBar.xml");
-    super::test_ui::load_ui(s, "Interface\\FrameXML\\Fonts.xml");
-    super::test_ui::load_ui(s, r"Interface\FrameXML\UIParent.xml");
     super::test_ui::load_ui(s, "Interface\\FrameXML\\GlobalStrings.lua");
-    super::test_ui::load_ui(s, "Interface\\FrameXML\\MainMenuBar.xml");
+    super::test_ui::load_ui(s, "Interface\\FrameXML\\Fonts.xml");
+    super::test_ui::load_ui(s, r"Interface\FrameXML\BasicControls.xml"); // `TEXT`
+    super::test_ui::load_ui(s, r"Interface\FrameXML\LocaleProperties.lua"); // `GetText`
+    super::test_ui::load_ui(s, r"Interface\FrameXML\UIParent.xml");
     super::test_ui::load_ui(s, r"Interface\FrameXML\MoneyFrame.lua");
     super::test_ui::load_ui(s, r"Interface\FrameXML\MoneyFrame.xml");
     super::test_ui::load_ui(s, "Interface\\FrameXML\\GameTooltip.xml");
-    super::test_ui::load_ui(s, "Interface\\FrameXML\\ActionBarFrame.xml");
-    super::test_ui::load_ui(s, "Interface\\FrameXML\\BonusActionBarFrame.xml");
-
-    // `ExhaustionTick_Update` reads `ReputationWatchBar`, which ReputationFrame.xml declares.
-    super::test_ui::load_ui(s, "Interface\\FrameXML\\Fonts.xml");
+    super::test_ui::load_ui(s, "Interface\\FrameXML\\UIDropDownMenu.xml");
     super::test_ui::load_ui(s, r"Interface\FrameXML\UIPanelTemplates.lua");
     super::test_ui::load_ui(s, r"Interface\FrameXML\UIPanelTemplates.xml");
     super::test_ui::load_ui(s, r"Interface\FrameXML\OptionsFrameTemplates.xml");
-    super::test_ui::load_ui(s, r"Interface\FrameXML\ReputationFrame.xml");
-    // StaticPopup.xml: the keybindings page adds its two confirm dialogs to `StaticPopupDialogs`.
-    super::test_ui::load_ui(s, r"Interface\FrameXML\BasicControls.xml"); // `TEXT`
-    super::test_ui::load_ui(s, r"Interface\FrameXML\LocaleProperties.lua"); // `GetText`
-    super::test_ui::load_ui(s, r"Interface\FrameXML\StaticPopup.xml");
-    super::test_ui::load_ui(s, "Interface\\FrameXML\\UIDropDownMenu.xml");
     // `UIOptionsFrame_Init` declares `LOCK_ACTIONBAR` and `ALWAYS_SHOW_MULTIBARS`
     // (UIOptionsFrame.lua:93-107), before our window, whose rows take their defaults from them.
     super::test_ui::load_ui(s, r"Interface\FrameXML\OptionsFrame.lua");
     super::test_ui::load_ui(s, r"Interface\FrameXML\UIOptionsFrame.xml");
+    // StaticPopup.xml: the keybindings page adds its two confirm dialogs to `StaticPopupDialogs`.
+    super::test_ui::load_ui(s, r"Interface\FrameXML\StaticPopup.xml");
+    super::test_ui::load_ui(s, "Interface\\FrameXML\\TextStatusBar.lua");
+    super::test_ui::load_ui(s, "Interface\\FrameXML\\TextStatusBar.xml");
+    super::test_ui::load_ui(s, "Interface\\FrameXML\\MainMenuBar.xml");
+    super::test_ui::load_ui(s, "Interface\\FrameXML\\Cooldown.xml");
+    super::test_ui::load_ui(s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
+    super::test_ui::load_ui(s, "Interface\\FrameXML\\ActionBarFrame.xml");
+    // `ExhaustionTick_Update` reads `ReputationWatchBar`, which ReputationFrame.xml declares.
+    super::test_ui::load_ui(s, r"Interface\FrameXML\ReputationFrame.xml");
+    super::test_ui::load_ui(s, "Interface\\FrameXML\\BonusActionBarFrame.xml");
     super::test_ui::load_ui(s, "ScrollTemplates.xml");
     super::test_ui::load_ui(s, "KeyBindingsPage.xml");
     super::test_ui::load_ui(s, "OptionsFrame.xml");
@@ -1014,32 +1024,22 @@ fn shipped_bag_frame_drives_end_to_end() {
 
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    // `BAG_UI` is `benilla.toc`'s order for a bag window. The bag buttons are parented to
-    // `MainMenuBarArtFrame`, so the main bar's files follow Cooldown.xml, and
     // `ContainerFrameItemButton_OnClick` reads `StackSplitFrame` and `MerchantFrame`
-    // (ContainerFrame.lua:581, 586), so both load after the bags.
+    // (ContainerFrame.lua:581, 586), which the bag kit leaves to its caller.
     let mut bar_frames = 0;
-    for file in BAG_UI {
+    for file in super::test_ui::production_order(&[
+        BAG_UI,
+        &[
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            "Interface\\FrameXML\\StackSplitFrame.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+        ],
+    ]) {
         let frames = load_ui(&s, file);
-        if *file == "Interface\\FrameXML\\Cooldown.xml" {
-            load_ui(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
-            load_ui(&s, "Interface\\FrameXML\\TextStatusBar.lua");
-            load_ui(&s, "Interface\\FrameXML\\TextStatusBar.xml");
-            load_ui(&s, "Interface\\FrameXML\\Fonts.xml");
-            load_ui(&s, r"Interface\FrameXML\UIParent.xml");
-            load_ui(&s, "ScrollTemplates.xml"); // our scroll kits
-            load_ui(&s, "Interface\\FrameXML\\GlobalStrings.lua");
-            load_ui(&s, "Interface\\FrameXML\\MainMenuBar.xml");
-            load_ui(&s, "Interface\\FrameXML\\ActionBarFrame.xml");
-            load_ui(&s, "Interface\\FrameXML\\BonusActionBarFrame.xml");
-        }
-        if *file == "Interface\\FrameXML\\MainMenuBarBagButtons.xml" {
+        if file == "Interface\\FrameXML\\MainMenuBarBagButtons.xml" {
             bar_frames = frames;
         }
     }
-    load_ui(&s, "Interface\\FrameXML\\StackSplitFrame.xml");
-    load_ui(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
-    load_ui(&s, "Interface\\FrameXML\\MerchantFrame.xml");
 
     assert_eq!(
         bar_frames, 16,
@@ -1470,40 +1470,37 @@ fn the_main_bar_pages_and_a_bonus_page_still_outranks_it() {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     for file in [
+        "Interface\\FrameXML\\GlobalStrings.lua",
         // Fonts first: the reputation pane's check boxes read `RED_FONT_COLOR` in their OnLoad.
         "Interface\\FrameXML\\Fonts.xml",
+        "Interface\\FrameXML\\BasicControls.xml",
+        "Interface\\FrameXML\\LocaleProperties.lua",
         r"Interface\FrameXML\UIParent.xml",
-        "Interface\\FrameXML\\Cooldown.xml",
-        "Interface\\FrameXML\\ActionButtonTemplate.xml",
-        "Interface\\FrameXML\\TextStatusBar.lua",
-        "Interface\\FrameXML\\TextStatusBar.xml",
-        "Interface\\FrameXML\\GlobalStrings.lua",
-        "Interface\\FrameXML\\MainMenuBar.xml",
         r"Interface\FrameXML\MoneyFrame.lua",
         r"Interface\FrameXML\MoneyFrame.xml",
         "Interface\\FrameXML\\GameTooltip.xml",
-        "Interface\\FrameXML\\ActionBarFrame.xml",
-        "Interface\\FrameXML\\BonusActionBarFrame.xml",
-        // `ExhaustionTick_Update` reads `ReputationWatchBar`, which ReputationFrame.xml declares.
+        "Interface\\FrameXML\\UIDropDownMenu.xml",
         r"Interface\FrameXML\UIPanelTemplates.lua",
         r"Interface\FrameXML\UIPanelTemplates.xml",
         r"Interface\FrameXML\OptionsFrameTemplates.xml",
-        r"Interface\FrameXML\ReputationFrame.xml",
-        "Interface\\FrameXML\\ActionBarFrame.xml",
-        "Interface\\FrameXML\\UIDropDownMenu.xml",
-        "ScrollTemplates.xml",
-        r"Interface\FrameXML\UIPanelTemplates.lua",
-        r"Interface\FrameXML\UIPanelTemplates.xml",
-        "Interface\\FrameXML\\BasicControls.xml",
-        "Interface\\FrameXML\\LocaleProperties.lua",
-        "Interface\\FrameXML\\StaticPopup.xml",
-        "KeyBindingsPage.xml",
         // `UIOptionsFrame_Init`'s uvars and `UIOptionsFrameCheckButtons`, which
         // `MultiActionBarFrame_OnLoad` writes (MultiActionBars.lua:8-22), so ahead of the bars.
         r"Interface\FrameXML\OptionsFrame.lua",
         r"Interface\FrameXML\UIOptionsFrame.xml",
-        "OptionsFrame.xml",
+        "Interface\\FrameXML\\StaticPopup.xml",
+        "Interface\\FrameXML\\TextStatusBar.lua",
+        "Interface\\FrameXML\\TextStatusBar.xml",
+        "Interface\\FrameXML\\MainMenuBar.xml",
+        "Interface\\FrameXML\\Cooldown.xml",
+        "Interface\\FrameXML\\ActionButtonTemplate.xml",
+        "Interface\\FrameXML\\ActionBarFrame.xml",
         "Interface\\FrameXML\\MultiActionBars.xml",
+        // `ExhaustionTick_Update` reads `ReputationWatchBar`, which ReputationFrame.xml declares.
+        r"Interface\FrameXML\ReputationFrame.xml",
+        "Interface\\FrameXML\\BonusActionBarFrame.xml",
+        "ScrollTemplates.xml",
+        "KeyBindingsPage.xml",
+        "OptionsFrame.xml",
     ] {
         super::test_ui::load_ui(&s, file);
     }
@@ -1626,26 +1623,24 @@ fn bonus_bar_slides_up_with_sound_and_down_without() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\Cooldown.xml");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\TextStatusBar.lua");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\TextStatusBar.xml");
+    super::test_ui::load_ui(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     super::test_ui::load_ui(&s, "Interface\\FrameXML\\Fonts.xml");
     super::test_ui::load_ui(&s, r"Interface\FrameXML\UIParent.xml");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\GlobalStrings.lua");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\MainMenuBar.xml");
     super::test_ui::load_ui(&s, r"Interface\FrameXML\MoneyFrame.lua");
     super::test_ui::load_ui(&s, r"Interface\FrameXML\MoneyFrame.xml");
     super::test_ui::load_ui(&s, "Interface\\FrameXML\\GameTooltip.xml");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\ActionBarFrame.xml");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\BonusActionBarFrame.xml");
-
-    // `ExhaustionTick_Update` reads `ReputationWatchBar`, which ReputationFrame.xml declares.
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\Fonts.xml");
     super::test_ui::load_ui(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
     super::test_ui::load_ui(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
     super::test_ui::load_ui(&s, r"Interface\FrameXML\OptionsFrameTemplates.xml");
+    super::test_ui::load_ui(&s, "Interface\\FrameXML\\TextStatusBar.lua");
+    super::test_ui::load_ui(&s, "Interface\\FrameXML\\TextStatusBar.xml");
+    super::test_ui::load_ui(&s, "Interface\\FrameXML\\MainMenuBar.xml");
+    super::test_ui::load_ui(&s, "Interface\\FrameXML\\Cooldown.xml");
+    super::test_ui::load_ui(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
+    super::test_ui::load_ui(&s, "Interface\\FrameXML\\ActionBarFrame.xml");
+    // `ExhaustionTick_Update` reads `ReputationWatchBar`, which ReputationFrame.xml declares.
     super::test_ui::load_ui(&s, r"Interface\FrameXML\ReputationFrame.xml");
+    super::test_ui::load_ui(&s, "Interface\\FrameXML\\BonusActionBarFrame.xml");
     s.fire_event("PLAYER_ENTERING_WORLD", vec![]);
     s.tick(10.0); // a nonzero clock epoch
     let _ = s.take_sounds();
@@ -1838,26 +1833,24 @@ fn bonus_bar_turnaround_continues_from_position() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\Cooldown.xml");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\TextStatusBar.lua");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\TextStatusBar.xml");
+    super::test_ui::load_ui(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     super::test_ui::load_ui(&s, "Interface\\FrameXML\\Fonts.xml");
     super::test_ui::load_ui(&s, r"Interface\FrameXML\UIParent.xml");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\GlobalStrings.lua");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\MainMenuBar.xml");
     super::test_ui::load_ui(&s, r"Interface\FrameXML\MoneyFrame.lua");
     super::test_ui::load_ui(&s, r"Interface\FrameXML\MoneyFrame.xml");
     super::test_ui::load_ui(&s, "Interface\\FrameXML\\GameTooltip.xml");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\ActionBarFrame.xml");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\BonusActionBarFrame.xml");
-
-    // `ExhaustionTick_Update` reads `ReputationWatchBar`, which ReputationFrame.xml declares.
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\Fonts.xml");
     super::test_ui::load_ui(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
     super::test_ui::load_ui(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
     super::test_ui::load_ui(&s, r"Interface\FrameXML\OptionsFrameTemplates.xml");
+    super::test_ui::load_ui(&s, "Interface\\FrameXML\\TextStatusBar.lua");
+    super::test_ui::load_ui(&s, "Interface\\FrameXML\\TextStatusBar.xml");
+    super::test_ui::load_ui(&s, "Interface\\FrameXML\\MainMenuBar.xml");
+    super::test_ui::load_ui(&s, "Interface\\FrameXML\\Cooldown.xml");
+    super::test_ui::load_ui(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
+    super::test_ui::load_ui(&s, "Interface\\FrameXML\\ActionBarFrame.xml");
+    // `ExhaustionTick_Update` reads `ReputationWatchBar`, which ReputationFrame.xml declares.
     super::test_ui::load_ui(&s, r"Interface\FrameXML\ReputationFrame.xml");
+    super::test_ui::load_ui(&s, "Interface\\FrameXML\\BonusActionBarFrame.xml");
     s.tick(10.0);
     let _ = s.take_sounds();
 
@@ -1909,26 +1902,24 @@ fn the_page_arrows_do_not_steal_each_other_s_clicks() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\Cooldown.xml");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\TextStatusBar.lua");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\TextStatusBar.xml");
+    super::test_ui::load_ui(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     super::test_ui::load_ui(&s, "Interface\\FrameXML\\Fonts.xml");
     super::test_ui::load_ui(&s, r"Interface\FrameXML\UIParent.xml");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\GlobalStrings.lua");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\MainMenuBar.xml");
     super::test_ui::load_ui(&s, r"Interface\FrameXML\MoneyFrame.lua");
     super::test_ui::load_ui(&s, r"Interface\FrameXML\MoneyFrame.xml");
     super::test_ui::load_ui(&s, "Interface\\FrameXML\\GameTooltip.xml");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\ActionBarFrame.xml");
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\BonusActionBarFrame.xml");
-
-    // `ExhaustionTick_Update` reads `ReputationWatchBar`, which ReputationFrame.xml declares.
-    super::test_ui::load_ui(&s, "Interface\\FrameXML\\Fonts.xml");
     super::test_ui::load_ui(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
     super::test_ui::load_ui(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
     super::test_ui::load_ui(&s, r"Interface\FrameXML\OptionsFrameTemplates.xml");
+    super::test_ui::load_ui(&s, "Interface\\FrameXML\\TextStatusBar.lua");
+    super::test_ui::load_ui(&s, "Interface\\FrameXML\\TextStatusBar.xml");
+    super::test_ui::load_ui(&s, "Interface\\FrameXML\\MainMenuBar.xml");
+    super::test_ui::load_ui(&s, "Interface\\FrameXML\\Cooldown.xml");
+    super::test_ui::load_ui(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
+    super::test_ui::load_ui(&s, "Interface\\FrameXML\\ActionBarFrame.xml");
+    // `ExhaustionTick_Update` reads `ReputationWatchBar`, which ReputationFrame.xml declares.
     super::test_ui::load_ui(&s, r"Interface\FrameXML\ReputationFrame.xml");
+    super::test_ui::load_ui(&s, "Interface\\FrameXML\\BonusActionBarFrame.xml");
     // The rested marker is declared shown in DIALOG strata over the arrows (MainMenuBar.xml:415);
     // `ExhaustionTick_Update` hides it on PLAYER_ENTERING_WORLD when `GetXPExhaustion()` is nil
     // (MainMenuBar.lua:29-31), or it eats every click.

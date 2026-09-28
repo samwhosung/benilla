@@ -9,24 +9,24 @@ mod common;
 
 const UI_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/ui");
 
-/// The reader's dependency prefix, in the manifest's order; the page's scroll frame inherits
+/// The reader's dependency prefix, in the production order; the page's scroll frame inherits
 /// `UIPanelScrollFrameTemplate` (`UIPanelTemplates.xml`).
 const FILES: &[&str] = &[
     // `ITEM_TEXT_FROM`, concatenated into the creator tail (`ItemTextFrame.lua:41`); nil, it
     // kills the handler before `ShowUIPanel`.
     "Interface\\FrameXML\\GlobalStrings.lua",
     "Interface\\FrameXML\\Fonts.xml",
-    r"Interface\FrameXML\MoneyFrame.lua",
-    r"Interface\FrameXML\MoneyFrame.xml",
-    // `GetMaterialTextColors` (`UIParent.lua:1880`), which picks the page and title ink.
-    r"Interface\FrameXML\UIParent.xml",
-    "ScrollTemplates.xml",
-    r"Interface\FrameXML\UIPanelTemplates.lua",
-    r"Interface\FrameXML\UIPanelTemplates.xml",
     "Interface\\FrameXML\\BasicControls.xml",
     "Interface\\FrameXML\\LocaleProperties.lua",
+    // `GetMaterialTextColors` (`UIParent.lua:1880`), which picks the page and title ink.
+    r"Interface\FrameXML\UIParent.xml",
+    r"Interface\FrameXML\MoneyFrame.lua",
+    r"Interface\FrameXML\MoneyFrame.xml",
+    r"Interface\FrameXML\UIPanelTemplates.lua",
+    r"Interface\FrameXML\UIPanelTemplates.xml",
     "Interface\\FrameXML\\StaticPopup.xml", // the dialog engine
     "Interface\\FrameXML\\ItemTextFrame.xml",
+    "ScrollTemplates.xml",
 ];
 
 /// Loads `FILES`: a bare filename from `assets/ui`, a path off the player's chain. The provider

@@ -127,9 +127,9 @@ fn game_time_session(hour: u32, minute: u32) -> UiScript {
     // `GameTime.lua` reads `TwentyFourHourTime`, which `LocalizeFrames` sets; the reference calls
     // that on `VARIABLES_LOADED` (`UIParent.lua:231-232`), and this session has no UIParent.
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
+    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
     load_xml(&s, "Interface\\FrameXML\\Localization.xml");
     s.run("LocalizeFrames()").unwrap();
-    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
     // `TEXT()`, which the tooltip formatting goes through.
     load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");
@@ -352,11 +352,11 @@ fn the_meeting_stone_icon_follows_the_queue_across_meetingstone_changed() {
         .unwrap();
     s.run("function PlaySound() end").unwrap();
     for f in [
-        "Interface\\FrameXML\\Fonts.xml",
         "Interface\\FrameXML\\GlobalStrings.lua",
+        "Interface\\FrameXML\\Fonts.xml",
         "Interface\\FrameXML\\Localization.xml",
-        "Interface\\FrameXML\\LocaleProperties.lua",
         "Interface\\FrameXML\\BasicControls.xml",
+        "Interface\\FrameXML\\LocaleProperties.lua",
         r"Interface\FrameXML\UIParent.xml",
         r"Interface\FrameXML\MoneyFrame.lua",
         r"Interface\FrameXML\MoneyFrame.xml",

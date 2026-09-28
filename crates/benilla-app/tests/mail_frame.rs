@@ -7,28 +7,28 @@ use benilla_ui::script::{MailInboxRow, MailInvoice, MailState, UiScript};
 
 /// The mail window's load prefix, in the app's order.
 const FILES: &[&str] = &[
+    "Interface\\FrameXML\\GlobalStrings.lua",
     "Interface\\FrameXML\\Fonts.xml",
+    "Interface\\FrameXML\\BasicControls.xml",
+    "Interface\\FrameXML\\LocaleProperties.lua",
+    r"Interface\FrameXML\UIParent.xml",
     r"Interface\FrameXML\MoneyFrame.lua",
     r"Interface\FrameXML\MoneyFrame.xml",
     // The send tab's money entry: `MoneyInputFrameTemplate` and the `MoneyInputFrame_*` verbs.
     r"Interface\FrameXML\MoneyInputFrame.lua",
     r"Interface\FrameXML\MoneyInputFrame.xml",
-    "Interface\\FrameXML\\GlobalStrings.lua",
-    r"Interface\FrameXML\UIParent.xml",
-    "ScrollTemplates.xml", // our scroll kit + the placeholder icon
-    r"Interface\FrameXML\UIPanelTemplates.lua",
-    r"Interface\FrameXML\UIPanelTemplates.xml",
-    "Interface\\FrameXML\\BasicControls.xml",
-    "Interface\\FrameXML\\LocaleProperties.lua",
-    "Interface\\FrameXML\\StaticPopup.xml", // the dialog engine
     "Interface\\FrameXML\\GameTooltip.xml",
-    r"Interface\FrameXML\ItemButtonTemplate.xml", // the send tab's attachment slot inherits it
     // The tabs inherit `FriendsFrameTabTemplate` and `inherits=` resolves at load, so the social
     // window and its kit come first, as in the stock toc.
     "Interface\\FrameXML\\UIDropDownMenu.xml",
+    r"Interface\FrameXML\UIPanelTemplates.lua",
+    r"Interface\FrameXML\UIPanelTemplates.xml",
     "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+    "Interface\\FrameXML\\StaticPopup.xml", // the dialog engine
+    r"Interface\FrameXML\ItemButtonTemplate.xml", // the send tab's attachment slot inherits it
     "Interface\\FrameXML\\FriendsFrame.xml",
     "Interface\\FrameXML\\MailFrame.xml",
+    "ScrollTemplates.xml", // our scroll kit + the placeholder icon
 ];
 
 fn load_ui(script: &UiScript) {

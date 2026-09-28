@@ -6,22 +6,22 @@ mod common;
 
 use benilla_ui::script::{ScriptValue, TradeSideState, TradeSlotItem, TradeState, UiScript};
 
-/// The trade window's load prefix, in `assets/ui/benilla.toc` order.
+/// The trade window's load prefix, in the production order.
 const FILES: &[&str] = &[
+    "Interface\\FrameXML\\GlobalStrings.lua",
     "Interface\\FrameXML\\Fonts.xml",
+    "Interface\\FrameXML\\BasicControls.xml",
+    "Interface\\FrameXML\\LocaleProperties.lua",
+    r"Interface\FrameXML\UIParent.xml",
     r"Interface\FrameXML\MoneyFrame.lua",
     r"Interface\FrameXML\MoneyFrame.xml",
     // `MoneyInputFrameTemplate` and the `MoneyInputFrame_*` functions the window calls.
     r"Interface\FrameXML\MoneyInputFrame.lua",
     r"Interface\FrameXML\MoneyInputFrame.xml",
-    r"Interface\FrameXML\UIParent.xml",
+    "Interface\\FrameXML\\GameTooltip.xml",
     r"Interface\FrameXML\UIPanelTemplates.lua",
     r"Interface\FrameXML\UIPanelTemplates.xml",
-    "Interface\\FrameXML\\GlobalStrings.lua",
-    "Interface\\FrameXML\\BasicControls.xml",
-    "Interface\\FrameXML\\LocaleProperties.lua",
     "Interface\\FrameXML\\StaticPopup.xml", // the dialog engine
-    "Interface\\FrameXML\\GameTooltip.xml",
     // The slot updates go through `ItemButtonTemplate.lua`'s `SetItemButton*` helpers.
     r"Interface\FrameXML\ItemButtonTemplate.xml",
     "Interface\\FrameXML\\TradeFrame.xml",

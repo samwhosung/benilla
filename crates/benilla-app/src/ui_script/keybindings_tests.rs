@@ -7,7 +7,8 @@ use benilla_ui::script::{QuadContent, UiScript};
 
 use crate::bindings::commands::SPECS;
 
-/// The page's files in manifest order, the registry seeded first, as `seed_bindings_for_vm` does.
+/// The page's files in the production order, the registry seeded first, as `seed_bindings_for_vm`
+/// does.
 pub(crate) fn harness() -> UiScript {
     let mut s = UiScript::new().unwrap();
     let cmds: Vec<KeybindCommand> = SPECS
@@ -23,20 +24,20 @@ pub(crate) fn harness() -> UiScript {
     s.register_bindings(&cmds);
     s.set_screen_size(1024.0, 768.0);
     for file in [
+        "Interface\\FrameXML\\GlobalStrings.lua",
         "Interface\\FrameXML\\Fonts.xml",
-        r"Interface\FrameXML\MoneyFrame.lua",
-        r"Interface\FrameXML\MoneyFrame.xml",
-        r"Interface\FrameXML\UIParent.xml",
-        r"Interface\FrameXML\UIPanelTemplates.lua",
-        r"Interface\FrameXML\UIPanelTemplates.xml",
         "Interface\\FrameXML\\BasicControls.xml",
         "Interface\\FrameXML\\LocaleProperties.lua",
-        "Interface\\FrameXML\\GlobalStrings.lua",
-        "Interface\\FrameXML\\StaticPopup.xml",
+        r"Interface\FrameXML\UIParent.xml",
+        r"Interface\FrameXML\MoneyFrame.lua",
+        r"Interface\FrameXML\MoneyFrame.xml",
         "Interface\\FrameXML\\GameTooltip.xml",
         "Interface\\FrameXML\\UIDropDownMenu.xml",
+        r"Interface\FrameXML\UIPanelTemplates.lua",
+        r"Interface\FrameXML\UIPanelTemplates.xml",
         // Before our files, as the core loads before the layer: it sources UIParent.lua again.
         r"Interface\FrameXML\GameMenuFrame.xml",
+        "Interface\\FrameXML\\StaticPopup.xml",
         "ScrollTemplates.xml",
         "KeyBindingsPage.xml",
         "OptionsFrame.xml",

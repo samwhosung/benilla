@@ -10,35 +10,34 @@ fn setup() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     for file in [
+        "Interface\\FrameXML\\GlobalStrings.lua",
         "Interface\\FrameXML\\Fonts.xml",
         "Interface\\FrameXML\\BasicControls.xml",
-        r"Interface\FrameXML\UIPanelTemplates.lua",
-        r"Interface\FrameXML\UIPanelTemplates.xml",
-        "ScrollTemplates.xml",
+        "Interface\\FrameXML\\LocaleProperties.lua",
+        r"Interface\FrameXML\UIParent.xml",
         r"Interface\FrameXML\MoneyFrame.lua",
-        r"Interface\FrameXML\MoneyFrame.xml",
-        "Interface\\FrameXML\\GameTooltip.xml",
         // Before StaticPopup.xml, whose coin row inherits `SmallMoneyFrameTemplate`.
         r"Interface\FrameXML\MoneyFrame.lua",
         r"Interface\FrameXML\MoneyFrame.xml",
-        "Interface\\FrameXML\\GlobalStrings.lua",
-        r"Interface\FrameXML\UIParent.xml",
-        "Interface\\FrameXML\\LocaleProperties.lua",
+        "Interface\\FrameXML\\GameTooltip.xml",
+        r"Interface\FrameXML\UIPanelTemplates.lua",
+        r"Interface\FrameXML\UIPanelTemplates.xml",
         "Interface\\FrameXML\\StaticPopup.xml",
+        "Interface\\FrameXML\\TextStatusBar.lua",
+        "Interface\\FrameXML\\TextStatusBar.xml",
+        "Interface\\FrameXML\\MainMenuBar.xml",
+        r"Interface\FrameXML\MainMenuBarMicroButtons.xml",
         // `HelpFrame_OnShow` calls `UpdateMicroButtons()` before `GetGMStatus()`
         // (`HelpFrame.lua:178`), so the micro row and the bar's button kit load too.
         "Interface\\FrameXML\\Cooldown.xml",
         "Interface\\FrameXML\\ActionButtonTemplate.xml",
-        "Interface\\FrameXML\\TextStatusBar.lua",
-        "Interface\\FrameXML\\TextStatusBar.xml",
-        "Interface\\FrameXML\\MainMenuBar.xml",
         "Interface\\FrameXML\\ActionBarFrame.xml",
-        "Interface\\FrameXML\\BonusActionBarFrame.xml",
-        r"Interface\FrameXML\MainMenuBarMicroButtons.xml",
         // `TicketStatusFrame_OnEvent` re-anchors `TemporaryEnchantFrame` before it arms the
         // repoll (`HelpFrame.lua:494`).
         "Interface\\FrameXML\\BuffFrame.xml",
+        "Interface\\FrameXML\\BonusActionBarFrame.xml",
         "Interface\\FrameXML\\HelpFrame.xml",
+        "ScrollTemplates.xml",
     ] {
         load_xml(&s, file);
     }

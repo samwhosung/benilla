@@ -73,41 +73,49 @@ fn click(s: &mut UiScript, name: &str, button: &str) {
     s.mouse_button(x, y, button, false);
 }
 
-/// The stock spellbook in manifest order, over the multibar grids and `UpdateMicroButtons` its show
-/// and hide call (`SpellBookFrame.lua:94-104`, `:186-203`).
+/// The stock spellbook in the production order, over the multibar grids and `UpdateMicroButtons`
+/// its show and hide call (`SpellBookFrame.lua:94-104`, `:186-203`).
 pub(super) fn spellbook_ui(w: f32, h: f32) -> UiScript {
+    spellbook_ui_with(w, h, &[])
+}
+
+/// [`spellbook_ui`] with `extra` files merged into it in the production order.
+pub(super) fn spellbook_ui_with(w: f32, h: f32, extra: &[&str]) -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(w, h);
-    for f in [
-        "Interface\\FrameXML\\Fonts.xml",
-        r"Interface\FrameXML\UIParent.xml",
-        "Interface\\FrameXML\\Cooldown.xml",
-        "Interface\\FrameXML\\ActionButtonTemplate.xml",
-        "Interface\\FrameXML\\TextStatusBar.lua",
-        "Interface\\FrameXML\\TextStatusBar.xml",
-        "Interface\\FrameXML\\GlobalStrings.lua",
-        "Interface\\FrameXML\\BasicControls.xml",
-        "Interface\\FrameXML\\MainMenuBar.xml",
-        r"Interface\FrameXML\MoneyFrame.lua",
-        r"Interface\FrameXML\MoneyFrame.xml",
-        "Interface\\FrameXML\\GameTooltip.xml",
-        "Interface\\FrameXML\\ActionBarFrame.xml",
-        "Interface\\FrameXML\\BonusActionBarFrame.xml",
-        r"Interface\FrameXML\UIPanelTemplates.lua",
-        r"Interface\FrameXML\UIPanelTemplates.xml",
-        r"Interface\FrameXML\OptionsFrameTemplates.xml",
-        r"Interface\FrameXML\ReputationFrame.xml",
-        "Interface\\FrameXML\\LocaleProperties.lua",
-        "Interface\\FrameXML\\StaticPopup.xml",
-        "Interface\\FrameXML\\UIDropDownMenu.xml",
-        "ScrollTemplates.xml",
-        "KeyBindingsPage.xml",
-        "OptionsFrame.xml",
-        "Interface\\FrameXML\\MultiActionBars.xml",
-        r"Interface\FrameXML\MainMenuBarMicroButtons.xml",
-        "Interface\\FrameXML\\SpellBookFrame.xml",
-        "SpellBookAdapters.xml",
-    ] {
+    for f in super::test_ui::production_order(&[
+        &[
+            "Interface\\FrameXML\\GlobalStrings.lua",
+            "Interface\\FrameXML\\Fonts.xml",
+            "Interface\\FrameXML\\BasicControls.xml",
+            "Interface\\FrameXML\\LocaleProperties.lua",
+            r"Interface\FrameXML\UIParent.xml",
+            r"Interface\FrameXML\MoneyFrame.lua",
+            r"Interface\FrameXML\MoneyFrame.xml",
+            "Interface\\FrameXML\\GameTooltip.xml",
+            "Interface\\FrameXML\\UIDropDownMenu.xml",
+            r"Interface\FrameXML\UIPanelTemplates.lua",
+            r"Interface\FrameXML\UIPanelTemplates.xml",
+            r"Interface\FrameXML\OptionsFrameTemplates.xml",
+            "Interface\\FrameXML\\StaticPopup.xml",
+            "Interface\\FrameXML\\TextStatusBar.lua",
+            "Interface\\FrameXML\\TextStatusBar.xml",
+            "Interface\\FrameXML\\MainMenuBar.xml",
+            r"Interface\FrameXML\MainMenuBarMicroButtons.xml",
+            "Interface\\FrameXML\\Cooldown.xml",
+            "Interface\\FrameXML\\ActionButtonTemplate.xml",
+            "Interface\\FrameXML\\ActionBarFrame.xml",
+            "Interface\\FrameXML\\MultiActionBars.xml",
+            "Interface\\FrameXML\\SpellBookFrame.xml",
+            r"Interface\FrameXML\ReputationFrame.xml",
+            "Interface\\FrameXML\\BonusActionBarFrame.xml",
+            "ScrollTemplates.xml",
+            "KeyBindingsPage.xml",
+            "OptionsFrame.xml",
+            "SpellBookAdapters.xml",
+        ],
+        extra,
+    ]) {
         load_xml(&s, f);
     }
     s
@@ -117,21 +125,19 @@ pub(super) fn spellbook_ui(w: f32, h: f32) -> UiScript {
 fn shipped_spellbook_loads_clean() {
     benilla_formats::wow_data_or_skip!();
     let s = UiScript::new().unwrap();
+    load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
+    load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
+    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
+    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.xml");
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, "ScrollTemplates.xml");
+    load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml");
     load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
     load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
-    load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
-    load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
     load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
-    load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml");
-    load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
-    load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");
     let frames = load_xml(&s, "Interface\\FrameXML\\SpellBookFrame.xml");
+    load_xml(&s, "ScrollTemplates.xml");
     load_xml(&s, "SpellBookAdapters.xml");
     assert!(s.errors().is_empty(), "loader errors: {:?}", s.errors());
     assert_eq!(
@@ -628,38 +634,35 @@ fn the_macro_editor_takes_a_shift_click_and_only_a_shift_click() {
         r"Interface\FrameXML\GlobalStrings.lua",
         "Interface\\FrameXML\\Fonts.xml",
         "Interface\\FrameXML\\BasicControls.xml", // `TEXT`
+        "Interface\\FrameXML\\LocaleProperties.lua",
+        r"Interface\FrameXML\UIParent.xml",
         r"Interface\FrameXML\MoneyFrame.lua",
         r"Interface\FrameXML\MoneyFrame.xml",
-        r"Interface\FrameXML\UIParent.xml",
-        "Interface\\FrameXML\\LocaleProperties.lua",
-        "Interface\\FrameXML\\StaticPopup.xml",
         "Interface\\FrameXML\\GameTooltip.xml",
-        "Interface\\FrameXML\\Cooldown.xml",
-        "ScrollTemplates.xml",
-        r"Interface\FrameXML\UIPanelTemplates.lua",
-        r"Interface\FrameXML\UIPanelTemplates.xml",
-        // The icon chooser's scroll frame inherits `ClassTrainerListScrollFrameTemplate`.
-        r"Interface\FrameXML\ClassTrainerFrameTemplates.xml",
-        r"Interface\FrameXML\MainMenuBarMicroButtons.xml",
-        "Interface\\FrameXML\\ActionButtonTemplate.xml",
-        "Interface\\FrameXML\\TextStatusBar.lua",
-        "Interface\\FrameXML\\TextStatusBar.xml",
-        "Interface\\FrameXML\\GlobalStrings.lua",
-        "Interface\\FrameXML\\MainMenuBar.xml",
-        "Interface\\FrameXML\\ActionBarFrame.xml",
-        "Interface\\FrameXML\\BonusActionBarFrame.xml",
-        // `ExhaustionTick_Update` reads `ReputationWatchBar` (`MainMenuBar.lua:52`, `:69`), which
-        // `ReputationFrame.xml` declares, after the templates its check boxes inherit.
+        "Interface\\FrameXML\\UIDropDownMenu.xml",
         r"Interface\FrameXML\UIPanelTemplates.lua",
         r"Interface\FrameXML\UIPanelTemplates.xml",
         r"Interface\FrameXML\OptionsFrameTemplates.xml",
-        r"Interface\FrameXML\ReputationFrame.xml",
+        "Interface\\FrameXML\\StaticPopup.xml",
+        "Interface\\FrameXML\\TextStatusBar.lua",
+        "Interface\\FrameXML\\TextStatusBar.xml",
+        "Interface\\FrameXML\\MainMenuBar.xml",
+        r"Interface\FrameXML\MainMenuBarMicroButtons.xml",
+        "Interface\\FrameXML\\Cooldown.xml",
+        "Interface\\FrameXML\\ActionButtonTemplate.xml",
+        "Interface\\FrameXML\\ActionBarFrame.xml",
         // The multibar grids the spellbook toggles, whose file wants the options window's uvars.
-        "Interface\\FrameXML\\UIDropDownMenu.xml",
-        "KeyBindingsPage.xml",
-        "OptionsFrame.xml",
         "Interface\\FrameXML\\MultiActionBars.xml",
         "Interface\\FrameXML\\SpellBookFrame.xml",
+        // `ExhaustionTick_Update` reads `ReputationWatchBar` (`MainMenuBar.lua:52`, `:69`), which
+        // `ReputationFrame.xml` declares, after the templates its check boxes inherit.
+        r"Interface\FrameXML\ReputationFrame.xml",
+        "Interface\\FrameXML\\BonusActionBarFrame.xml",
+        // The icon chooser's scroll frame inherits `ClassTrainerListScrollFrameTemplate`.
+        r"Interface\FrameXML\ClassTrainerFrameTemplates.xml",
+        "ScrollTemplates.xml",
+        "KeyBindingsPage.xml",
+        "OptionsFrame.xml",
         "SpellBookAdapters.xml",
     ] {
         load_xml(&s, file);

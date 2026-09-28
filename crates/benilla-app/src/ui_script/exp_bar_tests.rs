@@ -6,25 +6,25 @@ fn exp_bar_harness() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     for file in [
+        "Interface\\FrameXML\\GlobalStrings.lua",
         "Interface\\FrameXML\\Fonts.xml",
         r"Interface\FrameXML\UIParent.xml",
         r"Interface\FrameXML\MoneyFrame.lua",
         r"Interface\FrameXML\MoneyFrame.xml",
         "Interface\\FrameXML\\GameTooltip.xml",
-        "Interface\\FrameXML\\TextStatusBar.lua",
-        "Interface\\FrameXML\\TextStatusBar.xml",
-        "Interface\\FrameXML\\Cooldown.xml",
-        "Interface\\FrameXML\\ActionButtonTemplate.xml",
-        "Interface\\FrameXML\\GlobalStrings.lua",
-        "Interface\\FrameXML\\MainMenuBar.xml",
-        "Interface\\FrameXML\\ActionBarFrame.xml",
-        "Interface\\FrameXML\\BonusActionBarFrame.xml",
         // `ExhaustionTick_Update` reads `ReputationWatchBar`, which `ReputationFrame.xml`
         // declares; the two template files before it are what its check boxes inherit.
         r"Interface\FrameXML\UIPanelTemplates.lua",
         r"Interface\FrameXML\UIPanelTemplates.xml",
         r"Interface\FrameXML\OptionsFrameTemplates.xml",
+        "Interface\\FrameXML\\TextStatusBar.lua",
+        "Interface\\FrameXML\\TextStatusBar.xml",
+        "Interface\\FrameXML\\MainMenuBar.xml",
+        "Interface\\FrameXML\\Cooldown.xml",
+        "Interface\\FrameXML\\ActionButtonTemplate.xml",
+        "Interface\\FrameXML\\ActionBarFrame.xml",
         r"Interface\FrameXML\ReputationFrame.xml",
+        "Interface\\FrameXML\\BonusActionBarFrame.xml",
     ] {
         super::test_ui::load_ui(&s, file);
     }

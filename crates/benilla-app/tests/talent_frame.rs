@@ -9,32 +9,32 @@ use benilla_ui::script::{
     UiScript, UnitState,
 };
 
-/// The talent window's load prefix, in `assets/ui/benilla.toc` order.
+/// The talent window's load prefix, in the production order.
 const FILES: &[&str] = &[
     // `PLAYER_LEVEL` and the other strings the stock file formats.
     "Interface\\FrameXML\\GlobalStrings.lua",
     "Interface\\FrameXML\\Fonts.xml",
     // `TEXT`.
     "Interface\\FrameXML\\BasicControls.xml",
-    // `SetItemButtonDesaturated`, which the talent buttons grey through.
-    "Interface\\FrameXML\\ItemButtonTemplate.xml",
-    r"Interface\FrameXML\MoneyFrame.lua",
-    r"Interface\FrameXML\MoneyFrame.xml",
+    "Interface\\FrameXML\\LocaleProperties.lua",
     // `ToggleTalentFrame` (`UIParent.lua:205`).
     r"Interface\FrameXML\UIParent.xml",
+    r"Interface\FrameXML\MoneyFrame.lua",
+    r"Interface\FrameXML\MoneyFrame.xml",
     "Interface\\FrameXML\\GameTooltip.xml",
     // `UIPanelScrollFrameTemplate`: the scroll bar and the `<OnMouseWheel>`. A missing template
     // is only a loader warning, so the window would build without them.
     r"Interface\FrameXML\UIPanelTemplates.lua",
     r"Interface\FrameXML\UIPanelTemplates.xml",
-    "Interface\\FrameXML\\LocaleProperties.lua",
-    "Interface\\FrameXML\\StaticPopup.xml", // the dialog engine
     // `TalentTabTemplate` inherits `CharacterFrameTabButtonTemplate`; `inherits=` resolves at load.
     r"Interface\FrameXML\CharacterFrameTemplates.xml",
-    "ScrollTemplates.xml",
+    "Interface\\FrameXML\\StaticPopup.xml", // the dialog engine
     // `TalentFrame_OnShow` pulses `TalentMicroButton` and calls `UpdateMicroButtons()`
     // (`Blizzard_TalentUI.lua:97-100`); a nil button throws before `TalentFrame_Update()`.
     r"Interface\FrameXML\MainMenuBarMicroButtons.xml",
+    // `SetItemButtonDesaturated`, which the talent buttons grey through.
+    "Interface\\FrameXML\\ItemButtonTemplate.xml",
+    "ScrollTemplates.xml",
     // Sources its own `.lua` and `<Include>`s the templates file.
     "Interface\\AddOns\\Blizzard_TalentUI\\Blizzard_TalentUI.xml",
 ];

@@ -12,24 +12,24 @@ fn harness() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     for file in [
-        "Interface\\FrameXML\\Fonts.xml",
-        r"Interface\FrameXML\MoneyFrame.lua",
-        r"Interface\FrameXML\MoneyFrame.xml",
-        r"Interface\FrameXML\UIParent.xml",
-        r"Interface\FrameXML\UIPanelTemplates.lua",
-        r"Interface\FrameXML\UIPanelTemplates.xml",
         "Interface\\FrameXML\\GlobalStrings.lua",
+        "Interface\\FrameXML\\Fonts.xml",
         "Interface\\FrameXML\\BasicControls.xml",
         "Interface\\FrameXML\\LocaleProperties.lua",
-        "Interface\\FrameXML\\StaticPopup.xml",
+        r"Interface\FrameXML\UIParent.xml",
+        r"Interface\FrameXML\MoneyFrame.lua",
+        r"Interface\FrameXML\MoneyFrame.xml",
         "Interface\\FrameXML\\GameTooltip.xml",
         "Interface\\FrameXML\\UIDropDownMenu.xml", // the map's continent/zone pickers initialize into it at OnLoad
-        "ScrollTemplates.xml",
+        r"Interface\FrameXML\UIPanelTemplates.lua",
+        r"Interface\FrameXML\UIPanelTemplates.xml",
+        "Interface\\FrameXML\\StaticPopup.xml",
         // The stock update walks `MAX_PARTY_MEMBERS` and `MAX_RAID_MEMBERS`, set by these two.
         r"Interface\FrameXML\PartyMemberFrame.lua",
         r"Interface\FrameXML\RaidFrame.lua",
         // The reference's own map, which <Include>s its blip templates itself.
         r"Interface\FrameXML\WorldMapFrame.xml",
+        "ScrollTemplates.xml",
     ] {
         super::test_ui::load_ui(&s, file);
     }

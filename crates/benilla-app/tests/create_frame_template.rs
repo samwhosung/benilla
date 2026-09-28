@@ -6,23 +6,23 @@ mod common;
 
 use benilla_ui::script::UiScript;
 
-/// The prefix of `benilla.toc`'s load order these templates need. `FauxScrollFrameTemplate` and
+/// The prefix of the production load these templates need. `FauxScrollFrameTemplate` and
 /// `TabButtonTemplate` are the stock ones, from `UIPanelTemplates.xml` on the player's chain.
 const FILES: &[&str] = &[
+    "Interface\\FrameXML\\GlobalStrings.lua",
     "Interface\\FrameXML\\Fonts.xml",
+    "Interface\\FrameXML\\BasicControls.xml", // `TEXT`, which StaticPopup.lua reads at file scope
+    "Interface\\FrameXML\\LocaleProperties.lua",
+    r"Interface\FrameXML\UIParent.xml",
+    r"Interface\FrameXML\MoneyFrame.lua",
+    r"Interface\FrameXML\MoneyFrame.xml",
+    r"Interface\FrameXML\UIPanelTemplates.lua",
+    r"Interface\FrameXML\UIPanelTemplates.xml",
+    "Interface\\FrameXML\\StaticPopup.xml", // the dialog engine
     // A guard, not a dependency: its whole body is `<Script file="FadingFrame.lua"/>`, which loads
     // only if resolved against the document's own directory. It has no `inherits=` and its Lua
     // has no file-scope statements, so it needs nothing before it.
     "Interface\\FrameXML\\FadingFrame.xml",
-    r"Interface\FrameXML\MoneyFrame.lua",
-    r"Interface\FrameXML\MoneyFrame.xml",
-    r"Interface\FrameXML\UIParent.xml",
-    r"Interface\FrameXML\UIPanelTemplates.lua",
-    r"Interface\FrameXML\UIPanelTemplates.xml",
-    "Interface\\FrameXML\\GlobalStrings.lua",
-    "Interface\\FrameXML\\BasicControls.xml", // `TEXT`, which StaticPopup.lua reads at file scope
-    "Interface\\FrameXML\\LocaleProperties.lua",
-    "Interface\\FrameXML\\StaticPopup.xml", // the dialog engine
     "ScrollTemplates.xml",
 ];
 

@@ -23,11 +23,11 @@ fn session() -> UiScript {
     // `FloatingChatFrame.lua:9`'s value, read by the icon's fade-in (`BattlefieldFrame.lua:142`).
     s.run("CHAT_FRAME_FADE_TIME = 0.15").unwrap();
     for f in [
-        "Interface\\FrameXML\\Fonts.xml",
         "Interface\\FrameXML\\GlobalStrings.lua",
+        "Interface\\FrameXML\\Fonts.xml",
         "Interface\\FrameXML\\Localization.xml",
-        "Interface\\FrameXML\\LocaleProperties.lua",
         "Interface\\FrameXML\\BasicControls.xml",
+        "Interface\\FrameXML\\LocaleProperties.lua",
         r"Interface\FrameXML\UIParent.xml",
         r"Interface\FrameXML\MoneyFrame.lua",
         r"Interface\FrameXML\MoneyFrame.xml",

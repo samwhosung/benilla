@@ -12,13 +12,13 @@ const STABLE_UI: &[&str] = &[
     r"Interface\FrameXML\GlobalStrings.lua",
     r"Interface\FrameXML\Fonts.xml",
     r"Interface\FrameXML\BasicControls.xml",
-    r"Interface\FrameXML\ItemButtonTemplate.xml",
+    r"Interface\FrameXML\UIParent.xml",
     r"Interface\FrameXML\MoneyFrame.lua",
     r"Interface\FrameXML\MoneyFrame.xml",
-    r"Interface\FrameXML\UIParent.xml",
+    r"Interface\FrameXML\GameTooltip.xml",
     r"Interface\FrameXML\UIPanelTemplates.lua",
     r"Interface\FrameXML\UIPanelTemplates.xml",
-    r"Interface\FrameXML\GameTooltip.xml",
+    r"Interface\FrameXML\ItemButtonTemplate.xml",
     r"Interface\FrameXML\PetStable.xml",
 ];
 

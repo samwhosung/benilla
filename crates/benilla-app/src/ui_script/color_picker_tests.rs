@@ -5,24 +5,24 @@ use benilla_ui::script::{QuadContent, UiScript};
 
 use super::test_ui::load_ui as load_xml;
 
-/// The files the picker needs, in manifest order, ending with the window.
+/// The files the picker needs, in the production order, ending with the window.
 fn picker() -> UiScript {
     let mut s = UiScript::new().unwrap();
     for file in [
-        "Interface\\FrameXML\\Fonts.xml",
-        r"Interface\FrameXML\MoneyFrame.lua",
-        r"Interface\FrameXML\MoneyFrame.xml",
-        r"Interface\FrameXML\UIParent.xml",
-        "Interface\\FrameXML\\GameTooltip.xml",
-        "Interface\\FrameXML\\UIDropDownMenu.xml",
-        "ScrollTemplates.xml",
-        r"Interface\FrameXML\UIPanelTemplates.lua",
-        r"Interface\FrameXML\UIPanelTemplates.xml",
         "Interface\\FrameXML\\GlobalStrings.lua",
+        "Interface\\FrameXML\\Fonts.xml",
         "Interface\\FrameXML\\BasicControls.xml",
         "Interface\\FrameXML\\LocaleProperties.lua",
+        r"Interface\FrameXML\UIParent.xml",
+        r"Interface\FrameXML\MoneyFrame.lua",
+        r"Interface\FrameXML\MoneyFrame.xml",
+        "Interface\\FrameXML\\GameTooltip.xml",
+        "Interface\\FrameXML\\UIDropDownMenu.xml",
+        r"Interface\FrameXML\UIPanelTemplates.lua",
+        r"Interface\FrameXML\UIPanelTemplates.xml",
         "Interface\\FrameXML\\StaticPopup.xml",
         "Interface\\FrameXML\\ColorPickerFrame.xml",
+        "ScrollTemplates.xml",
     ] {
         load_xml(&s, file);
     }

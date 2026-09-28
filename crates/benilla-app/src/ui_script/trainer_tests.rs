@@ -25,38 +25,38 @@ fn trainer_script_base() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     s.set_text_measurer(Box::new(super::FixedWidthFont(7.0)));
-    // In manifest order (ScrollTemplates before UIPanelTemplates): the window calls
+    // In the production order: the window calls
     // `UpdateMicroButtons` and inherits the panel templates.
     for f in [
-        "Interface\\FrameXML\\Fonts.xml",
         "Interface\\FrameXML\\GlobalStrings.lua",
+        "Interface\\FrameXML\\Fonts.xml",
         "Interface\\FrameXML\\BasicControls.xml",
+        "Interface\\FrameXML\\LocaleProperties.lua",
         r"Interface\FrameXML\UIParent.xml",
-        "Interface\\FrameXML\\Cooldown.xml",
-        "Interface\\FrameXML\\ActionButtonTemplate.xml",
-        "Interface\\FrameXML\\TextStatusBar.lua",
-        "Interface\\FrameXML\\TextStatusBar.xml",
-        "Interface\\FrameXML\\MainMenuBar.xml",
         r"Interface\FrameXML\MoneyFrame.lua",
         r"Interface\FrameXML\MoneyFrame.xml",
         "Interface\\FrameXML\\GameTooltip.xml",
-        "Interface\\FrameXML\\ActionBarFrame.xml",
-        "Interface\\FrameXML\\BonusActionBarFrame.xml",
-        "ScrollTemplates.xml",
+        "Interface\\FrameXML\\UIDropDownMenu.xml",
         r"Interface\FrameXML\UIPanelTemplates.lua",
         r"Interface\FrameXML\UIPanelTemplates.xml",
         r"Interface\FrameXML\OptionsFrameTemplates.xml",
-        r"Interface\FrameXML\ReputationFrame.xml",
-        "Interface\\FrameXML\\LocaleProperties.lua",
+        "Interface\\FrameXML\\CharacterFrameTemplates.xml",
         "Interface\\FrameXML\\StaticPopup.xml",
-        "Interface\\FrameXML\\UIDropDownMenu.xml",
+        "Interface\\FrameXML\\TextStatusBar.lua",
+        "Interface\\FrameXML\\TextStatusBar.xml",
+        "Interface\\FrameXML\\MainMenuBar.xml",
+        r"Interface\FrameXML\MainMenuBarMicroButtons.xml",
+        "Interface\\FrameXML\\Cooldown.xml",
+        "Interface\\FrameXML\\ActionButtonTemplate.xml",
+        "Interface\\FrameXML\\ActionBarFrame.xml",
+        "Interface\\FrameXML\\MultiActionBars.xml",
+        r"Interface\FrameXML\ReputationFrame.xml",
+        "Interface\\FrameXML\\MerchantFrame.xml",
+        "Interface\\FrameXML\\BonusActionBarFrame.xml",
+        "Interface\\FrameXML\\ClassTrainerFrameTemplates.xml",
+        "ScrollTemplates.xml",
         "KeyBindingsPage.xml",
         "OptionsFrame.xml",
-        "Interface\\FrameXML\\MultiActionBars.xml",
-        r"Interface\FrameXML\MainMenuBarMicroButtons.xml",
-        "Interface\\FrameXML\\CharacterFrameTemplates.xml",
-        "Interface\\FrameXML\\MerchantFrame.xml",
-        "Interface\\FrameXML\\ClassTrainerFrameTemplates.xml",
     ] {
         load_xml(&s, f);
     }

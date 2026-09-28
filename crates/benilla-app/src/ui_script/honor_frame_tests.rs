@@ -339,25 +339,25 @@ fn shown_inspect_honor_page() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     for file in [
+        "Interface\\FrameXML\\GlobalStrings.lua",
         "Interface\\FrameXML\\Fonts.xml",
         // `TEXT`, the stock level line's formatter.
         "Interface\\FrameXML\\BasicControls.xml",
+        "Interface\\FrameXML\\LocaleProperties.lua",
+        r"Interface\FrameXML\UIParent.xml",
         r"Interface\FrameXML\MoneyFrame.lua",
         r"Interface\FrameXML\MoneyFrame.xml",
-        r"Interface\FrameXML\UIParent.xml",
-        "ScrollTemplates.xml",
+        "Interface\\FrameXML\\GameTooltip.xml",
         r"Interface\FrameXML\UIPanelTemplates.lua",
         r"Interface\FrameXML\UIPanelTemplates.xml",
         // The inspect window's tabs inherit its tab template.
         r"Interface\FrameXML\CharacterFrameTemplates.xml",
-        "Interface\\FrameXML\\GlobalStrings.lua",
-        "Interface\\FrameXML\\LocaleProperties.lua",
         "Interface\\FrameXML\\StaticPopup.xml",
-        "Interface\\FrameXML\\GameTooltip.xml",
         // Before the inspect addon, as `inherits=` resolves at load: its slot buttons inherit
         // `ItemButtonTemplate`, its honor rows `HonorFrame.xml`'s row templates.
         "Interface\\FrameXML\\ItemButtonTemplate.xml",
         "Interface\\FrameXML\\HonorFrame.xml",
+        "ScrollTemplates.xml",
     ] {
         load_xml(&s, file);
     }

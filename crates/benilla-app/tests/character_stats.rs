@@ -7,7 +7,7 @@ mod common;
 
 use benilla_ui::script::{UiScript, UnitCombatStats, UnitState};
 
-/// The paper doll's load prefix, in `assets/ui/benilla.toc` order. `CharacterFrame.xml` is left
+/// The paper doll's load prefix, in the production order. `CharacterFrame.xml` is left
 /// out: the rows are repainted directly and the window never opens. Every row formats a global
 /// string: `SPELL_STAT<n>_NAME` (`PaperDollFrame.lua:140`), `RESISTANCE<n>_NAME` and
 /// `RESISTANCE_TOOLTIP_SUBTEXT` (`:187`/`:226`), `ARMOR` and `ARMOR_TOOLTIP` (`:244`/`:249`).
@@ -15,18 +15,18 @@ const FILES: &[&str] = &[
     "Interface\\FrameXML\\GlobalStrings.lua",
     "Interface\\FrameXML\\Fonts.xml",
     "Interface\\FrameXML\\BasicControls.xml",
-    "Interface\\FrameXML\\ItemButtonTemplate.xml",
-    r"Interface\FrameXML\MoneyFrame.lua",
-    r"Interface\FrameXML\MoneyFrame.xml",
+    "Interface\\FrameXML\\LocaleProperties.lua",
     // `Model_OnLoad` (`UIParent.lua:1421`), which the model pane's `<OnLoad>` calls at load.
     r"Interface\FrameXML\UIParent.xml",
+    r"Interface\FrameXML\MoneyFrame.lua",
+    r"Interface\FrameXML\MoneyFrame.xml",
+    "Interface\\FrameXML\\GameTooltip.xml",
     r"Interface\FrameXML\UIPanelTemplates.lua",
     r"Interface\FrameXML\UIPanelTemplates.xml",
-    "Interface\\FrameXML\\LocaleProperties.lua",
     "Interface\\FrameXML\\StaticPopup.xml", // the dialog engine
-    "Interface\\FrameXML\\GameTooltip.xml",
     // Each slot button's OnLoad calls `CooldownFrame_SetTimer` (`PaperDollFrame.lua:692`).
     "Interface\\FrameXML\\Cooldown.xml",
+    "Interface\\FrameXML\\ItemButtonTemplate.xml",
     "Interface\\FrameXML\\PaperDollFrame.xml",
 ];
 

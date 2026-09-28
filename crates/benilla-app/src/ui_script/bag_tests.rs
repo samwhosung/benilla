@@ -101,12 +101,16 @@ fn b_opens_the_backpack_alone_and_closes_every_bag() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for file in BAG_UI {
+    for file in crate::ui_script::test_ui::production_order(&[
+        BAG_UI,
+        &[
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kit
+        ],
+    ]) {
         load_xml(&s, file);
     }
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit
-    load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     s.set_money(0);
 
     s.set_container(
@@ -171,12 +175,16 @@ fn shift_b_toggles_every_bag_at_once() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for file in BAG_UI {
+    for file in crate::ui_script::test_ui::production_order(&[
+        BAG_UI,
+        &[
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kit
+        ],
+    ]) {
         load_xml(&s, file);
     }
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit
-    load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     s.set_money(0);
     s.set_container(
         0,
@@ -249,12 +257,16 @@ fn bag_bar_buttons_light_while_their_bag_is_open() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for file in BAG_UI {
+    for file in crate::ui_script::test_ui::production_order(&[
+        BAG_UI,
+        &[
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kit
+        ],
+    ]) {
         load_xml(&s, file);
     }
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit
-    load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     s.set_money(0);
     s.set_container(
         0,
@@ -357,12 +369,16 @@ fn bag_tooltip_hangs_left_when_the_slot_sits_in_the_right_half() {
     s.set_screen_size(1024.0, 768.0);
     // The stock tooltip sizes from its lines, so reading its rect needs a text measurer.
     s.set_text_measurer(Box::new(super::FixedWidthFont(6.0)));
-    for file in BAG_UI {
+    for file in crate::ui_script::test_ui::production_order(&[
+        BAG_UI,
+        &[
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kit
+        ],
+    ]) {
         load_xml(&s, file);
     }
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit
-    load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     s.set_money(0);
 
     let mut slots = std::collections::HashMap::new();
@@ -430,12 +446,16 @@ fn hovered_bag_tooltip_fills_itself_when_the_stats_land() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for file in BAG_UI {
+    for file in crate::ui_script::test_ui::production_order(&[
+        BAG_UI,
+        &[
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kit
+        ],
+    ]) {
         load_xml(&s, file);
     }
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit
-    load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     s.set_money(0);
 
     let mut slots = std::collections::HashMap::new();
@@ -533,12 +553,16 @@ fn vendor_bag_hover_shows_sell_price_and_arms_the_pouch_cursor() {
 
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for file in BAG_UI {
+    for file in crate::ui_script::test_ui::production_order(&[
+        BAG_UI,
+        &[
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kit
+        ],
+    ]) {
         load_xml(&s, file);
     }
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit
-    load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     s.set_money(0);
 
     let mut slots = std::collections::HashMap::new();
@@ -667,12 +691,16 @@ fn readable_letter_hover_shows_the_inspect_magnifier() {
 
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for file in BAG_UI {
+    for file in crate::ui_script::test_ui::production_order(&[
+        BAG_UI,
+        &[
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kit
+        ],
+    ]) {
         load_xml(&s, file);
     }
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit
-    load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     s.set_money(0);
 
     let mut slots = std::collections::HashMap::new();
@@ -734,12 +762,16 @@ fn drag_across_two_slots_queues_the_same_move_a_click_pickup_would() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for file in BAG_UI {
+    for file in crate::ui_script::test_ui::production_order(&[
+        BAG_UI,
+        &[
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kit
+        ],
+    ]) {
         load_xml(&s, file);
     }
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit
-    load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     s.set_money(0);
 
     let mut slots = std::collections::HashMap::new();
@@ -816,12 +848,16 @@ fn a_second_bag_window_feeds_and_paints_via_the_bag_bar() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for file in BAG_UI {
+    for file in crate::ui_script::test_ui::production_order(&[
+        BAG_UI,
+        &[
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kit
+        ],
+    ]) {
         load_xml(&s, file);
     }
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit
-    load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     s.set_money(0);
 
     let mut slots = std::collections::HashMap::new();
@@ -887,12 +923,16 @@ fn equipped_bag_window_snug_fits_its_row_count() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for file in BAG_UI {
+    for file in crate::ui_script::test_ui::production_order(&[
+        BAG_UI,
+        &[
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kit
+        ],
+    ]) {
         load_xml(&s, file);
     }
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit
-    load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     s.set_money(0);
 
     // (bag, slots, height): 6 is 72+32+10, 8 is 94+32+10, 10 is 72+73+10, 20 is 94+155+10, and the
@@ -943,13 +983,17 @@ fn equipped_bag_window_snug_fits_its_row_count() {
 
 /// Open a backpack holding a five-stack in slot 1; returns that slot button's centre.
 fn open_backpack_with_a_five_stack(s: &mut UiScript) -> (f32, f32) {
-    for file in BAG_UI {
+    for file in crate::ui_script::test_ui::production_order(&[
+        BAG_UI,
+        &[
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            "Interface\\FrameXML\\StackSplitFrame.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kit
+        ],
+    ]) {
         load_xml(s, file);
     }
-    load_xml(s, "ScrollTemplates.xml"); // our scroll kit
-    load_xml(s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
-    load_xml(s, "Interface\\FrameXML\\MerchantFrame.xml");
-    load_xml(s, "Interface\\FrameXML\\StackSplitFrame.xml");
     s.set_money(0);
 
     let mut slots = std::collections::HashMap::new();
@@ -1260,12 +1304,16 @@ fn bag_slot_cooldown_sweeps_through_the_xml() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for file in BAG_UI {
+    for file in crate::ui_script::test_ui::production_order(&[
+        BAG_UI,
+        &[
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kit
+        ],
+    ]) {
         load_xml(&s, file);
     }
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit
-    load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     s.set_money(0);
     s.tick(100.0); // a nonzero clock epoch
 
@@ -1316,12 +1364,16 @@ fn the_bar_bag_buttons_name_themselves_on_hover() {
     // `GetBindingKey` reads the registered command set, seeded as the app seeds it.
     s.register_bindings(&crate::bindings::registry_commands());
     s.set_screen_size(1024.0, 768.0);
-    for file in BAG_UI {
+    for file in crate::ui_script::test_ui::production_order(&[
+        BAG_UI,
+        &[
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kit
+        ],
+    ]) {
         load_xml(&s, file);
     }
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit
-    load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     s.resolve();
 
     hover(&mut s, "MainMenuBarBackpackButton");
@@ -1440,13 +1492,17 @@ fn drawn_with(s: &mut UiScript, needle: &str) -> usize {
 /// The bar and bag files the keyring spans, plus `UIErrorsFrame.xml`: `PutKeyInKeyRing` reports a
 /// full ring through `UIErrorsFrame`.
 fn keyring_surface(s: &UiScript) {
-    for file in BAG_UI {
+    for file in crate::ui_script::test_ui::production_order(&[
+        BAG_UI,
+        &[
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            "Interface\\FrameXML\\UIErrorsFrame.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kit
+        ],
+    ]) {
         load_xml(s, file);
     }
-    load_xml(s, "ScrollTemplates.xml"); // our scroll kit
-    load_xml(s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
-    load_xml(s, "Interface\\FrameXML\\MerchantFrame.xml");
-    load_xml(s, "Interface\\FrameXML\\UIErrorsFrame.xml");
 }
 
 /// The first key shows the keyring button, swaps the bar's two right-hand strips to the keyring
@@ -1680,12 +1736,16 @@ fn an_item_push_drops_its_icon_into_the_bag_that_took_it() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1600.0, 900.0);
-    for file in BAG_UI {
+    for file in crate::ui_script::test_ui::production_order(&[
+        BAG_UI,
+        &[
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kit
+        ],
+    ]) {
         load_xml(&s, file);
     }
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit
-    load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     // `ForcedBackpackItem.m2` (`benilla-extract m2seq`, `m2batch`): one sequence (id 0, 1000 ms,
     // clamp) and a 0.02707 × 0.07962 box, which is 42.41 × 124.72 at 16:9, where a layout unit is
     // 768·√(a²+1) = 1566.4 FrameXML units.
@@ -1837,12 +1897,16 @@ fn an_addon_that_hooks_toggle_backpack_receives_the_click() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for file in BAG_UI {
+    for file in crate::ui_script::test_ui::production_order(&[
+        BAG_UI,
+        &[
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kit
+        ],
+    ]) {
         load_xml(&s, file);
     }
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit
-    load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     s.set_money(0);
 
     // Bagnon's idiom: capture the original, replace the global.
@@ -1882,12 +1946,16 @@ fn the_bag_slots_carry_the_references_names_and_icon_names() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for file in BAG_UI {
+    for file in crate::ui_script::test_ui::production_order(&[
+        BAG_UI,
+        &[
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kit
+        ],
+    ]) {
         load_xml(&s, file);
     }
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit
-    load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
 
     for i in 0..4 {
         assert!(
@@ -1932,12 +2000,16 @@ fn the_backpack_buttons_ring_follows_its_own_window_through_real_clicks() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    for file in BAG_UI {
+    for file in crate::ui_script::test_ui::production_order(&[
+        BAG_UI,
+        &[
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kit
+        ],
+    ]) {
         load_xml(&s, file);
     }
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kit
-    load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
     s.set_money(0);
     // Stock `ToggleBag` opens nothing for a size-0 container, so the backpack is fed.
     s.set_container(

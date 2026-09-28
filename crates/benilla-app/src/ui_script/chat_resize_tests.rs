@@ -7,33 +7,29 @@ use super::test_ui::load_ui as load_xml;
 fn chat_ui() -> UiScript {
     let mut s = UiScript::new().unwrap();
     for file in [
-        "Interface\\FrameXML\\Fonts.xml",
-        r"Interface\FrameXML\MoneyFrame.lua",
-        r"Interface\FrameXML\MoneyFrame.xml",
-        r"Interface\FrameXML\UIParent.xml",
-        "Interface\\FrameXML\\GameTooltip.xml",
-        "Interface\\FrameXML\\UIDropDownMenu.xml",
-        "ScrollTemplates.xml",
-        r"Interface\FrameXML\UIPanelTemplates.lua",
-        r"Interface\FrameXML\UIPanelTemplates.xml",
         "Interface\\FrameXML\\GlobalStrings.lua",
+        "Interface\\FrameXML\\Fonts.xml",
         "Interface\\FrameXML\\BasicControls.xml",
         "Interface\\FrameXML\\LocaleProperties.lua",
-        "Interface\\FrameXML\\StaticPopup.xml",
-        "Interface\\FrameXML\\ColorPickerFrame.xml",
+        r"Interface\FrameXML\UIParent.xml",
+        r"Interface\FrameXML\MoneyFrame.lua",
+        r"Interface\FrameXML\MoneyFrame.xml",
+        "Interface\\FrameXML\\GameTooltip.xml",
         "Interface\\FrameXML\\UIMenu.xml", // the kit ChatMenu/EmoteMenu/VoiceMacroMenu build from
-        "Interface\\FrameXML\\GlobalStrings.lua",
-        "Interface\\FrameXML\\BasicControls.xml",
-        // A tab-drag stop's `FCF_ValidateChatFramePosition` reads `MainMenuBar:GetHeight()`.
-        "Interface\\FrameXML\\Cooldown.xml",
-        "Interface\\FrameXML\\ActionButtonTemplate.xml",
+        "Interface\\FrameXML\\UIDropDownMenu.xml",
+        r"Interface\FrameXML\UIPanelTemplates.lua",
+        r"Interface\FrameXML\UIPanelTemplates.xml",
+        "Interface\\FrameXML\\StaticPopup.xml",
         "Interface\\FrameXML\\TextStatusBar.lua",
         "Interface\\FrameXML\\TextStatusBar.xml",
+        // A tab-drag stop's `FCF_ValidateChatFramePosition` reads `MainMenuBar:GetHeight()`.
         "Interface\\FrameXML\\MainMenuBar.xml",
+        "Interface\\FrameXML\\Cooldown.xml",
+        "Interface\\FrameXML\\ActionButtonTemplate.xml",
         "Interface\\FrameXML\\ChatFrame.xml",
-        "Interface\\FrameXML\\UIPanelTemplates.lua",
-        "Interface\\FrameXML\\UIPanelTemplates.xml",
         "Interface\\FrameXML\\FloatingChatFrame.xml",
+        "Interface\\FrameXML\\ColorPickerFrame.xml",
+        "ScrollTemplates.xml",
     ] {
         load_xml(&s, file);
     }

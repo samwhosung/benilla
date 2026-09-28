@@ -4,30 +4,40 @@ use benilla_ui::script::{
 
 use super::test_ui::{hover, load_ui as load_xml, unhover};
 
-/// The unit frames' load prefix, in the manifest's order.
+/// The unit frames' load prefix, in the production order.
 fn load_unit_frames(s: &UiScript) {
-    // Stock `GlobalStrings.lua` first, as the app runs it: the unit-frame files read it at load
-    // (`CombatFeedback.lua:6-17`, `UnitFrame.lua:2-7`).
-    load_xml(s, "Interface\\FrameXML\\GlobalStrings.lua");
-    load_xml(s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(s, "Interface\\FrameXML\\TextStatusBar.lua");
-    load_xml(s, "Interface\\FrameXML\\TextStatusBar.xml");
-    load_xml(s, r"Interface\FrameXML\MoneyFrame.lua");
-    load_xml(s, r"Interface\FrameXML\MoneyFrame.xml");
-    load_xml(s, "Interface\\FrameXML\\GameTooltip.xml");
-    // `FACTION_BAR_COLORS` (`ReputationFrame.lua:3`) for stock `GameTooltip_UnitColor`.
-    load_xml(s, r"Interface\FrameXML\ReputationFrame.lua");
-    load_xml(s, "Interface\\FrameXML\\UIDropDownMenu.xml");
-    load_xml(s, "Interface\\FrameXML\\BasicControls.xml"); // `TEXT`, read by UnitPopup.lua at load
-    load_xml(s, "Interface\\FrameXML\\UnitPopup.xml");
-    load_xml(s, "Interface\\FrameXML\\BuffFrame.xml");
-    load_xml(s, "Interface\\FrameXML\\UnitFrame.xml");
-    load_xml(s, "Interface\\FrameXML\\CombatFeedback.xml");
-    load_xml(s, "Interface\\FrameXML\\PlayerFrame.xml");
-    load_xml(s, "Interface\\FrameXML\\PartyFrame.xml");
-    load_xml(s, "Interface\\FrameXML\\TargetFrame.xml");
-    load_xml(s, "Interface\\FrameXML\\PetFrame.xml");
+    load_unit_frames_with(s, &[]);
+}
+
+/// [`load_unit_frames`] with `extra` merged in.
+fn load_unit_frames_with(s: &UiScript, extra: &[&str]) {
+    const UNIT_FRAMES: &[&str] = &[
+        // Stock `GlobalStrings.lua` first, as the app runs it: the unit-frame files read it at load
+        // (`CombatFeedback.lua:6-17`, `UnitFrame.lua:2-7`).
+        "Interface\\FrameXML\\GlobalStrings.lua",
+        "Interface\\FrameXML\\Fonts.xml",
+        "Interface\\FrameXML\\BasicControls.xml", // `TEXT`, read by UnitPopup.lua at load
+        r"Interface\FrameXML\UIParent.xml",
+        r"Interface\FrameXML\MoneyFrame.lua",
+        r"Interface\FrameXML\MoneyFrame.xml",
+        "Interface\\FrameXML\\GameTooltip.xml",
+        "Interface\\FrameXML\\UIDropDownMenu.xml",
+        "Interface\\FrameXML\\TextStatusBar.lua",
+        "Interface\\FrameXML\\TextStatusBar.xml",
+        "Interface\\FrameXML\\BuffFrame.xml",
+        "Interface\\FrameXML\\CombatFeedback.xml",
+        "Interface\\FrameXML\\UnitPopup.xml",
+        "Interface\\FrameXML\\UnitFrame.xml",
+        "Interface\\FrameXML\\PlayerFrame.xml",
+        "Interface\\FrameXML\\PartyFrame.xml",
+        "Interface\\FrameXML\\TargetFrame.xml",
+        "Interface\\FrameXML\\PetFrame.xml",
+        // `FACTION_BAR_COLORS` (`ReputationFrame.lua:3`) for stock `GameTooltip_UnitColor`.
+        r"Interface\FrameXML\ReputationFrame.lua",
+    ];
+    for file in super::test_ui::production_order(&[UNIT_FRAMES, extra]) {
+        load_xml(s, file);
+    }
 }
 
 /// The stock unit frames driven by snapshots: bar fill, the target's hide and show, a late name.
@@ -556,25 +566,23 @@ fn shipped_target_frame_runs_the_level_law() {
     use benilla_ui::script::PlayerReqState;
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    load_unit_frames(&s);
     // `GetDifficultyColor`'s load chain: the stock quest log window.
-    load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
-    load_xml(&s, r"Interface\FrameXML\CharacterFrameTemplates.xml"); // the window tab
-    load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
-    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
-    load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
-    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");
-    load_xml(&s, "Interface\\FrameXML\\ItemButtonTemplate.xml");
-    load_xml(&s, "Interface\\FrameXML\\QuestFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(&s, r"Interface\FrameXML\MainMenuBarMicroButtons.xml");
-    load_xml(&s, "Interface\\FrameXML\\QuestLogFrame.xml");
+    load_unit_frames_with(
+        &s,
+        &[
+            r"Interface\FrameXML\LocaleProperties.lua",
+            r"Interface\FrameXML\UIPanelTemplates.lua",
+            r"Interface\FrameXML\UIPanelTemplates.xml",
+            r"Interface\FrameXML\CharacterFrameTemplates.xml", // the window tab
+            r"Interface\FrameXML\StaticPopup.xml",
+            r"Interface\FrameXML\MainMenuBarMicroButtons.xml",
+            "Interface\\FrameXML\\ItemButtonTemplate.xml",
+            "Interface\\FrameXML\\QuestFrame.xml",
+            "Interface\\FrameXML\\QuestLogFrame.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "ScrollTemplates.xml", // our scroll kits
+        ],
+    );
     // Level 3 on both feeds, which the app keeps in step: the snapshot `UnitLevel("player")` reads
     // and the requirement state the −1 gate and `GetQuestGreenRange` read.
     s.set_player_req_state(PlayerReqState {
@@ -1139,31 +1147,31 @@ fn the_party_art_paints_over_the_bars() {
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");
-    load_xml(&s, r"Interface\FrameXML\MoneyFrame.xml");
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
     load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
-    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
-    load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
-    load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml");
-    load_xml(&s, r"Interface\FrameXML\ReputationFrame.lua"); // FACTION_BAR_COLORS
-    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml");
     // Before UnitPopup, which reads `TEXT` and `ITEM_QUALITY_COLORS` (`UIParent.lua:65`) at load.
     load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");
-    load_xml(&s, "Interface\\FrameXML\\UnitPopup.xml");
-    // The stock kit in the manifest's order. `TargetofTargetTextureFrame`'s OnLoad calls
+    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
+    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
+    load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");
+    load_xml(&s, r"Interface\FrameXML\MoneyFrame.xml");
+    load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml");
+    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml");
+    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
+    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
+    load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
+    // The stock kit in the production order. `TargetofTargetTextureFrame`'s OnLoad calls
     // `RaiseFrameLevel` (`UIParent.lua:1894-1896`), loaded above.
     load_xml(&s, "Interface\\FrameXML\\TextStatusBar.lua");
     load_xml(&s, "Interface\\FrameXML\\TextStatusBar.xml");
     load_xml(&s, "Interface\\FrameXML\\BuffFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\UnitFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\CombatFeedback.xml");
+    load_xml(&s, "Interface\\FrameXML\\UnitPopup.xml");
+    load_xml(&s, "Interface\\FrameXML\\UnitFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\PlayerFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\PartyFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\TargetFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\PetFrame.xml");
+    load_xml(&s, r"Interface\FrameXML\ReputationFrame.lua"); // FACTION_BAR_COLORS
 
     s.set_unit(
         "party1",

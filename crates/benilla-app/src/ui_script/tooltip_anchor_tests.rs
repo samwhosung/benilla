@@ -12,15 +12,19 @@ use super::test_ui::load_ui as load_xml;
 fn harness(extra: &[&str]) -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");
-    load_xml(&s, r"Interface\FrameXML\MoneyFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml");
-    // `FACTION_BAR_COLORS`, which `GameTooltip_UnitColor` indexes on every unit hover
-    // (`ReputationFrame.lua:3`).
-    load_xml(&s, r"Interface\FrameXML\ReputationFrame.lua");
-    for f in extra {
+    for f in crate::ui_script::test_ui::production_order(&[
+        &[
+            "Interface\\FrameXML\\Fonts.xml",
+            r"Interface\FrameXML\UIParent.xml",
+            r"Interface\FrameXML\MoneyFrame.lua",
+            r"Interface\FrameXML\MoneyFrame.xml",
+            "Interface\\FrameXML\\GameTooltip.xml",
+            // `FACTION_BAR_COLORS`, which `GameTooltip_UnitColor` indexes on every unit hover
+            // (`ReputationFrame.lua:3`).
+            r"Interface\FrameXML\ReputationFrame.lua",
+        ],
+        extra,
+    ]) {
         load_xml(&s, f);
     }
     // The stock tooltip sizes from its lines, so its rect needs a text measurer. Detailed tips
@@ -91,14 +95,14 @@ fn unit_frame_hover_takes_the_default_corner_and_drops_on_leave() {
         // The unit frames read GlobalStrings at load, and `UnitFrame_OnEnter` passes
         // `PARTY_OPTIONS_LABEL` to `SetText`, which raises on nil.
         "Interface\\FrameXML\\GlobalStrings.lua",
+        "Interface\\FrameXML\\BasicControls.xml", // `TEXT`, which UnitPopup.lua reads at file scope
+        "Interface\\FrameXML\\UIDropDownMenu.xml",
         "Interface\\FrameXML\\TextStatusBar.lua",
         "Interface\\FrameXML\\TextStatusBar.xml",
-        "Interface\\FrameXML\\UIDropDownMenu.xml",
-        "Interface\\FrameXML\\BasicControls.xml", // `TEXT`, which UnitPopup.lua reads at file scope
-        "Interface\\FrameXML\\UnitPopup.xml",
         "Interface\\FrameXML\\BuffFrame.xml",
-        "Interface\\FrameXML\\UnitFrame.xml",
         "Interface\\FrameXML\\CombatFeedback.xml",
+        "Interface\\FrameXML\\UnitPopup.xml",
+        "Interface\\FrameXML\\UnitFrame.xml",
         "Interface\\FrameXML\\PlayerFrame.xml",
         "Interface\\FrameXML\\PartyFrame.xml",
         "Interface\\FrameXML\\TargetFrame.xml",
@@ -188,14 +192,14 @@ fn your_own_portrait_explains_the_menu_instead_of_showing_your_health() {
         // The unit frames read GlobalStrings at load, and `UnitFrame_OnEnter` passes
         // `PARTY_OPTIONS_LABEL` to `SetText`, which raises on nil.
         "Interface\\FrameXML\\GlobalStrings.lua",
+        "Interface\\FrameXML\\BasicControls.xml", // `TEXT`, which UnitPopup.lua reads at file scope
+        "Interface\\FrameXML\\UIDropDownMenu.xml",
         "Interface\\FrameXML\\TextStatusBar.lua",
         "Interface\\FrameXML\\TextStatusBar.xml",
-        "Interface\\FrameXML\\UIDropDownMenu.xml",
-        "Interface\\FrameXML\\BasicControls.xml", // `TEXT`, which UnitPopup.lua reads at file scope
-        "Interface\\FrameXML\\UnitPopup.xml",
         "Interface\\FrameXML\\BuffFrame.xml",
-        "Interface\\FrameXML\\UnitFrame.xml",
         "Interface\\FrameXML\\CombatFeedback.xml",
+        "Interface\\FrameXML\\UnitPopup.xml",
+        "Interface\\FrameXML\\UnitFrame.xml",
         "Interface\\FrameXML\\PlayerFrame.xml",
         "Interface\\FrameXML\\PartyFrame.xml",
         "Interface\\FrameXML\\TargetFrame.xml",
@@ -252,14 +256,14 @@ fn your_own_portrait_explains_the_menu_instead_of_showing_your_health() {
 fn action_button_hover_takes_the_default_corner() {
     benilla_formats::wow_data_or_skip!();
     let s = harness(&[
-        "Interface\\FrameXML\\Cooldown.xml",
-        "Interface\\FrameXML\\ActionButtonTemplate.xml",
-        "Interface\\FrameXML\\TextStatusBar.lua",
-        "Interface\\FrameXML\\TextStatusBar.xml",
+        "Interface\\FrameXML\\GlobalStrings.lua",
         "Interface\\FrameXML\\Fonts.xml",
         r"Interface\FrameXML\UIParent.xml",
-        "Interface\\FrameXML\\GlobalStrings.lua",
+        "Interface\\FrameXML\\TextStatusBar.lua",
+        "Interface\\FrameXML\\TextStatusBar.xml",
         "Interface\\FrameXML\\MainMenuBar.xml",
+        "Interface\\FrameXML\\Cooldown.xml",
+        "Interface\\FrameXML\\ActionButtonTemplate.xml",
         "Interface\\FrameXML\\ActionBarFrame.xml",
         "Interface\\FrameXML\\BonusActionBarFrame.xml",
     ]);
@@ -288,27 +292,26 @@ fn action_button_hover_takes_the_default_corner() {
 fn ubertooltips_off_seats_action_bar_plates_beside_the_button() {
     benilla_formats::wow_data_or_skip!();
     let mut s = harness(&[
-        "Interface\\FrameXML\\Cooldown.xml",
-        "Interface\\FrameXML\\ActionButtonTemplate.xml",
-        "Interface\\FrameXML\\TextStatusBar.lua",
-        "Interface\\FrameXML\\TextStatusBar.xml",
-        "Interface\\FrameXML\\Fonts.xml",
-        r"Interface\FrameXML\UIParent.xml",
         "Interface\\FrameXML\\GlobalStrings.lua",
-        "Interface\\FrameXML\\MainMenuBar.xml",
-        "Interface\\FrameXML\\ActionBarFrame.xml",
-        "Interface\\FrameXML\\BonusActionBarFrame.xml",
-        "Interface\\FrameXML\\ActionBarFrame.xml",
-        "Interface\\FrameXML\\UIDropDownMenu.xml",
-        "ScrollTemplates.xml",
-        r"Interface\FrameXML\UIPanelTemplates.lua",
-        r"Interface\FrameXML\UIPanelTemplates.xml",
+        "Interface\\FrameXML\\Fonts.xml",
         "Interface\\FrameXML\\BasicControls.xml",
         "Interface\\FrameXML\\LocaleProperties.lua",
+        r"Interface\FrameXML\UIParent.xml",
+        "Interface\\FrameXML\\UIDropDownMenu.xml",
+        r"Interface\FrameXML\UIPanelTemplates.lua",
+        r"Interface\FrameXML\UIPanelTemplates.xml",
         "Interface\\FrameXML\\StaticPopup.xml",
+        "Interface\\FrameXML\\TextStatusBar.lua",
+        "Interface\\FrameXML\\TextStatusBar.xml",
+        "Interface\\FrameXML\\MainMenuBar.xml",
+        "Interface\\FrameXML\\Cooldown.xml",
+        "Interface\\FrameXML\\ActionButtonTemplate.xml",
+        "Interface\\FrameXML\\ActionBarFrame.xml",
+        "Interface\\FrameXML\\MultiActionBars.xml",
+        "Interface\\FrameXML\\BonusActionBarFrame.xml",
+        "ScrollTemplates.xml",
         "KeyBindingsPage.xml",
         "OptionsFrame.xml",
-        "Interface\\FrameXML\\MultiActionBars.xml",
     ]);
     s.register_cvars(crate::cvars::registered_pairs());
     s.set_cvar_engine("UberTooltips", "0");
@@ -365,16 +368,14 @@ fn ubertooltips_off_seats_action_bar_plates_beside_the_button() {
 fn ubertooltips_off_seats_stance_plates_beside_the_button() {
     benilla_formats::wow_data_or_skip!();
     let mut s = harness(&[
-        "Interface\\FrameXML\\Cooldown.xml",
-        "Interface\\FrameXML\\ActionButtonTemplate.xml",
-        "Interface\\FrameXML\\TextStatusBar.lua",
-        "Interface\\FrameXML\\TextStatusBar.xml",
+        "Interface\\FrameXML\\GlobalStrings.lua",
         "Interface\\FrameXML\\Fonts.xml",
         r"Interface\FrameXML\UIParent.xml",
-        "Interface\\FrameXML\\GlobalStrings.lua",
+        "Interface\\FrameXML\\TextStatusBar.lua",
+        "Interface\\FrameXML\\TextStatusBar.xml",
         "Interface\\FrameXML\\MainMenuBar.xml",
-        "Interface\\FrameXML\\ActionBarFrame.xml",
-        "Interface\\FrameXML\\BonusActionBarFrame.xml",
+        "Interface\\FrameXML\\Cooldown.xml",
+        "Interface\\FrameXML\\ActionButtonTemplate.xml",
         "Interface\\FrameXML\\ActionBarFrame.xml",
         "Interface\\FrameXML\\BonusActionBarFrame.xml",
     ]);
@@ -418,19 +419,17 @@ fn ubertooltips_off_seats_stance_plates_beside_the_button() {
 fn buff_hover_hangs_below_left_of_the_button() {
     benilla_formats::wow_data_or_skip!();
     let mut s = harness(&[
-        "Interface\\FrameXML\\Cooldown.xml",
-        "Interface\\FrameXML\\ActionButtonTemplate.xml",
-        "Interface\\FrameXML\\TextStatusBar.lua",
-        "Interface\\FrameXML\\TextStatusBar.xml",
+        "Interface\\FrameXML\\GlobalStrings.lua",
         "Interface\\FrameXML\\Fonts.xml",
         r"Interface\FrameXML\UIParent.xml",
-        "Interface\\FrameXML\\GlobalStrings.lua",
-        "Interface\\FrameXML\\MainMenuBar.xml",
-        "Interface\\FrameXML\\ActionBarFrame.xml",
-        "Interface\\FrameXML\\BonusActionBarFrame.xml",
         "Interface\\FrameXML\\TextStatusBar.lua",
         "Interface\\FrameXML\\TextStatusBar.xml",
+        "Interface\\FrameXML\\MainMenuBar.xml",
+        "Interface\\FrameXML\\Cooldown.xml",
+        "Interface\\FrameXML\\ActionButtonTemplate.xml",
+        "Interface\\FrameXML\\ActionBarFrame.xml",
         "Interface\\FrameXML\\BuffFrame.xml",
+        "Interface\\FrameXML\\BonusActionBarFrame.xml",
     ]);
     s.set_player_auras(vec![AuraState {
         spell_id: 1459,

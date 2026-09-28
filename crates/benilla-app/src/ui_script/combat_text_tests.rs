@@ -10,8 +10,8 @@ fn load_combat_text() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua"); // ENTERING_COMBAT & co.
-    load_xml(&s, "Interface\\FrameXML\\BasicControls.xml"); // TEXT()
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
+    load_xml(&s, "Interface\\FrameXML\\BasicControls.xml"); // TEXT()
     load_xml(&s, r"Interface\FrameXML\UIParent.xml");
     super::test_ui::seat_chain_addon(&mut s, "Blizzard_CombatText");
     // The options window's defaults block (`UIOptionsFrame.lua:125`), seated by hand, master on.

@@ -8,15 +8,15 @@ use super::test_ui::load_ui as load_xml;
 fn setup() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
-    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
-    load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");
-    load_xml(&s, r"Interface\FrameXML\MoneyFrame.xml");
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
-    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
     load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
+    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
     load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
+    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
+    load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");
+    load_xml(&s, r"Interface\FrameXML\MoneyFrame.xml");
+    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
+    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
     load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
     s
 }
@@ -252,8 +252,8 @@ fn hide_and_find_address_one_instance_by_data_only_for_a_multiple_dialog() {
 fn the_verb_dialogs_open_from_their_events_and_call_their_verbs() {
     benilla_formats::wow_data_or_skip!();
     use benilla_ui::script::ScriptValue;
+    // `setup` carries UIParent.xml, whose `UIParent_OnEvent` holds the arms.
     let mut s = setup();
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml"); // the arms
     s.set_money(50_000);
     s.fire_event("CONFIRM_PET_UNLEARN", vec![ScriptValue::Int(12_345)]);
     s.tick(0.0);

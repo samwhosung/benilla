@@ -6,29 +6,29 @@ use benilla_ui::script::UiScript;
 
 use super::test_ui::load_ui as load_xml;
 
-/// The files under test on the manifest prefix they sit on, in manifest order.
+/// The files under test on the manifest prefix they sit on, in the production order.
 fn harness() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     for file in [
+        "Interface\\FrameXML\\GlobalStrings.lua",
         "Interface\\FrameXML\\Fonts.xml",
+        "Interface\\FrameXML\\BasicControls.xml",
+        "Interface\\FrameXML\\LocaleProperties.lua",
         r"Interface\FrameXML\UIParent.xml",
         r"Interface\FrameXML\MoneyFrame.lua",
         r"Interface\FrameXML\MoneyFrame.xml",
         "Interface\\FrameXML\\GameTooltip.xml",
-        "ScrollTemplates.xml",
-        r"Interface\FrameXML\UIPanelTemplates.lua",
-        r"Interface\FrameXML\UIPanelTemplates.xml",
-        r"Interface\FrameXML\CharacterFrameTemplates.xml",
-        "Interface\\FrameXML\\GlobalStrings.lua",
-        "Interface\\FrameXML\\BasicControls.xml",
-        "Interface\\FrameXML\\LocaleProperties.lua",
-        "Interface\\FrameXML\\StaticPopup.xml",
-        r"Interface\FrameXML\OptionsFrameTemplates.xml",
         // `UIOptionsCheckButtonTemplate`'s home (`UIOptionsFrame.xml:6`), after the dropdown kit
         // its window uses.
         r"Interface\FrameXML\UIDropDownMenu.xml",
+        r"Interface\FrameXML\UIPanelTemplates.lua",
+        r"Interface\FrameXML\UIPanelTemplates.xml",
+        r"Interface\FrameXML\OptionsFrameTemplates.xml",
+        r"Interface\FrameXML\CharacterFrameTemplates.xml",
         r"Interface\FrameXML\UIOptionsFrame.xml",
+        "Interface\\FrameXML\\StaticPopup.xml",
+        "ScrollTemplates.xml",
     ] {
         load_xml(&s, file);
     }

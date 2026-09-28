@@ -8,32 +8,30 @@ use super::test_ui::load_ui as load_xml;
 fn harness() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
+    load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
+    load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");
+    // UIParent.xml comes first: `UnitPopup.lua:47` reads its `ITEM_QUALITY_COLORS` at file scope.
+    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml"); // TOOLTIP_DEFAULT_* for the dropdowns
     load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml"); // TargetFrameDropDown's template
+    load_xml(&s, "Interface\\FrameXML\\TextStatusBar.lua");
+    load_xml(&s, "Interface\\FrameXML\\TextStatusBar.xml");
+    load_xml(&s, "Interface\\FrameXML\\MainMenuBar.xml");
     load_xml(&s, "Interface\\FrameXML\\Cooldown.xml");
     load_xml(&s, "Interface\\FrameXML\\ActionButtonTemplate.xml");
-    load_xml(&s, "Interface\\FrameXML\\TextStatusBar.lua");
-    load_xml(&s, "Interface\\FrameXML\\TextStatusBar.xml");
-    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
-    load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
-    load_xml(&s, "Interface\\FrameXML\\MainMenuBar.xml");
     load_xml(&s, "Interface\\FrameXML\\ActionBarFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\BonusActionBarFrame.xml");
-    // UIParent.xml comes first: `UnitPopup.lua:47` reads its `ITEM_QUALITY_COLORS` at file scope.
-    load_xml(&s, "Interface\\FrameXML\\BasicControls.xml");
-    load_xml(&s, "Interface\\FrameXML\\UnitPopup.xml");
-    load_xml(&s, "Interface\\FrameXML\\TextStatusBar.lua");
-    load_xml(&s, "Interface\\FrameXML\\TextStatusBar.xml");
     load_xml(&s, "Interface\\FrameXML\\BuffFrame.xml");
-    load_xml(&s, "Interface\\FrameXML\\UnitFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\CombatFeedback.xml");
+    load_xml(&s, "Interface\\FrameXML\\UnitPopup.xml");
+    load_xml(&s, "Interface\\FrameXML\\UnitFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\PlayerFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\PartyFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\TargetFrame.xml");
     load_xml(&s, "Interface\\FrameXML\\PetFrame.xml");
+    load_xml(&s, "Interface\\FrameXML\\BonusActionBarFrame.xml");
 
     // `TargetofTargetFrame` loads shown (`TargetFrame.xml:515`) and hides only after the rows
     // lay out (`TargetFrame.lua:66`), so a first target lays its rows out for the 5-wide wrap;

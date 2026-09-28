@@ -10,30 +10,27 @@ fn harness() -> UiScript {
 
 /// Load the manifest slice onto `s`, so a page test can seed CVars before the XML loads, as the
 /// app does. GameTooltip.xml precedes UIDropDownMenu.xml for the kit's `TOOLTIP_DEFAULT_COLOR`.
-fn harness_on(mut s: UiScript) -> UiScript {
+fn harness_on(s: UiScript) -> UiScript {
+    harness_with(s, &[])
+}
+
+/// [`harness_on`] with a page's `definers` merged in: the files its rows read, each loaded once
+/// and in the production order.
+fn harness_with(mut s: UiScript, definers: &[&str]) -> UiScript {
     s.set_screen_size(1024.0, 768.0);
-    // Each file loads once: a page harness may have loaded it already, and a second load of the
-    // money kit's frames breaks `MoneyFrame_Update`, which writes through `getglobal(name)`.
-    let loaded = |s: &UiScript, file: &str| -> bool {
-        s.eval::<bool>(&format!(
-            "return (BENILLA_TEST_LOADED or {{}})[{file:?}] == true"
-        ))
-        .unwrap_or(false)
-    };
-    for file in [
+    const WINDOW: &[&str] = &[
+        "Interface\\FrameXML\\GlobalStrings.lua",
         "Interface\\FrameXML\\Fonts.xml",
+        "Interface\\FrameXML\\BasicControls.xml",
+        "Interface\\FrameXML\\LocaleProperties.lua",
         // Before every window that names `parent="UIParent"`, which resolves at load.
         r"Interface\FrameXML\UIParent.xml",
         r"Interface\FrameXML\MoneyFrame.lua",
         r"Interface\FrameXML\MoneyFrame.xml",
-        r"Interface\FrameXML\UIPanelTemplates.lua",
-        r"Interface\FrameXML\UIPanelTemplates.xml",
-        "Interface\\FrameXML\\GlobalStrings.lua",
-        "Interface\\FrameXML\\BasicControls.xml",
-        "Interface\\FrameXML\\LocaleProperties.lua",
-        "Interface\\FrameXML\\StaticPopup.xml",
         "Interface\\FrameXML\\GameTooltip.xml",
         "Interface\\FrameXML\\UIDropDownMenu.xml",
+        r"Interface\FrameXML\UIPanelTemplates.lua",
+        r"Interface\FrameXML\UIPanelTemplates.xml",
         // Before our files, as the core loads before the layer: it sources UIParent.lua again.
         r"Interface\FrameXML\GameMenuFrame.xml",
         // The stock options kit, hidden: `UIOptionsFrame_Init` assigns the option globals our
@@ -41,15 +38,14 @@ fn harness_on(mut s: UiScript) -> UiScript {
         r"Interface\FrameXML\OptionsFrameTemplates.xml",
         r"Interface\FrameXML\OptionsFrame.lua",
         r"Interface\FrameXML\UIOptionsFrame.xml",
+        "Interface\\FrameXML\\StaticPopup.xml",
         "ScrollTemplates.xml", // the page scroll and the Keybindings list
         "KeyBindingsPage.xml", // the Keybindings page's templates and script
         "OptionsFrame.xml",
         "GameMenuAdapters.xml",
-    ] {
+    ];
+    for file in super::test_ui::production_order(&[definers, WINDOW]) {
         // Our window loads strict: a missing template there fails instead of only warning.
-        if loaded(&s, file) {
-            continue;
-        }
         if file == "OptionsFrame.xml" {
             super::test_ui::load_ui_strict(&s, file);
         } else {
@@ -631,20 +627,8 @@ fn audio_harness() -> UiScript {
 fn combat_harness() -> UiScript {
     let mut s = audio_harness();
     s.set_screen_size(1024.0, 768.0);
-    load_definers(&s, &[r"Interface\FrameXML\UIParent.xml"]);
     super::test_ui::seat_chain_addon(&mut s, "Blizzard_CombatText");
     harness_on(s)
-}
-
-/// Load `files` ahead of the window, in order, each recorded so `harness_on` loads it only once.
-fn load_definers(s: &UiScript, files: &[&str]) {
-    for file in files {
-        super::test_ui::load_ui(s, file);
-        s.run(&format!(
-            "BENILLA_TEST_LOADED = BENILLA_TEST_LOADED or {{}} BENILLA_TEST_LOADED[{file:?}] = true"
-        ))
-        .unwrap();
-    }
 }
 
 /// The Interface page's harness, with its rows' consumers loaded ahead of the window: the unit
@@ -652,62 +636,56 @@ fn load_definers(s: &UiScript, files: &[&str]) {
 fn interface_harness() -> UiScript {
     let mut s = audio_harness();
     s.set_screen_size(1024.0, 768.0);
-    load_definers(
-        &s,
+    harness_with(
+        s,
         &[
+            "Interface\\FrameXML\\GlobalStrings.lua",
             "Interface\\FrameXML\\Fonts.xml",
+            "Interface\\FrameXML\\BasicControls.xml", // `TEXT`, which UnitPopup.lua calls at load
+            "Interface\\FrameXML\\LocaleProperties.lua",
+            r"Interface\FrameXML\UIParent.xml",
             r"Interface\FrameXML\MoneyFrame.lua",
             r"Interface\FrameXML\MoneyFrame.xml",
-            "Interface\\FrameXML\\GlobalStrings.lua",
-            r"Interface\FrameXML\UIParent.xml",
-            r"Interface\FrameXML\UIPanelTemplates.lua",
-            r"Interface\FrameXML\UIPanelTemplates.xml",
-            "Interface\\FrameXML\\BasicControls.xml",
-            "Interface\\FrameXML\\LocaleProperties.lua",
-            "Interface\\FrameXML\\StaticPopup.xml",
             // The unit frames and the kits ahead of them: their dropdowns initialize at load, and
             // the dropdown kit reads `GameTooltip`'s `TOOLTIP_DEFAULT_COLOR`.
             "Interface\\FrameXML\\GameTooltip.xml",
             "Interface\\FrameXML\\UIDropDownMenu.xml",
-            "Interface\\FrameXML\\BasicControls.xml", // `TEXT`, which UnitPopup.lua calls at load
-            "Interface\\FrameXML\\UnitPopup.xml",
+            r"Interface\FrameXML\UIPanelTemplates.lua",
+            r"Interface\FrameXML\UIPanelTemplates.xml",
+            r"Interface\FrameXML\OptionsFrameTemplates.xml",
+            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+            "Interface\\FrameXML\\StaticPopup.xml",
             "Interface\\FrameXML\\TextStatusBar.lua",
             "Interface\\FrameXML\\TextStatusBar.xml",
+            "Interface\\FrameXML\\MainMenuBar.xml",
+            r"Interface\FrameXML\MainMenuBarMicroButtons.xml",
+            "Interface\\FrameXML\\Cooldown.xml",
+            "Interface\\FrameXML\\ActionButtonTemplate.xml",
+            "Interface\\FrameXML\\ActionBarFrame.xml",
             "Interface\\FrameXML\\BuffFrame.xml",
-            "Interface\\FrameXML\\UnitFrame.xml",
             "Interface\\FrameXML\\CombatFeedback.xml",
+            "Interface\\FrameXML\\UnitPopup.xml",
+            "Interface\\FrameXML\\UnitFrame.xml",
             "Interface\\FrameXML\\PlayerFrame.xml",
             "Interface\\FrameXML\\PartyFrame.xml",
             "Interface\\FrameXML\\TargetFrame.xml",
             "Interface\\FrameXML\\PetFrame.xml",
-            // For `OpacityFrameSlider`, which `PartyMemberBackground` sets on `VARIABLES_LOADED`.
-            "Interface\\FrameXML\\ColorPickerFrame.xml",
-            "Interface\\FrameXML\\Cooldown.xml",
-            "Interface\\FrameXML\\ActionButtonTemplate.xml",
-            "Interface\\FrameXML\\MainMenuBar.xml",
-            "Interface\\FrameXML\\ActionBarFrame.xml",
-            "Interface\\FrameXML\\BonusActionBarFrame.xml",
+            "Interface\\FrameXML\\ItemButtonTemplate.xml",
             // `ExhaustionTick_Update` reads `ReputationWatchBar`, which `ReputationFrame.xml`
             // declares, after the templates its check boxes inherit.
-            r"Interface\FrameXML\UIPanelTemplates.lua",
-            r"Interface\FrameXML\UIPanelTemplates.xml",
-            r"Interface\FrameXML\OptionsFrameTemplates.xml",
             r"Interface\FrameXML\ReputationFrame.xml",
-            "ScrollTemplates.xml",
-            "Interface\\FrameXML\\CharacterFrameTemplates.xml",
-            "Interface\\FrameXML\\MerchantFrame.xml",
-            "Interface\\FrameXML\\GlobalStrings.lua",
-            "Interface\\FrameXML\\BasicControls.xml",
-            "Interface\\FrameXML\\ItemButtonTemplate.xml",
             "Interface\\FrameXML\\QuestFrame.xml",
-            r"Interface\FrameXML\MainMenuBarMicroButtons.xml",
             "Interface\\FrameXML\\QuestLogFrame.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "Interface\\FrameXML\\BonusActionBarFrame.xml",
             // The Show Tutorials setter, like the reference's Save arm, reaches
             // `TutorialFrameCheckButton` and `TutorialFrame_HideAllAlerts` unguarded.
             "Interface\\FrameXML\\TutorialFrame.xml",
+            // For `OpacityFrameSlider`, which `PartyMemberBackground` sets on `VARIABLES_LOADED`.
+            "Interface\\FrameXML\\ColorPickerFrame.xml",
+            "ScrollTemplates.xml",
         ],
-    );
-    harness_on(s)
+    )
 }
 
 /// The Chat page's harness: the chat frames ahead of the window, for `SetChatMouseOverDelay` and
@@ -715,31 +693,26 @@ fn interface_harness() -> UiScript {
 fn chat_harness() -> UiScript {
     let mut s = audio_harness();
     s.set_screen_size(1024.0, 768.0);
-    load_definers(
-        &s,
+    harness_with(
+        s,
         &[
+            "Interface\\FrameXML\\GlobalStrings.lua",
             "Interface\\FrameXML\\Fonts.xml",
+            "Interface\\FrameXML\\BasicControls.xml",
+            "Interface\\FrameXML\\LocaleProperties.lua",
+            r"Interface\FrameXML\UIParent.xml",
             r"Interface\FrameXML\MoneyFrame.lua",
             r"Interface\FrameXML\MoneyFrame.xml",
-            r"Interface\FrameXML\UIParent.xml",
+            "Interface\\FrameXML\\GameTooltip.xml",
+            "Interface\\FrameXML\\UIMenu.xml", // the kit the chat and emote menus build on
+            "Interface\\FrameXML\\UIDropDownMenu.xml",
             r"Interface\FrameXML\UIPanelTemplates.lua",
             r"Interface\FrameXML\UIPanelTemplates.xml",
-            "Interface\\FrameXML\\LocaleProperties.lua",
-            "Interface\\FrameXML\\GlobalStrings.lua",
-            "Interface\\FrameXML\\BasicControls.xml",
             "Interface\\FrameXML\\StaticPopup.xml",
-            "Interface\\FrameXML\\GameTooltip.xml",
-            "Interface\\FrameXML\\UIDropDownMenu.xml",
-            "Interface\\FrameXML\\UIMenu.xml", // the kit the chat and emote menus build on
-            "Interface\\FrameXML\\GlobalStrings.lua",
-            "Interface\\FrameXML\\BasicControls.xml",
             "Interface\\FrameXML\\ChatFrame.xml",
-            "Interface\\FrameXML\\UIPanelTemplates.lua",
-            "Interface\\FrameXML\\UIPanelTemplates.xml",
             "Interface\\FrameXML\\FloatingChatFrame.xml",
         ],
-    );
-    harness_on(s)
+    )
 }
 
 /// The Action Bars page's harness: the stock bars its rows move, and the options windows ahead of
@@ -747,46 +720,42 @@ fn chat_harness() -> UiScript {
 fn actionbars_harness() -> UiScript {
     let mut s = audio_harness();
     s.set_screen_size(1024.0, 768.0);
-    load_definers(
-        &s,
+    harness_with(
+        s,
         &[
-            "Interface\\FrameXML\\Fonts.xml",
-            r"Interface\FrameXML\UIParent.xml",
-            "Interface\\FrameXML\\Cooldown.xml",
-            "Interface\\FrameXML\\ActionButtonTemplate.xml",
-            "Interface\\FrameXML\\TextStatusBar.lua",
-            "Interface\\FrameXML\\TextStatusBar.xml",
             "Interface\\FrameXML\\GlobalStrings.lua",
-            "Interface\\FrameXML\\MainMenuBar.xml",
+            "Interface\\FrameXML\\Fonts.xml",
+            "Interface\\FrameXML\\BasicControls.xml",
+            "Interface\\FrameXML\\LocaleProperties.lua",
+            r"Interface\FrameXML\UIParent.xml",
             r"Interface\FrameXML\MoneyFrame.lua",
             r"Interface\FrameXML\MoneyFrame.xml",
             "Interface\\FrameXML\\GameTooltip.xml",
-            "Interface\\FrameXML\\ActionBarFrame.xml",
-            "Interface\\FrameXML\\BonusActionBarFrame.xml",
-            // `ExhaustionTick_Update` reads `ReputationWatchBar`, which `ReputationFrame.xml`
-            // declares, after the templates its check boxes inherit.
+            "Interface\\FrameXML\\UIDropDownMenu.xml",
             r"Interface\FrameXML\UIPanelTemplates.lua",
             r"Interface\FrameXML\UIPanelTemplates.xml",
             r"Interface\FrameXML\OptionsFrameTemplates.xml",
-            r"Interface\FrameXML\ReputationFrame.xml",
-            "Interface\\FrameXML\\ActionBarFrame.xml",
-            "Interface\\FrameXML\\UIDropDownMenu.xml",
-            "ScrollTemplates.xml",
-            r"Interface\FrameXML\UIPanelTemplates.lua",
-            r"Interface\FrameXML\UIPanelTemplates.xml",
-            "Interface\\FrameXML\\BasicControls.xml",
-            "Interface\\FrameXML\\LocaleProperties.lua",
-            "Interface\\FrameXML\\StaticPopup.xml",
-            "KeyBindingsPage.xml",
             // `UIOptionsFrame_Init` assigns the globals these rows capture at OnLoad as their
             // default, and `MultiActionBars.xml` writes into `UIOptionsFrameCheckButtons` at load.
             r"Interface\FrameXML\OptionsFrame.lua",
             r"Interface\FrameXML\UIOptionsFrame.xml",
-            "OptionsFrame.xml",
+            "Interface\\FrameXML\\StaticPopup.xml",
+            "Interface\\FrameXML\\TextStatusBar.lua",
+            "Interface\\FrameXML\\TextStatusBar.xml",
+            "Interface\\FrameXML\\MainMenuBar.xml",
+            "Interface\\FrameXML\\Cooldown.xml",
+            "Interface\\FrameXML\\ActionButtonTemplate.xml",
+            "Interface\\FrameXML\\ActionBarFrame.xml",
             "Interface\\FrameXML\\MultiActionBars.xml",
+            // `ExhaustionTick_Update` reads `ReputationWatchBar`, which `ReputationFrame.xml`
+            // declares, after the templates its check boxes inherit.
+            r"Interface\FrameXML\ReputationFrame.xml",
+            "Interface\\FrameXML\\BonusActionBarFrame.xml",
+            "ScrollTemplates.xml",
+            "KeyBindingsPage.xml",
+            "OptionsFrame.xml",
         ],
-    );
-    harness_on(s)
+    )
 }
 
 /// Sliders read the stored value with the era's rounded-percent readout; checkboxes read the flag.

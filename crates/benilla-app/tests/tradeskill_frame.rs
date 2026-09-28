@@ -11,28 +11,28 @@ mod common;
 
 /// The load prefix of both windows, in the app's order.
 const FILES: &[&str] = &[
-    "Interface\\FrameXML\\Fonts.xml",
-    r"Interface\FrameXML\MoneyFrame.lua",
-    r"Interface\FrameXML\MoneyFrame.xml",
-    r"Interface\FrameXML\UIParent.xml",
-    r"Interface\FrameXML\UIPanelTemplates.lua",
-    r"Interface\FrameXML\UIPanelTemplates.xml",
     "Interface\\FrameXML\\GlobalStrings.lua",
+    "Interface\\FrameXML\\Fonts.xml",
     "Interface\\FrameXML\\BasicControls.xml",
     "Interface\\FrameXML\\LocaleProperties.lua",
-    "Interface\\FrameXML\\StaticPopup.xml", // the dialog engine
+    r"Interface\FrameXML\UIParent.xml",
+    r"Interface\FrameXML\MoneyFrame.lua",
+    r"Interface\FrameXML\MoneyFrame.xml",
     "Interface\\FrameXML\\GameTooltip.xml",
     "Interface\\FrameXML\\UIDropDownMenu.xml",
-    "ScrollTemplates.xml",
+    r"Interface\FrameXML\UIPanelTemplates.lua",
+    r"Interface\FrameXML\UIPanelTemplates.xml",
+    "Interface\\FrameXML\\StaticPopup.xml", // the dialog engine
+    // The reagent slots inherit `QuestItemTemplate` and are painted with `SetItemButtonTexture`
+    // and `SetItemButtonCount` (`ItemButtonTemplate.lua`).
+    r"Interface\FrameXML\ItemButtonTemplate.xml",
+    r"Interface\FrameXML\QuestFrameTemplates.xml",
     // Both windows open from UIParent's TRADE_SKILL_SHOW / CRAFT_SHOW arms (`*_LoadUI`, then
     // `*_Show`). With no addon registry the addons load as chain files, and `*_LoadUI` reports
     // ADDON_LOAD_FAILED through `message`, a shown frame, not an error.
     // Both addons inherit the trainer window's list and detail templates.
     r"Interface\FrameXML\ClassTrainerFrameTemplates.xml",
-    // The reagent slots inherit `QuestItemTemplate` and are painted with `SetItemButtonTexture`
-    // and `SetItemButtonCount` (`ItemButtonTemplate.lua`).
-    r"Interface\FrameXML\ItemButtonTemplate.xml",
-    r"Interface\FrameXML\QuestFrameTemplates.xml",
+    "ScrollTemplates.xml",
     r"Interface\AddOns\Blizzard_TradeSkillUI\Blizzard_TradeSkillUI.xml",
     r"Interface\AddOns\Blizzard_CraftUI\Blizzard_CraftUI.xml",
 ];

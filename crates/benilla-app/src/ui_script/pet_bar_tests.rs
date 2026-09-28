@@ -4,39 +4,39 @@ use benilla_ui::script::{PetActionView, QuadContent, UiScript};
 
 use super::test_ui::load_ui as load_xml;
 
-/// The pet bar's chain in manifest order, then the chat window, whose edit box `ShowPetActionBar`
-/// raises over the sliding bar (PetActionBarFrame.lua:175).
+/// The pet bar's chain in the production order, then the chat window, whose edit box
+/// `ShowPetActionBar` raises over the sliding bar (PetActionBarFrame.lua:175).
 pub(super) fn load_pet_bar(s: &UiScript) {
     for file in [
-        "Interface\\FrameXML\\Fonts.xml",
-        r"Interface\FrameXML\UIParent.xml",
-        "Interface\\FrameXML\\Cooldown.xml",
-        "Interface\\FrameXML\\ActionButtonTemplate.xml",
-        "Interface\\FrameXML\\TextStatusBar.lua",
-        "Interface\\FrameXML\\TextStatusBar.xml",
         "Interface\\FrameXML\\GlobalStrings.lua",
+        "Interface\\FrameXML\\Fonts.xml",
         "Interface\\FrameXML\\BasicControls.xml",
-        "Interface\\FrameXML\\MainMenuBar.xml",
+        "Interface\\FrameXML\\LocaleProperties.lua",
+        r"Interface\FrameXML\UIParent.xml",
         r"Interface\FrameXML\MoneyFrame.lua",
         r"Interface\FrameXML\MoneyFrame.xml",
         "Interface\\FrameXML\\GameTooltip.xml",
-        "Interface\\FrameXML\\ActionBarFrame.xml",
-        "Interface\\FrameXML\\BonusActionBarFrame.xml",
+        "Interface\\FrameXML\\UIMenu.xml",
+        "Interface\\FrameXML\\UIDropDownMenu.xml",
         r"Interface\FrameXML\UIPanelTemplates.lua",
         r"Interface\FrameXML\UIPanelTemplates.xml",
         r"Interface\FrameXML\OptionsFrameTemplates.xml",
-        r"Interface\FrameXML\ReputationFrame.xml",
-        "Interface\\FrameXML\\LocaleProperties.lua",
         "Interface\\FrameXML\\StaticPopup.xml",
-        "Interface\\FrameXML\\UIDropDownMenu.xml",
+        "Interface\\FrameXML\\TextStatusBar.lua",
+        "Interface\\FrameXML\\TextStatusBar.xml",
+        "Interface\\FrameXML\\MainMenuBar.xml",
+        "Interface\\FrameXML\\Cooldown.xml",
+        "Interface\\FrameXML\\ActionButtonTemplate.xml",
+        "Interface\\FrameXML\\ActionBarFrame.xml",
+        "Interface\\FrameXML\\MultiActionBars.xml",
+        "Interface\\FrameXML\\ChatFrame.xml",
+        "Interface\\FrameXML\\FloatingChatFrame.xml",
+        r"Interface\FrameXML\ReputationFrame.xml",
+        "Interface\\FrameXML\\PetActionBarFrame.xml",
+        "Interface\\FrameXML\\BonusActionBarFrame.xml",
         "ScrollTemplates.xml",
         "KeyBindingsPage.xml",
         "OptionsFrame.xml",
-        "Interface\\FrameXML\\MultiActionBars.xml",
-        "Interface\\FrameXML\\PetActionBarFrame.xml",
-        "Interface\\FrameXML\\UIMenu.xml",
-        "Interface\\FrameXML\\ChatFrame.xml",
-        "Interface\\FrameXML\\FloatingChatFrame.xml",
     ] {
         load_xml(s, file);
     }
