@@ -17,6 +17,12 @@ use super::{
 /// The host's answer to whether a texture path resolves to a file.
 pub type TextureProbe = Box<dyn Fn(&str) -> bool>;
 
+/// The host's world-to-map projection (`0x4a7360`): the displayed map's selection as
+/// [`super::UiScript::world_map_selection`] reads it, a map id and a world `(x, y)`, to the map UV,
+/// `None` where the reference's outputs stay at their `(0, 0)`.
+pub type WorldLocProjector =
+    Box<dyn Fn((u32, u32, Option<u32>), u32, f32, f32) -> Option<(f32, f32)>>;
+
 /// The host's answer to a texture path's size in texels.
 pub type TextureSizeProbe = Box<dyn Fn(&str) -> Option<(u32, u32)>>;
 
@@ -76,6 +82,8 @@ pub(crate) struct Model {
     /// Whether a texture path resolves (patch chain or loose addon file), so the path form of
     /// `SetTexture` returns the reference's 1 or nil inline (`0x79bb40`). `None` answers nil.
     pub(crate) texture_probe: Option<TextureProbe>,
+    /// `GetWorldLocMapPosition`'s projection; `None` answers `(0, 0)`.
+    pub(crate) world_loc_projector: Option<WorldLocProjector>,
     /// A path's texel size, which an axis authored as 0 takes, one texel per unit, as the client's
     /// `GetWidth` (`0x770720`) and `GetHeight` (`0x770790`) do; `None` leaves it as authored.
     pub(crate) texture_size_probe: Option<TextureSizeProbe>,
@@ -1002,6 +1010,7 @@ impl Model {
             addons_chain_reader: None,
             measurer: None,
             texture_probe: None,
+            world_loc_projector: None,
             texture_size_probe: None,
             font_probe: None,
             addons_saved_account: None,

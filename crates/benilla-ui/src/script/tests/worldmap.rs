@@ -623,3 +623,49 @@ fn worldmap_overlays_reveal_by_explored_bits() {
     s.run("SetMapZoom(2)").unwrap();
     assert_eq!(s.eval::<i64>("return GetNumMapOverlays()").unwrap(), 0);
 }
+
+/// `GetWorldLocMapPosition` (`0x4a88f0`) hands the displayed selection, the truncated map id and
+/// the f32 position to the host's projection, answers `(0, 0)` without one, and raises on any
+/// non-number argument.
+#[test]
+fn world_loc_map_position_projects_through_the_host() {
+    let mut s = script();
+    push_catalog(&mut s);
+    assert_eq!(
+        s.eval::<(f64, f64)>("return GetWorldLocMapPosition(0, 100, 200)")
+            .unwrap(),
+        (0.0, 0.0),
+        "no projection: the zeroed outputs"
+    );
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let log = seen.clone();
+    s.set_world_loc_projector(Box::new(move |sel, map, x, y| {
+        log.borrow_mut().push((sel, map, x, y));
+        (map == 0).then_some((0.25, 0.75))
+    }));
+    s.run("SetMapZoom(2, 1)").unwrap();
+    assert_eq!(
+        s.eval::<(f64, f64)>("return GetWorldLocMapPosition(0.9, '-8913.2', 554.6)")
+            .unwrap(),
+        (0.25, 0.75)
+    );
+    assert_eq!(
+        s.eval::<(f64, f64)>("return GetWorldLocMapPosition(-1, 0, 0)")
+            .unwrap(),
+        (0.0, 0.0)
+    );
+    let seen = seen.borrow();
+    assert_eq!(seen[0], ((2, 1, None), 0, -8913.2f32, 554.6f32));
+    assert_eq!(seen[1].1, u32::MAX, "a negative map id matches nothing");
+    for call in [
+        "GetWorldLocMapPosition(0, 1)",
+        "GetWorldLocMapPosition('x', 1, 1)",
+        "GetWorldLocMapPosition(0, nil, 1)",
+    ] {
+        let err = s.run(call).unwrap_err().to_string();
+        assert!(
+            err.contains("Usage: GetWorldLocMapPosition(continent, x, y)"),
+            "{call}: {err}"
+        );
+    }
+}

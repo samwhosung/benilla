@@ -29,7 +29,7 @@ use benilla_world::world_map::CurrentMap;
 
 /// The app's copy of the pushed catalog's projection data (rects, world-sheet constants), in the
 /// engine's order: the indices must agree.
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub(crate) struct WorldMapUiData {
     continents: Vec<ContinentEntry>,
     /// The instance maps no continent owns, `0x4a5d00`'s third array in `WorldMapArea.dbc` file
@@ -37,6 +37,7 @@ pub(crate) struct WorldMapUiData {
     direct: Vec<DirectAreaEntry>,
 }
 
+#[derive(Clone)]
 pub(crate) struct ContinentEntry {
     map_id: u32,
     proj: Option<WorldProj>,
@@ -44,6 +45,7 @@ pub(crate) struct ContinentEntry {
     zones: Vec<ZoneEntry>,
 }
 
+#[derive(Clone)]
 struct ZoneEntry {
     area_id: u32,
     rect: ZoneRect,
@@ -51,6 +53,7 @@ struct ZoneEntry {
 
 /// One instance map, selected directly rather than through a continent and zone; 1.12 ships
 /// three, the battlegrounds.
+#[derive(Clone)]
 struct DirectAreaEntry {
     /// The `WorldMapArea` row id, which the third selection cell `[0x845074]` holds (`0x4a6717`);
     /// never a list index.
@@ -527,6 +530,14 @@ pub(crate) fn project_on_displayed(
     }
 }
 
+/// Hand the engine `GetWorldLocMapPosition`'s projection (`0x4a7360`) over a copy of the catalog.
+fn install_world_loc_projector(script: &mut UiScript, data: &WorldMapUiData) {
+    let copy = data.clone();
+    script.set_world_loc_projector(Box::new(move |selection, map, x, y| {
+        project_on_displayed(&copy, selection, map, x, y)
+    }));
+}
+
 /// [`feed_world_map`]'s memos under one [`crate::ui_script::VmMemo`], so a new VM resets them all.
 #[derive(Default)]
 struct FeedMemos {
@@ -534,6 +545,8 @@ struct FeedMemos {
     landmarks: Option<LandmarkKey>,
     /// The world-enter sync has run: the reference's `old == 0` gate.
     map_synced: bool,
+    /// `GetWorldLocMapPosition`'s projection is installed over the current catalog.
+    projector: bool,
 }
 
 fn feed_world_map(
@@ -590,6 +603,16 @@ fn feed_world_map(
             memo.map_synced = true;
             let (c, z) = sel.zone.unwrap_or((0, 0));
             script.sync_world_map_to_player_zone(c, z, sel.direct);
+        }
+    }
+
+    // `GetWorldLocMapPosition` projects synchronously with the engine's own selection, so the
+    // engine holds the projection over its own copy of the catalog.
+    {
+        let memo = memo.get(&script);
+        if !memo.projector || data.is_changed() {
+            memo.projector = true;
+            install_world_loc_projector(&mut script, &data);
         }
     }
 
@@ -1161,6 +1184,29 @@ mod player_zone_tests {
         assert_eq!(
             resolve_player_selection(&d, 389, Some(12)),
             PlayerSelection::default()
+        );
+    }
+
+    /// The engine's `GetWorldLocMapPosition` answers what the feed's own projection answers, on
+    /// the engine's selection.
+    #[test]
+    fn world_loc_map_position_projects_on_the_displayed_map() {
+        let mut script = UiScript::new().unwrap();
+        install_world_loc_projector(&mut script, &data());
+        script.sync_world_map_to_player_zone(0, 0, Some(443));
+        assert_eq!(script.world_map_selection(), (0, 0, Some(443)));
+        assert_eq!(
+            script
+                .eval::<(f64, f64)>("return GetWorldLocMapPosition(489, 0, 0)")
+                .unwrap(),
+            (0.5, 0.5)
+        );
+        assert_eq!(
+            script
+                .eval::<(f64, f64)>("return GetWorldLocMapPosition(0, 0, 0)")
+                .unwrap(),
+            (0.0, 0.0),
+            "a position on another map is off this one"
         );
     }
 

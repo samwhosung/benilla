@@ -418,6 +418,11 @@ impl super::UiScript {
         (wm.selection.0, wm.selection.1, wm.direct_area)
     }
 
+    /// Install the host's world-to-map projection behind `GetWorldLocMapPosition`.
+    pub fn set_world_loc_projector(&mut self, projector: super::WorldLocProjector) {
+        self.model_mut().world_loc_projector = Some(projector);
+    }
+
     /// Moves the selection from the engine, as the zone updater `0x494780` calls the setter
     /// `0x4a67a0`: a fresh login shows the player's map before any Lua runs, not the world sheet,
     /// whose `GetPlayerMapPosition` is sheet UV (`0x4a7360`). It takes the resolver's whole
@@ -599,6 +604,36 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 None => Value::Nil,
             };
             Ok((file, 0i64, 0i64))
+        })?,
+    )?;
+
+    // GetWorldLocMapPosition(continent, x, y) (`0x4a88f0`): a world position on the displayed
+    // map, through the projection `GetCorpseMapPosition` uses (`0x4a7360`). The first argument is
+    // the position's map id, however the usage names it (`0x4a7320` matches it against
+    // `WorldMapContinent.dbc`'s map ids); x and y narrow to f32. Each argument must be a number,
+    // else the usage raises; off the displayed map the answer is (0, 0). No stock caller.
+    g.set(
+        "GetWorldLocMapPosition",
+        lua.create_function(|lua, (map, x, y): (Value, Value, Value)| {
+            const USAGE: &str = "Usage: GetWorldLocMapPosition(continent, x, y)";
+            let (Some(map), Some(x), Some(y)) = (
+                lua.coerce_number(map)?,
+                lua.coerce_number(x)?,
+                lua.coerce_number(y)?,
+            ) else {
+                return Err(mlua::Error::RuntimeError(USAGE.into()));
+            };
+            // The truncating cast, then the map id compared as an unsigned dword.
+            let map = map as i64 as i32 as u32;
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let wm = &model.worldmap;
+            let selection = (wm.selection.0, wm.selection.1, wm.direct_area);
+            let (u, v) = model
+                .world_loc_projector
+                .as_ref()
+                .and_then(|project| project(selection, map, x as f32, y as f32))
+                .unwrap_or((0.0, 0.0));
+            Ok((f64::from(u), f64::from(v)))
         })?,
     )?;
 
