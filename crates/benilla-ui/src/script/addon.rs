@@ -141,6 +141,12 @@ fn row_of(model: &Model, key: &AddonKey) -> Option<usize> {
     }
 }
 
+/// The enable setter (`0x51ea20`), the one write every enable verb makes, for the current
+/// character's row.
+fn set_enabled(model: &mut Model, i: usize, on: bool) {
+    model.addons[i].enabled = on;
+}
+
 /// The registry as [`super::addon_gate`] rows, the one input every verb's verdict reads.
 fn gate_rows(model: &Model) -> Vec<GateRow<'_>> {
     model
@@ -322,21 +328,25 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let mut model = lua.app_data_mut::<Model>().expect("model");
                 let key = addon_key(lua, &model, &key, usage)?;
                 if let Some(i) = row_of(&model, &key) {
-                    model.addons[i].enabled = on;
+                    set_enabled(&mut model, i, on);
                 }
                 Ok(())
             })?,
         )?;
     }
 
-    // No arguments read (`0x48e720`, `0x48e7f0`).
+    // No arguments read (`0x48e720`, `0x48e7f0`). The loop runs over the Lua index array, not the
+    // registry: bound `0x51def0`, each name from `0x51df00`, into the setter `0x51ea20`. The array
+    // leaves out what `SMSG_ADDON_INFO` hid (`0x51dc4f`), which is every `Blizzard_*` addon on a
+    // server that hides them (vmangos `AddonHandler.cpp:129`), so their state is never touched.
     for (name, on) in [("EnableAllAddOns", true), ("DisableAllAddOns", false)] {
         g.set(
             name,
             lua.create_function(move |lua, _: MultiValue| {
                 let mut model = lua.app_data_mut::<Model>().expect("model");
-                for a in &mut model.addons {
-                    a.enabled = on;
+                for k in 0..model.addon_index.len() {
+                    let i = model.addon_index[k];
+                    set_enabled(&mut model, i, on);
                 }
                 Ok(())
             })?,
