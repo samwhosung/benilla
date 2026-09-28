@@ -50,10 +50,9 @@ awk -F'\t' -v ref="$REF" -v show_missing="$show_missing" -v show_beyond="$show_b
     if (o == "engine" || o == "lua") have++
     else if (o == "framexml") transcribable[$1] = 1
     else {
-      # Categorize the superset. Only the last bucket is an API-target question; the first two are
-      # benilla being benilla, and the third is our Lua runtime being 5.1 where 1.12 is 5.0.
+      # Categorize the superset. Only the last bucket is an API-target question; the first is
+      # benilla being benilla, and the second is our Lua runtime being 5.1 where 1.12 is 5.0.
       if ($1 ~ /^Benilla/)                                    bridge[$1] = 1
-      else if ($1 ~ /^__/)                                    internal[$1] = 1
       else if ($1 ~ /^(_G|_VERSION|coroutine|print|select)$/)  lua51[$1] = 1
       else                                                     api[$1] = 1
     }
@@ -78,7 +77,6 @@ awk -F'\t' -v ref="$REF" -v show_missing="$show_missing" -v show_beyond="$show_b
 
     printf "\nbeyond 1.12, by kind — every one of these is a deliberate exception or a bug:\n"
     printf "  %3d  benilla host bridge      Benilla*, called only by our own FrameXML\n", length(bridge)
-    printf "  %3d  VM internals             __benilla_*, pushed by the tick\n", length(internal)
     printf "  %3d  Lua 5.1 past 1.12'\''s 5.0  ", length(lua51); dump(lua51, "")
     printf "  %3d  WoW API past 1.12        the phase-5 list\n", length(api)
     printf "  %3d  ours in Rust that 1.12 defines in FrameXML\n", length(transcribable)
