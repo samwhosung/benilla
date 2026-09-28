@@ -260,8 +260,15 @@ fn the_debuff_row_fills_from_the_pets_own_auras() {
     s.set_unit("pet", Some(pet("Grimjaw", 72, 45, 80, 0)));
     s.fire_event("UNIT_PET", vec![ScriptValue::Str("player".into())]);
 
-    s.set_auras(
-        "pet",
+    // `"pet"` resolves to the pet's guid, whose list the row reads.
+    const PET: u64 = 0xF140_0000_0000_0077;
+    s.set_unit_guids(&benilla_ui::script::UnitGuids {
+        player: 1,
+        pet: PET,
+        ..Default::default()
+    });
+    s.set_unit_auras(
+        PET,
         Some(vec![pet_buff(1000, "Rend", 1), pet_buff(1001, "Sunder", 3)]),
     );
     s.fire_event("UNIT_AURA", vec![ScriptValue::Str("pet".into())]);
@@ -289,7 +296,7 @@ fn the_debuff_row_fills_from_the_pets_own_auras() {
     );
     assert!(draws(&mut s, "Interface\\Icons\\Spell_1001"));
 
-    s.set_auras("pet", Some(vec![]));
+    s.set_unit_auras(PET, Some(vec![]));
     s.fire_event("UNIT_AURA", vec![ScriptValue::Str("pet".into())]);
     assert!(!s
         .eval::<bool>("return PetFrameDebuff1:IsVisible()")

@@ -1,7 +1,7 @@
 //! The stock target frame's aura rows (`TargetFrame.lua:263`) under a stubbed feed.
 //! BuffFrame.xml loads first for the `DebuffTypeColor` and `RefreshBuffs` the frames use.
 
-use benilla_ui::script::{AuraState, QuadContent, ScriptValue, UiScript, UnitState};
+use benilla_ui::script::{AuraState, QuadContent, ScriptValue, UiScript, UnitGuids, UnitState};
 
 use super::test_ui::load_ui as load_xml;
 
@@ -56,9 +56,17 @@ fn target(s: &mut UiScript, reaction: u8, auras: Vec<AuraState>) {
             ..UnitState::default()
         }),
     );
-    s.set_auras("target", Some(auras));
+    s.set_unit_guids(&UnitGuids {
+        player: 1,
+        target: TARGET,
+        ..Default::default()
+    });
+    s.set_unit_auras(TARGET, Some(auras));
     s.fire_event("PLAYER_TARGET_CHANGED", vec![]);
 }
+
+/// The target's guid, which `"target"` resolves to.
+const TARGET: u64 = 0xF130_0000_0000_0001;
 
 fn debuff(spell_id: u32, name: &str, count: u8, debuff_type: Option<&str>) -> AuraState {
     AuraState {
@@ -235,7 +243,7 @@ fn reaching_the_wrap_shrinks_the_first_row_to_17px() {
     assert_eq!(size(&s, "TargetFrameBuff1"), (17.0, 17.0));
 
     // Below the wrap they grow back; the feed re-fires UNIT_AURA on the change.
-    s.set_auras("target", Some(vec![debuff(1000, "D0", 1, None)]));
+    s.set_unit_auras(TARGET, Some(vec![debuff(1000, "D0", 1, None)]));
     s.fire_event("UNIT_AURA", vec![ScriptValue::Str("target".into())]);
     assert_eq!(size(&s, "TargetFrameDebuff1"), (21.0, 21.0));
     assert_eq!(size(&s, "TargetFrameDebuff1Border"), (23.0, 23.0));
@@ -249,7 +257,7 @@ fn clearing_the_list_or_the_target_hides_the_buttons() {
     target(&mut s, 2, vec![debuff(589, "Pain", 1, Some("Magic"))]);
     assert!(shown(&s, "TargetFrameDebuff1"));
 
-    s.set_auras("target", Some(vec![]));
+    s.set_unit_auras(TARGET, Some(vec![]));
     s.fire_event("UNIT_AURA", vec![ScriptValue::Str("target".into())]);
     assert!(
         !shown(&s, "TargetFrameDebuff1"),
@@ -260,7 +268,7 @@ fn clearing_the_list_or_the_target_hides_the_buttons() {
     target(&mut s, 2, vec![debuff(589, "Pain", 1, Some("Magic"))]);
     assert!(shown(&s, "TargetFrameDebuff1"));
     s.set_unit("target", None);
-    s.set_auras("target", None);
+    s.set_unit_auras(TARGET, None);
     s.fire_event("PLAYER_TARGET_CHANGED", vec![]);
     assert!(!shown(&s, "TargetFrameDebuff1"), "no target, no buttons");
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());

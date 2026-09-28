@@ -402,8 +402,9 @@ fn the_debuff_row_draws_what_the_unit_carries() {
     benilla_formats::wow_data_or_skip!();
     let mut s = load_tot();
     switch_on(&mut s);
-    s.set_auras(
-        "targettarget",
+    s.set_unit_guids(&unit_guids());
+    s.set_unit_auras(
+        TOT,
         Some(vec![
             debuff(1000, "Rend", None),
             debuff(1001, "Curse of Agony", Some("Curse")),
@@ -437,7 +438,8 @@ fn the_target_rows_wrap_short_while_the_frame_stands_beside_them() {
     benilla_formats::wow_data_or_skip!();
     let mut s = load_tot();
     // A hostile target, so the debuffs lead and the buffs hang off them.
-    s.set_auras("target", Some(vec![debuff(2000, "Sunder", None)]));
+    s.set_unit_guids(&unit_guids());
+    s.set_unit_auras(TARGET, Some(vec![debuff(2000, "Sunder", None)]));
     s.fire_event("UNIT_AURA", vec![ScriptValue::Str("target".into())]);
 
     let anchor = |s: &mut UiScript, frame: &str| -> String {
@@ -497,4 +499,18 @@ fn the_reconcile_takes_the_frame_down_when_the_token_goes_silent() {
     s.tick(0.016);
     assert!(shown(&mut s), "and brings it back");
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
+const TARGET: u64 = 0xF130_0000_0000_0001;
+const TOT: u64 = 0xF130_0000_0000_0002;
+
+/// The resolver's inputs: `"target"` is `TARGET`, held and targeting `TOT`, so `"targettarget"`
+/// is `TOT`.
+fn unit_guids() -> benilla_ui::script::UnitGuids {
+    benilla_ui::script::UnitGuids {
+        player: 1,
+        target: TARGET,
+        held: [(TARGET, TOT)].into_iter().collect(),
+        ..Default::default()
+    }
 }

@@ -432,22 +432,19 @@ fn buff_hover_hangs_below_left_of_the_button() {
         "Interface\\FrameXML\\TextStatusBar.xml",
         "Interface\\FrameXML\\BuffFrame.xml",
     ]);
-    s.set_auras(
-        "player",
-        Some(vec![AuraState {
-            spell_id: 1459,
-            name: Some("Arcane Intellect".into()),
-            icon: Some("Interface\\Icons\\Spell_Holy_MagicalSentry".into()),
-            count: 1,
-            debuff_type: None,
-            duration: 1800.0,
-            expiration_time: 1800.0,
-            helpful: true,
-            cancelable: true,
-            until_cancelled: false,
-            channeled: false,
-        }]),
-    );
+    s.set_player_auras(vec![AuraState {
+        spell_id: 1459,
+        name: Some("Arcane Intellect".into()),
+        icon: Some("Interface\\Icons\\Spell_Holy_MagicalSentry".into()),
+        count: 1,
+        debuff_type: None,
+        duration: 1800.0,
+        expiration_time: 1800.0,
+        helpful: true,
+        cancelable: true,
+        until_cancelled: false,
+        channeled: false,
+    }]);
     // The event the stock buff buttons register (`BuffFrame.lua:113`).
     s.fire_event("PLAYER_AURAS_CHANGED", vec![]);
     s.resolve();

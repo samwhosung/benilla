@@ -444,33 +444,7 @@ fn pick_unit_token(a: &Option<String>, b: &Option<String>) -> Option<String> {
     }
 }
 
-/// The token prefixes the resolver (`0x515970`) tests, in its order (`partypet` before `party`).
-/// Each is a prefix test, so `"playerfoo"` is recognised; `npc`, its one full-string compare, is
-/// tested apart.
-const UNIT_TOKEN_PREFIXES: [&str; 8] = [
-    "player",
-    "pet",
-    "target",
-    "partypet",
-    "party",
-    "raidpet",
-    "raid",
-    "mouseover",
-];
-
-/// Whether the resolver recognises the token, not whether it names a unit: `"party5"` solo is
-/// recognised and answers nil, and only a token none of its nine compares match raises.
-pub(crate) fn token_recognised(token: &str) -> bool {
-    // `npc` full-string, the rest prefixes, all folded as `_strnicmp` folds: ASCII only.
-    token.eq_ignore_ascii_case("npc")
-        || UNIT_TOKEN_PREFIXES
-            .iter()
-            // Bytes, not a `str` slice, which panics mid-character on a multibyte token.
-            .any(|p| {
-                token.len() >= p.len()
-                    && token.as_bytes()[..p.len()].eq_ignore_ascii_case(p.as_bytes())
-            })
-}
+use resolve::token_recognised;
 
 /// The resolver's token check: an unrecognised token raises `Unknown unit name`, as `0x515970`
 /// ends in `luaL_error`; `""`, an absent token and a recognised one naming nothing pass. Whether
@@ -515,7 +489,10 @@ fn unit_predicate(
 
 /// The `Unit*` and `GetQuestGreenRange` registrations.
 mod bindings;
+mod resolve;
 #[cfg(test)]
 mod tests;
+
+pub use resolve::UnitGuids;
 
 pub(super) use bindings::install;

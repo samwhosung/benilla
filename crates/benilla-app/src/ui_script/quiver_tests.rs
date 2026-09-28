@@ -323,22 +323,23 @@ fn auto_shot_bar_drains_the_moment_an_ammo_lock_event_arrives() {
 /// Seat one active player buff by name and announce it the way the app's aura feed does.
 fn seat_a_buff(s: &mut UiScript, spell_id: u32, name: &str, icon: &str) {
     use benilla_ui::script::AuraState;
-    s.set_auras(
-        "player",
-        Some(vec![AuraState {
-            spell_id,
-            name: Some(name.into()),
-            icon: Some(icon.into()),
-            count: 0,
-            debuff_type: None,
-            duration: 0.0,
-            expiration_time: 0.0,
-            helpful: true,
-            cancelable: true,
-            until_cancelled: true,
-            channeled: false,
-        }]),
-    );
+    s.set_unit_guids(&benilla_ui::script::UnitGuids {
+        player: 1,
+        ..Default::default()
+    });
+    s.set_player_auras(vec![AuraState {
+        spell_id,
+        name: Some(name.into()),
+        icon: Some(icon.into()),
+        count: 0,
+        debuff_type: None,
+        duration: 0.0,
+        expiration_time: 0.0,
+        helpful: true,
+        cancelable: true,
+        until_cancelled: true,
+        channeled: false,
+    }]);
     s.fire_event("PLAYER_AURAS_CHANGED", vec![]);
 }
 

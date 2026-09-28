@@ -73,7 +73,7 @@ fn buff_index_arg(lua: &Lua, v: Value, usage: &'static str) -> mlua::Result<i64>
 fn player_buff_record(lua: &Lua, pos: i64) -> Option<AuraState> {
     let pos = usize::try_from(pos).ok()?;
     let model = lua.app_data_ref::<Model>().expect("model app_data");
-    model.auras.get("player")?.get(pos).cloned()
+    model.player_auras.get(pos).cloned()
 }
 
 /// The enumerator (`0x4e43b0`): the `index`-th record passing `filter`, by ascending position,
@@ -88,8 +88,7 @@ fn enumerate_player_buff(
     }
     let model = lua.app_data_ref::<Model>().expect("model app_data");
     model
-        .auras
-        .get("player")?
+        .player_auras
         .iter()
         .enumerate()
         .filter(|(_, a)| filter.matches(a))
@@ -226,7 +225,12 @@ mod tests {
 
     fn with_player_cache() -> UiScript {
         let mut s = UiScript::new().unwrap();
-        s.set_auras("player", Some(player_cache()));
+        s.set_player_auras(player_cache());
+        // `CancelUnitBuff("player", …)` resolves the token to the player's guid.
+        s.set_unit_guids(&crate::script::UnitGuids {
+            player: 1,
+            ..Default::default()
+        });
         s
     }
 
@@ -271,7 +275,7 @@ mod tests {
         assert!(s
             .eval::<bool>("local _, uc = GetPlayerBuff(0) return uc == 0")
             .unwrap());
-        s.set_auras("player", None);
+        s.set_player_auras(Vec::new());
         assert_eq!(
             s.eval::<(i64, i64)>("return GetPlayerBuff(0)").unwrap(),
             (-1, 0)
@@ -310,7 +314,7 @@ mod tests {
             "Interface\\Icons\\Spell_1126;Interface\\Icons\\Spell_2457;Interface\\Icons\\Spell_589;"
         );
 
-        s.set_auras("player", Some(vec![]));
+        s.set_player_auras(vec![]);
         assert_eq!(
             s.eval::<i64>(
                 r#"local c = 0
@@ -545,7 +549,7 @@ mod tests {
         // The channeled arm (`AttributesEx & 0x4`, `0x4e4a10`) cancels a negative aura.
         let mut channeled = aura(689, "Drain Life", false, false);
         channeled.channeled = true;
-        s.set_auras("player", Some(vec![channeled]));
+        s.set_player_auras(vec![channeled]);
         s.eval::<()>("CancelPlayerBuff(0)").unwrap();
         assert_eq!(s.take_cancel_aura_requests(), vec![689]);
     }

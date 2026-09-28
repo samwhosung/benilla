@@ -232,17 +232,14 @@ fn player_buff_hover_is_the_aura_variant() {
         },
     );
     s.tick(10.0); // GetTime = 10
-    s.set_auras(
-        "player",
-        Some(vec![AuraState {
-            spell_id: 1459,
-            name: Some("Arcane Intellect".into()),
-            duration: 1800.0,
-            expiration_time: 100.0, // 90 s left at now = 10
-            helpful: true,
-            ..Default::default()
-        }]),
-    );
+    s.set_player_auras(vec![AuraState {
+        spell_id: 1459,
+        name: Some("Arcane Intellect".into()),
+        duration: 1800.0,
+        expiration_time: 100.0, // 90 s left at now = 10
+        helpful: true,
+        ..Default::default()
+    }]);
     s.run(
         r#"
         -- The duration line's wording comes from the VM's GlobalStrings, which the app runs off
@@ -302,15 +299,12 @@ fn player_buff_hover_names_the_dispel_class_in_gold() {
             ..Default::default()
         },
     );
-    s.set_auras(
-        "player",
-        Some(vec![AuraState {
-            spell_id: 168,
-            name: Some("Ice Armor".into()),
-            helpful: true,
-            ..Default::default()
-        }]),
-    );
+    s.set_player_auras(vec![AuraState {
+        spell_id: 168,
+        name: Some("Ice Armor".into()),
+        helpful: true,
+        ..Default::default()
+    }]);
     s.run(
         r#"
         local a = CreateFrame("Button", "BF1"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
@@ -420,8 +414,13 @@ fn unit_buff_and_debuff_hover_render_the_aura_variant_without_remaining() {
             ..Default::default()
         },
     );
-    s.set_auras(
-        "target",
+    // The target, guid 7, through the resolver.
+    s.set_unit_guids(&crate::script::UnitGuids {
+        target: 7,
+        ..Default::default()
+    });
+    s.set_unit_auras(
+        7,
         Some(vec![
             AuraState {
                 spell_id: 1126,
@@ -480,29 +479,26 @@ fn player_buff_hover_indexes_the_cache_position_not_a_filtered_ordinal() {
         );
     }
     // The player's cache: two buffs then a debuff, in one insertion-ordered list.
-    s.set_auras(
-        "player",
-        Some(vec![
-            AuraState {
-                spell_id: 1126,
-                name: Some("Mark of the Wild".into()),
-                helpful: true,
-                ..Default::default()
-            },
-            AuraState {
-                spell_id: 2457,
-                name: Some("Battle Stance".into()),
-                helpful: true,
-                ..Default::default()
-            },
-            AuraState {
-                spell_id: 589,
-                name: Some("Shadow Word: Pain".into()),
-                helpful: false,
-                ..Default::default()
-            },
-        ]),
-    );
+    s.set_player_auras(vec![
+        AuraState {
+            spell_id: 1126,
+            name: Some("Mark of the Wild".into()),
+            helpful: true,
+            ..Default::default()
+        },
+        AuraState {
+            spell_id: 2457,
+            name: Some("Battle Stance".into()),
+            helpful: true,
+            ..Default::default()
+        },
+        AuraState {
+            spell_id: 589,
+            name: Some("Shadow Word: Pain".into()),
+            helpful: false,
+            ..Default::default()
+        },
+    ]);
     s.run(
         r#"
         local a = CreateFrame("Button", "BF1"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
@@ -888,7 +884,7 @@ fn the_remaining_line_is_gated_on_until_cancelled_not_on_the_duration() {
         BENILLA_LAST = BENILLA_LINES == 3 and TT2TextLeft3:GetText() or ""
     "#;
     let mut show = |aura: AuraState| {
-        s.set_auras("player", Some(vec![aura]));
+        s.set_player_auras(vec![aura]);
         s.run(hover).unwrap();
         (
             s.eval::<i64>("return BENILLA_LINES").unwrap(),

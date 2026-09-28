@@ -69,7 +69,7 @@ fn aura(
 
 /// Push the list and fire `PLAYER_AURAS_CHANGED`, as the app's feed does (`BuffFrame.lua:113`).
 fn push(s: &mut UiScript, auras: Vec<AuraState>) {
-    s.set_auras("player", Some(auras));
+    s.set_player_auras(auras);
     s.fire_event("PLAYER_AURAS_CHANGED", vec![]);
 }
 
@@ -351,7 +351,7 @@ fn a_refreshed_duration_reaches_the_bar_with_no_aura_event() {
     assert_eq!(text(&s, "BuffButton0Duration"), "19 s");
 
     // The refresh: a new expiry and no event.
-    s.set_auras("player", Some(vec![mark(300.0)]));
+    s.set_player_auras(vec![mark(300.0)]);
     frame(&mut s, 0.1);
     assert_eq!(
         text(&s, "BuffButton0Duration"),
@@ -367,14 +367,14 @@ fn a_refreshed_duration_reaches_the_bar_with_no_aura_event() {
     // timed aura with no stamp yet shows "0 s" and pulses until the stamp joins.
     let mut pending = mark(0.0);
     pending.until_cancelled = false; // a timed spell, stamp not yet arrived
-    s.set_auras("player", Some(vec![pending]));
+    s.set_player_auras(vec![pending]);
     frame(&mut s, 0.1);
     assert_eq!(
         text(&s, "BuffButton0Duration"),
         "0 s",
         "the reference draws the floor of a timed aura it has no stamp for, not a blank"
     );
-    s.set_auras("player", Some(vec![mark(60.0)])); // the stamp joins, still no event
+    s.set_player_auras(vec![mark(60.0)]); // the stamp joins, still no event
     frame(&mut s, 0.1);
     assert_eq!(
         text(&s, "BuffButton0Duration"),
@@ -885,17 +885,14 @@ fn the_duration_line_reads_the_real_global_strings() {
 
     // `secs_left` seconds remaining at GetTime = 10, read back as the tooltip's last line.
     let mut line = |secs_left: f64| -> String {
-        s.set_auras(
-            "player",
-            Some(vec![AuraState {
-                spell_id: 1459,
-                name: Some("Arcane Intellect".into()),
-                duration: 86_400.0,
-                expiration_time: 10.0 + secs_left,
-                helpful: true,
-                ..Default::default()
-            }]),
-        );
+        s.set_player_auras(vec![AuraState {
+            spell_id: 1459,
+            name: Some("Arcane Intellect".into()),
+            duration: 86_400.0,
+            expiration_time: 10.0 + secs_left,
+            helpful: true,
+            ..Default::default()
+        }]);
         s.run(
             r#"
             BENILLA_TIP:SetOwner(BENILLA_ANCHOR, "ANCHOR_RIGHT")

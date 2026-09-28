@@ -1088,18 +1088,20 @@ fn seat_a_session(script: &mut UiScript) {
     // One buff, one target and one action with a running cooldown, so an addon that only draws when
     // there is content (a buff bar, a target frame, cooldown text) is separated from one that
     // failed.
-    script.set_auras(
-        "player",
-        Some(vec![benilla_ui::script::AuraState {
-            spell_id: 1243,
-            name: Some("Power Word: Fortitude".into()),
-            icon: Some("Interface\\Icons\\Spell_Holy_WordFortitude".into()),
-            count: 1,
-            helpful: true,
-            cancelable: true,
-            ..Default::default()
-        }]),
-    );
+    // The player's guid, which a token resolves to before its aura list is read.
+    script.set_unit_guids(&benilla_ui::script::UnitGuids {
+        player: 1,
+        ..Default::default()
+    });
+    script.set_player_auras(vec![benilla_ui::script::AuraState {
+        spell_id: 1243,
+        name: Some("Power Word: Fortitude".into()),
+        icon: Some("Interface\\Icons\\Spell_Holy_WordFortitude".into()),
+        count: 1,
+        helpful: true,
+        cancelable: true,
+        ..Default::default()
+    }]);
     script.set_unit(
         "target",
         Some(benilla_ui::script::UnitState {

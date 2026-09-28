@@ -383,7 +383,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
                 let hit = usize::try_from(index)
                     .ok()
-                    .and_then(|pos| model.auras.get("player").and_then(|a| a.get(pos)));
+                    .and_then(|pos| model.player_auras.get(pos));
                 match hit {
                     Some(a) => {
                         // The gate is `untilCancelled`, not a known duration: `0x532b00` skips
@@ -442,12 +442,11 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         .unwrap_or(0),
                     _ => 0,
                 };
+                // The token resolves as `UnitBuff`'s does (`0x515970`, called at `0x534b8b`).
                 let hit = {
-                    let model = lua.app_data_mut::<Model>().expect("model app_data");
+                    let model = lua.app_data_ref::<Model>().expect("model app_data");
                     let idx = usize::try_from(index.max(1) - 1).unwrap_or(0);
-                    model
-                        .auras
-                        .get(&token)
+                    crate::script::aura::auras_of(&model, &token)?
                         .and_then(|a| a.iter().filter(|a| a.helpful == helpful).nth(idx))
                         .map(|a| (a.spell_id, a.name.clone()))
                 };

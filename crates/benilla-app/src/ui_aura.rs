@@ -1,10 +1,11 @@
-//! The aura feed: the `UNIT_FIELD_AURA` blocks of the player, the target, the target's target, the
-//! pet and the party and raid and their pets as the ordered [`AuraState`] lists the aura bindings
-//! read, with the player's durations. The player's list keeps the reference cache's insertion order
-//! (`0xbc6040`, repacked by `PlayerAuras_Update 0x4e4170`); any other unit's reads its descriptor
-//! by ascending slot, or, for a group member or pet with no live object, its roster record.
+//! The aura feed: the `UNIT_FIELD_AURA` blocks of the player and of every unit a token can name as
+//! the ordered [`AuraState`] lists the aura bindings read, with the player's durations, and the
+//! unit-token resolver's inputs the bindings reach them through ([`units`]). The player's list
+//! keeps the reference cache's insertion order (`0xbc6040`, repacked by `PlayerAuras_Update
+//! 0x4e4170`); any other unit's reads its descriptor by ascending slot, or, for a group member or
+//! pet with no live object, its roster record.
 
-mod group;
+mod units;
 
 use std::collections::HashMap;
 
@@ -157,13 +158,8 @@ struct AuraFeedMemo {
     last: Vec<AuraProjection>,
     /// The tracking spell: a tracking switch changes no list, but the minimap needs the event.
     tracking_last: Option<u32>,
-    /// The target's guid and projection: the guid makes a switch between equal lists re-fire.
-    /// The pet's and the target's target's are keyed the same way.
-    target_last: Option<(u64, Vec<AuraProjection>)>,
-    pet_last: Option<(u64, Vec<AuraProjection>)>,
-    tot_last: Option<(u64, Vec<AuraProjection>)>,
-    /// The `partyN`, `partypetN`, `raidN` and `raidpetN` lists and their pushes.
-    group: group::GroupAuras,
+    /// Every other unit's list, by guid, the resolver's inputs and their pushes.
+    units: units::UnitAuras,
 }
 
 /// The `BENILLA_AURA_TRACE` period in seconds; a set value that is not a positive number means 1 s.
@@ -230,19 +226,6 @@ fn projection_of(list: &[AuraState]) -> Vec<AuraProjection> {
         .collect()
 }
 
-/// A token's `UNIT_AURA` edge: its unit or its list moved since the last push. Keyed by guid too,
-/// so a switch between equal lists re-fires; a token clearing fires nothing, since the frames
-/// react to their own events (`PLAYER_TARGET_CHANGED`, `UNIT_PET`, `PARTY_MEMBERS_CHANGED`).
-fn aura_edge(
-    last: &mut Option<(u64, Vec<AuraProjection>)>,
-    cur: Option<(u64, &[AuraState])>,
-) -> bool {
-    let cur = cur.map(|(guid, l)| (guid, projection_of(l)));
-    let changed = cur.is_some() && cur != *last;
-    *last = cur;
-    changed
-}
-
 /// One aura as `UnitBuff 0x519500` and `UnitDebuff 0x5198f0` return it for a unit not the player:
 /// no duration, which the 1.12 wire carries for the player alone.
 fn unit_aura_state(
@@ -298,16 +281,6 @@ fn other_unit_inputs<'a>(
         .filter(move |a| buffs_visible || a.slot >= UNIT_AURA_POSITIVE_SLOTS)
         .filter(move |a| shown_in_aura_ui(catalog, a.spell_id))
         .map(|a| (a.slot, a.spell_id, a.stacks, a.flags))
-}
-
-/// [`other_unit_inputs`] as the list.
-fn other_unit_auras(
-    store: &ObjectStore,
-    catalog: Option<&SpellCatalog>,
-    buffs_visible: bool,
-) -> Vec<AuraState> {
-    let inputs: Vec<AuraInput> = other_unit_inputs(store, catalog, buffs_visible).collect();
-    aura_list(catalog, &inputs)
 }
 
 /// A roster record's aura block as the two bindings' roster walk reads it (`0x519763`-`0x5197d2`,
@@ -411,15 +384,24 @@ fn tracking_state_of(
     })
 }
 
+/// The units the resolver's guid globals name, from `UnitTokens`' own sources.
+#[derive(bevy::ecs::system::SystemParam)]
+struct AuraUnits<'w> {
+    selection: Res<'w, Selection>,
+    pet: Res<'w, crate::ui_pet::PetBar>,
+    // `Option`: a UI-only harness lacks their plugins; without the party's no group token names
+    // anyone.
+    group: Option<Res<'w, crate::ui_party::GroupState>>,
+    hovered: Option<Res<'w, crate::target::Hovered>>,
+    interact: Option<Res<'w, crate::ui_session::InteractNpc>>,
+}
+
 fn feed_auras(
     script: Option<NonSendMut<UiScript>>,
     self_q: Query<(&ObjectStore, &Guid), With<SelfPlayer>>,
-    selection: Res<Selection>,
+    units: AuraUnits,
     stores: Query<&ObjectStore>,
     spells: Option<Res<Spells>>,
-    pet: Res<crate::ui_pet::PetBar>,
-    // `Option`: a UI-only harness has no party plugin; without it no party token has a list.
-    group: Option<Res<crate::ui_party::GroupState>>,
     index: Res<GuidIndex>,
     // The `UnitBuff` gate's inputs, the same reaction the selection ring and nameplates use.
     factions: Option<Res<Factions>>,
@@ -537,65 +519,52 @@ fn feed_auras(
     }
 
     let held = |guid: u64| index.0.get(&guid).and_then(|&e| stores.get(e).ok());
+    let pet_guid = units.pet.spells.pet_guid;
     // `UnitBuff`'s unit gate on a live unit. `unit` is never `store`, the player's, which is the
-    // gate's second argument.
-    let buffs_visible = |unit: &ObjectStore| {
-        buffs_visible_on(
-            unit,
-            Some(store),
-            factions.as_deref(),
-            &reputations,
-            |owner| held(owner).cloned(),
-        )
+    // gate's second argument. The pet is ungated; the reference gates a pet too, but `CanAssist`'s
+    // player-controlled arm (`0x60673e`-`0x60679f`, the controlling players' duel and FFA-PvP
+    // state) passes for your own pet, leaving only the charm, selectable and reaction clauses to
+    // hide its buffs.
+    let buffs_visible = |guid: u64, unit: &ObjectStore| {
+        guid == pet_guid
+            || buffs_visible_on(
+                unit,
+                Some(store),
+                factions.as_deref(),
+                &reputations,
+                |owner| held(owner).cloned(),
+            )
     };
-    let gated = |unit: &ObjectStore| other_unit_auras(unit, catalog, buffs_visible(unit));
-
-    // The target's rows. A self-target mirrors the player list in cache order, where the
-    // reference's `UnitBuff` reads by slot.
-    let target_list: Option<Vec<AuraState>> =
-        selection.target.zip(selection.guid).and_then(|(e, guid)| {
-            if guid == self_guid.0 {
-                return Some(list.clone());
-            }
-            Some(gated(stores.get(e).ok()?))
-        });
-
-    // The pet's list: the stock pet frame's four buttons draw its buffs (`PetFrame.lua:37,56`).
-    let pet_guid = pet.spells.pet_guid;
-    let pet_list: Option<Vec<AuraState>> = (pet_guid != 0)
-        .then(|| held(pet_guid))
-        .flatten()
-        // Ungated; the reference gates a pet too, but `CanAssist`'s player-controlled arm
-        // (`0x60673e`-`0x60679f`, the controlling players' duel and FFA-PvP state) passes for
-        // your own pet, leaving only the charm, selectable and reaction clauses to hide its buffs.
-        .map(|store| other_unit_auras(store, catalog, true));
-
-    // The target's target's list, for the ToT frame's four debuff buttons, through the one-hop
-    // `UNIT_FIELD_TARGET` read. When that is you, it is the player list, as for a self-target.
-    let tot_guid = selection
-        .target
-        .and_then(|e| stores.get(e).ok())
-        .and_then(|s| s.0.unit_target())
-        .filter(|g| *g != 0)
-        .unwrap_or(0);
-    let tot_list: Option<Vec<AuraState>> =
-        (tot_guid != 0)
-            .then(|| held(tot_guid))
-            .flatten()
-            .map(|tot_store| {
-                if tot_guid == self_guid.0 {
-                    return list.clone();
-                }
-                gated(tot_store)
-            });
-
-    let target_changed = aura_edge(
-        &mut memo.target_last,
-        selection.guid.zip(target_list.as_deref()),
+    let target_guid = units.selection.guid.unwrap_or(0);
+    let catalog_moved = spells.as_ref().is_some_and(|s| s.is_changed());
+    let unit_changed = memo.units.feed(
+        &mut script,
+        units::Inputs {
+            group: units.group.as_deref(),
+            me: (self_guid.0, changed),
+            pet: pet_guid,
+            target: target_guid,
+            // The world pick, as `UnitTokens` resolves `"mouseover"`.
+            mouseover: units
+                .hovered
+                .as_deref()
+                .and_then(|h| h.target.and(h.guid))
+                .unwrap_or(0),
+            npc: units.interact.as_deref().and_then(|i| i.1).unwrap_or(0),
+            held,
+            buffs_visible,
+            catalog,
+            catalog_moved,
+        },
     );
 
-    if target_changed && std::env::var_os("BENILLA_AURA_DUMP").is_some() {
-        let l = target_list.as_deref().unwrap_or_default();
+    if unit_changed.contains(&"target") && std::env::var_os("BENILLA_AURA_DUMP").is_some() {
+        let l = if target_guid == self_guid.0 {
+            Some(list.as_slice())
+        } else {
+            memo.units.list(target_guid)
+        };
+        let l = l.unwrap_or_default();
         info!("aura dump: {} aura(s) on the target rows", l.len());
         for a in l {
             info!(
@@ -608,39 +577,7 @@ fn feed_auras(
         }
     }
 
-    let pet_changed = aura_edge(
-        &mut memo.pet_last,
-        (pet_guid != 0)
-            .then_some(pet_list.as_deref())
-            .flatten()
-            .map(|l| (pet_guid, l)),
-    );
-    let tot_changed = aura_edge(
-        &mut memo.tot_last,
-        (tot_guid != 0)
-            .then_some(tot_list.as_deref())
-            .flatten()
-            .map(|l| (tot_guid, l)),
-    );
-    // `party1..4`, `partypet1..4`, `raid1..40` and `raidpet1..40`: the live unit's rows, else its
-    // roster record's, each pushed only as it moves.
-    let catalog_moved = spells.as_ref().is_some_and(|s| s.is_changed());
-    let group_changed = memo.group.feed(
-        &mut script,
-        group::Inputs {
-            group: group.as_deref(),
-            me: (self_guid.0, &list, changed),
-            held,
-            buffs_visible,
-            catalog,
-            catalog_moved,
-        },
-    );
-    script.set_auras("player", Some(list));
-    // Clearing a token fires nothing: the frames react to `PLAYER_TARGET_CHANGED` and `UNIT_PET`.
-    script.set_auras("target", target_list);
-    script.set_auras("pet", pet_list);
-    script.set_auras("targettarget", tot_list);
+    script.set_player_auras(list);
     script.set_tracking(tracking);
     if changed {
         script.fire_event("UNIT_AURA", vec![ScriptValue::Str("player".into())]);
@@ -648,18 +585,11 @@ fn feed_auras(
         // `MiniMapTrackingFrame` register it, the unit frames `UNIT_AURA`.
         script.fire_event("PLAYER_AURAS_CHANGED", vec![]);
     }
-    if pet_changed {
-        script.fire_event("UNIT_AURA", vec![ScriptValue::Str("pet".into())]);
-    }
-    if target_changed {
-        script.fire_event("UNIT_AURA", vec![ScriptValue::Str("target".into())]);
-    }
-    if tot_changed {
-        script.fire_event("UNIT_AURA", vec![ScriptValue::Str("targettarget".into())]);
-    }
-    // The reference fires these from the record's aura bits (`0x5e57d8`, the pet's `0x5e58f1`)
-    // and from the live descriptor's aura fields, to every token naming the guid (`0x515e50`).
-    for token in group_changed {
+    // The reference fires these from the live descriptor's aura fields and the record's aura bits
+    // (`0x5e57d8`, the pet's `0x5e58f1`), to every token naming the guid (`0x515e50`); a token
+    // naming a new unit fires too, and a token clearing fires nothing, since the frames react to
+    // their own events (`PLAYER_TARGET_CHANGED`, `UNIT_PET`, `PARTY_MEMBERS_CHANGED`).
+    for token in unit_changed {
         script.fire_event("UNIT_AURA", vec![ScriptValue::Str(token.into())]);
     }
 }
@@ -694,12 +624,8 @@ fn end_session_aura_state(
     mut cache: ResMut<PlayerAuraCache>,
 ) {
     if let Some(mut script) = script {
-        script.set_auras("player", None);
-        script.set_auras("target", None);
-        script.set_auras("targettarget", None);
-        for token in group::tokens() {
-            script.set_auras(token, None);
-        }
+        script.clear_auras();
+        script.set_unit_guids(&Default::default());
         script.set_tracking(None);
     }
     cache.auras.clear();
@@ -720,6 +646,16 @@ fn drain_aura_cancels(script: Option<NonSendMut<UiScript>>, net: Res<NetCommands
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`other_unit_inputs`] as the list.
+    fn other_unit_auras(
+        store: &ObjectStore,
+        catalog: Option<&SpellCatalog>,
+        buffs_visible: bool,
+    ) -> Vec<AuraState> {
+        let inputs: Vec<AuraInput> = other_unit_inputs(store, catalog, buffs_visible).collect();
+        aura_list(catalog, &inputs)
+    }
 
     /// The plugin on a bare app: without a `UiScript` the systems that need one skip.
     fn aura_app() -> App {

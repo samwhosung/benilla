@@ -1,7 +1,9 @@
-//! The aura bindings, over the per-token lists the app pushes through [`UiScript::set_auras`] in
-//! display order: the player's in the reference's insertion-ordered cache (`0xbc6040`), kept by
-//! `benilla::ui_aura`, any other unit's by ascending aura slot. The player's list keeps cache order
-//! under every token, where the reference's `UnitBuff("player", i)` reads by slot.
+//! The aura bindings, over the lists the app pushes in display order: the player's in the
+//! reference's insertion-ordered cache (`0xbc6040`), kept by `benilla::ui_aura`, every other unit's
+//! by guid, in ascending aura slot. A token resolves to its guid as the reference's resolver
+//! `0x515970` does ([`super::UnitGuids`]), so `"mouseover"`, `"party1target"` and `"PLAYER"` read
+//! the list of the unit they name, and a token naming the player reads the player's list in cache
+//! order, where the reference's `UnitBuff("player", i)` reads by slot.
 //!
 //! `UnitAura`, `UnitBuff`, `UnitDebuff` and `CancelUnitBuff` take a token and a 1-based index into
 //! the sign-filtered list; the getters answer nil past the end. The 1.12 `GetPlayerBuff`
@@ -17,7 +19,8 @@ use super::Model;
 
 mod player_buff;
 
-/// One aura on one unit, as the app's [`crate::script::UiScript::set_auras`] feed pushes it.
+/// One aura on one unit, as the app's feed pushes it ([`crate::script::UiScript::set_unit_auras`],
+/// [`crate::script::UiScript::set_player_auras`]).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AuraState {
     /// `Spell.dbc` id, `UnitAura`'s `spellId`.
@@ -144,6 +147,20 @@ fn returns(lua: &Lua, a: &AuraState) -> mlua::Result<MultiValue> {
     ]))
 }
 
+/// The list of the unit `token` names, through the resolver (`0x515970`, which `UnitBuff` calls at
+/// `0x519542`): the player's cache list for the player, else that guid's; `None` for nobody or a
+/// unit with no list. A token the resolver does not recognise raises `Unknown unit name`.
+pub(crate) fn auras_of<'m>(model: &'m Model, token: &str) -> mlua::Result<Option<&'m [AuraState]>> {
+    let guids = &model.unit_guids;
+    Ok(guids.guid_of(token)?.and_then(|g| {
+        if g == guids.player {
+            Some(model.player_auras.as_slice())
+        } else {
+            model.unit_auras.get(&g).map(Vec::as_slice)
+        }
+    }))
+}
+
 /// The `index`-th (1-based) aura of `token` passing `filter`, in pushed order; out of range is a
 /// bare nil, the loop terminator.
 fn nth_aura(
@@ -153,20 +170,21 @@ fn nth_aura(
     filter: &Filter,
     shape: Shape,
 ) -> mlua::Result<MultiValue> {
-    if index < 1 {
-        return Ok(MultiValue::new());
-    }
+    // The token resolves before the index is read (`0x519542`, then `0x51957a`), so a bad token
+    // raises at any index.
     let hit = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
-        token
-            .as_ref()
-            .and_then(|t| model.auras.get(t))
-            .and_then(|list| {
-                list.iter()
-                    .filter(|a| filter.matches(a))
-                    .nth((index - 1) as usize)
-                    .cloned()
-            })
+        match token {
+            Some(t) => auras_of(&model, t)?
+                .filter(|_| index >= 1)
+                .and_then(|list| {
+                    list.iter()
+                        .filter(|a| filter.matches(a))
+                        .nth((index - 1) as usize)
+                        .cloned()
+                }),
+            None => None,
+        }
     };
     match hit {
         Some(a) => match shape {
@@ -179,17 +197,37 @@ fn nth_aura(
 }
 
 impl super::UiScript {
-    /// Push or clear a token's aura list, in display order: cache order for the player, ascending
-    /// aura slot for anyone else.
-    pub fn set_auras(&mut self, token: &str, auras: Option<Vec<AuraState>>) {
+    /// Push the player's aura list in the cache's order (`0xbc6040`), durations joined.
+    pub fn set_player_auras(&mut self, auras: Vec<AuraState>) {
+        self.model_mut().player_auras = auras;
+    }
+
+    /// Push or clear a unit's aura list by guid, in ascending aura slot; any token naming the unit
+    /// reads it. The player's is [`Self::set_player_auras`].
+    pub fn set_unit_auras(&mut self, guid: u64, auras: Option<Vec<AuraState>>) {
         let mut model = self.model_mut();
         match auras {
             Some(a) => {
-                model.auras.insert(token.to_string(), a);
+                model.unit_auras.insert(guid, a);
             }
             None => {
-                model.auras.remove(token);
+                model.unit_auras.remove(&guid);
             }
+        }
+    }
+
+    /// Drop every aura list, the player's with the rest: the session's end.
+    pub fn clear_auras(&mut self) {
+        let mut model = self.model_mut();
+        model.player_auras.clear();
+        model.unit_auras.clear();
+    }
+
+    /// Push the unit-token resolver's inputs, copied only when they moved.
+    pub fn set_unit_guids(&mut self, guids: &super::UnitGuids) {
+        let mut model = self.model_mut();
+        if model.unit_guids != *guids {
+            model.unit_guids.clone_from(guids);
         }
     }
 
@@ -274,16 +312,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let f = Filter::parse(Some(&spec));
                 let hit = {
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
-                    token
-                        .as_ref()
-                        .filter(|_| index >= 1)
-                        .and_then(|t| model.auras.get(t))
-                        .and_then(|list| {
-                            list.iter()
-                                .filter(|a| f.matches(a))
-                                .nth((index - 1) as usize)
-                                .cloned()
-                        })
+                    match token.as_deref() {
+                        Some(t) => auras_of(&model, t)?
+                            .filter(|_| index >= 1)
+                            .and_then(|list| {
+                                list.iter()
+                                    .filter(|a| f.matches(a))
+                                    .nth((index - 1) as usize)
+                                    .cloned()
+                            }),
+                        None => None,
+                    }
                 };
                 if let Some(a) = hit.filter(cancel_authorized) {
                     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -325,7 +364,21 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use crate::script::{AuraState, TrackingState, UiScript};
+    use crate::script::{AuraState, TrackingState, UiScript, UnitGuids};
+
+    const ME: u64 = 0x10;
+    const TARGET: u64 = 0xF130_0000_0000_0001;
+
+    /// A VM whose resolver names us as `player` and `TARGET` as `target`.
+    fn script() -> UiScript {
+        let mut s = UiScript::new().unwrap();
+        s.set_unit_guids(&UnitGuids {
+            player: ME,
+            target: TARGET,
+            ..Default::default()
+        });
+        s
+    }
 
     fn aura(spell_id: u32, name: &str, helpful: bool, cancelable: bool) -> AuraState {
         AuraState {
@@ -345,15 +398,12 @@ mod tests {
 
     #[test]
     fn unit_aura_enumerates_the_pushed_order_not_the_spell_id_order() {
-        let mut s = UiScript::new().unwrap();
-        s.set_auras(
-            "player",
-            Some(vec![
-                aura(2457, "Battle Stance", true, true),
-                aura(1126, "Mark of the Wild", true, true),
-                aura(589, "Shadow Word: Pain", false, false),
-            ]),
-        );
+        let mut s = script();
+        s.set_player_auras(vec![
+            aura(2457, "Battle Stance", true, true),
+            aura(1126, "Mark of the Wild", true, true),
+            aura(589, "Shadow Word: Pain", false, false),
+        ]);
         assert_eq!(
             s.eval::<String>(r#"return (UnitAura("player", 1))"#)
                 .unwrap(),
@@ -387,15 +437,12 @@ mod tests {
 
     #[test]
     fn unit_aura_defaults_to_helpful_and_honours_the_cancelable_tokens() {
-        let mut s = UiScript::new().unwrap();
-        s.set_auras(
-            "player",
-            Some(vec![
-                aura(2457, "Battle Stance", true, true),
-                aura(9999, "Sealed", true, false), // helpful, not cancelable
-                aura(589, "Pain", false, false),
-            ]),
-        );
+        let mut s = script();
+        s.set_player_auras(vec![
+            aura(2457, "Battle Stance", true, true),
+            aura(9999, "Sealed", true, false), // helpful, not cancelable
+            aura(589, "Pain", false, false),
+        ]);
         // No filter means HELPFUL.
         assert_eq!(
             s.eval::<i64>(
@@ -429,13 +476,13 @@ mod tests {
 
     #[test]
     fn unit_aura_returns_the_era_tuple_with_the_unknowable_fields_nil() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = script();
         let mut a = aura(589, "Shadow Word: Pain", false, false);
         a.count = 3;
         a.debuff_type = Some("Magic".into());
         a.duration = 18.0;
         a.expiration_time = 1042.5;
-        s.set_auras("target", Some(vec![a]));
+        s.set_unit_auras(TARGET, Some(vec![a]));
 
         let (name, icon, count, dtype, dur, expiry, spell) = s
             .eval::<(String, String, i64, String, f64, f64, i64)>(
@@ -453,13 +500,13 @@ mod tests {
 
     #[test]
     fn unit_buff_and_unit_debuff_return_the_1121_tuple_not_the_era_one() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = script();
         let mut buff = aura(1126, "Mark of the Wild", true, true);
         buff.count = 1;
         let mut debuff = aura(589, "Shadow Word: Pain", false, false);
         debuff.count = 3;
         debuff.debuff_type = Some("Magic".into());
-        s.set_auras("target", Some(vec![buff, debuff]));
+        s.set_unit_auras(TARGET, Some(vec![buff, debuff]));
 
         let (icon, count, third) = s
             .eval::<(String, i64, Option<String>)>(
@@ -500,15 +547,12 @@ mod tests {
 
     #[test]
     fn cancel_unit_buff_queues_the_spell_id_and_refuses_a_non_cancelable_aura() {
-        let mut s = UiScript::new().unwrap();
-        s.set_auras(
-            "player",
-            Some(vec![
-                aura(2457, "Battle Stance", true, true),
-                aura(9999, "Sealed", true, false),
-                aura(589, "Pain", false, false),
-            ]),
-        );
+        let mut s = script();
+        s.set_player_auras(vec![
+            aura(2457, "Battle Stance", true, true),
+            aura(9999, "Sealed", true, false),
+            aura(589, "Pain", false, false),
+        ]);
         assert!(s.take_cancel_aura_requests().is_empty());
 
         // Only the cancelable buff queues, by spell id; the others are silent no-ops.
@@ -521,7 +565,7 @@ mod tests {
 
     #[test]
     fn tracking_bindings_read_the_pushed_state_and_cancel_by_spell_id() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = script();
         assert!(s
             .eval::<bool>("return GetTrackingTexture() == nil")
             .unwrap());
@@ -556,15 +600,189 @@ mod tests {
     }
 
     #[test]
-    fn set_auras_none_clears_the_token() {
-        let mut s = UiScript::new().unwrap();
-        s.set_auras("player", Some(vec![aura(2457, "Stance", true, true)]));
+    fn an_emptied_player_list_answers_nil() {
+        let mut s = script();
+        s.set_player_auras(vec![aura(2457, "Stance", true, true)]);
         assert!(s
             .eval::<bool>(r#"return UnitAura("player", 1) ~= nil"#)
             .unwrap());
-        s.set_auras("player", None);
+        s.set_player_auras(Vec::new());
         assert!(s
             .eval::<bool>(r#"return UnitAura("player", 1) == nil"#)
             .unwrap());
+    }
+
+    const MOB: u64 = 0xF130_0000_0000_0002;
+    const P1: u64 = 0x21;
+    const P1_TARGET: u64 = 0xF130_0000_0000_0003;
+
+    /// We target `TARGET`, which targets party1, who targets `P1_TARGET`, which targets us; the mouse
+    /// is over `MOB`. Each unit's list holds a buff and a debuff named for it.
+    fn group_script() -> UiScript {
+        let mut s = UiScript::new().unwrap();
+        s.set_unit_guids(&UnitGuids {
+            player: ME,
+            target: TARGET,
+            mouseover: MOB,
+            party: [P1, 0, 0, 0],
+            held: [
+                (ME, TARGET),
+                (TARGET, P1),
+                (P1, P1_TARGET),
+                (MOB, 0),
+                (P1_TARGET, ME),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        });
+        s.set_player_auras(vec![
+            aura(2457, "Battle Stance", true, true),
+            aura(1126, "Mark of the Wild", true, true),
+            aura(11976, "Strike", false, false),
+        ]);
+        for (guid, name) in [
+            (TARGET, "on the target"),
+            (MOB, "on the mouseover"),
+            (P1, "on party1"),
+            (P1_TARGET, "on party1's target"),
+        ] {
+            s.set_unit_auras(
+                guid,
+                Some(vec![aura(1, name, true, true), aura(2, name, false, false)]),
+            );
+        }
+        s
+    }
+
+    /// `UnitAura`'s name, the list's identity: the bindings' own tuples lead with the icon.
+    fn named(s: &UiScript, call: &str) -> Option<String> {
+        s.eval::<Option<String>>(&format!("local a, b, c = {call} return b and a"))
+            .unwrap()
+    }
+
+    /// Every token reads the list of the unit the resolver names (`0x515970` at `0x519542`): the
+    /// mouseover, a group member's target and any depth of `target` chain.
+    #[test]
+    fn a_token_reads_the_list_of_the_unit_it_names() {
+        let s = group_script();
+        let icon = |name: &str| {
+            s.eval::<Option<String>>(&format!("return ({name})"))
+                .unwrap()
+        };
+        assert_eq!(
+            icon(r#"UnitDebuff("mouseover", 1)"#).as_deref(),
+            Some("Interface\\Icons\\Spell_2")
+        );
+        for (token, name) in [
+            ("mouseover", "on the mouseover"),
+            ("party1target", "on party1's target"),
+            ("targettarget", "on party1"),
+            ("TargetTarget", "on party1"),
+            ("targettargettarget", "on party1's target"),
+            ("party1", "on party1"),
+            ("PARTY1", "on party1"),
+        ] {
+            assert_eq!(
+                named(&s, &format!(r#"UnitAura("{token}", 1, "HARMFUL")"#)).as_deref(),
+                Some(name),
+                "{token}"
+            );
+            assert_eq!(
+                named(&s, &format!(r#"UnitAura("{token}", 1)"#)).as_deref(),
+                Some(name),
+                "{token}"
+            );
+        }
+        // `UnitBuff("party1target", 1)` and `UnitDebuff("mouseover", 1)`, by their icons.
+        assert!(s
+            .eval::<bool>(
+                r#"return UnitBuff("party1target", 1) == "Interface\\Icons\\Spell_1"
+                   and UnitDebuff("mouseover", 1) == "Interface\\Icons\\Spell_2"
+                   and UnitBuff("party1target", 2) == nil"#
+            )
+            .unwrap());
+    }
+
+    /// A token naming the player, in any case or down a chain, reads the player's list in cache
+    /// order, as `"player"` does.
+    #[test]
+    fn a_token_naming_the_player_reads_the_player_list() {
+        let s = group_script();
+        for token in [
+            "player",
+            "PLAYER",
+            "Player",
+            "targettargettargettarget",
+            "party1TARGETtarget",
+        ] {
+            assert_eq!(
+                named(&s, &format!(r#"UnitAura("{token}", 2)"#)).as_deref(),
+                Some("Mark of the Wild"),
+                "{token}"
+            );
+        }
+        assert!(s
+            .eval::<bool>(
+                r#"local a, n = UnitBuff("PLAYER", 1)
+                   local b, m = UnitBuff("player", 1)
+                   local c = UnitDebuff("targettargettargettarget", 1)
+                   return a == b and n == m and a == "Interface\\Icons\\Spell_2457"
+                       and c == "Interface\\Icons\\Spell_11976""#
+            )
+            .unwrap());
+    }
+
+    /// A recognised token naming nobody is nil; a token none of the resolver's nine compares match
+    /// raises `Unknown unit name: %s` (`0x515c14`), at any index, as the resolver runs first.
+    #[test]
+    fn an_unknown_token_raises_and_a_recognised_empty_one_is_nil() {
+        let s = group_script();
+        for call in [
+            r#"UnitBuff("party2", 1)"#,
+            r#"UnitDebuff("raid1target", 1)"#,
+            r#"UnitBuff("mouseovertargettarget", 1)"#,
+            r#"UnitBuff("playerfoo", 1)"#,
+            r#"UnitBuff("pet", 1)"#,
+            r#"UnitBuff("", 1)"#,
+        ] {
+            assert!(
+                s.eval::<bool>(&format!("return {call} == nil")).unwrap(),
+                "{call}"
+            );
+        }
+        for call in [
+            r#"UnitBuff("bogus", 1)"#,
+            r#"UnitDebuff("focus", 1)"#,
+            r#"UnitAura("npctarget", 1)"#,
+            r#"UnitBuff("bogus", 0)"#,
+            r#"CancelUnitBuff("bogus", 1)"#,
+        ] {
+            let err = s.eval::<()>(call).unwrap_err().to_string();
+            assert!(err.contains("Unknown unit name: "), "{call}: {err}");
+        }
+    }
+
+    /// `GameTooltip:SetUnitBuff` resolves as `UnitBuff` does (`0x534b8b`).
+    #[test]
+    fn set_unit_buff_resolves_the_token() {
+        let s = group_script();
+        s.run(
+            r#"local a = CreateFrame("Button", "TF1")
+               a:SetPoint("CENTER", 0, 0) a:SetWidth(10) a:SetHeight(10)
+               TT = CreateFrame("GameTooltip", "TT")
+               TT:SetOwner(a, "ANCHOR_BOTTOMRIGHT")
+               TT:SetUnitDebuff("MouseOver", 1)"#,
+        )
+        .unwrap();
+        assert_eq!(
+            s.eval::<String>("return TTTextLeft1:GetText()").unwrap(),
+            "on the mouseover"
+        );
+        let err = s
+            .run(r#"TT:SetUnitBuff("bogus", 1)"#)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Unknown unit name: bogus"), "{err}");
     }
 }
