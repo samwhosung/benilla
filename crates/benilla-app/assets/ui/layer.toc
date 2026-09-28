@@ -1,5 +1,5 @@
 # benilla's own interface, one layer on the stock one (docs/METHOD.md): every file is ours, from
-# `assets/ui`, and loads in this order after every `benilla.toc` row and before the third-party
+# `assets/ui`, and loads in this order after every `FrameXML.toc` row and before the third-party
 # addons. It is listed in no addon list, fires no `ADDON_LOADED` and cannot be switched off; a dev
 # build boots without it under `WOW_STOCK_UI=1`. A test names its files, so it does not grow.
 
