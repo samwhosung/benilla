@@ -139,8 +139,8 @@ fn trim_float(v: f64) -> String {
     }
 }
 
-/// The 1.12 token formatter (`0x507b7d`) prints fractional points with `%.1f`, while exact
-/// integers take its integer arm. Improved Frostbolt's `$/1000;S1` remains 0.1..0.5 sec.
+/// The 1.12 token formatter prints fractional points with `%.1f` for `$S`, `$m`, and `$M`.
+/// Lowercase `$s` takes its integer arm instead.
 fn scaled_effect_text(value: i64, scale: f64) -> (String, f64) {
     if scale == 1.0 {
         (value.to_string(), value as f64)
@@ -170,7 +170,12 @@ fn token_value(
             let (min, max) = effect_bounds(d, slot, ctx);
             let (min, max) = (min.abs(), max.abs());
             Some(if min == max {
-                scaled_effect_text(min, scale)
+                if letter == 's' {
+                    let value = scaled(min);
+                    (value.to_string(), value as f64)
+                } else {
+                    scaled_effect_text(min, scale)
+                }
             } else {
                 let (min, max) = (scaled(min), scaled(max));
                 (spread_text(min, max, ctx)?, max as f64)
@@ -623,7 +628,7 @@ mod tests {
         let c = ctx(&durations, &radii, &lookup);
         for (id, expected) in [
             (8024, "4.2 to 13.0 additional Fire damage"),
-            (20154, "1.2 to 4.3 Holy damage"),
+            (20154, "1 to 4 Holy damage"),
         ] {
             let d = spells.get(id).expect("spell");
             let description = substitute(d.description.as_deref().unwrap(), d, &c);
@@ -676,9 +681,13 @@ mod tests {
             "Deals 18 damage over <18sec>, every 3 sec."
         );
         assert_eq!(
-            substitute("Restores $/2;s1 health: $l point:points;.", &d, &c),
-            // 3 halved keeps its fractional value; the plural picks "points".
+            substitute("Restores $/2;S1 health: $l point:points;.", &d, &c),
+            // Uppercase S keeps 3/2 fractional; the plural picks "points".
             "Restores 1.5 health: points.".to_string()
+        );
+        assert_eq!(
+            substitute("Restores $/2;s1 health.", &d, &c),
+            "Restores 2 health."
         );
     }
 

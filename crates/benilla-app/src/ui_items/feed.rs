@@ -1,7 +1,7 @@
 //! The per-frame feeds into the VM: the container snapshots built from the player's descriptor,
 //! and the item-tooltip views every window reads.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 
@@ -87,6 +87,29 @@ fn spell_desc_text(
         }
         None => None,
     }
+}
+
+/// Only descriptions with substitution tokens can change when the caster's spell mods change.
+fn spell_has_mod_tokens(spells: Option<&crate::ui_action::Spells>, id: u32) -> bool {
+    spells
+        .and_then(|s| s.catalog.get(id))
+        .and_then(|d| d.description.as_deref())
+        .is_some_and(|desc| desc.contains('$'))
+}
+
+fn item_has_mod_tokens(t: &ItemInfo, spells: Option<&crate::ui_action::Spells>) -> bool {
+    t.spells
+        .iter()
+        .any(|slot| slot.spell_id != 0 && spell_has_mod_tokens(spells, slot.spell_id))
+}
+
+fn bonuses_have_mod_tokens(
+    bonuses: &[(u32, u32)],
+    spells: Option<&crate::ui_action::Spells>,
+) -> bool {
+    bonuses
+        .iter()
+        .any(|&(_, spell)| spell_has_mod_tokens(spells, spell))
 }
 
 /// The tooltip's "N Charges" count, 0 for no line. The builder (`0x52d8a0`) reads a template 0 as
@@ -231,19 +254,18 @@ pub(super) fn feed_item_sets(
     mut pending: Local<
         crate::ui_script::VmMemo<std::collections::HashMap<u32, benilla_ui::script::ItemSetView>>,
     >,
-    mut watched: Local<crate::ui_script::VmMemo<std::collections::HashSet<u32>>>,
+    mut mod_sensitive: Local<crate::ui_script::VmMemo<HashSet<u32>>>,
 ) {
     let Some(mut script) = script else {
         return;
     };
     let pending = pending.get(&script);
-    let watched = watched.get(&script);
+    let mod_sensitive = mod_sensitive.get(&script);
     for id in script.take_item_set_asks() {
-        watched.insert(id);
         pending.entry(id).or_default();
     }
     if spell_mods.is_changed() {
-        for &id in watched.iter() {
+        for &id in mod_sensitive.iter() {
             pending.entry(id).or_default();
         }
     }
@@ -264,6 +286,11 @@ pub(super) fn feed_item_sets(
             done.push(set_id); // no such row: drop the ask
             continue;
         };
+        if bonuses_have_mod_tokens(&row.bonuses, spell_res) {
+            mod_sensitive.insert(set_id);
+        } else {
+            mod_sensitive.remove(&set_id);
+        }
         let members: Vec<(u32, Option<String>)> = row
             .items
             .iter()
@@ -354,12 +381,14 @@ pub(super) fn feed_item_stats(
     classes: Option<Res<super::ItemClasses>>,
     icons: Option<Res<ItemDisplays>>,
     mut pending: Local<crate::ui_script::VmMemo<std::collections::HashSet<u32>>>,
+    mut mod_sensitive: Local<crate::ui_script::VmMemo<HashSet<u32>>>,
     mut last_home: Local<crate::ui_script::VmMemo<Option<String>>>,
 ) {
     let Some(mut script) = script else {
         return;
     };
     let pending = pending.get(&script);
+    let mod_sensitive = mod_sensitive.get(&script);
     let last_home = last_home.get(&script);
     // `GetBindLocation()`'s push, here so it and the `$z` token share one name, and ahead of the
     // pending gate below: the bind point can arrive while the feed idles.
@@ -378,7 +407,7 @@ pub(super) fn feed_item_stats(
     pending.extend(items.take_fresh());
     pending.extend(script.take_item_stat_asks());
     if spell_mods.is_changed() {
-        pending.extend(items.cached_template_ids());
+        pending.extend(mod_sensitive.iter().copied());
     }
     if pending.is_empty() {
         return;
@@ -405,6 +434,11 @@ pub(super) fn feed_item_stats(
             .filter_map(|id| {
                 pending.remove(&id);
                 let t = items.template(id, 0, &commands)?.clone();
+                if item_has_mod_tokens(&t, spell_res) {
+                    mod_sensitive.insert(id);
+                } else {
+                    mod_sensitive.remove(&id);
+                }
                 Some((
                     id,
                     template_view(
@@ -1802,6 +1836,44 @@ mod tests {
             category: 0,
             category_cooldown_ms: -1,
         }
+    }
+
+    #[test]
+    fn modifier_refresh_tracks_only_item_and_set_descriptions_with_tokens() {
+        let displays = std::collections::HashMap::from([
+            (
+                1,
+                benilla_formats::SpellDisplay {
+                    description: Some("Restores 5 health.".into()),
+                    ..Default::default()
+                },
+            ),
+            (
+                2,
+                benilla_formats::SpellDisplay {
+                    description: Some("Restores $s1 health.".into()),
+                    ..Default::default()
+                },
+            ),
+        ]);
+        let spells = crate::ui_action::Spells {
+            catalog: benilla_formats::SpellCatalog::from_displays(displays),
+            forms: Default::default(),
+            ranges: Default::default(),
+            cast_times: Default::default(),
+            durations: Default::default(),
+            radii: Default::default(),
+        };
+        let mut item = crate::items::test_template("Token item");
+        item.spells = vec![slot(1, 0)];
+        assert!(!super::item_has_mod_tokens(&item, Some(&spells)));
+        item.spells.push(slot(2, 0));
+        assert!(super::item_has_mod_tokens(&item, Some(&spells)));
+        assert!(!super::bonuses_have_mod_tokens(&[(2, 1)], Some(&spells)));
+        assert!(super::bonuses_have_mod_tokens(
+            &[(2, 1), (4, 2)],
+            Some(&spells)
+        ));
     }
 
     /// The builder's charge gate (`0x52da01`, `0x52db51`).
