@@ -212,7 +212,7 @@
 - `WOW_CULL_TRACE` — benilla-world/src/exterior_cull.rs
 - `WOW_CULLDUMP` — benilla-world/src/wmo_portal/mod.rs
 - `WOW_CURSOR_TRACE` — benilla-app/src/cursor.rs
-- `WOW_DATA` — benilla-app/src/local_state.rs, benilla-formats/src/install.rs, benilla-formats/tests/wow_data_env.rs, benilla-formats/tests/wow_data_none.rs
+- `WOW_DATA` — benilla-app/src/local_state.rs, benilla-formats/src/install.rs, benilla-formats/tests/project_folder.rs, benilla-formats/tests/wow_data_env.rs, benilla-formats/tests/wow_data_none.rs
 - `WOW_DEMO_BOTTOM_BARS` — benilla-app/src/ui_script/mod.rs
 - `WOW_DEPTH` — benilla-app/src/capture/depth_probe.rs, benilla-app/src/dev.rs, benilla-world/src/bgwin.rs
 - `WOW_DEPTH_AFTER` — benilla-app/src/capture/depth_probe.rs
