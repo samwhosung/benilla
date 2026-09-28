@@ -1129,9 +1129,9 @@ const TABLE: &[Spec] = &[
         None
     ),
     // ── MultiActionBar (BINDING_HEADER_MULTIACTIONBAR) ──────────────────────────────────
-    // The four multibars' `runOnUp` pairs (`Bindings.xml:799-1134`), stock MultiActionBars.lua's.
-    // Deviation: 1.12 files bars 2-4 under the spacer headers `BLANK`, `BLANK2` and `BLANK3`; they
-    // sit under MULTIACTIONBAR here because this page's sections are named.
+    // The four multibars' `runOnUp` pairs (`Bindings.xml:799-1134`), stock MultiActionBars.lua's;
+    // bars 2-4 under the spacer headers `BLANK`, `BLANK2` and `BLANK3`, as `Bindings.xml:883`,
+    // `:967` and `:1051` file them.
     spec!(
         "MULTIACTIONBAR1BUTTON1",
         MULTIACTIONBAR,
@@ -1254,7 +1254,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR2BUTTON1",
-        MULTIACTIONBAR,
+        BLANK,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarBottomRight", 1)"#,
             r#"MultiActionButtonUp("MultiBarBottomRight", 1)"#
@@ -1264,7 +1264,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR2BUTTON2",
-        MULTIACTIONBAR,
+        BLANK,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarBottomRight", 2)"#,
             r#"MultiActionButtonUp("MultiBarBottomRight", 2)"#
@@ -1274,7 +1274,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR2BUTTON3",
-        MULTIACTIONBAR,
+        BLANK,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarBottomRight", 3)"#,
             r#"MultiActionButtonUp("MultiBarBottomRight", 3)"#
@@ -1284,7 +1284,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR2BUTTON4",
-        MULTIACTIONBAR,
+        BLANK,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarBottomRight", 4)"#,
             r#"MultiActionButtonUp("MultiBarBottomRight", 4)"#
@@ -1294,7 +1294,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR2BUTTON5",
-        MULTIACTIONBAR,
+        BLANK,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarBottomRight", 5)"#,
             r#"MultiActionButtonUp("MultiBarBottomRight", 5)"#
@@ -1304,7 +1304,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR2BUTTON6",
-        MULTIACTIONBAR,
+        BLANK,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarBottomRight", 6)"#,
             r#"MultiActionButtonUp("MultiBarBottomRight", 6)"#
@@ -1314,7 +1314,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR2BUTTON7",
-        MULTIACTIONBAR,
+        BLANK,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarBottomRight", 7)"#,
             r#"MultiActionButtonUp("MultiBarBottomRight", 7)"#
@@ -1324,7 +1324,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR2BUTTON8",
-        MULTIACTIONBAR,
+        BLANK,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarBottomRight", 8)"#,
             r#"MultiActionButtonUp("MultiBarBottomRight", 8)"#
@@ -1334,7 +1334,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR2BUTTON9",
-        MULTIACTIONBAR,
+        BLANK,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarBottomRight", 9)"#,
             r#"MultiActionButtonUp("MultiBarBottomRight", 9)"#
@@ -1344,7 +1344,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR2BUTTON10",
-        MULTIACTIONBAR,
+        BLANK,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarBottomRight", 10)"#,
             r#"MultiActionButtonUp("MultiBarBottomRight", 10)"#
@@ -1354,7 +1354,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR2BUTTON11",
-        MULTIACTIONBAR,
+        BLANK,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarBottomRight", 11)"#,
             r#"MultiActionButtonUp("MultiBarBottomRight", 11)"#
@@ -1364,7 +1364,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR2BUTTON12",
-        MULTIACTIONBAR,
+        BLANK,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarBottomRight", 12)"#,
             r#"MultiActionButtonUp("MultiBarBottomRight", 12)"#
@@ -1375,7 +1375,7 @@ const TABLE: &[Spec] = &[
     // The vertical bars: `MultiBarRight` is bar 3, `MultiBarLeft` bar 4.
     spec!(
         "MULTIACTIONBAR3BUTTON1",
-        MULTIACTIONBAR,
+        BLANK2,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarRight", 1)"#,
             r#"MultiActionButtonUp("MultiBarRight", 1)"#
@@ -1385,7 +1385,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR3BUTTON2",
-        MULTIACTIONBAR,
+        BLANK2,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarRight", 2)"#,
             r#"MultiActionButtonUp("MultiBarRight", 2)"#
@@ -1395,7 +1395,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR3BUTTON3",
-        MULTIACTIONBAR,
+        BLANK2,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarRight", 3)"#,
             r#"MultiActionButtonUp("MultiBarRight", 3)"#
@@ -1405,7 +1405,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR3BUTTON4",
-        MULTIACTIONBAR,
+        BLANK2,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarRight", 4)"#,
             r#"MultiActionButtonUp("MultiBarRight", 4)"#
@@ -1415,7 +1415,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR3BUTTON5",
-        MULTIACTIONBAR,
+        BLANK2,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarRight", 5)"#,
             r#"MultiActionButtonUp("MultiBarRight", 5)"#
@@ -1425,7 +1425,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR3BUTTON6",
-        MULTIACTIONBAR,
+        BLANK2,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarRight", 6)"#,
             r#"MultiActionButtonUp("MultiBarRight", 6)"#
@@ -1435,7 +1435,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR3BUTTON7",
-        MULTIACTIONBAR,
+        BLANK2,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarRight", 7)"#,
             r#"MultiActionButtonUp("MultiBarRight", 7)"#
@@ -1445,7 +1445,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR3BUTTON8",
-        MULTIACTIONBAR,
+        BLANK2,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarRight", 8)"#,
             r#"MultiActionButtonUp("MultiBarRight", 8)"#
@@ -1455,7 +1455,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR3BUTTON9",
-        MULTIACTIONBAR,
+        BLANK2,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarRight", 9)"#,
             r#"MultiActionButtonUp("MultiBarRight", 9)"#
@@ -1465,7 +1465,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR3BUTTON10",
-        MULTIACTIONBAR,
+        BLANK2,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarRight", 10)"#,
             r#"MultiActionButtonUp("MultiBarRight", 10)"#
@@ -1475,7 +1475,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR3BUTTON11",
-        MULTIACTIONBAR,
+        BLANK2,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarRight", 11)"#,
             r#"MultiActionButtonUp("MultiBarRight", 11)"#
@@ -1485,7 +1485,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR3BUTTON12",
-        MULTIACTIONBAR,
+        BLANK2,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarRight", 12)"#,
             r#"MultiActionButtonUp("MultiBarRight", 12)"#
@@ -1495,7 +1495,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR4BUTTON1",
-        MULTIACTIONBAR,
+        BLANK3,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarLeft", 1)"#,
             r#"MultiActionButtonUp("MultiBarLeft", 1)"#
@@ -1505,7 +1505,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR4BUTTON2",
-        MULTIACTIONBAR,
+        BLANK3,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarLeft", 2)"#,
             r#"MultiActionButtonUp("MultiBarLeft", 2)"#
@@ -1515,7 +1515,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR4BUTTON3",
-        MULTIACTIONBAR,
+        BLANK3,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarLeft", 3)"#,
             r#"MultiActionButtonUp("MultiBarLeft", 3)"#
@@ -1525,7 +1525,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR4BUTTON4",
-        MULTIACTIONBAR,
+        BLANK3,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarLeft", 4)"#,
             r#"MultiActionButtonUp("MultiBarLeft", 4)"#
@@ -1535,7 +1535,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR4BUTTON5",
-        MULTIACTIONBAR,
+        BLANK3,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarLeft", 5)"#,
             r#"MultiActionButtonUp("MultiBarLeft", 5)"#
@@ -1545,7 +1545,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR4BUTTON6",
-        MULTIACTIONBAR,
+        BLANK3,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarLeft", 6)"#,
             r#"MultiActionButtonUp("MultiBarLeft", 6)"#
@@ -1555,7 +1555,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR4BUTTON7",
-        MULTIACTIONBAR,
+        BLANK3,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarLeft", 7)"#,
             r#"MultiActionButtonUp("MultiBarLeft", 7)"#
@@ -1565,7 +1565,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR4BUTTON8",
-        MULTIACTIONBAR,
+        BLANK3,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarLeft", 8)"#,
             r#"MultiActionButtonUp("MultiBarLeft", 8)"#
@@ -1575,7 +1575,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR4BUTTON9",
-        MULTIACTIONBAR,
+        BLANK3,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarLeft", 9)"#,
             r#"MultiActionButtonUp("MultiBarLeft", 9)"#
@@ -1585,7 +1585,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR4BUTTON10",
-        MULTIACTIONBAR,
+        BLANK3,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarLeft", 10)"#,
             r#"MultiActionButtonUp("MultiBarLeft", 10)"#
@@ -1595,7 +1595,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR4BUTTON11",
-        MULTIACTIONBAR,
+        BLANK3,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarLeft", 11)"#,
             r#"MultiActionButtonUp("MultiBarLeft", 11)"#
@@ -1605,7 +1605,7 @@ const TABLE: &[Spec] = &[
     ),
     spec!(
         "MULTIACTIONBAR4BUTTON12",
-        MULTIACTIONBAR,
+        BLANK3,
         Kind::EdgeUpDown(
             r#"MultiActionButtonDown("MultiBarLeft", 12)"#,
             r#"MultiActionButtonUp("MultiBarLeft", 12)"#
@@ -2099,6 +2099,35 @@ mod tests {
             Some("MOVEMENT"),
             "the file opens on the MOVEMENT section"
         );
+    }
+
+    /// Each registered command sits under the header the install's `Bindings.xml` files it under:
+    /// the last `header=` at or before its row, so the host's `HEADER_*` rows (a category change
+    /// opens one) are the reference's, the spacers over multibars 2-4 included.
+    #[test]
+    fn every_command_sits_under_its_bindings_xml_header() {
+        let Some(binds) = install_bindings() else {
+            return;
+        };
+        let mut section = String::new();
+        let mut under = std::collections::HashMap::new();
+        for b in &binds {
+            if b.platform.as_deref().is_some_and(|p| p != "windows") {
+                continue;
+            }
+            if let Some(h) = &b.header {
+                section = format!("BINDING_HEADER_{h}");
+            }
+            under.insert(b.name.clone(), section.clone());
+        }
+        for spec in SPECS {
+            assert_eq!(
+                under.get(spec.name).map(String::as_str),
+                Some(spec.category),
+                "{} is filed under the wrong header",
+                spec.name
+            );
+        }
     }
 
     /// The install's own `Bindings.xml`, parsed.

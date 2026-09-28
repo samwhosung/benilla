@@ -1,7 +1,8 @@
 //! The key-binding table behind `GetBinding`, `SetBinding`, `LoadBindings` and their kin: per
-//! command, a category header and its chords, spelled `[ALT-][CTRL-][SHIFT-]<TOKEN>` and matched by
-//! string equality as the reference does. Host commands carry their 1.12 defaults; an addon's
-//! `Bindings.xml` adds ordinary rows that also carry a Lua body.
+//! command, its chords, spelled `[ALT-][CTRL-][SHIFT-]<TOKEN>` and matched by string equality as
+//! the reference does, and the one flat list `GetBinding` walks, whose section headers are rows of
+//! their own. Host commands carry their 1.12 defaults; an addon's `Bindings.xml` adds ordinary rows
+//! that also carry a Lua body.
 
 use std::collections::HashMap;
 
@@ -11,8 +12,9 @@ use crate::bindings_xml::AddonBinding;
 
 use super::Model;
 
-/// One host-registered command: the 1.12 name, its category header's global string
-/// (`BINDING_HEADER_MOVEMENT`), whether it also runs on release (`runOnUp`, read only by
+/// One host-registered command: the 1.12 name, the header global string of the section it is filed
+/// under (`BINDING_HEADER_MOVEMENT`; a change from the previous command opens a `HEADER_*` row),
+/// whether it also runs on release (`runOnUp`, read only by
 /// `RunCommand` at `0x4b7bf1`, never a bindability rule), and the 1.12 default chords.
 #[derive(Clone, Copy, Debug)]
 pub struct KeybindCommand {
@@ -127,7 +129,6 @@ fn is_valid_binding_key(key: &str) -> bool {
 #[derive(Clone, Debug)]
 struct Entry {
     name: String,
-    category: String,
     run_on_up: bool,
     defaults: [Option<String>; 2],
     /// The live chords in bind order; `GetBindingKey` and the window show the first two.
@@ -138,10 +139,25 @@ struct Entry {
     body: Option<String>,
 }
 
+/// One row of the list `GetNumBindings`/`GetBinding` walk, in load order.
+#[derive(Clone, Debug)]
+enum Row {
+    /// A section header, `HEADER_<header>`: the reference stores `sprintf("HEADER_%s", header)`
+    /// (`0x846f58`) as a row of its own with a display ordinal and no script (`0x4b72f5`-`0x4b72fa`).
+    Header(String),
+    /// A command, an index into [`KeybindState::entries`].
+    Command(usize),
+}
+
 /// The table, the stored sets and the queued host requests; lives in [`Model`].
 #[derive(Default)]
 pub(crate) struct KeybindState {
     entries: Vec<Entry>,
+    /// The display list, headers and commands in load order.
+    rows: Vec<Row>,
+    /// The section the last host command was filed under, so the next one opens a header only on
+    /// a change.
+    host_section: Option<String>,
     by_name: HashMap<String, usize>,
     /// Stored sets in entry order: `[0]` account (set 1), `[1]` character (set 2, if any).
     stored: [Option<Vec<Vec<String>>>; 2],
@@ -152,15 +168,39 @@ pub(crate) struct KeybindState {
     /// Bumped by every change to the live table: the app's signal to re-derive dispatch.
     generation: u64,
     requests: Vec<KeybindRequest>,
-    /// Set by `BenillaBindCapture`: the host swallows raw input and hands the page the chord.
-    capture_armed: bool,
 }
 
 impl KeybindState {
-    /// The rows `GetNumBindings`/`GetBinding` enumerate: all but `hidden="true"`, since the stock
-    /// window skips only `HEADER` rows (`Blizzard_BindingUI.lua:87`).
-    fn visible(&self) -> impl Iterator<Item = &Entry> {
-        self.entries.iter().filter(|e| !e.hidden)
+    /// The rows `GetNumBindings`/`GetBinding` enumerate: every header and every command but a
+    /// `hidden="true"` one, which the reference numbers from a second counter, negated
+    /// (`0x4b73da`-`0x4b73e5`), so `GetBinding`'s ordinal walk (`0x4b7c80`) never reaches it and
+    /// `GetNumBindings` (`0x4b7f40`) counts only the first.
+    fn visible(&self) -> impl Iterator<Item = &Row> {
+        self.rows.iter().filter(|r| match r {
+            Row::Header(_) => true,
+            Row::Command(i) => !self.entries[*i].hidden,
+        })
+    }
+
+    /// Open a section: a `HEADER_<header>` row, unless one of that name exists, which the reference
+    /// refuses (`0x4b71c9`-`0x4b7258`) and loads the binding under the section already open.
+    fn open_header(&mut self, header: &str) {
+        let name = format!("HEADER_{header}");
+        if !self
+            .rows
+            .iter()
+            .any(|r| matches!(r, Row::Header(h) if h.eq_ignore_ascii_case(&name)))
+        {
+            self.rows.push(Row::Header(name));
+        }
+    }
+
+    /// Append a command and its row.
+    fn push_entry(&mut self, entry: Entry) {
+        let idx = self.entries.len();
+        self.by_name.insert(entry.name.to_ascii_uppercase(), idx);
+        self.entries.push(entry);
+        self.rows.push(Row::Command(idx));
     }
 
     /// `SetBinding(key[, command])`: unbind `key` everywhere, then append it to the command's
@@ -255,26 +295,29 @@ impl KeybindState {
     }
 
     /// Append one addon's parsed `Bindings.xml`, skipping a name already registered, so a host
-    /// command keeps it and no handed-out index moves. A `header` opens a section
-    /// (`BINDING_HEADER_<header>`) until the next one, as in the reference's flat list.
-    /// Deviation: rows before a file's first header take the addon's name as their section, not
-    /// the previous file's, because under a foreign header the player could not find them.
+    /// command keeps it and no handed-out index moves. A `header` adds its `HEADER_<header>` row
+    /// before the binding's own, as in the reference's flat list.
+    /// Deviation: a file whose first binding has no header opens a `HEADER_<addon>` row, where the
+    /// reference files those rows under the previous file's last header, because under a foreign
+    /// header the player could not find them.
     fn register_addon(&mut self, addon: &str, bindings: &[AddonBinding]) {
-        let mut section = addon.to_string();
+        let mut opened = false;
         for b in bindings {
             // A foreign `platform` skips the whole node, header included (`0x4b70c3`-`0x4b70e5`).
             if b.platform.as_deref().is_some_and(|p| p != THIS_PLATFORM) {
                 continue;
             }
-            // Before the duplicate skip: a duplicate's header still opens its section.
-            if let Some(h) = &b.header {
-                section = format!("BINDING_HEADER_{h}");
-            }
+            // A name already defined skips the node before its header is read (`0x4b70f1`-`0x4b717e`).
             let key = b.name.to_ascii_uppercase();
             if self.by_name.contains_key(&key) {
                 continue;
             }
-            let idx = self.entries.len();
+            match &b.header {
+                Some(h) => self.open_header(h),
+                None if !opened => self.open_header(addon),
+                None => {}
+            }
+            opened = true;
             // The stored chord: the current set first, then the account set, as `load` falls back.
             let stored = {
                 let cur = if self.current_set == 2 { 1 } else { 0 };
@@ -283,10 +326,8 @@ impl KeybindState {
                     .or_else(|| self.stored_by_name[0].get(&key))
                     .cloned()
             };
-            self.by_name.insert(key, idx);
-            self.entries.push(Entry {
+            self.push_entry(Entry {
                 name: b.name.clone(),
-                category: section.clone(),
                 run_on_up: b.run_on_up,
                 // 1.12's `<Binding>` carries no default chord.
                 defaults: [None, None],
@@ -317,11 +358,17 @@ impl super::UiScript {
                 continue;
             }
             let defaults = [c.default1.map(str::to_owned), c.default2.map(str::to_owned)];
-            let idx = model.keybinds.entries.len();
-            model.keybinds.by_name.insert(key, idx);
-            model.keybinds.entries.push(Entry {
+            let kb = &mut model.keybinds;
+            if kb.host_section.as_deref() != Some(c.category) {
+                kb.host_section = Some(c.category.to_owned());
+                let header = c
+                    .category
+                    .strip_prefix("BINDING_HEADER_")
+                    .unwrap_or(c.category);
+                kb.open_header(header);
+            }
+            kb.push_entry(Entry {
                 name: c.name.to_owned(),
-                category: c.category.to_owned(),
                 run_on_up: c.run_on_up,
                 keys: defaults.iter().flatten().cloned().collect(),
                 defaults,
@@ -425,11 +472,6 @@ impl super::UiScript {
     pub fn character_bindings_exist(&self) -> bool {
         self.model_mut().keybinds.stored[1].is_some()
     }
-
-    /// While true, the host swallows raw input and calls `KeyBindings_OnHostKey("<chord>")`.
-    pub fn bind_capture_armed(&self) -> bool {
-        self.model_mut().keybinds.capture_armed
-    }
 }
 
 /// Register one addon's `Bindings.xml` from a bare `&Lua`: `LoadAddOn` runs inside a Lua binding
@@ -441,9 +483,10 @@ pub(crate) fn register_addon_bindings(lua: &Lua, addon: &str, bindings: &[AddonB
         .register_addon(addon, bindings);
 }
 
-/// The binding globals. `GetBinding` returns command, category, key1, key2, which is not 1.12's
-/// shape: 1.12 returns command, key1, key2, with each header a `HEADER_*` row
-/// (`Blizzard_BindingUI.lua:84`). Only `GetNumBindings` and `GetBinding` skip hidden rows.
+/// The binding globals. `GetBinding(i)` answers the row's name and then every key bound to it
+/// (`0x4b7f60`: `1 + matches` values), so a `HEADER_*` row answers its name alone, which the stock
+/// window reads as three names (`Blizzard_BindingUI.lua:84`, `:87`). Only `GetNumBindings` and
+/// `GetBinding` skip hidden rows.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.globals().set(
         "GetNumBindings",
@@ -456,17 +499,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetBinding",
         lua.create_function(|lua, i: usize| {
             let model = lua.app_data_mut::<Model>().expect("model app_data");
-            let Some(e) = i
-                .checked_sub(1)
-                .and_then(|i| model.keybinds.visible().nth(i))
-            else {
+            let kb = &model.keybinds;
+            let Some(row) = i.checked_sub(1).and_then(|i| kb.visible().nth(i)) else {
                 return Ok(MultiValue::new());
             };
-            let mut out = vec![
-                Value::String(lua.create_string(&e.name)?),
-                Value::String(lua.create_string(&e.category)?),
-            ];
-            for k in e.keys.iter().take(2) {
+            let (name, keys): (&str, &[String]) = match row {
+                Row::Header(h) => (h, &[]),
+                Row::Command(c) => (&kb.entries[*c].name, &kb.entries[*c].keys),
+            };
+            let mut out = vec![Value::String(lua.create_string(name)?)];
+            for k in keys {
                 out.push(Value::String(lua.create_string(k)?));
             }
             Ok(MultiValue::from_iter(out))
@@ -545,21 +587,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(model.keybinds.current_set)
         })?,
     )?;
-    lua.globals().set(
-        "BenillaCharacterBindingsExist",
-        lua.create_function(|lua, ()| {
-            let model = lua.app_data_mut::<Model>().expect("model app_data");
-            Ok(model.keybinds.stored[1].is_some())
-        })?,
-    )?;
-    lua.globals().set(
-        "BenillaBindCapture",
-        lua.create_function(|lua, armed: Option<bool>| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.keybinds.capture_armed = armed.unwrap_or(false);
-            Ok(())
-        })?,
-    )
+    Ok(())
 }
 
 #[cfg(test)]
@@ -596,17 +624,40 @@ mod tests {
         s
     }
 
+    /// Every row `GetBinding` answers, each as its values in order.
+    fn rows(s: &UiScript) -> Vec<Vec<String>> {
+        s.eval(
+            "local out = {} \
+             for i = 1, GetNumBindings() do out[i] = { GetBinding(i) } end \
+             return out",
+        )
+        .unwrap()
+    }
+
+    fn row(values: &[&str]) -> Vec<String> {
+        values.iter().map(|v| v.to_string()).collect()
+    }
+
     #[test]
-    fn the_table_reads_like_the_reference() {
+    fn the_list_reads_like_the_reference() {
         let s = script();
-        assert_eq!(s.eval::<usize>("return GetNumBindings()").unwrap(), 3);
-        // Command, category, key1, key2 (not 1.12's three values), the defaults seeded live.
+        // A header row answers its name alone; a command, its name and then every key, no
+        // category (`0x4b7f60`).
+        assert_eq!(
+            rows(&s),
+            [
+                row(&["HEADER_MOVEMENT"]),
+                row(&["MOVEFORWARD", "W", "UP"]),
+                row(&["JUMP", "SPACE", "NUMPAD0"]),
+                row(&["HEADER_CAMERA"]),
+                row(&["CAMERAZOOMIN", "MOUSEWHEELUP"]),
+            ]
+        );
+        // Every key, not two.
+        s.run(r#"SetBinding("F", "JUMP")"#).unwrap();
+        assert_eq!(rows(&s)[2], row(&["JUMP", "SPACE", "NUMPAD0", "F"]));
         assert!(s
-            .eval::<bool>(
-                r#"local c, cat, k1, k2 = GetBinding(1)
-                   return c == "MOVEFORWARD" and cat == "BINDING_HEADER_MOVEMENT"
-                      and k1 == "W" and k2 == "UP""#
-            )
+            .eval::<bool>("return GetBinding(0) == nil and GetBinding(6) == nil")
             .unwrap());
         assert_eq!(
             s.eval::<String>(r#"return GetBindingAction("NUMPAD0")"#)
@@ -614,7 +665,7 @@ mod tests {
             "JUMP"
         );
         assert_eq!(
-            s.eval::<String>(r#"return GetBindingAction("F")"#).unwrap(),
+            s.eval::<String>(r#"return GetBindingAction("G")"#).unwrap(),
             "",
             "an unbound key reads as the empty command, like the client"
         );
@@ -748,22 +799,16 @@ mod tests {
             "registration must move the generation — it is the app's re-derive-dispatch signal"
         );
 
-        // Three host rows and two addon rows: the addon's `MOVEFORWARD` is skipped and
+        // Its header row, then two commands: the addon's `MOVEFORWARD` is skipped and
         // `PROBEHIDDEN` is not listed.
-        assert_eq!(s.eval::<usize>("return GetNumBindings()").unwrap(), 5);
-        assert!(s
-            .eval::<bool>(
-                r#"local c, cat, k1 = GetBinding(4)
-                   return c == "PROBEHOLD" and cat == "BINDING_HEADER_PROBE" and k1 == nil"#
-            )
-            .unwrap());
-        assert!(
-            s.eval::<bool>(
-                r#"local c, cat = GetBinding(5)
-                   return c == "PROBEEDGE" and cat == "BINDING_HEADER_PROBE""#
-            )
-            .unwrap(),
-            "a row with no header of its own belongs to the section the last header opened"
+        assert_eq!(s.eval::<usize>("return GetNumBindings()").unwrap(), 8);
+        assert_eq!(
+            rows(&s)[5..],
+            [
+                row(&["HEADER_PROBE"]),
+                row(&["PROBEHOLD"]),
+                row(&["PROBEEDGE"])
+            ]
         );
         assert!(s
             .eval::<bool>(
@@ -795,22 +840,49 @@ mod tests {
             .eval::<bool>(r#"return SetBinding("MOUSEWHEELDOWN", "PROBEEDGE") == 1"#)
             .unwrap());
 
-        // A file with no header: its rows' section is the addon's name.
+        // A duplicate's header is never read (`0x4b70f1`-`0x4b717e`); a header already in the
+        // list is refused and the row files under the open one (`0x4b71c9`-`0x4b7258`); a hidden
+        // row's header is a row, since the header is written before the hidden test (`0x4b73bc`).
+        let parsed = crate::bindings_xml::parse(
+            r#"<Bindings>
+                <Binding name="JUMP" header="DUPLICATE">Dup();</Binding>
+                <Binding name="PROBEAGAIN" header="PROBE">Again();</Binding>
+                <Binding name="PROBEHIDDENHEAD" header="QUIET" hidden="true">Quiet();</Binding>
+            </Bindings>"#,
+        )
+        .expect("well-formed");
+        s.register_addon_bindings("ProbeMore", &parsed);
+        assert_eq!(
+            rows(&s)[8..],
+            [row(&["PROBEAGAIN"]), row(&["HEADER_QUIET"])]
+        );
+
+        // A file with no header opens a row of the addon's name (the deviation on
+        // `register_addon`).
         let parsed = crate::bindings_xml::parse(
             r#"<Bindings><Binding name="LIBKEY">Lib();</Binding></Bindings>"#,
         )
         .expect("well-formed");
         s.register_addon_bindings("ProbeLib", &parsed);
-        assert!(s
-            .eval::<bool>(
-                r#"local c, cat = GetBinding(6); return c == "LIBKEY" and cat == "ProbeLib""#
-            )
-            .unwrap());
+        assert_eq!(
+            rows(&s)[10..],
+            [row(&["HEADER_ProbeLib"]), row(&["LIBKEY"])]
+        );
 
         // Addon rows only, in registration order, hidden included.
         let bodies = s.addon_binding_bodies();
         let names: Vec<&str> = bodies.iter().map(|b| b.name.as_str()).collect();
-        assert_eq!(names, ["PROBEHOLD", "PROBEEDGE", "PROBEHIDDEN", "LIBKEY"]);
+        assert_eq!(
+            names,
+            [
+                "PROBEHOLD",
+                "PROBEEDGE",
+                "PROBEHIDDEN",
+                "PROBEAGAIN",
+                "PROBEHIDDENHEAD",
+                "LIBKEY"
+            ]
+        );
         assert!(bodies[0].run_on_up && !bodies[1].run_on_up);
         assert!(bodies[0].body.contains(r#"keystate == "down""#));
     }
@@ -844,7 +916,7 @@ mod tests {
     }
 
     #[test]
-    fn host_seeding_feeds_load_and_the_capture_arm_reads_back() {
+    fn host_seeding_feeds_load() {
         let mut s = script();
         s.seed_binding_set(1, Some(vec![("JUMP".into(), vec!["F".into()])]));
         s.load_binding_set(1);
@@ -857,11 +929,6 @@ mod tests {
             s.eval::<String>(r#"return GetBindingAction("W")"#).unwrap(),
             "MOVEFORWARD"
         );
-        assert!(!s.bind_capture_armed());
-        s.run("BenillaBindCapture(true)").unwrap();
-        assert!(s.bind_capture_armed());
-        s.run("BenillaBindCapture(false)").unwrap();
-        assert!(!s.bind_capture_armed());
         let snap = s.keybind_snapshot();
         assert_eq!(snap[1].0, "JUMP");
         assert_eq!(snap[1].1, vec!["F".to_string()]);
