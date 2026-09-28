@@ -44,6 +44,20 @@ pub struct ChatSend {
     pub language: Option<u32>,
 }
 
+impl ChatSend {
+    /// The empty-line gate (`0x49f28d`-`0x49f2a1`): a line whose first byte is NUL ends the call,
+    /// before the language is read or anything is sent, unless its type is AFK (`0x14`) or DND
+    /// (`0x15`). The chat-type lookup and its "Unknown chat type" (`0x49f27f`) come first.
+    pub fn ends_at_empty_line(&self) -> bool {
+        ends_at_empty_line(&self.text, &self.chat_type)
+    }
+}
+
+/// [`ChatSend::ends_at_empty_line`] on the binding's arguments, before the line is built.
+fn ends_at_empty_line(text: &str, chat_type: &str) -> bool {
+    text.bytes().next().unwrap_or(0) == 0 && !matches!(chat_type, "AFK" | "DND")
+}
+
 impl super::UiScript {
     /// Push `Languages.dbc` as `(ID, Name_lang)` rows in file order, the table `SendChatMessage`
     /// matches its language name against (`[0xc0db40]`, count `[0xc0db44]`).
@@ -131,10 +145,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let chat_type = chat_type
                     .unwrap_or_else(|| "SAY".into())
                     .to_ascii_uppercase();
-                // The language is read only past the empty-line gate (`0x49f28d`-`0x49f2a1`),
-                // which lets an empty line through for AFK and DND alone.
-                let reads_language =
-                    !text.is_empty() || matches!(chat_type.as_str(), "AFK" | "DND");
+                // The language is read only past the empty-line gate. The line is queued
+                // anyway: the type check that precedes the gate is the app's, and the drain
+                // applies the gate after it.
+                let reads_language = !ends_at_empty_line(&text, &chat_type);
                 let language = match super::binding_abi::optional_string(lua, &language) {
                     Some(name) if reads_language => {
                         let model = lua.app_data_ref::<Model>().expect("model app_data");

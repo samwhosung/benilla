@@ -2581,3 +2581,81 @@ fn a_channel_send_carries_the_numbered_slots_name() {
         ]
     );
 }
+
+/// `SendChatMessage`'s empty-line gate through the real drain (`0x49f28d`-`0x49f2a1`): an empty
+/// line, or one whose first byte is NUL, of any type but AFK and DND sends nothing and leaves a
+/// standing AFK set, since the gate is ahead of the AFK clear. The type check comes first, so an
+/// unknown type still reports.
+#[test]
+fn an_empty_line_sends_nothing_but_afk_and_dnd() {
+    use super::edit::{ChannelSlot, ChannelState};
+    use crate::net::{ChatKind, ClientCommand, NetCommands};
+    use bevy::ecs::system::RunSystemOnce;
+
+    let mut world = bevy::prelude::World::new();
+    world.insert_non_send_resource(benilla_ui::script::UiScript::new().expect("VM"));
+    let (tx, rx) = crossbeam_channel::unbounded();
+    world.insert_resource(NetCommands(tx));
+    world.init_resource::<super::feed::ChatLog>();
+    world.insert_resource(super::away::AfkMirror(2));
+    world.init_resource::<crate::cvars::Cvars>();
+    world.insert_resource(ChannelState {
+        joined: vec![Some(ChannelSlot::joined("General - Elwynn Forest"))],
+        ..Default::default()
+    });
+    let script = |world: &bevy::prelude::World, lua: &str| {
+        world
+            .non_send_resource::<benilla_ui::script::UiScript>()
+            .run(lua)
+            .expect("lua");
+    };
+    let sent = |rx: &crossbeam_channel::Receiver<ClientCommand>| -> Vec<(ChatKind, String)> {
+        rx.try_iter()
+            .map(|c| match c {
+                ClientCommand::Chat { kind, text, .. } => (kind, text),
+                other => panic!("unexpected command {other:?}"),
+            })
+            .collect()
+    };
+    script(
+        &world,
+        r#"
+        MARKED_AFK_MESSAGE = "You are now AFK: %s"
+        CLEARED_AFK = "You are no longer AFK."
+        DEFAULT_AFK_MESSAGE = "Away from Keyboard"
+        SendChatMessage("")
+        SendChatMessage("", "PARTY")
+        SendChatMessage("", "WHISPER", nil, "Bob")
+        SendChatMessage("", "CHANNEL", nil, 1)
+        SendChatMessage("\0hidden", "YELL")
+        SendChatMessage("", "BOGUS")
+        "#,
+    );
+    world
+        .run_system_once(super::input::drain_addon_chat_sends)
+        .expect("drain");
+    assert_eq!(sent(&rx), vec![], "no empty line reaches the wire");
+    assert_eq!(
+        world.resource::<super::feed::ChatLog>().pending_lines(),
+        vec!["Unknown chat type \"BOGUS\"."],
+        "no AFK clear; the type check precedes the gate"
+    );
+    assert!(world.resource::<super::away::AfkMirror>().is_afk());
+
+    // A line with text clears the standing AFK and says itself; an empty AFK marks it again.
+    script(
+        &world,
+        r#"SendChatMessage("hi") SendChatMessage("", "AFK")"#,
+    );
+    world
+        .run_system_once(super::input::drain_addon_chat_sends)
+        .expect("drain");
+    assert_eq!(
+        sent(&rx),
+        vec![
+            (ChatKind::Afk, String::new()),
+            (ChatKind::Say, "hi".into()),
+            (ChatKind::Afk, "Away from Keyboard".into()),
+        ]
+    );
+}
