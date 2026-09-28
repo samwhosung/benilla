@@ -401,7 +401,7 @@ fn the_shipped_frames_carry_the_references_flags() {
     assert!(
         // The floor guards the pairing, not the census: the paired count falls as each of our
         // files declaring a reference-named frame retires.
-        compared > 5,
+        compared >= 1,
         "only {compared} frames compared — the pairing broke, and the sweep guards nothing"
     );
     assert!(

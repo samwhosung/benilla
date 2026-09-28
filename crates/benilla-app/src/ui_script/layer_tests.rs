@@ -28,17 +28,34 @@ f:SetScript("OnEvent", function() table.insert(ADDON_LOADED_LOG, arg1) end)
 /// A VM after the production in-game load, with one third-party addon, `ZZOrder`, in a hermetic
 /// AddOns root; the layer on unless `stock_ui`. Returns the VM and the load's failures.
 fn production_load(tag: &str, stock_ui: bool) -> (UiScript, Vec<String>) {
+    let before = format!("{DEFINE_LOG}\n{ADDON_LOADED_LOG}");
+    production_load_with(tag, stock_ui, &before, |root| {
+        let dir = root.join("ZZOrder");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ZZOrder.toc"), "## Interface: 11200\nprobe.lua\n").unwrap();
+        std::fs::write(
+            dir.join("probe.lua"),
+            "ZZORDER_SAW_LAYER = BenillaOptionsFrame ~= nil\n",
+        )
+        .unwrap();
+    })
+}
+
+/// The production in-game load, the layer on unless `stock_ui`, over a hermetic AddOns root that
+/// `addons` fills; `before` runs ahead of the load. The caller holds [`ENV_LOCK`]. Returns the VM
+/// and the load's failures.
+pub(super) fn production_load_with(
+    tag: &str,
+    stock_ui: bool,
+    before: &str,
+    addons: impl FnOnce(&std::path::Path),
+) -> (UiScript, Vec<String>) {
     let tmp = std::env::temp_dir().join(format!("benilla-layer-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     let home = tmp.join("benilla-config");
-    let dir = home.join("AddOns").join("ZZOrder");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("ZZOrder.toc"), "## Interface: 11200\nprobe.lua\n").unwrap();
-    std::fs::write(
-        dir.join("probe.lua"),
-        "ZZORDER_SAW_LAYER = BenillaOptionsFrame ~= nil\n",
-    )
-    .unwrap();
+    let root = home.join("AddOns");
+    std::fs::create_dir_all(&root).unwrap();
+    addons(&root);
     let _c = EnvGuard::unset("WOW_CAPTURE");
     let _h = EnvGuard::set("BENILLA_HOME", home.to_str().unwrap());
 
@@ -50,6 +67,8 @@ fn production_load(tag: &str, stock_ui: bool) -> (UiScript, Vec<String>) {
             exists: true,
             name: Some("Probesix".into()),
             level: 60,
+            class: Some("Warrior".into()),
+            class_file: Some("WARRIOR".into()),
             ..Default::default()
         }),
     );
@@ -57,8 +76,7 @@ fn production_load(tag: &str, stock_ui: bool) -> (UiScript, Vec<String>) {
     s.note_addon_info_reply(&[]);
     s.register_cvars(crate::cvars::registered_pairs());
     let mut failures = super::load_font_registry(&s);
-    s.run(DEFINE_LOG).unwrap();
-    s.run(ADDON_LOADED_LOG).unwrap();
+    s.run(before).unwrap();
     // The layer passed in, not set through `WOW_STOCK_UI`: every test in this process reads it.
     failures.extend(super::manifest::load_ingame_ui_with(
         &mut s,
@@ -109,12 +127,10 @@ fn the_layer_loads_after_every_stock_file_and_before_the_addons() {
     assert!(failures.is_empty(), "load failures: {failures:#?}");
     let log: Vec<String> = s.eval("return DEFINE_LOG").unwrap();
 
-    // The core's last stock row (TutorialFrame.lua), the core's own last row (GameMenuFrame.xml),
-    // the layer's first file (ScrollTemplates.xml) and last (FrameXMLFixes.xml is all
-    // redefinitions, so ScriptLogFrame.xml), then the addon.
+    // The core's last row (TutorialFrame.lua), the layer's first file (ScrollTemplates.xml) and
+    // last (FrameXMLFixes.xml is all redefinitions, so ScriptLogFrame.xml), then the addon.
     let order = [
         "TutorialFrame_OnHide",
-        "GameMenuButton_Pending",
         "BenillaScrollBar_Step",
         "BenillaScriptLog_Toggle",
         "ZZORDER_SAW_LAYER",
@@ -139,7 +155,7 @@ fn the_layer_loads_after_every_stock_file_and_before_the_addons() {
             || n.strip_prefix("arg")
                 .is_some_and(|d| d.len() == 1 && d.as_bytes()[0].is_ascii_digit())
     };
-    let late: Vec<&String> = log[at[2]..]
+    let late: Vec<&String> = log[at[1]..]
         .iter()
         .filter(|n| stock.contains(n.as_str()) && !dispatch(n))
         .collect();
@@ -235,6 +251,7 @@ fn the_stock_ui_switch_boots_the_core_without_the_layer() {
         "BenillaScrollBar_Step",
         "KeyBindings_OnHostKey",
         "BenillaOptionsFrame_SelectCategory",
+        "BenillaGameMenuButtonEditMode",
         "BENILLA_BAG_WAS_OPEN",
         "BenillaScriptLog_Toggle",
     ] {
@@ -245,12 +262,11 @@ fn the_stock_ui_switch_boots_the_core_without_the_layer() {
     }
     assert!(!s.eval::<bool>("return BenillaOptionsFrame ~= nil").unwrap());
     assert!(!s.eval::<bool>("return ZZORDER_SAW_LAYER").unwrap());
-    // The host's calls into the layer, and the game menu's Options rung.
+    // The host's calls into the layer.
     for body in [
         super::ERRORS_TOGGLE.to_string(),
         super::ERRORS_CLEAR.to_string(),
         super::host_key_capture("CTRL-J"),
-        "GameMenuButtonOptions:Click()".to_string(),
     ] {
         s.run(&body).unwrap_or_else(|e| panic!("{body}: {e}"));
     }

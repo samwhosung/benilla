@@ -1,4 +1,5 @@
-//! Tests for our `GameMenuFrame.xml`, the frame ESC opens. The bags in its way are the stock
+//! Tests for the frame ESC opens: the stock `GameMenuFrame.xml` as the layer's
+//! `GameMenuAdapters.xml` reshapes it. The bags in its way are the stock
 //! `ContainerFrame1..12`, recycled, so tests ask [`bag_open`] rather than naming a frame.
 
 use benilla_ui::script::{
@@ -7,8 +8,8 @@ use benilla_ui::script::{
 
 use super::test_ui::{bag_open, load_ui as load_xml, BAG_UI};
 
-/// The menu over what it needs (`GameMenuButtonTemplate` is `UIPanelTemplates.xml:403`), with
-/// `extra` in its way, deduped so no file loads twice.
+/// The stock menu over what it needs (`GameMenuButtonTemplate` is `UIPanelTemplates.xml:403`),
+/// with `extra` in its way, then the layer's reshaping, deduped so no file loads twice.
 fn harness_with(extra: &[&str]) -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
@@ -24,10 +25,12 @@ fn harness_with(extra: &[&str]) -> UiScript {
         "Interface\\FrameXML\\BasicControls.xml",
         "Interface\\FrameXML\\LocaleProperties.lua",
         "Interface\\FrameXML\\StaticPopup.xml",
+        // Ahead of `extra`, as the core loads before the layer: it sources UIParent.lua again.
+        r"Interface\FrameXML\GameMenuFrame.xml",
     ]
     .into_iter()
     .chain(extra.iter().copied())
-    .chain(std::iter::once("GameMenuFrame.xml"))
+    .chain(std::iter::once("GameMenuAdapters.xml"))
     .collect();
     let mut loaded = std::collections::HashSet::new();
     for file in files {
@@ -58,8 +61,8 @@ fn bag_harness_with(before: &[&str], after: &[&str]) -> UiScript {
 /// replace 1.12's; without the AddOns rung, as the character-select screen is the only addon UI.
 const LADDER: [&str; 7] = [
     "GameMenuButtonOptions",
-    "GameMenuButtonEditMode",
-    "GameMenuButtonSupport",
+    "BenillaGameMenuButtonEditMode",
+    "BenillaGameMenuButtonSupport",
     "GameMenuButtonMacros",
     "GameMenuButtonLogout",
     "GameMenuButtonQuit",
@@ -114,7 +117,10 @@ fn the_unbacked_entries_are_disabled_and_the_rest_are_live() {
     let s = harness();
     s.run("ShowUIPanel(GameMenuFrame)").unwrap();
 
-    for name in ["GameMenuButtonEditMode", "GameMenuButtonSupport"] {
+    for name in [
+        "BenillaGameMenuButtonEditMode",
+        "BenillaGameMenuButtonSupport",
+    ] {
         assert!(
             !s.eval::<bool>(&format!("return {name}:IsEnabled() ~= 0"))
                 .unwrap(),
@@ -134,10 +140,10 @@ fn the_unbacked_entries_are_disabled_and_the_rest_are_live() {
             "{name} is live"
         );
     }
-    // Edit Mode reads the era's `HUD_EDIT_MODE_MENU` and Continue 1.12's `RETURN_TO_GAME`; Options
-    // is a literal, as 1.12's `OPTIONS_MENU` is "Options Menu".
+    // Edit Mode is the era's label and Continue 1.12's `RETURN_TO_GAME`; Options is a literal, as
+    // 1.12's `OPTIONS_MENU` is "Options Menu".
     assert_eq!(
-        s.eval::<String>("return GameMenuButtonEditMode:GetText()")
+        s.eval::<String>("return BenillaGameMenuButtonEditMode:GetText()")
             .unwrap(),
         "Edit Mode"
     );

@@ -1322,10 +1322,9 @@ mod tests {
         );
     }
 
-    /// The core's chain rows are the reference's own `FrameXML.toc` rows, every one, but the stock
-    /// `GameMenuFrame.xml`, which ours stands in for until the layer reshapes the stock menu. A
-    /// row the stock toc lacks runs a file the reference does not, or twice: `UIParent.xml:4`
-    /// sources `LocaleProperties.lua`, which has no row.
+    /// The core's chain rows are the reference's own `FrameXML.toc` rows, every one. A row the
+    /// stock toc lacks runs a file the reference does not, or twice: `UIParent.xml:4` sources
+    /// `LocaleProperties.lua`, which has no row.
     #[test]
     fn the_cores_chain_rows_are_the_stock_tocs_rows() {
         let _data = benilla_formats::wow_data_or_skip!();
@@ -1337,7 +1336,6 @@ mod tests {
             .lines()
             .map(str::trim)
             .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .filter(|l| !l.eq_ignore_ascii_case("GameMenuFrame.xml"))
             .map(|l| format!("interface\\framexml\\{}", l.to_ascii_lowercase()))
             .collect();
         let mut core: Vec<String> = super::super::addons::Addon::core()

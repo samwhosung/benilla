@@ -34,6 +34,8 @@ fn harness_on(mut s: UiScript) -> UiScript {
         "Interface\\FrameXML\\StaticPopup.xml",
         "Interface\\FrameXML\\GameTooltip.xml",
         "Interface\\FrameXML\\UIDropDownMenu.xml",
+        // Before our files, as the core loads before the layer: it sources UIParent.lua again.
+        r"Interface\FrameXML\GameMenuFrame.xml",
         // The stock options kit, hidden: `UIOptionsFrame_Init` assigns the option globals our
         // rows capture at OnLoad, and these declare the tables the Graphics rows and census read.
         r"Interface\FrameXML\OptionsFrameTemplates.xml",
@@ -42,7 +44,7 @@ fn harness_on(mut s: UiScript) -> UiScript {
         "ScrollTemplates.xml", // the page scroll and the Keybindings list
         "KeyBindingsPage.xml", // the Keybindings page's templates and script
         "OptionsFrame.xml",
-        "GameMenuFrame.xml",
+        "GameMenuAdapters.xml",
     ] {
         // Our window loads strict: a missing template there fails instead of only warning.
         if loaded(&s, file) {

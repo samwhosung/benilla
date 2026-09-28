@@ -818,6 +818,8 @@ mod tooltip_template_tests;
 mod escape_tests;
 
 #[cfg(test)]
+mod game_menu_addon_tests;
+#[cfg(test)]
 mod game_menu_tests;
 
 #[cfg(test)]

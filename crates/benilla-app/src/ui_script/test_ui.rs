@@ -130,8 +130,15 @@ fn load_entry(s: &UiScript, entry: &str, strict_templates: bool, no_warnings: bo
         s.run(MICRO_BUTTON_STAND_INS)
             .expect("the micro-button stand-ins");
     }
-    if leaf.eq_ignore_ascii_case("UIParent.xml") && super::reference_ui::is_chain_entry(&path) {
+    // The stock GameMenuFrame.xml sources UIParent.lua again, which drops the stand-ins' wrappers.
+    if (leaf.eq_ignore_ascii_case("UIParent.xml") || leaf.eq_ignore_ascii_case("GameMenuFrame.xml"))
+        && super::reference_ui::is_chain_entry(&path)
+    {
         s.run(UIPARENT_STAND_INS).expect("the UIParent stand-ins");
+    }
+    if leaf.eq_ignore_ascii_case("GameMenuFrame.xml") && super::reference_ui::is_chain_entry(&path)
+    {
+        s.run(GAME_MENU_STAND_INS).expect("the game menu stand-ins");
     }
     if leaf.eq_ignore_ascii_case("UIOptionsFrame.xml") {
         s.run(UIOPTIONS_STAND_INS)
@@ -241,7 +248,7 @@ pub(super) const UIPARENT_STAND_INS: &str = r#"
     -- names are real, and all three options windows are the REFERENCE's own files,
     -- loaded hidden — including `OptionsFrame`, the video window, which used to be our own
     -- window's name. Ours is `BenillaOptionsFrame` now and is not in this list: it is not a name
-    -- the reference indexes, and the wrappers in `GameMenuFrame.xml` are what tell these two
+    -- the reference indexes, and the wrappers in `GameMenuAdapters.xml` are what tell these two
     -- functions about it. A KIT is a prefix of the manifest and may load none of the four, which
     -- is what these stand-ins are for.
     local function benilla_seat_options()
@@ -261,6 +268,15 @@ pub(super) const UIPARENT_STAND_INS: &str = r#"
         benilla_seat_options()
         return real_toggle_menu(clicked)
     end
+"#;
+
+/// What a kit owes stock `GameMenuFrame.xml`: its OnShow and OnHide (`GameMenuFrame.xml:188-195`)
+/// call the micro-button and bag-bar verbs unguarded, from files a kit may stop short of. Plain
+/// global writes, so the real definitions replace them in any order.
+pub(super) const GAME_MENU_STAND_INS: &str = r#"
+    UpdateMicroButtons = UpdateMicroButtons or function() end
+    Disable_BagButtons = Disable_BagButtons or function() end
+    Enable_BagButtons = Enable_BagButtons or function() end
 "#;
 
 /// What a kit owes stock `UIOptionsFrame.xml`: its `VARIABLES_LOADED` arm

@@ -1256,7 +1256,7 @@
                 </Texture>
             </Layer>
             <Layer level="OVERLAY">
-                <!-- Not GameFontNormalMed1: GameMenuFrame.xml declares that after this file. -->
+                <!-- Not BenillaGameFontNormalMed1: GameMenuAdapters.xml declares it later. -->
                 <FontString name="$parentTitleText" inherits="GameFontNormal" text="Options">
                     <Anchors>
                         <Anchor point="TOP" relativeTo="$parentHeader"><Offset><AbsDimension x="0" y="-14"/></Offset></Anchor>

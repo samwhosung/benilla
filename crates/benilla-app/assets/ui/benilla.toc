@@ -1,7 +1,6 @@
 # The core interface, in load order: the reference's own `FrameXML.toc` files, off the player's
-# patch chain, and one bare filename of ours from `assets/ui`. Entry 0, Fonts.xml, loads alone
-# into every boot VM, from Startup on; the rest loads on entering the world, then benilla's layer
-# (`layer.toc`), then the third-party addons.
+# patch chain. Entry 0, Fonts.xml, loads alone into every boot VM, from Startup on; the rest loads
+# on entering the world, then benilla's layer (`layer.toc`), then the third-party addons.
 # The font objects thus exist before the login screen; the reference loads Fonts.xml with the
 # rest of FrameXML.
 # `inherits=`, `parent=` and a named `relativeTo=` resolve only against names declared above; a
@@ -54,6 +53,9 @@ Interface\FrameXML\ComboFrame.xml
 Interface\FrameXML\UIPanelTemplates.lua
 
 Interface\FrameXML\UIPanelTemplates.xml
+# Inherits `GameMenuButtonTemplate`. It sources UIParent.lua again, as at the reference's own row,
+# which rebuilds UIParent.lua's tables; no row between here and UIParent.xml writes into them.
+Interface\FrameXML\GameMenuFrame.xml
 # The reference's three options windows, loaded hidden so addons find their frames by name.
 # Deviation: the player opens the layer's own options window, because 1.12's settings screens are
 # much worse to use; the stock one holds `OptionsFrame`.
@@ -148,7 +150,3 @@ Interface\FrameXML\HelpFrame.xml
 Interface\FrameXML\CinematicFrame.xml
 Interface\FrameXML\TabardFrame.xml
 Interface\FrameXML\TutorialFrame.xml
-# Ours, in place of the stock GameMenuFrame.xml until the layer reshapes the stock menu (#553).
-# Last: it wraps `ToggleGameMenu`, `IsOptionFrameOpen` and `UpdateMicroButtons` to count
-# `BenillaOptionsFrame`.
-GameMenuFrame.xml

@@ -42,7 +42,10 @@ pub fn load_ui(script: &UiScript, entry: &str) {
             .run(MICRO_BUTTON_STAND_INS)
             .expect("the micro-button stand-ins");
     }
-    if leaf.eq_ignore_ascii_case("UIParent.xml") && entry.contains('\\') {
+    // The stock GameMenuFrame.xml sources UIParent.lua again, which drops the stand-ins' wrappers.
+    if (leaf.eq_ignore_ascii_case("UIParent.xml") || leaf.eq_ignore_ascii_case("GameMenuFrame.xml"))
+        && entry.contains('\\')
+    {
         script
             .run(UIPARENT_STAND_INS)
             .expect("the UIParent stand-ins");
@@ -123,7 +126,7 @@ const UIPARENT_STAND_INS: &str = r#"
     -- names are real, and all three options windows are the REFERENCE's own files,
     -- loaded hidden — including `OptionsFrame`, the video window, which used to be our own
     -- window's name. Ours is `BenillaOptionsFrame` now and is not in this list: it is not a name
-    -- the reference indexes, and the wrappers in `GameMenuFrame.xml` are what tell these two
+    -- the reference indexes, and the wrappers in `GameMenuAdapters.xml` are what tell these two
     -- functions about it. A KIT is a prefix of the manifest and may load none of the four, which
     -- is what these stand-ins are for.
     local function benilla_seat_options()

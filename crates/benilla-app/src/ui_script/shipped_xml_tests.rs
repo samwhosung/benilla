@@ -486,7 +486,7 @@ fn every_shipped_text_attribute_answers_against_the_real_global_strings() {
     };
 
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui");
-    let mut keys = 0;
+    let mut swept = 0;
     for entry in std::fs::read_dir(&dir).expect("assets/ui").flatten() {
         let path = entry.path();
         if path.extension().is_none_or(|e| e != "xml") {
@@ -505,7 +505,6 @@ fn every_shipped_text_attribute_answers_against_the_real_global_strings() {
                     "{file}: text=\"{value}\" is shaped like a GlobalStrings key but the real \
                      GlobalStrings.lua has no such string — it would render as its own key name"
                 );
-                keys += 1;
             } else {
                 assert!(
                     resolved.is_none(),
@@ -513,10 +512,11 @@ fn every_shipped_text_attribute_answers_against_the_real_global_strings() {
                      the loader would silently show that string's value instead of these words"
                 );
             }
+            swept += 1;
         }
     }
     // A floor, so the sweep cannot pass by matching nothing.
-    assert!(keys >= 1, "only {keys} key-shaped text= values swept");
+    assert!(swept >= 1, "only {swept} text= values swept");
 }
 
 /// No shipped script hands a GlobalStrings key to a text sink as its words: `SetText` cannot tell
@@ -1096,7 +1096,7 @@ fn every_declared_parent_really_attaches() {
     let declared = shipped_frame_parents();
     assert!(
         // A sanity floor for the scan, not a census.
-        declared.len() >= 2,
+        !declared.is_empty(),
         "only {} parent declarations found — the scan broke",
         declared.len()
     );
@@ -1445,7 +1445,7 @@ fn the_stock_sound_options_window_loads_hidden_and_the_alias_is_gone() {
     );
 
     // `IsOptionFrameOpen` names the stock options windows, all hidden; it sees ours through the
-    // wrapper `GameMenuFrame.xml` installs.
+    // wrapper `GameMenuAdapters.xml` installs.
     assert!(
         s.eval::<bool>("return IsOptionFrameOpen() and true or false")
             .unwrap(),
@@ -1503,7 +1503,7 @@ fn the_stock_sound_window_turns_a_box_off_and_stores_a_slider_as_lua_text() {
 
 /// The stock Video Options window loads hidden (`OptionsFrame.xml:5`) and owns the `OptionsFrame`
 /// name; ours is `BenillaOptionsFrame`, which the ESC menu opens and the stock "options window
-/// open?" consumers see only through the `GameMenuFrame.xml` wrappers.
+/// open?" consumers see only through the `GameMenuAdapters.xml` wrappers.
 #[test]
 fn the_stock_video_options_window_loads_hidden_and_owns_its_own_name() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -1989,8 +1989,7 @@ fn the_stock_options_windows_load_and_save_are_reachable_for_addons() {
 }
 
 /// benilla's own interface is one layer, and it does not grow: `layer.toc` names exactly these
-/// files, all ours (none off the chain), and `assets/ui` holds nothing else but the two manifests
-/// and the core's one file. A window is migrated, not authored: point `benilla.toc` at
+/// files, all ours (none off the chain), and `assets/ui` holds nothing else but the two manifests. A window is migrated, not authored: point `benilla.toc` at
 /// `Interface\FrameXML\<Window>.xml`, delete ours, and build the engine verbs the stock file
 /// calls; what changes the stock UI goes in one of these files.
 #[test]
@@ -1999,6 +1998,7 @@ fn the_layer_does_not_grow() {
         "ScrollTemplates.xml",
         "KeyBindingsPage.xml",
         "OptionsFrame.xml",
+        "GameMenuAdapters.xml",
         "ContainerFrameAdapters.xml",
         "SpellBookAdapters.xml",
         "ScriptLogFrame.xml",
@@ -2020,44 +2020,28 @@ fn the_layer_does_not_grow() {
     found.sort();
     let mut shipped: Vec<String> = LAYER
         .iter()
-        .chain(&["benilla.toc", "layer.toc", "GameMenuFrame.xml"])
+        .chain(&["benilla.toc", "layer.toc"])
         .map(|s| s.to_string())
         .collect();
     shipped.sort();
     assert_eq!(
         found, shipped,
-        "assets/ui holds the two manifests, the layer's files and the core's one file, nothing else"
+        "assets/ui holds the two manifests and the layer's files, nothing else"
     );
 }
 
-/// The core is the stock UI: `benilla.toc` names the reference's own files off the chain and one
-/// file of ours, `GameMenuFrame.xml`, which stands in for the stock one until the layer reshapes
-/// the stock menu, and whose row says so.
+/// The core is the stock UI: `benilla.toc` names the reference's own files off the chain and no
+/// file of ours.
 #[test]
-fn the_core_toc_names_no_file_of_ours_but_the_game_menu() {
+fn the_core_toc_names_no_file_of_ours() {
     let core = super::addons::Addon::core().toc.files;
     let ours: Vec<&String> = core
         .iter()
         .filter(|f| !super::reference_ui::is_chain_entry(f))
         .collect();
-    assert_eq!(
-        ours,
-        ["GameMenuFrame.xml"],
-        "benilla.toc names a file of ours: benilla's own interface is the layer (layer.toc), \
-         which loads after every stock file"
-    );
-    let toc = super::content::read(super::manifest::MANIFEST).expect("benilla.toc");
-    let lines: Vec<&str> = toc.lines().collect();
-    let at = lines
-        .iter()
-        .position(|l| l.trim() == "GameMenuFrame.xml")
-        .expect("the row");
     assert!(
-        lines[..at]
-            .iter()
-            .rev()
-            .take_while(|l| l.starts_with('#'))
-            .any(|l| l.contains("#553")),
-        "GameMenuFrame.xml's row names the issue that retires it"
+        ours.is_empty(),
+        "benilla.toc names a file of ours, {ours:?}: benilla's own interface is the layer \
+         (layer.toc), which loads after every stock file"
     );
 }
