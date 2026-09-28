@@ -373,7 +373,7 @@ fn channel_notices_compose_by_the_notice_law() {
 // ── the Lua face: the CHAT_MSG_* fire ───────────────────────────────────────────────────────────
 
 /// A fresh VM with the chat stack the app loads, so `ChatFrame1` is the real window.
-fn chat_vm() -> benilla_ui::script::UiScript {
+pub(super) fn chat_vm() -> benilla_ui::script::UiScript {
     let mut s = benilla_ui::script::UiScript::new().unwrap();
     // The chat tabs call the dropdown kit (`CloseDropDownMenus` on a click), which reads
     // `TOOLTIP_DEFAULT_COLOR`: both load ahead of ChatFrame.xml, as in `benilla.toc`.
@@ -404,7 +404,7 @@ fn chat_vm() -> benilla_ui::script::UiScript {
 
 /// An addon that records a `CHAT_MSG_*` fire: the count, the event and `arg1..arg10` joined with
 /// `|`, which raises on a `nil` in any slot.
-const SPY: &str = r#"
+pub(super) const SPY: &str = r#"
     SpyN, SpyEvent, SpyLine = 0, "", ""
     Spy = CreateFrame("Frame", "BenillaChatSpy")
     Spy:SetScript("OnEvent", function()
@@ -416,7 +416,7 @@ const SPY: &str = r#"
 "#;
 
 /// How many lines `ChatFrame1` is holding (`GetNumMessages`).
-fn lines_in_window(s: &benilla_ui::script::UiScript) -> i64 {
+pub(super) fn lines_in_window(s: &benilla_ui::script::UiScript) -> i64 {
     s.eval::<i64>("return ChatFrame1:GetNumMessages()").unwrap()
 }
 

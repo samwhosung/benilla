@@ -793,17 +793,19 @@ pub(super) fn feed_chat(
                     });
                     continue;
                 }
-                // Not stamped: a guid-tail notice (a member joining or leaving, a kick, a
-                // moderation change) has arg7-arg9 empty, so the stock filter
-                // (`ChatFrame.lua:1374-1392`) finds no channel for it and it never prints; the
-                // reference stamps it as it stamps speech.
-                if let Some(event) = notice_event(
+                // Stamped against the channel list as it stands at delivery: the reference hands
+                // the composer `0x49a870` the notice's channel name, directly when the names are
+                // cached (`0x49c59f`-`0x49c5b0`), else from the queued line's node (`+0x2c`) in
+                // the name-query callback (`0x49cfb4`-`0x49cfc1`), and the composer looks it up
+                // among the joined channels (`0x49aa1e`-`0x49aa31`). Unstamped, arg7-arg9 are
+                // empty and the stock filter (`ChatFrame.lua:1374-1392`) drops the line.
+                if let Some(mut event) = notice_event(
                     notice,
                     channel,
                     Some(a.unwrap_or_else(|| "Unknown".into())),
                     b,
                 ) {
-                    route(&mut script, &mut windows, &event);
+                    deliver(&mut script, &mut windows, &mut channels, &mut event);
                 }
             }
             Pending::Addon {

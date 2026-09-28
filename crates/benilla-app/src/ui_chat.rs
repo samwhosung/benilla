@@ -32,6 +32,8 @@ mod language;
 /// `LoggingChat`/`LoggingCombat`: the two log files `/chatlog` and `/combatlog` toggle.
 mod logging;
 mod net;
+#[cfg(test)]
+mod notice_tests;
 /// The `AUTO_JOIN_GUILD_CHANNEL` cascade, the one place the client joins or leaves
 /// `GuildRecruitment - City` on its own.
 mod recruitment;
