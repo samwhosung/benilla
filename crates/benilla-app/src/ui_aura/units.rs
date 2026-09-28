@@ -963,6 +963,26 @@ mod tests {
         assert_eq!(listed(&mut app, "party1target", true), [770, 589]);
     }
 
+    /// A nearer GameObject wins the pick, and the publisher writes its guid, which the resolver
+    /// rejects as a unit (`0x515bd9 je`): the unit behind it is no longer the mouseover.
+    #[test]
+    fn a_nearer_gameobject_takes_the_mouseover_from_the_unit_behind_it() {
+        let mut app = chain_app();
+        assert_eq!(listed(&mut app, "mouseover", true), [770]);
+        app.world_mut()
+            .resource_mut::<crate::target::Hovered>()
+            .distance = 10.0;
+        let chest = app.world_mut().spawn_empty().id();
+        app.insert_resource(crate::target::HoveredObject {
+            target: Some(chest),
+            guid: Some(0xF110_0000_0000_0004),
+            distance: 5.0,
+        });
+        app.update();
+        assert!(listed(&mut app, "mouseover", true).is_empty());
+        assert!(listed(&mut app, "mouseovertarget", true).is_empty());
+    }
+
     /// A raid member's target that is out of view but on the roster reads its record, as
     /// `UnitDebuff`'s roster walk finds it (`0x519b25`); a hop off a unit not held is nobody.
     #[test]

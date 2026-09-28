@@ -189,8 +189,10 @@ pub struct TooltipState {
     pub min_width: f32,
     /// `FadeOut()`'s start on the `GetTime` clock; any fresh content or `Show` cancels the fade.
     pub fade_start: Option<f64>,
-    /// The unit this tooltip shows; a `set_unit` push for it re-drives the health bar.
-    pub unit_token: Option<String>,
+    /// The guid of the unit this tooltip shows (`+0x368`/`+0x36c`, stored at `0x52a070`), whose
+    /// health watcher (`0x467e70`, registered at `0x52a0a8`) drives the bar; a `set_unit` push of
+    /// that unit, under any token, re-drives it.
+    pub unit_guid: Option<u64>,
     /// Shows world-hover content, which fades when the hover is lost; a window hover never fades.
     pub world_owned: bool,
     /// Armed for a compare render: the next `SetInventoryItem` prepends "Currently Equipped"

@@ -113,6 +113,16 @@ impl Hovered {
     pub(crate) fn any(&self) -> Option<Entity> {
         self.target.or(self.corpse)
     }
+
+    /// The unit `"mouseover"` names: the hovered unit, unless a nearer GameObject won the pick.
+    /// The publisher `0x492890` writes whatever won to `0xb4e2c8`/`0xb4e2cc` (`0x492927`,
+    /// `0x492938`), and the token resolver re-resolves it as a unit (`0x515bca mov ecx,8`), so a
+    /// GameObject, a corpse or nothing names nobody (`0x515bd9 je`).
+    pub(crate) fn mouseover(&self, go: &HoveredObject) -> Option<(Entity, u64)> {
+        self.target
+            .zip(self.guid)
+            .filter(|_| !go_is_nearest(self, go))
+    }
 }
 
 /// The GameObject under the cursor this frame, by [`hover::update_hovered_object`]: usable, never

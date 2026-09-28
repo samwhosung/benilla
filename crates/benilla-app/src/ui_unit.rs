@@ -582,6 +582,7 @@ pub(crate) struct UnitTokens<'w, 's> {
     index: Option<Res<'w, crate::net::GuidIndex>>,
     pet: Option<Res<'w, crate::ui_pet::PetBar>>,
     hovered: Option<Res<'w, crate::target::Hovered>>,
+    hovered_go: Option<Res<'w, crate::target::HoveredObject>>,
     group: Res<'w, crate::ui_party::GroupState>,
     pub(crate) stores: Query<'w, 's, &'static ObjectStore>,
     me: Query<'w, 's, (Entity, &'static Guid), With<SelfPlayer>>,
@@ -610,11 +611,11 @@ impl UnitTokens<'_, '_> {
                 .and_then(|s| s.0.unit_target())
                 .filter(|g| *g != 0)
                 .and_then(|g| self.held(g)),
-            // The same `Hovered` pick `ui_tooltip` pushes `"mouseover"` from.
-            "mouseover" => {
-                let h = self.hovered.as_ref()?;
-                h.target.zip(h.guid)
-            }
+            // The same pick `ui_tooltip` pushes `"mouseover"` from.
+            "mouseover" => self
+                .hovered
+                .as_ref()?
+                .mouseover(&self.hovered_go.as_deref().copied().unwrap_or_default()),
             // Off the pet bar's cached guid, as the `"pet"` snapshot reads it.
             "pet" => {
                 let guid = self.pet.as_ref()?.spells.pet_guid;
@@ -1628,6 +1629,41 @@ fn combo_edge(last: Option<(u8, u64)>, now: (u8, u64)) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `"mouseover"` resolves through the pick the tooltip publishes: the hovered unit, until a
+    /// nearer GameObject wins it and the resolver rejects the GameObject's guid (`0x515bd9 je`).
+    #[test]
+    fn the_mouseover_token_resolves_nobody_behind_a_nearer_gameobject() {
+        use crate::target::{Hovered, HoveredObject};
+        use bevy::ecs::system::RunSystemOnce;
+        const WOLF: u64 = 0xF130_0000_4500_0001;
+
+        let mut app = App::new();
+        app.init_resource::<crate::ui_party::GroupState>()
+            .init_resource::<HoveredObject>();
+        let wolf = app.world_mut().spawn_empty().id();
+        app.insert_resource(Hovered {
+            target: Some(wolf),
+            guid: Some(WOLF),
+            distance: 10.0,
+            ..Default::default()
+        });
+        let resolve = |app: &mut App| {
+            app.world_mut()
+                .run_system_once(|tokens: UnitTokens| {
+                    tokens.resolve("mouseover", &Selection::default())
+                })
+                .unwrap()
+        };
+        assert_eq!(resolve(&mut app), Some((wolf, WOLF)), "the hovered unit");
+        let chest = app.world_mut().spawn_empty().id();
+        app.insert_resource(HoveredObject {
+            target: Some(chest),
+            guid: Some(0xF110_0000_0000_0004),
+            distance: 5.0,
+        });
+        assert_eq!(resolve(&mut app), None, "a nearer GameObject names nobody");
+    }
 
     /// The team digit comes off the race byte, whatever template sits beside it (a GM's 35).
     #[test]

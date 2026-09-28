@@ -518,17 +518,14 @@ fn the_spell_feed_runs_after_the_trainer_feed() {
     ));
 }
 
-/// The hover pushes `"mouseover"` with the hovered guid, the pair `0x492890` writes to
-/// `0xb4e2c8`/`0xb4e2cc`: `UnitIsUnit` (`0x516070`) resolves both tokens through `0x515970` and
-/// compares guids, so hovering the target answers 1 and hovering anyone else nil.
-#[test]
-fn the_mouseover_token_carries_the_hovered_guid() {
-    use benilla_protocol::ObjectFields;
-    use bevy::ecs::system::RunSystemOnce;
+const ME: u64 = 0x77;
+const WOLF: u64 = 0xF130_0000_4500_0001;
+const BOAR: u64 = 0xF130_0000_4600_0002;
 
-    const ME: u64 = 0x77;
-    const WOLF: u64 = 0xF130_0000_4500_0001;
-    const BOAR: u64 = 0xF130_0000_4600_0002;
+/// The world-hover driver over a bare VM holding `"player"` (us) and `"target"` (the wolf), each
+/// with its guid, as the unit feed pushes them; returns the app, the wolf and the boar.
+fn mouseover_app() -> (App, Entity, Entity) {
+    use benilla_protocol::ObjectFields;
 
     let mut app = App::new();
     let (tx, _rx) = crossbeam_channel::unbounded();
@@ -541,19 +538,17 @@ fn the_mouseover_token_carries_the_hovered_guid() {
         .init_resource::<crate::net::GuidIndex>()
         .init_resource::<crate::go_templates::GameObjectTemplates>()
         .init_resource::<Items>()
-        .init_resource::<PlayerActions>();
+        .init_resource::<PlayerActions>()
+        .add_systems(Update, drive_mouseover_tooltip);
     app.world_mut()
         .spawn((SelfPlayer, ObjectStore(ObjectFields::default())));
-    let wolf = app
-        .world_mut()
-        .spawn(ObjectStore(ObjectFields::default()))
-        .id();
-    let boar = app
-        .world_mut()
-        .spawn(ObjectStore(ObjectFields::default()))
-        .id();
+    let mut unit = || {
+        app.world_mut()
+            .spawn(ObjectStore(ObjectFields::default()))
+            .id()
+    };
+    let (wolf, boar) = (unit(), unit());
 
-    // `"player"` and `"target"` as the unit feed pushes them, each with its guid.
     let mut script = UiScript::new().unwrap();
     for (token, guid) in [("player", ME), ("target", WOLF)] {
         script.set_unit(
@@ -567,29 +562,51 @@ fn the_mouseover_token_carries_the_hovered_guid() {
         );
     }
     app.insert_non_send_resource(script);
+    (app, wolf, boar)
+}
 
-    let hover = |app: &mut App, entity: Entity, guid: u64| {
-        *app.world_mut().resource_mut::<Hovered>() = Hovered {
-            target: Some(entity),
-            guid: Some(guid),
-            ..Default::default()
-        };
-        app.world_mut()
-            .run_system_once(drive_mouseover_tooltip)
-            .unwrap();
+/// Set this frame's pick and run the driver.
+fn hover(app: &mut App, pick: Hovered, object: HoveredObject) {
+    *app.world_mut().resource_mut::<Hovered>() = pick;
+    *app.world_mut().resource_mut::<HoveredObject>() = object;
+    app.update();
+}
+
+fn hover_unit(app: &mut App, entity: Entity, guid: u64) {
+    let pick = Hovered {
+        target: Some(entity),
+        guid: Some(guid),
+        distance: 10.0,
+        ..Default::default()
     };
-    let is_unit = |app: &mut App, other: &str| -> Option<i64> {
-        app.world_mut()
-            .non_send_resource_mut::<UiScript>()
-            .eval::<Option<i64>>(&format!(r#"return UnitIsUnit("mouseover", "{other}")"#))
-            .unwrap()
+    hover(app, pick, HoveredObject::default());
+}
+
+fn eval(app: &mut App, lua: &str) -> Option<i64> {
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .eval::<Option<i64>>(lua)
+        .unwrap()
+}
+
+/// The hover pushes `"mouseover"` with the hovered guid, the pair `0x492890` writes to
+/// `0xb4e2c8`/`0xb4e2cc`: `UnitIsUnit` (`0x516070`) resolves both tokens through `0x515970` and
+/// compares guids, so hovering the target answers 1 and hovering anyone else nil.
+#[test]
+fn the_mouseover_token_carries_the_hovered_guid() {
+    let (mut app, wolf, boar) = mouseover_app();
+    let is_unit = |app: &mut App, other: &str| {
+        eval(
+            app,
+            &format!(r#"return UnitIsUnit("mouseover", "{other}")"#),
+        )
     };
 
-    hover(&mut app, wolf, WOLF);
+    hover_unit(&mut app, wolf, WOLF);
     assert_eq!(is_unit(&mut app, "target"), Some(1), "hovering the target");
     assert_eq!(is_unit(&mut app, "player"), None, "the target is not us");
 
-    hover(&mut app, boar, BOAR);
+    hover_unit(&mut app, boar, BOAR);
     assert_eq!(
         is_unit(&mut app, "target"),
         None,
@@ -600,4 +617,61 @@ fn the_mouseover_token_carries_the_hovered_guid() {
         Some(1),
         "the token is itself"
     );
+}
+
+/// Once no unit wins the pick, `"mouseover"` names nobody: the publisher `0x492890` zeroes the pair
+/// (`0x4928e8`, `0x4928f2`) and writes a null, corpse or GameObject guid, which the resolver
+/// rejects as a unit (`0x515bca mov ecx,8`, `0x515bd9 je`). Empty ground, a corpse and a nearer
+/// GameObject each clear it, in the frame the hover leaves the unit.
+#[test]
+fn the_mouseover_token_clears_when_no_unit_is_hovered() {
+    use benilla_protocol::ObjectFields;
+
+    let (mut app, wolf, _) = mouseover_app();
+    let corpse = app
+        .world_mut()
+        .spawn(ObjectStore(ObjectFields::default()))
+        .id();
+    let chest = app
+        .world_mut()
+        .spawn(ObjectStore(ObjectFields::default()))
+        .id();
+    let named = |app: &mut App| {
+        (
+            eval(app, r#"return UnitExists("mouseover")"#),
+            eval(app, r#"return UnitIsUnit("mouseover", "target")"#),
+        )
+    };
+    let empty = Hovered::default();
+    let on_corpse = Hovered {
+        corpse: Some(corpse),
+        corpse_guid: Some(0xF100_0000_0000_0003),
+        distance: 10.0,
+        ..Default::default()
+    };
+    let under_chest = Hovered {
+        target: Some(wolf),
+        guid: Some(WOLF),
+        distance: 10.0,
+        ..Default::default()
+    };
+    let chest_nearer = HoveredObject {
+        target: Some(chest),
+        guid: Some(0xF110_0000_0000_0004),
+        distance: 5.0,
+    };
+    for (leave, object, what) in [
+        (empty, HoveredObject::default(), "empty ground"),
+        (on_corpse, HoveredObject::default(), "a corpse"),
+        (under_chest, chest_nearer, "a nearer GameObject"),
+    ] {
+        hover_unit(&mut app, wolf, WOLF);
+        assert_eq!(
+            named(&mut app),
+            (Some(1), Some(1)),
+            "over the wolf, before {what}"
+        );
+        hover(&mut app, leave, object);
+        assert_eq!(named(&mut app), (None, None), "after {what}");
+    }
 }

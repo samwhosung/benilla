@@ -25,6 +25,7 @@ fn seed_level_strings(s: &mut UiScript) {
 fn wolf() -> UnitState {
     UnitState {
         exists: true,
+        guid: 0xF130_0000_4500_0001,
         name: Some("Timber Wolf".into()),
         health: 30,
         max_health: 50,
@@ -454,8 +455,28 @@ fn world_hover_drive_and_health_watcher() {
         r#"assert(GameTooltipStatusBar:GetValue() == 12, "the health watcher tracked the push")"#,
     )
     .unwrap();
+    // Hover lost: the fade arms and `"mouseover"` names nobody (`0x492890` zeroes the pair), yet
+    // the fading plate keeps its bar, whose watcher follows the unit's guid, not the token.
     s.world_tooltip_fade();
-    s.tick(0.6);
+    s.set_unit("mouseover", None);
+    s.tick(0.1);
+    s.run(
+        r#"
+        assert(UnitExists("mouseover") == nil, "the token is cleared")
+        assert(GameTooltip:IsShown(), "still fading")
+        assert(GameTooltipStatusBar:IsShown(), "the fading plate keeps its bar")
+        assert(GameTooltipStatusBar:GetValue() == 12, "and its value")
+        assert(recolored == 1, "the clear fires no UPDATE_MOUSEOVER_UNIT")
+    "#,
+    )
+    .unwrap();
+    // The same unit pushed under another token still drives the bar.
+    let mut as_target = wolf();
+    as_target.health = 8;
+    s.set_unit("target", Some(as_target));
+    s.run(r#"assert(GameTooltipStatusBar:GetValue() == 8, "the watcher follows the guid")"#)
+        .unwrap();
+    s.tick(0.5);
     s.run(r#"assert(not GameTooltip:IsShown(), "faded out after the ramp")"#)
         .unwrap();
     assert!(s.take_errors().is_empty());

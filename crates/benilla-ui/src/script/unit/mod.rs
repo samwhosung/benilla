@@ -308,7 +308,7 @@ impl super::UiScript {
                 }
             }
         }
-        // A push for a tooltip's live unit token re-drives its health bar, without a line rebuild.
+        // A push of the unit a tooltip shows re-drives its health bar, without a line rebuild.
         super::tooltip_unit::on_unit_push(&self.lua, token);
     }
 
