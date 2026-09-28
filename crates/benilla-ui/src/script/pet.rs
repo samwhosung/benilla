@@ -120,6 +120,9 @@ pub(crate) struct PetBarState {
     pub(crate) can_be_abandoned: bool,
     /// `PetCanBeRenamed()`, ANDed with the above for the rename row; set until the first rename.
     pub(crate) can_be_renamed: bool,
+    /// The charm or possess expiry `[0xb714a8]` on the `GetTime` clock, in seconds: the last
+    /// `SMSG_PET_SPELLS` duration past its arrival, `None` for a packet whose duration is 0.
+    pub(crate) expiry: Option<f64>,
 }
 
 impl super::UiScript {
@@ -158,6 +161,12 @@ impl super::UiScript {
         let bar = &mut self.model_mut().pet_bar;
         bar.has_ui = has_ui;
         bar.stats = stats;
+    }
+
+    /// Push the pet's expiry on the `GetTime` clock, `None` for none: `SetPet` (`0x4bc7e0`)
+    /// stores `OsTick() + duration` for each `SMSG_PET_SPELLS` whose duration is not 0, else 0.
+    pub fn set_pet_expiry(&mut self, expiry: Option<f64>) {
+        self.model_mut().pet_bar.expiry = expiry;
     }
 
     /// Push the menu's two predicates, which move with the pet's `UNIT_FIELD_FLAGS`.
@@ -234,6 +243,28 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
     let flag = |b: bool| if b { Value::Integer(1) } else { Value::Nil };
+
+    // GetPetTimeRemaining() (`0x4be600`): nil with no expiry, else the milliseconds to it as an
+    // unsigned 32-bit tick difference (`fild qword` over a zero high dword), so one past its
+    // expiry wraps to about 4.29e9 until the next packet. The stock caller is commented out
+    // (`PetFrame.lua:91-97`).
+    g.set(
+        "GetPetTimeRemaining",
+        lua.create_function(|lua, ()| {
+            let expiry = lua
+                .app_data_ref::<Model>()
+                .expect("model app_data")
+                .pet_bar
+                .expiry;
+            let Some(expiry) = expiry else {
+                return Ok(Value::Nil);
+            };
+            let now: f64 = lua.globals().get("__benilla_now").unwrap_or(0.0);
+            #[allow(clippy::cast_possible_truncation)] // a tick difference, wrapped as the u32 is
+            let ms = ((expiry - now) * 1000.0).round() as i64 as u32;
+            Ok(Value::Number(f64::from(ms)))
+        })?,
+    )?;
 
     g.set(
         "PetHasActionBar",
@@ -545,6 +576,39 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 mod tests {
     use super::{PetActionView, PetStats};
     use crate::script::UiScript;
+
+    /// A charmed or possessed unit's time left in ms, nil for none, and the unsigned wrap once
+    /// the expiry has passed (`0x4be634`).
+    #[test]
+    fn pet_time_remaining_counts_down_to_the_expiry() {
+        let mut s = UiScript::new().unwrap();
+        assert!(s
+            .eval::<Option<f64>>("return GetPetTimeRemaining()")
+            .unwrap()
+            .is_none());
+        s.tick(10.0);
+        s.set_pet_expiry(Some(12.5));
+        assert_eq!(
+            s.eval::<f64>("return GetPetTimeRemaining()").unwrap(),
+            2500.0
+        );
+        s.tick(2.0);
+        assert_eq!(
+            s.eval::<f64>("return GetPetTimeRemaining()").unwrap(),
+            500.0
+        );
+        s.tick(1.0);
+        assert_eq!(
+            s.eval::<f64>("return GetPetTimeRemaining()").unwrap(),
+            f64::from(u32::MAX - 499),
+            "0.5 s past it"
+        );
+        s.set_pet_expiry(None);
+        assert!(s
+            .eval::<Option<f64>>("return GetPetTimeRemaining()")
+            .unwrap()
+            .is_none());
+    }
 
     /// Attack (a token, attacking), Claw (a spell, autocasting, cooling down), an empty slot.
     fn slots() -> Vec<PetActionView> {

@@ -3,6 +3,8 @@
 //! data (vmangos `CharmInfo::InitPetActionBar`), not a layout: a possessed or charmed unit fills
 //! the same ten words differently, so nothing here assumes them.
 
+use std::time::Instant;
+
 use bevy::prelude::*;
 
 use benilla_protocol::messages::PetSpells;
@@ -47,6 +49,9 @@ pub(crate) struct PetBar {
     /// `0x4bc960`), and `OnClick`'s `SetChecked(0)` needs that repaint to relight a press on the
     /// current mode, so the count is in the feed's dedup key. Wrapping: only a change is read.
     pub(crate) bar_signals: u32,
+    /// `[0xb714a8]`: the charm or possess expiry, the packet's duration past its arrival; `None`
+    /// when the duration is 0, as for a hunter's or warlock's own pet.
+    pub(crate) expires: Option<Instant>,
 }
 
 impl PetBar {

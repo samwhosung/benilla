@@ -154,6 +154,9 @@ fn pet_spells(spells: PetSpells, catalog: Option<&Spells>, bar: &mut PetBar) {
             .join(" · ")
     );
     let now = Instant::now();
+    // `SetPet` (`0x4bc7e0`) re-arms the expiry on every packet, and a 0 duration clears it.
+    bar.expires = (spells.duration_ms != 0)
+        .then(|| now + std::time::Duration::from_millis(u64::from(spells.duration_ms)));
     bar.cooldowns = crate::spell::Cooldowns::default();
     for cd in &spells.cooldowns {
         let display = catalog.and_then(|c| c.catalog.get(cd.spell_id));
@@ -280,6 +283,28 @@ mod tests {
         pet_spells(PetSpells::default(), None, &mut bar);
         assert_eq!(bar.spells, PetSpells::default());
         assert!(!bar.has_bar());
+    }
+
+    /// `SetPet` (`0x4bc7e0`): each packet re-arms the expiry from its own duration, 0 clears it,
+    /// and the teardown clears it too.
+    #[test]
+    fn each_pet_packet_rearms_or_clears_the_expiry() {
+        let mut bar = PetBar::default();
+        let mut charm = a_bar(0x2A);
+        charm.duration_ms = 60_000;
+        let before = Instant::now();
+        pet_spells(charm.clone(), None, &mut bar);
+        let left = bar.expires.expect("armed").duration_since(before);
+        assert!(
+            left >= std::time::Duration::from_secs(60) && left < std::time::Duration::from_secs(61)
+        );
+
+        pet_spells(a_bar(0x2A), None, &mut bar);
+        assert_eq!(bar.expires, None, "a 0 duration clears it");
+        pet_spells(charm, None, &mut bar);
+        assert!(bar.expires.is_some());
+        pet_spells(PetSpells::default(), None, &mut bar);
+        assert_eq!(bar.expires, None, "the teardown clears it");
     }
 
     #[test]

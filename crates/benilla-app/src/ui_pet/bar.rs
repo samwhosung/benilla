@@ -202,6 +202,11 @@ pub(super) fn feed_pet_bar(
     // but its buttons work, so possession stays out of `usable`.
     let pickup_allowed = pet_flags.unwrap_or(0) & UNIT_FLAG_POSSESSED == 0;
     let pet_attacking = bar.attacking;
+    // `GetPetTimeRemaining`'s expiry on the VM clock, signed both ways around the anchor sample.
+    script.set_pet_expiry(bar.expires.map(|t| match t.checked_duration_since(anchor) {
+        Some(ahead) => ui_now + ahead.as_secs_f64(),
+        None => ui_now - anchor.duration_since(t).as_secs_f64(),
+    }));
 
     let fresh: Vec<PetActionView> = if has_bar {
         bar.spells
