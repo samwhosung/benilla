@@ -704,10 +704,12 @@ mod tests {
         stats(&mut app, true, online(vec![(32, 589)]));
         app.update();
         assert_eq!(listed(&mut app, "party1", true), [589]);
-        assert!(
-            listed(&mut app, "raid1", true).is_empty(),
-            "a party is no raid"
-        );
+        for token in ["raid1", "raid2"] {
+            assert!(
+                listed(&mut app, token, true).is_empty(),
+                "a party is no raid: {token}"
+            );
+        }
 
         let mut app = raid_app();
         stats_of(
