@@ -1186,13 +1186,6 @@ mod tests {
                  LoadOnDemand row.",
             ),
             (
-                "StatsFrame.xml",
-                "GetDebugStats",
-                "the debug readout's one engine verb (`0x488af0`), not built. `StatsFrame` loads \
-                 hidden and only its OnUpdate calls it; nothing stock shows it, and its binding, \
-                 `TOGGLESTATS`, is a `debug=\"true\"` row the release loader skips (`0x4b70a4`).",
-            ),
-            (
                 "StaticPopup.xml",
                 "ReplaceTradeEnchant",
                 "a registered 1.12 binding (`0x48d330`) whose body is not yet known; it is built \

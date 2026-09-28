@@ -1731,10 +1731,11 @@ pub(crate) static ABSENT: &[Absent] = &[
     // ── Misc ────────────────────────────────────────────────────────────────────────────
     // The nine `hidden="true" debug="true"` rows: benilla's instruments for these answer to the
     // dev plane's chords, not to a binding.
-    // Stock `StatsFrame.lua` defines `ToggleStats`; the readout it shows is `GetDebugStats`.
+    // Stock `StatsFrame.lua` defines `ToggleStats`; the readout it shows is `GetDebugStats`,
+    // which answers nothing in the release build (`0x488af0`).
     absent!(
         "TOGGLESTATS",
-        ["GetDebugStats"],
+        ["ToggleStats", "GetDebugStats"],
         "a dev-plane instrument on a dev chord"
     ),
     absent!(
@@ -1981,12 +1982,20 @@ mod tests {
     }
 
     /// An [`ABSENT`] row whose `needs` are all defined belongs in [`SPECS`]. "Defined" is read
-    /// from source, not from a VM.
+    /// from source, not from a VM. A `hidden="true"` row can never move there (the Key Bindings
+    /// page would list it), so its landed needs are no signal: `TOGGLESTATS`, whose stock body and
+    /// readout (`ToggleStats`, `GetDebugStats`) are all defined, is one.
     #[test]
     fn the_absent_commands_are_still_absent() {
         let defined = lua_globals_defined();
+        let hidden: std::collections::HashSet<String> = install_bindings()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|b| b.hidden)
+            .map(|b| b.name)
+            .collect();
         for a in ABSENT {
-            if a.needs.is_empty() {
+            if a.needs.is_empty() || hidden.contains(a.name) {
                 continue;
             }
             let landed: Vec<&str> = a
