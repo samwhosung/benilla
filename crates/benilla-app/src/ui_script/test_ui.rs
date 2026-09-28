@@ -107,7 +107,7 @@ fn load_entry(s: &UiScript, entry: &str, strict_templates: bool, no_warnings: bo
             .expect("the multibar stand-ins");
     }
     // Our options window's Graphics rows read stock `OptionsFrameSliders` (`OptionsFrame.lua`) at
-    // OnLoad; the manifest loads it one seat above ours, so a kit seats it before our file.
+    // OnLoad; the core loads it before the layer, so a kit seats it before our file.
     if path
         .rsplit('/')
         .next()

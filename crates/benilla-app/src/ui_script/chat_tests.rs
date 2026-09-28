@@ -1111,7 +1111,7 @@ fn a_glass_windows_plate_fades_in_on_every_hover_under_the_full_manifest() {
 
 /// Leaving and re-entering within `CHAT_FRAME_FADE_TIME` traps the stock Lua (the tab fade's
 /// finished callback nils `oldAlpha` under a live hover): the bare chat stack must trap, and the
-/// shipped manifest, with `install_chat_plate_guard`, must not.
+/// shipped interface, with the layer's `FrameXMLFixes.xml`, must not.
 #[test]
 fn a_quick_exit_and_reentry_keeps_the_plates_hover_fade() {
     benilla_formats::wow_data_or_skip!();
@@ -1178,7 +1178,7 @@ fn a_quick_exit_and_reentry_keeps_the_plates_hover_fade() {
         "the trapped state: tab up, oldAlpha nil, hover stuck"
     );
 
-    // The shipped interface, with the guard the manifest load installs.
+    // The shipped interface, with the guard the layer installs.
     let mut shipped = UiScript::new().unwrap();
     shipped.set_screen_size(1600.0, 900.0);
     super::test_ui::load_ui(&shipped, "Interface\\FrameXML\\GlobalStrings.lua");

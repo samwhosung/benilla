@@ -27,8 +27,8 @@ taken.
   lives in its own crate on top of benilla, started through `benilla_app::run_with` as in
   `crates/benilla-app/examples/extended_launcher.rs`. A deviation from the reference is the
   maintainer's call and is recorded where it lives; a pull request is not the place to propose one.
-- Anything from a WoW install: art, models, sounds, maps, data. The one exception is interface
-  code (FrameXML and GlueXML), and only through the migration recipe in `docs/METHOD.md`.
+- Anything from a WoW install: art, models, sounds, maps, data, and interface code (FrameXML and
+  GlueXML), which runs off the player's own install (`docs/METHOD.md`).
 - Big or mixed changes. One change per pull request, small enough to read in one sitting.
 
 ## How a change is judged
@@ -96,7 +96,8 @@ out of scope is closed with the reason.
     `series` and `hotspot`.
 - **The loop.** `cargo play` builds and runs the play profile. `scripts/check.sh` verifies a
   round of work; `scripts/gates.sh` is the full chain, and it opens a window for the engine boot
-  checks, so it needs a display. Work on a branch.
+  checks, so it needs a display. `WOW_STOCK_UI=1` boots a dev build on the stock interface
+  alone, without benilla's layer. Work on a branch.
 
 ## Reporting a bug
 

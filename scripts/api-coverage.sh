@@ -66,7 +66,7 @@ awk -F'\t' -v ref="$REF" -v show_missing="$show_missing" -v show_beyond="$show_b
       n_ref["engine"] + n_ref["framexml"] + n_ref["lua"]
     printf "  engine    %5d functions, %5d other   <- benilla implements these in Rust\n", \
       n_ref_fn["engine"], n_ref["engine"] - n_ref_fn["engine"]
-    printf "  framexml  %5d functions, %5d other   <- benilla transcribes these into assets/ui\n", \
+    printf "  framexml  %5d functions, %5d other   <- the stock FrameXML defines these\n", \
       n_ref_fn["framexml"], n_ref["framexml"] - n_ref_fn["framexml"]
     printf "  lua       %5d functions, %5d other   <- mlua provides these\n", \
       n_ref_fn["lua"], n_ref["lua"] - n_ref_fn["lua"]

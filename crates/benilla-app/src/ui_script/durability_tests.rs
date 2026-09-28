@@ -28,9 +28,9 @@ fn harness() -> UiScript {
         load_xml(&s, f);
     }
     // Deviation: the seat refreshes on every alert recompute, because the stock one goes stale
-    // when a side glyph appears while shown and hangs the shield off the screen edge. The app
-    // installs this after every load.
-    super::manifest::install_durability_reseat(&s).unwrap();
+    // when a side glyph appears while shown and hangs the shield off the screen edge. The layer
+    // installs this after every stock file.
+    load_xml(&s, "FrameXMLFixes.xml");
     s
 }
 
@@ -374,7 +374,7 @@ fn the_quest_tracker_stacks_below_the_durability_guy() {
     ] {
         load_xml(&s, f);
     }
-    super::manifest::install_durability_reseat(&s).unwrap();
+    load_xml(&s, "FrameXMLFixes.xml");
 
     let mut inv: InventorySlots = Default::default();
     inv[18] = slot(2504, Some((0, 20)));

@@ -1,0 +1,33 @@
+<Ui>
+    <!--
+        benilla's fixes to the stock FrameXML Lua, loaded after every stock file.
+    -->
+    <Script><![CDATA[
+        -- Deviation: the stock FCF_ChatTabFadeFinished (FloatingChatFrame.lua:989-992) nils
+        -- oldAlpha even under a live hover, so leaving and re-entering within
+        -- CHAT_FRAME_FADE_TIME (a flick to the scroll buttons, outside the hover box, does it)
+        -- stops the plate fading in (l.873) for the rest of the session; this keeps oldAlpha while
+        -- hover is set.
+        if FCF_ChatTabFadeFinished then
+            function FCF_ChatTabFadeFinished(chatTab, chatFrame)
+                chatTab:Hide()
+                if not chatFrame.hover then
+                    chatFrame.oldAlpha = nil
+                end
+            end
+        end
+
+        -- Deviation: re-runs UIParent_ManageFramePositions after DurabilityFrame's own OnEvent. The
+        -- pass seats the frame 20 further in while a side glyph shows (UIParent.lua:1759-1768),
+        -- but the stock frame runs it only from OnShow/OnHide, so a glyph appearing while the frame
+        -- is shown leaves the shield's overhang off the screen edge. The stock handler runs first,
+        -- unchanged, on the this/event/arg1 already set for the dispatch.
+        if DurabilityFrame then
+            local refOnEvent = DurabilityFrame:GetScript("OnEvent")
+            DurabilityFrame:SetScript("OnEvent", function()
+                if refOnEvent then refOnEvent() end
+                UIParent_ManageFramePositions()
+            end)
+        end
+    ]]></Script>
+</Ui>

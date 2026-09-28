@@ -1731,9 +1731,10 @@ pub(crate) static ABSENT: &[Absent] = &[
     // ── Misc ────────────────────────────────────────────────────────────────────────────
     // The nine `hidden="true" debug="true"` rows: benilla's instruments for these answer to the
     // dev plane's chords, not to a binding.
+    // Stock `StatsFrame.lua` defines `ToggleStats`; the readout it shows is `GetDebugStats`.
     absent!(
         "TOGGLESTATS",
-        ["ToggleStats"],
+        ["GetDebugStats"],
         "a dev-plane instrument on a dev chord"
     ),
     absent!(

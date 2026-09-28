@@ -1,0 +1,21 @@
+# benilla's own interface, one layer on the stock one (docs/METHOD.md): every file is ours, from
+# `assets/ui`, and loads in this order after every `benilla.toc` row and before the third-party
+# addons. It is listed in no addon list, fires no `ADDON_LOADED` and cannot be switched off; a dev
+# build boots without it under `WOW_STOCK_UI=1`. A test names its files, so it does not grow.
+
+## Interface: 11200
+
+# The scroll parts of our options window and script log.
+ScrollTemplates.xml
+# The Keybindings page's templates and script, which OptionsFrame.xml uses at load.
+KeyBindingsPage.xml
+# `BenillaOptionsFrame`; its rows read the option globals the stock options windows set.
+OptionsFrame.xml
+# Wraps the stock bag verbs; the keyring is a container (id -2).
+ContainerFrameAdapters.xml
+# The pet page's autocast widgets in the pet action button's proportions.
+SpellBookAdapters.xml
+# The `/errors` script error log and our slash commands.
+ScriptLogFrame.xml
+# Our fixes to the stock Lua.
+FrameXMLFixes.xml

@@ -2,7 +2,7 @@
 //! missing; `load_ui_files` and its `<Include>` provider read them here, never through `std::fs`.
 //! A dev build reads the source tree first, so an edit needs no recompile.
 
-/// The shipped UI tree: `benilla.toc` and every file it names.
+/// The shipped UI tree: `benilla.toc`, `layer.toc` and every file of ours they name.
 static UI: include_dir::Dir<'_> = include_dir::include_dir!("$CARGO_MANIFEST_DIR/assets/ui");
 
 /// The text of one shipped UI file, by path relative to `assets/ui`; the basename fallback for a
@@ -20,8 +20,9 @@ fn read_source_tree(req: &str) -> Option<String> {
     std::fs::read_to_string(dir.join(req)).ok()
 }
 
-/// FNV-1a (not cryptographic) over the manifest and each file it names, in load order, as eight
-/// hex digits: a stamp that tells two runs whether they loaded the same interface.
+/// FNV-1a (not cryptographic) over the core manifest and each file it names, then the layer's when
+/// this run loads it, in load order, as eight hex digits: a stamp that tells two runs whether they
+/// loaded the same interface.
 pub(crate) fn digest() -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let mut eat = |bytes: &[u8]| {
@@ -30,15 +31,24 @@ pub(crate) fn digest() -> String {
             h = h.wrapping_mul(0x1000_0000_01b3);
         }
     };
-    eat(super::manifest::MANIFEST.as_bytes());
-    if let Some(toc) = read(super::manifest::MANIFEST) {
-        eat(toc.as_bytes());
+    let mut loaded = vec![(super::manifest::MANIFEST, super::addons::Addon::core())];
+    if super::manifest::layer_enabled() {
+        loaded.push((
+            super::manifest::LAYER_MANIFEST,
+            super::addons::Addon::layer(),
+        ));
     }
-    for name in super::addons::Addon::builtin().toc.files {
-        // Only a chain entry's name counts: its bytes are the player's install.
-        eat(name.as_bytes());
-        if let Some(text) = read(&name) {
-            eat(text.as_bytes());
+    for (manifest, addon) in loaded {
+        eat(manifest.as_bytes());
+        if let Some(toc) = read(manifest) {
+            eat(toc.as_bytes());
+        }
+        for name in addon.toc.files {
+            // Only a chain entry's name counts: its bytes are the player's install.
+            eat(name.as_bytes());
+            if let Some(text) = read(&name) {
+                eat(text.as_bytes());
+            }
         }
     }
     format!("{:08x}", h as u32)
@@ -57,7 +67,7 @@ mod tests {
         for name in crate::ui_script::manifest::shipped_manifest_files() {
             assert!(
                 super::read(&name).is_some(),
-                "benilla.toc names {name}, which is not in assets/ui"
+                "a manifest names {name}, which is not in assets/ui"
             );
         }
     }

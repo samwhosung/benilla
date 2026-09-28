@@ -291,13 +291,13 @@ fn slash_command(index: SlashIndex, args: &str) -> ParsedChat {
         // `/reload` is the rebuild `/console reloadUI` runs (`0x4035f0`, which reads no arguments).
         S::ReloadUi => ParsedChat::ReloadUi,
         S::ConvertRaid => ParsedChat::ConvertRaid,
-        // `/errors`, benilla's own: toggles the script error log, a FrameXML window;
-        // `/errors clear` empties it.
+        // `/errors`, benilla's own: toggles the layer's script error log; `/errors clear` empties
+        // it. A no-op when the run boots without the layer.
         S::ScriptErrors => ParsedChat::Lua {
             body: if args.trim().eq_ignore_ascii_case("clear") {
-                "BenillaScriptLog_Clear()".into()
+                crate::ui_script::ERRORS_CLEAR.into()
             } else {
-                "BenillaScriptLog_Toggle()".into()
+                crate::ui_script::ERRORS_TOGGLE.into()
             },
         },
         // `SlashCmdList["CONSOLE"]` (`ChatFrame.lua:671`) is `ConsoleExec(msg)`. A typed line runs

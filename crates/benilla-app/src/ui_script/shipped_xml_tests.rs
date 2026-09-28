@@ -823,7 +823,7 @@ fn every_shipped_font_object_is_published_as_a_lua_global() {
 
     // The names come from the manifest's own entries, chain files included.
     let mut names: Vec<String> = Vec::new();
-    for entry in &super::addons::Addon::builtin().toc.files {
+    for entry in &super::manifest::manifest_files() {
         if !entry.to_ascii_lowercase().ends_with(".xml") {
             continue;
         }
@@ -1988,21 +1988,28 @@ fn the_stock_options_windows_load_and_save_are_reachable_for_addons() {
     );
 }
 
-/// `assets/ui` does not grow: the interface is the stock 1.12 FrameXML off the player's own patch
-/// chain, and a new file means a window was authored rather than migrated. Point `benilla.toc` at
-/// `Interface\FrameXML\<Window>.xml`, delete ours, and build the engine verbs the stock file calls.
+/// benilla's own interface is one layer, and it does not grow: `layer.toc` names exactly these
+/// files, all ours (none off the chain), and `assets/ui` holds nothing else but the two manifests
+/// and the core's one file. A window is migrated, not authored: point `benilla.toc` at
+/// `Interface\FrameXML\<Window>.xml`, delete ours, and build the engine verbs the stock file
+/// calls; what changes the stock UI goes in one of these files.
 #[test]
-fn assets_ui_does_not_grow() {
-    const SHIPPED: &[&str] = &[
-        "ContainerFrameAdapters.xml",
-        "GameMenuFrame.xml",
+fn the_layer_does_not_grow() {
+    const LAYER: &[&str] = &[
+        "ScrollTemplates.xml",
         "KeyBindingsPage.xml",
         "OptionsFrame.xml",
-        "ScriptLogFrame.xml",
-        "ScrollTemplates.xml",
+        "ContainerFrameAdapters.xml",
         "SpellBookAdapters.xml",
-        "benilla.toc",
+        "ScriptLogFrame.xml",
+        "FrameXMLFixes.xml",
     ];
+    assert_eq!(
+        super::addons::Addon::layer().toc.files,
+        LAYER,
+        "layer.toc changed. The layer does not grow (docs/METHOD.md): a file that retired comes \
+         off this list; a new one needs a reason this list can name."
+    );
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui");
     let mut found: Vec<String> = std::fs::read_dir(&dir)
         .expect("assets/ui")
@@ -2011,11 +2018,46 @@ fn assets_ui_does_not_grow() {
         .filter(|n| !n.starts_with('.'))
         .collect();
     found.sort();
-    let mut shipped: Vec<String> = SHIPPED.iter().map(|s| s.to_string()).collect();
+    let mut shipped: Vec<String> = LAYER
+        .iter()
+        .chain(&["benilla.toc", "layer.toc", "GameMenuFrame.xml"])
+        .map(|s| s.to_string())
+        .collect();
     shipped.sort();
     assert_eq!(
         found, shipped,
-        "assets/ui changed. It does not grow: a window is migrated, not authored (docs/METHOD.md). \
-         A file that retired comes off this list; a new one needs a reason this list can name."
+        "assets/ui holds the two manifests, the layer's files and the core's one file, nothing else"
+    );
+}
+
+/// The core is the stock UI: `benilla.toc` names the reference's own files off the chain and one
+/// file of ours, `GameMenuFrame.xml`, which stands in for the stock one until the layer reshapes
+/// the stock menu, and whose row says so.
+#[test]
+fn the_core_toc_names_no_file_of_ours_but_the_game_menu() {
+    let core = super::addons::Addon::core().toc.files;
+    let ours: Vec<&String> = core
+        .iter()
+        .filter(|f| !super::reference_ui::is_chain_entry(f))
+        .collect();
+    assert_eq!(
+        ours,
+        ["GameMenuFrame.xml"],
+        "benilla.toc names a file of ours: benilla's own interface is the layer (layer.toc), \
+         which loads after every stock file"
+    );
+    let toc = super::content::read(super::manifest::MANIFEST).expect("benilla.toc");
+    let lines: Vec<&str> = toc.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.trim() == "GameMenuFrame.xml")
+        .expect("the row");
+    assert!(
+        lines[..at]
+            .iter()
+            .rev()
+            .take_while(|l| l.starts_with('#'))
+            .any(|l| l.contains("#553")),
+        "GameMenuFrame.xml's row names the issue that retires it"
     );
 }

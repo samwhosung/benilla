@@ -484,7 +484,7 @@ fn latch_and_dispatch(
         if let Some(chord_str) = captured {
             // The Keybindings page's own handler, not a binding body.
             if let Some(s) = script.as_mut() {
-                if let Err(e) = s.run(&format!("KeyBindings_OnHostKey(\"{chord_str}\")")) {
+                if let Err(e) = s.run(&crate::ui_script::host_key_capture(&chord_str)) {
                     warn!("bindings(capture): {e}");
                 }
             }

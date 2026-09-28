@@ -36,19 +36,22 @@ comment naming the reference fact and why we differ. Anything else is a fork.
 ## Hard rules
 
 - **Never commit anything from the install.** Art, models, sounds, maps, data: the install is
-  read at runtime from a gitignored path, and everyone provides their own. The one exception is
-  interface code: FrameXML and GlueXML run off the player's own patch chain, and our own
-  counterparts under `assets/ui` stay until they retire.
+  read at runtime from a gitignored path, and everyone provides their own. Interface code is no
+  exception: FrameXML and GlueXML run off the player's own patch chain, and `assets/ui` holds
+  only benilla's own files.
 - **The install is read-only.** benilla never writes into the WoW folder: no screenshot, log,
   cache or scratch file. `scripts/smoke.sh` fails a run that leaves the install changed.
 - **Local state lives in one folder**, `benilla-config/`, at the repo root in a dev build and
   beside the binary in the player build; every path to it resolves through `crate::local_state`.
   Player settings are CVars persisted as a diff in `benilla-config/config.toml`.
-- **UI is stock-first: a window is migrated, not authored.** The end state is the stock 1.12
-  FrameXML executed off the player's own chain. `assets/ui` does not grow: a test names its
-  files and fails on a new one. A window is built by pointing `benilla.toc` at the stock file,
-  deleting ours and building the engine verbs it calls, never stubbing one to make the file
-  load.
+- **The core UI is the stock UI; benilla's own is one layer on top.** The core loads the stock
+  1.12 FrameXML off the player's own chain, byte for byte, and builds the engine verbs those
+  files call, never stubbing one to make a file load. benilla's own interface (its options
+  window, its game-menu look, its fixes to the stock Lua) is one layer that loads after the
+  stock files and before third-party addons, the way an addon does: written against the 1.12 API
+  alone, listed in no addon list and always on, and offering nothing another addon can build on.
+  Anything that changes what the stock UI does or shows lives in the layer, and the layer does
+  not grow: a test names its files and fails on a new one.
 - **A setting's default is the reference's default.** Every option boots at the stock 1.12
   value. Shipping another value costs an explicit `Deviates` row with the reason, and a test
   fails a row that drifts either way.

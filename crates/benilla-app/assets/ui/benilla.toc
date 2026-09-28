@@ -1,6 +1,7 @@
-# The built-in interface, in load order: a bare filename is ours, from `assets/ui`; a path is
-# the reference's own file, off the player's patch chain. Entry 0, Fonts.xml, loads alone into
-# every boot VM, from Startup on; the rest loads on entering the world, then third-party addons.
+# The core interface, in load order: the reference's own `FrameXML.toc` files, off the player's
+# patch chain, and one bare filename of ours from `assets/ui`. Entry 0, Fonts.xml, loads alone
+# into every boot VM, from Startup on; the rest loads on entering the world, then benilla's layer
+# (`layer.toc`), then the third-party addons.
 # The font objects thus exist before the login screen; the reference loads Fonts.xml with the
 # rest of FrameXML.
 # `inherits=`, `parent=` and a named `relativeTo=` resolve only against names declared above; a
@@ -19,8 +20,6 @@ Interface\FrameXML\Fonts.xml
 Interface\FrameXML\GlobalStrings.lua
 # `Localize()` runs at load and overwrites GlobalStrings keys, so this follows them.
 Interface\FrameXML\Localization.xml
-# `GetText` is a Lua global, not an engine binding: the client's `0x703bf0` calls it.
-Interface\FrameXML\LocaleProperties.lua
 Interface\FrameXML\BasicControls.xml
 # Before UIParent.xml, whose `LowHealthFrame` has `parent="WorldFrame"`.
 Interface\FrameXML\WorldFrame.xml
@@ -52,15 +51,12 @@ Interface\FrameXML\TargetFrame.xml
 Interface\FrameXML\PetFrame.xml
 # Anchors `relativeTo="TargetFrame"`.
 Interface\FrameXML\ComboFrame.xml
-# Ours: the scroll parts of our options window and script log.
-ScrollTemplates.xml
-
 Interface\FrameXML\UIPanelTemplates.lua
 
 Interface\FrameXML\UIPanelTemplates.xml
 # The reference's three options windows, loaded hidden so addons find their frames by name.
-# Deviation: the player opens our own options window, `OptionsFrame.xml` below, because 1.12's
-# settings screens are much worse to use; the stock one holds `OptionsFrame`.
+# Deviation: the player opens the layer's own options window, because 1.12's settings screens are
+# much worse to use; the stock one holds `OptionsFrame`.
 Interface\FrameXML\OptionsFrame.xml
 Interface\FrameXML\SoundOptionsFrame.xml
 # Inherits `OptionsCheckButtonTemplate`, and declares `UIOptionsFrameCheckButtons`, which
@@ -69,12 +65,6 @@ Interface\FrameXML\UIOptionsFrame.xml
 # StaticPopup.lua starts `StaticPopupDialogs` empty: a file that adds a dialog at load follows it.
 Interface\FrameXML\StaticPopup.xml
 Interface\FrameXML\CoinPickupFrame.xml
-
-# Ours: the Keybindings page's templates and script, which OptionsFrame.xml uses at load.
-KeyBindingsPage.xml
-
-# Ours: `BenillaOptionsFrame`; its rows read the option globals the stock windows above set.
-OptionsFrame.xml
 
 # `MainMenuBar`, `MainMenuBarArtFrame` and `MainMenuExpBar`, which later files read at load.
 Interface\FrameXML\MainMenuBar.xml
@@ -115,16 +105,14 @@ Interface\FrameXML\PaperDollFrame.xml
 Interface\FrameXML\PetPaperDollFrame.xml
 Interface\FrameXML\MainMenuBarBagButtons.xml
 Interface\FrameXML\StackSplitFrame.xml
-# Ours: wraps the stock bag verbs; the keyring is a container (id -2).
-ContainerFrameAdapters.xml
 Interface\FrameXML\ReputationFrame.xml
 Interface\FrameXML\SkillFrame.xml
 # Brings HonorFrameTemplates.xml, whose row templates `Blizzard_InspectUI` inherits.
 Interface\FrameXML\HonorFrame.xml
 Interface\FrameXML\DressUpFrame.xml
+# `FrameXML.toc` has it between ItemButtonTemplate.xml and SpellBookFrame.xml.
+Interface\FrameXML\StatsFrame.xml
 Interface\FrameXML\SpellBookFrame.xml
-# Ours: the pet page's autocast widgets in the pet action button's proportions.
-SpellBookAdapters.xml
 # RaidFrame.xml names `parent="FriendsFrame"` and MailFrame.xml inherits `FriendsFrameTabTemplate`.
 Interface\FrameXML\FriendsFrame.xml
 Interface\FrameXML\RaidFrame.xml
@@ -156,12 +144,11 @@ Interface\FrameXML\BonusActionBarFrame.xml
 Interface\FrameXML\WorldStateFrame.xml
 # `ClassTrainerListScrollFrameTemplate`, which on-demand addons inherit.
 Interface\FrameXML\ClassTrainerFrameTemplates.xml
-# Ours: the `/errors` script error log and our slash commands.
-ScriptLogFrame.xml
 Interface\FrameXML\HelpFrame.xml
 Interface\FrameXML\CinematicFrame.xml
 Interface\FrameXML\TabardFrame.xml
 Interface\FrameXML\TutorialFrame.xml
-# Ours: the ESC game menu. Last: it wraps `ToggleGameMenu`, `IsOptionFrameOpen` and
-# `UpdateMicroButtons` to count `BenillaOptionsFrame`.
+# Ours, in place of the stock GameMenuFrame.xml until the layer reshapes the stock menu (#553).
+# Last: it wraps `ToggleGameMenu`, `IsOptionFrameOpen` and `UpdateMicroButtons` to count
+# `BenillaOptionsFrame`.
 GameMenuFrame.xml
