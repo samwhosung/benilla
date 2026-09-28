@@ -16,8 +16,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::BuildId;
 
-/// Chains the crash-report hook after the current one. Called once from [`crate::run`], before
-/// the `App` exists, so a panic while plugins build is covered.
+/// Chains the crash-report hook after the current one. Called once as the client launches
+/// ([`crate::run`], [`crate::run_with`]), before the `App` exists, so a panic while plugins build
+/// is covered.
 pub(crate) fn install(build: BuildId) {
     let started = Instant::now();
     let previous = std::panic::take_hook();
@@ -139,12 +140,13 @@ mod tests {
         short: "0123456",
         date: "2026-09-16",
         profile: "debug",
+        extended: false,
     };
 
     #[test]
     fn a_report_carries_the_build_the_place_the_payload_and_the_log() {
         let log = vec!["+  1.000s  INFO benilla_app::net: entered world".to_owned()];
-        let text = render(&Report {
+        let mut report = Report {
             build: BUILD,
             unix: 1_800_000_000,
             uptime: Duration::from_millis(12_345),
@@ -153,10 +155,10 @@ mod tests {
             payload: "index out of bounds: the len is 3 but the index is 7",
             backtrace: "   0: benilla_app::net::apply::apply_net_updates",
             log: &log,
-        });
+        };
+        let text = render(&report);
         for needle in [
-            "sha 0123456789abcdef0123456789abcdef01234567",
-            "0.2.0+3 · 0123456 · 2026-09-16 · debug",
+            "build:     0.2.0+3 · 0123456 · 2026-09-16 · debug (sha 0123456789abcdef0123456789abcdef01234567)",
             "12.3 s after launch",
             "thread:    main",
             "at:        crates/benilla-app/src/net/apply.rs:100:5",
@@ -167,6 +169,13 @@ mod tests {
         ] {
             assert!(text.contains(needle), "missing {needle:?} in:\n{text}");
         }
+        // A client a crate on top of benilla extended says so in the build line.
+        report.build.extended = true;
+        let extended = render(&report);
+        assert!(
+            extended.contains("build:     0.2.0+3 · 0123456 · 2026-09-16 · debug · extended (sha "),
+            "{extended}"
+        );
 
         let dir = std::env::temp_dir().join(format!("benilla-crash-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

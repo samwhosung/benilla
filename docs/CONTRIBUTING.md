@@ -23,9 +23,10 @@ taken.
 
 ## What does not
 
-- Features 1.12.1 does not have, and behaviour changed because it seems better. A deviation
-  from the reference is the maintainer's call and is recorded where it lives; a pull request is
-  not the place to propose one.
+- Features 1.12.1 does not have, and behaviour changed because it seems better. Such a feature
+  lives in its own crate on top of benilla, started through `benilla_app::run_with` as in
+  `crates/benilla-app/examples/extended_launcher.rs`. A deviation from the reference is the
+  maintainer's call and is recorded where it lives; a pull request is not the place to propose one.
 - Anything from a WoW install: art, models, sounds, maps, data. The one exception is interface
   code (FrameXML and GlueXML), and only through the migration recipe in `docs/METHOD.md`.
 - Big or mixed changes. One change per pull request, small enough to read in one sitting.
