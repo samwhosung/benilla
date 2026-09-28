@@ -66,6 +66,11 @@ pub enum PetitionRequest {
     TurnIn,
     /// `CloseGuildRegistrar()`: sends nothing (`0x4f5010`).
     CloseRegistrar,
+    /// `GetTabardInfo()` (`0x4f5300`), not a getter: with a player, `MSG_TABARDVENDOR_ACTIVATE`
+    /// for the registrar's guid unless the designer is already open on that guid, or the
+    /// `ERR_EMBLEMERROR_NOTABARDGEOSET` refusal while the player's display id is not its native
+    /// one (`0x5e00e0`); then the registrar closes (`0x4f5355` → `0x4f5010`).
+    TabardInfo,
     /// `SignPetition([n])`: a wire byte defaulting to 1, not 0 (`0x4f46d9`); vmangos skips it.
     Sign(i8),
     /// `OfferPetition()`: the app resolves the current target (`CGGameUI`'s selection pair, not its
@@ -222,10 +227,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ── The verbs ────────────────────────────────────────────────────────────────────────────
-    // The four that carry and push nothing; none may touch the snapshot, which the server owns.
+    // The five that carry and push nothing; none may touch the snapshot, which the server owns.
+    // `GetTabardInfo`'s stock caller is commented out (`GuildRegistrarFrame.xml:190`).
     for (global, request) in [
         ("TurnInGuildCharter", PetitionRequest::TurnIn),
         ("CloseGuildRegistrar", PetitionRequest::CloseRegistrar),
+        ("GetTabardInfo", PetitionRequest::TabardInfo),
         ("OfferPetition", PetitionRequest::Offer),
         ("ClosePetition", PetitionRequest::ClosePetition),
     ] {
@@ -527,6 +534,21 @@ mod tests {
                 "{ok:?} passes to the server"
             );
         }
+    }
+
+    /// `GetTabardInfo()` pushes nothing (`0x4f535f`) and queues the designer's opener.
+    #[test]
+    fn get_tabard_info_is_an_intent_with_no_returns() {
+        let mut s = UiScript::new().unwrap();
+        assert_eq!(
+            s.eval::<i64>("local n = function(...) return arg.n end return n(GetTabardInfo())")
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            s.take_petition_requests(),
+            vec![PetitionRequest::TabardInfo]
+        );
     }
 
     #[test]

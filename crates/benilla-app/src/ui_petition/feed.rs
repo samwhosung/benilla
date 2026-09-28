@@ -173,6 +173,8 @@ pub(super) fn drain_petition(
     self_guid: Res<SelfGuid>,
     selection: Res<crate::target::Selection>,
     commands: Res<NetCommands>,
+    tabard: Res<crate::ui_tabard::TabardOpen>,
+    mut errors: ResMut<crate::ui_action::UiErrorKeys>,
 ) {
     let Some(mut script) = script else {
         return;
@@ -212,6 +214,19 @@ pub(super) fn drain_petition(
             }
             // Sends nothing.
             PetitionRequest::CloseRegistrar => registrar.close(),
+            PetitionRequest::TabardInfo => {
+                let npc = registrar.npc().unwrap_or(0);
+                if let Some(store) = self_q.iter().next() {
+                    tabard_vendor_activate(
+                        npc,
+                        tabard.npc().unwrap_or(0),
+                        store,
+                        &commands,
+                        &mut errors,
+                    );
+                }
+                registrar.close();
+            }
             PetitionRequest::ClosePetition => {
                 petition.decline_on_close(me, &commands);
                 petition.close();
@@ -261,5 +276,79 @@ pub(super) fn drain_petition(
                 petition.lines.push(lines::name_refused_line(key));
             }
         }
+    }
+}
+
+/// `0x5e00e0`, the designer's opener, for `GetTabardInfo` with the registrar's guid `npc`
+/// (`0x4f5338`): nothing while the designer is open on that guid (`0x5e00e6`-`0x5e00fc`, so two
+/// zero guids send nothing), the refusal while the player's `UNIT_FIELD_DISPLAYID` is not its
+/// `UNIT_FIELD_NATIVEDISPLAYID` (`0x5e0102`-`0x5e0116`, error `0x130`), else the packet.
+fn tabard_vendor_activate(
+    npc: u64,
+    designer: u64,
+    player: &ObjectStore,
+    commands: &NetCommands,
+    errors: &mut crate::ui_action::UiErrorKeys,
+) {
+    if designer == npc {
+        return;
+    }
+    if player.0.unit_displayid() != player.0.unit_native_displayid() {
+        errors.0.push(crate::ui_action::UiError::key(
+            "ERR_EMBLEMERROR_NOTABARDGEOSET",
+        ));
+        return;
+    }
+    let _ = commands.0.send(ClientCommand::TabardVendorActivate { npc });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui_action::UiErrorKeys;
+    use benilla_protocol::ObjectFields;
+
+    /// The player's display ids, `UNIT_FIELD_DISPLAYID` (131) and `UNIT_FIELD_NATIVEDISPLAYID`.
+    fn player(display: u32, native: u32) -> ObjectStore {
+        ObjectStore(ObjectFields::from_pairs(&[(131, display), (132, native)]))
+    }
+
+    fn run(npc: u64, designer: u64, me: &ObjectStore) -> (Vec<ClientCommand>, Vec<&'static str>) {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut errors = UiErrorKeys::default();
+        tabard_vendor_activate(npc, designer, me, &NetCommands(tx), &mut errors);
+        (
+            rx.try_iter().collect(),
+            errors.0.iter().map(|e| e.key).collect(),
+        )
+    }
+
+    #[test]
+    fn get_tabard_info_opens_the_designer_for_the_registrar() {
+        let (sent, errors) = run(0x42, 0, &player(49, 49));
+        assert!(
+            matches!(
+                sent.as_slice(),
+                [ClientCommand::TabardVendorActivate { npc: 0x42 }]
+            ),
+            "{sent:?}"
+        );
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn get_tabard_info_sends_nothing_to_a_designer_already_open_on_that_npc() {
+        let (sent, errors) = run(0x42, 0x42, &player(49, 49));
+        assert!(sent.is_empty() && errors.is_empty());
+        // With no registrar and no designer both guids are 0: equal, so nothing.
+        let (sent, _) = run(0, 0, &player(49, 49));
+        assert!(sent.is_empty());
+    }
+
+    #[test]
+    fn get_tabard_info_refuses_a_shapeshifted_player() {
+        let (sent, errors) = run(0x42, 0, &player(2281, 49));
+        assert!(sent.is_empty());
+        assert_eq!(errors, ["ERR_EMBLEMERROR_NOTABARDGEOSET"]);
     }
 }
