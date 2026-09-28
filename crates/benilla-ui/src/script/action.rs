@@ -160,6 +160,48 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
+    // GetActionAutocast(slot) (`0x4e6f90`) → autoCastAllowed, autoCastEnabled: 1 or nil each,
+    // always two values. Only a pet spell has them: the slot resolver (`0x4e5a50`) writes its
+    // book flag 0 for a spell or an item and a macro's `[rec+0x568]`, and only a set flag looks the
+    // spell up in the pet's words (`0x4bd160`, low 16 bits), reading bits 31 and 30. An empty,
+    // out-of-range or missing-macro slot leaves the flag unwritten, and the stale non-zero local
+    // looks up spell 0, which no pet word carries. A non-number raises.
+    g.set(
+        "GetActionAutocast",
+        lua.create_function(|lua, slot: Value| {
+            let slot = super::binding_abi::number_arg(lua, slot, "Usage: GetActionAutocast(slot)")?;
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            // `(spell, pet_book)` as the resolver leaves them.
+            let resolved = u32::try_from(slot)
+                .ok()
+                .filter(|s| (1..=120).contains(s))
+                .and_then(|s| model.actions.get(&s))
+                .and_then(|a| match a.kind & 0xf0 {
+                    ACTION_KIND_MACRO => model.macros.get(a.action as usize).map(|_| {
+                        let b = model
+                            .macro_bindings
+                            .get(&a.action)
+                            .copied()
+                            .unwrap_or_default();
+                        (b.spell as u32, b.pet_book)
+                    }),
+                    _ => Some((a.action, false)),
+                })
+                .unwrap_or((0, true));
+            let autocast = match resolved {
+                (spell, true) => model
+                    .pet_book
+                    .slots
+                    .iter()
+                    .find(|s| s.spell_id & 0xffff == spell)
+                    .and_then(|s| s.autocast),
+                (_, false) => None,
+            };
+            let (allowed, enabled) = autocast.unwrap_or((false, false));
+            Ok((flag(allowed), flag(enabled)))
+        })?,
+    )?;
+
     g.set(
         "GetActionTexture",
         lua.create_function(|lua, action: u32| {
@@ -352,6 +394,85 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 mod tests {
     use super::ActionSlot;
     use crate::script::UiScript;
+
+    /// `GetActionAutocast` answers a pet spell's two bits only for a macro bound out of the pet's
+    /// book (`0x4e6fcb`), never for a spell slot of the same id, and always two values.
+    #[test]
+    fn action_autocast_reads_a_pet_book_macro_only() {
+        use crate::script::{MacroBinding, MacroState, MacroView, PetBookState, SpellSlotView};
+        let mut s = UiScript::new().unwrap();
+        s.set_pet_book(PetBookState {
+            token: Some("PET".into()),
+            slots: vec![SpellSlotView {
+                spell_id: 3009, // Claw
+                autocast: Some((true, false)),
+                ..Default::default()
+            }],
+        });
+        s.set_macros(MacroState {
+            account: vec![
+                MacroView {
+                    name: "claw".into(),
+                    body: "/cast Claw".into(),
+                    ..Default::default()
+                },
+                MacroView {
+                    name: "fb".into(),
+                    body: "/cast Fireball".into(),
+                    ..Default::default()
+                },
+            ],
+            character: Vec::new(),
+        });
+        s.set_macro_bindings(std::collections::HashMap::from([
+            (
+                1,
+                MacroBinding {
+                    spell: 3009,
+                    pet_book: true,
+                },
+            ),
+            (
+                2,
+                MacroBinding {
+                    spell: 133,
+                    pet_book: false,
+                },
+            ),
+        ]));
+        let slot = |kind, action| ActionSlot {
+            kind,
+            action,
+            ..Default::default()
+        };
+        s.set_action(1, Some(slot(super::ACTION_KIND_MACRO, 1)));
+        s.set_action(2, Some(slot(super::ACTION_KIND_MACRO, 2)));
+        s.set_action(3, Some(slot(super::ACTION_KIND_SPELL, 3009)));
+        s.set_action(4, Some(slot(super::ACTION_KIND_MACRO, 9)));
+
+        let ask = |s: &UiScript, n: u32| {
+            s.eval::<(i64, Option<i64>, Option<i64>)>(&format!(
+                "local f = function(...) return arg.n, arg[1], arg[2] end \
+                 return f(GetActionAutocast({n}))"
+            ))
+            .unwrap()
+        };
+        assert_eq!(ask(&s, 1), (2, Some(1), None), "the pet-book macro");
+        for n in [2, 3, 4, 5, 0, 121] {
+            assert_eq!(ask(&s, n), (2, None, None), "slot {n}");
+        }
+        s.set_pet_book(PetBookState {
+            token: Some("PET".into()),
+            slots: vec![SpellSlotView {
+                spell_id: 3009,
+                autocast: Some((true, true)),
+                ..Default::default()
+            }],
+        });
+        assert_eq!(ask(&s, 1), (2, Some(1), Some(1)), "autocasting");
+        let err = s.run("GetActionAutocast()").unwrap_err().to_string();
+        assert!(err.contains("Usage: GetActionAutocast(slot)"), "{err}");
+    }
 
     fn uses(s: &mut UiScript) -> Vec<(u32, bool)> {
         s.take_action_uses()

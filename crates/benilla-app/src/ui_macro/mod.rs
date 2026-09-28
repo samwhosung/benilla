@@ -172,7 +172,7 @@ fn rebind_macro_spells(
     mut bound: ResMut<MacroBoundSpells>,
     mut last_generation: Local<crate::ui_script::VmMemo<Option<u64>>>,
 ) {
-    let (Some(script), Some(table)) = (script, table) else {
+    let (Some(mut script), Some(table)) = (script, table) else {
         return;
     };
     // Per VM: a fresh VM restarts its generation at 0, which a bare memo would gate off for good.
@@ -191,6 +191,27 @@ fn rebind_macro_spells(
         };
         fresh.insert(index, run::bound_spell(&table, &m.body, &book));
     }
+    // The engine's copy, for `GetActionAutocast`, re-pushed on every recompute so a fresh VM has
+    // it. The book flag stays the player's: `run::bound_spell` resolves the player's book only.
+    script.set_macro_bindings(
+        fresh
+            .iter()
+            .map(|(&index, b)| {
+                let spell = match *b {
+                    BoundSpell::None => 0,
+                    BoundSpell::Unresolved => -1,
+                    BoundSpell::Spell(id) => id as i32,
+                };
+                (
+                    index,
+                    benilla_ui::script::MacroBinding {
+                        spell,
+                        pet_book: false,
+                    },
+                )
+            })
+            .collect(),
+    );
     if fresh != bound.0 {
         let spells = fresh
             .values()

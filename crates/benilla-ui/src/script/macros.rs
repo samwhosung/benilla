@@ -36,6 +36,16 @@ pub struct MacroView {
     pub local_only: bool,
 }
 
+/// A macro record's cached cast, the reference's `([rec+0x564], [rec+0x568])` pair (`0x4efe00`):
+/// the bound spell and the book it resolved from, which the app derives.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MacroBinding {
+    /// The bound spell id; 0 for none, -1 for a `/cast` that did not resolve.
+    pub spell: i32,
+    /// The spell came from the pet's book (`0x4b3b51` writes 1), not the player's.
+    pub pet_book: bool,
+}
+
 /// The macro table: the account and character lists.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MacroState {
@@ -133,6 +143,11 @@ impl super::UiScript {
     /// The live table, for the app's save.
     pub fn macros(&self) -> MacroState {
         self.model_mut().macros.clone()
+    }
+
+    /// Push every macro's cached cast by 1-based index, replacing the last push.
+    pub fn set_macro_bindings(&mut self, bindings: std::collections::HashMap<u32, MacroBinding>) {
+        self.model_mut().macro_bindings = bindings;
     }
 
     /// Whether a script changed the table since the last call; the app then saves it and fires
