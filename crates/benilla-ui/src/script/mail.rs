@@ -97,6 +97,20 @@ pub struct StationeryView {
     pub texture: String,
 }
 
+/// One `Package.dbc` row, as `GetPackageInfo` answers it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PackageView {
+    /// The row id, which `SelectPackage` stores and `CMSG_SEND_MAIL` carries.
+    pub id: u32,
+    /// The localized name (field 3 on).
+    pub name: String,
+    /// The icon as a full path: `StringLookups.dbc` row 3's folder, `\` and field 1
+    /// (`0x4ae4ab`-`0x4ae4eb`).
+    pub icon: String,
+    /// Field 2, in copper.
+    pub cost: i32,
+}
+
 /// A drained `SendMail` intent, which the app turns into `CMSG_SEND_MAIL`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MailSendRequest {
@@ -110,7 +124,35 @@ pub struct MailSendRequest {
     /// The attached item's `(bag, 1-based slot)`; the app resolves its guid when the send fires,
     /// as the reference re-reads the slot then.
     pub item: Option<(i64, u32)>,
+    /// The selected `Package.dbc` id, sent only with an attached item (`0x4ae8f3`).
+    pub package: u32,
 }
+
+/// `0x4acdc0`'s clears: the attachment, whose lock it lifts (`0x495420`, firing
+/// `ITEM_LOCK_CHANGED`), then money, COD, stationery and package. Returns the lock event to fire.
+fn clear_compose(model: &mut Model) -> Option<(String, Vec<super::ScriptValue>)> {
+    let lock = model.mail_send_item.take().map(|item| {
+        (
+            "ITEM_LOCK_CHANGED".to_string(),
+            vec![
+                super::ScriptValue::Int(item.bag),
+                super::ScriptValue::Int(i64::from(item.slot)),
+            ],
+        )
+    });
+    model.mail_send_money = 0;
+    model.mail_send_cod = 0;
+    model.mail_stationery = 0;
+    model.mail_package = 0;
+    lock
+}
+
+/// `0x4acdc0(1)`'s three events, after the clears.
+const COMPOSE_RESET_EVENTS: [&str; 3] = [
+    "SEND_MAIL_MONEY_CHANGED", // 0x4ace14
+    "SEND_MAIL_COD_CHANGED",   // 0x4ace1e
+    "MAIL_SEND_SUCCESS",       // 0x4ace28
+];
 
 impl super::UiScript {
     /// Push (or clear, with `None`) the open mailbox's inbox snapshot.
@@ -172,25 +214,34 @@ impl super::UiScript {
             money: model.mail_send_money,
             cod: model.mail_send_cod,
             item,
+            package: model.mail_package,
         })
     }
 
-    /// The reference's compose-tab reset (`0x4acdc0`): clear the attachment, money and COD, then
-    /// fire `SEND_MAIL_MONEY_CHANGED`, `SEND_MAIL_COD_CHANGED` and `MAIL_SEND_SUCCESS` in that
-    /// order. The events must follow the clear, as `SendMailFrame_Reset` re-reads
-    /// `GetSendMailItem`. `MAIL_SEND_SUCCESS` means the form is clean: opening a mailbox fires it.
+    /// The reference's compose-tab reset (`0x4acdc0(1)`), run on mailbox open and a sent mail:
+    /// clear the attachment (its lock lifted), money, COD, stationery and package, then fire
+    /// `SEND_MAIL_MONEY_CHANGED`, `SEND_MAIL_COD_CHANGED` and `MAIL_SEND_SUCCESS` in that order.
+    /// The events must follow the clear, as `SendMailFrame_Reset` re-reads `GetSendMailItem` and
+    /// selects stationery row 1. `MAIL_SEND_SUCCESS` means the form is clean: opening a mailbox
+    /// fires it.
     pub fn reset_compose_tab(&mut self) {
-        {
-            let mut model = self.model_mut();
-            model.mail_send_item = None;
-            model.mail_send_money = 0;
-            model.mail_send_cod = 0;
-        }
+        let lock = clear_compose(&mut self.model_mut());
         // Fired now, not queued: the order against the caller's `MAIL_SHOW`/`MAIL_FAILED` matters.
-        // One literal call each, as the event census (`ui_script::reference_ui`) reads them.
-        self.fire_event("SEND_MAIL_MONEY_CHANGED", Vec::new()); // 0x4ace14
-        self.fire_event("SEND_MAIL_COD_CHANGED", Vec::new()); // 0x4ace1e
-        self.fire_event("MAIL_SEND_SUCCESS", Vec::new()); // 0x4ace28
+        if let Some((event, args)) = lock {
+            self.fire_event(&event, args);
+        }
+        for event in COMPOSE_RESET_EVENTS {
+            self.fire_event(event, Vec::new());
+        }
+    }
+
+    /// The close core's silent reset (`0x4acdc0(0)`, from `0x4acd50`): the same clears, and only
+    /// the attachment's `ITEM_LOCK_CHANGED`, which `0x495420` fires on either leg.
+    pub fn reset_compose_tab_silently(&mut self) {
+        let lock = clear_compose(&mut self.model_mut());
+        if let Some((event, args)) = lock {
+            self.fire_event(&event, args);
+        }
     }
 
     /// `SendMail`'s abort when the attached item left its slot (`ERR_ITEM_NOT_FOUND`, no packet,
@@ -209,10 +260,9 @@ impl super::UiScript {
         self.model_mut().mail_stationeries = list;
     }
 
-    /// Clear the stationery selection, as the reference does on mailbox open and close
-    /// (`0x4ace07`).
-    pub fn clear_stationery(&mut self) {
-        self.model_mut().mail_stationery = 0;
+    /// Push `Package.dbc`'s rows, in file order.
+    pub fn set_mail_packages(&mut self, packages: Vec<PackageView>) {
+        self.model_mut().mail_packages = packages;
     }
 
     /// Push `HasNewMail()`'s answer, independent of any open mailbox. The app sets it before each
@@ -689,6 +739,68 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
+    // ClearSendMail() (`0x4adee0`): the compose reset with its events (`0x4acdc0(1)`), queued in
+    // its order; zero returns.
+    g.set(
+        "ClearSendMail",
+        lua.create_function(|lua, ()| {
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            let lock = clear_compose(&mut model);
+            model.pending_events.extend(lock);
+            for event in COMPOSE_RESET_EVENTS {
+                model.pending_events.push((event.to_string(), Vec::new()));
+            }
+            Ok(MultiValue::new())
+        })?,
+    )?;
+
+    // GetNumPackages() (`0x4ae430`): `Package.dbc`'s raw row count, unfiltered.
+    g.set(
+        "GetNumPackages",
+        lua.create_function(|lua, ()| {
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            Ok(model.mail_packages.len() as i64)
+        })?,
+    )?;
+
+    // GetPackageInfo(index) (`0x4ae450`) → name, icon, cost for a 1-based row; out of range it
+    // pushes nil, nil, 0 (`0x4ae525`), and a non-number raises.
+    g.set(
+        "GetPackageInfo",
+        lua.create_function(|lua, index: Value| {
+            let index =
+                crate::script::binding_abi::number_arg(lua, index, "Usage: GetPackageInfo(index)")?;
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let row = usize::try_from(index.wrapping_sub(1))
+                .ok()
+                .and_then(|i| model.mail_packages.get(i));
+            Ok(match row {
+                Some(row) => MultiValue::from_vec(vec![
+                    Value::String(lua.create_string(&row.name)?),
+                    Value::String(lua.create_string(&row.icon)?),
+                    Value::Integer(i64::from(row.cost)),
+                ]),
+                None => MultiValue::from_vec(vec![Value::Nil, Value::Nil, Value::Integer(0)]),
+            })
+        })?,
+    )?;
+
+    // SelectPackage(index) (`0x4ae550`): stores the 1-based row's id, or 0 out of range
+    // (`0x4adc90`); a non-number raises. Zero returns.
+    g.set(
+        "SelectPackage",
+        lua.create_function(|lua, index: Value| {
+            let index =
+                crate::script::binding_abi::number_arg(lua, index, "Usage: SelectPackage(index)")?;
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            model.mail_package = usize::try_from(index.wrapping_sub(1))
+                .ok()
+                .and_then(|i| model.mail_packages.get(i))
+                .map_or(0, |row| row.id);
+            Ok(MultiValue::new())
+        })?,
+    )?;
+
     Ok(())
 }
 
@@ -1077,6 +1189,112 @@ mod tests {
         assert_eq!((req.money, req.cod, req.item), (0, 0, None));
     }
 
+    /// `ClearSendMail()` (`0x4adee0`) is the compose reset with its events, the attachment's lock
+    /// first, then the three in `0x4acdc0`'s order; stationery and package clear with the rest.
+    #[test]
+    fn clear_send_mail_resets_the_form_and_fires_its_events() {
+        use crate::script::cursor::{CursorItem, CursorPayload};
+        let mut s = UiScript::new().unwrap();
+        select_default_stationery(&mut s);
+        s.set_mail_packages(vec![PackageView {
+            id: 2,
+            name: "Test Package".into(),
+            icon: "Interface\\Icons\\INV_BOX_04".into(),
+            cost: 10,
+        }]);
+        s.run("SelectPackage(1)").unwrap();
+        s.model_mut().cursor = Some(CursorPayload::Item(CursorItem {
+            bar_placeable: true,
+            bag: 0,
+            slot: 3,
+            item_id: 1,
+            texture: None,
+            link: None,
+            count: None,
+            quality: None,
+            equip_slots: Vec::new(),
+        }));
+        s.run("ClickSendMailItemButton() SetSendMailMoney(99) SetSendMailCOD(5)")
+            .unwrap();
+        s.tick(0.0);
+        s.run(
+            r#"FIRED = {}
+               local f = CreateFrame("Frame")
+               for _, e in { "ITEM_LOCK_CHANGED", "SEND_MAIL_MONEY_CHANGED",
+                             "SEND_MAIL_COD_CHANGED", "MAIL_SEND_SUCCESS" } do
+                   f:RegisterEvent(e)
+               end
+               f:SetScript("OnEvent", function() table.insert(FIRED, event) end)"#,
+        )
+        .unwrap();
+        assert_eq!(
+            s.eval::<i64>("local n = function(...) return arg.n end return n(ClearSendMail())")
+                .unwrap(),
+            0
+        );
+        s.tick(0.0);
+        assert_eq!(
+            s.eval::<Vec<String>>("return FIRED").unwrap(),
+            [
+                "ITEM_LOCK_CHANGED",
+                "SEND_MAIL_MONEY_CHANGED",
+                "SEND_MAIL_COD_CHANGED",
+                "MAIL_SEND_SUCCESS"
+            ]
+        );
+        assert!(s
+            .eval::<bool>("return GetSendMailItem() == nil and GetSendMailMoney() == 0")
+            .unwrap());
+        s.run("SendMail('x', 'y', 'z')").unwrap();
+        assert!(s.take_mail_send().is_none(), "the stationery cleared too");
+        select_default_stationery(&mut s);
+        s.run("SendMail('x', 'y', 'z')").unwrap();
+        assert_eq!(s.take_mail_send().map(|r| r.package), Some(0));
+    }
+
+    /// `Package.dbc`'s one shipped row, through the three package verbs (`0x4ae430`, `0x4ae450`,
+    /// `0x4ae550`).
+    #[test]
+    fn packages_list_describe_and_select_by_row() {
+        let mut s = UiScript::new().unwrap();
+        assert_eq!(s.eval::<i64>("return GetNumPackages()").unwrap(), 0);
+        s.set_mail_packages(vec![PackageView {
+            id: 2,
+            name: "Test Package".into(),
+            icon: "Interface\\Icons\\INV_BOX_04".into(),
+            cost: 10,
+        }]);
+        assert_eq!(s.eval::<i64>("return GetNumPackages()").unwrap(), 1);
+        let (name, icon, cost): (String, String, i64) = s.eval("return GetPackageInfo(1)").unwrap();
+        assert_eq!(
+            (name.as_str(), icon.as_str(), cost),
+            ("Test Package", "Interface\\Icons\\INV_BOX_04", 10)
+        );
+        for miss in ["0", "2", "-1"] {
+            assert!(
+                s.eval::<bool>(&format!(
+                    "local a, b, c = GetPackageInfo({miss}) return a == nil and b == nil and c == 0"
+                ))
+                .unwrap(),
+                "{miss}"
+            );
+        }
+        for call in ["GetPackageInfo()", "SelectPackage('x')"] {
+            let err = s.run(call).unwrap_err().to_string();
+            assert!(err.contains("Usage: "), "{call}: {err}");
+        }
+
+        select_default_stationery(&mut s);
+        s.run("SelectPackage(1) SendMail('x', 'y', 'z')").unwrap();
+        assert_eq!(s.take_mail_send().map(|r| r.package), Some(2));
+        s.run("SelectPackage(5) SendMail('x', 'y', 'z')").unwrap();
+        assert_eq!(
+            s.take_mail_send().map(|r| r.package),
+            Some(0),
+            "out of range stores 0"
+        );
+    }
+
     #[test]
     fn clearing_the_mail_empties_it() {
         let mut s = UiScript::new().unwrap();
@@ -1184,7 +1402,7 @@ mod stationery_tests {
         s.run("SelectStationery(1) SendMail(\"Bob\", \"hi\", \"body\")")
             .unwrap();
         assert_eq!(s.take_mail_send().map(|r| r.stationery), Some(41));
-        s.clear_stationery();
+        s.reset_compose_tab_silently();
         s.run("SendMail(\"Bob\", \"hi\", \"body\")").unwrap();
         assert!(s.take_mail_send().is_none());
     }

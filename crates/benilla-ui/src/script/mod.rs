@@ -217,7 +217,9 @@ pub use layout_cache::{FrameLayout, LayoutPoint};
 pub use loot::{LootRow, LootState};
 pub use loot_roll::{LootRollEntry, LootRollsState};
 pub use macros::{MacroState, MacroView, MAX_MACROS, MAX_MACRO_BODY, MAX_MACRO_NAME};
-pub use mail::{MailInboxRow, MailInvoice, MailSendRequest, MailState, StationeryView};
+pub use mail::{
+    MailInboxRow, MailInvoice, MailSendRequest, MailState, PackageView, StationeryView,
+};
 pub use measure::TextMeasure;
 pub use merchant::{ItemStatsHead, MerchantItem, MerchantState, RepairCosts};
 pub(crate) use minimap::apply_model_attrs as apply_minimap_model_attrs;

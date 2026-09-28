@@ -709,6 +709,10 @@ pub(crate) struct Model {
     pub(crate) mail_stationeries: Vec<mail::StationeryView>,
     /// `SelectStationery`'s `Stationery.dbc` id; 0 is none, which silences `SendMail`.
     pub(crate) mail_stationery: u32,
+    /// `Package.dbc`'s rows in file order, `GetPackageInfo`'s list.
+    pub(crate) mail_packages: Vec<mail::PackageView>,
+    /// `SelectPackage`'s `Package.dbc` id (`[0xb6efb8]`); 0 is none.
+    pub(crate) mail_package: u32,
     /// `HasNewMail()` (`0x4afea0`), from `MSG_QUERY_NEXT_MAIL_TIME` and `SMSG_RECEIVED_MAIL`.
     pub(crate) has_new_mail: bool,
 
@@ -1291,6 +1295,8 @@ impl Model {
             mail_send_item: None,
             mail_stationeries: Vec::new(),
             mail_stationery: 0,
+            mail_packages: Vec::new(),
+            mail_package: 0,
             has_new_mail: false,
             auction: None,
             auction_item_classes: Vec::new(),

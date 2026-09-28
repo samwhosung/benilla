@@ -1402,6 +1402,8 @@ pub(crate) enum ClientCommand {
         body: String,
         /// The `Stationery.dbc` id, the sixth field.
         stationery: u32,
+        /// The `Package.dbc` id, the seventh field, 0 without an item.
+        package: u32,
         item_guid: u64,
         money: u32,
         cod: u32,

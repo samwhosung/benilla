@@ -96,6 +96,8 @@ mod stable_slot_prices;
 pub use stable_slot_prices::{load_stable_slot_prices, StableSlotPrices};
 mod page_text_material;
 pub use page_text_material::{load_page_text_material_catalog, PageTextMaterialCatalog};
+mod packages;
+pub use packages::{load_packages, PackageRow};
 mod stationery;
 pub use stationery::{
     load_stationery_catalog, StationeryCatalog, StationeryRow, STATIONERY_DEFAULT,

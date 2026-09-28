@@ -1232,14 +1232,15 @@ fn writer_loop(
                         subject,
                         body,
                         stationery,
+                        package,
                         item_guid,
                         money,
                         cod,
                     } => w.send_mail(
                         mailbox, &receiver, &subject, &body,
-                        // The chosen stationery and package 0, as the reference sends; vmangos
-                        // stores `MAIL_STATIONERY_DEFAULT` (41) regardless.
-                        stationery, 0, item_guid, money, cod,
+                        // vmangos stores `MAIL_STATIONERY_DEFAULT` (41) regardless of the chosen
+                        // stationery, and reads the package id (`Packets/Mail.cpp:10`) unused.
+                        stationery, package, item_guid, money, cod,
                     ),
                     ClientCommand::MailTakeMoney { mailbox, mail_id } => {
                         w.mail_take_money(mailbox, mail_id)

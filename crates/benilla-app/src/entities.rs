@@ -888,6 +888,10 @@ fn setup_entities(
         Ok(catalog) => commands.insert_resource(crate::ui_mail::Stationery(catalog)),
         Err(e) => warn!("stationery catalog unavailable, mail uses the default backdrop: {e:#}"),
     }
+    match benilla_formats::load_packages(&mut chain) {
+        Ok(rows) => commands.insert_resource(crate::ui_mail::Packages(rows)),
+        Err(e) => warn!("mail packages unavailable, GetNumPackages answers 0: {e:#}"),
+    }
     match benilla_formats::load_page_text_material_catalog(&mut chain) {
         Ok(catalog) => commands.insert_resource(crate::ui_item_text::PageMaterials(catalog)),
         Err(e) => warn!("page text materials unavailable, books read on parchment: {e:#}"),
