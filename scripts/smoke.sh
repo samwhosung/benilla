@@ -126,20 +126,21 @@ panics="$(printf '%s\n' "$plain" | grep -cE 'panicked at')"
 [ "$errors" -ne 0 ] && fail "$errors ERROR line(s)"
 
 # A marker counts once per edge it fires on. Each world entry builds a world VM beside the
-# character screen's glue VM (the reference's `0x490bd0`/`0x48fbf0` pair), so per-VM markers count
+# character screen's glue VM (the reference's `0x490bd0`/`0x48fbf0` pair), so the VM marker counts
 # twice per login; half that means an entry adopted the glue VM and its spent `VmMemo`s.
 sessions=2            # world entries in this walk
 vms=$((sessions * 2)) # …and the Lua states they cost: a glue VM and a world VM each
-for marker in "Fonts.xml loaded"; do
+for marker in "new VM, session"; do
     n="$(printf '%s\n' "$plain" | grep -cF "$marker")"
     printf '  %-24s %s\n' "$marker" "$n"
     [ "$n" -eq "$vms" ] ||
         fail "'$marker' happened $n time(s), expected $vms — one per VM built, two per login; \
 $sessions would mean the entry adopted the character screen's VM and inherited its spent VmMemos"
 done
-# The in-game UI and the keybinding table (`seed_bindings_for_vm`, run on the world-entry edge)
-# build once per login; one count for two logins means the second reused the first's frame tree.
-for marker in "UIParent.xml loaded" "commands registered"; do
+# The in-game UI, `FrameXML.toc`'s `Fonts.xml` included, and the keybinding table
+# (`seed_bindings_for_vm`, run on the world-entry edge) build once per login; one count for two
+# logins means the second reused the first's frame tree.
+for marker in "Fonts.xml loaded" "UIParent.xml loaded" "commands registered"; do
     n="$(printf '%s\n' "$plain" | grep -cF "$marker")"
     printf '  %-24s %s\n' "$marker" "$n"
     [ "$n" -eq "$sessions" ] ||

@@ -42,6 +42,7 @@ fn new_vm(world: &mut World) -> Option<UiScript> {
     };
     seed_vm_clock(world, &mut script);
     install_addon_asset_resolvers(world, &mut script);
+    info!("ui_script: new VM, session {}", script.session());
     Some(script)
 }
 
