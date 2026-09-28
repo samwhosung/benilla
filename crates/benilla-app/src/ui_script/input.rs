@@ -166,6 +166,10 @@ pub(super) fn feed_ui_input(
             (MouseButton::Left, "LeftButton"),
             (MouseButton::Right, "RightButton"),
             (MouseButton::Middle, "MiddleButton"),
+            // The names `RegisterForClicks` takes (`Blizzard_BindingUI.xml:10`), on the physical
+            // buttons the binding chords call BUTTON4 and BUTTON5 (`bindings::chord`).
+            (MouseButton::Forward, "Button4"),
+            (MouseButton::Back, "Button5"),
         ] {
             if buttons.just_pressed(btn) {
                 // A left press that would drop into the world (`world_drop_click`: any payload over

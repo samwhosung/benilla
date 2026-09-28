@@ -865,8 +865,9 @@ fn the_login_one_shots_wait_for_the_in_game_ui() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// An addon that fails to load without raising (a `.toc` naming a file the package lacks) is kept
-/// in the log, readable from Lua by the error window, and announced in chat.
+/// An addon that fails to load without raising (a `.toc` naming a file the package lacks) reaches
+/// no Lua error handler, so the `/errors` log (which collects off the handler) does not hold it:
+/// the engine's record keeps it, and a chat line names it.
 #[test]
 fn an_addon_that_fails_to_load_without_raising_is_readable_in_the_error_log() {
     benilla_formats::wow_data_or_skip!();
@@ -914,57 +915,20 @@ fn an_addon_that_fails_to_load_without_raising_is_readable_in_the_error_log() {
         row.message
     );
 
-    // 2. Readable from Lua through the window's own reads.
-    let count: i64 = script
-        .eval("local shown = BenillaGetNumScriptErrors() return shown")
-        .expect("BenillaGetNumScriptErrors is installed");
-    assert!(count >= 1, "the window's own read sees it");
-    let seen: String = script
-        .eval(
-            "local text = '' \
-             for i = 1, BenillaGetNumScriptErrors() do \
-                local seq, kind, message = BenillaGetScriptErrorInfo(i) \
-                if kind == 'load' then text = message end \
-             end \
-             return text",
-        )
-        .expect("BenillaGetScriptErrorInfo is installed");
-    assert!(
-        seen.contains("AaMissing"),
-        "the window walks the log and finds it: {seen:?}"
-    );
-
-    assert!(
-        script
-            .eval::<bool>("return BenillaScriptLogFrame ~= nil")
-            .expect("eval"),
-        "ScriptLogFrame.xml loaded and built the window"
-    );
-
-    // The repaint runs over a real row, so a nil global anywhere on its path raises here.
+    // 2. Not in the `/errors` log: it never reached the error handler.
     script
         .eval::<()>("BenillaScriptLog_Update() return nil")
-        .expect("the window repaints over a real log without raising");
-    // Some row shows it, not necessarily row 1: the log also holds the warnings a world entry
-    // raises before any addon loads.
-    let row_labels: Vec<String> = (1..=13)
-        .filter_map(|i| {
-            script
-                .eval::<Option<String>>(&format!("return BenillaScriptLogRow{i}Label:GetText()"))
-                .expect("eval")
-        })
-        .collect();
+        .expect("the window repaints without raising");
     assert!(
-        row_labels.iter().any(|l| l.contains("AaMissing")),
-        "a row shows the failure, trimmed to the row's width: {row_labels:?}"
-    );
-    let summary: String = script
-        .eval::<Option<String>>("return BenillaScriptLogSummary:GetText()")
-        .expect("eval")
-        .unwrap_or_default();
-    assert!(
-        summary.contains("problem"),
-        "the summary line counted them: {summary:?}"
+        !script
+            .eval::<bool>(
+                "for _, row in ipairs(BenillaScriptLog.rows) do \
+                    if strfind(row.message, 'AaMissing', 1, 1) then return true end \
+                 end \
+                 return false"
+            )
+            .expect("eval"),
+        "a failure no handler saw is not in the handler-fed log"
     );
 
     // 3. No dialog, since nothing raised: the reference answers an absent or unparseable file
@@ -977,12 +941,14 @@ fn an_addon_that_fails_to_load_without_raising_is_readable_in_the_error_log() {
          through `_ERRORMESSAGE` and through every addon handler that replaces it"
     );
 
-    // 4. Deviation: a chat line tells the player to look, where the reference stays silent,
-    // because an unannounced log goes unread.
-    assert_eq!(
-        world.resource::<crate::ui_chat::ChatLog>().pending_len(),
-        1,
-        "world entry queued the 'N addon load failures — type /errors' line"
+    // 4. Deviation: a chat line names the failure, where the reference stays silent, because
+    // otherwise it reaches no screen.
+    let lines = world.resource::<crate::ui_chat::ChatLog>().pending_lines();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("Addon load failure: ") && l.contains("AaMissing")),
+        "world entry queued the failure's line: {lines:?}"
     );
 
     drop(world);

@@ -407,7 +407,7 @@ mod measure_fits_render {
         "Main Menu",
     ];
 
-    /// `ERA_WINDOW_SCALE` of benilla's game menu and options window: fonts land on no whole size.
+    /// `BENILLA_ERA_WINDOW_SCALE` of benilla's game menu and options window: fonts land on no whole size.
     const ERA: f32 = 0.78;
 
     fn spec(h: f32) -> FontSpec<'static> {

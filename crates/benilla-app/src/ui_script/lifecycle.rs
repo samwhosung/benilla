@@ -367,6 +367,7 @@ pub(crate) fn load_ingame_ui_on_world_entry(world: &mut World) {
     // No sound during the load edge, as in the reference's `UI_Init` (`0x48fbfa` → `0x49016d`).
     silenced_ui_load(&mut script, |script| {
         let _ = load_ingame_ui(script, identity.as_ref(), &roster, version_check);
+        crate::ui_chat::commands::register_dev_commands(script, crate::run_mode::dev_affordances());
         // The new Minimap's zoom indices from the persisted CVars, as the reference's minimap reset
         // copies each CVar into its live index; `Minimap:SetZoom` owns them from here.
         script.set_minimap_zoom(zoom.0, zoom.1);
@@ -385,25 +386,22 @@ pub(crate) fn load_ingame_ui_on_world_entry(world: &mut World) {
             },
         );
     });
-    // Deviation: failed addons are reported in chat, because otherwise an addon that does not
-    // load says nothing on screen. Counted from the deduplicated diagnostics log as `/errors`
-    // lists them, after the whole load edge (handlers included); the VM is fresh, so every `Load`
-    // row is this load's.
-    let failed = script
-        .diagnostics()
-        .iter()
-        .filter(|d| d.kind == benilla_ui::script::diagnostics::DiagnosticKind::Load)
-        .count();
-    if failed > 0 {
-        if let Some(mut chat) = world.get_resource_mut::<crate::ui_chat::ChatLog>() {
+    // Deviation: each failed addon file is reported in chat, one line apiece, because otherwise
+    // an addon that does not load says nothing on screen: a failure that never raised reaches no
+    // error handler, so the `/errors` log cannot hold it. Read from the engine's deduplicated
+    // record after the whole load edge (handlers included); the VM is fresh, so every `Load` row
+    // is this load's.
+    if let Some(mut chat) = world.get_resource_mut::<crate::ui_chat::ChatLog>() {
+        for row in script
+            .diagnostics()
+            .iter()
+            .filter(|d| d.kind == benilla_ui::script::diagnostics::DiagnosticKind::Load)
+        {
+            let head = row.message.lines().next().unwrap_or_default();
             // Queued: the chat feed drains `ChatLog` once the UI is up.
             chat.push_event(crate::ui_chat::ChatEvent::text_only(
                 crate::ui_chat::ChatEventKind::System,
-                format!(
-                    "{failed} addon load {} — type /errors to see {}.",
-                    if failed == 1 { "failure" } else { "failures" },
-                    if failed == 1 { "it" } else { "them" }
-                ),
+                format!("Addon load failure: {head}"),
             ));
         }
     }

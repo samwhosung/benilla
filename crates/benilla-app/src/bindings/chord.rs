@@ -78,22 +78,6 @@ impl Chord {
     }
 }
 
-/// Build the canonical chord string from live modifier state and a base token.
-pub(crate) fn chord_string(alt: bool, ctrl: bool, shift: bool, token: &str) -> String {
-    let mut s = String::new();
-    if alt {
-        s.push_str("ALT-");
-    }
-    if ctrl {
-        s.push_str("CTRL-");
-    }
-    if shift {
-        s.push_str("SHIFT-");
-    }
-    s.push_str(token);
-    s
-}
-
 /// The 1.12 token for a physical key; `None` for a key the reference names `UNKNOWN` and for the
 /// modifiers, which are only prefixes (`IsKeyPressIgnoredForBinding`). Both Enters are `ENTER`.
 pub(crate) fn key_token(k: KeyCode) -> Option<&'static str> {
@@ -235,29 +219,17 @@ pub(crate) fn normalize_key(k: KeyCode) -> KeyCode {
     }
 }
 
-/// The 1.12 token for a mouse button: BUTTON4 is winit's `Forward` and BUTTON5 its `Back`, so the
-/// 1.12 default `BUTTON4 TOGGLEAUTORUN` sits on `Forward`. Which physical button the reference
-/// calls BUTTON4 is untraced.
-pub(crate) fn mouse_token(b: MouseButton) -> Option<&'static str> {
-    Some(match b {
-        MouseButton::Left => "BUTTON1",
-        MouseButton::Right => "BUTTON2",
-        MouseButton::Middle => "BUTTON3",
-        MouseButton::Forward => "BUTTON4",
-        MouseButton::Back => "BUTTON5",
-        // The reference names further buttons `BUTTON<n>` (`0x4b6aa0`'s bit-scan fallback).
-        // winit passes the platform's button number, so the sixth button is `Other(5)`.
-        MouseButton::Other(n) => return EXTRA_BUTTONS.get(usize::from(n).wrapping_sub(5)).copied(),
-    })
-}
-
-/// `BUTTON6` to `BUTTON20`, indexed by `Other(n) - 5`.
+/// `BUTTON6` to `BUTTON20`, indexed by `Other(n) - 5`: the reference names further buttons
+/// `BUTTON<n>` (`0x4b6aa0`'s bit-scan fallback), and winit passes the platform's button number, so
+/// the sixth button is `Other(5)`.
 const EXTRA_BUTTONS: &[&str] = &[
     "BUTTON6", "BUTTON7", "BUTTON8", "BUTTON9", "BUTTON10", "BUTTON11", "BUTTON12", "BUTTON13",
     "BUTTON14", "BUTTON15", "BUTTON16", "BUTTON17", "BUTTON18", "BUTTON19", "BUTTON20",
 ];
 
-/// Token to base input: the inverse of [`key_token`] and [`mouse_token`], plus the wheel pair.
+/// Token to base input: the inverse of [`key_token`], the mouse buttons and the wheel pair.
+/// BUTTON4 is winit's `Forward` and BUTTON5 its `Back`, so the 1.12 default `BUTTON4
+/// TOGGLEAUTORUN` sits on `Forward`; which physical button the reference calls BUTTON4 is untraced.
 fn token_key(t: &str) -> Option<BindKey> {
     use KeyCode::*;
     if let Some(b) = match t {
@@ -455,15 +427,11 @@ mod tests {
                 "{k:?} names '{token}', which SetBinding refuses"
             );
         }
-        for b in [
-            MouseButton::Left,
-            MouseButton::Right,
-            MouseButton::Middle,
-            MouseButton::Forward,
-            MouseButton::Back,
+        for token in [
+            "BUTTON1", "BUTTON2", "BUTTON3", "BUTTON4", "BUTTON5", "BUTTON20",
         ] {
-            let token = mouse_token(b).expect("named");
-            assert!(normalize_binding_key(token).is_some(), "{b:?} → '{token}'");
+            assert!(token_key(token).is_some(), "'{token}' names no button");
+            assert!(normalize_binding_key(token).is_some(), "'{token}'");
         }
         for token in ["MOUSEWHEELUP", "MOUSEWHEELDOWN"] {
             assert!(normalize_binding_key(token).is_some());
@@ -626,10 +594,6 @@ mod tests {
             })
         );
         assert_eq!(Chord::parse("BOGUS"), None);
-        assert_eq!(
-            chord_string(true, false, true, "PAGEDOWN"),
-            "ALT-SHIFT-PAGEDOWN"
-        );
         assert_eq!(
             Chord::parse("ALT-SHIFT-PAGEDOWN").unwrap(),
             Chord {

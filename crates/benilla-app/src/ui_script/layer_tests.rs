@@ -236,8 +236,8 @@ fn the_stock_ui_switch_is_a_dev_builds_alone() {
     assert!(layer_enabled_by(true, None) && layer_enabled_by(true, Some("0")));
 }
 
-/// Booted without the layer, as `WOW_STOCK_UI=1` does: no layer file loads, the stock files raise
-/// nothing, and the host's calls into the layer are no-ops.
+/// Booted without the layer, as `WOW_STOCK_UI=1` does: no layer file loads and the stock files
+/// raise nothing.
 #[test]
 fn the_stock_ui_switch_boots_the_core_without_the_layer() {
     benilla_formats::wow_data_or_skip!();
@@ -250,7 +250,7 @@ fn the_stock_ui_switch_boots_the_core_without_the_layer() {
     // One global from each layer file that defines a new one.
     for name in [
         "BenillaScrollBar_Step",
-        "KeyBindings_OnHostKey",
+        "BenillaKeyBindings_OnKeyDown",
         "BenillaOptionsFrame_SelectCategory",
         "BenillaGameMenuButtonEditMode",
         "BENILLA_BAG_WAS_OPEN",
@@ -263,13 +263,233 @@ fn the_stock_ui_switch_boots_the_core_without_the_layer() {
     }
     assert!(!s.eval::<bool>("return BenillaOptionsFrame ~= nil").unwrap());
     assert!(!s.eval::<bool>("return ZZORDER_SAW_LAYER").unwrap());
-    // The host's calls into the layer.
-    for body in [
-        super::ERRORS_TOGGLE.to_string(),
-        super::ERRORS_CLEAR.to_string(),
-        super::host_key_capture("CTRL-J"),
-    ] {
-        s.run(&body).unwrap_or_else(|e| panic!("{body}: {e}"));
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
+/// Types `line` into the chat box and sends it through the stock `ChatEdit_ParseText`
+/// (`ChatFrame.lua:2087`), counting the `HELP_TEXT_SIMPLE` lines it prints.
+fn type_line(s: &UiScript, line: &str) -> i64 {
+    s.run(&format!(
+        r#"HELPS = 0
+           local box = ChatFrameEditBox
+           box.chatFrame = box.chatFrame or DEFAULT_CHAT_FRAME
+           local frame = box.chatFrame
+           local add = frame.AddMessage
+           frame.AddMessage = function(f, text, r, g, b, id)
+               if text == HELP_TEXT_SIMPLE then HELPS = HELPS + 1 end
+               return add(f, text, r, g, b, id)
+           end
+           box:SetText({line:?})
+           ChatEdit_ParseText(box, 1)
+           frame.AddMessage = add"#
+    ))
+    .unwrap_or_else(|e| panic!("{line}: {e}"));
+    s.eval("return HELPS").unwrap()
+}
+
+/// The layer's player commands are plain `SlashCmdList` rows: `/reload` runs `ReloadUI()`,
+/// `/errors` (`/err`) toggles the log and `/errors clear` empties it. 1.12 has no `/convertraid`
+/// (the Raid tab's button converts, `RaidFrame.lua:63-71`), so it answers `HELP_TEXT_SIMPLE`, and
+/// the forwarding hook `SubmitChatInput` is gone.
+#[test]
+fn the_layers_commands_are_slash_rows_and_convertraid_is_unknown() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (mut s, failures) = production_load("slash", false);
+    assert!(failures.is_empty(), "load failures: {failures:#?}");
+    assert!(s.eval::<bool>("return SubmitChatInput == nil").unwrap());
+
+    s.take_session_requests();
+    assert_eq!(type_line(&s, "/reload"), 0);
+    assert_eq!(
+        s.take_session_requests(),
+        [benilla_ui::script::SessionRequest::ReloadUi],
+        "/reload is ReloadUI()"
+    );
+    assert!(
+        s.take_chat_input().is_empty(),
+        "nothing is handed to the host"
+    );
+
+    assert_eq!(type_line(&s, "/errors"), 0);
+    assert!(s
+        .eval::<bool>("return BenillaScriptLogFrame:IsVisible()")
+        .unwrap());
+    assert_eq!(type_line(&s, "/err"), 0);
+    assert!(!s
+        .eval::<bool>("return BenillaScriptLogFrame:IsVisible()")
+        .unwrap());
+    s.run("BenillaScriptLog_Record('kept')").unwrap();
+    assert_eq!(type_line(&s, "/errors  clear "), 0);
+    assert_eq!(
+        s.eval::<i64>("return table.getn(BenillaScriptLog.rows)")
+            .unwrap(),
+        0,
+        "/errors clear empties the log"
+    );
+
+    assert_eq!(type_line(&s, "/convertraid"), 1, "the unknown-command line");
+    assert!(s.take_chat_input().is_empty());
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
+/// In a player build the dev instruments are no `SlashCmdList` row, so a typed one answers
+/// `HELP_TEXT_SIMPLE` once and hands the host nothing to re-run; in a dev build each is a host row
+/// that hands the host its line.
+#[test]
+fn the_dev_commands_are_host_rows_in_a_dev_build_alone() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let lines = [
+        "/chattest",
+        "/shot",
+        "/liquid",
+        "/castvis",
+        "/partytest ping",
+        "/reaction",
+        "/react Probe",
+    ];
+
+    let (mut s, failures) = production_load("devcmds-player", false);
+    assert!(failures.is_empty(), "load failures: {failures:#?}");
+    crate::ui_chat::commands::register_dev_commands(&s, false);
+    for line in lines {
+        assert_eq!(
+            type_line(&s, line),
+            1,
+            "{line}: the unknown-command line, once"
+        );
+        assert!(
+            s.take_chat_input().is_empty(),
+            "{line}: nothing queued to loop"
+        );
+        let cmd = line[1..].split(' ').next().unwrap();
+        assert!(!s.has_slash_command(cmd), "{cmd} is no SlashCmdList row");
+    }
+    drop(s);
+
+    let (mut s, failures) = production_load("devcmds-dev", false);
+    assert!(failures.is_empty(), "load failures: {failures:#?}");
+    crate::ui_chat::commands::register_dev_commands(&s, true);
+    for line in lines {
+        assert_eq!(type_line(&s, line), 0, "{line}");
+        let queued = s.take_chat_input();
+        assert_eq!(queued.len(), 1, "{line}: {queued:?}");
+        // An alias queues under the command's first one, as the row's handler knows only that.
+        let want = line.replacen("/react ", "/reaction ", 1);
+        assert_eq!(queued[0].trim(), want, "{line}");
     }
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
+/// The `/errors` log collects off the Lua error handler, ahead of the stock `_ERRORMESSAGE`
+/// (`BasicControls.xml:16`), which still shows the `ScriptErrors` dialog: an addon's runtime error,
+/// an error in one of the layer's own handlers, and one raised in the stock load before the layer
+/// loaded (the engine hands caught errors to the handler after the load).
+#[test]
+fn the_error_log_collects_off_the_error_handler() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let before = r#"
+        local pre = CreateFrame("Button", "ZZPreLayer")
+        pre:SetScript("OnClick", function() error("before the layer") end)
+        pre:Click()
+    "#;
+    let (mut s, failures) = production_load_with("errlog", false, before, |root| {
+        let dir = root.join("ZZErr");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ZZErr.toc"), "## Interface: 11200\nerr.lua\n").unwrap();
+        std::fs::write(
+            dir.join("err.lua"),
+            "ZZErrButton = CreateFrame('Button', 'ZZErrButton')\n\
+             ZZErrButton:SetScript('OnClick', function() error('an addon boom') end)\n",
+        )
+        .unwrap();
+    });
+    assert!(
+        failures.iter().all(|f| f.contains("before the layer")),
+        "load failures: {failures:#?}"
+    );
+    s.run("ZZErrButton:Click()").unwrap();
+    // A layer handler raising: the window's OnShow calls this.
+    s.run("BenillaOptionsFrame_UpdateScale = function() error('a layer boom') end")
+        .unwrap();
+    s.run("ShowUIPanel(BenillaOptionsFrame)").unwrap();
+    s.dispatch_script_errors_to_handler();
+
+    let rows: Vec<String> = s
+        .eval(
+            "local out = {} \
+             for _, row in ipairs(BenillaScriptLog.rows) do table.insert(out, row.message) end \
+             return out",
+        )
+        .unwrap();
+    for want in ["before the layer", "an addon boom", "a layer boom"] {
+        assert!(
+            rows.iter().any(|r| r.contains(want)),
+            "{want:?} is in the log: {rows:#?}"
+        );
+    }
+    assert!(
+        s.eval::<bool>("return ScriptErrors:IsVisible()").unwrap(),
+        "the stock handler still runs after the log"
+    );
+    let shown: String = s.eval("return ScriptErrors_Message:GetText()").unwrap();
+    assert!(
+        shown.contains("before the layer"),
+        "the first error shows: {shown}"
+    );
+    // A repeat is one row with a count.
+    s.run("ZZErrButton:Click() ZZErrButton:Click()").unwrap();
+    s.dispatch_script_errors_to_handler();
+    assert_eq!(
+        s.eval::<i64>(
+            "for _, row in ipairs(BenillaScriptLog.rows) do \
+                if strfind(row.message, 'an addon boom', 1, 1) then return row.count end \
+             end"
+        )
+        .unwrap(),
+        3
+    );
+}
+
+/// Every global the layer defines takes the `Benilla` prefix (a slash alias its `SLASH_BENILLA_`
+/// form, as `ChatEdit_ParseText` reads it), so no layer name meets a stock or an addon one; a stock
+/// global the layer redefines keeps its name and is not a new definition here.
+#[test]
+fn every_global_the_layer_defines_takes_the_benilla_prefix() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (s, failures) = production_load("prefix", false);
+    assert!(failures.is_empty(), "load failures: {failures:#?}");
+    let log: Vec<String> = s.eval("return DEFINE_LOG").unwrap();
+    let start = defined_at(&log, "BenillaScrollBar_Step");
+    let end = defined_at(&log, "ZZORDER_SAW_LAYER");
+    let dispatch = |n: &str| {
+        n == "this"
+            || n == "event"
+            || n.strip_prefix("arg")
+                .is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))
+    };
+    let unprefixed: Vec<&String> = log[start..end]
+        .iter()
+        .filter(|n| {
+            !(n.starts_with("Benilla")
+                || n.starts_with("BENILLA_")
+                || n.starts_with("SLASH_BENILLA_"))
+                && !dispatch(n)
+        })
+        .collect();
+    assert!(
+        unprefixed.is_empty(),
+        "layer globals without the Benilla prefix: {unprefixed:?}"
+    );
 }

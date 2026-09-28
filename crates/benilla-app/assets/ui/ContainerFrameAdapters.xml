@@ -10,6 +10,8 @@
         -- The stock body, captured before it is shadowed; nil when no client data was sourced.
         local refItemButtonOnEnter = ContainerFrameItemButton_OnEnter
 
+        -- The stock name, redefined: the stock item buttons call it, and our keyring slot needs
+        -- the bag-slot tooltip.
         function ContainerFrameItemButton_OnEnter(button)
             if not button then
                 button = this
@@ -72,7 +74,8 @@
             end
         end
 
-        -- After the stock ContainerFrame.lua has loaded, so its callers reach these.
+        -- The stock names, redefined after the stock ContainerFrame.lua has loaded, so its callers
+        -- (the vendor, bank, mail and trade windows) reach these.
         OpenBackpack = BenillaOpenBackpack
         CloseBackpack = BenillaCloseBackpack
         CloseAllBags = BenillaCloseAllBags

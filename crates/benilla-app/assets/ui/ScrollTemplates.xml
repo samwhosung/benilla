@@ -183,7 +183,7 @@
             </Button>
         </Frames>
         <Scripts>
-            <OnValueChanged>BenillaFauxScrollBar_OnValueChanged(self, arg1)</OnValueChanged>
+            <OnValueChanged>BenillaFauxScrollBar_OnValueChanged(this, arg1)</OnValueChanged>
         </Scripts>
         <ThumbTexture name="$parentThumbTexture" file="Interface\Buttons\UI-ScrollBar-Knob">
             <Size><AbsDimension x="16" y="16"/></Size>

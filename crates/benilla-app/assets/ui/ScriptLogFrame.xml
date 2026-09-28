@@ -1,10 +1,10 @@
 <Ui>
     <!--
-        The script error log, which 1.12 does not have, so every name carries the `Benilla` prefix
-        (`tests::reference_surface`); the stock `ScriptErrors` dialog shows one message, this keeps
-        the log. Shaped like the reference's CraftFrame. It polls the engine:
-        `BenillaGetNumScriptErrors()` is (retained, total-ever), `BenillaGetScriptErrorInfo(i)` is
-        `seq, kind, message, count` (1-based, oldest first, nil past the end).
+        The script error log, which 1.12 does not have, so every name carries the `Benilla` prefix;
+        the stock `ScriptErrors` dialog shows one message, this keeps the log. Shaped like the
+        reference's CraftFrame. It collects as a 1.12 error-log addon does: it wraps the handler
+        `geterrorhandler` holds, the stock `_ERRORMESSAGE` (BasicControls.xml:16), which still runs
+        after it. An addon that later calls `seterrorhandler` replaces the chain, as in 1.12.
     -->
     <Script><![CDATA[
         -- A pushable above every stock panel's, so a game window opening pushes the log aside.
@@ -17,6 +17,39 @@
 
         -- A `seq`, not an index: indices shift when the cap evicts.
         BenillaScriptLogSelected = nil
+
+        -- Distinct messages kept before the oldest is evicted.
+        BENILLA_SCRIPTLOG_CAP = 256
+        -- Rows oldest first, each { seq, message, count }; `total` is the last `seq` handed out,
+        -- kept apart from the row count so an eviction or a clear never renumbers.
+        BenillaScriptLog = { rows = {}, total = 0 }
+
+        -- A repeat bumps its row's count and keeps its place.
+        function BenillaScriptLog_Record(message)
+            if type(message) ~= "string" then message = tostring(message) end
+            local log = BenillaScriptLog
+            local found = nil
+            for i = 1, table.getn(log.rows) do
+                if log.rows[i].message == message then found = log.rows[i] end
+            end
+            if found then
+                found.count = found.count + 1
+            else
+                log.total = log.total + 1
+                if table.getn(log.rows) >= BENILLA_SCRIPTLOG_CAP then table.remove(log.rows, 1) end
+                table.insert(log.rows, { seq = log.total, message = message, count = 1 })
+            end
+            if BenillaScriptLogFrame and BenillaScriptLogFrame:IsVisible() then
+                BenillaScriptLog_Update()
+            end
+        end
+
+        -- The chain: the log first, guarded so a fault in it cannot stop the stock handler.
+        local benillaStockErrorHandler = geterrorhandler()
+        seterrorhandler(function(message)
+            pcall(BenillaScriptLog_Record, message)
+            return benillaStockErrorHandler(message)
+        end)
 
         -- `strsub` counts bytes, so the cut backs up over UTF-8 continuation bytes (0x80..0xBF).
         function BenillaScriptLog_RowText(message)
@@ -35,18 +68,10 @@
             return head
         end
 
-        -- `load` red (the addon is not running), `error` amber (code raised), `warn` grey (a call
-        -- was accepted and quietly did nothing).
-        function BenillaScriptLog_RowColor(kind)
-            if kind == "load" then return 1.0, 0.3, 0.3 end
-            if kind == "warn" then return 0.65, 0.65, 0.65 end
-            return 1.0, 0.82, 0.0
-        end
-
         function BenillaScriptLog_Update()
-            local shown, total = BenillaGetNumScriptErrors()
+            local shown = table.getn(BenillaScriptLog.rows)
+            local total = BenillaScriptLog.total
 
-            -- "Problems", because two of the three kinds are not errors.
             local summary
             if total == 0 then
                 summary = "No problems this session."
@@ -68,18 +93,17 @@
             for i = 1, BENILLA_SCRIPTLOG_ROWS do
                 local button = getglobal("BenillaScriptLogRow" .. i)
                 local index = offset + i
-                local seq, kind, message, count = BenillaGetScriptErrorInfo(index)
-                if seq then
-                    button.seq = seq
-                    button.message = message
+                local row = BenillaScriptLog.rows[index]
+                if row then
+                    button.seq = row.seq
+                    button.message = row.message
                     -- `#12 x1113`: one deduplicated failure that happened 1,113 times.
-                    local label = "#" .. seq
-                    if count > 1 then label = label .. " x" .. count end
+                    local label = "#" .. row.seq
+                    if row.count > 1 then label = label .. " x" .. row.count end
                     button.index:SetText(label)
-                    button.label:SetText(BenillaScriptLog_RowText(message))
-                    button.label:SetTextColor(BenillaScriptLog_RowColor(kind))
+                    button.label:SetText(BenillaScriptLog_RowText(row.message))
                     button:Show()
-                    if seq == BenillaScriptLogSelected then selectedRow = button end
+                    if row.seq == BenillaScriptLogSelected then selectedRow = button end
                 else
                     button.seq = nil
                     button.message = nil
@@ -103,11 +127,9 @@
         function BenillaScriptLog_UpdateDetail()
             local text = ""
             if BenillaScriptLogSelected then
-                local shown = BenillaGetNumScriptErrors()
-                for i = 1, shown do
-                    local seq, _, message = BenillaGetScriptErrorInfo(i)
-                    if seq == BenillaScriptLogSelected then
-                        text = message
+                for _, row in ipairs(BenillaScriptLog.rows) do
+                    if row.seq == BenillaScriptLogSelected then
+                        text = row.message
                         break
                     end
                 end
@@ -133,7 +155,7 @@
             BenillaScriptLog_Update()
         end
 
-        function BenillaScriptLogFrame_OnLoad(self)
+        function BenillaScriptLogFrame_OnLoad()
             -- Masks the square icon to the portrait ring.
             SetPortraitToTexture("BenillaScriptLogFramePortrait",
                 "Interface\\Icons\\INV_Misc_Note_01")
@@ -157,7 +179,7 @@
 
         -- `/errors clear`: keeps the numbering, so a number never names two failures.
         function BenillaScriptLog_Clear()
-            BenillaClearScriptErrors()
+            BenillaScriptLog.rows = {}
             BenillaScriptLogSelected = nil
             if getglobal("BenillaScriptLogFrame"):IsVisible() then
                 BenillaScriptLog_Update()
@@ -184,10 +206,10 @@
         <HighlightTexture file="Interface\Buttons\UI-Listbox-Highlight2" alphaMode="ADD"/>
         <Scripts>
             <OnLoad>
-                self.index = getglobal(self:GetName() .. "Index")
-                self.label = getglobal(self:GetName() .. "Label")
+                this.index = getglobal(this:GetName() .. "Index")
+                this.label = getglobal(this:GetName() .. "Label")
             </OnLoad>
-            <OnClick>BenillaScriptLogRow_OnClick(self)</OnClick>
+            <OnClick>BenillaScriptLogRow_OnClick(this)</OnClick>
         </Scripts>
     </Button>
 
@@ -263,10 +285,10 @@
                 <Size><AbsDimension x="293" y="128"/></Size>
                 <Anchors><Anchor point="TOPLEFT" relativePoint="TOPLEFT"><Offset><AbsDimension x="22" y="-314"/></Offset></Anchor></Anchors>
                 <Scripts>
-                    <OnLoad>self:SetScrollChild(getglobal(self:GetName() .. "Child"))</OnLoad>
-                    <OnMouseWheel>BenillaScroll_OnMouseWheel(self, arg1)</OnMouseWheel>
-                    <OnVerticalScroll>BenillaScroll_SyncBar(self)</OnVerticalScroll>
-                    <OnScrollRangeChanged>BenillaScroll_SyncBar(self)</OnScrollRangeChanged>
+                    <OnLoad>this:SetScrollChild(getglobal(this:GetName() .. "Child"))</OnLoad>
+                    <OnMouseWheel>BenillaScroll_OnMouseWheel(this, arg1)</OnMouseWheel>
+                    <OnVerticalScroll>BenillaScroll_SyncBar(this)</OnVerticalScroll>
+                    <OnScrollRangeChanged>BenillaScroll_SyncBar(this)</OnScrollRangeChanged>
                 </Scripts>
                 <Frames>
                     <Slider name="$parentBar" inherits="BenillaScrollBarTemplate" hidden="true">
@@ -274,7 +296,7 @@
                             <Anchor point="TOPLEFT" relativePoint="TOPRIGHT"><Offset><AbsDimension x="6" y="-16"/></Offset></Anchor>
                             <Anchor point="BOTTOMLEFT" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="6" y="16"/></Offset></Anchor>
                         </Anchors>
-                        <Scripts><OnValueChanged>BenillaScrollBar_OnValueChanged(self, arg1)</OnValueChanged></Scripts>
+                        <Scripts><OnValueChanged>BenillaScrollBar_OnValueChanged(this, arg1)</OnValueChanged></Scripts>
                     </Slider>
                     <Frame name="$parentChild">
                         <Size><AbsDimension x="293" y="128"/></Size>
@@ -304,34 +326,32 @@
             </Button>
         </Frames>
         <Scripts>
-            <OnLoad>BenillaScriptLogFrame_OnLoad(self)</OnLoad>
+            <OnLoad>BenillaScriptLogFrame_OnLoad()</OnLoad>
             <!-- A spin bubbles up the parent chain; the detail pane's own handler wins there. -->
             <OnMouseWheel>BenillaScriptLogFrame_OnMouseWheel(arg1)</OnMouseWheel>
             <OnShow>BenillaScriptLog_Update()</OnShow>
             <OnUpdate>BenillaScriptLogFrame_OnUpdate()</OnUpdate>
         </Scripts>
     </Frame>
-    <!-- Benilla's slash commands, handed to SubmitChatInput (ui_chat::input); loads after the
-         stock ChatFrame.xml, which declares SlashCmdList. -->
+    <!-- The player's commands, as an addon registers them; after the stock ChatFrame.lua, which
+         declares SlashCmdList. -->
     <Script><![CDATA[
-        local BENILLA_COMMANDS = {
-            { "CHATTEST", "/chattest" },
-            { "SHOT", "/shot" },
-            { "LIQUID", "/liquid" },
-            { "CASTVIS", "/castvis" },
-            { "PARTYTEST", "/partytest" },
-            { "REACTION", "/reaction", "/react" },
-            { "RELOAD", "/reload" },
-            { "ERRORS", "/errors", "/err" },
-            { "CONVERTRAID", "/convertraid" },
-        }
-        for _, row in ipairs(BENILLA_COMMANDS) do
-            local key = "BENILLA_" .. row[1]
-            for i = 2, table.getn(row) do
-                setglobal("SLASH_" .. key .. (i - 1), row[i])
-            end
-            SlashCmdList[key] = function(msg)
-                SubmitChatInput(row[2] .. " " .. (msg or ""))
+        -- Deviation: 1.12 has no `/reload` (later clients added it; 1.12 reloads through
+        -- `/console reloadui`); kept so a player can reload the interface after toggling addons.
+        SLASH_BENILLA_RELOAD1 = "/reload"
+        SlashCmdList["BENILLA_RELOAD"] = function()
+            ReloadUI()
+        end
+
+        -- `/errors` toggles the log and `/errors clear` empties it; `/err` is the short form.
+        SLASH_BENILLA_ERRORS1 = "/errors"
+        SLASH_BENILLA_ERRORS2 = "/err"
+        SlashCmdList["BENILLA_ERRORS"] = function(msg)
+            local arg = string.lower((string.gsub(msg or "", "^%s*(.-)%s*$", "%1")))
+            if arg == "clear" then
+                BenillaScriptLog_Clear()
+            else
+                BenillaScriptLog_Toggle()
             end
         end
     ]]></Script>

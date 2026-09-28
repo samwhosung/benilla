@@ -173,7 +173,7 @@ fn the_selected_row_wears_the_gold_wash_and_hover_runs_blue() {
     benilla_formats::wow_data_or_skip!();
     let mut s = harness();
     // Scale 1, so rects and the pointer share coordinates; at 1024x768 the fit clamp stays above 1.
-    s.run("ERA_WINDOW_SCALE = 1").unwrap();
+    s.run("BENILLA_ERA_WINDOW_SCALE = 1").unwrap();
     s.run("ShowUIPanel(BenillaOptionsFrame)").unwrap();
 
     assert_eq!(
@@ -275,7 +275,7 @@ fn the_selected_row_wears_the_gold_wash_and_hover_runs_blue() {
 fn the_ground_dim_draws_over_the_tile_and_clear_of_the_rope() {
     benilla_formats::wow_data_or_skip!();
     let mut s = harness();
-    s.run("ERA_WINDOW_SCALE = 1").unwrap();
+    s.run("BENILLA_ERA_WINDOW_SCALE = 1").unwrap();
     s.run("ShowUIPanel(BenillaOptionsFrame)").unwrap();
     s.resolve();
 
@@ -514,7 +514,7 @@ fn a_track_press_seats_the_thumb_and_keeps_dragging() {
     benilla_formats::wow_data_or_skip!();
     let mut s = harness_on(audio_harness());
     s.set_cvar_host("MasterVolume", "0.1");
-    s.run("ERA_WINDOW_SCALE = 1").unwrap(); // pointer and rects share coordinates
+    s.run("BENILLA_ERA_WINDOW_SCALE = 1").unwrap(); // pointer and rects share coordinates
     s.run("ShowUIPanel(BenillaOptionsFrame)").unwrap();
     s.run("BenillaOptionsFrameCategoryListRowAudio:Click()")
         .unwrap();
@@ -1839,7 +1839,7 @@ fn defaults_resets_the_controls_page_to_registered_defaults() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// Run a few frames so the page body's fit converges: `OptionsScroll_Fit` reads the previous
+/// Run a few frames so the page body's fit converges: `BenillaOptionsScroll_Fit` reads the previous
 /// frame's rects.
 fn settle(s: &mut UiScript) {
     for _ in 0..4 {
@@ -1942,11 +1942,14 @@ fn a_broad_search_scrolls_the_page_instead_of_overflowing_it() {
         clip.bottom
     );
 
-    // Widget coordinates here, not the extract's pixels: the window carries `ERA_WINDOW_SCALE`.
+    // Widget coordinates here, not the extract's pixels: the window carries `BENILLA_ERA_WINDOW_SCALE`.
     let sf_bottom: f32 = s
         .eval("return BenillaOptionsFrameContainerScroll:GetBottom()")
         .unwrap();
-    let tail = |s: &UiScript| -> f32 { s.eval("return OptionsScroll_ContentBottom()").unwrap() };
+    let tail = |s: &UiScript| -> f32 {
+        s.eval("return BenillaOptionsScroll_ContentBottom()")
+            .unwrap()
+    };
     assert!(
         tail(&s) < sf_bottom,
         "the tail starts below the fold ({} vs {sf_bottom})",
@@ -2068,7 +2071,7 @@ fn the_page_scroll_bar_wears_the_trough_with_its_arrows_in_the_sockets() {
 
 // ── The row tooltips ─────────────────────────────────────────────────────────────
 
-/// Hover a row's label half, 60 units in at mid-height. Callers pin `ERA_WINDOW_SCALE = 1` first,
+/// Hover a row's label half, 60 units in at mid-height. Callers pin `BENILLA_ERA_WINDOW_SCALE = 1` first,
 /// so the row's rect and the pointer share coordinates.
 fn hover_label(s: &mut UiScript, frame: &str) {
     s.resolve();
@@ -2112,7 +2115,7 @@ fn a_hovered_row_raises_its_1_12_description_on_the_era_seat() {
     s.set_text_measurer(Box::new(super::FixedWidthFont(6.0)));
     s.run("OPTION_TOOLTIP_GAMEFIELD_DESELECT = \"Checking this will prevent the deselection.\"")
         .unwrap();
-    s.run("ERA_WINDOW_SCALE = 1").unwrap();
+    s.run("BENILLA_ERA_WINDOW_SCALE = 1").unwrap();
     s.run("ShowUIPanel(BenillaOptionsFrame)").unwrap();
 
     let row = "BenillaOptionsFrameContainerBodyControlsRowStickyTarget";
@@ -2181,7 +2184,7 @@ fn a_row_with_no_1_12_string_raises_no_plate() {
     let mut s = harness_on(audio_harness());
     s.run("OPTION_TOOLTIP_GAMEFIELD_DESELECT = \"Sticky's own description.\"")
         .unwrap();
-    s.run("ERA_WINDOW_SCALE = 1").unwrap();
+    s.run("BENILLA_ERA_WINDOW_SCALE = 1").unwrap();
     s.run("ShowUIPanel(BenillaOptionsFrame)").unwrap();
     hover_label(
         &mut s,
@@ -2201,10 +2204,10 @@ fn a_row_with_no_1_12_string_raises_no_plate() {
     );
 
     // Sticky's plate up, then straight into the mute row with no OnLeave in between.
-    s.run("OptionsRow_Hover(BenillaOptionsFrameContainerBodyControlsRowStickyTarget, 1)")
+    s.run("BenillaOptionsRow_Hover(BenillaOptionsFrameContainerBodyControlsRowStickyTarget, 1)")
         .unwrap();
     assert!(s.eval::<bool>("return GameTooltip:IsVisible()").unwrap());
-    s.run("OptionsRow_Hover(BenillaOptionsFrameContainerBodyControlsRowAutoLoot, 1)")
+    s.run("BenillaOptionsRow_Hover(BenillaOptionsFrameContainerBodyControlsRowAutoLoot, 1)")
         .unwrap();
     assert!(
         !s.eval::<bool>("return GameTooltip:IsVisible()").unwrap(),
@@ -2232,7 +2235,7 @@ fn every_row_tooltip_key_resolves_in_the_real_global_strings() {
     let listing: String = s
         .eval(
             "local out = {} \
-             for page, rows in pairs(OPTIONS_PAGE_ROWS) do \
+             for page, rows in pairs(BENILLA_OPTIONS_PAGE_ROWS) do \
                for _, rkey in ipairs(rows) do \
                  local row = getglobal(\"BenillaOptionsFrameContainerBody\" .. page .. rkey) \
                  table.insert(out, page .. rkey .. \"=\" .. (row.tip or \"\")) \
@@ -2320,7 +2323,7 @@ fn every_flavor_of_row_raises_its_plate_from_the_page_it_lives_on() {
     let mut s = harness_on(audio_harness());
     // Stand-in strings for every key the rows name.
     s.run(
-        "for page, rows in pairs(OPTIONS_PAGE_ROWS) do \
+        "for page, rows in pairs(BENILLA_OPTIONS_PAGE_ROWS) do \
            for _, rkey in ipairs(rows) do \
              local row = getglobal(\"BenillaOptionsFrameContainerBody\" .. page .. rkey) \
              if row.tip then setglobal(row.tip, \"described: \" .. rkey) end \
@@ -2328,7 +2331,7 @@ fn every_flavor_of_row_raises_its_plate_from_the_page_it_lives_on() {
          end",
     )
     .unwrap();
-    s.run("ERA_WINDOW_SCALE = 1").unwrap();
+    s.run("BENILLA_ERA_WINDOW_SCALE = 1").unwrap();
     s.run("ShowUIPanel(BenillaOptionsFrame)").unwrap();
 
     let mut raised = 0;
@@ -2346,7 +2349,7 @@ fn every_flavor_of_row_raises_its_plate_from_the_page_it_lives_on() {
             .unwrap();
         let rows: String = s
             .eval(&format!(
-                "return table.concat(OPTIONS_PAGE_ROWS.{page}, \",\")"
+                "return table.concat(BENILLA_OPTIONS_PAGE_ROWS.{page}, \",\")"
             ))
             .unwrap();
         for rkey in rows.split(',') {
@@ -2387,7 +2390,7 @@ fn every_flavor_of_row_raises_its_plate_from_the_page_it_lives_on() {
 }
 
 /// 1.12's AdvancedOptionsCombatText box as saved-global rows: a click writes the global, never a
-/// CVar, and runs the family's apply, `CombatText_UpdateOrLoad`.
+/// CVar, and runs the family's apply, `BenillaCombatText_UpdateOrLoad`.
 #[test]
 fn the_combat_page_writes_saved_variable_globals_and_applies_them() {
     benilla_formats::wow_data_or_skip!();
@@ -3236,7 +3239,7 @@ fn the_defaults_button_is_armed_by_rows_not_by_a_category() {
     s.run("ShowUIPanel(BenillaOptionsFrame)").unwrap();
 
     let keys: Vec<String> = s
-        .eval::<String>("return table.concat(OPTIONS_CATEGORY_KEYS, \",\")")
+        .eval::<String>("return table.concat(BENILLA_OPTIONS_CATEGORY_KEYS, \",\")")
         .unwrap()
         .split(',')
         .map(str::to_string)
@@ -3245,8 +3248,8 @@ fn the_defaults_button_is_armed_by_rows_not_by_a_category() {
     for key in &keys {
         let has_rows = s
             .eval::<bool>(&format!(
-                "return OPTIONS_PAGE_ROWS[\"{key}\"] ~= nil and \
-                 getn(OPTIONS_PAGE_ROWS[\"{key}\"]) > 0"
+                "return BENILLA_OPTIONS_PAGE_ROWS[\"{key}\"] ~= nil and \
+                 getn(BENILLA_OPTIONS_PAGE_ROWS[\"{key}\"]) > 0"
             ))
             .unwrap();
         assert!(
@@ -3966,7 +3969,7 @@ fn the_two_option_tabs_fit_their_labels_at_the_drawn_scale() {
     assert_eq!(
         num(&mut s, "BenillaOptionsFrame:GetScale()"),
         0.78,
-        "ERA_WINDOW_SCALE"
+        "BENILLA_ERA_WINDOW_SCALE"
     );
 
     for tab in ["BenillaOptionsFrameGameTab", "BenillaOptionsFrameAddOnsTab"] {
@@ -4156,7 +4159,7 @@ fn every_registered_reference_cvar_has_a_row_on_our_own_window() {
     let ours: std::collections::HashSet<String> = s
         .eval::<Vec<String>>(
             "local out = {} \
-             for page, rows in pairs(OPTIONS_PAGE_ROWS) do \
+             for page, rows in pairs(BENILLA_OPTIONS_PAGE_ROWS) do \
                  for _, rkey in ipairs(rows) do \
                      local row = getglobal(\"BenillaOptionsFrameContainerBody\" .. page .. rkey) \
                      if row.cvar then table.insert(out, row.cvar) end \
@@ -4396,7 +4399,7 @@ fn the_guild_line_greys_with_player_names_and_the_follow_speed_with_the_style() 
         .unwrap()
     };
     assert!(speed_thumb(&mut s));
-    s.run("SetCVar(\"cameraSmoothStyle\", \"0\") OptionsPage_Refresh(\"Controls\")")
+    s.run("SetCVar(\"cameraSmoothStyle\", \"0\") BenillaOptionsPage_Refresh(\"Controls\")")
         .unwrap();
     assert!(
         !speed_thumb(&mut s),
@@ -4410,7 +4413,7 @@ fn the_guild_line_greys_with_player_names_and_the_follow_speed_with_the_style() 
              :IsMouseEnabled()"
         )
         .unwrap());
-    s.run("SetCVar(\"cameraSmoothStyle\", \"1\") OptionsPage_Refresh(\"Controls\")")
+    s.run("SetCVar(\"cameraSmoothStyle\", \"1\") BenillaOptionsPage_Refresh(\"Controls\")")
         .unwrap();
     assert!(speed_thumb(&mut s));
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());

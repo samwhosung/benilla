@@ -1036,7 +1036,7 @@ pub(super) fn seed_ui_fixture(
             if let Err(e) = script.run(
                 "ShowUIPanel(BenillaOptionsFrame); \
                  BenillaOptionsFrameCategoryListRowKeybindings:Click(); \
-                 KeyBindings_ExpandSection(1, true); KeyBindingsPage_Update()",
+                 BenillaKeyBindings_ExpandSection(1, true); BenillaKeyBindingsPage_Update()",
             ) {
                 warn!("capture: ui-keybindings seed failed: {e}");
             }

@@ -2,7 +2,9 @@
 //! player's own strings define, read off the UI VM's globals the way `ChatEdit_ParseText` walks
 //! them (`ChatFrame.lua:2164-2200`): `SLASH_<INDEX><n>` for the actions, `EMOTE<i>_CMD<j>` →
 //! `EMOTE<i>_TOKEN` for the emotes. An action wins over an emote alias of the same name, as the
-//! reference tries `SlashCmdList` first; benilla's own commands, literals, go in after both.
+//! reference tries `SlashCmdList` first; benilla's dev instruments, literals, go in after both.
+//! benilla's player commands (`/reload`, `/errors`) are its layer's `SlashCmdList` rows, which a
+//! line this table does not know reaches through the drain's unknown-command arm.
 
 use std::collections::HashMap;
 
@@ -50,16 +52,6 @@ pub(crate) enum SlashIndex {
     MacroHelp,
     /// `/console <line>`: `ConsoleExec(msg)`, as the reference's handler (`ChatFrame.lua:671`).
     Console,
-    /// `/reload`, the rebuild `/console reloadUI` runs. Deviation: 1.12 has no such alias (later
-    /// clients added it); kept so a player can reload the interface after toggling addons.
-    ReloadUi,
-    /// `/errors`, `/err`: opens benilla's script error log. Deviation: 1.12 has only the
-    /// `ScriptErrors` modal, which shows a burst's first error and keeps none; addon users need
-    /// the list, so it is in every build.
-    ScriptErrors,
-    /// `/convertraid`: convert the party to a raid (`CMSG_GROUP_RAID_CONVERT`, leader only).
-    /// Deviation: 1.12's only trigger is the Raid tab's Convert button (`RaidFrame.xml`).
-    ConvertRaid,
 }
 
 impl SlashIndex {
@@ -101,15 +93,11 @@ impl SlashIndex {
             Self::MacroUi => "MACRO",
             Self::MacroHelp => "MACROHELP",
             Self::Console => "CONSOLE",
-            // No shipped strings under these three keys: their aliases are literals in `build`.
-            Self::ReloadUi => "RELOADUI",
-            Self::ScriptErrors => "BENILLASCRIPTERRORS",
-            Self::ConvertRaid => "BENILLACONVERTRAID",
         }
     }
 
     /// Every registered index; any other command answers `HELP_TEXT_SIMPLE`, as unknown ones do.
-    const ALL: [Self; 38] = [
+    const ALL: [Self; 35] = [
         Self::Reply,
         Self::Join,
         Self::Leave,
@@ -145,9 +133,6 @@ impl SlashIndex {
         Self::MacroUi,
         Self::MacroHelp,
         Self::Console,
-        Self::ReloadUi,
-        Self::ScriptErrors,
-        Self::ConvertRaid,
     ];
 }
 
@@ -199,8 +184,8 @@ pub(crate) enum Command {
 #[derive(Resource, Default)]
 pub(crate) struct SlashCommands {
     by_alias: HashMap<String, Command>,
-    /// Aliases per source, logged at boot: `(slash, emote, benilla additions, dev instruments)`.
-    counts: (usize, usize, usize, usize),
+    /// Aliases per source, logged at boot: `(slash, emote, dev instruments)`.
+    counts: (usize, usize, usize),
 }
 
 impl SlashCommands {
@@ -246,27 +231,7 @@ impl SlashCommands {
         }
         let emote_aliases = by_alias.len() - slash_aliases;
 
-        // 3 · benilla's player-facing additions, in every build; after the walks, so shipped wins.
-        insert(
-            &mut by_alias,
-            "reload",
-            Command::Slash(SlashIndex::ReloadUi),
-        );
-        for alias in ["errors", "err"] {
-            insert(
-                &mut by_alias,
-                alias,
-                Command::Slash(SlashIndex::ScriptErrors),
-            );
-        }
-        insert(
-            &mut by_alias,
-            "convertraid",
-            Command::Slash(SlashIndex::ConvertRaid),
-        );
-        let added_aliases = by_alias.len() - slash_aliases - emote_aliases;
-
-        // 4 · the dev instruments, dev builds only; a player build answers them as unknown.
+        // 3 · the dev instruments, dev builds only; a player build answers them as unknown.
         let before_dev = by_alias.len();
         if crate::run_mode::dev_affordances() {
             for dev in DevCmd::ALL {
@@ -279,13 +244,13 @@ impl SlashCommands {
 
         Self {
             by_alias,
-            counts: (slash_aliases, emote_aliases, added_aliases, dev_aliases),
+            counts: (slash_aliases, emote_aliases, dev_aliases),
         }
     }
 
     /// Distinct aliases per source (the shipped strings repeat: `EMOTE87_CMD1` and `_CMD2` are
     /// both `"/sit"`); a player build reports 0 dev aliases.
-    pub(super) fn counts(&self) -> (usize, usize, usize, usize) {
+    pub(super) fn counts(&self) -> (usize, usize, usize) {
         self.counts
     }
 }
@@ -295,6 +260,23 @@ fn insert(map: &mut HashMap<String, Command>, alias: &str, cmd: Command) {
     let key = alias.trim().trim_start_matches('/').to_ascii_lowercase();
     if !key.is_empty() {
         map.entry(key).or_insert(cmd);
+    }
+}
+
+/// The dev instruments as `SlashCmdList` rows (`BENILLA_<COMMAND>`), so a typed one reaches the
+/// drain through the stock `ChatEdit_ParseText`; registered on a freshly loaded VM in a build with
+/// dev affordances only, so a player build answers them `HELP_TEXT_SIMPLE`, as 1.12 does.
+pub(crate) fn register_dev_commands(script: &benilla_ui::script::UiScript, dev: bool) {
+    if !dev {
+        return;
+    }
+    for cmd in DevCmd::ALL {
+        let aliases: Vec<String> = cmd.aliases().iter().map(|a| format!("/{a}")).collect();
+        let aliases: Vec<&str> = aliases.iter().map(String::as_str).collect();
+        let key = format!("BENILLA_{}", cmd.aliases()[0].to_ascii_uppercase());
+        if let Err(e) = script.register_host_slash_command(&key, &aliases) {
+            warn!("chat: registering /{}: {e}", cmd.aliases()[0]);
+        }
     }
 }
 
@@ -314,11 +296,11 @@ pub(crate) fn build_slash_commands(
         |name| globals.get::<String>(name).ok().filter(|s| !s.is_empty()),
         |token| emotes.text_id(token),
     );
-    let (slash, emote, added, dev) = table.counts();
+    let (slash, emote, dev) = table.counts();
     // The shipped 1.12 data gives the counts `real_alias_table_resolves_the_shipped_commands` pins.
     info!(
         "chat: slash table — {slash} command aliases, {emote} emote aliases, \
-         {added} benilla additions, {dev} instrument aliases"
+         {dev} instrument aliases"
     );
     if emote == 0 {
         error!("chat: NO emote aliases — every /wave-style command is dead (GlobalStrings?)");

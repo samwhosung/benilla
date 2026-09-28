@@ -1437,7 +1437,11 @@ fn real_alias_table_resolves_the_shipped_commands() {
         );
     }
     assert_eq!(parse_line("/macrohelp"), ParsedChat::MacroHelp);
-    assert_eq!(parse_line("/convertraid"), ParsedChat::ConvertRaid);
+    // 1.12 has none of these: `/convertraid` (the Raid tab's button converts), and benilla's
+    // `/reload` and `/errors`, which are its layer's `SlashCmdList` rows, not this table's.
+    for line in ["/convertraid", "/reload", "/errors", "/err"] {
+        assert_eq!(parse_line(line), ParsedChat::Unknown, "{line}");
+    }
     // `/console` from a line that skipped the stock edit box forwards to the stock handler's verb.
     assert_eq!(
         parse_line("/console fpsJournal 1"),
@@ -1476,9 +1480,8 @@ fn real_alias_table_resolves_the_shipped_commands() {
         }
     }
     // The shipped surface: 68 distinct aliases over 36 `SlashCmdList` indices and 225 emote
-    // commands over 169 `EmotesText` names (aliases repeat; EMOTE27 "UNUSED" has no row). Then
-    // benilla's own `/reload`, `/errors`, `/err` and `/convertraid`, which are not 1.12 commands,
-    // in every build, and 7 instrument aliases, in dev builds only.
+    // commands over 169 `EmotesText` names (aliases repeat; EMOTE27 "UNUSED" has no row), then 7
+    // instrument aliases, in dev builds only.
     let instruments = if crate::run_mode::dev_affordances() {
         7
     } else {
@@ -1486,8 +1489,8 @@ fn real_alias_table_resolves_the_shipped_commands() {
     };
     assert_eq!(
         table.counts(),
-        (68, 225, 4, instruments),
-        "(slash, emote, benilla addition, instrument) aliases"
+        (68, 225, instruments),
+        "(slash, emote, instrument) aliases"
     );
 }
 

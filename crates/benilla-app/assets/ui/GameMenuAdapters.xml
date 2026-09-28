@@ -24,11 +24,11 @@
             end
         end
 
-        -- ERA_WINDOW_SCALE (OptionsFrame.xml) stands in for the era's UIParent scale; read at
-        -- every show, then the stock OnShow.
+        -- BENILLA_ERA_WINDOW_SCALE (OptionsFrame.xml) stands in for the era's UIParent scale;
+        -- read at every show, then the stock OnShow.
         local Ref_GameMenuFrame_OnShow = GameMenuFrame:GetScript("OnShow")
         GameMenuFrame:SetScript("OnShow", function()
-            this:SetScale(ERA_WINDOW_SCALE or 1)
+            this:SetScale(BENILLA_ERA_WINDOW_SCALE or 1)
             Ref_GameMenuFrame_OnShow()
         end)
 

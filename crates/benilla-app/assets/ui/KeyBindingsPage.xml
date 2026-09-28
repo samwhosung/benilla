@@ -4,14 +4,16 @@
         OptionsFrame.xml, which loads after. Only commands the engine dispatches appear.
         Deviation: the layout is the era Settings panel's Keybindings page (collapsible category
         sections), because 1.12's settings screens are much worse to use. Capture follows 1.12's
-        Blizzard_BindingUI: the next key or mouse 3/4/5 press binds, left and right clicks only
-        select, and ESC while armed binds Escape (its OnKeyDown has no ESCAPE filter).
+        Blizzard_BindingUI: while a capsule is selected the window is keyboard-enabled, so the
+        next key binds through its OnKeyDown, and a mouse 3/4/5 click or a wheel notch binds;
+        left and right clicks only select, and ESC while armed binds Escape (its OnKeyDown has no
+        ESCAPE filter).
         Deviation: every bind, unbind and reset saves at once, as the era panel commits, where
         1.12 had Okay and Cancel; only Reset To Default and leaving the character set confirm.
     -->
 
-    <!-- 1.12's KeyBindingFrameBindingButtonTemplate; all five buttons reach the capture. -->
-    <Button name="KeyBindingButtonTemplate" virtual="true">
+    <!-- 1.12's KeyBindingFrameBindingButtonTemplate; all five buttons reach the handler. -->
+    <Button name="BenillaKeyBindingButtonTemplate" virtual="true">
         <Size><AbsDimension x="180" y="22"/></Size>
         <ButtonText name="$parentText"/>
         <NormalTexture file="Interface\Buttons\UI-Panel-Button-Up"><TexCoords left="0" right="0.625" top="0" bottom="0.6875"/></NormalTexture>
@@ -22,13 +24,13 @@
         <DisabledFont inherits="GameFontDisableSmall"/>
         <Scripts>
             <OnLoad>this:RegisterForClicks("LeftButtonUp", "RightButtonUp", "MiddleButtonUp", "Button4Up", "Button5Up")</OnLoad>
-            <OnClick>KeyBindingButton_OnClick(arg1)</OnClick>
+            <OnClick>BenillaKeyBindingButton_OnClick(arg1)</OnClick>
         </Scripts>
     </Button>
 
     <!-- A binding row or a section header in 1.12's QuestLogTitleButton dress, since the era's
          expand arrows are not in 1.12; 25 tall, the era's row height. -->
-    <Frame name="KeyBindingRowTemplate" virtual="true">
+    <Frame name="BenillaKeyBindingRowTemplate" virtual="true">
         <Size><AbsDimension x="560" y="25"/></Size>
         <Layers>
             <Layer level="BACKGROUND">
@@ -61,13 +63,13 @@
                 <NormalFont inherits="GameFontNormal"/>
                 <HighlightFont inherits="GameFontHighlight"/>
                 <Scripts>
-                    <OnClick>KeyBindings_ToggleSection(this.sectionIndex)</OnClick>
+                    <OnClick>BenillaKeyBindings_ToggleSection(this.sectionIndex)</OnClick>
                 </Scripts>
             </Button>
-            <Button name="$parentKey1Button" inherits="KeyBindingButtonTemplate" id="1">
+            <Button name="$parentKey1Button" inherits="BenillaKeyBindingButtonTemplate" id="1">
                 <Anchors><Anchor point="LEFT"><Offset><AbsDimension x="175" y="0"/></Offset></Anchor></Anchors>
             </Button>
-            <Button name="$parentKey2Button" inherits="KeyBindingButtonTemplate" id="2">
+            <Button name="$parentKey2Button" inherits="BenillaKeyBindingButtonTemplate" id="2">
                 <Anchors><Anchor point="LEFT" relativeTo="$parentKey1Button" relativePoint="RIGHT"><Offset><AbsDimension x="0" y="0"/></Offset></Anchor></Anchors>
             </Button>
         </Frames>
@@ -75,7 +77,7 @@
 
     <Script><![CDATA[
         -- ── Strings ── a 1.12 GlobalStrings global, or the fallback for a harness without them.
-        function KeyBindings_String(name, fallback)
+        function BenillaKeyBindings_String(name, fallback)
             local s = getglobal(name)
             if s then return s end
             return fallback
@@ -83,9 +85,9 @@
 
         -- ── Key display ── 1.12's GetBindingText in full form: modifier prefixes stay tokens, the
         -- base key reads its KEY_* global. "CTRL--" is CTRL plus the minus key.
-        function KeyBindings_KeyText(key)
+        function BenillaKeyBindings_KeyText(key)
             if not key then
-                return NORMAL_FONT_COLOR_CODE .. KeyBindings_String("NOT_BOUND", "Not Bound") .. FONT_COLOR_CODE_CLOSE
+                return NORMAL_FONT_COLOR_CODE .. BenillaKeyBindings_String("NOT_BOUND", "Not Bound") .. FONT_COLOR_CODE_CLOSE
             end
             local prefix = ""
             local rest = key
@@ -104,43 +106,55 @@
                     break
                 end
             end
-            return prefix .. KeyBindings_String("KEY_" .. rest, rest)
+            return prefix .. BenillaKeyBindings_String("KEY_" .. rest, rest)
         end
 
         -- ── Page state ── `searchPainted` maps OptionsFrame.xml's search rows to binding indices.
-        KeyBindingsPage = { sections = {}, items = {} }
+        BenillaKeyBindingsPage = { sections = {}, items = {} }
 
-        KEYBINDINGS_ROW_BASE = "BenillaOptionsFrameContainerBodyKeybindingsRow"
-        KEYBINDINGS_DISPLAYED = 19
-        KEYBINDINGS_ROW_HEIGHT = 25
-        KEYBINDINGS_SEARCH_ROWS = 8
+        BENILLA_KEYBINDINGS_ROW_BASE = "BenillaOptionsFrameContainerBodyKeybindingsRow"
+        BENILLA_KEYBINDINGS_DISPLAYED = 19
+        BENILLA_KEYBINDINGS_ROW_HEIGHT = 25
+        BENILLA_KEYBINDINGS_SEARCH_ROWS = 8
 
-        -- ── Section model ── one section per category in Bindings.xml order, collapsed at first
-        -- as in the era; a rebuild keeps each state.
-        function KeyBindings_BuildSections()
-            local page = KeyBindingsPage
+        -- ── Section model ── one section per `HEADER_*` row of the binding list, in its
+        -- order (Blizzard_BindingUI.lua:84-92), collapsed at first as in the era; a rebuild keeps
+        -- each state. `token` is the header's GlobalStrings key, `fallback` its bare name.
+        -- Deviation: the spacer headers BLANK, BLANK2 and BLANK3 over multibars 2-4
+        -- (Bindings.xml:883/967/1051), which 1.12 draws blank (BINDING_HEADER_BLANK is "  ", the
+        -- other two are not defined), continue the section above, because this page's sections
+        -- are named and collapsible.
+        function BenillaKeyBindings_IsHeader(command)
+            return strsub(command, 1, 6) == "HEADER"
+        end
+
+        function BenillaKeyBindings_BuildSections()
+            local page = BenillaKeyBindingsPage
             local was = {}
             for _, s in ipairs(page.sections) do
                 was[s.token] = s.expanded
             end
             page.sections = {}
-            local byToken = {}
+            local sec = nil
             for i = 1, GetNumBindings() do
-                local _, category = GetBinding(i)
-                local sec = byToken[category]
-                if not sec then
-                    sec = { token = category, indices = {}, expanded = was[category] }
-                    byToken[category] = sec
-                    table.insert(page.sections, sec)
+                local command = GetBinding(i)
+                if BenillaKeyBindings_IsHeader(command) then
+                    local token = "BINDING_" .. command
+                    if not (sec and strfind(command, "^HEADER_BLANK%d*$")) then
+                        sec = { token = token, fallback = strsub(command, 8), indices = {},
+                            expanded = was[token] }
+                        table.insert(page.sections, sec)
+                    end
+                elseif sec then
+                    table.insert(sec.indices, i)
                 end
-                table.insert(sec.indices, i)
             end
-            KeyBindings_Flatten()
+            BenillaKeyBindings_Flatten()
         end
 
         -- The visible list the faux scroll runs over.
-        function KeyBindings_Flatten()
-            local page = KeyBindingsPage
+        function BenillaKeyBindings_Flatten()
+            local page = BenillaKeyBindingsPage
             page.items = {}
             for n, sec in ipairs(page.sections) do
                 table.insert(page.items, { header = n })
@@ -153,38 +167,38 @@
         end
 
         -- A header click, voiced with the checkbox sound.
-        function KeyBindings_ToggleSection(n)
-            local sec = KeyBindingsPage.sections[n]
+        function BenillaKeyBindings_ToggleSection(n)
+            local sec = BenillaKeyBindingsPage.sections[n]
             if not sec then return end
             PlaySound("igMainMenuOptionCheckBoxOn")
             sec.expanded = not sec.expanded
-            KeyBindings_Flatten()
-            KeyBindingsPage_Update()
+            BenillaKeyBindings_Flatten()
+            BenillaKeyBindingsPage_Update()
         end
 
         -- Silent, for the capture fixture.
-        function KeyBindings_ExpandSection(n, on)
-            local sec = KeyBindingsPage.sections[n]
+        function BenillaKeyBindings_ExpandSection(n, on)
+            local sec = BenillaKeyBindingsPage.sections[n]
             if not sec then return end
             sec.expanded = on and true or false
-            KeyBindings_Flatten()
+            BenillaKeyBindings_Flatten()
         end
 
         -- ── Painters ── shared by the list and the search rows, which capture in place.
-        function KeyBindings_PaintBindRow(name, index)
-            local command, _, key1, key2 = GetBinding(index)
+        function BenillaKeyBindings_PaintBindRow(name, index)
+            local command, key1, key2 = GetBinding(index)
             local b1 = getglobal(name .. "Key1Button")
             local b2 = getglobal(name .. "Key2Button")
             b1.commandName = command
             b2.commandName = command
-            b1:SetText(KeyBindings_KeyText(key1))
-            b2:SetText(KeyBindings_KeyText(key2))
+            b1:SetText(BenillaKeyBindings_KeyText(key1))
+            b2:SetText(BenillaKeyBindings_KeyText(key2))
             if key1 then b1:SetAlpha(1) else b1:SetAlpha(0.8) end
             if key2 then b2:SetAlpha(1) else b2:SetAlpha(0.8) end
             local desc = getglobal(name .. "Description")
-            desc:SetText(KeyBindings_String("BINDING_NAME_" .. command, command))
+            desc:SetText(BenillaKeyBindings_String("BINDING_NAME_" .. command, command))
             desc:Show()
-            local page = KeyBindingsPage
+            local page = BenillaKeyBindingsPage
             if page.selected == command and page.keyID == 1 then
                 b1:LockHighlight()
             else
@@ -200,11 +214,11 @@
             getglobal(name .. "Header"):Hide()
         end
 
-        function KeyBindings_PaintHeaderRow(name, n)
-            local sec = KeyBindingsPage.sections[n]
+        function BenillaKeyBindings_PaintHeaderRow(name, n)
+            local sec = BenillaKeyBindingsPage.sections[n]
             local header = getglobal(name .. "Header")
             header.sectionIndex = n
-            header:SetText(KeyBindings_String(sec.token, sec.token))
+            header:SetText(BenillaKeyBindings_String(sec.token, sec.fallback))
             local icon = getglobal(name .. "HeaderIcon")
             if sec.expanded then
                 icon:SetTexture("Interface\\Buttons\\UI-MinusButton-Up")
@@ -218,34 +232,34 @@
         end
 
         -- ── The list repaint (1.12 KeyBindingFrame_Update) ──
-        function KeyBindingsPage_Update()
-            local page = KeyBindingsPage
+        function BenillaKeyBindingsPage_Update()
+            local page = BenillaKeyBindingsPage
             local scroll = getglobal("BenillaOptionsFrameContainerBodyKeybindingsScrollFrame")
             local offset = FauxScrollFrame_GetOffset(scroll)
-            for i = 1, KEYBINDINGS_DISPLAYED do
-                local name = KEYBINDINGS_ROW_BASE .. i
+            for i = 1, BENILLA_KEYBINDINGS_DISPLAYED do
+                local name = BENILLA_KEYBINDINGS_ROW_BASE .. i
                 local row = getglobal(name)
                 local item = page.items[offset + i]
                 if item and item.header then
-                    KeyBindings_PaintHeaderRow(name, item.header)
+                    BenillaKeyBindings_PaintHeaderRow(name, item.header)
                     row:Show()
                 elseif item then
-                    KeyBindings_PaintBindRow(name, item.bind)
+                    BenillaKeyBindings_PaintBindRow(name, item.bind)
                     row:Show()
                 else
                     row:Hide()
                 end
             end
             FauxScrollFrame_Update(scroll, table.getn(page.items),
-                KEYBINDINGS_DISPLAYED, KEYBINDINGS_ROW_HEIGHT)
+                BENILLA_KEYBINDINGS_DISPLAYED, BENILLA_KEYBINDINGS_ROW_HEIGHT)
             -- Our trough follows the bar `FauxScrollFrame_Update` has just shown or hidden.
             BenillaScrollTrough_Follow(scroll:GetName())
-            KeyBindings_UpdateUnbindKey()
+            BenillaKeyBindings_UpdateUnbindKey()
         end
 
         -- The page entry: a rebind or a set switch may have changed the table.
-        function KeyBindingsPage_Refresh()
-            KeyBindings_BuildSections()
+        function BenillaKeyBindingsPage_Refresh()
+            BenillaKeyBindings_BuildSections()
             local box = getglobal("BenillaOptionsFrameContainerBodyKeybindingsCharacterRowCheck")
             if GetCurrentBindingSet() == 2 then
                 box:SetChecked(1)
@@ -253,23 +267,28 @@
                 box:SetChecked(nil)
             end
             getglobal("BenillaOptionsFrameContainerBodyKeybindingsScrollFrameScrollBar"):SetValue(0)
-            KeyBindingsPage_Update()
+            BenillaKeyBindingsPage_Update()
         end
 
-        function KeyBindings_Output(text)
+        function BenillaKeyBindings_Output(text)
             getglobal("BenillaOptionsFrameContainerBodyKeybindingsOutput"):SetText(text)
         end
 
-        -- ── Selection ── arms the host's capture, which hands its chord to KeyBindings_OnHostKey.
-        function KeyBindings_SetSelected(command, keyID)
-            KeyBindingsPage.selected = command
-            KeyBindingsPage.keyID = keyID
-            BenillaBindCapture(command ~= nil)
+        -- ── Selection ── while a capsule is selected the window takes every key and the
+        -- wheel, as 1.12's keyboard-enabled KeyBindingFrame does (Blizzard_BindingUI.xml:73,
+        -- :541-543); unarmed it takes neither, so keys and the wheel reach the game.
+        function BenillaKeyBindings_SetSelected(command, keyID)
+            BenillaKeyBindingsPage.selected = command
+            BenillaKeyBindingsPage.keyID = keyID
+            if BenillaOptionsFrame then
+                BenillaOptionsFrame:EnableKeyboard(command ~= nil)
+                BenillaOptionsFrame:EnableMouseWheel(command ~= nil)
+            end
         end
 
-        function KeyBindings_UpdateUnbindKey()
+        function BenillaKeyBindings_UpdateUnbindKey()
             local unbind = getglobal("BenillaOptionsFrameContainerUnbind")
-            if KeyBindingsPage.selected then
+            if BenillaKeyBindingsPage.selected then
                 unbind:Enable()
             else
                 unbind:Disable()
@@ -277,94 +296,134 @@
         end
 
         -- Every search row: a bind from one can unbind a victim shown on another.
-        function KeyBindings_RepaintVisible()
-            if KeyBindingsPage.searchPainted then
-                for name, index in pairs(KeyBindingsPage.searchPainted) do
-                    KeyBindings_PaintBindRow(name, index)
+        function BenillaKeyBindings_RepaintVisible()
+            if BenillaKeyBindingsPage.searchPainted then
+                for name, index in pairs(BenillaKeyBindingsPage.searchPainted) do
+                    BenillaKeyBindings_PaintBindRow(name, index)
                 end
-                KeyBindings_UpdateUnbindKey()
+                BenillaKeyBindings_UpdateUnbindKey()
             else
-                KeyBindingsPage_Update()
+                BenillaKeyBindingsPage_Update()
             end
         end
 
-        function KeyBindingButton_OnClick(button)
-            -- As 1.12: while armed, a middle, 4 or 5 press is a bind the capture takes after this.
-            local page = KeyBindingsPage
+        -- 1.12's KeyBindingButton_OnClick (Blizzard_BindingUI.lua:228-258): while armed, a middle,
+        -- 4 or 5 click binds that button.
+        function BenillaKeyBindingButton_OnClick(button)
+            local page = BenillaKeyBindingsPage
             if page.selected then
                 if button ~= "LeftButton" and button ~= "RightButton" then
+                    BenillaKeyBindings_OnKeyDown(button)
                     return
                 end
                 if page.selected == this.commandName and page.keyID == this:GetID() then
-                    KeyBindings_SetSelected(nil)
-                    KeyBindings_Output("")
+                    BenillaKeyBindings_SetSelected(nil)
+                    BenillaKeyBindings_Output("")
                 else
-                    KeyBindings_SetSelected(this.commandName, this:GetID())
-                    KeyBindings_Output(string.format(
-                        KeyBindings_String("BIND_KEY_TO_COMMAND", "Press Key to Bind to Command -> %s"),
-                        KeyBindings_String("BINDING_NAME_" .. this.commandName, this.commandName)))
+                    BenillaKeyBindings_SetSelected(this.commandName, this:GetID())
+                    BenillaKeyBindings_Output(string.format(
+                        BenillaKeyBindings_String("BIND_KEY_TO_COMMAND", "Press Key to Bind to Command -> %s"),
+                        BenillaKeyBindings_String("BINDING_NAME_" .. this.commandName, this.commandName)))
                 end
             else
-                KeyBindings_SetSelected(this.commandName, this:GetID())
-                KeyBindings_Output(string.format(
-                    KeyBindings_String("BIND_KEY_TO_COMMAND", "Press Key to Bind to Command -> %s"),
-                    KeyBindings_String("BINDING_NAME_" .. this.commandName, this.commandName)))
+                BenillaKeyBindings_SetSelected(this.commandName, this:GetID())
+                BenillaKeyBindings_Output(string.format(
+                    BenillaKeyBindings_String("BIND_KEY_TO_COMMAND", "Press Key to Bind to Command -> %s"),
+                    BenillaKeyBindings_String("BINDING_NAME_" .. this.commandName, this.commandName)))
             end
-            KeyBindings_RepaintVisible()
+            BenillaKeyBindings_RepaintVisible()
         end
 
-        function KeyBindings_Commit()
+        function BenillaKeyBindings_Commit()
             SaveBindings(GetCurrentBindingSet())
         end
 
-        -- `chord` is ALT-CTRL-SHIFT-TOKEN; 1.12's OnKeyDown armed branch, then the live commit.
-        function KeyBindings_OnHostKey(chord)
-            local page = KeyBindingsPage
+        -- 1.12's KeyBindingFrame_OnKeyDown armed branch (Blizzard_BindingUI.lua:140-212), then
+        -- the live commit: `button` is a mouse button's or the wheel's name, else the key is
+        -- `arg1`, the window's OnKeyDown argument. Unarmed it does nothing: the window takes keys
+        -- only while armed, so 1.12's unarmed ESCAPE arm never runs here.
+        function BenillaKeyBindings_OnKeyDown(button)
+            local page = BenillaKeyBindingsPage
             if not page.selected then
                 return
             end
+            if button == "LeftButton" then
+                button = "BUTTON1"
+            elseif button == "RightButton" then
+                button = "BUTTON2"
+            elseif button == "MiddleButton" then
+                button = "BUTTON3"
+            elseif button == "Button4" then
+                button = "BUTTON4"
+            elseif button == "Button5" then
+                button = "BUTTON5"
+            end
+            local chord
+            if button then
+                if button == "BUTTON1" or button == "BUTTON2" then
+                    return
+                end
+                chord = button
+            else
+                chord = arg1
+            end
+            if chord == "UNKNOWN" or chord == "SHIFT" or chord == "CTRL" or chord == "ALT" then
+                return
+            end
+            if IsShiftKeyDown() then chord = "SHIFT-" .. chord end
+            if IsControlKeyDown() then chord = "CTRL-" .. chord end
+            if IsAltKeyDown() then chord = "ALT-" .. chord end
             local selected = page.selected
             local oldAction = GetBindingAction(chord)
             if oldAction ~= "" and oldAction ~= selected then
                 local k1, k2 = GetBindingKey(oldAction)
                 if (not k1 or k1 == chord) and (not k2 or k2 == chord) then
-                    KeyBindings_Output(string.format(
-                        KeyBindings_String("KEY_UNBOUND_ERROR", "|cffff0000%s Function is Now Unbound!|r"),
-                        KeyBindings_String("BINDING_NAME_" .. oldAction, oldAction)))
+                    BenillaKeyBindings_Output(string.format(
+                        BenillaKeyBindings_String("KEY_UNBOUND_ERROR", "|cffff0000%s Function is Now Unbound!|r"),
+                        BenillaKeyBindings_String("BINDING_NAME_" .. oldAction, oldAction)))
                 else
-                    KeyBindings_Output(KeyBindings_String("KEY_BOUND", "Key Bound Successfully"))
+                    BenillaKeyBindings_Output(BenillaKeyBindings_String("KEY_BOUND", "Key Bound Successfully"))
                 end
             else
-                KeyBindings_Output(KeyBindings_String("KEY_BOUND", "Key Bound Successfully"))
+                BenillaKeyBindings_Output(BenillaKeyBindings_String("KEY_BOUND", "Key Bound Successfully"))
             end
             local key1, key2 = GetBindingKey(selected)
             if key1 then SetBinding(key1) end
             if key2 then SetBinding(key2) end
             if page.keyID == 1 then
-                KeyBindings_SetOrRestore(chord, selected, key1)
+                BenillaKeyBindings_SetOrRestore(chord, selected, key1)
                 if key2 then SetBinding(key2, selected) end
             else
                 if key1 then SetBinding(key1, selected) end
-                KeyBindings_SetOrRestore(chord, selected, key2)
+                BenillaKeyBindings_SetOrRestore(chord, selected, key2)
             end
-            KeyBindings_Commit()
-            KeyBindings_SetSelected(nil)
-            KeyBindings_RepaintVisible()
+            BenillaKeyBindings_Commit()
+            BenillaKeyBindings_SetSelected(nil)
+            BenillaKeyBindings_RepaintVisible()
         end
 
         -- 1.12's KeyBindingFrame_SetBinding, message and all; SetBinding refuses only a non-key.
-        function KeyBindings_SetOrRestore(key, command, oldKey)
+        function BenillaKeyBindings_SetOrRestore(key, command, oldKey)
             if not SetBinding(key, command) then
                 if oldKey then SetBinding(oldKey, command) end
-                KeyBindings_Output(KeyBindings_String(
+                BenillaKeyBindings_Output(BenillaKeyBindings_String(
                     "KEYBINDINGFRAME_MOUSEWHEEL_ERROR",
                     "Can't bind mousewheel to actions with up and down states"))
             end
         end
 
+        -- The list's OnMouseWheel while armed (Blizzard_BindingUI.xml:377-387).
+        function BenillaKeyBindings_OnMouseWheel(delta)
+            if delta > 0 then
+                BenillaKeyBindings_OnKeyDown("MOUSEWHEELUP")
+            else
+                BenillaKeyBindings_OnKeyDown("MOUSEWHEELDOWN")
+            end
+        end
+
         -- 1.12's Unbind Key body, then the live commit.
-        function KeyBindings_Unbind()
-            local page = KeyBindingsPage
+        function BenillaKeyBindings_Unbind()
+            local page = BenillaKeyBindingsPage
             local key1, key2 = GetBindingKey(page.selected)
             if key1 then SetBinding(key1) end
             if key2 then SetBinding(key2) end
@@ -373,67 +432,70 @@
             else
                 if key1 then SetBinding(key1, page.selected) end
             end
-            KeyBindings_Commit()
-            KeyBindings_SetSelected(nil)
-            KeyBindings_Output("")
-            KeyBindings_RepaintVisible()
+            BenillaKeyBindings_Commit()
+            BenillaKeyBindings_SetSelected(nil)
+            BenillaKeyBindings_Output("")
+            BenillaKeyBindings_RepaintVisible()
         end
 
         -- ── Character-specific set ── checking saves set 2 at once (LoadBindings(2) falls back
         -- to the account set); unchecking confirms first, as the era does. The accept loads set 1
         -- before saving it, or the character binds would be written into the account set.
-        function KeyBindings_CharacterToggle(box)
+        function BenillaKeyBindings_CharacterToggle(box)
             PlaySound("igMainMenuOptionCheckBoxOn")
             if box:GetChecked() then
                 LoadBindings(2)
                 SaveBindings(2)
-                KeyBindings_SetSelected(nil)
-                KeyBindings_Output("")
-                KeyBindingsPage_Refresh()
+                BenillaKeyBindings_SetSelected(nil)
+                BenillaKeyBindings_Output("")
+                BenillaKeyBindingsPage_Refresh()
             else
                 box:SetChecked(1)
-                StaticPopup_Show("CONFIRM_DELETING_CHARACTER_SPECIFIC_BINDINGS")
+                StaticPopup_Show("BENILLA_CONFIRM_DELETING_CHARACTER_SPECIFIC_BINDINGS")
             end
         end
 
-        StaticPopupDialogs["CONFIRM_DELETING_CHARACTER_SPECIFIC_BINDINGS"] = {
-            text = KeyBindings_String("CONFIRM_DELETING_CHARACTER_SPECIFIC_BINDINGS",
+        -- Our key: Blizzard_BindingUI.lua:10 defines the stock one for its own window.
+        StaticPopupDialogs["BENILLA_CONFIRM_DELETING_CHARACTER_SPECIFIC_BINDINGS"] = {
+            text = BenillaKeyBindings_String("CONFIRM_DELETING_CHARACTER_SPECIFIC_BINDINGS",
                 "Really switch to general key bindings?  All key bindings specific to this character will be permanantly deleted."),
-            button1 = KeyBindings_String("OKAY", "Okay"),
-            button2 = KeyBindings_String("CANCEL", "Cancel"),
+            button1 = BenillaKeyBindings_String("OKAY", "Okay"),
+            button2 = BenillaKeyBindings_String("CANCEL", "Cancel"),
             OnAccept = function()
                 LoadBindings(1)
                 SaveBindings(1)
-                KeyBindings_SetSelected(nil)
-                KeyBindings_Output("")
-                KeyBindingsPage_Refresh()
+                BenillaKeyBindings_SetSelected(nil)
+                BenillaKeyBindings_Output("")
+                BenillaKeyBindingsPage_Refresh()
             end,
         }
         -- Reset To Default confirms, as the era's does; our string, since 1.12 has none.
-        StaticPopupDialogs["CONFIRM_RESET_KEYBINDINGS"] = {
+        StaticPopupDialogs["BENILLA_CONFIRM_RESET_KEYBINDINGS"] = {
             text = "Are you sure you want to reset all keybindings to their defaults?",
-            button1 = KeyBindings_String("OKAY", "Okay"),
-            button2 = KeyBindings_String("CANCEL", "Cancel"),
+            button1 = BenillaKeyBindings_String("OKAY", "Okay"),
+            button2 = BenillaKeyBindings_String("CANCEL", "Cancel"),
             OnAccept = function()
                 PlaySound("igMainMenuOptionCheckBoxOn")
                 LoadBindings(0)
-                KeyBindings_Commit()
-                KeyBindings_SetSelected(nil)
-                KeyBindings_Output("")
-                KeyBindingsPage_Refresh()
+                BenillaKeyBindings_Commit()
+                BenillaKeyBindings_SetSelected(nil)
+                BenillaKeyBindings_Output("")
+                BenillaKeyBindingsPage_Refresh()
             end,
         }
 
         -- ── Search ── a binding's tag is its display name uppercased, as the era's.
-        -- A static pool of KEYBINDINGS_SEARCH_ROWS rows, where the era's results scroll.
-        function KeyBindings_SearchMatches(words)
+        -- A static pool of BENILLA_KEYBINDINGS_SEARCH_ROWS rows, where the era's results scroll.
+        function BenillaKeyBindings_SearchMatches(words)
             local out = {}
             for i = 1, GetNumBindings() do
                 local command = GetBinding(i)
-                local tag = string.upper(KeyBindings_String("BINDING_NAME_" .. command, command))
-                local s = OptionsSearch_Score(tag, words)
-                if s then
-                    table.insert(out, { score = s, index = i })
+                if not BenillaKeyBindings_IsHeader(command) then
+                    local tag = string.upper(BenillaKeyBindings_String("BINDING_NAME_" .. command, command))
+                    local s = BenillaOptionsSearch_Score(tag, words)
+                    if s then
+                        table.insert(out, { score = s, index = i })
+                    end
                 end
             end
             return out

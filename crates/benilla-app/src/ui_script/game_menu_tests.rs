@@ -719,8 +719,8 @@ fn backpack() -> ContainerState {
     }
 }
 
-/// The menu wears the options window's `ERA_WINDOW_SCALE` on show, as the era client draws the two
-/// at one density; loaded with OptionsFrame.xml, which defines it.
+/// The menu wears the options window's `BENILLA_ERA_WINDOW_SCALE` on show, as the era client draws
+/// the two at one density; loaded with OptionsFrame.xml, which defines it.
 #[test]
 fn the_menu_rides_the_shared_era_window_scale() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -737,7 +737,7 @@ fn the_menu_rides_the_shared_era_window_scale() {
     s.resolve();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
     let k = s.eval::<f64>("return GameMenuFrame:GetScale()").unwrap();
-    let want = s.eval::<f64>("return ERA_WINDOW_SCALE").unwrap();
+    let want = s.eval::<f64>("return BENILLA_ERA_WINDOW_SCALE").unwrap();
     assert!((k - want).abs() < 1e-6, "menu scale {k} != knob {want}");
     assert!((want - 0.78).abs() < 1e-6, "the knob itself moved: {want}");
 }

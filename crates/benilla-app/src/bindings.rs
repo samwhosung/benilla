@@ -15,10 +15,6 @@
 //! An addon's `Bindings.xml` rows ([`benilla_ui::bindings_xml`]) dispatch here too: a resolved
 //! chord names a [`Bound`], either a registry [`Cmd`] or an index into the addon table.
 //!
-//! While the Keybindings page has a capsule selected (`BenillaBindCapture`), raw input is
-//! canonicalized (`ALT-CTRL-SHIFT-<TOKEN>`) and handed to the page, by the 1.12 law: lone
-//! modifiers ignored, left and right clicks stay UI clicks, ESC binds like any key.
-//!
 //! Persistence: `benilla-config/bindings/account.txt` and `<Realm>-<Char>.txt` ([`store`]); the
 //! character file's existence is the character-set state, as in the reference.
 
@@ -442,7 +438,6 @@ fn latch_and_dispatch(
     // affordances: a player build keeps the reference's `CTRL-SHIFT-P` fallback to `SHIFT-P`.
     let dev_plane = ctrl && shift && !alt && crate::run_mode::dev_affordances();
 
-    let armed = script.as_ref().is_some_and(|s| s.bind_capture_armed());
     // A binding body runs as `ExecuteBinding` runs it, so the movement functions' gate passes.
     let run_lua = |script: &mut Option<NonSendMut<UiScript>>, lua: &str, tag: &str| {
         if let Some(s) = script.as_mut() {
@@ -451,47 +446,6 @@ fn latch_and_dispatch(
             }
         }
     };
-
-    // ── The capture seam ── a Keybindings capsule is selected: swallow raw input and hand the
-    // chord string to the page's Lua. The 1.12 law: lone modifiers and unknown keys ignored,
-    // left and right stay UI clicks, the wheel is a chord. Super is not a 1.12 modifier, so a
-    // Super press is ignored outright.
-    if armed {
-        let mut captured: Option<String> = None;
-        for ev in keyboard.read() {
-            if ev.state != ButtonState::Pressed || ev.repeat || sup {
-                continue;
-            }
-            if let Some(token) = chord::key_token(ev.key_code) {
-                captured = Some(chord::chord_string(alt, ctrl, shift, token));
-            }
-        }
-        for b in [MouseButton::Middle, MouseButton::Forward, MouseButton::Back] {
-            if buttons.just_pressed(b) && !sup {
-                if let Some(token) = chord::mouse_token(b) {
-                    captured = Some(chord::chord_string(alt, ctrl, shift, token));
-                }
-            }
-        }
-        if scroll.delta.y != 0.0 && !sup {
-            let token = if scroll.delta.y > 0.0 {
-                "MOUSEWHEELUP"
-            } else {
-                "MOUSEWHEELDOWN"
-            };
-            captured = Some(chord::chord_string(alt, ctrl, shift, token));
-        }
-        if let Some(chord_str) = captured {
-            // The Keybindings page's own handler, not a binding body.
-            if let Some(s) = script.as_mut() {
-                if let Err(e) = s.run(&crate::ui_script::host_key_capture(&chord_str)) {
-                    warn!("bindings(capture): {e}");
-                }
-            }
-        }
-        // Releases still unlatch below so a key held across the arm cannot stick; nothing new
-        // latches or fires while armed.
-    }
 
     // ── Who owns this frame's keys ── a focused EditBox eats every key while it holds focus; a
     // shown keyboard frame ate the keys in `capture.consumed`. Both suppress a press and nothing
@@ -533,7 +487,7 @@ fn latch_and_dispatch(
                 if !repeat {
                     state.down.push(key);
                 }
-                if armed || (typing && !arrow_exempt) || eaten || sup || repeat {
+                if (typing && !arrow_exempt) || eaten || sup || repeat {
                     continue;
                 }
                 if state.latched.iter().any(|&(k, _)| k == BindKey::Key(key)) {
@@ -579,7 +533,6 @@ fn latch_and_dispatch(
         MouseButton::Back,
     ] {
         if buttons.just_pressed(b)
-            && !armed
             && !sup
             && hover.0.is_none()
             && !state.latched.iter().any(|&(k, _)| k == BindKey::Mouse(b))
@@ -619,7 +572,7 @@ fn latch_and_dispatch(
     let wheel = wheel_lines(scroll.unit, scroll.delta.y);
     // Over chrome only (`PointerOverUiPanel`): the wheel still zooms with the cursor on a
     // nameplate, a mouse-enabled widget but not a panel.
-    if wheel != 0.0 && !armed && !sup && !over_ui.0 {
+    if wheel != 0.0 && !sup && !over_ui.0 {
         let (key, amount) = if wheel > 0.0 {
             (BindKey::WheelUp, wheel)
         } else {
@@ -1071,59 +1024,9 @@ mod tests {
         );
     }
 
-    /// The armed capture seam, driven by a real wheel event.
-    #[test]
-    fn an_armed_capture_takes_a_wheel_notch() {
-        let mut script = UiScript::new().expect("VM");
-        script.register_bindings(&registry_commands());
-        script
-            .run(
-                r#"CAPTURED = nil
-                   function KeyBindings_OnHostKey(chord) CAPTURED = chord end
-                   BenillaBindCapture(true)"#,
-            )
-            .expect("arm");
-        let mut app = vm_harness(script);
-
-        app.world_mut().write_message(MouseWheel {
-            unit: MouseScrollUnit::Line,
-            x: 0.0,
-            y: 1.0,
-            window: Entity::PLACEHOLDER,
-        });
-        app.update();
-        assert_eq!(
-            lua_str(&app, "tostring(CAPTURED)"),
-            "MOUSEWHEELUP",
-            "a wheel notch while armed is a binding key"
-        );
-        assert!(
-            !state(&app).fired(cmd::CAMERA_ZOOM_IN),
-            "the armed seam swallows the notch — it must not also zoom"
-        );
-
-        // Down, and a modified notch.
-        app.world_mut().write_message(MouseWheel {
-            unit: MouseScrollUnit::Line,
-            x: 0.0,
-            y: -1.0,
-            window: Entity::PLACEHOLDER,
-        });
-        app.update();
-        assert_eq!(lua_str(&app, "tostring(CAPTURED)"), "MOUSEWHEELDOWN");
-        press_key(&mut app, KeyCode::ShiftLeft);
-        app.world_mut().write_message(MouseWheel {
-            unit: MouseScrollUnit::Line,
-            x: 0.0,
-            y: 1.0,
-            window: Entity::PLACEHOLDER,
-        });
-        app.update();
-        assert_eq!(lua_str(&app, "tostring(CAPTURED)"), "SHIFT-MOUSEWHEELUP");
-    }
-
-    /// The whole wheel-bind path: the real Keybindings page, a capsule armed by a click, a real
-    /// notch, then the bound chord dispatching.
+    /// The whole wheel-bind path: the real Keybindings page, a capsule armed by a click, a notch
+    /// over the page (its OnMouseWheel, as 1.12's window binds it), then the bound chord
+    /// dispatching.
     #[test]
     fn a_wheel_notch_binds_through_the_real_page_and_then_dispatches() {
         benilla_formats::wow_data_or_skip!();
@@ -1141,26 +1044,26 @@ mod tests {
                 .unwrap(),
             crate::ui_script::keybindings_tests::label(&s, "BINDING_NAME_JUMP", "JUMP")
         );
-        assert!(s.bind_capture_armed());
+        s.resolve();
+        let (x, y): (f32, f32) = s
+            .eval(&format!(
+                "return ({ROW}5:GetLeft() + {ROW}5:GetRight()) / 2, \
+                        ({ROW}5:GetTop() + {ROW}5:GetBottom()) / 2"
+            ))
+            .unwrap();
+        s.mouse_wheel(x, y, 1.0);
+        assert_eq!(
+            s.eval::<String>(r#"return GetBindingAction("MOUSEWHEELUP")"#)
+                .unwrap(),
+            "JUMP",
+            "a notch on an armed capsule is a bind"
+        );
+        assert!(
+            s.eval::<bool>("return BenillaKeyBindingsPage.selected == nil")
+                .unwrap(),
+            "the completed bind disarms"
+        );
         let mut app = vm_harness(s);
-
-        app.world_mut().write_message(MouseWheel {
-            unit: MouseScrollUnit::Line,
-            x: 0.0,
-            y: 1.0,
-            window: Entity::PLACEHOLDER,
-        });
-        app.update();
-        {
-            let s = app.world().non_send_resource::<UiScript>();
-            assert_eq!(
-                s.eval::<String>(r#"return GetBindingAction("MOUSEWHEELUP")"#)
-                    .unwrap(),
-                "JUMP",
-                "a notch on an armed capsule is a bind"
-            );
-            assert!(!s.bind_capture_armed(), "the completed bind disarms");
-        }
 
         // The bound chord now dispatches: the next notch jumps rather than binding.
         app.world_mut().write_message(MouseWheel {

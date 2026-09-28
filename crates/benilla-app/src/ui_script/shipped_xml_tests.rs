@@ -1964,3 +1964,75 @@ fn the_layer_does_not_grow() {
         "assets/ui holds the layer's manifest and its files, nothing else"
     );
 }
+
+/// The layer speaks the 1.12 dialect: a handler body is the chunk itself (`0x704c70`), so it reads
+/// its frame from `this`, never `self`; the loader reads no `function=`; the strata table
+/// (`0x8119f8`) has no `BLIZZARD`; `SetDrawLayer` (`0x79a780`) takes a layer name alone; and a
+/// button's state textures take a texture, never a colour (`0x781970`).
+#[test]
+fn the_layer_speaks_the_1_12_dialect() {
+    fn handlers(el: &benilla_ui::framexml::Element, out: &mut Vec<(String, String)>) {
+        if el.tag == "Scripts" {
+            for h in &el.children {
+                out.push((h.tag.clone(), h.body.clone()));
+                assert!(
+                    h.attr("function").is_none(),
+                    "<{} function=…> is no 1.12 form",
+                    h.tag
+                );
+            }
+        }
+        for c in &el.children {
+            handlers(c, out);
+        }
+    }
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui");
+    let files = super::addons::Addon::layer().toc.files;
+    assert!(files.len() >= 8, "the layer's toc lists {files:?}");
+    let word = |text: &str, w: &str| {
+        text.match_indices(w).any(|(i, _)| {
+            let before = text[..i].chars().next_back();
+            let after = text[i + w.len()..].chars().next();
+            !before.is_some_and(|c| c.is_alphanumeric() || c == '_')
+                && !after.is_some_and(|c| c.is_alphanumeric() || c == '_')
+        })
+    };
+    for file in files {
+        let text = std::fs::read_to_string(dir.join(&file)).expect("read");
+        let doc = benilla_ui::framexml::parse(&text).expect("parses");
+        let mut found = Vec::new();
+        for item in &doc.items {
+            use benilla_ui::framexml::TopLevel;
+            if let TopLevel::Template(el) | TopLevel::Instance(el) = item {
+                handlers(el, &mut found);
+            }
+        }
+        for (tag, body) in found {
+            assert!(!word(&body, "self"), "{file}: <{tag}> reads `self`: {body}");
+        }
+        assert!(!text.contains("BLIZZARD"), "{file}: BLIZZARD strata");
+        for line in text.lines().filter(|l| l.contains("SetDrawLayer(")) {
+            assert_eq!(
+                line.matches(',').count(),
+                0,
+                "{file}: SetDrawLayer takes the layer alone: {line}"
+            );
+        }
+        for verb in [
+            "SetNormalTexture(",
+            "SetPushedTexture(",
+            "SetHighlightTexture(",
+            "SetDisabledTexture(",
+            "SetCheckedTexture(",
+            "SetDisabledCheckedTexture(",
+        ] {
+            for line in text.lines().filter(|l| l.contains(verb)) {
+                let args = line.split(verb).nth(1).unwrap_or_default();
+                assert!(
+                    !args.trim_start().starts_with(|c: char| c.is_ascii_digit()),
+                    "{file}: {verb} takes a texture, never a colour: {line}"
+                );
+            }
+        }
+    }
+}

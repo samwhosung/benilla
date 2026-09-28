@@ -169,8 +169,8 @@ pub(super) fn drain_chat_input(
         return;
     };
     let mut queue = engine_verbs(&mut script, emotes.as_deref());
-    // benilla's own commands, from the `SlashCmdList` entries in `ScriptLogFrame.xml` once the
-    // stock `ChatEdit_ParseText` has found no built-in, and probe lines.
+    // The dev instruments, from their host `SlashCmdList` rows once the stock `ChatEdit_ParseText`
+    // has found no built-in (dev builds), and probe lines.
     for raw in script.take_chat_input() {
         let msg = raw.trim();
         if msg.is_empty() {
@@ -537,11 +537,6 @@ pub(super) fn drain_chat_input(
                     let _ = commands.0.send(ClientCommand::GroupInvite { name });
                 }
             }
-            // The server judges it: a raid-typed `SMSG_GROUP_LIST`, or an
-            // `SMSG_PARTY_COMMAND_RESULT` error.
-            ParsedChat::ConvertRaid => {
-                let _ = commands.0.send(ClientCommand::GroupRaidConvert);
-            }
             ParsedChat::Uninvite { name } => {
                 if let Some(name) =
                     name.or_else(|| target_player_name(&selection, &names, &commands))
@@ -799,10 +794,6 @@ pub(super) fn drain_chat_input(
             // `Quit()`, the game menu Exit button's queue, countdown and confirmation.
             ParsedChat::Quit => {
                 script.queue_session_request(benilla_ui::script::SessionRequest::Quit)
-            }
-            // The deferred rebuild `ReloadUI()` queues.
-            ParsedChat::ReloadUi => {
-                script.queue_session_request(benilla_ui::script::SessionRequest::ReloadUi)
             }
             // Deferred to the world, since a command is `fn(&mut World, &str)`; its lines print
             // as system text.

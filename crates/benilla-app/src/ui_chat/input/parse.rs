@@ -1,8 +1,8 @@
 //! What a submitted slash line means: [`parse_line`] resolves it through the boot-built command
 //! table ([`super::super::commands`], the shipped `GlobalStrings.lua` aliases) into a
-//! [`ParsedChat`] for [`super`] to execute. A typed line reaches it only through benilla's own
-//! `SlashCmdList` entries, once the stock `ChatEdit_ParseText` finds no built-in; a probe's line
-//! reaches it directly.
+//! [`ParsedChat`] for [`super`] to execute. A typed line reaches it only through the dev
+//! instruments' `SlashCmdList` rows (dev builds), once the stock `ChatEdit_ParseText` finds no
+//! built-in; a probe's line reaches it directly.
 
 use crate::ui_chat::commands::{Command, DevCmd, SlashCommands, SlashIndex};
 
@@ -49,9 +49,6 @@ pub(in crate::ui_chat) enum ParsedChat {
     Liquid,
     /// `/reaction [name]`: every input and rung of the reaction ladder for one unit.
     Reaction { name: Option<String> },
-    /// `/convertraid` (`CMSG_GROUP_RAID_CONVERT`), benilla's own: 1.12 converts only from the
-    /// RaidFrame's Convert button.
-    ConvertRaid,
     /// `/help`.
     Help,
     /// An `EmotesText` command (`/wave` is 101), sent as `CMSG_TEXT_EMOTE` at the selection.
@@ -102,8 +99,6 @@ pub(in crate::ui_chat) enum ParsedChat {
     Follow { name: Option<String> },
     /// `/macrohelp`: `ChatFrame_DisplayMacroHelpText`'s five `MACRO_HELP_TEXT_LINE`s.
     MacroHelp,
-    /// `/reload`, benilla's own: the in-world rebuild `ReloadUI()` queues.
-    ReloadUi,
     /// A `/console` line the CVar store did not consume, for the `ConsoleCommand` registry
     /// ([`crate::console::execute`]).
     Console { line: String },
@@ -288,18 +283,6 @@ fn slash_command(index: SlashIndex, args: &str) -> ParsedChat {
             body: "ShowMacroFrame()".into(),
         },
         S::MacroHelp => ParsedChat::MacroHelp,
-        // `/reload` is the rebuild `/console reloadUI` runs (`0x4035f0`, which reads no arguments).
-        S::ReloadUi => ParsedChat::ReloadUi,
-        S::ConvertRaid => ParsedChat::ConvertRaid,
-        // `/errors`, benilla's own: toggles the layer's script error log; `/errors clear` empties
-        // it. A no-op when the run boots without the layer.
-        S::ScriptErrors => ParsedChat::Lua {
-            body: if args.trim().eq_ignore_ascii_case("clear") {
-                crate::ui_script::ERRORS_CLEAR.into()
-            } else {
-                crate::ui_script::ERRORS_TOGGLE.into()
-            },
-        },
         // `SlashCmdList["CONSOLE"]` (`ChatFrame.lua:671`) is `ConsoleExec(msg)`. A typed line runs
         // it; one that skipped the edit box calls the same verb, so a CVar line writes the CVar
         // and anything else comes back through `engine_verbs`.

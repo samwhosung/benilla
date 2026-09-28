@@ -26,19 +26,6 @@ pub(super) fn layer_enabled_by(dev_build: bool, stock_ui: Option<&str>) -> bool 
     !(dev_build && stock_ui == Some("1"))
 }
 
-/// `/errors`: toggles the layer's script error log; a no-op when the run boots without the layer.
-pub(crate) const ERRORS_TOGGLE: &str =
-    "if BenillaScriptLog_Toggle then BenillaScriptLog_Toggle() end";
-
-/// `/errors clear`: empties the layer's script error log, or does nothing without the layer.
-pub(crate) const ERRORS_CLEAR: &str = "if BenillaScriptLog_Clear then BenillaScriptLog_Clear() end";
-
-/// Hands a chord the layer's Keybindings page is capturing (`BenillaBindCapture`), a bind string
-/// such as `CTRL-J`, to its handler; a no-op without the layer.
-pub(crate) fn host_key_capture(chord: &str) -> String {
-    format!("if KeyBindings_OnHostKey then KeyBindings_OnHostKey(\"{chord}\") end")
-}
-
 /// Every entry in load order: the core's rows, none without an install, then the layer's.
 #[cfg(test)]
 pub(super) fn manifest_files() -> Vec<String> {
