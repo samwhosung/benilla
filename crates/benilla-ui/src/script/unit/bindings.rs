@@ -1026,27 +1026,6 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // TargetNearestFriend([reverse]) (`0x489aa0`): the Tab cycler `0x493f60` in mode 2 (enemy is
-    // 1), whose filter (`0x493eca`) wants `CanAssist` and health above 0. Argument 1 reverses
-    // (`0x6f1c10`, absent is 0); stock `Bindings.xml` says "1 (or "true")", so a number or a
-    // boolean reverses.
-    g.set(
-        "TargetNearestFriend",
-        lua.create_function(|lua, reverse: Option<Value>| {
-            let reverse = match reverse {
-                None | Some(Value::Nil) | Some(Value::Boolean(false)) => false,
-                Some(Value::Integer(n)) => n != 0,
-                Some(Value::Number(n)) => n != 0.0,
-                Some(_) => true,
-            };
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model
-                .script_calls
-                .push(ScriptCall::TargetNearestFriend { reverse });
-            Ok(())
-        })?,
-    )?;
-
     // TargetByName(name [, exactMatch]) (`0x489d60`, resolver `0x493aa0`, shared with `/target`): a
     // case-insensitive whole-name match wins, else without `exactMatch` the longest common prefix,
     // so "Rag" selects Ragnaros. Any unit (typemask 8), no dead, reaction, range or self gate. A

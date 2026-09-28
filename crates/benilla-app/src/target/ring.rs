@@ -13,7 +13,7 @@ use benilla_assets::{LockRecover, WorldAssets};
 use benilla_world::decal::{DecalFrame, WorldDecal};
 use benilla_world::particles::buffer::EffectVertex;
 
-use super::click::clear;
+use super::click::{clear, deselect};
 use super::{CombatFlash, Selection, SelectionRadius};
 use crate::creature_anim::Engaged;
 use benilla_world::view::WorldCamera;
@@ -277,7 +277,8 @@ pub(super) fn update_ring(
                         .is_some_and(|g| *last_vitals == Some((g, false)));
                 *last_vitals = selection.guid.map(|g| (g, is_dead));
                 if died {
-                    clear(&mut selection, &mut seam, !engaged.is_empty());
+                    // `SetSelection(0,0)` at `0x605901`, so the dead target becomes the last one.
+                    deselect(&mut selection, &mut seam, !engaged.is_empty());
                     *last_vitals = None;
                     state.shown = false;
                     state.verts.clear();
@@ -1161,6 +1162,7 @@ mod tests {
             *world.resource_mut::<Selection>() = Selection {
                 target: Some(mob),
                 guid: Some(MOB),
+                ..Default::default()
             };
             // Control: a live target keeps its selection through a ring pass.
             world

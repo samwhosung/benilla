@@ -15,10 +15,18 @@ pub enum ScriptCall {
     Select(SelectionRequest),
     /// `TargetByName(name, exactMatch)` (`0x489d60`), the stock `/target`.
     TargetByName { name: String, exact: bool },
-    /// `TargetNearestFriend([reverse])` (`0x489aa0` → `0x493f60(reverse, 2)`).
-    TargetNearestFriend { reverse: bool },
+    /// `TargetNearestEnemy`, `TargetNearestFriend`, `TargetNearestPartyMember` and
+    /// `TargetNearestRaidMember` (`0x489a80`/`0x489aa0`/`0x489ac0`/`0x489ae0`): one TAB cycle,
+    /// `0x493f60(reverse, mode)`.
+    TargetNearest { mode: NearestMode, reverse: bool },
+    /// `TargetLastTarget()` (`0x489b00`): re-select the last-target pair, or deselect when it is
+    /// empty.
+    TargetLastTarget,
     /// `ClearTarget()` (`0x489ff0` → `0x493540(0,0)`), a no-op when nothing is selected by then.
     ClearTarget,
+    /// `AttackTarget()` (`0x489b50` → `0x6131a0(0,0)`): the attack toggle at the selection as it
+    /// stands then.
+    AttackTarget,
     /// `SpellTargetUnit(unit)` (`0x6e6d90`), made while the cursor was up.
     SpellTargetUnit(String),
     /// `SpellStopTargeting()` (`0x6e6e30`), made while the cursor was up.
@@ -41,6 +49,20 @@ pub enum ScriptCall {
     PetAction(u32),
     /// `PetAttack` and the other one-shot orders, as their bar slot's packed word.
     PetOrder(u32),
+}
+
+/// The mode the four `TargetNearest*` shims hand the TAB cycler `0x493f60`, the only byte that
+/// differs between them; it reaches only the per-candidate filter `0x493e40`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NearestMode {
+    /// Mode 1, `TargetNearestEnemy`.
+    Enemy,
+    /// Mode 2, `TargetNearestFriend`.
+    Friend,
+    /// Mode 3, `TargetNearestPartyMember`: a party member other than us.
+    PartyMember,
+    /// Mode 4, `TargetNearestRaidMember`: a party or raid member other than us.
+    RaidMember,
 }
 
 impl UiScript {

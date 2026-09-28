@@ -132,7 +132,7 @@ pub(super) fn select_on_click(
                 return;
             }
             if click_cfg.deselect_on_click && (!payload_held.0 || occlusion.distance.is_finite()) {
-                clear(&mut selection, &mut seam, engaged);
+                deselect(&mut selection, &mut seam, engaged);
             }
         }
     }
@@ -1008,8 +1008,23 @@ pub(super) fn clear_target_requests(
 #[derive(bevy::ecs::message::Message, Clone, Copy, Debug)]
 pub(crate) struct DeselectGuid(pub(crate) u64);
 
-/// Drop the target and send `CMSG_SET_SELECTION` 0 (a no-op with none); when `engaged`, melee
-/// stops too, as on the reference's Esc, click-off or target death. Weapons stay drawn.
+/// `SetSelection(0,0)` (`0x493540` → `0x4938f3`): the deselect of Esc, a click off and a target's
+/// death, which stamps the outgoing target into the last-target pair before [`clear`]. A no-op
+/// with nothing selected, the setter's dedup.
+pub(super) fn deselect(
+    selection: &mut Selection,
+    seam: &mut crate::creature_anim::AttackSeam,
+    engaged: bool,
+) {
+    if selection.guid.is_some() {
+        selection.last = selection.guid;
+    }
+    clear(selection, seam, engaged);
+}
+
+/// Drop the target and send `CMSG_SET_SELECTION` 0 (a no-op with none): the teardown `0x493910`
+/// with its send, which a despawn and a dead unit's loot close reach without `SetSelection`, so the
+/// last-target pair is left. When `engaged`, melee stops too. Weapons stay drawn.
 pub(super) fn clear(
     selection: &mut Selection,
     seam: &mut crate::creature_anim::AttackSeam,
@@ -1512,6 +1527,7 @@ mod tests {
             world.insert_resource(Selection {
                 target: Some(Entity::PLACEHOLDER),
                 guid: Some(HELD),
+                ..Default::default()
             });
             world.insert_resource(PressPick {
                 hovered: pick,

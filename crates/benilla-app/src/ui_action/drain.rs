@@ -55,8 +55,8 @@ pub(super) fn item_action_route(
     }
 }
 
-/// The ATTACKTARGET binding (default T): the action bar's attack arm without a slot, as in the
-/// reference, where `AttackTarget` and `UseAction`'s Attack both land in `0x612df0`.
+/// The ATTACKTARGET binding (default T), whose stock body is `AttackTarget()`: the same toggle as
+/// the Lua call ([`ActionPress::attack_target`]).
 pub(super) fn attack_target_binding(
     binds: Res<crate::bindings::BindingsState>,
     targeting: cast_target::CastTargeting,
@@ -64,13 +64,24 @@ pub(super) fn attack_target_binding(
     mut ui_errors: ResMut<UiErrorKeys>,
     mut ladder: CastLadder,
 ) {
-    if !binds.fired(crate::bindings::cmd::ATTACK_TARGET) {
-        return;
+    if binds.fired(crate::bindings::cmd::ATTACK_TARGET) {
+        attack_target(&targeting, &mut acquire, &mut ui_errors, &mut ladder);
     }
+}
+
+/// `AttackTarget` (`0x489b50` → `0x6131a0(0,0)`): the action bar's attack arm without a slot, as
+/// `UseAction`'s Attack also lands in `0x612df0`. A held selection toggles the swing at it; none
+/// acquires the nearest enemy.
+fn attack_target(
+    targeting: &cast_target::CastTargeting,
+    acquire: &mut MessageWriter<crate::target::AttackNearestRequest>,
+    ui_errors: &mut UiErrorKeys,
+    ladder: &mut CastLadder,
+) {
     if attack_actor_refusal(
         targeting.self_store.iter().next(),
         targeting.context().self_guid,
-        &mut ui_errors,
+        ui_errors,
     ) {
         return;
     }
@@ -80,7 +91,7 @@ pub(super) fn attack_target_binding(
                 return;
             };
             debug!(
-                "bindings: ATTACKTARGET {} at {guid:#x}",
+                "AttackTarget {} at {guid:#x}",
                 if engaged { "toggled off" } else { "swing" }
             );
             // The action button's own toggle (`0x6131a0`).
@@ -96,7 +107,7 @@ pub(super) fn attack_target_binding(
             );
         }
         None => {
-            debug!("bindings: ATTACKTARGET with no target — acquiring nearest");
+            debug!("AttackTarget with no target — acquiring nearest");
             acquire.write(crate::target::AttackNearestRequest);
         }
     }
@@ -174,6 +185,18 @@ pub(crate) struct ActionPress<'w, 's> {
     ui_errors: ResMut<'w, UiErrorKeys>,
     ladder: CastLadder<'w, 's>,
     gate: crate::ui_bind_confirm::BindGate<'w>,
+}
+
+impl ActionPress<'_, '_> {
+    /// `AttackTarget()` from the call queue, at the selection the calls before it left.
+    pub(crate) fn attack_target(&mut self) {
+        attack_target(
+            &self.targeting,
+            &mut self.acquire,
+            &mut self.ui_errors,
+            &mut self.ladder,
+        );
+    }
 }
 
 /// `UseAction` (`0x4e5ee0`) on the pressed slot: a cast, a swing, an item use or a macro run, at

@@ -52,7 +52,7 @@ fn tab_trace_on() -> bool {
 
 /// The reference's scan mode: the `TargetNearest*` shims (`0x489a80` enemy 1, `0x489aa0` friend 2,
 /// `0x489ac0`/`0x489ae0` party and raid 3/4) all call one cycler, `0x493f60(reverse, mode)`, and
-/// the mode reaches only the per-candidate filter `0x493e40`. Modes 3 and 4 are not built.
+/// the mode reaches only the per-candidate filter `0x493e40`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ScanSide {
     /// Mode 1 (`0x493e73`): alive by the reads-dead triple `0x605f90`, and `CanAttack 0x606980`.
@@ -61,6 +61,25 @@ pub(crate) enum ScanSide {
     /// `IsPvP 0x605ff0` leg refuses a creature without `UNIT_FLAG_PVP`; then health > 0 with no
     /// dynflag leg, so a feigning ally counts.
     Friend,
+    /// Mode 3 (`0x493eed`): not us, then `0x4e7f70`, a member of our party slots. No health, dead
+    /// or reaction leg.
+    Party,
+    /// Mode 4 (`0x493f15`): not us, then `0x4918e0`, party (`0x4e7f70`) or raid roster
+    /// (`0x4baee0`).
+    Raid,
+}
+
+impl ScanSide {
+    /// The side a `TargetNearest*` call's mode names.
+    pub(crate) fn of(mode: benilla_ui::script::NearestMode) -> Self {
+        use benilla_ui::script::NearestMode;
+        match mode {
+            NearestMode::Enemy => Self::Enemy,
+            NearestMode::Friend => Self::Friend,
+            NearestMode::PartyMember => Self::Party,
+            NearestMode::RaidMember => Self::Raid,
+        }
+    }
 }
 
 /// `score`, lower is better, includes the fighting-me bonus; `on_screen` is the tier-1 gate.
@@ -199,6 +218,8 @@ pub(crate) struct TargetScan<'w, 's> {
     stores: Query<'w, 's, &'static ObjectStore>,
     /// The owner chase's guid → entity map; `Option` because a UI-only harness has no net stack.
     index: Option<Res<'w, GuidIndex>>,
+    /// The party slots and raid roster modes 3 and 4 test; `Option` for the same harnesses.
+    group: Option<Res<'w, crate::ui_party::GroupState>>,
 }
 
 impl TargetScan<'_, '_> {
@@ -206,6 +227,7 @@ impl TargetScan<'_, '_> {
     fn is_valid(
         &self,
         side: ScanSide,
+        guid: u64,
         store: Option<&ObjectStore>,
         self_store: Option<&ObjectStore>,
     ) -> bool {
@@ -232,6 +254,16 @@ impl TargetScan<'_, '_> {
                     |owner| self.store_of(owner).cloned(),
                 ) && !store.is_some_and(|s| s.0.unit_is_dead())
             }
+            // Modes 3 and 4 open on `cmp esi,ecx`, the candidate is not us, which our own body's
+            // absence from [`Self::units`] already gives.
+            ScanSide::Party => self
+                .group
+                .as_ref()
+                .is_some_and(|g| g.party_slots().any(|m| m.guid == guid)),
+            ScanSide::Raid => self.group.as_ref().is_some_and(|g| {
+                g.party_slots().any(|m| m.guid == guid)
+                    || (g.group_type == 1 && g.members.iter().any(|m| m.guid == guid))
+            }),
         }
     }
 
@@ -323,13 +355,15 @@ impl TargetScan<'_, '_> {
             if !matches!(net.kind, EntityKind::Unit | EntityKind::Player) {
                 continue;
             }
-            if !self.is_valid(side, store, self_store) {
+            if !self.is_valid(side, guid_c.0, store, self_store) {
                 trace_unit(
                     guid_c.0,
                     tf,
                     match side {
                         ScanSide::Enemy => "REJECT dead-or-unattackable",
                         ScanSide::Friend => "REJECT dead-or-unassistable",
+                        ScanSide::Party => "REJECT not-in-party",
+                        ScanSide::Raid => "REJECT not-in-party-or-raid",
                     },
                 );
                 continue;
@@ -457,6 +491,8 @@ pub(super) fn commit(
         return CommitOutcome::default(); // the setter's dedup
     }
     let had_old = selection.guid.is_some();
+    // The last-target stamp (`0x49361d`-`0x493628`), past the two early outs.
+    selection.last = selection.guid;
     if let Some(old) = selection.guid {
         // The old target's teardown (`0x4936cc` → `0x493910`) closes its loot first.
         seam.close_loot_on(old);
@@ -1314,6 +1350,72 @@ mod tests {
         assert_eq!(pool(&mut world, ScanSide::Enemy), [MOB]);
         // Mode 2: with no camera the order is pure distance.
         assert_eq!(pool(&mut world, ScanSide::Friend), [ALLY, ALLY_FEIGN]);
+    }
+
+    /// Modes 3 and 4 (`0x493eed`, `0x493f15`): the party slots, then party or raid roster, with no
+    /// health or reaction leg, so a dead party member counts and a stranger never does.
+    #[test]
+    fn the_party_and_raid_modes_take_only_the_roster() {
+        use benilla_protocol::messages::GroupMemberEntry;
+        use bevy::ecs::system::RunSystemOnce;
+
+        const PARTY: u64 = 0x11;
+        const PARTY_DEAD: u64 = 0x12;
+        const RAID: u64 = 0x13;
+        const STRANGER: u64 = 0x14;
+        let mut world = World::new();
+        world.init_resource::<Reputations>();
+        world.init_resource::<NameCache>();
+        world.spawn((
+            SelfPlayer,
+            Transform::default(),
+            Guid(1),
+            store(&[(F_HEALTH, 100)]),
+        ));
+        for (guid, x, health) in [
+            (PARTY, 5.0, 100),
+            (PARTY_DEAD, 6.0, 0),
+            (RAID, 7.0, 100),
+            (STRANGER, 3.0, 100),
+        ] {
+            world.spawn((
+                NetEntity {
+                    kind: EntityKind::Player,
+                    display_id: None,
+                    scale: 1.0,
+                },
+                Guid(guid),
+                Transform::from_xyz(x, 0.0, 0.0),
+                store(&[(F_HEALTH, health), (F_MAXHEALTH, 100)]),
+            ));
+        }
+        let member = |guid, flags| GroupMemberEntry {
+            name: String::new(),
+            guid,
+            status: 1,
+            flags,
+        };
+        // A raid: our subgroup 0 holds PARTY and PARTY_DEAD; RAID is in subgroup 1.
+        world.insert_resource(crate::ui_party::GroupState {
+            in_group: true,
+            group_type: 1,
+            members: vec![member(PARTY, 0), member(PARTY_DEAD, 0), member(RAID, 1)],
+            ..Default::default()
+        });
+        let pool = |world: &mut World, side: ScanSide| {
+            world
+                .run_system_once(move |scan: TargetScan| {
+                    scan.build(side).iter().map(|c| c.guid).collect::<Vec<_>>()
+                })
+                .expect("the scan runs as a one-shot system")
+        };
+        assert_eq!(pool(&mut world, ScanSide::Party), [PARTY, PARTY_DEAD]);
+        assert_eq!(pool(&mut world, ScanSide::Raid), [PARTY, PARTY_DEAD, RAID]);
+        // Out of a raid, mode 4's raid half has no roster: it is the party test.
+        world
+            .resource_mut::<crate::ui_party::GroupState>()
+            .group_type = 0;
+        assert_eq!(pool(&mut world, ScanSide::Raid), [PARTY, PARTY_DEAD]);
     }
 
     #[test]

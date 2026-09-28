@@ -2144,6 +2144,7 @@ mod tests {
             app.insert_resource(Selection {
                 target: Some(target),
                 guid: Some(guid),
+                ..Default::default()
             });
 
             app.world_mut().run_system_once(feed_unit_reach).unwrap();

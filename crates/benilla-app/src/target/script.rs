@@ -20,7 +20,7 @@ pub(crate) struct ScriptSelect<'w, 's> {
     /// included.
     commit: SelectCommit<'w, 's>,
     by_name: ByNameScan<'w, 's>,
-    /// The TAB cycler's inputs, for `TargetNearestFriend`.
+    /// The TAB cycler's inputs, for the `TargetNearest*` calls.
     scan: scan::TargetScan<'w, 's>,
     history: ResMut<'w, scan::TabHistory>,
     time: Res<'w, Time>,
@@ -73,11 +73,12 @@ impl ScriptSelect<'_, '_> {
         by_name::target_named(&self.by_name, &mut self.commit, name, exact);
     }
 
-    /// `TargetNearestFriend([reverse])` (`0x489aa0` → `0x493f60(reverse, 2)`), one cycle.
-    pub(crate) fn target_nearest_friend(&mut self, reverse: bool) {
+    /// `TargetNearest*([reverse])` (`0x489a80`/`0x489aa0`/`0x489ac0`/`0x489ae0` →
+    /// `0x493f60(reverse, mode)`), one cycle of the cycler the TAB key runs.
+    pub(crate) fn target_nearest(&mut self, mode: benilla_ui::script::NearestMode, reverse: bool) {
         let engaged = self.commit.engaged();
         scan::cycle(
-            scan::ScanSide::Friend,
+            scan::ScanSide::of(mode),
             reverse,
             self.time.elapsed_secs_f64(),
             &self.scan,
@@ -86,6 +87,20 @@ impl ScriptSelect<'_, '_> {
             &mut self.commit.seam,
             engaged,
         );
+    }
+
+    /// `TargetLastTarget()` (`0x489b00`): a held last-target pair goes to `0x489a40` as a stack
+    /// copy, so a streamed unit is committed (which stamps the outgoing target, swapping the two)
+    /// and an unstreamed one is a no-op (the roster fallback is not built, as for
+    /// `TargetLastEnemy`); an empty pair deselects through `0x493540(0,0)` (`0x489b2d`).
+    pub(crate) fn target_last_target(&mut self) {
+        match self.commit.selection.last {
+            Some(guid) => match self.tokens.held(guid) {
+                Some((entity, guid)) => self.commit.commit(entity, guid),
+                None => info!("TargetLastTarget: {guid:#x} is no longer streamed; no-op"),
+            },
+            None => self.commit.clear(),
+        }
     }
 
     /// `ClearTarget()` (`0x489ff0`): deselect whatever the calls before it left selected.

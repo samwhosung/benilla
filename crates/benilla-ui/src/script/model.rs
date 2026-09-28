@@ -234,6 +234,8 @@ pub(crate) struct Model {
     pub(crate) tracking: Option<super::aura::TrackingState>,
     /// The calls that touch the selection, the cast or the targeting cursor, in call order.
     pub(crate) script_calls: Vec<super::calls::ScriptCall>,
+    /// The binding functions' queue, gate depth and mouselook state.
+    pub(crate) input: super::input_verbs::InputState,
     /// `DropItemOnUnit` tokens (`0x48d960`), gated by the app; a refusal silently keeps the item.
     pub(crate) drop_item_on_unit: Vec<String>,
 
@@ -1035,6 +1037,7 @@ impl Model {
             cancel_aura_requests: Vec::new(),
             tracking: None,
             script_calls: Vec::new(),
+            input: Default::default(),
             drop_item_on_unit: Vec::new(),
             joined_channels: Vec::new(),
             party: party::PartyState::default(),

@@ -45,6 +45,13 @@ const VERDICTS: &[(&str, Verdict)] = &[
         Open("alt-tab bookkeeping; `cursor.rs` re-asserts the hardware cursor on the focus edge"),
     ),
     (
+        "KeyboardFocusLost",
+        Open(
+            "the window deactivate, not player input: `bindings.rs` drops a Lua-held movement \
+             command on it, the reference's `0x514490`, which a load must not hide",
+        ),
+    ),
+    (
         "WindowOccluded",
         Open("the present-mode throttle: a load behind another window must still throttle"),
     ),

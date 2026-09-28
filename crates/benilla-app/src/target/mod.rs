@@ -81,6 +81,10 @@ pub(crate) use click::DeselectGuid;
 pub(crate) struct Selection {
     pub(crate) target: Option<Entity>,
     pub(crate) guid: Option<u64>,
+    /// The last-target pair `[0xb4e2e0]` that `TargetLastTarget` reads: `SetSelection` stamps the
+    /// outgoing selection, none included, on every change it makes, a select or a deselect
+    /// (`0x49361d`-`0x493628`); a teardown clear (`0x493910` alone) leaves it.
+    pub(crate) last: Option<u64>,
 }
 
 /// This frame's character-model pick, by [`hover::update_hover`]. At most one slot is set: the
@@ -330,8 +334,8 @@ impl Plugin for TargetPlugin {
                     )
                         .chain(),
                     scan::auto_acquire_attacker,
-                    // The TAB cycler (`0x493f60`, mode 1); `TargetNearestFriend`, mode 2, is a
-                    // script call.
+                    // The TAB keys' cycler (`0x493f60`, mode 1); the `TargetNearest*` Lua calls
+                    // run the same cycle as script calls.
                     scan::tab_target,
                     scan::acquire_and_attack,
                     flash::drive_flash,

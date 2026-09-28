@@ -69,6 +69,7 @@ pub use handler_prof::HandlerRow;
 
 mod surface;
 pub use surface::widget_method_census;
+mod input_verbs;
 mod inspect;
 mod item_stats;
 mod item_text;
@@ -151,7 +152,7 @@ pub use battlefield_positions::{BattlefieldFlagView, BattlefieldPositionView};
 pub use battlefield_queue::{BattlefieldListView, BattlefieldMapInfo, BattlefieldQueueSlot};
 pub use battlefield_score::{BattlefieldScoreRow, BattlefieldScores, BattlefieldStatColumn};
 pub use bind_confirm::PendingEquipAnswer;
-pub use calls::ScriptCall;
+pub use calls::{NearestMode, ScriptCall};
 pub use camera_view::{CameraViewRequest, CAMERA_VIEW_COUNT};
 pub use channel::{ChannelCommand, ZoneChannelRow};
 pub use char_stats::{
@@ -187,6 +188,7 @@ pub use guild::{
     GuildMemberInfo, GuildRankEdit, GuildRankInfo, GuildRequest, GuildState, LastOnline, UnitGuild,
     MAX_RANKS, MIN_RANKS, RANK_RIGHT_BITS,
 };
+pub use input_verbs::{BindingInput, FiredInput, HeldInput};
 pub use modelframe::ModelPaneFrame;
 pub use petition::{
     validate_guild_name, PetitionRecordView, PetitionRequest, PetitionState, PETITION_TYPE_CHARTER,
@@ -508,6 +510,7 @@ impl UiScript {
         duel::install(&lua)?;
         follow::install(&lua)?;
         camera_view::install(&lua)?;
+        input_verbs::install(&lua)?;
         session::install(&lua)?;
         pvp::install(&lua)?;
         worn_display::install(&lua)?;

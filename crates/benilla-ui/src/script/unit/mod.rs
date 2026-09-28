@@ -4,7 +4,7 @@
 
 use mlua::Lua;
 
-use super::{Model, ScriptCall};
+use super::{Model, NearestMode, ScriptCall};
 
 /// A selection ask from Lua, queued in call order for the app to resolve and commit. The reference
 /// routes `TargetUnit`, `AssistUnit` and `TargetLastEnemy` through one helper (`0x489a40`: commit,
@@ -394,12 +394,12 @@ impl super::UiScript {
         })
     }
 
-    /// Take the `TargetNearestFriend([reverse])` calls out of the call stream, `true` for reverse.
-    /// It names no unit: the reference runs the TAB cycler (`0x493f60`, mode 2) straight into
+    /// Take the `TargetNearest*([reverse])` calls out of the call stream, `true` for reverse.
+    /// They name no unit: the reference runs the TAB cycler (`0x493f60`) straight into
     /// `SetSelection`.
-    pub fn take_target_nearest_friend_requests(&mut self) -> Vec<bool> {
+    pub fn take_target_nearest_requests(&mut self) -> Vec<(NearestMode, bool)> {
         self.take_calls_where(|c| match c {
-            ScriptCall::TargetNearestFriend { reverse } => Some(*reverse),
+            ScriptCall::TargetNearest { mode, reverse } => Some((*mode, *reverse)),
             _ => None,
         })
     }

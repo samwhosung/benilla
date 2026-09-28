@@ -655,6 +655,7 @@ pub(super) fn latch_world_mouse(
     mut rig: ResMut<CameraControl>,
     cameras: Query<&Camera, With<FlyCam>>,
     window: Single<&Window, With<PrimaryWindow>>,
+    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
 ) {
     let Ok(camera) = cameras.single() else {
         return;
@@ -662,6 +663,11 @@ pub(super) fn latch_world_mouse(
     let over_ui = pointer_over_ui.0;
     let world_press = rig.look.is_some() || (cursor_in_viewport(&window, camera) && !over_ui);
     rig.world_mouse.update(&buttons, world_press);
+    // `IsMouselooking` (`0x514270`) reads `[InputControl+4] & 1`, the TurnOrAction channel: the
+    // world's right button, the press the TURNORACTION binding latches.
+    if let Some(mut script) = script {
+        script.set_turn_or_action_held(rig.world_mouse.held(LookButton::Right));
+    }
 }
 
 /// The right button's down edge in the world, before the press is judged a click or a drag:

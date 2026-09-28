@@ -163,12 +163,14 @@ fn emoting_at_your_own_selection_sends_an_untargeted_emote() {
     let sel = Selection {
         target: Some(me),
         guid: Some(0xdead_beef),
+        ..Default::default()
     };
     assert_eq!(emote_target(&sel, Some(me)), 0);
 
     let sel = Selection {
         target: Some(them),
         guid: Some(0xdead_beef),
+        ..Default::default()
     };
     assert_eq!(emote_target(&sel, Some(me)), 0xdead_beef);
 
@@ -177,6 +179,7 @@ fn emoting_at_your_own_selection_sends_an_untargeted_emote() {
     let sel = Selection {
         target: Some(them),
         guid: Some(0xdead_beef),
+        ..Default::default()
     };
     assert_eq!(emote_target(&sel, None), 0xdead_beef);
 }

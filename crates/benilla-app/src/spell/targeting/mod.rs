@@ -542,6 +542,7 @@ mod tests {
         world.insert_resource(crate::target::Selection {
             target: Some(ally),
             guid: Some(ALLY),
+            ..Default::default()
         });
         let mut script = UiScript::new().expect("a VM");
         script.set_spell_targeting(true);

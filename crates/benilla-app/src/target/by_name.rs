@@ -536,7 +536,7 @@ impl SelectCommit<'_, '_> {
     /// Deselect (`0x493540(0,0)`), a no-op with nothing selected; see [`super::click::clear`].
     pub(super) fn clear(&mut self) {
         let engaged = self.engaged();
-        super::click::clear(&mut self.selection, &mut self.seam, engaged);
+        super::click::deselect(&mut self.selection, &mut self.seam, engaged);
     }
 
     /// Select a resolved guid, `0x489a40`'s arm 1, through [`scan::commit`].

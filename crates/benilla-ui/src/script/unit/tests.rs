@@ -349,22 +349,37 @@ fn the_selection_queue_carries_all_three_verbs_in_call_order() {
     assert!(s.take_selection_requests().is_empty());
 }
 
-/// The reverse flag as `0x6f1c10` reads it: absent, nil and 0 are forward, 1 and `true` reverse
-/// (`Bindings.xml:458`).
+/// The reverse flag as `0x6f1c10` reads it (default 0): absent, nil, 0 and `"0"` are forward, 1,
+/// `true` and `"1"` reverse (`Bindings.xml:458`). The four shims differ only in the mode.
 #[test]
-fn target_nearest_friend_queues_its_reverse_flag() {
+fn target_nearest_queues_its_mode_and_reverse_flag() {
+    use crate::script::NearestMode::{Enemy, Friend, PartyMember, RaidMember};
     let mut s = UiScript::new().unwrap();
-    assert!(s.take_target_nearest_friend_requests().is_empty());
+    assert!(s.take_target_nearest_requests().is_empty());
     s.eval::<()>("TargetNearestFriend()").unwrap();
     s.eval::<()>("TargetNearestFriend(1)").unwrap();
     s.eval::<()>("TargetNearestFriend(true)").unwrap();
     s.eval::<()>("TargetNearestFriend(0)").unwrap();
     s.eval::<()>("TargetNearestFriend(nil)").unwrap();
+    s.eval::<()>(r#"TargetNearestFriend("0")"#).unwrap();
+    s.eval::<()>(r#"TargetNearestEnemy("1")"#).unwrap();
+    s.eval::<()>("TargetNearestPartyMember()").unwrap();
+    s.eval::<()>("TargetNearestRaidMember(1)").unwrap();
     assert_eq!(
-        s.take_target_nearest_friend_requests(),
-        vec![false, true, true, false, false]
+        s.take_target_nearest_requests(),
+        vec![
+            (Friend, false),
+            (Friend, true),
+            (Friend, true),
+            (Friend, false),
+            (Friend, false),
+            (Friend, false),
+            (Enemy, true),
+            (PartyMember, false),
+            (RaidMember, true),
+        ]
     );
-    assert!(s.take_target_nearest_friend_requests().is_empty());
+    assert!(s.take_target_nearest_requests().is_empty());
 }
 
 #[test]

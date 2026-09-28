@@ -38,10 +38,12 @@ pub(crate) fn apply_script_calls(
     in_call_order(&mut script, |script, call| match call {
         ScriptCall::Select(request) => appliers.p0().select(request),
         ScriptCall::TargetByName { name, exact } => appliers.p0().target_by_name(&name, exact),
-        ScriptCall::TargetNearestFriend { reverse } => {
-            appliers.p0().target_nearest_friend(reverse);
+        ScriptCall::TargetNearest { mode, reverse } => {
+            appliers.p0().target_nearest(mode, reverse);
         }
+        ScriptCall::TargetLastTarget => appliers.p0().target_last_target(),
         ScriptCall::ClearTarget => appliers.p0().clear_target(),
+        ScriptCall::AttackTarget => appliers.p4().attack_target(),
         ScriptCall::SpellTargetUnit(token) => appliers.p1().spell_target_unit(&token),
         ScriptCall::SpellStopTargeting => appliers.p1().stop_targeting(),
         ScriptCall::SpellStopCasting => appliers.p2().stop_casting(),
@@ -160,6 +162,7 @@ mod tests {
             *world.resource_mut::<Selection>() = Selection {
                 target: Some(old),
                 guid: Some(OLD),
+                ..Default::default()
             };
         }
         let mut script = UiScript::new().expect("a VM");
@@ -256,6 +259,92 @@ mod tests {
                     .collect();
             assert_eq!(sends, vec![ME, 0], "selected before: {selected_before}");
         }
+    }
+
+    /// `TargetNearestEnemy` (`0x489a80` → `0x493f60(0, 1)`) commits through `SetSelection` before
+    /// it returns, so the cast after it in the same script goes to the unit the TAB cycle picked.
+    #[test]
+    fn a_cast_after_target_nearest_enemy_goes_to_the_picked_unit() {
+        const MOB: u64 = 0x31;
+        let mut f = frame(true);
+        let world = f.app.world_mut();
+        // With no `FactionTemplate.dbc` a plain unit is attackable; OLD and NEW carry no
+        // `NetEntity`, so the scan's one candidate is the mob.
+        let mob = world
+            .spawn((
+                Guid(MOB),
+                crate::net::NetEntity {
+                    kind: benilla_protocol::EntityKind::Unit,
+                    display_id: None,
+                    scale: 1.0,
+                },
+                Transform::from_xyz(3.0, 0.0, 0.0),
+                GlobalTransform::from_translation(Vec3::new(3.0, 0.0, 0.0)),
+                ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                    (22, 100),
+                    (28, 100),
+                ])),
+            ))
+            .id();
+        world.resource_mut::<GuidIndex>().0.insert(MOB, mob);
+        // We are a player (`OBJECT_FIELD_TYPE` 0x19, `UNIT_FLAG_PVP_ATTACKABLE`), which selects
+        // `CanAttack`'s player arm.
+        let me = world.resource::<GuidIndex>().0[&ME];
+        world
+            .entity_mut(me)
+            .insert(ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (2, 0x19),
+                (22, 100),
+                (28, 100),
+                (46, 0x8),
+            ])));
+        run(&mut f, r#"TargetNearestEnemy() CastSpellByName("Heal")"#);
+        assert_eq!(casts(&f), vec![(HEAL, Some(MOB))]);
+        assert_eq!(selected(&f), Some(MOB));
+    }
+
+    /// `TargetLastTarget` (`0x489b00`) reads the pair `SetSelection` stamps with the outgoing
+    /// selection (`0x49361d`): a held pair re-selects, which swaps the two; an empty one deselects
+    /// through `0x493540(0,0)` (`0x489b2d`), which stamps what it drops.
+    #[test]
+    fn target_last_target_swaps_and_deselects_on_an_empty_pair() {
+        let mut f = frame(false);
+        // Selecting from nothing stamps nothing: the pair is empty, so the call deselects.
+        run(&mut f, r#"TargetUnit("party1") TargetLastTarget()"#);
+        assert_eq!(selected(&f), None);
+        // The deselect stamped NEW, so the next call brings it back.
+        run(&mut f, "TargetLastTarget()");
+        assert_eq!(selected(&f), Some(NEW));
+        // A switch stamps the outgoing unit; the call swaps back, and the cast after it in the
+        // same script goes to the unit it re-selected.
+        run(
+            &mut f,
+            r#"TargetUnit("player") TargetLastTarget() CastSpellByName("Heal")"#,
+        );
+        assert_eq!(selected(&f), Some(NEW));
+        assert_eq!(casts(&f), vec![(HEAL, Some(NEW))]);
+        run(&mut f, "TargetLastTarget()");
+        assert_eq!(selected(&f), Some(ME), "and back again");
+    }
+
+    /// `AttackTarget` (`0x489b50` → `0x6131a0`) swings at the selection as the calls before it
+    /// left it.
+    #[test]
+    fn attack_target_swings_at_the_selection_in_call_order() {
+        let swings = |f: &Frame| -> Vec<u64> {
+            f.rx.try_iter()
+                .filter_map(|c| match c {
+                    ClientCommand::AttackSwing { guid } => Some(guid),
+                    _ => None,
+                })
+                .collect()
+        };
+        let mut f = frame(true);
+        run(&mut f, r#"AttackTarget() TargetUnit("party1")"#);
+        assert_eq!(swings(&f), vec![OLD]);
+        let mut f = frame(true);
+        run(&mut f, r#"TargetUnit("party1") AttackTarget()"#);
+        assert_eq!(swings(&f), vec![NEW]);
     }
 
     /// A macro's lines run inside `UseAction` (`0x4e6098 call 0x4f1460`), so what they call lands

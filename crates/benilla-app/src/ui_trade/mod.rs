@@ -999,6 +999,7 @@ mod tests {
             .insert_resource(Selection {
                 target: None,
                 guid: Some(0x7), // high 16 bits 0: a player guid
+                ..Default::default()
             });
         app.insert_non_send_resource(UiScript::new().unwrap());
 
