@@ -127,9 +127,9 @@ pub(crate) fn free_fly_hint() -> String {
 
 /// This crate's source directory on a dev build, `None` in a player build. The `cfg` must be real,
 /// not a runtime check: `env!("CARGO_MANIFEST_DIR")` names the build machine, and the literal must
-/// be absent from a player binary. Read by [`crate::ui_script`] (live `assets/ui`) and
-/// [`crate::local_state`] (the project-folder home); held by
-/// [`tests::the_dev_plane_has_exactly_one_door`].
+/// be absent from a player binary. Read by [`crate::ui_script`] for the live `assets/ui`, which are
+/// benilla's own files whoever the launcher is; the launcher's folder is
+/// [`benilla_formats::project_folder`]. Held by [`tests::the_dev_plane_has_exactly_one_door`].
 pub(crate) fn dev_source_dir() -> Option<&'static std::path::Path> {
     #[cfg(feature = "dev")]
     {
@@ -158,23 +158,15 @@ pub(crate) struct DeclaredIdentity {
     pub(crate) character: String,
 }
 
-/// The declaration, read off the project folder; a player build has none.
-#[cfg(feature = "dev")]
+/// The declaration, read off the launcher's project folder ([`benilla_formats::project_folder`]);
+/// a player build has none.
 pub(crate) fn declared_identity() -> Option<DeclaredIdentity> {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)?;
+    let root = benilla_formats::project_folder()?;
     parse_identity(&std::fs::read_to_string(root.join(".probe-identity")).ok()?)
-}
-
-#[cfg(not(feature = "dev"))]
-pub(crate) fn declared_identity() -> Option<DeclaredIdentity> {
-    None
 }
 
 /// The file as an identity, `None` unless both the account and the character are there; the
 /// password is never read.
-#[cfg_attr(not(feature = "dev"), allow(dead_code))]
 fn parse_identity(text: &str) -> Option<DeclaredIdentity> {
     let field = |key: &str| {
         text.lines()

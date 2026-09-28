@@ -237,12 +237,16 @@ fn launch(build: BuildId, extend: Option<Extension<'_>>) -> AppExit {
         ..build
     };
 
+    // A dev build's install, state folder and probe identity resolve from the launcher's folder,
+    // so a crate on top of benilla keeps them in its own and not in cargo's checkout of benilla.
+    benilla_formats::set_project_folder(build.project_dir);
+
     // From here a panic leaves `benilla-config/Diagnostics/crash-<unix>.txt`; armed before the
     // `App` exists, so a panic while plugins build is reported too.
     crash::install(build);
 
     let mut app = App::new();
-    // The panel footer and the preflight banner read the stamp back.
+    // The panel footer and the build banner read the stamp back.
     app.insert_resource(build);
     // Static-scene transform tracking pinned on: the default threshold re-decides every frame with
     // two full scans of the rows the tracking exists to skip, and this scene is static-heavy. It

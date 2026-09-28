@@ -49,8 +49,8 @@
 //!
 //! Its `Cargo.lock` starts as a copy of benilla's: cargo reads only the root's lockfile too, and
 //! without it resolves every crate to its newest compatible version, not the one benilla is built
-//! with. A dev build looks for the `WoW` link and `benilla-config/` at benilla's repo root, which
-//! for a git dependency is cargo's checkout, so `WOW_DATA` and `BENILLA_HOME` name them instead.
+//! with. A dev build keeps its `WoW` link, `benilla-config/` and `.probe-identity` in its own
+//! folder, beside that `Cargo.lock`, as benilla's does.
 
 use benilla_app::{AppExit, BuildId};
 use bevy::prelude::*;

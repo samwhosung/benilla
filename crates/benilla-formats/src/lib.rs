@@ -18,7 +18,10 @@ mod tga;
 pub use tga::tga_to_rgba;
 /// Where the WoW install is; [`Chain`] opens it.
 mod install;
-pub use install::{addon_corpus, addon_corpus_candidates, candidates, skipped, wow_data};
+pub use install::{
+    addon_corpus, addon_corpus_candidates, candidates, project_folder, set_project_folder, skipped,
+    wow_data,
+};
 mod characters;
 pub use characters::{
     equip_blits, equip_column, equip_region_candidates, equip_tex_dir, equip_tile, forearm_dressed,

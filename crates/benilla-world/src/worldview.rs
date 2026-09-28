@@ -52,6 +52,9 @@ const FOVY: f32 = 1.221_730_5;
 
 /// Builds and runs the world viewer; `build` is the launcher shim's compile-time git stamp.
 pub fn run(build: BuildId) -> AppExit {
+    // The install resolves from the launcher's folder when its stamp names one, as the client's
+    // does; this shim has no `dev` feature, so it stamps none and the viewer keeps benilla's.
+    benilla_formats::set_project_folder(build.project_dir);
     let mut app = App::new();
     app.insert_resource(build);
 

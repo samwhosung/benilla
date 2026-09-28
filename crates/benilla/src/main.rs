@@ -11,6 +11,7 @@ fn main() -> benilla_app::AppExit {
         short: env!("BENILLA_GIT_SHORT"),
         date: env!("BENILLA_GIT_DATE"),
         profile: env!("BENILLA_PROFILE"),
+        project_dir: env!("BENILLA_PROJECT_DIR"),
         ..Default::default()
     })
 }

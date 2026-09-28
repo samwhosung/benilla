@@ -3,7 +3,7 @@
 //!
 //! 1. `$WOW_DATA`. Set and empty (`WOW_DATA=`) means no install and ends the search, so the
 //!    no-install path runs on a machine that has one.
-//! 2. `<project folder>/WoW/Data`, `dev` builds only, from this crate's `CARGO_MANIFEST_DIR`.
+//! 2. `<project folder>/WoW/Data`, `dev` builds only ([`project_folder`]).
 //! 3. `<exe dir>/Data`, then `<exe dir>/WoW/Data`, the release layouts.
 //!
 //! `dev` is a default feature here, so every dependent declares `default-features = false` and
@@ -12,6 +12,44 @@
 //! catch it.
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+/// The launcher's project folder, handed in by its entry point ([`set_project_folder`]).
+static LAUNCHER_FOLDER: OnceLock<PathBuf> = OnceLock::new();
+
+/// Record the launcher's project folder, as its build stamp names it (`BuildId::project_dir`); an
+/// empty stamp, a player build's, records nothing. The entry point calls this once, before
+/// anything resolves from the folder, and a later call changes nothing.
+pub fn set_project_folder(dir: &str) {
+    if !dir.is_empty() {
+        let _ = LAUNCHER_FOLDER.set(PathBuf::from(dir));
+    }
+}
+
+/// The folder a dev build keeps its `WoW` link, `benilla-config/` and `.probe-identity` in: the
+/// launcher's, when its entry point recorded one, else benilla's own checkout, so a crate built on
+/// top of benilla resolves from its folder and not from cargo's checkout of benilla. `None` in a
+/// player build, which looks in no source tree.
+pub fn project_folder() -> Option<&'static Path> {
+    #[cfg(feature = "dev")]
+    {
+        LAUNCHER_FOLDER
+            .get()
+            .map(PathBuf::as_path)
+            .or_else(benilla_checkout)
+    }
+    #[cfg(not(feature = "dev"))]
+    {
+        None
+    }
+}
+
+/// benilla's own checkout: this crate's manifest dir, two levels up. The addon corpus always
+/// resolves here, since its tests are benilla's.
+#[cfg(feature = "dev")]
+fn benilla_checkout() -> Option<&'static Path> {
+    Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(2)
+}
 
 /// The vanilla `Data` directory, or `None` when there is no install. Uncached, so a `$WOW_DATA`
 /// change is seen.
@@ -23,6 +61,7 @@ pub fn wow_data() -> Option<PathBuf> {
 pub fn candidates() -> Vec<PathBuf> {
     candidates_from(
         std::env::var_os("WOW_DATA").map(PathBuf::from),
+        project_folder(),
         std::env::current_exe()
             .ok()
             .and_then(|e| e.parent().map(Path::to_path_buf)),
@@ -31,7 +70,11 @@ pub fn candidates() -> Vec<PathBuf> {
 
 /// [`candidates`] with the environment passed in: a test that set `$WOW_DATA` would change the
 /// answer for every test running beside it. `tests/wow_data_env.rs` covers the real read.
-fn candidates_from(override_dir: Option<PathBuf>, exe_dir: Option<PathBuf>) -> Vec<PathBuf> {
+fn candidates_from(
+    override_dir: Option<PathBuf>,
+    project: Option<&Path>,
+    exe_dir: Option<PathBuf>,
+) -> Vec<PathBuf> {
     let mut out = Vec::with_capacity(4);
 
     // 1. The override; set and empty is no install at all, even in a dev build
@@ -43,10 +86,8 @@ fn candidates_from(override_dir: Option<PathBuf>, exe_dir: Option<PathBuf>) -> V
         out.push(over);
     }
 
-    // 2. The project folder, dev builds only: this crate's manifest dir, two levels up, is the
-    // workspace root for every caller.
-    #[cfg(feature = "dev")]
-    if let Some(root) = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(2) {
+    // 2. The project folder, dev builds only.
+    if let Some(root) = project {
         out.push(root.join("WoW/Data"));
     }
 
@@ -113,8 +154,9 @@ fn skipped_under(required: bool, what: &str, looked_in: &[PathBuf]) {
 }
 
 /// The third-party addon corpus the UI engine's real-addon tests run against, or `None`:
-/// `$BENILLA_ADDON_CORPUS`, then `<project folder>/wow-addons-vanilla` (`dev` only), a gitignored
-/// link beside `WoW`. Never a folder beside the checkout, which depends on where the checkout sits.
+/// `$BENILLA_ADDON_CORPUS`, then `<benilla's checkout>/wow-addons-vanilla` (`dev` only), a
+/// gitignored link beside `WoW`. Never a folder beside the checkout, which depends on where the
+/// checkout sits.
 pub fn addon_corpus() -> Option<PathBuf> {
     addon_corpus_candidates().into_iter().find(|c| c.is_dir())
 }
@@ -130,9 +172,9 @@ fn addon_corpus_candidates_from(override_dir: Option<PathBuf>) -> Vec<PathBuf> {
     if let Some(over) = override_dir {
         out.push(over);
     }
-    // The project folder, dev builds only, as the install's rung 2.
+    // benilla's checkout, dev builds only, whoever the launcher is: the corpus tests are benilla's.
     #[cfg(feature = "dev")]
-    if let Some(root) = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(2) {
+    if let Some(root) = benilla_checkout() {
         out.push(root.join("wow-addons-vanilla"));
     }
     out
@@ -162,9 +204,14 @@ macro_rules! addon_corpus_or_skip {
 mod tests {
     use super::*;
 
-    /// No test here touches the process environment (see [`candidates_from`]).
+    /// No test here touches the process environment (see [`candidates_from`]), or records a
+    /// launcher's folder, which is process-wide (`tests/project_folder.rs` has a process of its own).
     fn probe(over: Option<&str>, exe: Option<&str>) -> Vec<PathBuf> {
-        candidates_from(over.map(PathBuf::from), exe.map(PathBuf::from))
+        candidates_from(
+            over.map(PathBuf::from),
+            project_folder(),
+            exe.map(PathBuf::from),
+        )
     }
 
     #[test]
@@ -195,7 +242,7 @@ mod tests {
 
         // The winner depends on the build (dev puts the project folder first), so assert only
         // that it is not the ghost and exists.
-        let chosen = candidates_from(Some(ghost.clone()), Some(tmp.clone()))
+        let chosen = candidates_from(Some(ghost.clone()), project_folder(), Some(tmp.clone()))
             .into_iter()
             .find(|c| c.is_dir());
         assert_ne!(
@@ -224,6 +271,11 @@ mod tests {
     #[cfg(not(feature = "dev"))]
     #[test]
     fn a_player_build_carries_no_source_tree_path() {
+        assert_eq!(
+            project_folder(),
+            None,
+            "a player build has no project folder, whatever its launcher stamped"
+        );
         let root = env!("CARGO_MANIFEST_DIR");
         for c in probe(None, Some("/games/benilla")) {
             assert!(
@@ -234,6 +286,8 @@ mod tests {
         }
     }
 
+    /// With no launcher folder recorded (a test, an example, a tool) the rung is benilla's own
+    /// checkout; with one, it is that folder's, and benilla's checkout is not looked in.
     #[cfg(feature = "dev")]
     #[test]
     fn a_dev_build_looks_in_the_project_folder() {
@@ -241,17 +295,34 @@ mod tests {
             .ancestors()
             .nth(2)
             .unwrap();
+        assert_eq!(
+            project_folder(),
+            Some(root),
+            "nothing recorded: the checkout"
+        );
         let c = probe(None, Some("/games/benilla"));
         assert!(
             c.contains(&root.join("WoW/Data")),
             "the dev build lost its project-folder candidate ({}): {c:?}",
             root.display()
         );
+
+        let launcher = Path::new("/home/player/hello-mod");
+        let c = candidates_from(None, Some(launcher), Some(PathBuf::from("/games/benilla")));
+        assert_eq!(
+            c,
+            vec![
+                launcher.join("WoW/Data"),
+                PathBuf::from("/games/benilla/Data"),
+                PathBuf::from("/games/benilla/WoW/Data"),
+            ],
+            "a launcher's folder takes the rung, and nothing else looks in benilla's checkout"
+        );
     }
 
     #[cfg(feature = "dev")]
     #[test]
-    fn the_corpus_ladder_is_override_then_the_project_folder_and_nothing_outside_it() {
+    fn the_corpus_ladder_is_override_then_benillas_checkout_and_nothing_outside_it() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .ancestors()
             .nth(2)

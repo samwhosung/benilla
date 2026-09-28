@@ -140,6 +140,7 @@ mod tests {
         short: "0123456",
         date: "2026-09-16",
         profile: "debug",
+        project_dir: "",
         extended: false,
     };
 

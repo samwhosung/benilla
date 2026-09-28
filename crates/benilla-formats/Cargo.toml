@@ -9,8 +9,8 @@ description = "WoW 1.12.1 asset-format adapters (MPQ/BLP/DBC/ADT/WDT) and the be
 workspace = true
 
 [features]
-# `dev` gates one thing, `install::candidates`' project-folder probe, which bakes this source
-# tree's path into the binary. Every dependent takes this crate without default features and
+# `dev` gates one thing, the project folder (`install::project_folder`), whose fallback bakes this
+# source tree's path into the binary. Every dependent takes this crate without default features and
 # forwards `dev`, or unification puts the path back into a player build.
 default = ["dev"]
 dev = []

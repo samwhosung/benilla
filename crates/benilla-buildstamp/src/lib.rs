@@ -6,7 +6,7 @@
 use std::path::Path;
 use std::process::Command;
 
-/// Stamp the commit this binary was built from into the calling package as five `rustc-env`
+/// Stamp the commit this binary was built from into the calling package as six `rustc-env`
 /// vars, which its `main.rs` reads back with `env!` into a `BuildId`, beside its own
 /// `CARGO_PKG_VERSION`:
 ///
@@ -17,6 +17,9 @@ use std::process::Command;
 ///   (`v0.2.0-12-gb17be27`), which says how far past its release the commit is.
 /// - `BENILLA_PROFILE`: the profile directory's name, which tells `ship` from `release` where
 ///   cargo's `PROFILE` does not.
+/// - `BENILLA_PROJECT_DIR`: the folder a dev build keeps its `WoW` link, `benilla-config/` and
+///   `.probe-identity` in, the calling package's workspace root ([`workspace_root`]); empty unless
+///   the package's own `dev` feature is on, so a player binary carries no source path.
 ///
 /// The git vars are empty when git cannot answer (no `.git`, no `git` on `PATH`, no tag in
 /// reach), which the runtime reports as an unknown commit or the bare version. The rerun
@@ -84,4 +87,65 @@ pub fn emit() {
         .map(str::to_owned)
         .unwrap_or_else(|| std::env::var("PROFILE").unwrap_or_default());
     println!("cargo::rustc-env=BENILLA_PROFILE={profile}");
+
+    let project = if std::env::var_os("CARGO_FEATURE_DEV").is_some() {
+        workspace_root(Path::new(&dir)).display().to_string()
+    } else {
+        String::new()
+    };
+    println!("cargo::rustc-env=BENILLA_PROJECT_DIR={project}");
+}
+
+/// The workspace root of the package at `manifest_dir`: the nearest folder up from it holding
+/// `Cargo.lock`, which cargo writes at the root before any build script runs, else the package's
+/// own folder. For a launcher inside benilla's checkout that is the checkout.
+fn workspace_root(manifest_dir: &Path) -> &Path {
+    manifest_dir
+        .ancestors()
+        .find(|d| d.join("Cargo.lock").is_file())
+        .unwrap_or(manifest_dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_workspace_root_is_the_nearest_folder_holding_the_lockfile() {
+        let tmp = std::env::temp_dir().join(format!("benilla-stamp-{}", std::process::id()));
+        let member = tmp.join("ws/crates/launcher");
+        std::fs::create_dir_all(&member).unwrap();
+        // A lockfile further up belongs to some other tree and must not win over the nearer one.
+        std::fs::write(tmp.join("Cargo.lock"), "").unwrap();
+        std::fs::write(tmp.join("ws/Cargo.lock"), "").unwrap();
+        assert_eq!(workspace_root(&member), tmp.join("ws"));
+        // A package that is its own workspace keeps its lockfile beside its manifest.
+        std::fs::write(member.join("Cargo.lock"), "").unwrap();
+        assert_eq!(workspace_root(&member), member);
+        std::fs::remove_dir_all(&tmp).ok();
+
+        let bare = std::env::temp_dir().join(format!("benilla-stamp-bare-{}", std::process::id()));
+        std::fs::create_dir_all(&bare).unwrap();
+        let root = workspace_root(&bare);
+        assert!(
+            root == bare || root.join("Cargo.lock").is_file(),
+            "no lockfile anywhere up means the package's own folder: {}",
+            root.display()
+        );
+        std::fs::remove_dir_all(&bare).ok();
+    }
+
+    /// benilla's own launchers stamp the checkout, the folder a dev build always used.
+    #[test]
+    fn a_launcher_in_this_checkout_stamps_the_checkout() {
+        let shim = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("benilla");
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .unwrap();
+        assert_eq!(workspace_root(&shim), checkout);
+    }
 }
