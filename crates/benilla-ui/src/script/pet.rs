@@ -259,7 +259,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(expiry) = expiry else {
                 return Ok(Value::Nil);
             };
-            let now: f64 = lua.globals().get("__benilla_now").unwrap_or(0.0);
+            let now = crate::script::clock::now(lua);
             #[allow(clippy::cast_possible_truncation)] // a tick difference, wrapped as the u32 is
             let ms = ((expiry - now) * 1000.0).round() as i64 as u32;
             Ok(Value::Number(f64::from(ms)))
