@@ -19,7 +19,15 @@ pub(super) const LAYER_MANIFEST: &str = "layer.toc";
 /// Whether this run loads the layer: always in a player build; a dev build boots the stock UI
 /// alone under `WOW_STOCK_UI=1`.
 pub(super) fn layer_enabled() -> bool {
-    !(crate::run_mode::dev_affordances() && std::env::var("WOW_STOCK_UI").as_deref() == Ok("1"))
+    layer_enabled_by(
+        crate::run_mode::dev_affordances(),
+        std::env::var("WOW_STOCK_UI").ok().as_deref(),
+    )
+}
+
+/// [`layer_enabled`] over its two facts: a dev build, and the switch's value.
+pub(super) fn layer_enabled_by(dev_build: bool, stock_ui: Option<&str>) -> bool {
+    !(dev_build && stock_ui == Some("1"))
 }
 
 /// `/errors`: toggles the layer's script error log; a no-op when the run boots without the layer.
@@ -219,11 +227,22 @@ pub(crate) fn load_ingame_ui(
     roster: &[String],
     version_check: bool,
 ) -> Vec<String> {
+    load_ingame_ui_with(script, identity, roster, version_check, layer_enabled())
+}
+
+/// [`load_ingame_ui`] with the layer decided by the caller.
+pub(super) fn load_ingame_ui_with(
+    script: &mut UiScript,
+    identity: Option<&(String, String)>,
+    roster: &[String],
+    version_check: bool,
+    layer: bool,
+) -> Vec<String> {
     // Bounded, addons included: a chunk that never returns fails as a load error instead of
     // freezing the loading screen. The caller disarms the budget once the edge is done.
     script.set_instruction_budget(super::addons::LOAD_INSTRUCTION_BUDGET);
     let mut failures = load_manifest(script, Addon::core().toc.files.get(1..).unwrap_or_default());
-    if layer_enabled() {
+    if layer {
         failures.extend(load_layer(script));
     }
     failures.extend(bootstrap_positions(script));

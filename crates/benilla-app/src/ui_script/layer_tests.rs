@@ -41,11 +41,6 @@ fn production_load(tag: &str, stock_ui: bool) -> (UiScript, Vec<String>) {
     .unwrap();
     let _c = EnvGuard::unset("WOW_CAPTURE");
     let _h = EnvGuard::set("BENILLA_HOME", home.to_str().unwrap());
-    let _s = if stock_ui {
-        EnvGuard::set("WOW_STOCK_UI", "1")
-    } else {
-        EnvGuard::unset("WOW_STOCK_UI")
-    };
 
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
@@ -64,7 +59,14 @@ fn production_load(tag: &str, stock_ui: bool) -> (UiScript, Vec<String>) {
     let mut failures = super::load_font_registry(&s);
     s.run(DEFINE_LOG).unwrap();
     s.run(ADDON_LOADED_LOG).unwrap();
-    failures.extend(super::load_ingame_ui(&mut s, None, &[], true));
+    // The layer passed in, not set through `WOW_STOCK_UI`: every test in this process reads it.
+    failures.extend(super::manifest::load_ingame_ui_with(
+        &mut s,
+        None,
+        &[],
+        true,
+        !stock_ui,
+    ));
     failures.extend(s.errors());
     let _ = std::fs::remove_dir_all(&tmp);
     (s, failures)
@@ -202,25 +204,29 @@ fn the_layer_is_absent_from_the_addon_api() {
     );
 }
 
-/// `WOW_STOCK_UI=1` in a dev build boots the core alone: no layer file loads, the stock files raise
-/// nothing, and the host's calls into the layer are no-ops. A player build ignores it.
+/// `WOW_STOCK_UI=1` drops the layer in a dev build alone; a player build always loads it.
+#[test]
+fn the_stock_ui_switch_is_a_dev_builds_alone() {
+    use super::manifest::layer_enabled_by;
+    assert!(
+        !layer_enabled_by(true, Some("1")),
+        "a dev build boots without it"
+    );
+    assert!(
+        layer_enabled_by(false, Some("1")),
+        "a player build ignores the switch"
+    );
+    assert!(layer_enabled_by(true, None) && layer_enabled_by(true, Some("0")));
+}
+
+/// Booted without the layer, as `WOW_STOCK_UI=1` does: no layer file loads, the stock files raise
+/// nothing, and the host's calls into the layer are no-ops.
 #[test]
 fn the_stock_ui_switch_boots_the_core_without_the_layer() {
     benilla_formats::wow_data_or_skip!();
     let _l = ENV_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    {
-        let _s = EnvGuard::set("WOW_STOCK_UI", "1");
-        assert_eq!(
-            super::manifest::layer_enabled(),
-            !crate::run_mode::dev_affordances(),
-            "the switch is a dev build's alone"
-        );
-    }
-    if !crate::run_mode::dev_affordances() {
-        return;
-    }
     let (s, failures) = production_load("stock", true);
     assert!(failures.is_empty(), "load failures: {failures:#?}");
     let log: Vec<String> = s.eval("return DEFINE_LOG").unwrap();
