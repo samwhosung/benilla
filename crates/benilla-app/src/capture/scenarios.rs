@@ -41,8 +41,8 @@ pub(super) enum UiFixture {
     Bag,
     /// The cooldown sweep at sixteen phases in one still: each backpack slot's
     /// `GetContainerItemCooldown` sits at its own fraction of one long cooldown, in reading order
-    /// (slot 1 renders top-left, `ContainerFrame_GenerateFrame` numbering backwards). The VM clock
-    /// `__benilla_now` is parked at a large value, so the settle's seconds are ~5e-4 of a phase.
+    /// (slot 1 renders top-left, `ContainerFrame_GenerateFrame` numbering backwards). The VM's
+    /// `GetTime` clock is parked at a large value, so the settle's seconds are ~5e-4 of a phase.
     Cooldown,
     /// The cooldown filmstrip with the pet bar's autocast shine beside it: `UI-AutoCastButton.m2`
     /// is four additive emitters and no batch, sharing the tile atlas, so this asks whether its

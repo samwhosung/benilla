@@ -260,6 +260,13 @@ pub(crate) struct Model {
     pub(crate) saved_instances: Vec<party::SavedInstanceInfo>,
     /// `SetRaidRosterSelection`'s raid row index, client-side only.
     pub(crate) raid_selection: i64,
+    /// `GetTime()`'s session seconds, which only the host moves ([`super::UiScript::tick`],
+    /// [`super::UiScript::set_now`]); off `_G`, as the reference's clock is the OS tick count.
+    pub(crate) now: f64,
+    /// `GetGameTime()`'s `(hour, minute)`, pushed by the host as the game clock ticks.
+    pub(crate) game_time: (u32, u32),
+    /// The zone caches the four zone-text getters and `GetZonePVPInfo` read.
+    pub(crate) zone: super::ZoneTexts,
     /// The current map's `Map.dbc` `InstanceType`, all `IsInInstance()` reads; `None` for no row.
     pub(crate) instance_type: Option<u32>,
     /// `CanShowResetInstances()`, the reference's four-term predicate (`0x495c90`), app-computed.
@@ -1066,6 +1073,9 @@ impl Model {
             ready_check: party::ReadyCheckState::default(),
             saved_instances: Vec::new(),
             raid_selection: 0,
+            now: 0.0,
+            game_time: (0, 0),
+            zone: Default::default(),
             instance_type: None,
             can_reset_instances: false,
             reset_instance_asks: 0,

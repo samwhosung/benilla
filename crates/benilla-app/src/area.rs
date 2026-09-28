@@ -99,7 +99,7 @@ fn elect_event(cache: &ZoneCache, next: &ZoneSignal) -> Option<&'static str> {
     None
 }
 
-/// Resolves the texts and PvP info, writes the host globals, then fires the elected zone event and,
+/// Resolves the texts and PvP info, pushes the zone caches, then fires the elected zone event and,
 /// independently, `MINIMAP_ZONE_CHANGED`.
 fn feed_zone_events(
     script: Option<NonSendMut<UiScript>>,
@@ -213,21 +213,20 @@ fn feed_zone_events(
             };
             Some((ty, f.catalog().faction_group_name(zone_mask).unwrap_or("")))
         });
-    let (pvp_type, pvp_faction) = pvp.unwrap_or(("", ""));
+    let pvp_type = pvp.map_or("", |(ty, _)| ty);
 
-    let globals = script.lua().globals();
-    let pushed = globals
-        .set("__benilla_zone_name", signal.zone_text.clone())
-        .and_then(|()| globals.set("__benilla_real_zone_name", real_zone_text))
-        .and_then(|()| globals.set("__benilla_subzone_name", signal.subzone_text.clone()))
-        .and_then(|()| globals.set("__benilla_zone_text", minimap_text.clone()))
-        .and_then(|()| globals.set("__benilla_pvp_type", pvp_type))
-        .and_then(|()| globals.set("__benilla_pvp_faction", pvp_faction))
-        .and_then(|()| globals.set("__benilla_pvp_arena", is_arena));
-    if let Err(e) = pushed {
-        warn!("area: zone host globals: {e}");
-        return;
-    }
+    script.set_zone_texts(benilla_ui::script::ZoneTexts {
+        zone: signal.zone_text.clone(),
+        real_zone: real_zone_text,
+        subzone: signal.subzone_text.clone(),
+        minimap: minimap_text.clone(),
+        pvp_type: pvp.map(|(ty, _)| ty.to_string()),
+        pvp_faction: pvp
+            .map(|(_, faction)| faction)
+            .filter(|f| !f.is_empty())
+            .map(str::to_string),
+        is_arena,
+    });
 
     if let Some(event) = event {
         script.fire_event(event, vec![]);

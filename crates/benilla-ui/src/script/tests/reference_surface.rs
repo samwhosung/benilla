@@ -14,21 +14,6 @@ const BEYOND_1_12: &[&str] = &[
     // addon reaches the globals with `getfenv(0)`); ours does, as our `getglobal`/`setglobal` are
     // written over it.
     "_G",
-    // The host's pushed state, which the Lua getters over it read (`script::stdlib`): the tick's
-    // clock for `GetTime`, the zone texts and PvP info for the zone family, the game clock for
-    // `GetGameTime`, and the default error handler's sink. Each is a slot the app writes, not an
-    // API; they await a home off `_G`.
-    "__benilla_game_hour",
-    "__benilla_game_minute",
-    "__benilla_now",
-    "__benilla_pvp_arena",
-    "__benilla_pvp_faction",
-    "__benilla_pvp_type",
-    "__benilla_real_zone_name",
-    "__benilla_script_error",
-    "__benilla_subzone_name",
-    "__benilla_zone_name",
-    "__benilla_zone_text",
 ];
 
 /// `reference/1.12-globals.tsv`'s names.

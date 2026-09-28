@@ -1,8 +1,8 @@
-//! Stock `ZoneText.xml`, driven by hand as `crate::area::feed_zone_events` drives it: host globals
-//! written, the event fired, the clock ticked. A plain `ZONE_CHANGED` re-caches the zone name
+//! Stock `ZoneText.xml`, driven by hand as `crate::area::feed_zone_events` drives it: zone caches
+//! pushed, the event fired, the clock ticked. A plain `ZONE_CHANGED` re-caches the zone name
 //! silently (`ZoneText.xml:92`), so a later `ZONE_CHANGED_NEW_AREA` on that name never splashes.
 
-use benilla_ui::script::UiScript;
+use benilla_ui::script::{UiScript, ZoneTexts};
 
 use super::test_ui::load_ui as load_xml;
 
@@ -16,14 +16,23 @@ fn text_of(s: &UiScript, fontstring: &str) -> String {
         .unwrap()
 }
 
-/// The host globals the app writes on an area change, in long brackets so an apostrophe survives.
-fn set_area(s: &UiScript, zone: &str, sub: &str, pvp: &str, faction: &str) {
-    s.run(&format!(
-        "__benilla_zone_name = [[{zone}]]; __benilla_subzone_name = [[{sub}]]; \
-         __benilla_pvp_type = [[{pvp}]]; __benilla_pvp_faction = [[{faction}]]; \
-         __benilla_pvp_arena = false"
-    ))
-    .unwrap();
+/// The zone caches the app pushes on an area change: the minimap line is the subzone, else the
+/// zone; an empty PvP word or faction is nil.
+fn area(zone: &str, sub: &str, pvp: &str, faction: &str) -> ZoneTexts {
+    let some = |t: &str| (!t.is_empty()).then(|| t.to_string());
+    ZoneTexts {
+        zone: zone.into(),
+        real_zone: zone.into(),
+        subzone: sub.into(),
+        minimap: if sub.is_empty() { zone } else { sub }.into(),
+        pvp_type: some(pvp),
+        pvp_faction: some(faction),
+        is_arena: false,
+    }
+}
+
+fn set_area(s: &mut UiScript, zone: &str, sub: &str, pvp: &str, faction: &str) {
+    s.set_zone_texts(area(zone, sub, pvp, faction));
 }
 
 fn harness() -> UiScript {
@@ -56,7 +65,7 @@ fn new_area_splashes_zone_pvp_and_subzone_then_fades_out() {
     assert!(!visible(&s, "ZoneTextFrame"));
     assert!(!visible(&s, "SubZoneTextFrame"));
 
-    set_area(&s, "Westfall", "", "friendly", "Alliance");
+    set_area(&mut s, "Westfall", "", "friendly", "Alliance");
     s.fire_event("ZONE_CHANGED_NEW_AREA", vec![]);
     assert!(visible(&s, "ZoneTextFrame"), "zone splash shows");
     assert_eq!(text_of(&s, "ZoneTextString"), "Westfall");
@@ -78,12 +87,12 @@ fn new_area_splashes_zone_pvp_and_subzone_then_fades_out() {
 fn subzone_hop_shows_only_the_small_line() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = harness();
-    set_area(&s, "Elwynn Forest", "", "friendly", "Alliance");
+    set_area(&mut s, "Elwynn Forest", "", "friendly", "Alliance");
     s.fire_event("ZONE_CHANGED_NEW_AREA", vec![]);
     s.tick(4.0); // let the login splash finish
     assert!(!visible(&s, "ZoneTextFrame"));
 
-    set_area(&s, "Elwynn Forest", "Goldshire", "friendly", "Alliance");
+    set_area(&mut s, "Elwynn Forest", "Goldshire", "friendly", "Alliance");
     s.fire_event("ZONE_CHANGED", vec![]);
     assert!(visible(&s, "SubZoneTextFrame"), "subzone splash shows");
     assert!(
@@ -97,12 +106,18 @@ fn subzone_hop_shows_only_the_small_line() {
 fn plain_zone_changed_recaches_silently_so_new_area_wont_resplash() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = harness();
-    set_area(&s, "Elwynn Forest", "", "friendly", "Alliance");
+    set_area(&mut s, "Elwynn Forest", "", "friendly", "Alliance");
     s.fire_event("ZONE_CHANGED_NEW_AREA", vec![]);
     s.tick(4.0);
     assert!(!visible(&s, "ZoneTextFrame"));
 
-    set_area(&s, "Westfall", "The Jansen Stead", "friendly", "Alliance");
+    set_area(
+        &mut s,
+        "Westfall",
+        "The Jansen Stead",
+        "friendly",
+        "Alliance",
+    );
     s.fire_event("ZONE_CHANGED", vec![]);
     assert!(
         !visible(&s, "ZoneTextFrame"),
@@ -114,7 +129,7 @@ fn plain_zone_changed_recaches_silently_so_new_area_wont_resplash() {
         "NEW_AREA on the already-cached zone text must not re-splash"
     );
 
-    set_area(&s, "Duskwood", "", "contested", "");
+    set_area(&mut s, "Duskwood", "", "contested", "");
     s.fire_event("ZONE_CHANGED_NEW_AREA", vec![]);
     assert!(visible(&s, "ZoneTextFrame"));
     assert_eq!(text_of(&s, "PVPInfoTextString"), "Contested Territory");
@@ -127,7 +142,7 @@ fn abbey_grounds_subzone_hop_shows_no_territory_line() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = harness();
     set_area(
-        &s,
+        &mut s,
         "Elwynn Forest",
         "Northshire Valley",
         "friendly",
@@ -137,7 +152,7 @@ fn abbey_grounds_subzone_hop_shows_no_territory_line() {
     s.tick(4.0); // both splashes fully faded
 
     set_area(
-        &s,
+        &mut s,
         "Elwynn Forest",
         "Northshire Abbey",
         "friendly",
@@ -159,7 +174,7 @@ fn abbey_interior_shows_the_room_in_the_small_line_alone() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = harness();
     set_area(
-        &s,
+        &mut s,
         "Elwynn Forest",
         "Northshire Abbey",
         "friendly",
@@ -168,7 +183,7 @@ fn abbey_interior_shows_the_room_in_the_small_line_alone() {
     s.fire_event("ZONE_CHANGED_NEW_AREA", vec![]);
     s.tick(4.0);
 
-    set_area(&s, "Elwynn Forest", "Main Hall", "friendly", "Alliance");
+    set_area(&mut s, "Elwynn Forest", "Main Hall", "friendly", "Alliance");
     s.fire_event("ZONE_CHANGED_INDOORS", vec![]);
     assert!(
         !visible(&s, "ZoneTextFrame"),
@@ -187,11 +202,11 @@ fn abbey_interior_shows_the_room_in_the_small_line_alone() {
 fn inn_entry_splashes_the_inn_name_with_territory_line() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = harness();
-    set_area(&s, "Elwynn Forest", "Goldshire", "friendly", "Alliance");
+    set_area(&mut s, "Elwynn Forest", "Goldshire", "friendly", "Alliance");
     s.fire_event("ZONE_CHANGED_NEW_AREA", vec![]);
     s.tick(4.0);
 
-    set_area(&s, "Lion's Pride Inn", "", "friendly", "Alliance");
+    set_area(&mut s, "Lion's Pride Inn", "", "friendly", "Alliance");
     s.fire_event("ZONE_CHANGED_INDOORS", vec![]);
     assert!(visible(&s, "ZoneTextFrame"), "the inn name splashes big");
     assert_eq!(text_of(&s, "ZoneTextString"), "Lion's Pride Inn");
@@ -207,19 +222,19 @@ fn indoor_exit_returns_the_subzone_line_alone() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = harness();
     set_area(
-        &s,
+        &mut s,
         "Elwynn Forest",
         "Northshire Abbey",
         "friendly",
         "Alliance",
     );
     s.fire_event("ZONE_CHANGED_NEW_AREA", vec![]);
-    s.run("__benilla_subzone_name = 'Main Hall'").unwrap();
+    set_area(&mut s, "Elwynn Forest", "Main Hall", "friendly", "Alliance");
     s.fire_event("ZONE_CHANGED_INDOORS", vec![]);
     s.tick(4.0); // everything faded
 
     set_area(
-        &s,
+        &mut s,
         "Elwynn Forest",
         "Northshire Abbey",
         "friendly",
@@ -238,11 +253,17 @@ fn indoor_exit_returns_the_subzone_line_alone() {
 fn room_to_room_hop_splashes_the_room_name_alone() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = harness();
-    set_area(&s, "Elwynn Forest", "Main Hall", "friendly", "Alliance");
+    set_area(&mut s, "Elwynn Forest", "Main Hall", "friendly", "Alliance");
     s.fire_event("ZONE_CHANGED_INDOORS", vec![]);
     s.tick(4.0);
 
-    set_area(&s, "Elwynn Forest", "Library Wing", "friendly", "Alliance");
+    set_area(
+        &mut s,
+        "Elwynn Forest",
+        "Library Wing",
+        "friendly",
+        "Alliance",
+    );
     s.fire_event("ZONE_CHANGED_INDOORS", vec![]);
     assert!(
         !visible(&s, "ZoneTextFrame"),
@@ -257,15 +278,14 @@ fn room_to_room_hop_splashes_the_room_name_alone() {
 fn arena_pit_shows_the_ffa_line() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = harness();
-    set_area(&s, "Stranglethorn Vale", "", "contested", "");
+    set_area(&mut s, "Stranglethorn Vale", "", "contested", "");
     s.fire_event("ZONE_CHANGED_NEW_AREA", vec![]);
     s.tick(4.0);
 
-    s.run(
-        "__benilla_subzone_name = 'Gurubashi Arena'; __benilla_zone_text = 'Gurubashi Arena'; \
-         __benilla_pvp_arena = true",
-    )
-    .unwrap();
+    s.set_zone_texts(ZoneTexts {
+        is_arena: true,
+        ..area("Stranglethorn Vale", "Gurubashi Arena", "contested", "")
+    });
     s.fire_event("ZONE_CHANGED", vec![]);
     assert!(visible(&s, "SubZoneTextFrame"));
     assert_eq!(text_of(&s, "SubZoneTextString"), "Gurubashi Arena");
@@ -278,7 +298,7 @@ fn subzone_seat_hangs_under_the_territory_line_on_new_area() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = harness();
     set_area(
-        &s,
+        &mut s,
         "Stormwind City",
         "Valley of Heroes",
         "friendly",

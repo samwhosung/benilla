@@ -164,7 +164,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetPlayerBuffTimeLeft",
         lua.create_function(|lua, index: Value| {
             let pos = buff_index_arg(lua, index, "Usage: GetPlayerBuffTimeLeft(buffIndex)")?;
-            let now: f64 = lua.globals().get("__benilla_now").unwrap_or(0.0);
+            let now = crate::script::clock::now(lua);
             // `max(0, …)` covers both zero cases: an expired aura, and a permanent one, expiry 0.
             Ok(player_buff_record(lua, pos).map_or(0.0, |a| (a.expiration_time - now).max(0.0)))
         })?,

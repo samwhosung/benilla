@@ -506,7 +506,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.globals().set(
         "GetContainerItemCooldown",
         lua.create_function(|lua, (bag, slot): (i64, u32)| {
-            let now: f64 = lua.globals().get("__benilla_now").unwrap_or(0.0);
+            let now = crate::script::clock::now(lua);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(match model.container_cooldowns.get(&(bag, slot)) {
                 Some(&(start, duration, enabled)) if start + duration > now || !enabled => {

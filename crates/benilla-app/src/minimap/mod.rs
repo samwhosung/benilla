@@ -842,14 +842,14 @@ fn feed_minimap_player_facing(
     script.set_minimap_player_facing(player.facing().rem_euclid(std::f32::consts::TAU));
 }
 
-/// Push the game clock into `GetGameTime()`'s backing globals when the minute ticks, the API's own
-/// resolution. Before the first `SMSG_LOGIN_SETTIMESPEED` they hold 0:00.
+/// Push the game clock `GetGameTime()` answers when the minute ticks, the API's own resolution.
+/// Before the first `SMSG_LOGIN_SETTIMESPEED` it reads 0:00.
 fn feed_game_time(
     script: Option<bevy::ecs::system::NonSendMut<benilla_ui::script::UiScript>>,
     time: Res<crate::net::ServerTime>,
     mut last: Local<crate::ui_script::VmMemo<Option<u32>>>,
 ) {
-    let Some(script) = script else { return };
+    let Some(mut script) = script else { return };
     let last = last.get(&script);
     let Some(gt) = time.0 else { return };
     let minute = gt.minute_of_day();
@@ -857,13 +857,7 @@ fn feed_game_time(
         return;
     }
     *last = Some(minute);
-    let globals = script.lua().globals();
-    let pushed = globals
-        .set("__benilla_game_hour", minute / 60)
-        .and_then(|()| globals.set("__benilla_game_minute", minute % 60));
-    if let Err(e) = pushed {
-        warn!("minimap: game-time globals: {e}");
-    }
+    script.set_game_time(minute / 60, minute % 60);
 }
 
 /// The app half of the `<Minimap>` widget. The zone label feed is `crate::area`'s: the reference

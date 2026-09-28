@@ -1360,9 +1360,7 @@ fn seed_cooldown_filmstrip(
 ) {
     // The clock first: `set_container` stores each triple against it, and
     // `GetContainerItemCooldown`'s expiry guard reads it.
-    if let Err(e) = script.run(&format!("__benilla_now = {COOLDOWN_NOW_S}")) {
-        warn!("capture: ui-cooldown failed to pin the session clock: {e}");
-    }
+    script.set_now(COOLDOWN_NOW_S);
     const DISP_STONE: u32 = 6418;
     let texture = icons
         .and_then(|i| i.catalog.get(DISP_STONE))

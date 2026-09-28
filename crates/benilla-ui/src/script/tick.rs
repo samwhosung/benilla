@@ -1,5 +1,5 @@
 //! The host runtime loop: event fan-out ([`UiScript::fire_event`]), the per-frame advance
-//! ([`UiScript::tick`]) and the `GetTime()` clock ([`UiScript::now`]).
+//! ([`UiScript::tick`]), which advances the `GetTime()` clock ([`UiScript::now`]).
 
 use mlua::Lua;
 
@@ -70,35 +70,11 @@ pub(crate) fn fire_event_into(lua: &Lua, event: &str, args: Vec<ScriptValue>) {
 }
 
 impl super::UiScript {
-    /// The current `GetTime()` value in seconds; the app stamps absolute expiries with it, such as
-    /// an aura's `expirationTime`.
-    pub fn now(&self) -> f64 {
-        self.lua.globals().get("__benilla_now").unwrap_or(0.0)
-    }
-
-    /// Start this VM's `GetTime()` clock at `secs`, so a rebuilt VM (a relog, a `ReloadUI`) keeps
-    /// the process's clock. The reference's `GetTime` (`0x515ea0`, through `0x42c010` and
-    /// `0x42b790`) is `GetTickCount` scaled by 0.001, an OS clock that never restarts, which stock
-    /// `Cooldown.lua` relies on (`start > 0`). Set once, at construction; after that only
-    /// [`Self::tick`] moves it.
-    pub fn set_now(&mut self, secs: f64) {
-        if let Err(e) = self.lua.globals().set("__benilla_now", secs) {
-            self.push_error(e);
-        }
-    }
-
     /// Advance a frame: the `GetTime()` clock, the edit boxes and queued events, then
     /// `OnUpdate(self, elapsed)` on every visible frame that has one (`0x704f10`), then the
     /// engine's own fades, model panes and hover.
     pub fn tick(&mut self, elapsed: f32) {
-        let clock = {
-            let g = self.lua.globals();
-            let now: f64 = g.get("__benilla_now").unwrap_or(0.0);
-            g.set("__benilla_now", now + f64::from(elapsed))
-        };
-        if let Err(e) = clock {
-            self.push_error(e);
-        }
+        self.model_mut().now += f64::from(elapsed);
         // The focused edit box's caret blink (`0x77a790`, on the client's frame tick).
         editbox::tick_blink(&self.lua, elapsed);
         // Then `0x77a790`'s drain of the `OnTextChanged`s an edit only marked (`0x77a7a1`), before

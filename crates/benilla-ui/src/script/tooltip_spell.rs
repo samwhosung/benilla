@@ -540,10 +540,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     m.set(
         "SetPlayerBuff",
         lua.create_function(|lua, (this, index): (Table, i64)| {
-            let now = {
-                let g = lua.globals();
-                g.get::<f64>("__benilla_now").unwrap_or(0.0)
-            };
+            let now = crate::script::clock::now(lua);
             let (spell_id, name, remaining_ms) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
                 let hit = usize::try_from(index)

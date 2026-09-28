@@ -52,6 +52,7 @@ pub(crate) mod addon;
 mod addon_enable;
 pub mod addon_gate;
 mod client;
+mod clock;
 mod cvars;
 mod dressup;
 mod duel;
@@ -140,6 +141,7 @@ mod who_sort;
 mod worldmap;
 mod worldstate;
 mod worn_display;
+mod zone_text;
 
 pub use action::{ActionSlot, ActionState, ActionUse};
 pub use addon::AddOnInfo;
@@ -270,6 +272,7 @@ pub use worldmap::{
 };
 pub use worldstate::WorldStateUiView;
 pub use worn_display::WornDisplay;
+pub use zone_text::ZoneTexts;
 
 use mlua::Lua;
 
@@ -292,9 +295,9 @@ const REG_TEXTURE_METHODS: &str = "__benilla_texture_methods";
 const REG_TEXTURE_META: &str = "__benilla_texture_meta";
 const REG_FONTSTRING_METHODS: &str = "__benilla_fontstring_methods";
 const REG_FONTSTRING_META: &str = "__benilla_fontstring_meta";
-/// The stdlib's default error handler, kept by identity for
-/// [`UiScript::dispatch_script_errors_to_handler`] to skip; stored at [`stdlib::install`].
-const REG_DEFAULT_ERRORHANDLER: &str = "__benilla_default_errorhandler";
+/// The error handler `seterrorhandler` holds, the reference's registry reference `[0x8722cc]`;
+/// unset until one is given, as the reference's starts at -1.
+const REG_ERRORHANDLER: &str = "__benilla_errorhandler";
 
 /// Names on both region leaves, each leaf registering its own copy (Texture's `SetAlpha`
 /// `0x79b580`, FontString's `0x79cb70`), so they are not on the Region map and must not be hoisted
@@ -1178,31 +1181,20 @@ impl UiScript {
             .push(msg.to_string());
     }
 
-    /// Hand each queued script error to the Lua error handler, as the reference invokes the one
-    /// `seterrorhandler`/`geterrorhandler` (`0x702900`/`0x702950`) hold on a caught error;
-    /// FrameXML installs `_ERRORMESSAGE`, the ScriptErrors dialog (`BasicControls.xml:16`). The
-    /// stdlib default is skipped, as it already reported into [`UiScript::errors`]; a handler that
-    /// raises is recorded on the host channel only and stops the batch, so the path cannot recurse.
+    /// Hand each queued script error to the Lua error handler, as the reference's catch closure
+    /// (`0x703b40`) calls the one `seterrorhandler` (`0x702900`) holds, read from its slot and not
+    /// through the `geterrorhandler` global; FrameXML installs `_ERRORMESSAGE`, the ScriptErrors
+    /// dialog (`BasicControls.xml:16`). With none installed the error stays on the host channel,
+    /// [`UiScript::errors`], alone; a handler that raises is recorded there only and stops the
+    /// batch, so the path cannot recurse.
     pub fn dispatch_script_errors_to_handler(&mut self) {
         let pending = std::mem::take(&mut self.model_mut().pending_error_dispatch);
         if pending.is_empty() {
             return;
         }
-        let handler: Option<mlua::Function> = self
-            .lua
-            .globals()
-            .get::<mlua::Function>("geterrorhandler")
-            .ok()
-            .and_then(|g| g.call::<mlua::Function>(()).ok());
-        let Some(handler) = handler else { return };
-        if let Ok(default) = self
-            .lua
-            .named_registry_value::<mlua::Function>(REG_DEFAULT_ERRORHANDLER)
-        {
-            if handler == default {
-                return;
-            }
-        }
+        let Some(handler) = stdlib::error_handler(&self.lua) else {
+            return;
+        };
         for msg in pending {
             if let Err(e) = handler.call::<()>(msg) {
                 self.model_mut()

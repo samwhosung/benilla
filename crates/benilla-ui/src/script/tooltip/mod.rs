@@ -352,7 +352,7 @@ fn full_alpha(model: &mut Model, h: FrameHandle) {
 
 /// The engine's `GetTime` clock, which [`super::UiScript::tick`] advances.
 fn now(lua: &Lua) -> f64 {
-    lua.globals().get("__benilla_now").unwrap_or(0.0)
+    crate::script::clock::now(lua)
 }
 
 /// Shows or hides through the arena and fires the visibility events.

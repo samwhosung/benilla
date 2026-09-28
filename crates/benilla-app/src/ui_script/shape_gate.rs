@@ -218,8 +218,10 @@ const BASELIB_PROBES: &[(&str, &str)] = &[
     ("rawequal", "1, 1"),
     ("rawget", "{}, 1"),
     ("rawset", "{}, 1, 1"),
-    // These write, but namespaced or self-restoring, so every later probe sees the same VM.
-    ("seterrorhandler", "geterrorhandler()"),
+    // These write, but namespaced or inert, so every later probe sees the same VM. The bare VM's
+    // handler slot is empty and takes a function alone (`0x702900`), so the probe hands it a no-op,
+    // which nothing here dispatches to.
+    ("seterrorhandler", "function() end"),
     ("setglobal", "\"BenillaShapeGateProbe\", 1"),
     ("setmetatable", "{}, nil"),
     ("tonumber", "\"1\""),

@@ -4,10 +4,10 @@
 //!   `loadfile`, `load`, `module`, `newproxy` and `debug` removed), the reference's `debugstack`,
 //!   and a text-only `loadstring`.
 //! - [`install`]: the 1.12 bare globals (string, table and math aliases, the `debug*` family, the
-//!   error-handler pair, the clock and zone getters), `time` and `date`, and a `string.format`
-//!   that accepts positional `%N$` specs as the 1.12 client's does, rewriting them into a
-//!   sequential format. Mixing positional and sequential specs raises, as in the reference,
-//!   whose single argument cursor a positional spec desyncs.
+//!   error-handler pair), `time` and `date`, the clock and zone getters ([`super::clock`],
+//!   [`super::zone_text`]), and a `string.format` that accepts positional `%N$` specs as the 1.12
+//!   client's does, rewriting them into a sequential format. Mixing positional and sequential
+//!   specs raises, as in the reference, whose single argument cursor a positional spec desyncs.
 
 use mlua::{Lua, Value, Variadic};
 
@@ -91,32 +91,45 @@ pub(super) fn sandbox(lua: &Lua) -> mlua::Result<()> {
 
 /// Install the stdlib layer: the bare globals, `time`/`date` and the positional `format`.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
-    // The default `geterrorhandler()` reports into the host's script-error channel; the
-    // `__benilla_` prefix marks host plumbing, not a 1.12 global.
-    lua.globals().set(
-        "__benilla_script_error",
-        lua.create_function(|lua, msg: mlua::Value| {
-            let text = match &msg {
-                mlua::Value::String(s) => s.to_string_lossy(),
-                other => format!("{other:?}"),
-            };
-            lua.app_data_mut::<super::Model>()
-                .expect("model app_data")
-                .errors
-                .push(text);
-            Ok(())
-        })?,
-    )?;
-
+    install_error_handler(lua)?;
     install_time(lua)?;
+    // Before the Lua layer, whose `debugprofile*` pair keeps its own `GetTime`.
+    super::clock::install(lua)?;
+    super::zone_text::install(lua)?;
     lua.load(WOW_STDLIB)
         .set_name("=[benilla wow stdlib]")
         .set_mode(mlua::ChunkMode::Text)
         .exec()?;
-    // Kept by identity: dispatch skips the default handler, whose channel already has the
-    // message, and fires only one that FrameXML or an addon set.
-    let default: mlua::Function = lua.load("return geterrorhandler()").eval()?;
-    lua.set_named_registry_value(super::REG_DEFAULT_ERRORHANDLER, default)?;
+    Ok(())
+}
+
+/// The handler `seterrorhandler` holds, `None` until one is given.
+pub(super) fn error_handler(lua: &Lua) -> Option<mlua::Function> {
+    lua.named_registry_value::<Option<mlua::Function>>(super::REG_ERRORHANDLER)
+        .ok()
+        .flatten()
+}
+
+/// `seterrorhandler(f)` / `geterrorhandler()`, engine globals in 1.12 (`0x702900`, `0x702950`)
+/// over one registry reference, `[0x8722cc]`. It starts at -1 (`0x7039e0`), so `geterrorhandler()`
+/// answers nil until something is set; in the running client FrameXML sets `_ERRORMESSAGE` first
+/// (`BasicControls.xml:16`), so every addon finds that. `seterrorhandler` takes a function alone
+/// and raises its `Usage:` on anything else, nil included, so the slot can never be cleared.
+fn install_error_handler(lua: &Lua) -> mlua::Result<()> {
+    let g = lua.globals();
+    g.set(
+        "seterrorhandler",
+        lua.create_function(|lua, f: Value| match f {
+            Value::Function(f) => lua.set_named_registry_value(super::REG_ERRORHANDLER, f),
+            _ => Err(mlua::Error::RuntimeError(
+                "Usage: seterrorhandler(errfunc)".into(),
+            )),
+        })?,
+    )?;
+    g.set(
+        "geterrorhandler",
+        lua.create_function(|lua, ()| Ok(error_handler(lua)))?,
+    )?;
     Ok(())
 }
 
@@ -205,8 +218,10 @@ ldexp = math.ldexp
 -- `debugprofilestart`/`debugprofilestop` are the two that are REAL (RDTSC via `0x4293d0`): start
 -- latches, stop answers the elapsed milliseconds since it. Modelled on `GetTime`'s own clock —
 -- the same monotonic session seconds the tick advances — because benilla has no cycle counter and
--- an addon uses these to time its own work, which milliseconds answer honestly.
+-- an addon uses these to time its own work, which milliseconds answer honestly. The clock is
+-- captured, so an addon that replaces the `GetTime` global cannot bend it.
 do
+    local GetTime = GetTime
     local function noop() end
     debuginfo = noop
     debugload = noop
@@ -220,71 +235,12 @@ do
     function debugprofilestop() return (GetTime() - profileStart) * 1000 end
 end
 
--- ── the error handler ──────────────────────────────────────────────────────────────────────────
--- `seterrorhandler(f)` / `geterrorhandler()` are ENGINE globals in 1.12 (the captured `_G` says
--- so), and `_ERRORMESSAGE` — the default handler they start out holding — is FrameXML's. That
--- split is why the pair lives here and the default is a plain function rather than a Rust binding:
--- our own transcribed UI can replace it exactly as the reference's `UIErrorsFrame` does.
---
--- The idiom this exists for is `geterrorhandler()(msg)` — an addon's pcall wrapper reporting a
--- caught error the way the client would. Without the pair that line is `attempt to call a nil
--- value` INSIDE an error path, which turns a recoverable addon fault into a dead addon.
-do
-    local handler = function(msg) __benilla_script_error(msg) end
-    function seterrorhandler(f) handler = f end
-    function geterrorhandler() return handler end
-end
-
 -- ── _G accessors (getglobal/setglobal: _G[name] get/set) ───────────────────────────────
 function getglobal(name) return _G[name] end
 function setglobal(name, value) _G[name] = value end
 
 -- ── GetLocale: benilla ships/reads enUS data only (the 5875 MPQs + Spell.dbc enUS column) ──────
 function GetLocale() return "enUS" end
-
--- ── GetTime: the FrameXML session clock (seconds, monotonic, arbitrary epoch — like the real
--- client's uptime-based GetTime). `__benilla_now` is advanced by `UiScript::tick` in the same
--- call that fires OnUpdate, so `GetTime()` deltas and accumulated `elapsed` agree. Reference
--- FrameXML (CastingBarFrame & co.) anchors cast windows on it.
-__benilla_now = 0.0
-function GetTime() return __benilla_now end
-
--- ── The zone-text family.
--- The app pushes the host globals on an area change (the same shape as
--- GetTime) and fires MINIMAP_ZONE_CHANGED / the ZONE_CHANGED family; these getters just read the
--- cached slots, like the real bindings (0x48a0a0/c0/e0/100 read BSS caches). GetZoneText = the
--- zone name, replaced by the WMO interior's name indoors; GetRealZoneText = the WMO-immune zone
--- name; GetSubZoneText = the leaf subzone, "" when the leaf IS the zone (and indoors);
--- GetMinimapZoneText = subzone-else-zone. GetZonePVPInfo returns (pvpType or nil, factionName or
--- nil, isArena) — pvpType is friendly/hostile/contested, never "arena".
-__benilla_zone_text = ""
-function GetMinimapZoneText() return __benilla_zone_text end
-__benilla_zone_name = ""
-__benilla_real_zone_name = ""
-__benilla_subzone_name = ""
-__benilla_pvp_type = ""
-__benilla_pvp_faction = ""
-__benilla_pvp_arena = false
-function GetZoneText() return __benilla_zone_name end
-function GetRealZoneText() return __benilla_real_zone_name end
-function GetSubZoneText() return __benilla_subzone_name end
-function GetZonePVPInfo()
-    local t, f = __benilla_pvp_type, __benilla_pvp_faction
-    if t == "" then t = nil end
-    if f == "" then f = nil end
-    -- isArena is 1/nil, never a Lua boolean: the reference's third slot is `(nil) | (number)`
-    -- like every other 1.12 predicate.
-    return t, f, __benilla_pvp_arena and 1 or nil
-end
-
--- ── GetGameTime: the server's in-game clock (hour, minute) — the reference reads the
--- SMSG_LOGIN_SETTIMESPEED-seeded clock the client advances by its timescale. The app pushes the
--- host globals when the game minute ticks (`crate::minimap::feed_game_time` — same shape as the
--- zone-text family); minute resolution is the API's own (the binding returns no seconds).
--- 0:00 until the first time packet lands.
-__benilla_game_hour = 0
-__benilla_game_minute = 0
-function GetGameTime() return __benilla_game_hour, __benilla_game_minute end
 
 -- ── NOT here: wipe / tostringall / strsplit / strjoin / strconcat / strtrim ────────────────────
 -- Six 2.0+ names benilla used to define. 1.12 has none of them (absent from

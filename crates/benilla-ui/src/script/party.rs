@@ -715,7 +715,7 @@ pub(crate) struct ReadyCheckState {
 
 /// `GetTime()`'s clock, the session seconds `UiScript::tick` advances.
 fn clock(lua: &Lua) -> f64 {
-    lua.globals().get("__benilla_now").unwrap_or(0.0)
+    crate::script::clock::now(lua)
 }
 
 /// The timeout worker `0x4bb310`.
@@ -765,7 +765,7 @@ fn ready_check_force_close(lua: &Lua, model: &mut Model) {
     if model.ready_check.deadline.is_none() {
         return;
     }
-    let now = clock(lua);
+    let now = model.now;
     model.ready_check.deadline = Some(now - 1.0);
     ready_check_tick(lua, model, now);
 }
@@ -1460,21 +1460,24 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         let party = raid_we_lead(&s);
         s.set_party(party);
-        s.run("__benilla_now = 100 DoReadyCheck()").unwrap();
+        s.set_now(100.0);
+        s.run("DoReadyCheck()").unwrap();
         assert_eq!(s.take_party_requests(), vec![PartyRequest::ReadyCheckStart]);
 
-        s.run("__benilla_now = 129.9 CheckReadyCheckTime()")
-            .unwrap();
+        s.set_now(129.9);
+        s.run("CheckReadyCheckTime()").unwrap();
         assert!(
             s.take_ready_check_lines().is_empty(),
             "not before the deadline"
         );
-        s.run("__benilla_now = 130 CheckReadyCheckTime()").unwrap();
+        s.set_now(130.0);
+        s.run("CheckReadyCheckTime()").unwrap();
         assert_eq!(
             s.take_ready_check_lines(),
             vec!["The following players are AFK: Alice, Bob".to_string()]
         );
-        s.run("__benilla_now = 200 CheckReadyCheckTime()").unwrap();
+        s.set_now(200.0);
+        s.run("CheckReadyCheckTime()").unwrap();
         assert!(
             s.take_ready_check_lines().is_empty(),
             "disarmed by the summary"
@@ -1487,7 +1490,8 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         let party = raid_we_lead(&s);
         s.set_party(party);
-        s.run("__benilla_now = 100 DoReadyCheck()").unwrap();
+        s.set_now(100.0);
+        s.run("DoReadyCheck()").unwrap();
         s.ready_check_answered(0xA11CE, true);
         assert!(
             s.take_ready_check_lines().is_empty(),
@@ -1499,7 +1503,8 @@ mod tests {
             vec!["No players are AFK".to_string()],
             "nobody left pending ⇒ the summary now, not at 130"
         );
-        s.run("__benilla_now = 130 CheckReadyCheckTime()").unwrap();
+        s.set_now(130.0);
+        s.run("CheckReadyCheckTime()").unwrap();
         assert!(s.take_ready_check_lines().is_empty());
     }
 
@@ -1511,7 +1516,8 @@ mod tests {
         s.run(r#"RAID_MEMBER_NOT_READY = "%s is not ready""#)
             .unwrap();
         s.set_party(party);
-        s.run("__benilla_now = 100 DoReadyCheck()").unwrap();
+        s.set_now(100.0);
+        s.run("DoReadyCheck()").unwrap();
         s.ready_check_answered(0xDEAD, false);
         assert!(
             s.take_ready_check_lines().is_empty(),
@@ -1522,7 +1528,8 @@ mod tests {
             s.take_ready_check_lines(),
             vec!["Alice is not ready".to_string()]
         );
-        s.run("__benilla_now = 130 CheckReadyCheckTime()").unwrap();
+        s.set_now(130.0);
+        s.run("CheckReadyCheckTime()").unwrap();
         assert_eq!(
             s.take_ready_check_lines(),
             vec!["The following players are AFK: Bob".to_string()],
@@ -1541,7 +1548,8 @@ mod tests {
             .iter_mut()
             .for_each(|m| m.online = m.guid != 0xB0B); // Bob is offline
         s.set_party(party);
-        s.run("__benilla_now = 100 DoReadyCheck()").unwrap();
+        s.set_now(100.0);
+        s.run("DoReadyCheck()").unwrap();
         s.ready_check_answered(0xA11CE, true);
         assert_eq!(
             s.take_ready_check_lines(),
@@ -1557,9 +1565,10 @@ mod tests {
         s.run(r#"READY_CHECK_NO_AFK = "No players are AFK""#)
             .unwrap();
         s.set_party(two_member_party()); // Alice leads; we are 0x5E1F
-        s.run("__benilla_now = 100").unwrap();
+        s.set_now(100.0);
         s.ready_check_request(false);
-        s.run("__benilla_now = 130 CheckReadyCheckTime()").unwrap();
+        s.set_now(130.0);
+        s.run("CheckReadyCheckTime()").unwrap();
         assert!(s.take_ready_check_lines().is_empty());
         assert_eq!(s.model_mut().ready_check.deadline, Some(130.0));
     }
@@ -1569,7 +1578,8 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         let party = raid_we_lead(&s);
         s.set_party(party.clone());
-        s.run("__benilla_now = 100 DoReadyCheck()").unwrap();
+        s.set_now(100.0);
+        s.run("DoReadyCheck()").unwrap();
         s.ready_check_answered(0xA11CE, true);
         let mut without_bob = party;
         without_bob.raid.retain(|m| m.guid != 0xB0B);
@@ -1588,7 +1598,8 @@ mod tests {
         let mut party = raid_we_lead(&s);
         party.raid.clear();
         s.set_party(party);
-        s.run("__benilla_now = 100 DoReadyCheck()").unwrap();
+        s.set_now(100.0);
+        s.run("DoReadyCheck()").unwrap();
         s.ready_check_request(true);
         assert_eq!(
             s.take_ready_check_lines(),
@@ -1602,9 +1613,10 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         let party = raid_we_lead(&s);
         s.set_party(party);
-        s.run("RAID_MEMBERS_AFK = nil __benilla_now = 100 DoReadyCheck()")
-            .unwrap();
-        s.run("__benilla_now = 130 CheckReadyCheckTime()").unwrap();
+        s.set_now(100.0);
+        s.run("RAID_MEMBERS_AFK = nil DoReadyCheck()").unwrap();
+        s.set_now(130.0);
+        s.run("CheckReadyCheckTime()").unwrap();
         assert_eq!(s.take_ready_check_lines(), vec![String::new()]);
     }
 }

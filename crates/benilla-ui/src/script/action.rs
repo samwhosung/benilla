@@ -332,7 +332,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetActionCooldown",
         lua.create_function(|lua, action: u32| {
-            let now: f64 = lua.globals().get("__benilla_now").unwrap_or(0.0);
+            let now = crate::script::clock::now(lua);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(
                 match model.action_states.get(&action).and_then(|s| s.cooldown) {

@@ -19,6 +19,7 @@ mod frame_api;
 mod generic_for;
 mod gm_ticket;
 mod handler_prof;
+mod host_state;
 mod input;
 mod keyboard;
 mod layout_gate;
@@ -156,7 +157,7 @@ fn request_time_played_queues_an_ask_and_the_answer_arrives_as_an_event() {
 
 /// `seterrorhandler`'s contract: an engine-caught script error goes to the chosen handler.
 #[test]
-fn a_chosen_error_handler_hears_engine_caught_errors_and_the_default_does_not_duplicate() {
+fn a_chosen_error_handler_hears_engine_caught_errors_and_none_leaves_the_host_channel_alone() {
     let mut s = crate::script::UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     s.run(
@@ -166,14 +167,14 @@ fn a_chosen_error_handler_hears_engine_caught_errors_and_the_default_does_not_du
     )
     .unwrap();
 
-    // With the stdlib default handler, recognised by identity, the dispatch adds nothing.
+    // With no handler set, as before FrameXML sets one, the dispatch adds nothing.
     s.fire_event("ERROR_PROBE", vec![]);
     s.dispatch_script_errors_to_handler();
     let errors = s.take_errors();
     assert_eq!(
         errors.iter().filter(|e| e.contains("boom")).count(),
         1,
-        "one error, once — the default handler must not double-report: {errors:?}"
+        "one error, once: {errors:?}"
     );
 
     // A chosen handler gets the message, and the host channel still records it.
