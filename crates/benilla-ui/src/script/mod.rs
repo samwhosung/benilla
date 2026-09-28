@@ -144,7 +144,7 @@ pub use addon::AddOnInfo;
 pub use addon_enable::EnableHash;
 pub use addon_message::{AddonDistribution, AddonSend};
 pub use auction::{
-    AuctionBid, AuctionCategory, AuctionItemRow, AuctionListState, AuctionQuery,
+    AuctionBid, AuctionCategory, AuctionHighBidder, AuctionItemRow, AuctionListState, AuctionQuery,
     AuctionStartRequest, AuctionState, AuctionSubCategory, BIDDER, LIST, OWNER, SORT_KEYS,
 };
 pub use aura::{AuraState, TrackingState};

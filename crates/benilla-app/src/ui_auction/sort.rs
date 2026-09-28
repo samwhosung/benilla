@@ -69,7 +69,7 @@ fn compare_by(key: &str, a: &AuctionRow, b: &AuctionRow) -> Ordering {
         // Highest first, which also sinks a 0 (no buyout) to the bottom.
         "buyout" => b.buyout.cmp(&a.buyout),
         // Our own bids first; the reference also ranks another bidder's above no bid.
-        "status" => b.high_bidder.cmp(&a.high_bidder),
+        "status" => b.player_holds_bid.cmp(&a.player_holds_bid),
         "name" => name_of(a).cmp(name_of(b)),
         "seller" => owner_of(a).cmp(owner_of(b)),
         _ => Ordering::Equal,
@@ -179,13 +179,13 @@ mod tests {
         let mut rows = vec![
             AuctionRow {
                 quality: Some(1),
-                high_bidder: false,
+                player_holds_bid: false,
                 name: Some("Common".into()),
                 ..Default::default()
             },
             AuctionRow {
                 quality: Some(4),
-                high_bidder: true,
+                player_holds_bid: true,
                 name: Some("Epic".into()),
                 ..Default::default()
             },

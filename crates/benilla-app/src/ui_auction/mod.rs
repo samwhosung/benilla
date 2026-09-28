@@ -11,8 +11,8 @@ use bevy::prelude::*;
 
 use benilla_protocol::messages::{auction_filter, AuctionListEntry};
 use benilla_ui::script::{
-    AuctionCategory, AuctionItemRow, AuctionListState, AuctionState, AuctionSubCategory, UiScript,
-    BIDDER, LIST, OWNER,
+    AuctionCategory, AuctionHighBidder, AuctionItemRow, AuctionListState, AuctionState,
+    AuctionSubCategory, UiScript, BIDDER, LIST, OWNER,
 };
 
 use crate::entities::ItemDisplays;
@@ -87,8 +87,10 @@ pub(crate) struct AuctionRow {
     pub(crate) current_bid: u32,
     /// The time-left bucket, `1..=4`.
     pub(crate) time_left: u32,
-    /// Whether the player holds the high bid.
-    pub(crate) high_bidder: bool,
+    /// Whether the player holds the high bid; the status sort's key.
+    pub(crate) player_holds_bid: bool,
+    /// `GetAuctionItemInfo`'s eleventh value, per [`high_bidder`].
+    pub(crate) high_bidder: AuctionHighBidder,
     pub(crate) owner: Option<String>,
     pub(crate) link: Option<String>,
 }
@@ -301,9 +303,41 @@ fn time_left_bucket(ms: u32) -> u32 {
     }
 }
 
-/// One wire entry as a display row, through the ask-once template and name caches; a `None`
-/// fills in when its answer lands. The link carries the row's enchant, property and suffix.
+/// `GetAuctionItemInfo`'s `highBidder` for a row of `list` (`0x4cf12a`–`0x4cf1a0`). On an
+/// `"owner"` row the player owns (`0x4cf131`–`0x4cf142` compare its owner guid with the player's),
+/// the bidder guid (vmangos `AuctionHouseMgr.cpp:840`) goes through the name cache: nil with no
+/// bid (`0x4cf150`) or until the asked name lands (`0x4cf16e`), whose arrival re-fires the owned
+/// list's update (`0x4cf2b0`), here the feed's diff. Any other row: `1` if the player holds the
+/// bid, else nil (`0x4cf17b`–`0x4cf1a0`).
+fn high_bidder(
+    list: usize,
+    entry: &AuctionListEntry,
+    self_guid: Option<u64>,
+    names: &NameCache,
+    commands: &NetCommands,
+) -> AuctionHighBidder {
+    let owned = list == OWNER && self_guid.is_some_and(|g| g == entry.owner_guid);
+    if owned {
+        if entry.bidder_guid == 0 {
+            return AuctionHighBidder::Nil;
+        }
+        return names
+            .resolve(entry.bidder_guid, commands)
+            .map_or(AuctionHighBidder::Nil, |n| {
+                AuctionHighBidder::Name(n.to_string())
+            });
+    }
+    if self_guid.is_some_and(|g| g == entry.bidder_guid) {
+        AuctionHighBidder::Player
+    } else {
+        AuctionHighBidder::Nil
+    }
+}
+
+/// One wire entry of `list` as a display row, through the ask-once template and name caches; a
+/// `None` fills in when its answer lands. The link carries the row's enchant, property and suffix.
 fn resolve_row(
+    list: usize,
     entry: &AuctionListEntry,
     self_guid: Option<u64>,
     items: &Items,
@@ -343,7 +377,8 @@ fn resolve_row(
         buyout: entry.buyout,
         current_bid: entry.current_bid,
         time_left: time_left_bucket(entry.time_left_ms),
-        high_bidder: self_guid.is_some_and(|g| g == entry.bidder_guid),
+        player_holds_bid: self_guid.is_some_and(|g| g == entry.bidder_guid),
+        high_bidder: high_bidder(list, entry, self_guid, names, commands),
         owner: names
             .resolve(entry.owner_guid, commands)
             .map(str::to_string),
@@ -390,7 +425,9 @@ pub(crate) fn categories(
         .collect()
 }
 
+/// List `list`'s rows in display order.
 fn rows_for(
+    list: usize,
     slot: &AuctionListSlot,
     self_guid: Option<u64>,
     items: &Items,
@@ -402,7 +439,7 @@ fn rows_for(
     let mut rows: Vec<AuctionRow> = slot
         .entries
         .iter()
-        .map(|e| resolve_row(e, self_guid, items, icons, names, commands, rolls))
+        .map(|e| resolve_row(list, e, self_guid, items, icons, names, commands, rolls))
         .collect();
     slot.sort.apply(&mut rows);
     rows
@@ -422,7 +459,7 @@ fn to_script_row(r: &AuctionRow) -> AuctionItemRow {
         min_increment: r.min_increment,
         buyout_price: r.buyout,
         bid_amount: r.current_bid,
-        high_bidder: r.high_bidder,
+        high_bidder: r.high_bidder.clone(),
         owner: r.owner.clone(),
         time_left: r.time_left,
         link: r.link.clone(),
@@ -512,6 +549,7 @@ fn feed_auction(
         let lists = [LIST, BIDDER, OWNER].map(|i| {
             let slot = &auction.lists[i];
             let rows = rows_for(
+                i,
                 slot,
                 self_guid,
                 &items,
@@ -685,6 +723,7 @@ fn drain_auction(
     if !bids.is_empty() || !cancels.is_empty() {
         for bid in bids {
             let rows = rows_for(
+                bid.list,
                 &auction.lists[bid.list],
                 self_guid,
                 &items,
@@ -703,6 +742,7 @@ fn drain_auction(
         }
         for index in cancels {
             let rows = rows_for(
+                OWNER,
                 &auction.lists[OWNER],
                 self_guid,
                 &items,
@@ -898,6 +938,203 @@ mod tests {
         // A closed session forgets it rather than clearing a slot it does not own.
         open.clear();
         assert!(!open.sell_slot_taken);
+    }
+
+    const ME: u64 = 0x77;
+    const BIDDER_GUID: u64 = 0x99;
+
+    /// A wire row owned by `owner` with `bidder` on it (0 for no bid).
+    fn entry(owner: u64, bidder: u64) -> AuctionListEntry {
+        AuctionListEntry {
+            auction_id: 1,
+            item_entry: 2589,
+            perm_enchant: 0,
+            random_property_id: 0,
+            suffix_factor: 0,
+            count: 1,
+            spell_charges: 0,
+            owner_guid: owner,
+            start_bid: 1000,
+            min_increment: if bidder == 0 { 0 } else { 125 },
+            buyout: 0,
+            time_left_ms: 60_000,
+            bidder_guid: bidder,
+            current_bid: if bidder == 0 { 0 } else { 2500 },
+        }
+    }
+
+    fn name_queries(rx: &crossbeam_channel::Receiver<ClientCommand>) -> Vec<u64> {
+        rx.try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::NameQuery { guid } => Some(guid),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The player's own auction names its bidder from the cache (`0x4cf144`–`0x4cf174`).
+    #[test]
+    fn an_owned_row_names_its_bidder() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let mut names = NameCache::default();
+        names.insert_player(BIDDER_GUID, "Bidder".into(), None);
+        assert_eq!(
+            high_bidder(OWNER, &entry(ME, BIDDER_GUID), Some(ME), &names, &commands),
+            AuctionHighBidder::Name("Bidder".into())
+        );
+        assert!(name_queries(&rx).is_empty(), "a cached name asks nothing");
+    }
+
+    /// An unknown bidder is nil and asked for; no bid is nil and asks nothing (`0x4cf150`).
+    #[test]
+    fn an_owned_row_is_nil_until_the_name_lands_and_with_no_bid() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let mut names = NameCache::default();
+        assert_eq!(
+            high_bidder(OWNER, &entry(ME, BIDDER_GUID), Some(ME), &names, &commands),
+            AuctionHighBidder::Nil
+        );
+        assert_eq!(
+            name_queries(&rx),
+            vec![BIDDER_GUID],
+            "the name goes out once"
+        );
+
+        assert_eq!(
+            high_bidder(OWNER, &entry(ME, 0), Some(ME), &names, &commands),
+            AuctionHighBidder::Nil
+        );
+        assert!(name_queries(&rx).is_empty(), "no bidder, no query");
+
+        names.insert_player(BIDDER_GUID, "Bidder".into(), None);
+        assert_eq!(
+            high_bidder(OWNER, &entry(ME, BIDDER_GUID), Some(ME), &names, &commands),
+            AuctionHighBidder::Name("Bidder".into())
+        );
+    }
+
+    /// Browse, Bids and an owner row the player does not own answer `1` or nil, never a name,
+    /// even with the bidder's name cached (`0x4cf17b`–`0x4cf1a0`).
+    #[test]
+    fn other_rows_answer_one_or_nil() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let mut names = NameCache::default();
+        names.insert_player(BIDDER_GUID, "Bidder".into(), None);
+        const SELLER: u64 = 0x55;
+        for list in [LIST, BIDDER] {
+            assert_eq!(
+                high_bidder(list, &entry(SELLER, ME), Some(ME), &names, &commands),
+                AuctionHighBidder::Player
+            );
+            assert_eq!(
+                high_bidder(
+                    list,
+                    &entry(SELLER, BIDDER_GUID),
+                    Some(ME),
+                    &names,
+                    &commands
+                ),
+                AuctionHighBidder::Nil
+            );
+            assert_eq!(
+                high_bidder(list, &entry(SELLER, 0), Some(ME), &names, &commands),
+                AuctionHighBidder::Nil
+            );
+            // The player's own auction, seen on a browse page, is not named either.
+            assert_eq!(
+                high_bidder(list, &entry(ME, BIDDER_GUID), Some(ME), &names, &commands),
+                AuctionHighBidder::Nil
+            );
+        }
+        // The owner list gates on the row's owner, not the list alone (`0x4cf131`).
+        assert_eq!(
+            high_bidder(OWNER, &entry(SELLER, ME), Some(ME), &names, &commands),
+            AuctionHighBidder::Player
+        );
+        assert_eq!(
+            high_bidder(
+                OWNER,
+                &entry(SELLER, BIDDER_GUID),
+                Some(ME),
+                &names,
+                &commands
+            ),
+            AuctionHighBidder::Nil
+        );
+        assert!(name_queries(&rx).is_empty());
+    }
+
+    /// A bidder's name landing after the owned list re-fires `AUCTION_OWNED_LIST_UPDATE` and the
+    /// row then answers it (the `0x4cf2b0` callback fires event `0x1a9`).
+    #[test]
+    fn a_landed_bidder_name_refires_the_owned_list() {
+        let mut app = App::new();
+        app.init_resource::<AuctionOpen>()
+            .init_resource::<Items>()
+            .init_resource::<NameCache>()
+            .init_resource::<Time>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.insert_resource(NetCommands(tx));
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_player(ME, "Seller".into(), None);
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                r#"
+                SEEN = {}
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("AUCTION_OWNED_LIST_UPDATE")
+                f:SetScript("OnEvent", function() table.insert(SEEN, event) end)
+            "#,
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        app.world_mut().spawn((SelfPlayer, crate::net::Guid(ME)));
+        {
+            let mut open = app.world_mut().resource_mut::<AuctionOpen>();
+            open.open(0x1234, 1);
+            open.set_list(OWNER, vec![entry(ME, BIDDER_GUID)], 1);
+        }
+
+        // One registered system, so its `VmMemo` locals persist from frame to frame.
+        let feed = app.world_mut().register_system(feed_auction);
+        let step = |app: &mut App| -> (Vec<String>, Option<String>) {
+            app.world_mut().run_system(feed).unwrap();
+            let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+            s.resolve();
+            let seen = s.eval::<Vec<String>>("return SEEN").unwrap();
+            s.run("SEEN = {}").unwrap();
+            let bidder = s
+                .eval::<Option<String>>(
+                    r#"local _,_,_,_,_,_,_,_,_,_,h = GetAuctionItemInfo("owner", 1) return h"#,
+                )
+                .unwrap();
+            (seen, bidder)
+        };
+
+        // The window opens with the page; the bidder is unknown, so nil and asked for.
+        let (_, bidder) = step(&mut app);
+        assert_eq!(bidder, None);
+        assert_eq!(name_queries(&rx), vec![BIDDER_GUID]);
+
+        let (seen, bidder) = step(&mut app);
+        assert!(seen.is_empty(), "nothing new, nothing fired: {seen:?}");
+        assert_eq!(bidder, None);
+
+        app.world_mut().resource_mut::<NameCache>().insert_player(
+            BIDDER_GUID,
+            "Bidder".into(),
+            None,
+        );
+        let (seen, bidder) = step(&mut app);
+        assert_eq!(bidder.as_deref(), Some("Bidder"));
+        assert_eq!(seen, vec!["AUCTION_OWNED_LIST_UPDATE".to_string()]);
     }
 
     #[test]

@@ -2,8 +2,8 @@
 //! `AuctionState` and the app's own show and list events, and asserts what it paints and queues.
 
 use benilla_ui::script::{
-    AuctionCategory, AuctionItemRow, AuctionListState, AuctionState, AuctionSubCategory, UiScript,
-    UnitState, BIDDER, LIST, OWNER,
+    AuctionCategory, AuctionHighBidder, AuctionItemRow, AuctionListState, AuctionState,
+    AuctionSubCategory, UiScript, UnitState, BIDDER, LIST, OWNER,
 };
 
 mod common;
@@ -78,7 +78,7 @@ fn row(name: &str, min_bid: u32, buyout: u32, bid: u32, owner: &str) -> AuctionI
         min_increment: if bid > 0 { 100 } else { 0 },
         buyout_price: buyout,
         bid_amount: bid,
-        high_bidder: false,
+        high_bidder: AuctionHighBidder::Nil,
         owner: Some(owner.to_string()),
         time_left: 4,
         link: Some("|cffffffff|Hitem:2589:0:0:0|h[Linen Cloth]|h|r".into()),
@@ -277,6 +277,49 @@ fn the_auctions_tab_cannot_repaint_before_it_has_been_shown() {
         s.take_errors().is_empty(),
         "and now the owned list may announce itself"
     );
+}
+
+/// The Auctions tab's High Bidder column prints `GetAuctionItemInfo`'s eleventh value, and
+/// `NO_BIDS` in red only for nil (`AuctionFrameAuctions_Update`): a bid-on auction names its
+/// bidder, as the reference answers on the owner list (`0x4cf144`–`0x4cf174`).
+#[test]
+fn the_auctions_tab_names_the_high_bidder() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut s = UiScript::new().unwrap();
+    load_ui_with_classes(&mut s);
+    seat_player(&mut s, 500_000);
+    let mut bid_on = row("Linen Cloth", 1000, 5000, 2500, "Buyer");
+    bid_on.auction_id = 1;
+    bid_on.high_bidder = AuctionHighBidder::Name("Bidder".into());
+    let mut unbid = row("Wool Cloth", 1000, 0, 0, "Buyer");
+    unbid.auction_id = 2;
+    let mut snapshot = state(Vec::new());
+    snapshot.lists[OWNER] = AuctionListState {
+        rows: vec![bid_on, unbid],
+        total: 2,
+        sort: Vec::new(),
+    };
+    s.set_auction(Some(snapshot));
+
+    s.fire_event("AUCTION_HOUSE_SHOW", vec![]);
+    s.run("AuctionFrameTab_OnClick(3)").unwrap();
+    s.fire_event("AUCTION_OWNED_LIST_UPDATE", vec![]);
+
+    assert_eq!(
+        s.eval::<String>("return AuctionsButton1HighBidder:GetText()")
+            .unwrap(),
+        "Bidder",
+        "a bid-on auction names its bidder, not No Bids"
+    );
+    assert!(
+        s.eval::<bool>(
+            "return AuctionsButton2HighBidder:GetText() \
+             == RED_FONT_COLOR_CODE..NO_BIDS..FONT_COLOR_CODE_CLOSE"
+        )
+        .unwrap(),
+        "an unbid auction reads No Bids in red"
+    );
+    assert!(s.errors().is_empty(), "clean repaint: {:?}", s.errors());
 }
 
 /// Each pane assigns `page` only in its `OnShow`. `AuctionFrameBid` alone is declared

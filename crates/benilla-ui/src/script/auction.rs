@@ -59,14 +59,28 @@ pub struct AuctionItemRow {
     pub buyout_price: u32,
     /// The current high bid; 0 before any bid.
     pub bid_amount: u32,
-    /// Whether the player holds the high bid: a flag, not a name.
-    pub high_bidder: bool,
+    /// `GetAuctionItemInfo`'s eleventh value, which the app picks per list and row.
+    pub high_bidder: AuctionHighBidder,
     /// The seller's name; `None` while the name query is in flight.
     pub owner: Option<String>,
     /// The time-left bucket, `1..=4` (Short, Medium, Long, Very Long); 0 when not known yet.
     pub time_left: u32,
     /// The full item link: auction rows carry entry, enchant, random property and suffix.
     pub link: Option<String>,
+}
+
+/// `GetAuctionItemInfo`'s `highBidder` (`0x4cf12a`–`0x4cf1a0`): on an `"owner"` row the player
+/// owns, the bidder's name from the name cache; on any other row, `1` when the player holds the
+/// bid. Nil otherwise, which the stock Auctions tab prints as `NO_BIDS`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum AuctionHighBidder {
+    /// No bid, another player's bid on a row the player does not own, or a name not arrived.
+    #[default]
+    Nil,
+    /// The player holds the bid on a row it does not own: `1`.
+    Player,
+    /// The bidder on the player's own auction, by name.
+    Name(String),
 }
 
 /// One of the three lists: the batch the server sent, the pre-cap match count and its sort stack.
@@ -303,7 +317,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetAuctionItemInfo(type, index) → twelve values; `highBidder` is a flag, not the seller.
+    // GetAuctionItemInfo(type, index) → twelve values; `highBidder` is a name, `1` or nil.
     g.set(
         "GetAuctionItemInfo",
         lua.create_function(|lua, (kind, index): (String, usize)| {
@@ -354,7 +368,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Value::Integer(i64::from(r.min_increment)),
                 Value::Integer(i64::from(r.buyout_price)),
                 Value::Integer(i64::from(r.bid_amount)),
-                flag(r.high_bidder),
+                match &r.high_bidder {
+                    AuctionHighBidder::Nil => Value::Nil,
+                    AuctionHighBidder::Player => flag(true),
+                    AuctionHighBidder::Name(n) => Value::String(lua.create_string(n)?),
+                },
                 opt_str(&r.owner)?,
             ]))
         })?,
@@ -916,6 +934,30 @@ mod tests {
         // The link answers no values on a miss, not a nil.
         let n = s.arity(r#"GetAuctionItemLink("list", 99)"#).unwrap();
         assert_eq!(n, 0, "zero values, not one nil");
+    }
+
+    /// The eleventh value is the name, `1` or nil as the app picked it (`0x4cf12a`–`0x4cf1a0`).
+    #[test]
+    fn high_bidder_answers_a_name_a_one_or_nil() {
+        let mut s = UiScript::new().unwrap();
+        let mut state = page(&[1, 2, 3]);
+        state.lists[LIST].rows[0].high_bidder = AuctionHighBidder::Name("Bidder".into());
+        state.lists[LIST].rows[1].high_bidder = AuctionHighBidder::Player;
+        s.set_auction(Some(state));
+        let eleventh = |i: usize| {
+            s.eval::<Value>(&format!(
+                r#"local _,_,_,_,_,_,_,_,_,_,h = GetAuctionItemInfo("list", {i}) return h"#
+            ))
+            .unwrap()
+        };
+        assert_eq!(
+            eleventh(1)
+                .as_string()
+                .map(|v| v.to_str().unwrap().to_string()),
+            Some("Bidder".into())
+        );
+        assert_eq!(eleventh(2), Value::Integer(1));
+        assert_eq!(eleventh(3), Value::Nil);
     }
 
     /// A 9-copper stack at 5% over 24 h deposits 0 here, where vmangos charges 5.
