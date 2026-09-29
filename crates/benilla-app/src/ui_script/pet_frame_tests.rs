@@ -70,7 +70,7 @@ fn pet(name: &str, health: u32, power: u32, max_power: u32, power_type: u8) -> U
         (POWER1 + slot, power),
         (MAXPOWER1 + slot, max_power),
     ]));
-    crate::ui_unit::snapshot(&store, 0, Some(name.into()), 0, None)
+    crate::ui_unit::snapshot(&store, 0, Some(name.into()), 0, None, Default::default())
 }
 
 /// Every texture path drawn this frame, with its vertex tint.

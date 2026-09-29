@@ -11,6 +11,7 @@ use benilla_ui::script::{
 };
 use bevy::prelude::*;
 
+use crate::creature_type::CreatureTypeSources;
 use crate::names::NameCache;
 use crate::net::{
     ClientCommand, FieldChanged, FieldEdges, Guid, GuidIndex, NetCommands, ObjectStore, SelfPlayer,
@@ -93,8 +94,9 @@ pub(crate) const GROUP_MEMBER_SUBGROUP: u8 = 0x07;
 /// Push the roster and the party unit snapshots into the VM and fire the party events on their
 /// edges. A member's unit state is their live descriptor when streamed, else their roster record.
 pub(super) fn feed_party(
-    // `ChrClasses.dbc` field 16, `UnitHasRelicSlot`'s input; without it no class has a relic slot.
-    classes: Option<Res<crate::chr_classes::ChrClassTable>>,
+    // `ChrClasses.dbc` field 16, `UnitHasRelicSlot`'s input, and the form table the creature type
+    // reads.
+    tables: crate::ui_unit::SnapshotTables,
     script: Option<NonSendMut<UiScript>>,
     group: Res<GroupState>,
     index: Res<GuidIndex>,
@@ -126,13 +128,14 @@ pub(super) fn feed_party(
             line,
         ));
     }
-    let chr = classes.as_deref().map(|t| &t.0);
+    let chr = tables.classes();
+    let types = tables.types(&names);
     // The gate also opens on a despawn, which `Changed` misses. Solo, it almost always stays shut.
     let names_moved = fed.names_generation.moved(names.generation());
     let area_moved = fed.area.moved(here.area().map_or(u64::MAX, u64::from));
     let group_changed = group.is_changed();
     let index_changed = index.is_changed();
-    let look = pets::Lookup::new(&index, &stores, &names);
+    let look = pets::Lookup::new(&index, &stores, &names, types);
     // Only the stores the merged view reads: a crowd's other stores change every frame. The
     // members' pets are the group's too, `partypetN` and `raidpetN` reading their descriptors.
     let stores_changed = self_q
@@ -294,6 +297,7 @@ pub(super) fn feed_party(
                 &group,
                 own_group.clone(),
                 chr,
+                types,
             )
         });
         if fed.units[i] != snap {
@@ -364,7 +368,7 @@ pub(super) fn feed_party(
             if Some(*guid) == self_guid {
                 let (_, _, store) = self_pair?;
                 let name = names.peek(*guid).map(str::to_string);
-                let mut s = crate::ui_unit::snapshot(store, *guid, name, 0, chr);
+                let mut s = crate::ui_unit::snapshot(store, *guid, name, 0, chr, types);
                 s.is_player = true;
                 s.raid_target = group.raid_target_index(*guid);
                 s.faction_group = own_group.clone();
@@ -380,6 +384,7 @@ pub(super) fn feed_party(
                     &group,
                     own_group.clone(),
                     chr,
+                    types,
                 ))
             }
         });
@@ -715,9 +720,13 @@ fn member_unit_state(
     // `ChrClasses.dbc`, for the relic slot alone: only the live leg has a class byte to key it
     // by, so an unstreamed paladin reads no relic slot.
     classes: Option<&benilla_formats::ChrClasses>,
+    // The creature type resolves from the live descriptor alone, so an unstreamed member has none.
+    types: CreatureTypeSources<'_>,
 ) -> UnitState {
     let mut s = match store {
-        Some(store) => crate::ui_unit::snapshot(store, m.guid, Some(m.name.clone()), 0, classes),
+        Some(store) => {
+            crate::ui_unit::snapshot(store, m.guid, Some(m.name.clone()), 0, classes, types)
+        }
         // Unstreamed: the roster record, snapshotted from the descriptor at despawn (`0x5f0880`),
         // seated at 1/1 for a member never seen (`0x4e82d0`) and patched by the wire. The
         // reference's getters read the descriptor, then the party record (`0x496400`), then the
@@ -1414,7 +1423,15 @@ mod tests {
             max_power: Some(1000),
             ..PartyMemberStatsInfo::default()
         };
-        let s = member_unit_state(&m, Some(&record), None, &GroupState::default(), None, None);
+        let s = member_unit_state(
+            &m,
+            Some(&record),
+            None,
+            &GroupState::default(),
+            None,
+            None,
+            Default::default(),
+        );
         assert_eq!(
             (s.health, s.max_health),
             (2400, 3000),
@@ -1429,7 +1446,15 @@ mod tests {
         assert!(s.exists && s.is_player && s.is_connected);
 
         // No record at all (a real roster always seats one): an existing player with empty bars.
-        let bare = member_unit_state(&m, None, None, &GroupState::default(), None, None);
+        let bare = member_unit_state(
+            &m,
+            None,
+            None,
+            &GroupState::default(),
+            None,
+            None,
+            Default::default(),
+        );
         assert_eq!((bare.health, bare.max_health, bare.power), (0, 0, 0));
         assert!(bare.exists);
     }
@@ -1449,7 +1474,15 @@ mod tests {
             status: Some(member_status::ONLINE | member_status::DEAD),
             ..PartyMemberStatsInfo::default()
         };
-        let s = member_unit_state(&m, Some(&dead), None, &GroupState::default(), None, None);
+        let s = member_unit_state(
+            &m,
+            Some(&dead),
+            None,
+            &GroupState::default(),
+            None,
+            None,
+            Default::default(),
+        );
         assert!(
             s.dead,
             "the record says dead even though the roster echo does not"
@@ -1460,7 +1493,15 @@ mod tests {
             status: Some(member_status::ONLINE | member_status::GHOST),
             ..PartyMemberStatsInfo::default()
         };
-        let s = member_unit_state(&m, Some(&ghost), None, &GroupState::default(), None, None);
+        let s = member_unit_state(
+            &m,
+            Some(&ghost),
+            None,
+            &GroupState::default(),
+            None,
+            None,
+            Default::default(),
+        );
         assert!(s.ghost);
         assert!(!s.dead, "a released ghost is not `dead` — only a ghost");
 
@@ -1476,6 +1517,7 @@ mod tests {
             &GroupState::default(),
             None,
             None,
+            Default::default(),
         );
         assert!(s.dead);
     }

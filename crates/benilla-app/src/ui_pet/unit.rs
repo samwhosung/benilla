@@ -5,6 +5,7 @@ use bevy::prelude::*;
 
 use benilla_ui::script::{ScriptValue, UiScript, UnitState};
 
+use crate::creature_type::CreatureTypeSources;
 use crate::names::NameCache;
 use crate::net::{NetCommands, ObjectStore};
 use crate::ui_script::gate;
@@ -43,6 +44,8 @@ pub(super) fn feed_pet_unit(
     mut removed_stores: RemovedComponents<ObjectStore>,
     mut names: ResMut<NameCache>,
     commands: Res<NetCommands>,
+    // The form table, the creature-type resolver's first stage.
+    spells: Option<Res<crate::ui_action::Spells>>,
     mut memory: Local<crate::ui_script::VmMemo<PetUnitMemory>>,
 ) {
     let Some(mut script) = script else {
@@ -81,7 +84,8 @@ pub(super) fn feed_pet_unit(
                 .resolve_unit(pet_guid, Some(store), &commands)
                 .map(str::to_string);
             // No `ChrClasses.dbc`: the reference reads a class only for TYPEMASK_PLAYER.
-            snapshot(store, pet_guid, name, 0, None)
+            let types = CreatureTypeSources::of_resources(&names, spells.as_deref());
+            snapshot(store, pet_guid, name, 0, None, types)
         });
 
     let dirty = match (&fresh, &memory.pushed) {

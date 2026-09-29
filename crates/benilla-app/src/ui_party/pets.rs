@@ -13,6 +13,7 @@ use bevy::prelude::*;
 
 use benilla_ui::script::{ScriptValue, UiScript, UnitState};
 
+use crate::creature_type::CreatureTypeSources;
 use crate::names::NameCache;
 use crate::net::{FieldEdges, GuidIndex, NetCommands, ObjectStore};
 use crate::ui_script::gate;
@@ -44,12 +45,14 @@ impl std::ops::Deref for Names<'_> {
     }
 }
 
-/// What the pets' snapshots read: the object manager and the name cache.
+/// What the pets' snapshots read: the object manager, the name cache and the creature-type
+/// resolver's sources.
 pub(super) struct Lookup<'a, 'w, 's, 'q> {
     index: &'a GuidIndex,
     stores: &'a Query<'w, 's, &'q ObjectStore>,
     names: &'a NameCache,
     commands: &'a NetCommands,
+    types: CreatureTypeSources<'a>,
 }
 
 impl<'a, 'w, 's, 'q> Lookup<'a, 'w, 's, 'q> {
@@ -57,12 +60,14 @@ impl<'a, 'w, 's, 'q> Lookup<'a, 'w, 's, 'q> {
         index: &'a GuidIndex,
         stores: &'a Query<'w, 's, &'q ObjectStore>,
         names: &'a Names,
+        types: CreatureTypeSources<'a>,
     ) -> Self {
         Self {
             index,
             stores,
             names: &names.cache,
             commands: &names.commands,
+            types,
         }
     }
 
@@ -125,7 +130,7 @@ pub(super) fn member_pet(
                 .names
                 .resolve_unit(guid, Some(store), look.commands)
                 .map(str::to_string);
-            crate::ui_unit::snapshot(store, guid, name, 0, None)
+            crate::ui_unit::snapshot(store, guid, name, 0, None, look.types)
         }
         None => record_state(
             group,
@@ -735,5 +740,138 @@ mod tests {
         assert_eq!(flag(&mut app, "PartyMemberFrame1PetFrame:IsShown()"), None);
         let errors = app.world().non_send_resource::<UiScript>().errors();
         assert!(errors.is_empty(), "script errors: {errors:?}");
+    }
+
+    /// The resolver's inputs for the creature-type tests: Cat Form's row, and entry 69's template
+    /// a Demon (an imp), so a pet's type is told from the race's Humanoid.
+    fn seed_creature_types(app: &mut App) {
+        let mut spells = crate::ui_action::Spells::empty_for_tests();
+        spells.forms.insert(
+            CAT_FORM,
+            benilla_formats::ShapeshiftForm {
+                creature_type: 1,
+                ..Default::default()
+            },
+        );
+        app.insert_resource(spells);
+        app.world_mut().resource_mut::<NameCache>().insert_creature(
+            69,
+            Some(crate::names::CreatureRecord {
+                name: "Imp".into(),
+                subname: None,
+                creature_type: 3,
+                pet_family: 0,
+                rank: 0,
+                type_flags: 0,
+                civilian: false,
+                racial_leader: false,
+                display_id: 0,
+            }),
+        );
+    }
+
+    /// `UNIT_FIELD_BYTES_0` and `_1`, `OBJECT_FIELD_ENTRY`, a Night Elf and Cat Form.
+    const BYTES_0: u16 = 36;
+    const BYTES_1: u16 = 138;
+    const OBJECT_FIELD_ENTRY: u16 = 3;
+    const NIGHT_ELF: u32 = 4;
+    const CAT_FORM: u32 = 1;
+
+    /// `UnitCreatureType` on the party's tokens goes through the one resolver (`0x605570`): a
+    /// held member in Cat Form is a Beast and an unshifted one a Humanoid by race, a held pet
+    /// answers its template's type, and a member the object manager does not hold answers nil,
+    /// as the token resolver finds no object for it (`0x51a2b1`).
+    #[test]
+    fn party_tokens_read_the_creature_type_through_the_resolver() {
+        let mut app = app();
+        seed_creature_types(&mut app);
+        party(&mut app, 2, true);
+        let fields = |form: u32| {
+            [
+                &[(BYTES_0, NIGHT_ELF), (BYTES_1, form << 16)][..],
+                &summon(pet(1)),
+            ]
+            .concat()
+        };
+        let druid = stream(&mut app, member(1), &fields(CAT_FORM));
+        stream(&mut app, pet(1), &[(OBJECT_FIELD_ENTRY, 69)]);
+        frame(&mut app);
+
+        let creature_type =
+            |app: &mut App, token: &str| text(app, &format!("UnitCreatureType('{token}')"));
+        assert_eq!(creature_type(&mut app, "party1").as_deref(), Some("Beast"));
+        assert_eq!(
+            creature_type(&mut app, "partypet1").as_deref(),
+            Some("Demon"),
+            "the pet's template"
+        );
+        assert_eq!(
+            creature_type(&mut app, "party2"),
+            None,
+            "a member the object manager does not hold"
+        );
+
+        set_fields(&mut app, druid, &[(BYTES_1, 0)]);
+        frame(&mut app);
+        assert_eq!(
+            creature_type(&mut app, "party1").as_deref(),
+            Some("Humanoid"),
+            "out of form: the race's type"
+        );
+    }
+
+    /// The raid rows read the same resolver, our own row off our descriptor.
+    #[test]
+    fn raid_tokens_read_the_creature_type_through_the_resolver() {
+        let mut app = app();
+        seed_creature_types(&mut app);
+        party(&mut app, 1, true);
+        app.world_mut().resource_mut::<GroupState>().apply_list(
+            super::super::GROUPTYPE_RAID,
+            0,
+            vec![GroupMemberEntry {
+                name: "M1".into(),
+                guid: member(1),
+                status: member_status::ONLINE,
+                flags: 0,
+            }],
+            ME,
+            None,
+            Some(ME),
+        );
+        let me = app
+            .world_mut()
+            .spawn((
+                crate::net::SelfPlayer,
+                Guid(ME),
+                store(&[(BYTES_0, NIGHT_ELF), (BYTES_1, CAT_FORM << 16)]),
+            ))
+            .id();
+        stream(
+            &mut app,
+            member(1),
+            &[(BYTES_0, NIGHT_ELF), (BYTES_1, CAT_FORM << 16)],
+        );
+        frame(&mut app);
+
+        let creature_type =
+            |app: &mut App, token: &str| text(app, &format!("UnitCreatureType('{token}')"));
+        assert_eq!(
+            creature_type(&mut app, "raid1").as_deref(),
+            Some("Beast"),
+            "our own row"
+        );
+        assert_eq!(
+            creature_type(&mut app, "raid2").as_deref(),
+            Some("Beast"),
+            "a held member's row"
+        );
+        set_fields(&mut app, me, &[(BYTES_1, 0)]);
+        frame(&mut app);
+        assert_eq!(
+            creature_type(&mut app, "raid1").as_deref(),
+            Some("Humanoid"),
+            "out of form: our race's type"
+        );
     }
 }

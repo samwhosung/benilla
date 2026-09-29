@@ -896,42 +896,48 @@ fn set_desaturated_reports_shader_support_and_does_not_raise() {
         .unwrap();
 }
 
-/// `UnitCreatureType` (`0x51a280`, stages 2 and 3 of three built): a creature's cached record,
-/// else (`0x605570`) the race's `ChrRaces.dbc` column 9, which is 7, "Humanoid", for every race.
+/// `UnitCreatureType` (`0x51a280`) answers the type the snapshot carries, which the app resolved
+/// as `0x605570` does (form, else template, else race), for a creature and a player alike: nil
+/// for a token that names no unit or a snapshot with no type (`0x51a2b8`, `0x51a2c3`).
 #[test]
-fn unit_creature_type_answers_the_record_then_falls_back_to_humanoid() {
+fn unit_creature_type_answers_the_snapshots_resolved_type() {
     let mut s = script();
-    s.set_unit(
-        "target",
+    let typed = |word: Option<&str>, is_player: bool| {
         Some(crate::script::UnitState {
             exists: true,
-            creature_type_name: Some("Beast".into()),
+            is_player,
+            creature_type_name: word.map(str::to_string),
             ..Default::default()
-        }),
-    );
-    s.set_unit(
-        "player",
-        Some(crate::script::UnitState {
-            exists: true,
-            is_player: true,
-            ..Default::default()
-        }),
-    );
+        })
+    };
+    s.set_unit("target", typed(Some("Beast"), false));
+    // A shapeshifted player carries the form's type, an unshifted one the race's.
+    s.set_unit("player", typed(Some("Beast"), true));
+    s.set_unit("party1", typed(Some("Humanoid"), true));
+    // A player with no descriptor behind the snapshot carries none, and answers nil.
+    s.set_unit("party2", typed(None, true));
 
-    assert_eq!(
-        s.eval::<String>(r#"return UnitCreatureType("target")"#)
-            .unwrap(),
-        "Beast"
-    );
-    assert_eq!(
-        s.eval::<String>(r#"return UnitCreatureType("player")"#)
-            .unwrap(),
-        "Humanoid"
-    );
-    // An unresolved token is nil; a missing argument fails `lua_isstring` and raises.
-    assert!(s
-        .eval::<bool>(r#"return UnitCreatureType("party4") == nil"#)
-        .unwrap());
+    for (token, word) in [
+        ("target", "Beast"),
+        ("player", "Beast"),
+        ("party1", "Humanoid"),
+    ] {
+        assert_eq!(
+            s.eval::<String>(&format!(r#"return UnitCreatureType("{token}")"#))
+                .unwrap(),
+            word,
+            "{token}"
+        );
+    }
+    // An unresolved token and a typeless snapshot are nil; a missing argument fails
+    // `lua_isstring` and raises.
+    for token in ["party2", "party4"] {
+        assert!(
+            s.eval::<bool>(&format!(r#"return UnitCreatureType("{token}") == nil"#))
+                .unwrap(),
+            "{token}"
+        );
+    }
     let err = s
         .run("UnitCreatureType()")
         .expect_err("a missing arg must raise");

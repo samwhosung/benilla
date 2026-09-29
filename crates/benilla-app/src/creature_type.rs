@@ -10,6 +10,7 @@ use benilla_formats::ShapeshiftForm;
 
 use crate::names::NameCache;
 use crate::net::ObjectStore;
+use crate::ui_action::Spells;
 
 /// What the resolver reads beside the unit's own fields: the creature template cache and the
 /// form table. A source that is absent resolves nothing at its stage.
@@ -19,7 +20,16 @@ pub(crate) struct CreatureTypeSources<'a> {
     pub(crate) forms: Option<&'a HashMap<u32, ShapeshiftForm>>,
 }
 
-impl CreatureTypeSources<'_> {
+impl<'a> CreatureTypeSources<'a> {
+    /// The sources a system holds as resources: the name cache and, once `Spell.dbc` has loaded,
+    /// the form table it carries.
+    pub(crate) fn of_resources(names: &'a NameCache, spells: Option<&'a Spells>) -> Self {
+        Self {
+            names: Some(names),
+            forms: spells.map(|s| &s.forms),
+        }
+    }
+
     /// The unit's creature type, 0 for none. The template stage answers whatever the record
     /// holds, 0 included, and is keyed by `OBJECT_FIELD_ENTRY` as the reference's cache is.
     pub(crate) fn of(&self, store: &ObjectStore) -> u32 {
@@ -101,8 +111,8 @@ mod tests {
             creature_type,
             ..Default::default()
         };
-        // Cat form is a Beast; a warrior stance carries type 0.
-        HashMap::from([(1, row(1)), (17, row(0))])
+        // Cat form is a Beast; a warrior stance carries type 0, and Tree of Life -1.
+        HashMap::from([(1, row(1)), (2, row(-1)), (17, row(0))])
     }
 
     /// The three stages in the reference's order: form above 0, then the template, then the
@@ -118,8 +128,9 @@ mod tests {
         // A cat-form player is a Beast; unshifted, a Humanoid by race.
         assert_eq!(sources.of(&store(0, 1, 1)), 1);
         assert_eq!(sources.of(&store(0, 1, 0)), 7);
-        // A stance row of type 0 falls through to the race, not to a fixed answer.
+        // A row of type 0 or -1 falls through to the race, not to a fixed answer.
         assert_eq!(sources.of(&store(0, 5, 17)), 7);
+        assert_eq!(sources.of(&store(0, 5, 2)), 7);
         // A cached creature is its template's type; the form still wins over it.
         assert_eq!(sources.of(&store(69, 0, 0)), 1);
         let humanoid = names_with(69, 7);
@@ -157,6 +168,68 @@ mod tests {
         assert_eq!(sources.of(&store(0, 10, 0)), 0, "race 10 has no row");
         assert_eq!(CreatureTypeSources::default().of(&store(0, 1, 1)), 7);
         assert_eq!(CreatureTypeSources::default().of(&store(69, 0, 1)), 0);
+    }
+
+    /// The shipped `SpellShapeshiftForm.dbc` through the resolver: the forms of type 1 name a
+    /// Beast, and every other row falls through to the race.
+    #[test]
+    fn the_shipped_forms_name_a_beast_or_fall_through_to_the_race() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let forms =
+            benilla_formats::load_shapeshift_forms(&mut chain).expect("SpellShapeshiftForm.dbc");
+        let sources = CreatureTypeSources {
+            names: None,
+            forms: Some(&forms),
+        };
+        // Cat, Travel, Aquatic, Bear, Dire Bear, Creature - Bear, Creature - Cat, Ghost Wolf.
+        for id in [1, 3, 4, 5, 8, 14, 15, 16] {
+            assert_eq!(forms[&id].creature_type, 1, "form {id} is type 1");
+            assert_eq!(sources.of(&store(0, 1, id)), 1, "form {id}");
+        }
+        // Tree of Life and Battle Stance carry -1: the human race's type answers.
+        for id in [2, 17] {
+            assert!(forms[&id].creature_type <= 0, "form {id} carries no type");
+            assert_eq!(sources.of(&store(0, 1, id)), 7, "form {id}");
+        }
+        // Every row by the rule: above 0 names the type, else the race.
+        for (&id, row) in &forms {
+            let expected = u32::try_from(row.creature_type).ok().filter(|&t| t > 0);
+            assert_eq!(
+                sources.of(&store(0, 1, id)),
+                expected.unwrap_or(7),
+                "form {id}"
+            );
+        }
+    }
+
+    /// The unit snapshot carries the resolver's word for every unit, players included: a
+    /// shapeshifted player a Beast, an unshifted one a Humanoid by race, a form of no type the
+    /// same, and a creature its template's.
+    #[test]
+    fn the_snapshot_carries_the_resolved_type_word() {
+        let names = names_with(69, 1);
+        let forms = forms();
+        let sources = CreatureTypeSources {
+            names: Some(&names),
+            forms: Some(&forms),
+        };
+        let word = |store: &ObjectStore| {
+            crate::ui_unit::snapshot(store, 0, None, 0, None, sources).creature_type_name
+        };
+        assert_eq!(word(&store(0, 1, 1)).as_deref(), Some("Beast"), "cat form");
+        assert_eq!(
+            word(&store(0, 1, 0)).as_deref(),
+            Some("Humanoid"),
+            "no form"
+        );
+        assert_eq!(
+            word(&store(0, 1, 2)).as_deref(),
+            Some("Humanoid"),
+            "type -1"
+        );
+        assert_eq!(word(&store(69, 0, 0)).as_deref(), Some("Beast"), "template");
+        assert_eq!(word(&store(70, 0, 0)), None, "uncached: race 0, no type");
     }
 
     /// The frozen race table against the shipped `ChrRaces.dbc`.

@@ -1074,6 +1074,9 @@ fn seat_a_session(script: &mut UiScript) {
             class_file: Some("WARRIOR".into()),
             sex: 2,
             is_player: true,
+            // `UnitCreatureType("player")`: the feed's snapshot carries the race's type, and a
+            // Human is a Humanoid.
+            creature_type_name: Some("Humanoid".into()),
             // `UnitFactionGroup("player")`: every playable race has a side, and AceDB-2.0
             // concatenates it into its per-realm key at file scope.
             faction_group: Some("Alliance".into()),

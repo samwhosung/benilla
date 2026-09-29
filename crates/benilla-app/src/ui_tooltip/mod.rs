@@ -14,7 +14,7 @@ use crate::net::{NetCommands, ObjectStore, SelfPlayer};
 use crate::target::{go_is_nearest, Hovered, HoveredObject, GO_FLAG_LOCKED, GO_TYPE_GENERIC};
 use crate::ui_script::UiFeed;
 use crate::ui_trainer::TrainerFeed;
-use crate::ui_unit::{enrich_unit, snapshot, unit_reaction, UnitFeed};
+use crate::ui_unit::{enrich_unit, snapshot, unit_reaction, SnapshotTables, UnitFeed};
 
 mod spell_deps;
 mod spell_feed;
@@ -117,8 +117,9 @@ fn drive_mouseover_tooltip(
     // The cursor seat crosses the VM seam: the anchor below is UI units, not px.
     ui_scale: Res<crate::ui_script::UiScaleCvar>,
     mut memo: HoverMemo,
-    // `ChrClasses.dbc` field 16, `UnitHasRelicSlot`'s input; without it no class has a relic slot.
-    classes: Option<Res<crate::chr_classes::ChrClassTable>>,
+    // `ChrClasses.dbc` field 16, `UnitHasRelicSlot`'s input, and the form table the creature type
+    // reads.
+    tables: SnapshotTables,
 ) {
     let Some(mut script) = script else {
         return;
@@ -128,7 +129,8 @@ fn drive_mouseover_tooltip(
     let last_lines = last_lines.get(&script);
     let published = memo.published.get(&script);
     let self_store = self_q.iter().next();
-    let chr = classes.as_deref().map(|t| &t.0);
+    let chr = tables.classes();
+    let types = tables.types(&names);
 
     let unit = hovered.mouseover(&hovered_go).and_then(|(entity, guid)| {
         let store = stores.get(entity).ok()?;
@@ -138,7 +140,7 @@ fn drive_mouseover_tooltip(
         let reaction = unit_reaction(rx.factions.as_deref(), &rx.reputations, store, self_store);
         // The hovered guid, the pair `0x492890` writes to `0xb4e2c8`/`0xb4e2cc` and the token
         // resolver `0x515970` reads for `"mouseover"`, so `UnitIsUnit` can match it.
-        let mut s = snapshot(store, guid, name, reaction, chr);
+        let mut s = snapshot(store, guid, name, reaction, chr, types);
         enrich_unit(
             &mut s,
             guid,

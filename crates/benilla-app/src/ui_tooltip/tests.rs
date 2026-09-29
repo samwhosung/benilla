@@ -911,6 +911,56 @@ fn the_mouseover_token_carries_the_hovered_guid() {
     );
 }
 
+/// `UnitCreatureType("mouseover")` goes through the resolver `0x605570` for a hovered player as
+/// for a creature: a druid in Cat Form is a Beast, and out of form a Humanoid by race. The plate
+/// itself is built for a player from its race and class, whatever type the snapshot carries.
+#[test]
+fn the_mouseover_token_names_the_hovered_units_creature_type() {
+    use benilla_protocol::ObjectFields;
+
+    /// `UNIT_FIELD_BYTES_0` and `UNIT_FIELD_BYTES_1`, absolute descriptor indices.
+    const BYTES_0: u16 = 36;
+    const BYTES_1: u16 = 138;
+    const NIGHT_ELF: u32 = 4;
+    const CAT_FORM: u32 = 1;
+    const DRUID: u64 = 0x99;
+
+    let (mut app, _, _) = mouseover_app();
+    let mut spells = crate::ui_action::Spells::empty_for_tests();
+    spells.forms.insert(
+        CAT_FORM,
+        benilla_formats::ShapeshiftForm {
+            creature_type: 1,
+            ..Default::default()
+        },
+    );
+    app.insert_resource(spells);
+    let druid = app
+        .world_mut()
+        .spawn(ObjectStore(ObjectFields::from_pairs(&[
+            (BYTES_0, NIGHT_ELF),
+            (BYTES_1, CAT_FORM << 16),
+        ])))
+        .id();
+    let creature_type = |app: &mut App| {
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .eval::<Option<String>>(r#"return UnitCreatureType("mouseover")"#)
+            .unwrap()
+    };
+
+    hover_unit(&mut app, druid, DRUID);
+    assert_eq!(creature_type(&mut app).as_deref(), Some("Beast"));
+    app.world_mut()
+        .entity_mut(druid)
+        .get_mut::<ObjectStore>()
+        .unwrap()
+        .0
+        .merge(ObjectFields::from_pairs(&[(BYTES_1, 0)]));
+    hover_unit(&mut app, druid, DRUID);
+    assert_eq!(creature_type(&mut app).as_deref(), Some("Humanoid"));
+}
+
 /// Once no unit wins the pick, `"mouseover"` names nobody: the publisher `0x492890` zeroes the pair
 /// (`0x4928e8`, `0x4928f2`) and writes a null, corpse or GameObject guid, which the resolver
 /// rejects as a unit (`0x515bca mov ecx,8`, `0x515bd9 je`). Empty ground, a corpse and a nearer

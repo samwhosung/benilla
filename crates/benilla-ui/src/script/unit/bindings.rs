@@ -756,13 +756,13 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // UnitCreatureType(unit) (`0x51a280`): one string, nil for a token naming no unit (`0x51a2b8`).
-    // Its resolver `0x605570` tries the shapeshift form's type (`SpellShapeshiftForm.dbc` column
-    // 12, only above 0, `0x60559a`), the cached creature record, then the race's (`ChrRaces.dbc`
-    // column 9, "Humanoid" for every race). The form stage is not built (no form index here), so an
-    // animal-form druid or a Ghost Wolf shaman answers "Humanoid" where the reference says "Beast".
-    // A missing argument, or one neither string nor number, raises `Usage:` (`0x6f3510`,
-    // `0x6f4940`).
+    // UnitCreatureType(unit) (`0x51a280`): one string, nil for a token naming no unit (`0x51a2b8`)
+    // and for a type of 0 (`0x51a2c3`). The type is the snapshot's, which the app resolved as the
+    // reference's `0x605570` does: the shapeshift form's (`SpellShapeshiftForm.dbc` column 12, only
+    // above 0), else the cached creature record's, else the race's (`ChrRaces.dbc` column 9). A
+    // snapshot with no descriptor behind it carries none, as the reference's token resolver finds
+    // no object for it. A missing argument, or one neither string nor number, raises `Usage:`
+    // (`0x6f3510`, `0x6f4940`).
     g.set(
         "UnitCreatureType",
         lua.create_function(|lua, token: Value| {
@@ -773,12 +773,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 Value::Number(_) | Value::Integer(_) => Some(String::new()),
                 _ => return Err(mlua::Error::runtime("Usage: UnitCreatureType(\"unit\")")),
             };
-            let word = with_unit(lua, &token, None, |u| {
-                u.creature_type_name
-                    .clone()
-                    // The race stage, collapsed: every player race maps to type 7.
-                    .or_else(|| u.is_player.then(|| "Humanoid".to_string()))
-            })?;
+            let word = with_unit(lua, &token, None, |u| u.creature_type_name.clone())?;
             match word {
                 Some(w) => Ok(Value::String(lua.create_string(&w)?)),
                 None => Ok(Value::Nil),

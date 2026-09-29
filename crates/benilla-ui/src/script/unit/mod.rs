@@ -137,7 +137,10 @@ pub struct UnitState {
     pub guild: Option<super::guild::UnitGuild>,
     /// The creature template's subname ("Stable Master"), the tooltip's second line.
     pub subtitle: Option<String>,
-    /// The creature type word ("Beast") from `CreatureType.dbc`, the level line's class slot.
+    /// The word ("Beast") from `CreatureType.dbc` for the type the reference's resolver `0x605570`
+    /// returns for any unit: the shapeshift form's, else the creature template's, else the
+    /// race's. `UnitCreatureType` answers it, and a creature's level line takes it as its class
+    /// slot; a player's reads race and class instead. `None` for type 0 or no descriptor.
     pub creature_type_name: Option<String>,
     /// Creature rank 0..=4 as the reference's getter (`0x605620`) answers it, so already gated:
     /// 0 without a cached creature template or with a pet number. The tooltip's rank word,

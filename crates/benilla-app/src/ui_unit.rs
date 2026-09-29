@@ -10,6 +10,7 @@ use benilla_formats::ChrClasses;
 use benilla_protocol::messages::ObjectType;
 use benilla_ui::script::{power_token, ScriptValue, UiScript, UnitState, WornDisplay};
 
+use crate::creature_type::CreatureTypeSources;
 use crate::names::NameCache;
 use crate::net::{
     FieldChanged, FieldEdges, Guid, NetCommands, ObjectStore, Reputations, SelfPlayer,
@@ -803,6 +804,27 @@ pub(crate) struct UnitStores<'w, 's> {
     edges: MessageReader<'w, 's, FieldChanged>,
 }
 
+/// The client tables [`snapshot`] reads beside a descriptor, as one parameter for the feeders that
+/// sit at Bevy's 16-parameter limit: `ChrClasses.dbc` for the relic slot, and the form table
+/// the creature-type resolver's first stage reads. Each is absent without game data.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct SnapshotTables<'w> {
+    classes: Option<Res<'w, crate::chr_classes::ChrClassTable>>,
+    spells: Option<Res<'w, crate::ui_action::Spells>>,
+}
+
+impl SnapshotTables<'_> {
+    /// `ChrClasses.dbc`; without it no class has a relic slot, the reference's bounds leg.
+    pub(crate) fn classes(&self) -> Option<&ChrClasses> {
+        self.classes.as_deref().map(|t| &t.0)
+    }
+
+    /// The creature-type resolver's sources: the name cache and the form table.
+    pub(crate) fn types<'a>(&'a self, names: &'a NameCache) -> CreatureTypeSources<'a> {
+        CreatureTypeSources::of_resources(names, self.spells.as_deref())
+    }
+}
+
 /// `UnitReaction(unit, "player")` (`0x5167e0`): [`ring_reaction`] plus one (`0x51683e`), so
 /// `1..=7`, Hated to Revered, and Exalted reads 7 too (`0x606439`). Stock `UnitReactionColor`
 /// has seven entries (`TargetFrame.lua:6-14`), one per value.
@@ -817,13 +839,14 @@ pub(crate) fn unit_reaction(
 
 /// Build a unit snapshot from a streamed descriptor, its guid, its cached name and its
 /// `UnitReaction` (`1..=7`, or `0` where none is resolved, as for `"player"`); `classes` feeds the
-/// relic column.
+/// relic column and `types` the creature type, which every unit carries, players included.
 pub(crate) fn snapshot(
     store: &ObjectStore,
     guid: u64,
     name: Option<String>,
     reaction: u8,
     classes: Option<&ChrClasses>,
+    types: CreatureTypeSources<'_>,
 ) -> UnitState {
     let power_type = store.0.unit_power_type();
     let race = store.0.unit_race().and_then(race_names);
@@ -862,6 +885,9 @@ pub(crate) fn snapshot(
         // The raw dword `PLAYER_FLAGS_CHANGED` fires on; 0 on a creature, as in the reference.
         player_flags: store.0.player_flags(),
         reaction,
+        // The one resolver `0x605570` behind `UnitCreatureType` (`0x51a2bc`) and the tooltip's
+        // type slot (`0x52a2e5`): the form's type, else the template's, else the race's.
+        creature_type_name: creature_type_word(types.of(store)).map(str::to_string),
         race: race.map(|(n, _)| n.to_string()),
         race_file: race.map(|(_, f)| f.to_string()),
         class: class.map(|(n, _)| n.to_string()),
@@ -910,8 +936,8 @@ pub(crate) fn snapshot(
     }
 }
 
-/// Fill the guid-keyed tooltip fields: `is_player`, or a creature's record fields (the type word
-/// from `CreatureType.dbc`'s enUS names) and its faction-name line.
+/// Fill the guid-keyed tooltip fields: `is_player`, or a creature's record fields and its
+/// faction-name line.
 pub(crate) fn enrich_unit(
     state: &mut UnitState,
     guid: u64,
@@ -933,7 +959,6 @@ pub(crate) fn enrich_unit(
     let rec = names.creature_record(entry);
     if let Some(rec) = rec {
         state.subtitle = rec.subname.clone();
-        state.creature_type_name = creature_type_word(rec.creature_type).map(str::to_string);
         // The client's one rank getter, never `rec.rank`: an enslaved elite reads rank 0.
         state.rank = crate::names::gated_rank(Some(rec), Some(store));
         state.civilian = rec.civilian;
@@ -1157,8 +1182,7 @@ pub(crate) fn fire_transitions(
 
 fn feed_units(
     script: Option<NonSendMut<UiScript>>,
-    // Absent when the data failed to load: no class has a relic slot, the reference's bounds leg.
-    classes: Option<Res<crate::chr_classes::ChrClassTable>>,
+    tables: SnapshotTables,
 
     self_q: Query<(&ObjectStore, &Guid), With<SelfPlayer>>,
     selection: Res<Selection>,
@@ -1189,7 +1213,8 @@ fn feed_units(
     {
         script.set_billing_time_rested(entered);
     }
-    let chr = classes.as_deref().map(|t| &t.0);
+    let chr = tables.classes();
+    let types = tables.types(&names);
     // One reborrow, so the memo and `warned_sideless` borrow disjointly rather than alias.
     let feed = &mut *feed;
     let (memo, vm_reset) = feed.vm.get_reset(&script);
@@ -1244,7 +1269,7 @@ fn feed_units(
         let name = names
             .resolve_unit(guid.0, Some(store), &commands)
             .map(str::to_string);
-        let mut s = snapshot(store, guid.0, name, 0, chr);
+        let mut s = snapshot(store, guid.0, name, 0, chr, types);
         s.is_player = true;
         s.raid_target = group.raid_target_index(guid.0);
         s.faction_group = faction_group(store, factions.as_deref());
@@ -1279,7 +1304,7 @@ fn feed_units(
             store,
             self_pair.map(|(s, _)| s),
         );
-        let mut s = snapshot(store, guid, name, reaction, chr);
+        let mut s = snapshot(store, guid, name, reaction, chr, types);
         s.raid_target = group.raid_target_index(guid);
         s.faction_group = faction_group(store, factions.as_deref());
         s.faction_group_localized = faction_group_localized(store, factions.as_deref());
@@ -1321,7 +1346,7 @@ fn feed_units(
                 store,
                 self_pair.map(|(s, _)| s),
             );
-            let mut s = snapshot(store, guid, name, reaction, chr);
+            let mut s = snapshot(store, guid, name, reaction, chr, types);
             s.raid_target = group.raid_target_index(guid);
             s.faction_group = faction_group(store, factions.as_deref());
             s.faction_group_localized = faction_group_localized(store, factions.as_deref());
@@ -1387,7 +1412,7 @@ fn feed_units(
                 store,
                 self_pair.map(|(s, _)| s),
             );
-            let mut s = snapshot(store, guid, name, reaction, chr);
+            let mut s = snapshot(store, guid, name, reaction, chr, types);
             s.raid_target = group.raid_target_index(guid);
             s.faction_group = faction_group(store, factions.as_deref());
             s.faction_group_localized = faction_group_localized(store, factions.as_deref());
@@ -2066,6 +2091,7 @@ mod tests {
                 None,
                 0,
                 None,
+                Default::default(),
             )
             .pvp_team
         };
@@ -2732,6 +2758,7 @@ mod tests {
             Some("Hunter".into()),
             0,
             None,
+            Default::default(),
         );
         assert_eq!((alive.health, alive.max_health), (1200, 1500));
         assert_eq!((alive.power, alive.max_power), (300, 900));
@@ -2745,6 +2772,7 @@ mod tests {
             Some("Hunter".into()),
             0,
             None,
+            Default::default(),
         );
         assert_eq!(
             (feigning.health, feigning.max_health),
@@ -3054,6 +3082,155 @@ mod tests {
         assert!(
             !exists(&mut app),
             "the window closed, yet UnitExists(\"npc\")"
+        );
+    }
+
+    /// `UnitCreatureType` through the real feed (`0x51a280`, resolver `0x605570`): a shapeshifted
+    /// player answers the form's type before the race's, an unshifted one the race's, a form of
+    /// type -1 falls through to the race, and a creature keeps its template's unless a form
+    /// outranks it.
+    #[test]
+    fn unit_creature_type_names_the_form_before_the_race_and_a_creature_its_template() {
+        use crate::names::CreatureRecord;
+        use benilla_formats::ShapeshiftForm;
+        use benilla_protocol::messages::ObjectType;
+        use benilla_protocol::ObjectFields;
+
+        /// `UNIT_FIELD_BYTES_0` and `UNIT_FIELD_BYTES_1`, absolute descriptor indices, and
+        /// `OBJECT_FIELD_ENTRY`.
+        const BYTES_0: u16 = 36;
+        const BYTES_1: u16 = 138;
+        const OBJECT_FIELD_ENTRY: u16 = 3;
+        const NIGHT_ELF: u32 = 4;
+        const CAT_FORM: u32 = 1;
+        /// A row whose type is -1 in the shipped table.
+        const NO_TYPE_FORM: u32 = 2;
+        /// `HIGHGUID_UNIT` guids of entries 69 (a wolf, a Beast) and 70 (a druid, a Humanoid).
+        const WOLF: u64 = 0xF130_0000_4500_0001;
+        const DRUID: u64 = 0xF130_0000_4600_0001;
+
+        let record = |name: &str, creature_type| CreatureRecord {
+            name: name.into(),
+            subname: None,
+            creature_type,
+            pet_family: 0,
+            rank: 0,
+            type_flags: 0,
+            civilian: false,
+            racial_leader: false,
+            display_id: 0,
+        };
+        let mut app = App::new();
+        app.init_resource::<UnitFeedState>()
+            .init_resource::<Selection>()
+            .init_resource::<Reputations>()
+            .init_resource::<crate::ui_party::GroupState>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .init_resource::<crate::ui_guild::GuildState>();
+        app.add_message::<FieldChanged>();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        app.insert_resource(NetCommands(tx));
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        let mut names = NameCache::default();
+        names.insert_creature(69, Some(record("Wolf", 1)));
+        names.insert_creature(70, Some(record("Druid", 7)));
+        app.insert_resource(names);
+        let mut spells = crate::ui_action::Spells::empty_for_tests();
+        let form = |creature_type| ShapeshiftForm {
+            creature_type,
+            ..Default::default()
+        };
+        spells.forms.insert(CAT_FORM, form(1));
+        spells.forms.insert(NO_TYPE_FORM, form(-1));
+        app.insert_resource(spells);
+        app.add_systems(Update, feed_units);
+
+        let me = app
+            .world_mut()
+            .spawn((
+                SelfPlayer,
+                Guid(0x77),
+                ObjectStore(
+                    ObjectFields::from_pairs(&[(BYTES_0, NIGHT_ELF)])
+                        .into_created(ObjectType::Player),
+                ),
+            ))
+            .id();
+        let mut creature = |entry: u32| {
+            app.world_mut()
+                .spawn(ObjectStore(ObjectFields::from_pairs(&[(
+                    OBJECT_FIELD_ENTRY,
+                    entry,
+                )])))
+                .id()
+        };
+        let wolf = creature(69);
+        let druid = creature(70);
+        let creature_type = |app: &mut App, token: &str| -> Option<String> {
+            app.world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .eval::<Option<String>>(&format!(r#"return UnitCreatureType("{token}")"#))
+                .unwrap()
+        };
+        let shift = |app: &mut App, unit: Entity, form: u32| {
+            app.world_mut()
+                .entity_mut(unit)
+                .get_mut::<ObjectStore>()
+                .unwrap()
+                .0
+                .merge(ObjectFields::from_pairs(&[(BYTES_1, form << 16)]));
+            app.update();
+        };
+        let select = |app: &mut App, unit: Entity, guid: u64| {
+            let mut selection = app.world_mut().resource_mut::<Selection>();
+            selection.target = Some(unit);
+            selection.guid = Some(guid);
+            app.update();
+        };
+
+        app.update();
+        assert_eq!(
+            creature_type(&mut app, "player").as_deref(),
+            Some("Humanoid"),
+            "no form: the race's type"
+        );
+        shift(&mut app, me, CAT_FORM);
+        assert_eq!(
+            creature_type(&mut app, "player").as_deref(),
+            Some("Beast"),
+            "Cat Form: the form's type, before the race's"
+        );
+        shift(&mut app, me, NO_TYPE_FORM);
+        assert_eq!(
+            creature_type(&mut app, "player").as_deref(),
+            Some("Humanoid"),
+            "a form of type -1 falls through to the race"
+        );
+        shift(&mut app, me, 0);
+        assert_eq!(
+            creature_type(&mut app, "player").as_deref(),
+            Some("Humanoid"),
+            "out of form again"
+        );
+
+        select(&mut app, wolf, WOLF);
+        assert_eq!(
+            creature_type(&mut app, "target").as_deref(),
+            Some("Beast"),
+            "a creature's template type"
+        );
+        select(&mut app, druid, DRUID);
+        assert_eq!(
+            creature_type(&mut app, "target").as_deref(),
+            Some("Humanoid"),
+            "a Humanoid template"
+        );
+        shift(&mut app, druid, CAT_FORM);
+        assert_eq!(
+            creature_type(&mut app, "target").as_deref(),
+            Some("Beast"),
+            "a form outranks the template, on a creature as on a player"
         );
     }
 

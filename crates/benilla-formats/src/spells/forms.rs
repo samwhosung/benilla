@@ -23,7 +23,7 @@ pub struct ShapeshiftForm {
     pub flags: u32,
     /// `creatureType` (column 12): the form's creature-type override, which the resolver
     /// (`0x605570`) reads before the creature template or race, so a cat-form druid tracks as a
-    /// Beast; `<= 0` falls back to Humanoid.
+    /// Beast; `<= 0` is no override, and the template or race answers.
     pub creature_type: i32,
     /// `AttackIconID` (column 13) through `SpellIcon.dbc`: the Attack action shows the current
     /// form's icon before the main-hand weapon's (`0x4e6870`); `None` falls through to the weapon.
