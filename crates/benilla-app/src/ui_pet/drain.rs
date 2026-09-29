@@ -3,6 +3,8 @@
 //! (`PetHandler.cpp:203-300`), and sends `SMSG_PET_MODE` only from `Pet::SetEnabled`
 //! (`Pet.cpp:2362-2377`), so the client applies them itself until the next `SMSG_PET_SPELLS`.
 
+use std::time::Instant;
+
 use bevy::prelude::*;
 
 use benilla_protocol::messages::{
@@ -30,6 +32,9 @@ pub(crate) struct PetPress<'w, 's> {
     pub(crate) commands: Res<'w, NetCommands>,
     pub(crate) pet: PetUnit<'w, 's>,
     pub(crate) spells: Option<Res<'w, Spells>>,
+    /// The talent modifiers the pet GCD's op 21 goes through: the player's tables, which gate on
+    /// the spell's family and never on the caster (`0x6e6b30`).
+    spell_mods: Res<'w, crate::spell::SpellModifiers>,
     ui_errors: ResMut<'w, crate::ui_action::UiErrorKeys>,
     pick: crate::target::AttackPick<'w, 's>,
     seam: crate::creature_anim::AttackSeam<'w, 's>,
@@ -69,6 +74,7 @@ impl PetPress<'_, '_> {
             commands,
             pet,
             spells,
+            spell_mods,
             ui_errors,
             pick,
             seam,
@@ -112,6 +118,15 @@ impl PetPress<'_, '_> {
             debug!("ui_pet: slot {slot} refused by the attack validator — no packet");
             return;
         }
+        arm_pet_gcd(
+            bar,
+            entry.action(),
+            display,
+            pet_store.is_some(),
+            possessing,
+            spell_mods,
+            Instant::now(),
+        );
         debug!(
             "ui_pet: press slot {slot} (action {} kind {:#04x}) at {target_guid:#x}",
             entry.action(),
@@ -122,6 +137,30 @@ impl PetPress<'_, '_> {
             packed: entry.packed,
             target_guid,
         });
+    }
+}
+
+/// The spell arm's tail (`0x4bd355`-`0x4bd36e`): a press that neither cancels an aura nor takes
+/// the generic cast entry `0x6e4b60` (`AttributesEx4 & 0x20`, or the bar's unit possessed) calls
+/// `StartGlobalCooldown 0x6e2de0(spellId, 1)` before the send (`0x4bd444`): the spell's own
+/// `StartRecovery*` pair, under op 21, into the pet's list (`0xcecaec + 0x18`). The bar's
+/// cooldown edge then reads it, which is `PET_BAR_UPDATE_COOLDOWN` (`0x6e2e8e`). An unresolved
+/// `SpellRec` or pet object leaves the arm before it (`0x4bd2fe`, `0x4bd34f`). This is the only
+/// place the pet's GCD starts: the `SMSG_SPELL_GO` pet leg inserts none (`0x6e85f7`).
+pub(super) fn arm_pet_gcd(
+    bar: &mut PetBar,
+    spell_id: u32,
+    display: Option<&benilla_formats::SpellDisplay>,
+    pet_resolved: bool,
+    possessing: bool,
+    mods: &crate::spell::SpellModifiers,
+    now: Instant,
+) {
+    let Some(spell) = display.filter(|_| pet_resolved && !possessing) else {
+        return;
+    };
+    if !spell.allows_client_targeting() {
+        bar.cooldowns.start_gcd(spell_id, spell, now, mods);
     }
 }
 

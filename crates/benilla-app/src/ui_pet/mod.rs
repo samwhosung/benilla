@@ -29,6 +29,8 @@ use menu::{drain_pet_menu, feed_pet_menu};
 use unit::feed_pet_unit;
 
 #[cfg(test)]
+mod press_tests;
+#[cfg(test)]
 mod tests;
 
 /// The pet action bar's state. A zero `spells.pet_guid` means no bar: the teardown packet carries
