@@ -59,6 +59,43 @@ type SpawnTables<'w> = (
     Option<ResMut<'w, crate::static_gx::StaticGx>>,
 );
 
+/// Retires a placement, or a WMO prop, whose model load failed: it spawns nothing and stops
+/// counting as pending, as a missing WDT falls back rather than stalling the world; warned once.
+fn retire_failed_placements(placements: &mut Placements, asset_server: &AssetServer) {
+    let Placements {
+        by_id,
+        pending_spawns,
+        ..
+    } = placements;
+    let failed = |id: bevy::asset::UntypedAssetId| {
+        asset_server.load_state(id).is_failed().then(|| {
+            asset_server
+                .get_path(id)
+                .map_or_else(|| id.to_string(), |p| p.to_string())
+        })
+    };
+    for p in by_id.values_mut() {
+        if !p.spawned {
+            let id = match &p.model {
+                ModelHandle::M2(h) => h.id().untyped(),
+                ModelHandle::Wmo(h) => h.id().untyped(),
+            };
+            if let Some(path) = failed(id) {
+                warn!("placement model {path} failed to load: nothing spawned");
+                p.spawned = true;
+                *pending_spawns -= 1;
+            }
+        }
+        for d in p.doodads.iter_mut().filter(|d| !d.spawned) {
+            if let Some(path) = failed(d.handle.id().untyped()) {
+                warn!("WMO prop model {path} failed to load: nothing spawned");
+                d.spawned = true;
+                *pending_spawns -= 1;
+            }
+        }
+    }
+}
+
 pub(super) fn spawn_loaded_placements(
     mut commands: Commands,
     placements: ResMut<Placements>,
@@ -87,6 +124,8 @@ pub(super) fn spawn_loaded_placements(
     if placements.pending_spawns == 0 {
         return;
     }
+    let placements = placements.into_inner();
+    retire_failed_placements(placements, &asset_server);
     let t0 = Instant::now();
     // The count cap bounds the render-side wave a time budget misses; off until the focus is
     // paced, as the loading cover absorbs the burst and a cap would only lengthen the reveal.
@@ -104,7 +143,7 @@ pub(super) fn spawn_loaded_placements(
         by_id,
         materials: mat_cache,
         pending_spawns,
-    } = placements.into_inner();
+    } = placements;
 
     // At most `SPAWN_BUDGET` per frame, resumed next frame through the `spawned` flags; the check
     // follows the work, so every frame spawns at least one.
@@ -878,5 +917,108 @@ pub fn m2_fade(bounds: &Option<M2Bounds>, scale: f32) -> (f32, Vec3) {
             (b.sphere_radius * scale, wow_to_bevy(c))
         }
         None => (f32::INFINITY, Vec3::ZERO),
+    }
+}
+
+#[cfg(test)]
+mod retire_tests {
+    use super::super::Placement;
+    use super::*;
+    use benilla_assets::WmoModel;
+
+    fn app() -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()));
+        app.init_asset::<M2Model>().init_asset::<WmoModel>();
+        app.init_resource::<Placements>();
+        app.add_systems(
+            Update,
+            |mut pl: ResMut<Placements>, server: Res<AssetServer>| {
+                retire_failed_placements(&mut pl, &server)
+            },
+        );
+        app
+    }
+
+    fn placement(model: ModelHandle, doodads: Vec<WmoDoodadInst>) -> Placement {
+        Placement {
+            model,
+            transform: Transform::IDENTITY,
+            entities: Vec::new(),
+            spawned: false,
+            doodad_set: 0,
+            name_set: 0,
+            doodads,
+            portal_instance: None,
+            refs: 1,
+            owner: (0, 0),
+        }
+    }
+
+    fn prop(handle: Handle<M2Model>) -> WmoDoodadInst {
+        WmoDoodadInst {
+            handle,
+            transform: Transform::IDENTITY,
+            groups: Arc::from([]),
+            light: PropLight::Exterior,
+            spawned: false,
+        }
+    }
+
+    /// Runs frames until every handle's load has failed (no loader is registered for the path).
+    fn settle(app: &mut App, ids: &[bevy::asset::UntypedAssetId]) {
+        for _ in 0..500 {
+            app.update();
+            let server = app.world().resource::<AssetServer>();
+            if ids.iter().all(|&i| server.load_state(i).is_failed()) {
+                app.update();
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        panic!("the loads never failed");
+    }
+
+    #[test]
+    fn a_failed_model_load_retires_the_placement() {
+        let mut app = app();
+        let server = app.world().resource::<AssetServer>().clone();
+        let m2: Handle<M2Model> = server.load("mpq://missing/tree.m2");
+        let wmo: Handle<WmoModel> = server.load("mpq://missing/hall.wmo");
+        let loading: Handle<M2Model> = Handle::default();
+        let ids = [m2.id().untyped(), wmo.id().untyped()];
+        {
+            let mut pl = app.world_mut().resource_mut::<Placements>();
+            pl.by_id.insert(1, placement(ModelHandle::M2(m2), vec![]));
+            pl.by_id.insert(2, placement(ModelHandle::Wmo(wmo), vec![]));
+            // A handle that was never loaded is not a failure: it keeps waiting.
+            pl.by_id
+                .insert(3, placement(ModelHandle::M2(loading), vec![]));
+            pl.pending_spawns = 3;
+        }
+        settle(&mut app, &ids);
+        let pl = app.world().resource::<Placements>();
+        assert!(pl.by_id[&1].spawned && pl.by_id[&2].spawned);
+        assert!(!pl.by_id[&3].spawned);
+        assert_eq!(pl.pending_spawns, 1);
+    }
+
+    #[test]
+    fn a_failed_prop_load_retires_the_prop() {
+        let mut app = app();
+        let server = app.world().resource::<AssetServer>().clone();
+        let bad: Handle<M2Model> = server.load("mpq://missing/lamp.m2");
+        let ids = [bad.id().untyped()];
+        {
+            let mut pl = app.world_mut().resource_mut::<Placements>();
+            let mut p = placement(ModelHandle::M2(Handle::default()), vec![prop(bad)]);
+            p.spawned = true; // the WMO root landed; its one prop is pending
+            pl.by_id.insert(1, p);
+            pl.pending_spawns = 1;
+        }
+        settle(&mut app, &ids);
+        let pl = app.world().resource::<Placements>();
+        assert!(pl.by_id[&1].doodads[0].spawned);
+        assert_eq!(pl.pending_spawns, 0);
     }
 }
