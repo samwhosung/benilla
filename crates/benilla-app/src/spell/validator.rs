@@ -268,6 +268,14 @@ mod tests {
         let refuse = |d2: f32| cast_range_refusal(&d, Some(&fireball), 1.5, reach, Some(d2), &mods);
         assert_eq!(refuse(0.1), None);
         assert_eq!(refuse(60.0 * 60.0), Some(ERR_OUT_OF_RANGE));
+        // The bound target is the pad's second reach (`0x6e47ca`): 35 + 1.5 + 1.5 = 38.
+        assert_eq!(refuse(37.0 * 37.0), None);
+        assert_eq!(refuse(39.0 * 39.0), Some(ERR_OUT_OF_RANGE));
+        // With no unit bound the row stands as it is: 35.
+        assert_eq!(
+            cast_range_refusal(&d, Some(&fireball), 1.5, None, Some(37.0 * 37.0), &mods),
+            Some(ERR_OUT_OF_RANGE)
+        );
 
         // A melee row has min 0: never too close.
         let melee = SpellRange {
