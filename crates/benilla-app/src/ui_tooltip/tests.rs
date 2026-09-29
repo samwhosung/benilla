@@ -206,6 +206,8 @@ fn improved_devotion_aura_updates_spell_and_aura_description() {
     assert!(improved.aura_description.contains("68"));
 }
 
+/// Fire Blast rank 1's 8 s is its category recovery, its own recovery 0; Improved Fire Blast's
+/// flat op 11 shortens the category value, and the cell shows the larger column (`0x52eada`).
 #[test]
 fn improved_fire_blast_shortens_the_cooldown_cell() {
     let data = benilla_formats::wow_data_or_skip!();
@@ -213,7 +215,10 @@ fn improved_fire_blast_shortens_the_cooldown_cell() {
     let mut spells = Spells::empty_for_tests();
     spells.catalog = benilla_formats::load_spell_catalog(&mut chain).expect("Spell.dbc");
     let fire_blast = spells.catalog.get(2136).expect("Fire Blast rank 1");
-    assert_eq!(fire_blast.recovery_ms, 8_000);
+    assert_eq!(
+        (fire_blast.recovery_ms, fire_blast.category_recovery_ms),
+        (0, 8_000)
+    );
     let bit = fire_blast.spell_family_flags.trailing_zeros() as u8;
     let mut t = TestCtx::new();
     let mut objs = no_objects();
