@@ -261,8 +261,10 @@ impl Cooldowns {
     }
 
     /// Arm the GCD at cast send (`StartGlobalCooldown 0x6e2de0`, from `0x6e58fb`) for any cast,
-    /// item use or pet cast, only when `startRecoveryTime != 0` (`0x6e2e0f`). `on_hold` is
-    /// Attributes bit 25.
+    /// item use or pet cast, unless `startRecoveryCategory` and `startRecoveryTime` are both 0
+    /// (`0x6e2e0f`-`0x6e2e21`), then with op 21 applied (`0x6e2e2c`) and nothing armed for a zero
+    /// result (`0x6e2e3d`). A negative one arms nothing either, where the reference inserts a
+    /// record no reader shows. `on_hold` is Attributes bit 25.
     pub(crate) fn start_gcd(
         &mut self,
         spell_id: u32,
