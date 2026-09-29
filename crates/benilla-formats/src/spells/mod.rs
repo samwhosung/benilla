@@ -79,6 +79,9 @@ const COL_SPELL_FAMILY_NAME: usize = 160;
 const COL_SPELL_FAMILY_FLAGS_LOW: usize = 161;
 /// `Targets` (`+0x34`): the seed the cast arm loads into its targeting word (`0x6e525a`).
 const COL_TARGETS: usize = 13;
+/// `TargetCreatureType` (`+0x38`): the creature-type mask `BindTarget` (`0x6e5c26`) and
+/// `SpellCanTargetUnit`'s mirror (`0x6e6544`) test the unit's type against, bit `type - 1`.
+const COL_TARGET_CREATURE_TYPE: usize = 14;
 /// `EffectImplicitTargetA[0]` (`+0x148`), the key of the cast arm's 62-case switch (`0x6e5484`).
 const COL_IMPLICIT_TARGET_A1: usize = 82;
 /// `EffectImplicitTargetB[0]` (`+0x154`), walked beside A by the classifier `0x6ea280`.
@@ -196,6 +199,9 @@ const ATTR_RANGED: u32 = 0x2;
 const ATTR_TARGET_MAIN_HAND_ITEM: u32 = 0x200;
 /// `SPELL_ATTR_EX2_AUTO_REPEAT`: Auto Shot and wand Shoot.
 const ATTR_EX2_AUTO_REPEAT: u32 = 0x20;
+/// `SPELL_ATTR_EX2_ALLOW_DEAD_TARGET` (vmangos `SpellDefines.h:868`): the bind's dead-unit gate
+/// tests it at `0x6e5c85`.
+const ATTR_EX2_ALLOW_DEAD_TARGET: u32 = 0x1;
 const ATTR_EX2_DO_NOT_RESET_COMBAT_TIMERS: u32 = 0x20000;
 /// `SPELL_ATTR_PASSIVE`: the spellbook grays the spell (`SpellBookFrame.lua:379-390`).
 const ATTR_PASSIVE: u32 = 0x40;
@@ -536,6 +542,7 @@ pub fn load_spell_catalog(chain: &mut Chain) -> Result<SpellCatalog> {
                 range_index: u32_at(r, COL_RANGE_INDEX).unwrap_or(0),
                 modal_next_spell: u32_at(r, COL_MODAL_NEXT_SPELL).unwrap_or(0),
                 targets: u32_at(r, COL_TARGETS).unwrap_or(0),
+                target_creature_type: u32_at(r, COL_TARGET_CREATURE_TYPE).unwrap_or(0),
                 implicit_target_a1: u32_at(r, COL_IMPLICIT_TARGET_A1).unwrap_or(0),
                 effect_implicit_target_a: std::array::from_fn(|i| {
                     u32_at(r, COL_IMPLICIT_TARGET_A1 + i).unwrap_or(0)

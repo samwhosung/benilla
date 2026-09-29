@@ -1493,3 +1493,71 @@ fn real_pet_spells_carry_the_gcd_pair_and_ex4_reads_column_10() {
         assert!(d.allows_client_targeting());
     }
 }
+
+/// `TargetCreatureType` (column 14), read as the bind gate does: bit `type - 1` of the mask.
+/// Beast is type 1, Dragonkin 2, Demon 3, Elemental 4, Undead 6, Humanoid 7.
+#[test]
+fn real_spell_catalog_reads_the_bind_gate_columns() {
+    let data = crate::wow_data_or_skip!();
+    let mut chain = crate::open_chain(&data).expect("open chain");
+    let cat = load_spell_catalog(&mut chain).expect("load Spell/SpellIcon");
+
+    for (id, mask, admits, refuses) in [
+        // Hibernate: Beast and Dragonkin.
+        (2637u32, 0x3u32, [1u32, 2], [7u32, 6]),
+        // Banish: Demon and Elemental.
+        (710, 0xc, [3, 4], [1, 7]),
+        // Turn Undead: Undead alone.
+        (2878, 0x20, [6, 6], [7, 1]),
+        // Mind Control: Humanoid alone, so a player (Humanoid) is a candidate.
+        (605, 0x40, [7, 7], [1, 6]),
+    ] {
+        let d = cat.get(id).expect("spell row");
+        assert_eq!(d.target_creature_type, mask, "{} ({id})", d.name);
+        for t in admits {
+            assert!(d.admits_creature_type(t), "{} admits type {t}", d.name);
+        }
+        for t in refuses {
+            assert!(!d.admits_creature_type(t), "{} refuses type {t}", d.name);
+        }
+    }
+    // Fireball has no mask: any type, and a unit with none too.
+    let fireball = cat.get(133).expect("Fireball");
+    assert_eq!(fireball.target_creature_type, 0);
+    assert!(fireball.admits_creature_type(0));
+
+    // Bloodlust (24185, a frenzy that never takes its own caster) and Revive (24341, which
+    // `AttributesEx2 & 1` lets reach a corpse): `AttributesEx` bit 19 and `AttributesEx2` bit 0.
+    assert!(cat.get(24185).expect("Bloodlust").excludes_caster());
+    assert!(!fireball.excludes_caster());
+    assert!(cat.get(24341).expect("Revive").allows_dead_target());
+    assert!(!fireball.allows_dead_target());
+}
+
+/// The mask rule alone: no mask admits everything, a masked spell refuses a unit of type 0, and
+/// the bit is `type - 1`, wrapping at 32 like the hardware's shift.
+#[test]
+fn creature_type_mask_rule() {
+    let masked = |mask| SpellDisplay {
+        target_creature_type: mask,
+        ..Default::default()
+    };
+    let open = masked(0);
+    for t in [0u32, 1, 7, 32, 33, u32::MAX] {
+        assert!(open.admits_creature_type(t), "no mask admits type {t}");
+    }
+    let beast = masked(1);
+    assert!(beast.admits_creature_type(1));
+    assert!(
+        !beast.admits_creature_type(0),
+        "type 0 is refused under a mask"
+    );
+    assert!(!beast.admits_creature_type(2));
+    let top = masked(1 << 31);
+    assert!(top.admits_creature_type(32), "type 32 is bit 31");
+    assert!(
+        !top.admits_creature_type(1),
+        "type 1 is bit 0, not the wrapped bit 32"
+    );
+    assert!(masked(1).admits_creature_type(33), "bit 32 wraps to bit 0");
+}

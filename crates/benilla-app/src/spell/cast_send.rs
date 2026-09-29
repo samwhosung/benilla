@@ -806,6 +806,7 @@ mod tests {
                 self_store: None,
                 factions: None,
                 reputations: &EMPTY_REPUTATIONS,
+                types: Default::default(),
             },
             range: cast_target::RangeInputs::default(),
             main_hand_item: None,

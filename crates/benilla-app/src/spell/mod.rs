@@ -11,6 +11,7 @@ use crate::ui_script::{UiFeed, UiInput};
 use crate::ui_unit::UnitFeed;
 use benilla_world::schedule::WorldStage;
 
+mod bind_gates;
 mod cast_send;
 pub(crate) mod cast_target;
 pub(crate) mod cooldowns;

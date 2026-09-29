@@ -106,6 +106,9 @@ pub struct SpellDisplay {
     pub range_index: u32,
     /// `Targets` (column 13): the `TARGET_FLAG_*` seed of the cast arm's targeting word.
     pub targets: u32,
+    /// `TargetCreatureType` (column 14): the creature types the spell may target, bit `type - 1`
+    /// each; 0 is any. Hibernate takes Beast and Dragonkin, Banish Demon and Elemental.
+    pub target_creature_type: u32,
     /// `EffectImplicitTargetA[0]` (column 82): the cast arm's switch adjusts the targeting word
     /// by it, and the usable walk's target-aura-state leg forks on it (6 enemy, 21 friend).
     pub implicit_target_a1: u32,
@@ -238,6 +241,7 @@ impl Default for SpellDisplay {
             mana_per_second: 0,
             range_index: 0,
             targets: 0,
+            target_creature_type: 0,
             implicit_target_a1: 0,
             stances: 0,
             stances_not: 0,
@@ -394,10 +398,26 @@ impl SpellDisplay {
         self.attributes_ex3 & ATTR_EX3_NO_CHANNEL_BAR != 0
     }
 
-    /// `AttributesEx & 0x80000`: the targeting cursor never takes the caster, neither the world
-    /// pick (`0x6e61a0` at `6e61cf`) nor `SpellCanTargetUnit`'s unit leg (`0x6e6460` at `6e6507`).
+    /// `AttributesEx & 0x80000`: the caster is never a bind candidate, not in `BindTarget`
+    /// (`0x6e5b40` at `6e5bf7`), not for `SpellCanTargetUnit`'s unit leg (`0x6e6460` at `6e6507`)
+    /// and not for the world pick (`0x6e61a0` at `6e61cf`).
     pub fn excludes_caster(&self) -> bool {
         self.attributes_ex & ATTR_EX_EXCLUDE_CASTER != 0
+    }
+
+    /// `AttributesEx2 & 0x1` (vmangos `SPELL_ATTR_EX2_ALLOW_DEAD_TARGET`, `SpellDefines.h:868`):
+    /// a dead unit stays a bind candidate (`BindTarget` at `6e5c85`).
+    pub fn allows_dead_target(&self) -> bool {
+        self.attributes_ex2 & ATTR_EX2_ALLOW_DEAD_TARGET != 0
+    }
+
+    /// The `TargetCreatureType` gate of `BindTarget` (`6e5c23`-`6e5c53`) and its mirror
+    /// (`6e6544`-`6e656c`): no mask admits any unit, else a unit of type 0 is refused and type `t`
+    /// needs bit `t - 1`. The shift wraps at 32 as the hardware's does.
+    pub fn admits_creature_type(&self, creature_type: u32) -> bool {
+        self.target_creature_type == 0
+            || (creature_type != 0
+                && self.target_creature_type & 1u32.wrapping_shl(creature_type - 1) != 0)
     }
 
     /// `AttributesEx & 0x2000_0000` (`0x6e759a`): the channel bar shows the spell's own name

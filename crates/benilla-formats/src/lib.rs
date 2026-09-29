@@ -308,6 +308,8 @@ pub use text_filter_lists::{load_chat_profanity, load_spam_messages, FilterPatte
 mod race_sound;
 pub use race_sound::{load_exploration_sound_catalog, ExplorationSoundCatalog};
 
+mod race_creature_type;
+pub use race_creature_type::load_race_creature_types;
 mod race_pvp_team;
 pub use race_pvp_team::load_race_pvp_teams;
 mod zone_map;

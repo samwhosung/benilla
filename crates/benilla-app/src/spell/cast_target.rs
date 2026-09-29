@@ -6,8 +6,9 @@
 //!   target from the spell's implicit targeting.
 //! - `Attributes & 0x200`: the candidate is the equipped main hand (`0x6e5361`), bound as an item
 //!   with no cursor; an empty hand refuses with "Your weapon hand is empty" (`0x6e504b`).
-//! - otherwise each bit is cleared against the selection by its relation check, then against the
-//!   player behind `autoSelfCast` (`0x6e53d7`); only a fully cleared word commits, as a unit guid.
+//! - otherwise the selection meets `BindTarget`'s gates ([`bind_gates`]), then each bit is cleared
+//!   by its relation check; then the player behind `autoSelfCast` (`0x6e53d7`) does the same. Only a
+//!   fully cleared word commits, as a unit guid.
 //! - a word with item, lock, GameObject or location bits enters the targeting cursor carrying
 //!   the whole word: its location (`0x6e6320`, `& 0x60`), item (`0x6e6330`, `& 0x4010`),
 //!   GameObject (`0x6e62d0`, `& 0x4800`) and unit (`0x6e6460`) predicates can hold at once, and
@@ -21,6 +22,9 @@ use benilla_formats::SpellDisplay;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
+use super::bind_gates::{bind_gates, unit_alive};
+use crate::creature_type::CreatureTypeSources;
+use crate::names::NameCache;
 use crate::net::{GuidIndex, ObjectStore, Reputations, SelfGuid, SelfPlayer};
 use crate::target::{can_assist, can_attack, Factions, Selection};
 
@@ -31,8 +35,11 @@ const TF_UNIT_PARTY: u16 = 0x0008;
 const TF_UNIT_ENEMY: u16 = 0x0080;
 const TF_UNIT_ASSIST: u16 = 0x0100;
 const TF_CORPSE_ENEMY: u16 = 0x0200;
-const TF_EXPLICIT_GATE: u16 = 0x0400;
+pub(super) const TF_EXPLICIT_GATE: u16 = 0x0400;
 const TF_CORPSE_ALLY: u16 = 0x8000;
+/// The corpse words, `0x8600`: `BindTarget`'s dead-unit gate lets a dead unit through for any of
+/// them (`6e5c7a`).
+pub(super) const CORPSE_WORD_BITS: u16 = TF_CORPSE_ENEMY | TF_EXPLICIT_GATE | TF_CORPSE_ALLY;
 /// The unit-shaped bits a selected unit (alive or dead) can satisfy.
 const UNIT_BITS: u16 = TF_UNIT
     | TF_UNIT_RAID
@@ -104,7 +111,7 @@ pub(crate) struct CastCandidates {
     pub(crate) main_hand_item: Option<u64>,
 }
 
-/// What the binder's relation checks read: the selected unit's store and the player's.
+/// What the binder's gates and relation checks read: the selected unit's store and the player's.
 #[derive(Clone, Copy)]
 pub(crate) struct TargetRelations<'a> {
     pub(crate) target_store: Option<&'a ObjectStore>,
@@ -113,6 +120,8 @@ pub(crate) struct TargetRelations<'a> {
     pub(crate) self_store: Option<&'a ObjectStore>,
     pub(crate) factions: Option<&'a Factions>,
     pub(crate) reputations: &'a Reputations,
+    /// The creature-type gate's inputs, for the candidate and for the player alike.
+    pub(crate) types: CreatureTypeSources<'a>,
 }
 
 /// The targeting inputs [`super::send_spell_cast`] resolves with, built by both cast callers.
@@ -205,6 +214,10 @@ pub(crate) struct CastTargeting<'w, 's> {
     auto_self_cast: Res<'w, AutoSelfCast>,
     factions: Option<Res<'w, Factions>>,
     reputations: Res<'w, Reputations>,
+    /// The creature-type gate's template cache and form table; a harness without them resolves
+    /// no type.
+    names: Option<Res<'w, NameCache>>,
+    spells: Option<Res<'w, crate::ui_action::Spells>>,
     self_transform: Query<'w, 's, &'static Transform, With<SelfPlayer>>,
     transforms: Query<'w, 's, &'static Transform>,
     /// `Option`: the body exists only in world, and the cast-result handler must fetch this param
@@ -234,6 +247,10 @@ impl CastTargeting<'_, '_> {
                 self_store: self.self_store.iter().next(),
                 factions: self.factions.as_deref(),
                 reputations: &self.reputations,
+                types: CreatureTypeSources {
+                    names: self.names.as_deref(),
+                    forms: self.spells.as_deref().map(|s| &s.forms),
+                },
             },
             range: RangeInputs {
                 self_pos: self.self_transform.iter().next().map(|t| t.translation),
@@ -295,7 +312,8 @@ pub(crate) fn cast_target_mask(def: &SpellDisplay) -> u16 {
     word
 }
 
-/// `BindTarget 0x6e5b40`'s unit branch: clear every flag-word bit the candidate satisfies.
+/// `BindTarget 0x6e5b40`'s unit branch past the gates: clear every flag-word bit the candidate
+/// satisfies.
 ///
 /// The assist bit asks `CanAssist 0x6066f0`: selectable, friendly or better, and an NPC's owner
 /// (or the NPC itself) PvP-enabled. This keeps friendly ambient NPCs and critters unbindable.
@@ -311,9 +329,7 @@ fn clear_satisfied_bits(word: u16, is_self: bool, rel: &TargetRelations) -> u16 
             rel.self_store,
             |_| rel.target_owner_store.cloned(),
         );
-    let dead = rel
-        .target_store
-        .is_some_and(|s| s.0.unit_health() == Some(0));
+    let dead = rel.target_store.is_some_and(|s| !unit_alive(&s.0));
     if word & TF_UNIT_PARTY != 0 && is_self {
         word &= !TF_UNIT_PARTY;
     }
@@ -334,11 +350,12 @@ fn clear_satisfied_bits(word: u16, is_self: bool, rel: &TargetRelations) -> u16 
     {
         word &= !TF_UNIT_ENEMY;
     }
-    // Bit 1 has no relation check: any unit binds. Bit 10 is cleared by any candidate but self.
+    // Bit 1 has no relation check: any unit binds. A dead unit's bind clears bit 10 (`6e5d89`,
+    // `6e5ddb`); the gate refuses a living unit under that word before it gets here.
     if word & TF_UNIT != 0 {
         word &= !TF_UNIT;
     }
-    if word & TF_EXPLICIT_GATE != 0 && !is_self {
+    if word & TF_EXPLICIT_GATE != 0 && dead {
         word &= !TF_EXPLICIT_GATE;
     }
     if word & TF_CORPSE_ALLY != 0 && assist && dead {
@@ -350,10 +367,22 @@ fn clear_satisfied_bits(word: u16, is_self: bool, rel: &TargetRelations) -> u16 
     word
 }
 
-/// Whether `BindTarget 0x6e5b40`'s unit arm clears the whole standing word for this unit.
-/// The initial selection, a world click and `SpellTargetUnit` all use this one predicate.
-pub(super) fn unit_word_binds(word: u16, is_self: bool, rel: &TargetRelations) -> bool {
+/// Whether the unit arm's relation checks clear the whole standing word for this unit.
+fn unit_word_binds(word: u16, is_self: bool, rel: &TargetRelations) -> bool {
     word & UNIT_BITS != 0 && clear_satisfied_bits(word, is_self, rel) == 0
+}
+
+/// Whether `BindTarget 0x6e5b40`'s unit branch binds this unit under the standing word: the gates
+/// ([`bind_gates`]), then the relation checks. The initial selection, the `autoSelfCast` fallback,
+/// a world click, `SpellTargetUnit` and the hover verdict all ask this one predicate. An unknown
+/// spell has no row to gate on and leaves the relation checks alone.
+pub(super) fn unit_binds(
+    def: Option<&SpellDisplay>,
+    word: u16,
+    is_self: bool,
+    rel: &TargetRelations,
+) -> bool {
+    def.is_none_or(|def| bind_gates(def, word, is_self, rel)) && unit_word_binds(word, is_self, rel)
 }
 
 /// The wire target for casting `def`. An unknown spell sends the selection as is, or no target
@@ -410,14 +439,15 @@ pub(crate) fn resolve_cast_target(
         }
         return CastWireTarget::Refused(ERR_INVALID_TARGET);
     }
-    // The selection (`0xb4e2d8`, `0x6e539f`).
+    // The selection (`0xb4e2d8`, `0x6e539f`). A unit the gates or the relation checks refuse binds
+    // nothing, so the fallback below gets its turn.
     if let Some(guid) = cand.selection {
         let is_self = cand.caster == Some(guid);
-        if unit_word_binds(word, is_self, rel) {
+        if unit_binds(Some(def), word, is_self, rel) {
             return CastWireTarget::Unit(guid);
         }
     }
-    // The fallback: the active player (`0x6e53d7`), behind autoSelfCast.
+    // The fallback: the active player (`0x6e53d7`), behind autoSelfCast, through the same gates.
     if auto_self_cast {
         if let Some(guid) = cand.caster {
             let self_rel = TargetRelations {
@@ -425,7 +455,7 @@ pub(crate) fn resolve_cast_target(
                 target_owner_store: None,
                 ..*rel
             };
-            if unit_word_binds(word, true, &self_rel) {
+            if unit_binds(Some(def), word, true, &self_rel) {
                 return CastWireTarget::Unit(guid);
             }
         }
@@ -503,15 +533,17 @@ mod tests {
     fn resolution_wire_shapes() {
         use benilla_protocol::ObjectFields;
         // `UNIT_FIELD_FLAGS` bit 3 (player-controlled) on us alone selects `CanAttack`'s mixed
-        // arm; with no catalog the reaction resolves neutral, so the enemy bit clears.
-        let me = crate::net::ObjectStore(ObjectFields::from_pairs(&[(46, 1 << 3)]));
-        let it = crate::net::ObjectStore(ObjectFields::from_pairs(&[(35, 0)]));
+        // arm; with no catalog the reaction resolves neutral, so the enemy bit clears. Both carry
+        // `UNIT_FIELD_HEALTH` (22): a store with none reads dead to the gates.
+        let me = crate::net::ObjectStore(ObjectFields::from_pairs(&[(22, 100), (46, 1 << 3)]));
+        let it = crate::net::ObjectStore(ObjectFields::from_pairs(&[(22, 100), (35, 0)]));
         let rel = TargetRelations {
             target_store: Some(&it),
             target_owner_store: None,
             self_store: Some(&me),
             factions: None,
             reputations: &Reputations(Vec::new()),
+            types: Default::default(),
         };
         let ice_armor = spell(0, 1);
         assert_eq!(
@@ -582,6 +614,7 @@ mod tests {
             self_store: Some(&me),
             factions: Some(&factions),
             reputations: &reputations,
+            types: Default::default(),
         };
 
         assert!(
@@ -760,6 +793,30 @@ mod tests {
         );
     }
 
+    /// A dead unit's bind clears the `0x400` bit whoever it is (`6e5d89`, `6e5ddb`); a living
+    /// unit's never does, and the gate refuses it before the relation checks are asked.
+    #[test]
+    fn a_dead_units_bind_clears_the_0x400_bit() {
+        use benilla_protocol::ObjectFields;
+
+        let health = |hp| ObjectStore(ObjectFields::from_pairs(&[(22, hp)]));
+        let (corpse, live) = (health(0), health(100));
+        let rel = |target| TargetRelations {
+            target_store: Some(target),
+            ..rel_none()
+        };
+        for is_self in [false, true] {
+            assert!(
+                unit_word_binds(0x402, is_self, &rel(&corpse)),
+                "a corpse, self {is_self}"
+            );
+            assert!(
+                !unit_word_binds(0x402, is_self, &rel(&live)),
+                "a living unit keeps the bit, self {is_self}"
+            );
+        }
+    }
+
     fn rel_none() -> TargetRelations<'static> {
         static EMPTY: Reputations = Reputations(Vec::new());
         TargetRelations {
@@ -768,6 +825,7 @@ mod tests {
             self_store: None,
             factions: None,
             reputations: &EMPTY,
+            types: Default::default(),
         }
     }
 }

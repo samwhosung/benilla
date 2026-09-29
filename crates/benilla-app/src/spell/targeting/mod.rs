@@ -44,8 +44,8 @@ use benilla_world::interact::WorldRightPress;
 
 /// The inputs of `BindTarget 0x6e5b40`'s unit and corpse arms and of their read-only mirror
 /// `0x6e6460` ([`SpellTargeting::can_target_unit`], [`bind_target_unit`],
-/// [`SpellTargeting::can_target_corpse`], [`corpse::bind_target_corpse`]): the relation checks the
-/// cast arm's selection bind runs ([`super::cast_target::unit_word_binds`]), the corpse's two
+/// [`SpellTargeting::can_target_corpse`], [`corpse::bind_target_corpse`]): the gates and relation
+/// checks the cast arm's selection bind runs ([`super::cast_target::unit_binds`]), the corpse's two
 /// facts, and the pre-send range gate's inputs ([`super::cast_target::RangeInputs`]), read as
 /// [`super::cast_target::CastTargeting`] reads them.
 #[derive(bevy::ecs::system::SystemParam)]
@@ -60,6 +60,7 @@ pub(crate) struct BindChecks<'w, 's> {
     >,
     factions: Option<Res<'w, crate::target::Factions>>,
     reputations: Res<'w, crate::net::Reputations>,
+    names: Option<Res<'w, crate::names::NameCache>>,
     /// The range leg's positions: the pose the hover picks against, as last frame propagated it,
     /// so the VM feed, the cursor and both binds read one pose. Never the camera's, which
     /// `publish_camera_pose` rewrites mid-frame.
@@ -76,8 +77,10 @@ impl BindChecks<'_, '_> {
             .is_some_and(|(me, _)| me == entity)
     }
 
-    /// `BindTarget 0x6e5b40`'s relation checks: whether this unit clears the whole word.
-    fn relations_clear(&self, word: u16, entity: Entity) -> bool {
+    /// `BindTarget 0x6e5b40`'s unit branch: whether this unit binds the word under this spell,
+    /// its gates and then its relation checks ([`super::cast_target::unit_binds`]). An unknown
+    /// spell has no row to gate on.
+    fn unit_binds(&self, spell_id: u32, word: u16, entity: Entity) -> bool {
         let target_store = self.stores.get(entity).ok();
         let target_owner_store = target_store
             .and_then(|store| {
@@ -93,8 +96,13 @@ impl BindChecks<'_, '_> {
             self_store: self.self_q.iter().next().and_then(|(_, store)| store),
             factions: self.factions.as_deref(),
             reputations: &self.reputations,
+            types: crate::creature_type::CreatureTypeSources {
+                names: self.names.as_deref(),
+                forms: self.spells.as_deref().map(|s| &s.forms),
+            },
         };
-        super::cast_target::unit_word_binds(word, self.is_self(entity), &rel)
+        let def = self.spells.as_deref().and_then(|s| s.catalog.get(spell_id));
+        super::cast_target::unit_binds(def, word, self.is_self(entity), &rel)
     }
 
     /// The spell's min/max range against this unit, through the one compare the pre-send gate
@@ -154,16 +162,6 @@ impl BindChecks<'_, '_> {
             self.factions.as_deref(),
             self.self_q.iter().next().and_then(|(_, s)| s),
         ))
-    }
-
-    /// The caster under a spell with `AttributesEx & 0x80000` (`6e6507`).
-    fn excluded_caster(&self, spell_id: u32, entity: Entity) -> bool {
-        self.is_self(entity)
-            && self
-                .spells
-                .as_deref()
-                .and_then(|s| s.catalog.get(spell_id))
-                .is_some_and(|d| d.excludes_caster())
     }
 }
 
@@ -241,13 +239,12 @@ impl SpellTargeting {
 
     /// `SpellCanTargetUnit`'s predicate `0x6e6460`, its unit leg, with the range flag both callers
     /// pass (the world hover `0x4828d0` at `48290b`, the Lua `SpellCanTargetUnit 0x6e6d00`):
-    /// `BindTarget`'s relation checks, the caster refused under `AttributesEx & 0x80000`
-    /// (`6e6507`), then min² ≤ d² ≤ max² (`6e677c`–`6e6802`), so a unit inside the minimum is out
-    /// too. There is no line-of-sight test.
+    /// `BindTarget`'s gates and relation checks (`6e6507`–`6e65ab`), then min² ≤ d² ≤ max²
+    /// (`6e677c`–`6e6802`), so a unit inside the minimum is out too. There is no line-of-sight
+    /// test.
     pub(crate) fn can_target_unit(&self, entity: Entity, checks: &BindChecks) -> bool {
         self.0.as_ref().is_some_and(|t| {
-            checks.relations_clear(t.word, entity)
-                && !checks.excluded_caster(t.spell_id, entity)
+            checks.unit_binds(t.spell_id, t.word, entity)
                 && checks.range_refusal(t.spell_id, entity).is_none()
         })
     }
@@ -386,9 +383,8 @@ pub(crate) fn feed_targeting_to_vm(
 }
 
 /// `BindTarget 0x6e5b40`'s unit arm, for the world click (`0x493540` at `4935d5`) and
-/// `SpellTargetUnit` (`0x6e5b10`): the caster under `AttributesEx & 0x80000` (`6e5bf7`) or a unit
-/// failing the relation checks binds nothing and the cursor stays up; otherwise the merge. The
-/// player's selection never moves.
+/// `SpellTargetUnit` (`0x6e5b10`): a unit the gates or the relation checks refuse binds nothing
+/// and the cursor stays up; otherwise the merge. The player's selection never moves.
 fn bind_target_unit(
     ladder: &mut crate::spell::CastLadder,
     checks: &BindChecks,
@@ -398,7 +394,7 @@ fn bind_target_unit(
     let Some((spell_id, commit, word)) = ladder.ground.pending() else {
         return;
     };
-    if checks.excluded_caster(spell_id, entity) || !checks.relations_clear(word, entity) {
+    if !checks.unit_binds(spell_id, word, entity) {
         return;
     }
     let range = checks.range_refusal(spell_id, entity);
@@ -532,13 +528,14 @@ mod tests {
             (114, row(8.0, 35.0)),
         ]));
         world.insert_resource(spells);
-        let empty = || ObjectStore(benilla_protocol::ObjectFields::default());
-        world.spawn((SelfPlayer, Guid(ME), GlobalTransform::default(), empty()));
+        // `UNIT_FIELD_HEALTH` 100: a store with no health reads dead to `BindTarget`'s gates.
+        let live = || ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(22, 100)]));
+        world.spawn((SelfPlayer, Guid(ME), GlobalTransform::default(), live()));
         let ally = world
             .spawn((
                 Guid(ALLY),
                 GlobalTransform::from_translation(Vec3::new(distance, 0.0, 0.0)),
-                empty(),
+                live(),
             ))
             .id();
         world.insert_resource(crate::target::Selection {
@@ -648,6 +645,231 @@ mod tests {
         assert!(!world.resource::<SpellTargeting>().active());
         let selection = world.resource::<crate::target::Selection>();
         assert_eq!((selection.target, selection.guid), (Some(ally), Some(ALLY)));
+    }
+
+    /// The press (`resolve_cast_target`), the click and `SpellTargetUnit` ([`bind_target_unit`]) and
+    /// the hover verdict (`SpellCanTargetUnit`) all ask [`crate::spell::cast_target::unit_binds`],
+    /// so one table of units decides all three: `BindTarget`'s gates refuse the same units at
+    /// each, and the control row beside each refusal binds at each.
+    #[test]
+    fn the_press_the_click_and_the_hover_bind_the_same_units() {
+        use crate::names::{CreatureRecord, NameCache};
+        use crate::spell::cast_target::{
+            cast_target_mask, resolve_cast_target, CastCandidates, CastWireTarget, TargetRelations,
+        };
+        use benilla_formats::SpellDisplay;
+        use benilla_protocol::ObjectFields;
+
+        const SPELL: u32 = 3000;
+        /// Absolute descriptor indices: `OBJECT_FIELD_ENTRY`, `UNIT_FIELD_HEALTH`,
+        /// `UNIT_FIELD_FLAGS` and `UNIT_DYNAMIC_FLAGS`.
+        const ENTRY: u16 = 3;
+        const HEALTH: u16 = 22;
+        const FLAGS: u16 = 46;
+        const DYNAMIC_FLAGS: u16 = 143;
+        const HUMANOID: u32 = 69;
+        const BEAST: u32 = 70;
+
+        let make_names = || {
+            let mut names = NameCache::default();
+            for (entry, creature_type) in [(HUMANOID, 7), (BEAST, 1)] {
+                names.insert_creature(
+                    entry,
+                    Some(CreatureRecord {
+                        name: String::new(),
+                        subname: None,
+                        creature_type,
+                        pet_family: 0,
+                        rank: 0,
+                        type_flags: 0,
+                        civilian: false,
+                        racial_leader: false,
+                        display_id: 0,
+                    }),
+                );
+            }
+            names
+        };
+        fn plain() -> SpellDisplay {
+            SpellDisplay {
+                targets: 0x2,
+                ..Default::default()
+            }
+        }
+        fn hibernate() -> SpellDisplay {
+            SpellDisplay {
+                target_creature_type: 0x3,
+                ..plain()
+            }
+        }
+        fn excluding() -> SpellDisplay {
+            SpellDisplay {
+                attributes_ex: 0x0008_0000,
+                ..plain()
+            }
+        }
+        fn skinning() -> SpellDisplay {
+            SpellDisplay {
+                targets: 0x402,
+                ..Default::default()
+            }
+        }
+        fn raise() -> SpellDisplay {
+            SpellDisplay {
+                attributes_ex2: 1,
+                ..plain()
+            }
+        }
+        // (label, spell, the caster is the candidate, the candidate's fields, binds)
+        #[allow(clippy::type_complexity)]
+        let cases: Vec<(&str, fn() -> SpellDisplay, bool, Vec<(u16, u32)>, bool)> = vec![
+            ("a live unit", plain, false, vec![(HEALTH, 100)], true),
+            ("a dead unit", plain, false, vec![(HEALTH, 0)], false),
+            ("no health streamed", plain, false, vec![], false),
+            (
+                "a dead unit, AttributesEx2 & 1",
+                raise,
+                false,
+                vec![(HEALTH, 0)],
+                true,
+            ),
+            (
+                "a dead unit, the dynamic dead flag",
+                plain,
+                false,
+                vec![(HEALTH, 0), (DYNAMIC_FLAGS, 0x20)],
+                true,
+            ),
+            (
+                "UNIT_FIELD_FLAGS & 0x10000",
+                plain,
+                false,
+                vec![(HEALTH, 100), (FLAGS, 0x1_0000)],
+                false,
+            ),
+            (
+                "a Humanoid under Hibernate's mask",
+                hibernate,
+                false,
+                vec![(HEALTH, 100), (ENTRY, HUMANOID)],
+                false,
+            ),
+            (
+                "a Beast under Hibernate's mask",
+                hibernate,
+                false,
+                vec![(HEALTH, 100), (ENTRY, BEAST)],
+                true,
+            ),
+            (
+                "the caster, AttributesEx & 0x80000",
+                excluding,
+                true,
+                vec![(HEALTH, 100)],
+                false,
+            ),
+            (
+                "another unit, AttributesEx & 0x80000",
+                excluding,
+                false,
+                vec![(HEALTH, 100)],
+                true,
+            ),
+            (
+                "a living unit under the 0x400 word",
+                skinning,
+                false,
+                vec![(HEALTH, 100)],
+                false,
+            ),
+            (
+                "a dead unit under the 0x400 word",
+                skinning,
+                false,
+                vec![(HEALTH, 0)],
+                true,
+            ),
+        ];
+
+        for (label, make_def, on_self, fields, binds) in cases {
+            let (mut world, rx, ally) = unit_world(10.0);
+            let me = world
+                .query_filtered::<Entity, With<SelfPlayer>>()
+                .single(&world)
+                .expect("the player");
+            let (entity, guid, token) = if on_self {
+                (me, ME, "player")
+            } else {
+                (ally, ALLY, "target")
+            };
+            let store = ObjectStore(ObjectFields::from_pairs(&fields));
+            world.entity_mut(entity).insert(store.clone());
+            let word = cast_target_mask(&make_def());
+            let mut spells = world.resource_mut::<crate::ui_action::Spells>();
+            spells.catalog = benilla_formats::SpellCatalog::from_displays(HashMap::from([(
+                SPELL,
+                SpellDisplay {
+                    range_index: 5,
+                    ..make_def()
+                },
+            )]));
+            world.insert_resource(make_names());
+            arm(&mut world, SPELL, word);
+
+            // The hover verdict.
+            world
+                .run_system_cached(feed_targeting_to_vm)
+                .expect("the feed runs");
+            let hover = world
+                .non_send_resource::<UiScript>()
+                .eval::<bool>(&format!("return SpellCanTargetUnit({token:?}) == true"))
+                .expect("a boolean");
+            assert_eq!(hover, binds, "{label}: the hover verdict");
+
+            // The click, through `SpellTargetUnit`.
+            spell_target_unit(&mut world, token);
+            let clicked = matches!(
+                rx.try_recv(),
+                Ok(ClientCommand::CastSpell {
+                    spell_id: SPELL,
+                    target: Some(sent),
+                }) if sent == guid
+            );
+            assert_eq!(clicked, binds, "{label}: the cursor's click");
+            assert_eq!(
+                world.resource::<SpellTargeting>().active(),
+                !binds,
+                "{label}: a bind ends the cursor, a refusal leaves it up"
+            );
+
+            // The press, from the same fields.
+            let (def, names) = (make_def(), make_names());
+            let pressed = resolve_cast_target(
+                Some(&def),
+                &CastCandidates {
+                    selection: Some(guid),
+                    caster: Some(ME),
+                    main_hand_item: None,
+                },
+                false,
+                &TargetRelations {
+                    target_store: Some(&store),
+                    target_owner_store: None,
+                    self_store: Some(&store),
+                    factions: None,
+                    reputations: &crate::net::Reputations(Vec::new()),
+                    types: crate::creature_type::CreatureTypeSources {
+                        names: Some(&names),
+                        forms: None,
+                    },
+                },
+            );
+            assert_eq!(
+                pressed == CastWireTarget::Unit(guid),
+                binds,
+                "{label}: the press ({pressed:?})"
+            );
+        }
     }
 
     /// `SpellCanTargetUnit` asks `0x6e6460`'s unit leg per token: nil out of range, inside the

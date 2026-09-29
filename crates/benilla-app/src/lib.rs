@@ -42,6 +42,7 @@ mod combat_text;
 mod console;
 mod crash;
 mod creature_anim;
+mod creature_type;
 mod cursor;
 mod cvars;
 mod death;

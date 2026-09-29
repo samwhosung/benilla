@@ -406,17 +406,20 @@ mod tests {
                 (114, row(8.0, 35.0)),
             ]));
             world.insert_resource(spells);
-            let empty = || crate::net::ObjectStore(benilla_protocol::ObjectFields::default());
+            // `UNIT_FIELD_HEALTH` 100: a store with no health reads dead to `BindTarget`'s gates.
+            let live = || {
+                crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(22, 100)]))
+            };
             world.spawn((
                 SelfPlayer,
                 Transform::default(),
                 GlobalTransform::default(),
-                empty(),
+                live(),
             ));
             let unit = world
                 .spawn((
                     GlobalTransform::from_translation(Vec3::new(distance, 0.0, 0.0)),
-                    empty(),
+                    live(),
                 ))
                 .id();
             world.insert_resource(crate::target::Hovered {
