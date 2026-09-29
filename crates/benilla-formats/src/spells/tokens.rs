@@ -458,6 +458,11 @@ pub fn substitute(text: &str, spell: &SpellDisplay, ctx: &TokenContext) -> Strin
         };
         match token_value(letter, slot, target, ctx, scale) {
             Some((sub, val)) => {
+                // Deviation: every token keys the `$l` plural. The reference's `$a`, `$d`, `$t`,
+                // `$e`, `$c`, `$p`, `$f`, `$F` and `$z` arms never write `[0xbe0b84]`, so its `$l`
+                // keys on the number before them, and Blizzard's "$s1 … every $t1
+                // $lsecond:seconds;" reads "every 1 seconds" in 1.12.1. We print the grammar the
+                // text means.
                 last_value = val;
                 out.push_str(&sub);
             }
@@ -1082,6 +1087,30 @@ mod tests {
         assert_eq!(substitute("$t1", &tick(0, 0), &bare), "0");
         assert_eq!(substitute("$t1", &tick(3000, 0), &c), "2");
         assert_eq!(substitute("$t1", &tick(3000, 1), &c), "5");
+    }
+
+    /// The `$l` deviation in [`substitute`]: Blizzard's wording keys its plural on the `$t` just
+    /// before it, "every 1 second", where 1.12.1 keys on the damage and reads "every 1 seconds".
+    #[test]
+    fn the_plural_keys_on_the_nearest_token_a_deviation() {
+        let durations = SpellDurationCatalog::default();
+        let radii = SpellRadiusCatalog::default();
+        let c = ctx(&durations, &radii, &none_lookup);
+        let blizzard = SpellDisplay {
+            effect_base_points: [24, 0, 0],
+            effect_base_dice: [1, 0, 0],
+            effect_die_sides: [1, 0, 0],
+            effect_amplitude: [1000, 0, 0],
+            ..Default::default()
+        };
+        assert_eq!(
+            substitute(
+                "$s1 Frost damage every $t1 $lsecond:seconds;",
+                &blizzard,
+                &c
+            ),
+            "25 Frost damage every 1 second"
+        );
     }
 
     /// `$r` (`507d5b`) reads row 1 for an index at or below 1 and prints one decimal through
