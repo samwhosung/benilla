@@ -62,6 +62,37 @@ fn slider(s: &UiScript, i: usize) -> f64 {
 fn assert_clean(s: &UiScript, step: &str) {
     let errors = s.errors();
     assert!(errors.is_empty(), "{step} raised: {errors:#?}");
+    let unknown: Vec<String> = s
+        .warnings()
+        .into_iter()
+        .filter(|w| w.contains("unknown CVar"))
+        .collect();
+    assert!(
+        unknown.is_empty(),
+        "{step} touched an unregistered CVar: {unknown:#?}"
+    );
+}
+
+/// Every box's `(cvar, stored value, checked)`, over the window's own table
+/// (`OptionsFrameCheckButtons`, `OptionsFrame.lua:5-22`); the stored value is `"nil"` when absent.
+fn boxes(s: &UiScript) -> Vec<(String, String, bool, bool)> {
+    s.eval::<Vec<String>>(
+        r#"local out = {}
+        for _, v in OptionsFrameCheckButtons do
+            local b = getglobal("OptionsFrameCheckButton"..v.index)
+            local bit = function(x) if x then return "1" else return "0" end end
+            table.insert(out, v.cvar.."|"..(GetCVar(v.cvar) or "nil").."|"..bit(b:GetChecked())
+                .."|"..bit(b:IsEnabled() == 1))
+        end
+        return out"#,
+    )
+    .unwrap()
+    .into_iter()
+    .map(|row| {
+        let f: Vec<&str> = row.split('|').collect();
+        (f[0].to_string(), f[1].to_string(), f[2] == "1", f[3] == "1")
+    })
+    .collect()
 }
 
 /// Open, walk every box and slider, Okay; reopen and Defaults; reopen, move the gamma and Cancel.
@@ -93,6 +124,18 @@ fn the_stock_video_window_opens_saves_restores_defaults_and_cancels_clean() {
         Some("0"),
         "`DesktopGamma` registers \"0\" (`0x402d4d`)"
     );
+
+    // Every box shows its CVar's stored value: all eighteen are registered, and an enabled box is
+    // ticked exactly when its value is "1" (`OptionsFrame_Load`'s `EnableCheckBox(button, 1,
+    // GetCVar(...))`).
+    let at_open = boxes(&s);
+    assert_eq!(at_open.len(), 18);
+    for (cvar, value, checked, enabled) in &at_open {
+        assert!(value == "0" || value == "1", "{cvar} stores {value:?}");
+        if *enabled {
+            assert_eq!(*checked, value == "1", "{cvar}'s box shows its value");
+        }
+    }
 
     // ── Every box, then every slider to a position off its default. ──
     for i in 1..=18 {
@@ -132,6 +175,36 @@ fn the_stock_video_window_opens_saves_restores_defaults_and_cancels_clean() {
     assert_eq!(cvar(&s, "gamma").as_deref(), Some("0.500000"));
     // The Use Desktop Gamma box was ticked, `_Save` wrote "1" and the recorded value follows it.
     assert_eq!(cvar(&s, "desktopGamma").as_deref(), Some("1"));
+    // `_Save` stored every box as it was left, and each moved box kept its click.
+    let saved = boxes(&s);
+    for (cvar, value, checked, _) in &saved {
+        assert_eq!(
+            value,
+            if *checked { "1" } else { "0" },
+            "{cvar} kept its box"
+        );
+    }
+    let moved: Vec<&str> = at_open
+        .iter()
+        .zip(&saved)
+        .filter(|(a, b)| a.1 != b.1)
+        .map(|(a, _)| a.0.as_str())
+        .collect();
+    for cvar in [
+        "ffxGlow",
+        "specular",
+        "movieSubtitle",
+        "lod",
+        "gxCursor",
+        "useWeatherShaders",
+    ] {
+        assert!(
+            moved.contains(&cvar),
+            "{cvar} was clicked and saved: {moved:?}"
+        );
+    }
+    // Enable All Shaders is copied into `ffx` (`OptionsFrame.lua:202-204`).
+    assert_eq!(cvar(&s, "ffx"), cvar(&s, "pixelShaders"));
 
     // ── Defaults: `OptionsFrame_SetDefaults` reads `GetCVarDefault` for `smallCull`,
     //    `shadowLevel` and `baseMip` (`:431-443`) and ends in `RestoreVideoDefaults`. ──

@@ -1189,10 +1189,7 @@ fn a_clean_world_entry_raises_only_the_warnings_we_have_named() {
 
     // Deviation: the `OnInputLanguageChanged` script slot (`ChatFrame.xml:121`, the IME language
     // indicator) is refused, because benilla has no IME to fire it.
-    // Deviation: `gxRefresh`, read by stock `OptionsFrameRefreshDropDown_OnLoad`
-    // (`OptionsFrame.lua:300`), is not registered, because no target offers the exclusive mode-set
-    // a refresh rate needs; `GetRefreshRates` answers the reference's no-rates sentinel.
-    const KNOWN: [&str; 2] = ["OnInputLanguageChanged", "unknown CVar 'gxRefresh'"];
+    const KNOWN: [&str; 1] = ["OnInputLanguageChanged"];
 
     let unexpected: Vec<String> = script
         .diagnostics()

@@ -86,11 +86,20 @@ pub(crate) fn parse_resolution(value: &str) -> Option<UVec2> {
     (size.x > 0 && size.y > 0).then_some(size)
 }
 
-/// The `WindowMode` a display mode means, on a given monitor.
-pub(crate) fn window_mode(display: DisplayMode, monitor: MonitorSelection) -> WindowMode {
-    match display {
-        DisplayMode::Fullscreen => WindowMode::BorderlessFullscreen(monitor),
-        DisplayMode::Windowed => WindowMode::Windowed,
+/// The `WindowMode` a display mode means, on a given monitor. `maximize` is `gxMaximize`, which
+/// counts only while windowed: the reference's window rebuild (`0x58cf10`) gives a windowed,
+/// maximized window the popup style `0x90000000`, no caption and no border, sized to the screen
+/// (`GetSystemMetrics` 0 and 1) at its origin, which is a borderless window over the monitor.
+pub(crate) fn window_mode(
+    display: DisplayMode,
+    maximize: bool,
+    monitor: MonitorSelection,
+) -> WindowMode {
+    match (display, maximize) {
+        (DisplayMode::Fullscreen, _) | (DisplayMode::Windowed, true) => {
+            WindowMode::BorderlessFullscreen(monitor)
+        }
+        (DisplayMode::Windowed, false) => WindowMode::Windowed,
     }
 }
 
@@ -98,14 +107,17 @@ pub(crate) fn window_mode(display: DisplayMode, monitor: MonitorSelection) -> Wi
 /// does not flash windowed until `Startup`. `MonitorSelection::Primary`, since `Current` has no
 /// answer before the window exists (`bevy_winit::select_monitor`).
 pub(crate) fn boot_window_mode() -> WindowMode {
-    let display = if windowed_env() {
-        DisplayMode::Windowed
+    let flag = |name| crate::cvars::boot_cvar(name).and_then(|v| v.parse::<f32>().ok());
+    // A run that sizes its own window owns both rows for the session.
+    let (display, maximize) = if windowed_env() {
+        (DisplayMode::Windowed, false)
     } else {
-        crate::cvars::boot_cvar("gxWindow")
-            .and_then(|v| v.parse::<f32>().ok())
-            .map_or_else(DisplayMode::default, display_from_flag)
+        (
+            flag("gxWindow").map_or_else(DisplayMode::default, display_from_flag),
+            flag("gxMaximize").is_some_and(|v| v != 0.0),
+        )
     };
-    window_mode(display, MonitorSelection::Primary)
+    window_mode(display, maximize, MonitorSelection::Primary)
 }
 
 /// The windowed size the primary window is born at, `gxResolution`, read as [`boot_window_mode`]
@@ -122,6 +134,8 @@ pub(crate) fn boot_windowed_size() -> UVec2 {
 pub(crate) struct VideoConfig {
     pub(crate) vsync: bool,
     pub(crate) display: DisplayMode,
+    /// `gxMaximize`: a windowed window fills the monitor, borderless ([`window_mode`]).
+    pub(crate) maximize: bool,
     /// The windowed size, `gxResolution`. Kept while fullscreen so leaving it can restore it.
     pub(crate) windowed: UVec2,
 }
@@ -135,6 +149,7 @@ impl Default for VideoConfig {
             } else {
                 DisplayMode::default()
             },
+            maximize: false,
             windowed: DEFAULT_WINDOWED,
         }
     }
@@ -165,6 +180,7 @@ pub(crate) fn on_cvar(
     mut weather: ResMut<benilla_world::weather::WeatherState>,
     particles: Option<ResMut<benilla_world::particles::ParticleTuning>>,
     mut spell_effect_level: ResMut<SpellEffectLevel>,
+    mut ffx: ResMut<benilla_world::ffx_glow::FfxSwitches>,
     mut console: Option<ResMut<crate::console::ConsoleEcho>>,
     mut cvars: ResMut<crate::cvars::Cvars>,
 ) {
@@ -179,6 +195,19 @@ pub(crate) fn on_cvar(
         "gxvsync" => cfg.vsync = ev.flag(),
         // The reference's polarity: `1` is windowed (the row is "Windowed Mode").
         "gxwindow" => cfg.display = display_from_flag(v),
+        // Latched like `gxWindow`: the commit is `RestartGx`, which rebuilds the window
+        // (`0x58cf10` reads `+0x09`); `apply_window_mode` is that rebuild.
+        "gxmaximize" => cfg.maximize = ev.flag(),
+        // The FFX pass's three switches, read every frame by the reference (`0x6cd8a6`, `0x6cc5a8`,
+        // `0x6cdf10`), so a write shows on the next frame.
+        "ffx" | "ffxglow" | "ffxdeath" => {
+            match ev.key().as_str() {
+                "ffx" => ffx.master = ev.flag(),
+                "ffxglow" => ffx.glow = ev.flag(),
+                _ => ffx.death = ev.flag(),
+            }
+            info!("video: full-screen effects {:?}", *ffx);
+        }
         "farclip" => view.farclip = v.clamp(*FARCLIP_RANGE.start(), *FARCLIP_RANGE.end()),
         // Clamped, where the reference refuses an out-of-range write and keeps the value
         // (`0x688d90` echoes "NearClip must be in range 0.01 - 0.33" and returns 0).
@@ -586,7 +615,7 @@ fn apply_window_mode(
     let Ok(mut window) = windows.single_mut() else {
         return;
     };
-    let want = window_mode(cfg.display, MonitorSelection::Current);
+    let want = window_mode(cfg.display, cfg.maximize, MonitorSelection::Current);
     let already = matches!(
         (&window.mode, &want),
         (WindowMode::Windowed, WindowMode::Windowed)
@@ -601,13 +630,21 @@ fn apply_window_mode(
     // Leaving fullscreen hands the size back: entering it overwrote `window.resolution` with the
     // monitor's (`bevy_window`'s documented behaviour). Both writes land in one frame, as
     // `bevy_winit::changed_windows` applies `mode` before `resolution`.
-    if cfg.display == DisplayMode::Windowed {
+    if want == WindowMode::Windowed {
         window
             .resolution
             .set(cfg.windowed.x as f32, cfg.windowed.y as f32);
     }
     window.mode = want;
-    info!("video: display mode {:?} ({want:?})", cfg.display);
+    info!(
+        "video: display mode {:?}{} ({want:?})",
+        cfg.display,
+        if cfg.maximize && cfg.display == DisplayMode::Windowed {
+            ", maximized"
+        } else {
+            ""
+        }
+    );
 }
 
 #[cfg(test)]
@@ -633,11 +670,11 @@ mod tests {
     fn the_default_is_borderless_fullscreen_not_exclusive() {
         assert_eq!(DisplayMode::default(), DisplayMode::Fullscreen);
         assert!(matches!(
-            window_mode(DisplayMode::Fullscreen, MonitorSelection::Primary),
+            window_mode(DisplayMode::Fullscreen, false, MonitorSelection::Primary),
             WindowMode::BorderlessFullscreen(_)
         ));
         assert_eq!(
-            window_mode(DisplayMode::Windowed, MonitorSelection::Primary),
+            window_mode(DisplayMode::Windowed, false, MonitorSelection::Primary),
             WindowMode::Windowed
         );
     }
@@ -657,6 +694,7 @@ mod tests {
         app.insert_resource(VideoConfig {
             vsync: true,
             display: DisplayMode::Fullscreen,
+            maximize: false,
             windowed: UVec2::new(1024, 768),
         })
         // Seated by hand: this test runs the one system, not the plugin.
@@ -671,7 +709,7 @@ mod tests {
             .entity_mut(win)
             .get_mut::<Window>()
             .unwrap()
-            .mode = window_mode(DisplayMode::Fullscreen, MonitorSelection::Primary);
+            .mode = window_mode(DisplayMode::Fullscreen, false, MonitorSelection::Primary);
 
         app.update();
         assert!(
@@ -706,6 +744,73 @@ mod tests {
             app.world().entity(win).get::<Window>().unwrap().mode,
             WindowMode::BorderlessFullscreen(MonitorSelection::Current)
         ));
+    }
+
+    /// `gxMaximize` counts only while windowed, and there it is the reference's popup over the
+    /// whole screen (`0x58cf10`: style `0x90000000`, `GetSystemMetrics` 0 and 1).
+    #[test]
+    fn a_maximized_window_is_borderless_over_the_monitor() {
+        let m = MonitorSelection::Current;
+        assert_eq!(
+            window_mode(DisplayMode::Windowed, true, m),
+            WindowMode::BorderlessFullscreen(m)
+        );
+        assert_eq!(
+            window_mode(DisplayMode::Windowed, false, m),
+            WindowMode::Windowed
+        );
+        assert_eq!(
+            window_mode(DisplayMode::Fullscreen, true, m),
+            WindowMode::BorderlessFullscreen(m),
+            "fullscreen ignores it"
+        );
+    }
+
+    /// The `RestartGx` rebuild applies a committed `gxMaximize`, and un-maximizing hands the
+    /// windowed size back.
+    #[test]
+    fn the_restart_rebuild_applies_a_committed_maximize() {
+        let mut app = App::new();
+        app.insert_resource(VideoConfig {
+            vsync: true,
+            display: DisplayMode::Windowed,
+            maximize: false,
+            windowed: UVec2::new(1024, 768),
+        })
+        .init_resource::<GxRestarts>()
+        .add_systems(Update, apply_window_mode);
+        let win = app
+            .world_mut()
+            .spawn((Window::default(), PrimaryWindow))
+            .id();
+        app.update();
+        assert_eq!(
+            app.world().entity(win).get::<Window>().unwrap().mode,
+            WindowMode::Windowed
+        );
+        // The commit's observer write, then the restart the stock Okay asks for.
+        app.world_mut().resource_mut::<VideoConfig>().maximize = true;
+        app.world_mut().resource_mut::<GxRestarts>().0 += 1;
+        app.update();
+        assert!(matches!(
+            app.world().entity(win).get::<Window>().unwrap().mode,
+            WindowMode::BorderlessFullscreen(MonitorSelection::Current)
+        ));
+        app.world_mut()
+            .entity_mut(win)
+            .get_mut::<Window>()
+            .unwrap()
+            .resolution
+            .set(2560.0, 1440.0);
+        app.world_mut().resource_mut::<VideoConfig>().maximize = false;
+        app.world_mut().resource_mut::<GxRestarts>().0 += 1;
+        app.update();
+        let w = app.world().entity(win).get::<Window>().unwrap();
+        assert_eq!(w.mode, WindowMode::Windowed);
+        assert_eq!(
+            (w.resolution.width(), w.resolution.height()),
+            (1024.0, 768.0)
+        );
     }
 
     #[test]

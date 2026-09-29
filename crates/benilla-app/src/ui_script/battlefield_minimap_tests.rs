@@ -8,16 +8,12 @@ use benilla_ui::script::{
     WorldStateUiView, ARROW_MODEL,
 };
 
-/// The manifest's one warning. Deviation: `gxRefresh`, read at `OptionsFrame.lua:300`, is not
-/// registered, because nothing here can set a refresh rate.
-const MANIFEST_WARNINGS: [&str; 1] = ["unknown CVar 'gxRefresh' (not host-registered) — ignored"];
-
 fn quiet(s: &UiScript) {
     assert!(s.errors().is_empty(), "script errors: {:#?}", s.errors());
-    assert_eq!(
-        s.warnings(),
-        MANIFEST_WARNINGS,
-        "host warnings beyond the manifest's own"
+    assert!(
+        s.warnings().is_empty(),
+        "host warnings: {:#?}",
+        s.warnings()
     );
 }
 

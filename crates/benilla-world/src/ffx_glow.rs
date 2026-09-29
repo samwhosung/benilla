@@ -109,6 +109,40 @@ pub struct FfxGlowGain(pub f32);
 #[derive(Resource, Clone, Default, ExtractResource)]
 pub struct FfxDeathFade(pub f32);
 
+/// The three switches the reference's FFX pass reads every frame, as the `ffx`, `ffxGlow` and
+/// `ffxDeath` CVars' integers (each registered "1" with the echo stub `0x6cde30`, so nothing is
+/// cached). The begin/end pair (`0x6cd890`/`0x6cda70`) runs the active pass only while `ffx`
+/// (`[0xce8a04]`, `0x6cd8a6`/`0x6cda76`) is on and the pass's own enable (vtable `+4`) says so:
+/// `CFFXGlow` (`0x6cc5a0`) reads `ffxGlow` (`0x6cc5a8`), `CFFXDeath` (`0x6cded0`) reads `ffxDeath`
+/// (`0x6cdf10`). A pass that does not run is not replaced by the other one: the slot holds one.
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug, ExtractResource)]
+pub struct FfxSwitches {
+    /// `ffx`, the master.
+    pub master: bool,
+    /// `ffxGlow`: the glow pass, the drunk and underwater haze and the underwater warp with it.
+    pub glow: bool,
+    /// `ffxDeath`: the ghost's death pass.
+    pub death: bool,
+}
+
+impl Default for FfxSwitches {
+    /// Each registers "1".
+    fn default() -> Self {
+        Self {
+            master: true,
+            glow: true,
+            death: true,
+        }
+    }
+}
+
+impl FfxSwitches {
+    /// Whether the pass the slot holds runs: the death pass while a ghost, else the glow pass.
+    fn runs(self, death_pass: bool) -> bool {
+        self.master && if death_pass { self.death } else { self.glow }
+    }
+}
+
 /// The glue screens' FFX state. The select build's tail (`0x472fba`–`0x473007`) forks on the
 /// selected record's `CHARSELECT+0xfc & 0x2000` (`0x472fd9`), installs (`0x6cde60`) the glue
 /// death or glow pass and pins `LightParams.glow` (`[0x6d48b0()+0x110]`) to a constant: both
@@ -254,10 +288,11 @@ fn sync_wave(
 }
 
 /// Whether a view draws the warped combine: the WorldFrame pair (the glue pair reaches the same
-/// render, but the guard's in-world half `0x467d00` never trips there), [`FfxWave::active`], and
-/// no ghost, whose `CFFXDeath::Render` (`0x6cdf20`) has one list and no guard.
-fn wave_armed(state: FfxState, wave: FfxWave, death: f32) -> bool {
-    matches!(state, FfxState::Player) && wave.active && death == 0.0
+/// render, but the guard's in-world half `0x467d00` never trips there), [`FfxWave::active`], no
+/// ghost, whose `CFFXDeath::Render` (`0x6cdf20`) has one list and no guard, and a glow pass that
+/// runs ([`FfxSwitches`]).
+fn wave_armed(state: FfxState, wave: FfxWave, world: FfxPassState) -> bool {
+    matches!(state, FfxState::Player) && wave.active && world.death == 0.0 && world.runs
 }
 
 /// [`FfxGlowGain`]: the zone's `LightParams.glow` in world (its default 0.5 while no lighting
@@ -697,6 +732,8 @@ fn dither_armed() -> f32 {
 
 /// One view's combine uniform: the zone glow × [`FfxGlow::gain_scale`], the death gate and haze of
 /// its pass pair, the dither arm, then the wave phases, written every frame so the clock runs free.
+/// A pair whose pass is switched off ([`FfxSwitches`]) leaves the scene as it was drawn: no glow,
+/// no haze, no death combine, only the decode.
 fn combine_uniform(
     zone_gain: f32,
     world: FfxPassState,
@@ -709,8 +746,13 @@ fn combine_uniform(
         FfxState::Glue => glue,
         FfxState::None => FfxPassState::INERT,
     };
+    let (gain, feed) = if feed.runs {
+        (zone_gain * glow.gain_scale, feed)
+    } else {
+        (0.0, FfxPassState::INERT)
+    };
     [
-        zone_gain * glow.gain_scale,
+        gain,
         feed.death,
         feed.haze,
         dither_armed(),
@@ -721,28 +763,48 @@ fn combine_uniform(
     ]
 }
 
-/// One pass pair's live death gate and haze mix.
+/// One pass pair's live death gate and haze mix, and whether the pass its slot holds runs.
 #[derive(Clone, Copy)]
 struct FfxPassState {
     death: f32,
     haze: f32,
+    runs: bool,
 }
 
 impl FfxPassState {
     fn world(death: f32, haze: f32) -> Self {
-        Self { death, haze }
+        Self {
+            death,
+            haze,
+            runs: true,
+        }
     }
 
     /// Death only: the reference packs the haze into `primary.z` of the glow combine (`0x6cb020`)
     /// from the in-world player's state, which a glue screen does not have.
     fn glue(death: f32) -> Self {
-        Self { death, haze: 0.0 }
+        Self {
+            death,
+            haze: 0.0,
+            runs: true,
+        }
+    }
+
+    /// The pair under the three switches: the glue pair is built by the same constructors
+    /// (`0x46a723`/`0x46a752`) and reads the same records, and its paint calls the same begin
+    /// (`0x46fad3`).
+    fn switched(self, switches: FfxSwitches) -> Self {
+        Self {
+            runs: switches.runs(self.death > 0.0),
+            ..self
+        }
     }
 
     /// What a view running neither pair reads: a bake.
     const INERT: Self = Self {
         death: 0.0,
         haze: 0.0,
+        runs: true,
     };
 }
 
@@ -792,10 +854,9 @@ impl ViewNode for FfxGlowNode {
         let render_device = render_context.render_device().clone();
         let diagnostics = render_context.diagnostic_recorder();
 
-        // The combines read the blur only through `w` (`x`) and the haze (`z`); with both zero the
-        // filter passes are skipped, and the stale, finite ¼-res target is multiplied by zero.
-        let blur_read = uniform[0] != 0.0 || uniform[2] != 0.0;
-        if blur_read {
+        // With both zero the filter passes are skipped, and the stale, finite ¼-res target is
+        // multiplied by zero.
+        if blur_read(&uniform) {
             let layout_filter = pipeline_cache.get_bind_group_layout(&pipelines.layout_filter);
             // Per frame: a `Write` view flips its main texture per call ([`FfxGlowTextures`]).
             let down_bind = render_device.create_bind_group(
@@ -895,18 +956,29 @@ impl ViewNode for FfxGlowNode {
     }
 }
 
+/// Whether a combine reads the blur: only through `w` (`x`) and the haze (`z`), so with both zero
+/// the three filter passes (Box4, Gauss4 H and V) do not run.
+fn blur_read(uniform: &[f32; 8]) -> bool {
+    uniform[0] != 0.0 || uniform[2] != 0.0
+}
+
 /// One view's combine uniform and whether its underwater entry is armed, for both combine nodes.
 fn live_combine(world: &World, glow: &FfxGlow) -> ([f32; 8], bool) {
-    let death = world.resource::<FfxDeathFade>().0;
+    let switches = *world.resource::<FfxSwitches>();
     let wave = *world.resource::<FfxWave>();
+    let player = FfxPassState::world(
+        world.resource::<FfxDeathFade>().0,
+        world.resource::<FfxHazeMix>().0,
+    )
+    .switched(switches);
     let uniform = combine_uniform(
         world.resource::<FfxGlowGain>().0,
-        FfxPassState::world(death, world.resource::<FfxHazeMix>().0),
-        FfxPassState::glue(world.resource::<GlueFfx>().death()),
+        player,
+        FfxPassState::glue(world.resource::<GlueFfx>().death()).switched(switches),
         glow,
         wave,
     );
-    (uniform, wave_armed(glow.state, wave, death))
+    (uniform, wave_armed(glow.state, wave, player))
 }
 
 /// The render-world views an [`FfxBackdrop`] claims this frame; a claimed view has no combine.
@@ -1090,6 +1162,7 @@ impl Plugin for FfxGlowPlugin {
             .init_resource::<GlueFfx>()
             .init_resource::<FfxHazeMix>()
             .init_resource::<FfxWave>()
+            .init_resource::<FfxSwitches>()
             .add_plugins((
                 ExtractComponentPlugin::<FfxGlow>::default(),
                 ExtractComponentPlugin::<FfxBackdrop>::default(),
@@ -1098,6 +1171,7 @@ impl Plugin for FfxGlowPlugin {
                 ExtractResourcePlugin::<GlueFfx>::default(),
                 ExtractResourcePlugin::<FfxHazeMix>::default(),
                 ExtractResourcePlugin::<FfxWave>::default(),
+                ExtractResourcePlugin::<FfxSwitches>::default(),
             ))
             .add_systems(
                 Update,
@@ -1151,6 +1225,10 @@ mod tests {
     }
     fn living_glue() -> FfxPassState {
         FfxPassState::glue(0.0)
+    }
+    /// The world pair, live: alive, sober and dry.
+    fn alive() -> FfxPassState {
+        FfxPassState::world(0.0, 0.0)
     }
 
     /// Checked as one table, so a new preset cannot quietly join the wrong side.
@@ -1301,25 +1379,137 @@ mod tests {
         };
         let dry = FfxWave::default();
         assert!(
-            wave_armed(FfxState::Player, wet, 0.0),
+            wave_armed(FfxState::Player, wet, alive()),
             "in-world, submerged, alive — the reference walks its second list"
         );
         assert!(
-            !wave_armed(FfxState::Player, dry, 0.0),
+            !wave_armed(FfxState::Player, dry, alive()),
             "a dry camera keeps the first list"
         );
         assert!(
-            !wave_armed(FfxState::Player, wet, 1.0),
+            !wave_armed(FfxState::Player, wet, ghost_world()),
             "a ghost runs CFFXDeath, which owns one list and no guard"
         );
         assert!(
-            !wave_armed(FfxState::Glue, wet, 0.0),
+            !wave_armed(FfxState::Glue, wet, alive()),
             "the glue pair reaches the same Render, but 0x467d00 gates it out of the swap"
         );
         assert!(
-            !wave_armed(FfxState::None, wet, 0.0),
+            !wave_armed(FfxState::None, wet, alive()),
             "a bake runs neither pair"
         );
+    }
+
+    /// The underwater, drunk world the glow pass does the most for.
+    fn wet() -> FfxWave {
+        FfxWave {
+            phase1: 0.0,
+            phase2: 0.0,
+            active: true,
+        }
+    }
+
+    /// `ffxGlow` 0: `CFFXGlow`'s enable (`0x6cc5a8`) fails, so the begin/end pair runs no pass. The
+    /// combine is the scene alone, the three filter passes are skipped, the warp never arms, and
+    /// the death pass, glue pair included, still runs.
+    #[test]
+    fn glow_off_drops_the_glow_pass_and_only_it() {
+        let off = FfxSwitches {
+            glow: false,
+            ..FfxSwitches::default()
+        };
+        let drunk = FfxPassState::world(0.0, 1.0).switched(off);
+        let u = combine_uniform(
+            0.5,
+            drunk,
+            living_glue().switched(off),
+            &FfxGlow::WORLD,
+            wet(),
+        );
+        assert_eq!(
+            u[..3],
+            [0.0, 0.0, 0.0],
+            "no glow add, no haze, no death gate"
+        );
+        assert!(!blur_read(&u), "Box4 and both Gauss4 passes are skipped");
+        assert!(
+            !wave_armed(FfxState::Player, wet(), drunk),
+            "the underwater warp is the glow pass's second list"
+        );
+        let glue = combine_uniform(
+            0.5,
+            drunk,
+            living_glue().switched(off),
+            &FfxGlow::GLUE_SCENE,
+            wet(),
+        );
+        assert_eq!(
+            glue[..3],
+            [0.0, 0.0, 0.0],
+            "the glue glow reads the same record"
+        );
+        let ghost = ghost_world().switched(off);
+        assert_eq!(
+            combine_uniform(0.5, ghost, living_glue(), &FfxGlow::WORLD, wet())[..3],
+            [0.5, 1.0, 0.0],
+            "a ghost's death pass does not read ffxGlow"
+        );
+    }
+
+    /// `ffxDeath` 0: the ghost's slot holds `CFFXDeath`, whose enable (`0x6cdf10`) fails, and the
+    /// glow pass is not put back in its place, so the ghost sees the plain scene.
+    #[test]
+    fn death_off_drops_the_death_pass_without_restoring_the_glow() {
+        let off = FfxSwitches {
+            death: false,
+            ..FfxSwitches::default()
+        };
+        let u = combine_uniform(
+            0.5,
+            ghost_world().switched(off),
+            living_glue().switched(off),
+            &FfxGlow::WORLD,
+            FfxWave::default(),
+        );
+        assert_eq!(u[..3], [0.0, 0.0, 0.0]);
+        assert!(!blur_read(&u));
+        assert_eq!(
+            combine_uniform(
+                0.5,
+                alive().switched(off),
+                living_glue(),
+                &FfxGlow::WORLD,
+                FfxWave::default()
+            )[..3],
+            [0.5, 0.0, 0.0],
+            "the living keep their glow"
+        );
+        let glue_ghost = FfxPassState::glue(1.0).switched(off);
+        assert_eq!(
+            combine_uniform(0.5, alive(), glue_ghost, &FfxGlow::GLUE_SCENE, wet())[..3],
+            [0.0, 0.0, 0.0],
+            "a ghost roster row loses its death combine too"
+        );
+    }
+
+    /// `ffx` 0 (`0x6cd8a6`): neither pass runs, on either pair.
+    #[test]
+    fn the_master_off_drops_both_passes() {
+        let off = FfxSwitches {
+            master: false,
+            ..FfxSwitches::default()
+        };
+        for (feed, what) in [(alive(), "alive"), (ghost_world(), "a ghost")] {
+            let feed = feed.switched(off);
+            let u = combine_uniform(0.5, feed, living_glue(), &FfxGlow::WORLD, wet());
+            assert_eq!(u[..3], [0.0, 0.0, 0.0], "{what}");
+            assert!(!blur_read(&u), "{what}");
+            assert!(!wave_armed(FfxState::Player, wet(), feed), "{what}");
+        }
+        let on = alive().switched(FfxSwitches::default());
+        let u = combine_uniform(0.5, on, living_glue(), &FfxGlow::WORLD, wet());
+        assert!(blur_read(&u), "all three on, the glow pass runs");
+        assert!(wave_armed(FfxState::Player, wet(), on));
     }
 
     /// Dry, the uniform's first row is the plain combine's and the node binds the dry pipeline.
@@ -1343,7 +1533,7 @@ mod tests {
             "the combine lane is exactly what it was before the wave lane existed"
         );
         assert!(
-            !wave_armed(FfxState::Player, live, 0.0),
+            !wave_armed(FfxState::Player, live, alive()),
             "and the node binds the unwarped pipeline"
         );
     }
