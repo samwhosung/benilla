@@ -9,6 +9,7 @@ use benilla_protocol::messages::{
 use benilla_ui::script::PetActionView;
 
 use crate::net::{ClientCommand, NetCommands, ObjectStore};
+use crate::target::UNIT_FLAG_POSSESSED;
 
 use super::bar::*;
 use super::drain::*;

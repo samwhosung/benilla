@@ -86,6 +86,23 @@ pub(crate) fn is_selectable(store: Option<&ObjectStore>, self_guid: Option<u64>)
         || (self_guid.is_some() && store.0.unit_created_by() == self_guid)
 }
 
+/// `UNIT_FLAG_POSSESSED`, `UNIT_FIELD_FLAGS` bit 24 (vmangos `UnitDefines.h:569`), which the
+/// reference reads as `[[unit+0x110]+0xA3] & 1`.
+pub(crate) const UNIT_FLAG_POSSESSED: u32 = 0x0100_0000;
+
+/// Whether the active player possesses this unit (Mind Control, an Eye of Kilrogg, Eyes of the
+/// Beast): `UNIT_FLAG_POSSESSED` set and `UNIT_FIELD_CHARMEDBY`, else `UNIT_FIELD_CREATEDBY`, the
+/// active player's guid. The own-pet resolver `0x5ee5a0` (`0x5ee626`, `0x5ee62f`) and the world
+/// pick's filter `0x480610` (`0x48064f`-`0x480674`) read this same clause. No store, no owner or
+/// no active player is no possession.
+pub(crate) fn is_possessed_by(store: Option<&ObjectStore>, self_guid: Option<u64>) -> bool {
+    let (Some(store), Some(me)) = (store, self_guid) else {
+        return false;
+    };
+    store.0.unit_flags() & UNIT_FLAG_POSSESSED != 0
+        && store.0.unit_owner(OwnerFallback::CreatedBy) == Some(me)
+}
+
 /// `0x6067d0(player, corpse)`, the corpse's reaction gate: `0x6064c0` compares the player's
 /// template (`UNIT_FIELD_FACTIONTEMPLATE`) toward the dead player's race's (`0x5d7120`: the race
 /// byte of `CORPSE_FIELD_BYTES_1`, then `ChrRaces.dbc` column 2) with the template comparator
@@ -200,5 +217,41 @@ mod tests {
             assert!(!gate(race), "Horde race {race}");
         }
         assert!(!gate(0) && !gate(10), "a race with no row");
+    }
+
+    /// `0x480658`-`0x480667`: the flag, then the charmer if there is one, else the creator; an
+    /// unset owner or an unknown active player is no possession.
+    #[test]
+    fn possession_is_the_flag_and_the_charmer_else_the_creator() {
+        let store = |flags: u32, charmed_by: u32, created_by: u32| {
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (46, flags),
+                (10, charmed_by),
+                (11, 0),
+                (14, created_by),
+                (15, 0),
+            ]))
+        };
+        let me = Some(0x77);
+        let flag = UNIT_FLAG_POSSESSED;
+        assert!(
+            is_possessed_by(Some(&store(flag, 0x77, 0)), me),
+            "charmed by us"
+        );
+        assert!(
+            is_possessed_by(Some(&store(flag, 0, 0x77)), me),
+            "created by us"
+        );
+        assert!(
+            !is_possessed_by(Some(&store(flag, 0x99, 0x77)), me),
+            "a charmer other than us comes before our creation"
+        );
+        assert!(!is_possessed_by(Some(&store(0, 0x77, 0x77)), me), "no flag");
+        assert!(!is_possessed_by(Some(&store(flag, 0, 0)), me), "no owner");
+        assert!(
+            !is_possessed_by(Some(&store(flag, 0, 0)), None),
+            "no active player"
+        );
+        assert!(!is_possessed_by(None, me), "no descriptor");
     }
 }

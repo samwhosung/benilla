@@ -13,15 +13,11 @@ use benilla_protocol::messages::{
 use benilla_ui::script::UiScript;
 
 use crate::net::{ClientCommand, NetCommands, ObjectStore};
-use crate::target::Selection;
+use crate::target::{is_possessed_by, Selection};
 use crate::ui_action::Spells;
 
 use super::bar::active_aura_press;
 use super::{PetBar, PetUnit};
-
-/// `UNIT_FLAG_POSSESSED`, `UNIT_FIELD_FLAGS` bit 24 (vmangos `UnitDefines.h:569`), which the
-/// reference reads as `[[pet+0x110]+0xA3] & 1`.
-pub(super) const UNIT_FLAG_POSSESSED: u32 = 0x0100_0000;
 
 /// What a pet bar press reads and writes: `CastPetAction`, `PetAttack` and the other orders, and
 /// the pet book's `CastSpell(id, "pet")`.
@@ -287,14 +283,12 @@ pub(crate) fn pet_stop_on_old_target_clear(
 
 /// `0x5ee5a0`: the unit the player possesses, which must be the bar's unit for an Attack press to
 /// latch (`0x4bd420`, `0x4bd42e`). It needs `UNIT_FLAG_POSSESSED` (`0x5ee626`) and charmed-by,
-/// else created-by, us (`0x5ee62f`); vmangos sets that flag only with possession (Mind Control,
-/// Eyes of the Beast), never for an ordinary pet. The reference also tests the active mover
-/// (`0x5ee5bc`, `0x5ee5e9`), not modelled here: vmangos sets the mover with the flag.
+/// else created-by, us (`0x5ee62f`), [`is_possessed_by`]; vmangos sets that flag only with
+/// possession (Mind Control, Eyes of the Beast), never for an ordinary pet. The reference also
+/// tests the active mover (`0x5ee5bc`, `0x5ee5e9`), not modelled here: vmangos sets the mover
+/// with the flag.
 pub(super) fn possessing(store: Option<&ObjectStore>, self_guid: Option<u64>) -> bool {
-    store.is_some_and(|s| {
-        s.0.unit_flags() & UNIT_FLAG_POSSESSED != 0
-            && s.0.unit_owner(benilla_protocol::OwnerFallback::CreatedBy) == self_guid
-    })
+    is_possessed_by(store, self_guid)
 }
 
 /// The Attack order, the one press validated before it sends: the type-7 arm branches only on

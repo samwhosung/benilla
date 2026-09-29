@@ -87,7 +87,7 @@ pub(super) struct PickPose<'w, 's> {
 /// the picker's param limit.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct TargetHoverState<'w, 's> {
-    /// For `IsSelectable`'s `UNIT_FIELD_CREATEDBY` clause.
+    /// For `IsSelectable`'s `UNIT_FIELD_CREATEDBY` clause and the pick filter's possession clause.
     self_guid: Res<'w, crate::net::SelfGuid>,
     /// `0x6e61a0`'s pick flag `0x20`, as the frame began.
     picks_self: Res<'w, crate::spell::PicksSelf>,
@@ -101,15 +101,34 @@ pub(super) struct TargetHoverState<'w, 's> {
 }
 
 impl TargetHoverState<'_, '_> {
+    /// `0x480610`'s two exclusions, which come first and which a pick whose flags carry `0x20`
+    /// skips (`48062c`, [`crate::spell::PicksSelf`]; `0x481050` ORs it in only for a word
+    /// `0x6e61a0` passes, so outside targeting they always run): the active player (`480638`),
+    /// and a unit they possess, an Eye of Kilrogg or a Mind Controlled target
+    /// ([`super::is_possessed_by`], `48064f`-`480674`), so the cursor and the click pass through
+    /// it to what lies behind.
+    fn excludes(&self, is_self: bool, store: Option<&ObjectStore>) -> bool {
+        !self.picks_self.0 && (is_self || super::is_possessed_by(store, self.self_guid.0))
+    }
+
     /// Whether an object of this kind is a candidate of this pick, the posed pass and the box
-    /// fallback alike: every unit and player outside targeting, and while targeting the ones
-    /// `0x480610` passes for the word ([`crate::spell::targeting::PickChecks::admits_unit`]);
-    /// a corpse (`0x480816`) always outside targeting, whose pick flags carry `0x40`, and while
-    /// targeting only one `0x6e6260` passes. A corpse whose store has not streamed is refused
-    /// then. The hover and the press, which latches this pick, share it.
-    fn is_candidate(&self, entity: Entity, kind: EntityKind, store: Option<&ObjectStore>) -> bool {
+    /// fallback alike: every unit and player outside targeting but the two [`Self::excludes`]
+    /// drops, and while targeting the ones `0x480610` passes for the word
+    /// ([`crate::spell::targeting::PickChecks::admits_unit`]); a corpse (`0x480816`) always
+    /// outside targeting, whose pick flags carry `0x40`, and while targeting only one `0x6e6260`
+    /// passes. A corpse whose store has not streamed is refused then. `is_self` is the active
+    /// player's own body. The hover and the press, which latches this pick, share it.
+    fn is_candidate(
+        &self,
+        entity: Entity,
+        kind: EntityKind,
+        is_self: bool,
+        store: Option<&ObjectStore>,
+    ) -> bool {
         match kind {
-            EntityKind::Unit | EntityKind::Player => self.units.admits_unit(entity, store),
+            EntityKind::Unit | EntityKind::Player => {
+                !self.excludes(is_self, store) && self.units.admits_unit(entity, store)
+            }
             EntityKind::Corpse => {
                 let Some(word) = self.corpse_pick.0 else {
                     return true;
@@ -249,15 +268,11 @@ pub(super) fn update_hover(
     let mut candidates: Vec<(Entity, u8, Vec<AssetId<Mesh>>, Vec<Mat4>)> = Vec::new();
     // Units with skinned parts: out of the box fallback even when the broad phase rejects them.
     let mut faithful: HashSet<Entity> = HashSet::new();
-    let picks_self = target_state.picks_self.0;
     for (entity, is_self, gt, net, anims, drv, store, children, mount_child, drawn, held) in &roots
     {
-        if is_self && !picks_self {
-            continue;
-        }
         // Units, players and corpses: the reference picks every CGObject in one trace and
         // switches on type at the end, below.
-        if !target_state.is_candidate(entity, net.kind, store) {
+        if !target_state.is_candidate(entity, net.kind, is_self, store) {
             continue;
         }
         // Not drawn, not clickable. Checked before `faithful.insert`, so an undrawn unit is out by
@@ -353,16 +368,15 @@ pub(super) fn update_hover(
         if faithful.contains(&parent) {
             continue; // posed-mesh-tested above
         }
-        if !picks_self && roots.get(parent).is_ok_and(|root| root.1) {
-            continue;
-        }
         // The same candidates as the posed pick. A bone pile lands here: its corpse model has no
         // skeleton, so only this box test can pick it.
         let Ok((_, parent_net)) = units.get(parent) else {
             continue;
         };
-        let store = roots.get(parent).ok().and_then(|root| root.6);
-        if !target_state.is_candidate(parent, parent_net.kind, store) {
+        let root = roots.get(parent).ok();
+        let is_self = root.as_ref().is_some_and(|root| root.1);
+        let store = root.and_then(|root| root.6);
+        if !target_state.is_candidate(parent, parent_net.kind, is_self, store) {
             continue;
         }
         if let Some(t) = ray_mesh_bounds(origin, dir, aabb, gt) {
@@ -1087,7 +1101,8 @@ mod tests {
         unit_store(2, 0, 100)
     }
 
-    /// The pick over `word`, the way a frame runs it: the word published, then the pick.
+    /// The pick over `word`, the way a frame runs it: the word published, its flags `0x20` and the
+    /// unit legs both, then the pick.
     fn pick_under(world: &mut World, word: Option<u16>) -> Hovered {
         let mut targeting = world.resource_mut::<crate::spell::SpellTargeting>();
         match word {
@@ -1097,6 +1112,9 @@ mod tests {
         world
             .run_system_cached(crate::spell::targeting::publish_unit_pick)
             .expect("the word publishes");
+        world
+            .run_system_cached(crate::spell::targeting::publish_picks_self)
+            .expect("the self bit publishes");
         world
             .run_system_cached(update_hover)
             .expect("the pick runs");
@@ -1221,6 +1239,117 @@ mod tests {
         assert_eq!((hovered.target, hovered.guid), (None, None));
         assert!(!hovered.refused);
         assert_eq!(hovered.distance, f32::MAX);
+    }
+
+    /// A living Orc creature whose `UNIT_FIELD_FLAGS` are `flags`, with its `UNIT_FIELD_CHARMEDBY`
+    /// (10) and `UNIT_FIELD_CREATEDBY` (14) the guids `charmed_by` and `created_by`, 0 for none.
+    fn owned(flags: u32, charmed_by: u32, created_by: u32) -> ObjectStore {
+        ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+            (35, 2),
+            (46, flags),
+            (22, 100),
+            (10, charmed_by),
+            (11, 0),
+            (14, created_by),
+            (15, 0),
+        ]))
+    }
+
+    /// The word's plain unit bit (`0x0002`), which `0x6e61a0` takes the player for (`0x850e`), and
+    /// the enemy bit (`0x0080`), which it does not.
+    const SELF_WORD: u16 = 0x0002;
+    const ENEMY_WORD: u16 = 0x0080;
+
+    /// `0x480610`, `48064f`-`480676`: a unit flagged `UNIT_FLAG_POSSESSED` whose charmer, else
+    /// creator, is the active player is no candidate outside targeting, or while a word without
+    /// `0x20` stands, so the pick passes through it to the unit behind. Us is guid 1.
+    #[test]
+    fn a_unit_you_possess_lets_the_pick_through_to_the_one_behind() {
+        let possessed = crate::target::UNIT_FLAG_POSSESSED;
+        let cases: [(&str, ObjectStore); 3] = [
+            (
+                "a Mind Controlled unit, charmed by us",
+                owned(possessed, 1, 0),
+            ),
+            ("an Eye of Kilrogg, created by us", owned(possessed, 0, 1)),
+            (
+                "charmed by us, created by another: the charmer comes first",
+                owned(possessed, 1, 7),
+            ),
+        ];
+        for (what, front_store) in cases {
+            let mut world = unit_pick_world();
+            let front = unit_at(&mut world, 10, 5.0, front_store);
+            let rear = unit_at(&mut world, 11, 0.0, foe());
+            for word in [None, Some(ENEMY_WORD)] {
+                let hovered = pick_under(&mut world, word);
+                assert_eq!(
+                    hovered.target,
+                    Some(rear),
+                    "{what}: the rear, word {word:?}"
+                );
+                assert_eq!(hovered.guid, Some(11), "{what}: word {word:?}");
+            }
+            // The word that takes us takes it too: the exclusions are skipped (`48062c`).
+            assert_eq!(
+                pick_under(&mut world, Some(SELF_WORD)).target,
+                Some(front),
+                "{what}: while flag 0x20 stands"
+            );
+            assert_eq!(
+                pick_under(&mut world, None).target,
+                Some(rear),
+                "{what}: and excluded again once the word ends"
+            );
+        }
+    }
+
+    /// With nothing behind it, the unit you possess leaves the pick empty, which is no refusal.
+    #[test]
+    fn a_lone_unit_you_possess_is_no_pick_at_all() {
+        let mut world = unit_pick_world();
+        unit_at(
+            &mut world,
+            10,
+            0.0,
+            owned(crate::target::UNIT_FLAG_POSSESSED, 1, 0),
+        );
+        let hovered = pick_under(&mut world, None);
+        assert_eq!((hovered.target, hovered.guid), (None, None));
+        assert!(!hovered.refused);
+    }
+
+    /// The exclusion asks for the flag, then for us: an owned unit that is not possessed, a unit
+    /// someone else possesses, and one whose charmer is another even where its creator is us, all
+    /// stay candidates.
+    #[test]
+    fn a_unit_you_do_not_possess_keeps_the_pick() {
+        let possessed = crate::target::UNIT_FLAG_POSSESSED;
+        let cases: [(&str, ObjectStore); 5] = [
+            ("possessed, charmed by another", owned(possessed, 2, 0)),
+            ("possessed, created by another", owned(possessed, 0, 2)),
+            (
+                "possessed, charmed by another, created by us: the charmer comes first",
+                owned(possessed, 2, 1),
+            ),
+            (
+                "our own pet, created by us but not possessed",
+                owned(0, 0, 1),
+            ),
+            ("possessed by no one", owned(possessed, 0, 0)),
+        ];
+        for (what, front_store) in cases {
+            let mut world = unit_pick_world();
+            let front = unit_at(&mut world, 10, 5.0, front_store);
+            unit_at(&mut world, 11, 0.0, foe());
+            for word in [None, Some(ENEMY_WORD), Some(SELF_WORD)] {
+                assert_eq!(
+                    pick_under(&mut world, word).target,
+                    Some(front),
+                    "{what}: word {word:?}"
+                );
+            }
+        }
     }
 
     /// `0x481116`: only a word with unit bits (`0x878e`) puts units and players in the pick. A

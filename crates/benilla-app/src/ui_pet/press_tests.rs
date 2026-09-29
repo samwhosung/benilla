@@ -297,7 +297,7 @@ fn a_possessed_units_press_starts_no_pet_gcd() {
     let charmed = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
         (CHARMEDBY, ME as u32),
         (CHARMEDBY + 1, 0),
-        (FLAGS, super::drain::UNIT_FLAG_POSSESSED),
+        (FLAGS, crate::target::UNIT_FLAG_POSSESSED),
     ]));
     let mut rig = rig(vec![(CLAW, claw())], &[CLAW], Some(charmed));
 

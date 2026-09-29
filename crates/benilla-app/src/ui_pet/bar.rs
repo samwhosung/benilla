@@ -12,9 +12,9 @@ use benilla_protocol::messages::{
 use benilla_ui::script::{PetActionView, UiScript};
 
 use crate::net::{GuidIndex, ObjectStore};
+use crate::target::UNIT_FLAG_POSSESSED;
 use crate::ui_action::Spells;
 
-use super::drain::UNIT_FLAG_POSSESSED;
 use super::PetBar;
 
 /// `GetPetActionsUsable()` (`0x4bcf70`): false while the state's bit 27 is set or the pet is
