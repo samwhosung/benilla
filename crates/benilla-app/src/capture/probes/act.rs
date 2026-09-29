@@ -141,8 +141,12 @@ fn probe_key_by_name(name: &str) -> Option<KeyCode> {
         "Tab" => KeyCode::Tab,
         // TOGGLEAUTORUN's 1.12 default; with `WOW_PROBE_LOOK` it scripts a drive.
         "NumLock" => KeyCode::NumLock,
-        // The nameplate toggle: bare `V` shows enemy plates, `Shift`+`V` friendly ones.
+        // The nameplate toggles: `V`, `Shift`+`V`, `Ctrl`+`V`.
         "V" => KeyCode::KeyV,
+        // A window toggle (TOGGLEBACKPACK) and an action button (ACTIONBUTTON1), by their 1.12
+        // defaults.
+        "B" => KeyCode::KeyB,
+        "1" => KeyCode::Digit1,
         // Free-fly is the dev chord (`Ctrl`+`Shift`) + `F` (`player.rs`); a held `Ctrl` is its ×5
         // speed boost (`camera.rs`).
         "F" => KeyCode::KeyF,

@@ -1322,8 +1322,8 @@ MapProbeZones = table.getn({ GetMapZones(1) })
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Stock `ActionButton_OnLoad` paints its hotkey from `GetBindingKey` at load, and an addon that
-/// rebinds a stock command at file scope needs the command to exist.
+/// Stock `ActionButton_OnLoad` paints its hotkey from `GetBindingKey` at load, so the key table,
+/// the install's defaults, is seeded before any file runs; an addon's rebind takes at file scope.
 #[test]
 fn an_addon_reads_the_keybinding_table_at_file_scope() {
     const TOC: &str = "\
@@ -1346,13 +1346,14 @@ BindProbeSet = SetBinding(\"J\", \"TOGGLEWORLDMAP\")
     let script = world
         .get_non_send_resource::<benilla_ui::script::UiScript>()
         .expect("VM");
+    // The defaults are the install's `WTF\DefaultBindings.wtf`: none without one.
     assert_eq!(
         script
             .eval::<Option<String>>("BindProbeKey")
             .ok()
             .flatten()
             .as_deref(),
-        Some("M"),
+        benilla_formats::wow_data().map(|_| "M"),
         "an addon's file scope must read the stock binding — `M` is TOGGLEWORLDMAP's own default"
     );
     assert_eq!(
