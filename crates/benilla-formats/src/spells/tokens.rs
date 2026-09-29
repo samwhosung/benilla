@@ -152,28 +152,31 @@ fn modify_float(ctx: &TokenContext, d: &SpellDisplay, op: u8, value: f32) -> f32
     ctx.mods.map_or(value, |m| m.apply_float(d, op, value))
 }
 
-/// A spell's duration in ms, `GetSpellDuration 0x6ea000`, which `$d` and `$o` both call: the
-/// row's base plus its per-level term times the spell's own level ([`skill_level`], `6ea041`)
+/// A spell's duration in ms, `GetSpellDuration 0x6ea000`, which `$d` and `$o` both call: 0 with
+/// no row (`6ea032`), else the row's base plus its per-level term times the spell's own level ([`skill_level`], `6ea041`)
 /// less `baseLevel`, subtracted and multiplied unfloored (`6ea046`-`6ea053`), capped at the row's
 /// maximum (`6ea055`), then op 1 unless its flag says not to (`6ea064`).
-fn duration_ms(d: &SpellDisplay, ctx: &TokenContext) -> Option<i64> {
-    let row = ctx.durations.get(d.duration_index)?;
+fn duration_ms(d: &SpellDisplay, ctx: &TokenContext) -> i64 {
+    let Some(row) = ctx.durations.get(d.duration_index) else {
+        return 0;
+    };
     let levels = (skill_level(ctx, d) as i32).wrapping_sub(d.base_level as i32);
     let resolved = row
         .base_ms
         .wrapping_add(levels.wrapping_mul(row.per_level_ms))
         .min(row.max_ms);
-    Some(i64::from(if ctx.unmodified_points {
+    i64::from(if ctx.unmodified_points {
         resolved
     } else {
         modify_int(ctx, d, 1, resolved)
-    }))
+    })
 }
 
-/// The duration formatter at `0x52f980` selects the integer ladder (`0x52fa50`) for whole
-/// units and the floating ladder (`0x52fbd0`) for fractional units. Both use the largest unit.
+/// The `$d` text: no positive duration is `SPELL_DURATION_UNTIL_CANCELLED` (`507cda`); else the
+/// formatter at `0x52f980` selects the integer ladder (`0x52fa50`) for whole units and the
+/// floating ladder (`0x52fbd0`) for fractional units. Both use the largest unit.
 fn duration_text(ms: i64, ctx: &TokenContext) -> Option<String> {
-    if ms < 0 {
+    if ms <= 0 {
         return keyed(ctx, "SPELL_DURATION_UNTIL_CANCELLED", &[]);
     }
     let (unit, unit_ms) = if ms < 60_000 {
@@ -235,11 +238,7 @@ fn points_text(
     if letter.eq_ignore_ascii_case(&'o') {
         let amplitude = d.effect_amplitude[slot] as i32;
         let period = if amplitude == 0 { 5000 } else { amplitude };
-        let duration = if period > 0 {
-            duration_ms(d, ctx).unwrap_or(0)
-        } else {
-            0
-        };
+        let duration = if period > 0 { duration_ms(d, ctx) } else { 0 };
         (min, max) = if duration > 0 {
             let over = |v: f32| (duration as f64 * f64::from(v) / f64::from(period)) as f32;
             (over(min), over(max))
@@ -304,7 +303,7 @@ fn token_value(
     match letter.to_ascii_lowercase() {
         's' | 'm' | 'o' => points_text(letter, slot, d, ctx, scale, level),
         'd' => {
-            let ms = duration_ms(d, ctx)?;
+            let ms = duration_ms(d, ctx);
             let v = if ms < 0 { 0.0 } else { ms as f64 / 1000.0 };
             Some((duration_text(ms, ctx)?, v))
         }
@@ -660,6 +659,7 @@ mod tests {
             (4, 7_200_000),
             (5, 172_800_000),
             (6, -1),
+            (7, 0),
         ] {
             durations.insert_for_tests(idx, ms);
         }
@@ -680,6 +680,9 @@ mod tests {
         assert_eq!(d(4), "<2hrs>", "but two take the _P1 twin");
         assert_eq!(d(5), "<2days>", "the days arm the ladder used to lack");
         assert_eq!(d(6), "<forever>");
+        // No positive duration, and no row, which `0x6ea000` reads as 0 (`507cda`).
+        assert_eq!(d(7), "<forever>");
+        assert_eq!(d(8), "<forever>");
     }
 
     #[test]
@@ -1109,7 +1112,7 @@ mod tests {
 
     /// Resurrection Sickness (15007) is the one shipped spell on a per-level duration row: 427,
     /// -600000 ms plus 60000 a level, capped at 600000. In no line of the player's its level is 0,
-    /// and the duration is negative.
+    /// and a duration at or below 0 reads as until cancelled.
     #[test]
     fn the_duration_takes_its_per_level_term_from_real_data() {
         let data = crate::wow_data_or_skip!();
@@ -1128,7 +1131,7 @@ mod tests {
         };
         for (value, expected) in [
             (0, "<forever>"),
-            (50, "<0sec>"),
+            (50, "<forever>"),
             (55, "<1min>"),
             (150, "<10min>"),
         ] {
