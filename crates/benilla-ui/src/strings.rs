@@ -2,7 +2,8 @@
 //! the client's `SStrPrintf` does: `%s`, `%d`, `%c`, `%f` and `%g` take the next argument left to
 //! right, `%N$s` takes argument N without moving that cursor (`DUEL_WINNER_RETREAT` reorders its
 //! two names), `%%` is `%`, and the precision is the template's. A hole with no argument, or one
-//! this does not know, is copied through literally so a mis-modelled template shows.
+//! this does not know, is copied through literally so a mis-modelled template shows. Reals round
+//! as the MSVC CRT behind `SStrPrintf` does: half up on the decimal digits ([`crt_digits`]).
 
 use std::fmt::Write as _;
 
@@ -84,12 +85,8 @@ impl Arg<'_> {
     fn as_f(&self, prec: Option<usize>, out: &mut String) {
         let p = prec.unwrap_or(6);
         match self {
-            Arg::F(x) => {
-                let _ = write!(out, "{x:.p$}");
-            }
-            Arg::D(n) => {
-                let _ = write!(out, "{:.p$}", *n as f64);
-            }
+            Arg::F(x) => crt_f(*x, p, out),
+            Arg::D(n) => crt_f(*n as f64, p, out),
             Arg::S(s) => out.push_str(s),
         }
     }
@@ -107,19 +104,93 @@ impl Arg<'_> {
             out.push('0');
             return;
         }
-        // Round first, then read the exponent, so 9.999 at P=3 is "10", not "10.0".
-        let sci = format!("{:.*e}", p - 1, x);
-        let (mantissa, exp) = sci.split_once('e').unwrap_or((sci.as_str(), "0"));
-        let exp: i32 = exp.parse().unwrap_or(0);
+        if !x.is_finite() {
+            let _ = write!(out, "{x}");
+            return;
+        }
+        if x.is_sign_negative() {
+            out.push('-');
+        }
+        // Round to P significant digits first, then read the exponent, so 9.999 at P=3 is "10",
+        // not "10.0"; the style's digits are the rounded ones, never rounded twice.
+        let (digits, decpt) = crt_digits(x.abs(), |_| p as i32);
+        let exp = decpt - 1;
         if exp < -4 || exp >= p as i32 {
             // `%e`: C writes at least two exponent digits and always a sign; Rust writes neither.
-            out.push_str(trim_zeros(mantissa));
+            let mantissa = fixed(&digits, 1, p - 1);
+            out.push_str(trim_zeros(&mantissa));
             let _ = write!(out, "e{}{:02}", if exp < 0 { '-' } else { '+' }, exp.abs());
         } else {
             let decimals = (p as i32 - 1 - exp).max(0) as usize;
-            out.push_str(trim_zeros(&format!("{x:.decimals$}")));
+            out.push_str(trim_zeros(&fixed(&digits, decpt, decimals)));
         }
     }
+}
+
+/// `%f` by the CRT: the sign, then [`crt_digits`] rounded at `p` decimals.
+fn crt_f(x: f64, p: usize, out: &mut String) {
+    if !x.is_finite() {
+        let _ = write!(out, "{x:.p$}");
+        return;
+    }
+    if x.is_sign_negative() {
+        out.push('-');
+    }
+    let (digits, decpt) = crt_digits(x.abs(), |decpt| decpt + p as i32);
+    out.push_str(&fixed(&digits, decpt, p));
+}
+
+/// The CRT's decimal digits of a finite `a >= 0` and its point position `decpt` (the value is
+/// `0.d1d2… × 10^decpt`): `_fltout2` takes 17 significant digits, then `_fptostr 0x40fef0` keeps
+/// `keep(decpt)` of them and rounds on the next digit, half up (`40ff3d: cmp byte [ecx],0x35`),
+/// a carry out of the first digit moving the point (`40ff4f`). A negative count keeps nothing
+/// and rounds nothing (`40ff3b`). So 41.25 at one decimal is 41.3, where Rust's `{:.1}` rounds
+/// the tie to even.
+fn crt_digits(a: f64, keep: impl FnOnce(i32) -> i32) -> (Vec<u8>, i32) {
+    let sci = format!("{a:.16e}");
+    let (mantissa, exp) = sci.split_once('e').unwrap_or((sci.as_str(), "0"));
+    let mant: Vec<u8> = mantissa.bytes().filter(u8::is_ascii_digit).collect();
+    let mut decpt = exp.parse::<i32>().unwrap_or(0) + 1;
+    let Ok(n) = usize::try_from(keep(decpt)) else {
+        return (Vec::new(), decpt);
+    };
+    // A leading slot takes the carry.
+    let mut buf = vec![b'0'];
+    buf.extend((0..n).map(|i| mant.get(i).copied().unwrap_or(b'0')));
+    if mant.get(n).is_some_and(|&d| d >= b'5') {
+        let mut i = buf.len() - 1;
+        while buf[i] == b'9' {
+            buf[i] = b'0';
+            i -= 1;
+        }
+        buf[i] += 1;
+    }
+    if buf[0] == b'1' {
+        decpt += 1;
+    } else {
+        buf.remove(0);
+    }
+    (buf, decpt)
+}
+
+/// Lay rounded digits out as `int.frac` with `p` decimals, zero-padded both sides (`_cftof`).
+fn fixed(digits: &[u8], decpt: i32, p: usize) -> String {
+    let digit = |i: i32| -> char {
+        usize::try_from(i)
+            .ok()
+            .and_then(|i| digits.get(i))
+            .map_or('0', |&d| d as char)
+    };
+    let mut s: String = if decpt <= 0 {
+        "0".into()
+    } else {
+        (0..decpt).map(digit).collect()
+    };
+    if p > 0 {
+        s.push('.');
+        s.extend((0..p as i32).map(|k| digit(decpt + k)));
+    }
+    s
 }
 
 /// `%g`'s last step: drop a fraction's trailing zeros, and the point if nothing is left.
@@ -287,9 +358,31 @@ mod tests {
     fn f_takes_the_templates_precision() {
         assert_eq!(
             fill("(%.1f damage per second)", &[Arg::F(41.25)]),
-            "(41.2 damage per second)"
+            "(41.3 damage per second)"
         );
         assert_eq!(fill("%.2f", &[Arg::F(41.25)]), "41.25");
+    }
+
+    /// The CRT rounds a tie half up on its decimal digits (`_fptostr`'s `>= '5'`), where Rust
+    /// rounds it to even; a value just short of the tie still rounds down.
+    #[test]
+    fn reals_round_ties_up_as_the_crt_does() {
+        let f = |t: &str, v: f64| fill(t, &[Arg::F(v)]);
+        assert_eq!(f("%.1f", 68.25), "68.3");
+        assert_eq!(f("%.1f", 0.25), "0.3");
+        assert_eq!(f("%.1f", 0.05), "0.1", "a carry past the point");
+        assert_eq!(f("%.1f", 99.96), "100.0", "a carry out of the first digit");
+        assert_eq!(f("%.1f", 0.004), "0.0");
+        assert_eq!(
+            f("%.1f", f64::from(0.35f32)),
+            "0.3",
+            "0.3499999940… is not a tie"
+        );
+        assert_eq!(f("%.1f", -2.25), "-2.3");
+        assert_eq!(f("%.2f", 0.125), "0.13");
+        // `%.3g` rounds at its third significant digit the same way: 67.5 s is 1.125 minutes.
+        assert_eq!(f("%.3g min", 1.125), "1.13 min");
+        assert_eq!(f("%.3g", 2.675), "2.67", "2.67499999… is not a tie");
     }
 
     #[test]
