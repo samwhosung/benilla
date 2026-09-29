@@ -124,6 +124,33 @@ pub(crate) struct TargetRelations<'a> {
     pub(crate) types: CreatureTypeSources<'a>,
 }
 
+impl TargetRelations<'_> {
+    /// `CanAssist 0x6066f0` toward the candidate, which the caster always is for himself. The
+    /// binder's assist arm and the world pick's relation leg both ask it.
+    pub(super) fn assistable(&self, is_self: bool) -> bool {
+        is_self
+            || can_assist(
+                self.target_store,
+                self.factions,
+                self.reputations,
+                self.self_store,
+                |_| self.target_owner_store.cloned(),
+            )
+    }
+
+    /// `CanAttack 0x606980` toward the candidate, never the caster. The binder's enemy arm and the
+    /// world pick's relation leg both ask it.
+    pub(super) fn attackable(&self, is_self: bool) -> bool {
+        !is_self
+            && can_attack(
+                self.target_store,
+                self.factions,
+                self.reputations,
+                self.self_store,
+            )
+    }
+}
+
 /// The targeting inputs [`super::send_spell_cast`] resolves with, built by both cast callers.
 pub(crate) struct CastContext<'a> {
     pub(crate) selection_guid: Option<u64>,
@@ -317,18 +344,12 @@ pub(crate) fn cast_target_mask(def: &SpellDisplay) -> u16 {
 ///
 /// The assist bit asks `CanAssist 0x6066f0`: selectable, friendly or better, and an NPC's owner
 /// (or the NPC itself) PvP-enabled. This keeps friendly ambient NPCs and critters unbindable.
-/// The enemy bit asks `CanAttack` (`0x606980`). Party and raid (`0x606c20`, `0x606d20`) accept
-/// only the player; the corpse check (`0x6067d0`) is assistable with health 0 here.
+/// The enemy bit asks `CanAttack` (`0x606980`). Party and raid (`0x606c20`, `0x606d20`, the player
+/// or a member of the group) clear for the caster alone; the corpse check (`0x6067d0`) is
+/// assistable with health 0 here.
 fn clear_satisfied_bits(word: u16, is_self: bool, rel: &TargetRelations) -> u16 {
     let mut word = word;
-    let assist = is_self
-        || can_assist(
-            rel.target_store,
-            rel.factions,
-            rel.reputations,
-            rel.self_store,
-            |_| rel.target_owner_store.cloned(),
-        );
+    let assist = rel.assistable(is_self);
     let dead = rel.target_store.is_some_and(|s| !unit_alive(&s.0));
     if word & TF_UNIT_PARTY != 0 && is_self {
         word &= !TF_UNIT_PARTY;
@@ -339,15 +360,7 @@ fn clear_satisfied_bits(word: u16, is_self: bool, rel: &TargetRelations) -> u16 
     if word & TF_UNIT_ASSIST != 0 && assist {
         word &= !TF_UNIT_ASSIST;
     }
-    if word & TF_UNIT_ENEMY != 0
-        && !is_self
-        && can_attack(
-            rel.target_store,
-            rel.factions,
-            rel.reputations,
-            rel.self_store,
-        )
-    {
+    if word & TF_UNIT_ENEMY != 0 && rel.attackable(is_self) {
         word &= !TF_UNIT_ENEMY;
     }
     // Bit 1 has no relation check: any unit binds. A dead unit's bind clears bit 10 (`6e5d89`,
