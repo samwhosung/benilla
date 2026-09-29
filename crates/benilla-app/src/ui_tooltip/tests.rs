@@ -226,6 +226,8 @@ fn improved_fire_blast_shortens_the_cooldown_cell() {
 /// a clamped zero would take the no-mana "Instant" (`0x52ec4b`).
 #[test]
 fn the_cast_cell_takes_op_10_unclamped() {
+    // The cells fill the install's `GlobalStrings.lua`.
+    let _data = benilla_formats::wow_data_or_skip!();
     let mut spells = Spells::empty_for_tests();
     let rage_cast = benilla_formats::SpellDisplay {
         name: "Rage Cast".into(),
