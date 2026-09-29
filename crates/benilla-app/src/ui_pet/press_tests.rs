@@ -11,9 +11,12 @@ use bevy::prelude::*;
 use crossbeam_channel::Receiver;
 
 use benilla_formats::{SpellCatalog, SpellDisplay};
-use benilla_protocol::messages::{PetActionEntry, PET_ACT_ENABLED};
+use benilla_protocol::messages::{
+    PetActionEntry, PET_ACT_COMMAND, PET_ACT_ENABLED, PET_ACT_REACTION, PET_COMMAND_ATTACK,
+    PET_COMMAND_FOLLOW, PET_COMMAND_STAY, PET_REACT_AGGRESSIVE,
+};
 
-use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, ObjectStore, SelfGuid};
+use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, ObjectStore, SelfGuid, SelfPlayer};
 use crate::spell::Cooldowns;
 use crate::ui_action::Spells;
 
@@ -83,6 +86,15 @@ pub(super) fn owned_pet() -> ObjectStore {
     ]))
 }
 
+/// Our own player: `OBJECT_FIELD_TYPE` 0x19, alive.
+fn player() -> ObjectStore {
+    ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+        (2, 0x19),
+        (22, 100),
+        (28, 100),
+    ]))
+}
+
 pub(super) struct Rig {
     pub(super) app: App,
     commands: Receiver<ClientCommand>,
@@ -127,6 +139,11 @@ pub(super) fn rig(
     app.insert_resource(NetCommands(tx));
     let world = app.world_mut();
     world.resource_mut::<SelfGuid>().0 = Some(ME);
+    // Our own object, which a spell press needs to resolve (`0x4bd31a`).
+    let me = world
+        .spawn((Guid(ME), SelfPlayer, Transform::default(), player()))
+        .id();
+    world.resource_mut::<GuidIndex>().0.insert(ME, me);
     if let Some(store) = pet {
         let entity = world.spawn((Guid(PET), store)).id();
         world.resource_mut::<GuidIndex>().0.insert(PET, entity);
@@ -353,15 +370,136 @@ fn an_aura_cancel_press_starts_no_pet_gcd() {
     assert_eq!(rig.pet_reads(COWER, &cower()).1, 1500);
 }
 
-/// `0x4bd34f`: the arm leaves before the GCD when the pet object does not resolve.
+/// What a press latched: the mode word, its signal count and the attack latch.
+fn latched(rig: &Rig) -> (u32, u32, bool) {
+    let bar = rig.app.world().resource::<PetBar>();
+    (bar.spells.state, bar.bar_signals, bar.attacking)
+}
+
+/// Everything a refused spell press leaves untouched: no command on the wire, nothing latched, no
+/// GCD on the pet's list, no event.
+fn assert_press_refused(rig: &mut Rig, before: (u32, u32, bool)) {
+    assert!(rig.sent().is_empty(), "no packet of any kind");
+    assert_eq!(latched(rig), before, "nothing latched");
+    assert!(rig.pet_list_untouched(), "no GCD armed");
+    assert!(rig.frame().is_empty(), "no event");
+}
+
+/// `0x4bd346`-`0x4bd34f`: the arm leaves for the epilogue, before its GCD and its send, when the
+/// pet's object does not resolve, as it is while the pet is out of view and the bar stands on its
+/// guid.
 #[test]
-fn a_press_with_no_pet_object_starts_no_pet_gcd() {
+fn a_spell_press_with_no_pet_object_sends_nothing_and_arms_nothing() {
     let mut rig = rig(vec![(CLAW, claw())], &[CLAW], None);
+    let before = latched(&rig);
 
     rig.press(1);
 
-    assert!(rig.pet_list_untouched());
-    assert!(rig.frame().is_empty());
+    assert_press_refused(&mut rig, before);
+}
+
+/// `0x4bd2e7`-`0x4bd2fe`: an id past the `Spell.dbc` table's maximum, or one inside it with no
+/// record, leaves the arm the same way; so does the unused slot's spell 0, which has none.
+#[test]
+fn a_spell_press_with_no_catalog_row_sends_nothing() {
+    // Slots 1-3: a row the catalog lacks, the unused slot's spell 0, and the top of the id range.
+    // Slot 4: the control, whose row it holds.
+    let mut rig = rig(
+        vec![(BITE, bite())],
+        &[CLAW, 0, u32::from(u16::MAX), BITE],
+        Some(owned_pet()),
+    );
+    let before = latched(&rig);
+
+    for slot in 1..=3 {
+        rig.press(slot);
+        assert_press_refused(&mut rig, before);
+    }
+
+    rig.press(4);
+    assert_eq!(pet_actions(&rig.sent()), 1, "the control sends");
+}
+
+/// `0x4bd31a`-`0x4bd324`: the arm also needs the active player's object, between the record and
+/// the pet.
+#[test]
+fn a_spell_press_with_no_player_object_sends_nothing() {
+    let mut rig = rig(vec![(CLAW, claw())], &[CLAW], Some(owned_pet()));
+    rig.app
+        .world_mut()
+        .resource_mut::<GuidIndex>()
+        .0
+        .remove(&ME);
+    let before = latched(&rig);
+
+    rig.press(1);
+
+    assert_press_refused(&mut rig, before);
+}
+
+/// `0x4bd24a`: the aura leg comes first and needs neither the player nor a record beyond its own,
+/// so a running aura is cancelled with the player unresolved.
+#[test]
+fn an_aura_cancel_press_needs_no_player_object() {
+    let running = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+        (CREATEDBY, ME as u32),
+        (CREATEDBY + 1, 0),
+        (AURA, COWER),
+        (AURAFLAGS, 0x3),
+    ]));
+    let mut rig = rig(vec![(COWER, cower())], &[COWER], Some(running));
+    rig.app
+        .world_mut()
+        .resource_mut::<GuidIndex>()
+        .0
+        .remove(&ME);
+
+    rig.press(1);
+
+    let sent = rig.sent();
+    assert_eq!(pet_actions(&sent), 0);
+    assert!(sent
+        .iter()
+        .any(|c| matches!(c, ClientCommand::PetCancelAura { .. })));
+}
+
+/// `0x4bd391`, `0x4bd3a3`: a reaction and the Follow and Stay commands have no exit before the
+/// send, so with the pet's object unresolved each still latches and sends.
+#[test]
+fn a_command_or_reaction_press_with_no_pet_object_still_sends() {
+    let word = |kind: u8, action: u32| action | (u32::from(kind) << 24);
+    let mut rig = rig(vec![(CLAW, claw())], &[CLAW], None);
+    for (packed, state) in [
+        (
+            word(PET_ACT_COMMAND, PET_COMMAND_FOLLOW),
+            PET_COMMAND_FOLLOW << 8,
+        ),
+        (
+            word(PET_ACT_COMMAND, PET_COMMAND_STAY),
+            PET_COMMAND_STAY << 8,
+        ),
+        (
+            word(PET_ACT_REACTION, PET_REACT_AGGRESSIVE),
+            PET_REACT_AGGRESSIVE,
+        ),
+    ] {
+        rig.app.world_mut().resource_mut::<PetBar>().spells.bar[0] = PetActionEntry::from(packed);
+        let signals = latched(&rig).1;
+
+        rig.press(1);
+
+        let sent = rig.sent();
+        assert!(
+            matches!(
+                sent.as_slice(),
+                [ClientCommand::PetAction { pet_guid: PET, packed: p, .. }] if *p == packed
+            ),
+            "{packed:#010x} sends: {sent:?}"
+        );
+        let (mode, now, _) = latched(&rig);
+        assert_eq!(mode, state, "{packed:#010x} latches");
+        assert_eq!(now, signals + 1, "{packed:#010x} signals the bar");
+    }
 }
 
 /// Op 21 applies to `StartRecoveryTime` first (`0x6e2e2c`), the player's table for a pet's
@@ -386,4 +524,53 @@ fn the_pets_gcd_takes_the_players_op_21() {
     rig.press(1);
 
     assert_eq!(rig.pet_reads(CLAW, &shaved()).1, 1000);
+}
+
+/// `0x4bd3c3`-`0x4bd405`: the Attack command resolves the pet before it validates, and with none
+/// jumps to the send (`0x4bd444`), the selection as its target.
+#[test]
+fn an_attack_press_with_no_pet_object_still_sends_at_the_selection() {
+    const FOE: u64 = 0x77;
+    let mut rig = rig(vec![(CLAW, claw())], &[CLAW], None);
+    let world = rig.app.world_mut();
+    // A player-controlled attacker, whose `CanAttack` arm needs no faction table.
+    let me = world.resource::<GuidIndex>().0[&ME];
+    world
+        .entity_mut(me)
+        .insert(ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+            (2, 0x19),
+            (22, 100),
+            (28, 100),
+            (FLAGS, 0x8),
+        ])));
+    let foe = world
+        .spawn((
+            Guid(FOE),
+            Transform::default(),
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (22, 100),
+                (28, 100),
+            ])),
+        ))
+        .id();
+    world.resource_mut::<GuidIndex>().0.insert(FOE, foe);
+    *world.resource_mut::<crate::target::Selection>() = crate::target::Selection {
+        target: Some(foe),
+        guid: Some(FOE),
+        ..Default::default()
+    };
+    let attack = PET_COMMAND_ATTACK | (u32::from(PET_ACT_COMMAND) << 24);
+    world.resource_mut::<PetBar>().spells.bar[0] = PetActionEntry::from(attack);
+
+    rig.press(1);
+
+    let sent = rig.sent();
+    assert!(
+        matches!(
+            sent.as_slice(),
+            [ClientCommand::PetAction { pet_guid: PET, packed, target_guid: FOE }] if *packed == attack
+        ),
+        "{sent:?}"
+    );
+    assert!(!latched(&rig).2, "an ordinary pet's Attack raises no latch");
 }

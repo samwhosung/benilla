@@ -138,6 +138,12 @@ impl PetUnit<'_, '_> {
         self.stores.get(e).ok()
     }
 
+    /// The active player's descriptor, `None` while its object is not streamed: the lookup the
+    /// pet bar's spell arm makes on the client's player guid (`0x4bd31a`, typemask `0x10`).
+    pub(crate) fn player_store(&self) -> Option<&ObjectStore> {
+        self.store(self.self_guid.0?)
+    }
+
     /// The pet's entity under [`Self::store`]'s contract, for the pet paper doll's model.
     pub(crate) fn entity(&self, pet_guid: u64) -> Option<Entity> {
         let e = *self.index.0.get(&pet_guid)?;

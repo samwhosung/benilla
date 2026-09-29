@@ -95,6 +95,24 @@ impl PetPress<'_, '_> {
                 .send(ClientCommand::PetCancelAura { pet_guid, spell_id });
             return;
         }
+        // The spell arm leaves for the epilogue, before its GCD and its send, unless the slot's
+        // `Spell.dbc` record, the active player and the pet's object all resolve (`0x4bd2e7`-
+        // `0x4bd2fe`, `0x4bd31a`-`0x4bd324`, `0x4bd346`-`0x4bd34f`); an id past the table's
+        // maximum has no record. Commands and reactions have no such exit (`0x4bd391`, `0x4bd3a3`).
+        let spell = if entry.is_spell() {
+            let Some(spell) =
+                display.filter(|_| pet_store.is_some() && pet.player_store().is_some())
+            else {
+                debug!(
+                    "ui_pet: slot {slot} (spell {}) has no record, player or pet object — no packet",
+                    entry.action()
+                );
+                return;
+            };
+            Some(spell)
+        } else {
+            None
+        };
         // Only Attack runs `0x612df0`, the attack validator with the pet as actor, whose target
         // pick can move the selection; every other press sends the selection as is (`0x4bd212`).
         let mut target_guid = selection.guid.unwrap_or(0);
@@ -114,15 +132,16 @@ impl PetPress<'_, '_> {
             debug!("ui_pet: slot {slot} refused by the attack validator — no packet");
             return;
         }
-        arm_pet_gcd(
-            bar,
-            entry.action(),
-            display,
-            pet_store.is_some(),
-            possessing,
-            spell_mods,
-            Instant::now(),
-        );
+        if let Some(spell) = spell {
+            arm_pet_gcd(
+                bar,
+                entry.action(),
+                spell,
+                possessing,
+                spell_mods,
+                Instant::now(),
+            );
+        }
         debug!(
             "ui_pet: press slot {slot} (action {} kind {:#04x}) at {target_guid:#x}",
             entry.action(),
@@ -136,27 +155,23 @@ impl PetPress<'_, '_> {
     }
 }
 
-/// The spell arm's tail (`0x4bd355`-`0x4bd36e`): a press that neither cancels an aura nor takes
-/// the generic cast entry `0x6e4b60` (`AttributesEx4 & 0x20`, or the bar's unit possessed) calls
-/// `StartGlobalCooldown 0x6e2de0(spellId, 1)` before the send (`0x4bd444`): the spell's own
-/// `StartRecovery*` pair, under op 21, into the pet's list (`0xcecaec + 0x18`). The insert moves
-/// the list's generation, which carries the flush that follows it (`0x6e2e77`, `0x6e2e8e`) to
-/// `bar::fire_pet_cooldown_events`. An unresolved `SpellRec` or pet object leaves the arm before
-/// it (`0x4bd2fe`, `0x4bd34f`). This is the only place the pet's GCD starts: the `SMSG_SPELL_GO`
-/// pet leg inserts the spell's own timers and no GCD (`0x6e85f7`).
+/// The spell arm's tail (`0x4bd355`-`0x4bd36e`) for a press whose record, player and pet object
+/// resolved: one that neither cancels an aura nor takes the generic cast entry `0x6e4b60`
+/// (`AttributesEx4 & 0x20`, or the bar's unit possessed) calls `StartGlobalCooldown
+/// 0x6e2de0(spellId, 1)` before the send (`0x4bd444`): the spell's own `StartRecovery*` pair,
+/// under op 21, into the pet's list (`0xcecaec + 0x18`). The insert moves the list's generation,
+/// which carries the flush that follows it (`0x6e2e77`, `0x6e2e8e`) to
+/// `bar::fire_pet_cooldown_events`. This is the only place the pet's GCD starts: the
+/// `SMSG_SPELL_GO` pet leg inserts the spell's own timers and no GCD (`0x6e85f7`).
 pub(super) fn arm_pet_gcd(
     bar: &mut PetBar,
     spell_id: u32,
-    display: Option<&benilla_formats::SpellDisplay>,
-    pet_resolved: bool,
+    spell: &benilla_formats::SpellDisplay,
     possessing: bool,
     mods: &crate::spell::SpellModifiers,
     now: Instant,
 ) {
-    let Some(spell) = display.filter(|_| pet_resolved && !possessing) else {
-        return;
-    };
-    if !spell.allows_client_targeting() {
+    if !possessing && !spell.allows_client_targeting() {
         bar.cooldowns.start_gcd(spell_id, spell, now, mods);
     }
 }
