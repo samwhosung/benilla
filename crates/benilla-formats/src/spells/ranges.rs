@@ -42,7 +42,7 @@ pub struct RangeTargets {
     /// read its reach, and the ranged arm pads only for a target passed in (`0x6e35d8`).
     pub target: Option<f32>,
     /// The caster's auto-attack target, `[caster+0xc48]`, which the function looks up itself
-    /// (`0x47bf60`, `0x6e356a`), and only the melee arm and only with no unit target passed
+    /// (`0x47bf60`, `0x6e356a`). Only the melee arm reads it, and only with no unit target passed
     /// (`0x6e3552`-`0x6e3584`). A caller that has no such unit to hand passes `None`.
     pub attack_target: Option<f32>,
 }
@@ -51,9 +51,9 @@ pub struct RangeTargets {
 /// client keeps the reach sums on the x87 stack and stores `f32` only at the end. On-next-swing
 /// spells (`Attributes & 0x404`, `0x6e34fb`) short-circuit to `(0, 100)`. The melee arm sums the
 /// reach of the unit target, else the auto-attack target, else the caster's own, with the
-/// caster's. The ranged arm pads only for a unit target passed in, the max and the min only when
-/// nonzero (the `fcomp`-vs-0.0 guard), so a min-0 spell never refuses `TOO_CLOSE`; the
-/// auto-attack target never pads it. `None`: no row, or the self row (id 1, `{0, 0}`).
+/// caster's. The ranged arm pads only for a unit target passed in, the auto-attack target never
+/// pads it: the max always, and the min only when nonzero (the `fcomp`-vs-0.0 guard), so a min-0
+/// spell never refuses `TOO_CLOSE`. `None`: no row, or the self row (id 1, `{0, 0}`).
 ///
 /// Not applied: the PvP `max += 2.6667` (`0x6e3648`, gated by `0x5fc350`), and for a player the
 /// `Attributes & 2` scale (`0x6e36aa`), `max *= RangedModRange · 0.01` of the ranged-slot item,
