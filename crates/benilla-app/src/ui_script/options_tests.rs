@@ -1272,6 +1272,56 @@ fn the_world_detail_slider_writes_the_cvar_and_the_readout_names_its_stop() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
+/// 1.12's slider 8, Spell Detail Level (`OptionsFrame.lua:32`), over `spellEffectLevel` on its
+/// 0..2 grid, labelled and tipped from the stock GlobalStrings.
+#[test]
+fn the_spell_detail_slider_reads_and_writes_the_spell_effect_level() {
+    benilla_formats::wow_data_or_skip!();
+    const ROW: &str = "BenillaOptionsFrameContainerBodyGraphicsRowSpellDetail";
+    let mut s = audio_harness();
+    s.set_cvar_host("spellEffectLevel", "1");
+    let mut s = harness_on(s);
+    s.run("ShowUIPanel(BenillaOptionsFrame)").unwrap();
+    s.run("BenillaOptionsFrameCategoryListRowGraphics:Click()")
+        .unwrap();
+    assert_eq!(
+        s.eval::<String>(&format!("return {ROW}Label:GetText()"))
+            .unwrap(),
+        s.eval::<String>("return SPELL_DETAIL").unwrap()
+    );
+    assert_eq!(
+        s.eval::<String>(&format!("return {ROW}.tip")).unwrap(),
+        "OPTION_TOOLTIP_SPELL_DETAIL"
+    );
+    assert!(s
+        .eval::<bool>(&format!(
+            "return {ROW}ControlSlider:GetValue() == 1 and {ROW}ControlValue:GetText() == \"Medium\""
+        ))
+        .unwrap());
+    assert!(
+        s.take_cvar_changes().is_empty(),
+        "reading the CVar on select must not write it back"
+    );
+    // The reference's grid (`OptionsFrameSliders[8]`): 0 to 2, one apart.
+    assert!(s
+        .eval::<bool>(&format!(
+            "local lo, hi = {ROW}ControlSlider:GetMinMaxValues() \
+             return lo == 0 and hi == 2 and {ROW}ControlSlider:GetValueStep() == 1"
+        ))
+        .unwrap());
+    s.run(&format!("{ROW}ControlSlider:SetValue(0)")).unwrap();
+    assert_eq!(
+        s.take_cvar_changes(),
+        vec![("spellEffectLevel".to_string(), "0".to_string())]
+    );
+    assert_eq!(
+        s.eval::<String>(&format!("return {ROW}ControlValue:GetText()"))
+            .unwrap(),
+        "Low"
+    );
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
 #[test]
 fn the_nameplates_page_toggles_the_unit_name_cvars() {
     benilla_formats::wow_data_or_skip!();
@@ -2231,9 +2281,9 @@ fn every_row_tooltip_key_resolves_in_the_real_global_strings() {
         );
         checked += 1;
     }
-    // 81 rows less the three untipped below; four of the 78 carry a `BENILLA_` key, and a dropdown
+    // 82 rows less the three untipped below; four of the 79 carry a `BENILLA_` key, and a dropdown
     // row is checked on the key it wears at rest.
-    assert_eq!(checked, 78, "every tipped row carries a live key");
+    assert_eq!(checked, 79, "every tipped row carries a live key");
     assert_eq!(
         untipped,
         vec![
@@ -2329,8 +2379,8 @@ fn every_flavor_of_row_raises_its_plate_from_the_page_it_lives_on() {
             s.errors()
         );
     }
-    // Every tipped row: the same 78 the key census counts.
-    assert_eq!(raised, 78, "every row but Auto Loot raises a description");
+    // Every tipped row: the same 79 the key census counts.
+    assert_eq!(raised, 79, "every row but Auto Loot raises a description");
 }
 
 /// 1.12's AdvancedOptionsCombatText box as saved-global rows: a click writes the global, never a

@@ -449,7 +449,7 @@
                 "RowBackgroundSound",
             },
             Graphics = {
-                "RowUiScale", "RowFarclip", "RowWorldDetail", "RowBrightness",
+                "RowUiScale", "RowFarclip", "RowWorldDetail", "RowSpellDetail", "RowBrightness",
                 "RowWeatherDensity",
                 "RowDisplayMode", "RowVerticalSync", "RowRenderScale",
             },
@@ -593,10 +593,10 @@
         -- UIOptionsFrame.lua:193-227 re-applies saved uvars, so this window has no load ladder.
 
         -- OptionsFrameSliders is the stock table (OptionsFrame.lua:24-34), which addons write.
-        -- Holes at 4, 5, 7 and 8, so the OnShow loop uses the pairs form: ipairs would stop at 3.
+        -- Holes at 4, 5 and 7, so the OnShow loop uses the pairs form: ipairs would stop at 3.
         BENILLA_GRAPHICS_SLIDER_ROWS = {
             "RowUiScale", "RowFarclip", "RowWorldDetail",
-            [6] = "RowBrightness", [9] = "RowWeatherDensity",
+            [6] = "RowBrightness", [8] = "RowSpellDetail", [9] = "RowWeatherDensity",
         }
 
         -- SetMinMaxValues re-clamps and fires OnValueChanged, which must not write back.
@@ -1877,13 +1877,31 @@
                                                     { "Low", "Medium", "High" })
                                             </OnLoad></Scripts>
                                         </Frame>
+                                        <!-- On the CVar, as 1.12's slider 8 lands: there is no
+                                             SetspellEffectLevel global. -->
+                                        <Frame name="$parentRowSpellDetail" inherits="BenillaOptionsSliderRowTemplate">
+                                            <Anchors>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowWorldDetail" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowWorldDetail" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                            </Anchors>
+                                            <Scripts><OnLoad>
+                                                BenillaOptionsRow_OnLoad(this, "spellEffectLevel", SPELL_DETAIL,
+                                                    "OPTION_TOOLTIP_SPELL_DETAIL")
+                                                -- Our names for the handler's emission scalars
+                                                -- 0.33, 0.66 and 1.0 (`0x689510`).
+                                                BenillaOptionsSliderRow_Setup(this, OptionsFrameSliders[8].minValue,
+                                                    OptionsFrameSliders[8].maxValue,
+                                                    OptionsFrameSliders[8].valueStep, nil,
+                                                    { "Low", "Medium", "High" })
+                                            </OnLoad></Scripts>
+                                        </Frame>
                                         <!-- An API row over GetGamma/SetGamma, whose unit is
                                              `1 - gamma`; writing `gamma` would invert the
                                              control. -->
                                         <Frame name="$parentRowBrightness" inherits="BenillaOptionsSliderRowTemplate">
                                             <Anchors>
-                                                <Anchor point="TOPLEFT" relativeTo="$parentRowWorldDetail" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
-                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowWorldDetail" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPLEFT" relativeTo="$parentRowSpellDetail" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
+                                                <Anchor point="TOPRIGHT" relativeTo="$parentRowSpellDetail" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="0" y="-9"/></Offset></Anchor>
                                             </Anchors>
                                             <Scripts><OnLoad>
                                                 -- OptionsFrame_SetDefaults' default (l.444-445);
