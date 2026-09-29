@@ -143,10 +143,11 @@ impl PetPress<'_, '_> {
 /// The spell arm's tail (`0x4bd355`-`0x4bd36e`): a press that neither cancels an aura nor takes
 /// the generic cast entry `0x6e4b60` (`AttributesEx4 & 0x20`, or the bar's unit possessed) calls
 /// `StartGlobalCooldown 0x6e2de0(spellId, 1)` before the send (`0x4bd444`): the spell's own
-/// `StartRecovery*` pair, under op 21, into the pet's list (`0xcecaec + 0x18`). The bar's
-/// cooldown edge then reads it, which is `PET_BAR_UPDATE_COOLDOWN` (`0x6e2e8e`). An unresolved
-/// `SpellRec` or pet object leaves the arm before it (`0x4bd2fe`, `0x4bd34f`). This is the only
-/// place the pet's GCD starts: the `SMSG_SPELL_GO` pet leg inserts none (`0x6e85f7`).
+/// `StartRecovery*` pair, under op 21, into the pet's list (`0xcecaec + 0x18`). The insert moves
+/// the list's generation, which carries the flush that follows it (`0x6e2e77`, `0x6e2e8e`) to
+/// `bar::fire_pet_cooldown_events`. An unresolved `SpellRec` or pet object leaves the arm before
+/// it (`0x4bd2fe`, `0x4bd34f`). This is the only place the pet's GCD starts: the `SMSG_SPELL_GO`
+/// pet leg inserts the spell's own timers and no GCD (`0x6e85f7`).
 pub(super) fn arm_pet_gcd(
     bar: &mut PetBar,
     spell_id: u32,

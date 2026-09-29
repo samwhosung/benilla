@@ -761,9 +761,10 @@ fn the_dismiss_word_is_the_carved_literal() {
     assert!(!entry.is_spell(), "dismiss is a command, never a cast");
 }
 
-/// The reference fires `PET_BAR_UPDATE_COOLDOWN` from the pet's cooldown bank (`0x6e2e8e`).
+/// A cooldown moves no bar: the feed pushes the new triple and fires nothing, for its events are
+/// the list's flush (`0x4b31b0`, `0x4bce90`), which `flush_tests` covers.
 #[test]
-fn a_cooldown_alone_fires_the_cooldown_event_and_not_the_bar_update() {
+fn a_cooldown_alone_is_pushed_with_no_event_from_the_bar_feed() {
     use bevy::prelude::*;
     use std::collections::HashMap;
     const CLAW: u32 = 3010;
@@ -821,8 +822,8 @@ fn a_cooldown_alone_fires_the_cooldown_event_and_not_the_bar_update() {
         .start_spell(CLAW, &claw(), 0, std::time::Instant::now(), None);
     assert_eq!(
         seen(&mut app),
-        vec!["PET_BAR_UPDATE_COOLDOWN".to_string()],
-        "a cooldown alone is the bank's edge, not the bar's"
+        Vec::<String>::new(),
+        "a cooldown alone is neither the bar's event nor this feed's"
     );
     let (start, duration, enable): (f64, f64, i32) = app
         .world_mut()

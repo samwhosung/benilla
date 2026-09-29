@@ -33,7 +33,8 @@ mod weapon_icon;
 
 /// Every feed that pushes cooldown triples runs `.before` this set: [`state::feed_action_state`]
 /// fires the cooldown events synchronously, so a triple pushed later goes unread until the next
-/// cooldown change.
+/// cooldown change. The pet list's flush, `ui_pet::bar::fire_pet_cooldown_events`, runs `.after`
+/// it on the same rule.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct CooldownEvents;
 

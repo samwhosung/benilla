@@ -1,5 +1,6 @@
 //! A pet bar spell press and the pet's global cooldown: the spell arm of `0x4bd1d0` starts it
 //! (`0x4bd367`-`0x4bd36e`), whole client headless, with the press applied as the script call it is.
+//! The rig is shared with `flush_tests`, whose packets reach the same list.
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -16,27 +17,27 @@ use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, ObjectStore, SelfG
 use crate::spell::Cooldowns;
 use crate::ui_action::Spells;
 
-use super::bar::feed_pet_bar;
+use super::bar::{feed_pet_bar, fire_pet_cooldown_events};
 use super::drain::PetPress;
 use super::PetBar;
 
-const ME: u64 = 0x10;
-const PET: u64 = 0x2A;
+pub(super) const ME: u64 = 0x10;
+pub(super) const PET: u64 = 0x2A;
 /// `UNIT_FIELD_CHARMEDBY` and `UNIT_FIELD_CREATEDBY`, low words; the high words stay 0.
-const CHARMEDBY: u16 = 10;
-const CREATEDBY: u16 = 14;
-const FLAGS: u16 = 46;
+pub(super) const CHARMEDBY: u16 = 10;
+pub(super) const CREATEDBY: u16 = 14;
+pub(super) const FLAGS: u16 = 46;
 /// `UNIT_FIELD_AURA` slot 0 and `UNIT_FIELD_AURAFLAGS`, a nibble per slot.
 const AURA: u16 = 47;
 const AURAFLAGS: u16 = 95;
 
-const CLAW: u32 = 16829;
-const BITE: u32 = 17258;
-const GROWL: u32 = 14918;
-const COWER: u32 = 1742;
+pub(super) const CLAW: u32 = 16829;
+pub(super) const BITE: u32 = 17258;
+pub(super) const GROWL: u32 = 14918;
+pub(super) const COWER: u32 = 1742;
 
 /// Claw's shape: no timer of its own, and the ordinary pet GCD, category 133 for 1500 ms.
-fn claw() -> SpellDisplay {
+pub(super) fn claw() -> SpellDisplay {
     SpellDisplay {
         name: "Claw".into(),
         start_recovery_category: 133,
@@ -46,7 +47,7 @@ fn claw() -> SpellDisplay {
 }
 
 /// Bite's shape: the same GCD pair, and a 10 s category timer of its own.
-fn bite() -> SpellDisplay {
+pub(super) fn bite() -> SpellDisplay {
     SpellDisplay {
         name: "Bite".into(),
         category: 19,
@@ -56,7 +57,7 @@ fn bite() -> SpellDisplay {
 }
 
 /// Growl's shape: a 5 s category timer and no GCD pair.
-fn growl() -> SpellDisplay {
+pub(super) fn growl() -> SpellDisplay {
     SpellDisplay {
         name: "Growl".into(),
         category: 82,
@@ -75,24 +76,52 @@ fn cower() -> SpellDisplay {
 }
 
 /// Our own pet: `CREATEDBY` us, no flags.
-fn owned_pet() -> ObjectStore {
+pub(super) fn owned_pet() -> ObjectStore {
     ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
         (CREATEDBY, ME as u32),
         (CREATEDBY + 1, 0),
     ]))
 }
 
-struct Rig {
-    app: App,
+pub(super) struct Rig {
+    pub(super) app: App,
     commands: Receiver<ClientCommand>,
-    /// The bar's feed as a schedule of its own, so its `Local` memory lives across runs.
+    /// The pet's feeds as a schedule of their own, so their `Local` memory lives across runs.
     feed: Schedule,
+}
+
+/// A VM whose listener records every event the pet's lists fire into `SEEN`, in order.
+pub(super) fn listening_vm() -> benilla_ui::script::UiScript {
+    let script = benilla_ui::script::UiScript::new().expect("a VM");
+    listen(&script);
+    script
+}
+
+/// The listener [`listening_vm`] carries, on a VM that has one already.
+pub(super) fn listen(script: &benilla_ui::script::UiScript) {
+    script
+        .run(
+            r#"
+            SEEN = {}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("PET_BAR_UPDATE")
+            f:RegisterEvent("PET_BAR_UPDATE_COOLDOWN")
+            f:RegisterEvent("ACTIONBAR_UPDATE_COOLDOWN")
+            f:RegisterEvent("SPELL_UPDATE_COOLDOWN")
+            f:SetScript("OnEvent", function() table.insert(SEEN, event) end)
+        "#,
+        )
+        .expect("the listener registers");
 }
 
 /// The whole client, headless, with `PET` on the bar and `catalog` as the spell table. Slot `n`
 /// (1-based) holds `slots[n - 1]` as an enabled spell word. `pet` is its object, or none
 /// streamed.
-fn rig(catalog: Vec<(u32, SpellDisplay)>, slots: &[u32], pet: Option<ObjectStore>) -> Rig {
+pub(super) fn rig(
+    catalog: Vec<(u32, SpellDisplay)>,
+    slots: &[u32],
+    pet: Option<ObjectStore>,
+) -> Rig {
     let mut app = crate::game_plugins::schedule_tests::headless_client();
     let (tx, commands) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx));
@@ -111,21 +140,17 @@ fn rig(catalog: Vec<(u32, SpellDisplay)>, slots: &[u32], pet: Option<ObjectStore
     for (i, &spell_id) in slots.iter().enumerate() {
         bar.spells.bar[i] = PetActionEntry::from(spell_id | (u32::from(PET_ACT_ENABLED) << 24));
     }
-    let script = benilla_ui::script::UiScript::new().expect("a VM");
-    script
-        .run(
-            r#"
-            SEEN = {}
-            local f = CreateFrame("Frame")
-            f:RegisterEvent("PET_BAR_UPDATE")
-            f:RegisterEvent("PET_BAR_UPDATE_COOLDOWN")
-            f:SetScript("OnEvent", function() table.insert(SEEN, event) end)
-        "#,
-        )
-        .expect("the listener registers");
-    world.insert_non_send_resource(script);
+    world.insert_non_send_resource(listening_vm());
+    // The order the plugin gives them: the feeds that push a pet cooldown, then the flush.
     let mut feed = Schedule::default();
-    feed.add_systems(feed_pet_bar);
+    feed.add_systems(
+        (
+            crate::ui_pet_book::feed_pet_book,
+            feed_pet_bar,
+            fire_pet_cooldown_events,
+        )
+            .chain(),
+    );
     let mut rig = Rig {
         app,
         commands,
@@ -137,8 +162,8 @@ fn rig(catalog: Vec<(u32, SpellDisplay)>, slots: &[u32], pet: Option<ObjectStore
 }
 
 impl Rig {
-    /// The bar's feed for one frame, and the events it fired.
-    fn frame(&mut self) -> Vec<String> {
+    /// The bar's feeds for one frame, and the events they fired.
+    pub(super) fn frame(&mut self) -> Vec<String> {
         self.feed.run(self.app.world_mut());
         let mut script = self
             .app
@@ -151,7 +176,7 @@ impl Rig {
     }
 
     /// `CastPetAction(slot)`, applied.
-    fn press(&mut self, slot: u32) {
+    pub(super) fn press(&mut self, slot: u32) {
         self.app
             .world_mut()
             .run_system_once(move |mut press: PetPress| press.press_slot(slot))
@@ -164,7 +189,7 @@ impl Rig {
     }
 
     /// `GetPetActionCooldown(slot)`, off what the last feed pushed: `(start, duration, enable)`.
-    fn cooldown(&mut self, slot: u32) -> (f64, f64, i32) {
+    pub(super) fn cooldown(&mut self, slot: u32) -> (f64, f64, i32) {
         self.app
             .world_mut()
             .non_send_resource_mut::<benilla_ui::script::UiScript>()
@@ -228,8 +253,15 @@ fn a_spell_press_starts_the_pets_gcd_for_every_slot_sharing_its_category() {
     );
     assert!(rig.player_list_untouched(), "list 1 is the pet's, not ours");
 
-    // `0x6e2e8e`: one `PET_BAR_UPDATE_COOLDOWN`, no bar update with it.
-    assert_eq!(rig.frame(), ["PET_BAR_UPDATE_COOLDOWN"]);
+    // `0x6e2e77`, `0x6e2e8e`: the flush, in the reference's order, and no bar update with it.
+    assert_eq!(
+        rig.frame(),
+        [
+            "ACTIONBAR_UPDATE_COOLDOWN",
+            "SPELL_UPDATE_COOLDOWN",
+            "PET_BAR_UPDATE_COOLDOWN"
+        ]
+    );
     let (start, duration, enable) = rig.cooldown(1);
     assert!(start > 0.0 && (duration - 1.5).abs() < 1e-9 && enable == 1);
     let (_, duration, enable) = rig.cooldown(2);

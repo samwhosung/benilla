@@ -50,11 +50,11 @@ impl Plugin for UiPetBookPlugin {
 
 /// What the feed last pushed, so `SPELLS_CHANGED` fires only on a real change.
 #[derive(Default)]
-struct FeedMemory {
+pub(crate) struct FeedMemory {
     pushed: PetBookState,
 }
 
-fn feed_pet_book(
+pub(crate) fn feed_pet_book(
     script: Option<NonSendMut<UiScript>>,
     bar: Res<PetBar>,
     spells: Option<Res<Spells>>,
@@ -117,16 +117,18 @@ fn feed_pet_book(
         script.set_pet_book(fresh.clone());
         memory.pushed = fresh;
         // One `SPELLS_CHANGED` for both books off the shared re-sort (`0x4b2fd0` tail-jumps
-        // `SignalEvent(0x104)`). Cooldown and autocast repaint the pet page through
-        // `PET_BAR_UPDATE` (`SpellBookFrame.lua:214`, `227-231`), which `ui_pet`'s feed fires.
+        // `SignalEvent(0x104)`). A cooldown repaints the pet page through the flush's
+        // `SPELL_UPDATE_COOLDOWN` (`SpellBookFrame.lua:209`, `221`), which `ui_pet`'s
+        // `fire_pet_cooldown_events` fires after this feed's push; autocast, through
+        // `PET_BAR_UPDATE` (`227-231`), which `ui_pet`'s feed fires.
         if changed {
             script.fire_event("SPELLS_CHANGED", vec![]);
         }
     }
 }
 
-/// Whether the book itself changed; a slot's cooldown, autocast or ring reaches the buttons
-/// through `PET_BAR_UPDATE` instead.
+/// Whether the book itself changed; a slot's cooldown reaches the buttons through the flush's
+/// `SPELL_UPDATE_COOLDOWN`, its autocast and ring through `PET_BAR_UPDATE`, instead.
 fn book_changed(fresh: &PetBookState, old: &PetBookState) -> bool {
     fresh.token != old.token
         || fresh.slots.len() != old.slots.len()

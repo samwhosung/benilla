@@ -10,8 +10,9 @@
 //! - A failed cast clears the GCD armed at send (`0x6e1d83`, `0x6e1630`) and, unless the reason
 //!   is 0x3c, removes a cooldown-on-event spell's parked record (`0x6e73cc`).
 //!
-//! Every mutation bumps [`Cooldowns::generation`], the `ACTIONBAR_UPDATE_COOLDOWN` edge; a
-//! natural expiry does not, since the stock `Cooldown.lua` frame hides itself at the end.
+//! Every mutation the reference flushes bumps [`Cooldowns::generation`], the edge of the flush
+//! `0x4b31b0` makes (`ACTIONBAR_UPDATE_COOLDOWN`, `SPELL_UPDATE_COOLDOWN`); a natural expiry does
+//! not, since the stock `Cooldown.lua` frame hides itself at the end.
 
 use std::time::{Duration, Instant};
 
@@ -92,12 +93,15 @@ impl CooldownInfo {
     }
 }
 
-/// The player's cooldown list (the client's `SpellHistory` at `0xcecaec`); the pet list has no
-/// consumer.
+/// One cooldown list, the client's `SpellHistory`: the player's is this resource (`0xcecaec`), the
+/// pet's is [`crate::ui_pet::PetBar::cooldowns`] (`0xcecb04`), which the pet bar, the pet book and
+/// the pet's `SMSG_SPELL_GO` leg read and write. Each list's edge feeds its own events: the
+/// player's `feed_action_state`, the pet's `ui_pet::bar::fire_pet_cooldown_events`.
 #[derive(Resource, Default)]
 pub(crate) struct Cooldowns {
     records: Vec<Record>,
-    /// Bumped on every mutation: the `ACTIONBAR_UPDATE_COOLDOWN` edge.
+    /// Bumped on every mutation the reference flushes (`0x4b31b0`), the flush's edge. Only counts
+    /// up, across [`Self::clear_silent`] too, so a watcher reads a reset as no mutation.
     pub(crate) generation: u64,
     /// Bumped when [`Self::prune`] removes records. Kept apart from [`Self::generation`]: gated
     /// feeds must see an expiry, but the reference never fires the event for one.
@@ -362,6 +366,14 @@ impl Cooldowns {
         }
     }
 
+    /// Empty the list with no flush: `SMSG_PET_SPELLS` clears the pet's list (`0x6e9b60` →
+    /// `0x6e1880`) before it seeds it again, or for a teardown leaves it empty, and the packet
+    /// calls no `0x4b31b0`. The counters keep their place, so a watcher never reads the reset as
+    /// a mutation.
+    pub(crate) fn clear_silent(&mut self) {
+        self.records.clear();
+    }
+
     /// Session end ([`crate::net::session::disconnected`]): `SMSG_INITIAL_SPELLS` re-sends every
     /// running cooldown at world entry and [`Self::seed_initial`] appends, so a surviving record
     /// would outlive the fresh one.
@@ -470,6 +482,9 @@ impl Cooldowns {
 
     /// One `SMSG_PET_SPELLS` cooldown: remainders, starting now. The category duration's
     /// [`PET_COOLDOWN_PERMANENT`] marker is stripped, or it would read as a 37-hour sweep.
+    ///
+    /// The handler seeds through `StartCooldown 0x6e2c60` (`0x4bdabf`), which calls no flush, so
+    /// the insert leaves [`Self::generation`] where it was.
     pub(crate) fn seed_pet(
         &mut self,
         cd: &benilla_protocol::messages::PetSpellCooldown,
@@ -478,6 +493,7 @@ impl Cooldowns {
     ) {
         use benilla_protocol::messages::PET_COOLDOWN_PERMANENT;
         let category_ms = cd.category_cd_ms & !PET_COOLDOWN_PERMANENT;
+        let generation = self.generation;
         self.add(
             cd.spell_id,
             0,
@@ -496,6 +512,7 @@ impl Cooldowns {
             0,
             Timer::none(now),
         );
+        self.generation = generation;
     }
 
     /// The client's `IsSpellOnCooldown 0x6e1690`, which despite its name is true only for an
