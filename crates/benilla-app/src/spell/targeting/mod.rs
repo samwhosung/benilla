@@ -74,6 +74,8 @@ pub(crate) struct BindChecks<'w, 's> {
     poses: Query<'w, 's, &'static GlobalTransform, Without<benilla_world::view::WorldCamera>>,
     spells: Option<Res<'w, crate::ui_action::Spells>>,
     spell_mods: Res<'w, super::SpellModifiers>,
+    /// The caster's auto-attack target guid, `[caster+0xc48]`, which `GetMinMaxRange` looks up.
+    engaged: Query<'w, 's, &'static crate::creature_anim::Engaged, With<crate::net::SelfPlayer>>,
 }
 
 impl BindChecks<'_, '_> {
@@ -153,10 +155,28 @@ impl BindChecks<'_, '_> {
                 .map(GlobalTransform::translation),
             ..Default::default()
         };
-        if let Some((_, Some(store))) = me {
-            range.self_reach = store.0.unit_combat_reach();
-        }
+        range.self_reach = self.self_reach();
         range
+    }
+
+    /// The caster's combat reach, the descriptor's default until its store streams.
+    fn self_reach(&self) -> f32 {
+        self.self_q
+            .iter()
+            .next()
+            .and_then(|(_, store)| store)
+            .map_or(super::cast_target::RangeInputs::default().self_reach, |s| {
+                s.0.unit_combat_reach()
+            })
+    }
+
+    /// The reach of the caster's auto-attack target, the unit `GetMinMaxRange 0x6e3480` looks up
+    /// itself for its melee arm when no unit is passed (`6e3552`-`6e3584`). `None` with no target
+    /// engaged or before it streams, where the arm reads the caster's own reach (`6e3594`).
+    fn attack_target_reach(&self) -> Option<f32> {
+        let guid = self.engaged.single().ok()?.0;
+        let entity = *self.index.as_ref()?.0.get(&guid)?;
+        Some(self.stores.get(entity).ok()?.0.unit_combat_reach())
     }
 
     fn refusal(&self, spell_id: u32, range: super::cast_target::RangeInputs) -> Option<u8> {

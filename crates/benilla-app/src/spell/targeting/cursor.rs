@@ -5,31 +5,65 @@
 
 use bevy::prelude::*;
 
-use benilla_formats::SpellRange;
+use benilla_formats::{RangeTargets, SpellDisplay, SpellRange};
 
 use crate::net::SelfPlayer;
+use crate::spell::SpellModifiers;
 use crate::target::{CursorKind, PickOcclusion, WorldCursor};
 use crate::ui_action::Spells;
 
 use super::{SpellTargeting, TargetingWants};
 
-/// `CheckGroundPointInRange 0x6e6810`: min² and max² from the `SpellRange` row against the squared
-/// caster-to-point distance. Its one caller is the hover classifier `0x4820f0`, so it colours the
-/// cursor and the click never asks. No row is permissive; the server judges every send.
-fn ground_point_in_range(row: Option<&SpellRange>, self_pos: Vec3, point: Vec3) -> bool {
-    let Some(row) = row else {
-        return true;
-    };
-    let dist_sq = self_pos.distance_squared(point);
-    if row.min > 0.0 && dist_sq < row.min * row.min {
-        return false;
-    }
-    dist_sq <= row.max * row.max
+/// What `GetMinMaxRange 0x6e3480` reads for the cursor's two range verdicts: the ground point
+/// (`CheckGroundPointInRange 0x6e6810`, a null target at `0x6e6879`) and the GameObject leg of
+/// `0x6e6460` (the object as target at `0x6e679b`). Neither passes a unit, which the function
+/// tests for at `0x6e34e1`-`0x6e34f9`: the ranged arm pads nothing, and the melee arm sums the
+/// caster's reach with its auto-attack target's.
+#[derive(Clone, Copy)]
+struct RangeCall<'a> {
+    spell: &'a SpellDisplay,
+    row: &'a SpellRange,
+    mods: &'a SpellModifiers,
+    self_reach: f32,
+    attack_target_reach: Option<f32>,
 }
 
-fn range_row(spells: Option<&Spells>, spell_id: u32) -> Option<&SpellRange> {
-    let spells = spells?;
-    spells.ranges.get(spells.catalog.get(spell_id)?.range_index)
+/// The call's inputs, or `None` where the data is absent (no catalog, an unknown spell, a row
+/// missing from `SpellRange`), which is permissive: the server judges every send.
+fn range_call<'a>(checks: &'a super::BindChecks, spell_id: u32) -> Option<RangeCall<'a>> {
+    let spells = checks.spells.as_deref()?;
+    let spell = spells.catalog.get(spell_id)?;
+    Some(RangeCall {
+        spell,
+        row: spells.ranges.get(spell.range_index)?,
+        mods: &checks.spell_mods,
+        self_reach: checks.self_reach(),
+        attack_target_reach: checks.attack_target_reach(),
+    })
+}
+
+/// `CheckGroundPointInRange 0x6e6810`: the squared caster-to-point distance against
+/// `GetMinMaxRange`'s bounds, whose max carries spell-mod op 5 (`0x6e3744`), so a range talent
+/// moves the verdict. The compare fails on min² > d² (`0x6e68b5`-`0x6e68c3`) and on max² < d²
+/// (`0x6e68c5`-`0x6e68d3`), a NaN failing both; the min has no `> 0` guard, a zero one is inert.
+/// Its one caller is the hover classifier `0x4820f0`, so it colours the cursor and the click never
+/// asks.
+fn ground_point_in_range(call: Option<RangeCall>, self_pos: Vec3, point: Vec3) -> bool {
+    let Some(call) = call else {
+        return true;
+    };
+    let targets = RangeTargets {
+        target: None,
+        attack_target: call.attack_target_reach,
+    };
+    // The self row is `{0, 0}` (`0x6e35dd`, `0x6e35ea`) and `min_max_range` answers `None` for it:
+    // only the caster's own spot passes it here.
+    let (min, max) = call
+        .mods
+        .min_max_range(call.spell, Some(call.row), call.self_reach, targets)
+        .unwrap_or_default();
+    let dist_sq = self_pos.distance_squared(point);
+    min * min <= dist_sq && dist_sq <= max * max
 }
 
 /// `GetCurrentCastRadius 0x6e6350`: per effect `radius + casterLevel × perLevel` over
@@ -81,7 +115,8 @@ pub(crate) fn ground_cast_radius(
 /// its ray (`0x4812c8`) and the world cursor stays grey.
 ///
 /// The object arm is `0x6e6460`'s GameObject leg: `word & 0x4800`, the lock predicate `0x5f8260`,
-/// then the same min/max range test through `GetMinMaxRange 0x6e3480`. Its unit leg is
+/// then the same min/max range test through `GetMinMaxRange 0x6e3480`, its range modifier included.
+/// Its unit leg is
 /// [`SpellTargeting::can_target_unit`] and its corpse leg [`SpellTargeting::can_target_corpse`],
 /// over a corpse the pick admitted under a word in `0x8600`. The world-item leg is not built.
 ///
@@ -92,7 +127,6 @@ pub(crate) fn drive_targeting_cursor(
     occlusion: Res<PickOcclusion>,
     hovered: Res<crate::target::Hovered>,
     hovered_object: Res<crate::target::HoveredObject>,
-    spells: Option<Res<Spells>>,
     self_tf: Query<&Transform, With<SelfPlayer>>,
     go_tf: Query<&Transform>,
     stores: Query<(
@@ -108,7 +142,7 @@ pub(crate) fn drive_targeting_cursor(
     let Some(spell_id) = targeting.spell() else {
         return;
     };
-    let row = range_row(spells.as_deref(), spell_id);
+    let range = range_call(&checks, spell_id);
     let me = self_tf.single().ok().map(|tf| tf.translation);
     // The arm the click would take ([`super::world::commit_object_cast_on_click`]): a GameObject
     // word's nearest GameObject, else the picked unit or corpse, else the terrain.
@@ -121,7 +155,7 @@ pub(crate) fn drive_targeting_cursor(
             &go_tf,
             &lock_inputs,
             spell_id,
-            row,
+            range,
             me,
         )
     } else if let Some(unit) = hovered
@@ -137,7 +171,7 @@ pub(crate) fn drive_targeting_cursor(
     } else if targeting.wants(TargetingWants::Location) {
         // `0x4820f0`. No ground hit (sky, mouselook) is state 0, UnableCast.
         match (occlusion.point, me) {
-            (Some(point), Some(me)) => ground_point_in_range(row, me, point),
+            (Some(point), Some(me)) => ground_point_in_range(range, me, point),
             _ => false,
         }
     } else {
@@ -161,7 +195,7 @@ fn object_arm(
     go_tf: &Query<&Transform>,
     lock_inputs: &crate::target::lock::GoLockInputs,
     spell_id: u32,
-    row: Option<&SpellRange>,
+    range: Option<RangeCall>,
     me: Option<Vec3>,
 ) -> bool {
     let (Some(entity), Some(guid)) = (hovered_object.target, hovered_object.guid) else {
@@ -195,7 +229,7 @@ fn object_arm(
     }
     // The range tail: the caster-to-object distance against the spell's min and max.
     match (me, go_tf.get(entity)) {
-        (Some(me), Ok(tf)) => ground_point_in_range(row, me, tf.translation),
+        (Some(me), Ok(tf)) => ground_point_in_range(range, me, tf.translation),
         _ => false,
     }
 }
@@ -204,20 +238,132 @@ fn object_arm(
 mod tests {
     use super::*;
 
+    /// The call for a spell and row under these tables, with the default combat reach and no
+    /// auto-attack target.
+    fn call<'a>(
+        spell: &'a SpellDisplay,
+        row: &'a SpellRange,
+        mods: &'a SpellModifiers,
+    ) -> Option<RangeCall<'a>> {
+        Some(RangeCall {
+            spell,
+            row,
+            mods,
+            self_reach: 1.5,
+            attack_target_reach: None,
+        })
+    }
+
     /// Blizzard's row 4 is 0 to 30 yd; a synthetic min exercises the too-close arm.
     #[test]
     fn ground_point_in_range_mirrors_check_ground_point_in_range() {
         let row = |min: f32, max: f32| SpellRange { min, max, flags: 0 };
         let origin = Vec3::ZERO;
         let at = |d: f32| Vec3::new(d, 0.0, 0.0);
+        let spell = SpellDisplay::default();
+        let mods = SpellModifiers::default();
         let blizzard = row(0.0, 30.0);
-        assert!(ground_point_in_range(Some(&blizzard), origin, at(29.9)));
-        assert!(!ground_point_in_range(Some(&blizzard), origin, at(30.1)));
+        let ground = |row: &SpellRange, d: f32| {
+            ground_point_in_range(call(&spell, row, &mods), origin, at(d))
+        };
+        assert!(ground(&blizzard, 29.9));
+        assert!(!ground(&blizzard, 30.1));
         let banded = row(8.0, 35.0);
-        assert!(!ground_point_in_range(Some(&banded), origin, at(5.0)));
-        assert!(ground_point_in_range(Some(&banded), origin, at(20.0)));
+        assert!(!ground(&banded, 5.0));
+        assert!(ground(&banded, 20.0));
+        // Both bounds are inclusive (`min² > d²` and `max² < d²` fail, `0x6e68c3`, `0x6e68d3`), and
+        // a NaN distance fails both.
+        assert!(ground(&banded, 8.0));
+        assert!(ground(&banded, 35.0));
+        assert!(!ground(&banded, f32::NAN));
+        assert!(!ground(&blizzard, f32::NAN));
+        // The self row is `{0, 0}`: only the caster's own spot is in range.
+        let own = row(0.0, 0.0);
+        assert!(ground(&own, 0.0));
+        assert!(!ground(&own, 1.0));
         // No row → permissive (the server still validates).
         assert!(ground_point_in_range(None, origin, at(500.0)));
+    }
+
+    /// Arctic Reach adds op 5 with family mask `0xa0` (bits 5 and 7), and Blizzard's `0x80080` sets
+    /// bit 7: 30 yd at +20% is 36. The talent moves the max only, and a spell whose mask it does
+    /// not cover keeps its 30.
+    #[test]
+    fn a_range_talent_moves_the_ground_verdict() {
+        let mage = |flags: u64| SpellDisplay {
+            spell_family: 3,
+            spell_family_flags: flags,
+            ..SpellDisplay::default()
+        };
+        let blizzard = mage(0x8_0080);
+        let flamestrike = mage(0x4000_0004);
+        let row = SpellRange {
+            min: 0.0,
+            max: 30.0,
+            flags: 0,
+        };
+        let banded = SpellRange {
+            min: 8.0,
+            max: 35.0,
+            flags: 0,
+        };
+        let plain = {
+            let mut mods = SpellModifiers::default();
+            mods.set_class_family(3);
+            mods
+        };
+        let mut talented = plain.clone();
+        for bit in [5, 7] {
+            talented.set(false, bit, crate::spell::OP_RANGE, 20);
+        }
+        let ground = |spell: &SpellDisplay, row: &SpellRange, mods: &SpellModifiers, d: f32| {
+            ground_point_in_range(call(spell, row, mods), Vec3::ZERO, Vec3::new(d, 0.0, 0.0))
+        };
+
+        assert!(!ground(&blizzard, &row, &plain, 33.0), "30 yd without it");
+        assert!(ground(&blizzard, &row, &talented, 29.9));
+        assert!(ground(&blizzard, &row, &talented, 33.0));
+        assert!(ground(&blizzard, &row, &talented, 35.9));
+        assert!(!ground(&blizzard, &row, &talented, 36.1));
+        assert!(!ground(&blizzard, &row, &talented, 37.0));
+        // Bit 7 is not in Flamestrike's mask (bits 2 and 30).
+        assert!(!ground(&flamestrike, &row, &talented, 33.0));
+        // Only the max moves: 8 to 35 is 8 to 42.
+        assert!(!ground(&blizzard, &banded, &talented, 5.0));
+        assert!(ground(&blizzard, &banded, &talented, 41.0));
+        assert!(!ground(&blizzard, &banded, &talented, 43.0));
+    }
+
+    /// With no unit passed, the melee arm sums the caster's reach with its auto-attack target's, else
+    /// its own, and the max is floored at 5.0 (`0x6e3552`-`0x6e35bf`).
+    #[test]
+    fn the_melee_row_reads_the_casters_reaches() {
+        let melee = SpellRange {
+            min: 0.0,
+            max: 5.0,
+            flags: 1,
+        };
+        let spell = SpellDisplay::default();
+        let mods = SpellModifiers::default();
+        let ground = |self_reach: f32, attack_target_reach: Option<f32>, d: f32| {
+            let call = RangeCall {
+                spell: &spell,
+                row: &melee,
+                mods: &mods,
+                self_reach,
+                attack_target_reach,
+            };
+            ground_point_in_range(Some(call), Vec3::ZERO, Vec3::new(d, 0.0, 0.0))
+        };
+        // 1.5 + 1.5 + 1.3333 is under the floor.
+        assert!(ground(1.5, None, 4.9));
+        assert!(!ground(1.5, None, 5.1));
+        // The caster's 3.0 twice: 7.33.
+        assert!(ground(3.0, None, 7.2));
+        assert!(!ground(3.0, None, 7.5));
+        // An auto-attack target's 4.0 in place of the second: 1.5 + 4.0 + 1.3333 = 6.83.
+        assert!(ground(1.5, Some(4.0), 6.7));
+        assert!(!ground(1.5, Some(4.0), 7.0));
     }
 
     /// Fixture rows mirror the real table: row 14 is 8.0 (Blizzard), row 8 is 5.0 (Flamestrike).
@@ -368,6 +514,201 @@ mod tests {
 
         // A lock word that also carries DEST (`0x4840`) keeps its terrain handler off a GameObject.
         assert!(verdict(0x4840, Some(Vec3::ZERO), None));
+    }
+
+    /// `0x4820f0` over terrain. Blizzard (10, `Targets 0x40`, family 3 mask `0x80080`, row 4, 0 to
+    /// 30 yd) under Arctic Reach's cells, and a melee-row ground spell (12684, row 2) under the
+    /// caster's reach and its auto-attack target's.
+    #[test]
+    fn the_terrain_verdict_reads_the_range_talent_and_the_casters_reaches() {
+        use super::super::corpse_fixture as fx;
+        use crate::creature_anim::Engaged;
+        use bevy::ecs::system::RunSystemOnce;
+        use std::collections::HashMap;
+
+        const BLIZZARD: u32 = 10;
+        const MELEE_GROUND: u32 = 12684;
+        const ATTACK_TARGET: u64 = 0xF130_0000_0000_0007;
+        // A spell, a talent or not, the caster's reach, an engaged target's reach, the distance.
+        let verdict =
+            |spell: u32, talent: bool, self_reach: f32, engaged: Option<f32>, d: f32| -> bool {
+                let mut world = World::new();
+                world.init_resource::<WorldCursor>();
+                world.init_resource::<SpellTargeting>();
+                world.init_resource::<crate::target::Hovered>();
+                world.init_resource::<crate::target::HoveredObject>();
+                world.init_resource::<crate::go_templates::GameObjectTemplates>();
+                world.init_resource::<crate::items::Items>();
+                world.insert_resource(crate::net::Reputations(Vec::new()));
+                world.insert_resource(PickOcclusion {
+                    distance: 10.0,
+                    point: Some(Vec3::new(d, 0.0, 0.0)),
+                });
+                let mut mods = SpellModifiers::default();
+                mods.set_class_family(3);
+                if talent {
+                    for bit in [5, 7] {
+                        mods.set(false, bit, crate::spell::OP_RANGE, 20);
+                    }
+                }
+                world.insert_resource(mods);
+                let display = |range_index, flags| SpellDisplay {
+                    range_index,
+                    targets: 0x40,
+                    spell_family: 3,
+                    spell_family_flags: flags,
+                    ..SpellDisplay::default()
+                };
+                let mut spells = Spells::empty_for_tests();
+                spells.catalog = benilla_formats::SpellCatalog::from_displays(HashMap::from([
+                    (BLIZZARD, display(4, 0x8_0080)),
+                    (MELEE_GROUND, display(2, 0)),
+                ]));
+                spells.ranges = benilla_formats::SpellRangeCatalog::from_rows(HashMap::from([
+                    (
+                        4,
+                        SpellRange {
+                            min: 0.0,
+                            max: 30.0,
+                            flags: 0,
+                        },
+                    ),
+                    (
+                        2,
+                        SpellRange {
+                            min: 0.0,
+                            max: 5.0,
+                            flags: 1,
+                        },
+                    ),
+                ]));
+                world.insert_resource(spells);
+                let mut index = HashMap::new();
+                let mut me =
+                    world.spawn((SelfPlayer, Transform::default(), fx::caster(self_reach)));
+                if engaged.is_some() {
+                    me.insert(Engaged(ATTACK_TARGET));
+                }
+                if let Some(reach) = engaged {
+                    let target = world.spawn(fx::caster(reach)).id();
+                    index.insert(ATTACK_TARGET, target);
+                }
+                world.insert_resource(crate::net::GuidIndex(index));
+                world.resource_mut::<SpellTargeting>().enter(
+                    spell,
+                    crate::spell::CastCommit::Spell,
+                    0x0040,
+                );
+                world
+                    .run_system_once(drive_targeting_cursor)
+                    .expect("the targeting cursor drives");
+                !world.resource::<WorldCursor>().unable
+            };
+
+        // 30 yd without the talent, 36 with it.
+        assert!(!verdict(BLIZZARD, false, 1.5, None, 33.0), "past 30 yd");
+        assert!(verdict(BLIZZARD, true, 1.5, None, 33.0), "inside 36 yd");
+        assert!(!verdict(BLIZZARD, true, 1.5, None, 37.0), "past 36 yd");
+        // The melee row's 5.0 floor; the caster's own reach twice, 3.0 + 3.0 + 1.3333; an auto-attack
+        // target's 4.0 in place of the second, 1.5 + 4.0 + 1.3333.
+        assert!(!verdict(MELEE_GROUND, false, 1.5, None, 7.0));
+        assert!(verdict(MELEE_GROUND, false, 3.0, None, 7.0));
+        assert!(verdict(MELEE_GROUND, false, 1.5, Some(4.0), 6.5));
+        assert!(!verdict(MELEE_GROUND, false, 1.5, Some(4.0), 7.0));
+    }
+
+    /// `0x6e6460`'s GameObject leg asks the same range through the same call: a chest a lock spell
+    /// opens, `d` yd out, on a family-3 lock spell (fixture) with row 12, 0 to 5 yd.
+    #[test]
+    fn the_object_leg_reads_the_range_talent() {
+        use super::super::corpse_fixture as fx;
+        use benilla_formats::{LockCatalog, LockSlot, OpenLock, LOCK_KEY_SKILL};
+        use bevy::ecs::system::RunSystemOnce;
+        use std::collections::HashMap;
+
+        const OPENER: u32 = 6477;
+        const LOCK: u32 = 55;
+        // Entry 7, a chest whose `data[0]` is the lock.
+        const CHEST: u64 = 0xF110_0000_0000_0001 | 7 << 24;
+        let verdict = |talent: bool, d: f32| -> bool {
+            let mut world = World::new();
+            world.init_resource::<WorldCursor>();
+            world.init_resource::<SpellTargeting>();
+            world.init_resource::<crate::target::Hovered>();
+            world.init_resource::<crate::items::Items>();
+            world.init_resource::<crate::net::GuidIndex>();
+            world.insert_resource(crate::net::Reputations(Vec::new()));
+            world.init_resource::<PickOcclusion>();
+            let mut mods = SpellModifiers::default();
+            mods.set_class_family(3);
+            if talent {
+                mods.set(false, 7, crate::spell::OP_RANGE, 20);
+            }
+            world.insert_resource(mods);
+            let mut spells = Spells::empty_for_tests();
+            spells.catalog = benilla_formats::SpellCatalog::from_displays(HashMap::from([(
+                OPENER,
+                SpellDisplay {
+                    range_index: 12,
+                    targets: 0x4000,
+                    spell_family: 3,
+                    spell_family_flags: 1 << 7,
+                    open_lock: Some(OpenLock {
+                        effect: 0,
+                        lock_type: 1,
+                    }),
+                    ..SpellDisplay::default()
+                },
+            )]));
+            spells.ranges = benilla_formats::SpellRangeCatalog::from_rows(HashMap::from([(
+                12,
+                SpellRange {
+                    min: 0.0,
+                    max: 5.0,
+                    flags: 0,
+                },
+            )]));
+            world.insert_resource(spells);
+            let mut slots = [LockSlot::default(); benilla_formats::MAX_LOCK_SLOTS];
+            slots[0] = LockSlot {
+                key_type: LOCK_KEY_SKILL,
+                index: 1,
+                skill: 0,
+                action: 5,
+            };
+            world.insert_resource(crate::go_templates::Locks(LockCatalog::from_rows([(
+                LOCK, slots,
+            )])));
+            let mut templates = crate::go_templates::GameObjectTemplates::default();
+            let mut data = [0; 24];
+            data[0] = LOCK as i32;
+            templates.insert(7, 3, "Chest".into(), &data);
+            world.insert_resource(templates);
+            world.spawn((SelfPlayer, Transform::default(), fx::caster(1.5)));
+            let chest = world
+                .spawn(Transform::from_translation(Vec3::new(d, 0.0, 0.0)))
+                .id();
+            world.insert_resource(crate::target::HoveredObject {
+                target: Some(chest),
+                guid: Some(CHEST),
+                distance: 5.0,
+            });
+            world.resource_mut::<SpellTargeting>().enter(
+                OPENER,
+                crate::spell::CastCommit::Spell,
+                0x4800,
+            );
+            world
+                .run_system_once(drive_targeting_cursor)
+                .expect("the targeting cursor drives");
+            !world.resource::<WorldCursor>().unable
+        };
+
+        // 5 yd without the talent, 6 with it.
+        assert!(verdict(false, 4.5));
+        assert!(!verdict(false, 5.5), "past 5 yd");
+        assert!(verdict(true, 5.5), "inside 6 yd");
+        assert!(!verdict(true, 6.5), "past 6 yd");
     }
 
     /// `0x6e6460`'s unit leg over a hovered unit: the relation checks, then min² ≤ d² ≤ max²
