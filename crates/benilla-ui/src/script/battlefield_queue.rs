@@ -13,7 +13,8 @@ use super::Model;
 pub struct BattlefieldQueueSlot {
     /// `+0x00`, the Map.dbc row id; 0 is a cleared slot, its name looked up like any other.
     pub map_id: u32,
-    /// The localized map name, or `None` when the id has no row (a real `nil`).
+    /// The localized map name, or `None` when the id has no row (a real `nil`). The VM holds no
+    /// Map.dbc, so a slot not yet pushed answers `nil` where the reference names row 0.
     pub map_name: Option<String>,
     /// `+0x04`: `0` none, `1` queued, `2` confirm, `3` active; anything else answers `"error"`.
     pub status: u32,
@@ -102,7 +103,7 @@ impl super::UiScript {
     /// clock getters move.
     pub fn set_battlefield_queue(
         &mut self,
-        slots: Vec<BattlefieldQueueSlot>,
+        slots: [BattlefieldQueueSlot; 3],
         instance_expiration_ms: u32,
     ) {
         let mut model = self.model_mut();
@@ -498,7 +499,7 @@ mod tests {
     #[test]
     fn get_battlefield_status_answers_five_values_on_every_leg() {
         let mut s = UiScript::new().unwrap();
-        s.set_battlefield_queue(vec![slot(489, 1, 5), slot(0, 0, 0), slot(529, 9, 2)], 0);
+        s.set_battlefield_queue([slot(489, 1, 5), slot(0, 0, 0), slot(529, 9, 2)], 0);
         let n = |s: &mut UiScript, i: &str| s.arity(&format!("GetBattlefieldStatus({i})")).unwrap();
         assert_eq!(n(&mut s, "1"), 5);
         assert_eq!(n(&mut s, "0"), 5);
@@ -532,7 +533,7 @@ mod tests {
         assert!(err.contains("Usage: GetBattlefieldStatus(index)"), "{err}");
         let mut empty = slot(0, 0, 0);
         empty.map_name = None;
-        s.set_battlefield_queue(vec![empty], 0);
+        s.set_battlefield_queue([empty, Default::default(), Default::default()], 0);
         assert!(
             s.eval::<bool>("local _, name = GetBattlefieldStatus(1) return name == nil")
                 .unwrap(),
@@ -541,9 +542,25 @@ mod tests {
     }
 
     #[test]
+    fn every_slot_answers_none_before_the_first_push() {
+        let s = UiScript::new().unwrap();
+        for i in 1..=3 {
+            assert_eq!(
+                s.eval::<String>(&format!("return (GetBattlefieldStatus({i}))"))
+                    .unwrap(),
+                "none",
+                "slot {i}"
+            );
+        }
+    }
+
+    #[test]
     fn the_time_getters_read_the_pushed_milliseconds() {
         let mut s = UiScript::new().unwrap();
-        s.set_battlefield_queue(vec![slot(489, 1, 5)], 120_000);
+        s.set_battlefield_queue(
+            [slot(489, 1, 5), Default::default(), Default::default()],
+            120_000,
+        );
         assert_eq!(
             s.eval::<i64>("return GetBattlefieldPortExpiration(1)")
                 .unwrap(),
@@ -594,7 +611,7 @@ mod tests {
     #[test]
     fn show_battlefield_list_gates_on_a_queued_slot() {
         let mut s = UiScript::new().unwrap();
-        s.set_battlefield_queue(vec![slot(489, 1, 5), slot(529, 2, 1), slot(0, 1, 0)], 0);
+        s.set_battlefield_queue([slot(489, 1, 5), slot(529, 2, 1), slot(0, 1, 0)], 0);
         s.run("ShowBattlefieldList(1) ShowBattlefieldList(2) ShowBattlefieldList(3) ShowBattlefieldList(4)")
             .unwrap();
         assert_eq!(s.take_battlefield_list_requests(), vec![489]);

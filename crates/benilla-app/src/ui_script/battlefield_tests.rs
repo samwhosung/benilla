@@ -77,7 +77,7 @@ fn the_queue_icon_follows_the_slots_across_update_battlefield_status() {
     let mut s = session();
     assert!(!visible(&s, "MiniMapBattlefieldFrame"), "no queue at load");
 
-    s.set_battlefield_queue(vec![slot(529, "Arathi Basin", 1, 0), empty(), empty()], 0);
+    s.set_battlefield_queue([slot(529, "Arathi Basin", 1, 0), empty(), empty()], 0);
     s.fire_event("UPDATE_BATTLEFIELD_STATUS", vec![]);
     assert!(
         visible(&s, "MiniMapBattlefieldFrame"),
@@ -103,7 +103,7 @@ fn the_queue_icon_follows_the_slots_across_update_battlefield_status() {
     assert!(!visible(&s, "StaticPopup1"), "queued is not yet a question");
 
     // Status 2, ready to enter: the confirm dialog and the port countdown.
-    s.set_battlefield_queue(vec![slot(529, "Arathi Basin", 2, 3), empty(), empty()], 0);
+    s.set_battlefield_queue([slot(529, "Arathi Basin", 2, 3), empty(), empty()], 0);
     s.fire_event("UPDATE_BATTLEFIELD_STATUS", vec![]);
     assert!(
         visible(&s, "StaticPopup1"),
@@ -127,7 +127,7 @@ fn the_queue_icon_follows_the_slots_across_update_battlefield_status() {
     s.run("StaticPopup1Button1:Click()").unwrap();
     assert_eq!(s.take_battlefield_port_requests(), vec![(1, true)]);
 
-    s.set_battlefield_queue(vec![empty(), empty(), empty()], 0);
+    s.set_battlefield_queue([empty(), empty(), empty()], 0);
     s.fire_event("UPDATE_BATTLEFIELD_STATUS", vec![]);
     assert!(
         !visible(&s, "MiniMapBattlefieldFrame"),
@@ -154,7 +154,7 @@ fn the_list_window_opens_on_battlefields_show_and_joins_the_selection() {
         }),
         group_queue: true,
     });
-    s.set_battlefield_queue(vec![empty(), empty(), empty()], 0);
+    s.set_battlefield_queue([empty(), empty(), empty()], 0);
     assert!(!visible(&s, "BattlefieldFrame"));
     s.fire_event("BATTLEFIELDS_SHOW", vec![]);
     assert!(visible(&s, "BattlefieldFrame"), "the event shows the panel");
@@ -228,7 +228,7 @@ fn the_list_rows_carry_the_queue_status() {
         }),
         ..Default::default()
     });
-    s.set_battlefield_queue(vec![slot(529, "Arathi Basin", 1, 4), empty(), empty()], 0);
+    s.set_battlefield_queue([slot(529, "Arathi Basin", 1, 4), empty(), empty()], 0);
     s.fire_event("BATTLEFIELDS_SHOW", vec![]);
     assert_eq!(
         s.eval::<String>("return BattlefieldZone2Status:GetText()")
@@ -242,4 +242,15 @@ fn the_list_rows_carry_the_queue_status() {
         "an un-queued row's status line is blank, and a blank FontString reads back NIL \
          (`FontString:GetText 0x79d690` substitutes nil)"
     );
+}
+
+#[test]
+fn a_party_leader_change_before_any_queue_push_updates_the_list_cleanly() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut s = session();
+    s.take_errors();
+    // A party login fires PARTY_LEADER_CHANGED, which runs `BattlefieldFrame_Update`; it reads
+    // `GetBattlefieldStatus(1..3)` and concatenates the name of any status but "none" (line 242).
+    s.fire_event("PARTY_LEADER_CHANGED", vec![]);
+    assert_eq!(s.take_errors(), Vec::<String>::new());
 }

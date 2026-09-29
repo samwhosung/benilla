@@ -490,8 +490,10 @@ pub(crate) struct Model {
     pub(crate) battlefield_list: super::battlefield_queue::BattlefieldListView,
     /// The selected instance id (`[0xb6eba0]`), not an index; written by `SetSelectedBattlefield`.
     pub(crate) battlefield_selected: u32,
-    /// The three queue slots, pushed each frame with their clocks reduced to values.
-    pub(crate) battlefield_slots: Vec<super::battlefield_queue::BattlefieldQueueSlot>,
+    /// The three queue slots, pushed each frame with their clocks reduced to values. Zeroed
+    /// until the first push, as the reference's static slots (`0xb6e9d0`) are, so each answers
+    /// "none" from the first frame.
+    pub(crate) battlefield_slots: [super::battlefield_queue::BattlefieldQueueSlot; 3],
     /// `GetBattlefieldInstanceExpiration()`, pushed each frame.
     pub(crate) battlefield_instance_expiration_ms: u32,
     /// `JoinBattlefield` calls, `(instance id, as group)`.
@@ -1191,7 +1193,7 @@ impl Model {
             battlefield_leave_requests: 0,
             battlefield_list: Default::default(),
             battlefield_selected: 0,
-            battlefield_slots: Vec::new(),
+            battlefield_slots: Default::default(),
             battlefield_instance_expiration_ms: 0,
             battlefield_join_requests: Vec::new(),
             battlefield_list_requests: Vec::new(),

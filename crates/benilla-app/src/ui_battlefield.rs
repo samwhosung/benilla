@@ -211,9 +211,8 @@ fn feed_battlefield(
 
     let slots = queue
         .slots()
-        .iter()
-        .map(|s| slot_view(s.as_ref(), catalog, now))
-        .collect();
+        .each_ref()
+        .map(|s| slot_view(s.as_ref(), catalog, now));
     script.set_battlefield_queue(slots, queue.instance_expiration_ms(now));
 
     if std::mem::take(&mut state.show) {
