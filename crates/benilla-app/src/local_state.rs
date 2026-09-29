@@ -28,6 +28,14 @@ pub(crate) fn home() -> Option<PathBuf> {
     if let Some(over) = std::env::var_os("BENILLA_HOME") {
         return Some(PathBuf::from(over));
     }
+    if cfg!(test) {
+        return None; // a unit test reaches no real state folder unless it pins `$BENILLA_HOME`
+    }
+    resident_home()
+}
+
+/// Steps 2 and 3 of [`home`]: the folder the build itself lives in.
+fn resident_home() -> Option<PathBuf> {
     // 2 · the project folder, dev builds only.
     if let Some(root) = dev_project_root() {
         return Some(root.join(STATE_DIR));
@@ -376,6 +384,19 @@ mod tests {
         std::fs::remove_dir_all(&tmp).ok();
     }
 
+    /// A unit test that does not pin `$BENILLA_HOME` resolves no state folder, so no test can write
+    /// the real one.
+    #[test]
+    fn a_test_without_an_override_has_no_state_folder() {
+        let _l = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _c = EnvGuard::unset("WOW_CAPTURE");
+        let _h = EnvGuard::unset("BENILLA_HOME");
+        assert_eq!(home(), None);
+        assert_eq!(config_path(), None);
+    }
+
     /// A missing or wrong `$WOW_DATA` does not move or lose the state folder.
     #[test]
     fn the_state_folder_no_longer_depends_on_finding_the_install() {
@@ -385,7 +406,8 @@ mod tests {
         let _c = EnvGuard::unset("WOW_CAPTURE");
         let _h = EnvGuard::unset("BENILLA_HOME");
         let _d = EnvGuard::set("WOW_DATA", "/nonexistent/benilla-test/Data");
-        let h = home().expect("a broken install path must not cost the player their config");
+        let h =
+            resident_home().expect("a broken install path must not cost the player their config");
         assert!(
             !h.starts_with("/nonexistent"),
             "home() still reads $WOW_DATA: {}",
@@ -403,7 +425,7 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let _c = EnvGuard::unset("WOW_CAPTURE");
         let _h = EnvGuard::unset("BENILLA_HOME");
-        let h = home().expect("home() always resolves outside a capture");
+        let h = resident_home().expect("the resident folder always resolves");
         assert!(h.ends_with(STATE_DIR), "{}", h.display());
 
         let Some(here) = benilla_formats::project_folder() else {
@@ -466,7 +488,7 @@ mod tests {
             let dir = PathBuf::from(dir);
             benilla_formats::set_project_folder(dir.to_str().unwrap());
             if crate::run_mode::dev_affordances() {
-                assert_eq!(home(), Some(dir.join(STATE_DIR)));
+                assert_eq!(resident_home(), Some(dir.join(STATE_DIR)));
                 assert_eq!(
                     crate::run_mode::declared_identity(),
                     Some(crate::run_mode::DeclaredIdentity {
@@ -476,7 +498,10 @@ mod tests {
                 );
             } else {
                 let exe_dir = std::env::current_exe().unwrap();
-                assert_eq!(home(), Some(exe_dir.parent().unwrap().join(STATE_DIR)));
+                assert_eq!(
+                    resident_home(),
+                    Some(exe_dir.parent().unwrap().join(STATE_DIR))
+                );
                 assert_eq!(crate::run_mode::declared_identity(), None);
             }
             return;
