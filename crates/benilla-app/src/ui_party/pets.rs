@@ -118,17 +118,14 @@ pub(super) fn member_pet(
     let guid = pet_guid(group, owner, held, roster)?;
     let mut state = match look.store(guid) {
         // A held pet is a live unit like any: every getter reads its descriptor (`0x468460`), and
-        // `UnitIsConnected` answers 1 for any object (`0x517daf`). No reaction: the pet frame
-        // reads none, as the `"pet"` token's.
+        // `UnitIsConnected` answers 1 for any object (`0x517daf`), as `snapshot` does. No
+        // reaction: the pet frame reads none, as the `"pet"` token's.
         Some(store) => {
             let name = look
                 .names
                 .resolve_unit(guid, Some(store), look.commands)
                 .map(str::to_string);
-            UnitState {
-                is_connected: true,
-                ..crate::ui_unit::snapshot(store, guid, name, 0, None)
-            }
+            crate::ui_unit::snapshot(store, guid, name, 0, None)
         }
         None => record_state(
             group,

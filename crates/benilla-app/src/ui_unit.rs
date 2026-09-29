@@ -833,6 +833,9 @@ pub(crate) fn snapshot(
         exists: true,
         // A live descriptor is `0x468460` having succeeded, all of `UnitIsVisible` (`0x516030`).
         has_object: true,
+        // `UnitIsConnected` (`0x517d50`) answers 1 for any unit the object manager holds
+        // (`0x517daf`); only an unheld member reads the roster record's online bit.
+        is_connected: true,
         // What the token resolver `0x515970` yields, and `UnitIsUnit` (`0x516070`) compares.
         guid,
         name,
@@ -1243,9 +1246,6 @@ fn feed_units(
             .map(str::to_string);
         let mut s = snapshot(store, guid.0, name, 0, chr);
         s.is_player = true;
-        // Every token pushed here is streamed, so connected; real link-death rides only the group
-        // roster's status byte, which the party feed reads for its own tokens.
-        s.is_connected = true;
         s.raid_target = group.raid_target_index(guid.0);
         s.faction_group = faction_group(store, factions.as_deref());
         s.faction_group_localized = faction_group_localized(store, factions.as_deref());
@@ -1280,7 +1280,6 @@ fn feed_units(
             self_pair.map(|(s, _)| s),
         );
         let mut s = snapshot(store, guid, name, reaction, chr);
-        s.is_connected = true;
         s.raid_target = group.raid_target_index(guid);
         s.faction_group = faction_group(store, factions.as_deref());
         s.faction_group_localized = faction_group_localized(store, factions.as_deref());
@@ -1323,7 +1322,6 @@ fn feed_units(
                 self_pair.map(|(s, _)| s),
             );
             let mut s = snapshot(store, guid, name, reaction, chr);
-            s.is_connected = true;
             s.raid_target = group.raid_target_index(guid);
             s.faction_group = faction_group(store, factions.as_deref());
             s.faction_group_localized = faction_group_localized(store, factions.as_deref());
@@ -1390,7 +1388,6 @@ fn feed_units(
                 self_pair.map(|(s, _)| s),
             );
             let mut s = snapshot(store, guid, name, reaction, chr);
-            s.is_connected = true;
             s.raid_target = group.raid_target_index(guid);
             s.faction_group = faction_group(store, factions.as_deref());
             s.faction_group_localized = faction_group_localized(store, factions.as_deref());

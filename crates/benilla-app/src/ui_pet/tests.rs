@@ -902,3 +902,88 @@ fn the_session_end_tears_the_pet_bar_down() {
     );
     assert!(bar.spells.bar[3].is_empty());
 }
+
+/// `UnitIsConnected` answers 1 for any unit the object manager holds (`0x517daf`), so the real
+/// `"pet"` feed's snapshot reads connected, and the stock pet frame's `UnitFrameManaBar_Update`
+/// takes its live leg: the pet's own power in its type's colour, not the disconnected leg's
+/// maximum in grey (UnitFrame.lua:214-216).
+#[test]
+fn a_held_pet_reads_connected_and_its_stock_power_bar_shows_its_power() {
+    use bevy::prelude::*;
+    benilla_formats::wow_data_or_skip!();
+    const PET: u64 = 0xF140_0000_0000_002A;
+    // `UNIT_FIELD_` HEALTH, MAXHEALTH, LEVEL, BYTES_0 (power type in byte 3), and focus, the power
+    // type a hunter's pet runs on, at POWER1 + 2 and MAXPOWER1 + 2.
+    const FOCUS: u32 = 2;
+    let fields = [
+        (22, 72),
+        (28, 100),
+        (34, 60),
+        (36, FOCUS << 24),
+        (25, 45),
+        (31, 80),
+    ];
+
+    let mut script = benilla_ui::script::UiScript::new().unwrap();
+    script.set_screen_size(1024.0, 768.0);
+    let failures = crate::ui_script::load_default_ui(&script);
+    assert!(failures.is_empty(), "load failures: {failures:?}");
+
+    let mut app = App::new();
+    app.add_message::<crate::net::FieldChanged>()
+        .init_resource::<crate::net::GuidIndex>()
+        .init_resource::<crate::net::SelfGuid>()
+        .init_resource::<crate::names::NameCache>()
+        .insert_resource(PetBar {
+            spells: PetSpells {
+                pet_guid: PET,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .add_systems(Update, feed_pet_unit);
+    let (tx, rx) = crossbeam_channel::unbounded();
+    // Kept alive for the run: a dropped receiver would fail the name query.
+    std::mem::forget(rx);
+    app.insert_resource(NetCommands(tx));
+    let pet = app
+        .world_mut()
+        .spawn((
+            crate::net::Guid(PET),
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&fields)),
+        ))
+        .id();
+    app.world_mut()
+        .resource_mut::<crate::net::GuidIndex>()
+        .0
+        .insert(PET, pet);
+    app.insert_non_send_resource(script);
+
+    app.update();
+    let mut script = app
+        .world_mut()
+        .non_send_resource_mut::<benilla_ui::script::UiScript>();
+    script.resolve();
+    let (connected, shown, value, max, r, g, b) = script
+        .eval::<(Option<f64>, Option<f64>, f64, f64, f64, f64, f64)>(
+            "local _, max = PetFrameManaBar:GetMinMaxValues() \
+             local r, g, b = PetFrameManaBar:GetStatusBarColor() \
+             return UnitIsConnected('pet'), PetFrame:IsShown(), PetFrameManaBar:GetValue(), \
+                    max, r, g, b",
+        )
+        .unwrap();
+    assert_eq!(connected, Some(1.0), "a held pet is connected");
+    assert_eq!(shown, Some(1.0), "the feed's UNIT_PET showed the frame");
+    assert_eq!(
+        (value, max),
+        (45.0, 80.0),
+        "the pet's power, not its maximum"
+    );
+    assert_eq!(
+        (r, g, b),
+        (1.0, 0.5, 0.25),
+        "FOCUS, not the disconnected grey"
+    );
+    let errors = script.errors();
+    assert!(errors.is_empty(), "script errors: {errors:?}");
+}

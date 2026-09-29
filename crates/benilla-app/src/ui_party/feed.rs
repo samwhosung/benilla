@@ -370,7 +370,6 @@ pub(super) fn feed_party(
                 s.faction_group = own_group.clone();
                 // A same-faction friendly player, as in `member_unit_state`.
                 s.reaction = 5;
-                s.is_connected = true;
                 Some(s)
             } else {
                 let m = group.members.iter().find(|m| m.guid == *guid)?;

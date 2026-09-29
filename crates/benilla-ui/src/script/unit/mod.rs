@@ -154,9 +154,10 @@ pub struct UnitState {
     /// The faction name ("Stormwind"), the tooltip line after the level line, from `Faction.dbc`
     /// through the faction template with its hiding gates applied; `None` shows no line.
     pub faction_name: Option<String>,
-    /// `UnitIsConnected`; party tokens take the roster status byte's `0x01`. The default `false`
-    /// reads disconnected, which greys a stock mana bar (`UnitFrame.lua:214`), so a synthetic
-    /// live unit must set it.
+    /// `UnitIsConnected`: any unit the object manager holds answers 1 (`0x517daf`); a party token
+    /// with no object takes the roster status byte's `0x01`. The default `false` reads
+    /// disconnected, which greys a stock mana bar (`UnitFrame.lua:214`), so a hand-built live
+    /// unit must set it; the app's `snapshot` does for every held one.
     pub is_connected: bool,
     /// `UnitIsPVPFreeForAll`: `PLAYER_FLAGS` bit `0x80`, or the roster status byte's `0x10`;
     /// independent of [`Self::pvp`].

@@ -1,4 +1,5 @@
-//! The stock pet frame, `PetFrame.xml`, over synthetic `"pet"` snapshots and the feed's events.
+//! The stock pet frame, `PetFrame.xml`, over `"pet"` snapshots built from synthetic descriptors
+//! and the feed's events.
 //! `UNIT_PET` names the owner (`arg1 == "player"`, `0x4bc84f`) and every other `UNIT_*` names the
 //! pet: a frame that mixes the two repaints off the player's health.
 
@@ -48,22 +49,28 @@ fn load_pet_frame() -> UiScript {
     s
 }
 
-/// A pet snapshot; `max_power == 0` is a powerless pet, which swaps the art.
+/// A pet snapshot off a descriptor through the real [`crate::ui_unit::snapshot`], as the `"pet"`
+/// feed builds it, so whatever that builder leaves unset (the connection flag included) reaches the
+/// stock frame here as it does in game; `max_power == 0` is a powerless pet, which swaps the art.
 fn pet(name: &str, health: u32, power: u32, max_power: u32, power_type: u8) -> UnitState {
-    UnitState {
-        exists: true,
-        name: Some(name.into()),
-        health,
-        max_health: 100,
-        level: 60,
-        power_type,
-        power,
-        max_power,
-        // The feed marks every unit it pushes connected; stock `UnitFrameManaBar_Update` greys a
-        // disconnected unit's bar (UnitFrame.lua:214-216).
-        is_connected: true,
-        ..UnitState::default()
-    }
+    // `UNIT_FIELD_` HEALTH, POWER1, MAXHEALTH, MAXPOWER1, LEVEL, BYTES_0 (the power type is its
+    // byte 3), the power pair at its type's slot.
+    const HEALTH: u16 = 22;
+    const POWER1: u16 = 23;
+    const MAXHEALTH: u16 = 28;
+    const MAXPOWER1: u16 = 29;
+    const LEVEL: u16 = 34;
+    const BYTES_0: u16 = 36;
+    let slot = u16::from(power_type);
+    let store = crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+        (HEALTH, health),
+        (MAXHEALTH, 100),
+        (LEVEL, 60),
+        (BYTES_0, u32::from(power_type) << 24),
+        (POWER1 + slot, power),
+        (MAXPOWER1 + slot, max_power),
+    ]));
+    crate::ui_unit::snapshot(&store, 0, Some(name.into()), 0, None)
 }
 
 /// Every texture path drawn this frame, with its vertex tint.
