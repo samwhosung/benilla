@@ -171,9 +171,22 @@ pub(super) fn load_core(script: &UiScript) -> Vec<String> {
         );
         error!("ui_script: {e}");
         script.report_load_failure(&e);
+        // Into the UI load's own record, before any banner (`0x6edc3f`).
+        let mut log = benilla_ui::status::Status::default();
+        log.report(
+            benilla_ui::status::FAILURE,
+            benilla_ui::status::missing(reference_ui::TOC, false),
+        );
+        script.report_load_status(log);
         return vec![e];
     };
-    core.load_files(script, &core.toc.files)
+    let mut toc = benilla_ui::status::Status::default();
+    let failures = core.load_files_into(script, &core.toc.files, &mut toc);
+    let mut log = benilla_ui::status::Status::default();
+    let banner = benilla_ui::status::toc_banner(reference_ui::TOC);
+    toc.close_into(&mut log, script.framexml_debug(), banner);
+    script.report_load_status(log);
+    failures
 }
 
 /// Every [`LAYER_MANIFEST`] entry, in order, after the whole core: the layer loads as more of the

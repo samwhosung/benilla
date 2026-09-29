@@ -102,6 +102,8 @@ pub(crate) struct Model {
     /// `FrameXML_Debug`'s flag (`0x488440` over `[0xceea30]`, boots 0); the loader's trace lines
     /// print while it is greater than 0 (`0x6ee298`), so it is signed.
     pub(crate) framexml_debug: std::cell::Cell<i32>,
+    /// The loads' records for `Logs\FrameXML.log` and the drains the host has yet to write.
+    pub(crate) load_log: crate::status::LoadLog,
     /// The FrameXML font registry, a namespace apart from templates (a font inherits only a font).
     pub(crate) framexml_fonts:
         std::cell::RefCell<std::collections::HashMap<String, crate::framexml::Element>>,
@@ -1019,6 +1021,7 @@ impl Model {
             addons_saved_character: None,
             framexml_templates: Default::default(),
             framexml_debug: Default::default(),
+            load_log: Default::default(),
             framexml_fonts: Default::default(),
             arena: WidgetArena::new(),
             layout_inputs: HashMap::new(),

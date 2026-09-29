@@ -30,7 +30,7 @@ mod input;
 /// The language gate: the exemptions and fluency lookup behind the chat garble.
 mod language;
 /// `LoggingChat`/`LoggingCombat`: the two log files `/chatlog` and `/combatlog` toggle.
-mod logging;
+pub(crate) mod logging;
 mod net;
 #[cfg(test)]
 mod notice_tests;

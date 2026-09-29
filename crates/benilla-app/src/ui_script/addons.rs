@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 
 use benilla_ui::script::{EnableHash, ScriptValue, UiScript};
+use benilla_ui::status::{self, Status};
 use benilla_ui::toc::Toc;
 
 use super::content;
@@ -107,16 +108,29 @@ impl Addon {
         }
     }
 
-    /// Load this addon's `.toc`-listed files, in listed order. Each error is logged as it happens
-    /// and also returned, tagged `"<Addon>/<file>: <error>"`, for the tests to assert empty.
-    fn load(&self, script: &UiScript) -> Vec<String> {
-        self.load_files(script, &self.toc.files)
+    /// Load this addon's `.toc`-listed files, in listed order, reporting into `toc`, the `.toc`'s
+    /// load record. Each error is logged as it happens and also returned, tagged
+    /// `"<Addon>/<file>: <error>"`, for the tests to assert empty.
+    fn load(&self, script: &UiScript, toc: &mut Status) -> Vec<String> {
+        self.load_files_into(script, &self.toc.files, toc)
+    }
+
+    /// [`Addon::load_files_into`] with the load record dropped.
+    pub(super) fn load_files(&self, script: &UiScript, files: &[String]) -> Vec<String> {
+        self.load_files_into(script, files, &mut Status::default())
     }
 
     /// [`Addon::load`] over an explicit slice. A manifest lists both kinds of file (the
     /// reference's `FrameXML.toc` opens with `GlobalStrings.lua`): a `.lua` runs as a chunk in the
-    /// shared state, anything else is parsed as FrameXML and materialized.
-    pub(super) fn load_files(&self, script: &UiScript, files: &[String]) -> Vec<String> {
+    /// shared state, anything else is parsed as FrameXML and materialized. What the reference's
+    /// `.toc` runner (`0x6edb90`) reports goes into `toc`: a file that did not open or parse, and
+    /// each document's own record under its banner.
+    pub(super) fn load_files_into(
+        &self,
+        script: &UiScript,
+        files: &[String],
+        toc: &mut Status,
+    ) -> Vec<String> {
         let mut failures = Vec::new();
         // The `<Include>` / `<Script file=>` provider; `read` is the sandbox.
         let provider = |req: &str| -> Option<Vec<u8>> { self.read(req) };
@@ -124,6 +138,7 @@ impl Addon {
             // Resolved once into the source's path space, for `read` and the loader alike.
             let path = benilla_ui::loader::join_ref(&self.prefix(), file);
             let Some(bytes) = self.read(&path) else {
+                toc.report(status::FAILURE, status::missing(&path, is_lua(file)));
                 let e = format!("{}/{file}: not found", self.name);
                 // Severity follows whose manifest is wrong. Ours, or the core's (a shipped file, or
                 // a `FrameXML.toc` row the player's chain lacks), is an ERROR. A player's addon is
@@ -156,6 +171,7 @@ impl Addon {
             let doc = match benilla_ui::framexml::parse(&benilla_ui::source::decode(&bytes)) {
                 Ok(d) => d,
                 Err(e) => {
+                    toc.report(status::FAILURE, status::unparsed(&path));
                     let e = format!("{}/{file}: {e}", self.name);
                     error!("ui_script: parsing {e}");
                     // No dialog, as the reference only logs it (FrameXML.log); still retained.
@@ -166,7 +182,12 @@ impl Addon {
             };
             // The loader resolves relative references against the document's own directory, and
             // names the file a raise came from.
-            let report = benilla_ui::loader::load_in(script, &doc, &path, &provider);
+            let mut report = benilla_ui::loader::load_in(script, &doc, &path, &provider);
+            std::mem::take(&mut report.status).close_into(
+                toc,
+                script.framexml_debug(),
+                status::file_banner(&path),
+            );
             // `FrameXML_Debug` traces go to the log only: the reference files them at severity 0
             // (`0x6ee2bc`) in a per-document record whose surface is untraced.
             for t in &report.traces {
@@ -904,7 +925,17 @@ impl Walk {
             return Err(());
         }
 
-        self.failures.extend(addon.load(script));
+        // The add-on's record: its `.toc`'s under that banner (`0x6eddc8`), then its own banner
+        // (`0x51f464`), merged into the UI load's.
+        let debug = script.framexml_debug();
+        let mut toc = Status::default();
+        self.failures.extend(addon.load(script, &mut toc));
+        let mut own = Status::default();
+        let toc_path = status::addon_toc_path(&addon.name);
+        toc.close_into(&mut own, debug, status::toc_banner(&toc_path));
+        let mut block = Status::default();
+        own.close_into(&mut block, debug, status::addon_banner(&addon.name));
+        script.report_load_status(block);
         // `Bindings.xml` (`0x51f400`), after the files whose functions a binding calls, through
         // the addon's own sandboxed reader; absent is normal.
         let bindings_xml = benilla_ui::loader::join_ref(&addon.prefix(), "Bindings.xml");
@@ -1238,7 +1269,7 @@ mod tests {
         };
 
         let script = UiScript::new().unwrap();
-        let failures = addon.load(&script);
+        let failures = addon.load(&script, &mut Status::default());
         assert!(
             failures.is_empty(),
             "a listed Bindings.xml costs log lines, not script errors: {failures:?}"
@@ -1282,7 +1313,7 @@ mod tests {
         };
 
         let script = UiScript::new().unwrap();
-        assert!(addon.load(&script).is_empty());
+        assert!(addon.load(&script, &mut Status::default()).is_empty());
 
         // The exact pattern the libraries run, on each file's own traceback.
         let folder = |global: &str| -> Option<String> {
@@ -1403,7 +1434,7 @@ mod tests {
         };
         let mut script = UiScript::new().unwrap();
         script.set_screen_size(1024.0, 768.0);
-        let failures = addon.load(&script);
+        let failures = addon.load(&script, &mut Status::default());
         assert!(failures.is_empty(), "addon load errors: {failures:#?}");
 
         assert_eq!(
@@ -2125,6 +2156,51 @@ mod tests {
                 .ok()
                 .as_deref(),
             Some("1")
+        );
+        let _ = std::fs::remove_dir_all(home.parent().unwrap());
+    }
+
+    /// A runtime `LoadAddOn`'s misses are one block appended to `Logs\FrameXML.log`
+    /// (`0x46aac0`): the add-on's banner, its toc's, then each document by its own record, an
+    /// included miss under its includer's banner (`0x6ee21c`).
+    #[test]
+    fn a_load_addon_appends_its_misses_as_one_block() {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _c = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
+        let (home, _h) = hermetic_root("lod-log");
+        write_addon(
+            &home,
+            "Demand",
+            "## Interface: 11200\n## LoadOnDemand: 1\nlate.xml\ngone.xml\ngone.lua\n",
+            &[("late.xml", "<Ui><Include file=\"nope.xml\"/></Ui>")],
+        );
+        let mut script = UiScript::new().unwrap();
+        script.set_screen_size(1024.0, 768.0);
+        let _ = load_third_party(&mut script, None, &[], true);
+        seat_stock_addon_reply(&mut script);
+        assert!(script.take_load_log_writes().is_empty());
+        script.run("LoadAddOn('Demand')").unwrap();
+        assert_eq!(
+            script.take_load_log_writes(),
+            vec![benilla_ui::status::LogWrite::Append(
+                [
+                    "Loading add-on Demand",
+                    "** Loading table of contents Interface\\AddOns\\Demand\\Demand.toc",
+                    "++ Loading file Interface\\AddOns\\Demand\\late.xml",
+                    "Couldn't open Interface\\AddOns\\Demand\\nope.xml",
+                    "Couldn't open Interface\\AddOns\\Demand\\gone.xml",
+                    "Error loading Interface\\AddOns\\Demand\\gone.lua",
+                ]
+                .map(String::from)
+                .to_vec()
+            )]
+        );
+        script.run("LoadAddOn('Demand')").unwrap();
+        assert!(
+            script.take_load_log_writes().is_empty(),
+            "an already loaded add-on reports nothing"
         );
         let _ = std::fs::remove_dir_all(home.parent().unwrap());
     }

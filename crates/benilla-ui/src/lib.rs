@@ -12,6 +12,7 @@ pub mod messages;
 pub mod order;
 pub mod script;
 pub mod source;
+pub mod status;
 pub mod strings;
 pub mod toc;
 pub mod widget;

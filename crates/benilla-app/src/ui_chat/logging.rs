@@ -71,8 +71,9 @@ impl ChatLogFiles {
     }
 }
 
-/// `M/D HH:MM:SS.mmm` of now, UTC.
-fn stamp() -> String {
+/// `M/D HH:MM:SS.mmm` of now, UTC: the reference's log-line stamp (`"%u/%u %02u:%02u:%02u.%03u  "`,
+/// `0x866aa0`, from `GetLocalTime` at `0x65a871`), which `crate::ui_script::load_log` shares.
+pub(crate) fn stamp() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();

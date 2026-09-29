@@ -395,25 +395,10 @@ pub(crate) fn load_ingame_ui_on_world_entry(world: &mut World) {
             },
         );
     });
-    // Deviation: each failed addon file is reported in chat, one line apiece, because otherwise
-    // an addon that does not load says nothing on screen: a failure that never raised reaches no
-    // error handler, so the `/errors` log cannot hold it. Read from the engine's deduplicated
-    // record after the whole load edge (handlers included); the VM is fresh, so every `Load` row
-    // is this load's.
-    if let Some(mut chat) = world.get_resource_mut::<crate::ui_chat::ChatLog>() {
-        for row in script
-            .diagnostics()
-            .iter()
-            .filter(|d| d.kind == benilla_ui::script::diagnostics::DiagnosticKind::Load)
-        {
-            let head = row.message.lines().next().unwrap_or_default();
-            // Queued: the chat feed drains `ChatLog` once the UI is up.
-            chat.push_event(crate::ui_chat::ChatEvent::text_only(
-                crate::ui_chat::ChatEventKind::System,
-                format!("Addon load failure: {head}"),
-            ));
-        }
-    }
+    // The load's record goes to `Logs\FrameXML.log` (`0x490187`-`0x4901b6`), after any
+    // `LoadAddOn` block the load ran; nothing reaches chat.
+    script.finish_ui_load_log();
+    super::load_log::write(script.take_load_log_writes());
     // `DAMAGE_TEXT_FONT` binds at the end of the load, after every addon's `ADDON_LOADED` (where
     // MikScrollingBattleText and pfUI assign it). The reference reads it eagerly, once per world
     // entry (`0x6c8470`, called at `0x401620` in `0x401570`, after the UI load at `0x401602`),

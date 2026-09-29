@@ -117,6 +117,32 @@ impl super::UiScript {
         record_load_failure(&self.lua, msg);
     }
 
+    /// Whether `FrameXML_Debug` is above 0, which puts every banner in the load log.
+    pub fn framexml_debug(&self) -> bool {
+        self.model_ref().framexml_debug.get() > 0
+    }
+
+    /// Merge one closed level of a UI load (the core's `.toc`, an add-on) into the load's record.
+    pub fn report_load_status(&self, status: crate::status::Status) {
+        self.model_mut().load_log.ui.merge(status);
+    }
+
+    /// The UI load is over: its record is drained (`0x490187`), after any `LoadAddOn` block it
+    /// ran.
+    pub fn finish_ui_load_log(&self) {
+        let mut model = self.model_mut();
+        let lines = model.load_log.ui.take_lines();
+        model
+            .load_log
+            .writes
+            .push(crate::status::LogWrite::Rewrite(lines));
+    }
+
+    /// The drains made since the last call, in order, for the host to write.
+    pub fn take_load_log_writes(&mut self) -> Vec<crate::status::LogWrite> {
+        std::mem::take(&mut self.model_mut().load_log.writes)
+    }
+
     /// Retain a warning the host has already logged (a loader warning with its `<Addon>/<file>`
     /// prefix). Queuing it on `Model::warnings` too would log it twice; an engine-raised warning
     /// goes through `Model::record_warning`, which does both.

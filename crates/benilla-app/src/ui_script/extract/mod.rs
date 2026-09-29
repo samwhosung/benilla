@@ -557,6 +557,8 @@ pub(super) fn tick_script(
     for w in script.take_warnings() {
         warn!("ui_script: {w}");
     }
+    // A runtime `LoadAddOn`'s record, appended to `Logs\FrameXML.log`.
+    super::load_log::write(script.take_load_log_writes());
 
     // ── The handover ────────────────────────────────────────────────────────────────────────
     *pass = super::UiPassState {

@@ -18,6 +18,7 @@ pub(crate) mod extract;
 mod input;
 #[cfg(test)]
 mod layer_tests;
+mod load_log;
 mod manifest;
 
 /// The stock FrameXML this client runs off the player's own patch chain; its header is the rule.

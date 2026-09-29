@@ -867,7 +867,7 @@ fn the_login_one_shots_wait_for_the_in_game_ui() {
 
 /// An addon that fails to load without raising (a `.toc` naming a file the package lacks) reaches
 /// no Lua error handler, so the `/errors` log (which collects off the handler) does not hold it:
-/// the engine's record keeps it, and a chat line names it.
+/// the engine's record keeps it, and `Logs\FrameXML.log` names it as the reference's does.
 #[test]
 fn an_addon_that_fails_to_load_without_raising_is_readable_in_the_error_log() {
     benilla_formats::wow_data_or_skip!();
@@ -880,7 +880,7 @@ fn an_addon_that_fails_to_load_without_raising_is_readable_in_the_error_log() {
     std::fs::create_dir_all(&dir).expect("addon dir");
     std::fs::write(
         dir.join("AaMissing.toc"),
-        "## Interface: 11200\nBossnames\\BossNames.xml\n",
+        "## Interface: 11200\nBossnames\\BossNames.xml\nDatabase\\hash.lua\n",
     )
     .expect("toc");
     // …and no such file is written.
@@ -941,14 +941,29 @@ fn an_addon_that_fails_to_load_without_raising_is_readable_in_the_error_log() {
          through `_ERRORMESSAGE` and through every addon handler that replaces it"
     );
 
-    // 4. Deviation: a chat line names the failure, where the reference stays silent, because
-    // otherwise it reaches no screen.
+    // 4. Nothing in chat, and the reference's lines in `benilla-config/Logs/FrameXML.log`, each
+    // stamped `M/D HH:MM:SS.mmm` and ended `\r\n`: the add-on's banner, its toc's, then each
+    // miss by its arm (`0x6edaa0`, `0x704bc0`). The clean core and probe add nothing.
     let lines = world.resource::<crate::ui_chat::ChatLog>().pending_lines();
     assert!(
-        lines
-            .iter()
-            .any(|l| l.starts_with("Addon load failure: ") && l.contains("AaMissing")),
-        "world entry queued the failure's line: {lines:?}"
+        !lines.iter().any(|l| l.contains("AaMissing")),
+        "no chat line names the failure: {lines:?}"
+    );
+    let log = std::fs::read_to_string(tmp.join("benilla-config/Logs/FrameXML.log"))
+        .expect("the load wrote FrameXML.log");
+    let texts: Vec<&str> = log
+        .split_terminator("\r\n")
+        .map(|l| l.split_once("  ").expect("a stamp, then two spaces").1)
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            "Loading add-on AaMissing",
+            "** Loading table of contents Interface\\AddOns\\AaMissing\\AaMissing.toc",
+            "Couldn't open Interface\\AddOns\\AaMissing\\Bossnames\\BossNames.xml",
+            "Error loading Interface\\AddOns\\AaMissing\\Database\\hash.lua",
+        ],
+        "{log}"
     );
 
     drop(world);

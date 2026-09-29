@@ -14,6 +14,7 @@ use mlua::{Function, ObjectLike, Table, Value};
 
 use crate::framexml::{self, Element, ParsedDocument, ScriptRef, TopLevel};
 use crate::script::{FontObject, JustifyH, JustifyV, Outline, UiScript};
+use crate::status;
 
 mod backdrop;
 mod geometry;
@@ -39,6 +40,11 @@ pub struct LoadReport {
     /// Trace lines, only while `FrameXML_Debug` is on: the reference's flag (`[0xceea30]`) boots 0
     /// and its loader traces gate on `flag > 0` (`0x6ee298`). A trace is severity 0, not a warning.
     pub traces: Vec<String>,
+    /// The document's own load status, the lines `0x6ede10` reports into its record for
+    /// `Logs\FrameXML.log`: the traces, each `<Include>` or `<Script file=>` that did not open or
+    /// parse, and each included document's own record under its banner. The caller closes it
+    /// under the document's banner ([`crate::status::Status::close_into`]).
+    pub status: crate::status::Status,
 }
 
 /// Materialize a parsed FrameXML document into live frames in `script`, in document order
@@ -69,10 +75,23 @@ pub fn load_into(
     path: &str,
     files: &dyn Fn(&str) -> Option<Vec<u8>>,
 ) -> LoadReport {
+    load_into_under(lua, doc, path, files, "")
+}
+
+/// [`load_into`] for a provider whose path space sits under `status_root` in the install's, so
+/// the status lines name the install path (`LoadAddOn` reads under `Interface\AddOns\`).
+pub fn load_into_under(
+    lua: &mlua::Lua,
+    doc: &ParsedDocument,
+    path: &str,
+    files: &dyn Fn(&str) -> Option<Vec<u8>>,
+    status_root: &str,
+) -> LoadReport {
     let mut loader = Loader {
         lua,
         files,
         path: path.to_string(),
+        status_root,
         report: LoadReport::default(),
         warned: HashSet::new(),
         deferred_anchors: Vec::new(),
@@ -98,6 +117,7 @@ pub fn apply_template(lua: &mlua::Lua, wrapper: &Table, kind: &str, template: &s
         lua,
         files: &no_files,
         path: String::new(),
+        status_root: "",
         report: LoadReport::default(),
         warned: HashSet::new(),
         deferred_anchors: Vec::new(),
@@ -196,11 +216,16 @@ pub(super) fn model_kind_tag(tag: &str) -> bool {
         .any(|k| k.eq_ignore_ascii_case(tag))
 }
 
-/// The `.lua` test `0x6ede10` opens with: the last `.` anywhere in the resolved path, not the
-/// basename's (`strrchr`), compared case-insensitively to `".lua"` (`0x8710c8`, via `0x64a4c0`).
-fn has_lua_suffix(path: &str) -> bool {
-    path.rsplit_once('.')
-        .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("lua"))
+impl Loader<'_> {
+    /// A provider path as a status line names it: under [`Loader::status_root`], `\`-separated.
+    fn status_path(&self, path: &str) -> String {
+        status::install_path(&format!("{}{path}", self.status_root))
+    }
+
+    /// `FrameXML_Debug` above 0, read where the reference reads it, at each close.
+    fn debug(&self) -> bool {
+        self.model().framexml_debug.get() > 0
+    }
 }
 
 /// The directory part of a provider path, `""` for a bare name.
@@ -219,6 +244,8 @@ struct Loader<'a> {
     /// The current document's path: its directory resolves relative references, the whole path
     /// names inline `<Script>` chunks. Swapped for each nested include and restored after.
     pub(super) path: String,
+    /// What the provider's path space sits under in the install's, for the status lines.
+    pub(super) status_root: &'a str,
     // The template and font registries live on the `Model` and persist across loads: the
     // reference's template table is global (`0x6ee500`), so `MerchantFrame.xml` inherits a template
     // `CharacterFrameTemplates.xml` registered. Fonts are their own namespace, stored flattened.
@@ -329,10 +356,15 @@ impl Loader<'_> {
                                     .push(format!("<Script file=\"{path}\">: {e}"));
                             }
                         }
-                        None => self.report.missing_files.push(format!(
-                            "<Script file=\"{path}\">: no provider hit for \"{joined}\"; \
-                             every handler in it is missing"
-                        )),
+                        None => {
+                            // The chunk arm (`0x704bc0`), whatever the extension.
+                            let line = status::missing(&self.status_path(&joined), true);
+                            self.report.status.report(status::FAILURE, line);
+                            self.report.missing_files.push(format!(
+                                "<Script file=\"{path}\">: no provider hit for \"{joined}\"; \
+                                 every handler in it is missing"
+                            ))
+                        }
                     }
                 }
                 TopLevel::Script(ScriptRef::Inline { body, line }) => {
@@ -370,6 +402,9 @@ impl Loader<'_> {
     pub(super) fn do_include(&mut self, path: &str) {
         let joined = join_ref(self.base(), path);
         let Some(bytes) = (self.files)(&joined) else {
+            // Reported into this document's record, before the included one has its own.
+            let line = status::missing(&self.status_path(&joined), status::runs_as_lua(&joined));
+            self.report.status.report(status::FAILURE, line);
             self.report.missing_files.push(format!(
                 "<Include file=\"{path}\">: no provider hit for \"{joined}\"; the whole \
                  document it names is missing"
@@ -380,7 +415,7 @@ impl Loader<'_> {
         // which dispatches on the resolved path's extension, never its content: a `.lua` suffix
         // (`0x6edee6`-`0x6edf0f`) runs the file as a chunk (`0x704bc0`), anything else parses as
         // XML. A `.toc` line goes through the same routine.
-        if has_lua_suffix(&joined) {
+        if status::runs_as_lua(&joined) {
             if let Err(e) = self.run(crate::source::chunk(&bytes), &joined) {
                 self.report
                     .errors
@@ -392,15 +427,24 @@ impl Loader<'_> {
         match framexml::parse(&crate::source::decode(&bytes)) {
             Ok(sub) => {
                 self.report.warnings.extend(sub.warnings.iter().cloned());
-                // The included document resolves and names against its own path until it is done.
+                // The included document resolves and names against its own path until it is done,
+                // and reports into a record of its own, closed under its banner (`0x6ee21c`).
                 let outer = std::mem::replace(&mut self.path, joined.clone());
+                let outer_status = std::mem::take(&mut self.report.status);
                 self.load_doc(&sub);
                 self.path = outer;
+                let own = std::mem::replace(&mut self.report.status, outer_status);
+                let banner = status::file_banner(&self.status_path(&joined));
+                let debug = self.debug();
+                own.close_into(&mut self.report.status, debug, banner);
             }
-            Err(e) => self
-                .report
-                .errors
-                .push(format!("<Include file=\"{path}\">: {e}")),
+            Err(e) => {
+                let line = status::unparsed(&self.status_path(&joined));
+                self.report.status.report(status::FAILURE, line);
+                self.report
+                    .errors
+                    .push(format!("<Include file=\"{path}\">: {e}"))
+            }
         }
     }
 
@@ -584,10 +628,10 @@ impl Loader<'_> {
 
         // One of the reference's five loader traces: `Instantiate 0x6ee280`'s `"-- Creating %s
         // named %s"` (`0x871154`), gated `flag > 0` at `0x6ee298`; the first `%s` is the tag.
-        if self.model().framexml_debug.get() > 0 {
-            self.report
-                .traces
-                .push(format!("-- Creating {} named {dbg_name}", el.tag));
+        if self.debug() {
+            let trace = format!("-- Creating {} named {dbg_name}", el.tag);
+            self.report.status.report(status::TRACE, trace.clone());
+            self.report.traces.push(trace);
         }
 
         // `$parent` for its contents; a nameless frame passes its nearest named ancestor on.
