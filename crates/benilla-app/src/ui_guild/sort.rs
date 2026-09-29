@@ -60,21 +60,18 @@ impl SortField {
             SortField::Level => a.info.level.cmp(&b.info.level),
             SortField::Name => icmp(&a.info.name, &b.info.name),
             // By the localized DBC name, not the id (`0x4d0e67`, `0x4d0ded`); an id the DBC does
-            // not resolve abstains rather than sorting first (`0x4d0ea1`, `0x4d0e27`).
-            SortField::Zone => abstaining(&a.info.zone, &b.info.zone),
-            SortField::Class => abstaining(&a.info.class, &b.info.class),
+            // not resolve ties with another miss and sorts after a hit (`0x4d0ea1`, `0x4d0e27`).
+            SortField::Zone => misses_last(&a.info.zone, &b.info.zone),
+            SortField::Class => misses_last(&a.info.class, &b.info.class),
             SortField::Group => Ordering::Equal,
             SortField::Online => match (a.info.online, b.info.online) {
                 (true, true) => Ordering::Equal,
                 (true, false) => Ordering::Less,
                 (false, true) => Ordering::Greater,
                 // Both offline: the more recently seen first, on the raw days float (`0x4d0f19`).
-                // Deviation: an exact tie is `Equal` where the reference answers ±1, because
-                // Rust's sort requires a total order.
-                (false, false) => a
-                    .last_online_days
-                    .partial_cmp(&b.last_online_days)
-                    .unwrap_or(Ordering::Equal),
+                // Deviation: an exact tie is `Equal` where the reference answers ±1, and a NaN
+                // has a place (`total_cmp`), because Rust's sort requires a total order.
+                (false, false) => a.last_online_days.total_cmp(&b.last_online_days),
             },
             SortField::Note => icmp(&a.info.note, &b.info.note),
         }
@@ -88,12 +85,15 @@ fn icmp(a: &str, b: &str) -> Ordering {
         .cmp(b.bytes().map(|c| c.to_ascii_lowercase()))
 }
 
-/// [`icmp`], but an empty value on either side abstains: the zone and class arms' DBC miss.
-fn abstaining(a: &str, b: &str) -> Ordering {
-    if a.is_empty() || b.is_empty() {
-        return Ordering::Equal;
+/// [`icmp`] with an empty value (the zone and class arms' DBC miss) after every name; two misses tie.
+/// Deviation: the reference ties a miss with a hit (`0x4d0e27`, `0x4d0ea1`), which is no total order.
+fn misses_last(a: &str, b: &str) -> Ordering {
+    match (a.is_empty(), b.is_empty()) {
+        (true, true) => Ordering::Equal,
+        (true, false) => Ordering::Greater,
+        (false, true) => Ordering::Less,
+        (false, false) => icmp(a, b),
     }
-    icmp(a, b)
 }
 
 /// The reference's eight-slot `{key, direction}` chain (`0xb72680`), most recent first: `0x4d0fb0`
@@ -302,9 +302,83 @@ mod tests {
         };
         assert_eq!(sort.compare(&recent, &ancient, true), Ordering::Less);
 
-        assert_eq!(abstaining("", "Ironforge"), Ordering::Equal);
-        assert_eq!(abstaining("Ironforge", ""), Ordering::Equal);
-        assert_eq!(abstaining("Elwynn", "Ironforge"), Ordering::Less);
+        assert_eq!(misses_last("", "Ironforge"), Ordering::Greater);
+        assert_eq!(misses_last("Ironforge", ""), Ordering::Less);
+        assert_eq!(misses_last("", ""), Ordering::Equal);
+        assert_eq!(misses_last("Elwynn", "Ironforge"), Ordering::Less);
         assert_eq!(icmp("alice", "Alice"), Ordering::Equal, "case-insensitive");
+    }
+
+    /// Mixed rows: resolved and empty zone and class, offline with a NaN and a repeat days value.
+    fn mixed() -> Vec<RosterRow> {
+        let zones = ["", "Elwynn", "Ironforge", "elwynn"];
+        let classes = ["Mage", "", "Warrior"];
+        let days = [0.5, f32::NAN, 90.0, 0.5];
+        let mut rows = Vec::new();
+        for i in 0..24usize {
+            let mut r = row(&format!("P{i}"), i % 3 == 0, 60, 0);
+            r.info.zone = zones[i % 4].to_string();
+            r.info.class = classes[(i / 2) % 3].to_string();
+            r.last_online_days = days[(i / 3) % 4];
+            rows.push(r);
+        }
+        rows
+    }
+
+    #[test]
+    fn every_key_is_a_total_order_over_mixed_rows() {
+        let rows = mixed();
+        for field in [SortField::Zone, SortField::Class, SortField::Online] {
+            let le = |a: &RosterRow, b: &RosterRow| field.compare(a, b) != Ordering::Greater;
+            for a in &rows {
+                for b in &rows {
+                    assert_eq!(
+                        field.compare(a, b),
+                        field.compare(b, a).reverse(),
+                        "{field:?} antisymmetric"
+                    );
+                    for c in &rows {
+                        if le(a, b) && le(b, c) {
+                            assert!(le(a, c), "{field:?} transitive");
+                        }
+                        if field.compare(a, b) == Ordering::Equal
+                            && field.compare(b, c) == Ordering::Equal
+                        {
+                            assert_eq!(
+                                field.compare(a, c),
+                                Ordering::Equal,
+                                "{field:?} equivalence"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sorting_a_mixed_roster_puts_misses_after_hits() {
+        for (field, get) in [
+            (
+                SortField::Zone,
+                (|r: &RosterRow| r.info.zone.clone()) as fn(&RosterRow) -> String,
+            ),
+            (SortField::Class, |r: &RosterRow| r.info.class.clone()),
+        ] {
+            let mut sort = SortStack::default();
+            sort.select(field);
+            let mut rows = mixed();
+            sort.order(&mut rows, true);
+            let first_miss = rows.iter().position(|r| get(r).is_empty()).unwrap();
+            assert!(
+                rows[first_miss..].iter().all(|r| get(r).is_empty()),
+                "{field:?}"
+            );
+            assert!(first_miss > 0 && rows.len() > 20);
+        }
+        let mut sort = SortStack::default();
+        sort.select(SortField::Online);
+        let mut rows = mixed();
+        sort.order(&mut rows, true);
     }
 }
