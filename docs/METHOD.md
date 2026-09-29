@@ -10,7 +10,9 @@ not build a server or simulate the game. The reference client is the spec: benil
 A change is right when it makes benilla more like 1.12.1 or fixes a bug, with evidence from the
 reference, in one small piece, with the gates green. A deviation from the reference is the
 maintainer's call alone, and each one is written down where it lives: a CVar's `Deviates` row, a
-comment naming the reference fact and why we differ. Anything else is a fork.
+comment naming the reference fact and why we differ. Anything else lives on top of benilla, in a
+crate of its own or a fork, and benilla opens a piece of itself to such a crate only when its own
+1.12.1 work creates that piece (`docs/CONTRIBUTING.md`, "Building on top").
 
 ## The loop
 

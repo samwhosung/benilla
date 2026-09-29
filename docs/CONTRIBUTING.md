@@ -2,8 +2,8 @@
 
 benilla is a faithful 1.12.1 client. It is the foundation people build on, not the place to get
 creative: a change is accepted when it makes benilla more like 1.12.1 or fixes a bug, with
-evidence from the reference, in one small piece, with the gates green. Everything else is a
-fork, and forks are welcome.
+evidence from the reference, in one small piece, with the gates green. Everything else lives on
+top of benilla, in a crate of its own or a fork, and both are welcome.
 
 ## Where to start
 
@@ -20,16 +20,31 @@ taken.
 - A step closer to 1.12.1: a missing packet, verb, window, effect or behaviour, done the way
   the real client does it.
 - A correction where benilla and the reference disagree, with the reference fact stated.
+- Whatever the stock 1.12.1 client loads from a patch, benilla loads: models, textures or data
+  rows that 1.12.1 shows and benilla does not are a bug.
 
 ## What does not
 
-- Features 1.12.1 does not have, and behaviour changed because it seems better. Such a feature
-  lives in its own crate on top of benilla, started through `benilla_app::run_with` as in
-  `crates/benilla-app/examples/extended_launcher.rs`. A deviation from the reference is the
-  maintainer's call and is recorded where it lives; a pull request is not the place to propose one.
+- Features 1.12.1 does not have, including what 1.12 client mods add (a new key binding, a spell
+  queue, new Lua functions, graphics past 1.12's), and behaviour changed because it seems better.
+  They live on top of benilla ("Building on top"), so that what benilla does is what 1.12.1 does,
+  for everyone who builds on it. A deviation from the reference is the maintainer's call and is
+  recorded where it lives; a pull request is not the place to propose one.
 - Anything from a WoW install: art, models, sounds, maps, data, and interface code (FrameXML and
   GlueXML), which runs off the player's own install (`docs/METHOD.md`).
 - Big or mixed changes. One change per pull request, small enough to read in one sitting.
+
+## Building on top
+
+A feature 1.12.1 does not have lives in a crate of its own that adds its Bevy plugins through
+`benilla_app::run_with`, as `crates/benilla-app/examples/extended_launcher.rs` shows, or in a
+fork. A client started through `run_with` says `extended` in its build line, so its reports read
+apart from stock benilla's. The crate keeps its own settings, never rows in benilla's CVar table,
+which every addon reads.
+
+benilla opens a piece of itself to such a crate only when its own 1.12.1 work creates that piece,
+never for the crate alone, and promises no stable API: a crate pins the benilla revision it
+builds on. What a crate cannot reach stays a fork's.
 
 ## How a change is judged
 
