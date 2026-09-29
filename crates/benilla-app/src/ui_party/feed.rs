@@ -51,6 +51,9 @@ pub(super) struct FedParty {
 
 pub(crate) const PARTY_TOKENS: [&str; 4] = ["party1", "party2", "party3", "party4"];
 
+/// `partypet1..partypet4`, the pet of each [`PARTY_TOKENS`] slot (`0x4e81d0`).
+pub(crate) const PARTY_PET_TOKENS: [&str; 4] = ["partypet1", "partypet2", "partypet3", "partypet4"];
+
 /// A new list or a new answer: `RaidFrame.lua:43-52` decides the Raid Info button on the second
 /// `UPDATE_INSTANCE_INFO`, which an unchanging empty list reaches only through the answer count.
 fn saved_instances_moved(saved: &[SavedInstanceInfo], answers: u32, fed: &FedParty) -> bool {
@@ -65,6 +68,17 @@ pub(crate) const RAID_TOKENS: [&str; 40] = [
     "raid20", "raid21", "raid22", "raid23", "raid24", "raid25", "raid26", "raid27", "raid28",
     "raid29", "raid30", "raid31", "raid32", "raid33", "raid34", "raid35", "raid36", "raid37",
     "raid38", "raid39", "raid40",
+];
+
+/// `raidpet1..raidpet40`, the pet of each [`RAID_TOKENS`] row (`0x491960`).
+#[rustfmt::skip]
+pub(crate) const RAID_PET_TOKENS: [&str; 40] = [
+    "raidpet1", "raidpet2", "raidpet3", "raidpet4", "raidpet5", "raidpet6", "raidpet7",
+    "raidpet8", "raidpet9", "raidpet10", "raidpet11", "raidpet12", "raidpet13", "raidpet14",
+    "raidpet15", "raidpet16", "raidpet17", "raidpet18", "raidpet19", "raidpet20", "raidpet21",
+    "raidpet22", "raidpet23", "raidpet24", "raidpet25", "raidpet26", "raidpet27", "raidpet28",
+    "raidpet29", "raidpet30", "raidpet31", "raidpet32", "raidpet33", "raidpet34", "raidpet35",
+    "raidpet36", "raidpet37", "raidpet38", "raidpet39", "raidpet40",
 ];
 
 /// `SMSG_GROUP_LIST`'s first byte for a raid; 0 is a party (vmangos `Group/Group.h:119`).

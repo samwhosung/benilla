@@ -14,42 +14,25 @@ use benilla_ui::script::{AuraState, UiScript, UnitGuids};
 
 use super::{aura_list, other_unit_inputs, record_inputs, AuraInput};
 use crate::net::ObjectStore;
-use crate::ui_party::{raid_row_guids, GroupState, RAID_TOKENS};
-
-/// `partyN` then `partypetN`.
-const PARTY_AURA_TOKENS: [&str; 8] = [
-    "party1",
-    "party2",
-    "party3",
-    "party4",
-    "partypet1",
-    "partypet2",
-    "partypet3",
-    "partypet4",
-];
-
-/// `raidpet1..raidpet40`, one per raid row.
-#[rustfmt::skip]
-const RAID_PET_TOKENS: [&str; 40] = [
-    "raidpet1", "raidpet2", "raidpet3", "raidpet4", "raidpet5", "raidpet6", "raidpet7",
-    "raidpet8", "raidpet9", "raidpet10", "raidpet11", "raidpet12", "raidpet13", "raidpet14",
-    "raidpet15", "raidpet16", "raidpet17", "raidpet18", "raidpet19", "raidpet20", "raidpet21",
-    "raidpet22", "raidpet23", "raidpet24", "raidpet25", "raidpet26", "raidpet27", "raidpet28",
-    "raidpet29", "raidpet30", "raidpet31", "raidpet32", "raidpet33", "raidpet34", "raidpet35",
-    "raidpet36", "raidpet37", "raidpet38", "raidpet39", "raidpet40",
-];
+use crate::ui_party::{
+    raid_row_guids, GroupState, PARTY_PET_TOKENS, PARTY_TOKENS, RAID_PET_TOKENS, RAID_TOKENS,
+};
 
 /// The tokens `UNIT_AURA` fires for besides `"player"`, in firing order: [`EVENT_UNITS`], then the
 /// group's, each resolved by [`event_guid`].
 const EVENT_UNITS: [&str; 3] = ["pet", "target", "targettarget"];
 
-const EVENT_TOKEN_COUNT: usize =
-    EVENT_UNITS.len() + PARTY_AURA_TOKENS.len() + RAID_TOKENS.len() + RAID_PET_TOKENS.len();
+const EVENT_TOKEN_COUNT: usize = EVENT_UNITS.len()
+    + PARTY_TOKENS.len()
+    + PARTY_PET_TOKENS.len()
+    + RAID_TOKENS.len()
+    + RAID_PET_TOKENS.len();
 
 fn event_tokens() -> impl Iterator<Item = &'static str> {
     EVENT_UNITS
         .into_iter()
-        .chain(PARTY_AURA_TOKENS)
+        .chain(PARTY_TOKENS)
+        .chain(PARTY_PET_TOKENS)
         .chain(RAID_TOKENS)
         .chain(RAID_PET_TOKENS)
 }

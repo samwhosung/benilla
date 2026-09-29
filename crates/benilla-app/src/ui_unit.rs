@@ -574,8 +574,8 @@ pub(crate) fn player_token_guid(
 
 /// The one unit-token resolver, the reference's `0x515970`: case-insensitive compares, then the
 /// object manager; a caller wanting a type tests the resolved unit. [`Selection`] is a parameter
-/// because [`crate::target::SelectCommit`] holds it as `ResMut`. `partypetN`, `raidpetN` and `npc`
-/// are recognised but unresolved here, a quiet nil.
+/// because [`crate::target::SelectCommit`] holds it as `ResMut`. `npc` is recognised but
+/// unresolved here, a quiet nil.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct UnitTokens<'w, 's> {
     /// `Option`, like the two below: a UI-only harness lacks their plugins; a bare `Res` panics.
@@ -600,8 +600,16 @@ impl UnitTokens<'_, '_> {
 
     /// Resolve `token` case-insensitively (`_strnicmp`); the first matching prefix wins.
     pub(crate) fn resolve(&self, token: &str, selection: &Selection) -> Option<(Entity, u64)> {
-        let token = token.to_ascii_lowercase();
-        match token.as_str() {
+        // Only a token with a capital pays for the fold: the reach feeds resolve every group token
+        // each frame, all of them already lowercase.
+        let folded;
+        let token = if token.bytes().any(|b| b.is_ascii_uppercase()) {
+            folded = token.to_ascii_lowercase();
+            folded.as_str()
+        } else {
+            token
+        };
+        match token {
             "player" => self.me(),
             "target" => selection.target.zip(selection.guid),
             // One hop off the target's `UNIT_FIELD_TARGET`, the read `/assist` runs.
@@ -621,22 +629,56 @@ impl UnitTokens<'_, '_> {
                 let guid = self.pet.as_ref()?.spells.pet_guid;
                 (guid != 0).then(|| self.held(guid)).flatten()
             }
-            t if t.starts_with("raid") => t
-                .strip_prefix("raid")
-                .and_then(|n| n.parse::<usize>().ok())
-                .filter(|n| (1..=40).contains(n))
-                .and_then(|n| {
-                    crate::ui_party::raid_row_guid(&self.group, self.me().map(|(_, g)| g), n)
-                })
+            // `partypet` and `raidpet` before `party` and `raid` (`0x515a9a`, `0x515b1c`): the
+            // shorter literal is a prefix of the longer.
+            t if t.starts_with("partypet") => slot_number(&t["partypet".len()..], 4)
+                .and_then(|n| self.group.party_slots().nth(n - 1).map(|m| m.guid))
+                .and_then(|member| self.pet_of(member, false)),
+            t if t.starts_with("raidpet") => slot_number(&t["raidpet".len()..], 40)
+                .and_then(|n| self.raid_member(n))
+                .and_then(|member| self.pet_of(member, true)),
+            t if t.starts_with("raid") => slot_number(&t["raid".len()..], 40)
+                .and_then(|n| self.raid_member(n))
                 .and_then(|g| self.held(g)),
             t => t
                 .strip_prefix("party")
-                .and_then(|n| n.parse::<usize>().ok())
-                .filter(|n| (1..=4).contains(n))
+                .and_then(|n| slot_number(n, 4))
                 .and_then(|n| self.group.party_slots().nth(n - 1).map(|m| m.guid))
                 .and_then(|g| self.held(g)),
         }
     }
+
+    /// The guid on 1-based raid row `n`, the one `raidN` and `GetRaidRosterInfo` share.
+    fn raid_member(&self, n: usize) -> Option<u64> {
+        crate::ui_party::raid_row_guid(&self.group, self.me().map(|(_, g)| g), n)
+    }
+
+    /// A group member's pet, held: `CHARM`, else `SUMMON`, off the member's descriptor while it is
+    /// held, else off the roster record's pet guid (`partypetN` `0x4e81d0`, `raidpetN` `0x491960`).
+    /// A pet the object manager does not hold names no unit here, as any unheld unit.
+    fn pet_of(&self, member: u64, raid: bool) -> Option<(Entity, u64)> {
+        let live = self
+            .held(member)
+            .and_then(|(entity, _)| self.stores.get(entity).ok())
+            .map(|store| &store.0);
+        let pet = if raid {
+            self.group.raid_pet_guid(member, live)
+        } else {
+            self.group.party_pet_guid(member, live)
+        };
+        self.held(pet?)
+    }
+}
+
+/// The number after a group token's prefix, `0x515970`'s inline digit parse read 1-based:
+/// `1..=max`, so `"partypet"`, `"partypet0"`, `"partypetX"` and a number past the table name no
+/// slot. Digits only, as the reference's parse: `"raid+3"` is no row. The reference's own
+/// `partypetN` has no bound and reads past its four-slot table; here it is nobody, as `partyN`.
+fn slot_number(digits: &str, max: usize) -> Option<usize> {
+    if !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok().filter(|n| (1..=max).contains(n))
 }
 
 /// Every token [`UnitTokens`] resolves, `"player"` included (the reference answers d² = 0).
@@ -644,7 +686,9 @@ pub(crate) fn reach_tokens() -> impl Iterator<Item = &'static str> {
     ["player", "target", "targettarget", "mouseover", "pet"]
         .into_iter()
         .chain(crate::ui_party::PARTY_TOKENS)
+        .chain(crate::ui_party::PARTY_PET_TOKENS)
         .chain(crate::ui_party::RAID_TOKENS)
+        .chain(crate::ui_party::RAID_PET_TOKENS)
 }
 
 /// Squared distance as the reference sums it: `f32` widened to `f64`, `(dz² + dx²) + dy²`
@@ -1668,6 +1712,344 @@ mod tests {
             distance: 5.0,
         });
         assert_eq!(resolve(&mut app), None, "a nearer GameObject names nobody");
+    }
+
+    /// `partypetN` and `raidpetN` through the one resolver (`0x515970`): the pet the member's
+    /// descriptor names while it is held, else the roster record's, and a pet the object manager
+    /// does not hold names no unit.
+    mod group_pet_tokens {
+        use super::*;
+        use crate::net::GuidIndex;
+        use crate::ui_party::{GroupState, GROUPTYPE_RAID};
+        use benilla_protocol::messages::{member_status, GroupMemberEntry, PartyMemberStatsInfo};
+        use benilla_protocol::ObjectFields;
+        use bevy::ecs::system::RunSystemOnce;
+
+        const ME: u64 = 0x10;
+        const MY_PET: u64 = 0xF140_0000_0000_0010;
+        /// `UNIT_FIELD_CHARM` and `UNIT_FIELD_SUMMON`, each a two-field guid.
+        const CHARM: u16 = 6;
+        const SUMMON: u16 = 8;
+
+        /// The `i`-th party member (1-based), `0x1000 + i`, and its pet.
+        fn member(i: u64) -> u64 {
+            0x1000 + i
+        }
+        fn pet(i: u64) -> u64 {
+            0xF140_0000_0000_0000 + i
+        }
+
+        fn guid_field(field: u16, guid: u64) -> [(u16, u32); 2] {
+            [(field, guid as u32), (field + 1, (guid >> 32) as u32)]
+        }
+
+        fn store(pairs: &[(u16, u32)]) -> ObjectStore {
+            ObjectStore(ObjectFields::from_pairs(pairs))
+        }
+
+        /// Hold `guid` in the object manager with these fields.
+        fn stream(app: &mut App, guid: u64, pairs: &[(u16, u32)]) -> Entity {
+            let e = app.world_mut().spawn((Guid(guid), store(pairs))).id();
+            app.world_mut()
+                .resource_mut::<GuidIndex>()
+                .0
+                .insert(guid, e);
+            e
+        }
+
+        fn entry(guid: u64, flags: u8) -> GroupMemberEntry {
+            GroupMemberEntry {
+                name: format!("M{guid:x}"),
+                guid,
+                status: member_status::ONLINE,
+                flags,
+            }
+        }
+
+        /// Us, held, and an empty group.
+        fn app() -> (App, Entity) {
+            let mut app = App::new();
+            app.init_resource::<GuidIndex>()
+                .init_resource::<GroupState>();
+            let me = app
+                .world_mut()
+                .spawn((SelfPlayer, Guid(ME), store(&[])))
+                .id();
+            app.world_mut().resource_mut::<GuidIndex>().0.insert(ME, me);
+            (app, me)
+        }
+
+        /// A party of `n` with each member's record naming its pet as `online`; `pets` holds the
+        /// pets, `members` the members, a member's descriptor naming its pet by `SUMMON`.
+        fn party(n: u64, members: bool, pets: bool) -> App {
+            let (mut app, _) = app();
+            let list = (1..=n).map(|i| entry(member(i), 0)).collect();
+            app.world_mut()
+                .resource_mut::<GroupState>()
+                .apply_list(0, 0, list, ME, None, Some(ME));
+            for i in 1..=n {
+                let record = PartyMemberStatsInfo {
+                    status: Some(member_status::ONLINE),
+                    pet_guid: Some(pet(i)),
+                    ..Default::default()
+                };
+                app.world_mut()
+                    .resource_mut::<GroupState>()
+                    .apply_stats(member(i), true, record);
+                if pets {
+                    stream(&mut app, pet(i), &[]);
+                }
+                if members {
+                    stream(&mut app, member(i), &guid_field(SUMMON, pet(i)));
+                }
+            }
+            app
+        }
+
+        fn resolve(app: &mut App, token: &str) -> Option<(Entity, u64)> {
+            let token = token.to_string();
+            app.world_mut()
+                .run_system_once(move |tokens: UnitTokens| {
+                    tokens.resolve(&token, &Selection::default())
+                })
+                .unwrap()
+        }
+
+        fn guid_of(app: &mut App, token: &str) -> Option<u64> {
+            resolve(app, token).map(|(_, guid)| guid)
+        }
+
+        /// `partypetN` is the Nth party slot's pet, and `partyN` is still the slot's member: the
+        /// pet arms sit ahead of `party`, whose prefix they share.
+        #[test]
+        fn partypet_names_the_pet_of_the_slot_and_party_the_member() {
+            let mut app = party(4, true, true);
+            for i in 1..=4 {
+                assert_eq!(guid_of(&mut app, &format!("partypet{i}")), Some(pet(i)));
+                assert_eq!(guid_of(&mut app, &format!("party{i}")), Some(member(i)));
+            }
+            let entity = resolve(&mut app, "partypet2").unwrap().0;
+            assert_eq!(
+                app.world().get::<Guid>(entity).map(|g| g.0),
+                Some(pet(2)),
+                "the entity is the pet's"
+            );
+        }
+
+        /// The compares fold ASCII case (`_strnicmp`, `0x5159b4`).
+        #[test]
+        fn the_pet_tokens_fold_case() {
+            let mut app = party(1, true, true);
+            for token in ["PartyPet1", "PARTYPET1", "partyPET1"] {
+                assert_eq!(guid_of(&mut app, token), Some(pet(1)), "{token}");
+            }
+        }
+
+        /// The number is 1-based and read as digits: `0`, a missing number, a letter, a sign and
+        /// a number past the four slots each name no slot. The reference's `partypetN` has no bound
+        /// and reads past its table; here it is nobody, as `partyN`.
+        #[test]
+        fn a_partypet_number_outside_one_to_four_names_nobody() {
+            let mut app = party(4, true, true);
+            for token in [
+                "partypet0",
+                "partypet5",
+                "partypet",
+                "partypetX",
+                "partypet+1",
+                "partypet1x",
+                "partypet99999999999999999999",
+            ] {
+                assert_eq!(resolve(&mut app, token), None, "{token}");
+            }
+        }
+
+        /// A held member names `CHARM` before `SUMMON` (`0x4e8204`), and a held member with
+        /// neither is petless whatever its record says (`0x4e8218`).
+        #[test]
+        fn a_held_member_names_its_charm_else_summon_and_never_its_record() {
+            let mut app = party(1, false, true);
+            let charmed = stream(&mut app, 0xF130_0000_0000_0042, &[]);
+            let held = stream(&mut app, member(1), &guid_field(SUMMON, pet(1)));
+            assert_eq!(guid_of(&mut app, "partypet1"), Some(pet(1)), "SUMMON");
+
+            let both: Vec<_> = guid_field(CHARM, 0xF130_0000_0000_0042)
+                .into_iter()
+                .chain(guid_field(SUMMON, pet(1)))
+                .collect();
+            app.world_mut().entity_mut(held).insert(store(&both));
+            assert_eq!(
+                resolve(&mut app, "partypet1"),
+                Some((charmed, 0xF130_0000_0000_0042)),
+                "CHARM first"
+            );
+
+            app.world_mut().entity_mut(held).insert(store(&[]));
+            assert_eq!(
+                resolve(&mut app, "partypet1"),
+                None,
+                "the record names a held pet, but the member's own descriptor is asked first"
+            );
+        }
+
+        /// A member the object manager does not hold answers from its record's pet guid, which
+        /// `partypetN` reads only while the record reads online (`0x4e8227`).
+        #[test]
+        fn an_unheld_member_names_its_records_pet_while_online() {
+            let mut app = party(1, false, false);
+            assert_eq!(resolve(&mut app, "partypet1"), None, "the pet is not held");
+
+            let held = stream(&mut app, pet(1), &[]);
+            assert_eq!(resolve(&mut app, "partypet1"), Some((held, pet(1))));
+
+            let offline = PartyMemberStatsInfo {
+                status: Some(member_status::OFFLINE),
+                ..Default::default()
+            };
+            app.world_mut()
+                .resource_mut::<GroupState>()
+                .apply_stats(member(1), false, offline);
+            assert_eq!(resolve(&mut app, "partypet1"), None, "an offline record");
+        }
+
+        /// A raid of five: us (row 1), then the wire's members, the last in another subgroup.
+        fn raid() -> App {
+            let (mut app, _) = app();
+            let list = vec![
+                entry(member(1), 0),
+                entry(member(2), 1),
+                entry(member(3), 1),
+                entry(member(4), 2),
+            ];
+            app.world_mut().resource_mut::<GroupState>().apply_list(
+                GROUPTYPE_RAID,
+                0,
+                list,
+                ME,
+                None,
+                Some(ME),
+            );
+            app
+        }
+
+        /// `raidpetN` is the pet of `GetRaidRosterInfo` row N, the row `raidN` names.
+        #[test]
+        fn raidpet_names_the_pet_of_the_row_raid_names() {
+            let mut app = raid();
+            // Row 3 is `member(2)`, held with a pet; row 1 is us.
+            let held_pet = stream(&mut app, pet(2), &[]);
+            stream(&mut app, member(2), &guid_field(SUMMON, pet(2)));
+            let mine = stream(&mut app, MY_PET, &[]);
+            let me = app.world().resource::<GuidIndex>().0[&ME];
+            app.world_mut()
+                .entity_mut(me)
+                .insert(store(&guid_field(SUMMON, MY_PET)));
+
+            assert_eq!(resolve(&mut app, "raidpet3"), Some((held_pet, pet(2))));
+            assert_eq!(
+                resolve(&mut app, "raidpet1"),
+                Some((mine, MY_PET)),
+                "our own row"
+            );
+            assert_eq!(
+                guid_of(&mut app, "raid3"),
+                Some(member(2)),
+                "raidN is unchanged"
+            );
+            assert_eq!(guid_of(&mut app, "raid1"), Some(ME));
+            assert_eq!(resolve(&mut app, "raidpet2"), None, "row 2 has no pet");
+            for token in ["raidpet0", "raidpet6", "raidpet", "raidpetX", "raidpet+3"] {
+                assert_eq!(resolve(&mut app, token), None, "{token}");
+            }
+            assert_eq!(guid_of(&mut app, "RaidPet3"), Some(pet(2)), "case folds");
+        }
+
+        /// `raidpetN`'s record leg has no online test (`0x4919ae`), where `partypetN`'s has one.
+        #[test]
+        fn a_raid_pet_reads_the_record_of_an_offline_member_a_party_pet_does_not() {
+            let mut app = raid();
+            let record = PartyMemberStatsInfo {
+                status: Some(member_status::OFFLINE),
+                pet_guid: Some(pet(1)),
+                ..Default::default()
+            };
+            app.world_mut()
+                .resource_mut::<GroupState>()
+                .apply_stats(member(1), true, record);
+            let held = stream(&mut app, pet(1), &[]);
+            // Row 2 and party slot 1 are the same member.
+            assert_eq!(resolve(&mut app, "raidpet2"), Some((held, pet(1))));
+            assert_eq!(resolve(&mut app, "partypet1"), None);
+        }
+
+        #[test]
+        fn a_slot_number_is_digits_within_the_table() {
+            assert_eq!(slot_number("1", 4), Some(1));
+            assert_eq!(slot_number("4", 4), Some(4));
+            assert_eq!(slot_number("40", 40), Some(40));
+            assert_eq!(slot_number("41", 40), None);
+            assert_eq!(slot_number("0", 4), None);
+            for bad in ["", "x", "+1", "-1", "1 ", "1x"] {
+                assert_eq!(slot_number(bad, 40), None, "{bad:?}");
+            }
+        }
+
+        /// The reach and `SpellCanTargetUnit` feeds walk [`reach_tokens`], so a token the
+        /// resolver names must be in it, or `CheckInteractDistance("partypet1", …)` answers nil.
+        #[test]
+        fn the_reach_tokens_cover_every_group_pet() {
+            let tokens: Vec<_> = reach_tokens().collect();
+            assert_eq!(tokens.len(), 5 + 4 + 4 + 40 + 40);
+            for i in 1..=4 {
+                assert!(tokens.contains(&format!("partypet{i}").as_str()));
+            }
+            for i in 1..=40 {
+                assert!(tokens.contains(&format!("raidpet{i}").as_str()));
+            }
+        }
+
+        /// A party pet in view gets a distance, so the range verbs answer for it.
+        #[test]
+        fn the_reach_feed_measures_a_party_pet() {
+            let mut app = party(1, true, false);
+            let me = app.world().resource::<GuidIndex>().0[&ME];
+            app.world_mut()
+                .entity_mut(me)
+                .insert(Transform::from_xyz(0.0, 0.0, 0.0));
+            let held = stream(&mut app, pet(1), &[]);
+            // Along one axis, so d² is exactly yards².
+            app.world_mut()
+                .entity_mut(held)
+                .insert(Transform::from_xyz(15.0, 0.0, 0.0));
+            app.init_resource::<Reputations>();
+            app.insert_resource(Selection::default());
+            app.insert_non_send_resource(UiScript::new().unwrap());
+            app.world_mut().run_system_once(feed_unit_reach).unwrap();
+            let answer = |app: &App, expr: &str| {
+                app.world()
+                    .non_send_resource::<UiScript>()
+                    .eval::<bool>(expr)
+                    .unwrap()
+            };
+            assert!(answer(
+                &app,
+                r#"return CheckInteractDistance("partypet1", 4) ~= nil"#
+            ));
+            assert!(
+                answer(
+                    &app,
+                    r#"return CheckInteractDistance("partypet1", 1) == nil"#
+                ),
+                "15 yards is outside the 10-yard row"
+            );
+            assert!(
+                answer(
+                    &app,
+                    r#"return CheckInteractDistance("partypet2", 4) == nil"#
+                ),
+                "no second member"
+            );
+        }
     }
 
     /// The team digit comes off the race byte, whatever template sits beside it (a GM's 35).
