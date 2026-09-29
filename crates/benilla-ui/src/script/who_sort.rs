@@ -151,10 +151,10 @@ fn ascii_ci_cmp(a: &str, b: &str) -> Ordering {
 }
 
 /// The class, race and zone arms (`0x5ada7b`, `0x5adadf`, `0x5adb40`): an id with no DBC row, an
-/// empty name here, sorts as no name rather than as `""`. Two misses tie and pass to the next key
-/// (`0x5adbb2`), as there. The empty name is the miss marker: the reference's `GetWhoInfo`
-/// (`0x5ad6e0`) shows `UNKNOWN` for it, benilla's an empty cell, and a row that carried `UNKNOWN`
-/// would sort on that word.
+/// empty name here, sorts after every resolved name, not first as `""`. Two misses tie and pass
+/// to the next key (`0x5adbb2`), as there. The empty name is the miss marker: the reference's
+/// `GetWhoInfo` (`0x5ad6e0`) shows `UNKNOWN` for it, benilla's an empty cell, and a row that
+/// carried `UNKNOWN` would sort on that word.
 fn dbc_name_cmp(a: &str, b: &str) -> Ordering {
     match (a.is_empty(), b.is_empty()) {
         (true, true) => Ordering::Equal,
