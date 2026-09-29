@@ -342,6 +342,17 @@ fn gate_doodad_anim(
         !tf.is_changed() && !proj.is_changed() && !local.as_ref().is_some_and(|l| l.is_changed())
     }) && !scene.changed()
         && changed_vis.is_empty();
+    // Fixed at spawn (`EmitterFade`), so a reused verdict never sees the sphere move.
+    let in_frustum = |frustum: &bevy::camera::primitives::Frustum,
+                      fade: &crate::particles::EmitterFade| {
+        frustum.intersects_sphere(
+            &bevy::camera::primitives::Sphere {
+                center: fade.center.into(),
+                radius: fade.radius,
+            },
+            false,
+        )
+    };
     for (entity, mut host, lazy, pose, has_rig, player, drive) in &mut hosts {
         // A host born this frame has no verdict to reuse (`active` starts false).
         let drawn = if verdicts_still && !host.is_added() {
@@ -355,21 +366,21 @@ fn gate_doodad_anim(
                     cam_tf.translation(),
                     Vec3::from(cam_tf.forward()),
                     farclip,
-                    frustum.intersects_sphere(
-                        &bevy::camera::primitives::Sphere {
-                            center: fade.center.into(),
-                            radius: fade.radius,
-                        },
-                        false,
-                    ),
+                    in_frustum(frustum, fade),
                     fade.exterior_admitted(&exterior_gate, camera_instance),
                     scene.room_admits(fade),
                 )
             })
         } else {
+            // Meshed: the fade and cull authorities' `Hidden` carries their verdicts, and the
+            // frustum term is the one Bevy's culling (`ViewVisibility`) never writes here; the
+            // reference animates only the worklist, which passes the 6-plane test (`0x683700`).
             host.meshes
                 .iter()
                 .any(|&e| vis.get(e).is_ok_and(|v| *v != Visibility::Hidden))
+                && world_cam
+                    .as_ref()
+                    .is_none_or(|(_, frustum, _, _)| in_frustum(frustum, &host.fade))
         };
         // The lazy-rig promote, retried every frame the host stays drawn so a full table is only
         // a delay. It needs a second drawn frame (`host.active`): on its first, a spawned part's
@@ -1109,6 +1120,65 @@ mod tests {
         }
         app.update();
         assert!(active(&app), "the snap frame re-judges the host: drawn");
+    }
+
+    /// Bevy's frustum culling writes `ViewVisibility` only, so a meshed doodad off-screen keeps an
+    /// `Inherited` part; the gate judges its fade sphere against the frustum like a meshless one.
+    #[test]
+    fn a_meshed_host_outside_the_frustum_is_parked() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_resource::<crate::view::ViewDistance>();
+        app.init_resource::<crate::wmo_portal::ExteriorWindows>();
+        app.init_resource::<crate::wmo_portal::CameraInteriorClaim>();
+        app.init_resource::<crate::rig_palette::RigPalettes>();
+        app.init_asset::<SkinnedMeshInverseBindposes>();
+        app.add_systems(Update, gate_doodad_anim);
+
+        // Looking down -Z from the origin.
+        let seat =
+            Transform::from_xyz(0.0, 0.0, 0.0).looking_at(Vec3::new(0.0, 0.0, -20.0), Vec3::Y);
+        let projection = bevy::camera::Projection::from(bevy::camera::PerspectiveProjection {
+            far: 5000.0,
+            ..default()
+        });
+        let frustum = bevy::camera::primitives::Frustum::from_clip_from_world(
+            &(projection.get_clip_from_view() * GlobalTransform::from(seat).affine().inverse()),
+        );
+        app.world_mut().spawn((
+            crate::view::WorldCamera,
+            GlobalTransform::from(seat),
+            seat,
+            frustum,
+            projection,
+        ));
+        let mut meshed = |center: Vec3| {
+            let mesh = app.world_mut().spawn(Visibility::Inherited).id();
+            app.world_mut()
+                .spawn(DoodadAnimHost {
+                    meshes: vec![mesh],
+                    fade: crate::particles::EmitterFade::sphere(2.0, center),
+                    clip: Some((AnimationNodeIndex::new(1), 2.0)),
+                    armed_at: 0.0,
+                    window_hi: f32::INFINITY,
+                    anim_id: Some(0),
+                    active: true,
+                    parked_at: 0.0,
+                })
+                .id()
+        };
+        let behind = meshed(Vec3::new(0.0, 0.0, 30.0));
+        let ahead = meshed(Vec3::new(0.0, 0.0, -30.0));
+        app.update();
+        let world = app.world();
+        assert!(
+            world.entity(behind).contains::<AnimParked>(),
+            "behind the camera ⇒ outside the frustum ⇒ parked, whatever its part's Visibility"
+        );
+        assert!(
+            !world.entity(ahead).contains::<AnimParked>(),
+            "in front of the camera ⇒ drawn"
+        );
     }
 
     #[test]
