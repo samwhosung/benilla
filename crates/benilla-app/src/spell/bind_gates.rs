@@ -14,7 +14,8 @@ use super::cast_target::{TargetRelations, CORPSE_WORD_BITS, TF_EXPLICIT_GATE};
 /// at `6e5c16`-`6e5c1d`.
 const UNIT_FLAG_NON_ATTACKABLE_2: u32 = 0x0001_0000;
 
-/// The bind's alive test (`6e5c5f`, `6e5e55`): signed `UNIT_FIELD_HEALTH` above 0. An absent field
+/// The bind's alive test (`6e5c5f`, `6e5e55`) and the world pick's (`4806fd`, `480713 setg`,
+/// [`super::targeting::PickFlags::admits`]): signed `UNIT_FIELD_HEALTH` above 0. An absent field
 /// reads 0, as the reference's descriptor does, so a dead unit whose create sent no health is dead.
 pub(super) fn unit_alive(fields: &ObjectFields) -> bool {
     fields.unit_health().unwrap_or(0) as i32 > 0

@@ -10,6 +10,8 @@
 //!   0x6e60f0`) and its object leg (`0x4925d0` → `SetSelection 0x493540` → `BindTarget 0x6e5b40`),
 //!   whose unit arm [`bind_target_unit`] shares with `SpellTargetUnit`
 //!   ([`ScriptCursor::spell_target_unit`]), and whose corpse arm is [`corpse`]'s.
+//! - [`pick`]: the world pick's unit and player filter, `0x481050`'s flags from the word and each
+//!   candidate's `0x480610`, so a unit the word cannot take is out of the hover and the click.
 //! - [`item`]: the bag click (`PickupContainerItem 0x4f9b30`) and the paper-doll click
 //!   (`0x4c7300`), both `IsTargeting`, `TargetingWantsItem 0x6e6330`, then `0x495d60`, whose
 //!   confirm popups park the clicked guid (`0xb4e3c0`) with the word still standing.
@@ -29,6 +31,7 @@
 mod corpse;
 mod cursor;
 mod item;
+mod pick;
 mod world;
 
 #[cfg(test)]
@@ -36,6 +39,7 @@ pub(crate) use corpse::fixture as corpse_fixture;
 pub(crate) use corpse::{corpse_pick_admits, publish_corpse_pick, CorpsePick};
 pub(crate) use cursor::{drive_targeting_cursor, ground_cast_radius};
 pub(crate) use item::{commit_item_cast_on_pick, EnchantConfirmItem};
+pub(crate) use pick::{publish_unit_pick, PickChecks, UnitPick};
 pub(crate) use world::{commit_ground_cast_on_click, commit_object_cast_on_click};
 
 use bevy::prelude::*;

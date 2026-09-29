@@ -96,16 +96,20 @@ pub(super) struct TargetHoverState<'w, 's> {
     /// The corpse reaction gate's inputs (`0x6067d0`).
     factions: Option<Res<'w, super::Factions>>,
     self_store: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
+    /// The unit and player filter while a word stands (`0x480610`).
+    units: crate::spell::targeting::PickChecks<'w, 's>,
 }
 
 impl TargetHoverState<'_, '_> {
     /// Whether an object of this kind is a candidate of this pick, the posed pass and the box
-    /// fallback alike: every unit and player, and a corpse (`0x480816`) always outside targeting,
-    /// whose pick flags carry `0x40`, and while targeting only one `0x6e6260` passes. A corpse
-    /// whose store has not streamed is refused then.
-    fn is_candidate(&self, kind: EntityKind, store: Option<&ObjectStore>) -> bool {
+    /// fallback alike: every unit and player outside targeting, and while targeting the ones
+    /// `0x480610` passes for the word ([`crate::spell::targeting::PickChecks::admits_unit`]);
+    /// a corpse (`0x480816`) always outside targeting, whose pick flags carry `0x40`, and while
+    /// targeting only one `0x6e6260` passes. A corpse whose store has not streamed is refused
+    /// then. The hover and the press, which latches this pick, share it.
+    fn is_candidate(&self, entity: Entity, kind: EntityKind, store: Option<&ObjectStore>) -> bool {
         match kind {
-            EntityKind::Unit | EntityKind::Player => true,
+            EntityKind::Unit | EntityKind::Player => self.units.admits_unit(entity, store),
             EntityKind::Corpse => {
                 let Some(word) = self.corpse_pick.0 else {
                     return true;
@@ -253,7 +257,7 @@ pub(super) fn update_hover(
         }
         // Units, players and corpses: the reference picks every CGObject in one trace and
         // switches on type at the end, below.
-        if !target_state.is_candidate(net.kind, store) {
+        if !target_state.is_candidate(entity, net.kind, store) {
             continue;
         }
         // Not drawn, not clickable. Checked before `faithful.insert`, so an undrawn unit is out by
@@ -358,7 +362,7 @@ pub(super) fn update_hover(
             continue;
         };
         let store = roots.get(parent).ok().and_then(|root| root.6);
-        if !target_state.is_candidate(parent_net.kind, store) {
+        if !target_state.is_candidate(parent, parent_net.kind, store) {
             continue;
         }
         if let Some(t) = ray_mesh_bounds(origin, dir, aabb, gt) {
@@ -770,6 +774,7 @@ pub(super) fn update_hovered_object(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::spell::targeting::corpse_fixture as fx;
     use bevy::ecs::system::RunSystemOnce;
 
     fn card(bone: u16, owner: Entity) -> BillboardCard {
@@ -900,6 +905,8 @@ mod tests {
         world.insert_resource(crate::net::SelfGuid(Some(1)));
         world.init_resource::<crate::spell::PicksSelf>();
         world.init_resource::<crate::spell::CorpsePick>();
+        world.init_resource::<crate::spell::targeting::UnitPick>();
+        world.insert_resource(crate::net::Reputations(Vec::new()));
         let mut camera = Camera::default();
         camera.computed.clip_from_view = Mat4::perspective_infinite_reverse_rh(1.0, 1.0, 0.1);
         camera.computed.target_info = Some(RenderTargetInfo {
@@ -1032,6 +1039,234 @@ mod tests {
         // is reachable.
         assert!(!hover(friend(), Some(0x0002)));
         assert!(!hover(friend(), Some(0x0040)), "a ground word");
+    }
+
+    /// A unit or player at depth `z` on the cursor's ray with one drawn pick box, of this store.
+    fn unit_at(world: &mut World, guid: u64, z: f32, store: ObjectStore) -> Entity {
+        let at = GlobalTransform::from_translation(Vec3::new(0.0, 0.0, z));
+        let body = world
+            .spawn((
+                Guid(guid),
+                NetEntity {
+                    kind: EntityKind::Unit,
+                    display_id: None,
+                    scale: 1.0,
+                },
+                at,
+                InheritedVisibility::VISIBLE,
+                store,
+            ))
+            .id();
+        world.spawn((
+            ChildOf(body),
+            CreaturePickPart,
+            Aabb::from_min_max(Vec3::splat(-1.0), Vec3::splat(1.0)),
+            at,
+            InheritedVisibility::VISIBLE,
+        ));
+        body
+    }
+
+    /// A store of `UNIT_FIELD_FACTIONTEMPLATE` (35), `UNIT_FIELD_FLAGS` (46) and
+    /// `UNIT_FIELD_HEALTH` (22), on [`fx::factions`]' rows: template 1 the caster's Human, 2 an Orc.
+    fn unit_store(template: u32, flags: u32, health: u32) -> ObjectStore {
+        ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+            (35, template),
+            (46, flags),
+            (22, health),
+        ]))
+    }
+
+    /// A living player of the caster's faction: assistable, not attackable.
+    fn friend() -> ObjectStore {
+        unit_store(1, 0x8, 100)
+    }
+
+    /// A living Orc creature: attackable, not assistable.
+    fn foe() -> ObjectStore {
+        unit_store(2, 0, 100)
+    }
+
+    /// The pick over `word`, the way a frame runs it: the word published, then the pick.
+    fn pick_under(world: &mut World, word: Option<u16>) -> Hovered {
+        let mut targeting = world.resource_mut::<crate::spell::SpellTargeting>();
+        match word {
+            Some(word) => targeting.enter(fx::RESURRECTION, crate::spell::CastCommit::Spell, word),
+            None => targeting.clear(),
+        }
+        world
+            .run_system_cached(crate::spell::targeting::publish_unit_pick)
+            .expect("the word publishes");
+        world
+            .run_system_cached(update_hover)
+            .expect("the pick runs");
+        *world.resource::<Hovered>()
+    }
+
+    /// Us, a human away from the ray, the faction tables, and the units a case puts on it.
+    fn unit_pick_world() -> World {
+        let mut world = pick_world();
+        world.insert_resource(fx::factions());
+        world.init_resource::<crate::spell::SpellTargeting>();
+        world.spawn((
+            SelfPlayer,
+            Guid(1),
+            GlobalTransform::from_translation(Vec3::new(50.0, 0.0, 0.0)),
+            fx::caster(1.5),
+        ));
+        world
+    }
+
+    /// `0x480610` while a word stands: a unit the word cannot take is no candidate, so the one
+    /// behind it takes the pick, where outside targeting the nearer wins whatever it is. The
+    /// front unit is 5 yards nearer the camera than the rear one.
+    #[test]
+    fn a_unit_the_word_cannot_take_lets_the_pick_through_to_the_one_behind() {
+        const HEAL: u16 = 0x0100;
+        const ENEMY: u16 = 0x0080;
+        const RESURRECTION: u16 = 0x8000;
+        const SKINNING: u16 = 0x0402;
+        // (word, the front unit it refuses, the rear unit it takes, what stands behind it)
+        let cases: [(&str, u16, ObjectStore, ObjectStore); 6] = [
+            ("a foe before a friend, under a heal", HEAL, foe(), friend()),
+            (
+                "a corpse before a friend, under a heal",
+                HEAL,
+                unit_store(1, 0x8, 0),
+                friend(),
+            ),
+            (
+                "a friend before a foe, under an enemy word",
+                ENEMY,
+                friend(),
+                foe(),
+            ),
+            (
+                "the living before a corpse, under Resurrection",
+                RESURRECTION,
+                friend(),
+                unit_store(1, 0x8, 0),
+            ),
+            (
+                "the living before a corpse, under Skinning",
+                SKINNING,
+                foe(),
+                unit_store(2, 0, 0),
+            ),
+            (
+                "a unit immune to players before a friend, under a heal",
+                HEAL,
+                unit_store(1, 0x108, 100),
+                friend(),
+            ),
+        ];
+        for (what, word, front_store, rear_store) in cases {
+            let mut world = unit_pick_world();
+            let front = unit_at(&mut world, 10, 5.0, front_store);
+            let rear = unit_at(&mut world, 11, 0.0, rear_store);
+            // Outside targeting the nearer unit wins, whoever it is.
+            assert_eq!(
+                pick_under(&mut world, None).target,
+                Some(front),
+                "{what}: outside targeting"
+            );
+            let hovered = pick_under(&mut world, Some(word));
+            assert_eq!(
+                hovered.target,
+                Some(rear),
+                "{what}: the word takes the rear"
+            );
+            assert_eq!(hovered.guid, Some(11), "{what}");
+            assert_eq!(
+                pick_under(&mut world, None).target,
+                Some(front),
+                "{what}: and back outside targeting"
+            );
+        }
+    }
+
+    /// The control of the table above: the same front unit is the pick when the word takes it.
+    #[test]
+    fn a_unit_the_word_takes_keeps_the_pick_in_front_of_the_one_behind() {
+        let cases: [(&str, u16, ObjectStore); 4] = [
+            ("a friend under a heal", 0x0100, friend()),
+            ("a foe under an enemy word", 0x0080, foe()),
+            ("a corpse under Resurrection", 0x8000, unit_store(1, 0x8, 0)),
+            ("a foe under a plain unit word", 0x0002, foe()),
+        ];
+        for (what, word, front_store) in cases {
+            let mut world = unit_pick_world();
+            let front = unit_at(&mut world, 10, 5.0, front_store);
+            let rear_store = if word == 0x8000 {
+                unit_store(1, 0x8, 0)
+            } else {
+                friend()
+            };
+            unit_at(&mut world, 11, 0.0, rear_store);
+            assert_eq!(
+                pick_under(&mut world, Some(word)).target,
+                Some(front),
+                "{what}"
+            );
+        }
+    }
+
+    /// With nothing behind it, a unit the word cannot take leaves the pick empty, which is no
+    /// refusal: `IsSelectable` grades the winner only, and there is none.
+    #[test]
+    fn a_lone_unit_the_word_cannot_take_is_no_pick_at_all() {
+        let mut world = unit_pick_world();
+        unit_at(&mut world, 10, 0.0, foe());
+        let hovered = pick_under(&mut world, Some(0x0100));
+        assert_eq!((hovered.target, hovered.guid), (None, None));
+        assert!(!hovered.refused);
+        assert_eq!(hovered.distance, f32::MAX);
+    }
+
+    /// `0x481116`: only a word with unit bits (`0x878e`) puts units and players in the pick. A
+    /// ground word, a lock word and a bag-item word pick none, so a unit in front of the ground
+    /// or the chest is no obstacle, and a unit word does pick them.
+    #[test]
+    fn only_a_word_with_unit_bits_picks_units() {
+        let mut world = unit_pick_world();
+        let front = unit_at(&mut world, 10, 5.0, friend());
+        for word in [0x0040, 0x0020, 0x4800, 0x0800, 0x0010] {
+            let hovered = pick_under(&mut world, Some(word));
+            assert_eq!(hovered.target, None, "{word:#06x}");
+            assert!(!hovered.refused, "{word:#06x}");
+        }
+        for word in [0x0002, 0x0100] {
+            assert_eq!(
+                pick_under(&mut world, Some(word)).target,
+                Some(front),
+                "{word:#06x}"
+            );
+        }
+    }
+
+    /// The press latches the hover's pick, so the click reaches what the cursor showed: the unit
+    /// behind, not the one in front the word refuses.
+    #[test]
+    fn the_press_latches_the_pick_the_word_left() {
+        use crate::target::{latch_press_pick, PressPick};
+
+        let mut world = unit_pick_world();
+        unit_at(&mut world, 10, 5.0, foe());
+        let rear = unit_at(&mut world, 11, 0.0, friend());
+        world.init_resource::<HoveredObject>();
+        world.init_resource::<PressPick>();
+        world.init_resource::<crate::target::WorldCursor>();
+        world.init_resource::<crate::target::cursor_mode::AttackFork>();
+        world.init_resource::<ButtonInput<MouseButton>>();
+
+        pick_under(&mut world, Some(0x0100));
+        world
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        world
+            .run_system_cached(latch_press_pick)
+            .expect("the press latches");
+        assert_eq!(world.resource::<PressPick>().hovered.target, Some(rear));
     }
 
     /// Naxxramas's "Unholy Axe" is an `InvisibleStalker` body with no vertices holding a real axe,

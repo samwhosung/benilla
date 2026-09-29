@@ -77,8 +77,8 @@ pub(crate) fn commit_ground_cast_on_click(
 /// not range nor the lock: the refusal is the server's `SMSG_CAST_RESULT`. The right-click path
 /// ([`crate::target::click`], `0x5f33e0`) does resolve the lock and can refuse locally. Otherwise
 /// the picked unit goes to the unit arm ([`super::bind_target_unit`]) and the picked corpse to the
-/// corpse arm ([`super::corpse::bind_target_corpse`]); a unit click under a lock word binds nothing
-/// there, since every unit arm tests a bit the word lacks.
+/// corpse arm ([`super::corpse::bind_target_corpse`]). A lock word has no unit bit, so it puts no
+/// unit in the pick and the click reaches what stands behind one ([`super::pick`]).
 ///
 /// Runs after `select_on_click`, as the terrain commit does.
 pub(crate) fn commit_object_cast_on_click(
