@@ -209,7 +209,7 @@ pub(super) fn load_core_bindings(script: &UiScript) -> Vec<String> {
         Ok(bindings) => {
             script.register_bindings(&bindings);
             info!(
-                "bindings: {} commands from {}",
+                "bindings: {} commands registered from {}",
                 bindings.len(),
                 reference_ui::BINDINGS
             );

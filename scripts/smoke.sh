@@ -137,14 +137,14 @@ for marker in "new VM, session"; do
         fail "'$marker' happened $n time(s), expected $vms — one per VM built, two per login; \
 $sessions would mean the entry adopted the character screen's VM and inherited its spent VmMemos"
 done
-# The in-game UI, `FrameXML.toc`'s `Fonts.xml` included, and the keybinding table
-# (`seed_bindings_for_vm`, run on the world-entry edge) build once per login; one count for two
-# logins means the second reused the first's frame tree.
+# The in-game UI, `FrameXML.toc`'s `Fonts.xml` included, and the key-binding commands (the core's
+# `Bindings.xml`, loaded after the toc) build once per login; one count for two logins means the
+# second reused the first's frame tree.
 for marker in "Fonts.xml loaded" "UIParent.xml loaded" "commands registered"; do
     n="$(printf '%s\n' "$plain" | grep -cF "$marker")"
     printf '  %-24s %s\n' "$marker" "$n"
     [ "$n" -eq "$sessions" ] ||
-        fail "'$marker' happened $n time(s), expected $sessions — once per login: the UI rebuilt per login and the keybinding table seeded on the entry edge"
+        fail "'$marker' happened $n time(s), expected $sessions — once per login: the UI and its binding commands rebuilt per login"
 done
 
 # The shutdown tail runs once per session: at the /logout, and at the exit, which closes the window
