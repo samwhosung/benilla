@@ -153,11 +153,12 @@ fn slot_view(
         let deadline = *at + std::time::Duration::from_millis(u64::from(delta));
         view.port_expiration_ms = ms(deadline.saturating_duration_since(now));
     }
-    // Status 1: the raw estimate, and `[slot+0x1c] = now − Δ` read back as `now − stamp`.
+    // Status 1: the raw estimate, and `[slot+0x1c] = now − Δ` read back as `now − stamp`, which is
+    // the time since the status plus Δ, taken forwards so no `Instant` precedes the clock's origin.
     if let Some((estimate, waited)) = status.queued {
         view.estimated_wait_ms = estimate;
-        let stamp = *at - std::time::Duration::from_millis(u64::from(waited));
-        view.time_waited_ms = ms(now.saturating_duration_since(stamp));
+        let since = now.saturating_duration_since(*at);
+        view.time_waited_ms = ms(since + std::time::Duration::from_millis(u64::from(waited)));
     }
     view
 }
@@ -387,6 +388,26 @@ mod tests {
             in_progress: None,
             queued: None,
         }
+    }
+
+    #[test]
+    fn a_waited_span_longer_than_any_uptime_reads_forwards() {
+        let at = Instant::now();
+        let mut queued = status(0, 489, 1);
+        queued.queued = Some((0, u32::MAX));
+        let v = slot_view(Some(&(queued.clone(), at)), None, at);
+        assert_eq!(
+            v.time_waited_ms,
+            u32::MAX,
+            "49.7 days waited, no stamp needed"
+        );
+        let later = at + std::time::Duration::from_secs(9);
+        let v = slot_view(Some(&(queued, at)), None, later);
+        assert_eq!(
+            v.time_waited_ms,
+            u32::MAX,
+            "saturates as the getter's u32 does"
+        );
     }
 
     #[test]
