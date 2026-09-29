@@ -151,14 +151,19 @@ fn ascii_ci_cmp(a: &str, b: &str) -> Ordering {
 }
 
 /// The class, race and zone arms (`0x5ada7b`, `0x5adadf`, `0x5adb40`): an id with no DBC row, an
-/// empty name here, ties and passes to the next key (`0x5adbb2`) rather than sorting as `""`. The
-/// empty name is the miss marker: the reference's `GetWhoInfo` (`0x5ad6e0`) shows `UNKNOWN` for
-/// it, benilla's an empty cell, and a row that carried `UNKNOWN` would sort on that word.
+/// empty name here, sorts as no name rather than as `""`. Two misses tie and pass to the next key
+/// (`0x5adbb2`), as there. The empty name is the miss marker: the reference's `GetWhoInfo`
+/// (`0x5ad6e0`) shows `UNKNOWN` for it, benilla's an empty cell, and a row that carried `UNKNOWN`
+/// would sort on that word.
 fn dbc_name_cmp(a: &str, b: &str) -> Ordering {
-    if a.is_empty() || b.is_empty() {
-        return Ordering::Equal;
+    match (a.is_empty(), b.is_empty()) {
+        (true, true) => Ordering::Equal,
+        // Deviation: the reference ties a miss against a hit (`0x5adab6`); no total order can, and
+        // `sort_by` may panic on one that is not, so the miss goes last.
+        (true, false) => Ordering::Greater,
+        (false, true) => Ordering::Less,
+        (false, false) => ascii_ci_cmp(a, b),
     }
-    ascii_ci_cmp(a, b)
 }
 
 #[cfg(test)]
@@ -304,20 +309,99 @@ mod tests {
     }
 
     #[test]
-    fn an_unresolved_dbc_name_ties() {
-        let mut chain = WhoSortChain::default();
-        chain.promote("zone");
+    fn an_unresolved_dbc_name_sorts_after_the_resolved_ones() {
+        // Zone is the seeded front key, so the promote flips it: the default chain already ascends.
+        let chain = WhoSortChain::default();
         let known = row("Bbb", 10, "Mage", "Westfall");
         let unknown = row("Aaa", 10, "Mage", "");
+        assert_eq!(chain.compare(&known, &unknown), Ordering::Less);
+        assert_eq!(chain.compare(&unknown, &known), Ordering::Greater);
+        let other_unknown = row("Ccc", 10, "Mage", "");
         assert_eq!(
-            chain.compare(&known, &unknown),
-            Ordering::Greater,
-            "the zone key ties, so the name decides"
+            chain.compare(&unknown, &other_unknown),
+            Ordering::Less,
+            "two misses tie on zone, so the name decides"
         );
-        assert_eq!(chain.compare(&unknown, &known), Ordering::Less);
 
         // A guild is not a DBC lookup: an empty guild is a real value and sorts first.
         assert_eq!(ascii_ci_cmp("", "Legacy"), Ordering::Less);
+    }
+
+    type Setter = fn(&mut WhoInfo, &str);
+
+    /// Each DBC-backed key as a single-key comparator, with the setter for its field.
+    fn dbc_keys() -> [(&'static str, Setter); 3] {
+        [
+            ("class", |r, v| r.class = v.to_string()),
+            ("race", |r, v| r.race = v.to_string()),
+            ("zone", |r, v| r.zone = v.to_string()),
+        ]
+    }
+
+    fn mixed_rows(set: Setter, n: usize) -> Vec<WhoInfo> {
+        let values = [
+            "",
+            "Mage",
+            "Warrior",
+            "",
+            "Elwynn Forest",
+            "Durotar",
+            "Mage",
+        ];
+        (0..n)
+            .map(|i| {
+                let mut r = row(&format!("N{i:03}"), 1 + (i % 7) as u32, "Mage", "Z");
+                set(&mut r, values[(i * 5 + i / 7) % values.len()]);
+                r
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_dbc_arms_are_a_total_order() {
+        for (key, set) in dbc_keys() {
+            let key = WhoSortKey::from_sort_type(key);
+            let rows = mixed_rows(set, 21);
+            let le = |a: &WhoInfo, b: &WhoInfo| key.order(a, b) != Ordering::Greater;
+            for a in &rows {
+                for b in &rows {
+                    assert_eq!(key.order(a, b), key.order(b, a).reverse(), "{key:?}");
+                    for c in &rows {
+                        if le(a, b) && le(b, c) {
+                            assert!(le(a, c), "{key:?} not transitive");
+                        }
+                        if key.order(a, b) == Ordering::Equal && key.order(b, c) == Ordering::Equal
+                        {
+                            assert_eq!(key.order(a, c), Ordering::Equal, "{key:?} tie");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sorting_a_mixed_list_puts_misses_last_without_panicking() {
+        for (key, set) in dbc_keys() {
+            let mut chain = WhoSortChain::default();
+            chain.promote("level"); // so the key below is promoted from behind, ascending
+            chain.promote(key);
+            let mut rows = mixed_rows(set, 64);
+            chain.sort(&mut rows);
+            let field = |r: &WhoInfo| match key {
+                "class" => r.class.clone(),
+                "race" => r.race.clone(),
+                _ => r.zone.clone(),
+            };
+            let first_miss = rows.iter().position(|r| field(r).is_empty()).unwrap();
+            assert!(
+                rows[first_miss..].iter().all(|r| field(r).is_empty()),
+                "{key}"
+            );
+            assert!(rows[..first_miss]
+                .windows(2)
+                .all(|w| { ascii_ci_cmp(&field(&w[0]), &field(&w[1])) != Ordering::Greater }));
+        }
     }
 
     #[test]
