@@ -181,7 +181,9 @@ pub(crate) struct BattlefieldQueue {
     active: Option<(usize, u32)>,
     /// The instance's run-time stamp (`[0xb6ebbc]`) and expiration (`[0xb6ebb8]`): set by status
     /// 3, zeroed by any other non-clearing status for any slot, as the handler `0x4aa850` does.
-    run_started: Option<Instant>,
+    /// The stamp is kept as the status's arrival and the wire's elapsed span, read forwards, so no
+    /// `Instant` precedes the clock's origin.
+    run_started: Option<(Instant, std::time::Duration)>,
     instance_expiration: Option<Instant>,
     /// Status 3 fires `UPDATE_BATTLEFIELD_SCORE` before `_STATUS` (`0x4aaa5a`, then `0x4aab05`).
     score_dirty: bool,
@@ -223,7 +225,7 @@ impl BattlefieldQueue {
                 self.instance_expiration = (expires_ms != 0)
                     .then(|| now + std::time::Duration::from_millis(u64::from(expires_ms)));
                 self.run_started = (elapsed_ms != 0)
-                    .then(|| now - std::time::Duration::from_millis(u64::from(elapsed_ms)));
+                    .then(|| (now, std::time::Duration::from_millis(u64::from(elapsed_ms))));
                 self.score_dirty = true;
             }
             None => {
@@ -258,8 +260,8 @@ impl BattlefieldQueue {
 
     /// `GetBattlefieldInstanceRunTime()`: ms since the status-3 stamp, 0 with none.
     pub(crate) fn run_time_ms(&self, now: Instant) -> u32 {
-        self.run_started.map_or(0, |t| {
-            now.saturating_duration_since(t)
+        self.run_started.map_or(0, |(at, elapsed)| {
+            (now.saturating_duration_since(at) + elapsed)
                 .as_millis()
                 .min(u128::from(u32::MAX)) as u32
         })
@@ -1589,6 +1591,30 @@ mod tests {
     }
 
     #[test]
+    fn a_run_longer_than_any_uptime_reads_forwards() {
+        let mut q = BattlefieldQueue::default();
+        let now = Instant::now();
+        q.apply_at(
+            BattlefieldStatus {
+                slot: 0,
+                map_id: 489,
+                bracket: 0,
+                instance_id: 3,
+                status: 3,
+                time_ms: None,
+                in_progress: Some((0, u32::MAX)),
+                queued: None,
+            },
+            now,
+        );
+        assert_eq!(
+            q.run_time_ms(now),
+            u32::MAX,
+            "49.7 days elapsed, no stamp needed"
+        );
+    }
+
+    #[test]
     fn the_instance_clocks_follow_the_status_handler() {
         let mut q = BattlefieldQueue::default();
         let now = Instant::now();
@@ -1606,6 +1632,11 @@ mod tests {
         assert_eq!(q.active_map(), Some(489));
         assert_eq!(q.instance_expiration_ms(now), 90_000);
         assert_eq!(q.run_time_ms(now), 30_000);
+        assert_eq!(
+            q.run_time_ms(now + std::time::Duration::from_secs(2)),
+            32_000,
+            "the stamp runs on from the status"
+        );
         assert!(q.take_score_dirty());
         // A queued status for slot 2 zeroes both clocks too.
         let mut queued = active.clone();
