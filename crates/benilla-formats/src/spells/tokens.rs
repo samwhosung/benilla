@@ -60,13 +60,16 @@ fn damage_op(d: &SpellDisplay, slot: usize) -> Option<u8> {
     (direct || aura_damage).then_some(if aura == 3 { 22 } else { 0 })
 }
 
+/// The aura's own op (`0x6e397e`, jump table `0x6e3ab8` over the byte table `0x6e3ad0`, indexed
+/// by `aura − 10`): 10/103/183 op 2 (`6e3996`), the speed auras op 12 (`6e39a6`), 138 op 23
+/// (`6e39b6`), 65 op 24 (`6e39c6`), 99 op 3 (`6e39d6`).
 fn aura_op(d: &SpellDisplay, slot: usize) -> Option<u8> {
     match d.effect_apply_aura[slot] {
         10 | 103 | 183 => Some(2),
         31 | 32 | 33 | 58 | 129 | 130 | 171 | 172 => Some(12),
-        65 => Some(23),
-        99 => Some(24),
-        138 => Some(3),
+        138 => Some(23),
+        65 => Some(24),
+        99 => Some(3),
         _ => None,
     }
 }
@@ -774,6 +777,26 @@ mod tests {
             substitute("Increases armor by $M1.", &d, &ctx),
             "Increases armor by 68."
         );
+    }
+
+    /// Every aura `0x6e3ab8`'s table covers (10..=183), and none outside it.
+    #[test]
+    fn each_aura_takes_the_op_of_its_jump_table_arm() {
+        for aura in 0..=255u32 {
+            let expected = match aura {
+                10 | 103 | 183 => Some(2),
+                31 | 32 | 33 | 58 | 129 | 130 | 171 | 172 => Some(12),
+                138 => Some(23),
+                65 => Some(24),
+                99 => Some(3),
+                _ => None,
+            };
+            let d = SpellDisplay {
+                effect_apply_aura: [aura, 0, 0],
+                ..Default::default()
+            };
+            assert_eq!(aura_op(&d, 0), expected, "aura {aura}");
+        }
     }
 
     #[test]
