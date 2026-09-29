@@ -1,19 +1,19 @@
-//! Key bindings: the one chord-to-command engine every rebindable input runs through. The table
-//! lives engine-side ([`benilla_ui::script::keybind`], which the Key Bindings window's Lua edits);
-//! this module derives an exact-match dispatch map from it whenever its generation moves.
+//! Key bindings: the one chord-to-command engine every rebindable input runs through. The key
+//! table and the commands live engine-side ([`benilla_ui::script::keybind`]): the commands are the
+//! `Bindings.xml` rows the core and each addon loaded, the live keys what `SetBinding` and the Key
+//! Bindings window write. This module derives an exact-match dispatch map from the keys whenever
+//! the table's generation moves, and runs a pressed chord's command.
 //!
-//! Dispatch ([`latch_and_dispatch`], in [`crate::ui_script::UiInput`] after the UI key feed):
+//! Dispatch ([`latch_and_dispatch`], in [`crate::ui_script::UiInput`] after the UI key feed), as
+//! `CBindings::ExecuteBinding` (`0x4b7990`) and `RunCommand` (`0x4b7b50`) do:
 //! - a press probes its exact chord, then once more with its leftmost modifier dropped
 //!   ([`Chord::fallback`]); Super held matches nothing;
-//! - [`Kind::Held`] commands latch on the press and unlatch on the base key's release (the
-//!   reference's `runOnUp` law). UI focus suppresses presses and releases nothing already held;
-//!   a latch ends only on its base key's release, the stuck-latch sweep (OS focus loss, the
+//! - the resolved command's body runs with `keystate = "down"`, and the base key's release runs a
+//!   `runOnUp` body again with `"up"`. UI focus suppresses presses and releases nothing already
+//!   held; a latch ends only on its base key's release, the stuck-latch sweep (OS focus loss, the
 //!   loading cover) or a VM swap;
-//! - [`Kind::Edge`]/[`Kind::EdgeUpDown`] run their 1.12 Lua bodies in the VM;
-//! - [`Kind::Host`] lands in [`BindingsState::fired`] for engine consumers.
-//!
-//! An addon's `Bindings.xml` rows ([`benilla_ui::bindings_xml`]) dispatch here too: a resolved
-//! chord names a [`Bound`], either a registry [`Cmd`] or an index into the addon table.
+//! - what the bodies call reaches the engine through the Lua binding functions
+//!   ([`benilla_ui::script::BindingInput`]) as [`BindingsState`]'s [`Input`]s.
 //!
 //! Persistence: `benilla-config/bindings/account.txt` and `<Realm>-<Char>.txt` ([`store`]); the
 //! character file's existence is the character-set state, as in the reference.
@@ -23,39 +23,24 @@ use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::input::ButtonState;
 use bevy::prelude::*;
 
-use benilla_ui::script::keybind::{AddonBindingBody, KeybindCommand, KeybindRequest};
+use benilla_ui::script::keybind::KeybindRequest;
 use benilla_ui::script::UiScript;
 
 use crate::char_select::InWorldGated;
 use crate::ui_script::{PlayerUiHover, PointerOverUiPanel, UiKeyboardCapture};
 
 pub(crate) mod chord;
-pub(crate) mod commands;
 mod script_input;
 mod store;
 
 use chord::{BindKey, Chord};
-pub(crate) use commands::cmd;
-use commands::{Cmd, Kind, SPECS};
+pub(crate) use script_input::Input;
 
-/// What a bound chord names: a registry command or an addon's `Bindings.xml` body. An enum, not
-/// one index space, so no `SPECS[cmd]` read can be handed an addon index.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Bound {
-    /// A registry command, an index into [`SPECS`].
-    Spec(Cmd),
-    /// An addon-declared binding, an index into [`BindingDispatch::addons`].
-    Addon(u16),
-}
-
-/// The chord-to-binding map, rebuilt whenever the engine table's generation moves. Probe it
+/// The chord-to-command map, rebuilt whenever the engine table's generation moves. Probe it
 /// through [`BindingDispatch::resolve`]: the lookup is two probes.
 #[derive(Resource, Default)]
 struct BindingDispatch {
-    map: std::collections::HashMap<Chord, Bound>,
-    /// The addon bindings [`Bound::Addon`] indexes, in registration order; snapshotted with the
-    /// map so the two agree on what an index means.
-    addons: Vec<AddonBindingBody>,
+    map: std::collections::HashMap<Chord, String>,
     /// The engine table's generation this map was built from, keyed per VM: a fresh VM restarts
     /// its counter at 0.
     seen_generation: crate::ui_script::VmMemo<Option<u64>>,
@@ -69,33 +54,33 @@ impl BindingDispatch {
     /// `Ctrl`+`Shift` is the dev overlays' plane ([`benilla_world::modkeys::DEV_CHORD`]) and
     /// `Ctrl`+`Shift`+`P` would otherwise fall back to `SHIFT-P` (`TOGGLECHARACTER3`). An exact
     /// `CTRL-SHIFT-` binding still dispatches; mouse and wheel are never suppressed.
-    fn resolve(&self, chord: Chord, dev_plane: bool) -> Option<Bound> {
-        if let Some(&bound) = self.map.get(&chord) {
-            return Some(bound);
+    fn resolve(&self, chord: Chord, dev_plane: bool) -> Option<&str> {
+        if let Some(command) = self.map.get(&chord) {
+            return Some(command);
         }
         if dev_plane {
             return None;
         }
-        self.map.get(&chord.fallback()?).copied()
+        self.map.get(&chord.fallback()?).map(String::as_str)
     }
 }
 
-/// This frame's binding activity, which engine-side consumers read instead of raw keys.
+/// This frame's binding activity, which engine-side consumers read instead of raw keys: the
+/// [`Input`]s the running bodies' Lua calls set.
 #[derive(Resource, Default)]
 pub(crate) struct BindingsState {
-    /// Live latches, (base key, binding): a [`Kind::Held`], [`Kind::EdgeUpDown`] or `runOnUp`
-    /// addon press not yet released.
-    latched: Vec<(BindKey, Bound)>,
-    /// The held commands a Lua Start set and no Stop has cleared ([`script_input`]); no key backs
-    /// them, so no key's release ends them but their own command's.
-    script_held: Vec<Cmd>,
-    /// Commands whose first latch began this frame (the press edge).
-    just: Vec<Cmd>,
-    /// Host-edge commands fired this frame.
-    fired: Vec<Cmd>,
-    /// Analog amount per host command this frame (wheel notches; a key press adds the
-    /// reference's 1.0 step), the camera zoom's input.
-    amounts: Vec<(Cmd, f32)>,
+    /// Live latches, (base key, command): a press not yet released, whose release runs the
+    /// command's `runOnUp` half. The reference replays the press-time chord at key-up (`0x483bd0`);
+    /// latching the resolved command is equivalent.
+    latched: Vec<(BindKey, String)>,
+    /// The held bits a Start set and no Stop has cleared.
+    held: Vec<Input>,
+    /// Inputs whose Start, or whose one-shot, came this frame (the press edge).
+    just: Vec<Input>,
+    /// One-shots fired this frame.
+    fired: Vec<Input>,
+    /// Amount per one-shot this frame: a zoom's yards, else 1.0.
+    amounts: Vec<(Input, f32)>,
     /// The keys we believe are down: a press of one is a repeat. The reference classifies
     /// auto-repeat off its own list (`0x4248b3`), never the Win32 `lParam` repeat bit.
     /// Normalized like [`latched`](Self::latched) and reconciled against `ButtonInput` every
@@ -105,34 +90,36 @@ pub(crate) struct BindingsState {
 }
 
 impl BindingsState {
-    /// Is a registry command latched right now (the reference's held movement bit), by a key or
-    /// by a Lua Start?
-    pub(crate) fn pressed(&self, c: Cmd) -> bool {
-        self.latched.iter().any(|&(_, l)| l == Bound::Spec(c)) || self.script_held.contains(&c)
+    /// Is a held bit set right now (the reference's `[InputControl+4]`)?
+    pub(crate) fn pressed(&self, i: Input) -> bool {
+        self.held.contains(&i)
     }
-    /// Did this command's latch begin this frame (the key-down edge)?
-    pub(crate) fn just_pressed(&self, c: Cmd) -> bool {
-        self.just.contains(&c)
+    /// Did this bit's Start, or this one-shot, come this frame (the key-down edge)?
+    pub(crate) fn just_pressed(&self, i: Input) -> bool {
+        self.just.contains(&i)
     }
-    /// Did this host-edge command fire this frame?
-    pub(crate) fn fired(&self, c: Cmd) -> bool {
-        self.fired.contains(&c)
+    /// Did this one-shot fire this frame?
+    pub(crate) fn fired(&self, i: Input) -> bool {
+        self.fired.contains(&i)
     }
-    /// Total analog amount for a host command this frame (0.0 when idle).
-    pub(crate) fn amount(&self, c: Cmd) -> f32 {
+    /// Total amount for a one-shot this frame (0.0 when idle): the camera zoom's yards.
+    pub(crate) fn amount(&self, i: Input) -> f32 {
         self.amounts
             .iter()
-            .filter(|&&(a, _)| a == c)
+            .filter(|&&(a, _)| a == i)
             .map(|&(_, v)| v)
             .sum()
     }
-    /// Test seam for consumer systems: a state in which these host commands fired this frame.
-    #[cfg(test)]
-    pub(crate) fn test_fired(cmds: &[Cmd]) -> Self {
-        Self {
-            fired: cmds.to_vec(),
-            ..Default::default()
-        }
+    /// Both mouse bits held by their Lua Starts, the both-button run: MOVEANDSTEER's body
+    /// (`Bindings.xml:3-11`) runs `CameraOrSelectOrMoveStart` and `TurnOrActionStart`.
+    pub(crate) fn steering(&self) -> bool {
+        self.pressed(Input::TurnOrAction) && self.pressed(Input::CameraOrSelectOrMove)
+    }
+    /// [`Self::steering`] began this frame.
+    pub(crate) fn steering_began(&self) -> bool {
+        self.steering()
+            && (self.just_pressed(Input::TurnOrAction)
+                || self.just_pressed(Input::CameraOrSelectOrMove))
     }
 }
 
@@ -159,58 +146,38 @@ impl Plugin for BindingsPlugin {
             .add_systems(
                 Update,
                 (
-                    // The registry and both sets are seeded at the VM's birth, not here:
-                    // `seed_bindings_for_vm` runs in `load_ingame_ui_on_world_entry`, before
-                    // FrameXML and every addon.
+                    // The key sets are seeded at the VM's birth, not here: `seed_bindings_for_vm`
+                    // runs in `load_ingame_ui_on_world_entry`, before FrameXML and every addon;
+                    // the commands come with the load.
                     (sync_dispatch, latch_and_dispatch)
                         .chain()
                         .in_set(crate::ui_script::UiInput)
                         .in_set(BindingSet)
                         .in_set(InWorldGated),
-                    // After the tick: the requests are Lua's own (`SaveBindings`, `RunBinding`),
-                    // queued by handlers the tick dispatched, and a save must not wait a frame.
+                    // After the tick: the requests are Lua's own (`SaveBindings`), queued by
+                    // handlers the tick dispatched, and a save must not wait a frame.
                     drain_binding_requests.after(crate::ui_script::UiInput),
                 ),
             );
     }
 }
 
-/// The registry as the engine table's registration payload, for the boot seed and the capture
-/// fixtures.
-pub(crate) fn registry_commands() -> Vec<KeybindCommand> {
-    SPECS
-        .iter()
-        .map(|s| KeybindCommand {
-            name: s.name,
-            category: s.category,
-            run_on_up: s.run_on_up(),
-            default1: s.d1,
-            default2: s.d2,
-        })
-        .collect()
-}
-
-/// Seed the keybinding table at the VM's birth, before any interface file runs: the command
-/// registry, the account set, and the character's set if it has one.
+/// Seed the key sets at the VM's birth, before any interface file runs: the defaults off the
+/// player's chain (`WTF\DefaultBindings.wtf`), the account set, and the character's set if it has
+/// one. The keys are their own table, so a command a later file declares finds its keys there,
+/// and stock `ActionButton_OnLoad` paints its hotkey corner from `GetBindingKey` at load.
 ///
-/// Order matters, and is the reference's: stock `ActionButton_OnLoad` paints its hotkey corner
-/// from `GetBindingKey` at load, an addon's `SetBinding` on a stock command needs the command
-/// registered, and the registry must hold the low indices the Key Bindings window walks.
-/// `seed_binding_set` keeps the diff by name, so a stored addon row binds when the addon
-/// registers it later.
+/// The reference reads the defaults later in `UI_Init` (`0x4b62b0` at `0x4900c7`); here they are
+/// read first because the stored sets are diffs against them ([`store`]'s deviation), and nothing
+/// reads set 0 before `LoadBindings(0)`.
 pub(crate) fn seed_bindings_for_vm(world: &mut World, script: &mut UiScript) {
-    script.register_bindings(&registry_commands());
+    let defaults = crate::ui_script::default_bindings();
+    script.set_default_bindings(defaults);
+    let defaults = script.default_bindings();
     let account = crate::local_state::bindings_account_path();
     let overrides = read_diff(&account).unwrap_or_default();
-    script.seed_binding_set(1, Some(store::resolve(&overrides)));
+    script.seed_binding_set(1, Some(store::resolve(&overrides, &defaults)));
     script.load_binding_set(1);
-    // `SPECS` and `ABSENT` together are the client's whole 1.12 command surface.
-    info!(
-        "bindings: {} of {} 1.12 commands registered ({} recorded absent)",
-        SPECS.len(),
-        SPECS.len() + commands::ABSENT.len(),
-        commands::ABSENT.len()
-    );
 
     // The character's own set: its file existing makes it the active set, the reference's rule.
     // No roster identity (a rigged or capture run) leaves set 2 unseeded.
@@ -222,7 +189,7 @@ pub(crate) fn seed_bindings_for_vm(world: &mut World, script: &mut UiScript) {
         .and_then(|(realm, name)| crate::local_state::bindings_character_path(realm, name));
     match read_diff(&character) {
         Some(overrides) => {
-            script.seed_binding_set(2, Some(store::resolve(&overrides)));
+            script.seed_binding_set(2, Some(store::resolve(&overrides, &defaults)));
             script.load_binding_set(2);
             info!("bindings: character-specific set loaded");
         }
@@ -250,34 +217,13 @@ fn read_diff(path: &Option<std::path::PathBuf>) -> Option<Vec<(String, Vec<Strin
     }
 }
 
-/// Drain the VM's binding requests. `Save` (`SaveBindings`) writes the set's diff; saving the
-/// account set deletes the character file. `Run` is `RunBinding(name)`, which stock keyboard
-/// frames use to pass a chord back to its binding (`CinematicFrame.xml:42`,
-/// `WorldMapFrame.xml:629`).
+/// Drain the VM's binding requests: `SaveBindings` writes the set's diff; saving the account set
+/// deletes the character file.
 fn drain_binding_requests(script: Option<NonSendMut<UiScript>>, files: Res<BindingFiles>) {
     let Some(mut script) = script else { return };
     for req in script.take_keybind_requests() {
-        // Only the Lua-bodied kinds can run this way: a `Held`/`Host` action is engine state a Lua
-        // call cannot assert. The stock callers run `SCREENSHOT` and `TOGGLEWORLDMAP`, both
-        // `Kind::Edge`.
-        let which = match req {
-            KeybindRequest::Save(which) => which,
-            KeybindRequest::Run(name) => {
-                match SPECS.iter().find(|s| s.name == name).map(|s| &s.kind) {
-                    Some(Kind::Edge(lua)) | Some(Kind::EdgeUpDown(lua, _)) => {
-                        let lua = *lua;
-                        if let Err(e) = script.run(lua) {
-                            warn!("bindings(RunBinding {name}): {e}");
-                        }
-                    }
-                    Some(_) => warn!("RunBinding({name}): a held/engine action has no body to run"),
-                    None => warn!("RunBinding({name}): no such command"),
-                }
-                continue;
-            }
-        };
-        let snapshot = script.keybind_snapshot();
-        let text = store::to_diff(&snapshot);
+        let KeybindRequest::Save(which) = req;
+        let text = store::to_diff(&script.keybind_snapshot(), &script.default_bindings());
         let path = match which {
             1 => &files.account,
             2 => &files.character,
@@ -300,8 +246,9 @@ fn drain_binding_requests(script: Option<NonSendMut<UiScript>>, files: Res<Bindi
     }
 }
 
-/// Rebuild the dispatch map when the engine table moved (a rebind, a set switch, the seed), and
-/// fire `UPDATE_BINDINGS` so the Lua consumers (the action bar's hotkey corners) repaint.
+/// Rebuild the dispatch map when the engine table moved (a rebind, a set switch, the seed, a
+/// load), and fire `UPDATE_BINDINGS` so the Lua consumers (the action bar's hotkey corners)
+/// repaint.
 fn sync_dispatch(script: Option<NonSendMut<UiScript>>, mut dispatch: ResMut<BindingDispatch>) {
     let Some(mut script) = script else { return };
     let generation = script.keybinds_generation();
@@ -310,43 +257,14 @@ fn sync_dispatch(script: Option<NonSendMut<UiScript>>, mut dispatch: ResMut<Bind
     }
     *dispatch.seen_generation.get(&script) = Some(generation);
     dispatch.map.clear();
-    // The addon table is where names the registry does not know resolve.
-    let addons = script.addon_binding_bodies();
-    let mut by_name: std::collections::HashMap<&str, Bound> = SPECS
-        .iter()
-        .enumerate()
-        .map(|(i, s)| (s.name, Bound::Spec(Cmd(i as u16))))
-        .collect();
-    for (i, a) in addons.iter().enumerate() {
-        // A registry name is never overwritten. `try_from`, because a wrapped index would
-        // dispatch the wrong body rather than none.
-        let Ok(i) = u16::try_from(i) else { break };
-        by_name.entry(a.name.as_str()).or_insert(Bound::Addon(i));
-    }
-    for (name, keys) in script.keybind_snapshot() {
-        let Some(&bound) = by_name.get(name.as_str()) else {
-            // A name with no home: an uninstalled addon's row (kept on purpose) or a 1.12
-            // command benilla does not implement, which `ABSENT` explains in the log.
-            if let Some(absent) = commands::ABSENT.iter().find(|a| a.name == name) {
-                if !keys.is_empty() {
-                    warn!(
-                        "bindings: {name} is bound to {keys:?} but benilla does not implement it \u{2014} {}",
-                        absent.why
-                    );
-                }
+    for (key, command) in script.binding_keys() {
+        match Chord::parse(&key) {
+            Some(ch) => {
+                dispatch.map.insert(ch, command);
             }
-            continue;
-        };
-        for key in keys {
-            match Chord::parse(&key) {
-                Some(ch) => {
-                    dispatch.map.insert(ch, bound);
-                }
-                None => warn!("bindings: {name}: unpressable chord '{key}' (unknown token)"),
-            }
+            None => warn!("bindings: {command}: unpressable chord '{key}' (unknown token)"),
         }
     }
-    dispatch.addons = addons;
     script.fire_event("UPDATE_BINDINGS", vec![]);
 }
 
@@ -400,6 +318,7 @@ fn latch_and_dispatch(
     dispatch: Res<BindingDispatch>,
     mut state: ResMut<BindingsState>,
     mut same_vm: Local<crate::ui_script::VmMemo<bool>>,
+    mut notches: Local<WheelNotches>,
     mut focus_lost: MessageReader<bevy::input::keyboard::KeyboardFocusLost>,
     cover: Option<Res<crate::loading_screen::LoadingScreen>>,
 ) {
@@ -407,21 +326,26 @@ fn latch_and_dispatch(
     state.fired.clear();
     state.amounts.clear();
 
-    // Deviation: latches die with the VM that made them, because a latch indexes that VM's
-    // dispatch table and releasing it against a new one would run the wrong addon's up-half. The
+    // Deviation: latches die with the VM that made them, because a latch names a command of that
+    // VM's table and releasing it against a new one would run another load's up-half. The
     // reference keeps a held key running through `ReloadUI`; here it re-latches on its next press.
-    // A Lua Start dies with it too, as a key would.
+    // The held bits die with it, as the key's Stop would have cleared them.
     if let Some(script) = script.as_ref() {
         if same_vm.claim(script) {
             state.latched.clear();
-            state.script_held.clear();
+            state.held.clear();
         }
     }
-    // The reference's two bulk clears reach a Lua Start as they reach a held key: the window
-    // deactivate (`0x514490`, direction bits only; autorun is `Player`'s) and the world enter
-    // behind the loading cover (`0x5144c0`). A key's latch meets them in the stuck-latch sweep.
-    if focus_lost.read().count() > 0 || cover.is_some_and(|c| c.covering()) {
-        state.script_held.clear();
+    // The reference's two bulk clears: the window deactivate (`0x514490`'s `and eax,0xfffff00f`,
+    // the direction bits only, so the mouse pair and autorun survive) and the world enter behind
+    // the loading cover (`0x5144c0`), which clears every bit. A key's latch meets them in the
+    // stuck-latch sweep too, whose up-half runs the Stop.
+    if cover.is_some_and(|c| c.covering()) {
+        state.held.clear();
+    } else if focus_lost.read().count() > 0 {
+        state
+            .held
+            .retain(|&i| matches!(i, Input::TurnOrAction | Input::CameraOrSelectOrMove));
     }
     // Lua's binding calls made since the last pass, before this frame's keys.
     if let Some(s) = script.as_mut() {
@@ -438,15 +362,6 @@ fn latch_and_dispatch(
     // affordances: a player build keeps the reference's `CTRL-SHIFT-P` fallback to `SHIFT-P`.
     let dev_plane = ctrl && shift && !alt && crate::run_mode::dev_affordances();
 
-    // A binding body runs as `ExecuteBinding` runs it, so the movement functions' gate passes.
-    let run_lua = |script: &mut Option<NonSendMut<UiScript>>, lua: &str, tag: &str| {
-        if let Some(s) = script.as_mut() {
-            if let Err(e) = s.run_binding(lua) {
-                warn!("bindings({tag}): {e}");
-            }
-        }
-    };
-
     // ── Who owns this frame's keys ── a focused EditBox eats every key while it holds focus; a
     // shown keyboard frame ate the keys in `capture.consumed`. Both suppress a press and nothing
     // else: in the reference a focused box makes the movement handlers no-ops, so the direction
@@ -461,8 +376,8 @@ fn latch_and_dispatch(
         .down
         .retain(|&kc| physically_down(BindKey::Key(kc), &keys, &buttons));
 
-    // ── Keyboard ── press edges latch or fire, gated on ownership and the capture arm; release
-    // edges unlatch and fire the `runOnUp` up-half.
+    // ── Keyboard ── press edges run their command, gated on ownership and the capture arm;
+    // release edges unlatch and run the `runOnUp` up-half.
     let typing = capture.typing;
     for ev in keyboard.read() {
         let key = chord::normalize_key(ev.key_code);
@@ -490,7 +405,7 @@ fn latch_and_dispatch(
                 if (typing && !arrow_exempt) || eaten || sup || repeat {
                     continue;
                 }
-                if state.latched.iter().any(|&(k, _)| k == BindKey::Key(key)) {
+                if state.latched.iter().any(|(k, _)| *k == BindKey::Key(key)) {
                     continue; // already latched (missed release would double-latch)
                 }
                 let chord = Chord {
@@ -499,26 +414,13 @@ fn latch_and_dispatch(
                     shift,
                     key: BindKey::Key(key),
                 };
-                if let Some(bound) = dispatch.resolve(chord, dev_plane) {
-                    press(
-                        &mut state,
-                        &mut script,
-                        run_lua,
-                        &dispatch,
-                        bound,
-                        BindKey::Key(key),
-                    );
+                if let Some(command) = dispatch.resolve(chord, dev_plane) {
+                    press(&mut state, &mut script, command, BindKey::Key(key));
                 }
             }
             ButtonState::Released => {
                 state.down.retain(|&kc| kc != key);
-                release(
-                    &mut state,
-                    &mut script,
-                    run_lua,
-                    &dispatch,
-                    BindKey::Key(key),
-                );
+                release(&mut state, &mut script, BindKey::Key(key));
             }
         }
     }
@@ -535,7 +437,7 @@ fn latch_and_dispatch(
         if buttons.just_pressed(b)
             && !sup
             && hover.0.is_none()
-            && !state.latched.iter().any(|&(k, _)| k == BindKey::Mouse(b))
+            && !state.latched.iter().any(|(k, _)| *k == BindKey::Mouse(b))
         {
             let chord = Chord {
                 alt,
@@ -543,40 +445,28 @@ fn latch_and_dispatch(
                 shift,
                 key: BindKey::Mouse(b),
             };
-            if let Some(bound) = dispatch.resolve(chord, false) {
-                press(
-                    &mut state,
-                    &mut script,
-                    run_lua,
-                    &dispatch,
-                    bound,
-                    BindKey::Mouse(b),
-                );
+            if let Some(command) = dispatch.resolve(chord, false) {
+                press(&mut state, &mut script, command, BindKey::Mouse(b));
             }
         }
         if buttons.just_released(b) {
-            release(
-                &mut state,
-                &mut script,
-                run_lua,
-                &dispatch,
-                BindKey::Mouse(b),
-            );
+            release(&mut state, &mut script, BindKey::Mouse(b));
         }
     }
 
-    // ── Wheel ── a notch is a press and its release, back to back: the reference hands one chord
-    // to `CBindings::ExecuteBinding` with `isDown=1` (`0x483d6f`) then `isDown=0` (`0x483d82`).
-    // A `runOnUp` command runs both halves in the frame; a plain one's up leg is the
-    // `RunCommand` (`0x4b7b50`) no-op.
+    // ── Wheel ── each notch is a press and its release, back to back: the reference hands one
+    // chord to `CBindings::ExecuteBinding` with `isDown=1` (`0x483d6f`) then `isDown=0`
+    // (`0x483d82`) per wheel message. A `runOnUp` command runs both halves; a plain one's up leg is
+    // the `RunCommand` (`0x4b7bf1`) no-op. A trackpad's fractional lines carry to whole notches.
     let wheel = wheel_lines(scroll.unit, scroll.delta.y);
     // Over chrome only (`PointerOverUiPanel`): the wheel still zooms with the cursor on a
     // nameplate, a mouse-enabled widget but not a panel.
     if wheel != 0.0 && !sup && !over_ui.0 {
-        let (key, amount) = if wheel > 0.0 {
-            (BindKey::WheelUp, wheel)
+        let steps = notches.feed(wheel);
+        let key = if steps > 0 {
+            BindKey::WheelUp
         } else {
-            (BindKey::WheelDown, -wheel)
+            BindKey::WheelDown
         };
         let chord = Chord {
             alt,
@@ -584,38 +474,26 @@ fn latch_and_dispatch(
             shift,
             key,
         };
-        match dispatch.resolve(chord, false) {
-            // A host command takes the notch's analog magnitude (the camera zoom), which `press`
-            // cannot carry: it spends the 1.0 key step. It has no release half.
-            Some(Bound::Spec(cmd)) if matches!(SPECS[cmd.0 as usize].kind, Kind::Host) => {
-                state.fired.push(cmd);
-                state.amounts.push((cmd, amount));
+        if let Some(command) = dispatch.resolve(chord, false) {
+            for _ in 0..steps.unsigned_abs() {
+                press(&mut state, &mut script, command, key);
+                release(&mut state, &mut script, key);
             }
-            // Everything else is the reference's pair: `Kind::EdgeUpDown` runs both halves (a
-            // wheel-bound action button casts), an addon's `runOnUp` body runs down then up, and
-            // `Kind::Held` sets and clears in the one tick, as the reference's movement bit does.
-            Some(bound) => {
-                press(&mut state, &mut script, run_lua, &dispatch, bound, key);
-                release(&mut state, &mut script, run_lua, &dispatch, key);
-            }
-            None => {}
         }
     }
 
     // ── The stuck-latch sweep ── a release the window never saw: a latch whose base key reads up
-    // unlatches now and fires its up-half. The reference's two bulk clears land here, since bevy
-    // zeroes `ButtonInput` for both: OS window deactivate (`0x514490`'s `and eax,0xfffff00f`, the
-    // direction bits released while autorun survives) and the loading cover
-    // (`loading_screen::input`'s `swallow`, the world-enter `0x5144c0`, which clears everything).
-    // UI keyboard focus never reaches here.
+    // unlatches now and runs its up-half. The reference's two bulk clears land here too, since
+    // bevy zeroes `ButtonInput` for both (see the clears above). UI keyboard focus never reaches
+    // here.
     let mut stuck: Vec<BindKey> = Vec::new();
-    for &(k, _) in &state.latched {
-        if !physically_down(k, &keys, &buttons) && !stuck.contains(&k) {
-            stuck.push(k);
+    for (k, _) in &state.latched {
+        if !physically_down(*k, &keys, &buttons) && !stuck.contains(k) {
+            stuck.push(*k);
         }
     }
     for k in stuck {
-        release(&mut state, &mut script, run_lua, &dispatch, k);
+        release(&mut state, &mut script, k);
     }
 
     // The calls this pass's binding bodies made act this frame, as the reference's return from
@@ -623,27 +501,6 @@ fn latch_and_dispatch(
     if let Some(s) = script.as_mut() {
         let inputs = s.take_binding_input();
         state.apply_script_input(inputs);
-    }
-}
-
-#[cfg(test)]
-impl BindingDispatch {
-    /// A dispatch seeded from the registry defaults, the no-VM test seam; no addon bindings.
-    fn test_defaults() -> Self {
-        let mut map = std::collections::HashMap::new();
-        for (i, s) in SPECS.iter().enumerate() {
-            for d in [s.d1, s.d2].into_iter().flatten() {
-                map.insert(
-                    Chord::parse(d).expect("default parses"),
-                    Bound::Spec(Cmd(i as u16)),
-                );
-            }
-        }
-        Self {
-            map,
-            addons: Vec::new(),
-            seen_generation: crate::ui_script::VmMemo::default(),
-        }
     }
 }
 
@@ -666,104 +523,37 @@ fn physically_down(
     }
 }
 
-/// One matching press: latch the held kinds, run or fire by kind.
+/// One matching press: the command's body with `keystate = "down"`, and a latch on its base key
+/// so the release can run the up-half.
 fn press(
     state: &mut BindingsState,
     script: &mut Option<NonSendMut<UiScript>>,
-    run_lua: impl Fn(&mut Option<NonSendMut<UiScript>>, &str, &str),
-    dispatch: &BindingDispatch,
-    bound: Bound,
+    command: &str,
     key: BindKey,
 ) {
-    let cmd = match bound {
-        Bound::Spec(cmd) => cmd,
-        // Run the body with `keystate = "down"`; latch only if its `runOnUp` asks for the
-        // release half.
-        Bound::Addon(i) => {
-            if let Some(a) = dispatch.addons.get(i as usize) {
-                run_addon(script, a, "down");
-                if a.run_on_up {
-                    state.latched.push((key, bound));
-                }
-            }
-            return;
-        }
-    };
-    let spec = &SPECS[cmd.0 as usize];
-    match &spec.kind {
-        Kind::Held => {
-            if !state.pressed(cmd) {
-                state.just.push(cmd);
-            }
-            state.latched.push((key, bound));
-        }
-        Kind::Edge(lua) => run_lua(script, lua, spec.name),
-        Kind::EdgeUpDown(down, _) => {
-            run_lua(script, down, spec.name);
-            state.latched.push((key, bound));
-        }
-        Kind::Host => {
-            state.fired.push(cmd);
-            if !state.pressed(cmd) {
-                state.just.push(cmd);
-            }
-            state.amounts.push((cmd, 1.0));
+    if let Some(s) = script.as_mut() {
+        if let Err(e) = s.execute_binding(command, true) {
+            warn!("bindings({command}): {e}");
         }
     }
+    state.latched.push((key, command.to_owned()));
 }
 
-/// A base key's release: drop its latch and fire a `runOnUp` up-half, even while typing (the
-/// reference completes a pressed binding's release regardless of focus).
-fn release(
-    state: &mut BindingsState,
-    script: &mut Option<NonSendMut<UiScript>>,
-    run_lua: impl Fn(&mut Option<NonSendMut<UiScript>>, &str, &str),
-    dispatch: &BindingDispatch,
-    key: BindKey,
-) {
+/// A base key's release: drop its latch and run the command's `runOnUp` up-half, even while
+/// typing (the reference completes a pressed binding's release regardless of focus).
+fn release(state: &mut BindingsState, script: &mut Option<NonSendMut<UiScript>>, key: BindKey) {
     let mut i = 0;
     while i < state.latched.len() {
         if state.latched[i].0 == key {
-            match state.latched.remove(i).1 {
-                Bound::Spec(cmd) => match &SPECS[cmd.0 as usize].kind {
-                    Kind::EdgeUpDown(_, up) => run_lua(script, up, SPECS[cmd.0 as usize].name),
-                    Kind::Held => state.release_script_held(cmd),
-                    _ => {}
-                },
-                // The same body again, with `keystate = "up"`.
-                Bound::Addon(a) => {
-                    if let Some(a) = dispatch.addons.get(a as usize) {
-                        run_addon(script, a, "up");
-                    }
+            let (_, command) = state.latched.remove(i);
+            if let Some(s) = script.as_mut() {
+                if let Err(e) = s.execute_binding(&command, false) {
+                    warn!("bindings({command}): {e}");
                 }
             }
         } else {
             i += 1;
         }
-    }
-}
-
-/// Run one addon binding's body with the `keystate` global set for the call and restored after.
-///
-/// A `runOnUp` body is one chunk run on press and release, forking on the bare global `keystate`
-/// (`Bindings.xml:4`); it is set in `_G`, not prepended, so the addon's line numbers hold.
-/// `keystate` is absent from the 1.12 client's in-world `_G` (`reference/1.12-globals.tsv`), so
-/// the reference sets it transiently, as it does `this`/`arg1` (`0x703f50` → `0x704f10`).
-/// Save-and-restore because bodies nest: an inner binding must not clear the outer `keystate`.
-fn run_addon(script: &mut Option<NonSendMut<UiScript>>, bind: &AddonBindingBody, keystate: &str) {
-    let Some(s) = script.as_mut() else { return };
-    let globals = s.lua().globals();
-    // `Option<String>`, since benilla-app does not depend on mlua; `None` converts back to nil.
-    let prior: Option<String> = globals.get("keystate").unwrap_or(None);
-    if let Err(e) = globals.set("keystate", keystate) {
-        warn!("bindings({}): setting keystate: {e}", bind.name);
-        return;
-    }
-    if let Err(e) = s.run_binding(&bind.body) {
-        warn!("bindings({}): {e}", bind.name);
-    }
-    if let Err(e) = s.lua().globals().set("keystate", prior) {
-        warn!("bindings({}): restoring keystate: {e}", bind.name);
     }
 }
 
@@ -774,18 +564,53 @@ mod tests {
 
     use super::*;
 
-    /// A minimal app around [`latch_and_dispatch`] with the registry defaults and no VM, fed real
-    /// input events through `InputPlugin` as winit feeds them.
+    /// A core `Bindings.xml` in the reference's shapes over the real binding functions, and bodies
+    /// that count their runs where the stock one would open a window; plus its defaults.
+    const CORE: &str = r#"<Bindings>
+        <Binding name="MOVEANDSTEER" runOnUp="true" header="MOVEMENT">
+            if keystate == "down" then CameraOrSelectOrMoveStart() TurnOrActionStart()
+            else CameraOrSelectOrMoveStop() TurnOrActionStop() end
+        </Binding>
+        <Binding name="MOVEFORWARD" runOnUp="true">
+            if keystate == "down" then MoveForwardStart() else MoveForwardStop() end
+        </Binding>
+        <Binding name="TURNLEFT" runOnUp="true">
+            if keystate == "down" then TurnLeftStart() else TurnLeftStop() end
+        </Binding>
+        <Binding name="JUMP">Jump()</Binding>
+        <Binding name="SITORSTAND">SitOrStand()</Binding>
+        <Binding name="TOGGLESHEATH">ToggleSheath()</Binding>
+        <Binding name="TOGGLEAUTORUN">ToggleAutoRun()</Binding>
+        <Binding name="ACTIONBUTTON1" runOnUp="true" header="ACTIONBAR">AB1 = keystate</Binding>
+        <Binding name="BONUSACTIONBUTTON1" runOnUp="true">PET1 = keystate</Binding>
+        <Binding name="BONUSACTIONBUTTON10" runOnUp="true">PET10 = keystate</Binding>
+        <Binding name="TARGETNEARESTENEMY" header="TARGETING">TABS = (TABS or 0) + 1</Binding>
+        <Binding name="TARGETPREVIOUSENEMY">STABS = (STABS or 0) + 1</Binding>
+        <Binding name="TOGGLECHARACTER3" header="INTERFACE">PETPAPER = 1</Binding>
+        <Binding name="TOGGLEUI" header="MISC">UITOGGLES = (UITOGGLES or 0) + 1</Binding>
+        <Binding name="CAMERAZOOMIN" header="CAMERA">CameraZoomIn(1.0)</Binding>
+        <Binding name="CAMERAZOOMOUT">CameraZoomOut(1.0)</Binding>
+    </Bindings>"#;
+    const DEFAULTS: &str = "bind BUTTON3 MOVEANDSTEER\r\nbind W MOVEFORWARD\r\nbind UP MOVEFORWARD\r\n\
+        bind A TURNLEFT\r\nbind LEFT TURNLEFT\r\nbind SPACE JUMP\r\nbind X SITORSTAND\r\n\
+        bind Z TOGGLESHEATH\r\nbind NUMLOCK TOGGLEAUTORUN\r\nbind BUTTON4 TOGGLEAUTORUN\r\n\
+        bind 1 ACTIONBUTTON1\r\nbind CTRL-1 BONUSACTIONBUTTON1\r\nbind CTRL-0 BONUSACTIONBUTTON10\r\n\
+        bind TAB TARGETNEARESTENEMY\r\nbind SHIFT-TAB TARGETPREVIOUSENEMY\r\n\
+        bind SHIFT-P TOGGLECHARACTER3\r\nbind ALT-Z TOGGLEUI\r\n\
+        bind MOUSEWHEELUP CAMERAZOOMIN\r\nbind MOUSEWHEELDOWN CAMERAZOOMOUT\r\n";
+
+    /// A VM with [`CORE`] declared and [`DEFAULTS`] live, as a first login has them.
+    fn core_script() -> UiScript {
+        let mut script = UiScript::new().expect("VM");
+        script.set_default_bindings(benilla_ui::script::keybind::parse_bindings_wtf(DEFAULTS));
+        script.load_binding_set(1);
+        script.register_bindings(&benilla_ui::bindings_xml::parse(CORE).expect("well-formed"));
+        script
+    }
+
+    /// The dispatch harness over [`core_script`].
     fn harness() -> App {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, bevy::input::InputPlugin))
-            .init_resource::<UiKeyboardCapture>()
-            .init_resource::<PlayerUiHover>()
-            .init_resource::<PointerOverUiPanel>()
-            .init_resource::<BindingsState>()
-            .insert_resource(BindingDispatch::test_defaults())
-            .add_systems(Update, latch_and_dispatch);
-        app
+        vm_harness(core_script())
     }
 
     fn key(app: &mut App, k: KeyCode, state: bevy::input::ButtonState, repeat: bool) {
@@ -810,6 +635,21 @@ mod tests {
     }
     fn state(app: &App) -> &BindingsState {
         app.world().resource::<BindingsState>()
+    }
+    fn mouse(app: &mut App, button: MouseButton, state: bevy::input::ButtonState) {
+        app.world_mut().write_message(MouseButtonInput {
+            button,
+            state,
+            window: Entity::PLACEHOLDER,
+        });
+    }
+    fn wheel(app: &mut App, y: f32) {
+        app.world_mut().write_message(MouseWheel {
+            unit: MouseScrollUnit::Line,
+            x: 0.0,
+            y,
+            window: Entity::PLACEHOLDER,
+        });
     }
 
     /// What a keyboard frame ate this frame. Set, not pushed: `feed_ui_input` rewrites the list
@@ -865,16 +705,20 @@ mod tests {
             .expect("eval")
     }
 
-    /// An addon's `runOnUp` body is one chunk run twice, `keystate` "down" then "up"; our own
-    /// registry holds two strings ([`Kind::EdgeUpDown`]) instead.
-    #[test]
-    fn an_addon_binding_fires_its_lua_and_runs_again_on_release_when_it_asked_to() {
-        let mut script = UiScript::new().expect("VM");
-        script.register_bindings(&registry_commands());
+    fn with_addon(bindings: &str) -> UiScript {
+        let mut script = core_script();
         script.register_addon_bindings(
             "ProbeAddon",
-            &benilla_ui::bindings_xml::parse(PROBE_BINDINGS).expect("well-formed"),
+            &benilla_ui::bindings_xml::parse(bindings).expect("well-formed"),
         );
+        script
+    }
+
+    /// A `runOnUp` body is one chunk run twice, `keystate` "down" then "up"; a plain one runs on
+    /// the press alone. The core's and an addon's rows dispatch the same way.
+    #[test]
+    fn a_binding_fires_its_lua_and_runs_again_on_release_when_it_asked_to() {
+        let script = with_addon(PROBE_BINDINGS);
         // A 1.12 `<Binding>` ships no default chord, so an addon binding starts unbound.
         script
             .run(r#"SetBinding("J", "PROBEHOLD"); SetBinding("G", "PROBEEDGE")"#)
@@ -887,7 +731,7 @@ mod tests {
         assert_eq!(
             lua_count(&app, "PROBE_DOWN"),
             1,
-            "the press must reach the addon's body — this is the phase-4 bug"
+            "the press reaches the body"
         );
         assert_eq!(lua_str(&app, "PROBE_LAST"), "down");
         assert_eq!(
@@ -919,23 +763,14 @@ mod tests {
             "no runOnUp, no second run — an addon that toggled here would toggle back"
         );
 
-        // The registry dispatches unchanged beside them.
+        // The core's rows dispatch beside them.
         press_key(&mut app, KeyCode::KeyW);
         app.update();
-        assert!(state(&app).pressed(cmd::MOVE_FORWARD));
-        assert_eq!(
-            lua_count(&app, "PROBE_DOWN"),
-            1,
-            "a built-in press is nobody else's"
-        );
+        assert!(state(&app).pressed(Input::MoveForward));
+        assert_eq!(lua_count(&app, "PROBE_DOWN"), 1, "W is nobody else's");
 
-        // `keystate` does not outlive the call: the 1.12 client's in-world `_G` has none
-        // (`reference/1.12-globals.tsv`).
-        assert_eq!(
-            lua_str(&app, "tostring(keystate)"),
-            "nil",
-            "keystate must be restored after a binding body runs, not left standing in _G"
-        );
+        // `keystate` does not outlive the call: `RunCommand` sets it to nil (`0x4b7c42`).
+        assert_eq!(lua_str(&app, "tostring(keystate)"), "nil");
     }
 
     /// A focused EditBox swallows every key (the reference's handler returns 1 on every path,
@@ -951,7 +786,7 @@ mod tests {
         press_key(&mut app, KeyCode::ArrowLeft);
         app.update();
         assert!(
-            !state(&app).pressed(cmd::TURN_LEFT),
+            !state(&app).pressed(Input::TurnLeft),
             "an unflagged focused box eats the arrow"
         );
         release_key(&mut app, KeyCode::ArrowLeft);
@@ -964,7 +799,7 @@ mod tests {
         press_key(&mut app, KeyCode::ArrowLeft);
         app.update();
         assert!(
-            state(&app).pressed(cmd::TURN_LEFT),
+            state(&app).pressed(Input::TurnLeft),
             "a flagged box declines the arrow, so TURNLEFT runs"
         );
 
@@ -972,7 +807,7 @@ mod tests {
         press_key(&mut app, KeyCode::KeyW);
         app.update();
         assert!(
-            !state(&app).pressed(cmd::MOVE_FORWARD),
+            !state(&app).pressed(Input::MoveForward),
             "only the arrows are exempt — every other key a focused box still eats"
         );
     }
@@ -981,26 +816,21 @@ mod tests {
     /// direction bits rather than clearing them (`0x514490` is the OS window-deactivate clear).
     #[test]
     fn a_held_latch_rides_out_a_box_taking_focus_and_still_releases() {
-        let mut script = UiScript::new().expect("VM");
-        script.register_bindings(&registry_commands());
-        script.register_addon_bindings(
-            "ProbeAddon",
-            &benilla_ui::bindings_xml::parse(PROBE_BINDINGS).expect("well-formed"),
-        );
+        let script = with_addon(PROBE_BINDINGS);
         script.run(r#"SetBinding("J", "PROBEHOLD")"#).expect("bind");
         let mut app = vm_harness(script);
 
         press_key(&mut app, KeyCode::KeyW);
         press_key(&mut app, KeyCode::KeyJ);
         app.update();
-        assert!(state(&app).pressed(cmd::MOVE_FORWARD));
+        assert!(state(&app).pressed(Input::MoveForward));
         assert_eq!(lua_count(&app, "PROBE_DOWN"), 1);
 
         // A box takes focus; both latches ride it out.
         app.world_mut().resource_mut::<UiKeyboardCapture>().typing = true;
         app.update();
         assert!(
-            state(&app).pressed(cmd::MOVE_FORWARD),
+            state(&app).pressed(Input::MoveForward),
             "holding W and opening the chat box keeps you running"
         );
         assert_eq!(
@@ -1014,7 +844,7 @@ mod tests {
         release_key(&mut app, KeyCode::KeyJ);
         app.update();
         assert!(
-            !state(&app).pressed(cmd::MOVE_FORWARD),
+            !state(&app).pressed(Input::MoveForward),
             "releasing W stops you, while typing exactly as otherwise"
         );
         assert_eq!(
@@ -1024,19 +854,17 @@ mod tests {
         );
     }
 
-    /// The whole wheel-bind path: the real Keybindings page, a capsule armed by a click, a notch
-    /// over the page (its OnMouseWheel, as 1.12's window binds it), then the bound chord
-    /// dispatching.
+    /// The whole wheel-bind path: the real Keybindings page over the stock commands, a capsule
+    /// armed by a click, a notch over the page (its OnMouseWheel, as 1.12's window binds it), then
+    /// the bound chord dispatching the stock JUMP body.
     #[test]
     fn a_wheel_notch_binds_through_the_real_page_and_then_dispatches() {
         benilla_formats::wow_data_or_skip!();
-        let by_name =
-            |n: &str| Cmd(SPECS.iter().position(|s| s.name == n).expect("registered") as u16);
         let mut s = crate::ui_script::keybindings_tests::harness();
         crate::ui_script::keybindings_tests::on_page(&mut s);
         const ROW: &str = "BenillaOptionsFrameContainerBodyKeybindingsRow";
-        // Expand Movement and arm JUMP's first capsule: JUMP is not `runOnUp`, so the reference
-        // accepts the wheel on it.
+        // Expand Movement and arm JUMP's first capsule: the reference accepts the wheel on any
+        // command.
         s.run(&format!("{ROW}1Header:Click()")).expect("expand");
         s.run(&format!("{ROW}9Key1Button:Click()")).expect("select");
         assert_eq!(
@@ -1066,47 +894,28 @@ mod tests {
         let mut app = vm_harness(s);
 
         // The bound chord now dispatches: the next notch jumps rather than binding.
-        app.world_mut().write_message(MouseWheel {
-            unit: MouseScrollUnit::Line,
-            x: 0.0,
-            y: 1.0,
-            window: Entity::PLACEHOLDER,
-        });
+        wheel(&mut app, 1.0);
         app.update();
-        assert!(state(&app).fired(by_name("JUMP")));
+        assert!(state(&app).fired(Input::Jump));
         assert!(
-            !state(&app).fired(cmd::CAMERA_ZOOM_IN),
+            !state(&app).fired(Input::CameraZoomIn),
             "JUMP stole the wheel from the camera, the 1.12 steal law"
         );
     }
 
     /// A notch is a press and its release (`0x483d6f`, `0x483d82`), so a `runOnUp` binding on the
-    /// wheel runs both halves in one frame. Seeded through the stored set, since `SetBinding`
-    /// refuses a wheel chord on a press-and-release command: the hand-edited file case.
+    /// wheel runs both halves in one frame.
     #[test]
     fn a_wheel_notch_runs_both_halves_of_a_press_and_release_binding() {
-        let mut script = UiScript::new().expect("VM");
-        script.register_bindings(&registry_commands());
-        script.register_addon_bindings(
-            "ProbeAddon",
-            &benilla_ui::bindings_xml::parse(PROBE_BINDINGS).expect("well-formed"),
-        );
+        let mut script = with_addon(PROBE_BINDINGS);
         script.seed_binding_set(
             1,
-            Some(vec![(
-                "PROBEHOLD".to_string(),
-                vec!["MOUSEWHEELUP".to_string()],
-            )]),
+            Some(vec![("MOUSEWHEELUP".to_string(), "PROBEHOLD".to_string())]),
         );
         script.load_binding_set(1);
         let mut app = vm_harness(script);
 
-        app.world_mut().write_message(MouseWheel {
-            unit: MouseScrollUnit::Line,
-            x: 0.0,
-            y: 1.0,
-            window: Entity::PLACEHOLDER,
-        });
+        wheel(&mut app, 1.0);
         app.update();
         assert_eq!(lua_count(&app, "PROBE_DOWN"), 1, "the notch's press half");
         assert_eq!(
@@ -1130,29 +939,29 @@ mod tests {
         let mut app = harness();
         press_key(&mut app, KeyCode::Space);
         app.update();
-        assert!(state(&app).fired(cmd::JUMP), "the first press jumps");
+        assert!(state(&app).fired(Input::Jump), "the first press jumps");
 
-        // (1) JUMP never latches, so only the pressed-key set stops a jump per repeat.
+        // (1) Only the pressed-key set stops a jump per repeat.
         repeat_key(&mut app, KeyCode::Space);
         app.update();
         assert!(
-            !state(&app).fired(cmd::JUMP),
+            !state(&app).fired(Input::Jump),
             "a repeat of a key already down is not a press"
         );
 
         // Movement, so the resume below has something to observe.
         press_key(&mut app, KeyCode::KeyW);
         app.update();
-        assert!(state(&app).pressed(cmd::MOVE_FORWARD));
+        assert!(state(&app).pressed(Input::MoveForward));
 
         // (3) The window is deactivated: bevy empties the keyboard plane, which unlatches through
-        // the stuck-latch sweep and empties our pressed-key set.
+        // the stuck-latch sweep, whose up-half runs the Stop, and empties our pressed-key set.
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .release_all();
         app.update();
         assert!(
-            !state(&app).pressed(cmd::MOVE_FORWARD),
+            !state(&app).pressed(Input::MoveForward),
             "the deactivate releases the direction bits (0x514490)"
         );
 
@@ -1161,37 +970,25 @@ mod tests {
         repeat_key(&mut app, KeyCode::KeyW);
         app.update();
         assert!(
-            state(&app).pressed(cmd::MOVE_FORWARD),
+            state(&app).pressed(Input::MoveForward),
             "the first repeat after re-activation re-latches"
         );
     }
 
-    /// An addon's bindings that call the movement functions, in the reference's shapes: a
-    /// `runOnUp` pair like stock MOVEFORWARD, and a Start and a Stop alone.
+    /// An addon's bindings that call the movement functions: a Start and a Stop alone.
     const MOVE_BINDINGS: &str = r#"<Bindings>
-        <Binding name="PROBEFWD" runOnUp="true">
-            if ( keystate == "down" ) then MoveForwardStart(); else MoveForwardStop(); end
-        </Binding>
         <Binding name="PROBEGO">MoveForwardStart()</Binding>
         <Binding name="PROBESTOP">MoveForwardStop()</Binding>
     </Bindings>"#;
 
-    /// `MoveForwardStart`/`Stop` set and clear the bit the W key does (`0x515090(0x10, …)`): a
-    /// binding body's pair moves while held, a Start with no Stop keeps moving, a Stop clears it
-    /// whoever set it, and outside a binding body the gate (`0x494a50`) refuses the call.
+    /// `MoveForwardStart`/`Stop` set and clear the bit the W key's body does (`0x515090(0x10, …)`):
+    /// a Start with no Stop keeps moving, a Stop clears it whoever set it, and outside a binding
+    /// body the gate (`0x494a50`) refuses the call.
     #[test]
     fn the_movement_functions_drive_the_held_state_as_the_key_does() {
-        let mut script = UiScript::new().expect("VM");
-        script.register_bindings(&registry_commands());
-        script.register_addon_bindings(
-            "ProbeAddon",
-            &benilla_ui::bindings_xml::parse(MOVE_BINDINGS).expect("well-formed"),
-        );
+        let script = with_addon(MOVE_BINDINGS);
         script
-            .run(
-                r#"SetBinding("J", "PROBEFWD"); SetBinding("K", "PROBEGO");
-                   SetBinding("L", "PROBESTOP")"#,
-            )
+            .run(r#"SetBinding("K", "PROBEGO"); SetBinding("L", "PROBESTOP")"#)
             .expect("bind");
         let mut app = vm_harness(script);
         let tap = |app: &mut App, k: KeyCode| {
@@ -1202,59 +999,61 @@ mod tests {
         };
 
         // The `runOnUp` pair: forward from the press frame, stopped on the release.
-        press_key(&mut app, KeyCode::KeyJ);
+        press_key(&mut app, KeyCode::KeyW);
         app.update();
-        assert!(state(&app).pressed(cmd::MOVE_FORWARD));
+        assert!(state(&app).pressed(Input::MoveForward));
         assert!(
-            state(&app).just_pressed(cmd::MOVE_FORWARD),
+            state(&app).just_pressed(Input::MoveForward),
             "the press edge"
         );
         app.update();
-        assert!(state(&app).pressed(cmd::MOVE_FORWARD), "held across frames");
-        release_key(&mut app, KeyCode::KeyJ);
+        assert!(
+            state(&app).pressed(Input::MoveForward),
+            "held across frames"
+        );
+        assert!(!state(&app).just_pressed(Input::MoveForward));
+        release_key(&mut app, KeyCode::KeyW);
         app.update();
-        assert!(!state(&app).pressed(cmd::MOVE_FORWARD));
+        assert!(!state(&app).pressed(Input::MoveForward));
 
         // A Start with no Stop keeps moving past its key's release; the Stop ends it.
         tap(&mut app, KeyCode::KeyK);
         app.update();
         assert!(
-            state(&app).pressed(cmd::MOVE_FORWARD),
+            state(&app).pressed(Input::MoveForward),
             "no Stop, still moving"
         );
         tap(&mut app, KeyCode::KeyL);
-        assert!(!state(&app).pressed(cmd::MOVE_FORWARD));
+        assert!(!state(&app).pressed(Input::MoveForward));
 
         // W's release runs MOVEFORWARD's Stop, which clears a Lua Start too.
         tap(&mut app, KeyCode::KeyK);
         tap(&mut app, KeyCode::KeyW);
-        assert!(!state(&app).pressed(cmd::MOVE_FORWARD));
+        assert!(!state(&app).pressed(Input::MoveForward));
         // And a Stop clears the bit under a held key, which stays stopped until pressed again.
         press_key(&mut app, KeyCode::KeyW);
         app.update();
         tap(&mut app, KeyCode::KeyL);
-        assert!(!state(&app).pressed(cmd::MOVE_FORWARD));
+        assert!(!state(&app).pressed(Input::MoveForward));
         release_key(&mut app, KeyCode::KeyW);
         app.update();
 
         // Outside a binding body (a macro, `RunScript`, an addon's own code) nothing moves.
         app.world()
             .non_send_resource::<UiScript>()
-            .run("MoveForwardStart() Jump() ToggleAutoRun()")
+            .run("MoveForwardStart() Jump() ToggleAutoRun() RunBinding('MOVEFORWARD')")
             .expect("the calls answer");
         app.update();
-        assert!(!state(&app).pressed(cmd::MOVE_FORWARD));
-        assert!(!state(&app).fired(cmd::JUMP));
-        assert!(!state(&app).fired(cmd::TOGGLE_AUTORUN));
+        assert!(!state(&app).pressed(Input::MoveForward));
+        assert!(!state(&app).fired(Input::Jump));
+        assert!(!state(&app).fired(Input::ToggleAutoRun));
     }
 
-    /// The ungated one-shots fire their commands as the keys do: `CameraZoomIn(yards)` carries its
-    /// amount to the zoom (1.0 when absent, `0x50b42d`), `SitOrStand` and `ToggleSheath` fire.
+    /// The ungated one-shots fire as the keys do: `CameraZoomIn(yards)` carries its amount to the
+    /// zoom (1.0 when absent, `0x50b42d`), `SitOrStand` and `ToggleSheath` fire.
     #[test]
-    fn the_one_shot_functions_fire_their_commands() {
-        let mut script = UiScript::new().expect("VM");
-        script.register_bindings(&registry_commands());
-        let mut app = vm_harness(script);
+    fn the_one_shot_functions_fire_their_inputs() {
+        let mut app = harness();
         let run = |app: &mut App, lua: &str| {
             app.world()
                 .non_send_resource::<UiScript>()
@@ -1263,55 +1062,55 @@ mod tests {
             app.update();
         };
         run(&mut app, "CameraZoomIn(3)");
-        assert!(state(&app).fired(cmd::CAMERA_ZOOM_IN));
-        assert_eq!(state(&app).amount(cmd::CAMERA_ZOOM_IN), 3.0);
+        assert!(state(&app).fired(Input::CameraZoomIn));
+        assert_eq!(state(&app).amount(Input::CameraZoomIn), 3.0);
         run(&mut app, "CameraZoomOut()");
-        assert_eq!(state(&app).amount(cmd::CAMERA_ZOOM_OUT), 1.0);
+        assert_eq!(state(&app).amount(Input::CameraZoomOut), 1.0);
         assert_eq!(
-            state(&app).amount(cmd::CAMERA_ZOOM_IN),
+            state(&app).amount(Input::CameraZoomIn),
             0.0,
             "one frame only"
         );
         run(&mut app, "SitOrStand()");
-        assert!(state(&app).fired(cmd::SIT_OR_STAND));
+        assert!(state(&app).fired(Input::SitOrStand));
         run(&mut app, "ToggleSheath()");
-        assert!(state(&app).fired(cmd::TOGGLE_SHEATH));
-        assert!(!state(&app).fired(cmd::SIT_OR_STAND));
+        assert!(state(&app).fired(Input::ToggleSheath));
+        assert!(!state(&app).fired(Input::SitOrStand));
     }
 
+    /// Two keys on one command share its one bit: W and UP both run MOVEFORWARD's body, so the
+    /// second Start is no new edge (`0x514840`) and either release's Stop clears the bit whoever
+    /// set it (`0x514b70`).
     #[test]
-    fn held_commands_latch_across_frames_and_release_per_base_key() {
+    fn two_keys_on_one_command_share_its_bit_so_either_release_stops_it() {
         let mut app = harness();
-        // W and UP are both MOVEFORWARD: press both, release one, still moving.
         press_key(&mut app, KeyCode::KeyW);
         app.update();
-        assert!(state(&app).pressed(cmd::MOVE_FORWARD));
-        assert!(state(&app).just_pressed(cmd::MOVE_FORWARD), "press edge");
+        assert!(state(&app).pressed(Input::MoveForward));
+        assert!(state(&app).just_pressed(Input::MoveForward), "press edge");
         press_key(&mut app, KeyCode::ArrowUp);
         app.update();
-        assert!(state(&app).pressed(cmd::MOVE_FORWARD));
+        assert!(state(&app).pressed(Input::MoveForward));
         assert!(
-            !state(&app).just_pressed(cmd::MOVE_FORWARD),
+            !state(&app).just_pressed(Input::MoveForward),
             "second key on an already-held command is no new edge"
         );
         release_key(&mut app, KeyCode::KeyW);
         app.update();
-        assert!(state(&app).pressed(cmd::MOVE_FORWARD), "UP still holds it");
+        assert!(
+            !state(&app).pressed(Input::MoveForward),
+            "W's Stop clears the bit though UP is still down"
+        );
         release_key(&mut app, KeyCode::ArrowUp);
         app.update();
-        assert!(!state(&app).pressed(cmd::MOVE_FORWARD));
-        // A repeat press (held-key auto-repeat) neither re-latches nor re-edges.
+        assert!(!state(&app).pressed(Input::MoveForward));
+        // A repeat press (held-key auto-repeat) neither re-runs nor re-edges.
         press_key(&mut app, KeyCode::KeyW);
         app.update();
-        key(
-            &mut app,
-            KeyCode::KeyW,
-            bevy::input::ButtonState::Pressed,
-            true,
-        );
+        repeat_key(&mut app, KeyCode::KeyW);
         app.update();
-        assert!(state(&app).pressed(cmd::MOVE_FORWARD));
-        assert!(!state(&app).just_pressed(cmd::MOVE_FORWARD));
+        assert!(state(&app).pressed(Input::MoveForward));
+        assert!(!state(&app).just_pressed(Input::MoveForward));
     }
 
     /// The two-probe lookup: the exact chord, then one retry with the leftmost modifier dropped,
@@ -1319,129 +1118,124 @@ mod tests {
     #[test]
     fn a_press_probes_its_chord_then_falls_back_once() {
         // Shift held, W pressed: `SHIFT-W` is unbound, so the retry drops SHIFT and MOVEFORWARD
-        // latches (the reference's `strchr` step, `0x4b7990`).
+        // runs (the reference's `strchr` step, `0x4b7990`).
         let mut app = harness();
         press_key(&mut app, KeyCode::ShiftLeft);
         press_key(&mut app, KeyCode::KeyW);
         app.update();
         assert!(
-            state(&app).pressed(cmd::MOVE_FORWARD),
+            state(&app).pressed(Input::MoveForward),
             "an unbound SHIFT-W falls back to W, the modifier dropped"
         );
-        // It unlatches on the base key with the modifier still down (the reference replays the
-        // press-time chord at key-up, `0x483bd0`; latching the resolved command is equivalent).
+        // It releases on the base key with the modifier still down (the reference replays the
+        // press-time chord at key-up, `0x483bd0`).
         release_key(&mut app, KeyCode::KeyW);
         app.update();
-        assert!(!state(&app).pressed(cmd::MOVE_FORWARD));
+        assert!(!state(&app).pressed(Input::MoveForward));
         // Bare Z is the sheath toggle, ALT-Z is TOGGLEUI: the exact probe runs first, so a
         // fallback never overrides a real entry.
         let mut app = harness();
         press_key(&mut app, KeyCode::KeyZ);
         app.update();
-        assert!(state(&app).fired(cmd::TOGGLE_SHEATH));
-        assert!(!state(&app).fired(cmd::TOGGLE_UI));
+        assert!(state(&app).fired(Input::ToggleSheath));
+        assert_eq!(lua_count(&app, "UITOGGLES"), 0);
         release_key(&mut app, KeyCode::KeyZ);
         press_key(&mut app, KeyCode::AltLeft);
         press_key(&mut app, KeyCode::KeyZ);
         app.update();
-        assert!(
-            state(&app).fired(cmd::TOGGLE_UI),
+        assert_eq!(
+            lua_count(&app, "UITOGGLES"),
+            1,
             "ALT-Z is TOGGLEUI: the exact chord probes first"
         );
-        assert!(!state(&app).fired(cmd::TOGGLE_SHEATH));
-        // CTRL-ALT-Z fires nothing: the single strip drops the leftmost modifier (`ALT-CTRL-Z`
+        assert!(!state(&app).fired(Input::ToggleSheath));
+        // CTRL-ALT-Z runs nothing: the single strip drops the leftmost modifier (`ALT-CTRL-Z`
         // to `CTRL-Z`, unbound) and stops, never reaching ALT-Z or Z.
         release_key(&mut app, KeyCode::KeyZ);
         press_key(&mut app, KeyCode::ControlLeft);
         press_key(&mut app, KeyCode::KeyZ);
         app.update();
         assert!(
-            !state(&app).fired(cmd::TOGGLE_UI) && !state(&app).fired(cmd::TOGGLE_SHEATH),
+            lua_count(&app, "UITOGGLES") == 1 && !state(&app).fired(Input::ToggleSheath),
             "ALT-CTRL-Z probes CTRL-Z and stops — no second strip to ALT-Z or Z"
         );
         // TAB and SHIFT-TAB are both bound, so each resolves exactly.
         let mut app = harness();
         press_key(&mut app, KeyCode::Tab);
         app.update();
-        assert!(state(&app).fired(cmd::TARGET_NEAREST_ENEMY));
+        assert_eq!(lua_count(&app, "TABS"), 1);
         release_key(&mut app, KeyCode::Tab);
         press_key(&mut app, KeyCode::ShiftLeft);
         press_key(&mut app, KeyCode::Tab);
         app.update();
-        assert!(state(&app).fired(cmd::TARGET_PREVIOUS_ENEMY));
-        assert!(!state(&app).fired(cmd::TARGET_NEAREST_ENEMY));
+        assert_eq!(lua_count(&app, "STABS"), 1);
+        assert_eq!(lua_count(&app, "TABS"), 1);
         // Super is never a binding modifier: a Super-held press builds no chord, so no fallback.
         let mut app = harness();
         press_key(&mut app, KeyCode::SuperLeft);
         press_key(&mut app, KeyCode::KeyZ);
         app.update();
-        assert!(!state(&app).fired(cmd::TOGGLE_SHEATH));
+        assert!(!state(&app).fired(Input::ToggleSheath));
     }
 
-    /// The dev plane spends the keyboard's fallback probe and nothing else. Asserted on
-    /// [`BindingDispatch::resolve`] because the colliding command is `Kind::Edge`, which the no-VM
-    /// harness cannot observe.
+    /// The dev plane spends the keyboard's fallback probe and nothing else, asserted on
+    /// [`BindingDispatch::resolve`] itself.
     #[test]
     fn the_dev_plane_keeps_its_letters_without_stealing_bound_chords() {
-        let by_name =
-            |n: &str| Cmd(SPECS.iter().position(|s| s.name == n).expect("registered") as u16);
-        let pet_paper_doll = by_name("TOGGLECHARACTER3"); // SHIFT-P
-        let mut dispatch = BindingDispatch::test_defaults();
+        let mut app = harness();
+        app.update();
+        let mut dispatch = app
+            .world_mut()
+            .remove_resource::<BindingDispatch>()
+            .expect("synced");
         let plane_p = Chord::parse("CTRL-SHIFT-P").expect("parses");
         // Ctrl+Shift+P is the perf HUD's; off the plane it falls back onto SHIFT-P...
         assert_eq!(
             dispatch.resolve(plane_p, false),
-            Some(Bound::Spec(pet_paper_doll)),
+            Some("TOGGLECHARACTER3"),
             "without the plane rule the retry does reach SHIFT-P — this is what is being blocked"
         );
         // ...so on the plane the retry is suppressed.
         assert_eq!(dispatch.resolve(plane_p, true), None);
         // Only the fallback is suppressed: an exact CTRL-SHIFT- entry, as a player would bind,
         // still resolves.
-        dispatch.map.insert(plane_p, Bound::Spec(pet_paper_doll));
+        dispatch.map.insert(plane_p, "TOGGLECHARACTER3".into());
         assert_eq!(
             dispatch.resolve(plane_p, true),
-            Some(Bound::Spec(pet_paper_doll)),
+            Some("TOGGLECHARACTER3"),
             "the plane spends the retry, never the exact probe"
         );
-        // SHIFT-P itself is still the pet paper doll.
         let shift_p = Chord::parse("SHIFT-P").expect("parses");
-        assert_eq!(
-            dispatch.resolve(shift_p, false),
-            Some(Bound::Spec(pet_paper_doll))
-        );
+        assert_eq!(dispatch.resolve(shift_p, false), Some("TOGGLECHARACTER3"));
     }
 
     /// The pet bar routes on the CTRL digits and the number row is untouched: the two share base
     /// keys, kept apart only by the exact-modifier probe. CTRL-0 is slot 10.
     #[test]
     fn the_pet_lane_dispatches_on_the_ctrl_digits() {
-        let by_name =
-            |n: &str| Cmd(SPECS.iter().position(|s| s.name == n).expect("registered") as u16);
         let mut app = harness();
         press_key(&mut app, KeyCode::ControlLeft);
         press_key(&mut app, KeyCode::Digit1);
         app.update();
-        assert!(state(&app).pressed(by_name("BONUSACTIONBUTTON1")));
-        assert!(
-            !state(&app).pressed(by_name("ACTIONBUTTON1")),
+        assert_eq!(lua_str(&app, "PET1"), "down");
+        assert_eq!(
+            lua_str(&app, "AB1"),
+            "",
             "the modifier decides: CTRL-1 is not the number row's"
         );
-        // The latch drops on the base key's release with Ctrl still held; in the VM that release
-        // runs `PetActionButtonUp`, which casts.
+        // The release runs the up half with Ctrl still held.
         release_key(&mut app, KeyCode::Digit1);
         app.update();
-        assert!(!state(&app).pressed(by_name("BONUSACTIONBUTTON1")));
-        // CTRL-0 is slot 10.
+        assert_eq!(lua_str(&app, "PET1"), "up");
         press_key(&mut app, KeyCode::Digit0);
         app.update();
-        assert!(state(&app).pressed(by_name("BONUSACTIONBUTTON10")));
-        // Bare 1 is still the action bar's, with no pet command in sight.
+        assert_eq!(lua_str(&app, "PET10"), "down", "CTRL-0 is slot 10");
+        // Bare 1 is still the action bar's.
         let mut app = harness();
         press_key(&mut app, KeyCode::Digit1);
         app.update();
-        assert!(state(&app).pressed(by_name("ACTIONBUTTON1")));
-        assert!(!state(&app).pressed(by_name("BONUSACTIONBUTTON1")));
+        assert_eq!(lua_str(&app, "AB1"), "down");
+        assert_eq!(lua_str(&app, "PET1"), "");
     }
 
     /// The typing gate blocks new presses and releases nothing already held: holding W and
@@ -1451,25 +1245,25 @@ mod tests {
         let mut app = harness();
         press_key(&mut app, KeyCode::KeyW);
         app.update();
-        assert!(state(&app).pressed(cmd::MOVE_FORWARD));
+        assert!(state(&app).pressed(Input::MoveForward));
         // A box takes focus. You keep running, and new presses type instead of binding.
         app.world_mut().resource_mut::<UiKeyboardCapture>().typing = true;
         app.update();
         assert!(
-            state(&app).pressed(cmd::MOVE_FORWARD),
+            state(&app).pressed(Input::MoveForward),
             "the capture edge is not a release — holding W keeps you running while you type"
         );
         press_key(&mut app, KeyCode::KeyX);
         app.update();
         assert!(
-            !state(&app).fired(cmd::SIT_OR_STAND),
+            !state(&app).fired(Input::SitOrStand),
             "typed keys are not bindings"
         );
         // Letting go still stops you, box focused or not.
         release_key(&mut app, KeyCode::KeyW);
         app.update();
         assert!(
-            !state(&app).pressed(cmd::MOVE_FORWARD),
+            !state(&app).pressed(Input::MoveForward),
             "the release is delivered regardless of focus"
         );
         // Focus drops; keys work again.
@@ -1478,7 +1272,7 @@ mod tests {
         app.update();
         press_key(&mut app, KeyCode::KeyX);
         app.update();
-        assert!(state(&app).fired(cmd::SIT_OR_STAND));
+        assert!(state(&app).fired(Input::SitOrStand));
     }
 
     /// A shown keyboard frame eating the key that closes it costs that key its binding and
@@ -1489,15 +1283,13 @@ mod tests {
         let mut app = harness();
         press_key(&mut app, KeyCode::KeyW);
         app.update();
-        assert!(state(&app).pressed(cmd::MOVE_FORWARD));
+        assert!(state(&app).pressed(Input::MoveForward));
 
-        // The map eats this frame's `M`. `M` is `Kind::Edge`, invisible to a no-VM harness, so
-        // the suppression is asserted on `X` below.
         frame_ate(&mut app, &[KeyCode::KeyM]);
         press_key(&mut app, KeyCode::KeyM);
         app.update();
         assert!(
-            state(&app).pressed(cmd::MOVE_FORWARD),
+            state(&app).pressed(Input::MoveForward),
             "the frame ate the toggle key; you are still running"
         );
 
@@ -1508,7 +1300,7 @@ mod tests {
         press_key(&mut app, KeyCode::KeyX);
         app.update();
         assert!(
-            !state(&app).fired(cmd::SIT_OR_STAND),
+            !state(&app).fired(Input::SitOrStand),
             "the frame ate this key: its binding must not also fire"
         );
 
@@ -1519,11 +1311,11 @@ mod tests {
         press_key(&mut app, KeyCode::KeyX);
         app.update();
         assert!(
-            state(&app).fired(cmd::SIT_OR_STAND),
+            state(&app).fired(Input::SitOrStand),
             "consumption is per key, not per frame"
         );
         assert!(
-            state(&app).pressed(cmd::MOVE_FORWARD),
+            state(&app).pressed(Input::MoveForward),
             "and W has been held throughout"
         );
     }
@@ -1532,78 +1324,99 @@ mod tests {
     fn mouse_buttons_bind_only_over_the_world_and_the_wheel_respects_ui() {
         let mut app = harness();
         // BUTTON4 (winit Forward) is TOGGLEAUTORUN's second default.
-        app.world_mut().write_message(MouseButtonInput {
-            button: MouseButton::Forward,
-            state: bevy::input::ButtonState::Pressed,
-            window: Entity::PLACEHOLDER,
-        });
+        mouse(&mut app, MouseButton::Forward, ButtonState::Pressed);
         app.update();
-        assert!(state(&app).fired(cmd::TOGGLE_AUTORUN));
+        assert!(state(&app).fired(Input::ToggleAutoRun));
         // Over a UI frame the press belongs to the frame.
-        app.world_mut().write_message(MouseButtonInput {
-            button: MouseButton::Forward,
-            state: bevy::input::ButtonState::Released,
-            window: Entity::PLACEHOLDER,
-        });
+        mouse(&mut app, MouseButton::Forward, ButtonState::Released);
         app.update();
         app.world_mut().resource_mut::<PlayerUiHover>().0 = Some(7);
-        app.world_mut().write_message(MouseButtonInput {
-            button: MouseButton::Forward,
-            state: bevy::input::ButtonState::Pressed,
-            window: Entity::PLACEHOLDER,
-        });
+        mouse(&mut app, MouseButton::Forward, ButtonState::Pressed);
         app.update();
-        assert!(!state(&app).fired(cmd::TOGGLE_AUTORUN));
-        // MOVEANDSTEER (BUTTON3) is a HELD command on a mouse button: press latches, release ends.
+        assert!(!state(&app).fired(Input::ToggleAutoRun));
+        // MOVEANDSTEER (BUTTON3): its body holds both mouse bits, the both-button run, until the
+        // release's Stops.
         let mut app = harness();
-        app.world_mut().write_message(MouseButtonInput {
-            button: MouseButton::Middle,
-            state: bevy::input::ButtonState::Pressed,
-            window: Entity::PLACEHOLDER,
-        });
+        mouse(&mut app, MouseButton::Middle, ButtonState::Pressed);
         app.update();
-        assert!(state(&app).pressed(cmd::MOVE_AND_STEER));
-        app.world_mut().write_message(MouseButtonInput {
-            button: MouseButton::Middle,
-            state: bevy::input::ButtonState::Released,
-            window: Entity::PLACEHOLDER,
-        });
+        assert!(state(&app).steering() && state(&app).steering_began());
         app.update();
-        assert!(!state(&app).pressed(cmd::MOVE_AND_STEER));
-        // The wheel: a notch fires CAMERAZOOMIN with its amount; over UI it belongs to the frame.
+        assert!(state(&app).steering() && !state(&app).steering_began());
+        mouse(&mut app, MouseButton::Middle, ButtonState::Released);
+        app.update();
+        assert!(!state(&app).steering());
+        // The wheel: each notch runs CAMERAZOOMIN's `CameraZoomIn(1.0)`; over UI it belongs to
+        // the frame.
         let mut app = harness();
-        app.world_mut().write_message(MouseWheel {
-            unit: MouseScrollUnit::Line,
-            x: 0.0,
-            y: 2.0,
-            window: Entity::PLACEHOLDER,
-        });
+        wheel(&mut app, 2.0);
         app.update();
-        assert!(state(&app).fired(cmd::CAMERA_ZOOM_IN));
-        assert_eq!(state(&app).amount(cmd::CAMERA_ZOOM_IN), 2.0);
+        assert!(state(&app).fired(Input::CameraZoomIn));
+        assert_eq!(state(&app).amount(Input::CameraZoomIn), 2.0, "two notches");
         app.world_mut().resource_mut::<PointerOverUiPanel>().0 = true;
-        app.world_mut().write_message(MouseWheel {
-            unit: MouseScrollUnit::Line,
-            x: 0.0,
-            y: 2.0,
-            window: Entity::PLACEHOLDER,
-        });
+        wheel(&mut app, 2.0);
         app.update();
         assert!(
-            !state(&app).fired(cmd::CAMERA_ZOOM_IN),
+            !state(&app).fired(Input::CameraZoomIn),
             "a UI wheel is the frame's"
         );
     }
 
-    /// B opens the backpack and SHIFT-B opens every bag, end to end: a real key event, the shipped
-    /// defaults, the binding body and the stock Lua. The windows are the stock
+    /// A trackpad's fractional lines carry to whole notches, each one `CameraZoomIn(1.0)`, and a
+    /// reversal drops the carried fraction.
+    #[test]
+    fn fractional_wheel_lines_dispatch_per_whole_notch() {
+        let mut app = harness();
+        for want in [0.0, 0.0, 1.0] {
+            wheel(&mut app, 0.4);
+            app.update();
+            assert_eq!(
+                state(&app).amount(Input::CameraZoomIn),
+                want,
+                "0.4 lines a frame: the third completes the notch"
+            );
+        }
+        wheel(&mut app, -1.0);
+        app.update();
+        assert_eq!(state(&app).amount(Input::CameraZoomOut), 1.0);
+        assert_eq!(state(&app).amount(Input::CameraZoomIn), 0.0);
+    }
+
+    /// The window deactivate (`0x514490`) clears the direction bits a Lua Start set and keeps the
+    /// mouse pair.
+    #[test]
+    fn focus_loss_clears_the_direction_bits_and_keeps_the_mouse_pair() {
+        let mut app = harness();
+        app.add_message::<bevy::input::keyboard::KeyboardFocusLost>();
+        let script_starts = |app: &mut App| {
+            app.world()
+                .non_send_resource::<UiScript>()
+                .execute_binding("MOVEANDSTEER", true)
+                .expect("runs");
+            app.world()
+                .non_send_resource::<UiScript>()
+                .execute_binding("MOVEFORWARD", true)
+                .expect("runs");
+            app.update();
+        };
+        script_starts(&mut app);
+        assert!(state(&app).steering() && state(&app).pressed(Input::MoveForward));
+        app.world_mut()
+            .write_message(bevy::input::keyboard::KeyboardFocusLost);
+        app.update();
+        assert!(!state(&app).pressed(Input::MoveForward));
+        assert!(state(&app).steering(), "0x514490 masks 0xfffff00f");
+    }
+
+    /// B opens the backpack and SHIFT-B opens every bag, end to end: a real key event, the
+    /// install's defaults, the stock binding body and the stock Lua. The windows are the stock
     /// `ContainerFrame1..12`, recycled across containers, so the test asks `IsBagOpen(id)`; the
     /// interface loads through [`crate::ui_script::load_default_ui`], so it needs client data.
     #[test]
     fn b_opens_the_backpack_and_shift_b_opens_every_bag() {
         let _data = benilla_formats::wow_data_or_skip!();
         let mut script = UiScript::new().expect("VM");
-        script.register_bindings(&registry_commands());
+        script.set_default_bindings(crate::ui_script::default_bindings());
+        script.load_binding_set(1);
         script.set_screen_size(1024.0, 768.0);
         // A player exists by the time the in-game UI loads, and the stock macro window formats
         // `UnitName("player")` into its character tab in OnLoad.
@@ -1685,5 +1498,109 @@ mod tests {
             !open(&app, 0) && !open(&app, 2),
             "SHIFT-B again shuts them all"
         );
+    }
+
+    /// No production source in the bindings code carries a stock body: every command's Lua is the
+    /// file's own, read off the chain at load. Each string literal outside the test modules, its
+    /// whitespace collapsed, is held against every stock body's.
+    #[test]
+    fn no_stock_binding_body_is_retyped_in_the_tree() {
+        benilla_formats::wow_data_or_skip!();
+        let collapse = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        let stock = crate::ui_script::stock_bindings_file().expect("the install's Bindings.xml");
+        let bodies: Vec<String> = benilla_ui::bindings_xml::parse(&stock)
+            .expect("parses")
+            .iter()
+            .map(|b| collapse(&b.body))
+            .collect();
+        assert!(bodies.len() > 200);
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let mut files = vec![
+            root.join("benilla-app/src/bindings.rs"),
+            root.join("benilla-ui/src/script/keybind.rs"),
+            root.join("benilla-ui/src/bindings_xml.rs"),
+        ];
+        for e in std::fs::read_dir(root.join("benilla-app/src/bindings")).unwrap() {
+            files.push(e.unwrap().path());
+        }
+        assert!(
+            !root.join("benilla-app/src/bindings/commands.rs").exists(),
+            "the retyped registry is gone"
+        );
+        for path in files {
+            let text = std::fs::read_to_string(&path).unwrap();
+            let production = text.split("#[cfg(test)]").next().unwrap_or_default();
+            for literal in string_literals(production) {
+                let literal = collapse(&literal);
+                if literal.is_empty() {
+                    continue;
+                }
+                for body in &bodies {
+                    assert!(
+                        !literal.contains(body.as_str()),
+                        "{} carries the stock body {body:?}",
+                        path.display()
+                    );
+                }
+            }
+        }
+    }
+
+    /// The contents of every `"…"` and `r#"…"#` literal in Rust source, escapes left as written.
+    fn string_literals(src: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let b = src.as_bytes();
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] == b'/' && b.get(i + 1) == Some(&b'/') {
+                i = src[i..].find('\n').map_or(b.len(), |n| i + n);
+                continue;
+            }
+            if b[i] == b'\'' {
+                // A char literal or a lifetime: skip `'x'` and `'\x'` so a quote char is no string.
+                if b.get(i + 2) == Some(&b'\'') {
+                    i += 3;
+                    continue;
+                }
+                if b.get(i + 1) == Some(&b'\\') && b.get(i + 3) == Some(&b'\'') {
+                    i += 4;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+            if b[i] == b'r' && (b.get(i + 1) == Some(&b'#') || b.get(i + 1) == Some(&b'"')) {
+                let hashes = src[i + 1..].bytes().take_while(|&c| c == b'#').count();
+                if b.get(i + 1 + hashes) == Some(&b'"') {
+                    let start = i + 2 + hashes;
+                    let close = format!("\"{}", "#".repeat(hashes));
+                    let end = src[start..].find(&close).map_or(b.len(), |n| start + n);
+                    out.push(src[start..end].to_string());
+                    i = end + close.len();
+                    continue;
+                }
+            }
+            if b[i] == b'"' {
+                let start = i + 1;
+                let mut j = start;
+                while j < b.len() && b[j] != b'"' {
+                    j += if b[j] == b'\\' { 2 } else { 1 };
+                }
+                out.push(src[start..j.min(b.len())].to_string());
+                i = j + 1;
+                continue;
+            }
+            i += 1;
+        }
+        out
+    }
+
+    /// The literal scanner finds what it must, so the check above cannot pass by seeing nothing.
+    #[test]
+    fn the_literal_scanner_reads_both_kinds_of_string() {
+        let found = string_literals(
+            "let a = \"x\\\"y\"; // \"comment\"\nlet c = '\"'; let b = r#\"ToggleBackpack();\"#;",
+        );
+        assert_eq!(found, ["x\\\"y", "ToggleBackpack();"]);
     }
 }

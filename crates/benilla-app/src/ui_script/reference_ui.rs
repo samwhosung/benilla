@@ -31,6 +31,12 @@ pub(super) fn is_chain_entry(entry: &str) -> bool {
 /// runner (`0x6edb90`) at `0x48ffed`, once per UI build, `ReloadUI` included.
 pub(super) const TOC: &str = r"Interface\FrameXML\FrameXML.toc";
 
+/// The stock key-binding commands, which `UI_Init` loads after the [`TOC`] walk (`0x490018`).
+pub(super) const BINDINGS: &str = r"Interface\FrameXML\Bindings.xml";
+
+/// The default key set, which `UI_Init` reads through `0x4b62b0` (`0x4900c7`).
+pub(super) const DEFAULT_BINDINGS: &str = r"WTF\DefaultBindings.wtf";
+
 /// The core interface: the chain's own [`TOC`], patched or not, as an [`Addon`] over the chain, or
 /// `None` when the chain has no such file.
 pub(super) fn core() -> Option<Addon> {

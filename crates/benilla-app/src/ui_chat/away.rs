@@ -187,18 +187,18 @@ pub(crate) fn movement_clears_afk(
     mut chat: ResMut<ChatLog>,
     mut mirror: ResMut<AfkMirror>,
 ) {
-    use crate::bindings::cmd;
+    use crate::bindings::Input;
     if !mirror.is_afk() || cvars.flag("autoClearAFK") == Some(false) {
         return;
     }
     let moved = [
-        cmd::JUMP,
-        cmd::MOVE_FORWARD,
-        cmd::MOVE_BACKWARD,
-        cmd::STRAFE_LEFT,
-        cmd::STRAFE_RIGHT,
-        cmd::TURN_LEFT,
-        cmd::TURN_RIGHT,
+        Input::Jump,
+        Input::MoveForward,
+        Input::MoveBackward,
+        Input::StrafeLeft,
+        Input::StrafeRight,
+        Input::TurnLeft,
+        Input::TurnRight,
     ]
     .iter()
     .any(|&c| binds.just_pressed(c));

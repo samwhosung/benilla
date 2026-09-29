@@ -784,16 +784,28 @@ mod tests {
         );
     }
 
-    /// The V, Shift-V and Ctrl-V bodies: each flips the verb and FrameXML's global together, so
-    /// the saved variable carries what the key did, and none writes a CVar.
+    /// The V, Shift-V and Ctrl-V commands run the stock bodies (`Bindings.xml:516-550`): V and
+    /// Shift-V each show their own kind and hide the other, and turn their own kind off only
+    /// when it is the one showing; Ctrl-V shows both unless both show. Each flips the verb and
+    /// FrameXML's global together, so the saved variable carries what the key did, and none
+    /// writes a CVar.
     #[test]
-    fn the_v_keys_move_the_bits_and_the_saved_globals_together() {
-        use crate::bindings::commands::{Kind, SPECS};
-        let body = |name: &str| match SPECS.iter().find(|s| s.name == name).map(|s| &s.kind) {
-            Some(Kind::Edge(lua)) => *lua,
-            _ => panic!("{name} runs a Lua body"),
-        };
+    fn the_v_keys_run_the_stock_bodies() {
+        benilla_formats::wow_data_or_skip!();
         let mut app = verb_app();
+        crate::ui_script::load_stock_bindings(
+            &mut app
+                .world_mut()
+                .non_send_resource_mut::<benilla_ui::script::UiScript>(),
+        );
+        let key = |app: &mut App, command: &str| {
+            assert!(app
+                .world()
+                .non_send_resource::<benilla_ui::script::UiScript>()
+                .execute_binding(command, true)
+                .unwrap());
+            app.update();
+        };
         let state = |app: &App| {
             (
                 mode(app),
@@ -802,27 +814,47 @@ mod tests {
             )
         };
 
-        run(&mut app, body("NAMEPLATES"));
-        assert_eq!(state(&app), ((true, false), Some(1), None), "V turns on");
-        run(&mut app, body("FRIENDNAMEPLATES"));
+        key(&mut app, "NAMEPLATES");
+        assert_eq!(state(&app), ((true, false), Some(1), None), "V: enemies on");
+        key(&mut app, "FRIENDNAMEPLATES");
         assert_eq!(
             state(&app),
-            ((true, true), Some(1), Some(1)),
-            "Shift-V moves only the other kind"
+            ((false, true), None, Some(1)),
+            "Shift-V: friends on, enemies off"
         );
-        run(&mut app, body("NAMEPLATES"));
-        assert_eq!(state(&app), ((false, true), None, Some(1)), "V turns off");
-        run(&mut app, body("ALLNAMEPLATES"));
+        key(&mut app, "NAMEPLATES");
+        assert_eq!(
+            state(&app),
+            ((true, false), Some(1), None),
+            "V with friends showing: enemies on, friends off"
+        );
+        key(&mut app, "NAMEPLATES");
+        assert_eq!(state(&app), ((false, false), None, None), "V again: off");
+        key(&mut app, "ALLNAMEPLATES");
         assert_eq!(
             state(&app),
             ((true, true), Some(1), Some(1)),
             "Ctrl-V: both on"
         );
-        run(&mut app, body("ALLNAMEPLATES"));
+        key(&mut app, "NAMEPLATES");
+        assert_eq!(
+            state(&app),
+            ((true, false), Some(1), None),
+            "V with both on turns friends off"
+        );
+        key(&mut app, "ALLNAMEPLATES");
+        key(&mut app, "FRIENDNAMEPLATES");
+        assert_eq!(
+            state(&app),
+            ((false, true), None, Some(1)),
+            "Shift-V with both on turns enemies off"
+        );
+        key(&mut app, "ALLNAMEPLATES");
+        key(&mut app, "ALLNAMEPLATES");
         assert_eq!(
             state(&app),
             ((false, false), None, None),
-            "...then both off"
+            "Ctrl-V with both on: both off"
         );
         assert!(
             app.world_mut()

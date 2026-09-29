@@ -31,7 +31,7 @@ pub(super) fn update(
     body: &BodyQuery,
     binds: &crate::bindings::BindingsState,
 ) {
-    if !binds.fired(crate::bindings::cmd::TOGGLE_RUN) {
+    if !binds.fired(crate::bindings::Input::ToggleRun) {
         return;
     }
     let dead = body

@@ -104,8 +104,8 @@ pub(super) enum UiFixture {
     OptionsDropdownList,
     /// The Options window mid-search: "volume" lists the four volume sliders under the Audio head.
     OptionsSearch,
-    /// The Options window's Keybindings page, Movement expanded, over the 1.12 default bindings and
-    /// GlobalStrings; the command registry registers in-fixture.
+    /// The Options window's Keybindings page, Movement expanded, over the stock commands and
+    /// default bindings the load read off the install, and GlobalStrings.
     KeyBindings,
     /// An overhead name with the river behind it: a named unit 25 yd out in the Elwynn river (the
     /// `water-noon` camera). Deep water is opaque (`WATER_DEEP_ALPHA` 1.0), so a name sorted before

@@ -11,7 +11,7 @@
 //! `CBindings::ExecuteBinding 0x4b7990` on the stack (`[[0xb71290]+0xd8]`, raised at `0x4b7b02`);
 //! tainted code (a macro, `RunScript`, an addon's own) is refused. So a key's body moves and a
 //! `/script MoveForwardStart()` does not. benilla has no taint model, so here the gate is "a
-//! binding body is running" ([`UiScript::run_binding`]), which refuses the same callers, silently
+//! binding body is running" ([`UiScript::execute_binding`]), which refuses the same callers, silently
 //! where the reference fires `MACRO_ACTION_FORBIDDEN` (431) or `ADDON_ACTION_FORBIDDEN` (432).
 //! The camera table and the main-table verbs have no gate.
 
@@ -37,6 +37,10 @@ pub enum HeldInput {
     StrafeLeft,
     /// `0x80`, `StrafeRightStart`/`Stop` (`0x514000`/`0x514030`).
     StrafeRight,
+    /// `0x1`, `TurnOrActionStart`/`Stop` (`0x514120`/`0x514160`), the right mouse button's bit.
+    TurnOrAction,
+    /// `0x2`, `CameraOrSelectOrMoveStart`/`Stop` (`0x514190`/`0x5141d0`), the left button's.
+    CameraOrSelectOrMove,
 }
 
 /// A one-shot command, fired as its key fires it.
@@ -91,6 +95,17 @@ impl UiScript {
     pub fn run_binding(&self, chunk: &str) -> mlua::Result<()> {
         self.model_mut().input.binding_depth += 1;
         let result = self.run(chunk);
+        self.model_mut().input.binding_depth -= 1;
+        result
+    }
+
+    /// `CBindings::ExecuteBinding` (`0x4b7990`) once the chord has resolved to `command`: its
+    /// `RunCommand` (`0x4b7b50`) with the hardware-event gate raised (`0x4b7b02`), a press when
+    /// `down`, else the release, which runs only a `runOnUp` body. `Ok(false)` when nothing ran:
+    /// no such command, or a release of one that is not `runOnUp`.
+    pub fn execute_binding(&self, command: &str, down: bool) -> mlua::Result<bool> {
+        self.model_mut().input.binding_depth += 1;
+        let result = super::keybind::run_command(&self.lua, command, down);
         self.model_mut().input.binding_depth -= 1;
         result
     }
@@ -150,9 +165,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
     // ── The movement table `0x8500b8` ──────────────────────────────────────────────────────
-    // Each Start/Stop is `0x494a50(0)`, then `0x515090(bit, set, time, 0)`; no argument is read,
-    // nothing is returned.
-    let held: [(&str, &str, HeldInput); 6] = [
+    // Each Start/Stop is `0x494a50(0)`, then `0x515090(bit, set, time, 0)`; nothing is returned,
+    // and no argument is read but `CameraOrSelectOrMoveStop`'s sticky flag (`0x5141f6`), which
+    // nothing here acts on.
+    let held: [(&str, &str, HeldInput); 8] = [
         (
             "MoveForwardStart",
             "MoveForwardStop",
@@ -170,6 +186,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             "StrafeRightStart",
             "StrafeRightStop",
             HeldInput::StrafeRight,
+        ),
+        // The mouse pair also arms the world click (`0x514810`); that, and each bit alone, the
+        // look session reads off the physical buttons. The two held together are the both-button
+        // run, which MOVEANDSTEER's body reaches through them.
+        (
+            "TurnOrActionStart",
+            "TurnOrActionStop",
+            HeldInput::TurnOrAction,
+        ),
+        (
+            "CameraOrSelectOrMoveStart",
+            "CameraOrSelectOrMoveStop",
+            HeldInput::CameraOrSelectOrMove,
         ),
     ];
     for (start, stop, input) in held {
@@ -234,11 +263,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             })?,
         )?;
     }
-    // Not built, so these answer and do nothing:
-    // - the pitch pair (`0x400`/`0x800`): the mover has no keyboard pitch axis (`ABSENT` PITCHUP);
-    // - TurnOrAction and CameraOrSelectOrMove (`0x514120`-`0x5141d0`), which arm the world click
-    //   (`0x514810`) and set the mouse bits: the look session reads the physical buttons for
-    //   these (`ABSENT` TURNORACTION, CAMERAORSELECTORMOVE).
+    // Not built, so these answer and do nothing: the pitch pair (`0x400`/`0x800`), since the
+    // mover has no keyboard pitch axis, so PITCHUP and PITCHDOWN (INSERT, DELETE) do nothing.
     inert(
         lua,
         &[
@@ -246,10 +272,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             "PitchUpStop",
             "PitchDownStart",
             "PitchDownStop",
-            "TurnOrActionStart",
-            "TurnOrActionStop",
-            "CameraOrSelectOrMoveStart",
-            "CameraOrSelectOrMoveStop",
         ],
     )?;
 

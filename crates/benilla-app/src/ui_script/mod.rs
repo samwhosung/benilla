@@ -33,8 +33,11 @@ pub(crate) mod gate;
 pub(crate) use session::VmMemo;
 
 // Not test-only: the addon harness loads the whole shipped interface under each addon.
+pub(crate) use manifest::default_bindings;
 pub(crate) use manifest::load_default_ui;
 pub(crate) use manifest::load_ingame_ui;
+#[cfg(test)]
+pub(crate) use manifest::{load_stock_bindings, stock_bindings_file};
 
 /// Whether the pointer is over any UI (the egui dev overlay or a player-UI frame), combined by
 /// [`arbitrate_pointer_over_ui`]; gameplay reads it, so it is not the dev plugin's.

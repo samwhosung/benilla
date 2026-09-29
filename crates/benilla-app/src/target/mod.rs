@@ -344,11 +344,9 @@ impl Plugin for TargetPlugin {
                     )
                         .chain(),
                     scan::auto_acquire_attacker,
-                    // The TAB keys' cycler (`0x493f60`, mode 1); the `TargetNearest*` Lua calls
-                    // run the same cycle as script calls.
-                    scan::tab_target,
-                    // The ATTACKTARGET binding and the melee probe's press, the player's Attack.
-                    crate::ui_action::attack_target_binding,
+                    // The melee probe's press, the player's Attack; the TAB keys and ATTACKTARGET
+                    // run their bodies' `TargetNearestEnemy` and `AttackTarget` as script calls.
+                    crate::ui_action::attack_nearest_probe,
                     flash::drive_flash,
                     // The last-enemy stamp before the ring's death-clear, so a hostile that dies
                     // selected is still remembered (the reference's `TargetLastEnemy` has no

@@ -1,21 +1,24 @@
-//! An addon's `Bindings.xml`, its key-binding declarations. The reference loads one per addon in
-//! `AddOn_Load 0x51f240`, after the addon's `.toc` files (`0x51f3fa`) and before its saved
-//! variables (`0x51f400` to `0x51f4b5`). The stock file has 228 live bindings (94 `runOnUp`, 13
-//! `header`, 12 `hidden`, 9 `debug`, 5 `platform`); the six `MOVEVIEW*` ones sit in an XML comment.
+//! A `Bindings.xml`, its key-binding declarations, as the one loader both uses (`0x4b6f70`) reads
+//! it: the core's `Interface\FrameXML\Bindings.xml` off the player's chain, which `UI_Init`
+//! (`0x48fbf0`) loads at `0x490018` after the `FrameXML.toc` walk (`0x48ffed`), and each addon's,
+//! which `AddOn_Load` (`0x51f240`) loads at `0x51f443` after the addon's `.toc` files and before
+//! its saved variables. The stock file has 219 commands (94 `runOnUp`, 13 `header`, 3 `hidden`, 5
+//! `platform`) once its nine `debug` rows are skipped; the six `MOVEVIEW*` ones sit in an XML
+//! comment.
 //!
 //! A body is one Lua chunk; with `runOnUp="true"` it runs on press and again on release, the
 //! global `keystate` set to `"down"` or `"up"`. `header="X"` opens the section
 //! `BINDING_HEADER_X` that following header-less bindings join, in a flat list with `HEADER`
 //! pseudo-entries (`Blizzard_BindingUI.lua:87`). `hidden="true"` keeps a binding bindable but out
-//! of the Key Bindings window. `platform="mac"` marks the `ITUNES_REMOTE` rows; the reference
-//! skips another platform's row at load (`0x4b70c3`–`0x4b70e5`), benilla at registration.
+//! of the Key Bindings window. `platform="mac"` marks the `ITUNES_REMOTE` rows; the loader skips
+//! another platform's row (`0x4b70c3`-`0x4b70e5`), here at registration.
 
 use std::fmt;
 
 /// One `<Binding>` element as the file states it; the section carry-forward and the
-/// `BINDING_HEADER_` prefix are applied by [`crate::script::UiScript::register_addon_bindings`].
+/// `BINDING_HEADER_` prefix are applied at registration ([`crate::script::UiScript::register_bindings`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AddonBinding {
+pub struct Binding {
     /// The command name `SetBinding` and `GetBindingKey` speak in.
     pub name: String,
     /// The raw `header` suffix (`MOVEMENT` of `BINDING_HEADER_MOVEMENT`), opening a section.
@@ -53,11 +56,13 @@ impl std::error::Error for Error {
     }
 }
 
-/// Parse `Bindings.xml` text into its bindings, in document order: every `<Binding>` at any
-/// depth, the tag matched case-insensitively (`0x64a4c0`), skipping one with no `name`. The
-/// reference reads only the root's children (`0x4b701f`) and also skips a row with an empty body
-/// (`0x4b7093`–`0x4b709e`) or `debug="true"` (`0x4b70a4`–`0x4b70bd`), which this keeps.
-pub fn parse(text: &str) -> Result<Vec<AddonBinding>, Error> {
+/// Parse `Bindings.xml` text into its bindings, in document order, with the loader's own skips.
+/// It walks the root's children only (`0x4b701f`, then the sibling link at `0x4b745b`), so a
+/// nested `<Binding>` is never read; a child that is not a `<Binding>` (the tag matched
+/// case-insensitively, `0x64a4c0`) is skipped (`0x4b704c`). A row with no `name`
+/// (`0x4b7084`-`0x4b708d`), an empty body (`0x4b7093`-`0x4b709e`) or `debug="true"`
+/// (`0x4b70a4`-`0x4b70bd`) is skipped too, so the stock file's nine debug rows are not commands.
+pub fn parse(text: &str) -> Result<Vec<Binding>, Error> {
     // The reference's expat has no namespace processing, so an undeclared prefix is bound and the
     // text re-read rather than costing the file, as in `framexml::parse`.
     let repaired;
@@ -70,14 +75,18 @@ pub fn parse(text: &str) -> Result<Vec<AddonBinding>, Error> {
         Err(e) => return Err(Error::Xml(e)),
     };
     let mut out = Vec::new();
-    for node in doc.root_element().descendants() {
+    for node in doc.root_element().children() {
         if !node.is_element() || !node.tag_name().name().eq_ignore_ascii_case("Binding") {
             continue;
         }
         let Some(name) = attr_ci(node, "name").filter(|n| !n.is_empty()) else {
             continue;
         };
-        out.push(AddonBinding {
+        let body = direct_text(node);
+        if body.is_empty() || attr_bool(node, "debug") {
+            continue;
+        }
+        out.push(Binding {
             name,
             header: attr_ci(node, "header").filter(|h| !h.is_empty()),
             run_on_up: attr_bool(node, "runOnUp"),
@@ -85,7 +94,7 @@ pub fn parse(text: &str) -> Result<Vec<AddonBinding>, Error> {
             platform: attr_ci(node, "platform")
                 .filter(|p| !p.is_empty())
                 .map(|p| p.to_ascii_lowercase()),
-            body: direct_text(node),
+            body,
         });
     }
     Ok(out)
@@ -132,8 +141,8 @@ mod tests {
     <Binding name="JUMP">
         Jump();
     </Binding>
-    <Binding name="TOGGLESTATS" hidden="true" debug="true">
-        ToggleStats();
+    <Binding name="PROBEHIDDEN" hidden="true">
+        Probe();
     </Binding>
     <Binding name="PROBECOMPARE" RUNONUP="TRUE">
         if ( a &lt; b ) then Probe(); end
@@ -196,21 +205,45 @@ mod tests {
     }
 
     /// Registered under `""`, a nameless binding would shadow `GetBindingAction`'s empty answer
-    /// for an unbound key.
+    /// for an unbound key; the loader skips it (`0x4b7084`-`0x4b708d`).
     #[test]
-    fn nameless_bindings_are_skipped_and_nesting_is_tolerated() {
+    fn nameless_bindings_are_skipped() {
         let binds = parse(
             r#"<Ui>
     <Binding>Orphan();</Binding>
     <Binding name="">AlsoOrphan();</Binding>
-    <Bindings>
-        <Binding name="PROBEWRAPPED">Probe();</Binding>
-    </Bindings>
+    <Binding name="PROBENAMED">Probe();</Binding>
 </Ui>"#,
         )
         .expect("well-formed");
         assert_eq!(binds.len(), 1);
-        assert_eq!(binds[0].name, "PROBEWRAPPED");
+        assert_eq!(binds[0].name, "PROBENAMED");
+    }
+
+    /// The loader's three skips beyond a missing name: a `<Binding>` below the root's children is
+    /// never walked (`0x4b701f`, the sibling link `0x4b745b`), an empty body is refused
+    /// (`0x4b7093`-`0x4b709e`), and a truthy `debug` skips the row (`0x4b70a4`-`0x4b70bd`), as
+    /// the stock file's nine debug rows are skipped. A whitespace body is not empty.
+    #[test]
+    fn nested_empty_and_debug_rows_are_not_bindings() {
+        let binds = parse(
+            r#"<Bindings>
+    <Binding name="PROBEKEPT">Probe();</Binding>
+    <Bindings>
+        <Binding name="PROBENESTED">Probe();</Binding>
+    </Bindings>
+    <Frame><Binding name="PROBEINFRAME">Probe();</Binding></Frame>
+    <Binding name="PROBEEMPTY"></Binding>
+    <Binding name="PROBESELFCLOSED"/>
+    <Binding name="PROBEDEBUG" hidden="true" debug="true">ToggleStats();</Binding>
+    <Binding name="PROBEDEBUGCASE" DEBUG="TRUE">Probe();</Binding>
+    <Binding name="PROBENOTDEBUG" debug="1">Probe();</Binding>
+    <Binding name="PROBEBLANK">  </Binding>
+</Bindings>"#,
+        )
+        .expect("well-formed");
+        let names: Vec<&str> = binds.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(names, ["PROBEKEPT", "PROBENOTDEBUG", "PROBEBLANK"]);
     }
 
     #[test]

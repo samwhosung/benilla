@@ -51,7 +51,7 @@ pub(super) fn update(
     // The queued asks (the `/sit` family) ran in the reference's message pass, before the X key
     // is read; the last writer wins, and all land on the single commit below.
     let mut request_stand = asks.read().last().map(|r| r.state);
-    if binds.fired(crate::bindings::cmd::SIT_OR_STAND) {
+    if binds.fired(crate::bindings::Input::SitOrStand) {
         request_stand = Some(u8::from(stand_state == 0));
     }
     // Movement stands us up, volunteered, as the server never does: translation, a keyboard turn
@@ -61,7 +61,7 @@ pub(super) fn update(
     // event stands us too (`0x60e139`: `GetStandState` `0x60be50`, then `0x60be30(0)`), read off
     // the latch [`super::wire_in::apply_server_moves`] armed this frame, as the mover runs later.
     let knocked_out_of_it = player.knockback.is_some();
-    if (moving || turned || knocked_out_of_it || binds.fired(crate::bindings::cmd::JUMP))
+    if (moving || turned || knocked_out_of_it || binds.fired(crate::bindings::Input::Jump))
         && stand_state != 0
         && request_stand.is_none()
     {
@@ -94,7 +94,7 @@ pub(super) fn update(
     // The sheath toggle (Z) cycles the anim layer's committed sheath state through its one setter
     // ([`crate::creature_anim::SheathRequest`]), which sends `CMSG_SETSHEATHED`; only it plays the
     // ceremony (`bInstant = 0` in `ToggleSheath` `0x5eb480`). No body model yet drops the press.
-    if binds.fired(crate::bindings::cmd::TOGGLE_SHEATH) {
+    if binds.fired(crate::bindings::Input::ToggleSheath) {
         if let Ok((e, _, _, _, Some(drv), store, engaged, _, _, wielded, _)) = body.single() {
             // Of `ToggleSheath`'s 12 silent guards: dead, in combat, any nonzero stand state,
             // mid-ceremony (clip 89/90) and mounted; its stunned and channeling guards are not

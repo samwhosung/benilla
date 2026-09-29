@@ -176,6 +176,8 @@ mod tests {
         ("cursor.rs", "decode_failed"),
         ("cursor.rs", "last_set"),
         ("cursor.rs", "last_ptr"),
+        // The wheel's fraction toward its next notch, a fact about the device, not the VM.
+        ("bindings.rs", "notches"),
     ];
 
     use crate::test_support::{fn_parameter_lists, rust_files};

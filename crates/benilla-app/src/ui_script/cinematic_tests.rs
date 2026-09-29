@@ -13,6 +13,8 @@ fn ui_with_the_cinematic_frame() -> UiScript {
     load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
     load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
+    // `TakeScreenshot` (`WorldFrame.lua:46`), which the SCREENSHOT binding's body calls.
+    load_xml(&s, r"Interface\FrameXML\WorldFrame.xml");
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
     load_xml(&s, r"Interface\FrameXML\UIParent.xml");
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua"); // StaticPopup's money row
@@ -107,9 +109,7 @@ fn the_screenshot_key_is_handed_back_to_its_binding() {
     benilla_formats::wow_data_or_skip!();
     let mut s = ui_with_the_cinematic_frame();
     // `GetBindingKey("SCREENSHOT")` must answer, or the handler's screenshot arm is skipped.
-    s.register_bindings(&crate::bindings::registry_commands());
-    s.seed_binding_set(1, None);
-    s.load_binding_set(1);
+    crate::ui_script::load_stock_bindings(&mut s);
     let key = s
         .keybind_snapshot()
         .into_iter()
@@ -118,23 +118,22 @@ fn the_screenshot_key_is_handed_back_to_its_binding() {
         .expect("SCREENSHOT ships a default chord");
 
     start_cinematic(&mut s);
-    let _ = s.take_keybind_requests();
+    let _ = s.take_screenshot_asks();
 
     assert!(
         s.frame_key_input(&key),
         "the frame consumes {key} like any other key"
     );
     assert_eq!(
-        s.take_keybind_requests(),
-        vec![benilla_ui::script::keybind::KeybindRequest::Run(
-            "SCREENSHOT".into()
-        )],
-        "the screenshot key must reach its binding through RunBinding"
+        s.take_screenshot_asks(),
+        1,
+        "the screenshot key must reach its binding's body through RunBinding"
     );
 
-    // ESCAPE still skips, and queues nothing on the binding channel.
+    // ESCAPE still skips, and asks for no screenshot.
     assert!(s.frame_key_input("ESCAPE"));
-    assert!(s.take_keybind_requests().is_empty());
+    assert_eq!(s.take_screenshot_asks(), 0);
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
 /// `ShowUIPanel`'s `area = "full"` row (`UIParent.lua:31`) routes to `SetFullScreenFrame`, which

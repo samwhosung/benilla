@@ -17,7 +17,7 @@ use benilla_assets::{AssetSet, LockRecover, WorldAssets};
 mod cast_fail;
 mod drain;
 // A `UseAction` press, applied in call order by `crate::script_calls`.
-pub(crate) use drain::{attack_target_binding, use_action, ActionPress, AttackPress, UseOutcome};
+pub(crate) use drain::{attack_nearest_probe, use_action, ActionPress, AttackPress, UseOutcome};
 #[cfg(test)]
 mod drain_tests;
 pub(crate) mod drop_item;

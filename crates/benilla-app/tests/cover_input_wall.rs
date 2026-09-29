@@ -47,8 +47,8 @@ const VERDICTS: &[(&str, Verdict)] = &[
     (
         "KeyboardFocusLost",
         Open(
-            "the window deactivate, not player input: `bindings.rs` drops a Lua-held movement \
-             command on it, the reference's `0x514490`, which a load must not hide",
+            "the window deactivate, not player input: `bindings.rs` clears the held direction \
+             bits on it, the reference's `0x514490`, which a load must not hide",
         ),
     ),
     (

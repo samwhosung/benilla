@@ -1362,7 +1362,7 @@ fn the_bar_bag_buttons_name_themselves_on_hover() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
     // `GetBindingKey` reads the registered command set, seeded as the app seeds it.
-    s.register_bindings(&crate::bindings::registry_commands());
+    crate::ui_script::load_stock_bindings(&mut s);
     s.set_screen_size(1024.0, 768.0);
     for file in crate::ui_script::test_ui::production_order(&[
         BAG_UI,

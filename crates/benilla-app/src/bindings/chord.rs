@@ -372,20 +372,30 @@ fn token_key(t: &str) -> Option<BindKey> {
 mod tests {
     use super::*;
 
-    /// Ties this namer to the engine's `IsValidBindingKeyString`: every default chord, and one key
-    /// of each token shape, since `KeyCode` cannot be enumerated.
+    /// Ties this namer to the engine's `IsValidBindingKeyString`: every chord the install's
+    /// `WTF\DefaultBindings.wtf` ships is a key string it accepts and a chord the dispatcher can
+    /// press, and one key of each token shape, since `KeyCode` cannot be enumerated.
     #[test]
     fn every_token_the_codec_names_is_one_setbinding_accepts() {
         use benilla_ui::script::keybind::normalize_binding_key;
-        for spec in super::super::commands::SPECS {
-            for default in [spec.d1, spec.d2].into_iter().flatten() {
-                assert_eq!(
-                    normalize_binding_key(default).as_deref(),
-                    Some(default),
-                    "the default chord '{default}' ({}) is not a bindable key string",
-                    spec.name
-                );
-            }
+        let defaults = crate::ui_script::default_bindings();
+        if benilla_formats::wow_data().is_some() {
+            assert!(
+                defaults.len() > 100,
+                "the install's defaults: {}",
+                defaults.len()
+            );
+        }
+        for (default, command) in &defaults {
+            assert_eq!(
+                normalize_binding_key(default).as_deref(),
+                Some(default.as_str()),
+                "the default chord '{default}' ({command}) is not a bindable key string"
+            );
+            assert!(
+                Chord::parse(default).is_some(),
+                "{command}: default '{default}' does not parse"
+            );
         }
         for k in [
             KeyCode::KeyW,

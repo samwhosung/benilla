@@ -583,33 +583,6 @@ pub(super) fn cycle(
     }
 }
 
-/// The `TARGETNEARESTENEMY` and `TARGETPREVIOUSENEMY` bindings (TAB, SHIFT-TAB); the dispatch has
-/// already applied the typing gate and the modifier match.
-pub(super) fn tab_target(
-    binds: Res<crate::bindings::BindingsState>,
-    time: Res<Time>,
-    scan: TargetScan,
-    mut history: ResMut<TabHistory>,
-    mut selection: ResMut<Selection>,
-    mut seam: crate::creature_anim::AttackSeam,
-    engaged: Query<(), (With<Engaged>, With<SelfPlayer>)>,
-) {
-    let reverse = binds.fired(crate::bindings::cmd::TARGET_PREVIOUS_ENEMY);
-    if !reverse && !binds.fired(crate::bindings::cmd::TARGET_NEAREST_ENEMY) {
-        return;
-    }
-    cycle(
-        ScanSide::Enemy,
-        reverse,
-        time.elapsed_secs_f64(),
-        &scan,
-        &mut history,
-        &mut selection,
-        &mut seam,
-        !engaged.is_empty(),
-    );
-}
-
 /// The target half of the attack validator `0x612df0` (`0x61305d`–`0x613198`), shared by the
 /// player's Attack (`0x6131aa`) and the pet bar's (`0x4bd40d`): what it reads beyond the
 /// selection, the cycler it runs as `TargetNearestEnemy` (`0x6130b5`, `0x493f60(0, 1)`), and

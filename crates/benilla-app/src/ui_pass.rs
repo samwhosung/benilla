@@ -734,12 +734,8 @@ fn rebuild_ui_mesh(
     mut pools: Local<BatchPools>,
     white: Option<Res<UiWhiteTexture>>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    // The hide binding and the cost meter's pair, bundled under clippy's argument ceiling.
-    mut hide_and_meter: (
-        Res<crate::ui_hide::UiHidden>,
-        ResMut<UiMeshCost>,
-        Res<crate::ui_script::UiCostWanted>,
-    ),
+    mut mesh_cost: ResMut<UiMeshCost>,
+    cost_wanted: Res<crate::ui_script::UiCostWanted>,
 ) {
     // Forget the materials of removed images first, before any early return, since a missed read
     // leaks: a cached material holds a strong image handle and, prepared, its GPU texture.
@@ -756,11 +752,9 @@ fn rebuild_ui_mesh(
     if !retired.is_empty() {
         pools.materials.retain(|key, _| !retired.contains(&key.0));
     }
-    let (hidden, mesh_cost, cost_wanted) =
-        (&hide_and_meter.0, &mut hide_and_meter.1, &hide_and_meter.2);
     // The meter is off unless asked (the hover recorder, `WOW_UI_COST=1`): one bool test.
     let cost_on = cost_wanted.0 || crate::ui_script::extract::ui_cost_enabled();
-    **mesh_cost = UiMeshCost::default();
+    *mesh_cost = UiMeshCost::default();
     let t_rebuild = cost_on.then(std::time::Instant::now);
     let mut t_mark = t_rebuild;
     let mut lap = move || -> u128 {
@@ -773,22 +767,7 @@ fn rebuild_ui_mesh(
     };
     let (meshes, materials) = (&mut stores.0, &mut stores.1);
     let q = quads.as_mut();
-    // TOGGLEUI hides at the draw, not the producers: both lanes keep filling, so the UI returns as
-    // it was ([`crate::ui_hide::UiHidden`]). The world is in neither lane (it is this camera's
-    // first draw), so retiring every batch leaves the world. While dark, the change flag is still
-    // swallowed and the append-lane mirror kept current, so neither lane reports a stale
-    // "unchanged" on return. The edge is `UiHidden`'s own change tick.
-    if hidden.is_changed() {
-        q.dirty = true;
-    }
-    let lanes_hidden = hidden.0;
-    if lanes_hidden {
-        q.last_overlays.clone_from(&q.overlays);
-        // Nothing moves a pixel while dark, so only the toggle edge rebuilds.
-        if !q.dirty {
-            return;
-        }
-    } else if !q.dirty && q.overlays == q.last_overlays {
+    if !q.dirty && q.overlays == q.last_overlays {
         return;
     }
     // `WOW_UI_DIFF=1`: names what re-triggered the rebuild, the base lane's dirty flag or the
@@ -832,7 +811,7 @@ fn rebuild_ui_mesh(
         retire_batches(&mut pools, &mut commands);
         return;
     };
-    let lanes_empty = lanes_hidden || (q.quads.is_empty() && q.overlays.is_empty());
+    let lanes_empty = q.quads.is_empty() && q.overlays.is_empty();
     if lanes_empty {
         retire_batches(&mut pools, &mut commands);
         q.dirty = false;
@@ -846,11 +825,7 @@ fn rebuild_ui_mesh(
     let to_world = move |p: Vec2| Vec2::new(p.x - half_w, half_h - p.y);
 
     // Stable, so equal keys keep producer order, the base lane before the append lane.
-    let mut sorted: Vec<&UiQuad> = if lanes_hidden {
-        Vec::new()
-    } else {
-        q.quads.iter().chain(q.overlays.iter()).collect()
-    };
+    let mut sorted: Vec<&UiQuad> = q.quads.iter().chain(q.overlays.iter()).collect();
     sorted.sort_by_key(|q| q.z_key);
     let n_sorted = sorted.len();
     let us_sort = lap();
@@ -1158,7 +1133,7 @@ fn rebuild_ui_mesh(
     pools.offsets.truncate(used);
     if cost_on {
         let us_write = lap();
-        **mesh_cost = UiMeshCost {
+        *mesh_cost = UiMeshCost {
             rebuilt: true,
             total: t_rebuild.map_or(0, |t| t.elapsed().as_micros()),
             sort: us_sort,
@@ -1186,7 +1161,6 @@ mod tests {
             .init_resource::<UiQuads>()
             .init_resource::<UiMeshCost>()
             .init_resource::<crate::ui_script::UiCostWanted>()
-            .init_resource::<crate::ui_hide::UiHidden>()
             .insert_resource(UiWhiteTexture(Handle::default()))
             .add_systems(Update, rebuild_ui_mesh);
         app.world_mut().spawn((Window::default(), PrimaryWindow));
@@ -1223,35 +1197,6 @@ mod tests {
             .query_filtered::<(), With<UiQuadBatch>>()
             .iter(app.world())
             .count()
-    }
-
-    fn set_hidden(app: &mut App, hidden: bool) {
-        app.world_mut().resource_mut::<crate::ui_hide::UiHidden>().0 = hidden;
-    }
-
-    /// Un-hiding brings back the same content, though neither lane changed while dark and the
-    /// rebuild would otherwise take its early-out.
-    #[test]
-    fn toggleui_retires_the_batches_and_restores_them() {
-        let mut app = rebuild_app();
-        app.update();
-        assert_eq!(batches(&mut app), 1, "one batch drawn to begin with");
-
-        set_hidden(&mut app, true);
-        app.update();
-        assert_eq!(batches(&mut app), 0, "hidden ⇒ nothing drawn");
-        // A flagged frame while dark still takes the dark path.
-        app.world_mut().resource_mut::<UiQuads>().dirty = true;
-        app.update();
-        assert_eq!(batches(&mut app), 0, "hidden stays hidden");
-
-        set_hidden(&mut app, false);
-        app.update();
-        assert_eq!(
-            batches(&mut app),
-            1,
-            "the UI comes back on the same content"
-        );
     }
 
     /// The cache's strong handle would otherwise pin the image and its GPU texture for good.
@@ -1318,32 +1263,6 @@ mod tests {
             .resource::<Assets<UiQuadMaterial>>()
             .iter()
             .any(|(_, m)| m.texture.as_ref().is_some_and(|t| t.id() == id))
-    }
-
-    /// The world is the UI camera's first draw (`benilla_world::ffx_glow::FfxBackdrop`), not a
-    /// batch, so dark leaves the world and nothing else; a batch alive while dark is a bug.
-    #[test]
-    fn toggleui_retires_every_batch_and_the_world_is_none_of_them() {
-        let mut app = rebuild_app();
-        app.update();
-        let lit = batches(&mut app);
-        assert!(lit >= 1, "content drawn to begin with");
-
-        set_hidden(&mut app, true);
-        app.update();
-        assert_eq!(
-            batches(&mut app),
-            0,
-            "dark ⇒ nothing drawn: the world is this camera's own pass, not a batch"
-        );
-
-        set_hidden(&mut app, false);
-        app.update();
-        assert_eq!(
-            batches(&mut app),
-            lit,
-            "the UI comes back over the same world"
-        );
     }
 
     /// The greyscale is a per-material uniform: merged, the first quad would decide both (a talent

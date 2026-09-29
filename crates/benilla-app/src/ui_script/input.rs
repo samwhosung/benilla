@@ -24,8 +24,6 @@ pub(super) struct PointerFeed<'w> {
     hovered_object: Res<'w, crate::target::HoveredObject>,
     occlusion: Res<'w, crate::target::PickOcclusion>,
     payload_held: ResMut<'w, CursorPayloadHeld>,
-    /// TOGGLEUI ([`crate::ui_hide::UiHidden`]): a hidden UI takes no mouse at all.
-    hidden: Res<'w, crate::ui_hide::UiHidden>,
     /// A headless probe drives the pointer ([`super::SyntheticPointer`]), not the real cursor.
     synthetic: Res<'w, super::SyntheticPointer>,
     /// A capture owns the pointer ([`super::CapturePointerPinned`]): no OS cursor in the shot.
@@ -99,7 +97,6 @@ pub(super) fn feed_ui_input(
 ) {
     let (keyboard, keys, capture, clipboard) = (&mut kbd.0, &kbd.1, &mut kbd.2, &mut kbd.3);
     let world_pick = pointer.world_pick();
-    let ui_hidden = pointer.hidden.0;
     // The OS pointer is not ours while a probe drives a gesture through the real pointer path or a
     // capture pins it: skip the mouse half whole, else-arm included, whose `pointer_left_window`
     // would disarm the probe's gesture between its press and release.
@@ -132,13 +129,13 @@ pub(super) fn feed_ui_input(
     let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     let alt = keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight);
     script.set_modifiers(shift, ctrl, alt);
-    // ── Mouse ── A cursor off the window, or a UI hidden by TOGGLEUI, skips only the mouse feed.
+    // ── Mouse ── A cursor off the window skips only the mouse feed.
     // The headless hover probe's aim stands in for a missing cursor, so `PointerOverUi` rises and
     // falls over a panel in an automated run as it does for a person; a real pointer always wins.
     if let Some(cursor) = window
         .cursor_position()
         .or_else(crate::target::hover_probe_point)
-        .filter(|_| !ui_hidden && !synthetic)
+        .filter(|_| !synthetic)
     {
         // The window cursor is logical px, y-down from the top left; the UI is y-up in 768-high
         // units under uiScale: flip through the window height, then undo the extract seam's scale.

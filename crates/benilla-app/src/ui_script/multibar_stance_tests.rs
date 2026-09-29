@@ -1204,7 +1204,7 @@ fn an_extra_bars_empty_well_keeps_its_bound_hotkey_label() {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     // The real command set, so `MULTIACTIONBAR1BUTTONn` is bindable; it ships unbound.
-    s.register_bindings(&crate::bindings::registry_commands());
+    crate::ui_script::load_stock_bindings(&mut s);
     load_action_bar(&s, &[]);
     show_bars(&s, &[1]);
     s.set_action(

@@ -135,7 +135,6 @@ mod ui_gamma;
 mod ui_gm_ticket;
 mod ui_gossip;
 mod ui_guild;
-mod ui_hide;
 mod ui_honor;
 mod ui_inspect;
 mod ui_instance;

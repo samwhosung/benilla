@@ -1026,13 +1026,13 @@ pub(super) fn seed_ui_fixture(
             }
         }
         UiFixture::KeyBindings => {
-            let Some(mut script) = script else {
+            let Some(script) = script else {
                 return;
             };
-            // The Keybindings page: the real command registry and CVar set first, then the live
-            // open path, with Movement expanded to show a header row and the default bindings.
+            // The Keybindings page over the commands the load registered: the real CVar set
+            // first, then the live open path, with Movement expanded to show a header row and the
+            // default bindings.
             script.register_cvars(crate::cvars::registered_pairs());
-            script.register_bindings(&crate::bindings::registry_commands());
             if let Err(e) = script.run(
                 "ShowUIPanel(BenillaOptionsFrame); \
                  BenillaOptionsFrameCategoryListRowKeybindings:Click(); \

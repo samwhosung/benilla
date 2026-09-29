@@ -226,8 +226,6 @@ impl PluginGroup for GamePlugins {
             .add(crate::raid_marks::RaidMarksPlugin)
             .add(crate::vplates::VPlatesPlugin)
             .add(crate::chat_bubble::ChatBubblePlugin)
-            // TOGGLEUI (`ALT-Z`): the whole quad layer goes dark, leaving the world and the cursor.
-            .add(crate::ui_hide::UiHidePlugin)
             .add(UiItemsPlugin)
             .add(UiGossipPlugin)
             .add(UiMerchantPlugin)
@@ -674,7 +672,7 @@ pub(crate) mod schedule_tests {
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 4_890;
+    const UPDATE_ACTIONABLE_CEILING: usize = 4_849;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {

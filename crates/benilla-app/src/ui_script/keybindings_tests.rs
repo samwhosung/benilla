@@ -2,16 +2,13 @@
 //! over the engine's binding table. Deviation: it is the era Settings panel's page, because 1.12's
 //! settings screens are much worse to use; capture and set follow 1.12's `Blizzard_BindingUI`.
 
-use benilla_ui::script::keybind::{KeybindCommand, KeybindRequest};
+use benilla_ui::script::keybind::KeybindRequest;
 use benilla_ui::script::{QuadContent, UiScript};
 
-use crate::bindings::commands::SPECS;
-
-/// The page's files in the production order, the registry seeded first, as `seed_bindings_for_vm`
-/// does.
+/// The page's files in the production order over the stock commands and the install's defaults.
 pub(crate) fn harness() -> UiScript {
     let mut s = UiScript::new().unwrap();
-    register_specs(&mut s);
+    crate::ui_script::load_stock_bindings(&mut s);
     s.set_screen_size(1024.0, 768.0);
     for file in [
         "Interface\\FrameXML\\GlobalStrings.lua",
@@ -44,19 +41,11 @@ pub(crate) fn harness() -> UiScript {
     s
 }
 
-/// The host's command registry, as `seed_bindings_for_vm` registers it.
-pub(crate) fn register_specs(s: &mut UiScript) {
-    let cmds: Vec<KeybindCommand> = SPECS
-        .iter()
-        .map(|spec| KeybindCommand {
-            name: spec.name,
-            category: spec.category,
-            run_on_up: spec.run_on_up(),
-            default1: spec.d1,
-            default2: spec.d2,
-        })
-        .collect();
-    s.register_bindings(&cmds);
+/// The install's defaults live, as a first login's account set is, on a VM whose load registered
+/// the stock commands.
+pub(crate) fn seed_defaults(s: &mut UiScript) {
+    s.set_default_bindings(crate::ui_script::default_bindings());
+    s.load_binding_set(1);
 }
 
 /// A label as the page resolves it: the GlobalStrings global named `token`, else `raw`.
@@ -146,11 +135,16 @@ fn the_page_is_an_options_category_with_the_collapsed_honest_tree() {
         .unwrap());
     // The categories in `Bindings.xml` order, each a header collapsed by default, as in the era;
     // the spacer headers over multibars 2-4 continue the section above (the page's deviation).
-    let mut expected: Vec<&str> = Vec::new();
-    for spec in SPECS {
-        if !expected.contains(&spec.category) && !spec.category.starts_with("BINDING_HEADER_BLANK")
-        {
-            expected.push(spec.category);
+    let stock = benilla_ui::bindings_xml::parse(
+        &crate::ui_script::stock_bindings_file().expect("the install's Bindings.xml"),
+    )
+    .unwrap();
+    let mut expected: Vec<String> = Vec::new();
+    for b in &stock {
+        let Some(h) = &b.header else { continue };
+        let token = format!("BINDING_HEADER_{h}");
+        if b.platform.is_none() && !token.starts_with("BINDING_HEADER_BLANK") {
+            expected.push(token);
         }
     }
     for (i, token) in expected.iter().enumerate() {
@@ -164,7 +158,9 @@ fn the_page_is_an_options_category_with_the_collapsed_honest_tree() {
             .unwrap(),
         "all sections collapsed: nothing past the headers"
     );
-    assert!(expected.contains(&"BINDING_HEADER_MULTIACTIONBAR"));
+    assert!(expected
+        .iter()
+        .any(|h| h == "BINDING_HEADER_MULTIACTIONBAR"));
     s.run(&format!("{ROW}1Header:Click()")).unwrap();
     assert_eq!(
         s.eval::<String>(&format!("return {ROW}2Description:GetText()"))
@@ -385,7 +381,7 @@ fn the_page_works_after_the_stock_binding_ui_loads_and_the_stock_window_reads_th
     let (mut s, failures) =
         super::layer_tests::production_load_with("bindingui", false, "", |_| {});
     assert!(failures.is_empty(), "load failures: {failures:#?}");
-    register_specs(&mut s);
+    seed_defaults(&mut s);
     s.run(r#"assert(LoadAddOn("Blizzard_BindingUI") == 1)"#)
         .unwrap();
     assert!(s
@@ -885,29 +881,114 @@ fn the_pet_lane_is_registered_under_the_action_bar_header() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
-/// `loadstring` on each command body: running one would need FrameXML this test does not load.
+/// `loadstring` on each stock command body: the reference compiles each at load (`0x704c70`),
+/// and running one would need FrameXML this test does not load.
 #[test]
 fn every_command_body_compiles() {
-    use crate::bindings::commands::Kind;
-
+    benilla_formats::wow_data_or_skip!();
+    let stock = benilla_ui::bindings_xml::parse(
+        &crate::ui_script::stock_bindings_file().expect("the install's Bindings.xml"),
+    )
+    .unwrap();
     let s = UiScript::new().unwrap();
-    for spec in SPECS {
-        let bodies: Vec<&str> = match &spec.kind {
-            Kind::Held | Kind::Host => Vec::new(),
-            Kind::Edge(body) => vec![*body],
-            Kind::EdgeUpDown(down, up) => vec![*down, *up],
-        };
-        for body in bodies {
-            s.run(&format!(
-                "local f, err = loadstring({body:?});                  if not f then BenillaBodyError = {name:?} .. \": \" .. err end",
-                body = body,
-                name = spec.name
-            ))
-            .unwrap_or_else(|e| panic!("{}: {e}", spec.name));
-        }
+    for b in &stock {
+        s.run(&format!(
+            "local f, err = loadstring({body:?}); \
+             if not f then BenillaBodyError = {name:?} .. \": \" .. err end",
+            body = b.body,
+            name = b.name
+        ))
+        .unwrap_or_else(|e| panic!("{}: {e}", b.name));
     }
     let bad: Vec<String> = s.errors();
     assert!(bad.is_empty(), "script errors: {bad:?}");
     s.run("if BenillaBodyError then error(BenillaBodyError) end")
         .unwrap_or_else(|e| panic!("a command body is not valid Lua: {e}"));
+}
+
+/// Every function and object a stock command body names exists once the in-game UI has loaded:
+/// the engine's behaviour sits behind the Lua globals the bodies call. Read off each body: a
+/// `Name(` call is a function, an `Object:` or `Object.` receiver a frame or table.
+#[test]
+fn every_stock_body_calls_what_the_load_defines() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = crate::local_state::test_env::ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (s, failures) = super::layer_tests::production_load_with("bindcalls", false, "", |_| {});
+    assert!(failures.is_empty(), "load failures: {failures:#?}");
+    let stock = benilla_ui::bindings_xml::parse(
+        &crate::ui_script::stock_bindings_file().expect("the install's Bindings.xml"),
+    )
+    .unwrap();
+    const KEYWORDS: [&str; 14] = [
+        "if", "then", "else", "elseif", "end", "not", "and", "or", "local", "function", "return",
+        "do", "while", "for",
+    ];
+    let mut missing = Vec::new();
+    for b in stock.iter().filter(|b| b.platform.is_none()) {
+        let body = b.body.as_bytes();
+        let mut i = 0;
+        while i < body.len() {
+            let c = body[i];
+            if !(c.is_ascii_alphabetic() || c == b'_') {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < body.len() && (body[i].is_ascii_alphanumeric() || body[i] == b'_') {
+                i += 1;
+            }
+            // A field or method name is its receiver's, not a global.
+            if start > 0 && matches!(body[start - 1], b'.' | b':') {
+                continue;
+            }
+            let name = &b.body[start..i];
+            let next = b.body[i..].trim_start().chars().next();
+            let want = match next {
+                Some('(') if !KEYWORDS.contains(&name) => "function",
+                Some(':') | Some('.') => "table",
+                _ => continue,
+            };
+            let kind: String = s.eval(&format!("return type({name})")).unwrap();
+            if kind != want {
+                missing.push(format!("{}: {name} is {kind}", b.name));
+            }
+        }
+    }
+    assert!(missing.is_empty(), "unresolved: {missing:#?}");
+}
+
+/// ALT-Z runs the stock TOGGLEUI body (`Bindings.xml:655-661`): `CloseAllWindows()` and
+/// `UIParent:Hide()`, then `UIParent:Show()`, so the interface under `UIParent` stops drawing and
+/// an open window is closed, as in the reference.
+#[test]
+fn toggleui_hides_uiparent_and_closes_the_windows() {
+    benilla_formats::wow_data_or_skip!();
+    let _l = crate::local_state::test_env::ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (mut s, failures) = super::layer_tests::production_load_with("toggleui", false, "", |_| {});
+    assert!(failures.is_empty(), "load failures: {failures:#?}");
+    s.run("ShowUIPanel(GameMenuFrame)").unwrap();
+    assert!(s
+        .eval::<bool>("return GameMenuFrame:IsVisible() == 1")
+        .unwrap());
+    s.resolve();
+    let lit = s.extract().len();
+    assert!(s.execute_binding("TOGGLEUI", true).unwrap());
+    s.resolve();
+    assert!(s
+        .eval::<bool>("return UIParent:IsVisible() == nil")
+        .unwrap());
+    assert!(s
+        .eval::<bool>("return GameMenuFrame:IsShown() == nil")
+        .unwrap());
+    assert!(
+        s.extract().len() < lit,
+        "the frames under UIParent stop drawing"
+    );
+    assert!(s.execute_binding("TOGGLEUI", true).unwrap());
+    assert!(s.eval::<bool>("return UIParent:IsVisible() == 1").unwrap());
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
 }

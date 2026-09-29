@@ -55,15 +55,13 @@ pub(super) fn item_action_route(
     }
 }
 
-/// The ATTACKTARGET binding (default T), whose stock body is `AttackTarget()`, and the melee
-/// probe's press with nothing selected: both the player's Attack ([`AttackPress::attack_target`]).
-pub(crate) fn attack_target_binding(
-    binds: Res<crate::bindings::BindingsState>,
+/// The melee probe's press with nothing selected, the player's Attack
+/// ([`AttackPress::attack_target`]), as the ATTACKTARGET binding's `AttackTarget()` is.
+pub(crate) fn attack_nearest_probe(
     mut probe: MessageReader<crate::target::AttackNearestRequest>,
     mut press: AttackPress,
 ) {
-    let probed = probe.read().last().is_some() && press.selection.guid.is_none();
-    if binds.fired(crate::bindings::cmd::ATTACK_TARGET) || probed {
+    if probe.read().last().is_some() && press.selection.guid.is_none() {
         press.attack_target();
     }
 }

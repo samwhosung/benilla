@@ -1,49 +1,29 @@
-//! The key-binding table behind `GetBinding`, `SetBinding`, `LoadBindings` and their kin: per
-//! command, its chords, spelled `[ALT-][CTRL-][SHIFT-]<TOKEN>` and matched by string equality as
-//! the reference does, and the one flat list `GetBinding` walks, whose section headers are rows of
-//! their own. Host commands carry their 1.12 defaults; an addon's `Bindings.xml` adds ordinary rows
-//! that also carry a Lua body.
+//! The key-binding table behind `GetBinding`, `SetBinding`, `LoadBindings` and their kin, in the
+//! reference's two halves. The commands are what `Bindings.xml` declared (the core's off the
+//! player's chain, then each addon's, through the one loader `0x4b6f70`): a name, its Lua body,
+//! `runOnUp`, and the one flat list `GetBinding` walks, whose section headers are rows of their
+//! own. The keys are a separate table of chord to command name, spelled
+//! `[ALT-][CTRL-][SHIFT-]<TOKEN>` and matched by string equality, which `SetBinding` writes without
+//! reading the command (`0x4b7490`): the live set the dispatcher probes, the stored account and
+//! character sets, and the defaults `WTF\DefaultBindings.wtf` fills (`0x4b62b0`).
 
 use std::collections::HashMap;
 
 use mlua::{Lua, MultiValue, Value};
 
-use crate::bindings_xml::AddonBinding;
+use crate::bindings_xml::Binding;
 
 use super::Model;
-
-/// One host-registered command: the 1.12 name, the header global string of the section it is filed
-/// under (`BINDING_HEADER_MOVEMENT`; a change from the previous command opens a `HEADER_*` row),
-/// whether it also runs on release (`runOnUp`, read only by
-/// `RunCommand` at `0x4b7bf1`, never a bindability rule), and the 1.12 default chords.
-#[derive(Clone, Copy, Debug)]
-pub struct KeybindCommand {
-    pub name: &'static str,
-    pub category: &'static str,
-    pub run_on_up: bool,
-    pub default1: Option<&'static str>,
-    pub default2: Option<&'static str>,
-}
-
-/// An addon binding's runnable half: what the app's dispatch needs to fire it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AddonBindingBody {
-    /// The command name as registered, the key of a `keybind_snapshot` row.
-    pub name: String,
-    /// Run the body a second time on the release, with `keystate = "up"` (`runOnUp="true"`).
-    pub run_on_up: bool,
-    /// The `<Binding>` element's Lua chunk, verbatim.
-    pub body: String,
-}
 
 /// A host request queued by Lua. `Save(set)` persists set 1 or 2 under `benilla-config/bindings/`;
 /// `Save(1)` also deletes the character set's file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KeybindRequest {
     Save(u32),
-    /// `RunBinding(command)`: the app runs the command's action as if its chord were pressed.
-    Run(String),
 }
+
+/// One key of a set: the chord and the command name it runs, as `SetBinding` stored it.
+pub type KeyBinding = (String, String);
 
 /// `SetBinding`'s only refusal: the alias step of `CBindings::SetBinding` (`0x4b7490`), then
 /// `IsValidBindingKeyString` (`0x4b7890`); no command is consulted. `Some` is the key to store,
@@ -126,17 +106,16 @@ fn is_valid_binding_key(key: &str) -> bool {
     NAMES.contains(&rest)
 }
 
+/// One command a `Bindings.xml` declared.
 #[derive(Clone, Debug)]
 struct Entry {
     name: String,
+    /// `runOnUp="true"`: the release runs the body again (`0x4b7bf1`).
     run_on_up: bool,
-    defaults: [Option<String>; 2],
-    /// The live chords in bind order; `GetBindingKey` and the window show the first two.
-    keys: Vec<String>,
-    /// An addon's `hidden="true"`: a full binding, left out of `GetNumBindings`/`GetBinding`.
+    /// `hidden="true"`: a full binding, left out of `GetNumBindings`/`GetBinding`.
     hidden: bool,
-    /// An addon binding's Lua chunk; `None` for a host command, whose action is engine-side.
-    body: Option<String>,
+    /// The `<Binding>` element's Lua chunk, verbatim.
+    body: String,
 }
 
 /// One row of the list `GetNumBindings`/`GetBinding` walk, in load order.
@@ -149,25 +128,64 @@ enum Row {
     Command(usize),
 }
 
-/// The table, the stored sets and the queued host requests; lives in [`Model`].
+/// The commands, the key sets and the queued host requests; lives in [`Model`].
 #[derive(Default)]
 pub(crate) struct KeybindState {
     entries: Vec<Entry>,
     /// The display list, headers and commands in load order.
     rows: Vec<Row>,
-    /// The section the last host command was filed under, so the next one opens a header only on
-    /// a change.
-    host_section: Option<String>,
     by_name: HashMap<String, usize>,
-    /// Stored sets in entry order: `[0]` account (set 1), `[1]` character (set 2, if any).
-    stored: [Option<Vec<Vec<String>>>; 2],
-    /// The same sets by uppercased name, for addon commands registered after the seed.
-    stored_by_name: [HashMap<String, Vec<String>>; 2],
+    /// The live keys the dispatcher probes, in bind order: one command per chord, and a command's
+    /// keys in the order `GetBindingKey` answers them.
+    live: Vec<KeyBinding>,
+    /// Set 0, the defaults `LoadBindings(0)` restores, in file order.
+    defaults: Vec<KeyBinding>,
+    /// Stored sets: `[0]` account (set 1), `[1]` character (set 2, if any).
+    stored: [Option<Vec<KeyBinding>>; 2],
     /// The set the live table edits (`GetCurrentBindingSet`): 1 account, 2 character.
     current_set: u32,
-    /// Bumped by every change to the live table: the app's signal to re-derive dispatch.
+    /// Bumped by every change to the live table or the commands: the app's signal to re-derive
+    /// dispatch.
     generation: u64,
     requests: Vec<KeybindRequest>,
+}
+
+/// `SetBinding(set, key, command)` on one key list: unbind `key` everywhere, then bind it to the
+/// command unless that is empty (`0x4b7490`, where an empty action is the unbind). The key is one
+/// [`normalize_binding_key`] accepted.
+fn bind_key(list: &mut Vec<KeyBinding>, key: String, command: Option<&str>) {
+    list.retain(|(k, _)| k != &key);
+    if let Some(command) = command.filter(|c| !c.is_empty()) {
+        list.push((key, command.to_owned()));
+    }
+}
+
+/// A list of `(key, command)` pairs applied in order through [`bind_key`], a key the validator
+/// refuses dropped: how the `.wtf` loader (`0x4b6140`) fills a set, line by line.
+fn key_list(pairs: impl IntoIterator<Item = KeyBinding>) -> Vec<KeyBinding> {
+    let mut list = Vec::new();
+    for (key, command) in pairs {
+        if let Some(key) = normalize_binding_key(&key) {
+            bind_key(&mut list, key, Some(&command));
+        }
+    }
+    list
+}
+
+/// A `.wtf` bindings file as the reference's reader (`0x4b6140`) takes it: lines split on CR and
+/// LF, a line counted only when it opens with `bind ` in any case (`0x4b61ea`), then the key up to
+/// the next space and the rest of the line as the command (`0x4b620d`), handed to `SetBinding`.
+pub fn parse_bindings_wtf(text: &str) -> Vec<KeyBinding> {
+    text.split(['\r', '\n'])
+        .filter_map(|line| {
+            let rest = line
+                .get(..5)
+                .filter(|p| p.eq_ignore_ascii_case("bind "))
+                .map(|_| &line[5..])?;
+            let (key, command) = rest.split_once(' ').unwrap_or((rest, ""));
+            Some((key.to_owned(), command.to_owned()))
+        })
+        .collect()
 }
 
 impl KeybindState {
@@ -180,6 +198,15 @@ impl KeybindState {
             Row::Header(_) => true,
             Row::Command(i) => !self.entries[*i].hidden,
         })
+    }
+
+    /// The live keys bound to `command`, in bind order; names compare case-insensitively
+    /// (`0x64a4c0`).
+    fn keys_of<'a>(&'a self, command: &'a str) -> impl Iterator<Item = &'a String> + 'a {
+        self.live
+            .iter()
+            .filter(move |(_, c)| c.eq_ignore_ascii_case(command))
+            .map(|(k, _)| k)
     }
 
     /// Open a section: a `HEADER_<header>` row, unless one of that name exists, which the reference
@@ -195,89 +222,36 @@ impl KeybindState {
         }
     }
 
-    /// Append a command and its row.
-    fn push_entry(&mut self, entry: Entry) {
-        let idx = self.entries.len();
-        self.by_name.insert(entry.name.to_ascii_uppercase(), idx);
-        self.entries.push(entry);
-        self.rows.push(Row::Command(idx));
-    }
-
-    /// `SetBinding(key[, command])`: unbind `key` everywhere, then append it to the command's
-    /// list. The reference refuses only an invalid key (`0x4b762c`) and never reads the command
-    /// (`0x4b7490`), so the wheel binds to a `runOnUp` command despite the stock window's
-    /// MOUSEWHEEL_ERROR branch.
+    /// `SetBinding(key[, command])` on the live set: refused only for a key string the validator
+    /// rejects (`0x4b762c`). The command is never read (`0x4b7490`), so a name no `Bindings.xml`
+    /// declared is stored and answered like any other.
     fn set_binding(&mut self, key: &str, command: Option<&str>) -> bool {
         let Some(key) = normalize_binding_key(key) else {
             return false;
         };
-        // Deviation: an unregistered command answers nil where the reference stores the string
-        // and answers 1, because this table only holds key lists of registered commands.
-        let cmd_idx = match command {
-            Some(name) => match self.by_name.get(&name.to_ascii_uppercase()) {
-                Some(&i) => Some(i),
-                None => return false,
-            },
-            None => None,
-        };
-        for e in &mut self.entries {
-            e.keys.retain(|k| k != &key);
-        }
-        if let Some(i) = cmd_idx {
-            self.entries[i].keys.push(key);
-        }
+        bind_key(&mut self.live, key, command);
         self.generation += 1;
         true
     }
 
-    /// The live key lists in entry order, as a stored set holds them.
-    fn snapshot(&self) -> Vec<Vec<String>> {
-        self.entries.iter().map(|e| e.keys.clone()).collect()
-    }
-
-    /// Replace the live key lists from a snapshot; an entry past the snapshot's end keeps its keys.
-    fn apply(&mut self, snap: &[Vec<String>]) {
-        for (i, e) in self.entries.iter_mut().enumerate() {
-            if let Some(keys) = snap.get(i) {
-                e.keys = keys.clone();
-            }
+    /// `LoadBindings(set)`: 0 defaults, 1 account, 2 character, which falls back to the account
+    /// set (the reference's starts as a copy), each falling back to the defaults. Loading defaults
+    /// keeps the current set, as the window's Reset To Default does.
+    fn load(&mut self, set: u32) {
+        let list = match set {
+            0 => &self.defaults,
+            1 => self.stored[0].as_ref().unwrap_or(&self.defaults),
+            2 => self.stored[1]
+                .as_ref()
+                .or(self.stored[0].as_ref())
+                .unwrap_or(&self.defaults),
+            _ => return,
+        };
+        self.live = list.clone();
+        if set != 0 {
+            self.current_set = set;
         }
         self.generation += 1;
-    }
-
-    fn defaults_snapshot(&self) -> Vec<Vec<String>> {
-        self.entries
-            .iter()
-            .map(|e| e.defaults.iter().flatten().cloned().collect())
-            .collect()
-    }
-
-    /// `LoadBindings(set)`: 0 defaults, 1 account, 2 character, which falls back to the account
-    /// set (the reference's starts as a copy). Loading defaults keeps the current set, as the
-    /// window's Reset To Default does.
-    fn load(&mut self, set: u32) {
-        match set {
-            0 => {
-                let d = self.defaults_snapshot();
-                self.apply(&d);
-            }
-            1 => {
-                let s = self.stored[0]
-                    .clone()
-                    .unwrap_or_else(|| self.defaults_snapshot());
-                self.apply(&s);
-                self.current_set = 1;
-            }
-            2 => {
-                let s = self.stored[1]
-                    .clone()
-                    .or_else(|| self.stored[0].clone())
-                    .unwrap_or_else(|| self.defaults_snapshot());
-                self.apply(&s);
-                self.current_set = 2;
-            }
-            _ => {}
-        }
     }
 
     /// `SaveBindings(which)`: store the live table as set `which` and make it current. Saving the
@@ -286,7 +260,7 @@ impl KeybindState {
         if which != 1 && which != 2 {
             return;
         }
-        self.stored[(which - 1) as usize] = Some(self.snapshot());
+        self.stored[(which - 1) as usize] = Some(self.live.clone());
         if which == 1 {
             self.stored[1] = None;
         }
@@ -294,146 +268,82 @@ impl KeybindState {
         self.requests.push(KeybindRequest::Save(which));
     }
 
-    /// Append one addon's parsed `Bindings.xml`, skipping a name already registered, so a host
-    /// command keeps it and no handed-out index moves. A `header` adds its `HEADER_<header>` row
-    /// before the binding's own, as in the reference's flat list.
-    /// Deviation: a file whose first binding has no header opens a `HEADER_<addon>` row, where the
-    /// reference files those rows under the previous file's last header, because under a foreign
-    /// header the player could not find them.
-    fn register_addon(&mut self, addon: &str, bindings: &[AddonBinding]) {
+    /// Append one parsed `Bindings.xml`, as the loader `0x4b6f70` does: a foreign `platform` skips
+    /// the node (`0x4b70c3`-`0x4b70e5`); a name already defined skips it before its header is
+    /// read (`0x4b70f1`-`0x4b717e`), so the first definition keeps it and no handed-out index
+    /// moves; a `header` adds its `HEADER_<header>` row before the binding's own.
+    ///
+    /// `fallback_header` is an addon's name. Deviation: an addon file whose first binding has no
+    /// header opens a `HEADER_<addon>` row, where the reference files those rows under the
+    /// previous file's last header, because under a foreign header the player could not find
+    /// them. The core file passes `None` and is read as the reference reads it.
+    fn register(&mut self, fallback_header: Option<&str>, bindings: &[Binding]) {
         let mut opened = false;
         for b in bindings {
-            // A foreign `platform` skips the whole node, header included (`0x4b70c3`-`0x4b70e5`).
             if b.platform.as_deref().is_some_and(|p| p != THIS_PLATFORM) {
                 continue;
             }
-            // A name already defined skips the node before its header is read (`0x4b70f1`-`0x4b717e`).
             let key = b.name.to_ascii_uppercase();
             if self.by_name.contains_key(&key) {
                 continue;
             }
-            match &b.header {
-                Some(h) => self.open_header(h),
-                None if !opened => self.open_header(addon),
-                None => {}
+            match (&b.header, fallback_header) {
+                (Some(h), _) => self.open_header(h),
+                (None, Some(addon)) if !opened => self.open_header(addon),
+                _ => {}
             }
             opened = true;
-            // The stored chord: the current set first, then the account set, as `load` falls back.
-            let stored = {
-                let cur = if self.current_set == 2 { 1 } else { 0 };
-                self.stored_by_name[cur]
-                    .get(&key)
-                    .or_else(|| self.stored_by_name[0].get(&key))
-                    .cloned()
-            };
-            self.push_entry(Entry {
+            let idx = self.entries.len();
+            self.by_name.insert(key, idx);
+            self.entries.push(Entry {
                 name: b.name.clone(),
                 run_on_up: b.run_on_up,
-                // 1.12's `<Binding>` carries no default chord.
-                defaults: [None, None],
-                keys: stored.unwrap_or_default(),
                 hidden: b.hidden,
-                body: Some(b.body.clone()),
+                body: b.body.clone(),
             });
+            self.rows.push(Row::Command(idx));
         }
         self.generation += 1;
     }
 }
 
-/// The `platform="…"` value that registers here: the Windows client compares against `"windows"`
-/// (`0x846f98`), the Mac client against `"mac"` (`0x4e28f8`); every other OS takes `"windows"`.
-const THIS_PLATFORM: &str = if cfg!(target_os = "macos") {
-    "mac"
-} else {
-    "windows"
-};
+/// The `platform="…"` value that registers: `"windows"` (`0x846f98`), the PC build's, on every OS,
+/// since benilla answers as the PC build (`IsMacClient` nil, `client.rs`); the Mac build compares
+/// against `"mac"` (`0x4e28f8`) and so has the `ITUNES_*` rows.
+const THIS_PLATFORM: &str = "windows";
 
 impl super::UiScript {
-    /// Register the host's commands at boot, in 1.12 `Bindings.xml` order, keys from the defaults.
-    pub fn register_bindings(&mut self, commands: &[KeybindCommand]) {
-        let mut model = self.model_mut();
-        for c in commands {
-            let key = c.name.to_ascii_uppercase();
-            if model.keybinds.by_name.contains_key(&key) {
-                continue;
-            }
-            let defaults = [c.default1.map(str::to_owned), c.default2.map(str::to_owned)];
-            let kb = &mut model.keybinds;
-            if kb.host_section.as_deref() != Some(c.category) {
-                kb.host_section = Some(c.category.to_owned());
-                let header = c
-                    .category
-                    .strip_prefix("BINDING_HEADER_")
-                    .unwrap_or(c.category);
-                kb.open_header(header);
-            }
-            kb.push_entry(Entry {
-                name: c.name.to_owned(),
-                run_on_up: c.run_on_up,
-                keys: defaults.iter().flatten().cloned().collect(),
-                defaults,
-                hidden: false,
-                body: None,
-            });
-        }
-        model.keybinds.current_set = 1;
-        model.keybinds.generation += 1;
+    /// Register the core's `Interface\FrameXML\Bindings.xml`, at the reference's point in the UI
+    /// load: after the `FrameXML.toc` walk (`0x48ffed`), before the addons (`0x490018`).
+    pub fn register_bindings(&self, bindings: &[Binding]) {
+        self.model_mut().keybinds.register(None, bindings);
     }
 
     /// Register one addon's parsed `Bindings.xml`, at the reference's point in the addon load:
-    /// after its `.toc` files, before its saved variables (`0x51f400`).
-    pub fn register_addon_bindings(&mut self, addon: &str, bindings: &[AddonBinding]) {
-        self.model_mut().keybinds.register_addon(addon, bindings);
+    /// after its `.toc` files, before its saved variables (`0x51f443`).
+    pub fn register_addon_bindings(&mut self, addon: &str, bindings: &[Binding]) {
+        self.model_mut().keybinds.register(Some(addon), bindings);
     }
 
-    /// Every addon binding's runnable half, in registration order; host commands have none.
-    pub fn addon_binding_bodies(&self) -> Vec<AddonBindingBody> {
-        self.model_mut()
-            .keybinds
-            .entries
-            .iter()
-            .filter_map(|e| {
-                e.body.as_ref().map(|body| AddonBindingBody {
-                    name: e.name.clone(),
-                    run_on_up: e.run_on_up,
-                    body: body.clone(),
-                })
-            })
-            .collect()
+    /// Set 0, the defaults, from `WTF\DefaultBindings.wtf` ([`parse_bindings_wtf`]), as
+    /// `0x4b62b0` loads it: each pair through `SetBinding(0, key, command)`.
+    pub fn set_default_bindings(&mut self, pairs: Vec<KeyBinding>) {
+        self.model_mut().keybinds.defaults = key_list(pairs);
+    }
+
+    /// Set 0, the defaults, in file order.
+    pub fn default_bindings(&self) -> Vec<KeyBinding> {
+        self.model_mut().keybinds.defaults.clone()
     }
 
     /// Seed stored set 1 (account) or 2 (character) from `benilla-config/bindings/`; `None` clears
     /// it. The live table is untouched until [`Self::load_binding_set`].
-    pub fn seed_binding_set(&mut self, set: u32, keys: Option<Vec<(String, Vec<String>)>>) {
+    pub fn seed_binding_set(&mut self, set: u32, keys: Option<Vec<KeyBinding>>) {
+        let keys = keys.map(key_list);
         let mut model = self.model_mut();
-        let kb = &mut model.keybinds;
-        // By name as well: an addon command registered later has no position yet.
-        let mut by_name_owned: HashMap<String, Vec<String>> = HashMap::new();
-        let snap = keys.map(|pairs| {
-            let by_name: HashMap<_, _> = pairs.into_iter().collect();
-            by_name_owned = by_name
-                .iter()
-                .map(|(n, k)| (n.to_ascii_uppercase(), k.clone()))
-                .collect();
-            kb.entries
-                .iter()
-                .map(|e| {
-                    by_name
-                        .get(&e.name)
-                        .cloned()
-                        .unwrap_or_else(|| e.keys.clone())
-                })
-                .collect()
-        });
         match set {
-            1 => {
-                kb.stored[0] = snap;
-                kb.stored_by_name[0] = by_name_owned;
-            }
-            2 => {
-                kb.stored[1] = snap;
-                kb.stored_by_name[1] = by_name_owned;
-            }
+            1 => model.keybinds.stored[0] = keys,
+            2 => model.keybinds.stored[1] = keys,
             _ => {}
         }
     }
@@ -443,14 +353,34 @@ impl super::UiScript {
         self.model_mut().keybinds.load(set);
     }
 
-    /// The live table as `(command, chords)` in registration order, for dispatch and the save.
+    /// The live keys as `(chord, command)` in bind order, for dispatch.
+    pub fn binding_keys(&self) -> Vec<KeyBinding> {
+        self.model_mut().keybinds.live.clone()
+    }
+
+    /// The live table as `(command, chords)`: every declared command in registration order, then
+    /// any other name a key is bound to, for the save and the tests.
     pub fn keybind_snapshot(&self) -> Vec<(String, Vec<String>)> {
-        self.model_mut()
-            .keybinds
+        let model = self.model_mut();
+        let kb = &model.keybinds;
+        let mut out: Vec<(String, Vec<String>)> = kb
             .entries
             .iter()
-            .map(|e| (e.name.clone(), e.keys.clone()))
-            .collect()
+            .map(|e| (e.name.clone(), kb.keys_of(&e.name).cloned().collect()))
+            .collect();
+        for (key, command) in &kb.live {
+            if kb.by_name.contains_key(&command.to_ascii_uppercase()) {
+                continue;
+            }
+            match out
+                .iter_mut()
+                .find(|(n, _)| n.eq_ignore_ascii_case(command))
+            {
+                Some((_, keys)) => keys.push(key.clone()),
+                None => out.push((command.clone(), vec![key.clone()])),
+            }
+        }
+        out
     }
 
     /// Bumped by every table change; re-derive dispatch when it moves.
@@ -476,11 +406,40 @@ impl super::UiScript {
 
 /// Register one addon's `Bindings.xml` from a bare `&Lua`: `LoadAddOn` runs inside a Lua binding
 /// with no `UiScript` to reach.
-pub(crate) fn register_addon_bindings(lua: &Lua, addon: &str, bindings: &[AddonBinding]) {
+pub(crate) fn register_addon_bindings(lua: &Lua, addon: &str, bindings: &[Binding]) {
     lua.app_data_mut::<Model>()
         .expect("model app_data")
         .keybinds
-        .register_addon(addon, bindings);
+        .register(Some(addon), bindings);
+}
+
+/// `CBindings::RunCommand` (`0x4b7b50`): look the command up by name (`0x4b7b77`); on a release
+/// run nothing unless it is `runOnUp` (`0x4b7bf1`); else set the global `keystate` to `"down"` or
+/// `"up"` (`0x4b7c0f`), run the body, and set `keystate` to nil (`0x4b7c42`-`0x4b7c4e`), since the
+/// 1.12 client's in-world `_G` has none (`reference/1.12-globals.tsv`). `Ok(false)` when nothing
+/// ran.
+pub(crate) fn run_command(lua: &Lua, command: &str, down: bool) -> mlua::Result<bool> {
+    let (name, body) = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        let kb = &model.keybinds;
+        let Some(&i) = kb.by_name.get(&command.to_ascii_uppercase()) else {
+            return Ok(false);
+        };
+        let e = &kb.entries[i];
+        if !down && !e.run_on_up {
+            return Ok(false);
+        }
+        (e.name.clone(), e.body.clone())
+    };
+    let g = lua.globals();
+    g.set("keystate", if down { "down" } else { "up" })?;
+    let ran = lua
+        .load(body.as_str())
+        .set_name(name)
+        .set_mode(mlua::ChunkMode::Text)
+        .exec();
+    g.set("keystate", Value::Nil)?;
+    ran.map(|()| true)
 }
 
 /// The binding globals. `GetBinding(i)` answers the row's name and then every key bound to it
@@ -503,13 +462,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(row) = i.checked_sub(1).and_then(|i| kb.visible().nth(i)) else {
                 return Ok(MultiValue::new());
             };
-            let (name, keys): (&str, &[String]) = match row {
-                Row::Header(h) => (h, &[]),
-                Row::Command(c) => (&kb.entries[*c].name, &kb.entries[*c].keys),
-            };
-            let mut out = vec![Value::String(lua.create_string(name)?)];
-            for k in keys {
-                out.push(Value::String(lua.create_string(k)?));
+            let mut out = Vec::new();
+            match row {
+                Row::Header(h) => out.push(Value::String(lua.create_string(h)?)),
+                Row::Command(c) => {
+                    let name = &kb.entries[*c].name;
+                    out.push(Value::String(lua.create_string(name)?));
+                    for k in kb.keys_of(name) {
+                        out.push(Value::String(lua.create_string(k)?));
+                    }
+                }
             }
             Ok(MultiValue::from_iter(out))
         })?,
@@ -522,16 +484,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(if ok { Some(1) } else { None })
         })?,
     )?;
-    // `RunBinding(command)`, as `CinematicFrame.xml:42` passes SCREENSHOT through: a host
-    // command's action is engine-side, so this queues it and the app runs it in the same frame.
+    // `RunBinding(command[, "up"])` (`0x4b8180`): the command's body through `RunCommand`
+    // (`0x4b81e0`), a release when the second argument is `"up"` in any case (`0x4b81c5`), else a
+    // press. Not a hardware event, so the movement functions' gate refuses unless a key's own
+    // body is already running.
     lua.globals().set(
         "RunBinding",
-        lua.create_function(|lua, command: String| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let name = command.to_ascii_uppercase();
-            if model.keybinds.by_name.contains_key(&name) {
-                model.keybinds.requests.push(KeybindRequest::Run(name));
-            }
+        lua.create_function(|lua, (command, state): (Value, Option<Value>)| {
+            let command =
+                super::binding_abi::string_arg(lua, command, "Usage: RunBinding(\"COMMAND\")")?;
+            let up = state
+                .as_ref()
+                .and_then(|v| super::binding_abi::optional_string(lua, v))
+                .is_some_and(|s| s.eq_ignore_ascii_case("up"));
+            run_command(lua, &command, !up)?;
             Ok(())
         })?,
     )?;
@@ -541,10 +507,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let model = lua.app_data_mut::<Model>().expect("model app_data");
             let kb = &model.keybinds;
             let mut out = Vec::new();
-            if let Some(&i) = kb.by_name.get(&command.to_ascii_uppercase()) {
-                for k in kb.entries[i].keys.iter().take(2) {
-                    out.push(Value::String(lua.create_string(k)?));
-                }
+            for k in kb.keys_of(&command).take(2) {
+                out.push(Value::String(lua.create_string(k)?));
             }
             Ok(MultiValue::from_iter(out))
         })?,
@@ -556,10 +520,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let key = key.to_ascii_uppercase();
             let name = model
                 .keybinds
-                .entries
+                .live
                 .iter()
-                .find(|e| e.keys.iter().any(|k| k == &key))
-                .map(|e| e.name.as_str())
+                .find(|(k, _)| k == &key)
+                .map(|(_, c)| c.as_str())
                 .unwrap_or("");
             lua.create_string(name)
         })?,
@@ -592,35 +556,26 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::KeybindCommand;
-    use crate::script::keybind::KeybindRequest;
+    use super::{parse_bindings_wtf, KeybindRequest};
+    use crate::bindings_xml::parse;
     use crate::script::UiScript;
+
+    /// Three commands in the reference's shape, bodies counting their runs, and their defaults.
+    const CORE: &str = r#"<Bindings>
+        <Binding name="MOVEFORWARD" runOnUp="true" header="MOVEMENT">
+            FWD_LAST = keystate
+        </Binding>
+        <Binding name="JUMP">JUMPS = (JUMPS or 0) + 1</Binding>
+        <Binding name="CAMERAZOOMIN" header="CAMERA">ZOOMS = (ZOOMS or 0) + 1</Binding>
+    </Bindings>"#;
+    const DEFAULTS: &str = "bind W MOVEFORWARD\r\nbind UP MOVEFORWARD\r\nbind SPACE JUMP\r\n\
+                            bind NUMPAD0 JUMP\r\nbind MOUSEWHEELUP CAMERAZOOMIN\r\n";
 
     fn script() -> UiScript {
         let mut s = UiScript::new().unwrap();
-        s.register_bindings(&[
-            KeybindCommand {
-                name: "MOVEFORWARD",
-                category: "BINDING_HEADER_MOVEMENT",
-                run_on_up: true,
-                default1: Some("W"),
-                default2: Some("UP"),
-            },
-            KeybindCommand {
-                name: "JUMP",
-                category: "BINDING_HEADER_MOVEMENT",
-                run_on_up: false,
-                default1: Some("SPACE"),
-                default2: Some("NUMPAD0"),
-            },
-            KeybindCommand {
-                name: "CAMERAZOOMIN",
-                category: "BINDING_HEADER_CAMERA",
-                run_on_up: false,
-                default1: Some("MOUSEWHEELUP"),
-                default2: None,
-            },
-        ]);
+        s.set_default_bindings(parse_bindings_wtf(DEFAULTS));
+        s.load_binding_set(1);
+        s.register_bindings(&parse(CORE).unwrap());
         s
     }
 
@@ -671,6 +626,17 @@ mod tests {
         );
     }
 
+    /// The core file is read as the reference reads it: a first row with no header files under
+    /// none, where an addon's opens a row of its own name (the deviation on `register`).
+    #[test]
+    fn the_core_file_opens_no_header_of_its_own() {
+        let s = UiScript::new().unwrap();
+        s.register_bindings(
+            &parse(r#"<Bindings><Binding name="A">x()</Binding></Bindings>"#).unwrap(),
+        );
+        assert_eq!(rows(&s), [row(&["A"])]);
+    }
+
     #[test]
     fn set_binding_steals_and_refuses_only_a_key_string_that_is_not_a_key() {
         let s = script();
@@ -693,6 +659,16 @@ mod tests {
             s.eval::<String>(r#"return GetBindingAction("SPACE")"#)
                 .unwrap(),
             ""
+        );
+        // The command is never read (`0x4b7490`): a name no file declared is stored and
+        // answered.
+        assert!(s
+            .eval::<bool>(r#"return SetBinding("CTRL-Y", "TOGGLESTATS") == 1"#)
+            .unwrap());
+        assert_eq!(
+            s.eval::<String>(r#"return GetBindingAction("CTRL-Y")"#)
+                .unwrap(),
+            "TOGGLESTATS"
         );
         // The wheel binds to a `runOnUp` command: `0x4b7490` never reads the command.
         assert!(s
@@ -764,6 +740,10 @@ mod tests {
             s.eval::<String>(r#"return GetBindingAction("F")"#).unwrap(),
             ""
         );
+        assert_eq!(
+            s.eval::<String>(r#"return GetBindingAction("W")"#).unwrap(),
+            "MOVEFORWARD"
+        );
         assert_eq!(s.current_binding_set(), 2);
         // Cancel reloads the saved character set.
         s.run("LoadBindings(2)").unwrap();
@@ -781,14 +761,14 @@ mod tests {
     #[test]
     fn an_addons_bindings_xml_registers_as_ordinary_rows() {
         let mut s = script();
-        let parsed = crate::bindings_xml::parse(
+        let parsed = parse(
             r#"<Bindings>
                 <Binding name="PROBEHOLD" runOnUp="true" header="PROBE">
-                    if ( keystate == "down" ) then Down(); else Up(); end
+                    PROBE_LAST = keystate
                 </Binding>
-                <Binding name="PROBEEDGE">Edge();</Binding>
+                <Binding name="PROBEEDGE">PROBE_EDGE = 1</Binding>
                 <Binding name="PROBEHIDDEN" hidden="true">Hidden();</Binding>
-                <Binding name="MOVEFORWARD">Hijack();</Binding>
+                <Binding name="MOVEFORWARD">HIJACKED = 1</Binding>
             </Bindings>"#,
         )
         .expect("well-formed");
@@ -815,6 +795,11 @@ mod tests {
                 r#"local k1, k2 = GetBindingKey("MOVEFORWARD"); return k1 == "W" and k2 == "UP""#
             )
             .unwrap());
+        assert!(s.execute_binding("MOVEFORWARD", true).unwrap());
+        assert!(
+            s.eval::<bool>("return HIJACKED == nil").unwrap(),
+            "the first definition keeps the name"
+        );
 
         // The hidden row is not enumerated, but binds and is found by key.
         assert!(s
@@ -832,18 +817,11 @@ mod tests {
             s.eval::<String>(r#"return GetBindingAction("H")"#).unwrap(),
             "PROBEHIDDEN"
         );
-        // `runOnUp` never refuses a wheel chord.
-        assert!(s
-            .eval::<bool>(r#"return SetBinding("MOUSEWHEELUP", "PROBEHOLD") == 1"#)
-            .unwrap());
-        assert!(s
-            .eval::<bool>(r#"return SetBinding("MOUSEWHEELDOWN", "PROBEEDGE") == 1"#)
-            .unwrap());
 
         // A duplicate's header is never read (`0x4b70f1`-`0x4b717e`); a header already in the
         // list is refused and the row files under the open one (`0x4b71c9`-`0x4b7258`); a hidden
         // row's header is a row, since the header is written before the hidden test (`0x4b73bc`).
-        let parsed = crate::bindings_xml::parse(
+        let parsed = parse(
             r#"<Bindings>
                 <Binding name="JUMP" header="DUPLICATE">Dup();</Binding>
                 <Binding name="PROBEAGAIN" header="PROBE">Again();</Binding>
@@ -857,47 +835,27 @@ mod tests {
             [row(&["PROBEAGAIN"]), row(&["HEADER_QUIET"])]
         );
 
-        // A file with no header opens a row of the addon's name (the deviation on
-        // `register_addon`).
-        let parsed = crate::bindings_xml::parse(
-            r#"<Bindings><Binding name="LIBKEY">Lib();</Binding></Bindings>"#,
-        )
-        .expect("well-formed");
+        // A file with no header opens a row of the addon's name (the deviation on `register`).
+        let parsed = parse(r#"<Bindings><Binding name="LIBKEY">Lib();</Binding></Bindings>"#)
+            .expect("well-formed");
         s.register_addon_bindings("ProbeLib", &parsed);
         assert_eq!(
             rows(&s)[10..],
             [row(&["HEADER_ProbeLib"]), row(&["LIBKEY"])]
         );
-
-        // Addon rows only, in registration order, hidden included.
-        let bodies = s.addon_binding_bodies();
-        let names: Vec<&str> = bodies.iter().map(|b| b.name.as_str()).collect();
-        assert_eq!(
-            names,
-            [
-                "PROBEHOLD",
-                "PROBEEDGE",
-                "PROBEHIDDEN",
-                "PROBEAGAIN",
-                "PROBEHIDDENHEAD",
-                "LIBKEY"
-            ]
-        );
-        assert!(bodies[0].run_on_up && !bodies[1].run_on_up);
-        assert!(bodies[0].body.contains(r#"keystate == "down""#));
     }
 
+    /// The PC build's filter on every OS (`0x4b70c3`-`0x4b70e5` against `"windows"`), so the
+    /// stock `platform="mac"` iTunes rows are never commands.
     #[test]
     fn a_binding_for_another_platform_does_not_register() {
         let mut s = script();
-        let parsed = crate::bindings_xml::parse(
+        let parsed = parse(
             r#"<Bindings>
-                <Binding name="PROBEHERE" platform="THIS">Here();</Binding>
-                <Binding name="PROBEELSEWHERE" platform="elsewhere">Elsewhere();</Binding>
+                <Binding name="PROBEHERE" platform="Windows">Here();</Binding>
+                <Binding name="PROBEMAC" platform="mac" header="ITUNES_REMOTE">Mac();</Binding>
                 <Binding name="PROBEANYWHERE">Anywhere();</Binding>
-            </Bindings>"#
-                .replace("THIS", super::THIS_PLATFORM)
-                .as_str(),
+            </Bindings>"#,
         )
         .unwrap();
         s.register_addon_bindings("Probe", &parsed);
@@ -906,43 +864,105 @@ mod tests {
         assert!(names.iter().any(|n| n == "PROBEHERE"), "{names:?}");
         assert!(names.iter().any(|n| n == "PROBEANYWHERE"), "{names:?}");
         assert!(
-            !names.iter().any(|n| n == "PROBEELSEWHERE"),
+            !names.iter().any(|n| n == "PROBEMAC"),
             "a foreign-platform row registered: {names:?}"
         );
-        assert!(!s
-            .addon_binding_bodies()
-            .iter()
-            .any(|b| b.name == "PROBEELSEWHERE"));
+        assert!(
+            !rows(&s).contains(&row(&["HEADER_ITUNES_REMOTE"])),
+            "the skipped node's header is never read"
+        );
     }
 
+    /// A stored set is the whole key table, as the reference's `bindings-cache.wtf` is: loading it
+    /// replaces the live keys, and a key it lacks is unbound.
     #[test]
     fn host_seeding_feeds_load() {
         let mut s = script();
-        s.seed_binding_set(1, Some(vec![("JUMP".into(), vec!["F".into()])]));
+        s.seed_binding_set(1, Some(vec![("F".into(), "JUMP".into())]));
         s.load_binding_set(1);
         assert_eq!(
             s.eval::<String>(r#"return GetBindingAction("F")"#).unwrap(),
             "JUMP"
         );
-        // A command the seed lacks keeps its live keys.
         assert_eq!(
             s.eval::<String>(r#"return GetBindingAction("W")"#).unwrap(),
-            "MOVEFORWARD"
+            ""
         );
         let snap = s.keybind_snapshot();
-        assert_eq!(snap[1].0, "JUMP");
-        assert_eq!(snap[1].1, vec!["F".to_string()]);
+        assert_eq!(snap[1], ("JUMP".to_string(), vec!["F".to_string()]));
+    }
+
+    /// The `.wtf` reader (`0x4b6140`): CR or LF ends a line, `bind ` opens one in any case, the key
+    /// runs to the next space and the command is the rest; `SetBinding` then refuses a bad key and
+    /// a later line steals an earlier one's key.
+    #[test]
+    fn a_bindings_wtf_reads_as_the_reference_reads_it() {
+        let pairs = parse_bindings_wtf(
+            "bind W MOVEFORWARD\r\nBIND UP MOVEFORWARD\n# a note\r\nbound X Y\r\n\
+             bind SCROLLLOCK JUMP\r\nbind SPACE JUMP\r\nbind SPACE SITORSTAND\r\n",
+        );
+        assert_eq!(pairs.len(), 5, "{pairs:?}");
+        let mut s = UiScript::new().unwrap();
+        s.set_default_bindings(pairs);
+        assert_eq!(
+            s.default_bindings(),
+            [
+                ("W".to_string(), "MOVEFORWARD".to_string()),
+                ("UP".to_string(), "MOVEFORWARD".to_string()),
+                ("SPACE".to_string(), "SITORSTAND".to_string()),
+            ]
+        );
+    }
+
+    /// `RunBinding(command[, "up"])` runs the body through `RunCommand` in the call
+    /// (`0x4b8180`-`0x4b81e0`): `keystate` set for the run and nil after (`0x4b7c42`), a release
+    /// only for a `runOnUp` command (`0x4b7bf1`), an unknown name a no-op, no name an error.
+    #[test]
+    fn run_binding_runs_the_body_in_the_call() {
+        let s = script();
+        s.run(r#"RunBinding("JUMP") RunBinding("JUMP", "up") RunBinding("NOSUCHCOMMAND")"#)
+            .unwrap();
+        assert_eq!(s.eval::<i64>("return JUMPS").unwrap(), 1);
+        s.run(r#"RunBinding("moveforward")"#).unwrap();
+        assert_eq!(s.eval::<String>("return FWD_LAST").unwrap(), "down");
+        s.run(r#"RunBinding("MOVEFORWARD", "UP")"#).unwrap();
+        assert_eq!(s.eval::<String>("return FWD_LAST").unwrap(), "up");
+        assert!(s.eval::<bool>("return keystate == nil").unwrap());
+        let err = s.run("RunBinding()").unwrap_err().to_string();
+        assert!(err.contains(r#"Usage: RunBinding("COMMAND")"#), "{err}");
+        // Nested, the inner run's nil is what the outer body sees after it: nothing restores.
+        s.register_bindings(
+            &parse(
+                r#"<Bindings><Binding name="OUTER">
+                    RunBinding("JUMP") OUTER_AFTER = tostring(keystate)
+                </Binding></Bindings>"#,
+            )
+            .unwrap(),
+        );
+        assert!(s.execute_binding("OUTER", true).unwrap());
+        assert_eq!(s.eval::<String>("return OUTER_AFTER").unwrap(), "nil");
+    }
+
+    /// `execute_binding` is `ExecuteBinding`'s `RunCommand`: the press runs, the release runs only
+    /// a `runOnUp` body, and nothing ran answers false.
+    #[test]
+    fn execute_binding_answers_whether_a_body_ran() {
+        let s = script();
+        assert!(s.execute_binding("JUMP", true).unwrap());
+        assert!(!s.execute_binding("JUMP", false).unwrap());
+        assert!(s.execute_binding("MOVEFORWARD", false).unwrap());
+        assert!(!s.execute_binding("TOGGLESTATS", true).unwrap());
+        assert_eq!(s.eval::<i64>("return JUMPS").unwrap(), 1);
     }
 }
 
 #[cfg(test)]
 mod addon_persistence_tests {
-    use crate::bindings_xml::AddonBinding;
-    use crate::script::keybind::KeybindCommand;
+    use crate::bindings_xml::Binding;
     use crate::script::UiScript;
 
-    fn binding(name: &str) -> AddonBinding {
-        AddonBinding {
+    fn binding(name: &str) -> Binding {
+        Binding {
             name: name.into(),
             header: None,
             run_on_up: false,
@@ -952,73 +972,48 @@ mod addon_persistence_tests {
         }
     }
 
+    fn keys(s: &UiScript, name: &str) -> Vec<String> {
+        s.keybind_snapshot()
+            .into_iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, k)| k)
+            .unwrap_or_default()
+    }
+
     /// The stored set is seeded at boot, before the addon's `Bindings.xml` registers at world
-    /// entry, so its row has no position to land in.
+    /// entry; the keys are their own table, so the chord is there when the command arrives.
     #[test]
     fn an_addon_binding_restores_its_stored_chord_registered_after_the_seed() {
         let mut s = UiScript::new().unwrap();
-        s.register_bindings(&[KeybindCommand {
-            name: "JUMP",
-            category: "BINDING_HEADER_MOVEMENT",
-            run_on_up: false,
-            default1: Some("SPACE"),
-            default2: None,
-        }]);
         s.seed_binding_set(
             1,
             Some(vec![
-                ("JUMP".into(), vec!["SPACE".into()]),
-                ("MYADDONTOGGLE".into(), vec!["CTRL-X".into()]),
+                ("SPACE".into(), "JUMP".into()),
+                ("CTRL-X".into(), "MYADDONTOGGLE".into()),
             ]),
         );
         s.load_binding_set(1);
-
         s.register_addon_bindings("MyAddon", &[binding("MYADDONTOGGLE")]);
-
-        let bound = s
-            .keybind_snapshot()
-            .into_iter()
-            .find(|(n, _)| n == "MYADDONTOGGLE")
-            .expect("the addon's command is in the table");
-        assert_eq!(
-            bound.1,
-            vec!["CTRL-X".to_string()],
-            "the stored chord came back, though the seed ran before the addon registered"
-        );
+        assert_eq!(keys(&s, "MYADDONTOGGLE"), ["CTRL-X"]);
+        assert!(s.execute_binding("MYADDONTOGGLE", true).unwrap());
     }
 
     #[test]
     fn an_addon_binding_with_no_stored_chord_registers_unbound() {
         let mut s = UiScript::new().unwrap();
-        s.seed_binding_set(1, Some(vec![("SOMETHINGELSE".into(), vec!["Q".into()])]));
+        s.seed_binding_set(1, Some(vec![("Q".into(), "SOMETHINGELSE".into())]));
         s.load_binding_set(1);
         s.register_addon_bindings("MyAddon", &[binding("MYADDONTOGGLE")]);
-        let bound = s
-            .keybind_snapshot()
-            .into_iter()
-            .find(|(n, _)| n == "MYADDONTOGGLE")
-            .expect("registered");
-        assert!(bound.1.is_empty());
+        assert!(keys(&s, "MYADDONTOGGLE").is_empty());
     }
 
     #[test]
     fn the_character_set_wins_for_an_addon_command() {
         let mut s = UiScript::new().unwrap();
-        s.seed_binding_set(
-            1,
-            Some(vec![("MYADDONTOGGLE".into(), vec!["CTRL-X".into()])]),
-        );
-        s.seed_binding_set(
-            2,
-            Some(vec![("MYADDONTOGGLE".into(), vec!["ALT-Z".into()])]),
-        );
+        s.seed_binding_set(1, Some(vec![("CTRL-X".into(), "MYADDONTOGGLE".into())]));
+        s.seed_binding_set(2, Some(vec![("ALT-Z".into(), "MYADDONTOGGLE".into())]));
         s.load_binding_set(2);
         s.register_addon_bindings("MyAddon", &[binding("MYADDONTOGGLE")]);
-        let bound = s
-            .keybind_snapshot()
-            .into_iter()
-            .find(|(n, _)| n == "MYADDONTOGGLE")
-            .expect("registered");
-        assert_eq!(bound.1, vec!["ALT-Z".to_string()]);
+        assert_eq!(keys(&s, "MYADDONTOGGLE"), ["ALT-Z"]);
     }
 }

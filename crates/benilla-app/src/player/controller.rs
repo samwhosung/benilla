@@ -266,8 +266,8 @@ pub(super) fn control(
     }
 
     // A rebound zoom key steps 1.0 per press, the stock `CameraZoomIn(1.0)` (`Bindings.xml:707`).
-    let zoom = binds.amount(crate::bindings::cmd::CAMERA_ZOOM_IN)
-        - binds.amount(crate::bindings::cmd::CAMERA_ZOOM_OUT);
+    let zoom = binds.amount(crate::bindings::Input::CameraZoomIn)
+        - binds.amount(crate::bindings::Input::CameraZoomOut);
     apply_zoom_scroll(zoom, dt, &mut rig, zoom_max);
 
     // Free fly is a dev tool on the dev chord: a bare `F` is the player's to bind.
@@ -493,7 +493,7 @@ pub(super) fn control(
         // `Jump` (`0x513bd0`) inlines `0x5144e0` and `0x514560`, which is `may_translate` term for
         // term: health, root and stand state 7. Hover's refusal is the movement handler's
         // (`0x7c623a`), which keeps the mounted flourish reachable while hovering.
-        let mut want_jump = binds.fired(crate::bindings::cmd::JUMP) && may_translate;
+        let mut want_jump = binds.fired(crate::bindings::Input::Jump) && may_translate;
 
         // Swim or walk, latched with hysteresis at the `0x6030c0` boundary against flicker.
         let surface_y = swim::surface_over_feet(world, player.pos);

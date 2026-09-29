@@ -216,7 +216,7 @@ fn every_micro_button_hovers_with_its_reference_explanation() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = harness();
     s.run("SHOW_NEWBIE_TIPS = \"1\"").unwrap();
-    s.register_bindings(&crate::bindings::registry_commands());
+    crate::ui_script::load_stock_bindings(&mut s);
     assert_eq!(
         s.eval::<Option<i64>>("return SetBinding(\"C\", \"TOGGLECHARACTER0\")")
             .unwrap(),

@@ -590,7 +590,7 @@ fn hovered_pet_bar() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     // The app's registries: `BONUSACTIONBUTTON1` binds CTRL-1 and `UberTooltips` reads "1".
-    s.register_bindings(&crate::bindings::registry_commands());
+    crate::ui_script::load_stock_bindings(&mut s);
     s.register_cvars(crate::cvars::registered_pairs());
     load_pet_bar(&s);
     declare_token_strings(&s);
