@@ -527,10 +527,16 @@ impl Plugin for CvarPlugin {
             // After the tick, so a `SetCVar` from this frame reaches the registry and its observers
             // before the frame's drains; `video::drain_restart_gx` orders after this so the commit
             // finds the stage.
-            .add_systems(Update, sync_cvars.after(crate::ui_script::UiInput));
-        // The save runs on the exit edge: the close button's `AppExit` is written in `PostUpdate`,
-        // and `Last` still runs after `sync_cvars`.
-        crate::shutdown::on_app_exit(app, save_config.into_configs());
+            .add_systems(Update, sync_cvars.after(crate::ui_script::UiInput))
+            // In `Last`, after every `Update` writer of the registry, so the save reads the frame's
+            // settled state; before the exit flush, which finds it clean on a quiet exit frame.
+            .add_systems(
+                Last,
+                save_config_when_quiet.before(crate::shutdown::OnAppExit),
+            );
+        // The exit flush runs on the exit edge: the close button's `AppExit` is written in
+        // `PostUpdate`, so an `Update` save never sees it.
+        crate::shutdown::on_app_exit(app, save_config_on_exit.into_configs());
     }
 }
 
@@ -812,17 +818,23 @@ const HEADER: &str = "\
 # Managed by the client; hand edits are read on next launch and preserved on save.
 ";
 
-/// Dirty and one quiet second, or the app exiting: rewrite `config.toml` atomically from the
-/// registry, so a session with no VM saves what it changed.
-fn save_config(mut cvars: ResMut<Cvars>, mut exits: MessageReader<AppExit>) {
-    let exiting = exits.read().next().is_some();
-    if !cvars.dirty {
-        return;
+/// Dirty and one quiet second since the last change: save, so a crash loses at most that second.
+fn save_config_when_quiet(mut cvars: ResMut<Cvars>) {
+    if cvars.dirty && cvars.last_change.is_none_or(|t| t.elapsed() >= SAVE_QUIET) {
+        write_config(&mut cvars);
     }
-    let quiet = cvars.last_change.is_none_or(|t| t.elapsed() >= SAVE_QUIET);
-    if !(quiet || exiting) {
-        return;
+}
+
+/// The exit frame: save whatever is still dirty, quiet second or not.
+fn save_config_on_exit(mut cvars: ResMut<Cvars>) {
+    if cvars.dirty {
+        write_config(&mut cvars);
     }
+}
+
+/// Rewrite `config.toml` atomically from the registry, so a session with no VM saves what it
+/// changed.
+fn write_config(cvars: &mut Cvars) {
     let Some(path) = crate::local_state::config_path() else {
         cvars.dirty = false; // hermetic/session-only: nothing to write, stop retrying
         return;
@@ -1531,6 +1543,46 @@ mod tests {
         assert_eq!(out.get("uiScale").map(String::as_str), Some("0.8"));
         assert!(!out.contains_key("farclip"));
         assert_eq!(out.get("FutureKnob").map(String::as_str), Some("3"));
+    }
+
+    #[test]
+    fn a_change_saves_after_one_quiet_second_with_no_exit() {
+        use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
+        let _l = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = std::env::temp_dir().join(format!("benilla-cvar-quiet-{}", std::process::id()));
+        std::fs::remove_dir_all(&tmp).ok();
+        let _c = EnvGuard::unset("WOW_CAPTURE");
+        let _u = EnvGuard::unset("WOW_UI_SCALE");
+        let _f = EnvGuard::unset("WOW_FARCLIP");
+        let _d = EnvGuard::unset("WOW_CLUTTER_DENSITY");
+        let _h = EnvGuard::set("BENILLA_HOME", tmp.to_str().unwrap());
+
+        let mut app = cvar_app();
+        app.update();
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run(r#"SetCVar("MusicVolume", 0.75)"#)
+            .unwrap();
+        app.update();
+        assert!(
+            !tmp.join("config.toml").exists(),
+            "inside the quiet second nothing is written"
+        );
+
+        // The change ages past the quiet second; no `AppExit` anywhere.
+        {
+            let mut cvars = app.world_mut().resource_mut::<Cvars>();
+            assert!(cvars.dirty);
+            cvars.last_change = Instant::now().checked_sub(SAVE_QUIET * 2);
+        }
+        app.update();
+        let text = std::fs::read_to_string(tmp.join("config.toml")).unwrap();
+        assert!(text.contains("MusicVolume = \"0.75\""), "{text}");
+        assert!(!app.world().resource::<Cvars>().dirty);
+        assert!(app.should_exit().is_none());
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]
