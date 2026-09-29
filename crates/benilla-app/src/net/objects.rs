@@ -303,7 +303,14 @@ fn on_object_destroyed(In(ev): In<SessionEvent>, mut sc: Scene) {
     if let SessionEvent::ObjectDestroyed(guid) = ev {
         crate::death::net::forget_corpse(guid, &mut sc.death_net);
         let held = |g: u64| sc.index.0.get(&g).and_then(|e| sc.stores.get(*e).ok());
-        crate::ui_party::net::member_deactivated(guid, &mut sc.group, held(guid), held, &sc.net);
+        crate::ui_party::net::member_deactivated(
+            guid,
+            &mut sc.group,
+            held(guid),
+            held,
+            &sc.names,
+            &sc.net,
+        );
         object_destroyed(guid, &mut sc.commands, &mut sc.index);
     }
 }
@@ -319,6 +326,7 @@ fn on_objects_removed(In(ev): In<SessionEvent>, mut sc: Scene) {
                 &mut sc.group,
                 held(*guid),
                 held,
+                &sc.names,
                 &sc.net,
             );
         }

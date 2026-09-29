@@ -228,7 +228,7 @@ fn on_worldport(
     } = ev
     {
         // Every streamed roster member is about to be purged; the reference deactivates each.
-        crate::ui_party::net::roster_deactivated(&mut group, &b.index, &b.stores, &b.net);
+        crate::ui_party::net::roster_deactivated(&mut group, &b.index, &b.stores, &b.names, &b.net);
         worldport(
             map_id,
             position,

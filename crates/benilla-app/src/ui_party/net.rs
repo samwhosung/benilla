@@ -299,13 +299,15 @@ fn seat_new_records(
 
 /// The despawn hook, the reference's deactivate virtual `0x5e9aa0` (object destroyed or out of
 /// range): for a roster member, snapshot the live descriptor into their record (`0x5f0880`), their
-/// pet's too while `held` finds it, then request their stats (`0x4e8646`). Nothing happens off the
-/// roster or without an object, since the hook is a virtual on the object.
+/// pet's too while `held` finds it, with the name `names` holds for it, then request their stats
+/// (`0x4e8646`). Nothing happens off the roster or without an object, since the hook is a virtual
+/// on the object.
 pub(crate) fn member_deactivated<'a>(
     guid: u64,
     group: &mut GroupState,
     store: Option<&'a ObjectStore>,
     held: impl Fn(u64) -> Option<&'a ObjectStore>,
+    names: &NameCache,
     net_commands: &NetCommands,
 ) {
     let Some(store) = store else {
@@ -314,12 +316,16 @@ pub(crate) fn member_deactivated<'a>(
     if !group.members.iter().any(|m| m.guid == guid) {
         return;
     }
-    let pet = store.0.unit_pet_guid().and_then(held);
+    let pet_guid = store.0.unit_pet_guid();
+    let pet = pet_guid.and_then(held);
+    let pet_name = pet_guid
+        .zip(pet)
+        .and_then(|(g, p)| names.peek_unit(g, Some(p)));
     group
         .stats
         .entry(guid)
         .or_default()
-        .snapshot_descriptor(&store.0, pet.map(|p| &p.0));
+        .snapshot_descriptor(&store.0, pet.map(|p| &p.0), pet_name);
     let _ = net_commands
         .0
         .send(ClientCommand::RequestPartyMemberStats { guid });
@@ -331,6 +337,7 @@ pub(crate) fn roster_deactivated(
     group: &mut GroupState,
     index: &GuidIndex,
     stores: &Query<&mut ObjectStore>,
+    names: &NameCache,
     net_commands: &NetCommands,
 ) {
     let streamed: Vec<u64> = group
@@ -341,7 +348,7 @@ pub(crate) fn roster_deactivated(
         .collect();
     let held = |g: u64| index.0.get(&g).and_then(|e| stores.get(*e).ok());
     for guid in streamed {
-        member_deactivated(guid, group, held(guid), held, net_commands);
+        member_deactivated(guid, group, held(guid), held, names, net_commands);
     }
 }
 
@@ -530,7 +537,14 @@ mod tests {
             (LEVEL, 41),
             (BYTES_0, 1 << 24), // POWER_RAGE in BYTES_0 byte 3
         ]));
-        member_deactivated(guid, &mut group, Some(&store), |_| None, &net);
+        member_deactivated(
+            guid,
+            &mut group,
+            Some(&store),
+            |_| None,
+            &NameCache::default(),
+            &net,
+        );
 
         let rec = group.stats.get(&guid).expect("the member has a record");
         assert_eq!(
@@ -574,13 +588,18 @@ mod tests {
             (SUMMON, pet_guid as u32),
             (SUMMON + 1, (pet_guid >> 32) as u32),
         ]));
+        // `UNIT_FIELD_PETNUMBER`, the key the pet-name cache files a pet's name under.
+        const PETNUMBER: u16 = 139;
         let pet = ObjectStore(benilla_protocol::messages::ObjectFields::from_pairs(&[
             (HEALTH, 900),
+            (PETNUMBER, 4),
             (AURA + 40, 770),
             (AURAFLAGS + 5, 0x0000_0002),
         ]));
         let held = |g: u64| (g == pet_guid).then_some(&pet);
-        member_deactivated(guid, &mut group, Some(&store), held, &net);
+        let mut names = NameCache::default();
+        names.insert_pet(4, "Whelp".into());
+        member_deactivated(guid, &mut group, Some(&store), held, &names, &net);
 
         let rec = group.stats.get(&guid).expect("the member has a record");
         assert_eq!(
@@ -590,14 +609,20 @@ mod tests {
         );
         assert_eq!(rec.auras_negative, Some(vec![(33, 589)]));
         assert_eq!(rec.pet_guid, Some(pet_guid));
+        assert_eq!(
+            rec.pet_name.as_deref(),
+            Some("Whelp"),
+            "the pet's cached name rides into the record, as `0x5f0a63`-`0x5f0a70` copy it (`+0x88`)"
+        );
         assert_eq!(rec.pet_cur_hp, Some(900));
         assert_eq!(rec.pet_auras, Some(vec![]));
         assert_eq!(rec.pet_auras_negative, Some(vec![(40, 770)]));
 
         // The pet not held: its block is emptied, not left as it was.
-        member_deactivated(guid, &mut group, Some(&store), |_| None, &net);
+        member_deactivated(guid, &mut group, Some(&store), |_| None, &names, &net);
         let rec = group.stats.get(&guid).unwrap();
         assert_eq!((rec.pet_guid, rec.pet_auras_negative.clone()), (None, None));
+        assert_eq!(rec.pet_name, None, "and its name with it (`0x5f0a0f`)");
         assert_eq!(rec.auras, Some(vec![(0, 1126)]));
     }
 
@@ -611,12 +636,26 @@ mod tests {
         let store = ObjectStore(benilla_protocol::messages::ObjectFields::from_pairs(&[(
             HEALTH, 40,
         )]));
-        member_deactivated(0xdead, &mut group, Some(&store), |_| None, &net);
+        member_deactivated(
+            0xdead,
+            &mut group,
+            Some(&store),
+            |_| None,
+            &NameCache::default(),
+            &net,
+        );
         assert!(asked(&rx).is_empty());
         assert!(!group.stats.contains_key(&0xdead));
 
         // The object gate alone: a roster member we hold no object for asks nothing.
-        member_deactivated(0x1234, &mut group, None, |_| None, &net);
+        member_deactivated(
+            0x1234,
+            &mut group,
+            None,
+            |_| None,
+            &NameCache::default(),
+            &net,
+        );
         assert!(asked(&rx).is_empty());
     }
 

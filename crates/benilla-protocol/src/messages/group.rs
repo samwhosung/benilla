@@ -219,15 +219,18 @@ impl PartyMemberStatsInfo {
     /// raw; [`Self::shown_power`] divides at the read. AFK and DND are cleared, as in the client.
     /// `pet` is the object of the member's pet guid ([`ObjectFields::unit_pet_guid`]) when held:
     /// its block is copied, and without one the pet block is emptied (`0x5f0a1f`-`0x5f0b72`).
+    /// `pet_name` is that pet's cached name (`0x609210`, copied into `+0x88` at `0x5f0a70`); a
+    /// pet whose name the cache does not hold yet keeps the name the record had.
     ///
     /// Deviation: zone and position are kept, not set to the viewer's zone and the object's
-    /// position, and the pet's name is not copied, because nothing in benilla reads them.
+    /// position, because nothing in benilla reads them.
     ///
     /// [`ObjectFields::unit_pet_guid`]: crate::messages::update_object::ObjectFields::unit_pet_guid
     pub fn snapshot_descriptor(
         &mut self,
         fields: &crate::messages::update_object::ObjectFields,
         pet: Option<&crate::messages::update_object::ObjectFields>,
+        pet_name: Option<&str>,
     ) {
         let mut status = member_status::ONLINE;
         if fields.player_is_ghost() {
@@ -263,6 +266,9 @@ impl PartyMemberStatsInfo {
             Some((guid, pet)) => {
                 let power_type = pet.unit_power_type();
                 self.pet_guid = Some(guid);
+                if let Some(name) = pet_name {
+                    self.pet_name = Some(name.to_string());
+                }
                 self.pet_model_id = Some(pet.unit_displayid().unwrap_or(0) as u16);
                 self.pet_cur_hp = Some(pet.unit_health().unwrap_or(0) as u16);
                 self.pet_max_hp = Some(pet.unit_max_health().unwrap_or(0) as u16);
@@ -305,6 +311,24 @@ impl PartyMemberStatsInfo {
     pub fn shown_max_power(&self) -> u32 {
         u32::from(self.max_power.unwrap_or(0))
             / power_display_scale(u32::from(self.shown_power_type()))
+    }
+
+    /// `UnitPowerType` from the pet block (`+0xd8`, `0x5179d2`'s pet leg), 0 when it has none.
+    pub fn shown_pet_power_type(&self) -> u8 {
+        self.pet_power_type.unwrap_or(0)
+    }
+
+    /// `UnitMana` from the pet block (`+0xe0`): the stored power divided by
+    /// [`power_display_scale`] of the pet's own power type, as for a live unit.
+    pub fn shown_pet_power(&self) -> u32 {
+        u32::from(self.pet_cur_power.unwrap_or(0))
+            / power_display_scale(u32::from(self.shown_pet_power_type()))
+    }
+
+    /// `UnitManaMax` from the pet block (`+0xe2`), the same divide.
+    pub fn shown_pet_max_power(&self) -> u32 {
+        u32::from(self.pet_max_power.unwrap_or(0))
+            / power_display_scale(u32::from(self.shown_pet_power_type()))
     }
 }
 
