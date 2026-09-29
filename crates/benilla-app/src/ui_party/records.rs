@@ -14,10 +14,20 @@ impl GroupState {
 
     /// The record whose pet block names `guid` (`0x496420`); a pet is found only while its owner's
     /// record reads online, party (`0x4e8860`) or raid (`0x4bb130`).
-    fn pet_record(&self, guid: u64) -> Option<&PartyMemberStatsInfo> {
+    pub(crate) fn pet_record(&self, guid: u64) -> Option<&PartyMemberStatsInfo> {
         self.stats
             .values()
             .find(|r| guid != 0 && r.pet_guid == Some(guid) && online(r))
+    }
+
+    /// Whether the roster fallback of `UnitExists` (`0x491900`) names `member`'s pet, which the
+    /// object manager may not hold and which `partypetN` or `raidpetN` resolved to a guid: a held
+    /// member answers off its descriptor's `CHARM`/`SUMMON` (`0x4e814d`, `0x4bb022`), an unheld one
+    /// off its record's pet guid while the record reads online (`0x4e816b`, `0x4bb040`). That test
+    /// is the party pet's own online gate already, but not the raid pet's guid, which the resolver
+    /// reads off the record with none (`0x4919ae`).
+    pub(crate) fn roster_names_pet(&self, member: u64, member_held: bool) -> bool {
+        member_held || self.member_record(member).is_some_and(online)
     }
 
     /// `partypetN`'s guid for the member `member` (`0x4e81d0`): `CHARM`, else `SUMMON`, off the

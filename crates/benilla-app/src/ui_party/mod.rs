@@ -16,6 +16,7 @@ use crate::ui_script::{UiFeed, UiInput};
 
 mod feed;
 pub(crate) mod net;
+mod pets;
 mod records;
 pub(crate) use feed::{
     raid_row_guid, raid_row_guids, synthetic_raid, synthetic_roster, GROUPTYPE_RAID,

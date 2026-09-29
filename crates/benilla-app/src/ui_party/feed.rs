@@ -18,6 +18,7 @@ use crate::net::{
 use crate::target::Selection;
 use crate::ui_script::gate;
 
+use super::pets::{self, Roster};
 use super::GroupState;
 
 // ─── The VM feed and drain ───────────────────────────────────────────────────────────────────────
@@ -39,6 +40,8 @@ pub(super) struct FedParty {
     names_generation: gate::Watch,
     area: gate::Watch,
     raid_units: Vec<Option<UnitState>>,
+    /// `partypet1..4` and `raidpet1..40`, with the `UNIT_PET` edges (see [`pets`]).
+    pets: pets::FedPets,
     /// The raid roster's identity (guid, rank, subgroup, online): `RAID_ROSTER_UPDATE`'s edge.
     raid_key: Vec<(u64, u32, u32, bool)>,
     saved: Vec<SavedInstanceInfo>,
@@ -101,7 +104,7 @@ pub(super) fn feed_party(
     mut edges: MessageReader<FieldChanged>,
     self_q: Query<(Entity, &Guid, &ObjectStore), With<SelfPlayer>>,
     factions: Option<Res<crate::target::Factions>>,
-    names: Res<NameCache>,
+    names: pets::Names,
     areas: Option<Res<crate::area::AreaTableRes>>,
     // The area under us, through the accessor `crate::area` uses: `terrain_stream::CurrentArea`
     // would cross the world-API wall (`tests/world_api_wall.rs`).
@@ -129,7 +132,9 @@ pub(super) fn feed_party(
     let area_moved = fed.area.moved(here.area().map_or(u64::MAX, u64::from));
     let group_changed = group.is_changed();
     let index_changed = index.is_changed();
-    // Only the stores the merged view reads: a crowd's other stores change every frame.
+    let look = pets::Lookup::new(&index, &stores, &names);
+    // Only the stores the merged view reads: a crowd's other stores change every frame. The
+    // members' pets are the group's too, `partypetN` and `raidpetN` reading their descriptors.
     let stores_changed = self_q
         .iter()
         .next()
@@ -139,7 +144,13 @@ pub(super) fn feed_party(
                 .0
                 .get(&m.guid)
                 .is_some_and(|&e| changed_stores.get(e).is_ok())
-        });
+        })
+        || pets::store_changed(
+            &look,
+            &group,
+            self_q.iter().next().map(|(_, g, store)| (g.0, store)),
+            &changed_stores,
+        );
     let stores_removed = !removed_stores.is_empty();
     let factions_changed = factions.as_ref().is_some_and(|r| r.is_changed());
     let areas_changed = areas.as_ref().is_some_and(|r| r.is_changed());
@@ -321,6 +332,27 @@ pub(super) fn feed_party(
         }
     }
 
+    // ── partypet1..partypet4 ────────────────────────────────────────────────
+    //
+    // Each slot's pet, off its descriptor or its record, after the members' own tokens and before
+    // the roster event whose handler asks `UnitExists("partypetN")` (`PartyMemberFrame.lua:73`).
+    for (i, token) in PARTY_PET_TOKENS.iter().enumerate() {
+        let owner = slots.get(i).map_or(0, |m| m.guid);
+        let now = (owner != 0)
+            .then(|| pets::member_pet(&look, &group, owner, look.store(owner), Roster::Party))
+            .flatten();
+        pets::feed_token(
+            &mut script,
+            &gate,
+            &edges,
+            &mut fed.pets.party[i],
+            token,
+            Some(PARTY_TOKENS[i]),
+            owner,
+            now,
+        );
+    }
+
     // ── raid1..raid40 ──────────────────────────────────────────────────────
     //
     // Token N is `GetRaidRosterInfo` row N, both in `raid_row_guids`' order. Our own row comes off
@@ -366,6 +398,35 @@ pub(super) fn feed_party(
             }
             fed.raid_units[i] = snap;
         }
+    }
+
+    // ── raidpet1..raidpet40 ────────────────────────────────────────────────
+    //
+    // Row N's pet. Our own row's pet is `"pet"`, whose own feed fires `UNIT_PET("player")`.
+    fed.pets
+        .raid
+        .resize_with(RAID_PET_TOKENS.len(), Default::default);
+    for (i, token) in RAID_PET_TOKENS.iter().enumerate() {
+        let owner = raid_guids.get(i).copied().unwrap_or(0);
+        let ours = Some(owner) == self_guid;
+        let held = if ours {
+            self_pair.map(|(_, _, store)| store)
+        } else {
+            look.store(owner)
+        };
+        let now = (owner != 0)
+            .then(|| pets::member_pet(&look, &group, owner, held, Roster::Raid))
+            .flatten();
+        pets::feed_token(
+            &mut script,
+            &gate,
+            &edges,
+            &mut fed.pets.raid[i],
+            token,
+            (!ours).then_some(RAID_TOKENS[i]),
+            owner,
+            now,
+        );
     }
 
     let roster: Vec<u64> = group.members.iter().map(|m| m.guid).collect();
@@ -661,7 +722,8 @@ fn member_unit_state(
         // Unstreamed: the roster record, snapshotted from the descriptor at despawn (`0x5f0880`),
         // seated at 1/1 for a member never seen (`0x4e82d0`) and patched by the wire. The
         // reference's getters read the descriptor, then the party record (`0x496400`), then the
-        // pet record (`0x496420`); a `partyN` token is never a pet, so the pet leg cannot arise.
+        // pet record (`0x496420`); a `partyN` token names a player, so only `partypetN` reaches
+        // that last leg ([`pets`]).
         None => UnitState {
             exists: true,
             guid: m.guid,
