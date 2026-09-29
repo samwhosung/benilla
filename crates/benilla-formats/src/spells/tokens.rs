@@ -152,12 +152,17 @@ fn modify_float(ctx: &TokenContext, d: &SpellDisplay, op: u8, value: f32) -> f32
     ctx.mods.map_or(value, |m| m.apply_float(d, op, value))
 }
 
-/// A spell's duration in ms, flat term only. `GetSpellDuration 0x6ea000` applies op 1 after
-/// resolving and capping the DBC row, unless its flag says not to (`6ea064`); `$d` and `$o` both
-/// call it.
+/// A spell's duration in ms, `GetSpellDuration 0x6ea000`, which `$d` and `$o` both call: the
+/// row's base plus its per-level term times the spell's own level ([`skill_level`], `6ea041`)
+/// less `baseLevel`, subtracted and multiplied unfloored (`6ea046`-`6ea053`), capped at the row's
+/// maximum (`6ea055`), then op 1 unless its flag says not to (`6ea064`).
 fn duration_ms(d: &SpellDisplay, ctx: &TokenContext) -> Option<i64> {
     let row = ctx.durations.get(d.duration_index)?;
-    let resolved = row.base_ms.min(row.max_ms);
+    let levels = (skill_level(ctx, d) as i32).wrapping_sub(d.base_level as i32);
+    let resolved = row
+        .base_ms
+        .wrapping_add(levels.wrapping_mul(row.per_level_ms))
+        .min(row.max_ms);
     Some(i64::from(if ctx.unmodified_points {
         resolved
     } else {
@@ -1100,6 +1105,67 @@ mod tests {
             ..ctx(&durations, &radii, &lookup)
         };
         assert_eq!(substitute("$2s1 $3s1", &outer, &c), "19 29");
+    }
+
+    /// Resurrection Sickness (15007) is the one shipped spell on a per-level duration row: 427,
+    /// -600000 ms plus 60000 a level, capped at 600000. In no line of the player's its level is 0,
+    /// and the duration is negative.
+    #[test]
+    fn the_duration_takes_its_per_level_term_from_real_data() {
+        let data = crate::wow_data_or_skip!();
+        let mut chain = crate::open_chain(&data).expect("open chain");
+        let spells = crate::load_spell_catalog(&mut chain).expect("Spell.dbc");
+        let durations = crate::load_spell_durations(&mut chain).expect("SpellDuration.dbc");
+        let radii = SpellRadiusCatalog::default();
+        let lookup = |id| spells.get(id);
+        let sickness = spells.get(15007).expect("Resurrection Sickness");
+        assert_eq!(sickness.duration_index, 427);
+        let skill = std::cell::Cell::new(0);
+        let skill_of = |_| skill.get();
+        let c = TokenContext {
+            skill: &skill_of,
+            ..ctx(&durations, &radii, &lookup)
+        };
+        for (value, expected) in [
+            (0, "<forever>"),
+            (50, "<0sec>"),
+            (55, "<1min>"),
+            (150, "<10min>"),
+        ] {
+            skill.set(value);
+            assert_eq!(substitute("$d", sickness, &c), expected, "skill {value}");
+        }
+    }
+
+    /// Below `baseLevel` the duration's per-level term goes negative: no floor (`6ea046`).
+    #[test]
+    fn the_duration_level_term_is_not_floored() {
+        let mut durations = SpellDurationCatalog::default();
+        durations.insert_row_for_tests(
+            1,
+            crate::SpellDuration {
+                base_ms: 20_000,
+                per_level_ms: 1_000,
+                max_ms: 30_000,
+            },
+        );
+        let radii = SpellRadiusCatalog::default();
+        let d = SpellDisplay {
+            base_level: 10,
+            duration_index: 1,
+            ..Default::default()
+        };
+        let skill = std::cell::Cell::new(0);
+        let skill_of = |_| skill.get();
+        let c = TokenContext {
+            skill: &skill_of,
+            ..ctx(&durations, &radii, &none_lookup)
+        };
+        // Level 5, five under: 20 s less 5 s. Level 20: 30 s, the cap.
+        skill.set(25);
+        assert_eq!(substitute("$d", &d, &c), "<15sec>");
+        skill.set(100);
+        assert_eq!(substitute("$d", &d, &c), "<30sec>");
     }
 
     #[test]

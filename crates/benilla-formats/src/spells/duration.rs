@@ -1,7 +1,7 @@
 //! `SpellDuration.dbc`: the duration a spell's `DurationIndex`
 //! ([`crate::spells::SpellDisplay::duration_index`]) resolves to in `Spell_C::GetSpellDuration`
 //! (`0x6ea000`), before spell-mod op 1 (`SPELLMOD_DURATION`). All three columns are signed: a few
-//! rows (427) pair a negative base with a per-level term this crate does not evaluate.
+//! rows (427, Resurrection Sickness's) pair a negative base with a per-level term.
 
 use std::collections::HashMap;
 
@@ -16,7 +16,8 @@ use crate::dbc::{i32_at, parse, u32_at};
 pub struct SpellDuration {
     /// The duration a level-independent tooltip shows; -1 is permanent.
     pub base_ms: i32,
-    /// Added per caster level above the spell's `BaseLevel`; 0 for most rows.
+    /// Added per level of the spell's skill level (`0x6e3130`) above its `baseLevel`, below it
+    /// taken off (`0x6ea049`); 0 for most rows.
     pub per_level_ms: i32,
     /// The ceiling the level-scaled duration clamps to.
     pub max_ms: i32,
@@ -48,6 +49,12 @@ impl SpellDurationCatalog {
                 max_ms: base_ms,
             },
         );
+    }
+
+    /// Test-only seeding of a whole row.
+    #[cfg(test)]
+    pub(crate) fn insert_row_for_tests(&mut self, index: u32, row: SpellDuration) {
+        self.durations.insert(index, row);
     }
 
     pub fn get(&self, index: u32) -> Option<&SpellDuration> {
