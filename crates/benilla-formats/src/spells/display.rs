@@ -13,6 +13,9 @@ pub struct OpenLock {
 
 /// One spell's `Spell.dbc` row, as the display, tooltip and cast gates read it.
 pub struct SpellDisplay {
+    /// `ID` (column 0): the row's own id, which `GetEffectPoints` hands the level lookup
+    /// `0x6e3130` (`0x6e384b`).
+    pub id: u32,
     pub name: String,
     /// `SpellNameSubtext` enUS (column 129): "Rank N", even "Rank 1", or a word such as "Racial".
     pub rank: Option<String>,
@@ -192,6 +195,7 @@ pub struct SpellDisplay {
 impl Default for SpellDisplay {
     fn default() -> Self {
         SpellDisplay {
+            id: 0,
             name: String::new(),
             rank: None,
             icon: None,
@@ -274,6 +278,18 @@ impl Default for SpellDisplay {
 }
 
 impl SpellDisplay {
+    /// The level the effect values, cast time, cost and duration scale by for a caster whose
+    /// skill in this spell's line is `skill_value` (`0x6e3130`): the skill capped at
+    /// `maxLevel × 5` unless `maxLevel` is 0 (`0x5ea6dc`-`0x5ea6ea`), over 5 (`0x6e3195`).
+    pub fn skill_level(&self, skill_value: u32) -> u32 {
+        let capped = if self.max_level > 0 {
+            skill_value.min(self.max_level.saturating_mul(5))
+        } else {
+            skill_value
+        };
+        capped / 5
+    }
+
     /// The `LockType` this spell opens, if any.
     pub fn open_lock_type(&self) -> Option<u32> {
         self.open_lock.map(|o| o.lock_type)
@@ -285,14 +301,10 @@ impl SpellDisplay {
     /// the flat terms.
     pub fn open_lock_skill(&self, skill_value: u32) -> Option<i32> {
         let e = self.open_lock?.effect;
-        // The skill capped at maxLevel·5, 0 uncapped (`0x5ea6e3`), integer /5 (`0x6e3195`), less
-        // baseLevel floored at 0 (read at `0x6e3854`, subtracted at `0x6e385b`-`0x6e385f`).
-        let capped = if self.max_level > 0 {
-            skill_value.min(self.max_level * 5)
-        } else {
-            skill_value
-        };
-        let delta = (capped / 5).saturating_sub(self.base_level) as f32;
+        // Less baseLevel floored at 0 (read at `0x6e3854`, subtracted at `0x6e385b`-`0x6e385f`).
+        let delta = self
+            .skill_level(skill_value)
+            .saturating_sub(self.base_level) as f32;
         let v = self.effect_base_points[e] as f32
             + self.effect_base_dice[e] as f32
             + self.effect_dice_per_level[e] as f32 * delta

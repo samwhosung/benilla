@@ -55,6 +55,8 @@ struct ViewCtx<'a, 'w, 's> {
     items: &'a mut Items,
     commands: &'a NetCommands,
     sub_classes: Option<&'a benilla_formats::ItemSubClassCatalog>,
+    /// The spell-to-line hop the `$`-tokens' skill level reads ([`crate::spell::spell_skill_value`]).
+    skill_lines: Option<&'a benilla_formats::SkillLineCatalog>,
     /// The talent spell-modifier tables: the cost cell shows the modified cost (`power_cost`).
     spell_mods: &'a crate::spell::SpellModifiers,
     /// The VM's `GlobalStrings.lua`, where the keyed cells and the `$` tokens' templates resolve.
@@ -83,7 +85,7 @@ fn spell_tooltip_view(
         durations: &spells.durations,
         radii: &spells.radii,
         ranges: Some(&spells.ranges),
-        caster_level: vctx.store.and_then(|s| s.0.unit_level()),
+        skill: &|id| crate::spell::spell_skill_value(vctx.store, vctx.skill_lines, id),
         lookup: &|id| spells.catalog.get(id),
         mods: Some(vctx.spell_mods),
         unmodified_points: false,
@@ -328,8 +330,8 @@ struct SpellFeedMemory {
     home: Option<String>,
     /// The form the required-form line's colour follows (`0x52f1e3`).
     form: Option<u8>,
-    /// The description's per-level effect values follow the player level.
-    caster_level: Option<Option<u32>>,
+    /// The skills the descriptions' per-level terms scale by ([`crate::spell::skill_snapshot`]).
+    skills: Option<crate::spell::SkillSnapshot>,
     /// The 19 worn-slot guids the required-item line's colour follows (`0x5f0c50`).
     worn: Option<[u64; 19]>,
     /// The block, dodge, parry and crit percentages as bit patterns (`0x52f5b1`).
@@ -367,11 +369,12 @@ fn feed_spell_tooltips(
     lookups: (
         Option<Res<crate::ui_items::ItemSubClasses>>,
         Res<crate::spell::SpellModifiers>,
+        Option<Res<crate::ui_spellbook::SkillLines>>,
     ),
     commands: Res<NetCommands>,
     mut memory: Local<crate::ui_script::VmMemo<SpellFeedMemory>>,
 ) {
-    let (sub_classes, spell_mods) = &lookups;
+    let (sub_classes, spell_mods, skill_lines) = &lookups;
     let SpellTooltipSources {
         spells,
         trainer_subjects,
@@ -446,9 +449,10 @@ fn feed_spell_tooltips(
         wanted.extend(memory.pushed.drain());
     }
     let self_store = self_q.single().ok();
-    let caster_level = self_store.and_then(|s| s.0.unit_level());
-    if memory.caster_level != Some(caster_level) {
-        memory.caster_level = Some(caster_level);
+    // So does a skill change: the `$`-tokens' per-level terms scale by the spell's line.
+    let skills = crate::spell::skill_snapshot(self_store);
+    if memory.skills != Some(skills) {
+        memory.skills = Some(skills);
         wanted.extend(memory.pushed.drain());
     }
     // So do the worn set and, below, the reagents on show.
@@ -520,6 +524,7 @@ fn feed_spell_tooltips(
             items: &mut items,
             commands: &commands,
             sub_classes: sub_classes.as_deref().map(|c| &c.0),
+            skill_lines: skill_lines.as_deref().map(|s| &s.catalog),
             spell_mods,
             get: &get,
         };

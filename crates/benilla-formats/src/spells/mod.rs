@@ -475,6 +475,7 @@ pub fn load_spell_catalog(chain: &mut Chain) -> Result<SpellCatalog> {
         spells.insert(
             id,
             SpellDisplay {
+                id,
                 name,
                 rank,
                 icon,

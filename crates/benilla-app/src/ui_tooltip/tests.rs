@@ -13,6 +13,8 @@ struct TestCtx {
     get: Box<Getter>,
     /// Empty by default; modifier tests populate it explicitly.
     spell_mods: crate::spell::SpellModifiers,
+    /// Absent by default: every spell's skill level reads 0.
+    skill_lines: Option<benilla_formats::SkillLineCatalog>,
 }
 
 type Getter = dyn Fn(&str) -> Option<String>;
@@ -28,6 +30,7 @@ impl TestCtx {
             _rx: rx,
             get: Box::new(move |key| benilla_ui::strings::global(vm.lua(), key)),
             spell_mods: crate::spell::SpellModifiers::default(),
+            skill_lines: None,
         }
     }
 
@@ -68,6 +71,7 @@ impl TestCtx {
             items: &mut self.items,
             commands: &self.commands,
             sub_classes,
+            skill_lines: self.skill_lines.as_ref(),
             spell_mods: &self.spell_mods,
             get: self.get.as_ref(),
         }
@@ -85,8 +89,12 @@ fn empty_player() -> ObjectStore {
     )]))
 }
 
+/// Battle Shout rank 1's `$s1` (14 + 1d1, 0.5 a level from 1, cap 11) scales by the player's
+/// skill in its line over 5 (`0x6e3130`), not the character level: a class line sits at level
+/// × 5 (vmangos `Player::UpdateSkillsForLevel`), so levels 1, 11 and 60 read 15, 20 and 20.
 #[test]
-fn battle_shout_description_uses_player_level() {
+fn battle_shout_description_scales_by_the_skill_level() {
+    use benilla_protocol::messages::FIELD_PLAYER_SKILL_INFO_1_1;
     let data = benilla_formats::wow_data_or_skip!();
     let mut chain = benilla_formats::open_chain(&data).expect("open chain");
     let spells = Spells {
@@ -97,11 +105,21 @@ fn battle_shout_description_uses_player_level() {
         durations: benilla_formats::load_spell_durations(&mut chain).expect("durations"),
         radii: benilla_formats::load_spell_radii(&mut chain).expect("radii"),
     };
+    let skill_lines = benilla_formats::load_skill_line_catalog(&mut chain).expect("skill lines");
+    let line = skill_lines
+        .spell_to_line(6673)
+        .expect("Battle Shout's line");
     let mut t = TestCtx::new();
+    t.skill_lines = Some(skill_lines);
     let mut objs = no_objects();
     let objects = objs.get();
-    for (level, ap) in [(1, 15), (11, 20), (60, 20)] {
-        let store = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(34, level)]));
+    // (character level, skill value, attack power); the last is a level 60 at skill 5.
+    for (level, skill, ap) in [(1, 5, 15), (11, 55, 20), (60, 300, 20), (60, 5, 15)] {
+        let store = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+            (34, level),
+            (FIELD_PLAYER_SKILL_INFO_1_1, line),
+            (FIELD_PLAYER_SKILL_INFO_1_1 + 1, skill | 300 << 16),
+        ]));
         let view = spell_tooltip_view(
             6673,
             &spells,
@@ -110,7 +128,7 @@ fn battle_shout_description_uses_player_level() {
         .expect("Battle Shout view");
         assert!(
             view.description.contains(&format!("by {ap}.")),
-            "level {level}: {}",
+            "level {level}, skill {skill}: {}",
             view.description
         );
     }

@@ -100,3 +100,55 @@ impl Plugin for SpellPlugin {
         net::register(app);
     }
 }
+
+/// The player's skill in `spell_id`'s own line, the input of every per-level term: `0x5ea690`
+/// hops spell to SkillLineAbility line (`0x6de040`), then `0x5ea520` reads that line's
+/// `PLAYER_SKILL_INFO` slot. Every missing input reads 0, like the reference's null paths.
+pub(crate) fn spell_skill_value(
+    me: Option<&crate::net::ObjectStore>,
+    skill_lines: Option<&benilla_formats::SkillLineCatalog>,
+    spell_id: u32,
+) -> u32 {
+    let Some(line) = skill_lines.and_then(|c| c.spell_to_line(spell_id)) else {
+        return 0;
+    };
+    let Some(store) = me else { return 0 };
+    line_skill_value(
+        (0..benilla_protocol::messages::PLAYER_SKILL_SLOTS)
+            .filter_map(|slot| store.0.player_skill(slot)),
+        line,
+    )
+}
+
+/// `0x5ea520`'s sum on the line's first slot: `value + temp_bonus + perm_bonus`
+/// (`0x5ea56d`..`0x5ea580`), floored at 0 since the bonuses are signed.
+fn line_skill_value(
+    slots: impl Iterator<Item = benilla_protocol::messages::PlayerSkillSlot>,
+    line: u32,
+) -> u32 {
+    for s in slots {
+        if u32::from(s.skill_id) == line {
+            let v = i32::from(s.value) + i32::from(s.temp_bonus) + i32::from(s.perm_bonus);
+            return v.max(0) as u32;
+        }
+    }
+    0
+}
+
+/// Each skill slot's line and effective value, all [`spell_skill_value`] reads: a text built
+/// against one snapshot is rebuilt when the next differs.
+pub(crate) type SkillSnapshot =
+    [(u16, u32); benilla_protocol::messages::PLAYER_SKILL_SLOTS as usize];
+
+/// The [`SkillSnapshot`] of the player; all zeros without one.
+pub(crate) fn skill_snapshot(me: Option<&crate::net::ObjectStore>) -> SkillSnapshot {
+    std::array::from_fn(|slot| {
+        me.and_then(|s| s.0.player_skill(slot as u8))
+            .map_or((0, 0), |s| {
+                (
+                    s.skill_id,
+                    line_skill_value(std::iter::once(s), s.skill_id.into()),
+                )
+            })
+    })
+}
