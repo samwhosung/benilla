@@ -65,8 +65,9 @@ pub(crate) mod test_bake;
 
 /// The round portrait slots, each with its own layer and camera. `"npc"` is an interaction
 /// window's NPC ([`crate::ui_session::InteractNpc`]); `"targettarget"` resolves only while drawn,
-/// and so does the loot source `SetLootPortrait` binds ([`benilla_ui::script::LOOT_PORTRAIT_UNIT`]).
-const SLOTS: [&str; 10] = [
+/// and so do a party member's pet, `"partypetN"`, and the loot source `SetLootPortrait` binds
+/// ([`benilla_ui::script::LOOT_PORTRAIT_UNIT`]).
+const SLOTS: [&str; 14] = [
     "player",
     "target",
     "targettarget",
@@ -76,6 +77,10 @@ const SLOTS: [&str; 10] = [
     "party2",
     "party3",
     "party4",
+    "partypet1",
+    "partypet2",
+    "partypet3",
+    "partypet4",
     benilla_ui::script::LOOT_PORTRAIT_UNIT,
 ];
 /// The character window's full-body pane: the dressed player, sampled square.
@@ -1343,6 +1348,19 @@ fn sync_portraits(
                         .and_then(|g| party.index.0.get(&g).copied())
                 })
                 .flatten(),
+            // A party member's pet, gated on the UI drawing it as `"targettarget"` is: a slot's
+            // frame ships hidden, and an undrawn one would bake for nothing.
+            tok if tok.starts_with("partypet") => {
+                let (entity, stand_in) = party_pet_subject(
+                    &party.roster,
+                    tok,
+                    party.panes.0.contains_key(tok),
+                    |g| party.index.0.get(&g).copied(),
+                    |g| party.index.0.get(&g).and_then(|e| stores_q.get(*e).ok()),
+                );
+                unseen = stand_in.or(unseen);
+                entity
+            }
             // Out of range, the stand-in's race and sex come from the name cache.
             tok => {
                 let member = tok
@@ -2193,10 +2211,54 @@ fn player_temporary_portrait(race: Option<u8>, sex: Option<u8>) -> String {
     format!("{TEMPORARY_PORTRAIT}-{sex}-{race}.blp")
 }
 
+/// What `"partypetN"`'s portrait shows, as the entity to bake and the stand-in file: the pet the
+/// roster names for that party slot (`0x4e81d0`) while the UI draws the slot. A pet the client does
+/// not hold takes the roster pet's stand-in (`0x525cb0`), and one with no pet record, blank
+/// (`0x51a0ce`), so neither.
+///
+/// Deviation: the reference probes a bake cache keyed by the record's display id (`0x525cb0`,
+/// `0xc0cea4`) before the stand-in, so a pet out of view keeps its face. benilla holds no such
+/// cache, and [`PortraitBakes`] is keyed by guid for the party slots alone: the stand-in shows.
+fn party_pet_subject<'a>(
+    roster: &crate::ui_party::GroupState,
+    token: &str,
+    drawn: bool,
+    entity_of: impl Fn(u64) -> Option<Entity>,
+    store_of: impl Fn(u64) -> Option<&'a crate::net::ObjectStore>,
+) -> (Option<Entity>, Option<String>) {
+    if !drawn {
+        return (None, None);
+    }
+    let Some(member) = token
+        .strip_prefix("partypet")
+        .and_then(|n| n.parse::<usize>().ok())
+        .and_then(|n| n.checked_sub(1))
+        .and_then(|n| roster.party_slots().nth(n))
+    else {
+        return (None, None);
+    };
+    let Some(pet) = roster.party_pet_guid(member.guid, store_of(member.guid).map(|s| &s.0)) else {
+        return (None, None);
+    };
+    match entity_of(pet) {
+        Some(entity) => (Some(entity), None),
+        None => (
+            None,
+            roster.pet_record(pet).map(|_| pet_temporary_portrait()),
+        ),
+    }
+}
+
 /// The creature stand-in, benilla's own file: the reference's only creature stand-in is `-Pet`,
 /// for a roster pet with no object (`0x525cb0`), and a live creature not yet loaded shows blank.
 fn creature_temporary_portrait() -> String {
     format!("{TEMPORARY_PORTRAIT}-Monster.blp")
+}
+
+/// A roster pet with no object and no bake under its display id (`0x525cb0`): the reference's
+/// creature stand-in, its only.
+fn pet_temporary_portrait() -> String {
+    format!("{TEMPORARY_PORTRAIT}-Pet.blp")
 }
 
 /// Set the named slot's camera transform and projection to `rig`.
@@ -2217,6 +2279,117 @@ fn aim(
 mod tests {
     use super::*;
     use crate::entities::ItemModelKind;
+
+    /// The stock pet frame binds `"partypetN"` (`PartyFrameTemplates.xml`, `UnitFrame_Initialize`),
+    /// and `SetPortraitTexture` draws only a token a slot bakes.
+    #[test]
+    fn every_party_pet_token_has_a_portrait_slot() {
+        for token in crate::ui_party::PARTY_PET_TOKENS {
+            assert!(SLOTS.contains(&token), "{token} has no slot");
+        }
+    }
+
+    /// The party pet's portrait, by what the client holds: the pet's own model while it is held,
+    /// the roster pet's stand-in (`0x525cb0`) while only its owner's record names it, blank with no
+    /// record (`0x51a0ce`), and nothing while the UI is not drawing the slot.
+    #[test]
+    fn a_party_pets_portrait_is_its_bake_else_the_roster_pets_stand_in() {
+        use benilla_protocol::messages::{
+            member_status, GroupMemberEntry, ObjectFields, PartyMemberStatsInfo,
+        };
+        const MEMBER: u64 = 0x1001;
+        const PET: u64 = 0xF140_0000_0000_0001;
+        let mut world = World::new();
+        let held = world.spawn_empty().id();
+        let summon = |guid: u64| {
+            crate::net::ObjectStore(ObjectFields::from_pairs(&[
+                (8, guid as u32),
+                (9, (guid >> 32) as u32),
+            ]))
+        };
+        let group = |status: u8| {
+            let mut g = crate::ui_party::GroupState::default();
+            g.apply_list(
+                0,
+                0,
+                vec![GroupMemberEntry {
+                    name: "Brisca".into(),
+                    guid: MEMBER,
+                    status,
+                    flags: 0,
+                }],
+                MEMBER,
+                None,
+                None,
+            );
+            g.stats.insert(
+                MEMBER,
+                PartyMemberStatsInfo {
+                    status: Some(status),
+                    pet_guid: Some(PET),
+                    ..Default::default()
+                },
+            );
+            g
+        };
+        let subject = |g: &crate::ui_party::GroupState,
+                       drawn: bool,
+                       pet_held: bool,
+                       owner: Option<&crate::net::ObjectStore>| {
+            party_pet_subject(
+                g,
+                "partypet1",
+                drawn,
+                |guid| (pet_held && guid == PET).then_some(held),
+                |guid| owner.filter(|_| guid == MEMBER),
+            )
+        };
+        let online = group(member_status::ONLINE);
+        let stand_in = Some(pet_temporary_portrait());
+        assert!(stand_in
+            .as_deref()
+            .is_some_and(|f| f.ends_with("TemporaryPortrait-Pet.blp")));
+
+        assert_eq!(
+            subject(&online, false, true, None),
+            (None, None),
+            "not drawn"
+        );
+        assert_eq!(
+            subject(&online, true, true, None),
+            (Some(held), None),
+            "held"
+        );
+        assert_eq!(
+            subject(&online, true, false, None),
+            (None, stand_in.clone()),
+            "the record"
+        );
+        // A held owner names its pet off its descriptor, whatever the record holds.
+        let owner = summon(PET);
+        assert_eq!(
+            subject(&online, true, false, Some(&owner)),
+            (None, stand_in)
+        );
+        let mut no_record = group(member_status::ONLINE);
+        no_record.stats.clear();
+        assert_eq!(
+            subject(&no_record, true, false, Some(&owner)),
+            (None, None),
+            "a pet with no record is blank"
+        );
+        let offline = group(member_status::OFFLINE);
+        assert_eq!(
+            subject(&offline, true, true, None),
+            (None, None),
+            "an offline owner's pet"
+        );
+        assert_eq!(
+            party_pet_subject(&online, "partypet2", true, |_| Some(held), |_| None),
+            (None, None),
+            "a slot with no member"
+        );
+    }
 
     #[test]
     fn the_bake_cache_replaces_in_place_and_evicts_oldest_first() {
