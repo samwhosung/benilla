@@ -23,10 +23,12 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use super::bind_gates::{bind_gates, unit_alive};
+use super::group_relation::{GroupInputs, GroupRoster};
 use crate::creature_type::CreatureTypeSources;
 use crate::names::NameCache;
 use crate::net::{GuidIndex, ObjectStore, Reputations, SelfGuid, SelfPlayer};
 use crate::target::{can_assist, can_attack, Factions, Selection};
+use benilla_protocol::messages::OwnerFallback;
 
 /// `TARGET_FLAG_*` bits of the client's targeting flag word (`0xcecac0`).
 const TF_UNIT: u16 = 0x0002;
@@ -122,6 +124,19 @@ pub(crate) struct TargetRelations<'a> {
     pub(crate) reputations: &'a Reputations,
     /// The creature-type gate's inputs, for the candidate and for the player alike.
     pub(crate) types: CreatureTypeSources<'a>,
+    /// The party and raid predicates' inputs (`0x606c20`, `0x606d20`).
+    pub(crate) group: GroupInputs<'a>,
+}
+
+/// A unit's owner as `CanAssist`'s `IsPvP` chase (`0x5ee5a0`) and `0x606170` read it, its charmer
+/// else its creator: that object's descriptor, if it has streamed (`0x468460`).
+pub(super) fn owner_store<'a>(
+    store: Option<&ObjectStore>,
+    index: Option<&GuidIndex>,
+    stores: &'a Query<&ObjectStore>,
+) -> Option<&'a ObjectStore> {
+    let owner = store?.0.unit_owner(OwnerFallback::CreatedBy)?;
+    stores.get(*index?.0.get(&owner)?).ok()
 }
 
 impl TargetRelations<'_> {
@@ -176,6 +191,7 @@ impl CastContext<'_> {
         if on_self {
             self.selection_guid = self.self_guid;
             self.rel.target_store = self.rel.self_store;
+            self.rel.group.target_guid = self.self_guid;
         }
         self
     }
@@ -241,6 +257,8 @@ pub(crate) struct CastTargeting<'w, 's> {
     auto_self_cast: Res<'w, AutoSelfCast>,
     factions: Option<Res<'w, Factions>>,
     reputations: Res<'w, Reputations>,
+    /// The party slots and raid roster as the frame began; a harness without them has no group.
+    roster: Option<Res<'w, GroupRoster>>,
     /// The creature-type gate's template cache and form table; a harness without them resolves
     /// no type.
     names: Option<Res<'w, NameCache>>,
@@ -256,27 +274,27 @@ impl CastTargeting<'_, '_> {
     /// This frame's [`CastContext`].
     pub(crate) fn context(&self) -> CastContext<'_> {
         let target_store = self.selection.target.and_then(|e| self.stores.get(e).ok());
-        let target_owner_store = target_store
-            .and_then(|store| {
-                store
-                    .0
-                    .unit_owner(benilla_protocol::messages::OwnerFallback::CreatedBy)
-            })
-            .and_then(|guid| self.index.as_ref()?.0.get(&guid).copied())
-            .and_then(|entity| self.stores.get(entity).ok());
+        let owner_store = |store| owner_store(store, self.index.as_deref(), &self.stores);
+        let self_store = self.self_store.iter().next();
         CastContext {
             selection_guid: self.selection.guid,
             self_guid: self.self_guid.0,
             auto_self_cast: self.auto_self_cast.0,
             rel: TargetRelations {
                 target_store,
-                target_owner_store,
-                self_store: self.self_store.iter().next(),
+                target_owner_store: owner_store(target_store),
+                self_store,
                 factions: self.factions.as_deref(),
                 reputations: &self.reputations,
                 types: CreatureTypeSources {
                     names: self.names.as_deref(),
                     forms: self.spells.as_deref().map(|s| &s.forms),
+                },
+                group: GroupInputs {
+                    self_guid: self.self_guid.0,
+                    target_guid: self.selection.guid,
+                    self_owner_store: owner_store(self_store),
+                    roster: self.roster.as_deref(),
                 },
             },
             range: RangeInputs {
@@ -344,17 +362,19 @@ pub(crate) fn cast_target_mask(def: &SpellDisplay) -> u16 {
 ///
 /// The assist bit asks `CanAssist 0x6066f0`: selectable, friendly or better, and an NPC's owner
 /// (or the NPC itself) PvP-enabled. This keeps friendly ambient NPCs and critters unbindable.
-/// The enemy bit asks `CanAttack` (`0x606980`). Party and raid (`0x606c20`, `0x606d20`, the player
-/// or a member of the group) clear for the caster alone; the corpse check (`0x6067d0`) is
-/// assistable with health 0 here.
+/// The enemy bit asks `CanAttack` (`0x606980`). The party bit needs `0x606c20` and then `CanAssist`
+/// (`6e5cad`-`6e5cec`): the player, a member of his party, or a unit that answers to one. The raid
+/// bit needs `0x606d20` and `CanAssist` (`6e5cf1`-`6e5d2f`): the same, with the raid roster
+/// counting as well as the party slots. The corpse check (`0x6067d0`) is assistable with health 0
+/// here.
 fn clear_satisfied_bits(word: u16, is_self: bool, rel: &TargetRelations) -> u16 {
     let mut word = word;
     let assist = rel.assistable(is_self);
     let dead = rel.target_store.is_some_and(|s| !unit_alive(&s.0));
-    if word & TF_UNIT_PARTY != 0 && is_self {
+    if word & TF_UNIT_PARTY != 0 && assist && rel.in_party(is_self) {
         word &= !TF_UNIT_PARTY;
     }
-    if word & TF_UNIT_RAID != 0 && is_self {
+    if word & TF_UNIT_RAID != 0 && assist && rel.in_group(is_self) {
         word &= !TF_UNIT_RAID;
     }
     if word & TF_UNIT_ASSIST != 0 && assist {
@@ -466,6 +486,10 @@ pub(crate) fn resolve_cast_target(
             let self_rel = TargetRelations {
                 target_store: rel.self_store,
                 target_owner_store: None,
+                group: GroupInputs {
+                    target_guid: Some(guid),
+                    ..rel.group
+                },
                 ..*rel
             };
             if unit_binds(Some(def), word, true, &self_rel) {
@@ -557,6 +581,7 @@ mod tests {
             factions: None,
             reputations: &Reputations(Vec::new()),
             types: Default::default(),
+            group: Default::default(),
         };
         let ice_armor = spell(0, 1);
         assert_eq!(
@@ -628,6 +653,7 @@ mod tests {
             factions: Some(&factions),
             reputations: &reputations,
             types: Default::default(),
+            group: Default::default(),
         };
 
         assert!(
@@ -839,6 +865,7 @@ mod tests {
             factions: None,
             reputations: &EMPTY,
             types: Default::default(),
+            group: Default::default(),
         }
     }
 }

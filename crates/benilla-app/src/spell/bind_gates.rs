@@ -106,6 +106,7 @@ mod tests {
             factions: None,
             reputations: &EMPTY,
             types,
+            group: Default::default(),
         };
         bind_gates(def, word, is_caster, &rel)
     }
@@ -138,6 +139,7 @@ mod tests {
             factions: None,
             reputations: &Reputations(Vec::new()),
             types: CreatureTypeSources::default(),
+            group: Default::default(),
         };
         assert!(!bind_gates(&excluding, WORD_ASSIST, true, &rel));
         assert!(bind_gates(&excluding, WORD_ASSIST, false, &rel));
@@ -369,6 +371,7 @@ mod tests {
                     names: Some(&names),
                     forms: None,
                 },
+                group: Default::default(),
             };
             let candidates = CastCandidates {
                 selection: Some(if selection_is_self { ME } else { THEM }),

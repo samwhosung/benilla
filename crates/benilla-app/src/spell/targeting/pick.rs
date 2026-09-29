@@ -5,21 +5,20 @@
 //!
 //! - [`PickFlags`]: the unit-shaped bits of the flags, [`PickFlags::of`], and the legs of
 //!   `0x480610` they switch on, [`PickFlags::admits`].
-//! - [`UnitPick`]: the flags and the party slots as the frame began, [`publish_unit_pick`],
-//!   beside [`super::PicksSelf`] (flag `0x20`) and [`super::CorpsePick`] (flag `0x40`), which own
-//!   the other two bits the flags carry for these arms.
+//! - [`UnitPick`]: the flags as the frame began, [`publish_unit_pick`], beside
+//!   [`super::PicksSelf`] (flag `0x20`) and [`super::CorpsePick`] (flag `0x40`), which own the
+//!   other two bits the flags carry for these arms.
 //! - [`PickChecks`]: what the hover reads per candidate, the relation checks the bind runs
-//!   ([`crate::spell::cast_target::TargetRelations`]) and the party leg `0x606c20`.
+//!   ([`crate::spell::cast_target::TargetRelations`]), the party leg `0x606c20` among them.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
-use benilla_protocol::messages::{ObjectType, OwnerFallback};
-
 use super::SpellTargeting;
 use crate::net::{Guid, GuidIndex, ObjectStore, Reputations, SelfGuid, SelfPlayer};
 use crate::spell::bind_gates::unit_alive;
-use crate::spell::cast_target::TargetRelations;
+use crate::spell::cast_target::{owner_store, TargetRelations};
+use crate::spell::group_relation::{GroupInputs, GroupRoster};
 use crate::target::Factions;
 
 /// Flags `0x8` and `0x10`, which `0x480780`'s unit and player arms test (`4807e1`, `4807cb`) and
@@ -36,9 +35,6 @@ const ALIVE: u32 = 0x10_0000;
 const DEAD: u32 = 0x20_0000;
 const LIVENESS: u32 = ALIVE | DEAD;
 
-/// `UNIT_FLAG_PLAYER_CONTROLLED` (vmangos `UnitDefines.h:548`), tested for both units at
-/// `606c5e` and `606c76`.
-const UNIT_FLAG_PLAYER_CONTROLLED: u32 = 0x8;
 /// `UNIT_FLAG_IMMUNE_TO_PLAYER` (vmangos `UnitDefines.h:553`): the `[desc+0xa0]` bit 8 that
 /// `0x480737` refuses while targeting.
 const UNIT_FLAG_IMMUNE_TO_PLAYER: u32 = 0x100;
@@ -122,34 +118,22 @@ impl PickFlags {
     }
 }
 
-/// The unit pick's inputs as the frame began, which [`crate::target`]'s hover reads: the flags,
-/// `None` outside targeting, where they carry `0x5c` and the filter's three legs never run; and
-/// while targeting the party slots, the table `0x4e7f70` reads. The press latches the hover's
-/// pick, so both read this.
+/// The unit pick's flags as the frame began, which [`crate::target`]'s hover reads: `None`
+/// outside targeting, where they carry `0x5c` and the filter's three legs never run. The press
+/// latches the hover's pick, so both read this.
 #[derive(Resource, Default)]
 pub(crate) struct UnitPick {
     pub(crate) flags: Option<PickFlags>,
-    /// The guids of [`crate::ui_party::GroupState::party_slots`], empty outside targeting.
-    party: Vec<u64>,
 }
 
-/// Publish [`UnitPick`] before the input pass, beside [`super::PicksSelf`]. The party slots are
-/// read here and not by the hover, so a party command in the input pass never orders against it.
-pub(crate) fn publish_unit_pick(
-    targeting: Res<SpellTargeting>,
-    group: Option<Res<crate::ui_party::GroupState>>,
-    mut pick: ResMut<UnitPick>,
-) {
+/// Publish [`UnitPick`] before the input pass, beside [`super::PicksSelf`].
+pub(crate) fn publish_unit_pick(targeting: Res<SpellTargeting>, mut pick: ResMut<UnitPick>) {
     let flags = targeting
         .0
         .as_ref()
         .map(|targeting| PickFlags::of(targeting.word));
-    let party: Vec<u64> = match (flags, group.as_deref()) {
-        (Some(_), Some(group)) => group.party_slots().map(|m| m.guid).collect(),
-        _ => Vec::new(),
-    };
-    if pick.flags != flags || pick.party != party {
-        *pick = UnitPick { flags, party };
+    if pick.flags != flags {
+        pick.flags = flags;
     }
 }
 
@@ -165,6 +149,8 @@ pub(crate) struct PickChecks<'w, 's> {
     reputations: Res<'w, Reputations>,
     self_guid: Res<'w, SelfGuid>,
     guids: Query<'w, 's, &'static Guid>,
+    /// The party slots and raid roster as the frame began; a harness without them has no group.
+    roster: Option<Res<'w, GroupRoster>>,
 }
 
 impl PickChecks<'_, '_> {
@@ -179,74 +165,24 @@ impl PickChecks<'_, '_> {
             .iter()
             .next()
             .is_some_and(|(me, _)| me == entity);
+        let self_store = self.self_q.iter().next().and_then(|(_, store)| store);
         let rel = TargetRelations {
             target_store: store,
             // `CanAssist`'s `IsPvP` owner chase: charmer, else creator.
-            target_owner_store: store
-                .and_then(|s| s.0.unit_owner(OwnerFallback::CreatedBy))
-                .and_then(|owner| self.store_of(owner)),
-            self_store: self.self_q.iter().next().and_then(|(_, store)| store),
+            target_owner_store: owner_store(store, self.index.as_deref(), &self.stores),
+            self_store,
             factions: self.factions.as_deref(),
             reputations: &self.reputations,
             // The pick reads no creature type.
             types: Default::default(),
+            group: GroupInputs {
+                self_guid: self.self_guid.0,
+                target_guid: self.guids.get(entity).ok().map(|guid| guid.0),
+                self_owner_store: owner_store(self_store, self.index.as_deref(), &self.stores),
+                roster: self.roster.as_deref(),
+            },
         };
-        flags.admits(is_self, &rel, || self.in_my_party(&rel, entity, is_self))
-    }
-
-    /// A guid's descriptor, whatever kind of object holds it (`0x468460`).
-    fn store_of(&self, guid: u64) -> Option<&ObjectStore> {
-        let entity = *self.index.as_ref()?.0.get(&guid)?;
-        self.stores.get(entity).ok()
-    }
-
-    /// `0x606c20(active player, candidate)`: the candidate is the active player (`606c3d`), or
-    /// both are player-controlled (`606c4f`-`606c79`) and one side's controlling player
-    /// ([`Self::controller`], `0x606170`) is the active player and the other's is in his party
-    /// (`606ca3`-`606d02`, [`Self::in_party`]). A group member's pet is such a unit.
-    fn in_my_party(&self, rel: &TargetRelations, entity: Entity, is_self: bool) -> bool {
-        if is_self {
-            return true;
-        }
-        let (Some(me), Some(me_store), Some(store), Ok(&Guid(guid))) = (
-            self.self_guid.0,
-            rel.self_store,
-            rel.target_store,
-            self.guids.get(entity),
-        ) else {
-            return false;
-        };
-        let both = me_store.0.unit_flags() & store.0.unit_flags();
-        if both & UNIT_FLAG_PLAYER_CONTROLLED == 0 {
-            return false;
-        }
-        let (Some(mine), Some(theirs)) =
-            (self.controller(me_store, me), self.controller(store, guid))
-        else {
-            return false;
-        };
-        mine == me && self.in_party(theirs) || theirs == me && self.in_party(mine)
-    }
-
-    /// `0x606170`: the player a unit answers to, its charmer else its creator (`606170`-`60619f`)
-    /// or the unit itself when neither is set, and only when that object is a player (`6061c6`-
-    /// `6061cf`, `TYPEMASK_PLAYER`); a controller that has not streamed answers none.
-    fn controller(&self, store: &ObjectStore, guid: u64) -> Option<u64> {
-        let owner = store.0.unit_owner(OwnerFallback::CreatedBy).unwrap_or(guid);
-        let owner_store = if owner == guid {
-            Some(store)
-        } else {
-            self.store_of(owner)
-        };
-        owner_store
-            .is_some_and(|s| s.0.object_type() == Some(ObjectType::Player))
-            .then_some(owner)
-    }
-
-    /// `0x4e7f70`: a nonzero guid that is the active player's (`4e7f84`) or one of the four
-    /// party slots' (`4e7f96`-`4e7fb0`, [`UnitPick::party`]).
-    fn in_party(&self, guid: u64) -> bool {
-        guid != 0 && (self.self_guid.0 == Some(guid) || self.pick.party.contains(&guid))
+        flags.admits(is_self, &rel, || rel.in_party(is_self))
     }
 }
 
@@ -254,6 +190,7 @@ impl PickChecks<'_, '_> {
 mod tests {
     use super::*;
     use crate::net::{GuidIndex, Reputations};
+    use crate::spell::group_relation::publish_group_roster;
     use crate::spell::targeting::corpse_fixture as fx;
     use benilla_protocol::messages::GroupMemberEntry;
     use benilla_protocol::ObjectFields;
@@ -325,6 +262,7 @@ mod tests {
             factions: Some(&factions),
             reputations: &Reputations(Vec::new()),
             types: Default::default(),
+            group: Default::default(),
         };
         PickFlags::of(word).admits(is_self, &rel, in_party)
     }
@@ -428,6 +366,7 @@ mod tests {
             factions: Some(&factions),
             reputations: &Reputations(Vec::new()),
             types: Default::default(),
+            group: Default::default(),
         };
         assert!(!PickFlags::of(UNIT).admits(false, &rel, || false));
         assert!(PickFlags::of(UNIT | DEAD_ONLY).admits(false, &rel, || true));
@@ -504,6 +443,7 @@ mod tests {
     fn party_world() -> (World, Entity) {
         let mut world = World::new();
         world.init_resource::<UnitPick>();
+        world.init_resource::<GroupRoster>();
         world.init_resource::<SpellTargeting>();
         world.insert_resource(fx::factions());
         world.insert_resource(Reputations(Vec::new()));
@@ -552,6 +492,9 @@ mod tests {
         world
             .run_system_once(publish_unit_pick)
             .expect("the word publishes");
+        world
+            .run_system_once(publish_group_roster)
+            .expect("the roster publishes");
         world
             .run_system_once(move |checks: PickChecks, stores: Query<&ObjectStore>| {
                 checks.admits_unit(entity, stores.get(entity).ok())

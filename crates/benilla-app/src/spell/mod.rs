@@ -1,6 +1,7 @@
 //! The spell, the reference's `Spell_C`: the cast ladder and commit ([`cast_send`], `TryCast
 //! 0x6e4b60` and `SendCast 0x6e54f0`), the target bind ([`cast_target`], `ArmCast 0x6e5250` and
-//! `BindTarget 0x6e5b40`), the requirement validator ([`validator`], `0x6094f0`), the usable walk
+//! `BindTarget 0x6e5b40`), the party and raid relations its arms ask ([`group_relation`],
+//! `0x606c20`, `0x606d20`), the requirement validator ([`validator`], `0x6094f0`), the usable walk
 //! ([`usable`], `IsSpellUsableNow 0x6e3d60`), the targeting cursor ([`targeting`], `0xcecac0`),
 //! the in-flight slot, the cooldowns, the talent modifiers and their packet handlers ([`net`]).
 
@@ -15,6 +16,7 @@ mod bind_gates;
 mod cast_send;
 pub(crate) mod cast_target;
 pub(crate) mod cooldowns;
+mod group_relation;
 mod inflight;
 mod mods;
 pub(crate) mod net;
@@ -70,6 +72,7 @@ impl Plugin for SpellPlugin {
             .init_resource::<targeting::PicksSelf>()
             .init_resource::<targeting::CorpsePick>()
             .init_resource::<targeting::UnitPick>()
+            .init_resource::<group_relation::GroupRoster>()
             .add_observer(cast_target::on_cvar)
             .add_systems(
                 Update,
@@ -93,6 +96,11 @@ impl Plugin for SpellPlugin {
                         targeting::publish_unit_pick,
                     )
                         .in_set(UiFeed),
+                    // The party slots and raid roster the party and raid words read, before
+                    // the feed's targeting push asks them.
+                    group_relation::publish_group_roster
+                        .in_set(UiFeed)
+                        .before(UnitFeed),
                     // The item-target commit (`0x495d60`): after the input pass so a bag click
                     // binds the same frame; outside the target chain, as its clicks never reach
                     // the world.
