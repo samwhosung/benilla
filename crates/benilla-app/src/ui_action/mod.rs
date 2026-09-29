@@ -99,20 +99,33 @@ pub(crate) struct Spells {
 }
 
 impl Spells {
-    /// The cast time in ms (`GetCastTime 0x6e3340`), level-scaled from the `CastingTimeIndex`
-    /// row; a missing row reads 0. The reference applies spell-mod op 10 after the row floor.
+    /// The cast time in ms as `GetCastTime 0x6e3340` returns it for argument 1, the tooltip's
+    /// (`52eb4b`): the level-scaled `CastingTimeIndex` row, then spell-mod op 10 (`0x6e33b7`),
+    /// with no clamp, so row 18's negative time survives. A missing row returns 0 before the
+    /// modifier (`0x6e338a`). The cast-speed multiply (`0x6e3422`) is not applied.
+    pub(crate) fn cast_time_unclamped_ms(
+        &self,
+        def: &benilla_formats::SpellDisplay,
+        caster_level: u32,
+        mods: &crate::spell::SpellModifiers,
+    ) -> i32 {
+        self.cast_times
+            .get(def.casting_time_index)
+            .map_or(0, |row| {
+                let resolved = row.resolved_ms(caster_level, def.base_level);
+                mods.apply(def, crate::spell::OP_CAST_TIME, resolved)
+            })
+    }
+
+    /// [`Self::cast_time_unclamped_ms`] for argument 0, the cast validator's (`0x609e16`): a
+    /// result at or below zero reads 0 (`0x6e3461`-`0x6e3470`).
     pub(crate) fn cast_time_ms(
         &self,
         def: &benilla_formats::SpellDisplay,
         caster_level: u32,
         mods: &crate::spell::SpellModifiers,
     ) -> u32 {
-        let base = self
-            .cast_times
-            .get(def.casting_time_index)
-            .map_or(0, |row| row.resolved_ms(caster_level, def.base_level));
-        mods.apply(def, crate::spell::OP_CAST_TIME, base as i32)
-            .max(0) as u32
+        self.cast_time_unclamped_ms(def, caster_level, mods).max(0) as u32
     }
 }
 

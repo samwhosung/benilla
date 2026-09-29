@@ -594,6 +594,11 @@ fn real_spell_catalog_reads_tooltip_columns() {
     assert_eq!(frost_armor.casting_time_index, 1);
     assert_eq!(cast_times.get(1).unwrap().base_ms, 0, "instant");
     assert_eq!(
+        cast_times.get(18).unwrap().resolved_ms(60, 1),
+        -1_000_000,
+        "the hunter shots' row reads signed and stays negative"
+    );
+    assert_eq!(
         frost_armor.effect_apply_aura[0], 22,
         "SPELL_AURA_MOD_RESISTANCE"
     );

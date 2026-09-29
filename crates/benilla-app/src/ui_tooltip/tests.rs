@@ -228,6 +228,46 @@ fn improved_fire_blast_shortens_the_cooldown_cell() {
     assert_eq!(improved.cooldown.as_deref(), Some("6.5 sec cooldown"));
 }
 
+/// The cast cell reads `GetCastTime(1)` (`52eb4b`): op 10 applies and nothing clamps, so a
+/// modifier past the whole cast time reaches the negative "Instant cast" arm (`0x52ebce`), where
+/// a clamped zero would take the no-mana "Instant" (`0x52ec4b`).
+#[test]
+fn the_cast_cell_takes_op_10_unclamped() {
+    let mut spells = Spells::empty_for_tests();
+    let rage_cast = benilla_formats::SpellDisplay {
+        name: "Rage Cast".into(),
+        casting_time_index: 5,
+        power_type: 1,
+        spell_family: 4,
+        spell_family_flags: 1,
+        ..Default::default()
+    };
+    spells.catalog =
+        benilla_formats::SpellCatalog::from_displays([(900_001, rage_cast)].into_iter().collect());
+    spells.cast_times = benilla_formats::SpellCastTimeCatalog::from_rows([(
+        5,
+        benilla_formats::SpellCastTime {
+            base_ms: 1500,
+            per_level_ms: 0,
+            minimum_ms: 1500,
+        },
+    )]);
+    let mut objs = no_objects();
+    let objects = objs.get();
+    let cell = |flat: i32| {
+        let mut t = TestCtx::new();
+        t.spell_mods.set_class_family(4);
+        t.spell_mods.set(true, 0, crate::spell::OP_CAST_TIME, flat);
+        spell_tooltip_view(900_001, &spells, &mut t.ctx(&objects, 0, None))
+            .unwrap()
+            .cast_time
+    };
+    assert_eq!(cell(0).as_deref(), Some("1.5 sec cast"));
+    assert_eq!(cell(-500).as_deref(), Some("1 sec cast"));
+    assert_eq!(cell(-1500).as_deref(), Some("Instant"), "exactly zero");
+    assert_eq!(cell(-2000).as_deref(), Some("Instant cast"), "below zero");
+}
+
 #[test]
 fn cost_and_cast_cells_on_real_data() {
     let data = benilla_formats::wow_data_or_skip!();

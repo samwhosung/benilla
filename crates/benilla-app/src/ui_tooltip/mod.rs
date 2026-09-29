@@ -152,20 +152,14 @@ fn spell_tooltip_view(
         })
         .flatten();
     // The cast line: gate `0x52eb15` also omits it for a TRADE_SKILL or ATTACK `Effect[0]`; then
-    // the ladder `0x52eb45`-`0x52ec90`, where a negative base is "Instant cast" (`0x52ebce`) and a
-    // zero one is "Instant cast" only for a mana spell with a cost (`0x52ec4b`).
+    // the ladder `0x52eb45`-`0x52ec90` over `GetCastTime(1)` (`52eb4d`), unclamped, where a
+    // negative time is "Instant cast" (`0x52ebce`) and a zero one is "Instant cast" only for a
+    // mana spell with a cost (`0x52ec4b`).
     let cast_time = if d.tooltip_omits_cast_line() {
         None
     } else {
-        let base = spells
-            .cast_times
-            .get(d.casting_time_index)
-            .map(|c| c.base_ms as i32)
-            .unwrap_or(0);
-        let base = vctx
-            .spell_mods
-            .apply(d, crate::spell::OP_CAST_TIME, base)
-            .max(0);
+        let level = vctx.store.and_then(|s| s.0.unit_level()).unwrap_or(0);
+        let base = spells.cast_time_unclamped_ms(d, level, vctx.spell_mods);
         // `%.3g` templates: the seconds go over as a real.
         if base > 0 {
             let (key, v) = if base >= 60_000 {
