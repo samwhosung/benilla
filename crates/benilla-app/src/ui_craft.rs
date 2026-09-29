@@ -135,7 +135,7 @@ fn feed_craft(
             lookup: &|id| spells.catalog.get(id),
             mods: Some(&*spell_mods),
             unmodified_points: false,
-            home_area: None,
+            home_area: &|| None,
             global: &global,
             printf: &crate::ui_script::token_printf,
         };

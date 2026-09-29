@@ -32,8 +32,8 @@ mod immunity;
 pub use immunity::{cc_exemption, grants_immunity, CcExemption};
 pub use radius::{load_spell_radii, SpellRadius, SpellRadiusCatalog};
 pub use ranges::{
-    load_spell_ranges, min_max_range, SpellRange, SpellRangeCatalog, COMBAT_REACH_ADD,
-    MELEE_RANGE_FLOOR, ON_NEXT_SWING_RANGE,
+    load_spell_ranges, min_max_range, min_max_range_reads_reach, SpellRange, SpellRangeCatalog,
+    COMBAT_REACH_ADD, MELEE_RANGE_FLOOR, ON_NEXT_SWING_RANGE,
 };
 pub use soft_float::modify as soft_modify;
 pub use tokens::{substitute, SpellMods, TokenContext, TokenNumber};

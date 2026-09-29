@@ -40,8 +40,9 @@ pub struct TokenContext<'a> {
     /// (`0x6ea000`'s flag, pushed at `507ccd` and `507917`).
     pub unmodified_points: bool,
     /// The `$z` token: the home-bind area's name, from `SMSG_BINDPOINTUPDATE`'s area id through
-    /// `AreaTable.dbc`; `None` leaves the token raw.
-    pub home_area: Option<&'a str>,
+    /// `AreaTable.dbc`; `None` leaves the token raw. Asked only where a `$z` expands, so a caller
+    /// can tell which texts read the bind point.
+    pub home_area: &'a dyn Fn() -> Option<&'a str>,
     /// `GetText 0x703bf0`: a `GlobalStrings` template by key. `None` leaves the token raw.
     pub global: &'a dyn Fn(&str) -> Option<String>,
     /// `SStrPrintf 0x64a7f0`: a template's `%` holes filled, as the CRT formats them.
@@ -344,7 +345,7 @@ fn token_value(
         }
         'z' => {
             // Player state, not spell data: the home-bind area name.
-            let name = ctx.home_area?;
+            let name = (ctx.home_area)()?;
             Some((name.to_string(), 0.0))
         }
         'r' => {
@@ -611,7 +612,7 @@ mod tests {
         lookup: &'a dyn Fn(u32) -> Option<&'a SpellDisplay>,
     ) -> TokenContext<'a> {
         TokenContext {
-            home_area: None,
+            home_area: &|| None,
             durations,
             radii,
             ranges: None,
@@ -1225,7 +1226,7 @@ mod tests {
         let lookup = |id: u32| -> Option<&SpellDisplay> { (id == 1234).then_some(&other) };
         let d = SpellDisplay::default();
         let c = TokenContext {
-            home_area: Some("Goldshire"),
+            home_area: &|| Some("Goldshire"),
             ..ctx(&durations, &radii, &lookup)
         };
         assert_eq!(

@@ -1,26 +1,38 @@
 //! The spell-view cell tests, against the real 5875 data, and the feed's place in the schedule.
 
+use super::spell_feed::{build_view, feed_spell_tooltips, ViewCaster, ViewCtx};
 use super::*;
-use crate::ui_action::Spells;
+use crate::items::Items;
+use crate::net::{NetCommands, ObjectStore, Objects, SelfPlayer};
+use crate::ui_action::{PlayerActions, Spells};
+
+/// The view alone, for the cell tests; the feed keeps what it read beside it.
+fn spell_tooltip_view(
+    spell_id: u32,
+    spells: &Spells,
+    vctx: &mut ViewCtx,
+) -> Option<benilla_ui::script::SpellTooltipView> {
+    build_view(spell_id, spells, vctx).map(|(view, _)| view)
+}
 
 /// A view context with no player state, the DBC-only half of the builder.
-struct TestCtx {
-    items: Items,
-    commands: NetCommands,
+pub(super) struct TestCtx {
+    pub(super) items: Items,
+    pub(super) commands: NetCommands,
     _rx: crossbeam_channel::Receiver<crate::net::ClientCommand>,
     /// The builder's lookup over the shipped `GlobalStrings.lua`: a stub would pass on wording
     /// the client never shows.
     get: Box<Getter>,
     /// Empty by default; modifier tests populate it explicitly.
-    spell_mods: crate::spell::SpellModifiers,
+    pub(super) spell_mods: crate::spell::SpellModifiers,
     /// Absent by default: every spell's skill level reads 0.
-    skill_lines: Option<benilla_formats::SkillLineCatalog>,
+    pub(super) skill_lines: Option<benilla_formats::SkillLineCatalog>,
 }
 
 type Getter = dyn Fn(&str) -> Option<String>;
 
 impl TestCtx {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let (tx, rx) = crossbeam_channel::unbounded();
         let vm = benilla_ui::script::UiScript::new().expect("VM");
         crate::ui_script::load_ui_for_test(&vm, "Interface\\FrameXML\\GlobalStrings.lua");
@@ -54,7 +66,7 @@ impl TestCtx {
         ctx
     }
 
-    fn ctx_for<'a, 'w, 's>(
+    pub(super) fn ctx_for<'a, 'w, 's>(
         &'a mut self,
         objects: &'a Objects<'w, 's>,
         form: u8,
@@ -92,7 +104,7 @@ impl TestCtx {
 }
 
 /// The 5875 spell data the view builder reads; `None` skips where the install is absent.
-fn real_spells() -> Option<Spells> {
+pub(super) fn real_spells() -> Option<Spells> {
     let data = benilla_formats::wow_data_or_skip!(None);
     let mut chain = benilla_formats::open_chain(&data).expect("open chain");
     Some(Spells {

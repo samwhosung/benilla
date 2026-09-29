@@ -77,7 +77,7 @@ fn spell_desc_text(
                 lookup: &|i| sp.catalog.get(i),
                 mods: mods.map(|m| m as &dyn benilla_formats::SpellMods),
                 unmodified_points: false,
-                home_area,
+                home_area: &|| home_area,
                 global,
                 printf: &crate::ui_script::token_printf,
             };

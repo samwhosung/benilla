@@ -33,7 +33,7 @@ pub(crate) use inflight::{
 };
 #[cfg(test)]
 pub(crate) use mods::OP_COOLDOWN;
-pub(crate) use mods::{SpellModifiers, OP_CAST_TIME, OP_COST, OP_GCD, OP_RADIUS};
+pub(crate) use mods::{ModsDiff, SpellModifiers, OP_CAST_TIME, OP_COST, OP_GCD, OP_RADIUS};
 // `TargetingWants` is exported for the ground reticle, which draws for the location word alone.
 pub(crate) use targeting::{
     ground_cast_radius, CorpsePick, PicksSelf, ScriptCursor, SpellTargeting, TargetingWants,
@@ -113,6 +113,12 @@ pub(crate) fn spell_skill_value(
     let Some(line) = skill_lines.and_then(|c| c.spell_to_line(spell_id)) else {
         return 0;
     };
+    skill_line_value(me, line)
+}
+
+/// The player's skill in `line`, [`spell_skill_value`]'s second half: 0 without a player or a
+/// slot for it.
+pub(crate) fn skill_line_value(me: Option<&crate::net::ObjectStore>, line: u32) -> u32 {
     let Some(store) = me else { return 0 };
     line_skill_value(
         (0..benilla_protocol::messages::PLAYER_SKILL_SLOTS)
@@ -158,8 +164,31 @@ pub(crate) fn skill_snapshot(me: Option<&crate::net::ObjectStore>) -> SkillSnaps
     })
 }
 
+/// The skill lines whose value differs between two snapshots: a line with no slot reads 0
+/// ([`skill_line_value`]), and the first slot of a line is the one read.
+pub(crate) fn changed_skill_lines(prev: &SkillSnapshot, now: &SkillSnapshot) -> Vec<u32> {
+    let by_line = |snapshot: &SkillSnapshot| {
+        let mut lines = std::collections::HashMap::new();
+        for &(line, value) in snapshot.iter().filter(|(line, _)| *line != 0) {
+            lines.entry(u32::from(line)).or_insert(value);
+        }
+        lines
+    };
+    let (prev, now) = (by_line(prev), by_line(now));
+    let value =
+        |lines: &std::collections::HashMap<u32, u32>, line| lines.get(&line).copied().unwrap_or(0);
+    prev.keys()
+        .chain(now.keys())
+        .copied()
+        .filter(|&line| value(&prev, line) != value(&now, line))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
     use benilla_protocol::messages::PlayerSkillSlot;
 
     fn slot(value: u16, temp_bonus: i16, perm_bonus: i16) -> PlayerSkillSlot {
@@ -171,6 +200,37 @@ mod tests {
             temp_bonus,
             perm_bonus,
         }
+    }
+
+    /// A line's change is its value's, wherever its slot sits: a moved slot is no change, a line
+    /// gained or lost is one, and a slot at 0 is a line at 0.
+    #[test]
+    fn the_changed_lines_are_those_whose_value_moved() {
+        let snapshot = |slots: &[(u16, u32)]| -> SkillSnapshot {
+            let mut s = [(0, 0); benilla_protocol::messages::PLAYER_SKILL_SLOTS as usize];
+            s[..slots.len()].copy_from_slice(slots);
+            s
+        };
+        let base = snapshot(&[(43, 100), (44, 50), (54, 0)]);
+        assert!(changed_skill_lines(&base, &base).is_empty());
+        assert!(
+            changed_skill_lines(&base, &snapshot(&[(54, 0), (44, 50), (43, 100)])).is_empty(),
+            "a reordered slot table changes no line"
+        );
+        assert_eq!(
+            changed_skill_lines(&base, &snapshot(&[(43, 101), (44, 50)])),
+            [43]
+        );
+        assert_eq!(
+            changed_skill_lines(&base, &snapshot(&[(43, 100), (44, 50), (95, 1)])),
+            [95],
+            "a gained line, and the slot at 0 that went away is no change"
+        );
+        assert_eq!(
+            changed_skill_lines(&base, &snapshot(&[(43, 100)])),
+            [44],
+            "a lost line reads 0"
+        );
     }
 
     /// The high bonus half counts only over a positive value, and unsigned; the low half is

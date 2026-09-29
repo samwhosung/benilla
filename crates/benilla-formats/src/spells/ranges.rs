@@ -81,6 +81,20 @@ pub fn min_max_range(
     Some((min, (f64::from(row.max) + pad) as f32))
 }
 
+/// Whether [`min_max_range`] reads either reach for this spell and row: every arm but the
+/// on-next-swing short-circuit, the missing row and the self row `{0, 0}`. The melee arm sums both;
+/// the ranged arm pads by both, or by neither when there is no target, so a change of either reach
+/// can move the result.
+pub fn min_max_range_reads_reach(
+    spell: &crate::spells::SpellDisplay,
+    row: Option<&SpellRange>,
+) -> bool {
+    if spell.on_next_swing() {
+        return false;
+    }
+    row.is_some_and(|row| row.is_melee() || row.min != 0.0 || row.max != 0.0)
+}
+
 /// `SpellRange.dbc`, by row id ([`crate::spells::SpellDisplay::range_index`]).
 #[derive(Default)]
 pub struct SpellRangeCatalog {
@@ -205,6 +219,46 @@ mod tests {
             flags: 0,
         };
         assert_eq!(min_max_range(&d, Some(&self_row), 1.5, None), None);
+    }
+
+    /// The predicate is exact over every arm: it is true for a spell and row exactly when some
+    /// change of either reach, with or without a target, moves [`min_max_range`]'s answer.
+    #[test]
+    fn the_reach_predicate_matches_what_min_max_range_reads() {
+        let row = |min, max, flags| Some(SpellRange { min, max, flags });
+        let rows = [
+            None,
+            row(0.0, 0.0, 0),
+            row(0.0, 0.0, 1),
+            row(0.0, 35.0, 0),
+            row(8.0, 25.0, 0),
+            row(0.0, 5.0, 1),
+        ];
+        for attributes in [0, 0x4, 0x400, 0x404] {
+            let spell = crate::spells::SpellDisplay {
+                attributes,
+                ..Default::default()
+            };
+            for row in &rows {
+                let moves = [
+                    (1.5, None, 4.0, None),
+                    (1.5, Some(1.5), 4.0, Some(1.5)),
+                    (1.5, Some(1.5), 1.5, Some(4.0)),
+                    (1.5, None, 1.5, Some(4.0)),
+                    (1.5, Some(1.5), 1.5, None),
+                ]
+                .iter()
+                .any(|&(a, at, b, bt)| {
+                    min_max_range(&spell, row.as_ref(), a, at)
+                        != min_max_range(&spell, row.as_ref(), b, bt)
+                });
+                assert_eq!(
+                    min_max_range_reads_reach(&spell, row.as_ref()),
+                    moves,
+                    "attributes {attributes:#x}, row {row:?}"
+                );
+            }
+        }
     }
 
     /// Row 2 is the melee family, 114 Auto Shot's 8-35, 95 Charge's 8-25.

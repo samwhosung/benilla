@@ -77,6 +77,28 @@ fn hand_mask(d: &SpellDisplay) -> u32 {
     }
 }
 
+/// Whether the equipped-item search runs at all for `d`: the reference's short-circuits to "fits"
+/// (`0x6e40e0` at `6e4103`..`6e4130`) are `EquippedItemClass < 0`, a zero subclass mask (no item
+/// required, not a wildcard), and an item-targeting spell (`0x495d60` checks those).
+fn needs_equipped_item(d: &SpellDisplay) -> bool {
+    d.equipped_item_class >= 0
+        && d.equipped_item_subclass_mask != 0
+        && d.targets & TARGET_FLAG_ITEM == 0
+}
+
+/// The worn slots (0-18) [`equipped_item_fits`] reads for `d`, a bit each: none unless it
+/// searches, else the slots its hand restriction leaves.
+pub(crate) fn worn_slots_read(d: &SpellDisplay) -> u32 {
+    if needs_equipped_item(d) {
+        hand_mask(d) & WORN_SLOTS
+    } else {
+        0
+    }
+}
+
+/// The 19 worn slots, as a mask over the equipment indices ([`EQUIPMENT_SLOTS`] adds the bags).
+pub(crate) const WORN_SLOTS: u32 = (1 << 19) - 1;
+
 /// [`equipped_item_fits`] for the cast ladder's rung 7: the same search, never querying a
 /// missing template; an uncached one counts as a match.
 pub(crate) fn equipped_item_fits_cached(
@@ -85,10 +107,7 @@ pub(crate) fn equipped_item_fits_cached(
     objects: &Objects,
     items: &Items,
 ) -> bool {
-    if d.equipped_item_class < 0
-        || d.equipped_item_subclass_mask == 0
-        || d.targets & TARGET_FLAG_ITEM != 0
-    {
+    if !needs_equipped_item(d) {
         return true;
     }
     let mut mask = hand_mask(d);
@@ -137,13 +156,9 @@ pub(crate) fn equipped_item_fits(
     items: &Items,
     commands: &NetCommands,
 ) -> bool {
-    // The reference's short-circuits to "fits" (`0x6e40e0` at `6e4103`..`6e4130`): a caster that
-    // is not the active player (always ours here), `EquippedItemClass < 0`, a zero subclass mask
-    // (no item required, not a wildcard), and an item-targeting spell (`0x495d60` checks those).
-    if d.equipped_item_class < 0
-        || d.equipped_item_subclass_mask == 0
-        || d.targets & TARGET_FLAG_ITEM != 0
-    {
+    // The short-circuits to "fits" (`0x6e40e0` at `6e4103`..`6e4130`): a caster that is not the
+    // active player (always ours here), and those of [`needs_equipped_item`].
+    if !needs_equipped_item(d) {
         return true;
     }
     let class = d.equipped_item_class as u32;

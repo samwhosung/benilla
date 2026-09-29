@@ -83,7 +83,7 @@ impl SpellMod {
 
 /// The two tables and the class family the gate compares against (`0xcead60`, `0xcecb30`,
 /// `0xcecaac`). Written only by the wire, cleared only at world-enter, read live.
-#[derive(Resource)]
+#[derive(Clone, Resource)]
 pub(crate) struct SpellModifiers {
     flat: [i32; CELLS],
     pct: [i32; CELLS],
@@ -135,15 +135,45 @@ impl SpellModifiers {
         self.class_family = 0;
     }
 
+    /// The two family gates of `GetSpellModifiers 0x6e6b30` (`SpellFamilyName` nonzero and the
+    /// class's, `AttributesEx3` bit 29 clear).
+    fn gates_pass(&self, d: &SpellDisplay) -> bool {
+        d.spell_family != 0
+            && d.spell_family == self.class_family
+            && d.attributes_ex3 & ATTR_EX3_IGNORE_CASTER_MODIFIERS == 0
+    }
+
+    /// The `SpellFamilyFlags` bits whose cells any read for `d` can sum, whatever the op: its
+    /// whole mask past the gates, none before them. A change to another bit's cells cannot move
+    /// a value modified for `d`; a change of the class family can, whatever the bit.
+    pub(crate) fn read_bits(&self, d: &SpellDisplay) -> u64 {
+        if self.gates_pass(d) {
+            d.spell_family_flags
+        } else {
+            0
+        }
+    }
+
+    /// What differs from `prev`: the `SpellFamilyFlags` bits with any changed cell, in either
+    /// table and at any op, and whether the class family moved.
+    pub(crate) fn diff(&self, prev: &SpellModifiers) -> ModsDiff {
+        let bits = (0..BITS).fold(0u64, |bits, bit| {
+            let row = bit * OPS..(bit + 1) * OPS;
+            let same = self.flat[row.clone()] == prev.flat[row.clone()]
+                && self.pct[row.clone()] == prev.pct[row];
+            bits | u64::from(!same) << bit
+        });
+        ModsDiff {
+            bits,
+            class_family: self.class_family != prev.class_family,
+        }
+    }
+
     /// `GetSpellModifiers 0x6e6b30` for one spell and op. `None` covers all four of its false
     /// exits: the three gates and both sums zero (`6e6ba8`/`6e6bad`). The op range check is ours;
     /// the reference's call sites all pass a literal.
     fn modifiers(&self, d: &SpellDisplay, op: u8) -> Option<SpellMod> {
-        if d.spell_family == 0
-            || d.spell_family != self.class_family
-            || d.attributes_ex3 & ATTR_EX3_IGNORE_CASTER_MODIFIERS != 0
-            || usize::from(op) >= OPS
-        {
+        if !self.gates_pass(d) || usize::from(op) >= OPS {
             return None;
         }
         // All 64 bits, no early break (`6e6b8f`/`6e6b97`); the accumulators wrap, as the
@@ -216,6 +246,14 @@ impl SpellModifiers {
             },
         ))
     }
+}
+
+/// How one snapshot of the tables differs from an earlier one ([`SpellModifiers::diff`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ModsDiff {
+    /// Bit `b` set: a cell of family-flag bit `b` changed, in either table at any op.
+    pub(crate) bits: u64,
+    pub(crate) class_family: bool,
 }
 
 /// The description expander's view of the tables.
