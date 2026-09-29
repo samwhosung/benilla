@@ -12,6 +12,7 @@ use std::time::Instant;
 
 use bevy::prelude::*;
 
+use benilla_formats::RangeTargets;
 use benilla_protocol::messages::{ACTION_KIND_ITEM, ACTION_KIND_MACRO, ACTION_KIND_SPELL};
 use benilla_ui::script::{ActionState, UiScript};
 
@@ -213,14 +214,25 @@ pub(super) fn feed_action_state(
                 } else {
                     st.usable = true;
                 }
-                // The range verdict against the target (`0x4e56f0`); nil without one.
                 let row = spells.as_ref().and_then(|s| s.ranges.get(d.range_index));
-                let resolved = spell_mods.min_max_range(d, row, self_reach, target_reach);
-                st.has_range = resolved
+                // `ActionHasRange 0x4e5810` asks `GetMinMaxRange` with a null target (`0x4e5852`)
+                // and tests `|min|` and `|max|` against `FLT_EPSILON`. The auto-attack target the
+                // melee arm falls back to cannot move that: its max is at least the 5.0 floor.
+                st.has_range = spell_mods
+                    .min_max_range(d, row, self_reach, RangeTargets::default())
                     .is_some_and(|(min, max)| min.abs() > f32::EPSILON || max.abs() > f32::EPSILON);
-                st.in_range = match (resolved, dist_sq) {
-                    (Some((min, max)), Some(d2)) if st.has_range => {
-                        Some(d2 >= min * min && d2 <= max * max)
+                // `IsActionInRange 0x4e56f0` runs `CanTargetUnit 0x6e4440`, which binds the selected
+                // target, then `IsTargetInRange 0x6e47b0`, which hands `GetMinMaxRange` that target
+                // (`0x6e47ca`): its reach pads a ranged row. Nil without a target.
+                st.in_range = match dist_sq {
+                    Some(d2) if st.has_range => {
+                        let targets = RangeTargets {
+                            target: target_reach,
+                            attack_target: None,
+                        };
+                        spell_mods
+                            .min_max_range(d, row, self_reach, targets)
+                            .map(|(min, max)| d2 >= min * min && d2 <= max * max)
                     }
                     _ => None,
                 };
@@ -474,6 +486,123 @@ mod tests {
                 .eval::<bool>("local _, oom = IsUsableAction(2) return oom and true or false")
                 .unwrap(),
             "grey, not the out-of-power blue: notEnoughMana stays 0 on the spell-less leg"
+        );
+    }
+
+    /// `IsActionInRange` (`0x4e56f0`) hands `GetMinMaxRange` the selected unit, so a ranged row
+    /// pads by that unit's reach and the player's alone: a Fireball (0-35) button reads in range
+    /// out to 38 yards from a 1.5-reach target, whoever the player swings at, and `ActionHasRange`
+    /// (`0x4e5810`, a null target) says the button has a range.
+    #[test]
+    fn a_ranged_button_pads_its_range_by_the_selected_target_alone() {
+        use benilla_protocol::messages::ActionButton;
+        use benilla_protocol::ObjectFields;
+
+        const FIREBALL: u32 = 133;
+        const SWUNG_AT: u64 = 0xA1;
+        const SELECTED: u64 = 0xB2;
+        /// `UNIT_FIELD_COMBATREACH`.
+        const REACH: u16 = 130;
+
+        let verdict = |distance: f32| {
+            let (tx, _rx) = crossbeam_channel::unbounded();
+            let mut app = App::new();
+            let mut actions = PlayerActions::default();
+            actions.buttons.insert(
+                0,
+                ActionButton {
+                    slot: 0,
+                    action: FIREBALL,
+                    kind: ACTION_KIND_SPELL,
+                },
+            );
+            let fireball = SpellDisplay {
+                range_index: 4,
+                ..Default::default()
+            };
+            let row = benilla_formats::SpellRange {
+                min: 0.0,
+                max: 35.0,
+                flags: 0,
+            };
+            app.insert_resource(actions)
+                .insert_resource(crate::ui_macro::MacroBoundSpells::default())
+                .insert_resource(Spells {
+                    catalog: benilla_formats::SpellCatalog::from_displays(
+                        [(FIREBALL, fireball)].into_iter().collect(),
+                    ),
+                    forms: Default::default(),
+                    ranges: benilla_formats::SpellRangeCatalog::from_rows(
+                        [(4, row)].into_iter().collect(),
+                    ),
+                    cast_times: Default::default(),
+                    durations: Default::default(),
+                    radii: Default::default(),
+                })
+                .init_resource::<Cooldowns>()
+                .init_resource::<crate::spell::SpellModifiers>()
+                .init_resource::<crate::ui_script::UiClock>()
+                .init_resource::<AutoRepeatActive>()
+                .init_resource::<crate::spell::PendingCast>()
+                .init_resource::<crate::spell::QueuedMeleeSpell>()
+                .init_resource::<crate::spell::ActiveChannel>()
+                .init_resource::<crate::spell::SpellTargeting>()
+                .init_resource::<crate::spell::HeldForPick>()
+                .init_resource::<crate::net::GuidIndex>()
+                .init_resource::<crate::net::Reputations>()
+                .init_resource::<Items>()
+                .insert_resource(NetCommands(tx));
+            // The player swings at a 4.0-reach unit, close by.
+            let swung_at = app
+                .world_mut()
+                .spawn((
+                    Transform::from_xyz(2.0, 0.0, 0.0),
+                    ObjectStore(ObjectFields::from_pairs(&[
+                        (22, 100),
+                        (REACH, 4.0f32.to_bits()),
+                    ])),
+                ))
+                .id();
+            app.world_mut().spawn((
+                SelfPlayer,
+                Engaged(SWUNG_AT),
+                Transform::default(),
+                ObjectStore(ObjectFields::from_pairs(&[(22, 100), (23, 500)])),
+            ));
+            // The selected unit keeps the descriptor's default 1.5 reach.
+            let selected = app
+                .world_mut()
+                .spawn((
+                    Transform::from_xyz(distance, 0.0, 0.0),
+                    ObjectStore(ObjectFields::from_pairs(&[(22, 100)])),
+                ))
+                .id();
+            let mut index = app.world_mut().resource_mut::<crate::net::GuidIndex>();
+            index.0.insert(SWUNG_AT, swung_at);
+            index.0.insert(SELECTED, selected);
+            app.insert_resource(Selection {
+                target: Some(selected),
+                guid: Some(SELECTED),
+                last: None,
+            });
+            app.insert_non_send_resource(UiScript::new().unwrap());
+            app.add_systems(Update, feed_action_state);
+            app.update();
+            let script = app.world().non_send_resource::<UiScript>();
+            assert!(script
+                .eval::<bool>("return ActionHasRange(1) == 1")
+                .unwrap());
+            script
+                .eval::<i64>("return IsActionInRange(1) or -1")
+                .unwrap()
+        };
+
+        // 35 + the caster's 1.5 + the selected unit's 1.5 = 38.
+        assert_eq!(verdict(37.5), 1, "inside the padded max");
+        assert_eq!(
+            verdict(38.5),
+            0,
+            "past it: the swing's 4.0 reach pads nothing"
         );
     }
 

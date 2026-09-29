@@ -621,6 +621,23 @@ fn range_cell_on_real_data() {
     .expect("Fireball view");
     assert_eq!(v.range.as_deref(), Some("35 yd range"));
 
+    // The tooltip passes a null target (`0x52e9c2`), so the auto-attack target pads no ranged row:
+    // Fireball still reads its 35 while you swing at a 1.5-reach unit, and Charge its 8-25.
+    let v = spell_tooltip_view(
+        133,
+        &spells,
+        &mut t.ctx_engaged(&objects, Some(&store), 1.5),
+    )
+    .expect("Fireball view");
+    assert_eq!(v.range.as_deref(), Some("35 yd range"));
+    let v = spell_tooltip_view(
+        100,
+        &spells,
+        &mut t.ctx_engaged(&objects, Some(&store), 1.5),
+    )
+    .expect("Charge view");
+    assert_eq!(v.range.as_deref(), Some("8-25 yd range"));
+
     // An authored pair, `"%d-%d"`: Charge's 8-25, which the reach does not change.
     let v = spell_tooltip_view(100, &spells, &mut t.ctx_for(&objects, 0, None, Some(&big)))
         .expect("Charge view");

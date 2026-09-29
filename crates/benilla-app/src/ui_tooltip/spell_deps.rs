@@ -124,7 +124,8 @@ pub(super) struct Deps {
     pub(super) home: bool,
     /// The required-form test read the shapeshift form.
     pub(super) form: bool,
-    /// The range cell read the caster's or the auto-attack target's combat reach.
+    /// The range cell's melee arm read the caster's or the auto-attack target's combat reach;
+    /// the ranged arm, given no target, reads neither.
     pub(super) reach: bool,
     /// The chance line read these percentages, a [`Chance`] bit each.
     pub(super) avoidance: u8,

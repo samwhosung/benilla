@@ -14,7 +14,10 @@ pub(super) const ERR_TOO_CLOSE: u8 = 0x76;
 /// The range refusal, before `ArmCast`/`SendCast`, so an out-of-range press never runs the commit
 /// tail (the ranged sheath snap `0x6e5930` included): squared 3D distance against
 /// [`benilla_formats::min_max_range`], beyond max² out of range, inside a nonzero min² too close.
-/// No range row or no distance passes; the server judges.
+/// `target_reach` is the bound unit's, the target `IsTargetInRange 0x6e47b0` hands
+/// `GetMinMaxRange` (`0x6e47ca`). The function looks the auto-attack target up only when that
+/// target is no unit, which a bound unit never is, so none is passed. No range row or no
+/// distance passes; the server judges.
 pub(super) fn cast_range_refusal(
     spell: &SpellDisplay,
     row: Option<&SpellRange>,
@@ -23,7 +26,11 @@ pub(super) fn cast_range_refusal(
     dist_sq: Option<f32>,
     mods: &SpellModifiers,
 ) -> Option<u8> {
-    let (min, max) = mods.min_max_range(spell, row, self_reach, target_reach)?;
+    let targets = benilla_formats::RangeTargets {
+        target: target_reach,
+        attack_target: None,
+    };
+    let (min, max) = mods.min_max_range(spell, row, self_reach, targets)?;
     let d2 = dist_sq?;
     if d2 > max * max {
         return Some(ERR_OUT_OF_RANGE);

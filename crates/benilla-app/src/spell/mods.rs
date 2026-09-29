@@ -234,9 +234,9 @@ impl SpellModifiers {
         d: &SpellDisplay,
         row: Option<&SpellRange>,
         caster_reach: f32,
-        target_reach: Option<f32>,
+        targets: benilla_formats::RangeTargets,
     ) -> Option<(f32, f32)> {
-        let (min, max) = benilla_formats::min_max_range(d, row, caster_reach, target_reach)?;
+        let (min, max) = benilla_formats::min_max_range(d, row, caster_reach, targets)?;
         Some((
             min,
             if d.on_next_swing() {
@@ -521,18 +521,22 @@ mod tests {
             flags: 0,
         };
         mods.set(false, 5, OP_RANGE, 20);
-        let (min, max) = mods.min_max_range(&d, Some(&row), 1.5, Some(1.5)).unwrap();
+        let target = benilla_formats::RangeTargets {
+            target: Some(1.5),
+            attack_target: None,
+        };
+        let (min, max) = mods.min_max_range(&d, Some(&row), 1.5, target).unwrap();
         assert_eq!(min, 11.0);
         assert!((max - 45.6).abs() < 0.001, "38 yards with +20% range");
-        assert_eq!(mods.min_max_range(&d, None, 1.5, Some(1.5)), None);
+        assert_eq!(mods.min_max_range(&d, None, 1.5, target), None);
 
         let on_next_swing = SpellDisplay {
             attributes: 0x404,
             ..d
         };
         assert_eq!(
-            mods.min_max_range(&on_next_swing, Some(&row), 1.5, Some(1.5)),
-            benilla_formats::min_max_range(&on_next_swing, Some(&row), 1.5, Some(1.5)),
+            mods.min_max_range(&on_next_swing, Some(&row), 1.5, target),
+            benilla_formats::min_max_range(&on_next_swing, Some(&row), 1.5, target),
             "the reference's early return bypasses op 5"
         );
     }

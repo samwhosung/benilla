@@ -55,8 +55,8 @@ pub(super) struct ViewCtx<'a, 'w, 's> {
     pub(super) caster: ViewCaster<'a>,
     /// The caster's `UNIT_FIELD_COMBATREACH`; 1.5 is the descriptor default.
     pub(super) combat_reach: f32,
-    /// The caster's auto-attack target's reach, which `0x6e3480` reads itself (`[caster+0xc48]`);
-    /// with none, the caster's reach counts twice.
+    /// The caster's auto-attack target's reach, which `0x6e3480` looks up itself
+    /// (`[caster+0xc48]`) for its melee arm alone; with none, the caster's reach counts twice.
     pub(super) attack_target_reach: Option<f32>,
     /// The object index the worn-item search and each reagent's carried count resolve through.
     pub(super) objects: &'a Objects<'w, 's>,
@@ -190,12 +190,15 @@ pub(super) fn build_view(
             {
                 deps.borrow_mut().reach = true;
             }
-            let (min, max) = vctx.spell_mods.min_max_range(
-                d,
-                row,
-                vctx.combat_reach,
-                vctx.attack_target_reach,
-            )?;
+            // The call passes a null target (`0x52e9c2`): the auto-attack target is the melee arm's
+            // own lookup, and the ranged arm, with no target, pads nothing.
+            let targets = benilla_formats::RangeTargets {
+                target: None,
+                attack_target: vctx.attack_target_reach,
+            };
+            let (min, max) = vctx
+                .spell_mods
+                .min_max_range(d, row, vctx.combat_reach, targets)?;
             if max <= 0.0 {
                 return None;
             }

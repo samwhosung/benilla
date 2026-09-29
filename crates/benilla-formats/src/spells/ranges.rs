@@ -33,14 +33,27 @@ pub const MELEE_RANGE_FLOOR: f32 = 5.0;
 /// The on-next-swing short-circuit's max, `[0x8118d4]` (`0x6e3504`).
 pub const ON_NEXT_SWING_RANGE: f32 = 100.0;
 
+/// The combat reaches `GetMinMaxRange` (`0x6e3480`) reads besides the caster's own, `None` where
+/// that unit is absent. The two are different inputs: only the first is an argument of the call.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RangeTargets {
+    /// The call's `target` argument (`[ebx+0x10]`), when it is a unit (typemask bit 3,
+    /// `0x6e34e1`-`0x6e34f9`): a null target, and one that is no unit, read `None`. Both arms
+    /// read its reach, and the ranged arm pads only for a target passed in (`0x6e35d8`).
+    pub target: Option<f32>,
+    /// The caster's auto-attack target, `[caster+0xc48]`, which the function looks up itself
+    /// (`0x47bf60`, `0x6e356a`), and only the melee arm and only with no unit target passed
+    /// (`0x6e3552`-`0x6e3584`). A caller that has no such unit to hand passes `None`.
+    pub attack_target: Option<f32>,
+}
+
 /// `GetMinMaxRange` (`0x6e3480`): a spell's `{min, max}` cast range, summed in `f64` because the
 /// client keeps the reach sums on the x87 stack and stores `f32` only at the end. On-next-swing
 /// spells (`Attributes & 0x404`, `0x6e34fb`) short-circuit to `(0, 100)`. The melee arm sums the
-/// target's reach, else the caster's own a second time, and reads the auto-attack target itself
-/// (`attack_target_guid`, `0x6e356a`), so a caller with no explicit target passes that unit's
-/// reach. Given a target, the ranged arm pads the max, and the min only when nonzero (the
-/// `fcomp`-vs-0.0 guard), so a min-0 spell never refuses `TOO_CLOSE`. `None`: no row, or the self
-/// row (id 1, `{0, 0}`).
+/// reach of the unit target, else the auto-attack target, else the caster's own, with the
+/// caster's. The ranged arm pads only for a unit target passed in, the max and the min only when
+/// nonzero (the `fcomp`-vs-0.0 guard), so a min-0 spell never refuses `TOO_CLOSE`; the
+/// auto-attack target never pads it. `None`: no row, or the self row (id 1, `{0, 0}`).
 ///
 /// Not applied: the PvP `max += 2.6667` (`0x6e3648`, gated by `0x5fc350`), and for a player the
 /// `Attributes & 2` scale (`0x6e36aa`), `max *= RangedModRange · 0.01` of the ranged-slot item,
@@ -50,14 +63,17 @@ pub fn min_max_range(
     spell: &crate::spells::SpellDisplay,
     row: Option<&SpellRange>,
     caster_reach: f32,
-    target_reach: Option<f32>,
+    targets: RangeTargets,
 ) -> Option<(f32, f32)> {
     if spell.on_next_swing() {
         return Some((0.0, ON_NEXT_SWING_RANGE));
     }
     let row = row?;
-    let reach = target_reach.unwrap_or(caster_reach);
     if row.is_melee() {
+        let reach = targets
+            .target
+            .or(targets.attack_target)
+            .unwrap_or(caster_reach);
         let sum = f64::from(reach) + f64::from(caster_reach) + f64::from(COMBAT_REACH_ADD);
         let max = if sum > f64::from(MELEE_RANGE_FLOOR) {
             sum as f32
@@ -69,7 +85,7 @@ pub fn min_max_range(
     if row.min == 0.0 && row.max == 0.0 {
         return None;
     }
-    let Some(target_reach) = target_reach else {
+    let Some(target_reach) = targets.target else {
         return Some((row.min, row.max));
     };
     let pad = f64::from(caster_reach) + f64::from(target_reach);
@@ -81,18 +97,17 @@ pub fn min_max_range(
     Some((min, (f64::from(row.max) + pad) as f32))
 }
 
-/// Whether [`min_max_range`] reads either reach for this spell and row: every arm but the
-/// on-next-swing short-circuit, the missing row and the self row `{0, 0}`. The melee arm sums both;
-/// the ranged arm pads by both, or by neither when there is no target, so a change of either reach
-/// can move the result.
+/// Whether [`min_max_range`] reads a reach for this spell and row when it is passed no unit
+/// target, as the spell tooltip calls it (`push 0`, `0x52e9c2`): only the melee arm, which sums
+/// the auto-attack target's reach, else the caster's own, with the caster's. The ranged arm pads
+/// only for a target passed in, so a tooltip prints its row as it is; the on-next-swing
+/// short-circuit, the missing row and the self row read none. With a unit target the ranged arm
+/// reads both reaches too.
 pub fn min_max_range_reads_reach(
     spell: &crate::spells::SpellDisplay,
     row: Option<&SpellRange>,
 ) -> bool {
-    if spell.on_next_swing() {
-        return false;
-    }
-    row.is_some_and(|row| row.is_melee() || row.min != 0.0 || row.max != 0.0)
+    !spell.on_next_swing() && row.is_some_and(SpellRange::is_melee)
 }
 
 /// `SpellRange.dbc`, by row id ([`crate::spells::SpellDisplay::range_index`]).
@@ -156,60 +171,73 @@ pub fn load_spell_ranges(chain: &mut Chain) -> Result<SpellRangeCatalog> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn min_max_range_follows_the_byte_law() {
-        let spell = |range_index: u32, attributes: u32| crate::spells::SpellDisplay {
+    /// The two inputs, as a call passes them: `target` the unit argument, `attack` the caster's
+    /// auto-attack target that the melee arm looks up itself.
+    fn reaches(target: Option<f32>, attack: Option<f32>) -> RangeTargets {
+        RangeTargets {
+            target,
+            attack_target: attack,
+        }
+    }
+
+    fn spell(range_index: u32, attributes: u32) -> crate::spells::SpellDisplay {
+        crate::spells::SpellDisplay {
             range_index,
             attributes,
             ..Default::default()
-        };
-        let melee = SpellRange {
-            min: 0.0,
-            max: 5.0,
-            flags: 1,
-        };
+        }
+    }
+
+    const MELEE: SpellRange = SpellRange {
+        min: 0.0,
+        max: 5.0,
+        flags: 1,
+    };
+    const CHARGE: SpellRange = SpellRange {
+        min: 8.0,
+        max: 25.0,
+        flags: 0,
+    };
+    const FIREBALL: SpellRange = SpellRange {
+        min: 0.0,
+        max: 35.0,
+        flags: 0,
+    };
+
+    #[test]
+    fn min_max_range_follows_the_byte_law() {
         // Two 1.5-reach units (4.333) floor at 5.0,
         let d = spell(2, 0);
         assert_eq!(
-            min_max_range(&d, Some(&melee), 1.5, Some(1.5)),
+            min_max_range(&d, Some(&MELEE), 1.5, reaches(Some(1.5), None)),
             Some((0.0, MELEE_RANGE_FLOOR))
         );
         // a 4.0 pair (9.333) clears it.
-        let (_, max) = min_max_range(&d, Some(&melee), 4.0, Some(4.0)).unwrap();
+        let (_, max) = min_max_range(&d, Some(&MELEE), 4.0, reaches(Some(4.0), None)).unwrap();
         assert!((max - 9.3333).abs() < 1e-3);
         // With no target the caster's reach counts twice, as in the client: 9.333 alone too.
-        let (_, max) = min_max_range(&d, Some(&melee), 4.0, None).unwrap();
+        let (_, max) = min_max_range(&d, Some(&MELEE), 4.0, RangeTargets::default()).unwrap();
         assert!((max - 9.3333).abs() < 1e-3);
 
         // Charge's 8-25 row pads both bounds by the bare reach sum; the 1.3333 is melee-only.
-        let charge_row = SpellRange {
-            min: 8.0,
-            max: 25.0,
-            flags: 0,
-        };
-        let (min, max) = min_max_range(&d, Some(&charge_row), 1.5, Some(1.5)).unwrap();
+        let (min, max) = min_max_range(&d, Some(&CHARGE), 1.5, reaches(Some(1.5), None)).unwrap();
         assert!((min - (8.0 + 3.0)).abs() < 1e-3);
         assert!((max - (25.0 + 3.0)).abs() < 1e-3);
 
         // Fireball's 0-35 row pads the max only: the fcomp-vs-0.0 guard keeps the min at zero.
-        let fireball_row = SpellRange {
-            min: 0.0,
-            max: 35.0,
-            flags: 0,
-        };
-        let (min, max) = min_max_range(&d, Some(&fireball_row), 1.5, Some(1.5)).unwrap();
+        let (min, max) = min_max_range(&d, Some(&FIREBALL), 1.5, reaches(Some(1.5), None)).unwrap();
         assert_eq!(min, 0.0);
         assert!((max - 38.0).abs() < 1e-3);
 
         // No target, as the tooltip calls it (`target = NULL`, `0x52e9c2`): the raw bounds.
         assert_eq!(
-            min_max_range(&d, Some(&charge_row), 1.5, None),
+            min_max_range(&d, Some(&CHARGE), 1.5, RangeTargets::default()),
             Some((8.0, 25.0))
         );
 
         // The on-next-swing attribute short-circuits to 100 without reading the row.
         assert_eq!(
-            min_max_range(&spell(1, 0x400), None, 1.5, None),
+            min_max_range(&spell(1, 0x400), None, 1.5, RangeTargets::default()),
             Some((0.0, ON_NEXT_SWING_RANGE))
         );
 
@@ -218,13 +246,63 @@ mod tests {
             max: 0.0,
             flags: 0,
         };
-        assert_eq!(min_max_range(&d, Some(&self_row), 1.5, None), None);
+        assert_eq!(
+            min_max_range(&d, Some(&self_row), 1.5, RangeTargets::default()),
+            None
+        );
     }
 
-    /// The predicate is exact over every arm: it is true for a spell and row exactly when some
-    /// change of either reach, with or without a target, moves [`min_max_range`]'s answer.
+    /// The ranged arm pads only for the target passed in (`0x6e35d8 test ecx,ecx`, `0x6e35ec je`),
+    /// never for the caster's auto-attack target, which the ranged arm does not read.
     #[test]
-    fn the_reach_predicate_matches_what_min_max_range_reads() {
+    fn the_ranged_arm_pads_only_for_the_explicit_target() {
+        let d = spell(4, 0);
+        // Fireball's 35 with no target passed but an auto-attack target of reach 1.5: 35, not 38.
+        assert_eq!(
+            min_max_range(&d, Some(&FIREBALL), 1.5, reaches(None, Some(1.5))),
+            Some((0.0, 35.0))
+        );
+        // The same row with the target passed, and the caster's reach 1.5: 35 + 1.5 + 1.5.
+        assert_eq!(
+            min_max_range(&d, Some(&FIREBALL), 1.5, reaches(Some(1.5), None)),
+            Some((0.0, 38.0))
+        );
+        // An auto-attack target beside it pads nothing: the target passed is the pad's second reach.
+        assert_eq!(
+            min_max_range(&d, Some(&FIREBALL), 1.5, reaches(Some(1.5), Some(4.0))),
+            Some((0.0, 38.0))
+        );
+        // A bounded row's min stays unpadded without a target too: Charge's 8-25.
+        assert_eq!(
+            min_max_range(&d, Some(&CHARGE), 1.5, reaches(None, Some(1.5))),
+            Some((8.0, 25.0))
+        );
+    }
+
+    /// The melee arm takes the unit target's reach, else the auto-attack target's, else the
+    /// caster's own (`0x6e3552`-`0x6e3584`, `0x6e3594`), and adds the caster's.
+    #[test]
+    fn the_melee_arm_falls_back_from_the_target_to_the_attack_target_to_the_caster() {
+        let d = spell(2, 0);
+        let max = |target, attack| {
+            min_max_range(&d, Some(&MELEE), 4.0, reaches(target, attack))
+                .unwrap()
+                .1
+        };
+        let sum = |reach: f32| reach + 4.0 + COMBAT_REACH_ADD;
+        // With no target passed the auto-attack target's 6.0 counts: 6 + 4 + 1.3333.
+        assert!((max(None, Some(6.0)) - sum(6.0)).abs() < 1e-3);
+        // A target passed wins over it.
+        assert!((max(Some(2.0), Some(6.0)) - sum(2.0)).abs() < 1e-3);
+        // With neither, the caster's reach counts twice.
+        assert!((max(None, None) - sum(4.0)).abs() < 1e-3);
+    }
+
+    /// The predicate is exact for the tooltip's call (`0x52e9c2`, no unit target passed): it is
+    /// true for a spell and row exactly when some change of the caster's reach or of the
+    /// auto-attack target's, present or not, moves [`min_max_range`]'s answer.
+    #[test]
+    fn the_reach_predicate_matches_what_min_max_range_reads_with_no_target() {
         let row = |min, max, flags| Some(SpellRange { min, max, flags });
         let rows = [
             None,
@@ -240,17 +318,18 @@ mod tests {
                 ..Default::default()
             };
             for row in &rows {
+                // (caster reach, auto-attack target's reach) before and after.
                 let moves = [
-                    (1.5, None, 4.0, None),
-                    (1.5, Some(1.5), 4.0, Some(1.5)),
-                    (1.5, Some(1.5), 1.5, Some(4.0)),
-                    (1.5, None, 1.5, Some(4.0)),
-                    (1.5, Some(1.5), 1.5, None),
+                    ((1.5, None), (4.0, None)),
+                    ((1.5, Some(1.5)), (1.5, Some(4.0))),
+                    ((1.5, Some(1.5)), (4.0, Some(1.5))),
+                    ((1.5, None), (1.5, Some(4.0))),
+                    ((1.5, Some(1.5)), (1.5, None)),
                 ]
                 .iter()
-                .any(|&(a, at, b, bt)| {
-                    min_max_range(&spell, row.as_ref(), a, at)
-                        != min_max_range(&spell, row.as_ref(), b, bt)
+                .any(|&((a, a_attack), (b, b_attack))| {
+                    min_max_range(&spell, row.as_ref(), a, reaches(None, a_attack))
+                        != min_max_range(&spell, row.as_ref(), b, reaches(None, b_attack))
                 });
                 assert_eq!(
                     min_max_range_reads_reach(&spell, row.as_ref()),
