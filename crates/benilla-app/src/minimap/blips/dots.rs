@@ -10,6 +10,7 @@ use benilla_assets::coords::bevy_to_wow;
 use benilla_formats::{LockCatalog, ShapeshiftForm, LOCK_KEY_SKILL};
 use benilla_protocol::EntityKind;
 
+use crate::creature_type::CreatureTypeSources;
 use crate::go_templates::GameObjectTemplates;
 use crate::names::NameCache;
 use crate::net::{GuidIndex, NetEntity, ObjectStore};
@@ -31,10 +32,6 @@ const TRACKED_UNIT_CELL: [f32; 4] = [0.25, 0.5, 0.0, 0.25];
 /// `UNIT_DYNAMIC_FLAGS` bit 0x2, set per viewer on a Hunter's Mark victim for its caster; one of
 /// `0x5ed210`'s two always-show clauses (`+0x224 & 0x2`).
 const UNIT_DYNFLAG_TRACK_UNIT: u32 = 0x2;
-/// Creature type 7, Humanoid: a player's type (`ChrRaces.dbc` col 9 is 7 for all nine playable
-/// races, read by `0x605570`) and the `<= 0` fallback of the shapeshift override.
-const CREATURE_TYPE_HUMANOID: u32 = 7;
-
 /// Only DIALOG_STATUS 7 draws a quest dot, the gold cell 3 (`cmp [obj+0xcb8],7` at `0x4eac31`).
 fn quest_dot_cell(status: u32) -> Option<[f32; 4]> {
     (status == 7).then_some([0.75, 1.0, 0.0, 0.25])
@@ -162,33 +159,6 @@ fn tracked_creature(
             .is_some_and(|t| (1..=32).contains(&t) && tracking.creatures & (1u32 << (t - 1)) != 0)
 }
 
-/// The creature-type resolver `0x605570`: a shapeshift form's `SpellShapeshiftForm.dbc` type
-/// first (`<= 0` reads Humanoid), else an NPC's cached template, else Humanoid for a player.
-fn creature_type_of(
-    kind: EntityKind,
-    shapeshift_form: u8,
-    entry: Option<u32>,
-    names: &NameCache,
-    forms: Option<&HashMap<u32, ShapeshiftForm>>,
-) -> Option<u32> {
-    if shapeshift_form != 0 {
-        if let Some(t) =
-            forms.and_then(|f| f.get(&u32::from(shapeshift_form)).map(|r| r.creature_type))
-        {
-            return Some(if t >= 1 {
-                t as u32
-            } else {
-                CREATURE_TYPE_HUMANOID
-            });
-        }
-    }
-    match kind {
-        EntityKind::Unit => entry.and_then(|e| names.creature_type(e)),
-        EntityKind::Player => Some(CREATURE_TYPE_HUMANOID),
-        _ => None,
-    }
-}
-
 /// Draw the tracking dots, gold cell 0 per GameObject then red cell 1 per unit not at quest
 /// status 7 (`0x4eac31` tests that first). Drawn before the quest and party dots, as the cell
 /// lists draw in order.
@@ -257,6 +227,10 @@ pub(in crate::minimap) fn emit_tracking_dots(
         }
     }
     // Cell 1, units.
+    let types = CreatureTypeSources {
+        names: Some(names),
+        forms,
+    };
     for (guid, net, tf, store) in candidates.iter() {
         if !matches!(net.kind, EntityKind::Unit | EntityKind::Player) {
             continue;
@@ -267,22 +241,10 @@ pub(in crate::minimap) fn emit_tracking_dots(
         if statuses.get(&guid.0).copied() == Some(7) {
             continue; // the ==7 branch already drew the quest dot
         }
-        let (dyn_flags, form, creeping) = store
-            .map(|s| {
-                (
-                    s.0.unit_dynamic_flags(),
-                    s.0.unit_shapeshift_form(),
-                    s.0.unit_is_stealthed(),
-                )
-            })
-            .unwrap_or((0, 0, false));
-        let creature_type = creature_type_of(
-            net.kind,
-            form,
-            benilla_protocol::guid::entry(guid.0),
-            names,
-            forms,
-        );
+        let (dyn_flags, creeping) = store
+            .map(|s| (s.0.unit_dynamic_flags(), s.0.unit_is_stealthed()))
+            .unwrap_or((0, false));
+        let creature_type = store.map(|s| types.of(s));
         if tracked_creature(tracking, creature_type, dyn_flags, creeping) {
             dot(guid.0, tf, TRACKED_UNIT_CELL, DotName::Guid);
         }
@@ -331,6 +293,9 @@ pub(in crate::minimap) fn emit_party_dots(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Creature type 7, Humanoid: a player's, by race (`ChrRaces.dbc` column 9).
+    const CREATURE_TYPE_HUMANOID: u32 = 7;
 
     /// The first row is the control: an ordinary live creature still passes.
     #[test]
@@ -495,51 +460,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn creature_type_resolver_prefers_the_shapeshift_override() {
-        use benilla_formats::ShapeshiftForm;
-        let names = NameCache::default();
-        let forms: HashMap<u32, ShapeshiftForm> = [
-            (
-                1,
-                ShapeshiftForm {
-                    creature_type: 1, // Cat → Beast
-                    ..Default::default()
-                },
-            ),
-            (
-                16,
-                ShapeshiftForm {
-                    creature_type: 0, // a <=0 row reads Humanoid (the resolver's fallback)
-                    ..Default::default()
-                },
-            ),
-        ]
-        .into();
-        // A cat-form player is a Beast; unshifted, a Humanoid.
-        assert_eq!(
-            creature_type_of(EntityKind::Player, 1, None, &names, Some(&forms)),
-            Some(1)
-        );
-        assert_eq!(
-            creature_type_of(EntityKind::Player, 0, None, &names, Some(&forms)),
-            Some(CREATURE_TYPE_HUMANOID)
-        );
-        assert_eq!(
-            creature_type_of(EntityKind::Player, 16, None, &names, Some(&forms)),
-            Some(CREATURE_TYPE_HUMANOID)
-        );
-        // An NPC with no cached template yet resolves nothing.
-        assert_eq!(
-            creature_type_of(EntityKind::Unit, 0, Some(69), &names, Some(&forms)),
-            None
-        );
-        assert_eq!(
-            creature_type_of(EntityKind::GameObject, 0, None, &names, Some(&forms)),
-            None
-        );
-    }
-
     /// The tracking spell's `EffectMiscValue`, the server's mask bit and the node's `Lock.dbc`
     /// skill slot, on the install's data.
     #[test]
@@ -586,12 +506,17 @@ mod tests {
             0,
             false
         ));
-        let cat = creature_type_of(
-            EntityKind::Player,
-            1,
-            None,
-            &NameCache::default(),
-            Some(&forms),
+        // A cat-form player (`UNIT_FIELD_BYTES_1` byte 2 is form 1).
+        let cat_druid = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(
+            138,
+            1 << 16,
+        )]));
+        let cat = Some(
+            CreatureTypeSources {
+                names: Some(&NameCache::default()),
+                forms: Some(&forms),
+            }
+            .of(&cat_druid),
         );
         assert_eq!(cat, Some(1), "cat form resolves Beast (DBC col 12)");
         assert!(tracked_creature(beasts, cat, 0, false));
