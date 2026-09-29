@@ -227,7 +227,11 @@ pub(super) fn reseat_mounts(
             Option<&AppliedMount>,
             Option<&MountChild>,
         ),
-        With<super::VisualAttached>,
+        // A torn-down unit is freed, not re-seated (`0x464920`).
+        (
+            With<super::VisualAttached>,
+            Without<benilla_world::model_fade::DespawnFade>,
+        ),
     >,
     // One pose query for both sides, the rider's rig and the mount's, borrowed in sequence below.
     mut poses: Query<&mut RigPose>,

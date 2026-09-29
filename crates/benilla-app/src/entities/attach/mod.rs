@@ -230,7 +230,11 @@ pub(super) fn attach_entity_visuals(
             Option<&super::mount::MountBody>,
             Has<crate::transport::TransportAnchor>,
         ),
-        Without<VisualAttached>,
+        // A torn-down unit gets no model: the reference frees it at once (`0x464920`).
+        (
+            Without<VisualAttached>,
+            Without<benilla_world::model_fade::DespawnFade>,
+        ),
     >,
     // A mounted rider waits on its mount child, whose attachment-0 point is the seat.
     mount_children: super::mount::MountChildren,
@@ -955,5 +959,68 @@ mod tests {
             );
             *app.world_mut() = world;
         }
+    }
+    /// A unit torn down before its visual built gets none: `0x464920` frees it at once, so the
+    /// build would run commands on an entity `apply_despawn_fade` has despawned by the time they
+    /// apply.
+    #[test]
+    fn a_torn_down_unit_is_not_built() {
+        use benilla_world::model_fade::DespawnFade;
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<Image>()
+            .init_asset::<Mesh>()
+            .init_asset::<benilla_assets::materials::WowModelMaterial>()
+            .init_resource::<benilla_world::model_render::ModelMaterials>()
+            .init_resource::<super::super::corpse::BonesModels>()
+            .init_resource::<SkinComposites>()
+            .init_resource::<merge::MergedFormsCache>()
+            .init_resource::<benilla_world::doodad_anim::UvAnimMaterials>()
+            .init_resource::<benilla_world::doodad_anim::TintAnimMaterials>()
+            .init_resource::<benilla_world::mat_anim_table::MatAnimTable>()
+            .init_resource::<benilla_world::rig_palette::RigPalettes>()
+            .init_resource::<benilla_world::collision::ColliderEpoch>()
+            .insert_resource(CubeAssets {
+                mesh: Handle::default(),
+                player_mesh: Handle::default(),
+                player_mat: Handle::default(),
+                npc_mat: Handle::default(),
+            });
+        let mut spawn = |torn_down: bool| {
+            let mut unit = app.world_mut().spawn(NetEntity {
+                kind: EntityKind::Unit,
+                display_id: None,
+                scale: 1.0,
+            });
+            if torn_down {
+                unit.insert(DespawnFade::default());
+            }
+            unit.id()
+        };
+        let (gone, kept, live) = (spawn(true), spawn(true), spawn(false));
+
+        // The build's commands are queued, the fade's despawn of the unit with nothing fadeable
+        // lands, then the queue applies: the order two unordered chains can interleave in.
+        let world = app.world_mut();
+        let mut build = IntoSystem::into_system(attach_entity_visuals);
+        build.initialize(world);
+        build
+            .run_without_applying_deferred((), world)
+            .expect("the build system runs");
+        world.despawn(gone);
+        build.apply_deferred(world);
+
+        let kept = world.entity(kept);
+        assert!(
+            !kept.contains::<VisualAttached>(),
+            "a torn-down unit has no visual"
+        );
+        assert!(!kept.contains::<benilla_world::interior::BodyBakeCenter>());
+
+        assert!(
+            world.entity(live).contains::<VisualAttached>(),
+            "a live unit still builds"
+        );
     }
 }

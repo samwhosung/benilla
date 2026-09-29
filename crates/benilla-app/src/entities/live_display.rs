@@ -82,7 +82,11 @@ pub(super) fn refresh_live_display(
             Option<&CollisionHeight>,
             &Transform,
         ),
-        With<VisualAttached>,
+        // A torn-down unit is freed, not rebuilt (`0x464920`).
+        (
+            With<VisualAttached>,
+            Without<benilla_world::model_fade::DespawnFade>,
+        ),
     >,
     mut swapped: MessageWriter<DisplaySwapped>,
 ) {
@@ -206,6 +210,7 @@ pub(super) fn heal_rig_starved(
         (
             With<benilla_world::rig_palette::RigStarved>,
             With<VisualAttached>,
+            Without<benilla_world::model_fade::DespawnFade>,
         ),
     >,
 ) {
@@ -312,6 +317,29 @@ mod tests {
             app.world().get_entity(child).is_err(),
             "the old visual's children despawned"
         );
+    }
+
+    #[test]
+    fn a_torn_down_starved_unit_is_not_rebuilt() {
+        let mut app = App::new();
+        app.init_resource::<benilla_world::rig_palette::RigPalettes>();
+        app.add_systems(Update, heal_rig_starved);
+        let unit = app
+            .world_mut()
+            .spawn((
+                benilla_world::rig_palette::RigStarved,
+                VisualAttached,
+                benilla_world::model_fade::DespawnFade::default(),
+                crate::net::Guid(0xB0B),
+            ))
+            .id();
+        app.update();
+        let e = app.world().entity(unit);
+        assert!(
+            e.contains::<VisualAttached>(),
+            "a fading unit keeps its visual"
+        );
+        assert!(!e.contains::<super::super::equipment::Reattached>());
     }
 
     #[test]

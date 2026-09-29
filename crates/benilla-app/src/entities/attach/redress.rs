@@ -57,7 +57,11 @@ pub(in crate::entities) fn redress_player_looks(
             Option<&benilla_world::interior::BodyBakeCenter>,
             Option<&benilla_world::model_fade::UnitAppearFade>,
         ),
-        With<VisualAttached>,
+        // A torn-down player is freed, not re-dressed (`0x464920`).
+        (
+            With<VisualAttached>,
+            Without<benilla_world::model_fade::DespawnFade>,
+        ),
     >,
     // The standing parts, found again by their batch index.
     mut standing: Query<(
