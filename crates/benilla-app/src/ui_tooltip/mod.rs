@@ -354,6 +354,8 @@ fn drive_mouseover_tooltip(
 }
 
 #[cfg(test)]
+mod bench;
+#[cfg(test)]
 mod deps_tests;
 #[cfg(test)]
 mod feed_tests;

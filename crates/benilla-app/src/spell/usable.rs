@@ -87,14 +87,19 @@ fn needs_equipped_item(d: &SpellDisplay) -> bool {
 }
 
 /// The worn slots (0-18) [`equipped_item_fits`] reads for `d`, a bit each: none unless it
-/// searches, else the slots its hand restriction leaves.
+/// searches, else the slots its hand restriction leaves and both hands, which the disarm ladder
+/// reads whatever the restriction (`0x5f0c69`, `0x5f0c91`).
 pub(crate) fn worn_slots_read(d: &SpellDisplay) -> u32 {
     if needs_equipped_item(d) {
-        hand_mask(d) & WORN_SLOTS
+        (hand_mask(d) | HANDS) & WORN_SLOTS
     } else {
         0
     }
 }
+
+/// The main and off hand, the two slots the disarm ladder tells apart.
+const HANDS: u32 =
+    1 << crate::items::EQUIPMENT_SLOT_MAINHAND | 1 << crate::items::EQUIPMENT_SLOT_OFFHAND;
 
 /// The 19 worn slots, as a mask over the equipment indices ([`EQUIPMENT_SLOTS`] adds the bags).
 pub(crate) const WORN_SLOTS: u32 = (1 << 19) - 1;

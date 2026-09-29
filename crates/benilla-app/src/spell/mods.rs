@@ -289,7 +289,7 @@ pub(super) fn track_class_family(
         return;
     };
     let family = classes.0.spell_family(u32::from(class));
-    // Guarded: the tooltip feed rebuilds whenever the resource is marked changed.
+    // Guarded: the tooltip feed diffs the tables whenever the resource is marked changed.
     if mods.class_family != family {
         mods.set_class_family(family);
     }
