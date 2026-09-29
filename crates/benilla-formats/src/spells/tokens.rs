@@ -271,20 +271,21 @@ fn token_value(
             Some((duration_text(ms, ctx)?, v))
         }
         't' => {
-            let period = i64::from(*d.effect_amplitude.get(slot).unwrap_or(&0));
-            let period = if period == 0 {
+            // `507e3c`: ProcFlags bit 0 is five seconds unmodified, else the amplitude through
+            // op 19, zero included (`507e5c`); whole seconds, truncated (`507e61`).
+            let ms = if d.proc_flags & 1 != 0 {
                 5000
             } else {
-                i64::from(modify_int(ctx, d, 19, period as i32))
+                modify_int(ctx, d, 19, d.effect_amplitude[slot] as i32)
             };
-            let v = period as f64 / 1000.0;
-            Some((trim_float(v), v))
+            let secs = ms / 1000;
+            Some((secs.to_string(), f64::from(secs)))
         }
         'a' => {
-            let idx = *d.effect_radius_index.get(slot).unwrap_or(&0);
-            let r = ctx.radii.get(idx)?;
-            let v = f64::from(modify_int(ctx, d, 6, r.radius as i32));
-            Some((trim_float(v), v))
+            // `507c74`: the SpellRadius row's radius truncated, then op 6; no row is 0.
+            let r = ctx.radii.get(d.effect_radius_index[slot]);
+            let v = r.map_or(0, |r| modify_int(ctx, d, 6, r.radius as i32));
+            Some((v.to_string(), f64::from(v)))
         }
         'h' => {
             let v = modify_int(ctx, d, 18, d.proc_chance as i32);
@@ -296,9 +297,9 @@ fn token_value(
             Some((v.to_string(), f64::from(v)))
         }
         'e' => {
-            let v = f64::from(*d.effect_multiple_value.get(slot).unwrap_or(&0.0));
-            let v = f64::from(modify_float(ctx, d, 27, v as f32));
-            Some((trim_float(v), v))
+            // `507f83`: EffectMultipleValue through op 27, always one decimal.
+            let v = modify_float(ctx, d, 27, d.effect_multiple_value[slot]);
+            Some((tenths(ctx, v), f64::from(v)))
         }
         'n' => {
             let v = modify_int(ctx, d, 4, d.proc_charges as i32);
@@ -310,20 +311,13 @@ fn token_value(
             Some((name.to_string(), 0.0))
         }
         'r' => {
-            let max = ctx.ranges?.get(d.range_index)?.max;
-            let v = f64::from(modify_float(ctx, d, 5, max));
-            Some((trim_float(v), v))
+            // `507d5b`: RangeIndex at or below 1 reads row 1, its maximum through op 5; no row is
+            // 0.0. One decimal, and the plural keys on the ceiling (`507dbd`).
+            let row = ctx.ranges?.get(d.range_index.max(1));
+            let v = row.map_or(0.0, |r| modify_float(ctx, d, 5, r.max));
+            Some((tenths(ctx, v), f64::from(v).ceil()))
         }
         _ => None,
-    }
-}
-
-/// Trim a float to a terse style (no trailing zeros: 2.5 → "2.5", 3.0 → "3").
-fn trim_float(v: f64) -> String {
-    if (v - v.round()).abs() < 1e-9 {
-        format!("{}", v.round() as i64)
-    } else {
-        format!("{v:.1}")
     }
 }
 
@@ -1065,6 +1059,72 @@ mod tests {
             };
             assert_eq!(aura_op(&d, 0), expected, "aura {aura}");
         }
+    }
+
+    /// `$t` (`507e3c`): ProcFlags bit 0 is five seconds whatever the amplitude; else the
+    /// amplitude through op 19, zero included, in whole seconds.
+    #[test]
+    fn t_is_whole_seconds_of_the_modified_amplitude() {
+        let durations = SpellDurationCatalog::default();
+        let radii = SpellRadiusCatalog::default();
+        let mods = Mods(vec![(19, -1000, 100)]);
+        let c = TokenContext {
+            mods: Some(&mods),
+            ..ctx(&durations, &radii, &none_lookup)
+        };
+        let tick = |amplitude, proc_flags| SpellDisplay {
+            effect_amplitude: [amplitude, 0, 0],
+            proc_flags,
+            ..Default::default()
+        };
+        let bare = ctx(&durations, &radii, &none_lookup);
+        assert_eq!(substitute("$t1", &tick(1500, 0), &bare), "1");
+        assert_eq!(substitute("$t1", &tick(0, 0), &bare), "0");
+        assert_eq!(substitute("$t1", &tick(3000, 0), &c), "2");
+        assert_eq!(substitute("$t1", &tick(3000, 1), &c), "5");
+    }
+
+    /// `$r` (`507d5b`) reads row 1 for an index at or below 1 and prints one decimal through
+    /// op 5; `$e` (`507f83`) prints one decimal through op 27; `$a` (`507c74`) truncates the
+    /// radius, applies op 6 and prints an integer, 0 without a row.
+    #[test]
+    fn r_e_and_a_follow_their_arms() {
+        let durations = SpellDurationCatalog::default();
+        let radii = SpellRadiusCatalog::from_rows(
+            [(
+                7,
+                crate::SpellRadius {
+                    radius: 8.5,
+                    per_level: 0.0,
+                    max: 8.5,
+                },
+            )]
+            .into(),
+        );
+        let range = |max| crate::SpellRange {
+            min: 0.0,
+            max,
+            flags: 0,
+        };
+        let ranges = SpellRangeCatalog::from_rows([(1, range(5.0)), (4, range(30.0))].into());
+        let mods = Mods(vec![(5, 0, 110), (27, 0, 150), (6, 2, 100)]);
+        let c = TokenContext {
+            ranges: Some(&ranges),
+            mods: Some(&mods),
+            ..ctx(&durations, &radii, &none_lookup)
+        };
+        let d = |range_index, radius| SpellDisplay {
+            range_index,
+            effect_radius_index: [radius, 0, 0],
+            effect_multiple_value: [2.0, 0.0, 0.0],
+            ..Default::default()
+        };
+        assert_eq!(substitute("$r", &d(4, 0), &c), "33.0");
+        assert_eq!(substitute("$r", &d(0, 0), &c), "5.5", "index 0 reads row 1");
+        assert_eq!(substitute("$r", &d(9, 0), &c), "0.0", "no row");
+        assert_eq!(substitute("$e1", &d(4, 0), &c), "3.0");
+        assert_eq!(substitute("$a1", &d(4, 7), &c), "10");
+        assert_eq!(substitute("$a1", &d(4, 3), &c), "0", "no row");
     }
 
     /// Whole within 0.001 of either neighbour, a near-ceiling value reading as the ceiling.

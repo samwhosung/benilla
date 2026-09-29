@@ -147,6 +147,9 @@ pub struct SpellDisplay {
     pub duration_index: u32,
     /// `CastingTimeIndex` (column 18): the `SpellCastTimes.dbc` row; row 1 is instant.
     pub casting_time_index: u32,
+    /// `ProcFlags` (column 24, `SpellRec+0x60`): bit 0 makes the description's `$t` a fixed five
+    /// seconds.
+    pub proc_flags: u32,
     /// `ProcChance` (column 25): percent; vmangos reads 101 as always, with no roll.
     pub proc_chance: u32,
     /// `ProcCharges` (column 26): the description expander's `$n` value before op 4.
@@ -247,6 +250,7 @@ impl Default for SpellDisplay {
             aura_description: None,
             duration_index: 0,
             casting_time_index: 0,
+            proc_flags: 0,
             proc_chance: 0,
             proc_charges: 0,
             effect_base_points: [0; 3],
