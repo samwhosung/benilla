@@ -181,7 +181,8 @@ impl Cooldowns {
     ///
     /// `ranged_attack_time_ms` is `UNIT_FIELD_RANGEDATTACKTIME` when
     /// [`SpellDisplay::ranged_speed_cooldown`], else 0, added to the category timer (`0x6e2b60`):
-    /// the Throw and wand Shoot sweep. Category 0 (Auto Shot) never surfaces it.
+    /// the Throw and wand Shoot sweep. Category 0 (Auto Shot) never surfaces it. `mods` applies
+    /// op 11 to both timers, as the self and pet legs do; `None` inserts the DBC values.
     pub(crate) fn start_spell(
         &mut self,
         spell_id: u32,
