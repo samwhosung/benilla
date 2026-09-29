@@ -228,7 +228,7 @@ pub(super) fn feed_token(
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::ui_party) mod tests {
     use super::*;
     use crate::net::{FieldChanged, Guid};
     use benilla_protocol::messages::{
@@ -242,10 +242,10 @@ mod tests {
     const MAXHEALTH: u16 = 28;
     const PETNUMBER: u16 = 139;
 
-    const ME: u64 = 0x10;
+    pub(in crate::ui_party) const ME: u64 = 0x10;
 
     /// The `i`-th party member, and its pet.
-    fn member(i: u64) -> u64 {
+    pub(in crate::ui_party) fn member(i: u64) -> u64 {
         0x1000 + i
     }
     fn pet(i: u64) -> u64 {
@@ -294,12 +294,12 @@ mod tests {
         app
     }
 
-    fn app() -> App {
+    pub(in crate::ui_party) fn app() -> App {
         app_with(UiScript::new().unwrap())
     }
 
     /// A party of `n`, each `online` on the wire and in its record, the record naming pet `i`.
-    fn party(app: &mut App, n: u64, online: bool) {
+    pub(in crate::ui_party) fn party(app: &mut App, n: u64, online: bool) {
         let status = if online {
             member_status::ONLINE
         } else {
@@ -337,7 +337,7 @@ mod tests {
     }
 
     /// Hold `guid` in the object manager.
-    fn stream(app: &mut App, guid: u64, pairs: &[(u16, u32)]) -> Entity {
+    pub(in crate::ui_party) fn stream(app: &mut App, guid: u64, pairs: &[(u16, u32)]) -> Entity {
         let e = app.world_mut().spawn((Guid(guid), store(pairs))).id();
         app.world_mut()
             .resource_mut::<GuidIndex>()
@@ -356,7 +356,7 @@ mod tests {
     }
 
     /// Run a frame and take the pet events it fired; `UNIT_PET`, or a unit event naming a pet.
-    fn frame(app: &mut App) -> Vec<String> {
+    pub(in crate::ui_party) fn frame(app: &mut App) -> Vec<String> {
         app.update();
         let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
         s.resolve();
@@ -384,7 +384,7 @@ mod tests {
     }
 
     /// A predicate answers the number 1 or nil, never a boolean.
-    fn flag(app: &mut App, code: &str) -> Option<f64> {
+    pub(in crate::ui_party) fn flag(app: &mut App, code: &str) -> Option<f64> {
         app.world_mut()
             .non_send_resource::<UiScript>()
             .eval(&format!("return {code}"))

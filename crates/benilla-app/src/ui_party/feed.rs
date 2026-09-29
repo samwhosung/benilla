@@ -743,11 +743,13 @@ fn member_unit_state(
             // Divided as on the live leg (`UnitMana`'s record path, `0x517744`-`0x51775e`).
             power: stats.map_or(0, PartyMemberStatsInfo::shown_power),
             max_power: stats.map_or(0, PartyMemberStatsInfo::shown_max_power),
+            // Connected is the roster byte's online bit, the one `0x4e82d0` writes into the
+            // record's bit 0 (`0x4e836e`-`0x4e837b`) for `UnitIsConnected` to read (`0x517dd3`);
+            // a held member never gets here, its 1 is `snapshot`'s (`0x517daf`).
+            is_connected: m.status & member_status::ONLINE != 0,
             // Dead and ghost from the record, as the reference's `UnitIsDead` (`0x517b5d`,
             // `+0x08 & 4`) and `UnitIsGhost` (`0x517c32`, `& 8`) read it: fresher than the roster
-            // byte, which only `SMSG_GROUP_LIST` moves. Connected stays the roster's, though the
-            // reference reads the record's bit 0 (`0x517dd3`); its no-object PvP and FFA reads are
-            // untraced, and 1.12 has no AFK or DND predicate to feed.
+            // byte, which only `SMSG_GROUP_LIST` moves. 1.12 has no AFK or DND predicate to feed.
             dead: stats.is_some_and(|s| s.status.unwrap_or(0) & member_status::DEAD != 0),
             ghost: stats.is_some_and(|s| s.status.unwrap_or(0) & member_status::GHOST != 0),
             ..Default::default()
@@ -759,8 +761,7 @@ fn member_unit_state(
     s.raid_target = group.raid_target_index(m.guid);
     s.reaction = 5;
     s.faction_group = own_group;
-    // The roster status byte overlays both legs.
-    s.is_connected = m.status & member_status::ONLINE != 0;
+    // The roster status byte overlays both legs, but for `is_connected`, which is the record leg's.
     s.is_pvp_ffa = m.status & member_status::PVP_FFA != 0;
     s.pvp = s.pvp || m.status & member_status::PVP != 0;
     s.ghost = s.ghost || m.status & member_status::GHOST != 0;
@@ -1404,6 +1405,7 @@ pub(crate) fn synthetic_raid(
 
 #[cfg(test)]
 mod tests {
+    use super::super::pets::tests::{app, flag, frame, member, party, stream, ME};
     use super::*;
 
     #[test]
@@ -1520,6 +1522,108 @@ mod tests {
             Default::default(),
         );
         assert!(s.dead);
+    }
+
+    /// Seat member 1 alone in the party or raid roster with `status`, on the wire and in its
+    /// record, as [`party`] does.
+    fn seat(app: &mut App, group_type: u8, status: u8) {
+        let mut group = app.world_mut().resource_mut::<GroupState>();
+        group.apply_list(
+            group_type,
+            0,
+            vec![GroupMemberEntry {
+                name: "M1".into(),
+                guid: member(1),
+                status,
+                flags: 0,
+            }],
+            ME,
+            None,
+            Some(ME),
+        );
+        group.stats.get_mut(&member(1)).unwrap().status = Some(status);
+    }
+
+    /// `UnitIsConnected` (`0x517d50`) answers 1 for any unit the object manager holds
+    /// (`0x517daf`), whatever the roster's status byte says; the record is not read.
+    #[test]
+    fn a_held_member_reads_connected_whatever_the_roster_status_says() {
+        let mut app = app();
+        party(&mut app, 1, false);
+        stream(&mut app, member(1), &[]);
+        frame(&mut app);
+        assert_eq!(
+            flag(&mut app, "UnitIsConnected('party1')"),
+            Some(1.0),
+            "held, roster and record without the online bit"
+        );
+
+        seat(&mut app, GROUPTYPE_RAID, member_status::OFFLINE);
+        frame(&mut app);
+        assert_eq!(
+            flag(&mut app, "UnitIsConnected('raid1')"),
+            Some(1.0),
+            "the raid token reads the same view"
+        );
+    }
+
+    /// The reported shape: a member goes link-dead while still in view. The roster marks them
+    /// offline and the reference keeps them connected until the object leaves (`0x517daf`), then
+    /// reads the record's online bit (`0x517dd3`).
+    #[test]
+    fn a_held_member_going_offline_reads_disconnected_only_once_the_object_leaves() {
+        let mut app = app();
+        party(&mut app, 1, true);
+        let held = stream(&mut app, member(1), &[]);
+        frame(&mut app);
+        assert_eq!(flag(&mut app, "UnitIsConnected('party1')"), Some(1.0));
+
+        seat(&mut app, 0, member_status::OFFLINE);
+        frame(&mut app);
+        assert_eq!(
+            flag(&mut app, "UnitIsConnected('party1')"),
+            Some(1.0),
+            "link-dead, still in view"
+        );
+
+        app.world_mut().despawn(held);
+        app.world_mut()
+            .resource_mut::<GuidIndex>()
+            .0
+            .remove(&member(1));
+        frame(&mut app);
+        assert_eq!(
+            flag(&mut app, "UnitIsConnected('party1')"),
+            None,
+            "out of view, the record's clear online bit decides"
+        );
+    }
+
+    /// With no object, the record's online bit (`+0x08 & 1`) is the answer: clear is nil
+    /// (`0x517dfd`).
+    #[test]
+    fn an_unheld_member_with_the_online_bit_clear_reads_nil() {
+        let mut app = app();
+        party(&mut app, 1, false);
+        frame(&mut app);
+        assert_eq!(flag(&mut app, "UnitIsConnected('party1')"), None);
+
+        seat(&mut app, GROUPTYPE_RAID, member_status::OFFLINE);
+        frame(&mut app);
+        assert_eq!(flag(&mut app, "UnitIsConnected('raid1')"), None);
+    }
+
+    /// Set, it is 1 (`0x517dd7`).
+    #[test]
+    fn an_unheld_member_with_the_online_bit_set_reads_connected() {
+        let mut app = app();
+        party(&mut app, 1, true);
+        frame(&mut app);
+        assert_eq!(flag(&mut app, "UnitIsConnected('party1')"), Some(1.0));
+
+        seat(&mut app, GROUPTYPE_RAID, member_status::ONLINE);
+        frame(&mut app);
+        assert_eq!(flag(&mut app, "UnitIsConnected('raid1')"), Some(1.0));
     }
 
     #[test]
