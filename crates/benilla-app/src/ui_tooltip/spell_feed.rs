@@ -12,9 +12,10 @@ use benilla_ui::script::UiScript;
 use benilla_ui::strings::Arg;
 
 use super::keyed;
-use super::spell_deps::{Chance, Changes, Deps, Reagents, Seen};
+use super::spell_deps::{Chance, Changes, Deps, Reagents, Seen, UnitField};
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, Objects, SelfPlayer};
+use crate::spell::usable::{self, CostBasis};
 use crate::ui_action::{PlayerActions, Spells};
 use crate::ui_items::{count_of, InventoryScope};
 use crate::ui_trainer::TrainerTooltipSubjects;
@@ -133,13 +134,27 @@ pub(super) fn build_view(
     // percentage. Rage shows wire ÷ 10, a per-second column adds `_PER_TIME`, and no cost at all
     // leaves the cell empty. A pet with no unit costs -1 (`0x6e3233`), which shows as none.
     let resolved_cost = match caster {
-        ViewCaster::Player => vctx.store.map_or(d.mana_cost, |s| {
-            crate::spell::usable::power_cost(d, s, vctx.spell_mods)
-        }),
+        ViewCaster::Player => vctx
+            .store
+            .map_or(d.mana_cost, |s| usable::power_cost(d, s, vctx.spell_mods)),
         ViewCaster::Pet(pet) => pet.map_or(0, |p| {
-            crate::spell::usable::power_cost_at(d, p, pet_level(Some(p)), vctx.spell_mods)
+            usable::power_cost_at(d, p, pet_level(Some(p)), vctx.spell_mods)
         }),
     };
+    // The player's cost reads its level, and the field a percentage scales by; the pet's reads the
+    // pet's own, which are pet inputs.
+    if matches!(caster, ViewCaster::Player) {
+        let mut deps = deps.borrow_mut();
+        if usable::cost_reads_level(d) {
+            deps.unit(UnitField::Level);
+        }
+        match usable::cost_basis(d) {
+            CostBasis::None => {}
+            CostBasis::BaseMana => deps.unit(UnitField::BaseMana),
+            CostBasis::MaxHealth => deps.unit(UnitField::MaxHealth),
+            CostBasis::MaxPower(ty) => deps.unit(UnitField::MaxPower(ty)),
+        }
+    }
     let cost = {
         // The shared per-type divisor (`0x6e7130`), never a local `power_type == 1` test.
         let div = benilla_protocol::messages::power_display_scale(d.power_type);
@@ -202,7 +217,16 @@ pub(super) fn build_view(
     let cast_time = if d.tooltip_omits_cast_line() {
         None
     } else {
-        // `GetCastTime` takes the selector too (`52eb45`), and its level term is `0x6e3130`'s.
+        // `GetCastTime` takes the selector too (`52eb45`), and its level term is `0x6e3130`'s. The
+        // player's is its level only where the row scales by one.
+        if matches!(caster, ViewCaster::Player)
+            && spells
+                .cast_times
+                .get(d.casting_time_index)
+                .is_some_and(|row| row.reads_caster_level())
+        {
+            deps.borrow_mut().unit(UnitField::Level);
+        }
         let level = match caster {
             ViewCaster::Player => vctx.store.and_then(|s| s.0.unit_level()).unwrap_or(0),
             ViewCaster::Pet(pet) => pet_level(pet),
@@ -233,8 +257,10 @@ pub(super) fn build_view(
             keyed(vctx.get, key, &[])
         }
     };
-    // The larger recovery column (`0x52eada`): op 11 follows the ranged-speed category pad.
+    // The larger recovery column (`0x52eada`): op 11 follows the ranged-speed category pad. The
+    // ranged attack time is the player's, a pet view's too.
     let ranged_ms = if d.ranged_speed_cooldown() {
+        deps.borrow_mut().unit(UnitField::RangedTime);
         vctx.store
             .and_then(|s| s.0.unit_ranged_attack_time())
             .unwrap_or(0)
@@ -293,11 +319,11 @@ pub(super) fn build_view(
     let chance = chance_line(d, vctx.store, &mut deps.borrow_mut());
     // The unit selector passes the item test outright (`0x52f07f`).
     if matches!(caster, ViewCaster::Player) {
-        deps.borrow_mut().worn |= crate::spell::usable::worn_slots_read(d);
+        deps.borrow_mut().item_search(usable::worn_slots_read(d));
     }
     let item_met = matches!(caster, ViewCaster::Pet(_))
         || vctx.store.is_none_or(|s| {
-            crate::spell::usable::equipped_item_fits(d, s, vctx.objects, vctx.items, vctx.commands)
+            usable::equipped_item_fits(d, s, vctx.objects, vctx.items, vctx.commands)
         });
     // Reagents (`SPELL_REAGENTS`, `0x854e54`), red when short; one whose template has not
     // streamed is absent until `feed_spell_tooltips` re-pushes on its arrival.
@@ -450,7 +476,7 @@ pub(super) fn reagent_state(
 /// The pet unit's fields a pet view reads (`0x52e610` with the unit selector set): its level, the
 /// cost bases `0x612c50` reads, its form, and its and its melee target's reach, as bit patterns.
 #[derive(Clone, Copy, PartialEq, Default)]
-struct PetInputs {
+pub(super) struct PetInputs {
     guid: Option<u64>,
     level: u32,
     base_mana: u32,
@@ -462,7 +488,7 @@ struct PetInputs {
 }
 
 impl PetInputs {
-    fn of(
+    pub(super) fn of(
         guid: Option<u64>,
         pet: Option<&benilla_protocol::ObjectFields>,
         attack_target_reach: Option<f32>,
@@ -600,9 +626,16 @@ pub(super) fn feed_spell_tooltips(
         |e: &crate::creature_anim::Engaged| objects.object(e.0).map(|f| f.unit_combat_reach());
     let attack_target_reach = engaged_q.single().ok().and_then(target_reach);
     // What moved since the last frame, which each pushed view is checked against: the bind
-    // point (Astral Recall's `$z`), the form, the skills, the worn set, the block, dodge, parry
-    // and crit percentages, and the two combat reaches.
-    let seen = Seen::of(self_store, home_area.as_deref(), attack_target_reach);
+    // point (Astral Recall's `$z`), the form, the skills, what the equipped-item search learns of
+    // each equipment slot and the disarm flag, the level, cost bases and ranged attack time, the
+    // block, dodge, parry and crit percentages, and the two combat reaches.
+    let seen = Seen::of(
+        self_store,
+        home_area.as_deref(),
+        attack_target_reach,
+        &objects,
+        &items,
+    );
     let mut changes = memory
         .seen
         .as_ref()

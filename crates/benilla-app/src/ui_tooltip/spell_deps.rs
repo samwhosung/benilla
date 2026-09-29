@@ -9,7 +9,9 @@ use std::collections::BTreeMap;
 
 use benilla_protocol::ObjectFields;
 
-use crate::net::ObjectStore;
+use crate::items::Items;
+use crate::net::{ObjectStore, Objects};
+use crate::spell::usable::{slot_item_cached, SlotItem, EQUIPMENT_MASK, EQUIPMENT_SLOTS};
 use crate::spell::{ModsDiff, SkillSnapshot};
 
 /// The four percentages a chance-to-X line reads (`0x52f5b1`), in the order [`Seen`] keeps them.
@@ -40,6 +42,79 @@ impl Chance {
     }
 }
 
+/// One of the player's unit fields a cost, cast or cooldown cell reads, a bit of [`Deps::unit`].
+#[derive(Clone, Copy)]
+pub(super) enum UnitField {
+    Level,
+    BaseMana,
+    MaxHealth,
+    /// `UNIT_FIELD_MAXPOWER` of a type; one past the five reads nothing.
+    MaxPower(u8),
+    RangedTime,
+}
+
+impl UnitField {
+    pub(super) fn bit(self) -> u16 {
+        match self {
+            UnitField::Level => 1,
+            UnitField::BaseMana => 1 << 1,
+            UnitField::MaxHealth => 1 << 2,
+            UnitField::MaxPower(ty) if ty < 5 => 1 << (3 + ty),
+            UnitField::MaxPower(_) => 0,
+            UnitField::RangedTime => 1 << 8,
+        }
+    }
+}
+
+/// The player's unit fields those cells read, as the values they read them at (an absent field
+/// reads 0).
+#[derive(Clone, Copy, Default, PartialEq)]
+struct UnitFields {
+    level: u32,
+    base_mana: u32,
+    max_health: u32,
+    max_power: [u32; 5],
+    ranged_time: u32,
+}
+
+impl UnitFields {
+    fn of(player: Option<&ObjectStore>) -> Self {
+        let Some(p) = player.map(|s| &s.0) else {
+            return Self::default();
+        };
+        Self {
+            level: p.unit_level().unwrap_or(0),
+            base_mana: p.unit_base_mana().unwrap_or(0),
+            max_health: p.unit_max_health().unwrap_or(0),
+            max_power: std::array::from_fn(|ty| p.unit_max_power(ty as u8).unwrap_or(0)),
+            ranged_time: p.unit_ranged_attack_time().unwrap_or(0),
+        }
+    }
+
+    /// The [`UnitField`] bits that differ.
+    fn diff(&self, prev: &Self) -> u16 {
+        let moved = |field: UnitField, now: u32, before: u32| {
+            if now != before {
+                field.bit()
+            } else {
+                0
+            }
+        };
+        let mut bits = moved(UnitField::Level, self.level, prev.level)
+            | moved(UnitField::BaseMana, self.base_mana, prev.base_mana)
+            | moved(UnitField::MaxHealth, self.max_health, prev.max_health)
+            | moved(UnitField::RangedTime, self.ranged_time, prev.ranged_time);
+        for ty in 0..5u8 {
+            bits |= moved(
+                UnitField::MaxPower(ty),
+                self.max_power[usize::from(ty)],
+                prev.max_power[usize::from(ty)],
+            );
+        }
+        bits
+    }
+}
+
 /// What one built view read of the player-side inputs the feed watches; the pet's own inputs
 /// ([`super::spell_feed::PetInputs`]) rebuild every pet view and are not recorded. Written where
 /// the builder reads, so a read cannot be added without saying what it depends on.
@@ -53,8 +128,14 @@ pub(super) struct Deps {
     pub(super) reach: bool,
     /// The chance line read these percentages, a [`Chance`] bit each.
     pub(super) avoidance: u8,
-    /// The equipped-item search read these worn slots, a bit each.
+    /// The equipped-item search read these equipment slots, a bit each.
     pub(super) worn: u32,
+    /// The equipped-item search asked whether the disarm flag hides a hand.
+    pub(super) disarm: bool,
+    /// The player's unit fields the cost, cast and cooldown cells read, a [`UnitField`] bit each.
+    /// A pet view's cost and cast cells read the pet's own fields, which are pet inputs, so of
+    /// the unit fields only the ranged attack time (read off the player) is recorded for one.
+    pub(super) unit: u16,
     /// The modifier cells read: the `SpellFamilyFlags` bits of the view's spell and of each spell
     /// its text cross-references, for the ones the caster's class family owns.
     pub(super) mod_bits: u64,
@@ -67,6 +148,16 @@ pub(super) struct Deps {
 impl Deps {
     pub(super) fn chance(&mut self, which: Chance) {
         self.avoidance |= which.bit();
+    }
+
+    pub(super) fn unit(&mut self, field: UnitField) {
+        self.unit |= field.bit();
+    }
+
+    /// The equipped-item search ran over the equipment slots in `slots`.
+    pub(super) fn item_search(&mut self, slots: u32) {
+        self.worn |= slots;
+        self.disarm |= slots != 0;
     }
 
     pub(super) fn skill_line(&mut self, line: u32) {
@@ -94,6 +185,8 @@ impl Deps {
             || (changes.reach && self.reach)
             || changes.avoidance & self.avoidance != 0
             || changes.worn & self.worn != 0
+            || (changes.disarm && self.disarm)
+            || changes.unit & self.unit != 0
             || changes.mod_bits & self.mod_bits != 0
             || self
                 .skill_lines
@@ -116,8 +209,11 @@ pub(super) struct Changes {
     pub(super) reach: bool,
     /// A [`Chance`] bit each.
     pub(super) avoidance: u8,
-    /// The worn slots whose guid moved, a bit each.
+    /// The equipment slots whose item moved in a way the search can tell, a bit each.
     pub(super) worn: u32,
+    pub(super) disarm: bool,
+    /// A [`UnitField`] bit each.
+    pub(super) unit: u16,
     /// The `SpellFamilyFlags` bits with a changed modifier cell.
     pub(super) mod_bits: u64,
     pub(super) skill_lines: Vec<u32>,
@@ -132,6 +228,8 @@ impl Changes {
             && !self.reach
             && self.avoidance == 0
             && self.worn == 0
+            && !self.disarm
+            && self.unit == 0
             && self.mod_bits == 0
             && self.skill_lines.is_empty()
             && self.reagents.is_empty()
@@ -169,13 +267,17 @@ pub(super) struct Seen {
     form: u8,
     /// The skills the descriptions' per-level terms scale by ([`crate::spell::skill_snapshot`]).
     skills: SkillSnapshot,
-    /// The 19 worn-slot guids the required-item line's colour follows (`0x5f0c50`); `None`
+    /// What the equipped-item search learns of each of the 23 equipment slots (`0x5f0c50`); `None`
     /// without a player.
-    worn: Option<[u64; 19]>,
+    worn: Option<[SlotItem; EQUIPMENT_SLOTS as usize]>,
+    /// The disarm flag, which hides a hand from that search.
+    disarmed: bool,
     /// The [`Chance`] percentages as bit patterns.
     avoidance: [Option<u32>; 4],
     /// The caster's and its auto-attack target's combat reach as bit patterns.
     reach: (Option<u32>, Option<u32>),
+    /// The unit fields the cost, cast and cooldown cells read.
+    unit: UnitFields,
 }
 
 impl Seen {
@@ -183,19 +285,23 @@ impl Seen {
         player: Option<&ObjectStore>,
         home: Option<&str>,
         attack_target_reach: Option<f32>,
+        objects: &Objects,
+        items: &Items,
     ) -> Self {
         Seen {
             home: home.map(str::to_string),
             form: player.map_or(0, |s| s.0.unit_shapeshift_form()),
             skills: crate::spell::skill_snapshot(player),
             worn: player
-                .map(|s| std::array::from_fn(|i| s.0.player_inv_slot(i as u8).unwrap_or(0))),
+                .map(|s| std::array::from_fn(|i| slot_item_cached(s, i as u8, objects, items))),
+            disarmed: player.is_some_and(crate::items::is_disarmed),
             avoidance: Chance::ALL
                 .map(|which| player.and_then(|s| which.read(&s.0)).map(f32::to_bits)),
             reach: (
                 player.map(|s| s.0.unit_combat_reach().to_bits()),
                 attack_target_reach.map(f32::to_bits),
             ),
+            unit: UnitFields::of(player),
         }
     }
 
@@ -205,6 +311,8 @@ impl Seen {
             home: self.home != prev.home,
             form: self.form != prev.form,
             reach: self.reach != prev.reach,
+            disarm: self.disarmed != prev.disarmed,
+            unit: self.unit.diff(&prev.unit),
             ..Changes::default()
         };
         for (which, (now, before)) in Chance::ALL
@@ -224,8 +332,8 @@ impl Seen {
                     mask | u32::from(now != before) << slot
                 }),
             (None, None) => 0,
-            // A player appearing or going: every slot's guid is new.
-            _ => crate::spell::usable::WORN_SLOTS,
+            // A player appearing or going: every slot's item is new.
+            _ => EQUIPMENT_MASK,
         };
         if self.skills != prev.skills {
             changes.skill_lines = crate::spell::changed_skill_lines(&prev.skills, &self.skills);

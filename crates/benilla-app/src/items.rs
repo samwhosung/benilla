@@ -564,6 +564,12 @@ fn equipped_class(
     Some(items.template(entry, guid, commands)?.class as u8)
 }
 
+/// Whether the disarm flag is up (`UNIT_FIELD_FLAGS & UNIT_FLAG_DISARMED`), which hides one hand
+/// from the equipped-item search.
+pub(crate) fn is_disarmed(store: &ObjectStore) -> bool {
+    store.0.unit_flags() & crate::creature_anim::UNIT_FLAG_DISARMED != 0
+}
+
 /// The equipment slot this character's disarm hides ([`crate::creature_anim::disarmed_hand`] over
 /// the raw inventory), for the action bar's equipped-item requirement (`0x5f0c50`) and the
 /// item-use refusal (`CGItem::Use` rung 15). `None` while the flag is down or neither hand holds
@@ -574,7 +580,7 @@ pub(crate) fn disarmed_equipment_slot(
     items: &Items,
     commands: &NetCommands,
 ) -> Option<u8> {
-    if store.0.unit_flags() & crate::creature_anim::UNIT_FLAG_DISARMED == 0 {
+    if !is_disarmed(store) {
         return None;
     }
     let main = equipped_class(store, objects, items, commands, EQUIPMENT_SLOT_MAINHAND);
@@ -588,7 +594,7 @@ pub(crate) fn disarmed_equipment_slot_cached(
     objects: &Objects,
     items: &Items,
 ) -> Option<u8> {
-    if store.0.unit_flags() & crate::creature_anim::UNIT_FLAG_DISARMED == 0 {
+    if !is_disarmed(store) {
         return None;
     }
     let class_of = |slot: u8| -> Option<u8> {

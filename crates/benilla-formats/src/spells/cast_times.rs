@@ -38,6 +38,13 @@ impl SpellCastTime {
     }
 }
 
+impl SpellCastTime {
+    /// Whether the caster's level moves [`Self::resolved_ms`]: only through the per-level column.
+    pub fn reads_caster_level(&self) -> bool {
+        self.per_level_ms != 0
+    }
+}
+
 /// `SpellCastTimes.dbc`, by row id ([`crate::spells::SpellDisplay::casting_time_index`]).
 #[derive(Default)]
 pub struct SpellCastTimeCatalog {
@@ -99,6 +106,50 @@ pub fn load_spell_cast_times(chain: &mut Chain) -> Result<SpellCastTimeCatalog> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A row reads the caster's level when some level changes its answer, which the per-level
+    /// column decides for every row shape the data has.
+    #[test]
+    fn a_row_reads_the_caster_level_only_through_its_per_level_column() {
+        for row in [
+            SpellCastTime {
+                base_ms: 0,
+                per_level_ms: 0,
+                minimum_ms: 0,
+            },
+            SpellCastTime {
+                base_ms: 1500,
+                per_level_ms: 0,
+                minimum_ms: 1500,
+            },
+            SpellCastTime {
+                base_ms: -1_000_000,
+                per_level_ms: 0,
+                minimum_ms: -1_000_000,
+            },
+            SpellCastTime {
+                base_ms: 1000,
+                per_level_ms: -100,
+                minimum_ms: 500,
+            },
+            SpellCastTime {
+                base_ms: 1000,
+                per_level_ms: 50,
+                minimum_ms: 0,
+            },
+        ] {
+            for base_level in [0, 10] {
+                let moves = (0..=60).any(|level| {
+                    row.resolved_ms(level, base_level) != row.resolved_ms(level + 1, base_level)
+                });
+                assert_eq!(
+                    row.reads_caster_level(),
+                    moves,
+                    "{row:?} at base {base_level}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn resolved_ms_scales_and_floors() {

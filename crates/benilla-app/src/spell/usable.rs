@@ -50,7 +50,7 @@ pub(crate) struct UsableCtx<'a> {
 
 /// The search covers equipment indices `0..=22` (`0x5f0c50`'s `cmp ebx,0x17; jl`): the 19 worn
 /// slots and the four equipped bags.
-const EQUIPMENT_SLOTS: u8 = 23;
+pub(crate) const EQUIPMENT_SLOTS: u8 = 23;
 
 /// `AttributesEx3`'s hand restrictions, the source of the search's slot mask (`0x5f0c50`'s
 /// callers): `0x400` main hand only (mask `0x8000`), `0x1000000` off hand only (mask `0x10000`).
@@ -86,12 +86,12 @@ fn needs_equipped_item(d: &SpellDisplay) -> bool {
         && d.targets & TARGET_FLAG_ITEM == 0
 }
 
-/// The worn slots (0-18) [`equipped_item_fits`] reads for `d`, a bit each: none unless it
-/// searches, else the slots its hand restriction leaves and both hands, which the disarm ladder
-/// reads whatever the restriction (`0x5f0c69`, `0x5f0c91`).
+/// The equipment slots [`equipped_item_fits`] reads for `d`, a bit each: none unless it searches,
+/// else the slots its hand restriction leaves and both hands, which the disarm ladder reads
+/// whatever the restriction (`0x5f0c69`, `0x5f0c91`).
 pub(crate) fn worn_slots_read(d: &SpellDisplay) -> u32 {
     if needs_equipped_item(d) {
-        (hand_mask(d) | HANDS) & WORN_SLOTS
+        (hand_mask(d) | HANDS) & EQUIPMENT_MASK
     } else {
         0
     }
@@ -101,8 +101,8 @@ pub(crate) fn worn_slots_read(d: &SpellDisplay) -> u32 {
 const HANDS: u32 =
     1 << crate::items::EQUIPMENT_SLOT_MAINHAND | 1 << crate::items::EQUIPMENT_SLOT_OFFHAND;
 
-/// The 19 worn slots, as a mask over the equipment indices ([`EQUIPMENT_SLOTS`] adds the bags).
-pub(crate) const WORN_SLOTS: u32 = (1 << 19) - 1;
+/// Every equipment index the search covers, as a mask: the 19 worn slots and the four bags.
+pub(crate) const EQUIPMENT_MASK: u32 = (1 << EQUIPMENT_SLOTS) - 1;
 
 /// [`equipped_item_fits`] for the cast ladder's rung 7: the same search, never querying a
 /// missing template; an uncached one counts as a match.
@@ -124,18 +124,89 @@ pub(crate) fn equipped_item_fits_cached(
         mask,
         d.equipped_item_class as u32,
         d.equipped_item_subclass_mask,
-        |guid| {
-            let obj = objects.object(guid)?;
-            let t = items.template_cached(obj.object_entry()?)?;
-            Some(WornItem {
-                class: t.class,
-                subclass: t.subclass,
-                flags: t.flags,
-                durability: obj.item_durability(),
-                max_durability: obj.item_max_durability(),
-            })
-        },
+        |guid| worn_item_cached(guid, objects, items),
     )
+}
+
+/// The worn item `guid` names from the cached records alone: `None` while its object or its
+/// template has not streamed.
+fn worn_item_cached(guid: u64, objects: &Objects, items: &Items) -> Option<WornItem> {
+    let obj = objects.object(guid)?;
+    let t = items.template_cached(obj.object_entry()?)?;
+    Some(WornItem {
+        class: t.class,
+        subclass: t.subclass,
+        flags: t.flags,
+        durability: obj.item_durability(),
+        max_durability: obj.item_max_durability(),
+    })
+}
+
+/// What the equipped-item search learns of one equipment slot, and all it can: the feed compares
+/// these frame to frame, so a view built on the search is rebuilt when a slot's answer can move,
+/// and not on a durability tick that leaves an item unbroken.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum SlotItem {
+    /// No guid: the search passes over the slot.
+    Empty,
+    /// A guid whose item object or template has not streamed: the search gives the benefit of the
+    /// doubt.
+    Unresolved,
+    Item {
+        class: u32,
+        subclass: u32,
+        /// `ITEM_FLAG_DEPRECATED`.
+        deprecated: bool,
+        /// `MaxDurability > 0 && Durability == 0`.
+        broken: bool,
+    },
+}
+
+impl SlotItem {
+    fn of(guid: u64, worn: impl FnOnce(u64) -> Option<WornItem>) -> SlotItem {
+        if guid == 0 {
+            return SlotItem::Empty;
+        }
+        let Some(it) = worn(guid) else {
+            return SlotItem::Unresolved;
+        };
+        SlotItem::Item {
+            class: it.class,
+            subclass: it.subclass,
+            deprecated: it.flags & ITEM_FLAG_DEPRECATED != 0,
+            broken: it.max_durability.is_some_and(|m| m > 0) && it.durability == Some(0),
+        }
+    }
+
+    /// The search's verdict on the slot for a requirement.
+    fn fits(self, class: u32, subclass_mask: u32) -> bool {
+        match self {
+            SlotItem::Empty => false,
+            SlotItem::Unresolved => true, // unresolved template: benefit of the doubt
+            // The reference's two rejects before the class match: deprecated, and broken.
+            SlotItem::Item {
+                deprecated: true, ..
+            }
+            | SlotItem::Item { broken: true, .. } => false,
+            SlotItem::Item {
+                class: c,
+                subclass: sub,
+                ..
+            } => c == class && subclass_mask & (1 << sub) != 0,
+        }
+    }
+}
+
+/// Equipment slot `slot`'s [`SlotItem`] from the cached records, without an ask.
+pub(crate) fn slot_item_cached(
+    store: &ObjectStore,
+    slot: u8,
+    objects: &Objects,
+    items: &Items,
+) -> SlotItem {
+    SlotItem::of(store.0.player_inv_slot(slot).unwrap_or(0), |guid| {
+        worn_item_cached(guid, objects, items)
+    })
 }
 
 /// The equipped-item refusal reason, keyed on `AttributesEx3` alone (`0x6e40e0` at
@@ -214,21 +285,8 @@ fn equipped_slots_match(
     (0..EQUIPMENT_SLOTS)
         .filter(|slot| mask & (1u32 << slot) != 0)
         .any(|slot| {
-            let Some(guid) = store.0.player_inv_slot(slot).filter(|&g| g != 0) else {
-                return false;
-            };
-            let Some(it) = worn(guid) else {
-                return true; // unresolved template: benefit of the doubt
-            };
-            // The reference's two rejects before the class match: deprecated, and broken
-            // (`MaxDurability > 0 && Durability == 0`).
-            if it.flags & ITEM_FLAG_DEPRECATED != 0 {
-                return false;
-            }
-            if it.max_durability.is_some_and(|m| m > 0) && it.durability == Some(0) {
-                return false;
-            }
-            it.class == class && subclass_mask & (1 << it.subclass) != 0
+            let guid = store.0.player_inv_slot(slot).unwrap_or(0);
+            SlotItem::of(guid, &mut worn).fits(class, subclass_mask)
         })
 }
 
@@ -413,15 +471,11 @@ pub(crate) fn power_cost_at(
     level: u32,
     mods: &SpellModifiers,
 ) -> u32 {
-    let power_type = d.power_type as i32;
-    let base = if d.mana_cost_pct == 0 {
-        0
-    } else if d.power_type == 0 {
-        unit.unit_base_mana().unwrap_or(0)
-    } else if power_type < 0 {
-        unit.unit_max_health().unwrap_or(0)
-    } else {
-        unit.unit_max_power(power_type as u8).unwrap_or(0)
+    let base = match cost_basis(d) {
+        CostBasis::None => 0,
+        CostBasis::BaseMana => unit.unit_base_mana().unwrap_or(0),
+        CostBasis::MaxHealth => unit.unit_max_health().unwrap_or(0),
+        CostBasis::MaxPower(ty) => unit.unit_max_power(ty).unwrap_or(0),
     };
     let level_delta = i64::from(level) - i64::from(d.base_level);
     let cost = i64::from(d.mana_cost)
@@ -430,6 +484,37 @@ pub(crate) fn power_cost_at(
     // The talent cut applies before the clamp at 0.
     let cost = cost.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
     u32::try_from(mods.apply(d, OP_COST, cost)).unwrap_or(0)
+}
+
+/// The unit field [`power_cost_at`] scales `d`'s percentage cost by, the reference's `0x612c50`
+/// basis: base mana for a mana spell, else the max pool of the power type, or base health for a
+/// negative one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum CostBasis {
+    /// No percentage: the cost reads no unit field.
+    None,
+    BaseMana,
+    MaxHealth,
+    /// `UNIT_FIELD_MAXPOWER` of the type; a type past the five reads nothing.
+    MaxPower(u8),
+}
+
+pub(crate) fn cost_basis(d: &SpellDisplay) -> CostBasis {
+    let power_type = d.power_type as i32;
+    if d.mana_cost_pct == 0 {
+        CostBasis::None
+    } else if d.power_type == 0 {
+        CostBasis::BaseMana
+    } else if power_type < 0 {
+        CostBasis::MaxHealth
+    } else {
+        CostBasis::MaxPower(power_type as u8)
+    }
+}
+
+/// Whether [`power_cost_at`]'s level term moves the cost: only a spell with a per-level cost.
+pub(crate) fn cost_reads_level(d: &SpellDisplay) -> bool {
+    d.mana_cost_per_level != 0
 }
 
 /// Whether the caster can afford `d`, for leg 12 (`0x6e3fba`) and the press-path gate
