@@ -39,16 +39,43 @@ impl Plugin for UiTooltipPlugin {
     }
 }
 
-/// The player-dependent inputs of a spell view: the worn set (`0x5f0c50`), the bags, the form and
+/// The unit a view's caster cells are computed against, the spell builder `0x52e610`'s fourth
+/// argument: the level the `$`-tokens, the cost and the cast time scale by, and the cost's basis.
+#[derive(Clone, Copy)]
+enum ViewCaster<'a> {
+    /// The active player ([`ViewCtx::store`]), selector 0.
+    Player,
+    /// Selector 1: the player's charm, else its summon (`0x6e3159`-`0x6e317f`, `0x6e31fe`-
+    /// `0x6e3228`), `None` when neither is streamed.
+    Pet(Option<&'a benilla_protocol::ObjectFields>),
+}
+
+impl ViewCaster<'_> {
+    /// The pet's `[vtbl+0xa8]`, `CGUnit`'s `0x60cd80`: `UNIT_FIELD_LEVEL × 5`, which
+    /// [`benilla_formats::SpellDisplay::skill_level`] caps at `maxLevel × 5` and divides by 5 as
+    /// `0x60cdb2`-`0x60cdb9` and `0x6e3195` do. No unit reads 0 (`0x6e31a4`).
+    fn pet_skill_value(pet: Option<&benilla_protocol::ObjectFields>) -> u32 {
+        pet.and_then(|p| p.unit_level())
+            .unwrap_or(0)
+            .saturating_mul(5)
+    }
+}
+
+/// The caster-dependent inputs of a spell view: the worn set (`0x5f0c50`), the bags, the form and
 /// the bind point `$z` names.
 struct ViewCtx<'a, 'w, 's> {
     home_area: Option<&'a str>,
+    /// The caster's shapeshift form, which the required-form line's colour reads (`0x52f1f2`).
     form: u8,
+    /// The active player.
     store: Option<&'a ObjectStore>,
+    /// Whom the level terms and the cost read: the player or its pet. The form and the reaches
+    /// are that same unit's.
+    caster: ViewCaster<'a>,
     /// The caster's `UNIT_FIELD_COMBATREACH`; 1.5 is the descriptor default.
     combat_reach: f32,
-    /// The auto-attack target's reach, which `0x6e3480` reads itself (`[caster+0xc48]`); with
-    /// none, the caster's reach counts twice.
+    /// The caster's auto-attack target's reach, which `0x6e3480` reads itself (`[caster+0xc48]`);
+    /// with none, the caster's reach counts twice.
     attack_target_reach: Option<f32>,
     /// The object index the worn-item search and each reagent's carried count resolve through.
     objects: &'a Objects<'w, 's>,
@@ -81,11 +108,19 @@ fn spell_tooltip_view(
     let d = spells.catalog.get(spell_id)?;
     let home_area = vctx.home_area;
     let form = vctx.form;
+    let caster = vctx.caster;
+    // The `$`-tokens' level (`0x5075f0` hands the selector to `0x6e3130`, `507645`-`50764a`).
+    let skill = |id| match caster {
+        ViewCaster::Player => crate::spell::spell_skill_value(vctx.store, vctx.skill_lines, id),
+        ViewCaster::Pet(pet) => ViewCaster::pet_skill_value(pet),
+    };
+    // `0x6e3130` for this spell: the level the cost's and the cast time's per-level terms read.
+    let pet_level = |pet| d.skill_level(ViewCaster::pet_skill_value(pet));
     let ctx = benilla_formats::TokenContext {
         durations: &spells.durations,
         radii: &spells.radii,
         ranges: Some(&spells.ranges),
-        skill: &|id| crate::spell::spell_skill_value(vctx.store, vctx.skill_lines, id),
+        skill: &skill,
         lookup: &|id| spells.catalog.get(id),
         mods: Some(vctx.spell_mods),
         unmodified_points: false,
@@ -101,10 +136,15 @@ fn spell_tooltip_view(
     // The cost cell (`0x52e8ad`): the resolved `power_cost`, named by power type (keys at
     // `0x85416c`) and Health for a type outside 0..=4 (`0x52e8fc`: Bloodrage's -2), never a
     // percentage. Rage shows wire ÷ 10, a per-second column adds `_PER_TIME`, and no cost at all
-    // leaves the cell empty.
-    let resolved_cost = vctx.store.map_or(d.mana_cost, |s| {
-        crate::spell::usable::power_cost(d, s, vctx.spell_mods)
-    });
+    // leaves the cell empty. A pet with no unit costs -1 (`0x6e3233`), which shows as none.
+    let resolved_cost = match caster {
+        ViewCaster::Player => vctx.store.map_or(d.mana_cost, |s| {
+            crate::spell::usable::power_cost(d, s, vctx.spell_mods)
+        }),
+        ViewCaster::Pet(pet) => pet.map_or(0, |p| {
+            crate::spell::usable::power_cost_at(d, p, pet_level(Some(p)), vctx.spell_mods)
+        }),
+    };
     let cost = {
         // The shared per-type divisor (`0x6e7130`), never a local `power_type == 1` test.
         let div = benilla_protocol::messages::power_display_scale(d.power_type);
@@ -160,7 +200,11 @@ fn spell_tooltip_view(
     let cast_time = if d.tooltip_omits_cast_line() {
         None
     } else {
-        let level = vctx.store.and_then(|s| s.0.unit_level()).unwrap_or(0);
+        // `GetCastTime` takes the selector too (`52eb45`), and its level term is `0x6e3130`'s.
+        let level = match caster {
+            ViewCaster::Player => vctx.store.and_then(|s| s.0.unit_level()).unwrap_or(0),
+            ViewCaster::Pet(pet) => pet_level(pet),
+        };
         let base = spells.cast_time_unclamped_ms(d, level, vctx.spell_mods);
         // `%.3g` templates: the seconds go over as a real.
         if base > 0 {
@@ -228,7 +272,9 @@ fn spell_tooltip_view(
                 .flatten()
         })
         .flatten();
-    let form_met = form != 0 && d.stances & (1u32 << (u32::from(form) - 1)) != 0;
+    // No caster unit passes the form test (`0x52f1e8`).
+    let form_met = matches!(caster, ViewCaster::Pet(None))
+        || (form != 0 && d.stances & (1u32 << (u32::from(form) - 1)) != 0);
     // The required-item line (`0x52eea7`-`0x52f10a`): a mask is named whole by
     // `ItemSubClassMask.dbc` before its subclasses are joined; an empty mask or class < 0 skips it.
     let requires_item = (d.targets & TARGET_ITEM == 0 && d.equipped_item_class >= 0)
@@ -239,9 +285,11 @@ fn spell_tooltip_view(
         .flatten()
         .and_then(|name| keyed(vctx.get, "SPELL_EQUIPPED_ITEM", &[Arg::S(&name)]));
     let chance = chance_line(d, vctx.store);
-    let item_met = vctx.store.is_none_or(|s| {
-        crate::spell::usable::equipped_item_fits(d, s, vctx.objects, vctx.items, vctx.commands)
-    });
+    // The unit selector passes the item test outright (`0x52f07f`).
+    let item_met = matches!(caster, ViewCaster::Pet(_))
+        || vctx.store.is_none_or(|s| {
+            crate::spell::usable::equipped_item_fits(d, s, vctx.objects, vctx.items, vctx.commands)
+        });
     // Reagents (`SPELL_REAGENTS`, `0x854e54`), red when short; one whose template has not
     // streamed is absent until `feed_spell_tooltips` re-pushes on its arrival.
     let reagents = {
@@ -321,11 +369,16 @@ fn chance_line(d: &benilla_formats::SpellDisplay, store: Option<&ObjectStore>) -
     Some(format!("{percentage:.2}% chance to {label}"))
 }
 
-/// What a pushed view snapshots at build time; a change to any of it re-pushes every view. The
-/// reference rebuilds on every hover and keeps no such snapshot.
+/// What a pushed view snapshots at build time; a change to any of it re-pushes every view, and a
+/// change to the pet's inputs every pet view. The reference rebuilds on every hover and keeps no
+/// such snapshot.
 #[derive(Default)]
 struct SpellFeedMemory {
     pushed: std::collections::HashSet<u32>,
+    /// The spells whose view built against the pet is in the VM's pet store.
+    pet_pushed: std::collections::HashSet<u32>,
+    /// What the pet views read off the pet unit.
+    pet: Option<PetInputs>,
     /// The bind point `$z` names.
     home: Option<String>,
     /// The form the required-form line's colour follows (`0x52f1e3`).
@@ -340,6 +393,53 @@ struct SpellFeedMemory {
     combat_reach: Option<(Option<u32>, Option<u32>)>,
     /// Per reagent on show, `(owned count, name resolved)` (the inline red, `0x854120`).
     reagents: std::collections::BTreeMap<u32, (u32, bool)>,
+}
+
+impl SpellFeedMemory {
+    /// Queue every pushed view, the player's and the pet's, for a rebuild.
+    fn invalidate(&mut self, wanted: &mut Vec<u32>, wanted_pet: &mut Vec<u32>) {
+        wanted.extend(self.pushed.drain());
+        wanted_pet.extend(self.pet_pushed.drain());
+    }
+}
+
+/// The pet unit's fields a pet view reads (`0x52e610` with the unit selector set): its level, the
+/// cost bases `0x612c50` reads, its form, and its and its melee target's reach, as bit patterns.
+#[derive(Clone, Copy, PartialEq, Default)]
+struct PetInputs {
+    guid: Option<u64>,
+    level: u32,
+    base_mana: u32,
+    max_health: u32,
+    max_power: [u32; 5],
+    form: u8,
+    combat_reach: u32,
+    attack_target_reach: Option<u32>,
+}
+
+impl PetInputs {
+    fn of(
+        guid: Option<u64>,
+        pet: Option<&benilla_protocol::ObjectFields>,
+        attack_target_reach: Option<f32>,
+    ) -> Self {
+        let Some(p) = pet else {
+            return Self {
+                guid,
+                ..Self::default()
+            };
+        };
+        Self {
+            guid,
+            level: p.unit_level().unwrap_or(0),
+            base_mana: p.unit_base_mana().unwrap_or(0),
+            max_health: p.unit_max_health().unwrap_or(0),
+            max_power: std::array::from_fn(|i| p.unit_max_power(i as u8).unwrap_or(0)),
+            form: p.unit_shapeshift_form(),
+            combat_reach: p.unit_combat_reach().to_bits(),
+            attack_target_reach: attack_target_reach.map(f32::to_bits),
+        }
+    }
 }
 
 /// The hoverable spell sources [`feed_spell_tooltips`] reads, one parameter under Bevy's 16.
@@ -359,8 +459,9 @@ fn feed_spell_tooltips(
     actions: Option<Res<PlayerActions>>,
     spell_sources: SpellTooltipSources,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    // The auto-attack target, the melee range cell's second reach.
+    // The player's and the pet's auto-attack target, the melee range cell's second reach.
     engaged_q: Query<&crate::creature_anim::Engaged, With<SelfPlayer>>,
+    engaged_units: Query<&crate::creature_anim::Engaged>,
     objects: Objects,
     home_bind: Option<Res<crate::net::HomeBind>>,
     area_names: Option<Res<crate::ui_quest_log::QuestHeaderNamesRes>>,
@@ -404,14 +505,30 @@ fn feed_spell_tooltips(
                 .filter(|s| !memory.pushed.contains(s)),
         );
     }
-    // The open trainer's services, which the detail icon's `SetTrainerService` renders.
+    // The pet views: the pet's bar and book, and what their setters asked for.
+    let mut wanted_pet: Vec<u32> = script.take_pet_spell_tooltip_asks();
+    wanted_pet.extend(
+        script
+            .pet_spell_tooltip_subjects()
+            .into_iter()
+            .filter(|s| !memory.pet_pushed.contains(s)),
+    );
+    // The open trainer's services, which the detail icon's `SetTrainerService` renders, a
+    // pet-learn service's against the pet.
     if let Some(trainer) = trainer_subjects.as_deref() {
         wanted.extend(
             trainer
-                .0
+                .player
                 .iter()
                 .copied()
                 .filter(|s| !memory.pushed.contains(s)),
+        );
+        wanted_pet.extend(
+            trainer
+                .pet
+                .iter()
+                .copied()
+                .filter(|s| !memory.pet_pushed.contains(s)),
         );
     }
     // Every rank of the class's talents: a talent tooltip reads the current and the next rank.
@@ -437,7 +554,7 @@ fn feed_spell_tooltips(
     // A bind-point change re-substitutes every view's `$z` (Astral Recall).
     if memory.home != home_area {
         memory.home = home_area.clone();
-        wanted.extend(memory.pushed.drain());
+        memory.invalidate(&mut wanted, &mut wanted_pet);
     }
     // So does a form change: the required-form line's colour follows the form (`0x52f1e3`).
     let form = self_q
@@ -446,21 +563,21 @@ fn feed_spell_tooltips(
         .unwrap_or(0);
     if memory.form != Some(form) {
         memory.form = Some(form);
-        wanted.extend(memory.pushed.drain());
+        memory.invalidate(&mut wanted, &mut wanted_pet);
     }
     let self_store = self_q.single().ok();
     // So does a skill change: the `$`-tokens' per-level terms scale by the spell's line.
     let skills = crate::spell::skill_snapshot(self_store);
     if memory.skills != Some(skills) {
         memory.skills = Some(skills);
-        wanted.extend(memory.pushed.drain());
+        memory.invalidate(&mut wanted, &mut wanted_pet);
     }
     // So do the worn set and, below, the reagents on show.
     let worn =
         self_store.map(|s| std::array::from_fn(|i| s.0.player_inv_slot(i as u8).unwrap_or(0)));
     if memory.worn != worn {
         memory.worn = worn;
-        wanted.extend(memory.pushed.drain());
+        memory.invalidate(&mut wanted, &mut wanted_pet);
     }
     let avoidance = self_store.map(|s| {
         [
@@ -473,24 +590,22 @@ fn feed_spell_tooltips(
     });
     if memory.avoidance != avoidance {
         memory.avoidance = avoidance;
-        wanted.extend(memory.pushed.drain());
+        memory.invalidate(&mut wanted, &mut wanted_pet);
     }
-    let attack_target_reach = engaged_q
-        .single()
-        .ok()
-        .and_then(|e| objects.object(e.0))
-        .map(|f| f.unit_combat_reach());
+    let target_reach =
+        |e: &crate::creature_anim::Engaged| objects.object(e.0).map(|f| f.unit_combat_reach());
+    let attack_target_reach = engaged_q.single().ok().and_then(target_reach);
     let reaches = (
         self_store.map(|s| s.0.unit_combat_reach().to_bits()),
         attack_target_reach.map(f32::to_bits),
     );
     if memory.combat_reach != Some(reaches) {
         memory.combat_reach = Some(reaches);
-        wanted.extend(memory.pushed.drain());
+        memory.invalidate(&mut wanted, &mut wanted_pet);
     }
     // So does a spell-modifier change: the cost cell resolves through the talent tables.
     if spell_mods.is_changed() {
-        wanted.extend(memory.pushed.drain());
+        memory.invalidate(&mut wanted, &mut wanted_pet);
     }
     let watched: Vec<u32> = memory.reagents.keys().copied().collect();
     let reagent_state: std::collections::BTreeMap<u32, (u32, bool)> = watched
@@ -505,19 +620,34 @@ fn feed_spell_tooltips(
         .collect();
     if memory.reagents != reagent_state {
         memory.reagents = reagent_state;
-        wanted.extend(memory.pushed.drain());
+        memory.invalidate(&mut wanted, &mut wanted_pet);
+    }
+    // The pet's inputs: a new pet, or its level, bases, form or reach moving, rebuilds the pet
+    // views alone.
+    let pet_guid = self_store.and_then(|s| s.0.unit_pet_guid());
+    let pet = pet_guid.and_then(|g| objects.object(g));
+    let pet_target_reach = pet_guid
+        .and_then(|g| objects.entity(g))
+        .and_then(|e| engaged_units.get(e).ok())
+        .and_then(target_reach);
+    let pet_inputs = PetInputs::of(pet_guid, pet, pet_target_reach);
+    if memory.pet != Some(pet_inputs) {
+        memory.pet = Some(pet_inputs);
+        wanted_pet.extend(memory.pet_pushed.drain());
     }
     // The sources overlap (a self-buff is in the book and on the player): build each id once.
     wanted.sort_unstable();
     wanted.dedup();
+    wanted_pet.sort_unstable();
+    wanted_pet.dedup();
     // Build, then push: the build's borrow of the VM's strings ends before the store is written.
-    let mut built: Vec<(u32, benilla_ui::script::SpellTooltipView)> = Vec::new();
-    {
+    let (built, built_pet) = {
         let get = |key: &str| benilla_ui::strings::global(script.lua(), key);
         let mut vctx = ViewCtx {
             home_area: home_area.as_deref(),
             form,
             store: self_store,
+            caster: ViewCaster::Player,
             combat_reach: self_store.map_or(1.5, |s| s.0.unit_combat_reach()),
             attack_target_reach,
             objects: &objects,
@@ -528,30 +658,58 @@ fn feed_spell_tooltips(
             spell_mods,
             get: &get,
         };
-        for id in wanted {
-            if let Some(view) = spell_tooltip_view(id, spells, &mut vctx) {
-                // Watch this spell's reagents, seeded with the state the view was built against.
-                if let Some(d) = spells.catalog.get(id) {
-                    for (entry, _) in d.reagents.iter().copied().filter(|&(e, _)| e != 0) {
-                        if let std::collections::btree_map::Entry::Vacant(slot) =
-                            memory.reagents.entry(entry)
-                        {
-                            let named = vctx.items.template(entry, 0, vctx.commands).is_some();
-                            let owned = vctx.store.map_or(0, |s| {
-                                count_of(&s.0, vctx.objects, entry, InventoryScope::CARRIED)
-                            });
-                            slot.insert((owned, named));
-                        }
-                    }
-                }
-                built.push((id, view));
-                memory.pushed.insert(id);
-            }
-        }
-    }
+        let built = build_views(wanted, spells, &mut vctx, memory, false);
+        // The pet views read the pet's form and reach where the player's read the player's.
+        vctx.caster = ViewCaster::Pet(pet);
+        vctx.form = pet.map_or(0, |p| p.unit_shapeshift_form());
+        vctx.combat_reach = pet.map_or(1.5, |p| p.unit_combat_reach());
+        vctx.attack_target_reach = pet_target_reach;
+        let built_pet = build_views(wanted_pet, spells, &mut vctx, memory, true);
+        (built, built_pet)
+    };
     for (id, view) in built {
         script.set_spell_tooltip(id, view);
     }
+    for (id, view) in built_pet {
+        script.set_pet_spell_tooltip(id, view);
+    }
+}
+
+/// Build the views of `ids` against `vctx`'s caster, recording each in the pushed set `pet` names
+/// and watching its reagents, seeded with the state the view was built against.
+fn build_views(
+    ids: Vec<u32>,
+    spells: &Spells,
+    vctx: &mut ViewCtx,
+    memory: &mut SpellFeedMemory,
+    pet: bool,
+) -> Vec<(u32, benilla_ui::script::SpellTooltipView)> {
+    let mut built = Vec::new();
+    for id in ids {
+        let Some(view) = spell_tooltip_view(id, spells, vctx) else {
+            continue;
+        };
+        if let Some(d) = spells.catalog.get(id) {
+            for (entry, _) in d.reagents.iter().copied().filter(|&(e, _)| e != 0) {
+                if let std::collections::btree_map::Entry::Vacant(slot) =
+                    memory.reagents.entry(entry)
+                {
+                    let named = vctx.items.template(entry, 0, vctx.commands).is_some();
+                    let owned = vctx.store.map_or(0, |s| {
+                        count_of(&s.0, vctx.objects, entry, InventoryScope::CARRIED)
+                    });
+                    slot.insert((owned, named));
+                }
+            }
+        }
+        built.push((id, view));
+        if pet {
+            memory.pet_pushed.insert(id);
+        } else {
+            memory.pushed.insert(id);
+        }
+    }
+    built
 }
 
 /// What the world tooltip was last built for; the reference rebuilds once per hover-target change.

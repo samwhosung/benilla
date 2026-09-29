@@ -293,6 +293,6 @@ pub(super) fn install_tooltip_method(lua: &Lua, m: &Table) -> mlua::Result<()> {
 /// Ask the spell store for the next rank's description; a miss queues it as a primary view's does.
 pub(super) fn ask_next_rank(lua: &Lua, next_spell: u32) {
     if next_spell != 0 {
-        let _ = spell_view_of(lua, next_spell); // a miss records the ask as a side effect
+        let _ = spell_view_of(lua, next_spell, false); // a miss records the ask as a side effect
     }
 }

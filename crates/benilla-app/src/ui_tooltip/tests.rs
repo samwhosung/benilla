@@ -65,6 +65,7 @@ impl TestCtx {
             home_area: None,
             form,
             store,
+            caster: ViewCaster::Player,
             combat_reach: store.map_or(1.5, |s| s.0.unit_combat_reach()),
             attack_target_reach: None,
             objects,
@@ -76,6 +77,133 @@ impl TestCtx {
             get: self.get.as_ref(),
         }
     }
+
+    /// The pet view's context: the player `store`, and `pet` the unit the selector reads.
+    fn pet_ctx<'a, 'w, 's>(
+        &'a mut self,
+        objects: &'a Objects<'w, 's>,
+        store: Option<&'a ObjectStore>,
+        pet: Option<&'a benilla_protocol::ObjectFields>,
+    ) -> ViewCtx<'a, 'w, 's> {
+        let mut ctx = self.ctx_for(objects, 0, None, store);
+        ctx.caster = ViewCaster::Pet(pet);
+        ctx
+    }
+}
+
+/// The 5875 spell data the view builder reads; `None` skips where the install is absent.
+fn real_spells() -> Option<Spells> {
+    let data = benilla_formats::wow_data_or_skip!(None);
+    let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+    Some(Spells {
+        catalog: benilla_formats::load_spell_catalog(&mut chain).expect("Spell.dbc"),
+        forms: benilla_formats::load_shapeshift_forms(&mut chain).expect("forms"),
+        ranges: benilla_formats::load_spell_ranges(&mut chain).expect("ranges"),
+        cast_times: benilla_formats::load_spell_cast_times(&mut chain).expect("cast times"),
+        durations: benilla_formats::load_spell_durations(&mut chain).expect("durations"),
+        radii: benilla_formats::load_spell_radii(&mut chain).expect("radii"),
+    })
+}
+
+/// A unit's fields: level (34) and base mana (162).
+fn unit(level: u32, base_mana: u32) -> benilla_protocol::ObjectFields {
+    benilla_protocol::ObjectFields::from_pairs(&[(22u16, 100u32), (34, level), (162, base_mana)])
+}
+
+/// The pet bar's views scale by the pet's level (`0x6e3130` with the selector: the charm or
+/// summon's `[vtbl+0xa8]`, `0x60cd80`, level × 5 capped at `maxLevel × 5`): Voidwalker Sacrifice
+/// rank 1 (7812: 305, 2.3 a level from 16, cap 22) reads 318 at 22 and at 30, and the player's own
+/// view of it, in no line of the player's, reads the floor.
+#[test]
+fn a_pet_view_scales_sacrifice_by_the_pets_level() {
+    let Some(spells) = real_spells() else { return };
+    let mut t = TestCtx::new();
+    let mut objs = no_objects();
+    let objects = objs.get();
+    let player = ObjectStore(unit(60, 1373));
+    let absorb = |v: benilla_ui::script::SpellTooltipView, n: u32| {
+        assert!(
+            v.description.contains(&format!("absorb {n} damage")),
+            "{n}: {}",
+            v.description
+        );
+    };
+    for (level, n) in [(16, 305), (22, 318), (30, 318)] {
+        let pet = unit(level, 0);
+        let v = spell_tooltip_view(
+            7812,
+            &spells,
+            &mut t.pet_ctx(&objects, Some(&player), Some(&pet)),
+        )
+        .expect("Sacrifice view");
+        absorb(v, n);
+    }
+    let v = spell_tooltip_view(
+        7812,
+        &spells,
+        &mut t.ctx_for(&objects, 0, None, Some(&player)),
+    )
+    .expect("Sacrifice view");
+    absorb(v, 305);
+    // No pet unit reads level 0 (`0x6e31a4`), which floors at the rank's base.
+    let v = spell_tooltip_view(7812, &spells, &mut t.pet_ctx(&objects, Some(&player), None))
+        .expect("Sacrifice view");
+    absorb(v, 305);
+}
+
+/// Imp Blood Pact rank 1 (6307: 0.1 a level from 4, cap 14) reads 3 on a level-14 imp's bar.
+#[test]
+fn a_pet_view_scales_blood_pact_by_the_pets_level() {
+    let Some(spells) = real_spells() else { return };
+    let mut t = TestCtx::new();
+    let mut objs = no_objects();
+    let objects = objs.get();
+    let player = ObjectStore(unit(60, 1373));
+    let pet = unit(14, 0);
+    let v = spell_tooltip_view(
+        6307,
+        &spells,
+        &mut t.pet_ctx(&objects, Some(&player), Some(&pet)),
+    )
+    .expect("Blood Pact view");
+    assert!(v.description.contains("Stamina by 3."), "{}", v.description);
+    let v = spell_tooltip_view(
+        6307,
+        &spells,
+        &mut t.ctx_for(&objects, 0, None, Some(&player)),
+    )
+    .expect("Blood Pact view");
+    assert!(v.description.contains("Stamina by 2."), "{}", v.description);
+}
+
+/// Seduction (6358, 24% of base mana) on the pet bar costs 24% of the succubus's
+/// `UNIT_FIELD_BASE_MANA`, as `0x6e31b0` calls `0x612c50` on the pet (`6e327d`): 449 of 1874, not
+/// 329 of the warlock's 1373. No pet unit is `GetPowerCost`'s -1 (`0x6e3233`), no cost cell.
+#[test]
+fn a_pet_view_costs_seduction_from_the_pets_base_mana() {
+    let Some(spells) = real_spells() else { return };
+    let mut t = TestCtx::new();
+    let mut objs = no_objects();
+    let objects = objs.get();
+    let player = ObjectStore(unit(60, 1373));
+    let pet = unit(60, 1874);
+    let v = spell_tooltip_view(
+        6358,
+        &spells,
+        &mut t.pet_ctx(&objects, Some(&player), Some(&pet)),
+    )
+    .expect("Seduction view");
+    assert_eq!(v.cost.as_deref(), Some("449 Mana"));
+    let v = spell_tooltip_view(
+        6358,
+        &spells,
+        &mut t.ctx_for(&objects, 0, None, Some(&player)),
+    )
+    .expect("Seduction view");
+    assert_eq!(v.cost.as_deref(), Some("329 Mana"), "the player's own view");
+    let v = spell_tooltip_view(6358, &spells, &mut t.pet_ctx(&objects, Some(&player), None))
+        .expect("Seduction view");
+    assert_eq!(v.cost, None);
 }
 
 /// An object index with nothing streamed: no worn item, and every reagent count 0.
@@ -931,5 +1059,129 @@ fn the_feed_pushes_the_spells_the_vm_holds_before_a_hover() {
     assert_eq!(
         script.eval::<String>("return TOT").unwrap(),
         "Shadow Word: Pain | Shadow damage over time."
+    );
+}
+
+/// The feed builds the pet's bar and book against the pet (the charm, else the summon), keeps the
+/// player's book on the player, and rebuilds only the pet views when the pet's level moves.
+#[test]
+fn the_feed_builds_the_pet_views_against_the_pet_and_rebuilds_them_on_its_level() {
+    use benilla_protocol::ObjectFields;
+    use benilla_ui::script::{PetActionView, PetBookState, SpellBookState, SpellSlotView};
+    const ME: u64 = 0x10;
+    const IMP: u64 = 0xF140_0000_0000_0077;
+    // `$s1` is 10 plus 1 a level, uncapped: the player, in no line of its own, reads 10.
+    let pact = benilla_formats::SpellDisplay {
+        id: 6307,
+        name: "Blood Pact".into(),
+        description: Some("Stamina by $s1.".into()),
+        effect_base_points: [9, 0, 0],
+        effect_base_dice: [1, 0, 0],
+        effect_die_sides: [1, 0, 0],
+        effect_real_points_per_level: [1.0, 0.0, 0.0],
+        ..Default::default()
+    };
+    let (tx, _rx) = crossbeam_channel::unbounded();
+    let mut app = App::new();
+    app.insert_resource(Spells {
+        catalog: benilla_formats::SpellCatalog::from_displays([(6307, pact)].into()),
+        ..Spells::empty_for_tests()
+    })
+    .insert_resource(NetCommands(tx))
+    .init_resource::<Items>()
+    .init_resource::<crate::net::GuidIndex>()
+    .init_resource::<crate::spell::SpellModifiers>()
+    .add_systems(Update, feed_spell_tooltips);
+    // The player summons the imp (`UNIT_FIELD_SUMMON`, 8-9).
+    let me = app
+        .world_mut()
+        .spawn((
+            SelfPlayer,
+            ObjectStore(ObjectFields::from_pairs(&[
+                (8, IMP as u32),
+                (9, (IMP >> 32) as u32),
+                (34, 60),
+            ])),
+        ))
+        .id();
+    let imp = app
+        .world_mut()
+        .spawn(ObjectStore(ObjectFields::from_pairs(&[(34, 14)])))
+        .id();
+    let mut index = app.world_mut().resource_mut::<crate::net::GuidIndex>();
+    index.0.insert(ME, me);
+    index.0.insert(IMP, imp);
+
+    let mut script = UiScript::new().unwrap();
+    script.set_pet_actions(
+        true,
+        true,
+        true,
+        vec![PetActionView {
+            name: Some("Blood Pact".into()),
+            spell_id: Some(6307),
+            ..Default::default()
+        }],
+    );
+    let slot = SpellSlotView {
+        spell_id: 6307,
+        name: "Blood Pact".into(),
+        ..Default::default()
+    };
+    script.set_pet_book(PetBookState {
+        token: Some("DEMON".into()),
+        slots: vec![slot.clone()],
+    });
+    script.set_spellbook(SpellBookState {
+        tabs: Vec::new(),
+        slots: vec![slot],
+    });
+    script
+        .run(
+            r#"
+            local a = CreateFrame("Button", "B"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+            CreateFrame("GameTooltip", "TT")
+            function DESC(set) TT:SetOwner(B, "ANCHOR_RIGHT"); set(); return TTTextLeft2:GetText() end
+            "#,
+        )
+        .unwrap();
+    app.insert_non_send_resource(script);
+    // The feed runs over the pet bar and book; the player's book's view is an ask on its hover.
+    app.update();
+    let descs = |app: &mut App| {
+        let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+        let d = script
+            .eval::<(String, String, Option<String>)>(
+                r#"return DESC(function() TT:SetPetAction(1) end),
+                    DESC(function() TT:SetSpell(1, "pet") end),
+                    DESC(function() TT:SetSpell(1, "spell") end)"#,
+            )
+            .unwrap();
+        assert!(script.take_errors().is_empty());
+        d
+    };
+    let _ = descs(&mut app);
+    app.update();
+    assert_eq!(
+        descs(&mut app),
+        (
+            "Stamina by 24.".to_string(),
+            "Stamina by 24.".to_string(),
+            Some("Stamina by 10.".to_string())
+        ),
+        "a level-14 imp's bar and book, and the player's own book"
+    );
+    // The imp dings: its views rebuild; the player's does not move.
+    app.world_mut()
+        .entity_mut(imp)
+        .insert(ObjectStore(ObjectFields::from_pairs(&[(34, 15)])));
+    app.update();
+    assert_eq!(
+        descs(&mut app),
+        (
+            "Stamina by 25.".to_string(),
+            "Stamina by 25.".to_string(),
+            Some("Stamina by 10.".to_string())
+        )
     );
 }

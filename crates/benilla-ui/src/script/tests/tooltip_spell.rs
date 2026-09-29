@@ -68,7 +68,8 @@ fn a_pet_book_hover_reads_the_pets_book_not_the_players() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
     s.set_spell_tooltip(133, fireball());
-    s.set_spell_tooltip(
+    // The pet book's flag is the builder's unit selector, so its hover reads the pet's view.
+    s.set_pet_spell_tooltip(
         3110,
         SpellTooltipView {
             name: "Firebolt".into(),
@@ -667,16 +668,16 @@ fn set_trainer_service_selects_the_builder_and_never_renders_its_own_line() {
             ..Default::default()
         },
     );
-    s.set_spell_tooltip(
-        200,
-        SpellTooltipView {
-            name: "Heroic Strike".into(),
-            cost: Some("15 Rage".into()),
-            reagents: Some("Reagents: Linen Cloth".into()),
-            description: "A strong attack.".into(),
-            ..Default::default()
-        },
-    );
+    let heroic_strike = SpellTooltipView {
+        name: "Heroic Strike".into(),
+        cost: Some("15 Rage".into()),
+        reagents: Some("Reagents: Linen Cloth".into()),
+        description: "A strong attack.".into(),
+        ..Default::default()
+    };
+    s.set_spell_tooltip(200, heroic_strike.clone());
+    // altCaster is the builder's unit selector, which reads the pet's view.
+    s.set_pet_spell_tooltip(200, heroic_strike);
     s.set_trainer(Some(TrainerState {
         services: vec![
             trainer_service(2756, "Copper Shortsword", TrainerTooltip::Item(2847)),
@@ -1149,10 +1150,131 @@ fn the_spell_subjects_are_what_the_setters_read_from_the_vm() {
 
     let mut subjects = s.spell_tooltip_subjects();
     subjects.sort_unstable();
-    assert_eq!(
-        subjects,
-        vec![116, 133, 172, 589, 1459, 2580, 3110, 6307, 8921, 17253]
+    assert_eq!(subjects, vec![116, 133, 172, 589, 1459, 2580, 8921, 17253]);
+    // The pet's bar and book are read through the builder's unit selector: the pet's views.
+    let mut pet_subjects = s.pet_spell_tooltip_subjects();
+    pet_subjects.sort_unstable();
+    assert_eq!(pet_subjects, vec![3110, 6307]);
+}
+
+/// The builder's unit selector picks the view built against the pet: `SetPetAction` passes it
+/// (`0x532888`, `0x5328d0`), `SetSpell` on the pet book (`0x532e23`) and a pet-learn
+/// `SetTrainerService` (`0x533a7f`); the player's book, a class service and a craft pass 0.
+#[test]
+fn the_unit_selector_setters_read_the_pet_view() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    let view = |description: &str| SpellTooltipView {
+        name: "Sacrifice".into(),
+        description: description.into(),
+        ..Default::default()
+    };
+    s.set_spell_tooltip(7812, view("absorb 305 damage"));
+    s.set_pet_spell_tooltip(7812, view("absorb 318 damage"));
+    s.set_pet_actions(
+        true,
+        true,
+        true,
+        vec![PetActionView {
+            name: Some("Sacrifice".into()),
+            spell_id: Some(7812),
+            ..Default::default()
+        }],
     );
+    let slot = SpellSlotView {
+        spell_id: 7812,
+        name: "Sacrifice".into(),
+        ..Default::default()
+    };
+    s.set_pet_book(PetBookState {
+        token: Some("DEMON".into()),
+        slots: vec![slot.clone()],
+    });
+    s.set_spellbook(SpellBookState {
+        tabs: Vec::new(),
+        slots: vec![slot],
+    });
+    let service = |alt_caster| {
+        trainer_service(
+            100,
+            "Sacrifice",
+            TrainerTooltip::Spell {
+                spell_id: 7812,
+                alt_caster,
+            },
+        )
+    };
+    s.set_trainer(Some(TrainerState {
+        services: vec![service(true), service(false)],
+        ..Default::default()
+    }));
+    s.set_craft(Some(CraftState {
+        name: "Beast Training".into(),
+        rank: 0,
+        max_rank: 0,
+        craft_type: 1,
+        recipes: vec![craft_recipe(24599, "Sacrifice", CraftTooltip::Spell(7812))],
+    }));
+    s.run(
+        r#"
+        local a = CreateFrame("Button", "PB1"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+        CreateFrame("GameTooltip", "TT")
+        local function desc(set)
+            TT:SetOwner(PB1, "ANCHOR_RIGHT"); set(); return TTTextLeft2:GetText()
+        end
+        PET_BAR = desc(function() TT:SetPetAction(1) end)
+        PET_BOOK = desc(function() TT:SetSpell(1, "pet") end)
+        BOOK = desc(function() TT:SetSpell(1, "spell") end)
+        -- Row 1 is the group header.
+        PET_SERVICE = desc(function() TT:SetTrainerService(2) end)
+        SERVICE = desc(function() TT:SetTrainerService(3) end)
+        CRAFT = desc(function() TT:SetCraftSpell(1) end)
+    "#,
+    )
+    .unwrap();
+    let got = |name: &str| s.eval::<String>(&format!("return {name}")).unwrap();
+    assert_eq!(got("PET_BAR"), "absorb 318 damage");
+    assert_eq!(got("PET_BOOK"), "absorb 318 damage");
+    assert_eq!(got("PET_SERVICE"), "absorb 318 damage");
+    assert_eq!(got("BOOK"), "absorb 305 damage");
+    assert_eq!(got("SERVICE"), "absorb 305 damage");
+    assert_eq!(got("CRAFT"), "absorb 305 damage");
+    assert!(s.take_spell_tooltip_asks().is_empty());
+    assert!(s.take_pet_spell_tooltip_asks().is_empty());
+    assert!(s.take_errors().is_empty());
+}
+
+/// A pet view's miss asks the pet's store, and only the pet view's answer re-renders it.
+#[test]
+fn a_pet_view_miss_waits_on_the_pet_store() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_pet_actions(true, true, true, vec![firebolt_slot()]);
+    s.run(
+        r#"
+        local a = CreateFrame("Button", "PB1"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+        CreateFrame("GameTooltip", "TT")
+        TT:SetOwner(PB1, "ANCHOR_RIGHT")
+        TT:SetPetAction(1)
+    "#,
+    )
+    .unwrap();
+    assert!(s.take_spell_tooltip_asks().is_empty());
+    assert_eq!(s.take_pet_spell_tooltip_asks(), vec![3110]);
+    // The player's view of the same id is not the one the selector renders.
+    s.set_spell_tooltip(3110, firebolt());
+    assert_eq!(left_lines(&mut s), vec!["Firebolt"]);
+    s.set_pet_spell_tooltip(3110, firebolt());
+    assert_eq!(
+        left_lines(&mut s),
+        vec![
+            "Firebolt",
+            "10 Mana",
+            "1 sec cast",
+            "Deals 7 to 10 Fire damage to a target."
+        ]
+    );
+    assert!(s.take_errors().is_empty());
 }
 
 /// No second hover and no second `OnTooltipCleared`: the reference builds the tooltip at the call.
@@ -1173,9 +1295,9 @@ fn a_missed_view_re_renders_the_tooltip_when_the_app_answers() {
     )
     .unwrap();
     assert_eq!(left_lines(&mut s), vec!["Firebolt"]);
-    assert_eq!(s.take_spell_tooltip_asks(), vec![3110]);
+    assert_eq!(s.take_pet_spell_tooltip_asks(), vec![3110]);
 
-    s.set_spell_tooltip(3110, firebolt());
+    s.set_pet_spell_tooltip(3110, firebolt());
     assert_eq!(
         left_lines(&mut s),
         vec![
@@ -1187,7 +1309,7 @@ fn a_missed_view_re_renders_the_tooltip_when_the_app_answers() {
     );
     assert!(s.eval::<bool>("return TT:IsShown() == 1").unwrap());
     assert!(
-        s.take_spell_tooltip_asks().is_empty(),
+        s.take_pet_spell_tooltip_asks().is_empty(),
         "the re-render found the view"
     );
     assert_eq!(
@@ -1290,7 +1412,7 @@ fn new_content_or_an_added_line_ends_the_wait() {
     "#,
     )
     .unwrap();
-    s.set_spell_tooltip(3110, firebolt());
+    s.set_pet_spell_tooltip(3110, firebolt());
     assert_eq!(left_lines(&mut s), vec!["Attack"]);
     assert_eq!(s.eval::<i64>("return HID:NumLines()").unwrap(), 0);
     assert!(!s.eval::<bool>("return HID:IsShown() == 1").unwrap());
@@ -1329,7 +1451,7 @@ fn a_line_rewritten_in_place_ends_the_wait() {
     "#,
     )
     .unwrap();
-    s.set_spell_tooltip(3110, firebolt());
+    s.set_pet_spell_tooltip(3110, firebolt());
     assert_eq!(
         s.eval::<(i64, String)>("return APP:NumLines(), APPTextLeft1:GetText()")
             .unwrap(),
@@ -1351,7 +1473,6 @@ fn a_line_rewritten_in_place_ends_the_wait() {
 fn a_wait_replaced_by_an_earlier_re_render_is_not_replayed() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
-    s.set_pet_actions(true, true, true, vec![firebolt_slot()]);
     s.set_craft(Some(CraftState {
         name: "Beast Training".into(),
         rank: 0,
@@ -1367,7 +1488,7 @@ fn a_wait_replaced_by_an_earlier_re_render_is_not_replayed() {
         A:SetOwner(PB1, "ANCHOR_RIGHT")
         A:SetCraftSpell(1)
         B:SetOwner(PB1, "ANCHOR_RIGHT")
-        B:SetPetAction(1)
+        B:SetCraftSpell(1)
         A:SetScript("OnShow", function()
             B:SetOwner(PB1, "ANCHOR_RIGHT")
             B:SetHyperlink("|cffffd000|Henchant:20034|h[Enchant Weapon - Crusader]|h|r")

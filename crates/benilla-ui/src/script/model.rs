@@ -796,6 +796,10 @@ pub(crate) struct Model {
     /// Spell id to its tooltip view, and the misses asked for.
     pub(crate) spell_tooltips: HashMap<u32, super::SpellTooltipView>,
     pub(crate) spell_tooltip_asks: HashSet<u32>,
+    /// The same for the views built against the player's pet, which the spell builder's unit
+    /// selector asks for (`0x52e610`'s fourth argument).
+    pub(crate) pet_spell_tooltips: HashMap<u32, super::SpellTooltipView>,
+    pub(crate) pet_spell_tooltip_asks: HashSet<u32>,
     /// The tooltips whose spell render missed its view, re-rendered when the app answers.
     pub(crate) spell_tooltip_waits: HashMap<FrameHandle, super::tooltip_spell::SpellWait>,
     /// `CollapseQuestHeader`/`ExpandQuestHeader` as `(1-based entry, collapse)`, entry 0 for all.
@@ -1357,6 +1361,8 @@ impl Model {
             player_req: PlayerReqState::default(),
             spell_tooltips: HashMap::new(),
             spell_tooltip_asks: HashSet::new(),
+            pet_spell_tooltips: HashMap::new(),
+            pet_spell_tooltip_asks: HashSet::new(),
             spell_tooltip_waits: HashMap::new(),
             quest_log_collapses: Vec::new(),
             quest_log_watched: Vec::new(),

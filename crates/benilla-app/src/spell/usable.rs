@@ -378,19 +378,32 @@ pub(crate) fn spell_usable(
 /// callers. The press-path gate refuses an unaffordable cast without sending anything
 /// (`0x609657`), so an unmodified cost refuses casts a talented character can afford.
 pub(crate) fn power_cost(d: &SpellDisplay, store: &ObjectStore, mods: &SpellModifiers) -> u32 {
+    // The level term reads `baseLevel` (`+0x70`), as `0x6e31b0` does, but the reference scales a
+    // caster value / 5 there (vmangos: the level / 5); only creature spells have a per-level cost.
+    power_cost_at(d, &store.0, store.0.unit_level().unwrap_or(0), mods)
+}
+
+/// [`power_cost`] against `unit`'s fields at the level term `level`, the value `0x6e31b0` reads
+/// through the caster's `[vtbl+0xa8]` over 5 (`6e3242`-`6e3254`). With the unit selector set, the
+/// tooltip's caster is the player's charm, else its summon (`6e31fe`-`6e3228`), whose own basis
+/// `0x612c50` is called (`6e327d`).
+pub(crate) fn power_cost_at(
+    d: &SpellDisplay,
+    unit: &benilla_protocol::ObjectFields,
+    level: u32,
+    mods: &SpellModifiers,
+) -> u32 {
     let power_type = d.power_type as i32;
     let base = if d.mana_cost_pct == 0 {
         0
     } else if d.power_type == 0 {
-        store.0.unit_base_mana().unwrap_or(0)
+        unit.unit_base_mana().unwrap_or(0)
     } else if power_type < 0 {
-        store.0.unit_max_health().unwrap_or(0)
+        unit.unit_max_health().unwrap_or(0)
     } else {
-        store.0.unit_max_power(power_type as u8).unwrap_or(0)
+        unit.unit_max_power(power_type as u8).unwrap_or(0)
     };
-    // The level term reads `baseLevel` (`+0x70`), as `0x6e31b0` does, but the reference scales a
-    // caster value / 5 there (vmangos: the level / 5); only creature spells have a per-level cost.
-    let level_delta = i64::from(store.0.unit_level().unwrap_or(0)) - i64::from(d.base_level);
+    let level_delta = i64::from(level) - i64::from(d.base_level);
     let cost = i64::from(d.mana_cost)
         + level_delta * i64::from(d.mana_cost_per_level)
         + i64::from(base) * i64::from(d.mana_cost_pct) / 100;

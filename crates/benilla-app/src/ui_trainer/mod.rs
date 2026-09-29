@@ -99,9 +99,13 @@ impl TrainerOpen {
 #[derive(Resource, Default)]
 pub(crate) struct TrainerErrors(pub Vec<u32>);
 
-/// The spells the open trainer's services show as tooltips, which the spell-tooltip feed pushes.
-#[derive(Resource, Default)]
-pub(crate) struct TrainerTooltipSubjects(pub(crate) Vec<u32>);
+/// The spells the open trainer's services show as tooltips, which the spell-tooltip feed pushes:
+/// a pet-learn service's view is built against the pet (the builder's unit selector, `0x533a7f`).
+#[derive(Resource, Default, PartialEq)]
+pub(crate) struct TrainerTooltipSubjects {
+    pub(crate) player: Vec<u32>,
+    pub(crate) pet: Vec<u32>,
+}
 
 /// The trainer feed, which the spell-tooltip feed runs after.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -430,18 +434,30 @@ pub(crate) fn feed_trainer(
         },
     );
     // A spell subject's view must be in the store before the detail icon is hovered.
-    let mut fresh_tooltip_subjects: Vec<u32> = fresh
-        .iter()
-        .flat_map(|state| &state.services)
-        .filter_map(|service| match &service.tooltip {
-            TrainerTooltip::Spell { spell_id, .. } => Some(*spell_id),
-            TrainerTooltip::Item(_) => None,
-        })
-        .collect();
-    fresh_tooltip_subjects.sort_unstable();
-    fresh_tooltip_subjects.dedup();
-    if tooltip_subjects.0 != fresh_tooltip_subjects {
-        tooltip_subjects.0 = fresh_tooltip_subjects;
+    let mut fresh_tooltip_subjects = TrainerTooltipSubjects::default();
+    for service in fresh.iter().flat_map(|state| &state.services) {
+        if let TrainerTooltip::Spell {
+            spell_id,
+            alt_caster,
+        } = service.tooltip
+        {
+            let subjects = if alt_caster {
+                &mut fresh_tooltip_subjects.pet
+            } else {
+                &mut fresh_tooltip_subjects.player
+            };
+            subjects.push(spell_id);
+        }
+    }
+    for subjects in [
+        &mut fresh_tooltip_subjects.player,
+        &mut fresh_tooltip_subjects.pet,
+    ] {
+        subjects.sort_unstable();
+        subjects.dedup();
+    }
+    if *tooltip_subjects != fresh_tooltip_subjects {
+        *tooltip_subjects = fresh_tooltip_subjects;
     }
     // A name-only change re-fires `TRAINER_UPDATE`, so the title's `UnitName("npc")` repaints.
     // The name rides as arg1, which the 1.12 trainer events do not carry.

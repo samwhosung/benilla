@@ -161,7 +161,7 @@ impl super::UiScript {
 
 /// Whether `bookType` names the pet book: a case-insensitive compare with `"pet"` alone
 /// (`0x4b3f27`), so any other string, `"spell"` included, is the player's book.
-fn is_pet_book(book_type: &str) -> bool {
+pub(super) fn is_pet_book(book_type: &str) -> bool {
     book_type.eq_ignore_ascii_case(BOOKTYPE_PET)
 }
 
